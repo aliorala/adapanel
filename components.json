@@ -1,0 +1,372 @@
+{
+  "components": [
+    {
+      "id": "vc-redist-x64",
+      "displayName": "Microsoft Visual C++ Runtime (x64)",
+      "version": "14.x",
+      "type": "installer",
+      "downloadUrl": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\vc-redist-x64",
+      "postInstall": [],
+      "dependencies": [],
+      "serviceName": "",
+      "silentArgs": "/install /quiet /norestart",
+      "note": "PHP ve veritabani motorlarinin temiz Windows kurulumlarinda gereken Microsoft calisma zamani.",
+      "default": false
+    },
+    {
+      "id": "php-8.3",
+      "displayName": "PHP 8.3 (NTS x64)",
+      "version": "8.3.31",
+      "type": "zip",
+      "downloadUrl": "https://downloads.php.net/~windows/releases/php-8.3.31-nts-Win32-vs16-x64.zip",
+      "sha256": "389c1327d325f6b6b3b892a5b2e1484ca5b5df775b6c4ddf5d1b5dc3b34ac761",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\php\\8.3",
+      "postInstall": [
+        "registerFastCgi",
+        "writePhpIni"
+      ],
+      "dependencies": [
+        "vc-redist-x64"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "default": true
+    },
+    {
+      "id": "mariadb-11",
+      "displayName": "MariaDB 11.8 LTS",
+      "version": "11.8.3",
+      "type": "zip",
+      "downloadUrl": "https://archive.mariadb.org/mariadb-11.8.3/winx64-packages/mariadb-11.8.3-winx64.zip",
+      "sha256": "debd9643db9b3d35276fb782789564484c681b1bb264d03de0b3a2e8e739f493",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\mariadb\\11",
+      "postInstall": [
+        "initMariaDbZip"
+      ],
+      "dependencies": [
+        "vc-redist-x64"
+      ],
+      "serviceName": "AdaMariaDB",
+      "silentArgs": "__GENERATED__",
+      "default": true
+    },
+    {
+      "id": "mysql-8",
+      "displayName": "MySQL 8.x",
+      "version": "8.4.9",
+      "type": "zip",
+      "downloadUrl": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.9-winx64.zip",
+      "sha256": "5795ba250e89290f7507ed3bcc6a655be373616abb58b877acdea71e1b8f4e8c",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\mysql\\8",
+      "postInstall": [
+        "initMySqlZip"
+      ],
+      "dependencies": [
+        "vc-redist-x64"
+      ],
+      "serviceName": "AdaMySQL",
+      "silentArgs": "__GENERATED__",
+      "note": "MariaDB ile ayni sunucuda 3307 portunda calisir; varsayilan yiginda kapali gelir.",
+      "default": false
+    },
+    {
+      "id": "postgresql-16",
+      "displayName": "PostgreSQL 16",
+      "version": "16.14",
+      "type": "installer",
+      "downloadUrl": "https://get.enterprisedb.com/postgresql/postgresql-16.14-1-windows-x64.exe",
+      "sha256": "d389834df279a9b7ce4b4a030b6545fd0befb05385ff66932ac37454ad9b9312",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\postgresql\\16",
+      "postInstall": [],
+      "dependencies": [
+        "vc-redist-x64"
+      ],
+      "serviceName": "AdaPostgreSQL",
+      "silentArgs": "--mode unattended --unattendedmodeui none --prefix \"__INSTALL_DIR__\" --datadir \"__INSTALL_DIR__\\data\" --servicename AdaPostgreSQL --superpassword __GENERATED__ --serverport 5432",
+      "default": false
+    },
+    {
+      "id": "pgadmin4",
+      "displayName": "pgAdmin 4",
+      "version": "9.15",
+      "type": "installer",
+      "downloadUrl": "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.15/windows/pgadmin4-9.15-x64.exe",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\tools\\pgadmin4",
+      "postInstall": [],
+      "dependencies": [
+        "postgresql-16"
+      ],
+      "serviceName": "",
+      "silentArgs": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS /DIR=\"__INSTALL_DIR__\"",
+      "note": "PostgreSQL icin resmi masaustu ve web yonetim uygulamasi.",
+      "default": false
+    },
+    {
+      "id": "composer",
+      "displayName": "Composer",
+      "version": "2.x",
+      "type": "phar",
+      "downloadUrl": "https://getcomposer.org/download/latest-stable/composer.phar",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\tools\\composer",
+      "postInstall": [],
+      "dependencies": [
+        "php-8.3"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "default": true
+    },
+    {
+      "id": "phpmyadmin",
+      "displayName": "phpMyAdmin",
+      "version": "latest",
+      "type": "zip",
+      "downloadUrl": "https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.zip",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\tools\\phpmyadmin",
+      "postInstall": [],
+      "dependencies": [
+        "php-8.3"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "default": true
+    },
+    {
+      "id": "roundcube",
+      "displayName": "Roundcube Webmail",
+      "version": "1.7.1",
+      "type": "targz",
+      "downloadUrl": "https://github.com/roundcube/roundcubemail/releases/download/1.7.1/roundcubemail-1.7.1-complete.tar.gz",
+      "sha256": "1E0382BCEFD627AB0B6285D3181DDFBA5B444FDCF6D49F33F5EA15FBF97864EF",
+      "installDir": "%ProgramData%\\AdaPanel\\tools\\roundcube",
+      "postInstall": [],
+      "dependencies": [
+        "php-8.3"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "default": true
+    },
+    {
+      "id": "adminer",
+      "displayName": "Adminer",
+      "version": "5.4.2",
+      "type": "phpFile",
+      "downloadUrl": "https://github.com/vrana/adminer/releases/download/v5.4.2/adminer-5.4.2.php",
+      "sha256": "5b761efe7049bf586119256324fd417b49e5bb9243b40d9734fe86655e4402fd",
+      "installDir": "%ProgramData%\\AdaPanel\\tools\\adminer",
+      "postInstall": [],
+      "dependencies": [
+        "php-8.3"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "default": false
+    },
+    {
+      "id": "redis",
+      "displayName": "Redis",
+      "version": "latest",
+      "type": "zip",
+      "downloadUrl": "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip",
+      "sha256": "018ea18a35876383cbb5f4cd0258adfc87747cf9d619bce1cf73a2e36f720ccf",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\redis",
+      "postInstall": [
+        "installRedisService"
+      ],
+      "serviceName": "AdaRedis",
+      "silentArgs": "",
+      "default": false
+    },
+    {
+      "id": "memcached",
+      "displayName": "Memcached",
+      "version": "1.6.8",
+      "type": "zip",
+      "downloadUrl": "https://github.com/jefyt/memcached-windows/releases/download/1.6.8_mingw_libressl/memcached-1.6.8-win64-mingw.zip",
+      "sha256": "48ec62cef718f0d73698414b783c0e4a69821013553ca00afe0eed324eb5994b",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\memcached",
+      "postInstall": [
+        "installMemcachedService"
+      ],
+      "serviceName": "AdaMemcached",
+      "silentArgs": "",
+      "default": false
+    },
+    {
+      "id": "nodejs-lts",
+      "displayName": "Node.js LTS",
+      "version": "24.16.0",
+      "type": "msi",
+      "downloadUrl": "https://nodejs.org/dist/v24.16.0/node-v24.16.0-x64.msi",
+      "sha256": "43749d78a28ff11a36cb279407bc13e79bcfb8670e7926e469018d31c2ec6453",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\nodejs",
+      "postInstall": [],
+      "dependencies": [
+        "http-platform-handler"
+      ],
+      "serviceName": "",
+      "silentArgs": "/qn INSTALLDIR=\"__INSTALL_DIR__\"",
+      "default": false
+    },
+    {
+      "id": "python-3",
+      "displayName": "Python 3.x",
+      "version": "3.x",
+      "type": "installer",
+      "downloadUrl": "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\python\\3",
+      "postInstall": [],
+      "dependencies": [
+        "http-platform-handler"
+      ],
+      "serviceName": "",
+      "silentArgs": "/quiet InstallAllUsers=1 TargetDir=\"__INSTALL_DIR__\" PrependPath=1 Include_test=0",
+      "default": false
+    },
+    {
+      "id": "url-rewrite",
+      "displayName": "IIS URL Rewrite 2.1",
+      "version": "2.1",
+      "type": "msi",
+      "downloadUrl": "https://download.microsoft.com/download/1/2/8/128E2E22-C1B9-44A4-BE2A-5859ED1D4592/rewrite_amd64_en-US.msi",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\components\\iis-url-rewrite",
+      "postInstall": [],
+      "serviceName": "",
+      "silentArgs": "/qn /norestart",
+      "note": "Yonlendirme, ozel rewrite kurallari ve ters proxy icin IIS modulu.",
+      "default": true
+    },
+    {
+      "id": "iis-arr",
+      "displayName": "IIS Application Request Routing 3.0",
+      "version": "3.0",
+      "type": "msi",
+      "downloadUrl": "https://download.microsoft.com/download/e/9/8/e9849d6a-020e-47e4-9fd0-a023e99b54eb/requestRouter_amd64.msi",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\components\\iis-arr",
+      "postInstall": [],
+      "dependencies": [
+        "url-rewrite"
+      ],
+      "serviceName": "",
+      "silentArgs": "/qn /norestart",
+      "note": "IIS ters proxy ve uygulama yonlendirme altyapisi.",
+      "default": true
+    },
+    {
+      "id": "nginx",
+      "displayName": "Nginx for Windows",
+      "version": "1.31.0",
+      "type": "zip",
+      "downloadUrl": "https://nginx.org/download/nginx-1.31.0.zip",
+      "sha256": "1710b22d0aebf2197f4cc7fb605f2b4b34ed8af7ee4b27da77cb9f8761327371",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\nginx",
+      "postInstall": [
+        "prepareNginx"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "note": "IIS onunde istege bagli reverse proxy, statik onbellek ve trafik giris katmani. Windows surumu beta oldugu icin varsayilan olarak kurulmaz.",
+      "default": false
+    },
+    {
+      "id": "http-platform-handler",
+      "displayName": "IIS HttpPlatformHandler 1.2",
+      "version": "1.2",
+      "type": "msi",
+      "downloadUrl": "https://download.microsoft.com/download/8/1/3/813AC4E6-9203-4F7A-8DD5-F3D54D10C5CD/httpPlatformHandler_amd64.msi",
+      "sha256": "",
+      "installDir": "%ProgramData%\\AdaPanel\\components\\http-platform-handler",
+      "postInstall": [],
+      "serviceName": "",
+      "silentArgs": "/qn /norestart",
+      "note": "Node.js ve Python uygulamalarini IIS arkasinda calistirir.",
+      "default": false
+    },
+    {
+      "id": "stalwart-cli",
+      "displayName": "Stalwart CLI",
+      "version": "1.0.8",
+      "type": "zip",
+      "downloadUrl": "https://github.com/stalwartlabs/cli/releases/download/v1.0.8/stalwart-cli-x86_64-pc-windows-msvc.zip",
+      "sha256": "9ca0d971ed567ed83964361ec8b582a109deeac6cf8dbc6ce46b30eb54df0147",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\stalwart-cli",
+      "postInstall": [],
+      "serviceName": "",
+      "silentArgs": "",
+      "note": "Stalwart sunucusunu panelden yonetmek icin komut satiri araci. Stalwart Mail Server varsayilan oldugundan bu da varsayilan kurulur (bagimlilik).",
+      "default": true
+    },
+    {
+      "id": "stalwart-mail",
+      "displayName": "Stalwart Mail Server",
+      "version": "0.16.8",
+      "type": "zip",
+      "downloadUrl": "https://github.com/stalwartlabs/stalwart/releases/download/v0.16.8/stalwart-x86_64-pc-windows-msvc.zip",
+      "sha256": "c80d56c6b425f5232ed93fc61f9fdb52ce78dd27b1c047f7270a4825054ed532",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\stalwart",
+      "postInstall": [
+        "installStalwartService"
+      ],
+      "dependencies": [
+        "stalwart-cli"
+      ],
+      "serviceName": "AdaStalwart",
+      "silentArgs": "__GENERATED__",
+      "note": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerlesik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; onerilen yiginda otomatik kurulur. MailEnable yedektir; biri kurulurken digeri durdurulur (cakisma yok).",
+      "default": true
+    },
+    {
+      "id": "mailenable-standard",
+      "displayName": "MailEnable Standard (Mail Server)",
+      "version": "10.58",
+      "type": "installer",
+      "downloadUrl": "https://www.mailenable.com/standard1058.exe",
+      "sha256": "",
+      "installDir": "%ProgramFiles(x86)%\\Mail Enable",
+      "postInstall": [],
+      "dependencies": [],
+      "serviceName": "",
+      "silentArgs": "/s",
+      "note": "Olgun Windows e-posta sunucusu (SMTP/POP3/IMAP + web yonetim). YEDEK mail sunucusudur (varsayilan Stalwart); yalniz elle kurulur. Stalwart kuruluyken otomatik durdurulur (cakisma engellenir). Standard surumde DKIM imzalama/mailing list yoktur.",
+      "default": false
+    },
+    {
+      "id": "docker-engine",
+      "displayName": "Docker Engine",
+      "version": "29.5.3",
+      "type": "zip",
+      "downloadUrl": "https://download.docker.com/win/static/stable/x86_64/docker-29.5.3.zip",
+      "sha256": "46B70C3680F7F5CF037D714A06D15C8F1FBDDED0D17CA18D222A311C424C4EE0",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\docker",
+      "postInstall": [
+        "installDockerEngine"
+      ],
+      "serviceName": "docker",
+      "silentArgs": "",
+      "note": "Docker Engine (resmi static binary). Windows 'Containers' ozelligini etkinlestirir, dockerd'yi servis olarak kaydeder ve baslatir (Windows container'lari). Containers ozelligi yeni acildiysa servisin baslamasi icin yeniden baslatma gerekebilir. Surum kurulum aninda download.docker.com'dan otomatik cozulur.",
+      "default": false
+    },
+    {
+      "id": "win-acme",
+      "displayName": "win-acme (Let's Encrypt)",
+      "version": "latest",
+      "type": "zip",
+      "downloadUrl": "https://github.com/win-acme/win-acme/releases/latest/download/win-acme.v2.2.9.1701.x64.trimmed.zip",
+      "sha256": "f4dc3b144841ffdba391ce168c273d7a686d45a359075e30ee4bf4ee186857d6",
+      "installDir": "%ProgramData%\\AdaPanel\\tools\\win-acme",
+      "postInstall": [],
+      "serviceName": "",
+      "silentArgs": "",
+      "default": true
+    }
+  ]
+}

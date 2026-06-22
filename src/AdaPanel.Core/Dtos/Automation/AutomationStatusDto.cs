@@ -1,0 +1,25 @@
+namespace AdaPanel.Core.Dtos.Automation;
+
+/// <summary>
+/// Arka plan zamanlayıcısının çalışma durumu (son/sonraki çalışma, sonuç özeti).
+/// </summary>
+public sealed class AutomationStatusDto
+{
+    public AutomationSettingsDto Settings { get; set; } = new();
+
+    public DateTime? LastBackupRunUtc { get; set; }
+
+    public string LastBackupStatus { get; set; } = string.Empty;
+
+    public string LastBackupDetails { get; set; } = string.Empty;
+
+    public DateTime? NextBackupRunUtc { get; set; }
+
+    public DateTime? LastSslRunUtc { get; set; }
+
+    public string LastSslStatus { get; set; } = string.Empty;
+
+    public string LastSslDetails { get; set; } = string.Empty;
+
+    public DateTime? NextSslRunUtc { get; set; }
+}

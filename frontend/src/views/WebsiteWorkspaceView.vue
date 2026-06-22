@@ -1,0 +1,514 @@
+<template>
+  <section class="website-workspace">
+    <!-- Liste görünümü: doğrudan site listesi. -->
+    <SitesView v-if="!inWorkspace" @open-tool="onOpenTool" />
+
+    <!-- Domain paneli (Plesk gibi): geri çubuğu + 4 ana sekme + dikey araç listesi. -->
+    <template v-else>
+      <div class="tool-context">
+        <button class="secondary compact back-btn" @click="backToSites">
+          ← {{ t("panel.sites.backToSites") }}
+        </button>
+        <strong class="context-domain">{{ selectedSiteName || t("panel.php.selectSite") }}</strong>
+        <a
+          v-if="primaryUrl"
+          class="secondary compact open-link"
+          :href="primaryUrl"
+          target="_blank"
+          rel="noopener">
+          {{ t("panel.sites.open") }} ↗
+        </a>
+      </div>
+
+      <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+
+      <!-- Plesk ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
+      <nav class="primary-nav" :aria-label="t('panel.sites.toolsBar')">
+        <button
+          v-for="tab in primaryTabs"
+          :key="tab.id"
+          :class="['primary-tab', { active: primary === tab.id && !openToolId }]"
+          @click="selectPrimary(tab.id)">
+          <span class="tab-icon">{{ tab.glyph }}</span>
+          <strong>{{ tab.label }}</strong>
+        </button>
+      </nav>
+
+      <!-- Bir araç açıldığında: geri linki + araç görünümü (Barındırma ve DNS / Başlarken drill-in). -->
+      <template v-if="openToolId">
+        <button class="secondary compact back-btn back-to-list" @click="backToList">
+          ← {{ activePrimaryLabel }}
+        </button>
+
+        <PhpView v-if="openToolId === 'php'" />
+        <AspView v-else-if="openToolId === 'asp'" />
+        <DnsView v-else-if="openToolId === 'dns'" />
+        <SslView v-else-if="openToolId === 'ssl'" />
+        <ProxyView v-else-if="openToolId === 'proxy'" />
+        <FilesView v-else-if="openToolId === 'files'" />
+        <FtpView v-else-if="openToolId === 'ftp'" :site-name="selectedSiteName" />
+        <WebDbView v-else-if="openToolId === 'webdb'" />
+        <SiteDatabasesView v-else-if="openToolId === 'domaindb'" />
+        <ProtectedDirsView v-else-if="openToolId === 'protected'" />
+        <SiteStatisticsView v-else-if="openToolId === 'stats'" />
+        <SiteBackupView v-else-if="openToolId === 'backup'" />
+        <CronView v-else-if="openToolId === 'cron'" />
+        <SiteLogsView v-else-if="openToolId === 'logs'" />
+        <CacheView v-else-if="openToolId === 'cache'" />
+        <AppStoreView v-else-if="openToolId === 'store'" />
+        <WordPressToolkitView v-else-if="openToolId === 'wp'" />
+        <AppsView v-else-if="openToolId === 'apps'" />
+        <AppToolkitView v-else-if="openToolId === 'toolkit'" />
+        <SiteMigrationView v-else-if="openToolId === 'migrate'" />
+        <SiteHostingView v-else-if="openToolId === 'hosting'" />
+      </template>
+
+      <!-- Sekme açılış içeriği (araç seçilmediğinde). -->
+      <template v-else>
+        <!-- PANO: Plesk benzeri domain panosu (özet + önizleme + kısayollar + bağlamalar + subdomain). -->
+        <SiteDetailView
+          v-if="primary === 'pano'"
+          :site="selectedSite"
+          :busy-site-name="sitesStore.busySiteName"
+          :busy-binding-key="sitesStore.busyBindingKey"
+          :defaults-report="defaultsReport"
+          @start="handleStart"
+          @stop="handleStop"
+          @delete="handleDelete"
+          @prepare-defaults="handlePrepareDefaults"
+          @open-tool="focusTool"
+          @add-subdomain="handleAddSubdomain"
+          @add-binding="handleAddBinding"
+          @remove-binding="handleRemoveBinding" />
+
+        <!-- POSTA: tek araç → doğrudan. -->
+        <MailView v-else-if="primary === 'mail'" :domain="selectedSiteName" />
+
+        <!-- BARINDIRMA ve DNS / BAŞLARKEN: dikey araç listesi (alt alta). -->
+        <div v-else class="tool-stack">
+          <button
+            v-for="tool in toolsFor(primary)"
+            :key="tool.id"
+            type="button"
+            class="tool-row"
+            @click="openTool(tool.id)">
+            <span class="tab-icon">{{ tool.glyph }}</span>
+            <span class="tool-row-text">
+              <strong>{{ tool.label }}</strong>
+              <small>{{ tool.description }}</small>
+            </span>
+            <span class="chev">›</span>
+          </button>
+        </div>
+      </template>
+    </template>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { getPanelPreferences } from "../api/panelSettings";
+import type { SiteBindingPayload, SiteDefaultsResult } from "../api/sites";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { useSitesStore } from "../stores/sites";
+import AppStoreView from "./AppStoreView.vue";
+import AppsView from "./AppsView.vue";
+import AppToolkitView from "./AppToolkitView.vue";
+import AspView from "./AspView.vue";
+import CacheView from "./CacheView.vue";
+import CronView from "./CronView.vue";
+import SiteDatabasesView from "./SiteDatabasesView.vue";
+import SiteLogsView from "./SiteLogsView.vue";
+import SiteMigrationView from "./SiteMigrationView.vue";
+import FilesView from "./FilesView.vue";
+import MailView from "./MailView.vue";
+import SiteBackupView from "./SiteBackupView.vue";
+import SiteDetailView from "./SiteDetailView.vue";
+import SiteStatisticsView from "./SiteStatisticsView.vue";
+import ProtectedDirsView from "./ProtectedDirsView.vue";
+import WordPressToolkitView from "./WordPressToolkitView.vue";
+import DnsView from "./DnsView.vue";
+import FtpView from "./FtpView.vue";
+import PhpView from "./PhpView.vue";
+import ProxyView from "./ProxyView.vue";
+import SitesView from "./SitesView.vue";
+import SiteHostingView from "./SiteHostingView.vue";
+import SslView from "./SslView.vue";
+import WebDbView from "./WebDbView.vue";
+
+type PrimaryTab = "pano" | "hostingdns" | "mail" | "start";
+type ToolDef = { id: string; group: PrimaryTab; glyph: string; label: string; description: string };
+
+const { t } = useI18n();
+const sitesStore = useSitesStore();
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+// Server-level araçlar (yazılım mağazası, web DB kurulumu, önbellek) yalnız admin'e açık.
+const adminOnlyTools = new Set(["store", "webdb", "cache", "cron"]);
+
+const inWorkspace = ref(false);
+const primary = ref<PrimaryTab>("pano");
+const openToolId = ref<string>("");
+const notice = ref("");
+const noticeError = ref(false);
+const defaultsReport = ref<SiteDefaultsResult | null>(null);
+const defaultSiteRoot = ref("C:\\inetpub\\wwwroot");
+
+const selectedSiteName = computed(() => sitesStore.selectedSiteName);
+const selectedSite = computed(() => sitesStore.selectedSite);
+
+const primaryUrl = computed(() => {
+  const binding = selectedSite.value?.bindings?.[0];
+  if (!binding) {
+    return "";
+  }
+  const host = binding.hostName || (binding.ipAddress === "*" ? window.location.hostname : binding.ipAddress);
+  const standard = (binding.protocol === "http" && binding.port === 80) ||
+    (binding.protocol === "https" && binding.port === 443);
+  return `${binding.protocol}://${host}${standard ? "" : `:${binding.port}`}`;
+});
+
+onMounted(async () => {
+  await getPanelPreferences()
+    .then((settings) => {
+      defaultSiteRoot.value = settings.defaultSiteRoot.replace(/[\\/]+$/, "");
+    })
+    .catch(() => undefined);
+});
+
+// Tüm domain araçları + ait olduğu ana sekme (Plesk gruplaması).
+const allTools = computed<ToolDef[]>(() => [
+  { id: "hosting", group: "hostingdns", glyph: "⚙", label: t("panel.sites.tools.hosting"), description: t("panel.sites.tools.hostingHint") },
+  { id: "php", group: "hostingdns", glyph: "P", label: t("panel.sites.tools.php"), description: t("panel.sites.tools.phpHint") },
+  { id: "asp", group: "hostingdns", glyph: ".N", label: t("panel.sites.tools.asp"), description: t("panel.sites.tools.aspHint") },
+  { id: "dns", group: "hostingdns", glyph: "DNS", label: t("panel.sites.tools.dns"), description: t("panel.sites.tools.dnsHint") },
+  { id: "ssl", group: "hostingdns", glyph: "SSL", label: t("panel.sites.tools.ssl"), description: t("panel.sites.tools.sslHint") },
+  { id: "proxy", group: "hostingdns", glyph: "PX", label: t("panel.sites.tools.proxy"), description: t("panel.sites.tools.proxyHint") },
+  { id: "files", group: "hostingdns", glyph: "FL", label: t("panel.sites.tools.files"), description: t("panel.sites.tools.filesHint") },
+  { id: "ftp", group: "hostingdns", glyph: "FT", label: t("panel.sites.tools.ftp"), description: t("panel.sites.tools.ftpHint") },
+  { id: "webdb", group: "hostingdns", glyph: "DB", label: t("panel.sites.tools.webdb"), description: t("panel.sites.tools.webdbHint") },
+  { id: "domaindb", group: "hostingdns", glyph: "SQL", label: t("panel.sites.tools.domaindb"), description: t("panel.sites.tools.domaindbHint") },
+  { id: "protected", group: "hostingdns", glyph: "KOR", label: t("panel.sites.tools.protected"), description: t("panel.sites.tools.protectedHint") },
+  { id: "stats", group: "hostingdns", glyph: "IST", label: t("panel.sites.tools.stats"), description: t("panel.sites.tools.statsHint") },
+  { id: "backup", group: "hostingdns", glyph: "BK", label: t("panel.sites.tools.backup"), description: t("panel.sites.tools.backupHint") },
+  { id: "cron", group: "hostingdns", glyph: "CR", label: t("panel.sites.tools.cron"), description: t("panel.sites.tools.cronHint") },
+  { id: "logs", group: "hostingdns", glyph: "LOG", label: t("panel.sites.tools.logs"), description: t("panel.sites.tools.logsHint") },
+  { id: "cache", group: "hostingdns", glyph: "CA", label: t("panel.sites.tools.cache"), description: t("panel.sites.tools.cacheHint") },
+  { id: "mail", group: "mail", glyph: "@", label: t("panel.sites.tools.mail"), description: t("panel.sites.tools.mailHint") },
+  { id: "toolkit", group: "start", glyph: "</>", label: t("panel.sites.tools.toolkit"), description: t("panel.sites.tools.toolkitHint") },
+  { id: "migrate", group: "start", glyph: "GÖÇ", label: t("panel.sites.tools.migrate"), description: t("panel.sites.tools.migrateHint") },
+  { id: "store", group: "start", glyph: "AP", label: t("panel.sites.tools.store"), description: t("panel.sites.tools.storeHint") },
+  { id: "wp", group: "start", glyph: "WP", label: "WordPress", description: t("panel.wp.hint") },
+  { id: "apps", group: "start", glyph: "JS", label: t("panel.sites.tools.apps"), description: t("panel.sites.tools.appsHint") }
+]);
+
+const visibleTools = computed(() => allTools.value.filter((tool) => isAdmin.value || !adminOnlyTools.has(tool.id)));
+function toolsFor(group: PrimaryTab): ToolDef[] {
+  return visibleTools.value.filter((tool) => tool.group === group);
+}
+
+const primaryTabs = computed(() => [
+  { id: "pano" as const, glyph: "▦", label: t("panel.sites.primary.dashboard") },
+  { id: "hostingdns" as const, glyph: "⚙", label: t("panel.sites.primary.hostingDns") },
+  { id: "mail" as const, glyph: "@", label: t("panel.sites.primary.mail") },
+  { id: "start" as const, glyph: "★", label: t("panel.sites.primary.getStarted") }
+]);
+
+const activePrimaryLabel = computed(() =>
+  primaryTabs.value.find((tab) => tab.id === primary.value)?.label ?? "");
+
+// Domain satırından / pano kısayolundan gelen hızlı eylem: siteyi seç + doğru sekme/araca git.
+function onOpenTool(payload: { siteName: string; tool: string }) {
+  sitesStore.selectSite(payload.siteName);
+  notice.value = "";
+  focusTool(payload.tool);
+  inWorkspace.value = true;
+}
+
+// Bir aracı doğru ana sekme altında aç. "pano" / bilinmeyen → Pano sekmesi; Posta tek araç → doğrudan.
+function focusTool(tool: string) {
+  if (tool === "pano") {
+    primary.value = "pano";
+    openToolId.value = "";
+    return;
+  }
+  const def = allTools.value.find((item) => item.id === tool);
+  const group = def?.group ?? "hostingdns";
+  primary.value = group;
+  openToolId.value = group === "mail" || !def ? "" : tool;
+}
+
+function selectPrimary(tab: PrimaryTab) {
+  primary.value = tab;
+  openToolId.value = "";
+}
+
+function openTool(id: string) {
+  openToolId.value = id;
+}
+
+function backToList() {
+  openToolId.value = "";
+}
+
+function backToSites() {
+  inWorkspace.value = false;
+  openToolId.value = "";
+  primary.value = "pano";
+}
+
+// --- Pano (SiteDetailView) eylemleri: sitesStore üzerinden. ---
+function showNotice(message: string, isError: boolean) {
+  notice.value = message;
+  noticeError.value = isError;
+}
+
+function resolveApiMessage(error: unknown): string {
+  const key = extractApiMessage(error);
+  const translated = t(key);
+  return translated === key ? key : translated;
+}
+
+async function handleStart(siteName: string) {
+  try {
+    await sitesStore.startSite(siteName);
+    showNotice(t("panel.sites.started"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function handleStop(siteName: string) {
+  try {
+    await sitesStore.stopSite(siteName);
+    showNotice(t("panel.sites.stopped"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function handleDelete(siteName: string) {
+  if (!window.confirm(t("panel.sites.confirmDelete"))) {
+    return;
+  }
+  try {
+    // Plesk gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir.
+    await sitesStore.deleteSite(siteName, { deleteDatabases: true });
+    showNotice(t("panel.sites.deleted"), false);
+    backToSites();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function handlePrepareDefaults(siteName: string) {
+  try {
+    defaultsReport.value = await sitesStore.prepareSiteDefaults(siteName);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function handleAddBinding(payload: { siteName: string; binding: SiteBindingPayload }) {
+  try {
+    await sitesStore.addBinding(payload.siteName, payload.binding);
+    showNotice(t("panel.sites.bindingAdded"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function handleRemoveBinding(payload: { siteName: string; binding: SiteBindingPayload }) {
+  try {
+    await sitesStore.removeBinding(payload.siteName, payload.binding);
+    showNotice(t("panel.sites.bindingRemoved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function handleAddSubdomain(label: string) {
+  const parent = selectedSiteName.value;
+  if (!parent || !label) {
+    return;
+  }
+  const host = `${label}.${parent}`.toLowerCase();
+  try {
+    await sitesStore.createSite({
+      name: host,
+      hostName: host,
+      physicalPath: `${defaultSiteRoot.value}\\${host}`,
+      applicationPoolName: "",
+      ipAddress: "*",
+      port: 80,
+      protocol: "http",
+      autoStart: true,
+      runtimeProfile: "auto",
+      runtimeComponentId: "",
+      installRuntimeIfMissing: true,
+      startupFile: "",
+      provisionDefaultServices: false
+    });
+    showNotice(t("panel.sites.subdomainCreated", { host }), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+</script>
+
+<style scoped>
+.website-workspace {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Bağlam çubuğu (Plesk breadcrumb): geri + hedef domain + siteyi aç. */
+.tool-context {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 11px;
+  background: var(--surface-1);
+}
+
+.tool-context .back-btn {
+  font-weight: 700;
+}
+
+.tool-context .context-domain {
+  font-size: 0.96rem;
+  color: var(--text-strong);
+}
+
+.tool-context .open-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* 4 ana sekme (Plesk üst sekmeleri). */
+.primary-nav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 5px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface-0));
+  box-shadow: var(--panel-shadow);
+  scrollbar-width: thin;
+}
+
+.primary-tab {
+  display: inline-flex;
+  flex: 1 1 auto;
+  justify-content: center;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-soft);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.primary-tab:hover {
+  border-color: color-mix(in srgb, var(--accent-1) 20%, transparent);
+  background: var(--surface-1);
+}
+
+.primary-tab.active {
+  border-color: color-mix(in srgb, var(--accent-1) 16%, transparent);
+  border-bottom-color: var(--accent-1);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent-2) 18%, transparent), rgba(22, 29, 41, 0.34));
+}
+
+.primary-tab strong {
+  font-size: 0.84rem;
+}
+
+.tab-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent-1) 12%, transparent);
+  color: var(--accent-1);
+  font-size: 0.58rem;
+  font-weight: 850;
+  flex-shrink: 0;
+}
+
+.back-to-list {
+  justify-self: start;
+}
+
+/* Dikey araç listesi (alt alta — Plesk Barındırma ve DNS düzeni). */
+.tool-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 13px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--surface-1);
+  color: var(--text-strong);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.05s ease;
+}
+
+.tool-row:hover {
+  border-color: color-mix(in srgb, var(--accent-1) 42%, transparent);
+}
+
+.tool-row:active {
+  transform: translateY(1px);
+}
+
+.tool-row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tool-row-text strong {
+  font-size: 0.9rem;
+}
+
+.tool-row-text small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.tool-row .chev {
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+@media (max-width: 760px) {
+  .primary-tab {
+    flex: 0 0 auto;
+  }
+}
+</style>

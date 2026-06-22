@@ -1,0 +1,34 @@
+using AdaPanel.Core.Dtos.Databases;
+
+namespace AdaPanel.Core.Interfaces;
+
+public interface IDatabaseService
+{
+    Task<IReadOnlyCollection<DatabaseEngineStatusDto>> GetEnginesAsync(CancellationToken cancellationToken = default);
+
+    Task<DatabaseEngineStatusDto> RegisterCredentialsAsync(RegisterDatabaseCredentialsRequest request, CancellationToken cancellationToken = default);
+
+    Task<DatabaseWorkspaceDto> GetWorkspaceAsync(string engine, CancellationToken cancellationToken = default);
+
+    Task<DatabaseWorkspaceDto> CreateDatabaseAsync(CreateDatabaseRequest request, CancellationToken cancellationToken = default);
+
+    Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default);
+
+    Task<DatabaseWorkspaceDto> CreateUserAsync(CreateDatabaseUserRequest request, CancellationToken cancellationToken = default);
+
+    Task DeleteUserAsync(string engine, string userName, string host, CancellationToken cancellationToken = default);
+
+    Task<DatabaseWorkspaceDto> SetUserPasswordAsync(SetDatabaseUserPasswordRequest request, CancellationToken cancellationToken = default);
+
+    Task<DatabaseWorkspaceDto> GrantAccessAsync(GrantDatabaseAccessRequest request, CancellationToken cancellationToken = default);
+
+    Task<DatabaseDumpResultDto> ExportDumpAsync(DatabaseDumpRequest request, CancellationToken cancellationToken = default);
+
+    Task<DatabaseDumpResultDto> ImportDumpAsync(DatabaseDumpRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sunucu taraflı taşıma: kaynak (uzak olabilir) MySQL/MariaDB veritabanını mysqldump→mysql ile
+    /// yerel hedef veritabanına aktarır. Tarayıcı upload'ı olmadığından 413/timeout yaşanmaz.
+    /// </summary>
+    Task<DatabaseTransferResultDto> TransferDatabaseAsync(DatabaseTransferRequest request, CancellationToken cancellationToken = default);
+}

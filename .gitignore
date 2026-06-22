@@ -1,0 +1,22 @@
+bin/
+obj/
+.vs/
+.vscode/
+node_modules/
+dist/
+coverage/
+*.user
+*.suo
+*.db
+*.db-shm
+*.db-wal
+*.log
+frontend/dist/
+src/AdaPanel.Api/wwwroot/assets/
+
+# Gömülü .NET SDK (büyük, yeniden indirilebilir) ve tüm çıktı/araç artefaktları
+.tools/
+artifacts/
+*.pfx
+*.password
+

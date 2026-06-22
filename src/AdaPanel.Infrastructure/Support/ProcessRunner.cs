@@ -1,0 +1,149 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
+
+namespace AdaPanel.Infrastructure.Support;
+
+internal static class ProcessRunner
+{
+    public static async Task<CommandResult> RunAsync(
+        string fileName,
+        string arguments,
+        string? workingDirectory = null,
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
+        TimeSpan? timeout = null)
+    {
+        // ÇALIŞMA SAĞLIĞI: çağıran açıkça timeout vermezse de güvenli bir TAVAN uygula. Aksi halde
+        // asılan bir dış araç (erişilemez git remote, yanıt vermeyen DB CLI, win-acme istemi vb.)
+        // isteği SONSUZA dek dondurur ve bağlantıyı kilitler. Yanıt isteyen yollar zaten kendi kısa
+        // timeout'unu geçer (ör. mail 30sn); bu yalnız üst sınırdır. 10 dk; en uzun meşru tek komut
+        // (büyük git clone, win-acme issuance) bile sığar ama sonsuz asılma engellenir.
+        timeout ??= TimeSpan.FromMinutes(10);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? Environment.CurrentDirectory : workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        if (environmentVariables is not null)
+        {
+            foreach (var (key, value) in environmentVariables)
+            {
+                startInfo.Environment[key] = value;
+            }
+        }
+
+        using var process = new Process
+        {
+            StartInfo = startInfo
+        };
+
+        process.Start();
+
+        // Zaman aşımı verildiyse süre dolunca süreci öldür ve "başarısız" sonuç dön; böylece
+        // takılan dış araçlar (win-acme HTTP-01 doğrulaması, MailEnable COM vb.) isteği
+        // sonsuza kadar dondurmaz.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (timeout is { } limit)
+        {
+            timeoutCts.CancelAfter(limit);
+        }
+
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (timeout is not null && !cancellationToken.IsCancellationRequested)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* en iyi çaba */ }
+            return new CommandResult
+            {
+                ExitCode = -1,
+                StandardOutput = string.Empty,
+                StandardError = $"Process timed out after {timeout.Value.TotalSeconds:0} s and was terminated."
+            };
+        }
+
+        return new CommandResult
+        {
+            ExitCode = process.ExitCode,
+            StandardOutput = await outputTask,
+            StandardError = await errorTask
+        };
+    }
+
+    public static async Task<CommandResult> RunPowerShellAsync(string command, CancellationToken cancellationToken = default)
+    {
+        var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+        var result = await RunAsync(
+            "powershell.exe",
+            $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}",
+            cancellationToken: cancellationToken);
+
+        return new CommandResult
+        {
+            ExitCode = result.ExitCode,
+            StandardOutput = NormalizePowerShellStream(result.StandardOutput),
+            StandardError = NormalizePowerShellStream(result.StandardError)
+        };
+    }
+
+    private static string NormalizePowerShellStream(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Trim();
+        var xmlStart = normalized.IndexOf("<Objs", StringComparison.Ordinal);
+        if (xmlStart >= 0)
+        {
+            try
+            {
+                var document = XDocument.Parse(normalized[xmlStart..]);
+                var errorLines = document
+                    .Descendants()
+                    .Where(element =>
+                        element.Name.LocalName == "S" &&
+                        string.Equals((string?)element.Attribute("S"), "Error", StringComparison.OrdinalIgnoreCase))
+                    .Select(element => DecodeCliXmlText(element.Value))
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .ToArray();
+
+                if (errorLines.Length > 0)
+                {
+                    normalized = string.Join(Environment.NewLine, errorLines);
+                }
+            }
+            catch
+            {
+                normalized = normalized[xmlStart..];
+            }
+        }
+
+        return DecodeCliXmlText(normalized)
+            .Replace("#< CLIXML", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Trim();
+    }
+
+    private static string DecodeCliXmlText(string value)
+    {
+        return Regex.Replace(
+            value,
+            "_x([0-9A-Fa-f]{4})_",
+            match => char.ConvertFromUtf32(Convert.ToInt32(match.Groups[1].Value, 16)));
+    }
+}

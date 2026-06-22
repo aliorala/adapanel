@@ -1,0 +1,92 @@
+﻿[
+    {
+        "Id":  "php",
+        "Executable":  "php.exe",
+        "ExitCode":  0,
+        "Output":  "PHP 8.3.31 (cli) (built: May  5 2026 17:23:04) (NTS Visual C++ 2019 x64) | Copyright (c) The PHP Group | Zend Engine v4.3.31, Copyright (c) Zend Technologies"
+    },
+    {
+        "Id":  "composer",
+        "Executable":  "composer.phar",
+        "ExitCode":  0,
+        "Output":  "Composer version 2.10.1 2026-06-04 10:25:59 | php.exe : PHP version 8.3.31 (C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\php\\php.exe) | At line:2 char:836 | + ... e; $composerOut=\u0026 $php $composer \u0027--version\u0027 \u0027--no-ansi\u0027 2\u003e\u00261; $rows+ ... | +                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ |     + CategoryInfo          : NotSpecified: (PHP version 8.3...ke\\php\\php.exe):String) [], RemoteException |     + FullyQualifiedErrorId : NativeCommandError |   | Run the \"diagnose\" command to get more detailed diagnostics output."
+    },
+    {
+        "Id":  "mariadb",
+        "Executable":  "mariadbd.exe",
+        "ExitCode":  0,
+        "Output":  "C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\mariadb\\mariadb-11.8.3-winx64\\bin\\mariadbd.exe  Ver 11.8.3-MariaDB for Win64 on AMD64 (mariadb.org binary distribution)"
+    },
+    {
+        "Id":  "mariadb",
+        "Executable":  "mariadb-admin.exe",
+        "ExitCode":  0,
+        "Output":  "C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\mariadb\\mariadb-11.8.3-winx64\\bin\\mariadb-admin.exe from 11.8.3-MariaDB, client 10.0 for Win64 (AMD64)"
+    },
+    {
+        "Id":  "mysql",
+        "Executable":  "mysqld.exe",
+        "ExitCode":  0,
+        "Output":  "C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\mysql\\mysql-8.4.9-winx64\\bin\\mysqld.exe  Ver 8.4.9 for Win64 on x86_64 (MySQL Community Server - GPL)"
+    },
+    {
+        "Id":  "mysql",
+        "Executable":  "mysqladmin.exe",
+        "ExitCode":  0,
+        "Output":  "C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\mysql\\mysql-8.4.9-winx64\\bin\\mysqladmin.exe  Ver 8.4.9 for Win64 on x86_64 (MySQL Community Server - GPL)"
+    },
+    {
+        "Id":  "redis",
+        "Executable":  "redis-server.exe",
+        "ExitCode":  0,
+        "Output":  "Redis server v=5.0.14.1 sha=ec77f72d:0 malloc=jemalloc-5.2.1-redis bits=64 build=5627b8177c9289c"
+    },
+    {
+        "Id":  "redis",
+        "Executable":  "redis-cli.exe",
+        "ExitCode":  0,
+        "Output":  ""
+    },
+    {
+        "Id":  "memcached",
+        "Executable":  "memcached.exe",
+        "ExitCode":  0,
+        "Output":  "memcached 1.6.8 | -p, --port=\u003cnum\u003e          TCP port to listen on (default: 11211) | -U, --udp-port=\u003cnum\u003e      UDP port to listen on (default: 0, off) | -s, --unix-socket=\u003cfile\u003e  UNIX socket to listen on (disables network support) | -a, --unix-mask=\u003cmask\u003e    access mask for UNIX socket, in octal (default: 700) | -A, --enable-shutdown     enable ascii \"shutdown\" command | -l, --listen=\u003caddr\u003e       interface to listen on (default: INADDR_ANY) |                           if TLS/SSL is enabled, \u0027notls\u0027 prefix can be used to |                           disable for specific listeners (-l notls:\u003cip\u003e:\u003cport\u003e)  | -d, --daemon              run as a daemon | -m, --memory-limit=\u003cnum\u003e  item memory in megabytes (default: 64) | -M, --disable-evictions   return error on memory exhausted instead of evicting | -c, --conn-limit=\u003cnum\u003e    max simultaneous connections (default: 1024) | -v, --verbose             verbose (print errors/warnings while in event loop) | -vv                       very verbose (also print client commands/responses) | -vvv                      extremely verbose (internal state transitions) | -h, --help                print this help and exit | -i, --license             print memcached and libevent license | -V, --version             print version and exit | -P, --pidfile=\u003cfile\u003e      save PID in \u003cfile\u003e, only used with -d option | -f, --slab-growth-factor=\u003cnum\u003e chunk size growth factor (default: 1.25) | -n, --slab-min-size=\u003cbytes\u003e min space used for key+value+flags (default: 48) | -L, --enable-largepages  try to use large memory pages (if available) | -D \u003cchar\u003e     Use \u003cchar\u003e as the delimiter between key prefixes and IDs. |               This is used for per-prefix stats reporting. The default is |               \":\" (colon). If this option is specified, stats collection |               is turned on automatically; if not, then it may be turned on |               by sending the \"stats detail on\" command to the server. | -t, --threads=\u003cnum\u003e       number of threads to use (default: 4) | -R, --max-reqs-per-event  maximum number of requests per event, limits the |                           requests processed per connection to prevent  |                           starvation (default: 20) | -C, --disable-cas         disable use of CAS | -b, --listen-backlog=\u003cnum\u003e set the backlog queue limit (default: 1024) | -B, --protocol=\u003cname\u003e     protocol - one of ascii, binary, or auto (default: auto-negotiate) | -I, --max-item-size=\u003cnum\u003e adjusts max item size |                           (default: 1m, min: 1k, max: 1024m) | -F, --disable-flush-all   disable flush_all command | -X, --disable-dumping     disable stats cachedump and lru_crawler metadump | -W  --disable-watch       disable watch commands (live logging) | -Y, --auth-file=\u003cfile\u003e    (EXPERIMENTAL) enable ASCII protocol authentication. format: |                           user:pass\\nuser2:pass2\\n | -e, --memory-file=\u003cfile\u003e  (EXPERIMENTAL) mmap a file for item memory. |                           use only in ram disks or persistent memory mounts! |                           enables restartable cache (stop with SIGUSR1) | -Z, --enable-ssl          enable TLS/SSL | -o, --extended            comma separated list of extended options |                           most options have a \u0027no_\u0027 prefix to disable |    - maxconns_fast:       immediately close new connections after limit (default: enabled) |    - hashpower:           an integer multiplier for how large the hash |                           table should be. normally grows at runtime. (default starts at: 0) |                           set based on \"STAT hash_power_level\" |    - tail_repair_time:    time in seconds for how long to wait before |                           forcefully killing LRU tail item. |                           disabled by default; very dangerous option. |    - hash_algorithm:      the hash table algorithm |                           default is murmur3 hash. options: jenkins, murmur3 |    - no_lru_crawler:      disable LRU Crawler background thread. |    - lru_crawler_sleep:   microseconds to sleep between items |                           default is 100. |    - lru_crawler_tocrawl: max items to crawl per slab per run |                           default is 0 (unlimited) |    - read_buf_mem_limit:  limit in megabytes for connection read/response buffers. |                           do not adjust unless you have high (20k+) conn. limits. |                           0 means unlimited (default: 0) |    - no_lru_maintainer:   disable new LRU system + background thread. |    - hot_lru_pct:         pct of slab memory to reserve for hot lru. |                           (requires lru_maintainer, default pct: 20) |    - warm_lru_pct:        pct of slab memory to reserve for warm lru. |                           (requires lru_maintainer, default pct: 40) |    - hot_max_factor:      items idle \u003e cold lru age * drop from hot lru. (default: 0.20) |    - warm_max_factor:     items idle \u003e cold lru age * this drop from warm. (default: 2.00) |    - temporary_ttl:       TTL\u0027s below get separate LRU, can\u0027t be evicted. |                           (requires lru_maintainer, default: 61) |    - idle_timeout:        timeout for idle connections. (default: 0, no timeout) |    - slab_chunk_max:      (EXPERIMENTAL) maximum slab size in kilobytes. use extreme care. (default: 512) |    - watcher_logbuf_size: size in kilobytes of per-watcher write buffer. (default: 256) |    - worker_logbuf_size:  size in kilobytes of per-worker-thread buffer |                           read by background thread, then written to watchers. (default: 64) |    - track_sizes:         enable dynamic reports for \u0027stats sizes\u0027 command. |    - no_hashexpand:       disables hash table expansion (dangerous) |    - modern:              enables options which will be default in future. |                           currently: nothing |    - no_modern:           uses defaults of previous major version (1.4.x) |  |    - External storage (ext_*) related options (see: https://memcached.org/extstore) |    - ext_path:            file to write to for external storage. |                           ie: ext_path=/mnt/d1/extstore:1G |    - ext_page_size:       size in megabytes of storage pages. (default: 64) |    - ext_wbuf_size:       size in megabytes of page write buffers. (default: 4) |    - ext_threads:         number of IO threads to run. (default: 1) |    - ext_item_size:       store items larger than this (bytes, default 512) |    - ext_item_age:        store items idle at least this long (seconds, default: no age limit) |    - ext_low_ttl:         consider TTLs lower than this specially (default: 0) |    - ext_drop_unread:     don\u0027t re-write unread values during compaction (default: disabled) |    - ext_recache_rate:    recache an item every N accesses (default: 2000) |    - ext_compact_under:   compact when fewer than this many free pages |                           (default: 1/4th of the assigned storage) |    - ext_drop_under:      drop COLD items when fewer than this many free pages |                           (default: 1/4th of the assigned storage) |    - ext_max_frag:        max page fragmentation to tolerate (default: 0.80) |    - slab_automove_freeratio: ratio of memory to hold free as buffer. |                           (see doc/storage.txt for more info, default: 0.010) |    - ssl_chain_cert:      certificate chain file in PEM format |    - ssl_key:             private key, if not part of the -ssl_chain_cert |    - ssl_keyformat:       private key format (PEM, DER or ENGINE) (default: PEM) |    - ssl_verify_mode:     peer certificate verification mode, default is 0(None). |                           valid values are 0(None), 1(Request), 2(Require) |                           or 3(Once) |    - ssl_ciphers:         specify cipher list to be used |    - ssl_ca_cert:         PEM format file of acceptable client CA\u0027s |    - ssl_wbuf_size:       size in kilobytes of per-connection SSL output buffer |                           (default: 16) |    - ssl_session_cache:   enable server-side SSL session cache, to support session |                           resumption"
+    },
+    {
+        "Id":  "nginx",
+        "Executable":  "nginx.exe",
+        "ExitCode":  0,
+        "Output":  "nginx.exe : nginx: the configuration file C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\nginx\\nginx-1.31 | .0\\conf/nginx.conf syntax is ok | At line:2 char:1622 | + ... \u0027; $nginxOut=\u0026 $nginxExe.FullName \u0027-t\u0027 \u0027-p\u0027 $nginxPrefix 2\u003e\u00261; $rows+ ... | +                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ |     + CategoryInfo          : NotSpecified: (nginx: the conf...nf syntax is ok:String) [], RemoteException |     + FullyQualifiedErrorId : NativeCommandError |   | nginx: configuration file C:\\Users\\aLi\\Desktop\\AdaPanel\\.tools\\component-runtime-smoke\\nginx\\nginx-1.31.0\\conf/nginx.co | nf test is successful"
+    },
+    {
+        "Id":  "stalwart-cli",
+        "Executable":  "stalwart-cli.exe",
+        "ExitCode":  0,
+        "Output":  "stalwart-cli 1.0.8"
+    },
+    {
+        "Id":  "stalwart-mail",
+        "Executable":  "stalwart.exe",
+        "ExitCode":  0,
+        "Output":  "0.16.8"
+    },
+    {
+        "Id":  "docker",
+        "Executable":  "docker.exe",
+        "ExitCode":  0,
+        "Output":  "Docker version 29.5.3, build d1c06ef"
+    },
+    {
+        "Id":  "docker",
+        "Executable":  "dockerd.exe",
+        "ExitCode":  0,
+        "Output":  "Docker version 29.5.3, build 285b471"
+    },
+    {
+        "Id":  "win-acme",
+        "Executable":  "wacs.exe",
+        "ExitCode":  0,
+        "Output":  "Error creating event logger: The source was not found, but some or all event logs could not be searched.  Inaccessible logs: Security, State. |  |  A simple Windows ACMEv2 client (WACS) |  Software version 2.2.9.1701 (release, trimmed, standalone, 64-bit) |  Connecting to https://acme-v02.api.letsencrypt.org/... |  Connection OK! |  Running without administrator credentials, some options disabled |  Scheduled task not configured yet |  Please report issues at https://github.com/win-acme/win-acme"
+    }
+]
