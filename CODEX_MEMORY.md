@@ -3472,3 +3472,18 @@ Basarili:
 - Installer SHA256: `F204CBFAA48E12A0BA8F4B881821260F5FC9A5CA3FDE8A7426902F0948620C71` (51116007 byte / 48.75 MiB). AKTİF.
 - KALAN M1 (görev #21-23): plan zenginleştir (DB/posta/bandwidth limitleri), DB+posta kotası dayat, plan→müşteri uygulama +
   müşteri self-servis ekran deneyimi doğrula. Çok-adımlı; her biri ayrı tur.
+
+## 2026-06-23 (74) — M1 #22 (kısmî): DB sahiplik modeli + MaxDatabases kotası (Plesk yolu) — BACKEND TAM
+- Kullanıcı "DB sahiplik modelini kur, Plesk gibi" seçti. BULGU: DatabaseCredentialStore'da DB↔sahip bağı yoktu → per-müşteri
+  DB sayılamıyordu. KURULDU: IDatabaseOwnershipService + DatabaseOwnershipService (config/db-ownership.json: "engine|db" → {OwnerId, SiteName};
+  Record/Remove/RemoveBySite/CountForOwner/GetOwner). DI kayıtlı.
+- MaxDatabases scope'a eklendi: CustomerScope record (+MaxDatabases), ScopeEntry.MaxDatabases, GetScopeAsync, SetDatabaseLimitAsync
+  (ayrı setter — SetScopeAsync ripple'ı yok; SetScopeAsync/SetOwnerAsync MaxDatabases'i KORUR). Uçtan uca: CreateUserRequest/
+  UpdateUserRequest/UserSummaryDto +MaxDatabases, UserManagement.ApplyScopeAsync → SetDatabaseLimitAsync, MapUser.
+- DAYATMA: SitesController (site-DB oluşturma yolu, #20 ile bayiye açık) — IsDatabaseQuotaReachedAsync (admin sınırsız, MaxDatabases>0
+  && owned>=limit → DB atlanır, site yine oluşur, warning) + başarılı create'te dbOwnership.RecordAsync (admin değilse). Varsayılan
+  0=limitsiz → REGRESYON YOK (dormant).
+- Doğrulama: build 0/0, test 44/44 (+2). Installer SHA256: `929508AC1B86DA7B61C2C92D5FB6A1ACE6AC15F96D26E8AAF30D6DBE3BCDF626` (51120959 / 48.75 MiB). AKTİF.
+- KALAN (#22/#21 polish): (1) MaxDatabases'i UI'da ayarlanır kıl — limitler frontend'de SERVİS PLANI üzerinden set ediliyor (ayrı user-form yok);
+  ServicePlan'a MaxDatabases ekle + plan UI + plan→müşteri kopyalama. (2) cascade temizlik: DB silince RemoveAsync, site silince RemoveBySiteAsync
+  (yetim kayıt over-count yapmasın — DatabasesController.Delete + SiteCascadeDeletionService'e bağlanacak). (3) posta kutusu kotası (linkable). (4) DatabasesController'ı bayiye aç + DB görünürlük filtresi (güvenlik).

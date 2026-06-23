@@ -37,6 +37,9 @@ public sealed class CreateUserRequest
     /// <summary>Customer için toplam disk kotası MB (0 = sınırsız).</summary>
     public int MaxDiskMb { get; init; }
 
+    /// <summary>Customer için en fazla veritabanı kotası (Plesk MaxDatabases; 0 = sınırsız).</summary>
+    public int MaxDatabases { get; init; }
+
     /// <summary>true ise kullanıcıya giriş bilgilerini içeren hoş geldin e-postası gönderilir.</summary>
     public bool SendWelcomeEmail { get; init; }
 }

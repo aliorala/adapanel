@@ -21,6 +21,7 @@ public sealed class SitesController(
     ISiteDefaultsService siteDefaultsService,
     ISiteCascadeDeletionService siteCascadeDeletionService,
     ICustomerScopeService customerScopes,
+    IDatabaseOwnershipService dbOwnership,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet]
@@ -130,6 +131,13 @@ public sealed class SitesController(
             (request.ProvisionDefaultServices && installedComponents.Contains("stalwart-mail"));
         var shouldCreateFtpUser = request.CreateFtpUser || request.ProvisionDefaultServices;
 
+        // M1 (Plesk MaxDatabases): DB kotası doluysa DB oluşturmayı atla (site yine oluşur). Admin sınırsız.
+        if (shouldCreateDatabase && !string.IsNullOrWhiteSpace(databaseEngine) && await IsDatabaseQuotaReachedAsync(cancellationToken))
+        {
+            shouldCreateDatabase = false;
+            result.Warnings.Add("database: quota reached (max databases in your plan).");
+        }
+
         if (shouldCreateDatabase && !string.IsNullOrWhiteSpace(databaseEngine))
         {
             var dbName = string.IsNullOrWhiteSpace(request.DatabaseName)
@@ -159,6 +167,11 @@ public sealed class SitesController(
                     UserName = databaseUser,
                     Password = databasePassword
                 });
+                // M1: yeni DB'yi oluşturan müşteriye + siteye ait kaydet (kota sayımı + sahiplik).
+                if (!User.IsInRole("Administrator"))
+                {
+                    await dbOwnership.RecordAsync(databaseEngine, dbName, User.GetRequiredUserId(), site.Name, cancellationToken);
+                }
             }
             catch (Exception exception)
             {
@@ -348,6 +361,24 @@ public sealed class SitesController(
         {
             throw new Core.Common.AppException("sites.quota_exceeded", 403, 403);
         }
+    }
+
+    // M1 (Plesk MaxDatabases): admin olmayan kullanıcının sahip olduğu DB sayısı kotayı doldurdu mu?
+    private async Task<bool> IsDatabaseQuotaReachedAsync(CancellationToken cancellationToken)
+    {
+        if (User.IsInRole("Administrator"))
+        {
+            return false;
+        }
+
+        var userId = User.GetRequiredUserId();
+        var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
+        if (scope.MaxDatabases <= 0)
+        {
+            return false; // 0 = limitsiz
+        }
+
+        return await dbOwnership.CountForOwnerAsync(userId, cancellationToken) >= scope.MaxDatabases;
     }
 
     // M1: admin olmayan oluşturucunun yeni sitesini kendi kapsamına ekler (yoksa). OwnerId korunur (SetScopeAsync).

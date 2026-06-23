@@ -23,8 +23,8 @@ public sealed class CustomerScopeService(
     {
         var state = await LoadAsync(cancellationToken);
         return state.TryGetValue(userId.ToString("N"), out var entry)
-            ? new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb)
-            : new CustomerScope([], 0, 0);
+            ? new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb, entry.MaxDatabases)
+            : new CustomerScope([], 0, 0, 0);
     }
 
     public async Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default)
@@ -42,8 +42,9 @@ public sealed class CustomerScopeService(
             var key = userId.ToString("N");
             state.TryGetValue(key, out var current);
             var ownerId = current?.OwnerId; // bayi sahipliğini koru
+            var maxDatabases = current?.MaxDatabases ?? 0; // DB kotasını koru (ayrı setter'la set edilir)
 
-            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && string.IsNullOrEmpty(ownerId))
+            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && string.IsNullOrEmpty(ownerId))
             {
                 state.Remove(key);
             }
@@ -54,8 +55,32 @@ public sealed class CustomerScopeService(
                     Sites = normalized,
                     MaxSites = Math.Max(0, maxSites),
                     MaxDiskMb = Math.Max(0, maxDiskMb),
+                    MaxDatabases = maxDatabases,
                     OwnerId = ownerId
                 };
+            }
+
+            return state;
+        }, cancellationToken);
+    }
+
+    public async Task SetDatabaseLimitAsync(Guid userId, int maxDatabases, CancellationToken cancellationToken = default)
+    {
+        await fileStore.UpdateAsync(StatePath, NewState(), existing =>
+        {
+            var state = Wrap(existing);
+            var key = userId.ToString("N");
+            if (!state.TryGetValue(key, out var entry))
+            {
+                entry = new ScopeEntry();
+                state[key] = entry;
+            }
+
+            entry.MaxDatabases = Math.Max(0, maxDatabases);
+
+            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0)
+            {
+                state.Remove(key);
             }
 
             return state;
@@ -197,6 +222,7 @@ public sealed class CustomerScopeService(
         public List<string> Sites { get; set; } = [];
         public int MaxSites { get; set; }
         public int MaxDiskMb { get; set; }
+        public int MaxDatabases { get; set; }
 
         /// <summary>Bu müşteriyi yöneten bayinin kimliği ("N" formatı); admin oluşturduysa null.</summary>
         public string? OwnerId { get; set; }
@@ -217,7 +243,7 @@ public sealed class CustomerScopeService(
             entry.OwnerId = ownerId?.ToString("N");
 
             // Sahiplik kaldırıldı ve başka veri yoksa kaydı temizle (yetim kalmasın).
-            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0)
+            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0)
             {
                 state.Remove(key);
             }

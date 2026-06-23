@@ -30,4 +30,7 @@ public sealed class UpdateUserRequest
 
     /// <summary>Customer için toplam disk kotası MB (0 = sınırsız).</summary>
     public int MaxDiskMb { get; init; }
+
+    /// <summary>Customer için en fazla veritabanı kotası (Plesk MaxDatabases; 0 = sınırsız).</summary>
+    public int MaxDatabases { get; init; }
 }

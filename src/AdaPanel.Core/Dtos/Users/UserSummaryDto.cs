@@ -27,6 +27,9 @@ public sealed class UserSummaryDto
 
     public int MaxDiskMb { get; init; }
 
+    /// <summary>Customer için en fazla veritabanı kotası (Plesk MaxDatabases).</summary>
+    public int MaxDatabases { get; init; }
+
     /// <summary>Customer'ın atanan sitelerinin güncel disk kullanımı (MB).</summary>
     public long DiskUsageMb { get; init; }
 
