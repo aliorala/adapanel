@@ -3601,3 +3601,18 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44 (+2 core), publish OK, ISCC OK.
 - Installer SHA256: `4DC8005B1736A28ADC05E26C1AA5172A6ED4880FB4024043BF3CB3CD75DE5CC6` (51137280 / 48.77 MiB). AKTİF.
 - NOT (canlı): kullanıcı webmail.<domain> DNS'ini sunucuya yöneltmeli (Plesk'te de şart). KALAN: FTP+FTPS+SFTP ile uzaktan DOSYA çekme (site göçü).
+
+## 2026-06-23 (83) — FTP/FTPS/SFTP ile uzaktan DOSYA çekme (Plesk Migrator dosya tarafı)
+- Kullanıcı: "DB'yi uzaktan çekiyoruz, dosyaları da FTP ile çekelim, site taşınmış olsun" + "pleski örnek al, araştır, ona göre yap."
+- ARAŞTIRMA (Plesk docs/obsidian Importing Websites): Plesk Migrator simple/advanced mod; kaynak FTP/SSH kullanıcısı + belge kökü
+  (httpdocs/public_html/www); SSH (SFTP) FTP'den HIZLI, önerilir. AdaPanel advanced-mod eşine hizalandı (protokol + host + kök yol seçilir).
+- KÜTÜPHANE (memory "kırılgan çözüm icat etme" → kanıtlanmışı kullan, FTP listesi elle ayrıştırma): FluentFTP 52.0.0 (FTP/FTPS,
+  sağlam DownloadDirectory) + SSH.NET 2024.1.0 (SFTP, özyinelemeli ListDirectory/DownloadFile). csproj'a eklendi, restore+publish OK.
+- BACKEND: IFileMigrationService + FileMigrationService (Infrastructure/Migration). PullAsync → hedef = site.PhysicalPath (IIS kökü);
+  ftp/ftps → FluentFTP AsyncFtpClient.DownloadDirectory (ValidateAnyCertificate; EncryptionMode.Auto=ftps); sftp → SSH.NET özyinelemeli.
+  RemoteFileMigrationRequest/Result. SiteHostingSettingsController POST .../migrate-files ([Authorize Admin,Reseller] + EnsureSiteAsync scope). DI kaydı.
+- FRONTEND: api/siteHosting.ts migrateSiteFiles; SiteMigrationView'a "FTP/SFTP ile dosya çek" formu (protokol [SFTP önerilen]/host/port/
+  kullanıcı/parola/uzak yol [public_html|httpdocs|www ipucu]). i18n panel.migration.ftp.* + migration.host_required/target_missing/failed (TR+EN).
+- Doğrulama: build 0/0, test 44/44 (+2 core), typecheck 0, i18n 2141/2141, FE build 0, publish OK, ISCC OK.
+- Installer SHA256: `02AEBD264AF197EE935DAEEEDC27022A1E9E2656C6497F26A2F92A58F9291B58` (51682628 / 49.29 MiB; +FluentFTP/SSH.NET DLL'leri). AKTİF.
+- NOT: bağlantı parolası SAKLANMAZ (yalnız işlem için). DB taşıma (mevcut) + dosya çekme = TAM site göçü. SFTP host-key/FTPS cert göç için gevşek (kullanıcı kendi dosyası).

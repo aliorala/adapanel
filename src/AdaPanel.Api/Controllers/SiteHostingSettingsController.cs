@@ -13,7 +13,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/sites/{siteName}/hosting-settings")]
 public sealed class SiteHostingSettingsController(
     ISiteHostingSettingsService service,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IFileMigrationService migrationService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<SiteHostingSettingsDto>>> GetAsync(string siteName, CancellationToken cancellationToken)
@@ -92,6 +93,18 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         return Ok(ApiResponse<SiteImportResultDto>.Ok(await service.ImportSiteArchiveAsync(siteName, request.ArchiveUrl, request.CleanFirst, cancellationToken), "migration.completed"));
+    }
+
+    // Plesk Migrator gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını hedef sitenin köküne indirir.
+    [HttpPost("migrate-files")]
+    public async Task<ActionResult<ApiResponse<RemoteFileMigrationResult>>> MigrateFilesAsync(
+        string siteName,
+        [FromBody] RemoteFileMigrationRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        request.SiteName = siteName;
+        return Ok(ApiResponse<RemoteFileMigrationResult>.Ok(await migrationService.PullAsync(request, cancellationToken), "migration.completed"));
     }
 
     // Plesk Kuyruk sekmesi gibi: Laravel queue worker durum / başlat / durdur.

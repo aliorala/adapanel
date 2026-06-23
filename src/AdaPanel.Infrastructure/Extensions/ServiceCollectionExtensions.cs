@@ -85,6 +85,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
         services.AddScoped<IBackupService, Backup.BackupService>();
+        services.AddScoped<IFileMigrationService, Migration.FileMigrationService>();
         services.AddScoped<IAppStoreService, AppStore.AppStoreService>();
         services.AddScoped<IWordPressToolkitService, AppStore.WordPressToolkitService>();
         services.AddScoped<ISelfUpdateService, SelfUpdate.SelfUpdateService>();

@@ -82,6 +82,32 @@ export async function importSiteArchive(siteName: string, archiveUrl: string, cl
   return response.data.data;
 }
 
+export type RemoteFileMigrationPayload = {
+  protocol: string; // ftp | ftps | sftp
+  host: string;
+  port: number;
+  userName: string;
+  password: string;
+  remotePath: string;
+};
+
+export type RemoteFileMigrationResult = {
+  siteName: string;
+  protocol: string;
+  filesDownloaded: number;
+  bytesDownloaded: number;
+  targetPath: string;
+};
+
+// Plesk Migrator gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını çeker.
+export async function migrateSiteFiles(siteName: string, payload: RemoteFileMigrationPayload) {
+  const response = await apiClient.post<ApiEnvelope<RemoteFileMigrationResult>>(
+    `/sites/${encodeURIComponent(siteName)}/hosting-settings/migrate-files`,
+    payload
+  );
+  return response.data.data;
+}
+
 export type QueueWorkerStatus = { running: boolean; taskName: string };
 
 export async function getQueueWorker(siteName: string) {
