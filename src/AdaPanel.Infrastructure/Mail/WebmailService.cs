@@ -24,6 +24,7 @@ public sealed class WebmailService(
     IPhpService phpService,
     IHttpClientFactory httpClientFactory,
     JsonFileStore fileStore,
+    ISslService sslService,
     ILogger<WebmailService> logger) : IWebmailService
 {
     private const string StatePath = "config/webmail.json";
@@ -49,7 +50,7 @@ public sealed class WebmailService(
         var existing = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
         if (existing is { Port: > 0 } && await IsDeployedAndHealthyAsync(existing.Port, cancellationToken))
         {
-            return BuildUrl(publicHost, existing.Port);
+            return BuildWebmailUrl(existing, publicHost);
         }
 
         var component = await EnsureInstalledAsync(cancellationToken);
@@ -110,6 +111,61 @@ public sealed class WebmailService(
         await VerifyHealthyAsync(port, cancellationToken);
 
         return BuildUrl(publicHost, port);
+    }
+
+    // Plesk gibi: bir mail domaini SSL alınca webmail.<domain> de otomatik HTTPS olur. Best-effort.
+    public async Task SecureWebmailForDomainAsync(string domain, string contactEmail, CancellationToken cancellationToken = default)
+    {
+        var normalized = (domain ?? string.Empty).Trim().TrimStart('.').ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.StartsWith("webmail.", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var webmailHost = $"webmail.{normalized}";
+        try
+        {
+            var state = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
+            if (state is null || state.Port <= 0)
+            {
+                return; // webmail henüz kurulmamış → güvenli yapacak bir şey yok
+            }
+
+            // 1) win-acme HTTP-01 doğrulaması + servis için webmail sitesine host-header HTTP binding ekle (idempotent).
+            await EnsureWebmailHostBindingAsync(webmailHost, cancellationToken);
+
+            // 2) host'u HTTPS yap (mevcut kapsayan cert ya da Let's Encrypt). Başarısızsa sessiz geç.
+            if (!await sslService.TrySecureHostAsync(SiteName, webmailHost, contactEmail ?? string.Empty, cancellationToken))
+            {
+                return;
+            }
+
+            // 3) başarılı → kaydet (OpenAsync artık https döner).
+            var hosts = new List<string>(state.SecuredHosts ?? new List<string>());
+            if (!hosts.Contains(webmailHost, StringComparer.OrdinalIgnoreCase))
+            {
+                hosts.Add(webmailHost);
+                state.SecuredHosts = hosts;
+                await fileStore.WriteAsync(StatePath, state, cancellationToken);
+            }
+
+            logger.LogInformation("Webmail HTTPS etkin: {Host}", webmailHost);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Webmail HTTPS yapılamadı: {Host} (best-effort).", webmailHost);
+        }
+    }
+
+    private static async Task EnsureWebmailHostBindingAsync(string webmailHost, CancellationToken cancellationToken)
+    {
+        // Paylaşımlı webmail sitesine webmail.<domain>:80 host-header binding'i ekle (challenge + servis).
+        // New-WebBinding zaten varsa hata verir, SilentlyContinue ile yutulur → idempotent. Mevcut :8899 erişimi etkilenmez.
+        var script = $$"""
+            Import-Module WebAdministration -ErrorAction SilentlyContinue
+            New-WebBinding -Name '{{SiteName}}' -Protocol http -Port 80 -HostHeader '{{webmailHost}}' -ErrorAction SilentlyContinue
+            """;
+        await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
     }
 
     private async Task<InstalledRoundcube> EnsureInstalledAsync(CancellationToken cancellationToken)
@@ -269,6 +325,17 @@ public sealed class WebmailService(
     {
         var host = string.IsNullOrWhiteSpace(publicHost) ? "127.0.0.1" : publicHost.Trim();
         return new WebmailOpenDto { Url = $"http://{host}:{port}/" };
+    }
+
+    // Bir domain için webmail HTTPS yapıldıysa (webmail.<domain>) uyarısız HTTPS adresini tercih et; yoksa düz HTTP.
+    private static WebmailOpenDto BuildWebmailUrl(WebmailState state, string publicHost)
+    {
+        if (state.SecuredHosts is { Count: > 0 })
+        {
+            return new WebmailOpenDto { Url = $"https://{state.SecuredHosts[0]}/" };
+        }
+
+        return BuildUrl(publicHost, state.Port);
     }
 
     private async Task VerifyHealthyAsync(int port, CancellationToken cancellationToken)
@@ -465,5 +532,8 @@ public sealed class WebmailService(
         public string EntryRoot { get; set; } = string.Empty;
 
         public string PhpComponentId { get; set; } = string.Empty;
+
+        // Webmail'in HTTPS yapıldığı host'lar (webmail.<domain>). Doluysa OpenAsync https döner.
+        public List<string> SecuredHosts { get; set; } = new();
     }
 }

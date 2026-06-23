@@ -3583,3 +3583,21 @@ Basarili:
 - Installer SHA256: `9AFCDB3602E50D586079FA7B970E5674B5E6E115557700DF7A4A57FE3D279B95` (51134445 / 48.77 MiB). AKTİF.
 - KALAN: (a) Webmail SSL — Let's Encrypt per-site webmail.<domain> SAN (jenerik/otomatik, kullanıcı "her site için otomatik" onayladı).
   (b) YENİ istek: FTP ile uzaktan DOSYA çekme (site taşıma; mevcut sunucu-taraflı remote-DB transfer'in dosya eşi).
+
+## 2026-06-23 (82) — Webmail SSL (Plesk gibi otomatik, jenerik, herhangi sertifika) — GÜVENLİ hook
+- Kullanıcı: "webmail her yerden HTTPS, panel girişi olmadan; SADECE Let's Encrypt değil yüklenen sertifika da; her site için
+  OTOMATİK; pleskte nasılsa öyle." Webmail-open GLOBAL (Request.Host.Host), paylaşımlı tek Roundcube sitesi (AdaPanel.Webmail).
+- YÜKSEK ETKİ ALANI (müşteri sitelerinin ORTAK SSL akışı) → GÜVENLİ tasarım: müşteri cert akışına DOKUNMADAN, SONRASINA best-effort
+  hook. Müşteri cert'i HİÇBİR durumda etkilenmez (önce o tamamlanır, sonra webmail denenir).
+- ISslService.TrySecureHostAsync(site, host, email): (1) host'u KAPSAYAN mevcut cert varsa (yüklenen wildcard dahil) BAĞLA,
+  (2) yoksa DNS çözülüyorsa LE dene (çözülmüyorsa HIZLI ATLA — win-acme 120sn takılmasın), (3) HTTP→HTTPS REDIRECT EKLEMEZ
+  (paylaşımlı :8899 erişimi bozulmaz). Tamamı try/catch.
+- WebmailService: ISslService enjekte (DI cycle YOK — WinAcmeSslService IWebmailService'e bağlı değil). SecureWebmailForDomainAsync(domain):
+  webmail.<domain>:80 host-header binding (New-WebBinding idempotent, :8899 etkilenmez) + TrySecureHostAsync + WebmailState.SecuredHosts kaydı.
+  OpenAsync → BuildWebmailUrl: secured host varsa https://webmail.<domain>/, yoksa http fallback.
+- SslController: IssueLetsEncrypt VE Import sonrası TrySecureWebmailAsync(cert.HostName, email) best-effort (isteği bozmaz).
+  → "Let's Encrypt al" YA DA "sertifika yükle" deyince webmail.<o-domain> OTOMATİK HTTPS olur. Jenerik, sabit-kod yok, dağıtıma uygun.
+- Backend-only (yeni UI/i18n yok; mevcut SSL akışı + "webmail aç" otomatik kapsar).
+- Doğrulama: build 0/0, test 44/44 (+2 core), publish OK, ISCC OK.
+- Installer SHA256: `4DC8005B1736A28ADC05E26C1AA5172A6ED4880FB4024043BF3CB3CD75DE5CC6` (51137280 / 48.77 MiB). AKTİF.
+- NOT (canlı): kullanıcı webmail.<domain> DNS'ini sunucuya yöneltmeli (Plesk'te de şart). KALAN: FTP+FTPS+SFTP ile uzaktan DOSYA çekme (site göçü).

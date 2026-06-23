@@ -200,6 +200,52 @@ public sealed class WinAcmeSslService(
         return result.Success && result.StandardOutput.Contains("YES", StringComparison.Ordinal);
     }
 
+    public async Task<bool> TrySecureHostAsync(string siteName, string hostName, string contactEmail, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+
+            // 1) host'u kapsayan geçerli bir sertifika zaten varsa (ör. yüklenen wildcard) onu bağla.
+            var existing = FindBestCertificate(hostName);
+            if (existing is not null && existing.NotAfter > DateTime.Now)
+            {
+                await EnsureHttpsBindingAsync(site.Name, hostName, 443, existing, cancellationToken);
+                return true;
+            }
+
+            // 2) yoksa Let's Encrypt dene. ÖNCE host DNS'te çözülüyor mu bak — çözülmüyorsa win-acme
+            // ~120 sn takılır; hızlıca atla ki paylaşımlı site cert isteğini yavaşlatmasın.
+            try
+            {
+                var addresses = await System.Net.Dns.GetHostAddressesAsync(hostName, cancellationToken);
+                if (addresses.Length == 0)
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                return false; // host çözülmüyor → Let's Encrypt denemeye gerek yok
+            }
+
+            var issued = await TryIssueWithWinAcmeAsync(site, hostName, contactEmail, false, cancellationToken);
+            if (issued is null)
+            {
+                return false;
+            }
+
+            PersistCertificate(issued);
+            await EnsureHttpsBindingAsync(site.Name, hostName, 443, issued, cancellationToken);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Host '{Host}' güvenli (HTTPS) yapılamadı (best-effort).", hostName);
+            return false;
+        }
+    }
+
     private async Task<X509Certificate2?> TryIssueWithWinAcmeAsync(
         AdaPanel.Core.Dtos.Sites.SiteDto site,
         string hostName,

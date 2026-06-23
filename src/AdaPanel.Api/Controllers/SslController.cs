@@ -12,7 +12,7 @@ namespace AdaPanel.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller")]
 [Route("api/v1/ssl")]
-public sealed class SslController(ISslService sslService, ICustomerScopeService customerScopes) : ControllerBase
+public sealed class SslController(ISslService sslService, ICustomerScopeService customerScopes, IWebmailService webmailService) : ControllerBase
 {
     [HttpGet("{siteName}")]
     public async Task<ActionResult<ApiResponse<SslWorkspaceDto>>> GetWorkspaceAsync(string siteName, CancellationToken cancellationToken)
@@ -27,6 +27,7 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
         var certificate = await sslService.IssueLetsEncryptAsync(request, cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
     }
 
@@ -35,7 +36,27 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
         var certificate = await sslService.ImportCertificateAsync(request, cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
+    }
+
+    // Best-effort: site SSL aldıktan sonra webmail.<domain>'i de otomatik HTTPS yap (Plesk gibi).
+    // İsteği ASLA bozmaz — webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.
+    private async Task TrySecureWebmailAsync(string? domain, string? contactEmail, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            return;
+        }
+
+        try
+        {
+            await webmailService.SecureWebmailForDomainAsync(domain, contactEmail ?? string.Empty, cancellationToken);
+        }
+        catch
+        {
+            // best-effort — SSL akışını bozma
+        }
     }
 
     [HttpPost("renew")]

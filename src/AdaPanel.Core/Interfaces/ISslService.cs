@@ -17,4 +17,11 @@ public interface ISslService
 
     /// <summary>Site silinince panelin SSL durumundaki o siteye ait kayıtları temizler (öksüz kalmasın).</summary>
     Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Best-effort: bir host'u (ör. webmail.&lt;domain&gt;) verilen IIS sitesinde HTTPS yapar — önce host'u
+    /// KAPSAYAN mevcut bir sertifika varsa (yüklenen wildcard dahil) onu bağlar, yoksa Let's Encrypt dener.
+    /// HTTP→HTTPS yönlendirmesi EKLEMEZ (paylaşımlı webmail sitesini bozmaz). Başarılıysa true.
+    /// </summary>
+    Task<bool> TrySecureHostAsync(string siteName, string hostName, string contactEmail, CancellationToken cancellationToken = default);
 }
