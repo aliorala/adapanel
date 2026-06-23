@@ -3423,3 +3423,11 @@ Basarili:
 - GERİ-ALINMIŞ DURUM INSTALLER'I (kullanıcı istedi): SHA256 `553D271191EA64DB1F6814373B579840DA0A6EAC17D87EDE76DA3C50D0D6F734`
   (51099865 byte / 48.73 MiB) — güvenlik düzeltmeleri YOK. Arşiv: artifacts/installer/archive/AdaPanelSetup-553D2711.exe.
   (Karşılaştırma: düzeltmeli son installer = 8D699AAE arşivde duruyor.)
+
+## 2026-06-23 (70) — FİKİR DEĞİŞTİ: güvenli sürüm yeniden uygulandı
+- Kullanıcı geri-alınmış sürümün "açıklı eski hali" olduğunu fark etti → "güvenlik açığı olmayan bir sürüm yap" dedi.
+- `git checkout 073c964 -- <14 kod dosyası>` (CODEX hariç) ile düzeltmeli kod geri yüklendi (K1,K3,B5,B6,B4,M3,B3 + silinen
+  3 dosya geri geldi). Commit bc7f9a1. AKTİF installer artık GÜVENLİ sürüm.
+- GÜVENLİ installer SHA256: `90093A49DBEA068C79E6B476992AD57A4366EC3C483E9BF718A9036F203D1E41` (51108693 byte / 48.74 MiB). Arşiv: AdaPanelSetup-90093A49.exe.
+- git: 073c964(düzeltmeli)→6a9463e(geri-al)→4ccfbf3(docs)→bc7f9a1(yeniden-uygula, GÜVENLİ, HEAD). Tam izlenebilir, çift yönlü geri-alınabilir.
+- Arşivde 3 sürüm: 90093A49(güvenli/AKTİF), 8D699AAE(güvenli/eski), 553D2711(açıklı).
