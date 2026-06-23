@@ -2868,8 +2868,90 @@ public sealed class ComponentBootstrapper(
             installer,
             $"--datadir=\"{dataDirectory}\" --service=\"{serviceName}\" --password=\"{password}\" --port={port}",
             cancellationToken);
+        // B5: mariadb-install-db kendi my.ini'sini uretir ve varsayilanda bind-address YAZMAZ (tum
+        // arabirimleri dinler). Servis baslamadan ONCE, gercekten okudugu config'e 127.0.0.1 baglamasini ekle.
+        await EnsureMariaDbBindAddressAsync(serviceName, dataDirectory, installDirectory, cancellationToken);
         await RunProcessAsync("sc.exe", $"start \"{serviceName}\"", cancellationToken);
         await WaitForDatabaseReadyAsync(admin, serviceName, port, password, cancellationToken);
+    }
+
+    // B5 (savunma derinligi): MariaDB'nin gelen ag baglantilarini 127.0.0.1 ile sinirla.
+    // mariadb-install-db kendi my.ini'sini uretir; varsayilanda bind-address satiri YOKtur. Servisin
+    // gercekten kullandigi config dosyasini (ImagePath'teki --defaults-file) bulup [mysqld] altina
+    // bind-address ekleriz. Zaten varsa dokunmayiz; config bulunamazsa sessiz geceriz (guvenlik duvari
+    // 3306'yi disa zaten kapatir). Yalniz bind-address YOKken ekler -> admin acikca ayarlarsa ezmez.
+    private static async Task EnsureMariaDbBindAddressAsync(
+        string serviceName,
+        string dataDirectory,
+        string installDirectory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var candidates = new List<string>();
+            var fromService = ResolveServiceDefaultsFile(serviceName);
+            if (!string.IsNullOrWhiteSpace(fromService))
+            {
+                candidates.Add(fromService);
+            }
+
+            candidates.Add(Path.Combine(dataDirectory, "my.ini"));
+            candidates.Add(Path.Combine(installDirectory, "my.ini"));
+            candidates.Add(Path.Combine(installDirectory, "data", "my.ini"));
+
+            var configPath = candidates.FirstOrDefault(File.Exists);
+            if (configPath is null)
+            {
+                return;
+            }
+
+            var lines = (await File.ReadAllLinesAsync(configPath, cancellationToken)).ToList();
+            if (lines.Any(line => Regex.IsMatch(line, @"^\s*bind-address\s*=", RegexOptions.IgnoreCase)))
+            {
+                return;
+            }
+
+            var mysqldIndex = lines.FindIndex(line =>
+                line.Trim().Equals("[mysqld]", StringComparison.OrdinalIgnoreCase));
+            if (mysqldIndex >= 0)
+            {
+                lines.Insert(mysqldIndex + 1, "bind-address=127.0.0.1");
+            }
+            else
+            {
+                lines.Add("[mysqld]");
+                lines.Add("bind-address=127.0.0.1");
+            }
+
+            await File.WriteAllLinesAsync(configPath, lines, cancellationToken);
+        }
+        catch
+        {
+            // Best-effort sertlestirme: basarisiz olursa kurulumu bozma.
+        }
+    }
+
+    // Servisin ImagePath'inden --defaults-file yolunu cikarir (servisin gercekten okudugu config). Bulamazsa null.
+    private static string? ResolveServiceDefaultsFile(string serviceName)
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(
+            $@"SYSTEM\CurrentControlSet\Services\{serviceName}");
+        if (key?.GetValue("ImagePath") is not string imagePath || string.IsNullOrWhiteSpace(imagePath))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(
+            imagePath,
+            "--defaults-file=(?:\"(?<q>[^\"]+)\"|(?<u>\\S+))",
+            RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var path = match.Groups["q"].Success ? match.Groups["q"].Value : match.Groups["u"].Value;
+        return string.IsNullOrWhiteSpace(path) ? null : path.Trim();
     }
 
     private async Task WaitForDatabaseReadyAsync(
@@ -3133,16 +3215,30 @@ public sealed class ComponentBootstrapper(
                 }
             }
 
-            var desired = new SortedSet<string>(binds, StringComparer.Ordinal);
-            foreach (var address in binds)
+            // M3 (sertleştirme): yönetim/HTTP portu (8080) YALNIZ LOOPBACK dinlesin — admin arayüzü/JMAP
+            // dışarıya açık olmasın (denetim: "8080 0.0.0.0 → localhost'a al"). Panel zaten localhost
+            // (::1/127.0.0.1) üzerinden yönetir; IMAP/SMTP (25/143/587) AYRI portlardır ve etkilenmez;
+            // standart mail-client autoconfig 443/well-known kullanır, 8080 değil. Best-effort (çağrı try/catch).
+            SortedSet<string> desired;
+            if (binds.Any(address => address.EndsWith(":8080", StringComparison.Ordinal)))
             {
-                if (address.StartsWith("[::]:", StringComparison.Ordinal))
+                desired = new SortedSet<string>(["127.0.0.1:8080", "[::1]:8080"], StringComparer.Ordinal);
+            }
+            else
+            {
+                // Diğer (mail) dinleyiciler: "[::]:port" varsa "0.0.0.0:port" da ekle (çift yığın, IPv4 erişimi).
+                desired = new SortedSet<string>(binds, StringComparer.Ordinal);
+                foreach (var address in binds)
                 {
-                    desired.Add("0.0.0.0:" + address["[::]:".Length..]);
+                    if (address.StartsWith("[::]:", StringComparison.Ordinal))
+                    {
+                        desired.Add("0.0.0.0:" + address["[::]:".Length..]);
+                    }
                 }
             }
 
-            if (desired.Count == binds.Count)
+            // İçerik aynıysa (port/kümeler eşit) dokunma. SetEquals: loopback değişiminde sayı eşit ama içerik farklı olabilir.
+            if (desired.SetEquals(binds))
             {
                 continue;
             }
@@ -3399,6 +3495,12 @@ public sealed class ComponentBootstrapper(
         // PHP Windows'ta ileri-bölü yolu kabul eder; ters-bölü kaçış belirsizliğinden kaçınılır.
         SetPhpIniDirective(lines, "log_errors", "On");
         SetPhpIniDirective(lines, "error_log", "\"" + Path.Combine(installDirectory, "php_errors.log").Replace("\\", "/") + "\"");
+        // GÜVENLİK (K3): boş disable_functions, barındırılan bir sitenin OS komutu çalıştırmasına (RCE) izin verir
+        // → K1 (dosya okuma) ile birleşince tam ele geçirme. Sadece komut-çalıştırma fonksiyonlarını kapat;
+        // curl/parse_ini gibi uygulama-gerekli fonksiyonlar AÇIK kalır. preserveExisting YOK: varsayılan
+        // php.ini'deki boş "disable_functions =" + "expose_php = On" satırlarını EZMEK gerekir.
+        SetPhpIniDirective(lines, "disable_functions", "exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec");
+        SetPhpIniDirective(lines, "expose_php", "Off");
         // Tuning değerleri: optimal varsayılan ama kullanıcının aktif ayarını BOZMA.
         SetPhpIniDirective(lines, "memory_limit", "512M", preserveExisting: true);
         SetPhpIniDirective(lines, "max_execution_time", "300", preserveExisting: true);

@@ -28,6 +28,16 @@ public static class ServiceCollectionExtensions
                 // ağır kimlikli sayfayı bekleyip 3sn timeout'a takılırız (webdb.health.http_failed).
                 AllowAutoRedirect = false
             });
+        // B3 panel reverse-proxy: phpMyAdmin/Adminer'i yerel IIS'e ilet. Yönlendirmeleri (302 signon/login)
+        // İZLEME — tarayıcıya geçir ki phpMyAdmin akışı doğru ilerlesin. Cookie'leri factory tutmasın (her
+        // istek tarayıcının kendi cookie'siyle gelir/gider).
+        services.AddHttpClient("DbToolsProxy")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                UseProxy = false,
+                AllowAutoRedirect = false,
+                UseCookies = false
+            });
         services.AddScoped<IPasswordHasher<PanelUser>, PasswordHasher<PanelUser>>();
         services.AddScoped<IAuditService, AuditService>();
         services.AddScoped<ISetupService, SetupService>();
@@ -93,6 +103,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDockerService, Docker.DockerService>();
         services.AddScoped<IAutomationService, Automation.AutomationService>();
         // K1 güvenlik: veri kökü hassas klasörlerini her açılışta SYSTEM/Admins'e kilitle (AutomationWorker'dan ÖNCE).
+        services.AddHostedService<Bootstrap.DataRootHardeningService>();
         services.AddHostedService<Automation.AutomationWorker>();
 
         return services;

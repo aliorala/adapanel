@@ -1999,6 +1999,8 @@
   "panel.php.uploadMaxFilesize": "Max upload size",
   "panel.php.postMaxSize": "Max POST size",
   "panel.php.displayErrors": "Display errors (development)",
+  "panel.php.openBasedir": "open_basedir isolation (confine site to its own root)",
+  "panel.php.openBasedirHint": "Off unless explicitly enabled. When on, PHP can only read this site's root (the project root for Laravel), the in-site tmp and the system temp; it cannot see other sites or panel data. If a site breaks (e.g. it reads files outside its root), just turn it off and save.",
   "panel.php.settingsSaved": "PHP settings saved. Changes take effect within a few minutes.",
   "php.settings.success": "PHP settings saved.",
   "php.site_root_missing": "Site root directory not found.",

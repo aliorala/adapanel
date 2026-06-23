@@ -306,9 +306,29 @@ public sealed class PhpService(
             {
                 dto.DisplayErrors = de.Equals("On", StringComparison.OrdinalIgnoreCase) || de == "1";
             }
+
+            // open_basedir satırı varsa izolasyon açık demektir.
+            dto.OpenBasedirEnabled = values.ContainsKey("open_basedir");
         }
 
         return dto;
+    }
+
+    // IIS app pool kimliği (IIS_IUSRS) bir dizine YAZABİLSİN (open_basedir açıkken PHP oturum dosyaları
+    // site-içi tmp'e yazılır). Best-effort; icacls yoksa/başarısızsa sessiz geçer (ayar yine yazılır).
+    private static async Task GrantAppPoolWriteAsync(string directory, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync(
+                "icacls.exe",
+                $"\"{directory}\" /grant \"IIS_IUSRS:(OI)(CI)M\" /T /C /Q",
+                cancellationToken: cancellationToken);
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     public async Task<SitePhpSettingsDto> UpdateSitePhpSettingsAsync(
@@ -329,6 +349,29 @@ public sealed class PhpService(
         content.AppendLine($"upload_max_filesize = {SanitizeIniValue(request.UploadMaxFilesize)}");
         content.AppendLine($"post_max_size = {SanitizeIniValue(request.PostMaxSize)}");
         content.AppendLine($"display_errors = {(request.DisplayErrors ? "On" : "Off")}");
+
+        if (request.OpenBasedirEnabled)
+        {
+            // B4 İZOLASYON (opsiyonel, geri-alınabilir): PHP'yi sitenin köküne hapset.
+            // KÖK = ApplicationRootPath — Laravel'de çerçeve kodu (vendor/app/bootstrap) public'in ÜSTÜndedir;
+            // panel gerçek proje kökünü bilir. Boşsa (düz site) PhysicalPath kök olur.
+            // Oturum dosyaları site-içi tmp'e yazılır (session.save_path = INI_ALL → .user.ini'den ayarlanır).
+            // YÜKLEMELER OS temp'inde kalır (upload_tmp_dir INI_SYSTEM → buradan değiştirilemez); o yüzden
+            // OS temp'i de izinli yola DAHİL ederiz → açınca yükleme/oturum KIRILMAZ.
+            var openBaseRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                ? site.PhysicalPath
+                : site.ApplicationRootPath);
+            var sessionDir = Path.Combine(openBaseRoot, "tmp");
+            Directory.CreateDirectory(sessionDir);
+            await GrantAppPoolWriteAsync(sessionDir, cancellationToken);
+
+            var osTemp = Path.GetFullPath(Environment.ExpandEnvironmentVariables("%SystemRoot%\\Temp"));
+            var allowed = new[] { openBaseRoot, sessionDir, osTemp }
+                .Select(path => path.Replace('\\', '/').TrimEnd('/'))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            content.AppendLine($"open_basedir = \"{string.Join(';', allowed)}\"");
+            content.AppendLine($"session.save_path = \"{sessionDir.Replace('\\', '/')}\"");
+        }
 
         var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
         await File.WriteAllTextAsync(iniPath, content.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
@@ -729,6 +772,10 @@ public sealed class PhpService(
             // (300sn) KISA. Büyük SQL import / uzun işlemler "500 0x80070102 (timeout)" verir. Mevcut kayıtta da yükselt.
             SetAttributeValue(existing, "activityTimeout", 600);
             SetAttributeValue(existing, "requestTimeout", 600);
+            // B4 (sertleştirme): bir php-cgi süreci 10000 istekten sonra geri dönüştürülür. Kaçak bellek
+            // biriktiren / uzun ömürlü süreçlerin "blast radius"unu sınırlar; PHP'nin kendi PHP_FCGI_MAX_REQUESTS
+            // varsayılanıyla (10000) hizalı olduğundan PHP süreci önce kendini sonlandırıp 500 vermez.
+            SetAttributeValue(existing, "instanceMaxRequests", 10000);
             return;
         }
 
@@ -737,6 +784,9 @@ public sealed class PhpService(
         SetAttributeValue(application, "arguments", string.Empty);
         SetAttributeValue(application, "activityTimeout", 600);
         SetAttributeValue(application, "requestTimeout", 600);
+        // B4: süreç geri-dönüşüm sınırı (yukarıdaki açıklama). maxInstances'a DOKUNULMAZ -> IIS otomatik
+        // (0) bırakılır; sabit düşük bir tavan meşru eşzamanlılığı boğardı.
+        SetAttributeValue(application, "instanceMaxRequests", 10000);
         InvokeMethod(fastCgiCollection, "Add", application);
     }
 
