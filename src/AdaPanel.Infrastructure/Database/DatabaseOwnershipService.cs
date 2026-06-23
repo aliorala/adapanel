@@ -79,6 +79,28 @@ internal sealed class DatabaseOwnershipService(JsonFileStore fileStore) : IDatab
             : null;
     }
 
+    public async Task<IReadOnlyCollection<(string Engine, string DatabaseName)>> GetOwnedAsync(Guid ownerUserId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        var owner = ownerUserId.ToString("N");
+        var result = new List<(string Engine, string DatabaseName)>();
+        foreach (var pair in state)
+        {
+            if (!string.Equals(pair.Value.OwnerId, owner, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var parts = pair.Key.Split('|', 2);
+            if (parts.Length == 2)
+            {
+                result.Add((parts[0], parts[1]));
+            }
+        }
+
+        return result;
+    }
+
     private async Task<Dictionary<string, OwnershipEntry>> LoadAsync(CancellationToken cancellationToken) =>
         Wrap(await fileStore.ReadAsync<Dictionary<string, OwnershipEntry>>(StatePath, [], cancellationToken));
 

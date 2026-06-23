@@ -181,6 +181,8 @@
 
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
+    <MyDatabasesView v-else-if="activeSection === 'database' && isReseller" />
+
     <MailView v-else-if="activeSection === 'mail' && (isAdmin || isCustomer || isReseller)" />
 
     <MonitoringView
@@ -648,6 +650,7 @@ import { useSoftwareStore } from "../stores/software";
 import { useSystemStore } from "../stores/system";
 import CronView from "./CronView.vue";
 import DatabasesView from "./DatabasesView.vue";
+import MyDatabasesView from "./MyDatabasesView.vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import FilesView from "./FilesView.vue";
 import MailView from "./MailView.vue";
@@ -871,6 +874,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "sites" ||
       section.id === "mail" ||
       section.id === "files" ||
+      section.id === "database" ||
       section.id === "settings" ||
       section.id === "exit");
   }

@@ -21,4 +21,7 @@ public interface IDatabaseOwnershipService
 
     /// <summary>Veritabanının sahibi (yoksa null) — kapsam/görünürlük kontrolü için.</summary>
     Task<Guid?> GetOwnerAsync(string engine, string databaseName, CancellationToken cancellationToken = default);
+
+    /// <summary>Müşterinin sahip olduğu veritabanları (engine + ad) — bayi/müşteri self-servis listesi.</summary>
+    Task<IReadOnlyCollection<(string Engine, string DatabaseName)>> GetOwnedAsync(Guid ownerUserId, CancellationToken cancellationToken = default);
 }
