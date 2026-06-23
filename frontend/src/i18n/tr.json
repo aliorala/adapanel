@@ -1067,6 +1067,7 @@
   "panel.users.assignedSites": "Atanan siteler",
   "panel.users.maxSites": "En fazla site sayısı",
   "panel.users.maxDiskMb": "Disk kotası (MB)",
+  "panel.users.maxDatabases": "Veritabanı kotası (adet)",
   "panel.users.sitesShort": "site",
   "panel.plans.title": "Servis Planları",
   "panel.plans.hint": "Limit şablonu tanımlayın; müşteri oluştururken seçince limitler otomatik dolar.",

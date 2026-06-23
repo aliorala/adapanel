@@ -3487,3 +3487,16 @@ Basarili:
 - KALAN (#22/#21 polish): (1) MaxDatabases'i UI'da ayarlanır kıl — limitler frontend'de SERVİS PLANI üzerinden set ediliyor (ayrı user-form yok);
   ServicePlan'a MaxDatabases ekle + plan UI + plan→müşteri kopyalama. (2) cascade temizlik: DB silince RemoveAsync, site silince RemoveBySiteAsync
   (yetim kayıt over-count yapmasın — DatabasesController.Delete + SiteCascadeDeletionService'e bağlanacak). (3) posta kutusu kotası (linkable). (4) DatabasesController'ı bayiye aç + DB görünürlük filtresi (güvenlik).
+
+## 2026-06-23 (75) — M1 DB-kotası UÇTAN UCA TAM + yönetim UI bulundu
+- DÜZELTME: yönetim UI "yok" sandım ama VAR — SetupWizardView.vue "settings" bölümünde (App.vue→SetupWizardView tek monolit kabuk;
+  sections+view-switch orada). createUserForm/selectedUserForm + servis planı seçimi (applyPlanToCreate) + limit alanları mevcuttu.
+- MaxDatabases UI'a bağlandı: auth.ts 3 tip (ManagedUser/CreateUserPayload/UpdateUserPayload) + createUserForm/selectedUserForm/planForm
+  reactive + create/edit user template alanı + plan formu alanı + applyPlanToCreate kopyalama + reset/load + i18n panel.users.maxDatabases.
+  Submit zaten {...form} spread ediyor → otomatik akar. ServicePlan'a MaxDatabases+MaxMailboxes (model + UI plan formu).
+- ZİNCİR TAM: admin müşteriye/plana MaxDatabases girer → CustomerScope → SitesController site-DB yolunda IsDatabaseQuotaReachedAsync
+  dayatır → dbOwnership.RecordAsync → DB/site silince RemoveAsync/RemoveBySiteAsync. Plesk DB kotası bitti.
+- cascade temizlik de bağlandı (DatabasesController.Delete→RemoveAsync, SitesController.Delete→RemoveBySiteAsync).
+- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2095/2095, FE 0, publish OK, ISCC OK.
+- Installer SHA256: `B1AE6B3A72504AE303CCA8630C68424D442B2CFAE4223535388AEB01510449B2` (51122061 / 48.75 MiB). AKTİF.
+- KALAN M1: posta kutusu kotası (MaxMailboxes scope+enforce — MailController), DatabasesController'ı bayiye aç + DB görünürlük filtresi (güvenlik). #23 plan akışı ZATEN çalışıyor (plan seç→limit kopyala).

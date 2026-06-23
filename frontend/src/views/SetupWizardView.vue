@@ -422,6 +422,7 @@
             <input v-model.trim="planForm.name" :placeholder="t('panel.plans.name')" />
             <input v-model.number="planForm.maxSites" type="number" min="0" :placeholder="t('panel.users.maxSites')" />
             <input v-model.number="planForm.maxDiskMb" type="number" min="0" :placeholder="t('panel.users.maxDiskMb')" />
+            <input v-model.number="planForm.maxDatabases" type="number" min="0" :placeholder="t('panel.users.maxDatabases')" />
             <button type="submit" class="compact" :disabled="!planForm.name">{{ t("panel.plans.add") }}</button>
           </form>
         </div>
@@ -489,6 +490,11 @@
           <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
             <input v-model.number="createUserForm.maxDiskMb" type="number" min="0" />
+            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
+          </label>
+          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+            <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
+            <input v-model.number="createUserForm.maxDatabases" type="number" min="0" />
             <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label class="stacked-field">
@@ -581,6 +587,11 @@
           <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
             <input v-model.number="selectedUserForm.maxDiskMb" type="number" min="0" />
+            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
+          </label>
+          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+            <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
+            <input v-model.number="selectedUserForm.maxDatabases" type="number" min="0" />
             <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label class="stacked-field">
@@ -714,6 +725,7 @@ const createUserForm = reactive({
   assignedSites: [] as string[],
   maxSites: 0,
   maxDiskMb: 0,
+  maxDatabases: 0,
   sendWelcomeEmail: false,
   preferredLanguage: "tr"
 });
@@ -725,6 +737,7 @@ const selectedUserForm = reactive({
   assignedSites: [] as string[],
   maxSites: 0,
   maxDiskMb: 0,
+  maxDatabases: 0,
   preferredLanguage: "tr",
   isActive: true
 });
@@ -739,7 +752,7 @@ const securityForm = reactive({
 
 // Servis planları (Plesk Service Plans): müşterilere atanabilen limit şablonları.
 const servicePlans = ref<ServicePlan[]>([]);
-const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0 });
+const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0 });
 const createPlanId = ref("");
 
 async function loadServicePlans() {
@@ -750,10 +763,11 @@ async function addServicePlan() {
   if (!planForm.name.trim()) {
     return;
   }
-  await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb });
+  await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases });
   planForm.name = "";
   planForm.maxSites = 0;
   planForm.maxDiskMb = 0;
+  planForm.maxDatabases = 0;
   await loadServicePlans();
 }
 
@@ -767,6 +781,7 @@ function applyPlanToCreate() {
   if (plan) {
     createUserForm.maxSites = plan.maxSites;
     createUserForm.maxDiskMb = plan.maxDiskMb;
+    createUserForm.maxDatabases = plan.maxDatabases;
   }
 }
 const panelPreferences = reactive<PanelPreferences>({
@@ -1286,6 +1301,7 @@ async function createUser() {
     createUserForm.assignedSites = [];
     createUserForm.maxSites = 0;
     createUserForm.maxDiskMb = 0;
+    createUserForm.maxDatabases = 0;
     createUserForm.sendWelcomeEmail = false;
     createUserForm.preferredLanguage = "tr";
     showUserCreateForm.value = false;
@@ -1313,6 +1329,7 @@ function selectUser(user: ManagedUser) {
   selectedUserForm.assignedSites = [...(user.assignedSites ?? [])];
   selectedUserForm.maxSites = user.maxSites ?? 0;
   selectedUserForm.maxDiskMb = user.maxDiskMb ?? 0;
+  selectedUserForm.maxDatabases = user.maxDatabases ?? 0;
   selectedUserForm.preferredLanguage = user.preferredLanguage;
   selectedUserForm.isActive = user.isActive;
 }

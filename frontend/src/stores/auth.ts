@@ -61,6 +61,7 @@ export type ManagedUser = {
   assignedSites: string[];
   maxSites: number;
   maxDiskMb: number;
+  maxDatabases: number;
   diskUsageMb: number;
   ownerId: string | null;
   ownerName: string;
@@ -94,6 +95,7 @@ type CreateUserPayload = {
   assignedSites: string[];
   maxSites: number;
   maxDiskMb: number;
+  maxDatabases: number;
   sendWelcomeEmail: boolean;
 };
 
@@ -106,6 +108,7 @@ type UpdateUserPayload = {
   assignedSites: string[];
   maxSites: number;
   maxDiskMb: number;
+  maxDatabases: number;
 };
 
 export const useAuthStore = defineStore("auth", {

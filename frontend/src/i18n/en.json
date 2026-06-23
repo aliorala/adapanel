@@ -1067,6 +1067,7 @@
   "panel.users.assignedSites": "Assigned sites",
   "panel.users.maxSites": "Max site count",
   "panel.users.maxDiskMb": "Disk quota (MB)",
+  "panel.users.maxDatabases": "Database quota (count)",
   "panel.users.sitesShort": "sites",
   "panel.plans.title": "Service Plans",
   "panel.plans.hint": "Define a limit template; selecting it when creating a customer fills the limits automatically.",
