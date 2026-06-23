@@ -3447,3 +3447,15 @@ Basarili:
 - AÇIK İSTEK: kullanıcı B4'ü de "Plesk gibi" istiyor. NOT: AdaPanel zaten per-site app pool (AdaPanel.{site}, ApplicationPoolIdentity
   = ayrı kimlik → OS-düzey izolasyon) + per-site open_basedir (opt-in) veriyor. Plesk farkı: open_basedir'i YENİ sitelerde
   VARSAYILAN AÇIK yapar. Sıradaki olası iş: site provizyonda open_basedir'i kök-bazlı otomatik aç (kullanıcı onayıyla).
+
+## 2026-06-23 (72) — B4 Plesk-tam: open_basedir yeni sitelerde VARSAYILAN AÇIK
+- Kullanıcı "Plesk gibi yap" onayladı. PhpService.SetSitePhpVersionAsync sonuna EnsureDefaultUserIniAsync eklendi:
+  PHP atanan sitede .user.ini YOKsa, izolasyonlu varsayılan yazar (memory/exec/upload + open_basedir AÇIK, kök=ApplicationRootPath).
+  MEVCUT .user.ini'ye DOKUNMAZ → mevcut/çalışan siteler etkilenmez (yalnız yeni/ayarsız siteler). Best-effort (atamayı bozmaz).
+- open_basedir mantığı AppendOpenBasedirAsync helper'ına çıkarıldı (toggle + yeni-site varsayılanı ortak kullanır).
+- Plesk paritesi B4: per-site app pool (zaten) + open_basedir varsayılan-açık (yeni) + per-site toggle (kapatma) = TAM.
+- Doğrulama: build 0/0, test 44/44 (+2). (frontend değişmedi)
+- Installer SHA256: `CFC70E661F94F5283FBB95DD6E6D483FB3CAA88E647EC8116FAA8ABCEBAFC25D` (51115595 byte / 48.75 MiB). AKTİF.
+- GÜVENLİK DURUMU: denetimdeki TÜM açıklar kapalı (K1-K3, B1-B6, M3) + Plesk-işlevsellik (uzak DB erişimi, phpMyAdmin proxy,
+  open_basedir varsayılan). KALAN: B3 8896'yı loopback'e alma = phpMyAdmin proxy CANLI doğrulanınca. M1 (müşteri/abonelik/kota
+  modeli) = BÜYÜK mimari özellik, açık değil. M4 (DNS tek-IP SPOF) mimari.

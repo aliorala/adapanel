@@ -251,7 +251,7 @@ public sealed class PhpService(
 
         try
         {
-            return await concurrencyLock.RunExclusiveAsync(() =>
+            var assignment = await concurrencyLock.RunExclusiveAsync(() =>
             {
                 using var serverManager = CreateServerManager();
                 EnsureSiteExists(serverManager, siteName);
@@ -270,6 +270,11 @@ public sealed class PhpService(
                     IsFastCgiRegistered = true
                 });
             }, cancellationToken);
+
+            // B4 (Plesk gibi): PHP atanan siteye .user.ini YOKsa izolasyonlu (open_basedir AÇIK) varsayılan
+            // yaz. Mevcut .user.ini'ye dokunulmaz → mevcut siteler etkilenmez. Best-effort.
+            await EnsureDefaultUserIniAsync(siteName, cancellationToken);
+            return assignment;
         }
         catch (AppException)
         {
@@ -331,6 +336,61 @@ public sealed class PhpService(
         }
     }
 
+    // open_basedir + session.save_path satırlarını .user.ini içeriğine ekler. KÖK = ApplicationRootPath
+    // (Laravel'de çerçeve kodu public'in ÜSTÜndedir; panel gerçek proje kökünü bilir), boşsa PhysicalPath.
+    // Oturumlar site-içi tmp'e; YÜKLEMELER OS temp'inde kalır (upload_tmp_dir INI_SYSTEM) → OS temp'i de
+    // izinli yola dahil ederiz, böylece açınca yükleme/oturum KIRILMAZ.
+    private async Task AppendOpenBasedirAsync(StringBuilder content, AdaPanel.Core.Dtos.Sites.SiteDto site, CancellationToken cancellationToken)
+    {
+        var openBaseRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+            ? site.PhysicalPath
+            : site.ApplicationRootPath);
+        var sessionDir = Path.Combine(openBaseRoot, "tmp");
+        Directory.CreateDirectory(sessionDir);
+        await GrantAppPoolWriteAsync(sessionDir, cancellationToken);
+
+        var osTemp = Path.GetFullPath(Environment.ExpandEnvironmentVariables("%SystemRoot%\\Temp"));
+        var allowed = new[] { openBaseRoot, sessionDir, osTemp }
+            .Select(path => path.Replace('\\', '/').TrimEnd('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        content.AppendLine($"open_basedir = \"{string.Join(';', allowed)}\"");
+        content.AppendLine($"session.save_path = \"{sessionDir.Replace('\\', '/')}\"");
+    }
+
+    // B4 (Plesk gibi): PHP atanan siteye .user.ini YOKsa, izolasyonlu (open_basedir AÇIK) varsayılan yazar.
+    // Mevcut .user.ini'ye DOKUNMAZ (kullanıcı/önceki ayar korunur). Best-effort: hata atama akışını bozmaz.
+    private async Task EnsureDefaultUserIniAsync(string siteName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+            if (string.IsNullOrWhiteSpace(site.PhysicalPath) || !Directory.Exists(site.PhysicalPath))
+            {
+                return;
+            }
+
+            var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
+            if (File.Exists(iniPath))
+            {
+                return;
+            }
+
+            var content = new StringBuilder();
+            content.AppendLine("; AdaPanel - site PHP ayarları (.user.ini, per-dizin)");
+            content.AppendLine("memory_limit = 256M");
+            content.AppendLine("max_execution_time = 120");
+            content.AppendLine("upload_max_filesize = 64M");
+            content.AppendLine("post_max_size = 64M");
+            content.AppendLine("display_errors = Off");
+            await AppendOpenBasedirAsync(content, site, cancellationToken);
+            await File.WriteAllTextAsync(iniPath, content.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Varsayılan .user.ini (open_basedir) yazılamadı: {Site}", siteName);
+        }
+    }
+
     public async Task<SitePhpSettingsDto> UpdateSitePhpSettingsAsync(
         string siteName,
         UpdateSitePhpSettingsRequest request,
@@ -352,25 +412,7 @@ public sealed class PhpService(
 
         if (request.OpenBasedirEnabled)
         {
-            // B4 İZOLASYON (opsiyonel, geri-alınabilir): PHP'yi sitenin köküne hapset.
-            // KÖK = ApplicationRootPath — Laravel'de çerçeve kodu (vendor/app/bootstrap) public'in ÜSTÜndedir;
-            // panel gerçek proje kökünü bilir. Boşsa (düz site) PhysicalPath kök olur.
-            // Oturum dosyaları site-içi tmp'e yazılır (session.save_path = INI_ALL → .user.ini'den ayarlanır).
-            // YÜKLEMELER OS temp'inde kalır (upload_tmp_dir INI_SYSTEM → buradan değiştirilemez); o yüzden
-            // OS temp'i de izinli yola DAHİL ederiz → açınca yükleme/oturum KIRILMAZ.
-            var openBaseRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(site.ApplicationRootPath)
-                ? site.PhysicalPath
-                : site.ApplicationRootPath);
-            var sessionDir = Path.Combine(openBaseRoot, "tmp");
-            Directory.CreateDirectory(sessionDir);
-            await GrantAppPoolWriteAsync(sessionDir, cancellationToken);
-
-            var osTemp = Path.GetFullPath(Environment.ExpandEnvironmentVariables("%SystemRoot%\\Temp"));
-            var allowed = new[] { openBaseRoot, sessionDir, osTemp }
-                .Select(path => path.Replace('\\', '/').TrimEnd('/'))
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-            content.AppendLine($"open_basedir = \"{string.Join(';', allowed)}\"");
-            content.AppendLine($"session.save_path = \"{sessionDir.Replace('\\', '/')}\"");
+            await AppendOpenBasedirAsync(content, site, cancellationToken);
         }
 
         var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
