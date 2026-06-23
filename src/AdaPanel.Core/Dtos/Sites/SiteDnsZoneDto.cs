@@ -8,6 +8,9 @@ public sealed class SiteDnsZoneDto
 
     public string[] NameServers { get; set; } = [];
 
+    /// <summary>İzin verilen AXFR (zone transfer) hedef IP'leri (ikincil DNS sunucuları). Boş = transfer kapalı.</summary>
+    public string[] ZoneTransferIps { get; set; } = [];
+
     public SiteDnsRecordDto[] Records { get; set; } = [];
 
     public bool IsWindowsDnsAvailable { get; set; }

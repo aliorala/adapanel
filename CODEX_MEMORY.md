@@ -3552,3 +3552,18 @@ Basarili:
 - Doğrulama: backend build 0/0, test 44/44 (+2 core), typecheck 0, i18n 2114/2114, FE build 0, publish OK, ISCC OK.
 - Installer SHA256: `EBEC6602FBB0392EC2F12943A2E4B3C04E223C38004499E6811D0E9E31333F88` (51130317 / 48.76 MiB) — M5 (78) + askıya alma (79) BİRLİKTE. AKTİF.
 - KALAN (FINAL istek): M4 DNS (ikincil NS/AXFR — kodlanabilir kısım), M2 yedek (Plesk paritesi — büyük ölçüde mevcut, doğrula), FTP izolasyon (mode 3 = per-user, doğrula).
+
+## 2026-06-23 (80) — M4 DNS Plesk-parite: zone transfer (AXFR) ACL + FINAL liste TAM
+- Kullanıcı M4 için "pleskte nasılsa aynısını yap" dedi. BULGU: DNS zaten Plesk gibi (gerçek Windows DNS Server rolü, yetkili ns1/ns2,
+  A/AAAA/CNAME/MX/TXT/NS kayıtları, site açılışında otomatik yayın). Plesk'in tek-sunucuda dahi sunduğu EKSİK kalem: zone transfer (AXFR) ACL → eklendi.
+- BACKEND: DnsZoneState.ZoneTransferIps + SiteDnsZoneDto + UpdateDnsZoneRequest. UpdateZoneAsync persist eder (NormalizeZoneTransferIps:
+  IPv4/IPv6 doğrula, dedupe, geçersiz→400 dns.invalid_transfer_ip). GetOrCreateStateAsync eski JSON'u normalize eder. ToDtoAsync map'ler.
+- WINDOWS DNS: BuildSyncScript → IP varsa `Set-DnsServerPrimaryZone -SecureSecondaries TransferToSecureServers -SecondaryServers <ips>
+  -Notify NotifyServers -NotifyServers <ips>`; IP yoksa `-SecureSecondaries NoTransfer` (GÜVENLİ varsayılan — açık AXFR tüm zone'u sızdırır).
+- FRONTEND: api/dns.ts DnsZone.zoneTransferIps + updateDnsZone payload; DnsView.vue zone ayarlarına AXFR textarea (load + saveZone +
+  restoreDefaults'ta doldurulur). i18n panel.dns.zoneTransfer/zoneTransferHelp + dns.invalid_transfer_ip (TR+EN).
+- NOT: gerçek ikincil/slave DNS hâlâ 2. fiziksel sunucu ister (donanım); bu ACL o sunucuyu YETKİLENDİREN Plesk kalemidir (kullanıcı bilerek istedi).
+- Doğrulama: build 0/0, test 44/44 (+2 core), typecheck 0, i18n 2117/2117, FE build 0, publish OK, ISCC OK.
+- Installer SHA256: `32CD1EC2F7E22D34609FD895F887CE4592F22BEB618B58A48B8B5F3AB0234DC8` (51130378 / 48.76 MiB). AKTİF.
+- FINAL LİSTE DURUMU: M5 (78)✅ + Abonelik askıya alma (79)✅ + M4 (80)✅ + M2 yedek (zaten tam: S3/FTP/WebDAV + retention + granüler restore)✅
+  + FTP izolasyon (mode 3 per-user = Plesk chroot)✅ → FINAL İSTEK TAMAMLANDI. NOT: bu oturumun installer'ları VPS'te HENÜZ canlı test edilmedi.

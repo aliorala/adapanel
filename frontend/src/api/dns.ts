@@ -16,6 +16,7 @@ export type DnsZone = {
   siteName: string;
   zoneName: string;
   nameServers: string[];
+  zoneTransferIps: string[];
   records: DnsRecord[];
   isWindowsDnsAvailable: boolean;
   isWindowsZonePresent: boolean;
@@ -37,7 +38,7 @@ export async function getDnsZone(siteName: string) {
   return response.data.data;
 }
 
-export async function updateDnsZone(siteName: string, payload: { zoneName: string; nameServers: string[] }) {
+export async function updateDnsZone(siteName: string, payload: { zoneName: string; nameServers: string[]; zoneTransferIps: string[] }) {
   const response = await apiClient.put<ApiEnvelope<DnsZone>>(`/sites/${encodeURIComponent(siteName)}/dns/zone`, payload);
   return response.data.data;
 }

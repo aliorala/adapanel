@@ -78,6 +78,7 @@ public sealed partial class DnsService(
         var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
         state.ZoneName = NormalizeZoneName(string.IsNullOrWhiteSpace(request.ZoneName) ? state.ZoneName : request.ZoneName);
         state.NameServers = NormalizeNameServers(request.NameServers, state.ZoneName);
+        state.ZoneTransferIps = NormalizeZoneTransferIps(request.ZoneTransferIps);
         state.Records.RemoveAll(record => record.IsManaged);
         state.Records.AddRange(CreateDefaultRecords(site, state.ZoneName, serverAddress));
         state.DefaultsVersion = CurrentDefaultsVersion;
@@ -199,6 +200,7 @@ public sealed partial class DnsService(
         {
             state.ZoneName = NormalizeZoneName(state.ZoneName);
             state.NameServers = NormalizeNameServers(state.NameServers, state.ZoneName);
+            state.ZoneTransferIps = NormalizeZoneTransferIps(state.ZoneTransferIps?.ToArray());
             state.Records = SortRecords(state.Records.Select(record => NormalizeRecord(record, state.ZoneName))).ToList();
             if (state.DefaultsVersion < CurrentDefaultsVersion)
             {
@@ -243,6 +245,7 @@ public sealed partial class DnsService(
             SiteName = state.SiteName,
             ZoneName = state.ZoneName,
             NameServers = state.NameServers,
+            ZoneTransferIps = (state.ZoneTransferIps ?? []).ToArray(),
             Records = SortRecords(state.Records).Select(ToDto).ToArray(),
             IsWindowsDnsAvailable = isDnsAvailable,
             IsWindowsZonePresent = isZonePresent,
@@ -384,6 +387,17 @@ public sealed partial class DnsService(
             "}"
         };
 
+        // Plesk "zone transfer ACL": izin verilen IP varsa yalnız onlara AXFR + NOTIFY; yoksa transfer KAPALI (güvenli + Plesk varsayılanı).
+        if (state.ZoneTransferIps is { Count: > 0 })
+        {
+            var ipList = string.Join(",", state.ZoneTransferIps.Select(ip => $"'{EscapePowerShellLiteral(ip)}'"));
+            lines.Add($"Set-DnsServerPrimaryZone -Name $zoneName -SecureSecondaries TransferToSecureServers -SecondaryServers {ipList} -Notify NotifyServers -NotifyServers {ipList} | Out-Null");
+        }
+        else
+        {
+            lines.Add("Set-DnsServerPrimaryZone -Name $zoneName -SecureSecondaries NoTransfer | Out-Null");
+        }
+
         foreach (var group in groups)
         {
             lines.Add($"Get-DnsServerResourceRecord -ZoneName $zoneName -Name '{EscapePowerShellLiteral(group.Host)}' -RRType '{group.Type}' -ErrorAction SilentlyContinue | Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction SilentlyContinue");
@@ -407,6 +421,37 @@ public sealed partial class DnsService(
         }
 
         return string.Join(Environment.NewLine, lines.Where(line => !string.IsNullOrWhiteSpace(line)));
+    }
+
+    // İzin verilen AXFR hedef IP'lerini doğrular (IPv4/IPv6), kırpar, tekrarları atar. Geçersiz IP → 400.
+    private static List<string> NormalizeZoneTransferIps(string[]? ips)
+    {
+        var result = new List<string>();
+        if (ips is null)
+        {
+            return result;
+        }
+
+        foreach (var raw in ips)
+        {
+            var ip = raw?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(ip))
+            {
+                continue;
+            }
+
+            if (!System.Net.IPAddress.TryParse(ip, out _))
+            {
+                throw new AppException("dns.invalid_transfer_ip", 400, 400);
+            }
+
+            if (!result.Contains(ip, StringComparer.OrdinalIgnoreCase))
+            {
+                result.Add(ip);
+            }
+        }
+
+        return result;
     }
 
     private static DnsRecordState NormalizeRecord(UpsertDnsRecordRequest request, string zoneName)
@@ -616,6 +661,8 @@ public sealed partial class DnsService(
         public string[] NameServers { get; set; } = [];
 
         public List<DnsRecordState> Records { get; set; } = [];
+
+        public List<string> ZoneTransferIps { get; set; } = [];
 
         public int DefaultsVersion { get; set; }
     }

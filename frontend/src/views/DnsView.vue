@@ -110,6 +110,11 @@
             <textarea v-model="nameServersText" rows="3" placeholder="ns1.example.com&#10;ns2.example.com"></textarea>
             <small class="field-hint">{{ t("panel.dns.nameServersHelp") }}</small>
           </label>
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.dns.zoneTransfer") }}</span>
+            <textarea v-model="zoneTransferText" rows="3" placeholder="192.0.2.53&#10;2001:db8::53"></textarea>
+            <small class="field-hint">{{ t("panel.dns.zoneTransferHelp") }}</small>
+          </label>
         </div>
       </form>
     </template>
@@ -132,6 +137,7 @@ const installingWindowsDns = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const nameServersText = ref("");
+const zoneTransferText = ref("");
 const editingId = ref("");
 const activeTab = ref<"records" | "settings">("records");
 const showRecordForm = ref(false);
@@ -161,6 +167,7 @@ async function load() {
     zone.value = await getDnsZone(siteName.value);
     zoneForm.zoneName = zone.value.zoneName;
     nameServersText.value = zone.value.nameServers.join("\n");
+    zoneTransferText.value = (zone.value.zoneTransferIps ?? []).join("\n");
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
@@ -174,7 +181,8 @@ async function saveZone() {
   try {
     zone.value = await updateDnsZone(siteName.value, {
       zoneName: zoneForm.zoneName,
-      nameServers: splitLines(nameServersText.value)
+      nameServers: splitLines(nameServersText.value),
+      zoneTransferIps: splitLines(zoneTransferText.value)
     });
     showNotice(t("panel.dns.zoneSaved"), false);
   } catch (error) {
@@ -245,6 +253,7 @@ async function restoreDefaults() {
     zone.value = await resetDnsDefaults(siteName.value);
     zoneForm.zoneName = zone.value.zoneName;
     nameServersText.value = zone.value.nameServers.join("\n");
+    zoneTransferText.value = (zone.value.zoneTransferIps ?? []).join("\n");
     showNotice(t("panel.dns.defaultsRestored"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
