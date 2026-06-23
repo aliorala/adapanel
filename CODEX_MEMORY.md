@@ -3406,3 +3406,17 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44 (+2), publish OK, ISCC OK.
 - Installer SHA256: `8D699AAEF269E56D3F6A9B1C5CEEAFC3ED23E00BF071CE8CFE35449DB82DD9E2` (51111661 byte / 48.74 MiB).
 - SIRADA: kullanıcı 8D699A kur → phpMyAdmin "Aç" test → çalışırsa 8896'yı loopback'e al + Adminer'ı da proxy'e bağla; bozuksa hata/F12-network raporu ile iterasyon.
+
+## 2026-06-23 (69) — GERİ ALMA: kullanıcı talebiyle TÜM güvenlik düzeltmeleri geri çevrildi
+- Kullanıcı "tüm bu yaptıklarını geri al" → kapsam: "bu oturumdaki TÜM güvenlik düzeltmeleri (K1, K3, B5, B6, B4, M3, B3)".
+  (Laravel Scheduler özelliği güvenlik DEĞİL → KORUNDU. K2/B1/B2 zaten önceki kaynaktaydı, bu oturumda dokunulmadı → kaldı.)
+- SİLİNEN dosyalar: DataRootHardeningService.cs (K1), DbToolsProxyController.cs (B3), scripts/harden-adapanel.ps1.
+- GERİ ÇEVRİLEN düzenlemeler: ComponentBootstrapper (K3 disable_functions/expose_php; B5 EnsureMariaDbBindAddressAsync+
+  ResolveServiceDefaultsFile+çağrı; M3 8080 loopback → eski çift-yığın döngüsü) · PhpService (B4 instanceMaxRequests; open_basedir
+  bloğu+read-back+GrantAppPoolWriteAsync) · WebDbClientService (B3 signon URL+PmaAbsoluteUri+GetDeployedToolPortAsync) ·
+  IWebDbClientService (port imzası) · ServiceCollectionExtensions (K1 AddHostedService + B3 DbToolsProxy HttpClient) ·
+  SitePhpSettingsDto (OpenBasedirEnabled ×2) · configure-firewall.ps1 (B6 web/DNS bloğu) · api/php.ts · PhpView.vue ×4 · i18n tr/en (openBasedir ×2).
+- SONUÇ: kod 60-68 düzeltmeleri-öncesi duruma döndü. ⚠️ Denetimdeki K1/K3/B5/B6 açıkları YENİDEN AÇIK (kullanıcı bilerek istedi).
+- git: baseline 073c964 (düzeltmeli) → bu geri-alma ayrı commit (düzeltmesiz); ikisi de tarihte, istenirse geri-al-geri-alınabilir.
+- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2074/2074 (scheduler korundu). Installer ÜRETİLMEDİ (kullanıcı istemedi).
+- Güvenlik denetimi görev listesi (#10-#19) kullanıcı talebiyle silindi ("kalan görevleri sil").

@@ -138,12 +138,7 @@
           <input v-model="settings.displayErrors" type="checkbox" />
           <span>{{ t("panel.php.displayErrors") }}</span>
         </label>
-        <label class="toggle-field">
-          <input v-model="settings.openBasedirEnabled" type="checkbox" />
-          <span>{{ t("panel.php.openBasedir") }}</span>
-        </label>
       </div>
-      <p class="meta">{{ t("panel.php.openBasedirHint") }}</p>
       <div class="row-actions">
         <button class="compact" :disabled="savingSettings" @click="saveSettings">
           {{ savingSettings ? t("panel.database.saving") : t("panel.common.save") }}
@@ -176,8 +171,7 @@ const settings = reactive({
   maxExecutionTime: 120,
   uploadMaxFilesize: "64M",
   postMaxSize: "64M",
-  displayErrors: false,
-  openBasedirEnabled: false
+  displayErrors: false
 });
 const savingSettings = ref(false);
 
@@ -192,7 +186,6 @@ async function loadSettings(siteName: string) {
     settings.uploadMaxFilesize = data.uploadMaxFilesize;
     settings.postMaxSize = data.postMaxSize;
     settings.displayErrors = data.displayErrors;
-    settings.openBasedirEnabled = data.openBasedirEnabled ?? false;
   } catch {
     // site PHP ayarı okunamadıysa varsayılanlar kalır
   }
@@ -209,8 +202,7 @@ async function saveSettings() {
       maxExecutionTime: settings.maxExecutionTime,
       uploadMaxFilesize: settings.uploadMaxFilesize,
       postMaxSize: settings.postMaxSize,
-      displayErrors: settings.displayErrors,
-      openBasedirEnabled: settings.openBasedirEnabled
+      displayErrors: settings.displayErrors
     });
     settings.memoryLimit = data.memoryLimit;
     showNotice(t("panel.php.settingsSaved"), false);

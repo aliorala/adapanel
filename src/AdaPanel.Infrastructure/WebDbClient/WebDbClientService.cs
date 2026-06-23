@@ -130,19 +130,10 @@ public sealed class WebDbClientService(
             new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             cancellationToken);
 
-        // B3 (panel HTTPS reverse-proxy): tarayıcı dış *:8896 düz-HTTP portuna DEĞİL, panelin kimlik-doğrulamalı
-        // HTTPS'ine gider; panel isteği yerel phpMyAdmin'e (127.0.0.1) iletir. URL panel-GÖRELİ olduğundan
-        // frontend'in openReachable'ı aynı-köken açar (panel cookie'si taşınır, proxy [Authorize] geçer).
-        // 8896 ayrıca açık kalır (fallback); ileride loopback'e alınacak.
-        return new WebDbSignonDto { Url = $"/api/v1/dbtools/phpmyadmin/adapanel-signon.php?token={token}" };
-    }
-
-    // Panel reverse-proxy (B3) hedef portu: dağıtılmış aracın yerel IIS portu (IIS fallback seçmiş olabilir).
-    public async Task<int> GetDeployedToolPortAsync(string provider, CancellationToken cancellationToken = default)
-    {
-        var states = await fileStore.ReadAsync(StatePath, Array.Empty<WebDbState>(), cancellationToken);
-        var state = states.FirstOrDefault(item => string.Equals(item.Provider, provider, StringComparison.OrdinalIgnoreCase));
-        return state?.Port ?? 0;
+        // Resmi phpMyAdmin signon akışı: signon sayfası token'daki kimlik bilgileriyle signon oturumunu
+        // kurup phpMyAdmin'e yönlendirir. DB kullanıcısıyla girince phpMyAdmin YALNIZ o DB'yi gösterir.
+        var baseUrl = string.IsNullOrWhiteSpace(state.Url) ? $"http://127.0.0.1:{state.Port}/" : state.Url;
+        return new WebDbSignonDto { Url = $"{baseUrl.TrimEnd('/')}/adapanel-signon.php?token={token}" };
     }
 
     private async Task<string> ResolveRootPasswordAsync(string componentId, CancellationToken cancellationToken)
@@ -501,13 +492,6 @@ public sealed class WebDbClientService(
             $cfg['Servers'][$i]['AllowNoPassword'] = true;
             $cfg['UploadDir'] = '';
             $cfg['SaveDir'] = '';
-            // B3: panel reverse-proxy arkasındayken phpMyAdmin mutlak URL'leri (signon redirect, asset, AJAX)
-            // panel yolundan üretmeli. YALNIZ proxy üzerinden gelindiğinde (X-Forwarded-Host var) ayarlanır;
-            // doğrudan 8896 erişimi (forwarded header yok) etkilenmez → fallback bozulmaz.
-            if (!empty($_SERVER['HTTP_X_FORWARDED_HOST'])) {
-                $pmaProto = !empty($_SERVER['HTTP_X_FORWARDED_PROTO']) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : 'https';
-                $cfg['PmaAbsoluteUri'] = $pmaProto . '://' . $_SERVER['HTTP_X_FORWARDED_HOST'] . '/api/v1/dbtools/phpmyadmin/';
-            }
             """;
 
         await File.WriteAllTextAsync(

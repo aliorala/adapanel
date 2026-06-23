@@ -15,10 +15,4 @@ public interface IWebDbClientService
     /// veritabanının kullanıcısı olarak girer ve yalnız o DB'yi gösterir; boşsa root (tüm DB).
     /// </summary>
     Task<WebDbSignonDto> CreatePhpMyAdminSignonAsync(string engine, string? databaseName, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Dağıtılmış DB aracının (phpmyadmin/adminer) yerel IIS portunu döndürür (panel reverse-proxy hedefi).
-    /// Dağıtılmamışsa 0.
-    /// </summary>
-    Task<int> GetDeployedToolPortAsync(string provider, CancellationToken cancellationToken = default);
 }

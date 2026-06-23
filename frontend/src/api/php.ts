@@ -53,7 +53,6 @@ export type SitePhpSettings = {
   uploadMaxFilesize: string;
   postMaxSize: string;
   displayErrors: boolean;
-  openBasedirEnabled?: boolean;
   configured: boolean;
 };
 

@@ -1999,8 +1999,6 @@
   "panel.php.uploadMaxFilesize": "Maks. yükleme boyutu",
   "panel.php.postMaxSize": "Maks. POST boyutu",
   "panel.php.displayErrors": "Hataları göster (geliştirme)",
-  "panel.php.openBasedir": "open_basedir izolasyonu (siteyi kendi köküne hapset)",
-  "panel.php.openBasedirHint": "Açıkça açılmadıkça kapalıdır. Açınca PHP yalnız bu sitenin kökünü (Laravel'de proje kökü), site-içi tmp'i ve sistem temp'ini okuyabilir; diğer siteleri veya panel verisini göremez. Bir sitede sorun (ör. kök dışı dosya okuma) olursa kapatıp kaydetmen yeterli.",
   "panel.php.settingsSaved": "PHP ayarları kaydedildi. Değişiklik birkaç dakika içinde etkin olur.",
   "php.settings.success": "PHP ayarları kaydedildi.",
   "php.site_root_missing": "Site kök dizini bulunamadı.",

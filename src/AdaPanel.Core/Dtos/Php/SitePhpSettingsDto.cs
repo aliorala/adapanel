@@ -20,13 +20,6 @@ public sealed class SitePhpSettingsDto
 
     public bool DisplayErrors { get; set; }
 
-    /// <summary>
-    /// open_basedir izolasyonu açık mı. Açıkken PHP sitenin köküne (Laravel'de ApplicationRootPath,
-    /// yani public'in ÜSTÜ) + site-içi tmp + OS temp ile sınırlanır; diğer siteleri / panel verisini okuyamaz.
-    /// Opsiyonel ve VARSAYILAN KAPALI: açıkça açılmadıkça hiçbir site etkilenmez (geri-alınabilir).
-    /// </summary>
-    public bool OpenBasedirEnabled { get; set; }
-
     /// <summary>.user.ini mevcut mu (yani daha önce özelleştirildi mi).</summary>
     public bool Configured { get; set; }
 }
@@ -52,7 +45,4 @@ public sealed class UpdateSitePhpSettingsRequest
     public string PostMaxSize { get; init; } = "64M";
 
     public bool DisplayErrors { get; init; }
-
-    /// <summary>open_basedir izolasyonunu aç/kapat (per-site, varsayılan kapalı).</summary>
-    public bool OpenBasedirEnabled { get; init; }
 }
