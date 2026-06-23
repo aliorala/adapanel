@@ -23,6 +23,25 @@ public sealed class FtpController(IFtpService ftpService, ICustomerScopeService 
         return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, "ftp.server_ready"));
     }
 
+    // M5 (Plesk "yalnız güvenli FTP"): FTPS zorunluluğu server-level → admin-only.
+    [HttpGet("tls")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> GetTlsAsync(CancellationToken cancellationToken)
+    {
+        var requireSsl = await ftpService.GetRequireSslAsync(cancellationToken);
+        return Ok(ApiResponse<FtpTlsStatusDto>.Ok(new FtpTlsStatusDto { RequireSsl = requireSsl }));
+    }
+
+    [HttpPut("tls")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> SetTlsAsync([FromBody] FtpTlsRequest request, CancellationToken cancellationToken)
+    {
+        var requireSsl = await ftpService.SetRequireSslAsync(request.RequireSsl, cancellationToken);
+        return Ok(ApiResponse<FtpTlsStatusDto>.Ok(
+            new FtpTlsStatusDto { RequireSsl = requireSsl },
+            requireSsl ? "ftp.tls_required" : "ftp.tls_optional"));
+    }
+
     [HttpGet("users")]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<FtpUserDto>>>> GetUsersAsync(CancellationToken cancellationToken)
     {
@@ -79,4 +98,16 @@ public sealed class FtpController(IFtpService ftpService, ICustomerScopeService 
             ?? string.Empty;
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
     }
+}
+
+/// <summary>FTPS zorunluluğu toggle isteği (Plesk "yalnız güvenli FTP").</summary>
+public sealed class FtpTlsRequest
+{
+    public bool RequireSsl { get; set; }
+}
+
+/// <summary>FTPS zorunluluğu durumu.</summary>
+public sealed class FtpTlsStatusDto
+{
+    public bool RequireSsl { get; set; }
 }

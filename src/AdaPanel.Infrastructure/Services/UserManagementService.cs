@@ -18,7 +18,8 @@ public sealed class UserManagementService(
     IPanelPreferencesService preferencesService,
     IPanelSecurityService securityService,
     ILogger<UserManagementService> logger,
-    IAuditService auditService) : IUserManagementService
+    IAuditService auditService,
+    IIisSiteService iisSiteService) : IUserManagementService
 {
     public async Task<IReadOnlyCollection<UserSummaryDto>> GetUsersAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
@@ -226,6 +227,9 @@ public sealed class UserManagementService(
             }
         }
 
+        // Plesk gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
+        var wasActive = user.IsActive;
+
         user.Email = normalizedEmail;
         user.PreferredLanguage = request.PreferredLanguage.Trim();
         user.Role = newRole;
@@ -245,6 +249,9 @@ public sealed class UserManagementService(
         {
             await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
         }
+
+        // Aktiflik değiştiyse (askıya al / sürdür) müşterinin atanan sitelerini durdur/başlat.
+        await ApplySuspensionStateAsync(user, scope, wasActive, actorUserId, ipAddress, cancellationToken);
 
         var usageMb = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
@@ -271,6 +278,59 @@ public sealed class UserManagementService(
 
         await customerScopeService.RemoveUserAsync(user.Id, cancellationToken);
         return new CustomerScope([], 0, 0, 0, 0);
+    }
+
+    /// <summary>
+    /// Plesk gibi abonelik yaşam döngüsü: Customer'ın aktifliği true→false olunca (askıya alma)
+    /// atanan sitelerini durdur (web siteleri 503 döner), false→true olunca (sürdürme) başlat.
+    /// En iyi çaba; tek bir sitenin hatası kullanıcı güncelleme akışını bozmaz. (Mail/FTP askıya
+    /// alma sonraki adım; panel girişi zaten IsActive=false ile engellenir.)
+    /// </summary>
+    private async Task ApplySuspensionStateAsync(
+        PanelUser user,
+        CustomerScope scope,
+        bool wasActive,
+        Guid actorUserId,
+        string? ipAddress,
+        CancellationToken cancellationToken)
+    {
+        if (user.Role != UserRole.Customer || wasActive == user.IsActive || scope.Sites.Count == 0)
+        {
+            return;
+        }
+
+        var suspended = !user.IsActive;
+        foreach (var site in scope.Sites)
+        {
+            try
+            {
+                if (suspended)
+                {
+                    await iisSiteService.StopSiteAsync(site, cancellationToken);
+                }
+                else
+                {
+                    await iisSiteService.StartSiteAsync(site, cancellationToken);
+                }
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Abonelik {State} site '{Site}' üzerinde uygulanamadı (kullanıcı: {User}).",
+                    suspended ? "durdurma" : "başlatma",
+                    site,
+                    user.UserName);
+            }
+        }
+
+        await auditService.WriteAsync(
+            suspended ? "users.suspended" : "users.resumed",
+            "users",
+            $"Customer '{user.UserName}' {(suspended ? "suspended" : "resumed")}; {scope.Sites.Count} site(s) {(suspended ? "stopped" : "started")}.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
     }
 
     private string ResolveOwnerName(Guid? ownerId, IReadOnlyDictionary<Guid, string> nameById)

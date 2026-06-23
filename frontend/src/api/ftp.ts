@@ -44,6 +44,21 @@ export async function setFtpPassword(userName: string, password: string) {
   await apiClient.post<ApiEnvelope<object>>("/ftp/users/password", { userName, password });
 }
 
+export type FtpTlsStatus = {
+  requireSsl: boolean;
+};
+
+// M5 (Plesk "yalnız güvenli FTP"): admin-only server-level FTPS zorunluluğu.
+export async function getFtpTls() {
+  const response = await apiClient.get<ApiEnvelope<FtpTlsStatus>>("/ftp/tls");
+  return response.data.data;
+}
+
+export async function setFtpTls(requireSsl: boolean) {
+  const response = await apiClient.put<ApiEnvelope<FtpTlsStatus>>("/ftp/tls", { requireSsl });
+  return response.data.data;
+}
+
 export async function deleteFtpUser(userName: string) {
   await apiClient.delete<ApiEnvelope<object>>(`/ftp/users/${encodeURIComponent(userName)}`);
 }

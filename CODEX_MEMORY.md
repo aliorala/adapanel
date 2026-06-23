@@ -3529,3 +3529,26 @@ Basarili:
 - Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2110/2110, FE 0, publish OK, ISCC OK.
 - Installer SHA256: `F16B6092B87BE43E78FB11C0E328A8CE70529ABEC307421E62556E354AE67560` (51128493 / 48.76 MiB). AKTİF.
 - M1 ARTIK TAM KAPSAMLI: 4 kota + plan + bayi self-servis (site + DB) + sahiplik + cascade + admin/bayi/müşteri rolleri. KALAN: M2-M5 ayrı denetim kalemleri.
+
+## 2026-06-23 (78) — M5 FTPS "yalnız güvenli FTP" toggle (Plesk gibi, opsiyonel)
+- Kullanıcı "m5 plesk ile aynı olsun" dedi. Plesk'te FTPS DAİMA açık + opsiyonel "yalnız güvenli FTP" zorunlu kılma. AdaPanel zaten
+  SslAllow (düz+FTPS, policy 0) idi → Plesk varsayılanıyla aynı. EKLENEN: opsiyonel admin toggle (controlChannelPolicy/dataChannelPolicy 0↔1).
+- FtpService: TlsStatePath (config/ftp-tls.json {RequireSsl}), GetRequireSslAsync/SetRequireSslAsync (yaz + EnsureFtpInfrastructureAsync ile
+  politikayı HEMEN uygula + FTPSVC restart). EnsureFtpInfrastructureAsync artık RequireSsl okur → policy 0=SslAllow / 1=SslRequire (hardcode 0 KALKTI).
+  Doğrulama uyarısı policy/policyName'e göre güncellendi (yanlış-pozitif uyarı yok).
+- IFtpService: GetRequireSslAsync + SetRequireSslAsync. FtpController: GET/PUT /ftp/tls ([Authorize Administrator] — server-level). FtpTlsRequest/FtpTlsStatusDto.
+- FRONTEND: api/ftp.ts getFtpTls/setFtpTls; FtpView.vue admin+standalone (!siteName) toggle (checkbox + hint), erişim yoksa gizli.
+  i18n panel.ftp.requireTls/requireTlsHint/tlsRequired/tlsOptional (TR+EN).
+- VARSAYILAN KAPALI (RequireSsl=false) → kilitlenme yok, mevcut düz-FTP istemciler çalışmaya devam eder. Plesk varsayılanıyla birebir.
+
+## 2026-06-23 (79) — Abonelik yaşam döngüsü: ASKIYA ALMA / SÜRDÜRME (Plesk "suspend") — UÇTAN UCA
+- Kullanıcı "abonelik yaşam döngüsü bunu da yap" dedi. BULGU: IsActive zaten (a) girişi engelliyor (AuthService:53 auth.login.blocked)
+  ve (b) mevcut oturumu geçersiz kılıyor (GetCurrentSession IsActive=false → boş). EKSİK olan: kaynakların durması.
+- UserManagementService.UpdateUserAsync: IIisSiteService enjekte edildi. Aktiflik geçişi yakalanıyor (wasActive). YENİ ApplySuspensionStateAsync:
+  Customer için true→false (askıya al) atanan sitelerini StopSiteAsync (web 503), false→true (sürdür) StartSiteAsync. En-iyi-çaba (tek site
+  hatası akışı bozmaz, log). Audit users.suspended / users.resumed.
+- Plesk-parite: askıya alınmış müşteri panele GİREMEZ + siteleri DURUR. NOT (sonraki adım): mail/FTP askıya alma henüz dahil değil.
+- FRONTEND: YENİ UI GEREKMEDİ — kullanıcı yönetimindeki mevcut "Aktif" toggle artık askıya al/sürdür anlamına gelir (Plesk active/suspended).
+- Doğrulama: backend build 0/0, test 44/44 (+2 core), typecheck 0, i18n 2114/2114, FE build 0, publish OK, ISCC OK.
+- Installer SHA256: `EBEC6602FBB0392EC2F12943A2E4B3C04E223C38004499E6811D0E9E31333F88` (51130317 / 48.76 MiB) — M5 (78) + askıya alma (79) BİRLİKTE. AKTİF.
+- KALAN (FINAL istek): M4 DNS (ikincil NS/AXFR — kodlanabilir kısım), M2 yedek (Plesk paritesi — büyük ölçüde mevcut, doğrula), FTP izolasyon (mode 3 = per-user, doğrula).

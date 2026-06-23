@@ -15,6 +15,7 @@ public sealed partial class FtpService(
     IOptions<PanelRuntimeOptions> runtimeOptions) : IFtpService
 {
     private const string StatePath = "config/ftp-users.json";
+    private const string TlsStatePath = "config/ftp-tls.json";
     private const string FtpSiteName = "AdaPanel FTP";
     private const int FtpPort = 21;
     private const int PassivePortStart = 50000;
@@ -34,6 +35,22 @@ public sealed partial class FtpService(
             IsConfigured = true,
             StatusMessage = "ftp.server_ready"
         };
+    }
+
+    // M5 (Plesk gibi opsiyonel "yalnız güvenli FTP"): FTPS zorunlu mu? Varsayılan false = düz + FTPS (kilitlenme yok).
+    public async Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default)
+        => (await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken)).RequireSsl;
+
+    public async Task<bool> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default)
+    {
+        await fileStore.WriteAsync(TlsStatePath, new FtpTlsState { RequireSsl = requireSsl }, cancellationToken);
+        await EnsureFtpInfrastructureAsync(cancellationToken); // politikayı HEMEN uygula (controlChannelPolicy 0/1 + FTPSVC restart)
+        return requireSsl;
+    }
+
+    private sealed class FtpTlsState
+    {
+        public bool RequireSsl { get; set; }
     }
 
     public async Task<IReadOnlyCollection<FtpUserDto>> GetFtpUsersAsync(CancellationToken cancellationToken = default)
@@ -198,6 +215,11 @@ public sealed partial class FtpService(
             ? $"Set-ItemProperty \"IIS:\\Sites\\$siteName\" -Name ftpServer.firewallSupport.externalIp4Address -Value '{EscapePowerShellLiteral(externalIp)}'"
             : "# sunucu IPv4 adresi panelde tanimli degil; pasif mod sunucunun kendi IP'sini kullanir";
 
+        // M5 (Plesk gibi opsiyonel): FTPS zorunlu mu? 0=SslAllow (düz+FTPS, varsayılan), 1=SslRequire (yalnız FTPS).
+        var requireSsl = (await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken)).RequireSsl;
+        var policy = requireSsl ? 1 : 0;
+        var policyName = requireSsl ? "SslRequire" : "SslAllow";
+
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
@@ -215,8 +237,8 @@ public sealed partial class FtpService(
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $false
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
             Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.userIsolation.mode -Value 3
-            Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
-            Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
+            Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value {{policy}}
+            Set-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value {{policy}}
             # FTPS sertifikasi: yoksa self-signed olustur ve bagla. serverCertHash bos olursa IIS "AUTH TLS"i
             # reddeder; bagliyken FTPS calisir. controlChannelPolicy=0 ile duz baglanti da kabul -> kimse kilitlenmez.
             $ftpsCert = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq 'AdaPanel FTPS' } | Select-Object -First 1
@@ -238,7 +260,7 @@ public sealed partial class FtpService(
             # değeri farklı tipte döndürdüğü için (.Value boş/enum-adı) eski throw, Set basarili olsa bile
             # FTP'yi tümden bloke ediyordu (yanlis-pozitif). Set yukarida calisti; dogrulama bilgilendirme amacli.
             $applied = "$((Get-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.controlChannelPolicy -ErrorAction SilentlyContinue).Value)"
-            if ($applied -ne '0' -and $applied -ne 'SslAllow') { Write-Warning "FTP SSL ayari dogrulanamadi (controlChannelPolicy=$applied)." }
+            if ($applied -ne '{{policy}}' -and $applied -ne '{{policyName}}') { Write-Warning "FTP SSL ayari dogrulanamadi (controlChannelPolicy=$applied, beklenen={{policy}})." }
             Start-WebSite -Name $siteName -ErrorAction SilentlyContinue
             # Pasif port aralığı (firewallSupport) ve SSL sertifikası değişikliklerinin uygulanması için
             # Microsoft FTP Service yeniden başlatılır (IIS bu ayarları canlı okumaz).

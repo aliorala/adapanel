@@ -53,6 +53,14 @@
       </div>
     </div>
 
+    <label v-if="isAdmin && !siteName" class="form-surface ftp-tls-bar">
+      <input type="checkbox" :checked="requireSsl" :disabled="tlsSaving" @change="toggleTls(($event.target as HTMLInputElement).checked)" />
+      <span class="ftp-tls-text">
+        <strong>{{ t("panel.ftp.requireTls") }}</strong>
+        <small>{{ t("panel.ftp.requireTlsHint") }}</small>
+      </span>
+    </label>
+
     <section v-if="showCreateForm" class="form-surface ftp-create">
       <div class="section-head compact-head">
         <div>
@@ -136,8 +144,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpUsers, setFtpPassword, type FtpServerStatus, type FtpUser } from "../api/ftp";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
@@ -146,6 +154,8 @@ const props = defineProps<{ siteName?: string }>();
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 
 const users = ref<FtpUser[]>([]);
 const serverStatus = ref<FtpServerStatus | null>(null);
@@ -158,6 +168,9 @@ const noticeDetails = ref("");
 const noticeError = ref(false);
 const search = ref("");
 const showCreateForm = ref(false);
+// M5: FTPS zorunlu mu (yalnız admin + standalone FTP sayfasında gösterilir).
+const requireSsl = ref(false);
+const tlsSaving = ref(false);
 
 const form = reactive({
   userName: "",
@@ -227,8 +240,31 @@ onMounted(async () => {
     await sitesStore.fetchSites().catch(() => undefined);
   }
 
-  await Promise.allSettled([prepareServer(), refresh()]);
+  await Promise.allSettled([prepareServer(), refresh(), loadTls()]);
 });
+
+async function loadTls() {
+  if (!isAdmin.value || props.siteName) {
+    return;
+  }
+  try {
+    requireSsl.value = (await getFtpTls()).requireSsl;
+  } catch {
+    // erişim yoksa toggle gizli kalır
+  }
+}
+
+async function toggleTls(value: boolean) {
+  tlsSaving.value = true;
+  try {
+    requireSsl.value = (await setFtpTls(value)).requireSsl;
+    showNotice(t(value ? "panel.ftp.tlsRequired" : "panel.ftp.tlsOptional"), false);
+  } catch (error) {
+    showApiError(error);
+  } finally {
+    tlsSaving.value = false;
+  }
+}
 
 async function prepareServer() {
   try {
@@ -367,6 +403,28 @@ function formatCreatedAt(value: string) {
 
 .ftp-summary {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ftp-tls-bar {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 12px;
+  cursor: pointer;
+}
+
+.ftp-tls-bar input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.ftp-tls-text {
+  display: grid;
+  gap: 2px;
+}
+
+.ftp-tls-text small {
+  color: var(--text-muted);
 }
 
 .meta {
