@@ -49,6 +49,10 @@ var panelCertificate = LoadPanelCertificate(dataRoot);
 Directory.CreateDirectory(dataRoot);
 Directory.CreateDirectory(logDirectory);
 Directory.CreateDirectory(keyDirectory);
+// Panel SQLite veritabanı klasörü ({dataRoot}\data\adapanel.db) migration/EnsureCreated'dan ÖNCE var olmalı.
+// Yoksa SQLite "unable to open database file" verir: taze kurulumda 'data' klasörünü henüz kimse oluşturmamıştır
+// (DataRootHardeningService hosted service olarak app.Run SONRASI çalışır; EnsureDatabaseAsync ise app.Run'dan ÖNCE).
+Directory.CreateDirectory(Path.Combine(dataRoot, "data"));
 
 var serilogAssemblies = new[]
 {

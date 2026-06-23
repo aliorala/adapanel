@@ -3628,3 +3628,14 @@ Basarili:
   servisini engellemez); initialize-panel-certificate + install-service KRİTİK kaldı (panel açılması için şart).
 - Installer SHA256: `7921D0ADD90D63831B24287294C156381E2B7906D49E975A045D0C6F15015CB2` (51682354 / 49.29 MiB). AKTİF — tüm 6 özellik + bu fix.
 - ANINDA ÇÖZÜM (yeni kurulum gerekmez): {app}\scripts\ içinde initialize-panel-certificate.ps1 + install-service.ps1 elle çalıştır.
+
+## 2026-06-24 (85) — KURULUM KÖK NEDEN 2: 'data' klasörü migration'dan ÖNCE yok → SQLite "unable to open database file"
+- Kullanıcı canlı kurulumda buldu: servis KURULU ama Stopped; log: SQLite Error 14 'unable to open database file'
+  (C:\ProgramData\AdaPanel\data\adapanel.db). Servis crash-loop → panel açılmıyor.
+- KÖK NEDEN: Program.cs dataRoot/logs/keys oluşturuyor ama 'data' klasörünü OLUŞTURMUYOR. 'data'yı DataRootHardeningService
+  (IHostedService → app.Run SONRASI) oluşturuyor; oysa EnsureDatabaseAsync (MigrateAsync; catch'te EnsureCreatedAsync) app.Run'dan
+  ÖNCE çalışıyor → taze kurulumda 'data' yokken SQLite db dosyasını oluşturamıyor → catch'teki EnsureCreated de patlıyor (korumasız)
+  → uygulama çöküyor, servis Stopped. (ACL DEĞİL; DataRootHardening SYSTEM/Admin'e F veriyor + admin elle de yazabilir — klasör hiç yoktu.)
+- FIX: Program.cs'e `Directory.CreateDirectory(Path.Combine(dataRoot,"data"))` eklendi (logs/keys ile aynı yerde, EnsureDatabaseAsync'ten ÖNCE). OS-bağımsız (Server + 10/11).
+- ANINDA ÇÖZÜM (rebuild'siz): `New-Item -ItemType Directory -Force C:\ProgramData\AdaPanel\data` + `Start-Service AdaPanel`.
+- Installer SHA256: `03BB6345D4073DA4581D39403B9E1FB9D6F92837854C205BC4B0A99625CD94F9` (51682184 / 49.29 MiB). AKTİF — 6 özellik + IIS-features fix (84) + data-dir fix (85).
