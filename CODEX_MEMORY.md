@@ -3514,3 +3514,18 @@ Basarili:
 - Installer SHA256: `0CDAAC25FD4DF65104A36C3DABBFE6C96121708EA7C56A78968D8DE897E27E6F` (51122432 / 48.75 MiB). AKTİF.
 - KALAN (opsiyonel sağlamlaştırma, ACİL DEĞİL): DatabasesController'ı bayiye aç + DB görünürlük filtresi (şu an DB yönetimi admin-only;
   bayi DB'yi site-oluşturma yolundan açıyor — güvenli). M2-M5 (yedek/mail-DNS/DNS-SPOF/FTPS) ayrı denetim kalemleri.
+
+## 2026-06-23 (77) — Bayi self-servis DB yönetim ekranı (GÜVENLİ, izole)
+- Kullanıcı "bayi DB ekranı, dikkatli" seçti. KANIT: admin DatabasesController.GetWorkspaceAsync root parolayı (AdminPassword) +
+  tüm DB/kullanıcıları döner → bayiye AÇILAMAZ. Çözüm: AYRI izole controller + frontend.
+- YENİ ResellerDatabasesController (api/v1/my-databases, [Authorize Administrator,Reseller]): GET (yalnız SAHİP OLUNAN DB'ler,
+  parolasız OwnedDatabaseDto), POST (MaxDatabases kotası + dbOwnership.RecordAsync), DELETE (YALNIZ sahip olduğu — GetOwnerAsync==userId
+  değilse 403 not_owned + RemoveAsync). Admin DatabasesController'a DOKUNULMADI (root parola/transfer/kullanıcı orada admin-only kaldı).
+- dbOwnership.GetOwnedAsync (sahip olunan engine+ad listesi) eklendi. SecureEntryPathMiddleware'e /api/v1/my-databases eklendi.
+- FRONTEND: MyDatabasesView.vue (liste + oluştur formu + sil, parolasız) + api/myDatabases.ts + SetupWizardView'e bayi "database"
+  bölümü (sections filtresine eklendi + isReseller render) + i18n panel.myDb.* + database.quota_exceeded/not_owned.
+- GÜVENLİK: bayi başka müşterinin DB'sini GÖRMEZ (GetOwnedAsync sahip-filtreli) / SİLEMEZ (GetOwnerAsync kontrolü) / root parola GÖRMEZ
+  (OwnedDatabaseDto sadece engine+ad). Admin ekranı değişmedi.
+- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2110/2110, FE 0, publish OK, ISCC OK.
+- Installer SHA256: `F16B6092B87BE43E78FB11C0E328A8CE70529ABEC307421E62556E354AE67560` (51128493 / 48.76 MiB). AKTİF.
+- M1 ARTIK TAM KAPSAMLI: 4 kota + plan + bayi self-servis (site + DB) + sahiplik + cascade + admin/bayi/müşteri rolleri. KALAN: M2-M5 ayrı denetim kalemleri.
