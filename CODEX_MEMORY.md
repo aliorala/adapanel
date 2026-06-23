@@ -3459,3 +3459,16 @@ Basarili:
 - GÜVENLİK DURUMU: denetimdeki TÜM açıklar kapalı (K1-K3, B1-B6, M3) + Plesk-işlevsellik (uzak DB erişimi, phpMyAdmin proxy,
   open_basedir varsayılan). KALAN: B3 8896'yı loopback'e alma = phpMyAdmin proxy CANLI doğrulanınca. M1 (müşteri/abonelik/kota
   modeli) = BÜYÜK mimari özellik, açık değil. M4 (DNS tek-IP SPOF) mimari.
+
+## 2026-06-23 (73) — M1 başladı: BULGU temel ZATEN VAR + ilk adım (bayi self-servis + MaxSites kotası)
+- M1 sanıldığı kadar boş DEĞİL: ServicePlan (ServicePlanService/Controller/Dto — MaxSites+MaxDiskMb), CustomerScope
+  (siteler+limitler+BAYİ hiyerarşisi OwnerId+disk kullanımı), roller (Admin/Bayi/Müşteri), DiskQuota DAYATILI (FilesController
+  quota_exceeded), rol-kapsamlı erişim (CustomerAccess.EnsureSiteAsync). Temel sağlam.
+- GERÇEK boşluk: site oluşturma ADMIN-ONLY'di (SitesController:95) → müşteri/bayi self-servis YOK + MaxSites dayatılmıyordu.
+- YAPILAN (#20): CreateSiteAsync → [Authorize "Administrator,Reseller"]. EnsureSiteQuotaAsync (admin sınırsız; MaxSites>0 &&
+  Sites.Count>=MaxSites → 403 sites.quota_exceeded). AssignSiteToActorAsync (admin değilse yeni site oluşturanın scope'una eklenir,
+  OwnerId korunur). i18n sites.quota_exceeded. → Plesk: bayi kendi kotası kadar self-servis site açar, otomatik kendi kapsamına düşer.
+- Doğrulama: build 0/0, test 44/44 (+2), i18n 2094/2094, FE 0, publish OK, ISCC OK.
+- Installer SHA256: `F204CBFAA48E12A0BA8F4B881821260F5FC9A5CA3FDE8A7426902F0948620C71` (51116007 byte / 48.75 MiB). AKTİF.
+- KALAN M1 (görev #21-23): plan zenginleştir (DB/posta/bandwidth limitleri), DB+posta kotası dayat, plan→müşteri uygulama +
+  müşteri self-servis ekran deneyimi doğrula. Çok-adımlı; her biri ayrı tur.

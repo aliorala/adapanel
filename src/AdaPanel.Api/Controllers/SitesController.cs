@@ -92,7 +92,7 @@ public sealed class SitesController(
     /// mail domaini ve FTP hesabını da best-effort oluşturur (biri kurulamazsa site yine kalır).
     /// </summary>
     [HttpPost]
-    [Authorize(Roles = "Administrator")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<SiteCreationResultDto>>> CreateSiteAsync(
         [FromBody] CreateSiteRequest request,
         [FromServices] IDatabaseService databaseService,
@@ -102,11 +102,17 @@ public sealed class SitesController(
         [FromServices] IComponentBootstrapper componentBootstrapper,
         CancellationToken cancellationToken)
     {
+        // M1 (Plesk gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
+        await EnsureSiteQuotaAsync(cancellationToken);
+
         var site = await siteProvisioningService.CreateAndProvisionAsync(
             request,
             User.GetRequiredUserId(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
+
+        // M1: admin değilse yeni siteyi oluşturanın kapsamına EKLE (erişebilsin + kota sayımı doğru olsun).
+        await AssignSiteToActorAsync(site.Name, cancellationToken);
         await WriteAuditAsync("sites.create.completed", site.Name, cancellationToken);
 
         var result = new SiteCreationResultDto { Site = site };
@@ -327,6 +333,41 @@ public sealed class SitesController(
         return Ok(ApiResponse<SiteDefaultsResultDto>.Ok(
             result,
             result.IsComplete ? "sites.defaults.success" : "sites.defaults.partial"));
+    }
+
+    // M1: Bayi/Müşteri site kotası. Admin sınırsız. MaxSites=0 → limitsiz (mevcut davranışı korur).
+    private async Task EnsureSiteQuotaAsync(CancellationToken cancellationToken)
+    {
+        if (User.IsInRole("Administrator"))
+        {
+            return;
+        }
+
+        var scope = await customerScopes.GetScopeAsync(User.GetRequiredUserId(), cancellationToken);
+        if (scope.MaxSites > 0 && scope.Sites.Count >= scope.MaxSites)
+        {
+            throw new Core.Common.AppException("sites.quota_exceeded", 403, 403);
+        }
+    }
+
+    // M1: admin olmayan oluşturucunun yeni sitesini kendi kapsamına ekler (yoksa). OwnerId korunur (SetScopeAsync).
+    private async Task AssignSiteToActorAsync(string siteName, CancellationToken cancellationToken)
+    {
+        if (User.IsInRole("Administrator"))
+        {
+            return;
+        }
+
+        var userId = User.GetRequiredUserId();
+        var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
+        if (scope.Sites.Contains(siteName, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var sites = scope.Sites.ToList();
+        sites.Add(siteName);
+        await customerScopes.SetScopeAsync(userId, sites, scope.MaxSites, scope.MaxDiskMb, cancellationToken);
     }
 
     private Task WriteAuditAsync(string action, string siteName, CancellationToken cancellationToken)

@@ -1091,6 +1091,7 @@
   "panel.users.sendWelcomeEmail": "Giriş bilgilerini e-posta ile gönder",
   "users.too_many_sites": "Atanan site sayısı belirlenen limiti aşıyor.",
   "files.quota_exceeded": "Disk kotası aşıldı; dosya yüklenemedi.",
+  "sites.quota_exceeded": "Site kotası doldu: planınızdaki en fazla site sayısına ulaştınız. Yeni site için yöneticinize başvurun.",
   "notifications.recipient_required": "Alıcı e-posta adresi gerekli.",
   "panel.users.noSitesToAssign": "Atanacak site yok; önce Web Sitesi ekranından site oluşturun.",
   "panel.navigation.backup": "Yedekleme",

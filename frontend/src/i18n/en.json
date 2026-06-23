@@ -1091,6 +1091,7 @@
   "panel.users.sendWelcomeEmail": "Send sign-in details by email",
   "users.too_many_sites": "The number of assigned sites exceeds the configured limit.",
   "files.quota_exceeded": "Disk quota exceeded; the file could not be uploaded.",
+  "sites.quota_exceeded": "Site quota reached: you have hit the maximum number of sites in your plan. Contact your administrator for more.",
   "notifications.recipient_required": "A recipient email address is required.",
   "panel.users.noSitesToAssign": "No sites to assign; create a site from the Website screen first.",
   "panel.navigation.backup": "Backups",
