@@ -61,6 +61,13 @@
             @click="refreshWorkspace">
             {{ t("panel.database.refresh") }}
           </button>
+          <button
+            class="secondary compact"
+            :disabled="!selectedEngineInstalled || hardening"
+            :title="t('panel.database.hardenHint')"
+            @click="hardenSecurity">
+            {{ hardening ? t("panel.database.hardening") : t("panel.database.harden") }}
+          </button>
         </div>
       </div>
 
@@ -334,7 +341,7 @@ import CacheView from "./CacheView.vue";
 import DbToolSettingsView from "./DbToolSettingsView.vue";
 import DbTransferView from "./DbTransferView.vue";
 import WebDbView from "./WebDbView.vue";
-import { openPhpMyAdmin } from "../api/databases";
+import { hardenDatabase, openPhpMyAdmin } from "../api/databases";
 import { openReachable } from "../utils/url";
 import { extractApiMessage } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
@@ -665,6 +672,28 @@ async function changeUserPassword(userName: string, host: string) {
     showNotice(t("panel.database.passwordChanged"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
+  }
+}
+
+const hardening = ref(false);
+
+async function hardenSecurity() {
+  if (!selectedEngineInstalled.value) {
+    return;
+  }
+  hardening.value = true;
+  try {
+    const removed = await hardenDatabase(selectedEngine.value);
+    showNotice(
+      removed.length === 0
+        ? t("panel.database.hardenedClean")
+        : t("panel.database.hardenedRemoved", { items: removed.join(", ") }),
+      false,
+    );
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    hardening.value = false;
   }
 }
 

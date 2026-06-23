@@ -160,3 +160,10 @@ export async function transferDatabase(payload: DatabaseTransferPayload) {
   return response.data.data;
 }
 
+// K2 (Plesk mysql_secure_installation gibi): güvensiz DB yönetici hesaplarını (anonim + uzak root) kaldırır.
+// root@localhost'a dokunmaz. Kaldırılanların listesini döner (boş = zaten güvenli).
+export async function hardenDatabase(engine: string) {
+  const response = await apiClient.post<ApiEnvelope<string[]>>("/db/harden", null, { params: { engine } });
+  return response.data.data;
+}
+

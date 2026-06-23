@@ -3567,3 +3567,19 @@ Basarili:
 - Installer SHA256: `32CD1EC2F7E22D34609FD895F887CE4592F22BEB618B58A48B8B5F3AB0234DC8` (51130378 / 48.76 MiB). AKTİF.
 - FINAL LİSTE DURUMU: M5 (78)✅ + Abonelik askıya alma (79)✅ + M4 (80)✅ + M2 yedek (zaten tam: S3/FTP/WebDAV + retention + granüler restore)✅
   + FTP izolasyon (mode 3 per-user = Plesk chroot)✅ → FINAL İSTEK TAMAMLANDI. NOT: bu oturumun installer'ları VPS'te HENÜZ canlı test edilmedi.
+
+## 2026-06-23 (81) — K2 sertleştirme: güvensiz DB yönetici hesapları (Plesk mysql_secure_installation)
+- Kullanıcı "K2 yap (Plesk gibi, dağıtıma uygun)" seçti. KRİTİK BULGU: panel root'a PAROLA İLE bağlanıyor
+  (ResolveConnectionProfileAsync:477 parola yoksa database.admin_password_missing fırlatır; phpMyAdmin/Adminer de aynı saklı
+  parolayı kullanır). Yani ANA root@localhost parolası ZATEN VAR — "parolasız root" senaryosu esasen kapalı.
+- Kalan gerçek sertleştirme (GÜVENLİ, paneli kilitlemez): anonim kullanıcılar + uzak root@'%' kaldırma. root@localhost'a
+  ASLA dokunulmaz → panel DB erişimi kopmaz. İdempotent (boşsa "zaten güvenli").
+- BACKEND: IDatabaseEngineProvider.HardenAdminAccountsAsync (default no-op → Pg/MsSql etkilenmez). MySqlDatabaseProvider override:
+  SELECT mysql.user WHERE User='' OR (root AND Host='%') → DROP USER IF EXISTS (best-effort) + FLUSH. DatabaseService.HardenAdminAccountsAsync(engine)
+  + IDatabaseService. DatabasesController POST /db/harden?engine ([Authorize Administrator]) + audit database.hardened.
+- FRONTEND: api/databases.ts hardenDatabase; DatabasesView motor araç çubuğuna "Güvenliği sıkılaştır" butonu (sonuç: kaldırılan
+  hesaplar listesi / "zaten güvenli"). i18n panel.database.harden/hardening/hardenHint/hardenedClean/hardenedRemoved + database.hardened (TR+EN).
+- Doğrulama: build 0/0, test 44/44 (+2 core), typecheck 0, i18n 2123/2123, FE build 0, publish OK, ISCC OK.
+- Installer SHA256: `9AFCDB3602E50D586079FA7B970E5674B5E6E115557700DF7A4A57FE3D279B95` (51134445 / 48.77 MiB). AKTİF.
+- KALAN: (a) Webmail SSL — Let's Encrypt per-site webmail.<domain> SAN (jenerik/otomatik, kullanıcı "her site için otomatik" onayladı).
+  (b) YENİ istek: FTP ile uzaktan DOSYA çekme (site taşıma; mevcut sunucu-taraflı remote-DB transfer'in dosya eşi).

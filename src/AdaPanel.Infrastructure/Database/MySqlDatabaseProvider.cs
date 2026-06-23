@@ -173,6 +173,50 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         }
     }
 
+    // K2 (mysql_secure_installation eşdeğeri, GÜVENLİ): anonim kullanıcıları ve uzak root@'%' hesabını
+    // kaldır. root@localhost ve loopback'e DOKUNMA — panel onlarla bağlanıyor, kilitlenme olmaz. İdempotent.
+    public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+    {
+        var removed = new List<string>();
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        var targets = new List<(string User, string Host)>();
+        await using (var query = connection.CreateCommand())
+        {
+            // Güvensiz hesaplar: anonim (User='') veya uzak root (root@'%'). localhost/loopback root KORUNUR.
+            query.CommandText = "SELECT User, Host FROM mysql.user WHERE User = '' OR (User = 'root' AND Host = '%');";
+            await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                targets.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        foreach (var (user, host) in targets)
+        {
+            try
+            {
+                await using var drop = connection.CreateCommand();
+                drop.CommandText = $"DROP USER IF EXISTS '{user.Replace("'", "''")}'@'{host.Replace("'", "''")}';";
+                await drop.ExecuteNonQueryAsync(cancellationToken);
+                removed.Add(string.IsNullOrEmpty(user) ? $"(anonim)@{host}" : $"{user}@{host}");
+            }
+            catch (MySqlException)
+            {
+                // en iyi çaba — tek hesabın hatası diğerlerini engellemesin
+            }
+        }
+
+        if (removed.Count > 0)
+        {
+            await using var flush = connection.CreateCommand();
+            flush.CommandText = "FLUSH PRIVILEGES;";
+            await flush.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        return removed;
+    }
+
     private static async Task<MySqlConnection> OpenConnectionAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
     {
         try

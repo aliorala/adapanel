@@ -31,4 +31,7 @@ public interface IDatabaseService
     /// yerel hedef veritabanına aktarır. Tarayıcı upload'ı olmadığından 413/timeout yaşanmaz.
     /// </summary>
     Task<DatabaseTransferResultDto> TransferDatabaseAsync(DatabaseTransferRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>K2: güvensiz DB yönetici hesaplarını (anonim + uzak root) kaldırır. Kaldırılanların listesini döner.</summary>
+    Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default);
 }

@@ -26,4 +26,9 @@ internal interface IDatabaseEngineProvider
         string allowedHost,
         IReadOnlyCollection<string> privileges,
         CancellationToken cancellationToken);
+
+    // K2: güvensiz yönetici hesaplarını (anonim kullanıcılar + uzak root@'%') kaldırır; root@localhost'a
+    // DOKUNMAZ (panel onunla bağlanır). Yalnız MySQL/MariaDB anlamlı uygular; diğer motorlar no-op.
+    Task<IReadOnlyList<string>> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 }

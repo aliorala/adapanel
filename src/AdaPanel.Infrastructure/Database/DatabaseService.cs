@@ -153,6 +153,13 @@ internal sealed partial class DatabaseService(
         return await ResolveProvider(dbEngine).GetWorkspaceAsync(profile, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        return await ResolveProvider(dbEngine).HardenAdminAccountsAsync(profile, cancellationToken);
+    }
+
     public async Task<DatabaseWorkspaceDto> CreateDatabaseAsync(
         CreateDatabaseRequest request,
         CancellationToken cancellationToken = default)

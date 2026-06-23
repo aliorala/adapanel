@@ -47,6 +47,24 @@ public sealed class DatabasesController(
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace));
     }
 
+    // K2 (Plesk mysql_secure_installation gibi): güvensiz yönetici hesaplarını (anonim + uzak root) kaldırır.
+    // root@localhost'a dokunmaz → panel DB erişimi kopmaz. Admin-only.
+    [HttpPost("harden")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<string>>>> HardenAsync(
+        [FromQuery] string engine,
+        CancellationToken cancellationToken)
+    {
+        var removed = await databaseService.HardenAdminAccountsAsync(engine, cancellationToken);
+        await WriteAuditAsync(
+            "database.hardened",
+            engine,
+            removed.Count == 0
+                ? $"Hardening '{engine}': no insecure admin accounts found."
+                : $"Hardening '{engine}': removed {string.Join(", ", removed)}.",
+            cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<string>>.Ok(removed, "database.hardened"));
+    }
+
     [HttpPost]
     public async Task<ActionResult<ApiResponse<DatabaseWorkspaceDto>>> CreateDatabaseAsync(
         [FromBody] CreateDatabaseRequest request,
