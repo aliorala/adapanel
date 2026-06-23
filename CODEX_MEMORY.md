@@ -3639,3 +3639,17 @@ Basarili:
 - FIX: Program.cs'e `Directory.CreateDirectory(Path.Combine(dataRoot,"data"))` eklendi (logs/keys ile aynı yerde, EnsureDatabaseAsync'ten ÖNCE). OS-bağımsız (Server + 10/11).
 - ANINDA ÇÖZÜM (rebuild'siz): `New-Item -ItemType Directory -Force C:\ProgramData\AdaPanel\data` + `Start-Service AdaPanel`.
 - Installer SHA256: `03BB6345D4073DA4581D39403B9E1FB9D6F92837854C205BC4B0A99625CD94F9` (51682184 / 49.29 MiB). AKTİF — 6 özellik + IIS-features fix (84) + data-dir fix (85).
+
+## 2026-06-24 (86) — KURULUM GERÇEK KÖK NEDEN: K1 sertleştirme AÇIK db'ye icacls /T uyguluyordu → ACL bozuluyordu
+- (85)'teki "data klasörü yok" tek başına yeterli değildi. ASIL kök neden: DataRootHardeningService IHostedService olarak
+  app.Run SONRASI çalışıyordu; o an adapanel.db AÇIKTI. `icacls /inheritance:r ... /T` açık db dosyasının ACL'ini bozabiliyor
+  ("/inheritance:r OK + /grant FAIL" yarışı = boş DACL) → sonraki açılışta SYSTEM bile açamıyor (SQLite Error 14).
+  LOG KANITI: 23:37 panel ÇALIŞTI (migration OK + "K1 kilitlendi" + Kestrel) → sonra HER açılış Error 14. Elle düzeltme
+  (icacls /reset + db sil + Start-Service) açtı → kök neden ACL/açık-dosya yarışı.
+- FIX: DataRootHardeningService artık IHostedService DEĞİL → `public static HardenAsync`. Program.cs EnsureDatabaseAsync
+  BAŞINDA, **db AÇILMADAN önce** çağrılır → /T hep KAPALI db'ye uygulanır; yeni db kilidi MİRAS alarak doğar (tenant okuyamaz),
+  açıkken bir daha ACL'lenmez. ServiceCollectionExtensions'tan AddHostedService kaydı kaldırıldı. (Program.cs'teki data-dir
+  oluşturma + HardenAsync'in dir-oluşturması birlikte = sağlam.)
+- Doğrulama: build 0/0, test 44/44 (+2), publish OK, ISCC OK.
+- Installer SHA256: `2FC2D0D877615578F8923B56AF607065D9FAF423BE0FE42BBF2B056FF35C0D87` (51682947 / 49.29 MiB). AKTİF.
+- AÇIK KALAN: (a) setup ekranında "common.unexpected_error" (canlı, log bekleniyor). (b) Inno kurulumda "runtime error 2:1017" (ekran görüntüsü bekleniyor).

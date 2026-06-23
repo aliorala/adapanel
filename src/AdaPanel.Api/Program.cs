@@ -213,15 +213,22 @@ app.UseStaticFiles();
 app.MapControllers();
 app.MapFallbackToFile("index.html");
 
-await EnsureDatabaseAsync(app);
+await EnsureDatabaseAsync(app, dataRoot);
 
 app.Run();
 
-static async Task EnsureDatabaseAsync(WebApplication app)
+static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
 {
     await using var scope = app.Services.CreateAsyncScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<AdaPanelDbContext>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    // K1 GÜVENLİK + KURULUM SAĞLAMLIĞI: Veri kökünü panel DB'si AÇILMADAN ÖNCE sertleştir. Eskiden bu işlem
+    // hosted service olarak app.Run SONRASI, adapanel.db AÇIKKEN icacls /T uyguluyordu → açık dosyanın ACL'i
+    // bozulup sonraki açılışta "SQLite Error 14: unable to open database file" oluyordu. Artık db'den ÖNCE,
+    // dosya kapalıyken çalışır; yeni db kilidi miras alarak doğar, açıkken bir daha ACL'lenmez.
+    await AdaPanel.Infrastructure.Bootstrap.DataRootHardeningService.HardenAsync(dataRoot, logger);
+
     var database = dbContext.Database;
 
     try
