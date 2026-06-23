@@ -39,7 +39,9 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
             Id = Guid.NewGuid().ToString("N"),
             Name = name,
             MaxSites = Math.Max(0, request.MaxSites),
-            MaxDiskMb = Math.Max(0, request.MaxDiskMb)
+            MaxDiskMb = Math.Max(0, request.MaxDiskMb),
+            MaxDatabases = Math.Max(0, request.MaxDatabases),
+            MaxMailboxes = Math.Max(0, request.MaxMailboxes)
         };
         plans.Add(plan);
         await fileStore.WriteAsync(StatePath, plans, cancellationToken);
@@ -60,6 +62,8 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
 
         plan.MaxSites = Math.Max(0, request.MaxSites);
         plan.MaxDiskMb = Math.Max(0, request.MaxDiskMb);
+        plan.MaxDatabases = Math.Max(0, request.MaxDatabases);
+        plan.MaxMailboxes = Math.Max(0, request.MaxMailboxes);
         await fileStore.WriteAsync(StatePath, plans, cancellationToken);
         return plan;
     }

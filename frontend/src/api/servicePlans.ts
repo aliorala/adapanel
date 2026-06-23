@@ -12,6 +12,8 @@ export type ServicePlan = {
   name: string;
   maxSites: number;
   maxDiskMb: number;
+  maxDatabases: number;
+  maxMailboxes: number;
 };
 
 export async function getServicePlans() {
@@ -19,7 +21,7 @@ export async function getServicePlans() {
   return response.data.data;
 }
 
-export async function createServicePlan(payload: { name: string; maxSites: number; maxDiskMb: number }) {
+export async function createServicePlan(payload: { name: string; maxSites: number; maxDiskMb: number; maxDatabases?: number; maxMailboxes?: number }) {
   const response = await apiClient.post<ApiEnvelope<ServicePlan>>("/service-plans", payload);
   return response.data.data;
 }

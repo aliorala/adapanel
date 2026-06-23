@@ -10,6 +10,12 @@ public sealed class ServicePlanDto
     public int MaxSites { get; set; }
 
     public int MaxDiskMb { get; set; }
+
+    /// <summary>En fazla veritabanı (Plesk MaxDatabases; 0 = sınırsız).</summary>
+    public int MaxDatabases { get; set; }
+
+    /// <summary>En fazla posta kutusu (Plesk MaxMailboxes; 0 = sınırsız).</summary>
+    public int MaxMailboxes { get; set; }
 }
 
 public sealed class ServicePlanRequest
@@ -19,4 +25,8 @@ public sealed class ServicePlanRequest
     public int MaxSites { get; set; }
 
     public int MaxDiskMb { get; set; }
+
+    public int MaxDatabases { get; set; }
+
+    public int MaxMailboxes { get; set; }
 }
