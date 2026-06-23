@@ -33,4 +33,7 @@ public sealed class UpdateUserRequest
 
     /// <summary>Customer için en fazla veritabanı kotası (Plesk MaxDatabases; 0 = sınırsız).</summary>
     public int MaxDatabases { get; init; }
+
+    /// <summary>Customer için en fazla posta kutusu kotası (Plesk MaxMailboxes; 0 = sınırsız).</summary>
+    public int MaxMailboxes { get; init; }
 }

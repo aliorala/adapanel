@@ -23,8 +23,8 @@ public sealed class CustomerScopeService(
     {
         var state = await LoadAsync(cancellationToken);
         return state.TryGetValue(userId.ToString("N"), out var entry)
-            ? new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb, entry.MaxDatabases)
-            : new CustomerScope([], 0, 0, 0);
+            ? new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb, entry.MaxDatabases, entry.MaxMailboxes)
+            : new CustomerScope([], 0, 0, 0, 0);
     }
 
     public async Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default)
@@ -43,8 +43,9 @@ public sealed class CustomerScopeService(
             state.TryGetValue(key, out var current);
             var ownerId = current?.OwnerId; // bayi sahipliğini koru
             var maxDatabases = current?.MaxDatabases ?? 0; // DB kotasını koru (ayrı setter'la set edilir)
+            var maxMailboxes = current?.MaxMailboxes ?? 0; // posta kutusu kotasını koru
 
-            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && string.IsNullOrEmpty(ownerId))
+            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && maxMailboxes <= 0 && string.IsNullOrEmpty(ownerId))
             {
                 state.Remove(key);
             }
@@ -56,6 +57,7 @@ public sealed class CustomerScopeService(
                     MaxSites = Math.Max(0, maxSites),
                     MaxDiskMb = Math.Max(0, maxDiskMb),
                     MaxDatabases = maxDatabases,
+                    MaxMailboxes = maxMailboxes,
                     OwnerId = ownerId
                 };
             }
@@ -64,7 +66,7 @@ public sealed class CustomerScopeService(
         }, cancellationToken);
     }
 
-    public async Task SetDatabaseLimitAsync(Guid userId, int maxDatabases, CancellationToken cancellationToken = default)
+    public async Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, CancellationToken cancellationToken = default)
     {
         await fileStore.UpdateAsync(StatePath, NewState(), existing =>
         {
@@ -77,8 +79,9 @@ public sealed class CustomerScopeService(
             }
 
             entry.MaxDatabases = Math.Max(0, maxDatabases);
+            entry.MaxMailboxes = Math.Max(0, maxMailboxes);
 
-            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0)
+            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0)
             {
                 state.Remove(key);
             }
@@ -223,6 +226,7 @@ public sealed class CustomerScopeService(
         public int MaxSites { get; set; }
         public int MaxDiskMb { get; set; }
         public int MaxDatabases { get; set; }
+        public int MaxMailboxes { get; set; }
 
         /// <summary>Bu müşteriyi yöneten bayinin kimliği ("N" formatı); admin oluşturduysa null.</summary>
         public string? OwnerId { get; set; }
@@ -243,7 +247,7 @@ public sealed class CustomerScopeService(
             entry.OwnerId = ownerId?.ToString("N");
 
             // Sahiplik kaldırıldı ve başka veri yoksa kaydı temizle (yetim kalmasın).
-            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0)
+            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0)
             {
                 state.Remove(key);
             }

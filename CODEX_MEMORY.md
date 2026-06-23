@@ -3500,3 +3500,17 @@ Basarili:
 - Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2095/2095, FE 0, publish OK, ISCC OK.
 - Installer SHA256: `B1AE6B3A72504AE303CCA8630C68424D442B2CFAE4223535388AEB01510449B2` (51122061 / 48.75 MiB). AKTİF.
 - KALAN M1: posta kutusu kotası (MaxMailboxes scope+enforce — MailController), DatabasesController'ı bayiye aç + DB görünürlük filtresi (güvenlik). #23 plan akışı ZATEN çalışıyor (plan seç→limit kopyala).
+
+## 2026-06-23 (76) — M1 posta kutusu kotası (MaxMailboxes) UÇTAN UCA + M1 KOTALARI TAM
+- MaxMailboxes DB kotasıyla aynı desende: CustomerScope record (+5. alan) + ScopeEntry + SetExtraLimitsAsync (SetDatabaseLimitAsync'i
+  birleşik maxDb+maxMail setter'a çevirdim) + SetScopeAsync/SetOwnerAsync MaxMailboxes'i korur + UserManagement (ApplyScopeAsync param,
+  2 caller, MapUser) + CreateUserRequest/UpdateUserRequest/UserSummaryDto + auth.ts 3 tip + SetupWizardView (createUserForm/selectedUserForm/
+  planForm + applyPlanToCreate + reset/load + create/edit/plan template alanları) + ServicePlan zaten MaxMailboxes taşıyor (#21) + i18n.
+- DAYATMA: MailController.CreateAccountAsync → EnsureMailboxQuotaAsync (admin sınırsız, MaxMailboxes>0 ise müşterinin etkin mail
+  domainlerindeki kutuları GetWorkspaceAsync ile sayar, >=limit → 403 mail.mailbox_quota_exceeded).
+- SONUÇ: M1 kotaları TAM → MaxSites + MaxDiskMb + MaxDatabases + MaxMailboxes hepsi dayatılıyor, plan şablonları 4 limiti de taşıyor,
+  müşteri formu hepsini ayarlıyor, plan seçince kopyalanıyor. Plesk abonelik/plan/kota modeli kurulu.
+- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2097/2097, FE 0, publish OK, ISCC OK.
+- Installer SHA256: `0CDAAC25FD4DF65104A36C3DABBFE6C96121708EA7C56A78968D8DE897E27E6F` (51122432 / 48.75 MiB). AKTİF.
+- KALAN (opsiyonel sağlamlaştırma, ACİL DEĞİL): DatabasesController'ı bayiye aç + DB görünürlük filtresi (şu an DB yönetimi admin-only;
+  bayi DB'yi site-oluşturma yolundan açıyor — güvenli). M2-M5 (yedek/mail-DNS/DNS-SPOF/FTPS) ayrı denetim kalemleri.

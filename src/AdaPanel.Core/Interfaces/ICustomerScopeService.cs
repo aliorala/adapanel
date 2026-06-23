@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Interfaces;
 
 /// <summary>Bir müşteri hesabının kaynak kapsamı: atanmış siteler + limitler.</summary>
-public sealed record CustomerScope(IReadOnlyList<string> Sites, int MaxSites, int MaxDiskMb, int MaxDatabases);
+public sealed record CustomerScope(IReadOnlyList<string> Sites, int MaxSites, int MaxDiskMb, int MaxDatabases, int MaxMailboxes);
 
 /// <summary>
 /// Customer rolündeki kullanıcıların erişebileceği siteler ve kaynak limitlerinin
@@ -15,8 +15,8 @@ public interface ICustomerScopeService
 
     Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default);
 
-    /// <summary>Müşterinin en fazla veritabanı kotası (Plesk MaxDatabases). 0 = limitsiz.</summary>
-    Task SetDatabaseLimitAsync(Guid userId, int maxDatabases, CancellationToken cancellationToken = default);
+    /// <summary>Müşterinin ek kaynak kotaları (Plesk MaxDatabases / MaxMailboxes). 0 = limitsiz.</summary>
+    Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, CancellationToken cancellationToken = default);
 
     Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken = default);
 

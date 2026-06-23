@@ -152,6 +152,7 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> CreateAccountAsync([FromBody] CreateMailAccountRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
+        await EnsureMailboxQuotaAsync(cancellationToken);
         var workspace = await mailService.CreateAccountAsync(request, cancellationToken);
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_created"));
     }
@@ -367,6 +368,39 @@ public sealed class MailController(
     {
         var settings = await mailService.UpdateSpamSettingsAsync(request, cancellationToken);
         return Ok(ApiResponse<MailSpamSettingsDto>.Ok(settings, "mail.spam_saved"));
+    }
+
+    // M1 (Plesk MaxMailboxes): admin olmayan kullanıcının posta kutusu kotası doldu mu? Müşterinin etkin
+    // mail domainlerindeki kutuları sayar. Admin sınırsız; MaxMailboxes=0 = limitsiz.
+    private async Task EnsureMailboxQuotaAsync(CancellationToken cancellationToken)
+    {
+        if (User.IsInRole("Administrator"))
+        {
+            return;
+        }
+
+        var scope = await customerScopes.GetScopeAsync(User.GetRequiredUserId(), cancellationToken);
+        if (scope.MaxMailboxes <= 0)
+        {
+            return;
+        }
+
+        var allowed = await CustomerAccess.GetEffectiveMailDomainsAsync(customerScopes, User, cancellationToken);
+        if (allowed is null)
+        {
+            return;
+        }
+
+        var count = 0;
+        foreach (var domain in allowed)
+        {
+            var workspace = await mailService.GetWorkspaceAsync(domain, cancellationToken);
+            count += workspace.Accounts?.Count ?? 0;
+            if (count >= scope.MaxMailboxes)
+            {
+                throw new Core.Common.AppException("mail.mailbox_quota_exceeded", 403, 403);
+            }
+        }
     }
 
     private static string ExtractDomain(string address)
