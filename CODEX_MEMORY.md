@@ -3418,5 +3418,8 @@ Basarili:
   SitePhpSettingsDto (OpenBasedirEnabled ×2) · configure-firewall.ps1 (B6 web/DNS bloğu) · api/php.ts · PhpView.vue ×4 · i18n tr/en (openBasedir ×2).
 - SONUÇ: kod 60-68 düzeltmeleri-öncesi duruma döndü. ⚠️ Denetimdeki K1/K3/B5/B6 açıkları YENİDEN AÇIK (kullanıcı bilerek istedi).
 - git: baseline 073c964 (düzeltmeli) → bu geri-alma ayrı commit (düzeltmesiz); ikisi de tarihte, istenirse geri-al-geri-alınabilir.
-- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2074/2074 (scheduler korundu). Installer ÜRETİLMEDİ (kullanıcı istemedi).
+- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2074/2074 (scheduler korundu).
 - Güvenlik denetimi görev listesi (#10-#19) kullanıcı talebiyle silindi ("kalan görevleri sil").
+- GERİ-ALINMIŞ DURUM INSTALLER'I (kullanıcı istedi): SHA256 `553D271191EA64DB1F6814373B579840DA0A6EAC17D87EDE76DA3C50D0D6F734`
+  (51099865 byte / 48.73 MiB) — güvenlik düzeltmeleri YOK. Arşiv: artifacts/installer/archive/AdaPanelSetup-553D2711.exe.
+  (Karşılaştırma: düzeltmeli son installer = 8D699AAE arşivde duruyor.)
