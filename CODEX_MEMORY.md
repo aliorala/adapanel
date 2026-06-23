@@ -3616,3 +3616,15 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44 (+2 core), typecheck 0, i18n 2141/2141, FE build 0, publish OK, ISCC OK.
 - Installer SHA256: `02AEBD264AF197EE935DAEEEDC27022A1E9E2656C6497F26A2F92A58F9291B58` (51682628 / 49.29 MiB; +FluentFTP/SSH.NET DLL'leri). AKTİF.
 - NOT: bağlantı parolası SAKLANMAZ (yalnız işlem için). DB taşıma (mevcut) + dosya çekme = TAM site göçü. SFTP host-key/FTPS cert göç için gevşek (kullanıcı kendi dosyası).
+
+## 2026-06-23 (84) — KURULUM KÖK NEDEN: enable-iis-features Server'da patlıyor → panel servisi kurulmuyor → panel açılmıyor
+- Kullanıcı İLK canlı kurulumda buldu: "enable-iis-features.ps1 çıkış kodu 1" + Inno "expression error" + "https://localhost:8890/panel ulaşılamıyor".
+- KÖK NEDEN: enable-iis-features.ps1 DISM/Enable-WindowsOptionalFeature (Win10/11 isimleri) kullanıyordu; Windows SERVER'da patlayıp
+  exit 1 → AdaPanel.iss ConfigureInstallation RaiseException → TÜM kurulum durdu → install-service.ps1 HİÇ çalışmadı → servis yok →
+  panel açılmıyor (kısayol var çünkü dosyalar kopyalanmıştı). NOT: panel Kestrel servisidir, çalışmak için IIS'e İHTİYACI YOK.
+- FIX 1 (enable-iis-features.ps1): OS'a göre DOĞRU API — Server→Install-WindowsFeature (Web-Server/Web-CGI/Web-Ftp-Server/Web-Asp-Net45/...),
+  Client→Enable-WindowsOptionalFeature (DISM). Her özellik best-effort (warn), yönetim aracı yoksa THROW yok → exit 0.
+- FIX 2 (AdaPanel.iss): TryRunPowerShellScript (try/except + Log). enable-iis-features + configure-firewall artık BEST-EFFORT (panel
+  servisini engellemez); initialize-panel-certificate + install-service KRİTİK kaldı (panel açılması için şart).
+- Installer SHA256: `7921D0ADD90D63831B24287294C156381E2B7906D49E975A045D0C6F15015CB2` (51682354 / 49.29 MiB). AKTİF — tüm 6 özellik + bu fix.
+- ANINDA ÇÖZÜM (yeni kurulum gerekmez): {app}\scripts\ içinde initialize-panel-certificate.ps1 + install-service.ps1 elle çalıştır.

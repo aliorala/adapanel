@@ -95,16 +95,30 @@ begin
   end;
 end;
 
+{ Best-effort: IIS ozellikleri / firewall gibi adimlar panel SERVISINI kurmayi engellememeli.
+  Panel (Kestrel Windows servisi) bunlarsiz da acilir; bu yuzden hatayi yutup loglariz. }
+procedure TryRunPowerShellScript(const ScriptName: string; const Arguments: string);
+begin
+  try
+    RunPowerShellScript(ScriptName, Arguments);
+  except
+    Log('AdaPanel: best-effort kurulum adimi atlandi (' + ScriptName + '): ' + GetExceptionMessage);
+  end;
+end;
+
 procedure ConfigureInstallation;
 begin
-  RunPowerShellScript('enable-iis-features.ps1', '');
+  { IIS = site barindirma; panel IIS olmadan da acilir -> best-effort, kurulumu BOZMAZ. }
+  TryRunPowerShellScript('enable-iis-features.ps1', '');
+  { HTTPS sertifikasi + servis = panelin acilmasi icin KRITIK -> hata olursa kurulum gercekten basarisiz olsun. }
   RunPowerShellScript('initialize-panel-certificate.ps1', '');
   RunPowerShellScript(
     'install-service.ps1',
     '-ExecutablePath "' + ExpandConstant('{app}\{#MyAppExeName}') +
     '" -ServiceName "{#MyAppServiceName}" -Urls "https://0.0.0.0:' +
     GetPanelPort('') + '" -PreferredHttpsPort ' + GetPanelPort(''));
-  RunPowerShellScript('configure-firewall.ps1', '-Port ' + GetPanelPort(''));
+  { Firewall = uzaktan erisim; panel local acilir -> best-effort. }
+  TryRunPowerShellScript('configure-firewall.ps1', '-Port ' + GetPanelPort(''));
 end;
 
 function ExtractPortFromMarker(ImagePath: string; Marker: string): string;
