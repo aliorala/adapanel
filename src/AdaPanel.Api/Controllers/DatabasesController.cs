@@ -13,6 +13,7 @@ namespace AdaPanel.Api.Controllers;
 public sealed class DatabasesController(
     IDatabaseService databaseService,
     IRemoteDbAccessService remoteDbAccessService,
+    IDatabaseOwnershipService dbOwnership,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet("engines")]
@@ -63,6 +64,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         await databaseService.DeleteDatabaseAsync(engine, name, cancellationToken);
+        await dbOwnership.RemoveAsync(engine, name, cancellationToken); // M1: sahiplik kaydını temizle (kota over-count olmasın)
         await WriteAuditAsync("database.delete.completed", engine, $"Database '{name}' was removed.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { engine, name }, "database.delete.success"));
     }

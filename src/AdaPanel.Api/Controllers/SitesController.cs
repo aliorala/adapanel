@@ -275,6 +275,7 @@ public sealed class SitesController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await siteCascadeDeletionService.DeleteAsync(siteName, deleteFiles, deleteDatabases, cancellationToken);
+        await dbOwnership.RemoveBySiteAsync(siteName, cancellationToken); // M1: siteye bağlı DB sahiplik kayıtlarını temizle (kota doğru kalsın)
         await WriteAuditAsync("sites.delete.completed", siteName, cancellationToken);
         return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.success"));
     }
