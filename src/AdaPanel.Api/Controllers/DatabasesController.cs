@@ -12,6 +12,7 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/db")]
 public sealed class DatabasesController(
     IDatabaseService databaseService,
+    IRemoteDbAccessService remoteDbAccessService,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet("engines")]
@@ -126,6 +127,28 @@ public sealed class DatabasesController(
             $"Database '{result.SourceDatabase}' from {request.SourceHost} was transferred to '{result.TargetDatabase}'.",
             cancellationToken);
         return Ok(ApiResponse<DatabaseTransferResultDto>.Ok(result, "database.transfer.success"));
+    }
+
+    // Plesk benzeri "Uzak Erişim": masaüstü istemcilerin (HeidiSQL/Workbench) bağlanabilmesi için 3306'yı
+    // yalnız belirtilen IP'ye açar/kapatır. MariaDB zaten dinler; gerçek kapı Windows Güvenlik Duvarı.
+    [HttpGet("remote-access")]
+    public async Task<ActionResult<ApiResponse<RemoteDbAccessDto>>> GetRemoteAccessAsync(CancellationToken cancellationToken)
+    {
+        return Ok(ApiResponse<RemoteDbAccessDto>.Ok(await remoteDbAccessService.GetAsync(cancellationToken)));
+    }
+
+    [HttpPut("remote-access")]
+    public async Task<ActionResult<ApiResponse<RemoteDbAccessDto>>> SetRemoteAccessAsync(
+        [FromBody] UpdateRemoteDbAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        var dto = await remoteDbAccessService.SetAsync(request, cancellationToken);
+        await WriteAuditAsync(
+            request.Enabled ? "database.remote.enabled" : "database.remote.disabled",
+            "mariadb",
+            $"Remote DB access enabled={request.Enabled}, ip={request.AllowedIp ?? "(any)"}.",
+            cancellationToken);
+        return Ok(ApiResponse<RemoteDbAccessDto>.Ok(dto, request.Enabled ? "database.remote_enabled" : "database.remote_disabled"));
     }
 
     private Task WriteAuditAsync(string action, string engine, string detail, CancellationToken cancellationToken)

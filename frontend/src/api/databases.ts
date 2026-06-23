@@ -108,6 +108,24 @@ export async function openPhpMyAdmin(engine: string, databaseName?: string) {
   return response.data.data;
 }
 
+// Plesk benzeri uzak erişim: 3306'yı yalnız belirtilen IP'ye aç/kapat (masaüstü DB istemcileri için).
+export type RemoteDbAccess = {
+  enabled: boolean;
+  allowedIp: string;
+  serverHost: string;
+  port: number;
+};
+
+export async function getRemoteDbAccess() {
+  const response = await apiClient.get<ApiEnvelope<RemoteDbAccess>>("/db/remote-access");
+  return response.data.data;
+}
+
+export async function setRemoteDbAccess(enabled: boolean, allowedIp: string) {
+  const response = await apiClient.put<ApiEnvelope<RemoteDbAccess>>("/db/remote-access", { enabled, allowedIp });
+  return response.data.data;
+}
+
 export async function setDatabaseUserPassword(payload: { engine: string; userName: string; password: string; allowedHost?: string }) {
   const response = await apiClient.post<ApiEnvelope<DatabaseWorkspace>>("/db/users/password", payload);
   return response.data.data;

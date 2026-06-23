@@ -2875,11 +2875,10 @@ public sealed class ComponentBootstrapper(
         await WaitForDatabaseReadyAsync(admin, serviceName, port, password, cancellationToken);
     }
 
-    // B5 (savunma derinligi): MariaDB'nin gelen ag baglantilarini 127.0.0.1 ile sinirla.
-    // mariadb-install-db kendi my.ini'sini uretir; varsayilanda bind-address satiri YOKtur. Servisin
-    // gercekten kullandigi config dosyasini (ImagePath'teki --defaults-file) bulup [mysqld] altina
-    // bind-address ekleriz. Zaten varsa dokunmayiz; config bulunamazsa sessiz geceriz (guvenlik duvari
-    // 3306'yi disa zaten kapatir). Yalniz bind-address YOKken ekler -> admin acikca ayarlarsa ezmez.
+    // MariaDB TUM arayuzlerde dinlesin (bind-address=0.0.0.0) ki panelin "Uzak Erisim" toggle'i (Plesk gibi)
+    // calissin. GUVENLIK = Windows Guvenlik Duvari: 3306 varsayilan KAPALI (kural yok), toggle acilinca
+    // firewall yalniz istenen IP'ye acilir. mariadb-install-db varsayilanda bind-address yazmaz; servisin
+    // gercek config'ini (ImagePath'teki --defaults-file) bulup [mysqld] altina ekleriz. Zaten varsa dokunmayiz.
     private static async Task EnsureMariaDbBindAddressAsync(
         string serviceName,
         string dataDirectory,
@@ -2915,12 +2914,12 @@ public sealed class ComponentBootstrapper(
                 line.Trim().Equals("[mysqld]", StringComparison.OrdinalIgnoreCase));
             if (mysqldIndex >= 0)
             {
-                lines.Insert(mysqldIndex + 1, "bind-address=127.0.0.1");
+                lines.Insert(mysqldIndex + 1, "bind-address=0.0.0.0");
             }
             else
             {
                 lines.Add("[mysqld]");
-                lines.Add("bind-address=127.0.0.1");
+                lines.Add("bind-address=0.0.0.0");
             }
 
             await File.WriteAllLinesAsync(configPath, lines, cancellationToken);

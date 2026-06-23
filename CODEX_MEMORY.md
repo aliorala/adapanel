@@ -3431,3 +3431,19 @@ Basarili:
 - GÜVENLİ installer SHA256: `90093A49DBEA068C79E6B476992AD57A4366EC3C483E9BF718A9036F203D1E41` (51108693 byte / 48.74 MiB). Arşiv: AdaPanelSetup-90093A49.exe.
 - git: 073c964(düzeltmeli)→6a9463e(geri-al)→4ccfbf3(docs)→bc7f9a1(yeniden-uygula, GÜVENLİ, HEAD). Tam izlenebilir, çift yönlü geri-alınabilir.
 - Arşivde 3 sürüm: 90093A49(güvenli/AKTİF), 8D699AAE(güvenli/eski), 553D2711(açıklı).
+
+## 2026-06-23 (71) — Uzak Veritabanı Erişimi (Plesk "Remote Access") + B5 firewall-kapı modeli
+- Kullanıcı: "herşeyi Plesk gibi yap" + "evden masaüstü programıyla DB'ye bağlanayım, panelde açma yeri olsun". B5'i bind-127.0.0.1
+  yaptığım için bağlanamayacaktı → DÜZELTİLDİ: Plesk modeli = MariaDB tüm arayüzlerde dinler (bind 0.0.0.0) + 3306 firewall'da
+  VARSAYILAN KAPALI; panel toggle'ı yalnız istenen IP'ye açar.
+- B5 değişti: ComponentBootstrapper.EnsureMariaDbBindAddress artık bind-address=0.0.0.0 yazar (eski 127.0.0.1 yerine) + yorum.
+- YENİ ÖZELLİK: RemoteDbAccessService (Infrastructure/Database, internal) — GetAsync/SetAsync; New-NetFirewallRule
+  "AdaPanel RemoteDB 3306" -RemoteAddress <IP|Any>; durum config/remote-db.json. RESTART/my.ini-runtime YOK → sıfır kesinti.
+  + IRemoteDbAccessService + RemoteDbAccessDto/UpdateRemoteDbAccessRequest + DI kaydı + DatabasesController GET/PUT /db/remote-access
+  + api/databases.ts (getRemoteDbAccess/setRemoteDbAccess) + DbToolSettingsView "Uzak Erişim" kartı (toggle+IP+bağlantı bilgisi) + i18n tr/en.
+- Tenant DB user'ları @'%' (zaten) → firewall açılınca kendi user/parolasıyla bağlanır. IP boşsa Any (önerilmez, uyarı var).
+- Doğrulama: build 0/0, typecheck 0, test 44/44 (+2), i18n 2093/2093, FE build 0, publish OK, ISCC OK.
+- Installer SHA256: `678C07A4F4110913FFF683B07D5374035075C01B8627CBA8750C4022E820B346` (51112988 byte / 48.75 MiB). AKTİF + arşivde.
+- AÇIK İSTEK: kullanıcı B4'ü de "Plesk gibi" istiyor. NOT: AdaPanel zaten per-site app pool (AdaPanel.{site}, ApplicationPoolIdentity
+  = ayrı kimlik → OS-düzey izolasyon) + per-site open_basedir (opt-in) veriyor. Plesk farkı: open_basedir'i YENİ sitelerde
+  VARSAYILAN AÇIK yapar. Sıradaki olası iş: site provizyonda open_basedir'i kök-bazlı otomatik aç (kullanıcı onayıyla).

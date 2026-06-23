@@ -72,6 +72,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Database.IDatabaseEngineProvider, Database.MsSqlDatabaseProvider>();
         services.AddScoped<IDatabaseService, Database.DatabaseService>();
         services.AddScoped<IWebDbClientService, WebDbClient.WebDbClientService>();
+        services.AddScoped<IRemoteDbAccessService, Database.RemoteDbAccessService>();
         services.AddScoped<IWebmailService, Mail.WebmailService>();
         services.AddScoped<ICacheService, Cache.CacheService>();
         services.AddScoped<IFileService, Files.FileService>();

@@ -43,6 +43,37 @@
       </div>
       <p class="hint">{{ t("panel.database.toolSettings.redisHint") }}</p>
     </div>
+
+    <div class="form-surface remote-db">
+      <div class="remote-head">
+        <div>
+          <h4>{{ t("panel.database.remote.title") }}</h4>
+          <p class="meta">{{ t("panel.database.remote.subtitle") }}</p>
+        </div>
+        <span :class="['status-pill', remote.enabled ? 'ok' : '']">
+          {{ remote.enabled ? t("panel.database.remote.on") : t("panel.database.remote.off") }}
+        </span>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span class="field-label">{{ t("panel.database.remote.ip") }}</span>
+          <input v-model.trim="remote.allowedIp" :placeholder="t('panel.database.remote.ipPlaceholder')" />
+        </label>
+      </div>
+      <p v-if="remote.enabled" class="hint conn">
+        {{ t("panel.database.remote.connInfo") }}
+        <code>{{ remote.serverHost || "sunucu-ip" }}:{{ remote.port }}</code>
+      </p>
+      <div class="row-actions">
+        <button v-if="!remote.enabled" :disabled="remoteBusy" @click="setRemote(true)">
+          {{ remoteBusy ? t("panel.database.remote.working") : t("panel.database.remote.enable") }}
+        </button>
+        <button v-else class="secondary" :disabled="remoteBusy" @click="setRemote(false)">
+          {{ remoteBusy ? t("panel.database.remote.working") : t("panel.database.remote.disable") }}
+        </button>
+      </div>
+      <p class="hint">{{ t("panel.database.remote.help") }}</p>
+    </div>
   </section>
 </template>
 
@@ -50,6 +81,7 @@
 import { onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { enableRedisExtension, getGlobalPhpSettings, updateGlobalPhpSettings } from "../api/php";
+import { getRemoteDbAccess, setRemoteDbAccess } from "../api/databases";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
@@ -66,8 +98,13 @@ const form = reactive({
   maxExecutionTime: 300,
   displayErrors: false
 });
+const remote = reactive({ enabled: false, allowedIp: "", serverHost: "", port: 3306 });
+const remoteBusy = ref(false);
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadRemote();
+});
 
 async function load() {
   loading.value = true;
@@ -120,6 +157,34 @@ async function enableRedis() {
   }
 }
 
+async function loadRemote() {
+  try {
+    const data = await getRemoteDbAccess();
+    remote.enabled = data.enabled;
+    remote.allowedIp = data.allowedIp;
+    remote.serverHost = data.serverHost;
+    remote.port = data.port;
+  } catch {
+    // sessiz geç; kullanıcı yine de aç/kapat yapabilir
+  }
+}
+
+async function setRemote(enabled: boolean) {
+  remoteBusy.value = true;
+  try {
+    const data = await setRemoteDbAccess(enabled, remote.allowedIp);
+    remote.enabled = data.enabled;
+    remote.allowedIp = data.allowedIp;
+    remote.serverHost = data.serverHost;
+    remote.port = data.port;
+    showNotice(enabled ? t("panel.database.remote.enabledMsg") : t("panel.database.remote.disabledMsg"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    remoteBusy.value = false;
+  }
+}
+
 function resolveApiMessage(error: unknown) {
   const key = extractApiMessage(error);
   const translated = t(key);
@@ -142,4 +207,8 @@ label { display: grid; gap: 6px; }
 .row-actions { margin-top: 14px; }
 .row-actions button { width: auto; }
 .hint { color: var(--text-muted, #94a3b8); font-size: 13px; margin-top: 10px; }
+.remote-db { margin-top: 14px; }
+.remote-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.remote-head h4 { margin: 0; }
+.conn code { font-weight: 700; }
 </style>
