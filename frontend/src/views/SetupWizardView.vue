@@ -200,6 +200,8 @@
 
     <ServerToolsView v-else-if="activeSection === 'tools' && isAdmin" />
 
+    <MigrationView v-else-if="activeSection === 'migration' && isAdmin" />
+
     <SoftwareView v-else-if="activeSection === 'software' && isAdmin" />
 
     <section v-else-if="activeSection === 'settings'" class="panel module-shell settings-workspace">
@@ -650,6 +652,7 @@ import { useSoftwareStore } from "../stores/software";
 import { useSystemStore } from "../stores/system";
 import CronView from "./CronView.vue";
 import DatabasesView from "./DatabasesView.vue";
+import MigrationView from "./MigrationView.vue";
 import MyDatabasesView from "./MyDatabasesView.vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import FilesView from "./FilesView.vue";
@@ -861,6 +864,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
     { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC" },
     { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR" },
+    { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
     { id: "settings", label: t("panel.navigation.settings"), description: t("panel.settings.subtitle"), glyph: "AY" },
     { id: "exit", label: t("panel.navigation.exit"), description: t("panel.auth.logout"), glyph: "EX" }
   ];

@@ -3853,3 +3853,16 @@ Basarili:
 - DEPLOY BACKLOG TAMAM: #1 docroot ✓, #2 rewrite ✓, #4 composer ✓, #5 perms+repair ✓, DB import ✓, SSL geçerlilik ✓. KALAN tek madde:
   .user.ini göç sanitize → Plesk→AdaPanel MIGRATION TOOL ile birlikte (o araç henüz kurulmadı; tasarım entry'lerde mevcut).
 - KULLANICIYA: yeni installer → Veritabanları'nda "Mevcut DB'yi içe aktar" (karsilastir'ı tanıt) + SSL'de her cert'in yanında kalan gün/durum.
+
+## 2026-06-24 (99) — Göç sihirbazı ARAYÜZÜ (manuel mod) — kabuğa yeni "Göç" bölümü (motor entry 98-öncesinde commit'ti)
+- MigrationView.vue: site (ad / fiziksel yol / "siteyi oluştur") + dosya kaynağı (protocol/host/port/user/pass/remotePath) + DB kaynağı
+  (engine/host/port/user/pass/sourceDb/targetDb) formu → api/migration.migrateSite (POST /migration/site) → adım-adım sonuç (✓/✗ + mesaj).
+- Kabuk wiring: SetupWizardView.dashboardSections'a {id:"migration", glyph:"MG"} eklendi + import MigrationView + render
+  (v-else-if activeSection==='migration' && isAdmin). Admin filtresi (adminSections = files HARİÇ hepsi) → admin görür; customer/reseller
+  whitelist'inde yok → ADMIN-ONLY. MainLayout.NAV_ICONS.migration (transfer-ok ikonu) eklendi (yoksa fallback daire).
+- api/migration.ts (migrateSite + MigrateSitePayload/Result/Step tipleri). i18n: panel.navigation.migration + panel.migration.* (~20 anahtar;
+  dosya alanlarında panel.migration.ftp.* YENİDEN kullanıldı). migration.step.* (backend mesaj anahtarları) i18n'e eklendi.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2183=2183. Installer SHA256: `67BF3514394914DE740139834552FB5FFCF3E1BE04DD71576B5602D59CB88399` (49.31 MiB).
+- KULLANICIYA: menüde "Göç" → formu doldur (site + SFTP + DB) → "Göçü başlat" → adım sonuçları. Plesk/cPanel/ham sunucu hepsiyle (manuel kimlik girişiyle).
+- GÖÇ ARACINDA KALAN: Plesk REST OTOMATİK KEŞİF ("keşif" katmanı — Plesk'e API anahtarıyla bağlan → domain'leri listele → formu otomatik doldur →
+  tek tık). Bende canlı Plesk olmadığı için test edilemeyen katman; mevcut motor/forma oturur. + .user.ini göç-sonrası sanitize.
