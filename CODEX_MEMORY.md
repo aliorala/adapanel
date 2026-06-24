@@ -3826,3 +3826,17 @@ Basarili:
   #4 composer = RunComposerInstallAsync + frontend (runComposerInstall) ZATEN VAR.
 - KULLANICIYA: yeni installer → Site → Barındırma → "Belge kökü" alanına ...\public yaz + Kaydet (ya da "\public kullan" düğmesi). Laravel
   kök 403'ü biter (panel artık kalıcı tutar). Yol-ötesi route'lar için pretty-URL rewrite (#2) sıradaki iş.
+
+## 2026-06-24 (97) — #2 Laravel/WP pretty-URL rewrite + #5 fix-permissions onar aracı
+- #2 (pretty-URL): WebAppPublisher.TryWriteFrontControllerRewrite — URL Rewrite MODÜLÜ (%windir%\System32\inetsrv\rewrite.dll)
+  kontrolü; VARSA web.config'e front-controller kuralı (REQUEST_FILENAME dosya/dizin DEĞİLSE → index.php) ekler (idempotent
+  "AdaPanel Front Controller"; mevcut kuralları korur). MODÜL YOKSA hiç yazmaz + false → çağıran 409 "sites.url_rewrite_module_missing"
+  verir (site 500.19 OLMAZ). ISiteProvisioningService.EnableFrameworkRewriteAsync + SitesController POST sites/{name}/framework-rewrite.
+- #5 onar: SiteProvisioningService.RepairPermissionsAsync (GrantSiteWritableAsync'i mevcut siteye uygular — bu özellikten önce kurulmuş
+  siteler için) + POST sites/{name}/repair-permissions.
+- Frontend SiteHostingView: docroot satırına 2 buton — "Pretty URL yönlendirmesi (Laravel/WordPress)" + "Yazma izinlerini onar";
+  api/sites.enableFrameworkRewrite + repairSitePermissions; i18n (+ sites.url_rewrite_module_missing hata mesajı, resolveApiMessage çevirir).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2154=2154. Installer SHA256: `583D389F7A4369A8A64FEC1324600A2446ECF0A7163914D582636DB297762335` (49.30 MiB).
+- BACKLOG DURUMU: TAMAM → #1 docroot, #2 rewrite, #4 composer (RunComposerInstall), #5 perms (oluşturmada + onar aracı). KALAN →
+  DB import (mevcut MariaDB db/user'ları tara→panele kaydet), SSL geçerlilik kontrolü, .user.ini göç sanitize.
+- KULLANICIYA: Site → Barındırma → "Pretty URL yönlendirmesi" (URL Rewrite modülü gerek; yoksa net uyarı) + "Yazma izinlerini onar" (eski sitelere #5).

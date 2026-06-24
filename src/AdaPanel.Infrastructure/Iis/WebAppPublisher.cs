@@ -138,6 +138,62 @@ internal static class WebAppPublisher
         }
     }
 
+    // #2 — Laravel/WordPress/Symfony "front controller" yönlendirmesi: istenen yol gerçek bir dosya/dizin
+    // DEĞİLSE index.php'ye yeniden yaz (pretty URL'ler). URL Rewrite MODÜLÜ gerekir; MODÜL YOKSA bir <rewrite>
+    // bölümü tüm siteyi 500.19'a sokar → rewrite.dll yoksa HİÇBİR ŞEY yazma + false döndür (çağıran net hata verir).
+    // Idempotent: aynı isimli kural varsa tekrar eklemez. Mevcut başka rewrite kurallarını korur.
+    public static bool TryWriteFrontControllerRewrite(string root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return false;
+        }
+
+        var rewriteModule = Path.Combine(Environment.SystemDirectory, "inetsrv", "rewrite.dll");
+        if (!File.Exists(rewriteModule))
+        {
+            return false;
+        }
+
+        try
+        {
+            var webConfig = Path.Combine(root, "web.config");
+            var document = File.Exists(webConfig)
+                ? XDocument.Load(webConfig, LoadOptions.PreserveWhitespace)
+                : new XDocument(new XDeclaration("1.0", "utf-8", null), new XElement("configuration"));
+            var configuration = document.Root ?? new XElement("configuration");
+            if (document.Root is null)
+            {
+                document.Add(configuration);
+            }
+
+            var rules = EnsureChild(EnsureChild(EnsureChild(configuration, "system.webServer"), "rewrite"), "rules");
+            var exists = rules.Elements("rule").Any(rule =>
+                string.Equals((string?)rule.Attribute("name"), "AdaPanel Front Controller", StringComparison.OrdinalIgnoreCase));
+            if (!exists)
+            {
+                rules.Add(new XElement(
+                    "rule",
+                    new XAttribute("name", "AdaPanel Front Controller"),
+                    new XAttribute("stopProcessing", "true"),
+                    new XElement("match", new XAttribute("url", "^(.*)$")),
+                    new XElement(
+                        "conditions",
+                        new XAttribute("logicalGrouping", "MatchAll"),
+                        new XElement("add", new XAttribute("input", "{REQUEST_FILENAME}"), new XAttribute("matchType", "IsFile"), new XAttribute("negate", "true")),
+                        new XElement("add", new XAttribute("input", "{REQUEST_FILENAME}"), new XAttribute("matchType", "IsDirectory"), new XAttribute("negate", "true"))),
+                    new XElement("action", new XAttribute("type", "Rewrite"), new XAttribute("url", "index.php"))));
+                document.Save(webConfig);
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static XElement EnsureChild(XElement parent, string name)
     {
         var child = parent.Element(name);

@@ -63,6 +63,26 @@ public sealed class SitesController(
         return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
     }
 
+    // #2 Laravel/WordPress pretty-URL yönlendirmesi (index.php). URL Rewrite modülü yoksa 409 (site bozulmaz).
+    [HttpPost("{siteName}/framework-rewrite")]
+    public async Task<ActionResult<ApiResponse<SiteDto>>> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var site = await siteProvisioningService.EnableFrameworkRewriteAsync(siteName, cancellationToken);
+        await WriteAuditAsync("sites.framework_rewrite.enabled", siteName, cancellationToken);
+        return Ok(ApiResponse<SiteDto>.Ok(site, "sites.framework_rewrite.enabled"));
+    }
+
+    // #5 izin onar — mevcut siteye yazma iznini yeniden uygula (app pool kök Modify).
+    [HttpPost("{siteName}/repair-permissions")]
+    public async Task<ActionResult<ApiResponse<SiteDto>>> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var site = await siteProvisioningService.RepairPermissionsAsync(siteName, cancellationToken);
+        await WriteAuditAsync("sites.permissions.repaired", siteName, cancellationToken);
+        return Ok(ApiResponse<SiteDto>.Ok(site, "sites.permissions.repaired"));
+    }
+
     // --- Korumalı dizinler (panel "Password-Protected Directories") ---
 
     [HttpGet("{siteName}/protected-dirs")]

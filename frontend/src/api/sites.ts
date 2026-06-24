@@ -35,6 +35,18 @@ export async function updateDocumentRoot(siteName: string, physicalPath: string)
   return response.data.data;
 }
 
+// #2 Laravel/WordPress pretty-URL yönlendirmesi (index.php front controller). URL Rewrite modülü gerekir.
+export async function enableFrameworkRewrite(siteName: string) {
+  const response = await apiClient.post<ApiEnvelope<SiteRecord>>(`/sites/${encodeURIComponent(siteName)}/framework-rewrite`, {});
+  return response.data.data;
+}
+
+// #5 onar: mevcut siteye yazma iznini (app pool kök Modify) yeniden uygula.
+export async function repairSitePermissions(siteName: string) {
+  const response = await apiClient.post<ApiEnvelope<SiteRecord>>(`/sites/${encodeURIComponent(siteName)}/repair-permissions`, {});
+  return response.data.data;
+}
+
 export type CreateSitePayload = {
   name: string;
   physicalPath: string;

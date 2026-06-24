@@ -119,6 +119,28 @@ public sealed class SiteProvisioningService(
         return site;
     }
 
+    // #2 — Laravel/WordPress/Symfony pretty-URL yönlendirmesi (index.php front controller). URL Rewrite MODÜLÜ
+    // gerekir; yoksa <rewrite> tüm siteyi 500.19 yapar → modül yoksa hiç yazılmaz, net hata verilir (site bozulmaz).
+    public async Task<SiteDto> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        if (!WebAppPublisher.TryWriteFrontControllerRewrite(site.PhysicalPath))
+        {
+            throw new AppException("sites.url_rewrite_module_missing", 409, 409);
+        }
+
+        return site;
+    }
+
+    // #5 onar — mevcut siteye yazma iznini (app pool kimliği, kök Modify) YENİDEN uygula. Bu özellikten önce
+    // kurulmuş siteler için (oluşturma anında otomatik verilen izin onlarda yoktu). Best-effort.
+    public async Task<SiteDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        await GrantSiteWritableAsync(site, site.ApplicationPoolName, cancellationToken);
+        return site;
+    }
+
     private static string ResolveProfile(string requestedProfile)
     {
         var profile = requestedProfile.Trim().ToLowerInvariant();

@@ -52,6 +52,12 @@
                 <button type="button" class="secondary compact" :disabled="busy" @click="useLaravelPublic">
                   {{ t("panel.hosting.useLaravelPublic") }}
                 </button>
+                <button type="button" class="secondary compact" :disabled="busy" @click="enableRewrite">
+                  {{ t("panel.hosting.enableRewrite") }}
+                </button>
+                <button type="button" class="secondary compact" :disabled="busy" @click="repairPermissions">
+                  {{ t("panel.hosting.repairPermissions") }}
+                </button>
               </div>
 
               <label class="setting-row">
@@ -398,7 +404,7 @@ import { configureGitDeployment, deployGit, getGitDeployment, type GitDeployment
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
-import { updateDocumentRoot } from "../api/sites";
+import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
@@ -536,6 +542,34 @@ async function saveDocumentRoot() {
 function useLaravelPublic() {
   const base = (selectedSite.value?.physicalPath ?? "").replace(/[\\/]+$/, "");
   documentRoot.value = base.length > 0 ? `${base}\\public` : "public";
+}
+
+// #2 — pretty-URL (index.php front controller) yönlendirmesini etkinleştir. URL Rewrite modülü yoksa net hata.
+async function enableRewrite() {
+  if (!siteName.value) return;
+  busy.value = true;
+  try {
+    await enableFrameworkRewrite(siteName.value);
+    showNotice(t("panel.hosting.rewriteEnabled"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// #5 — mevcut siteye yazma iznini yeniden uygula.
+async function repairPermissions() {
+  if (!siteName.value) return;
+  busy.value = true;
+  try {
+    await repairSitePermissions(siteName.value);
+    showNotice(t("panel.hosting.permissionsRepaired"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function runComposer() {
