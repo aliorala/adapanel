@@ -41,10 +41,18 @@
 
             <div class="settings-rows">
               <label class="setting-row">
-                <span>{{ t("panel.sites.physicalPath") }}</span>
-                <input :value="selectedSite?.physicalPath || '-'" readonly />
-                <small>{{ t("panel.hosting.pathHelp") }}</small>
+                <span>{{ t("panel.hosting.documentRoot") }}</span>
+                <input v-model="documentRoot" :placeholder="selectedSite?.physicalPath || ''" spellcheck="false" />
+                <small>{{ t("panel.hosting.documentRootHelp") }}</small>
               </label>
+              <div class="setting-row doc-root-actions">
+                <button class="compact" :disabled="busy || !documentRoot.trim()" @click="saveDocumentRoot">
+                  {{ busy ? t("panel.hosting.saving") : t("panel.hosting.saveDocumentRoot") }}
+                </button>
+                <button type="button" class="secondary compact" :disabled="busy" @click="useLaravelPublic">
+                  {{ t("panel.hosting.useLaravelPublic") }}
+                </button>
+              </div>
 
               <label class="setting-row">
                 <span>{{ t("panel.sites.appPool") }}</span>
@@ -390,11 +398,14 @@ import { configureGitDeployment, deployGit, getGitDeployment, type GitDeployment
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { updateDocumentRoot } from "../api/sites";
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);
+const documentRoot = ref("");
+watch(selectedSite, (site) => { documentRoot.value = site?.physicalPath ?? ""; }, { immediate: true });
 const activeSection = ref("general");
 const busy = ref(false);
 const notice = ref("");
@@ -504,6 +515,27 @@ async function save() {
   } finally {
     busy.value = false;
   }
+}
+
+// #1 ⭐ Belge kökü / web root kaydet (Laravel/Symfony için ...\public). IIS'te kalıcı; panel revert etmez.
+async function saveDocumentRoot() {
+  if (!siteName.value || !documentRoot.value.trim()) return;
+  busy.value = true;
+  try {
+    await updateDocumentRoot(siteName.value, documentRoot.value.trim());
+    await sitesStore.fetchSites();
+    showNotice(t("panel.hosting.documentRootSaved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Mevcut yolun altına \public ekle (Laravel/Symfony belge kökü). Kullanıcı kaydetmeden önce görür/düzenler.
+function useLaravelPublic() {
+  const base = (selectedSite.value?.physicalPath ?? "").replace(/[\\/]+$/, "");
+  documentRoot.value = base.length > 0 ? `${base}\\public` : "public";
 }
 
 async function runComposer() {

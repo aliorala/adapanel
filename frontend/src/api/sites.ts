@@ -26,6 +26,15 @@ export type SiteRecord = {
   bindings: SiteBinding[];
 };
 
+// #1 Belge kökü / web root: IIS fiziksel yolunu değiştir (Laravel/Symfony için ...\public). IIS'te kalıcı.
+export async function updateDocumentRoot(siteName: string, physicalPath: string) {
+  const response = await apiClient.put<ApiEnvelope<SiteRecord>>(
+    `/sites/${encodeURIComponent(siteName)}/document-root`,
+    { physicalPath }
+  );
+  return response.data.data;
+}
+
 export type CreateSitePayload = {
   name: string;
   physicalPath: string;

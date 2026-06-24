@@ -49,6 +49,20 @@ public sealed class SitesController(
         return Ok(ApiResponse<SiteDto>.Ok(site));
     }
 
+    // #1 ⭐ Belge kökü / web root: IIS fiziksel yolunu değiştir (Laravel/Symfony için ...\public). IIS'te KALICI
+    // (panel sonraki düzenlemelerde proje köküne geri döndürmez). Yeni kökte index.php varsayılan belge yapılır.
+    [HttpPut("{siteName}/document-root")]
+    public async Task<ActionResult<ApiResponse<SiteDto>>> SetDocumentRootAsync(
+        string siteName,
+        [FromBody] UpdateDocumentRootRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var site = await siteProvisioningService.SetDocumentRootAsync(siteName, request.PhysicalPath, cancellationToken);
+        await WriteAuditAsync("sites.document_root.updated", $"{siteName}:{site.PhysicalPath}", cancellationToken);
+        return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
+    }
+
     // --- Korumalı dizinler (panel "Password-Protected Directories") ---
 
     [HttpGet("{siteName}/protected-dirs")]

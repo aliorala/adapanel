@@ -99,6 +99,26 @@ public sealed class SiteProvisioningService(
         }
     }
 
+    // #1 ⭐ Belge kökü / web root: IIS fiziksel yolunu değiştir (Laravel/Symfony için ...\public) ve KALICI yap.
+    // Yeni kökte index.php varsayılan belge + temel web.config yazılır — IIS'in stok varsayılan-belge listesi
+    // index.php İÇERMEZ, bu yüzden docroot=public olunca "/" 403 verirdi. Mevcut web.config'i (handler/rewrite)
+    // EZMEZ; eksik öğeleri ekler (idempotent merge).
+    public async Task<SiteDto> SetDocumentRootAsync(string siteName, string physicalPath, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.UpdatePhysicalPathAsync(siteName, physicalPath, cancellationToken);
+
+        try
+        {
+            WebAppPublisher.EnsurePhpEntry(site.PhysicalPath);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Belge kökü web.config'i yazılamadı (en iyi çaba): {Site}", siteName);
+        }
+
+        return site;
+    }
+
     private static string ResolveProfile(string requestedProfile)
     {
         var profile = requestedProfile.Trim().ToLowerInvariant();

@@ -3811,3 +3811,18 @@ Basarili:
   SSL sertifika geçerlilik kontrolü/uyarısı. + #2 web.config handler/rewrite (docroot ile), #3 .user.ini göç sanitize, #4 composer vendor (göç aracı).
 - phpredis NOTU: enable akışı SAĞLAM (eşleşen DLL indir + php -m doğrula + başarısızsa geri al). "kurulu sanılıp kurulmamış" = Redis
   SUNUCUSU ≠ phpredis UZANTISI; PHP Ayarları'ndan "Redis uzantısını etkinleştir" çalıştırılmalı. App file driver kullandığı için ZORUNLU değil.
+
+## 2026-06-24 (96) — #1 ⭐ Document Root / Web Root per-site ayarı (EN KRİTİK — Laravel public/ 403'ü kalıcı çözer)
+- Mekanizma ZATEN vardı: IIisSiteService.UpdatePhysicalPathAsync (root virtual dir PhysicalPath → IIS'te kalıcı) ama CONTROLLER'da
+  AÇIK DEĞİLDİ + frontend'de fiziksel yol READONLY → kullanıcı paneldan docroot değiştiremiyordu (elle IIS'ten değiştirince de revert korkusu).
+- FIX: ISiteProvisioningService.SetDocumentRootAsync = UpdatePhysicalPathAsync + yeni kökte WebAppPublisher.EnsurePhpEntry (index.php
+  VARSAYILAN BELGE; IIS stok varsayılan-belge listesi index.php İÇERMEZ → docroot=public'te "/" 403 verirdi; mevcut web.config'i EZMEZ, merge).
+  SitesController: PUT sites/{name}/document-root (UpdateDocumentRootRequest{PhysicalPath} + EnsureSite scope + audit). Frontend SiteHostingView:
+  readonly yol → DÜZENLENEBİLİR "Belge kökü" alanı + Kaydet + "\public kullan (Laravel)" hızlı-doldur; api/sites.updateDocumentRoot (PUT).
+  Kaydetten sonra fetchSites → selectedSite tazelenir. IIS'te KALICI → panel revert ETMEZ (kullanıcının asıl endişesi giderildi).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2149=2149. Installer SHA256: `625C1A2A650E3747A8E6195830512EF4442F9A6115953F78151E2002CBD37D90` (49.30 MiB).
+- KALAN BACKLOG: DB import (mevcut MariaDB db/user'ları tara→panele kaydet), fix-permissions repair (mevcut sitelere #5 izni), web.config
+  REWRITE (#2 — Laravel pretty-URL; URL Rewrite MODÜLÜ gerekir, yoksa 500.19 → dikkatli/modül kontrolü gerek), SSL geçerlilik, .user.ini göç sanitize.
+  #4 composer = RunComposerInstallAsync + frontend (runComposerInstall) ZATEN VAR.
+- KULLANICIYA: yeni installer → Site → Barındırma → "Belge kökü" alanına ...\public yaz + Kaydet (ya da "\public kullan" düğmesi). Laravel
+  kök 403'ü biter (panel artık kalıcı tutar). Yol-ötesi route'lar için pretty-URL rewrite (#2) sıradaki iş.
