@@ -12,6 +12,9 @@ public interface IDatabaseService
 
     Task<DatabaseWorkspaceDto> CreateDatabaseAsync(CreateDatabaseRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Var olan DB+kullanıcıyı panel yönetimine tanıtır: GRANT ALL (eksikse) + kullanıcı parolasını saklar.</summary>
+    Task<DatabaseWorkspaceDto> ImportDatabaseAsync(ImportDatabaseRequest request, CancellationToken cancellationToken = default);
+
     Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default);
 
     Task<DatabaseWorkspaceDto> CreateUserAsync(CreateDatabaseUserRequest request, CancellationToken cancellationToken = default);

@@ -68,7 +68,7 @@
         <span class="cell-main"><strong>{{ item.hostName }}</strong><small>{{ item.thumbprint }}</small></span>
         <span>{{ item.source }}</span>
         <span class="cell-muted">{{ item.subject || "-" }}</span>
-        <span :class="['status-pill', expiryClass(item.notAfterUtc)]">{{ formatUtc(item.notAfterUtc) }}</span>
+        <span :class="['status-pill', expiryClass(item.notAfterUtc)]" :title="formatUtc(item.notAfterUtc)">{{ formatUtc(item.notAfterUtc) }} · {{ expiryLabel(item.notAfterUtc) }}</span>
         <span :class="['status-pill', item.isHttpsBindingPresent ? 'ok' : 'warn']">
           {{ item.isHttpsBindingPresent ? `${item.port}` : t("panel.ssl.notBound") }}
         </span>
@@ -252,6 +252,15 @@ async function handleFileChange(event: Event) {
 function expiryClass(value: string) {
   const days = (new Date(value).getTime() - Date.now()) / 86400000;
   return days < 0 ? "danger" : days < 30 ? "warn" : "ok";
+}
+
+// Açık geçerlilik etiketi: "X gün kaldı" / "Bugün doluyor" / "Süresi doldu" — sertifikanın geçerli/yenilenmiş olduğunu netleştirir.
+function expiryLabel(value: string) {
+  if (!value) return "-";
+  const days = Math.floor((new Date(value).getTime() - Date.now()) / 86400000);
+  if (days < 0) return t("panel.ssl.expired");
+  if (days === 0) return t("panel.ssl.expiresToday");
+  return t("panel.ssl.daysRemaining", { days });
 }
 
 function formatUtc(value: string) {

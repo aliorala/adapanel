@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import {
   createDatabase,
   createDatabaseUser,
+  importDatabase,
   deleteDatabase,
   deleteDatabaseUser,
   setDatabaseUserPassword,
@@ -10,6 +11,7 @@ import {
   registerDatabaseCredentials,
   type CreateDatabasePayload,
   type CreateDatabaseUserPayload,
+  type ImportDatabasePayload,
   type DatabaseEngineStatus,
   type DatabaseWorkspace,
   type RegisterCredentialsPayload
@@ -114,6 +116,11 @@ export const useDatabasesStore = defineStore("databases", {
           this.creatingUserEngine = "";
         }
       }
+    },
+    async importDatabase(payload: ImportDatabasePayload) {
+      const workspace = await importDatabase(payload);
+      this.workspaces[payload.engine] = workspace;
+      return workspace;
     },
     async deleteUser(engine: string, userName: string, host: string) {
       this.deletingUserKey = `${engine}:${userName}:${host}`;

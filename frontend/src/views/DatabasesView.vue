@@ -171,6 +171,12 @@
               {{ showDatabaseForm ? t("panel.database.cancelAction") : t("panel.database.createDbTitle") }}
             </button>
             <button
+              v-if="activeSection === 'databases'"
+              class="secondary compact"
+              @click="showImportForm = !showImportForm">
+              {{ showImportForm ? t("panel.database.cancelAction") : t("panel.database.importTitle") }}
+            </button>
+            <button
               v-if="activeSection === 'users'"
               class="compact"
               @click="showUserForm = !showUserForm">
@@ -202,6 +208,38 @@
                 :disabled="databasesStore.creatingEngine === selectedEngine"
                 @click="submitCreateDatabase">
                 {{ databasesStore.creatingEngine === selectedEngine ? t("panel.database.saving") : t("panel.database.createDatabase") }}
+              </button>
+            </div>
+          </section>
+
+          <section v-if="showImportForm" class="form-surface">
+            <p class="meta create-hint">{{ t("panel.database.importHint") }}</p>
+            <div class="form-grid">
+              <label>
+                <span class="field-label">{{ t("panel.database.databaseName") }}</span>
+                <select v-model="importForm.databaseName">
+                  <option value="">{{ t("panel.database.selectDatabase") }}</option>
+                  <option v-for="db in filteredDatabases" :key="db.name" :value="db.name">{{ db.name }}</option>
+                </select>
+              </label>
+              <label>
+                <span class="field-label">{{ t("panel.database.userName") }}</span>
+                <select v-model="importForm.userName">
+                  <option value="">{{ t("panel.database.selectUser") }}</option>
+                  <option v-for="u in (workspace?.users ?? [])" :key="`${u.userName}@${u.host}`" :value="u.userName">{{ u.userName }}</option>
+                </select>
+              </label>
+              <label>
+                <span class="field-label">{{ t("panel.database.userPassword") }}</span>
+                <input v-model="importForm.password" type="password" />
+              </label>
+            </div>
+            <div class="row-actions">
+              <button
+                class="compact"
+                :disabled="!importForm.databaseName || !importForm.userName || !importForm.password"
+                @click="submitImport">
+                {{ t("panel.database.import") }}
               </button>
             </div>
           </section>
@@ -379,6 +417,13 @@ const userForm = reactive({
   userName: "",
   password: "",
   databaseName: ""
+});
+
+const showImportForm = ref(false);
+const importForm = reactive({
+  databaseName: "",
+  userName: "",
+  password: ""
 });
 
 const credForm = reactive({
@@ -638,6 +683,27 @@ async function submitCreateUser() {
     userForm.databaseName = "";
     showUserForm.value = false;
     showNotice(t("database.user_created"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+// Var olan DB+kullanıcıyı panele içe aktar (GRANT ALL eksikse + parolayı sakla → phpMyAdmin + yönetim).
+async function submitImport() {
+  if (!importForm.databaseName || !importForm.userName || !importForm.password) return;
+  try {
+    await databasesStore.importDatabase({
+      engine: selectedEngine.value,
+      databaseName: importForm.databaseName,
+      userName: importForm.userName,
+      host: "%",
+      password: importForm.password
+    });
+    importForm.databaseName = "";
+    importForm.userName = "";
+    importForm.password = "";
+    showImportForm.value = false;
+    showNotice(t("panel.database.imported"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }

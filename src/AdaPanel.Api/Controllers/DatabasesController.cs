@@ -75,6 +75,18 @@ public sealed class DatabasesController(
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.create.success"));
     }
 
+    // Var olan DB+kullanıcıyı panele tanıt (import): GRANT ALL (eksikse) + kullanıcı parolasını sakla → phpMyAdmin
+    // "bu kullanıcı olarak aç" + panel yönetimi. Harici (uygulama/elle) oluşturulmuş DB'ler için.
+    [HttpPost("import")]
+    public async Task<ActionResult<ApiResponse<DatabaseWorkspaceDto>>> ImportDatabaseAsync(
+        [FromBody] ImportDatabaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        var workspace = await databaseService.ImportDatabaseAsync(request, cancellationToken);
+        await WriteAuditAsync("database.import.completed", request.Engine, $"Database '{request.DatabaseName}' bound to user '{request.UserName}'.", cancellationToken);
+        return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.import.success"));
+    }
+
     [HttpDelete("{name}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteDatabaseAsync(
         string name,

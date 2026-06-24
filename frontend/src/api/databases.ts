@@ -104,6 +104,20 @@ export async function createDatabaseUser(payload: CreateDatabaseUserPayload) {
   return response.data.data;
 }
 
+export type ImportDatabasePayload = {
+  engine: string;
+  databaseName: string;
+  userName: string;
+  host: string;
+  password: string;
+};
+
+// Var olan DB+kullanıcıyı panele tanıt (GRANT ALL eksikse + parolayı sakla).
+export async function importDatabase(payload: ImportDatabasePayload) {
+  const response = await apiClient.post<ApiEnvelope<DatabaseWorkspace>>("/db/import", payload);
+  return response.data.data;
+}
+
 export async function openPhpMyAdmin(engine: string, databaseName?: string) {
   const response = await apiClient.post<ApiEnvelope<{ url: string }>>("/webdb/phpmyadmin/open", { engine, databaseName });
   return response.data.data;

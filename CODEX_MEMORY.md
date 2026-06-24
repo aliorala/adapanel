@@ -3840,3 +3840,16 @@ Basarili:
 - BACKLOG DURUMU: TAMAM → #1 docroot, #2 rewrite, #4 composer (RunComposerInstall), #5 perms (oluşturmada + onar aracı). KALAN →
   DB import (mevcut MariaDB db/user'ları tara→panele kaydet), SSL geçerlilik kontrolü, .user.ini göç sanitize.
 - KULLANICIYA: Site → Barındırma → "Pretty URL yönlendirmesi" (URL Rewrite modülü gerek; yoksa net uyarı) + "Yazma izinlerini onar" (eski sitelere #5).
+
+## 2026-06-24 (98) — DB import + SSL geçerlilik etiketi (deploy backlog'unun kalanı tamamlandı)
+- DB import: panel ZATEN tüm DB'leri+kullanıcıları listeliyor (sistem şemaları hariç; GetDatabasesAsync Owner=""). "import"un değeri =
+  harici (uygulama/elle) DB+kullanıcıyı PANELE TANIT. DatabaseService.ImportDatabaseAsync = provider.GrantAccessAsync(ALL, eksikse) +
+  credentialStore.UpsertAsync(engine,user,host,db,password) → phpMyAdmin "bu kullanıcı olarak aç" + panel yönetimi (yedek/şifre/yetki).
+  ImportDatabaseRequest DTO + POST db/import + DatabasesView "Mevcut DB'yi içe aktar" formu (DB seç + kullanıcı seç + parola) + api/store.
+  Kullanıcı zaten var olmalı (yoksa "Kullanıcı ekle" + DB seçimi). (NOT: bu turda DatabasesController'a yanlış eklenen pragma-blok düzeltildi.)
+- SSL: SslView ZATEN her cert'in NotAfterUtc + renk-kodlu pill'ini (expiryClass: <0 danger, <30 warn, ok) gösteriyordu. expiryLabel eklendi:
+  "X gün kaldı / Bugün doluyor / Süresi doldu" → "geçerli/yenilenmiş mi" netliği. Backend DEĞİŞMEDİ (NotAfterUtc zaten DTO'da).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2163=2163. Installer SHA256: `82A13955D755F69ACCE48B26931799C8CA719A310F2C7634D89A5350797B12F0` (49.30 MiB).
+- DEPLOY BACKLOG TAMAM: #1 docroot ✓, #2 rewrite ✓, #4 composer ✓, #5 perms+repair ✓, DB import ✓, SSL geçerlilik ✓. KALAN tek madde:
+  .user.ini göç sanitize → Plesk→AdaPanel MIGRATION TOOL ile birlikte (o araç henüz kurulmadı; tasarım entry'lerde mevcut).
+- KULLANICIYA: yeni installer → Veritabanları'nda "Mevcut DB'yi içe aktar" (karsilastir'ı tanıt) + SSL'de her cert'in yanında kalan gün/durum.

@@ -262,6 +262,25 @@ internal sealed partial class DatabaseService(
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 
+    // Var olan bir veritabanı+kullanıcıyı panele TANIT (import): erişimi garanti et (eksikse GRANT ALL) ve
+    // kullanıcının parolasını sakla → phpMyAdmin "bu kullanıcı olarak aç" + panel yönetimi (yedek/şifre/yetki).
+    // Harici (uygulama/elle oluşturulmuş) DB'ler panelde LİSTELENİR ama sahibi/credential'ı izlenmez; bu onu bağlar.
+    // Kullanıcı zaten var olmalı (yoksa "Kullanıcı ekle" + veritabanı seçimini kullan).
+    public async Task<DatabaseWorkspaceDto> ImportDatabaseAsync(ImportDatabaseRequest request, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(request.Engine);
+        var databaseName = NormalizeDatabaseName(request.DatabaseName);
+        var userName = NormalizeUserName(request.UserName);
+        var allowedHost = NormalizeAllowedHost(request.Host);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        var provider = ResolveProvider(dbEngine);
+
+        var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
+        await provider.GrantAccessAsync(profile, databaseName, userName, allowedHost, fullPrivileges, cancellationToken);
+        await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, databaseName, request.Password, cancellationToken);
+        return await provider.GetWorkspaceAsync(profile, cancellationToken);
+    }
+
     public async Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(engine);
