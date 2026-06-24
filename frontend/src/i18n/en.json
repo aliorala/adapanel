@@ -549,6 +549,8 @@
   "panel.database.createDbTitle": "Create database",
   "panel.database.createDbSubtitle": "Enter a new database name and create it on the selected engine.",
   "panel.database.databaseName": "Database name",
+  "panel.database.grantToDatabase": "Grant access to database",
+  "panel.database.grantNone": "None (create user only)",
   "panel.database.createDatabase": "Create database",
   "panel.database.deleteDatabase": "Delete",
   "panel.database.removing": "Removing...",

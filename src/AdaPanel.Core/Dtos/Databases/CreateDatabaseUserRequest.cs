@@ -18,4 +18,11 @@ public sealed class CreateDatabaseUserRequest
 
     [StringLength(255)]
     public string AllowedHost { get; init; } = "%";
+
+    /// <summary>
+    /// İsteğe bağlı: kullanıcı bu veritabanına OTOMATİK tam yetki (GRANT ALL) alır (Plesk gibi). Boşsa yalnız
+    /// kullanıcı oluşturulur (yetki verilmez) → uygulama "Access denied to database" almasın diye genelde dolu gelir.
+    /// </summary>
+    [StringLength(64)]
+    public string DatabaseName { get; init; } = string.Empty;
 }

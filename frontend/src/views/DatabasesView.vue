@@ -255,6 +255,13 @@
                 <span class="field-label">{{ t("panel.database.userPassword") }}</span>
                 <input v-model="userForm.password" type="password" />
               </label>
+              <label>
+                <span class="field-label">{{ t("panel.database.grantToDatabase") }}</span>
+                <select v-model="userForm.databaseName">
+                  <option value="">{{ t("panel.database.grantNone") }}</option>
+                  <option v-for="db in filteredDatabases" :key="db.name" :value="db.name">{{ db.name }}</option>
+                </select>
+              </label>
             </div>
             <div class="row-actions">
               <button
@@ -370,7 +377,8 @@ const databaseForm = reactive({
 
 const userForm = reactive({
   userName: "",
-  password: ""
+  password: "",
+  databaseName: ""
 });
 
 const credForm = reactive({
@@ -620,11 +628,14 @@ async function submitCreateUser() {
       userName: userForm.userName,
       password: userForm.password,
       // profesyonel paneller gibi: host seçtirilmez; her yerden erişim ('%').
-      allowedHost: "%"
+      allowedHost: "%",
+      // Seçilirse o veritabanına otomatik GRANT ALL (kullanıcı "Access denied to database" almasın).
+      databaseName: userForm.databaseName
     });
 
     userForm.userName = "";
     userForm.password = "";
+    userForm.databaseName = "";
     showUserForm.value = false;
     showNotice(t("database.user_created"), false);
   } catch (error) {

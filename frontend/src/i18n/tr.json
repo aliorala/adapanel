@@ -549,6 +549,8 @@
   "panel.database.createDbTitle": "Veritabanı oluştur",
   "panel.database.createDbSubtitle": "Yeni bir veritabanı adı girip seçili motorda oluşturun.",
   "panel.database.databaseName": "Veritabanı adı",
+  "panel.database.grantToDatabase": "Veritabanına yetki ver",
+  "panel.database.grantNone": "Yok (yalnız kullanıcı oluştur)",
   "panel.database.createDatabase": "Veritabanını oluştur",
   "panel.database.deleteDatabase": "Sil",
   "panel.database.removing": "Siliniyor...",

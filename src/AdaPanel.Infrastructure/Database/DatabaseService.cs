@@ -330,7 +330,19 @@ internal sealed partial class DatabaseService(
         var provider = ResolveProvider(dbEngine);
 
         await provider.CreateUserAsync(profile, userName, request.Password, allowedHost, cancellationToken);
-        await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, string.Empty, request.Password, cancellationToken);
+
+        // Plesk gibi: kullanıcı bir veritabanı bağlamında eklenirse o DB'ye OTOMATİK tam yetki (GRANT ALL) ver.
+        // Aksi halde kullanıcı giriş yapar ama "Access denied for user ... to database ..." alır (en sık şikâyet).
+        // Veritabanı seçilmemişse yalnız kullanıcı oluşur (ileride GrantAccess ile bağlanabilir).
+        var grantedDatabase = string.Empty;
+        if (!string.IsNullOrWhiteSpace(request.DatabaseName))
+        {
+            grantedDatabase = NormalizeDatabaseName(request.DatabaseName);
+            var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
+            await provider.GrantAccessAsync(profile, grantedDatabase, userName, allowedHost, fullPrivileges, cancellationToken);
+        }
+
+        await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, grantedDatabase, request.Password, cancellationToken);
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 

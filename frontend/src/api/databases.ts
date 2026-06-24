@@ -67,6 +67,7 @@ export type CreateDatabaseUserPayload = {
   userName: string;
   password: string;
   allowedHost: string;
+  databaseName?: string;
 };
 
 export async function getDatabaseEngines() {

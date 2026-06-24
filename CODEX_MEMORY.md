@@ -3776,3 +3776,21 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44(+2), typecheck 0. Installer SHA256: `F48314F2AB92BFB3E32702AB290CC60B2C52A78171FBD36FA580EFD76DB1BF65` (49.30 MiB).
 - KULLANICIYA: yeni installer kur → Veritabanı/WebDB sayfasında "Güvenliği sıkılaştır" (K2) bir kez tıkla. Parolasız root'a güçlü parola
   atanır+saklanır; panel/phpMyAdmin kopmaz. NOT: canlı MariaDB olmadan test EDİLEMEDİ → verify+rollback güvenlik ağı; K2 başarısız olsa bile panel eski parolayla çalışır.
+
+## 2026-06-24 (94) — Canlı Laravel deploy'unun ortaya çıkardığı 6 Plesk-parite eksiği; #6 (DB kullanıcı→GRANT) DÜZELTİLDİ
+- Kullanıcı bir Laravel sitesini AdaPanel'e elle kurarken 6 eksik buldu + manuel düzeltti; panelin bunları OTOMATİK yapması istendi.
+- #6 DÜZELTİLDİ (bu installer): "SQLSTATE[HY000] [1044] Access denied for user 'karsilastir'@'%' to database 'karsilastir'". DB + kullanıcı
+  vardı ama GRANT yoktu. KÖK NEDEN: ayrı "Kullanıcı ekle" formu bir DB SEÇTİRMİYORDU (CreateDatabaseUserRequest'te DatabaseName yoktu) →
+  CreateUserAsync kullanıcıyı kurup hiçbir DB'ye grant vermiyordu. (Birleşik db+user create ZATEN grant veriyordu.) FIX: CreateDatabaseUserRequest.
+  DatabaseName (opsiyonel); DatabaseService.CreateUserAsync → DatabaseName doluysa GRANT ALL + credentialStore.Upsert(db). Frontend: create-user
+  formuna veritabanı <select> (i18n grantToDatabase/grantNone) + payload.databaseName. Plesk gibi: kullanıcı bir DB bağlamında eklenir+otomatik tam yetki.
+- KAYDA GEÇEN diğer 5 eksik — SONRAKİ İŞ (HENÜZ YAPILMADI), öncelik sırası:
+  #5 (KRİTİK, her PHP app) yazma izni: PHP IUSR çalışır; storage + bootstrap/cache'e (Laravel) / wp-content'e yazamaz → site oluştururken
+     app pool kimliği/IUSR'a yazılabilir dizinlerde Modify ver (Plesk gibi otomatik). 
+  #1 (KRİTİK) framework doc root: panel IIS fiziksel yolu PROJE KÖKÜNE bakıyor; Laravel'de public/ olmalı (kök = 403). → artisan+public/index.php
+     algıla → docroot public/; ayrıca panelde "Document root" alanı (Plesk gibi).
+  #2 public/web.config PHP handler+rewrite yoktu → PHP FastCGI handler + index.php fallback (Laravel/WP rewrite) otomatik yaz.
+  #3 .user.ini eski Plesk yolları (C:\Inetpub\vhosts) + bozuk open_basedir (GÖÇTEN gelen dosya) → göçte .user.ini sanitize + doğru yol/temiz open_basedir.
+  #4 vendor eksik geldi (composer bağımlılıkları taşınmamış) → toolkit "composer install" tek-tık / göç sonrası bütünlük adımı.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2143=2143. Installer SHA256: `AD3E6F7E921563D0DB1716EC94E22DCBA7E6705747F2A7BE6CDE399C55528476` (49.30 MiB).
+- KULLANICIYA: yeni installer → "Kullanıcı ekle"de artık veritabanı seçilir → otomatik GRANT. #1-5 sıradaki öncelik (önce #5 izinler + #1 docroot).
