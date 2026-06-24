@@ -3686,3 +3686,21 @@ Basarili:
 - FRONTEND (client.ts): /auth/csrf null/ağ hatasında ÇÖKMEK yerine boş token + catch → "requestToken null" çirkin hatası gitmez.
 - Doğrulama: build 0/0, test 44/44 (+2), typecheck 0, FE build 0. Installer SHA256: `898F067757F18A92FECB1DE1F981FDB51D3FCF67F60350FFF70302AED755D70C` (49.29 MiB).
 - KULLANICIYA: TEMİZ kurulum şart (eski bozuk-ACL'li dosyalar yeni dir ACL'ini miras ALMIYOR): C:\ProgramData\AdaPanel sil + yeni installer.
+
+## 2026-06-24 (89) — phpMyAdmin/Adminer public açıklığı kapatıldı (codex denetimi: 8896 public + composer sızıntısı + OS portları)
+- Codex bulgusu: (1) phpMyAdmin :8896 PUBLIC (Plesk'te panel auth arkasında olmalı), (2) /composer.json + /vendor/composer/installed.json
+  HTTP'den okunuyor = bilgi sızıntısı, (3) 3389(RDP)/445(SMB)/135(RPC)/5985(WinRM) public.
+- DOĞRULAMA: WebDbClientService.CreateSiteAsync IpAddress="*" (0.0.0.0:8896) + OpenFirewallPort → public. Proxy (DbToolsProxyController) ZATEN
+  [Authorize(Roles=Administrator)] = güvenli yol vardı ama public fallback bırakılmıştı (kod yorumu da itiraf ediyordu). 3389/445/135/5985'i
+  AdaPanel AÇMIYOR (Windows'un kendi varsayılan kuralları).
+- FIX (kod, WebDbClientService): (a) site binding IpAddress="*" → "127.0.0.1" (yalnız loopback; proxy+health zaten 127.0.0.1 kullanıyor → çalışır).
+  (b) OpenFirewallPort → EnsureFirewallPortClosed (public "AdaPanel WebDb {port}" kuralını AÇMAZ, varsa KALDIRIR). (c) HardenWebDbWebConfig: kök
+  web.config'e requestFiltering hiddenSegments(vendor,composer.json,composer.lock,package*.json,yarn.lock,.git,.github,examples,test,node_modules)
+  + denied fileExtensions(.md,.lock,.dist,.sh,.yml,.yaml) → metadata/paket dosyaları HTTP'den engellenir (savunma derinliği). Deploy + signon "Aç"
+  yollarından çağrılır (yeniden dağıtım beklemeden web.config sertleşir). vendor/ sunucu-tarafı autoload → HTTP kapatmak phpMyAdmin'i bozmaz.
+- FIX (harden-adapanel.ps1, OS portları — Plesk gibi opt-in, "sormadan kapatma" ilkesi): B7(DEFAULT) phpMyAdmin/Adminer public firewall kurallarını
+  kaldır. B8(opt-in -HardenManagementPorts) SMB445/RPC135/NetBIOS137-139/WinRM5985-5986 inbound BLOCK. RDP(opt-in -RdpAllowFrom <ip[,ip]>) yerleşik
+  RDP kurallarını yalnız allowlist IP'ye kısıtla — blanket KAPATMA YOK (kilitlenme önlenir, kırmızı uyarı). param + .PARAMETER/.EXAMPLE eklendi.
+- Doğrulama: build 0/0, test 44/44(+2), PS parse OK (0 hata). Installer SHA256: `FCCCFFD0CCB04FB5875375A24808F9CC2B698A602AFA5ADACC18B55BB9AACFB0` (49.29 MiB).
+- KULLANICIYA: yeni installer kur + panelden phpMyAdmin/Adminer'i 1 kez YENIDEN DAGIT (loopback binding uygulansın). Mevcut public'i HEMEN kapatmak
+  için canlıda harden-adapanel.ps1 çalıştır (B7 firewall kuralını kaldırır). OS portları için -HardenManagementPorts (+ sabit IP'n varsa -RdpAllowFrom).

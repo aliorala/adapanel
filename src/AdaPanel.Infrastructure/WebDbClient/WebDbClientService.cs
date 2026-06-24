@@ -87,6 +87,8 @@ public sealed class WebDbClientService(
         // yeniden dağıtmaya gerek kalmadan uygulanır (config yalnız deploy'da yazılıyordu → eski
         // config diskte kalıp aynı hatayı tekrarlıyordu).
         await EnsurePhpMyAdminConfigAsync(entryRoot, cancellationToken);
+        // Var olan dağıtımda da paket/metadata dosyalarını HTTP'den engelle (yeniden dağıtım beklemeden).
+        HardenWebDbWebConfig(entryRoot);
         var engineKey = (engine ?? string.Empty).Trim().ToLowerInvariant();
         var (port, rootComponentId) = engineKey == "mysql"
             ? (3307, "mysql-8")
@@ -152,18 +154,18 @@ public sealed class WebDbClientService(
         return component is null ? string.Empty : ReadRootPassword(component);
     }
 
-    // Araç portunu (phpMyAdmin/Adminer) Windows Güvenlik Duvarı'nda açar. Best-effort, idempotent.
-    private static void OpenFirewallPort(int port)
+    // GÜVENLİK: DB aracı portunu (phpMyAdmin/Adminer) Windows Güvenlik Duvarı'nda KAPALI tutar —
+    // eski sürümde public açılmış "AdaPanel WebDb {port}" kuralını kaldırır. Best-effort, idempotent.
+    private static void EnsureFirewallPortClosed(int port)
     {
         try
         {
             var ruleName = $"AdaPanel WebDb {port}";
             RunNetsh($"advfirewall firewall delete rule name=\"{ruleName}\"");
-            RunNetsh($"advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow protocol=TCP localport={port}");
         }
         catch
         {
-            // En iyi çaba; port açılamasa da yerel erişim çalışır.
+            // En iyi çaba; kural yoksa zaten kapalıdır.
         }
     }
 
@@ -280,15 +282,19 @@ public sealed class WebDbClientService(
         // TÜM PHP app'leriyle ortak: placeholder index.html'i kaldır + index.php varsayılan
         // belge web.config'ini yaz ki "/" doğrudan phpMyAdmin/Adminer'i açsın (403.14 önlenir).
         Iis.WebAppPublisher.EnsurePhpEntry(entryRoot);
+        // GÜVENLİK (savunma derinliği): paket/metadata dosyalarını (composer.json, vendor/ ...) HTTP'den
+        // engelle — codex bulgusu: 8896/composer.json + vendor/composer/installed.json okunuyordu.
+        HardenWebDbWebConfig(entryRoot);
         await phpService.RegisterFastCgiAsync(phpComponentId, cancellationToken);
         await phpService.SetSitePhpVersionAsync(siteName, new SetSitePhpVersionRequest
         {
             ComponentId = phpComponentId
         }, cancellationToken);
 
-        // Aracı uzak tarayıcıdan açabilmek için portu Windows Güvenlik Duvarı'nda aç (webmail/mail
-        // ile tutarlı). Best-effort; idempotent.
-        OpenFirewallPort(port);
+        // GÜVENLİK: DB aracı public portu AÇILMAZ (loopback + panel proxy yeterli). Eski sürümlerde
+        // açılmış "AdaPanel WebDb {port}" kuralı varsa KALDIRILIR ki phpMyAdmin/Adminer dışarıdan
+        // erişilebilir kalmasın (codex bulgusu: 8896 public). Best-effort; idempotent.
+        EnsureFirewallPortClosed(port);
 
         var state = new WebDbState
         {
@@ -653,6 +659,89 @@ public sealed class WebDbClientService(
             new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
+    // GÜVENLİK (savunma derinliği): WebDB aracının kök web.config'ine, paket/metadata dosyalarının HTTP ile
+    // OKUNMASINI engelleyen requestFiltering kuralları ekler. Codex bulgusu: /composer.json ve
+    // /vendor/composer/installed.json public okunuyordu. vendor/ sunucu-tarafı include'dur (autoload);
+    // HTTP erişimini kapatmak phpMyAdmin'i bozmaz, asset'leri (js/, themes/) etkilemez. Idempotent.
+    private static void HardenWebDbWebConfig(string entryRoot)
+    {
+        try
+        {
+            var webConfigPath = Path.Combine(entryRoot, "web.config");
+            var document = File.Exists(webConfigPath)
+                ? System.Xml.Linq.XDocument.Load(webConfigPath)
+                : new System.Xml.Linq.XDocument(new System.Xml.Linq.XElement("configuration"));
+
+            var configuration = document.Root ?? new System.Xml.Linq.XElement("configuration");
+            var requestFiltering = EnsureXmlChild(
+                EnsureXmlChild(
+                    EnsureXmlChild(configuration, "system.webServer"),
+                    "security"),
+                "requestFiltering");
+
+            var hiddenSegments = EnsureXmlChild(requestFiltering, "hiddenSegments");
+            foreach (var segment in new[]
+                     {
+                         "vendor", "composer.json", "composer.lock", "package.json",
+                         "package-lock.json", "yarn.lock", ".git", ".github", "examples", "test", "node_modules"
+                     })
+            {
+                AddXmlAttributeChildIfMissing(hiddenSegments, "add", "segment", segment);
+            }
+
+            var fileExtensions = EnsureXmlChild(requestFiltering, "fileExtensions");
+            foreach (var extension in new[] { ".md", ".lock", ".dist", ".sh", ".yml", ".yaml" })
+            {
+                AddDenyExtensionIfMissing(fileExtensions, extension);
+            }
+
+            document.Save(webConfigPath);
+        }
+        catch
+        {
+            // Best-effort; asıl koruma loopback binding'dir (public erişim zaten kapalı).
+        }
+    }
+
+    private static System.Xml.Linq.XElement EnsureXmlChild(System.Xml.Linq.XElement parent, string name)
+    {
+        var child = parent.Element(name);
+        if (child is null)
+        {
+            child = new System.Xml.Linq.XElement(name);
+            parent.Add(child);
+        }
+
+        return child;
+    }
+
+    private static void AddXmlAttributeChildIfMissing(
+        System.Xml.Linq.XElement parent,
+        string elementName,
+        string attributeName,
+        string value)
+    {
+        var exists = parent.Elements(elementName).Any(element =>
+            string.Equals((string?)element.Attribute(attributeName), value, StringComparison.OrdinalIgnoreCase));
+        if (!exists)
+        {
+            parent.Add(new System.Xml.Linq.XElement(elementName, new System.Xml.Linq.XAttribute(attributeName, value)));
+        }
+    }
+
+    private static void AddDenyExtensionIfMissing(System.Xml.Linq.XElement fileExtensions, string extension)
+    {
+        var exists = fileExtensions.Elements("add").Any(element =>
+            string.Equals((string?)element.Attribute("fileExtension"), extension, StringComparison.OrdinalIgnoreCase));
+        if (!exists)
+        {
+            fileExtensions.Add(new System.Xml.Linq.XElement(
+                "add",
+                new System.Xml.Linq.XAttribute("fileExtension", extension),
+                new System.Xml.Linq.XAttribute("allowed", "false")));
+        }
+    }
+
     private Task<SiteDto> CreateSiteAsync(
         string siteName,
         string physicalPath,
@@ -665,7 +754,10 @@ public sealed class WebDbClientService(
             PhysicalPath = physicalPath,
             ApplicationPoolName = $"AdaPanel.{siteName}",
             HostName = string.Empty,
-            IpAddress = "*",
+            // GÜVENLİK (Plesk gibi): DB araçları YALNIZ loopback'te (127.0.0.1) dinler — dışarıdan
+            // doğrudan *:8896/8897 erişimi YOK. Erişim panelin kimlik-doğrulamalı HTTPS reverse-proxy'si
+            // (DbToolsProxyController [Authorize(Roles="Administrator")]) üzerinden; o da 127.0.0.1'e iletir.
+            IpAddress = "127.0.0.1",
             Port = port,
             Protocol = "http",
             AutoStart = true

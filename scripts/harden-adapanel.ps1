@@ -8,16 +8,41 @@
     calistirilir. Tum islemler IDEMPOTENT'tir: tekrar tekrar calistirmak guvenlidir.
 
     Uygulanan duzeltmeler:
-      K1 - C:\ProgramData\AdaPanel ACL'lerini kilitle (hassas dosyalari BUILTIN\Users'tan koru)
-      K3 - Paylasimli PHP php.ini sertlestir (OS komut fonksiyonlarini kapat + surum gizle)
-      B2 - Yinelenen (duplicate) Windows Guvenlik Duvari kurallarini temizle
+      K1  - C:\ProgramData\AdaPanel ACL'lerini kilitle (hassas dosyalari BUILTIN\Users'tan koru)
+      K3  - Paylasimli PHP php.ini sertlestir (OS komut fonksiyonlarini kapat + surum gizle)
+      B2  - Yinelenen (duplicate) Windows Guvenlik Duvari kurallarini temizle
+      B6  - Web (80/443) ve DNS (53) icin acik guvenlik duvari kurallari
+      B7  - phpMyAdmin/Adminer PUBLIC portlarini (8896/8897) KAPAT (artik panel proxy arkasinda)
+      B8  - (opt-in -HardenManagementPorts) SMB(445)/RPC(135)/NetBIOS/WinRM(5985) gelen baglantilarini engelle
+      RDP - (opt-in -RdpAllowFrom <IP>) RDP(3389) erisimini sadece belirtilen kaynak IP'ye kisitla
 
     NOT: MariaDB root parolasi BILEREK DEGISTIRILMEZ (sondaki "K2 - NEDEN BURADA YOK"
     bolumune bakin).
 
+.PARAMETER HardenManagementPorts
+    Verilirse SMB(445)/RPC(135)/NetBIOS(137-139)/WinRM(5985-5986) gelen baglantilarini ENGELLE.
+    Bir hosting sunucusunda bunlar internete acik olmamalidir. WinRM'i uzaktan yonetim icin
+    kullaniyorsan bu anahtari VERME.
+
+.PARAMETER RdpAllowFrom
+    RDP(3389) erisimini SADECE bu kaynak IP(ler)e kisitla (orn. '203.0.113.5' veya '203.0.113.0/24',
+    virgulle birden fazla). BOS birakilirsa RDP'ye DOKUNULMAZ (kilitlenme riski yok), yalniz uyari basilir.
+
+.EXAMPLE
+    .\harden-adapanel.ps1
+    .\harden-adapanel.ps1 -HardenManagementPorts -RdpAllowFrom '203.0.113.5'
+
 .NOTES
     Hedef: CANLI VPS. Bu makinede DEGIL, sunucuda calistirilmak uzere yazilmistir.
 #>
+
+param(
+    # SMB(445)/RPC(135)/NetBIOS(137-139)/WinRM(5985-5986) gelen baglantilarini ENGELLE (opt-in).
+    [switch]$HardenManagementPorts,
+
+    # RDP(3389) erisimini SADECE bu kaynak IP(ler)e kisitla (virgulle birden fazla). Bos=dokunma.
+    [string]$RdpAllowFrom
+)
 
 # Idempotent islemlerde tek bir hatanin scripti tamamen durdurmasini istemiyoruz; her
 # bolum kendi hatalarini ele alir. Beklenmeyen terminating hatalarda yine de duralim.
@@ -357,11 +382,133 @@ foreach ($dnsProto in 'TCP', 'UDP') {
 Write-Host "[B6] Tamamlandi." -ForegroundColor Green
 
 # =======================================================================================
+# B7 - phpMyAdmin/Adminer PUBLIC PORTLARINI KAPAT (8896/8897)
+# =======================================================================================
+# Problem (codex bulgusu): phpMyAdmin 8896 disariya ACIK + /composer.json, /vendor/composer/installed.json
+# sizinti. Plesk'te bu araclar panel auth ARKASINDADIR. AdaPanel artik araci YALNIZ loopback'te (127.0.0.1)
+# dinletir ve panelin kimlik-dogrulamali HTTPS reverse-proxy'si uzerinden sunar. Eski kurulumda acilmis
+# public guvenlik duvari kurallarini (varsa) kaldiriyoruz; araclar panel uzerinden calismaya devam eder.
+
+Write-Host ""
+Write-Host "[B7] phpMyAdmin/Adminer public guvenlik duvari kurallari kaldiriliyor (8896/8897)..." -ForegroundColor Yellow
+try {
+    $webDbRules = Get-NetFirewallRule -Direction Inbound -ErrorAction Stop |
+        Where-Object { $_.DisplayName -like 'AdaPanel WebDb*' }
+
+    if (-not $webDbRules -or @($webDbRules).Count -eq 0) {
+        Write-Host "[B7] Acik WebDb kurali yok; phpMyAdmin/Adminer zaten public degil."
+    }
+    else {
+        foreach ($rule in $webDbRules) {
+            try {
+                Remove-NetFirewallRule -Name $rule.Name -ErrorAction Stop
+                Write-Host "[B7]   Kaldirildi: '$($rule.DisplayName)' ($($rule.Name))." -ForegroundColor Green
+            }
+            catch {
+                Write-Warning "[B7]   '$($rule.DisplayName)' kaldirilamadi: $($_.Exception.Message)"
+            }
+        }
+        Write-Host "[B7] phpMyAdmin/Adminer artik yalniz panel uzerinden erisilebilir." -ForegroundColor Green
+    }
+    Write-Host "[B7] NOT: Loopback binding'in tam uygulanmasi icin panelden araci bir kez YENIDEN DAGIT." -ForegroundColor Yellow
+}
+catch {
+    Write-Warning "[B7] WebDb guvenlik duvari kurallari islenirken hata: $($_.Exception.Message)"
+}
+Write-Host "[B7] Tamamlandi." -ForegroundColor Green
+
+# =======================================================================================
+# B8 - YONETIM/PAYLASIM PORTLARINI ENGELLE (opt-in: -HardenManagementPorts)
+# =======================================================================================
+# Problem (codex bulgusu): 445(SMB)/135(RPC)/137-139(NetBIOS)/5985-5986(WinRM) disariya acik. Bir hosting
+# sunucusu disariya web(80/443)+mail+dns sunar; bu yonetim/dosya-paylasim portlari INTERNETE ACIK OLMAMALI
+# (NTLM relay, kimlik dogrulama saldirilari, uzaktan yonetim yuzeyi). Bu portlar genelde Windows'un KENDI
+# varsayilan kurallariyla aciktir; AdaPanel acmaz. Opt-in: bilerek -HardenManagementPorts verilirse Block
+# kurallari ekleriz (Block, Allow'dan onceliklidir). Loopback (yerel) trafigi etkilenmez.
+
+if ($HardenManagementPorts) {
+    Write-Host ""
+    Write-Host "[B8] Yonetim/paylasim portlari engelleniyor (SMB/RPC/NetBIOS/WinRM)..." -ForegroundColor Yellow
+    $blockSpecs = @(
+        @{ Name = "AdaPanel Block SMB 445";     Proto = "TCP"; Ports = @("445") },
+        @{ Name = "AdaPanel Block RPC 135";     Proto = "TCP"; Ports = @("135") },
+        @{ Name = "AdaPanel Block NetBIOS TCP"; Proto = "TCP"; Ports = @("137-139") },
+        @{ Name = "AdaPanel Block NetBIOS UDP"; Proto = "UDP"; Ports = @("137-138") },
+        @{ Name = "AdaPanel Block WinRM";       Proto = "TCP"; Ports = @("5985", "5986") }
+    )
+    foreach ($spec in $blockSpecs) {
+        try {
+            Get-NetFirewallRule -DisplayName $spec.Name -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null
+            New-NetFirewallRule -DisplayName $spec.Name -Direction Inbound -Action Block -Protocol $spec.Proto -LocalPort $spec.Ports -Profile Any -ErrorAction Stop | Out-Null
+            Write-Host "[B8]   Engellendi: $($spec.Name) ($($spec.Proto) $($spec.Ports -join ','))." -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "[B8]   '$($spec.Name)' eklenemedi: $($_.Exception.Message)"
+        }
+    }
+    Write-Host "[B8] Tamamlandi." -ForegroundColor Green
+}
+else {
+    Write-Host ""
+    Write-Host "[B8] ATLANDI (varsayilan). SMB(445)/RPC(135)/NetBIOS/WinRM(5985) disariya ACIK olabilir." -ForegroundColor Yellow
+    Write-Host "[B8] Internete kapatmak icin: .\harden-adapanel.ps1 -HardenManagementPorts" -ForegroundColor Yellow
+    Write-Host "[B8] (WinRM'i uzaktan yonetim icin kullaniyorsan bu anahtari VERME.)" -ForegroundColor Yellow
+}
+
+# =======================================================================================
+# RDP (3389) — SADECE belirtilen kaynak IP'ye kisitla (opt-in: -RdpAllowFrom)
+# =======================================================================================
+# RDP'yi blanket (tumden) KAPATMIYORUZ — kendini kilitleyebilirsin. -RdpAllowFrom verirsen yerlesik RDP
+# kurallarinin RemoteAddress'ini o IP(ler)e cekeriz (digerleri dusurulur). Plesk de yonetim erisimini IP
+# allowlist ile kisitlar. -RdpAllowFrom verilmezse RDP'ye DOKUNMAYIZ (sadece uyari).
+
+Write-Host ""
+if (-not [string]::IsNullOrWhiteSpace($RdpAllowFrom)) {
+    $rdpSources = $RdpAllowFrom -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    Write-Host "[RDP] RDP (3389) erisimi yalniz su kaynaklara kisitlaniyor: $($rdpSources -join ', ')" -ForegroundColor Yellow
+    try {
+        $rdpRules = Get-NetFirewallRule -Direction Inbound -ErrorAction Stop |
+            Where-Object { ($_.DisplayGroup -like '*Remote Desktop*' -or $_.DisplayName -like '*Remote Desktop*') -and $_.Enabled -eq 'True' }
+
+        if (-not $rdpRules -or @($rdpRules).Count -eq 0) {
+            # Yerlesik kural yoksa allowlist'li kendi Allow kuralimizi ekle (3389 yalniz bu kaynaklara).
+            Get-NetFirewallRule -DisplayName "AdaPanel RDP Allowlist" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null
+            New-NetFirewallRule -DisplayName "AdaPanel RDP Allowlist" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3389 -RemoteAddress $rdpSources -Profile Any -ErrorAction Stop | Out-Null
+            Write-Host "[RDP]   'AdaPanel RDP Allowlist' eklendi (3389, kaynak: $($rdpSources -join ', '))." -ForegroundColor Green
+        }
+        else {
+            foreach ($rule in $rdpRules) {
+                try {
+                    $rule | Set-NetFirewallRule -RemoteAddress $rdpSources -ErrorAction Stop
+                    Write-Host "[RDP]   Kisitlandi: '$($rule.DisplayName)'." -ForegroundColor Green
+                }
+                catch {
+                    Write-Warning "[RDP]   '$($rule.DisplayName)' kisitlanamadi: $($_.Exception.Message)"
+                }
+            }
+        }
+        Write-Host "[RDP] UYARI: Kaynak IP'n degisirse RDP'den KILITLENEBILIRSIN. Saglayicinin konsol/VNC erisimini hazir tut." -ForegroundColor Red
+    }
+    catch {
+        Write-Warning "[RDP] RDP kurallari kisitlanirken hata: $($_.Exception.Message)"
+    }
+}
+else {
+    Write-Host "[RDP] ATLANDI (varsayilan). RDP (3389) tum kaynaklara ACIK olabilir." -ForegroundColor Yellow
+    Write-Host "[RDP] Kisitlamak icin: .\harden-adapanel.ps1 -RdpAllowFrom '<senin-sabit-IP>'" -ForegroundColor Yellow
+    Write-Host "[RDP] (Blanket kapatmiyoruz; kendini kilitlememen icin bilerek opt-in.)" -ForegroundColor Yellow
+}
+
+# =======================================================================================
 # Bitti.
 # =======================================================================================
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Cyan
-Write-Host " Sertlestirme tamamlandi: K1 (ACL), K3 (php.ini), B2+B6 (firewall)." -ForegroundColor Cyan
+Write-Host " Sertlestirme tamamlandi: K1 (ACL), K3 (php.ini), B2+B6+B7 (firewall)." -ForegroundColor Cyan
+$mgmtState = if ($HardenManagementPorts) { "uygulandi" } else { "ATLANDI (-HardenManagementPorts ile ac)" }
+$rdpState  = if (-not [string]::IsNullOrWhiteSpace($RdpAllowFrom)) { "kisitlandi ($RdpAllowFrom)" } else { "ATLANDI (-RdpAllowFrom ile kisitla)" }
+Write-Host " B8 (SMB/RPC/WinRM): $mgmtState" -ForegroundColor Cyan
+Write-Host " RDP allowlist: $rdpState" -ForegroundColor Cyan
 Write-Host " Script idempotenttir; gerekirse tekrar calistirabilirsiniz." -ForegroundColor Cyan
 Write-Host "==================================================================" -ForegroundColor Cyan
 
