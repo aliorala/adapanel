@@ -110,8 +110,10 @@ procedure ConfigureInstallation;
 begin
   { IIS = site barindirma; panel IIS olmadan da acilir -> best-effort, kurulumu BOZMAZ. }
   TryRunPowerShellScript('enable-iis-features.ps1', '');
-  { HTTPS sertifikasi + servis = panelin acilmasi icin KRITIK -> hata olursa kurulum gercekten basarisiz olsun. }
-  RunPowerShellScript('initialize-panel-certificate.ps1', '');
+  { Sertifika = best-effort: hata olsa bile install-service'i ENGELLEME (eksikse panel HTTP'ye duser ya da
+    mevcut sertifikayi kullanir; servis acilinca HardenAsync certs ACL'ini onarir -> sonraki sefer duzgun olur). }
+  TryRunPowerShellScript('initialize-panel-certificate.ps1', '');
+  { Servis = KRITIK: panelin calismasi icin sart. }
   RunPowerShellScript(
     'install-service.ps1',
     '-ExecutablePath "' + ExpandConstant('{app}\{#MyAppExeName}') +

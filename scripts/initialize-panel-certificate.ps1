@@ -11,6 +11,10 @@ $passwordPath = Join-Path $certDirectory "panel.password"
 
 New-Item -ItemType Directory -Path $certDirectory -Force | Out-Null
 
+# certs klasörü önceki sürümün sertleştirmesinden bozuk/kısıtlı ACL almış olabilir; panel.pfx'i yazabilmek
+# için erişimi geri ver (best-effort). Panel servisi açılışta sertleştirmeyi güvenli biçimde yeniden uygular.
+try { & icacls "$certDirectory" /reset /T /C 2>$null | Out-Null } catch { }
+
 $dnsNames = @("localhost", $env:COMPUTERNAME) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 $storeLocation = "LocalMachine"
 $existingCertificate = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
@@ -72,7 +76,7 @@ $password = -join ($passwordCharacters | Get-Random -Count 32 | ForEach-Object {
 $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
 
 if (Test-Path $certificatePath) {
-    Remove-Item $certificatePath -Force
+    Remove-Item $certificatePath -Force -ErrorAction SilentlyContinue
 }
 
 Export-PfxCertificate -Cert $existingCertificate -FilePath $certificatePath -Password $securePassword | Out-Null

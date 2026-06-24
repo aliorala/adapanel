@@ -3653,3 +3653,20 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44 (+2), publish OK, ISCC OK.
 - Installer SHA256: `2FC2D0D877615578F8923B56AF607065D9FAF423BE0FE42BBF2B056FF35C0D87` (51682947 / 49.29 MiB). AKTİF.
 - AÇIK KALAN: (a) setup ekranında "common.unexpected_error" (canlı, log bekleniyor). (b) Inno kurulumda "runtime error 2:1017" (ekran görüntüsü bekleniyor).
+
+## 2026-06-24 (87) — KURULUM/AÇILIŞ KÖK NEDENLERİNİN TAMAMI düzeltildi (kullanıcı canlı denedi, çok tur, sonunda çözüm)
+- Windows Server 2019'da bir dizi hata: enable-iis exit 1, "2:1017", common.unexpected_error, SQLite Error 14. Hepsi çözüldü:
+- (a) enable-iis-features.ps1: Server'da DISM isimleri patlıyordu → OS'a göre Install-WindowsFeature/Enable-WindowsOptionalFeature + best-effort + exit 0.
+- (b) AdaPanel.iss: enable-iis + cert + firewall artık TryRunPowerShellScript (best-effort) → install-service'i ENGELLEMEZ; yalnız install-service kritik. ("2:1017" = cert RaiseException dialog'uydu; best-effort olunca kayboldu.)
+- (c) Program.cs: 'data' klasörü migration'dan ÖNCE oluşturuluyor.
+- (d) ASIL KÖK NEDEN (SQLite Error 14): K1 `icacls /inheritance:r` miras ACE'lerini (CREATOR OWNER dahil) SİLİP DACL'i bozuyor →
+  SYSTEM bile db oluşturamıyor. FIX: `/inheritance:d` (mirası KAPAT ama ACE'leri KORU/kopyala) + yalnız tenant'ları kaldır
+  (Users S-1-5-32-545 + Auth Users S-1-5-11) → SYSTEM/Admin/CREATOR-OWNER korunur, SQLite kırılmaz, K1 GÜVENLİĞİ KORUNUR.
+  (Kullanıcı "kapatma, çöz, pleski örnek al, araştır" dedi → kapatılmadı, araştırılıp doğru çözüldü.)
+- (e) Program.cs KURTARMA AĞI: migration db'yi açamazsa EnsureWritableAsync (data ACL /reset) + yeniden dene → panel ASLA
+  kilitlenmez; eski bozuk kurulumlar kendiliğinden iyileşir.
+- (f) Program.cs: sertifika yoksa --urls https olsa bile HTTP'ye düş (sertifikasız HTTPS çökmesi yerine açılsın).
+- (g) initialize-panel-certificate.ps1: certs ACL'ini /reset ile onarıp panel.pfx yazar (best-effort) → HTTPS sıfır-ayar.
+- DataRootHardeningService: static HardenAsync (/inheritance:d güvenli) + EnsureWritableAsync (kurtarma).
+- Doğrulama: build 0/0, test 44/44 (+2). Installer SHA256: `150B18264ED4D5BADF0D5BB1F3EF6951AA3EE19E860B7F395542AAB921E97317` (49.29 MiB).
+- HEDEF: tek installer, sıfır elle müdahale, eski bozuk durumu da kendiliğinden onarır.

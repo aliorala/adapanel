@@ -85,12 +85,13 @@ if (panelCertificate is not null)
     });
 }
 
-if (panelCertificate is null &&
-    string.IsNullOrWhiteSpace(builder.Configuration["ASPNETCORE_URLS"]) &&
-    string.IsNullOrWhiteSpace(builder.Configuration["urls"]))
+if (panelCertificate is null)
 {
+    // Sertifika yoksa HTTPS bağlanamaz; install-service --urls "https://..." verse BİLE HTTP'ye düş —
+    // sertifikasız HTTPS'e bağlanmaya çalışıp ÇÖKMEK yerine panel HTTP'de açılsın (kurulum sağlamlığı).
+    var fallbackPort = ResolveListenerPort(builder.Configuration["ASPNETCORE_URLS"] ?? builder.Configuration["urls"], panelOptions.PreferredHttpsPort);
     var listenerHost = panelOptions.AllowHttpFallback ? "0.0.0.0" : "127.0.0.1";
-    builder.WebHost.UseUrls($"http://{listenerHost}:{panelOptions.PreferredHttpsPort}");
+    builder.WebHost.UseUrls($"http://{listenerHost}:{fallbackPort}");
 }
 
 builder.Services.AddDataProtection()
@@ -223,10 +224,8 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
     var dbContext = scope.ServiceProvider.GetRequiredService<AdaPanelDbContext>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
-    // K1 GÜVENLİK + KURULUM SAĞLAMLIĞI: Veri kökünü panel DB'si AÇILMADAN ÖNCE sertleştir. Eskiden bu işlem
-    // hosted service olarak app.Run SONRASI, adapanel.db AÇIKKEN icacls /T uyguluyordu → açık dosyanın ACL'i
-    // bozulup sonraki açılışta "SQLite Error 14: unable to open database file" oluyordu. Artık db'den ÖNCE,
-    // dosya kapalıyken çalışır; yeni db kilidi miras alarak doğar, açıkken bir daha ACL'lenmez.
+    // K1 GÜVENLİK: panel DB'si AÇILMADAN ÖNCE veri kökünü sertleştir (tenant'lar adapanel.db'yi okuyamasın).
+    // Artık GÜVENLİ /inheritance:d yöntemiyle (SYSTEM/Admin/CREATOR-OWNER korunur) → SQLite kırılmaz.
     await AdaPanel.Infrastructure.Bootstrap.DataRootHardeningService.HardenAsync(dataRoot, logger);
 
     var database = dbContext.Database;
@@ -265,10 +264,20 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
     }
     catch (Exception exception)
     {
-        // GÜVENLİK AĞI: migration herhangi bir sebeple başarısız olsa bile taze kurulum BRICK olmasın —
-        // en azından şemayı oluştur (eski davranış).
-        logger.LogError(exception, "Migration uygulanamadı; EnsureCreated ile şema garanti ediliyor.");
-        await dbContext.Database.EnsureCreatedAsync();
+        // KURTARMA AĞI: db açılamadıysa (ör. ACL herhangi bir sebeple bozuksa) önce 'data' klasörünün erişimini
+        // GARANTİ et (ACL sıfırla), sonra yeniden dene; yine olmazsa en azından şemayı oluştur. Böylece panel
+        // db yüzünden ASLA kilitlenmez — kullanıcı elle uğraşmak zorunda kalmaz.
+        logger.LogError(exception, "Migration başarısız; veri klasörü erişimi garanti edilip yeniden denenecek.");
+        await AdaPanel.Infrastructure.Bootstrap.DataRootHardeningService.EnsureWritableAsync(dataRoot, logger);
+        try
+        {
+            await database.MigrateAsync();
+        }
+        catch (Exception retryException)
+        {
+            logger.LogError(retryException, "Migration tekrar başarısız; EnsureCreated ile şema garanti ediliyor.");
+            await dbContext.Database.EnsureCreatedAsync();
+        }
     }
 }
 
