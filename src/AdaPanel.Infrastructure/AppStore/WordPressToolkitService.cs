@@ -7,7 +7,7 @@ using AdaPanel.Core.Interfaces;
 namespace AdaPanel.Infrastructure.AppStore;
 
 /// <summary>
-/// Plesk WordPress Toolkit'in temel, dosya tabanlı karşılığı. WP-CLI gerektirmez:
+/// panel WordPress Toolkit'in temel, dosya tabanlı karşılığı. WP-CLI gerektirmez:
 /// wp-config.php varlığına göre algılar, wp-includes/version.php'den sürümü okur,
 /// bakım modunu .maintenance dosyasıyla yönetir.
 /// </summary>

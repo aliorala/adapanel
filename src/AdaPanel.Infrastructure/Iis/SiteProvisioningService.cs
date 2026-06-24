@@ -344,7 +344,7 @@ public sealed class SiteProvisioningService(
         WriteStarterIfAbsent(Path.Combine(root, "php-info.php"), BuildPhpWelcomePage());
     }
 
-    /// <summary>Şık, koyu temalı karşılama HTML'i (Plesk benzeri "site hazır" sayfası).</summary>
+    /// <summary>Şık, koyu temalı karşılama HTML'i (profesyonel panel benzeri "site hazır" sayfası).</summary>
     private static string BuildWelcomePage(string badge, string heading, string subtitle, string dynamicLine, string extra)
         => $$"""
             <!doctype html>
@@ -427,7 +427,7 @@ public sealed class SiteProvisioningService(
 
     private static void WriteDefaultDocumentConfig(string root, string defaultDocument)
     {
-        // Plesk gibi: varsayılan belge listesini TEMIZLEME (clear yok). Tercih edilen dosyayı
+        // profesyonel paneller gibi: varsayılan belge listesini TEMIZLEME (clear yok). Tercih edilen dosyayı
         // (örn. index.php) listenin BAŞINA ekle ama index.html/Default.aspx/index.htm gibi
         // yaygın dosyaları da BIRAK. Böylece kullanıcının index.html'i "/" adresinde çalışmaya
         // devam eder; index.php yoksa 500/403 vermez.

@@ -2875,7 +2875,7 @@ public sealed class ComponentBootstrapper(
         await WaitForDatabaseReadyAsync(admin, serviceName, port, password, cancellationToken);
     }
 
-    // MariaDB TUM arayuzlerde dinlesin (bind-address=0.0.0.0) ki panelin "Uzak Erisim" toggle'i (Plesk gibi)
+    // MariaDB TUM arayuzlerde dinlesin (bind-address=0.0.0.0) ki panelin "Uzak Erisim" toggle'i (profesyonel paneller gibi)
     // calissin. GUVENLIK = Windows Guvenlik Duvari: 3306 varsayilan KAPALI (kural yok), toggle acilinca
     // firewall yalniz istenen IP'ye acilir. mariadb-install-db varsayilanda bind-address yazmaz; servisin
     // gercek config'ini (ImagePath'teki --defaults-file) bulup [mysqld] altina ekleriz. Zaten varsa dokunmayiz.
@@ -3583,7 +3583,7 @@ public sealed class ComponentBootstrapper(
         }
 
         // Kullanıcının aktif (yorumsuz) ayarını koru: tuning direktiflerinde bileşen/uygulama
-        // kurulumu bunu EZMEZ (Plesk gibi: optimal varsayılan ilk kurulumda, sonra kullanıcı serbest).
+        // kurulumu bunu EZMEZ (profesyonel paneller gibi: optimal varsayılan ilk kurulumda, sonra kullanıcı serbest).
         if (preserveExisting && activeIndex >= 0)
         {
             return;

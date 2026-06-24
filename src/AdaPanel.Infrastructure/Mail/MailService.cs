@@ -224,7 +224,7 @@ public sealed class MailService(
             return await GetWorkspaceAsync(null, cancellationToken);
         }
 
-        // Plesk gibi CASCADE: domaine bağlı her şey domainle birlikte gider. Stalwart üzerinde
+        // profesyonel paneller gibi CASCADE: domaine bağlı her şey domainle birlikte gider. Stalwart üzerinde
         // hesap bulunan bir domaini silmeyi reddeder; bu yüzden eski kod domaini silemiyor,
         // domain UI'de takılı kalıyordu. Önce domaine ait hesapları (alias'lar hesabın içinde
         // saklandığından onlarla birlikte), ardından başka domaindeki hesaplarda bu domaine

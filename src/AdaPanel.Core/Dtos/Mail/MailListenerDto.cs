@@ -2,7 +2,7 @@ namespace AdaPanel.Core.Dtos.Mail;
 
 /// <summary>
 /// Stalwart mail sunucusunun bir ağ dinleyicisi (NetworkListener): hangi protokol için
-/// hangi adres:port'larda dinlediği. Salt-okunur bilgi (Plesk "mail server IP" görünümü).
+/// hangi adres:port'larda dinlediği. Salt-okunur bilgi (panel "mail server IP" görünümü).
 /// </summary>
 public sealed class MailListenerDto
 {

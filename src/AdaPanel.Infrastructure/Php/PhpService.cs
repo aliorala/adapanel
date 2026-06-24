@@ -271,7 +271,7 @@ public sealed class PhpService(
                 });
             }, cancellationToken);
 
-            // B4 (Plesk gibi): PHP atanan siteye .user.ini YOKsa izolasyonlu (open_basedir AÇIK) varsayılan
+            // B4 (profesyonel paneller gibi): PHP atanan siteye .user.ini YOKsa izolasyonlu (open_basedir AÇIK) varsayılan
             // yaz. Mevcut .user.ini'ye dokunulmaz → mevcut siteler etkilenmez. Best-effort.
             await EnsureDefaultUserIniAsync(siteName, cancellationToken);
             return assignment;
@@ -357,7 +357,7 @@ public sealed class PhpService(
         content.AppendLine($"session.save_path = \"{sessionDir.Replace('\\', '/')}\"");
     }
 
-    // B4 (Plesk gibi): PHP atanan siteye .user.ini YOKsa, izolasyonlu (open_basedir AÇIK) varsayılan yazar.
+    // B4 (profesyonel paneller gibi): PHP atanan siteye .user.ini YOKsa, izolasyonlu (open_basedir AÇIK) varsayılan yazar.
     // Mevcut .user.ini'ye DOKUNMAZ (kullanıcı/önceki ayar korunur). Best-effort: hata atama akışını bozmaz.
     private async Task EnsureDefaultUserIniAsync(string siteName, CancellationToken cancellationToken)
     {

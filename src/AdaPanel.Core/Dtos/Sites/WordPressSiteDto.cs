@@ -1,6 +1,6 @@
 namespace AdaPanel.Core.Dtos.Sites;
 
-/// <summary>Plesk WordPress Toolkit benzeri: bir sitedeki WordPress kurulumunun durumu.</summary>
+/// <summary>panel WordPress Toolkit benzeri: bir sitedeki WordPress kurulumunun durumu.</summary>
 public sealed class WordPressSiteDto
 {
     public string SiteName { get; set; } = string.Empty;

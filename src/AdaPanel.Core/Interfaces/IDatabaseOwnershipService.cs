@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Interfaces;
 
 /// <summary>
-/// Plesk benzeri kaynak↔abonelik sahipliği: hangi veritabanının hangi müşteriye (ve siteye) ait
+/// profesyonel panel benzeri kaynak↔abonelik sahipliği: hangi veritabanının hangi müşteriye (ve siteye) ait
 /// olduğunu kaydeder. MaxDatabases kotası ve müşteri-kapsamlı DB görünürlüğü bunun üstüne kurulur.
 /// JSON dosyasında tutulur (config/db-ownership.json) — DB migration gerektirmez.
 /// </summary>

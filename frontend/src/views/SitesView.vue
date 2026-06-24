@@ -238,7 +238,7 @@ const authStore = useAuthStore();
 // Site oluşturma/içe aktarma yalnız admin (bayi/müşteri mevcut sitelerini yönetir, oluşturamaz).
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 
-// Plesk benzeri domain kartlarindaki hizli eylemler -> ilgili site araci sekmesine git.
+// profesyonel panel benzeri domain kartlarindaki hizli eylemler -> ilgili site araci sekmesine git.
 const emit = defineEmits<{ (event: "open-tool", payload: { siteName: string; tool: string }): void }>();
 
 const quickTools = computed(() => [
@@ -480,7 +480,7 @@ async function handleStopSite(siteName: string) {
 }
 
 async function handleDeleteSite(siteName: string) {
-  // Plesk gibi: silmeden önce siteye bağlı tüm kaynakları göster, sonra cascade sil.
+  // profesyonel paneller gibi: silmeden önce siteye bağlı tüm kaynakları göster, sonra cascade sil.
   let lines: string[] = [];
   try {
     const plan = await getSiteDeletionPlan(siteName);
@@ -523,7 +523,7 @@ async function handleDeleteSite(siteName: string) {
   }
 
   try {
-    // Plesk gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir (plan yukarıda gösterildi/onaylandı).
+    // profesyonel paneller gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir (plan yukarıda gösterildi/onaylandı).
     const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true });
     if (result && result.warnings.length) {
       showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);
@@ -742,7 +742,7 @@ async function copyCredential(credential: { service: string; userName: string; p
   margin-top: 8px;
 }
 
-/* Plesk benzeri tam genişlikte satır listesi (kare kartlar yerine). */
+/* profesyonel panel benzeri tam genişlikte satır listesi (kare kartlar yerine). */
 .domain-rows {
   display: flex;
   flex-direction: column;
@@ -839,7 +839,7 @@ async function copyCredential(credential: { service: string; userName: string; p
   text-decoration: underline;
 }
 
-/* Hızlı araç simgeleri — satırda kompakt ikon dizisi (Plesk benzeri). */
+/* Hızlı araç simgeleri — satırda kompakt ikon dizisi (profesyonel panel benzeri). */
 .domain-tools {
   display: flex;
   flex-wrap: wrap;

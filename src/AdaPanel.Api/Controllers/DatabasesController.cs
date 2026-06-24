@@ -47,7 +47,7 @@ public sealed class DatabasesController(
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace));
     }
 
-    // K2 (Plesk mysql_secure_installation gibi): güvensiz yönetici hesaplarını (anonim + uzak root) kaldırır.
+    // K2 (panel mysql_secure_installation gibi): güvensiz yönetici hesaplarını (anonim + uzak root) kaldırır.
     // root@localhost'a dokunmaz → panel DB erişimi kopmaz. Admin-only.
     [HttpPost("harden")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<string>>>> HardenAsync(
@@ -134,7 +134,7 @@ public sealed class DatabasesController(
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.grant_updated"));
     }
 
-    // Plesk gibi sunucu taraflı taşıma: kaynak DB bilgileri girilir, sistem mysqldump→mysql ile otomatik aktarır.
+    // profesyonel paneller gibi sunucu taraflı taşıma: kaynak DB bilgileri girilir, sistem mysqldump→mysql ile otomatik aktarır.
     [HttpPost("transfer")]
     public async Task<ActionResult<ApiResponse<DatabaseTransferResultDto>>> TransferDatabaseAsync(
         [FromBody] DatabaseTransferRequest request,
@@ -149,7 +149,7 @@ public sealed class DatabasesController(
         return Ok(ApiResponse<DatabaseTransferResultDto>.Ok(result, "database.transfer.success"));
     }
 
-    // Plesk benzeri "Uzak Erişim": masaüstü istemcilerin (HeidiSQL/Workbench) bağlanabilmesi için 3306'yı
+    // profesyonel panel benzeri "Uzak Erişim": masaüstü istemcilerin (HeidiSQL/Workbench) bağlanabilmesi için 3306'yı
     // yalnız belirtilen IP'ye açar/kapatır. MariaDB zaten dinler; gerçek kapı Windows Güvenlik Duvarı.
     [HttpGet("remote-access")]
     public async Task<ActionResult<ApiResponse<RemoteDbAccessDto>>> GetRemoteAccessAsync(CancellationToken cancellationToken)

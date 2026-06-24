@@ -171,7 +171,7 @@ internal sealed partial class DatabaseService(
 
         await provider.CreateDatabaseAsync(profile, databaseName, cancellationToken);
 
-        // Plesk gibi: kullanıcı adı verildiyse aynı anda kullanıcı oluştur ve bu veritabanına
+        // profesyonel paneller gibi: kullanıcı adı verildiyse aynı anda kullanıcı oluştur ve bu veritabanına
         // otomatik TAM yetki ver (host '%' = her yerden; ayrı host/yetki seçimi yok).
         if (!string.IsNullOrWhiteSpace(request.UserName))
         {
@@ -194,7 +194,7 @@ internal sealed partial class DatabaseService(
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
-        // Plesk gibi: DB'ye bağlı (panel oluşturduğu) kullanıcıyı da temizle ki öksüz kullanıcı kalmasın.
+        // profesyonel paneller gibi: DB'ye bağlı (panel oluşturduğu) kullanıcıyı da temizle ki öksüz kullanıcı kalmasın.
         var owner = await credentialStore.FindForDatabaseAsync(profile.EngineKey, databaseName, cancellationToken);
 
         await provider.DeleteDatabaseAsync(profile, databaseName, cancellationToken);

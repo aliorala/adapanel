@@ -3710,3 +3710,18 @@ Basarili:
   (Ara build'ler: FCCCFFD0 = harden script bundle öncesi, F87BF955 = K1 .NET düzeltmesi öncesi.)
 - KULLANICIYA: yeni installer kur + panelden phpMyAdmin/Adminer'i 1 kez YENIDEN DAGIT (loopback binding uygulansın). Mevcut public'i HEMEN kapatmak
   için canlıda harden-adapanel.ps1 çalıştır (B7 firewall kuralını kaldırır). OS portları için -HardenManagementPorts (+ sabit IP'n varsa -RdpAllowFrom).
+
+## 2026-06-24 (90) — UI'dan + tüm kaynaktan "Plesk" markası kaldırıldı
+- Kullanıcı: "Plesk gibi" yazısı veritabanı + ayarlar sekmesinde görünüyor; "hiç bir yerde plesk yazısı geçmesin".
+- Görünen (bundle'a giden) TEK "Plesk" = i18n string'leri. 10 string düzeltildi (5 tr + 5 en), anlam korunarak "Plesk" çıkarıldı:
+  panel.migration.ftp.title ("site göçü"), .remotePathHint ("bazı panellerde httpdocs"), panel.database.remote.subtitle ("Varsayılan kapalı"),
+  panel.ftp.requireTlsHint ("(varsayılan)"), panel.toolkit.subtitle ("tek yerden komutla yönetin"). en tarafı: "site migration", "some panels",
+  "Off by default", "(the default)", komut cümlesi.
+- Kalan ~150 "Plesk" = kod yorumları (//, ///, <!-- -->); kullanıcıya GÖRÜNMEZ (derlemede silinir, bundle'da yok). "hiç bir yerde" istendiği
+  için hepsi de temizlendi: BOM-koruyan PowerShell bulk replace (83 dosya) — "Plesk gibi"→"profesyonel paneller gibi", "Plesk benzeri"→
+  "profesyonel panel benzeri", "Plesk Obsidian"→"modern paneller", "Plesk Service Plans"→"Servis Planları", "Plesk Migrator"→"profesyonel göç
+  aracı", "Plesk-style"→"industry-standard", catch-all "Plesk"→"panel". i18n .json + wwwroot + bin/obj/node_modules HARİÇ tutuldu.
+- Backend'deki 107 "Plesk"in TAMAMI yorum/XML-doc olduğu doğrulandı (identifier/string değil) → bulk replace derlemeyi bozmaz.
+- Doğrulama: grep -i plesk (src + frontend/src) = 0; SHIPPED wwwroot bundle = 0. Solution build 0/0, typecheck 0, i18n parite en=tr=2141 (0 fark),
+  Türkçe karakter kodlaması sağlam (spot-check: "kullanıcı" bozulmadı). Installer SHA256: `2F81159FDFBA9D7FE3BB6E051F03197C136EDF37024A8EA97D4CB6771F80A393` (49.30 MiB).
+- KULLANICIYA: yeni installer kur — UI metinleri artık Plesk'siz. Değişikliği görmek için panel güncellenmeli (kur + tarayıcıyı yenile).

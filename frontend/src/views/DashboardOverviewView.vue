@@ -254,7 +254,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 
-// Plesk benzeri: hizli erisim kartlari + ozet kutulari ilgili bolume gider.
+// profesyonel panel benzeri: hizli erisim kartlari + ozet kutulari ilgili bolume gider.
 const emit = defineEmits<{ (event: "navigate", sectionId: string): void }>();
 
 // Yalnızca kullanıcının rolünde mevcut olan bölümlere kısayol göster (boş ekrana götürmesin).

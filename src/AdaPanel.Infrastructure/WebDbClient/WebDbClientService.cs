@@ -259,7 +259,7 @@ public sealed class WebDbClientService(
         await DeleteManagedSiteIfPresentAsync(siteName, cancellationToken);
         var createdSite = await CreateSiteAsync(siteName, entryRoot, requestedPort, cancellationToken);
 
-        // DB araçları (phpMyAdmin/Adminer) Plesk gibi HER ZAMAN sıcak kalsın: app pool AlwaysRunning +
+        // DB araçları (phpMyAdmin/Adminer) profesyonel paneller gibi HER ZAMAN sıcak kalsın: app pool AlwaysRunning +
         // idle timeout kapalı. Aksi halde ~20 dk boştan sonra pool durur, sonraki istek PHP'yi SOĞUK
         // başlatır ve sağlık kontrolü "TaskCanceled" verir ("çalışıyordu sonra olmadı" şikâyeti).
         await KeepAppPoolWarmAsync($"AdaPanel.{siteName}", cancellationToken);
@@ -474,7 +474,7 @@ public sealed class WebDbClientService(
         // sebebi: signon oturumuna PMA_single_signon_HMAC_secret KOYMUYORDUM (phpMyAdmin 5.x doğruluyor)
         // ve SignonScript yerine SignonURL kullanılmalıydı. adapanel-signon.php artık resmi örneğe göre
         // oturumu (user/password/host/port/HMAC + only_db) kurup phpMyAdmin'e yönlendiriyor → DB
-        // kullanıcısıyla girince YALNIZ o DB görünür (Plesk gibi gerçek izolasyon, cookie/CSRF derdi yok).
+        // kullanıcısıyla girince YALNIZ o DB görünür (profesyonel paneller gibi gerçek izolasyon, cookie/CSRF derdi yok).
 
         // phpMyAdmin AÇILIŞTA Twig şablon motorunu kullanır; TempDir yazılabilir olmalı.
         var tempDir = Path.Combine(entryRoot, "tmp");
@@ -584,7 +584,7 @@ public sealed class WebDbClientService(
             @session_write_close();
 
             // DB belirtildiyse phpMyAdmin'i O VERİTABANI SEÇİLİ aç → "İçe Aktar" doğrudan o DB'ye gider,
-            // "#1046 No database selected" olmaz (Plesk gibi: DB'ye tıklayınca o DB seçili açılır).
+            // "#1046 No database selected" olmaz (profesyonel paneller gibi: DB'ye tıklayınca o DB seçili açılır).
             if ($onlyDb !== '') {
                 header('Location: index.php?db=' . urlencode($onlyDb));
             } else {
@@ -754,7 +754,7 @@ public sealed class WebDbClientService(
             PhysicalPath = physicalPath,
             ApplicationPoolName = $"AdaPanel.{siteName}",
             HostName = string.Empty,
-            // GÜVENLİK (Plesk gibi): DB araçları YALNIZ loopback'te (127.0.0.1) dinler — dışarıdan
+            // GÜVENLİK (profesyonel paneller gibi): DB araçları YALNIZ loopback'te (127.0.0.1) dinler — dışarıdan
             // doğrudan *:8896/8897 erişimi YOK. Erişim panelin kimlik-doğrulamalı HTTPS reverse-proxy'si
             // (DbToolsProxyController [Authorize(Roles="Administrator")]) üzerinden; o da 127.0.0.1'e iletir.
             IpAddress = "127.0.0.1",

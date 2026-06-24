@@ -149,7 +149,7 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 import { useSitesStore } from "../stores/sites";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
-// göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (Plesk gibi site-bağlamı).
+// göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (profesyonel paneller gibi site-bağlamı).
 const props = defineProps<{ siteName?: string }>();
 
 const { t } = useI18n();
@@ -179,7 +179,7 @@ const form = reactive({
   homePath: ""
 });
 
-// Site bağlamında "Kullanıcı ekle"ye basınca, Plesk gibi geçerli bir kullanıcı adı önerir
+// Site bağlamında "Kullanıcı ekle"ye basınca, profesyonel paneller gibi geçerli bir kullanıcı adı önerir
 // (<site>_ftp, Windows hesap sınırı 20 karaktere sığdırılmış). Kullanıcı düzenleyebilir.
 function suggestedFtpUserName(site: string): string {
   let base = site.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/^_+|_+$/g, "");

@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Dtos.Databases;
 
 /// <summary>
-/// Plesk benzeri "Uzak Veritabanı Erişimi" durumu. Açıkken Windows Güvenlik Duvarı'nda 3306 portu
+/// profesyonel panel benzeri "Uzak Veritabanı Erişimi" durumu. Açıkken Windows Güvenlik Duvarı'nda 3306 portu
 /// yalnız <see cref="AllowedIp"/> için açılır (boşsa her yer); kapalıyken kural kaldırılır.
 /// </summary>
 public sealed class RemoteDbAccessDto

@@ -85,7 +85,7 @@ public sealed class AuthController(
         return Ok(ApiResponse<object>.Ok(new { }, "auth.password_reset.completed"));
     }
 
-    /// <summary>Plesk "log in as customer": yönetici, hedef kullanıcı olarak oturum açar.</summary>
+    /// <summary>panel "log in as customer": yönetici, hedef kullanıcı olarak oturum açar.</summary>
     [Authorize(Roles = "Administrator")]
     [HttpPost("impersonate/{userId:guid}")]
     public async Task<ActionResult<ApiResponse<CurrentUserDto>>> ImpersonateAsync(Guid userId, CancellationToken cancellationToken)

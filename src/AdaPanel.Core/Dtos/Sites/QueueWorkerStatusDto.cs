@@ -1,6 +1,6 @@
 namespace AdaPanel.Core.Dtos.Sites;
 
-/// <summary>Laravel queue worker (queue:work) durumu — Plesk Kuyruk sekmesi gibi.</summary>
+/// <summary>Laravel queue worker (queue:work) durumu — panel Kuyruk sekmesi gibi.</summary>
 public sealed class QueueWorkerStatusDto
 {
     public bool Running { get; set; }

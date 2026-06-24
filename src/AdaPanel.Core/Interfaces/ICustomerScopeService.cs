@@ -15,7 +15,7 @@ public interface ICustomerScopeService
 
     Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default);
 
-    /// <summary>Müşterinin ek kaynak kotaları (Plesk MaxDatabases / MaxMailboxes). 0 = limitsiz.</summary>
+    /// <summary>Müşterinin ek kaynak kotaları (panel MaxDatabases / MaxMailboxes). 0 = limitsiz.</summary>
     Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, CancellationToken cancellationToken = default);
 
     Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken = default);

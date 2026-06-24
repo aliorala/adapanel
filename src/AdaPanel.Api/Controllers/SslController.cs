@@ -40,7 +40,7 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
     }
 
-    // Best-effort: site SSL aldıktan sonra webmail.<domain>'i de otomatik HTTPS yap (Plesk gibi).
+    // Best-effort: site SSL aldıktan sonra webmail.<domain>'i de otomatik HTTPS yap (profesyonel paneller gibi).
     // İsteği ASLA bozmaz — webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.
     private async Task TrySecureWebmailAsync(string? domain, string? contactEmail, CancellationToken cancellationToken)
     {

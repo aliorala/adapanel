@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace AdaPanel.Infrastructure.Iis;
 
 /// <summary>
-/// Plesk benzeri cascade site silme. Siteye bağlı kaynakları (mail domaini, veritabanı,
+/// profesyonel panel benzeri cascade site silme. Siteye bağlı kaynakları (mail domaini, veritabanı,
 /// FTP, reverse proxy, disk kotası, DNS bölgesi, müşteri atamaları, git yapılandırması,
 /// IIS sitesi ve dosyalar) tek işlemde temizler. Her adım best-effort'tur; biri başarısız
 /// olsa da diğerleri sürer ve sonuç uyarı olarak raporlanır.

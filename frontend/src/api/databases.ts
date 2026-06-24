@@ -57,7 +57,7 @@ export type RegisterCredentialsPayload = {
 export type CreateDatabasePayload = {
   engine: string;
   name: string;
-  // Plesk gibi: veritabanıyla birlikte kullanıcı (boşsa kullanıcı oluşturulmaz)
+  // profesyonel paneller gibi: veritabanıyla birlikte kullanıcı (boşsa kullanıcı oluşturulmaz)
   userName?: string;
   password?: string;
 };
@@ -108,7 +108,7 @@ export async function openPhpMyAdmin(engine: string, databaseName?: string) {
   return response.data.data;
 }
 
-// Plesk benzeri uzak erişim: 3306'yı yalnız belirtilen IP'ye aç/kapat (masaüstü DB istemcileri için).
+// profesyonel panel benzeri uzak erişim: 3306'yı yalnız belirtilen IP'ye aç/kapat (masaüstü DB istemcileri için).
 export type RemoteDbAccess = {
   enabled: boolean;
   allowedIp: string;
@@ -154,13 +154,13 @@ export type DatabaseTransferResult = {
   size: number;
 };
 
-// Plesk gibi sunucu taraflı taşıma: kaynak DB bilgileri → sistem mysqldump→mysql ile otomatik aktarır.
+// profesyonel paneller gibi sunucu taraflı taşıma: kaynak DB bilgileri → sistem mysqldump→mysql ile otomatik aktarır.
 export async function transferDatabase(payload: DatabaseTransferPayload) {
   const response = await apiClient.post<ApiEnvelope<DatabaseTransferResult>>("/db/transfer", payload);
   return response.data.data;
 }
 
-// K2 (Plesk mysql_secure_installation gibi): güvensiz DB yönetici hesaplarını (anonim + uzak root) kaldırır.
+// K2 (panel mysql_secure_installation gibi): güvensiz DB yönetici hesaplarını (anonim + uzak root) kaldırır.
 // root@localhost'a dokunmaz. Kaldırılanların listesini döner (boş = zaten güvenli).
 export async function hardenDatabase(engine: string) {
   const response = await apiClient.post<ApiEnvelope<string[]>>("/db/harden", null, { params: { engine } });

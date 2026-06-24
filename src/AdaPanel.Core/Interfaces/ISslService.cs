@@ -12,7 +12,7 @@ public interface ISslService
 
     Task<RenewAllResultDto> RenewAllAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>HTTP→HTTPS kalıcı (301) yönlendirmesini açar/kapatır (Plesk "Force HTTPS").</summary>
+    /// <summary>HTTP→HTTPS kalıcı (301) yönlendirmesini açar/kapatır (panel "Force HTTPS").</summary>
     Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Site silinince panelin SSL durumundaki o siteye ait kayıtları temizler (öksüz kalmasın).</summary>

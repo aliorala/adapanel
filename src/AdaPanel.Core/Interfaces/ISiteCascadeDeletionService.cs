@@ -3,7 +3,7 @@ using AdaPanel.Core.Dtos.Sites;
 namespace AdaPanel.Core.Interfaces;
 
 /// <summary>
-/// Plesk benzeri site silme: bir site silindiğinde ona bağlı tüm kaynakları
+/// profesyonel panel benzeri site silme: bir site silindiğinde ona bağlı tüm kaynakları
 /// (dosyalar, veritabanları, mail domaini, DNS, FTP, SSL/proxy, kota, git, müşteri
 /// atamaları) tek işlemde temizler. Tüm adımlar best-effort'tur; biri başarısız olsa
 /// da diğerleri devam eder ve sonuç uyarı olarak raporlanır.

@@ -387,7 +387,7 @@ public sealed partial class DnsService(
             "}"
         };
 
-        // Plesk "zone transfer ACL": izin verilen IP varsa yalnız onlara AXFR + NOTIFY; yoksa transfer KAPALI (güvenli + Plesk varsayılanı).
+        // panel "zone transfer ACL": izin verilen IP varsa yalnız onlara AXFR + NOTIFY; yoksa transfer KAPALI (güvenli + panel varsayılanı).
         if (state.ZoneTransferIps is { Count: > 0 })
         {
             var ipList = string.Join(",", state.ZoneTransferIps.Select(ip => $"'{EscapePowerShellLiteral(ip)}'"));

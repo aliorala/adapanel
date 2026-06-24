@@ -161,7 +161,7 @@ async function download(record: BackupRecord) {
 }
 
 async function restore(record: BackupRecord) {
-  // Canlı siteyi geri yükleme yıkıcıdır — onay al (Plesk gibi).
+  // Canlı siteyi geri yükleme yıkıcıdır — onay al (profesyonel paneller gibi).
   if (!window.confirm(t("panel.backup.restoreConfirm"))) {
     return;
   }

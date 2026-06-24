@@ -40,7 +40,7 @@ public sealed class BackupController(
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
-    /// <summary>Yerel yedek dosyasını .zip olarak indirir (Plesk benzeri "indir").</summary>
+    /// <summary>Yerel yedek dosyasını .zip olarak indirir (profesyonel panel benzeri "indir").</summary>
     [HttpGet("{backupId}/download")]
     public async Task<IActionResult> DownloadAsync(string backupId, CancellationToken cancellationToken)
     {

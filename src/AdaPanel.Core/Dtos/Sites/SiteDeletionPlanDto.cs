@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Dtos.Sites;
 
 /// <summary>
-/// Bir site silinmeden önce, siteye bağlı tüm kaynakların (Plesk benzeri cascade)
+/// Bir site silinmeden önce, siteye bağlı tüm kaynakların (profesyonel panel benzeri cascade)
 /// önizlemesi. Kullanıcı silme onayında neyin gideceğini görür.
 /// </summary>
 public sealed class SiteDeletionPlanDto

@@ -79,7 +79,7 @@ public sealed class WebmailService(
         await DeleteManagedSiteIfPresentAsync(cancellationToken);
         var createdSite = await CreateSiteAsync(documentRoot, requestedPort, cancellationToken);
 
-        // Webmail'i Plesk gibi HER ZAMAN sıcak tut (app pool AlwaysRunning + idle timeout kapalı) ki
+        // Webmail'i profesyonel paneller gibi HER ZAMAN sıcak tut (app pool AlwaysRunning + idle timeout kapalı) ki
         // "her tıkta uzun bekletiyor" / soğuk başlangıç sağlık-kontrol timeout'u olmasın.
         await KeepAppPoolWarmAsync($"AdaPanel.{SiteName}", cancellationToken);
 
@@ -113,7 +113,7 @@ public sealed class WebmailService(
         return BuildUrl(publicHost, port);
     }
 
-    // Plesk gibi: bir mail domaini SSL alınca webmail.<domain> de otomatik HTTPS olur. Best-effort.
+    // profesyonel paneller gibi: bir mail domaini SSL alınca webmail.<domain> de otomatik HTTPS olur. Best-effort.
     public async Task SecureWebmailForDomainAsync(string domain, string contactEmail, CancellationToken cancellationToken = default)
     {
         var normalized = (domain ?? string.Empty).Trim().TrimStart('.').ToLowerInvariant();

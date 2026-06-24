@@ -12,7 +12,7 @@ namespace AdaPanel.Infrastructure.Mail;
 /// <summary>
 /// MailEnable (Standard) e-posta yönetimi. MailEnable 32-bit yerel COM yönetim nesneleri
 /// (MEAOPO.PostOffice, MEAOPO.Mailbox, MEAOAU.Login, MEAOAM.AddressMap) üzerinden, 32-bit
-/// PowerShell ile çalışır. Plesk benzeri: domain (postoffice), posta kutusu + login (parola),
+/// PowerShell ile çalışır. profesyonel panel benzeri: domain (postoffice), posta kutusu + login (parola),
 /// alias (address map). Yönetici parolası gerekmez (yerel makine COM yönetimi).
 /// </summary>
 [SupportedOSPlatform("windows")]
@@ -275,7 +275,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         var aliasAddress = $"{aliasLocal}@{domain}";
         var target = request.Target.Trim().ToLowerInvariant();
         // "*" yerel kısmı = catch-all (yakala-tümü). MailEnable'da kaynak çıplak alan adıdır:
-        // domaine gelip eşleşmeyen TÜM adresler hedefe yönlenir (Plesk "catch-all" gibi).
+        // domaine gelip eşleşmeyen TÜM adresler hedefe yönlenir (panel "catch-all" gibi).
         var isCatchAll = aliasLocal is "*" or "@" or "";
         var source = isCatchAll ? domain : aliasAddress;
         var script = $$"""

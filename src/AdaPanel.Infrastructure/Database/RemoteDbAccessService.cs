@@ -6,7 +6,7 @@ using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Database;
 
-// Plesk "Uzak Erişim": MariaDB tüm arayüzlerde dinler ama 3306 Windows Güvenlik Duvarı ile varsayılan
+// panel "Uzak Erişim": MariaDB tüm arayüzlerde dinler ama 3306 Windows Güvenlik Duvarı ile varsayılan
 // KAPALIDIR. Bu servis, panelden açılınca SADECE istenen IP'ye 3306 inbound kuralı açar; kapanınca siler.
 // Yeniden başlatma / my.ini düzenleme YOK -> canlı DB'ye sıfır kesinti riski.
 internal sealed class RemoteDbAccessService(

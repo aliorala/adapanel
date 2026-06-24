@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Plesk benzeri self-servis veritabanı yönetimi. Bayi (ve admin) YALNIZ kendi SAHİP OLDUĞU veritabanlarını
+// profesyonel panel benzeri self-servis veritabanı yönetimi. Bayi (ve admin) YALNIZ kendi SAHİP OLDUĞU veritabanlarını
 // listeler/oluşturur/siler. Admin DatabasesController (root parola, transfer, kullanıcı yönetimi, uzak erişim)
 // BİLEREK ayrı + admin-only kalır — burada parola/kredensiyel ASLA dönmez, başka müşterinin DB'si GÖRÜNMEZ.
 // MaxDatabases kotası dayatılır; her DB oluşturana ait kaydedilir, silince kayıt temizlenir.

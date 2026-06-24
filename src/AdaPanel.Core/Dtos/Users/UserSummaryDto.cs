@@ -27,10 +27,10 @@ public sealed class UserSummaryDto
 
     public int MaxDiskMb { get; init; }
 
-    /// <summary>Customer için en fazla veritabanı kotası (Plesk MaxDatabases).</summary>
+    /// <summary>Customer için en fazla veritabanı kotası (panel MaxDatabases).</summary>
     public int MaxDatabases { get; init; }
 
-    /// <summary>Customer için en fazla posta kutusu kotası (Plesk MaxMailboxes).</summary>
+    /// <summary>Customer için en fazla posta kutusu kotası (panel MaxMailboxes).</summary>
     public int MaxMailboxes { get; init; }
 
     /// <summary>Customer'ın atanan sitelerinin güncel disk kullanımı (MB).</summary>

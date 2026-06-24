@@ -619,7 +619,7 @@ async function submitCreateUser() {
       engine: selectedEngine.value,
       userName: userForm.userName,
       password: userForm.password,
-      // Plesk gibi: host seçtirilmez; her yerden erişim ('%').
+      // profesyonel paneller gibi: host seçtirilmez; her yerden erişim ('%').
       allowedHost: "%"
     });
 

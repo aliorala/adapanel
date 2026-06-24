@@ -404,7 +404,7 @@
       </section>
 
       <section v-else-if="settingsTab === 'users' && (isAdmin || isReseller)" class="settings-section">
-        <!-- Servis planları (Plesk): limit şablonu tanımla, müşteriye ata. Yalnız admin. -->
+        <!-- Servis planları (panel): limit şablonu tanımla, müşteriye ata. Yalnız admin. -->
         <div v-if="isAdmin" class="form-surface plans-card">
           <div class="module-toolbar">
             <div>
@@ -766,7 +766,7 @@ const securityForm = reactive({
   allowedIpAddressesText: ""
 });
 
-// Servis planları (Plesk Service Plans): müşterilere atanabilen limit şablonları.
+// Servis planları (Servis Planlari): müşterilere atanabilen limit şablonları.
 const servicePlans = ref<ServicePlan[]>([]);
 const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0, maxMailboxes: 0 });
 const createPlanId = ref("");
@@ -849,7 +849,7 @@ const subtitle = computed(() => mode.value === "setup" ? t("panel.setup.subtitle
 
 const dashboardSections = computed<SectionItem[]>(() => {
   const sections: SectionItem[] = [
-    // Plesk sırası: Web Siteleri → Posta → Dosyalar → Veritabanları → İstatistikler →
+    // panel sırası: Web Siteleri → Posta → Dosyalar → Veritabanları → İstatistikler →
     // Uygulamalar/Mağaza → Zamanlanmış Görevler → Güvenlik → Araçlar/Ayarlar.
     { id: "home", label: t("panel.navigation.home"), description: t("panel.dashboard.subtitle"), glyph: "HM" },
     { id: "sites", label: t("panel.navigation.sites"), description: t("panel.sites.workspaceSubtitle"), glyph: "WS", badge: sitesStore.sites.length ? String(sitesStore.sites.length) : undefined },
@@ -904,7 +904,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "exit");
   }
 
-  // Tam Plesk: domaine özel araçlar (SSL/DNS/FTP/PHP/Dosyalar) üst menüde DEĞİL, yalnızca
+  // Tam panel: domaine özel araçlar (SSL/DNS/FTP/PHP/Dosyalar) üst menüde DEĞİL, yalnızca
   // Web Siteleri > domain > araçlar altında. "Dosyalar" admin üst menüsünden çıkarılır
   // (hub'da "Dosyalar" aracı var). Müşteride üst menüde kalır (onların site hub'ı yok).
   const adminSections = sections.filter((section) => section.id !== "files");

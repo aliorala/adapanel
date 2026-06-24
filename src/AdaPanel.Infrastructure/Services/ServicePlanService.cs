@@ -6,7 +6,7 @@ using AdaPanel.Infrastructure.Support;
 namespace AdaPanel.Infrastructure.Services;
 
 /// <summary>
-/// Müşteri limit şablonları (Plesk Service Plans). DB migration'a gerek kalmaması için
+/// Müşteri limit şablonları (Servis Planlari). DB migration'a gerek kalmaması için
 /// config/service-plans.json içinde tutulur.
 /// </summary>
 public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanService

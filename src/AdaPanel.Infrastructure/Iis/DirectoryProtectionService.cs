@@ -7,7 +7,7 @@ using AdaPanel.Infrastructure.Support;
 namespace AdaPanel.Infrastructure.Iis;
 
 /// <summary>
-/// Plesk "Password-Protected Directories" karşılığı. Korunacak klasöre, Windows hesabı
+/// panel "Password-Protected Directories" karşılığı. Korunacak klasöre, Windows hesabı
 /// gerektirmeyen, IIS URL Rewrite tabanlı Basic Auth uygulayan kendi-içeren bir web.config
 /// yazar. Kayıtlar config/protected-dirs.json içinde listeleme için tutulur.
 /// </summary>

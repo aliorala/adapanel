@@ -982,7 +982,7 @@ public sealed class AppStoreService(
 
     /// <summary>
     /// Hedef klasörü kuruluma hazırlar. Boş değilse: cleanInstall=false → 409 (Existing entries...);
-    /// cleanInstall=true → Plesk "yedekle + temizle": mevcut içeriği kardeş "_yedek_&lt;tarih&gt;" klasörüne
+    /// cleanInstall=true → panel "yedekle + temizle": mevcut içeriği kardeş "_yedek_&lt;tarih&gt;" klasörüne
     /// taşır, klasörü boşaltır. Taşındıysa yedek klasör yolunu döner (yoksa null).
     /// </summary>
     private static string? EnsureLaravelDestinationReady(string destination, bool cleanInstall)

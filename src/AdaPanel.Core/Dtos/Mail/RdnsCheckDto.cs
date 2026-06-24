@@ -2,7 +2,7 @@ namespace AdaPanel.Core.Dtos.Mail;
 
 /// <summary>
 /// Ters DNS (rDNS / PTR) kontrol sonucu. PTR kaydi IP sahibinde (VPS saglayici) tutulur;
-/// panel onu YAZAMAZ, yalnizca DOGRULAR ve yonlendirir (Plesk'in pratik yaklasimi).
+/// panel onu YAZAMAZ, yalnizca DOGRULAR ve yonlendirir (panel'in pratik yaklasimi).
 /// </summary>
 public sealed class RdnsCheckDto
 {

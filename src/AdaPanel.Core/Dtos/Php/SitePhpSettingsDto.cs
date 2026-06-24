@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 namespace AdaPanel.Core.Dtos.Php;
 
 /// <summary>
-/// Site başına PHP ayarları (Plesk "PHP Settings"). Sitenin kök dizinindeki <c>.user.ini</c>
+/// Site başına PHP ayarları (panel "PHP Settings"). Sitenin kök dizinindeki <c>.user.ini</c>
 /// dosyasına yazılır; PHP bu dosyayı per-dizin okur (FastCGI/CGI).
 /// </summary>
 public sealed class SitePhpSettingsDto

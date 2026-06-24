@@ -67,7 +67,7 @@ public sealed class MailController(
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.DomainName, cancellationToken);
         var workspace = await mailService.CreateDomainAsync(request, cancellationToken);
 
-        // Plesk gibi: domain panelde site olarak yönetiliyorsa MX/SPF/DKIM/DMARC kayıtları
+        // profesyonel paneller gibi: domain panelde site olarak yönetiliyorsa MX/SPF/DKIM/DMARC kayıtları
         // panel DNS bölgesine OTOMATİK eklenir. Site yoksa (dış DNS) sessizce geçilir;
         // kullanıcı kayıtları ekrandaki DNS panelinden kopyalar.
         var dnsApplied = false;
@@ -110,7 +110,7 @@ public sealed class MailController(
 
         var workspace = await mailService.DeleteDomainAsync(domainName, cancellationToken);
 
-        // Plesk gibi CASCADE: domain panelde site olarak yönetiliyorsa otomatik eklenen
+        // profesyonel paneller gibi CASCADE: domain panelde site olarak yönetiliyorsa otomatik eklenen
         // mail kayıtları (MX/SPF/DKIM/DMARC/mail A) panel DNS bölgesinden de kaldırılır.
         // Sitenin web kayıtları (kök A/www) mail'e ait olmadığından korunur. Best-effort.
         if (mailDns is not null)
@@ -370,7 +370,7 @@ public sealed class MailController(
         return Ok(ApiResponse<MailSpamSettingsDto>.Ok(settings, "mail.spam_saved"));
     }
 
-    // M1 (Plesk MaxMailboxes): admin olmayan kullanıcının posta kutusu kotası doldu mu? Müşterinin etkin
+    // M1 (panel MaxMailboxes): admin olmayan kullanıcının posta kutusu kotası doldu mu? Müşterinin etkin
     // mail domainlerindeki kutuları sayar. Admin sınırsız; MaxMailboxes=0 = limitsiz.
     private async Task EnsureMailboxQuotaAsync(CancellationToken cancellationToken)
     {

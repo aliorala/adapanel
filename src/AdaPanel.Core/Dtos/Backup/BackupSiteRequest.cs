@@ -15,7 +15,7 @@ public sealed class BackupSiteRequest
     /// <summary>S3 için bölge (örn. eu-central-1). Boşsa us-east-1 varsayılır.</summary>
     public string RemoteRegion { get; set; } = string.Empty;
 
-    // --- Plesk benzeri tam-site yedeği kapsamı ---
+    // --- profesyonel panel benzeri tam-site yedeği kapsamı ---
 
     /// <summary>Site dosyaları (wwwroot) dahil edilsin mi.</summary>
     public bool IncludeFiles { get; set; } = true;

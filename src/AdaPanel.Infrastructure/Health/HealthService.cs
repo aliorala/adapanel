@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore;
 namespace AdaPanel.Infrastructure.Health;
 
 /// <summary>
-/// Plesk "Server Health / Repair Kit" benzeri: kritik Windows servislerinin durumunu gösterir ve
+/// panel "Server Health / Repair Kit" benzeri: kritik Windows servislerinin durumunu gösterir ve
 /// tek tıkla yeniden başlatır. Yalnız BİLİNEN servisler (çekirdek IIS/FTP + kurulu bileşenlerin
 /// servisleri) hedeflenir — keyfi servis durdurma/başlatma engellenir.
 /// </summary>

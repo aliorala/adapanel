@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Dtos.System;
 
 /// <summary>
-/// Sunucunun bir ağ arabirimine bağlı IP adresi (Plesk "IP Addresses"). Site binding'lerinde
+/// Sunucunun bir ağ arabirimine bağlı IP adresi (panel "IP Addresses"). Site binding'lerinde
 /// "tüm IP'ler (*)" yerine belirli bir IP (dedicated IP) seçmek için kullanılır.
 /// </summary>
 public sealed class ServerIpAddressDto

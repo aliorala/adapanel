@@ -66,7 +66,7 @@ public sealed class WinAcmeSslService(
         PersistCertificate(certificate);
         await EnsureHttpsBindingAsync(site.Name, hostName, 443, certificate, cancellationToken);
 
-        // Plesk gibi: SSL kurulunca HTTP→HTTPS yönlendirmesi otomatik açılır (best-effort).
+        // profesyonel paneller gibi: SSL kurulunca HTTP→HTTPS yönlendirmesi otomatik açılır (best-effort).
         await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
 
         var dto = ToDto(site.Name, hostName, certificate, certificate.FriendlyName?.Contains("Let's Encrypt", StringComparison.OrdinalIgnoreCase) == true

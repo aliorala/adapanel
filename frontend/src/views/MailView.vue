@@ -41,7 +41,7 @@
     </section>
 
     <template v-else-if="workspace">
-      <!-- Plesk: Posta ana ekrani = web sitesi alan adlari listesi. Ayri "mail alan adi
+      <!-- panel: Posta ana ekrani = web sitesi alan adlari listesi. Ayri "mail alan adi
            olustur" adimi yoktur; domaine tiklayinca posta otomatik etkinlesir ve hesap
            yonetimine dusulur. -->
       <template v-if="!selectedDomain">
@@ -152,7 +152,7 @@
           <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t("panel.mail.noMailboxes") }}</p>
         </div>
 
-        <!-- Webmail + posta istemci ayarları (Plesk gibi). -->
+        <!-- Webmail + posta istemci ayarları (profesyonel paneller gibi). -->
         <section class="form-surface">
           <div class="section-head">
             <div>
@@ -195,7 +195,7 @@
           </div>
         </section>
 
-        <!-- Mail teşhis: panel MX/A/SPF/DKIM/DMARC/PTR'yi kendisi kontrol eder (Plesk gibi). -->
+        <!-- Mail teşhis: panel MX/A/SPF/DKIM/DMARC/PTR'yi kendisi kontrol eder (profesyonel paneller gibi). -->
         <section class="form-surface diagnostics-card">
           <div class="section-head">
             <div>
@@ -564,7 +564,7 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 import { useSitesStore } from "../stores/sites";
 
 // Site bağlamından (Web Siteleri > site > Mail) gelindiğinde o sitenin alan adını
-// önceden seçmek için opsiyonel prop (Plesk gibi domain-içi Mail sekmesi).
+// önceden seçmek için opsiyonel prop (profesyonel paneller gibi domain-içi Mail sekmesi).
 const props = defineProps<{ domain?: string }>();
 
 const { t } = useI18n();
@@ -605,7 +605,7 @@ const notice = ref("");
 const noticeError = ref(false);
 const noticeDetails = ref("");
 
-// Plesk: posta domain listesi = mevcut mail domainleri (Stalwart) + henuz postasi acilmamis
+// panel: posta domain listesi = mevcut mail domainleri (Stalwart) + henuz postasi acilmamis
 // web sitesi alan adlari birlesimi. Boylece kullanici ayri bir "olustur" adimi gormeden
 // listeden secip yonetir; postasi yoksa secince otomatik etkinlesir (openDomain).
 const mailDomains = computed(() => {
@@ -624,7 +624,7 @@ const mailDomains = computed(() => {
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
 });
 
-// Listeden bir alan adi secilince: postasi yoksa otomatik olustur (Plesk gibi), sonra
+// Listeden bir alan adi secilince: postasi yoksa otomatik olustur (profesyonel paneller gibi), sonra
 // o domaini yukle ve DNS kayitlarini hazirla.
 async function openDomain(name: string) {
   const lower = name.toLowerCase();
@@ -658,7 +658,7 @@ onMounted(async () => {
   await ensureSiteDomain();
 });
 
-// Plesk gibi: site bağlamından gelince (domain prop) o alan adı için mail otomatik etkin olsun;
+// profesyonel paneller gibi: site bağlamından gelince (domain prop) o alan adı için mail otomatik etkin olsun;
 // kullanıcı ayrıca "alan adı ekle" adımı görmesin.
 async function ensureSiteDomain() {
   const target = (props.domain ?? "").trim().toLowerCase();
@@ -734,7 +734,7 @@ async function loadCertificate() {
     if (!certForm.contactEmail && result.suggestedContactEmail) {
       certForm.contactEmail = result.suggestedContactEmail;
     }
-    // Plesk gibi: panel sertifikası yoksa ve iletişim e-postası zaten biliniyorsa
+    // profesyonel paneller gibi: panel sertifikası yoksa ve iletişim e-postası zaten biliniyorsa
     // (ör. site SSL'i alınırken kaydedildi) sertifikayı bir kez otomatik al — uğraştırma.
     // Sonuç (LE ya da self-signed) yüklenince active=true olur, bu yüzden döngüye girmez.
     if (!result.active && result.suggestedContactEmail && !certAutoTried.value) {
@@ -776,7 +776,7 @@ async function issueCert() {
   });
 }
 
-// Tek tık webmail (Plesk gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
+// Tek tık webmail (profesyonel paneller gibi): Roundcube kurulu/yayında değilse panel otomatik kurar,
 // sonra yeni sekmede açar. Kullanıcı tam e-posta adresi + şifresiyle giriş yapar.
 async function openWebmail() {
   // Pop-up engelleyiciye takılmamak için sekmeyi tıklama anında aç, URL gelince yönlendir.

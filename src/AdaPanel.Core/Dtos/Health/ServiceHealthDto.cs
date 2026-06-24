@@ -1,6 +1,6 @@
 namespace AdaPanel.Core.Dtos.Health;
 
-/// <summary>Bir Windows servisinin sağlık durumu (Plesk Server Health / Repair Kit benzeri).</summary>
+/// <summary>Bir Windows servisinin sağlık durumu (panel Server Health / Repair Kit benzeri).</summary>
 public sealed class ServiceHealthDto
 {
     public string Name { get; set; } = string.Empty;

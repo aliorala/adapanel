@@ -313,7 +313,7 @@ public sealed class SiteHostingSettingsService(
 
         var phpPath = await ResolvePhpExecutableAsync(cancellationToken);
 
-        // Plesk Kuyruk gibi: minutely zamanlanmış görev + --max-time = kendini yenileyen kalıcı worker.
+        // panel Kuyruk gibi: minutely zamanlanmış görev + --max-time = kendini yenileyen kalıcı worker.
         // Windows Görev Zamanlayıcı varsayılanı "çalışıyorsa yeni örnek başlatma" olduğundan tek worker döner;
         // --max-time ile saatte bir taze süreç (Laravel'in bellek sızıntısına karşı önerisi).
         await schedulerService.CreateTaskAsync(new CreateScheduledTaskRequest
@@ -431,7 +431,7 @@ public sealed class SiteHostingSettingsService(
 
         var phpPath = await ResolvePhpExecutableAsync(cancellationToken);
 
-        // Plesk Laravel Toolkit "Scheduler": dakikada bir `php artisan schedule:run` (Laravel'in tek cron girdisi).
+        // panel Laravel Toolkit "Scheduler": dakikada bir `php artisan schedule:run` (Laravel'in tek cron girdisi).
         await schedulerService.CreateTaskAsync(new CreateScheduledTaskRequest
         {
             Name = SchedulerTaskName(siteName),
@@ -512,7 +512,7 @@ public sealed class SiteHostingSettingsService(
         };
     }
 
-    // wp-cli.phar yoksa ilk kullanımda resmi build'den indirir (Plesk WP Toolkit'in altında da wp-cli vardır).
+    // wp-cli.phar yoksa ilk kullanımda resmi build'den indirir (panel WP Toolkit'in altında da wp-cli vardır).
     private async Task<string> EnsureWpCliAsync(CancellationToken cancellationToken)
     {
         var toolsDir = Path.Combine(dataRoot, "tools");

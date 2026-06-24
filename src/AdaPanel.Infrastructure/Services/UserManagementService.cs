@@ -227,7 +227,7 @@ public sealed class UserManagementService(
             }
         }
 
-        // Plesk gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
+        // profesyonel paneller gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
         var wasActive = user.IsActive;
 
         user.Email = normalizedEmail;
@@ -281,7 +281,7 @@ public sealed class UserManagementService(
     }
 
     /// <summary>
-    /// Plesk gibi abonelik yaşam döngüsü: Customer'ın aktifliği true→false olunca (askıya alma)
+    /// profesyonel paneller gibi abonelik yaşam döngüsü: Customer'ın aktifliği true→false olunca (askıya alma)
     /// atanan sitelerini durdur (web siteleri 503 döner), false→true olunca (sürdürme) başlat.
     /// En iyi çaba; tek bir sitenin hatası kullanıcı güncelleme akışını bozmaz. (Mail/FTP askıya
     /// alma sonraki adım; panel girişi zaten IsActive=false ile engellenir.)

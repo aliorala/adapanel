@@ -8,7 +8,7 @@ import "@fontsource-variable/open-sans";
 import "./styles/base.css";
 
 // Kayıtlı temayı uygulama monte edilmeden önce uygula (login ekranı dahil, açılışta tema sıçraması olmaz).
-// Varsayılan AÇIK tema (Plesk benzeri hosting paneli görünümü); kullanıcı koyuya geçebilir.
+// Varsayılan AÇIK tema (profesyonel panel benzeri hosting paneli görünümü); kullanıcı koyuya geçebilir.
 try {
   const savedTheme = localStorage.getItem("adapanel-theme");
   document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";

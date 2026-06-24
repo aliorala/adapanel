@@ -23,7 +23,7 @@ public sealed class FtpController(IFtpService ftpService, ICustomerScopeService 
         return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, "ftp.server_ready"));
     }
 
-    // M5 (Plesk "yalnız güvenli FTP"): FTPS zorunluluğu server-level → admin-only.
+    // M5 (panel "yalnız güvenli FTP"): FTPS zorunluluğu server-level → admin-only.
     [HttpGet("tls")]
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> GetTlsAsync(CancellationToken cancellationToken)
@@ -100,7 +100,7 @@ public sealed class FtpController(IFtpService ftpService, ICustomerScopeService 
     }
 }
 
-/// <summary>FTPS zorunluluğu toggle isteği (Plesk "yalnız güvenli FTP").</summary>
+/// <summary>FTPS zorunluluğu toggle isteği (panel "yalnız güvenli FTP").</summary>
 public sealed class FtpTlsRequest
 {
     public bool RequireSsl { get; set; }

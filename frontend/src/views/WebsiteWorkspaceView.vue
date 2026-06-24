@@ -3,7 +3,7 @@
     <!-- Liste görünümü: doğrudan site listesi. -->
     <SitesView v-if="!inWorkspace" @open-tool="onOpenTool" />
 
-    <!-- Domain paneli (Plesk gibi): geri çubuğu + 4 ana sekme + dikey araç listesi. -->
+    <!-- Domain paneli (profesyonel paneller gibi): geri çubuğu + 4 ana sekme + dikey araç listesi. -->
     <template v-else>
       <div class="tool-context">
         <button class="secondary compact back-btn" @click="backToSites">
@@ -22,7 +22,7 @@
 
       <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
-      <!-- Plesk ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
+      <!-- panel ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
       <nav class="primary-nav" :aria-label="t('panel.sites.toolsBar')">
         <button
           v-for="tab in primaryTabs"
@@ -65,7 +65,7 @@
 
       <!-- Sekme açılış içeriği (araç seçilmediğinde). -->
       <template v-else>
-        <!-- PANO: Plesk benzeri domain panosu (özet + önizleme + kısayollar + bağlamalar + subdomain). -->
+        <!-- PANO: profesyonel panel benzeri domain panosu (özet + önizleme + kısayollar + bağlamalar + subdomain). -->
         <SiteDetailView
           v-if="primary === 'pano'"
           :site="selectedSite"
@@ -177,7 +177,7 @@ onMounted(async () => {
     .catch(() => undefined);
 });
 
-// Tüm domain araçları + ait olduğu ana sekme (Plesk gruplaması).
+// Tüm domain araçları + ait olduğu ana sekme (panel gruplaması).
 const allTools = computed<ToolDef[]>(() => [
   { id: "hosting", group: "hostingdns", glyph: "⚙", label: t("panel.sites.tools.hosting"), description: t("panel.sites.tools.hostingHint") },
   { id: "php", group: "hostingdns", glyph: "P", label: t("panel.sites.tools.php"), description: t("panel.sites.tools.phpHint") },
@@ -293,7 +293,7 @@ async function handleDelete(siteName: string) {
     return;
   }
   try {
-    // Plesk gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir.
+    // profesyonel paneller gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir.
     await sitesStore.deleteSite(siteName, { deleteDatabases: true });
     showNotice(t("panel.sites.deleted"), false);
     backToSites();
@@ -364,7 +364,7 @@ async function handleAddSubdomain(label: string) {
   min-width: 0;
 }
 
-/* Bağlam çubuğu (Plesk breadcrumb): geri + hedef domain + siteyi aç. */
+/* Bağlam çubuğu (panel breadcrumb): geri + hedef domain + siteyi aç. */
 .tool-context {
   display: flex;
   align-items: center;
@@ -392,7 +392,7 @@ async function handleAddSubdomain(label: string) {
   text-decoration: none;
 }
 
-/* 4 ana sekme (Plesk üst sekmeleri). */
+/* 4 ana sekme (panel üst sekmeleri). */
 .primary-nav {
   display: flex;
   gap: 6px;
@@ -454,7 +454,7 @@ async function handleAddSubdomain(label: string) {
   justify-self: start;
 }
 
-/* Dikey araç listesi (alt alta — Plesk Barındırma ve DNS düzeni). */
+/* Dikey araç listesi (alt alta — panel Barındırma ve DNS düzeni). */
 .tool-stack {
   display: grid;
   gap: 8px;

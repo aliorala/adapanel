@@ -40,7 +40,7 @@ export type CreateSitePayload = {
   installRuntimeIfMissing: boolean;
   startupFile: string;
   provisionDefaultServices?: boolean;
-  // Plesk benzeri birleşik oluşturma (opsiyonel)
+  // profesyonel panel benzeri birleşik oluşturma (opsiyonel)
   createDatabase?: boolean;
   databaseEngine?: string;
   databaseName?: string;

@@ -8,7 +8,7 @@ public sealed class CurrentSessionDto
 
     public CurrentUserDto? User { get; init; }
 
-    /// <summary>Yönetici başka bir kullanıcıyı taklit ediyor mu (Plesk "log in as customer").</summary>
+    /// <summary>Yönetici başka bir kullanıcıyı taklit ediyor mu (panel "log in as customer").</summary>
     public bool IsImpersonating { get; init; }
 
     /// <summary>Taklit eden asıl yöneticinin adı (geri dönüş için).</summary>

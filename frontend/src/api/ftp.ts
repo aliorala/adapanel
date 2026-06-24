@@ -48,7 +48,7 @@ export type FtpTlsStatus = {
   requireSsl: boolean;
 };
 
-// M5 (Plesk "yalnız güvenli FTP"): admin-only server-level FTPS zorunluluğu.
+// M5 (panel "yalnız güvenli FTP"): admin-only server-level FTPS zorunluluğu.
 export async function getFtpTls() {
   const response = await apiClient.get<ApiEnvelope<FtpTlsStatus>>("/ftp/tls");
   return response.data.data;

@@ -1,6 +1,6 @@
 namespace AdaPanel.Core.Dtos.Sites;
 
-/// <summary>Plesk "Password-Protected Directories" benzeri korumalı dizin kaydı.</summary>
+/// <summary>panel "Password-Protected Directories" benzeri korumalı dizin kaydı.</summary>
 public sealed class ProtectedDirectoryDto
 {
     public string SiteName { get; set; } = string.Empty;

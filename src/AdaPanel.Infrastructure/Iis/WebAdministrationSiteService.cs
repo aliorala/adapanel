@@ -54,7 +54,7 @@ public sealed partial class WebAdministrationSiteService(
 
             // Aynı isimde IIS sitesi zaten varsa (genelde önceki bir AdaPanel kurulumu
             // kaldırılınca IIS'te kalan artık site), onu KALDIR ve yeniden oluştur. Böylece
-            // kullanıcı domaini tekrar ekleyebilir (Plesk gibi: aynı domain = aynı site).
+            // kullanıcı domaini tekrar ekleyebilir (profesyonel paneller gibi: aynı domain = aynı site).
             var existingSite = EnumerateSites(sites).FirstOrDefault(site =>
                 string.Equals(GetStringProperty(site, "Name"), normalizedName, StringComparison.OrdinalIgnoreCase));
             if (existingSite is not null)
@@ -596,7 +596,7 @@ public sealed partial class WebAdministrationSiteService(
     }
 
     // AdaPanel'in iç/altyapı IIS siteleri (FTP, phpMyAdmin/Adminer, MailEnable web arayüzleri,
-    // IIS varsayılan sitesi). Plesk gibi: bunlar kullanıcının web sitesi listesinde GÖRÜNMEZ.
+    // IIS varsayılan sitesi). profesyonel paneller gibi: bunlar kullanıcının web sitesi listesinde GÖRÜNMEZ.
     private static readonly HashSet<string> SystemSiteNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Default Web Site",

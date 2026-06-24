@@ -54,7 +54,7 @@
         </div>
       </dl>
 
-      <!-- Plesk benzeri site önizlemesi (canlı iframe — ekran görüntüsü servisi gerektirmez). -->
+      <!-- profesyonel panel benzeri site önizlemesi (canlı iframe — ekran görüntüsü servisi gerektirmez). -->
       <section v-if="primaryUrl" class="preview-block">
         <div class="section-head">
           <h4>{{ t("panel.sites.previewTitle") }}</h4>
@@ -67,7 +67,7 @@
         </div>
       </section>
 
-      <!-- Plesk benzeri "domain araçları" ızgarası: özet altında tek tık kısayollar. -->
+      <!-- profesyonel panel benzeri "domain araçları" ızgarası: özet altında tek tık kısayollar. -->
       <section class="tools-block">
         <div class="section-head">
           <h4>{{ t("panel.sites.toolsTitle") }}</h4>
@@ -85,7 +85,7 @@
         </div>
       </section>
 
-      <!-- Plesk benzeri subdomain ekleme: <etiket>.<alanadı> için yeni yönetilen site.
+      <!-- profesyonel panel benzeri subdomain ekleme: <etiket>.<alanadı> için yeni yönetilen site.
            Yeni site oluşturur → yalnız admin (bayi/müşteri site oluşturamaz). -->
       <section v-if="isAdmin" class="subdomain-block">
         <div class="section-head">
@@ -199,7 +199,7 @@ const emit = defineEmits<{
 }>();
 const { t } = useI18n();
 
-// Plesk "Websites & Domains" domain araç kısayolları.
+// panel "Websites & Domains" domain araç kısayolları.
 const siteTools = computed(() => [
   { id: "hosting", glyph: "⚙", label: t("panel.sites.tools.hosting") },
   { id: "files", glyph: "FL", label: t("panel.sites.tools.files") },
@@ -231,7 +231,7 @@ const subdomainLabel = ref("");
 const showBindingForm = ref(false);
 const showPreview = ref(false);
 
-// Çoklu IP (Plesk dedicated IP): binding'de seçilebilecek sunucu IP'leri.
+// Çoklu IP (panel dedicated IP): binding'de seçilebilecek sunucu IP'leri.
 const serverIps = ref<ServerIpAddress[]>([]);
 onMounted(async () => {
   serverIps.value = await getServerIpAddresses().catch(() => []);

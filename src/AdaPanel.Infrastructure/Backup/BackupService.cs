@@ -46,7 +46,7 @@ public sealed class BackupService(
             ? site.PhysicalPath
             : site.ApplicationRootPath;
 
-        // Plesk benzeri tam-site yedeği: tek .zip içinde files/ + config/ + databases/ + mail/.
+        // profesyonel panel benzeri tam-site yedeği: tek .zip içinde files/ + config/ + databases/ + mail/.
         var includedParts = new List<string>();
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
@@ -324,7 +324,7 @@ public sealed class BackupService(
             return record;
         }
 
-        // Plesk benzeri tam-site yedeği (files/ + databases/ + config/ içeren birleşik .zip):
+        // profesyonel panel benzeri tam-site yedeği (files/ + databases/ + config/ içeren birleşik .zip):
         // dosyaları sitenin köküne, veritabanlarını içe aktararak gerçek geri yükleme yap.
         if (string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase) &&

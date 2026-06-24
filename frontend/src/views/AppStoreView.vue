@@ -227,7 +227,7 @@ async function install(templateId: string, cleanInstall = false) {
     showNotice(t("panel.appStore.installed"), false);
     await sitesStore.fetchSites();
   } catch (error) {
-    // Plesk gibi: hedef klasör boş değilse "yedekle + temizle + kur" teklif et, onaylanırsa tekrar dene.
+    // profesyonel paneller gibi: hedef klasör boş değilse "yedekle + temizle + kur" teklif et, onaylanırsa tekrar dene.
     if (!cleanInstall && extractApiMessage(error) === "store.site_has_content" && window.confirm(t("panel.appStore.cleanInstallConfirm"))) {
       busyTemplate.value = "";
       await install(templateId, true);

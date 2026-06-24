@@ -3,7 +3,7 @@ using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Database;
 
-// Plesk benzeri DB sahipliği (config/db-ownership.json). Anahtar = "engine|dbname" (küçük harf).
+// profesyonel panel benzeri DB sahipliği (config/db-ownership.json). Anahtar = "engine|dbname" (küçük harf).
 // Atomik oku-değiştir-yaz (UpdateAsync) ile eşzamanlı kayıplara karşı korunur.
 internal sealed class DatabaseOwnershipService(JsonFileStore fileStore) : IDatabaseOwnershipService
 {

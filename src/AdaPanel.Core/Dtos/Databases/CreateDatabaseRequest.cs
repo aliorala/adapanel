@@ -12,7 +12,7 @@ public sealed class CreateDatabaseRequest
     [StringLength(64, MinimumLength = 2)]
     public string Name { get; init; } = string.Empty;
 
-    // ---- Plesk gibi: veritabaniyla birlikte kullanici olustur + otomatik TAM yetki (opsiyonel) ----
+    // ---- profesyonel paneller gibi: veritabaniyla birlikte kullanici olustur + otomatik TAM yetki (opsiyonel) ----
 
     /// <summary>Boş değilse bu kullanıcı oluşturulur ve veritabanına otomatik tam yetki alır.</summary>
     [StringLength(64)]

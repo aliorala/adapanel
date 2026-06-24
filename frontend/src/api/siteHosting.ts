@@ -37,7 +37,7 @@ export async function runComposerInstall(siteName: string) {
   return response.data.data;
 }
 
-// Plesk gibi keyfi Composer komutu (update, require monolog/monolog, dump-autoload, vb.).
+// profesyonel paneller gibi keyfi Composer komutu (update, require monolog/monolog, dump-autoload, vb.).
 export async function runComposerCommand(siteName: string, command: string) {
   const response = await apiClient.post<ApiEnvelope<{ exitCode: number; output: string; error: string }>>(
     `/sites/${encodeURIComponent(siteName)}/hosting-settings/composer-command`,
@@ -99,7 +99,7 @@ export type RemoteFileMigrationResult = {
   targetPath: string;
 };
 
-// Plesk Migrator gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını çeker.
+// profesyonel goc araci gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını çeker.
 export async function migrateSiteFiles(siteName: string, payload: RemoteFileMigrationPayload) {
   const response = await apiClient.post<ApiEnvelope<RemoteFileMigrationResult>>(
     `/sites/${encodeURIComponent(siteName)}/hosting-settings/migrate-files`,

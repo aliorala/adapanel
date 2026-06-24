@@ -126,7 +126,7 @@ import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
 
-// Plesk benzeri stroke ikonlar (bölüm id → SVG iç içeriği). 24x24, currentColor stroke.
+// profesyonel panel benzeri stroke ikonlar (bölüm id → SVG iç içeriği). 24x24, currentColor stroke.
 const NAV_ICONS: Record<string, string> = {
   home: '<path d="M3 11l9-7 9 7M5 10v9h5v-5h4v5h5v-9"/>',
   sites: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.3 2.5 14.7 0 17M12 3.5c-2.5 2.3-2.5 14.7 0 17"/>',
@@ -147,7 +147,7 @@ function iconFor(id: string): string {
   return NAV_ICONS[id] ?? '<circle cx="12" cy="12" r="7"/>';
 }
 
-// Global arama (Plesk benzeri "git"): menü bölümlerinde ada göre filtrele.
+// Global arama (profesyonel panel benzeri "git"): menü bölümlerinde ada göre filtrele.
 const searchQuery = ref("");
 const searchResults = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
@@ -429,7 +429,7 @@ const twoFactorLabel = computed(() =>
   min-width: 0;
 }
 
-/* Plesk gibi ince tek satır üst çubuk. */
+/* profesyonel paneller gibi ince tek satır üst çubuk. */
 .topbar {
   display: flex;
   align-items: center;

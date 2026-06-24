@@ -42,7 +42,7 @@ public sealed class CreateSiteRequest
     [StringLength(260)]
     public string StartupFile { get; init; } = string.Empty;
 
-    // ---- Plesk benzeri birleşik oluşturma: site ile birlikte opsiyonel kaynaklar ----
+    // ---- profesyonel panel benzeri birleşik oluşturma: site ile birlikte opsiyonel kaynaklar ----
 
     /// <summary>
     /// Kurulu servisleri algılayıp veritabanı, mail domaini ve FTP hesabı gibi

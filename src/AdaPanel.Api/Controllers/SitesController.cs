@@ -49,7 +49,7 @@ public sealed class SitesController(
         return Ok(ApiResponse<SiteDto>.Ok(site));
     }
 
-    // --- Korumalı dizinler (Plesk "Password-Protected Directories") ---
+    // --- Korumalı dizinler (panel "Password-Protected Directories") ---
 
     [HttpGet("{siteName}/protected-dirs")]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<ProtectedDirectoryDto>>>> GetProtectedDirsAsync(
@@ -89,7 +89,7 @@ public sealed class SitesController(
     }
 
     /// <summary>
-    /// Plesk benzeri birleşik oluşturma: siteyi kurar ve istenirse aynı akışta veritabanı,
+    /// profesyonel panel benzeri birleşik oluşturma: siteyi kurar ve istenirse aynı akışta veritabanı,
     /// mail domaini ve FTP hesabını da best-effort oluşturur (biri kurulamazsa site yine kalır).
     /// </summary>
     [HttpPost]
@@ -103,7 +103,7 @@ public sealed class SitesController(
         [FromServices] IComponentBootstrapper componentBootstrapper,
         CancellationToken cancellationToken)
     {
-        // M1 (Plesk gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
+        // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
         await EnsureSiteQuotaAsync(cancellationToken);
 
         var site = await siteProvisioningService.CreateAndProvisionAsync(
@@ -131,7 +131,7 @@ public sealed class SitesController(
             (request.ProvisionDefaultServices && installedComponents.Contains("stalwart-mail"));
         var shouldCreateFtpUser = request.CreateFtpUser || request.ProvisionDefaultServices;
 
-        // M1 (Plesk MaxDatabases): DB kotası doluysa DB oluşturmayı atla (site yine oluşur). Admin sınırsız.
+        // M1 (panel MaxDatabases): DB kotası doluysa DB oluşturmayı atla (site yine oluşur). Admin sınırsız.
         if (shouldCreateDatabase && !string.IsNullOrWhiteSpace(databaseEngine) && await IsDatabaseQuotaReachedAsync(cancellationToken))
         {
             shouldCreateDatabase = false;
@@ -189,7 +189,7 @@ public sealed class SitesController(
                     cancellationToken);
                 result.Created.Add($"mail: {domain}");
 
-                // Plesk gibi: mail domaini sitenin DNS bölgesine MX/SPF/DKIM/DMARC kayıtlarını
+                // profesyonel paneller gibi: mail domaini sitenin DNS bölgesine MX/SPF/DKIM/DMARC kayıtlarını
                 // otomatik yazsın (mail ekranındaki davranışla tutarlı). Best-effort.
                 try
                 {
@@ -253,7 +253,7 @@ public sealed class SitesController(
         return Ok(ApiResponse<SiteCreationResultDto>.Ok(result, "sites.create.success"));
     }
 
-    /// <summary>Silmeden önce siteye bağlı tüm kaynakların (Plesk benzeri) önizlemesi.</summary>
+    /// <summary>Silmeden önce siteye bağlı tüm kaynakların (profesyonel panel benzeri) önizlemesi.</summary>
     [HttpGet("{siteName}/deletion-plan")]
     public async Task<ActionResult<ApiResponse<SiteDeletionPlanDto>>> GetDeletionPlanAsync(string siteName, CancellationToken cancellationToken)
     {
@@ -264,7 +264,7 @@ public sealed class SitesController(
 
     /// <summary>
     /// Siteyi ve ona bağlı tüm kaynakları (mail domaini, veritabanı, FTP, DNS, proxy, kota,
-    /// git, müşteri atamaları ve isteğe bağlı dosyalar) Plesk gibi cascade siler.
+    /// git, müşteri atamaları ve isteğe bağlı dosyalar) profesyonel paneller gibi cascade siler.
     /// </summary>
     [HttpDelete("{siteName}")]
     public async Task<ActionResult<ApiResponse<SiteDeletionResultDto>>> DeleteSiteAsync(
@@ -364,7 +364,7 @@ public sealed class SitesController(
         }
     }
 
-    // M1 (Plesk MaxDatabases): admin olmayan kullanıcının sahip olduğu DB sayısı kotayı doldurdu mu?
+    // M1 (panel MaxDatabases): admin olmayan kullanıcının sahip olduğu DB sayısı kotayı doldurdu mu?
     private async Task<bool> IsDatabaseQuotaReachedAsync(CancellationToken cancellationToken)
     {
         if (User.IsInRole("Administrator"))

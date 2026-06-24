@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Dtos.Sites;
 
 /// <summary>
-/// Plesk benzeri birleşik site oluşturma sonucu: oluşturulan site + onunla birlikte
+/// profesyonel panel benzeri birleşik site oluşturma sonucu: oluşturulan site + onunla birlikte
 /// kurulan yan kaynaklar (veritabanı, mail domaini, FTP) ve kurulamayan/atlanan uyarılar.
 /// </summary>
 public sealed class SiteCreationResultDto

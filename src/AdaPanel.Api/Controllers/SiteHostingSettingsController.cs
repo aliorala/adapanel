@@ -40,7 +40,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(await service.RunComposerInstallAsync(siteName, cancellationToken), "composer.completed"));
     }
 
-    // Plesk gibi keyfi Composer komutu (update, require, dump-autoload, vb.).
+    // profesyonel paneller gibi keyfi Composer komutu (update, require, dump-autoload, vb.).
     [HttpPost("composer-command")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> ComposerCommandAsync(
         string siteName,
@@ -51,7 +51,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(await service.RunComposerCommandAsync(siteName, request.Command, cancellationToken), "composer.completed"));
     }
 
-    // Plesk Laravel Toolkit gibi: keyfi Artisan komutu (migrate, cache:clear, key:generate, config:cache, vb.).
+    // panel Laravel Toolkit gibi: keyfi Artisan komutu (migrate, cache:clear, key:generate, config:cache, vb.).
     [HttpPost("artisan-command")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> ArtisanCommandAsync(
         string siteName,
@@ -62,7 +62,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(await service.RunArtisanCommandAsync(siteName, request.Command, cancellationToken), "artisan.completed"));
     }
 
-    // Plesk Node.js sekmesi gibi: npm install / npm run <script> vb.
+    // panel Node.js sekmesi gibi: npm install / npm run <script> vb.
     [HttpPost("node-command")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> NodeCommandAsync(
         string siteName,
@@ -73,7 +73,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(await service.RunNodeCommandAsync(siteName, request.Command, cancellationToken), "node.completed"));
     }
 
-    // Plesk WP Toolkit gibi: WP-CLI komutu (plugin/tema/çekirdek, search-replace, cache flush, user…).
+    // panel WP Toolkit gibi: WP-CLI komutu (plugin/tema/çekirdek, search-replace, cache flush, user…).
     [HttpPost("wpcli-command")]
     public async Task<ActionResult<ApiResponse<ComposerRunResultDto>>> WpCliCommandAsync(
         string siteName,
@@ -84,7 +84,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(await service.RunWpCliCommandAsync(siteName, request.Command, cancellationToken), "wpcli.completed"));
     }
 
-    // Plesk Migrator gibi: kaynak sitenin dosya arşivini (http/https/ftp .zip) indirip hedef siteye açar.
+    // profesyonel goc araci gibi: kaynak sitenin dosya arşivini (http/https/ftp .zip) indirip hedef siteye açar.
     [HttpPost("import-archive")]
     public async Task<ActionResult<ApiResponse<SiteImportResultDto>>> ImportArchiveAsync(
         string siteName,
@@ -95,7 +95,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<SiteImportResultDto>.Ok(await service.ImportSiteArchiveAsync(siteName, request.ArchiveUrl, request.CleanFirst, cancellationToken), "migration.completed"));
     }
 
-    // Plesk Migrator gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını hedef sitenin köküne indirir.
+    // profesyonel goc araci gibi (dosya tarafı): kaynak sunucudan FTP/FTPS/SFTP ile site dosyalarını hedef sitenin köküne indirir.
     [HttpPost("migrate-files")]
     public async Task<ActionResult<ApiResponse<RemoteFileMigrationResult>>> MigrateFilesAsync(
         string siteName,
@@ -107,7 +107,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<RemoteFileMigrationResult>.Ok(await migrationService.PullAsync(request, cancellationToken), "migration.completed"));
     }
 
-    // Plesk Kuyruk sekmesi gibi: Laravel queue worker durum / başlat / durdur.
+    // panel Kuyruk sekmesi gibi: Laravel queue worker durum / başlat / durdur.
     [HttpGet("queue")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> GetQueueAsync(string siteName, CancellationToken cancellationToken)
     {
@@ -129,7 +129,7 @@ public sealed class SiteHostingSettingsController(
         return Ok(ApiResponse<QueueWorkerStatusDto>.Ok(await service.StopQueueWorkerAsync(siteName, cancellationToken), "queue.stopped"));
     }
 
-    // Plesk Laravel Toolkit "Scheduler": dakikalık `php artisan schedule:run` (Laravel'in tek cron girdisi).
+    // panel Laravel Toolkit "Scheduler": dakikalık `php artisan schedule:run` (Laravel'in tek cron girdisi).
     [HttpGet("scheduler")]
     public async Task<ActionResult<ApiResponse<QueueWorkerStatusDto>>> GetSchedulerAsync(string siteName, CancellationToken cancellationToken)
     {

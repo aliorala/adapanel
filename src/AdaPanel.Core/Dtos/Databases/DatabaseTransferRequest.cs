@@ -1,7 +1,7 @@
 namespace AdaPanel.Core.Dtos.Databases;
 
 /// <summary>
-/// Sunucu taraflı veritabanı taşıma (Plesk gibi): kaynak (uzak olabilir) MySQL/MariaDB'den
+/// Sunucu taraflı veritabanı taşıma (profesyonel paneller gibi): kaynak (uzak olabilir) MySQL/MariaDB'den
 /// mysqldump ile alıp yerel hedef veritabanına aktarır. Tarayıcı upload'ı yok → 413/timeout yaşanmaz.
 /// </summary>
 public sealed class DatabaseTransferRequest

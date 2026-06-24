@@ -2,7 +2,7 @@ using AdaPanel.Core.Dtos.Users;
 
 namespace AdaPanel.Core.Interfaces;
 
-/// <summary>Yeniden kullanılabilir müşteri limit şablonları (Plesk Service Plans).</summary>
+/// <summary>Yeniden kullanılabilir müşteri limit şablonları (Servis Planlari).</summary>
 public interface IServicePlanService
 {
     Task<IReadOnlyCollection<ServicePlanDto>> GetPlansAsync(CancellationToken cancellationToken = default);

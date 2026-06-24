@@ -3,7 +3,7 @@ using AdaPanel.Core.Dtos.Sites;
 namespace AdaPanel.Core.Interfaces;
 
 /// <summary>
-/// Plesk WordPress Toolkit benzeri temel yönetim: kurulum algılama, sürüm okuma ve
+/// panel WordPress Toolkit benzeri temel yönetim: kurulum algılama, sürüm okuma ve
 /// bakım modu (WP-CLI gerektirmeden, dosya tabanlı).
 /// </summary>
 public interface IWordPressToolkitService

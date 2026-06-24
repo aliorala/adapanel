@@ -14,7 +14,7 @@ public interface IFtpService
 
     Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default);
 
-    /// <summary>FTPS zorunlu mu (Plesk "yalnız güvenli FTP"). Varsayılan false.</summary>
+    /// <summary>FTPS zorunlu mu (panel "yalnız güvenli FTP"). Varsayılan false.</summary>
     Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default);
 
     /// <summary>FTPS zorunluluğunu aç/kapat ve IIS FTP politikasını (SslAllow/SslRequire) hemen uygula.</summary>

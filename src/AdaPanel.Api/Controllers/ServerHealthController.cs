@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Plesk Server Health / Repair Kit benzeri: kritik servis durumları + tek-tık yeniden başlat (admin).
+// panel Server Health / Repair Kit benzeri: kritik servis durumları + tek-tık yeniden başlat (admin).
 // (Anonim liveness ucu HealthController'da; bu admin-only operasyonel sağlık panosudur.)
 [ApiController]
 [Authorize(Roles = "Administrator")]

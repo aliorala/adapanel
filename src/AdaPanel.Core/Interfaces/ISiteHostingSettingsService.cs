@@ -14,7 +14,7 @@ public interface ISiteHostingSettingsService
     Task<ComposerRunResultDto> RunComposerInstallAsync(string siteName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Keyfi composer alt komutu çalıştırır (Plesk Composer komut kutusu gibi): update, require, dump-autoload vb.
+    /// Keyfi composer alt komutu çalıştırır (panel Composer komut kutusu gibi): update, require, dump-autoload vb.
     /// Komut composer'a argüman olarak geçer (shell yok).
     /// </summary>
     Task<ComposerRunResultDto> RunComposerCommandAsync(string siteName, string command, CancellationToken cancellationToken = default);
