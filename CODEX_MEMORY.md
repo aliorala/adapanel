@@ -3794,3 +3794,20 @@ Basarili:
   #4 vendor eksik geldi (composer bağımlılıkları taşınmamış) → toolkit "composer install" tek-tık / göç sonrası bütünlük adımı.
 - Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2143=2143. Installer SHA256: `AD3E6F7E921563D0DB1716EC94E22DCBA7E6705747F2A7BE6CDE399C55528476` (49.30 MiB).
 - KULLANICIYA: yeni installer → "Kullanıcı ekle"de artık veritabanı seçilir → otomatik GRANT. #1-5 sıradaki öncelik (önce #5 izinler + #1 docroot).
+
+## 2026-06-24 (95) — Panel-geneli deploy düzeltmeleri: #5 yazma izni + memory_limit varsayılanı (kullanıcı: tek site değil, panel geneli)
+- #5 (yazma izni) YAPILDI: SiteProvisioningService.CreateAndProvisionAsync → site oluşunca o sitenin app pool kimliğine
+  ("IIS AppPool\<pool>") site kökünde (OI)(CI)M ver → PHP/Laravel storage+bootstrap/cache, WP uploads yazabilir. YALNIZ kendi
+  pool'una (kiracı izolasyonu; IIS_IUSRS DEĞİL → başka site yazamaz). (OI)(CI) → sonradan/göçle gelen dosyalar miras alır. Best-effort.
+- memory_limit YAPILDI: PhpService.EnsurePhpSecurityDefaultsAsync → boş/stok 128M ise 256M (Laravel/WP "memory exhausted"); admin
+  daha yükseğe çekmişse dokunmaz. expose_php=Off ile birlikte RegisterFastCgiAsync'te uygulanır.
+- Doğrulama: build 0/0, test 44/44(+2). Installer SHA256: `B5814FAF6D7BCE51375A19EDFCA28B3617E904A473591331CFEAA589B0E6A9CA` (49.30 MiB).
+- BACKLOG (panel-geneli, kullanıcı önceliğiyle — SIRADAKİ İŞ):
+  #1 ⭐ EN KRİTİK — Document Root/Web Root per-site ayarı: panel siteyi düzenleyince docroot'u proje köküne geri döndürüp 403'e
+     yol açıyor. Kalıcı "belge kökü" alanı + IIS fiziksel yolunu alt klasöre (public) yönlendir + PERSIST + Laravel auto-detect (artisan+public/index.php).
+  DB içe-aktarma: mevcut MariaDB db/user'larını tara → panele kaydet (panel yalnız kendi oluşturduklarını biliyor; karsilastir görünmüyordu).
+  PHP UI: redis extension toggle'ı arayüze çıkar (EnableRedisExtensionAsync zaten var); proc_open default KAPALI DEĞİL (harden script kapatırsa opt-in); open_basedir doğru yol.
+  Fix-permissions repair aracı: #5'i MEVCUT sitelere de uygula (tek-tık izin onar).
+  SSL sertifika geçerlilik kontrolü/uyarısı. + #2 web.config handler/rewrite (docroot ile), #3 .user.ini göç sanitize, #4 composer vendor (göç aracı).
+- phpredis NOTU: enable akışı SAĞLAM (eşleşen DLL indir + php -m doğrula + başarısızsa geri al). "kurulu sanılıp kurulmamış" = Redis
+  SUNUCUSU ≠ phpredis UZANTISI; PHP Ayarları'ndan "Redis uzantısını etkinleştir" çalıştırılmalı. App file driver kullandığı için ZORUNLU değil.

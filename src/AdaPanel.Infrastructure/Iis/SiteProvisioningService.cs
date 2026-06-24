@@ -5,6 +5,7 @@ using AdaPanel.Core.Dtos.Asp;
 using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Iis;
@@ -35,6 +36,7 @@ public sealed class SiteProvisioningService(
             await ApplyProfileAsync(site, profile, request, actorUserId, ipAddress, cancellationToken);
             site = await iisSiteService.GetSiteAsync(site.Name, cancellationToken);
             _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
+            await GrantSiteWritableAsync(site, request.ApplicationPoolName, cancellationToken);
             return site;
         }
         catch
@@ -64,6 +66,36 @@ public sealed class SiteProvisioningService(
             }
 
             throw;
+        }
+    }
+
+    // #5 — Uygulama (PHP FastCGI) site kökünde KENDİ app pool kimliğiyle çalışır; kendi köküne YAZABİLSİN:
+    // Laravel storage/ + bootstrap/cache/, WordPress wp-content/uploads vb. (aksi halde "Permission denied"/500).
+    // YALNIZ bu sitenin app pool'una verilir → başka site bu köke yazamaz (kiracı izolasyonu). (OI)(CI) → sonradan
+    // eklenen/göç edilen dosyalar da miras alır. Best-effort: izin verilemese de site kurulumu başarısız sayılmaz.
+    private async Task GrantSiteWritableAsync(SiteDto site, string applicationPoolName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows() ||
+                string.IsNullOrWhiteSpace(site.PhysicalPath) ||
+                !Directory.Exists(site.PhysicalPath))
+            {
+                return;
+            }
+
+            var pool = string.IsNullOrWhiteSpace(applicationPoolName) ? site.Name : applicationPoolName;
+            await ProcessRunner.RunAsync(
+                "icacls.exe",
+                $"\"{site.PhysicalPath}\" /grant \"IIS AppPool\\{pool}:(OI)(CI)M\" /T /C /Q",
+                cancellationToken: cancellationToken,
+                timeout: TimeSpan.FromSeconds(60));
+
+            logger.LogInformation("Site yazma izni verildi (app pool kimliği): {Site} -> {Path}", site.Name, site.PhysicalPath);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Site yazma izni verilemedi (en iyi çaba): {Site}", site.Name);
         }
     }
 

@@ -234,15 +234,31 @@ public sealed class PhpService(
 
             var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
             var current = ParseUserIni(lines);
-            if (current.TryGetValue("expose_php", out var value) &&
-                value.Trim().Equals("Off", StringComparison.OrdinalIgnoreCase))
+            var changed = false;
+
+            // expose_php=Off (Plesk varsayılanı): PHP sürümünü gizle.
+            if (!(current.TryGetValue("expose_php", out var exposeValue) &&
+                  exposeValue.Trim().Equals("Off", StringComparison.OrdinalIgnoreCase)))
             {
-                return; // zaten Plesk varsayılanında.
+                SetIniDirective(lines, "expose_php", "Off");
+                changed = true;
             }
 
-            SetIniDirective(lines, "expose_php", "Off");
-            await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
-            logger.LogInformation("PHP güvenlik varsayılanı uygulandı (expose_php=Off): {IniPath}", iniPath);
+            // memory_limit: stok PHP varsayılanı 128M, modern app'ler (Laravel/WordPress) için sık sık yetersiz
+            // ("Allowed memory size exhausted"). Boşsa veya stok 128M ise 256M'ye çıkar; admin DAHA YÜKSEĞE
+            // çekmişse DOKUNMA (yalnız boş/128M → 256M, panel genel makul varsayılan).
+            var memoryLimit = current.TryGetValue("memory_limit", out var mlValue) ? mlValue.Trim() : string.Empty;
+            if (memoryLimit.Length == 0 || memoryLimit.Equals("128M", StringComparison.OrdinalIgnoreCase))
+            {
+                SetIniDirective(lines, "memory_limit", "256M");
+                changed = true;
+            }
+
+            if (changed)
+            {
+                await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+                logger.LogInformation("PHP varsayılanları uygulandı (expose_php=Off; memory_limit boş/128M ise 256M): {IniPath}", iniPath);
+            }
         }
         catch (Exception exception)
         {
