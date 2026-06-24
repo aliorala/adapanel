@@ -197,6 +197,9 @@ public sealed class PhpService(
                     500,
                     $"FastCGI registration was not persisted for '{executablePath}'.");
             }
+
+            // GÜVENLİK (Plesk varsayılanı): paylaşımlı php.ini'ye expose_php=Off yaz (PHP sürümünü gizle).
+            await EnsurePhpSecurityDefaultsAsync(component.InstallDir, cancellationToken);
         }
         catch (AppException)
         {
@@ -211,6 +214,39 @@ public sealed class PhpService(
                 componentId,
                 mappedException.MessageKey);
             throw mappedException;
+        }
+    }
+
+    // GÜVENLİK — Plesk varsayılanı: paylaşımlı php.ini'ye expose_php=Off yazar (sürüm gizlenir; sürüme özel
+    // açık avı zorlaşır). disable_functions BİLEREK varsayılan KAPATILMAZ — Plesk de varsayılan kapatmaz;
+    // tenant izolasyonu open_basedir (B4, per-site .user.ini) ile sağlanır. Sıkı disable_functions isteyen
+    // admin harden-adapanel.ps1 (K3) ile uygular (Plesk'te PHP Settings/Service Plan'la yapıldığı gibi).
+    // Idempotent (zaten Off ise yazmaz), best-effort (FastCGI kaydını bozmaz).
+    private async Task EnsurePhpSecurityDefaultsAsync(string installDir, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var iniPath = Path.Combine(installDir, "php.ini");
+            if (!File.Exists(iniPath))
+            {
+                return;
+            }
+
+            var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
+            var current = ParseUserIni(lines);
+            if (current.TryGetValue("expose_php", out var value) &&
+                value.Trim().Equals("Off", StringComparison.OrdinalIgnoreCase))
+            {
+                return; // zaten Plesk varsayılanında.
+            }
+
+            SetIniDirective(lines, "expose_php", "Off");
+            await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
+            logger.LogInformation("PHP güvenlik varsayılanı uygulandı (expose_php=Off): {IniPath}", iniPath);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "PHP güvenlik varsayılanı (expose_php) yazılamadı.");
         }
     }
 

@@ -3741,3 +3741,19 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44(+2). Installer SHA256: `1341B429C20E433ED1ABBD85C1FBCA7D7755756CEFDA2DF5629AD68BBF9AABEF` (49.30 MiB).
 - KULLANICIYA: yeni installer kur — düzeltme PANELDE (Program.cs+proxy), phpMyAdmin'i yeniden DAĞITMAYA GEREK YOK. Kur + tarayıcıda Ctrl+F5.
   phpMyAdmin navigation/sekme gezinmesi artık çalışır.
+
+## 2026-06-24 (92) — PHP güvenlik varsayılanları Plesk'e hizalandı (expose_php=Off; disable_functions BİLEREK opsiyonel)
+- Kullanıcı "pleskteki ayarların aynısını yap" dedi (devam et güvenlik turu). ARAŞTIRMA (Plesk Obsidian docs + support):
+  Plesk'in DOMAIN varsayılanı disable_functions="opcache_get_status" (MİNİMAL) — exec/shell_exec'i VARSAYILAN KAPATMAZ;
+  tenant güvenliğini per-domain open_basedir izolasyonu + expose_php=Off ile sağlar. Sıkı disable_functions admin OPSİYONU
+  (PHP Settings / Service Plan ile). Yani "Plesk gibi" = agresif disable_functions DEĞİL.
+- Durum: open_basedir per-site zaten default ✓ (B4, .user.ini). expose_php yoktu → eklendi.
+- FIX: PhpService.EnsurePhpSecurityDefaultsAsync — RegisterFastCgiAsync sonunda paylaşımlı php.ini'ye expose_php=Off yazar
+  (idempotent: zaten Off ise yazmaz; best-effort: FastCGI kaydını bozmaz). Kuruluşta + her site PHP kurulumunda çalışır.
+  disable_functions BİLEREK default kapatılmadı (Plesk de kapatmaz; müşteri sitesi exec kullanıyorsa bozulmasın). Sıkı liste
+  isteyen admin harden-adapanel.ps1 (K3) çalıştırır = Plesk'teki PHP Settings opt-in'in karşılığı.
+- PROAKTİF DENETİM (entry 91 hata sınıfı): gövde-iletme (Request.Body proxy) tüm src tarandı → tek örnek DbToolsProxy (düzeldi);
+  diğer StreamContent'ler dosya yükleme (seekable FileStream) ya da gövdesiz GET prob → aynı hata YOK. Webmail panel-proxy'den geçmiyor.
+- Doğrulama: build 0/0, test 44/44(+2). Installer SHA256: `8A7AE5F6C355C501ECB6A04B82CF7CAE8E9B5869F6589A9D48D3577E9186A424` (49.30 MiB).
+- KULLANICIYA: yeni installer kur. expose_php=Off yeni PHP kurulumunda/site PHP kurulumunda uygulanır (mevcut PHP'de bir sonraki
+  PHP işleminde). Hemen istersen harden-adapanel.ps1 (K3 + expose_php zaten içinde) çalıştır. exec/shell_exec Plesk gibi AÇIK kalır.
