@@ -3670,3 +3670,19 @@ Basarili:
 - DataRootHardeningService: static HardenAsync (/inheritance:d güvenli) + EnsureWritableAsync (kurtarma).
 - Doğrulama: build 0/0, test 44/44 (+2). Installer SHA256: `150B18264ED4D5BADF0D5BB1F3EF6951AA3EE19E860B7F395542AAB921E97317` (49.29 MiB).
 - HEDEF: tek installer, sıfır elle müdahale, eski bozuk durumu da kendiliğinden onarır.
+
+## 2026-06-24 (88) — K1 sertleştirme .NET DirectorySecurity'ye geçti (icacls (OI)(CI)F "inherit-only" belirsizliği = KÖK NEDEN)
+- Kullanıcı: db düzeldi (panel açıldı!) ama setup'ta "Cannot read properties of null (reading 'requestToken')" + "Failed to fetch"
+  → CSRF/antiforgery patlıyor. ARAŞTIRMA (MS DataProtection docs + Windows servis anahtar sorunu): servis DataProtection
+  anahtarını keys klasörüne yazamayınca antiforgery patlar. Kök neden DB ile AYNI sınıf: keys klasörü izni.
+- ASIL KÖK NEDEN: icacls `/grant SID:(OI)(CI)F` bazı Server'larda izni klasörün KENDİSİNE değil "inherit-only" uyguluyor →
+  SYSTEM klasöre DOSYA yazamıyor (SQLite + DataProtection kırılıyor). NOT: db'nin çalışması /inheritance:d değil, kurtarma
+  ağının icacls /reset'i sayesindeydi → K1 aslında uygulanmıyordu (data dir reset edilmişti).
+- FIX: icacls yerine .NET DirectorySecurity. FileSystemAccessRule(SYSTEM/Admins, FullControl, Container|ObjectInherit,
+  PropagationFlags.None = NESNENİN KENDİSİNE de uygula) → izin KESİN "bu klasör + alt klasör/dosyalar". SetAccessRuleProtection
+  (true, preserveInheritance:true) + PurgeAccessRules(Users S-1-5-32-545 + Auth Users S-1-5-11). Tenant kaldırılır, SYSTEM/Admin
+  yazar → K1 KORUNUR + SQLite/DataProtection çalışır. (net8.0-windows'ta System.Security.AccessControl gömülü, ek paket yok.)
+- EnsureWritableAsync kurtarma ağı artık data + KEYS ikisini de /reset eder.
+- FRONTEND (client.ts): /auth/csrf null/ağ hatasında ÇÖKMEK yerine boş token + catch → "requestToken null" çirkin hatası gitmez.
+- Doğrulama: build 0/0, test 44/44 (+2), typecheck 0, FE build 0. Installer SHA256: `898F067757F18A92FECB1DE1F981FDB51D3FCF67F60350FFF70302AED755D70C` (49.29 MiB).
+- KULLANICIYA: TEMİZ kurulum şart (eski bozuk-ACL'li dosyalar yeni dir ACL'ini miras ALMIYOR): C:\ProgramData\AdaPanel sil + yeni installer.

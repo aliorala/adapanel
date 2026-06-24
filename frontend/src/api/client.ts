@@ -48,7 +48,11 @@ async function fetchCsrfToken(force = false): Promise<string> {
       });
 
       const payload = (await response.json()) as ApiEnvelope<{ requestToken: string }>;
-      csrfToken = payload.data.requestToken;
+      csrfToken = payload?.data?.requestToken ?? "";
+      return csrfToken;
+    } catch {
+      // Ağ hatası ("Failed to fetch") / boş yanıt → ÇÖKME yerine boş token (çağıran tarafta temiz hata).
+      csrfToken = "";
       return csrfToken;
     } finally {
       csrfPromise = null;

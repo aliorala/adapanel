@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
@@ -5,63 +7,81 @@ namespace AdaPanel.Infrastructure.Bootstrap;
 
 /// <summary>
 /// K1 GÜVENLİK: Veri kökündeki HASSAS alt klasörlere (panel DB, DataProtection anahtarları, sertifikalar,
-/// config, yedekler) yalnız SYSTEM + Administrators erişsin; barındırılan tenant'lar (her sitenin PHP'si,
-/// IUSR, FTP kullanıcıları = Users / Authenticated Users) adapanel.db'yi (admin hash/2FA) ve anahtarları
-/// OKUYAMASIN. 'runtimes' klasörüne DOKUNULMAZ.
+/// config, yedekler) yalnız SYSTEM + Administrators erişsin; barındırılan tenant'lar (Users / Authenticated
+/// Users = her sitenin PHP'si, IUSR, FTP) adapanel.db (admin hash/2FA) ve key-*.xml (DataProtection) okuyamasın.
 ///
-/// DOĞRU YÖNTEM (kök neden düzeltmesi): Eski sürüm `icacls /inheritance:r` kullanıyordu — bu miras ACE'lerini
-/// (CREATOR OWNER dahil) SİLİYOR ve bazı Windows Server'larda DACL'i bozup SYSTEM'in bile db oluşturmasını
-/// engelliyordu → "SQLite Error 14: unable to open database file". Artık `/inheritance:d` (mirası KAPAT ama
-/// mevcut ACE'leri açık kopya olarak KORU) kullanılır → SYSTEM/Admin/CREATOR-OWNER korunur (SQLite kırılmaz),
-/// ardından yalnız Users (S-1-5-32-545) + Authenticated Users (S-1-5-11) KALDIRILIR. db AÇILMADAN önce çağrılır.
-/// İdempotent + best-effort. Yine de bir sorun olursa <see cref="EnsureWritableAsync"/> kurtarma ağı devreye girer.
+/// KÖK NEDEN DÜZELTMESİ — neden .NET, neden icacls DEĞİL: Eski icacls yaklaşımı (`/inheritance:r` ya da `/grant
+/// SID:(OI)(CI)F`) bazı Windows Server'larda izni klasörün KENDİSİNE değil "yalnız miras (inherit-only)" olarak
+/// uygulayabiliyor → SYSTEM klasöre dosya YAZAMIYOR → hem "SQLite Error 14" hem antiforgery/CSRF (DataProtection
+/// anahtarı yazılamıyor) patlıyordu. .NET <see cref="FileSystemAccessRule"/> ile izin AÇIKÇA "bu klasör + alt
+/// klasör + dosyalar"a (PropagationFlags.None) uygulanır → belirsizlik yok. db AÇILMADAN önce çağrılır,
+/// idempotent + best-effort. Yine de sorun olursa <see cref="EnsureWritableAsync"/> kurtarma ağı devrede.
 /// </summary>
 public static class DataRootHardeningService
 {
     private static readonly string[] SensitiveDirectories =
         ["data", "keys", "certs", "config", "backups", "mail-certs"];
 
-    // SYSTEM=S-1-5-18, Administrators=S-1-5-32-544, Users=S-1-5-32-545, Authenticated Users=S-1-5-11 (dil-bağımsız).
-    public static async Task HardenAsync(string dataRoot, ILogger logger, CancellationToken cancellationToken = default)
+    public static Task HardenAsync(string dataRoot, ILogger logger, CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows())
         {
-            return;
+            return Task.CompletedTask;
         }
 
         try
         {
             var root = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dataRoot));
+            var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var authUsers = new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null);
+            const InheritanceFlags inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
 
             foreach (var sub in SensitiveDirectories)
             {
                 var dir = Path.Combine(root, sub);
                 Directory.CreateDirectory(dir);
 
-                // 1) Mirası KAPAT ama mevcut ACE'leri KORU (kopyala) — CREATOR OWNER + SYSTEM + Admin korunur.
-                //    (icacls /inheritance:r her şeyi siliyordu → DACL bozuluyordu; :d güvenli.)
-                await IcaclsAsync(dir, "/inheritance:d /T /C", cancellationToken);
+                try
+                {
+                    var info = new DirectoryInfo(dir);
+                    var security = info.GetAccessControl();
 
-                // 2) SYSTEM + Administrators tam yetki GARANTİ; sonra TENANT erişimini kaldır (Users + Auth Users).
-                //    Ayrı çağrı: icacls seçenek sırası garantilensin (önce inheritance, sonra grant/remove).
-                await IcaclsAsync(
-                    dir,
-                    "/grant *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /remove:g *S-1-5-32-545 *S-1-5-11 /T /C",
-                    cancellationToken);
+                    // Mirası KAPAT ama mevcut ACE'leri açık kopya olarak KORU (CREATOR OWNER vb. bozulmaz).
+                    security.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);
+
+                    // SYSTEM + Administrators: KLASÖRÜN KENDİSİNE + alt klasör/dosyalara tam yetki.
+                    // PropagationFlags.None => kural NESNENİN KENDİSİNE de uygulanır (icacls'in inherit-only
+                    // belirsizliği YOK) → SYSTEM bu klasöre db/anahtar YAZABİLİR.
+                    security.AddAccessRule(new FileSystemAccessRule(system, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+                    security.AddAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+
+                    // Tenant erişimini KALDIR (Users + Authenticated Users) → hassas dosyalar sızmaz (K1).
+                    security.PurgeAccessRules(users);
+                    security.PurgeAccessRules(authUsers);
+
+                    info.SetAccessControl(security);
+                }
+                catch (Exception dirException)
+                {
+                    logger.LogWarning(dirException, "Veri kökü ACL ayarı '{Directory}' için atlandı.", dir);
+                }
             }
 
-            logger.LogInformation("Veri kökü hassas klasörleri sertleştirildi (tenant erişimi kaldırıldı; SYSTEM/Admin korundu).");
+            logger.LogInformation("Veri kökü hassas klasörleri sertleştirildi (tenant kaldırıldı; SYSTEM/Admin bu-klasör+alt-öğeler tam yetki).");
         }
         catch (Exception exception)
         {
-            // Sertleştirme başarısızsa bile paneli başlatmaya devam et.
             logger.LogWarning(exception, "Veri kökü ACL sertleştirme atlandı.");
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
-    /// KURTARMA AĞI: db hâlâ açılamıyorsa (herhangi bir sebeple ACL bozuksa) yalnız 'data' klasörünün ACL'ini
-    /// SIFIRLA (mirası geri ver → SYSTEM/Admin yazabilir) ki panel kilitlenmesin. Migration başarısız olunca çağrılır.
+    /// KURTARMA AĞI: db/anahtar hâlâ açılamıyorsa (ACL herhangi bir sebeple bozuksa) 'data' VE 'keys'
+    /// klasörlerinin ACL'ini SIFIRLA (mirası geri ver → SYSTEM yazabilir) ki panel kilitlenmesin.
     /// </summary>
     public static async Task EnsureWritableAsync(string dataRoot, ILogger logger, CancellationToken cancellationToken = default)
     {
@@ -70,25 +90,25 @@ public static class DataRootHardeningService
             return;
         }
 
-        try
+        var root = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dataRoot));
+        foreach (var sub in new[] { "data", "keys" })
         {
-            var dataDir = Path.Combine(Path.GetFullPath(Environment.ExpandEnvironmentVariables(dataRoot)), "data");
-            Directory.CreateDirectory(dataDir);
-            await IcaclsAsync(dataDir, "/reset /T /C", cancellationToken);
-            logger.LogWarning("Veri klasörü ACL'i sıfırlandı (db erişim kurtarma — panel kilitlenmesin diye).");
+            try
+            {
+                var dir = Path.Combine(root, sub);
+                Directory.CreateDirectory(dir);
+                await ProcessRunner.RunAsync(
+                    "icacls.exe",
+                    $"\"{dir}\" /reset /T /C",
+                    cancellationToken: cancellationToken,
+                    timeout: TimeSpan.FromSeconds(60));
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "Veri klasörü ACL sıfırlama atlandı: {Sub}", sub);
+            }
         }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "Veri klasörü ACL sıfırlama atlandı.");
-        }
-    }
 
-    private static async Task IcaclsAsync(string dir, string arguments, CancellationToken cancellationToken)
-    {
-        await ProcessRunner.RunAsync(
-            "icacls.exe",
-            $"\"{dir}\" {arguments}",
-            cancellationToken: cancellationToken,
-            timeout: TimeSpan.FromSeconds(60));
+        logger.LogWarning("Veri klasörü ACL'leri sıfırlandı (erişim kurtarma — panel kilitlenmesin diye).");
     }
 }
