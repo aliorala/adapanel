@@ -42,9 +42,19 @@ public sealed class DbToolsProxyController(
 
         using var message = new HttpRequestMessage(new HttpMethod(Request.Method), targetUri);
 
-        // Gövde: GET/HEAD dışındaki metotlarda istek gövdesini akış olarak ilet.
+        // Gövde: GET/HEAD dışındaki metotlarda istek gövdesini ilet. KÖK NEDEN DÜZELTMESİ — gövde proxy'ye
+        // geldiğinde başa-sarılı/okunabilir olmayabiliyordu → StreamContent 0 byte okuyup, kopyalanan
+        // "Content-Length: N" ile çelişiyor: "Sent 0 request content bytes, but Content-Length promised N" →
+        // panelin 500'ü (phpMyAdmin'in tüm POST AJAX'ları = navigation, her sekme patlardı). Çözüm: gövde erken
+        // EnableBuffering ile tekrar-okunabilir yapılır (Program.cs); burada BAŞA SARILIR → gövde artık dolu,
+        // tarayıcının gönderdiği Content-Length ile birebir eşleşir (otoriter uzunluk, çelişki bitti).
         if (!HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
+            if (Request.Body.CanSeek)
+            {
+                Request.Body.Position = 0;
+            }
+
             message.Content = new StreamContent(Request.Body);
             foreach (var header in Request.Headers)
             {

@@ -3725,3 +3725,19 @@ Basarili:
 - Doğrulama: grep -i plesk (src + frontend/src) = 0; SHIPPED wwwroot bundle = 0. Solution build 0/0, typecheck 0, i18n parite en=tr=2141 (0 fark),
   Türkçe karakter kodlaması sağlam (spot-check: "kullanıcı" bozulmadı). Installer SHA256: `2F81159FDFBA9D7FE3BB6E051F03197C136EDF37024A8EA97D4CB6771F80A393` (49.30 MiB).
 - KULLANICIYA: yeni installer kur — UI metinleri artık Plesk'siz. Değişikliği görmek için panel güncellenmeli (kur + tarayıcıyı yenile).
+
+## 2026-06-24 (91) — phpMyAdmin reverse-proxy POST AJAX 500'ü düzeltildi (Content-Length mismatch / boş gövde)
+- Belirti: phpMyAdmin açılıyor, DB görünüyor, ama HER sekmede "İstek işlemede hata / Hata kodu: 500 / error (rejected)" (phpMyAdmin'in
+  AJAX hata kutusu). KRİTİK: yanıt PANELİN zarfı {"success":false,"message":"common.unexpected_error","code":500} → phpMyAdmin değil
+  PROXY patlıyor. DevTools: çalışan ana sayfa GET, patlayan navigation POST (gövdeli). Serilog log:
+  `System.Net.Http.HttpRequestException: Sent 0 request content bytes, but Content-Length promised 102` at DbToolsProxyController.ProxyAsync.
+- KÖK NEDEN: POST gövdesi proxy'ye boş/başa-sarılmamış geliyor → StreamContent 0 byte gönderiyor ama kopyalanan Content-Length 102 vaat
+  ediyor → HttpClient exception → panelin 500'ü. phpMyAdmin'in TÜM POST AJAX'ları (navigation = her sekme) bu yüzden ölüyordu; GET'ler
+  (gövdesiz) çalıştığı için sayfa açılıyor + DB görünüyordu (yanıltıcı). Log yolu: C:\ProgramData\AdaPanel\logs\adapanel-<tarih>.log.
+- FIX (2 dosya): (1) Program.cs line-191 ara katmanı: /api/v1/dbtools + non-GET isteklerde context.Request.EnableBuffering() → gövde
+  tekrar-okunabilir (küçük=bellek, büyük SQL import=disk; gövdeyi okuyan her şeyden ÖNCE çalışır). (2) DbToolsProxyController.ProxyAsync:
+  StreamContent'ten önce `if (Request.Body.CanSeek) Request.Body.Position = 0;` → başa sar. Gövde artık DOLU → tarayıcının Content-Length'i
+  birebir eşleşir (Content-Length kopyası korundu = otoriter uzunluk). DbToolsProxyController Plesk-scrub'ında DEĞİŞMEDİ (logic aynı).
+- Doğrulama: build 0/0, test 44/44(+2). Installer SHA256: `1341B429C20E433ED1ABBD85C1FBCA7D7755756CEFDA2DF5629AD68BBF9AABEF` (49.30 MiB).
+- KULLANICIYA: yeni installer kur — düzeltme PANELDE (Program.cs+proxy), phpMyAdmin'i yeniden DAĞITMAYA GEREK YOK. Kur + tarayıcıda Ctrl+F5.
+  phpMyAdmin navigation/sekme gezinmesi artık çalışır.

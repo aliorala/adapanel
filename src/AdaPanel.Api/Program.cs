@@ -190,6 +190,15 @@ app.UseMiddleware<ApiExceptionHandlingMiddleware>();
 app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
+    // DbTools reverse-proxy: gövdeli (POST/PUT/PATCH/DELETE) isteklerde istek gövdesini TEKRAR-OKUNABİLİR yap.
+    // DbToolsProxyController gövdeyi başa sarıp yerel phpMyAdmin'e iletir; aksi halde StreamContent boş okur ve
+    // "Sent 0 bytes but Content-Length promised N" 500'ü çıkar (phpMyAdmin POST AJAX'ları patlardı). EnableBuffering
+    // küçük gövdeyi bellekte, büyük SQL import'unu diskte tutar (bellek taşmaz).
+    if (context.Request.Path.StartsWithSegments("/api/v1/dbtools") && !HttpMethods.IsGet(context.Request.Method))
+    {
+        context.Request.EnableBuffering();
+    }
+
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["X-Frame-Options"] = "DENY";
     context.Response.Headers["Referrer-Policy"] = "same-origin";
