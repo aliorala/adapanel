@@ -3701,6 +3701,7 @@ Basarili:
 - FIX (harden-adapanel.ps1, OS portları — Plesk gibi opt-in, "sormadan kapatma" ilkesi): B7(DEFAULT) phpMyAdmin/Adminer public firewall kurallarını
   kaldır. B8(opt-in -HardenManagementPorts) SMB445/RPC135/NetBIOS137-139/WinRM5985-5986 inbound BLOCK. RDP(opt-in -RdpAllowFrom <ip[,ip]>) yerleşik
   RDP kurallarını yalnız allowlist IP'ye kısıtla — blanket KAPATMA YOK (kilitlenme önlenir, kırmızı uyarı). param + .PARAMETER/.EXAMPLE eklendi.
-- Doğrulama: build 0/0, test 44/44(+2), PS parse OK (0 hata). Installer SHA256: `FCCCFFD0CCB04FB5875375A24808F9CC2B698A602AFA5ADACC18B55BB9AACFB0` (49.29 MiB).
+- Doğrulama: build 0/0, test 44/44(+2), PS parse OK (0 hata). harden-adapanel.ps1 artık installer'a DAHİL (AdaPanel.iss [Files] → {app}\scripts).
+  Installer SHA256: `F87BF9550A6D8C0E3AAEFA93AA91A7F350C8012A8FE49F5711F28B8CBFF1D959` (49.30 MiB). (Ara build FCCCFFD0 — script bundle'ından önce.)
 - KULLANICIYA: yeni installer kur + panelden phpMyAdmin/Adminer'i 1 kez YENIDEN DAGIT (loopback binding uygulansın). Mevcut public'i HEMEN kapatmak
   için canlıda harden-adapanel.ps1 çalıştır (B7 firewall kuralını kaldırır). OS portları için -HardenManagementPorts (+ sabit IP'n varsa -RdpAllowFrom).

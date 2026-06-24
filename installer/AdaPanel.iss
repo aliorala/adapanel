@@ -33,6 +33,7 @@ Source: "..\scripts\enable-iis-features.ps1"; DestDir: "{app}\scripts"; Flags: i
 Source: "..\scripts\initialize-panel-certificate.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\install-service.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\configure-firewall.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\harden-adapanel.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\uninstall-cleanup.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; AfterInstall: ConfigureInstallation
 
 [InstallDelete]
