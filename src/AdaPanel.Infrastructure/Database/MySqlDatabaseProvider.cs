@@ -119,6 +119,58 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         }
     }
 
+    // K2 (atomik akışın "uygula" adımı): yerel root hesaplarına (localhost/127.0.0.1/::1) güçlü parola koyar.
+    // Her host için YOKSA oluştur + parolayı set et + tam yetki ver → uzak root@'%' kaldırılınca panelin
+    // 127.0.0.1 bağlantısı kopmaz. Sonra yeni parolayla YENİ bağlantı açıp DOĞRULAR; başarısızsa servis
+    // katmanı saklı parolayı geri alır (panel eski parolayla çalışmaya devam eder).
+    public async Task SetRootPasswordAsync(DatabaseConnectionProfile profile, string newPassword, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+            foreach (var host in new[] { "localhost", "127.0.0.1", "::1" })
+            {
+                await using (var ensure = connection.CreateCommand())
+                {
+                    ensure.CommandText = $"CREATE USER IF NOT EXISTS 'root'@'{host}' IDENTIFIED BY @pw;";
+                    ensure.Parameters.AddWithValue("@pw", newPassword);
+                    await ensure.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await using (var alter = connection.CreateCommand())
+                {
+                    alter.CommandText = $"ALTER USER 'root'@'{host}' IDENTIFIED BY @pw;";
+                    alter.Parameters.AddWithValue("@pw", newPassword);
+                    await alter.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await using (var grant = connection.CreateCommand())
+                {
+                    grant.CommandText = $"GRANT ALL PRIVILEGES ON *.* TO 'root'@'{host}' WITH GRANT OPTION;";
+                    await grant.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+
+            await using (var flush = connection.CreateCommand())
+            {
+                flush.CommandText = "FLUSH PRIVILEGES;";
+                await flush.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            // DOĞRULA: panelin kullanacağı yeni parolayla YENİ bağlantı (mevcut bağlantı zaten kimlik doğruluydu).
+            var verifyProfile = profile with { AdminPassword = newPassword };
+            await using var verifyConnection = await OpenConnectionAsync(verifyProfile, cancellationToken);
+            await using var ping = verifyConnection.CreateCommand();
+            ping.CommandText = "SELECT 1;";
+            await ping.ExecuteScalarAsync(cancellationToken);
+        }
+        catch (MySqlException exception)
+        {
+            throw MapUnexpectedMySqlException(exception);
+        }
+    }
+
     public async Task DeleteUserAsync(DatabaseConnectionProfile profile, string userName, string host, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(profile, cancellationToken);
@@ -212,6 +264,40 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             await using var flush = connection.CreateCommand();
             flush.CommandText = "FLUSH PRIVILEGES;";
             await flush.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // mysql_secure_installation eşi: varsayılan 'test' veritabanını düşür (anonim erişime açık güvensiz
+        // varsayılan). YALNIZ BOŞSA (tablosuz) düşürülür → gerçek veri kazara silinmez. Best-effort.
+        try
+        {
+            long testExists;
+            await using (var existsCmd = connection.CreateCommand())
+            {
+                existsCmd.CommandText = "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'test';";
+                testExists = Convert.ToInt64(await existsCmd.ExecuteScalarAsync(cancellationToken));
+            }
+
+            if (testExists > 0)
+            {
+                long testTables;
+                await using (var tablesCmd = connection.CreateCommand())
+                {
+                    tablesCmd.CommandText = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'test';";
+                    testTables = Convert.ToInt64(await tablesCmd.ExecuteScalarAsync(cancellationToken));
+                }
+
+                if (testTables == 0)
+                {
+                    await using var dropTest = connection.CreateCommand();
+                    dropTest.CommandText = "DROP DATABASE IF EXISTS `test`;";
+                    await dropTest.ExecuteNonQueryAsync(cancellationToken);
+                    removed.Add("test (bos guvensiz varsayilan veritabani)");
+                }
+            }
+        }
+        catch (MySqlException)
+        {
+            // best-effort — test db düşürülemese de hesap sertleştirmesi geçerli.
         }
 
         return removed;

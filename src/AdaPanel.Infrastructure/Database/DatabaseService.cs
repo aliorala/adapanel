@@ -156,8 +156,83 @@ internal sealed partial class DatabaseService(
     public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(engine);
-        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
-        return await ResolveProvider(dbEngine).HardenAdminAccountsAsync(profile, cancellationToken);
+        var provider = ResolveProvider(dbEngine);
+        var results = new List<string>();
+
+        // K2 (parolasız-root açığı) — yalnız MySQL/MariaDB. Boş parolaya İZİN VEREREK profil kur (parolasız
+        // root'a bağlanabilmek için); root parolasızsa Plesk gibi güçlü parola ATA (atomik). Sonra güvensiz
+        // hesapları (anonim + uzak root) ve boş 'test' db'sini temizle (mysql_secure_installation eşi).
+        if (dbEngine is DbEngine.MariaDb or DbEngine.MySql)
+        {
+            var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken, allowEmptyPassword: true);
+            if (string.IsNullOrWhiteSpace(profile.AdminPassword))
+            {
+                profile = await SetRootPasswordAtomicAsync(dbEngine, profile, results, cancellationToken);
+            }
+
+            results.AddRange(await provider.HardenAdminAccountsAsync(profile, cancellationToken));
+            return results;
+        }
+
+        var otherProfile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        results.AddRange(await provider.HardenAdminAccountsAsync(otherProfile, cancellationToken));
+        return results;
+    }
+
+    // ATOMİK root parolası (Plesk gibi): MariaDB root'u parolasızsa güçlü parola atar + saklar. "MariaDB yeni /
+    // panel eski" TEHLİKELİ durumu OLUŞMAZ: önce SAKLAR, sonra UYGULAR+DOĞRULAR, hata olursa saklamayı GERİ ALIR.
+    // Saklanan parola tek kaynaktır → panelin DB bağlantıları + phpMyAdmin (WebDbClient) aynı anda tutarlı kalır.
+    private async Task<DatabaseConnectionProfile> SetRootPasswordAtomicAsync(
+        DbEngine dbEngine,
+        DatabaseConnectionProfile oldProfile,
+        List<string> results,
+        CancellationToken cancellationToken)
+    {
+        var descriptor = ResolveDescriptor(dbEngine);
+        var component = await dbContext.InstalledComponents.FirstOrDefaultAsync(
+            item => item.ComponentId == descriptor.ComponentId && item.Status == ComponentInstallStatus.Installed,
+            cancellationToken) ?? throw new AppException("database.engine_not_installed", 404, 404);
+
+        var configuration = ReadProtectedConfiguration(component);
+        var oldPassword = oldProfile.AdminPassword; // boş
+        var newPassword = GenerateStrongDbPassword();
+
+        // 1) Yeni parolayı önce SAKLA (panel + phpMyAdmin bunu kullanır). [sakla=yeni, MariaDB=eski → kurtarılabilir]
+        configuration[GeneratedPasswordKey] = newPassword;
+        component.ProtectedConfigurationJson = secretProtector.Protect(JsonSerializer.Serialize(configuration, SerializerOptions));
+        component.UpdatedAtUtc = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            // 2) MariaDB'ye UYGULA (eski/boş parolayla bağlan) + yeni parolayla DOĞRULA.
+            await ResolveProvider(dbEngine).SetRootPasswordAsync(oldProfile, newPassword, cancellationToken);
+            results.Add("root@localhost: guclu parola ayarlandi (panel uretti; phpMyAdmin/araclar otomatik kullanir)");
+            return oldProfile with { AdminPassword = newPassword };
+        }
+        catch
+        {
+            // 3) Hata → saklamayı ESKİYE geri al (panel eski parolayla çalışmaya devam eder, kilitlenmez).
+            configuration[GeneratedPasswordKey] = oldPassword;
+            component.ProtectedConfigurationJson = secretProtector.Protect(JsonSerializer.Serialize(configuration, SerializerOptions));
+            component.UpdatedAtUtc = DateTime.UtcNow;
+            await dbContext.SaveChangesAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    // K2 root parolası: güçlü, belirsiz karakter içermeyen, bağlantı-dizesi güvenli (özel karakter yok) 28 hane.
+    private static string GenerateStrongDbPassword()
+    {
+        const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(28);
+        var chars = new char[28];
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            chars[index] = alphabet[bytes[index] % alphabet.Length];
+        }
+
+        return new string(chars);
     }
 
     public async Task<DatabaseWorkspaceDto> CreateDatabaseAsync(
@@ -461,7 +536,7 @@ internal sealed partial class DatabaseService(
         return trimmed.Length > 600 ? trimmed[..600] : trimmed;
     }
 
-    private async Task<DatabaseConnectionProfile> ResolveConnectionProfileAsync(DbEngine engine, CancellationToken cancellationToken)
+    private async Task<DatabaseConnectionProfile> ResolveConnectionProfileAsync(DbEngine engine, CancellationToken cancellationToken, bool allowEmptyPassword = false)
     {
         if (engine == DbEngine.MsSql)
         {
@@ -481,7 +556,7 @@ internal sealed partial class DatabaseService(
 
         var configuration = ReadProtectedConfiguration(installedComponent);
         var adminPassword = configuration.TryGetValue(GeneratedPasswordKey, out var storedPassword) ? storedPassword : string.Empty;
-        if (string.IsNullOrWhiteSpace(adminPassword))
+        if (string.IsNullOrWhiteSpace(adminPassword) && !allowEmptyPassword)
         {
             throw new AppException("database.admin_password_missing", 409, 409);
         }

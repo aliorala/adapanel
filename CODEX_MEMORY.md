@@ -3757,3 +3757,22 @@ Basarili:
 - Doğrulama: build 0/0, test 44/44(+2). Installer SHA256: `8A7AE5F6C355C501ECB6A04B82CF7CAE8E9B5869F6589A9D48D3577E9186A424` (49.30 MiB).
 - KULLANICIYA: yeni installer kur. expose_php=Off yeni PHP kurulumunda/site PHP kurulumunda uygulanır (mevcut PHP'de bir sonraki
   PHP işleminde). Hemen istersen harden-adapanel.ps1 (K3 + expose_php zaten içinde) çalıştır. exec/shell_exec Plesk gibi AÇIK kalır.
+
+## 2026-06-24 (93) — K2 atomik root parolası (Plesk gibi) — parolasız-root açığı kapatıldı
+- Kullanıcı: "K2'yi yap, pleskteki gibi atomik kur". K2 = MariaDB root PAROLASIZ açığı (mevcut K2 yalnız anonim+uzak-root düşürüyordu,
+  root'a PAROLA koymuyordu = asıl açık). Üstelik DatabaseService.ResolveConnectionProfileAsync saklı parola boşsa FIRLATIYORDU →
+  parolasız root'ta K2 bile çalışamazdı.
+- FIX (atomik, mevcut /db/harden K2 butonunu genişleterek — yeni endpoint/UI YOK):
+  - ResolveConnectionProfileAsync'e `allowEmptyPassword` param → parolasız root'a bağlanılabilir (K2 yolunda true).
+  - SetRootPasswordAtomicAsync (DatabaseService): root parolasızsa 1) yeni güçlü parolayı ÖNCE SAKLA (component.ProtectedConfigurationJson,
+    secretProtector), 2) UYGULA (provider) + yeni parolayla YENİ bağlantı açıp DOĞRULA, 3) HATA olursa saklamayı ESKİYE geri al.
+    "MariaDB yeni / panel eski" TEHLİKELİ durumu hiç oluşmaz (önce sakla → kurtarılabilir; verify+rollback panel kilitlenmesini önler).
+  - MySqlDatabaseProvider.SetRootPasswordAsync: root@localhost/127.0.0.1/::1 için CREATE USER IF NOT EXISTS + ALTER USER IDENTIFIED BY +
+    GRANT ALL WITH GRANT OPTION + FLUSH; sonra 127.0.0.1+yeni parola ile DOĞRULAMA bağlantısı. (uzak root@'%' kaldırılınca panel kopmaz.)
+  - Saklanan parola TEK KAYNAK → panel DB bağlantıları + phpMyAdmin (WebDbClient.ResolveRootPasswordAsync) AYNI ANDA tutarlı.
+  - HardenAdminAccounts ayrıca boş 'test' db'sini düşürür (information_schema'dan tablosuz doğrulanır → gerçek veri silinmez). 28-hane alfanumerik.
+  - IDatabaseEngineProvider.SetRootPasswordAsync DEFAULT no-op → postgres/mssql sağlayıcıları dokunulmadı.
+- Frontend: K2 butonu aynı; hardenHint + hardenedRemoved("Güvenlik uygulandı: {items}") metinleri güncellendi (tr+en, parite 2141).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0. Installer SHA256: `F48314F2AB92BFB3E32702AB290CC60B2C52A78171FBD36FA580EFD76DB1BF65` (49.30 MiB).
+- KULLANICIYA: yeni installer kur → Veritabanı/WebDB sayfasında "Güvenliği sıkılaştır" (K2) bir kez tıkla. Parolasız root'a güçlü parola
+  atanır+saklanır; panel/phpMyAdmin kopmaz. NOT: canlı MariaDB olmadan test EDİLEMEDİ → verify+rollback güvenlik ağı; K2 başarısız olsa bile panel eski parolayla çalışır.
