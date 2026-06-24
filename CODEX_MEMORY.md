@@ -3701,7 +3701,12 @@ Basarili:
 - FIX (harden-adapanel.ps1, OS portları — Plesk gibi opt-in, "sormadan kapatma" ilkesi): B7(DEFAULT) phpMyAdmin/Adminer public firewall kurallarını
   kaldır. B8(opt-in -HardenManagementPorts) SMB445/RPC135/NetBIOS137-139/WinRM5985-5986 inbound BLOCK. RDP(opt-in -RdpAllowFrom <ip[,ip]>) yerleşik
   RDP kurallarını yalnız allowlist IP'ye kısıtla — blanket KAPATMA YOK (kilitlenme önlenir, kırmızı uyarı). param + .PARAMETER/.EXAMPLE eklendi.
-- Doğrulama: build 0/0, test 44/44(+2), PS parse OK (0 hata). harden-adapanel.ps1 artık installer'a DAHİL (AdaPanel.iss [Files] → {app}\scripts).
-  Installer SHA256: `F87BF9550A6D8C0E3AAEFA93AA91A7F350C8012A8FE49F5711F28B8CBFF1D959` (49.30 MiB). (Ara build FCCCFFD0 — script bundle'ından önce.)
+- harden-adapanel.ps1 K1 DÜZELTİLDİ: eski `icacls /inheritance:r /grant:r (OI)(CI)F` (paneli kıran AYNI yöntem!) → panelle aynı .NET
+  Get-Acl/Set-Acl (SetAccessRuleProtection(true,true) + SYSTEM/Admin FullControl Container|ObjectInherit + None + PurgeAccessRules Users+Auth),
+  yalnız 6 hassas alt klasör (root/runtimes'a DOKUNMAZ → runtimes IIS için RX kalır). Geçici klasörde test: SYSTEM✓ Admins✓ Users✗ Auth✗
+  Protected✓ Yazılabilir✓. Artık scripti çalıştırmak paneli KIRMAZ (önceki K1 çalıştırılsa DataProtection/SQLite'ı yeniden kırardı).
+- harden-adapanel.ps1 artık installer'a DAHİL (AdaPanel.iss [Files] → {app}\scripts\harden-adapanel.ps1).
+- Doğrulama: build 0/0, test 44/44(+2), PS parse OK (0 hata). Installer SHA256: `AF632C4E204620644ADD8344E0688BE299FFF739617CF715FF42D8301BD01DC4` (49.30 MiB).
+  (Ara build'ler: FCCCFFD0 = harden script bundle öncesi, F87BF955 = K1 .NET düzeltmesi öncesi.)
 - KULLANICIYA: yeni installer kur + panelden phpMyAdmin/Adminer'i 1 kez YENIDEN DAGIT (loopback binding uygulansın). Mevcut public'i HEMEN kapatmak
   için canlıda harden-adapanel.ps1 çalıştır (B7 firewall kuralını kaldırır). OS portları için -HardenManagementPorts (+ sabit IP'n varsa -RdpAllowFrom).

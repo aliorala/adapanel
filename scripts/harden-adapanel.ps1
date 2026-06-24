@@ -74,8 +74,10 @@ $root = "C:\ProgramData\AdaPanel"
 # data\adapanel.db (admin parola ozetleri, 2FA secret'lari), certs\panel.password ve
 # keys\key-*.xml (ASP.NET DataProtection anahtarlari — hatta yazilabilir) dosyalarini
 # herhangi bir barindirilmis sitenin PHP koduna acar -> tam sunucu ele gecirme.
-# Cozum: Mirasi kir, sadece SYSTEM + Administrators full kalsin; panelin kendi servis
-# hesabini ve calismasi gereken runtime ikililerini ise tekrar ac.
+# Cozum (panel servisiyle AYNI .NET yontemi): yalniz HASSAS alt klasorleri (data/keys/certs/config/
+# backups/mail-certs) kilitle. icacls DEGIL .NET ACL kullanilir: izin "bu klasor + alt ogeler"e KESIN
+# uygulanir (icacls (OI)(CI)F bazi Server'larda inherit-only uygulayip SYSTEM erisimini -> SQLite ve
+# DataProtection'i kiriyordu). KOK (root) ve runtimes'a DOKUNULMAZ (runtimes IIS icin RX kalmali).
 
 Write-Host ""
 Write-Host "[K1] C:\ProgramData\AdaPanel ACL kilidi..." -ForegroundColor Yellow
@@ -84,81 +86,63 @@ if (-not (Test-Path -LiteralPath $root)) {
     Write-Warning "[K1] '$root' bulunamadi. AdaPanel bu sunucuda standart konumda kurulu degil gibi gorunuyor; K1 atlandi."
 }
 else {
-    # 1) Mirasi kir ve SADECE SYSTEM + Administrators full control olacak sekilde sifirla.
-    #    /inheritance:r  -> miras alinan izinleri kaldirir (acik izinlere cevirir)
-    #    /grant:r        -> mevcut acik izinleri bu hesaplar icin SIFIRLAYIP yeniden verir
-    #    (OI)(CI)F       -> Object+Container Inherit, Full control (alt klasor/dosyalara da)
-    #    /T              -> mevcut tum alt ogelere uygula
-    #    /C              -> hatalarda durmadan devam et
-    Write-Host "[K1] Miras kiriliyor; SYSTEM + Administrators tam yetki olarak sifirlaniyor..."
-    & icacls "$root" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" /T /C
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "[K1] icacls sifirlama bazi ogelerde uyari/hata dondurdu (exit $LASTEXITCODE). Cikti yukarida; genelde acik dosyalardan kaynaklanir."
+    # Panel servisinin (DataRootHardeningService) acilista uyguladiginin AYNISI — burada elle de uygulanir.
+    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs")
+    $inherit   = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
+    $noProp    = [System.Security.AccessControl.PropagationFlags]::None
+    $allow     = [System.Security.AccessControl.AccessControlType]::Allow
+    $fullCtrl  = [System.Security.AccessControl.FileSystemRights]::FullControl
+    $systemSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+    $adminSid  = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $usersSid  = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+    $authSid   = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::AuthenticatedUserSid, $null)
+
+    foreach ($sub in $sensitive) {
+        $dir = Join-Path $root $sub
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        try {
+            $acl = Get-Acl -LiteralPath $dir
+            # Mirasi kapat ama mevcut ACE'leri acik kopya olarak KORU (CREATOR OWNER bozulmaz).
+            $acl.SetAccessRuleProtection($true, $true)
+            # SYSTEM + Administrators: bu KLASOR + alt ogelere tam yetki (PropagationFlags.None = nesnenin
+            # KENDISINE de uygulanir -> SYSTEM db/anahtar YAZABILIR; icacls inherit-only belirsizligi yok).
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, $fullCtrl, $inherit, $noProp, $allow)))
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid,  $fullCtrl, $inherit, $noProp, $allow)))
+            # Tenant erisimini KALDIR (Users + Authenticated Users) -> db/anahtar/parola sizmaz.
+            [void]$acl.PurgeAccessRules($usersSid)
+            [void]$acl.PurgeAccessRules($authSid)
+            Set-Acl -LiteralPath $dir -AclObject $acl
+            Write-Host "[K1]   Kilitlendi: $dir" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "[K1]   '$dir' ACL ayarlanamadi: $($_.Exception.Message)"
+        }
     }
 
-    # 2) KRITIK — panelin kendi servisini kilitleme. AdaPanel servisi LocalSystem disinda
-    #    ozel bir hesapla (orn. bir gMSA / yerel hesap) calisiyorsa, mirasi kirdiktan sonra
-    #    erisimini kaybeder. Servis hesabini tespit edip gerekirse tam yetki veriyoruz.
-    #    Servis "AdaPanel" veya "AdaPanelApi" olabilir; ikisini de yakalariz.
-    $svc = Get-CimInstance Win32_Service -Filter "Name='AdaPanel' OR Name LIKE 'AdaPanel%'" -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-
-    if ($svc) {
-        $startName = $svc.StartName
-        Write-Host "[K1] AdaPanel servisi bulundu: '$($svc.Name)' (LogOn: '$startName')."
-
-        # LocalSystem zaten SYSTEM olarak tam yetkili; ekstra grant gerekmez.
-        $isLocalSystem = [string]::IsNullOrWhiteSpace($startName) -or
-                         $startName -ieq "LocalSystem" -or
-                         $startName -ieq ".\LocalSystem"
-
-        if ($isLocalSystem) {
-            Write-Host "[K1] Servis LocalSystem/SYSTEM olarak calisiyor; SYSTEM tam yetkili oldugundan ek izin gerekmiyor."
-        }
-        else {
-            Write-Host "[K1] Servis ozel bir hesapla calisiyor ('$startName'); kilitlenmemesi icin tam yetki veriliyor..."
-            & icacls "$root" /grant:r "$($startName):(OI)(CI)F" /T /C
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "[K1] Servis hesabi '$startName' icin izin verme uyari/hata dondurdu (exit $LASTEXITCODE). Hesap adini ('DOMAIN\kullanici' veya '.\kullanici' formatinda olmali) dogrulayin."
+    # AdaPanel servisi LocalSystem disinda OZEL bir hesapla calisiyorsa, o hesaba da hassas klasorlerde tam
+    # yetki ver (yoksa panel kendi DB/anahtarlarina erisemez). LocalSystem (SYSTEM) zaten yetkilidir.
+    $svc = Get-CimInstance Win32_Service -Filter "Name='AdaPanel' OR Name LIKE 'AdaPanel%'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($svc -and -not ([string]::IsNullOrWhiteSpace($svc.StartName) -or $svc.StartName -ieq "LocalSystem" -or $svc.StartName -ieq ".\LocalSystem")) {
+        Write-Host "[K1] Servis ozel hesapla calisiyor ('$($svc.StartName)'); hassas klasorlerde tam yetki veriliyor..."
+        try {
+            $svcSid = (New-Object System.Security.Principal.NTAccount($svc.StartName)).Translate([System.Security.Principal.SecurityIdentifier])
+            foreach ($sub in $sensitive) {
+                $dir = Join-Path $root $sub
+                if (Test-Path -LiteralPath $dir) {
+                    $acl = Get-Acl -LiteralPath $dir
+                    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svcSid, $fullCtrl, $inherit, $noProp, $allow)))
+                    Set-Acl -LiteralPath $dir -AclObject $acl
+                }
             }
         }
-    }
-    else {
-        Write-Warning "[K1] AdaPanel servisi bulunamadi (Win32_Service Name='AdaPanel'/'AdaPanel%'). Servis baska bir adla calisiyorsa, o hesabin '$root' uzerinde erisimi olup olmadigini elle kontrol edin."
-    }
-
-    # 3) Sadece hosted sitelerin CALISMASI icin gereken runtime'lara (php, node) Read+Execute
-    #    geri ver. MariaDB/Redis/Stalwart AG uzerinden (localhost:3306/6379/...) erisilir;
-    #    dosyalarinin (DB verisi/config/parola) tenant'larca OKUNMASINA GEREK YOK ve gizli
-    #    kalmali — bu yuzden RX'i TUM runtimes'a degil, yalniz php + node'a veriyoruz.
-    #    data/keys/certs/config/backups/mail-certs'e de DOKUNMUYORUZ (kilitli ebeveyni miras alir).
-    $runtimes = Join-Path $root "runtimes"
-    $reopened = @()
-    foreach ($sub in @("php", "node")) {
-        $dir = Join-Path $runtimes $sub
-        if (Test-Path -LiteralPath $dir) {
-            Write-Host "[K1] '$dir' uzerinde IIS_IUSRS + Users icin Read+Execute (RX) geri veriliyor..."
-            & icacls "$dir" /grant:r "BUILTIN\IIS_IUSRS:(OI)(CI)RX" "BUILTIN\Users:(OI)(CI)RX" /T /C
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "[K1] '$dir' RX izni uyari/hata dondurdu (exit $LASTEXITCODE)."
-            }
-            $reopened += $dir
+        catch {
+            Write-Warning "[K1] Servis hesabi '$($svc.StartName)' icin izin verilemedi: $($_.Exception.Message). Hesap adini dogrulayin."
         }
     }
-    if ($reopened.Count -eq 0) {
-        Write-Warning "[K1] runtimes\php / runtimes\node bulunamadi; RX yeniden acma atlandi (PHP/Node baska konumdaysa elle ac)."
-    }
 
-    # 4) Yonetici dogrulamasi icin son ACL durumlarini bas.
-    Write-Host ""
-    Write-Host "[K1] Son durum -> icacls `"$root`":" -ForegroundColor Green
-    & icacls "$root"
-    foreach ($dir in $reopened) {
-        Write-Host ""
-        Write-Host "[K1] Son durum -> icacls `"$dir`":" -ForegroundColor Green
-        & icacls "$dir"
-    }
-    Write-Host "[K1] Tamamlandi." -ForegroundColor Green
+    Write-Host "[K1] Tamamlandi. (Panel servisi de acilista ayni sertlestirmeyi uygular.)" -ForegroundColor Green
 }
 
 # =======================================================================================
