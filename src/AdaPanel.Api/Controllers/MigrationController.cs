@@ -31,4 +31,15 @@ public sealed class MigrationController(ISiteMigrationService migrationService) 
             result,
             result.OverallSuccess ? "migration.site.success" : "migration.site.partial"));
     }
+
+    // Plesk REST API keşfi: domain'leri otomatik listele (sihirbazı doldurmak için). Best-effort.
+    [HttpPost("plesk/discover")]
+    [RequestSizeLimit(8192)]
+    public async Task<ActionResult<ApiResponse<PleskDiscoverResultDto>>> DiscoverPleskAsync(
+        [FromBody] PleskDiscoverRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await migrationService.DiscoverPleskAsync(request, cancellationToken);
+        return Ok(ApiResponse<PleskDiscoverResultDto>.Ok(result));
+    }
 }

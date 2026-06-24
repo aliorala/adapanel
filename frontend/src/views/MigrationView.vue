@@ -9,6 +9,43 @@
 
     <p v-if="notice" :class="['inline-notice', noticeError ? 'error' : 'ok']">{{ notice }}</p>
 
+    <div class="form-surface plesk-discover">
+      <h3 class="section-label">{{ t("panel.migration.discoverTitle") }}</h3>
+      <p class="meta create-hint">{{ t("panel.migration.discoverHint") }}</p>
+      <div class="form-grid">
+        <label>
+          <span class="field-label">{{ t("panel.migration.pleskHost") }}</span>
+          <input v-model="plesk.host" placeholder="plesk.example.com" spellcheck="false" />
+        </label>
+        <label>
+          <span class="field-label">{{ t("panel.migration.ftp.port") }}</span>
+          <input v-model.number="plesk.port" type="number" />
+        </label>
+        <label>
+          <span class="field-label">{{ t("panel.migration.pleskApiKey") }}</span>
+          <input v-model="plesk.apiKey" type="password" spellcheck="false" />
+        </label>
+      </div>
+      <div class="row-actions">
+        <button class="secondary compact" :disabled="discovering || !plesk.host.trim() || !plesk.apiKey.trim()" @click="discover">
+          {{ discovering ? t("panel.migration.discovering") : t("panel.migration.discover") }}
+        </button>
+      </div>
+      <div v-if="discoveredDomains.length" class="discovered-list">
+        <p class="meta">{{ t("panel.migration.discovered", { count: discoveredDomains.length }) }}</p>
+        <div class="domain-chips">
+          <button
+            v-for="d in discoveredDomains"
+            :key="d.name"
+            type="button"
+            class="secondary compact"
+            @click="pickDomain(d.name)">
+            {{ d.name }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="form-surface">
       <p class="meta create-hint">{{ t("panel.migration.intro") }}</p>
 
@@ -125,7 +162,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { migrateSite, type MigrationStep } from "../api/migration";
+import { migrateSite, discoverPlesk, type MigrationStep, type PleskDomain } from "../api/migration";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
@@ -157,6 +194,11 @@ const notice = ref("");
 const noticeError = ref(false);
 let physicalPathEdited = false;
 
+// Plesk REST keşfi (opsiyonel kolaylık)
+const plesk = reactive({ host: "", port: 8443, apiKey: "" });
+const discovering = ref(false);
+const discoveredDomains = ref<PleskDomain[]>([]);
+
 // Site adından varsayılan fiziksel yol türet (kullanıcı elle değiştirmediyse).
 watch(
   () => form.siteName,
@@ -179,6 +221,37 @@ watch(
 // Protokole göre varsayılan portu güncelle (SFTP=22, FTP/FTPS=21).
 function syncFilePort() {
   form.filePort = form.fileProtocol === "sftp" ? 22 : 21;
+}
+
+// Plesk'e bağlan → domain listesi çek (best-effort; hata → uyarı, manuel form çalışır).
+async function discover() {
+  if (!plesk.host.trim() || !plesk.apiKey.trim()) return;
+  discovering.value = true;
+  notice.value = "";
+  discoveredDomains.value = [];
+  try {
+    const result = await discoverPlesk({ host: plesk.host.trim(), port: plesk.port || 8443, apiKey: plesk.apiKey.trim() });
+    discoveredDomains.value = result.domains;
+    if (result.domains.length === 0) {
+      notice.value = t("panel.migration.noDomains");
+      noticeError.value = false;
+    }
+  } catch (error) {
+    notice.value = extractApiMessage(error);
+    noticeError.value = true;
+  } finally {
+    discovering.value = false;
+  }
+}
+
+// Keşfedilen domain'i seç → sihirbazı doldur (parolalar yine elle girilir).
+function pickDomain(name: string) {
+  form.siteName = name;
+  form.remotePath = "/httpdocs";
+  if (plesk.host.trim()) {
+    form.fileHost = plesk.host.trim();
+    form.dbHost = plesk.host.trim();
+  }
 }
 
 async function run() {

@@ -13,4 +13,10 @@ public interface ISiteMigrationService
         Guid? actorUserId,
         string? ipAddress,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Plesk REST API'sine bağlanıp domain'leri keşfeder (göç sihirbazını doldurmak için). Best-effort —
+    /// bağlantı/şekil hatasında net hata fırlatır; manuel form etkilenmez.
+    /// </summary>
+    Task<PleskDiscoverResultDto> DiscoverPleskAsync(PleskDiscoverRequest request, CancellationToken cancellationToken = default);
 }

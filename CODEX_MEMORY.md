@@ -3866,3 +3866,19 @@ Basarili:
 - KULLANICIYA: menüde "Göç" → formu doldur (site + SFTP + DB) → "Göçü başlat" → adım sonuçları. Plesk/cPanel/ham sunucu hepsiyle (manuel kimlik girişiyle).
 - GÖÇ ARACINDA KALAN: Plesk REST OTOMATİK KEŞİF ("keşif" katmanı — Plesk'e API anahtarıyla bağlan → domain'leri listele → formu otomatik doldur →
   tek tık). Bende canlı Plesk olmadığı için test edilemeyen katman; mevcut motor/forma oturur. + .user.ini göç-sonrası sanitize.
+
+## 2026-06-24 (100) — Plesk REST OTOMATİK KEŞİF → Göç aracı TAM (sihirbaz + keşif)
+- DiscoverPleskAsync (SiteMigrationService): GET https://host:8443/api/v2/domains (header X-API-Key) → domain listesi. Plesk self-signed
+  cert'i tek-seferlik göç bağlantısı için ServerCertificateCustomValidationCallback => true ile ATLANIR (admin kendi sunucusuna bağlanıyor).
+  JSON array'den her elemanın "name" (+ "hosting_type") çıkarılır. Best-effort: bağlantı/HTTP/parse hatası → net AppException
+  (migration.plesk.connect_failed / api_error / parse_failed); MANUEL FORM ETKİLENMEZ. PleskDiscoverRequest/ResultDto + PleskDomainDto.
+  POST /migration/plesk/discover.
+- Frontend MigrationView: en üstte "Plesk'ten otomatik keşfet" bölümü (host + port 8443 + API anahtarı → "Domain'leri keşfet") → domain
+  buton-chip'leri → birine tıklayınca form doldurulur (siteName=domain, remotePath=/httpdocs, fileHost/dbHost=plesk host). Parolalar yine
+  ELLE girilir (Plesk API parola vermez). api/migration.discoverPlesk + i18n (~11 anahtar; migration.plesk.* hata mesajları).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2194=2194. Installer SHA256: `F65B1166638BDEA8B1D396369A54180DAECC08B570D7D0428E1ABA40168229C1` (49.31 MiB).
+- ⚠️ Plesk REST keşfi BENDE TEST EDİLEMEDİ (canlı Plesk yok) → docs'a göre (api/v2/domains, X-API-Key) yazıldı; Plesk yanıt şekli farklıysa
+  parse_failed döner (çökmez, manuel form çalışır). Manuel mod = güvenli taban; keşif sadece form-doldurma kolaylığı.
+- 🎯 GÖÇ ARACI TAM: motor (orkestrasyon) ✓ + sihirbaz (manuel) ✓ + Plesk REST keşif ✓. Geriye yalnız nice-to-have: .user.ini göç-sonrası
+  sanitize, per-domain DB otomatik keşfi (Plesk CLI gate — kırılgan, atlandı).
+- KULLANICIYA: menü → "Göç" → (opsiyonel) Plesk host + API anahtarı → "keşfet" → domain seç → SFTP + DB parolalarını gir → "Göçü başlat" → adım sonuçları.

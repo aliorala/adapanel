@@ -36,3 +36,13 @@ export async function migrateSite(payload: MigrateSitePayload) {
   const response = await apiClient.post<ApiEnvelope<MigrateSiteResult>>("/migration/site", payload);
   return response.data.data;
 }
+
+export type PleskDiscoverPayload = { host: string; port: number; apiKey: string };
+export type PleskDomain = { name: string; hostingType: string };
+export type PleskDiscoverResult = { domains: PleskDomain[] };
+
+// Plesk REST API'sine bağlanıp domain'leri keşfet (sihirbazı doldurmak için). Best-effort.
+export async function discoverPlesk(payload: PleskDiscoverPayload) {
+  const response = await apiClient.post<ApiEnvelope<PleskDiscoverResult>>("/migration/plesk/discover", payload);
+  return response.data.data;
+}

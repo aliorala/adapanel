@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Migration;
@@ -125,6 +126,73 @@ public sealed class SiteMigrationService(
             Steps = steps,
             OverallSuccess = steps.Count > 0 && steps.TrueForAll(step => step.Success)
         };
+    }
+
+    // Plesk REST keşfi: GET https://host:8443/api/v2/domains (X-API-Key) → domain listesi. Plesk genelde
+    // self-signed sertifika kullanır → bu TEK seferlik göç bağlantısı için sertifika doğrulaması atlanır (admin
+    // kendi sunucusuna bağlanıyor). Best-effort: bağlantı/şekil hatası → net AppException; manuel form çalışmaya devam eder.
+    public async Task<PleskDiscoverResultDto> DiscoverPleskAsync(PleskDiscoverRequest request, CancellationToken cancellationToken = default)
+    {
+        var host = request.Host.Trim().TrimEnd('/');
+        var port = request.Port > 0 ? request.Port : 8443;
+
+        using var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+        };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+        http.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", request.ApiKey);
+        http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.GetAsync($"https://{host}:{port}/api/v2/domains", cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Plesk keşif bağlantısı başarısız {Host}:{Port}", host, port);
+            throw new AppException("migration.plesk.connect_failed", 502, 502, exception.Message);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new AppException("migration.plesk.api_error", 502, 502, $"HTTP {(int)response.StatusCode}");
+        }
+
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var domains = new List<PleskDomainDto>();
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in document.RootElement.EnumerateArray())
+                {
+                    if (element.ValueKind != JsonValueKind.Object ||
+                        !element.TryGetProperty("name", out var nameElement) ||
+                        nameElement.ValueKind != JsonValueKind.String)
+                    {
+                        continue;
+                    }
+
+                    domains.Add(new PleskDomainDto
+                    {
+                        Name = nameElement.GetString() ?? string.Empty,
+                        HostingType = element.TryGetProperty("hosting_type", out var hostingType) && hostingType.ValueKind == JsonValueKind.String
+                            ? hostingType.GetString() ?? string.Empty
+                            : string.Empty
+                    });
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Plesk keşif yanıtı ayrıştırılamadı.");
+            throw new AppException("migration.plesk.parse_failed", 502, 502, exception.Message);
+        }
+
+        return new PleskDiscoverResultDto { Domains = domains };
     }
 
     private static MigrationStepDto Step(string name, bool success, string message)
