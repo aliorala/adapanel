@@ -31,6 +31,8 @@ public sealed class MailService(
 {
     private const string ConfigPath = "config/mail.json";
     private const string CertificateStatePath = "config/mail-cert.json";
+    // Domain kotalari Stalwart'ta yok → panel-tarafi tutulur (domain→azami toplam MB) ve tahsis toplamiyla dayatilir.
+    private const string DomainQuotaPath = "config/mail-domain-quotas.json";
     private const string ServerComponentId = "stalwart-mail";
     private const string CliComponentId = "stalwart-cli";
     private const string GeneratedPasswordKey = "generatedPassword";
@@ -71,6 +73,7 @@ public sealed class MailService(
             return new MailWorkspaceDto { Installed = true, Configured = false };
         }
 
+        var quotas = await ReadDomainQuotasAsync(cancellationToken);
         var domainItems = ParseItems(probe.StandardOutput);
         var domains = domainItems
             .Select(item => new MailDomainDto
@@ -78,7 +81,7 @@ public sealed class MailService(
                 Name = GetField(item, "name"),
                 Active = GetBoolField(item, "isEnabled", "active", "enabled"),
                 AccountCount = 0,
-                MaxSizeMB = 0
+                MaxSizeMB = quotas.GetValueOrDefault(GetField(item, "name").Trim().ToLowerInvariant())
             })
             .Where(item => !string.IsNullOrWhiteSpace(item.Name))
             .ToArray();
@@ -178,6 +181,14 @@ public sealed class MailService(
             workspace.Accounts = accounts;
             workspace.Aliases = aliases;
             workspace.Lists = lists;
+
+            // Seçili domainin tahsis toplamını (kutu kotaları) doldur → UI "kullanılan / limit" gösterir.
+            var selected = domains.FirstOrDefault(item => string.Equals(item.Name, normalized, StringComparison.OrdinalIgnoreCase));
+            if (selected is not null)
+            {
+                selected.AllocatedMB = accounts.Sum(account => Math.Max(0, account.MaxSizeMB));
+                selected.AccountCount = accounts.Count;
+            }
         }
 
         return workspace;
@@ -203,10 +214,20 @@ public sealed class MailService(
         return await GetWorkspaceAsync(null, cancellationToken);
     }
 
-    public Task<MailWorkspaceDto> CreateDomainAsync(CreateMailDomainRequest request, CancellationToken cancellationToken = default)
+    public async Task<MailWorkspaceDto> CreateDomainAsync(CreateMailDomainRequest request, CancellationToken cancellationToken = default)
     {
         var domain = request.DomainName.Trim().ToLowerInvariant();
-        return MutateAsync(
+        // İDEMPOTENT: domain Stalwart'ta ZATEN varsa (ör. önceki kurulumdan/silinemeyen testten kalma) "create
+        // domain" reddeder → mail.operation_failed → site oluşturma uyarı verirdi (canlı bulgu).
+        // Profesyonel paneller gibi var olanı BAŞARI say. (Stalwart kurulu/yapılandırılı değilse FindIdAsync null
+        // döner → MutateAsync gerçek mail.not_installed/not_configured'ı fırlatır = maskelenmez.)
+        var existing = await FindIdAsync("domain", "name", domain, cancellationToken);
+        if (existing is not null)
+        {
+            return await GetWorkspaceAsync(domain, cancellationToken);
+        }
+
+        return await MutateAsync(
             domain,
             $"create domain --field name={Arg(domain)} --field isEnabled=true",
             cancellationToken);
@@ -224,47 +245,48 @@ public sealed class MailService(
             return await GetWorkspaceAsync(null, cancellationToken);
         }
 
-        // profesyonel paneller gibi CASCADE: domaine bağlı her şey domainle birlikte gider. Stalwart üzerinde
-        // hesap bulunan bir domaini silmeyi reddeder; bu yüzden eski kod domaini silemiyor,
-        // domain UI'de takılı kalıyordu. Önce domaine ait hesapları (alias'lar hesabın içinde
-        // saklandığından onlarla birlikte), ardından başka domaindeki hesaplarda bu domaine
-        // işaret eden alias girdilerini temizleriz; en son domaini sileriz.
-        foreach (var brief in await QueryAsync(cli, "account", env, cancellationToken))
+        // profesyonel paneller gibi CASCADE: domaine bağlı TÜM üyeler (hesap + grup + liste) domainle birlikte
+        // gider. Stalwart, ÜYESİ olan bir domaini silmeyi REDDEDER → eskiden yalnız hesaplar siliniyordu; domainde
+        // grup/liste/öksüz üye kalınca "delete domain" patlıyor ve domain UI'de takılı kalıyordu (mail.operation_failed).
+        // QueryAsync bilinmeyen/desteklenmeyen tipte [] döner (fırlatmaz) → grup/liste güvenle denenir. account
+        // turunda ayrıca BAŞKA domaindeki hesaplarda bu domaine işaret eden alias girdileri de temizlenir.
+        foreach (var principalType in new[] { "list", "group", "account" })
         {
-            var accountId = GetField(brief, "id");
-            if (string.IsNullOrWhiteSpace(accountId))
+            foreach (var brief in await QueryAsync(cli, principalType, env, cancellationToken))
             {
-                continue;
-            }
+                var memberId = GetField(brief, "id");
+                if (string.IsNullOrWhiteSpace(memberId))
+                {
+                    continue;
+                }
 
-            var detail = await GetObjectAsync(cli, "account", accountId, env, cancellationToken);
-            if (detail is null)
-            {
-                continue;
-            }
+                var detail = await GetObjectAsync(cli, principalType, memberId, env, cancellationToken);
+                var memberDomainId = detail is null ? null : GetField(detail.Value, "domainId");
+                var memberEmail = detail is null ? GetField(brief, "emailAddress") : GetField(detail.Value, "emailAddress");
+                var belongsToDomain =
+                    string.Equals(memberDomainId, domainId, StringComparison.Ordinal) ||
+                    (memberEmail?.EndsWith("@" + domain, StringComparison.OrdinalIgnoreCase) ?? false);
 
-            var accountDomainId = GetField(detail.Value, "domainId");
-            var emailAddress = GetField(detail.Value, "emailAddress");
-            var belongsToDomain =
-                string.Equals(accountDomainId, domainId, StringComparison.Ordinal) ||
-                (emailAddress?.EndsWith("@" + domain, StringComparison.OrdinalIgnoreCase) ?? false);
+                if (belongsToDomain)
+                {
+                    await RunCliAsync(cli, $"delete {principalType} --ids {Arg(memberId)}", env, cancellationToken);
+                    continue;
+                }
 
-            if (belongsToDomain)
-            {
-                await RunCliAsync(cli, $"delete account --ids {Arg(accountId)}", env, cancellationToken);
-                continue;
-            }
-
-            // Başka domaindeki hesapta bu domaine ait alias varsa alias map'ten çıkar.
-            var (entries, removed) = StripAliasesOfDomain(detail.Value, domainId);
-            if (removed)
-            {
-                var aliasPayload = "aliases={" + string.Join(",", entries) + "}";
-                await RunCliAsync(cli, $"update account {Arg(accountId)} --field {CliJsonArg(aliasPayload)}", env, cancellationToken);
+                // Başka domaindeki HESAPTA bu domaine ait alias varsa alias map'ten çıkar (yalnız account).
+                if (principalType == "account" && detail is not null)
+                {
+                    var (entries, removed) = StripAliasesOfDomain(detail.Value, domainId);
+                    if (removed)
+                    {
+                        var aliasPayload = "aliases={" + string.Join(",", entries) + "}";
+                        await RunCliAsync(cli, $"update account {Arg(memberId)} --field {CliJsonArg(aliasPayload)}", env, cancellationToken);
+                    }
+                }
             }
         }
 
-        // Artık boş olan domaini sil.
+        // Üyeler temizlendi → domaini sil. Hâlâ reddederse gerçek Stalwart çıktısı Details'te taşınır (cascade gösterir).
         var result = await RunCliAsync(cli, $"delete domain --ids {Arg(domainId)}", env, cancellationToken);
         if (!result.Success)
         {
@@ -304,6 +326,9 @@ public sealed class MailService(
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var domainId = await FindIdAsync("domain", "name", domain, cancellationToken)
             ?? throw new AppException("mail.operation_failed", 404, 404, $"domain not found: {domain}");
+
+        // panel-tarafı domain kotası denetimi: yeni kutu domain toplamını aşarsa reddet (Plesk gibi).
+        await EnsureDomainAllocationAsync(domain, address, request.MaxSizeMB, cancellationToken);
 
         // Hesap KOTASIZ oluşturulur: canlı testte quota'sız `create Account/User` çalışıyor,
         // payload'a "quotas" eklenince Stalwart 0.16.9 reddediyordu. Ayrıca JSON --json yerine
@@ -518,6 +543,8 @@ public sealed class MailService(
     {
         var normalized = request.Address.Trim().ToLowerInvariant();
         var domain = ExtractDomain(normalized);
+        // panel-tarafı domain kotası denetimi: bu kutunun yeni kotası domain toplamını aşarsa reddet.
+        await EnsureDomainAllocationAsync(domain, normalized, Math.Max(0, request.MaxSizeMB), cancellationToken);
         var id = await FindIdAsync("account", "emailAddress", normalized, cancellationToken) ?? normalized;
         // Stalwart account kotası tek tamsayı alan: `quota` (byte). Eski `quotas={maxDiskQuota}`
         // şeması 0.16.9'da reddediliyordu. 0 = sınırsız.
@@ -532,9 +559,78 @@ public sealed class MailService(
     public Task<MailAutoResponderDto> SetAutoResponderAsync(SetMailAutoResponderRequest request, CancellationToken cancellationToken = default)
         => throw new AppException("mail.autoresponder_not_supported", 400, 400);
 
-    // Stalwart'ta domain seviyesinde kota yoktur; çağrı sessizce mevcut durumu döner.
-    public Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)
-        => GetWorkspaceAsync(request.Domain, cancellationToken);
+    // panel-tarafı domain kotası: Stalwart domain kotası tutmaz; limit mail-domain-quotas.json'da saklanır ve
+    // yeni kutu/kota işlemlerinde tahsis toplamıyla dayatılır. 0 = sınırsız (kayıttan silinir).
+    public async Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)
+    {
+        var domain = request.Domain.Trim().ToLowerInvariant();
+        var limit = Math.Max(0, request.MaxSizeMB);
+
+        // Limit, halihazırda tahsis edilenden küçük olamaz (aksi halde mevcut kutular kotayı aşmış olurdu).
+        if (limit > 0)
+        {
+            var allocated = await GetDomainAllocatedMbAsync(domain, cancellationToken);
+            if (allocated > limit)
+            {
+                throw new AppException("mail.domain_quota_below_allocated", 409, 409, $"allocated={allocated}MB");
+            }
+        }
+
+        var quotas = await ReadDomainQuotasAsync(cancellationToken);
+        if (limit == 0)
+        {
+            quotas.Remove(domain);
+        }
+        else
+        {
+            quotas[domain] = limit;
+        }
+        await fileStore.WriteAsync(DomainQuotaPath, quotas, cancellationToken);
+
+        return await GetWorkspaceAsync(domain, cancellationToken);
+    }
+
+    // Domain kota haritası (domain→MB, büyük/küçük harf duyarsız). Boş = kota yok.
+    private async Task<Dictionary<string, int>> ReadDomainQuotasAsync(CancellationToken cancellationToken)
+    {
+        var stored = await fileStore.ReadAsync<Dictionary<string, int>>(DomainQuotaPath, new(), cancellationToken);
+        return stored is null
+            ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, int>(stored, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Bir domaindeki posta kutularına tahsis edilen toplam kota (MB). Sınırsız (0) kutular 0 sayılır.
+    private async Task<int> GetDomainAllocatedMbAsync(string domain, CancellationToken cancellationToken)
+    {
+        var workspace = await GetWorkspaceAsync(domain, cancellationToken);
+        return workspace.Accounts?.Sum(account => Math.Max(0, account.MaxSizeMB)) ?? 0;
+    }
+
+    // Yeni kutu/kota işlemi domain kotasını aşıyor mu? Aşıyorsa AppException fırlatır. excludeAddress: güncellenen kutu
+    // (kendi eski tahsisi düşülür). requestedMb: yeni kota (0 = sınırsız → domain kotalıysa reddedilir).
+    private async Task EnsureDomainAllocationAsync(string domain, string excludeAddress, int requestedMb, CancellationToken cancellationToken)
+    {
+        var quotas = await ReadDomainQuotasAsync(cancellationToken);
+        if (!quotas.TryGetValue(domain, out var limit) || limit <= 0)
+        {
+            return; // domain kotası yok
+        }
+
+        if (requestedMb <= 0)
+        {
+            // Domain kotası varken sınırsız kutu, kotayı anlamsız kılar.
+            throw new AppException("mail.domain_quota_needs_mailbox_limit", 409, 409);
+        }
+
+        var workspace = await GetWorkspaceAsync(domain, cancellationToken);
+        var others = (workspace.Accounts ?? [])
+            .Where(account => !string.Equals(account.Address, excludeAddress, StringComparison.OrdinalIgnoreCase))
+            .Sum(account => Math.Max(0, account.MaxSizeMB));
+        if (others + requestedMb > limit)
+        {
+            throw new AppException("mail.domain_quota_exceeded", 409, 409, $"limit={limit}MB used={others}MB add={requestedMb}MB");
+        }
+    }
 
     /// <summary>
     /// Domain için dış DNS sağlayıcısına eklenmesi gereken kayıtları üretir.

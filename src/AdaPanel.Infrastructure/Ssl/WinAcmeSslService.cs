@@ -77,6 +77,15 @@ public sealed class WinAcmeSslService(
         return dto;
     }
 
+    // Domainsiz önizleme (nip.io): HIZLI self-signed HTTPS bağlaması — ACME beklemez, redirect'i değiştirmez.
+    public async Task EnsurePreviewCertificateAsync(string siteName, string hostName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var certificate = CreateSelfSignedCertificate(hostName, site.Name);
+        PersistCertificate(certificate);
+        await EnsureHttpsBindingAsync(site.Name, hostName, 443, certificate, cancellationToken);
+    }
+
     public async Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);

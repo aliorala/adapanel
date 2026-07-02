@@ -16,6 +16,12 @@ public interface IBackupService
     /// </summary>
     Task<BackupRecordDto> BackupMailAsync(BackupMailRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Panelin KENDİ durumunu yedekler: adapanel.db (kullanıcı/2FA) + config/*.json
+    /// (servis planları, müşteri scope'ları, otomasyon ayarları). DataProtection anahtarları HARİÇ.
+    /// </summary>
+    Task<BackupRecordDto> BackupPanelAsync(BackupPanelRequest request, CancellationToken cancellationToken = default);
+
     Task<BackupRecordDto> RestoreAsync(RestoreBackupRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Zip yedeği içeriğini dizin bazlı listeler (granüler geri yükleme için gezinme).</summary>
@@ -25,8 +31,15 @@ public interface IBackupService
     Task<RestoreBackupItemsResultDto> RestoreItemsAsync(RestoreBackupItemsRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// <paramref name="retentionDays"/> gününden eski yerel yedek dosyalarını ve kayıtlarını siler.
-    /// 0 veya negatif değer hiçbir şeyi silmez. Silinen kayıt sayısını döner.
+    /// <paramref name="retentionDays"/> gününden eski yedekleri budar: yerel dosya + kayıt silinir; <paramref name="remote"/>
+    /// verilmişse off-site (S3/FTP/WebDAV) UZAK kopya da silinir (uzak rotasyon). 0/negatif gün hiçbir şeyi silmez.
+    /// Silinen kayıt sayısını döner.
     /// </summary>
-    Task<int> PruneAsync(int retentionDays, CancellationToken cancellationToken = default);
+    Task<int> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Off-site yedek hedefini gerçek yedek almadan doğrular: küçük bir test dosyasını gerçek yükleme yoluyla
+    /// gönderir (kimlik + bağlantı + yazma izni). Başarısızlıkta fırlatmaz; sonucu (Success + neden) döner.
+    /// </summary>
+    Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default);
 }

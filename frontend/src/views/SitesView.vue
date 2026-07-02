@@ -14,7 +14,7 @@
         <button v-if="isAdmin" class="secondary compact" :disabled="sitesStore.importing" @click="importExistingSites">
           {{ t("panel.sites.import") }}
         </button>
-        <button v-if="isAdmin" class="compact" @click="showCreateForm = !showCreateForm">
+        <button v-if="canCreateSite" class="compact" @click="showCreateForm = !showCreateForm">
           {{ showCreateForm ? t("panel.sites.cancelCreate") : t("panel.sites.create") }}
         </button>
       </div>
@@ -41,7 +41,7 @@
       </div>
     </section>
 
-    <form v-if="showCreateForm && isAdmin" class="create-card" @submit.prevent="submitCreateSite">
+    <form v-if="showCreateForm && canCreateSite" class="create-card" @submit.prevent="submitCreateSite">
       <div class="create-card-head">
         <div>
           <h3>{{ t("panel.sites.createTitle") }}</h3>
@@ -71,7 +71,7 @@
             <small class="field-hint">{{ t("panel.sites.internalNameHint") }}</small>
           </label>
 
-          <label>
+          <label v-if="isAdmin">
             <span>{{ t("panel.sites.physicalPath") }}</span>
             <input v-model="createForm.physicalPath" required @input="physicalPathEdited = true" />
           </label>
@@ -144,6 +144,19 @@
         <span class="meta">{{ sitesStore.sites.length }}</span>
       </div>
 
+      <div v-if="preview" class="preview-card">
+        <div class="preview-card-head">
+          <strong>{{ t("panel.sites.previewReady") }}</strong>
+          <button class="secondary compact" @click="preview = null">{{ t("panel.sites.previewClose") }}</button>
+        </div>
+        <p v-if="preview.url" class="preview-line">
+          <a class="link-btn compact" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
+          <a class="preview-url" :href="preview.url" target="_blank" rel="noopener">{{ preview.url }}</a>
+        </p>
+        <p class="meta">{{ t("panel.sites.previewHostsHint") }}</p>
+        <code v-if="preview.hostsLine" class="preview-hosts">{{ preview.hostsLine }}</code>
+      </div>
+
       <div v-if="sitesStore.sites.length > 0" class="domain-rows">
         <article
           v-for="site in sitesStore.sites"
@@ -184,6 +197,12 @@
               {{ t("panel.sites.open") }}
             </a>
             <button
+              class="secondary compact"
+              :disabled="previewLoading === site.name || sitesStore.busySiteName === site.name"
+              @click="handlePreview(site.name)">
+              {{ previewLoading === site.name ? t("panel.common.loading") : t("panel.sites.preview") }}
+            </button>
+            <button
               v-if="!isRunning(site)"
               class="secondary compact"
               :disabled="sitesStore.busySiteName === site.name"
@@ -214,7 +233,7 @@
         </svg>
         <h3>{{ t("panel.sites.noSites") }}</h3>
         <p class="meta">{{ t("panel.sites.noSitesHint") }}</p>
-        <button v-if="isAdmin" class="compact" @click="showCreateForm = true">{{ t("panel.sites.create") }}</button>
+        <button v-if="canCreateSite" class="compact" @click="showCreateForm = true">{{ t("panel.sites.create") }}</button>
       </div>
     </section>
 
@@ -224,8 +243,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { SiteBindingPayload, SiteDefaultsResult, SiteRecord } from "../api/sites";
-import { getSiteDeletionPlan } from "../api/sites";
+import type { SiteBindingPayload, SiteDefaultsResult, SiteRecord, SitePreview } from "../api/sites";
+import { getSiteDeletionPlan, getSitePreview } from "../api/sites";
 import { getPanelPreferences } from "../api/panelSettings";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
@@ -237,6 +256,11 @@ const softwareStore = useSoftwareStore();
 const authStore = useAuthStore();
 // Site oluşturma/içe aktarma yalnız admin (bayi/müşteri mevcut sitelerini yönetir, oluşturamaz).
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+// Site oluşturma: admin + bayi + müşteri (backend kota + kapsam dayatır). Import yalnız admin.
+const canCreateSite = computed(() => {
+  const role = authStore.session?.user?.role;
+  return role === "Administrator" || role === "Reseller" || role === "Customer";
+});
 
 // profesyonel panel benzeri domain kartlarindaki hizli eylemler -> ilgili site araci sekmesine git.
 const emit = defineEmits<{ (event: "open-tool", payload: { siteName: string; tool: string }): void }>();
@@ -247,8 +271,8 @@ const quickTools = computed(() => [
   { id: "php", glyph: "P", label: t("panel.sites.tools.php") },
   { id: "mail", glyph: "@", label: t("panel.sites.tools.mail") },
   { id: "ssl", glyph: "SSL", label: t("panel.sites.tools.ssl") },
-  // webdb server-level (admin-only) → bayi/müşteride gizli.
-  ...(isAdmin.value ? [{ id: "webdb", glyph: "DB", label: t("panel.sites.tools.webdb") }] : []),
+  // Veritabanları (admin-only): site iş alanında DB ekle/sil + phpMyAdmin (SiteDatabasesView).
+  ...(isAdmin.value ? [{ id: "webdb", glyph: "SQL", label: t("panel.sites.tools.domaindb") }] : []),
   { id: "ftp", glyph: "FT", label: t("panel.sites.tools.ftp") },
   { id: "dns", glyph: "DNS", label: t("panel.sites.tools.dns") }
 ]);
@@ -263,7 +287,8 @@ function isRunning(site: SiteRecord): boolean {
 }
 
 function siteUrl(site: SiteRecord): string {
-  const binding = site.bindings[0];
+  // nip.io önizleme bağlamalarını ATLA → asıl domain gösterilsin (önizleme host'u "Siteyi aç"ı ele geçirmesin).
+  const binding = site.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io")) ?? site.bindings[0];
   if (!binding) {
     return "#";
   }
@@ -453,6 +478,25 @@ async function handleStartSite(siteName: string) {
     showNotice(t("panel.sites.started"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
+  }
+}
+
+// Domainsiz önizleme: linki kartta gösterir (window.open await sonrası tarayıcıca engellenir → kullanıcı KARTTAKİ
+// linke tıklar). previewLoading = işlenen site adı (buton "Yükleniyor" gösterir).
+const preview = ref<SitePreview | null>(null);
+const previewLoading = ref("");
+async function handlePreview(siteName: string) {
+  previewLoading.value = siteName;
+  preview.value = null;
+  try {
+    preview.value = await getSitePreview(siteName);
+    showNotice(
+      preview.value.method === "nipio" ? t("panel.sites.previewOpened") : t("panel.sites.previewHostsOnly"),
+      preview.value.method !== "nipio");
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    previewLoading.value = "";
   }
 }
 
@@ -972,5 +1016,37 @@ button:disabled {
   .create-actions button {
     width: 100%;
   }
+}
+
+.preview-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-1) 8%, transparent);
+}
+.preview-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.preview-line a {
+  font-weight: 600;
+  word-break: break-all;
+}
+.preview-hosts {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-0, #0b1418);
+  border: 1px solid var(--panel-border);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
 }
 </style>

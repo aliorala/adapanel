@@ -30,4 +30,16 @@ public interface IDnsService
     /// (site oluşturmayı asla bozmaz).
     /// </summary>
     Task EnsureZonePublishedAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>Sunucu-geneli DNS şablonunu döner (kayıtlı yoksa yerleşik varsayılan şablon).</summary>
+    Task<DnsTemplateDto> GetTemplateAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Sunucu-geneli DNS şablonunu kaydeder; bundan sonra yeni bölgeler bu şablonla seed edilir.</summary>
+    Task<DnsTemplateDto> UpdateTemplateAsync(UpdateDnsTemplateRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bölge için Windows DNS Server DNSSEC'i açar (Invoke-DnsServerZoneSign) ya da kapatır (Unsign). Plesk
+    /// DNSSEC eşdeğeri; Windows DNS Server gerektirir. Açıkken DTO'da registrar'a verilecek DS kayıtları döner.
+    /// </summary>
+    Task<SiteDnsZoneDto> SetDnssecAsync(string siteName, bool enabled, CancellationToken cancellationToken = default);
 }

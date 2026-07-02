@@ -256,10 +256,12 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
         string engineKey,
         CancellationToken cancellationToken)
     {
+        // Sistem rollerini (pg_*) ve süper-kullanıcı 'postgres'u GİZLE (motor admin — silinirse panel DB erişimini kaybeder).
         const string sql = """
             SELECT rolname, rolcanlogin
             FROM pg_roles
             WHERE rolname NOT LIKE 'pg_%'
+              AND rolname <> 'postgres'
             ORDER BY rolname;
             """;
 

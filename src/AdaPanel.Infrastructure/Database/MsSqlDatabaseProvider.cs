@@ -182,6 +182,8 @@ internal sealed class MsSqlDatabaseProvider : IDatabaseEngineProvider
         SqlConnection connection,
         CancellationToken cancellationToken)
     {
+        // Sistem/yerleşik principal'ları GİZLE: 'sa' (sysadmin — motor admin), guest/dbo/sys/INFORMATION_SCHEMA,
+        // sertifika (##), Windows servis/otorite hesapları. Kullanıcıya yalnız gerçek, yönetilebilir login'ler gösterilir.
         const string sql = """
             SELECT name, is_disabled
             FROM sys.server_principals
@@ -189,6 +191,7 @@ internal sealed class MsSqlDatabaseProvider : IDatabaseEngineProvider
               AND name NOT LIKE '##%'
               AND name NOT LIKE 'NT SERVICE\%'
               AND name NOT LIKE 'NT AUTHORITY\%'
+              AND name NOT IN ('sa', 'guest', 'dbo', 'sys', 'INFORMATION_SCHEMA', 'public')
             ORDER BY name;
             """;
         var results = new List<DatabaseUserDto>();

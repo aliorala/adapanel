@@ -19,9 +19,9 @@ public sealed class StoreController(IAppStoreService appStoreService) : Controll
     }
 
     [HttpPost("install")]
-    public async Task<ActionResult<ApiResponse<AppTemplateDto>>> InstallAsync([FromBody] InstallAppTemplateRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<AppInstallResultDto>>> InstallAsync([FromBody] InstallAppTemplateRequest request, CancellationToken cancellationToken)
     {
-        var template = await appStoreService.InstallAsync(request, cancellationToken);
-        return Ok(ApiResponse<AppTemplateDto>.Ok(template, "store.installed"));
+        var result = await appStoreService.InstallAsync(request, cancellationToken);
+        return Ok(ApiResponse<AppInstallResultDto>.Ok(result, "store.installed"));
     }
 }

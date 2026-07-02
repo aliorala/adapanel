@@ -13,6 +13,7 @@ export type DatabaseRecord = {
   owner: string;
   encoding: string;
   collation: string;
+  users: string[];
 };
 
 export type DatabaseUserRecord = {
@@ -60,6 +61,8 @@ export type CreateDatabasePayload = {
   // profesyonel paneller gibi: veritabanıyla birlikte kullanıcı (boşsa kullanıcı oluşturulmaz)
   userName?: string;
   password?: string;
+  // Plesk gibi: siteye bağla → site silinince bu DB de cascade ile gider.
+  siteName?: string;
 };
 
 export type CreateDatabaseUserPayload = {
@@ -110,6 +113,8 @@ export type ImportDatabasePayload = {
   userName: string;
   host: string;
   password: string;
+  // Plesk gibi: siteye bağla → site silinince bu DB de cascade ile gider.
+  siteName?: string;
 };
 
 // Var olan DB+kullanıcıyı panele tanıt (GRANT ALL eksikse + parolayı sakla).
@@ -160,6 +165,8 @@ export type DatabaseTransferPayload = {
   sourcePassword: string;
   sourceDatabase: string;
   targetDatabase?: string;
+  targetUserName?: string;
+  targetPassword?: string;
 };
 
 export type DatabaseTransferResult = {
@@ -167,6 +174,8 @@ export type DatabaseTransferResult = {
   sourceDatabase: string;
   targetDatabase: string;
   size: number;
+  userName: string;
+  password: string;
 };
 
 // profesyonel paneller gibi sunucu taraflı taşıma: kaynak DB bilgileri → sistem mysqldump→mysql ile otomatik aktarır.

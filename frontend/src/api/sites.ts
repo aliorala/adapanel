@@ -129,6 +129,21 @@ export async function getSite(siteName: string) {
   return response.data.data;
 }
 
+export type SitePreview = {
+  url: string;
+  previewHost: string;
+  method: string;
+  realHost: string;
+  serverAddress: string;
+  hostsLine: string;
+  bindingAdded: boolean;
+};
+
+export async function getSitePreview(siteName: string) {
+  const response = await apiClient.get<ApiEnvelope<SitePreview>>(`/sites/${encodeURIComponent(siteName)}/preview`);
+  return response.data.data;
+}
+
 export async function createSite(payload: CreateSitePayload) {
   const response = await apiClient.post<ApiEnvelope<SiteCreationResult>>("/sites", payload);
   return response.data.data;
@@ -188,6 +203,27 @@ export async function getSiteDeletionPlan(siteName: string) {
   );
   return response.data.data;
 }
+
+export type SiteDatabaseRef = { engine: string; name: string };
+export type SiteDatabases = { linked: SiteDatabaseRef[]; candidates: SiteDatabaseRef[] };
+
+// Sitenin veritabanı görünümü: bağlı olanlar + bağlanabilecek adaylar (seçerek bağlamak için).
+export async function getSiteDatabases(siteName: string) {
+  const response = await apiClient.get<ApiEnvelope<SiteDatabases>>(
+    `/sites/${encodeURIComponent(siteName)}/databases`,
+  );
+  return response.data.data;
+}
+
+// Mevcut bir veritabanını siteye bağla (seçerek; ad eşleşmesi gerekmez).
+export async function linkSiteDatabase(siteName: string, engine: string, name: string) {
+  await apiClient.post<ApiEnvelope<object>>(
+    `/sites/${encodeURIComponent(siteName)}/databases/link`,
+    { engine, name },
+  );
+}
+
+// Veritabanının siteyle bağını kaldır (veritabanını silmez).
 
 export async function deleteSite(
   siteName: string,

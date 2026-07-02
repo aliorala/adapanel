@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Components;
+using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Dtos.Sites;
@@ -25,6 +26,7 @@ public sealed class AppStoreService(
     IHttpClientFactory httpClientFactory,
     IComponentBootstrapper componentBootstrapper,
     IPhpService phpService,
+    IDatabaseService databaseService,
     ISchedulerService schedulerService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<AppStoreService> logger) : IAppStoreService
@@ -132,7 +134,7 @@ public sealed class AppStoreService(
         return Task.FromResult<IReadOnlyCollection<AppTemplateDto>>(Templates);
     }
 
-    public async Task<AppTemplateDto> InstallAsync(InstallAppTemplateRequest request, CancellationToken cancellationToken = default)
+    public async Task<AppInstallResultDto> InstallAsync(InstallAppTemplateRequest request, CancellationToken cancellationToken = default)
     {
         var templateId = request.TemplateId?.Trim().ToLowerInvariant() ?? string.Empty;
         var template = Templates.FirstOrDefault(item => item.Id == templateId)
@@ -150,22 +152,23 @@ public sealed class AppStoreService(
                 LaravelInstallLock.Release();
             }
 
-            return template;
+            return new AppInstallResultDto { TemplateId = template.Id };
         }
 
         if (template.Id == "roundcube")
         {
             await InstallRoundcubeAsync(request, cancellationToken);
-            return template;
+            return new AppInstallResultDto { TemplateId = template.Id };
         }
 
         var destination = await ResolveDestinationAsync(request, cancellationToken);
         Directory.CreateDirectory(destination);
 
+        (string Url, string User, string Password)? wordpressAdmin = null;
         switch (template.Id)
         {
             case "wordpress":
-                await InstallWordPressAsync(destination, cancellationToken);
+                wordpressAdmin = await InstallWordPressAsync(request, destination, cancellationToken);
                 break;
             case "adminer":
                 await InstallVerifiedAdminerAsync(destination, cancellationToken);
@@ -198,10 +201,22 @@ public sealed class AppStoreService(
         // web.config'ini (index.php'li) yazdığından korunur.
         Iis.WebAppPublisher.EnsurePhpEntry(destination);
 
-        return template;
+        return new AppInstallResultDto
+        {
+            TemplateId = template.Id,
+            AdminUrl = wordpressAdmin?.Url ?? string.Empty,
+            AdminUser = wordpressAdmin?.User ?? string.Empty,
+            AdminPassword = wordpressAdmin?.Password ?? string.Empty
+        };
     }
 
-    private async Task InstallWordPressAsync(string destination, CancellationToken cancellationToken)
+    // WordPress için gereken/önerilen PHP eklentileri. mysqli OLMADAN WordPress DB'ye HİÇ bağlanamaz (en kritik).
+    private static readonly string[] WordPressExtensions =
+    {
+        "mysqli", "pdo_mysql", "mbstring", "gd", "curl", "exif", "intl", "zip", "openssl", "fileinfo"
+    };
+
+    private async Task<(string Url, string User, string Password)?> InstallWordPressAsync(InstallAppTemplateRequest request, string destination, CancellationToken cancellationToken)
     {
         var package = await ResolveWordPressPackageAsync(cancellationToken);
         var workspace = Path.Combine(dataRoot, "temp", "app-installs", Guid.NewGuid().ToString("N"));
@@ -222,6 +237,242 @@ public sealed class AppStoreService(
         {
             TryDeleteDirectory(workspace);
         }
+
+        // TURNKEY (Plesk/cPanel WordPress Toolkit gibi): PHP'de mysqli vb. etkinleştir + veritabanı/kullanıcı oluştur +
+        // wp-config.php'yi yaz → kullanıcı DB ekranını ELLE doldurmak zorunda kalmaz, doğrudan "5 dakikalık" kuruluma düşer.
+        // Best-effort: DB sağlanamasa bile dosyalar kurulu kalır (kullanıcı wp-config'i elle tamamlayabilir).
+        try
+        {
+            var (phpComponentId, phpExecutable) = await EnsurePhpRuntimeAsync(cancellationToken);
+            await phpService.EnsureExtensionsAsync(phpComponentId, WordPressExtensions, cancellationToken);
+
+            var (dbName, dbUser, dbPassword) = await ProvisionWordPressDatabaseAsync(request, cancellationToken);
+            WriteWordPressConfig(destination, dbName, dbUser, dbPassword);
+            logger.LogInformation("WordPress veritabanı sağlandı (site {Site}): db={Db} user={User}", request.SiteName, dbName, dbUser);
+
+            // wp-cli ile çekirdek kurulumu (admin hesabı oluştur) → site DB ekranı YERİNE doğrudan giriş yapılabilir olur.
+            return await TryInstallWordPressCoreAsync(request, destination, phpExecutable, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "WordPress DB/wp-config otomatik kurulamadı (dosyalar kuruldu): {Site}", request.SiteName);
+            return null;
+        }
+    }
+
+    // wp-cli ile WordPress çekirdek kurulumunu tamamlar (admin hesabı + site başlığı). Başarılıysa giriş bilgilerini döner;
+    // başarısızsa (ör. zaten kurulu) null → kullanıcı WP'nin "5 dakikalık" ekranını kullanır. PHP CLI + DB + wp-config gerekir.
+    private async Task<(string Url, string User, string Password)?> TryInstallWordPressCoreAsync(
+        InstallAppTemplateRequest request,
+        string destination,
+        string phpExecutable,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var wpCli = await EnsureWpCliAsync(cancellationToken);
+            var (url, title) = await ResolveSiteUrlAndTitleAsync(request, cancellationToken);
+            var host = new Uri(url).Host;
+            const string adminUser = "admin";
+            var adminPassword = "Wp!" + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
+            var adminEmail = host.Contains('.') ? $"admin@{host}" : "admin@example.com";
+
+            var arguments =
+                $"\"{wpCli}\" --path=\"{destination}\" core install " +
+                $"--url=\"{url}\" --title=\"{title}\" --admin_user=\"{adminUser}\" " +
+                $"--admin_password=\"{adminPassword}\" --admin_email=\"{adminEmail}\" --skip-email";
+
+            var result = await ProcessRunner.RunAsync(
+                phpExecutable,
+                arguments,
+                cancellationToken: cancellationToken,
+                timeout: TimeSpan.FromMinutes(5));
+
+            if (result.ExitCode != 0)
+            {
+                logger.LogWarning("wp core install başarısız ({Site}): {Error}", request.SiteName, result.StandardError);
+                return null;
+            }
+
+            return ($"{url.TrimEnd('/')}/wp-admin/", adminUser, adminPassword);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "wp-cli core install hatası ({Site})", request.SiteName);
+            return null;
+        }
+    }
+
+    // wp-cli.phar'ı indirir (yoksa) ve yolunu döner. Tool dizininde önbelleklenir.
+    private async Task<string> EnsureWpCliAsync(CancellationToken cancellationToken)
+    {
+        var directory = Path.Combine(dataRoot, "tools", "wp-cli");
+        Directory.CreateDirectory(directory);
+        var phar = Path.Combine(directory, "wp-cli.phar");
+        if (File.Exists(phar) && new FileInfo(phar).Length > 1_000_000)
+        {
+            return phar;
+        }
+
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        var bytes = await client.GetByteArrayAsync(
+            "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar",
+            cancellationToken);
+        await File.WriteAllBytesAsync(phar, bytes, cancellationToken);
+        return phar;
+    }
+
+    // Sitenin URL'sini (ilk host-header binding'inden) ve başlığını çözer. Host yoksa site adına/localhost'a düşer.
+    private async Task<(string Url, string Title)> ResolveSiteUrlAndTitleAsync(InstallAppTemplateRequest request, CancellationToken cancellationToken)
+    {
+        var host = string.Empty;
+        try
+        {
+            var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
+            host = site.Bindings
+                .Select(binding => binding.HostName)
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? string.Empty;
+        }
+        catch
+        {
+            // site okunamazsa aşağıda fallback
+        }
+
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            host = string.IsNullOrWhiteSpace(request.SiteName) ? "localhost" : request.SiteName.Trim();
+        }
+
+        return ($"http://{host}", host);
+    }
+
+    // WordPress için yerel MySQL/MariaDB veritabanı + kullanıcı oluşturur (kullanıcı bu DB'ye tam yetki alır, site'ye
+    // bağlanır → site silinince cascade gider). Ad çakışırsa kısa rastgele son ekle benzersizleştirir.
+    private async Task<(string Db, string User, string Password)> ProvisionWordPressDatabaseAsync(
+        InstallAppTemplateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var engine = await ResolveWordPressDbEngineAsync(cancellationToken);
+        var basis = ResourceNaming.DatabaseNameFromSite(
+            string.IsNullOrWhiteSpace(request.SiteName) ? "wordpress" : request.SiteName);
+        if (string.IsNullOrWhiteSpace(basis))
+        {
+            basis = "wordpress";
+        }
+
+        var password = "Wp1!" + Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+        var dbName = basis;
+        var dbUser = (basis.Length > 26 ? basis[..26] : basis) + "_u";
+
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await databaseService.CreateDatabaseAsync(
+                    new CreateDatabaseRequest
+                    {
+                        Engine = engine,
+                        Name = dbName,
+                        UserName = dbUser,
+                        Password = password,
+                        SiteName = request.SiteName
+                    },
+                    cancellationToken);
+                return (dbName, dbUser, password);
+            }
+            catch (AppException exception) when (exception.MessageKey == "database.database_already_exists" && attempt < 5)
+            {
+                var suffix = Convert.ToHexString(RandomNumberGenerator.GetBytes(2)).ToLowerInvariant();
+                dbName = (basis.Length > 24 ? basis[..24] : basis) + "_" + suffix;
+                dbUser = (basis.Length > 22 ? basis[..22] : basis) + "_" + suffix + "u";
+            }
+        }
+    }
+
+    // Kurulu MySQL/MariaDB motorunu seç (WordPress için). Yoksa "mariadb" (panel varsayılanı; yoksa CreateDatabaseAsync net hata verir).
+    private async Task<string> ResolveWordPressDbEngineAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var engines = await databaseService.GetEnginesAsync(cancellationToken);
+            var installed = engines.Where(item => item.Installed).Select(item => item.Engine).ToList();
+            if (installed.Any(item => string.Equals(item, "mariadb", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "mariadb";
+            }
+            if (installed.Any(item => string.Equals(item, "mysql", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "mysql";
+            }
+        }
+        catch
+        {
+            // motor listesi alınamazsa varsayılana düş
+        }
+        return "mariadb";
+    }
+
+    // wp-config-sample.php'yi temel alıp DB bilgilerini + benzersiz salt'ları doldurur (yoksa sıfırdan minimal config yazar).
+    // DB_HOST = 127.0.0.1 (Windows'ta "localhost" named-pipe'a kayabilir → IP daha güvenli).
+    private static void WriteWordPressConfig(string destination, string dbName, string dbUser, string dbPassword)
+    {
+        var configPath = Path.Combine(destination, "wp-config.php");
+        if (File.Exists(configPath))
+        {
+            return; // kullanıcının/önceki kurulumun config'ini ezme
+        }
+
+        var samplePath = Path.Combine(destination, "wp-config-sample.php");
+        string content;
+        if (File.Exists(samplePath))
+        {
+            content = File.ReadAllText(samplePath);
+            content = content
+                .Replace("database_name_here", dbName)
+                .Replace("username_here", dbUser)
+                .Replace("password_here", dbPassword.Replace("'", "\\'"));
+            content = Regex.Replace(content, @"(define\(\s*'DB_HOST',\s*')[^']*('\s*\)\s*;)", "${1}127.0.0.1${2}");
+            // 8 adet benzersiz salt: sample'daki 'put your unique phrase here' yer tutucularının HER BİRİ ayrı değerle.
+            content = Regex.Replace(content, "put your unique phrase here", _ => GenerateWpSalt());
+        }
+        else
+        {
+            content =
+                "<?php\n" +
+                $"define('DB_NAME', '{dbName}');\n" +
+                $"define('DB_USER', '{dbUser}');\n" +
+                $"define('DB_PASSWORD', '{dbPassword.Replace("'", "\\'")}');\n" +
+                "define('DB_HOST', '127.0.0.1');\n" +
+                "define('DB_CHARSET', 'utf8mb4');\n" +
+                "define('DB_COLLATE', '');\n" +
+                $"define('AUTH_KEY', '{GenerateWpSalt()}');\n" +
+                $"define('SECURE_AUTH_KEY', '{GenerateWpSalt()}');\n" +
+                $"define('LOGGED_IN_KEY', '{GenerateWpSalt()}');\n" +
+                $"define('NONCE_KEY', '{GenerateWpSalt()}');\n" +
+                $"define('AUTH_SALT', '{GenerateWpSalt()}');\n" +
+                $"define('SECURE_AUTH_SALT', '{GenerateWpSalt()}');\n" +
+                $"define('LOGGED_IN_SALT', '{GenerateWpSalt()}');\n" +
+                $"define('NONCE_SALT', '{GenerateWpSalt()}');\n" +
+                "$table_prefix = 'wp_';\n" +
+                "if (!defined('ABSPATH')) { define('ABSPATH', __DIR__ . '/'); }\n" +
+                "require_once ABSPATH . 'wp-settings.php';\n";
+        }
+
+        File.WriteAllText(configPath, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    // wp-config salt'ı: 64 karakter, SQL/PHP single-quote güvenli (tek tırnak ve ters bölü HARİÇ) alfabe.
+    private static string GenerateWpSalt()
+    {
+        const string alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}<>?,.:;";
+        var bytes = RandomNumberGenerator.GetBytes(64);
+        var builder = new StringBuilder(64);
+        foreach (var value in bytes)
+        {
+            builder.Append(alphabet[value % alphabet.Length]);
+        }
+        return builder.ToString();
     }
 
     private async Task InstallVerifiedAdminerAsync(string destination, CancellationToken cancellationToken)

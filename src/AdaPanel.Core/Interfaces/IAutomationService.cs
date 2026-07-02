@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Automation;
+using AdaPanel.Core.Dtos.Backup;
 
 namespace AdaPanel.Core.Interfaces;
 
@@ -19,4 +20,10 @@ public interface IAutomationService
 
     /// <summary>Zamanı gelmiş job'ları çalıştırır (worker tarafından çağrılır).</summary>
     Task RunDueJobsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Off-site yedek hedefini test eder (gerçek yedek almadan küçük dosya yükleme). İstekte parola boşsa
+    /// sunucudaki kayıtlı (korumalı) parola kullanılır → kullanıcı kaydedilmiş hedefi tekrar parola girmeden test edebilir.
+    /// </summary>
+    Task<BackupRemoteTestResultDto> TestRemoteBackupAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default);
 }

@@ -199,11 +199,18 @@ app.Use(async (context, next) =>
         context.Request.EnableBuffering();
     }
 
-    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
-    context.Response.Headers["X-Frame-Options"] = "DENY";
-    context.Response.Headers["Referrer-Policy"] = "same-origin";
-    context.Response.Headers["Content-Security-Policy"] =
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+    // DbTools reverse-proxy (phpMyAdmin/Adminer) YOLUNA panelin KATI güvenlik başlıklarını UYGULAMA:
+    // katı CSP (script-src 'self' = inline script YOK) + nosniff, phpMyAdmin'in inline script/CSS/asset'lerini
+    // bloklar → menü-genişliği/layout JS'i çalışmaz, ana içerik sol menünün ALTINA kayar (kullanıcı bildirimi).
+    // Bu araçlar zaten panelin kimlik-doğrulamalı HTTPS proxy'si arkasında; kendi (phpMyAdmin) başlıkları geçerli olur.
+    if (!context.Request.Path.StartsWithSegments("/api/v1/dbtools"))
+    {
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        context.Response.Headers["X-Frame-Options"] = "DENY";
+        context.Response.Headers["Referrer-Policy"] = "same-origin";
+        context.Response.Headers["Content-Security-Policy"] =
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+    }
 
     await next();
 });

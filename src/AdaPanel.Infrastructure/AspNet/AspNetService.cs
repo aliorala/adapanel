@@ -31,12 +31,18 @@ public sealed class AspNetService(
         }, "aspnet.configuration_failed", cancellationToken);
     }
 
-    public Task<AspSiteConfigurationDto> SetClassicAspAsync(
+    public async Task<AspSiteConfigurationDto> SetClassicAspAsync(
         string siteName,
         UpdateClassicAspRequest request,
         CancellationToken cancellationToken = default)
     {
-        return ExecuteWriteAsync(serverManager =>
+        // ASP etkinleştiriliyorsa motoru (asp.dll) GARANTİ et — yoksa OTOMATİK KUR (atlama yok).
+        if (request.Enabled)
+        {
+            await EnsureClassicAspEngineAsync(cancellationToken);
+        }
+
+        return await ExecuteWriteAsync(serverManager =>
         {
             var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
             SetClassicAspEnabled(serverManager, GetStringProperty(site, "Name"), request.Enabled);
@@ -70,6 +76,12 @@ public sealed class AspNetService(
             throw new AppException("php.executable_not_found", 404, 404);
         }
 
+        // Karışık handler'larda Classic ASP isteniyorsa motoru GARANTİ et (yoksa OTOMATİK KUR, atlama yok).
+        if (request.EnableClassicAsp)
+        {
+            await EnsureClassicAspEngineAsync(cancellationToken);
+        }
+
         return await ExecuteWriteAsync(serverManager =>
         {
             var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
@@ -83,6 +95,39 @@ public sealed class AspNetService(
 
             return MapSiteConfiguration(serverManager, site);
         }, "aspnet.configuration_failed", cancellationToken);
+    }
+
+    // asp.dll yoksa IIS Classic ASP özelliğini OTOMATİK KURAR (panel SYSTEM/admin çalışır). Windows Server: Web-Asp,
+    // Windows Client (10/11): IIS-ASP. Kurulamazsa net hata fırlatır. Böylece ASP gerektiren site KURULURKEN
+    // sessizce atlanmaz — motor gerçekten kurulur (panelin PHP'yi on-demand kurması gibi).
+    private async Task EnsureClassicAspEngineAsync(CancellationToken cancellationToken)
+    {
+        var aspDll = Environment.ExpandEnvironmentVariables(ClassicAspDllPath);
+        if (File.Exists(aspDll))
+        {
+            return;
+        }
+
+        const string script =
+            "if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) { " +
+            "Install-WindowsFeature -Name Web-Asp -IncludeManagementTools -ErrorAction Stop | Out-Null } " +
+            "else { Enable-WindowsOptionalFeature -Online -FeatureName IIS-ASP -All -NoRestart -ErrorAction Stop | Out-Null }";
+        var result = await AdaPanel.Infrastructure.Support.ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+
+        if (!File.Exists(aspDll))
+        {
+            var detail = (result.StandardError ?? string.Empty).Trim();
+            if (detail.Length > 500)
+            {
+                detail = detail[..500];
+            }
+
+            throw new AppException(
+                "sites.iis_install_required",
+                503,
+                503,
+                $"Classic ASP motoru (Web-Asp/IIS-ASP) otomatik kurulamadi. asp.dll bulunamadi: {aspDll}. {detail}".Trim());
+        }
     }
 
     private async Task<AdaPanel.Core.Entities.InstalledComponent> GetInstalledPhpComponentAsync(string componentId, CancellationToken cancellationToken)

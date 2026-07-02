@@ -47,6 +47,20 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.ResetDefaultsAsync(siteName, cancellationToken), "dns.defaults_restored"));
     }
 
+    // DNSSEC aç/kapat (Windows DNS zone-imzalama). Server-level imzalama → admin-only.
+    [HttpPost("dnssec")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> SetDnssecAsync(
+        string siteName,
+        [FromBody] SetDnssecRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(
+            await dnsService.SetDnssecAsync(siteName, request.Enabled, cancellationToken),
+            request.Enabled ? "dns.dnssec_enabled" : "dns.dnssec_disabled"));
+    }
+
     [HttpPost("records")]
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> UpsertRecordAsync(
         string siteName,

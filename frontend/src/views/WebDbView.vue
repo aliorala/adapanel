@@ -84,7 +84,8 @@
           </a>
         </span>
       </div>
-      <p v-if="deployments.length === 0" class="empty-state">{{ t("panel.webdb.empty") }}</p>
+      <p v-if="loading && deployments.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="deployments.length === 0" class="empty-state">{{ t("panel.webdb.empty") }}</p>
     </div>
   </section>
 </template>

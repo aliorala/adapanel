@@ -101,7 +101,8 @@
           <strong v-else class="entry-file">{{ entry.name }}</strong>
           <span class="cell-muted">{{ entry.isDirectory ? "—" : formatBytes(entry.size) }}</span>
         </div>
-        <p v-if="browseEntries.length === 0" class="empty-state">{{ t("panel.backup.browseEmpty") }}</p>
+        <p v-if="loading && browseEntries.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+        <p v-else-if="browseEntries.length === 0" class="empty-state">{{ t("panel.backup.browseEmpty") }}</p>
       </div>
       <p v-if="browseTruncated" class="field-hint">{{ t("panel.backup.browseTruncated") }}</p>
 
@@ -133,6 +134,9 @@
           </button>
           <button :class="{ active: backupKind === 'mail' }" @click="backupKind = 'mail'">
             {{ t("panel.backup.mailTitle") }}
+          </button>
+          <button v-if="isAdmin" :class="{ active: backupKind === 'panel' }" @click="backupKind = 'panel'">
+            {{ t("panel.backup.panelTitle") }}
           </button>
         </div>
       </div>
@@ -192,7 +196,7 @@
       <p class="field-hint">{{ t("panel.backup.targetHint") }}</p>
       <div class="row-actions">
         <button class="compact" :disabled="busy" @click="createSelectedBackup">
-          {{ backupKind === "site" ? t("panel.backup.siteAction") : backupKind === "mail" ? t("panel.backup.mailAction") : t("panel.backup.dbAction") }}
+          {{ backupKind === "site" ? t("panel.backup.siteAction") : backupKind === "mail" ? t("panel.backup.mailAction") : backupKind === "panel" ? t("panel.backup.panelAction") : t("panel.backup.dbAction") }}
         </button>
         <button class="secondary compact" @click="activeView = 'list'">{{ t("panel.common.cancel") }}</button>
       </div>
@@ -207,6 +211,7 @@ import {
   backupDatabase,
   backupMail,
   backupSite,
+  backupPanel,
   getBackupEntries,
   getBackups,
   restoreBackup,
@@ -215,18 +220,21 @@ import {
   type BackupRecord,
   type BackupTargetPayload
 } from "../api/backup";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const backups = ref<BackupRecord[]>([]);
 const activeView = ref<"list" | "create">("list");
-const backupKind = ref<"site" | "database" | "mail">("site");
+const backupKind = ref<"site" | "database" | "mail" | "panel">("site");
 
 const backupKindHint = computed(() => {
   if (backupKind.value === "site") return t("panel.backup.siteHint");
   if (backupKind.value === "database") return t("panel.backup.dbHint");
+  if (backupKind.value === "panel") return t("panel.backup.panelHint");
   return t("panel.backup.mailHint");
 });
 const siteName = ref(sitesStore.selectedSiteName);
@@ -305,6 +313,11 @@ async function createSelectedBackup() {
   if (backupKind.value === "mail") {
     if (!window.confirm(t("panel.backup.confirmMailBackup"))) return;
     await runBackup(() => backupMail(buildTargetPayload()));
+    return;
+  }
+
+  if (backupKind.value === "panel") {
+    await runBackup(() => backupPanel(buildTargetPayload()));
     return;
   }
 

@@ -10,4 +10,10 @@ public sealed class DatabaseTransferResultDto
 
     /// <summary>Aktarılan dökümün bayt cinsinden boyutu (bilgi amaçlı).</summary>
     public long Size { get; set; }
+
+    /// <summary>Hedef DB'ye tam yetkiyle oluşturulan/ayarlanan kullanıcı (uygulamanın bağlanacağı).</summary>
+    public string UserName { get; set; } = string.Empty;
+
+    /// <summary>Parola ÜRETİLDİYSE gösterilir (kullanıcı kendi verdiyse boş — zaten biliyor).</summary>
+    public string Password { get; set; } = string.Empty;
 }

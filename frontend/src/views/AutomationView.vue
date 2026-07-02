@@ -49,6 +49,10 @@
           <input v-model="form.backupMail" type="checkbox" />
           <span>{{ t("panel.automation.backupMail") }}</span>
         </label>
+        <label class="toggle-field">
+          <input v-model="form.backupPanelConfig" type="checkbox" />
+          <span>{{ t("panel.automation.backupPanelConfig") }}</span>
+        </label>
       </div>
 
       <div v-if="form.autoBackupEnabled" class="section-head remote-head">
@@ -89,6 +93,19 @@
           <input v-model.trim="form.backupRemoteRegion" placeholder="eu-central-1" />
         </label>
       </div>
+
+      <div v-if="form.backupTargetType !== 'local'" class="row-actions remote-test">
+        <button class="secondary compact" type="button" :disabled="testingRemote" @click="testRemote">
+          {{ testingRemote ? t("panel.automation.remoteTesting") : t("panel.automation.remoteTest") }}
+        </button>
+        <span v-if="remoteTestResult" :class="['status-pill', remoteTestResult.success ? 'ok' : 'warn']">
+          {{ remoteTestResult.success ? t("panel.automation.remoteTestOk") : t(remoteTestResult.message) }}
+        </span>
+      </div>
+      <details v-if="remoteTestResult && !remoteTestResult.success && remoteTestResult.details" class="notice-details">
+        <summary>{{ t("panel.common.technicalDetails") }}</summary>
+        <pre>{{ remoteTestResult.details }}</pre>
+      </details>
 
       <p class="field-hint">
         {{ t("panel.automation.lastRun") }}:
@@ -147,6 +164,14 @@
           <span class="field-label">{{ t("panel.automation.certWarningDays") }}</span>
           <input v-model.number="form.certExpiryWarningDays" type="number" min="1" max="90" />
         </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.automation.memoryThreshold") }}</span>
+          <input v-model.number="form.memoryUsageThresholdPercent" type="number" min="50" max="99" />
+        </label>
+        <label class="toggle-field">
+          <input v-model="form.serviceDownAlertsEnabled" type="checkbox" />
+          <span>{{ t("panel.automation.serviceDownAlerts") }}</span>
+        </label>
       </div>
       <p class="field-hint">{{ t("panel.automation.alertChannelHint") }}</p>
     </div>
@@ -171,8 +196,10 @@ import {
   runAutomationBackup,
   runAutomationSsl,
   updateAutomation,
+  testRemoteBackup,
   type AutomationSettings,
-  type AutomationStatus
+  type AutomationStatus,
+  type BackupRemoteTestResult
 } from "../api/automation";
 import { extractApiMessage } from "../stores/auth";
 
@@ -183,6 +210,8 @@ const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const remotePassword = ref("");
+const testingRemote = ref(false);
+const remoteTestResult = ref<BackupRemoteTestResult | null>(null);
 const form = reactive<AutomationSettings>({
   autoBackupEnabled: false,
   backupIntervalHours: 24,
@@ -190,12 +219,15 @@ const form = reactive<AutomationSettings>({
   backupSites: true,
   backupDatabases: false,
   backupMail: false,
+  backupPanelConfig: false,
   backupDatabaseEngines: [],
   autoSslRenewEnabled: false,
   sslRenewIntervalHours: 24,
   alertsEnabled: false,
   diskUsageThresholdPercent: 90,
   certExpiryWarningDays: 14,
+  memoryUsageThresholdPercent: 90,
+  serviceDownAlertsEnabled: true,
   backupTargetType: "local",
   backupRemoteUrl: "",
   backupRemoteUserName: "",
@@ -235,6 +267,24 @@ async function save() {
     remotePassword.value = "";
     showNotice(t("panel.automation.saved"), false);
   });
+}
+
+async function testRemote() {
+  testingRemote.value = true;
+  remoteTestResult.value = null;
+  try {
+    remoteTestResult.value = await testRemoteBackup({
+      targetType: form.backupTargetType,
+      remoteUrl: form.backupRemoteUrl,
+      remoteUserName: form.backupRemoteUserName,
+      remotePassword: remotePassword.value,
+      remoteRegion: form.backupRemoteRegion
+    });
+  } catch (error) {
+    remoteTestResult.value = { success: false, message: extractApiMessage(error), details: "" };
+  } finally {
+    testingRemote.value = false;
+  }
 }
 
 async function runBackupNow() {

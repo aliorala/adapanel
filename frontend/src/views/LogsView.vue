@@ -75,7 +75,8 @@
         <span>{{ item.ipAddress || "-" }}</span>
         <span>{{ formatUtc(item.createdAtUtc) }}</span>
       </div>
-      <p v-if="filteredAudit.length === 0" class="empty-state">{{ t("panel.logs.emptyAudit") }}</p>
+      <p v-if="loading && filteredAudit.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="filteredAudit.length === 0" class="empty-state">{{ t("panel.logs.emptyAudit") }}</p>
     </div>
   </section>
 </template>

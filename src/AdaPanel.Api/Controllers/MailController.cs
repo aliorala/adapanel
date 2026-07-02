@@ -27,6 +27,20 @@ public sealed class MailController(
         return Ok(ApiResponse<WebmailOpenDto>.Ok(result));
     }
 
+    /// <summary>
+    /// Webmail tanılama (salt-okunur): "neden açılmıyor"u tek raporda toplar — IIS site/binding, FastCGI'de yüklü
+    /// PHP eklentileri, Roundcube kök yanıtı ve hata günlüğü. Yalnız admin (geçici diag dosyası yazıp log okur).
+    /// </summary>
+    [HttpGet("webmail/diagnose")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<WebmailDiagnosticsDto>>> DiagnoseWebmailAsync(CancellationToken cancellationToken)
+    {
+        var result = await webmailService.DiagnoseAsync(Request.Host.Host, cancellationToken);
+        return Ok(ApiResponse<WebmailDiagnosticsDto>.Ok(
+            result,
+            result.Healthy ? "mail.webmail.diag_ok" : "mail.webmail.diag_fail"));
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> GetAsync([FromQuery] string? domain, CancellationToken cancellationToken)
     {

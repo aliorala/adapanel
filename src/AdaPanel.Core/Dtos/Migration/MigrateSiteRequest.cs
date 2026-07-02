@@ -65,4 +65,13 @@ public sealed class MigrateSiteRequest
     /// <summary>Hedef DB adı (boşsa kaynak adı).</summary>
     [StringLength(64)]
     public string TargetDatabase { get; init; } = string.Empty;
+
+    /// <summary>Taşınan uygulamanın bağlanacağı hedef DB KULLANICISI (wp-config.php/.env'deki). Boşsa site adından
+    /// türetilir. Bu kullanıcı yeni sunucuda oluşturulup hedef DB'ye tam yetki alır (Plesk göçü gibi).</summary>
+    [StringLength(64)]
+    public string TargetDatabaseUser { get; init; } = string.Empty;
+
+    /// <summary>Hedef DB kullanıcısının parolası. Boşsa güçlü bir parola üretilir ve sonuç adımında gösterilir.</summary>
+    [StringLength(128)]
+    public string TargetDatabasePassword { get; init; } = string.Empty;
 }

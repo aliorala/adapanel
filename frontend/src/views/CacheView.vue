@@ -86,6 +86,7 @@
           </button>
         </span>
       </div>
+      <p v-if="busyAction === 'refresh' && !status" class="empty-state">{{ t("panel.common.loading") }}</p>
     </div>
   </section>
 </template>

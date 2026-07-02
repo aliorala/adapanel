@@ -23,6 +23,9 @@ public sealed class AutomationSettingsDto
     /// <summary>Mail (Stalwart) verisini de yedekle (servis kısa süre durdurulur).</summary>
     public bool BackupMail { get; set; }
 
+    /// <summary>Panelin kendi yapılandırmasını (adapanel.db + config) da yedekle. Anahtarlar hariç.</summary>
+    public bool BackupPanelConfig { get; set; }
+
     /// <summary>Yedeklenecek veritabanı motorları (mysql, postgresql, mssql). Boşsa varsayılan mysql.</summary>
     public IReadOnlyCollection<string> BackupDatabaseEngines { get; set; } = [];
 
@@ -52,4 +55,10 @@ public sealed class AutomationSettingsDto
 
     /// <summary>Sertifika bitişine bu kadar gün kalınca uyarı gönderilir.</summary>
     public int CertExpiryWarningDays { get; set; } = 14;
+
+    /// <summary>RAM (bellek) doluluk yüzdesi bu eşiği aşınca uyarı gönderilir.</summary>
+    public int MemoryUsageThresholdPercent { get; set; } = 90;
+
+    /// <summary>Kurulu bir servis (web/mail/DB/FTP) durduğunda uyarı gönderilsin mi.</summary>
+    public bool ServiceDownAlertsEnabled { get; set; } = true;
 }

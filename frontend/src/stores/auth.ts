@@ -64,6 +64,7 @@ export type ManagedUser = {
   maxDatabases: number;
   maxMailboxes: number;
   diskUsageMb: number;
+  databaseCount: number;
   ownerId: string | null;
   ownerName: string;
 };

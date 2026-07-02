@@ -4,6 +4,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using System.Net;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace AdaPanel.Infrastructure.SelfUpdate;
 
@@ -13,15 +14,43 @@ public sealed class SelfUpdateService(
     IUpdateInstallerLauncher installerLauncher) : ISelfUpdateService
 {
     private const string ManifestPath = "config/update-manifest.json";
+    private const string GithubConfigPath = "config/update-github.json";
     private const string PendingUpdatePath = "updates/pending-update.json";
+    private const string DefaultRepo = "aliorala/adapanel";
 
     public async Task<UpdateStatusDto> CheckForUpdateAsync(CancellationToken cancellationToken = default)
     {
         var currentVersion = VersionInfo.Current;
+        var github = await fileStore.ReadAsync(GithubConfigPath, new GithubConfig { Repo = DefaultRepo }, cancellationToken);
+        var fetchNote = string.Empty;
+
+        // GitHub deposu ayarlıysa en son Release'i ÇEK (sürüm + .exe indirme linki + SHA256) ve yerel manifeste
+        // önbelleğe yaz → indir/kur akışı yerel manifestle aynen çalışır. Hata olursa net not (UI gösterir), tab çökmiyor.
+        if (!string.IsNullOrWhiteSpace(github.Repo))
+        {
+            try
+            {
+                var remote = await FetchGithubManifestAsync(github.Repo.Trim(), cancellationToken);
+                if (remote is not null)
+                {
+                    await fileStore.WriteAsync(ManifestPath, remote, cancellationToken);
+                }
+            }
+            catch (AppException appException)
+            {
+                fetchNote = appException.MessageKey;
+            }
+            catch
+            {
+                fetchNote = "update.github_fetch_failed";
+            }
+        }
+
         var manifest = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
         var latestVersion = string.IsNullOrWhiteSpace(manifest.LatestVersion) ? currentVersion : manifest.LatestVersion;
         var pendingUpdate = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
 
+        var defaultNote = string.IsNullOrWhiteSpace(github.Repo) ? "update.github_not_configured" : "update.github_ok";
         return new UpdateStatusDto
         {
             CurrentVersion = currentVersion,
@@ -32,10 +61,141 @@ public sealed class SelfUpdateService(
             IsPackageReady = !string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) && File.Exists(pendingUpdate.PackagePath),
             IsInstallScheduled = pendingUpdate.InstallScheduledAtUtc.HasValue,
             InstallScheduledAtUtc = pendingUpdate.InstallScheduledAtUtc,
-            Notes = string.IsNullOrWhiteSpace(manifest.Notes) ? "update.feed_not_configured" : manifest.Notes,
+            Notes = !string.IsNullOrEmpty(fetchNote) ? fetchNote : (string.IsNullOrWhiteSpace(manifest.Notes) ? defaultNote : manifest.Notes),
+            GithubRepo = github.Repo,
             IsUpdateAvailable = !string.Equals(currentVersion, latestVersion, StringComparison.OrdinalIgnoreCase),
             CheckedAtUtc = DateTime.UtcNow
         };
+    }
+
+    public async Task<UpdateStatusDto> SetGithubRepoAsync(string repo, CancellationToken cancellationToken = default)
+    {
+        var trimmed = (repo ?? string.Empty).Trim();
+        await fileStore.WriteAsync(GithubConfigPath, new GithubConfig { Repo = trimmed }, cancellationToken);
+        return await CheckForUpdateAsync(cancellationToken);
+    }
+
+    // GitHub Releases API'sinden en son sürümü çevirir → UpdateManifest. owner/repo (ya da github.com URL'si) kabul eder.
+    // .exe asset'inin indirme linki + SHA256'sı (asset 'digest' alanı veya '<exe>.sha256' asset'i) alınır. PUBLIC repo:
+    // kimlik gerektirmez (User-Agent zorunlu). SHA256 bulunamazsa güvenlik gereği net hata (.sha256 ekleyin) verir.
+    private async Task<UpdateManifest?> FetchGithubManifestAsync(string repo, CancellationToken cancellationToken)
+    {
+        var clean = repo.Trim().Trim('/');
+        var marker = clean.IndexOf("github.com/", StringComparison.OrdinalIgnoreCase);
+        if (marker >= 0)
+        {
+            clean = clean[(marker + "github.com/".Length)..];
+        }
+        var parts = clean.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+        {
+            throw new AppException("update.github_repo_invalid", 400, 400, $"Repo={repo}");
+        }
+        var owner = parts[0];
+        var name = parts[1];
+
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(20);
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "AdaPanel");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/vnd.github+json");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
+
+        using var response = await client.GetAsync($"https://api.github.com/repos/{owner}/{name}/releases/latest", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw new AppException("update.github_no_release", 404, 404, $"{owner}/{name}");
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new AppException("update.github_fetch_failed", (int)response.StatusCode, 502, $"{owner}/{name} HTTP {(int)response.StatusCode}");
+        }
+
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        var tag = root.TryGetProperty("tag_name", out var tagElement) ? tagElement.GetString() ?? string.Empty : string.Empty;
+        var version = tag.TrimStart('v', 'V').Trim();
+        var notes = root.TryGetProperty("body", out var bodyElement) ? bodyElement.GetString() ?? string.Empty : string.Empty;
+
+        var downloadUrl = string.Empty;
+        var sha = string.Empty;
+        var exeAssetName = string.Empty;
+        string? shaAssetUrl = null;
+
+        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var assetName = asset.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
+                if (assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    downloadUrl = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? string.Empty : string.Empty;
+                    exeAssetName = assetName;
+                    if (asset.TryGetProperty("digest", out var digestElement) && digestElement.ValueKind == JsonValueKind.String)
+                    {
+                        var digest = digestElement.GetString() ?? string.Empty;
+                        if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            sha = digest["sha256:".Length..].Trim();
+                        }
+                    }
+                }
+            }
+
+            // .exe var ama digest yoksa: bir SHA256 asset'i ara ('<exe>.sha256', '*.sha256', 'SHA256SUMS').
+            if (!string.IsNullOrEmpty(downloadUrl) && string.IsNullOrEmpty(sha))
+            {
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    var assetName = asset.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
+                    if (assetName.Equals($"{exeAssetName}.sha256", StringComparison.OrdinalIgnoreCase) ||
+                        assetName.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase) ||
+                        assetName.Equals("SHA256SUMS", StringComparison.OrdinalIgnoreCase))
+                    {
+                        shaAssetUrl = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (string.IsNullOrEmpty(downloadUrl))
+        {
+            throw new AppException("update.github_no_asset", 404, 404, $"{owner}/{name}: latest release has no .exe asset");
+        }
+
+        if (string.IsNullOrEmpty(sha) && shaAssetUrl is not null)
+        {
+            var shaContent = await client.GetStringAsync(shaAssetUrl, cancellationToken);
+            sha = ExtractSha256(shaContent);
+        }
+
+        if (string.IsNullOrEmpty(sha))
+        {
+            throw new AppException("update.github_no_sha", 422, 422, $"{owner}/{name}: .exe asset has no SHA256 (digest/.sha256)");
+        }
+
+        return new UpdateManifest
+        {
+            LatestVersion = version,
+            DownloadUrl = downloadUrl,
+            PackageSha256 = sha,
+            Notes = notes
+        };
+    }
+
+    // Metinden ilk 64 karakterlik hex SHA256 dizisini çıkarır (".sha256"/SHA256SUMS dosyaları: "hash *dosya" biçimi).
+    private static string ExtractSha256(string content)
+    {
+        foreach (var token in content.Split([' ', '\t', '\r', '\n', '*'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.Length == 64 && token.All(Uri.IsHexDigit))
+            {
+                return token;
+            }
+        }
+        return string.Empty;
     }
 
     public async Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default)
@@ -220,6 +380,11 @@ public sealed class SelfUpdateService(
         {
             throw new AppException("update.package_invalid", 400, 400);
         }
+    }
+
+    private sealed class GithubConfig
+    {
+        public string Repo { get; set; } = string.Empty;
     }
 
     private sealed class UpdateManifest

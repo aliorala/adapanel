@@ -13,6 +13,13 @@ public interface IWebmailService
     Task<WebmailOpenDto> OpenAsync(string publicHost, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Webmail'i denetler ve "neden açılmıyor"u tek bir okunur rapora derler: IIS site/binding durumu, FastCGI
+    /// sürecinde GERÇEKTEN yüklü PHP eklentileri (Roundcube'un patlama #1 sebebi eksik eklenti), Roundcube kök
+    /// yanıtı (durum + gövde önizleme) ve hata günlüğü. Hiçbir şeyi değiştirmez (salt-okunur teşhis).
+    /// </summary>
+    Task<WebmailDiagnosticsDto> DiagnoseAsync(string publicHost, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Bir mail domaini için webmail.&lt;domain&gt; adresini otomatik HTTPS yapar (site SSL sertifikası
     /// alındığında çağrılır). Best-effort: webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.
     /// </summary>

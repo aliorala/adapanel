@@ -13,7 +13,7 @@ namespace AdaPanel.Api.Controllers;
 // BİLEREK ayrı + admin-only kalır — burada parola/kredensiyel ASLA dönmez, başka müşterinin DB'si GÖRÜNMEZ.
 // MaxDatabases kotası dayatılır; her DB oluşturana ait kaydedilir, silince kayıt temizlenir.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
 [Route("api/v1/my-databases")]
 public sealed class ResellerDatabasesController(
     IDatabaseService databaseService,

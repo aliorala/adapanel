@@ -47,9 +47,18 @@ export type SystemOverview = {
   networkInterfaces: NetworkInterfaceMetric[];
 };
 
+export type SystemHistorySample = {
+  timestampUtc: string;
+  cpuPercent: number;
+  memoryPercent: number;
+  networkDownBytesPerSec: number;
+  networkUpBytesPerSec: number;
+};
+
 export const useSystemStore = defineStore("system", {
   state: () => ({
     overview: null as SystemOverview | null,
+    history: [] as SystemHistorySample[],
     loading: false
   }),
   actions: {
@@ -63,6 +72,12 @@ export const useSystemStore = defineStore("system", {
       } finally {
         this.loading = false;
       }
+    },
+    // Kalıcı izleme geçmişi (sunucu dakikada bir örnekler) → trend grafikleri sayfa yenilense de dolu gelir.
+    async fetchHistory() {
+      const response = await apiClient.get<ApiEnvelope<SystemHistorySample[]>>("/system/history");
+      this.history = response.data.data;
+      return this.history;
     }
   }
 });

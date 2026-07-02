@@ -10,7 +10,9 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
-    <div v-if="services.length" class="health-list">
+    <p v-if="loading && !services.length" class="meta">{{ t("panel.common.loading") }}</p>
+
+    <div v-else-if="services.length" class="health-list">
       <article v-for="svc in services" :key="svc.name" class="health-row">
         <div class="health-id">
           <span :class="['state-dot', dotClass(svc.status)]"></span>

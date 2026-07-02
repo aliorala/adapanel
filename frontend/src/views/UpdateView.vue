@@ -36,6 +36,17 @@
         </article>
       </div>
 
+      <div class="update-github">
+        <h3>{{ t("panel.update.githubTitle") }}</h3>
+        <p class="meta">{{ t("panel.update.githubHint") }}</p>
+        <div class="github-row">
+          <input v-model.trim="githubRepo" placeholder="aliorala/adapanel" spellcheck="false" />
+          <button class="secondary compact" :disabled="Boolean(busy)" @click="saveGithub">
+            {{ busy === "github" ? t("panel.update.githubSaving") : t("panel.update.githubSave") }}
+          </button>
+        </div>
+      </div>
+
       <dl class="detail-grid">
         <div><dt>{{ t("panel.update.notes") }}</dt><dd>{{ translate(status.notes) }}</dd></div>
         <div><dt>{{ t("panel.update.sha256") }}</dt><dd>{{ status.packageSha256 || "-" }}</dd></div>
@@ -62,14 +73,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { applyUpdate, checkForUpdate, installPreparedUpdate, type UpdateStatus } from "../api/update";
+import { applyUpdate, checkForUpdate, installPreparedUpdate, setUpdateGithubRepo, type UpdateStatus } from "../api/update";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
 const status = ref<UpdateStatus | null>(null);
-const busy = ref<"" | "download" | "install">("");
+const busy = ref<"" | "download" | "install" | "github">("");
 const notice = ref("");
 const noticeError = ref(false);
+const githubRepo = ref("");
 
 onMounted(async () => {
   await refresh();
@@ -78,8 +90,23 @@ onMounted(async () => {
 async function refresh() {
   try {
     status.value = await checkForUpdate();
+    githubRepo.value = status.value.githubRepo;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
+  }
+}
+
+// GitHub deposunu (owner/repo) kaydet → panel en son Release'i buradan otomatik görür.
+async function saveGithub() {
+  busy.value = "github";
+  try {
+    status.value = await setUpdateGithubRepo(githubRepo.value);
+    githubRepo.value = status.value.githubRepo;
+    showNotice(t("panel.update.githubSaved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = "";
   }
 }
 
@@ -137,6 +164,35 @@ function showNotice(message: string, isError: boolean) {
 .update-actions {
   display: grid;
   gap: 16px;
+}
+
+.update-github {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.update-github h3 {
+  margin: 0;
+}
+
+.github-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.github-row input {
+  flex: 1 1 240px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.github-row button {
+  flex: none;
 }
 
 .section-head {

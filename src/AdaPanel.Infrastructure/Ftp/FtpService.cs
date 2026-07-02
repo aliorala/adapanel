@@ -16,6 +16,7 @@ public sealed partial class FtpService(
 {
     private const string StatePath = "config/ftp-users.json";
     private const string TlsStatePath = "config/ftp-tls.json";
+    private const string InfraStatePath = "config/ftp-infra.json";
     private const string FtpSiteName = "AdaPanel FTP";
     private const int FtpPort = 21;
     private const int PassivePortStart = 50000;
@@ -24,7 +25,7 @@ public sealed partial class FtpService(
 
     public async Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default)
     {
-        await EnsureFtpInfrastructureAsync(cancellationToken);
+        await EnsureFtpInfrastructureAsync(false, cancellationToken);
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
         return new FtpServerStatusDto
         {
@@ -44,13 +45,20 @@ public sealed partial class FtpService(
     public async Task<bool> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default)
     {
         await fileStore.WriteAsync(TlsStatePath, new FtpTlsState { RequireSsl = requireSsl }, cancellationToken);
-        await EnsureFtpInfrastructureAsync(cancellationToken); // politikayı HEMEN uygula (controlChannelPolicy 0/1 + FTPSVC restart)
+        await EnsureFtpInfrastructureAsync(true, cancellationToken); // SSL politikası değişti → tam yeniden kur (controlChannelPolicy 0/1 + FTPSVC restart)
         return requireSsl;
     }
 
     private sealed class FtpTlsState
     {
         public bool RequireSsl { get; set; }
+    }
+
+    // FTP altyapısı (IIS FTP sitesi + SSL + firewall) bir kez tam kurulduğunda işaretlenir → sonraki kullanıcı
+    // eklemeleri ağır kurulumu + FTPSVC yeniden başlatmayı ATLAR (hızlı yol). SSL politikası değişimi force=true ile tam kurar.
+    private sealed class FtpInfraState
+    {
+        public bool Configured { get; set; }
     }
 
     public async Task<IReadOnlyCollection<FtpUserDto>> GetFtpUsersAsync(CancellationToken cancellationToken = default)
@@ -88,7 +96,7 @@ public sealed partial class FtpService(
 
         var homePath = await ResolveHomePathAsync(request, cancellationToken);
         Directory.CreateDirectory(homePath);
-        await EnsureFtpInfrastructureAsync(cancellationToken);
+        await EnsureFtpInfrastructureAsync(false, cancellationToken);
 
         if (!await UserExistsAsync(userName, cancellationToken))
         {
@@ -200,10 +208,22 @@ public sealed partial class FtpService(
         await fileStore.WriteAsync(StatePath, records, cancellationToken);
     }
 
-    private async Task EnsureFtpInfrastructureAsync(CancellationToken cancellationToken)
+    private async Task EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken)
     {
+        // IIS FTP rolü kurulu değilse New-WebFtpSite ve ftpServer config bölümleri bulunmaz → script
+        // "ftp.site_configuration_failed" ile patlar (canlı VPS bulgusu). Classic ASP/PHP gibi OTOMATİK KUR (atlama yok).
+        await EnsureFtpFeatureInstalledAsync(cancellationToken);
+
         var ftpRoot = Path.Combine(dataRoot, "ftp-root");
         Directory.CreateDirectory(Path.Combine(ftpRoot, "LocalUser"));
+
+        // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak) ve FTPSVC çalışıyorsa ağır yeniden-kurulumu + FTPSVC
+        // yeniden başlatmayı ATLA → 2. ve sonraki FTP kullanıcısı eklemesi saniyelerce beklemeden, anında olur.
+        // (SSL politikası değişimi gibi gerçekten gereken durumlar force=true ile tam yeniden kurar.)
+        if (!forceReconfigure && await IsFtpInfrastructureReadyAsync(cancellationToken))
+        {
+            return;
+        }
 
         // Pasif (PASV) mod: sunucu, veri kanalı için istemciye bir IP bildirir. Bu IP yanlış/iç IP olursa
         // istemci bağlanır, giriş yapar ama DİZİN LİSTESİ/transfer TAKILIR. Panelde tanımlı public IPv4'ü
@@ -277,6 +297,57 @@ public sealed partial class FtpService(
         if (!result.Success)
         {
             throw new AppException("ftp.site_configuration_failed", 500, 500, BuildCommandDetails(result));
+        }
+
+        // Tam kurulum başarılı → bayrağı işaretle ki sonraki kullanıcı eklemeleri hızlı yolu kullansın (servis restart yok).
+        await fileStore.WriteAsync(InfraStatePath, new FtpInfraState { Configured = true }, cancellationToken);
+    }
+
+    // Altyapı hazır mı (hızlı kontrol): daha önce tam kuruldu (bayrak) VE FTPSVC çalışıyor mu. FTPSVC kontrolü
+    // Get-Service ile yapılır (yavaş 'Import-Module WebAdministration' YOK → sub-saniye). Biri bile sağlanmazsa false →
+    // çağıran tam kurulumu çalıştırır (kendini onarır). Böylece ağır betik + servis restart yalnız gerektiğinde çalışır.
+    private async Task<bool> IsFtpInfrastructureReadyAsync(CancellationToken cancellationToken)
+    {
+        var state = await fileStore.ReadAsync(InfraStatePath, new FtpInfraState(), cancellationToken);
+        if (!state.Configured)
+        {
+            return false;
+        }
+
+        var probe = await ProcessRunner.RunPowerShellAsync(
+            "if ((Get-Service FTPSVC -ErrorAction SilentlyContinue).Status -eq 'Running') { 'up' } else { 'down' }",
+            cancellationToken);
+        return probe.Success && probe.StandardOutput.Contains("up", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // IIS FTP sunucu rolü (FTPSVC servisi) yoksa OTOMATİK KURAR. Windows Server: Web-Ftp-Server (+ yönetim
+    // araçları); Windows Client (10/11): IIS-FTPServer (-All ile alt özellik IIS-FTPSvc dahil). PHP/Classic ASP
+    // on-demand kurulumuyla aynı desen — "atlama yok". Kurulamazsa net hata fırlatır (sessiz başarısızlık yok).
+    private static async Task EnsureFtpFeatureInstalledAsync(CancellationToken cancellationToken)
+    {
+        const string probe = "if (Get-Service FTPSVC -ErrorAction SilentlyContinue) { 'present' } else { 'absent' }";
+
+        var check = await ProcessRunner.RunPowerShellAsync(probe, cancellationToken);
+        if (check.Success && check.StandardOutput.Contains("present", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        const string script =
+            "if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) { " +
+            "Install-WindowsFeature -Name Web-Ftp-Server -IncludeManagementTools -ErrorAction Stop | Out-Null } " +
+            "else { Enable-WindowsOptionalFeature -Online -FeatureName IIS-FTPServer -All -NoRestart -ErrorAction Stop | Out-Null }";
+        var install = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+
+        var verify = await ProcessRunner.RunPowerShellAsync(probe, cancellationToken);
+        if (!(verify.Success && verify.StandardOutput.Contains("present", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new AppException(
+                "ftp.feature_install_failed",
+                503,
+                503,
+                "IIS FTP rolu (Web-Ftp-Server/IIS-FTPServer) otomatik kurulamadi; FTPSVC servisi bulunamadi. "
+                + BuildCommandDetails(install));
         }
     }
 

@@ -169,6 +169,7 @@
   "ftp.user_create_failed": "The FTP user could not be created.",
   "ftp.acl_failed": "The FTP folder permissions could not be applied.",
   "ftp.site_configuration_failed": "The IIS FTP site or user isolation could not be configured.",
+  "ftp.feature_install_failed": "The IIS FTP role (Web-Ftp-Server) could not be installed automatically. Install the FTP role on the server and try again.",
   "ftp.user_delete_failed": "The FTP user could not be deleted.",
   "ftp.user_created": "The FTP user was created.",
   "ftp.user_deleted": "The FTP user was deleted.",

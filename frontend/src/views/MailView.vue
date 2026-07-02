@@ -9,7 +9,7 @@
     </div>
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
-    <details v-if="noticeError && noticeDetails" class="notice-details">
+    <details v-if="noticeError && noticeDetails" class="notice-details" open>
       <summary>{{ t("panel.common.technicalDetails") }}</summary>
       <pre>{{ noticeDetails }}</pre>
     </details>
@@ -81,6 +81,9 @@
           <input v-model.number="domainQuota" type="number" min="0" />
           <span class="hint">MB ({{ t("panel.mail.zeroUnlimited") }})</span>
         </label>
+        <span v-if="selectedDomainInfo && selectedDomainInfo.maxSizeMB > 0" class="hint">
+          {{ t("panel.mail.domainQuotaUsage", { used: selectedDomainInfo.allocatedMB, limit: selectedDomainInfo.maxSizeMB }) }}
+        </span>
         <button class="secondary compact" :disabled="busy" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
       </div>
 
@@ -234,16 +237,9 @@
               <p class="meta">{{ autoResponderFor }}</p>
             </div>
           </div>
-          <label class="checkbox">
-            <input v-model="autoResponderForm.enabled" type="checkbox" />
-            <span>{{ t("panel.mail.autoResponderEnabled") }}</span>
-          </label>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.mail.autoResponderMessage") }}</span>
-            <textarea v-model="autoResponderForm.message" rows="5"></textarea>
-          </label>
+          <p class="meta">{{ t("panel.mail.autoResponderWebmailHint") }}</p>
           <div class="row-actions">
-            <button class="compact" :disabled="busy" @click="saveAutoResponder">{{ t("panel.common.save") }}</button>
+            <button class="compact" :disabled="busy" @click="openWebmail">{{ t("panel.mail.webmailOpen") }}</button>
             <button class="secondary compact" @click="autoResponderFor = ''">{{ t("panel.common.cancel") }}</button>
           </div>
         </section>
@@ -537,14 +533,12 @@ import {
   deleteMailAccount,
   deleteMailAlias,
   deleteMailDomain,
-  getMailAutoResponder,
   getMailCertificate,
   getMailDns,
   getMailDiagnostics,
   getMailListeners,
   getMailSpam,
   getMailWorkspace,
-  setMailAutoResponder,
   issueMailCertificate,
   setMailAccountPassword,
   setMailAccountQuota,
@@ -578,9 +572,7 @@ const selectedDomain = ref((props.domain ?? "").toLowerCase());
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
 const autoResponderFor = ref("");
-const autoResponderForm = reactive({ enabled: false, message: "" });
 const aliasForm = reactive({ localPart: "", target: "" });
-const domainQuota = ref(0);
 const spam = ref<MailSpamSettings | null>(null);
 const dns = ref<MailDns | null>(null);
 const rdns = ref<RdnsCheck | null>(null);
@@ -601,6 +593,9 @@ const showMailAdvanced = ref(false);
 const listeners = ref<MailListener[] | null>(null);
 const loading = ref(false);
 const busy = ref(false);
+const domainQuota = ref(0);
+const selectedDomainInfo = computed(() =>
+  workspace.value?.domains.find((item) => item.name.toLowerCase() === selectedDomain.value.toLowerCase()) ?? null);
 const notice = ref("");
 const noticeError = ref(false);
 const noticeDetails = ref("");
@@ -621,7 +616,21 @@ const mailDomains = computed(() => {
       if (!map.has(bare)) map.set(bare, { name: bare, accountCount: 0, active: false });
     }
   }
-  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+  // Servis alt alanlarını GİZLE: mail./webmail./autodiscover. gibi host'lar posta sunucusunun KENDİ adresleridir
+  // (ör. mail sertifikası alınırken HTTP-01 için siteye 'mail.<domain>' binding'i eklenir) → posta ALAN ADI değildir.
+  // Yalnızca ÜST alan adı zaten listedeyse gizle (tek başına 'mail.x' adlı gerçek bir siteyi yanlışlıkla saklamayalım).
+  const servicePrefixes = ["mail", "webmail", "autodiscover", "autoconfig", "smtp", "imap", "pop", "pop3", "mx"];
+  const names = new Set(map.keys());
+  return Array.from(map.values())
+    .filter((item) => {
+      const dot = item.name.indexOf(".");
+      if (dot <= 0) return true;
+      const firstLabel = item.name.slice(0, dot);
+      const parent = item.name.slice(dot + 1);
+      return !(servicePrefixes.includes(firstLabel) && names.has(parent));
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 });
 
 // Listeden bir alan adi secilince: postasi yoksa otomatik olustur (profesyonel paneller gibi), sonra
@@ -781,6 +790,17 @@ async function issueCert() {
 async function openWebmail() {
   // Pop-up engelleyiciye takılmamak için sekmeyi tıklama anında aç, URL gelince yönlendir.
   const tab = window.open("", "_blank");
+  // Sekmeyi boş bırakma: hazırlık sürerken (ilk açılış birkaç saniye + olası kurulum) "hazırlanıyor" göster,
+  // yoksa kullanıcı boş sayfa görüp "açılmadı" sanıyor. URL gelince oraya yönlendiririz; hata olursa sekmede yazarız.
+  if (tab) {
+    tab.document.write(
+      '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Webmail</title></head>' +
+      '<body style="margin:0;height:100vh;display:grid;place-items:center;font-family:Segoe UI,system-ui,sans-serif;background:#0a141a;color:#eaf5ee">' +
+      '<div style="text-align:center"><div style="font-size:1.15rem;font-weight:600">Webmail hazırlanıyor…</div>' +
+      '<div style="opacity:.6;margin-top:8px;font-size:.85rem">Roundcube ilk açılışta birkaç saniye sürebilir, lütfen bekleyin.</div></div></body></html>'
+    );
+    tab.document.close();
+  }
   webmailOpening.value = true;
   await run(async () => {
     try {
@@ -792,7 +812,12 @@ async function openWebmail() {
         window.location.href = url;
       }
     } catch (error) {
-      if (tab) tab.close();
+      // Sekmeyi sessizce kapatma → kullanıcı ne olduğunu anlamaz. Nedeni sekmede göster.
+      if (tab && tab.document?.body) {
+        tab.document.body.innerHTML =
+          '<div style="text-align:center"><div style="font-size:1.05rem;color:#f85149;font-weight:600">Webmail açılamadı</div>' +
+          '<div style="opacity:.7;margin-top:8px;font-size:.85rem">Panele dönüp tekrar deneyin; sorun sürerse "Tanıla" ile nedenini görün.</div></div>';
+      }
       throw error;
     }
   });
@@ -839,6 +864,11 @@ async function removeDomain() {
 }
 
 async function addAccount() {
+  // Plesk gibi: kısa parolayı SUNUCUYA göndermeden net uyar (yoksa Stalwart reddi sağır "işlem tamamlanamadı" olurdu).
+  if ((accountForm.password ?? "").trim().length < 8) {
+    showNotice(t("mail.weak_password"), true);
+    return;
+  }
   await run(async () => {
     apply(await createMailAccount(selectedDomain.value, accountForm.localPart, accountForm.password, accountForm.maxSizeMB));
     accountForm.localPart = "";
@@ -856,31 +886,19 @@ async function removeAccount(address: string) {
   });
 }
 
-async function openAutoResponder(address: string) {
+// Otomatik yanıt (vacation) Stalwart'ta yalnız kullanıcının kendi ManageSieve'iyle (webmail) ayarlanır;
+// admin adına set edilemez. Kart kullanıcıyı webmail'e yönlendirir.
+function openAutoResponder(address: string) {
   autoResponderFor.value = address;
-  autoResponderForm.enabled = false;
-  autoResponderForm.message = "";
-  try {
-    const data = await getMailAutoResponder(address);
-    autoResponderForm.enabled = data.enabled;
-    autoResponderForm.message = data.message;
-  } catch (error) {
-    showError(error);
-  }
-}
-
-async function saveAutoResponder() {
-  if (!autoResponderFor.value) return;
-  await run(async () => {
-    await setMailAutoResponder(autoResponderFor.value, autoResponderForm.enabled, autoResponderForm.message);
-    autoResponderFor.value = "";
-    showNotice(t("panel.mail.autoResponderSaved"), false);
-  });
 }
 
 async function changePassword(address: string) {
   const password = window.prompt(t("panel.mail.enterNewPassword"));
   if (!password) return;
+  if (password.trim().length < 8) {
+    showNotice(t("mail.weak_password"), true);
+    return;
+  }
   await run(async () => {
     apply(await setMailAccountPassword(address, password));
     showNotice(t("panel.mail.passwordChanged"), false);

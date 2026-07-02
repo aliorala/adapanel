@@ -11,6 +11,7 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
     <p v-if="!siteName" class="empty-state">{{ t("panel.php.selectSite") }}</p>
+    <p v-else-if="loading && !wp" class="empty-state">{{ t("panel.common.loading") }}</p>
 
     <template v-else-if="wp && wp.isWordPress">
       <div class="wp-summary">

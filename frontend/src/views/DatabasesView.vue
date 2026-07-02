@@ -201,6 +201,14 @@
                 <span class="field-label">{{ t("panel.database.userPassword") }}</span>
                 <input v-model="databaseForm.password" type="password" :placeholder="t('panel.database.optional')" />
               </label>
+              <label>
+                <span class="field-label">{{ t("panel.database.linkSite") }}</span>
+                <select v-model="databaseForm.siteName">
+                  <option value="">{{ t("panel.database.linkSiteNone") }}</option>
+                  <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
+                </select>
+                <small class="field-hint">{{ t("panel.database.linkSiteHint") }}</small>
+              </label>
             </div>
             <div class="row-actions">
               <button
@@ -233,6 +241,13 @@
                 <span class="field-label">{{ t("panel.database.userPassword") }}</span>
                 <input v-model="importForm.password" type="password" />
               </label>
+              <label>
+                <span class="field-label">{{ t("panel.database.linkSite") }}</span>
+                <select v-model="importForm.siteName">
+                  <option value="">{{ t("panel.database.linkSiteNone") }}</option>
+                  <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
+                </select>
+              </label>
             </div>
             <div class="row-actions">
               <button
@@ -247,7 +262,7 @@
           <section class="data-table">
             <div class="data-row table-head database-row">
               <span>{{ t("panel.database.databaseName") }}</span>
-              <span>{{ t("panel.database.owner") }}</span>
+              <span>{{ t("panel.database.dbUsers") }}</span>
               <span>{{ t("panel.database.encoding") }}</span>
               <span>{{ t("panel.database.collation") }}</span>
               <span>{{ t("panel.files.actions") }}</span>
@@ -257,7 +272,7 @@
                 <strong>{{ item.name }}</strong>
                 <small>{{ workspace.displayName }}</small>
               </span>
-              <span>{{ item.owner || "-" }}</span>
+              <span :class="{ 'cell-muted': !item.users.length }">{{ item.users.length ? item.users.join(", ") : (item.owner || t("panel.database.noDbUser")) }}</span>
               <span>{{ item.encoding || "-" }}</span>
               <span class="cell-muted">{{ item.collation || "-" }}</span>
               <span class="row-actions">
@@ -276,7 +291,10 @@
                 </button>
               </span>
             </div>
-            <p v-if="filteredDatabases.length === 0" class="empty-state">
+            <p v-if="databasesStore.loadingEngine === selectedEngine && filteredDatabases.length === 0" class="empty-state">
+              {{ t("panel.common.loading") }}
+            </p>
+            <p v-else-if="filteredDatabases.length === 0" class="empty-state">
               {{ t("panel.database.noDatabases") }}
             </p>
           </section>
@@ -342,7 +360,10 @@
                 </button>
               </span>
             </div>
-            <p v-if="filteredUsers.length === 0" class="empty-state">
+            <p v-if="databasesStore.loadingEngine === selectedEngine && filteredUsers.length === 0" class="empty-state">
+              {{ t("panel.common.loading") }}
+            </p>
+            <p v-else-if="filteredUsers.length === 0" class="empty-state">
               {{ t("panel.database.noUsers") }}
             </p>
           </section>
@@ -391,6 +412,7 @@ import { openReachable } from "../utils/url";
 import { extractApiMessage } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
 import { useSoftwareStore } from "../stores/software";
+import { useSitesStore } from "../stores/sites";
 
 type DatabaseModule = "databases" | "webdb" | "cache" | "transfer" | "settings";
 type WorkspaceSection = "databases" | "users" | "connection";
@@ -398,6 +420,13 @@ type WorkspaceSection = "databases" | "users" | "connection";
 const { t } = useI18n();
 const databasesStore = useDatabasesStore();
 const softwareStore = useSoftwareStore();
+const sitesStore = useSitesStore();
+// Site↔DB bağı dropdown'u için site listesini yükle (Plesk gibi: DB'yi siteye bağla).
+onMounted(() => {
+  if (sitesStore.sites.length === 0) {
+    sitesStore.fetchSites().catch(() => undefined);
+  }
+});
 
 const notice = ref("");
 const noticeError = ref(false);
@@ -410,7 +439,8 @@ const showUserForm = ref(false);
 const databaseForm = reactive({
   name: "",
   userName: "",
-  password: ""
+  password: "",
+  siteName: ""
 });
 
 const userForm = reactive({
@@ -423,7 +453,8 @@ const showImportForm = ref(false);
 const importForm = reactive({
   databaseName: "",
   userName: "",
-  password: ""
+  password: "",
+  siteName: ""
 });
 
 const credForm = reactive({
@@ -471,7 +502,7 @@ const filteredDatabases = computed(() => {
   }
 
   return rows.filter((item) =>
-    [item.name, item.owner, item.encoding, item.collation]
+    [item.name, item.owner, item.encoding, item.collation, ...item.users]
       .some((value) => (value ?? "").toLowerCase().includes(query)));
 });
 
@@ -645,11 +676,13 @@ async function submitCreateDatabase() {
       engine: selectedEngine.value,
       name: databaseForm.name,
       userName: databaseForm.userName.trim() || undefined,
-      password: databaseForm.password || undefined
+      password: databaseForm.password || undefined,
+      siteName: databaseForm.siteName || undefined
     });
     databaseForm.name = "";
     databaseForm.userName = "";
     databaseForm.password = "";
+    databaseForm.siteName = "";
     showDatabaseForm.value = false;
     showNotice(t("database.create.success"), false);
   } catch (error) {
@@ -697,11 +730,13 @@ async function submitImport() {
       databaseName: importForm.databaseName,
       userName: importForm.userName,
       host: "%",
-      password: importForm.password
+      password: importForm.password,
+      siteName: importForm.siteName || undefined
     });
     importForm.databaseName = "";
     importForm.userName = "";
     importForm.password = "";
+    importForm.siteName = "";
     showImportForm.value = false;
     showNotice(t("panel.database.imported"), false);
   } catch (error) {

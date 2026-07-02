@@ -24,6 +24,14 @@
       <pre>{{ noticeDetails }}</pre>
     </details>
 
+    <div v-if="wpAdmin.adminPassword" class="notice wp-creds">
+      <strong>{{ t("panel.appStore.wpReady") }}</strong>
+      <div class="wp-cred-line">{{ t("panel.appStore.wpAdminUrl") }}: <a :href="wpAdmin.adminUrl" target="_blank" rel="noopener">{{ wpAdmin.adminUrl }}</a></div>
+      <div class="wp-cred-line">{{ t("panel.appStore.wpUser") }}: <code>{{ wpAdmin.adminUser }}</code></div>
+      <div class="wp-cred-line">{{ t("panel.appStore.wpPass") }}: <code>{{ wpAdmin.adminPassword }}</code></div>
+      <small>{{ t("panel.appStore.wpCredHint") }}</small>
+    </div>
+
     <p v-if="sitesUnavailable" class="notice warn">
       {{ t("panel.appStore.sitesUnavailable") }}
     </p>
@@ -107,7 +115,10 @@
         </button>
       </article>
 
-      <p v-if="filteredTemplates.length === 0" class="empty-state">
+      <p v-if="loading && templates.length === 0" class="empty-state">
+        {{ t("panel.common.loading") }}
+      </p>
+      <p v-else-if="filteredTemplates.length === 0" class="empty-state">
         {{ t("panel.appStore.noResults") }}
       </p>
     </div>
@@ -133,6 +144,7 @@ const { t } = useI18n();
 const sitesStore = useSitesStore();
 
 const templates = ref<AppTemplate[]>([]);
+const loading = ref(false);
 const busyTemplate = ref("");
 const notice = ref("");
 const noticeDetails = ref("");
@@ -141,6 +153,7 @@ const sitesUnavailable = ref(false);
 const search = ref("");
 const activeCategory = ref("all");
 const siteMap = reactive<Record<string, string>>({});
+const wpAdmin = reactive({ adminUrl: "", adminUser: "", adminPassword: "" });
 
 const categories = computed(() => [
   "all",
@@ -188,6 +201,7 @@ onMounted(async () => {
 });
 
 async function refresh() {
+  loading.value = true;
   try {
     sitesUnavailable.value = false;
     if (sitesStore.sites.length === 0 && !sitesStore.loading) {
@@ -210,20 +224,29 @@ async function refresh() {
     }
 
     showNotice(resolveApiMessage(error), true, extractApiDetails(error));
+  } finally {
+    loading.value = false;
   }
 }
 
 async function install(templateId: string, cleanInstall = false) {
   busyTemplate.value = templateId;
   showNotice("", false);
+  wpAdmin.adminUrl = "";
+  wpAdmin.adminUser = "";
+  wpAdmin.adminPassword = "";
 
   try {
-    await installAppTemplate({
+    const result = await installAppTemplate({
       templateId,
       siteName: siteMap[templateId] || "",
       targetPath: "",
       cleanInstall
     });
+    // WordPress otomatik kurulduysa giriş bilgilerini göster (bir kez).
+    wpAdmin.adminUrl = result.adminUrl || "";
+    wpAdmin.adminUser = result.adminUser || "";
+    wpAdmin.adminPassword = result.adminPassword || "";
     showNotice(t("panel.appStore.installed"), false);
     await sitesStore.fetchSites();
   } catch (error) {
@@ -541,6 +564,24 @@ function appInitials(displayName: string) {
 .notice.warn {
   color: var(--warn-text);
   background: color-mix(in srgb, var(--warn-1) 12%, transparent);
+}
+
+.notice.wp-creds {
+  display: grid;
+  gap: 4px;
+  background: color-mix(in srgb, var(--accent-1) 10%, transparent);
+}
+.wp-cred-line code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  background: color-mix(in srgb, var(--accent-1) 16%, transparent);
+  color: var(--accent-1);
+  padding: 2px 8px;
+  border-radius: 6px;
+  user-select: all;
+}
+.wp-creds small {
+  opacity: 0.75;
+  margin-top: 2px;
 }
 
 @keyframes spin {

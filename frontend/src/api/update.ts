@@ -18,6 +18,7 @@ export type UpdateStatus = {
   isInstallScheduled: boolean;
   installScheduledAtUtc: string | null;
   notes: string;
+  githubRepo: string;
   checkedAtUtc: string;
 };
 
@@ -36,5 +37,11 @@ export async function applyUpdate(downloadUrl: string, packageSha256 = "") {
 
 export async function installPreparedUpdate() {
   const response = await apiClient.post<ApiEnvelope<UpdateStatus>>("/update/install");
+  return response.data.data;
+}
+
+// Güncellemelerin çekileceği GitHub deposunu (owner/repo) ayarla.
+export async function setUpdateGithubRepo(repo: string) {
+  const response = await apiClient.post<ApiEnvelope<UpdateStatus>>("/update/github", { repo });
   return response.data.data;
 }

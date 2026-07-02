@@ -2,8 +2,8 @@
   <section class="panel module-shell site-migration">
     <div class="module-head">
       <div>
-        <h3>{{ t("panel.migration.title") }}</h3>
-        <p class="meta">{{ t("panel.migration.subtitle") }}</p>
+        <h3>{{ t("panel.siteImport.title") }}</h3>
+        <p class="meta">{{ t("panel.siteImport.subtitle") }}</p>
       </div>
     </div>
 
@@ -24,7 +24,7 @@
 
       <div class="row-actions">
         <button :disabled="busy || !archiveUrl.trim()" @click="run">
-          {{ busy ? t("panel.migration.running") : t("panel.migration.run") }}
+          {{ busy ? t("panel.siteImport.running") : t("panel.migration.run") }}
         </button>
       </div>
 

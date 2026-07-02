@@ -13,7 +13,7 @@ function Enable-AdaPanelIisFeatures {
             "Web-Server", "Web-WebServer", "Web-Common-Http", "Web-Default-Doc", "Web-Dir-Browsing",
             "Web-Http-Errors", "Web-Static-Content", "Web-Http-Logging", "Web-Filtering",
             "Web-App-Dev", "Web-Asp-Net45", "Web-Net-Ext45", "Web-ISAPI-Ext", "Web-ISAPI-Filter",
-            "Web-CGI", "Web-Mgmt-Console", "Web-Scripting-Tools",
+            "Web-CGI", "Web-Asp", "Web-Mgmt-Console", "Web-Scripting-Tools",
             "Web-Ftp-Server", "Web-Ftp-Service", "Web-Ftp-Ext"
         )
         foreach ($feature in $serverFeatures) {
@@ -35,7 +35,7 @@ function Enable-AdaPanelIisFeatures {
         "IIS-WebServerRole", "IIS-WebServer", "IIS-CommonHttpFeatures", "IIS-DefaultDocument",
         "IIS-DirectoryBrowsing", "IIS-HttpErrors", "IIS-StaticContent", "IIS-HttpLogging",
         "IIS-RequestFiltering", "IIS-ApplicationDevelopment", "IIS-ASPNET45", "IIS-NetFxExtensibility45",
-        "IIS-ISAPIExtensions", "IIS-ISAPIFilter", "IIS-CGI", "IIS-FTPServer", "IIS-FTPSvc",
+        "IIS-ISAPIExtensions", "IIS-ISAPIFilter", "IIS-CGI", "IIS-ASP", "IIS-FTPServer", "IIS-FTPSvc",
         "IIS-FTPExtensibility", "IIS-ManagementConsole", "IIS-ManagementScriptingTools"
     )
     foreach ($feature in $clientFeatures) {

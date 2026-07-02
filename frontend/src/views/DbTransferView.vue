@@ -8,6 +8,12 @@
     </div>
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <div v-if="created.userName" class="notice cred-box">
+      <strong>{{ t("panel.database.transfer.userCreated") }}</strong>
+      <div class="cred-line">{{ t("panel.database.transfer.userLabel") }}: <code>{{ created.userName }}</code></div>
+      <div v-if="created.password" class="cred-line">{{ t("panel.database.transfer.passLabel") }}: <code>{{ created.password }}</code></div>
+      <small>{{ t("panel.database.transfer.credHint") }}</small>
+    </div>
 
     <div class="form-surface">
       <h4 class="group-head">{{ t("panel.database.transfer.sourceGroup") }}</h4>
@@ -48,7 +54,16 @@
           <input v-model.trim="form.targetDatabase" :placeholder="form.sourceDatabase || 'yeni_db'" :disabled="busy" />
           <small class="field-hint">{{ t("panel.database.transfer.targetDbHint") }}</small>
         </label>
+        <label>
+          <span class="field-label">{{ t("panel.database.transfer.targetUser") }}</span>
+          <input v-model.trim="form.targetUserName" autocomplete="off" :disabled="busy" />
+        </label>
+        <label>
+          <span class="field-label">{{ t("panel.database.transfer.targetPassword") }}</span>
+          <input v-model="form.targetPassword" type="text" autocomplete="off" :disabled="busy" />
+        </label>
       </div>
+      <p class="hint">{{ t("panel.database.transfer.targetUserHint") }}</p>
 
       <div class="row-actions">
         <button :disabled="busy || !canRun" @click="run">
@@ -72,6 +87,7 @@ const { t } = useI18n();
 const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
+const created = reactive({ userName: "", password: "" });
 const form = reactive({
   engine: "mariadb",
   sourceHost: "",
@@ -79,7 +95,9 @@ const form = reactive({
   sourceUserName: "root",
   sourcePassword: "",
   sourceDatabase: "",
-  targetDatabase: ""
+  targetDatabase: "",
+  targetUserName: "",
+  targetPassword: ""
 });
 
 const canRun = computed(() =>
@@ -93,6 +111,8 @@ async function run() {
   }
   busy.value = true;
   showNotice("", false);
+  created.userName = "";
+  created.password = "";
   try {
     const result = await transferDatabase({
       engine: form.engine,
@@ -101,8 +121,12 @@ async function run() {
       sourceUserName: form.sourceUserName.trim(),
       sourcePassword: form.sourcePassword,
       sourceDatabase: form.sourceDatabase.trim(),
-      targetDatabase: form.targetDatabase.trim()
+      targetDatabase: form.targetDatabase.trim(),
+      targetUserName: form.targetUserName.trim(),
+      targetPassword: form.targetPassword
     });
+    created.userName = result.userName;
+    created.password = result.password;
     showNotice(t("panel.database.transfer.done", { target: result.targetDatabase }), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
@@ -126,6 +150,23 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.cred-box {
+  display: grid;
+  gap: 4px;
+}
+.cred-box .cred-line code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  background: rgba(95, 227, 154, 0.12);
+  color: var(--accent-1, #5fe39a);
+  padding: 2px 8px;
+  border-radius: 6px;
+  user-select: all;
+}
+.cred-box small {
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
 .group-head {
   margin: 4px 2px 10px;
   font-size: 0.84rem;

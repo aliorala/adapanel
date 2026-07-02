@@ -177,7 +177,10 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         public void Add(string[] columns, Dictionary<string, int> fieldIndex, DateTime cutoff)
         {
             var date = Get(columns, fieldIndex, "date");
-            if (!string.IsNullOrEmpty(date) && DateTime.TryParse(date, out var parsedDate) && parsedDate.Date < cutoff)
+            // IIS W3C 'date' alanı ISO yyyy-MM-dd; InvariantCulture ile parse (Türkçe locale'de de doğru, kültür-bağımsız).
+            if (!string.IsNullOrEmpty(date) &&
+                DateTime.TryParse(date, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsedDate) &&
+                parsedDate.Date < cutoff)
             {
                 return;
             }

@@ -33,6 +33,10 @@
         <span>DK</span>
         <strong>{{ t("panel.docker.title") }}</strong>
       </button>
+      <button :class="{ active: activeTool === 'dnstemplate' }" @click="activeTool = 'dnstemplate'">
+        <span>DN</span>
+        <strong>{{ t("panel.dnsTemplate.title") }}</strong>
+      </button>
     </nav>
 
     <ServerHealthView v-if="activeTool === 'health'" />
@@ -42,6 +46,7 @@
     <NginxView v-else-if="activeTool === 'nginx'" />
     <LogsView v-else-if="activeTool === 'logs'" />
     <TerminalView v-else-if="activeTool === 'terminal'" />
+    <DnsTemplateView v-else-if="activeTool === 'dnstemplate'" />
     <DockerView v-else />
   </section>
 </template>
@@ -57,9 +62,10 @@ import LogsView from "./LogsView.vue";
 import NginxView from "./NginxView.vue";
 import TerminalView from "./TerminalView.vue";
 import ServerHealthView from "./ServerHealthView.vue";
+import DnsTemplateView from "./DnsTemplateView.vue";
 
 const { t } = useI18n();
-const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "logs" | "terminal" | "docker">("health");
+const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "logs" | "terminal" | "docker" | "dnstemplate">("health");
 </script>
 
 <style scoped>

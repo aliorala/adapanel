@@ -278,6 +278,15 @@ public sealed class CustomerScopeService(
     public async Task<IReadOnlyCollection<string>> GetResellerSitesAsync(Guid resellerId, CancellationToken cancellationToken = default)
     {
         var sites = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Bayinin KENDİ doğrudan oluşturduğu/atanmış siteleri. AssignSiteToActor bayinin kendi kapsamına ekler;
+        // bunlar dahil edilmezse bayi kendi açtığı siteyi göremez/yönetemez (EnsureSiteAsync 403).
+        foreach (var site in await GetAssignedSitesAsync(resellerId, cancellationToken))
+        {
+            sites.Add(site);
+        }
+
+        // + sahip olduğu TÜM müşterilerin siteleri.
         foreach (var customerId in await GetOwnedUserIdsAsync(resellerId, cancellationToken))
         {
             foreach (var site in await GetAssignedSitesAsync(customerId, cancellationToken))
@@ -292,6 +301,14 @@ public sealed class CustomerScopeService(
     public async Task<IReadOnlyCollection<string>> GetResellerMailDomainsAsync(Guid resellerId, CancellationToken cancellationToken = default)
     {
         var domains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Bayinin kendi sitelerinin mail domainleri.
+        foreach (var domain in await GetAllowedMailDomainsAsync(resellerId, cancellationToken))
+        {
+            domains.Add(domain);
+        }
+
+        // + sahip olduğu müşterilerin mail domainleri.
         foreach (var customerId in await GetOwnedUserIdsAsync(resellerId, cancellationToken))
         {
             foreach (var domain in await GetAllowedMailDomainsAsync(customerId, cancellationToken))

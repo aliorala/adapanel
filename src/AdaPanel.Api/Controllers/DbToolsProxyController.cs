@@ -66,9 +66,14 @@ public sealed class DbToolsProxyController(
         }
 
         // İstek başlıkları (hop-by-hop, Host ve Content-* hariç — Content-* gövdeye eklendi).
+        // Accept-Encoding de ATLANIR: upstream'den DAİMA identity (sıkıştırmasız) iste. Böylece HTML yanıt
+        // gövdesini güvenle string'e çevirip layout-fix <style>'ını enjekte edebiliriz (gzip'lenmiş gövdeye
+        // dokunamazdık) ve gzip/Content-Length uyumsuzluğu riski kalmaz. Loopback'te sıkıştırma kazancı önemsiz.
         foreach (var header in Request.Headers)
         {
-            if (HopByHop.Contains(header.Key) || header.Key.StartsWith("Content-", StringComparison.OrdinalIgnoreCase))
+            if (HopByHop.Contains(header.Key) ||
+                header.Key.StartsWith("Content-", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.Equals("Accept-Encoding", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -110,7 +115,71 @@ public sealed class DbToolsProxyController(
 
         Response.Headers.Remove("X-Frame-Options");
 
+        // KALICI LAYOUT DÜZELTMESİ (kök-nedenden bağımsız): phpMyAdmin'in init JS'i (inline AJAX.fireOnload
+        // bootstrap) bloklanır/çalışmazsa, içerik margin'i (body margin-left = nav genişliği) JS ile
+        // ayarlandığından UYGULANMAZ → ana içerik sabit sol menünün ALTINA kayar (kullanıcı ekran görüntüsü).
+        // Proxy'lenen text/html'e küçük bir <style> enjekte ederiz: inline <style> HER CSP altında izinlidir
+        // (script DEĞİL), dolayısıyla CSP/yapılandırma/build durumundan BAĞIMSIZ çalışır. :has(#pma_navigation)
+        // ile YALNIZ nav'lı tam sayfaya uygulanır (login/hata/AJAX parçası değil); JS çalışırsa kendi inline
+        // margin'i (daha yüksek öncelik) bunu sorunsuz ezer → çakışma/çift margin yok, nav resize korunur.
+        var mediaType = backendResponse.Content.Headers.ContentType?.MediaType;
+        var isHtml = string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase);
+        var contentLength = backendResponse.Content.Headers.ContentLength;
+        if (isHtml && !HttpMethods.IsHead(Request.Method) && contentLength is null or <= 16 * 1024 * 1024)
+        {
+            var bytes = await backendResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+            try
+            {
+                var html = System.Text.Encoding.UTF8.GetString(bytes);
+                var injected = InjectLayoutFix(html);
+                if (!ReferenceEquals(injected, html))
+                {
+                    var modified = System.Text.Encoding.UTF8.GetBytes(injected);
+                    Response.Headers.Remove("Content-Length");
+                    Response.Headers.Remove("Content-Encoding");
+                    Response.ContentLength = modified.Length;
+                    await Response.Body.WriteAsync(modified, cancellationToken);
+                    return;
+                }
+            }
+            catch
+            {
+                // Beklenmeyen kodlama/biçim → enjeksiyondan vazgeç, orijinal gövdeyi AYNEN gönder.
+            }
+
+            await Response.Body.WriteAsync(bytes, cancellationToken);
+            return;
+        }
+
         await backendResponse.Content.CopyToAsync(Response.Body, cancellationToken);
+    }
+
+    // phpMyAdmin tam sayfasının margin'ini JS'siz garanti eden inline stil. body margin-left = phpMyAdmin
+    // varsayılan NavigationWidth'i (240px). #pma_console (alt SQL konsolu, position:fixed) de aynı şekilde kayar.
+    // !important KULLANILMAZ: JS çalışırsa kendi inline margin'i (resize/daralt) bunu ezsin → phpMyAdmin'in
+    // nav yeniden-boyutlandırma özelliği korunur; JS ölüyse bu kural devreye girip içeriği menü altından kurtarır.
+    private const string LayoutFixStyle =
+        "<style id=\"adapanel-pma-layout\">@media screen{" +
+        "body:has(#pma_navigation){margin-left:240px}" +
+        "body:has(#pma_navigation) #pma_console{margin-left:240px}" +
+        "}</style>";
+
+    // Layout-fix <style>'ını </head>'den hemen önce (yoksa </body>) ekler. Zaten varsa ya da uygun kapanış
+    // etiketi yoksa (ör. AJAX HTML parçası) girdiyi AYNEN döndürür (referans eşitliği = değişmedi sinyali).
+    private static string InjectLayoutFix(string html)
+    {
+        if (html.Contains("adapanel-pma-layout", StringComparison.Ordinal))
+        {
+            return html;
+        }
+
+        var index = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            index = html.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return index < 0 ? html : html.Insert(index, LayoutFixStyle);
     }
 
     private void CopyResponseHeaders(System.Net.Http.Headers.HttpHeaders headers)

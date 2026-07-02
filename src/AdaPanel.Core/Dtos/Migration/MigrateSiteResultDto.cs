@@ -7,8 +7,12 @@ public sealed class MigrationStepDto
 
     public bool Success { get; set; }
 
-    /// <summary>i18n anahtarı ya da ham hata metni.</summary>
+    /// <summary>i18n anahtarı ya da ham hata metni (kategori başlığı).</summary>
     public string Message { get; set; } = string.Empty;
+
+    /// <summary>Başarısızlıkta gerçek teknik neden (ham kütüphane mesajı: "530 Login incorrect", "/httpdocs not found" …).
+    /// Başlık i18n anahtarı kullanıcıya "ne" olduğunu, bu alan "neden"i söyler. Başarıda null.</summary>
+    public string? Detail { get; set; }
 }
 
 /// <summary>Site göçünün adım-adım sonucu.</summary>

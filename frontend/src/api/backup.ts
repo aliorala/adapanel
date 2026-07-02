@@ -75,6 +75,12 @@ export async function backupMail(target?: BackupTargetPayload) {
   return response.data.data;
 }
 
+// Panelin kendi durumunu yedekle: adapanel.db + config (DataProtection anahtarları hariç).
+export async function backupPanel(target?: BackupTargetPayload) {
+  const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/panel", { ...(target ?? {}) });
+  return response.data.data;
+}
+
 export async function backupDatabase(engine: string, databaseName = "", target?: BackupTargetPayload) {
   const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/db", {
     engine,

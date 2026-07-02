@@ -54,17 +54,21 @@
         </div>
       </dl>
 
-      <!-- profesyonel panel benzeri site önizlemesi (canlı iframe — ekran görüntüsü servisi gerektirmez). -->
+      <!-- Domainsiz önizleme: iframe çoğu sitede (X-Frame-Options/CSP) engellendiğinden nip.io linkini yeni sekmede açtırırız. -->
       <section v-if="primaryUrl" class="preview-block">
         <div class="section-head">
           <h4>{{ t("panel.sites.previewTitle") }}</h4>
-          <button class="secondary compact" type="button" @click="showPreview = !showPreview">
-            {{ showPreview ? t("panel.common.cancel") : t("panel.sites.previewShow") }}
+          <button class="secondary compact" type="button" :disabled="previewLoading" @click="loadPreview">
+            {{ previewLoading ? t("panel.common.loading") : t("panel.sites.preview") }}
           </button>
         </div>
-        <div v-if="showPreview" class="preview-frame">
-          <iframe :src="primaryUrl" :title="site.name" loading="lazy" referrerpolicy="no-referrer"></iframe>
+        <div v-if="preview" class="preview-card">
+          <a class="link-btn compact" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
+          <a class="preview-url" :href="preview.url" target="_blank" rel="noopener">{{ preview.url }}</a>
+          <p class="meta">{{ t("panel.sites.previewHostsHint") }}</p>
+          <code v-if="preview.hostsLine" class="preview-hosts">{{ preview.hostsLine }}</code>
         </div>
+        <p v-if="previewError" class="notice error">{{ previewError }}</p>
       </section>
 
       <!-- profesyonel panel benzeri "domain araçları" ızgarası: özet altında tek tık kısayollar. -->
@@ -172,10 +176,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import type { SiteBinding, SiteBindingPayload, SiteDefaultsResult, SiteRecord } from "../api/sites";
+import type { SiteBinding, SiteBindingPayload, SiteDefaultsResult, SiteRecord, SitePreview } from "../api/sites";
+import { getSitePreview } from "../api/sites";
 import { getServerIpAddresses, type ServerIpAddress } from "../api/system";
 import { openReachable } from "../utils/url";
-import { useAuthStore } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
 
 // Site oluşturma içeren işlemler (subdomain) + server-level araçlar yalnız admin'e gösterilir.
 const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");
@@ -207,8 +212,8 @@ const siteTools = computed(() => [
   { id: "asp", glyph: ".N", label: t("panel.sites.tools.asp") },
   { id: "mail", glyph: "@", label: t("panel.sites.tools.mail") },
   { id: "ssl", glyph: "SSL", label: t("panel.sites.tools.ssl") },
-  // webdb server-level (admin-only) → bayi/müşteride gizli.
-  ...(isAdmin.value ? [{ id: "webdb", glyph: "DB", label: t("panel.sites.tools.webdb") }] : []),
+  // Veritabanları (admin-only): site iş alanında DB ekle/sil + phpMyAdmin (SiteDatabasesView).
+  ...(isAdmin.value ? [{ id: "webdb", glyph: "SQL", label: t("panel.sites.tools.domaindb") }] : []),
   { id: "ftp", glyph: "FT", label: t("panel.sites.tools.ftp") },
   { id: "dns", glyph: "DNS", label: t("panel.sites.tools.dns") },
   { id: "stats", glyph: "IST", label: t("panel.sites.tools.stats") },
@@ -229,7 +234,24 @@ const bindingForm = reactive<SiteBindingPayload>({
 
 const subdomainLabel = ref("");
 const showBindingForm = ref(false);
-const showPreview = ref(false);
+const preview = ref<SitePreview | null>(null);
+const previewLoading = ref(false);
+const previewError = ref("");
+async function loadPreview() {
+  if (!props.site) {
+    return;
+  }
+  previewLoading.value = true;
+  preview.value = null;
+  previewError.value = "";
+  try {
+    preview.value = await getSitePreview(props.site.name);
+  } catch (error) {
+    previewError.value = extractApiMessage(error);
+  } finally {
+    previewLoading.value = false;
+  }
+}
 
 // Çoklu IP (panel dedicated IP): binding'de seçilebilecek sunucu IP'leri.
 const serverIps = ref<ServerIpAddress[]>([]);
@@ -249,7 +271,9 @@ function submitSubdomain() {
 const isStarted = computed(() => props.site?.state.toLowerCase() === "started");
 const isStopped = computed(() => props.site?.state.toLowerCase() === "stopped");
 const primaryUrl = computed(() => {
-  const binding = props.site?.bindings[0];
+  // nip.io önizleme bağlamalarını ATLA → asıl domain gösterilsin/açılsın.
+  const binding = props.site?.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
+    ?? props.site?.bindings[0];
   if (!binding) {
     return "";
   }
@@ -371,18 +395,32 @@ function translateState(state: string): string {
   gap: 10px;
 }
 
-.preview-frame {
+.preview-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md, 8px);
-  overflow: hidden;
-  background: #fff;
-  height: 320px;
+  background: color-mix(in srgb, var(--accent-1) 8%, transparent);
 }
 
-.preview-frame iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
+.preview-card .preview-url {
+  font-size: 0.82rem;
+  word-break: break-all;
+  opacity: 0.85;
+}
+
+.preview-card .preview-hosts {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-0, #0b1418);
+  border: 1px solid var(--panel-border);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
 }
 
 .subdomain-form {

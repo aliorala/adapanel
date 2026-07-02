@@ -117,6 +117,35 @@
           </label>
         </div>
       </form>
+
+      <div v-if="zone" class="form-surface dnssec-card">
+        <div class="section-head">
+          <div>
+            <h4>{{ t("panel.dns.dnssecTitle") }}</h4>
+            <p class="meta">{{ t("panel.dns.dnssecHint") }}</p>
+          </div>
+          <span :class="['status-pill', zone.isDnssecSigned ? 'ok' : '']">
+            {{ zone.isDnssecSigned ? t("panel.dns.dnssecOn") : t("panel.dns.dnssecOff") }}
+          </span>
+        </div>
+        <p v-if="!zone.isWindowsDnsAvailable" class="field-hint">{{ t("panel.dns.dnssecRequiresWindows") }}</p>
+        <template v-else>
+          <div class="row-actions">
+            <button v-if="!zone.isDnssecSigned" class="compact" :disabled="dnssecBusy" @click="toggleDnssec(true)">
+              {{ dnssecBusy ? t("panel.dns.dnssecWorking") : t("panel.dns.dnssecEnable") }}
+            </button>
+            <button v-else class="secondary compact danger" :disabled="dnssecBusy" @click="toggleDnssec(false)">
+              {{ dnssecBusy ? t("panel.dns.dnssecWorking") : t("panel.dns.dnssecDisable") }}
+            </button>
+          </div>
+          <div v-if="zone.isDnssecSigned" class="dnssec-ds">
+            <p class="field-label">{{ t("panel.dns.dnssecDsTitle") }}</p>
+            <p class="field-hint">{{ t("panel.dns.dnssecDsHint") }}</p>
+            <pre v-if="zone.dnssecDsRecords.length" class="ds-box">{{ zone.dnssecDsRecords.join("\n") }}</pre>
+            <p v-else class="field-hint">{{ t("panel.dns.dnssecDsUnavailable") }}</p>
+          </div>
+        </template>
+      </div>
     </template>
   </section>
 </template>
@@ -124,7 +153,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
+import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, setDnssec, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -134,6 +163,7 @@ const siteName = computed(() => sitesStore.selectedSiteName);
 const zone = ref<DnsZone | null>(null);
 const busy = ref(false);
 const installingWindowsDns = ref(false);
+const dnssecBusy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const nameServersText = ref("");
@@ -272,6 +302,19 @@ async function installWindowsDns() {
     showNotice(resolveApiMessage(error), true);
   } finally {
     installingWindowsDns.value = false;
+  }
+}
+
+async function toggleDnssec(enable: boolean) {
+  if (!siteName.value) return;
+  dnssecBusy.value = true;
+  try {
+    zone.value = await setDnssec(siteName.value, enable);
+    showNotice(t(enable ? "panel.dns.dnssecEnabledMsg" : "panel.dns.dnssecDisabledMsg"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    dnssecBusy.value = false;
   }
 }
 

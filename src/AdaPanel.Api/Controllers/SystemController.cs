@@ -24,4 +24,12 @@ public sealed class SystemController(ISystemMonitoringService systemMonitoringSe
         var addresses = await systemMonitoringService.GetServerIpAddressesAsync(cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<ServerIpAddressDto>>.Ok(addresses));
     }
+
+    // Kalıcı izleme geçmişi (CPU/RAM/ağ örnekleri) → izleme ekranı trend grafikleri.
+    [HttpGet("history")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<SystemHistorySampleDto>>>> GetHistoryAsync(CancellationToken cancellationToken)
+    {
+        var history = await systemMonitoringService.GetHistoryAsync(cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SystemHistorySampleDto>>.Ok(history));
+    }
 }

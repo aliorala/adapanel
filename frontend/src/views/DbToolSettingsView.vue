@@ -36,8 +36,11 @@
       </div>
       <p class="hint">{{ t("panel.database.toolSettings.help") }}</p>
 
-      <div class="row-actions">
-        <button class="secondary" :disabled="redisBusy" @click="enableRedis">
+      <div class="row-actions redis-actions">
+        <span :class="['status-pill', redisEnabled ? 'ok' : '']">
+          {{ redisEnabled ? t("panel.database.toolSettings.redisOn") : t("panel.database.toolSettings.redisOff") }}
+        </span>
+        <button v-if="!redisEnabled" class="secondary" :disabled="redisBusy" @click="enableRedis">
           {{ redisBusy ? t("panel.database.toolSettings.enablingRedis") : t("panel.database.toolSettings.enableRedis") }}
         </button>
       </div>
@@ -88,6 +91,7 @@ const { t } = useI18n();
 const loading = ref(false);
 const saving = ref(false);
 const redisBusy = ref(false);
+const redisEnabled = ref(false);
 const loaded = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
@@ -116,6 +120,7 @@ async function load() {
     // 0 = süresiz; "|| 300" 0'ı falsy sayıp eziyordu → ?? ile sadece null/undefined'da varsayılan kullan.
     form.maxExecutionTime = settings.maxExecutionTime ?? 300;
     form.displayErrors = settings.displayErrors;
+    redisEnabled.value = settings.redisEnabled ?? false;
     loaded.value = true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
@@ -147,6 +152,7 @@ async function enableRedis() {
   redisBusy.value = true;
   try {
     const result = await enableRedisExtension();
+    redisEnabled.value = true;
     showNotice(result.message === "already"
       ? t("panel.database.toolSettings.redisAlready")
       : t("panel.database.toolSettings.redisEnabled"), false);

@@ -22,6 +22,8 @@ export type DnsZone = {
   isWindowsZonePresent: boolean;
   source: string;
   statusMessage: string;
+  isDnssecSigned: boolean;
+  dnssecDsRecords: string[];
 };
 
 export type UpsertDnsRecordPayload = {
@@ -60,5 +62,25 @@ export async function upsertDnsRecord(siteName: string, payload: UpsertDnsRecord
 
 export async function deleteDnsRecord(siteName: string, recordId: string) {
   const response = await apiClient.delete<ApiEnvelope<DnsZone>>(`/sites/${encodeURIComponent(siteName)}/dns/records/${encodeURIComponent(recordId)}`);
+  return response.data.data;
+}
+
+// Sunucu-geneli DNS şablonu (Plesk "DNS template"): yeni site bölgeleri bununla seed edilir.
+export type DnsTemplateRecord = { type: string; host: string; value: string; ttl: number };
+export type DnsTemplate = { records: DnsTemplateRecord[] };
+
+export async function getDnsTemplate() {
+  const response = await apiClient.get<ApiEnvelope<DnsTemplate>>("/dns/template");
+  return response.data.data;
+}
+
+export async function updateDnsTemplate(records: DnsTemplateRecord[]) {
+  const response = await apiClient.put<ApiEnvelope<DnsTemplate>>("/dns/template", { records });
+  return response.data.data;
+}
+
+// DNSSEC aç/kapat (Windows DNS zone-imzalama). Açıkken dönen zone'da dnssecDsRecords (registrar'a verilecek) dolu olur.
+export async function setDnssec(siteName: string, enabled: boolean) {
+  const response = await apiClient.post<ApiEnvelope<DnsZone>>(`/sites/${encodeURIComponent(siteName)}/dns/dnssec`, { enabled });
   return response.data.data;
 }

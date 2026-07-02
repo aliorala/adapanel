@@ -177,11 +177,11 @@
       :allowed-sections="dashboardSections.map((section) => section.id)"
       @navigate="handleNavigation" />
 
-    <WebsiteWorkspaceView v-else-if="activeSection === 'sites' && (isAdmin || isReseller)" />
+    <WebsiteWorkspaceView v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)" />
 
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
-    <MyDatabasesView v-else-if="activeSection === 'database' && isReseller" />
+    <MyDatabasesView v-else-if="activeSection === 'database' && (isReseller || isCustomer)" />
 
     <MailView v-else-if="activeSection === 'mail' && (isAdmin || isCustomer || isReseller)" />
 
@@ -408,27 +408,57 @@
       <section v-else-if="settingsTab === 'users' && (isAdmin || isReseller)" class="settings-section">
         <!-- Servis planları (panel): limit şablonu tanımla, müşteriye ata. Yalnız admin. -->
         <div v-if="isAdmin" class="form-surface plans-card">
-          <div class="module-toolbar">
+          <div class="plans-head">
             <div>
               <strong>{{ t("panel.plans.title") }}</strong>
               <p class="meta">{{ t("panel.plans.hint") }}</p>
             </div>
+            <button type="button" class="compact" @click="showPlanForm = !showPlanForm">
+              {{ showPlanForm ? t("panel.common.cancel") : t("panel.plans.add") }}
+            </button>
           </div>
-          <div class="plans-list">
-            <div v-for="plan in servicePlans" :key="plan.id" class="plan-row">
-              <strong>{{ plan.name }}</strong>
-              <span class="meta">{{ plan.maxSites || "∞" }} {{ t("panel.users.sitesShort") }} · {{ plan.maxDiskMb || "∞" }} MB</span>
-              <button class="secondary compact danger" @click="removeServicePlan(plan.id)">{{ t("panel.common.delete") }}</button>
+
+          <div v-if="servicePlans.length" class="plans-grid">
+            <article v-for="plan in servicePlans" :key="plan.id" class="plan-card">
+              <div class="plan-card-head">
+                <strong class="plan-name">{{ plan.name }}</strong>
+                <button class="secondary compact danger" @click="removeServicePlan(plan.id)">{{ t("panel.common.delete") }}</button>
+              </div>
+              <ul class="plan-limits">
+                <li><span>{{ t("panel.plans.sitesLabel") }}</span><b>{{ plan.maxSites || "∞" }}</b></li>
+                <li><span>{{ t("panel.plans.diskLabel") }}</span><b>{{ plan.maxDiskMb ? plan.maxDiskMb + " MB" : "∞" }}</b></li>
+                <li><span>{{ t("panel.plans.databasesLabel") }}</span><b>{{ plan.maxDatabases || "∞" }}</b></li>
+                <li><span>{{ t("panel.plans.mailboxesLabel") }}</span><b>{{ plan.maxMailboxes || "∞" }}</b></li>
+              </ul>
+            </article>
+          </div>
+          <p v-else class="empty-state plans-empty">{{ t("panel.plans.empty") }}</p>
+
+          <form v-if="showPlanForm" class="plan-form-grid" @submit.prevent="addServicePlan">
+            <label class="stacked-field plan-name-cell">
+              <span class="field-label">{{ t("panel.plans.name") }}</span>
+              <input v-model.trim="planForm.name" :placeholder="t('panel.plans.namePlaceholder')" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.users.maxSites") }}</span>
+              <input v-model.number="planForm.maxSites" type="number" min="0" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
+              <input v-model.number="planForm.maxDiskMb" type="number" min="0" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
+              <input v-model.number="planForm.maxDatabases" type="number" min="0" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
+              <input v-model.number="planForm.maxMailboxes" type="number" min="0" />
+            </label>
+            <p class="plan-form-hint">{{ t("panel.plans.formHint") }}</p>
+            <div class="plan-form-actions">
+              <button type="submit" class="compact" :disabled="!planForm.name">{{ t("panel.plans.add") }}</button>
             </div>
-            <p v-if="servicePlans.length === 0" class="empty-state">{{ t("panel.plans.empty") }}</p>
-          </div>
-          <form class="plan-form" @submit.prevent="addServicePlan">
-            <input v-model.trim="planForm.name" :placeholder="t('panel.plans.name')" />
-            <input v-model.number="planForm.maxSites" type="number" min="0" :placeholder="t('panel.users.maxSites')" />
-            <input v-model.number="planForm.maxDiskMb" type="number" min="0" :placeholder="t('panel.users.maxDiskMb')" />
-            <input v-model.number="planForm.maxDatabases" type="number" min="0" :placeholder="t('panel.users.maxDatabases')" />
-            <input v-model.number="planForm.maxMailboxes" type="number" min="0" :placeholder="t('panel.users.maxMailboxes')" />
-            <button type="submit" class="compact" :disabled="!planForm.name">{{ t("panel.plans.add") }}</button>
           </form>
         </div>
 
@@ -490,23 +520,20 @@
           <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxSites") }}</span>
             <input v-model.number="createUserForm.maxSites" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
             <input v-model.number="createUserForm.maxDiskMb" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
             <input v-model.number="createUserForm.maxDatabases" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
             <input v-model.number="createUserForm.maxMailboxes" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
+          <p v-if="createUserForm.role === 'Customer'" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.form.language") }}</span>
             <select v-model="createUserForm.preferredLanguage">
@@ -538,6 +565,7 @@
               <small v-if="user.role === 'Customer'" class="customer-meta">
                 {{ user.assignedSites.length }} {{ t("panel.users.sitesShort") }}
                 · {{ user.diskUsageMb }} / {{ user.maxDiskMb > 0 ? user.maxDiskMb : "∞" }} MB
+                · {{ user.databaseCount }} / {{ user.maxDatabases > 0 ? user.maxDatabases : "∞" }} {{ t("panel.users.databasesShort") }}
                 <template v-if="user.ownerName"> · {{ t("panel.users.owner") }}: {{ user.ownerName }}</template>
               </small>
             </div>
@@ -592,23 +620,20 @@
           <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxSites") }}</span>
             <input v-model.number="selectedUserForm.maxSites" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
             <input v-model.number="selectedUserForm.maxDiskMb" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
             <input v-model.number="selectedUserForm.maxDatabases" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
           <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
             <input v-model.number="selectedUserForm.maxMailboxes" type="number" min="0" />
-            <small class="field-hint">{{ t("panel.users.zeroUnlimited") }}</small>
           </label>
+          <p v-if="selectedUserForm.role === 'Customer'" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.form.language") }}</span>
             <select v-model="selectedUserForm.preferredLanguage">
@@ -711,6 +736,7 @@ const recoveryCodes = ref<string[]>([]);
 const selectedUserId = ref("");
 const settingsTab = ref<SettingsTab>("general");
 const showUserCreateForm = ref(false);
+const showPlanForm = ref(false);
 const activeSection = ref("home");
 const ftpUserCount = ref(0);
 let refreshHandle: number | null = null;
@@ -788,6 +814,7 @@ async function addServicePlan() {
   planForm.maxDiskMb = 0;
   planForm.maxDatabases = 0;
   planForm.maxMailboxes = 0;
+  showPlanForm.value = false;
   await loadServicePlans();
 }
 
@@ -856,6 +883,9 @@ const dashboardSections = computed<SectionItem[]>(() => {
     // Uygulamalar/Mağaza → Zamanlanmış Görevler → Güvenlik → Araçlar/Ayarlar.
     { id: "home", label: t("panel.navigation.home"), description: t("panel.dashboard.subtitle"), glyph: "HM" },
     { id: "sites", label: t("panel.navigation.sites"), description: t("panel.sites.workspaceSubtitle"), glyph: "WS", badge: sitesStore.sites.length ? String(sitesStore.sites.length) : undefined },
+    // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi). Mevcut yönetim
+    // ekranını (Ayarlar > Kullanıcılar) doğrudan açar; handleNavigation bunu settings+users sekmesine yönlendirir.
+    { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
     { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
@@ -876,6 +906,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     return sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
+      section.id === "accounts" ||
       section.id === "mail" ||
       section.id === "files" ||
       section.id === "database" ||
@@ -884,14 +915,18 @@ const dashboardSections = computed<SectionItem[]>(() => {
   }
 
   if (isCustomer.value) {
-    // Müşteri yalnızca kendi sitelerinin kaynaklarını yönetir.
+    // Müşteri KENDİ sitelerini + veritabanlarını yönetir (site/DB oluşturma kotaya tabi, kapsamı kendi sitelerine kilitli).
     const customerSections = sections.filter((section) =>
       section.id === "home" ||
-      section.id === "files" ||
+      section.id === "sites" ||
       section.id === "mail" ||
+      section.id === "database" ||
+      section.id === "files" ||
       section.id === "settings" ||
       section.id === "exit");
-    customerSections.splice(3, 0, {
+    // Müşteriye özel yedek bölümü (kendi sitelerinin yedekleri) — Dosyalar'dan hemen sonra.
+    const filesIndex = customerSections.findIndex((section) => section.id === "files");
+    customerSections.splice(filesIndex >= 0 ? filesIndex + 1 : customerSections.length - 1, 0, {
       id: "backup",
       label: t("panel.navigation.backup"),
       description: t("panel.backup.subtitle"),
@@ -1117,7 +1152,7 @@ async function loadDashboardData() {
     // Müşteri için site listesi (kapsam ucu yalnızca atanmış siteleri döner).
     await Promise.allSettled([sitesStore.fetchSites()]);
     if (activeSection.value === "home" && sitesStore.sites.length > 0) {
-      activeSection.value = "files";
+      activeSection.value = "sites";
     }
     return;
   }
@@ -1238,6 +1273,14 @@ function handleNavigation(sectionId: string) {
     return;
   }
 
+  // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi → mevcut hesap yönetimi ekranı (Ayarlar > Kullanıcılar).
+  if (sectionId === "accounts") {
+    activeSection.value = "settings";
+    settingsTab.value = "users";
+    window.scrollTo({ top: 0, behavior: "auto" });
+    return;
+  }
+
   activeSection.value = sectionId;
   if (sectionId === "settings" && !isAdmin.value) {
     settingsTab.value = "account";
@@ -1319,7 +1362,8 @@ async function createUser() {
     createUserForm.userName = "";
     createUserForm.email = "";
     createUserForm.password = "";
-    createUserForm.role = "Operator";
+    // Bayi YALNIZ müşteri oluşturabilir → rolü Customer'da tut (yoksa kota/site/plan alanları gizlenir).
+    createUserForm.role = isReseller.value ? "Customer" : "Operator";
     createUserForm.ownerId = "";
     createUserForm.assignedSites = [];
     createUserForm.maxSites = 0;
@@ -1642,37 +1686,103 @@ function formatUtc(value: string | null) {
 
 .plans-card {
   display: grid;
+  gap: 14px;
+}
+
+.plans-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 10px;
 }
 
-.plans-list {
+.plan-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--surface-1);
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.plan-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-card-head .plan-name {
+  font-size: 0.98rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-limits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: grid;
   gap: 6px;
 }
 
-.plan-row {
+.plan-limits li {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.84rem;
+  padding: 4px 0;
+  border-top: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
+}
+
+.plan-limits li:first-child {
+  border-top: none;
+}
+
+.plan-limits li span {
+  color: var(--text-muted);
+}
+
+.plan-limits li b {
+  font-weight: 700;
+}
+
+.plans-empty {
+  padding: 14px 0;
+}
+
+.plan-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md, 8px);
-  background: var(--surface-1);
+  align-items: end;
+  padding-top: 14px;
+  border-top: 1px solid var(--panel-border);
 }
 
-.plan-row .meta {
-  flex: 1 1 auto;
+.plan-form-grid .plan-name-cell {
+  grid-column: 1 / -1;
 }
 
-.plan-form {
+.plan-form-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.plan-form-actions {
+  grid-column: 1 / -1;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.plan-form input {
-  flex: 1 1 120px;
-  min-width: 100px;
+  justify-content: flex-end;
 }
 
 .customer-meta {
@@ -1737,6 +1847,13 @@ button {
 
 .user-create-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.quota-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 @media (max-width: 980px) {

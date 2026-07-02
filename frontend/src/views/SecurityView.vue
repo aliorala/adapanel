@@ -146,7 +146,8 @@
           <span>{{ rule.localPort }}</span>
           <span :class="['status-pill', rule.action.toLowerCase() === 'allow' ? 'ok' : 'warn']">{{ rule.action }}</span>
         </div>
-        <p v-if="firewallRules.length === 0" class="empty-state">{{ t("panel.firewall.empty") }}</p>
+        <p v-if="loading && firewallRules.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+        <p v-else-if="firewallRules.length === 0" class="empty-state">{{ t("panel.firewall.empty") }}</p>
       </div>
     </template>
 
@@ -205,7 +206,8 @@
             {{ t("panel.bruteforce.unban") }}
           </button>
         </div>
-        <p v-if="bannedIps.length === 0" class="empty-state">{{ t("panel.bruteforce.empty") }}</p>
+        <p v-if="loading && bannedIps.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+        <p v-else-if="bannedIps.length === 0" class="empty-state">{{ t("panel.bruteforce.empty") }}</p>
       </div>
     </template>
   </section>
@@ -238,6 +240,7 @@ const firewallRules = ref<FirewallRule[]>([]);
 const notice = ref("");
 const noticeError = ref(false);
 const busyAction = ref("");
+const loading = ref(false);
 const activeSection = ref<"site" | "firewall" | "bruteforce">("site");
 const showFirewallForm = ref(false);
 const showSiteForm = ref(false);
@@ -271,6 +274,7 @@ onMounted(async () => {
 watch(selectedSiteName, refreshAll);
 
 async function refreshAll() {
+  loading.value = true;
   try {
     firewallRules.value = await getFirewallRules();
     await refreshBruteForce();
@@ -281,6 +285,8 @@ async function refreshAll() {
     }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
+  } finally {
+    loading.value = false;
   }
 }
 

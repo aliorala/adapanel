@@ -72,6 +72,7 @@ public sealed class WebmailService(
         EnsureAssetJunctions(installRoot, documentRoot);
         WebAppPublisher.EnsurePhpEntry(documentRoot);
         EnsureHealthEndpoint(documentRoot);
+        EnsureDiagnosticsIni(documentRoot, Path.Combine(installRoot, "logs"));
 
         var state = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
         var requestedPort = state?.Port is > 0 ? state.Port : DefaultPort;
@@ -108,7 +109,7 @@ public sealed class WebmailService(
             PhpComponentId = phpComponentId
         }, cancellationToken);
 
-        await VerifyHealthyAsync(port, cancellationToken);
+        await VerifyHealthyAsync(port, documentRoot, cancellationToken);
 
         return BuildUrl(publicHost, port);
     }
@@ -154,6 +155,200 @@ public sealed class WebmailService(
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Webmail HTTPS yapılamadı: {Host} (best-effort).", webmailHost);
+        }
+    }
+
+    public async Task<WebmailDiagnosticsDto> DiagnoseAsync(string publicHost, CancellationToken cancellationToken = default)
+    {
+        var state = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
+        if (state is null || state.Port <= 0)
+        {
+            return new WebmailDiagnosticsDto
+            {
+                Healthy = false,
+                Report = "Webmail henüz kurulmadı. Önce 'Webmail aç' butonuna basın (panel Roundcube'u otomatik kurar)."
+            };
+        }
+
+        var port = state.Port;
+        var lines = new List<string>
+        {
+            $"Port: {port}",
+            $"PHP bileşeni: {(string.IsNullOrWhiteSpace(state.PhpComponentId) ? "(bilinmiyor)" : state.PhpComponentId)}"
+        };
+
+        // 1) IIS sitesi + joker HTTP binding portu.
+        try
+        {
+            var site = await iisSiteService.GetSiteAsync(SiteName, cancellationToken);
+            lines.Add($"IIS sitesi: VAR · durum={site.State}");
+            var boundPort = site.Bindings
+                .Where(binding => binding.Protocol.Equals("http", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(binding.HostName))
+                .Select(binding => binding.Port)
+                .FirstOrDefault();
+            lines.Add($"HTTP binding portu: {(boundPort > 0 ? boundPort.ToString() : "(joker http binding YOK!)")}");
+        }
+        catch
+        {
+            lines.Add("IIS sitesi: YOK (oluşturulamamış). 'Webmail aç' ile yeniden kurmayı deneyin.");
+        }
+
+        // 2) Düz PHP/IIS hattı (FastCGI kayıtlı + çalışıyor mu).
+        var (healthStatus, healthBody) = await FetchAsync(port, "/adapanel-health.php", cancellationToken);
+        var phpOk = healthStatus is >= 200 and < 400 && healthBody.Contains("AdaPanel-Webmail-OK", StringComparison.Ordinal);
+        lines.Add($"PHP/IIS hattı (/adapanel-health.php): durum={healthStatus}{(phpOk ? " · OK" : " · SORUN")}");
+
+        // 3) FastCGI sürecinde GERÇEKTEN yüklü PHP eklentileri — Roundcube'un patlama #1 sebebi eksik eklenti
+        //    (pdo_sqlite/intl/mbstring ...). Geçici diag PHP'sini docroot'a yazıp çalıştırır, sonra siler.
+        var entryRoot = state.EntryRoot;
+        if (phpOk && !string.IsNullOrWhiteSpace(entryRoot) && Directory.Exists(entryRoot))
+        {
+            lines.Add(await ProbePhpExtensionsAsync(port, entryRoot, cancellationToken));
+        }
+
+        // 4) Roundcube kökü (/) gerçekten açılıyor mu (asıl soru). Açılmıyorsa yanıt gövdesi (PHP hatası) önizlenir.
+        var (rootStatus, rootBody) = await FetchAsync(port, "/", cancellationToken);
+        var rootOk = rootStatus is >= 200 and < 400;
+        lines.Add($"Roundcube kökü (/): durum={rootStatus}{(rootOk ? " · açılıyor" : " · AÇILMIYOR")}");
+        if (!rootOk && !string.IsNullOrWhiteSpace(rootBody))
+        {
+            lines.Add("— Roundcube yanıtı (ilk 600):");
+            lines.Add(rootBody.Length <= 600 ? rootBody : rootBody[..600] + "…");
+        }
+
+        // 5) Roundcube hata günlüğü (display_errors kapalıysa fatal burada görünür).
+        var logTail = ReadRoundcubeLogTail(entryRoot);
+        if (!string.IsNullOrWhiteSpace(logTail))
+        {
+            lines.Add("— Roundcube hata günlüğü (son):");
+            lines.Add(logTail);
+        }
+
+        lines.Insert(0, rootOk
+            ? "SONUÇ: Webmail açılıyor görünüyor."
+            : "SONUÇ: Webmail AÇILMIYOR — aşağıdaki ayrıntı kök nedeni gösterir (genelde eksik PHP eklentisi).");
+
+        return new WebmailDiagnosticsDto
+        {
+            Healthy = rootOk,
+            Report = string.Join("\r\n", lines),
+            Url = $"http://{(string.IsNullOrWhiteSpace(publicHost) ? "127.0.0.1" : publicHost.Trim())}:{port}/"
+        };
+    }
+
+    // 127.0.0.1:port{path} → (HTTP durumu, gövde). Hata olursa durum=0, gövde=istisna metni.
+    private async Task<(int Status, string Body)> FetchAsync(int port, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(12));
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}{path}");
+            using var response = await httpClientFactory.CreateClient("AdaPanel.LocalHealth").SendAsync(request, timeout.Token);
+            var body = await response.Content.ReadAsStringAsync(timeout.Token);
+            return ((int)response.StatusCode, body);
+        }
+        catch (Exception exception)
+        {
+            return (0, $"{exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    // Docroot'a geçici diag PHP'si yazıp çalıştırır → FastCGI sürecinde yüklü eklentileri ve PDO sürücülerini döner.
+    // Böylece "DLL var ama yüklenmiyor" / "eklenti eksik" durumu KESİN görülür. Çalışsa da çalışmasa da dosyayı siler.
+    private async Task<string> ProbePhpExtensionsAsync(int port, string entryRoot, CancellationToken cancellationToken)
+    {
+        const string diagName = "adapanel-webmail-diag.php";
+        var diagPath = Path.Combine(entryRoot, diagName);
+        var required = new[] { "pdo_sqlite", "sqlite3", "intl", "mbstring", "openssl", "dom", "xml", "session", "fileinfo", "iconv", "zip", "gd", "exif", "curl" };
+        try
+        {
+            var php = "<?php header('Content-Type: text/plain; charset=utf-8');"
+                + "$r=['" + string.Join("','", required) + "'];"
+                + "foreach($r as $e){echo $e.'='.(extension_loaded($e)?'on':'OFF').\"\\n\";}"
+                + "echo 'pdo_drivers='.(class_exists('PDO')?implode(',',PDO::getAvailableDrivers()):'(PDO yok)').\"\\n\";";
+            await File.WriteAllTextAsync(diagPath, php, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+
+            var (status, body) = await FetchAsync(port, "/" + diagName, cancellationToken);
+            if (status is >= 200 and < 400 && body.Contains('='))
+            {
+                var missing = body.Split('\n')
+                    .Where(line => line.Contains("=OFF", StringComparison.Ordinal))
+                    .Select(line => line.Split('=')[0].Trim())
+                    .Where(name => name.Length > 0)
+                    .ToArray();
+                var summary = missing.Length == 0
+                    ? "tüm gerekli eklentiler YÜKLÜ"
+                    : "EKSİK eklenti(ler): " + string.Join(", ", missing) + "  ← Roundcube'un açılmama sebebi büyük olasılıkla bu";
+                return "PHP eklentileri (FastCGI sürecinde): " + summary + "\r\n" + body.Trim();
+            }
+
+            return $"PHP eklenti probu başarısız (durum {status}).";
+        }
+        catch (Exception exception)
+        {
+            return $"PHP eklenti probu hata: {exception.Message}";
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(diagPath))
+                {
+                    File.Delete(diagPath);
+                }
+            }
+            catch
+            {
+                // diag dosyası silinemezse zararsız (sabit isim) → yut
+            }
+        }
+    }
+
+    // Roundcube logs/ dizinindeki en güncel günlüğün son ~1500 baytı (entryRoot = installRoot/public_html).
+    private static string ReadRoundcubeLogTail(string entryRoot)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(entryRoot))
+            {
+                return string.Empty;
+            }
+
+            var installRoot = Path.GetDirectoryName(entryRoot.TrimEnd('\\', '/'));
+            if (string.IsNullOrWhiteSpace(installRoot))
+            {
+                return string.Empty;
+            }
+
+            var logDir = Path.Combine(installRoot, "logs");
+            if (!Directory.Exists(logDir))
+            {
+                return string.Empty;
+            }
+
+            // YALNIZ gerçek hata günlükleri: php_errors.log (bizim .user.ini), Roundcube "errors"/"errors.log".
+            // .htaccess / index.html gibi dosyalar ATLANIR (eskiden newest=.htaccess seçilip yanıltıyordu).
+            var candidates = Directory.EnumerateFiles(logDir)
+                .Select(path => new FileInfo(path))
+                .Where(info => !info.Name.StartsWith('.') &&
+                               (info.Name.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                                info.Extension.Equals(".log", StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ToList();
+
+            var newest = candidates.FirstOrDefault(info => info.Length > 0) ?? candidates.FirstOrDefault();
+            if (newest is null)
+            {
+                return string.Empty;
+            }
+
+            var text = File.ReadAllText(newest.FullName);
+            return text.Length <= 1500 ? text : text[^1500..];
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 
@@ -269,7 +464,14 @@ public sealed class WebmailService(
             // IIS'te URL rewrite / static.php PATH_INFO'ya bel bağlamamak için: skins/program/plugins
             // public_html içine junction'landı ve varlıklar './' önekiyle düz statik dosya olarak verilir.
             $config['assets_path'] = './';
-            $config['plugins'] = [];
+            // managesieve: kullanicilar webmail Ayarlar > Filtreler/Tatil'den otomatik yanit (vacation) kurar.
+            // Stalwart per-kullanici Sieve'i yalniz ManageSieve (4190) ile yonetilir; admin adina set edilemez.
+            $config['plugins'] = ['managesieve'];
+            $config['managesieve_host'] = 'localhost';
+            $config['managesieve_port'] = 4190;
+            $config['managesieve_usetls'] = false;
+            $config['managesieve_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'allow_self_signed' => true]];
+            $config['managesieve_vacation'] = 1;
             $config['temp_dir'] = '{{tempDir.Replace('\\', '/')}}';
             $config['log_dir'] = '{{logDir.Replace('\\', '/')}}';
             $config['skin'] = 'elastic';
@@ -317,8 +519,17 @@ public sealed class WebmailService(
             return false; // site yok / okunamıyor → tam kurulum gerekir
         }
 
-        var (ok, _) = await ProbeAsync(port, "/adapanel-health.php", "AdaPanel-Webmail-OK", 1, cancellationToken);
-        return ok;
+        // Düz PHP hattı VE Roundcube kökü (/) birlikte sağlıklı olmalı. Eskiden yalnız düz PHP denetleniyordu →
+        // Roundcube uygulaması bozuksa (eksik eklenti vb.) bile hızlı-yol "sağlıklı" sayıp BOZUK siteye URL dönüyordu
+        // (kullanıcı "açıyor ama sayfa çalışmıyor" görüyordu). Artık / de denenir → bozuksa tam yeniden kurulum tetiklenir.
+        var (phpOk, _) = await ProbeAsync(port, "/adapanel-health.php", "AdaPanel-Webmail-OK", 1, cancellationToken);
+        if (!phpOk)
+        {
+            return false;
+        }
+
+        var (rootOk, _) = await ProbeAsync(port, "/", null, 1, cancellationToken);
+        return rootOk;
     }
 
     private static WebmailOpenDto BuildUrl(string publicHost, int port)
@@ -338,7 +549,7 @@ public sealed class WebmailService(
         return BuildUrl(publicHost, state.Port);
     }
 
-    private async Task VerifyHealthyAsync(int port, CancellationToken cancellationToken)
+    private async Task VerifyHealthyAsync(int port, string entryRoot, CancellationToken cancellationToken)
     {
         // 1) PHP/IIS hattı çalışıyor mu (düz PHP)?
         var (phpOk, phpDetails) = await ProbeAsync(port, "/adapanel-health.php", "AdaPanel-Webmail-OK", 8, cancellationToken);
@@ -352,8 +563,17 @@ public sealed class WebmailService(
         var (appOk, appDetails) = await ProbeAsync(port, "/", null, 4, cancellationToken);
         if (!appOk)
         {
+            // 500 + boş gövde = PHP fatal (display_errors kapalı) → çıktıdan neden okunamaz. Düz PHP ÇALIŞTIĞINA göre
+            // gerçek nedeni KESİN tespit et: FastCGI sürecinde yüklü eklentiler (eksik olanı işaretler) + Roundcube log.
+            // Böylece "Webmail aç" hatası, ikinci bir tıklamaya gerek kalmadan eksik eklentinin ADINI gösterir.
+            var extReport = await ProbePhpExtensionsAsync(port, entryRoot, cancellationToken);
+            var logTail = ReadRoundcubeLogTail(entryRoot);
+            var diagnosis = string.IsNullOrWhiteSpace(logTail)
+                ? extReport
+                : extReport + "\r\n— Roundcube log (son):\r\n" + logTail;
+
             throw new AppException("mail.webmail_deploy_failed", 500, 500,
-                $"Roundcube açılışı başarısız (port {port}). Genelde eksik PHP eklentisi (pdo_sqlite/intl/openssl/mbstring) ya da yazma izni.\r\n{appDetails}");
+                $"Roundcube açılışı başarısız (port {port}). Genelde eksik PHP eklentisi (pdo_sqlite/intl/openssl/mbstring) ya da yazma izni.\r\n{appDetails}\r\n{diagnosis}");
         }
     }
 
@@ -479,6 +699,33 @@ public sealed class WebmailService(
             Path.Combine(entryRoot, "adapanel-health.php"),
             "<?php header('Content-Type: text/plain; charset=utf-8'); echo 'AdaPanel-Webmail-OK';",
             new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    // Webmail docroot'una .user.ini koyar: PHP fatal'leri DOSYAYA loglar (display KAPALI = güvenli, kullanıcıya
+    // sızmaz). Roundcube 500/boş gövde verdiğinde gerçek neden php_errors.log'a yazılır ve tanılama bunu okur →
+    // "neden açılmıyor" kesin görünür. Idempotent (her dağıtımda yeniden yazılır; zararsız).
+    private void EnsureDiagnosticsIni(string documentRoot, string logDir)
+    {
+        try
+        {
+            var errorLog = Path.Combine(logDir, "php_errors.log").Replace('\\', '/');
+            var content = string.Join("\n", new[]
+            {
+                "; Managed by AdaPanel — webmail teşhis günlüğü",
+                "log_errors = On",
+                "display_errors = Off",
+                "error_reporting = E_ALL",
+                $"error_log = \"{errorLog}\""
+            });
+            File.WriteAllText(
+                Path.Combine(documentRoot, ".user.ini"),
+                content,
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Webmail .user.ini (teşhis) yazılamadı (best-effort).");
+        }
     }
 
     private async Task DeleteManagedSiteIfPresentAsync(CancellationToken cancellationToken)

@@ -27,4 +27,8 @@ public sealed class ImportDatabaseRequest
     [Required]
     [StringLength(128)]
     public string Password { get; init; } = string.Empty;
+
+    /// <summary>Boş değilse bu veritabanı siteye BAĞLANIR → site silinince bu DB de cascade ile gider (Plesk gibi).</summary>
+    [StringLength(255)]
+    public string SiteName { get; init; } = string.Empty;
 }

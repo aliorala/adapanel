@@ -1,4 +1,5 @@
 using AdaPanel.Core.Dtos.Automation;
+using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -39,5 +40,15 @@ public sealed class AutomationController(IAutomationService automationService) :
     {
         var status = await automationService.RunSslRenewNowAsync(cancellationToken);
         return Ok(ApiResponse<AutomationStatusDto>.Ok(status, "automation.ssl_started"));
+    }
+
+    // Off-site yedek hedefini gerçek yedek almadan test et (küçük dosya yükleme). Parola boşsa kayıtlı kullanılır.
+    [HttpPost("backup/remote/test")]
+    public async Task<ActionResult<ApiResponse<BackupRemoteTestResultDto>>> TestRemoteBackupAsync(
+        [FromBody] BackupRemoteTestRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await automationService.TestRemoteBackupAsync(request, cancellationToken);
+        return Ok(ApiResponse<BackupRemoteTestResultDto>.Ok(result));
     }
 }

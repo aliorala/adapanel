@@ -111,6 +111,15 @@ public sealed class PhpService(
         var extensionDirectory = Path.Combine(component.InstallDir, "ext");
         var lines = (await File.ReadAllLinesAsync(phpIniPath, cancellationToken)).ToList();
         var changed = false;
+
+        // extension_dir GÜVENCESİ: php.ini'de AKTİF bir extension_dir yoksa, mutlak ext yoluyla ekle. Yoksa
+        // etkinleştirdiğimiz "extension=..." satırları DLL'ler ext/ içinde var olsa bile YÜKLENMEZ (PHP eklentiyi
+        // bulamaz) → Roundcube/uygulamalar 500 verir. Aktif bir extension_dir varsa (build/admin değeri) DOKUNMA.
+        if (Directory.Exists(extensionDirectory) && EnsureExtensionDir(lines, extensionDirectory))
+        {
+            changed = true;
+        }
+
         foreach (var extension in extensions)
         {
             // DLL yoksa atla (her PHP derlemesi her eklentiyi getirmez); varsa etkinleştir.
@@ -128,7 +137,39 @@ public sealed class PhpService(
         if (changed)
         {
             await File.WriteAllLinesAsync(phpIniPath, lines, cancellationToken);
+
+            // php.ini DEĞİŞTİ → sıcak php-cgi süreçlerini yenile ki YENİ ayar (extension_dir + etkinleştirilen
+            // eklentiler) HEMEN uygulansın. Aksi halde uygulama (ör. webmail) ilk açılışta hâlâ eski/eksik
+            // yapılandırmayı görür → "ikinci denemede/biraz sonra düzeldi" sorunu. IIS php-cgi'yi sonraki istekte
+            // taze başlatır (güncel php.ini ile). Best-effort: yenilenemese de bir sonraki havuz dönüşünde uygulanır.
+            try
+            {
+                await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "php-cgi yenilenemedi; etkinleştirilen eklentiler bir sonraki havuz dönüşünde uygulanır.");
+            }
         }
+    }
+
+    // php.ini'de AKTİF bir extension_dir varsa dokunmaz (false); yoksa mutlak ext yoluyla ekler (true). Yorumlu
+    // (;extension_dir) satır "aktif yok" sayılır → eklenir. Böylece eklentiler güvenle yüklenir.
+    private static bool EnsureExtensionDir(List<string> lines, string extensionDirectory)
+    {
+        var hasActive = lines.Any(line =>
+        {
+            var trimmed = line.TrimStart();
+            return !trimmed.StartsWith(';') &&
+                   trimmed.Replace(" ", string.Empty).StartsWith("extension_dir=", StringComparison.OrdinalIgnoreCase);
+        });
+        if (hasActive)
+        {
+            return false;
+        }
+
+        lines.Add($"extension_dir = \"{extensionDirectory.Replace('/', '\\')}\"");
+        return true;
     }
 
     // php.ini'de bir eklentiyi etkinleştirir: zaten aktifse false; yorumluysa açar / yoksa ekler → true.
@@ -504,6 +545,25 @@ public sealed class PhpService(
             if (values.TryGetValue("max_execution_time", out var met) && int.TryParse(met, out var metVal)) dto.MaxExecutionTime = metVal;
             if (values.TryGetValue("upload_max_filesize", out var umf)) dto.UploadMaxFilesize = umf;
             if (values.TryGetValue("post_max_size", out var pms)) dto.PostMaxSize = pms;
+        }
+
+        // phpredis durumu: kart "etkin ise etkin yazsın" (kullanıcı isteği). php -m ile gerçekten yüklü mü bak (best-effort).
+        try
+        {
+            var phpCli = Path.Combine(component.InstallDir, "php.exe");
+            if (!File.Exists(phpCli))
+            {
+                phpCli = ResolvePhpExecutablePath(component.InstallDir); // php-cgi.exe yedeği
+            }
+
+            if (File.Exists(phpCli))
+            {
+                dto.RedisEnabled = await PhpHasModuleAsync(phpCli, "redis", cancellationToken);
+            }
+        }
+        catch
+        {
+            // Durum belirlenemezse false kalır (UI "Devre dışı" gösterir, etkinleştir butonu görünür).
         }
 
         return dto;

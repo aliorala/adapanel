@@ -18,6 +18,8 @@ public sealed class UpdateAutomationSettingsRequest
 
     public bool BackupMail { get; set; }
 
+    public bool BackupPanelConfig { get; set; }
+
     public IReadOnlyCollection<string> BackupDatabaseEngines { get; set; } = [];
 
     public bool AutoSslRenewEnabled { get; set; }
@@ -49,4 +51,9 @@ public sealed class UpdateAutomationSettingsRequest
 
     [Range(1, 90)]
     public int CertExpiryWarningDays { get; set; } = 14;
+
+    [Range(50, 99)]
+    public int MemoryUsageThresholdPercent { get; set; } = 90;
+
+    public bool ServiceDownAlertsEnabled { get; set; } = true;
 }

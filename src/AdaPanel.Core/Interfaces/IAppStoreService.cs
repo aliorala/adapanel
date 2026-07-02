@@ -6,5 +6,5 @@ public interface IAppStoreService
 {
     Task<IReadOnlyCollection<AppTemplateDto>> GetTemplatesAsync(CancellationToken cancellationToken = default);
 
-    Task<AppTemplateDto> InstallAsync(InstallAppTemplateRequest request, CancellationToken cancellationToken = default);
+    Task<AppInstallResultDto> InstallAsync(InstallAppTemplateRequest request, CancellationToken cancellationToken = default);
 }

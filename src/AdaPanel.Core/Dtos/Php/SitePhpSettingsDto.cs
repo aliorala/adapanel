@@ -29,6 +29,9 @@ public sealed class SitePhpSettingsDto
 
     /// <summary>.user.ini mevcut mu (yani daha önce özelleştirildi mi).</summary>
     public bool Configured { get; set; }
+
+    /// <summary>phpredis (Redis) uzantısı PHP'de yüklü/etkin mi (global). UI'de "Etkin/Devre dışı" rozeti için.</summary>
+    public bool RedisEnabled { get; set; }
 }
 
 public sealed class UpdateSitePhpSettingsRequest

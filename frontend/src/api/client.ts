@@ -66,6 +66,20 @@ export function clearCsrfToken(): void {
   csrfToken = "";
 }
 
+// Manuel fetch (ör. SSE göç akışı) için mutasyon başlıklarını üretir — axios interceptor'ı ile AYNI kuralları
+// izler: Content-Type + (varsa) güvenli-giriş yolu + CSRF jetonu. Böylece akış uçları da CSRF korumasından geçer.
+export async function buildStreamRequestHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+  const secureEntryPath = resolveSecureEntryPath();
+  if (secureEntryPath) {
+    headers["X-AdaPanel-Entry-Path"] = secureEntryPath;
+  }
+
+  headers["X-CSRF-TOKEN"] = await fetchCsrfToken();
+  return headers;
+}
+
 export function readSecureEntryPath(): string {
   return resolveSecureEntryPath();
 }

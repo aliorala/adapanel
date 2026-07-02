@@ -17,6 +17,7 @@ internal sealed partial class DatabaseService(
     AdaPanelDbContext dbContext,
     ISecretProtector secretProtector,
     DatabaseCredentialStore credentialStore,
+    ISiteDatabaseLinkService siteDatabaseLinks,
     IEnumerable<IDatabaseEngineProvider> providers) : IDatabaseService
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
@@ -259,6 +260,12 @@ internal sealed partial class DatabaseService(
             await credentialStore.UpsertAsync(profile.EngineKey, newUser, anyHost, databaseName, request.Password, cancellationToken);
         }
 
+        // Site bağı (Plesk gibi): site verildiyse bu DB'yi siteye bağla → site silinince cascade ile gider.
+        if (!string.IsNullOrWhiteSpace(request.SiteName))
+        {
+            await siteDatabaseLinks.LinkAsync(request.Engine, databaseName, request.SiteName, cancellationToken);
+        }
+
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 
@@ -278,6 +285,13 @@ internal sealed partial class DatabaseService(
         var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
         await provider.GrantAccessAsync(profile, databaseName, userName, allowedHost, fullPrivileges, cancellationToken);
         await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, databaseName, request.Password, cancellationToken);
+
+        // Site bağı: içe aktarılan DB de bir siteye bağlanabilir → site silinince cascade ile gider.
+        if (!string.IsNullOrWhiteSpace(request.SiteName))
+        {
+            await siteDatabaseLinks.LinkAsync(request.Engine, databaseName, request.SiteName, cancellationToken);
+        }
+
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 
@@ -295,6 +309,8 @@ internal sealed partial class DatabaseService(
 
         // Önce bu DB'nin kimlik kaydını sil, sonra kullanıcı başka DB'de kullanılmıyorsa kullanıcıyı düşür.
         await credentialStore.RemoveDatabaseAsync(profile.EngineKey, databaseName, cancellationToken);
+        // DB bağımsız silindiyse site bağını da temizle (öksüz bağ kalmasın).
+        await siteDatabaseLinks.UnlinkAsync(engine, databaseName, cancellationToken);
         if (owner is not null)
         {
             var stillUsed = await credentialStore.IsUserReferencedAsync(profile.EngineKey, owner.Value.UserName, owner.Value.Host, cancellationToken);
@@ -532,12 +548,48 @@ internal sealed partial class DatabaseService(
                 throw new AppException("database.transfer_import_failed", 500, 500, TrimTransferError(import.StandardError));
             }
 
+            // 3) Hedef DB KULLANICISINI oluştur + bu DB'ye tam yetki (taşınan uygulama bağlanabilsin). Eskiden yalnız
+            //    DB + veri taşınıyordu, kullanıcı oluşturulmuyordu → uygulama "Access denied for user" alıyordu.
+            //    Kullanıcı/parola verilmezse DB adından türetilir / güçlü üretilir. Best-effort (transfer'i bozmaz).
+            var createdUser = string.Empty;
+            var createdPassword = string.Empty;
+            try
+            {
+                var transferUser = string.IsNullOrWhiteSpace(request.TargetUserName)
+                    ? DeriveTransferUser(targetDatabase)
+                    : NormalizeUserName(request.TargetUserName);
+                var passwordGenerated = string.IsNullOrWhiteSpace(request.TargetPassword);
+                var transferPassword = passwordGenerated ? GenerateDbPassword() : request.TargetPassword;
+                const string anyHost = "%";
+                var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], engine);
+
+                try
+                {
+                    await provider.CreateUserAsync(targetProfile, transferUser, transferPassword, anyHost, cancellationToken);
+                }
+                catch
+                {
+                    // kullanıcı zaten var olabilir → parolayı değiştirmeden yetkilendirmeye devam et
+                }
+
+                createdUser = transferUser;
+                createdPassword = passwordGenerated ? transferPassword : string.Empty;
+                await provider.GrantAccessAsync(targetProfile, targetDatabase, transferUser, anyHost, fullPrivileges, cancellationToken);
+                await credentialStore.UpsertAsync(targetProfile.EngineKey, transferUser, anyHost, targetDatabase, transferPassword, cancellationToken);
+            }
+            catch
+            {
+                // best-effort: kullanıcı kurulamasa da transfer başarılı (DB + veri taşındı)
+            }
+
             return new DatabaseTransferResultDto
             {
                 Engine = targetProfile.EngineKey,
                 SourceDatabase = sourceDatabase,
                 TargetDatabase = targetDatabase,
-                Size = File.Exists(tempFile) ? new FileInfo(tempFile).Length : 0
+                Size = File.Exists(tempFile) ? new FileInfo(tempFile).Length : 0,
+                UserName = createdUser,
+                Password = createdPassword
             };
         }
         finally
@@ -555,6 +607,26 @@ internal sealed partial class DatabaseService(
             }
         }
     }
+
+    // Hedef DB kullanıcı adı türetimi (kullanıcı vermediyse): DB adından harf-rakam süzülür, harfle başlatılır,
+    // 27'ye kırpılır, "_usr" eklenir → geçerli MySQL kullanıcı adı (≤32). NormalizeUserName regex'iyle uyumlu.
+    private static string DeriveTransferUser(string databaseName)
+    {
+        var cleaned = new string((databaseName ?? string.Empty).Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        if (cleaned.Length == 0 || !char.IsLetter(cleaned[0]))
+        {
+            cleaned = "db" + cleaned;
+        }
+        if (cleaned.Length > 27)
+        {
+            cleaned = cleaned[..27];
+        }
+        return cleaned + "_usr";
+    }
+
+    // Politika dostu (büyük + küçük + rakam + simge) ve SQL string-literal güvenli (tırnak/ters bölü yok) parola.
+    private static string GenerateDbPassword()
+        => "Ap1!" + System.Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
 
     private static string TrimTransferError(string? value)
     {

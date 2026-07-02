@@ -19,12 +19,23 @@ OutputBaseFilename=AdaPanelSetup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+DisableWelcomePage=no
+AppContact=AdaPanel
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion=0.2.2.0
 CloseApplications=yes
 RestartApplications=no
+
+[Languages]
+Name: "tr"; MessagesFile: "compiler:Languages\Turkish.isl"
+
+[Messages]
+tr.WelcomeLabel1=AdaPanel Kurulum Sihirbazina Hos Geldiniz
+tr.WelcomeLabel2=Bu sihirbaz AdaPanel'i (Windows barindirma kontrol paneli) bilgisayariniza kuracak.%n%nDevam etmeden once tum diger uygulamalari kapatmaniz onerilir.
+tr.SetupWindowTitle=AdaPanel Kurulumu
+tr.FinishedHeadingLabel=AdaPanel kurulumu tamamlandi
 
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -184,10 +195,10 @@ begin
 
   PortPage := CreateInputQueryPage(
     wpSelectDir,
-    'Panel port',
-    'Choose the AdaPanel listening port',
-    'Pick a free TCP port for AdaPanel on this machine.');
-  PortPage.Add('AdaPanel port:', False);
+    'AdaPanel port',
+    'AdaPanel dinleme portunu secin',
+    'AdaPanel arayuzu icin bu makinede bos bir TCP portu girin (varsayilan 8890).');
+  PortPage.Add('AdaPanel portu:', False);
   if ExistingPort <> '' then
     PortPage.Values[0] := ExistingPort
   else
@@ -217,7 +228,7 @@ begin
     PortValue := StrToIntDef(GetPanelPort(''), 0);
     if (PortValue < 1) or (PortValue > 65535) then
     begin
-      MsgBox('Please enter a valid TCP port between 1 and 65535.', mbError, MB_OK);
+      MsgBox('Lutfen 1 ile 65535 arasinda gecerli bir TCP portu girin.', mbError, MB_OK);
       Result := False;
     end;
   end;

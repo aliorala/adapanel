@@ -13,7 +13,7 @@ namespace AdaPanel.Api.Controllers;
 // CustomerAccess.EnsureSiteAsync ile etkin kapsama göre korunur. Site OLUŞTURMA/içe aktarma
 // admin-only kalır (bayi atama/limit modeli kapsam dışı).
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
 [Route("api/v1/sites")]
 public sealed class SitesController(
     IIisSiteService iisSiteService,
@@ -22,6 +22,9 @@ public sealed class SitesController(
     ISiteCascadeDeletionService siteCascadeDeletionService,
     ICustomerScopeService customerScopes,
     IDatabaseOwnershipService dbOwnership,
+    ISiteDatabaseLinkService siteDatabaseLinks,
+    IPanelPreferencesService panelPreferences,
+    ISslService sslService,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet]
@@ -41,12 +44,224 @@ public sealed class SitesController(
         return Ok(ApiResponse<IReadOnlyCollection<SiteDto>>.Ok(sites));
     }
 
+    // Domain yönlendirmeden siteyi test et (Plesk "Preview" gibi): nip.io tıklanır link (domainsiz çalışır) +
+    // her durumda çalışan hosts satırı. nip.io için sunucu IP'sine bir IIS bağlaması eklenir (idempotent).
+    [HttpGet("{siteName}/preview")]
+    public async Task<ActionResult<ApiResponse<SitePreviewDto>>> GetPreviewAsync(string siteName, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var realHost = site.Bindings
+            .Select(binding => binding.HostName)
+            .FirstOrDefault(host => !string.IsNullOrWhiteSpace(host) && !host.EndsWith(".nip.io", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+
+        var preferences = await panelPreferences.GetAsync(cancellationToken);
+        var serverAddress = (preferences.ServerAddress ?? string.Empty).Trim();
+
+        var dto = new SitePreviewDto
+        {
+            RealHost = realHost,
+            ServerAddress = serverAddress,
+            HostsLine = string.IsNullOrWhiteSpace(realHost) || serverAddress.Length == 0 ? string.Empty : $"{serverAddress}\t{realHost}"
+        };
+
+        // Sunucu adresi IPv4 ise nip.io ile domainsiz tıklanır link üret (host DNS'siz sunucuya çözülür).
+        if (System.Net.IPAddress.TryParse(serverAddress, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            var previewHost = $"{BuildPreviewLabel(siteName)}.{serverAddress}.nip.io";
+            dto.PreviewHost = previewHost;
+            dto.Method = "nipio";
+
+            // 1) HTTP bağlaması (host-header eşleşsin ki nip.io host'u bu siteye gelsin).
+            if (!site.Bindings.Any(binding => string.Equals(binding.HostName, previewHost, StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    await iisSiteService.AddBindingAsync(siteName, new SiteBindingRequest { Protocol = "http", HostName = previewHost, IpAddress = "*", Port = 80 }, cancellationToken);
+                    dto.BindingAdded = true;
+                }
+                catch
+                {
+                    // Bağlama eklenemezse (zaten var / port çakışması) link yine de denenebilir.
+                }
+            }
+
+            // 2) WordPress ise: mu-plugin ile WP'yi önizleme host'unda servis et (kendi asıl adresine yönlendirmesin).
+            TryWriteWordPressPreviewPlugin(site);
+
+            // 3) Önizleme host'una HIZLI self-signed HTTPS bağlaması (site HTTPS zorlarsa https resetlenmesin; ACME
+            //    beklemesi YOK → buton donmaz). Zaten varsa tekrar üretme. Tarayıcı bir kez sertifika uyarısı gösterir.
+            var hasHttps = site.Bindings.Any(binding =>
+                string.Equals(binding.HostName, previewHost, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(binding.Protocol, "https", StringComparison.OrdinalIgnoreCase));
+            var scheme = "http";
+            if (hasHttps)
+            {
+                scheme = "https";
+            }
+            else
+            {
+                try
+                {
+                    await sslService.EnsurePreviewCertificateAsync(siteName, previewHost, cancellationToken);
+                    scheme = "https";
+                }
+                catch
+                {
+                    // SSL bağlanamadıysa http linki döneriz (site https zorlamıyorsa çalışır).
+                }
+            }
+            dto.Url = $"{scheme}://{previewHost}/";
+        }
+        else
+        {
+            // Sunucu adresi IP değil (makine adı) → nip.io kurulamaz; yalnız hosts yöntemi.
+            dto.Method = "hosts";
+            dto.Url = string.IsNullOrWhiteSpace(realHost) ? string.Empty : $"http://{realHost}/";
+        }
+
+        return Ok(ApiResponse<SitePreviewDto>.Ok(dto));
+    }
+
+    // Site adından geçerli bir DNS etiketi türetir (küçük harf, alnum+tire, tek tire, ≤40).
+    private static string BuildPreviewLabel(string siteName)
+    {
+        var label = new string(siteName.Trim().ToLowerInvariant()
+            .Select(character => char.IsLetterOrDigit(character) ? character : '-').ToArray()).Trim('-');
+        while (label.Contains("--"))
+        {
+            label = label.Replace("--", "-");
+        }
+        if (label.Length > 40)
+        {
+            label = label[..40].Trim('-');
+        }
+        return label.Length == 0 ? "site" : label;
+    }
+
+    // WordPress sitesiyse: nip.io önizleme host'unda WP'nin kendi (asıl) adresine yönlendirmesini engelleyen mu-plugin yazar
+    // (option_siteurl/home'u istenen host'a çevirir). Böylece önizleme host'unda WP'nin tüm bağlantı/varlıkları çalışır.
+    private static void TryWriteWordPressPreviewPlugin(SiteDto site)
+    {
+        try
+        {
+            var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+            if (string.IsNullOrWhiteSpace(root) || !System.IO.File.Exists(System.IO.Path.Combine(root, "wp-config.php")))
+            {
+                return;
+            }
+
+            var muDir = System.IO.Path.Combine(root, "wp-content", "mu-plugins");
+            System.IO.Directory.CreateDirectory(muDir);
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(muDir, "adapanel-preview.php"),
+@"<?php
+/* AdaPanel Preview: nip.io onizleme host'unda WordPress'i kendi asil adresine yonlendirmeden servis eder. */
+if (!defined('ABSPATH')) { exit; }
+if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERVER['HTTP_HOST'])) {
+    $scheme = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off') ? 'https' : 'http';
+    $base = $scheme . '://' . $_SERVER['HTTP_HOST'];
+    add_filter('option_siteurl', static function () use ($base) { return $base; });
+    add_filter('option_home', static function () use ($base) { return $base; });
+}
+");
+        }
+        catch
+        {
+            // mu-plugin yazılamazsa önizleme yine denenebilir (WP olmayan sitelerde zaten gerekmez).
+        }
+    }
+
     [HttpGet("{siteName}")]
     public async Task<ActionResult<ApiResponse<SiteDto>>> GetSiteAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         return Ok(ApiResponse<SiteDto>.Ok(site));
+    }
+
+    /// <summary>
+    /// Sitenin veritabanı görünümü (Plesk gibi): BAĞLI olanlar (açık seçimle bağlanan + adı eşleşen) ve bağlanabilecek
+    /// ADAYLAR (henüz bağlı olmayan mevcut veritabanları). Böylece kullanıcı isim tahminine bağlı kalmadan seçerek bağlar.
+    /// </summary>
+    [HttpGet("{siteName}/databases")]
+    public async Task<ActionResult<ApiResponse<SiteDatabasesDto>>> GetSiteDatabasesAsync(
+        string siteName,
+        [FromServices] IDatabaseService databaseService,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // Kurulu tüm motorlardaki veritabanlarını topla (motor erişilemezse sessizce atla).
+        var all = new List<SiteDatabaseRefDto>();
+        foreach (var engine in await databaseService.GetEnginesAsync(cancellationToken))
+        {
+            if (!engine.Installed)
+            {
+                continue;
+            }
+
+            try
+            {
+                var workspace = await databaseService.GetWorkspaceAsync(engine.Engine, cancellationToken);
+                foreach (var database in workspace.Databases)
+                {
+                    all.Add(new SiteDatabaseRefDto { Engine = engine.Engine, Name = database.Name });
+                }
+            }
+            catch
+            {
+                // motor erişilemiyor → atla
+            }
+        }
+
+        // Bağlı = açık link VEYA ad eşleşmesi (site adı / DatabaseNameFromSite). Geri kalan mevcut DB'ler aday.
+        var links = await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken);
+        var wantedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            siteName.Trim(),
+            AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(siteName)
+        };
+
+        bool IsLinked(SiteDatabaseRefDto reference) =>
+            links.Any(link =>
+                string.Equals(link.Engine, reference.Engine, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.DatabaseName, reference.Name, StringComparison.OrdinalIgnoreCase)) ||
+            wantedNames.Contains(reference.Name);
+
+        var result = new SiteDatabasesDto
+        {
+            Linked = all.Where(IsLinked).ToList(),
+            Candidates = all.Where(reference => !IsLinked(reference)).ToList()
+        };
+        return Ok(ApiResponse<SiteDatabasesDto>.Ok(result));
+    }
+
+    /// <summary>Mevcut bir veritabanını siteye BAĞLA (seçerek; ad eşleşmesi gerekmez). Site silinince cascade gider.</summary>
+    [HttpPost("{siteName}/databases/link")]
+    public async Task<ActionResult<ApiResponse<object>>> LinkSiteDatabaseAsync(
+        string siteName,
+        [FromBody] LinkSiteDatabaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        await siteDatabaseLinks.LinkAsync(request.Engine, request.Name, siteName, cancellationToken);
+        await WriteAuditAsync("sites.database.linked", $"{siteName}:{request.Engine}:{request.Name}", cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { }, "sites.database.linked"));
+    }
+
+    /// <summary>Bir veritabanının siteyle BAĞINI kaldırır (veritabanını SİLMEZ).</summary>
+    [HttpDelete("{siteName}/databases/link")]
+    public async Task<ActionResult<ApiResponse<object>>> UnlinkSiteDatabaseAsync(
+        string siteName,
+        [FromQuery] string engine,
+        [FromQuery] string name,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        await siteDatabaseLinks.UnlinkAsync(engine, name, cancellationToken);
+        await WriteAuditAsync("sites.database.unlinked", $"{siteName}:{engine}:{name}", cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { }, "sites.database.unlinked"));
     }
 
     // #1 ⭐ Belge kökü / web root: IIS fiziksel yolunu değiştir (Laravel/Symfony için ...\public). IIS'te KALICI
@@ -127,7 +342,7 @@ public sealed class SitesController(
     /// mail domaini ve FTP hesabını da best-effort oluşturur (biri kurulamazsa site yine kalır).
     /// </summary>
     [HttpPost]
-    [Authorize(Roles = "Administrator,Reseller")]
+    [Authorize(Roles = "Administrator,Reseller,Customer")]
     public async Task<ActionResult<ApiResponse<SiteCreationResultDto>>> CreateSiteAsync(
         [FromBody] CreateSiteRequest request,
         [FromServices] IDatabaseService databaseService,
@@ -137,6 +352,15 @@ public sealed class SitesController(
         [FromServices] IComponentBootstrapper componentBootstrapper,
         CancellationToken cancellationToken)
     {
+        // GÜVENLİK (internet/güvenilmez kiracı): admin DIŞINDAKİ kullanıcılar (bayi/müşteri) fiziksel yolu SEÇEMEZ —
+        // panel yolu DAİMA varsayılan site köküne (kiracı-izole) zorlar. Aksi halde kötü-niyetli istek başka sitenin
+        // klasörüne işaret edip okuyabilir/ACL'ini bozabilirdi (çapraz-kiracı). Admin tam serbest (mevcut davranış).
+        if (!User.IsInRole("Administrator"))
+        {
+            var prefs = await panelPreferences.GetAsync(cancellationToken);
+            request.PhysicalPath = ResolveScopedPhysicalPath(request, prefs.DefaultSiteRoot);
+        }
+
         // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
         await EnsureSiteQuotaAsync(cancellationToken);
 
@@ -209,7 +433,7 @@ public sealed class SitesController(
             }
             catch (Exception exception)
             {
-                result.Warnings.Add($"database ({databaseEngine}:{dbName}): {exception.Message}");
+                result.Warnings.Add($"database ({databaseEngine}:{dbName}): {DescribeProvisionError(exception)}");
             }
         }
 
@@ -247,7 +471,7 @@ public sealed class SitesController(
             }
             catch (Exception exception)
             {
-                result.Warnings.Add($"mail ({domain}): {exception.Message}");
+                result.Warnings.Add($"mail ({domain}): {DescribeProvisionError(exception)}");
             }
         }
 
@@ -280,11 +504,30 @@ public sealed class SitesController(
             }
             catch (Exception exception)
             {
-                result.Warnings.Add($"ftp ({ftpUserName}): {exception.Message}");
+                result.Warnings.Add($"ftp ({ftpUserName}): {DescribeProvisionError(exception)}");
             }
         }
 
         return Ok(ApiResponse<SiteCreationResultDto>.Ok(result, "sites.create.success"));
+    }
+
+    // Alt-kaynak (DB/mail/FTP) provisyon hatasını okunur özetler: AppException ise GERÇEK sebebi (Details =
+    // altyapı/CLI çıktısı, tek satıra indirilip kısaltılmış) anahtarla birlikte gösterir → kullanıcı "ham anahtar"
+    // yerine asıl nedeni görür. AppException değilse düz mesaj.
+    private static string DescribeProvisionError(Exception exception)
+    {
+        if (exception is AdaPanel.Core.Common.AppException app && !string.IsNullOrWhiteSpace(app.Details))
+        {
+            var detail = app.Details.Trim().ReplaceLineEndings(" ");
+            if (detail.Length > 300)
+            {
+                detail = detail[..300] + "…";
+            }
+
+            return $"{app.MessageKey} — {detail}";
+        }
+
+        return exception.Message;
     }
 
     /// <summary>Silmeden önce siteye bağlı tüm kaynakların (profesyonel panel benzeri) önizlemesi.</summary>
@@ -381,6 +624,34 @@ public sealed class SitesController(
         return Ok(ApiResponse<SiteDefaultsResultDto>.Ok(
             result,
             result.IsComplete ? "sites.defaults.success" : "sites.defaults.partial"));
+    }
+
+    // Admin olmayan site oluşturmada fiziksel yolu DAİMA varsayılan site kökünün altında, güvenli bir klasör adına
+    // sabitler (istemcinin gönderdiği yol yok sayılır). Geçersiz/escape eden ad → rastgele güvenli klasör. Çapraz-kiracı engeli.
+    private static string ResolveScopedPhysicalPath(CreateSiteRequest request, string defaultSiteRoot)
+    {
+        var baseName = string.IsNullOrWhiteSpace(request.Name) ? request.HostName : request.Name;
+        var safe = new string((baseName ?? string.Empty).Trim()
+            .Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '-')
+            .ToArray())
+            .Trim('.', '-', '_');
+        if (string.IsNullOrWhiteSpace(safe) || safe.Contains("..", StringComparison.Ordinal))
+        {
+            safe = "site-" + Guid.NewGuid().ToString("N")[..8];
+        }
+
+        var root = Path.GetFullPath(Environment.ExpandEnvironmentVariables(
+            string.IsNullOrWhiteSpace(defaultSiteRoot) ? "C:\\inetpub\\wwwroot" : defaultSiteRoot));
+        var full = Path.GetFullPath(Path.Combine(root, safe));
+
+        // Containment: sonuç kökün ALTINDA değilse (escape) rastgele güvenli klasöre düş.
+        var rootPrefix = root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            full = Path.Combine(root, "site-" + Guid.NewGuid().ToString("N")[..8]);
+        }
+
+        return full;
     }
 
     // M1: Bayi/Müşteri site kotası. Admin sınırsız. MaxSites=0 → limitsiz (mevcut davranışı korur).

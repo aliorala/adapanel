@@ -15,6 +15,7 @@ public sealed partial class DnsService(
     JsonFileStore fileStore) : IDnsService
 {
     private const string StatePath = "config/dns-zones.json";
+    private const string TemplatePath = "config/dns-template.json";
     private const int CurrentDefaultsVersion = 1;
     private static readonly string[] SupportedTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS"];
 
@@ -80,7 +81,7 @@ public sealed partial class DnsService(
         state.NameServers = NormalizeNameServers(request.NameServers, state.ZoneName);
         state.ZoneTransferIps = NormalizeZoneTransferIps(request.ZoneTransferIps);
         state.Records.RemoveAll(record => record.IsManaged);
-        state.Records.AddRange(CreateDefaultRecords(site, state.ZoneName, serverAddress));
+        state.Records.AddRange(await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
         state.DefaultsVersion = CurrentDefaultsVersion;
         state.Records = SortRecords(state.Records).ToList();
 
@@ -95,7 +96,7 @@ public sealed partial class DnsService(
         var state = await GetOrCreateStateAsync(site, cancellationToken);
         var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
         state.Records.RemoveAll(record => record.IsManaged);
-        state.Records.AddRange(CreateDefaultRecords(site, state.ZoneName, serverAddress));
+        state.Records.AddRange(await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
         state.DefaultsVersion = CurrentDefaultsVersion;
         state.Records = SortRecords(state.Records).ToList();
 
@@ -204,7 +205,7 @@ public sealed partial class DnsService(
             state.Records = SortRecords(state.Records.Select(record => NormalizeRecord(record, state.ZoneName))).ToList();
             if (state.DefaultsVersion < CurrentDefaultsVersion)
             {
-                MergeMissingDefaults(state.Records, CreateDefaultRecords(site, state.ZoneName, serverAddress));
+                MergeMissingDefaults(state.Records, await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
                 state.DefaultsVersion = CurrentDefaultsVersion;
                 state.Records = SortRecords(state.Records).ToList();
                 await UpsertStateAsync(state, cancellationToken);
@@ -215,12 +216,13 @@ public sealed partial class DnsService(
         }
 
         var zoneName = ResolveDefaultZoneName(site);
+        var defaultRecords = await BuildDefaultRecordsAsync(site, zoneName, serverAddress, cancellationToken);
         state = new DnsZoneState
         {
             SiteName = site.Name,
             ZoneName = zoneName,
             NameServers = NormalizeNameServers([], zoneName),
-            Records = CreateDefaultRecords(site, zoneName, serverAddress).ToList(),
+            Records = defaultRecords,
             DefaultsVersion = CurrentDefaultsVersion
         };
         await UpsertStateAsync(state, cancellationToken);
@@ -240,6 +242,9 @@ public sealed partial class DnsService(
     {
         var isDnsAvailable = await IsWindowsDnsAvailableAsync(cancellationToken);
         var isZonePresent = isDnsAvailable && await IsWindowsZonePresentAsync(state.ZoneName, cancellationToken);
+        var (isSigned, dsRecords) = isZonePresent
+            ? await ReadDnssecAsync(state.ZoneName, cancellationToken)
+            : (false, Array.Empty<string>());
         return new SiteDnsZoneDto
         {
             SiteName = state.SiteName,
@@ -252,7 +257,9 @@ public sealed partial class DnsService(
             Source = isDnsAvailable ? "windows-dns" : "panel-managed",
             StatusMessage = isDnsAvailable
                 ? isZonePresent ? "dns.windows_zone_present" : "dns.windows_zone_missing"
-                : "dns.windows_dns_unavailable"
+                : "dns.windows_dns_unavailable",
+            IsDnssecSigned = isSigned,
+            DnssecDsRecords = dsRecords
         };
     }
 
@@ -269,6 +276,180 @@ public sealed partial class DnsService(
             IsManaged = state.IsManaged
         };
     }
+
+    public async Task<DnsTemplateDto> GetTemplateAsync(CancellationToken cancellationToken = default)
+    {
+        var saved = await fileStore.ReadAsync(TemplatePath, new DnsTemplateDto(), cancellationToken);
+        return saved.Records.Count > 0 ? saved : BuiltInTemplate();
+    }
+
+    public async Task<DnsTemplateDto> UpdateTemplateAsync(UpdateDnsTemplateRequest request, CancellationToken cancellationToken = default)
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"
+        };
+
+        var clean = new DnsTemplateDto();
+        foreach (var record in request.Records ?? [])
+        {
+            var type = (record.Type ?? string.Empty).Trim().ToUpperInvariant();
+            var host = (record.Host ?? string.Empty).Trim();
+            var value = (record.Value ?? string.Empty).Trim();
+            if (!allowed.Contains(type) || host.Length == 0 || value.Length == 0)
+            {
+                continue;
+            }
+
+            clean.Records.Add(new DnsTemplateRecordDto
+            {
+                Type = type,
+                Host = host,
+                Value = value,
+                Ttl = record.Ttl > 0 ? record.Ttl : 3600
+            });
+        }
+
+        await fileStore.WriteAsync(TemplatePath, clean, cancellationToken);
+        return clean.Records.Count > 0 ? clean : BuiltInTemplate();
+    }
+
+    public async Task<SiteDnsZoneDto> SetDnssecAsync(string siteName, bool enabled, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken);
+
+        // DNSSEC, Windows DNS Server zone-imzalama gerektirir (Plesk-on-Windows ile aynı). Yoksa net hata.
+        if (!await IsWindowsDnsAvailableAsync(cancellationToken))
+        {
+            throw new AppException("dns.dnssec_requires_windows", 409, 409);
+        }
+
+        // İmzalamak için bölgenin Windows DNS'te bulunması gerekir → önce yayınla (kayıtlarıyla).
+        await TrySyncWindowsDnsAsync(state, cancellationToken);
+
+        var zone = EscapePowerShellLiteral(state.ZoneName);
+        var script = enabled
+            ? $"$ErrorActionPreference='Stop'; Invoke-DnsServerZoneSign -ZoneName '{zone}' -SignWithDefault -Force | Out-Null"
+            : $"$ErrorActionPreference='Stop'; Invoke-DnsServerZoneUnsign -ZoneName '{zone}' -Force | Out-Null";
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException(
+                enabled ? "dns.dnssec_sign_failed" : "dns.dnssec_unsign_failed",
+                500,
+                500,
+                BuildCommandDetails(result));
+        }
+
+        return await ToDtoAsync(state, cancellationToken);
+    }
+
+    // Bölgenin DNSSEC durumunu + registrar'a verilecek DS kayıtlarını Windows DNS'ten okur. IsSigned + DS
+    // (Export-DnsServerDnsSecPublicKey, SHA-256). DS alınamazsa boş döner (imza durumu yine doğru; UI ipucu verir). Best-effort.
+    private async Task<(bool IsSigned, string[] DsRecords)> ReadDnssecAsync(string zoneName, CancellationToken cancellationToken)
+    {
+        var zone = EscapePowerShellLiteral(zoneName);
+        var script = string.Join("\n", new[]
+        {
+            "$ErrorActionPreference='SilentlyContinue'",
+            $"$z = Get-DnsServerZone -Name '{zone}'",
+            "if (-not $z) { 'SIGNED=False'; return }",
+            "'SIGNED=' + [bool]$z.IsSigned",
+            "if ($z.IsSigned) {",
+            $"  $keys = Export-DnsServerDnsSecPublicKey -ZoneName '{zone}' -Path $env:TEMP -PassThru -DigestType Sha256 -ErrorAction SilentlyContinue",
+            "  foreach ($k in $keys) {",
+            "    $rd = $k.RecordData",
+            "    if ($rd -and ($rd.PSObject.Properties.Name -contains 'KeyTag') -and ($rd.PSObject.Properties.Name -contains 'Digest')) {",
+            "      'DS=' + $k.HostName + ' IN DS ' + $rd.KeyTag + ' ' + [int]$rd.CryptographicAlgorithm + ' ' + [int]$rd.DigestType + ' ' + $rd.Digest",
+            "    }",
+            "  }",
+            "}"
+        });
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            return (false, Array.Empty<string>());
+        }
+
+        var lines = result.StandardOutput
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+
+        var isSigned = lines.Any(line => line.Equals("SIGNED=True", StringComparison.OrdinalIgnoreCase));
+        var dsRecords = lines
+            .Where(line => line.StartsWith("DS=", StringComparison.Ordinal))
+            .Select(line => line[3..].Trim())
+            .Where(line => line.Length > 0)
+            .Distinct()
+            .ToArray();
+
+        return (isSigned, dsRecords);
+    }
+
+    // Kayıtlı şablon yoksa UI'de gösterilecek/uygulanacak yerleşik varsayılan (mevcut CreateDefaultRecords ile aynı set, yer tutuculu).
+    private static DnsTemplateDto BuiltInTemplate() => new()
+    {
+        Records =
+        [
+            new DnsTemplateRecordDto { Type = "NS", Host = "@", Value = "{ns1}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "NS", Host = "@", Value = "{ns2}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "A", Host = "@", Value = "{ip}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "A", Host = "ns1", Value = "{ip}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "A", Host = "ns2", Value = "{ip}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "CNAME", Host = "www", Value = "{domain}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "CNAME", Host = "ftp", Value = "{domain}", Ttl = 3600 }
+        ]
+    };
+
+    // Yeni bölgenin yönetilen (managed) varsayılan kayıtları: kayıtlı şablon varsa onu yer tutucularla genişletir,
+    // yoksa yerleşik CreateDefaultRecords'a düşer. Şablon tüm kayıtları atlanırsa da yerleşiğe düşer (boş zone olmaz).
+    private async Task<List<DnsRecordState>> BuildDefaultRecordsAsync(SiteDto site, string zoneName, string serverAddress, CancellationToken cancellationToken)
+    {
+        var template = await fileStore.ReadAsync(TemplatePath, new DnsTemplateDto(), cancellationToken);
+        if (template.Records.Count == 0)
+        {
+            return CreateDefaultRecords(site, zoneName, serverAddress).ToList();
+        }
+
+        var ip = ResolveDefaultIpv4Address(site, serverAddress);
+        var ns1 = $"ns1.{zoneName}";
+        var ns2 = $"ns2.{zoneName}";
+        var records = new List<DnsRecordState>();
+        foreach (var tpl in template.Records)
+        {
+            var host = ExpandPlaceholders(tpl.Host, zoneName, ip, ns1, ns2);
+            var value = ExpandPlaceholders(tpl.Value, zoneName, ip, ns1, ns2);
+            // {ip} çözülemediyse (sunucu IPv4 yok) A/AAAA gibi kayıtlar boş value'lu olur → atla (geçersiz kayıt yazma).
+            if (host.Length == 0 || value.Length == 0)
+            {
+                continue;
+            }
+
+            records.Add(new DnsRecordState
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Type = tpl.Type,
+                Host = host,
+                Value = value,
+                Ttl = tpl.Ttl > 0 ? tpl.Ttl : 3600,
+                IsManaged = true
+            });
+        }
+
+        return records.Count > 0 ? records : CreateDefaultRecords(site, zoneName, serverAddress).ToList();
+    }
+
+    private static string ExpandPlaceholders(string input, string zone, string ip, string ns1, string ns2)
+        => (input ?? string.Empty)
+            .Replace("{domain}", zone, StringComparison.OrdinalIgnoreCase)
+            .Replace("{ip}", ip, StringComparison.OrdinalIgnoreCase)
+            .Replace("{ns1}", ns1, StringComparison.OrdinalIgnoreCase)
+            .Replace("{ns2}", ns2, StringComparison.OrdinalIgnoreCase)
+            .Trim();
 
     private static IEnumerable<DnsRecordState> CreateDefaultRecords(SiteDto site, string zoneName, string preferredServerAddress)
     {

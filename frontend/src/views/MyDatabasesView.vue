@@ -52,7 +52,8 @@
           <button class="danger compact" :disabled="busy" @click="remove(db)">{{ t("panel.myDb.delete") }}</button>
         </span>
       </div>
-      <p v-if="databases.length === 0" class="empty-state">{{ t("panel.myDb.empty") }}</p>
+      <p v-if="loading && databases.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="databases.length === 0" class="empty-state">{{ t("panel.myDb.empty") }}</p>
     </div>
   </section>
 </template>

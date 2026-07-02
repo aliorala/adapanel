@@ -21,4 +21,11 @@ public sealed class DatabaseTransferRequest
 
     /// <summary>Boş bırakılırsa kaynak veritabanı adı kullanılır.</summary>
     public string TargetDatabase { get; set; } = string.Empty;
+
+    /// <summary>Hedef DB'ye erişecek kullanıcı (taşınan uygulamanın bağlanacağı). Boşsa DB adından türetilir;
+    /// oluşturulup hedef DB'ye tam yetki alır.</summary>
+    public string TargetUserName { get; set; } = string.Empty;
+
+    /// <summary>Hedef kullanıcının parolası. Boşsa güçlü bir parola üretilir ve sonuçta gösterilir.</summary>
+    public string TargetPassword { get; set; } = string.Empty;
 }

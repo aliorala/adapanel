@@ -15,6 +15,8 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
     private readonly object syncRoot = new();
     private readonly PerformanceCounter? cpuCounter = CreateCpuCounter(logger);
     private readonly Dictionary<string, NetworkSample> previousNetworkSamples = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxHistorySamples = 1440; // 1 dk × 1440 ≈ son 24 saat (kalıcı izleme geçmişi, bellek-içi halka)
+    private readonly LinkedList<SystemHistorySampleDto> history = new();
     private bool disposed;
 
     public Task<SystemOverviewDto> GetOverviewAsync(CancellationToken cancellationToken = default)
@@ -74,6 +76,37 @@ public sealed class SystemMonitoringService(ILogger<SystemMonitoringService> log
         };
 
         return Task.FromResult(overview);
+    }
+
+    public async Task RecordSampleAsync(CancellationToken cancellationToken = default)
+    {
+        var overview = await GetOverviewAsync(cancellationToken);
+        var sample = new SystemHistorySampleDto
+        {
+            TimestampUtc = DateTime.UtcNow,
+            CpuPercent = overview.CpuUsagePercent,
+            MemoryPercent = overview.MemoryUsagePercent,
+            NetworkDownBytesPerSec = overview.NetworkInterfaces.Sum(item => item.BytesReceivedPerSecond),
+            NetworkUpBytesPerSec = overview.NetworkInterfaces.Sum(item => item.BytesSentPerSecond)
+        };
+
+        lock (syncRoot)
+        {
+            history.AddLast(sample);
+            while (history.Count > MaxHistorySamples)
+            {
+                history.RemoveFirst();
+            }
+        }
+    }
+
+    public Task<IReadOnlyList<SystemHistorySampleDto>> GetHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (syncRoot)
+        {
+            return Task.FromResult<IReadOnlyList<SystemHistorySampleDto>>(history.ToList());
+        }
     }
 
     public Task<IReadOnlyCollection<ServerIpAddressDto>> GetServerIpAddressesAsync(CancellationToken cancellationToken = default)

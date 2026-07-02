@@ -988,7 +988,10 @@ public sealed partial class WebAdministrationSiteService(
             return CreateDiagnosticException("sites.iis_permission_denied", 403, exception);
         }
 
-        if (message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase) ||
+        // 0x80070020 = ERROR_SHARING_VIOLATION → dosya başka işlemde. HRESULT dile bağımsız; Türkçe Windows'ta
+        // İngilizce metin ("being used by another process") yerelleşir ve tutmaz → HRESULT'ı da kontrol et.
+        if (message.Contains("0x80070020", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("The process cannot access the file", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("configuration file is locked", StringComparison.OrdinalIgnoreCase))
         {

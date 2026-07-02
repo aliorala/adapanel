@@ -55,6 +55,7 @@ export type SitePhpSettings = {
   displayErrors: boolean;
   openBasedirEnabled?: boolean;
   configured: boolean;
+  redisEnabled?: boolean;
 };
 
 export async function getSitePhpSettings(siteName: string) {

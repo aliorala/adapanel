@@ -24,4 +24,11 @@ public interface ISslService
     /// HTTP→HTTPS yönlendirmesi EKLEMEZ (paylaşımlı webmail sitesini bozmaz). Başarılıysa true.
     /// </summary>
     Task<bool> TrySecureHostAsync(string siteName, string hostName, string contactEmail, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Domainsiz önizleme (nip.io) host'u için HIZLI self-signed HTTPS bağlaması ekler — ACME beklemez
+    /// (buton donmaz), HTTP→HTTPS yönlendirmesini DEĞİŞTİRMEZ. Böylece https zorlayan siteler resetlenmez
+    /// (tarayıcı bir kez sertifika uyarısı gösterir, "Devam et" ile açılır).
+    /// </summary>
+    Task EnsurePreviewCertificateAsync(string siteName, string hostName, CancellationToken cancellationToken = default);
 }

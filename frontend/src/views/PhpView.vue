@@ -8,6 +8,9 @@
       <button class="secondary compact" :disabled="phpStore.loading" @click="refreshAll">
         {{ t("panel.php.refresh") }}
       </button>
+      <button class="secondary compact" :disabled="enablingRedis" @click="enableRedis">
+        {{ enablingRedis ? t("panel.php.enablingRedis") : t("panel.php.enableRedis") }}
+      </button>
     </div>
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
@@ -80,7 +83,8 @@
           </button>
         </span>
       </div>
-      <p v-if="filteredInstalled.length === 0" class="empty-state">{{ t("panel.php.noInstalledVersions") }}</p>
+      <p v-if="phpStore.loading && filteredInstalled.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="filteredInstalled.length === 0" class="empty-state">{{ t("panel.php.noInstalledVersions") }}</p>
     </div>
 
     <div v-else class="data-table">
@@ -107,7 +111,8 @@
           </button>
         </span>
       </div>
-      <p v-if="filteredAvailable.length === 0" class="empty-state">{{ t("panel.php.noManifestVersions") }}</p>
+      <p v-if="phpStore.loading && filteredAvailable.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="filteredAvailable.length === 0" class="empty-state">{{ t("panel.php.noManifestVersions") }}</p>
     </div>
 
     <div v-if="selectedSiteName" class="form-surface php-settings">
@@ -156,7 +161,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { getSitePhpSettings, updateSitePhpSettings } from "../api/php";
+import { enableRedisExtension, getSitePhpSettings, updateSitePhpSettings } from "../api/php";
 import { extractApiMessage } from "../stores/auth";
 import { usePhpStore } from "../stores/php";
 import { useSitesStore } from "../stores/sites";
@@ -170,6 +175,7 @@ const activeTab = ref<"installed" | "available">("installed");
 const query = ref("");
 const notice = ref("");
 const noticeError = ref(false);
+const enablingRedis = ref(false);
 
 const settings = reactive({
   memoryLimit: "256M",
@@ -283,6 +289,19 @@ async function removeVersion(componentId: string) {
     showNotice(t("panel.php.removed"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
+  }
+}
+
+// Sunucu geneli native phpredis uzantısını etkinleştir (idempotent; zaten varsa "already" döner).
+async function enableRedis() {
+  enablingRedis.value = true;
+  try {
+    const result = await enableRedisExtension();
+    showNotice(t(result.message === "already" ? "php.redis_already" : "php.redis_enabled"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    enablingRedis.value = false;
   }
 }
 

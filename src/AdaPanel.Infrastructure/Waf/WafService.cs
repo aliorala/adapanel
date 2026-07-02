@@ -89,13 +89,36 @@ public sealed class WafService(
         var applicationRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
             ? site.PhysicalPath
             : site.ApplicationRootPath;
-        var result = await ProcessRunner.RunPowerShellAsync(
-            $"""icacls "{applicationRoot}" /grant "{principal}:(OI)(CI){request.Rights}" /T /C""",
-            cancellationToken);
+        var rights = string.IsNullOrWhiteSpace(request.Rights) ? "M" : request.Rights.Trim();
+        var rootLiteral = applicationRoot.Replace("'", "''");
+        var poolLiteral = principal.Replace("'", "''");
+        var siteLiteral = site.Name.Replace("'", "''");
+
+        // PLESK-BENZERİ TAM KİRACI İZOLASYONU: (1) statik dosyalar IUSR ile DEĞİL app pool kimliğiyle sunulsun
+        // (anonymousAuthentication.userName='') → sitenin TÜM erişimi (PHP FastCGI + statik) tek kimlikten geçer.
+        // (2) site kökünde ACL kalıtımını KIR: üst klasörden miras gelen IIS_IUSRS/Users GENİŞ okuması düşer —
+        // aksi halde DİĞER sitelerin app pool kimlikleri (hepsi IIS_IUSRS üyesi) bu sitenin dosyalarını okuyabilirdi
+        // (izolasyon yok). Yalnız BU sitenin app pool kimliği (Modify) + SYSTEM + Administrators (SID = locale
+        // BAĞIMSIZ) kalır. /T ve /reset YOK → FTP kullanıcısının açık grant'i ve alt klasör kalıtımı korunur
+        // (çocuklar yeni kök ACL'ini miras alır). Anonim kimlik AYARLANAMAZSA icacls'e GEÇİLMEZ (exit 2) → statik
+        // içerik kırılmasın diye izolasyon uygulanmadan güvenli durulur (fail-safe).
+        var script = $$"""
+            $site = '{{siteLiteral}}'
+            try {
+              Import-Module WebAdministration -ErrorAction Stop
+              Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $site -Filter 'system.webServer/security/authentication/anonymousAuthentication' -Name userName -Value '' -ErrorAction Stop
+            } catch {
+              Write-Error ("Anonim kimlik app pool kimligine ayarlanamadi: " + $_.Exception.Message); exit 2
+            }
+            $grant = '{{poolLiteral}}' + ':(OI)(CI){{rights}}'
+            icacls '{{rootLiteral}}' /inheritance:r /grant:r "$grant" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /C /Q | Out-Null
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            """;
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
 
         if (!result.Success)
         {
-            throw new AppException("security.acl_failed", 500, 500);
+            throw new AppException("security.acl_failed", 500, 500, result.StandardError);
         }
 
         return await SaveStateAsync(site, folderAclApplied: true, principal: principal, cancellationToken: cancellationToken);

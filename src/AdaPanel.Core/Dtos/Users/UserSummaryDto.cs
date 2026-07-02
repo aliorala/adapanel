@@ -36,6 +36,12 @@ public sealed class UserSummaryDto
     /// <summary>Customer'ın atanan sitelerinin güncel disk kullanımı (MB).</summary>
     public long DiskUsageMb { get; init; }
 
+    /// <summary>
+    /// Customer'a ait güncel veritabanı sayısı (MaxDatabases kotasının kullanılan kısmı). TÜM motorların
+    /// (MySQL + MariaDB + PostgreSQL + MSSQL) TOPLAMIDIR — kota motordan bağımsız, toplam DB sayısını sınırlar.
+    /// </summary>
+    public int DatabaseCount { get; init; }
+
     /// <summary>Customer'ı yöneten bayinin (Reseller) kimliği; yoksa null (admin yönetir).</summary>
     public Guid? OwnerId { get; init; }
 

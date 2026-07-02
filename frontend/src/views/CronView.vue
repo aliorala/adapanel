@@ -73,7 +73,8 @@
           </button>
         </span>
       </div>
-      <p v-if="filteredTasks.length === 0" class="empty-state">{{ t("panel.tasks.empty") }}</p>
+      <p v-if="loading && filteredTasks.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="filteredTasks.length === 0" class="empty-state">{{ t("panel.tasks.empty") }}</p>
     </div>
   </section>
 </template>

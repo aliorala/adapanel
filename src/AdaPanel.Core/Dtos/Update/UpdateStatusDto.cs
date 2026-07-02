@@ -22,5 +22,8 @@ public sealed class UpdateStatusDto
 
     public string Notes { get; set; } = string.Empty;
 
+    /// <summary>GitHub deposu (owner/repo). Panel en son sürümü GitHub Releases'ten otomatik görür. Boş = ayarlanmamış.</summary>
+    public string GithubRepo { get; set; } = string.Empty;
+
     public DateTime CheckedAtUtc { get; set; }
 }

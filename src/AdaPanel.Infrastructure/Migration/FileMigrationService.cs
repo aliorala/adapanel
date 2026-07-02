@@ -45,8 +45,38 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
         }
         catch (Exception exception)
         {
-            throw new AppException("migration.failed", 502, 500, exception.Message);
+            throw ClassifyFileError(exception);
         }
+    }
+
+    // Ham FTP/SFTP istisnasını anlaşılır bir başlığa (yetkilendirme / uzak yol / bağlantı) eşler ve gerçek teknik
+    // mesajı Details'te taşır. Tür adı + mesaj üzerinden anahtar-kelime sınıflandırması (kütüphaneye sıkı bağlı
+    // değil; FluentFTP ve SSH.NET'in tipik metinlerini kapsar). Eşleşme yoksa generic "migration.failed".
+    private static AppException ClassifyFileError(Exception exception)
+    {
+        var detail = exception.Message;
+        var probe = $"{exception.GetType().Name} {detail}".ToLowerInvariant();
+
+        if (probe.Contains("auth") || probe.Contains("login") || probe.Contains("permission denied") ||
+            probe.Contains("password") || probe.Contains("530"))
+        {
+            return new AppException("migration.files.auth_failed", 502, 502, detail);
+        }
+
+        if (probe.Contains("no such file") || probe.Contains("not found") || probe.Contains("pathnotfound") ||
+            probe.Contains("could not find") || probe.Contains("no such directory") || probe.Contains("550"))
+        {
+            return new AppException("migration.files.path_not_found", 502, 502, detail);
+        }
+
+        if (probe.Contains("socket") || probe.Contains("connect") || probe.Contains("timeout") ||
+            probe.Contains("timed out") || probe.Contains("resolve") || probe.Contains("refused") ||
+            probe.Contains("unreachable") || probe.Contains("host"))
+        {
+            return new AppException("migration.files.connect_failed", 502, 502, detail);
+        }
+
+        return new AppException("migration.failed", 502, 500, detail);
     }
 
     private async Task<RemoteFileMigrationResult> PullFtpAsync(

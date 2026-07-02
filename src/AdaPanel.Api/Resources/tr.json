@@ -169,6 +169,7 @@
   "ftp.user_create_failed": "FTP kullanıcısı oluşturulamadı.",
   "ftp.acl_failed": "FTP klasör izinleri uygulanamadı.",
   "ftp.site_configuration_failed": "IIS FTP sitesi veya kullanıcı izolasyonu yapılandırılamadı.",
+  "ftp.feature_install_failed": "IIS FTP rolü (Web-Ftp-Server) otomatik kurulamadı. Sunucuya FTP rolünü kurup tekrar deneyin.",
   "ftp.user_delete_failed": "FTP kullanıcısı silinemedi.",
   "ftp.user_created": "FTP kullanıcısı oluşturuldu.",
   "ftp.user_deleted": "FTP kullanıcısı silindi.",

@@ -20,4 +20,10 @@ public sealed class SiteDnsZoneDto
     public string Source { get; set; } = "panel-managed";
 
     public string StatusMessage { get; set; } = string.Empty;
+
+    /// <summary>Bölge Windows DNS'te DNSSEC ile imzalı mı (Plesk DNSSEC eşdeğeri).</summary>
+    public bool IsDnssecSigned { get; set; }
+
+    /// <summary>Registrar'a (üst bölgeye) verilecek DS kayıtları — imzalıyken doldurulur.</summary>
+    public string[] DnssecDsRecords { get; set; } = [];
 }

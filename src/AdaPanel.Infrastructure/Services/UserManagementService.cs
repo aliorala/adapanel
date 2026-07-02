@@ -19,7 +19,8 @@ public sealed class UserManagementService(
     IPanelSecurityService securityService,
     ILogger<UserManagementService> logger,
     IAuditService auditService,
-    IIisSiteService iisSiteService) : IUserManagementService
+    IIisSiteService iisSiteService,
+    IDatabaseOwnershipService databaseOwnership) : IUserManagementService
 {
     public async Task<IReadOnlyCollection<UserSummaryDto>> GetUsersAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
@@ -46,7 +47,8 @@ public sealed class UserManagementService(
                 var scope = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
                 var usageMb = await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken);
                 var ownerId = await customerScopeService.GetOwnerAsync(user.Id, cancellationToken);
-                summaries.Add(MapUser(user, scope, usageMb, ownerId, ResolveOwnerName(ownerId, nameById)));
+                var dbCount = await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken);
+                summaries.Add(MapUser(user, scope, usageMb, ownerId, ResolveOwnerName(ownerId, nameById), dbCount));
             }
             else
             {
@@ -256,8 +258,11 @@ public sealed class UserManagementService(
         var usageMb = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
             : 0;
+        var dbCount = user.Role == UserRole.Customer
+            ? await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken)
+            : 0;
         var resolvedOwner = user.Role == UserRole.Customer ? ownerId : null;
-        return MapUser(user, scope, usageMb, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken));
+        return MapUser(user, scope, usageMb, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken), dbCount);
     }
 
     /// <summary>Customer rolünde kapsamı (siteler + limitler) kaydeder; diğer rollerde varsa temizler.</summary>
@@ -347,10 +352,11 @@ public sealed class UserManagementService(
         return owner?.UserName ?? string.Empty;
     }
 
-    private static UserSummaryDto MapUser(PanelUser user, CustomerScope scope, long diskUsageMb, Guid? ownerId = null, string ownerName = "")
+    private static UserSummaryDto MapUser(PanelUser user, CustomerScope scope, long diskUsageMb, Guid? ownerId = null, string ownerName = "", int databaseCount = 0)
     {
         return new UserSummaryDto
         {
+            DatabaseCount = databaseCount,
             Id = user.Id,
             UserName = user.UserName,
             Email = user.Email,

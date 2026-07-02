@@ -3882,3 +3882,1120 @@ Basarili:
 - 🎯 GÖÇ ARACI TAM: motor (orkestrasyon) ✓ + sihirbaz (manuel) ✓ + Plesk REST keşif ✓. Geriye yalnız nice-to-have: .user.ini göç-sonrası
   sanitize, per-domain DB otomatik keşfi (Plesk CLI gate — kırılgan, atlandı).
 - KULLANICIYA: menü → "Göç" → (opsiyonel) Plesk host + API anahtarı → "keşfet" → domain seç → SFTP + DB parolalarını gir → "Göçü başlat" → adım sonuçları.
+
+## 2026-06-24 (101) — Önbellek TTL özelliği ARAŞTIRILDI → kullanıcı talebiyle GERİ ALINDI + doğrulama rebuild'i
+- İstek: panelden önbellek süresi (TTL), "her db/site ayrı". Web araştırması: Plesk'te GENEL Redis TTL kadranı YOK. Redis nesne
+  önbelleği TTL = wp-config `WP_REDIS_MAXTTL` (WP Toolkit); site-bazlı "Cache timeout" = nginx proxy cache (IIS karşılığı: output caching).
+  Tek GERÇEK server-side kadran = Redis `maxmemory` + `maxmemory-policy` (allkeys-lru) — sektör standardı (256mb/allkeys-lru).
+- Başlanan iş: 5 DTO oluşturuldu (RedisConfigDto, UpdateRedisConfigRequest + 3 TTL DTO). CacheService/controller/frontend/i18n'e
+  DOKUNULMADI. Kullanıcı önce "karıştırma, boşver, her site kendi web.config'inde belirlesin", sonra "yaptığın işlemleri geri al" dedi.
+- GERİ ALINDI: 5 DTO silindi; Cache DTO klasörü orijinal 3 dosyaya (CacheMetrics/CacheRuntime/CacheStatus) döndü. KAYNAK = entry 100 durumu.
+- İLERİDE istenirse Plesk-sadık yol: (a) Redis maxmemory+eviction (global, gerçek, CONFIG SET + conf'a yaz); (b) site başına
+  tarayıcı/statik önbellek süresi = `SiteHostingSettingsService.UpdateWebConfig`'e `<staticContent><clientCache cacheControlMaxAge>`
+  (Plesk "browser caching/Expires" karşılığı; IIS-yerel; dinamik sayfayı bozmaz; "her site web.config'de" = kullanıcının istediği).
+- Doğrulama rebuild'i (içerik entry 100 ile AYNI): build 0/0, test 44/44(+2), typecheck 0, frontend dist OK.
+  Installer SHA256: `09AAF3254403DEFF4AA86955B3BAE36756D56D1DB346C5636322213AF34DDE4E` (49.31 MiB). Tek-dosya publish + ISCC
+  non-deterministik → SHA `F65B11…`'den farklı, içerik özdeş.
+
+## 2026-06-24 (102) — Göç #1 (.user.ini sanitize) + #3 (phpredis UI toggle) — deploy/Plesk-parite backlog'unun KOD kalanı bitti
+- #1 .user.ini SANITIZE (göç-sonrası; deploy backlog'unun son kod maddesi): SiteMigrationService'e IIisSiteService enjekte edildi;
+  PullFiles BAŞARILIYSA `SanitizeUserIniFilesAsync(site kökü)` ayrı "userini" adımı olarak çalışır. Site kökündeki .user.ini'leri
+  tarar (recursive, ≤200 dosya): `open_basedir`'i `"<yeni kök>;<temp>"` olarak YENİDEN yazar; yol-içeren yönergeleri
+  (session.save_path, upload_tmp_dir, sys_temp_dir, error_log, sendmail_path, curl.cainfo, openssl.cafile, soap.wsdl_cache_dir,
+  opcache.file_cache, extension_dir) ESKİ Plesk/vhost izli (\vhosts\, /var/www/vhosts ...) VEYA bu makinede OLMAYAN mutlak yol ise
+  yorum satırına alır → PHP varsayılanına döner (göçen sitenin "open_basedir restriction"/eksik-path 500'ü çözülür). Değişiklik yoksa dokunmaz.
+- #3 phpredis UI: backend (POST /api/v1/php/enable-redis → indir + `php -m` doğrula + başarısızsa geri al) ve api/php.ts
+  `enableRedisExtension` ZATEN vardı; SADECE buton eksikti. PhpView başlığına "Redis uzantısını etkinleştir" + `enableRedis()`
+  (idempotent; "already" → zaten etkin). i18n: panel.php.enableRedis/enablingRedis + php.redis_already/redis_enabled.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2200=2200. Installer SHA256:
+  `1B726EBDB34A365FEB0C8C15D23191E99A5532ED6CE36B4D8BA90731B2E0B4A0` (49.31 MiB).
+- DEPLOY/GÖÇ BACKLOG TAM (kod): #1 docroot ✓ #2 rewrite ✓ #4 composer ✓ #5 perms ✓ DB import ✓ SSL ✓ .user.ini sanitize ✓ phpredis UI ✓.
+- KALAN (kodla bitmez): CANLI-doğrulama (Roundcube tek-tık, Plesk REST keşif, K2 root, B3) + MİMARİ M1 (müşteri/abonelik/servis-planı/
+  KOTA modeli — EN BÜYÜK eksik, Plesk "Service Plans") · M2 (yedek zamanlama/restore) · M3 (mail DKIM/SPF/DMARC canlı) · M4/M5 (DNS/FTPS) · RBAC UI.
+- KULLANICIYA: yeni installer → Göç artık .user.ini'yi otomatik temizler; PHP ekranında "Redis uzantısını etkinleştir" butonu.
+
+## 2026-06-24 (103) — M1 (müşteri/abonelik/KOTA) ZATEN TAM ÇIKTI — yanlışlıkla başlanan duplike GERİ ALINDI
+- Kullanıcı M1'i "en büyük eksik" diye seçti (benim ESKİMİŞ notuma göre). GERÇEK: M1 tamamen kurulu + ENFORCE ediliyor:
+  · ServicePlanService (config/service-plans.json) — plan şablonları CRUD; /api/v1/service-plans; Ayarlar→Kullanıcılar'da UI.
+  · CustomerScopeService (config/customer-scopes.json) — müşteri başına limit (MaxSites/MaxDiskMb/MaxDatabases/MaxMailboxes) +
+    bayi sahipliği (OwnerId) + disk kullanımı ölçümü (GetDiskUsageMbAsync).
+  · ENFORCEMENT: site → SitesController:386 (MaxSites), DB → SitesController:401 + ResellerDatabasesController:42 (MaxDatabases),
+    posta → MailController:373 (MaxMailboxes), disk → FilesController:84 (MaxDiskMb; kullanım+gelen>limit → 403). Admin sınırsız.
+  · Plan→müşteri uygula: create-user formunda plan seçici (applyPlanToCreate → limit alanlarını doldurur). Kullanıcı listesinde
+    disk kullanım/limit gösterimi + "login as" (impersonation). Yani M1 UI+enforcement TAM.
+- YANLIŞ BAŞLANAN duplike (ServicePlan EF entity + tablo + PlanService + /api/v1/plans + migration AddServicePlans) TAMAMEN GERİ ALINDI
+  (ef migrations remove + dosya silme + DbSet/DI revert). Build 0/0. KAYNAK = entry 102 durumu → installer 1B726EBD; YENİ installer GEREKMEZ.
+- ⚠️ DERS: security-audit memory'deki "M1 YOK / kota uygulanmıyor" ve "M-serisi mimari eksik" YANILTICI/ESKİMİŞ. M2 (IBackupService),
+  M3 (mail/Stalwart + mail kotaları), M4 (IDnsService/IRdnsService), M5 (IFtpService) SERVİSLERİ DE VAR. "X YOK" demeden ÖNCE KAYNAĞI DOĞRULA.
+- GERÇEK KALAN: CANLI-doğrulama (#4-7) + M2-M5'in İNCE eksikleri (körlemesine kurma; önce denetle).
+
+## 2026-06-25 (104) — M2 denetimi: zaten ~tam; tek gerçek eksik = PANEL SELF-BACKUP eklendi (config + adapanel.db)
+- M2 DENETİM SONUCU: yedek sistemi zaten kapsamlı. AutomationService (config/automation.json + AutomationWorker dakikalık):
+  otomatik zamanlanmış yedek (aralık/saat) + kapsam (site/DB/mail) + retention (PruneAsync) + OFF-SITE (FTP/S3/WebDAV, parola DPAPI) +
+  otomatik SSL yenileme + mail cert sync + uyarılar (disk/cert eşiği → e-posta/webhook, 24s cooldown). BackupService: granüler restore + indir.
+- TEK GERÇEK EKSİK = panelin KENDİ yedeği yoktu (site/DB/mail yedekleniyordu ama adapanel.db + config/ değil → sunucu çökerse
+  panel yapılandırması kayıp). EKLENDİ: IBackupService.BackupPanelAsync → adapanel.db (+wal/shm, FileShare.ReadWrite ile paylaşımlı
+  okuma) + config/*.json zip'lenir; Type="panel"; fileStore.ResolvePath ile yol. DataProtection ANAHTARLARI (keys/) + sertifikalar
+  BİLEREK HARİÇ (kullanıcı kararı: makineye-bağlı DPAPI, taşınamaz). Off-site hedefi (ResolveTarget/UploadToRemote) destekli. POST /api/v1/backup/panel (admin).
+- Otomasyona bağlandı: AutomationSettings.BackupPanelConfig toggle → RunBackupAsync panel yedeğini de alır (interval+retention+remote ile).
+  Frontend: BackupView'e admin-gated "Panel" yedek türü (backupKind) + AutomationView'e "Panel yapılandırması" onay kutusu.
+  i18n: panel.backup.panelTitle/panelAction/panelHint + panel.automation.backupPanelConfig.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2204=2204. Installer SHA256:
+  `E117C96A7A8CB7FF9DF139A1F0733AC3E63E657D9F2E89C11AF5A92C5DE688A6` (49.31 MiB).
+- M2 ARTIK TAM. ⚠️ M3 (mail DKIM/SPF/DMARC), M4 (IDnsService/IRdnsService), M5 (IFtpService) servisleri de VAR — denetlenmeden "eksik" sayma.
+  En yüksek değer artık CANLI kurulum + #4-7 doğrulama.
+- KULLANICIYA: yeni installer → Yedek → "Panel" türü ile panel config yedeği; Otomasyon → "Panel yapılandırması" ile otomatik plana ekle.
+
+## 2026-06-25 (105) — M3 (mail-auth) denetimi: zaten tam; açık-röle BİLEREK eklenmedi + canlı doğrulama runbook'u
+- M3 DENETİM: mail kimlik-doğrulama zaten kapsamlı. DKIM (Stalwart RSA+Ed25519 otomatik üretir → GetDnsRecordsAsync selector._domainkey
+  TXT) + SPF + DMARC kayıt üretimi + zone'a uygulama. MailDiagnosticsRunner CANLI sorgu: MX/A/SPF/DKIM/DMARC/PTR + 25/587/143 port probe;
+  frontend yeşil/kırmızı (panel.mail.diag.*). RdnsService = PTR.
+- AÇIK-RÖLE testi BİLEREK EKLENMEDİ: güvenilir open-relay testi HARİCİ IP'den yapılmalı; panel sunucunun KENDİSİ → 127.0.0.1'den test
+  ederdi ama MTA'lar (Stalwart dahil) genelde localhost'a relay izni verir → "açık röle" YANLIŞ-ALARMI. Stalwart zaten varsayılan kapalı-röle
+  (587 auth, 25 yalnız yerel domain). Kırılgan/yanıltıcı prob = "uydurma çözüm yapma" kuralına aykırı → yazmadım (dürüst karar).
+- SONUÇ: M1+M2+M3 üçü de bu oturumda denetlendi → HEPSİ KURULU (yalnız M2'ye panel self-backup eklendi). Panel ÖZELLİK-TAM.
+- EKLENEN (doc, kod DEĞİL): repo köküne `DEPLOYMENT_VERIFICATION.md` — canlı kurulum + #1-7 doğrulama + mail DNS + yedek + sorun giderme
+  checklist'i. Panel portu 8888 (kurulumda seçilir, 0.0.0.0'a bağlanır). KAYNAK değişmedi → installer hâlâ `E117C96A…` (yeni derleme yok).
+- SIRADAKİ GERÇEK DEĞER: CANLI KURULUM (E117C96A → VPS) + runbook ile #4-7 doğrulama. Spekülatif özellik aramayı bıraktık (her şey zaten var).
+
+## 2026-06-25 (106) — Komple kod denetimi (hata SINIFI taraması): 2 gerçek bulgu düzeltildi, gerisi temiz
+- Kullanıcı "sistemi komple tara, eksik/hatalı bul ve düzelt" → proaktif-denetim kuralıyla hata SINIFLARINI taradım (semptom değil):
+  · sync-over-async (.Result/.Wait/GetAwaiter().GetResult): YOK ✓
+  · .NET ToLower()/ToUpper() locale (Türkçe İ/ı): 6 eşleşme AMA hepsi EF LINQ → SQL'e çevrilir, .NET locale'i etkilemez → DOKUNULMADI (doğru) ✓
+  · kültür-duyarlı sayı biçimleme: temiz (gerçek formatlar CultureInfo.InvariantCulture; ":N" eşleşmeleri Guid "N" formatı = false-positive) ✓
+  · komut enjeksiyonu (PowerShell interpolasyon): temiz (ProcessRunner shell kullanmaz + sanitize; tek interpolasyon sabit ServiceName) ✓
+  · async void (yutulmuş exception): YOK ✓
+  · Win32ErrorHelper (HRESULT, dile bağımsız): 8 serviste tutarlı kullanılıyor ✓
+- DÜZELTİLEN 2 GERÇEK BULGU:
+  1. (ÖNEMLİ, Türkçe-Windows landmine) WebAdministrationSiteService.MapIisException: dosya-kilitli/kullanımda durumu YALNIZ İngilizce
+     metinle ("being used by another process") eşleşiyordu → Türkçe Windows'ta tutmaz → genel 500. HRESULT 0x80070020
+     (ERROR_SHARING_VIOLATION) eklendi (access-denied 0x80070005 + already-exists 0x800700B7 zaten vardı; in-use EKSİKTİ).
+  2. (defansif) WebStatisticsService: IIS W3C log tarihi DateTime.TryParse kültürsüzdü → CultureInfo.InvariantCulture + DateTimeStyles.None.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2204=2204. Installer SHA256:
+  `18FD9AF16AD72C7E34012551C80BC6B0C1027C2684424BDBE013944DA99268D0` (49.31 MiB).
+- SONUÇ: kod tabanı çok disiplinli; statik hata-sınıfı taramasında başka SİSTEMİK kusur YOK. Kalan = CANLI doğrulama (#4-7).
+- KULLANICIYA: yeni installer; Türkçe Windows'ta "dosya kilitli" IIS hataları artık doğru 409 verir (genel 500 değil).
+
+## 2026-06-25 (107) — Derin denetim turu 2: installer "AdaPanel" markası + Türkçe sihirbaz + runbook port düzeltmesi
+- Kullanıcı: "didik didik tara, yarım kod/işlevsiz/eksik bul; + kurulum ekranında AdaPanel yazmıyor." Bu SON sürüm, internete konacak.
+- Kod taraması (2. derin pas): NotImplementedException/TODO/FIXME/stub YOK; `AddHostedService<AutomationWorker>` KAYITLI (otomatik
+  yedek/SSL arka planda GERÇEKTEN çalışıyor — "hayalet" değil); marka: index.html `<title>AdaPanel</title>` var. Sistemik yarım/işlevsiz kod YOK.
+- INSTALLER MARKA (somut şikayet) DÜZELTİLDİ: Inno Setup 6'da Welcome sayfası VARSAYILAN KAPALI → "AdaPanel" adı belirgin görünmüyordu.
+  AdaPanel.iss: `DisableWelcomePage=no` + `AppContact=AdaPanel` + `[Languages]` Turkish.isl + `[Messages]` tr.WelcomeLabel1/2
+  ("AdaPanel Kurulum Sihirbazina Hos Geldiniz") + SetupWindowTitle/FinishedHeadingLabel. Özel port sayfası + MsgBox Türkçeleştirildi.
+  Sihirbaz artık TÜRKÇE + her ekranda AdaPanel adı.
+- GERÇEK DOC BUG: installer varsayılan portu **8890** (iss satır 194) ama DEPLOYMENT_VERIFICATION.md'ye 8888 yazmıştım → tümü 8890'a düzeltildi.
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK (Turkish.isl yüklendi). Installer SHA256:
+  `EF96DADF1E5A7B0A0CF4DE194D9568B09EE90C3DB25B7F386C00C96F27B7CC7D` (49.31 MiB) = SON SÜRÜM adayı.
+- KULLANICIYA: yeni installer'da kurulum TÜRKÇE + ilk ekranda "AdaPanel Kurulum Sihirbazina Hos Geldiniz".
+
+## 2026-06-25 (108) — Derin denetim turu 3: i18n çakışan anahtar (yanlış metin) + MySQL kullanıcı-adı/host enjeksiyonu düzeltildi
+- Yöntem: geçici node denetim scripti → frontend'de t('...') ile KULLANILAN tüm statik anahtarları i18n'le karşılaştır + çift anahtar tara.
+- BULGU 1 (kullanıcı-görünür hata): SiteMigrationView (eski .zip arşiv içe-aktarma) ile MigrationView (yeni göç sihirbazı) AYNI
+  panel.migration.title/subtitle/running anahtarlarını paylaşıyordu → JSON son-tanım-kazanır → arşiv-import ekranı SİHİRBAZIN metnini
+  gösteriyordu ("Site göçü / Taşınıyor", olması gereken "Site Göçü (İçe Aktarma) / Aktarılıyor"). FIX: arşiv-import'un 3 çakışan anahtarı
+  panel.siteImport.title/subtitle/running'e taşındı (en+tr) + SiteMigrationView güncellendi. Artık 0 çift, 0 eksik (1637 statik key denetlendi).
+- BULGU 2 (GÜVENLİK): MySqlDatabaseProvider CREATE/ALTER/DROP USER + GRANT'ta userName/host tek-tırnağa sarılıp ESCAPE EDİLMİYORDU
+  (yalnız harden-drop satır 252 escape ediyordu). Reseller/Customer DB kullanıcısı oluşturabildiğinden "x'@'%" gibi bir adla @localhost
+  kısıtı aşılıp UZAKTAN erişilebilir kullanıcı oluşturulabilirdi (host enjeksiyonu). FIX: 86/108/182/209'da userName+host'a .Replace("'","''")
+  (satır 252 deseniyle tutarlı). Parola zaten parametreli (@password). Root metotları (136/143/150) sabit host → dokunulmadı.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2207=2207 (0 çift/0 eksik). Installer SHA256:
+  `D8EC12F1DF651A1F0EABCB8C55F3EC7F293895976449B71287406C453F1569EC` (49.31 MiB). Geçici _i18n-audit.cjs silindi.
+- KULLANICIYA: 3. derin pas; iki gerçek bug daha kapandı (arşiv-import yanlış başlık + MySQL host enjeksiyonu). = güncel son sürüm.
+
+## 2026-06-25 (109) — Derin denetim turu 4: BackupService eşzamanlılık yarışı düzeltildi; IDisposable/zip-slip/ReDoS temiz
+- Taranan sınıflar: JSON dosya eşzamanlılığı (lost-update), IDisposable sızıntısı, zip-slip (path traversal), regex ReDoS.
+- GERÇEK BULGU + FIX (eşzamanlılık): BackupService kayıtları (config/backups.json) AppendRecordAsync/UpsertRecordAsync/PruneAsync
+  NON-ATOMİK Read+Write yapıyordu. AutomationWorker arka planda otomatik yedek eklerken kullanıcı ELLE yedek tetiklerse "son yazan
+  kazanır" → kayıp yedek kaydı. FIX: üçü de fileStore.UpdateAsync (IndexPath dosya-başına kilit) → serileşir, kayıp yok. Prune artık
+  güncel listeden YALNIZ silinen ID'leri çıkarır (eşzamanlı eklenen yeni kaydı korur); dosya silme kilidin DIŞINDA.
+  (DatabaseOwnershipService/DatabaseCredentialStore/CustomerScopeService ZATEN UpdateAsync; admin-düzenleme servisleri tek-admin/düşük risk.)
+- TEMİZ ÇIKAN sınıflar: IDisposable (TcpClient/HttpClient/SftpClient hepsi `using var`); zip-slip (ZipFile.ExtractToDirectory/TarFile
+  .NET yerleşik koruması + manuel per-entry çıkarımda 592/1157 açık StartsWith(root) guard'ı); ReDoS (tüm regex'ler anchored/lineer,
+  iç içe quantifier yok; Git branch/PHP-değeri gibi kullanıcı-girdili olanlar bile güvenli).
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK. Installer SHA256:
+  `1C25FA7DB73CDA6A67E8A189F0C2937F0948B7B85737A4F35D581736E17CD0B0` (49.32 MiB).
+- 4 derin pasta TOPLAM 6 gerçek bug: HRESULT(106), tarih-parse(106), installer marka(107), i18n çakışma(108), MySQL enjeksiyon(108), backup yarışı(109).
+- KULLANICIYA: backup kayıt yarışı kapandı (otomatik+elle yedek aynı anda → kayıp yok). Diğer denetlenen sınıflar temiz.
+
+## 2026-06-25 (110) — Derin denetim turu 5: XSS / dosya-yükleme / authorization → HEPSİ TEMİZ (0 bug), güvenlik duruşu örnek
+- Taranan (yüksek-değerli güvenlik): frontend XSS (v-html), dosya-yükleme/çıkarma (path traversal/zip-slip/symlink), controller authorization.
+- v-html: yalnız iconFor(id) → SABİT SVG ikon path'i (NAV_ICONS), kullanıcı verisi değil → XSS yok.
+- FileService: zip-slip guard (200) + sandbox path-traversal guard (ResolveSandboxTarget) + REPARSE-POINT/symlink escape kontrolü
+  (EnsureNoReparsePoints) — örnek nitelikte (çoğu panel symlink escape'i kaçırır).
+- Authorization: 44 controller'dan 42'si [Authorize]; anonim 2'si BİLEREK + sıkı korumalı:
+  · SetupController: initialize LOOPBACK-ONLY (uzaktan 403) + SetupService "admin zaten varsa setup.already_initialized" reddi (çift kilit).
+  · GitController webhook: [AllowAnonymous] ama FixedTimeEquals(token, WebhookSecret) = SABİT-ZAMAN gizli doğrulama (timing-attack kapalı), boş/yanlış 401.
+  · HealthController: yalnız liveness + setup durumu (machineName bilerek kaldırılmış).
+- SONUÇ: pas 5'te 0 bug. Kaynak DEĞİŞMEDİ → installer hâlâ `1C25FA7D`. 5 pas bug eğrisi: 2→2→1→1→0 = doygunluk; statik güvenlik çok sağlam.
+- KULLANICIYA: XSS/dosya-yükleme/yetkilendirme denetlendi, sorun yok. Statik denetim doygunluğa ulaştı; gerçek değer artık CANLI doğrulama.
+
+## 2026-06-25 (111) — CANLI BUG (kullanıcı VPS'te): site oluşturma Classic ASP (asp.dll) yokluğunda çöküyordu → ON-DEMAND kurulum
+- Kullanıcı `1C25FA7D`'yi VPS'e kurdu, site eklerken: "IIS web ve yönetim özellikleri hazırlanamadı" (sites.iis_install_required) +
+  detay "Classic ASP engine was not found: …asp.dll".
+- KÖK NEDEN: enable-iis-features.ps1 Classic ASP'yi (Web-Asp/IIS-ASP) HİÇ kurmuyordu → asp.dll yok. Site provisioning (auto/mixed
+  profili EnableClassicAsp=true) → EnsureClassicAspHandler asp.dll yoksa FIRLATIYOR → "auto" catch'i ASP hatasını kapsamıyor → site geri alınıyor.
+- DÜZELTME (kullanıcı talebi: "atlama, KUR"): (1) AspNetService.EnsureClassicAspEngineAsync — asp.dll yoksa IIS Classic ASP özelliğini
+  OTOMATİK kurar (Server: Install-WindowsFeature Web-Asp; Client: Enable-WindowsOptionalFeature IIS-ASP), sonra devam eder;
+  SetClassicAspAsync + EnableMixedHandlersAsync ASP etkinleştirmeden ÖNCE çağırır (panelin PHP'yi on-demand kurması gibi).
+  İLK denenen "zarif atla" yaklaşımı kullanıcı reddiyle GERİ ALINDI (skip değil install). (2) enable-iis-features.ps1 listesine
+  Web-Asp + IIS-ASP eklendi → taze kurulumda asp.dll baştan var.
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK. Installer SHA256: `5A34A31760CEC993819F2FAADAE658D72E2C8DC6F3F3E2361445EDD1062C8172` (49.32 MiB).
+- MEVCUT VPS hızlı çözüm: `Install-WindowsFeature Web-Asp -IncludeManagementTools` (admin) → asp.dll gelir → site tekrar denenir.
+  Ya da yeni build'i kur (update install enable-iis-features'ı Web-Asp ile yeniden çalıştırır).
+- DERS: bir runtime profili eksik IIS özelliğinde HARD-FAIL etmemeli; panel gerekli motoru (PHP gibi) on-demand kurmalı.
+
+## 2026-06-25 (112) — Plesk-parite: site↔veritabanı GERÇEK bağı + cascade silme (site silinince DB de gider)
+- Kullanıcı: "siteyi sildiğimde DB de silinsin, geriye site'la ilgili hiçbir şey kalmasın." Cascade ZATEN kapsamlıydı (mail/FTP/DNS/SSL/
+  proxy/kota/dosya) ama DB SADECE isim-tahminiyle eşleşiyordu (ResolveDatabasesAsync: DB adı == site adı) → farklı isimli DB (karsilastir) bağlanmıyordu.
+- EKLENEN: explicit site↔DB bağı. ISiteDatabaseLinkService + SiteDatabaseLinkService (config/site-databases.json, atomik UpdateAsync).
+  DatabaseService: CreateDatabaseAsync + ImportDatabaseAsync → SiteName verilirse LinkAsync; DeleteDatabaseAsync → UnlinkAsync (öksüz bağ kalmaz).
+  SiteCascadeDeletionService: ResolveDatabasesAsync artık isim-eşleşmesi ∪ explicit bağları siler; DeleteAsync sonunda RemoveSiteAsync.
+  GetPlanAsync (silme önizlemesi) bağlı DB'leri de gösterir. DTO: CreateDatabaseRequest.SiteName + ImportDatabaseRequest.SiteName.
+- Frontend: DatabasesView create + import formlarına "Siteye bağla" dropdown'u (sitesStore) + hint. databases.ts payload'larına siteName. DI kaydı.
+- TAM CASCADE: WebsiteWorkspaceView site silme artık `{ deleteDatabases:true, deleteFiles:true }` → site + bağlı DB'ler + DOSYALAR gider
+  (kullanıcı "geriye hiçbir şey kalmasın" dedi; eskiden deleteFiles geçilmiyordu, dosyalar kalıyordu). Onay mesajı (panel.sites.confirmDelete)
+  ne silineceğini açıkça yazar: DB/dosya/DNS/SSL/mail/FTP, geri alınamaz.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2210=2210. Installer SHA256:
+  `8301FA8F6F38A271130A488A207B5DB93E25FCEA6C826895603742BA21976707` (49.32 MiB).
+- KULLANICIYA: DB oluştururken/içe aktarırken "Siteye bağla" seç → site silince o DB + dosyalar + bağlı HER ŞEY cascade gider. İsim eşleşmesi de korunur (eski DB).
+
+## 2026-06-25 (113) — CANLI BUG: site silmede mail domaini "mail.operation_failed" (Stalwart delete domain reddi) → sağlamlaştırıldı
+- Kullanıcı ESKİ build'de site sildi → site gitti ama cascade uyardı: "Mail domaini (alioral.xyz): mail.operation_failed".
+- KÖK NEDEN: MailService.DeleteDomainAsync cascade'i YALNIZ hesapları (account) siliyordu; Stalwart ÜYESİ olan domaini silmeyi
+  reddeder → domainde grup/liste/öksüz üye kalınca son "delete domain --ids" patlıyordu. Hesap-silme sonucu da kontrol edilmiyordu.
+- FIX: (1) DeleteDomainAsync artık ["list","group","account"] TÜM üye tiplerini siler (QueryAsync bilinmeyen tipte [] döner=fırlatmaz,
+  güvenli) sonra domaini siler; account turunda başka domaindeki alias'lar da temizlenir. (2) SiteCascadeDeletionService.StepAsync
+  artık AppException.Details'i (gerçek Stalwart CLI çıktısı) uyarıya ekler → bundan sonra "mail.operation_failed" yerine GERÇEK sebep görünür.
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK. Installer SHA256: `BB6A648E2E44455C4DFD020B18709776848D2EC2F09B34111BD13D2453DF729F` (49.32 MiB).
+- MEVCUT DURUM: alioral.xyz mail domaini hâlâ Stalwart'ta (site silindi). Yeni build kurulunca Mail → domaini sil (artık temizlenir) ya da
+  sonraki cascade temizler. Hâlâ patlarsa uyarı artık GERÇEK Stalwart hatasını gösterir. Bu build önceki tüm düzeltmeleri de içerir (site↔DB, tam cascade, Classic ASP on-demand).
+
+## 2026-06-25 (114) — Site-altı "Veritabanları" (domaindb) sekmesi tam yöneticiye çevrildi (site altından DB ekle/sil)
+- Kullanıcı: "site seçip Web DB sekmesine basınca DB gözükmüyor, sadece arayüzler" + "oradan da DB ekle/sil olmalı".
+- DURUM: site altında İKİ sekme var → "Web DB" (webdb=WebDbView, sadece phpMyAdmin/Adminer ARAÇLARI) ve "Veritabanları"
+  (domaindb=SiteDatabasesView, siteye-bağlı DB'ler). Kullanıcı yanlış sekmeye (Web DB) basmış. AMA SiteDatabasesView de eksikti:
+  create siteye BAĞLAMIYORDU (siteName geçmiyordu) + SİL yoktu.
+- FIX (SiteDatabasesView): (1) createDatabase artık siteName geçiyor → site iş alanından açılan DB doğrudan siteye bağlanır.
+  (2) Her DB satırına admin-only "Sil" (deleteDatabase → DB + öksüz kullanıcı + site bağı, onaylı). phpMyAdmin-aç korundu. Liste
+  getSiteDeletionPlan.databases'ten (isim-eşleşme ∪ explicit bağ).
+- i18n: panel.siteDb.delete/deleting/deleted/confirmDelete. Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2214=2214.
+  Installer SHA256: `DF771F7A883DF294A749A014B79F2A85D52428CDE64205FCF7B07F71526B9F7B` (49.32 MiB).
+- KULLANICIYA: site → "Veritabanları" (SQL ikonu) sekmesi (Web DB DEĞİL) → DB ekle (siteye bağlı)/sil/phpMyAdmin. Gelişmiş kullanıcı
+  işlemleri (parola değiştir, ayrı kullanıcı, import) global "Veritabanları" bölümünde + phpMyAdmin'de.
+
+## 2026-06-25 (115) — Site-altı DB sekmesi BİRLEŞTİRİLDİ: "Web DB" (araçlar) → tek "Veritabanları" (DB yöneticisi); 3 görünüm tutarlı
+- Kullanıcı: "site detaylarında Veritabanları yok, sadece Web DB var; onu değiştir." KÖK NEDEN: per-site araç listeleri 3 YERDE:
+  WebsiteWorkspaceView.allTools (hem webdb=WebDbView-araçları HEM domaindb=SiteDatabasesView), SiteDetailView + SitesView kısayolları
+  (YALNIZ webdb). Yani çoğu yerde "Web DB" (sadece phpMyAdmin/Adminer KURULUM aracı) görünüyordu, gerçek DB yönetimi değil.
+- FIX (birleştirme): per-site "webdb" id'si artık DB YÖNETİCİSİ → SiteDatabasesView render eder, "Veritabanları" (SQL) etiketli.
+  WebsiteWorkspaceView: webdb→SiteDatabasesView (WebDbView render+import kaldırıldı), duplike "domaindb" tool çıkarıldı (render iki id'yi de
+  karşılar). SiteDetailView + SitesView kısayolları: webdb glyph=SQL + label=panel.sites.tools.domaindb. Üç görünümde TEK tutarlı "Veritabanları".
+  phpMyAdmin/Adminer KURULUMU global Veritabanları bölümünde (WebDbView) kalır; per-site'de her DB'nin "phpMyAdmin ↗" butonu var.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0 (unused WebDbView import temizlendi), i18n 2214=2214. Installer SHA256:
+  `7FC4C586333CD55D26E636D1D946FB6E626558A379986B11FCBAFCF5D742C14F` (49.32 MiB). Önceki TÜM düzeltmeleri içerir.
+- KULLANICIYA: site → "Veritabanları" (SQL ikonu) TEK sekme → DB ekle (siteye bağlı)/sil/phpMyAdmin. "Web DB" araç-kurulum sekmesi per-site'den kaldırıldı.
+
+## 2026-06-25 (116) — CANLI BUG: phpMyAdmin proxy'de görüntü kayıyor (panel CSP/nosniff sızıntısı) → dbtools muaf tutuldu
+- Kullanıcı: "phpMyAdmin açınca görüntü sola kayıyor, sol menünün altında kalıyor, F5+gizli sekmede de aynı" (deterministik, cache değil).
+- KÖK NEDEN: Program.cs global güvenlik-başlıkları middleware'i TÜM yanıtlara sıkı CSP (`script-src 'self'`, unsafe-inline YOK) +
+  `X-Content-Type-Options: nosniff` ekliyordu — proxy'lenen phpMyAdmin yanıtına DA. phpMyAdmin'in inline script'leri CSP'ye takılıyor →
+  layout/sol-menü-genişlik JS'i çalışmıyor → ana içerik margin-left:0 ile sabit sol menünün ALTINA kayıyor.
+- FIX: Program.cs'de 4 başlık ataması `if (!context.Request.Path.StartsWithSegments("/api/v1/dbtools"))` ile sarıldı → proxy'lenen DB
+  araçları YALNIZ kendi (phpMyAdmin'in) başlıklarını alır; panelin sıkı CSP/nosniff/X-Frame'i artık sızmıyor. dbtools EnableBuffering bloğu korundu.
+  (DbToolsProxyController zaten panel CSP+X-Frame'i upstream yanıttan ayıklıyordu; asıl sızıntı bu global middleware'di.)
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK (backend-only, frontend rebuild gerekmedi). Installer SHA256:
+  `1D64ECBEB7A4D6D3489783FEB7DDA6E5D8172F163052A704279833C020988879` (49.32 MiB). Önceki TÜM düzeltmeleri içerir (site↔DB, tam cascade, mail cascade, Classic ASP on-demand, birleşik DB sekmesi).
+- KULLANICIYA: yeni build'i kur → phpMyAdmin'i aç → layout artık düzgün (sol menü + sorgu sekmeleri normal). Hâlâ kayarsa tarayıcı cache'i için Ctrl+F5.
+
+## 2026-06-25 (117) — phpMyAdmin layout HÂLÂ kayıyordu → (116) CSP teşhisi EKSİKTİ; KALICI çözüm: proxy HTML'ine <style> enjekte
+- Kullanıcı (116 build'i kurdu): "yine aynı, yaptığın işe yaramadı" + ekran görüntüsü (aaa.png): CSS/ikonlar/renkler DOĞRU ama üst
+  sekme çubuğu (Yapı/SQL/Ara) sol menünün ALTINDA; body margin-left uygulanmamış. Yani CSP'yi muaf tutmak (116) TEK BAŞINA çözmedi.
+- KÖK NEDEN (kaynaktan doğrulandı — phpMyAdmin QA_5_2 js/src/navigation.js): içerik margin'i `ResizeHandler.setWidth` →
+  `$('body').css('margin-left', pos)` ile JS'ten gelir. Document-ready'de (non-mobile) `callbackSuccessGetConfigValue(initialResizeValue)`
+  SENKRON çağrılır (data-config-navigation-width=240) → JS çalışırsa margin AJAX'sız anında uygulanır. Margin'in 0 kalması =
+  phpMyAdmin'in init JS'i (inline `AJAX.fireOnload` bootstrap'ı, registerOnload callback'lerini ateşler) HİÇ çalışmıyor. CSS çalışıp
+  script çalışmaması = inline bootstrap bloklanmış. CSP muafiyeti (116) yardımcı ama deploy/cache/ikinci-CSP gibi nedenlerle yetmedi.
+- KALICI ÇÖZÜM (kök-nedenden BAĞIMSIZ, DbToolsProxyController): proxy'lenen `text/html` yanıtına `</head>` öncesi küçük bir <style>
+  enjekte et: `body:has(#pma_navigation){margin-left:240px}` (+#pma_console). MANTIK: inline <style> HER CSP altında İZİNLİ (script
+  değil) → CSP/build/cache durumundan bağımsız çalışır. `:has(#pma_navigation)` → yalnız nav'lı TAM sayfa (login/hata/AJAX-parçası
+  değil; bunlarda </head> yok zaten = enjekte edilmez). Specificity (1,0,1) > `body{margin:0}`; JS çalışırsa kendi INLINE margin'i
+  (daha yüksek öncelik) ezer → çift-margin/çakışma yok, resize bozulmaz. Ayrıca upstream'e Accept-Encoding ATLANIR (identity) →
+  gövde güvenle string'e çevrilir, gzip/Content-Length uyumsuzluğu olmaz. 16MB üstü/HEAD/non-html → dokunulmaz, stream. try/catch → hata olursa orijinali aynen geçer.
+- KAPSAM: değişiklik YALNIZ /api/v1/dbtools proxy'sinde (admin-only); panelin SPA/API/başka hiçbir yerine dokunmaz. (116) CSP muafiyeti
+  KORUNDU (güvenli + doğru: panel SPA CSP'si proxy'lenen 3. taraf PHP app'e uygulanmamalı). Build 0/0, test 44/44(+2), ISCC OK.
+  Installer SHA256: `C25F815932E7FF0203705FED9A6300C109DD34D4FC109911131B5D5D9F43A03D` (49.32 MiB).
+- KULLANICIYA: yeni build kur → phpMyAdmin layout artık JS çalışsa da çalışmasa da DÜZGÜN. Eğer tablo tıklama/SQL konsolu gibi
+  ETKİLEŞİMLİ JS de bozuksa (margin değil), F12→Console hatası iste → o zaman init JS'inin neden ölü olduğu (kalan CSP/nonce) kovalanır.
+
+## 2026-06-25 (118) — CANLI: site oluşturmada mail+ftp hatası düzeltildi; phpMyAdmin !important geri alındı; DB sekmesine yükleniyor
+- Kullanıcı (canlı): site oluştu ama "mail (alioral.xyz): mail.operation_failed • ftp (alioral_xyz_ftp): ftp.site_configuration_failed". "düzelt, atlama yapma".
+- FTP KÖK NEDEN: IIS FTP rolü VPS'te kurulu değil → New-WebFtpSite + ftpServer config bölümleri yok → EnsureFtpInfrastructureAsync
+  script'i patlıyor. FIX: FtpService.EnsureFtpFeatureInstalledAsync (Classic ASP/PHP gibi ON-DEMAND): FTPSVC servisi yoksa Server'da
+  Install-WindowsFeature Web-Ftp-Server, Client'ta Enable-WindowsOptionalFeature IIS-FTPServer -All; doğrulama FTPSVC; kurulamazsa net
+  ftp.feature_install_failed. EnsureFtpInfrastructureAsync EN BAŞINDA çağrılıyor. (enable-iis-features.ps1 zaten FTP içeriyor ama install-anı best-effort = VPS'te tutmamıştı.)
+- MAIL KÖK NEDEN: alioral.xyz domaini Stalwart'ta ZATEN var (önceki testten; site silinince mail domaini kalmıştı) → "create domain"
+  reddediyor → mail.operation_failed. FIX: MailService.CreateDomainAsync İDEMPOTENT — FindIdAsync ile domain varsa workspace dönüp başarı
+  say (Stalwart kurulu/yapılandırılı değilse FindIdAsync null → MutateAsync gerçek not_installed/not_configured fırlatır = maskelenmez).
+- SitesController: alt-kaynak uyarıları artık DescribeProvisionError → AppException.Details (gerçek altyapı/CLI sebebi, tek satır, ≤300) anahtarla gösterilir; "ham anahtar" yerine asıl neden görünür.
+- phpMyAdmin layout: kullanıcı "düzeldi" dedi → (117) eklediğim !important + nav-genişlik sabitleme GEREKSİZDİ (resize/daralt devre dışı
+  bırakıyordu) → GERİ ALINDI; sade enjeksiyon (JS çalışırsa inline margin ezer, nav resize korunur) kaldı. Kullanıcı "arada çıkıyor"
+  DEMEDİ; "başka yerlerden böyle sorunlar çıkabilir, KONTROL ET" dedi (proaktif denetim isteği).
+- UX: SiteDatabasesView veri gelmeden boş kalıyordu → "panel.siteDb.loading" göstergesi (loading && !databases.length). Kullanıcı bunu
+  YÜKLEME BEKLEYEN HER YERE istedi (mail dahil) → görev #25 (devam: tüm async-fetch view taraması).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2216=2216, resources 258=258, ISCC OK. Installer SHA256:
+  `CB5ECFC8768880A77D8DA8D53EF9A405109510C71D3C9ADB9FF2C1ED13FCE256` (49.32 MiB).
+- AÇIK GÖREVLER (kullanıcı bu oturumda art arda istedi): #25 yükleniyor-her-yere · #26 site izolasyonu (open_basedir+ACL+DB grant, Plesk gibi)
+  · #27 "pas geç/atlama" deseni denetimi · #28 phpredis kartı gerçek durumu göstersin · #29 Plesk-benzeri bayi/müşteri UI'si YOK (sadece
+  backend servicePlans+customer scopes var) = büyük eksik özellik.
+
+## 2026-06-25 (119) — Site izolasyonu (Plesk gibi) sertleştirildi + phpredis kartı gerçek durumu gösteriyor
+- Kullanıcı: "bir site diğer sitelerin hiçbir şeyini göremesin, DB'den en ufak dosyasına kadar."
+- DOSYA İZOLASYONU (KÖK NEDEN): WafService.ApplyFolderAclAsync yalnız `icacls /grant` yapıyordu → site kökü üst klasörden
+  IIS_IUSRS/Users GENİŞ okumasını MİRAS alıyordu → diğer sitelerin app pool kimlikleri (hepsi IIS_IUSRS üyesi) bu siteyi OKUYABİLİYORDU.
+  FIX (Plesk modeli): (1) anonymousAuthentication.userName='' → statik dosyalar IUSR DEĞİL app pool kimliğiyle sunulur (tek kimlik).
+  (2) icacls `/inheritance:r /grant:r` ile kök kalıtımı KIR + yalnız o sitenin app pool (Modify) + SYSTEM(*S-1-5-18) + Administrators
+  (*S-1-5-32-544) (SID=locale bağımsız). /T ve /reset YOK → FTP kullanıcısı açık grant'i + çocuk kalıtımı korunur. Anon kimlik
+  ayarlanamazsa icacls'e GEÇİLMEZ (exit 2) → statik kırılmasın diye fail-safe. Panel servisi LocalSystem (=SYSTEM) → erişimi korunur.
+- DB İZOLASYONU: ZATEN DOĞRU — MySqlDatabaseProvider site DB kullanıcısına `GRANT ... ON dbname.*` (root/`*.*` değil); root parolası
+  sitelere verilmez; MariaDB 127.0.0.1. open_basedir per-site .user.ini (B4) defense-in-depth olarak duruyor.
+- ÖNEMLİ: yeni sertleştirme YENİ sitelerde otomatik (FolderAclApplied=false). MEVCUT sitelerde (ör. alioral.xyz, zaten applied) otomatik
+  RETRO uygulanmaz (çalışan siteyi test etmeden bozmamak için) → Güvenlik sekmesinden "klasör ACL uygula" ile elle tetiklenir.
+- phpredis (#28): DbToolSettingsView kartı hep "Etkinleştir" gösteriyordu. FIX: GetGlobalPhpSettingsAsync `php -m` ile RedisEnabled
+  döndürür (SitePhpSettingsDto.RedisEnabled); UI "Etkin/Devre dışı" rozeti + etkinse buton gizli. i18n redisOn/redisOff.
+- MailView ZATEN spinner'lı yükleme göstergesine sahip → #25 "her yere" aslında EKSİK olan belirli view'leri bulup eklemek (SiteDatabasesView yapıldı).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2218=2218, resources 258=258, ISCC OK. Installer SHA256:
+  `61EDED5D16D63ECAB9F5E07587A8A9FFF32861CB74CD7A7FDFB86B8DC53E44F7` (49.32 MiB).
+- AÇIK: #25 yükleme-göstergesi sweep (eksik view'ler) · #27 "pas geç/atlama" deseni denetimi · #29 bayi/müşteri UI (büyük, henüz YOK).
+
+## 2026-06-25 (120) — Bayi/müşteri yönetimi ZATEN VARDI (Ayarlar>Kullanıcılar) → Plesk gibi üst-düzey sekme; DB yükleme göstergeleri; pas-geç denetimi
+- Kullanıcı: "Plesk gibi bayi (kendi müşterisini açan) + müşteri ekleme alanı nerede, bitti mi?" + "hepsini bitir".
+- BULGU (önceki "UI yok" dememi DÜZELTİR): hiyerarşi backend'de TAM (roller Administrator/Operator/Reseller/Customer; CreateUserRequest
+  Role+OwnerId+AssignedSites+kotalar; UserManagementService: bayi yalnız KENDI müşterisini açar/günceller, müşteriye owner=kendisi zorlanır;
+  GetUsers reseller-scoped; askıya alma site stop/start; CustomerScopeService). UI de VARDI: SetupWizardView Ayarlar>"Kullanıcılar/Müşteriler"
+  sekmesi (servis planları + kullanıcı oluştur [rol/owner/atanmış site/kota/hoş geldin] + liste + loginAs). Kullanıcı bulamamıştı çünkü
+  Ayarlar altında gömülü; Plesk'te üst-düzey.
+- FIX (#29, keşfedilebilirlik): SetupWizardView dashboardSections'a üst-düzey "accounts" sekmesi (admin label "Müşteriler & Bayiler",
+  bayi "Müşteriler"); handleNavigation('accounts') → activeSection='settings'+settingsTab='users' (mevcut ekranı açar, kod taşıma YOK = düşük risk).
+  Reseller filtresine accounts eklendi. i18n panel.navigation.accounts/accountsDesc.
+- #25 (yükleme göstergesi): MailView ZATEN spinner'lıymış. DB-alanı düzeltildi — SiteDatabasesView (yapılmıştı) + MyDatabasesView +
+  DatabasesView "yüklenirken erken BOŞ mesajı" → loading guard + genel `panel.common.loading` (Yükleniyor…/Loading…). Kalan admin-araç view'leri düşük öncelik.
+- #27 (pas-geç denetimi): ciddi sessiz-atlama provisioning'leri (Classic ASP, FTP eksik özellik) ZATEN zorunlu-kuruluma çevrildi.
+  Infra'da yalnız 3 boş catch: FtpService (firewall/icacls best-effort), MailEnableMailService (Stalwart kullanılıyor, fallback),
+  ComponentBootstrapper (try-validate→false probe). Hepsi meşru; yeni provisioning sessiz-atlaması YOK.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2221=2221, ISCC OK. Installer SHA256:
+  `704C253EF1900E4C10624D2AD98436CA73A79AEAAD56B33B9A6BB6910DA2B516` (49.32 MiB). Bu oturumun TÜM düzeltmelerini içerir (mail/ftp, izolasyon, phpredis, hesap-sekmesi, yükleme).
+- KULLANICIYA: sol menüde "Müşteriler & Bayiler" → bayi/müşteri/plan oluştur. Bayi girince yalnız kendi müşterilerini görür/açar.
+
+## 2026-06-25 (121) — Yükleme göstergesi TÜM data view'lerine yayıldı + "Plan ekle" formu profesyonelleştirildi (etiketler)
+- Kullanıcı: "hepsine yap demiştim; veritabanı ön bellek servislerinde de (CacheView) yüklenirken gösterge yok" + "plan ekle üstündeki
+  etiketsiz textbox'lar ne için, profesyonel yap".
+- YÜKLEME SWEEP (#25 tamam): genel `panel.common.loading` (Yükleniyor…/Loading…) anahtarı + şu view'lere "yüklenirken erken BOŞ mesajı
+  yerine Yükleniyor" guard'ı: CacheView (status null), SiteDatabasesView, MyDatabasesView, DatabasesView (DB+kullanıcı listeleri,
+  loadingEngine), CronView, WebDbView, LogsView, PhpView (kurulu+mevcut), SecurityView (firewall+banlı IP; loading ref eklendi),
+  AppStoreView (loading ref eklendi), DockerView (workspace null), WordPressToolkitView (wp null), BackupView (browse). MailView ZATEN
+  spinner'lıydı; DnsView (zoneStatus) + FtpView (sitesStore.loading) kendi göstergesine sahip → dokunulmadı.
+- PLAN FORMU (profesyonel): SetupWizardView Ayarlar>Kullanıcılar>Servis Planları formu çıplak placeholder-input'lardan etiketli
+  stacked-field'lere çevrildi (Plan adı + Maks site/disk/DB/posta + "0 = sınırsız" ipuçları); .plan-form CSS güncellendi; i18n panel.plans.namePlaceholder.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2222=2222, ISCC OK. Installer SHA256:
+  `9A7D937588388F9534E187AAD43B42B74C35EF9150BF6476B23B4DF2458133B9` (49.32 MiB). Bu oturumun TÜM düzeltmelerini içerir.
+- KALAN (düşük öncelik): mevcut sitelere izolasyon ACL'ini Güvenlik sekmesinden elle uygulamak (yeni siteler otomatik).
+
+## 2026-06-25 (122) — İzolasyon ARTIK OTOMATİK (Plesk gibi): mevcut sitelere açılışta tek seferlik uygulanır; manuel adım kaldırıldı
+- Kullanıcı: "mevcut site için elle 'Klasör ACL uygula' — bu ne, Plesk'te böyle bir şey var mı?" → HAYIR, Plesk izolasyonu otomatik
+  kurar/korur, kullanıcı elle tetiklemez. (119)'daki "elle uygula" önerim aşırı-temkinliydi (tek çalışan siteyi test etmeden bozmama).
+- FIX: YENİ SiteIsolationUpgradeService (Infrastructure/Iis, BackgroundService — AutomationWorker deseni). Açılıştan ~60sn sonra,
+  config/isolation-upgrade.json marker'ı CurrentVersion(2)'den küçükse: IIisSiteService.GetSitesAsync ile TÜM siteleri gez, panelin
+  kendi yardımcıları (AdaPanel*) + "Default Web Site" hariç her tenant sitesine WafService.ApplyFolderAclAsync uygula (idempotent +
+  fail-safe: anon=app pool ayarlanamazsa ACL'e dokunmaz → statik kırılmaz). Marker yazılır → sürüm başına bir kez. Best-effort:
+  tek site hatası diğerlerini/başlatmayı etkilemez (scope içinden IIisSiteService/IWafService/JsonFileStore çözülür).
+- Kayıt: ServiceCollectionExtensions AddHostedService<Iis.SiteIsolationUpgradeService> (AutomationWorker'dan sonra). NOT: bu icacls
+  SİTE köklerine uygulanır (panel data/db'ye DEĞİL) ve /T YOK → (86)'daki "açık db'ye icacls /T" yarışı burada GEÇERSİZ, güvenli.
+- SONUÇ: yeni build kurulunca mevcut alioral.xyz dahil tüm siteler ~1dk içinde OTOMATİK izole olur; kullanıcı hiçbir şey yapmaz.
+  Sürüm artışında (CurrentVersion) hepsi yeniden işlenir. Güvenlik sekmesindeki elle "ACL uygula" yine durur (manuel re-apply isteyene).
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK. Installer SHA256:
+  `A6EF1C3FA92605701564A7FBABC0350D3755EE010D333013349F0DC042C919D0` (49.32 MiB). Bu oturumun TÜM düzeltmelerini içerir.
+
+## 2026-06-25 (123) — (122) GERİ ALINDI: retroaktif izolasyon-upgrade servisi kaldırıldı (kullanıcı isteği); yeni-site izolasyonu DEFAULT kalır
+- Kullanıcı: "mevcut sitelere açılışta otomatik uygulamaya gerek yok, siteyi silerim; sistemi boşuna yormasın, default yap."
+- KALDIRILDI: SiteIsolationUpgradeService.cs silindi + ServiceCollectionExtensions AddHostedService<Iis.SiteIsolationUpgradeService> kaydı geri alındı.
+- KORUNDU (default davranış): YENİ siteler oluşturulurken izolasyon ZATEN otomatik (SiteDefaultsService → WafService.ApplyFolderAclAsync:
+  ACL kalıtım kırma + anon=app pool, fail-safe). Mevcut siteye dokunan retroaktif arka plan taraması artık YOK → sistem yorulmaz.
+  İsteyen Güvenlik sekmesinden tek tek "Klasör ACL uygula" yapabilir (elle yol duruyor).
+- Doğrulama: build 0/0, test 44/44(+2), ISCC OK. Installer SHA256:
+  `9B0C99A911397C3D3A7AA3FB49F28021AC6A6C0291E90409EB86A5225EEAE99D` (49.32 MiB).
+
+## 2026-06-26 (124) — Plesk parite cilası: izlemeye zaman-içi TREND grafikleri (CPU/RAM/ağ); servis-sağlık + göç sihirbazı zaten vardı
+- Kullanıcı: "Plesk parite cilası (derin izleme, göç sihirbazı vb.) yap."
+- DURUM TESPİTİ: MonitoringView anlık görüntüydü (CPU/RAM/disk/ağ ring+tablo, geçmiş yok). ServerHealthView ZATEN servis durumu
+  (çalışıyor/durdu/kurulu-değil + restart) = Plesk "Servisler" paritesi. MigrationView ZATEN tam sihirbaz (Plesk host/port/API-key
+  KEŞFİ → domain seç → dosya/DB/mail çek). Yani en net eksik: izlemede zaman-içi trend.
+- YAPILDI (derin izleme): MonitoringView'e istemci-tarafı rolling history (overview parent'ça 15sn'de bir tazelenir; son ~40 örnek≈10dk)
+  + küçük SVG sparkline'lar: CPU ring altı, RAM ring altı, ve ağ bölümünde indir/yükle overlay trend grafiği (vector-effect
+  non-scaling-stroke; netScale max'a göre otomatik ölçek). Sunucu time-series GEREKMEZ. i18n panel.monitor.networkTrend/trend10m.
+- YAN: ServerHealthView'de de yükleme-boşluğu vardı (loaded'a kadar boş) → "Yükleniyor" guard'ı eklendi (sweep tutarlılığı).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2224=2224, ISCC OK. Installer SHA256:
+  `CF0CA26B82055BAF793D3554C022684F85A01D6656426E47B9364737D55519B2` (49.32 MiB).
+- KALAN/AÇIK: göç sihirbazı zaten gelişmiş → somut "iyileştirme" için kullanıcıdan spesifik istek beklenmeli (tahminle özellik
+  eklenmedi). Trend grafikleri şimdilik istemci-oturumu (sayfa açıkken birikir); kalıcı geçmiş istenirse sunucu time-series gerekir.
+
+## 2026-06-26 (125) — Göç sihirbazı 4 iyileştirme: cPanel/WHM kaynağı + göç-öncesi doğrulama + toplu göç + canlı günlük
+- Kullanıcı: önerdiğim 4 göç iyileştirmesinin "hepsini yap".
+- (1) cPanel/WHM KAYNAĞI: SiteMigrationService.DiscoverCpanelAsync (WHM listaccts: GET :2087/json-api/listaccts?api.version=1,
+  Authorization: whm user:TOKEN, self-signed atlanır) → PleskDiscoverResultDto döner (domain=acct.domain, hostingType=acct.user).
+  Yeni DTO CpanelDiscoverRequest. Controller POST /migration/cpanel/discover. Frontend: keşif bölümünde Plesk/cPanel toggle (segmented-tabs).
+- (2) GÖÇ-ÖNCESİ DOĞRULAMA: ValidateMigrationAsync(MigrateSiteRequest) → site adı uygunluğu (oluşturulacaksa çakışma yok/hedefse var)
+  + dosya & DB kaynağı TCP erişilebilirliği (TcpClient 6sn timeout, kimlik DOĞRULAMAZ = ucuz). MigrationValidationResultDto{AllPassed,
+  Checks[]}. Controller POST /migration/validate. Frontend "Doğrula" butonu + ön-kontrol listesi (✓/✗).
+- (3) TOPLU GÖÇ: keşfedilen domain'lere checkbox + "Seçilenleri göç et ({count})". Frontend SIRAYLA her domain için mevcut
+  /migration/site'ı çağırır (createSite+pullFiles; DB atlanır=hesap başına kimlik farklı). Uzak yol şablonu {domain}/{user} ile
+  genişler (Plesk: /var/www/vhosts/{domain}/httpdocs, cPanel: /home/{user}/public_html). Dosya kimliği form "Dosya kaynağı"ndan.
+- (4) CANLI GÜNLÜK: toplu modda her domain bittikçe bulkLog'a eklenir → "Toplu göç günlüğü" panelinde domain+adımlar canlı akar
+  (backend SSE gerektirmeden, frontend sıralı fetch ile). Tekli göçte de adım sonuçları gösterilir (zaten vardı).
+- Backend yalnız EK (mevcut MigrateSiteAsync/DiscoverPleskAsync DEĞİŞMEDİ). Doğrulama: build 0/0, test 44/44(+2), typecheck 0,
+  i18n 2253=2253, ISCC OK. Installer SHA256: `3013F1FDAA9120AC629C83BDE01B564362428F5A5C579096C61A3AC608C24ECB` (49.33 MiB).
+
+## 2026-06-26 (126) — Plesk parite: sağlık uyarılarına RAM eşiği + servis-düştü eklendi (disk+sertifika ZATEN vardı)
+- "devam et" → Plesk "Health Monitoring" paritesi. BULGU: AutomationService.RunAlertChecksAsync ZATEN var (disk doluluk + sertifika
+  bitişi → e-posta/webhook, 24s cooldown, AlertsEnabled). Eksikti: RAM eşiği + servis-düştü. Mükerrer yapmadan GENİŞLETİLDİ.
+- EKLENEN: (1) RAM eşiği — overview.MemoryUsagePercent >= MemoryUsageThresholdPercent (varsayılan 90, clamp 50-99) → "RAM %X dolu" uyarısı.
+  (2) Servis-düştü — IHealthService.GetHealthAsync (AutomationService'e IHealthService inject edildi) ile Status=="Stopped" olan kurulu
+  servisler için "{Label} servisi DURMUS" uyarısı (key service:{name}); ServiceDownAlertsEnabled (varsayılan açık). CPU bilerek EKLENMEDİ
+  (tek-örnek spike'ta gürültülü olur; RAM daha kararlı/anlamlı).
+- DTO/state: AutomationSettingsDto + UpdateAutomationSettingsRequest + AutomationStateRecord + ToStatus + UpdateSettingsAsync'e
+  MemoryUsageThresholdPercent + ServiceDownAlertsEnabled. Frontend AutomationView uyarı bölümüne RAM eşiği input + servis-düştü toggle;
+  api/automation.ts AutomationSettings'e iki alan (save {...form} ile gider, applyStatus Object.assign ile yüklenir). i18n memoryThreshold/serviceDownAlerts.
+- Cooldown/teslimat (e-posta+webhook, 24s, key bazlı) mevcut altyapıyı kullanır. Uyarı e-postaları Türkçe (mevcut disk/cert ile tutarlı).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2255=2255, ISCC OK. Installer SHA256:
+  `A3F011DC92CC8EBD46C3C27C6EDA9673518963DB055F26B5E4FB83A36E72151F` (49.33 MiB).
+- AÇMA: Ayarlar/Otomasyon → "Uyarılar"ı aç + e-posta (Bildirimler) yapılandır → arka plan worker (dakikada bir) eşik/servis kontrol eder.
+
+## 2026-06-26 (127) — Plesk parite: sunucu-geneli DNS ŞABLONU (yapılandırılabilir); DNSSEC dürüstçe ertelendi
+- Kullanıcı: "DNSSEC / DNS şablonları".
+- DNS ŞABLONU (yapıldı): DnsService.CreateDefaultRecords sabit kodluydu → yapılandırılabilir şablona çevrildi (Plesk modeli). YENİ:
+  config/dns-template.json + DnsTemplateDto/Record + UpdateDnsTemplateRequest. GetTemplateAsync (kayıtlı yoksa BuiltInTemplate =
+  mevcut set, yer tutuculu). UpdateTemplateAsync (tip beyaz-listesi A/AAAA/CNAME/MX/TXT/NS/SRV/CAA, boş host/value atlanır, kaydet).
+  BuildDefaultRecordsAsync: şablonu yer tutucularla genişletir ({domain}/{ip}/{ns1}/{ns2}), boş value (ör. IP yok) atlar, hepsi
+  atlanırsa yerleşiğe düşer (boş zone olmaz). 4 çağrı yeri (UpdateZone/ResetDefaults/GetOrCreate merge+yeni) async BuildDefaultRecordsAsync'e çevrildi.
+  Controller: YENİ DnsTemplateController (api/v1/dns/template GET/PUT, admin-only). Frontend: YENİ DnsTemplateView (tip/host/değer/TTL
+  satırları, ekle/sil/kaydet, yer-tutucu ipucu) → ServerToolsView switcher'a "DNS Şablonu" (DN) sekmesi. api/dns.ts getDnsTemplate/updateDnsTemplate. i18n panel.dnsTemplate.*.
+- DNSSEC (ERTELENDİ, dürüst): Windows DNS Server zone-imzalama (Invoke-DnsServerZoneSign) + registrar'a DS kaydı (manuel) + anahtar
+  yönetimi gerektiren büyük/ortam-bağımlı iş; JSON-zone modeli yerel imzalamaz, canlı test edilemez → "kırılgan çözüm icat etme"
+  ilkesiyle (adapanel-copy-plesk) yarım yapılmadı. İstenirse Windows-DNS-destekli per-zone DNSSEC aç/kapa + DS gösterimi ayrı iş olarak yapılır.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2267=2267, ISCC OK. Installer SHA256:
+  `63F08DB4EC93EC33FCE02D9DB7CF493E1399F3497B10F85E4B7396B6524968C2` (49.33 MiB).
+- YER: Sunucu Araçları → "DNS Şablonu" (admin). Düzenle+kaydet → sonraki yeni siteler bu şablonla seed.
+
+## 2026-06-26 (128) — DNSSEC Plesk-on-Windows yöntemiyle eklendi (Microsoft DNS zone-imzalama + registrar DS)
+- Kullanıcı: "pleskte nasılsa aynı şekilde yap DNS'i" → Plesk-on-Windows DNSSEC için MS DNS Server zone-imzalama kullanır. AdaPanel
+  zaten zone'ları Windows DNS'e yayınlıyor → aynı yol.
+- BACKEND: IDnsService.SetDnssecAsync(siteName, enabled). DnsService.SetDnssecAsync: Windows DNS yoksa dns.dnssec_requires_windows;
+  varsa önce TrySyncWindowsDns (bölge gerekir) sonra enabled? Invoke-DnsServerZoneSign -SignWithDefault -Force : Invoke-DnsServerZoneUnsign
+  -Force. ToDtoAsync artık ReadDnssecAsync ile (zone Windows'ta varsa) IsSigned + DS okur: Get-DnsServerZone.IsSigned +
+  Export-DnsServerDnsSecPublicKey -DigestType Sha256 -PassThru → DS satırları (KeyTag/alg/digestType/digest); property yoksa guard'la
+  atlar (best-effort, DS alınamazsa imza durumu yine doğru). SiteDnsZoneDto'ya IsDnssecSigned + DnssecDsRecords[]. DTO SetDnssecRequest.
+  Controller DnsController POST /sites/{site}/dns/dnssec (admin-only).
+- FRONTEND: DnsView "Zone ayarları" sekmesine DNSSEC kartı — İmzalı/İmzasız rozeti, aç/kapat butonu (Windows DNS yoksa uyarı),
+  imzalıyken DS kayıtları <pre> (registrar'a yapıştır) + ipuçları. api/dns.ts setDnssec + DnsZone'a iki alan. i18n panel.dns.dnssec* + dns.dnssec_*.
+- DÜRÜSTLÜK: enable/disable/status SAĞLAM (belgelenmiş cmdlet'ler); DS gösterimi best-effort (Export property adları sürüm-bağımlı →
+  guard + "DS otomatik alınamadı, Windows DNS Yöneticisi'nden bak" ipucu). Canlı test edilemedi (Windows DNS Server gerek) ama yöntem belgelidir.
+- DNS şablonu (entry 127) + DNSSEC birlikte = DNS artık Plesk benzeri tam. Doğrulama: build 0/0, test 44/44(+2), typecheck 0,
+  i18n 2283=2283, ISCC OK. Installer SHA256: `0E3650CB724E3310AEBC968C00B53378F04D79077F9BCECE07FF5B4E67A40254` (49.34 MiB).
+- YER: site → DNS → "Zone ayarları" → DNSSEC. (Windows DNS Server kurulu olmalı; yoksa kart "önce Windows DNS'i kur" der.)
+
+## 2026-06-26 (129) — Kalıcı izleme geçmişi: trend grafikleri sunucu-örneklemeli (sayfa yenilense de dolu, ~24s)
+- "devam et" → (124)'teki istemci-tarafı trend sparkline'ları sayfa yenileyince sıfırlanıyordu. Plesk geçmiş grafikleri gibi KALICI yapıldı.
+- BACKEND: SystemMonitoringService (singleton) bellek-içi halka (LinkedList, cap 1440 = ~24s @1/dk) + RecordSampleAsync (overview'dan
+  CPU/RAM + ağ down/up topla → halkaya ekle) + GetHistoryAsync. ISystemMonitoringService'e iki metot. AutomationService.RunDueJobsAsync
+  her turda (dakikada bir) RecordSampleAsync çağırır (best-effort try/catch). SystemController GET /system/history. YENİ SystemHistorySampleDto.
+- FRONTEND: stores/system.ts history[] + fetchHistory(). MonitoringView artık istemci-biriktirme YERİNE systemStore.history'den besleniyor:
+  onMounted fetchHistory + 60sn interval (onUnmounted temizler); cpu/mem/ağ sparkline'ları geçmişten. trend10m etiketi "Son ~24 saat".
+- NOT: bellek-içi (sayfa yenileme/oturumlar arası DOLU; panel servisi yeniden başlarsa sıfırlanır, ~dakikalar içinde dolar). Dosya-kalıcılığı
+  istenirse JsonFileStore'a yazılır (şimdilik gereksiz I/O'dan kaçınıldı).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2283=2283, ISCC OK. Installer SHA256:
+  `274EA19FAE32866029E932B0465644C26E088D1201D785B24297640FD3347C1F` (49.34 MiB).
+
+## 2026-06-26 (130) — Plesk parite: off-site yedek "Bağlantıyı test et" (gerçek yedek almadan hedefi doğrula)
+- "devam et" → Plesk "remote storage test connection" eşdeğeri. Canlıya çıkmadan yedek güvenilirliği için kritik.
+- BACKEND: BackupService.TestRemoteTargetAsync(BackupRemoteTestRequest) → sabit-adlı küçük dosyayı GERÇEK yükleme yoluyla
+  (UploadToRemoteAsync, mevcut FTP/S3/WebDAV/HTTP dispatch + ResolveTarget) hedefe yazar = kimlik+bağlantı+yazma izni doğrulanır.
+  Fırlatmaz; {Success, Message(i18n key), Details} döner. "adapanel-connection-test.txt" üzerine yazılır (birikme yok). local → ağ testi yok.
+  AutomationService.TestRemoteBackupAsync: istek parolası boşsa kayıtlı korumalı parolayı çözer (kullanıcı kayıtlı hedefi tekrar parola
+  girmeden test eder) → backupService'e delege. Controller POST /automation/backup/remote/test (admin). YENİ DTO BackupRemoteTestRequest/ResultDto.
+- FRONTEND: AutomationView uzak-yedek bölümüne "Bağlantıyı test et" butonu (target!=local) + sonuç rozeti (ok/warn) + hata Details details/summary.
+  api/automation.ts testRemoteBackup. i18n panel.automation.remoteTest/Testing/TestOk + backup.remote_test.ok/local/failed.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2289=2289, ISCC OK. Installer SHA256:
+  `A8CB3BEE235AAA3B64AA148ADD81321C535449C2AEFD7329EC646F0C092A20A5` (49.34 MiB).
+- YER: Sunucu Araçları → Otomasyon → uzak yedek hedefi seç/gir → "Bağlantıyı test et" (parola boşsa kayıtlı kullanılır).
+
+## 2026-06-26 (131) — Plesk parite DENETİMİ: büyük özellikler ZATEN var; kullanıcı non-Plesk kaldırmayı reddetti
+- Kullanıcı: "Plesk'te varsa yap, olmayanı yapma" → sonra "gerçekten kullanılan önemli özellikleri ekle + bizde olup Plesk'te olmayanı kaldır".
+- DOĞRULANDI (zaten MEVCUT, YENİDEN YAPMA): mail kimlik doğrulama (DKIM/SPF/DMARC/PTR canlı tanılama + DNS uygula + rDNS, MailView
+  diagnostics-card + getMailDiagnostics/getMailDns/applyMailDns/checkRdns) · catch-all (MailView + i18n) · domain alias = IIS binding
+  ekle/çıkar (IIisSiteService.AddBindingAsync/RemoveBindingAsync, SiteDetailView add/remove binding UI) · Let's Encrypt (WinAcmeSslService +
+  IssueLetsEncryptRequest). MAIL KUYRUĞU yok (tek net eksik; ama Stalwart queue CLI riskli → yapılmadı).
+- KALDIRMA: kullanıcıya non-Plesk adaylar soruldu (Terminal [Plesk'te yok], Nginx [IIS panelinde artık], Önbellek/Redis-Memcached
+  [Plesk çekirdeğinde yok]) → kullanıcı "HİÇBİRİNİ KALDIRMA" seçti. Docker zaten Plesk'te eklenti olarak VAR → kaldırma adayı bile değil.
+  SONUÇ: hiçbir özellik kaldırılmadı (silme geri-dönüşü zor olduğu için ÖNCE onay alındı = doğru karar).
+- DURUM: AdaPanel büyük Plesk özelliklerinde PARİTEDE. Yeni "ekle" turlarında ÖNCE var-mı diye kaynağı kontrol et (mail-auth gibi 3 kez
+  "zaten var"a çarpıldı). Güncel installer (bu oturumun tüm eklemeleri): `A8CB3BEE235AAA3B64AA148ADD81321C535449C2AEFD7329EC646F0C092A20A5`.
+
+## 2026-06-26 (132) — Müşteri DB kotası profesyonelleştirildi: motorlar belirtildi + kullanılan/limit gösterimi (Plesk gibi)
+- Kullanıcı: "DB kotası hangi motorlar için geçerli (MySQL/MariaDB/PostgreSQL/MSSQL)? belirtmemişsin; müşteri panelinde o kısmı Plesk gibi profesyonel yap."
+- GERÇEK: AdaPanel 4 motoru destekler (MySql/MariaDb/PostgreSql/MsSql provider'ları). Kota dbOwnership.CountForOwnerAsync ile sahip
+  olunan TÜM DB'leri MOTORDAN BAĞIMSIZ sayar = 4 motorun TOPLAMI. UI bunu belirtmiyordu.
+- YAPILDI: (1) UserSummaryDto.DatabaseCount eklendi (müşterinin güncel DB sayısı, tüm motorlar toplamı). UserManagementService'e
+  IDatabaseOwnershipService inject; GetUsers/Update'te Customer için CountForOwnerAsync ile doldurulur (MapUser'a databaseCount param).
+  (2) Frontend: stores/auth.ts UserSummary'ye databaseCount. SetupWizardView kullanıcı listesinde "X / N DB" (disk gibi kullanılan/limit);
+  3 formda (plan + oluştur + düzenle) maxDatabases ipucu → "0 = sınırsız · tüm motorların TOPLAMI (MySQL, MariaDB, PostgreSQL, MSSQL)".
+  i18n panel.users.maxDatabasesHint + databasesShort.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2291=2291, ISCC OK. Installer SHA256:
+  `CAE9E01F3B75A0EB13D97F51F33A4CED73D37BE84D8C761A83491C4BC490343C` (49.34 MiB).
+- NOT: kota toplam-DB-sayısıdır (motor-başına ayrım YOK; Plesk de temel planda toplam sayar). İstenirse motor-başına izin (allowed engines) ayrı iş.
+
+## 2026-06-26 (133) — Servis Planları kartı profesyonelleştirildi (Plesk gibi: kart-listesi + temiz grid form)
+- Kullanıcı: "Servis Planları görüntü çok kötü, profesyonel yap, Plesk'teki işlevliğin aynısı olsun." (Ayarlar>Kullanıcılar>Servis Planları)
+- ESKİ: planlar tek satır (yalnız site+disk gösteriyordu); form flex-wrap'te sıkışık, her sayı alanının altında tekrar eden "0=sınırsız" ipuçları = çirkin.
+- YENİ (SetupWizardView): (1) plans-head: başlık + "Plan ekle" toggle butonu (showPlanForm). (2) plans-grid: her plan ARTIK KART —
+  ad + sil + 4 limitin TAMAMI (Site/Disk/DB/Posta kutusu) etiketli liste halinde (responsive auto-fill grid). (3) Form artık plan-form-grid:
+  ad tam-genişlik, 4 sayı alanı auto-fit hizalı, TEK birleşik ipucu (formHint: "0=sınırsız; DB kotası tüm motorların toplamı"), sağa-hizalı
+  Ekle butonu; "Plan ekle" ile açılır, eklenince kapanır. Plesk davranışı (liste-önce + ekle).
+- i18n: panel.plans.sitesLabel/diskLabel/databasesLabel/mailboxesLabel/formHint. Eski .plan-form/.plan-row CSS → yeni .plans-head/.plans-grid/.plan-card/.plan-limits/.plan-form-grid.
+- Frontend-only. Doğrulama: typecheck 0, i18n 2296=2296, build 0, ISCC OK. Installer SHA256:
+  `9CADF360205D7E1D42E64B95DBDD636B8BFAD2340E6EA44C71201C2FF1F91D90` (49.34 MiB).
+
+## 2026-06-26 (134) — KRİTİK eksik: müşteri panelinde site + veritabanı OLUŞTURMA yoktu → açıldı (kota+scope zaten hazırdı)
+- Kullanıcı (göz denetimi): "müşteri girince siteyi/DB'yi nasıl oluşturacak, o bölümler neden yok?" — gerçek işlevsel boşluk.
+- BULGU: backend müşteri için TAM hazırmış, sadece auth rolü dışlıyordu. SitesController EnsureSiteQuotaAsync (MaxSites) +
+  AssignSiteToActorAsync (yeni siteyi oluşturanın kapsamına ekler) + her per-site uç CustomerAccess.EnsureSiteAsync ile scoped (müşteri
+  yalnız kendi sitesi); ResellerDatabasesController MaxDatabases kotası + dbOwnership kaydı + sahibe-özel liste. WebsiteWorkspaceView
+  adminOnlyTools={store,webdb,cache,cron} → non-admin'de sunucu-araçları + per-site DB tab'ı (webdb=admin-only) GİZLİ = güvenli.
+- AÇILDI: SitesController + ResellerDatabasesController [Authorize] rollerine "Customer" eklendi (replace_all + ResellerDb class).
+  Frontend: render sites→(isAdmin||isReseller||isCustomer), database→MyDatabasesView (isReseller||isCustomer). Müşteri nav'ına 'sites'+'database'
+  eklendi (yedek Dosyalar'dan sonra, sağlam index). Müşteri landing 'files'→'sites' (web hub). Import-existing-sites Admin-only KALDI.
+- GÜVENLİK: müşteri YALNIZ kendi sitelerini/DB'lerini görür-yönetir-oluşturur (kota dahilinde); başka müşteriye atama/sunucu-aracı YOK
+  (EnsureSiteAsync + adminOnlyTools). Site-DB binding per-site tab admin-only olduğundan müşteri DB'yi global "Veritabanları" (MyDatabasesView, scoped) sekmesinden açar.
+- AYRICA (133 öncesi denetim): kullanıcı-oluştur+düzenle formlarındaki kota ipuçları (her alanda ayrı, DB'ninki uzun=eşitsiz) → plan
+  formundaki gibi TEK birleşik ipuca (panel.plans.formHint, .quota-hint grid 1/-1) çevrildi (tutarlılık).
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2296=2296, ISCC OK. Installer SHA256:
+  `F425F74652A0A0D862ACBF10D43B9AAAFB1E5F4348D290F99D88A4C92088C02E` (49.34 MiB).
+- KULLANICIYA: müşteri girince sol menüde "Web Siteleri" (oluştur/yönet, kota) + "Veritabanları" (oluştur/sil, kota) var artık. Canlı test et.
+
+## 2026-06-26 (135) — Bayi+müşteri denetimi: 4 gerçek bug düzeltildi (create-customer formu, bayi-kendi-siteleri, site-oluştur butonu, yol-güvenliği)
+- Kullanıcı: "bayi tarafını da kontrol et" + "müşteri girince Web Siteleri var ama içinde SİTE OLUŞTUR butonu YOK, adam akıllı yap."
+- BUG1 (bayi create-customer formu): createUserForm.role varsayılan "Operator"; Customer-özel alanlar (atanmış site+kotalar+plan)
+  `role==='Customer'` ile gizli; rol seçici admin-only → BAYİ müşteri açarken kota/site alanlarını GÖREMİYORDU. createUser reset'i
+  rolü "Operator"a sıfırlıyordu (ilk oluşturma sonrası tekrar gizleniyordu). FIX: reset rolü `isReseller ? "Customer" : "Operator"`. (watch zaten immediate.)
+- BUG2 (bayi kendi sitelerini göremez): CustomerScopeService.GetResellerSitesAsync YALNIZ müşterilerin sitelerini birleştiriyordu;
+  bayinin KENDİ doğrudan açtığı site (AssignSiteToActor bayinin kapsamına ekler) DAHİL DEĞİLDİ → bayi kendi sitesini göremez/yönetemez (403).
+  FIX: GetResellerSitesAsync + GetResellerMailDomainsAsync bayinin KENDİ assigned sitelerini/domainlerini de ekler.
+- BUG3 (site-oluştur butonu yok): SitesView'de create butonu+formu+empty-state butonu `isAdmin` ile gated → bayi DE müşteri DE göremiyordu.
+  FIX: yeni `canCreateSite` (admin||reseller||customer) ile gated (import butonu admin-only KALDI). Müşteri/bayide fiziksel-yol alanı GİZLİ (auto-türetilir).
+- GÜVENLİK (BUG3 düzgün olsun): CreateSiteRequest.PhysicalPath init→set; SitesController'a IPanelPreferencesService inject; CreateSite'te
+  non-admin için PhysicalPath = ResolveScopedPhysicalPath (DAİMA DefaultSiteRoot altında, ad sanitize + containment guard) → kötü-niyetli
+  müşteri başka sitenin klasörüne işaret edemez (çapraz-kiracı engeli). Admin tam serbest.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, ISCC OK. Installer SHA256:
+  `28CA71B9AF935FA2A20A2421499C15632342376AC847BA971B49CD0B7B2F6616` (49.34 MiB). (Önceki bu-tur paketi reseller-only düzeltmeleri içeriyordu; bu paket hepsini kapsar.)
+- KULLANICIYA: müşteri/bayi → Web Siteleri → "Site oluştur" artık VAR (kota+kapsam dayatılır, yol güvenli köke sabit). Canlı test et.
+
+## 2026-06-26 (136) — Göç sekmesi netleştirildi ("Nasıl çalışır?" adımları) + kişisel domain (alioral.xyz) örneklerden TEMİZLENDİ
+- Kullanıcı: "göç sekmesini daha mantıklı yap, ne nasıl yapılıyor anlamadım. alioral.xyz benim kişisel sitem, örnek olarak yazma, nerede varsa sil → ornek.com yap."
+- ALIORAL TEMİZLİĞİ: MigrationView.vue siteName placeholder "alioral.xyz" → "ornek.com". MailService.cs yorumundaki "(canlı bulgu:
+  alioral.xyz)" → "(canlı bulgu)". (Diğer placeholder'lar zaten generic: plesk.example.com / whm.example.com / root.) CODEX_MEMORY iç
+  günlük (gerçek olay kaydı) — dokunulmadı. KURAL: örnek/placeholder'da ASLA kullanıcının gerçek domaini; ornek.com / example.com kullan.
+- GÖÇ NETLİĞİ: MigrationView başına "Nasıl çalışır?" kutusu eklendi — howWhat (göç = başka sunucudaki HAZIR siteyi AdaPanel'e taşıma:
+  dosyalar FTP/SFTP + DB) + 5 numaralı adım (1 keşif opsiyonel, 2 hedef site, 3 dosya kaynağı, 4 DB kaynağı, 5 doğrula→başlat). <ol>
+  .migration-steps CSS (accent marker). i18n panel.migration.howTitle/howWhat/howStep1-5.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck 0, i18n 2303=2303, ISCC OK. Installer SHA256:
+  `A4E5C39700A1CC9D5D704971DE53B8157AB1EFB763C6D94709532B67F102C49B` (49.34 MiB).
+
+## 2026-06-26 (137) — Göç CANLI ilerleme (SSE) + dosya hatasının GERÇEK nedeni yüzeye çıkarıldı
+- Kullanıcı: "göçü başlattım 'taşınıyor' yazdı ama hangi aşamada ne yaptığı görünmüyor, adımları canlı gösterse iyi olur."
+  Ardından canlı bir göç denemesi: site ✓ / DOSYALAR ✗ "Dosya göçü başarısız oldu." / DB ✓ — neden belirsiz (generic mesaj).
+- KÖK NEDEN (sağır hata): FileMigrationService tüm hataları `AppException("migration.failed", …, ex.Message)` ile sarıyordu;
+  SiteMigrationService.ToMessage YALNIZCA MessageKey'i ("migration.failed") döndürüp gerçek nedeni (AppException.Details =
+  ham FTP/SFTP mesajı) ATIYORDU → kullanıcı "neden"i göremiyor. ([[adapanel-proactive-audit]] kuralı: gerçek hatayı göster.)
+- CANLI İLERLEME (SSE): yeni `MigrationProgressEvent` DTO (phase=plan|start|result|done). ISiteMigrationService.MigrateSiteAsync'e
+  `Func<MigrationProgressEvent,CancellationToken,Task>? onProgress` eklendi (ct'den ÖNCE; tek çağıran controller güncellendi).
+  Servis 4 tekrarlı try/catch → tek `ExecuteStepAsync(stepId, successMsg, action)` helper'ında toplandı: start raporla → dene →
+  sonuç(listeye+raporla). Önce "plan" (çalışacak adımlar) yollanır; userini dinamik (yalnız dosya başarılıysa, istemci ekler).
+  Yeni controller ucu `POST /migration/site/stream` → text/event-stream, `data: {json}\n\n`, DisableBuffering, OperationCanceled
+  yutulur, beklenmeyen hata→ done(fail) çerçevesi. Eski `/migration/site` (toplu göç) KORUNDU (onProgress:null).
+- GERÇEK NEDEN: MigrationStepDto + MigrationProgressEvent'e `Detail` (ham teknik mesaj). DescribeError → (MessageKey, Details).
+  FileMigrationService.ClassifyFileError: ham istisnayı anlaşılır başlığa eşler — migration.files.auth_failed / .path_not_found /
+  .connect_failed (anahtar-kelime: auth/login/530 · no such/not found/550 · socket/connect/timeout/refused), gerçek metni Details'te taşır.
+- FRONTEND: client.ts `buildStreamRequestHeaders()` (CSRF + entry-path, axios ile aynı). migration.ts `migrateSiteStream()` (fetch +
+  ReadableStream, \r\n normalize, \n\n çerçeve ayırma). MigrationView.vue: `steps` ref → `liveSteps` (pending→running ⟳→ok/fail),
+  canlı checklist + başarısız adımda monospace kırmızı `Detail` satırı; toplu göç adımlarına da detail. Spinner CSS + reduced-motion.
+- i18n +8/dil: panel.migration.liveTitle/liveHint/statusPending/statusRunning/streamFailed + migration.files.auth_failed/path_not_found/connect_failed.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2311=2311, typecheck 0, vite OK. Installer SHA256:
+  `B0DD94189BE5734DD28D48D430A5D2C9EF8292C1ACC3D3E67B747949EA62659B` (49.34 MiB).
+- NOT: kullanıcının DOSYA hatasının kesin sebebi yeni sürümde adımın altında ham olarak çıkacak (yetki/uzak yol/bağlantı). En olası:
+  yanlış FTP/SFTP kullanıcı-parola ya da yanlış 'Uzak yol' (kaynak Plesk ise /var/www/vhosts/.../httpdocs, cPanel ise /home/<user>/public_html).
+
+## 2026-06-26 (138) — Posta hatalarının gerçek nedeni görünür kılındı + "aç/kapa" dili Plesk'e yaklaştırıldı
+- Kullanıcı 3 şikâyet (hızlı ardışık): (a) "posta neden kapalı? aç/kapa neden var? otomatik açık olsun, pleskte gibi";
+  (b) posta kurarken/hesap açarken "E-posta işlemi tamamlanamadı." generic — parola hatasını söylemiyor; (c) "Webmail
+  (Roundcube) hazırlanamadı" — neden belirsiz.
+- KÖK BULGU: MailView'da gerçek teknik neden ZATEN vardı ama katlı `<details>` (summary "Teknik ayrıntılar") içinde GİZLİ →
+  kullanıcı açmadığı için sağır mesaj görüyordu. MapMailError zaten zayıf/kısa parolayı mail.weak_password'e çeviriyor;
+  WebmailService.VerifyHealthyAsync gerçek Roundcube/PHP nedenini Details'e koyuyor. Sorun GÖRÜNÜRLÜK.
+- DÜZELTME (hepsi frontend/i18n, backend değişmedi):
+  1) MailView `<details ... open>` → hata olunca teknik detay OTOMATİK açık (webmail/parola/operation_failed gerçek nedeni anında görünür).
+  2) addAccount + changePassword: parola <8 ise SUNUCUYA gitmeden net `mail.weak_password` uyarısı (Stalwart sağır reddini önler).
+  3) "Aç/kapa" dili Plesk gibi: rozet "Posta kapalı"→"Henüz kurulmadı"/"Not set up yet"; listHint+firstDomainHint "ayrı aç/kapat
+     adımı yok, alan adını ilk açınca postası otomatik kurulur" diye yeniden yazıldı.
+- ÖNEMLİ BAĞLAM (kod doğru, sunum yanlıştı): SitesController site oluştururken posta domainini ZATEN otomatik açıyor
+  (`ProvisionDefaultServices && stalwart-mail kurulu` → mailService.CreateDomainAsync + DNS MX/SPF/DKIM/DMARC). Domainlerin
+  "kapalı" görünme sebebi: o siteler MAIL SERVER yapılandırılmadan ÖNCE açılmış (posta domaini mail server'sız oluşturulamaz).
+  Mail yapılandırıldıktan sonra YENİ siteler otomatik posta-açık; var olanlar ilk "Yönet"te lazy kurulur (openDomain → createMailDomain).
+- Doğrulama: i18n 2311=2311, typecheck 0, vite OK. Installer SHA256:
+  `47114AD0540084E3E34E9ED7794115F9726A262C0D1AC5BAFA189A9B225B5AAC` (49.34 MiB).
+- AÇIK İŞ: Webmail (Roundcube) gerçek başarısızlık nedeni artık otomatik görünecek — kullanıcı detayı paylaşırsa kök neden
+  (eksik PHP DLL / port / yazma izni) hedefli düzeltilecek. İstenirse: mail yapılandırılınca var olan tüm site alan adlarını
+  tek seferde otomatik posta-açık yapan reconcile eklenebilir (şu an mail akışı oturmadığı için bilinçli ertelendi).
+
+## 2026-06-26 (139) — Göç DB adımı artık DB KULLANICISINI da oluşturuyor (Plesk göçü gibi) + erişim bilgisini gösteriyor
+- Kullanıcı: "göçte DB oluşturup çekti ama KULLANICI oluşturmamış, bunu da yapmalı." Doğru — DB'siz kullanıcı → taşınan
+  uygulama (wp-config.php/.env'deki kullanıcıyla) yeni sunucuda "Access denied for user" alır.
+- DÜZELTME: MigrateSiteRequest'e TargetDatabaseUser + TargetDatabasePassword (opsiyonel) eklendi. SiteMigrationService DB adımı:
+  (1) CreateDatabaseAsync (DB + siteye bağla, varsa yoksay) → (2) CreateUserAsync(Engine,UserName,Password,DatabaseName=target)
+  = kullanıcı + o DB'ye GRANT ALL (varsa yoksay) → (3) TransferDatabaseAsync. Kullanıcı/parola verilmezse: kullanıcı site adından
+  türetilir (DeriveDbUser → "<temizad>_usr"), parola güçlü üretilir (GenerateDbPassword "Ap1!"+24hex, policy+SQL-güvenli).
+- GÖSTERİM: MigrationStepDto.Detail başarı için de dolduruluyor; ExecuteStepAsync artık Func<Task<string?>> (başarı-detayı döner).
+  DB adımı detail = "DB user: x · password: y" (parola üretildiyse) / "DB user: x" (kullanıcı verdiyse). MigrationView canlı
+  checklist detail'i başarıda da gösterir (.step-detail.ok yeşil / .err kırmızı). ([[adapanel-copy-plesk]])
+- FRONTEND: form.targetDatabaseUser/targetDatabasePassword + DB bölümünde 2 alan + açıklama (uygulamanın config kullanıcı/parolasını
+  gir → aynı kullanıcı kurulur, config değişmeden bağlanır; boşsa otomatik üretilip sonuçta gösterilir). MigrateSitePayload tipine eklendi.
+- NOT: `Step()` helper kaldırıldı (artık MigrationStepDto inline). Bulk göç DB taşımıyor (transferDatabase:false) → etkilenmez.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2314=2314, typecheck 0, vite OK. Installer SHA256:
+  `870B36329531635654A55746B738648A32345320DCBE962B6329F5089E5E4700` (49.35 MiB).
+
+## 2026-06-27 (140) — Webmail "açıyor ama sayfa çalışmıyor": tanılama aracı + hızlı-yol sağlık kontrolü düzeltildi
+- Kullanıcı: VPS'te panelden "Webmail aç"a basıyor, localhost:8899 açılıyor ama "bu sayfa çalışmıyor". Yani PHP/IIS hattı
+  çalışıyor, ROUNDCUBE uygulaması açılmıyor (büyük olasılıkla FastCGI sürecinde eksik PHP eklentisi: pdo_sqlite/intl/mbstring).
+- KÖK BULGU (bug): WebmailService.OpenAsync hızlı-yolu (IsDeployedAndHealthyAsync) yalnız /adapanel-health.php (DÜZ PHP) probu
+  yapıyordu, Roundcube kökünü (/) DENEMİYORDU → Roundcube bozuk olsa bile "sağlıklı" sayıp BOZUK siteye URL dönüyordu. DÜZELTME:
+  artık / de probe edilir; düz PHP OK ama / değilse → tam yeniden kurulum tetiklenir (ve deploy gerçek hatayı fırlatır).
+- YENİ ARAÇ — Webmail tanılama (salt-okunur): WebmailService.DiagnoseAsync → tek rapor: IIS site/durum + joker http binding portu;
+  düz PHP probu; FastCGI SÜRECİNDE gerçekten yüklü eklentiler (docroot'a geçici adapanel-webmail-diag.php yazıp çalıştırır →
+  extension_loaded + PDO::getAvailableDrivers, sonra siler) — EKSİK olanları vurgular; Roundcube kök (/) durum+gövde önizleme;
+  Roundcube logs/ son ~1500 bayt. DTO WebmailDiagnosticsDto{Healthy,Report,Url}. Uç: GET /mail/webmail/diagnose (admin).
+- FRONTEND: MailView webmail kartına "Tanıla" butonu (admin); rapor teknik-ayrıntı kutusunda gösterilir. Kutu artık
+  noticeError olmadan da görünür (v-if=noticeDetails) ki sağlıklı rapor da çıksın. api/mail.ts diagnoseWebmail().
+- i18n +3/dil: panel.mail.webmailDiagnose/webmailDiagOk/webmailDiagFail. (Controller mesaj anahtarları mail.webmail.diag_ok/fail
+  frontend'de render edilmiyor → i18n'e eklenmedi.)
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2317=2317, typecheck 0, vite OK. Installer SHA256:
+  `CAE4F8039783353ED3767631EB9E48A14D7529C5F63E9577C19D1B5083757CE9` (49.35 MiB).
+- AÇIK İŞ: Kullanıcı yeni sürümde "Tanıla" çıktısını paylaşınca kesin kök neden (hangi eklenti EKSİK / log'daki fatal) görülecek
+  → o spesifik eklentiyi AdaPanel PHP'sinde garanti et / Roundcube config'ini düzelt. ([[adapanel-webmail-tasks]] [[adapanel-security-audit]] değil)
+
+## 2026-06-27 (141) — Webmail 500/boş gövde: extension_dir güvencesi + deploy hatası artık eksik eklentiyi gösteriyor
+- Kullanıcı tanılama paylaştı: Roundcube `/` → Status=500, Body=BOŞ. Boş gövde = PHP display_errors KAPALI → fatal çıktıya
+  yansımıyor. Düz PHP çalışıyor ama Roundcube açılmıyor = neredeyse kesin eksik/yüklenemeyen PHP eklentisi (pdo_sqlite/intl).
+- KÖK NEDEN ADAYI (sistemik, BULUNDU): PhpService.EnsureExtensionsAsync `ext/php_<x>.dll` var mı diye bakıp `extension=<x>`
+  yazıyordu AMA `extension_dir`'i HİÇ ayarlamıyordu. php.ini'de aktif extension_dir YOKSA, etkinleştirilen eklentiler DLL'ler
+  ext/ içinde olsa bile YÜKLENMEZ → Roundcube 500. DÜZELTME: EnsureExtensionDir — aktif extension_dir yoksa mutlak ext yoluyla
+  ekler (varsa dokunmaz, idempotent). Bu tüm PHP eklenti yüklemelerini sağlamlaştırır (webmail + redis + genel).
+- GÖRÜNÜRLÜK: WebmailService.VerifyHealthyAsync artık `/` 500 verince (boş gövde olsa bile) ProbePhpExtensionsAsync (FastCGI
+  sürecinde yüklü eklentiler, EKSİK olanı işaretler) + ReadRoundcubeLogTail çalıştırıp AppException.Details'e ekliyor →
+  "Webmail aç" hatasının kendisi artık eksik eklentinin ADINI/log fatal'ını gösteriyor (ikinci tıklama gerektirmez).
+  VerifyHealthyAsync(port, entryRoot, ct) imzası; OpenAsync documentRoot geçiyor.
+- Doğrulama: build 0/0, test 44/44(+2), typecheck/ön turda. Installer SHA256:
+  `5308C142736AADD51D9FD771DCF54F3DEA76E38A87DBFC0DEE448D6C0767D139` (49.35 MiB).
+- BEKLENEN: yeni sürümde extension_dir eksikse otomatik düzelir → webmail büyük olasılıkla AÇILIR. Açılmazsa "Webmail aç"
+  hatası ya da "Tanıla" artık hangi eklentinin OFF olduğunu / log fatal'ını net yazacak → o eklentiyi (ör. intl→ICU DLL'leri,
+  pdo_sqlite→php_pdo_sqlite.dll) AdaPanel PHP bileşeninde garanti et. ([[adapanel-webmail-tasks]])
+
+## 2026-06-27 (142) — Site↔DB seçerek bağlama (Plesk gibi) + webmail gerçek PHP fatal'ı loglanıyor
+### Thread B — DB'yi siteye SEÇEREK bağla (isimle değil)
+- Kullanıcı: "Bağlı Veritabanları boş, dbler eşleşmiyor; isme göre değil SEÇİME göre olsun + bağlayınca burada görünsün."
+- Sebep: SiteDatabasesView listeyi silme planından çekiyordu; DB'ler siteye AÇIK bağ (SiteDatabaseLinkService) olmadığı için
+  (isim eşleşmiyor) boştu. Silme planı ResolveDatabasesAsync zaten isim-eşleşmesi ∪ açık bağ döndürüyor → açık bağ eklenince görünür.
+- Eklenen: SitesController GET /sites/{site}/databases (linked = açık bağ + ad eşleşmesi; candidates = bağlı olmayan mevcut DB'ler,
+  kurulu motorlar taranır), POST .../databases/link {engine,name}, DELETE .../databases/link?engine&name. Hepsi EnsureSiteAsync + audit.
+  DTO SiteDatabasesDto/SiteDatabaseRefDto/LinkSiteDatabaseRequest. ISiteDatabaseLinkService ctor'a enjekte.
+- Frontend SiteDatabasesView: load() artık getSiteDatabases kullanıyor (linked+candidates); bağla seçicisi (select+Bağla),
+  her bağlı DB'de "Bağlantıyı kaldır" (DB'yi SİLMEZ). api/sites.ts getSiteDatabases/linkSiteDatabase/unlinkSiteDatabase.
+  i18n +8 (panel.siteDb.linkTitle/linkSelect/link/linking/linked/unlink/unlinking/unlinked) + subtitle/empty/hint güncellendi.
+### Thread A — webmail 500/boş gövde teşhisi derinleşti
+- Kullanıcı tanılaması: TÜM eklentiler on (pdo_sqlite/intl/mbstring/openssl...), pdo_drivers=...,sqlite. Roundcube 1.7.1 + PHP 8.3.31
+  (uyumlu). Yani çökme eklenti/sürüm DEĞİL. "Roundcube log" diye görünen aslında logs/.htaccess'ti (log okuyucu newest dosyayı seçip
+  yanıltıyordu) → gerçek hata logu YOK = Roundcube kendi loglamasına ulaşamadan PHP-fatal, display_errors kapalı (gövde boş).
+- Eklenen: WebmailService.EnsureDiagnosticsIni → docroot'a .user.ini (log_errors=On, display_errors=Off=güvenli, error_log=logs/php_errors.log,
+  error_reporting=E_ALL). ReadRoundcubeLogTail düzeltildi: .htaccess/nokta dosyaları atlanır, yalnız *error*/*.log okunur (boş olmayanı tercih).
+  Böylece bir sonraki "Webmail aç" hatası gerçek PHP fatal'ını php_errors.log'dan gösterecek.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2325=2325, typecheck 0, vite OK. Installer SHA256:
+  `D0EEBB6DD830A89B544EAD7B297F98F092077BA4555CDB9A45E8839E9AEF1380` (49.35 MiB).
+- AÇIK İŞ: kullanıcı yeni sürümde "Webmail aç"ı deneyip "Roundcube log (son)" bölümünü paylaşınca gerçek fatal görülecek →
+  kök neden (muhtemelen public_html docroot layout / SQLite DSN / yazma izni) hedefli düzeltilecek. ([[adapanel-webmail-tasks]])
+
+## 2026-06-27 (143) — Webmail "iki deneme/Tanıla gerekti" kökü: php-cgi tazelenmiyordu + boş sekme UX
+- Kullanıcı: "Tanıla deyince düzeldi; ama Tanıla demeden Webmail aç'a basınca boş sayfa açtı, hata da vermedi."
+- KÖK NEDEN: PhpService.EnsureExtensionsAsync php.ini'yi güncelliyor (extension_dir + eklentiler) AMA sıcak php-cgi
+  süreçlerini YENİLEMİYORDU. AlwaysRunning + idleTimeout=0 php-cgi eski php.ini'yi tutuyor → Roundcube ilk açılışta hâlâ
+  bozuk. Süreç bir şekilde dönünce (zaman/işlem) yeni ayarı okuyup düzeliyordu → "Tanıla'dan sonra düzeldi" yanılsaması.
+- DÜZELTME 1 (asıl): EnsureExtensionsAsync php.ini DEĞİŞTİĞİNDE `taskkill /f /im php-cgi.exe` ile süreçleri yeniliyor
+  (UpdateGlobalPhpSettings/redis ile aynı desen) → IIS sonraki istekte taze php-cgi (güncel php.ini) başlatır → ilk
+  "Webmail aç" tıkında çalışır. Best-effort.
+- DÜZELTME 2 (UX): MailView openWebmail artık açtığı sekmeye "Webmail hazırlanıyor…" placeholder'ı yazıyor (boş sekme
+  yerine), URL gelince yönlendiriyor; hata olursa sekmeyi sessizce kapatmak yerine "açılamadı, Tanıla ile bak" yazıyor.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2325=2325, typecheck 0, vite OK. Installer SHA256:
+  `4A4561425108BE6C920F32BE6E87657FB8D69EC88F6BAB23B06134EF4ACD94D3` (49.35 MiB). Webmail ARTIK ÇALIŞIYOR (kullanıcı onayı).
+
+## 2026-06-27 (144) — Profesyonelleştirme: "Tanıla" + "Bağlantıyı kaldır" butonları kaldırıldı + ana sayfaya dış erişim bilgisi
+- Kullanıcı: "Tanıla butonu olmasın (Plesk'te yok), profesyonel yap"; "DB'de Bağlantıyı kaldır butonu olmasın"; "ana sayfaya
+  dışarıdan mail/DB'ye nasıl bağlanılır yaz, kompakt (boşluk doldurmasın)".
+- THREAD A: MailView webmail kartından "Tanıla" butonu + diagnoseWebmail handler + import kaldırıldı; notice-details v-if eski
+  haline (noticeError && noticeDetails). Teşhis ARKA PLANDA kalıyor: webmail açılışında hata olursa VerifyHealthyAsync zaten
+  gerçek nedeni (PHP eklenti probu + Roundcube log) detaya ekliyor → manuel butona gerek yok. (Backend /webmail/diagnose ucu +
+  api fonksiyonu + i18n anahtarları kullanılmıyor ama zararsız; bırakıldı.)
+- THREAD C: SiteDatabasesView'dan "Bağlantıyı kaldır" butonu + unlinkDb + unlinkingKey + unlinkSiteDatabase importu kaldırıldı.
+  (Bağla + Sil kalır; bağ, DB silinince/site silinince zaten temizlenir — Plesk gibi.) Backend unlink ucu/api kullanılmıyor, bırakıldı.
+- THREAD D: DashboardOverviewView erişim paneline KOMPAKT "Dışarıdan bağlantı (posta/veritabanı)" bloğu eklendi: primaryHost
+  (erişim panelindeki ilk genel IP, yoksa window host) ile Posta (IMAP 993/143, SMTP 465/587, giriş=tam e-posta) + Veritabanı
+  (MariaDB/MySQL 3306, PostgreSQL 5432, uzak erişim açılmalı). Küçük font + dar boşluk (sayfayı doldurmasın). i18n +5/dil
+  (panel.dashboard.ext.title/mail/mailValue/db/dbValue, {host} parametreli).
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2330=2330, typecheck 0, vite OK. Installer SHA256:
+  `CF2B111A57B1F4CA7CBD83320AA1F3FE86A6356C85079A3811DE6F6485B0D768` (49.35 MiB).
+
+## 2026-06-28 (145) — Plesk keşfi artık yönetici kullanıcı adı+parola (Basic auth) ile de çalışıyor + opsiyonel açıklaması
+- Kullanıcı: "Plesk REST API nedir, Plesk'te böyle bir API/buton bulamadım." → Açıklandı (REST API UI'da görünmez, hep
+  https://host:8443/api/v2; anahtar `plesk bin secret_key` ile üretilir). Sonra: "evet bunu da ekle" (kullanıcı/parola ile keşif).
+- DÜZELTME: PleskDiscoverRequest.ApiKey artık opsiyonel; UserName + Password eklendi. SiteMigrationService.DiscoverPleskAsync:
+  ApiKey varsa X-API-Key; yoksa UserName+Password ile Basic auth (Authorization: Basic base64(user:pass)); ikisi de yoksa
+  AppException("migration.plesk.auth_required"). Böylece CLI ile anahtar üretmeden, Plesk admin giriş bilgileriyle keşif.
+- FRONTEND: MigrationView Plesk formuna pleskUser + pleskPassword alanları + pleskAuthHint (API anahtarı YA DA admin user/parola;
+  hiçbiri yoksa keşfi atla, elle gir). canDiscover computed: host + (apiKey || (user && pass)); cPanel host + apiToken. discover()
+  user/pass geçiyor. api/migration.ts PleskDiscoverPayload +userName/password. pleskApiKey etiketi "(opsiyonel)".
+- i18n +4/dil: panel.migration.pleskUser/pleskPassword/pleskAuthHint + migration.plesk.auth_required (pleskApiKey güncellendi).
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2334=2334, typecheck 0, vite OK. Installer SHA256:
+  `48A5C0B1C737DCBB6E32E5AED01090DD00A8BA12B228E1506C0B9BE3290E3BE3` (49.35 MiB).
+
+## 2026-06-28 (146) — Plesk keşif hatası ham anahtar görünüyordu + HTTP kodu gizliydi: çeviri + gerçek neden yüzeye
+- Kullanıcı: host + Plesk admin kullanıcı/parola girdi (API anahtarı yok), keşifte ham "migration.plesk.api_error" gördü.
+- İKİ BULGU: (1) MigrationView catch'leri `extractApiMessage(error)`'i HAM (çevirisiz) notice'a yazıyordu → kullanıcı i18n
+  ANAHTARINI görüyordu (success'ler t() ile çevriliyordu ama hatalar değil). (2) api_error gerçek HTTP kodunu/yanıtını
+  Details'te taşıyordu ama notice detayı göstermiyordu → 401 mi 404 mü belli değildi.
+- DÜZELTME (frontend): apiErrorText(error) helper → anahtarı t() ile çevir (anahtar değilse ham bırak) + extractApiDetails ekle
+  (" — HTTP 401 ...{plesk yanıtı}"). discover()/validate()/run() catch'leri bunu kullanıyor (bulkLog hariç). import extractApiDetails.
+- DÜZELTME (backend): DiscoverPleskAsync non-2xx → HTTP kodu + Plesk JSON gövde (300 char) Details'e; kod sınıflandırıldı:
+  401/403 → migration.plesk.auth_failed, 404 → migration.plesk.not_found, diğer → api_error. i18n +2/dil (auth_failed/not_found).
+- ARTIK: kullanıcı tekrar denediğinde gerçek nedeni okuyacak. En olası: 401 (admin login genelde "admin"; parola/2FA/IP kısıtı)
+  ya da 404 (eski Plesk / yanlış 8443). Alternatif: 'plesk bin secret_key' ile anahtar.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2336=2336, typecheck 0, vite OK. Installer SHA256:
+  `F368C47A93EA3BAAC4EF1EB8739E1DC1B7DAD8942A4A6F2E3136558C135A059E` (49.35 MiB).
+
+## 2026-06-28 (147) — FTP kullanıcı eklemedeki yavaşlık düzeltildi: altyapı artık tek-seferlik (servis restart kalktı)
+- Kullanıcı: "FTP kullanıcısı ekledim baya bekletti, neden?" → Sebep: CreateFtpUserAsync HER eklemede EnsureFtpInfrastructureAsync
+  çağırıp tüm FTP altyapısını yeniden kuruyordu: Import-Module WebAdministration (~1-3s) + site/SSL/izolasyon Set-ItemProperty x10 +
+  cert kontrolü + **Restart-Service FTPSVC -Force (her seferinde, ~3-8s)** + firewall kontrolleri. İlk seferde ayrıca tek-seferlik
+  IIS FTP rolü kurulumu (Install-WindowsFeature, 30s-dakika).
+- DÜZELTME: EnsureFtpInfrastructureAsync(bool forceReconfigure, ct). HIZLI YOL: bayrak (config/ftp-infra.json Configured) + FTPSVC
+  'Running' (Get-Service ile, Import-Module YOK → sub-saniye) ise ağır betiği + servis restart'ı ATLA → return. Tam kurulum
+  başarınca bayrak yazılır. CreateFtpUserAsync ve EnsureServerAsync force=false (hızlı); SetRequireSslAsync force=true (SSL
+  politikası + externalIp + restart gerçekten gerekir). Kendini onarır: bayrak yok / FTPSVC down ise tam kurulum yine çalışır.
+- SONUÇ: 2. ve sonraki FTP kullanıcısı eklemeleri saniyelerce beklemeden anında. İlk kullanıcı (rol kurulumu) yine tek-seferlik yavaş.
+- Doğrulama: build 0/0, test 44/44(+2), (frontend/i18n değişmedi). Installer SHA256:
+  `109BC9BE394CAF6C8FAB99A2A80503D23AA871A735A77B2379436A921F9FDA0A` (49.35 MiB).
+
+## 2026-06-28 (148) — Posta listesinde 'mail.<domain>' görünmesi düzeltildi (servis alt alanları filtrelendi)
+- Kullanıcı: "Postada alioral.xyz VE mail.alioral.xyz görünüyor; mail.alioral.xyz'i ben eklemedim, tek domainim var."
+- KÖK NEDEN: MailService.IssueCertificateAsync (mail sertifikası) → TryIssueWithWinAcmeAsync, Let's Encrypt HTTP-01 için
+  siteye `mail.<domain>` host binding'i ekliyor (gerekli + kalıcı, cert yenileme için). MailView.mailDomains computed ise
+  TÜM site binding host'larını potansiyel posta alan adı olarak listeliyordu → mail.alioral.xyz "Henüz kurulmadı" diye görünüyordu.
+- DÜZELTME (frontend, MailView.mailDomains): servis alt alanları (mail./webmail./autodiscover./autoconfig./smtp./imap./pop./mx.)
+  ÜST alan adı zaten listedeyse listeden filtrelenir → mail.<x> gizlenir ama tek başına 'mail.x' adlı gerçek site yanlışlıkla
+  saklanmaz. Binding'e DOKUNULMADI (sertifika/serving için gerekli); sadece posta DOMAIN listesinde gösterilmiyor.
+- Doğrulama: i18n 2336=2336, typecheck 0, vite OK, build (paket) OK. Installer SHA256:
+  `DEB45779D132129031FCF8AB68B582A964F41A68B14DCB5D06F8438F60F38C5B` (49.35 MiB).
+
+## 2026-06-28 (149) — GitHub tabanlı güncelleme (aliorala/adapanel, public) + EN/TR tanıtım web sitesi (website/)
+- Kullanıcı çok pivot etti; net karar: güncelleme GİTHUB'tan (repo aliorala/adapanel, PUBLIC), + ayrı website/ klasöründe
+  EN/TR web sitesi. (.host domaini bu yıl kullanılacak; GitHub ücretsiz olduğu için domain güncellemeye bağlı değil.)
+  NOT: Bu turda önce "website/klasör feed" başlanıp KULLANICI İSTEĞİYLE GERİ ALINDI, sonra GitHub'a dönüldü — geçmişte
+  bir tur "remote feed (configurable URL)" yazılıp revert edilmişti; nihai çözüm GitHub.
+- GITHUB GÜNCELLEME: SelfUpdateService.CheckForUpdateAsync artık config/update-github.json'daki repo'dan (varsayılan
+  DefaultRepo="aliorala/adapanel") GitHub Releases API'sini (api.github.com/repos/{owner}/{repo}/releases/latest, User-Agent
+  zorunlu, public=token yok) çeker → tag_name(→latestVersion), .exe asset browser_download_url(→downloadUrl), SHA256 asset
+  'digest' (sha256:...) YOKSA '<exe>.sha256'/'*.sha256'/SHA256SUMS asset'inden ExtractSha256, body(→notes) → yerel manifeste
+  cache → mevcut indir/kur (SYSTEM scheduled task → silent installer → servis restart) aynen çalışır. SHA256 bulunamazsa
+  güvenlik gereği net hata (update.github_no_sha). SetGithubRepoAsync + POST /update/github + UpdateStatusDto.GithubRepo.
+  Frontend: UpdateView'da "Güncelleme kaynağı (GitHub)" repo alanı + Kaydet; api setUpdateGithubRepo. i18n +13/dil
+  (panel.update.github* + update.github_ok/not_configured/fetch_failed/no_release/no_asset/no_sha/repo_invalid/saved).
+- KULLANICI İŞ AKIŞI: GitHub'da public 'adapanel' deposu → Release aç (tag vX.Y.Z) → AdaPanelSetup.exe yükle → panel
+  Ayarlar→Güncellemeler otomatik görür → tek tık kur. (GitHub asset digest'i SHA256 sağlar; yoksa .exe.sha256 ekle.)
+- WEB SİTESİ: website/index.html — tek dosya, bağımsız (build yok), EN/TR (sağ üst TR/EN, localStorage, varsayılan TR),
+  AdaPanel koyu teması; hero + 9 özellik + istatistik bandı + indirme (→ github releases/latest) + 5 SSS + footer.
+  website/README.md (GitHub Pages veya hosting'e yükleme talimatı). Linkler aliorala/adapanel'e işaret eder.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2349=2349, typecheck 0, vite OK. Installer SHA256:
+  `C4F69286B34931BD8C1A79868B449512F544B98CC219344571A66B5C083A4FF4` (49.36 MiB).
+
+## 2026-06-28 (150) — Web sitesi profesyonelleştirildi (website/index.html yeniden tasarım)
+- Kullanıcı "daha profesyonel yapsan?" → website/index.html baştan, daha rafine: metin-rozet ikonlar yerine inline SVG ikon
+  seti; gri kutu yerine inandırıcı panel mockup'ı (kenar çubuğu SVG nav + conic-gradient istatistik HALKALARI CPU/RAM/Disk +
+  site tablosu/durum etiketleri + sahte URL pill); IntersectionObserver scroll-reveal; scroll'da nav gölgesi; ambient glow +
+  ince grid arka plan; "Nasıl çalışır" 3 adım; CTA bandı; SVG favicon (data-uri); rafine tipografi/gölge/hover.
+  Tek dosya, build yok, EN/TR (localStorage, varsayılan TR). Linkler github aliorala/adapanel. Etiketler dengeli, data-tr=data-en=74.
+- Panel KODU değişmedi → yeniden paketleme yok; son installer hâlâ (149): C4F69286B34931BD8C1A79868B449512F544B98CC219344571A66B5C083A4FF4.
+
+## 2026-06-28 (151) — Web sitesi teması: AÇIK & kurumsal (indigo) — kullanıcı yeşil/mavi neon'u beğenmedi
+- Kullanıcı (AskUserQuestion ile seçti): "Aydınlık & kurumsal (indigo)". website/index.html koyu/neon temadan AÇIK temaya
+  çevrildi: zemin #f6f8fb/#ffffff, metin #0f172a arduvaz, vurgu indigo #4f46e5 (degrade #4338ca / #6366f1), yumuşak gri
+  gölgeler, ferah ince ızgara — neon parıltı yok. Çoğu kural var(--*) kullandığı için :root flip + birkaç hedefli düzeltme
+  (buton metni #fff, nav.scrolled açık, ambient/grid açık, favicon+theme-color indigo) yetti.
+- Panel MOCKUP'ı bilinçli KOYU bırakıldı (gerçek panel koyu; açık sayfada koyu ürün ekranı = şık kontrast): .mock içinde
+  CSS değişkenleri scope'lanarak (--surface/-2/--border/--text/--accent #818cf8/--accent-3 #5cc8ff) koyu tutuldu.
+- Doğrulama: eski yeşil/mavi/koyu renk 0 kaldı, etiketler dengeli, data-tr=data-en=74. Panel KODU değişmedi → paket yok
+  (son installer 149: C4F69286B34931BD8C1A79868B449512F544B98CC219344571A66B5C083A4FF4). Tema tercihi: [[adapanel-webmail-tasks]] değil, salt web sitesi.
+
+## 2026-06-30 (152) — phpMyAdmin sol menü "+" açılmıyor (KÖK NEDEN: web.config 'vendor' segmenti) + DB Taşı/Aktar kullanıcı oluşturuyor
+### phpMyAdmin "+" (navigation) çalışmıyordu — JS ölüydü
+- Belirti: sol menüde DB'nin "+"ına basınca hiç AJAX yok, URL'ye sadece '#' ekleniyor → JS handler bağlı değil (CSS çalışıyor, sayfa biçimli).
+- KÖK NEDEN: HardenWebDbWebConfig'in requestFiltering hiddenSegments listesindeki **'vendor'** segmenti. IIS hiddenSegments YOLDAKİ HER
+  segmenti eşler → phpMyAdmin'in JS kütüphaneleri **js/vendor/** (jQuery, CodeMirror) 404 oluyordu → jQuery yüklenmeyince TÜM
+  phpMyAdmin JS'i çalışmıyordu (navigation expand, AJAX yok). CSS themes/ altında olduğu için sayfa biçimli görünüyordu (yanıltıcı).
+- DÜZELTME: 'vendor' segmenti listeden çıkarıldı + eski web.config'lerden de TEMİZLENİYOR (hiddenSegments.Elements remove).
+  Güvenlik zaten loopback binding + auth proxy. KULLANICI: yeni sürümü kurup phpMyAdmin'i TEKRAR AÇINCA (HardenWebDbWebConfig
+  open'da çalışır) web.config temizlenir → "+" çalışır. (DbToolsProxy + config.inc/PmaAbsoluteUri zaten doğruydu.)
+### DB "Taşı/Aktar" (Databases sekmesi) kullanıcı oluşturmuyordu — göç(139) ile aynı eksik
+- DatabaseService.TransferDatabaseAsync DB'yi oluşturup veri taşıyor ama kullanıcı yoktu → uygulama "Access denied". DÜZELTME:
+  import sonrası provider.CreateUserAsync + GrantAccessAsync(ALL) + credentialStore.Upsert (best-effort). DatabaseTransferRequest'e
+  TargetUserName/TargetPassword (opsiyonel; boşsa DeriveTransferUser '<db>_usr' + GenerateDbPassword 'Ap1!'+hex). DatabaseTransferResultDto'ya
+  UserName/Password. Frontend DbTransferView: hedef kullanıcı/parola alanları + üretilen kimlik kutusu (cred-box). i18n +7/dil.
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2356=2356, typecheck 0, vite OK. Installer SHA256:
+  `2E1B03BCEB531C494277406D82BBE0D4ED43E328315B310E3CBDF1D24EF6BF10` (49.36 MiB).
+
+## 2026-06-30 (153) — WordPress tek-tık kurulumu turnkey yapıldı (DB + kullanıcı + wp-config otomatik) + proaktif tarama
+- Proaktif tarama (kullanıcı "her yeri tara"): TEK gerçek eksik = WordPress tek-tık DB'yi kurmuyordu (RequiresDatabase sadece UI
+  bayrağıydı, tüketilmiyordu). Gerisi temiz: i18n'de kullanılan tüm anahtarlar tanımlı (0 eksik, en=tr=2356), çevrilmemiş ham
+  hata yok, alioral.xyz sızıntısı yok (kalan aliorala/adapanel = GitHub repo), TODO yok, tüm controller'lar korumalı (anonim
+  uçlar bilinçli: setup 'already_initialized' guard'lı, git webhook token'lı), panel DB kullanıcıları host '%', izolasyon var.
+- DÜZELTME (AppStoreService): IDatabaseService enjekte edildi. InstallWordPressAsync(request, destination): dosya açımından sonra
+  (1) EnsurePhpRuntimeAsync + phpService.EnsureExtensionsAsync(WordPressExtensions: mysqli/pdo_mysql/mbstring/gd/curl/exif/intl/
+  zip/openssl/fileinfo) — mysqli OLMADAN WP DB'ye bağlanamaz; (2) ProvisionWordPressDatabaseAsync → CreateDatabaseAsync(Engine=
+  kurulu mariadb/mysql, Name=DatabaseNameFromSite, UserName=<basis>_u, Password='Wp1!'+hex, SiteName=site → cascade) + ad çakışırsa
+  rastgele son ek; (3) WriteWordPressConfig → wp-config-sample.php'yi temel alıp DB_NAME/USER/PASSWORD + DB_HOST=127.0.0.1 + 8
+  benzersiz salt (GenerateWpSalt) doldurur (yoksa minimal config). Best-effort (DB sağlanamazsa dosyalar kalır). Test ctor +null!.
+- KALAN (kapsam dışı, isteğe bağlı): WP admin hesabı hâlâ WP'nin "5 dakikalık" ekranında kuruluyor (wp-cli ile tam otomasyon sonra eklenebilir).
+- Doğrulama: build 0/0, test 44/44(+2), paket OK. Installer SHA256 (kümülatif: phpMyAdmin vendor + transfer user + WP turnkey):
+  `D3E678D0111133FB4EBF77867E8A1998E92A8DB2BB2A3EA7D5F46FFAC707D235` (49.36 MiB).
+
+## 2026-06-30 (154) — WordPress tek-tık: admin hesabı wp-cli ile otomatik kuruluyor (giriş yapılabilir hazır site)
+- Kullanıcı: "admin hesabını da wp-cli ile otomatik kur; WP olayını Plesk gibi her özellik/gereç yap."
+- YAPILAN (admin otomasyonu): AppStoreService.InstallWordPressAsync artık wp-config sonrası TryInstallWordPressCoreAsync:
+  EnsureWpCliAsync (wp-cli.phar'ı raw.githubusercontent'ten <dataRoot>/tools/wp-cli'ye indirir, önbellek) → php.exe wp-cli.phar
+  --path core install --url(site host'undan) --title --admin_user=admin --admin_password(üretilen Wp!+hex) --admin_email
+  --skip-email. Başarılıysa giriş bilgileri döner; başarısızsa null (kullanıcı WP 5-dk ekranını kullanır). InstallAsync dönüşü
+  AppTemplateDto → AppInstallResultDto {TemplateId, AdminUrl, AdminUser, AdminPassword} (IAppStoreService + StoreController +
+  store.ts + AppStoreView güncellendi). AppStoreView'da kurulum sonrası kopyalanabilir admin kimlik kutusu (wp-creds). i18n +5/dil.
+  (Önceki turda: mysqli vb. eklenti + DB+kullanıcı+wp-config zaten ekliydi → artık uçtan uca: DB ekranı YOK, doğrudan giriş.)
+- MEVCUT WP araç-seti: DetectAll/Detect (sürüm, plugins, themes, UpdateAvailable), maintenance modu. KALAN (Plesk WP Toolkit
+  menüsü, ileride): tek-tık admin girişi (auto-login), çekirdek/eklenti/tema güncelleme + auto-update, eklenti/tema kur-aktifleştir,
+  güvenlik sıkılaştırma, klon/staging, arama-değiştir(URL), şifre sıfırlama. → Kullanıcıya sıra/öncelik sorulacak (hepsi tek seferde değil).
+- Doğrulama: build 0/0, test 44/44(+2), i18n 2361=2361, typecheck 0, vite OK. Installer SHA256 (kümülatif: phpMyAdmin vendor +
+  DB transfer user + WP DB + WP admin): `9B90F740E69903B812D7CD2FB45F43114117BE58320C99CA7B8552E595DD9E09` (49.36 MiB).
+
+## 2026-06-30 (155) — WordPress Toolkit buton paneli (Plesk tarzı, AppToolkitView yeni "wordpress" sekmesi)
+- İSTEK: "hepsini sırayla yap" + "pleskte nasılsa aynısını yap fazla işleri yapmana gerek" → Plesk WP Toolkit menüsündeki
+  tek-tık işlemleri panel haline getir, AMA yalın tut (over-engineering yok).
+- YAPILAN (SADECE FRONTEND — backend'e dokunulmadı; mevcut wp-cli motoru yeniden kullanıldı): AppToolkitView.vue'ya
+  "wordpress" sekmesi. ToolkitTab union'a "wordpress" eklendi. Site seçilince getWordPress ile durum yüklenir.
+  - DURUM SATIRI: sürüm pill + (Güncel / Güncelleme var → {v}) pill + "Yönetim paneli" linki (adminUrl, _blank).
+  - BUTONLAR (her biri runWp ile tek wp-cli komutu, çıktı `$ wp ...` ile <pre>'de gösterilir, exitCode===0 başarı):
+    * Tümünü güncelle → "core update" + "plugin update --all" + "theme update --all" (sıralı).
+    * Güvenliği sıkılaştır → "config set DISALLOW_FILE_EDIT true --raw".
+    * Bakım modu aç/kapat → setWordPressMaintenance (mevcut API).
+  - FORMLAR: Eklenti kur ("plugin install SLUG --activate"); Arama-Değiştir ("search-replace FROM TO --all-tables
+    --report-changes-only"); Yönetici parolası sıfırla ("user update USER --user_pass=PASS --skip-email") — parola
+    crypto.getRandomValues ile üretilir ("Wp!"+hex), tek sefer gösterilir (wp-cred kutusu).
+  - reactive() ile wpForm (pluginSlug, srFrom, srTo, adminUser=admin). State: wp, wpLoading, wpLoaded, wpBusy (union),
+    wpOutput, wpNotice/wpNoticeError, wpNewPassword. CSS: .wp-panel/.wp-status/.wp-admin-link/.wp-actions/.wp-form/
+    .wp-row/.wp-cred/.wp-output.
+- Motor (değişmedi): SiteHostingSettingsService.RunWpCliCommandAsync (len≤300, tehlikeli karakter reddi, "wp " soyma,
+  php wp-cli.phar <cmd> --no-color) ← runWpCliCommand (siteHosting.ts) ← runWp.
+- i18n: panel.toolkit.tabs.wordpress + panel.wpkit.* (28 anahtar/dil). 2361 → 2389 (en=tr).
+- KALAN (Plesk WP Toolkit, sırayla devam): tek-tık SSO admin girişi (mu-plugin/token), klon/staging, çekirdek/eklenti
+  otomatik-güncelleme zamanlaması. → Bu ağır parçalar kullanıcı onayıyla.
+- Doğrulama: typecheck 0, vite build OK, i18n 2389=2389 (backend değişmediği için build/test çalıştırılmadı — yalnız FE).
+  Installer SHA256: `D49BCB41F57DD0485228DD414012B623EDD5B28EF2F103D0093FD26AACF48B45` (49.37 MiB).
+
+## 2026-06-30 (156) — WordPress tek-tık yönetici girişi (Plesk "Giriş yap" / SSO sihirli bağlantı)
+- İSTEK: "hepsini sırayla yap" → Plesk WP Toolkit'in en ikonik özelliği: panelden tek tıkla site wp-admin'ine giriş.
+- YÖNTEM (Plesk'in geçici, kendini silen oturum-açma eklentisini birebir taklit): backend tek kullanımlık SİHİRLİ
+  BAĞLANTI üretir. Jeton (256-bit rastgele hex) yalnızca URL'de gider; diskte SADECE SHA256 özeti + 120 sn son-kullanım
+  gömülü olarak <root>/wp-content/mu-plugins/adapanel-login.php'ye yazılır. mu-plugin `init`'te: süre/özet kontrolü
+  (hash_equals), eşleşince DOSYAYI SİLER (tek kullanım), ilk yöneticiyle (role=administrator, ID ASC, number=1)
+  wp_set_auth_cookie + wp_safe_redirect(admin_url()). wp-cli GEREKTİRMEZ (saf WP API). Yeni bağlantı üretmek eskisini
+  ezer (hash değişir → eski jeton geçersiz).
+- DEĞİŞENLER: WordPressSiteDto.cs +WordPressLoginLinkDto{Url,ExpiresInSeconds}; IWordPressToolkitService
+  +CreateLoginLinkAsync; WordPressToolkitService.CreateLoginLinkAsync + BuildLoginPlugin (PHP şablon, __HASH__/__EXPIRES__
+  replace; brace-doubling'den kaçınmak için token-replace) + en uygun bağlama seçimi (https>hostlu>ilk, port 80/443 atlanır);
+  WordPressController +[HttpPost {siteName}/login-link] (CustomerAccess.EnsureSiteAsync ile kapsam — Bayi yalnız kendi
+  müşterisi); api/wordpress.ts +createWordPressLoginLink/WordPressLoginLink; AppToolkitView WordPress sekmesine "Giriş yap
+  (tek tık)" birincil butonu (wpLogin → link al → window.open _blank noopener), wpBusy union'a "login".
+- GÜVENLİK: tek kullanımlık + 2 dk ömür + at-rest yalnız hash + [Authorize Administrator,Reseller] + site kapsam kontrolü.
+  Hata kodu yeni anahtar açmamak için mevcut "wpcli.not_wordpress" (ham anahtar sızması yok).
+- i18n: panel.wpkit.login + panel.wpkit.loginOpened (+2/dil) → 2389→2391 (en=tr).
+- KALAN (Plesk WP Toolkit, sırayla): klon/staging, çekirdek/eklenti otomatik-güncelleme zamanlaması. → ağır parçalar, onayla.
+- Doğrulama: build 0, test PASS (exit 0), i18n 2391=2391, typecheck 0, vite OK.
+  Installer SHA256: `D209BE44C3F3742CBA469DF37480DE22A18E85F92B73712CA5003FE76E95C71E` (49.37 MiB).
+
+## 2026-06-30 (157) — WordPress Toolkit: otomatik güncelleme + klon/staging (Plesk WP Toolkit seti tamam)
+- İSTEK: "İkisi de — sırayla" (AskUserQuestion) → önce otomatik güncelleme, sonra klon.
+- (A) OTOMATİK GÜNCELLEME (frontend-only, WP-native — harici görev YOK): WordPress panosuna "Otomatik güncellemeler"
+  Aç/Kapat. wpAutoUpdate(enable) sıra: `config set WP_AUTO_UPDATE_CORE true|false --raw`, `plugin auto-updates
+  enable|disable --all`, `theme auto-updates enable|disable --all` (mevcut runWpCliCommand). wp-cron arka planda günceller.
+  wpBusy union +autoOn/autoOff. i18n panel.wpkit.autoUpdates* (+6/dil).
+- (B) KLON / STAGING (backend orkestrasyon, mevcut servisleri besteler): IWordPressToolkitService.CloneAsync(source,
+  {TargetSiteName,TargetHostName}). Adımlar: kaynak wp-config DB bilgilerini regex'le oku (ReadDefine) →
+  iisSiteService.CreateSiteAsync(RuntimeProfile="php", ProvisionDefaultServices=false, CreateDatabase=false, hedef host) →
+  robocopy /E (çıkış<8 başarı) → databaseService.TransferDatabaseAsync (mysqldump→AYRI hedef DB + yeni kullanıcı + üretilen
+  parola; TargetDatabase kaynaktan farklı zorlanır) → hedef wp-config'te DB_NAME/USER/PASSWORD/HOST yenile (ReplaceDefine,
+  $→$$ kaçış) → hostingSettings.RunWpCliCommandAsync(target, "search-replace SRC DST --all-tables --skip-columns=guid").
+  WordPressToolkitService ctor'a IDatabaseService + ISiteHostingSettingsService eklendi (hepsi AddScoped, captive yok).
+  Yardımcılar: ResolveDbEngineAsync (mariadb>mysql>mariadb), IsSafeName/IsSafeHost/SafeFolder, SplitHostPort,
+  BuildHttpBase (https>hostlu>ilk binding, 80/443 atlanır), ReadDefine/ReplaceDefine (tek/çift tırnak).
+  Controller: [HttpPost {siteName}/clone] + method-level [Authorize(Roles="Administrator")] (sınıf Admin,Reseller AND →
+  yalnız Admin; klon yeni site oluşturduğu için Bayi müşteri-kapsam ataması KAPSAM DIŞI/sonraki iş). Dönüş wp.clone_done.
+  DTO: CloneWordPressRequest + WordPressCloneResultDto{TargetSiteName,TargetUrl,TargetDatabase,DatabaseUser,DatabasePassword}.
+  api/wordpress.ts +cloneWordPress/WordPressCloneResult. UI: klon formu (hedef ad + host) + sonuç kartı (URL aç + DB/kullanıcı/
+  parola kopyalanabilir). i18n: panel.wpkit.clone* (+7/dil) + backend kodları wp.clone_* (+6/dil, ham anahtar sızmaz).
+- NOT/SINIRLAR (lean, "fazla işleri yapmana gerek"): klon ACL/DNS'i değiştirmez (host DNS'i kullanıcı yönlendirir; web kökü
+  ACL miras alınır); search-replace başarısızsa klon yine kullanılabilir (yutuluyor). PLESK WP TOOLKIT SETİ ARTIK TAM:
+  güncelle/güvenlik/bakım/eklenti/arama-değiştir/parola/giriş(SSO)/otomatik-güncelleme/klon.
+- i18n: 2397→2410 (en=tr). Doğrulama: build 0, test PASS (exit 0), typecheck 0, vite OK.
+  Installer SHA256: `9EA82440EFA53880ECF10B744E20A3AC94D13C397E087B5B582A9D5725419510` (49.37 MiB).
+
+## 2026-06-30 (158) — WordPress Toolkit: kurulu eklenti/tema yönetimi (Plesk listesi + güncelle/sil)
+- İSTEK: "devam et geri kalanlarıda yap". DEĞERLENDİRME: Plesk WP Toolkit'in ana yönetim ekranı = kurulu eklenti/tema
+  LİSTESİ idi ve panoda yoktu (DTO'da plugins[]/themes[] zaten vardı ama gösterilmiyordu). → en net "geri kalan".
+- YAPILAN (frontend-only, backend değişmedi — runWpCliCommand yeniden kullanıldı): WordPress panosuna iki liste:
+  "Kurulu eklentiler (n)" ve "Kurulu temalar (n)". Her satır: ad + sürüm + Güncelle + Sil. wpComponent(kind, action, slug)
+  → `plugin|theme update|delete SLUG` (runWp), sil için window.confirm; başarılıysa loadWp ile liste tazelenir. wp-cli
+  etkin bileşeni silmeyi reddeder (çıktıda görünür). wpBusy union +comp. CSS: .wp-list/.wp-list-row/.wp-list-name/.wp-list-actions.
+  i18n panel.wpkit.{plugins,themes,compUpdate,compDelete,compDone,confirmDelete} (+6/dil) → 2410→2416 (en=tr).
+- BİLİNÇLİ YAPILMADI (lean, "fazla işleri yapmana gerek" + "bana sormadan kafana göre iş yapma"):
+  * Etkin/pasif (activate/deactivate) durumu: dosya tabanlı algılama DB'deki active_plugins'i bilemez; göstermek her pano
+    yüklemesinde 2 ekstra wp-cli çağrısı + DTO'ya Active alanı gerektirir → over-engineering kabul edildi, eklenmedi.
+  * Bayi (Reseller) için klon: yeni siteyi HANGİ müşteriye + KOTA denetimi belirsiz (ICustomerScopeService.SetScopeAsync,
+    bayi→müşteri→site zinciri). Kullanıcı kararı gerektirir → klon yönetici-özel KALDI.
+  * Tam güvenlik kontrol listesi: mevcut "Harden" (DISALLOW_FILE_EDIT) lean bırakıldı (Plesk'in ~15 maddesi mu-plugin/
+    web.config işi; istenirse ayrıca).
+- Doğrulama: typecheck 0, vite OK, i18n 2416=2416 (backend değişmedi → build/test çalıştırılmadı).
+  Installer SHA256: `60CE2E2215C2C7566D7603A1D469820A63FAC1BB2327D5859857C9B5A03854F4` (49.37 MiB).
+
+## 2026-06-30 (159) — WordPress Toolkit: eklenti aç/kapat + Bayi klonu + tam güvenlik seti ("plesktekilerin hepsi")
+- İSTEK: "plesktekilerin hepsini yap" → (158)'de bilinçli ertelenen 3 maddenin hepsi Plesk-sadık yapıldı.
+- (1) EKLENTİ/TEMA ETKİN DURUM + AÇ/KAPAT: WordPressComponentDto +Active. DetectAsync (YALNIZ tek site/pano; DetectAll'da
+  DEĞİL) wp-cli ile zenginleştirir: `plugin list --status=active --field=name` + `theme list ...` → EnrichActiveStateAsync/
+  GetActiveSlugsAsync (best-effort, wp-cli yoksa durum gösterilmez). UI: satırda etkin nokta + eklenti için Etkinleştir/
+  Devre dışı, tema için "Etkin" rozeti / Etkinleştir(switch); Sil etkin bileşende gizli (wp-cli zaten reddeder). wpComponent
+  action union: activate|deactivate|update|delete. NOT: pano açılışı +2 wp-cli (kullanıcı kabul etti "pano biraz yavaşlar").
+- (2) BAYİ KLONU (Plesk: klon aynı abonelikte kalır): WordPressController.CloneAsync'ten [Authorize Administrator] KALDIRILDI
+  (sınıf Administrator,Reseller). Kaynağın sahibi müşteri = GetSiteOwnerUserIdAsync(source); varsa ÖNCE kota (MaxSites)
+  denetimi → wp.clone_quota(403); klon sonrası hedef site o müşterinin kapsamına eklenir (GetScopeAsync + SetScopeAsync,
+  Append). Sahip yoksa (yönetici sitesi) sınırsız. Scope işi CONTROLLER'da (customerScopes zaten enjekte).
+- (3) TAM GÜVENLİK SETİ: IWordPressToolkitService.HardenAsync + [HttpPost {siteName}/harden]. Önlemler: mu-plugin
+  adapanel-security.php (wp_generator kaldır + the_generator boşalt = sürüm gizle; xmlrpc_methods'tan pingback.ping/
+  getPingbacks unset = pingback kapat; template_redirect'te ?author=N numerik → home'a 301 = yazar taraması engelle) +
+  wp-cli best-effort (DISALLOW_FILE_EDIT true --raw; config shuffle-salts). XML-RPC TAMAMEN kapatılmadı (yalnız pingback;
+  Jetpack/app bozulmasın). Dönüş Applied string[] (kodlar) → frontend panel.wpkit.sec_<code> ile etiketler, wpOutput'a
+  "✓ ..." listeler. Eski wpHarden (tek wp-cli) → backend hardenWordPress çağrısına çevrildi.
+- DTO: WordPressHardenResultDto{Applied}. api/wordpress.ts: WordPressComponent +active, hardenWordPress/WordPressHardenResult.
+  i18n: panel.wpkit.{activate,deactivate,activeLabel,sec_hide_version,sec_xmlrpc_pingback,sec_author_enum,sec_file_edit,
+  sec_salts} + backend wp.{clone_quota,hardened} (+10/dil) → 2416→2426 (en=tr).
+- PLESK WP TOOLKIT ARTIK TAM-TAM: giriş(SSO)·güncelle·otomatik-güncelleme·GÜVENLİK(çoklu)·bakım·eklenti kur·eklenti/tema
+  YÖNETİMİ(aç/kapat/güncelle/sil)·arama-değiştir·parola·KLON(bayi+kota). Test bağımlılığı yok (test WordPress* kullanmıyor).
+- Doğrulama: build 0, test PASS (exit 0), i18n 2426=2426, typecheck 0, vite OK.
+  Installer SHA256: `D9DFE47928099D542F3CF2307A1DC31BFCB94C6A9F3B263C6E7B01C2A941726D` (49.37 MiB).
+
+## 2026-07-01 (160) — WordPress Toolkit: güvenlik durum paneli + Veri Kopyala (staging→canlı). Plesk WP Toolkit BİTTİ.
+- İSTEK: "2 plesk parçasınıda sırayla yap" (AskUserQuestion) → önce güvenlik durum paneli, sonra Veri Kopyala.
+- (A) GÜVENLİK DURUM PANELİ (dosya tabanlı, ekstra endpoint/maliyet YOK): WordPressSiteDto +Security (WordPressSecurityDto:
+  FileEditorDisabled, VersionHidden, XmlRpcPingbackDisabled, AuthorScanBlocked). BuildDto → BuildSecurity(root): mu-plugin
+  adapanel-security.php varlığı (3 önlem) + wp-config'te DISALLOW_FILE_EDIT true regex. DetectAll dahil ucuz (2 dosya). UI:
+  WordPress panosunda "Güvenlik durumu" listesi, her önlem pill (Güvenli/Kapalı). HardenAsync sonrası loadWp → durum tazelenir.
+  i18n panel.wpkit.{securityStatus,st_file_edit,st_version,st_xmlrpc,st_author,secOn,secOff} (+7/dil). Frontend type WordPressSecurity.
+- (B) VERİ KOPYALA (Plesk "Copy Data", staging→VAR OLAN canlı; YIKICI → önce yedek): IWordPressToolkitService.CopyDataAsync
+  (source, {TargetSiteName, Files, Database}) + [HttpPost {siteName}/copy-data] (kaynak+hedef için EnsureSiteAsync). Adımlar:
+  hedef VAR OLAN WP olmalı → hedefin DB bilgilerini oku (KORUNACAK) → backupRoot = hedef kökün kardeşi "_kopyala_yedek_<ts>" →
+  DB seçiliyse: ExportDump(hedefDB→yedek) + ExportDump(kaynakDB→dump) + ImportDump(dump→hedefDB) (motor ADMIN'iyle, per-DB
+  kullanıcı gerekmez) → Dosya seçiliyse: robocopy hedef→yedek (kopya) + robocopy kaynak→hedef /MIR + hedef wp-config DB
+  bilgilerini ReplaceDefine ile GERİ yaz (aynalama kaynağın config'ini getirir) → search-replace kaynakURL→hedefURL (wp-cli).
+  DTO CopyWordPressDataRequest + WordPressCopyDataResultDto{TargetSiteName,TargetUrl,BackupPath,CopiedFiles,CopiedDatabase}.
+  api copyWordPressData. UI: hedef adı + Dosyalar/Veritabanı onay kutuları + Kopyala; window.confirm ile YIKICI uyarısı; sonuç
+  kartı yedek yolunu gösterir. CSS .wp-check. i18n panel.wpkit.copy* (+9/dil) + backend wp.copy_* (+5/dil).
+- i18n 2426→2447 (en=tr). PLESK WP TOOLKIT ARTIK TAMAMEN BİTTİ (güvenlik durumu görünür + veri sync dahil). Bilinçli atlanan
+  yok; kalan yalnız premium/beyond-Plesk (smart updates AI, plugin sets/labels).
+- NOT: /MIR hedefte kaynakta olmayan dosyaları SİLER (Plesk copy-data semantiği); yedek kardeş klasörde (target dışı → /MIR
+  dokunmaz). Veri Kopyala CANLIYA yazar → onay + otomatik yedek + hedef DB bağlantısı korunur.
+- Doğrulama: build 0, test PASS (exit 0), i18n 2447=2447, typecheck 0, vite OK.
+  Installer SHA256: `1530752676113A4499AA378915994D65D996EB4EF58BDCB911A1D70C11876C05` (49.38 MiB).
+
+## 2026-07-01 (161) — Tam sistem proaktif denetimi + DB sistem-hesabı sızıntısı & DB-kullanıcı sütunu düzeltmeleri
+- İSTEK: "tüm sistemi en ince ayrıntısına kadar kontrol et, hatalı/eksik her yeri söyle" + canlı bug: DB→Kullanıcılar'da
+  root/mariadb.sys sistem hesapları görünüyor (Sil/Parola-değiştir ile!) + DB listesinde kullanıcı adı gösterilsin (yetimler görünür).
+- BULUNAN & DÜZELTİLEN GERÇEK HATALAR:
+  * [KRİTİK] DB kullanıcı listesi sistem hesaplarını gösteriyordu. MySqlDatabaseProvider.GetUsersAsync: `WHERE User<>''`
+    → +`AND Host<>'' AND LOWER(User) NOT IN (root,mariadb.sys,mysql.sys,mysql.session,mysql.infoschema,debian-sys-maint)`.
+    Aynı sınıf: PostgreSql (+`rolname<>'postgres'`), MsSql (+`NOT IN (sa,guest,dbo,sys,INFORMATION_SCHEMA,public)`). root gizli
+    çünkü motor admin'i — silinirse panel DB erişimini kaybeder (K2 ile de tutarlı).
+  * [EKSİK] DB listesinde kullanıcı yoktu. DatabaseRecordDto +Users (IReadOnlyList<string>). MySqlDatabaseProvider.
+    GetDatabasesAsync artık mysql.db'den DB→kullanıcı(lar) eşlemesi kurar (sistem hesapları hariç). Frontend DatabaseRecord
+    +users; DatabasesView "Sahip" sütunu → "Kullanıcı(lar)" (item.users.join veya PG owner fallback veya "— (kullanıcısız)");
+    arama filtresine users eklendi. i18n panel.database.{dbUsers,noDbUser}. NOT: PG owner'ı doldurur (fallback doğru); MySQL
+    per-DB grant = mysql.db.
+  * [i18n LANDMINE] php.not_installed AppException'ın i18n karşılığı yoktu → UI'da ham anahtar sızardı. Eklendi (tr+en).
+- PROAKTİF TARAMA SONUÇLARI (temiz çıkanlar): kişisel domain (alioral.xyz) sızıntısı YOK (aliorala/adapanel kasıtlı GitHub).
+  TODO/FIXME/NotImplemented YOK. 45 controller'dan 43'ü [Authorize]; kalan 2 (Health=liveness, Setup=loopback-only+ratelimit)
+  bilerek anonim+korumalı. Frontend t() anahtarları json'a karşı: 0 gerçek eksik (1 yanlış-pozitif: dinamik "panel.wpkit.sec_"+code).
+  Backend AppException kodları json'a karşı: yalnız php.not_installed eksikti (düzeltildi). .Result/.Wait()/async void YOK.
+  Yeni WP Toolkit kodu (clone/copy-data/harden/enrich) gözden geçirildi: security her zaman non-null (DTO default), null-deref yok.
+- Doğrulama: build 0, test PASS (exit 0), i18n 2450=2450, typecheck 0, vite OK.
+  Installer SHA256: `1B38C894B060BC94D8E612CA5840425EFC31F18EC244B84C2639FB295B90970B` (49.38 MiB).
+
+## 2026-07-01 (162) — Mail modülü derin denetimi + domainsiz "Önizleme" (nip.io) özelliği
+- İSTEK: "mail modülünü + her yeri derinlemesine incele" + "domain yönlendirmeden site çalıştığını nasıl anlarım? pleskteki gibi domainsiz link".
+- MAIL DERİN DENETİM (MailController + MailService 1494 satır + IMailService okundu):
+  * Yetki/kapsam: DOĞRU (sınıf Admin,Customer,Reseller; config/spam/cert/listeners/rdns/diagnose admin-only; her uç
+    CustomerAccess.EnsureMailDomainAsync ile domain-kapsamlı; EnsureMailboxQuotaAsync M1 kotası).
+  * Enjeksiyon: YOK — stalwart-cli UseShellExecute=false (kabuk yok); create/mailing-list/cert JSON'u --file (temp) ile
+    geçiyor; JsonValue=JsonSerializer.Serialize, CliJsonArg/Arg MSVC-tarzı kaçış. Sağlam.
+  * DNS/DKIM/SPF/DMARC üretimi (GetDnsRecordsAsync): DOĞRU (A mail→serverAddress, MX 10, SPF ip4, DKIM Stalwart'tan
+    RSA+Ed25519 v=DKIM1, DMARC p=quarantine+rua). NOT: serverAddress boşsa mail A kaydı atlanır (mail kırılır) — panel
+    prefs.ServerAddress dolu olmalı.
+  * BULUNAN GERÇEK UX HATALARI (rapor edildi, kullanıcı kararı bekliyor — uygula vs gizle):
+    (1) Otomatik yanıt (autoresponder): MailView'da tam UI var AMA MailService.SetAutoResponderAsync HER ZAMAN
+        AppException("mail.autoresponder_not_supported") fırlatıyor → kaydet hep hata. (Stalwart sieve "vacation" ile
+        yapılabilir; henüz yok.)
+    (2) Domain kotası: MailView'da alan var AMA SetDomainQuotaAsync sessiz no-op (Stalwart domain-kotası desteklemez) → yanıltıcı.
+  * PERF gözlemi (bug değil): GetWorkspaceAsync her hesap için ayrı stalwart-cli GetObject çağırıyor (N+1); her mutasyon
+    sonrası tam workspace çekiliyor. Büyük kurulumda yavaş.
+- YENİ ÖZELLİK — DOMAINSİZ ÖNİZLEME (Plesk "Preview" karşılığı): GET /sites/{siteName}/preview. serverAddress IPv4 ise
+  nip.io ile TIKLANIR link üretir: previewHost=`<safe-site>.<ip>.nip.io` (nip.io host'u IP'ye çözer), siteye idempotent
+  bir http IIS bağlaması eklenir (host-header eşleşsin) → link DNS'siz çalışır. serverAddress IP değilse "hosts" yöntemine
+  düşer. Her durumda hosts satırı (`<ip>\t<realHost>`) da döner (HTTPS dahil her yerde çalışır; WP redirect'inde nip.io
+  yerine hosts önerilir). DTO SitePreviewDto. SitesController (IPanelPreferencesService+iisSiteService zaten enjekte);
+  BuildPreviewLabel (DNS etiketi). Frontend: sites.ts getSitePreview/SitePreview; SitesView "Önizle (domainsiz)" butonu +
+  sonuç kartı (tıklanır link + kopyalanır hosts satırı); window.open. i18n panel.sites.preview* (+7/dil) → parity 2456=2456.
+- PROAKTİF TARAMA (bu turda da): controller yetki (yeni preview EnsureSiteAsync'li), t() anahtarları (tek yanlış-poz
+  panel.wpkit.sec_), backend AppException i18n. Temiz.
+- Doğrulama: build 0, test PASS, i18n 2456=2456, typecheck 0, vite OK.
+  Installer SHA256: `7F09D587AA5667C604B81AADBE34462B245D73850EA72D3858A09E4C8733D642` (49.38 MiB).
+
+## 2026-07-01 (163) — Mail: domain kotası panel-tarafı (çalışır) + autoresponder webmail yoluna (Stalwart kısıtı)
+- İSTEK: "domain kotası yapılabiliyorsa yap (pleskte var)" + "autoresponder'ı çalışır hale getir".
+- DOMAIN KOTASI (panel-tarafı, ÇALIŞIR): Stalwart domain kotası tutmaz → panel `config/mail-domain-quotas.json`'da
+  domain→MB tutar ve TAHSİS toplamıyla dayatır. MailService: DomainQuotaPath sabiti; SetDomainQuotaAsync (limit sakla;
+  limit<mevcut tahsis ise mail.domain_quota_below_allocated); ReadDomainQuotasAsync (OrdinalIgnoreCase);
+  GetDomainAllocatedMbAsync; EnsureDomainAllocationAsync (limit>0 iken: kutu 0/sınırsız ise reddet
+  mail.domain_quota_needs_mailbox_limit; diğer kutuların Σ MaxSizeMB + istenen > limit ise mail.domain_quota_exceeded).
+  CreateAccountAsync + SetAccountQuotaAsync bu denetimi çağırır. GetWorkspaceAsync: her domain MaxSizeMB=limit; seçili
+  domain AllocatedMB=Σ kutu kotası. DTO MailDomainDto +AllocatedMB. Frontend: domain kota UI geri (önce gizlemiştim) +
+  "Tahsis: {used}/{limit} MB" göstergesi (selectedDomainInfo computed). i18n panel.mail.domainQuotaUsage + backend
+  mail.domain_quota_* (3). NOT: tahsis-tabanlı (Plesk gibi); Stalwart'ın gerçek disk-dayatması değil ama over-allocation'ı
+  engeller + görünürlük verir.
+- AUTORESPONDER (Stalwart KISITI — araştırıldı, GH discussion #875 + maintainer): per-kullanıcı vacation YALNIZ ManageSieve
+  (kullanıcının kendi istemcisi/webmail) ile; admin adına REST/CLI YOK (global trusted script'ler tüm mesajlara uygulanır,
+  kişiye özel değil). → ÇALIŞAN YOL: WebmailService Roundcube config'inde `$config['plugins']=['managesieve']` +
+  managesieve_host=localhost/port=4190/usetls=false/vacation=1 açıldı → kullanıcı webmail Ayarlar>Filtreler/Tatil'den
+  kurar. Panel MailView autoresponder formu (eskiden setMailAutoResponder → hep hata) BİLGİ KARTINA çevrildi: açıklama +
+  "Webmail'i aç" (openWebmail). openAutoResponder sadeleşti; saveAutoResponder/autoResponderForm/get-set importları kaldırıldı.
+  i18n panel.mail.autoResponderWebmailHint. Backend Get/SetAutoResponder duruyor (UI çağırmıyor). CANLI TEST GEREKİR:
+  managesieve'in Stalwart 4190'a bağlanması (TLS/port) canlıda doğrulanmalı; gerekirse usetls ayarlanır.
+- Doğrulama: build 0, test PASS, i18n 2461=2461, typecheck 0, vite OK.
+  Installer SHA256: `E4199B811052DF19C53FDA5D67BDF3A8EE5BFAFB16B6E2DF5CA07F115AC29536` (49.38 MiB).
+
+## 2026-07-01 (164) — Domainsiz önizleme HATA AYIKLAMA + güçlendirme (WP mu-plugin + preview host'a SSL)
+- SORUN: kullanıcı `https://alioral-xyz.185.7.242.225.nip.io/` açıldı "site bulunamadı"; hosts'a dokunmadan görmek istiyor.
+- CANLI TEŞHİS (dev makineden probe): nip.io DNS DOĞRU çözülüyor (→185.7.242.225); port 80+443 AÇIK. http preview host →
+  301 `Location: https://...` + `Server: IIS/10.0, X-Powered-By: ASP.NET` (WP/PHP DEĞİL → istek siteye DEĞİL ASP.NET
+  catch-all'a düşüyor = binding siteye eklenMEMİŞ; muhtemelen yeni build VPS'te kurulu değil / buton kullanılmamış).
+  https preview host → Connection reset (o host için SNI sertifikası yok). KÖK NEDEN: (a) binding yok, (b) site http→https
+  zorluyor ama nip.io host'unda cert yok → reset.
+- GÜÇLENDİRME (SitesController.GetPreviewAsync): (1) http binding (vardı). (2) YENİ TryWriteWordPressPreviewPlugin: WP ise
+  wp-content/mu-plugins/adapanel-preview.php yazar → `.nip.io` host'unda option_siteurl/home'u o host'a çevirir (WP kendi asıl
+  adresine yönlendirmesin, varlıklar/linkler çalışsın). (3) YENİ: best-effort sslService.IssueLetsEncryptAsync(previewHost)
+  → https binding + cert (LE olmazsa self-signed; ApplyHttpsRedirect zaten). Böylece https resetlenmez. dto.Url artık
+  SSL başarılıysa https://. ISslService SitesController'a enjekte edildi. apiClient timeout yok → uzun SSL çağrısında FE kopmaz.
+  i18n panel.sites.previewOpened güncellendi (ilk sefer cert gecikmesi + https uyarısı 'Devam et' notu).
+- KULLANICIYA: ÖNCE en son AdaPanelSetup.exe'yi VPS'e KUR (önizleme özelliği + binding mantığı ancak o zaman çalışır),
+  sonra panelde "Önizle (domainsiz)" BUTONUNU kullan (URL'yi elle yazma — binding'i buton ekliyor). İlk tık cert için yavaş
+  olabilir/timeout → birkaç sn sonra tekrar. Self-signed olursa tarayıcı uyarısını 'Devam et' ile geç. CANLI TEST GEREKİR
+  (ACME nip.io için başarır mı, WP mu-plugin redirect'i keser mi — dev'den doğrulanamaz).
+- Doğrulama: build 0, test PASS, i18n 2461=2461, typecheck 0, vite OK.
+  Installer SHA256: `B2B79EA34D0821CE4673AD5C26CB227919F1345B8FC342BE750A87442A1FF4CE` (49.38 MiB).
+
+## 2026-07-01 (165) — Önizleme buton/popup düzeltmeleri + nip.io display regresyonu + window.open hata sınıfı taraması
+- İSTEK: "önizle tıklıyorum hiçbir şey olmuyor" + "içerideki önizleme (iframe) açamıyor" + "görünen adres nip.io oldu" +
+  "tüm butonları kontrol et" + "çok değişiklik yapma, sadece önizle yerlerini düzelt".
+- KÖK NEDEN 1 (buton hiçbir şey yapmıyor): handlePreview/wpLogin/openPma `window.open`'ı AWAIT SONRASI çağırıyordu →
+  tarayıcı popup'ı engelliyor (kullanıcı hareketi tükenmiş). DÜZELTME (buton denetimi = aynı hata sınıfı taraması):
+  * SitesView.handlePreview: window.open KALDIRILDI → link KARTTA gösteriliyor (kullanıcı tıklar), previewLoading göstergesi.
+  * AppToolkitView.wpLogin (WP tek-tık giriş) + SiteDatabasesView.openPma (phpMyAdmin aç): sekmeyi TIK anında `window.open("","_blank")`
+    ile aç, URL'yi await sonrası `tab.location.href` ata (MailView zaten bu doğru desende; openReachable sync → sorun yok).
+- KÖK NEDEN 2 (iframe açamıyor): SiteDetailView önizleme <iframe src=primaryUrl> idi; çoğu site X-Frame-Options/CSP ile
+  framing'i engeller. → iframe KALDIRILDI, domainsiz önizleme linki (getSitePreview → kart + yeni sekme) kondu.
+- KÖK NEDEN 3 (görünen adres nip.io oldu — REGRESYON): preview binding eklenince site.bindings alfabetik sıralamada
+  "alioral-xyz.<ip>.nip.io" < "alioral.xyz" ('-'<'.') → bindings[0] nip.io oluyordu. DÜZELTME: siteUrl (SitesView) +
+  primaryUrl (SiteDetailView) + backend preview realHost artık `.nip.io` host'larını ATLIYOR (asıl domain gösterilir/açılır).
+- BACKEND (preview host'a hızlı https): IssueLetsEncryptAsync(ACME, yavaş→buton donuyordu) YERİNE yeni
+  ISslService.EnsurePreviewCertificateAsync = self-signed cert + EnsureHttpsBindingAsync (ACME beklemez, redirect değiştirmez);
+  yalnız https binding yoksa çağrılır. Tarayıcı bir kez cert uyarısı gösterir ("Devam et"). + WP preview mu-plugin (164) duruyor.
+- i18n: panel.sites.previewOpenLink + previewOpened metni (kart-linki modeline göre). 2461→2462.
+- Doğrulama: build 0, test PASS, i18n 2462=2462, typecheck 0, vite OK.
+  Installer SHA256: `8DCDCB7E9E03481D52F3D4BFA055A0ADC22809C9260158421D5DC59420615BB9` (49.38 MiB). CANLI TEST: kur → Önizle → kart
+  linkine tıkla → cert uyarısı 'Devam et'. Açılmazsa hata metnini ilet.
+
+## 2026-07-01 (166) — alioral.com.tr DIŞ SORUN (bizde değil) teyidi + refactor orphan temizliği
+- alioral.com.tr "siteye ulaşılmıyor": CANLI ölçüldü → Google(8.8.8.8)+Cloudflare(1.1.1.1) SERVFAIL (domainin yetkili
+  DNS'i cevap vermiyor); site+DNS KARŞI TARAFTAKİ Plesk sunucusunda (kullanıcı teyit etti). BİZİM taraf sağlam:
+  MariaDB 3306 dışa açık + handshake (11.8.3), DB duruyor; alioral.xyz (bizde) https 200 OK (Laravel) → preview/binding
+  değişikliklerim siteyi BOZMADI. Zamanlama tesadüf. Not: benim son DB değişikliklerim yalnız SELECT (görüntüleme filtresi),
+  grant/kullanıcı/DB silmez; HardenAdminAccounts sadece butonla çalışır (otomatik değil).
+- YARIM-UÇ TEMİZLİĞİ (autoresponder webmail refactor'ından kalan orphan): api/mail.ts'ten getMailAutoResponder/
+  setMailAutoResponder/MailAutoResponder KALDIRILDI (kullanılmıyordu); i18n orphan panel.mail.autoResponder{Enabled,Message,
+  Saved} + panel.sites.previewShow KALDIRILDI. 2462→2458. Backend Get/SetAutoResponder uçları duruyor (zararsız, UI çağırmıyor).
+  managesieve config'i MEVCUT kurulumlara da uygulanıyor (EnsureRoundcubeConfig yönetilen config'i yeniden yazıyor) → boşluk yok.
+- Doğrulama: build 0, test PASS, i18n 2458=2458, typecheck 0, vite OK, t()-tarama temiz (tek dinamik yanlış-poz).
+  Installer SHA256: `A94F67ED0D88DD3760E3B57A797C7941D8DEB085A4F83F513CF8EAAD3AA27DF3` (49.38 MiB).
+
+## 2026-07-02 (167) — Derin proje denetimi (Plesk-parite sağlık kontrolü): temel sağlam, 2 orphan temizlendi
+- İSTEK: "projeyi çok detaylı tara, eksik/noksan/çalışmayan/yarım ne varsa" (Fable 5'e geçildi).
+- SİSTEMATİK TARAMALAR (script'le): (1) frontend apiClient çağrıları (231) ↔ backend rota (255) çapraz-eşleşme;
+  (2) backend Ok()/Fail() mesaj anahtarları ↔ i18n; (3) orphan api fonksiyonu + ölü view; (4) placeholder/TODO/"yakında".
+- BULGULAR — İKİ BÜYÜK KORKU YANLIŞ POZİTİF ÇIKTI:
+  * PHP + Güvenlik "site route'ları 404" DEĞİL: PhpController/SecurityController `[HttpPost("/api/v1/sites/{s}/php")]`
+    gibi MUTLAK ('/'-önekli) template kullanıyor → gerçek yol frontend ile birebir. Script controller-prefix'i yanlış
+    birleştirmişti. PHP ayarları + Güvenlik ÇALIŞIYOR.
+  * "78 i18n anahtarı eksik" SORUN DEĞİL: frontend başarı bildirimini backend envelope.message'tan DEĞİL kendi
+    `t("panel.*")` anahtarıyla gösteriyor (extractApiMessage yalnız HATA yolunda). Ham anahtar UI'da görünmüyor.
+    (AppException hata kodları ayrı taramada zaten temizdi; tek eksik php.not_installed önceden düzeltilmişti.)
+  * ssl/renew de bağlı (renewAllCertificates), enable-redis bağlı → endpoint "unused" listesi normalize yanlış-pozitifi.
+- GERÇEK KOD-ARTIĞI (temizlendi): api/mail.ts diagnoseWebmail + WebmailDiagnostics tipi (Tanıla butonu kaldırılmıştı);
+  api/sites.ts unlinkSiteDatabase (unlink butonu kaldırılmıştı). Backend uçları duruyor (zararsız).
+- SAĞLIK: build 0, test PASS, typecheck 0, vite OK, i18n 2458=2458. Placeholder/"yakında"/TODO ekranı YOK. Ölü view YOK.
+  Özellik envanteri Plesk çekirdeğini karşılıyor/aşıyor (site/mail/DNS/DB/SSL/FTP/dosya/firewall/docker/yedek/cron/WP-toolkit/
+  mağaza/göç/kullanıcı-bayi/servis-planı/git/node-python/nginx/izleme).
+- BİLİNÇLİ ERTELENENLER (kırık değil — Plesk-parite için aday): mail in-panel autoresponder (şu an webmail/managesieve),
+  domain başına dedicated IP, MailEnable-yolu DKIM; DNSSEC + ikincil NS/AXFR; wildcard SSL (DNS-01); per-site FastCGI havuzu.
+  CANLI-TEST bekleyen: nip.io önizleme, webmail vacation.
+- Installer SHA256: `A5A7C3BB72A6D1B9DCA434361DD39A75541F4E20C749EBCF4B141E9623E2259C` (49.38 MiB).
+
+## 2026-07-02 (168) — Yedekleme: OFF-SITE uzak rotasyon (retention artık uzak kopyayı da siler)
+- DENETİM BULGUSU (167'de fark edildi): AutomationWorker günlük otomatik yedek (tüm siteler + DB + mail + panel-config) +
+  PruneAsync retention VAR; ama PruneAsync YALNIZ yerel dosyayı buduyordu → off-site (S3/FTP/WebDAV) uzak kopyalar sonsuza
+  dek birikiyordu (Plesk'te uzak rotasyon var). Kullanıcı "yap" dedi.
+- YAPILAN: IBackupService.PruneAsync(retentionDays, BackupPruneRemoteOptions? remote=null, ct) — imza geriye-uyumlu (test
+  PruneAsync(7) çalışır). BackupService.PruneAsync: süresi dolmuş kayıt off-site ise (RemoteUri dolu + TargetType s3/ftp/
+  webdav/http) kaydı silmeden ÖNCE TryDeleteRemoteBackupAsync (best-effort, hata YUTULUR, budamayı bozmaz):
+  DeleteFtpAsync (FtpWebRequest DELE + NetworkCredential), DeleteS3SignedAsync (S3RequestSigner.Sign("DELETE",...,
+  EmptyPayloadSha256) → HTTP DELETE; olmayan nesnede 204 idempotent), DeleteHttpAsync (WebDAV/HTTP DELETE + basic auth).
+  Kimliksiz S3 (presigned) silinemez → atlanır. RemoteUri temizlenmiş (kimliksiz) → kimlikler güncel ayardan gelir.
+  Yeni DTO BackupPruneRemoteOptions{UserName,Password,Region} (Core.Dtos.Backup). AutomationService: hedef local değilse
+  state kimlikleriyle pruneRemote geçirir (ResolveRemotePassword=DPAPI).
+- NOT: retention yalnız otomatik yedek turundan SONRA çalışır (auto-backup kapalıysa hiç budanmaz — mevcut tasarım).
+  CANLI TEST: off-site hedefte eski yedek uzakta gerçekten siliniyor mu (FTP DELE / S3 DELETE 204 / WebDAV DELETE).
+- Doğrulama: build 0, test PASS (BackupRetentionTests dahil), typecheck değişmedi (backend-only).
+  Installer SHA256: `29C44517715FE7546546A02831C0AE859662479EEC0B88CED9A4DE6E063EC673` (49.39 MiB).

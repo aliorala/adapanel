@@ -18,6 +18,9 @@
               <small>{{ overview.logicalProcessorCount }} {{ t("panel.system.cores") }}</small>
             </div>
           </div>
+          <svg v-if="cpuSpark" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
+            <polyline :points="cpuSpark" />
+          </svg>
         </article>
 
         <article class="meter-card">
@@ -28,6 +31,9 @@
               <small>{{ formatBytes(overview.usedMemoryBytes) }} / {{ formatBytes(overview.totalMemoryBytes) }}</small>
             </div>
           </div>
+          <svg v-if="memSpark" class="meter-spark mem" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
+            <polyline :points="memSpark" />
+          </svg>
         </article>
 
         <article class="meter-card">
@@ -116,13 +122,29 @@
           <span>{{ formatBytes(network.bytesReceivedPerSecond + network.bytesSentPerSecond) }}</span>
         </div>
       </div>
+
+      <div v-if="overview && hasNetTrend" class="net-trend">
+        <div class="net-trend-head">
+          <span>{{ t("panel.monitor.networkTrend") }}</span>
+          <span class="meta">{{ t("panel.monitor.trend10m") }}</span>
+        </div>
+        <svg class="net-spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
+          <polyline class="down" :points="netDownSpark" />
+          <polyline class="up" :points="netUpSpark" />
+        </svg>
+        <div class="net-legend">
+          <span><i class="legend-dot down"></i>{{ t("panel.system.download") }}</span>
+          <span><i class="legend-dot up"></i>{{ t("panel.system.upload") }}</span>
+        </div>
+      </div>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { useSystemStore } from "../stores/system";
 
 type DiskUsage = {
   name: string;
@@ -163,6 +185,53 @@ const props = defineProps<{
 const { t } = useI18n();
 
 const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
+
+// Plesk-benzeri "derin izleme": sunucu dakikada bir CPU/RAM/ağ örnekler (kalıcı geçmiş halkası); izleme ekranı
+// bu geçmişi çekip küçük SVG sparkline'larla trend gösterir → sayfa yenilense de DOLU gelir (~24 saatlik pencere).
+const systemStore = useSystemStore();
+let historyTimer: number | null = null;
+
+const cpuSeries = computed(() => systemStore.history.map((sample) => sample.cpuPercent));
+const memSeries = computed(() => systemStore.history.map((sample) => sample.memoryPercent));
+const netDownSeries = computed(() => systemStore.history.map((sample) => sample.networkDownBytesPerSec));
+const netUpSeries = computed(() => systemStore.history.map((sample) => sample.networkUpBytesPerSec));
+
+const cpuSpark = computed(() => spark(cpuSeries.value, 100));
+const memSpark = computed(() => spark(memSeries.value, 100));
+const netScale = computed(() => Math.max(1, ...netDownSeries.value, ...netUpSeries.value));
+const netDownSpark = computed(() => spark(netDownSeries.value, netScale.value));
+const netUpSpark = computed(() => spark(netUpSeries.value, netScale.value));
+const hasNetTrend = computed(() => systemStore.history.length > 1);
+
+onMounted(() => {
+  void systemStore.fetchHistory();
+  historyTimer = window.setInterval(() => void systemStore.fetchHistory(), 60000);
+});
+
+onUnmounted(() => {
+  if (historyTimer !== null) {
+    window.clearInterval(historyTimer);
+    historyTimer = null;
+  }
+});
+
+// Değer dizisini 100×28 viewBox içinde bir polyline "points" dizgesine çevirir (üst=yüksek değer).
+function spark(values: number[], maxValue: number): string {
+  if (values.length < 2) {
+    return "";
+  }
+
+  const max = maxValue > 0 ? maxValue : 1;
+  const count = values.length;
+  return values
+    .map((value, index) => {
+      const x = (index / (count - 1)) * 100;
+      const ratio = Math.max(0, Math.min(1, value / max));
+      const y = 27 - ratio * 26;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
 
 function ringStyle(value: number, color = "var(--accent-1)") {
   return {
@@ -275,6 +344,85 @@ function formatTimeSpan(value: string): string {
 .meter-card {
   display: grid;
   place-items: center;
+}
+
+.meter-spark {
+  width: 100%;
+  height: 30px;
+  margin-top: 12px;
+}
+
+.meter-spark polyline {
+  fill: none;
+  stroke: var(--accent-1);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.meter-spark.mem polyline {
+  stroke: #6fd2ff;
+}
+
+.net-trend {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.net-trend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.net-spark {
+  width: 100%;
+  height: 60px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.net-spark polyline {
+  fill: none;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.net-spark polyline.down {
+  stroke: var(--accent-1);
+}
+
+.net-spark polyline.up {
+  stroke: var(--warn-1);
+}
+
+.net-legend {
+  display: flex;
+  gap: 18px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.net-legend .legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.legend-dot.down {
+  background: var(--accent-1);
+}
+
+.legend-dot.up {
+  background: var(--warn-1);
 }
 
 .meter-ring {

@@ -7,7 +7,7 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
-export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number };
+export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number; allocatedMB: number };
 export type MailAccount = { address: string; active: boolean; maxSizeMB: number; currentSizeMB: number };
 export type MailAlias = { address: string; target: string; active: boolean };
 export type MailList = { address: string; recipients: string[] };
@@ -41,20 +41,6 @@ export async function getMailWorkspace(domain?: string) {
   const response = await apiClient.get<ApiEnvelope<MailWorkspace>>("/mail", {
     params: domain ? { domain } : {}
   });
-  return response.data.data;
-}
-
-export type MailAutoResponder = { address: string; enabled: boolean; message: string };
-
-export async function getMailAutoResponder(address: string) {
-  const response = await apiClient.get<ApiEnvelope<MailAutoResponder>>("/mail/accounts/autoresponder", {
-    params: { address }
-  });
-  return response.data.data;
-}
-
-export async function setMailAutoResponder(address: string, enabled: boolean, message: string) {
-  const response = await apiClient.post<ApiEnvelope<MailAutoResponder>>("/mail/accounts/autoresponder", { address, enabled, message });
   return response.data.data;
 }
 

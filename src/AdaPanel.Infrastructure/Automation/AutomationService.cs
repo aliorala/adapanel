@@ -26,6 +26,7 @@ public sealed class AutomationService(
     ISecretProtector secretProtector,
     INotificationService notificationService,
     ISystemMonitoringService systemMonitoringService,
+    IHealthService healthService,
     IConcurrencyLock concurrencyLock,
     ILogger<AutomationService> logger) : IAutomationService
 {
@@ -51,6 +52,7 @@ public sealed class AutomationService(
         state.BackupSites = request.BackupSites;
         state.BackupDatabases = request.BackupDatabases;
         state.BackupMail = request.BackupMail;
+        state.BackupPanelConfig = request.BackupPanelConfig;
         state.BackupDatabaseEngines = NormalizeEngines(request.BackupDatabaseEngines);
         state.AutoSslRenewEnabled = request.AutoSslRenewEnabled;
         state.SslRenewIntervalHours = Math.Clamp(request.SslRenewIntervalHours, 1, 24 * 30);
@@ -73,6 +75,8 @@ public sealed class AutomationService(
         state.AlertsEnabled = request.AlertsEnabled;
         state.DiskUsageThresholdPercent = Math.Clamp(request.DiskUsageThresholdPercent, 50, 99);
         state.CertExpiryWarningDays = Math.Clamp(request.CertExpiryWarningDays, 1, 90);
+        state.MemoryUsageThresholdPercent = Math.Clamp(request.MemoryUsageThresholdPercent, 50, 99);
+        state.ServiceDownAlertsEnabled = request.ServiceDownAlertsEnabled;
 
         await SaveAsync(state, cancellationToken);
         return ToStatus(state);
@@ -102,11 +106,44 @@ public sealed class AutomationService(
         return await GetStatusAsync(cancellationToken);
     }
 
+    public async Task<BackupRemoteTestResultDto> TestRemoteBackupAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default)
+    {
+        var password = request.RemotePassword;
+        if (string.IsNullOrEmpty(password))
+        {
+            // İstekte parola yoksa kayıtlı (korumalı) parolayı kullan → kullanıcı kayıtlı hedefi tekrar parola girmeden test eder.
+            var state = await LoadAsync(cancellationToken);
+            password = ResolveRemotePassword(state);
+        }
+
+        return await backupService.TestRemoteTargetAsync(
+            new BackupRemoteTestRequest
+            {
+                TargetType = request.TargetType,
+                RemoteUrl = request.RemoteUrl,
+                RemoteUserName = request.RemoteUserName,
+                RemotePassword = password,
+                RemoteRegion = request.RemoteRegion
+            },
+            cancellationToken);
+    }
+
     public async Task RunDueJobsAsync(CancellationToken cancellationToken = default)
     {
         // Süresi dolmuş brute-force engellerini temizle. Paylaşılan kilit reentrant
         // olmadığından bu çağrı exclusive bloğun dışında kalmalı.
         await bruteForceProtection.CleanupExpiredBansAsync(cancellationToken);
+
+        // Kalıcı izleme geçmişi: her turda (dakikada bir) CPU/RAM/ağ örneği biriktir → izleme ekranı
+        // trend grafiklerini bununla doldurur (sayfa yenilense de dolu). Best-effort; ana akışı bozmaz.
+        try
+        {
+            await systemMonitoringService.RecordSampleAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "İzleme geçmişi örneği alınamadı.");
+        }
 
         // Uyarı bildirimleri exclusive bloğun DIŞINDA (SMTP yavaş olabilir, kendi
         // cooldown dosyasını kullanır, otomasyon kilidini meşgul etmez).
@@ -246,7 +283,38 @@ public sealed class AutomationService(
                 }
             }
 
-            var pruned = await backupService.PruneAsync(state.BackupRetentionDays, cancellationToken);
+            if (state.BackupPanelConfig)
+            {
+                try
+                {
+                    await backupService.BackupPanelAsync(new BackupPanelRequest
+                    {
+                        TargetType = state.BackupTargetType,
+                        RemoteUrl = state.BackupRemoteUrl,
+                        RemoteUserName = state.BackupRemoteUserName,
+                        RemotePassword = ResolveRemotePassword(state),
+                        RemoteRegion = state.BackupRemoteRegion
+                    }, cancellationToken);
+                    summary.AppendLine("panel: yedeklendi");
+                }
+                catch (Exception exception)
+                {
+                    hasError = true;
+                    summary.AppendLine($"panel: {exception.Message}");
+                    logger.LogWarning(exception, "Otomatik panel yedeği başarısız.");
+                }
+            }
+
+            // Uzak rotasyon: hedef off-site ise budama uzak kopyaları da silsin (kimlikleri güncel ayardan geçir).
+            var pruneRemote = string.Equals(state.BackupTargetType, "local", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : new BackupPruneRemoteOptions
+                {
+                    UserName = state.BackupRemoteUserName,
+                    Password = ResolveRemotePassword(state),
+                    Region = state.BackupRemoteRegion
+                };
+            var pruned = await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken);
 
             state.LastBackupRunUtc = DateTime.UtcNow;
             state.LastBackupStatus = hasError ? "completed_with_errors" : "completed";
@@ -352,6 +420,7 @@ public sealed class AutomationService(
                 BackupSites = state.BackupSites,
                 BackupDatabases = state.BackupDatabases,
                 BackupMail = state.BackupMail,
+                BackupPanelConfig = state.BackupPanelConfig,
                 BackupDatabaseEngines = state.BackupDatabaseEngines,
                 AutoSslRenewEnabled = state.AutoSslRenewEnabled,
                 SslRenewIntervalHours = state.SslRenewIntervalHours,
@@ -362,7 +431,9 @@ public sealed class AutomationService(
                 BackupRemotePasswordSet = !string.IsNullOrWhiteSpace(state.BackupRemotePasswordProtected),
                 AlertsEnabled = state.AlertsEnabled,
                 DiskUsageThresholdPercent = state.DiskUsageThresholdPercent,
-                CertExpiryWarningDays = state.CertExpiryWarningDays
+                CertExpiryWarningDays = state.CertExpiryWarningDays,
+                MemoryUsageThresholdPercent = state.MemoryUsageThresholdPercent,
+                ServiceDownAlertsEnabled = state.ServiceDownAlertsEnabled
             },
             LastBackupRunUtc = state.LastBackupRunUtc,
             LastBackupStatus = state.LastBackupStatus,
@@ -418,6 +489,16 @@ public sealed class AutomationService(
             }
         }
 
+        // RAM (bellek) doluluk
+        var memoryThreshold = Math.Clamp(state.MemoryUsageThresholdPercent, 50, 99);
+        if (overview.MemoryUsagePercent >= memoryThreshold)
+        {
+            alerts.Add((
+                "memory",
+                $"AdaPanel uyari: RAM %{overview.MemoryUsagePercent:F0} dolu",
+                $"Sunucu bellegi %{overview.MemoryUsagePercent:F0} doluluga ulasti (esik: %{memoryThreshold}). Kaynak tuketen site/servisleri kontrol edin."));
+        }
+
         // Sertifika bitisi
         var warningDays = Math.Clamp(state.CertExpiryWarningDays, 1, 90);
         var certs = await fileStore.ReadAsync(SslStatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
@@ -432,6 +513,28 @@ public sealed class AutomationService(
                     daysLeft < 0
                         ? $"{cert.HostName} ({cert.SiteName}) sertifikasinin suresi DOLDU. Yenileyin."
                         : $"{cert.HostName} ({cert.SiteName}) sertifikasinin bitisine {daysLeft:F0} gun kaldi."));
+            }
+        }
+
+        // Servis durumu: kurulu ama DURMUS servisler (web/mail/DB/FTP/cache) → site/posta/DB etkilenir.
+        if (state.ServiceDownAlertsEnabled)
+        {
+            try
+            {
+                foreach (var service in await healthService.GetHealthAsync(cancellationToken))
+                {
+                    if (string.Equals(service.Status, "Stopped", StringComparison.OrdinalIgnoreCase))
+                    {
+                        alerts.Add((
+                            $"service:{service.Name}",
+                            $"AdaPanel uyari: {service.Label} servisi DURMUS",
+                            $"{service.Label} ({service.Name}) servisi calismiyor (Stopped). Baglantili site/posta/DB etkilenebilir; Sunucu Sagligi ekranindan yeniden baslatabilirsiniz."));
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "Servis durumu uyari kontrolu basarisiz.");
             }
         }
 
@@ -503,6 +606,7 @@ public sealed class AutomationService(
         public bool BackupSites { get; set; } = true;
         public bool BackupDatabases { get; set; }
         public bool BackupMail { get; set; }
+        public bool BackupPanelConfig { get; set; }
         public IReadOnlyCollection<string> BackupDatabaseEngines { get; set; } = [];
         public bool AutoSslRenewEnabled { get; set; }
         public int SslRenewIntervalHours { get; set; } = 24;
@@ -514,6 +618,8 @@ public sealed class AutomationService(
         public bool AlertsEnabled { get; set; }
         public int DiskUsageThresholdPercent { get; set; } = 90;
         public int CertExpiryWarningDays { get; set; } = 14;
+        public int MemoryUsageThresholdPercent { get; set; } = 90;
+        public bool ServiceDownAlertsEnabled { get; set; } = true;
 
         public DateTime? LastBackupRunUtc { get; set; }
         public string LastBackupStatus { get; set; } = string.Empty;

@@ -26,7 +26,14 @@ export async function getAppTemplates() {
   return response.data.data;
 }
 
+export type AppInstallResult = {
+  templateId: string;
+  adminUrl: string;
+  adminUser: string;
+  adminPassword: string;
+};
+
 export async function installAppTemplate(payload: { templateId: string; siteName: string; targetPath: string; cleanInstall?: boolean; }) {
-  const response = await apiClient.post<ApiEnvelope<AppTemplate>>("/store/install", payload);
+  const response = await apiClient.post<ApiEnvelope<AppInstallResult>>("/store/install", payload);
   return response.data.data;
 }

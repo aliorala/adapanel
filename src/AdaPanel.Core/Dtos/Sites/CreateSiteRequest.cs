@@ -10,7 +10,8 @@ public sealed class CreateSiteRequest
 
     [Required]
     [StringLength(1024, MinimumLength = 3)]
-    public string PhysicalPath { get; init; } = string.Empty;
+    // set: SitesController non-admin (bayi/müşteri) için yolu güvenli köke ZORLAR (çapraz-kiracı yolu engellenir).
+    public string PhysicalPath { get; set; } = string.Empty;
 
     [StringLength(128)]
     public string ApplicationPoolName { get; init; } = string.Empty;

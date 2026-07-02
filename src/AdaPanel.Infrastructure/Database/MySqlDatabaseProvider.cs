@@ -83,7 +83,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         try
         {
             await using var command = connection.CreateCommand();
-            command.CommandText = $"CREATE USER '{userName}'@'{allowedHost}' IDENTIFIED BY @password;";
+            command.CommandText = $"CREATE USER '{userName.Replace("'", "''")}'@'{allowedHost.Replace("'", "''")}' IDENTIFIED BY @password;";
             command.Parameters.AddWithValue("@password", password);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -105,7 +105,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         try
         {
             await using var command = connection.CreateCommand();
-            command.CommandText = $"ALTER USER '{userName}'@'{host}' IDENTIFIED BY @password;";
+            command.CommandText = $"ALTER USER '{userName.Replace("'", "''")}'@'{host.Replace("'", "''")}' IDENTIFIED BY @password;";
             command.Parameters.AddWithValue("@password", password);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -179,7 +179,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         {
             var allowedHost = string.IsNullOrWhiteSpace(host) ? "%" : host;
             await using var command = connection.CreateCommand();
-            command.CommandText = $"DROP USER '{userName}'@'{allowedHost}'; FLUSH PRIVILEGES;";
+            command.CommandText = $"DROP USER '{userName.Replace("'", "''")}'@'{allowedHost.Replace("'", "''")}'; FLUSH PRIVILEGES;";
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         catch (MySqlException exception) when (exception.Number is 1396)
@@ -206,7 +206,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         {
             await using var command = connection.CreateCommand();
             command.CommandText = $"""
-                GRANT {BuildPrivilegeClause(privileges)} ON {QuoteIdentifier(databaseName)}.* TO '{userName}'@'{allowedHost}';
+                GRANT {BuildPrivilegeClause(privileges)} ON {QuoteIdentifier(databaseName)}.* TO '{userName.Replace("'", "''")}'@'{allowedHost.Replace("'", "''")}';
                 FLUSH PRIVILEGES;
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -338,6 +338,35 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         string engineKey,
         CancellationToken cancellationToken)
     {
+        // DB → yetkili kullanıcı(lar) eşlemesi (mysql.db per-DB grant tablosu; sistem hesapları hariç).
+        // Böylece listede her DB'nin kullanıcısı görünür; kullanıcısı olmayan (yetim) DB'ler ayırt edilir.
+        var databaseUsers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        await using (var mapCommand = connection.CreateCommand())
+        {
+            mapCommand.CommandText = """
+                SELECT DISTINCT Db, User
+                FROM mysql.db
+                WHERE User <> ''
+                  AND LOWER(User) NOT IN ('root', 'mariadb.sys', 'mysql.sys', 'mysql.session', 'mysql.infoschema', 'debian-sys-maint')
+                ORDER BY Db, User;
+                """;
+            await using var mapReader = await mapCommand.ExecuteReaderAsync(cancellationToken);
+            while (await mapReader.ReadAsync(cancellationToken))
+            {
+                var db = mapReader.GetString(0);
+                var user = mapReader.GetString(1);
+                if (!databaseUsers.TryGetValue(db, out var list))
+                {
+                    list = new List<string>();
+                    databaseUsers[db] = list;
+                }
+                if (!list.Contains(user, StringComparer.OrdinalIgnoreCase))
+                {
+                    list.Add(user);
+                }
+            }
+        }
+
         const string sql = """
             SELECT
                 SCHEMA_NAME,
@@ -356,13 +385,15 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
+            var name = reader.GetString(0);
             results.Add(new DatabaseRecordDto
             {
                 Engine = engineKey,
-                Name = reader.GetString(0),
+                Name = name,
                 Owner = string.Empty,
                 Encoding = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
-                Collation = reader.IsDBNull(2) ? string.Empty : reader.GetString(2)
+                Collation = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                Users = databaseUsers.TryGetValue(name, out var mapped) ? mapped : []
             });
         }
 
@@ -374,10 +405,15 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         string engineKey,
         CancellationToken cancellationToken)
     {
+        // Sistem/iç hesapları ve rolleri GİZLE: root (motor admin — silinirse panel DB erişimini kaybeder),
+        // mariadb.sys / mysql.sys / mysql.session / mysql.infoschema (kilitli iç hesaplar) ve roller (Host='').
+        // Kullanıcıya yalnız gerçek, yönetilebilir DB hesapları gösterilir (Plesk gibi).
         const string sql = """
             SELECT User, Host
             FROM mysql.user
             WHERE User <> ''
+              AND Host <> ''
+              AND LOWER(User) NOT IN ('root', 'mariadb.sys', 'mysql.sys', 'mysql.session', 'mysql.infoschema', 'debian-sys-maint')
             ORDER BY User, Host;
             """;
 

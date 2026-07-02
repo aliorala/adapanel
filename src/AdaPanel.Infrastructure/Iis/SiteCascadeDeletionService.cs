@@ -17,6 +17,7 @@ public sealed class SiteCascadeDeletionService(
     IFtpService ftpService,
     IMailService mailService,
     IDatabaseService databaseService,
+    ISiteDatabaseLinkService siteDatabaseLinks,
     IReverseProxyService reverseProxyService,
     IDiskQuotaService diskQuotaService,
     ICustomerScopeService customerScopeService,
@@ -114,6 +115,9 @@ public sealed class SiteCascadeDeletionService(
         // 8) Müşteri atamaları.
         await StepAsync(result, "Müşteri atamaları", () => customerScopeService.RemoveSiteFromAllScopesAsync(siteName, cancellationToken));
 
+        // 8b) Site↔DB bağ kayıtları (site gidince öksüz bağ kalmasın; bağlı DB'ler yukarıda 2. adımda zaten silindi).
+        await StepAsync(result, "Veritabanı bağları", () => siteDatabaseLinks.RemoveSiteAsync(siteName, cancellationToken));
+
         // 8) Git dağıtım yapılandırması.
         TryDeleteFile(result, "Git dağıtım yapılandırması", fileStore.ResolvePath(GitConfigRelativePath(siteName)));
 
@@ -210,6 +214,17 @@ public sealed class SiteCascadeDeletionService(
             }
         }
 
+        // GERÇEK site↔DB BAĞI (isim tahmininden bağımsız): siteye explicit bağlanmış DB'leri de ekle (Plesk gibi).
+        // Böylece "karsilastir" gibi siteyle aynı adı taşımayan DB'ler de site silinince temizlenir.
+        foreach (var link in await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken))
+        {
+            var entry = $"{link.Engine}:{link.DatabaseName}";
+            if (!matches.Contains(entry, StringComparer.OrdinalIgnoreCase))
+            {
+                matches.Add(entry);
+            }
+        }
+
         return matches;
     }
 
@@ -270,7 +285,12 @@ public sealed class SiteCascadeDeletionService(
             }
 
             logger.LogWarning(exception, "Cascade silme adımı başarısız: {Label}", label);
-            result.Warnings.Add($"{label}: {exception.Message}");
+            // GERÇEK sebebi göster: AppException.Details (ör. Stalwart CLI çıktısı) varsa onu da ekle; yoksa yalnız mesaj.
+            // Eskiden sadece exception.Message (mail.operation_failed gibi anahtar) görünüyordu → neden anlaşılmıyordu.
+            var reason = exception is AdaPanel.Core.Common.AppException appEx && !string.IsNullOrWhiteSpace(appEx.Details)
+                ? $"{appEx.MessageKey} — {appEx.Details}"
+                : exception.Message;
+            result.Warnings.Add($"{label}: {reason}");
         }
     }
 

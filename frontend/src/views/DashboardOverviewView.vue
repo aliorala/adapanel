@@ -40,6 +40,18 @@
           </button>
         </li>
       </ul>
+
+      <div class="ext-conn">
+        <span class="ext-title">{{ t("panel.dashboard.ext.title") }}</span>
+        <div class="ext-row">
+          <span class="ext-tag">{{ t("panel.dashboard.ext.mail") }}</span>
+          <span class="ext-val">{{ t("panel.dashboard.ext.mailValue", { host: primaryHost }) }}</span>
+        </div>
+        <div class="ext-row">
+          <span class="ext-tag">{{ t("panel.dashboard.ext.db") }}</span>
+          <span class="ext-val">{{ t("panel.dashboard.ext.dbValue", { host: primaryHost }) }}</span>
+        </div>
+      </div>
     </section>
 
     <section class="panel overview-panel">
@@ -295,6 +307,9 @@ const accessLinks = computed(() => {
   return links;
 });
 
+// Dış bağlantı (posta/DB) için sunucu adresi: erişim panelindeki ilk genel IP; yoksa pencere host'u.
+const primaryHost = computed(() => serverIps.value[0] || window.location.hostname || "127.0.0.1");
+
 async function copyAccess(url: string) {
   try {
     await navigator.clipboard.writeText(url);
@@ -501,6 +516,44 @@ function formatTimeSpan(value: string): string {
 
 .access-copy {
   flex: none;
+}
+
+.ext-conn {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.ext-title {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.ext-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.ext-tag {
+  min-width: 72px;
+  font-weight: 700;
+  font-size: 0.74rem;
+  color: var(--accent-text);
+}
+
+.ext-val {
+  flex: 1;
+  min-width: 200px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.76rem;
+  color: var(--text-soft);
+  word-break: break-word;
 }
 
 .meter-core small {

@@ -89,6 +89,15 @@ public sealed class BackupController(
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
+    /// <summary>Panelin kendi durumunu yedekler: adapanel.db + config (DataProtection anahtarları hariç).</summary>
+    [HttpPost("panel")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupPanelAsync([FromBody] BackupPanelRequest? request, CancellationToken cancellationToken)
+    {
+        var backup = await backupService.BackupPanelAsync(request ?? new BackupPanelRequest(), cancellationToken);
+        return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
+    }
+
     // Tam geri yükleme (hedef yol seçimi dahil) yalnız yöneticidedir; müşteriler
     // kendi sitelerine "restore-items" ile granüler geri yükleme yapar.
     [HttpPost("restore")]

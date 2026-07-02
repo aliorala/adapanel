@@ -10,7 +10,8 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
-    <div v-if="workspace && !workspace.installed" class="empty-state">{{ t("panel.docker.notInstalled") }}</div>
+    <div v-if="loading && !workspace" class="empty-state">{{ t("panel.common.loading") }}</div>
+    <div v-else-if="workspace && !workspace.installed" class="empty-state">{{ t("panel.docker.notInstalled") }}</div>
     <div v-else-if="workspace && !workspace.daemonRunning" class="empty-state">{{ t("panel.docker.daemonDown") }}</div>
 
     <template v-else-if="workspace">

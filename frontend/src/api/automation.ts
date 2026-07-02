@@ -14,12 +14,15 @@ export type AutomationSettings = {
   backupSites: boolean;
   backupDatabases: boolean;
   backupMail: boolean;
+  backupPanelConfig: boolean;
   backupDatabaseEngines: string[];
   autoSslRenewEnabled: boolean;
   sslRenewIntervalHours: number;
   alertsEnabled: boolean;
   diskUsageThresholdPercent: number;
   certExpiryWarningDays: number;
+  memoryUsageThresholdPercent: number;
+  serviceDownAlertsEnabled: boolean;
   backupTargetType: string;
   backupRemoteUrl: string;
   backupRemoteUserName: string;
@@ -61,5 +64,20 @@ export async function runAutomationBackup() {
 
 export async function runAutomationSsl() {
   const response = await apiClient.post<ApiEnvelope<AutomationStatus>>("/automation/ssl/run");
+  return response.data.data;
+}
+
+export type BackupRemoteTestPayload = {
+  targetType: string;
+  remoteUrl: string;
+  remoteUserName: string;
+  remotePassword: string;
+  remoteRegion: string;
+};
+export type BackupRemoteTestResult = { success: boolean; message: string; details: string };
+
+// Off-site yedek hedefini gerçek yedek almadan test et (parola boşsa sunucudaki kayıtlı kullanılır).
+export async function testRemoteBackup(payload: BackupRemoteTestPayload) {
+  const response = await apiClient.post<ApiEnvelope<BackupRemoteTestResult>>("/automation/backup/remote/test", payload);
   return response.data.data;
 }

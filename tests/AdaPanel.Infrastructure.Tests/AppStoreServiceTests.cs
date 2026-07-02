@@ -15,6 +15,7 @@ public sealed class AppStoreServiceTests
             null!,
             null!,
             null!,
+            null!, // IDatabaseService (bu test yalnız GetTemplatesAsync çağırır, kullanılmaz)
             null!,
             Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions()),
             NullLogger<AppStoreService>.Instance);

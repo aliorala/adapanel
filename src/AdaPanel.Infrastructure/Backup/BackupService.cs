@@ -185,6 +185,92 @@ public sealed class BackupService(
         return record;
     }
 
+    public async Task<BackupRecordDto> BackupPanelAsync(BackupPanelRequest request, CancellationToken cancellationToken = default)
+    {
+        var preferences = await preferencesService.GetAsync(cancellationToken);
+        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "panel");
+        var fileName = $"panel-config-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";
+        var targetPath = Path.Combine(backupsDirectory, fileName);
+        if (File.Exists(targetPath))
+        {
+            File.Delete(targetPath);
+        }
+
+        // Panelin KENDİ durumu: adapanel.db (kullanıcı/2FA) + config/*.json (planlar, scope'lar, otomasyon...).
+        // DataProtection ANAHTARLARI (keys/) ve sertifikalar BİLEREK DIŞARIDA — makineye bağlı/hassas, taşınamaz.
+        var configDirectory = fileStore.ResolvePath("config");
+        var dbPath = fileStore.ResolvePath("data/adapanel.db");
+        var includedParts = new List<string>();
+
+        await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
+        using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
+        {
+            // adapanel.db (+ WAL/SHM) — çalışan panel kilitleyebilir → paylaşımlı okuma ile ekle.
+            foreach (var suffix in new[] { string.Empty, "-wal", "-shm" })
+            {
+                var file = dbPath + suffix;
+                if (File.Exists(file))
+                {
+                    AddSharedFileToArchive(archive, file, $"data/{Path.GetFileName(file)}");
+                    includedParts.Add(Path.GetFileName(file));
+                }
+            }
+
+            // config/ tüm JSON durum dosyaları (backups.json dahil — zararsız).
+            if (Directory.Exists(configDirectory))
+            {
+                AddDirectoryToArchive(archive, configDirectory, "config");
+                includedParts.Add("config");
+            }
+
+            var manifest = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                kind = "panel-config",
+                createdAtUtc = DateTime.UtcNow,
+                parts = includedParts,
+                note = "DataProtection keys and certificates are intentionally excluded (machine-bound)."
+            }, BackupJsonOptions);
+            AddTextEntry(archive, "manifest.json", manifest);
+        }
+
+        var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
+        var remoteUri = await UploadToRemoteAsync(targetPath, fileName, target, cancellationToken);
+
+        var record = new BackupRecordDto
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = fileName,
+            Type = "panel",
+            Source = "panel",
+            Path = targetPath,
+            Format = "zip",
+            CreatedAtUtc = DateTime.UtcNow,
+            Size = new FileInfo(targetPath).Length,
+            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
+            TargetType = target.Type,
+            RemoteUri = remoteUri
+        };
+
+        await AppendRecordAsync(record, cancellationToken);
+        return record;
+    }
+
+    // Çalışan süreç kilitlese bile (ör. SQLite adapanel.db) paylaşımlı okuma ile zip'e ekler.
+    private static void AddSharedFileToArchive(ZipArchive archive, string filePath, string entryName)
+    {
+        try
+        {
+            using var source = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+            using var entryStream = entry.Open();
+            source.CopyTo(entryStream);
+        }
+        catch (IOException)
+        {
+            // Kilitli/erişilemeyen dosyayı atla; yedek geri kalanıyla devam eder.
+        }
+    }
+
     private const string StalwartTaskName = "AdaStalwart";
 
     /// <summary>
@@ -548,7 +634,7 @@ public sealed class BackupService(
     private static string NormalizeArchivePath(string value) =>
         value.Replace('\\', '/').TrimStart('/');
 
-    public async Task<int> PruneAsync(int retentionDays, CancellationToken cancellationToken = default)
+    public async Task<int> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default)
     {
         if (retentionDays <= 0)
         {
@@ -557,20 +643,26 @@ public sealed class BackupService(
 
         var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
         var records = (await GetBackupsAsync(cancellationToken)).ToList();
-        var survivors = new List<BackupRecordDto>(records.Count);
-        var removed = 0;
+        var removedIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var record in records)
         {
-            // Yalnızca yerel olarak tutulan ve süresi dolmuş yedekleri buda.
+            // Süresi dolmuş yedekleri buda (yerel + off-site uzak kopya).
             if (record.CreatedAtUtc >= cutoff)
             {
-                survivors.Add(record);
                 continue;
             }
 
             try
             {
+                // Uzak rotasyon: off-site (S3/FTP/WebDAV) kopyayı kaydı silmeden ÖNCE sil (best-effort).
+                if (remote is not null
+                    && !string.IsNullOrWhiteSpace(record.RemoteUri)
+                    && record.TargetType is "s3" or "ftp" or "webdav" or "http")
+                {
+                    await TryDeleteRemoteBackupAsync(record, remote, cancellationToken);
+                }
+
                 if (!string.IsNullOrWhiteSpace(record.Path) && File.Exists(record.Path))
                 {
                     File.Delete(record.Path);
@@ -580,48 +672,183 @@ public sealed class BackupService(
                     Directory.Delete(record.Path, recursive: true);
                 }
 
-                removed++;
+                removedIds.Add(record.Id);
             }
             catch (IOException)
             {
                 // Dosya kilitliyse kaydı koru, bir sonraki budamada tekrar denenir.
-                survivors.Add(record);
             }
             catch (UnauthorizedAccessException)
             {
-                survivors.Add(record);
             }
         }
 
-        if (removed > 0)
+        if (removedIds.Count > 0)
         {
-            await fileStore.WriteAsync(IndexPath, survivors, cancellationToken);
+            // ATOMİK: güncel listeden YALNIZ silinen ID'leri çıkar → eşzamanlı eklenen yeni kayıt (otomatik+elle
+            // yedek aynı anda) KORUNUR. Dosya silme kilidin DIŞINDA yapıldı; burada yalnız kısa liste güncellemesi var.
+            await fileStore.UpdateAsync(
+                IndexPath,
+                Array.Empty<BackupRecordDto>(),
+                existing => existing.Where(item => !removedIds.Contains(item.Id)).ToArray(),
+                cancellationToken);
         }
 
-        return removed;
+        return removedIds.Count;
     }
 
+    // Off-site yedeğin UZAK kopyasını siler (uzak rotasyon). Best-effort: hata/yoksa sessizce geçer, budamayı BOZMAZ.
+    private async Task TryDeleteRemoteBackupAsync(BackupRecordDto record, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(record.RemoteUri, UriKind.Absolute, out var uri))
+        {
+            return;
+        }
+
+        try
+        {
+            switch (record.TargetType)
+            {
+                case "ftp":
+                    await DeleteFtpAsync(uri, remote, cancellationToken);
+                    break;
+                case "s3" when !string.IsNullOrWhiteSpace(remote.UserName):
+                    await DeleteS3SignedAsync(uri, remote, cancellationToken);
+                    break;
+                case "webdav":
+                case "http":
+                    await DeleteHttpAsync(uri, remote, cancellationToken);
+                    break;
+                // "s3" kimliksiz (presigned URL) → imza atılamaz, silinemez; atlanır.
+            }
+        }
+        catch
+        {
+            // Best-effort: uzak silme başarısızsa yerel budama yine sürer (kayıt yine kaldırılır; kalıcı uzak
+            // yetim yalnız erişim/kimlik sorununda olur ve nadirdir).
+        }
+    }
+
+    // S3 (SigV4 imzalı) DELETE. Boş gövde → EmptyPayloadSha256. Olmayan nesnede de 204 (idempotent).
+    private async Task DeleteS3SignedAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    {
+        var region = string.IsNullOrWhiteSpace(remote.Region) ? "us-east-1" : remote.Region;
+        var (authorization, amzDate, contentSha) = S3RequestSigner.Sign(
+            "DELETE", uri, remote.UserName, remote.Password, region, DateTimeOffset.UtcNow, S3RequestSigner.EmptyPayloadSha256);
+
+        var client = httpClientFactory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
+        request.Headers.TryAddWithoutValidation("Authorization", authorization);
+        request.Headers.TryAddWithoutValidation("x-amz-date", amzDate);
+        request.Headers.TryAddWithoutValidation("x-amz-content-sha256", contentSha);
+        using var response = await client.SendAsync(request, cancellationToken);
+    }
+
+    // WebDAV/HTTP DELETE (basic auth). 404/410 = zaten yok → sorun değil.
+    private async Task DeleteHttpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    {
+        var client = httpClientFactory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
+        if (!string.IsNullOrWhiteSpace(remote.UserName))
+        {
+            var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{remote.UserName}:{remote.Password}"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
+        }
+        using var response = await client.SendAsync(request, cancellationToken);
+    }
+
+#pragma warning disable SYSLIB0014
+    // FTP DELETE (DELE). Kimlik uzak seçeneklerden; RemoteUri temizlenmiş (kimliksiz) olduğundan buradan verilir.
+    private static async Task DeleteFtpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    {
+        var request = (FtpWebRequest)WebRequest.Create(uri);
+        request.Method = WebRequestMethods.Ftp.DeleteFile;
+        request.Credentials = new NetworkCredential(remote.UserName, remote.Password);
+        request.UsePassive = true;
+        request.KeepAlive = false;
+        using var registration = cancellationToken.Register(() => request.Abort());
+        using var response = (FtpWebResponse)await request.GetResponseAsync();
+    }
+#pragma warning restore SYSLIB0014
+
+    // ATOMİK ekleme: arka plan otomatik yedek + kullanıcı elle yedek AYNI ANDA çalışırsa (UpdateAsync dosya-başına
+    // kilit tutar) kayıt kaybolmaz. Eski Read+Write deseni "son yazan kazanır" → kayıp yedek kaydı veriyordu.
     private async Task AppendRecordAsync(BackupRecordDto record, CancellationToken cancellationToken)
     {
-        var records = (await GetBackupsAsync(cancellationToken)).ToList();
-        records.Add(record);
-        await fileStore.WriteAsync(IndexPath, records, cancellationToken);
+        await fileStore.UpdateAsync(
+            IndexPath,
+            Array.Empty<BackupRecordDto>(),
+            existing => existing.Append(record).ToArray(),
+            cancellationToken);
     }
 
     private async Task UpsertRecordAsync(BackupRecordDto record, CancellationToken cancellationToken)
     {
-        var records = (await GetBackupsAsync(cancellationToken)).ToList();
-        var index = records.FindIndex(item => item.Id == record.Id);
-        if (index >= 0)
+        await fileStore.UpdateAsync(
+            IndexPath,
+            Array.Empty<BackupRecordDto>(),
+            existing =>
+            {
+                var list = existing.ToList();
+                var index = list.FindIndex(item => item.Id == record.Id);
+                if (index >= 0)
+                {
+                    list[index] = record;
+                }
+                else
+                {
+                    list.Add(record);
+                }
+
+                return list.ToArray();
+            },
+            cancellationToken);
+    }
+
+    public async Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default)
+    {
+        var targetType = (request.TargetType ?? "local").Trim().ToLowerInvariant();
+        if (targetType is "local" or "")
         {
-            records[index] = record;
-        }
-        else
-        {
-            records.Add(record);
+            // Yerel hedef için ağ testi yok; her zaman "tamam".
+            return new BackupRemoteTestResultDto { Success = true, Message = "backup.remote_test.local" };
         }
 
-        await fileStore.WriteAsync(IndexPath, records, cancellationToken);
+        var tempFile = Path.Combine(Path.GetTempPath(), $"adapanel-conn-test-{Guid.NewGuid():N}.txt");
+        try
+        {
+            await File.WriteAllTextAsync(
+                tempFile,
+                $"AdaPanel off-site backup connection test {DateTime.UtcNow:O}",
+                cancellationToken);
+
+            var target = ResolveTarget(targetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
+            // Sabit ad: her test aynı dosyayı üzerine yazar → hedefte birikme olmaz.
+            await UploadToRemoteAsync(tempFile, "adapanel-connection-test.txt", target, cancellationToken);
+            return new BackupRemoteTestResultDto { Success = true, Message = "backup.remote_test.ok" };
+        }
+        catch (AppException exception)
+        {
+            return new BackupRemoteTestResultDto { Success = false, Message = exception.MessageKey, Details = exception.Details };
+        }
+        catch (Exception exception)
+        {
+            return new BackupRemoteTestResultDto { Success = false, Message = "backup.remote_test.failed", Details = exception.Message };
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                {
+                    File.Delete(tempFile);
+                }
+            }
+            catch
+            {
+                // geçici dosya temizliği best-effort
+            }
+        }
     }
 
     private async Task<string> UploadToRemoteAsync(

@@ -47,8 +47,7 @@
         <ProxyView v-else-if="openToolId === 'proxy'" />
         <FilesView v-else-if="openToolId === 'files'" />
         <FtpView v-else-if="openToolId === 'ftp'" :site-name="selectedSiteName" />
-        <WebDbView v-else-if="openToolId === 'webdb'" />
-        <SiteDatabasesView v-else-if="openToolId === 'domaindb'" />
+        <SiteDatabasesView v-else-if="openToolId === 'webdb' || openToolId === 'domaindb'" />
         <ProtectedDirsView v-else-if="openToolId === 'protected'" />
         <SiteStatisticsView v-else-if="openToolId === 'stats'" />
         <SiteBackupView v-else-if="openToolId === 'backup'" />
@@ -119,6 +118,8 @@ import AspView from "./AspView.vue";
 import CacheView from "./CacheView.vue";
 import CronView from "./CronView.vue";
 import SiteDatabasesView from "./SiteDatabasesView.vue";
+// NOT: per-site "Web DB" (araç kurulumu) kaldırıldı; DB yönetimi tek "Veritabanları" sekmesinde (SiteDatabasesView).
+// phpMyAdmin/Adminer KURULUMU global Veritabanları bölümünde (WebDbView) kalır.
 import SiteLogsView from "./SiteLogsView.vue";
 import SiteMigrationView from "./SiteMigrationView.vue";
 import FilesView from "./FilesView.vue";
@@ -135,7 +136,6 @@ import ProxyView from "./ProxyView.vue";
 import SitesView from "./SitesView.vue";
 import SiteHostingView from "./SiteHostingView.vue";
 import SslView from "./SslView.vue";
-import WebDbView from "./WebDbView.vue";
 
 type PrimaryTab = "pano" | "hostingdns" | "mail" | "start";
 type ToolDef = { id: string; group: PrimaryTab; glyph: string; label: string; description: string };
@@ -187,8 +187,7 @@ const allTools = computed<ToolDef[]>(() => [
   { id: "proxy", group: "hostingdns", glyph: "PX", label: t("panel.sites.tools.proxy"), description: t("panel.sites.tools.proxyHint") },
   { id: "files", group: "hostingdns", glyph: "FL", label: t("panel.sites.tools.files"), description: t("panel.sites.tools.filesHint") },
   { id: "ftp", group: "hostingdns", glyph: "FT", label: t("panel.sites.tools.ftp"), description: t("panel.sites.tools.ftpHint") },
-  { id: "webdb", group: "hostingdns", glyph: "DB", label: t("panel.sites.tools.webdb"), description: t("panel.sites.tools.webdbHint") },
-  { id: "domaindb", group: "hostingdns", glyph: "SQL", label: t("panel.sites.tools.domaindb"), description: t("panel.sites.tools.domaindbHint") },
+  { id: "webdb", group: "hostingdns", glyph: "SQL", label: t("panel.sites.tools.domaindb"), description: t("panel.sites.tools.domaindbHint") },
   { id: "protected", group: "hostingdns", glyph: "KOR", label: t("panel.sites.tools.protected"), description: t("panel.sites.tools.protectedHint") },
   { id: "stats", group: "hostingdns", glyph: "IST", label: t("panel.sites.tools.stats"), description: t("panel.sites.tools.statsHint") },
   { id: "backup", group: "hostingdns", glyph: "BK", label: t("panel.sites.tools.backup"), description: t("panel.sites.tools.backupHint") },
@@ -293,8 +292,8 @@ async function handleDelete(siteName: string) {
     return;
   }
   try {
-    // profesyonel paneller gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir.
-    await sitesStore.deleteSite(siteName, { deleteDatabases: true });
+    // Plesk gibi TAM cascade: siteye bağlı veritabanları + site dosyaları da silinir → geriye hiçbir şey kalmaz.
+    await sitesStore.deleteSite(siteName, { deleteDatabases: true, deleteFiles: true });
     showNotice(t("panel.sites.deleted"), false);
     backToSites();
   } catch (error) {

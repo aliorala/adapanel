@@ -31,4 +31,12 @@ public sealed class UpdateController(ISelfUpdateService selfUpdateService) : Con
         var status = await selfUpdateService.InstallPreparedUpdateAsync(cancellationToken);
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.install_scheduled"));
     }
+
+    // Güncellemelerin çekileceği GitHub deposunu (owner/repo) ayarlar — panel en son Release'i buradan otomatik görür.
+    [HttpPost("github")]
+    public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> SetGithubAsync([FromBody] SetUpdateGithubRequest request, CancellationToken cancellationToken)
+    {
+        var status = await selfUpdateService.SetGithubRepoAsync(request.Repo, cancellationToken);
+        return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.github_saved"));
+    }
 }

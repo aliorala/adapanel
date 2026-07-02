@@ -680,9 +680,20 @@ public sealed class WebDbClientService(
                 "requestFiltering");
 
             var hiddenSegments = EnsureXmlChild(requestFiltering, "hiddenSegments");
+
+            // KÖK NEDEN DÜZELTMESİ: 'vendor' gizli-segmenti, IIS hiddenSegments YOLDAKİ HER segmenti eşlediği için
+            // phpMyAdmin'in JS kütüphanelerini (js/vendor/jquery, js/vendor/codemirror ...) de 404 yapıyordu →
+            // jQuery yüklenmeyince phpMyAdmin'in TÜM JS'i çalışmıyordu (sol menü '+' açılmıyor, hiç AJAX yok; sayfa
+            // yalnız CSS'le biçimli görünüyor). 'vendor'ı ENGELLEME (root composer dizini zaten loopback + auth
+            // proxy arkasında, asıl koruma o). Eski dağıtımlarda kalmış 'vendor' kaydını da TEMİZLE.
+            hiddenSegments.Elements("add")
+                .Where(element => string.Equals((string?)element.Attribute("segment"), "vendor", StringComparison.OrdinalIgnoreCase))
+                .ToList()
+                .ForEach(element => element.Remove());
+
             foreach (var segment in new[]
                      {
-                         "vendor", "composer.json", "composer.lock", "package.json",
+                         "composer.json", "composer.lock", "package.json",
                          "package-lock.json", "yarn.lock", ".git", ".github", "examples", "test", "node_modules"
                      })
             {
