@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.6"
+  #define MyAppVersion "0.2.7"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
@@ -65,16 +65,16 @@ Name: "{group}\AdaPanel'i Kaldir"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\AdaPanel"; Filename: "{code:GetPanelUrl}"; Tasks: desktopicon
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-cleanup.ps1"" -InstallDir ""{app}"" -DataRoot ""{commonappdata}\AdaPanel"""; Flags: runhidden waituntilterminated; RunOnceId: "AdaPanelCleanUninstall"
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-cleanup.ps1"" -InstallDir ""{app}"" -DataRoot ""{commonappdata}\AdaPanel"" -KeepData {code:GetUninstallKeepData}"; Flags: runhidden waituntilterminated; RunOnceId: "AdaPanelCleanUninstall"
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{commonappdata}\AdaPanel"
 Type: filesandordirs; Name: "{app}"
 
 [Code]
 var
   PortPage: TInputQueryWizardPage;
   IsUpdateInstall: Boolean;
+  WipeAllData: Boolean;
 
 function GetPanelPort(Param: string): string;
 forward;
@@ -239,6 +239,30 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := IsUpdateInstall and (ReadExistingPanelPort <> '') and (PageID = PortPage.ID);
+end;
+
+{ Kaldirma: veriler VARSAYILAN OLARAK KORUNUR (Plesk gibi once sorulur). Yalnizca kullanici
+  acikca EVET derse musteri veritabanlari/siteler/yedekler silinir. Sessiz kaldirma = koru. }
+function InitializeUninstall(): Boolean;
+begin
+  Result := True;
+  WipeAllData := False;
+  if not UninstallSilent then
+    WipeAllData := MsgBox(
+      'AdaPanel kaldiriliyor.' + #13#10 + #13#10 +
+      'BARINDIRMA VERILERI DE SILINSIN MI?' + #13#10 +
+      '(musteri veritabanlari, web sitesi kayitlari, yedekler, panel ayarlari)' + #13#10 + #13#10 +
+      'Hayir = yalnizca panel kaldirilir; siteler ve veritabanlari CALISMAYA DEVAM EDER (onerilen).' + #13#10 +
+      'Evet = HER SEY kalici olarak silinir.',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+end;
+
+function GetUninstallKeepData(Param: string): string;
+begin
+  if WipeAllData then
+    Result := '0'
+  else
+    Result := '1';
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): string;

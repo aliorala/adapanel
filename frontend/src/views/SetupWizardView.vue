@@ -1132,6 +1132,8 @@ async function submitLogin() {
     showBanner(t("panel.auth.loginSuccess"), false, 4000);
     await loadDashboardData();
     startRefreshLoop();
+    // Girişten hemen sonra da "yeni sürüm" bandı görünsün (mount'taki kontrol login öncesiydi).
+    void loadPanelUpdate();
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
   }

@@ -5099,3 +5099,22 @@ Basarili:
   bu gecis bir kez daha ayni belirtiyi verebilir; cozum Start-Service AdaPanel. 0.2.6'dan itibaren zincir kendi kendini onarir.
 - 0.2.6 SHA256 `24DE9186E2F6CB2732BABE5A35F1A6D763A4A25F8AFE564A956C0B6D6FB309BA` (49.39 MiB), tum surum varsayilanlari
   (props/scriptler/iss) 0.2.6. Testler 2+44 yesil. 0.2.6 yayini ayrica 0.2.5 panelde YENI SURUM BANNERINI canli test ettirir.
+
+## 2026-07-03 (175) — Denetim onaylari uygulandi (0.2.7): uninstall veri korumasi + banner login + semver + kozmetik
+- (1) UNINSTALL VERI KORUMASI: AdaPanel.iss InitializeUninstall -> MsgBox "BARINDIRMA VERILERI DE SILINSIN MI?"
+  (varsayilan HAYIR=koru; sessiz kaldirma=koru). GetUninstallKeepData scripted-constant -> uninstall-cleanup.ps1
+  -KeepData "1|0". KeepData=1: yalnizca AdaPanel servisi + AdaPanel-SelfUpdate gorevi kaldirilir, siteler/DB servisleri/
+  yedekler/DataRoot CALISIR halde kalir (Plesk davranisi). KeepData=0: eski tam temizlik. Kosulsuz veri silen
+  [UninstallDelete] {commonappdata}\AdaPanel SATIRI KALDIRILDI (silme artik yalniz scriptte, bayraga bagli).
+- (2) BANNER LOGIN GAP: SetupWizardView.submitLogin basari yolunda `void loadPanelUpdate()` -> giristen hemen sonra
+  banner gelir (once yalniz mount'ta kontrol vardi, login sonrasi F5 gerekiyordu).
+- (3) SEMVER KIYAS: SelfUpdateService.IsUpdateAvailable artik IsNewerVersion(current,latest) (internal static):
+  "-suffix"/"+hash" atilir, Version.TryParse, latest > current; cozulemezse eski esitsizlik. Boylece panel 0.2.7 iken
+  GitHub'da 0.2.6 kalmasi "guncelleme var" DEDIRTMEZ (downgrade/gecikmis-release durumu). 7 InlineData'li Theory eklendi
+  (InternalsVisibleTo zaten vardi).
+- (4) KOZMETIK: frontend package.json+lock 0.2.7 (npm --package-lock-only ile lock sync), VersionInfo fallback "0.0.0".
+- (5) GIT GUVENLIGI: `git remote remove origin` (kaynak yanlislikla push edilemesin; releases GitHub web'den yukleniyor.
+  Geri eklemek: git remote add origin https://github.com/aliorala/adapanel.git).
+- Tum surum varsayilanlari 0.2.7. Uretilen/duzenlenen ps1'ler parser-dogrulandi. 0.2.7 installer SHA256
+  `C7DCF49AF57F72EBC1D114EFD5E96EA24E9D4CB466DD1AA992F66B47F9448E86` (49.39 MiB). 0.2.6 YAYINDA (24DE9186)
+  -> kullanici 0.2.6'ya guncelleyince 0.2.7 yayinlanacak; 0.2.6->0.2.7 gecisi YENI dayanikli runner'la ilk tam test.

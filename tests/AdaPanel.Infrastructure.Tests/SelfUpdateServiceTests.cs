@@ -79,6 +79,19 @@ public sealed class SelfUpdateServiceTests
         }
     }
 
+    [Theory]
+    [InlineData("0.2.6", "0.2.7", true)]   // daha yeni release -> guncelleme var
+    [InlineData("0.2.7", "0.2.7", false)]  // esit -> yok
+    [InlineData("0.2.7", "0.2.6", false)]  // release ESKI (downgrade) -> uyari YOK
+    [InlineData("0.2.2-preview", "0.2.4", true)]   // "-suffix" sayisal kiyastan once atilir
+    [InlineData("0.2.4+abc123", "0.2.4", false)]   // "+hash" eki de atilir -> esit
+    [InlineData("0.2.6", "", false)]               // bos tag -> yok
+    [InlineData("abc", "def", true)]               // cozulemeyen -> eski esitsizlik davranisi
+    public void IsNewerVersion_ComparesSemanticVersions(string current, string latest, bool expected)
+    {
+        Assert.Equal(expected, SelfUpdateService.IsNewerVersion(current, latest));
+    }
+
     private static SelfUpdateService CreateService(string dataRoot, IUpdateInstallerLauncher launcher)
     {
         var fileStore = new JsonFileStore(

@@ -1,9 +1,32 @@
 param(
     [string]$InstallDir = "C:\Program Files\AdaPanel",
-    [string]$DataRoot = "$env:ProgramData\AdaPanel"
+    [string]$DataRoot = "$env:ProgramData\AdaPanel",
+    # "1" = verileri KORU (varsayilan guvenli mod): yalnizca panel servisi + self-update gorevi kaldirilir;
+    # musteri veritabanlari, IIS siteleri, yedekler, DB servisleri CALISMAYA DEVAM eder (Plesk davranisi).
+    # "0" = tam temizlik (asagidaki eski davranis, kullanici kaldirirken ACIKCA onaylarsa).
+    [string]$KeepData = "1"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
+
+if ($KeepData -eq "1") {
+    $panelService = Get-Service -Name "AdaPanel" -ErrorAction SilentlyContinue
+    if ($panelService) {
+        Stop-Service -Name "AdaPanel" -Force -ErrorAction SilentlyContinue
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            Start-Sleep -Milliseconds 500
+            $panelService = Get-Service -Name "AdaPanel" -ErrorAction SilentlyContinue
+            if (-not $panelService -or $panelService.Status -eq "Stopped") { break }
+        }
+        & sc.exe delete "AdaPanel" | Out-Null
+    }
+
+    Stop-ScheduledTask -TaskName "AdaPanel-SelfUpdate" -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "AdaPanel-SelfUpdate" -Confirm:$false -ErrorAction SilentlyContinue
+
+    Write-Host "AdaPanel removed. Hosted sites, databases, and data were preserved."
+    exit 0
+}
 
 $serviceNames = @(
     "AdaPanel",

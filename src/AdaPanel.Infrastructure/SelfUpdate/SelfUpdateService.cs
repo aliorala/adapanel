@@ -85,7 +85,7 @@ public sealed class SelfUpdateService(
             InstallScheduledAtUtc = pendingUpdate.InstallScheduledAtUtc,
             Notes = !string.IsNullOrEmpty(fetchNote) ? fetchNote : (string.IsNullOrWhiteSpace(manifest.Notes) ? defaultNote : manifest.Notes),
             GithubRepo = github.Repo,
-            IsUpdateAvailable = !string.Equals(currentVersion, latestVersion, StringComparison.OrdinalIgnoreCase),
+            IsUpdateAvailable = IsNewerVersion(currentVersion, latestVersion),
             CheckedAtUtc = DateTime.UtcNow
         };
     }
@@ -375,6 +375,37 @@ public sealed class SelfUpdateService(
         return string.IsNullOrWhiteSpace(fileName)
             ? $"AdaPanelUpdate-{DateTime.UtcNow:yyyyMMddHHmmss}.exe"
             : fileName;
+    }
+
+    // Yalnizca GERCEKTEN daha yeni surumde "guncelleme var" de: esit ya da ESKI release tag'i
+    // (or. panel 0.2.7 iken GitHub'da hala 0.2.6 varsa) uyari dogurmasin. "-preview"/"+hash"
+    // ekleri sayisal kiyastan once atilir; sayi olarak cozulemeyen surumlerde eski esitsizlik davranisi korunur.
+    internal static bool IsNewerVersion(string currentVersion, string latestVersion)
+    {
+        if (string.IsNullOrWhiteSpace(latestVersion))
+        {
+            return false;
+        }
+
+        var current = TryParseVersion(currentVersion);
+        var latest = TryParseVersion(latestVersion);
+        if (current is null || latest is null)
+        {
+            return !string.Equals(currentVersion, latestVersion, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return latest > current;
+    }
+
+    private static Version? TryParseVersion(string value)
+    {
+        var core = value.Split('-', '+')[0].Trim();
+        if (!core.Contains('.'))
+        {
+            core += ".0";
+        }
+
+        return Version.TryParse(core, out var parsed) ? parsed : null;
     }
 
     private static string NormalizeSha256(string? value)

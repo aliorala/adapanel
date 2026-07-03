@@ -1,6 +1,6 @@
 {
   "name": "adapanel-frontend",
-  "version": "0.2.2-preview",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "scripts": {
