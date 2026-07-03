@@ -5076,3 +5076,26 @@ Basarili:
   StubHttpClientFactory artik NotFoundHandler (her istege 404) kullaniyor → ag yok, deterministik. 44/44 gecti. (Production kodu
   dogru; NormalizeSha256 64-hex zorunlu tutuyor, sadece test canli internete cikiyordu.)
 - 0.2.5 installer SHA256 `F37D6D8E1816A803A4DE03B0B91BA95006CEE0FAE8BBA48782FDE5BEBE1AB9DA` (49.39 MiB). Release tag'i "0.2.5" YAP.
+
+## 2026-07-03 (174) — CANLI ARIZA: self-update sonrasi servis KAPALI kaldi -> kalici cozum (0.2.6)
+- OLAY: kullanici 0.2.5 guncellemesini paneldan kurdu -> panel ACILMADI (8890 disaridan kapali; 443/IIS saglam).
+  Start-Service AdaPanel ile elle acildi -> mekanizma kurulumu yapmis ama SERVISI AYAKTA BIRAKMAMIS.
+- KOK NEDEN ADAYLARI (log dogrulamasi beklenmedi, HEPSI kapatildi):
+  1) install-service.ps1 guncellemede sil+yeniden-kur yapiyordu: sc delete acik handle varsa servisi "marked for
+     deletion"da birakir -> script throw -> AfterInstall RaiseException -> kurulum servis baslatilmadan yarida.
+  2) apply-update.ps1'de GUVENLIK AGI YOKTU: installer nasil biterse bitsin servis durumunu kontrol eden yoktu.
+  3) Eski surec dosya kilidini gec birakirsa sessiz kurulumda dosya kopyalama patlar (PrepareToInstall 15sn bekliyordu, kill yoktu).
+- FIX SETI:
+  * install-service.ps1: mevcut servisi ARTIK SILMIYOR -> yerinde reconfigure (HKLM ImagePath + Set-Service auto; sc config
+    quoting cehennemine girmemek icin registry). + sc.exe failure restart/5000/10000/30000 (cokme -> Windows kendisi baslatir).
+    + Start-Service 6 deneme x 5sn (eski surec 8890'i gec birakirsa).
+  * WindowsUpdateInstallerLauncher (apply-update.ps1 uretici): Write-UpdateLog ([runner] onekli, apply-update.log'a) +
+    installer exit code loglanir + SON GUVENCE blogu: installer ne dondururse dondursun Get-Service -> Running degilse
+    8 deneme x 5sn Start-Service; hala degilse log + exit 1. Unregister-ScheduledTask finally'den cikip sona alindi.
+  * AdaPanel.iss PrepareToInstall: 15sn stop beklemesinden sonra surec hala yasiyorsa taskkill /F /IM AdaPanel.Api.exe + 2sn.
+  * SelfUpdateService.CheckForUpdateAsync: pending.Version == currentVersion ise pending-update.json + eski paket SILINIR
+    (best-effort) -> "kurulum planlandi" etiketi kalici kalmaz, updates klasoru 50MB'lik eskilerle dolmaz.
+- DIKKAT (tek seferlik): 0.2.5->0.2.6 guncellemesi ESKI runner scriptiyle calisir (scripti KURULU panel uretir) ->
+  bu gecis bir kez daha ayni belirtiyi verebilir; cozum Start-Service AdaPanel. 0.2.6'dan itibaren zincir kendi kendini onarir.
+- 0.2.6 SHA256 `24DE9186E2F6CB2732BABE5A35F1A6D763A4A25F8AFE564A956C0B6D6FB309BA` (49.39 MiB), tum surum varsayilanlari
+  (props/scriptler/iss) 0.2.6. Testler 2+44 yesil. 0.2.6 yayini ayrica 0.2.5 panelde YENI SURUM BANNERINI canli test ettirir.

@@ -50,6 +50,28 @@ public sealed class SelfUpdateService(
         var latestVersion = string.IsNullOrWhiteSpace(manifest.LatestVersion) ? currentVersion : manifest.LatestVersion;
         var pendingUpdate = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
 
+        // Guncelleme UYGULANDIYSA (calisan surum == bekleyen paketin surumu) bekleyen durumu temizle:
+        // "kurulum planlandi" etiketi sonsuza dek kalmasin, eski ~50MB paket updates klasorunde birikmesin.
+        if (!string.IsNullOrWhiteSpace(pendingUpdate.Version) &&
+            string.Equals(pendingUpdate.Version, currentVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) && File.Exists(pendingUpdate.PackagePath))
+                {
+                    File.Delete(pendingUpdate.PackagePath);
+                }
+
+                File.Delete(fileStore.ResolvePath(PendingUpdatePath));
+            }
+            catch
+            {
+                // Temizlik best-effort: dosya kilitliyse bir sonraki kontrolde tekrar denenir.
+            }
+
+            pendingUpdate = new PendingUpdate();
+        }
+
         var defaultNote = string.IsNullOrWhiteSpace(github.Repo) ? "update.github_not_configured" : "update.github_ok";
         return new UpdateStatusDto
         {

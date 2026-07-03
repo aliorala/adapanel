@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.4"
+  #define MyAppVersion "0.2.6"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
@@ -250,7 +250,7 @@ begin
   begin
     Exec(
       'powershell.exe',
-      '-NoProfile -ExecutionPolicy Bypass -Command "if (Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue) { Stop-Service -Name ''{#MyAppServiceName}'' -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Milliseconds 500; $svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if (-not $svc -or $svc.Status -eq ''Stopped'') { break } } }"',
+      '-NoProfile -ExecutionPolicy Bypass -Command "if (Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue) { Stop-Service -Name ''{#MyAppServiceName}'' -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Milliseconds 500; $svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if (-not $svc -or $svc.Status -eq ''Stopped'') { break } } }; if (Get-Process -Name ''AdaPanel.Api'' -ErrorAction SilentlyContinue) { taskkill /F /IM AdaPanel.Api.exe | Out-Null; Start-Sleep -Seconds 2 }"',
       '',
       SW_HIDE,
       ewWaitUntilTerminated,

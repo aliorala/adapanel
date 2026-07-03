@@ -17,23 +17,39 @@ if ($PreferredHttpsPort -gt 0) {
 }
 $binaryPath = ('"{0}" {1}' -f $resolvedExecutable, ($binaryArguments -join " ")).Trim()
 
-if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($existing) {
+    # GUNCELLEME YOLU: servisi SILME. 'sc delete' acik bir handle varsa servisi "silinmek uzere
+    # isaretli" durumda birakir -> New-Service basarisiz olur -> kurulum servis BASLATILMADAN yarim
+    # kalir (panel olu kalir). Yerinde yeniden yapilandirmak (ImagePath guncelle) bu tuzagi tamamen
+    # ortadan kaldirir; Plesk/ISPConfig de guncellemede reconfigure eder.
     Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-    & sc.exe delete $ServiceName | Out-Null
-
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    for ($wait = 0; $wait -lt 30; $wait++) {
+        $existing.Refresh()
+        if ($existing.Status -eq "Stopped") { break }
         Start-Sleep -Milliseconds 500
-        if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
-            break
-        }
     }
 
-    if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-        throw "Service '$ServiceName' could not be removed."
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" -Name ImagePath -Value $binaryPath
+    Set-Service -Name $ServiceName -StartupType Automatic
+} else {
+    New-Service -Name $ServiceName -BinaryPathName $binaryPath -DisplayName $ServiceName -StartupType Automatic -ErrorAction Stop | Out-Null
+}
+
+# Cokme durumunda Windows servisi kendisi yeniden baslatsin (5sn/10sn/30sn) -> panel olu kalmasin.
+& sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+
+# BASLATMA: eski surec portu (8890) veya dosya kilidini hemen birakmamis olabilir -> tekrar dene.
+for ($attempt = 1; $attempt -le 6; $attempt++) {
+    try {
+        Start-Service -Name $ServiceName -ErrorAction Stop
+        break
+    } catch {
+        if ($attempt -eq 6) {
+            throw "Service '$ServiceName' could not be started after $attempt attempts: $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds 5
     }
 }
 
-New-Service -Name $ServiceName -BinaryPathName $binaryPath -DisplayName $ServiceName -StartupType Automatic -ErrorAction Stop
-Start-Service -Name $ServiceName -ErrorAction Stop
-
-Write-Host "Service '$ServiceName' created and started."
+Write-Host "Service '$ServiceName' configured and started."
