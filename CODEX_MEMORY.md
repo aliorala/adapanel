@@ -5224,3 +5224,13 @@ Basarili:
 - KULLANICIYA NOT: 0.2.10'daki "unexpected_error" sirasinda gorev BUYUK IHTIMALLE OLUSTU (kayit basarili, okuma cokuyordu);
   0.2.11'e gecince Planli Gorevler listesinde GORUNECEK — kopya olusturmadan once listeye bak (ayni ad zaten unregister+re-register, sorun degil).
 - 0.2.11 SHA256 `4B7711EA0C199E791974C3BF5B7BCA03468FCE120570597024338E1FDFCAC08D` (artifacts\release\0.2.11\). Testler 2+51.
+
+## 2026-07-04 (182) — CANLI ONAY: cron URL gorevi VPS'te calisti (0.2.11)
+- Kullanici 0.2.11'i yayinladi+kurdu: "gorev listede gorundu calisti". Boylece UCTAN UCA KANITLANDI:
+  self-update zinciri (0.2.5->...->0.2.11 sorunsuz) + cron kayit (SYSTEM principal) + okuma (ISO tarih) + calisma (curl URL GET).
+- 179-181 zincirinin ozeti (uc maskelenmis hata): (1) RepetitionDuration MaxValue XML reddi -> (2) principal'siz
+  Register SYSTEM'de hesap eslemesi -> (3) PS5.1 /Date() JSON'u System.Text.Json'da patlar. Her fix bir sonrakini acti;
+  hepsi lokal birebir-repro ile kanitlanarak cozuldu. Uretilen PS scriptleri = derleyici korumasiz alan; degisiklikte
+  MUTLAKA lokal calistir-dogrula.
+- ACIK KALAN KUCUK ISLER: kullanici ikinci gorevi (IPTV cleanup 03:10) ekleyecek; cron hata e-postasi icin SMTP
+  (Ayarlar>Bildirimler) yapilandirilmis olmali. BUYUK BEKLEYENLER: K2+B3 guvenlik (canli-guided), DNSSEC, wildcard DNS-01, domain-basi mail IP.
