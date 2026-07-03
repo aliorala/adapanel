@@ -16,6 +16,9 @@ public sealed class ServicePlanDto
 
     /// <summary>En fazla posta kutusu (panel MaxMailboxes; 0 = sınırsız).</summary>
     public int MaxMailboxes { get; set; }
+
+    /// <summary>En fazla planlı görev (panel MaxScheduledTasks; 0 = sınırsız).</summary>
+    public int MaxScheduledTasks { get; set; }
 }
 
 public sealed class ServicePlanRequest
@@ -29,4 +32,6 @@ public sealed class ServicePlanRequest
     public int MaxDatabases { get; set; }
 
     public int MaxMailboxes { get; set; }
+
+    public int MaxScheduledTasks { get; set; }
 }

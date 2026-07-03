@@ -5258,3 +5258,26 @@ Basarili:
 - 0.2.12 SHA256 `039CDC838366C83A248FADE8D8C6588E584C2F9DE10986978AF224870690963C` (artifacts\release\0.2.12\). Testler 2+51.
 - BACKLOG SIRASI: (1) K2+B3 guvenlik = SIRADAKI, kullanici VPS basindayken (DB root parolasi yaris riski);
   (2) plan gorev limiti; (3) tasimada cron; (4) DNSSEC / wildcard DNS-01 / domain-basi mail IP; (5) tam-sunucu DR.
+
+## 2026-07-04 (184) — "Kalan isleri bitir" turu: K2+B3 ZATEN URUNDE dogrulandi + plan gorev kotasi eklendi (0.2.12 final)
+- BAYAT BACKLOG DUZELTMESI (onemli!): K2 ve B3 icin "kullaniciyla canli yapilacak" diyordum — YANLISTI, ikisi de coktan kaynakta:
+  * K2: DatabasesController /databases/harden -> HardenAdminAccountsAsync -> SetRootPasswordAtomicAsync (once SAKLA,
+    sonra UYGULA+DOGRULA, hata->geri al; tek kaynak: InstalledComponent ProtectedConfiguration; phpMyAdmin ayni parolayi
+    ReadRootPassword ile alir) + anonim/uzak-root/test-db temizligi. UI: Veritabanlari ekrani "Guclendir" butonu.
+    KULLANICI TEK SEFER TIKLAMALI (guvenli, atomik, geri-alinabilir). CODEX 61'deki "K2 yapma" notu 63'te asilmis;
+    174-183 arasi ben 61'e bakip yanlis rapor ettim. DERS: guvenlik durumu icin HER ZAMAN en guncel girdiyi tara.
+  * B3: phpMyAdmin/Adminer IIS'te LOOPBACK'e bagli + panel uzerinden DbToolsProxyController ile proxy'li (X-Forwarded-Proto
+    'https') -> dis dunyaya yalniz panelin HTTPS'i acik. B3 mimaride KAPALI.
+- YENI: PLAN GORELI GOREV KOTASI (MaxScheduledTasks, 0=sinirsiz; Plesk plan paritesi):
+  CustomerScope record +alan (TUM ctor'lar guncellendi: UMS 55/285, CSS 26/27), ScopeEntry+persist+3 bos-kayit-temizlik
+  kosulu, SetExtraLimitsAsync +param, ApplyScopeAsync +param (create/update user), UserSummaryDto/Create/UpdateUserRequest/
+  ServicePlanDto+Request +alan, ServicePlanService create/update. ENFORCEMENT: CronController non-admin create'te scope
+  kotasi (ayni ada re-register kotayi doldurmaz; asim -> cron.quota_exceeded 409). FRONTEND: plan karti "Planli gorev"
+  satiri, plan formu + kullanici olustur/duzenle formlarina kota alani, applyPlanToCreate/reset/selectUser baglari,
+  auth.ts 3 tip + servicePlans.ts tip/payload. i18n +4 (panel.users.maxScheduledTasks, panel.plans.scheduledTasksLabel,
+  cron.quota_exceeded tr+en) -> parite 2491=2491.
+- KASITLI ERTELENENLER (kullaniciya acikca soylendi): DNSSEC / wildcard DNS-01 / domain-basi mail IP -> her biri VPS
+  ortaminda test ister (DNS server, ek IP), buradan dogrulanamaz; tek buyuk pakete koymak 179-181 tarzi zincir risk dogurur.
+  Tasima-cron: Plesk REST cron uclarini discover'imiza vermiyor -> ayri arastirma. Tam-sunucu DR (IIS rebuild) ayri oturum.
+- 0.2.12 FINAL SHA256 `A80029220CE860FD51500FA580AA8AAFC4EB3A79A01B36BA5B7019D5A043A9E0` (yedek-gorev + kota BIRLIKTE;
+  onceki 039CDC yayinlanmamisti, gecersiz). Testler 2+51, parite 2491.

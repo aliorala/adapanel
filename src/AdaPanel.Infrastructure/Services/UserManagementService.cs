@@ -52,7 +52,7 @@ public sealed class UserManagementService(
             }
             else
             {
-                summaries.Add(MapUser(user, new CustomerScope([], 0, 0, 0, 0), 0, null, string.Empty));
+                summaries.Add(MapUser(user, new CustomerScope([], 0, 0, 0, 0, 0), 0, null, string.Empty));
             }
         }
 
@@ -105,7 +105,7 @@ public sealed class UserManagementService(
             ipAddress,
             cancellationToken);
 
-        var scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, cancellationToken);
+        var scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
         if (role == UserRole.Customer)
         {
             await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
@@ -246,7 +246,7 @@ public sealed class UserManagementService(
             ipAddress,
             cancellationToken);
 
-        var scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, cancellationToken);
+        var scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
         if (user.Role == UserRole.Customer)
         {
             await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
@@ -266,7 +266,7 @@ public sealed class UserManagementService(
     }
 
     /// <summary>Customer rolünde kapsamı (siteler + limitler) kaydeder; diğer rollerde varsa temizler.</summary>
-    private async Task<CustomerScope> ApplyScopeAsync(PanelUser user, string[] assignedSites, int maxSites, int maxDiskMb, int maxDatabases, int maxMailboxes, CancellationToken cancellationToken)
+    private async Task<CustomerScope> ApplyScopeAsync(PanelUser user, string[] assignedSites, int maxSites, int maxDiskMb, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken)
     {
         if (user.Role == UserRole.Customer)
         {
@@ -277,12 +277,12 @@ public sealed class UserManagementService(
             }
 
             await customerScopeService.SetScopeAsync(user.Id, assignedSites, maxSites, maxDiskMb, cancellationToken);
-            await customerScopeService.SetExtraLimitsAsync(user.Id, maxDatabases, maxMailboxes, cancellationToken);
+            await customerScopeService.SetExtraLimitsAsync(user.Id, maxDatabases, maxMailboxes, maxScheduledTasks, cancellationToken);
             return await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
         }
 
         await customerScopeService.RemoveUserAsync(user.Id, cancellationToken);
-        return new CustomerScope([], 0, 0, 0, 0);
+        return new CustomerScope([], 0, 0, 0, 0, 0);
     }
 
     /// <summary>
@@ -371,6 +371,7 @@ public sealed class UserManagementService(
             MaxDiskMb = scope.MaxDiskMb,
             MaxDatabases = scope.MaxDatabases,
             MaxMailboxes = scope.MaxMailboxes,
+            MaxScheduledTasks = scope.MaxScheduledTasks,
             DiskUsageMb = diskUsageMb,
             OwnerId = ownerId,
             OwnerName = ownerName

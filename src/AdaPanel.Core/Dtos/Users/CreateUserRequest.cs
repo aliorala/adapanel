@@ -43,6 +43,9 @@ public sealed class CreateUserRequest
     /// <summary>Customer için en fazla posta kutusu kotası (panel MaxMailboxes; 0 = sınırsız).</summary>
     public int MaxMailboxes { get; init; }
 
+    /// <summary>Customer için en fazla planlı görev kotası (panel MaxScheduledTasks; 0 = sınırsız).</summary>
+    public int MaxScheduledTasks { get; init; }
+
     /// <summary>true ise kullanıcıya giriş bilgilerini içeren hoş geldin e-postası gönderilir.</summary>
     public bool SendWelcomeEmail { get; init; }
 }

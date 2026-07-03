@@ -430,6 +430,7 @@
                 <li><span>{{ t("panel.plans.diskLabel") }}</span><b>{{ plan.maxDiskMb ? plan.maxDiskMb + " MB" : "∞" }}</b></li>
                 <li><span>{{ t("panel.plans.databasesLabel") }}</span><b>{{ plan.maxDatabases || "∞" }}</b></li>
                 <li><span>{{ t("panel.plans.mailboxesLabel") }}</span><b>{{ plan.maxMailboxes || "∞" }}</b></li>
+                <li><span>{{ t("panel.plans.scheduledTasksLabel") }}</span><b>{{ plan.maxScheduledTasks || "∞" }}</b></li>
               </ul>
             </article>
           </div>
@@ -455,6 +456,10 @@
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
               <input v-model.number="planForm.maxMailboxes" type="number" min="0" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
+              <input v-model.number="planForm.maxScheduledTasks" type="number" min="0" />
             </label>
             <p class="plan-form-hint">{{ t("panel.plans.formHint") }}</p>
             <div class="plan-form-actions">
@@ -533,6 +538,10 @@
           <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
             <input v-model.number="createUserForm.maxMailboxes" type="number" min="0" />
+          </label>
+          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+            <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
+            <input v-model.number="createUserForm.maxScheduledTasks" type="number" min="0" />
           </label>
           <p v-if="createUserForm.role === 'Customer'" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
           <label class="stacked-field">
@@ -633,6 +642,10 @@
           <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
             <input v-model.number="selectedUserForm.maxMailboxes" type="number" min="0" />
+          </label>
+          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+            <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
+            <input v-model.number="selectedUserForm.maxScheduledTasks" type="number" min="0" />
           </label>
           <p v-if="selectedUserForm.role === 'Customer'" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
           <label class="stacked-field">
@@ -774,6 +787,7 @@ const createUserForm = reactive({
   maxDiskMb: 0,
   maxDatabases: 0,
   maxMailboxes: 0,
+  maxScheduledTasks: 0,
   sendWelcomeEmail: false,
   preferredLanguage: "tr"
 });
@@ -787,6 +801,7 @@ const selectedUserForm = reactive({
   maxDiskMb: 0,
   maxDatabases: 0,
   maxMailboxes: 0,
+  maxScheduledTasks: 0,
   preferredLanguage: "tr",
   isActive: true
 });
@@ -801,7 +816,7 @@ const securityForm = reactive({
 
 // Servis planları (Servis Planlari): müşterilere atanabilen limit şablonları.
 const servicePlans = ref<ServicePlan[]>([]);
-const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0, maxMailboxes: 0 });
+const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0, maxMailboxes: 0, maxScheduledTasks: 0 });
 const createPlanId = ref("");
 
 async function loadServicePlans() {
@@ -812,12 +827,13 @@ async function addServicePlan() {
   if (!planForm.name.trim()) {
     return;
   }
-  await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases, maxMailboxes: planForm.maxMailboxes });
+  await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases, maxMailboxes: planForm.maxMailboxes, maxScheduledTasks: planForm.maxScheduledTasks });
   planForm.name = "";
   planForm.maxSites = 0;
   planForm.maxDiskMb = 0;
   planForm.maxDatabases = 0;
   planForm.maxMailboxes = 0;
+  planForm.maxScheduledTasks = 0;
   showPlanForm.value = false;
   await loadServicePlans();
 }
@@ -834,6 +850,7 @@ function applyPlanToCreate() {
     createUserForm.maxDiskMb = plan.maxDiskMb;
     createUserForm.maxDatabases = plan.maxDatabases;
     createUserForm.maxMailboxes = plan.maxMailboxes;
+    createUserForm.maxScheduledTasks = plan.maxScheduledTasks;
   }
 }
 const panelPreferences = reactive<PanelPreferences>({
@@ -1400,6 +1417,7 @@ async function createUser() {
     createUserForm.maxDiskMb = 0;
     createUserForm.maxDatabases = 0;
     createUserForm.maxMailboxes = 0;
+    createUserForm.maxScheduledTasks = 0;
     createUserForm.sendWelcomeEmail = false;
     createUserForm.preferredLanguage = "tr";
     showUserCreateForm.value = false;
@@ -1429,6 +1447,7 @@ function selectUser(user: ManagedUser) {
   selectedUserForm.maxDiskMb = user.maxDiskMb ?? 0;
   selectedUserForm.maxDatabases = user.maxDatabases ?? 0;
   selectedUserForm.maxMailboxes = user.maxMailboxes ?? 0;
+  selectedUserForm.maxScheduledTasks = user.maxScheduledTasks ?? 0;
   selectedUserForm.preferredLanguage = user.preferredLanguage;
   selectedUserForm.isActive = user.isActive;
 }

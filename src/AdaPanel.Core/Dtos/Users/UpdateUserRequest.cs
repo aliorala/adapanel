@@ -36,4 +36,7 @@ public sealed class UpdateUserRequest
 
     /// <summary>Customer için en fazla posta kutusu kotası (panel MaxMailboxes; 0 = sınırsız).</summary>
     public int MaxMailboxes { get; init; }
+
+    /// <summary>Customer için en fazla planlı görev kotası (panel MaxScheduledTasks; 0 = sınırsız).</summary>
+    public int MaxScheduledTasks { get; init; }
 }

@@ -33,6 +33,9 @@ public sealed class UserSummaryDto
     /// <summary>Customer için en fazla posta kutusu kotası (panel MaxMailboxes).</summary>
     public int MaxMailboxes { get; init; }
 
+    /// <summary>Customer için en fazla planlı görev kotası (panel MaxScheduledTasks).</summary>
+    public int MaxScheduledTasks { get; init; }
+
     /// <summary>Customer'ın atanan sitelerinin güncel disk kullanımı (MB).</summary>
     public long DiskUsageMb { get; init; }
 

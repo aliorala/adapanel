@@ -11,7 +11,9 @@ namespace AdaPanel.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
 [Route("api/v1/cron")]
-public sealed class CronController(ISchedulerService schedulerService) : ControllerBase
+public sealed class CronController(
+    ISchedulerService schedulerService,
+    ICustomerScopeService customerScopeService) : ControllerBase
 {
     private bool IsAdmin => User.IsInRole("Administrator");
 
@@ -51,6 +53,22 @@ public sealed class CronController(ISchedulerService schedulerService) : Control
             request.WorkingDirectory = string.Empty;
             request.PhpVersion = string.Empty;
             EnsureCustomerUrlAllowed(request.Url);
+
+            // Plan kotası (MaxScheduledTasks; 0 = sınırsız): aynı adla güncelleme kotayı doldurmaz.
+            var scope = await customerScopeService.GetScopeAsync(User.GetRequiredUserId(), cancellationToken);
+            if (scope.MaxScheduledTasks > 0)
+            {
+                var prefix = OwnerPrefix;
+                var requestedName = prefix + (request.Name ?? string.Empty).Trim();
+                var ownedCount = (await schedulerService.GetTasksAsync(cancellationToken))
+                    .Count(task => task.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                                   !string.Equals(task.Name, requestedName, StringComparison.OrdinalIgnoreCase));
+                if (ownedCount >= scope.MaxScheduledTasks)
+                {
+                    throw new AppException("cron.quota_exceeded", 409, 409);
+                }
+            }
+
             request.Name = OwnerPrefix + (request.Name ?? string.Empty).Trim();
         }
 
