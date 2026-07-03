@@ -5152,3 +5152,24 @@ Basarili:
   2) "IPTV temizlik"      url=https://alioral.com.tr/iptv/public/index.php/v1/cron/cleanup?key=...  saat 03:10
   "Simdi calistir" ile aninda test edilebilir. (Adresler gizli key icerir - panelde kalir, sorun degil.)
 - 0.2.7 FINAL SHA256 `DBDF3187CA0E8EE9932E141CEF5CB445E2A446EE3B489A17B435009353BB500F` (onceki B753A4 GECERSIZ, yayinlanmamisti).
+
+## 2026-07-03 (178) — Cron paritesi TAMAM: ac/kapat + son sonuc + hata e-postasi + musteri/bayi cron (0.2.8)
+- Kullanici 0.2.7'yi C7DCF4 build'iyle yayinladi (update-UX ve cron tipleri ICERMIYOR) -> hepsi 0.2.8'de toplandi.
+- AC/KAPAT: ISchedulerService.SetTaskEnabledAsync (Enable-/Disable-ScheduledTask) + POST /cron/{name}/enable|disable
+  + satirda Ac/Durdur butonu (state Disabled'a gore). cron.enabled/disabled anahtarlari.
+- SON SONUC sutunu: Get-ScheduledTaskInfo LastTaskResult (long?) DTO+tablo; 0=Basarili yesil, 267009/267045
+  calisiyor/kuyrukta notr, 267011 hic calismadi "-", digerleri "Hata (0x..)" warn pill.
+- HATA E-POSTASI (Plesk notify-on-error): AutomationService.RunAlertChecksAsync'e cron blogu — LastTaskResult
+  ozel-kod-disi != 0 VE son 2 gunde calismis -> mevcut uyari kanaliyla (email+webhook, 24h cooldown, key cron:{ad})
+  Turkce uyari. DI: AutomationService += ISchedulerService.
+- MUSTERI/BAYI CRON (guvenli kapsam): CronController rolleri Admin,Reseller,Customer. Admin-disi: TaskType=url'e
+  ZORLANIR (komut/PHP = sunucuda kod calistirmak, yalniz admin; Plesk de musteriyi kisitlar), ad "u{userId:N}--"
+  onekiyle yasar (GET filtre+onek soyma, run/delete/enable/disable ScopeName ile onek ekler -> baskasinin gorevine
+  ERISEMEZ), URL loopback/localhost/169.254.* HEDEFLEYEMEZ (cron.url_forbidden; panel API/SSRF kapisi kapali).
+  UI: CronView isAdmin degilse tip selecti gizli+form url'e kilitli; SetupWizard 'tasks' bolumu 3 role acildi
+  (mount kosulu + reseller/customer section filtreleri).
+- i18n +8 -> parite 2488=2488. Testler 2+51 yesil. Surumler 0.2.8 (props/scriptler/iss/package.json+lock).
+- 0.2.8 SHA256 `DC2FF48A9A8E8B634F0F1461CD0BF824635EFBAE8B2C6942C45B6A1815470D65` (49.39 MiB) -> tag "0.2.8" ile yayinla.
+  VPS hala 0.2.5 ise dogrudan 0.2.8'e atlanabilir (eski runner tek-seferlik riski: gelmezse Start-Service AdaPanel).
+- KALAN (kullaniciyla canli): K2 MariaDB root parolasi + B3 phpMyAdmin HTTPS; buyuk ertelenenler: DNSSEC,
+  wildcard DNS-01, domain-basi mail IP.

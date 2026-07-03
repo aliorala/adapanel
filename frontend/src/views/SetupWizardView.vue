@@ -197,7 +197,7 @@
 
     <BackupView v-else-if="activeSection === 'backup' && isCustomer" />
 
-    <CronView v-else-if="activeSection === 'tasks' && isAdmin" />
+    <CronView v-else-if="activeSection === 'tasks' && (isAdmin || isReseller || isCustomer)" />
 
     <ServerToolsView v-else-if="activeSection === 'tools' && isAdmin" />
 
@@ -914,6 +914,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "mail" ||
       section.id === "files" ||
       section.id === "database" ||
+      section.id === "tasks" ||
       section.id === "settings" ||
       section.id === "exit");
   }
@@ -926,6 +927,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "mail" ||
       section.id === "database" ||
       section.id === "files" ||
+      section.id === "tasks" ||
       section.id === "settings" ||
       section.id === "exit");
     // Müşteriye özel yedek bölümü (kendi sitelerinin yedekleri) — Dosyalar'dan hemen sonra.

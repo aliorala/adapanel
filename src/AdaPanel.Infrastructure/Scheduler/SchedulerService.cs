@@ -25,6 +25,7 @@ public sealed class SchedulerService : ISchedulerService
     WorkingDirectory = if ($_.Actions.Count -gt 0) {{ $_.Actions[0].WorkingDirectory }} else {{ '' }}
     NextRunTimeUtc = if ($info) {{ [datetime]$info.NextRunTime }} else {{ $null }}
     LastRunTimeUtc = if ($info) {{ [datetime]$info.LastRunTime }} else {{ $null }}
+    LastTaskResult = if ($info) {{ [long]$info.LastTaskResult }} else {{ $null }}
   }}
 }}
 $tasks | ConvertTo-Json -Depth 5";
@@ -113,6 +114,22 @@ $tasks | ConvertTo-Json -Depth 5";
         if (!result.Success)
         {
             throw new AppException("cron.write_failed", 500, 500);
+        }
+    }
+
+    public async Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new AppException("cron.invalid_name", 400, 400);
+        }
+
+        var verb = enabled ? "Enable-ScheduledTask" : "Disable-ScheduledTask";
+        var script = $@"{verb} -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction Stop | Out-Null";
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("cron.write_failed", 500, 500, result.StandardError);
         }
     }
 

@@ -23,4 +23,7 @@ public sealed class ScheduledTaskDto
     public DateTime? NextRunTimeUtc { get; set; }
 
     public DateTime? LastRunTimeUtc { get; set; }
+
+    /// <summary>Son çalışmanın çıkış kodu (0 = başarılı). Hiç çalışmadıysa/koşuyorsa Task Scheduler özel kodları döner.</summary>
+    public long? LastTaskResult { get; set; }
 }

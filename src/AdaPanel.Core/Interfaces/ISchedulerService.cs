@@ -12,4 +12,7 @@ public interface ISchedulerService
 
     /// <summary>Görevi beklemeden hemen tetikler (Plesk "Run Now").</summary>
     Task RunTaskAsync(string name, CancellationToken cancellationToken = default);
+
+    /// <summary>Görevi silmeden geçici olarak açar/kapatır (Plesk satır anahtarı).</summary>
+    Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default);
 }

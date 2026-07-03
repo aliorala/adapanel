@@ -27,6 +27,7 @@ public sealed class AutomationService(
     INotificationService notificationService,
     ISystemMonitoringService systemMonitoringService,
     IHealthService healthService,
+    ISchedulerService schedulerService,
     IConcurrencyLock concurrencyLock,
     ILogger<AutomationService> logger) : IAutomationService
 {
@@ -536,6 +537,34 @@ public sealed class AutomationService(
             {
                 logger.LogWarning(exception, "Servis durumu uyari kontrolu basarisiz.");
             }
+        }
+
+        // Planli gorev hatasi (Plesk "notify on error"): son calismasi sifirdan farkli kodla biten gorevler.
+        // Ozel kodlar uyari DEGIL: 267009 su an calisiyor, 267011 hic calismadi, 267045 kuyrukta.
+        try
+        {
+            foreach (var task in await schedulerService.GetTasksAsync(cancellationToken))
+            {
+                if (task.LastTaskResult is not long code || code is 0 or 267009 or 267011 or 267045)
+                {
+                    continue;
+                }
+
+                if (task.LastRunTimeUtc is null || now - task.LastRunTimeUtc > TimeSpan.FromDays(2))
+                {
+                    continue;
+                }
+
+                var target = string.IsNullOrWhiteSpace(task.Url) ? task.Command : task.Url;
+                alerts.Add((
+                    $"cron:{task.Name}",
+                    $"AdaPanel uyari: '{task.Name}' planli gorevi basarisiz",
+                    $"'{task.Name}' gorevi son calismasinda hata dondurdu (kod 0x{code:X}). Hedef: {target}. Planli Gorevler ekranindan 'Simdi calistir' ile yeniden deneyebilirsiniz."));
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Planli gorev uyari kontrolu basarisiz.");
         }
 
         var changed = false;

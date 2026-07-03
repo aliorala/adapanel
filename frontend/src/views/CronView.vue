@@ -25,7 +25,7 @@
     <section v-if="formOpen" class="form-surface">
       <div class="form-grid">
         <label><span class="field-label">{{ t("panel.tasks.name") }}</span><input v-model.trim="form.name" /></label>
-        <label>
+        <label v-if="isAdmin">
           <span class="field-label">{{ t("panel.tasks.taskType") }}</span>
           <select v-model="form.taskType">
             <option value="command">{{ t("panel.tasks.typeCommand") }}</option>
@@ -73,6 +73,7 @@
         <span>{{ t("panel.tasks.command") }}</span>
         <span>{{ t("panel.tasks.scheduleType") }}</span>
         <span>{{ t("panel.sites.state") }}</span>
+        <span>{{ t("panel.tasks.lastResult") }}</span>
         <span>{{ t("panel.tasks.nextRun") }}</span>
         <span>{{ t("panel.tasks.lastRun") }}</span>
         <span>{{ t("panel.files.actions") }}</span>
@@ -88,11 +89,15 @@
         </span>
         <span>{{ scheduleLabel(item.scheduleType) }}</span>
         <span :class="['status-pill', taskStateClass(item.state)]">{{ item.state || "-" }}</span>
+        <span :class="['status-pill', resultClass(item)]">{{ resultLabel(item) }}</span>
         <span>{{ formatUtc(item.nextRunTimeUtc) }}</span>
         <span>{{ formatUtc(item.lastRunTimeUtc) }}</span>
         <span class="row-actions">
           <button class="secondary compact" :disabled="runningName === item.name" @click="runTask(item.name)">
             {{ runningName === item.name ? t("panel.tasks.running") : t("panel.tasks.runNow") }}
+          </button>
+          <button class="secondary compact" :disabled="togglingName === item.name" @click="toggleTask(item)">
+            {{ isDisabled(item) ? t("panel.tasks.enableTask") : t("panel.tasks.disableTask") }}
           </button>
           <button class="danger compact" :disabled="deletingName === item.name" @click="removeTask(item.name)">
             {{ deletingName === item.name ? t("panel.database.removing") : t("panel.sites.delete") }}
@@ -108,10 +113,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, type ScheduledTask } from "../api/cron";
-import { extractApiMessage } from "../stores/auth";
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, type ScheduledTask } from "../api/cron";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
 
 const { t } = useI18n();
+const authStore = useAuthStore();
+// Müşteri/bayi yalnızca URL görevi kurar (backend de zorlar); tip seçici yalnız admin'de görünür.
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const tasks = ref<ScheduledTask[]>([]);
 const query = ref("");
 const formOpen = ref(false);
@@ -119,6 +127,7 @@ const loading = ref(false);
 const saving = ref(false);
 const deletingName = ref("");
 const runningName = ref("");
+const togglingName = ref("");
 const notice = ref("");
 const noticeError = ref(false);
 const form = reactive(defaultForm());
@@ -130,7 +139,12 @@ const filteredTasks = computed(() => {
     : tasks.value;
 });
 
-onMounted(refresh);
+onMounted(() => {
+  if (!isAdmin.value) {
+    form.taskType = "url";
+  }
+  void refresh();
+});
 
 async function refresh() {
   loading.value = true;
@@ -205,6 +219,38 @@ async function runTask(name: string) {
   }
 }
 
+function isDisabled(item: ScheduledTask) {
+  return item.state.toLocaleLowerCase().includes("disabled");
+}
+
+async function toggleTask(item: ScheduledTask) {
+  togglingName.value = item.name;
+  try {
+    await setScheduledTaskEnabled(item.name, isDisabled(item));
+    await refresh();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    togglingName.value = "";
+  }
+}
+
+// Son çalışma sonucu: 0 = başarılı; 267009/267011/267045 = koşuyor/hiç çalışmadı/kuyrukta (nötr); diğerleri hata kodu.
+function resultLabel(item: ScheduledTask) {
+  const code = item.lastTaskResult;
+  if (code === null || code === undefined || code === 267011) return "-";
+  if (code === 0) return t("panel.tasks.resultOk");
+  if (code === 267009 || code === 267045) return t("panel.tasks.running");
+  return t("panel.tasks.resultFail", { code: "0x" + code.toString(16).toUpperCase() });
+}
+
+function resultClass(item: ScheduledTask) {
+  const code = item.lastTaskResult;
+  if (code === 0) return "ok";
+  if (code === null || code === undefined || code === 267011 || code === 267009 || code === 267045) return "";
+  return "warn";
+}
+
 function typeLabel(value: string) {
   const key = value === "url" ? "panel.tasks.typeUrl" : value === "php" ? "panel.tasks.typePhp" : "panel.tasks.typeCommand";
   return t(key);
@@ -238,7 +284,7 @@ function resolveApiMessage(error: unknown) {
 
 <style scoped>
 .cron-row {
-  grid-template-columns: 1.1fr 1.8fr 0.7fr 0.75fr 1fr 1fr 1fr;
+  grid-template-columns: 1.1fr 1.6fr 0.65fr 0.7fr 0.8fr 0.95fr 0.95fr 1.25fr;
 }
 
 .span-2 {

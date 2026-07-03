@@ -18,6 +18,7 @@ export type ScheduledTask = {
   workingDirectory: string;
   nextRunTimeUtc: string | null;
   lastRunTimeUtc: string | null;
+  lastTaskResult: number | null;
 };
 
 export async function getScheduledTasks() {
@@ -48,4 +49,9 @@ export async function deleteScheduledTask(name: string) {
 // Görevi beklemeden hemen tetikler (Plesk "Run Now") — yeni kurulan cron'u anında test etmek için.
 export async function runScheduledTask(name: string) {
   await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/run`);
+}
+
+// Görevi silmeden aç/kapat (Plesk satır anahtarı).
+export async function setScheduledTaskEnabled(name: string, enabled: boolean) {
+  await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/${enabled ? "enable" : "disable"}`);
 }
