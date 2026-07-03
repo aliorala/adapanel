@@ -114,7 +114,7 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, type ScheduledTask } from "../api/cron";
-import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 
 const { t } = useI18n();
 const authStore = useAuthStore();
@@ -278,7 +278,10 @@ function showNotice(message: string, isError: boolean) {
 function resolveApiMessage(error: unknown) {
   const key = extractApiMessage(error);
   const translated = t(key);
-  return translated === key ? key : translated;
+  const message = translated === key ? key : translated;
+  // Gerçek teknik nedeni (backend Details) da göster: "kaydedilemedi" tek başına teşhis edilemiyor.
+  const details = extractApiDetails(error);
+  return details ? `${message} — ${details}` : message;
 }
 </script>
 

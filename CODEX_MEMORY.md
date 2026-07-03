@@ -5189,3 +5189,19 @@ Basarili:
   0.2.8->0.2.9 gecisi bu deneyimin ilk canli gosterimi olacak (Ayarlar>Guncellemeler sayfasinda KALARAK izlenmeli).
 - Surumler 0.2.9; 0.2.8 exe artifacts\release\0.2.8\ altinda korunuyor (DC2FF4), 0.2.9 exe artifacts\release\0.2.9\
   SHA256 `DFEAEF379DD2032CDEECE1F1E247EABE208459B4CF9D8E920E4A618EDD35D944`. Testler 2+51 yesil.
+
+## 2026-07-04 (180) — Cron "kaydedilemedi" DEVAM ETTI (0.2.9'da da) -> SYSTEM principal fix + ekranda hata detayi (0.2.10)
+- 179'daki MaxValue fix'i GERCEK ama YETMEDI (kullanici buyuk ihtimalle daily denedi; daily'de MaxValue yolu yok).
+- EN OLASI KOK (kanitlanmis-desen kiyasi): SchedulerService Register-ScheduledTask'i PRINCIPAL'siz "-RunLevel Highest"
+  ile cagiriyordu. Panel servisi LocalSystem; SYSTEM baglaminda principal'siz kayit hesap eslemesinde patlayabiliyor.
+  KANIT: WindowsUpdateInstallerLauncher AYNI sunucuda AYNI servisten New-ScheduledTaskPrincipal -UserId 'SYSTEM'
+  -LogonType ServiceAccount -RunLevel Highest ile DEFALARCA basarili kayit yapti. FIX: create scripti birebir o desene
+  cevrildi ($principal ... ; Register ... -Principal $principal) + basa $ErrorActionPreference='Stop' (non-terminating
+  hatalar exit 0'la 'basarili' gorunmesin). Lokal dogrulama: parametre/XML gecti (yalniz elevation ACL'ine takildi = beklenen).
+- KORLUK BITTI: CronView.resolveApiMessage artik extractApiDetails'i mesaja EKLIYOR ("kaydedilemedi — <gercek PS hatasi>").
+  0.2.9 backend'i zaten Details tasiyordu (ApiResponse.Details + middleware exception.Details) ama UI gostermiyordu.
+  Bundan sonra cron hatasi ekranda GERCEK nedeniyle gorunur -> kullanici direkt okuyup iletebilir.
+- NOT (arastirma sirasi icin): ProcessRunner.Success = ExitCode==0; RunPowerShellAsync -EncodedCommand (UTF-16, encoding derdi yok);
+  middleware AppException'i LogWarning'ler ve Details'i HTTP yanitina koyar; Serilog dosya loglari ProgramData\AdaPanel\logs.
+- 0.2.10 SHA256 `9D501E845ABFDF20F2008E587FFEC380F992FFE3C426EE031D96734D42AD767C` (artifacts\release\0.2.10\). Testler 2+51.
+  HALA basarisiz olursa: ekrandaki "—" sonrasi detay metnini al (gercek neden orada), tek bakista cozulur.
