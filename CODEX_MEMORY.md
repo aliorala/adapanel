@@ -5205,3 +5205,22 @@ Basarili:
   middleware AppException'i LogWarning'ler ve Details'i HTTP yanitina koyar; Serilog dosya loglari ProgramData\AdaPanel\logs.
 - 0.2.10 SHA256 `9D501E845ABFDF20F2008E587FFEC380F992FFE3C426EE031D96734D42AD767C` (artifacts\release\0.2.10\). Testler 2+51.
   HALA basarisiz olursa: ekrandaki "—" sonrasi detay metnini al (gercek neden orada), tek bakista cozulur.
+
+## 2026-07-04 (181) — common.unexpected_error COZULDU: PS5.1 ConvertTo-Json tarih bicimi + Frequency hayaleti (0.2.11)
+- ZINCIRIN 3. HALKASI: 0.2.10'da kayit ILK KEZ basarili oldu (principal fix tuttu) -> akis GERI OKUMAYA gecti ve
+  ORADA patladi: PS 5.1 ConvertTo-Json [datetime]'i "\/Date(ms)\/" yazar, System.Text.Json bunu DateTime? olarak
+  OKUYAMAZ -> JsonException -> middleware catch-all -> common.unexpected_error. Bugune dek gorunmemesinin nedeni:
+  liste HEP BOSTU (tum kayitlar basarisizdi) -> tarih hic serilestirilmedi. KANIT lokal: [datetime] | ConvertTo-Json
+  => "\/Date(...)\/" birebir.
+- IKINCI HAYALET ayni scriptte: ScheduleType = $_.Triggers[0].Frequency — trigger CIM nesnesinde Frequency OZELLIGI YOK
+  (Get-Member False) -> tip hep bos kalacakti. FIX: CimClassName=='MSFT_TaskDailyTrigger' -> daily;
+  Repetition.Interval '^PT\d+M$' -> minute; else hourly.
+- READ SCRIPT FIX: tarihler ISO ('o') STRING (Year>2000 guard: hic-calismadi 1899 tarihleri null/'-' olur),
+  Command/Arguments/WorkingDirectory [string] zorlamasi (null -> '' ; C# EndsWith NRE zirhi + C# tarafinda ??= belt).
+  Gercek gorevlerle (Time Synchronization klasoru) UCTAN UCA dogrulandi: /Date yok, JSON gecerli, progress gurultusu stderr'de.
+- YAN KAZA: surum bump'inda Set-Content -Encoding utf8 (PS5.1 = BOM'LU) package.json'a BOM ekledi -> vite/rolldown
+  build coktu ("unwrapBindingResult"). BOM'suz yeniden yazilinca gecti. DERS: json/props yazarken UTF8Encoding($false) kullan.
+  (0.2.11 klasorune yanlislikla kopyalanan eski 0.2.10 exe'si silindi; dogru exe yeniden kopyalandi.)
+- KULLANICIYA NOT: 0.2.10'daki "unexpected_error" sirasinda gorev BUYUK IHTIMALLE OLUSTU (kayit basarili, okuma cokuyordu);
+  0.2.11'e gecince Planli Gorevler listesinde GORUNECEK — kopya olusturmadan once listeye bak (ayni ad zaten unregister+re-register, sorun degil).
+- 0.2.11 SHA256 `4B7711EA0C199E791974C3BF5B7BCA03468FCE120570597024338E1FDFCAC08D` (artifacts\release\0.2.11\). Testler 2+51.

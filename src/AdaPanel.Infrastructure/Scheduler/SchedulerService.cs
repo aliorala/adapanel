@@ -14,17 +14,28 @@ public sealed class SchedulerService : ISchedulerService
 
     public async Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default)
     {
+        // DIKKAT-1: tarihler ISO ('o') STRING yazilmali — PS 5.1 ConvertTo-Json [datetime]'i "\/Date(...)\/"
+        // bicimine cevirir ve System.Text.Json bunu OKUYAMAZ (liste dolunca common.unexpected_error).
+        // DIKKAT-2: tetikleyici CIM nesnesinde 'Frequency' OZELLIGI YOKTUR; tip CimClassName + Repetition'dan turetilir.
+        // DIKKAT-3: alanlar [string] ile zorlanir ki null gelmesin (C# tarafinda EndsWith NRE atmasin).
         var script = $@"$tasks = Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction SilentlyContinue | ForEach-Object {{
   $info = Get-ScheduledTaskInfo -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue
+  $trigger = if ($_.Triggers.Count -gt 0) {{ $_.Triggers[0] }} else {{ $null }}
+  $scheduleType = ''
+  if ($trigger) {{
+    if ($trigger.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger') {{ $scheduleType = 'daily' }}
+    elseif ($trigger.Repetition -and $trigger.Repetition.Interval -match '^PT\d+M$') {{ $scheduleType = 'minute' }}
+    else {{ $scheduleType = 'hourly' }}
+  }}
   [pscustomobject]@{{
     Name = $_.TaskName
-    ScheduleType = if ($_.Triggers.Count -gt 0) {{ $_.Triggers[0].Frequency }} else {{ '' }}
+    ScheduleType = $scheduleType
     State = $_.State.ToString()
-    Command = if ($_.Actions.Count -gt 0) {{ $_.Actions[0].Execute }} else {{ '' }}
-    Arguments = if ($_.Actions.Count -gt 0) {{ $_.Actions[0].Arguments }} else {{ '' }}
-    WorkingDirectory = if ($_.Actions.Count -gt 0) {{ $_.Actions[0].WorkingDirectory }} else {{ '' }}
-    NextRunTimeUtc = if ($info) {{ [datetime]$info.NextRunTime }} else {{ $null }}
-    LastRunTimeUtc = if ($info) {{ [datetime]$info.LastRunTime }} else {{ $null }}
+    Command = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].Execute }} else {{ '' }}
+    Arguments = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].Arguments }} else {{ '' }}
+    WorkingDirectory = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].WorkingDirectory }} else {{ '' }}
+    NextRunTimeUtc = if ($info -and $info.NextRunTime -and ([datetime]$info.NextRunTime).Year -gt 2000) {{ ([datetime]$info.NextRunTime).ToUniversalTime().ToString('o') }} else {{ $null }}
+    LastRunTimeUtc = if ($info -and $info.LastRunTime -and ([datetime]$info.LastRunTime).Year -gt 2000) {{ ([datetime]$info.LastRunTime).ToUniversalTime().ToString('o') }} else {{ $null }}
     LastTaskResult = if ($info) {{ [long]$info.LastTaskResult }} else {{ $null }}
   }}
 }}
@@ -39,6 +50,10 @@ $tasks | ConvertTo-Json -Depth 5";
         var tasks = DeserializeArray<ScheduledTaskDto>(result.StandardOutput);
         foreach (var task in tasks)
         {
+            // JSON'dan null sizarsa NRE atmasin (PS tarafi [string] zorluyor ama kemer-askı).
+            task.Command ??= string.Empty;
+            task.Arguments ??= string.Empty;
+
             // Görev tipini kayıtlı eylemden türet (URL curl ile, PHP php.exe ile çalışır).
             if (task.Command.EndsWith("curl.exe", StringComparison.OrdinalIgnoreCase))
             {

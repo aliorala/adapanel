@@ -4,7 +4,7 @@
 # -Version: panelin RAPOR ETTIGI surum. Self-update icin GitHub release tag'i ile AYNI olmali
 # (ornek: -Version 0.2.5 ile paketle -> release'i "0.2.5" tag'iyle yayinla). Yoksa panel surumu
 # release tag'iyle esitlenmez ve "guncelleme var" uyarisi hic kaybolmaz.
-param([string]$Version = "0.2.10")
+param([string]$Version = "0.2.11")
 $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
