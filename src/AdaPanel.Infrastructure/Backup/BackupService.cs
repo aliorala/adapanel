@@ -223,6 +223,23 @@ public sealed class BackupService(
                 includedParts.Add("config");
             }
 
+            // Planlı görevler (\AdaPanel\ klasörü): Windows Görev Zamanlayıcı'da yaşarlar, panel dosyalarında DEĞİL —
+            // ham görev XML'i (principal/tetikleyici/eylem birebir) yedeğe girer; panel geri yüklemesinde otomatik kaydedilir.
+            var exportedTasks = await TryExportScheduledTasksAsync(cancellationToken);
+            if (exportedTasks.Count > 0)
+            {
+                var index = new List<object>();
+                for (var i = 0; i < exportedTasks.Count; i++)
+                {
+                    var entryName = $"tasks/{i:000}.xml";
+                    AddTextEntry(archive, entryName, exportedTasks[i].Xml);
+                    index.Add(new { name = exportedTasks[i].Name, entry = entryName });
+                }
+
+                AddTextEntry(archive, "tasks/index.json", System.Text.Json.JsonSerializer.Serialize(index, BackupJsonOptions));
+                includedParts.Add($"tasks({exportedTasks.Count})");
+            }
+
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = "panel-config",
@@ -268,6 +285,81 @@ public sealed class BackupService(
         catch (IOException)
         {
             // Kilitli/erişilemeyen dosyayı atla; yedek geri kalanıyla devam eder.
+        }
+    }
+
+    private sealed record ScheduledTaskExport(string Name, string Xml);
+
+    private sealed record ScheduledTaskIndexEntry(string Name, string Entry);
+
+    // Planlı görevlerin ham XML dökümü (best-effort: dışa aktarılamazsa panel yedeği yine de oluşur).
+    private static async Task<List<ScheduledTaskExport>> TryExportScheduledTasksAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            const string script = @"$list = Get-ScheduledTask -TaskPath '\AdaPanel\' -ErrorAction SilentlyContinue | ForEach-Object {
+  [pscustomobject]@{ Name = $_.TaskName; Xml = [string](Export-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath) }
+}
+$list | ConvertTo-Json -Depth 3";
+            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
+            {
+                return [];
+            }
+
+            using var document = System.Text.Json.JsonDocument.Parse(result.StandardOutput);
+            var root = document.RootElement;
+            ScheduledTaskExport[] items = root.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.Array => System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskExport[]>(root) ?? [],
+                System.Text.Json.JsonValueKind.Object => [System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskExport>(root)!],
+                _ => []
+            };
+
+            return items
+                .Where(item => !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.Xml))
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    // Panel yedeğindeki görevleri Görev Zamanlayıcı'ya geri kaydeder (XML: principal/tetikleyici birebir).
+    private static async Task TryRestoreScheduledTasksAsync(string extractedRoot, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var indexPath = Path.Combine(extractedRoot, "tasks", "index.json");
+            if (!File.Exists(indexPath))
+            {
+                return;
+            }
+
+            var index = System.Text.Json.JsonSerializer.Deserialize<List<ScheduledTaskIndexEntry>>(
+                await File.ReadAllTextAsync(indexPath, cancellationToken),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+
+            foreach (var item in index)
+            {
+                var xmlPath = Path.Combine(extractedRoot, item.Entry.Replace('/', Path.DirectorySeparatorChar));
+                if (string.IsNullOrWhiteSpace(item.Name) || !File.Exists(xmlPath))
+                {
+                    continue;
+                }
+
+                // XML'i base64 taşı: tırnak/özel karakter kaçış derdi tamamen ortadan kalkar.
+                var xml = await File.ReadAllTextAsync(xmlPath, cancellationToken);
+                var xmlBase64 = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(xml));
+                var script = $@"$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{xmlBase64}'))
+Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
+                await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            }
+        }
+        catch
+        {
+            // Best-effort: bir görev geri yüklenemese de yedek çıkarma işlemi tamamlanır.
         }
     }
 
@@ -430,6 +522,13 @@ public sealed class BackupService(
 
             Directory.CreateDirectory(destination);
             ZipFile.ExtractToDirectory(record.Path, destination, overwriteFiles: true);
+
+            // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet.
+            if (string.Equals(record.Type, "panel", StringComparison.OrdinalIgnoreCase))
+            {
+                await TryRestoreScheduledTasksAsync(destination, cancellationToken);
+            }
+
             record.Status = "restored";
             record.Path = destination;
         }

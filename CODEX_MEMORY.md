@@ -5234,3 +5234,27 @@ Basarili:
   MUTLAKA lokal calistir-dogrula.
 - ACIK KALAN KUCUK ISLER: kullanici ikinci gorevi (IPTV cleanup 03:10) ekleyecek; cron hata e-postasi icin SMTP
   (Ayarlar>Bildirimler) yapilandirilmis olmali. BUYUK BEKLEYENLER: K2+B3 guvenlik (canli-guided), DNSSEC, wildcard DNS-01, domain-basi mail IP.
+
+## 2026-07-04 (183) — GERI BILDIRIM iclesti + planli gorevler YEDEGE dahil + kesisim matrisi taramasi (0.2.12)
+- Kullanici hakli cikisti: "yedek planli gorevleri kapsiyor mu"yu ONUN sormasi gerekmemeliydi. KALICI KURAL
+  (memory adapanel-proactive-audit'e de islendi): yeni ozellik bitince ALT SISTEM KESISIM MATRISI kendiliginden taranir:
+  yedek/geri-yukleme, kaldirma (2 mod), tasima sihirbazi, plan limitleri, roller, self-update kaliciligi + uretilen
+  scriptler LOKALDE calistirilarak kanitlanir.
+- CEVAP: HAYIR, yedeklemiyordu. Panel yedegi yalniz data/adapanel.db + config/*.json iceriyordu; gorevler Task
+  Scheduler'da yasar. FIX (Plesk paritesi): BackupPanelAsync gorevleri Export-ScheduledTask ile HAM XML olarak
+  tasks/NNN.xml + tasks/index.json seklinde zipe koyar (best-effort; principal/tetikleyici birebir).
+  RestoreAsync panel-tipi zipte cikartmadan sonra TryRestoreScheduledTasksAsync: index'ten her gorevi
+  Register-ScheduledTask -Xml (XML base64 tasima = kacis derdi sifir) -Force ile geri kaydeder. Musteri gorevleri
+  (u<id>-- onekli) XML ile aynen doner. Derleme notu: BackupService'te using System.Text.Json yok -> JsonElement
+  .Deserialize<T>() uzanti metodu gorulmez; JsonSerializer.Deserialize<T>(root) statik formu kullanildi.
+- MATRIS BULGULARI (kendi taramam, kullanici sormadan):
+  * Tasima sihirbazi (Plesk->AdaPanel) planli gorevleri TASIMIYOR (site+dosya+DB tasiyor) -> backlog.
+  * Servis planlarinda gorev limiti YOK (Plesk planlarinda var; musteri sinirsiz URL gorevi kurabilir).
+    CustomerScope positional-record genisletmesi cok dosyaya dokunuyor -> aceleye getirmedim, backlog (dogru is: MaxScheduledTasks alani).
+  * Kaldirma keep-data modunda kullanici gorevleri KORUNUYOR (yalniz AdaPanel servisi+self-update gorevi kalkar) OK;
+    full-wipe \AdaPanel\ gorevlerini temizliyor OK.
+  * FELAKET KURTARMA SINIRI (bilinen): panel yedegi IIS kayitlarini (site/binding/pool/FTP) YENIDEN KURMAZ;
+    adapanel.db siteleri bilir ama IIS reconcile mekanizmasi yok -> buyuk backlog kalemi ("tam sunucu geri yukleme").
+- 0.2.12 SHA256 `039CDC838366C83A248FADE8D8C6588E584C2F9DE10986978AF224870690963C` (artifacts\release\0.2.12\). Testler 2+51.
+- BACKLOG SIRASI: (1) K2+B3 guvenlik = SIRADAKI, kullanici VPS basindayken (DB root parolasi yaris riski);
+  (2) plan gorev limiti; (3) tasimada cron; (4) DNSSEC / wildcard DNS-01 / domain-basi mail IP; (5) tam-sunucu DR.
