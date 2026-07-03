@@ -83,7 +83,7 @@ if (-not $iscc) {
     exit 0
 }
 
-& $iscc (Join-Path $repoRoot "installer\AdaPanel.iss")
+& $iscc "/DMyAppVersion=$Version" (Join-Path $repoRoot "installer\AdaPanel.iss")
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup derlemesi basarisiz oldu."
 }

@@ -1,5 +1,7 @@
 #define MyAppName "AdaPanel"
-#define MyAppVersion "0.2.2-preview"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.2.4"
+#endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
 #define MyAppServiceName "AdaPanel"
@@ -24,7 +26,7 @@ AppContact=AdaPanel
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
-VersionInfoVersion=0.2.2.0
+VersionInfoVersion={#MyAppVersion}
 CloseApplications=yes
 RestartApplications=no
 

@@ -5040,3 +5040,20 @@ Basarili:
   "0.2.4" der, uyarı kaybolur. Hâlâ kurulmuyorsa: C:\ProgramData\AdaPanel\updates\apply-update.log bak (installer logu).
 - NOT: FileVersion hâlâ 0.2.2.0 görünüyor (bir yerde tanımlı, muhtemelen Directory.Build.props) — VersionInfo
   InformationalVersion'ı okuduğu için ETKİSİZ; istenirse ayrıca hizalanır.
+
+## 2026-07-03 (172) — Surum TEK KAYNAK + script-driven (171'in landmine temizligi)
+- 171'de InformationalVersion damgalandi ama FileVersion hala 0.2.2.0 gorunuyordu. KOK: Directory.Build.props
+  surumu 4 yerde SABIT tutuyordu (<Version>/<AssemblyVersion>/<FileVersion>/<InformationalVersion> = 0.2.2).
+  Komut satiri /p:InformationalVersion bunu eziyordu (o yuzden self-update calisiyordu) ama Assembly/FileVersion
+  explicit oldugu icin /p:Version onlari EZEMIYORDU -> stale kaliyordu. Ayrica -Version unutulan build 0.2.2'ye duserdi.
+- FIX (tek kaynak, stale-proof):
+  * Directory.Build.props: sadece <Version>0.2.4</Version> + <IncludeSourceRevisionInInformationalVersion>false</...>.
+    Assembly/File/Informational ARTIK Version'dan TUREM eder; /p:Version=X.Y.Z hepsini birden gunceller.
+  * installer/AdaPanel.iss: #ifndef guard'li #define MyAppVersion (default 0.2.4) + VersionInfoVersion={#MyAppVersion}.
+  * build/package scriptleri ISCC'ye "/DMyAppVersion=$Version" geciyor -> installer'in Programlar listesindeki
+    surumu de -Version ile ayni. Boylece TEK yerden (-Version) her sey guncellenir.
+- Dogrulandi: yeni AdaPanelSetup.exe -> panel .exe ProductVersion=0.2.4, FileVersion=0.2.4.0, installer surumu=0.2.4.
+  YENI installer SHA `0DD96D196993CA89A4E0E1B49976D067510C47D74B517D82A956E300E6FB501A` (49.39 MiB). 171'deki 3C0938 ARTIK
+  gecersiz -> 0.2.4 release'ine BUNU (0DD96D) yukle, aciklamadaki SHA satirini bununla guncelle.
+- Testlerde surum iddiasi YOK (grep temiz) -> props degisikligi guvenli. frontend/package.json'daki 0.2.2 kozmetik
+  (hicbir yerde gosterilmiyor), VersionInfo.cs fallback "0.2.2-preview" ulasilmaz savunma -> dokunulmadi.

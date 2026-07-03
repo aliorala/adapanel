@@ -32,7 +32,7 @@ $isccCandidates = @(
 $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup (ISCC.exe) bulunamadi." }
 
-& $iscc (Join-Path $repo "installer\AdaPanel.iss")
+& $iscc "/DMyAppVersion=$Version" (Join-Path $repo "installer\AdaPanel.iss")
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup derlemesi basarisiz." }
 
 $exe = Join-Path $repo "artifacts\installer\AdaPanelSetup.exe"
