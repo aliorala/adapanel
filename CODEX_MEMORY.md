@@ -5132,3 +5132,23 @@ Basarili:
 - 0.2.7 FINAL SHA256 `B753A4AD5D345A39AFB7C7232FE5B0A9E0DB94141B99B1ABEE5A3EDB130350FF` (onceki C7DCF4 build'i GECERSIZ,
   kullanici henuz yayinlamamisti). Yayin sirasi: VPS'i 0.2.6'ya guncelle -> 0.2.7'yi tag "0.2.7" ile yayinla ->
   0.2.6->0.2.7 gecisi yeni dayanikli runner + yeni izleme UX'inin ilk tam ucta-uca testi.
+
+## 2026-07-03 (177) — Planli gorevler PLESK PARITESI: 3 gorev tipi (komut/PHP/URL) + "Simdi calistir" (0.2.7)
+- ISTEK: "planli islere sayfa calistirma ekle" + kullanicinin GERCEK ihtiyaci: IPTV uygulamasinin cron uclari
+  (reverify + cleanup, gunde 1 GET). Plesk'in 3 gorev tipi aynen alindi.
+- BACKEND: CreateScheduledTaskRequest += TaskType("command|php|url") + Url + PhpVersion. SchedulerService.ResolveAction:
+  url -> curl.exe -fsSL --max-time 300 --retry 2 "<url>" (Server 2019+ ile gelir); php -> %ProgramData%\AdaPanel\
+  runtimes\php altinda php.exe cozumu (surum istegi contains-match, yoksa en yeni; hic yoksa cron.php_not_installed),
+  arguman = "betik yolu" + ek arglar, WD bos ise betik klasoru; command -> eskisi. ONEMLI FIX: eylem artik TEK-TIRNAK
+  ('' kacisli) PS stringleriyle kuruluyor -> URL/komut icindeki $ & " PowerShell'de bozulmuyordu bug'i kapandi
+  (eski cift-tirnak $-expansion landmine'iydi). Okuma: Execute curl.exe->url (Url = argumanlardaki SON "..." grubu),
+  php.exe->php, digeri command. RunTaskAsync (Start-ScheduledTask) + POST /cron/{name}/run (Plesk "Run Now").
+- FRONTEND CronView: gorev tipi select + kosullu alanlar (url: tek URL alani + ipucu; php: betik yolu + arglar;
+  command: eskisi) + tabloda tip etiketi, url gorevlerinde hedef URL gosterimi, satirda "Simdi calistir" butonu
+  (4 sn sonra listeyi yenileyip Son calisma sutununu gunceller). api/cron.ts runScheduledTask + genisletilmis tipler.
+- i18n +17 anahtar (panel.tasks.* 12 + cron.* 4 + ...) -> parite 2480=2480. Testler 2+51 yesil.
+- KULLANICI KURULUMU (0.2.7 sonrasi, Planli Gorevler): 2 gorev, tip=URL cagir, gunluk:
+  1) "IPTV VIP dogrulama" url=https://alioral.com.tr/iptv/public/index.php/v1/cron/reverify?key=... saat 03:00
+  2) "IPTV temizlik"      url=https://alioral.com.tr/iptv/public/index.php/v1/cron/cleanup?key=...  saat 03:10
+  "Simdi calistir" ile aninda test edilebilir. (Adresler gizli key icerir - panelde kalir, sorun degil.)
+- 0.2.7 FINAL SHA256 `DBDF3187CA0E8EE9932E141CEF5CB445E2A446EE3B489A17B435009353BB500F` (onceki B753A4 GECERSIZ, yayinlanmamisti).

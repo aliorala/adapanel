@@ -25,9 +25,26 @@
     <section v-if="formOpen" class="form-surface">
       <div class="form-grid">
         <label><span class="field-label">{{ t("panel.tasks.name") }}</span><input v-model.trim="form.name" /></label>
-        <label><span class="field-label">{{ t("panel.tasks.command") }}</span><input v-model.trim="form.command" /></label>
-        <label><span class="field-label">{{ t("panel.tasks.arguments") }}</span><input v-model="form.arguments" /></label>
-        <label><span class="field-label">{{ t("panel.tasks.workingDirectory") }}</span><input v-model.trim="form.workingDirectory" /></label>
+        <label>
+          <span class="field-label">{{ t("panel.tasks.taskType") }}</span>
+          <select v-model="form.taskType">
+            <option value="command">{{ t("panel.tasks.typeCommand") }}</option>
+            <option value="php">{{ t("panel.tasks.typePhp") }}</option>
+            <option value="url">{{ t("panel.tasks.typeUrl") }}</option>
+          </select>
+        </label>
+        <label v-if="form.taskType === 'url'" class="span-2">
+          <span class="field-label">{{ t("panel.tasks.url") }}</span>
+          <input v-model.trim="form.url" placeholder="https://ornek.com/cron/calistir?key=..." spellcheck="false" />
+          <small class="field-hint">{{ t("panel.tasks.urlHint") }}</small>
+        </label>
+        <label v-if="form.taskType !== 'url'">
+          <span class="field-label">{{ form.taskType === 'php' ? t("panel.tasks.scriptPath") : t("panel.tasks.command") }}</span>
+          <input v-model.trim="form.command" :placeholder="form.taskType === 'php' ? 'C:\\inetpub\\wwwroot\\site\\httpdocs\\cron.php' : 'powershell.exe'" />
+          <small v-if="form.taskType === 'php'" class="field-hint">{{ t("panel.tasks.phpHint") }}</small>
+        </label>
+        <label v-if="form.taskType !== 'url'"><span class="field-label">{{ t("panel.tasks.arguments") }}</span><input v-model="form.arguments" /></label>
+        <label v-if="form.taskType === 'command'"><span class="field-label">{{ t("panel.tasks.workingDirectory") }}</span><input v-model.trim="form.workingDirectory" /></label>
         <label>
           <span class="field-label">{{ t("panel.tasks.scheduleType") }}</span>
           <select v-model="form.scheduleType">
@@ -43,7 +60,7 @@
         </label>
       </div>
       <div class="row-actions">
-        <button :disabled="saving || !form.name || !form.command" @click="saveTask">
+        <button :disabled="saving || !form.name || (form.taskType === 'url' ? !form.url : !form.command)" @click="saveTask">
           {{ saving ? t("panel.tasks.saving") : t("panel.tasks.save") }}
         </button>
         <button class="secondary compact" @click="resetForm">{{ t("panel.tasks.reset") }}</button>
@@ -61,13 +78,22 @@
         <span>{{ t("panel.files.actions") }}</span>
       </div>
       <div v-for="item in filteredTasks" :key="item.name" class="data-row cron-row">
-        <span class="cell-main"><strong>{{ item.name }}</strong><small>{{ item.workingDirectory || "-" }}</small></span>
-        <span class="cell-main"><strong>{{ item.command }}</strong><small>{{ item.arguments || "-" }}</small></span>
+        <span class="cell-main">
+          <strong>{{ item.name }}</strong>
+          <small>{{ typeLabel(item.taskType) }}</small>
+        </span>
+        <span class="cell-main">
+          <strong>{{ item.taskType === "url" ? item.url || item.arguments : item.command }}</strong>
+          <small>{{ item.taskType === "url" ? "-" : item.arguments || "-" }}</small>
+        </span>
         <span>{{ scheduleLabel(item.scheduleType) }}</span>
         <span :class="['status-pill', taskStateClass(item.state)]">{{ item.state || "-" }}</span>
         <span>{{ formatUtc(item.nextRunTimeUtc) }}</span>
         <span>{{ formatUtc(item.lastRunTimeUtc) }}</span>
         <span class="row-actions">
+          <button class="secondary compact" :disabled="runningName === item.name" @click="runTask(item.name)">
+            {{ runningName === item.name ? t("panel.tasks.running") : t("panel.tasks.runNow") }}
+          </button>
           <button class="danger compact" :disabled="deletingName === item.name" @click="removeTask(item.name)">
             {{ deletingName === item.name ? t("panel.database.removing") : t("panel.sites.delete") }}
           </button>
@@ -82,7 +108,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, type ScheduledTask } from "../api/cron";
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, type ScheduledTask } from "../api/cron";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
@@ -92,6 +118,7 @@ const formOpen = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const deletingName = ref("");
+const runningName = ref("");
 const notice = ref("");
 const noticeError = ref(false);
 const form = reactive(defaultForm());
@@ -146,11 +173,41 @@ async function removeTask(name: string) {
 }
 
 function defaultForm() {
-  return { name: "", command: "powershell.exe", arguments: "", workingDirectory: "", scheduleType: "hourly", interval: 1, timeOfDay: "00:00" };
+  return {
+    name: "",
+    taskType: "command",
+    command: "powershell.exe",
+    arguments: "",
+    workingDirectory: "",
+    url: "",
+    phpVersion: "",
+    scheduleType: "hourly",
+    interval: 1,
+    timeOfDay: "00:00"
+  };
 }
 
 function resetForm() {
   Object.assign(form, defaultForm());
+}
+
+// Görevi hemen tetikle; birkaç saniye sonra listeyi yenile ki "son çalışma" sütunu sonucu göstersin.
+async function runTask(name: string) {
+  runningName.value = name;
+  try {
+    await runScheduledTask(name);
+    showNotice(t("panel.tasks.runStarted"), false);
+    window.setTimeout(() => void refresh(), 4000);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    runningName.value = "";
+  }
+}
+
+function typeLabel(value: string) {
+  const key = value === "url" ? "panel.tasks.typeUrl" : value === "php" ? "panel.tasks.typePhp" : "panel.tasks.typeCommand";
+  return t(key);
 }
 
 function scheduleLabel(value: string) {
@@ -181,7 +238,16 @@ function resolveApiMessage(error: unknown) {
 
 <style scoped>
 .cron-row {
-  grid-template-columns: 1.1fr 1.8fr 0.7fr 0.75fr 1fr 1fr 0.6fr;
+  grid-template-columns: 1.1fr 1.8fr 0.7fr 0.75fr 1fr 1fr 1fr;
+}
+
+.span-2 {
+  grid-column: span 2;
+}
+
+.field-hint {
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
 .search-control {

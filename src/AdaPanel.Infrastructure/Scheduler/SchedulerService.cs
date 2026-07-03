@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Interfaces;
@@ -34,7 +35,45 @@ $tasks | ConvertTo-Json -Depth 5";
             throw new AppException("cron.read_failed", 500, 500);
         }
 
-        return DeserializeArray<ScheduledTaskDto>(result.StandardOutput);
+        var tasks = DeserializeArray<ScheduledTaskDto>(result.StandardOutput);
+        foreach (var task in tasks)
+        {
+            // Görev tipini kayıtlı eylemden türet (URL curl ile, PHP php.exe ile çalışır).
+            if (task.Command.EndsWith("curl.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                task.TaskType = "url";
+                var quoted = Regex.Matches(task.Arguments ?? string.Empty, "\"([^\"]+)\"");
+                if (quoted.Count > 0)
+                {
+                    task.Url = quoted[^1].Groups[1].Value;
+                }
+            }
+            else if (task.Command.EndsWith("php.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                task.TaskType = "php";
+            }
+            else
+            {
+                task.TaskType = "command";
+            }
+        }
+
+        return tasks;
+    }
+
+    public async Task RunTaskAsync(string name, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new AppException("cron.invalid_name", 400, 400);
+        }
+
+        var script = $@"Start-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction Stop";
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("cron.run_failed", 500, 500, result.StandardError);
+        }
     }
 
     public async Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default)
@@ -52,6 +91,8 @@ $tasks | ConvertTo-Json -Depth 5";
             ?? new ScheduledTaskDto
             {
                 Name = request.Name.Trim(),
+                TaskType = (request.TaskType ?? "command").Trim().ToLowerInvariant(),
+                Url = request.Url?.Trim() ?? string.Empty,
                 ScheduleType = request.ScheduleType.Trim(),
                 Command = request.Command.Trim(),
                 Arguments = request.Arguments?.Trim() ?? string.Empty,
@@ -79,15 +120,18 @@ $tasks | ConvertTo-Json -Depth 5";
     {
         var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
         var interval = Math.Max(1, request.Interval);
-        var action = $"New-ScheduledTaskAction -Execute \"{EscapePowerShell(request.Command.Trim())}\"";
-        if (!string.IsNullOrWhiteSpace(request.Arguments))
+        var (execute, arguments, workingDirectory) = ResolveAction(request);
+
+        // Tek tırnak + '' kaçışı: URL/komut içindeki $, ", & karakterleri PowerShell tarafından yorumlanmasın.
+        var action = $"New-ScheduledTaskAction -Execute '{EscapeSingleQuoted(execute)}'";
+        if (!string.IsNullOrWhiteSpace(arguments))
         {
-            action += $" -Argument \"{EscapePowerShell(request.Arguments.Trim())}\"";
+            action += $" -Argument '{EscapeSingleQuoted(arguments)}'";
         }
 
-        if (!string.IsNullOrWhiteSpace(request.WorkingDirectory))
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
-            action += $" -WorkingDirectory \"{EscapePowerShell(request.WorkingDirectory.Trim())}\"";
+            action += $" -WorkingDirectory '{EscapeSingleQuoted(workingDirectory)}'";
         }
 
         var trigger = scheduleType switch
@@ -107,10 +151,91 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
 
     private static void ValidateRequest(CreateScheduledTaskRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Command))
+        if (string.IsNullOrWhiteSpace(request.Name))
         {
             throw new AppException("cron.invalid_name", 400, 400);
         }
+
+        var taskType = (request.TaskType ?? "command").Trim().ToLowerInvariant();
+        switch (taskType)
+        {
+            case "url":
+                if (!Uri.TryCreate(request.Url?.Trim(), UriKind.Absolute, out var uri) ||
+                    (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                {
+                    throw new AppException("cron.invalid_url", 400, 400);
+                }
+                break;
+            case "php":
+            default:
+                if (string.IsNullOrWhiteSpace(request.Command))
+                {
+                    throw new AppException("cron.invalid_name", 400, 400);
+                }
+                break;
+        }
+    }
+
+    // Görev tipini yürütülebilir eyleme çevirir (Plesk görev tipleri):
+    //  url     -> curl.exe -fsS ... "<adres>" (Windows Server 2019+/Win10 ile birlikte gelir)
+    //  php     -> <runtimes\php\...\php.exe> "<betik>" <argümanlar>
+    //  command -> kullanıcı komutu aynen
+    private static (string Execute, string Arguments, string WorkingDirectory) ResolveAction(CreateScheduledTaskRequest request)
+    {
+        var taskType = (request.TaskType ?? "command").Trim().ToLowerInvariant();
+        var workingDirectory = request.WorkingDirectory?.Trim() ?? string.Empty;
+
+        switch (taskType)
+        {
+            case "url":
+                // -f: HTTP hata kodunda başarısız say (Task Scheduler "son sonuç"a yansır), -sS: sessiz ama hatayı yaz,
+                // -L: yönlendirmeyi izle, 5 dk üst sınır + 2 tekrar: geçici ağ sorunlarında görev boşa düşmesin.
+                return ("curl.exe", $"-fsSL --max-time 300 --retry 2 \"{request.Url.Trim()}\"", workingDirectory);
+            case "php":
+            {
+                var scriptPath = request.Command.Trim();
+                var arguments = $"\"{scriptPath}\"";
+                if (!string.IsNullOrWhiteSpace(request.Arguments))
+                {
+                    arguments += " " + request.Arguments.Trim();
+                }
+
+                if (string.IsNullOrWhiteSpace(workingDirectory))
+                {
+                    workingDirectory = Path.GetDirectoryName(scriptPath) ?? string.Empty;
+                }
+
+                return (ResolvePhpExecutable(request.PhpVersion), arguments, workingDirectory);
+            }
+            default:
+                return (request.Command.Trim(), request.Arguments?.Trim() ?? string.Empty, workingDirectory);
+        }
+    }
+
+    private static string ResolvePhpExecutable(string? version)
+    {
+        var phpRoot = Environment.ExpandEnvironmentVariables("%ProgramData%\\AdaPanel\\runtimes\\php");
+        var candidates = Directory.Exists(phpRoot)
+            ? Directory.EnumerateFiles(phpRoot, "php.exe", SearchOption.AllDirectories)
+                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            : [];
+
+        if (candidates.Count == 0)
+        {
+            throw new AppException("cron.php_not_installed", 404, 404);
+        }
+
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            var match = candidates.FirstOrDefault(path => path.Contains(version.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return candidates[0];
     }
 
     private static string NormalizeTime(string timeOfDay)
@@ -121,6 +246,8 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
     }
 
     private static string EscapePowerShell(string value) => value.Replace("\"", "`\"");
+
+    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
 
     private static T[] DeserializeArray<T>(string json)
     {

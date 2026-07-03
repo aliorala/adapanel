@@ -8,6 +8,12 @@ public sealed class ScheduledTaskDto
 
     public string State { get; set; } = string.Empty;
 
+    /// <summary>Kayıtlı eylemden türetilir: "url" (curl), "php" (php.exe) ya da "command".</summary>
+    public string TaskType { get; set; } = "command";
+
+    /// <summary>url tipinde çağrılan adres (eylem argümanlarından çözülür).</summary>
+    public string Url { get; set; } = string.Empty;
+
     public string Command { get; set; } = string.Empty;
 
     public string Arguments { get; set; } = string.Empty;

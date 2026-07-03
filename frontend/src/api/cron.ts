@@ -9,6 +9,8 @@ type ApiEnvelope<T> = {
 
 export type ScheduledTask = {
   name: string;
+  taskType: string;
+  url: string;
   scheduleType: string;
   state: string;
   command: string;
@@ -25,9 +27,12 @@ export async function getScheduledTasks() {
 
 export async function createScheduledTask(payload: {
   name: string;
+  taskType: string;
   command: string;
   arguments: string;
   workingDirectory: string;
+  url: string;
+  phpVersion: string;
   scheduleType: string;
   interval: number;
   timeOfDay: string;
@@ -38,4 +43,9 @@ export async function createScheduledTask(payload: {
 
 export async function deleteScheduledTask(name: string) {
   await apiClient.delete<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}`);
+}
+
+// Görevi beklemeden hemen tetikler (Plesk "Run Now") — yeni kurulan cron'u anında test etmek için.
+export async function runScheduledTask(name: string) {
+  await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/run`);
 }

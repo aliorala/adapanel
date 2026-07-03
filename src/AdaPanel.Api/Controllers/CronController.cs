@@ -25,6 +25,13 @@ public sealed class CronController(ISchedulerService schedulerService) : Control
         return Ok(ApiResponse<ScheduledTaskDto>.Ok(task, "cron.saved"));
     }
 
+    [HttpPost("{name}/run")]
+    public async Task<ActionResult<ApiResponse<object>>> RunTaskAsync(string name, CancellationToken cancellationToken)
+    {
+        await schedulerService.RunTaskAsync(name, cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { name }, "cron.run_started"));
+    }
+
     [HttpDelete("{name}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteTaskAsync(string name, CancellationToken cancellationToken)
     {
