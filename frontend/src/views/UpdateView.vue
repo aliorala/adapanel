@@ -36,6 +36,8 @@
         </article>
       </div>
 
+      <p v-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
+
       <div class="update-github">
         <h3>{{ t("panel.update.githubTitle") }}</h3>
         <p class="meta">{{ t("panel.update.githubHint") }}</p>
@@ -54,7 +56,9 @@
       </dl>
 
       <div class="update-actions">
-        <button :disabled="!status.downloadUrl || !status.packageSha256 || Boolean(busy)" @click="downloadUpdate">
+        <button
+          :disabled="!status.downloadUrl || !status.packageSha256 || !status.isUpdateAvailable || Boolean(busy)"
+          @click="downloadUpdate">
           {{ busy === "download" ? t("panel.webdb.deploying") : t("panel.update.download") }}
         </button>
         <button
@@ -71,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { applyUpdate, checkForUpdate, installPreparedUpdate, setUpdateGithubRepo, type UpdateStatus } from "../api/update";
 import { extractApiMessage } from "../stores/auth";
@@ -131,16 +135,58 @@ async function installUpdate() {
     return;
   }
 
+  const versionBeforeInstall = status.value.currentVersion;
   busy.value = "install";
   try {
     status.value = await installPreparedUpdate();
-    showNotice(t("panel.update.installScheduled"), false);
+    showNotice(t("panel.update.waitingRestart"), false);
+    startPostInstallWatch(versionBeforeInstall);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = "";
   }
 }
+
+// Kurulum planlandiktan sonra paneli izle: servis yeniden başlarken istekler düşer (sessizce beklenir),
+// panel YENİ sürümle dönünce sayfa otomatik yenilenir (Plesk davranışı). Oturum düşmüşse (401) login'e döner.
+let postInstallHandle: number | null = null;
+
+function startPostInstallWatch(versionBeforeInstall: string) {
+  stopPostInstallWatch();
+  const startedAt = Date.now();
+  postInstallHandle = window.setInterval(async () => {
+    if (Date.now() - startedAt > 5 * 60_000) {
+      stopPostInstallWatch();
+      showNotice(t("panel.update.updateTimeout"), true);
+      return;
+    }
+
+    try {
+      const fresh = await checkForUpdate();
+      if (fresh.currentVersion && fresh.currentVersion !== versionBeforeInstall) {
+        stopPostInstallWatch();
+        status.value = fresh;
+        showNotice(t("panel.update.updated"), false);
+        window.setTimeout(() => window.location.reload(), 1500);
+      }
+    } catch (error) {
+      if ((error as { response?: { status?: number } })?.response?.status === 401) {
+        stopPostInstallWatch();
+        window.location.reload();
+      }
+    }
+  }, 5000);
+}
+
+function stopPostInstallWatch() {
+  if (postInstallHandle !== null) {
+    window.clearInterval(postInstallHandle);
+    postInstallHandle = null;
+  }
+}
+
+onBeforeUnmount(stopPostInstallWatch);
 
 function translate(key: string) {
   const translated = t(key);
@@ -164,6 +210,14 @@ function showNotice(message: string, isError: boolean) {
 .update-actions {
   display: grid;
   gap: 16px;
+}
+
+.up-to-date {
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--ok-1, #22c55e) 40%, var(--panel-border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok-1, #22c55e) 8%, var(--surface-1));
+  color: var(--text-strong);
 }
 
 .update-github {

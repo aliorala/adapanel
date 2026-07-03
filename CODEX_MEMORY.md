@@ -5118,3 +5118,17 @@ Basarili:
 - Tum surum varsayilanlari 0.2.7. Uretilen/duzenlenen ps1'ler parser-dogrulandi. 0.2.7 installer SHA256
   `C7DCF49AF57F72EBC1D114EFD5E96EA24E9D4CB466DD1AA992F66B47F9448E86` (49.39 MiB). 0.2.6 YAYINDA (24DE9186)
   -> kullanici 0.2.6'ya guncelleyince 0.2.7 yayinlanacak; 0.2.6->0.2.7 gecisi YENI dayanikli runner'la ilk tam test.
+
+## 2026-07-03 (176) — Guncelleme UX'i tamamlandi: kurulum-sonrasi otomatik izleme + "Panel guncel" durumu (0.2.7 final)
+- EKSIK: "Kur"a basildiktan sonra tarayici KOR kaliyordu (kullanicinin ilk sikayeti "kurulum planlandi...sonra bisey yok"
+  mekanizma duzelse bile UI'da yasanacakti). Plesk kurulumdan sonra izleyip sayfayi yeniler -> ayni davranis eklendi.
+- UpdateView.vue: installUpdate basarisinda startPostInstallWatch(versionBeforeInstall) -> 5 sn'de bir checkForUpdate;
+  servis yeniden başlarken istekler reddedilir (catch -> sessiz bekle), YENI currentVersion gelince "guncelleme tamamlandi"
+  + 1.5 sn sonra window.location.reload(); 401 gelirse (oturum dustu) direkt reload -> login. 5 dk timeout ->
+  panel.update.updateTimeout (apply-update.log yolu gosterilir). onBeforeUnmount interval temizler.
+- "PANEL GUNCEL" durumu: !isUpdateAvailable iken yesil "panel.update.upToDate" bandi + INDIR butonu artik
+  isUpdateAvailable sartina bagli (eski/esit surumu yanlislikla indirme-kur = downgrade kapisi kapandi; Plesk gibi).
+- i18n +4 anahtar (upToDate/waitingRestart/updated/updateTimeout, tr+en) -> parite 2465=2465. Testler 2+51 yesil.
+- 0.2.7 FINAL SHA256 `B753A4AD5D345A39AFB7C7232FE5B0A9E0DB94141B99B1ABEE5A3EDB130350FF` (onceki C7DCF4 build'i GECERSIZ,
+  kullanici henuz yayinlamamisti). Yayin sirasi: VPS'i 0.2.6'ya guncelle -> 0.2.7'yi tag "0.2.7" ile yayinla ->
+  0.2.6->0.2.7 gecisi yeni dayanikli runner + yeni izleme UX'inin ilk tam ucta-uca testi.
