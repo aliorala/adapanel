@@ -4999,3 +4999,44 @@ Basarili:
   CANLI TEST: off-site hedefte eski yedek uzakta gerçekten siliniyor mu (FTP DELE / S3 DELETE 204 / WebDAV DELETE).
 - Doğrulama: build 0, test PASS (BackupRetentionTests dahil), typecheck değişmedi (backend-only).
   Installer SHA256: `29C44517715FE7546546A02831C0AE859662479EEC0B88CED9A4DE6E063EC673` (49.39 MiB).
+
+## 2026-07-02 (169) — Tekrar tarama (temiz) + GitHub'a yükleme hazırlığı
+- RE-TARAMA (yeni açı = DI kayıt bütünlüğü): 57 controller-enjekte arayüzden yalnız IAntiforgery "eksik" göründü → o
+  framework-sağlı (panel canlıda çözüyor) = gerçek sorun DEĞİL. 167+168 ile birlikte kod tarafı sağlam.
+- GITHUB: proje ZATEN git deposu (branch main), .gitignore düzgün (bin/obj/node_modules/.tools/artifacts/*.pfx/*.password/
+  *.db hariç). Takip edilen gerçek gizli dosya yok. Son commit çok eskiydi → 141 değişik + 21 yeni dosya tek commit'te
+  toplandı: `2f4f8a8`. Remote eklendi: origin = https://github.com/aliorala/adapanel.git. PUSH KULLANICIDA (kimlik/tarayıcı
+  auth). gh CLI kurulu DEĞİL, git 2.54 var (Credential Manager tarayıcı açar).
+- KULLANICI ADIMLARI: (A) kaynak: `git push -u origin main` (uzakta boş README varsa reddederse `--force`).
+  (B) panel self-update: GitHub → Releases → yeni release → tag (vX.Y.Z) → artifacts\installer\AdaPanelSetup.exe'yi asset
+  olarak yükle → publish → panelde Güncelle görür (SelfUpdateService releases/latest'ten çeker).
+
+## 2026-07-02 (170) — Navigasyon erişilebilirlik denetimi (temiz) + README bilingual + git commit'ler
+- YENİ TARAMA AÇISI: "yapılmış ama menüde/erişilemez mi" — SetupWizardView render switch + handleNavigation
+  (accounts→settings/users, exit→logout) + WebsiteWorkspaceView (20 site-aracı) + ServerToolsView (health/firewall/backup/
+  automation/nginx/logs/terminal/docker/dnstemplate) + settings tabs (general/account/security/users/notifications/updates).
+  47 view'ın HEPSİ erişilebilir; ölü nav girişi yok. Admin yedek+otomasyona ServerToolsView'dan ulaşıyor.
+- SONUÇ: 167 (endpoint/i18n/ölü kod) + 169 (DI) + 170 (nav) → hiçbir eksik/kopuk/erişilemez özellik YOK. Kod tarafı tam.
+- YAPILAN: kök README.md çift dilli (EN/TR) tüm özelliklerle yeniden yazıldı (önceki TR-tek → EN+TR; portlar/kurulum/güvenlik
+  korundu). Git: tüm çalışma commit'lendi (2f4f8a8) + README commit (6a9e0cb); remote origin=github.com/aliorala/adapanel.
+  PUSH KULLANICIDA. Release açıklaması (bilingual) + adımlar kullanıcıya verildi.
+- Bilinçli ertelenenler (kırık değil): DNSSEC, çoklu-IP mail, wildcard SSL (DNS-01), domain-başı dedicated mail IP.
+
+## 2026-07-03 (171) — SELF-UPDATE BUG: sürüm damgası yok → panel hep "1.0.0" → güncelleme hiç uygulanmıyor gibi
+- SEMPTOM: kullanıcı "Kur ve yeniden başlat" → "kurulum planlandı" → sonra hiçbir şey (güncelleme var uyarısı kaybolmuyor).
+- KÖK NEDEN: HİÇBİR yerde sürüm damgalanmıyordu (csproj/scriptte <Version>/-p:Version YOK) → assembly "1.0.0".
+  SelfUpdateService: IsUpdateAvailable = (VersionInfo.Current != releaseTag). Current="1.0.0", tag="0.2.4" → HEP true.
+  Güncelleme kursa bile yeni build yine "1.0.0" der → uyarı hiç kaybolmaz → "hiçbir şey olmadı" algısı. (Mekanizma sağlam:
+  WindowsUpdateInstallerLauncher SYSTEM zamanlanmış görev 15sn → apply-update.ps1 → AdaPanelSetup.exe /VERYSILENT;
+  .iss PrepareToInstall servisi Stop-Service -Force ile durduruyor. Sorun kurulum değil, SÜRÜM KIYASI.)
+- FIX: build-installer.ps1 + package-installer.ps1'e -Version param (varsayılan 0.2.4) + publish'e
+  "/p:Version=$Version" "/p:InformationalVersion=$Version" /p:IncludeSourceRevisionInInformationalVersion=false.
+  (Son property ŞART: yoksa .NET InformationalVersion'a "+<gitHash>" ekliyor → "0.2.4+6a9e..." yine tag'le eşleşmez.)
+  Doğrulandı: yayınlanan AdaPanel.Api.exe ProductVersion = tam "0.2.4". Global /p:Version tüm projelere (Core/Infra/Data)
+  akar → VersionInfo (Infra assembly) da 0.2.4.
+- KULLANICI AKIŞI (release her seferinde): package/build -Version X.Y.Z İLE paketle → GitHub release tag'ini "X.Y.Z" YAP
+  (aynı olmalı). Yeni installer SHA `3C09383F117DDFF9829911F12C29CC6F78CFC9CA93CB303C367124C9C37FB710` (v0.2.4, 49.39 MiB).
+  → mevcut 0.2.4 release'indeki asset'i BUNUNLA değiştir + açıklamadaki SHA satırını güncelle. VPS'te panel bunu kurunca
+  "0.2.4" der, uyarı kaybolur. Hâlâ kurulmuyorsa: C:\ProgramData\AdaPanel\updates\apply-update.log bak (installer logu).
+- NOT: FileVersion hâlâ 0.2.2.0 görünüyor (bir yerde tanımlı, muhtemelen Directory.Build.props) — VersionInfo
+  InformationalVersion'ı okuduğu için ETKİSİZ; istenirse ayrıca hizalanır.

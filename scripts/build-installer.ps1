@@ -1,6 +1,9 @@
 param(
     [string]$Configuration = "Release",
-    [string]$RuntimeIdentifier = "win-x64"
+    [string]$RuntimeIdentifier = "win-x64",
+    # Panelin RAPOR ETTIGI surum. Self-update icin GitHub release tag'i ile AYNI olmali
+    # (ornek: -Version 0.2.5 ile build et -> release'i "0.2.5" tag'iyle yayinla).
+    [string]$Version = "0.2.4"
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +57,9 @@ if ($LASTEXITCODE -ne 0) {
     -r $RuntimeIdentifier `
     --self-contained true `
     -o $publishDir `
+    "/p:Version=$Version" `
+    "/p:InformationalVersion=$Version" `
+    /p:IncludeSourceRevisionInInformationalVersion=false `
     /p:PublishSingleFile=true `
     /p:EnableCompressionInSingleFile=true `
     /p:DebugType=None `
@@ -82,4 +88,5 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup derlemesi basarisiz oldu."
 }
 
-Write-Host "AdaPanelSetup.exe olusturuldu. Cikti klasoru: $installerOutDir"
+Write-Host "AdaPanelSetup.exe olusturuldu (surum $Version). Cikti klasoru: $installerOutDir"
+Write-Host "ONEMLI: GitHub release tag'ini '$Version' yap (yoksa self-update surumu esitleyemez)."
