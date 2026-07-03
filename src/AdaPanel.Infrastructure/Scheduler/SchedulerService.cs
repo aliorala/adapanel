@@ -84,7 +84,8 @@ $tasks | ConvertTo-Json -Depth 5";
         var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request), cancellationToken);
         if (!result.Success)
         {
-            throw new AppException("cron.write_failed", 500, 500);
+            // Gercek PowerShell hatasini detaya koy: "kaydedilemedi" tek basina teshis edilemiyor.
+            throw new AppException("cron.write_failed", 500, 500, result.StandardError);
         }
 
         var tasks = await GetTasksAsync(cancellationToken);
@@ -113,7 +114,7 @@ $tasks | ConvertTo-Json -Depth 5";
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
-            throw new AppException("cron.write_failed", 500, 500);
+            throw new AppException("cron.write_failed", 500, 500, result.StandardError);
         }
     }
 
@@ -151,11 +152,13 @@ $tasks | ConvertTo-Json -Depth 5";
             action += $" -WorkingDirectory '{EscapeSingleQuoted(workingDirectory)}'";
         }
 
+        // DIKKAT: [TimeSpan]::MaxValue KULLANMA — Task Scheduler XML dogrulamasi "P99999999DT23H59M59S"
+        // suresini REDDEDIYOR ("aralik disi deger") ve kayit patliyor. 3650 gun (10 yil) = fiilen suresiz, her surumde gecerli.
         var trigger = scheduleType switch
         {
-            "minute" or "minutely" => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {interval}) -RepetitionDuration ([TimeSpan]::MaxValue)",
+            "minute" or "minutely" => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)",
             "daily" => $"New-ScheduledTaskTrigger -Daily -At ([datetime]::ParseExact('{NormalizeTime(request.TimeOfDay)}','HH:mm',[System.Globalization.CultureInfo]::InvariantCulture))",
-            _ => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours {interval}) -RepetitionDuration ([TimeSpan]::MaxValue)"
+            _ => $"New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours {interval}) -RepetitionDuration (New-TimeSpan -Days 3650)"
         };
 
         return $@"if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -ErrorAction SilentlyContinue) {{

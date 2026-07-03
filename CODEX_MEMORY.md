@@ -5173,3 +5173,19 @@ Basarili:
   VPS hala 0.2.5 ise dogrudan 0.2.8'e atlanabilir (eski runner tek-seferlik riski: gelmezse Start-Service AdaPanel).
 - KALAN (kullaniciyla canli): K2 MariaDB root parolasi + B3 phpMyAdmin HTTPS; buyuk ertelenenler: DNSSEC,
   wildcard DNS-01, domain-basi mail IP.
+
+## 2026-07-03 (179) — CANLI HATA: cron "kaydedilemedi" -> [TimeSpan]::MaxValue mayini (0.2.9)
+- OLAY: kullanici 0.2.8'de (yayinladi+kurdu) URL cron eklerken "Zamanlanmis gorev kaydedilemedi" (cron.write_failed).
+- TESHIS YONTEMI: uretilen Register scriptini LOKALDE birebir calistirdim (EncodedCommand ayni yolla):
+  * daily -> "Erisim engellendi" (lokal yonetici degil; VPS SYSTEM'de sorun yok, ortamsal)
+  * hourly (FORM VARSAYILANI) -> GERCEK HATA: "Gorev XML'si ... aralik disi deger: Duration P99999999DT23H59M59S"
+    => New-ScheduledTaskTrigger -RepetitionDuration ([TimeSpan]::MaxValue) Task Scheduler XML dogrulamasinda REDDEDILIYOR.
+    Cron ekraninin ilk gununden beri duran mayin; URL ozelliginin ilk gercek kullaniminda patladi (kullanici hourly varsayilaniyla denedi).
+- FIX: her iki tekrarli tetikleyicide (minute/hourly) MaxValue -> (New-TimeSpan -Days 3650) (10 yil = fiilen suresiz;
+  lokalde dogrulandi: XML gecti, ACL asamasina ulasti). + cron.write_failed artik result.StandardError DETAYLI
+  (create+delete) -> bir daha kor "kaydedilemedi" yok (UI extractApiDetails ile gosterebilir/loglanir).
+- SURUM DEMOSU NOTU: kullanici "guncelleme bitince neden tepki yok" diye sordu — takip/otomatik-yenileme UX'i 0.2.8'de
+  ve IZLEYEN ekran ESKI surumun ekranidir; 0.2.5/0.2.7'den guncellerken sessizlik NORMALDI. VPS artik 0.2.8 oldugundan
+  0.2.8->0.2.9 gecisi bu deneyimin ilk canli gosterimi olacak (Ayarlar>Guncellemeler sayfasinda KALARAK izlenmeli).
+- Surumler 0.2.9; 0.2.8 exe artifacts\release\0.2.8\ altinda korunuyor (DC2FF4), 0.2.9 exe artifacts\release\0.2.9\
+  SHA256 `DFEAEF379DD2032CDEECE1F1E247EABE208459B4CF9D8E920E4A618EDD35D944`. Testler 2+51 yesil.
