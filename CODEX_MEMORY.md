@@ -5281,3 +5281,22 @@ Basarili:
   Tasima-cron: Plesk REST cron uclarini discover'imiza vermiyor -> ayri arastirma. Tam-sunucu DR (IIS rebuild) ayri oturum.
 - 0.2.12 FINAL SHA256 `A80029220CE860FD51500FA580AA8AAFC4EB3A79A01B36BA5B7019D5A043A9E0` (yedek-gorev + kota BIRLIKTE;
   onceki 039CDC yayinlanmamisti, gecersiz). Testler 2+51, parite 2491.
+
+## 2026-07-04 (185) — Komple tarama: otomatikler TEMIZ; 2 gercek kesisim acigi bulundu+duzeltildi (0.2.13)
+- TARAMA (kullanici "komple tara bul yap"): i18n 279 backend anahtari tam iki dilde, parite 2491=2491; DI kayitlari
+  eksiksiz (Scheduler/CustomerScope/Automation), DONGU YOK (SchedulerService bagimsiz); build+test 2+51 yesil.
+  Yedek export/restore PS scriptleri GERCEK round-trip ile dogrulandi (2 gorev export, XML+base64 tasima, restore
+  kayit asamasina ulasti — yerelde "erisim engellendi" = admin degilim, VPS SYSTEM'de sorun yok).
+- BULGU 1 (izlenebilirlik): CronController AUDIT YAZMIYORDU (tum diger controller'lar yaziyor). Multi-tenant'ta
+  musteri/bayi URL cron kurabildiginden kim-ne-zaman-hangi-URL onemli. FIX: IAuditService enjekte; created/deleted/
+  run/enabled/disabled -> auditService.WriteAsync("cron.*","cron",details,userId,RemoteIp). created details'e tip+hedef URL.
+- BULGU 2 (GUVENLIK/SSRF): EnsureCustomerUrlAllowed yalniz loopback+localhost+169.254 engelliyordu; IC AG (10/8,
+  172.16/12, 192.168/16, 0/8) ve IPv6 ozel adresler ACIKTI -> musteri panelden ic agi tarayabilir/vurabilirdi.
+  FIX: async EnsureCustomerUrlAllowedAsync -> IsBlockedAddress(IPAddress): loopback + IPv4 ozel bloklar + IPv6
+  link-local/site-local/fc00::/7. Literal IP KESIN engellenir; hostname best-effort Dns.GetHostAddressesAsync ile
+  cozulup ozel'e dusuyorsa reddedilir (DNS cozulemezse literal koruma yeterli, mesru site engellenmez). http/https semasi zorunlu.
+- KUCUK: cron failure-alert tarih kiyasi task.LastRunTimeUtc.Value.ToUniversalTime() (System.Text.Json "Z"li ISO'yu
+  yerel Kind'e ceviriyordu; 2 gun esiginde ~offset kaymasi). NOT (dusuk oncelik, ertelendi): RunAlertChecksAsync
+  AlertsEnabled iken her dakika GetTasks (PS process/dk); disk/cert de zaten her dakika -> tasarim, kabul edildi.
+- 0.2.13 SHA256 `CEFC97BD03A6EE90DCE956CD4B814D67E0A7B0FE8138ACCB24E994AB1CF1C529` (artifacts\release\0.2.13\).
+  0.2.12 YAYINDA oldugu icin yeni surum. Testler 2+51, parite 2491.

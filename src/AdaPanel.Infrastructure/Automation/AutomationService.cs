@@ -550,7 +550,8 @@ public sealed class AutomationService(
                     continue;
                 }
 
-                if (task.LastRunTimeUtc is null || now - task.LastRunTimeUtc > TimeSpan.FromDays(2))
+                // ToUniversalTime: System.Text.Json "Z"li ISO'yu yerel Kind'e çevirebilir; gerçek UTC'ye normalize et.
+                if (task.LastRunTimeUtc is null || now - task.LastRunTimeUtc.Value.ToUniversalTime() > TimeSpan.FromDays(2))
                 {
                     continue;
                 }

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
@@ -13,7 +15,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/cron")]
 public sealed class CronController(
     ISchedulerService schedulerService,
-    ICustomerScopeService customerScopeService) : ControllerBase
+    ICustomerScopeService customerScopeService,
+    IAuditService auditService) : ControllerBase
 {
     private bool IsAdmin => User.IsInRole("Administrator");
 
@@ -52,7 +55,7 @@ public sealed class CronController(
             request.Arguments = string.Empty;
             request.WorkingDirectory = string.Empty;
             request.PhpVersion = string.Empty;
-            EnsureCustomerUrlAllowed(request.Url);
+            await EnsureCustomerUrlAllowedAsync(request.Url);
 
             // Plan kotası (MaxScheduledTasks; 0 = sınırsız): aynı adla güncelleme kotayı doldurmaz.
             var scope = await customerScopeService.GetScopeAsync(User.GetRequiredUserId(), cancellationToken);
@@ -78,6 +81,8 @@ public sealed class CronController(
             task.Name = task.Name[OwnerPrefix.Length..];
         }
 
+        var target = string.IsNullOrWhiteSpace(request.Url) ? request.Command : request.Url;
+        await WriteAuditAsync("cron.created", $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}", cancellationToken);
         return Ok(ApiResponse<ScheduledTaskDto>.Ok(task, "cron.saved"));
     }
 
@@ -85,6 +90,7 @@ public sealed class CronController(
     public async Task<ActionResult<ApiResponse<object>>> RunTaskAsync(string name, CancellationToken cancellationToken)
     {
         await schedulerService.RunTaskAsync(ScopeName(name), cancellationToken);
+        await WriteAuditAsync("cron.run", $"Scheduled task '{name}' triggered manually.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.run_started"));
     }
 
@@ -92,6 +98,7 @@ public sealed class CronController(
     public async Task<ActionResult<ApiResponse<object>>> EnableTaskAsync(string name, CancellationToken cancellationToken)
     {
         await schedulerService.SetTaskEnabledAsync(ScopeName(name), true, cancellationToken);
+        await WriteAuditAsync("cron.enabled", $"Scheduled task '{name}' enabled.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.enabled"));
     }
 
@@ -99,6 +106,7 @@ public sealed class CronController(
     public async Task<ActionResult<ApiResponse<object>>> DisableTaskAsync(string name, CancellationToken cancellationToken)
     {
         await schedulerService.SetTaskEnabledAsync(ScopeName(name), false, cancellationToken);
+        await WriteAuditAsync("cron.disabled", $"Scheduled task '{name}' suspended.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.disabled"));
     }
 
@@ -106,26 +114,91 @@ public sealed class CronController(
     public async Task<ActionResult<ApiResponse<object>>> DeleteTaskAsync(string name, CancellationToken cancellationToken)
     {
         await schedulerService.DeleteTaskAsync(ScopeName(name), cancellationToken);
+        await WriteAuditAsync("cron.deleted", $"Scheduled task '{name}' deleted.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.deleted"));
     }
 
     private string ScopeName(string name) => IsAdmin ? name : OwnerPrefix + name;
 
-    // Müşteri URL'si sunucunun kendisini (loopback/link-local) hedefleyemez; dış dünya serbest.
-    private static void EnsureCustomerUrlAllowed(string? url)
+    private Task WriteAuditAsync(string action, string details, CancellationToken cancellationToken) =>
+        auditService.WriteAsync(
+            action,
+            "cron",
+            details,
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+    // Müşteri URL görevi yalnızca dış (genel) adresleri hedefleyebilir. SSRF koruması: sunucunun kendisi
+    // (loopback), iç ağ (10/8, 172.16/12, 192.168/16), link-local ve IPv6 özel adresleri engellenir.
+    // Literal IP kesin engellenir; alan adı ise en iyi çabayla DNS ile çözülür — çözülen IP'lerden biri
+    // özel/loopback ise reddedilir (DNS çözülemezse literal-IP koruması yeterlidir, meşru site engellenmez).
+    private static async Task EnsureCustomerUrlAllowedAsync(string? url)
     {
-        if (!Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri))
+        if (!Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
             throw new AppException("cron.invalid_url", 400, 400);
         }
 
         var host = uri.Host;
-        var isBlocked = uri.IsLoopback ||
-            host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-            host.StartsWith("169.254.", StringComparison.Ordinal);
-        if (isBlocked)
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
         {
             throw new AppException("cron.url_forbidden", 403, 403);
         }
+
+        if (IPAddress.TryParse(host, out var literal))
+        {
+            if (IsBlockedAddress(literal))
+            {
+                throw new AppException("cron.url_forbidden", 403, 403);
+            }
+
+            return;
+        }
+
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(host);
+            if (addresses.Any(IsBlockedAddress))
+            {
+                throw new AppException("cron.url_forbidden", 403, 403);
+            }
+        }
+        catch (AppException)
+        {
+            throw;
+        }
+        catch
+        {
+            // DNS çözülemedi → engelleme (geçici DNS hatası meşru siteyi engellemesin; literal-IP SSRF zaten kapalı).
+        }
+    }
+
+    private static bool IsBlockedAddress(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip))
+        {
+            return true;
+        }
+
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return b[0] == 10                                  // 10.0.0.0/8
+                || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)   // 172.16.0.0/12
+                || (b[0] == 192 && b[1] == 168)                // 192.168.0.0/16
+                || (b[0] == 169 && b[1] == 254)                // 169.254.0.0/16 (link-local)
+                || b[0] == 0;                                  // 0.0.0.0/8
+        }
+
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            return ip.IsIPv6LinkLocal
+                || ip.IsIPv6SiteLocal
+                || (ip.GetAddressBytes()[0] & 0xFE) == 0xFC;   // fc00::/7 (unique-local)
+        }
+
+        return false;
     }
 }
