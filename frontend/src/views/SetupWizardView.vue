@@ -205,6 +205,8 @@
 
     <SoftwareView v-else-if="activeSection === 'software' && isAdmin" />
 
+    <AdvisorView v-else-if="activeSection === 'advisor' && isAdmin" @navigate="handleNavigation" />
+
     <section v-else-if="activeSection === 'settings'" class="panel module-shell settings-workspace">
       <div class="module-head">
         <div>
@@ -694,6 +696,7 @@ import DatabasesView from "./DatabasesView.vue";
 import MigrationView from "./MigrationView.vue";
 import MyDatabasesView from "./MyDatabasesView.vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
+import AdvisorView from "./AdvisorView.vue";
 import FilesView from "./FilesView.vue";
 import MailView from "./MailView.vue";
 import MonitoringView from "./MonitoringView.vue";
@@ -911,6 +914,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
     { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN" },
+    { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD" },
     { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badge: installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined },
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
     { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC" },

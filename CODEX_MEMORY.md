@@ -5300,3 +5300,24 @@ Basarili:
   AlertsEnabled iken her dakika GetTasks (PS process/dk); disk/cert de zaten her dakika -> tasarim, kabul edildi.
 - 0.2.13 SHA256 `CEFC97BD03A6EE90DCE956CD4B814D67E0A7B0FE8138ACCB24E994AB1CF1C529` (artifacts\release\0.2.13\).
   0.2.12 YAYINDA oldugu icin yeni surum. Testler 2+51, parite 2491.
+
+## 2026-07-04 (186) — Plesk parite YOL HARITASI basladi: Advisor oneri motoru (A8) tamamlandi (0.2.14)
+- Kullanici "hepsini yap pleskte varsa bizde de olmalı". Tek turda 9 buyuk sistemi yigmak = cron-zinciri riski, o yuzden
+  ONCELIK SIRASIYLA her tur bir tam+test-edilmis artis. Batch 1 = Advisor (tamamen yerel-dogrulanabilir, VPS gerektirmez).
+- TARAMA DUZELTMESI (onemli, eski backlog yanlisti): DNSSEC ZATEN VAR (SetDnssecRequest+DnsService+DnsController);
+  mail greylist+spam esigi VAR (MailService GetSpamSettings), mailing list VAR, hotlink koruma VAR (SiteHostingSettings),
+  Node/Python runtime VAR. GERCEK EKSIKLER: antivirus/malware(ClamAV), otomatik wildcard SSL(DNS-01), Ruby runtime,
+  SEO toolkit, abonelik-alti ek kullanicilar, coklu-sunucu, tam-sunucu DR (IIS rebuild), 1-tik app katalog genisligi.
+- ADVISOR (Plesk Advisor karsiligi): IAdvisorService/AdvisorService [SupportedOSPlatform windows], her kontrol ayri
+  try/catch (dayanikli). Sinyaller (yeni altyapi KURMADAN): ISelfUpdateService(guncelleme), config/ssl.json(SSL bitis
+  <14g uyari / <0 kritik), ISystemMonitoring(disk>=90/95, RAM>=90), IAutomationService(AutoBackup/AutoSslRenew/Alerts),
+  INotificationService(alerts acik ama kanal yok), IPanelSecurityService(gizli yol="panel", IP allowlist bos).
+  AdvisorItemDto{Id,Severity,TitleKey,DetailKey,Detail(dile-notr: host/surum/%/tarih),ActionSection}. Rapor onem sayilari
+  + severity-sirali. Controller GET /api/v1/advisor [Administrator]. DI: AddScoped IAdvisorService.
+  FRONTEND: api/advisor.ts + AdvisorView.vue (ozet pill'ler + severity-renkli liste + "Duzelt"->emit navigate; bos ise
+  "her sey yolunda" yesil kart). SetupWizard: 'advisor' bolumu (monitor'dan sonra, glyph AD, admin-only; reseller/customer
+  allow-list'lerde YOK), render @navigate="handleNavigation". i18n +25 anahtar tr+en, parite 2515=2515.
+- 0.2.14 SHA256 `AAB1E2E44B4BED4B0D15421475A16876B7885C6410E9CEF563FC70681F817352`. Testler 2+51.
+- KALAN PLESK PARITE SIRASI: (Batch2, yerel) Ruby runtime + 1-tik app katalog (Joomla/Drupal/prestashop templateleri);
+  (Batch3, VPS-testli) ClamAV antivirus + wildcard SSL DNS-01; (Batch4) abonelik-alti kullanicilar; (Batch5) tam-sunucu DR;
+  (deferred) SEO toolkit, coklu-sunucu (enterprise). VPS-testli olanlar kullanici test edebilecekken yapilacak.
