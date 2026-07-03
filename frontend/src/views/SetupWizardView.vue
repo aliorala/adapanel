@@ -175,6 +175,7 @@
       :secure-path="currentSecurePath"
       :audit-items="authStore.auditLogs"
       :allowed-sections="dashboardSections.map((section) => section.id)"
+      :panel-update="panelUpdate"
       @navigate="handleNavigation" />
 
     <WebsiteWorkspaceView v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)" />
@@ -689,6 +690,7 @@ import ServerToolsView from "./ServerToolsView.vue";
 import BackupView from "./BackupView.vue";
 import SoftwareView from "./SoftwareView.vue";
 import UpdateView from "./UpdateView.vue";
+import { checkForUpdate, type UpdateStatus } from "../api/update";
 import WebsiteWorkspaceView from "./WebsiteWorkspaceView.vue";
 
 type ViewMode = "setup" | "auth" | "dashboard";
@@ -738,6 +740,8 @@ const settingsTab = ref<SettingsTab>("general");
 const showUserCreateForm = ref(false);
 const showPlanForm = ref(false);
 const activeSection = ref("home");
+// Ana sayfa "yeni sürüm" bandı için panel güncelleme durumu (yalnızca admin doldurur).
+const panelUpdate = ref<UpdateStatus | null>(null);
 const ftpUserCount = ref(0);
 let refreshHandle: number | null = null;
 
@@ -960,6 +964,7 @@ const activeSectionMeta = computed(() =>
 
 onMounted(async () => {
   await initializeView();
+  await loadPanelUpdate();
 });
 
 onBeforeUnmount(() => {
@@ -1281,11 +1286,32 @@ function handleNavigation(sectionId: string) {
     return;
   }
 
+  // Ana sayfadaki "Yeni sürüm" bandı → Ayarlar > Güncellemeler sekmesi.
+  if (sectionId === "updates") {
+    activeSection.value = "settings";
+    settingsTab.value = "updates";
+    window.scrollTo({ top: 0, behavior: "auto" });
+    return;
+  }
+
   activeSection.value = sectionId;
   if (sectionId === "settings" && !isAdmin.value) {
     settingsTab.value = "account";
   }
   window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+// Ana sayfa banner'ı için panel güncelleme durumunu bir kez çek (admin; GitHub Releases'e bakar, hata olursa sessiz).
+async function loadPanelUpdate() {
+  if (!isAdmin.value) {
+    return;
+  }
+
+  try {
+    panelUpdate.value = await checkForUpdate();
+  } catch {
+    panelUpdate.value = null;
+  }
 }
 
 async function startTwoFactor() {

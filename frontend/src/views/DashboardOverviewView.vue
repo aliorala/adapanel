@@ -1,5 +1,17 @@
 <template>
   <div class="overview-stack">
+    <section
+      v-if="panelUpdate && panelUpdate.isUpdateAvailable"
+      class="panel update-banner"
+      role="alert">
+      <span class="ub-badge" aria-hidden="true">↑</span>
+      <div class="ub-text">
+        <strong>{{ t("panel.dashboard.update.available") }}</strong>
+        <span>{{ t("panel.dashboard.update.hint", { version: panelUpdate.latestVersion, current: panelUpdate.currentVersion }) }}</span>
+      </div>
+      <button class="ub-action" @click="go('updates')">{{ t("panel.dashboard.update.action") }}</button>
+    </section>
+
     <section class="panel quick-actions-panel">
       <span class="tile-label">{{ t("panel.dashboard.quickActions") }}</span>
       <div class="quick-actions">
@@ -142,6 +154,10 @@
                 <dd>{{ overview.frameworkDescription }}</dd>
               </div>
               <div>
+                <dt>{{ t("panel.system.panelVersion") }}</dt>
+                <dd>{{ overview.panelVersion || t("panel.common.notAvailable") }}</dd>
+              </div>
+              <div>
                 <dt>{{ t("panel.system.bootTime") }}</dt>
                 <dd>{{ formatUtc(overview.bootTimeUtc) }}</dd>
               </div>
@@ -210,6 +226,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getServerIpAddresses } from "../api/system";
+import type { UpdateStatus } from "../api/update";
 
 type DiskUsage = {
   name: string;
@@ -230,6 +247,7 @@ type SystemOverview = {
   operatingSystem: string;
   osArchitecture: string;
   frameworkDescription: string;
+  panelVersion: string;
   currentServerTimeUtc: string | null;
   bootTimeUtc: string;
   uptime: string;
@@ -262,6 +280,8 @@ const props = defineProps<{
   securePath: string;
   auditItems: AuditItem[];
   allowedSections: string[];
+  // Panel self-update durumu (yalnızca admin doldurur; null ise banner gizli).
+  panelUpdate: UpdateStatus | null;
 }>();
 
 const { t } = useI18n();
@@ -581,6 +601,55 @@ function formatTimeSpan(value: string): string {
 .quick-actions-panel {
   display: grid;
   gap: 10px;
+}
+
+/* "Yeni sürüm mevcut" uyarı bandı (yalnızca admin + guncelleme varsa). */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-color: color-mix(in srgb, var(--accent-1) 45%, var(--panel-border));
+  background: color-mix(in srgb, var(--accent-1) 10%, var(--surface-2));
+}
+
+.ub-badge {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-1) 20%, transparent);
+  color: var(--accent-1);
+  font-weight: 800;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+}
+
+.ub-text {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ub-text span {
+  color: var(--text-soft);
+  font-size: 0.85rem;
+}
+
+.ub-action {
+  flex: none;
+  width: fit-content;
+}
+
+@media (max-width: 820px) {
+  .update-banner {
+    flex-wrap: wrap;
+  }
+
+  .ub-action {
+    width: 100%;
+  }
 }
 
 .quick-actions {

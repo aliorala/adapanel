@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -111,6 +112,15 @@ public sealed class SelfUpdateServiceTests
 
     private sealed class StubHttpClientFactory : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new();
+        public HttpClient CreateClient(string name) => new(new NotFoundHandler());
+    }
+
+    // Testi hermetik tutar: gerçek ağa (GitHub/örnek URL) ÇIKMAZ, her isteğe 404 döner. Böylece
+    // CheckForUpdate uzak sürüm bulamaz → SHA boş kalır → ApplyUpdate indirmeden ÖNCE checksum_required
+    // fırlatır. (Aksi halde canlı aliorala/adapanel release'i gerçek SHA döndürüp bu testi kırıyordu.)
+    private sealed class NotFoundHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 }

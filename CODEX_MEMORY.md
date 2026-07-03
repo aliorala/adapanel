@@ -5057,3 +5057,22 @@ Basarili:
   gecersiz -> 0.2.4 release'ine BUNU (0DD96D) yukle, aciklamadaki SHA satirini bununla guncelle.
 - Testlerde surum iddiasi YOK (grep temiz) -> props degisikligi guvenli. frontend/package.json'daki 0.2.2 kozmetik
   (hicbir yerde gosterilmiyor), VersionInfo.cs fallback "0.2.2-preview" ulasilmaz savunma -> dokunulmadi.
+
+## 2026-07-03 (173) — Ana sayfa sürüm göstergesi + "yeni sürüm" bandı + hermetik test düzeltmesi (0.2.5)
+- ISTEK: ana sayfada sürüm görünsün + "yeni sürüm çıktı" uyarısı; test için 0.2.5 çıkar.
+- SURUM GOSTERGESI (tüm roller): SystemOverviewDto zaten PanelVersion=VersionInfo.Current içeriyordu → DashboardOverviewView
+  "Sunucu Bilgisi" kartına "AdaPanel sürümü" satırı eklendi (overview.panelVersion). Backend degisikligi YOK.
+- "YENI SURUM" BANDI (yalnızca admin): SetupWizardView mount'ta isAdmin ise checkForUpdate() çağırıp panelUpdate ref'ini
+  doldurur → DashboardOverviewView'a :panel-update prop. Banner overview-stack'in EN ustunde, v-if panelUpdate.isUpdateAvailable.
+  "Güncelle" butonu → emit navigate('updates') → handleNavigation'a eklenen 'updates' case → activeSection='settings',
+  settingsTab='updates' (UpdateView orada). i18n: panel.system.panelVersion + panel.dashboard.update.{available,hint,action}
+  (tr+en, {version}/{current} placeholder). Parite 2461=2461.
+  DIKKAT: banner KODU 0.2.5'te. Kurulu 0.2.4 panelde banner GORUNMEZ (guncellemeyi Ayarlar>Guncellemeler'de gorur). 0.2.5'e
+  gecince banner kodu var → daha yeni bir release (0.2.6) cikinca banner yanar. Sürüm satırı ise 0.2.5'te hemen görünür.
+- GERCEK HATA DUZELTILDI (benim degisikligim degil, ONCEDEN vardi, package-installer testleri atladigi icin gizli kalmisti):
+  SelfUpdateServiceTests.ApplyUpdateAsync_RequiresSha256BeforeDownload HERMETIK DEGILDI — CheckForUpdateAsync varsayilan
+  repo "aliorala/adapanel"ya GERCEK GitHub istegi atiyor. Repo bostken (release yokken) 404→SHA bos→checksum_required (test gecerdi).
+  Biz 0.2.4'u YAYINLAYINCA gercek SHA donuyor→guard geciliyor→example.test'e baglanip socket hatasi→test kirildi. FIX: test
+  StubHttpClientFactory artik NotFoundHandler (her istege 404) kullaniyor → ag yok, deterministik. 44/44 gecti. (Production kodu
+  dogru; NormalizeSha256 64-hex zorunlu tutuyor, sadece test canli internete cikiyordu.)
+- 0.2.5 installer SHA256 `F37D6D8E1816A803A4DE03B0B91BA95006CEE0FAE8BBA48782FDE5BEBE1AB9DA` (49.39 MiB). Release tag'i "0.2.5" YAP.
