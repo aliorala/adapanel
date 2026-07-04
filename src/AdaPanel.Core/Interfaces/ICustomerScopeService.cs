@@ -4,6 +4,18 @@ namespace AdaPanel.Core.Interfaces;
 public sealed record CustomerScope(IReadOnlyList<string> Sites, int MaxSites, int MaxDiskMb, int MaxDatabases, int MaxMailboxes, int MaxScheduledTasks);
 
 /// <summary>
+/// Müşteri panelinin bölüm anahtarları (alt-kullanıcı izin matrisinin evreni).
+/// Frontend menü kimlikleriyle birebir aynıdır; home/settings/exit her zaman açıktır, listelenmez.
+/// </summary>
+public static class CustomerPanelSections
+{
+    public static readonly IReadOnlyList<string> All = ["sites", "mail", "database", "files", "backup", "tasks"];
+
+    public static bool IsKnown(string section) =>
+        All.Contains(section, StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
 /// Customer rolündeki kullanıcıların erişebileceği siteler ve kaynak limitlerinin
 /// kalıcı kaydı (config/customer-scopes.json). Yetki ve kota denetimi bunun üzerinden yapılır.
 /// </summary>
@@ -59,4 +71,16 @@ public interface ICustomerScopeService
 
     /// <summary>Kullanıcı bir alt-kullanıcıysa bağlı olduğu parent müşteri kimliği; değilse null.</summary>
     Task<Guid?> GetParentSubscriptionAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>Verilen parent müşterinin altındaki tüm alt-kullanıcı kimlikleri.</summary>
+    Task<IReadOnlyCollection<Guid>> GetSubUserIdsAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Alt-kullanıcının panel bölümü izinleri (Plesk "additional user" izin matrisi karşılığı).
+    /// null = kısıtsız (tüm müşteri bölümleri). Bilinmeyen bölüm anahtarları yok sayılır.
+    /// </summary>
+    Task SetSubUserSectionsAsync(Guid userId, IReadOnlyCollection<string>? sections, CancellationToken cancellationToken = default);
+
+    /// <summary>Alt-kullanıcının izinli bölümleri; null = kısıtsız veya alt-kullanıcı değil.</summary>
+    Task<IReadOnlyCollection<string>?> GetSubUserSectionsAsync(Guid userId, CancellationToken cancellationToken = default);
 }

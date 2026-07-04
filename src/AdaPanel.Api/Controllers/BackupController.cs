@@ -9,6 +9,7 @@ namespace AdaPanel.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Administrator,Customer,Reseller")]
+[RequireSubUserSection("backup")]
 [Route("api/v1/backup")]
 public sealed class BackupController(
     IBackupService backupService,

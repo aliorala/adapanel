@@ -22,6 +22,25 @@ public static class CustomerAccess
     /// <summary>Kapsam denetimine tabi rol mü (Customer veya Reseller).</summary>
     public static bool IsScoped(ClaimsPrincipal user) => IsCustomer(user) || IsReseller(user);
 
+    /// <summary>
+    /// Etkin abonelik sahibi: alt-kullanıcı ise parent müşteri, değilse kullanıcının kendisi.
+    /// Aboneliğe bağlı kaynaklar (cron görevleri, self-servis veritabanları) bu kimliğe yazılır →
+    /// parent ve tüm alt-kullanıcılar aynı kaynak kümesini ve kotayı paylaşır (Plesk davranışı).
+    /// </summary>
+    public static async Task<Guid> GetSubscriptionUserIdAsync(
+        ICustomerScopeService scopes,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        var userId = user.GetRequiredUserId();
+        if (IsCustomer(user) && await scopes.GetParentSubscriptionAsync(userId, cancellationToken) is { } parent)
+        {
+            return parent;
+        }
+
+        return userId;
+    }
+
     /// <summary>Kullanıcının erişebileceği site adları; kapsamsız rol (admin/operator) için null.</summary>
     public static async Task<IReadOnlyCollection<string>?> GetEffectiveSitesAsync(
         ICustomerScopeService scopes,

@@ -14,6 +14,7 @@ namespace AdaPanel.Api.Controllers;
 // admin-only kalır (bayi atama/limit modeli kapsam dışı).
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/sites")]
 public sealed class SitesController(
     IIisSiteService iisSiteService,
@@ -428,7 +429,12 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 // M1: yeni DB'yi oluşturan müşteriye + siteye ait kaydet (kota sayımı + sahiplik).
                 if (!User.IsInRole("Administrator"))
                 {
-                    await dbOwnership.RecordAsync(databaseEngine, dbName, User.GetRequiredUserId(), site.Name, cancellationToken);
+                    await dbOwnership.RecordAsync(
+                        databaseEngine,
+                        dbName,
+                        await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken),
+                        site.Name,
+                        cancellationToken);
                 }
             }
             catch (Exception exception)
@@ -684,7 +690,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             return false; // 0 = limitsiz
         }
 
-        return await dbOwnership.CountForOwnerAsync(userId, cancellationToken) >= scope.MaxDatabases;
+        // Alt-kullanıcıda sayım abonelik (parent) kimliğiyle yapılır → kota abonelik genelinde tektir.
+        var subscriptionId = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
+        return await dbOwnership.CountForOwnerAsync(subscriptionId, cancellationToken) >= scope.MaxDatabases;
     }
 
     // M1: admin olmayan oluşturucunun yeni sitesini kendi kapsamına ekler (yoksa). OwnerId korunur (SetScopeAsync).
@@ -695,7 +703,9 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             return;
         }
 
-        var userId = User.GetRequiredUserId();
+        // Alt-kullanıcıda site PARENT'ın kapsamına yazılır (alt-kullanıcının kendi kaydına yazılırsa
+        // ResolveEffective parent'ı döndürdüğünden site görünmez kalır + kayıt tutarsızlaşır).
+        var userId = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
         var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
         if (scope.Sites.Contains(siteName, StringComparer.OrdinalIgnoreCase))
         {

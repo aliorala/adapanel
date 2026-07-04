@@ -389,6 +389,176 @@ public sealed class UserManagementService(
             cancellationToken);
     }
 
+    // --- Abonelik altı ek kullanıcılar (Plesk "additional user"): top-level müşteri kendi altındaki
+    // login'leri yönetir. Alt-kullanıcının kendi kaynağı yoktur; site/kota/cron/DB parent'tan miras. ---
+
+    /// <summary>Aktörün top-level (alt-kullanıcı olmayan) bir Customer olduğunu doğrular ve kaydını döner.</summary>
+    private async Task<PanelUser> EnsureTopLevelCustomerAsync(Guid parentUserId, CancellationToken cancellationToken)
+    {
+        var parent = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == parentUserId, cancellationToken);
+        if (parent is null || parent.Role != UserRole.Customer ||
+            await customerScopeService.GetParentSubscriptionAsync(parentUserId, cancellationToken) is not null)
+        {
+            throw new AppException("users.sub_forbidden", 403, 403);
+        }
+
+        return parent;
+    }
+
+    private async Task<SubUserDto> MapSubUserAsync(PanelUser user, CancellationToken cancellationToken)
+    {
+        var sections = await customerScopeService.GetSubUserSectionsAsync(user.Id, cancellationToken);
+        return new SubUserDto
+        {
+            Id = user.Id,
+            UserName = user.UserName,
+            Email = user.Email,
+            IsActive = user.IsActive,
+            LastLoginAtUtc = user.LastLoginAtUtc,
+            CreatedAtUtc = user.CreatedAtUtc,
+            AllowedSections = sections?.ToArray()
+        };
+    }
+
+    public async Task<IReadOnlyCollection<SubUserDto>> GetSubUsersAsync(Guid parentUserId, CancellationToken cancellationToken = default)
+    {
+        await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
+
+        var subIds = await customerScopeService.GetSubUserIdsAsync(parentUserId, cancellationToken);
+        var idSet = subIds.ToHashSet();
+        var users = await dbContext.Users
+            .Where(user => idSet.Contains(user.Id))
+            .OrderBy(user => user.UserName)
+            .ToListAsync(cancellationToken);
+
+        var result = new List<SubUserDto>(users.Count);
+        foreach (var user in users)
+        {
+            result.Add(await MapSubUserAsync(user, cancellationToken));
+        }
+
+        return result;
+    }
+
+    public async Task<SubUserDto> CreateSubUserAsync(Guid parentUserId, CreateSubUserRequest request, string? ipAddress, CancellationToken cancellationToken = default)
+    {
+        var parent = await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
+
+        var normalizedUserName = request.UserName.Trim();
+        var normalizedEmail = request.Email.Trim();
+        var userNameLookup = normalizedUserName.ToLowerInvariant();
+        var emailLookup = normalizedEmail.ToLowerInvariant();
+
+        if (await dbContext.Users.AnyAsync(user => user.UserName.ToLower() == userNameLookup, cancellationToken))
+        {
+            throw new InvalidOperationException("users.duplicate_username");
+        }
+
+        if (await dbContext.Users.AnyAsync(user => user.Email.ToLower() == emailLookup, cancellationToken))
+        {
+            throw new InvalidOperationException("users.duplicate_email");
+        }
+
+        var user = new PanelUser
+        {
+            UserName = normalizedUserName,
+            Email = normalizedEmail,
+            Role = UserRole.Customer,
+            PreferredLanguage = parent.PreferredLanguage,
+            IsActive = true,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow
+        };
+
+        user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+        dbContext.Users.Add(user);
+
+        await auditService.WriteAsync(
+            "users.sub_created",
+            "users",
+            $"Additional user '{user.UserName}' created under subscription '{parent.UserName}'.",
+            parentUserId,
+            ipAddress,
+            cancellationToken);
+
+        await customerScopeService.SetParentSubscriptionAsync(user.Id, parentUserId, cancellationToken);
+        await customerScopeService.SetSubUserSectionsAsync(user.Id, request.AllowedSections, cancellationToken);
+
+        return await MapSubUserAsync(user, cancellationToken);
+    }
+
+    public async Task<SubUserDto> UpdateSubUserAsync(Guid parentUserId, Guid subUserId, UpdateSubUserRequest request, string? ipAddress, CancellationToken cancellationToken = default)
+    {
+        var parent = await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
+        var user = await GetOwnedSubUserAsync(parentUserId, subUserId, cancellationToken);
+
+        var normalizedEmail = request.Email.Trim();
+        var emailLookup = normalizedEmail.ToLowerInvariant();
+        if (!string.Equals(user.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase) &&
+            await dbContext.Users.AnyAsync(candidate => candidate.Email.ToLower() == emailLookup && candidate.Id != subUserId, cancellationToken))
+        {
+            throw new InvalidOperationException("users.duplicate_email");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Password))
+        {
+            if (request.Password.Length < 12)
+            {
+                throw new InvalidOperationException("users.password_too_short");
+            }
+
+            user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+        }
+
+        user.Email = normalizedEmail;
+        // Askıya alma yalnız BU login'i kapatır; paylaşılan abonelik siteleri etkilenmez (kendi kaynağı yok).
+        user.IsActive = request.IsActive;
+        user.UpdatedAtUtc = DateTime.UtcNow;
+
+        await auditService.WriteAsync(
+            "users.sub_updated",
+            "users",
+            $"Additional user '{user.UserName}' updated under subscription '{parent.UserName}'. Active='{user.IsActive}'.",
+            parentUserId,
+            ipAddress,
+            cancellationToken);
+
+        await customerScopeService.SetSubUserSectionsAsync(user.Id, request.AllowedSections, cancellationToken);
+
+        return await MapSubUserAsync(user, cancellationToken);
+    }
+
+    public async Task DeleteSubUserAsync(Guid parentUserId, Guid subUserId, string? ipAddress, CancellationToken cancellationToken = default)
+    {
+        var parent = await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
+        var user = await GetOwnedSubUserAsync(parentUserId, subUserId, cancellationToken);
+
+        // Alt-kullanıcının kendi kaynağı yoktur (cron/DB abonelik kimliğine yazılır) → silmek güvenlidir.
+        dbContext.Users.Remove(user);
+        await customerScopeService.RemoveUserAsync(subUserId, cancellationToken);
+
+        await auditService.WriteAsync(
+            "users.sub_deleted",
+            "users",
+            $"Additional user '{user.UserName}' deleted from subscription '{parent.UserName}'.",
+            parentUserId,
+            ipAddress,
+            cancellationToken);
+    }
+
+    /// <summary>Hedefin GERÇEKTEN aktörün alt-kullanıcısı olduğunu doğrular (başka aboneliğinkine dokunulamaz).</summary>
+    private async Task<PanelUser> GetOwnedSubUserAsync(Guid parentUserId, Guid subUserId, CancellationToken cancellationToken)
+    {
+        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == subUserId, cancellationToken);
+        if (user is null || user.Role != UserRole.Customer ||
+            await customerScopeService.GetParentSubscriptionAsync(subUserId, cancellationToken) != parentUserId)
+        {
+            throw new InvalidOperationException("users.not_found");
+        }
+
+        return user;
+    }
+
     private string ResolveOwnerName(Guid? ownerId, IReadOnlyDictionary<Guid, string> nameById)
         => ownerId is { } id && nameById.TryGetValue(id, out var name) ? name : string.Empty;
 

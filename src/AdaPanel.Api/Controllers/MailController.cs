@@ -10,6 +10,7 @@ namespace AdaPanel.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Administrator,Customer,Reseller")]
+[RequireSubUserSection("mail")]
 [Route("api/v1/mail")]
 public sealed class MailController(
     IMailService mailService,

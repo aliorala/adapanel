@@ -199,6 +199,8 @@
 
     <CronView v-else-if="activeSection === 'tasks' && (isAdmin || isReseller || isCustomer)" />
 
+    <SubUsersView v-else-if="activeSection === 'subusers' && isCustomer && !isSubUser" />
+
     <ServerToolsView v-else-if="activeSection === 'tools' && isAdmin" />
 
     <MigrationView v-else-if="activeSection === 'migration' && isAdmin" />
@@ -714,6 +716,7 @@ import NotificationsView from "./NotificationsView.vue";
 import SecurityView from "./SecurityView.vue";
 import ServerToolsView from "./ServerToolsView.vue";
 import BackupView from "./BackupView.vue";
+import SubUsersView from "./SubUsersView.vue";
 import SoftwareView from "./SoftwareView.vue";
 import UpdateView from "./UpdateView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
@@ -890,6 +893,10 @@ const panelPreferences = reactive<PanelPreferences>({
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isCustomer = computed(() => authStore.session?.user?.role === "Customer");
 const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
+// Abonelik altı ek kullanıcı (Plesk "additional user"): menü izin listesine göre daraltılır,
+// "Kullanıcılar" bölümü gizlenir. Asıl dayatma backend'de (RequireSubUserSection).
+const isSubUser = computed(() => authStore.session?.isSubUser === true);
+const subUserAllowedSections = computed(() => authStore.session?.allowedSections ?? null);
 
 // Bayi: create formunda rol Customer'a sabit (rol seçimi gizli) + Ayarlar'da doğrudan
 // "Müşteriler" sekmesine düşsün ("general" sekmesi bayiye kapalı).
@@ -957,7 +964,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
 
   if (isCustomer.value) {
     // Müşteri KENDİ sitelerini + veritabanlarını yönetir (site/DB oluşturma kotaya tabi, kapsamı kendi sitelerine kilitli).
-    const customerSections = sections.filter((section) =>
+    let customerSections = sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
       section.id === "mail" ||
@@ -974,6 +981,30 @@ const dashboardSections = computed<SectionItem[]>(() => {
       description: t("panel.backup.subtitle"),
       glyph: "YD"
     });
+
+    if (isSubUser.value) {
+      // Alt-kullanıcı: izin listesi doluysa menü ona göre daraltılır (home/settings/exit hep açık).
+      const allowed = subUserAllowedSections.value;
+      if (allowed) {
+        const allowedSet = new Set(allowed.map((section) => section.toLowerCase()));
+        customerSections = customerSections.filter((section) =>
+          section.id === "home" || section.id === "settings" || section.id === "exit" || allowedSet.has(section.id));
+      }
+    } else {
+      // Top-level müşteri: aboneliği altındaki ek kullanıcıları yönetir (Plesk "Users" sekmesi) — Ayarlar'dan önce.
+      const settingsIndex = customerSections.findIndex((section) => section.id === "settings");
+      customerSections.splice(settingsIndex >= 0 ? settingsIndex : customerSections.length - 1, 0, {
+        id: "subusers",
+        label: t("panel.navigation.subUsers"),
+        description: t("panel.subUsers.subtitle"),
+        glyph: "EK"
+      });
+    }
+
+    if (!customerSections.some((section) => section.id === activeSection.value)) {
+      activeSection.value = "home";
+    }
+
     return customerSections;
   }
 
@@ -1195,9 +1226,14 @@ async function loadDashboardData() {
 
   if (isCustomer.value) {
     // Müşteri için site listesi (kapsam ucu yalnızca atanmış siteleri döner).
-    await Promise.allSettled([sitesStore.fetchSites()]);
-    if (activeSection.value === "home" && sitesStore.sites.length > 0) {
-      activeSection.value = "sites";
+    // Alt-kullanıcıda "sites" izni yoksa uç 403 döner (allSettled yutar) ve otomatik geçiş yapılmaz.
+    const sitesAllowed = !isSubUser.value || !subUserAllowedSections.value ||
+      subUserAllowedSections.value.some((section) => section.toLowerCase() === "sites");
+    if (sitesAllowed) {
+      await Promise.allSettled([sitesStore.fetchSites()]);
+      if (activeSection.value === "home" && sitesStore.sites.length > 0) {
+        activeSection.value = "sites";
+      }
     }
     return;
   }

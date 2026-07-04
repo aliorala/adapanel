@@ -10,6 +10,7 @@ namespace AdaPanel.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Administrator,Customer,Reseller")]
+[RequireSubUserSection("files")]
 [Route("api/v1/files")]
 public sealed class FilesController(
     IFileService fileService,

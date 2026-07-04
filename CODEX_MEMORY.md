@@ -5387,3 +5387,38 @@ Basarili:
   0.2.16 SHA (CA5EBA...) ARTIK GECERSIZ (yayinlanmamisti). GitHub'da hala 0.2.12 -> 0.2.17'yi yayinla. Testler 2+51.
 - TEST (kullanici VPS): alt-kullanici olustur + O LOGIN'le gir (parent sitelerini gormeli) + alt-kullaniciyi pasiflestir
   (parent siteleri DURMAMALI, yalniz o giris engellenmeli). Grav 1-tik kurulum. KALAN: ClamAV+wildcard SSL (VPS), tam-DR.
+
+## 2026-07-05 (190) — Musteri-tarafi ALT-KULLANICI yonetimi + IZIN MATRISI + abonelik kaynak paylasimi fixleri (0.2.18)
+- PLESK PARITE (188 v1 sinirlari kapandi): musteri artik KENDI alt-kullanicilarini yonetir + bolum-bazli izin matrisi.
+- ABONELIK PAYLASIM FIXLERI (bug-avi, kullanici sormadan): alt-kullanici kaynaklari KENDI kimligine yaziliyordu:
+  * CronController OwnerPrefix -> GetOwnerPrefixAsync: CustomerAccess.GetSubscriptionUserIdAsync (alt-kullanici -> parent).
+    Gorevler abonelik ad alaninda paylasilir; kota carpani kapandi (her alt-kullanici ayri kota alamaz).
+  * ResellerDatabasesController: GetMine/quota/Record/Delete-sahiplik abonelik kimligiyle; audit gercek aktorle.
+  * SitesController: IsDatabaseQuotaReached + dbOwnership.RecordAsync + AssignSiteToActorAsync abonelik kimligine
+    (alt-kullanicinin kendi kaydina site yazilirsa ResolveEffective parent'i dondurdugunden site GORUNMEZ kalirdi).
+- IZIN MATRISI (Plesk "additional user" permissions): ScopeEntry.SubUserSections (List<string>?, null=kisitsiz;
+  yalniz ParentUserId doluyken anlamli; parent bagi kaldirilinca temizlenir; SetScopeAsync rebuild'inde korunur).
+  CustomerPanelSections.All = sites/mail/database/files/backup/tasks (frontend menu id'leriyle birebir).
+  TAM LISTE secilirse null saklanir (yeni bolum eklenince "her seye izinli" otomatik kapsar).
+  ENFORCEMENT: RequireSubUserSectionAttribute (IAsyncAuthorizationFilter, DI'dan scope servisi, AppException
+  auth.section_forbidden 403) -> Sites("sites"), Mail("mail"), ResellerDatabases("database"), Files("files"),
+  Backup("backup"), Cron("tasks") class-level. DbToolsProxy admin-only, ScopeController serbest (dashboard metadata).
+- CRUD: SubUsersController /api/v1/sub-users [Customer] (GET/POST/PUT/DELETE). UserManagementService:
+  EnsureTopLevelCustomerAsync (alt-kullanici bu ucu KULLANAMAZ 403 users.sub_forbidden), GetOwnedSubUserAsync
+  (baska abonelikinkine dokunulamaz -> users.not_found), Create (dup kontrol, parent dili miras, SetParent+SetSections),
+  Update (email/parola-opsiyonel min12/aktiflik/izinler; askiya alma yalniz o login), Delete (kaynaklari abonelikte
+  yasadigindan guvenli; AuditLog FK'siz dogrulandi). Audit: users.sub_created/updated/deleted.
+- SESSION: CurrentSessionDto +IsSubUser +AllowedSections (AuthService'e ICustomerScopeService eklendi).
+  Login sonrasi store fetchSession cagirir (login yaniti bu alanlari tasimaz).
+- FRONTEND: SubUsersView.vue (liste+form+izin checkbox'lari, tam-liste->null normalizasyonu backend'le ayni);
+  SetupWizard musteri menusu: top-level musteride "subusers" bolumu (Ayarlar'dan once, glyph EK); alt-kullanicida
+  menu AllowedSections'a gore daraltilir (home/settings/exit hep acik) + "sites" izni yoksa otomatik sites-gecisi
+  ve fetchSites yapilmaz. api/subUsers.ts (SUB_USER_SECTIONS sabiti backend'le ayni sira).
+- i18n +31 tr+en -> parite 2553=2553. Testler 2+51 yesil, vue-tsc temiz. Eski scopes.json geriye uyumlu
+  (SubUserSections alani yok -> null = kisitsiz).
+- 0.2.18 SHA256 `7F488C99D7F90AE30B7C89D39C01A9F3ED6CAA249291A1193B2DBA6703813AD1` (artifacts\release\0.2.18\, 49.42 MiB).
+  GitHub'da en son yayinlanan 0.2.12 -> 0.2.18'i yayinla (0.2.13-0.2.17 atlanir; hepsi bu pakette).
+- TEST (kullanici VPS): (1) musteri loginiyle "Kullanicilar" bolumunden alt-kullanici olustur (izinlerden birkacini kapat),
+  (2) o loginle gir -> menu daralmis olmali + kapali bolumun API'si 403 auth.section_forbidden, (3) alt-kullanici cron
+  gorevi kurunca parent'in listesinde gorunmeli (abonelik paylasimi), (4) alt-kullanici sil -> siteler etkilenmemeli.
+- KALAN: ClamAV + wildcard SSL DNS-01 (VPS-testli, kullanici hazirken), tam-sunucu DR. Deferred: SEO, coklu-sunucu.

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Scheduler;
@@ -12,6 +13,7 @@ namespace AdaPanel.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("tasks")]
 [Route("api/v1/cron")]
 public sealed class CronController(
     ISchedulerService schedulerService,
@@ -20,9 +22,11 @@ public sealed class CronController(
 {
     private bool IsAdmin => User.IsInRole("Administrator");
 
-    // Müşteri/bayi görevleri kendi ad alanında yaşar (Plesk aboneliğe bağlar): "u<id>--<ad>".
-    // Böylece herkes yalnızca kendi görevlerini görür/siler/çalıştırır; admin hepsini görür.
-    private string OwnerPrefix => $"u{User.GetRequiredUserId():N}--";
+    // Müşteri/bayi görevleri abonelik ad alanında yaşar (Plesk aboneliğe bağlar): "u<id>--<ad>".
+    // Alt-kullanıcıda kimlik PARENT müşteriye çözülür → parent ve tüm alt-kullanıcılar aynı görev
+    // listesini ve kotayı paylaşır; admin hepsini görür.
+    private async Task<string> GetOwnerPrefixAsync(CancellationToken cancellationToken) =>
+        $"u{await CustomerAccess.GetSubscriptionUserIdAsync(customerScopeService, User, cancellationToken):N}--";
 
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<ScheduledTaskDto>>>> GetTasksAsync(CancellationToken cancellationToken)
@@ -30,7 +34,7 @@ public sealed class CronController(
         var tasks = await schedulerService.GetTasksAsync(cancellationToken);
         if (!IsAdmin)
         {
-            var prefix = OwnerPrefix;
+            var prefix = await GetOwnerPrefixAsync(cancellationToken);
             tasks = tasks
                 .Where(task => task.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 .Select(task =>
@@ -47,6 +51,7 @@ public sealed class CronController(
     [HttpPost]
     public async Task<ActionResult<ApiResponse<ScheduledTaskDto>>> CreateTaskAsync([FromBody] CreateScheduledTaskRequest request, CancellationToken cancellationToken)
     {
+        var prefix = IsAdmin ? string.Empty : await GetOwnerPrefixAsync(cancellationToken);
         if (!IsAdmin)
         {
             // Müşteri/bayi yalnızca URL görevi kurabilir (komut/PHP = sunucuda kod çalıştırmak, admin yetkisi).
@@ -58,10 +63,11 @@ public sealed class CronController(
             await EnsureCustomerUrlAllowedAsync(request.Url);
 
             // Plan kotası (MaxScheduledTasks; 0 = sınırsız): aynı adla güncelleme kotayı doldurmaz.
+            // GetScopeAsync alt-kullanıcıda parent'ın kapsamına çözülür; prefix de parent'a çözüldüğünden
+            // kota ABONELİK genelinde tektir (alt-kullanıcı sayısıyla çarpılamaz).
             var scope = await customerScopeService.GetScopeAsync(User.GetRequiredUserId(), cancellationToken);
             if (scope.MaxScheduledTasks > 0)
             {
-                var prefix = OwnerPrefix;
                 var requestedName = prefix + (request.Name ?? string.Empty).Trim();
                 var ownedCount = (await schedulerService.GetTasksAsync(cancellationToken))
                     .Count(task => task.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
@@ -72,13 +78,13 @@ public sealed class CronController(
                 }
             }
 
-            request.Name = OwnerPrefix + (request.Name ?? string.Empty).Trim();
+            request.Name = prefix + (request.Name ?? string.Empty).Trim();
         }
 
         var task = await schedulerService.CreateTaskAsync(request, cancellationToken);
-        if (!IsAdmin && task.Name.StartsWith(OwnerPrefix, StringComparison.OrdinalIgnoreCase))
+        if (!IsAdmin && task.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
-            task.Name = task.Name[OwnerPrefix.Length..];
+            task.Name = task.Name[prefix.Length..];
         }
 
         var target = string.IsNullOrWhiteSpace(request.Url) ? request.Command : request.Url;
@@ -89,7 +95,7 @@ public sealed class CronController(
     [HttpPost("{name}/run")]
     public async Task<ActionResult<ApiResponse<object>>> RunTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.RunTaskAsync(ScopeName(name), cancellationToken);
+        await schedulerService.RunTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
         await WriteAuditAsync("cron.run", $"Scheduled task '{name}' triggered manually.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.run_started"));
     }
@@ -97,7 +103,7 @@ public sealed class CronController(
     [HttpPost("{name}/enable")]
     public async Task<ActionResult<ApiResponse<object>>> EnableTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.SetTaskEnabledAsync(ScopeName(name), true, cancellationToken);
+        await schedulerService.SetTaskEnabledAsync(await ScopeNameAsync(name, cancellationToken), true, cancellationToken);
         await WriteAuditAsync("cron.enabled", $"Scheduled task '{name}' enabled.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.enabled"));
     }
@@ -105,7 +111,7 @@ public sealed class CronController(
     [HttpPost("{name}/disable")]
     public async Task<ActionResult<ApiResponse<object>>> DisableTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.SetTaskEnabledAsync(ScopeName(name), false, cancellationToken);
+        await schedulerService.SetTaskEnabledAsync(await ScopeNameAsync(name, cancellationToken), false, cancellationToken);
         await WriteAuditAsync("cron.disabled", $"Scheduled task '{name}' suspended.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.disabled"));
     }
@@ -113,12 +119,13 @@ public sealed class CronController(
     [HttpDelete("{name}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.DeleteTaskAsync(ScopeName(name), cancellationToken);
+        await schedulerService.DeleteTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
         await WriteAuditAsync("cron.deleted", $"Scheduled task '{name}' deleted.", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.deleted"));
     }
 
-    private string ScopeName(string name) => IsAdmin ? name : OwnerPrefix + name;
+    private async Task<string> ScopeNameAsync(string name, CancellationToken cancellationToken) =>
+        IsAdmin ? name : await GetOwnerPrefixAsync(cancellationToken) + name;
 
     private Task WriteAuditAsync(string action, string details, CancellationToken cancellationToken) =>
         auditService.WriteAsync(

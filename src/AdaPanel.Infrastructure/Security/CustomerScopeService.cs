@@ -64,6 +64,7 @@ public sealed class CustomerScopeService(
             var maxMailboxes = current?.MaxMailboxes ?? 0; // posta kutusu kotasını koru
             var maxScheduledTasks = current?.MaxScheduledTasks ?? 0; // planlı görev kotasını koru
             var parentUserId = current?.ParentUserId; // alt-kullanıcı bağını koru
+            var subUserSections = current?.SubUserSections; // alt-kullanıcı bölüm izinlerini koru
 
             if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && maxMailboxes <= 0 && maxScheduledTasks <= 0 && string.IsNullOrEmpty(ownerId) && string.IsNullOrEmpty(parentUserId))
             {
@@ -80,7 +81,8 @@ public sealed class CustomerScopeService(
                     MaxMailboxes = maxMailboxes,
                     MaxScheduledTasks = maxScheduledTasks,
                     OwnerId = ownerId,
-                    ParentUserId = parentUserId
+                    ParentUserId = parentUserId,
+                    SubUserSections = subUserSections
                 };
             }
 
@@ -257,6 +259,12 @@ public sealed class CustomerScopeService(
 
         /// <summary>Bu kullanıcı bir alt-kullanıcıysa, aboneliğini paylaştığı parent müşterinin kimliği ("N"); değilse null.</summary>
         public string? ParentUserId { get; set; }
+
+        /// <summary>
+        /// Alt-kullanıcının erişebildiği panel bölümleri (Plesk "additional user" izinleri).
+        /// null = kısıtsız. Yalnız ParentUserId doluyken anlamlıdır.
+        /// </summary>
+        public List<string>? SubUserSections { get; set; }
     }
 
     public async Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default)
@@ -314,6 +322,11 @@ public sealed class CustomerScopeService(
                 entry.MaxMailboxes = 0;
                 entry.MaxScheduledTasks = 0;
             }
+            else
+            {
+                // Bağ kaldırıldı → bölüm izinleri anlamını yitirir, sızıntı kalmasın.
+                entry.SubUserSections = null;
+            }
 
             if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
             {
@@ -330,6 +343,57 @@ public sealed class CustomerScopeService(
         return state.TryGetValue(userId.ToString("N"), out var entry) && Guid.TryParse(entry.ParentUserId, out var parent)
             ? parent
             : null;
+    }
+
+    public async Task<IReadOnlyCollection<Guid>> GetSubUserIdsAsync(Guid parentUserId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        var parent = parentUserId.ToString("N");
+        return state
+            .Where(pair => string.Equals(pair.Value.ParentUserId, parent, StringComparison.OrdinalIgnoreCase))
+            .Select(pair => Guid.TryParse(pair.Key, out var id) ? id : Guid.Empty)
+            .Where(id => id != Guid.Empty)
+            .ToArray();
+    }
+
+    public async Task SetSubUserSectionsAsync(Guid userId, IReadOnlyCollection<string>? sections, CancellationToken cancellationToken = default)
+    {
+        // Bilinmeyen anahtarlar elenir; TÜM bölümler seçiliyse null (kısıtsız) olarak saklanır
+        // (yeni bölüm eklendiğinde "her şeye izinli" kullanıcı otomatik kapsar).
+        List<string>? normalized = null;
+        if (sections is not null)
+        {
+            normalized = sections
+                .Select(section => (section ?? string.Empty).Trim().ToLowerInvariant())
+                .Where(CustomerPanelSections.IsKnown)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (normalized.Count >= CustomerPanelSections.All.Count)
+            {
+                normalized = null;
+            }
+        }
+
+        await fileStore.UpdateAsync(StatePath, NewState(), existing =>
+        {
+            var state = Wrap(existing);
+            var key = userId.ToString("N");
+            if (!state.TryGetValue(key, out var entry))
+            {
+                entry = new ScopeEntry();
+                state[key] = entry;
+            }
+
+            entry.SubUserSections = normalized;
+            return state;
+        }, cancellationToken);
+    }
+
+    public async Task<IReadOnlyCollection<string>?> GetSubUserSectionsAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state.TryGetValue(userId.ToString("N"), out var entry) ? entry.SubUserSections : null;
     }
 
     public async Task<IReadOnlyCollection<Guid>> GetOwnedUserIdsAsync(Guid ownerId, CancellationToken cancellationToken = default)

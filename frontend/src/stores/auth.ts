@@ -27,6 +27,8 @@ type CurrentSession = {
   user: CurrentUser | null;
   isImpersonating?: boolean;
   impersonatorName?: string | null;
+  isSubUser?: boolean;
+  allowedSections?: string[] | null;
 };
 
 type LoginResult = {
@@ -150,6 +152,12 @@ export const useAuthStore = defineStore("auth", {
             requiresSetupWizard: false,
             user: result.user
           };
+          // Oturumu tazele: alt-kullanıcı/izin bilgisi (isSubUser, allowedSections) yalnız session ucunda döner.
+          try {
+            await this.fetchSession();
+          } catch {
+            // Session tazeleme başarısızsa login yine geçerli; menü kısıtları bir sonraki yüklemede oturur.
+          }
         }
 
         return result;

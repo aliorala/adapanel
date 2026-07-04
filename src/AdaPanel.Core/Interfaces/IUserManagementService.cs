@@ -13,4 +13,15 @@ public interface IUserManagementService
     Task<UserSummaryDto> CreateUserAsync(CreateUserRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default);
 
     Task<UserSummaryDto> UpdateUserAsync(Guid userId, UpdateUserRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default);
+
+    // --- Abonelik altı ek kullanıcılar (Plesk "additional user"): TOP-LEVEL müşteri kendisi yönetir ---
+
+    /// <summary>Parent müşterinin altındaki ek kullanıcılar. Aktör top-level müşteri değilse users.sub_forbidden.</summary>
+    Task<IReadOnlyCollection<SubUserDto>> GetSubUsersAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+    Task<SubUserDto> CreateSubUserAsync(Guid parentUserId, CreateSubUserRequest request, string? ipAddress, CancellationToken cancellationToken = default);
+
+    Task<SubUserDto> UpdateSubUserAsync(Guid parentUserId, Guid subUserId, UpdateSubUserRequest request, string? ipAddress, CancellationToken cancellationToken = default);
+
+    Task DeleteSubUserAsync(Guid parentUserId, Guid subUserId, string? ipAddress, CancellationToken cancellationToken = default);
 }

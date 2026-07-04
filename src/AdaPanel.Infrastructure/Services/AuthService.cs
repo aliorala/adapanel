@@ -26,6 +26,7 @@ public sealed class AuthService(
     INotificationService notificationService,
     IPanelPreferencesService preferencesService,
     IPanelSecurityService securityService,
+    ICustomerScopeService customerScopeService,
     JsonFileStore fileStore,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<AuthService> logger) : IAuthService
@@ -163,13 +164,27 @@ public sealed class AuthService(
         }
 
         var impersonatorName = principal.FindFirstValue("impersonator_name");
+
+        // Abonelik altı ek kullanıcı bilgisi: frontend menüyü izinlere göre filtreler (asıl
+        // dayatma backend'de RequireSubUserSection ile yapılır; burası yalnız UX içindir).
+        var isSubUser = false;
+        string[]? allowedSections = null;
+        if (user.Role == UserRole.Customer &&
+            await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken) is not null)
+        {
+            isSubUser = true;
+            allowedSections = (await customerScopeService.GetSubUserSectionsAsync(user.Id, cancellationToken))?.ToArray();
+        }
+
         return new CurrentSessionDto
         {
             IsAuthenticated = true,
             RequiresSetupWizard = requiresSetupWizard,
             User = MapCurrentUser(user),
             IsImpersonating = !string.IsNullOrWhiteSpace(impersonatorName),
-            ImpersonatorName = impersonatorName
+            ImpersonatorName = impersonatorName,
+            IsSubUser = isSubUser,
+            AllowedSections = allowedSections
         };
     }
 

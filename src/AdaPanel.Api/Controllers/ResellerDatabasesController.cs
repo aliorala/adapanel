@@ -1,4 +1,5 @@
 using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Databases;
@@ -14,6 +15,7 @@ namespace AdaPanel.Api.Controllers;
 // MaxDatabases kotası dayatılır; her DB oluşturana ait kaydedilir, silince kayıt temizlenir.
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("database")]
 [Route("api/v1/my-databases")]
 public sealed class ResellerDatabasesController(
     IDatabaseService databaseService,
@@ -24,7 +26,9 @@ public sealed class ResellerDatabasesController(
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<OwnedDatabaseDto>>>> GetMineAsync(CancellationToken cancellationToken)
     {
-        var owned = await dbOwnership.GetOwnedAsync(User.GetRequiredUserId(), cancellationToken);
+        // Alt-kullanıcıda sahiplik PARENT aboneliğe çözülür → abonelikteki herkes aynı DB listesini paylaşır.
+        var owned = await dbOwnership.GetOwnedAsync(
+            await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken), cancellationToken);
         var list = owned
             .Select(item => new OwnedDatabaseDto { Engine = item.Engine, Name = item.DatabaseName })
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
@@ -38,19 +42,21 @@ public sealed class ResellerDatabasesController(
         CancellationToken cancellationToken)
     {
         var userId = User.GetRequiredUserId();
+        // Sahiplik ve kota abonelik kimliğiyle işler (alt-kullanıcı → parent); audit gerçek aktörle yazılır.
+        var subscriptionId = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
 
         // M1: kota (admin sınırsız; MaxDatabases>0 ise sahip olunan DB sayısı sınırı aşamaz).
         if (!User.IsInRole("Administrator"))
         {
             var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
-            if (scope.MaxDatabases > 0 && await dbOwnership.CountForOwnerAsync(userId, cancellationToken) >= scope.MaxDatabases)
+            if (scope.MaxDatabases > 0 && await dbOwnership.CountForOwnerAsync(subscriptionId, cancellationToken) >= scope.MaxDatabases)
             {
                 throw new AppException("database.quota_exceeded", 403, 403);
             }
         }
 
         await databaseService.CreateDatabaseAsync(request, cancellationToken);
-        await dbOwnership.RecordAsync(request.Engine, request.Name, userId, null, cancellationToken);
+        await dbOwnership.RecordAsync(request.Engine, request.Name, subscriptionId, null, cancellationToken);
         await auditService.WriteAsync(
             "database.create.completed",
             "database",
@@ -69,11 +75,11 @@ public sealed class ResellerDatabasesController(
     {
         var userId = User.GetRequiredUserId();
 
-        // KRİTİK: admin değilse YALNIZ kendi sahip olduğu DB'yi silebilir (başkasınınkini değil).
+        // KRİTİK: admin değilse YALNIZ kendi aboneliğinin sahip olduğu DB'yi silebilir (başkasınınkini değil).
         if (!User.IsInRole("Administrator"))
         {
             var owner = await dbOwnership.GetOwnerAsync(engine, name, cancellationToken);
-            if (owner != userId)
+            if (owner != await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken))
             {
                 throw new AppException("database.not_owned", 403, 403);
             }
