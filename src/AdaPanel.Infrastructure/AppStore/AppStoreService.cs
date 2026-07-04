@@ -99,6 +99,33 @@ public sealed class AppStoreService(
         },
         new()
         {
+            Id = "grav",
+            DisplayName = "Grav CMS",
+            Description = "Grav'in (veritabani GEREKTIRMEYEN, dosya-tabanli modern CMS) son surumunu site kokune kurar; kurulum biter bitmez dogrudan kullanilabilir.",
+            Runtime = "PHP 8.x",
+            Category = "CMS",
+            DownloadUrl = "https://getgrav.org/download/core/grav/latest",
+            RequiresDatabase = false,
+            DefaultRootFolder = "site koku",
+            Requirements = ["PHP 8.x"],
+            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"],
+            Featured = true
+        },
+        new()
+        {
+            Id = "drupal",
+            DisplayName = "Drupal",
+            Description = "Drupal son surum paketini site kokune indirip acar. Ardindan panelden bir veritabani olusturup taryici kurulum sihirbazini tamamlayin.",
+            Runtime = "PHP 8.x",
+            Category = "CMS",
+            DownloadUrl = "https://www.drupal.org/download-latest/zip",
+            RequiresDatabase = true,
+            DefaultRootFolder = "site koku",
+            Requirements = ["PHP 8.x", "MySQL veya MariaDB"],
+            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"]
+        },
+        new()
+        {
             Id = "plain-php",
             DisplayName = "PHP Starter",
             Description = "Basit bir index.php ile bos PHP calisma alani olusturur.",
@@ -173,6 +200,10 @@ public sealed class AppStoreService(
             case "adminer":
                 await InstallVerifiedAdminerAsync(destination, cancellationToken);
                 break;
+            case "grav":
+            case "drupal":
+                await InstallDownloadableAppAsync(template, destination, cancellationToken);
+                break;
             case "plain-php":
                 await File.WriteAllTextAsync(Path.Combine(destination, "index.php"), "<?php phpinfo();", cancellationToken);
                 break;
@@ -215,6 +246,24 @@ public sealed class AppStoreService(
     {
         "mysqli", "pdo_mysql", "mbstring", "gd", "curl", "exif", "intl", "zip", "openssl", "fileinfo"
     };
+
+    // Genel indirilebilir PHP uygulaması (Grav, Drupal ...): resmi zip'i geçici alana indir+aç, tek üst
+    // klasörü düzleştir, site köküne kopyala. WordPress ile aynı kanıtlanmış akış (workspace→flatten→copy).
+    private async Task InstallDownloadableAppAsync(AppTemplateDto template, string destination, CancellationToken cancellationToken)
+    {
+        var workspace = Path.Combine(dataRoot, "temp", "app-installs", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await DownloadAndExtractZipAsync(template.DownloadUrl, string.Empty, workspace, cancellationToken);
+            FlattenSingleTopDirectory(workspace);
+            CopyDirectory(workspace, destination);
+        }
+        finally
+        {
+            TryDeleteDirectory(workspace);
+        }
+    }
 
     private async Task<(string Url, string User, string Password)?> InstallWordPressAsync(InstallAppTemplateRequest request, string destination, CancellationToken cancellationToken)
     {
@@ -1484,7 +1533,10 @@ public sealed class AppStoreService(
             await using (var stream = File.OpenRead(tempFile))
             {
                 var actualSha1 = Convert.ToHexString(await SHA1.HashDataAsync(stream, cancellationToken));
-                if (!string.Equals(actualSha1, expectedSha1, StringComparison.OrdinalIgnoreCase))
+                // Sabit sürüm için SHA1 doğrulanır; "latest" sürükleyen resmi kaynaklarda (sürüm değiştikçe hash
+                // değişir) sha boş bırakılır → yalnız HTTPS/resmi kaynağa güvenilir (components.json'daki boş-sha
+                // bileşen kurulumlarıyla aynı davranış).
+                if (!string.IsNullOrWhiteSpace(expectedSha1) && !string.Equals(actualSha1, expectedSha1, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new AppException("store.checksum_mismatch", 400, 400);
                 }

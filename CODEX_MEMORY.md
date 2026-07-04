@@ -5321,3 +5321,24 @@ Basarili:
 - KALAN PLESK PARITE SIRASI: (Batch2, yerel) Ruby runtime + 1-tik app katalog (Joomla/Drupal/prestashop templateleri);
   (Batch3, VPS-testli) ClamAV antivirus + wildcard SSL DNS-01; (Batch4) abonelik-alti kullanicilar; (Batch5) tam-sunucu DR;
   (deferred) SEO toolkit, coklu-sunucu (enterprise). VPS-testli olanlar kullanici test edebilecekken yapilacak.
+
+## 2026-07-04 (187) — Batch 2: 1-tik app katalog (Grav + Drupal) + 0.2.15 KONSOLIDE surum
+- BATCH 2 KARARI: Ruby runtime'i DUSURDUM — Plesk-on-Windows'ta Ruby fiilen yok + Rails/native-gem Windows'ta
+  finicky + runtime yerel test edilemez ("pleskte olmayani yapma" + test-edilemez-riski). Onun yerine AdaPanel'in
+  GUCLU oldugu alan: PHP CMS 1-tik katalog.
+- APP STORE KATALOG: AppStoreService.Templates dizisine Grav (DB'siz, dosya-tabanli, ANINDA hazir) + Drupal
+  (DB'li, dosyalar hazir + kullanici taryici sihirbazini tamamlar) eklendi. Resmi HTTPS "latest" URL'leri
+  (getgrav.org/download/core/grav/latest, drupal.org/download-latest/zip — ikisi de latest zip'e 302). InstallAsync
+  switch'e grav/drupal -> InstallDownloadableAppAsync (WordPress'le AYNI kanitlanmis akis: geçici workspace'e
+  DownloadAndExtractZipAsync + FlattenSingleTopDirectory + CopyDirectory + TryDeleteDirectory). DefaultRootFolder
+  sadece etiket (dosyalar ResolveDestinationAsync -> site docroot'una gider). EnsurePhpEntry switch sonrasi calisir.
+- GUVENLIK KARARI: DownloadAndExtractZipAsync artik expectedSha1 BOSSA checksum'i ATLAR (yalniz HTTPS/resmi kaynaga
+  guven). Bu YENI bir posture DEGIL — components.json'da zaten bos-sha256 bileşenler ayni sekilde kuruluyor. Sabit
+  surumde sha verilirse yine dogrulanir. (SSRF/audit oturumundan sonra bunu bilinçli ve tutarli tuttum.)
+- TEST NOTU: indirme/açma VPS'te dogrulanmali (buradan buyuk zip indirilemedi); KOD yolu WordPress'le birebir ayni,
+  derleme yesil. Grav en dusuk riskli (DB yok, tek adim). Drupal legacy-zip layout -> index.php flatten sonrasi kokte.
+- 0.2.15 = KONSOLIDE: 0.2.13 (cron audit+SSRF) + 0.2.14 (Advisor) + Batch2 (Grav/Drupal) TEK PAKETTE. Kullanici
+  0.2.12'den sonra HICBIRINI yayinlamamis (GitHub'da en son 0.2.12) -> ara surumleri atla, 0.2.15'i yayinla.
+  SHA256 `3ED00206D48ADFDB39DA7F32843E2028EFA835CCEA3DDD9A109F5970070A4AE6`. Testler 2+51.
+- KALAN PLESK PARITE: (Batch3 VPS-testli) ClamAV antivirus + wildcard SSL DNS-01; (Batch4) abonelik-alti kullanicilar;
+  (Batch5) tam-sunucu DR (IIS rebuild). Deferred: SEO toolkit, coklu-sunucu. Ruby DUSURULDU (Windows-Plesk'te yok).
