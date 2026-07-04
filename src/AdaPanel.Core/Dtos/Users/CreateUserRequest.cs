@@ -46,6 +46,9 @@ public sealed class CreateUserRequest
     /// <summary>Customer için en fazla planlı görev kotası (panel MaxScheduledTasks; 0 = sınırsız).</summary>
     public int MaxScheduledTasks { get; init; }
 
+    /// <summary>Ayarlıysa: kullanıcı, bu parent müşterinin aboneliğine "ek kullanıcı" olur (parent'ın site/kotalarını miras alır; kendi kaynağı olmaz).</summary>
+    public Guid? ParentUserId { get; init; }
+
     /// <summary>true ise kullanıcıya giriş bilgilerini içeren hoş geldin e-postası gönderilir.</summary>
     public bool SendWelcomeEmail { get; init; }
 }

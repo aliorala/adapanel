@@ -36,6 +36,12 @@ public sealed class UserSummaryDto
     /// <summary>Customer için en fazla planlı görev kotası (panel MaxScheduledTasks).</summary>
     public int MaxScheduledTasks { get; init; }
 
+    /// <summary>Kullanıcı bir alt-kullanıcıysa parent müşterinin kimliği; değilse null.</summary>
+    public Guid? ParentUserId { get; init; }
+
+    /// <summary>Alt-kullanıcının parent müşterisinin kullanıcı adı (gösterim için).</summary>
+    public string ParentName { get; init; } = string.Empty;
+
     /// <summary>Customer'ın atanan sitelerinin güncel disk kullanımı (MB).</summary>
     public long DiskUsageMb { get; init; }
 

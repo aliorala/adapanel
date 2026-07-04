@@ -48,4 +48,15 @@ public interface ICustomerScopeService
 
     /// <summary>Verilen siteyi atanmış olarak içeren ilk müşteri (kota sahibi) kimliği; yoksa null.</summary>
     Task<Guid?> GetSiteOwnerUserIdAsync(string siteName, CancellationToken cancellationToken = default);
+
+    // --- Abonelik altı ek kullanıcı (Plesk "additional user") ---
+
+    /// <summary>
+    /// Bir kullanıcıyı başka bir müşterinin (parent) aboneliğine "ek kullanıcı" olarak bağlar; o andan itibaren
+    /// parent'ın sitelerini/kotalarını MIRAS alır (kendi kaynağı olmaz). parentUserId null ise bağ kaldırılır.
+    /// </summary>
+    Task SetParentSubscriptionAsync(Guid userId, Guid? parentUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Kullanıcı bir alt-kullanıcıysa bağlı olduğu parent müşteri kimliği; değilse null.</summary>
+    Task<Guid?> GetParentSubscriptionAsync(Guid userId, CancellationToken cancellationToken = default);
 }

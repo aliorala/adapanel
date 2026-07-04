@@ -48,7 +48,9 @@ public sealed class UserManagementService(
                 var usageMb = await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken);
                 var ownerId = await customerScopeService.GetOwnerAsync(user.Id, cancellationToken);
                 var dbCount = await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken);
-                summaries.Add(MapUser(user, scope, usageMb, ownerId, ResolveOwnerName(ownerId, nameById), dbCount));
+                var parentId = await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken);
+                summaries.Add(MapUser(user, scope, usageMb, ownerId, ResolveOwnerName(ownerId, nameById), dbCount,
+                    parentId, ResolveOwnerName(parentId, nameById)));
             }
             else
             {
@@ -83,6 +85,25 @@ public sealed class UserManagementService(
         var role = actorIsReseller ? UserRole.Customer : Enum.Parse<UserRole>(request.Role, ignoreCase: true);
         var ownerId = actorIsReseller ? actorUserId : request.OwnerId;
 
+        // Abonelik altı ek kullanıcı (Plesk "additional user"): yalnız Admin, mevcut TOP-LEVEL bir müşteriyi
+        // parent seçerek oluşturur. Parent bir müşteri olmalı ve KENDISI alt-kullanıcı OLMAMALI (iç içe yok).
+        Guid? parentUserId = null;
+        if (!actorIsReseller && role == UserRole.Customer && request.ParentUserId is { } requestedParent)
+        {
+            var parent = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == requestedParent, cancellationToken);
+            if (parent is null || parent.Role != UserRole.Customer)
+            {
+                throw new InvalidOperationException("users.invalid_parent");
+            }
+
+            if (await customerScopeService.GetParentSubscriptionAsync(requestedParent, cancellationToken) is not null)
+            {
+                throw new InvalidOperationException("users.parent_is_subuser");
+            }
+
+            parentUserId = requestedParent;
+        }
+
         var user = new PanelUser
         {
             UserName = normalizedUserName,
@@ -105,10 +126,20 @@ public sealed class UserManagementService(
             ipAddress,
             cancellationToken);
 
-        var scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
-        if (role == UserRole.Customer)
+        CustomerScope scope;
+        if (parentUserId is { } resolvedParent)
         {
-            await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
+            // Alt-kullanıcı: kendi kaynağı yok; parent'ın aboneliğini (site/kotalar) miras alır.
+            await customerScopeService.SetParentSubscriptionAsync(user.Id, resolvedParent, cancellationToken);
+            scope = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
+        }
+        else
+        {
+            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
+            if (role == UserRole.Customer)
+            {
+                await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
+            }
         }
 
         if (request.SendWelcomeEmail)
@@ -116,7 +147,8 @@ public sealed class UserManagementService(
             await TrySendWelcomeEmailAsync(user, request.Password, cancellationToken);
         }
 
-        return MapUser(user, scope, 0, ownerId, await ResolveOwnerNameAsync(ownerId, cancellationToken));
+        return MapUser(user, scope, 0, ownerId, await ResolveOwnerNameAsync(ownerId, cancellationToken), 0,
+            parentUserId, await ResolveOwnerNameAsync(parentUserId, cancellationToken));
     }
 
     /// <summary>
@@ -262,7 +294,11 @@ public sealed class UserManagementService(
             ? await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken)
             : 0;
         var resolvedOwner = user.Role == UserRole.Customer ? ownerId : null;
-        return MapUser(user, scope, usageMb, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken), dbCount);
+        var parentId = user.Role == UserRole.Customer
+            ? await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken)
+            : null;
+        return MapUser(user, scope, usageMb, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken), dbCount,
+            parentId, await ResolveOwnerNameAsync(parentId, cancellationToken));
     }
 
     /// <summary>Customer rolünde kapsamı (siteler + limitler) kaydeder; diğer rollerde varsa temizler.</summary>
@@ -352,10 +388,12 @@ public sealed class UserManagementService(
         return owner?.UserName ?? string.Empty;
     }
 
-    private static UserSummaryDto MapUser(PanelUser user, CustomerScope scope, long diskUsageMb, Guid? ownerId = null, string ownerName = "", int databaseCount = 0)
+    private static UserSummaryDto MapUser(PanelUser user, CustomerScope scope, long diskUsageMb, Guid? ownerId = null, string ownerName = "", int databaseCount = 0, Guid? parentId = null, string parentName = "")
     {
         return new UserSummaryDto
         {
+            ParentUserId = parentId,
+            ParentName = parentName,
             DatabaseCount = databaseCount,
             Id = user.Id,
             UserName = user.UserName,

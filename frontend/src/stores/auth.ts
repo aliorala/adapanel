@@ -64,6 +64,8 @@ export type ManagedUser = {
   maxDatabases: number;
   maxMailboxes: number;
   maxScheduledTasks: number;
+  parentUserId: string | null;
+  parentName: string;
   diskUsageMb: number;
   databaseCount: number;
   ownerId: string | null;
@@ -101,6 +103,7 @@ type CreateUserPayload = {
   maxDatabases: number;
   maxMailboxes: number;
   maxScheduledTasks: number;
+  parentUserId?: string | null;
   sendWelcomeEmail: boolean;
 };
 

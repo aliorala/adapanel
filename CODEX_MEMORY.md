@@ -5342,3 +5342,30 @@ Basarili:
   SHA256 `3ED00206D48ADFDB39DA7F32843E2028EFA835CCEA3DDD9A109F5970070A4AE6`. Testler 2+51.
 - KALAN PLESK PARITE: (Batch3 VPS-testli) ClamAV antivirus + wildcard SSL DNS-01; (Batch4) abonelik-alti kullanicilar;
   (Batch5) tam-sunucu DR (IIS rebuild). Deferred: SEO toolkit, coklu-sunucu. Ruby DUSURULDU (Windows-Plesk'te yok).
+
+## 2026-07-04 (188) — Batch 4: abonelik altı EK KULLANICI (Plesk "additional user") + bug-avi (0.2.16)
+- BUG-AVI (kullanici istedi): bu oturumun yeni kodu (cron/kota/advisor/katalog) TARANDI -> CODE temiz. Katalog
+  FlattenSingleTopDirectory Grav/Drupal tek-dizin acilimini dogru isler (WordPress'le ayni). Advisor DI dongusu yok.
+  Cron kota reseller-kenar durumu makul (reseller scope'suz=sinirsiz). TEK not: Grav "latest" URL'i VPS'te dogrulanmali.
+- ALT-KULLANICI TASARIMI (guvenli, merkezi, DB-migration'SIZ): Plesk'te musteri kendi altinda ek login acar. AdaPanel'de
+  parent bagini config'te tuttum (customer-scopes.json ScopeEntry.ParentUserId) — OwnerId gibi, DB semasi degismez.
+  KRITIK IÇGORU: tum authz GetAssignedSitesAsync/GetScopeAsync'ten akiyor (CustomerAccess). Bu IKI fonksiyonu
+  ResolveEffective ile parent'i takip edecek sekilde degistirince (TEK sicrama, dongu yok) alt-kullanici parent'in
+  site/mail/dosya/DB/kota'sina OTOMATIK erisir. GetAllowedMailDomains/GetDiskUsage zaten GetAssignedSites kullaniyor -> miras.
+- BACKEND: ICustomerScopeService +SetParentSubscriptionAsync/GetParentSubscriptionAsync. ScopeEntry+ParentUserId,
+  3 bos-kayit-temizlik kosuluna "&& ParentUserId is null" (alt-kullanici kaydi silinmesin). CreateUserRequest+ParentUserId,
+  UserSummaryDto+ParentUserId/ParentName. UserManagementService.CreateUserAsync: yalniz ADMIN, parent=mevcut TOP-LEVEL
+  musteri secerek olusturur (parent musteri olmali + KENDISI alt-kullanici OLMAMALI=ic ice yok; users.invalid_parent/
+  parent_is_subuser). Alt-kullanici ApplyScope ATLANIR, SetParentSubscription cagrilir -> kendi kaynagi yok. Update/list
+  MapUser'a parent bilgisi. (Compile hatasi: `parent` isim cakismasi -> resolvedParent'a cevrildi.)
+- FRONTEND: create formunda "Ana abonelik" secici (parentCandidates=alt-olmayan musteriler); secilince owner/site/plan/
+  kota alanlari GIZLI (miras). Liste satirinda "Ek kullanici: <parent>". auth.ts tipleri + payload parentUserId||null.
+  i18n +6 (tr+en) -> parite 2521=2521.
+- DIKKAT (TEST): backend derlendi + typecheck gecti AMA alt-kullanici LOGIN akisi yerel test EDILEMEDI. Kullanici
+  VPS'te: admin bir musteri altinda ek kullanici olustursun -> o kullaniciyla giris yapip parent'in sitelerini gordugunu
+  DOGRULASIN. Tasarim merkezi (2 fonksiyon) oldugundan risk dusuk ama login testi sart.
+- v1 SINIRI: alt-kullaniciyi ADMIN olusturur (Plesk'te musteri kendi olusturur) + tam-erisim (granuler izin matrisi yok).
+  Sonraki: musteri-tarafi olusturma + izin flag'leri.
+- 0.2.16 = KONSOLIDE (0.2.13 audit/SSRF + 0.2.14 Advisor + Grav/Drupal + alt-kullanici). GitHub'da hala 0.2.12 ->
+  0.2.16'yi yayinla (0.2.13-0.2.15'i atla). SHA256 `CA5EBA1089A7B9C335EA6BF3DC08DED54478326CD906193570CFCC7C1C85E815`.
+- KALAN: (VPS-testli) ClamAV antivirus + wildcard SSL DNS-01; (Batch5) tam-sunucu DR. Deferred: SEO, coklu-sunucu, Ruby(dusuruldu).

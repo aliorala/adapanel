@@ -502,7 +502,15 @@
               <option value="Customer">{{ t("panel.role.customer") }}</option>
             </select>
           </label>
-          <label v-if="isAdmin && createUserForm.role === 'Customer' && resellers.length > 0" class="stacked-field">
+          <label v-if="isAdmin && createUserForm.role === 'Customer' && parentCandidates.length > 0" class="stacked-field">
+            <span class="field-label">{{ t("panel.users.parentSubscription") }}</span>
+            <select v-model="createUserForm.parentUserId">
+              <option value="">{{ t("panel.users.parentSubscriptionNone") }}</option>
+              <option v-for="candidate in parentCandidates" :key="candidate.id" :value="candidate.id">{{ candidate.userName }}</option>
+            </select>
+            <small class="field-hint">{{ t("panel.users.parentSubscriptionHint") }}</small>
+          </label>
+          <label v-if="isAdmin && createUserForm.role === 'Customer' && !createUserForm.parentUserId && resellers.length > 0" class="stacked-field">
             <span class="field-label">{{ t("panel.users.owner") }}</span>
             <select v-model="createUserForm.ownerId">
               <option value="">{{ t("panel.users.ownerNone") }}</option>
@@ -510,7 +518,7 @@
             </select>
             <small class="field-hint">{{ t("panel.users.ownerHint") }}</small>
           </label>
-          <div v-if="createUserForm.role === 'Customer'" class="stacked-field customer-sites">
+          <div v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field customer-sites">
             <span class="field-label">{{ t("panel.users.assignedSites") }}</span>
             <label v-for="site in sitesStore.sites" :key="site.name" class="checkbox">
               <input v-model="createUserForm.assignedSites" type="checkbox" :value="site.name" />
@@ -518,34 +526,34 @@
             </label>
             <small v-if="sitesStore.sites.length === 0" class="field-hint">{{ t("panel.users.noSitesToAssign") }}</small>
           </div>
-          <label v-if="createUserForm.role === 'Customer' && servicePlans.length > 0" class="stacked-field">
+          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId && servicePlans.length > 0" class="stacked-field">
             <span class="field-label">{{ t("panel.plans.select") }}</span>
             <select v-model="createPlanId" @change="applyPlanToCreate">
               <option value="">{{ t("panel.plans.custom") }}</option>
               <option v-for="plan in servicePlans" :key="plan.id" :value="plan.id">{{ plan.name }}</option>
             </select>
           </label>
-          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxSites") }}</span>
             <input v-model.number="createUserForm.maxSites" type="number" min="0" />
           </label>
-          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
             <input v-model.number="createUserForm.maxDiskMb" type="number" min="0" />
           </label>
-          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
             <input v-model.number="createUserForm.maxDatabases" type="number" min="0" />
           </label>
-          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
             <input v-model.number="createUserForm.maxMailboxes" type="number" min="0" />
           </label>
-          <label v-if="createUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
             <input v-model.number="createUserForm.maxScheduledTasks" type="number" min="0" />
           </label>
-          <p v-if="createUserForm.role === 'Customer'" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
+          <p v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.form.language") }}</span>
             <select v-model="createUserForm.preferredLanguage">
@@ -579,6 +587,7 @@
                 · {{ user.diskUsageMb }} / {{ user.maxDiskMb > 0 ? user.maxDiskMb : "∞" }} MB
                 · {{ user.databaseCount }} / {{ user.maxDatabases > 0 ? user.maxDatabases : "∞" }} {{ t("panel.users.databasesShort") }}
                 <template v-if="user.ownerName"> · {{ t("panel.users.owner") }}: {{ user.ownerName }}</template>
+                <template v-if="user.parentName"> · {{ t("panel.users.subUserOf") }}: {{ user.parentName }}</template>
               </small>
             </div>
             <span>{{ user.role }}</span>
@@ -791,6 +800,7 @@ const createUserForm = reactive({
   maxDatabases: 0,
   maxMailboxes: 0,
   maxScheduledTasks: 0,
+  parentUserId: "",
   sendWelcomeEmail: false,
   preferredLanguage: "tr"
 });
@@ -811,6 +821,9 @@ const selectedUserForm = reactive({
 
 // Müşteriye sahip atamak için bayi (Reseller) kullanıcı listesi.
 const resellers = computed(() => authStore.users.filter((user) => user.role === "Reseller"));
+
+// Alt-kullanıcı için "ana abonelik" adayları: kendisi alt-kullanıcı OLMAYAN (bağımsız) müşteriler.
+const parentCandidates = computed(() => authStore.users.filter((user) => user.role === "Customer" && !user.parentUserId));
 
 const securityForm = reactive({
   secureEntryPath: "",
@@ -1409,7 +1422,7 @@ async function saveSecuritySettings() {
 
 async function createUser() {
   try {
-    await authStore.createUser({ ...createUserForm, ownerId: createUserForm.ownerId || null });
+    await authStore.createUser({ ...createUserForm, ownerId: createUserForm.ownerId || null, parentUserId: createUserForm.parentUserId || null });
     createUserForm.userName = "";
     createUserForm.email = "";
     createUserForm.password = "";
@@ -1422,6 +1435,7 @@ async function createUser() {
     createUserForm.maxDatabases = 0;
     createUserForm.maxMailboxes = 0;
     createUserForm.maxScheduledTasks = 0;
+    createUserForm.parentUserId = "";
     createUserForm.sendWelcomeEmail = false;
     createUserForm.preferredLanguage = "tr";
     showUserCreateForm.value = false;

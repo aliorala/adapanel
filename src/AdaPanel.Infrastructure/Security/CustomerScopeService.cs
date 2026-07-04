@@ -16,15 +16,33 @@ public sealed class CustomerScopeService(
     public async Task<IReadOnlyCollection<string>> GetAssignedSitesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var state = await LoadAsync(cancellationToken);
-        return state.TryGetValue(userId.ToString("N"), out var entry) ? entry.Sites : [];
+        return ResolveEffective(state, userId)?.Sites ?? [];
     }
 
     public async Task<CustomerScope> GetScopeAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var state = await LoadAsync(cancellationToken);
-        return state.TryGetValue(userId.ToString("N"), out var entry)
-            ? new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb, entry.MaxDatabases, entry.MaxMailboxes, entry.MaxScheduledTasks)
-            : new CustomerScope([], 0, 0, 0, 0, 0);
+        var entry = ResolveEffective(state, userId);
+        return entry is null
+            ? new CustomerScope([], 0, 0, 0, 0, 0)
+            : new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb, entry.MaxDatabases, entry.MaxMailboxes, entry.MaxScheduledTasks);
+    }
+
+    // Alt-kullanıcı (ParentUserId set) parent'ın kaydını miras alır. TEK sıçrama: parent'ın kendisi
+    // alt-kullanıcı OLAMAZ (oluşturmada engellenir) → döngü/sonsuz zincir yok.
+    private static ScopeEntry? ResolveEffective(Dictionary<string, ScopeEntry> state, Guid userId)
+    {
+        if (!state.TryGetValue(userId.ToString("N"), out var entry))
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(entry.ParentUserId) && state.TryGetValue(entry.ParentUserId, out var parent))
+        {
+            return parent;
+        }
+
+        return entry;
     }
 
     public async Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default)
@@ -45,8 +63,9 @@ public sealed class CustomerScopeService(
             var maxDatabases = current?.MaxDatabases ?? 0; // DB kotasını koru (ayrı setter'la set edilir)
             var maxMailboxes = current?.MaxMailboxes ?? 0; // posta kutusu kotasını koru
             var maxScheduledTasks = current?.MaxScheduledTasks ?? 0; // planlı görev kotasını koru
+            var parentUserId = current?.ParentUserId; // alt-kullanıcı bağını koru
 
-            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && maxMailboxes <= 0 && maxScheduledTasks <= 0 && string.IsNullOrEmpty(ownerId))
+            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && maxMailboxes <= 0 && maxScheduledTasks <= 0 && string.IsNullOrEmpty(ownerId) && string.IsNullOrEmpty(parentUserId))
             {
                 state.Remove(key);
             }
@@ -60,7 +79,8 @@ public sealed class CustomerScopeService(
                     MaxDatabases = maxDatabases,
                     MaxMailboxes = maxMailboxes,
                     MaxScheduledTasks = maxScheduledTasks,
-                    OwnerId = ownerId
+                    OwnerId = ownerId,
+                    ParentUserId = parentUserId
                 };
             }
 
@@ -84,7 +104,7 @@ public sealed class CustomerScopeService(
             entry.MaxMailboxes = Math.Max(0, maxMailboxes);
             entry.MaxScheduledTasks = Math.Max(0, maxScheduledTasks);
 
-            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
+            if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
             {
                 state.Remove(key);
             }
@@ -234,6 +254,9 @@ public sealed class CustomerScopeService(
 
         /// <summary>Bu müşteriyi yöneten bayinin kimliği ("N" formatı); admin oluşturduysa null.</summary>
         public string? OwnerId { get; set; }
+
+        /// <summary>Bu kullanıcı bir alt-kullanıcıysa, aboneliğini paylaştığı parent müşterinin kimliği ("N"); değilse null.</summary>
+        public string? ParentUserId { get; set; }
     }
 
     public async Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default)
@@ -251,7 +274,7 @@ public sealed class CustomerScopeService(
             entry.OwnerId = ownerId?.ToString("N");
 
             // Sahiplik kaldırıldı ve başka veri yoksa kaydı temizle (yetim kalmasın).
-            if (entry.OwnerId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
+            if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
             {
                 state.Remove(key);
             }
@@ -265,6 +288,47 @@ public sealed class CustomerScopeService(
         var state = await LoadAsync(cancellationToken);
         return state.TryGetValue(userId.ToString("N"), out var entry) && Guid.TryParse(entry.OwnerId, out var owner)
             ? owner
+            : null;
+    }
+
+    public async Task SetParentSubscriptionAsync(Guid userId, Guid? parentUserId, CancellationToken cancellationToken = default)
+    {
+        await fileStore.UpdateAsync(StatePath, NewState(), existing =>
+        {
+            var state = Wrap(existing);
+            var key = userId.ToString("N");
+            if (!state.TryGetValue(key, out var entry))
+            {
+                entry = new ScopeEntry();
+                state[key] = entry;
+            }
+
+            // Alt-kullanıcının KENDI kaynağı olmaz (parent'ınkini miras alır) → varsa kendi site/limitlerini temizle.
+            entry.ParentUserId = parentUserId?.ToString("N");
+            if (entry.ParentUserId is not null)
+            {
+                entry.Sites = [];
+                entry.MaxSites = 0;
+                entry.MaxDiskMb = 0;
+                entry.MaxDatabases = 0;
+                entry.MaxMailboxes = 0;
+                entry.MaxScheduledTasks = 0;
+            }
+
+            if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
+            {
+                state.Remove(key);
+            }
+
+            return state;
+        }, cancellationToken);
+    }
+
+    public async Task<Guid?> GetParentSubscriptionAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state.TryGetValue(userId.ToString("N"), out var entry) && Guid.TryParse(entry.ParentUserId, out var parent)
+            ? parent
             : null;
     }
 
