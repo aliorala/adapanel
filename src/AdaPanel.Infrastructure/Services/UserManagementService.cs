@@ -278,14 +278,29 @@ public sealed class UserManagementService(
             ipAddress,
             cancellationToken);
 
-        var scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
-        if (user.Role == UserRole.Customer)
+        // Alt-kullanıcı ise: kapsamı parent'tan MIRAS; düzenlemede kendi site/kota YAZILMAZ (parent bağı korunur).
+        var existingParent = user.Role == UserRole.Customer
+            ? await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken)
+            : null;
+
+        CustomerScope scope;
+        if (existingParent is not null)
         {
-            await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
+            scope = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
+        }
+        else
+        {
+            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
+            if (user.Role == UserRole.Customer)
+            {
+                await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
+            }
         }
 
         // Aktiflik değiştiyse (askıya al / sürdür) müşterinin atanan sitelerini durdur/başlat.
-        await ApplySuspensionStateAsync(user, scope, wasActive, actorUserId, ipAddress, cancellationToken);
+        // ALT-KULLANICI: PAYLAŞILAN siteleri DURDURMA (yalnız o login IsActive=false ile engellenir) → boş kapsam geç.
+        var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
+        await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
 
         var usageMb = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)

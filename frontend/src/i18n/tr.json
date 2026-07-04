@@ -1305,6 +1305,7 @@
   "panel.users.parentSubscriptionNone": "Yok (bağımsız müşteri)",
   "panel.users.parentSubscriptionHint": "Seçilirse bu kullanıcı, seçilen müşterinin aboneliğine EK KULLANICI olur; onun sitelerini ve kotalarını paylaşır (kendi kaynağı olmaz).",
   "panel.users.subUserOf": "Ek kullanıcı",
+  "panel.users.subUserScopeNote": "Bu bir ek kullanıcıdır; site ve kotalarını ana aboneliğinden miras alır (burada ayrıca ayarlanmaz).",
   "panel.users.sitesShort": "site",
   "panel.users.databasesShort": "DB",
   "panel.users.maxDatabasesHint": "0 = sınırsız · tüm motorların TOPLAMI (MySQL, MariaDB, PostgreSQL, MSSQL)",

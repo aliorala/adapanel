@@ -5369,3 +5369,21 @@ Basarili:
 - 0.2.16 = KONSOLIDE (0.2.13 audit/SSRF + 0.2.14 Advisor + Grav/Drupal + alt-kullanici). GitHub'da hala 0.2.12 ->
   0.2.16'yi yayinla (0.2.13-0.2.15'i atla). SHA256 `CA5EBA1089A7B9C335EA6BF3DC08DED54478326CD906193570CFCC7C1C85E815`.
 - KALAN: (VPS-testli) ClamAV antivirus + wildcard SSL DNS-01; (Batch5) tam-sunucu DR. Deferred: SEO, coklu-sunucu, Ruby(dusuruldu).
+
+## 2026-07-04 (189) — Bug-avi: alt-kullanici SUSPEND hatasi duzeltildi + edit formu tamamlandi (0.2.17)
+- KAPSAMLI KONTROL (kullanici "hata eksik kontrol et"): 299 backend anahtari (AppException + InvalidOperationException
+  i18n-benzeri + Notes) -> i18n'de EKSIK 0. Kullanici DELETE ucu YOK (UsersController) -> parent-silme senaryosu yok;
+  ResolveEffective zaten fail-closed (parent kaydi yoksa sub-user BOS kapsam alir, her seyi degil).
+- GERCEK BUG (bu kontrolde bulundu): UpdateUserAsync alt-kullaniciyi pasiflestirince ApplySuspensionStateAsync,
+  MIRAS alinan PARENT kapsamindaki siteleri durduruyordu -> tek ek-login'i kapatmak TUM aboneligi (parent + diger
+  alt-kullanicilar) durdururdu. FIX: (1) alt-kullanici duzenlemede kendi site/kota YAZILMAZ (existingParent varsa
+  ApplyScope/SetOwner atlanir, scope=GetScope=parent'tan miras, DTO icin); (2) suspensionScope = alt-kullanici ise
+  BOS CustomerScope -> ApplySuspensionStateAsync Sites.Count==0 ile erken doner (siteler durmaz; yalniz IsActive=false
+  ile o login engellenir = dogru davranis).
+- EDIT FORMU TAMAMLANDI (create'te gizliydi, edit'te tutarsizdi): selectedUserForm+parentUserId, selectUser doldurur,
+  edit formundaki tum Customer-kapsam alanlari (owner/site/kota) `&& !parentUserId` ile gizli + "bu bir ek kullanici,
+  kapsam miras" notu (panel.users.subUserScopeNote tr+en). Parite 2522=2522.
+- 0.2.17 = 0.2.16 + bu fix/polish. SHA256 `546F4D98951532D0F8C305C9BE9B0BA7F7FB72CD3F5C4E9ABC85DBEB117F5F47`.
+  0.2.16 SHA (CA5EBA...) ARTIK GECERSIZ (yayinlanmamisti). GitHub'da hala 0.2.12 -> 0.2.17'yi yayinla. Testler 2+51.
+- TEST (kullanici VPS): alt-kullanici olustur + O LOGIN'le gir (parent sitelerini gormeli) + alt-kullaniciyi pasiflestir
+  (parent siteleri DURMAMALI, yalniz o giris engellenmeli). Grav 1-tik kurulum. KALAN: ClamAV+wildcard SSL (VPS), tam-DR.

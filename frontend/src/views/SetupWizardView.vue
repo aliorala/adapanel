@@ -623,14 +623,15 @@
               <option value="Customer">{{ t("panel.role.customer") }}</option>
             </select>
           </label>
-          <label v-if="isAdmin && selectedUserForm.role === 'Customer' && resellers.length > 0" class="stacked-field">
+          <p v-if="selectedUserForm.parentUserId" class="quota-hint settings-wide-field">{{ t("panel.users.subUserScopeNote") }}</p>
+          <label v-if="isAdmin && selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId && resellers.length > 0" class="stacked-field">
             <span class="field-label">{{ t("panel.users.owner") }}</span>
             <select v-model="selectedUserForm.ownerId">
               <option value="">{{ t("panel.users.ownerNone") }}</option>
               <option v-for="reseller in resellers" :key="reseller.id" :value="reseller.id">{{ reseller.userName }}</option>
             </select>
           </label>
-          <div v-if="selectedUserForm.role === 'Customer'" class="stacked-field customer-sites">
+          <div v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field customer-sites">
             <span class="field-label">{{ t("panel.users.assignedSites") }}</span>
             <label v-for="site in sitesStore.sites" :key="site.name" class="checkbox">
               <input v-model="selectedUserForm.assignedSites" type="checkbox" :value="site.name" />
@@ -638,27 +639,27 @@
             </label>
             <small v-if="sitesStore.sites.length === 0" class="field-hint">{{ t("panel.users.noSitesToAssign") }}</small>
           </div>
-          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxSites") }}</span>
             <input v-model.number="selectedUserForm.maxSites" type="number" min="0" />
           </label>
-          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
             <input v-model.number="selectedUserForm.maxDiskMb" type="number" min="0" />
           </label>
-          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
             <input v-model.number="selectedUserForm.maxDatabases" type="number" min="0" />
           </label>
-          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
             <input v-model.number="selectedUserForm.maxMailboxes" type="number" min="0" />
           </label>
-          <label v-if="selectedUserForm.role === 'Customer'" class="stacked-field">
+          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
             <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
             <input v-model.number="selectedUserForm.maxScheduledTasks" type="number" min="0" />
           </label>
-          <p v-if="selectedUserForm.role === 'Customer'" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
+          <p v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.form.language") }}</span>
             <select v-model="selectedUserForm.preferredLanguage">
@@ -815,6 +816,7 @@ const selectedUserForm = reactive({
   maxDatabases: 0,
   maxMailboxes: 0,
   maxScheduledTasks: 0,
+  parentUserId: "",
   preferredLanguage: "tr",
   isActive: true
 });
@@ -1466,6 +1468,7 @@ function selectUser(user: ManagedUser) {
   selectedUserForm.maxDatabases = user.maxDatabases ?? 0;
   selectedUserForm.maxMailboxes = user.maxMailboxes ?? 0;
   selectedUserForm.maxScheduledTasks = user.maxScheduledTasks ?? 0;
+  selectedUserForm.parentUserId = user.parentUserId ?? "";
   selectedUserForm.preferredLanguage = user.preferredLanguage;
   selectedUserForm.isActive = user.isActive;
 }

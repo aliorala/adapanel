@@ -1305,6 +1305,7 @@
   "panel.users.parentSubscriptionNone": "None (standalone customer)",
   "panel.users.parentSubscriptionHint": "If set, this user becomes an ADDITIONAL USER on the selected customer's subscription, sharing its sites and quotas (no resources of its own).",
   "panel.users.subUserOf": "Sub-user of",
+  "panel.users.subUserScopeNote": "This is an additional user; it inherits sites and quotas from its parent subscription (not set separately here).",
   "panel.users.sitesShort": "sites",
   "panel.users.databasesShort": "DB",
   "panel.users.maxDatabasesHint": "0 = unlimited · combined TOTAL across all engines (MySQL, MariaDB, PostgreSQL, MSSQL)",
