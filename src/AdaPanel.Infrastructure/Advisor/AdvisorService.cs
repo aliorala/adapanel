@@ -17,6 +17,7 @@ public sealed class AdvisorService(
     IAutomationService automationService,
     IPanelSecurityService panelSecurityService,
     INotificationService notificationService,
+    IAntivirusService antivirusService,
     JsonFileStore fileStore) : IAdvisorService
 {
     private const string SslStatePath = "config/ssl.json";
@@ -115,6 +116,21 @@ public sealed class AdvisorService(
             else
             {
                 items.Add(new AdvisorItemDto { Id = "alerts-off", Severity = "info", TitleKey = "advisor.alerts.off", ActionSection = "tools" });
+            }
+        }
+        catch { }
+
+        // Antivirüs (ClamAV): kurulu değil → öneri; kurulu ama tanımlar hiç indirilmemiş → uyarı.
+        try
+        {
+            var antivirus = await antivirusService.GetStatusAsync(cancellationToken);
+            if (!antivirus.IsInstalled)
+            {
+                items.Add(new AdvisorItemDto { Id = "antivirus-missing", Severity = "info", TitleKey = "advisor.antivirus.missing", ActionSection = "security" });
+            }
+            else if (!antivirus.DatabaseReady)
+            {
+                items.Add(new AdvisorItemDto { Id = "antivirus-no-definitions", Severity = "warning", TitleKey = "advisor.antivirus.noDefinitions", ActionSection = "security" });
             }
         }
         catch { }

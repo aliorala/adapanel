@@ -108,6 +108,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDockerService, Docker.DockerService>();
         services.AddScoped<IAutomationService, Automation.AutomationService>();
         services.AddScoped<IAdvisorService, Advisor.AdvisorService>();
+        services.AddScoped<IAntivirusService, Antivirus.AntivirusService>();
         // K1 güvenlik: veri kökü hassas klasörlerini her açılışta SYSTEM/Admins'e kilitle (AutomationWorker'dan ÖNCE).
         // NOT: DataRootHardeningService artık hosted service DEĞİL — Program.cs'te DB açılmadan ÖNCE
         // statik HardenAsync ile çağrılır (açık db'ye icacls /T uygulanıp ACL'in bozulmasını önlemek için).

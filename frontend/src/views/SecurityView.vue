@@ -17,6 +17,7 @@
         <button :class="{ active: activeSection === 'site' }" @click="activeSection = 'site'">{{ t("panel.security.siteTitle") }}</button>
         <button :class="{ active: activeSection === 'firewall' }" @click="activeSection = 'firewall'">{{ t("panel.firewall.title") }}</button>
         <button :class="{ active: activeSection === 'bruteforce' }" @click="activeSection = 'bruteforce'">{{ t("panel.bruteforce.title") }}</button>
+        <button :class="{ active: activeSection === 'antivirus' }" @click="activeSection = 'antivirus'">{{ t("panel.antivirus.title") }}</button>
       </div>
       <select v-model="selectedSiteName" class="site-select">
         <option value="">{{ t("panel.php.selectSite") }}</option>
@@ -151,6 +152,97 @@
       </div>
     </template>
 
+    <template v-else-if="activeSection === 'antivirus'">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.antivirus.title") }}</h3>
+          <p class="meta">{{ t("panel.antivirus.subtitle") }}</p>
+        </div>
+        <span :class="['status-pill', avStatus?.isInstalled ? 'ok' : 'warn']">
+          {{ avStatus?.isInstalled
+            ? t("panel.antivirus.installedVersion", { version: avStatus.version })
+            : t("panel.antivirus.notInstalled") }}
+        </span>
+      </div>
+
+      <div v-if="!avStatus?.isInstalled" class="form-surface">
+        <p class="meta">{{ t("panel.antivirus.installHint") }}</p>
+        <div class="row-actions">
+          <button class="compact" :disabled="busyAction === 'av'" @click="installAv">
+            {{ busyAction === "av" ? t("panel.antivirus.installing") : t("panel.antivirus.install") }}
+          </button>
+        </div>
+      </div>
+
+      <template v-else>
+        <div class="form-surface">
+          <div class="section-head">
+            <div>
+              <h4>{{ t("panel.antivirus.defsTitle") }}</h4>
+              <p class="meta">
+                {{ avStatus.databaseReady && avStatus.databaseUpdatedAtUtc
+                  ? t("panel.antivirus.defsUpdatedAt", { date: new Date(avStatus.databaseUpdatedAtUtc).toLocaleString() })
+                  : t("panel.antivirus.defsMissing") }}
+              </p>
+            </div>
+            <button class="secondary compact" :disabled="busyAction === 'av'" @click="updateAvDefs">
+              {{ busyAction === "av" ? t("panel.antivirus.updating") : t("panel.antivirus.updateDefs") }}
+            </button>
+          </div>
+          <p v-if="!avStatus.databaseReady" class="field-hint">{{ t("panel.antivirus.defsHint") }}</p>
+        </div>
+
+        <div class="form-surface">
+          <h4>{{ t("panel.antivirus.scanTitle") }}</h4>
+          <div class="form-grid">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.php.targetSite") }}</span>
+              <select v-model="avSiteName">
+                <option value="">{{ t("panel.php.selectSite") }}</option>
+                <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
+              </select>
+            </label>
+          </div>
+          <p class="field-hint">{{ t("panel.antivirus.scanHint") }}</p>
+          <div class="row-actions">
+            <button class="compact" :disabled="busyAction === 'av' || !avSiteName || !avStatus.databaseReady" @click="runAvScan">
+              {{ busyAction === "av" ? t("panel.antivirus.scanning") : t("panel.antivirus.scan") }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="avStatus.lastScan" class="form-surface">
+          <div class="section-head">
+            <div>
+              <h4>{{ t("panel.antivirus.lastScanTitle") }}: {{ avStatus.lastScan.target }}</h4>
+              <p class="meta">
+                {{ new Date(avStatus.lastScan.startedAtUtc).toLocaleString() }} •
+                {{ t("panel.antivirus.scanSummary", {
+                  files: avStatus.lastScan.scannedFiles,
+                  seconds: avStatus.lastScan.durationSeconds
+                }) }}
+              </p>
+            </div>
+            <span :class="['status-pill', avStatus.lastScan.status === 'clean' ? 'ok' : 'warn']">
+              {{ t(`panel.antivirus.status.${avStatus.lastScan.status}`) }}
+            </span>
+          </div>
+          <p v-if="avStatus.lastScan.status === 'failed'" class="notice error">{{ avStatus.lastScan.detail }}</p>
+          <div v-else-if="avStatus.lastScan.infected.length > 0" class="data-table">
+            <div class="data-row table-head av-finding-row">
+              <span>{{ t("panel.antivirus.file") }}</span>
+              <span>{{ t("panel.antivirus.signature") }}</span>
+            </div>
+            <div v-for="finding in avStatus.lastScan.infected" :key="finding.path" class="data-row av-finding-row">
+              <span class="cell-muted av-path">{{ finding.path }}</span>
+              <strong>{{ finding.signature }}</strong>
+            </div>
+          </div>
+          <p v-else class="empty-state">{{ t("panel.antivirus.noFindings") }}</p>
+        </div>
+      </template>
+    </template>
+
     <template v-else>
       <div class="section-head">
         <div>
@@ -230,6 +322,13 @@ import {
   type BruteForceSettings,
   type SiteSecurityConfiguration
 } from "../api/security";
+import {
+  getAntivirusStatus,
+  installAntivirus,
+  scanAntivirus,
+  updateAntivirusDefinitions,
+  type AntivirusStatus
+} from "../api/antivirus";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -241,7 +340,10 @@ const notice = ref("");
 const noticeError = ref(false);
 const busyAction = ref("");
 const loading = ref(false);
-const activeSection = ref<"site" | "firewall" | "bruteforce">("site");
+const activeSection = ref<"site" | "firewall" | "bruteforce" | "antivirus">("site");
+// ClamAV antivirüs (Güvenlik > Antivirüs). Durum sekme ilk açıldığında yüklenir.
+const avStatus = ref<AntivirusStatus | null>(null);
+const avSiteName = ref("");
 const showFirewallForm = ref(false);
 const showSiteForm = ref(false);
 const aclForm = reactive({ principal: "", rights: "M" });
@@ -272,6 +374,62 @@ onMounted(async () => {
 });
 
 watch(selectedSiteName, refreshAll);
+
+watch(activeSection, async (section) => {
+  if (section === "antivirus" && avStatus.value === null) {
+    await refreshAvStatus();
+  }
+});
+
+async function refreshAvStatus() {
+  try {
+    avStatus.value = await getAntivirusStatus();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function installAv() {
+  busyAction.value = "av";
+  try {
+    avStatus.value = await installAntivirus();
+    showNotice(t("panel.antivirus.installed"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busyAction.value = "";
+  }
+}
+
+async function updateAvDefs() {
+  busyAction.value = "av";
+  try {
+    avStatus.value = await updateAntivirusDefinitions();
+    showNotice(t("panel.antivirus.defsDone"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busyAction.value = "";
+  }
+}
+
+async function runAvScan() {
+  if (!avSiteName.value) return;
+  busyAction.value = "av";
+  try {
+    const result = await scanAntivirus(avSiteName.value);
+    await refreshAvStatus();
+    showNotice(
+      result.status === "infected"
+        ? t("panel.antivirus.scanInfected", { count: result.infectedCount })
+        : t("panel.antivirus.scanClean"),
+      result.status === "infected");
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busyAction.value = "";
+  }
+}
 
 async function refreshAll() {
   loading.value = true;
@@ -424,5 +582,13 @@ function showNotice(message: string, isError: boolean) {
   .security-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.av-finding-row {
+  grid-template-columns: minmax(280px, 2fr) 1fr;
+}
+
+.av-path {
+  overflow-wrap: anywhere;
 }
 </style>

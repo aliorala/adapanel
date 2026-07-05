@@ -5452,3 +5452,25 @@ Basarili:
   YAYINLANMADIYSA atla -> GitHub'a dogrudan 0.2.19 tag'iyla bu exe'yi koy.
 - TEST (VPS): Grav/Joomla 1-tik kurulum (indirme sunucudan), yedek sil butonu, otomatik yedek karti kaydet;
   188/190 alt-kullanici testleri hala bekliyor. KALAN: ClamAV + wildcard DNS-01 (VPS), tam-sunucu DR.
+
+## 2026-07-05 (192) — Batch 3a: ClamAV ANTIVIRUS (Plesk parite) — motor LOKAL KANITLI (0.2.20)
+- KARAR: kalan uc isten (ClamAV / wildcard DNS-01 / tam-DR) ClamAV secildi cunku TEK lokal-dogrulanabilir olani:
+  resmi Windows build'i indirildi (219MB), clamscan calistirildi, OZEL .hdb imzasiyla uctan uca tarama kanitlandi:
+  * clamscan --database=<dizin> --recursive --infected <hedef> -> bulgu satiri "path: Sig.Adi.UNOFFICIAL FOUND"
+    (FoundLine regex birebir tutuyor), ozette "Scanned files: N", exit 0=temiz 1=bulgu 2+=hata. --version calisiyor.
+- BILESEN: components.json +clamav (1.5.3, GitHub Cisco-Talos zip, sha256 e998b3b9..., installDir runtimes\clamav,
+  postInstall YOK, service YOK, default false). Zip tek-ust-klasorlu ama sorun degil (exe AllDirectories aranir).
+- SERVIS: AntivirusService [SupportedOSPlatform] — InstalledComponents'ten clamav bulur (MailService deseni),
+  daemon YOK (bilincli: kalici RAM maliyeti yok, clamscan istege bagli). UpdateDefinitions: freshclam.conf'u
+  KENDI yazar (DatabaseDirectory+DatabaseMirror; bootstrapper hook'una GEREK KALMADI) + freshclam 30dk timeout
+  (ilk indirme ~250MB). Scan: site adi -> IIS koku (veya mutlak yol, admin-only), clamscan 2sa timeout,
+  exit 1 = bulgu (hata DEGIL). Son rapor config/antivirus.json. DI: AddScoped IAntivirusService.
+- API: AntivirusController [Administrator] status/install(bootstrapper'a delege)/definitions\update/scan; update+scan audit.
+- UI: Guvenlik ekranina 4. sekme "Antivirus": kurulum karti -> tanim guncelle karti (tarih/eksik uyarisi) ->
+  site sec+tara -> son tarama raporu (bulgu tablosu: dosya+imza). axios timeout'lar uzun (35dk defs / 125dk scan).
+- ADVISOR: +2 sinyal (kurulu degil=info, tanimlar yok=warning, ActionSection security). AdvisorService +IAntivirusService.
+- i18n +35 -> parite 2604=2604. Testler 2+51, vue-tsc temiz.
+- 0.2.20 SHA256 `E4B2A25CCC6544F8268403FE47716711EC6894A0577D5CAEE6003F7D6167739C` (artifacts\release\0.2.20\).
+  Onceki yayinlanmamis 0.2.19 (03803E) ATLANIR -> GitHub'a dogrudan 0.2.20 koy (188-192 arasi HER SEY icinde).
+- VPS TEST: Guvenlik>Antivirus: Kur (220MB) -> Tanimlari guncelle (250MB, dakikalar) -> site tara (EICAR dosyasiyla
+  bulgu testi yapilabilir: eicar.org test dosyasi docroot'a koy). KALAN: wildcard DNS-01, tam-sunucu DR (VPS oturumlari).
