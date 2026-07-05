@@ -90,6 +90,11 @@
           <input v-model.trim="issueForm.contactEmail" type="email" placeholder="admin@example.com" />
         </label>
       </div>
+      <label v-if="isAdmin" class="toggle-field wildcard-toggle">
+        <input v-model="issueForm.wildcard" type="checkbox" />
+        <span>{{ t("panel.ssl.wildcardOption") }}</span>
+      </label>
+      <p v-if="issueForm.wildcard" class="field-hint">{{ t("panel.ssl.wildcardHint") }}</p>
       <div class="row-actions">
         <button :disabled="!canIssue || busyAction === 'issue'" @click="issue">
           {{ busyAction === "issue" ? t("panel.ssl.busy") : t("panel.ssl.issue") }}
@@ -130,7 +135,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, setHttpsRedirect, type SslWorkspace } from "../api/ssl";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
@@ -144,7 +149,9 @@ const selectedSiteName = computed({
   get: () => sitesStore.selectedSiteName,
   set: (value: string) => sitesStore.selectSite(value)
 });
-const issueForm = reactive({ contactEmail: "", hostName: "", useStaging: false });
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+const issueForm = reactive({ contactEmail: "", hostName: "", useStaging: false, wildcard: false });
 const importForm = reactive({ hostName: "", password: "", fileName: "", base64Content: "" });
 const httpsBindingCount = computed(() => workspace.value?.certificates.filter((item) => item.isHttpsBindingPresent).length ?? 0);
 const canIssue = computed(() => Boolean(selectedSiteName.value && issueForm.hostName && issueForm.contactEmail));
@@ -199,7 +206,9 @@ async function issue() {
     activeTab.value = "current";
     showNotice(t("panel.ssl.issued"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    // Wildcard/DNS-01 hatasında gerçek neden (win-acme çıktısı) Details'te gelir — kör mesaj bırakma.
+    const details = extractApiDetails(error);
+    showNotice(details ? `${resolveApiMessage(error)} — ${details}` : resolveApiMessage(error), true);
   } finally {
     busyAction.value = "";
   }
@@ -306,5 +315,17 @@ function resolveApiMessage(error: unknown) {
 
 .site-select {
   width: min(260px, 52vw);
+}
+
+.wildcard-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-soft);
+}
+
+.wildcard-toggle input {
+  width: auto;
 }
 </style>

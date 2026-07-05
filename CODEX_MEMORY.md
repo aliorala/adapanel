@@ -5520,3 +5520,29 @@ Basarili:
   YAYINLANMAMISTI, gecersiz; bu paket ClamAV + log rotasyonu + oto-yanit DAHIL). Testler 2+53, vue-tsc temiz.
 - VPS TEST: Mail > hesap > Otomatik yanit: ac+kaydet -> dis adresten mail at -> otoyanit gelmeli; listeye/bounce'a
   yanit GITMEMELI. KALAN BUYUKLER: wildcard SSL DNS-01, tam-sunucu DR. Deferred: SEO, coklu-sunucu.
+
+## 2026-07-05 (195) — WILDCARD SSL (DNS-01) eklendi: win-acme sozlesmesi GERCEK binary ile dogrulandi (0.2.20 final-3)
+- Kalan iki "VPS isi"nden wildcard SSL azami yerel dogrulamayla yapildi:
+  * win-acme zip'i indirildi — SHA256 f4dc3b14... components.json'dakiyle BIREBIR AYNI binary. --help'ten sozlesme:
+    "--validation script --dnsscript <ps1>" (tek script, argumanlar: create|delete {Identifier} {RecordName} {Token}),
+    "--source manual --host *.d,d", "--installation iis --installationsiteid". CANLI arg-parse smoke: wacs bizim tam
+    arguman dizgimizi kabul etti ("Source generated using plugin Manual: *.ornek... and 1 alternatives").
+  * DNS-01 PS scripti (Get/Add/Remove-DnsServerResourceRecord — DnsService'in VPS'te kanitli cmdletleri):
+    en-uzun-birincil-bolge eslesmesi + '@'/goreli ad + yalniz-eslesen-token silme + anlasilir bolge-yok hatasi.
+    MANTIK LOKAL TESTLE 5/5 KANITLI (mock cmdletlerle gercek script calistirildi; DIKKAT: mock'ta $script: degil
+    $global: kullan — child script scope tuzagi; advanced-function mock'una ayrica $ErrorAction param'i YAZMA, cakisir).
+- IMPLEMENTASYON: IssueLetsEncryptRequest +Wildcard. WinAcmeSslService.IssueWildcardAsync: apex turetme ("*." ve
+  bastaki "www." atilir), e-posta zorunlu (ssl.contact_email_required), wacs yoksa ssl.winacme_missing, script
+  tools/acme-dns01.ps1'e her seferinde yazilir (upgrade propagasyonu), 10dk timeout, BASARISIZLIKTA SELF-SIGNED'A
+  DUSME YOK -> ssl.wildcard_failed + win-acme cikti kuyrugu Details'te (UI extractApiDetails ile gosterir).
+  Basarida FindBestCertificate("*.domain") (CN eslesir) + persist + redirect + ssl.json envanteri.
+  SslController: Wildcard && !admin -> ssl.wildcard_admin_only 403 (DNS bolgesine yazma = sunucu-duzeyi yetki).
+  UI: SslView Let's Encrypt sekmesinde admin-only wildcard checkbox + on-kosul hint; issue() hatada Details ekler;
+  api timeout 12dk. i18n +6 -> parite 2621=2621.
+- E2E (gercek sertifika) VPS ister: alan adinin NS'i panele isaret + bolge panelde birincil olmali. TEST ADIMI:
+  DNS ekranindan bolge yayinla -> SSL > Let's Encrypt > wildcard isaretle -> ver. Hata olursa mesajdaki Details'te
+  win-acme ciktisi var (kor hata yok).
+- 0.2.20 FINAL-3 SHA256 `3F899CDDA8B1302862ED879B828BA6FF3D579BE747D2633FB15EC8D0AAD233BE` (A84A8A dahil onceki
+  0.2.20 paketleri GECERSIZ; bu paket: alt-kullanici+izin, katalog, yedek sil/oto-yedek, ClamAV, log rotasyonu,
+  oto-yanit, wildcard SSL). Testler 2+53, vue-tsc temiz.
+- KALAN BUYUK: tam-sunucu DR (IIS rebuild — gercek IIS ister, ayri oturum). Deferred: SEO, coklu-sunucu.

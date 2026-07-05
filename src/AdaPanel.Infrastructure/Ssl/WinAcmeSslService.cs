@@ -49,6 +49,12 @@ public sealed class WinAcmeSslService(
     public async Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
+
+        if (request.Wildcard)
+        {
+            return await IssueWildcardAsync(site, request, cancellationToken);
+        }
+
         var hostName = ResolveHostName(site, request.HostName);
         var certificate = await TryIssueWithWinAcmeAsync(site, hostName, request.ContactEmail, request.UseStaging, cancellationToken)
             ?? CreateSelfSignedCertificate(hostName, site.Name);
@@ -253,6 +259,100 @@ public sealed class WinAcmeSslService(
             logger.LogWarning(exception, "Host '{Host}' güvenli (HTTPS) yapılamadı (best-effort).", hostName);
             return false;
         }
+    }
+
+    // --- Wildcard sertifika (DNS-01) — Plesk paritesi ---
+    // win-acme "script" doğrulama eklentisiyle: panel, kendi Windows DNS'ine _acme-challenge TXT
+    // kaydını ekleyen/silen bir PS scripti üretir; win-acme create/delete eylemleriyle çağırır.
+    // CLI sözleşmesi (--source manual, --validation script, --dnsscript, create {Identifier}
+    // {RecordName} {Token}) VPS'tekiyle AYNI binary'de (sha256 f4dc3b14...) yerelde doğrulandı.
+    // ÖN KOŞUL: alan adının bölgesi panelin DNS'inde birincil bölge olarak yayında olmalı
+    // (DNS ekranından); değilse script "bölge yok" der ve hata detayında görünür.
+
+    private const string Dns01ScriptContent =
+        """
+        param(
+            [Parameter(Position = 0)][string]$Action,
+            [Parameter(Position = 1)][string]$Identifier,
+            [Parameter(Position = 2)][string]$RecordName,
+            [Parameter(Position = 3)][string]$Token
+        )
+        $ErrorActionPreference = 'Stop'
+        $fqdn = $RecordName.TrimEnd('.')
+
+        # En uzun eslesen birincil bolge (ornek: _acme-challenge.sub.example.com -> example.com).
+        $zone = Get-DnsServerZone |
+            Where-Object { -not $_.IsAutoCreated -and $_.ZoneType -eq 'Primary' -and ($fqdn -eq $_.ZoneName -or $fqdn.EndsWith('.' + $_.ZoneName)) } |
+            Sort-Object { $_.ZoneName.Length } -Descending |
+            Select-Object -First 1
+        if (-not $zone) { throw "AdaPanel DNS-01: '$fqdn' icin panel DNS'inde birincil bolge bulunamadi. Once DNS ekranindan bolgeyi yayinlayin." }
+
+        $name = if ($fqdn -eq $zone.ZoneName) { '@' } else { $fqdn.Substring(0, $fqdn.Length - $zone.ZoneName.Length - 1) }
+
+        if ($Action -eq 'create') {
+            Add-DnsServerResourceRecord -ZoneName $zone.ZoneName -Txt -Name $name -DescriptiveText $Token -TimeToLive ([TimeSpan]::FromSeconds(60)) | Out-Null
+        }
+        elseif ($Action -eq 'delete') {
+            Get-DnsServerResourceRecord -ZoneName $zone.ZoneName -Name $name -RRType 'TXT' -ErrorAction SilentlyContinue |
+                Where-Object { $_.RecordData.DescriptiveText -eq $Token } |
+                Remove-DnsServerResourceRecord -ZoneName $zone.ZoneName -Force -ErrorAction SilentlyContinue
+        }
+        else { throw "AdaPanel DNS-01: bilinmeyen eylem '$Action'." }
+        """;
+
+    private async Task<SslCertificateDto> IssueWildcardAsync(
+        AdaPanel.Core.Dtos.Sites.SiteDto site,
+        IssueLetsEncryptRequest request,
+        CancellationToken cancellationToken)
+    {
+        // Wildcard'da self-signed'a SESSİZ düşme YOK: kullanıcı bilinçli DNS-01 istedi, hata gerçek nedeniyle döner.
+        // Apex türetme: "*." ve baştaki "www." atılır (kullanıcı listeden www'lu hostu seçmiş olabilir).
+        var domain = ResolveHostName(site, request.HostName).TrimStart('*').TrimStart('.').ToLowerInvariant();
+        if (domain.StartsWith("www.", StringComparison.Ordinal))
+        {
+            domain = domain[4..];
+        }
+        if (string.IsNullOrWhiteSpace(request.ContactEmail))
+        {
+            throw new AppException("ssl.contact_email_required", 400, 400);
+        }
+
+        var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(wacs))
+        {
+            throw new AppException("ssl.winacme_missing", 409, 409);
+        }
+
+        var scriptPath = Path.Combine(fileStore.EnsureDirectory("tools"), "acme-dns01.ps1");
+        await File.WriteAllTextAsync(scriptPath, Dns01ScriptContent, cancellationToken);
+
+        var baseUri = request.UseStaging
+            ? "https://acme-staging-v02.api.letsencrypt.org/"
+            : "https://acme-v02.api.letsencrypt.org/";
+
+        var args =
+            $"--source manual --host *.{domain},{domain} " +
+            $"--validation script --dnsscript \"{scriptPath}\" --dnsscriptparallelism 0 " +
+            $"--installation iis --installationsiteid {site.Id} " +
+            $"--emailaddress {request.ContactEmail.Trim()} --accepttos --baseuri {baseUri}";
+
+        // DNS-01 turları (kayıt yazma + yetkili sunucu doğrulaması) HTTP-01'den uzun sürebilir.
+        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken, timeout: TimeSpan.FromMinutes(10));
+        if (!result.Success)
+        {
+            var detail = (result.StandardError + "\r\n" + result.StandardOutput).Trim();
+            throw new AppException("ssl.wildcard_failed", 502, 502, detail.Length > 2000 ? detail[^2000..] : detail);
+        }
+
+        var certificate = FindBestCertificate($"*.{domain}")
+            ?? throw new AppException("ssl.wildcard_failed", 502, 502, "win-acme succeeded but the wildcard certificate was not found in the store.");
+
+        PersistCertificate(certificate);
+        await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
+
+        var dto = ToDto(site.Name, $"*.{domain}", certificate, "letsencrypt");
+        await UpsertAsync(dto, cancellationToken);
+        return dto;
     }
 
     private async Task<X509Certificate2?> TryIssueWithWinAcmeAsync(

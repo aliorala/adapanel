@@ -26,6 +26,13 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
     public async Task<ActionResult<ApiResponse<SslCertificateDto>>> IssueLetsEncryptAsync([FromBody] IssueLetsEncryptRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+
+        // Wildcard (DNS-01) sunucunun DNS bölgesine kayıt yazar → yalnız yönetici.
+        if (request.Wildcard && !User.IsInRole("Administrator"))
+        {
+            throw new AdaPanel.Core.Common.AppException("ssl.wildcard_admin_only", 403, 403);
+        }
+
         var certificate = await sslService.IssueLetsEncryptAsync(request, cancellationToken);
         await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));

@@ -36,8 +36,9 @@ export async function getSslWorkspace(siteName: string) {
   return response.data.data;
 }
 
-export async function issueLetsEncrypt(payload: { siteName: string; hostName: string; contactEmail: string; useStaging: boolean; }) {
-  const response = await apiClient.post<ApiEnvelope<SslCertificate>>("/ssl/letsencrypt", payload);
+export async function issueLetsEncrypt(payload: { siteName: string; hostName: string; contactEmail: string; useStaging: boolean; wildcard?: boolean; }) {
+  // Wildcard DNS-01 turları uzun sürebilir (kayıt yazma + yetkili doğrulama) → geniş timeout.
+  const response = await apiClient.post<ApiEnvelope<SslCertificate>>("/ssl/letsencrypt", payload, { timeout: 12 * 60_000 });
   return response.data.data;
 }
 
