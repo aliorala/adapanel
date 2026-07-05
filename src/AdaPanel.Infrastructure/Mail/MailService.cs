@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Mail;
@@ -552,12 +553,177 @@ public sealed class MailService(
         return await MutateAsync(domain, $"update account {Arg(id)} --field quota={bytes}", cancellationToken);
     }
 
-    // Stalwart'ta autoresponder sieve "vacation" ile yapilir; su an panelden yonetilmiyor.
-    public Task<MailAutoResponderDto> GetAutoResponderAsync(string address, CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailAutoResponderDto { Address = address, Enabled = false });
+    // --- Otomatik yanıt (Plesk autoresponder paritesi) ---
+    // Stalwart'ta kullanıcı-sieve "vacation" TRUSTED bağlamda ÇALIŞMAZ (canlı doğrulandı:
+    // sieve.not-supported/DuplicateId). Kanıtlanan yol: tek SISTEM sieve script'i (SieveSystemScript
+    // "adapanel-autoreply") DATA aşamasına bağlanır (MtaStageData.script) ve enotify/mailto ile yanıt
+    // üretir; RFC 3834 döngü korumaları (Auto-Submitted/Precedence/List-Id/boş-gönderen) script içindedir.
+    // Ayarlar config/mail-autoresponders.json'da tutulur; değişiklik ReloadSettings ile ANINDA etkinleşir.
+    // Bilinen sınırlar: gönderen-başına frekans kısıtı yok (duplicate trusted'da desteklenmez) ve
+    // yanıtın From başlığı Stalwart'ın bildirim varsayılanıdır (mailto from parametresi RFC 5436 gereği yok sayılır).
+    private const string AutoResponderStorePath = "config/mail-autoresponders.json";
+    private const string AutoResponderScriptName = "adapanel-autoreply";
 
-    public Task<MailAutoResponderDto> SetAutoResponderAsync(SetMailAutoResponderRequest request, CancellationToken cancellationToken = default)
-        => throw new AppException("mail.autoresponder_not_supported", 400, 400);
+    private sealed class AutoResponderEntry
+    {
+        public bool Enabled { get; set; }
+        public string Subject { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+    }
+
+    public async Task<MailAutoResponderDto> GetAutoResponderAsync(string address, CancellationToken cancellationToken = default)
+    {
+        var normalized = address.Trim().ToLowerInvariant();
+        var store = await ReadAutoRespondersAsync(cancellationToken);
+        return store.TryGetValue(normalized, out var entry)
+            ? new MailAutoResponderDto { Address = normalized, Enabled = entry.Enabled, Subject = entry.Subject, Message = entry.Message }
+            : new MailAutoResponderDto { Address = normalized, Enabled = false };
+    }
+
+    public async Task<MailAutoResponderDto> SetAutoResponderAsync(SetMailAutoResponderRequest request, CancellationToken cancellationToken = default)
+    {
+        var normalized = request.Address.Trim().ToLowerInvariant();
+        if (request.Enabled && string.IsNullOrWhiteSpace(request.Message))
+        {
+            throw new AppException("mail.autoresponder_message_required", 400, 400);
+        }
+
+        // Hesap gerçekten var olmalı (hayalet adrese kural yazılmasın).
+        _ = await FindIdAsync("account", "emailAddress", normalized, cancellationToken)
+            ?? throw new AppException("mail.account_not_found", 404, 404);
+
+        var store = await ReadAutoRespondersAsync(cancellationToken);
+        if (request.Enabled)
+        {
+            store[normalized] = new AutoResponderEntry
+            {
+                Enabled = true,
+                Subject = request.Subject.Trim(),
+                Message = request.Message.Trim()
+            };
+        }
+        else
+        {
+            store.Remove(normalized);
+        }
+
+        await fileStore.WriteAsync(AutoResponderStorePath, store, cancellationToken);
+        await SyncAutoResponderScriptAsync(store, cancellationToken);
+
+        return await GetAutoResponderAsync(normalized, cancellationToken);
+    }
+
+    private async Task<Dictionary<string, AutoResponderEntry>> ReadAutoRespondersAsync(CancellationToken cancellationToken)
+    {
+        var stored = await fileStore.ReadAsync<Dictionary<string, AutoResponderEntry>>(AutoResponderStorePath, new(), cancellationToken);
+        return stored is null
+            ? new Dictionary<string, AutoResponderEntry>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, AutoResponderEntry>(stored, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Mağazadaki TÜM aktif kayıtlardan tek sistem script'ini üretir, upsert eder, DATA aşamasına bağlar ve ayarları yeniden yükletir.</summary>
+    private async Task SyncAutoResponderScriptAsync(Dictionary<string, AutoResponderEntry> store, CancellationToken cancellationToken)
+    {
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var contents = BuildAutoResponderScript(store);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            name = AutoResponderScriptName,
+            isActive = true,
+            description = "AdaPanel otomatik yanit (panelden uretilir; elle duzenlemeyin)",
+            contents
+        });
+
+        var scriptId = await FindIdAsync("SieveSystemScript", "name", AutoResponderScriptName, cancellationToken);
+        var upsert = scriptId is null
+            ? await RunCliJsonAsync(cli, "create SieveSystemScript", payload, env, cancellationToken)
+            : await RunCliJsonAsync(cli, $"update SieveSystemScript {Arg(scriptId)}", payload, env, cancellationToken);
+        if (!upsert.Success)
+        {
+            throw new AppException("mail.autoresponder_script_failed", 502, 502, upsert.StandardError.Trim());
+        }
+
+        // DATA aşamasına bağla (boş/false ise). Yönetici elle başka script bağladıysa DOKUNMA ve açıkça bildir.
+        var stage = await GetObjectAsync(cli, "MtaStageData", "singleton", env, cancellationToken);
+        var currentScript = stage is { } stageValue
+            && stageValue.TryGetProperty("script", out var scriptExpr)
+            && scriptExpr.TryGetProperty("else", out var elseValue)
+                ? elseValue.GetString() ?? string.Empty
+                : string.Empty;
+
+        var ourExpression = $"'{AutoResponderScriptName}'";
+        if (string.IsNullOrWhiteSpace(currentScript) || currentScript is "false" or "0")
+        {
+            var bind = await RunCliAsync(
+                cli,
+                $"update MtaStageData singleton --field {CliJsonArg($"script={{\"match\":{{}},\"else\":\"{ourExpression}\"}}")}",
+                env,
+                cancellationToken);
+            if (!bind.Success)
+            {
+                throw new AppException("mail.autoresponder_script_failed", 502, 502, bind.StandardError.Trim());
+            }
+        }
+        else if (!string.Equals(currentScript, ourExpression, StringComparison.Ordinal))
+        {
+            throw new AppException("mail.autoresponder_conflict", 409, 409, $"MtaStageData.script={currentScript}");
+        }
+
+        // Değişiklik yeniden başlatma OLMADAN etkinleşir (canlı doğrulandı: ReloadSettings yeterli).
+        _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+    }
+
+    /// <summary>
+    /// Sistem sieve script içeriği. Aktif kayıt yoksa yorum-satırı script (derlenir, hiçbir şey yapmaz;
+    /// canlı doğrulandı). RFC 3834: listelere/otomatik iletilere/boş-göndericiye asla yanıt verilmez.
+    /// </summary>
+    private static string BuildAutoResponderScript(Dictionary<string, AutoResponderEntry> store)
+    {
+        var active = store
+            .Where(pair => pair.Value.Enabled && !string.IsNullOrWhiteSpace(pair.Value.Message))
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .ToList();
+
+        if (active.Count == 0)
+        {
+            return "# AdaPanel: aktif otomatik yanit yok / no active auto-replies\r\n";
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine("require [\"envelope\", \"variables\", \"enotify\"];");
+        builder.AppendLine("# AdaPanel tarafindan uretilir; elle duzenlemeyin. / Generated by AdaPanel; do not edit.");
+        builder.AppendLine("if allof(");
+        builder.AppendLine("    not exists [\"list-id\", \"list-unsubscribe\"],");
+        builder.AppendLine("    not header :is \"precedence\" [\"bulk\", \"list\", \"junk\"],");
+        builder.AppendLine("    not header :matches \"auto-submitted\" [\"auto-*\", \"yes\"]");
+        builder.AppendLine(") {");
+        builder.AppendLine("    set \"sender\" \"\";");
+        builder.AppendLine("    if envelope :all :matches \"from\" \"*\" {");
+        builder.AppendLine("        set \"sender\" \"${1}\";");
+        builder.AppendLine("    }");
+        builder.AppendLine("    if not string :is \"${sender}\" \"\" {");
+
+        foreach (var (address, entry) in active)
+        {
+            var sieveAddress = SieveString(address);
+            var subject = string.IsNullOrWhiteSpace(entry.Subject) ? "Otomatik yanit / Auto-reply" : entry.Subject;
+            var uri = $"mailto:${{sender}}?subject={Uri.EscapeDataString(subject)}&body={Uri.EscapeDataString(NormalizeNewlines(entry.Message))}";
+            builder.AppendLine($"        if allof(envelope :all :is \"to\" \"{sieveAddress}\", not string :is \"${{sender}}\" \"{sieveAddress}\") {{");
+            builder.AppendLine($"            notify \"{SieveString(uri)}\";");
+            builder.AppendLine("        }");
+        }
+
+        builder.AppendLine("    }");
+        builder.AppendLine("}");
+        return builder.ToString();
+    }
+
+    private static string SieveString(string value) =>
+        value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    private static string NormalizeNewlines(string value) =>
+        value.Replace("\r\n", "\n").Replace('\r', '\n');
 
     // panel-tarafı domain kotası: Stalwart domain kotası tutmaz; limit mail-domain-quotas.json'da saklanır ve
     // yeni kutu/kota işlemlerinde tahsis toplamıyla dayatılır. 0 = sınırsız (kayıttan silinir).

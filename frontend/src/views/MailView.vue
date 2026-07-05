@@ -236,10 +236,29 @@
               <h3>{{ t("panel.mail.autoResponderTitle") }}</h3>
               <p class="meta">{{ autoResponderFor }}</p>
             </div>
+            <label class="toggle-field">
+              <input v-model="autoResponderForm.enabled" type="checkbox" />
+              <span>{{ t("panel.mail.autoResponderEnabled") }}</span>
+            </label>
           </div>
-          <p class="meta">{{ t("panel.mail.autoResponderWebmailHint") }}</p>
+          <p class="meta">{{ t("panel.mail.autoResponderHint") }}</p>
+          <div v-if="autoResponderForm.enabled" class="form-grid one">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.autoResponderSubject") }}</span>
+              <input v-model.trim="autoResponderForm.subject" :placeholder="t('panel.mail.autoResponderSubjectPlaceholder')" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.autoResponderMessage") }}</span>
+              <textarea v-model="autoResponderForm.message" rows="5"></textarea>
+            </label>
+          </div>
           <div class="row-actions">
-            <button class="compact" :disabled="busy" @click="openWebmail">{{ t("panel.mail.webmailOpen") }}</button>
+            <button
+              class="compact"
+              :disabled="busy || (autoResponderForm.enabled && !autoResponderForm.message.trim())"
+              @click="saveAutoResponder">
+              {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
+            </button>
             <button class="secondary compact" @click="autoResponderFor = ''">{{ t("panel.common.cancel") }}</button>
           </div>
         </section>
@@ -539,6 +558,8 @@ import {
   getMailListeners,
   getMailSpam,
   getMailWorkspace,
+  getAutoResponder,
+  setAutoResponder,
   issueMailCertificate,
   setMailAccountPassword,
   setMailAccountQuota,
@@ -572,6 +593,7 @@ const selectedDomain = ref((props.domain ?? "").toLowerCase());
 const adminPassword = ref("");
 const accountForm = reactive({ localPart: "", password: "", maxSizeMB: 1024 });
 const autoResponderFor = ref("");
+const autoResponderForm = reactive({ enabled: false, subject: "", message: "" });
 const aliasForm = reactive({ localPart: "", target: "" });
 const spam = ref<MailSpamSettings | null>(null);
 const dns = ref<MailDns | null>(null);
@@ -886,10 +908,36 @@ async function removeAccount(address: string) {
   });
 }
 
-// Otomatik yanıt (vacation) Stalwart'ta yalnız kullanıcının kendi ManageSieve'iyle (webmail) ayarlanır;
-// admin adına set edilemez. Kart kullanıcıyı webmail'e yönlendirir.
-function openAutoResponder(address: string) {
+// Otomatik yanıt: panel yönetir (backend sistem sieve script'i üretir; Plesk autoresponder paritesi).
+async function openAutoResponder(address: string) {
   autoResponderFor.value = address;
+  autoResponderForm.enabled = false;
+  autoResponderForm.subject = "";
+  autoResponderForm.message = "";
+  try {
+    const current = await getAutoResponder(address);
+    autoResponderForm.enabled = current.enabled;
+    autoResponderForm.subject = current.subject;
+    autoResponderForm.message = current.message;
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function saveAutoResponder() {
+  if (!autoResponderFor.value) return;
+  await run(async () => {
+    const saved = await setAutoResponder({
+      address: autoResponderFor.value,
+      enabled: autoResponderForm.enabled,
+      subject: autoResponderForm.subject,
+      message: autoResponderForm.message
+    });
+    autoResponderForm.enabled = saved.enabled;
+    autoResponderForm.subject = saved.subject;
+    autoResponderForm.message = saved.message;
+    showNotice(t("panel.mail.autoResponderSaved"), false);
+  });
 }
 
 async function changePassword(address: string) {

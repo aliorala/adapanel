@@ -5490,3 +5490,33 @@ Basarili:
 - Testler 2+53 (yeni 2 log-cleanup testi), vue-tsc temiz.
 - KALAN BUYUKLER (hepsi VPS/arastirma oturumu ister): mail oto-yanit (Stalwart sieve), wildcard SSL DNS-01,
   tam-sunucu DR. Deferred: SEO toolkit, coklu-sunucu.
+
+## 2026-07-05 (194) — MAIL OTO-YANIT tamamlandi: LOKAL Stalwart'la kanitlanan sistem-sieve yolu (0.2.20 final-2)
+- "VPS arastirma oturumu ister" denen is LOKAL cozuldu: eski probe binary'leri hala duruyordu
+  (%LOCALAPPDATA%\Temp\stalwart-srv-probe\stalwart.exe + stalwart-cli-probe + stalwart-auto-test verisi).
+  Yerel Stalwart ayaga kaldirilip GERCEK SMTP/IMAP akisiyla arastirildi (mehmet->ayse mail, yanit mehmet INBOX'ta).
+- KANIT ZINCIRI (hepsi canli):
+  * Kullanici-sieve "vacation" ve "duplicate" TRUSTED baglamda CALISMAZ: trace "sieve.not-supported / DuplicateId"
+    (vacation'in ic dedup'u da DuplicateId -> ayni sebepten oluyor). Account semasinda vacation alani YOK.
+  * COZUM: SieveSystemScript ("adapanel-autoreply") + MtaStageData.script Expression'a baglama
+    (update MtaStageData singleton --field script={"match":{},"else":"'adapanel-autoreply'"}) + enotify/mailto.
+    Konu+GOVDE mailto URI percent-encoding ile (subject=..&body=.. — coklu satir %0A calisiyor; Turkce OK).
+  * RFC 3834 dongu korumalari script icinde: list-id/list-unsubscribe yok + precedence bulk/list/junk degil +
+    auto-submitted auto-*/yes degil + bos-gonderen (bounce) atla + kendine yanit yok. Yanit Auto-Submitted:
+    auto-notified tasir -> iki AdaPanel otoyaniti dongu YAPMAZ.
+  * ReloadSettings Action'i ile degisiklik RESTART'SIZ aninda etkin (canli dogrulandi). create/update --file
+    bicimleri MailService.RunCliJsonAsync ile birebir ayni (canli dogrulandi). Yorum-satiri-only script derlenir
+    (sifir kayit durumu). C# sablon sekli Turkce+coksatir+tirnakli mesajla uctan uca MARKER testinden gecti.
+- SINIRLAR (bilincli): gonderen-basina frekans siniri YOK (duplicate trusted'da yok; Plesk'te de opsiyonel);
+  yanit From'u Stalwart bildirim varsayilani "Automated Message <MAILER-DAEMON@...>" (RFC 5436 mailto from
+  parametresini yok sayar; SieveSystemInterpreter.defaultFromAddress global — kozmetik, konu kimligi tasiyor).
+- IMPLEMENTASYON: MailService stub -> gercek: config/mail-autoresponders.json (adres->Enabled/Subject/Message),
+  Get/SetAutoResponder (hesap varligi FindIdAsync ile dogrulanir; mail.account_not_found), SyncAutoResponderScript
+  (tum aktif kayitlardan TEK script uret + upsert + stage bind [elle baska script bagliysa mail.autoresponder_conflict
+  409 + detay] + ReloadSettings). DTO +Subject. MailEnable tarafi ZATEN gercekti (COM), router degismedi.
+  UI: MailView webmail-yonlendirme paneli GERCEK form oldu (acik/konu/metin); api/mail.ts get/setAutoResponder.
+  i18n: +11 yeni, -2 bayat (autoResponderWebmailHint, mail.autoresponder_not_supported) -> parite 2615=2615.
+- 0.2.20 FINAL-2 SHA256 `A84A8A47BF0818560BABE5D024D2D23C944E40DC59A9F52352CE5E8915F7501D` (onceki 9FC7D9 paketi
+  YAYINLANMAMISTI, gecersiz; bu paket ClamAV + log rotasyonu + oto-yanit DAHIL). Testler 2+53, vue-tsc temiz.
+- VPS TEST: Mail > hesap > Otomatik yanit: ac+kaydet -> dis adresten mail at -> otoyanit gelmeli; listeye/bounce'a
+  yanit GITMEMELI. KALAN BUYUKLER: wildcard SSL DNS-01, tam-sunucu DR. Deferred: SEO, coklu-sunucu.

@@ -115,6 +115,23 @@ export async function setMailAccountQuota(address: string, maxSizeMB: number) {
   return response.data.data;
 }
 
+export type MailAutoResponder = {
+  address: string;
+  enabled: boolean;
+  subject: string;
+  message: string;
+};
+
+export async function getAutoResponder(address: string) {
+  const response = await apiClient.get<ApiEnvelope<MailAutoResponder>>("/mail/accounts/autoresponder", { params: { address } });
+  return response.data.data;
+}
+
+export async function setAutoResponder(payload: MailAutoResponder) {
+  const response = await apiClient.post<ApiEnvelope<MailAutoResponder>>("/mail/accounts/autoresponder", payload);
+  return response.data.data;
+}
+
 export type MailDnsRecord = {
   type: string;
   host: string;
