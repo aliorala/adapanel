@@ -56,4 +56,10 @@ public sealed class UpdateAutomationSettingsRequest
     public int MemoryUsageThresholdPercent { get; set; } = 90;
 
     public bool ServiceDownAlertsEnabled { get; set; } = true;
+
+    /// <summary>IIS site erişim loglarının otomatik rotasyonu (günde bir; eski loglar silinir).</summary>
+    public bool LogCleanupEnabled { get; set; }
+
+    [Range(1, 3650)]
+    public int LogRetentionDays { get; set; } = 30;
 }

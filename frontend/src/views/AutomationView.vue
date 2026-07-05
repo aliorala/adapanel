@@ -146,6 +146,33 @@
     <div class="form-surface">
       <div class="section-head">
         <div>
+          <h3>{{ t("panel.automation.logSection") }}</h3>
+          <p class="meta">{{ t("panel.automation.logHint") }}</p>
+        </div>
+        <label class="toggle-field">
+          <input v-model="form.logCleanupEnabled" type="checkbox" />
+          <span>{{ t("panel.automation.enabled") }}</span>
+        </label>
+      </div>
+
+      <div v-if="form.logCleanupEnabled" class="form-grid">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.automation.logRetentionDays") }}</span>
+          <input v-model.number="form.logRetentionDays" type="number" min="1" max="3650" />
+        </label>
+      </div>
+
+      <p class="field-hint">
+        {{ t("panel.automation.lastRun") }}:
+        <strong>{{ formatDate(status?.lastLogCleanupRunUtc) }}</strong>
+        · {{ formatStatus(status?.lastLogCleanupStatus) }}
+      </p>
+      <p v-if="status?.lastLogCleanupDetails" class="cell-muted details-line">{{ status.lastLogCleanupDetails }}</p>
+    </div>
+
+    <div class="form-surface">
+      <div class="section-head">
+        <div>
           <h3>{{ t("panel.automation.alertSection") }}</h3>
           <p class="meta">{{ t("panel.automation.alertHint") }}</p>
         </div>
@@ -232,7 +259,9 @@ const form = reactive<AutomationSettings>({
   backupRemoteUrl: "",
   backupRemoteUserName: "",
   backupRemoteRegion: "",
-  backupRemotePasswordSet: false
+  backupRemotePasswordSet: false,
+  logCleanupEnabled: false,
+  logRetentionDays: 30
 });
 
 const remoteUrlPlaceholder = computed(() => {

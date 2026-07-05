@@ -5474,3 +5474,19 @@ Basarili:
   Onceki yayinlanmamis 0.2.19 (03803E) ATLANIR -> GitHub'a dogrudan 0.2.20 koy (188-192 arasi HER SEY icinde).
 - VPS TEST: Guvenlik>Antivirus: Kur (220MB) -> Tanimlari guncelle (250MB, dakikalar) -> site tara (EICAR dosyasiyla
   bulgu testi yapilabilir: eicar.org test dosyasi docroot'a koy). KALAN: wildcard DNS-01, tam-sunucu DR (VPS oturumlari).
+
+## 2026-07-05 (193) — Envanter taramasi + IIS site LOG ROTASYONU (Plesk parity; 0.2.20 final paket)
+- ENVANTER ("baska var mi"): site-bazli PHP ayarlari VAR (.user.ini), ozel hata sayfalari VAR (SiteHostingSettings
+  httpErrors), mail forwarding VAR. GERCEK EKSIKLER: (1) mail OTO-YANIT panelde yok (MailService 555. satir stub +
+  UI webmail'e yonlendiriyor — Stalwart'ta sieve vacation; ManageSieve/JMAP yolu kullanici parolasiz belirsiz ->
+  CANLI Stalwart arastirma oturumu ister, BILINCLI ertelendi); (2) IIS site log rotasyonu YOKTU -> BU TURDA YAPILDI.
+- LOG ROTASYONU: SiteLogCleanup.DeleteOldLogs (saf statik, UNIT TESTLI: 2 yeni test, eski *.log siler / taze +
+  .log-olmayan korur / kilitli atlanir). AutomationService: state +LogCleanupEnabled/+LogRetentionDays(30)/
+  +LastLogCleanup*; saatlik dongude gunde bir RunLogCleanupAsync — her site icin inetpub\logs\LogFiles\W3SVC{id}
+  (LogViewer/WebStatistics ile AYNI kanitlanmis dizin cozumu). DTO'lar+UpdateSettings clamp(1,3650)+ToStatus.
+  UI: Otomasyon ekraninda "Site logu rotasyonu" karti (toggle+gun+son calisma/detay). i18n +3 -> parite 2607=2607.
+- 0.2.20 FINAL SHA256 `9FC7D9DE07B784C3358D0445E7BC5C79C234C9FE1B9AD377084BE354E61BF64E` (192'deki E4B2A2 paketi
+  YAYINLANMADI, GECERSIZ; bu paket ClamAV + log rotasyonu DAHIL her seyi icerir). GitHub'a 0.2.20 tag'iyla BU exe.
+- Testler 2+53 (yeni 2 log-cleanup testi), vue-tsc temiz.
+- KALAN BUYUKLER (hepsi VPS/arastirma oturumu ister): mail oto-yanit (Stalwart sieve), wildcard SSL DNS-01,
+  tam-sunucu DR. Deferred: SEO toolkit, coklu-sunucu.

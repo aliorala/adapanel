@@ -22,4 +22,10 @@ public sealed class AutomationStatusDto
     public string LastSslDetails { get; set; } = string.Empty;
 
     public DateTime? NextSslRunUtc { get; set; }
+
+    public DateTime? LastLogCleanupRunUtc { get; set; }
+
+    public string LastLogCleanupStatus { get; set; } = string.Empty;
+
+    public string LastLogCleanupDetails { get; set; } = string.Empty;
 }

@@ -28,6 +28,8 @@ export type AutomationSettings = {
   backupRemoteUserName: string;
   backupRemoteRegion: string;
   backupRemotePasswordSet: boolean;
+  logCleanupEnabled: boolean;
+  logRetentionDays: number;
 };
 
 export type UpdateAutomationPayload = AutomationSettings & {
@@ -45,6 +47,9 @@ export type AutomationStatus = {
   lastSslStatus: string;
   lastSslDetails: string;
   nextSslRunUtc: string | null;
+  lastLogCleanupRunUtc: string | null;
+  lastLogCleanupStatus: string;
+  lastLogCleanupDetails: string;
 };
 
 export async function getAutomation() {

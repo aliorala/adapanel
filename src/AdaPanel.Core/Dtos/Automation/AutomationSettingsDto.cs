@@ -61,4 +61,10 @@ public sealed class AutomationSettingsDto
 
     /// <summary>Kurulu bir servis (web/mail/DB/FTP) durduğunda uyarı gönderilsin mi.</summary>
     public bool ServiceDownAlertsEnabled { get; set; } = true;
+
+    /// <summary>IIS site erişim loglarının otomatik rotasyonu (Plesk log rotation): günde bir eski loglar silinir.</summary>
+    public bool LogCleanupEnabled { get; set; }
+
+    /// <summary>Bu günden eski site logları silinir (minimum 1).</summary>
+    public int LogRetentionDays { get; set; } = 30;
 }

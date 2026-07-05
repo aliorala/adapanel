@@ -73,6 +73,10 @@ public sealed class AutomationService(
             state.BackupRemotePasswordProtected = secretProtector.Protect(request.BackupRemotePassword);
         }
 
+        // IIS site log rotasyonu (Plesk log rotation): eski erişim logları dolan diski sessizce büyütür.
+        state.LogCleanupEnabled = request.LogCleanupEnabled;
+        state.LogRetentionDays = Math.Clamp(request.LogRetentionDays, 1, 3650);
+
         state.AlertsEnabled = request.AlertsEnabled;
         state.DiskUsageThresholdPercent = Math.Clamp(request.DiskUsageThresholdPercent, 50, 99);
         state.CertExpiryWarningDays = Math.Clamp(request.CertExpiryWarningDays, 1, 90);
@@ -172,6 +176,13 @@ public sealed class AutomationService(
             if (state.AutoSslRenewEnabled && IsDue(state.LastSslRunUtc, state.SslRenewIntervalHours, now))
             {
                 await RunSslRenewAsync(state, cancellationToken);
+                changed = true;
+            }
+
+            // Log temizliği günde bir çalışır (aralık ayarı yok; retention gün sayısı ayarlıdır).
+            if (state.LogCleanupEnabled && IsDue(state.LastLogCleanupRunUtc, 24, now))
+            {
+                await RunLogCleanupAsync(state, cancellationToken);
                 changed = true;
             }
 
@@ -403,6 +414,46 @@ public sealed class AutomationService(
             .ToArray();
     }
 
+    /// <summary>
+    /// IIS site erişim loglarının rotasyonu: her sitenin W3SVC&lt;id&gt; dizininden retention'dan eski
+    /// *.log dosyalarını siler (LogViewer/İstatistik ile AYNI kanıtlanmış dizin çözümü). Best-effort.
+    /// </summary>
+    private async Task RunLogCleanupAsync(AutomationStateRecord state, CancellationToken cancellationToken)
+    {
+        var deletedTotal = 0;
+        long freedTotal = 0;
+        var hasError = false;
+        var summary = new StringBuilder();
+
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-Math.Max(1, state.LogRetentionDays));
+            var logRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System).Replace("System32", "inetpub\\logs\\LogFiles"),
+                string.Empty);
+            var sites = await iisSiteService.GetSitesAsync(cancellationToken);
+            foreach (var site in sites)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (deleted, freed) = SiteLogCleanup.DeleteOldLogs(Path.Combine(logRoot, $"W3SVC{site.Id}"), cutoff);
+                deletedTotal += deleted;
+                freedTotal += freed;
+            }
+        }
+        catch (Exception exception)
+        {
+            hasError = true;
+            summary.AppendLine(exception.Message);
+            logger.LogWarning(exception, "Otomatik log temizliği tamamlanamadı.");
+        }
+
+        state.LastLogCleanupRunUtc = DateTime.UtcNow;
+        state.LastLogCleanupStatus = hasError ? "completed_with_errors" : "completed";
+        state.LastLogCleanupDetails = BuildDetails(
+            $"{deletedTotal} log file(s) deleted, {freedTotal / (1024 * 1024)} MB freed.",
+            summary.ToString());
+    }
+
     private static string BuildDetails(string headline, string errors)
     {
         var trimmed = errors.Trim();
@@ -434,7 +485,9 @@ public sealed class AutomationService(
                 DiskUsageThresholdPercent = state.DiskUsageThresholdPercent,
                 CertExpiryWarningDays = state.CertExpiryWarningDays,
                 MemoryUsageThresholdPercent = state.MemoryUsageThresholdPercent,
-                ServiceDownAlertsEnabled = state.ServiceDownAlertsEnabled
+                ServiceDownAlertsEnabled = state.ServiceDownAlertsEnabled,
+                LogCleanupEnabled = state.LogCleanupEnabled,
+                LogRetentionDays = state.LogRetentionDays
             },
             LastBackupRunUtc = state.LastBackupRunUtc,
             LastBackupStatus = state.LastBackupStatus,
@@ -447,7 +500,10 @@ public sealed class AutomationService(
             LastSslDetails = state.LastSslDetails,
             NextSslRunUtc = state.AutoSslRenewEnabled
                 ? (state.LastSslRunUtc ?? DateTime.UtcNow).AddHours(Math.Max(1, state.SslRenewIntervalHours))
-                : null
+                : null,
+            LastLogCleanupRunUtc = state.LastLogCleanupRunUtc,
+            LastLogCleanupStatus = state.LastLogCleanupStatus,
+            LastLogCleanupDetails = state.LastLogCleanupDetails
         };
     }
 
@@ -657,5 +713,12 @@ public sealed class AutomationService(
         public DateTime? LastSslRunUtc { get; set; }
         public string LastSslStatus { get; set; } = string.Empty;
         public string LastSslDetails { get; set; } = string.Empty;
+
+        // IIS site log rotasyonu (Plesk log rotation paritesi).
+        public bool LogCleanupEnabled { get; set; }
+        public int LogRetentionDays { get; set; } = 30;
+        public DateTime? LastLogCleanupRunUtc { get; set; }
+        public string LastLogCleanupStatus { get; set; } = string.Empty;
+        public string LastLogCleanupDetails { get; set; } = string.Empty;
     }
 }
