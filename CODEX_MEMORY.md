@@ -5546,3 +5546,27 @@ Basarili:
   0.2.20 paketleri GECERSIZ; bu paket: alt-kullanici+izin, katalog, yedek sil/oto-yedek, ClamAV, log rotasyonu,
   oto-yanit, wildcard SSL). Testler 2+53, vue-tsc temiz.
 - KALAN BUYUK: tam-sunucu DR (IIS rebuild — gercek IIS ister, ayri oturum). Deferred: SEO, coklu-sunucu.
+
+## 2026-07-05 (196) — TAM-SUNUCU DR eklendi -> PLESK PARITE BACKLOG'U KAPANDI (0.2.20 final-4, YAYINLANACAK)
+- SON kalem tam-sunucu DR ("panel yedegi IIS'i yeniden kurmaz" acigi, 183'ten beri):
+  * BackupPanelAsync artik iis/sites.json yazar (IIisSiteService.GetSitesAsync -> SiteDto listesi: ad+yol+havuz+
+    bagalamalar; best-effort, IIS'siz makinede yedek yine olusur).
+  * RestoreAsync (panel-tipi) TryRestoreIisSitesAsync: envanterde olup IIS'te olmayan siteleri IIisSiteService.
+    CreateSiteAsync + AddBindingAsync ile yeniden kurar (yalniz HTTP baglamalari — HTTPS sertifika makineye bagli,
+    SSL ekranindan yeniden verilir; ProvisionDefaultServices=false + InstallRuntimeIfMissing=false: DR'da yeni
+    kaynak/indirme yan etkisi YOK). Site basina best-effort; rapor cikarma klasorune iis-restore-report.txt yazilir.
+  * Saf mantik IisSnapshotRestore statik sinifinda: GetMissingSites (ad, case-insensitive) + ToProvisioningPlan
+    (ilk http ana baglama, kalan http'ler ek, https atlanir, bos IP='*'). 4 UNIT TEST (roundtrip dahil) -> 2+57 yesil.
+  * DR AKISI (dokuman): taze sunucuya AdaPanel kur -> panel yedegini kopyala/Backups listesine koy -> Geri Yukle ->
+    kullanicilar+config+gorevler+IIS siteleri doner -> site yedeklerini geri yukle (icerik+DB) -> SSL'leri yeniden ver.
+- BACKLOG DURUMU: Plesk parite listesi BITTI. Bilerek YAPILMAYACAK olanlar (kapsam disi, kullaniciya soylendi):
+  * SEO toolkit — Plesk'te ucretli 3. parti eklenti (XOVI), cekirdek panel ozelligi degil.
+  * Coklu-sunucu yonetimi — enterprise kapsami; tek-VPS hedefiyle celisir.
+  * Ruby runtime — Windows-Plesk'te de yok (187'de dusuruldu).
+- 0.2.20 NIHAI SHA256 `4910A2397089BC9C59FA9CFB7569CECC1A7DC76FF345A182A23E8F7F0043C5D4` (onceki TUM 0.2.20
+  hash'leri gecersiz). Icerik: alt-kullanici+izin matrisi, musteri sub-user CRUD, Joomla/PrestaShop, yedek sil/indir,
+  oto-yedek karti, ClamAV, log rotasyonu, mail oto-yanit (lokal-Stalwart-kanitli), wildcard SSL DNS-01 (wacs-sozlesme-
+  kanitli), tam-sunucu DR. GitHub'a 0.2.20 tag'iyla BU exe.
+- VPS TEST LISTESI (kumulatif): alt-kullanici senaryolari (190) + Grav/Joomla kurulum + yedek sil + oto-yedek karti +
+  ClamAV kur/tanim/tara + oto-yanit (dis adresten mail) + wildcard SSL (NS panele isaret etmeli) + DR provasi
+  (test VPS'inde panel yedegini geri yukleyip iis-restore-report.txt kontrol).

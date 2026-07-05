@@ -240,6 +240,22 @@ public sealed class BackupService(
                 includedParts.Add($"tasks({exportedTasks.Count})");
             }
 
+            // Tam-sunucu DR: IIS site envanteri (ad + fiziksel yol + havuz + bağlamalar). Geri yüklemede
+            // eksik siteler bu envanterden yeniden kurulur; içerik site yedeklerinden döner. Best-effort.
+            try
+            {
+                var sites = await iisSiteService.GetSitesAsync(cancellationToken);
+                if (sites.Count > 0)
+                {
+                    AddTextEntry(archive, "iis/sites.json", System.Text.Json.JsonSerializer.Serialize(sites, BackupJsonOptions));
+                    includedParts.Add($"iis-sites({sites.Count})");
+                }
+            }
+            catch
+            {
+                // IIS okunamıyorsa (rol yok vb.) panel yedeği yine de oluşur.
+            }
+
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 kind = "panel-config",
@@ -360,6 +376,87 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         catch
         {
             // Best-effort: bir görev geri yüklenemese de yedek çıkarma işlemi tamamlanır.
+        }
+    }
+
+    /// <summary>
+    /// Tam-sunucu DR: panel yedeğindeki IIS envanterinden (iis/sites.json) eksik siteleri yeniden kurar.
+    /// Best-effort — site başına hata diğerlerini durdurmaz; sonuç, çıkarma klasörüne
+    /// iis-restore-report.txt olarak yazılır (kullanıcı ne kurulup ne atlandığını görür).
+    /// HTTPS bağlamaları bilerek kurulmaz (sertifika makineye bağlıdır; SSL ekranından yeniden verilir).
+    /// </summary>
+    private async Task TryRestoreIisSitesAsync(string extractedRoot, CancellationToken cancellationToken)
+    {
+        var report = new List<string>();
+        try
+        {
+            var snapshotPath = Path.Combine(extractedRoot, "iis", "sites.json");
+            if (!File.Exists(snapshotPath))
+            {
+                return;
+            }
+
+            var snapshot = System.Text.Json.JsonSerializer.Deserialize<List<AdaPanel.Core.Dtos.Sites.SiteDto>>(
+                await File.ReadAllTextAsync(snapshotPath, cancellationToken),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            if (snapshot.Count == 0)
+            {
+                return;
+            }
+
+            var existing = (await iisSiteService.GetSitesAsync(cancellationToken)).Select(site => site.Name);
+            var missing = IisSnapshotRestore.GetMissingSites(snapshot, existing);
+            report.Add($"Envanter: {snapshot.Count} site; eksik: {missing.Count}.");
+
+            foreach (var site in missing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var (create, extraBindings) = IisSnapshotRestore.ToProvisioningPlan(site);
+                    if (!string.IsNullOrWhiteSpace(create.PhysicalPath))
+                    {
+                        Directory.CreateDirectory(create.PhysicalPath);
+                    }
+
+                    await iisSiteService.CreateSiteAsync(create, cancellationToken);
+                    foreach (var binding in extraBindings)
+                    {
+                        try
+                        {
+                            await iisSiteService.AddBindingAsync(site.Name, binding, cancellationToken);
+                        }
+                        catch (Exception bindingException)
+                        {
+                            report.Add($"  {site.Name}: ek bağlama {binding.HostName}:{binding.Port} eklenemedi — {bindingException.Message}");
+                        }
+                    }
+
+                    report.Add($"  {site.Name}: yeniden kuruldu ({1 + extraBindings.Count} http bağlama). İçerik için site yedeğini geri yükleyin; HTTPS'i SSL ekranından yeniden verin.");
+                }
+                catch (Exception siteException)
+                {
+                    report.Add($"  {site.Name}: KURULAMADI — {siteException.Message}");
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            report.Add($"IIS envanteri geri yüklenemedi: {exception.Message}");
+        }
+        finally
+        {
+            if (report.Count > 0)
+            {
+                try
+                {
+                    await File.WriteAllLinesAsync(Path.Combine(extractedRoot, "iis-restore-report.txt"), report, cancellationToken);
+                }
+                catch
+                {
+                    // rapor yazılamazsa akış bozulmaz
+                }
+            }
         }
     }
 
@@ -523,10 +620,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             Directory.CreateDirectory(destination);
             ZipFile.ExtractToDirectory(record.Path, destination, overwriteFiles: true);
 
-            // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet.
+            // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet
+            // + tam-sunucu DR: envanterde olup IIS'te olmayan siteleri yeniden kur (rapor: iis-restore-report.txt).
             if (string.Equals(record.Type, "panel", StringComparison.OrdinalIgnoreCase))
             {
                 await TryRestoreScheduledTasksAsync(destination, cancellationToken);
+                await TryRestoreIisSitesAsync(destination, cancellationToken);
             }
 
             record.Status = "restored";
