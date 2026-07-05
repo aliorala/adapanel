@@ -20,7 +20,9 @@ public sealed class UserManagementService(
     ILogger<UserManagementService> logger,
     IAuditService auditService,
     IIisSiteService iisSiteService,
-    IDatabaseOwnershipService databaseOwnership) : IUserManagementService
+    IDatabaseOwnershipService databaseOwnership,
+    ISchedulerService schedulerService,
+    ISiteCascadeDeletionService siteCascadeDeletion) : IUserManagementService
 {
     public async Task<IReadOnlyCollection<UserSummaryDto>> GetUsersAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
@@ -31,12 +33,21 @@ public sealed class UserManagementService(
         // Sahip (bayi) adlarını çözmek için TÜM kullanıcılardan ad haritası (filtreden önce).
         var nameById = users.ToDictionary(user => user.Id, user => user.UserName);
 
-        // Bayi (Reseller) yalnızca KENDI sahip olduğu müşterileri görür; admin herkesi görür.
+        // Bayi (Reseller) yalnızca KENDI sahip olduğu müşterileri + o müşterilerin alt-kullanıcılarını görür
+        // (alt-kullanıcının OwnerId'si yoktur; parent bağı üzerinden dahil edilir). Admin herkesi görür.
         var actor = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == actorUserId, cancellationToken);
         if (actor?.Role == UserRole.Reseller)
         {
-            var owned = new HashSet<Guid>(await customerScopeService.GetOwnedUserIdsAsync(actorUserId, cancellationToken));
-            users = users.Where(user => owned.Contains(user.Id)).ToList();
+            var visible = new HashSet<Guid>(await customerScopeService.GetOwnedUserIdsAsync(actorUserId, cancellationToken));
+            foreach (var ownedId in visible.ToArray())
+            {
+                foreach (var subUserId in await customerScopeService.GetSubUserIdsAsync(ownedId, cancellationToken))
+                {
+                    visible.Add(subUserId);
+                }
+            }
+
+            users = users.Where(user => visible.Contains(user.Id)).ToList();
         }
 
         var summaries = new List<UserSummaryDto>(users.Count);
@@ -387,6 +398,134 @@ public sealed class UserManagementService(
             actorUserId,
             ipAddress,
             cancellationToken);
+    }
+
+    public async Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default)
+    {
+        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken)
+            ?? throw new InvalidOperationException("users.not_found");
+
+        if (userId == actorUserId)
+        {
+            throw new InvalidOperationException("users.cannot_delete_self");
+        }
+
+        // Bayi yalnız KENDİ müşterisini silebilir; yıkıcı mod (site silme) admin'e özeldir.
+        var actor = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == actorUserId, cancellationToken);
+        if (actor?.Role == UserRole.Reseller)
+        {
+            var currentOwner = await customerScopeService.GetOwnerAsync(userId, cancellationToken);
+            if (user.Role != UserRole.Customer || currentOwner != actorUserId)
+            {
+                throw new AppException("users.forbidden", 403, 403);
+            }
+
+            removeSites = false;
+        }
+
+        if (user.Role == UserRole.Administrator)
+        {
+            var otherActiveAdmins = await dbContext.Users.CountAsync(candidate =>
+                candidate.Id != userId &&
+                candidate.Role == UserRole.Administrator &&
+                candidate.IsActive, cancellationToken);
+            if (otherActiveAdmins == 0)
+            {
+                throw new InvalidOperationException("users.last_admin_protected");
+            }
+        }
+
+        var isSubUser = user.Role == UserRole.Customer
+            && await customerScopeService.GetParentSubscriptionAsync(userId, cancellationToken) is not null;
+        var scope = user.Role == UserRole.Customer && !isSubUser
+            ? await customerScopeService.GetScopeAsync(userId, cancellationToken)
+            : new CustomerScope([], 0, 0, 0, 0, 0);
+
+        // 1) Top-level müşteri: altındaki ek kullanıcı login'leri de silinir (Plesk aboneliği kaldırma davranışı).
+        if (user.Role == UserRole.Customer && !isSubUser)
+        {
+            foreach (var subUserId in await customerScopeService.GetSubUserIdsAsync(userId, cancellationToken))
+            {
+                var subUser = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == subUserId, cancellationToken);
+                if (subUser is not null)
+                {
+                    dbContext.Users.Remove(subUser);
+                }
+
+                await customerScopeService.RemoveUserAsync(subUserId, cancellationToken);
+                await TryDeleteOwnedCronTasksAsync(subUserId, cancellationToken);
+            }
+        }
+
+        // 2) Aboneliğin cron görevleri (u<id>-- ad alanı) Görev Zamanlayıcı'dan temizlenir (best-effort).
+        await TryDeleteOwnedCronTasksAsync(userId, cancellationToken);
+
+        // 3) Siteler: removeSites=true → dosyalar + eşleşen DB'lerle cascade silinir. false → siteler
+        //    SUNUCUDA KALIR (yönetime devir); yalnız panel kayıtları temizlenir.
+        if (removeSites)
+        {
+            foreach (var siteName in scope.Sites)
+            {
+                try
+                {
+                    await siteCascadeDeletion.DeleteAsync(siteName, deleteFiles: true, deleteDatabases: true, cancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(exception, "Kullanıcı silme: site cascade silinemedi: {Site}", siteName);
+                }
+            }
+        }
+
+        // 4) DB sahiplik KAYITLARI temizlenir (removeSites=false ise veritabanlarının kendisi durur).
+        try
+        {
+            foreach (var owned in await databaseOwnership.GetOwnedAsync(userId, cancellationToken))
+            {
+                await databaseOwnership.RemoveAsync(owned.Engine, owned.DatabaseName, cancellationToken);
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Kullanıcı silme: DB sahiplik kayıtları temizlenemedi.");
+        }
+
+        // 5) Kapsam kaydı + kullanıcı satırı. Audit yazımı SaveChanges'ı tetikler (mevcut desen).
+        await customerScopeService.RemoveUserAsync(userId, cancellationToken);
+        dbContext.Users.Remove(user);
+
+        await auditService.WriteAsync(
+            "users.deleted",
+            "users",
+            $"User '{user.UserName}' ({user.Role}) deleted. removeSites={removeSites}; {scope.Sites.Count} site(s) in scope.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
+    }
+
+    /// <summary>Kullanıcının ad alanındaki (u&lt;id&gt;--) planlı görevleri siler; hata silmeyi durdurmaz.</summary>
+    private async Task TryDeleteOwnedCronTasksAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var prefix = $"u{userId:N}--";
+            foreach (var task in (await schedulerService.GetTasksAsync(cancellationToken))
+                .Where(task => task.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    await schedulerService.DeleteTaskAsync(task.Name, cancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(exception, "Kullanıcı silme: cron görevi silinemedi: {Task}", task.Name);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Kullanıcı silme: cron görevleri listelenemedi.");
+        }
     }
 
     // --- Abonelik altı ek kullanıcılar (Plesk "additional user"): top-level müşteri kendi altındaki

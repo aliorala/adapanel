@@ -34,6 +34,31 @@ public sealed class UsersController(IUserManagementService userManagementService
         return Ok(ApiResponse<UserSummaryDto>.Ok(user, "users.create.success"));
     }
 
+    /// <summary>
+    /// Kullanıcıyı siler. removeSites=true (yalnız admin): atanan siteler dosya + eşleşen DB'lerle
+    /// cascade silinir; aksi halde siteler/veriler sunucuda kalır ve yönetime devredilmiş olur.
+    /// </summary>
+    [HttpDelete("{userId:guid}")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteUserAsync(
+        Guid userId,
+        [FromQuery] bool removeSites,
+        CancellationToken cancellationToken)
+    {
+        if (removeSites && !User.IsInRole("Administrator"))
+        {
+            throw new AdaPanel.Core.Common.AppException("users.forbidden", 403, 403);
+        }
+
+        await userManagementService.DeleteUserAsync(
+            userId,
+            User.GetRequiredUserId(),
+            removeSites,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<object>.Ok(new { id = userId }, "users.delete.success"));
+    }
+
     [HttpPut("{userId:guid}")]
     public async Task<ActionResult<ApiResponse<UserSummaryDto>>> UpdateUserAsync(
         Guid userId,

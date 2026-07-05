@@ -227,6 +227,11 @@ export const useAuthStore = defineStore("auth", {
       this.users = this.users.map((user) => user.id === userId ? response.data.data : user);
       return response.data.data;
     },
+    // Siteler/veriler sunucuda kalır (yönetime devir); alt-kullanıcıları ve panel kayıtları backend'de temizlenir.
+    async deleteUser(userId: string) {
+      await apiClient.delete<ApiEnvelope<object>>(`/users/${userId}`);
+      await this.fetchUsers();
+    },
     async fetchSecuritySettings() {
       const response = await apiClient.get<ApiEnvelope<SecuritySettings>>("/security/settings");
       this.securitySettings = response.data.data;

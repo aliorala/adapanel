@@ -14,6 +14,15 @@ public interface IUserManagementService
 
     Task<UserSummaryDto> UpdateUserAsync(Guid userId, UpdateUserRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Kullanıcıyı siler (Plesk paritesi). Korumalar: kendini silemez, son aktif yönetici silinemez,
+    /// bayi yalnız kendi müşterisini silebilir. Top-level müşteri silinirken alt-kullanıcıları da silinir;
+    /// panel-tarafı kayıtlar (kapsam, cron görevleri, DB sahiplikleri) temizlenir.
+    /// <paramref name="removeSites"/> true ise (yalnız admin) atanan siteler dosya+eşleşen DB'lerle cascade silinir;
+    /// false ise siteler/veriler SUNUCUDA KALIR (yönetime devredilmiş olur).
+    /// </summary>
+    Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default);
+
     // --- Abonelik altı ek kullanıcılar (Plesk "additional user"): TOP-LEVEL müşteri kendisi yönetir ---
 
     /// <summary>Parent müşterinin altındaki ek kullanıcılar. Aktör top-level müşteri değilse users.sub_forbidden.</summary>

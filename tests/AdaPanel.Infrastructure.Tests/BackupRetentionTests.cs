@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Backup;
+﻿using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
@@ -47,7 +47,7 @@ public sealed class BackupRetentionTests
 
             await fileStore.WriteAsync("config/backups.json", records);
 
-            var service = new BackupService(null!, null!, null!, null!, fileStore, null!);
+            var service = new BackupService(null!, null!, null!, null!, null!, fileStore, null!);
 
             var removed = await service.PruneAsync(retentionDays: 7);
 
@@ -81,7 +81,7 @@ public sealed class BackupRetentionTests
                 new BackupRecordDto { Id = "old", CreatedAtUtc = DateTime.UtcNow.AddYears(-1) }
             });
 
-            var service = new BackupService(null!, null!, null!, null!, fileStore, null!);
+            var service = new BackupService(null!, null!, null!, null!, null!, fileStore, null!);
 
             var removed = await service.PruneAsync(retentionDays: 0);
 
@@ -94,3 +94,4 @@ public sealed class BackupRetentionTests
         }
     }
 }
+

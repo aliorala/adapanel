@@ -13,6 +13,7 @@ public sealed class BackupService(
     IDatabaseService databaseService,
     IMailService mailService,
     IPanelPreferencesService preferencesService,
+    IFtpService ftpService,
     JsonFileStore fileStore,
     IHttpClientFactory httpClientFactory) : IBackupService
 {
@@ -385,9 +386,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// iis-restore-report.txt olarak yazılır (kullanıcı ne kurulup ne atlandığını görür).
     /// HTTPS bağlamaları bilerek kurulmaz (sertifika makineye bağlıdır; SSL ekranından yeniden verilir).
     /// </summary>
-    private async Task TryRestoreIisSitesAsync(string extractedRoot, CancellationToken cancellationToken)
+    private async Task TryRestoreIisSitesAsync(string extractedRoot, List<string> report, CancellationToken cancellationToken)
     {
-        var report = new List<string>();
         try
         {
             var snapshotPath = Path.Combine(extractedRoot, "iis", "sites.json");
@@ -444,19 +444,80 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         {
             report.Add($"IIS envanteri geri yüklenemedi: {exception.Message}");
         }
-        finally
+    }
+
+    private sealed class FtpUserSnapshot
+    {
+        public string UserName { get; set; } = string.Empty;
+        public string HomePath { get; set; } = string.Empty;
+        public string SiteName { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Tam-sunucu DR: yedekteki config/ftp-users.json kayıtlarından FTP hesaplarını yeniden kurar.
+    /// Windows yerel hesap PAROLALARI yedeğe giremez (dışa aktarılamaz) → hesap RASTGELE parolayla
+    /// açılır ve rapora "parolayı FTP ekranından sıfırlayın" düşülür. Hesap zaten varsa parolasına
+    /// dokunulmaz (CreateFtpUserAsync mevcut hesapta yalnız ACL/ana dizini tazeler — idempotent).
+    /// </summary>
+    private async Task TryRestoreFtpUsersAsync(string extractedRoot, List<string> report, CancellationToken cancellationToken)
+    {
+        try
         {
-            if (report.Count > 0)
+            var snapshotPath = Path.Combine(extractedRoot, "config", "ftp-users.json");
+            if (!File.Exists(snapshotPath))
             {
+                return;
+            }
+
+            var snapshot = System.Text.Json.JsonSerializer.Deserialize<List<FtpUserSnapshot>>(
+                await File.ReadAllTextAsync(snapshotPath, cancellationToken),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            if (snapshot.Count == 0)
+            {
+                return;
+            }
+
+            report.Add($"FTP envanteri: {snapshot.Count} hesap.");
+            foreach (var user in snapshot.Where(item => !string.IsNullOrWhiteSpace(item.UserName)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    await File.WriteAllLinesAsync(Path.Combine(extractedRoot, "iis-restore-report.txt"), report, cancellationToken);
+                    await ftpService.CreateFtpUserAsync(new AdaPanel.Core.Dtos.Ftp.CreateFtpUserRequest
+                    {
+                        UserName = user.UserName,
+                        Password = $"Dr{Guid.NewGuid():N}aA1",
+                        SiteName = user.SiteName,
+                        HomePath = user.HomePath
+                    }, cancellationToken);
+                    report.Add($"  FTP {user.UserName}: hazır — parolayı FTP ekranından sıfırlayın (parolalar yedeğe giremez).");
                 }
-                catch
+                catch (Exception exception)
                 {
-                    // rapor yazılamazsa akış bozulmaz
+                    report.Add($"  FTP {user.UserName}: KURULAMADI — {exception.Message}");
                 }
             }
+        }
+        catch (Exception exception)
+        {
+            report.Add($"FTP envanteri geri yüklenemedi: {exception.Message}");
+        }
+    }
+
+    private static async Task TryWriteRestoreReportAsync(string extractedRoot, List<string> report, CancellationToken cancellationToken)
+    {
+        if (report.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await File.WriteAllLinesAsync(Path.Combine(extractedRoot, "iis-restore-report.txt"), report, cancellationToken);
+        }
+        catch
+        {
+            // rapor yazılamazsa akış bozulmaz
         }
     }
 
@@ -621,11 +682,14 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             ZipFile.ExtractToDirectory(record.Path, destination, overwriteFiles: true);
 
             // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet
-            // + tam-sunucu DR: envanterde olup IIS'te olmayan siteleri yeniden kur (rapor: iis-restore-report.txt).
+            // + tam-sunucu DR: eksik IIS siteleri + FTP hesapları yeniden kurulur (rapor: iis-restore-report.txt).
             if (string.Equals(record.Type, "panel", StringComparison.OrdinalIgnoreCase))
             {
                 await TryRestoreScheduledTasksAsync(destination, cancellationToken);
-                await TryRestoreIisSitesAsync(destination, cancellationToken);
+                var report = new List<string>();
+                await TryRestoreIisSitesAsync(destination, report, cancellationToken);
+                await TryRestoreFtpUsersAsync(destination, report, cancellationToken);
+                await TryWriteRestoreReportAsync(destination, report, cancellationToken);
             }
 
             record.Status = "restored";

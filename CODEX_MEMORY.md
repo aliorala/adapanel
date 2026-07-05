@@ -5570,3 +5570,30 @@ Basarili:
 - VPS TEST LISTESI (kumulatif): alt-kullanici senaryolari (190) + Grav/Joomla kurulum + yedek sil + oto-yedek karti +
   ClamAV kur/tanim/tara + oto-yanit (dis adresten mail) + wildcard SSL (NS panele isaret etmeli) + DR provasi
   (test VPS'inde panel yedegini geri yukleyip iis-restore-report.txt kontrol).
+
+## 2026-07-05 (197) — SON TUR: kullanici SILME + FTP-DR + bayi alt-kullanici gorunurlugu -> 0.2.20 KESIN NIHAI
+- Kullanici "hepsini bitir, son haliyle kuracagim" dedi; 196'daki kucuk-eksikler listesi kapatildi:
+  * KULLANICI SILME (Plesk parite acigi — hic yoktu): DELETE /api/v1/users/{id}?removeSites=bool.
+    UserManagementService.DeleteUserAsync korumalar: kendini silemez (users.cannot_delete_self), son aktif admin
+    silinemez, bayi yalniz kendi musterisini (removeSites bayi icin zorla false; controller'da da admin-degilse 403).
+    Kaskad: top-level musterinin ALT-KULLANICILARI da silinir; u<id>-- cron gorevleri Task Scheduler'dan temizlenir
+    (best-effort, sub'larin eski prefix'leri dahil); DB sahiplik KAYITLARI silinir; scope kaydi silinir.
+    removeSites=true (yalniz admin, API'den): atanan siteler SiteCascadeDeletionService.DeleteAsync(files+databases).
+    VARSAYILAN (UI): siteler/veriler SUNUCUDA KALIR = yonetime devir; confirm metni bunu acikca soyler.
+    UI: kullanici satirinda Sil butonu (kendine gizli); auth store deleteUser + fetchUsers.
+    DIKKAT: SetupWizardView'in YEREL t() sarmalayicisi TEK parametre alir — enterpolasyon icin i18n.t(key, params)!
+  * FTP-DR: panel restore artik config/ftp-users.json'dan FTP hesaplarini yeniden kurar (CreateFtpUserAsync
+    IDEMPOTENT: hesap varsa net-user atlanir, ACL/home tazelenir). Windows yerel hesap parolalari yedege GIREMEZ ->
+    hesap rastgele parolayla acilir, rapora "parolayi FTP ekranindan sifirlayin" yazilir. BackupService +IFtpService
+    (dongu yok). Rapor tek dosyada birlesti: TryWriteRestoreReportAsync (iis+ftp satirlari).
+    TEST KIRILIMI DERSI: BackupService ctor'una parametre eklenince 4 test POZISYONEL null! cagrilariyla kirildi ->
+    testlerdeki new BackupService(...) cagrilarina null! eklendi.
+  * BAYI GORUNURLUGU: GetUsersAsync reseller filtresi artik sahip oldugu musterilerin ALT-KULLANICILARINI da listeler
+    (OwnerId'siz olduklari icin gorunmuyorlardi); duzenleme/silme bayi icin yine kapali (owner=null -> 403), yalniz listeler.
+- Dogrulama: build 0/0, testler 2+57, vue-tsc temiz, 296 istisna anahtari i18n'de TAM, parite 2626=2626.
+- 0.2.20 KESIN NIHAI SHA256 `81554DB28AC5471C6BC3269DEC87C6A8B47B54F862D6DF30ED01CCB7212CB860` — onceki TUM 0.2.20
+  hash'leri (4910A2 dahil) GECERSIZ. KULLANICI BU PAKETI KURACAK. GitHub tag 0.2.20 = bu exe.
+- ICERIK OZETI (0.2.12 sonrasi hepsi): cron audit+SSRF, Advisor, Grav/Drupal/Joomla/PrestaShop, plan gorev kotasi,
+  yedekte gorevler, alt-kullanici + izin matrisi + musteri CRUD, abonelik kaynak paylasimi fixleri, yedek sil/indir,
+  oto-yedek karti, guncelleme-kaynagi gizleme, ClamAV, log rotasyonu, mail oto-yanit, wildcard SSL DNS-01,
+  tam-sunucu DR (IIS+FTP), kullanici silme. Kapsam disi: SEO toolkit, coklu-sunucu, Ruby.

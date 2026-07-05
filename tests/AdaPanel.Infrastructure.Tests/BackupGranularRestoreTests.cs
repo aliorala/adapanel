@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Options;
@@ -8,8 +8,8 @@ using Xunit;
 namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>
-/// Granüler geri yükleme: zip içeriğine dizin bazlı gözatma ve seçilen
-/// dosya/dizinlerin hedefe çıkarılması (zip-slip koruması dahil).
+/// GranÃ¼ler geri yÃ¼kleme: zip iÃ§eriÄŸine dizin bazlÄ± gÃ¶zatma ve seÃ§ilen
+/// dosya/dizinlerin hedefe Ã§Ä±karÄ±lmasÄ± (zip-slip korumasÄ± dahil).
 /// </summary>
 public sealed class BackupGranularRestoreTests
 {
@@ -24,7 +24,7 @@ public sealed class BackupGranularRestoreTests
             var fileStore = new JsonFileStore(
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot }));
 
-            // Gerçek bir site yedeği gibi: kök klasör adı dahil (includeBaseDirectory).
+            // GerÃ§ek bir site yedeÄŸi gibi: kÃ¶k klasÃ¶r adÄ± dahil (includeBaseDirectory).
             var siteRoot = Path.Combine(dataRoot, "source", "webroot");
             Directory.CreateDirectory(Path.Combine(siteRoot, "wp-content", "uploads"));
             await File.WriteAllTextAsync(Path.Combine(siteRoot, "index.php"), "<?php echo 'merhaba';");
@@ -48,21 +48,21 @@ public sealed class BackupGranularRestoreTests
                 }
             });
 
-            var service = new BackupService(null!, null!, null!, null!, fileStore, null!);
+            var service = new BackupService(null!, null!, null!, null!, null!, fileStore, null!);
 
-            // Kök listeleme: tek dizin (webroot).
+            // KÃ¶k listeleme: tek dizin (webroot).
             var root = await service.GetEntriesAsync("b1", null);
             Assert.Single(root.Entries);
             Assert.True(root.Entries[0].IsDirectory);
             Assert.Equal("webroot/", root.Entries[0].Path);
 
-            // webroot altında: wp-content dizini + 2 dosya.
+            // webroot altÄ±nda: wp-content dizini + 2 dosya.
             var level1 = await service.GetEntriesAsync("b1", "webroot/");
             Assert.Contains(level1.Entries, entry => entry.IsDirectory && entry.Name == "wp-content");
             Assert.Contains(level1.Entries, entry => !entry.IsDirectory && entry.Name == "index.php");
             Assert.Contains(level1.Entries, entry => !entry.IsDirectory && entry.Name == "wp-config.php");
 
-            // Tek dosya + bir dizini hedefe geri yükle.
+            // Tek dosya + bir dizini hedefe geri yÃ¼kle.
             var restoreTarget = Path.Combine(dataRoot, "restored");
             var result = await service.RestoreItemsAsync(new RestoreBackupItemsRequest
             {
@@ -104,7 +104,7 @@ public sealed class BackupGranularRestoreTests
                 new BackupRecordDto { Id = "b2", Path = zipPath, Format = "zip", Type = "site", Source = "x", CreatedAtUtc = DateTime.UtcNow }
             });
 
-            var service = new BackupService(null!, null!, null!, null!, fileStore, null!);
+            var service = new BackupService(null!, null!, null!, null!, null!, fileStore, null!);
 
             var exception = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() =>
                 service.RestoreItemsAsync(new RestoreBackupItemsRequest
@@ -122,3 +122,4 @@ public sealed class BackupGranularRestoreTests
         }
     }
 }
+

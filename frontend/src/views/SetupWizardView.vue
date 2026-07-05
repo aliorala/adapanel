@@ -607,6 +607,12 @@
                 {{ t("panel.users.loginAs") }}
               </button>
               <button class="secondary compact row-button" @click="selectUser(user)">{{ t("panel.users.edit") }}</button>
+              <button
+                v-if="user.id !== authStore.session?.user?.id"
+                class="danger compact row-button"
+                @click="deleteUser(user)">
+                {{ t("panel.users.delete") }}
+              </button>
             </span>
           </div>
         </div>
@@ -1490,6 +1496,25 @@ async function impersonateUser(user: ManagedUser) {
     window.location.reload();
   } catch (error) {
     void error;
+  }
+}
+
+// Kullanıcı silme (Plesk paritesi): varsayılan davranış siteleri/verileri SUNUCUDA BIRAKIR (yönetime devir).
+// Site+dosya+DB'yi de silmek isteyen admin, Web Siteleri ekranındaki cascade silmeyi kullanır.
+async function deleteUser(user: ManagedUser) {
+  // Yerel t() sarmalayıcısı parametre almaz; ad enterpolasyonu için i18n.t doğrudan kullanılır.
+  if (!window.confirm(i18n.t("panel.users.confirmDelete", { name: user.userName }) as string)) {
+    return;
+  }
+
+  try {
+    await authStore.deleteUser(user.id);
+    if (selectedUserId.value === user.id) {
+      selectedUserId.value = "";
+    }
+    showBanner(t("panel.users.deleted"), false);
+  } catch (error) {
+    showBanner(resolveApiMessage(error), true);
   }
 }
 
