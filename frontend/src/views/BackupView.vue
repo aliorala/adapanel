@@ -57,10 +57,66 @@
             @click="openBrowser(backup)">
             {{ t("panel.backup.browse") }}
           </button>
+          <button class="secondary compact row-button" :disabled="busy" @click="download(backup)">
+            {{ t("panel.backup.download") }}
+          </button>
+          <button class="danger compact row-button" :disabled="busy" @click="removeBackup(backup)">
+            {{ t("panel.backup.delete") }}
+          </button>
         </div>
       </div>
       <p v-if="!loading && backups.length === 0" class="empty-state">{{ t("panel.backup.empty") }}</p>
     </div>
+
+    <!-- Otomatik zamanlanmış yedek (Plesk gibi): motor Otomasyon servisidir; bu kart en çok aranan
+         ayarları (sıklık + saklama) yedek ekranının içine taşır. Gelişmiş seçenekler Araçlar > Otomasyon'da. -->
+    <section v-if="activeView === 'list' && isAdmin && autoForm" class="form-surface auto-backup-card">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.backup.autoTitle") }}</h3>
+          <p class="meta">{{ t("panel.backup.autoHint") }}</p>
+        </div>
+        <span :class="['status-pill', autoForm.autoBackupEnabled ? 'ok' : '']">
+          {{ autoForm.autoBackupEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
+        </span>
+      </div>
+      <div class="form-grid">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.autoEnabled") }}</span>
+          <select v-model="autoForm.autoBackupEnabled">
+            <option :value="true">{{ t("panel.status.enabled") }}</option>
+            <option :value="false">{{ t("panel.status.disabled") }}</option>
+          </select>
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.autoFrequency") }}</span>
+          <select v-model="autoFrequency">
+            <option value="daily">{{ t("panel.backup.freq.daily") }}</option>
+            <option value="weekly">{{ t("panel.backup.freq.weekly") }}</option>
+            <option value="monthly">{{ t("panel.backup.freq.monthly") }}</option>
+            <option v-if="autoFrequency === 'custom'" value="custom">
+              {{ t("panel.backup.freq.custom", { hours: autoForm.backupIntervalHours }) }}
+            </option>
+          </select>
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.autoRetention") }}</span>
+          <input v-model.number="autoForm.backupRetentionDays" type="number" min="0" />
+        </label>
+      </div>
+      <p class="field-hint">
+        {{ t("panel.backup.autoRuns", {
+          last: autoStatus?.lastBackupRunUtc ? new Date(autoStatus.lastBackupRunUtc).toLocaleString() : "-",
+          next: autoStatus?.nextBackupRunUtc ? new Date(autoStatus.nextBackupRunUtc).toLocaleString() : "-"
+        }) }}
+        {{ t("panel.backup.autoAdvancedHint") }}
+      </p>
+      <div class="row-actions">
+        <button class="compact" :disabled="busy" @click="saveAutoBackup">
+          {{ t("panel.backup.autoSave") }}
+        </button>
+      </div>
+    </section>
 
     <section v-if="activeView === 'list' && browseRecord" class="form-surface backup-browser">
       <div class="section-head">
@@ -212,6 +268,8 @@ import {
   backupMail,
   backupSite,
   backupPanel,
+  deleteBackup,
+  downloadBackup,
   getBackupEntries,
   getBackups,
   restoreBackup,
@@ -220,6 +278,7 @@ import {
   type BackupRecord,
   type BackupTargetPayload
 } from "../api/backup";
+import { getAutomation, updateAutomation, type AutomationSettings, type AutomationStatus } from "../api/automation";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -286,12 +345,57 @@ watch(() => sitesStore.selectedSiteName, (value) => {
   }
 });
 
+// Otomatik yedek programı (yalnız admin; motor = Otomasyon servisi, bu kart en sık kullanılan ayarların kısayolu).
+const autoStatus = ref<AutomationStatus | null>(null);
+const autoForm = ref<AutomationSettings | null>(null);
+// Sıklık ön ayarı ↔ saat eşlemesi: günlük=24, haftalık=168, aylık=720; başka değer "custom" olarak korunur.
+const autoFrequency = computed({
+  get(): "daily" | "weekly" | "monthly" | "custom" {
+    const hours = autoForm.value?.backupIntervalHours ?? 24;
+    if (hours === 24) return "daily";
+    if (hours === 168) return "weekly";
+    if (hours === 720) return "monthly";
+    return "custom";
+  },
+  set(value: "daily" | "weekly" | "monthly" | "custom") {
+    if (!autoForm.value || value === "custom") return;
+    autoForm.value.backupIntervalHours = value === "daily" ? 24 : value === "weekly" ? 168 : 720;
+  }
+});
+
 onMounted(async () => {
   if (sitesStore.sites.length === 0) {
     await sitesStore.fetchSites().catch(() => undefined);
   }
   await refresh();
+  if (isAdmin.value) {
+    await loadAutoBackup();
+  }
 });
+
+async function loadAutoBackup() {
+  try {
+    autoStatus.value = await getAutomation();
+    autoForm.value = { ...autoStatus.value.settings };
+  } catch {
+    // Otomasyon durumu okunamazsa kart gizli kalır; yedek listesi etkilenmez.
+  }
+}
+
+async function saveAutoBackup() {
+  if (!autoForm.value) return;
+  busy.value = true;
+  try {
+    // backupRemotePassword boş = sunucudaki kayıtlı parola korunur (Otomasyon ekranıyla aynı sözleşme).
+    autoStatus.value = await updateAutomation({ ...autoForm.value, backupRemotePassword: "" });
+    autoForm.value = { ...autoStatus.value.settings };
+    showNotice(t("panel.backup.autoSaved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
 
 async function refresh() {
   loading.value = true;
@@ -357,6 +461,37 @@ async function restore(backup: BackupRecord) {
     await restoreBackup(backup.id, "");
     await refresh();
     showNotice(t("panel.backup.restored"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function removeBackup(backup: BackupRecord) {
+  if (!window.confirm(t("panel.backup.confirmDelete", { name: backup.name }))) {
+    return;
+  }
+
+  busy.value = true;
+  try {
+    await deleteBackup(backup.id);
+    await refresh();
+    if (browseRecord.value?.id === backup.id) {
+      closeBrowser();
+    }
+    showNotice(t("panel.backup.deletedNotice"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function download(backup: BackupRecord) {
+  busy.value = true;
+  try {
+    await downloadBackup(backup.id, backup.name);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

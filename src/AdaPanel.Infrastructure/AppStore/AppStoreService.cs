@@ -126,6 +126,38 @@ public sealed class AppStoreService(
         },
         new()
         {
+            // Joomla surum-pinli (Adminer emsali): downloads.joomla.org/latest HTML dondugu icin
+            // dogrudan zip veren GitHub release asset'i kullanilir (canli dogrulandi: kokte index.php
+            // + installation/ sihirbazi, tek-ust-klasor YOK -> flatten no-op).
+            Id = "joomla",
+            DisplayName = "Joomla",
+            Description = "Joomla son kararli surumunu site kokune indirip acar. Ardindan panelden bir veritabani olusturup tarayici kurulum sihirbazini (installation/) tamamlayin.",
+            Runtime = "PHP 8.x",
+            Category = "CMS",
+            DownloadUrl = "https://github.com/joomla/joomla-cms/releases/download/6.1.1/Joomla_6.1.1-Stable-Full_Package.zip",
+            RequiresDatabase = true,
+            DefaultRootFolder = "site koku",
+            Requirements = ["PHP 8.x", "MySQL veya MariaDB"],
+            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"]
+        },
+        new()
+        {
+            // PrestaShop 9.x GitHub'a zip asset koymuyor; son zip'li kararli seri 8.2.x pinlenir
+            // (canli dogrulandi: kokte index.php + prestashop.zip -> index.php tarayicida
+            // kendini acar ve kurulum sihirbazini baslatir).
+            Id = "prestashop",
+            DisplayName = "PrestaShop",
+            Description = "PrestaShop e-ticaret paketini site kokune indirip acar. Siteyi tarayicida acinca paket kendini cikartir ve kurulum sihirbazi baslar; oncesinde panelden bir veritabani olusturun.",
+            Runtime = "PHP 8.x",
+            Category = "E-Ticaret",
+            DownloadUrl = "https://github.com/PrestaShop/PrestaShop/releases/download/8.2.7/prestashop_8.2.7.zip",
+            RequiresDatabase = true,
+            DefaultRootFolder = "site koku",
+            Requirements = ["PHP 8.x", "MySQL veya MariaDB"],
+            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"]
+        },
+        new()
+        {
             Id = "plain-php",
             DisplayName = "PHP Starter",
             Description = "Basit bir index.php ile bos PHP calisma alani olusturur.",
@@ -202,6 +234,8 @@ public sealed class AppStoreService(
                 break;
             case "grav":
             case "drupal":
+            case "joomla":
+            case "prestashop":
                 await InstallDownloadableAppAsync(template, destination, cancellationToken);
                 break;
             case "plain-php":

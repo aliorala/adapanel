@@ -796,6 +796,36 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         return removedIds.Count;
     }
 
+    public async Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        var record = (await GetBackupsAsync(cancellationToken)).FirstOrDefault(item => item.Id == backupId)
+            ?? throw new AppException("backup.not_found", 404, 404);
+
+        // Yerel dosya kilitliyse kayıt KORUNUR (kör kayıt kaybı olmasın); kullanıcı gerçek nedeni görür.
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(record.Path) && File.Exists(record.Path))
+            {
+                File.Delete(record.Path);
+            }
+            else if (!string.IsNullOrWhiteSpace(record.Path) && Directory.Exists(record.Path))
+            {
+                Directory.Delete(record.Path, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new AppException("backup.delete_failed", 409, 409, exception.Message);
+        }
+
+        // ATOMİK: yalnız bu ID çıkarılır → eşzamanlı eklenen yeni kayıtlar (otomatik yedek) korunur.
+        await fileStore.UpdateAsync(
+            IndexPath,
+            Array.Empty<BackupRecordDto>(),
+            existing => existing.Where(item => item.Id != backupId).ToArray(),
+            cancellationToken);
+    }
+
     // Off-site yedeğin UZAK kopyasını siler (uzak rotasyon). Best-effort: hata/yoksa sessizce geçer, budamayı BOZMAZ.
     private async Task TryDeleteRemoteBackupAsync(BackupRecordDto record, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {

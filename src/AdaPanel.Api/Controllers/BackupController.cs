@@ -1,3 +1,4 @@
+using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Common;
@@ -13,7 +14,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/backup")]
 public sealed class BackupController(
     IBackupService backupService,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IAuditService auditService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<BackupRecordDto>>>> GetBackupsAsync(CancellationToken cancellationToken)
@@ -136,6 +138,31 @@ public sealed class BackupController(
 
         var result = await backupService.RestoreItemsAsync(request, cancellationToken);
         return Ok(ApiResponse<RestoreBackupItemsResultDto>.Ok(result, "backup.items_restored"));
+    }
+
+    /// <summary>
+    /// Yedeği siler (yerel dosya + kayıt; off-site uzak kopyaya dokunulmaz). Admin her yedeği,
+    /// müşteri/bayi yalnız etkin kapsamındaki SITE yedeklerini silebilir.
+    /// </summary>
+    [HttpDelete("{backupId}")]
+    public async Task<ActionResult<ApiResponse<object>>> DeleteAsync(string backupId, CancellationToken cancellationToken)
+    {
+        await EnsureBackupOwnershipAsync(backupId, cancellationToken);
+
+        var record = (await backupService.GetBackupsAsync(cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.Id, backupId, StringComparison.OrdinalIgnoreCase));
+
+        await backupService.DeleteBackupAsync(backupId, cancellationToken);
+
+        await auditService.WriteAsync(
+            "backup.deleted",
+            "backup",
+            $"Backup '{record?.Name ?? backupId}' ({record?.Type}/{record?.Source}) deleted.",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<object>.Ok(new { id = backupId }, "backup.deleted"));
     }
 
     /// <summary>Customer/Reseller için yedek kaydının etkin kapsamındaki bir siteye ait olduğunu doğrular.</summary>

@@ -70,6 +70,11 @@ export async function downloadBackup(backupId: string, fileName: string) {
   window.URL.revokeObjectURL(url);
 }
 
+// Yedeği siler (yerel dosya + kayıt; off-site uzak kopya hedef depoda kalır).
+export async function deleteBackup(backupId: string) {
+  await apiClient.delete<ApiEnvelope<object>>(`/backup/${encodeURIComponent(backupId)}`);
+}
+
 export async function backupMail(target?: BackupTargetPayload) {
   const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/mail", { ...(target ?? {}) });
   return response.data.data;

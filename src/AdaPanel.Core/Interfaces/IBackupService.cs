@@ -42,4 +42,10 @@ public interface IBackupService
     /// gönderir (kimlik + bağlantı + yazma izni). Başarısızlıkta fırlatmaz; sonucu (Success + neden) döner.
     /// </summary>
     Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Tek bir yedeği siler: yerel dosya/dizin + kayıt. Off-site UZAK kopyaya DOKUNMAZ (uzak rotasyon
+    /// PruneAsync'in işidir); kayıt silinse de uzak kopya hedef depoda durur.
+    /// </summary>
+    Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
 }

@@ -5422,3 +5422,33 @@ Basarili:
   (2) o loginle gir -> menu daralmis olmali + kapali bolumun API'si 403 auth.section_forbidden, (3) alt-kullanici cron
   gorevi kurunca parent'in listesinde gorunmeli (abonelik paylasimi), (4) alt-kullanici sil -> siteler etkilenmemeli.
 - KALAN: ClamAV + wildcard SSL DNS-01 (VPS-testli, kullanici hazirken), tam-sunucu DR. Deferred: SEO, coklu-sunucu.
+
+## 2026-07-05 (191) — Katalog (Joomla+PrestaShop) + kullanici istekleri: guncelleme-kaynagi gizlendi, yedek SIL/INDIR + otomatik-yedek karti (0.2.19)
+- KATALOG (Batch2 tamamlandi): Joomla + PrestaShop 1-tik kurulum, InstallDownloadableAppAsync (WordPress akisi).
+  URL'ler CANLI dogrulandi (zip indirilip yapisi incelendi): Joomla GitHub asset 6.1.1 (33MB, kokte index.php +
+  installation/ sihirbaz; downloads.joomla.org/latest HTML dondugu icin KULLANILMADI). PrestaShop 8.2.7 GitHub asset
+  (79MB, kokte index.php + prestashop.zip -> tarayicida kendini acar); 9.x GitHub'a zip KOYMUYOR -> 8.2.x pinli
+  (Adminer emsali). Kategori "E-Ticaret" dinamik sekme olarak gelir, i18n gerekmez (sablon aciklamalari ham TR, mevcut tasarim).
+- TARAMA: 284 backend istisna anahtari i18n'de TAM. NOT (yanlis-alarm dersi): ApiResponse.Ok success anahtarlarinin
+  86'si i18n'de YOK ama SORUN DEGIL — UI basari mesajlarini KENDI yerel anahtarlarindan gosterir (t("panel.X.saved")),
+  API success anahtari kullanilmaz; yalniz HATA anahtarlari i18n'den cozulur. Gelecek taramalarda success'i sayma.
+- KULLANICI ISTEKLERI (oturum ici):
+  * Ayarlar>Guncellemeler'deki "Guncelleme kaynagi (GitHub)" blogu UI'dan KALDIRILDI (kullanici istegi; depo alani+
+    aciklama gorunmesin). Backend ucu ve SetGithubRepoAsync DURUYOR; varsayilan repo SelfUpdateService.DefaultRepo=
+    aliorala/adapanel + config/update-github.json'dan degisebilir. 5 i18n anahtari (githubTitle/Hint/Save/Saving/Saved)
+    iki dilden silindi; update.github_repo_invalid KALDI (uc hala var).
+  * YEDEK SILME eklendi (eksikti; kullanici sordu "neden sil yok"): IBackupService.DeleteBackupAsync (yerel dosya/
+    dizin sil, kilitliyse backup.delete_failed 409 + kayit KORUNUR; kayit cikarma atomik UpdateAsync), BackupController
+    DELETE {id} (EnsureBackupOwnershipAsync: musteri yalniz kendi site yedegi; audit backup.deleted). UZAK kopya
+    BILEREK silinmez (kimlik otomasyon state'inde; BackupService<->AutomationService dongusu olurdu) — onay metni bunu soyler.
+  * BackupView: Sil + Indir butonlari (downloadBackup api'si zaten vardi, UI'da kullanilmiyordu) + ADMIN'e
+    "Otomatik yedekleme" karti (gunluk=24/haftalik=168/aylik=720 saat preset + saklama gunu + son/sonraki calisma;
+    getAutomation/updateAutomation'i kullanir, backupRemotePassword:"" = kayitli parola korunur sozlesmesi).
+    Motor ZATEN vardi (AutomationService AutoBackup + her kosudan sonra PruneAsync uzak-rotasyonlu); kullanici
+    BULAMAMISTI (Araclar>Otomasyon'da gomulu) -> kesif sorunu cozuldu, kullanici da sonradan buldu.
+- i18n +19 -2 (github) -> parite 2566=2566. Testler 2+51, vue-tsc temiz.
+- 0.2.19 SHA256 `03803EA219A0FCDC41C80AB66C751CAA705DBA4ECF5D11A184BAFC871A2AD068` (artifacts\release\0.2.19\;
+  ayni oturumdaki onceki iki 0.2.19 paketi 1506B0/7F488C-sonrasi GECERSIZ, bu SONUNCU gecerli). 0.2.18 (7F488C)
+  YAYINLANMADIYSA atla -> GitHub'a dogrudan 0.2.19 tag'iyla bu exe'yi koy.
+- TEST (VPS): Grav/Joomla 1-tik kurulum (indirme sunucudan), yedek sil butonu, otomatik yedek karti kaydet;
+  188/190 alt-kullanici testleri hala bekliyor. KALAN: ClamAV + wildcard DNS-01 (VPS), tam-sunucu DR.
