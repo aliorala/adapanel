@@ -5621,3 +5621,16 @@ Basarili:
 - 0.2.20 v5 SHA256 `AB360F2F81ED4A88FDEAA6E349C47ACFEE0B96D8520BB3A7B5F5048FCBE31D21` (81554D dahil onceki TUM
   0.2.20 hash'leri GECERSIZ — kullanici HENUZ kurmadi/kurulumu cakismada kaldi, BU paketi kuracak).
 - NOT: MySqlPort=3307 — panelin kendi MySQL-8'i bilerek 3307'de (kendi motorlari arasinda cakisma zaten yok).
+
+## 2026-07-07 (199) — DUZELTME: 0.2.20 YAYINDAYMIS -> on-kontrol 0.2.21 oldu (198'deki v5 iddiasi GECERSIZ)
+- KULLANICI HAKLI UYARDI: "0.2.20 zaten yayinladik, niye kontrol etmiyorsun". GitHub dogrulandi:
+  tag 0.2.20, 2026-07-05T20:28Z, 1 indirme; yayindaki exe INDIRILIP hash'lendi = `81554DB2...` (dun geceki
+  kullanici-silme+FTP-DR paketi — icerik dogru paket, sansli kacis). 198'de ayni numaraya urettigim AB360F GECERSIZ,
+  yereldeki kopyasi silindi.
+- KALICI KURAL (adapanel-workflow memory'ye de yazildi): paketlemeden ONCE GitHub releases/latest KONTROL ET;
+  yayinlanmis tag'e asla yeni exe uretme (self-update surum karsilastirir — ayni tag altinda degisen exe,
+  o surumu kurmus panellere yeni duzeltmeleri GORUNMEZ yapar). "Yayinlanmadi" varsayma.
+- Kurulum on-kontrolu (198'deki ozellik, degisiklik yok) 0.2.21 olarak paketlendi:
+  SHA256 `310F186F6CCBAEEEF60A67F99A227E6AC9DC571FE278981160266F0BB291B57B` (artifacts\release\0.2.21\).
+  GitHub'a 0.2.21 tag'iyla yayinlanacak; 0.2.20 kurulu paneller guncellemeyi otomatik gorecek.
+- MEVCUT DURUM: yayinda 0.2.20 (81554D, on-kontrol HARIC her sey); 0.2.21 (310F18) = 0.2.20 + kurulum on-kontrolu.
