@@ -656,6 +656,12 @@ public sealed class ComponentBootstrapper(
             // (ikisi de port 25/110/143'e bağlanamaz). Stalwart birincil, MailEnable yedek.
             await ResolveMailServerConflictAsync(component.Id, cancellationToken);
 
+            // ÖN KONTROL (Plesk paritesi): bileşenin portunu tutan yabancı yazılım veya çakışan
+            // yabancı servis varsa kurulum İNDİRMEDEN ÖNCE, suçlunun ADIYLA reddedilir. Aksi halde
+            // hata çok sonra yanıltıcı biçimde patlar (ör. MySQL 8 3306'dayken MariaDB probe'u
+            // yabancı sunucuya bağlanıp "Access denied" der). Kendi Ada* servislerimiz muaftır.
+            await EnsureNoComponentConflictsAsync(component, cancellationToken);
+
             // memcached'in Windows (mingw) ikili dosyalari Windows Defender tarafindan
             // YANLIS POZITIF "PUA" olarak isaretlenip indirilir indirilmez siliniyor; resmi
             // bir Windows derlemesi olmadigindan kaynak degistirmek bunu cozmuyor. AdaPanel'in
@@ -2992,6 +2998,86 @@ public sealed class ComponentBootstrapper(
             $"Service={serviceName}\r\nPort={port}\r\n" +
             $"ServiceState={serviceResult.StandardOutput}\r\n" +
             $"ProbeOut={lastResult?.StandardOutput}\r\nProbeError={lastResult?.StandardError}");
+    }
+
+    /// <summary>
+    /// Kurulum ön kontrolü: bileşenin portlarını tutan YABANCI süreçler (software.port_conflict)
+    /// ve çakışan yabancı servisler (software.conflicting_service) suçlunun adıyla raporlanır.
+    /// Probe'un kendisi başarısız olursa kurulum ENGELLENMEZ (best-effort teşhis).
+    /// </summary>
+    private async Task EnsureNoComponentConflictsAsync(ComponentManifestItemDto component, CancellationToken cancellationToken)
+    {
+        var ports = ComponentPreflight.GetRequiredPorts(component.Id);
+        var patterns = ComponentPreflight.GetConflictingServicePatterns(component.Id);
+        if (ports.Count == 0 && patterns.Count == 0)
+        {
+            return;
+        }
+
+        IReadOnlyList<ComponentPreflight.PortOccupancy> occupied = [];
+        IReadOnlyList<ComponentPreflight.ServiceInfo> services = [];
+        try
+        {
+            var probe = await ProcessRunner.RunPowerShellAsync(
+                ComponentPreflight.BuildProbeScript(ports, patterns),
+                cancellationToken);
+            if (!probe.Success || string.IsNullOrWhiteSpace(probe.StandardOutput))
+            {
+                return;
+            }
+
+            using var document = JsonDocument.Parse(probe.StandardOutput);
+            var root = document.RootElement;
+            occupied = ReadPreflightArray<ComponentPreflight.PortOccupancy>(root, "Ports");
+            services = ReadPreflightArray<ComponentPreflight.ServiceInfo>(root, "Services");
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Kurulum ön kontrol probe'u çalıştırılamadı; kontrol atlanıyor ({ComponentId}).", component.Id);
+            return;
+        }
+
+        var portConflicts = ComponentPreflight.SelectForeignPortConflicts(occupied, component.ServiceName);
+        if (portConflicts.Count > 0)
+        {
+            var lines = portConflicts.Select(item =>
+                $"Port {item.Port}: {(string.IsNullOrWhiteSpace(item.Process) ? "bilinmeyen süreç" : item.Process + ".exe")} (PID {item.Pid})" +
+                (string.IsNullOrWhiteSpace(item.Service) ? string.Empty : $" — Windows servisi: {item.Service}"));
+            throw new AppException(
+                "software.port_conflict",
+                409,
+                409,
+                $"Component={component.DisplayName}\r\n{string.Join("\r\n", lines)}\r\n" +
+                "Cozum: yukaridaki yazilimi kaldirin ya da servisini durdurup devre disi birakin (sc stop <servis> && sc config <servis> start= disabled), sonra kurulumu tekrar deneyin.");
+        }
+
+        var blockingServices = ComponentPreflight.SelectBlockingServices(services, patterns, component.ServiceName);
+        if (blockingServices.Count > 0)
+        {
+            var lines = blockingServices.Select(item => $"Servis: {item.Name} (durum: {item.State}, başlangıç: {item.StartMode})");
+            throw new AppException(
+                "software.conflicting_service",
+                409,
+                409,
+                $"Component={component.DisplayName}\r\n{string.Join("\r\n", lines)}\r\n" +
+                "Cozum: bu servis su an calisiyor ya da otomatik baslangicta — ayni portlar icin cakisir. Kaldirin veya devre disi birakin (sc config <servis> start= disabled), sonra tekrar deneyin.");
+        }
+    }
+
+    // PS 5.1 ConvertTo-Json tek elemanı diziye sarmayabilir → hem dizi hem tek nesne kabul edilir.
+    private static IReadOnlyList<T> ReadPreflightArray<T>(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty(property, out var value))
+        {
+            return [];
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Array => JsonSerializer.Deserialize<List<T>>(value) ?? [],
+            JsonValueKind.Object => JsonSerializer.Deserialize<T>(value) is { } single ? [single] : [],
+            _ => []
+        };
     }
 
     internal static int ResolveDatabasePort(string componentId)

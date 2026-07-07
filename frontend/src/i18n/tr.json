@@ -1514,6 +1514,8 @@
   "software.service_validation_failed": "Bileşen kuruldu ancak servisinin gerçekten çalıştığı doğrulanamadı.",
   "software.service_not_running": "Bileşen servisi kuruldu ancak çalışır duruma geçemedi.",
   "software.database_start_failed": "Veritabanı servisi kuruldu ancak bağlantı vermeye başlamadı.",
+  "software.port_conflict": "Kurulum yapılamadı: bu bileşenin ihtiyaç duyduğu port, sunucuda zaten kurulu başka bir yazılım tarafından kullanılıyor. Aşağıdaki ayrıntılarda hangi yazılım/servis olduğu belirtilmiştir — onu kaldırın ya da servisini durdurup devre dışı bırakın, sonra kurulumu tekrar deneyin.",
+  "software.conflicting_service": "Kurulum yapılamadı: sunucuda bu bileşenle çakışan başka bir yazılımın Windows servisi var (çalışıyor ya da otomatik başlangıçta). Ayrıntılarda servis adı belirtilmiştir — kaldırın ya da devre dışı bırakın, sonra tekrar deneyin.",
   "software.dependency_not_found": "Bileşenin gerekli otomatik kurulum bağımlılığı bulunamadı.",
   "software.dependency_cycle": "Bileşen bağımlılıklarında geçersiz bir döngü bulundu.",
   "software.remove.completed": "Yazılım kaydı kaldırıldı.",

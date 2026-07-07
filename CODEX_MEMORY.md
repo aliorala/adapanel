@@ -5597,3 +5597,27 @@ Basarili:
   yedekte gorevler, alt-kullanici + izin matrisi + musteri CRUD, abonelik kaynak paylasimi fixleri, yedek sil/indir,
   oto-yedek karti, guncelleme-kaynagi gizleme, ClamAV, log rotasyonu, mail oto-yanit, wildcard SSL DNS-01,
   tam-sunucu DR (IIS+FTP), kullanici silme. Kapsam disi: SEO toolkit, coklu-sunucu, Ruby.
+
+## 2026-07-07 (198) — CANLI HATA analizi (Win10 + MySQL 8 cakismasi) -> KURULUM ON-KONTROLU eklendi (0.2.20 v5)
+- KULLANICI CANLI HATA bildirdi (baska Win10 makinede kurulum): "Veritabani servisi kuruldu ancak baglanti vermeye
+  baslamadi" + AdaMariaDB STOPPED (1066) + probe "Access denied for user root". TESHIS: makinede MySQL 8.x calisiyor,
+  3306'yi tutuyor -> AdaMariaDB baslayamadi; mariadb-admin probe'u 127.0.0.1:3306'da YABANCI MySQL 8'e baglandi ->
+  farkli root parolasi -> Access denied. Iki celiskili belirti tek nedenle aciklandi. COZUM (kullaniciya): MySQL80
+  servisini durdur+devre disi birak, MariaDB'yi tekrar kur. Oneri: MariaDB (panel varsayilani, dusuk RAM, CMS uyumu).
+- KULLANICI HAKLI TALEP: "panel bunu kendisi acik soylese profesyonel olur — tum cakismalar icin". YAPILDI:
+  ComponentPreflight (Bootstrap/) — kurulum INDIRMEDEN ONCE:
+  * PORT KONTROLU: bilesenin portlari (mariadb 3306 / panel-mysql 3307(!) / pg 5432 / redis 6379 / memcached 11211 /
+    stalwart 25,143,587,993,4190,8080) dolu mu -> sahibi surec+PID+Windows servis ADIYLA software.port_conflict 409
+    (cozum metni Details'te). Kendi Ada* servislerimiz MUAF (yeniden kurulum bozulmaz).
+  * SERVIS KONTROLU: yabanci cakisan servis desenleri (mysql/mariadb, postgresql, redis, memcached, hmailserver) —
+    CALISIYOR veya baslangici OTOMATIK ise software.conflicting_service 409 (durmus+devre-disi engellemez).
+    MailEnable BILEREK stalwart deseninde YOK (panel-yonetimli cift, ResolveMailServerConflict once calisir).
+  * Probe tek PS cagrisiyla (Get-NetTCPConnection + Win32_Service) JSON doner; probe hatasi kurulumu ENGELLEMEZ
+    (best-effort). PS5.1 tek-eleman JSON sarmasi ReadPreflightArray ile ele alindi.
+- DOGRULAMA: saf mantik 9 UNIT TEST (port haritasi, Ada* muafiyeti, yabanci secimi, Running/Auto/Disabled ayrimi,
+  script uretimi) -> testler 2+66. PROBE CANLI DOGRULANDI: bu makinede 33061'e gercek TcpListener acildi, script
+  ayni sekliyle calistirildi -> {Port:33061, Pid, Process:"powershell", Service:""} dondu (parser'la birebir).
+  SoftwareView details'i ZATEN gosteriyor (451. satir) — UI degisikligi gerekmedi. i18n +2 -> parite 2628=2628.
+- 0.2.20 v5 SHA256 `AB360F2F81ED4A88FDEAA6E349C47ACFEE0B96D8520BB3A7B5F5048FCBE31D21` (81554D dahil onceki TUM
+  0.2.20 hash'leri GECERSIZ — kullanici HENUZ kurmadi/kurulumu cakismada kaldi, BU paketi kuracak).
+- NOT: MySqlPort=3307 — panelin kendi MySQL-8'i bilerek 3307'de (kendi motorlari arasinda cakisma zaten yok).

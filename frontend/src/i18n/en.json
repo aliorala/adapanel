@@ -1514,6 +1514,8 @@
   "software.service_validation_failed": "The component was installed, but its service could not be verified as operational.",
   "software.service_not_running": "The component service was installed but did not reach the running state.",
   "software.database_start_failed": "The database service was installed but did not become ready for connections.",
+  "software.port_conflict": "Installation blocked: a port this component needs is already in use by other software installed on this server. The details below name the process/service — remove it or stop and disable its service, then retry the installation.",
+  "software.conflicting_service": "Installation blocked: another software's Windows service on this server conflicts with this component (it is running or set to start automatically). The details name the service — remove or disable it, then retry.",
   "software.dependency_not_found": "A required automatic installation dependency could not be found.",
   "software.dependency_cycle": "An invalid component dependency cycle was detected.",
   "software.remove.completed": "The software record was removed.",
