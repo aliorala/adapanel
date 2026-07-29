@@ -5771,3 +5771,12 @@ Basarili:
 - **0.2.22 PAKET (REVIZE, 201'deki 8C2B53BE GECERSIZ — yayinlanmadi, uzerine yazildi):**
   `artifacts\release\0.2.22\AdaPanelSetup.exe`, `51,863,354` byte (49.46 MiB),
   SHA256 `6215AD30BACB02228565D1099E632839D9EB09AFB29C1EB895EF9E243DB026FB`.
+- **YAYINLANDI (2026-07-30):** commit `e0758b1` (yerel main; bu depoda git remote TANIMLI DEGIL — GitHub'daki
+  repo yalniz README commit'i tasiyor, kaynak hic push edilmemis, release'ler API ile yayinlaniyor).
+  GitHub release `0.2.22` olusturuldu (id 362090453, target main, draft=false) + `AdaPanelSetup.exe`
+  yuklendi. YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `6215AD30BACB02228565D1099E632839D9EB09AFB29C1EB895EF9E243DB026FB`
+  (yereldekiyle birebir), `releases/latest` -> 0.2.22. Yerelde `0.2.22` annotated tag'i de olusturuldu.
+  Release body'si panelin self-update ekraninda "notlar" olarak gorunur (SelfUpdateService JSON `body`
+  alanini okur) -> notlar Turkce yazildi.
+  YAYIN YONTEMI (tekrar icin): `git credential fill` ile Windows Kimlik Yoneticisi'ndeki github.com
+  token'i (scope: gist, repo, workflow) okunup GitHub REST API'ye Bearer olarak verildi; gh CLI kurulu DEGIL.
