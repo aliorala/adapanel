@@ -23,6 +23,13 @@ public interface IUserManagementService
     /// </summary>
     Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Hatalı giriş denemeleri yüzünden kilitlenmiş kullanıcının kilidini açar (LockedUntilUtc +
+    /// FailedLoginCount sıfırlanır). Bayi yalnız kendi müşterisinin kilidini açabilir.
+    /// Kimse giremiyorsa sunucu tarafı çıkış yolu: veri kökünde config\recover-access.flag dosyası.
+    /// </summary>
+    Task<UserSummaryDto> UnlockUserAsync(Guid userId, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default);
+
     // --- Abonelik altı ek kullanıcılar (Plesk "additional user"): TOP-LEVEL müşteri kendisi yönetir ---
 
     /// <summary>Parent müşterinin altındaki ek kullanıcılar. Aktör top-level müşteri değilse users.sub_forbidden.</summary>

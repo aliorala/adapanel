@@ -59,6 +59,8 @@ export type ManagedUser = {
   isActive: boolean;
   isTwoFactorEnabled: boolean;
   lastLoginAtUtc: string | null;
+  // Hatalı giriş denemeleri yüzünden kilitliyse kilidin bitişi; değilse null.
+  lockedUntilUtc: string | null;
   createdAtUtc: string;
   assignedSites: string[];
   maxSites: number;
@@ -224,6 +226,12 @@ export const useAuthStore = defineStore("auth", {
     },
     async updateUser(userId: string, payload: UpdateUserPayload) {
       const response = await apiClient.put<ApiEnvelope<ManagedUser>>(`/users/${userId}`, payload);
+      this.users = this.users.map((user) => user.id === userId ? response.data.data : user);
+      return response.data.data;
+    },
+    // Hatalı giriş kilidini beklemeden açar (varsayılan kilit süresi 15 dk).
+    async unlockUser(userId: string) {
+      const response = await apiClient.post<ApiEnvelope<ManagedUser>>(`/users/${userId}/unlock`, {});
       this.users = this.users.map((user) => user.id === userId ? response.data.data : user);
       return response.data.data;
     },

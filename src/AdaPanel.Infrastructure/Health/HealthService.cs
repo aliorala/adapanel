@@ -20,7 +20,12 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
     [
         new("W3SVC", "IIS — Web (W3SVC)"),
         new("WAS", "IIS — Süreç Etkinleştirme (WAS)"),
-        new("FTPSVC", "FTP (Microsoft FTP Service)")
+        new("FTPSVC", "FTP (Microsoft FTP Service)"),
+        // DNS Server: panel bölge barındırıyorsa bu servis durduğunda TÜM alan adları çözülemez.
+        // Kurulu değilse listede "NotInstalled" görünür (istemci OS'ta rol yoktur).
+        // DİKKAT: bu servisin "Running" olması yetmez, genel IP'ye bind olması da gerekir —
+        // onu DnsService.GetServerHealthAsync ölçer, Sunucu Sağlığı ekranı ayrı kartta gösterir.
+        new("DNS", "DNS Sunucusu (DNS Server)")
     ];
 
     public async Task<IReadOnlyCollection<ServiceHealthDto>> GetHealthAsync(CancellationToken cancellationToken = default)

@@ -599,7 +599,18 @@
             <span :class="['status-pill', user.isTwoFactorEnabled ? 'ok' : 'warn']">
               {{ user.isTwoFactorEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
+            <span v-if="user.lockedUntilUtc" class="status-pill danger" :title="t('panel.users.lockedHint')">
+              {{ t("panel.users.locked") }}
+            </span>
             <span class="user-row-actions">
+              <!-- Hatalı giriş kilidi: beklemeden aç (doğru parolayla da kalkar, bu kısayol). -->
+              <button
+                v-if="user.lockedUntilUtc"
+                class="secondary compact row-button"
+                :disabled="unlockingUserId === user.id"
+                @click="unlockUser(user)">
+                {{ unlockingUserId === user.id ? t("panel.users.unlocking") : t("panel.users.unlock") }}
+              </button>
               <button
                 v-if="user.role === 'Customer'"
                 class="secondary compact row-button"
@@ -771,6 +782,7 @@ const twoFactorVerificationCode = ref("");
 const disableTwoFactorPassword = ref("");
 const recoveryCodes = ref<string[]>([]);
 const selectedUserId = ref("");
+const unlockingUserId = ref("");
 const settingsTab = ref<SettingsTab>("general");
 const showUserCreateForm = ref(false);
 const showPlanForm = ref(false);
@@ -1515,6 +1527,19 @@ async function deleteUser(user: ManagedUser) {
     showBanner(t("panel.users.deleted"), false);
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
+  }
+}
+
+// Hatalı giriş kilidini beklemeden açar (yönetici kısayolu; bayi yalnız kendi müşterisini açabilir).
+async function unlockUser(user: ManagedUser) {
+  unlockingUserId.value = user.id;
+  try {
+    await authStore.unlockUser(user.id);
+    showBanner(t("panel.users.unlocked"), false);
+  } catch (error) {
+    showBanner(resolveApiMessage(error), true);
+  } finally {
+    unlockingUserId.value = "";
   }
 }
 

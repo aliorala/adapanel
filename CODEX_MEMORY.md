@@ -5634,3 +5634,140 @@ Basarili:
   SHA256 `310F186F6CCBAEEEF60A67F99A227E6AC9DC571FE278981160266F0BB291B57B` (artifacts\release\0.2.21\).
   GitHub'a 0.2.21 tag'iyla yayinlanacak; 0.2.20 kurulu paneller guncellemeyi otomatik gorecek.
 - MEVCUT DURUM: yayinda 0.2.20 (81554D, on-kontrol HARIC her sey); 0.2.21 (310F18) = 0.2.20 + kurulum on-kontrolu.
+
+## 2026-07-30 (200) — KOK NEDEN: "adapanel.host paneldeki site listesinde YOK" + wildcard DNS-01 on kontrolu
+- **SITE GIZLENME BUG'I (gercek kok neden, kullanici sikayeti):** `WebAdministrationSiteService.IsSystemSite`
+  dahili siteleri gizlemek icin `"AdaPanel."` ONEKI kullaniyordu. `"adapanel.host"` bu onekle (OrdinalIgnoreCase)
+  ESLESIYOR -> musterinin GERCEK sitesi "panel ic altyapi sitesi" sayilip `GetSitesAsync` listesinden
+  DUSURULUYORDU. IIS'te ve diskte site duruyor, panelde YOK. Ayni sekilde `"MailEnable"` oneki
+  `mailenable.com` gibi bir alan adini gizlerdi.
+  DUZELTME: tam-ad kumesine `AdaPanel.WebDb.PhpMyAdmin` + `AdaPanel.WebDb.Adminer` eklendi; onekler
+  alan adiyla CAKISAMAYACAK sekilde daraltildi (`AdaPanel.WebDb.`, `AdaPanel FTP`, `MailEnable ` — son
+  ikisi BOSLUKLU, alan adinda bosluk olamaz). `IsSystemSite` internal yapildi + 11 regresyon testi
+  (adapanel.host / AdaPanel.host / adapanel.com.tr / mailenable.com / alioral.xyz gorunur; dahili 5 ad
+  ve loopback-only site gizli). KURAL: site listesi filtresine ASLA alan adiyla eslesebilecek onek koyma.
+- **Wildcard DNS-01 on kontrolu (`EnsureDns01ResolvableAsync`):** kullanicinin `*.alioral.xyz` hatasinin
+  nedeni panelin TXT yazamamasi DEGIL — log kaydin yazildigini VE silindigini gosteriyor; LE tarafinda
+  `DNS problem: query timed out looking up TXT` = delege edilmis NS'ler kaydi disariya yanitlamiyor
+  (53/UDP kapali, DNS servisi durmus veya NS'ler baska saglayici). win-acme bu durumda 10 tur x 30 sn
+  bosa bekliyor ve BASARISIZ dogrulama LE limitine yaziliyor. Artik win-acme'den ONCE tek PowerShell
+  turu: (1) bolge panel DNS'inde birincil mi, (2) 1.1.1.1/8.8.8.8'den NS delegasyonu var mi,
+  (3) rastgele token'li gecici `_adapanel-acme-check` TXT yazilip delege NS IP'lerine + genel
+  cozumleyiciye soruluyor, sonra siliniyor. Sonuca gore net hata: `ssl.dns01_zone_missing` /
+  `ssl.dns01_no_delegation` / `ssl.dns01_ns_unreachable` (+ detay: zone, ns, nsIp, serverIp,
+  authoritativeAnswer, publicAnswer, notes). Yetkili NS yanit veriyorsa (genel cozumleyici henuz
+  gormediyse = yayilma) ENGELLEMEZ, devam eder. On kontrol calistirilamazsa (DnsServer/DnsClient
+  modulu yok) yolu KAPATMAZ, win-acme yine denenir.
+- DOGRULAMA: build 0 uyari/0 hata, dotnet test Core 2/2 + Infrastructure 77/77, typecheck OK,
+  frontend build OK, i18n TR/EN 2631/2631 parite, onek cakismasi yok.
+- HENUZ PAKETLENMEDI: 0.2.21 (310F18) yayina gidiyordu; bu iki duzeltme icin surum/paket karari
+  kullanicida (paketlemeden once GitHub releases/latest KONTROL EDILECEK).
+- **AYNI GUN, KULLANICI SUNUCU CIKTISI + DISARIDAN TESHIS -> KESIN KOK NEDEN:**
+  - `Get-Website` ciktisi bug'i DOGRULADI: `adapanel.host` IIS'te **Started**, binding `*:80:adapanel.host`,
+    path `C:\inetpub\wwwroot\adapanel.host` — yani site sapasaglam, panel onu FILTRE ile gizliyordu.
+  - AYNI CIKTI benim ilk duzeltmemde ACIK buldu: gercek dahili site adi `AdaPanel.Webmail`
+    (WebmailService.SiteName) ve binding'leri `*:8899:` + `*:80:webmail.<alan>`. Onekleri daralttigim icin
+    bu site musteri listesine SIZACAKTI. Cozum: tam-ad kumesine eklendi + GENEL kural: ad `AdaPanel.` ile
+    basliyor VE kendi adina (ya da alt alan adina) binding'i YOKSA dahilidir. Boylece gelecekteki
+    `AdaPanel.<Bilesen>` siteleri otomatik gizli, `adapanel.host` (kendi adina bagli) gorunur.
+    +2 test (AdaPanel.Webmail/AdaPanel.FutureTool gizli; yalniz www.adapanel.host'a bagli site gorunur)
+    -> Infrastructure 79/79.
+  - **DNS KOK NEDENI (kod degil, sunucu/ag):** registry delegasyonu DOGRU — `nslookup -norecurse` ile
+    x.nic.xyz ve ns01.trs-dns.com'dan: `ns1/ns2.<alan>` + glue **185.7.242.225** (RDAP de ayni, iki alan
+    adi da `active`). AMA 185.7.242.225'te **53 dısarıdan KAPALI** (TCP 53 -> False, UDP 53 -> timeout),
+    buna karsin ICMP + **TCP 80 ve 443 ACIK**. Sonuc: 1.1.1.1/8.8.8.8 iki alan adi icin de SERVFAIL ->
+    ne tarayici cozer ne de Let's Encrypt TXT'yi okur ("query timed out").
+  - SITELER ASLINDA CALISIYOR: ham IP'ye Host basligiyla istek -> `adapanel.host` ve `alioral.xyz`
+    301 -> HTTPS; `curl --resolve <alan>:443:185.7.242.225` -> **HTTP 200, ssl_verify=0 (sertifika gecerli)**;
+    `webmail.adapanel.host` -> Roundcube 200. Yani IIS/SSL saglam, tek eksik DNS'in dısarıya yanit vermesi.
+    (Yan bulgu: alioral.xyz HTTPS yaniti 34 sn — PHP/Laravel icinde cozulemeyen DNS beklemeleri olabilir.)
+  - SUNUCUDA DOGRULANACAK (kullaniciya verildi): `Get-Service DNS`, 53 dinleyicileri
+    (`Get-NetUDPEndpoint/Get-NetTCPConnection`), `Get-DnsServerZone`, `Get-DnsServerSetting` ListenAddresses,
+    `Resolve-DnsName ... -Server 127.0.0.1`. Yerelde calisiyorsa engel HOSTING SAGLAYICI agindadir
+    (Windows Firewall'da 'AdaPanel DNS 53 TCP/UDP' + 'DNS (TCP/UDP, Gelen)' kurallari ZATEN etkin).
+  - YAYIN DURUMU: 0.2.21 GitHub'da **yayinda** (2026-07-08, 1 indirme) -> bu duzeltmeler **0.2.22** olacak.
+
+## 2026-07-30 (201) — 0.2.22: DNS bind sagligi + tek tik onarim + otomatik nobetci (KULLANICI SUNUCUDA KOK NEDENI BULDU)
+- **KULLANICININ TESHISI (kesin):** 23 Temmuz 23:50 reboot'unda Windows DNS Server servisi, ag arayuzu
+  (185.7.242.225) hazir olmadan basladi ve yalniz 127.0.0.1/::1/link-local'e bind kaldi.
+  `Get-DnsServerSetting` KONFIGURASYONUNDA genel IP dinleme listesindeydi ama FIILEN dinlemiyordu
+  (klasik servis baslatma yarisi). ALTI GUN boyunca dısarıdan tek DNS sorgusu yanitlanmadi.
+  Kullanici duzeltti: servisi restart + `sc config DNS start= delayed-auto` + ACME TXT dongusunu
+  ucta uca dogruladi. -> Panelin bunu KENDI yakalamasi icin bu tur eklendi.
+- **DERS / KURAL:** servis "Running" kontrolu bu sinif hatayi ASLA yakalamaz. Bir ag servisinin
+  sagligi = PORTUN FIILI DINLEYICILERI (`Get-NetUDPEndpoint`/`Get-NetTCPConnection` + servis PID'i),
+  konfigurasyon degil. Ayni desen ileride IIS/FTP/mail portlari icin de kullanilabilir.
+- **YENI: DNS erisilebilirlik sagligi** — `DnsServerHealthDto` (installed, serviceStatus, startMode,
+  delayedAutoStart, listeningAddresses, expectedAddresses, missingAddresses, publiclyBound, zoneCount,
+  NeedsRepair, lastAutoRepair*, details) + `DnsService.GetServerHealthAsync` (tek PowerShell turu:
+  servis + Win32_Service PID/StartMode + DelayedAutostart registry + 53 UDP/TCP dinleyicileri +
+  birincil bolge sayisi). Beklenen adresler: loopback olmayan IPv4'ler + panelin kayitli ServerAddress'i.
+  Saf karar mantigi `internal static EvaluateBinding` (0.0.0.0/:: joker; beklenen liste bossa
+  loopback disi herhangi bir adres yeterli -> NAT'ta yanlis alarm yok) -> **6 UNIT TEST**
+  (`DnsServerBindingTests`, loopback-only kesintisi dahil).
+- **YENI: tek tik onarim** — `RepairServerAsync(applyDelayedAutoStart)`: `sc.exe config DNS
+  start= delayed-auto` (PowerShell 5.1 Set-Service AutomaticDelayedStart DESTEKLEMEZ) + Restart-Service
+  + 3 sn bekleme + yeniden olcum. API: `GET /api/v1/dns/server/health`, `POST /api/v1/dns/server/repair`
+  (yeni `DnsServerController`, admin-only). i18n: dns.server_repaired/_not_installed/_restart_failed.
+- **YENI: otomatik nobetci** — `RunBindWatchdogAsync`: 5 dk aralik + 1 saat onarim sogumasi
+  (durum `config/dns-watchdog.json`; servis Scoped oldugu icin sayac DOSYADA, zaman damgasi olcumden
+  ONCE yazilir ki hata halinde sicak dongu olmasin). `AutomationService.RunDueJobsAsync` icinde
+  KILIT DISINDA cagriliyor; aralik dolmadiysa null doner. AYAR YOK, her zaman acik (bozuk DNS = tam
+  kesinti). Onarim/basarisizlik loglanir; UI "son otomatik onarim" satirinda gosterilir.
+- **Sunucu Sagligi ekrani (kullanici istegi):** `HealthService.CoreServices`'e `DNS` eklendi (IIS/WAS/FTP
+  yaninda yeniden baslat butonu). Ustune `ServerHealthView`'a **DNS erisilebilirlik karti**: yesil/kirmizi
+  durum, dinlenen/beklenen/eksik adresler, bolge sayisi, baslangic turu (gecikmeli mi), son otomatik
+  onarim, ham teshis satiri + "DNS'i yeniden baslat ve onar" butonu. Rol kurulu degilse kart gizli.
+- **Wildcard DNS-01 hatasi artik dogru sebebi soyluyor:** on kontrol NS'lerden yanit alamazsa DNS bind
+  sagligina bakar; bind bozuksa `ssl.dns01_not_listening` (= "panelin DNS'i genel IP'de dinlemiyor,
+  Sunucu Sagligi'ndan onar") doner, yoksa eski `ssl.dns01_ns_unreachable`. Kullanici bir daha bosuna
+  registrar'da NS aramaz. (WinAcmeSslService'e IDnsService enjekte edildi; dongu yok.)
+- **AYRICA (ayni pakette):** site listesi gizleme bug'i (`adapanel.host`) + `AdaPanel.Webmail` sizinti
+  aciği + wildcard DNS-01 on kontrolu (bkz. 200).
+- DOGRULAMA: build 0 uyari/0 hata, dotnet test Core 2/2 + Infrastructure **85/85**, typecheck OK,
+  frontend build OK, i18n TR/EN **2652/2652** parite, onek cakismasi yok.
+- **0.2.22 PAKET:** `artifacts\release\0.2.22\AdaPanelSetup.exe`, boyut `51,857,768` byte (49.46 MiB),
+  SHA256 `8C2B53BEF50E8BF384A9D509527B6031D0033CD825FCBA9D6A5619799918B49F`.
+  Surum 6 yerde artirildi (Directory.Build.props, installer\AdaPanel.iss, frontend\package.json +
+  package-lock, scripts\build-installer.ps1, scripts\package-installer.ps1).
+  GitHub'da yayinda olan: 0.2.21 (2026-07-08, dogrulandi) -> 0.2.22 tag'iyla yayinlanacak.
+
+## 2026-07-30 (202) — 0.2.22 (revize): hesap kilidi kurtarma + "adapanel.host" konusunda BAŞKA AJAN YANILDI
+- **BAŞKA AJANIN SONUCU YANLIŞ (kullanici aktardi):** "COM/ServerManager staleness -> servisi yeniden
+  baslattim, adapanel.host artik gorunur" DEGIL. `/api/v1/scope/sites` (ScopeController, admin dalinda)
+  dogrudan `iisSiteService.GetSitesAsync` cagirir -> `IsSystemSite` filtresi uygulanir -> 0.2.21 kodunda
+  `"AdaPanel."` oneki `adapanel.host` ile eslesip siteyi LISTEDEN DUSURUR. Servis yeniden baslatmak
+  BUNU DUZELTMEZ; site ancak 0.2.22 kurulunca gorunur. (Ajanin COMException tespiti ise DOGRU ve
+  ZARARSIZ: "AdaPanel FTP" ftp-only sitesinin State okumasi 0x800710D8 atar, `ReadSiteValue`
+  yakalayip "Unknown" fallback'i verir — istek 200 doner.)
+- **HESAP KILIDI (auth.user_locked) — kullanici istegi uzerine davranis degisti:** Eskiden kilitliyken
+  parola HIC dogrulanmiyordu (erken throw) -> tek yonetici kendini kilitlerse 15 dk beklemekten baska
+  yol yoktu. ARTIK: kilitliyken de parola dogrulanir; DOGRU parola (+ varsa 2FA) kilidi kaldirir ve
+  giris yapar (`auth.login.lock_cleared` denetim kaydi), YANLIS parola kilidi korur ve `auth.user_locked`
+  doner (kilit UZAMAZ). Guvenlik gerekcesi: asil hiz sinirlayici IP katmani — BruteForceProtectionService
+  varsayilan ACIK (Enabled=true, 15 dk icinde 10 hata -> IP 60 dk Windows Firewall'da bloklanir) ve
+  kilitliyken yapilan her hatali deneme o sayaci da besler. TAKAS (kullaniciya soylendi): dagitik
+  cok-IP'li tahmin saldirisinda hesap-basina 5/15dk ust siniri kalkar; savunma IP engeli + guclu parola + 2FA.
+- **LATENT HATA BULUNDU VE DUZELTILDI (testler ortaya cikardi):** `LoginAsync` sayac/kilit
+  mutasyonlarini HIC kaydetmiyordu; yalnizca `AuditService`in AYNI scoped DbContext'te SaveChanges
+  cagirmasi sayesinde tesadufen kalici oluyordu. Denetim kaydi bir gun dosyaya/uzaga yazsa kilit
+  SESSIZCE calismayi birakirdi. Iki yola (hata + basari) acik `SaveChangesAsync` eklendi.
+- **KURTARMA YOLLARI (Plesk `plesk bin admin` muadili):**
+  1. Panelden: `POST /api/v1/users/{id}/unlock` + kullanici listesinde "Kilitli" cipi ve "Kilidi ac"
+     butonu (UserSummaryDto.LockedUntilUtc; suresi gecmis kilit "kilitli" gosterilmez). Bayi yalniz
+     kendi musterisini acar. Denetim: `users.unlocked`.
+  2. Dogru parolayla giris (yukaridaki davranis).
+  3. Parola sifirlama akisi (zaten vardi, kilidi de temizler — SMTP yapilandirilmisse).
+  4. **Sunucudan, kimse giremiyorsa:** `%ProgramData%\AdaPanel\config\recover-access.flag` dosyasi
+     olusturulup panel servisi yeniden baslatilir -> `Program.ApplyAccessRecoveryFlagAsync` TUM giris
+     kilitlerini + FailedLoginCount'lari temizler, `BruteForceRecovery.ClearBansAsync` ile brute-force
+     IP engellerini (firewall kurallari dahil) kaldirir, bayragi SILER ve LogWarning yazar. Dosyayi
+     olusturmak yonetici ACL'i gerektirir (K1) -> yeni saldiri yuzeyi yok.
+- **TESTLER:** `LoginLockoutTests` (in-memory SQLite + gercek PasswordHasher + sahte audit/bruteforce;
+  giris yolunda cagrilmayan bagimliliklar NotSupportedException atar): dogru parola kilidi kaldirir,
+  yanlis parola kilidi korur/uzatmaz + IP sayacini besler, 5 hatada kilitlenir, suresi gecmis kilit
+  "kilitli" sayilmaz. -> Infrastructure **89/89**, Core 2/2.
+- DOGRULAMA: build 0 uyari/0 hata, typecheck OK, frontend build OK, i18n TR/EN **2658/2658**, cakisma yok.
+- **0.2.22 PAKET (REVIZE, 201'deki 8C2B53BE GECERSIZ — yayinlanmadi, uzerine yazildi):**
+  `artifacts\release\0.2.22\AdaPanelSetup.exe`, `51,863,354` byte (49.46 MiB),
+  SHA256 `6215AD30BACB02228565D1099E632839D9EB09AFB29C1EB895EF9E243DB026FB`.

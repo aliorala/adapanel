@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Iis;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,6 +25,79 @@ public sealed class WebAdministrationSiteServiceTests
         Assert.Equal(@"C:\sites\example.test", site.PhysicalPath);
         Assert.Equal("ExamplePool", site.ApplicationPoolName);
         Assert.Single(site.Bindings);
+    }
+
+    // Regresyon: "adapanel.host" gibi paneli çağrıştıran gerçek bir müşteri alan adı, dahili
+    // "AdaPanel." önekiyle çakışıp site listesinden gizleniyordu (kullanıcı sitesini panelde göremiyordu).
+    [Theory]
+    [InlineData("adapanel.host")]
+    [InlineData("AdaPanel.host")]
+    [InlineData("adapanel.com.tr")]
+    [InlineData("mailenable.com")]
+    [InlineData("alioral.xyz")]
+    public void IsSystemSite_IsFalse_ForCustomerDomainsThatResemblePanelSites(string siteName)
+    {
+        Assert.False(WebAdministrationSiteService.IsSystemSite(CreateSite(siteName, "*:80:" + siteName)));
+    }
+
+    [Theory]
+    [InlineData("Default Web Site")]
+    [InlineData("AdaPanel FTP")]
+    [InlineData("AdaPanel.WebDb.PhpMyAdmin")]
+    [InlineData("AdaPanel.WebDb.Adminer")]
+    [InlineData("MailEnable WebMail")]
+    public void IsSystemSite_IsTrue_ForPanelInternalSites(string siteName)
+    {
+        Assert.True(WebAdministrationSiteService.IsSystemSite(CreateSite(siteName, "*:8896:")));
+    }
+
+    [Fact]
+    public void IsSystemSite_IsTrue_WhenEveryBindingIsLoopbackOnly()
+    {
+        Assert.True(WebAdministrationSiteService.IsSystemSite(CreateSite("internal.tool", "127.0.0.1:9000:")));
+    }
+
+    // Panelin kendi "AdaPanel.<Bileşen>" siteleri kendi adlarına bağlanmaz (webmail sitesi
+    // *:8899 ve webmail.<alan> ile yayınlanır) -> gizli kalmalı, listeye sızmamalı.
+    [Fact]
+    public void IsSystemSite_IsTrue_ForPanelComponentSitesThatAreNotBoundToTheirOwnName()
+    {
+        Assert.True(WebAdministrationSiteService.IsSystemSite(
+            CreateSite("AdaPanel.Webmail", "*:8899:", "*:80:webmail.alioral.xyz")));
+        Assert.True(WebAdministrationSiteService.IsSystemSite(
+            CreateSite("AdaPanel.FutureTool", "*:9100:")));
+    }
+
+    // Müşteri sitesi yalnızca www alt alan adına bağlıysa da GÖRÜNMELİ.
+    [Fact]
+    public void IsSystemSite_IsFalse_WhenACustomerSiteIsBoundOnlyToItsWwwSubdomain()
+    {
+        Assert.False(WebAdministrationSiteService.IsSystemSite(
+            CreateSite("adapanel.host", "*:80:www.adapanel.host")));
+    }
+
+    private static SiteDto CreateSite(string name, params string[] bindingInformations)
+    {
+        return new SiteDto
+        {
+            Id = 1,
+            Name = name,
+            State = "Started",
+            Bindings = bindingInformations
+                .Select(information =>
+                {
+                    var parts = information.Split(':');
+                    return new SiteBindingDto
+                    {
+                        Protocol = "http",
+                        BindingInformation = information,
+                        HostName = parts.ElementAtOrDefault(2) ?? string.Empty,
+                        Port = int.TryParse(parts.ElementAtOrDefault(1), out var port) ? port : 80,
+                        IpAddress = parts.FirstOrDefault() ?? "*"
+                    };
+                })
+                .ToArray()
+        };
     }
 
     private sealed class StaleStateSite

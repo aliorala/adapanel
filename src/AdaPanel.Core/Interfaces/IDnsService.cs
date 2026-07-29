@@ -31,6 +31,28 @@ public interface IDnsService
     /// </summary>
     Task EnsureZonePublishedAsync(string siteName, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Windows DNS Server'ın 53 portunda FİİLEN hangi adreslerde dinlediğini ölçer. Servis
+    /// "Running" olsa bile genel IP'ye bind olmamış olabilir (reboot yarış durumu) — o durumda
+    /// alan adları dışarıdan hiç çözülmez. <see cref="DnsServerHealthDto.NeedsRepair"/> bunu bildirir.
+    /// </summary>
+    Task<DnsServerHealthDto> GetServerHealthAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// DNS Server servisini yeniden başlatır (genel IP'ye yeniden bind olması için) ve istenirse
+    /// başlangıç türünü gecikmeli otomatiğe alır — reboot'ta ağ arayüzü hazır olmadan başlayıp
+    /// yalnız loopback'e bind kalma yarışını önler. Yeniden ölçülmüş sağlık durumunu döner.
+    /// </summary>
+    Task<DnsServerHealthDto> RepairServerAsync(bool applyDelayedAutoStart, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Otomatik nöbetçi: DNS genel IP'de dinlemiyorsa (ve panelde bölge varsa) servisi kendiliğinden
+    /// yeniden başlatır. Arka plan otomasyonu tarafından periyodik çağrılır; kendi soğuma süresini
+    /// (bir saat) uygular ki bozuk bir kurulumda sonsuz yeniden başlatma döngüsü oluşmasın.
+    /// Ölçüm aralığı (beş dakika) henüz dolmadıysa hiçbir şey yapmadan <c>null</c> döner.
+    /// </summary>
+    Task<DnsServerHealthDto?> RunBindWatchdogAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Sunucu-geneli DNS şablonunu döner (kayıtlı yoksa yerleşik varsayılan şablon).</summary>
     Task<DnsTemplateDto> GetTemplateAsync(CancellationToken cancellationToken = default);
 

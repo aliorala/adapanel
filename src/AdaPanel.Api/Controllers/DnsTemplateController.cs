@@ -22,3 +22,32 @@ public sealed class DnsTemplateController(IDnsService dnsService) : ControllerBa
         CancellationToken cancellationToken)
         => Ok(ApiResponse<DnsTemplateDto>.Ok(await dnsService.UpdateTemplateAsync(request, cancellationToken), "dns.template_saved"));
 }
+
+/// <summary>
+/// DNS sunucusunun dışarıya yanıt verebilirliği (53 portunun fiili dinleyicileri) + tek tık onarım.
+/// Sunucu-geneli operasyonel işlem → admin-only. Sunucu Sağlığı ekranı bu uçları kullanır.
+/// </summary>
+[ApiController]
+[Authorize(Roles = "Administrator")]
+[Route("api/v1/dns/server")]
+public sealed class DnsServerController(IDnsService dnsService) : ControllerBase
+{
+    [HttpGet("health")]
+    public async Task<ActionResult<ApiResponse<DnsServerHealthDto>>> GetHealthAsync(CancellationToken cancellationToken)
+        => Ok(ApiResponse<DnsServerHealthDto>.Ok(await dnsService.GetServerHealthAsync(cancellationToken)));
+
+    [HttpPost("repair")]
+    public async Task<ActionResult<ApiResponse<DnsServerHealthDto>>> RepairAsync(
+        [FromBody] RepairDnsServerRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var health = await dnsService.RepairServerAsync(request?.ApplyDelayedAutoStart ?? true, cancellationToken);
+        return Ok(ApiResponse<DnsServerHealthDto>.Ok(health, "dns.server_repaired"));
+    }
+}
+
+public sealed class RepairDnsServerRequest
+{
+    /// <summary>Servisi gecikmeli otomatik başlangıca da al (reboot yarış durumuna karşı). Varsayılan: açık.</summary>
+    public bool ApplyDelayedAutoStart { get; init; } = true;
+}

@@ -74,4 +74,23 @@ public sealed class UsersController(IUserManagementService userManagementService
 
         return Ok(ApiResponse<UserSummaryDto>.Ok(user, "users.update.success"));
     }
+
+    /// <summary>
+    /// Hatalı giriş denemeleri yüzünden kilitlenmiş kullanıcının kilidini açar. Kilitli kullanıcı
+    /// süre dolana kadar (varsayılan 15 dk) giriş yapamaz; bu uç beklemeden açar. Bayi yalnız kendi
+    /// müşterisini açabilir. HİÇBİR yönetici giremiyorsa: veri kökünde config\recover-access.flag.
+    /// </summary>
+    [HttpPost("{userId:guid}/unlock")]
+    public async Task<ActionResult<ApiResponse<UserSummaryDto>>> UnlockUserAsync(
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var user = await userManagementService.UnlockUserAsync(
+            userId,
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<UserSummaryDto>.Ok(user, "users.unlock.success"));
+    }
 }

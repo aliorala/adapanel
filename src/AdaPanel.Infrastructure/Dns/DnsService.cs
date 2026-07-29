@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
@@ -16,6 +17,9 @@ public sealed partial class DnsService(
 {
     private const string StatePath = "config/dns-zones.json";
     private const string TemplatePath = "config/dns-template.json";
+    private const string WatchdogPath = "config/dns-watchdog.json";
+    private static readonly TimeSpan WatchdogInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan WatchdogCooldown = TimeSpan.FromHours(1);
     private const int CurrentDefaultsVersion = 1;
     private static readonly string[] SupportedTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS"];
 
@@ -275,6 +279,303 @@ public sealed partial class DnsService(
             Priority = state.Priority,
             IsManaged = state.IsManaged
         };
+    }
+
+    // --- DNS sunucusu erişilebilirlik sağlığı + onarım ---
+    // KANITLANMIŞ OLAY (2026-07-23 reboot, 6 gün fark edilmedi): DNS servisi "Running", yapılandırmada
+    // genel IP dinleme listesinde, AMA ağ arayüzü hazır olmadan başladığı için fiilen yalnız
+    // 127.0.0.1/::1/link-local'e bind olmuş. Dışarıdan tek bir sorgu bile yanıtlanmadı → siteler
+    // açılmadı, Let's Encrypt DNS-01 zaman aşımına uğradı. Bu yüzden SERVİS DURUMU DEĞİL,
+    // 53 portunun FİİLİ DİNLEYİCİLERİ ölçülür (Get-NetUDPEndpoint / Get-NetTCPConnection, DNS PID'i ile).
+    private const string ServerHealthScript =
+        """
+        $ErrorActionPreference = 'Continue'
+        $out = [ordered]@{
+            installed = $false
+            serviceStatus = 'NotInstalled'
+            startMode = 'Unknown'
+            delayedAutoStart = $false
+            listening = @()
+            expected = @()
+            zoneCount = 0
+            notes = @()
+        }
+
+        $out.installed = [bool](Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)
+
+        $service = Get-Service -Name 'DNS' -ErrorAction SilentlyContinue
+        if ($service) { $out.serviceStatus = $service.Status.ToString() }
+
+        $processId = 0
+        try {
+            $wmi = Get-CimInstance -ClassName Win32_Service -Filter "Name='DNS'" -ErrorAction Stop
+            if ($wmi) {
+                $out.startMode = [string]$wmi.StartMode
+                $processId = [int]$wmi.ProcessId
+            }
+        }
+        catch { $out.notes += "service-query: $($_.Exception.Message)" }
+
+        try {
+            $delayed = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DNS' -Name 'DelayedAutostart' -ErrorAction Stop).DelayedAutostart
+            $out.delayedAutoStart = ($delayed -eq 1)
+        }
+        catch { }
+
+        if ($processId -gt 0) {
+            $udp = @(Get-NetUDPEndpoint -LocalPort 53 -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $processId } | Select-Object -ExpandProperty LocalAddress)
+            $tcp = @(Get-NetTCPConnection -LocalPort 53 -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $processId } | Select-Object -ExpandProperty LocalAddress)
+            $out.listening = @(($udp + $tcp) | Sort-Object -Unique)
+        }
+        else {
+            $out.notes += 'service-not-running'
+        }
+
+        $out.expected = @(
+            Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+                Select-Object -ExpandProperty IPAddress -Unique
+        )
+
+        if ($out.installed) {
+            try { $out.zoneCount = @(Get-DnsServerZone -ErrorAction Stop | Where-Object { -not $_.IsAutoCreated -and $_.ZoneType -eq 'Primary' }).Count }
+            catch { $out.notes += "zone-query: $($_.Exception.Message)" }
+        }
+
+        $out | ConvertTo-Json -Depth 4 -Compress
+        """;
+
+    private sealed class DnsWatchdogRecord
+    {
+        public DateTime? LastCheckUtc { get; set; }
+
+        public DateTime? LastRepairUtc { get; set; }
+
+        public string LastStatus { get; set; } = string.Empty;
+    }
+
+    private sealed class ServerHealthProbe
+    {
+        public bool Installed { get; init; }
+
+        public string ServiceStatus { get; init; } = "Unknown";
+
+        public string StartMode { get; init; } = "Unknown";
+
+        public bool DelayedAutoStart { get; init; }
+
+        public string[] Listening { get; init; } = [];
+
+        public string[] Expected { get; init; } = [];
+
+        public int ZoneCount { get; init; }
+
+        public string[] Notes { get; init; } = [];
+    }
+
+    /// <summary>
+    /// Saf karar mantığı (test edilebilir): 53'te dinlenen adresler, beklenen genel adreslerden
+    /// hangilerini karşılıyor. <c>0.0.0.0</c> / <c>::</c> tüm arayüzleri kapsar.
+    /// </summary>
+    internal static (bool PubliclyBound, string[] Missing) EvaluateBinding(
+        IEnumerable<string> listeningAddresses,
+        IEnumerable<string> expectedAddresses)
+    {
+        var listening = listeningAddresses
+            .Where(address => !string.IsNullOrWhiteSpace(address))
+            .Select(address => address.Trim())
+            .ToArray();
+
+        var expected = expectedAddresses
+            .Where(address => !string.IsNullOrWhiteSpace(address))
+            .Select(address => address.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var wildcard = listening.Any(address => address is "0.0.0.0" or "::" or "*");
+        if (wildcard)
+        {
+            return (true, []);
+        }
+
+        var missing = expected
+            .Where(address => !listening.Contains(address, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
+        // Beklenen adres hiç bulunamadıysa (ör. NAT arkasında tek arayüz okunamadı) loopback
+        // DIŞINDA bir adreste dinliyor olmak yeterli sayılır; yanlış alarm üretmeyiz.
+        var bound = expected.Length > 0
+            ? missing.Length < expected.Length
+            : listening.Any(address => !IsLoopbackOrLinkLocal(address));
+
+        return (bound, missing);
+    }
+
+    private static bool IsLoopbackOrLinkLocal(string address)
+    {
+        return address.StartsWith("127.", StringComparison.Ordinal) ||
+               address.StartsWith("169.254.", StringComparison.Ordinal) ||
+               address is "::1" ||
+               address.StartsWith("fe80", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task<DnsServerHealthDto> GetServerHealthAsync(CancellationToken cancellationToken = default)
+    {
+        var run = await ProcessRunner.RunPowerShellAsync(ServerHealthScript, cancellationToken);
+        var watchdog = await fileStore.ReadAsync(WatchdogPath, new DnsWatchdogRecord(), cancellationToken);
+        var probe = ParseProbe(run.StandardOutput);
+        if (probe is null)
+        {
+            return new DnsServerHealthDto
+            {
+                LastAutoRepairUtc = watchdog.LastRepairUtc,
+                LastAutoRepairStatus = watchdog.LastStatus,
+                Details = string.IsNullOrWhiteSpace(run.StandardError)
+                    ? "DNS sunucu sağlığı ölçülemedi."
+                    : run.StandardError.Trim()
+            };
+        }
+
+        var expected = probe.Expected.ToList();
+
+        // Panelin kayıtlı sunucu adresi bir IP ise beklenenlere ekle: NAT arkasında yerel arayüz
+        // adresi farklı olabilir, ama panel hangi adresi yayınladığını bilir.
+        var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
+        if (System.Net.IPAddress.TryParse(serverAddress, out _) &&
+            !expected.Contains(serverAddress, StringComparer.OrdinalIgnoreCase))
+        {
+            expected.Add(serverAddress);
+        }
+
+        var (publiclyBound, missing) = EvaluateBinding(probe.Listening, expected);
+
+        var details = new StringBuilder()
+            .Append("service=").Append(probe.ServiceStatus)
+            .Append("; startMode=").Append(probe.StartMode)
+            .Append(probe.DelayedAutoStart ? " (delayed-auto)" : string.Empty)
+            .Append("; listening=").Append(probe.Listening.Length == 0 ? "(none)" : string.Join(",", probe.Listening))
+            .Append("; expected=").Append(expected.Count == 0 ? "(none)" : string.Join(",", expected))
+            .Append("; zones=").Append(probe.ZoneCount);
+
+        if (probe.Notes.Length > 0)
+        {
+            details.Append("; notes=").Append(string.Join(" | ", probe.Notes.Take(6)));
+        }
+
+        return new DnsServerHealthDto
+        {
+            Installed = probe.Installed,
+            ServiceStatus = probe.ServiceStatus,
+            StartMode = probe.StartMode,
+            DelayedAutoStart = probe.DelayedAutoStart,
+            ListeningAddresses = probe.Listening,
+            ExpectedAddresses = expected.ToArray(),
+            MissingAddresses = missing,
+            PubliclyBound = publiclyBound,
+            ZoneCount = probe.ZoneCount,
+            LastAutoRepairUtc = watchdog.LastRepairUtc,
+            LastAutoRepairStatus = watchdog.LastStatus,
+            Details = details.ToString()
+        };
+    }
+
+    public async Task<DnsServerHealthDto?> RunBindWatchdogAsync(CancellationToken cancellationToken = default)
+    {
+        // Otomasyon worker'ı dakikada bir tetiklenir; ölçüm aralığını BURADA kısıtlıyoruz (servis
+        // Scoped olduğu için bellekte sayaç tutulamaz, durum dosyada). Zaman damgası ölçümden ÖNCE
+        // yazılır: ölçüm patlarsa dakika başı yeniden denenip sıcak döngü oluşmaz.
+        var watchdog = await fileStore.ReadAsync(WatchdogPath, new DnsWatchdogRecord(), cancellationToken);
+        if (watchdog.LastCheckUtc is { } lastCheck && DateTime.UtcNow - lastCheck < WatchdogInterval)
+        {
+            return null;
+        }
+
+        watchdog.LastCheckUtc = DateTime.UtcNow;
+        await fileStore.WriteAsync(WatchdogPath, watchdog, cancellationToken);
+
+        var health = await GetServerHealthAsync(cancellationToken);
+        if (!health.NeedsRepair)
+        {
+            return health;
+        }
+
+        if (watchdog.LastRepairUtc is { } last && DateTime.UtcNow - last < WatchdogCooldown)
+        {
+            // Soğuma süresi: art arda yeniden başlatma döngüsü kurmayız. Sorun devam ediyorsa
+            // Sunucu Sağlığı ekranında kırmızı olarak görünmeye devam eder.
+            return health;
+        }
+
+        try
+        {
+            var repaired = await RepairServerAsync(true, cancellationToken);
+            watchdog.LastRepairUtc = DateTime.UtcNow;
+            watchdog.LastStatus = repaired.PubliclyBound
+                ? "ok: DNS servisi yeniden başlatıldı, genel adreste dinliyor."
+                : $"failed: yeniden başlatıldı ama hâlâ dinlemiyor ({repaired.Details})";
+            await fileStore.WriteAsync(WatchdogPath, watchdog, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            watchdog.LastRepairUtc = DateTime.UtcNow;
+            watchdog.LastStatus = $"failed: {exception.Message}";
+            await fileStore.WriteAsync(WatchdogPath, watchdog, cancellationToken);
+            throw;
+        }
+
+        // Nöbetçi kaydı yazıldıktan sonra yeniden ölç: dönen DTO hem güncel bind durumunu hem de
+        // "son otomatik onarım" bilgisini içerir (Sunucu Sağlığı ekranı bunu gösterir).
+        return await GetServerHealthAsync(cancellationToken);
+    }
+
+    public async Task<DnsServerHealthDto> RepairServerAsync(bool applyDelayedAutoStart, CancellationToken cancellationToken = default)
+    {
+        var before = await GetServerHealthAsync(cancellationToken);
+        if (!before.Installed)
+        {
+            throw new AppException("dns.server_not_installed", 409, 409, before.Details);
+        }
+
+        // sc.exe kullanılıyor: Windows PowerShell 5.1'in Set-Service'i AutomaticDelayedStart'ı
+        // DESTEKLEMEZ. Bu, canlı sunucuda kanıtlanmış komutun aynısıdır.
+        var script = new StringBuilder();
+        if (applyDelayedAutoStart)
+        {
+            script.AppendLine("& sc.exe config DNS start= delayed-auto | Out-Null");
+        }
+
+        script.AppendLine("Restart-Service -Name 'DNS' -Force -ErrorAction Stop");
+        // Servis ayağa kalkıp soketleri açana kadar kısa bekleme; hemen ölçersek dinleyiciler boş görünür.
+        script.AppendLine("Start-Sleep -Seconds 3");
+
+        var result = await ProcessRunner.RunPowerShellAsync(script.ToString(), cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("dns.server_restart_failed", 500, 500, BuildCommandDetails(result));
+        }
+
+        return await GetServerHealthAsync(cancellationToken);
+    }
+
+    private static ServerHealthProbe? ParseProbe(string standardOutput)
+    {
+        try
+        {
+            var text = (standardOutput ?? string.Empty).Trim();
+            var start = text.IndexOf('{');
+            if (start < 0)
+            {
+                return null;
+            }
+
+            return System.Text.Json.JsonSerializer.Deserialize<ServerHealthProbe>(
+                text[start..],
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public async Task<DnsTemplateDto> GetTemplateAsync(CancellationToken cancellationToken = default)

@@ -400,6 +400,62 @@ public sealed class UserManagementService(
             cancellationToken);
     }
 
+    public async Task<UserSummaryDto> UnlockUserAsync(Guid userId, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
+    {
+        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken)
+            ?? throw new InvalidOperationException("users.not_found");
+
+        // Bayi yalnız KENDİ müşterisinin kilidini açabilir (silme/güncellemeyle aynı kapsam kuralı).
+        var actor = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == actorUserId, cancellationToken);
+        if (actor?.Role == UserRole.Reseller)
+        {
+            var currentOwner = await customerScopeService.GetOwnerAsync(userId, cancellationToken);
+            if (user.Role != UserRole.Customer || currentOwner != actorUserId)
+            {
+                throw new AppException("users.forbidden", 403, 403);
+            }
+        }
+
+        user.LockedUntilUtc = null;
+        user.FailedLoginCount = 0;
+        user.UpdatedAtUtc = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        await auditService.WriteAsync(
+            "users.unlocked",
+            "users",
+            $"Login lock cleared for '{user.UserName}'.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
+
+        var scope = user.Role == UserRole.Customer
+            ? await customerScopeService.GetScopeAsync(user.Id, cancellationToken)
+            : new CustomerScope([], 0, 0, 0, 0, 0);
+        var usageMb = user.Role == UserRole.Customer
+            ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
+            : 0;
+        var dbCount = user.Role == UserRole.Customer
+            ? await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken)
+            : 0;
+        var ownerId = user.Role == UserRole.Customer
+            ? await customerScopeService.GetOwnerAsync(user.Id, cancellationToken)
+            : null;
+        var parentId = user.Role == UserRole.Customer
+            ? await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken)
+            : null;
+
+        return MapUser(
+            user,
+            scope,
+            usageMb,
+            ownerId,
+            await ResolveOwnerNameAsync(ownerId, cancellationToken),
+            dbCount,
+            parentId,
+            await ResolveOwnerNameAsync(parentId, cancellationToken));
+    }
+
     public async Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default)
     {
         var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken)
@@ -727,6 +783,8 @@ public sealed class UserManagementService(
             IsActive = user.IsActive,
             IsTwoFactorEnabled = user.IsTwoFactorEnabled,
             LastLoginAtUtc = user.LastLoginAtUtc,
+            // Süresi geçmiş kilidi "kilitli" göstermeyiz (AuthService de geçmiş kilide takılmaz).
+            LockedUntilUtc = user.LockedUntilUtc > DateTime.UtcNow ? user.LockedUntilUtc : null,
             CreatedAtUtc = user.CreatedAtUtc,
             AssignedSites = scope.Sites.ToArray(),
             MaxSites = scope.MaxSites,

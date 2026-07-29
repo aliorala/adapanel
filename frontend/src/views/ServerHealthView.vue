@@ -10,6 +10,55 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
+    <!-- DNS erişilebilirliği: servisin "Running" olması YETMEZ, 53 portunun genel IP'de
+         dinlemesi gerekir. Bu kart o farkı gösterir ve tek tıkla onarır. -->
+    <article v-if="dns && dns.installed" :class="['dns-card', dns.needsRepair ? 'bad' : 'good']">
+      <div class="dns-head">
+        <span :class="['state-dot', dns.needsRepair ? 'dot-danger' : 'dot-ok']"></span>
+        <div class="health-name">
+          <strong>{{ t("panel.health.dnsTitle") }}</strong>
+          <span class="svc-id">{{ dns.needsRepair ? t("panel.health.dnsBad") : t("panel.health.dnsGood") }}</span>
+        </div>
+        <span :class="['status-pill', dns.needsRepair ? 'danger' : 'ok']">
+          {{ dns.publiclyBound ? t("panel.health.dnsBound") : t("panel.health.dnsNotBound") }}
+        </span>
+        <button class="secondary compact" :disabled="dnsBusy" @click="repairDns">
+          {{ dnsBusy ? t("panel.health.dnsRepairing") : t("panel.health.dnsRepair") }}
+        </button>
+      </div>
+      <dl class="dns-facts">
+        <div>
+          <dt>{{ t("panel.health.dnsListening") }}</dt>
+          <dd>{{ dns.listeningAddresses.length ? dns.listeningAddresses.join(", ") : "—" }}</dd>
+        </div>
+        <div>
+          <dt>{{ t("panel.health.dnsExpected") }}</dt>
+          <dd>{{ dns.expectedAddresses.length ? dns.expectedAddresses.join(", ") : "—" }}</dd>
+        </div>
+        <div v-if="dns.missingAddresses.length">
+          <dt>{{ t("panel.health.dnsMissing") }}</dt>
+          <dd class="warn">{{ dns.missingAddresses.join(", ") }}</dd>
+        </div>
+        <div>
+          <dt>{{ t("panel.health.dnsZones") }}</dt>
+          <dd>{{ dns.zoneCount }}</dd>
+        </div>
+        <div>
+          <dt>{{ t("panel.health.dnsStartMode") }}</dt>
+          <dd>
+            {{ dns.startMode }}
+            <span v-if="dns.delayedAutoStart">({{ t("panel.health.dnsDelayedOn") }})</span>
+            <span v-else class="warn">({{ t("panel.health.dnsDelayedOff") }})</span>
+          </dd>
+        </div>
+        <div v-if="dns.lastAutoRepairUtc">
+          <dt>{{ t("panel.health.dnsLastAutoRepair") }}</dt>
+          <dd>{{ formatDate(dns.lastAutoRepairUtc) }} — {{ dns.lastAutoRepairStatus }}</dd>
+        </div>
+      </dl>
+      <p class="dns-details">{{ dns.details }}</p>
+    </article>
+
     <p v-if="loading && !services.length" class="meta">{{ t("panel.common.loading") }}</p>
 
     <div v-else-if="services.length" class="health-list">
@@ -40,10 +89,13 @@
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getServerHealth, restartService, type ServiceHealth } from "../api/health";
+import { getDnsServerHealth, repairDnsServer, type DnsServerHealth } from "../api/dns";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
 const services = ref<ServiceHealth[]>([]);
+const dns = ref<DnsServerHealth | null>(null);
+const dnsBusy = ref(false);
 const loading = ref(false);
 const loaded = ref(false);
 const busyName = ref("");
@@ -63,6 +115,35 @@ async function load() {
   } finally {
     loading.value = false;
   }
+
+  // DNS kartı bağımsız yüklenir: ölçüm başarısız olsa bile servis listesi görünmeye devam eder.
+  try {
+    dns.value = await getDnsServerHealth();
+  } catch {
+    dns.value = null;
+  }
+}
+
+async function repairDns() {
+  dnsBusy.value = true;
+  notice.value = "";
+  try {
+    dns.value = await repairDnsServer(true);
+    showNotice(
+      dns.value.publiclyBound ? t("panel.health.dnsRepaired") : t("panel.health.dnsStillBad"),
+      !dns.value.publiclyBound
+    );
+    services.value = await getServerHealth();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    dnsBusy.value = false;
+  }
+}
+
+function formatDate(value: string) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 async function restart(name: string) {
@@ -190,5 +271,64 @@ function showNotice(message: string, isError: boolean) {
 
 .state-dot.dot-muted {
   background: var(--text-muted);
+}
+
+.dns-card {
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 11px;
+  background: var(--surface-1);
+}
+
+.dns-card.bad {
+  border-color: color-mix(in srgb, var(--danger-1) 55%, var(--panel-border));
+  background: color-mix(in srgb, var(--danger-1) 7%, var(--surface-1));
+}
+
+.dns-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dns-head .health-name {
+  flex: 1 1 auto;
+}
+
+.dns-head button {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.dns-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.dns-facts dt {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.dns-facts dd {
+  margin: 0;
+  font-size: 0.86rem;
+  word-break: break-word;
+}
+
+.dns-facts .warn {
+  color: var(--danger-1);
+}
+
+.dns-details {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: break-word;
 }
 </style>

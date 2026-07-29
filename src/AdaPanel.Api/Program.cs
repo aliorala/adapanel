@@ -277,6 +277,8 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
         // Bekleyen migration'ları uygula: taze kurulumda tüm şema, baseline sonrası/güncellemede yenileri.
         await database.MigrateAsync();
         logger.LogInformation("Veritabanı şeması migration ile güncel.");
+
+        await ApplyAccessRecoveryFlagAsync(dataRoot, dbContext, logger);
     }
     catch (Exception exception)
     {
@@ -294,6 +296,67 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
             logger.LogError(retryException, "Migration tekrar başarısız; EnsureCreated ile şema garanti ediliyor.");
             await dbContext.Database.EnsureCreatedAsync();
         }
+    }
+}
+
+// ERİŞİM KURTARMA (kendini kilitleyen tek yönetici için). Panelde kilidi açacak başka bir
+// yönetici yoksa çıkış yolu YALNIZCA beklemekti (LoginLockoutMinutes, varsayılan 15 dk) — SQLite'ı
+// elle düzenlemek için sunucuda sqlite aracı da bulunmuyor. Plesk'in "plesk bin admin" muadili:
+// veri kökündeki config klasöründe bir bayrak dosyası varsa panel açılışta TÜM kilitleri temizler.
+// Dosyayı oluşturmak yönetici ACL'i gerektirir (K1 sertleştirmesi) → sunucuya erişimi olan kişi
+// zaten paneli sıfırlayabilirdi; yeni bir güvenlik açığı doğmaz. Bayrak kullanıldıktan sonra SİLİNİR.
+static async Task ApplyAccessRecoveryFlagAsync(
+    string dataRoot,
+    AdaPanelDbContext dbContext,
+    Microsoft.Extensions.Logging.ILogger<Program> logger)
+{
+    try
+    {
+        var flagPath = Path.Combine(dataRoot, "config", "recover-access.flag");
+        if (!File.Exists(flagPath))
+        {
+            return;
+        }
+
+        var locked = await dbContext.Users
+            .Where(user => user.LockedUntilUtc != null || user.FailedLoginCount > 0)
+            .ToListAsync();
+
+        foreach (var user in locked)
+        {
+            user.LockedUntilUtc = null;
+            user.FailedLoginCount = 0;
+            user.UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        // Aynı bayrak IP engellerini de kaldırır: art arda hatalı denemeler brute-force korumasını
+        // tetikleyip yöneticinin IP'sini firewall'da bloklamış olabilir (o zaman panel hiç açılmaz).
+        var banStatePath = Path.Combine(dataRoot, "config", "bruteforce.json");
+        var bansCleared = false;
+        try
+        {
+            if (File.Exists(banStatePath))
+            {
+                await AdaPanel.Infrastructure.Security.BruteForceRecovery.ClearBansAsync(banStatePath, logger);
+                bansCleared = true;
+            }
+        }
+        catch (Exception banException)
+        {
+            logger.LogWarning(banException, "Erişim kurtarma: IP engelleri temizlenemedi.");
+        }
+
+        await dbContext.SaveChangesAsync();
+        File.Delete(flagPath);
+
+        logger.LogWarning(
+            "ERİŞİM KURTARMA uygulandı (recover-access.flag): {Count} kullanıcının giriş kilidi temizlendi, IP engelleri temizlendi={Bans}. Bayrak dosyası silindi.",
+            locked.Count,
+            bansCleared);
+    }
+    catch (Exception exception)
+    {
+        logger.LogError(exception, "Erişim kurtarma bayrağı işlenemedi.");
     }
 }
 

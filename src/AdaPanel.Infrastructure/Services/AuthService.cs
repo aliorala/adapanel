@@ -57,10 +57,15 @@ public sealed class AuthService(
             throw new InvalidOperationException("auth.user_inactive");
         }
 
-        if (user.LockedUntilUtc.HasValue && user.LockedUntilUtc.Value > DateTime.UtcNow)
-        {
-            throw new InvalidOperationException("auth.user_locked");
-        }
+        // HESAP KİLİDİ: kilitliyken parola YİNE DE doğrulanır. DOĞRU parola (ve varsa 2FA) kilidi
+        // kaldırıp girişe izin verir; YANLIŞ parola kilidi olduğu gibi bırakır.
+        // Neden güvenli: asıl hız sınırlayıcı IP katmanıdır (BruteForceProtectionService varsayılan
+        // AÇIK: 15 dk içinde 10 hata -> IP 60 dk Windows Firewall'da bloklanır) ve kilitliyken yapılan
+        // her hatalı deneme o sayacı da besler. Parolayı bilen zaten girebilirdi; kilidin tek etkisi
+        // MEŞRU kullanıcıyı 15 dk dışarıda tutmaktı ve panelde başka giriş yolu her zaman olmayabilir.
+        // TAKAS: dağıtık (çok IP'li) bir tahmin saldırısında hesap-başına 5-deneme/15 dk üst sınırı
+        // ortadan kalkar; kalan savunmalar IP engeli, güçlü parola ve iki adımlı doğrulamadır.
+        var wasLocked = user.LockedUntilUtc.HasValue && user.LockedUntilUtc.Value > DateTime.UtcNow;
 
         var passwordResult = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
         if (passwordResult == PasswordVerificationResult.Failed)
@@ -74,9 +79,16 @@ public sealed class AuthService(
                 user.FailedLoginCount = 0;
             }
 
+            // Sayaç/kilit değişikliğini AÇIKÇA kaydet. Eskiden yalnızca auditService'in AYNI
+            // DbContext'i SaveChanges çağırması sayesinde tesadüfen kalıcı oluyordu; denetim kaydı
+            // bir gün başka bir yere (dosya/uzak) yazsa kilit sessizce çalışmayı bırakırdı.
+            await dbContext.SaveChangesAsync(cancellationToken);
+
             await auditService.WriteAsync("auth.login.failed", "auth", $"Invalid password provided for '{user.UserName}'.", user.Id, ipAddress, cancellationToken);
             await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
-            throw new InvalidOperationException("auth.invalid_credentials");
+
+            // Kilitliyken yanlış parola: kullanıcı neden giremediğini bilsin (kilit süresi UZAMAZ).
+            throw new InvalidOperationException(wasLocked ? "auth.user_locked" : "auth.invalid_credentials");
         }
 
         if (user.IsTwoFactorEnabled)
@@ -117,6 +129,20 @@ public sealed class AuthService(
         user.LockedUntilUtc = null;
         user.LastLoginAtUtc = DateTime.UtcNow;
         user.UpdatedAtUtc = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        // Kilit doğru kimlik bilgisiyle kaldırıldıysa bunu DENETİM KAYDINA yaz: "kilitliydi ama
+        // doğru parolayla girildi" izlenebilir kalsın (güvenlik incelemesi için önemli).
+        if (wasLocked)
+        {
+            await auditService.WriteAsync(
+                "auth.login.lock_cleared",
+                "auth",
+                $"Account lock cleared for '{user.UserName}' by a successful sign-in.",
+                user.Id,
+                ipAddress,
+                cancellationToken);
+        }
 
         await bruteForceProtection.RegisterSuccessAsync(ipAddress, cancellationToken);
         await auditService.WriteAsync("auth.login.succeeded", "auth", $"User '{user.UserName}' signed in.", user.Id, ipAddress, cancellationToken);

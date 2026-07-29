@@ -17,6 +17,7 @@ namespace AdaPanel.Infrastructure.Ssl;
 public sealed class WinAcmeSslService(
     AdaPanelDbContext dbContext,
     IIisSiteService iisSiteService,
+    IDnsService dnsService,
     JsonFileStore fileStore,
     IComponentBootstrapper componentBootstrapper,
     ILogger<WinAcmeSslService> logger) : ISslService
@@ -300,6 +301,234 @@ public sealed class WinAcmeSslService(
         else { throw "AdaPanel DNS-01: bilinmeyen eylem '$Action'." }
         """;
 
+    // DNS-01 ÖN KONTROLÜ (preflight). Neden gerekli: win-acme her deneme için ~5 dk boyunca
+    // "No TXT records found / retry" döngüsüne girer, sonunda Let's Encrypt "query timed out"
+    // der ve bu BAŞARISIZ doğrulama LE hesap limitine yazılır. Oysa kayıt panelin DNS'ine
+    // yazılmıştır; sorun kaydın DIŞARIDAN görünmemesidir. Bunu önceden, 1 dakikanın altında,
+    // gerçek nedeni söyleyerek tespit ediyoruz:
+    //   1) bölge panelin DNS'inde birincil olarak var mı,
+    //   2) alan adının NS delegasyonu (halka açık çözümleyiciden) var mı,
+    //   3) o NS'ler gerçekten bu sunucunun yazdığı TXT'yi yanıtlıyor mu (53/UDP açık + servis ayakta).
+    private const string Dns01PreflightScript =
+        """
+        $ErrorActionPreference = 'Continue'
+        $result = [ordered]@{
+            zone = ''
+            nsNames = @()
+            nsIps = @()
+            localIps = @()
+            publicVisible = $false
+            authoritativeVisible = $false
+            notes = @()
+        }
+
+        try {
+            $zone = Get-DnsServerZone -ErrorAction Stop |
+                Where-Object { -not $_.IsAutoCreated -and $_.ZoneType -eq 'Primary' -and ($domain -eq $_.ZoneName -or $domain.EndsWith('.' + $_.ZoneName)) } |
+                Sort-Object { $_.ZoneName.Length } -Descending |
+                Select-Object -First 1
+            if ($zone) { $result.zone = $zone.ZoneName }
+        }
+        catch { $result.notes += "dns-role: $($_.Exception.Message)" }
+
+        $result.localIps = @(
+            Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+                Select-Object -ExpandProperty IPAddress
+        )
+
+        foreach ($resolver in @('1.1.1.1', '8.8.8.8')) {
+            if ($result.nsNames.Count -gt 0) { break }
+            try {
+                $ns = Resolve-DnsName -Name $domain -Type NS -Server $resolver -DnsOnly -ErrorAction Stop |
+                    Where-Object { $_.NameHost } |
+                    Select-Object -ExpandProperty NameHost -Unique
+                if ($ns) { $result.nsNames = @($ns) }
+            }
+            catch { $result.notes += "ns-query($resolver): $($_.Exception.Message)" }
+        }
+
+        foreach ($name in $result.nsNames) {
+            try {
+                $ips = Resolve-DnsName -Name $name -Type A -Server '1.1.1.1' -DnsOnly -ErrorAction Stop |
+                    Where-Object { $_.IPAddress } |
+                    Select-Object -ExpandProperty IPAddress -Unique
+                foreach ($ip in $ips) { if ($result.nsIps -notcontains $ip) { $result.nsIps += $ip } }
+            }
+            catch { $result.notes += "ns-resolve($name): $($_.Exception.Message)" }
+        }
+
+        if ($result.zone) {
+            $token = [guid]::NewGuid().ToString('N')
+            $label = '_adapanel-acme-check'
+            $probeFqdn = "$label.$domain"
+            $relative = if ($domain -eq $result.zone) {
+                $label
+            } else {
+                $label + '.' + $domain.Substring(0, $domain.Length - $result.zone.Length - 1)
+            }
+
+            $written = $false
+            try {
+                Add-DnsServerResourceRecord -ZoneName $result.zone -Txt -Name $relative -DescriptiveText $token -TimeToLive ([TimeSpan]::FromSeconds(30)) -ErrorAction Stop | Out-Null
+                $written = $true
+            }
+            catch { $result.notes += "probe-write: $($_.Exception.Message)" }
+
+            if ($written) {
+                foreach ($ip in $result.nsIps) {
+                    try {
+                        $answer = Resolve-DnsName -Name $probeFqdn -Type TXT -Server $ip -DnsOnly -ErrorAction Stop
+                        if (@($answer | ForEach-Object { $_.Strings }) -contains $token) {
+                            $result.authoritativeVisible = $true
+                            break
+                        }
+                    }
+                    catch { $result.notes += "auth-query($ip): $($_.Exception.Message)" }
+                }
+
+                for ($i = 0; $i -lt 3; $i++) {
+                    try {
+                        $answer = Resolve-DnsName -Name $probeFqdn -Type TXT -Server '1.1.1.1' -DnsOnly -ErrorAction Stop
+                        if (@($answer | ForEach-Object { $_.Strings }) -contains $token) {
+                            $result.publicVisible = $true
+                            break
+                        }
+                    }
+                    catch { }
+                    Start-Sleep -Seconds 2
+                }
+
+                try {
+                    Get-DnsServerResourceRecord -ZoneName $result.zone -Name $relative -RRType 'TXT' -ErrorAction SilentlyContinue |
+                        Where-Object { $_.RecordData.DescriptiveText -eq $token } |
+                        Remove-DnsServerResourceRecord -ZoneName $result.zone -Force -ErrorAction SilentlyContinue
+                }
+                catch { $result.notes += "probe-cleanup: $($_.Exception.Message)" }
+            }
+        }
+
+        $result | ConvertTo-Json -Depth 4 -Compress
+        """;
+
+    private sealed class Dns01Preflight
+    {
+        public string Zone { get; init; } = string.Empty;
+
+        public string[] NsNames { get; init; } = [];
+
+        public string[] NsIps { get; init; } = [];
+
+        public string[] LocalIps { get; init; } = [];
+
+        public bool PublicVisible { get; init; }
+
+        public bool AuthoritativeVisible { get; init; }
+
+        public string[] Notes { get; init; } = [];
+    }
+
+    private async Task EnsureDns01ResolvableAsync(string domain, CancellationToken cancellationToken)
+    {
+        // Alan adı doğrudan PowerShell'e gömüldüğü için katı doğrulama (komut enjeksiyonu yok).
+        if (!System.Text.RegularExpressions.Regex.IsMatch(domain, "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"))
+        {
+            throw new AppException("ssl.host_name_required", 400, 400);
+        }
+
+        var script = $"$domain = '{domain}'\r\n{Dns01PreflightScript}";
+        var run = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+
+        Dns01Preflight? preflight = null;
+        try
+        {
+            var json = run.StandardOutput.Trim();
+            var start = json.IndexOf('{');
+            if (start >= 0)
+            {
+                preflight = System.Text.Json.JsonSerializer.Deserialize<Dns01Preflight>(
+                    json[start..],
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "DNS-01 ön kontrol çıktısı ayrıştırılamadı; doğrulama yine denenecek.");
+        }
+
+        if (preflight is null)
+        {
+            // Ön kontrol çalıştırılamadıysa (ör. DnsServer/DnsClient modülü yok) yolu KAPATMA:
+            // win-acme yine denenir, hata detayı kullanıcıya döner.
+            logger.LogWarning(
+                "DNS-01 ön kontrolü yapılamadı (çıkış {ExitCode}). Doğrulama doğrudan deneniyor. {Error}",
+                run.ExitCode,
+                run.StandardError);
+            return;
+        }
+
+        var detail = new StringBuilder()
+            .Append("domain=").Append(domain)
+            .Append("; zone=").Append(string.IsNullOrWhiteSpace(preflight.Zone) ? "(none)" : preflight.Zone)
+            .Append("; ns=").Append(preflight.NsNames.Length == 0 ? "(none)" : string.Join(",", preflight.NsNames))
+            .Append("; nsIp=").Append(preflight.NsIps.Length == 0 ? "(unresolved)" : string.Join(",", preflight.NsIps))
+            .Append("; serverIp=").Append(string.Join(",", preflight.LocalIps))
+            .Append("; authoritativeAnswer=").Append(preflight.AuthoritativeVisible)
+            .Append("; publicAnswer=").Append(preflight.PublicVisible);
+
+        if (preflight.Notes.Length > 0)
+        {
+            detail.Append("; notes=").Append(string.Join(" | ", preflight.Notes.Take(6)));
+        }
+
+        var details = detail.ToString();
+
+        if (string.IsNullOrWhiteSpace(preflight.Zone))
+        {
+            throw new AppException("ssl.dns01_zone_missing", 409, 409, details);
+        }
+
+        if (preflight.NsNames.Length == 0)
+        {
+            throw new AppException("ssl.dns01_no_delegation", 409, 409, details);
+        }
+
+        if (preflight.PublicVisible || preflight.AuthoritativeVisible)
+        {
+            if (!preflight.PublicVisible)
+            {
+                logger.LogInformation(
+                    "DNS-01 ön kontrolü: yetkili sunucu TXT'yi yanıtlıyor ama genel çözümleyici henüz görmedi (yayılma). Devam ediliyor. {Details}",
+                    details);
+            }
+
+            return;
+        }
+
+        // Kayıt panelin DNS'ine yazıldı, delegasyon var, ama delege edilen NS'ler kaydı YANITLAMIYOR.
+        // BU NOKTADA EN SIK GERÇEK NEDEN (2026-07-23'te bu sunucuda yaşandı): DNS servisi çalışıyor
+        // ama genel IP'ye bind olmamış. Onu ayırt edip kullanıcıyı tek tık onarıma yönlendiriyoruz;
+        // aksi halde "NS kayıtlarınız yanlış" der ve kullanıcı boşuna registrar'da arar.
+        try
+        {
+            var dnsHealth = await dnsService.GetServerHealthAsync(cancellationToken);
+            if (dnsHealth.NeedsRepair)
+            {
+                throw new AppException("ssl.dns01_not_listening", 409, 409, $"{details}; dns={dnsHealth.Details}");
+            }
+        }
+        catch (AppException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "DNS sunucu bind kontrolü yapılamadı; genel DNS-01 hatası dönülüyor.");
+        }
+
+        throw new AppException("ssl.dns01_ns_unreachable", 409, 409, details);
+    }
+
     private async Task<SslCertificateDto> IssueWildcardAsync(
         AdaPanel.Core.Dtos.Sites.SiteDto site,
         IssueLetsEncryptRequest request,
@@ -322,6 +551,9 @@ public sealed class WinAcmeSslService(
         {
             throw new AppException("ssl.winacme_missing", 409, 409);
         }
+
+        // Doğrulamayı denemeden ÖNCE zincirin dışarıdan çalıştığını kanıtla (bkz. EnsureDns01ResolvableAsync).
+        await EnsureDns01ResolvableAsync(domain, cancellationToken);
 
         var scriptPath = Path.Combine(fileStore.EnsureDirectory("tools"), "acme-dns01.ps1");
         await File.WriteAllTextAsync(scriptPath, Dns01ScriptContent, cancellationToken);

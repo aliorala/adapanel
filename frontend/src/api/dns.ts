@@ -65,6 +65,34 @@ export async function deleteDnsRecord(siteName: string, recordId: string) {
   return response.data.data;
 }
 
+// DNS sunucusunun dışarıya yanıt verebilirliği: servis "Running" olsa bile genel IP'ye bind
+// olmamış olabilir (reboot yarış durumu) — o zaman hiçbir alan adı dışarıdan çözülmez.
+export type DnsServerHealth = {
+  installed: boolean;
+  serviceStatus: string;
+  startMode: string;
+  delayedAutoStart: boolean;
+  listeningAddresses: string[];
+  expectedAddresses: string[];
+  missingAddresses: string[];
+  publiclyBound: boolean;
+  zoneCount: number;
+  needsRepair: boolean;
+  lastAutoRepairUtc: string | null;
+  lastAutoRepairStatus: string;
+  details: string;
+};
+
+export async function getDnsServerHealth() {
+  const response = await apiClient.get<ApiEnvelope<DnsServerHealth>>("/dns/server/health");
+  return response.data.data;
+}
+
+export async function repairDnsServer(applyDelayedAutoStart = true) {
+  const response = await apiClient.post<ApiEnvelope<DnsServerHealth>>("/dns/server/repair", { applyDelayedAutoStart });
+  return response.data.data;
+}
+
 // Sunucu-geneli DNS şablonu (Plesk "DNS template"): yeni site bölgeleri bununla seed edilir.
 export type DnsTemplateRecord = { type: string; host: string; value: string; ttl: number };
 export type DnsTemplate = { records: DnsTemplateRecord[] };

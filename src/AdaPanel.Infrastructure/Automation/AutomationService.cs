@@ -21,6 +21,7 @@ public sealed class AutomationService(
     ISslService sslService,
     IMailService mailService,
     IIisSiteService iisSiteService,
+    IDnsService dnsService,
     IDatabaseService databaseService,
     IBruteForceProtectionService bruteForceProtection,
     ISecretProtector secretProtector,
@@ -35,6 +36,7 @@ public sealed class AutomationService(
     private const string AlertCooldownPath = "config/automation-alerts.json";
     private const string SslStatePath = "config/ssl.json";
     private static readonly TimeSpan AlertCooldown = TimeSpan.FromHours(24);
+    private static readonly TimeSpan WatchdogInterval = TimeSpan.FromMinutes(5);
     private static readonly string[] DefaultEngines = ["mysql"];
 
     public async Task<AutomationStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -159,6 +161,37 @@ public sealed class AutomationService(
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Uyarı bildirimi kontrolü başarısız oldu.");
+        }
+
+        // DNS bind nöbetçisi (kilit DIŞINDA; kendi soğuma süresini dosyada tutar). Beş dakikada bir:
+        // DNS servisi çalışıyor ama genel IP'ye bind olmamışsa kendiliğinden yeniden başlatır.
+        // GERÇEK OLAY: 2026-07-23 reboot'unda servis loopback'e bind kaldı ve ALTI GÜN boyunca
+        // fark edilmedi (tüm alan adları dışarıdan çözülemedi, Let's Encrypt DNS-01 patladı).
+        // Ayar YOK, her zaman açık: bozuk DNS = tam kesinti, kimse bunu kapalı tutmak istemez.
+        // Aralık kısıtlamasını DnsService kendi durum dosyasında uygular; aralık dolmadıysa null döner.
+        try
+        {
+            var dnsHealth = await dnsService.RunBindWatchdogAsync(cancellationToken);
+            if (dnsHealth is not null)
+            {
+                if (dnsHealth.NeedsRepair)
+                {
+                    logger.LogError(
+                        "DNS sunucusu genel adreste dinlemiyor ve otomatik onarılamadı: {Details}",
+                        dnsHealth.Details);
+                }
+                else if (dnsHealth.LastAutoRepairUtc is { } repairedAt &&
+                         DateTime.UtcNow - repairedAt < WatchdogInterval)
+                {
+                    logger.LogWarning(
+                        "DNS bind nöbetçisi devreye girdi: {Status}",
+                        dnsHealth.LastAutoRepairStatus);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "DNS bind nöbetçisi çalıştırılamadı.");
         }
 
         await concurrencyLock.RunExclusiveAsync(async () =>

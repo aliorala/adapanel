@@ -18,6 +18,12 @@ public sealed class UserSummaryDto
 
     public DateTime? LastLoginAtUtc { get; init; }
 
+    /// <summary>
+    /// Hatalı giriş denemeleri yüzünden kilitliyse kilidin bitiş zamanı (UTC); değilse null.
+    /// Kullanıcı listesinde görünür ve yönetici tek tıkla kilidi açabilir.
+    /// </summary>
+    public DateTime? LockedUntilUtc { get; init; }
+
     public DateTime CreatedAtUtc { get; init; }
 
     /// <summary>Customer rolü için atanmış site adları.</summary>

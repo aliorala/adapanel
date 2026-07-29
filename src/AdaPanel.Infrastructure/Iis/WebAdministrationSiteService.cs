@@ -600,16 +600,25 @@ public sealed partial class WebAdministrationSiteService(
     private static readonly HashSet<string> SystemSiteNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Default Web Site",
-        "AdaPanel FTP"
+        "AdaPanel FTP",
+        "AdaPanel.Webmail",
+        "AdaPanel.WebDb.PhpMyAdmin",
+        "AdaPanel.WebDb.Adminer"
     };
 
+    // DİKKAT: burada bir alan adıyla ÇAKIŞABİLEN önek KULLANMA. Eskiden "AdaPanel." öneki vardı ve
+    // "adapanel.host" gibi gerçek bir müşteri sitesini de dahili sayıp site listesinden GİZLİYORDU.
+    // Bu yüzden önekler ya boşluk içerir (alan adında olamaz) ya da tam ad kümesine taşındı.
     private static readonly string[] SystemSitePrefixes =
     {
-        "AdaPanel.",   // AdaPanel.WebDb.PhpMyAdmin, AdaPanel.WebDb.Adminer
-        "MailEnable"   // MailEnable WebAdmin, MailEnable WebMail
+        "AdaPanel.WebDb.",  // AdaPanel.WebDb.PhpMyAdmin, AdaPanel.WebDb.Adminer (gelecek varyantlar)
+        "AdaPanel FTP",     // boşluklu: alan adı olamaz
+        "MailEnable "       // MailEnable WebAdmin, MailEnable WebMail (boşluklu)
     };
 
-    private static bool IsSystemSite(SiteDto site)
+    private const string InternalSiteNamePrefix = "AdaPanel.";
+
+    internal static bool IsSystemSite(SiteDto site)
     {
         var name = site.Name;
         if (string.IsNullOrWhiteSpace(name))
@@ -623,7 +632,19 @@ public sealed partial class WebAdministrationSiteService(
             return true;
         }
 
-        // Geleceğe dönük: gerçek bir alan adına (public binding) sahip OLMAYAN, yalnızca
+        // Geleceğe dönük: panelin sonradan ekleyeceği "AdaPanel.<Bileşen>" siteleri de gizlenmeli,
+        // ama bu ASLA "adapanel.host" gibi gerçek bir müşteri alan adını yakalamamalı. Ayırt edici
+        // ölçüt binding'dir: müşteri sitesi kendi adına (ya da alt alan adına) bağlıdır; dahili
+        // servis siteleri kendi adına bağlanmaz (AdaPanel.Webmail -> *:8899 ve webmail.<alan>).
+        if (name.StartsWith(InternalSiteNamePrefix, StringComparison.OrdinalIgnoreCase) &&
+            !site.Bindings.Any(binding =>
+                string.Equals(binding.HostName, name, StringComparison.OrdinalIgnoreCase) ||
+                binding.HostName.EndsWith("." + name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        // Gerçek bir alan adına (public binding) sahip OLMAYAN, yalnızca
         // loopback'e bağlı siteler dahili servislerdir (yönetim panelleri, webmail, db araçları).
         // Kullanıcının eklediği siteler her zaman bir hostname binding'i taşır.
         if (site.Bindings.Count > 0 && site.Bindings.All(IsLoopbackBinding))
