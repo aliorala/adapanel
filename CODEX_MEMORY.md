@@ -5922,3 +5922,7 @@ Basarili:
   SHA256 `4D99C994DFC7FE6C27756C7B6439B862593D95C5CCFC11C46D1E980C59230471`.
   Icerik: 203 (guncelleme otomasyonu) + 204 (8 canli surum cozumleyici) + 205 (varsayilan bolgeye
   posta kayitlari + sablon Priority) + 206 (4 yeni kayit tipi).
+- **YAYINLANDI (2026-07-31):** commit `725ddb2` + yerel `0.2.23` tag'i. GitHub release **0.2.23**
+  (id 362930524, target main) + AdaPanelSetup.exe yuklendi. YAYINDAKI DOSYA INDIRILIP HASH'LENDI:
+  `4D99C994DFC7FE6C27756C7B6439B862593D95C5CCFC11C46D1E980C59230471` (yereldekiyle birebir),
+  `releases/latest` -> 0.2.23. Release notu Turkce (self-update ekraninda gorunur).
