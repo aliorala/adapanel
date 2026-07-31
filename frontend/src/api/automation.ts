@@ -30,6 +30,10 @@ export type AutomationSettings = {
   backupRemotePasswordSet: boolean;
   logCleanupEnabled: boolean;
   logRetentionDays: number;
+  /** Kurulu bileşenler için günlük güncelleme kontrolü (varsayılan açık). */
+  updateCheckEnabled: boolean;
+  /** Bulunan güncellemeleri otomatik kur (riskli bileşenler hariç; varsayılan kapalı). */
+  autoApplyComponentUpdates: boolean;
 };
 
 export type UpdateAutomationPayload = AutomationSettings & {
@@ -50,6 +54,10 @@ export type AutomationStatus = {
   lastLogCleanupRunUtc: string | null;
   lastLogCleanupStatus: string;
   lastLogCleanupDetails: string;
+  lastUpdateCheckRunUtc: string | null;
+  lastUpdateCheckStatus: string;
+  lastUpdateCheckDetails: string;
+  pendingComponentUpdates: number;
 };
 
 export async function getAutomation() {

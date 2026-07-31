@@ -19,6 +19,7 @@
         <span>{{ t("panel.dnsTemplate.host") }}</span>
         <span>{{ t("panel.dnsTemplate.value") }}</span>
         <span>{{ t("panel.dnsTemplate.ttl") }}</span>
+        <span>{{ t("panel.dnsTemplate.priority") }}</span>
         <span></span>
       </div>
       <div v-for="(record, index) in records" :key="index" class="tmpl-row">
@@ -28,6 +29,14 @@
         <input v-model.trim="record.host" placeholder="@" spellcheck="false" />
         <input v-model.trim="record.value" placeholder="{ip}" spellcheck="false" />
         <input v-model.number="record.ttl" type="number" min="60" max="604800" />
+        <!-- Öncelik yalnızca MX/SRV için; boş bırakılırsa MX'e 10 uygulanır. -->
+        <input
+          v-model.number="record.priority"
+          type="number"
+          min="0"
+          max="65535"
+          :disabled="record.type !== 'MX' && record.type !== 'SRV'"
+          placeholder="—" />
         <button class="danger compact" type="button" @click="records.splice(index, 1)">{{ t("panel.common.delete") }}</button>
       </div>
       <p v-if="records.length === 0" class="empty-state">{{ t("panel.dnsTemplate.empty") }}</p>
@@ -114,7 +123,7 @@ function resolveMessage(error: unknown) {
 
 .tmpl-row {
   display: grid;
-  grid-template-columns: 0.8fr 1fr 1.6fr 0.7fr auto;
+  grid-template-columns: 0.8fr 1fr 1.6fr 0.7fr 0.6fr auto;
   gap: 8px;
   align-items: center;
 }

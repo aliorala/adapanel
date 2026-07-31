@@ -51,8 +51,9 @@
           <label class="stacked-field value-field">
             <span class="field-label">{{ t("panel.dns.value") }}</span>
             <input v-model="recordForm.value" :placeholder="valuePlaceholder" />
+            <small v-if="valueHint" class="field-hint">{{ valueHint }}</small>
           </label>
-          <label v-if="recordForm.type === 'MX'" class="stacked-field">
+          <label v-if="recordForm.type === 'MX' || recordForm.type === 'SRV'" class="stacked-field">
             <span class="field-label">{{ t("panel.dns.priority") }}</span>
             <input v-model.number="recordForm.priority" type="number" min="0" max="65535" />
           </label>
@@ -171,7 +172,7 @@ const zoneTransferText = ref("");
 const editingId = ref("");
 const activeTab = ref<"records" | "settings">("records");
 const showRecordForm = ref(false);
-const recordTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS"];
+const recordTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", "TLSA", "PTR"];
 const zoneForm = reactive({ zoneName: "" });
 const recordForm = reactive({ type: "A", host: "@", value: "", ttl: 3600, priority: 10 as number | null });
 
@@ -182,12 +183,34 @@ const valuePlaceholder = computed(() => ({
   CNAME: zone.value?.zoneName ?? "example.com",
   MX: `mail.${zone.value?.zoneName ?? "example.com"}`,
   TXT: "v=spf1 a mx ~all",
-  NS: `ns1.${zone.value?.zoneName ?? "example.com"}`
+  NS: `ns1.${zone.value?.zoneName ?? "example.com"}`,
+  // Çok alanlı tiplerde değer biçimi tek satırda verilir; alan sırası RFC ile aynıdır.
+  SRV: `5 5060 sip.${zone.value?.zoneName ?? "example.com"}`,
+  CAA: "0 issue letsencrypt.org",
+  TLSA: "3 1 1 abcdef0123456789...",
+  PTR: `mail.${zone.value?.zoneName ?? "example.com"}`
 }[recordForm.type] ?? ""));
+
+// Çok alanlı tiplerde kullanıcıya değerin hangi sırayla yazılacağını söylüyoruz.
+const valueHint = computed(() => {
+  const key = {
+    SRV: "panel.dns.hintSrv",
+    CAA: "panel.dns.hintCaa",
+    TLSA: "panel.dns.hintTlsa",
+    PTR: "panel.dns.hintPtr"
+  }[recordForm.type];
+  return key ? t(key) : "";
+});
 
 watch(siteName, load, { immediate: true });
 watch(() => recordForm.type, (type) => {
-  recordForm.priority = type === "MX" ? recordForm.priority ?? 10 : null;
+  if (type === "MX") {
+    recordForm.priority = recordForm.priority ?? 10;
+  } else if (type === "SRV") {
+    recordForm.priority = recordForm.priority ?? 0;
+  } else {
+    recordForm.priority = null;
+  }
 });
 
 async function load() {

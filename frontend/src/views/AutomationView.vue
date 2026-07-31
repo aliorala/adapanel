@@ -170,6 +170,38 @@
       <p v-if="status?.lastLogCleanupDetails" class="cell-muted details-line">{{ status.lastLogCleanupDetails }}</p>
     </div>
 
+    <!-- Yazılım güncellemeleri: kontrol varsayılan açık, KURULUM kararı yöneticinin. -->
+    <div class="form-surface">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.automation.updateSection") }}</h3>
+          <p class="meta">{{ t("panel.automation.updateHint") }}</p>
+        </div>
+        <label class="toggle-field">
+          <input v-model="form.updateCheckEnabled" type="checkbox" />
+          <span>{{ t("panel.automation.enabled") }}</span>
+        </label>
+      </div>
+
+      <label v-if="form.updateCheckEnabled" class="toggle-field">
+        <input v-model="form.autoApplyComponentUpdates" type="checkbox" />
+        <span>{{ t("panel.automation.autoApplyUpdates") }}</span>
+      </label>
+      <p v-if="form.updateCheckEnabled && form.autoApplyComponentUpdates" class="field-hint">
+        {{ t("panel.automation.autoApplyWarning") }}
+      </p>
+
+      <p class="field-hint">
+        {{ t("panel.automation.lastRun") }}:
+        <strong>{{ formatDate(status?.lastUpdateCheckRunUtc) }}</strong>
+        · {{ formatStatus(status?.lastUpdateCheckStatus) }}
+        <span v-if="status?.pendingComponentUpdates">
+          · {{ t("panel.automation.pendingUpdates", { count: status.pendingComponentUpdates }) }}
+        </span>
+      </p>
+      <p v-if="status?.lastUpdateCheckDetails" class="cell-muted details-line">{{ status.lastUpdateCheckDetails }}</p>
+    </div>
+
     <div class="form-surface">
       <div class="section-head">
         <div>
@@ -261,7 +293,9 @@ const form = reactive<AutomationSettings>({
   backupRemoteRegion: "",
   backupRemotePasswordSet: false,
   logCleanupEnabled: false,
-  logRetentionDays: 30
+  logRetentionDays: 30,
+  updateCheckEnabled: true,
+  autoApplyComponentUpdates: false
 });
 
 const remoteUrlPlaceholder = computed(() => {

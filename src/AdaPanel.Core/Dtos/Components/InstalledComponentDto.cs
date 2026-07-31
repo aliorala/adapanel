@@ -32,5 +32,11 @@ public sealed class InstalledComponentDto
     /// <summary>true ise kurulu sürümden daha yeni bir sürüm mevcut.</summary>
     public bool UpdateAvailable { get; init; }
 
+    /// <summary>
+    /// Bu bileşenin üst sürümü canlı olarak sorgulanabiliyor mu. False ise sürüm manifeste sabittir:
+    /// "güncelleme yok" bilgisi GÜVENİLİR DEĞİLDİR, yalnızca kontrol edilemediği anlamına gelir.
+    /// </summary>
+    public bool VersionCheckSupported { get; init; }
+
     public DateTime InstalledAtUtc { get; init; }
 }

@@ -38,9 +38,18 @@ public static class ComponentPreflight
         _ => []
     };
 
+    /// <summary>Panelin kendi kurduğu Windows servisleri (components.json serviceName alanları + panel servisi).</summary>
+    private static readonly HashSet<string> OwnServiceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AdaPanel", "AdaMySQL", "AdaMariaDB", "AdaPostgreSQL", "AdaRedis", "AdaMemcached", "AdaStalwart"
+    };
+
     /// <summary>
-    /// Servis panele mi ait? Panelin tüm servisleri "Ada" önekiyle adlandırılır (AdaMariaDB,
-    /// AdaStalwart...); yeniden kurulum/güncellemede kendi servisimiz çakışma sayılmaz.
+    /// Servis panele mi ait? Yeniden kurulum/güncellemede kendi servisimiz çakışma sayılmaz.
+    /// DİKKAT: eskiden yalnızca "Ada" öneki aranıyordu — bu, üçüncü parti "AdAware"/"Adaptive..."
+    /// gibi servisleri de panele aitmiş gibi gösterip GERÇEK bir çakışmayı sessizce yutabilirdi
+    /// (kurulum ön kontrolünün varlık sebebini ortadan kaldırır). Artık bilinen adlar kümesi +
+    /// "Ada" ardından BÜYÜK harf gelen panel kalıbı ("AdaMariaDB") aranıyor.
     /// </summary>
     public static bool IsOwnService(string? serviceName, string? componentServiceName)
     {
@@ -55,7 +64,15 @@ public static class ComponentPreflight
             return true;
         }
 
-        return serviceName.StartsWith("Ada", StringComparison.OrdinalIgnoreCase);
+        if (OwnServiceNames.Contains(serviceName))
+        {
+            return true;
+        }
+
+        // Gelecekte eklenecek "Ada<Bilesen>" servisleri: "Ada" + BÜYÜK harf kalıbı.
+        return serviceName.Length > 3 &&
+               serviceName.StartsWith("Ada", StringComparison.Ordinal) &&
+               char.IsUpper(serviceName[3]);
     }
 
     public static bool MatchesConflictPattern(string? serviceName, IReadOnlyList<string> patterns) =>

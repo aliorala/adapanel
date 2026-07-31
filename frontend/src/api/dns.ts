@@ -94,7 +94,8 @@ export async function repairDnsServer(applyDelayedAutoStart = true) {
 }
 
 // Sunucu-geneli DNS şablonu (Plesk "DNS template"): yeni site bölgeleri bununla seed edilir.
-export type DnsTemplateRecord = { type: string; host: string; value: string; ttl: number };
+/** priority yalnızca MX (ve SRV) için anlamlıdır; gönderilmezse sunucu MX'e 10 uygular. */
+export type DnsTemplateRecord = { type: string; host: string; value: string; ttl: number; priority?: number | null };
 export type DnsTemplate = { records: DnsTemplateRecord[] };
 
 export async function getDnsTemplate() {

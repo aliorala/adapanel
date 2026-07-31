@@ -131,6 +131,13 @@
               :title="t('panel.software.updateTo', { version: item.installed.availableVersion })">
               {{ t("panel.software.newVersion") }} {{ item.installed.availableVersion }}
             </span>
+            <!-- Sürümü canlı sorgulanamayan bileşen: "güncel" DEĞİL, "bilinmiyor" demektir. -->
+            <span
+              v-else-if="item.installed && !item.installed.versionCheckSupported && !item.installed.isSystemDetected"
+              class="unknown-badge"
+              :title="t('panel.software.versionCheckUnsupportedHint')">
+              {{ t("panel.software.versionCheckUnsupported") }}
+            </span>
           </span>
           <span>{{ item.type }}</span>
           <span class="path-cell">{{ item.installed?.installDir || item.installDir }}</span>
@@ -686,6 +693,15 @@ function formatDetectionSource(source: string): string {
   font-weight: 600;
   color: #fff;
   background: var(--accent-1, #2e7d32);
+  white-space: nowrap;
+}
+
+.unknown-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  border: 1px dashed var(--panel-border);
   white-space: nowrap;
 }
 

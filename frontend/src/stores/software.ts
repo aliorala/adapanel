@@ -40,6 +40,8 @@ export type InstalledComponent = {
   detectionSource: string;
   availableVersion: string;
   updateAvailable: boolean;
+  /** Üst sürüm canlı sorgulanabiliyor mu; false ise "güncel" değil "bilinmiyor". */
+  versionCheckSupported: boolean;
   installedAtUtc: string;
 };
 

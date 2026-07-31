@@ -78,6 +78,25 @@ public sealed class ComponentBootstrapper(
         };
     }
 
+    /// <summary>
+    /// Bileşenin üst sürümü CANLI olarak çözülebiliyor mu (ResolveDynamicComponentAsync'te karşılığı
+    /// var mı). Çözülemeyenlerin sürümü manifeste SABİT yazılıdır; bunlar için "güncelleme yok"
+    /// demek yanıltıcıdır — panel bunu "kontrol edilemiyor" olarak bildirir, sessizce güncelmiş
+    /// gibi göstermez. (Örn. PHP, MariaDB, MySQL, PostgreSQL, nginx yeni sürüm çıkardığında
+    /// manifest elle güncellenene kadar panel fark etmez.)
+    /// </summary>
+    internal static bool SupportsVersionCheck(string componentId)
+    {
+        return componentId.Trim().ToLowerInvariant() is
+            "adminer" or "clamav" or "composer" or "docker-engine" or "memcached" or
+            "nodejs-lts" or "phpmyadmin" or "roundcube" or "stalwart-cli" or "stalwart-mail" or "win-acme" or
+            "php-8.3" or "mariadb-11" or "mysql-8" or "postgresql-16" or "pgadmin4" or
+            "nginx" or "python-3" or "redis" or
+            // Sabit "evergreen" adresler: URL her zaman en gunceli verir (aka.ms/vs/17/release/...,
+            // Microsoft IIS eklenti MSI'lari). Surum sorgusu gerekmez; "kontrol edilemiyor" DEGIL.
+            "vc-redist-x64" or "url-rewrite" or "iis-arr" or "http-platform-handler";
+    }
+
     public async Task<SoftwareCatalogDto> CheckForUpdatesAsync(CancellationToken cancellationToken = default)
     {
         var manifest = await LoadManifestAsync(cancellationToken);
@@ -133,6 +152,7 @@ public sealed class ComponentBootstrapper(
             {
                 AvailableVersion = availableVersion,
                 UpdateAvailable = IsNewerVersion(availableVersion, installed.Version),
+                VersionCheckSupported = SupportsVersionCheck(installed.ComponentId),
                 CheckedAtUtc = DateTime.UtcNow
             };
         }
@@ -801,6 +821,7 @@ public sealed class ComponentBootstrapper(
             DetectionSource = ReadConfigurationValue(configuration, DetectionSourceKey),
             AvailableVersion = updateInfo?.AvailableVersion ?? string.Empty,
             UpdateAvailable = updateInfo?.UpdateAvailable ?? false,
+            VersionCheckSupported = updateInfo?.VersionCheckSupported ?? SupportsVersionCheck(component.ComponentId),
             InstalledAtUtc = component.InstalledAtUtc
         };
     }
@@ -875,6 +896,30 @@ public sealed class ComponentBootstrapper(
         return false;
     }
 
+    /// <summary>Sürüm karşılaştırması: sol &gt; sağ ise pozitif, eşitse 0, küçükse negatif.</summary>
+    internal static int CompareVersions(string? left, string? right)
+    {
+        var a = ParseVersionParts(left);
+        var b = ParseVersionParts(right);
+        if (a is null || b is null)
+        {
+            return 0;
+        }
+
+        var length = Math.Max(a.Length, b.Length);
+        for (var index = 0; index < length; index++)
+        {
+            var leftPart = index < a.Length ? a[index] : 0;
+            var rightPart = index < b.Length ? b[index] : 0;
+            if (leftPart != rightPart)
+            {
+                return leftPart.CompareTo(rightPart);
+            }
+        }
+
+        return 0;
+    }
+
     private static int[]? ParseVersionParts(string? version)
     {
         if (string.IsNullOrWhiteSpace(version))
@@ -899,6 +944,9 @@ public sealed class ComponentBootstrapper(
         public string AvailableVersion { get; set; } = string.Empty;
 
         public bool UpdateAvailable { get; set; }
+
+        /// <summary>Üst sürüm canlı çözülebiliyor mu; false ise "güncel" değil "bilinmiyor" demektir.</summary>
+        public bool VersionCheckSupported { get; set; }
 
         public DateTime CheckedAtUtc { get; set; }
     }
@@ -1289,6 +1337,65 @@ public sealed class ComponentBootstrapper(
             case "nodejs-lts":
                 return await ResolveLatestNodeLtsAsync(component, client, cancellationToken);
 
+            // Webmail: GitHub releases'ta "roundcubemail-<surum>-complete.tar.gz". Manifeste sabit
+            // surum yazilirsa asla guncelleme gorunmez — webmail internete acik oldugu icin
+            // guncel kalmasi onemli.
+            case "roundcube":
+                return await ResolveLatestGitHubAssetAsync(
+                    component,
+                    client,
+                    "roundcube/roundcubemail",
+                    assetName =>
+                        assetName.StartsWith("roundcubemail-", StringComparison.OrdinalIgnoreCase) &&
+                        assetName.EndsWith("-complete.tar.gz", StringComparison.OrdinalIgnoreCase),
+                    cancellationToken);
+
+            // --- Manifeste sabitlenmis surumler icin canli cozumleyiciler ---
+            // ORTAK KURAL: hepsi bilesenin KENDI SERISINDE kalir (php-8.3 -> 8.3.x, mariadb-11 -> 11.8.x,
+            // postgresql-16 -> 16.x). Seri atlamak (8.3 -> 8.4) uyumluluk kararidir ve panel surumuyle
+            // gelir; guncelleme kontrolu sessizce major yukseltme YAPMAZ.
+            case "php-8.3":
+                return await ResolveLatestPhpAsync(component, client, cancellationToken);
+
+            case "mariadb-11":
+                return await ResolveLatestMariaDbAsync(component, client, cancellationToken);
+
+            case "mysql-8":
+                return await ResolveLatestMysqlAsync(component, client, cancellationToken);
+
+            case "postgresql-16":
+                return await ResolveLatestPostgresAsync(component, client, cancellationToken);
+
+            case "pgadmin4":
+                return await ResolveLatestPgAdminAsync(component, client, cancellationToken);
+
+            case "nginx":
+                return await ResolveLatestNginxAsync(component, client, cancellationToken);
+
+            case "python-3":
+                return await ResolveLatestPythonAsync(component, client, cancellationToken);
+
+            case "redis":
+                return await ResolveLatestGitHubAssetAsync(
+                    component,
+                    client,
+                    "tporadowski/redis",
+                    assetName =>
+                        assetName.StartsWith("Redis-x64-", StringComparison.OrdinalIgnoreCase) &&
+                        assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase),
+                    cancellationToken);
+
+            // Antivirus imza motoru: eski surum = yeni tehditleri kacirma.
+            case "clamav":
+                return await ResolveLatestGitHubAssetAsync(
+                    component,
+                    client,
+                    "Cisco-Talos/clamav",
+                    assetName =>
+                        assetName.EndsWith(".win.x64.zip", StringComparison.OrdinalIgnoreCase) &&
+                        !assetName.Contains("debug", StringComparison.OrdinalIgnoreCase),
+                    cancellationToken);
+
             case "win-acme":
                 return await ResolveLatestGitHubAssetAsync(
                     component,
@@ -1599,6 +1706,485 @@ public sealed class ComponentBootstrapper(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Unable to resolve latest Node.js LTS package for {ComponentId}.", component.Id);
+        }
+
+        return component;
+    }
+
+    /// <summary>Sürüm dizesinin ilk <paramref name="parts"/> parçası ("8.3.31", 2 → "8.3").</summary>
+    internal static string VersionSeries(string version, int parts)
+    {
+        var segments = (version ?? string.Empty).Split('.', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length < parts ? string.Empty : string.Join('.', segments.Take(parts));
+    }
+
+    /// <summary>
+    /// Aday sürümlerden, bileşenin KENDİ serisinde kalan ve kurulu olandan yeni olanları en
+    /// yeniden eskiye sıralar. Seri filtresi kritik: nginx sayfası hem 1.31.x hem 1.30.x listeler,
+    /// Python dizini 3.12 ile 3.14'ü yan yana tutar — dal atlamak uyumluluğu bozar.
+    /// </summary>
+    internal static IReadOnlyList<string> SelectNewerInSeries(
+        IEnumerable<string> candidates,
+        string currentVersion,
+        int seriesParts)
+    {
+        var series = VersionSeries(currentVersion, seriesParts);
+        if (string.IsNullOrEmpty(series))
+        {
+            return [];
+        }
+
+        return candidates
+            .Where(version => VersionSeries(version, seriesParts) == series)
+            .Where(version => CompareVersions(version, currentVersion) > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(version => version, Comparer<string>.Create(CompareVersions))
+            .ToArray();
+    }
+
+    /// <summary>Bir URL'in gerçekten indirilebilir olduğunu HEAD ile doğrular (yanlış sürüm yazmayalım).</summary>
+    private static async Task<bool> UrlExistsAsync(HttpClient client, string url, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Head, url);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// releases.json'daki bir dal nesnesinden (ör. "8.3") sürüm + Windows zip adı + sha256 çıkarır.
+    /// Kurulu paketin lezzeti (nts-vs16-x64 gibi) korunur; yoksa herhangi bir nts-x64 kullanılır.
+    /// ts (thread-safe) paketler ELENİR: panel FastCGI ile nts kurar.
+    /// </summary>
+    internal static (string Version, string FileName, string Sha256)? ParsePhpBranch(
+        JsonElement branch,
+        string currentDownloadUrl)
+    {
+        if (branch.ValueKind != JsonValueKind.Object ||
+            !branch.TryGetProperty("version", out var versionElement))
+        {
+            return null;
+        }
+
+        var version = versionElement.GetString();
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+
+        var flavours = branch
+            .EnumerateObject()
+            .Where(property =>
+                property.Name.StartsWith("nts-", StringComparison.OrdinalIgnoreCase) &&
+                property.Name.EndsWith("-x64", StringComparison.OrdinalIgnoreCase) &&
+                property.Value.ValueKind == JsonValueKind.Object)
+            // Kurulu URL hangi derleyici etiketini içeriyorsa (vs16/vs17) o tercih edilir.
+            .OrderByDescending(property => currentDownloadUrl.Contains(
+                property.Name[4..],
+                StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(property => property.Name, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var flavour in flavours)
+        {
+            if (!flavour.Value.TryGetProperty("zip", out var zip) ||
+                !zip.TryGetProperty("path", out var pathElement) ||
+                !zip.TryGetProperty("sha256", out var shaElement))
+            {
+                continue;
+            }
+
+            var path = pathElement.GetString();
+            var sha256 = shaElement.GetString();
+            if (!string.IsNullOrWhiteSpace(path) && !string.IsNullOrWhiteSpace(sha256))
+            {
+                return (version, path, sha256);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// MariaDB REST cevabından, kurulu sürümden yeni olan EN GÜNCEL sürümün winx64 zip'ini ve
+    /// sha256'sını çıkarır.
+    /// </summary>
+    internal static (string Version, string FileName, string Sha256)? ParseMariaDbReleases(
+        JsonElement root,
+        string currentVersion)
+    {
+        if (!root.TryGetProperty("releases", out var releases) || releases.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var ordered = releases
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .Where(name => CompareVersions(name, currentVersion) > 0)
+            .OrderByDescending(name => name, Comparer<string>.Create(CompareVersions));
+
+        foreach (var version in ordered)
+        {
+            if (!releases.TryGetProperty(version, out var release) ||
+                !release.TryGetProperty("files", out var files) ||
+                files.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var file in files.EnumerateArray())
+            {
+                var fileName = file.TryGetProperty("file_name", out var nameElement) ? nameElement.GetString() : null;
+                if (fileName is null || !fileName.EndsWith("winx64.zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var sha256 = file.TryGetProperty("checksum", out var checksum) &&
+                             checksum.TryGetProperty("sha256sum", out var shaElement)
+                    ? shaElement.GetString()
+                    : null;
+                if (!string.IsNullOrWhiteSpace(sha256))
+                {
+                    return (version, fileName, sha256);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // PHP: windows.php.net/downloads/releases/releases.json dal başına EN GÜNCEL yamayı ve
+    // dosyanın SHA256'sını verir → tam doğrulama korunur (checksum muafiyeti gerekmez).
+    private async Task<ComponentManifestItemDto> ResolveLatestPhpAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var branch = VersionSeries(component.Version, 2);
+            if (string.IsNullOrEmpty(branch))
+            {
+                return component;
+            }
+
+            using var response = await client.GetAsync(
+                "https://windows.php.net/downloads/releases/releases.json",
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return component;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!document.RootElement.TryGetProperty(branch, out var branchElement) ||
+                !branchElement.TryGetProperty("version", out var versionElement))
+            {
+                return component;
+            }
+
+            var parsed = ParsePhpBranch(branchElement, component.DownloadUrl);
+            if (parsed is null)
+            {
+                return component;
+            }
+
+            return CopyComponent(
+                component,
+                version: parsed.Value.Version,
+                downloadUrl: $"https://windows.php.net/downloads/releases/{parsed.Value.FileName}",
+                sha256: parsed.Value.Sha256);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "PHP sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
+        }
+
+        return component;
+    }
+
+    // MariaDB: resmi REST API seri içindeki sürümleri ve her dosyanın sha256'sını verir.
+    private async Task<ComponentManifestItemDto> ResolveLatestMariaDbAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var series = VersionSeries(component.Version, 2);
+            if (string.IsNullOrEmpty(series))
+            {
+                return component;
+            }
+
+            using var response = await client.GetAsync(
+                $"https://downloads.mariadb.org/rest-api/mariadb/{series}/",
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return component;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            var parsed = ParseMariaDbReleases(document.RootElement, component.Version);
+            if (parsed is not null)
+            {
+                return CopyComponent(
+                    component,
+                    version: parsed.Value.Version,
+                    // API http:// döndürebiliyor; kalıcı arşiv adresini HTTPS ile kuruyoruz.
+                    downloadUrl: $"https://archive.mariadb.org/mariadb-{parsed.Value.Version}/winx64-packages/{parsed.Value.FileName}",
+                    sha256: parsed.Value.Sha256);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "MariaDB sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
+        }
+
+        return component;
+    }
+
+    // MySQL: dev.mysql.com kazımayı engelliyor (403) ve checksum sidecar'ı yok. CDN ise olmayan
+    // dosyaya 404, olana 200 döndüğü için yama numarasını ileri YOKLAYARAK güvenilir şekilde bulunur.
+    private async Task<ComponentManifestItemDto> ResolveLatestMysqlAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var series = VersionSeries(component.Version, 2);
+            var parts = component.Version.Split('.', StringSplitOptions.RemoveEmptyEntries);
+            if (string.IsNullOrEmpty(series) || parts.Length < 3 || !int.TryParse(parts[2], out var patch))
+            {
+                return component;
+            }
+
+            var bestVersion = component.Version;
+            var bestUrl = component.DownloadUrl;
+            var misses = 0;
+
+            for (var candidate = patch + 1; candidate <= patch + 15 && misses < 2; candidate++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var version = $"{series}.{candidate}";
+                var url = $"https://cdn.mysql.com/Downloads/MySQL-{series}/mysql-{version}-winx64.zip";
+                if (await UrlExistsAsync(client, url, cancellationToken))
+                {
+                    bestVersion = version;
+                    bestUrl = url;
+                    misses = 0;
+                }
+                else
+                {
+                    misses++;
+                }
+            }
+
+            return bestVersion == component.Version
+                ? component
+                : CopyComponent(component, version: bestVersion, downloadUrl: bestUrl, sha256: string.Empty);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "MySQL sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
+        }
+
+        return component;
+    }
+
+    // PostgreSQL: postgresql.org/versions.json her ana sürümün güncel yamasını bildirir; paket EDB'de.
+    private async Task<ComponentManifestItemDto> ResolveLatestPostgresAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var major = VersionSeries(component.Version, 1);
+            if (string.IsNullOrEmpty(major))
+            {
+                return component;
+            }
+
+            using var response = await client.GetAsync(
+                "https://www.postgresql.org/versions.json",
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return component;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("major", out var majorElement) ||
+                    !string.Equals(majorElement.GetString(), major, StringComparison.Ordinal) ||
+                    !entry.TryGetProperty("latestMinor", out var minorElement))
+                {
+                    continue;
+                }
+
+                var minor = minorElement.GetString();
+                if (string.IsNullOrWhiteSpace(minor))
+                {
+                    return component;
+                }
+
+                var version = $"{major}.{minor}";
+                var url = $"https://get.enterprisedb.com/postgresql/postgresql-{version}-1-windows-x64.exe";
+                if (CompareVersions(version, component.Version) <= 0 ||
+                    !await UrlExistsAsync(client, url, cancellationToken))
+                {
+                    return component;
+                }
+
+                return CopyComponent(component, version: version, downloadUrl: url, sha256: string.Empty);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "PostgreSQL sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
+        }
+
+        return component;
+    }
+
+    // pgAdmin: resmi versions.json (uygulamanın kendi güncelleme kontrolü de bunu kullanır).
+    private async Task<ComponentManifestItemDto> ResolveLatestPgAdminAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await client.GetAsync(
+                "https://www.pgadmin.org/versions.json",
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return component;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (!document.RootElement.TryGetProperty("pgadmin4", out var entry) ||
+                !entry.TryGetProperty("version", out var versionElement))
+            {
+                return component;
+            }
+
+            var version = versionElement.GetString();
+            if (string.IsNullOrWhiteSpace(version) || CompareVersions(version, component.Version) <= 0)
+            {
+                return component;
+            }
+
+            var url = $"https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v{version}/windows/pgadmin4-{version}-x64.exe";
+            return await UrlExistsAsync(client, url, cancellationToken)
+                ? CopyComponent(component, version: version, downloadUrl: url, sha256: string.Empty)
+                : component;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "pgAdmin sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
+        }
+
+        return component;
+    }
+
+    // nginx: indirme sayfasındaki sürümlerden AYNI DALDAKİ (ör. 1.31.x) en yenisi alınır.
+    private async Task<ComponentManifestItemDto> ResolveLatestNginxAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var branch = VersionSeries(component.Version, 2);
+            if (string.IsNullOrEmpty(branch))
+            {
+                return component;
+            }
+
+            var html = await client.GetStringAsync("https://nginx.org/en/download.html", cancellationToken);
+            var best = SelectNewerInSeries(
+                    Regex.Matches(html, @"nginx-(\d+\.\d+\.\d+)\.zip").Select(match => match.Groups[1].Value),
+                    component.Version,
+                    2)
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(best))
+            {
+                return component;
+            }
+
+            return CopyComponent(
+                component,
+                version: best,
+                downloadUrl: $"https://nginx.org/download/nginx-{best}.zip",
+                sha256: string.Empty);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "nginx sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
+        }
+
+        return component;
+    }
+
+    // Python: DİKKAT — bir seri güvenlik-yalnız moda geçince (3.12.11+) yeni yamalar KAYNAK olarak
+    // yayınlanır, Windows kurulumu ÜRETİLMEZ. Bu yüzden en yeni dizini körlemesine almak bozuk URL
+    // uretir; adaylar yüksekten aşağı denenip installer'ı GERÇEKTEN olan ilk sürüm seçilir.
+    private async Task<ComponentManifestItemDto> ResolveLatestPythonAsync(
+        ComponentManifestItemDto component,
+        HttpClient client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var series = VersionSeries(component.Version, 2);
+            if (string.IsNullOrEmpty(series))
+            {
+                return component;
+            }
+
+            var html = await client.GetStringAsync("https://www.python.org/ftp/python/", cancellationToken);
+            var candidates = SelectNewerInSeries(
+                    Regex.Matches(html, @"href=""(\d+\.\d+\.\d+)/""").Select(match => match.Groups[1].Value),
+                    component.Version,
+                    2)
+                .Take(6)
+                .ToArray();
+
+            foreach (var candidate in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var url = $"https://www.python.org/ftp/python/{candidate}/python-{candidate}-amd64.exe";
+                if (await UrlExistsAsync(client, url, cancellationToken))
+                {
+                    return CopyComponent(component, version: candidate, downloadUrl: url, sha256: string.Empty);
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Python sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
         return component;
@@ -1938,13 +2524,33 @@ public sealed class ComponentBootstrapper(
             $"Component={component.Id}\r\nUrl={component.DownloadUrl}");
     }
 
-    // Resmi, HTTPS dagitim CDN'leri icin checksum sidecar'i olmadiginda guvenilir kabul edilir.
+    /// <summary>
+    /// Checksum sidecar'ı YAYINLAMAYAN resmi HTTPS dağıtım sunucuları. Bu listeye yalnızca üreticinin
+    /// KENDİ dağıtım adresi girer ve yalnızca HTTPS kabul edilir (sertifika + host doğrulaması kalır).
+    /// Neden gerekli: bu bileşenlerin sürümü aksi halde manifeste sabit kalır ve sunucu eski, açık
+    /// sürümde takılır — yayınlanmamış bir sha256'yı beklemek, bilinen CVE'lerle yaşamaktan daha
+    /// riskli. sha256 YAYINLAYAN kaynaklar (PHP, MariaDB, Node, Composer, GitHub) bu listede DEĞİL;
+    /// onlarda tam doğrulama zorunlu kalır.
+    /// </summary>
+    private static readonly string[] TrustedNoChecksumHosts =
+    [
+        "download.docker.com",   // Docker Engine (static)
+        "cdn.mysql.com",         // MySQL Community Server
+        "get.enterprisedb.com",  // PostgreSQL (EDB resmi Windows paketi)
+        "ftp.postgresql.org",    // pgAdmin 4
+        "nginx.org",             // nginx (yalnız PGP imzası yayınlar)
+        "www.python.org"         // CPython Windows installer
+    ];
+
+    internal static bool IsTrustedNoChecksumHostForTests(string downloadUrl) => IsTrustedNoChecksumHost(downloadUrl);
+
     private static bool IsTrustedNoChecksumHost(string downloadUrl)
     {
         return Uri.TryCreate(downloadUrl, UriKind.Absolute, out var uri) &&
             uri.Scheme == Uri.UriSchemeHttps &&
-            (uri.Host.Equals("download.docker.com", StringComparison.OrdinalIgnoreCase) ||
-             uri.Host.EndsWith(".download.docker.com", StringComparison.OrdinalIgnoreCase));
+            TrustedNoChecksumHosts.Any(host =>
+                uri.Host.Equals(host, StringComparison.OrdinalIgnoreCase) ||
+                uri.Host.EndsWith("." + host, StringComparison.OrdinalIgnoreCase));
     }
 
     private static async Task VerifyChecksumAsync(
@@ -4099,6 +4705,9 @@ public sealed class ComponentBootstrapper(
             .Replace("=", string.Empty);
     }
 
+    // DİKKAT (sha256): null "manifesttekini KORU" demektir. Checksum yayınlamayan bir kaynaktan
+    // YENİ sürüm çözerken sha256 olarak MUTLAKA string.Empty geç — null geçilirse eski sürümün
+    // hash'i yeni dosyayla karşılaştırılır ve kurulum "checksum uyuşmuyor" ile patlar.
     private static ComponentManifestItemDto CopyComponent(
         ComponentManifestItemDto component,
         string? version = null,

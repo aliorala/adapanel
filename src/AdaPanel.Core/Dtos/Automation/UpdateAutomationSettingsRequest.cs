@@ -62,4 +62,10 @@ public sealed class UpdateAutomationSettingsRequest
 
     [Range(1, 3650)]
     public int LogRetentionDays { get; set; } = 30;
+
+    /// <summary>Kurulu bileşenler için günlük güncelleme kontrolü (varsayılan açık).</summary>
+    public bool UpdateCheckEnabled { get; set; } = true;
+
+    /// <summary>Bulunan güncellemeleri otomatik kur (riskli bileşenler hariç; varsayılan kapalı).</summary>
+    public bool AutoApplyComponentUpdates { get; set; }
 }

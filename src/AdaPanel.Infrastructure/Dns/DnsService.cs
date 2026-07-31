@@ -20,8 +20,19 @@ public sealed partial class DnsService(
     private const string WatchdogPath = "config/dns-watchdog.json";
     private static readonly TimeSpan WatchdogInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan WatchdogCooldown = TimeSpan.FromHours(1);
-    private const int CurrentDefaultsVersion = 1;
-    private static readonly string[] SupportedTypes = ["A", "AAAA", "CNAME", "MX", "TXT", "NS"];
+    // 2: posta kayitlari (mail A, webmail A, MX, SPF, DMARC) varsayilan sete eklendi. Surum artinca
+    // MevcutDefaults birlestirmesi calisir -> ESKI bolgeler de eksik posta kayitlarini kendiliginden alir
+    // (kullanicinin ekledigi kayitlara dokunulmaz, yalniz EKSIK olanlar eklenir).
+    private const int CurrentDefaultsVersion = 2;
+    // Desteklenen kayıt tipleri. SRV/PTR/TLSA'nın Windows DNS'te NATIVE cmdlet parametresi vardır;
+    // CAA'nın yoktur, RFC 3597 "bilinmeyen kayıt" yolu (-Unknown -Type 257 + ham RDATA) ile yazılır.
+    // Değer biçimleri (UI'da da gösterilir):
+    //   SRV   -> değer: "<ağırlık> <port> <hedef>", öncelik ayrı alanda
+    //   CAA   -> değer: "<bayrak> <etiket> <değer>"   ör: 0 issue letsencrypt.org
+    //   TLSA  -> değer: "<kullanım> <seçici> <eşleşme> <sertifika-hex>"
+    //   PTR   -> değer: hedef alan adı
+    private static readonly string[] SupportedTypes =
+        ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", "TLSA", "PTR"];
 
     public async Task<SiteDnsZoneDto> GetZoneAsync(string siteName, CancellationToken cancellationToken = default)
     {
@@ -607,7 +618,14 @@ public sealed partial class DnsService(
                 Type = type,
                 Host = host,
                 Value = value,
-                Ttl = record.Ttl > 0 ? record.Ttl : 3600
+                Ttl = record.Ttl > 0 ? record.Ttl : 3600,
+                // MX önceliksiz kaydedilirse posta yönlendirmesi bozulur; istemci göndermezse 10'a düşer.
+                Priority = type switch
+                {
+                    "MX" => record.Priority is > 0 ? record.Priority : 10,
+                    "SRV" => record.Priority,
+                    _ => null
+                }
             });
         }
 
@@ -692,6 +710,11 @@ public sealed partial class DnsService(
     }
 
     // Kayıtlı şablon yoksa UI'de gösterilecek/uygulanacak yerleşik varsayılan (mevcut CreateDefaultRecords ile aynı set, yer tutuculu).
+    // Yeni bölgenin varsayılan kayıtları. POSTA KAYITLARI DA BURADA olmalı: panel kendi mail
+    // sunucusunu (Stalwart) ve webmail'i (webmail.<alan>) kuruyor, ama bölgede MX/SPF/DMARC yoksa
+    // o alan adına posta HİÇ ULAŞMAZ, giden posta da spam'e düşer; webmail adresi de çözülmez.
+    // (Karşılaştırma: Plesk'in ürettiği bölgede MX, mail A, webmail A, SPF ve DMARC standarttır.)
+    // DKIM burada YOK: anahtar mail domaini oluşturulunca üretilir → EnsureMailRecordsAsync ekler.
     private static DnsTemplateDto BuiltInTemplate() => new()
     {
         Records =
@@ -702,7 +725,12 @@ public sealed partial class DnsService(
             new DnsTemplateRecordDto { Type = "A", Host = "ns1", Value = "{ip}", Ttl = 3600 },
             new DnsTemplateRecordDto { Type = "A", Host = "ns2", Value = "{ip}", Ttl = 3600 },
             new DnsTemplateRecordDto { Type = "CNAME", Host = "www", Value = "{domain}", Ttl = 3600 },
-            new DnsTemplateRecordDto { Type = "CNAME", Host = "ftp", Value = "{domain}", Ttl = 3600 }
+            new DnsTemplateRecordDto { Type = "CNAME", Host = "ftp", Value = "{domain}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "A", Host = "mail", Value = "{ip}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "A", Host = "webmail", Value = "{ip}", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "MX", Host = "@", Value = "mail.{domain}", Ttl = 3600, Priority = 10 },
+            new DnsTemplateRecordDto { Type = "TXT", Host = "@", Value = "v=spf1 mx a ip4:{ip} ~all", Ttl = 3600 },
+            new DnsTemplateRecordDto { Type = "TXT", Host = "_dmarc", Value = "v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}", Ttl = 3600 }
         ]
     };
 
@@ -737,6 +765,8 @@ public sealed partial class DnsService(
                 Host = host,
                 Value = value,
                 Ttl = tpl.Ttl > 0 ? tpl.Ttl : 3600,
+                // MX önceliği şablondan taşınmalı; taşınmazsa MX kaydı önceliksiz yazılır.
+                Priority = tpl.Priority,
                 IsManaged = true
             });
         }
@@ -760,15 +790,26 @@ public sealed partial class DnsService(
         yield return CreateManagedRecord("CNAME", "www", zoneName);
         yield return CreateManagedRecord("CNAME", "ftp", zoneName);
 
+        // Posta: MX + SPF + DMARC olmadan alan adına posta ULAŞMAZ, giden posta spam'e düşer.
+        yield return CreateManagedRecord("MX", "@", $"mail.{zoneName}", priority: 10);
+        yield return CreateManagedRecord("TXT", "_dmarc", $"v=DMARC1; p=quarantine; rua=mailto:postmaster@{zoneName}");
+
         if (!string.IsNullOrWhiteSpace(serverIp))
         {
             yield return CreateManagedRecord("A", "@", serverIp);
             yield return CreateManagedRecord("A", "ns1", serverIp);
             yield return CreateManagedRecord("A", "ns2", serverIp);
+            yield return CreateManagedRecord("A", "mail", serverIp);
+            yield return CreateManagedRecord("A", "webmail", serverIp);
+            yield return CreateManagedRecord("TXT", "@", $"v=spf1 mx a ip4:{serverIp} ~all");
+        }
+        else
+        {
+            yield return CreateManagedRecord("TXT", "@", "v=spf1 mx a ~all");
         }
     }
 
-    private static DnsRecordState CreateManagedRecord(string type, string host, string value)
+    private static DnsRecordState CreateManagedRecord(string type, string host, string value, int? priority = null)
     {
         return new DnsRecordState
         {
@@ -777,6 +818,7 @@ public sealed partial class DnsService(
             Host = host,
             Value = value,
             Ttl = 3600,
+            Priority = priority,
             IsManaged = true
         };
     }
@@ -898,11 +940,43 @@ public sealed partial class DnsService(
                 "MX" => $"Add-DnsServerResourceRecordMX -ZoneName $zoneName -Name '{host}' -MailExchange '{value}' -Preference {record.Priority ?? 10} -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "TXT" => $"Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name '{host}' -DescriptiveText '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "NS" => $"Add-DnsServerResourceRecord -ZoneName $zoneName -NS -Name '{host}' -NameServer '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
+                "PTR" => $"Add-DnsServerResourceRecordPtr -ZoneName $zoneName -Name '{host}' -PtrDomainName '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
+                "SRV" => BuildSrvLine(host, record.Value, record.Priority, ttl),
+                "TLSA" => BuildTlsaLine(host, record.Value, ttl),
+                // CAA: Windows DNS'te native parametre yok → RFC 3597 bilinmeyen-kayıt yolu.
+                "CAA" => BuildCaaLine(host, record.Value, ttl),
                 _ => string.Empty
             });
         }
 
         return string.Join(Environment.NewLine, lines.Where(line => !string.IsNullOrWhiteSpace(line)));
+    }
+
+    // Aşağıdaki üç üretici test edilebilir olsun diye ayrı: Windows DNS'e yazılan komut satırının
+    // birebir doğru olması gerekiyor (yanlış parametre = kayıt sessizce yayınlanmaz).
+    internal static string BuildSrvLine(string host, string value, int? priority, int ttl)
+    {
+        var (weight, port, target) = ParseSrvValue(value);
+        return $"Add-DnsServerResourceRecord -ZoneName $zoneName -Srv -Name '{host}' " +
+               $"-DomainName '{EscapePowerShellLiteral(target)}' -Priority {priority ?? 0} " +
+               $"-Weight {weight} -Port {port} -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
+    }
+
+    internal static string BuildTlsaLine(string host, string value, int ttl)
+    {
+        var (usage, selector, matching, data) = ParseTlsaValue(value);
+        return $"Add-DnsServerResourceRecord -ZoneName $zoneName -Tlsa -Name '{host}' " +
+               $"-CertificateUsage {usage} -Selector {selector} -MatchingType {matching} " +
+               $"-CertificateAssociationData '{EscapePowerShellLiteral(data)}' " +
+               $"-TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
+    }
+
+    internal static string BuildCaaLine(string host, string recordValue, int ttl)
+    {
+        var (flags, tag, value) = ParseCaaValue(recordValue);
+        var rdata = BuildCaaRecordData(flags, tag, value);
+        return $"Add-DnsServerResourceRecord -ZoneName $zoneName -Unknown -Name '{host}' " +
+               $"-Type 257 -RecordData {rdata} -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
     }
 
     // İzin verilen AXFR hedef IP'lerini doğrular (IPv4/IPv6), kırpar, tekrarları atar. Geçersiz IP → 400.
@@ -972,7 +1046,12 @@ public sealed partial class DnsService(
             Host = host,
             Value = NormalizeRecordValue(type, value),
             Ttl = Math.Clamp(record.Ttl <= 0 ? 3600 : record.Ttl, 60, 86400),
-            Priority = type == "MX" ? Math.Clamp(record.Priority ?? 10, 0, 65535) : null,
+            Priority = type switch
+            {
+                "MX" => Math.Clamp(record.Priority ?? 10, 0, 65535),
+                "SRV" => Math.Clamp(record.Priority ?? 0, 0, 65535),
+                _ => null
+            },
             IsManaged = record.IsManaged
         };
     }
@@ -998,7 +1077,88 @@ public sealed partial class DnsService(
                 break;
             case "TXT" when value.Length > 512:
                 throw new AppException("dns.invalid_record_value", 400, 400);
+            case "PTR":
+                _ = NormalizeDomainValue(value);
+                break;
+            case "SRV":
+                _ = ParseSrvValue(value);
+                if (priority is < 0 or > 65535)
+                {
+                    throw new AppException("dns.invalid_priority", 400, 400);
+                }
+                break;
+            case "CAA":
+                _ = ParseCaaValue(value);
+                break;
+            case "TLSA":
+                _ = ParseTlsaValue(value);
+                break;
         }
+    }
+
+    /// <summary>SRV değeri: "&lt;ağırlık&gt; &lt;port&gt; &lt;hedef&gt;" (öncelik ayrı alandadır).</summary>
+    internal static (int Weight, int Port, string Target) ParseSrvValue(string value)
+    {
+        var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 3 ||
+            !int.TryParse(parts[0], out var weight) || weight is < 0 or > 65535 ||
+            !int.TryParse(parts[1], out var port) || port is < 1 or > 65535)
+        {
+            throw new AppException("dns.invalid_srv_value", 400, 400);
+        }
+
+        return (weight, port, NormalizeDomainValue(parts[2]));
+    }
+
+    /// <summary>CAA değeri: "&lt;bayrak&gt; &lt;etiket&gt; &lt;değer&gt;" (ör. 0 issue letsencrypt.org).</summary>
+    internal static (byte Flags, string Tag, string Value) ParseCaaValue(string value)
+    {
+        var parts = (value ?? string.Empty).Split(' ', 3, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 3 ||
+            !byte.TryParse(parts[0], out var flags) ||
+            parts[1].Length is 0 or > 15 ||
+            !parts[1].All(char.IsAsciiLetterOrDigit))
+        {
+            throw new AppException("dns.invalid_caa_value", 400, 400);
+        }
+
+        // Değer tırnaklı yazılmış olabilir (0 issue "letsencrypt.org") — tırnaklar RDATA'ya girmez.
+        var caaValue = parts[2].Trim().Trim('"');
+        if (caaValue.Length == 0 || caaValue.Length > 255 || caaValue.Any(character => character > 126))
+        {
+            throw new AppException("dns.invalid_caa_value", 400, 400);
+        }
+
+        return (flags, parts[1].ToLowerInvariant(), caaValue);
+    }
+
+    /// <summary>TLSA değeri: "&lt;kullanım&gt; &lt;seçici&gt; &lt;eşleşme&gt; &lt;sertifika-hex&gt;".</summary>
+    internal static (int Usage, int Selector, int MatchingType, string Data) ParseTlsaValue(string value)
+    {
+        var parts = (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 4 ||
+            !int.TryParse(parts[0], out var usage) || usage is < 0 or > 3 ||
+            !int.TryParse(parts[1], out var selector) || selector is < 0 or > 1 ||
+            !int.TryParse(parts[2], out var matching) || matching is < 0 or > 2 ||
+            parts[3].Length is 0 or > 512 ||
+            !parts[3].All(Uri.IsHexDigit))
+        {
+            throw new AppException("dns.invalid_tlsa_value", 400, 400);
+        }
+
+        return (usage, selector, matching, parts[3].ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// CAA kaydının ham RDATA'sı (RFC 8659): bayrak(1) + etiket uzunluğu(1) + etiket + değer.
+    /// Windows DNS'in CAA için native parametresi olmadığından RFC 3597 "-Unknown" yolu kullanılır.
+    /// </summary>
+    internal static string BuildCaaRecordData(byte flags, string tag, string value)
+    {
+        var bytes = new List<byte>(2 + tag.Length + value.Length) { flags, (byte)tag.Length };
+        bytes.AddRange(Encoding.ASCII.GetBytes(tag));
+        bytes.AddRange(Encoding.ASCII.GetBytes(value));
+        return string.Join(",", bytes.Select(item => "0x" + item.ToString("X2")));
     }
 
     private static bool IsAddressFamily(string value, System.Net.Sockets.AddressFamily family)
@@ -1008,10 +1168,24 @@ public sealed partial class DnsService(
 
     private static string NormalizeRecordValue(string type, string value)
     {
-        return type is "CNAME" or "MX" or "NS"
-            ? NormalizeDomainValue(value)
-            : value.Trim();
+        return type switch
+        {
+            "CNAME" or "MX" or "NS" or "PTR" => NormalizeDomainValue(value),
+            "SRV" => FormatSrvValue(ParseSrvValue(value)),
+            "CAA" => FormatCaaValue(ParseCaaValue(value)),
+            "TLSA" => FormatTlsaValue(ParseTlsaValue(value)),
+            _ => value.Trim()
+        };
     }
+
+    private static string FormatSrvValue((int Weight, int Port, string Target) parsed)
+        => $"{parsed.Weight} {parsed.Port} {parsed.Target}";
+
+    private static string FormatCaaValue((byte Flags, string Tag, string Value) parsed)
+        => $"{parsed.Flags} {parsed.Tag} {parsed.Value}";
+
+    private static string FormatTlsaValue((int Usage, int Selector, int MatchingType, string Data) parsed)
+        => $"{parsed.Usage} {parsed.Selector} {parsed.MatchingType} {parsed.Data}";
 
     private static string ResolveDefaultZoneName(SiteDto site)
     {

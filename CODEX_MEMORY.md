@@ -5780,3 +5780,145 @@ Basarili:
   alanini okur) -> notlar Turkce yazildi.
   YAYIN YONTEMI (tekrar icin): `git credential fill` ile Windows Kimlik Yoneticisi'ndeki github.com
   token'i (scope: gist, repo, workflow) okunup GitHub REST API'ye Bearer olarak verildi; gh CLI kurulu DEGIL.
+
+## 2026-07-30 (203) — PROAKTIF TARAMA: guncelleme otomasyonu + bulunan 3 gercek risk
+- **KULLANICI ISTEGI:** "paneli tara, eksik/noksan duzelt, ileride sorun cikaracak sey var mi, magazadaki
+  yazilimlarin guncellemesi var mi, sistem kendini guncel tutsun ya da sorsun".
+- **BULGU 1 — GUNCELLEME KONTROLU HIC OTOMATIK DEGILDI:** `CheckForUpdatesAsync` YALNIZ mağaza
+  ekranindaki butondan tetikleniyordu. Yonetici o ekrani acmazsa sunucu suresiz eski surumde kalirdi
+  (en sik guvenlik acigi kaynagi). EKLENDI: `AutomationService.RunUpdateCheckAsync` gunde bir calisir
+  (`UpdateCheckEnabled` VARSAYILAN ACIK) -> Danisman ekraninda "Kurulu yazilimlarda guncelleme var"
+  maddesi + uyarilar aciksa e-posta/webhook bildirimi (24 sa cooldown). Panel kendi guncellemesi de
+  artik bildirim gonderiyor (eskiden yalniz Danisman ekraninda gorunuyordu).
+  Istege bagli `AutoApplyComponentUpdates` (VARSAYILAN KAPALI) bulunanlari kurar.
+- **BULGU 2 — KILIT ICINDEN KURULUM = PANELIN KALICI KILITLENMESI (yeni kodda yakalandi):** guncelleme
+  isini once digerleri gibi `concurrencyLock.RunExclusiveAsync` icine koymustum. Bilesen kurulumu
+  (Roundcube/phpMyAdmin/Adminer) IIS SITESI OLUSTURUR -> `WebAdministrationSiteService.ExecuteWriteAsync`
+  -> AYNI non-reentrant kilidi ister -> panel bir daha hicbir yazma islemi yapamaz. Is kilidin DISINA
+  alindi; yalniz SONUC (`UpdateCheckOutcome` record) kilit icinde state'e yaziliyor.
+  KURAL: otomasyon job'i disaridan bir servise is yaptiracaksa once o servisin kilit alip almadigina bak.
+  (Kontrol edildi: BackupService'in `iisSiteService.CreateSiteAsync` cagrisi YALNIZ restore yolunda
+  (`TryRestoreIisSitesAsync`), otomasyondan erisilmiyor -> mevcut deadlock yok.)
+- **BULGU 3 — "GUNCEL" ILE "KONTROL EDEMIYORUM" AYNI GOSTERILIYORDU:** 24 bilesenin yalniz 9'unun
+  ust surumu canli cozuluyordu; digerlerinin surumu manifeste SABIT. Panel bunlar icin sessizce
+  "guncelleme yok" diyordu -> yanlis guven. `SupportsVersionCheck` + DTO `VersionCheckSupported`
+  eklendi; magaza ekraninda "surum kontrol edilemiyor" rozeti, otomasyon ozetinde ayri liste.
+  AYRICA iki yeni canli cozumleyici: **roundcube** (GitHub roundcube/roundcubemail, webmail internete
+  acik) ve **clamav** (Cisco-Talos/clamav, imza motoru). Artik 11/24 canli.
+  HALA SABIT (elle manifest guncellemesi gerekir): php-8.3, mariadb-11, mysql-8, postgresql-16, nginx,
+  redis, pgadmin4, python-3, vc-redist, url-rewrite, iis-arr, http-platform-handler, mailenable.
+- **BULGU 4 — `ComponentPreflight.IsOwnService` "Ada" onegi (ADAPANEL.HOST BUG'IYLA AYNI SINIF):**
+  `serviceName.StartsWith("Ada")` ucuncu parti "AdAwareService"/"Adaptive..." servislerini de panele
+  aitmis sayip GERCEK bir kurulum cakismasini sessizce yutabilirdi (dc38e10'daki on kontrolun varlik
+  sebebini bosa cikarir). Bilinen ad kumesi (AdaPanel/AdaMySQL/AdaMariaDB/AdaPostgreSQL/AdaRedis/
+  AdaMemcached/AdaStalwart) + "Ada"+BUYUK harf kalibi ile daraltildi.
+- **TEMIZ CIKAN TARAMALAR:** EF varliklarini kaydetmeden degistiren baska yer YOK (MailService/
+  WebDbClientService eslesmeleri DTO atamasi, false positive). Servis "Running" varsayimi yalniz
+  CacheService'te ve orada zaten canli RESP INFO ile dogrulaniyor. Alan adiyla cakisabilecek baska
+  StartsWith filtresi yok.
+- TESTLER: `UpdatePolicyTests` (otomatik guncellenebilirlik listesi, canli surum kontrolu destegi,
+  IsOwnService ucuncu parti ayrimi) -> Infrastructure **129/129**, Core 2/2. build 0/0, typecheck OK,
+  frontend build OK, i18n TR/EN **2667/2667**.
+- PAKETLENMEDI/YAYINLANMADI: 0.2.22 yayinda oldugu icin bu calisma **0.2.23** olacak (kullanici karari).
+
+## 2026-07-31 (204) — SABIT SURUMLERIN HEPSINE CANLI COZUMLEYICI (kullanici: "hepsi icin istiyorum")
+- **YONTEM:** her kaynak ONCE canli test edildi (feed sekli + URL kalibi + checksum var mi), sonra kod
+  yazildi. Uydurma yok; her cozumleyici hata durumunda manifest surumune SESSIZCE geri duser.
+- **YENI 8 COZUMLEYICI** (+ onceki turdaki roundcube/clamav ile birlikte 11 -> toplam **19/20 bilesen**):
+  - `php-8.3`: windows.php.net/downloads/releases/**releases.json** -> dal ("8.3") basina surum + zip yolu
+    + **SHA256** (tam dogrulama korunur). Kurulu paketin lezzeti (nts-vs16/vs17-x64) korunur, **ts ELENIR**.
+  - `mariadb-11`: downloads.mariadb.org/rest-api/mariadb/**11.8**/ -> seri icindeki en yeni surum +
+    winx64.zip + **sha256sum**. Indirme adresi archive.mariadb.org uzerinden HTTPS'e cevrilir
+    (API http:// donuyor).
+  - `mysql-8`: dev.mysql.com KAZIMAYI ENGELLIYOR (403) ve checksum sidecar'i YOK -> cdn.mysql.com'da
+    yama numarasi ileri YOKLANIR (olmayan dosyaya gercekten 404 donuyor; 8.4.99 ile dogrulandi),
+    2 ardisik bosluk sonrasi durur.
+  - `postgresql-16`: postgresql.org/**versions.json** -> major 16 icin latestMinor -> EDB adresi HEAD ile
+    dogrulanir (EDB olmayan surume 403 doner, o yuzden HEAD sart).
+  - `pgadmin4`: pgadmin.org/**versions.json** (uygulamanin kendi guncelleme kontrolu de bunu kullanir).
+  - `nginx`: indirme sayfasi regex; AYNI DALDA kalinir (sayfa 1.31.x ve 1.30.x'i birlikte listeler).
+  - `python-3`: **TUZAK** — bir seri guvenlik-yalniz moda gecince (3.12.11+) yeni yamalar KAYNAK olarak
+    cikar, Windows installer URETILMEZ. En yeni dizini almak bozuk URL uretir; adaylar yuksekten asagi
+    HEAD ile denenip installer'i GERCEKTEN olan ilk surum secilir (3.12.10 dogrulandi).
+  - `redis`: GitHub tporadowski/redis (Redis-x64-*.zip).
+- **BULUNAN GERCEK GERIDE KALMALAR** (panel bunlari GOREMIYORDU): PHP 8.3.31->**8.3.33**,
+  MariaDB 11.8.3->**11.8.8**, MySQL 8.4.9->**8.4.11**, nginx 1.31.0->**1.31.3**, pgAdmin 9.15->**9.16**,
+  Python 3.12.4->**3.12.10**, Roundcube 1.7.1->**1.7.2**. Guncel olanlar: PostgreSQL 16.14, Redis 5.0.14.1,
+  ClamAV 1.5.3.
+- **TAZE KURULUMLAR DA GUNCEL GELIR:** `InstallComponentInternalAsync` zaten `ResolveDynamicComponentAsync`
+  cagiriyor (satir ~657) -> manifest artik yalnizca FALLBACK/seed. Manifest surumlerini elle bumplamaya
+  gerek KALMADI.
+- **SERI DISIPLINI:** hicbir cozumleyici major/minor atlamaz (php-8.3 -> 8.3.x, python 3.12 -> 3.12.x,
+  nginx 1.31 -> 1.31.x). Seri gecisi uyumluluk karari; panel surumuyle gelir. `SelectNewerInSeries` testli.
+- **CHECKSUM POLITIKASI:** sha256 YAYINLAYANLAR (PHP, MariaDB, Node, Composer, GitHub) tam dogrulamada
+  KALIR. Yayinlamayan resmi HTTPS dagitim sunuculari icin `TrustedNoChecksumHosts` genisletildi:
+  cdn.mysql.com, get.enterprisedb.com, ftp.postgresql.org, nginx.org, www.python.org (+ mevcut
+  download.docker.com). Yalniz HTTPS + tam host esitligi/alt alan adi; "cdn.mysql.com.evil.example"
+  testle reddediliyor.
+- **INCE TUZAK (yorum olarak koda yazildi):** `CopyComponent`'te `sha256: null` = "manifesttekini KORU".
+  Checksum yayinlamayan kaynaktan YENI surum cozerken **string.Empty** gecilmeli; null gecilirse eski
+  surumun hash'i yeni dosyayla karsilastirilir ve kurulum "checksum uyusmuyor" ile patlar.
+- TESTLER: `ComponentVersionResolutionTests` (VersionSeries, CompareVersions sayisal, SelectNewerInSeries
+  dal atlamama, IsTrustedNoChecksumHost sahte-alt-alan-adi reddi, PHP dal ayristirici ts/nts secimi,
+  MariaDB releases ayristirici) — GERCEK upstream JSON kopyalariyla. Infrastructure **165/165**, Core 2/2.
+  build 0/0, typecheck OK, frontend build OK.
+- **KALAN TEK ISTISNA:** `mailenable-standard` (surum akisi yok, adres elle guncellenir) — panel bunu
+  "surum kontrol edilemiyor" olarak DURUSTCE isaretliyor.
+
+## 2026-07-31 (205) — KULLANICI PLESK BOLGESINI GONDERDI: VARSAYILAN BOLGEDE POSTA KAYITLARI EKSIKMIS
+- **KULLANICI SORUSU:** rakip panelin (Plesk/ozkula) alioral.com.tr bolgesini yapistirdi, "bizde neden
+  cok az kayit var, eksik mi yaptik?" + ayri mesajda kayit tipi listesi ekran goruntusu (12 tip).
+- **CEVAP: EVET, GERCEK EKSIK VARDI.** Karsilastirma:
+  - Bizde varsayilan: NS x2, A @, A ns1, A ns2, CNAME www, CNAME ftp = **7 kayit**.
+  - Plesk'te ayrica: **MX (10) mail**, **A mail**, **A webmail**, **TXT SPF**, **TXT _dmarc** (+ TLSA/DANE,
+    _domainconnect Plesk'e ozel, kullanicinin elle ekledikleri).
+  - KRITIK SONUC: panel Stalwart mail + Roundcube webmail KURUYOR ama bolgede MX/SPF/DMARC ve
+    mail/webmail A kayitlari YOKTU -> o alan adina posta HIC ULASMAZ, giden posta spam'e duser,
+    webmail.<alan> cozulmez. (Panelin `MailService.GetDnsRecordsAsync`'i bu kayitlari ZATEN dogru
+    uretiyordu — ama yalnizca "dis DNS saglayicisina ekleyin" diye GOSTERIYORDU; panel KENDI bolgesini
+    barindirirken bile yazmiyordu.)
+- **DUZELTME:** `BuiltInTemplate` + `CreateDefaultRecords` genisletildi: `A mail`, `A webmail`,
+  `MX @ -> mail.{domain}` (oncelik 10), `TXT @ -> v=spf1 mx a ip4:{ip} ~all` (MailService.BuildSpfValue
+  ile ayni format), `TXT _dmarc -> v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}`.
+  `CurrentDefaultsVersion` 1 -> **2**: `MergeMissingDefaults` sayesinde MEVCUT bolgeler de eksik posta
+  kayitlarini kendiliginden alir (kullanici kayitlarina dokunulmaz).
+- **YAN BULGU + DUZELTME:** `DnsTemplateRecordDto`'da **Priority YOKTU** -> sablondan uretilen MX
+  onceliksiz yaziliyordu. Alan eklendi, `BuildDefaultRecordsAsync` tasiyor, `UpdateTemplateAsync`
+  MX icin bos/0 gelirse **10**'a dusuruyor (UI'dan sablon kaydedilince MX bozulmasin), sablon
+  ekranina Oncelik sutunu eklendi (yalniz MX/SRV'de aktif).
+- **HENUZ YAPILMADI (kullanicinin ekran goruntusu istegi):** kayit tipi listesi hala 6
+  (A, AAAA, CNAME, MX, TXT, NS). Rakipte 12 var: +CAA, DS, HTTPS, PTR, SRV, TLSA.
+  NOT: **TUTARSIZLIK** — sunucu-geneli SABLON `UpdateTemplateAsync` SRV ve CAA'yi KABUL EDIYOR
+  (satir ~591 allowed listesi) ama bolge kayit editoru `SupportedTypes` (satir 24) REDDEDIYOR.
+  Windows DNS gercekleri: SRV/PTR/TLSA native cmdlet parametreleri VAR; CAA ve HTTPS/SVCB icin
+  `-Unknown -Type <n> -RecordData <hex>` (RFC 3597) gerekir — CAA'nin RDATA kodlamasi basit ve
+  test edilebilir, HTTPS/SVCB SvcParam kodlamasi karmasik. Bu makinede DNS Server rolu YOK,
+  canli dogrulanamaz. SIRADAKI IS: SRV + CAA + PTR + TLSA.
+- DOGRULAMA: build 0/0, Core 2/2, Infrastructure **168/168** (+3 `DnsDefaultRecordsTests`),
+  typecheck OK, frontend build OK, i18n TR/EN **2668/2668**.
+
+## 2026-07-31 (206) — 0.2.23: SRV/CAA/TLSA/PTR kayit tipleri (rakip panel paritesi tamamlandi)
+- Kayit tipi listesi 6 -> **10**: A, AAAA, CNAME, MX, TXT, NS + **SRV, CAA, TLSA, PTR**.
+  (Ekran goruntusundeki rakipte 12 vardi; DS DNSSEC imzalamayla panel tarafindan zaten uretiliyor,
+  **HTTPS/SVCB** BILEREK DISARIDA: SvcParam kodlamasi karmasik ve bu makinede DNS Server rolu olmadigi
+  icin canli dogrulanamaz -> korlemesine yazilmadi.)
+- **Deger bicimleri** (tek "deger" alaninda cok alan; UI'da tipe gore ipucu gosteriliyor):
+  SRV -> "agirlik port hedef" + oncelik AYRI alanda (MX ile tutarli)
+  CAA -> "bayrak etiket deger"  (ornek: 0 issue letsencrypt.org; tirnaklar temizlenir, etiket lowercase)
+  TLSA -> "kullanim secici eslesme sertifika-hex"  (0-3 / 0-1 / 0-2 / hex)
+  PTR -> hedef alan adi
+- **Windows DNS yazimi:** SRV (-Srv -DomainName/-Priority/-Weight/-Port), TLSA (-Tlsa
+  -CertificateUsage/-Selector/-MatchingType/-CertificateAssociationData), PTR
+  (Add-DnsServerResourceRecordPtr -PtrDomainName) NATIVE. **CAA'nin native parametresi YOK** ->
+  RFC 3597 `-Unknown -Type 257 -RecordData <0xNN,...>`; RDATA = bayrak(1)+etiket-uzunlugu(1)+etiket+deger
+  (RFC 8659) ve `BuildCaaRecordData` ile uretilip TESTLE dogrulaniyor.
+  **CANLI DOGRULANMASI GEREKEN TEK SEY:** CAA'nin `-Unknown` cagrisi hedef sunucuda denenmeli
+  (bu makinede DNS Server rolu yok). Digerleri native cmdlet parametreleri.
+- Uretilen PowerShell satirlari test edilebilir olsun diye `BuildSrvLine/BuildTlsaLine/BuildCaaLine`
+  ayri metodlara alindi (DnsRecordState private nested oldugu icin primitif parametre alirlar).
+- TESTLER: `DnsRecordTypeTests` 20 test (ayristirma + hatali girdi reddi + RDATA bayt bayt +
+  uretilen komut satiri) -> Infrastructure **188/188**, Core 2/2. i18n TR/EN **2675/2675**.
+- **0.2.23 PAKET:** `artifacts\release\0.2.23\AdaPanelSetup.exe`, `51,877,932` byte (49.47 MiB),
+  SHA256 `4D99C994DFC7FE6C27756C7B6439B862593D95C5CCFC11C46D1E980C59230471`.
+  Icerik: 203 (guncelleme otomasyonu) + 204 (8 canli surum cozumleyici) + 205 (varsayilan bolgeye
+  posta kayitlari + sablon Priority) + 206 (4 yeni kayit tipi).

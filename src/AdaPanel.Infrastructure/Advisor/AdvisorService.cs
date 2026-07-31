@@ -46,6 +46,26 @@ public sealed class AdvisorService(
         }
         catch { /* ağ/oran sınırı: öneri atlanır */ }
 
+        // Kurulu bileşen güncellemeleri (PHP, veritabanı, phpMyAdmin, webmail, win-acme...).
+        // Günlük otomasyon kontrolünün ÖNBELLEĞİ okunur; burada ağa çıkılmaz, rapor hızlı kalır.
+        try
+        {
+            var automation = await automationService.GetStatusAsync(cancellationToken);
+            if (automation.PendingComponentUpdates > 0)
+            {
+                items.Add(new AdvisorItemDto
+                {
+                    Id = "component-updates",
+                    Severity = "warning",
+                    TitleKey = "advisor.components.title",
+                    DetailKey = "advisor.components.detail",
+                    Detail = automation.LastUpdateCheckDetails,
+                    ActionSection = "software"
+                });
+            }
+        }
+        catch { }
+
         // SSL sertifikası bitişi.
         try
         {

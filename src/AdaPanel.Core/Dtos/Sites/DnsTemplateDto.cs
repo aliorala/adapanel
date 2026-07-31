@@ -14,6 +14,9 @@ public sealed class DnsTemplateRecordDto
     public string Value { get; set; } = string.Empty;
 
     public int Ttl { get; set; } = 3600;
+
+    /// <summary>MX (ve SRV) için öncelik. Diğer tiplerde yok sayılır.</summary>
+    public int? Priority { get; set; }
 }
 
 /// <summary>Sunucu-geneli DNS şablonu (yeni bölgelerin varsayılan kayıt seti).</summary>

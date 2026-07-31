@@ -67,4 +67,18 @@ public sealed class AutomationSettingsDto
 
     /// <summary>Bu günden eski site logları silinir (minimum 1).</summary>
     public int LogRetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Yazılım mağazasındaki kurulu bileşenler için günlük güncelleme kontrolü. Açıkken panel
+    /// her gün üstteki sürümleri sorgular; güncelleme çıkanlar Danışman ekranında ve (uyarılar
+    /// açıksa) e-posta/webhook bildiriminde listelenir.
+    /// </summary>
+    public bool UpdateCheckEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Bulunan bileşen güncellemelerini panel kendisi kursun mu. KAPALIYKEN (varsayılan) yalnızca
+    /// haber verir, kararı yöneticiye bırakır. Açıkken bile veri/kesinti riski taşıyan bileşenler
+    /// (veritabanı motorları, mail sunucusu, Docker Engine) otomatik güncellenmez.
+    /// </summary>
+    public bool AutoApplyComponentUpdates { get; set; }
 }

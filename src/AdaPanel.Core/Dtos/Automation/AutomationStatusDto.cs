@@ -28,4 +28,15 @@ public sealed class AutomationStatusDto
     public string LastLogCleanupStatus { get; set; } = string.Empty;
 
     public string LastLogCleanupDetails { get; set; } = string.Empty;
+
+    public DateTime? LastUpdateCheckRunUtc { get; set; }
+
+    /// <summary>ok / applied / failed + kısa özet.</summary>
+    public string LastUpdateCheckStatus { get; set; } = string.Empty;
+
+    /// <summary>Güncellemesi çıkan bileşenlerin adı ve sürümleri.</summary>
+    public string LastUpdateCheckDetails { get; set; } = string.Empty;
+
+    /// <summary>Son kontrolde güncellemesi bulunan bileşen sayısı.</summary>
+    public int PendingComponentUpdates { get; set; }
 }

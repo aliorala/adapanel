@@ -22,6 +22,8 @@ public sealed class AutomationService(
     IMailService mailService,
     IIisSiteService iisSiteService,
     IDnsService dnsService,
+    IComponentBootstrapper componentBootstrapper,
+    ISelfUpdateService selfUpdateService,
     IDatabaseService databaseService,
     IBruteForceProtectionService bruteForceProtection,
     ISecretProtector secretProtector,
@@ -78,6 +80,9 @@ public sealed class AutomationService(
         // IIS site log rotasyonu (Plesk log rotation): eski erişim logları dolan diski sessizce büyütür.
         state.LogCleanupEnabled = request.LogCleanupEnabled;
         state.LogRetentionDays = Math.Clamp(request.LogRetentionDays, 1, 3650);
+
+        state.UpdateCheckEnabled = request.UpdateCheckEnabled;
+        state.AutoApplyComponentUpdates = request.AutoApplyComponentUpdates;
 
         state.AlertsEnabled = request.AlertsEnabled;
         state.DiskUsageThresholdPercent = Math.Clamp(request.DiskUsageThresholdPercent, 50, 99);
@@ -194,6 +199,24 @@ public sealed class AutomationService(
             logger.LogWarning(exception, "DNS bind nöbetçisi çalıştırılamadı.");
         }
 
+        // Bileşen güncelleme kontrolü günde bir. KİLİDİN DIŞINDA çalışmalı: hem uzun süren ağ
+        // istekleri hem de otomatik kurulum yüzünden. Kurulum (ör. Roundcube/phpMyAdmin) IIS sitesi
+        // oluşturur, o da AYNI non-reentrant kilidi almaya çalışır → kilit içinde çağrılırsa panel
+        // KALICI OLARAK KİLİTLENİR. Sonuç aşağıda, kilit içinde state'e yazılır.
+        UpdateCheckOutcome? updateOutcome = null;
+        try
+        {
+            var snapshot = await LoadAsync(cancellationToken);
+            if (snapshot.UpdateCheckEnabled && IsDue(snapshot.LastUpdateCheckRunUtc, 24, DateTime.UtcNow))
+            {
+                updateOutcome = await RunUpdateCheckAsync(snapshot.AutoApplyComponentUpdates, cancellationToken);
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Bileşen güncelleme kontrolü çalıştırılamadı.");
+        }
+
         await concurrencyLock.RunExclusiveAsync(async () =>
         {
             var state = await LoadAsync(cancellationToken);
@@ -216,6 +239,13 @@ public sealed class AutomationService(
             if (state.LogCleanupEnabled && IsDue(state.LastLogCleanupRunUtc, 24, now))
             {
                 await RunLogCleanupAsync(state, cancellationToken);
+                changed = true;
+            }
+
+            // Güncelleme kontrolünün SONUCU burada işlenir; işin kendisi kilidin DIŞINDA koştu.
+            if (updateOutcome is not null)
+            {
+                ApplyUpdateOutcome(state, updateOutcome);
                 changed = true;
             }
 
@@ -487,6 +517,110 @@ public sealed class AutomationService(
             summary.ToString());
     }
 
+    /// <summary>
+    /// Kurulu bileşenlerin üstteki sürümlerini sorgular. Otomatik kurulum AÇIKSA güncellemeyi
+    /// uygular — ama yalnızca güvenli sayılan bileşenlere. Veritabanı motorları, mail sunucusu ve
+    /// Docker Engine dışarıda: bunlarda güncelleme veri taşıma/servis kesintisi anlamına gelir ve
+    /// kararı yöneticinin vermesi gerekir (Plesk de bunları otomatik yükseltmez).
+    /// </summary>
+    private static readonly string[] AutoUpdateExcludedPrefixes =
+    [
+        "mysql", "mariadb", "postgres", "mssql", "sqlserver", "stalwart", "docker"
+    ];
+
+    internal static bool IsAutoUpdatable(string componentId)
+    {
+        return !AutoUpdateExcludedPrefixes.Any(prefix =>
+            componentId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Kilidin dışında hesaplanan güncelleme sonucu; kilit içinde state'e yazılır.</summary>
+    private sealed record UpdateCheckOutcome(string Status, string Details, int Pending);
+
+    private static void ApplyUpdateOutcome(AutomationStateRecord state, UpdateCheckOutcome outcome)
+    {
+        state.LastUpdateCheckRunUtc = DateTime.UtcNow;
+        state.LastUpdateCheckStatus = outcome.Status;
+        state.LastUpdateCheckDetails = outcome.Details;
+        state.PendingComponentUpdates = outcome.Pending;
+    }
+
+    private async Task<UpdateCheckOutcome> RunUpdateCheckAsync(bool autoApply, CancellationToken cancellationToken)
+    {
+        var summary = new StringBuilder();
+        var hasError = false;
+        var pending = new List<string>();
+        var unresolvable = new List<string>();
+        var applied = 0;
+
+        try
+        {
+            var catalog = await componentBootstrapper.CheckForUpdatesAsync(cancellationToken);
+            var outdated = catalog.Installed
+                .Where(component => component.UpdateAvailable)
+                .ToArray();
+
+            unresolvable.AddRange(catalog.Installed
+                .Where(component => !component.VersionCheckSupported && !component.IsSystemDetected)
+                .Select(component => $"{component.DisplayName} {component.Version}"));
+
+            foreach (var component in outdated)
+            {
+                pending.Add($"{component.DisplayName} {component.Version} -> {component.AvailableVersion}");
+            }
+
+            if (autoApply)
+            {
+                foreach (var component in outdated.Where(item => IsAutoUpdatable(item.ComponentId)))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        // Kurulum akışı aynı bileşeni yeni sürümle yeniden kurar (upgrade yolu budur).
+                        var result = await componentBootstrapper.InstallAsync(component.ComponentId, null, null, cancellationToken);
+                        if (string.Equals(result.Status, "Installed", StringComparison.OrdinalIgnoreCase))
+                        {
+                            applied++;
+                            pending.Remove($"{component.DisplayName} {component.Version} -> {component.AvailableVersion}");
+                        }
+                        else
+                        {
+                            hasError = true;
+                            summary.AppendLine($"{component.ComponentId}: {result.Message}");
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        hasError = true;
+                        summary.AppendLine($"{component.ComponentId}: {exception.Message}");
+                        logger.LogWarning(exception, "Otomatik bileşen güncellemesi başarısız: {ComponentId}", component.ComponentId);
+                    }
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            hasError = true;
+            summary.AppendLine(exception.Message);
+            logger.LogWarning(exception, "Bileşen güncelleme kontrolü tamamlanamadı.");
+        }
+
+        // DÜRÜSTLÜK: sürümü canlı sorgulanamayan bileşenler için "güncel" DEME. Onların sürümü
+        // manifeste sabittir; yeni sürüm çıksa da panel göremez ve sessizce eski kalır.
+        var headline = pending.Count == 0 && applied == 0
+            ? "All checkable components are up to date."
+            : $"{applied} update(s) installed, {pending.Count} pending: {string.Join(", ", pending.Take(12))}";
+        if (unresolvable.Count > 0)
+        {
+            headline += $" | Version cannot be checked automatically ({unresolvable.Count}): {string.Join(", ", unresolvable.Take(10))}";
+        }
+
+        return new UpdateCheckOutcome(
+            hasError ? "completed_with_errors" : applied > 0 ? "applied" : "completed",
+            BuildDetails(headline, summary.ToString()),
+            pending.Count);
+    }
+
     private static string BuildDetails(string headline, string errors)
     {
         var trimmed = errors.Trim();
@@ -520,7 +654,9 @@ public sealed class AutomationService(
                 MemoryUsageThresholdPercent = state.MemoryUsageThresholdPercent,
                 ServiceDownAlertsEnabled = state.ServiceDownAlertsEnabled,
                 LogCleanupEnabled = state.LogCleanupEnabled,
-                LogRetentionDays = state.LogRetentionDays
+                LogRetentionDays = state.LogRetentionDays,
+                UpdateCheckEnabled = state.UpdateCheckEnabled,
+                AutoApplyComponentUpdates = state.AutoApplyComponentUpdates
             },
             LastBackupRunUtc = state.LastBackupRunUtc,
             LastBackupStatus = state.LastBackupStatus,
@@ -536,7 +672,11 @@ public sealed class AutomationService(
                 : null,
             LastLogCleanupRunUtc = state.LastLogCleanupRunUtc,
             LastLogCleanupStatus = state.LastLogCleanupStatus,
-            LastLogCleanupDetails = state.LastLogCleanupDetails
+            LastLogCleanupDetails = state.LastLogCleanupDetails,
+            LastUpdateCheckRunUtc = state.LastUpdateCheckRunUtc,
+            LastUpdateCheckStatus = state.LastUpdateCheckStatus,
+            LastUpdateCheckDetails = state.LastUpdateCheckDetails,
+            PendingComponentUpdates = state.PendingComponentUpdates
         };
     }
 
@@ -604,6 +744,37 @@ public sealed class AutomationService(
                         ? $"{cert.HostName} ({cert.SiteName}) sertifikasinin suresi DOLDU. Yenileyin."
                         : $"{cert.HostName} ({cert.SiteName}) sertifikasinin bitisine {daysLeft:F0} gun kaldi."));
             }
+        }
+
+        // Bilesen guncellemeleri: gunluk kontrol bekleyen guncelleme bulduysa haber ver. Eski surumde
+        // kalmak en sik guvenlik acigi kaynagidir; cooldown 24 saat oldugu icin gunde bir hatirlatir.
+        if (state.UpdateCheckEnabled && state.PendingComponentUpdates > 0)
+        {
+            alerts.Add((
+                "component-updates",
+                $"AdaPanel: {state.PendingComponentUpdates} bilesen icin guncelleme var",
+                $"{state.LastUpdateCheckDetails}\r\n\r\nYazilim magazasi ekranindan kurabilirsiniz. " +
+                "Otomatik kurulum icin Sunucu Araclari > Otomasyon > 'Guncellemeleri otomatik kur' secenegini acabilirsiniz " +
+                "(veritabani motorlari, mail sunucusu ve Docker Engine guvenlik geregi haric tutulur)."));
+        }
+
+        // Panel guncellemesi: self-update GitHub'daki son surumu bilir; Danisman ekranini acmayan
+        // yonetici de haberdar olsun.
+        try
+        {
+            var panelUpdate = await selfUpdateService.CheckForUpdateAsync(cancellationToken);
+            if (panelUpdate.IsUpdateAvailable)
+            {
+                alerts.Add((
+                    $"panel-update:{panelUpdate.LatestVersion}",
+                    $"AdaPanel {panelUpdate.LatestVersion} yayinlandi",
+                    $"Panelin yeni surumu ({panelUpdate.LatestVersion}) mevcut; kurulu surum {panelUpdate.CurrentVersion}. " +
+                    "Guncelleme ekranindan tek tikla kurabilirsiniz."));
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogInformation(exception, "Panel guncelleme uyari kontrolu yapilamadi (ag/oran siniri).");
         }
 
         // Servis durumu: kurulu ama DURMUS servisler (web/mail/DB/FTP/cache) → site/posta/DB etkilenir.
@@ -753,5 +924,14 @@ public sealed class AutomationService(
         public DateTime? LastLogCleanupRunUtc { get; set; }
         public string LastLogCleanupStatus { get; set; } = string.Empty;
         public string LastLogCleanupDetails { get; set; } = string.Empty;
+
+        // Bilesen guncelleme kontrolu. UpdateCheckEnabled VARSAYILAN ACIK: sunucuyu guncel tutmanin
+        // ilk sarti eski kaldigini gormek. Otomatik KURULUM ise varsayilan kapali (kesinti karari).
+        public bool UpdateCheckEnabled { get; set; } = true;
+        public bool AutoApplyComponentUpdates { get; set; }
+        public DateTime? LastUpdateCheckRunUtc { get; set; }
+        public string LastUpdateCheckStatus { get; set; } = string.Empty;
+        public string LastUpdateCheckDetails { get; set; } = string.Empty;
+        public int PendingComponentUpdates { get; set; }
     }
 }
