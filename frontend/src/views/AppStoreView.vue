@@ -137,10 +137,12 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getAppTemplates, installAppTemplate, type AppTemplate } from "../api/store";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 
 const templates = ref<AppTemplate[]>([]);
@@ -251,10 +253,28 @@ async function install(templateId: string, cleanInstall = false) {
     await sitesStore.fetchSites();
   } catch (error) {
     // profesyonel paneller gibi: hedef klasör boş değilse "yedekle + temizle + kur" teklif et, onaylanırsa tekrar dene.
-    if (!cleanInstall && extractApiMessage(error) === "store.site_has_content" && window.confirm(t("panel.appStore.cleanInstallConfirm"))) {
-      busyTemplate.value = "";
-      await install(templateId, true);
-      return;
+    if (!cleanInstall && extractApiMessage(error) === "store.site_has_content") {
+      const targetSite = siteMap[templateId] || "";
+      const templateName = templates.value.find((item) => item.id === templateId)?.displayName || templateId;
+      const impact: string[] = [];
+      if (targetSite) {
+        impact.push(`${t("panel.files.siteLabel")}: ${targetSite}`);
+      }
+      impact.push(`${t("panel.appStore.application")}: ${templateName}`);
+
+      // Yüksek riskli onay: hedef klasörün mevcut içeriği temizlenir → site adı yazılmadan devam edilemez.
+      const approved = await confirm({
+        title: t("panel.confirm.cleanInstallTitle", { name: targetSite }),
+        message: t("panel.appStore.cleanInstallConfirm"),
+        impact,
+        requireText: targetSite,
+        confirmLabel: t("panel.appStore.install"),
+      });
+      if (approved) {
+        busyTemplate.value = "";
+        await install(templateId, true);
+        return;
+      }
     }
     showNotice(resolveApiMessage(error), true, extractApiDetails(error));
   } finally {

@@ -5926,3 +5926,44 @@ Basarili:
   (id 362930524, target main) + AdaPanelSetup.exe yuklendi. YAYINDAKI DOSYA INDIRILIP HASH'LENDI:
   `4D99C994DFC7FE6C27756C7B6439B862593D95C5CCFC11C46D1E980C59230471` (yereldekiyle birebir),
   `releases/latest` -> 0.2.23. Release notu Turkce (self-update ekraninda gorunur).
+
+## 2026-08-01/02 (207) — TASARIM DALGASI: gorunurluk, dis-bakis saglik, canli izleme (7 ajan)
+- KULLANICI "tasarimci olsan ne yapardin" diye sordu, sonra "hepsini yap ajanlara bolerek" dedi.
+  Ilke: panel DURUMU degil, DISARIDAN NASIL GORUNDUGUNU gostermeli + bulguyu kullanicinin onune getirmeli.
+- **AJAN YONETIMI DERSI:** ilk 5 ajan AYNI ANDA oturum limitine carpti (hicbiri kendi dogrulamasini
+  calistiramadan durdu) ama agac DERLENEBILIR kaldi. KURAL: (1) i18n dosyalarina HICBIR ajan dokunmasin,
+  anahtarlari RAPORLASIN, ana oturum tek elden birlestirsin — eszamanli yazimda anahtarlar kaybolur.
+  (2) Frontend ajanlari `npm run build` CALISTIRMASIN (dist/ cakisir), yalniz `typecheck`.
+  (3) Her ajana SAHIP OLDUGU + DOKUNMAYACAGI dosya listesi verilsin. (4) DI kaydi ve menu/router
+  baglantisi ajana YAPTIRILMASIN (tek satirlik ortak dosyalar cakisir) — ana oturum baglar.
+- **YENI BACKEND SERVISLERI:** `ISiteHealthService` (disaridan DNS/HTTP/TLS/mail olcumu; HTTP kontrolu
+  DNS'e guvenmez, sunucu IP'sine `Host` basligiyla gider), `IAttentionService` (Advisor+guncelleme+DNS+
+  servis sinyallerini tek listede toplar, madde basina `actionEndpoint`), `IProcessMonitorService`
+  (**Singleton** — CPU% iki olcum farkindan hesaplanir, Scoped olsa hep 0 gorunurdu; w3wp komut
+  satirindaki `-ap "AdaPanel.<site>"` -> SITE ADI), `IResourceAttributionService` (**Scoped**;
+  MySQL/MariaDB `information_schema.PROCESSLIST`, PostgreSQL `pg_stat_activity`, IIS
+  `appcmd list requests /xml` -> aktif sorgu/istek SITEYE baglanir; `SanitizeStatement` parola iceren
+  sorgulari maskeler).
+- **YENI FRONTEND:** `SiteHealthStrip` (workspace breadcrumb altinda, site basina TEK dis olcum,
+  otomatik polling YOK), `AttentionDrawer` + ust bar rozeti + menu rozetleri + panel ozet karti
+  (60 sn, `document.hidden` iken durur), `ProcessMonitor` bolumu (2 sn, duraklat/sirala),
+  `ResourceConsumers` (3 sn, kaynak secici), `ConfirmDialog` (yikici islemlerde ne kaybedilecegini
+  SAYAR, yuksek riskte ad yazdirir), `FieldHint` (uzun aciklamalar popover'a), mobil kabuk
+  (900px hamburger, yapiskan ust bar -> dikkat dugmesi her zaman erisilebilir; `main-column` dar
+  ekranda flex ÇÜNKÜ yapiskan grid ogesi kendi satirina hapsolur).
+- **ONAY MODALI:** 20 `window.confirm` cevrildi. Ajan HIC ONAYI OLMAYAN iki yikici islem buldu:
+  yedek geri yukleme (uzerine yazar) ve veritabani silme -> ikisine de yuksek riskli onay eklendi.
+  Kullanici silme ana oturumda cevrildi (site/DB sayisini gosterir + ad yazdirir).
+- **MOBIL:** mevcut kirilma noktalari (900/820/720) yeniden kullanildi, 700/620 eklendi. Gizlenenler:
+  PID, calisma suresi, ag "Toplam" sutunu, halka ici kullanilan/toplam, site listesi etiketsiz
+  arac simgeleri. ASLA gizlenmeyen: durum rozetleri ve dugmeler. Kaydirma kilidi SAYAÇLI
+  (menu + cekmece ayni kilidi paylasir). Disk/ag satirlarinin 820px'te tek sutuna cokup basliklari
+  oksuz birakan MEVCUT hatasi da duzeltildi.
+- **CANLI DOGRULANAMAYAN (hedef sunucuda bakilmali):** MySQL/PostgreSQL sorgulari ve ozellikle
+  `appcmd list requests /xml` oznitelik adlari (bu makinede motor/IIS yok). Ajan aday-liste ile
+  buyuk/kucuk harf duyarsiz eslestirme + duz metin fallback yazdi; uyusmazlikta satir KAYBOLMAZ,
+  alan bos gelir. Site adlari bos gelirse tek bir `appcmd list requests /xml` satiri yeterli.
+- DOGRULAMA: build 0/0, Core 2/2, Infrastructure **307/307** (+117 test), typecheck OK, frontend
+  build OK, i18n TR/EN **2815/2815**, onek cakismasi yok.
+- **0.2.24 PAKET:** `artifacts\release\0.2.24\AdaPanelSetup.exe`, `51,932,998` byte (49.53 MiB),
+  SHA256 `176EF8B0B390DACD4355967A689C707B7D98CD59556F88BE49930C03D04CC8FA`.

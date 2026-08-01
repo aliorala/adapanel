@@ -3,7 +3,7 @@ param(
     [string]$RuntimeIdentifier = "win-x64",
     # Panelin RAPOR ETTIGI surum. Self-update icin GitHub release tag'i ile AYNI olmali
     # (ornek: -Version 0.2.5 ile build et -> release'i "0.2.5" tag'iyle yayinla).
-    [string]$Version = "0.2.23"
+    [string]$Version = "0.2.24"
 )
 
 $ErrorActionPreference = "Stop"

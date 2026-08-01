@@ -409,6 +409,7 @@ import DbTransferView from "./DbTransferView.vue";
 import WebDbView from "./WebDbView.vue";
 import { hardenDatabase, openPhpMyAdmin } from "../api/databases";
 import { openReachable } from "../utils/url";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
 import { useSoftwareStore } from "../stores/software";
@@ -418,6 +419,7 @@ type DatabaseModule = "databases" | "webdb" | "cache" | "transfer" | "settings";
 type WorkspaceSection = "databases" | "users" | "connection";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const databasesStore = useDatabasesStore();
 const softwareStore = useSoftwareStore();
 const sitesStore = useSitesStore();
@@ -691,12 +693,31 @@ async function submitCreateDatabase() {
 }
 
 async function removeDatabase(name: string) {
-  try {
-    await databasesStore.deleteDatabase(selectedEngine.value, name);
-    showNotice(t("database.delete.success"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+  const record = workspace.value?.databases.find((item) => item.name === name);
+  const impact = [`${t("panel.database.databaseName")}: ${name} (${workspace.value?.displayName || selectedEngine.value})`];
+  if (record?.owner) {
+    impact.push(`${t("panel.database.owner")}: ${record.owner}`);
   }
+  if (record?.users.length) {
+    impact.push(`${t("panel.database.dbUsers")}: ${record.users.join(", ")}`);
+  }
+
+  // Yüksek riskli onay: veritabanı ve içindeki tüm veri gider → DB adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.deleteDatabaseTitle", { name }),
+    message: t("panel.confirm.deleteDatabaseMessage", { name }),
+    impact,
+    requireText: name,
+    busyLabel: t("panel.database.removing"),
+    action: async () => {
+      try {
+        await databasesStore.deleteDatabase(selectedEngine.value, name);
+        showNotice(t("database.delete.success"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    },
+  });
 }
 
 async function submitCreateUser() {
@@ -745,15 +766,29 @@ async function submitImport() {
 }
 
 async function removeUser(userName: string, host: string) {
-  if (!window.confirm(t("panel.database.confirmDeleteUser"))) {
-    return;
-  }
-  try {
-    await databasesStore.deleteUser(selectedEngine.value, userName, host);
-    showNotice(t("database.user_deleted"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  const linked = (workspace.value?.databases ?? [])
+    .filter((item) => item.users.includes(userName))
+    .map((item) => item.name);
+  const impact = [
+    `${t("panel.database.userName")}: ${userName}${host ? `@${host}` : ""}`,
+    `${t("panel.confirm.impactDbUser")}: ${linked.length ? linked.join(", ") : "—"}`
+  ];
+
+  // Normal onay: yalnız erişim hesabı düşer, veritabanları ve içindeki veri yerinde kalır.
+  await confirm({
+    title: t("panel.confirm.deleteDatabaseUserTitle", { name: userName }),
+    message: t("panel.database.confirmDeleteUser"),
+    impact,
+    busyLabel: t("panel.database.removing"),
+    action: async () => {
+      try {
+        await databasesStore.deleteUser(selectedEngine.value, userName, host);
+        showNotice(t("database.user_deleted"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    },
+  });
 }
 
 const openingDb = ref("");

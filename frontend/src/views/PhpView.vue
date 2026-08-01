@@ -162,12 +162,14 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { enableRedisExtension, getSitePhpSettings, updateSitePhpSettings } from "../api/php";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { usePhpStore } from "../stores/php";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const phpStore = usePhpStore();
 const sitesStore = useSitesStore();
 const softwareStore = useSoftwareStore();
@@ -282,14 +284,32 @@ async function assignVersion(componentId: string) {
 }
 
 async function removeVersion(componentId: string) {
-  if (!window.confirm(t("panel.php.confirmRemove"))) return;
-  try {
-    await softwareStore.removeComponent(componentId);
-    await phpStore.fetchVersions();
-    showNotice(t("panel.php.removed"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+  const version = phpStore.versions.find((item) => item.componentId === componentId);
+  const displayName = version?.displayName || componentId;
+  const impact: string[] = [];
+  if (version?.installDir) {
+    impact.push(`${t("panel.php.installDir")}: ${version.installDir}`);
   }
+  impact.push(t("panel.confirm.impactPhpSites"));
+
+  // Yüksek riskli onay: PHP sürümü (bileşen) kaldırma → sürüm adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.removeComponentTitle", { name: displayName }),
+    message: t("panel.php.confirmRemove"),
+    impact,
+    requireText: displayName,
+    confirmLabel: t("panel.confirm.remove"),
+    busyLabel: t("panel.confirm.removing"),
+    action: async () => {
+      try {
+        await softwareStore.removeComponent(componentId);
+        await phpStore.fetchVersions();
+        showNotice(t("panel.php.removed"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    },
+  });
 }
 
 // Sunucu geneli native phpredis uzantısını etkinleştir (idempotent; zaten varsa "already" döner).

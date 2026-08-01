@@ -1,6 +1,13 @@
 <template>
   <div class="app-shell">
-    <aside class="sidebar">
+    <!--
+      Dar ekran: kenar menü içeriğin üstüne binmesin diye dışarı kayan (off-canvas)
+      çekmeceye döner. Karartma katmanı hem dış tıklamayla kapatır hem de arka plandaki
+      düğmelerin yanlışlıkla basılmasını engeller.
+    -->
+    <div v-if="isNarrow && menuOpen" class="nav-scrim" @click="closeMenu"></div>
+
+    <aside id="ap-sidebar" ref="sidebarRef" :class="['sidebar', { open: isNarrow && menuOpen }]">
       <div class="brand-card">
         <div class="brand-mark">AP</div>
         <div class="brand-copy">
@@ -14,7 +21,7 @@
           v-for="section in sections"
           :key="section.id"
           :class="['nav-item', { active: section.id === activeSection }]"
-          @click="$emit('navigate', section.id)">
+          @click="handleNavigate(section.id)">
           <span class="nav-glyph">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="iconFor(section.id)"></svg>
           </span>
@@ -39,6 +46,21 @@
 
     <div class="main-column">
       <header class="topbar">
+        <!-- Menü düğmesi yalnız dar ekranda: geniş ekranda kenar menü zaten görünür. -->
+        <button
+          v-if="isNarrow"
+          ref="menuButtonRef"
+          class="secondary compact icon-btn nav-toggle"
+          :title="t('panel.layout.menu')"
+          :aria-label="t('panel.layout.menu')"
+          :aria-expanded="menuOpen"
+          aria-controls="ap-sidebar"
+          @click="toggleMenu">
+          <svg viewBox="0 0 24 24" class="nav-icon" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" />
+          </svg>
+        </button>
+
         <div class="topbar-copy">
           <h1>
             <span class="status-dot" :title="t('panel.layout.online')"></span>
@@ -69,6 +91,26 @@
         </div>
 
         <div class="topbar-actions">
+          <!--
+            Dikkat düğmesi: panelin bulduğu kritik+uyarı sayısı rozette. Bulguyu kullanıcının
+            önüne getirir; "doğru sekmeye gidersen görürsün" tasarımını bitirir.
+          -->
+          <button
+            v-if="role === 'Administrator'"
+            class="secondary compact icon-btn attention-btn"
+            :title="t('panel.attention.open')"
+            :aria-label="t('panel.attention.open')"
+            :aria-expanded="attentionOpen"
+            @click="$emit('attention-toggle')">
+            <svg viewBox="0 0 24 24" class="nav-icon" aria-hidden="true">
+              <path d="M12 3.5 21 20H3z" />
+              <path d="M12 10v4M12 17h.01" />
+            </svg>
+            <span v-if="attentionAlertCount" class="attention-badge" :class="{ critical: (attentionSummary?.criticalCount ?? 0) > 0 }">
+              {{ attentionAlertCount > 9 ? "9+" : attentionAlertCount }}
+            </span>
+          </button>
+
           <div v-if="role === 'Administrator'" class="bell-wrap">
             <button class="secondary compact icon-btn bell-btn" :title="t('panel.layout.notifications')" @click="showNotifications = !showNotifications">
               <svg viewBox="0 0 24 24" class="nav-icon" aria-hidden="true">
@@ -116,12 +158,24 @@
         <slot />
       </main>
     </div>
+
+    <AttentionDrawer
+      :open="attentionOpen === true"
+      :summary="attentionSummary ?? null"
+      :loading="attentionLoading === true"
+      :load-error="attentionError"
+      :allowed-sections="sections.map((section) => section.id)"
+      @close="$emit('attention-close')"
+      @refresh="$emit('attention-refresh')"
+      @navigate="$emit('navigate', $event)" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AttentionDrawer from "../components/AttentionDrawer.vue";
+import type { AttentionSummary } from "../api/attention";
 import { useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
@@ -162,8 +216,86 @@ const searchResults = computed(() => {
 
 function selectSearch(id: string) {
   searchQuery.value = "";
-  emit("navigate", id);
+  handleNavigate(id);
 }
+
+// --- Dar ekran kabuğu: açılır kenar menü -----------------------------------
+// 900px altında kenar menü sabit sütun olmaktan çıkıp çekmeceye döner (bkz. stiller).
+// Eşiği JS tarafında da biliyoruz ki menü düğmesi geniş ekranda hiç basılamasın (odak sırasına
+// girmesin) ve ekran genişleyince açık kalan çekmece kendiliğinden kapansın.
+const NARROW_QUERY = "(max-width: 900px)";
+// İlk çizimde de doğru olmalı: aksi halde telefonda menü düğmesi bir kare gecikmeli belirir.
+const isNarrow = ref(typeof window !== "undefined" && window.matchMedia(NARROW_QUERY).matches);
+const menuOpen = ref(false);
+const sidebarRef = ref<HTMLElement | null>(null);
+const menuButtonRef = ref<HTMLElement | null>(null);
+let narrowQuery: MediaQueryList | null = null;
+
+function onNarrowChange(event: MediaQueryListEvent) {
+  isNarrow.value = event.matches;
+  if (!event.matches) {
+    menuOpen.value = false;
+  }
+}
+
+function toggleMenu() {
+  menuOpen.value = !menuOpen.value;
+}
+
+function closeMenu() {
+  menuOpen.value = false;
+}
+
+// Menüden bir bölüm seçilince çekmece kapanır: telefonda seçim sonrası ekranı kapatan
+// menüyle baş başa kalınmaz.
+function handleNavigate(sectionId: string) {
+  closeMenu();
+  emit("navigate", sectionId);
+}
+
+function onMenuKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && menuOpen.value) {
+    event.stopPropagation();
+    closeMenu();
+  }
+}
+
+// Arka plan kaydırma kilidi: çekmece/aşağıdan açılan yaprak açıkken sayfa kaymasın.
+// Aynı anda birden fazla katman açılabildiği için sayaçla çalışır (AttentionDrawer aynı sayacı kullanır).
+function lockBodyScroll(lock: boolean) {
+  const root = document.documentElement;
+  const next = Math.max(0, Number(root.dataset.apScrollLock ?? "0") + (lock ? 1 : -1));
+  root.dataset.apScrollLock = String(next);
+  root.classList.toggle("ap-scroll-lock", next > 0);
+}
+
+watch(menuOpen, async (open) => {
+  lockBodyScroll(open);
+
+  if (open) {
+    document.addEventListener("keydown", onMenuKeydown, true);
+    await nextTick();
+    sidebarRef.value?.querySelector<HTMLElement>(".nav-item")?.focus();
+    return;
+  }
+
+  document.removeEventListener("keydown", onMenuKeydown, true);
+  menuButtonRef.value?.focus?.();
+});
+
+onMounted(() => {
+  narrowQuery = window.matchMedia(NARROW_QUERY);
+  isNarrow.value = narrowQuery.matches;
+  narrowQuery.addEventListener("change", onNarrowChange);
+});
+
+onBeforeUnmount(() => {
+  narrowQuery?.removeEventListener("change", onNarrowChange);
+  document.removeEventListener("keydown", onMenuKeydown, true);
+  if (menuOpen.value) {
+    lockBodyScroll(false);
+  }
+});
 
 function goToFirstResult() {
   if (searchResults.value.length > 0) {
@@ -216,6 +348,11 @@ const props = defineProps<{
   panelVersion: string;
   isTwoFactorEnabled: boolean;
   resolvedTheme: string;
+  // "Dikkat" çekmecesi: veriyi üst bileşen (SetupWizardView) tutar, layout yalnız gösterir.
+  attentionSummary?: AttentionSummary | null;
+  attentionLoading?: boolean;
+  attentionError?: string;
+  attentionOpen?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -223,9 +360,16 @@ const emit = defineEmits<{
   (event: "refresh"): void;
   (event: "logout"): void;
   (event: "toggle-theme"): void;
+  (event: "attention-toggle"): void;
+  (event: "attention-close"): void;
+  (event: "attention-refresh"): void;
 }>();
 
 const { t } = useI18n();
+
+// Rozet: kritik + uyarı (bilgi maddeleri kırmızı nokta üretmez, gürültü olmasın).
+const attentionAlertCount = computed(() =>
+  (props.attentionSummary?.criticalCount ?? 0) + (props.attentionSummary?.warningCount ?? 0));
 
 const twoFactorLabel = computed(() =>
   props.isTwoFactorEnabled ? t("panel.status.enabled") : t("panel.status.disabled"));
@@ -540,6 +684,40 @@ const twoFactorLabel = computed(() =>
   line-height: 1;
 }
 
+.attention-btn {
+  position: relative;
+}
+
+.attention-btn .nav-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.attention-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--warn-1);
+  color: #fff;
+  font-size: 0.6rem;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.attention-badge.critical {
+  background: var(--danger-1);
+}
+
 .bell-wrap {
   position: relative;
 }
@@ -698,7 +876,32 @@ const twoFactorLabel = computed(() =>
   font-weight: 600;
 }
 
-@media (max-width: 1200px) {
+/* Menü düğmesi masaüstünde hiç basılmaz (v-if ile de render edilmez); burası yalnız görünüm. */
+.nav-toggle {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.nav-toggle .nav-icon {
+  width: 19px;
+  height: 19px;
+}
+
+/* Çekmece karartması: AttentionDrawer (z-index 60) bunun ÜSTÜNDE kalmalı. */
+.nav-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 23, 42, 0.44);
+}
+
+/* Ara genişlik (tablet): kenar menü içeriğin üstünde yatay şerit — mevcut davranış. */
+@media (min-width: 901px) and (max-width: 1200px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -716,51 +919,127 @@ const twoFactorLabel = computed(() =>
 }
 
 @media (max-width: 960px) {
-  .topbar {
-    grid-template-columns: 1fr;
-  }
-
   .topbar-panels {
     justify-content: space-between;
   }
-
-  .topbar-actions {
-    justify-content: flex-start;
-  }
 }
 
-@media (max-width: 720px) {
+/*
+  Dar ekran kabuğu (telefon / küçük tablet).
+  Alt bar yerine hamburger seçildi: menüde 13+ bölüm var ve bunlar role göre değişiyor;
+  alt bara ancak 4-5 tanesi sığar, gerisi gizlenirdi. Olay akışının giriş kapısı zaten
+  üst bardaki DİKKAT düğmesi — bu yüzden üst bar yapışkan (sticky) yapılıp dikkat düğmesi
+  her an ekranda tutulur, tam bölüm listesi ise çekmecede saklı kalır.
+*/
+@media (max-width: 900px) {
   .app-shell {
-    padding: 8px;
+    grid-template-columns: minmax(0, 1fr);
+    /* Yapışkan üst bar tepeye yaslansın diye üst boşluk yok. */
+    padding: 0 8px 8px;
   }
 
-  .sidebar,
-  .topbar {
-    border-radius: var(--radius-md);
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 56;
+    width: min(288px, 86vw);
+    height: 100vh;
+    height: 100dvh;
+    padding: 12px 10px calc(12px + env(safe-area-inset-bottom));
+    border-radius: 0;
+    border-width: 0 1px 0 0;
+    box-shadow: 18px 0 48px rgba(0, 0, 0, 0.32);
+    overflow: hidden;
+    /* Kapalıyken görünmez + sekme sırasının dışında (visibility: hidden odak almaz). */
+    visibility: hidden;
+    transform: translateX(-102%);
+    transition: transform 0.22s ease, visibility 0.22s ease;
   }
 
-  .topbar {
-    padding: 14px;
-  }
-
-  .topbar-panels {
-    flex-wrap: wrap;
-  }
-
-  .status-card {
-    flex: 1 1 140px;
+  .sidebar.open {
+    visibility: visible;
+    transform: none;
   }
 
   .nav-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    overflow-y: auto;
   }
 
   .nav-item {
-    grid-template-columns: auto 1fr;
+    min-height: 44px;
+    padding: 8px 10px;
   }
 
-  .nav-badge {
+  .nav-copy strong {
+    font-size: 0.92rem;
+  }
+
+  /* Yapışkan üst bar için: grid öğesinin sabitlenme alanı kendi satırıyla sınırlıdır,
+     esnek (flex) öğede ise kapsayıcının tamamıdır — bu yüzden sütun flex'e çevriliyor. */
+  .main-column {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Üst bar: 1. satır menü + başlık, 2. satır eylemler (dikkat düğmesi dahil).
+     Sticky → "neyin bozuk olduğunu gör" düğmesi kaydırma nerede olursa olsun elde. */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 8px 10px;
+    border-width: 0 0 1px;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+
+  .topbar-copy {
+    flex: 1 1 auto;
+  }
+
+  .topbar-actions {
+    flex: 1 1 100%;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .icon-btn,
+  .theme-toggle {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+  }
+
+  .attention-badge,
+  .bell-badge {
+    top: -3px;
+    right: -3px;
+    min-width: 17px;
+    height: 17px;
+    font-size: 0.64rem;
+    line-height: 17px;
+  }
+
+  .bell-menu {
+    width: min(300px, calc(100vw - 32px));
+  }
+}
+
+@media (max-width: 620px) {
+  /* Kullanıcı adı/rol yalnız bilgi; olay anında yer kaplamasın (bilgi user-chip title'ında kalır). */
+  .user-chip {
     display: none;
+  }
+
+  .topbar-copy h1 {
+    font-size: 0.98rem;
   }
 }
 </style>

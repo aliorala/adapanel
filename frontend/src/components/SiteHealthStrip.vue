@@ -1,0 +1,391 @@
+<template>
+  <!-- Ölçüm başarısızsa hiçbir şey çizmeyiz: şerit sessizce kaybolur, sayfa bozulmaz. -->
+  <section v-if="loading || health" class="site-health-strip" :aria-busy="loading ? 'true' : 'false'">
+    <div class="health-head">
+      <span class="health-label">
+        {{ label("title", "Dışarıdan görünüm") }}
+        <FieldHint
+          :label="label('title', 'Dışarıdan görünüm')"
+          :text="label('hint', 'Bu rozetler sunucunun kendi servis durumunu değil, alan adının dışarıdan görünen davranışını gösterir.')" />
+      </span>
+      <span v-if="health?.domain" class="meta health-domain">{{ health.domain }}</span>
+    </div>
+
+    <!-- Ölçüm birkaç saniye sürer: ilk yüklemede iskelet. -->
+    <div v-if="loading && !health" class="health-badges" role="status">
+      <span v-for="index in 4" :key="index" class="health-badge skeleton" aria-hidden="true"></span>
+      <span class="meta measuring">{{ label("measuring", "Dışarıdan ölçülüyor…") }}</span>
+    </div>
+
+    <div v-else-if="health" class="health-badges">
+      <span
+        v-for="badge in badges"
+        :key="badge.id"
+        :class="['status-pill', 'health-badge', badge.status]"
+        :title="badge.detail || badge.value">
+        <span class="badge-label">{{ badge.label }}</span>
+        <span v-if="badge.value" class="badge-value">{{ badge.value }}</span>
+        <span class="badge-mark" :aria-label="statusLabel(badge.status)">{{ mark(badge.status) }}</span>
+        <FieldHint
+          v-if="badge.detail"
+          align="end"
+          :label="`${badge.label} — ${statusLabel(badge.status)}`"
+          :text="badge.detail" />
+      </span>
+
+      <!-- Posta kayıtları: MX / SPF / DKIM / DMARC tek grup halinde. -->
+      <span v-if="mailBadges.length > 0" class="mail-group">
+        <span class="meta mail-caption">{{ label("mail", "Posta") }}:</span>
+        <span
+          v-for="badge in mailBadges"
+          :key="badge.id"
+          :class="['status-pill', 'health-badge', badge.status]"
+          :title="badge.detail || badge.value">
+          <span class="badge-label">{{ badge.label }}</span>
+          <span class="badge-mark" :aria-label="statusLabel(badge.status)">{{ mark(badge.status) }}</span>
+          <FieldHint
+            v-if="badge.detail"
+            align="end"
+            :label="`${badge.label} — ${statusLabel(badge.status)}`"
+            :text="badge.detail" />
+        </span>
+      </span>
+    </div>
+
+    <div class="row-actions health-foot">
+      <span v-if="health" class="meta">
+        {{ label("checkedAt", "Ölçüm: {time}", { time: checkedAtText }) }}
+        <template v-if="health.durationMs > 0">· {{ health.durationMs }} ms</template>
+      </span>
+      <!-- OTOMATİK POLLING YOK: ölçüm dış ağa çıkar, yalnız istendiğinde yenilenir. -->
+      <button type="button" class="secondary compact" :disabled="loading" @click="load">
+        {{ loading ? label("measuring", "Dışarıdan ölçülüyor…") : label("refresh", "Yenile") }}
+      </button>
+    </div>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { getSiteHealth, type SiteHealth, type SiteHealthCheck, type SiteHealthStatus } from "../api/siteHealth";
+import FieldHint from "./FieldHint.vue";
+
+/**
+ * Bir sitenin DIŞARIDAN görünen sağlığını tek satırda gösteren şerit.
+ * Sebep (2026-07-23): DNS servisi yalnız loopback'e bind kalmıştı; panel her şeyi yeşil
+ * gösterdiği için sorun ALTI GÜN fark edilmedi. Buradaki rozetler panelin iç bilgisini değil,
+ * dış gözlemi gösterir — "unknown" ölçemedik demektir, "sorun yok" demek değildir.
+ */
+const props = defineProps<{ siteName: string }>();
+const { t } = useI18n();
+
+const health = ref<SiteHealth | null>(null);
+const loading = ref(false);
+// Ölçüm başarısız → şerit sessizce kaybolur (health null kalır, hata kutusu göstermeyiz).
+let requestId = 0;
+
+// i18n anahtarları başka bir ajanda; anahtar henüz yoksa ham anahtar yerine TR metni göster
+// (SiteDetailView.translateState ile aynı kalıp).
+function label(suffix: string, fallback: string, params?: Record<string, unknown>): string {
+  const key = `panel.siteHealth.${suffix}`;
+  const translated = params ? t(key, params) : t(key);
+  return translated === key ? interpolate(fallback, params) : translated;
+}
+
+function interpolate(text: string, params?: Record<string, unknown>): string {
+  if (!params) {
+    return text;
+  }
+  return text.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in params ? String(params[name]) : match);
+}
+
+const statusOrder: SiteHealthStatus[] = ["ok", "warn", "fail", "unknown"];
+
+function normalize(status: string | undefined): SiteHealthStatus {
+  const value = (status ?? "").toLowerCase() as SiteHealthStatus;
+  return statusOrder.includes(value) ? value : "unknown";
+}
+
+function mark(status: SiteHealthStatus): string {
+  if (status === "ok") return "✓";
+  if (status === "fail") return "✗";
+  if (status === "warn") return "!";
+  return "?";
+}
+
+function statusLabel(status: SiteHealthStatus): string {
+  const fallbacks: Record<SiteHealthStatus, string> = {
+    ok: "sorunsuz",
+    warn: "uyarı",
+    fail: "hata",
+    unknown: "ölçülemedi"
+  };
+  return label(`status.${status}`, fallbacks[status]);
+}
+
+type Badge = {
+  id: string;
+  label: string;
+  value: string;
+  status: SiteHealthStatus;
+  detail: string;
+};
+
+function detailOf(check: SiteHealthCheck | undefined, status: SiteHealthStatus): string {
+  const parts = [check?.value ?? "", check?.detail ?? ""].map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) {
+    return status === "unknown" ? label("notMeasured", "Bu kontrol ölçülemedi.") : "";
+  }
+  return parts.join(" — ");
+}
+
+function toBadge(id: string, text: string, check: SiteHealthCheck | undefined, value?: string): Badge {
+  const status = normalize(check?.status);
+  return {
+    id,
+    label: text,
+    value: value ?? check?.value ?? "",
+    status,
+    detail: detailOf(check, status)
+  };
+}
+
+// SSL rozetinde ham değer yerine kalan gün: "87 gün" / "süresi doldu".
+const certificateText = computed(() => {
+  const data = health.value;
+  if (!data) {
+    return "";
+  }
+  const days = data.certificateDaysLeft;
+  if (days === null || days === undefined) {
+    return data.https?.value ?? "";
+  }
+  return days < 0
+    ? label("certExpired", "süresi doldu")
+    : label("certDays", "{days} gün", { days });
+});
+
+const badges = computed<Badge[]>(() => {
+  const data = health.value;
+  if (!data) {
+    return [];
+  }
+  return [
+    toBadge("dns", label("dns", "DNS"), data.dnsResolves),
+    // Asıl olay buydu: alan adı çözülüyor ama BAŞKA sunucuyu gösteriyor olabilir.
+    toBadge("dnsMatch", label("dnsMatch", "Sunucu eşleşmesi"), data.dnsMatchesServer),
+    toBadge("http", label("http", "HTTP"), data.http),
+    toBadge("ssl", label("ssl", "SSL"), data.https, certificateText.value)
+  ];
+});
+
+// Posta rozetleri kısa kalsın (MX/SPF/DKIM/DMARC); ham kayıt ipucu metnine taşınır.
+const mailBadges = computed<Badge[]>(() => {
+  const data = health.value;
+  if (!data) {
+    return [];
+  }
+  const records = data.mailRecords ?? [];
+  if (records.length === 0) {
+    const summary = toBadge("mail", label("mailSummary", "Kayıtlar"), data.mail);
+    return normalize(data.mail?.status) === "unknown" && !data.mail?.value ? [] : [summary];
+  }
+  return records.map((record) => {
+    const suffix = (record.key ?? "").split(".").pop() ?? "";
+    return { ...toBadge(`mail-${suffix || record.key}`, suffix.toUpperCase(), record), value: "" };
+  });
+});
+
+const checkedAtText = computed(() => {
+  const raw = health.value?.checkedAtUtc ?? "";
+  if (!raw) {
+    return "";
+  }
+  // Sunucu UTC gönderir; sonek yoksa UTC olarak yorumla, sonra yerel saate çevir.
+  const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString();
+});
+
+async function load() {
+  const siteName = props.siteName?.trim();
+  if (!siteName) {
+    health.value = null;
+    return;
+  }
+
+  const current = ++requestId;
+  loading.value = true;
+  try {
+    const result = await getSiteHealth(siteName);
+    if (current !== requestId) {
+      return;
+    }
+    health.value = result;
+  } catch {
+    // Sessiz başarısızlık: ölçüm yapılamadıysa şerit görünmez, sayfanın geri kalanı çalışmaya devam eder.
+    if (current === requestId) {
+      health.value = null;
+    }
+  } finally {
+    if (current === requestId) {
+      loading.value = false;
+    }
+  }
+}
+
+onMounted(load);
+
+// Site değişince tek seferlik yeniden ölçüm (polling değil).
+watch(() => props.siteName, () => {
+  health.value = null;
+  void load();
+});
+</script>
+
+<style scoped>
+.site-health-strip {
+  display: grid;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 11px;
+  background: var(--surface-1);
+}
+
+.health-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.health-label {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.health-domain {
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+/* Dar ekranda rozetler alt alta sarar. */
+.health-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.health-badge {
+  gap: 5px;
+  max-width: 100%;
+  font-size: 0.76rem;
+}
+
+.health-badge .badge-label {
+  font-weight: 700;
+}
+
+.health-badge .badge-value {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.health-badge .badge-mark {
+  font-weight: 800;
+}
+
+/* fail → mevcut "danger" rengi; ok/warn zaten status-pill sınıflarından gelir. */
+.health-badge.fail {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--danger-1) 30%, transparent);
+}
+
+/* unknown ASLA yeşil gösterilmez: "ölçemedik" nötr/soluk kalır. */
+.health-badge.unknown {
+  background: var(--surface-1);
+  color: var(--text-muted);
+  border-color: var(--panel-border);
+  border-style: dashed;
+}
+
+.health-badge.ok {
+  border-color: color-mix(in srgb, var(--ok-1) 30%, transparent);
+}
+
+.mail-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mail-caption {
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.skeleton {
+  width: 84px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(90deg, var(--surface-1), color-mix(in srgb, var(--text-muted) 16%, var(--surface-1)), var(--surface-1));
+  background-size: 200% 100%;
+  animation: health-shimmer 1.2s ease-in-out infinite;
+}
+
+.measuring {
+  font-size: 0.76rem;
+}
+
+@keyframes health-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+.health-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.health-foot .meta {
+  font-size: 0.74rem;
+}
+
+.health-foot button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 560px) {
+  .health-foot {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

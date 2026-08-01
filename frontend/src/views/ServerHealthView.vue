@@ -331,4 +331,67 @@ function showNotice(message: string, isError: boolean) {
   font-family: var(--font-mono, ui-monospace, monospace);
   word-break: break-word;
 }
+
+/*
+  Dar ekran: bu ekran olay akışının kalbi ("neyin bozuk olduğunu gör" + "yeniden başlat").
+  Servis adı tek satıra, DURUM ROZETİ ile EYLEM DÜĞMESİ ise alt satırda yan yana durur —
+  ikisi de asla gizlenmez, düğme parmak hedefine büyütülür.
+*/
+@media (max-width: 620px) {
+  .health-row,
+  .dns-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .health-row {
+    padding: 11px 12px;
+  }
+
+  .health-id {
+    flex: 1 1 100%;
+  }
+
+  /* DNS başlığında nokta + ad ilk satırı doldursun (nokta 9px + 10px boşluk). */
+  .dns-head .health-name {
+    flex: 1 1 calc(100% - 22px);
+  }
+
+  .health-row .status-pill,
+  .dns-head .status-pill {
+    order: 1;
+  }
+
+  .health-row button,
+  .health-row .na,
+  .dns-head button {
+    order: 2;
+    margin-left: auto;
+    min-height: 42px;
+  }
+
+  .health-row button,
+  .dns-head button {
+    min-width: 148px;
+  }
+
+  .na {
+    width: auto;
+    min-width: 0;
+  }
+
+  .dns-head {
+    align-items: center;
+  }
+
+  /* DNS ayrıntıları: tek sütun, etiket üstte — dinlenen/beklenen adresler uzun. */
+  .dns-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .dns-facts dd {
+    overflow-wrap: anywhere;
+  }
+}
 </style>

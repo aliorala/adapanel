@@ -3,13 +3,16 @@
     <div class="module-head">
       <div>
         <h3>{{ t("panel.dnsTemplate.title") }}</h3>
-        <p class="meta">{{ t("panel.dnsTemplate.subtitle") }}</p>
+        <!-- Yer tutucu açıklaması paragraf yerine "?" ipucunda: başlık kısa kalıyor. -->
+        <p class="meta">
+          {{ t("panel.dnsTemplate.subtitle") }}
+          <FieldHint :label="t('panel.dnsTemplate.value')" :text="t('panel.dnsTemplate.placeholderHint')" />
+        </p>
       </div>
       <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.dnsTemplate.refresh") }}</button>
     </div>
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
-    <p class="field-hint">{{ t("panel.dnsTemplate.placeholderHint") }}</p>
 
     <p v-if="loading && records.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
 
@@ -55,6 +58,7 @@
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getDnsTemplate, updateDnsTemplate, type DnsTemplateRecord } from "../api/dns";
+import FieldHint from "../components/FieldHint.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
@@ -137,11 +141,6 @@ function resolveMessage(error: unknown) {
 .tmpl-row input,
 .tmpl-row select {
   width: 100%;
-}
-
-.field-hint {
-  color: var(--text-muted);
-  font-size: 0.82rem;
 }
 
 @media (max-width: 820px) {

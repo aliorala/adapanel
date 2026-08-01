@@ -67,9 +67,11 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { applyUpdate, checkForUpdate, installPreparedUpdate, type UpdateStatus } from "../api/update";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const status = ref<UpdateStatus | null>(null);
 const busy = ref<"" | "download" | "install">("");
 const notice = ref("");
@@ -106,7 +108,23 @@ async function downloadUpdate() {
 }
 
 async function installUpdate() {
-  if (!status.value?.isPackageReady || !window.confirm(t("panel.update.installConfirm"))) {
+  if (!status.value?.isPackageReady) {
+    return;
+  }
+
+  // Yıkıcı değil (silme yok, yalnız servis yeniden başlar) → nötr ton, ad yazdırma yok.
+  const approved = await confirm({
+    title: t("panel.confirm.installUpdateTitle", { name: status.value.latestVersion }),
+    message: t("panel.update.installConfirm"),
+    impact: [
+      `${t("panel.update.current")}: ${status.value.currentVersion}`,
+      `${t("panel.update.latest")}: ${status.value.latestVersion}`
+    ],
+    tone: "neutral",
+    confirmLabel: t("panel.update.install"),
+    busyLabel: t("panel.update.scheduling"),
+  });
+  if (!approved) {
     return;
   }
 

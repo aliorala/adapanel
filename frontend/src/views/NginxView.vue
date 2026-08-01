@@ -154,10 +154,12 @@ import {
   type NginxStatus
 } from "../api/nginx";
 import { openReachable } from "../utils/url";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
 const loading = ref(false);
 const busy = ref(false);
@@ -221,20 +223,33 @@ async function install() {
 }
 
 async function remove() {
-  if (!window.confirm(t("panel.nginx.confirmRemove"))) {
-    return;
+  const impact: string[] = [];
+  if (status.installDir) {
+    impact.push(`${t("panel.software.installDir")}: ${status.installDir}`);
   }
+  impact.push(t("panel.confirm.impactNginxProxy"));
 
-  busy.value = true;
-  try {
-    await softwareStore.removeComponent("nginx");
-    await refresh();
-    showNotice(t("panel.nginx.removed"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  // Yüksek riskli onay: bileşen kaldırma → "nginx" yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.removeComponentTitle", { name: "Nginx" }),
+    message: t("panel.nginx.confirmRemove"),
+    impact,
+    requireText: "nginx",
+    confirmLabel: t("panel.confirm.remove"),
+    busyLabel: t("panel.confirm.removing"),
+    action: async () => {
+      busy.value = true;
+      try {
+        await softwareStore.removeComponent("nginx");
+        await refresh();
+        showNotice(t("panel.nginx.removed"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
 }
 
 async function save() {

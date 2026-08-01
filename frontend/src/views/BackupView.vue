@@ -279,10 +279,12 @@ import {
   type BackupTargetPayload
 } from "../api/backup";
 import { getAutomation, updateAutomation, type AutomationSettings, type AutomationStatus } from "../api/automation";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -415,7 +417,14 @@ async function createSelectedBackup() {
   }
 
   if (backupKind.value === "mail") {
-    if (!window.confirm(t("panel.backup.confirmMailBackup"))) return;
+    // Yıkıcı değil (yalnız servis kısa süre durur) → nötr ton: kırmızı düğme ve "geri alınamaz" uyarısı yok.
+    const approved = await confirm({
+      title: t("panel.confirm.mailBackupTitle"),
+      message: t("panel.backup.confirmMailBackup"),
+      tone: "neutral",
+      confirmLabel: t("panel.backup.mailAction"),
+    });
+    if (!approved) return;
     await runBackup(() => backupMail(buildTargetPayload()));
     return;
   }
@@ -456,36 +465,61 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
 }
 
 async function restore(backup: BackupRecord) {
-  busy.value = true;
-  try {
-    await restoreBackup(backup.id, "");
-    await refresh();
-    showNotice(t("panel.backup.restored"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  // Yüksek riskli onay: geri yükleme canlı veriyi ÜZERİNE yazar → yedek adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.restoreBackupTitle", { name: backup.name }),
+    message: t("panel.backup.restoreConfirm"),
+    impact: backupImpact(backup),
+    requireText: backup.name,
+    confirmLabel: t("panel.backup.restore"),
+    busyLabel: t("panel.backup.restoring"),
+    action: async () => {
+      busy.value = true;
+      try {
+        await restoreBackup(backup.id, "");
+        await refresh();
+        showNotice(t("panel.backup.restored"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
+}
+
+// Onay kutusundaki "etkilenecekler" listesi: ekranın zaten elinde olan yedek bilgileri.
+function backupImpact(backup: BackupRecord) {
+  return [
+    `${t("panel.backup.name")}: ${backup.name}`,
+    `${t("panel.backup.type")}: ${backup.type} (${backup.source})`,
+    `${t("panel.backup.size")}: ${formatBytes(backup.size)}`,
+    `${t("panel.backup.createdAt")}: ${new Date(backup.createdAtUtc).toLocaleString()}`
+  ];
 }
 
 async function removeBackup(backup: BackupRecord) {
-  if (!window.confirm(t("panel.backup.confirmDelete", { name: backup.name }))) {
-    return;
-  }
-
-  busy.value = true;
-  try {
-    await deleteBackup(backup.id);
-    await refresh();
-    if (browseRecord.value?.id === backup.id) {
-      closeBrowser();
-    }
-    showNotice(t("panel.backup.deletedNotice"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  // Normal onay: yalnız yedek dosyası silinir, canlı veri etkilenmez.
+  await confirm({
+    title: t("panel.confirm.deleteBackupTitle", { name: backup.name }),
+    message: t("panel.backup.confirmDelete", { name: backup.name }),
+    impact: backupImpact(backup),
+    action: async () => {
+      busy.value = true;
+      try {
+        await deleteBackup(backup.id);
+        await refresh();
+        if (browseRecord.value?.id === backup.id) {
+          closeBrowser();
+        }
+        showNotice(t("panel.backup.deletedNotice"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
 }
 
 async function download(backup: BackupRecord) {
@@ -532,18 +566,36 @@ async function navigateTo(prefix: string) {
 }
 
 async function restoreSelectedItems() {
-  if (!browseRecord.value || selectedItems.value.length === 0) return;
-  if (!window.confirm(t("panel.backup.confirmRestoreItems"))) return;
-  busy.value = true;
-  try {
-    const result = await restoreBackupItems(browseRecord.value.id, selectedItems.value, itemsTargetPath.value);
-    selectedItems.value = [];
-    showNotice(t("panel.backup.itemsRestoredNotice", { count: result.restoredCount, target: result.targetRoot }), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  const record = browseRecord.value;
+  if (!record || selectedItems.value.length === 0) return;
+
+  const impact = [
+    `${t("panel.backup.name")}: ${record.name}`,
+    `${t("panel.backup.restoreSelected")}: ${selectedItems.value.length}`,
+    `${t("panel.backup.itemsTarget")}: ${itemsTargetPath.value || t("panel.backup.itemsTargetOriginal")}`
+  ];
+
+  // Yüksek riskli onay: seçilen öğeler hedeftekilerin ÜZERİNE yazılır → yedek adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
+    message: t("panel.backup.confirmRestoreItems"),
+    impact,
+    requireText: record.name,
+    confirmLabel: t("panel.backup.restore"),
+    busyLabel: t("panel.backup.restoring"),
+    action: async () => {
+      busy.value = true;
+      try {
+        const result = await restoreBackupItems(record.id, selectedItems.value, itemsTargetPath.value);
+        selectedItems.value = [];
+        showNotice(t("panel.backup.itemsRestoredNotice", { count: result.restoredCount, target: result.targetRoot }), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
 }
 
 function formatBytes(value: number) {

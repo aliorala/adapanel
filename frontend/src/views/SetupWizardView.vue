@@ -148,10 +148,17 @@
     :panel-version="systemStore.overview?.panelVersion || '-'"
     :is-two-factor-enabled="authStore.session?.user?.isTwoFactorEnabled ?? false"
     :resolved-theme="resolvedThemeMode"
+    :attention-summary="attentionSummary"
+    :attention-loading="attentionLoading"
+    :attention-error="attentionError"
+    :attention-open="attentionOpen"
     @navigate="handleNavigation"
     @refresh="refreshDashboard"
     @toggle-theme="toggleTheme"
-    @logout="logout">
+    @logout="logout"
+    @attention-toggle="toggleAttention"
+    @attention-close="attentionOpen = false"
+    @attention-refresh="loadAttention(false)">
     <template #banner>
       <div class="banner-stack">
         <p v-if="showDefaultPortWarning" class="notice warn-banner">
@@ -176,6 +183,7 @@
       :audit-items="authStore.auditLogs"
       :allowed-sections="dashboardSections.map((section) => section.id)"
       :panel-update="panelUpdate"
+      :attention="attentionSummary"
       @navigate="handleNavigation" />
 
     <WebsiteWorkspaceView v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)" />
@@ -201,6 +209,11 @@
 
     <SubUsersView v-else-if="activeSection === 'subusers' && isCustomer && !isSubUser" />
 
+    <!-- Hesap yönetimi (Müşteriler & Bayiler) ve "Hesabım" artık ayrı ekranlar. -->
+    <UsersView v-else-if="activeSection === 'accounts' && (isAdmin || isReseller)" @notify="showBanner" />
+
+    <AccountView v-else-if="activeSection === 'account'" @notify="showBanner" />
+
     <ServerToolsView v-else-if="activeSection === 'tools' && isAdmin" />
 
     <MigrationView v-else-if="activeSection === 'migration' && isAdmin" />
@@ -209,7 +222,7 @@
 
     <AdvisorView v-else-if="activeSection === 'advisor' && isAdmin" @navigate="handleNavigation" />
 
-    <section v-else-if="activeSection === 'settings'" class="panel module-shell settings-workspace">
+    <section v-else-if="activeSection === 'settings' && isAdmin" class="panel module-shell settings-workspace">
       <div class="module-head">
         <div>
           <h2>{{ t("panel.settings.title") }}</h2>
@@ -225,14 +238,8 @@
           <button v-if="isAdmin" :class="{ active: settingsTab === 'general' }" @click="settingsTab = 'general'">
             {{ t("panel.settings.tab.general") }}
           </button>
-          <button :class="{ active: settingsTab === 'account' }" @click="settingsTab = 'account'">
-            {{ t("panel.settings.tab.account") }}
-          </button>
           <button v-if="isAdmin" :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'">
             {{ t("panel.settings.tab.security") }}
-          </button>
-          <button v-if="isAdmin || isReseller" :class="{ active: settingsTab === 'users' }" @click="settingsTab = 'users'">
-            {{ isReseller ? t("panel.navigation.customers") : t("panel.settings.tab.users") }}
           </button>
           <button v-if="isAdmin" :class="{ active: settingsTab === 'notifications' }" @click="settingsTab = 'notifications'">
             {{ t("panel.settings.tab.notifications") }}
@@ -329,65 +336,6 @@
         </div>
       </section>
 
-      <section v-else-if="settingsTab === 'account'" class="form-surface settings-section">
-        <div class="section-head">
-          <div>
-            <h3>{{ t("panel.account.title") }}</h3>
-            <p class="meta">
-              {{ t("panel.account.status") }}:
-              {{ authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
-            </p>
-          </div>
-          <span :class="['status-pill', authStore.session?.user?.isTwoFactorEnabled ? 'ok' : 'warn']">
-            {{ authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
-          </span>
-        </div>
-
-        <div v-if="authStore.twoFactorSetup" class="form-grid two">
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.account.manualKey") }}</span>
-            <input :value="authStore.twoFactorSetup.manualEntryKey" readonly />
-          </label>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.account.verificationCode") }}</span>
-            <input v-model="twoFactorVerificationCode" inputmode="numeric" maxlength="8" />
-          </label>
-          <label class="stacked-field settings-wide-field">
-            <span class="field-label">{{ t("panel.account.provisioningUri") }}</span>
-            <textarea :value="authStore.twoFactorSetup.provisioningUri" rows="3" readonly />
-          </label>
-          <div class="row-actions settings-wide-field">
-            <button class="compact" @click="confirmTwoFactor">{{ t("panel.account.confirm2fa") }}</button>
-          </div>
-        </div>
-
-        <div v-else class="settings-inline-action">
-          <button v-if="!(authStore.session?.user?.isTwoFactorEnabled ?? false)" class="compact" @click="startTwoFactor">
-            {{ t("panel.account.start2fa") }}
-          </button>
-          <template v-else>
-            <button class="secondary compact" @click="regenerateRecoveryCodes">{{ t("panel.account.regenerateRecovery") }}</button>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.account.disablePassword") }}</span>
-              <input v-model="disableTwoFactorPassword" type="password" minlength="12" />
-            </label>
-            <button class="danger compact" @click="disableTwoFactor">{{ t("panel.account.disable2fa") }}</button>
-          </template>
-        </div>
-
-        <div v-if="recoveryCodes.length" class="recovery-codes">
-          <strong>{{ t("panel.account.recoveryTitle") }}</strong>
-          <p class="meta">{{ t("panel.account.recoveryHint") }}</p>
-          <ul class="recovery-list">
-            <li v-for="rc in recoveryCodes" :key="rc">{{ rc }}</li>
-          </ul>
-          <div class="row-actions">
-            <button class="secondary compact" @click="copyRecoveryCodes">{{ t("panel.account.recoveryCopy") }}</button>
-            <button class="secondary compact" @click="recoveryCodes = []">{{ t("panel.common.cancel") }}</button>
-          </div>
-        </div>
-      </section>
-
       <section v-else-if="settingsTab === 'security' && isAdmin" class="form-surface settings-section">
         <div class="section-head">
           <div>
@@ -410,293 +358,6 @@
         </div>
       </section>
 
-      <section v-else-if="settingsTab === 'users' && (isAdmin || isReseller)" class="settings-section">
-        <!-- Servis planları (panel): limit şablonu tanımla, müşteriye ata. Yalnız admin. -->
-        <div v-if="isAdmin" class="form-surface plans-card">
-          <div class="plans-head">
-            <div>
-              <strong>{{ t("panel.plans.title") }}</strong>
-              <p class="meta">{{ t("panel.plans.hint") }}</p>
-            </div>
-            <button type="button" class="compact" @click="showPlanForm = !showPlanForm">
-              {{ showPlanForm ? t("panel.common.cancel") : t("panel.plans.add") }}
-            </button>
-          </div>
-
-          <div v-if="servicePlans.length" class="plans-grid">
-            <article v-for="plan in servicePlans" :key="plan.id" class="plan-card">
-              <div class="plan-card-head">
-                <strong class="plan-name">{{ plan.name }}</strong>
-                <button class="secondary compact danger" @click="removeServicePlan(plan.id)">{{ t("panel.common.delete") }}</button>
-              </div>
-              <ul class="plan-limits">
-                <li><span>{{ t("panel.plans.sitesLabel") }}</span><b>{{ plan.maxSites || "∞" }}</b></li>
-                <li><span>{{ t("panel.plans.diskLabel") }}</span><b>{{ plan.maxDiskMb ? plan.maxDiskMb + " MB" : "∞" }}</b></li>
-                <li><span>{{ t("panel.plans.databasesLabel") }}</span><b>{{ plan.maxDatabases || "∞" }}</b></li>
-                <li><span>{{ t("panel.plans.mailboxesLabel") }}</span><b>{{ plan.maxMailboxes || "∞" }}</b></li>
-                <li><span>{{ t("panel.plans.scheduledTasksLabel") }}</span><b>{{ plan.maxScheduledTasks || "∞" }}</b></li>
-              </ul>
-            </article>
-          </div>
-          <p v-else class="empty-state plans-empty">{{ t("panel.plans.empty") }}</p>
-
-          <form v-if="showPlanForm" class="plan-form-grid" @submit.prevent="addServicePlan">
-            <label class="stacked-field plan-name-cell">
-              <span class="field-label">{{ t("panel.plans.name") }}</span>
-              <input v-model.trim="planForm.name" :placeholder="t('panel.plans.namePlaceholder')" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.users.maxSites") }}</span>
-              <input v-model.number="planForm.maxSites" type="number" min="0" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
-              <input v-model.number="planForm.maxDiskMb" type="number" min="0" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
-              <input v-model.number="planForm.maxDatabases" type="number" min="0" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
-              <input v-model.number="planForm.maxMailboxes" type="number" min="0" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
-              <input v-model.number="planForm.maxScheduledTasks" type="number" min="0" />
-            </label>
-            <p class="plan-form-hint">{{ t("panel.plans.formHint") }}</p>
-            <div class="plan-form-actions">
-              <button type="submit" class="compact" :disabled="!planForm.name">{{ t("panel.plans.add") }}</button>
-            </div>
-          </form>
-        </div>
-
-        <div class="module-toolbar">
-          <div>
-            <strong>{{ t("panel.users.title") }}</strong>
-            <p class="meta">{{ t("panel.settings.usersHint") }}</p>
-          </div>
-          <button class="compact" @click="showUserCreateForm = !showUserCreateForm">
-            {{ showUserCreateForm ? t("panel.common.cancel") : t("panel.users.create") }}
-          </button>
-        </div>
-
-        <form v-if="showUserCreateForm" class="form-surface form-grid user-create-grid" @submit.prevent="createUser">
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.users.userName") }}</span>
-            <input v-model="createUserForm.userName" minlength="3" maxlength="32" required />
-          </label>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.form.email") }}</span>
-            <input v-model="createUserForm.email" type="email" required />
-          </label>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.form.password") }}</span>
-            <input v-model="createUserForm.password" type="password" minlength="12" required />
-          </label>
-          <label v-if="isAdmin" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.role") }}</span>
-            <select v-model="createUserForm.role">
-              <option value="Administrator">{{ t("panel.role.administrator") }}</option>
-              <option value="Operator">{{ t("panel.role.operator") }}</option>
-              <option value="Reseller">{{ t("panel.role.reseller") }}</option>
-              <option value="Customer">{{ t("panel.role.customer") }}</option>
-            </select>
-          </label>
-          <label v-if="isAdmin && createUserForm.role === 'Customer' && parentCandidates.length > 0" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.parentSubscription") }}</span>
-            <select v-model="createUserForm.parentUserId">
-              <option value="">{{ t("panel.users.parentSubscriptionNone") }}</option>
-              <option v-for="candidate in parentCandidates" :key="candidate.id" :value="candidate.id">{{ candidate.userName }}</option>
-            </select>
-            <small class="field-hint">{{ t("panel.users.parentSubscriptionHint") }}</small>
-          </label>
-          <label v-if="isAdmin && createUserForm.role === 'Customer' && !createUserForm.parentUserId && resellers.length > 0" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.owner") }}</span>
-            <select v-model="createUserForm.ownerId">
-              <option value="">{{ t("panel.users.ownerNone") }}</option>
-              <option v-for="reseller in resellers" :key="reseller.id" :value="reseller.id">{{ reseller.userName }}</option>
-            </select>
-            <small class="field-hint">{{ t("panel.users.ownerHint") }}</small>
-          </label>
-          <div v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field customer-sites">
-            <span class="field-label">{{ t("panel.users.assignedSites") }}</span>
-            <label v-for="site in sitesStore.sites" :key="site.name" class="checkbox">
-              <input v-model="createUserForm.assignedSites" type="checkbox" :value="site.name" />
-              <span>{{ site.name }}</span>
-            </label>
-            <small v-if="sitesStore.sites.length === 0" class="field-hint">{{ t("panel.users.noSitesToAssign") }}</small>
-          </div>
-          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId && servicePlans.length > 0" class="stacked-field">
-            <span class="field-label">{{ t("panel.plans.select") }}</span>
-            <select v-model="createPlanId" @change="applyPlanToCreate">
-              <option value="">{{ t("panel.plans.custom") }}</option>
-              <option v-for="plan in servicePlans" :key="plan.id" :value="plan.id">{{ plan.name }}</option>
-            </select>
-          </label>
-          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxSites") }}</span>
-            <input v-model.number="createUserForm.maxSites" type="number" min="0" />
-          </label>
-          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
-            <input v-model.number="createUserForm.maxDiskMb" type="number" min="0" />
-          </label>
-          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
-            <input v-model.number="createUserForm.maxDatabases" type="number" min="0" />
-          </label>
-          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
-            <input v-model.number="createUserForm.maxMailboxes" type="number" min="0" />
-          </label>
-          <label v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
-            <input v-model.number="createUserForm.maxScheduledTasks" type="number" min="0" />
-          </label>
-          <p v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.form.language") }}</span>
-            <select v-model="createUserForm.preferredLanguage">
-              <option value="tr">{{ t("panel.language.tr") }}</option>
-              <option value="en">{{ t("panel.language.en") }}</option>
-            </select>
-          </label>
-          <label class="check-field welcome-cell">
-            <input v-model="createUserForm.sendWelcomeEmail" type="checkbox" />
-            <span>{{ t("panel.users.sendWelcomeEmail") }}</span>
-          </label>
-          <div class="form-submit-cell">
-            <button type="submit" class="compact">{{ t("panel.users.create") }}</button>
-          </div>
-        </form>
-
-        <div class="data-table">
-          <div class="data-row table-head user-row">
-            <span>{{ t("panel.users.userName") }}</span>
-            <span>{{ t("panel.users.role") }}</span>
-            <span>{{ t("panel.users.status") }}</span>
-            <span>{{ t("panel.users.twoFactor") }}</span>
-            <span>{{ t("panel.software.action") }}</span>
-          </div>
-          <div v-for="user in authStore.users" :key="user.id" class="data-row user-row">
-            <div class="cell-main">
-              <strong>{{ user.userName }}</strong>
-              <small>{{ user.email }}</small>
-              <small v-if="user.role === 'Customer'" class="customer-meta">
-                {{ user.assignedSites.length }} {{ t("panel.users.sitesShort") }}
-                · {{ user.diskUsageMb }} / {{ user.maxDiskMb > 0 ? user.maxDiskMb : "∞" }} MB
-                · {{ user.databaseCount }} / {{ user.maxDatabases > 0 ? user.maxDatabases : "∞" }} {{ t("panel.users.databasesShort") }}
-                <template v-if="user.ownerName"> · {{ t("panel.users.owner") }}: {{ user.ownerName }}</template>
-                <template v-if="user.parentName"> · {{ t("panel.users.subUserOf") }}: {{ user.parentName }}</template>
-              </small>
-            </div>
-            <span>{{ user.role }}</span>
-            <span :class="['status-pill', user.isActive ? 'ok' : 'warn']">
-              {{ user.isActive ? t("panel.status.active") : t("panel.status.inactive") }}
-            </span>
-            <span :class="['status-pill', user.isTwoFactorEnabled ? 'ok' : 'warn']">
-              {{ user.isTwoFactorEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
-            </span>
-            <span v-if="user.lockedUntilUtc" class="status-pill danger" :title="t('panel.users.lockedHint')">
-              {{ t("panel.users.locked") }}
-            </span>
-            <span class="user-row-actions">
-              <!-- Hatalı giriş kilidi: beklemeden aç (doğru parolayla da kalkar, bu kısayol). -->
-              <button
-                v-if="user.lockedUntilUtc"
-                class="secondary compact row-button"
-                :disabled="unlockingUserId === user.id"
-                @click="unlockUser(user)">
-                {{ unlockingUserId === user.id ? t("panel.users.unlocking") : t("panel.users.unlock") }}
-              </button>
-              <button
-                v-if="user.role === 'Customer'"
-                class="secondary compact row-button"
-                @click="impersonateUser(user)">
-                {{ t("panel.users.loginAs") }}
-              </button>
-              <button class="secondary compact row-button" @click="selectUser(user)">{{ t("panel.users.edit") }}</button>
-              <button
-                v-if="user.id !== authStore.session?.user?.id"
-                class="danger compact row-button"
-                @click="deleteUser(user)">
-                {{ t("panel.users.delete") }}
-              </button>
-            </span>
-          </div>
-        </div>
-
-        <form v-if="selectedUserId" class="form-surface form-grid user-edit-grid" @submit.prevent="saveUserChanges">
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.form.email") }}</span>
-            <input v-model="selectedUserForm.email" type="email" required />
-          </label>
-          <label v-if="isAdmin" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.role") }}</span>
-            <select v-model="selectedUserForm.role">
-              <option value="Administrator">{{ t("panel.role.administrator") }}</option>
-              <option value="Operator">{{ t("panel.role.operator") }}</option>
-              <option value="Reseller">{{ t("panel.role.reseller") }}</option>
-              <option value="Customer">{{ t("panel.role.customer") }}</option>
-            </select>
-          </label>
-          <p v-if="selectedUserForm.parentUserId" class="quota-hint settings-wide-field">{{ t("panel.users.subUserScopeNote") }}</p>
-          <label v-if="isAdmin && selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId && resellers.length > 0" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.owner") }}</span>
-            <select v-model="selectedUserForm.ownerId">
-              <option value="">{{ t("panel.users.ownerNone") }}</option>
-              <option v-for="reseller in resellers" :key="reseller.id" :value="reseller.id">{{ reseller.userName }}</option>
-            </select>
-          </label>
-          <div v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field customer-sites">
-            <span class="field-label">{{ t("panel.users.assignedSites") }}</span>
-            <label v-for="site in sitesStore.sites" :key="site.name" class="checkbox">
-              <input v-model="selectedUserForm.assignedSites" type="checkbox" :value="site.name" />
-              <span>{{ site.name }}</span>
-            </label>
-            <small v-if="sitesStore.sites.length === 0" class="field-hint">{{ t("panel.users.noSitesToAssign") }}</small>
-          </div>
-          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxSites") }}</span>
-            <input v-model.number="selectedUserForm.maxSites" type="number" min="0" />
-          </label>
-          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxDiskMb") }}</span>
-            <input v-model.number="selectedUserForm.maxDiskMb" type="number" min="0" />
-          </label>
-          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxDatabases") }}</span>
-            <input v-model.number="selectedUserForm.maxDatabases" type="number" min="0" />
-          </label>
-          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxMailboxes") }}</span>
-            <input v-model.number="selectedUserForm.maxMailboxes" type="number" min="0" />
-          </label>
-          <label v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="stacked-field">
-            <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
-            <input v-model.number="selectedUserForm.maxScheduledTasks" type="number" min="0" />
-          </label>
-          <p v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.form.language") }}</span>
-            <select v-model="selectedUserForm.preferredLanguage">
-              <option value="tr">{{ t("panel.language.tr") }}</option>
-              <option value="en">{{ t("panel.language.en") }}</option>
-            </select>
-          </label>
-          <label class="check-field">
-            <input v-model="selectedUserForm.isActive" type="checkbox" />
-            <span>{{ t("panel.users.isActive") }}</span>
-          </label>
-          <div class="row-actions">
-            <button type="submit" class="compact">{{ t("panel.users.save") }}</button>
-            <button type="button" class="secondary compact" @click="selectedUserId = ''">{{ t("panel.common.cancel") }}</button>
-          </div>
-        </form>
-      </section>
-
       <NotificationsView v-else-if="settingsTab === 'notifications' && isAdmin" />
       <UpdateView v-else-if="settingsTab === 'updates' && isAdmin" />
     </section>
@@ -704,15 +365,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import MainLayout from "../layouts/MainLayout.vue";
 import { readSecureEntryPath } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
 import { getPanelPreferences, updatePanelPreferences, type PanelPreferences } from "../api/panelSettings";
-import { getServicePlans, createServicePlan, deleteServicePlan, type ServicePlan } from "../api/servicePlans";
 import { useAppsStore } from "../stores/apps";
-import { extractApiDetails, extractApiMessage, useAuthStore, type ManagedUser } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
 import { usePhpStore } from "../stores/php";
 import { useProxyStore } from "../stores/proxy";
@@ -734,14 +394,19 @@ import SecurityView from "./SecurityView.vue";
 import ServerToolsView from "./ServerToolsView.vue";
 import BackupView from "./BackupView.vue";
 import SubUsersView from "./SubUsersView.vue";
+import UsersView from "./UsersView.vue";
+import AccountView from "./AccountView.vue";
 import SoftwareView from "./SoftwareView.vue";
 import UpdateView from "./UpdateView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
+import { getAttentionSummary, type AttentionSummary } from "../api/attention";
 import WebsiteWorkspaceView from "./WebsiteWorkspaceView.vue";
 
 type ViewMode = "setup" | "auth" | "dashboard";
 type SectionItem = { id: string; label: string; description: string; glyph: string; badge?: string };
-type SettingsTab = "general" | "account" | "security" | "users" | "notifications" | "updates";
+// Hesap yönetimi ("accounts" → UsersView) ve "Hesabım" ("account" → AccountView) artık ayrı bölümler;
+// Ayarlar yalnızca yönetici kapsamındaki sunucu/panel ayarlarını barındırır.
+type SettingsTab = "general" | "security" | "notifications" | "updates";
 
 const i18n = useI18n();
 const t = (key: string) => {
@@ -778,19 +443,18 @@ const resetForm = reactive({ token: "", newPassword: "", confirmPassword: "" });
 const banner = ref("");
 const bannerError = ref(false);
 const requiresTwoFactor = ref(false);
-const twoFactorVerificationCode = ref("");
-const disableTwoFactorPassword = ref("");
-const recoveryCodes = ref<string[]>([]);
-const selectedUserId = ref("");
-const unlockingUserId = ref("");
 const settingsTab = ref<SettingsTab>("general");
-const showUserCreateForm = ref(false);
-const showPlanForm = ref(false);
 const activeSection = ref("home");
 // Ana sayfa "yeni sürüm" bandı için panel güncelleme durumu (yalnızca admin doldurur).
 const panelUpdate = ref<UpdateStatus | null>(null);
 const ftpUserCount = ref(0);
+// "Dikkat" toplayıcısı (menü rozetleri + üst bar çekmecesi). Yalnız admin doldurur (uç admin-only).
+const attentionSummary = ref<AttentionSummary | null>(null);
+const attentionLoading = ref(false);
+const attentionError = ref("");
+const attentionOpen = ref(false);
 let refreshHandle: number | null = null;
+let attentionHandle: number | null = null;
 
 const setupForm = reactive({
   userName: "admin",
@@ -810,88 +474,11 @@ const loginForm = reactive({
   rememberMe: true
 });
 
-const createUserForm = reactive({
-  userName: "",
-  email: "",
-  password: "",
-  role: "Operator",
-  ownerId: "",
-  assignedSites: [] as string[],
-  maxSites: 0,
-  maxDiskMb: 0,
-  maxDatabases: 0,
-  maxMailboxes: 0,
-  maxScheduledTasks: 0,
-  parentUserId: "",
-  sendWelcomeEmail: false,
-  preferredLanguage: "tr"
-});
-
-const selectedUserForm = reactive({
-  email: "",
-  role: "Operator",
-  ownerId: "",
-  assignedSites: [] as string[],
-  maxSites: 0,
-  maxDiskMb: 0,
-  maxDatabases: 0,
-  maxMailboxes: 0,
-  maxScheduledTasks: 0,
-  parentUserId: "",
-  preferredLanguage: "tr",
-  isActive: true
-});
-
-// Müşteriye sahip atamak için bayi (Reseller) kullanıcı listesi.
-const resellers = computed(() => authStore.users.filter((user) => user.role === "Reseller"));
-
-// Alt-kullanıcı için "ana abonelik" adayları: kendisi alt-kullanıcı OLMAYAN (bağımsız) müşteriler.
-const parentCandidates = computed(() => authStore.users.filter((user) => user.role === "Customer" && !user.parentUserId));
-
 const securityForm = reactive({
   secureEntryPath: "",
   allowedIpAddressesText: ""
 });
 
-// Servis planları (Servis Planlari): müşterilere atanabilen limit şablonları.
-const servicePlans = ref<ServicePlan[]>([]);
-const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0, maxMailboxes: 0, maxScheduledTasks: 0 });
-const createPlanId = ref("");
-
-async function loadServicePlans() {
-  servicePlans.value = await getServicePlans().catch(() => []);
-}
-
-async function addServicePlan() {
-  if (!planForm.name.trim()) {
-    return;
-  }
-  await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases, maxMailboxes: planForm.maxMailboxes, maxScheduledTasks: planForm.maxScheduledTasks });
-  planForm.name = "";
-  planForm.maxSites = 0;
-  planForm.maxDiskMb = 0;
-  planForm.maxDatabases = 0;
-  planForm.maxMailboxes = 0;
-  planForm.maxScheduledTasks = 0;
-  showPlanForm.value = false;
-  await loadServicePlans();
-}
-
-async function removeServicePlan(id: string) {
-  await deleteServicePlan(id);
-  await loadServicePlans();
-}
-
-function applyPlanToCreate() {
-  const plan = servicePlans.value.find((item) => item.id === createPlanId.value);
-  if (plan) {
-    createUserForm.maxSites = plan.maxSites;
-    createUserForm.maxDiskMb = plan.maxDiskMb;
-    createUserForm.maxDatabases = plan.maxDatabases;
-    createUserForm.maxMailboxes = plan.maxMailboxes;
-    createUserForm.maxScheduledTasks = plan.maxScheduledTasks;
-  }
-}
 const panelPreferences = reactive<PanelPreferences>({
   panelName: "AdaPanel",
   defaultLanguage: "tr",
@@ -916,14 +503,6 @@ const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
 const isSubUser = computed(() => authStore.session?.isSubUser === true);
 const subUserAllowedSections = computed(() => authStore.session?.allowedSections ?? null);
 
-// Bayi: create formunda rol Customer'a sabit (rol seçimi gizli) + Ayarlar'da doğrudan
-// "Müşteriler" sekmesine düşsün ("general" sekmesi bayiye kapalı).
-watch(isReseller, (value) => {
-  if (value) {
-    createUserForm.role = "Customer";
-    settingsTab.value = "users";
-  }
-}, { immediate: true });
 const installedSoftwareCount = computed(() => softwareStore.catalog?.installed.length ?? 0);
 const totalBindingCount = computed(() => sitesStore.sites.reduce((sum, site) => sum + site.bindings.length, 0));
 const databaseCount = computed(() => Object.values(databasesStore.workspaces)
@@ -941,33 +520,63 @@ const securityStatusLabel = computed(() => {
 const heading = computed(() => mode.value === "setup" ? t("panel.setup.title") : t("panel.auth.title"));
 const subtitle = computed(() => mode.value === "setup" ? t("panel.setup.subtitle") : t("panel.auth.subtitle"));
 
+// Backend "dns" / "health" / "updates" gibi mantıksal bölümler döndürür; bunların üst menüde
+// birebir karşılığı yok (DNS site araçlarında, servis sağlığı Sunucu Araçları'nda, güncellemeler
+// Ayarlar > Güncellemeler sekmesinde). Rozet ve gezinme aynı eşlemeyi kullanır.
+const ATTENTION_SECTION_ALIASES: Record<string, string> = {
+  dns: "sites",
+  health: "tools",
+  updates: "settings"
+};
+
+// Bölüm başına dikkat sayısı (takma adlar katlanmış hâlde).
+const attentionCounts = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {};
+  for (const [section, count] of Object.entries(attentionSummary.value?.sectionCounts ?? {})) {
+    const target = ATTENTION_SECTION_ALIASES[section] ?? section;
+    counts[target] = (counts[target] ?? 0) + count;
+  }
+
+  return counts;
+});
+
+function attentionBadge(sectionId: string): string | undefined {
+  const count = attentionCounts.value[sectionId] ?? 0;
+  return count > 0 ? String(count) : undefined;
+}
+
 const dashboardSections = computed<SectionItem[]>(() => {
   const sections: SectionItem[] = [
     // panel sırası: Web Siteleri → Posta → Dosyalar → Veritabanları → İstatistikler →
     // Uygulamalar/Mağaza → Zamanlanmış Görevler → Güvenlik → Araçlar/Ayarlar.
     { id: "home", label: t("panel.navigation.home"), description: t("panel.dashboard.subtitle"), glyph: "HM" },
     { id: "sites", label: t("panel.navigation.sites"), description: t("panel.sites.workspaceSubtitle"), glyph: "WS", badge: sitesStore.sites.length ? String(sitesStore.sites.length) : undefined },
-    // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi). Mevcut yönetim
-    // ekranını (Ayarlar > Kullanıcılar) doğrudan açar; handleNavigation bunu settings+users sekmesine yönlendirir.
+    // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi):
+    // hesap yönetimi ekranı (UsersView) — kullanıcılar, planlar, kotalar, alt kullanıcılar.
     { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
     { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
-    { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN" },
-    { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD" },
-    { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badge: installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined },
+    { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badge: attentionBadge("monitor") },
+    // Danışman rozeti = bekleyen dikkat maddesi sayısı; Mağaza rozeti = bekleyen güncelleme
+    // sayısı (yoksa eskisi gibi kurulu bileşen sayısı).
+    { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD", badge: attentionBadge("advisor") },
+    { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badge: attentionBadge("software") ?? (installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined) },
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
-    { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC" },
-    { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR" },
+    { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC", badge: attentionBadge("security") },
+    { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
-    { id: "settings", label: t("panel.navigation.settings"), description: t("panel.settings.subtitle"), glyph: "AY" },
+    // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.
+    { id: "account", label: t("panel.settings.tab.account"), description: t("panel.account.title"), glyph: "HS" },
+    { id: "settings", label: t("panel.navigation.settings"), description: t("panel.settings.subtitle"), glyph: "AY", badge: attentionBadge("settings") },
     { id: "exit", label: t("panel.navigation.exit"), description: t("panel.auth.logout"), glyph: "EX" }
   ];
 
   if (isReseller.value) {
-    // Bayi: kendi müşterilerini yönetir (Ayarlar > Müşteriler) + müşterilerinin tüm site
+    // Bayi: kendi müşterilerini yönetir ("Müşteriler" ekranı) + müşterilerinin tüm site
     // kaynakları (Web Siteleri hub'ı: PHP/SSL/DNS/FTP/Proxy/WP/Stats/Backup/Hosting — hepsi
     // sahip-kapsamına göre EnsureSiteAsync ile filtreli; server-level araçlar hub'da gizli).
+    // Panel ayarları bayiye kapalı olduğundan "Ayarlar" yerine "Hesabım" görünür.
     return sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
@@ -976,7 +585,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "files" ||
       section.id === "database" ||
       section.id === "tasks" ||
-      section.id === "settings" ||
+      section.id === "account" ||
       section.id === "exit");
   }
 
@@ -989,7 +598,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "database" ||
       section.id === "files" ||
       section.id === "tasks" ||
-      section.id === "settings" ||
+      section.id === "account" ||
       section.id === "exit");
     // Müşteriye özel yedek bölümü (kendi sitelerinin yedekleri) — Dosyalar'dan hemen sonra.
     const filesIndex = customerSections.findIndex((section) => section.id === "files");
@@ -1001,17 +610,17 @@ const dashboardSections = computed<SectionItem[]>(() => {
     });
 
     if (isSubUser.value) {
-      // Alt-kullanıcı: izin listesi doluysa menü ona göre daraltılır (home/settings/exit hep açık).
+      // Alt-kullanıcı: izin listesi doluysa menü ona göre daraltılır (home/account/exit hep açık).
       const allowed = subUserAllowedSections.value;
       if (allowed) {
         const allowedSet = new Set(allowed.map((section) => section.toLowerCase()));
         customerSections = customerSections.filter((section) =>
-          section.id === "home" || section.id === "settings" || section.id === "exit" || allowedSet.has(section.id));
+          section.id === "home" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id));
       }
     } else {
-      // Top-level müşteri: aboneliği altındaki ek kullanıcıları yönetir (Plesk "Users" sekmesi) — Ayarlar'dan önce.
-      const settingsIndex = customerSections.findIndex((section) => section.id === "settings");
-      customerSections.splice(settingsIndex >= 0 ? settingsIndex : customerSections.length - 1, 0, {
+      // Top-level müşteri: aboneliği altındaki ek kullanıcıları yönetir (Plesk "Users" sekmesi) — Hesabım'dan önce.
+      const accountIndex = customerSections.findIndex((section) => section.id === "account");
+      customerSections.splice(accountIndex >= 0 ? accountIndex : customerSections.length - 1, 0, {
         id: "subusers",
         label: t("panel.navigation.subUsers"),
         description: t("panel.subUsers.subtitle"),
@@ -1027,10 +636,11 @@ const dashboardSections = computed<SectionItem[]>(() => {
   }
 
   if (!isAdmin.value) {
+    // Operator vb.: panel ayarları kapalı; kendi hesabı (2FA) açık.
     return sections.filter((section) =>
       section.id === "home" ||
       section.id === "monitor" ||
-      section.id === "settings" ||
+      section.id === "account" ||
       section.id === "exit");
   }
 
@@ -1232,6 +842,8 @@ async function logout() {
     stopRefreshLoop();
     mode.value = "auth";
     activeSection.value = "home";
+    attentionOpen.value = false;
+    attentionSummary.value = null;
     requiresTwoFactor.value = false;
     showBanner(t("panel.auth.logoutSuccess"), false);
   } catch (error) {
@@ -1272,7 +884,6 @@ async function loadDashboardData() {
     authStore.fetchUsers(),
     authStore.fetchAuditLogs(),
     softwareStore.fetchCatalog(),
-    loadServicePlans(),
     getPanelPreferences().then((preferences) => {
       Object.assign(panelPreferences, preferences);
       i18n.locale.value = preferences.defaultLanguage;
@@ -1372,11 +983,9 @@ function handleNavigation(sectionId: string) {
     return;
   }
 
-  // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi → mevcut hesap yönetimi ekranı (Ayarlar > Kullanıcılar).
-  if (sectionId === "accounts") {
-    activeSection.value = "settings";
-    settingsTab.value = "users";
-    window.scrollTo({ top: 0, behavior: "auto" });
+  // Ana sayfadaki özet kartı → dikkat çekmecesini aç (ayrı bir ekrana gitmeden).
+  if (sectionId === "attention") {
+    openAttention();
     return;
   }
 
@@ -1388,11 +997,50 @@ function handleNavigation(sectionId: string) {
     return;
   }
 
-  activeSection.value = sectionId;
-  if (sectionId === "settings" && !isAdmin.value) {
-    settingsTab.value = "account";
-  }
+  // Dikkat maddelerinin mantıksal bölümleri ("dns" → Web Siteleri, "health" → Sunucu Araçları).
+  activeSection.value = ATTENTION_SECTION_ALIASES[sectionId] ?? sectionId;
   window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+// Dikkat çekmecesi: açılışta taze veri çeker (rozet 60 sn'de bir tazelenir, açılınca beklenmez).
+function openAttention() {
+  attentionOpen.value = true;
+  void loadAttention(false);
+}
+
+function toggleAttention() {
+  if (attentionOpen.value) {
+    attentionOpen.value = false;
+    return;
+  }
+
+  openAttention();
+}
+
+/**
+ * Dikkat özetini çeker. `silent` (arka plan turu) hata gösterme; kullanıcı tetiklediyse
+ * çekmecede hata satırı görünür. Uç admin-only olduğundan diğer roller için hiç çağrılmaz.
+ */
+async function loadAttention(silent = true) {
+  if (!isAdmin.value || mode.value !== "dashboard") {
+    return;
+  }
+
+  if (!silent) {
+    attentionLoading.value = true;
+    attentionError.value = "";
+  }
+
+  try {
+    attentionSummary.value = await getAttentionSummary();
+    attentionError.value = "";
+  } catch (error) {
+    if (!silent) {
+      attentionError.value = resolveApiMessage(error);
+    }
+  } finally {
+    attentionLoading.value = false;
+  }
 }
 
 // Ana sayfa banner'ı için panel güncelleme durumunu bir kez çek (admin; GitHub Releases'e bakar, hata olursa sessiz).
@@ -1405,54 +1053,6 @@ async function loadPanelUpdate() {
     panelUpdate.value = await checkForUpdate();
   } catch {
     panelUpdate.value = null;
-  }
-}
-
-async function startTwoFactor() {
-  try {
-    await authStore.beginTwoFactorSetup();
-    showBanner(t("panel.account.started"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function confirmTwoFactor() {
-  try {
-    recoveryCodes.value = await authStore.confirmTwoFactorSetup(twoFactorVerificationCode.value);
-    twoFactorVerificationCode.value = "";
-    showBanner(t("panel.account.enabledMessage"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function regenerateRecoveryCodes() {
-  try {
-    recoveryCodes.value = await authStore.regenerateRecoveryCodes();
-    showBanner(t("panel.account.recoveryRegenerated"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function copyRecoveryCodes() {
-  try {
-    await navigator.clipboard.writeText(recoveryCodes.value.join("\n"));
-    showBanner(t("panel.account.recoveryCopied"), false);
-  } catch {
-    showBanner(t("panel.account.recoveryCopyFailed"), true);
-  }
-}
-
-async function disableTwoFactor() {
-  try {
-    await authStore.disableTwoFactor(disableTwoFactorPassword.value);
-    disableTwoFactorPassword.value = "";
-    recoveryCodes.value = [];
-    showBanner(t("panel.account.disabledMessage"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
   }
 }
 
@@ -1476,105 +1076,6 @@ async function saveSecuritySettings() {
   }
 }
 
-async function createUser() {
-  try {
-    await authStore.createUser({ ...createUserForm, ownerId: createUserForm.ownerId || null, parentUserId: createUserForm.parentUserId || null });
-    createUserForm.userName = "";
-    createUserForm.email = "";
-    createUserForm.password = "";
-    // Bayi YALNIZ müşteri oluşturabilir → rolü Customer'da tut (yoksa kota/site/plan alanları gizlenir).
-    createUserForm.role = isReseller.value ? "Customer" : "Operator";
-    createUserForm.ownerId = "";
-    createUserForm.assignedSites = [];
-    createUserForm.maxSites = 0;
-    createUserForm.maxDiskMb = 0;
-    createUserForm.maxDatabases = 0;
-    createUserForm.maxMailboxes = 0;
-    createUserForm.maxScheduledTasks = 0;
-    createUserForm.parentUserId = "";
-    createUserForm.sendWelcomeEmail = false;
-    createUserForm.preferredLanguage = "tr";
-    showUserCreateForm.value = false;
-    showBanner(t("panel.users.created"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-async function impersonateUser(user: ManagedUser) {
-  try {
-    await authStore.impersonate(user.id);
-    // Müşteri arayüzüne temiz geçiş için paneli yeniden yükle.
-    window.location.reload();
-  } catch (error) {
-    void error;
-  }
-}
-
-// Kullanıcı silme (Plesk paritesi): varsayılan davranış siteleri/verileri SUNUCUDA BIRAKIR (yönetime devir).
-// Site+dosya+DB'yi de silmek isteyen admin, Web Siteleri ekranındaki cascade silmeyi kullanır.
-async function deleteUser(user: ManagedUser) {
-  // Yerel t() sarmalayıcısı parametre almaz; ad enterpolasyonu için i18n.t doğrudan kullanılır.
-  if (!window.confirm(i18n.t("panel.users.confirmDelete", { name: user.userName }) as string)) {
-    return;
-  }
-
-  try {
-    await authStore.deleteUser(user.id);
-    if (selectedUserId.value === user.id) {
-      selectedUserId.value = "";
-    }
-    showBanner(t("panel.users.deleted"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
-// Hatalı giriş kilidini beklemeden açar (yönetici kısayolu; bayi yalnız kendi müşterisini açabilir).
-async function unlockUser(user: ManagedUser) {
-  unlockingUserId.value = user.id;
-  try {
-    await authStore.unlockUser(user.id);
-    showBanner(t("panel.users.unlocked"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  } finally {
-    unlockingUserId.value = "";
-  }
-}
-
-function selectUser(user: ManagedUser) {
-  selectedUserId.value = user.id;
-  selectedUserForm.email = user.email;
-  selectedUserForm.role = user.role;
-  selectedUserForm.ownerId = user.ownerId ?? "";
-  selectedUserForm.assignedSites = [...(user.assignedSites ?? [])];
-  selectedUserForm.maxSites = user.maxSites ?? 0;
-  selectedUserForm.maxDiskMb = user.maxDiskMb ?? 0;
-  selectedUserForm.maxDatabases = user.maxDatabases ?? 0;
-  selectedUserForm.maxMailboxes = user.maxMailboxes ?? 0;
-  selectedUserForm.maxScheduledTasks = user.maxScheduledTasks ?? 0;
-  selectedUserForm.parentUserId = user.parentUserId ?? "";
-  selectedUserForm.preferredLanguage = user.preferredLanguage;
-  selectedUserForm.isActive = user.isActive;
-}
-
-async function saveUserChanges() {
-  if (!selectedUserId.value) {
-    return;
-  }
-
-  try {
-    await authStore.updateUser(selectedUserId.value, { ...selectedUserForm, ownerId: selectedUserForm.ownerId || null });
-    if (selectedUserId.value === authStore.session?.user?.id) {
-      await authStore.fetchSession();
-    }
-    showBanner(t("panel.users.saved"), false);
-  } catch (error) {
-    showBanner(resolveApiMessage(error), true);
-  }
-}
-
 function startRefreshLoop() {
   stopRefreshLoop();
   refreshHandle = window.setInterval(() => {
@@ -1582,12 +1083,28 @@ function startRefreshLoop() {
       void systemStore.fetchOverview();
     }
   }, 15000);
+
+  // Dikkat toplayıcısı AĞIR (servis/DNS/güncelleme taraması) → 60 sn'de bir, sekme
+  // arka plandayken hiç değil.
+  attentionHandle = window.setInterval(() => {
+    if (mode.value === "dashboard" && !document.hidden) {
+      void loadAttention(true);
+    }
+  }, 60000);
+
+  // Panele girer girmez rozet dolsun (kullanıcı hiçbir sekmeye gitmeden sorunu görsün).
+  void loadAttention(true);
 }
 
 function stopRefreshLoop() {
   if (refreshHandle !== null) {
     window.clearInterval(refreshHandle);
     refreshHandle = null;
+  }
+
+  if (attentionHandle !== null) {
+    window.clearInterval(attentionHandle);
+    attentionHandle = null;
   }
 }
 
@@ -1754,27 +1271,6 @@ function formatUtc(value: string | null) {
   max-width: 100%;
 }
 
-.customer-sites {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 6px;
-  max-height: 180px;
-  overflow-y: auto;
-  padding: 10px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-sm);
-}
-
-.customer-sites .checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.customer-sites .checkbox input {
-  width: auto;
-}
-
 .settings-tabs button {
   width: auto;
 }
@@ -1796,8 +1292,7 @@ function formatUtc(value: string | null) {
   gap: 12px;
 }
 
-.section-head,
-.settings-inline-action {
+.section-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1810,152 +1305,8 @@ function formatUtc(value: string | null) {
   min-height: 39px;
 }
 
-.settings-inline-action {
-  justify-content: flex-start;
-  align-items: end;
-}
-
-.settings-inline-action .stacked-field {
-  min-width: min(340px, 100%);
-}
-
-.settings-inline-action button,
-.row-button,
 .row-actions button {
   width: auto;
-}
-
-.settings-wide-field {
-  grid-column: 1 / -1;
-}
-
-.user-row {
-  grid-template-columns: minmax(220px, 1.5fr) 0.75fr 0.7fr 0.7fr auto;
-}
-
-.user-row-actions {
-  display: inline-flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.plans-card {
-  display: grid;
-  gap: 14px;
-}
-
-.plans-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.plans-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 10px;
-}
-
-.plan-card {
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  background: var(--surface-1);
-  padding: 12px 14px;
-  display: grid;
-  gap: 10px;
-  align-content: start;
-}
-
-.plan-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.plan-card-head .plan-name {
-  font-size: 0.98rem;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.plan-limits {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.plan-limits li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 0.84rem;
-  padding: 4px 0;
-  border-top: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
-}
-
-.plan-limits li:first-child {
-  border-top: none;
-}
-
-.plan-limits li span {
-  color: var(--text-muted);
-}
-
-.plan-limits li b {
-  font-weight: 700;
-}
-
-.plans-empty {
-  padding: 14px 0;
-}
-
-.plan-form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  align-items: end;
-  padding-top: 14px;
-  border-top: 1px solid var(--panel-border);
-}
-
-.plan-form-grid .plan-name-cell {
-  grid-column: 1 / -1;
-}
-
-.plan-form-hint {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.plan-form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.customer-meta {
-  color: var(--accent-text);
-}
-
-.form-submit-cell {
-  display: flex;
-  align-items: end;
-}
-
-.form-submit-cell button {
-  width: auto;
-}
-
-.user-edit-grid {
-  align-items: end;
 }
 
 .audit-item {
@@ -2001,23 +1352,7 @@ button {
   width: 100%;
 }
 
-.user-create-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.quota-hint {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
 @media (max-width: 980px) {
-  .user-create-grid,
-  .user-edit-grid {
-    grid-template-columns: 1fr;
-  }
-
   .settings-account {
     display: none;
   }
@@ -2039,10 +1374,6 @@ button {
   .settings-tabs button {
     width: 100%;
     white-space: normal;
-  }
-
-  .settings-wide-field {
-    grid-column: auto;
   }
 }
 </style>

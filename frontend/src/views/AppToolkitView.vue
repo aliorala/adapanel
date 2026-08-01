@@ -238,12 +238,14 @@ import {
   stopQueueWorker
 } from "../api/siteHosting";
 import { getWordPress, setWordPressMaintenance, createWordPressLoginLink, cloneWordPress, hardenWordPress, copyWordPressData, type WordPressSite, type WordPressCloneResult, type WordPressCopyDataResult } from "../api/wordpress";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 type ToolkitTab = "composer" | "artisan" | "node" | "wpcli" | "wordpress" | "queue";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const tab = ref<ToolkitTab>("composer");
@@ -347,8 +349,16 @@ async function wpComponent(kind: "plugin" | "theme", action: "activate" | "deact
   if (!slug) {
     return;
   }
-  if (action === "delete" && !window.confirm(t("panel.wpkit.confirmDelete", { name: slug }))) {
-    return;
+  if (action === "delete") {
+    // Normal onay: tek bir eklenti/tema kaldırılır (yeniden kurulabilir) → ad yazdırmaya gerek yok.
+    const approved = await confirm({
+      title: t("panel.confirm.deleteWpComponentTitle", { name: slug }),
+      message: t("panel.wpkit.confirmDelete", { name: slug }),
+      impact: [`${t(kind === "plugin" ? "panel.wpkit.plugins" : "panel.wpkit.themes")}: ${slug}`],
+    });
+    if (!approved) {
+      return;
+    }
   }
   wpBusy.value = "comp";
   wpNotice.value = "";
@@ -370,24 +380,40 @@ async function wpDoCopy() {
   if (!siteName.value || !wpCopy.targetSiteName || (!wpCopy.files && !wpCopy.database)) {
     return;
   }
-  if (!window.confirm(t("panel.wpkit.copyConfirm", { target: wpCopy.targetSiteName }))) {
-    return;
+  const impact: string[] = [`${t("panel.wpkit.copyTarget")}: ${wpCopy.targetSiteName}`];
+  if (wpCopy.files) {
+    impact.push(t("panel.wpkit.copyFiles"));
   }
-  wpBusy.value = "copy";
-  wpNotice.value = "";
-  wpCopyResult.value = null;
-  try {
-    wpCopyResult.value = await copyWordPressData(siteName.value, {
-      targetSiteName: wpCopy.targetSiteName,
-      files: wpCopy.files,
-      database: wpCopy.database,
-    });
-    showWpNotice(t("panel.wpkit.copyDone"), false);
-  } catch (error) {
-    showWpNotice(resolveApiMessage(error), true);
-  } finally {
-    wpBusy.value = "";
+  if (wpCopy.database) {
+    impact.push(t("panel.wpkit.copyDatabase"));
   }
+
+  // Yüksek riskli onay: hedef sitenin ÜZERİNE yazılır → hedef site adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.copyDataTitle", { name: wpCopy.targetSiteName }),
+    message: t("panel.wpkit.copyConfirm", { target: wpCopy.targetSiteName }),
+    impact,
+    requireText: wpCopy.targetSiteName,
+    confirmLabel: t("panel.wpkit.copyBtn"),
+    busyLabel: t("panel.wpkit.working"),
+    action: async () => {
+      wpBusy.value = "copy";
+      wpNotice.value = "";
+      wpCopyResult.value = null;
+      try {
+        wpCopyResult.value = await copyWordPressData(siteName.value, {
+          targetSiteName: wpCopy.targetSiteName,
+          files: wpCopy.files,
+          database: wpCopy.database,
+        });
+        showWpNotice(t("panel.wpkit.copyDone"), false);
+      } catch (error) {
+        showWpNotice(resolveApiMessage(error), true);
+      } finally {
+        wpBusy.value = "";
+      }
+    },
+  });
 }
 
 // panel "Klonla": kaynak WP'yi yeni bir staging sitesine kopyalar (yalnız yönetici). Backend tüm işi orkestre eder.

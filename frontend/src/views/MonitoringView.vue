@@ -138,13 +138,90 @@
         </div>
       </div>
     </section>
+
+    <!-- Canlı süreç izleyici (htop benzeri). Fark: ham süreç adı yerine "hangi site / hangi
+         bileşen" etiketi gösterilir — "sunucu yavaş" sorusunun asıl cevabı budur. -->
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>{{ t("panel.processes.title") }}</h2>
+          <p class="meta">{{ t("panel.processes.subtitle") }}</p>
+        </div>
+        <div class="row-actions">
+          <select v-model="processSort" class="compact-select">
+            <option value="cpu">{{ t("panel.processes.sortCpu") }}</option>
+            <option value="memory">{{ t("panel.processes.sortMemory") }}</option>
+          </select>
+          <button class="secondary compact" @click="processPaused = !processPaused">
+            {{ processPaused ? t("panel.processes.resume") : t("panel.processes.pause") }}
+          </button>
+        </div>
+      </div>
+
+      <p v-if="processError" class="notice error">{{ processError }}</p>
+      <p v-else-if="!snapshot" class="meta">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="!snapshot.cpuBaselineReady" class="field-hint">{{ t("panel.processes.baselineHint") }}</p>
+
+      <div v-if="snapshot" class="proc-table">
+        <div class="proc-row head">
+          <span>{{ t("panel.processes.owner") }}</span>
+          <span>{{ t("panel.processes.pid") }}</span>
+          <span>{{ t("panel.system.cpu") }}</span>
+          <span>{{ t("panel.system.memory") }}</span>
+          <span>{{ t("panel.processes.uptime") }}</span>
+        </div>
+        <div v-for="item in snapshot.processes" :key="item.processId" class="proc-row">
+          <div class="proc-owner">
+            <strong>{{ item.label || item.name }}</strong>
+            <small>{{ t("panel.processes.category." + item.category) }} · {{ item.name }}<template v-if="item.detail"> · {{ item.detail }}</template></small>
+          </div>
+          <span class="proc-num">{{ item.processId }}</span>
+          <span class="proc-num">
+            <span :class="['proc-bar', cpuSeverity(item.cpuPercent)]" :style="{ '--fill': Math.min(100, item.cpuPercent) + '%' }"></span>
+            {{ item.cpuPercent.toFixed(1) }}%
+          </span>
+          <span class="proc-num">{{ formatBytes(item.workingSetBytes) }}</span>
+          <span class="proc-num">{{ formatUptime(item.uptimeSeconds) }}</span>
+        </div>
+        <p v-if="snapshot.processes.length === 0" class="meta">{{ t("panel.processes.empty") }}</p>
+        <p class="field-hint">
+          {{ t("panel.processes.footer", { shown: snapshot.processes.length, total: snapshot.totalProcessCount }) }}
+        </p>
+      </div>
+    </section>
+
+    <!-- Süreç listesinin bir adım derini. MySQL/PostgreSQL TEK süreçtir ve tüm siteler onu
+         paylaşır; "MariaDB %42" satırı o yükün KİMDEN geldiğini söyleyemez. Cevap sürecin
+         içindeki aktif sorgularda: her satır bir siteye bağlanır. -->
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>{{ t("panel.consumers.title") }}</h2>
+          <p class="meta">{{ t("panel.consumers.subtitle", { name: consumerSourceLabel }) }}</p>
+        </div>
+        <label class="stacked-field consumer-source">
+          <span class="field-label">{{ t("panel.consumers.source") }}</span>
+          <select v-model="consumerSource" class="compact-select">
+            <option value="mariadb">MariaDB</option>
+            <option value="mysql">MySQL</option>
+            <option value="postgresql">PostgreSQL</option>
+            <option value="iis">IIS (web)</option>
+          </select>
+        </label>
+      </div>
+
+      <ResourceConsumers :source="consumerSource" />
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSystemStore } from "../stores/system";
+import { getProcessSnapshot, type ProcessSnapshot } from "../api/processes";
+import ResourceConsumers from "../components/ResourceConsumers.vue";
+import type { ConsumerSource } from "../api/consumers";
 
 type DiskUsage = {
   name: string;
@@ -203,9 +280,50 @@ const netDownSpark = computed(() => spark(netDownSeries.value, netScale.value));
 const netUpSpark = computed(() => spark(netUpSeries.value, netScale.value));
 const hasNetTrend = computed(() => systemStore.history.length > 1);
 
+// --- "Şu an kim kullanıyor?" kaynak seçimi ---
+const consumerSource = ref<ConsumerSource>("mariadb");
+const consumerSourceLabel = computed(() => ({
+  mariadb: "MariaDB",
+  mysql: "MySQL",
+  postgresql: "PostgreSQL",
+  iis: "IIS"
+}[consumerSource.value]));
+
+// --- Canlı süreç izleyici ---
+const snapshot = ref<ProcessSnapshot | null>(null);
+const processSort = ref<"cpu" | "memory">("cpu");
+const processPaused = ref(false);
+const processError = ref("");
+let processTimer: number | null = null;
+let processInFlight = false;
+
+async function pollProcesses() {
+  // Sekme arka plandaysa veya kullanıcı duraklattıysa sunucuyu boşuna yorma.
+  // Önceki istek hâlâ sürüyorsa yenisini kuyruğa alma (yavaş sunucuda istek yığılmasın).
+  if (processPaused.value || document.hidden || processInFlight) {
+    return;
+  }
+
+  processInFlight = true;
+  try {
+    snapshot.value = await getProcessSnapshot(processSort.value);
+    processError.value = "";
+  } catch {
+    processError.value = t("panel.processes.failed");
+  } finally {
+    processInFlight = false;
+  }
+}
+
+// Sıralama değişince beklemeden yenile.
+watch(processSort, () => void pollProcesses());
+
 onMounted(() => {
   void systemStore.fetchHistory();
   historyTimer = window.setInterval(() => void systemStore.fetchHistory(), 60000);
+
+  void pollProcesses();
+  processTimer = window.setInterval(() => void pollProcesses(), 2000);
 });
 
 onUnmounted(() => {
@@ -213,7 +331,27 @@ onUnmounted(() => {
     window.clearInterval(historyTimer);
     historyTimer = null;
   }
+
+  if (processTimer !== null) {
+    window.clearInterval(processTimer);
+    processTimer = null;
+  }
 });
+
+function cpuSeverity(percent: number) {
+  if (percent >= 50) return "high";
+  return percent >= 20 ? "medium" : "low";
+}
+
+function formatUptime(seconds: number) {
+  if (seconds <= 0) return "—";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}g ${hours}sa`;
+  if (hours > 0) return `${hours}sa ${minutes}dk`;
+  return `${minutes}dk`;
+}
 
 // Değer dizisini 100×28 viewBox içinde bir polyline "points" dizgesine çevirir (üst=yüksek değer).
 function spark(values: number[], maxValue: number): string {
@@ -515,14 +653,212 @@ function formatTimeSpan(value: string): string {
 }
 
 @media (max-width: 820px) {
-  .disk-row,
-  .network-row {
-    grid-template-columns: 1fr;
-  }
-
   .section-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  /*
+    Disk/ağ satırları tek sütuna inmiyor: başlık satırı da tek sütuna inince değerlerden
+    kopuyor ve "hangi sayı neydi" okunamıyordu. Sütunlar korunup yazı/boşluk daraltılıyor.
+  */
+  .mini-row {
+    gap: 8px;
+    padding: 9px 10px;
+    font-size: 0.82rem;
+  }
+
+  .mini-row span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .disk-row {
+    grid-template-columns: minmax(0, 1.2fr) 0.7fr 0.9fr;
+  }
+
+  /* "Toplam" sütunu gizlenir: indir+yükle toplamıdır, iki sütunu da ekranda tutmak
+     türetilebilir bir sayıyı göstermekten önemli. */
+  .network-row {
+    grid-template-columns: minmax(0, 1.1fr) 0.9fr 0.9fr;
+  }
+
+  .network-row > :nth-child(4) {
+    display: none;
+  }
+}
+
+/* Ölçer halkaları: alt alta üç 220px halka yerine yan yana üç küçük halka →
+   CPU/RAM/disk tek bakışta okunur (olay akışının "kaynak tüketimini oku" adımı). */
+@media (max-width: 700px) {
+  .meter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .meter-card {
+    padding: 8px;
+    border-radius: var(--radius-md);
+  }
+
+  .meter-ring {
+    width: min(112px, 100%);
+    padding: 8px;
+  }
+
+  .meter-core {
+    gap: 2px;
+  }
+
+  .meter-core span {
+    font-size: 0.56rem;
+    letter-spacing: 0.02em;
+  }
+
+  .meter-core strong {
+    font-size: clamp(0.9rem, 4.4vw, 1.15rem);
+  }
+
+  /* Aynı bilgi hemen aşağıdaki Diskler tablosunda var. */
+  .meter-core small {
+    display: none;
+  }
+
+  .meter-spark {
+    height: 22px;
+    margin-top: 8px;
+  }
+
+  .info-card {
+    padding: 12px;
+  }
+
+  .net-legend {
+    gap: 12px;
+    font-size: 0.74rem;
+  }
+}
+
+.proc-table {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.proc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) 0.6fr 1fr 0.8fr 0.8fr;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+
+.proc-row.head {
+  border: 0;
+  background: transparent;
+  padding-bottom: 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.proc-owner {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.proc-owner strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proc-owner small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proc-num {
+  position: relative;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.86rem;
+}
+
+/* CPU çubuğu satırın arkasında ince bir dolgu: sıralama değişse de göz oranı yakalar. */
+.proc-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
+}
+
+.proc-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--fill, 0%);
+  border-radius: 999px;
+  background: var(--ok-1);
+}
+
+.proc-bar.medium::after {
+  background: #e0a500;
+}
+
+.proc-bar.high::after {
+  background: var(--danger-1);
+}
+
+.compact-select {
+  width: auto;
+}
+
+/*
+  Canlı süreç tablosu telefonda: PID ve çalışma süresi gizlenir (PID telefondan zaten
+  kullanılamaz, süre teşhis için ikincil), SAHİP + CPU + BELLEK kalır — "sunucuyu ne yiyor"
+  sorusunun cevabı bu üçü. CPU çubuğu da korunur.
+*/
+@media (max-width: 720px) {
+  .proc-row {
+    grid-template-columns: minmax(0, 1.7fr) 0.8fr 0.9fr;
+    gap: 8px;
+    padding: 8px 10px 10px;
+  }
+
+  .proc-row > :nth-child(2),
+  .proc-row > :nth-child(5) {
+    display: none;
+  }
+
+  .proc-num {
+    font-size: 0.8rem;
+  }
+
+  .proc-owner strong {
+    font-size: 0.86rem;
+  }
+
+  .proc-owner small {
+    font-size: 0.68rem;
+  }
+
+  .compact-select {
+    min-width: 140px;
+  }
+
+  .row-actions {
+    width: 100%;
   }
 }
 </style>

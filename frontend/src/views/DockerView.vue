@@ -47,7 +47,7 @@
             <button v-else class="secondary compact row-button" :disabled="busy" @click="action(c.id, 'stop')">{{ t("panel.docker.stop") }}</button>
             <button class="secondary compact row-button" :disabled="busy" @click="action(c.id, 'restart')">{{ t("panel.docker.restart") }}</button>
             <button class="secondary compact row-button" :disabled="busy" @click="showLogs(c.id)">{{ t("panel.docker.logs") }}</button>
-            <button class="secondary compact row-button danger" :disabled="busy" @click="removeContainer(c.id)">{{ t("panel.docker.remove") }}</button>
+            <button class="secondary compact row-button danger" :disabled="busy" @click="removeContainer(c)">{{ t("panel.docker.remove") }}</button>
           </div>
         </div>
         <p v-if="workspace.containers.length === 0" class="empty-state">{{ t("panel.docker.noContainers") }}</p>
@@ -72,7 +72,7 @@
           <strong>{{ img.repository }}</strong>
           <span>{{ img.tag }}</span>
           <span class="cell-muted">{{ img.size }}</span>
-          <button class="secondary compact row-button danger" :disabled="busy" @click="removeImage(img.id)">{{ t("panel.docker.remove") }}</button>
+          <button class="secondary compact row-button danger" :disabled="busy" @click="removeImage(img)">{{ t("panel.docker.remove") }}</button>
         </div>
         <p v-if="workspace.images.length === 0" class="empty-state">{{ t("panel.docker.noImages") }}</p>
       </div>
@@ -119,11 +119,15 @@ import {
   removeDockerContainer,
   removeDockerImage,
   runDockerContainer,
+  type DockerContainer,
+  type DockerImage,
   type DockerWorkspace
 } from "../api/docker";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const workspace = ref<DockerWorkspace | null>(null);
 const tab = ref<"containers" | "images" | "run">("containers");
 const loading = ref(false);
@@ -153,10 +157,25 @@ async function action(id: string, kind: "start" | "stop" | "restart") {
   });
 }
 
-async function removeContainer(id: string) {
-  if (!window.confirm(t("panel.docker.confirmRemove"))) return;
-  await run2(async () => {
-    workspace.value = await removeDockerContainer(id);
+async function removeContainer(container: DockerContainer) {
+  const name = container.name || container.id.slice(0, 12);
+  const impact = [
+    `${t("panel.docker.name")}: ${name}`,
+    `${t("panel.docker.image")}: ${container.image}`,
+    `${t("panel.docker.ports")}: ${container.ports || "—"}`
+  ];
+
+  // Yüksek riskli onay: konteyner ve içindeki yazılabilir katman gider → konteyner adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.removeContainerTitle", { name }),
+    message: t("panel.docker.confirmRemove"),
+    impact,
+    requireText: name,
+    action: async () => {
+      await run2(async () => {
+        workspace.value = await removeDockerContainer(container.id);
+      });
+    },
   });
 }
 
@@ -175,10 +194,25 @@ async function pull() {
   });
 }
 
-async function removeImage(id: string) {
-  if (!window.confirm(t("panel.docker.confirmRemove"))) return;
-  await run2(async () => {
-    workspace.value = await removeDockerImage(id);
+async function removeImage(image: DockerImage) {
+  const reference = image.tag ? `${image.repository}:${image.tag}` : image.repository;
+  const impact = [
+    `${t("panel.docker.repository")}: ${image.repository}`,
+    `${t("panel.docker.tag")}: ${image.tag || "—"}`,
+    `${t("panel.docker.size")}: ${image.size || "—"}`
+  ];
+
+  // Yüksek riskli onay: imaj sunucudan silinir (yeniden çekilmesi gerekir) → imaj adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.removeImageTitle", { name: reference }),
+    message: t("panel.docker.confirmRemove"),
+    impact,
+    requireText: reference,
+    action: async () => {
+      await run2(async () => {
+        workspace.value = await removeDockerImage(image.id);
+      });
+    },
   });
 }
 

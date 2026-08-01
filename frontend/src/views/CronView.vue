@@ -114,9 +114,11 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, type ScheduledTask } from "../api/cron";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const authStore = useAuthStore();
 // Müşteri/bayi yalnızca URL görevi kurar (backend de zorlar); tip seçici yalnız admin'de görünür.
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -173,17 +175,30 @@ async function saveTask() {
 }
 
 async function removeTask(name: string) {
-  if (!window.confirm(t("panel.tasks.confirmDelete"))) return;
-  deletingName.value = name;
-  try {
-    await deleteScheduledTask(name);
-    await refresh();
-    showNotice(t("panel.tasks.deleted"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    deletingName.value = "";
+  const task = tasks.value.find((item) => item.name === name);
+  const impact = [`${t("panel.tasks.name")}: ${name}`];
+  if (task?.command) {
+    impact.push(`${t("panel.tasks.command")}: ${task.command}`);
   }
+
+  // Normal onay: tek bir zamanlanmış görev silinir, veri/dosya kaybı yok → ad yazdırmaya gerek yok.
+  await confirm({
+    title: t("panel.confirm.deleteTaskTitle", { name }),
+    message: t("panel.tasks.confirmDelete"),
+    impact,
+    action: async () => {
+      deletingName.value = name;
+      try {
+        await deleteScheduledTask(name);
+        await refresh();
+        showNotice(t("panel.tasks.deleted"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        deletingName.value = "";
+      }
+    },
+  });
 }
 
 function defaultForm() {

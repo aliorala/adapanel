@@ -1,0 +1,466 @@
+<template>
+  <section class="consumers" :aria-busy="loading ? 'true' : 'false'">
+    <div class="consumers-head">
+      <div class="consumers-title">
+        <strong>{{ label("title", "Şu an kim kullanıyor?") }}</strong>
+        <small class="meta">
+          {{ label("subtitle", "{name} sürecinin içinde çalışan işlemler", { name: displayName }) }}
+        </small>
+      </div>
+      <span v-if="snapshot && snapshot.available" class="meta consumers-count">
+        {{ label("count", "{n} aktif", { n: snapshot.totalCount }) }}
+      </span>
+    </div>
+
+    <!-- Elimizde eski bir liste varken bir tur başarısız olduysa listeyi SİLMEYİZ (titreme olmasın),
+         ama kullanıcıyı bilgilendiririz: baktığı satırlar bayat olabilir. -->
+    <p v-if="failed && snapshot" class="meta consumers-stale">
+      {{ label("stale", "Son yenileme başarısız oldu; liste bayat olabilir.") }}
+    </p>
+
+    <!-- Henüz hiç veri yok: ya ilk tur sürüyor ya da hata aldık. (Sekme arka plandayken de buraya
+         düşeriz — "aktif sorgu yok" DEMEYİZ, çünkü ölçüm hiç yapılmadı; yanlış güven vermemeli.) -->
+    <p v-if="!snapshot && failed" class="notice error">{{ label("failed", "Tüketici listesi alınamadı.") }}</p>
+    <p v-else-if="!snapshot" class="meta" role="status">{{ label("loading", "Okunuyor…") }}</p>
+
+    <!-- Kurulu değil: bu bir HATA DEĞİL. Sakin, bilgilendirici mesaj. -->
+    <p v-else-if="!snapshot.installed" class="field-hint">
+      {{ label("notInstalled", "{name} bu sunucuda kurulu değil.", { name: displayName }) }}
+    </p>
+
+    <p v-else-if="snapshot.statusCode === 'credentials_missing'" class="field-hint">
+      {{ label("credentialsMissing", "{name} kurulu ama panel ona bağlanamıyor: yönetici parolası kayıtlı değil. Veritabanları ekranından kimlik bilgisini kaydedin.", { name: displayName }) }}
+    </p>
+
+    <p v-else-if="!snapshot.available" class="notice warn">
+      {{ label("unavailable", "{name} şu an sorgulanamadı. Servis durmuş olabilir; liste boş olduğu için değil, okunamadığı için görünmüyor.", { name: displayName }) }}
+    </p>
+
+    <!-- Boş durum: sakin bir cümle; "sorun yok" demek burada doğrudur. -->
+    <p v-else-if="rows.length === 0" class="meta consumers-empty">
+      {{ isWeb
+        ? label("emptyWeb", "Şu an işlenen istek yok.")
+        : label("emptyDb", "Şu an aktif sorgu yok.") }}
+    </p>
+
+    <div v-else class="consumer-table">
+      <div class="consumer-row head" aria-hidden="true">
+        <span>{{ label("site", "Site") }}</span>
+        <span>{{ label("duration", "Süre") }}</span>
+        <span>{{ label("state", "Durum") }}</span>
+        <span>{{ isWeb ? label("url", "İstek") : label("query", "Sorgu") }}</span>
+      </div>
+
+      <div
+        v-for="row in rows"
+        :key="row.key"
+        :class="['consumer-row', { slow: row.slow }]">
+        <div class="consumer-who">
+          <strong :title="row.who">{{ row.who }}</strong>
+          <small class="meta">{{ row.whoDetail }}</small>
+        </div>
+
+        <span class="consumer-duration">
+          <span v-if="row.slow" class="slow-dot" :title="label('slowHint', '5 saniyeden uzun sürüyor')">!</span>
+          {{ row.durationText }}
+        </span>
+
+        <span class="consumer-state">{{ row.stateText || "—" }}</span>
+
+        <div class="consumer-statement">
+          <code :title="row.statement">{{ row.statement || "—" }}</code>
+          <small v-if="row.redacted" class="meta">
+            {{ label("redacted", "parola içerdiği için gizlendi") }}
+          </small>
+        </div>
+      </div>
+    </div>
+
+    <p v-if="rows.length > 0" class="field-hint consumers-foot">
+      {{ isWeb
+        ? label("footWeb", "IIS'te o an işlenen istekler. Uzun süren satır asılı kalmış bir isteği gösterir.")
+        : label("footDb", "Uykudaki (boşta) bağlantılar listelenmez; yalnız gerçekten çalışan sorgular görünür.") }}
+    </p>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import {
+  getResourceConsumers,
+  type ConsumerSource,
+  type ResourceConsumerSnapshot
+} from "../api/consumers";
+
+/**
+ * Paylaşılan bir sürecin İÇİNİ gösteren liste.
+ *
+ * NEDEN VAR: süreç izleyici "MariaDB %42 CPU" der ve orada durur — MySQL tek süreçtir, tüm siteler
+ * onu paylaşır, o yüzden işletim sistemi hangi sitenin sorgusu olduğunu ASLA söyleyemez. Bu bileşen
+ * motorun kendi oturum listesini gösterir ve her satırı -mümkünse- bir SİTEYE bağlar. "Site" sütunu
+ * bu ekranın asıl değeridir: teknik bilmeyen biri de "alioral.xyz 12 saniyedir sorgu çalıştırıyor"
+ * cümlesini okuyabilmeli.
+ */
+const props = withDefaults(
+  defineProps<{
+    source: ConsumerSource;
+    /** Kaç satır çekilsin (sunucu toplam sayıyı ayrıca bildirir). */
+    limit?: number;
+    /** Yenileme aralığı (ms). 0 verilirse otomatik yenileme kapanır. */
+    intervalMs?: number;
+    /** Bu eşiğin üstündeki satırlar dikkat çeker (saniye). */
+    slowSeconds?: number;
+  }>(),
+  { limit: 50, intervalMs: 3000, slowSeconds: 5 }
+);
+
+const { t } = useI18n();
+
+const snapshot = ref<ResourceConsumerSnapshot | null>(null);
+const loading = ref(false);
+const failed = ref(false);
+
+// Aynı anda tek istek: yavaş sunucuda 3 sn'lik zamanlayıcı istekleri ÜST ÜSTE YIĞMASIN.
+let inFlight = false;
+let timer: number | null = null;
+let controller: AbortController | null = null;
+// Kaynak değişince yolda olan eski yanıt yeni listeyi ezmesin.
+let requestId = 0;
+
+const isWeb = computed(() => props.source === "iis");
+
+const displayName = computed(() => {
+  if (snapshot.value?.displayName) {
+    return snapshot.value.displayName;
+  }
+  const fallbacks: Record<ConsumerSource, string> = {
+    mysql: "MySQL",
+    mariadb: "MariaDB",
+    postgresql: "PostgreSQL",
+    iis: "IIS"
+  };
+  return fallbacks[props.source] ?? props.source;
+});
+
+// i18n anahtarları başka bir ajanda eklenecek; anahtar henüz yoksa ham anahtar yerine TR metni göster
+// (SiteHealthStrip ile aynı kalıp — ekran anahtarlar gelmeden de okunabilir kalır).
+function label(suffix: string, fallback: string, params?: Record<string, unknown>): string {
+  const key = `panel.consumers.${suffix}`;
+  const translated = params ? t(key, params) : t(key);
+  return translated === key ? interpolate(fallback, params) : translated;
+}
+
+function interpolate(text: string, params?: Record<string, unknown>): string {
+  if (!params) {
+    return text;
+  }
+  return text.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in params ? String(params[name]) : match);
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return label("justStarted", "<1 sn");
+  }
+  if (seconds < 60) {
+    return label("seconds", "{n} sn", { n: seconds < 10 ? seconds.toFixed(1) : Math.round(seconds) });
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return label("minutes", "{n} dk", { n: minutes });
+  }
+  return label("hours", "{n} sa", { n: Math.floor(minutes / 60) });
+}
+
+const rows = computed(() => {
+  const data = snapshot.value;
+  if (!data || !data.available) {
+    return [];
+  }
+
+  return data.consumers.map((item, index) => {
+    // Site bilinmiyorsa teknik hedefe (veritabanı / app pool) düşeriz — asla boş satır göstermeyiz.
+    const who = item.siteName || item.target || label("unknownSite", "Bilinmeyen");
+    const detailParts = [
+      item.siteName && item.target && item.siteName !== item.target ? item.target : "",
+      item.user,
+      item.clientHost,
+      item.command
+    ].filter((part) => Boolean(part && part.trim()));
+
+    return {
+      key: `${item.connectionId || "row"}-${index}`,
+      who,
+      whoDetail: detailParts.join(" · "),
+      durationText: formatDuration(item.durationSeconds),
+      slow: item.durationSeconds >= props.slowSeconds,
+      stateText: item.state,
+      statement: item.statement,
+      redacted: item.redacted
+    };
+  });
+});
+
+async function load() {
+  // Sekme arka plandaysa sunucuyu boşuna yorma; önceki istek bitmeden yenisini gönderme.
+  if (inFlight || document.hidden) {
+    return;
+  }
+
+  const current = ++requestId;
+  inFlight = true;
+  loading.value = true;
+  controller = new AbortController();
+
+  try {
+    const result = await getResourceConsumers(props.source, props.limit, controller.signal);
+    if (current !== requestId) {
+      return;
+    }
+    snapshot.value = result;
+    failed.value = false;
+  } catch {
+    // Ağ/yetki hatası: son iyi listeyi silmeyiz (titreme olmasın), yalnız uyarı satırı çıkarırız.
+    if (current === requestId) {
+      failed.value = true;
+    }
+  } finally {
+    if (current === requestId) {
+      loading.value = false;
+    }
+    inFlight = false;
+  }
+}
+
+function startTimer() {
+  stopTimer();
+  if (props.intervalMs > 0) {
+    timer = window.setInterval(() => void load(), props.intervalMs);
+  }
+}
+
+function stopTimer() {
+  if (timer !== null) {
+    window.clearInterval(timer);
+    timer = null;
+  }
+}
+
+// Sekme geri gelince beklemeden tazele (aksi halde kullanıcı bayat listeye bakar).
+function onVisibilityChange() {
+  if (!document.hidden) {
+    void load();
+  }
+}
+
+watch(
+  () => props.source,
+  () => {
+    // Kaynak değişti: eski veriyi hemen bırak, uçuşan isteği iptal et.
+    controller?.abort();
+    requestId += 1;
+    inFlight = false;
+    snapshot.value = null;
+    failed.value = false;
+    void load();
+  }
+);
+
+onMounted(() => {
+  void load();
+  startTimer();
+  document.addEventListener("visibilitychange", onVisibilityChange);
+});
+
+onUnmounted(() => {
+  stopTimer();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  controller?.abort();
+});
+
+// Üst ekran isterse elle tazeleyebilsin (ör. "Yenile" düğmesi).
+defineExpose({ refresh: load });
+</script>
+
+<style scoped>
+.consumers {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.consumers-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.consumers-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.consumers-count {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.consumers-empty {
+  padding: 10px 2px;
+}
+
+.consumers-stale {
+  color: var(--warn-text);
+  font-size: 0.76rem;
+}
+
+/* Sütunlar: kim · süre · durum · sorgu. Sorgu sütunu esner, diğerleri sabit kalır. */
+.consumer-table {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.consumer-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) 76px minmax(90px, 0.8fr) minmax(0, 2.4fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  min-width: 0;
+}
+
+/* Zebra: başlık satırı 1. çocuktur, veri satırları 2'den başlar → tek/çift doğal olarak dönüşümlü.
+   ("nth-child(... of S)" bilinçli KULLANILMADI; eski tarayıcılarda desteklenmiyor. */
+.consumer-row:not(.head):nth-child(odd) {
+  background: var(--surface-1);
+}
+
+.consumer-row.head {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Uzun süren satır göze batsın: asıl aranan "kim asılı kalmış" satırı budur. */
+.consumer-row.slow {
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn-1) 35%, transparent);
+}
+
+.consumer-who {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.consumer-who strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+}
+
+.consumer-who small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+}
+
+.consumer-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.slow-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--warn-1);
+  color: #1b1300;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.consumer-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* Sorgu metni ASLA taşmaz: tek satır, kırpılır; tamamı title ipucunda. */
+.consumer-statement {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.consumer-statement code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.consumer-statement small {
+  font-size: 0.68rem;
+}
+
+.consumers-foot {
+  margin: 0;
+}
+
+/* Dar ekran: tablo satırı kart olur, başlık şeridi gizlenir. */
+@media (max-width: 720px) {
+  .consumer-row {
+    grid-template-columns: 1fr auto;
+    gap: 4px 8px;
+    padding: 9px;
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+  }
+
+  .consumer-row.head {
+    display: none;
+  }
+
+  .consumer-row:not(.head):nth-child(odd) {
+    background: transparent;
+  }
+
+  .consumer-who {
+    grid-column: 1;
+  }
+
+  .consumer-duration {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .consumer-state,
+  .consumer-statement {
+    grid-column: 1 / -1;
+  }
+}
+</style>

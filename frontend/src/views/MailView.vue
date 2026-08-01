@@ -575,6 +575,7 @@ import {
   type RdnsCheck
 } from "../api/mail";
 import { toReachableUrl } from "../utils/url";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -583,6 +584,7 @@ import { useSitesStore } from "../stores/sites";
 const props = defineProps<{ domain?: string }>();
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 // Sunucu seviyesi mail araçları (dinleyiciler, rDNS, sertifika, spam) yalnız admin'e gösterilir;
@@ -877,11 +879,29 @@ async function configure() {
 }
 
 async function removeDomain() {
-  if (!selectedDomain.value || !window.confirm(t("panel.mail.confirmDeleteDomain"))) return;
-  await run(async () => {
-    apply(await deleteMailDomain(selectedDomain.value));
-    selectedDomain.value = "";
-    showNotice(t("panel.mail.domainDeleted"), false);
+  const domain = selectedDomain.value;
+  if (!domain) return;
+
+  const impact = [
+    `${t("panel.mail.domainName")}: ${domain}`,
+    `${t("panel.mail.mailboxes")}: ${workspace.value?.accounts.length ?? 0}`,
+    `${t("panel.mail.aliases")}: ${workspace.value?.aliases.length ?? 0}`,
+    `${t("panel.mail.lists")}: ${workspace.value?.lists.length ?? 0}`
+  ];
+
+  // Yüksek riskli onay: alan adıyla birlikte TÜM posta kutuları ve içindeki postalar silinir.
+  await confirm({
+    title: t("panel.confirm.deleteMailDomainTitle", { name: domain }),
+    message: t("panel.mail.confirmDeleteDomain"),
+    impact,
+    requireText: domain,
+    action: async () => {
+      await run(async () => {
+        apply(await deleteMailDomain(domain));
+        selectedDomain.value = "";
+        showNotice(t("panel.mail.domainDeleted"), false);
+      });
+    },
   });
 }
 
@@ -901,10 +921,23 @@ async function addAccount() {
 }
 
 async function removeAccount(address: string) {
-  if (!window.confirm(t("panel.mail.confirmDelete"))) return;
-  await run(async () => {
-    apply(await deleteMailAccount(address));
-    showNotice(t("panel.mail.mailboxDeleted"), false);
+  const account = workspace.value?.accounts.find((item) => item.address === address) ?? null;
+  const impact = [`${t("panel.mail.mailboxes")}: ${address}`];
+  if (account) {
+    impact.push(`${t("panel.mail.quota")}: ${account.currentSizeMB} / ${account.maxSizeMB} MB`);
+  }
+
+  // Normal onay: tek posta kutusu (dar kapsam) → ad yazdırmaya gerek yok.
+  await confirm({
+    title: t("panel.confirm.deleteMailboxTitle", { name: address }),
+    message: t("panel.mail.confirmDelete"),
+    impact,
+    action: async () => {
+      await run(async () => {
+        apply(await deleteMailAccount(address));
+        showNotice(t("panel.mail.mailboxDeleted"), false);
+      });
+    },
   });
 }
 
@@ -964,10 +997,23 @@ async function addAlias() {
 }
 
 async function removeAlias(address: string) {
-  if (!window.confirm(t("panel.mail.confirmDelete"))) return;
-  await run(async () => {
-    apply(await deleteMailAlias(address));
-    showNotice(t("panel.mail.aliasDeleted"), false);
+  const alias = workspace.value?.aliases.find((item) => item.address === address) ?? null;
+  const impact = [`${t("panel.mail.aliasAddress")}: ${address}`];
+  if (alias?.target) {
+    impact.push(`${t("panel.mail.aliasTarget")}: ${alias.target}`);
+  }
+
+  // Normal onay: yalnız yönlendirme kaydı silinir, hedef posta kutusu etkilenmez.
+  await confirm({
+    title: t("panel.confirm.deleteAliasTitle", { name: address }),
+    message: t("panel.mail.confirmDelete"),
+    impact,
+    action: async () => {
+      await run(async () => {
+        apply(await deleteMailAlias(address));
+        showNotice(t("panel.mail.aliasDeleted"), false);
+      });
+    },
   });
 }
 
@@ -999,10 +1045,23 @@ async function editListRecipients(address: string, current: string[]) {
 }
 
 async function removeList(address: string) {
-  if (!window.confirm(t("panel.mail.confirmDelete"))) return;
-  await run(async () => {
-    apply(await deleteMailList(address));
-    showNotice(t("panel.mail.listDeleted"), false);
+  const list = workspace.value?.lists.find((item) => item.address === address) ?? null;
+  const impact = [`${t("panel.mail.listAddress")}: ${address}`];
+  if (list?.recipients.length) {
+    impact.push(`${t("panel.mail.listRecipients")}: ${list.recipients.length}`);
+  }
+
+  // Normal onay: yalnız dağıtım listesi silinir, alıcıların posta kutuları etkilenmez.
+  await confirm({
+    title: t("panel.confirm.deleteMailListTitle", { name: address }),
+    message: t("panel.mail.confirmDelete"),
+    impact,
+    action: async () => {
+      await run(async () => {
+        apply(await deleteMailList(address));
+        showNotice(t("panel.mail.listDeleted"), false);
+      });
+    },
   });
 }
 

@@ -552,3 +552,50 @@ button:disabled {
     align-items: flex-start;
   }
 }
+
+/* ==========================================================================
+   Dar ekran (telefon) ortak kuralları.
+   Hedef PANELİN TAMAMINI telefona sığdırmak değil: bir şey bozulduğunda
+   kullanıcının telefondan "gör → düzelt → kaynağı oku" yolunu yürüyebilmesi.
+   Buradaki kurallar her bileşende tekrarlanmasın diye ortak tutulur ve
+   yalnız max-width sorgularının içinde yaşar (masaüstü birebir aynı kalır).
+   ========================================================================== */
+
+/* Açılır menü / çekmece açıkken arka plan kaymasın. Aynı anda birden çok
+   katman açılabildiği için bileşenler sayaçla (data-ap-scroll-lock) çalışır;
+   kilit yalnız dar ekranda uygulanır ki masaüstünde kaydırma çubuğu
+   kaybolup yerleşim zıplamasın. */
+@media (max-width: 900px) {
+  html.ap-scroll-lock,
+  html.ap-scroll-lock body {
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 720px) {
+  /* Parmak hedefi: olay anındaki düğmelere (yeniden başlat / onar / git)
+     ıskalamadan basılabilmeli. */
+  button,
+  .link-btn {
+    min-height: 40px;
+  }
+
+  button.compact {
+    min-height: 38px;
+    padding: 7px 11px;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 40px;
+  }
+
+  /* Uzun yol/host/hata metinleri satırı taşırıp sayfayı yatay kaydırmasın. */
+  .notice,
+  .cell-main,
+  .cell-muted,
+  .meta {
+    overflow-wrap: anywhere;
+  }
+}

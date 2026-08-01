@@ -229,6 +229,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import AppStoreView from "./AppStoreView.vue";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSoftwareStore, type ComponentManifestItem, type InstalledComponent } from "../stores/software";
 
@@ -237,6 +238,7 @@ type WorkspaceKey = "applications" | "components";
 type ManifestRow = ComponentManifestItem & { installed: InstalledComponent | null };
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
 
 const notice = ref("");
@@ -374,23 +376,44 @@ async function installDefaultStack() {
 
 async function removeComponent(componentId: string) {
   const installed = installedRows.value.find((item) => item.componentId === componentId);
-  if (installed?.isSystemDetected) {
-    const confirmationKey = componentId === "vc-redist-x64"
-      ? "panel.software.confirmSharedDetectedRemove"
-      : "panel.software.confirmDetectedRemove";
-    if (!window.confirm(t(confirmationKey, { name: installed.displayName }))) {
-      return;
-    }
-  } else if (!window.confirm(t("panel.software.confirmRemove"))) {
-    return;
+  const displayName = installed?.displayName || componentId;
+  const message = installed?.isSystemDetected
+    ? t(
+        componentId === "vc-redist-x64"
+          ? "panel.software.confirmSharedDetectedRemove"
+          : "panel.software.confirmDetectedRemove",
+        { name: displayName }
+      )
+    : t("panel.software.confirmRemove");
+
+  const impact: string[] = [];
+  if (installed?.version) {
+    impact.push(`${displayName} ${installed.version}`);
+  }
+  if (installed?.serviceName) {
+    impact.push(`${t("panel.confirm.impactService")}: ${installed.serviceName}`);
+  }
+  if (installed?.installDir) {
+    impact.push(`${t("panel.confirm.impactFiles")}: ${installed.installDir}`);
   }
 
-  try {
-    await softwareStore.removeComponent(componentId);
-    showNotice(t("software.remove.completed"), false);
-  } catch (error) {
-    showApiError(error);
-  }
+  // Yüksek riskli onay: bileşen kaldırma (sistem geneli) → bileşen adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.removeComponentTitle", { name: displayName }),
+    message,
+    impact,
+    requireText: displayName,
+    confirmLabel: t("panel.confirm.remove"),
+    busyLabel: t("panel.confirm.removing"),
+    action: async () => {
+      try {
+        await softwareStore.removeComponent(componentId);
+        showNotice(t("software.remove.completed"), false);
+      } catch (error) {
+        showApiError(error);
+      }
+    },
+  });
 }
 
 function componentCategory(item: ComponentManifestItem): CategoryKey {

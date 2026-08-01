@@ -67,9 +67,11 @@ import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import { backupSite, downloadBackup, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
@@ -161,19 +163,34 @@ async function download(record: BackupRecord) {
 }
 
 async function restore(record: BackupRecord) {
-  // Canlı siteyi geri yükleme yıkıcıdır — onay al (profesyonel paneller gibi).
-  if (!window.confirm(t("panel.backup.restoreConfirm"))) {
-    return;
-  }
-  restoringId.value = record.id;
-  try {
-    await restoreBackup(record.id, "");
-    showNotice(t("panel.backup.restored"), false);
-  } catch (error) {
-    showNotice(extractApiMessage(error), true);
-  } finally {
-    restoringId.value = "";
-  }
+  // Canlı siteyi geri yükleme yıkıcıdır — YÜKSEK RİSKLİ onay: üzerine yazılacak site adı yazılmadan devam edilemez.
+  const target = record.source || siteName.value;
+  const impact = [
+    `${t("panel.files.siteLabel")}: ${target}`,
+    `${t("panel.backup.name")}: ${record.name}`,
+    `${t("panel.backup.size")}: ${formatSize(record.size)}`,
+    `${t("panel.backup.createdAt")}: ${formatDate(record.createdAtUtc)}`
+  ];
+
+  await confirm({
+    title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
+    message: t("panel.backup.restoreConfirm"),
+    impact,
+    requireText: target,
+    confirmLabel: t("panel.backup.restore"),
+    busyLabel: t("panel.backup.restoring"),
+    action: async () => {
+      restoringId.value = record.id;
+      try {
+        await restoreBackup(record.id, "");
+        showNotice(t("panel.backup.restored"), false);
+      } catch (error) {
+        showNotice(extractApiMessage(error), true);
+      } finally {
+        restoringId.value = "";
+      }
+    },
+  });
 }
 
 function showNotice(message: string, isError: boolean) {

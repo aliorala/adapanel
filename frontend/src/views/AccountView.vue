@@ -1,0 +1,219 @@
+<template>
+  <section class="panel module-shell account-workspace">
+    <div class="module-head">
+      <div>
+        <h2>{{ t("panel.settings.tab.account") }}</h2>
+        <p class="meta">{{ authStore.session?.user?.userName }} · {{ authStore.session?.user?.email }}</p>
+      </div>
+    </div>
+
+    <section class="form-surface settings-section">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.account.title") }}</h3>
+          <p class="meta">
+            {{ t("panel.account.status") }}:
+            {{ authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
+          </p>
+        </div>
+        <span :class="['status-pill', authStore.session?.user?.isTwoFactorEnabled ? 'ok' : 'warn']">
+          {{ authStore.session?.user?.isTwoFactorEnabled ? t("panel.account.enabled") : t("panel.account.disabled") }}
+        </span>
+      </div>
+
+      <div v-if="authStore.twoFactorSetup" class="form-grid two">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.account.manualKey") }}</span>
+          <input :value="authStore.twoFactorSetup.manualEntryKey" readonly />
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.account.verificationCode") }}</span>
+          <input v-model="twoFactorVerificationCode" inputmode="numeric" maxlength="8" />
+        </label>
+        <label class="stacked-field settings-wide-field">
+          <span class="field-label">{{ t("panel.account.provisioningUri") }}</span>
+          <textarea :value="authStore.twoFactorSetup.provisioningUri" rows="3" readonly />
+        </label>
+        <div class="row-actions settings-wide-field">
+          <button class="compact" @click="confirmTwoFactor">{{ t("panel.account.confirm2fa") }}</button>
+        </div>
+      </div>
+
+      <div v-else class="settings-inline-action">
+        <button v-if="!(authStore.session?.user?.isTwoFactorEnabled ?? false)" class="compact" @click="startTwoFactor">
+          {{ t("panel.account.start2fa") }}
+        </button>
+        <template v-else>
+          <button class="secondary compact" @click="regenerateRecoveryCodes">{{ t("panel.account.regenerateRecovery") }}</button>
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.account.disablePassword") }}</span>
+            <input v-model="disableTwoFactorPassword" type="password" minlength="12" />
+          </label>
+          <button class="danger compact" @click="disableTwoFactor">{{ t("panel.account.disable2fa") }}</button>
+        </template>
+      </div>
+
+      <div v-if="recoveryCodes.length" class="recovery-codes">
+        <strong>{{ t("panel.account.recoveryTitle") }}</strong>
+        <p class="meta">{{ t("panel.account.recoveryHint") }}</p>
+        <ul class="recovery-list">
+          <li v-for="rc in recoveryCodes" :key="rc">{{ rc }}</li>
+        </ul>
+        <div class="row-actions">
+          <button class="secondary compact" @click="copyRecoveryCodes">{{ t("panel.account.recoveryCopy") }}</button>
+          <button class="secondary compact" @click="recoveryCodes = []">{{ t("panel.common.cancel") }}</button>
+        </div>
+      </div>
+    </section>
+  </section>
+</template>
+
+<script setup lang="ts">
+// "Hesabım": oturum açan kullanıcının kendi hesap güvenliği (iki adımlı doğrulama kurulumu,
+// kurtarma kodları, 2FA kapatma). Daha önce SetupWizardView > Ayarlar > Hesap sekmesindeydi;
+// davranış birebir korunmuştur.
+import { ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+
+// Bildirimler üst bandda (MainLayout > banner) gösterilsin diye kabuk bileşene iletilir.
+const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
+
+const i18n = useI18n();
+const t = (key: string) => {
+  try {
+    const value = i18n.t(key);
+    if (typeof value !== "string") {
+      console.error("Unexpected i18n value", key, value);
+      return key;
+    }
+
+    return value;
+  } catch (error) {
+    console.error("Failed i18n key", key, error);
+    return key;
+  }
+};
+
+const authStore = useAuthStore();
+
+const twoFactorVerificationCode = ref("");
+const disableTwoFactorPassword = ref("");
+const recoveryCodes = ref<string[]>([]);
+
+async function startTwoFactor() {
+  try {
+    await authStore.beginTwoFactorSetup();
+    notify(t("panel.account.started"), false);
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  }
+}
+
+async function confirmTwoFactor() {
+  try {
+    recoveryCodes.value = await authStore.confirmTwoFactorSetup(twoFactorVerificationCode.value);
+    twoFactorVerificationCode.value = "";
+    notify(t("panel.account.enabledMessage"), false);
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  }
+}
+
+async function regenerateRecoveryCodes() {
+  try {
+    recoveryCodes.value = await authStore.regenerateRecoveryCodes();
+    notify(t("panel.account.recoveryRegenerated"), false);
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  }
+}
+
+async function copyRecoveryCodes() {
+  try {
+    await navigator.clipboard.writeText(recoveryCodes.value.join("\n"));
+    notify(t("panel.account.recoveryCopied"), false);
+  } catch {
+    notify(t("panel.account.recoveryCopyFailed"), true);
+  }
+}
+
+async function disableTwoFactor() {
+  try {
+    await authStore.disableTwoFactor(disableTwoFactorPassword.value);
+    disableTwoFactorPassword.value = "";
+    recoveryCodes.value = [];
+    notify(t("panel.account.disabledMessage"), false);
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  }
+}
+
+function notify(message: string, isError: boolean) {
+  emit("notify", message, isError);
+}
+
+function resolveApiMessage(error: unknown): string {
+  const key = extractApiMessage(error);
+  const translated = t(key);
+  const message = translated === key ? key : translated;
+  const details = extractApiDetails(error);
+  return details ? `${message}\n\n${details}` : message;
+}
+</script>
+
+<style scoped>
+.account-workspace {
+  align-content: start;
+}
+
+.settings-section {
+  display: grid;
+  gap: 12px;
+}
+
+.section-head,
+.settings-inline-action {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-inline-action {
+  justify-content: flex-start;
+  align-items: end;
+}
+
+.settings-inline-action .stacked-field {
+  min-width: min(340px, 100%);
+}
+
+.settings-inline-action button,
+.row-actions button {
+  width: auto;
+}
+
+.settings-wide-field {
+  grid-column: 1 / -1;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+}
+
+input,
+select,
+textarea,
+button {
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .settings-wide-field {
+    grid-column: auto;
+  }
+}
+</style>

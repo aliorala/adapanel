@@ -12,6 +12,41 @@
       <button class="ub-action" @click="go('updates')">{{ t("panel.dashboard.update.action") }}</button>
     </section>
 
+    <!--
+      Dikkat özeti: panele girer girmez "N site · N güncelleme bekliyor · N sertifika yakında
+      bitiyor" görünür. Tıklanan parça ya ilgili ekrana ya da dikkat çekmecesine götürür.
+    -->
+    <section v-if="attention" :class="['panel', 'attention-card', attentionTone]">
+      <div class="ac-head">
+        <span class="tile-label">{{ t("panel.attention.summaryTitle") }}</span>
+        <button class="secondary compact" @click="go('attention')">{{ t("panel.attention.viewAll") }}</button>
+      </div>
+
+      <div class="ac-chips">
+        <button type="button" class="ac-chip" :disabled="!can('sites')" @click="can('sites') && go('sites')">
+          <strong>{{ sitesCount }}</strong>
+          <span>{{ t("panel.attention.summarySites") }}</span>
+        </button>
+
+        <button type="button" class="ac-chip" @click="go(pendingUpdateCount ? 'updates' : 'attention')">
+          <strong>{{ pendingUpdateCount }}</strong>
+          <span>{{ t("panel.attention.summaryUpdates") }}</span>
+        </button>
+
+        <button type="button" class="ac-chip" :disabled="!can('sites')" @click="can('sites') && go('sites')">
+          <strong>{{ expiringCertificateCount }}</strong>
+          <span>{{ t("panel.attention.summaryCertificates") }}</span>
+        </button>
+
+        <button type="button" class="ac-chip alert" @click="go('attention')">
+          <strong>{{ attention.criticalCount + attention.warningCount }}</strong>
+          <span>{{ t("panel.attention.summaryAlerts") }}</span>
+        </button>
+      </div>
+
+      <p v-if="attention.totalCount === 0" class="ac-clear">{{ t("panel.attention.emptyTitle") }}</p>
+    </section>
+
     <section class="panel quick-actions-panel">
       <span class="tile-label">{{ t("panel.dashboard.quickActions") }}</span>
       <div class="quick-actions">
@@ -227,6 +262,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getServerIpAddresses } from "../api/system";
 import type { UpdateStatus } from "../api/update";
+import type { AttentionSummary } from "../api/attention";
 
 type DiskUsage = {
   name: string;
@@ -282,9 +318,27 @@ const props = defineProps<{
   allowedSections: string[];
   // Panel self-update durumu (yalnızca admin doldurur; null ise banner gizli).
   panelUpdate: UpdateStatus | null;
+  // Dikkat özeti (yalnızca admin doldurur; null ise özet kartı gizli).
+  attention?: AttentionSummary | null;
 }>();
 
 const { t } = useI18n();
+
+// Bekleyen güncellemeler: bileşen güncellemeleri ("software") + panel güncellemesi ("updates").
+const pendingUpdateCount = computed(() => (props.attention?.items ?? [])
+  .filter((item) => item.section === "software" || item.section === "updates").length);
+
+// Süresi dolan/dolmak üzere olan sertifikalar (Danışman'ın SSL maddeleri).
+const expiringCertificateCount = computed(() => (props.attention?.items ?? [])
+  .filter((item) => item.titleKey.startsWith("advisor.ssl")).length);
+
+const attentionTone = computed(() => {
+  if (!props.attention || props.attention.criticalCount > 0) {
+    return "critical";
+  }
+
+  return props.attention.warningCount > 0 ? "warning" : "calm";
+});
 
 // profesyonel panel benzeri: hizli erisim kartlari + ozet kutulari ilgili bolume gider.
 const emit = defineEmits<{ (event: "navigate", sectionId: string): void }>();
@@ -603,6 +657,83 @@ function formatTimeSpan(value: string): string {
   gap: 10px;
 }
 
+/* Dikkat özeti kartı: panele girer girmez görünen tek satırlık durum. */
+.attention-card {
+  display: grid;
+  gap: 10px;
+}
+
+.attention-card.critical {
+  border-color: color-mix(in srgb, var(--danger-1) 45%, var(--panel-border));
+}
+
+.attention-card.warning {
+  border-color: color-mix(in srgb, var(--warn-1) 40%, var(--panel-border));
+}
+
+.attention-card.calm {
+  border-color: color-mix(in srgb, var(--ok-1) 35%, var(--panel-border));
+}
+
+.ac-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ac-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.ac-chip {
+  display: grid;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text-strong);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ac-chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.ac-chip:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent-1) 45%, transparent);
+}
+
+.ac-chip strong {
+  font-size: 1.4rem;
+  line-height: 1.1;
+}
+
+.ac-chip span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.attention-card.critical .ac-chip.alert strong {
+  color: var(--danger-1);
+}
+
+.attention-card.warning .ac-chip.alert strong {
+  color: var(--warn-1);
+}
+
+.ac-clear {
+  margin: 0;
+  color: var(--ok-1);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 /* "Yeni sürüm mevcut" uyarı bandı (yalnızca admin + guncelleme varsa). */
 .update-banner {
   display: flex;
@@ -778,15 +909,113 @@ function formatTimeSpan(value: string): string {
 }
 
 @media (max-width: 820px) {
-  .disk-row,
-  .network-row {
-    grid-template-columns: 1fr;
-  }
-
   .section-head,
   .audit-top {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  /*
+    Disk/ağ satırları dar ekranda TEK sütuna inmiyor: başlık satırı da tek sütuna inip
+    değerlerden koptuğu için "hangi sayı neydi" okunamıyordu. Bunun yerine sütunlar
+    korunup yazı/boşluk daraltılıyor — üç kısa değer 360px'e sığar.
+  */
+  .mini-row {
+    gap: 8px;
+    padding: 9px 10px;
+    font-size: 0.82rem;
+  }
+
+  .mini-row span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .disk-row {
+    grid-template-columns: minmax(0, 1.2fr) 0.7fr 0.9fr;
+  }
+
+  .network-row {
+    grid-template-columns: minmax(0, 1.1fr) 0.9fr 0.9fr;
+  }
+
+  .audit-item {
+    padding: 12px;
+  }
+}
+
+/*
+  Telefon: olay akışının 3. adımı "kaynak tüketimini oku". Üç adet 220px halka alt alta
+  gelince kullanıcı üçünü görmek için kaydırmak zorunda kalıyordu; küçültülüp yan yana
+  dizilir, tek bakışta CPU/RAM/disk okunur.
+*/
+@media (max-width: 700px) {
+  .meter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .meter-card {
+    padding: 8px;
+    border-radius: var(--radius-md);
+  }
+
+  .meter-ring {
+    width: min(112px, 100%);
+    padding: 8px;
+  }
+
+  .meter-core {
+    gap: 2px;
+  }
+
+  .meter-core span {
+    font-size: 0.56rem;
+    letter-spacing: 0.02em;
+  }
+
+  .meter-core strong {
+    font-size: clamp(0.9rem, 4.4vw, 1.15rem);
+  }
+
+  /* Halkanın içindeki "kullanılan / toplam" satırı bu boyutta okunmuyor; aynı bilgi
+     hemen aşağıdaki Diskler tablosunda ve özet kartlarında zaten var. */
+  .meter-core small {
+    display: none;
+  }
+
+  /* Özet kutuları: 4 tam genişlik kart yerine 2x2 → kaydırma yarıya iner. */
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .summary-card {
+    padding: 12px;
+    gap: 4px;
+  }
+
+  .summary-card strong {
+    font-size: clamp(1.1rem, 5.5vw, 1.5rem);
+  }
+
+  .summary-card small,
+  .tile-label {
+    font-size: 0.7rem;
+  }
+
+  .info-card {
+    padding: 12px;
+  }
+
+  .access-row {
+    gap: 6px 10px;
+    padding: 10px;
+  }
+
+  .access-url,
+  .ext-val {
+    min-width: 100%;
   }
 }
 </style>

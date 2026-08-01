@@ -77,12 +77,14 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getSiteDatabases, linkSiteDatabase, type SiteDatabaseRef } from "../api/sites";
 import { createDatabase, deleteDatabase, openPhpMyAdmin } from "../api/databases";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 type LinkedDb = SiteDatabaseRef;
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");
 const siteName = computed(() => sitesStore.selectedSiteName);
@@ -172,21 +174,27 @@ async function openPma(db: LinkedDb) {
 }
 
 async function deleteDb(db: LinkedDb) {
-  if (!window.confirm(t("panel.siteDb.confirmDelete", { name: db.name }))) {
-    return;
-  }
-  deletingKey.value = db.engine + ":" + db.name;
-  notice.value = "";
-  try {
-    // DeleteDatabaseAsync DB'yi + (başka yerde kullanılmıyorsa) kullanıcısını da düşürür + site bağını temizler.
-    await deleteDatabase(db.engine, db.name);
-    showNotice(t("panel.siteDb.deleted"), false);
-    await load();
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    deletingKey.value = "";
-  }
+  // Yüksek riskli onay: veritabanı adı yazılmadan silinemez.
+  await confirm({
+    title: t("panel.confirm.deleteDatabaseTitle", { name: db.name }),
+    message: t("panel.siteDb.confirmDelete", { name: db.name }),
+    impact: [`${t("panel.siteDb.dbName")}: ${db.name} (${db.engine})`, t("panel.confirm.impactDbUser")],
+    requireText: db.name,
+    action: async () => {
+      deletingKey.value = db.engine + ":" + db.name;
+      notice.value = "";
+      try {
+        // DeleteDatabaseAsync DB'yi + (başka yerde kullanılmıyorsa) kullanıcısını da düşürür + site bağını temizler.
+        await deleteDatabase(db.engine, db.name);
+        showNotice(t("panel.siteDb.deleted"), false);
+        await load();
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        deletingKey.value = "";
+      }
+    },
+  });
 }
 
 async function createDb() {

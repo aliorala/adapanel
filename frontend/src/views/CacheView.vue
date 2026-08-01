@@ -95,10 +95,12 @@
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, type CacheRuntime, type CacheStatus } from "../api/cache";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
 const status = ref<CacheStatus | null>(null);
 const busyAction = ref("");
@@ -136,17 +138,37 @@ async function install(componentId: string) {
 }
 
 async function remove(componentId: string) {
-  if (!window.confirm(t("panel.cache.confirmRemove"))) return;
-  busyAction.value = `${componentId}:remove`;
-  try {
-    await softwareStore.removeComponent(componentId);
-    await refresh();
-    showNotice(t("panel.cache.removedMessage"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busyAction.value = "";
+  const runtime = runtimes.value.find((item) => item.componentId === componentId);
+  const displayName = runtime?.displayName || componentId;
+  const impact: string[] = [];
+  if (runtime?.serviceName) {
+    impact.push(`${t("panel.cache.service")}: ${runtime.serviceName}`);
   }
+  if (runtime?.installDir) {
+    impact.push(`${t("panel.software.installDir")}: ${runtime.installDir}`);
+  }
+
+  // Yüksek riskli onay: bileşen kaldırma → bileşen adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.removeComponentTitle", { name: displayName }),
+    message: t("panel.cache.confirmRemove"),
+    impact,
+    requireText: displayName,
+    confirmLabel: t("panel.confirm.remove"),
+    busyLabel: t("panel.confirm.removing"),
+    action: async () => {
+      busyAction.value = `${componentId}:remove`;
+      try {
+        await softwareStore.removeComponent(componentId);
+        await refresh();
+        showNotice(t("panel.cache.removedMessage"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busyAction.value = "";
+      }
+    },
+  });
 }
 
 async function toggle(componentId: string, shouldStart: boolean) {

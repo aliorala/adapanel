@@ -246,11 +246,13 @@ import { useI18n } from "vue-i18n";
 import type { SiteBindingPayload, SiteDefaultsResult, SiteRecord, SitePreview } from "../api/sites";
 import { getSiteDeletionPlan, getSitePreview } from "../api/sites";
 import { getPanelPreferences } from "../api/panelSettings";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const softwareStore = useSoftwareStore();
 const authStore = useAuthStore();
@@ -559,24 +561,26 @@ async function handleDeleteSite(siteName: string) {
     // Plan alınamazsa yine de basit onayla devam edilir.
   }
 
-  const detail = lines.length
-    ? `\n\n${t("panel.sites.deletePlan.intro")}\n- ${lines.join("\n- ")}`
-    : "";
-  if (!window.confirm(`${t("panel.sites.confirmDelete")}${detail}`)) {
-    return;
-  }
-
-  try {
-    // profesyonel paneller gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir (plan yukarıda gösterildi/onaylandı).
-    const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true });
-    if (result && result.warnings.length) {
-      showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);
-    } else {
-      showNotice(t("panel.sites.deleted"), false);
-    }
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  // Yüksek riskli onay: kullanıcı devam etmek için site adını birebir yazmalı.
+  await confirm({
+    title: t("panel.confirm.deleteSiteTitle", { name: siteName }),
+    message: t("panel.sites.confirmDelete"),
+    impact: lines,
+    requireText: siteName,
+    action: async () => {
+      try {
+        // profesyonel paneller gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir (plan yukarıda gösterildi/onaylandı).
+        const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true });
+        if (result && result.warnings.length) {
+          showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);
+        } else {
+          showNotice(t("panel.sites.deleted"), false);
+        }
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    },
+  });
 }
 
 async function handleAddBinding(payload: { siteName: string; binding: SiteBindingPayload }) {
@@ -1015,6 +1019,87 @@ button:disabled {
 
   .create-actions button {
     width: 100%;
+  }
+
+  .sites-actions {
+    width: 100%;
+  }
+
+  .sites-actions button {
+    width: 100%;
+  }
+
+  /* Simgeler 32px'ti — parmak hedefi olarak küçük. */
+  .domain-tools .tool-chip {
+    width: 38px;
+    height: 38px;
+    min-height: 38px;
+  }
+}
+
+/*
+  Telefon: site listesi olay akışının 2. adımı ("siteyi başlat"). Satır kart düzenine geçer:
+  1) kimlik (ad + adres + yol) 2) durum rozeti 3) eylemler 2x2 ızgarada, tam genişlikte.
+*/
+@media (max-width: 620px) {
+  .domain-row {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .domain-row-main {
+    flex: 1 1 100%;
+  }
+
+  .pill {
+    align-self: flex-start;
+  }
+
+  /*
+    Hızlı araç simgeleri (⚙ FL P @ SSL FT DNS) gizlenir: etiketsiz 8 simge telefonda hem
+    okunmuyor hem de yanlış basmaya davet ediyor. Hepsi kaybolmuyor — satıra dokunmak
+    site iş alanını açıyor ve oradaki araç listesi aynı araçları ADIYLA veriyor.
+  */
+  .domain-tools {
+    display: none;
+  }
+
+  .domain-row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .domain-row-actions > * {
+    justify-content: center;
+    width: 100%;
+    min-height: 42px;
+    text-align: center;
+  }
+
+  .domain-row-actions .link-btn {
+    justify-content: center;
+    padding: 10px 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    color: var(--text-strong);
+    font-weight: 600;
+  }
+
+  .domain-glyph {
+    width: 34px;
+    height: 34px;
+  }
+
+  .credentials-card,
+  .preview-card {
+    padding: 12px;
+  }
+
+  .preview-card-head {
+    flex-wrap: wrap;
   }
 }
 

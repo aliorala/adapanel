@@ -92,9 +92,11 @@ import {
   updateSubUser,
   type SubUser
 } from "../api/subUsers";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const subUsers = ref<SubUser[]>([]);
 const loading = ref(false);
 const busy = ref(false);
@@ -170,23 +172,32 @@ function startEdit(user: SubUser) {
 }
 
 async function remove(user: SubUser) {
-  if (!window.confirm(t("panel.subUsers.confirmDelete", { name: user.userName }))) {
-    return;
+  const impact = [`${t("panel.subUsers.userName")}: ${user.userName}`];
+  if (user.email) {
+    impact.push(`${t("panel.subUsers.email")}: ${user.email}`);
   }
 
-  busy.value = true;
-  try {
-    await deleteSubUser(user.id);
-    if (editingId.value === user.id) {
-      resetForm();
-    }
-    showNotice(t("panel.subUsers.deleted"), false);
-    await load();
-  } catch (error) {
-    showNotice(resolveMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
+  // Normal onay: yalnız giriş hesabı kaldırılır; site/veri silinmez → ad yazdırmaya gerek yok.
+  await confirm({
+    title: t("panel.confirm.deleteSubUserTitle", { name: user.userName }),
+    message: t("panel.subUsers.confirmDelete", { name: user.userName }),
+    impact,
+    action: async () => {
+      busy.value = true;
+      try {
+        await deleteSubUser(user.id);
+        if (editingId.value === user.id) {
+          resetForm();
+        }
+        showNotice(t("panel.subUsers.deleted"), false);
+        await load();
+      } catch (error) {
+        showNotice(resolveMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
 }
 
 function resetForm() {

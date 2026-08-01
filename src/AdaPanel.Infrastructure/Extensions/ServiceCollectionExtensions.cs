@@ -108,6 +108,18 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDockerService, Docker.DockerService>();
         services.AddScoped<IAutomationService, Automation.AutomationService>();
         services.AddScoped<IAdvisorService, Advisor.AdvisorService>();
+        // Dışarıdan bakan site sağlığı (DNS/HTTP/TLS/mail) + tüm dikkat sinyallerini tek listede
+        // toplayan rozet servisi. İkisi de yalnız MEVCUT sinyalleri okur, kalıcı durum tutmaz → Scoped.
+        services.AddScoped<ISiteHealthService, Health.SiteHealthService>();
+        services.AddScoped<IAttentionService, Advisor.AttentionService>();
+        // Süreç izleyici BİLİNÇLİ İSTİSNA olarak Singleton: CPU yüzdesi iki ölçüm arasındaki
+        // işlemci-zamanı farkından hesaplanır, yani servisin önceki anlık görüntüyü HATIRLAMASI
+        // gerekir. Scoped olsaydı her istek yeni örnek alır ve CPU sütunu daima 0 görünürdü.
+        services.AddSingleton<IProcessMonitorService, Monitoring.ProcessMonitorService>();
+        // "Paylaşılan süreci kim kullanıyor" atfı: MySQL/PostgreSQL tek süreçtir, tüm siteler onu
+        // paylaşır — CPU'yu kimin yediğini ancak sürecin İÇİNDEKİ aktif sorgulara bakarak söyleyebiliriz.
+        // Süreç izleyicinin aksine çağrılar arası durum tutmaz (DbContext kullanır) → Scoped.
+        services.AddScoped<IResourceAttributionService, Monitoring.ResourceAttributionService>();
         services.AddScoped<IAntivirusService, Antivirus.AntivirusService>();
         // K1 güvenlik: veri kökü hassas klasörlerini her açılışta SYSTEM/Admins'e kilitle (AutomationWorker'dan ÖNCE).
         // NOT: DataRootHardeningService artık hosted service DEĞİL — Program.cs'te DB açılmadan ÖNCE

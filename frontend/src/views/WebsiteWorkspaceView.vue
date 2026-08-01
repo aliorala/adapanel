@@ -20,6 +20,11 @@
         </a>
       </div>
 
+      <!-- Başlığın hemen altında: sitenin DIŞARIDAN görünen sağlığı (DNS/HTTP/SSL/posta).
+           Panelin iç durumu yeşilken dünyanın siteyi göremediği durumu burada yakalarız.
+           Tek ölçüm site başına: her araç sekmesinde görünür kalır ama yeniden ölçmez. -->
+      <SiteHealthStrip v-if="selectedSiteName" :site-name="selectedSiteName" />
+
       <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
       <!-- panel ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
@@ -109,6 +114,8 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getPanelPreferences } from "../api/panelSettings";
 import type { SiteBindingPayload, SiteDefaultsResult } from "../api/sites";
+import { useConfirm } from "../components/ConfirmDialog.vue";
+import SiteHealthStrip from "../components/SiteHealthStrip.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import AppStoreView from "./AppStoreView.vue";
@@ -141,6 +148,7 @@ type PrimaryTab = "pano" | "hostingdns" | "mail" | "start";
 type ToolDef = { id: string; group: PrimaryTab; glyph: string; label: string; description: string };
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -288,17 +296,27 @@ async function handleStop(siteName: string) {
 }
 
 async function handleDelete(siteName: string) {
-  if (!window.confirm(t("panel.sites.confirmDelete"))) {
-    return;
-  }
-  try {
-    // Plesk gibi TAM cascade: siteye bağlı veritabanları + site dosyaları da silinir → geriye hiçbir şey kalmaz.
-    await sitesStore.deleteSite(siteName, { deleteDatabases: true, deleteFiles: true });
-    showNotice(t("panel.sites.deleted"), false);
-    backToSites();
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  // Yüksek riskli onay: cascade silme (dosya + veritabanı) için site adı yazılmadan devam edilemez.
+  await confirm({
+    title: t("panel.confirm.deleteSiteTitle", { name: siteName }),
+    message: t("panel.sites.confirmDelete"),
+    impact: [
+      t("panel.sites.deletePlan.files"),
+      t("panel.sites.deletePlan.databases"),
+      t("panel.sites.deletePlan.dns"),
+    ],
+    requireText: siteName,
+    action: async () => {
+      try {
+        // Plesk gibi TAM cascade: siteye bağlı veritabanları + site dosyaları da silinir → geriye hiçbir şey kalmaz.
+        await sitesStore.deleteSite(siteName, { deleteDatabases: true, deleteFiles: true });
+        showNotice(t("panel.sites.deleted"), false);
+        backToSites();
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    },
+  });
 }
 
 async function handlePrepareDefaults(siteName: string) {
@@ -508,6 +526,75 @@ async function handleAddSubdomain(label: string) {
 @media (max-width: 760px) {
   .primary-tab {
     flex: 0 0 auto;
+  }
+}
+
+/*
+  Telefon: 4 ana sekme yatay kaydırmalı şeritte kalınca "Posta"/"Başlarken" ekran dışında
+  kalıyor ve kullanıcı orada bir şey olduğunu göremiyordu. 2x2 ızgaraya alınır: dördü de
+  görünür, her biri tam genişlikte bir parmak hedefi olur.
+*/
+@media (max-width: 620px) {
+  .primary-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+    overflow: visible;
+  }
+
+  .primary-tab {
+    flex: none;
+    justify-content: flex-start;
+    gap: 8px;
+    min-height: 46px;
+    padding: 8px 10px;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .primary-tab strong {
+    font-size: 0.8rem;
+    line-height: 1.15;
+  }
+
+  .tool-context {
+    gap: 8px 10px;
+    padding: 10px;
+  }
+
+  .tool-context .back-btn {
+    min-height: 40px;
+  }
+
+  /* Uzun alan adı düğmeleri sıkıştırmasın: kendi satırını alsın. */
+  .tool-context .context-domain {
+    flex: 1 1 100%;
+    order: -1;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+  }
+
+  .tool-context .open-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    color: var(--text-strong);
+    font-weight: 600;
+  }
+
+  .tool-row {
+    gap: 10px;
+    min-height: 56px;
+    padding: 11px 12px;
+  }
+
+  .tool-row-text small {
+    font-size: 0.7rem;
   }
 }
 </style>
