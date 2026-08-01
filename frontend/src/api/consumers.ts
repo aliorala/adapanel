@@ -28,6 +28,10 @@ export type ResourceConsumer = {
   /** true ise statement içindeki değişmez metinler gizlilik için maskelendi. */
   redacted: boolean;
   connectionId: string;
+  /** Veritabanı panelde bir müşteriye kayıtlıysa o müşterinin adı (site başka sunucudaysa tek ipucu). */
+  ownerName: string;
+  /** Bu veritabanı bu sunucudaki bir siteye bağlı mı. */
+  siteLinked: boolean;
 };
 
 export type ResourceConsumerSnapshot = {

@@ -78,8 +78,26 @@
           <template v-else>—</template>
         </span>
 
-        <div class="consumer-statement">
-          <code :title="row.statement">{{ row.statement || "—" }}</code>
+        <!-- Sorgu varsayılan olarak tek satır; teşhis için tamamı gerektiğinde tıklayınca açılır.
+             30 satırın hepsini açık göstermek tabloyu okunmaz yapardı. -->
+        <div :class="['consumer-statement', { expanded: expandedRows.has(row.key) }]">
+          <button
+            v-if="row.statement"
+            type="button"
+            class="statement-toggle"
+            :aria-expanded="expandedRows.has(row.key)"
+            :title="expandedRows.has(row.key) ? label('collapse', 'Kapat') : label('expand', 'Tamamını göster')"
+            @click="toggleRow(row.key)">
+            <code>{{ row.statement }}</code>
+          </button>
+          <span v-else>—</span>
+
+          <div v-if="expandedRows.has(row.key)" class="statement-actions">
+            <button type="button" class="secondary compact" @click="copyStatement(row.statement)">
+              {{ copiedKey === row.key ? label("copied", "Kopyalandı") : label("copy", "Kopyala") }}
+            </button>
+          </div>
+
           <small v-if="row.redacted" class="meta">
             {{ label("redacted", "parola içerdiği için gizlendi") }}
           </small>
@@ -134,6 +152,41 @@ const { t } = useI18n();
 const snapshot = ref<ResourceConsumerSnapshot | null>(null);
 // Veritabanı görünümünde "muhtemel sayfa" için IIS'in anlık istekleri (yalnız eşleştirme amaçlı).
 const webSnapshot = ref<ResourceConsumerSnapshot | null>(null);
+
+// Açılmış sorgu satırları. Anahtar bazlı tutulur ki 3 sn'lik yenileme açık satırı kapatmasın.
+const expandedRows = ref(new Set<string>());
+const copiedKey = ref("");
+let copiedTimer: number | null = null;
+
+function toggleRow(key: string) {
+  const next = new Set(expandedRows.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  expandedRows.value = next;
+}
+
+async function copyStatement(statement: string) {
+  if (!statement) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(statement);
+  } catch {
+    // Pano izni yoksa (http bağlamı vb.) sessizce geç — kullanıcı metni zaten seçip kopyalayabilir.
+    return;
+  }
+
+  const key = [...expandedRows.value].find((item) => rows.value.some((row) => row.key === item && row.statement === statement));
+  copiedKey.value = key ?? "";
+  if (copiedTimer !== null) {
+    window.clearTimeout(copiedTimer);
+  }
+  copiedTimer = window.setTimeout(() => (copiedKey.value = ""), 2000);
+}
 const loading = ref(false);
 const failed = ref(false);
 
@@ -239,8 +292,18 @@ const rows = computed(() => {
   return data.consumers.map((item, index) => {
     // Site bilinmiyorsa teknik hedefe (veritabanı / app pool) düşeriz — asla boş satır göstermeyiz.
     const who = item.siteName || item.target || label("unknownSite", "Bilinmeyen");
+
+    // Sitesi bu sunucuda olmayan veritabanları: satır sahipsiz görünmesin. Sahip biliniyorsa
+    // müşteri adını, bilinmiyorsa "panelde kayıtlı değil"i yazarız — ikisi FARKLI durumlardır.
+    const externalNote = !isWeb.value && !item.siteLinked
+      ? item.ownerName
+        ? `${label("ownedBy", "müşteri")}: ${item.ownerName} · ${label("siteElsewhere", "site bu sunucuda değil")}`
+        : label("unmanagedDb", "panelde kayıtlı değil")
+      : "";
+
     const detailParts = [
       item.siteName && item.target && item.siteName !== item.target ? item.target : "",
+      externalNote,
       item.user,
       item.clientHost,
       item.command
@@ -392,6 +455,45 @@ defineExpose({ refresh: load });
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+/* Kapalıyken tek satır, açıkken tam metin: satır sonları korunur, uzun sorgu sarılır. */
+.statement-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  min-width: 0;
+}
+
+.statement-toggle code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.consumer-statement.expanded .statement-toggle code {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  user-select: text;
+}
+
+.statement-actions {
+  margin-top: 6px;
 }
 
 .consumer-row.with-page {

@@ -8,9 +8,15 @@ using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Scheduler;
 
-public sealed class SchedulerService : ISchedulerService
+public sealed class SchedulerService(IIisSiteService siteService) : ISchedulerService
 {
     private const string TaskPath = "\\AdaPanel\\";
+
+    /// <summary>
+    /// "script" görevinin çözülmüş hâli: hangi program, hangi argümanlar, hangi klasör ve hangi kimlik.
+    /// <paramref name="PrincipalUserId"/> null ise görev bugünkü gibi SYSTEM olarak çalışır.
+    /// </summary>
+    private sealed record ScriptPlan(string Execute, string Arguments, string WorkingDirectory, string? PrincipalUserId);
 
     public async Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default)
     {
@@ -68,6 +74,10 @@ $tasks | ConvertTo-Json -Depth 5";
             {
                 task.TaskType = "php";
             }
+            else if (ScriptTaskPlanner.IsScriptAction(task.Command, task.Arguments))
+            {
+                task.TaskType = "script";
+            }
             else
             {
                 task.TaskType = "command";
@@ -96,9 +106,20 @@ $tasks | ConvertTo-Json -Depth 5";
     {
         ValidateRequest(request);
 
-        var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request), cancellationToken);
+        // Betik görevi IIS'e (site kökü + havuz adı) bakmak zorunda olduğundan çözüm ASENKRON;
+        // saf yol/komut mantığı ScriptTaskPlanner'da, IIS'e bağımlı kısmı burada duruyor.
+        var plan = await ResolveScriptPlanAsync(request, cancellationToken);
+
+        var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request, plan), cancellationToken);
         if (!result.Success)
         {
+            // Uygulama havuzu kimliğiyle kayıt başarısızsa SYSTEM'e SESSİZCE DÜŞME — bu, kullanıcının
+            // seçmediği bir yetki yükseltmesi olurdu. Ayrı hata koduyla nedeni açıkça söyle.
+            if (plan?.PrincipalUserId is not null)
+            {
+                throw new AppException("cron.app_pool_principal_failed", 500, 500, result.StandardError);
+            }
+
             // Gercek PowerShell hatasini detaya koy: "kaydedilemedi" tek basina teshis edilemiyor.
             throw new AppException("cron.write_failed", 500, 500, result.StandardError);
         }
@@ -149,11 +170,13 @@ $tasks | ConvertTo-Json -Depth 5";
         }
     }
 
-    private static string BuildCreateScript(CreateScheduledTaskRequest request)
+    private static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan)
     {
         var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
         var interval = Math.Max(1, request.Interval);
-        var (execute, arguments, workingDirectory) = ResolveAction(request);
+        var (execute, arguments, workingDirectory) = plan is null
+            ? ResolveAction(request)
+            : (plan.Execute, plan.Arguments, plan.WorkingDirectory);
 
         // Tek tırnak + '' kaçışı: URL/komut içindeki $, ", & karakterleri PowerShell tarafından yorumlanmasın.
         var action = $"New-ScheduledTaskAction -Execute '{EscapeSingleQuoted(execute)}'";
@@ -179,13 +202,24 @@ $tasks | ConvertTo-Json -Depth 5";
         // Principal'i ACIKCA ver: panel servisi LocalSystem'dir ve principal'siz "-RunLevel Highest"
         // SYSTEM baglaminda hesap eslemesinde patlayabiliyor. Ayni desen self-update gorevinde
         // (WindowsUpdateInstallerLauncher) bu sunucuda defalarca KANITLANDI - birebir onu kullaniyoruz.
+        //
+        // Uygulama havuzu kimligi seciliyse: "IIS APPPOOL\<havuz>" bir SANAL hesaptir; parolasi yoktur
+        // ama LSA kimlik bilgisini kendisi turetir. Bu yuzden -LogonType Password (parola PARAMETRESI
+        // VERILMEDEN) kullaniliyor — gMSA/sanal hesaplar icin Microsoft'un belgeledigi kalip budur.
+        // ServiceAccount yalnizca LocalSystem/LocalService/NetworkService icin gecerlidir, S4U ise
+        // sanal hesaplarda "hesap adi-SID eslemesi yok" hatasi verir. RunLevel bilerek Limited:
+        // havuz hesabina yonetici yukseltmesi vermek modun tum amacini bozardi.
+        var principal = plan?.PrincipalUserId is { Length: > 0 } appPoolUserId
+            ? $"New-ScheduledTaskPrincipal -UserId '{EscapeSingleQuoted(appPoolUserId)}' -LogonType Password -RunLevel Limited"
+            : "New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest";
+
         return $@"$ErrorActionPreference = 'Stop'
 if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -ErrorAction SilentlyContinue) {{
   Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 }}
 $action = {action}
 $trigger = {trigger}
-$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$principal = {principal}
 Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null";
     }
 
@@ -206,6 +240,13 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
                     throw new AppException("cron.invalid_url", 400, 400);
                 }
                 break;
+            case "script":
+                // Betik yolu boşsa "invalid_name" yanıltıcı olur; kullanıcı yol alanını göremez.
+                if (string.IsNullOrWhiteSpace(request.Command))
+                {
+                    throw new AppException("cron.invalid_script", 400, 400);
+                }
+                break;
             case "php":
             default:
                 if (string.IsNullOrWhiteSpace(request.Command))
@@ -216,10 +257,81 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
         }
     }
 
+    /// <summary>
+    /// "script" görevini çalıştırılabilir bir plana çevirir; başka tiplerde null döner.
+    /// Sıra bilinçli: önce ucuz ve kesin denetimler (uzantı, varlık), sonra IIS'e gidenler.
+    /// </summary>
+    private async Task<ScriptPlan?> ResolveScriptPlanAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken)
+    {
+        if (!string.Equals((request.TaskType ?? string.Empty).Trim(), "script", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var scriptPath = ScriptTaskPlanner.NormalizePath(request.Command);
+        if (scriptPath is null || !ScriptTaskPlanner.IsAllowedExtension(scriptPath))
+        {
+            throw new AppException("cron.invalid_script", 400, 400);
+        }
+
+        if (!File.Exists(scriptPath))
+        {
+            throw new AppException("cron.script_not_found", 404, 404);
+        }
+
+        // Çalışma dizini verilmemişse betiğin bulunduğu klasör: .bat dosyaları neredeyse her zaman
+        // kendi klasörlerine göreli yol kullanır, aksi hâlde görev "dosya bulunamadı" ile düşer.
+        var workingDirectory = ScriptTaskPlanner.NormalizePath(request.WorkingDirectory)
+                               ?? Path.GetDirectoryName(scriptPath)
+                               ?? string.Empty;
+
+        var siteName = (request.SiteName ?? string.Empty).Trim();
+        var wantsAppPool = string.Equals((request.RunAs ?? string.Empty).Trim(), "apppool", StringComparison.OrdinalIgnoreCase);
+        string? principalUserId = null;
+
+        if (siteName.Length > 0)
+        {
+            var site = await siteService.GetSiteAsync(siteName, cancellationToken);
+            var siteRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+            if (string.IsNullOrWhiteSpace(siteRoot))
+            {
+                throw new AppException("cron.site_root_unknown", 409, 409);
+            }
+
+            // Hem betik hem çalışma dizini site kökünün İÇİNDE kalmalı. Çalışma dizinini de denetliyoruz
+            // çünkü "cd C:\Windows\System32" ile başlayan bir görev, göreli yollarla site dışına taşar.
+            if (!ScriptTaskPlanner.IsInsideRoot(siteRoot, scriptPath) ||
+                !ScriptTaskPlanner.IsInsideRoot(siteRoot, workingDirectory))
+            {
+                throw new AppException("cron.script_outside_site", 403, 403);
+            }
+
+            if (wantsAppPool)
+            {
+                if (string.IsNullOrWhiteSpace(site.ApplicationPoolName))
+                {
+                    throw new AppException("cron.app_pool_unknown", 409, 409);
+                }
+
+                principalUserId = ScriptTaskPlanner.BuildAppPoolUserId(site.ApplicationPoolName);
+            }
+        }
+        else if (wantsAppPool)
+        {
+            // Havuz kimliği bir SİTEYE aittir; site seçilmeden istenirse sessizce SYSTEM'e düşmek
+            // kullanıcının seçmediği bir yetki verirdi — hata dön.
+            throw new AppException("cron.app_pool_requires_site", 400, 400);
+        }
+
+        var (execute, arguments) = ScriptTaskPlanner.BuildAction(scriptPath, request.Arguments);
+        return new ScriptPlan(execute, arguments, workingDirectory, principalUserId);
+    }
+
     // Görev tipini yürütülebilir eyleme çevirir (Plesk görev tipleri):
     //  url     -> curl.exe -fsS ... "<adres>" (Windows Server 2019+/Win10 ile birlikte gelir)
     //  php     -> <runtimes\php\...\php.exe> "<betik>" <argümanlar>
     //  command -> kullanıcı komutu aynen
+    // ("script" tipi buraya UĞRAMAZ; onu ResolveScriptPlanAsync çözer — IIS'e bakması gerekir.)
     private static (string Execute, string Arguments, string WorkingDirectory) ResolveAction(CreateScheduledTaskRequest request)
     {
         var taskType = (request.TaskType ?? "command").Trim().ToLowerInvariant();

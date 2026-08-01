@@ -34,6 +34,10 @@ export async function createScheduledTask(payload: {
   workingDirectory: string;
   url: string;
   phpVersion: string;
+  // script tipi: doluysa "site betiği" modu (yol o sitenin kökünde kalmak zorunda), boşsa sunucu betiği.
+  siteName?: string;
+  // script tipi: "system" (varsayılan) veya "apppool" (sitenin uygulama havuzu kimliği).
+  runAs?: string;
   scheduleType: string;
   interval: number;
   timeOfDay: string;

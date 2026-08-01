@@ -30,6 +30,7 @@
           <select v-model="form.taskType">
             <option value="command">{{ t("panel.tasks.typeCommand") }}</option>
             <option value="php">{{ t("panel.tasks.typePhp") }}</option>
+            <option value="script">{{ t("panel.tasks.typeScript") }}</option>
             <option value="url">{{ t("panel.tasks.typeUrl") }}</option>
           </select>
         </label>
@@ -38,13 +39,44 @@
           <input v-model.trim="form.url" placeholder="https://ornek.com/cron/calistir?key=..." spellcheck="false" />
           <small class="field-hint">{{ t("panel.tasks.urlHint") }}</small>
         </label>
+
+        <!-- Betik görevi yalnız yöneticide: sunucu betiği (yol serbest) mi, site betiği (yol o sitenin kökünde) mi. -->
+        <label v-if="isScriptForm">
+          <span class="field-label">{{ t("panel.tasks.scriptScope") }}</span>
+          <select v-model="scriptScope">
+            <option value="server">{{ t("panel.tasks.scriptScopeServer") }}</option>
+            <option value="site">{{ t("panel.tasks.scriptScopeSite") }}</option>
+          </select>
+        </label>
+        <label v-if="isScriptForm && scriptScope === 'site'">
+          <span class="field-label">{{ t("panel.tasks.scriptSite") }}</span>
+          <select v-model="form.siteName">
+            <option value="">{{ t("panel.tasks.scriptSitePlaceholder") }}</option>
+            <option v-for="site in sites" :key="site.name" :value="site.name">{{ site.name }}</option>
+          </select>
+          <small v-if="selectedSiteRoot" class="field-hint">{{ t("panel.tasks.scriptRootHint", { path: selectedSiteRoot }) }}</small>
+        </label>
+        <!-- Kimlik seçimi yalnız site modunda anlamlı: havuz hesabı bir SİTEYE aittir. -->
+        <label v-if="isScriptForm && scriptScope === 'site'">
+          <span class="field-label">{{ t("panel.tasks.runAs") }}</span>
+          <select v-model="form.runAs">
+            <option value="system">{{ t("panel.tasks.runAsSystem") }}</option>
+            <option value="apppool">{{ t("panel.tasks.runAsAppPool") }}</option>
+          </select>
+          <small class="field-hint">{{ t("panel.tasks.runAsHint") }}</small>
+        </label>
+
         <label v-if="form.taskType !== 'url'">
-          <span class="field-label">{{ form.taskType === 'php' ? t("panel.tasks.scriptPath") : t("panel.tasks.command") }}</span>
-          <input v-model.trim="form.command" :placeholder="form.taskType === 'php' ? 'C:\\inetpub\\wwwroot\\site\\httpdocs\\cron.php' : 'powershell.exe'" />
+          <span class="field-label">{{ commandFieldLabel }}</span>
+          <input v-model.trim="form.command" :placeholder="commandFieldPlaceholder" spellcheck="false" />
           <small v-if="form.taskType === 'php'" class="field-hint">{{ t("panel.tasks.phpHint") }}</small>
+          <small v-else-if="form.taskType === 'script'" class="field-hint">{{ t("panel.tasks.scriptHint") }}</small>
         </label>
         <label v-if="form.taskType !== 'url'"><span class="field-label">{{ t("panel.tasks.arguments") }}</span><input v-model="form.arguments" /></label>
-        <label v-if="form.taskType === 'command'"><span class="field-label">{{ t("panel.tasks.workingDirectory") }}</span><input v-model.trim="form.workingDirectory" /></label>
+        <label v-if="form.taskType === 'command' || form.taskType === 'script'">
+          <span class="field-label">{{ t("panel.tasks.workingDirectory") }}</span>
+          <input v-model.trim="form.workingDirectory" :placeholder="form.taskType === 'script' ? t('panel.tasks.workingDirectoryScriptHint') : ''" />
+        </label>
         <label>
           <span class="field-label">{{ t("panel.tasks.scheduleType") }}</span>
           <select v-model="form.scheduleType">
@@ -60,7 +92,7 @@
         </label>
       </div>
       <div class="row-actions">
-        <button :disabled="saving || !form.name || (form.taskType === 'url' ? !form.url : !form.command)" @click="saveTask">
+        <button :disabled="saving || !form.name || !formComplete" @click="saveTask">
           {{ saving ? t("panel.tasks.saving") : t("panel.tasks.save") }}
         </button>
         <button class="secondary compact" @click="resetForm">{{ t("panel.tasks.reset") }}</button>
@@ -111,9 +143,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, type ScheduledTask } from "../api/cron";
+import { getSites, type SiteRecord } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 
@@ -121,7 +154,11 @@ const { t } = useI18n();
 const { confirm } = useConfirm();
 const authStore = useAuthStore();
 // Müşteri/bayi yalnızca URL görevi kurar (backend de zorlar); tip seçici yalnız admin'de görünür.
+// "script" tipi de bilinçli olarak yalnız yöneticide: planlı betik = sunucuda kod çalıştırmak.
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+// Betik görevinin site/sunucu ayrımı yalnız formda yaşar; sunucuya "siteName dolu mu" olarak gider.
+const scriptScope = ref<"server" | "site">("server");
+const sites = ref<SiteRecord[]>([]);
 const tasks = ref<ScheduledTask[]>([]);
 const query = ref("");
 const formOpen = ref(false);
@@ -133,6 +170,56 @@ const togglingName = ref("");
 const notice = ref("");
 const noticeError = ref(false);
 const form = reactive(defaultForm());
+const isScriptForm = computed(() => isAdmin.value && form.taskType === "script");
+const selectedSiteRoot = computed(() => {
+  const site = sites.value.find((item) => item.name === form.siteName);
+  return site ? site.applicationRootPath || site.physicalPath : "";
+});
+const commandFieldLabel = computed(() => {
+  if (form.taskType === "php") return t("panel.tasks.scriptPath");
+  if (form.taskType === "script") return t("panel.tasks.scriptFile");
+  return t("panel.tasks.command");
+});
+const commandFieldPlaceholder = computed(() => {
+  if (form.taskType === "php") return "C:\\inetpub\\wwwroot\\site\\httpdocs\\cron.php";
+  // Site seçiliyse yolun o sitenin kökünden başlaması gerektiğini ipucu olarak göster.
+  if (form.taskType === "script") return (selectedSiteRoot.value || "C:\\inetpub\\wwwroot\\site") + "\\cron.bat";
+  return "powershell.exe";
+});
+const formComplete = computed(() => {
+  if (form.taskType === "url") return Boolean(form.url);
+  if (form.taskType === "script" && scriptScope.value === "site" && !form.siteName) return false;
+  return Boolean(form.command);
+});
+
+// Tip değişince betiğe uymayan varsayılanları temizle: "powershell.exe" bir betik yolu değildir ve
+// betik dışı tiplerde site/kimlik alanları gönderilmemeli (sunucu da yok sayar, ama istek temiz kalsın).
+watch(() => form.taskType, (taskType) => {
+  if (taskType === "script") {
+    if (form.command === "powershell.exe") {
+      form.command = "";
+    }
+
+    if (sites.value.length === 0 && isAdmin.value) {
+      void loadSites();
+    }
+
+    return;
+  }
+
+  scriptScope.value = "server";
+  form.siteName = "";
+  form.runAs = "system";
+});
+
+// Sunucu betiğine dönülünce site ve havuz kimliği seçimi geçersizdir; sunucuya sızmasın.
+watch(scriptScope, (scope) => {
+  if (scope === "server") {
+    form.siteName = "";
+    form.runAs = "system";
+  }
+});
+
 const filteredTasks = computed(() => {
   const needle = query.value.toLocaleLowerCase();
   return needle
@@ -210,6 +297,8 @@ function defaultForm() {
     workingDirectory: "",
     url: "",
     phpVersion: "",
+    siteName: "",
+    runAs: "system",
     scheduleType: "hourly",
     interval: 1,
     timeOfDay: "00:00"
@@ -218,6 +307,16 @@ function defaultForm() {
 
 function resetForm() {
   Object.assign(form, defaultForm());
+  scriptScope.value = "server";
+}
+
+// Site listesi yalnız betik görevinin site modu için gerekir; form açılana kadar istek atma.
+async function loadSites() {
+  try {
+    sites.value = await getSites();
+  } catch {
+    // Site listesi alınamazsa betik formu yine kullanılabilir (yol elle yazılır); sessiz geç.
+  }
 }
 
 // Görevi hemen tetikle; birkaç saniye sonra listeyi yenile ki "son çalışma" sütunu sonucu göstersin.
@@ -267,7 +366,13 @@ function resultClass(item: ScheduledTask) {
 }
 
 function typeLabel(value: string) {
-  const key = value === "url" ? "panel.tasks.typeUrl" : value === "php" ? "panel.tasks.typePhp" : "panel.tasks.typeCommand";
+  const key = value === "url"
+    ? "panel.tasks.typeUrl"
+    : value === "php"
+      ? "panel.tasks.typePhp"
+      : value === "script"
+        ? "panel.tasks.typeScript"
+        : "panel.tasks.typeCommand";
   return t(key);
 }
 

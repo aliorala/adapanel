@@ -24,4 +24,12 @@ public interface IDatabaseOwnershipService
 
     /// <summary>Müşterinin sahip olduğu veritabanları (engine + ad) — bayi/müşteri self-servis listesi.</summary>
     Task<IReadOnlyCollection<(string Engine, string DatabaseName)>> GetOwnedAsync(Guid ownerUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Tüm sahiplik kayıtları (motor, veritabanı, sahip, kayıtlıysa site). Tek tek
+    /// <see cref="GetOwnerAsync"/> çağırmak yerine listeyi bir kez okumak gereken yerler için:
+    /// izleme ekranı onlarca satırı tek turda etiketler.
+    /// </summary>
+    Task<IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)>> GetAllAsync(
+        CancellationToken cancellationToken = default);
 }

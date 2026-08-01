@@ -35,6 +35,7 @@ internal sealed partial class ResourceAttributionService(
     AdaPanelDbContext dbContext,
     ISecretProtector secretProtector,
     ISiteDatabaseLinkService siteDatabaseLinks,
+    IDatabaseOwnershipService databaseOwnership,
     ILogger<ResourceAttributionService> logger) : IResourceAttributionService
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
@@ -48,8 +49,13 @@ internal sealed partial class ResourceAttributionService(
     private const string AdminUserKey = "adminUser";
     private const string AdminPortKey = "adminPort";
 
-    /// <summary>Sorgu metni bu uzunlukta kırpılır: hem gizlilik hem de dar ekranda okunabilirlik için.</summary>
-    private const int StatementMaxLength = 200;
+    /// <summary>
+    /// Sorgu metni bu uzunlukta kırpılır. Yavaş bir sorguyu TEŞHİS etmek için tamamını görmek gerekir
+    /// (WHERE koşulu, JOIN'ler, alt sorgu genelde 200 karakterden uzundur), o yüzden cömert bir sınır.
+    /// Yine de sınırsız değil: tek bir satır megabaytlarca metin taşıyabilir ve bu liste saniyede
+    /// bir çekiliyor. Arayüz satırı katlı gösterir, tıklayınca tamamı açılır.
+    /// </summary>
+    private const int StatementMaxLength = 4000;
 
     public async Task<ResourceConsumerSnapshotDto> GetConsumersAsync(
         string source,
@@ -113,12 +119,14 @@ internal sealed partial class ResourceAttributionService(
         //    ASIL DEĞERİ bu sütun; teknik bilmeyen biri "alioral.xyz 12 saniyedir sorgu çalıştırıyor"
         //    cümlesini ancak buradan okuyabilir.
         var siteMap = await BuildSiteMapAsync(cancellationToken);
+        // Sitesi baska sunucuda barindirilan veritabanlari icin: yerel site yok, sahip var.
+        var ownerMap = await BuildOwnerMapAsync(cancellationToken);
 
         try
         {
             var rows = descriptor.IsMySqlFamily
-                ? await ReadMySqlProcessListAsync(adminUser, password, port, engineKey, siteMap, cancellationToken)
-                : await ReadPostgreSqlActivityAsync(adminUser, password, port, engineKey, siteMap, cancellationToken);
+                ? await ReadMySqlProcessListAsync(adminUser, password, port, engineKey, siteMap, ownerMap, cancellationToken)
+                : await ReadPostgreSqlActivityAsync(adminUser, password, port, engineKey, siteMap, ownerMap, cancellationToken);
 
             var ordered = rows
                 .OrderByDescending(row => row.DurationSeconds)
@@ -157,6 +165,7 @@ internal sealed partial class ResourceAttributionService(
         int port,
         string engineKey,
         IReadOnlyDictionary<string, string> siteMap,
+        IReadOnlyDictionary<string, string> ownerMap,
         CancellationToken cancellationToken)
     {
         var builder = new MySqlConnectionStringBuilder
@@ -201,6 +210,8 @@ internal sealed partial class ResourceAttributionService(
                 ResourceType = "database",
                 Source = engineKey,
                 SiteName = ResolveSiteForDatabase(siteMap, engineKey, databaseName),
+                SiteLinked = ResolveSiteForDatabase(siteMap, engineKey, databaseName) is not null,
+                OwnerName = ResolveOwnerForDatabase(ownerMap, engineKey, databaseName),
                 Target = databaseName,
                 User = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
                 ClientHost = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
@@ -228,6 +239,7 @@ internal sealed partial class ResourceAttributionService(
         int port,
         string engineKey,
         IReadOnlyDictionary<string, string> siteMap,
+        IReadOnlyDictionary<string, string> ownerMap,
         CancellationToken cancellationToken)
     {
         var builder = new NpgsqlConnectionStringBuilder
@@ -278,6 +290,8 @@ internal sealed partial class ResourceAttributionService(
                 ResourceType = "database",
                 Source = engineKey,
                 SiteName = ResolveSiteForDatabase(siteMap, engineKey, databaseName),
+                SiteLinked = ResolveSiteForDatabase(siteMap, engineKey, databaseName) is not null,
+                OwnerName = ResolveOwnerForDatabase(ownerMap, engineKey, databaseName),
                 Target = databaseName,
                 User = reader.GetString(1),
                 ClientHost = reader.GetString(6),
@@ -694,6 +708,72 @@ internal sealed partial class ResourceAttributionService(
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// Veritabanı → sahip müşteri adı eşlemesi. Sitesi BAŞKA BİR SUNUCUDA barındırılan ama
+    /// veritabanı burada duran kurulumlarda yerel site yoktur, dolayısıyla site sütunu boş kalır;
+    /// o satırın kime ait olduğunu söyleyebilecek tek kayıt panelin sahiplik defteridir.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> BuildOwnerMapAsync(CancellationToken cancellationToken)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var owners = await databaseOwnership.GetAllAsync(cancellationToken);
+            if (owners.Count == 0)
+            {
+                return map;
+            }
+
+            var userNames = await dbContext.Users
+                .Select(user => new { user.Id, user.UserName })
+                .ToDictionaryAsync(user => user.Id, user => user.UserName, cancellationToken);
+
+            foreach (var owner in owners)
+            {
+                if (string.IsNullOrWhiteSpace(owner.DatabaseName) ||
+                    !userNames.TryGetValue(owner.OwnerUserId, out var userName))
+                {
+                    continue;
+                }
+
+                map[SiteMapKey(owner.Engine, owner.DatabaseName)] = userName;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Veritabanı sahiplik defteri okunamadı; sahip sütunu boş kalacak.");
+        }
+
+        return map;
+    }
+
+    /// <summary>Sahip adını, kardeş motor (mysql↔mariadb) yedeğiyle birlikte çözer.</summary>
+    internal static string ResolveOwnerForDatabase(
+        IReadOnlyDictionary<string, string> ownerMap,
+        string engineKey,
+        string? databaseName)
+    {
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            return string.Empty;
+        }
+
+        if (ownerMap.TryGetValue(SiteMapKey(engineKey, databaseName), out var owner) && !string.IsNullOrWhiteSpace(owner))
+        {
+            return owner;
+        }
+
+        var sibling = engineKey.Equals("mysql", StringComparison.OrdinalIgnoreCase)
+            ? "mariadb"
+            : engineKey.Equals("mariadb", StringComparison.OrdinalIgnoreCase) ? "mysql" : null;
+
+        return sibling is not null &&
+               ownerMap.TryGetValue(SiteMapKey(sibling, databaseName), out var siblingOwner) &&
+               !string.IsNullOrWhiteSpace(siblingOwner)
+            ? siblingOwner
+            : string.Empty;
     }
 
     private static ResourceConsumerSnapshotDto Snapshot(string source, string displayName, bool installed, string statusCode) =>

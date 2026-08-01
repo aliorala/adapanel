@@ -4,10 +4,13 @@ public sealed class CreateScheduledTaskRequest
 {
     public string Name { get; set; } = string.Empty;
 
-    /// <summary>Plesk'teki görev tipleri: "command" (komut), "php" (PHP betiği), "url" (adresi GET ile çağır).</summary>
+    /// <summary>
+    /// Plesk'teki görev tipleri: "command" (komut), "php" (PHP betiği), "url" (adresi GET ile çağır),
+    /// "script" (.bat/.cmd/.ps1 dosyası; YALNIZCA Administrator).
+    /// </summary>
     public string TaskType { get; set; } = "command";
 
-    /// <summary>command: çalıştırılacak program. php: betik dosyasının tam yolu.</summary>
+    /// <summary>command: çalıştırılacak program. php/script: betik dosyasının tam yolu.</summary>
     public string Command { get; set; } = string.Empty;
 
     public string Arguments { get; set; } = string.Empty;
@@ -19,6 +22,18 @@ public sealed class CreateScheduledTaskRequest
 
     /// <summary>php tipi: istenen PHP sürümü (ör. "8.3"); boşsa kurulu en yeni sürüm kullanılır.</summary>
     public string PhpVersion { get; set; } = string.Empty;
+
+    /// <summary>
+    /// script tipi: doluysa "site betiği" modu — betik yolu ve çalışma dizini O SİTENİN kökünün
+    /// içinde kalmak ZORUNDA. Boşsa "sunucu betiği" modu (yol serbest, yalnız Administrator).
+    /// </summary>
+    public string SiteName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// script tipi: görevin hangi kimlikle çalışacağı. "system" (varsayılan, RunLevel Highest) veya
+    /// "apppool" (sitenin uygulama havuzu sanal hesabı — yalnız site betiği modunda seçilebilir).
+    /// </summary>
+    public string RunAs { get; set; } = "system";
 
     public string ScheduleType { get; set; } = "hourly";
 

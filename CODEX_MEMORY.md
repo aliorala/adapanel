@@ -5970,3 +5970,42 @@ Basarili:
 - **YAYINLANDI (2026-08-02):** commit `08fb8a4` + yerel `0.2.24` tag'i. GitHub release **0.2.24**
   (id 363632766). YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `176EF8B0...D04CC8FA` (yereldekiyle birebir),
   `releases/latest` -> 0.2.24.
+
+## 2026-08-02 (208) — Canli izleme rotuslari + planli BETIK gorevi (admin-only)
+- **SIRALAMA ZIPLAMASI (kullanici sikayeti):** islem tablosu 2 sn'de bir yeniden siralanip satir sayisi
+  degistikce ALTINDAKI "kim kullaniyor" bolumu zipliyordu. Uc katmanli cozum: (1) `.proc-scroll`
+  SABIT 420px yukseklik + ic kaydirma -> bolum boyu hic degismez, (2) fare/klavye tablonun uzerindeyken
+  SIRALAMA DONDURULUR (`orderFrozen` + `frozenOrder` pid listesi; degerler yerinde guncellenir, yeni
+  surec SONA eklenir, araya girip satirlari itmez), (3) `TransitionGroup` ile satirlar kayarak yer
+  degistirir (`prefers-reduced-motion` saygili). Alt satirda "siralama donduruldu" yazar.
+- **SORGUYU TAM GOSTER:** backend kirpma 200 -> **4000** karakter (yavas sorgu teshisi WHERE/JOIN'leri
+  gormeyi gerektirir; sinirsiz DEGIL cunku satir megabaytlarca olabilir ve liste saniyede bir cekilir).
+  Arayuzde satira tiklayinca sorgu tam metin acilir (`white-space: pre-wrap`, secilebilir, 40vh
+  kaydirmali) + **Kopyala** dugmesi. Acik satir 3 sn'lik yenilemede KAPANMAZ (anahtar bazli `expandedRows`).
+- **"SITE BASKA YERDE, DB BIZDE" (kullanici sikayeti):** db->site bagi yoksa satir yalniz veritabani
+  adini gosteriyordu; "site burada ama bag yok" ile "site baska sunucuda" AYIRT EDILEMIYORDU.
+  `ResourceConsumerDto`'ya `OwnerName` + `SiteLinked` eklendi; `IDatabaseOwnershipService`'e
+  **`GetAllAsync`** eklendi (50 satir icin 50 dosya okumasi yerine tek okuma). Artik uc durum ayri:
+  site adi | "musteri: X · site bu sunucuda degil" | "panelde kayitli degil".
+- **"HANGI SAYFA" (kullanici istegi):** MySQL sorgunun kaynagini BILMEZ. Tek durust ipucu zaman
+  ortusmesi: ayni sitenin o an IIS'te islenen ve **sorgudan ONCE baslamis** istekleri (0.5 sn tolerans).
+  Tek aday -> adres, coklu -> "~N istek" + tooltip'te hepsi. `~` ve dipnot bunun TAHMIN oldugunu soyler.
+  Sutun yalniz veritabani gorunumunde ve eslesecek istek varken cikar.
+- **PLANLI BETIK GOREVI (`script` tipi, YALNIZ Administrator):** kullanici once "site icinde + baska
+  yerden" istedi, sonra "musteri olmasin admine ozel olsun" dedi -> musteri/bayi yolu HIC ACILMADI
+  (bugunku gibi zorla `url`). Iki mod: **sunucu betigi** (yol serbest, SYSTEM) ve **site betigi**
+  (yol site kokunun icinde olmali). `.bat`/`.cmd` -> `cmd.exe /c`, `.ps1` -> `powershell -File`.
+  Kimlik ACIK SECIM: SYSTEM (varsayilan) veya sitenin app pool kimligi; app pool ile kayit basarisiz
+  olursa **SESSIZCE SYSTEM'E DUSMEZ**, ham Windows hatasiyla `cron.app_pool_principal_failed` doner.
+  Yol dogrulamasi admin icin de duruyor (kaza korumasi): `..` kacisi, kok-adi-oneki tuzagi
+  (`site1-evil`/`site1evil`/`site10`/`site1.backup`), calisma dizini de kok icinde olmali.
+  `cmd /c` TIRNAKLAMA TUZAGI: cmd, `/c` kuyrugunda TAM IKI tirnak varsa ilk ve sonuncuyu SILER —
+  bosluklu tek yol tam bu durumdur; disa sarmalama (`/c ""yol" args"`) sayiyi 4'e cikarip kurali devre disi
+  birakir. Test edildi. Yeni dosya: `Scheduler/ScriptTaskPlanner.cs` + `ScriptTaskPlannerTests` (31 test).
+  **CANLI DOGRULANAMADI:** app pool principal'i icin `-LogonType Password -RunLevel Limited` secildi
+  (sanal hesaplarda belgelenen kalip; `ServiceAccount` yalniz LocalSystem/Service icin, `S4U` sanal
+  hesapta calismiyor). Bu makinede IIS YOK ve kabuk yukseltilmemis -> `Register-ScheduledTask` her
+  LogonType'ta ayni "No mapping between account names and security IDs" hatasini veriyor, yani hata
+  ORTAMSAL. Hedef sunucuda dogrulanmali; yanlissa `BuildCreateScript`'te tek satir degisir.
+- DOGRULAMA: build 0/0, Core 2/2, Infrastructure **338/338**, typecheck OK, frontend build OK,
+  i18n TR/EN **2847/2847**, onek cakismasi yok.

@@ -54,12 +54,16 @@ public sealed class CronController(
         var prefix = IsAdmin ? string.Empty : await GetOwnerPrefixAsync(cancellationToken);
         if (!IsAdmin)
         {
-            // Müşteri/bayi yalnızca URL görevi kurabilir (komut/PHP = sunucuda kod çalıştırmak, admin yetkisi).
+            // Müşteri/bayi yalnızca URL görevi kurabilir (komut/PHP/betik = sunucuda kod çalıştırmak,
+            // admin yetkisi). "script" tipi de bilinçli olarak BU sınırın dışında: müşteriye planlı
+            // betik açmak, kimlik ne olursa olsun yeni bir saldırı yüzeyidir.
             request.TaskType = "url";
             request.Command = string.Empty;
             request.Arguments = string.Empty;
             request.WorkingDirectory = string.Empty;
             request.PhpVersion = string.Empty;
+            request.SiteName = string.Empty;
+            request.RunAs = "system";
             await EnsureCustomerUrlAllowedAsync(request.Url);
 
             // Plan kotası (MaxScheduledTasks; 0 = sınırsız): aynı adla güncelleme kotayı doldurmaz.
@@ -88,7 +92,14 @@ public sealed class CronController(
         }
 
         var target = string.IsNullOrWhiteSpace(request.Url) ? request.Command : request.Url;
-        await WriteAuditAsync("cron.created", $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}", cancellationToken);
+        // Betik görevlerinde denetim kaydı tek başına "script" demekle yetinemez: hangi dosya, hangi mod
+        // (site/sunucu) ve hangi kimlik çalıştı sorusu olay sonrası incelemenin tamamıdır.
+        var scriptContext = string.Equals(request.TaskType, "script", StringComparison.OrdinalIgnoreCase)
+            ? string.IsNullOrWhiteSpace(request.SiteName)
+                ? " [mode=server, identity=SYSTEM]"
+                : $" [mode=site:{request.SiteName}, identity={(string.Equals(request.RunAs, "apppool", StringComparison.OrdinalIgnoreCase) ? "app-pool" : "SYSTEM")}]"
+            : string.Empty;
+        await WriteAuditAsync("cron.created", $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}{scriptContext}", cancellationToken);
         return Ok(ApiResponse<ScheduledTaskDto>.Ok(task, "cron.saved"));
     }
 

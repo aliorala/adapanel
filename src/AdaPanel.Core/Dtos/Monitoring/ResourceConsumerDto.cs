@@ -49,6 +49,20 @@ public sealed class ResourceConsumerDto
 
     /// <summary>Motorun bağlantı/istek kimliği (aynı satırı iki ölçüm arasında eşlemek için).</summary>
     public string ConnectionId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Veritabanı panelde kayıtlı bir müşteriye aitse o müşterinin kullanıcı adı. Sitesi BAŞKA BİR
+    /// SUNUCUDA barındırılan ama veritabanı burada duran kurulumlarda satırın kime ait olduğunu
+    /// söyleyen tek ipucu budur (yerel site olmadığı için <see cref="SiteName"/> boş kalır).
+    /// </summary>
+    public string OwnerName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Bu veritabanı bu sunucudaki bir siteye bağlı mı. false + <see cref="OwnerName"/> dolu ise
+    /// "sitesi burada değil, yalnız veritabanı burada" demektir; false + sahip de boşsa panel bu
+    /// veritabanını hiç tanımıyordur (elle oluşturulmuş olabilir).
+    /// </summary>
+    public bool SiteLinked { get; init; }
 }
 
 /// <summary>
