@@ -5967,3 +5967,6 @@ Basarili:
   build OK, i18n TR/EN **2815/2815**, onek cakismasi yok.
 - **0.2.24 PAKET:** `artifacts\release\0.2.24\AdaPanelSetup.exe`, `51,932,998` byte (49.53 MiB),
   SHA256 `176EF8B0B390DACD4355967A689C707B7D98CD59556F88BE49930C03D04CC8FA`.
+- **YAYINLANDI (2026-08-02):** commit `08fb8a4` + yerel `0.2.24` tag'i. GitHub release **0.2.24**
+  (id 363632766). YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `176EF8B0...D04CC8FA` (yereldekiyle birebir),
+  `releases/latest` -> 0.2.24.
