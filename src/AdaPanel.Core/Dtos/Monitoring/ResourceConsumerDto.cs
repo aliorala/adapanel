@@ -63,6 +63,14 @@ public sealed class ResourceConsumerDto
     /// veritabanını hiç tanımıyordur (elle oluşturulmuş olabilir).
     /// </summary>
     public bool SiteLinked { get; init; }
+
+    /// <summary>
+    /// Bağlantı bu sunucunun DIŞINDAN mı geliyor. Aynı sitenin birden çok veritabanı olabilir ve
+    /// bunlardan biri başka bir sunucudaki uygulama tarafından kullanılıyor olabilir; o zaman site
+    /// bağı yerel görünse bile yükü üreten burası değildir. Ayrımı yapan tek gözlem istemci adresidir:
+    /// localhost = bu sunucudaki site, uzak IP = dışarıdaki bir uygulama.
+    /// </summary>
+    public bool RemoteClient { get; init; }
 }
 
 /// <summary>

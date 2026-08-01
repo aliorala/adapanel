@@ -215,6 +215,7 @@ internal sealed partial class ResourceAttributionService(
                 Target = databaseName,
                 User = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
                 ClientHost = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                RemoteClient = IsRemoteClientHost(reader.IsDBNull(2) ? null : reader.GetString(2)),
                 // TIME nadiren negatif gelebilir (saat sıçraması / replikasyon) → 0'a kenetle.
                 DurationSeconds = reader.IsDBNull(5) ? 0 : Math.Max(0, Convert.ToDouble(reader.GetValue(5), CultureInfo.InvariantCulture)),
                 State = reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
@@ -295,6 +296,7 @@ internal sealed partial class ResourceAttributionService(
                 Target = databaseName,
                 User = reader.GetString(1),
                 ClientHost = reader.GetString(6),
+                RemoteClient = IsRemoteClientHost(reader.GetString(6)),
                 DurationSeconds = reader.IsDBNull(5) ? 0 : Math.Max(0, reader.GetDouble(5)),
                 State = state,
                 // PostgreSQL'de MySQL'deki COMMAND sütununun karşılığı yoktur; durum aynı zamanda işlem türüdür.
@@ -747,6 +749,49 @@ internal sealed partial class ResourceAttributionService(
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// İstemci adresi bu sunucunun dışından mı geliyor? MySQL "host:port", PostgreSQL ise ham adres
+    /// (yerel soket bağlantısında BOŞ) döndürür. Boş/localhost/127.x/::1 → yerel; onun dışındaki her
+    /// gerçek adres dış bir uygulamadır. "localhost" adı da kabul edilir çünkü MySQL kendi çözer.
+    /// </summary>
+    internal static bool IsRemoteClientHost(string? clientHost)
+    {
+        var value = (clientHost ?? string.Empty).Trim();
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        // "host:port" veya IPv6 "[::1]:port" → adres kısmını ayıkla.
+        if (value.StartsWith('['))
+        {
+            var closing = value.IndexOf(']');
+            value = closing > 0 ? value[1..closing] : value.Trim('[', ']');
+        }
+        else
+        {
+            var lastColon = value.LastIndexOf(':');
+            // Tek ':' varsa port ayracıdır; birden çoksa tırnaksız IPv6'dır ve port yoktur.
+            if (lastColon > 0 && value.IndexOf(':') == lastColon)
+            {
+                value = value[..lastColon];
+            }
+        }
+
+        value = value.Trim();
+        if (value.Length == 0 ||
+            value.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("::1", StringComparison.Ordinal) ||
+            value.StartsWith("127.", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Adres olarak ayrıştırılamayan bir şey (ör. makine adı) geldiyse "uzak" varsaymak yanıltıcı
+        // olur; yalnız GERÇEK bir IP ise ve loopback değilse dış bağlantı deriz.
+        return System.Net.IPAddress.TryParse(value, out var address) && !System.Net.IPAddress.IsLoopback(address);
     }
 
     /// <summary>Sahip adını, kardeş motor (mysql↔mariadb) yedeğiyle birlikte çözer.</summary>

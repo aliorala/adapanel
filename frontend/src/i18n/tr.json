@@ -1320,6 +1320,8 @@
   "panel.consumers.source": "Kaynak",
   "panel.consumers.page": "Sayfa",
   "panel.consumers.ownedBy": "müşteri",
+  "panel.consumers.remote": "dışarıdan",
+  "panel.consumers.remoteHint": "Bu bağlantı sunucunun dışından geliyor: veritabanı burada ama onu kullanan uygulama başka bir sunucuda çalışıyor.",
   "panel.consumers.siteElsewhere": "site bu sunucuda değil",
   "panel.consumers.unmanagedDb": "panelde kayıtlı değil",
   "panel.consumers.expand": "Tamamını göster",

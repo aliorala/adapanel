@@ -57,7 +57,14 @@
         :key="row.key"
         :class="['consumer-row', { slow: row.slow, 'with-page': showPageColumn }]">
         <div class="consumer-who">
-          <strong :title="row.who">{{ row.who }}</strong>
+          <strong :title="row.who">
+            {{ row.who }}
+            <!-- Aynı sitenin bir veritabanı buradaki uygulamaya, diğeri dışarıdaki bir sunucuya
+                 hizmet ediyor olabilir. Bunu ayıran tek gözlem istemci adresidir. -->
+            <span v-if="row.remote" class="remote-badge" :title="label('remoteHint', 'Bu bağlantı sunucunun dışından geliyor')">
+              {{ label("remote", "dışarıdan") }}
+            </span>
+          </strong>
           <small class="meta">{{ row.whoDetail }}</small>
         </div>
 
@@ -318,6 +325,7 @@ const rows = computed(() => {
       stateText: item.state,
       statement: item.statement,
       redacted: item.redacted,
+      remote: !isWeb.value && item.remoteClient,
       page: isWeb.value ? null : pageHintFor(item.siteName ?? "", item.durationSeconds)
     };
   });
@@ -455,6 +463,17 @@ defineExpose({ refresh: load });
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.remote-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border: 1px solid var(--panel-border);
+  white-space: nowrap;
 }
 
 /* Kapalıyken tek satır, açıkken tam metin: satır sonları korunur, uzun sorgu sarılır. */

@@ -32,6 +32,8 @@ export type ResourceConsumer = {
   ownerName: string;
   /** Bu veritabanı bu sunucudaki bir siteye bağlı mı. */
   siteLinked: boolean;
+  /** Bağlantı bu sunucunun dışından mı geliyor (uzak IP) — dışarıdaki bir uygulama kullanıyor demektir. */
+  remoteClient: boolean;
 };
 
 export type ResourceConsumerSnapshot = {

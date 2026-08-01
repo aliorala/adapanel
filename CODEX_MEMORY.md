@@ -6009,3 +6009,12 @@ Basarili:
   ORTAMSAL. Hedef sunucuda dogrulanmali; yanlissa `BuildCreateScript`'te tek satir degisir.
 - DOGRULAMA: build 0/0, Core 2/2, Infrastructure **338/338**, typecheck OK, frontend build OK,
   i18n TR/EN **2847/2847**, onek cakismasi yok.
+- **DIS BAGLANTI TESPITI (kullanici: "alioral.xyz'de 2 db var, biri disaridan kullaniliyor"):**
+  Ayni sitenin birden cok veritabani olabilir ve biri BASKA sunucudaki uygulama tarafindan
+  kullaniliyor olabilir — site bagi yerel gorunse de yuku ureten burasi degildir. Ayrimi yapan tek
+  gozlem ISTEMCI ADRESI. `ResourceConsumerDto.RemoteClient` + `IsRemoteClientHost` (MySQL "host:port",
+  PostgreSQL ham adres/yerel sokette BOS; IPv6 koseli parantez ve tek-iki-nokta port ayirimi ele
+  alinir). IP olarak ayristirilamayan deger (makine adi) "uzak" SAYILMAZ — emin olmadigimizi
+  "disaridan" diye etiketlemek yanlis yonlendirir. Satirda "disaridan" rozeti. 16 test.
+- **0.2.25 PAKET:** `artifacts\release\0.2.25\AdaPanelSetup.exe`, `51,939,996` byte,
+  SHA256 `9FAE4082243C76034A0231D13F01F06ED4FB743D05D3D3C4AFB2BA5A16D575DD`.

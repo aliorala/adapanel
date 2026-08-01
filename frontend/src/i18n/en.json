@@ -1320,6 +1320,8 @@
   "panel.consumers.source": "Source",
   "panel.consumers.page": "Page",
   "panel.consumers.ownedBy": "customer",
+  "panel.consumers.remote": "external",
+  "panel.consumers.remoteHint": "This connection comes from outside the server: the database is here, but the application using it runs on another machine.",
   "panel.consumers.siteElsewhere": "site is not on this server",
   "panel.consumers.unmanagedDb": "not registered in the panel",
   "panel.consumers.expand": "Show in full",
