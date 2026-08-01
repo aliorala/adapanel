@@ -6018,3 +6018,6 @@ Basarili:
   "disaridan" diye etiketlemek yanlis yonlendirir. Satirda "disaridan" rozeti. 16 test.
 - **0.2.25 PAKET:** `artifacts\release\0.2.25\AdaPanelSetup.exe`, `51,939,996` byte,
   SHA256 `9FAE4082243C76034A0231D13F01F06ED4FB743D05D3D3C4AFB2BA5A16D575DD`.
+- **YAYINLANDI (2026-08-02):** commit `ef1d223` + yerel `0.2.25` tag'i. GitHub release **0.2.25**
+  (id 363640088). YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `9FAE4082...16D575DD` (birebir),
+  `releases/latest` -> 0.2.25.
