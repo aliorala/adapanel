@@ -44,17 +44,18 @@
     </p>
 
     <div v-else class="consumer-table">
-      <div class="consumer-row head" aria-hidden="true">
+      <div :class="['consumer-row', 'head', { 'with-page': showPageColumn }]" aria-hidden="true">
         <span>{{ label("site", "Site") }}</span>
         <span>{{ label("duration", "Süre") }}</span>
         <span>{{ label("state", "Durum") }}</span>
+        <span v-if="showPageColumn">{{ label("page", "Sayfa") }}</span>
         <span>{{ isWeb ? label("url", "İstek") : label("query", "Sorgu") }}</span>
       </div>
 
       <div
         v-for="row in rows"
         :key="row.key"
-        :class="['consumer-row', { slow: row.slow }]">
+        :class="['consumer-row', { slow: row.slow, 'with-page': showPageColumn }]">
         <div class="consumer-who">
           <strong :title="row.who">{{ row.who }}</strong>
           <small class="meta">{{ row.whoDetail }}</small>
@@ -66,6 +67,16 @@
         </span>
 
         <span class="consumer-state">{{ row.stateText || "—" }}</span>
+
+        <!-- Muhtemel sayfa: MySQL sorgunun kaynağını bilmez, bu zaman örtüşmesinden çıkarılmış
+             bir TAHMİNDİR; kesin olmadığında "~" ile işaretlenir. -->
+        <span v-if="showPageColumn" class="consumer-page">
+          <template v-if="row.page">
+            <span v-if="!row.page.exact" class="page-approx" :title="row.page.all">~</span>
+            <code :title="row.page.all || row.page.text">{{ row.page.text }}</code>
+          </template>
+          <template v-else>—</template>
+        </span>
 
         <div class="consumer-statement">
           <code :title="row.statement">{{ row.statement || "—" }}</code>
@@ -80,6 +91,9 @@
       {{ isWeb
         ? label("footWeb", "IIS'te o an işlenen istekler. Uzun süren satır asılı kalmış bir isteği gösterir.")
         : label("footDb", "Uykudaki (boşta) bağlantılar listelenmez; yalnız gerçekten çalışan sorgular görünür.") }}
+      <template v-if="showPageColumn">
+        {{ label("pageHint", "Sayfa sütunu bir TAHMİNDİR: veritabanı, sorgunun hangi sayfadan geldiğini bilmez.") }}
+      </template>
     </p>
   </section>
 </template>
@@ -118,6 +132,8 @@ const props = withDefaults(
 const { t } = useI18n();
 
 const snapshot = ref<ResourceConsumerSnapshot | null>(null);
+// Veritabanı görünümünde "muhtemel sayfa" için IIS'in anlık istekleri (yalnız eşleştirme amaçlı).
+const webSnapshot = ref<ResourceConsumerSnapshot | null>(null);
 const loading = ref(false);
 const failed = ref(false);
 
@@ -129,6 +145,12 @@ let controller: AbortController | null = null;
 let requestId = 0;
 
 const isWeb = computed(() => props.source === "iis");
+
+// "Sayfa" sütunu yalnız veritabanı görünümünde ve gerçekten eşleşecek istek varken görünür;
+// aksi halde her satırı "—" ile dolduran boş bir sütun eklemenin anlamı yok.
+const showPageColumn = computed(
+  () => !isWeb.value && (webSnapshot.value?.consumers?.length ?? 0) > 0
+);
 
 const displayName = computed(() => {
   if (snapshot.value?.displayName) {
@@ -173,6 +195,41 @@ function formatDuration(seconds: number): string {
   return label("hours", "{n} sa", { n: Math.floor(minutes / 60) });
 }
 
+/**
+ * Bir veritabanı sorgusunun HANGİ SAYFADAN geldiğini MySQL bilmez — sorgu ile HTTP isteği
+ * arasında taşınan bir bağ yoktur. Elimizdeki tek dürüst ipucu zaman örtüşmesi: aynı sitenin
+ * o an IIS'te işlenen istekleri. Sorgudan SONRA başlamış bir istek onu açmış olamaz, o yüzden
+ * yalnız sorgu kadar (veya daha uzun) süredir çalışan istekler aday sayılır.
+ * Tek aday varsa adresi gösteririz; birden çoksa sayısını — çünkü hangisi olduğunu BİLEMEYİZ.
+ */
+function pageHintFor(siteName: string, durationSeconds: number) {
+  const requests = webSnapshot.value?.consumers ?? [];
+  if (!siteName || requests.length === 0) {
+    return null;
+  }
+
+  // 0.5 sn tolerans: iki ölçüm aynı anda alınmadığı için sınırdaki adayı elemeyelim.
+  const candidates = requests.filter(
+    (request) =>
+      request.siteName === siteName &&
+      request.durationSeconds + 0.5 >= durationSeconds
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (candidates.length === 1) {
+    return { text: candidates[0].statement || candidates[0].target, exact: true, all: "" };
+  }
+
+  return {
+    text: label("pageCandidates", "{n} istek", { n: candidates.length }),
+    exact: false,
+    all: candidates.map((request) => request.statement || request.target).join("\n")
+  };
+}
+
 const rows = computed(() => {
   const data = snapshot.value;
   if (!data || !data.available) {
@@ -197,7 +254,8 @@ const rows = computed(() => {
       slow: item.durationSeconds >= props.slowSeconds,
       stateText: item.state,
       statement: item.statement,
-      redacted: item.redacted
+      redacted: item.redacted,
+      page: isWeb.value ? null : pageHintFor(item.siteName ?? "", item.durationSeconds)
     };
   });
 });
@@ -214,11 +272,22 @@ async function load() {
   controller = new AbortController();
 
   try {
-    const result = await getResourceConsumers(props.source, props.limit, controller.signal);
+    // Veritabanı kaynaklarında IIS'in o an işlediği istekleri de çekiyoruz: MySQL bir sorgunun
+    // hangi sayfadan geldiğini BİLMEZ, ama aynı sitenin aynı anda açık olan isteklerini
+    // eşleştirerek "muhtemel sayfa" gösterebiliriz (bkz. pageHintFor). Başarısız olursa
+    // sessizce geçilir — asıl liste bundan etkilenmez.
+    const [result, web] = await Promise.all([
+      getResourceConsumers(props.source, props.limit, controller.signal),
+      isWeb.value
+        ? Promise.resolve(null)
+        : getResourceConsumers("iis", props.limit, controller.signal).catch(() => null)
+    ]);
+
     if (current !== requestId) {
       return;
     }
     snapshot.value = result;
+    webSnapshot.value = web;
     failed.value = false;
   } catch {
     // Ağ/yetki hatası: son iyi listeyi silmeyiz (titreme olmasın), yalnız uyarı satırı çıkarırız.
@@ -323,6 +392,32 @@ defineExpose({ refresh: load });
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.consumer-row.with-page {
+  grid-template-columns: minmax(110px, 1.1fr) 72px minmax(80px, 0.7fr) minmax(0, 1.3fr) minmax(0, 2fr);
+}
+
+.consumer-page {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.consumer-page code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+/* Kesin olmayan eşleşme işareti: kullanıcı bunun tahmin olduğunu görmeli. */
+.page-approx {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-weight: 700;
+  cursor: help;
 }
 
 .consumer-row {

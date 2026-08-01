@@ -170,22 +170,35 @@
           <span>{{ t("panel.system.memory") }}</span>
           <span>{{ t("panel.processes.uptime") }}</span>
         </div>
-        <div v-for="item in snapshot.processes" :key="item.processId" class="proc-row">
-          <div class="proc-owner">
-            <strong>{{ item.label || item.name }}</strong>
-            <small>{{ t("panel.processes.category." + item.category) }} · {{ item.name }}<template v-if="item.detail"> · {{ item.detail }}</template></small>
-          </div>
-          <span class="proc-num">{{ item.processId }}</span>
-          <span class="proc-num">
-            <span :class="['proc-bar', cpuSeverity(item.cpuPercent)]" :style="{ '--fill': Math.min(100, item.cpuPercent) + '%' }"></span>
-            {{ item.cpuPercent.toFixed(1) }}%
-          </span>
-          <span class="proc-num">{{ formatBytes(item.workingSetBytes) }}</span>
-          <span class="proc-num">{{ formatUptime(item.uptimeSeconds) }}</span>
+        <!-- Sabit yükseklikli kaydırma alanı: satır sayısı değiştikçe bölümün boyu değişmesin,
+             yoksa ALTINDAKİ "kim kullanıyor" bölümü sürekli aşağı yukarı zıplar.
+             Fare/klavye tablonun üzerindeyken sıralama DONDURULUR (bkz. orderedProcesses). -->
+        <div
+          class="proc-scroll"
+          @mouseenter="orderFrozen = true"
+          @mouseleave="orderFrozen = false"
+          @focusin="orderFrozen = true"
+          @focusout="orderFrozen = false">
+          <TransitionGroup name="proc" tag="div" class="proc-body">
+            <div v-for="item in orderedProcesses" :key="item.processId" class="proc-row">
+              <div class="proc-owner">
+                <strong>{{ item.label || item.name }}</strong>
+                <small>{{ t("panel.processes.category." + item.category) }} · {{ item.name }}<template v-if="item.detail"> · {{ item.detail }}</template></small>
+              </div>
+              <span class="proc-num">{{ item.processId }}</span>
+              <span class="proc-num">
+                <span :class="['proc-bar', cpuSeverity(item.cpuPercent)]" :style="{ '--fill': Math.min(100, item.cpuPercent) + '%' }"></span>
+                {{ item.cpuPercent.toFixed(1) }}%
+              </span>
+              <span class="proc-num">{{ formatBytes(item.workingSetBytes) }}</span>
+              <span class="proc-num">{{ formatUptime(item.uptimeSeconds) }}</span>
+            </div>
+          </TransitionGroup>
+          <p v-if="orderedProcesses.length === 0" class="meta">{{ t("panel.processes.empty") }}</p>
         </div>
-        <p v-if="snapshot.processes.length === 0" class="meta">{{ t("panel.processes.empty") }}</p>
         <p class="field-hint">
-          {{ t("panel.processes.footer", { shown: snapshot.processes.length, total: snapshot.totalProcessCount }) }}
+          {{ t("panel.processes.footer", { shown: orderedProcesses.length, total: snapshot.totalProcessCount }) }}
+          <span v-if="orderFrozen"> · {{ t("panel.processes.orderFrozen") }}</span>
         </p>
       </div>
     </section>
@@ -291,6 +304,33 @@ const consumerSourceLabel = computed(() => ({
 
 // --- Canlı süreç izleyici ---
 const snapshot = ref<ProcessSnapshot | null>(null);
+
+// Sıralama dondurma: iki saniyede bir gelen veri satırları yeniden sıralarsa, okumaya çalıştığın
+// satır elinin altından kaçar. Fare/klavye tablonun üzerindeyken ESKİ SIRA korunur; değerler
+// yerinde güncellenmeye devam eder. İmleç ayrılınca sıra tekrar canlıya döner.
+const orderFrozen = ref(false);
+const frozenOrder = ref<number[]>([]);
+
+const orderedProcesses = computed(() => {
+  const rows = snapshot.value?.processes ?? [];
+  if (!orderFrozen.value) {
+    return rows;
+  }
+
+  const byId = new Map(rows.map((row) => [row.processId, row]));
+  // Önce donmuş sıradaki (hâlâ var olan) satırlar, sonra bu arada beliren yeni süreçler sona.
+  // Yeni süreç araya girip mevcut satırları kaydırmaz.
+  const kept = frozenOrder.value.map((pid) => byId.get(pid)).filter((row) => row !== undefined);
+  const keptIds = new Set(kept.map((row) => row!.processId));
+  return [...kept, ...rows.filter((row) => !keptIds.has(row.processId))] as typeof rows;
+});
+
+// Donmadığı sürece güncel sırayı hatırla ki donduğu an referans hazır olsun.
+watch(snapshot, (value) => {
+  if (!orderFrozen.value && value) {
+    frozenOrder.value = value.processes.map((row) => row.processId);
+  }
+});
 const processSort = ref<"cpu" | "memory">("cpu");
 const processPaused = ref(false);
 const processError = ref("");
@@ -743,6 +783,49 @@ function formatTimeSpan(value: string): string {
   display: grid;
   gap: 4px;
   margin-top: 10px;
+}
+
+/* Sabit görüntü alanı: satır sayısı 8'e de düşse 30'a da çıksa bölümün yüksekliği DEĞİŞMEZ,
+   dolayısıyla altındaki "kim kullanıyor" bölümü yerinde kalır. Liste uzunsa içeride kaydırılır. */
+.proc-scroll {
+  height: 420px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.proc-body {
+  display: grid;
+  gap: 4px;
+}
+
+/* Satırlar ışınlanmak yerine kayarak yer değiştirsin; göz takip edebilsin. */
+.proc-move {
+  transition: transform 320ms ease;
+}
+
+.proc-enter-active,
+.proc-leave-active {
+  transition: opacity 200ms ease;
+}
+
+.proc-enter-from,
+.proc-leave-to {
+  opacity: 0;
+}
+
+/* Ayrılan satır akıştan çıkarılır, yoksa kalanları aşağı iterek yeni bir zıplama yaratır. */
+.proc-leave-active {
+  position: absolute;
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .proc-move,
+  .proc-enter-active,
+  .proc-leave-active {
+    transition: none;
+  }
 }
 
 .proc-row {
