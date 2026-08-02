@@ -161,6 +161,9 @@ const snapshot = ref<ResourceConsumerSnapshot | null>(null);
 const webSnapshot = ref<ResourceConsumerSnapshot | null>(null);
 
 // Açılmış sorgu satırları. Anahtar bazlı tutulur ki 3 sn'lik yenileme açık satırı kapatmasın.
+// IIS okunamıyorsa "muhtemel sayfa" korelasyonunu bırak: her turda boşuna appcmd çalıştırma.
+let webUnavailable = false;
+
 const expandedRows = ref(new Set<string>());
 const copiedKey = ref("");
 let copiedTimer: number | null = null;
@@ -347,18 +350,30 @@ async function load() {
     // hangi sayfadan geldiğini BİLMEZ, ama aynı sitenin aynı anda açık olan isteklerini
     // eşleştirerek "muhtemel sayfa" gösterebiliriz (bkz. pageHintFor). Başarısız olursa
     // sessizce geçilir — asıl liste bundan etkilenmez.
+    //
+    // MASRAF KONTROLÜ: bu ek istek sunucuda her seferinde `appcmd` SÜRECİ başlatır. Üç saniyede bir
+    // bunu bedavaya yapmamak için iki koşul: IIS okunamıyorsa bir daha DENEME, ve eşleştirilecek
+    // veritabanı satırı yoksa (liste boş) hiç isteme.
+    const wantWebCorrelation = !isWeb.value && !webUnavailable && (snapshot.value?.consumers.length ?? 1) > 0;
+
     const [result, web] = await Promise.all([
       getResourceConsumers(props.source, props.limit, controller.signal),
-      isWeb.value
-        ? Promise.resolve(null)
-        : getResourceConsumers("iis", props.limit, controller.signal).catch(() => null)
+      wantWebCorrelation
+        ? getResourceConsumers("iis", props.limit, controller.signal).catch(() => null)
+        : Promise.resolve(null)
     ]);
 
     if (current !== requestId) {
       return;
     }
+
+    if (wantWebCorrelation) {
+      // Kurulu değil / okunamıyor → bir daha sorma (kaynak değişince sıfırlanır).
+      webUnavailable = web !== null && (!web.installed || !web.available);
+      webSnapshot.value = webUnavailable ? null : web;
+    }
+
     snapshot.value = result;
-    webSnapshot.value = web;
     failed.value = false;
   } catch {
     // Ağ/yetki hatası: son iyi listeyi silmeyiz (titreme olmasın), yalnız uyarı satırı çıkarırız.
@@ -402,6 +417,10 @@ watch(
     requestId += 1;
     inFlight = false;
     snapshot.value = null;
+    webSnapshot.value = null;
+    // IIS "okunamıyor" damgasını sıfırla: kullanıcı bu arada IIS'i düzeltmiş olabilir.
+    webUnavailable = false;
+    expandedRows.value = new Set();
     failed.value = false;
     void load();
   }

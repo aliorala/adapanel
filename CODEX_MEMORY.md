@@ -6037,3 +6037,14 @@ Basarili:
   `IComponentBootstrapper.GetPendingUpdateCountAsync` (yalniz kurulu bilesenler + onbellek; AG YOK,
   sistem taramasi YOK) ve AttentionService artik sayiyi ondan alir. Kaldirilmis bilesenin onbellekte
   kalan kaydi da sayilmaz.
+- **PROAKTIF TARAMA (kullanici istegi, yayin oncesi):** TEMIZ cikanlar — 4 yeni ucun yetkilendirmesi
+  (SiteHealth: Administrator,Reseller + `CustomerAccess.EnsureSiteAsync`; Attention/ProcessMonitor/
+  ResourceAttribution: Administrator-only), tum setInterval'lerin onUnmounted'da temizlenmesi,
+  Advisor'in urettigi 17 + AttentionService'in 4 baslik anahtarinin i18n'de TAM olmasi, cron'da
+  admin olmayan icin `SiteName`/`RunAs` dahil tum betik alanlarinin temizlenmesi.
+  **BULUNAN TEK SORUN (israf):** veritabani gorunumunde "muhtemel sayfa" korelasyonu icin HER 3
+  SANIYEDE bir IIS'e istek gidiyordu — sunucuda bu her seferinde `appcmd` SURECI baslatir, ustelik
+  IIS kurulu olmasa bile. Iki kosul eklendi: IIS okunamiyorsa (`installed/available` false) bir daha
+  DENEME (`webUnavailable`, kaynak degisince sifirlanir) ve eslestirilecek DB satiri yoksa hic isteme.
+- **0.2.26 PAKET:** `artifacts\release\0.2.26\AdaPanelSetup.exe`, `51,940,503` byte,
+  SHA256 `3D1B87ACDB5BD19059B7993D4C796E2B37DC108C7EBA976D630A4E984E317FCC`.
