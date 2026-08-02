@@ -2901,5 +2901,18 @@
   "auth.forbidden": "Bu işlem için yetkiniz yok.",
   "monitoring.source_not_supported": "Bu kaynak için canlı tüketim listesi desteklenmiyor.",
   "panel.advisor.checksFailed": "Bazı kontroller çalıştırılamadı ({checks}); bu alanlarda sorun olup olmadığı BİLİNMİYOR. Aşağıdaki liste eksik olabilir.",
-  "panel.update.checkFailed": "Sürüm bilgisi alınamadı; güncel olup olmadığınız BİLİNMİYOR. Aşağıdaki sürüm son başarılı kontrolden kalma olabilir. Birkaç dakika sonra \"Kontrol et\" ile tekrar deneyin."
+  "panel.update.checkFailed": "Sürüm bilgisi alınamadı; güncel olup olmadığınız BİLİNMİYOR. Aşağıdaki sürüm son başarılı kontrolden kalma olabilir. Birkaç dakika sonra \"Kontrol et\" ile tekrar deneyin.",
+  "panel.update.phase.scheduled": "Kurulum başlatıldı, panel henüz çalışıyor…",
+  "panel.update.phase.restarting": "Panel kapandı, dosyalar değiştiriliyor…",
+  "panel.update.phase.verifying": "Panel geri döndü, sürüm doğrulanıyor…",
+  "panel.update.phase.done": "Güncelleme tamamlandı. Sayfa yenileniyor…",
+  "panel.update.phase.timeout": "Panel beklenen sürede geri dönmedi.",
+  "panel.update.phaseHint": "Yüzde bir tahmindir — panel kurulum boyunca kapalı olduğu için gerçek ilerleme okunamaz. Üstteki yazı ise ölçülen durumu gösterir; %100 yalnızca yeni sürüm doğrulandığında görünür.",
+  "panel.update.elapsedSeconds": "{seconds} sn",
+  "panel.update.elapsedMinutes": "{minutes} dk {seconds} sn",
+  "panel.update.phase.failed": "Kurulum tamamlanamadı.",
+  "panel.update.phaseHintReal": "Yüzde, gözlemlenen adımlarla ilerler: kurulum planlandı, panel kapandı, panel geri döndü, sürüm doğrulandı. Panel kurulum sırasında kapalı olduğu için o aralıkta sunucudan sinyal gelmez; bu yüzden ara bir sayı uydurulmaz, geçen süre gösterilir.",
+  "panel.update.attemptAborted": "Kurulum, panel dosyaları kullanımda olduğu için iptal edildi (kod 5) ve değişiklikler geri alındı. Panel eski sürümde çalışmaya devam ediyor. Kurulum dosyasını sunucuda bir kez elle çalıştırın.",
+  "panel.update.attemptFailed": "Kurulum tamamlanamadı; panel eski sürümde çalışmaya devam ediyor.",
+  "panel.update.attemptFailedWithReason": "Kurulum tamamlanamadı: {reason} Panel eski sürümde çalışmaya devam ediyor."
 }

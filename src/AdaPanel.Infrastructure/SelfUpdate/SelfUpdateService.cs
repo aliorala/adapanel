@@ -101,9 +101,36 @@ public sealed class SelfUpdateService(
             // Çekme başarısızsa sürüm bilgisi önbellekten geliyor demektir; ekran "güncelsiniz"
             // DEMEMELİ, çünkü yeni bir sürüm yayınlanmış olabilir ve panel onu görememiştir.
             IsCheckFailed = !string.IsNullOrEmpty(fetchNote),
+            LastAttempt = await ReadLastAttemptAsync(cancellationToken),
             IsUpdateAvailable = IsNewerVersion(currentVersion, latestVersion),
             CheckedAtUtc = DateTime.UtcNow
         };
+    }
+
+    /// <summary>
+    /// Kurulum çalıştırıcısının bıraktığı son durumu okur (updates/last-attempt.json).
+    /// Dosya yoksa ya da okunamıyorsa null döner — bu bir hata değildir, henüz deneme olmamıştır.
+    /// </summary>
+    private async Task<UpdateAttemptDto?> ReadLastAttemptAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var path = Path.Combine(fileStore.EnsureDirectory("updates"), "last-attempt.json");
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var json = await File.ReadAllTextAsync(path, cancellationToken);
+            return JsonSerializer.Deserialize<UpdateAttemptDto>(
+                json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (Exception)
+        {
+            // Durum dosyası okunamadıysa güncelleme akışını bozmamalı: bu yalnız bilgilendirme.
+            return null;
+        }
     }
 
     public async Task<UpdateStatusDto> SetGithubRepoAsync(string repo, CancellationToken cancellationToken = default)

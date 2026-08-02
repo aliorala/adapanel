@@ -7,11 +7,23 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
+export type UpdateAttempt = {
+  phase: string;
+  installerExitCode: number | null;
+  error: string;
+  updatedAtUtc: string | null;
+  /** Deneme sonuçlandı mı? true ise arayüz beklemeyi bırakmalı. */
+  isFinished: boolean;
+  isFailed: boolean;
+};
+
 export type UpdateStatus = {
   currentVersion: string;
   isUpdateAvailable: boolean;
   /** Sürüm bilgisi GitHub'dan alınamadı; aşağıdaki sürüm önbellekten. "Güncelsiniz" DENMEZ. */
   isCheckFailed: boolean;
+  /** Son kurulum denemesinin durumu; çalıştırıcının diske yazdığı gerçek sonuç. */
+  lastAttempt: UpdateAttempt | null;
   latestVersion: string;
   downloadUrl: string;
   packageSha256: string;

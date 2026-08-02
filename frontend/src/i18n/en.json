@@ -2901,5 +2901,18 @@
   "auth.forbidden": "You do not have permission for this action.",
   "monitoring.source_not_supported": "Live consumption is not supported for this source.",
   "panel.advisor.checksFailed": "Some checks could not run ({checks}); whether there is a problem in those areas is UNKNOWN. The list below may be incomplete.",
-  "panel.update.checkFailed": "Version information could not be retrieved, so whether you are up to date is UNKNOWN. The version below may be from the last successful check. Try \"Check\" again in a few minutes."
+  "panel.update.checkFailed": "Version information could not be retrieved, so whether you are up to date is UNKNOWN. The version below may be from the last successful check. Try \"Check\" again in a few minutes.",
+  "panel.update.phase.scheduled": "Install started, the panel is still running…",
+  "panel.update.phase.restarting": "The panel is down, files are being replaced…",
+  "panel.update.phase.verifying": "The panel is back, verifying the version…",
+  "panel.update.phase.done": "Update complete. Reloading the page…",
+  "panel.update.phase.timeout": "The panel did not come back within the expected time.",
+  "panel.update.phaseHint": "The percentage is an estimate — real progress cannot be read while the panel is down. The line above reports what is actually observed; 100% appears only once the new version is verified.",
+  "panel.update.elapsedSeconds": "{seconds}s",
+  "panel.update.elapsedMinutes": "{minutes}m {seconds}s",
+  "panel.update.phase.failed": "The installation did not complete.",
+  "panel.update.phaseHintReal": "The percentage advances through observed steps: install scheduled, panel down, panel back, version verified. While the panel is down there is no signal from the server, so no intermediate number is invented — the elapsed time is shown instead.",
+  "panel.update.attemptAborted": "The installation was cancelled because panel files were in use (code 5) and the changes were rolled back. The panel keeps running on the old version. Run the installer manually on the server once.",
+  "panel.update.attemptFailed": "The installation did not complete; the panel keeps running on the old version.",
+  "panel.update.attemptFailedWithReason": "The installation did not complete: {reason} The panel keeps running on the old version."
 }

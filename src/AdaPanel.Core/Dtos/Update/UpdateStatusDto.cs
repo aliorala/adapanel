@@ -17,6 +17,17 @@ public sealed class UpdateStatusDto
     /// </summary>
     public bool IsCheckFailed { get; set; }
 
+    /// <summary>
+    /// SON kurulum denemesinin durumu (çalıştırıcının yazdığı dosyadan). Deneme yoksa null.
+    /// <para>
+    /// Gerekli: arayüz kurulumdan sonra yalnızca "sürüm değişti mi" diye bakıyordu. Kurulum iptal
+    /// olup saniyeler içinde bittiğinde bile ekran "panel yeniden başlatılıyor" diyerek dakikalarca
+    /// bekliyor, sonunda da zaman aşımı gösteriyordu — kullanıcı ne sonucu ne sebebini görüyordu.
+    /// Bu alanla arayüz denemenin BİTTİĞİNİ anlar ve gerçek hatayı hemen gösterir.
+    /// </para>
+    /// </summary>
+    public UpdateAttemptDto? LastAttempt { get; set; }
+
     public string LatestVersion { get; set; } = string.Empty;
 
     public string DownloadUrl { get; set; } = string.Empty;

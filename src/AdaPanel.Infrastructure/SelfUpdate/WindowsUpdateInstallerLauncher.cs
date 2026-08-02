@@ -77,6 +77,29 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
               Add-Content -LiteralPath $logPath -Value "$timestamp [runner] $message" -ErrorAction SilentlyContinue
             }
 
+            # DURUM DOSYASI: panel kurulum boyunca kapali oldugu icin ilerlemeyi kendisi bildiremez.
+            # Bunun yerine calistirici her adimda buraya yaziyor; panel geri donunce dosyayi okuyup
+            # denemenin BITIP BITMEDIGINI ve sonucunu raporluyor.
+            #
+            # Cozdugu sorun: kurulum iptal olup saniyeler icinde bittiginde bile arayuz "panel yeniden
+            # baslatiliyor" diyerek 15 dakika bekliyordu, cunku YALNIZCA surum degisti mi diye bakiyor,
+            # denemenin sonucunu hic sormuyordu. Kullaniciya ne hata ne sonuc gorunuyordu.
+            $statePath = Join-Path (Split-Path -Parent $logPath) 'last-attempt.json'
+            function Write-UpdateState([string]$phase, [string]$errorText, $exitCode) {
+              try {
+                $state = [ordered]@{
+                  phase = $phase
+                  error = $errorText
+                  installerExitCode = $exitCode
+                  updatedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                }
+                ($state | ConvertTo-Json -Compress) | Set-Content -LiteralPath $statePath -Encoding UTF8 -ErrorAction SilentlyContinue
+              }
+              catch { }
+            }
+
+            Write-UpdateState 'starting' '' $null
+
             $failed = $false
             try {
               Start-Sleep -Seconds 5
@@ -93,6 +116,7 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
               try {
                 $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
                 if ($svc -and $svc.Status -ne 'Stopped') {
+                  Write-UpdateState 'stopping-service' '' $null
                   Write-UpdateLog "Stopping service '$serviceName' before install."
                   Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
                   for ($i = 0; $i -lt 60; $i++) {
@@ -113,8 +137,10 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
                 '/NORESTART',
                 "/LOG=`"$logPath`""
               )
+              Write-UpdateState 'installing' '' $null
               $process = Start-Process -FilePath $packagePath -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait
               Write-UpdateLog "Installer exited with code $($process.ExitCode)."
+              Write-UpdateState 'installer-finished' '' $process.ExitCode
               if ($process.ExitCode -notin @(0, 1641, 3010)) {
                 throw "Installer exited with code $($process.ExitCode)."
               }
@@ -122,6 +148,7 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
             catch {
               $failed = $true
               Write-UpdateLog $_.Exception.ToString()
+              Write-UpdateState 'failed' $_.Exception.Message $null
             }
 
             # GUVENCE: installer hangi adimda biterse bitsin panel servisi olu birakilamaz.
@@ -159,6 +186,10 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
               $failed = $true
               Write-UpdateLog "Service recovery failed: $($_.Exception.ToString())"
             }
+
+            # SON DURUM: panel geri donunce bunu okuyup kullaniciya sonucu soyleyecek.
+            if ($failed) { Write-UpdateState 'failed' 'Kurulum tamamlanamadi.' $null }
+            else { Write-UpdateState 'succeeded' '' 0 }
 
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
             if ($failed) { exit 1 }
