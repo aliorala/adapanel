@@ -22,7 +22,10 @@
         <span :class="['status-pill', dns.needsRepair ? 'danger' : 'ok']">
           {{ dns.publiclyBound ? t("panel.health.dnsBound") : t("panel.health.dnsNotBound") }}
         </span>
-        <button class="secondary compact" :disabled="dnsBusy" @click="repairDns">
+        <!-- Onarım düğmesi YALNIZCA onarılacak bir şey varken görünür. Her zaman durduğunda
+             kullanıcı "demek ki sorun var" diye tekrar tekrar basıyor, hiçbir şey değişmiyor
+             (çünkü zaten sorun yok) ve panel bozukmuş gibi hissettiriyordu. -->
+        <button v-if="dns.needsRepair" class="secondary compact" :disabled="dnsBusy" @click="repairDns">
           {{ dnsBusy ? t("panel.health.dnsRepairing") : t("panel.health.dnsRepair") }}
         </button>
       </div>
@@ -77,7 +80,14 @@
               : t("panel.health.domainsCurrent", { total: domains.totalSites })
           }}
         </span>
-        <button class="secondary compact" :disabled="domainsBusy" @click="refreshAllDomains">
+        <!-- "Eksikleri tamamla" YALNIZCA gerçekten eksik varken görünür. Aksi hâlde kullanıcı
+             hiç eksik yokken de düğmeyi görüp basıyor, hiçbir şey değişmiyor ve panel çalışmıyor
+             sanıyordu. (İşlem zaten idempotent; sorun düğmenin varlığının yanlış sinyal vermesiydi.) -->
+        <button
+          v-if="domains && domains.updatedSites > 0"
+          class="secondary compact"
+          :disabled="domainsBusy"
+          @click="refreshAllDomains">
           {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsRefresh") }}
         </button>
       </div>
