@@ -21,7 +21,13 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
-    <section v-if="!status.isInstalled" class="nginx-empty">
+    <!-- Durum sunucudan gelmeden "kurulu değil" ekranı gösteriliyordu; kurulu bir Nginx'i
+         yöneticinin yeniden kurmaya çalışmasına yol açan yanıltıcı bir varsayılandı. -->
+    <p v-if="!statusLoaded" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
+    <section v-else-if="!status.isInstalled" class="nginx-empty">
       <div class="nginx-mark">NX</div>
       <div>
         <h3>{{ t("panel.nginx.notInstalled") }}</h3>
@@ -163,6 +169,8 @@ const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
 const loading = ref(false);
 const busy = ref(false);
+// Durum okunana kadar isInstalled=false varsayılanı "kurulu değil" olarak görünüyordu.
+const statusLoaded = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const status = reactive<NginxStatus>({
@@ -202,6 +210,7 @@ async function refresh() {
   loading.value = true;
   try {
     applyStatus(await getNginxStatus());
+    statusLoaded.value = true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

@@ -27,6 +27,10 @@
           </ul>
         </article>
       </div>
+      <!-- Planlar gelmeden "plan yok" yazıyordu; tanımlı servis planları yokmuş gibi görünüyordu. -->
+      <p v-else-if="!plansLoaded" class="empty-state plans-empty" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
       <p v-else class="empty-state plans-empty">{{ t("panel.plans.empty") }}</p>
 
       <form v-if="showPlanForm" class="plan-form-grid" @submit.prevent="addServicePlan">
@@ -370,6 +374,8 @@ const parentCandidates = computed(() => authStore.users.filter((user) => user.ro
 
 // Servis planları (Servis Planlari): müşterilere atanabilen limit şablonları.
 const servicePlans = ref<ServicePlan[]>([]);
+// Yüklenmemiş plan listesi "plan yok" olarak görünüyordu.
+const plansLoaded = ref(false);
 const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0, maxMailboxes: 0, maxScheduledTasks: 0 });
 const createPlanId = ref("");
 
@@ -391,6 +397,7 @@ onMounted(async () => {
 
 async function loadServicePlans() {
   servicePlans.value = await getServicePlans().catch(() => []);
+  plansLoaded.value = true;
 }
 
 async function addServicePlan() {

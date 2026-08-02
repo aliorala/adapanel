@@ -159,9 +159,15 @@
               <button class="danger compact" :disabled="busy" @click="removeRecord(record.id)">{{ t("panel.dns.delete") }}</button>
             </span>
           </div>
-          <p v-if="!zone?.records.length" class="empty-state">{{ t("panel.dns.noRecords") }}</p>
+          <!-- Bölge gelmeden "kayıt yok" yazıyordu; dolu bir DNS bölgesi boş sanılabiliyordu. -->
+          <p v-if="!zone" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+          <p v-else-if="!zone.records.length" class="empty-state">{{ t("panel.dns.noRecords") }}</p>
         </div>
       </template>
+
+      <!-- Bölge ayarları gelmeden alanlar boş görünüyordu; dolu bir zone tanımsız sanılıp
+           boş değerlerle kaydedilebiliyordu. -->
+      <p v-else-if="!zone" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
 
       <form v-else class="form-surface" @submit.prevent="saveZone">
         <div class="section-head">

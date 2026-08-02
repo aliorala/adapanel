@@ -36,7 +36,7 @@
     <div class="pd-list">
       <div class="section-head">
         <h3>{{ t("panel.protected.listTitle") }}</h3>
-        <span class="meta">{{ items.length }}</span>
+        <span class="meta">{{ listLoaded ? items.length : "…" }}</span>
       </div>
       <div v-if="items.length > 0" class="pd-rows">
         <article v-for="item in items" :key="item.relativePath" class="pd-row">
@@ -49,6 +49,10 @@
           </button>
         </article>
       </div>
+      <!-- Liste gelmeden "koruma yok" yazıyordu; korumalı dizinler korumasız sanılabiliyordu. -->
+      <p v-else-if="siteName && !listLoaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
       <p v-else class="empty-state">{{ t("panel.protected.empty") }}</p>
     </div>
   </section>
@@ -66,6 +70,8 @@ const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
 const items = ref<ProtectedDirectory[]>([]);
+// Yüklenmemiş liste "kayıt yok" olarak görünüyordu.
+const listLoaded = ref(false);
 const loading = ref(false);
 const busy = ref(false);
 const removing = ref("");
@@ -79,11 +85,13 @@ watch(siteName, refresh);
 async function refresh() {
   if (!siteName.value) {
     items.value = [];
+    listLoaded.value = false;
     return;
   }
   loading.value = true;
   try {
     items.value = await getProtectedDirs(siteName.value);
+    listLoaded.value = true;
   } catch (error) {
     showNotice(extractApiMessage(error), true);
   } finally {

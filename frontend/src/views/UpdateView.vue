@@ -12,7 +12,10 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
-    <template v-if="status">
+    <!-- Sürüm durumu gelmeden ekran boştu; yükleniyor ile "veri yok" ayırt edilemiyordu. -->
+    <p v-if="!status" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+
+    <template v-else>
       <div class="update-summary">
         <article>
           <span>{{ t("panel.update.current") }}</span>

@@ -37,7 +37,7 @@
     <div class="bk-list">
       <div class="section-head">
         <h3>{{ t("panel.backup.listTitle") }}</h3>
-        <span class="meta">{{ siteBackups.length }}</span>
+        <span class="meta">{{ listLoaded ? siteBackups.length : "…" }}</span>
       </div>
 
       <div v-if="siteBackups.length > 0" class="bk-rows">
@@ -56,6 +56,10 @@
           </div>
         </article>
       </div>
+      <!-- Yedek listesi gelmeden "yedek yok" yazıyordu; var olan yedekler yokmuş gibi görünüyordu. -->
+      <p v-else-if="!listLoaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
       <p v-else class="empty-state">{{ t("panel.backup.empty") }}</p>
     </div>
   </section>
@@ -76,6 +80,8 @@ const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
 const loading = ref(false);
+// Yüklenmemiş liste "yedek yok" olarak görünüyordu.
+const listLoaded = ref(false);
 const busy = ref(false);
 const downloadingId = ref("");
 const restoringId = ref("");
@@ -99,6 +105,7 @@ async function refresh() {
   loading.value = true;
   try {
     backups.value = await getBackups();
+    listLoaded.value = true;
   } catch (error) {
     showNotice(extractApiMessage(error), true);
   } finally {

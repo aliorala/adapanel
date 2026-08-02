@@ -171,6 +171,12 @@
       </section>
     </template>
 
+    <!-- Site seçiliyken yapılandırma gelene kadar "site seçin" ipucu görünüyordu;
+         yüklenme durumu ile "seçim yok" ekranda ayırt edilemiyordu. -->
+    <p v-else-if="selectedSiteName" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
     <p v-else class="meta">
       {{ t("panel.asp.selectSiteHint") }}
     </p>

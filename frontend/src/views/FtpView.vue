@@ -53,7 +53,8 @@
       </div>
     </div>
 
-    <label v-if="isAdmin && !siteName" class="form-surface ftp-tls-bar">
+    <!-- FTPS anahtarı sunucudan okunmadan kapalı görünüyordu; TLS zorunluyken kapalı sanılıyordu. -->
+    <label v-if="isAdmin && !siteName && tlsLoaded" class="form-surface ftp-tls-bar">
       <input type="checkbox" :checked="requireSsl" :disabled="tlsSaving" @change="toggleTls(($event.target as HTMLInputElement).checked)" />
       <span class="ftp-tls-text">
         <strong>{{ t("panel.ftp.requireTls") }}</strong>
@@ -134,6 +135,12 @@
         </div>
       </template>
 
+      <!-- Liste sunucudan gelmeden "kullanıcı yok" yazıyordu; var olan FTP hesapları
+           silinmiş/yok sanılabiliyordu. -->
+      <p v-else-if="!usersLoaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+
       <p v-else class="empty-state">
         {{ t("panel.ftp.noUsers") }}
       </p>
@@ -158,6 +165,9 @@ const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 
 const users = ref<FtpUser[]>([]);
+// Yüklenmemiş durumu "kayıt yok" / "kapalı" göstermek yanıltıcıydı.
+const usersLoaded = ref(false);
+const tlsLoaded = ref(false);
 const serverStatus = ref<FtpServerStatus | null>(null);
 const serverCheckCompleted = ref(false);
 const creating = ref(false);
@@ -249,6 +259,7 @@ async function loadTls() {
   }
   try {
     requireSsl.value = (await getFtpTls()).requireSsl;
+    tlsLoaded.value = true;
   } catch {
     // erişim yoksa toggle gizli kalır
   }
@@ -279,6 +290,7 @@ async function prepareServer() {
 async function refresh() {
   try {
     users.value = await getFtpUsers();
+    usersLoaded.value = true;
   } catch (error) {
     showApiError(error);
   }

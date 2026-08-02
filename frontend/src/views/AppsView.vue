@@ -31,7 +31,14 @@
       </label>
     </div>
 
-    <template v-if="selectedSiteName">
+    <!-- Yapılandırma gelmeden durum kartını göstermiyoruz: yüklenmemişken hostedByApp false
+         olduğu için Node/Python ile barındırılan bir site "düz site" görünüyor ve kullanıcı
+         barındırmanın kapalı olduğunu sanıyordu. -->
+    <p v-if="selectedSiteName && !configurationLoaded" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
+    <template v-if="selectedSiteName && configurationLoaded">
       <!-- 1) DURUM: kullanıcının ilk gördüğü şey, sitenin şu an neyle hizmet verdiği. -->
       <article :class="['runtime-status', hostedByApp ? 'app' : 'plain']">
         <div class="runtime-status-main">
@@ -305,6 +312,8 @@ const currentConfiguration = computed(() =>
 
 // Site şu an gerçekten bir uygulamayla mı hizmet veriyor? (web.config'de handler var ve process tanımlı)
 const hostedByApp = computed(() => Boolean(currentConfiguration.value?.isEnabled));
+// Yapılandırma sunucudan geldi mi? "Gelmedi" ile "barındırma kapalı" ekranda ayrışsın diye gerekli.
+const configurationLoaded = computed(() => currentConfiguration.value !== undefined && currentConfiguration.value !== null);
 
 const hostedRuntimeLabel = computed(() => runtimeLabel(currentConfiguration.value?.runtimeType ?? "none"));
 

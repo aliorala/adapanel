@@ -262,6 +262,14 @@
           </div>
           <span v-if="panelPreferences.restartRequired" class="status-pill warn">{{ t("panel.settings.restartRequired") }}</span>
         </div>
+
+        <!-- Tercihler gelmeden alanlar varsayılan değerleriyle doluydu; kaydedilirse gerçek
+             ayarların üzerine yazılıyordu. -->
+        <p v-if="!panelPreferencesLoaded" class="empty-state" role="status" aria-live="polite">
+          {{ t("panel.common.loading") }}
+        </p>
+
+        <template v-else>
         <div class="form-grid">
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.settings.panelName") }}</span>
@@ -334,6 +342,7 @@
         <div class="row-actions">
           <button class="compact" @click="savePanelPreferences">{{ t("panel.settings.saveGeneral") }}</button>
         </div>
+        </template>
       </section>
 
       <section v-else-if="settingsTab === 'security' && isAdmin" class="form-surface settings-section">
@@ -494,6 +503,9 @@ const panelPreferences = reactive<PanelPreferences>({
   installRuntimeIfMissing: true,
   restartRequired: false
 });
+// Tercihler sunucudan gelmeden yukarıdaki varsayılanlar gerçek ayar sanılıyordu (anahtarlar
+// yanlış konumda görünüp yanlışlıkla üzerine kaydedilebiliyordu).
+const panelPreferencesLoaded = ref(false);
 
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isCustomer = computed(() => authStore.session?.user?.role === "Customer");
@@ -886,6 +898,7 @@ async function loadDashboardData() {
     softwareStore.fetchCatalog(),
     getPanelPreferences().then((preferences) => {
       Object.assign(panelPreferences, preferences);
+      panelPreferencesLoaded.value = true;
       i18n.locale.value = preferences.defaultLanguage;
       applyAppearance(preferences);
     })

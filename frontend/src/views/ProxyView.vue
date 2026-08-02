@@ -33,7 +33,13 @@
       </label>
     </div>
 
-    <template v-if="selectedSiteName">
+    <!-- Yapılandırma sunucudan gelmeden özet "devre dışı", form da varsayılan değerlerle
+         görünüyordu; kullanıcı proxy'yi kapalı sanıp yanlış karar veriyordu. -->
+    <p v-if="selectedSiteName && !currentConfiguration" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
+    <template v-else-if="selectedSiteName">
       <div class="summary-strip">
         <article class="summary-item">
           <span class="tile-label">{{ t("panel.proxy.arrStatus") }}</span>

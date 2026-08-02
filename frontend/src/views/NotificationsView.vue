@@ -12,6 +12,13 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
+    <!-- Ayarlar gelmeden form boş / "yapılandırılmamış" görünüyordu; kayıtlı SMTP'si olan
+         yönetici bunu "ayar yok" sanıp boş formu üstüne kaydedebiliyordu. -->
+    <p v-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
+    <template v-else>
     <div class="summary-strip">
       <div class="summary-item">
         <span>{{ t("panel.notifications.smtpStatus") }}</span>
@@ -109,6 +116,7 @@
       </div>
       <span class="field-hint">{{ t("panel.notifications.testHint") }}</span>
     </div>
+    </template>
   </section>
 </template>
 
@@ -121,6 +129,8 @@ import { extractApiMessage } from "../stores/auth";
 const { t } = useI18n();
 const activeTab = ref<"email" | "webhook">("email");
 const busy = ref("");
+// Yüklenmemiş durumu "yapılandırılmamış/boş" göstermek yanıltıcıydı.
+const settingsLoaded = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 
@@ -145,6 +155,7 @@ async function loadSettings() {
   busy.value = "load";
   try {
     Object.assign(form, await getNotificationSettings(), { smtpPassword: "" });
+    settingsLoaded.value = true;
     notice.value = "";
   } catch (error) {
     showNotice(resolveApiMessage(error), true);

@@ -15,7 +15,9 @@
 
     <p v-if="notice" class="notice error">{{ notice }}</p>
     <p v-if="!siteName" class="empty-state">{{ t("panel.hosting.selectSiteHint") }}</p>
-    <p v-else-if="stats && !stats.hasData" class="empty-state">{{ t("panel.hosting.statsEmpty") }}</p>
+    <!-- İstatistikler gelmeden ekran bomboş kalıyordu; "henüz bilmiyorum" görünür olmalı. -->
+    <p v-else-if="!stats" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+    <p v-else-if="!stats.hasData" class="empty-state">{{ t("panel.hosting.statsEmpty") }}</p>
 
     <template v-if="stats && stats.hasData">
       <div class="summary-strip">

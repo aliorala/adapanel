@@ -41,7 +41,13 @@
         </div>
       </div>
 
-      <div class="summary-strip security-summary">
+      <!-- Site güvenlik durumu okunmadan izolasyon/ACL/kural rozetleri "kapalı" görünüyordu;
+           korumalı bir site korumasız sanılabiliyordu. -->
+      <p v-if="selectedSiteName && !securityConfig" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+
+      <div v-else-if="securityConfig" class="summary-strip security-summary">
         <div class="summary-item">
           <span>{{ t("panel.security.isolationStatus") }}</span>
           <strong :class="['status-pill', securityConfig?.isIsolated ? 'ok' : 'warn']">
@@ -158,14 +164,20 @@
           <h3>{{ t("panel.antivirus.title") }}</h3>
           <p class="meta">{{ t("panel.antivirus.subtitle") }}</p>
         </div>
-        <span :class="['status-pill', avStatus?.isInstalled ? 'ok' : 'warn']">
-          {{ avStatus?.isInstalled
+        <span v-if="avStatus" :class="['status-pill', avStatus.isInstalled ? 'ok' : 'warn']">
+          {{ avStatus.isInstalled
             ? t("panel.antivirus.installedVersion", { version: avStatus.version })
             : t("panel.antivirus.notInstalled") }}
         </span>
       </div>
 
-      <div v-if="!avStatus?.isInstalled" class="form-surface">
+      <!-- Durum gelmeden "kurulu değil" + kurulum butonu gösteriliyordu; kurulu ClamAV
+           yeniden kurulmaya çalışılabiliyordu. -->
+      <p v-if="!avStatus" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+
+      <div v-else-if="!avStatus.isInstalled" class="form-surface">
         <p class="meta">{{ t("panel.antivirus.installHint") }}</p>
         <div class="row-actions">
           <button class="compact" :disabled="busyAction === 'av'" @click="installAv">
@@ -249,13 +261,18 @@
           <h3>{{ t("panel.bruteforce.title") }}</h3>
           <p class="meta">{{ t("panel.bruteforce.subtitle") }}</p>
         </div>
-        <label class="toggle-field">
+        <label v-if="bruteForceLoaded" class="toggle-field">
           <input v-model="bruteForm.enabled" type="checkbox" />
           <span>{{ t("panel.bruteforce.enabled") }}</span>
         </label>
       </div>
 
-      <div class="form-surface">
+      <!-- Kaba kuvvet ayarları gelmeden anahtar ve eşikler varsayılan değerlerini gösteriyordu. -->
+      <p v-if="!bruteForceLoaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+
+      <div v-else class="form-surface">
         <div class="form-grid">
           <label>
             <span class="field-label">{{ t("panel.bruteforce.maxAttempts") }}</span>
@@ -350,6 +367,8 @@ const aclForm = reactive({ principal: "", rights: "M" });
 const rateForm = reactive({ requestsPerMinute: 120 });
 const firewallForm = reactive({ ruleName: "", port: 8890, protocol: "TCP" });
 const bannedIps = ref<BannedIp[]>([]);
+// Ayarlar okunmadan önceki varsayılanlar gerçek yapılandırma sanılıyordu.
+const bruteForceLoaded = ref(false);
 const bruteWhitelistText = ref("");
 const bruteForm = reactive<BruteForceSettings>({
   enabled: true,
@@ -457,6 +476,7 @@ function applyBruteForce(settings: BruteForceSettings, bans: BannedIp[]) {
   Object.assign(bruteForm, settings);
   bruteWhitelistText.value = settings.whitelistedIps.join(", ");
   bannedIps.value = bans;
+  bruteForceLoaded.value = true;
 }
 
 async function saveBruteForce() {

@@ -30,17 +30,18 @@
         <span>{{ t("panel.ssl.targetSite") }}</span>
         <strong>{{ selectedSiteName || "-" }}</strong>
       </div>
+      <!-- Sayaçlar veri gelmeden 0 gösteriyordu; sertifikası olan site sertifikasız sanılıyordu. -->
       <div class="summary-item">
         <span>{{ t("panel.ssl.hostNames") }}</span>
-        <strong>{{ workspace?.hostNames.length ?? 0 }}</strong>
+        <strong>{{ workspace ? workspace.hostNames.length : "…" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.ssl.certificateCount") }}</span>
-        <strong>{{ workspace?.certificates.length ?? 0 }}</strong>
+        <strong>{{ workspace ? workspace.certificates.length : "…" }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.ssl.httpsBindings") }}</span>
-        <strong>{{ httpsBindingCount }}</strong>
+        <strong>{{ workspace ? httpsBindingCount : "…" }}</strong>
       </div>
     </div>
 
@@ -73,7 +74,10 @@
           {{ item.isHttpsBindingPresent ? `${item.port}` : t("panel.ssl.notBound") }}
         </span>
       </div>
-      <p v-if="!workspace?.certificates.length" class="empty-state">{{ t("panel.ssl.noCertificates") }}</p>
+      <!-- Liste yüklenmeden "sertifika yok" yazıyordu; henüz bilinmiyor ile gerçekten yok
+           ekranda ayırt edilemiyordu. -->
+      <p v-if="!workspace" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="!workspace.certificates.length" class="empty-state">{{ t("panel.ssl.noCertificates") }}</p>
     </div>
 
     <section v-else-if="activeTab === 'letsencrypt'" class="form-surface">

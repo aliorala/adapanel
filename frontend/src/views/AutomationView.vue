@@ -12,6 +12,13 @@
 
     <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
+    <!-- Ayarlar sunucudan gelmeden bütün otomasyon anahtarları varsayılan (kapalı) görünüyordu;
+         yönetici "hiçbir otomasyon açık değil" sanıp yanlış karar veriyordu. -->
+    <p v-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
+    <template v-else>
     <div class="form-surface">
       <div class="section-head">
         <div>
@@ -244,6 +251,7 @@
         {{ t("panel.automation.runSslNow") }}
       </button>
     </div>
+    </template>
   </section>
 </template>
 
@@ -265,6 +273,8 @@ import { extractApiMessage } from "../stores/auth";
 const { t } = useI18n();
 const status = ref<AutomationStatus | null>(null);
 const loading = ref(false);
+// "Henüz bilmiyorum" ile "kapalı" ekranda ayırt edilemiyordu; ayarlar gelene kadar kartları gizle.
+const settingsLoaded = ref(false);
 const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
@@ -378,6 +388,7 @@ async function run(operation: () => Promise<void>) {
 function applyStatus(next: AutomationStatus) {
   status.value = next;
   Object.assign(form, next.settings);
+  settingsLoaded.value = true;
 }
 
 function formatDate(value: string | null | undefined) {
