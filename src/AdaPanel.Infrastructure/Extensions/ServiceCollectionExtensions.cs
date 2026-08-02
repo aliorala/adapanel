@@ -112,6 +112,8 @@ public static class ServiceCollectionExtensions
         // toplayan rozet servisi. İkisi de yalnız MEVCUT sinyalleri okur, kalıcı durum tutmaz → Scoped.
         services.AddScoped<ISiteHealthService, Health.SiteHealthService>();
         services.AddScoped<IDomainRefreshService, Health.DomainRefreshService>();
+        // Sunucudan sunucuya erisim anahtarlari (MCP baglantilari); bkz. PanelApiToken.
+        services.AddScoped<IApiTokenService, Security.ApiTokenService>();
         services.AddScoped<IAttentionService, Advisor.AttentionService>();
         // Süreç izleyici BİLİNÇLİ İSTİSNA olarak Singleton: CPU yüzdesi iki ölçüm arasındaki
         // işlemci-zamanı farkından hesaplanır, yani servisin önceki anlık görüntüyü HATIRLAMASI

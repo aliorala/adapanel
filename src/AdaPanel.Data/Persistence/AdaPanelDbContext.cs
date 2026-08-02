@@ -13,6 +13,9 @@ public sealed class AdaPanelDbContext(DbContextOptions<AdaPanelDbContext> option
 
     public DbSet<PanelSetting> Settings => Set<PanelSetting>();
 
+    /// <summary>Sunucudan sunucuya erişim anahtarları (MCP bağlantıları). Bkz. <see cref="PanelApiToken"/>.</summary>
+    public DbSet<PanelApiToken> ApiTokens => Set<PanelApiToken>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AdaPanelDbContext).Assembly);

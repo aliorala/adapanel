@@ -30,6 +30,12 @@
         <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
         <p v-if="!siteName" class="empty-state">{{ t("panel.hosting.selectSiteHint") }}</p>
 
+        <!-- Veri gelmeden ayar anahtarlarını göstermiyoruz: kapalı görünen bir anahtar,
+             "kapalı" demektir — oysa henüz okunmamıştır. -->
+        <p v-else-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
+          {{ t("panel.common.loading") }}
+        </p>
+
         <template v-else>
           <section v-if="activeSection === 'general'" class="settings-card">
             <div class="settings-card-head">
@@ -414,6 +420,10 @@ const documentRoot = ref("");
 watch(selectedSite, (site) => { documentRoot.value = site?.physicalPath ?? ""; }, { immediate: true });
 const activeSection = ref("general");
 const busy = ref(false);
+// Ayarlar SUNUCUDAN gelene kadar anahtarlar varsayılan (kapalı) durumda render ediliyordu; kullanıcı
+// "her şey kapalı" sanıp yanlış karar veriyordu. Bu bayrak, "henüz bilmiyorum" ile "kapalı" arasındaki
+// farkı ekranda görünür kılar.
+const settingsLoaded = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const deniedIps = ref("");
@@ -497,6 +507,7 @@ async function load() {
     protectedExtensions.value = settings.protectedExtensions.join(", ");
     await loadQuota();
     await loadGit();
+    settingsLoaded.value = true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
