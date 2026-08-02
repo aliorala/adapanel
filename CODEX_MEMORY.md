@@ -6082,3 +6082,33 @@ Basarili:
 - **BU MAKINEYE KURULUM DENEMESI:** Windows 10 Pro, kabuk YUKSELTILMEMIS (IsInRole Administrator=False),
   IIS kurulu DEGIL, DNS Server rolu istemci OS'ta YOK. Installer yonetici hakki ister (UAC) —
   ajan tiklayamaz. Kullanicinin `!` ile elle calistirmasi gerekir.
+
+## 2026-08-02 (211) — CANLI TEST: 0.2.27'DEKI MariaDB DUZELTMESI YETERSIZDI (uc ayri hata)
+- **BU MAKINEYE PANEL KURULDU** (Windows 10 Pro, 8890, secureEntryPath=panel, admin/AdaPanelTest2026!).
+  Haziran'dan kalan gelistirme DB'si `.bak` olarak yedeklenip sifir kurulum yapildi.
+  API'yi surmek icin `scratchpad\ada.ps1` (her cagrida taze giris; **CSRF token GIRISTEN SONRA
+  yenilenmeli**, aksi halde 400) ve `swap-binary.ps1` (servisi durdur, publish'i kopyala, baslat).
+- **CANLI DOGRULANAN ILK SEY:** manifest 11.8.3 derken kurulum **11.8.8** getirdi → canli surum
+  cozumleyicisi (204) GERCEKTEN calisiyor.
+- **TEST: MariaDB kur -> veri yaz -> force reinstall -> veri duruyor mu? ILK DENEME: VERI SILINDI.**
+  0.2.27'de yayinladigim duzeltme YETMIYORDU. Uc ayri hata bulundu:
+  1. **Asil silme daha yukarida:** `InstallComponentInternalAsync` kurulumdan ONCE
+     `DeleteManagedPath(installDirectory)` yapiyor. `data/` o dizinin icinde oldugu icin veri
+     postInstall'a gelmeden yok oluyordu; benim `InitializeMariaDbZipAsync` icindeki "veri varsa
+     dokunma" korumam BIR ADIM GEC kaliyordu.
+     -> `PreserveDataDirectories` / `RestorePreservedDirectories`: korunacak klasorler silmeden ONCE
+     kurulum dizininin YANINA tasinir (ayni disk = rename), extract'ten SONRA ve postInstall'dan
+     ONCE geri konur. Tasima basarisizsa kurulum DURUR (veriyi koruyamiyorsak silmeye devam edilemez).
+  2. **Geri alma da siliyordu:** postInstall patlayinca `RollbackFailedInstallAsync` zip tipi icin
+     `DeleteManagedPath(cleanupPath)` yapiyor → basarisiz bir YUKSELTME calisan veritabanini yok
+     ediyordu. Artik orada da preserve/restore var.
+  3. **Sira hatasi (benim eklediğim):** `mariadb-upgrade` `sc start`'tan hemen sonra, sunucu hazir
+     olmadan calisiyordu → "Can't connect (10061)" → kurulum geri alindi → (2) yuzunden veri gitti.
+     Artik ONCE `WaitForDatabaseReadyAsync`, SONRA upgrade; ustelik upgrade hatasi ARTIK OLUMCUL DEGIL
+     (sunucu verisiyle ayakta; sema tasimasi aksadi diye kurulumu geri alip veriyi yok etmek sacma).
+- **IKINCI DENEME: TEST GECTI.** Kur -> `veri_kaybi_testi` DB + `kanit` tablosu + satir -> force
+  reinstall -> satir YERINDE (`1 | YUKSELTMEDEN ONCE YAZILDI`), servis Running.
+- Regresyon testi: `DataPreservationTests` (motorlar + stalwart data/etc + durumsuz bilesenlerde
+  koruma YAPILMAMASI). Infrastructure **365/365**.
+- **DERS:** "kod okudum, mantik dogru" YETMEZ. 0.2.27'yi duzeltme diye yayinladim ama veri kaybi
+  aynen duruyordu; ancak gercek kurulumda deneyince ortaya cikti.

@@ -724,12 +724,26 @@ public sealed class ComponentBootstrapper(
             // serbest birak ki yeniden kurulumda dosyalar uzerine yazilabilsin.
             await StopManagedRuntimeAsync(component.ServiceName, installDirectory, cancellationToken);
 
+            // VERI KORUMASI — bu satirlarin sirasi kritiktir. Asagidaki DeleteManagedPath kurulum
+            // dizinini KOMPLE siler; veritabani motorlarinin veri klasoru (data/) KURULUM DIZININ
+            // ICINDE oldugu icin, surum yukseltmesinde ya da onarim kurulumunda TUM VERITABANLARI
+            // yok olurdu. postInstall icindeki "veri varsa dokunma" korumalari BURADAN SONRA
+            // calistigi icin ise yaramaz — veri o noktada zaten silinmis olur.
+            // Cozum: veri klasorlerini silmeden ONCE kenara al, kurulumdan SONRA geri koy.
+            var preserved = PreserveDataDirectories(component, installDirectory);
+
             // Onceki BASARISIZ kurulumdan kalan kismi durum yeni kurulumu bozar:
             // PostgreSQL'de data dizini doluysa initdb "cluster init failed" verir; MSI/zip'te
             // kilitli/yarim dosyalar cakisir. Temiz kurulum icin dizini sifirla (servis durduruldu).
             DeleteManagedPath(installDirectory);
 
             await ExecuteInstallAsync(component, downloadPath, installDirectory, executionArgs, cancellationToken);
+
+            // Geri koyma, postInstall'dan ONCE olmali: postInstall adimlari (ornegin
+            // InitializeMariaDbZipAsync) "veri var mi" diye bakip initialize etmeme kararini
+            // buna gore verir.
+            RestorePreservedDirectories(installDirectory, preserved);
+
             await ApplyPostInstallStepsAsync(component, installDirectory, generatedPassword, cancellationToken);
             await ValidateInstallationAsync(component, installDirectory, cancellationToken, generatedPassword);
 
@@ -1154,7 +1168,13 @@ public sealed class ComponentBootstrapper(
 
         try
         {
+            // GERI ALMA DA VERIYI SILMEMELI. Kurulum postInstall'da patlarsa buraya gelinir ve
+            // burada dizin komple silinirdi — veri klasörü kurulum dizininin içinde olduğu için
+            // başarısız bir YÜKSELTME, çalışan bir veritabanının tüm verisini yok ederdi.
+            // Binary'ler silinir, veri geri konur; yönetici en kötü ihtimalle bileşeni yeniden kurar.
+            var preserved = PreserveDataDirectories(component, cleanupPath);
             DeleteManagedPath(cleanupPath);
+            RestorePreservedDirectories(cleanupPath, preserved);
         }
         catch (Exception exception)
         {
@@ -3561,21 +3581,37 @@ public sealed class ComponentBootstrapper(
         await EnsureMariaDbBindAddressAsync(serviceName, dataDirectory, installDirectory, cancellationToken);
         await RunProcessAsync("sc.exe", $"start \"{serviceName}\"", cancellationToken);
 
+        // Hazır olmayı ÖNCE bekle: sunucu bağlantı kabul etmeden mariadb-upgrade çalıştırmak
+        // "Can't connect to server (10061)" ile patlar ve kurulumu geri almaya sürükler.
+        await WaitForDatabaseReadyAsync(admin, serviceName, port, password, cancellationToken);
+
         if (hasExistingData)
         {
             // Sürüm yükseltmesinde şema/sistem tabloları yeni sürüme taşınmalı; aksi halde MariaDB
             // uyarı verir ya da bazı özellikler çalışmaz. Parola mevcut kurulumdan gelir.
+            //
+            // BAŞARISIZLIK ÖLÜMCÜL DEĞİLDİR: sunucu bu noktada verisiyle birlikte ÇALIŞIYOR.
+            // Şema taşımasında bir aksaklık yüzünden kurulumu geri almak, çalışan bir veritabanını
+            // yok etmek anlamına gelirdi. Uyarı yazılır, yönetici gerekirse elle çalıştırır.
             var upgrade = FindExecutable(installDirectory, "mariadb-upgrade.exe");
             if (!string.IsNullOrWhiteSpace(upgrade))
             {
-                await RunProcessAsync(
-                    upgrade,
-                    $"--user=root --password=\"{password}\" --protocol=TCP --host=127.0.0.1 --port={port}",
-                    cancellationToken);
+                try
+                {
+                    await RunProcessAsync(
+                        upgrade,
+                        $"--user=root --password=\"{password}\" --protocol=TCP --host=127.0.0.1 --port={port}",
+                        cancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    logger.LogWarning(
+                        exception,
+                        "mariadb-upgrade tamamlanamadı; sunucu verisiyle çalışıyor. Gerekirse elle çalıştırın: {Path}",
+                        upgrade);
+                }
             }
         }
-
-        await WaitForDatabaseReadyAsync(admin, serviceName, port, password, cancellationToken);
     }
 
     // MariaDB TUM arayuzlerde dinlesin (bind-address=0.0.0.0) ki panelin "Uzak Erisim" toggle'i (profesyonel paneller gibi)
@@ -4431,6 +4467,99 @@ public sealed class ComponentBootstrapper(
             : null;
 
         return nested ?? throw new AppException("software.executable_not_found", 404, 404);
+    }
+
+    /// <summary>
+    /// Verisini KURULUM DIZININ ICINDE tutan bileşenler ve korunacak alt klasörleri.
+    /// Bu bileşenlerde kurulum dizinini silmek = müşterinin verisini silmek.
+    /// </summary>
+    internal static IReadOnlyList<string> DataDirectoriesToPreserve(string componentId)
+    {
+        return componentId.Trim().ToLowerInvariant() switch
+        {
+            "mariadb-11" or "mysql-8" or "postgresql-16" => ["data"],
+            // Stalwart posta kutularını data/, üretilmiş yapılandırmayı (admin parolası dahil) etc/ altında tutar.
+            "stalwart-mail" => ["data", "etc"],
+            _ => []
+        };
+    }
+
+    /// <summary>
+    /// Korunacak klasörleri kurulum dizininin YANINA taşır (aynı disk → rename, kopyalama yok) ve
+    /// geri koymak için (geçiciYol, göreliAd) çiftlerini döner. Taşıma başarısız olursa kurulumu
+    /// DURDURUR: veriyi koruyamıyorsak silmeye devam etmek kabul edilemez.
+    /// </summary>
+    private List<(string TempPath, string RelativeName)> PreserveDataDirectories(
+        ComponentManifestItemDto component,
+        string installDirectory)
+    {
+        var preserved = new List<(string, string)>();
+        foreach (var relativeName in DataDirectoriesToPreserve(component.Id))
+        {
+            var source = Path.Combine(installDirectory, relativeName);
+            if (!Directory.Exists(source) || !Directory.EnumerateFileSystemEntries(source).Any())
+            {
+                continue;
+            }
+
+            var tempPath = Path.Combine(
+                Path.GetDirectoryName(installDirectory.TrimEnd(Path.DirectorySeparatorChar))!,
+                $".{Path.GetFileName(installDirectory.TrimEnd(Path.DirectorySeparatorChar))}-{relativeName}-{Guid.NewGuid():N}");
+
+            try
+            {
+                Directory.Move(source, tempPath);
+                preserved.Add((tempPath, relativeName));
+                logger.LogInformation(
+                    "{ComponentId}: '{Relative}' klasörü kurulum süresince korumaya alındı ({Temp}).",
+                    component.Id,
+                    relativeName,
+                    tempPath);
+            }
+            catch (Exception exception)
+            {
+                // Geri al: daha önce taşınanları yerine koy, sonra kurulumu iptal et.
+                RestorePreservedDirectories(installDirectory, preserved);
+                throw new AppException(
+                    "software.data_preserve_failed",
+                    500,
+                    500,
+                    $"Component={component.Id}\r\nPath={source}\r\n{exception.Message}");
+            }
+        }
+
+        return preserved;
+    }
+
+    private void RestorePreservedDirectories(
+        string installDirectory,
+        List<(string TempPath, string RelativeName)> preserved)
+    {
+        foreach (var (tempPath, relativeName) in preserved)
+        {
+            var target = Path.Combine(installDirectory, relativeName);
+            try
+            {
+                Directory.CreateDirectory(installDirectory);
+                // Yeni paket aynı adla boş bir klasör açmış olabilir; taşımayı engellemesin.
+                if (Directory.Exists(target) && !Directory.EnumerateFileSystemEntries(target).Any())
+                {
+                    Directory.Delete(target);
+                }
+
+                Directory.Move(tempPath, target);
+                logger.LogInformation("'{Relative}' klasörü kurulum sonrası yerine kondu.", relativeName);
+            }
+            catch (Exception exception)
+            {
+                // Veri hâlâ tempPath'te DURUYOR; silme. Yöneticiye nerede olduğunu söyle.
+                logger.LogError(
+                    exception,
+                    "'{Relative}' klasörü yerine konamadı. VERİ KAYBOLMADI, şurada duruyor: {Temp}",
+                    relativeName,
+                    tempPath);
+            }
+        }
     }
 
     private static void FlattenSingleTopDirectory(string destination)
