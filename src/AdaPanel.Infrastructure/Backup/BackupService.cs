@@ -19,6 +19,15 @@ public sealed class BackupService(
 {
     private const string IndexPath = "config/backups.json";
 
+    /// <summary>
+    /// Uzak hedefe yükleme için ÜST SINIR. Sonsuz bekleme kabul edilemez: yükleme, otomatik
+    /// yedeklemede global kilidin içinde çalışıyor ve aynı kilidi giriş akışı da alıyor.
+    /// </summary>
+    private static readonly TimeSpan RemoteUploadTimeout = TimeSpan.FromHours(2);
+
+    /// <summary>Veri akışının DURMASINA tahammül süresi (yalnız FTP; HttpClient'ta ayrı ayarı yok).</summary>
+    private static readonly TimeSpan RemoteUploadStallTimeout = TimeSpan.FromMinutes(5);
+
     private static readonly System.Text.Json.JsonSerializerOptions BackupJsonOptions =
         new() { WriteIndented = true };
 
@@ -1220,7 +1229,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             S3RequestSigner.UnsignedPayload);
 
         var client = httpClientFactory.CreateClient();
-        client.Timeout = Timeout.InfiniteTimeSpan;
+        // SINIRLI zaman aşımı ŞART: bu yükleme otomatik yedeklemede GLOBAL KİLİDİN İÇİNDE çalışıyor
+        // ve aynı kilidi giriş akışı (brute-force denetimi) da alıyor. Yarı açık kalmış bir TCP
+        // bağlantısında (NAT zaman aşımı, uzak uç donması) sonsuz bekleme, kilidi kalıcı olarak
+        // tutar ve o andan sonra PANELE KİMSE GİREMEZ; tek çare servisi yeniden başlatmaktır.
+        // 2 saat, yavaş hatta büyük bir yedeği yüklemeye yeterken sonsuz askıda kalmayı engeller.
+        client.Timeout = RemoteUploadTimeout;
 
         await using var source = File.OpenRead(localPath);
         using var content = new StreamContent(source);
@@ -1261,7 +1275,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
 
         var client = httpClientFactory.CreateClient();
-        client.Timeout = Timeout.InfiniteTimeSpan;
+        // SINIRLI zaman aşımı ŞART: bu yükleme otomatik yedeklemede GLOBAL KİLİDİN İÇİNDE çalışıyor
+        // ve aynı kilidi giriş akışı (brute-force denetimi) da alıyor. Yarı açık kalmış bir TCP
+        // bağlantısında (NAT zaman aşımı, uzak uç donması) sonsuz bekleme, kilidi kalıcı olarak
+        // tutar ve o andan sonra PANELE KİMSE GİREMEZ; tek çare servisi yeniden başlatmaktır.
+        // 2 saat, yavaş hatta büyük bir yedeği yüklemeye yeterken sonsuz askıda kalmayı engeller.
+        client.Timeout = RemoteUploadTimeout;
 
         await using var source = File.OpenRead(localPath);
         using var content = new StreamContent(source);
@@ -1312,6 +1331,14 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         request.UseBinary = true;
         request.Credentials = credential;
         request.ContentLength = new FileInfo(localPath).Length;
+        // FtpWebRequest'in VARSAYILANI sonsuzdur. Bu yükleme global kilidin içinde çalıştığı ve aynı
+        // kilidi giriş akışı da aldığı için, donmuş bir FTP bağlantısı paneli kalıcı olarak kilitler.
+        // Timeout bağlantı/komut aşamasını, ReadWriteTimeout ise veri akışının durmasını sınırlar —
+        // ikincisi olmadan yarı açık bir bağlantıda aktarım sonsuza kadar askıda kalır.
+        request.Timeout = (int)RemoteUploadTimeout.TotalMilliseconds;
+        request.ReadWriteTimeout = (int)RemoteUploadStallTimeout.TotalMilliseconds;
+        // İptal edildiğinde soketi gerçekten kapat: CopyToAsync'in token'ı FtpWebRequest'i durdurmaz.
+        await using var cancellationRegistration = cancellationToken.Register(request.Abort);
 
         await using (var source = File.OpenRead(localPath))
         await using (var destination = await request.GetRequestStreamAsync())

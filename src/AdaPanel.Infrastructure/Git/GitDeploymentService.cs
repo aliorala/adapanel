@@ -92,8 +92,7 @@ public sealed class GitDeploymentService(
             }
             else
             {
-                result = await ProcessRunner.RunAsync(
-                    "git",
+                result = await RunGitAsync(
                     $"clone --branch {QuoteArg(record.Branch)} --single-branch {QuoteArg(record.RepositoryUrl)} .",
                     path,
                     cancellationToken);
@@ -101,9 +100,24 @@ public sealed class GitDeploymentService(
         }
         else
         {
-            await ProcessRunner.RunAsync("git", $"remote set-url origin {QuoteArg(record.RepositoryUrl)}", path, cancellationToken);
-            await ProcessRunner.RunAsync("git", $"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
-            result = await ProcessRunner.RunAsync("git", $"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+            // DİKKAT: bu üç komutun sonuçları ayrı ayrı denetlenmeli. `reset --hard origin/<dal>`
+            // YEREL remote-tracking ref'ini kullanır; önceki başarılı bir fetch'ten kalmış bir
+            // `origin/<dal>` varsa fetch TAMAMEN başarısız olsa bile reset 0 ile çıkar. Yalnızca
+            // reset'e bakmak, süresi dolmuş bir deploy token'ında her dağıtımın "başarılı" görünmesine
+            // ve sitenin günlerce eski kodda kalmasına yol açıyordu.
+            var setUrl = await RunGitAsync($"remote set-url origin {QuoteArg(record.RepositoryUrl)}", path, cancellationToken);
+            if (!setUrl.Success)
+            {
+                // Depo adresi güncellenemediyse sonraki adımlar ESKİ depodan çeker; "dağıtıldı" demek yanıltıcı olur.
+                result = setUrl;
+            }
+            else
+            {
+                var fetch = await RunGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
+                result = !fetch.Success
+                    ? fetch
+                    : await RunGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+            }
         }
 
         var commit = await GetCurrentCommitAsync(path, cancellationToken);
@@ -131,16 +145,16 @@ public sealed class GitDeploymentService(
 
     private static async Task<CommandResult> InitAndFetchAsync(string path, GitDeploymentRecord record, CancellationToken cancellationToken)
     {
-        await ProcessRunner.RunAsync("git", "init", path, cancellationToken);
-        await ProcessRunner.RunAsync("git", $"remote add origin {QuoteArg(record.RepositoryUrl)}", path, cancellationToken);
-        await ProcessRunner.RunAsync("git", $"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
-        await ProcessRunner.RunAsync("git", $"checkout -f -B {QuoteArg(record.Branch)} {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
-        return await ProcessRunner.RunAsync("git", $"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+        await RunGitAsync("init", path, cancellationToken);
+        await RunGitAsync($"remote add origin {QuoteArg(record.RepositoryUrl)}", path, cancellationToken);
+        await RunGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
+        await RunGitAsync($"checkout -f -B {QuoteArg(record.Branch)} {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+        return await RunGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
     }
 
     private static async Task<string> GetCurrentCommitAsync(string path, CancellationToken cancellationToken)
     {
-        var result = await ProcessRunner.RunAsync("git", "rev-parse --short HEAD", path, cancellationToken);
+        var result = await RunGitAsync("rev-parse --short HEAD", path, cancellationToken);
         return result.Success ? result.StandardOutput.Trim() : string.Empty;
     }
 
@@ -148,7 +162,7 @@ public sealed class GitDeploymentService(
     {
         try
         {
-            var result = await ProcessRunner.RunAsync("git", "--version", cancellationToken: cancellationToken);
+            var result = await RunGitAsync("--version", null, cancellationToken);
             if (!result.Success)
             {
                 throw new AppException("git.not_available", 409, 409);
@@ -240,6 +254,29 @@ public sealed class GitDeploymentService(
     private static string CombineOutput(CommandResult result) =>
         string.Join(Environment.NewLine, new[] { result.StandardOutput, result.StandardError }
             .Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    /// <summary>
+    /// git komutlarını KİMLİK İSTEMİ KAPALI çalıştırır.
+    /// <para>
+    /// Kimlik gerektiren bir HTTPS remote'ta git, terminal istemi ya da Git Credential Manager
+    /// penceresi açmaya çalışır. Servis oturumunda bunu yanıtlayacak kimse yoktur; süreç
+    /// ProcessRunner'ın 10 dakikalık tavanına kadar asılı kalır. Dağıtım GLOBAL KİLİDİN İÇİNDE
+    /// çalıştığı için bu süre boyunca panelde hiç kimse giriş yapamaz, hiçbir değişiklik kaydedilemez.
+    /// Bu değişkenlerle git, "kimlik doğrulama gerekli" diyerek HEMEN hata verir.
+    /// </para>
+    /// </summary>
+    private static Task<CommandResult> RunGitAsync(string arguments, string? workingDirectory, CancellationToken cancellationToken)
+        => ProcessRunner.RunAsync(
+            "git",
+            arguments,
+            workingDirectory,
+            cancellationToken,
+            new Dictionary<string, string>
+            {
+                ["GIT_TERMINAL_PROMPT"] = "0",
+                ["GCM_INTERACTIVE"] = "never",
+                ["GIT_ASKPASS"] = "echo"
+            });
 
     private static string QuoteArg(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
 

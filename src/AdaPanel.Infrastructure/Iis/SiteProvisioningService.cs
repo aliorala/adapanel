@@ -85,13 +85,31 @@ public sealed class SiteProvisioningService(
             }
 
             var pool = string.IsNullOrWhiteSpace(applicationPoolName) ? site.Name : applicationPoolName;
-            await ProcessRunner.RunAsync(
+            var result = await ProcessRunner.RunAsync(
                 "icacls.exe",
                 $"\"{site.PhysicalPath}\" /grant \"IIS AppPool\\{pool}:(OI)(CI)M\" /T /C /Q",
                 cancellationToken: cancellationToken,
                 timeout: TimeSpan.FromSeconds(60));
 
-            logger.LogInformation("Site yazma izni verildi (app pool kimliği): {Site} -> {Path}", site.Name, site.PhysicalPath);
+            // ProcessRunner EXCEPTION FIRLATMAZ, CommandResult döndürür. icacls'in en tipik hatası
+            // ("No mapping between account names and security IDs was done" — app pool yoksa ya da adı
+            // farklıysa) sıfırdan farklı çıkış kodudur, exception değil. Sonuç okunmadığı için
+            // aşağıdaki catch bu vakada HİÇ tetiklenmiyor, hemen ardından "izin verildi" yazılıyordu:
+            // kullanıcı "İzinleri Onar"a basıp başarı görüyor, izinler hiç değişmiyor ve 500 hatasının
+            // sebebini başka yerde arıyordu.
+            if (result.Success)
+            {
+                logger.LogInformation("Site yazma izni verildi (app pool kimliği): {Site} -> {Path}", site.Name, site.PhysicalPath);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Site yazma izni VERİLEMEDİ: {Site} -> {Path} (havuz: {Pool}). icacls çıkışı: {Error}",
+                    site.Name,
+                    site.PhysicalPath,
+                    pool,
+                    string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
+            }
         }
         catch (Exception exception)
         {

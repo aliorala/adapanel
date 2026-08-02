@@ -35,6 +35,17 @@ public sealed class AuthService(
 
     public async Task<LoginResultDto> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default)
     {
+        // Engelli IP kimlik bilgisi DOĞRULANMADAN reddedilir. Bu denetim olmadan brute-force koruması
+        // tamamen Windows Firewall kuralına bağlıydı; kural yazılamadığında (firewall servisi kapalı,
+        // grup ilkesiyle yönetilen firewall, yetki yok) engelleme HİÇ gerçekleşmiyor, üstelik ban
+        // kaydı var olduğu için bir daha da denenmiyordu — panel "engellendi" derken saldırgan
+        // sınırsız deneme yapabiliyordu.
+        if (await bruteForceProtection.IsBannedAsync(ipAddress, cancellationToken))
+        {
+            await auditService.WriteAsync("auth.login.blocked", "auth", $"Login attempt from banned address '{ipAddress}'.", null, ipAddress, cancellationToken);
+            throw new InvalidOperationException("auth.ip_banned");
+        }
+
         var lookup = request.UserNameOrEmail.Trim();
         var normalizedLookup = lookup.ToLowerInvariant();
 

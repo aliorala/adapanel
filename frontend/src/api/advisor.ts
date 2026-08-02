@@ -21,6 +21,8 @@ export type AdvisorReport = {
   warningCount: number;
   infoCount: number;
   checkedAtUtc: string;
+  /** Çalıştırılamayan kontrollerin adları. Doluysa "öneri yok" demek YANLIŞTIR. */
+  failedChecks: string[];
   items: AdvisorItem[];
 };
 

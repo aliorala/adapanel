@@ -32,5 +32,15 @@ public sealed class AdvisorReportDto
 
     public DateTime CheckedAtUtc { get; set; }
 
+    /// <summary>
+    /// ÇALIŞTIRILAMAYAN kontrollerin adları. Boş liste = tüm kontroller çalıştı.
+    /// <para>
+    /// Gerekli: her kontrol ayrı try/catch içinde ve hata yutulduğunda o kontrolün önerileri listeye
+    /// hiç eklenmiyor. Bu alan olmadan ekran, hiçbir şey ölçülememişken bile yeşil tik ve
+    /// "Her şey yolunda" gösteriyordu — üstelik tarama zamanı taze olduğu için inandırıcı görünüyordu.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> FailedChecks { get; set; } = [];
+
     public IReadOnlyList<AdvisorItemDto> Items { get; set; } = [];
 }

@@ -412,7 +412,7 @@ internal sealed partial class DatabaseService(
         var result = engine switch
         {
             DbEngine.MariaDb or DbEngine.MySql => await ExportMySqlAsync(profile, databaseName, targetPath, cancellationToken),
-            DbEngine.PostgreSql => await ExportPostgreSqlAsync(profile, targetPath, cancellationToken),
+            DbEngine.PostgreSql => await ExportPostgreSqlAsync(profile, databaseName, targetPath, cancellationToken),
             DbEngine.MsSql => await ExportMsSqlAsync(profile, databaseName, targetPath, cancellationToken),
             _ => throw new AppException("database.engine_not_supported", 400, 400)
         };
@@ -449,7 +449,7 @@ internal sealed partial class DatabaseService(
         var result = engine switch
         {
             DbEngine.MariaDb or DbEngine.MySql => await ImportMySqlAsync(profile, databaseName, sourcePath, cancellationToken),
-            DbEngine.PostgreSql => await ImportPostgreSqlAsync(profile, sourcePath, cancellationToken),
+            DbEngine.PostgreSql => await ImportPostgreSqlAsync(profile, databaseName, sourcePath, cancellationToken),
             DbEngine.MsSql => await ImportMsSqlAsync(profile, databaseName, sourcePath, cancellationToken),
             _ => throw new AppException("database.engine_not_supported", 400, 400)
         };
@@ -787,13 +787,27 @@ internal sealed partial class DatabaseService(
             environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = profile.AdminPassword });
     }
 
+    /// <summary>
+    /// TEK veritabanının dökümünü alır.
+    /// <para>
+    /// Burada eskiden <c>pg_dumpall</c> kullanılıyordu ve <c>databaseName</c> hiç okunmuyordu: kullanıcı
+    /// tek bir veritabanının yedeğini istediğinde SUNUCUNUN TAMAMI (tüm roller ve tüm veritabanları)
+    /// dökülüyor, dosya adı ve arayüz ise tek veritabanı gösteriyordu. Geri yükleme de aynı dosyayı
+    /// çalıştırdığı için "şu veritabanını geri yükle" demek bütün kümenin üzerine yazmak anlamına
+    /// geliyordu — istenmeyen veritabanları ve roller sessizce eziliyordu.
+    /// </para>
+    /// <para><c>--no-password</c>: parola yanlışsa istem beklemek yerine hemen hata versin.</para>
+    /// </summary>
     private static Task<CommandResult> ExportPostgreSqlAsync(
         DatabaseConnectionProfile profile,
+        string databaseName,
         string targetPath,
         CancellationToken cancellationToken)
     {
-        var executable = FindExecutable(profile.InstallDir, "pg_dumpall.exe");
-        var arguments = $"--host={profile.Host} --port={profile.Port} --username=\"{profile.AdminUserName}\" --file=\"{targetPath}\"";
+        var executable = FindExecutable(profile.InstallDir, "pg_dump.exe");
+        var arguments =
+            $"--host={profile.Host} --port={profile.Port} --username=\"{profile.AdminUserName}\" " +
+            $"--no-password --dbname=\"{databaseName}\" --file=\"{targetPath}\"";
         return ProcessRunner.RunAsync(
             executable,
             arguments,
@@ -801,13 +815,28 @@ internal sealed partial class DatabaseService(
             environmentVariables: new Dictionary<string, string> { ["PGPASSWORD"] = profile.AdminPassword });
     }
 
+    /// <summary>
+    /// Dökümü HEDEF veritabanına geri yükler.
+    /// <para>
+    /// <c>-v ON_ERROR_STOP=1</c> ZORUNLU: psql, tek tek SQL ifadelerinin hataları yüzünden çıkış kodunu
+    /// DEĞİŞTİRMEZ — bağlantı kurulabildiği sürece 0 döner. Bu bayrak olmadan bozuk ya da uyumsuz bir
+    /// döküm geri yüklenirken her ifade patlasa bile panel "geri yükleme tamam" der; yönetici de buna
+    /// güvenip elindeki yedeği siler. (PostgreSQL psql belgeleri, "Exit Status".)
+    /// </para>
+    /// <para>
+    /// <c>--dbname</c> artık <c>postgres</c> değil HEDEF veritabanı: döküm tek veritabanına ait.
+    /// </para>
+    /// </summary>
     private static Task<CommandResult> ImportPostgreSqlAsync(
         DatabaseConnectionProfile profile,
+        string databaseName,
         string sourcePath,
         CancellationToken cancellationToken)
     {
         var executable = FindExecutable(profile.InstallDir, "psql.exe");
-        var arguments = $"--host={profile.Host} --port={profile.Port} --username=\"{profile.AdminUserName}\" --dbname=postgres --file=\"{sourcePath}\"";
+        var arguments =
+            $"--host={profile.Host} --port={profile.Port} --username=\"{profile.AdminUserName}\" " +
+            $"--no-password -v ON_ERROR_STOP=1 --dbname=\"{databaseName}\" --file=\"{sourcePath}\"";
         return ProcessRunner.RunAsync(
             executable,
             arguments,

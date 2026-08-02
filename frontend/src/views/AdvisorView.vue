@@ -19,7 +19,13 @@
       <span class="meta checked-at">{{ t("panel.advisor.checkedAt") }}: {{ formatUtc(report.checkedAtUtc) }}</span>
     </div>
 
-    <div v-if="report && report.items.length === 0" class="advisor-clear">
+    <!-- Bazı kontroller ÇALIŞTIRILAMADIYSA "her şey yolunda" demek yalan olur: hiçbir şey
+         ölçülememişken de öneri listesi boş çıkar. Bu durumu ayrı ve açık şekilde göster. -->
+    <div v-if="report && report.failedChecks?.length" class="notice warn">
+      {{ t("panel.advisor.checksFailed", { checks: report.failedChecks.join(", ") }) }}
+    </div>
+
+    <div v-if="report && report.items.length === 0 && !report.failedChecks?.length" class="advisor-clear">
       <span class="clear-badge">✓</span>
       <div>
         <strong>{{ t("panel.advisor.allClearTitle") }}</strong>

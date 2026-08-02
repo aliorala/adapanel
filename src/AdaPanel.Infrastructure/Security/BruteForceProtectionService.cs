@@ -26,6 +26,29 @@ public sealed class BruteForceProtectionService(
         return ToStatus(state);
     }
 
+    public async Task<bool> IsBannedAsync(string? ipAddress, CancellationToken cancellationToken = default)
+    {
+        var ip = Normalize(ipAddress);
+        if (ip is null)
+        {
+            return false;
+        }
+
+        // Kilit ALINMAZ: bu, her giriş denemesinde çalışan sıcak bir yol ve global kilit panelin
+        // tamamıyla paylaşılıyor. Salt okuma için kilit almak, uzun süren bir iş (yedek yüklemesi
+        // gibi) kilidi tuttuğunda giriş ekranını da kilitlerdi.
+        var state = await LoadAsync(cancellationToken);
+        if (!state.Enabled || IsWhitelisted(state, ip))
+        {
+            return false;
+        }
+
+        var now = DateTime.UtcNow;
+        return state.Bans.Any(ban =>
+            string.Equals(ban.IpAddress, ip, StringComparison.OrdinalIgnoreCase) &&
+            (ban.ExpiresAtUtc is null || ban.ExpiresAtUtc > now));
+    }
+
     public async Task<BruteForceStatusDto> UpdateSettingsAsync(UpdateBruteForceSettingsRequest request, CancellationToken cancellationToken = default)
     {
         return await concurrencyLock.RunExclusiveAsync(async () =>
@@ -97,8 +120,24 @@ public sealed class BruteForceProtectionService(
 
             if (ipToBan is not null && banRecord is not null)
             {
-                await ApplyFirewallBlockAsync(banRecord, cancellationToken);
-                logger.LogWarning("Brute-force eşiği aşıldı, IP engellendi: {IpAddress}", ipToBan);
+                var blocked = await ApplyFirewallBlockAsync(banRecord, cancellationToken);
+                if (blocked)
+                {
+                    logger.LogWarning("Brute-force eşiği aşıldı, IP engellendi: {IpAddress}", ipToBan);
+                }
+                else
+                {
+                    // Kural yazılamadı (firewall servisi kapalı, grup ilkesiyle yönetilen firewall,
+                    // yetersiz yetki...). Ban kaydı DURUR — çünkü asıl zorlayıcı katman artık
+                    // uygulama tarafındaki IsBannedAsync denetimidir ve o firewall'dan bağımsız
+                    // çalışır. Burada yapılması gereken tek şey durumu DÜRÜST raporlamak: sessizce
+                    // "engellendi" demek, yöneticiye var olmayan bir koruma vaat ederdi.
+                    logger.LogError(
+                        "Brute-force: {IpAddress} için firewall kuralı YAZILAMADI. IP ağ katmanında " +
+                        "engellenmedi; panel girişi uygulama katmanında reddedilmeye devam edecek. " +
+                        "Windows Firewall servisini ve yönetici yetkisini kontrol edin.",
+                        ipToBan);
+                }
             }
         }
         catch (Exception exception)
@@ -187,14 +226,20 @@ public sealed class BruteForceProtectionService(
         }
     }
 
-    private static async Task ApplyFirewallBlockAsync(BanRecord ban, CancellationToken cancellationToken)
+    /// <summary>
+    /// Firewall engel kuralını yazar. Dönüş değeri KULLANILMALIDIR: kural yazılamadığında IP
+    /// gerçekte engellenmemiştir ve panel "engellendi" demeye devam ederse yönetici korunduğunu sanır.
+    /// </summary>
+    private static async Task<bool> ApplyFirewallBlockAsync(BanRecord ban, CancellationToken cancellationToken)
     {
         var script = $"""
+            $ErrorActionPreference = 'Stop'
             Remove-NetFirewallRule -DisplayName "{EscapePowerShellString(ban.FirewallRuleName)}" -ErrorAction SilentlyContinue | Out-Null
             New-NetFirewallRule -DisplayName "{EscapePowerShellString(ban.FirewallRuleName)}" -Direction Inbound -Action Block -RemoteAddress {ban.IpAddress} -Profile Any | Out-Null
             """;
 
-        await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        return result.Success;
     }
 
     private static async Task RemoveFirewallBlockAsync(string ruleName, CancellationToken cancellationToken)

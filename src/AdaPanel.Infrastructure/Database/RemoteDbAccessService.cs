@@ -47,8 +47,23 @@ internal sealed class RemoteDbAccessService(
         }
         else
         {
-            var script = $"Remove-NetFirewallRule -DisplayName '{RuleName}' -ErrorAction SilentlyContinue | Out-Null";
-            await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            // KAPATMA da açma kadar sıkı denetlenmeli. Burada eskiden sonuç okunmuyordu ve
+            // -ErrorAction SilentlyContinue hatayı ayrıca bastırıyordu: kural silinemediğinde
+            // (grup ilkesiyle yönetilen firewall, farklı profilde oluşmuş kural, yetki yok) panel
+            // "kapalı" yazarken veritabanı portu internete açık kalıyordu. Kullanıcının kapalı
+            // sandığı bir port, açık olduğunu bildiği porttan daha tehlikelidir.
+            //
+            // Kural YOKSA hata sayılmaz: kapatma isteği idempotent olmalı.
+            var script =
+                $"$ErrorActionPreference = 'Stop'; " +
+                $"$rule = Get-NetFirewallRule -DisplayName '{RuleName}' -ErrorAction SilentlyContinue; " +
+                $"if ($rule) {{ Remove-NetFirewallRule -DisplayName '{RuleName}' | Out-Null }}; " +
+                $"if (Get-NetFirewallRule -DisplayName '{RuleName}' -ErrorAction SilentlyContinue) {{ throw 'kural silinemedi' }}";
+            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            if (!result.Success)
+            {
+                throw new AppException("database.remote_firewall_failed", 500, 500, result.StandardError);
+            }
         }
 
         var newState = new RemoteDbState { Enabled = request.Enabled, AllowedIp = allowedIp };

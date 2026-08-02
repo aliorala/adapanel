@@ -253,6 +253,23 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             return fixedAccounts;
         }
 
+        // Bu sağlayıcı HEM MariaDB HEM MySQL için kullanılıyor (DatabaseService.ResolveProvider),
+        // ama aşağıdaki her şey MariaDB'ye ÖZGÜ: `mysql.global_priv` tablosu MySQL'de YOKTUR
+        // (hata 1146) ve `IDENTIFIED VIA ... USING PASSWORD()` MariaDB sözdizimidir. Motor kontrolü
+        // yapılmazsa MySQL 8 sunucusunda sertleştirmenin TAMAMI bu adımda patlar — anonim hesap
+        // temizliği yapılmış olsa bile uç 500 döner ve kullanıcı güvenlik sıkılaştırmasını hiç
+        // tamamlayamaz. gssapi zinciri zaten yalnızca MariaDB'nin Windows kurucusunun ürettiği
+        // bir durumdur; MySQL'de böyle bir sorun yoktur.
+        await using (var versionCommand = connection.CreateCommand())
+        {
+            versionCommand.CommandText = "SELECT VERSION();";
+            var version = (await versionCommand.ExecuteScalarAsync(cancellationToken))?.ToString() ?? string.Empty;
+            if (!version.Contains("MariaDB", StringComparison.OrdinalIgnoreCase))
+            {
+                return fixedAccounts;
+            }
+        }
+
         var hosts = new List<string>();
         await using (var query = connection.CreateCommand())
         {
@@ -322,7 +339,16 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             }
         }
 
-        removed.AddRange(await NormalizeRootAuthenticationAsync(connection, profile, cancellationToken));
+        // Kimlik zinciri sadeleştirmesi sertleştirmenin SON adımıdır ve başarısızlığı ondan önceki
+        // (anonim hesap, uzak root, test veritabanı) temizliği geçersiz kılmamalı.
+        try
+        {
+            removed.AddRange(await NormalizeRootAuthenticationAsync(connection, profile, cancellationToken));
+        }
+        catch (MySqlException)
+        {
+            // Motor bu şemayı desteklemiyor ya da yetki yok; diğer sertleştirme adımları geçerli kalır.
+        }
 
         if (removed.Count > 0)
         {

@@ -2895,5 +2895,10 @@
   "panel.health.domainsRowCurrent": "zaten güncel",
   "panel.health.domainsRowMail": "{count} posta kaydı (DKIM dahil)",
   "attention.domains.staleDefaults": "Bazı alan adları panelin güncel ayarlarını almamış (DMARC, DKIM, MX gibi). Tek tıkla tamamlanabilir; var olan kayıtlarınız değişmez.",
-  "health.domains_refreshed": "Alan adları güncel varsayılanlara taşındı."
+  "health.domains_refreshed": "Alan adları güncel varsayılanlara taşındı.",
+  "auth.ip_banned": "Bu IP adresi çok fazla başarısız giriş denemesi nedeniyle engellendi. Engel süresi dolunca ya da yönetici Güvenlik ekranından kaldırınca tekrar deneyebilirsiniz.",
+  "auth.unauthorized": "Oturumunuz sona ermiş. Lütfen tekrar giriş yapın.",
+  "auth.forbidden": "Bu işlem için yetkiniz yok.",
+  "monitoring.source_not_supported": "Bu kaynak için canlı tüketim listesi desteklenmiyor.",
+  "panel.advisor.checksFailed": "Bazı kontroller çalıştırılamadı ({checks}); bu alanlarda sorun olup olmadığı BİLİNMİYOR. Aşağıdaki liste eksik olabilir."
 }

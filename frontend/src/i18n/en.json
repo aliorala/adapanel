@@ -2895,5 +2895,10 @@
   "panel.health.domainsRowCurrent": "already up to date",
   "panel.health.domainsRowMail": "{count} mail records (including DKIM)",
   "attention.domains.staleDefaults": "Some domains never received the panel's current settings (DMARC, DKIM, MX and so on). One click fills them in; your existing records are left untouched.",
-  "health.domains_refreshed": "Domains were brought up to the current defaults."
+  "health.domains_refreshed": "Domains were brought up to the current defaults.",
+  "auth.ip_banned": "This IP address is blocked after too many failed sign-in attempts. Try again when the block expires, or ask an administrator to remove it from the Security screen.",
+  "auth.unauthorized": "Your session has ended. Please sign in again.",
+  "auth.forbidden": "You do not have permission for this action.",
+  "monitoring.source_not_supported": "Live consumption is not supported for this source.",
+  "panel.advisor.checksFailed": "Some checks could not run ({checks}); whether there is a problem in those areas is UNKNOWN. The list below may be incomplete."
 }

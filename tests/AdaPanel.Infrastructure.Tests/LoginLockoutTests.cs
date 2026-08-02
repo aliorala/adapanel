@@ -211,6 +211,12 @@ public sealed class LoginLockoutTests
 
         public int Successes { get; private set; }
 
+        /// <summary>Bu testlerde IP hiç engelli değil; amaç kilitlenme sayaçlarını ölçmek.</summary>
+        public bool Banned { get; set; }
+
+        public Task<bool> IsBannedAsync(string? ipAddress, CancellationToken cancellationToken = default)
+            => Task.FromResult(Banned);
+
         public Task RegisterFailedAttemptAsync(string? ipAddress, CancellationToken cancellationToken = default)
         {
             Failures++;

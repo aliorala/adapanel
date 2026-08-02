@@ -45,11 +45,64 @@ internal sealed class DomainRefreshService(
         return result;
     }
 
-    public Task<DomainRefreshSummaryDto> RefreshAllAsync(CancellationToken cancellationToken = default)
-        => RunAllAsync(applyChanges: true, cancellationToken);
+    /// <summary>
+    /// Denetim sonucunun önbelleği. Servis Scoped olduğu için istekler arasında yaşaması gerekiyor.
+    /// <para>
+    /// Önbellek ŞART: "Dikkat" rozeti bu denetimi 60 SANİYEDE BİR çağırıyor ve denetim SİTE BAŞINA
+    /// IIS yapılandırmasını açıp zone dosyasını okuyor. 40 siteli bir sunucuda bu, boştaki panelde
+    /// saatte binlerce dosya okuması ve applicationHost.config ayrıştırması demek — kullanıcı hiçbir
+    /// şey yapmadan sunucu sürekli meşgul görünür.
+    /// </para>
+    /// <para>
+    /// 10 dakika güvenli: eksik varsayılanlar ancak panel güncellemesiyle ya da kullanıcının kayıt
+    /// silmesiyle oluşur, ikisi de saniyeler içinde fark edilmesi gereken şeyler değildir. Tazeleme
+    /// UYGULANDIĞINDA önbellek hemen düşürülür, böylece rozet "hâlâ eksik var" demeye devam etmez.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan InspectionFreshness = TimeSpan.FromMinutes(10);
 
-    public Task<DomainRefreshSummaryDto> InspectAllAsync(CancellationToken cancellationToken = default)
-        => RunAllAsync(applyChanges: false, cancellationToken);
+    private static DomainRefreshSummaryDto? _cachedInspection;
+    private static DateTime _cachedInspectionAtUtc = DateTime.MinValue;
+    private static readonly SemaphoreSlim InspectionGate = new(1, 1);
+
+    public async Task<DomainRefreshSummaryDto> RefreshAllAsync(CancellationToken cancellationToken = default)
+    {
+        var summary = await RunAllAsync(applyChanges: true, cancellationToken);
+
+        // Tazeleme durumu DEĞİŞTİRDİ: bayat denetim sonucunu tutmak, rozetin düzeltilmiş bir sunucuda
+        // 10 dakika boyunca "eksik var" demesine yol açardı.
+        _cachedInspection = null;
+        _cachedInspectionAtUtc = DateTime.MinValue;
+        return summary;
+    }
+
+    public async Task<DomainRefreshSummaryDto> InspectAllAsync(CancellationToken cancellationToken = default)
+    {
+        if (_cachedInspection is not null && DateTime.UtcNow - _cachedInspectionAtUtc < InspectionFreshness)
+        {
+            return _cachedInspection;
+        }
+
+        // Tek geçit: birden çok panel sekmesi aynı anda rozetini yenilediğinde aynı ağır taramanın
+        // paralel kopyalarını çalıştırmayalım.
+        await InspectionGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_cachedInspection is not null && DateTime.UtcNow - _cachedInspectionAtUtc < InspectionFreshness)
+            {
+                return _cachedInspection;
+            }
+
+            var summary = await RunAllAsync(applyChanges: false, cancellationToken);
+            _cachedInspection = summary;
+            _cachedInspectionAtUtc = DateTime.UtcNow;
+            return summary;
+        }
+        finally
+        {
+            InspectionGate.Release();
+        }
+    }
 
     private async Task<DomainRefreshSummaryDto> RunAllAsync(bool applyChanges, CancellationToken cancellationToken)
     {
