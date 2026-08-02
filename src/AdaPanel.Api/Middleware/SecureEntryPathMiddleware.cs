@@ -28,6 +28,19 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
             return;
         }
 
+        // MCP ucu: kimlik doğrulaması bearer anahtarıyla yapılır. Gizli giriş yolu başlığını burada
+        // zorunlu kılmak MCP istemcisini gereksiz kırılganlaştırır — anahtar zaten yüksek entropili
+        // bir sırdır ve tek tek iptal edilebilir. IP kısıtlaması ise YUKARIDA uygulanmış durumda,
+        // yani kaldırılmıyor.
+        //
+        // NOT: IP kısıtlaması kullanılıyorsa yapay zeka sağlayıcısının çıkış adresleri listeye
+        // eklenmelidir; aksi hâlde bağlantı 403 alır.
+        if (path.StartsWithSegments("/mcp", out _))
+        {
+            await next(context);
+            return;
+        }
+
         if (path.StartsWithSegments("/api", out _))
         {
             if (RequiresSecureEntryHeader(path))

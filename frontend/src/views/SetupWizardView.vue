@@ -213,6 +213,7 @@
     <UsersView v-else-if="activeSection === 'accounts' && (isAdmin || isReseller)" @notify="showBanner" />
 
     <AccountView v-else-if="activeSection === 'account'" @notify="showBanner" />
+    <AiConnectionView v-else-if="activeSection === 'ai'" />
 
     <ServerToolsView v-else-if="activeSection === 'tools' && isAdmin" />
 
@@ -240,6 +241,9 @@
           </button>
           <button v-if="isAdmin" :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'">
             {{ t("panel.settings.tab.security") }}
+          </button>
+          <button v-if="isAdmin" :class="{ active: settingsTab === 'errorReports' }" @click="settingsTab = 'errorReports'">
+            {{ t("panel.settings.tab.errorReports") }}
           </button>
           <button v-if="isAdmin" :class="{ active: settingsTab === 'notifications' }" @click="settingsTab = 'notifications'">
             {{ t("panel.settings.tab.notifications") }}
@@ -368,6 +372,7 @@
       </section>
 
       <NotificationsView v-else-if="settingsTab === 'notifications' && isAdmin" />
+      <ErrorReportsView v-else-if="settingsTab === 'errorReports' && isAdmin" />
       <UpdateView v-else-if="settingsTab === 'updates' && isAdmin" />
     </section>
   </MainLayout>
@@ -405,6 +410,8 @@ import BackupView from "./BackupView.vue";
 import SubUsersView from "./SubUsersView.vue";
 import UsersView from "./UsersView.vue";
 import AccountView from "./AccountView.vue";
+import AiConnectionView from "./AiConnectionView.vue";
+import ErrorReportsView from "./ErrorReportsView.vue";
 import SoftwareView from "./SoftwareView.vue";
 import UpdateView from "./UpdateView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
@@ -415,7 +422,7 @@ type ViewMode = "setup" | "auth" | "dashboard";
 type SectionItem = { id: string; label: string; description: string; glyph: string; badge?: string };
 // Hesap yönetimi ("accounts" → UsersView) ve "Hesabım" ("account" → AccountView) artık ayrı bölümler;
 // Ayarlar yalnızca yönetici kapsamındaki sunucu/panel ayarlarını barındırır.
-type SettingsTab = "general" | "security" | "notifications" | "updates";
+type SettingsTab = "general" | "security" | "notifications" | "errorReports" | "updates";
 
 const i18n = useI18n();
 const t = (key: string) => {
@@ -579,6 +586,9 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
     // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.
+    // Yapay zeka baglantisi HER role acik: anahtarin yetkisi sahibinin rolunden turer, yani
+    // musteri anahtari musterinin gordugu kadarini gorur. (Plesk yalniz yoneticiye izin veriyor.)
+    { id: "ai", label: t("panel.navigation.aiConnection"), description: t("panel.aiConnection.subtitle"), glyph: "YZ" },
     { id: "account", label: t("panel.settings.tab.account"), description: t("panel.account.title"), glyph: "HS" },
     { id: "settings", label: t("panel.navigation.settings"), description: t("panel.settings.subtitle"), glyph: "AY", badge: attentionBadge("settings") },
     { id: "exit", label: t("panel.navigation.exit"), description: t("panel.auth.logout"), glyph: "EX" }
@@ -597,6 +607,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "files" ||
       section.id === "database" ||
       section.id === "tasks" ||
+      section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");
   }
@@ -610,6 +621,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "database" ||
       section.id === "files" ||
       section.id === "tasks" ||
+      section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");
     // Müşteriye özel yedek bölümü (kendi sitelerinin yedekleri) — Dosyalar'dan hemen sonra.
@@ -627,7 +639,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       if (allowed) {
         const allowedSet = new Set(allowed.map((section) => section.toLowerCase()));
         customerSections = customerSections.filter((section) =>
-          section.id === "home" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id));
+          section.id === "home" || section.id === "ai" || section.id === "account" || section.id === "exit" || allowedSet.has(section.id));
       }
     } else {
       // Top-level müşteri: aboneliği altındaki ek kullanıcıları yönetir (Plesk "Users" sekmesi) — Hesabım'dan önce.
@@ -652,6 +664,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     return sections.filter((section) =>
       section.id === "home" ||
       section.id === "monitor" ||
+      section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");
   }

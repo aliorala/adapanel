@@ -170,7 +170,8 @@ builder.Services.AddAuthorization();
 // durumsuz kurmak ileriye dönük en güvenli tercih.
 builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.Stateless = true)
-    .WithTools<AdaPanel.Api.Mcp.AdaPanelReadTools>();
+    .WithTools<AdaPanel.Api.Mcp.AdaPanelReadTools>()
+    .WithTools<AdaPanel.Api.Mcp.AdaPanelWriteTools>();
 builder.Services.AddAntiforgery(options =>
 {
     options.HeaderName = "X-CSRF-TOKEN";
