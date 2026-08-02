@@ -1,10 +1,17 @@
+using System.Diagnostics;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Diagnostics;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Routing;
 
 namespace AdaPanel.Api.Middleware;
 
-public sealed class ApiExceptionHandlingMiddleware(RequestDelegate next, ILogger<ApiExceptionHandlingMiddleware> logger)
+public sealed class ApiExceptionHandlingMiddleware(
+    RequestDelegate next,
+    ILogger<ApiExceptionHandlingMiddleware> logger,
+    IServiceScopeFactory scopeFactory)
 {
     public async Task InvokeAsync(HttpContext context)
     {
@@ -20,6 +27,13 @@ public sealed class ApiExceptionHandlingMiddleware(RequestDelegate next, ILogger
                 context.Request.Method,
                 context.Request.Path,
                 exception.MessageKey);
+
+            // 4xx kural ihlalleri BEKLENEN akıştır (yanlış parola, kota aşımı...) — kaydedilirse
+            // gerçek hatalar gürültüde kaybolur. Yalnız 5xx'e düşen AppException bir kusurdur.
+            if (exception.HttpStatusCode >= StatusCodes.Status500InternalServerError)
+            {
+                QueueErrorReport(context, exception);
+            }
 
             await WriteResponseAsync(context, exception.HttpStatusCode, exception.MessageKey, exception.Code, exception.Details);
         }
@@ -48,8 +62,54 @@ public sealed class ApiExceptionHandlingMiddleware(RequestDelegate next, ILogger
         catch (Exception exception)
         {
             logger.LogError(exception, "Unhandled exception for request {Method} {Path}", context.Request.Method, context.Request.Path);
+            QueueErrorReport(context, exception);
             await WriteResponseAsync(context, StatusCodes.Status500InternalServerError, "common.unexpected_error");
         }
+    }
+
+    /// <summary>
+    /// Hatayı maskelenmiş kayda ARKA PLANDA yazar.
+    /// NEDEN arka plan: kayıt (veritabanı yazımı) hata yanıtını GECİKTİRMEMELİ — kullanıcı
+    /// zaten bir hata almış durumda, üstüne bir de bekletilmemeli.
+    /// NEDEN önce alan çıkarımı: <see cref="HttpContext"/> yanıt tamamlandıktan sonra
+    /// geçersizdir; ihtiyaç duyulan değerler görev başlatılmadan ÖNCE okunur.
+    /// NEDEN kendi kapsamı: istek kapsamı (ve DbContext'i) yanıtla birlikte yok edilir.
+    /// </summary>
+    private void QueueErrorReport(HttpContext context, Exception exception)
+    {
+        string routePattern;
+        string correlationId;
+
+        try
+        {
+            var template = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
+            routePattern = ErrorReportSanitizer.BuildRoutePattern(
+                context.Request.Method,
+                template,
+                context.Request.Path.Value);
+            correlationId = Activity.Current?.Id ?? context.TraceIdentifier ?? string.Empty;
+        }
+        catch
+        {
+            // Bağlam okunamadıysa kayıt uğruna isteği riske atma.
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var reportService = scope.ServiceProvider.GetRequiredService<IErrorReportService>();
+                // İstek iptal jetonu KULLANILMAZ: tarayıcı bağlantıyı kapatınca kayıt da iptal olurdu.
+                await reportService.RecordAsync(exception, routePattern, correlationId, CancellationToken.None);
+            }
+            catch (Exception reportFailure)
+            {
+                // Bildirim mekanizmasının kendi hatası kullanıcıya YANSIMAZ; yalnız yerel günlük.
+                logger.LogDebug(reportFailure, "Error report could not be queued for {RoutePattern}", routePattern);
+            }
+        });
     }
 
     private static Task WriteResponseAsync(HttpContext context, int statusCode, string message, int? code = null, string details = "")

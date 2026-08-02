@@ -31,6 +31,7 @@ public sealed class AutomationService(
     ISystemMonitoringService systemMonitoringService,
     IHealthService healthService,
     ISchedulerService schedulerService,
+    IErrorReportSender errorReportSender,
     IConcurrencyLock concurrencyLock,
     ILogger<AutomationService> logger) : IAutomationService
 {
@@ -145,6 +146,19 @@ public sealed class AutomationService(
         // Süresi dolmuş brute-force engellerini temizle. Paylaşılan kilit reentrant
         // olmadığından bu çağrı exclusive bloğun dışında kalmalı.
         await bruteForceProtection.CleanupExpiredBansAsync(cancellationToken);
+
+        // Bekleyen hata bildirimlerini gönder ve eskileri temizle. Exclusive bloğun DIŞINDA:
+        // ağ çağrısı içeriyor ve paylaşılan kilit reentrant değil — kilidi ağ beklerken tutmak
+        // panelin tamamını (giriş dahil) bloklardı. Toplayıcı adresi boşsa hiçbir şey yapılmaz.
+        try
+        {
+            await errorReportSender.SendPendingAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // Bildirim gönderimi ASLA panelin işleyişini etkilememeli: bu yalnız telemetri.
+            logger.LogDebug(exception, "Hata bildirimleri gönderilemedi.");
+        }
 
         // Kalıcı izleme geçmişi: her turda (dakikada bir) CPU/RAM/ağ örneği biriktir → izleme ekranı
         // trend grafiklerini bununla doldurur (sayfa yenilense de dolu). Best-effort; ana akışı bozmaz.

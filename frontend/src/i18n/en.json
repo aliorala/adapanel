@@ -2914,5 +2914,8 @@
   "panel.update.phaseHintReal": "The percentage advances through observed steps: install scheduled, panel down, panel back, version verified. While the panel is down there is no signal from the server, so no intermediate number is invented — the elapsed time is shown instead.",
   "panel.update.attemptAborted": "The installation was cancelled because panel files were in use (code 5) and the changes were rolled back. The panel keeps running on the old version. Run the installer manually on the server once.",
   "panel.update.attemptFailed": "The installation did not complete; the panel keeps running on the old version.",
-  "panel.update.attemptFailedWithReason": "The installation did not complete: {reason} The panel keeps running on the old version."
+  "panel.update.attemptFailedWithReason": "The installation did not complete: {reason} The panel keeps running on the old version.",
+  "errorReporting.invalid_collector_url": "The error reporting address is not valid. Enter a full address starting with https.",
+  "errorReporting.send_failed": "Error reports could not be sent. They are kept on the server and will be retried on the next run.",
+  "errorReporting.collector_unreachable": "The error reporting address could not be reached. Check the address and the server's internet access."
 }

@@ -16,6 +16,9 @@ public sealed class AdaPanelDbContext(DbContextOptions<AdaPanelDbContext> option
     /// <summary>Sunucudan sunucuya erişim anahtarları (MCP bağlantıları). Bkz. <see cref="PanelApiToken"/>.</summary>
     public DbSet<PanelApiToken> ApiTokens => Set<PanelApiToken>();
 
+    /// <summary>Maskelenmiş hata kayıtları; parmak izi üzerinden tekilleştirilir. Bkz. <see cref="ErrorReport"/>.</summary>
+    public DbSet<ErrorReport> ErrorReports => Set<ErrorReport>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AdaPanelDbContext).Assembly);

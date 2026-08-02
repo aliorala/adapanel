@@ -2914,5 +2914,8 @@
   "panel.update.phaseHintReal": "Yüzde, gözlemlenen adımlarla ilerler: kurulum planlandı, panel kapandı, panel geri döndü, sürüm doğrulandı. Panel kurulum sırasında kapalı olduğu için o aralıkta sunucudan sinyal gelmez; bu yüzden ara bir sayı uydurulmaz, geçen süre gösterilir.",
   "panel.update.attemptAborted": "Kurulum, panel dosyaları kullanımda olduğu için iptal edildi (kod 5) ve değişiklikler geri alındı. Panel eski sürümde çalışmaya devam ediyor. Kurulum dosyasını sunucuda bir kez elle çalıştırın.",
   "panel.update.attemptFailed": "Kurulum tamamlanamadı; panel eski sürümde çalışmaya devam ediyor.",
-  "panel.update.attemptFailedWithReason": "Kurulum tamamlanamadı: {reason} Panel eski sürümde çalışmaya devam ediyor."
+  "panel.update.attemptFailedWithReason": "Kurulum tamamlanamadı: {reason} Panel eski sürümde çalışmaya devam ediyor.",
+  "errorReporting.invalid_collector_url": "Hata bildirimi adresi geçersiz. https ile başlayan tam bir adres girin.",
+  "errorReporting.send_failed": "Hata bildirimleri gönderilemedi. Kayıtlar sunucuda duruyor, bir sonraki turda tekrar denenecek.",
+  "errorReporting.collector_unreachable": "Hata bildirimi adresine ulaşılamadı. Adresi ve sunucunun internet erişimini kontrol edin."
 }

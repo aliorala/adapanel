@@ -53,6 +53,75 @@ namespace AdaPanel.Data.Persistence.Migrations
                     b.ToTable("audit_logs", (string)null);
                 });
 
+            modelBuilder.Entity("AdaPanel.Core.Entities.ErrorReport", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExceptionType")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastSeenAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("OccurrenceCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("OsVersion")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PanelVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RoutePattern")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StackTrace")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Fingerprint")
+                        .HasDatabaseName("ix_error_reports_fingerprint");
+
+                    b.HasIndex("SentAtUtc", "LastSeenAtUtc")
+                        .HasDatabaseName("ix_error_reports_sent_last_seen");
+
+                    b.ToTable("error_reports", (string)null);
+                });
+
             modelBuilder.Entity("AdaPanel.Core.Entities.InstalledComponent", b =>
                 {
                     b.Property<Guid>("Id")

@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.RateLimiting;
+using AdaPanel.Api.Security;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -152,9 +154,23 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return context.Response.WriteAsJsonAsync(ApiResponse<object?>.Fail("auth.forbidden", StatusCodes.Status403Forbidden));
         };
-    });
+    })
+    // Sunucudan sunucuya istekler için ikinci şema: "Authorization: Bearer adap_…".
+    // Çerez tarayıcı içindir; tarayıcı dışı bir istemci için 12 saatlik oturum, dakikada 5 giriş
+    // denemesi sınırı ve iki adımlı doğrulama onu kullanılamaz kılar. Bu şema çerez şemasıyla AYNI
+    // talepleri ürettiği için mevcut yetkilendirme/kapsam/denetim kodu değişmeden çalışır.
+    .AddScheme<AuthenticationSchemeOptions, PanelTokenAuthenticationHandler>(
+        PanelTokenAuthenticationHandler.SchemeName,
+        _ => { });
 
 builder.Services.AddAuthorization();
+
+// MCP sunucusu: yapay zeka istemcisi (Claude vb.) paneli bu uç üzerinden kullanır.
+// Stateless bilerek: MCP'nin yeni sürümü protokol seviyesindeki oturumları kaldırdı, baştan
+// durumsuz kurmak ileriye dönük en güvenli tercih.
+builder.Services.AddMcpServer()
+    .WithHttpTransport(options => options.Stateless = true)
+    .WithTools<AdaPanel.Api.Mcp.AdaPanelReadTools>();
 builder.Services.AddAntiforgery(options =>
 {
     options.HeaderName = "X-CSRF-TOKEN";
@@ -228,6 +244,17 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapControllers();
+
+// MCP ucu: YALNIZCA anahtar (bearer) şemasıyla, oturum çerezi kabul edilmez — tarayıcıdan
+// gelen bir isteğin yanlışlıkla yapay zeka araçlarını çağırması mümkün olmamalı.
+// Antiforgery bu uçta anlamsız: CSRF koruması ÇEREZE karşıdır, Authorization başlığı ortamdan
+// otomatik gitmediği için burada koruma değil yalnız engel olurdu.
+app.MapMcp("/mcp")
+    .RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute
+    {
+        AuthenticationSchemes = AdaPanel.Api.Security.PanelTokenAuthenticationHandler.SchemeName
+    })
+    .WithMetadata(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute());
 app.MapFallbackToFile("index.html");
 
 await EnsureDatabaseAsync(app, dataRoot);

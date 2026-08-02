@@ -114,6 +114,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDomainRefreshService, Health.DomainRefreshService>();
         // Sunucudan sunucuya erisim anahtarlari (MCP baglantilari); bkz. PanelApiToken.
         services.AddScoped<IApiTokenService, Security.ApiTokenService>();
+        // Hata bildirimi: maskelenmis kayit + toplayiciya gonderim. Toplayici adresi bos ise
+        // hicbir sey gonderilmez, kayitlar yerelde birikir (guvenli varsayilan).
+        services.AddScoped<IErrorReportService, Diagnostics.ErrorReportService>();
+        services.AddScoped<IErrorReportSender, Diagnostics.ErrorReportSender>();
         services.AddScoped<IAttentionService, Advisor.AttentionService>();
         // Süreç izleyici BİLİNÇLİ İSTİSNA olarak Singleton: CPU yüzdesi iki ölçüm arasındaki
         // işlemci-zamanı farkından hesaplanır, yani servisin önceki anlık görüntüyü HATIRLAMASI
