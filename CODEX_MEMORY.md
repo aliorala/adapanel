@@ -6077,3 +6077,8 @@ Basarili:
   hedef sunucuda YEDEK ALINDIKTAN SONRA denenmeli.
 - **0.2.27 PAKET:** `artifacts\release\0.2.27\AdaPanelSetup.exe`, `51,940,416` byte,
   SHA256 `B1E040BBD210A89FDACADE7A8AFAB28035D3C1A4D73A3DD216E164161C177CA3`.
+- **YAYINLANDI (2026-08-02):** commit `bfba0d1` + yerel `0.2.27` tag'i. GitHub release **0.2.27**.
+  Yayindaki dosya indirilip hash'lendi: `B1E040BB...1C177CA3` (birebir), `releases/latest` -> 0.2.27.
+- **BU MAKINEYE KURULUM DENEMESI:** Windows 10 Pro, kabuk YUKSELTILMEMIS (IsInRole Administrator=False),
+  IIS kurulu DEGIL, DNS Server rolu istemci OS'ta YOK. Installer yonetici hakki ister (UAC) —
+  ajan tiklayamaz. Kullanicinin `!` ile elle calistirmasi gerekir.
