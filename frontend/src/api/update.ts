@@ -22,8 +22,15 @@ export type UpdateStatus = {
   checkedAtUtc: string;
 };
 
-export async function checkForUpdate() {
-  const response = await apiClient.get<ApiEnvelope<UpdateStatus>>("/update/check");
+/**
+ * force=true yalnız kullanıcı AÇIKÇA "kontrol et" dediğinde gönderilir: sunucu o zaman önbelleği
+ * atlayıp GitHub'a gider. Otomatik çağrılarda (panel açılışı, rozet yenilemesi) önbellek kullanılır,
+ * aksi hâlde GitHub'ın kimliksiz saatlik sınırı dolar ve yeni sürüm yayınlansa bile görünmez olur.
+ */
+export async function checkForUpdate(force = false) {
+  const response = await apiClient.get<ApiEnvelope<UpdateStatus>>(
+    force ? "/update/check?force=true" : "/update/check",
+  );
   return response.data.data;
 }
 

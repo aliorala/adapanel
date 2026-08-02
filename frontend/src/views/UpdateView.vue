@@ -5,7 +5,7 @@
         <h2>{{ t("panel.update.title") }}</h2>
         <p class="meta">{{ t("panel.update.subtitle") }}</p>
       </div>
-      <button class="secondary compact" @click="refresh">
+      <button class="secondary compact" @click="refresh(true)">
         {{ t("panel.update.refresh") }}
       </button>
     </div>
@@ -77,15 +77,17 @@ const busy = ref<"" | "download" | "install">("");
 const notice = ref("");
 const noticeError = ref(false);
 
+// Ekrana GİRMEK "kontrol et" demektir: kullanıcı buraya güncelleme var mı diye bakmaya gelir,
+// önbellekten bayat cevap vermek bu ekranın tek işini boşa çıkarır.
 onMounted(async () => {
-  await refresh();
+  await refresh(true);
 });
 
 // NOT: Güncelleme kaynağı (GitHub depo) ayarı kullanıcı isteğiyle UI'dan KALDIRILDI; backend
 // varsayılanı (SelfUpdateService.DefaultRepo) kullanılır, gerekirse config/update-github.json'dan değişir.
-async function refresh() {
+async function refresh(force = true) {
   try {
-    status.value = await checkForUpdate();
+    status.value = await checkForUpdate(force);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }

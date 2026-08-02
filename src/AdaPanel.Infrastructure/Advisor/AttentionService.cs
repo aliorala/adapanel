@@ -74,7 +74,7 @@ public sealed class AttentionService(
         // 3) Panel güncellemesi (GitHub Releases; ağ hatası tüm raporu bozmasın).
         try
         {
-            var update = await selfUpdateService.CheckForUpdateAsync(cancellationToken);
+            var update = await selfUpdateService.CheckForUpdateAsync(forceRefresh: false, cancellationToken);
             if (update.IsUpdateAvailable)
             {
                 items.Add(new AttentionItemDto

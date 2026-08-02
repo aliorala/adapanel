@@ -30,7 +30,7 @@ public sealed class AdvisorService(
         // Panel güncellemesi (GitHub'a bakar; ağ hatası raporu bozmasın).
         try
         {
-            var update = await selfUpdateService.CheckForUpdateAsync(cancellationToken);
+            var update = await selfUpdateService.CheckForUpdateAsync(forceRefresh: false, cancellationToken);
             if (update.IsUpdateAvailable)
             {
                 items.Add(new AdvisorItemDto

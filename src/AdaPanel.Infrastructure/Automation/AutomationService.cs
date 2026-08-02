@@ -762,7 +762,7 @@ public sealed class AutomationService(
         // yonetici de haberdar olsun.
         try
         {
-            var panelUpdate = await selfUpdateService.CheckForUpdateAsync(cancellationToken);
+            var panelUpdate = await selfUpdateService.CheckForUpdateAsync(forceRefresh: false, cancellationToken);
             if (panelUpdate.IsUpdateAvailable)
             {
                 alerts.Add((

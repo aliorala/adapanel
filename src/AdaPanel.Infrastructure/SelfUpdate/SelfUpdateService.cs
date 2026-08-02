@@ -18,21 +18,34 @@ public sealed class SelfUpdateService(
     private const string PendingUpdatePath = "updates/pending-update.json";
     private const string DefaultRepo = "aliorala/adapanel";
 
-    public async Task<UpdateStatusDto> CheckForUpdateAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// GitHub sonucunun taze sayıldığı süre. Rozet 60 saniyede bir sorduğu ve GitHub'ın kimliksiz
+    /// sınırı saatte 60 istek olduğu için her çağrıda ağa çıkmak sınırı tek başına doldurur.
+    /// 15 dakika, sınırı saatte ~4 isteğe indirirken yeni sürümü fark etmeyi de yeterince hızlı tutar.
+    /// </summary>
+    private static readonly TimeSpan ManifestFreshness = TimeSpan.FromMinutes(15);
+
+    public async Task<UpdateStatusDto> CheckForUpdateAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
     {
         var currentVersion = VersionInfo.Current;
         var github = await fileStore.ReadAsync(GithubConfigPath, new GithubConfig { Repo = DefaultRepo }, cancellationToken);
         var fetchNote = string.Empty;
 
+        var cached = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
+        var isFresh = cached.FetchedAtUtc.HasValue &&
+                      DateTime.UtcNow - cached.FetchedAtUtc.Value < ManifestFreshness &&
+                      !string.IsNullOrWhiteSpace(cached.LatestVersion);
+
         // GitHub deposu ayarlıysa en son Release'i ÇEK (sürüm + .exe indirme linki + SHA256) ve yerel manifeste
         // önbelleğe yaz → indir/kur akışı yerel manifestle aynen çalışır. Hata olursa net not (UI gösterir), tab çökmiyor.
-        if (!string.IsNullOrWhiteSpace(github.Repo))
+        if (!string.IsNullOrWhiteSpace(github.Repo) && (forceRefresh || !isFresh))
         {
             try
             {
                 var remote = await FetchGithubManifestAsync(github.Repo.Trim(), cancellationToken);
                 if (remote is not null)
                 {
+                    remote.FetchedAtUtc = DateTime.UtcNow;
                     await fileStore.WriteAsync(ManifestPath, remote, cancellationToken);
                 }
             }
@@ -94,7 +107,8 @@ public sealed class SelfUpdateService(
     {
         var trimmed = (repo ?? string.Empty).Trim();
         await fileStore.WriteAsync(GithubConfigPath, new GithubConfig { Repo = trimmed }, cancellationToken);
-        return await CheckForUpdateAsync(cancellationToken);
+        // Depo AÇIKÇA değiştirildi: önbelleği atla, yeni deponun sürümünü hemen göster.
+        return await CheckForUpdateAsync(forceRefresh: true, cancellationToken);
     }
 
     // GitHub Releases API'sinden en son sürümü çevirir → UpdateManifest. owner/repo (ya da github.com URL'si) kabul eder.
@@ -222,7 +236,8 @@ public sealed class SelfUpdateService(
 
     public async Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        var status = await CheckForUpdateAsync(cancellationToken);
+        // İndirme başlıyor: indirme linki ve SHA256 GÜNCEL olmalı, bayat manifestten indirme yapılmaz.
+        var status = await CheckForUpdateAsync(forceRefresh: true, cancellationToken);
         var url = string.IsNullOrWhiteSpace(request.DownloadUrl) ? status.DownloadUrl : request.DownloadUrl.Trim();
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -346,7 +361,7 @@ public sealed class SelfUpdateService(
         pendingUpdate.InstallScheduledAtUtc = DateTime.UtcNow;
         await fileStore.WriteAsync(PendingUpdatePath, pendingUpdate, cancellationToken);
 
-        var status = await CheckForUpdateAsync(cancellationToken);
+        var status = await CheckForUpdateAsync(forceRefresh: false, cancellationToken);
         status.Notes = "update.install_scheduled";
         return status;
     }
@@ -449,6 +464,9 @@ public sealed class SelfUpdateService(
         public string PackageSha256 { get; set; } = string.Empty;
 
         public string Notes { get; set; } = string.Empty;
+
+        /// <summary>Bu manifest GitHub'dan en son NE ZAMAN alındı. Boşsa (eski kurulum) bayat sayılır.</summary>
+        public DateTime? FetchedAtUtc { get; set; }
     }
 
     private sealed class PendingUpdate
