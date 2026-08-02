@@ -6112,3 +6112,7 @@ Basarili:
   koruma YAPILMAMASI). Infrastructure **365/365**.
 - **DERS:** "kod okudum, mantik dogru" YETMEZ. 0.2.27'yi duzeltme diye yayinladim ama veri kaybi
   aynen duruyordu; ancak gercek kurulumda deneyince ortaya cikti.
+- **0.2.28 PAKET + YAYIN:** `artifacts\release\0.2.28\AdaPanelSetup.exe`, `51,943,958` byte,
+  SHA256 `358681007665DA493B904C8AC5DB3B9A4DDD538B99D999CE386D961363B76174`. Yayindaki dosya
+  indirilip hash'lendi: birebir. Ayrica **0.2.27 release notuna UYARI eklendi** (API PATCH ile):
+  "bu surumu kullanmayin, veritabani motorlarinda Guncelle verinizi silebilir, 0.2.28'e gecin".
