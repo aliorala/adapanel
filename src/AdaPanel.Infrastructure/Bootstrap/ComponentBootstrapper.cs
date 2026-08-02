@@ -3738,6 +3738,39 @@ public sealed class ComponentBootstrapper(
     /// ve çakışan yabancı servisler (software.conflicting_service) suçlunun adıyla raporlanır.
     /// Probe'un kendisi başarısız olursa kurulum ENGELLENMEZ (best-effort teşhis).
     /// </summary>
+    /// <summary>
+    /// IIS site bağlamalarını okur. Yalnızca HTTP.sys çakışması varken çağrılır ve başarısızlığı
+    /// KURULUMU ENGELLEMEZ: amacı hata mesajını zenginleştirmek, yeni bir hata kaynağı olmak değil.
+    /// </summary>
+    private async Task<IReadOnlyList<(string SiteName, string Binding, int Port)>> ReadIisBindingsAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var appcmd = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "inetsrv",
+                "appcmd.exe");
+            if (!File.Exists(appcmd))
+            {
+                return [];
+            }
+
+            var result = await ProcessRunner.RunAsync(
+                appcmd,
+                "list sites",
+                cancellationToken: cancellationToken,
+                timeout: TimeSpan.FromSeconds(10));
+
+            return ComponentPreflight.ParseAppcmdSiteBindings(result.StandardOutput);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "IIS bağlamaları okunamadı; port çakışması mesajı site adı olmadan gösterilecek.");
+            return [];
+        }
+    }
+
     private async Task EnsureNoComponentConflictsAsync(ComponentManifestItemDto component, CancellationToken cancellationToken)
     {
         var ports = ComponentPreflight.GetRequiredPorts(component.Id);
@@ -3773,15 +3806,32 @@ public sealed class ComponentBootstrapper(
         var portConflicts = ComponentPreflight.SelectForeignPortConflicts(occupied, component.ServiceName);
         if (portConflicts.Count > 0)
         {
+            // HTTP.sys'in tuttuğu portlarda süreç adı ("System", PID 4) yöneticiye hiçbir şey söylemez;
+            // gerçek sahip olan IIS sitesini bul ve onu yaz. Bulunamazsa mesaj eski hâlinde kalır.
+            var iisBindings = portConflicts.Any(item => ComponentPreflight.IsHttpSysHolder(item.Pid, item.Process))
+                ? await ReadIisBindingsAsync(cancellationToken)
+                : [];
+
             var lines = portConflicts.Select(item =>
-                $"Port {item.Port}: {(string.IsNullOrWhiteSpace(item.Process) ? "bilinmeyen süreç" : item.Process + ".exe")} (PID {item.Pid})" +
-                (string.IsNullOrWhiteSpace(item.Service) ? string.Empty : $" — Windows servisi: {item.Service}"));
+            {
+                var owner = ComponentPreflight.IsHttpSysHolder(item.Pid, item.Process)
+                    ? ComponentPreflight.DescribeHttpSysPortOwner(item.Port, iisBindings)
+                    : string.Empty;
+
+                return $"Port {item.Port}: {(string.IsNullOrWhiteSpace(item.Process) ? "bilinmeyen süreç" : item.Process + ".exe")} (PID {item.Pid})" +
+                       (string.IsNullOrWhiteSpace(item.Service) ? string.Empty : $" — Windows servisi: {item.Service}") +
+                       (string.IsNullOrWhiteSpace(owner) ? string.Empty : $" — {owner}");
+            });
+
+            var remedy = iisBindings.Count > 0
+                ? "Cozum: portu bir IIS sitesi kullaniyor. O sitenin baglamasini baska bir porta alin (Siteler > site > Baglamalar) ya da siteyi durdurun, sonra kurulumu tekrar deneyin."
+                : "Cozum: yukaridaki yazilimi kaldirin ya da servisini durdurup devre disi birakin (sc stop <servis> && sc config <servis> start= disabled), sonra kurulumu tekrar deneyin.";
+
             throw new AppException(
                 "software.port_conflict",
                 409,
                 409,
-                $"Component={component.DisplayName}\r\n{string.Join("\r\n", lines)}\r\n" +
-                "Cozum: yukaridaki yazilimi kaldirin ya da servisini durdurup devre disi birakin (sc stop <servis> && sc config <servis> start= disabled), sonra kurulumu tekrar deneyin.");
+                $"Component={component.DisplayName}\r\n{string.Join("\r\n", lines)}\r\n{remedy}");
         }
 
         var blockingServices = ComponentPreflight.SelectBlockingServices(services, patterns, component.ServiceName);

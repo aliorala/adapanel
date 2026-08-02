@@ -226,4 +226,68 @@ public sealed class ResourceAttributionServiceTests
         Assert.False(ResourceAttributionService.LooksLikeXml(AppcmdTextOutput));
         Assert.False(ResourceAttributionService.LooksLikeXml(null));
     }
+
+    // appcmd, başarısızlığı çıkış koduyla değil GÖVDESİNE <ERROR/> yazarak bildirir. Bu yakalanmazsa
+    // çıktı geçerli XML olduğu için ayrıştırma sıfır satır döndürür ve ekran "şu an işlenen istek yok"
+    // yazar — panel hiçbir şey göremezken "sorun yok" demiş oluruz. Canlı olarak yaşandı: IIS
+    // "İstek İzleyici" bileşeni kurulu olmayan makinede appcmd E_NOTIMPL döndürüyordu.
+    [Theory]
+    [InlineData("<?xml version=\"1.0\"?><appcmd><ERROR hresult=\"80004001\" message=\"Ger&#231;eklenmemi&#351;\" /></appcmd>", "80004001")]
+    [InlineData("ERROR ( hresult:80004001, message:Komut yürütme başarısız oldu. )", "80004001")]
+    [InlineData("<appcmd><ERROR hresult=\"80070005\" /></appcmd>", "80070005")]
+    public void TryGetAppcmdError_DetectsFailureReportedInsideTheOutput(string output, string expected)
+    {
+        Assert.True(ResourceAttributionService.TryGetAppcmdError(output, out var hresult));
+        Assert.Equal(expected, hresult);
+    }
+
+    // Gerçek liste çıktısı (dolu ya da boş) hata SAYILMAMALI; aksi hâlde çalışan sunucuda sürekli
+    // "okunamadı" uyarısı gösterirdik.
+    [Theory]
+    [InlineData(AppcmdXmlOutput)]
+    [InlineData(AppcmdTextOutput)]
+    [InlineData("<?xml version=\"1.0\"?><appcmd></appcmd>")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryGetAppcmdError_IsFalse_ForRealOutput(string? output)
+    {
+        Assert.False(ResourceAttributionService.TryGetAppcmdError(output, out _));
+    }
+
+    // Bu ekranın varlık nedeni "sitesi başka sunucuda, veritabanı bizde" bağlantılarını göstermektir.
+    // MySQL'de ad çözümlemesi varsayılan olarak açıktır; uzak istemci PROCESSLIST'te IP değil ADLA
+    // görünür. Eski kural "IP değilse uzak sayma" diyordu ve tam da işaretlenmesi gereken satırları
+    // yerel sanıyordu.
+    [Theory]
+    [InlineData("web02.musteri.com:51234")]
+    [InlineData("sunucu-2:3306")]
+    [InlineData("203.0.113.44:51234")]
+    [InlineData("[2001:db8::5]:51234")]
+    [InlineData("2001:db8::5")]
+    public void IsRemoteClientHost_FlagsConnectionsFromOtherMachines(string clientHost)
+    {
+        Assert.True(ResourceAttributionService.IsRemoteClientHost(clientHost));
+    }
+
+    // Yerel bağlantılar uzak SAYILMAMALI: aksi hâlde her satır "dış bağlantı" rozetiyle gelir ve
+    // uyarı anlamını yitirir. Makinenin kendi adı da (düz ve FQDN biçimiyle) yereldir.
+    [Theory]
+    [InlineData("localhost:64476")]
+    [InlineData("localhost")]
+    [InlineData("127.0.0.1:3306")]
+    [InlineData("::1")]
+    [InlineData("[::1]:3306")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsRemoteClientHost_DoesNotFlagLoopback(string? clientHost)
+    {
+        Assert.False(ResourceAttributionService.IsRemoteClientHost(clientHost));
+    }
+
+    [Fact]
+    public void IsRemoteClientHost_DoesNotFlagThisServersOwnName()
+    {
+        Assert.False(ResourceAttributionService.IsRemoteClientHost($"{Environment.MachineName}:64476"));
+        Assert.False(ResourceAttributionService.IsRemoteClientHost($"{Environment.MachineName}.mshome.net:64476"));
+    }
 }

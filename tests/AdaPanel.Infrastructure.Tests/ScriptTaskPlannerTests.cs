@@ -135,10 +135,15 @@ public sealed class ScriptTaskPlannerTests
         Assert.Equal("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\sites\\site1\\backup.ps1\" -Target Full", arguments);
     }
 
+    // Sınırlı kimlik, Task Scheduler'ın GERÇEKTEN kabul ettiği bir hesap olmalı. Uygulama havuzu
+    // sanal hesabı ("IIS APPPOOL\…") bu makinede denenen her yolda reddedildi ya da — schtasks'ta —
+    // "SUCCESS" deyip kimliksiz, hiç çalışmayan bir görev bıraktı. Bu test o hesaba geri dönülmesini
+    // engeller.
     [Fact]
-    public void BuildAppPoolUserId_UsesTheVirtualAccountForm()
+    public void LimitedUserId_IsAServiceAccountTheSchedulerAccepts()
     {
-        Assert.Equal(@"IIS APPPOOL\AdaPanel.example-test", ScriptTaskPlanner.BuildAppPoolUserId(" AdaPanel.example-test "));
+        Assert.Equal(@"NT AUTHORITY\LOCAL SERVICE", ScriptTaskPlanner.LimitedUserId);
+        Assert.DoesNotContain("APPPOOL", ScriptTaskPlanner.LimitedUserId, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -151,5 +156,36 @@ public sealed class ScriptTaskPlannerTests
     public void IsScriptAction_DerivesTheTypeFromTheRegisteredAction(string execute, string arguments, bool expected)
     {
         Assert.Equal(expected, ScriptTaskPlanner.IsScriptAction(execute, arguments));
+    }
+
+    // Canlı testte yakalanan hatanın regresyonu: site kökünde duran bir bot.bat için çalışma dizini
+    // kökün ta kendisine düşüyordu ve görev "site dışında" diye 403 ile reddediliyordu. Yani site
+    // kökündeki HİÇBİR betik zamanlanamıyordu.
+    [Theory]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", @"C:\inetpub\wwwroot\test.local")]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", @"C:\inetpub\wwwroot\test.local\")]
+    [InlineData(@"C:\inetpub\wwwroot\test.local\", @"C:\inetpub\wwwroot\test.local")]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", @"C:\inetpub\wwwroot\test.local\alt")]
+    public void IsRootOrInsideRoot_AcceptsTheRootItselfAsAWorkingDirectory(string root, string candidate)
+    {
+        Assert.True(ScriptTaskPlanner.IsRootOrInsideRoot(root, candidate));
+    }
+
+    // Gevşetme yalnızca "kökün kendisi" ile sınırlı kalmalı: dışarısı ve ön ek benzerliği hâlâ ret.
+    [Theory]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", @"C:\Windows\System32")]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", @"C:\inetpub\wwwroot\test.local-evil")]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", @"C:\inetpub\wwwroot\test.local\..\baska")]
+    [InlineData(@"C:\inetpub\wwwroot\test.local", null)]
+    public void IsRootOrInsideRoot_StillRejectsAnythingOutsideTheRoot(string root, string? candidate)
+    {
+        Assert.False(ScriptTaskPlanner.IsRootOrInsideRoot(root, candidate));
+    }
+
+    // Betik için kural DEĞİŞMEDİ: klasörün kendisi çalıştırılabilir bir hedef değildir.
+    [Fact]
+    public void IsInsideRoot_StillRejectsTheRootItself_ForScriptPaths()
+    {
+        Assert.False(ScriptTaskPlanner.IsInsideRoot(@"C:\inetpub\wwwroot\test.local", @"C:\inetpub\wwwroot\test.local"));
     }
 }

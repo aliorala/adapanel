@@ -84,6 +84,32 @@ internal static class ScriptTaskPlanner
     }
 
     /// <summary>
+    /// Klasör denetimi: <see cref="IsInsideRoot"/> ile aynı, ancak KÖKÜN KENDİSİ de geçerli sayılır.
+    /// <para>
+    /// Çalışma dizini için ayrı bir kural gerekir. Bir BETİK site kökünün kendisi olamaz (klasör
+    /// çalıştırılamaz), ama site kökü bir çalışma dizini olarak tamamen meşrudur — üstelik en olağan
+    /// durumdur: kullanıcı alanı boş bırakır, çalışma dizini betiğin klasörüne düşer ve site kökünde
+    /// duran bir .bat için o klasör kökün ta kendisidir. Bu ayrım yapılmazsa site kökündeki hiçbir
+    /// betik zamanlanamaz; canlı testte tam olarak bu yaşandı.
+    /// </para>
+    /// </summary>
+    internal static bool IsRootOrInsideRoot(string? root, string? candidate)
+    {
+        var normalizedRoot = NormalizePath(root);
+        var normalizedCandidate = NormalizePath(candidate);
+        if (normalizedRoot is null || normalizedCandidate is null)
+        {
+            return false;
+        }
+
+        var trimmedRoot = normalizedRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var trimmedCandidate = normalizedCandidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        return string.Equals(trimmedRoot, trimmedCandidate, StringComparison.OrdinalIgnoreCase)
+               || IsInsideRoot(root, candidate);
+    }
+
+    /// <summary>
     /// Betiği çalıştıracak sarmalayıcı komutu üretir.
     /// <list type="bullet">
     /// <item>.bat/.cmd → <c>cmd.exe /c ""&lt;yol&gt;" &lt;arg&gt;"</c></item>
@@ -128,9 +154,23 @@ internal static class ScriptTaskPlanner
         return ("cmd.exe", $"/c \"{inner}\"");
     }
 
-    /// <summary>Uygulama havuzu sanal hesabının Windows kimliği ("IIS APPPOOL\&lt;havuz&gt;").</summary>
-    internal static string BuildAppPoolUserId(string applicationPoolName) =>
-        $"IIS APPPOOL\\{applicationPoolName.Trim()}";
+    /// <summary>
+    /// Sınırlı yetkili görev kimliği. Site betikleri SYSTEM yerine BU hesapla çalışır.
+    /// <para>
+    /// Neden uygulama havuzu hesabı DEĞİL: "IIS APPPOOL\&lt;havuz&gt;" (S-1-5-82-…) bir ada karşılık
+    /// SID'e çözülse bile Task Scheduler bir prensipal olarak KABUL ETMİYOR. Bu makinede dört yol da
+    /// denendi ve dördü de "hesap adı-SID eşlemesi yapılamadı" (0x80070534) verdi:
+    /// New-ScheduledTaskPrincipal ile LogonType Password / ServiceAccount / S4U / Interactive.
+    /// schtasks.exe /RU "IIS APPPOOL\…" /NP ise DAHA KÖTÜSÜNÜ yapıyor: "SUCCESS" yazdırıp görevi
+    /// UserId'si BOŞ, LogonType'ı Group olarak kaydediyor; görev sessizce hiç çalışmıyor (0x41303).
+    /// Yani havuz kimliği seçeneği hiçbir koşulda çalışamazdı.
+    /// </para>
+    /// <para>
+    /// LOCAL SERVICE canlı olarak doğrulandı: görev kaydoluyor, çalışıyor (sonuç 0x0) ve betik içinden
+    /// okunan kimlik "NT AUTHORITY\Local Service". Yönetici yetkisi yoktur — amaç buydu.
+    /// </para>
+    /// </summary>
+    internal const string LimitedUserId = @"NT AUTHORITY\LOCAL SERVICE";
 
     /// <summary>Kayıtlı bir görevin eyleminden "script" tipini geri türetir (liste ekranı için).</summary>
     internal static bool IsScriptAction(string? execute, string? arguments)

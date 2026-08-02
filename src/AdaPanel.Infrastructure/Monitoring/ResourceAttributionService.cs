@@ -338,6 +338,22 @@ internal sealed partial class ResourceAttributionService(
                 timeout: TimeSpan.FromSeconds(10));
 
             var output = result.StandardOutput;
+
+            // appcmd BAŞARISIZLIĞI ÇIKIŞ KODUYLA DEĞİL, gövdesine <ERROR .../> yazarak bildirir.
+            // Bu ayrım kritik: çıktı geçerli XML olduğu için aşağıdaki metin yedeği devreye girmez,
+            // satır sayısı sıfır çıkar ve kaynak "sorunsuz ama boş" sanılır — ekranda "şu an işlenen
+            // istek yok" yazar. Oysa panel HİÇBİR ŞEY GÖREMİYORDUR. Canlı olarak bu makinede yaşandı:
+            // IIS "İstek İzleyici" (IIS-RequestMonitor) bileşeni kurulu olmadığı için appcmd
+            // E_NOTIMPL (0x80004001) döndürüyordu ve ekran boş liste gösteriyordu.
+            if (TryGetAppcmdError(output, out var hresult))
+            {
+                var statusCode = string.Equals(hresult, "80004001", StringComparison.OrdinalIgnoreCase)
+                    ? "request_monitor_missing"
+                    : "unavailable";
+                logger.LogDebug("appcmd list requests hata döndürdü (hresult={HResult}); IIS kaynağı '{Status}'.", hresult, statusCode);
+                return Snapshot("iis", "IIS", installed: true, statusCode: statusCode);
+            }
+
             var rows = ParseAppcmdRequests(output);
 
             // XML denemesi başarısızsa (eski appcmd, /xml desteklenmiyor) düz metin biçimine düş.
@@ -374,6 +390,38 @@ internal sealed partial class ResourceAttributionService(
             logger.LogDebug(exception, "appcmd list requests çalıştırılamadı; IIS kaynağı 'unavailable' olarak raporlanıyor.");
             return Snapshot("iis", "IIS", installed: true, statusCode: "unavailable");
         }
+    }
+
+    /// <summary>
+    /// appcmd çıktısındaki <c>&lt;ERROR hresult="…" /&gt;</c> öğesini yakalar.
+    /// <para>
+    /// Metin biçiminde de ("ERROR ( hresult:80004001, …") aynı bilgi vardır; iki biçim de aranır
+    /// çünkü hangi biçimin döneceği appcmd sürümüne ve komutun kendisine göre değişir.
+    /// </para>
+    /// </summary>
+    internal static bool TryGetAppcmdError(string? output, out string hresult)
+    {
+        hresult = string.Empty;
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return false;
+        }
+
+        var match = Regex.Match(
+            output,
+            @"hresult\s*[=:]\s*""?(?<code>[0-9A-Fa-f]{8})""?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(2));
+
+        if (match.Success)
+        {
+            hresult = match.Groups["code"].Value;
+            return true;
+        }
+
+        // hresult okunamasa bile bir ERROR öğesi varsa kaynak GÜVENİLMEZDİR; boş liste sanılmamalı.
+        return output.Contains("<ERROR", StringComparison.OrdinalIgnoreCase) ||
+               output.Contains("ERROR (", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveAppcmdPath()
@@ -789,10 +837,55 @@ internal sealed partial class ResourceAttributionService(
             return false;
         }
 
-        // Adres olarak ayrıştırılamayan bir şey (ör. makine adı) geldiyse "uzak" varsaymak yanıltıcı
-        // olur; yalnız GERÇEK bir IP ise ve loopback değilse dış bağlantı deriz.
-        return System.Net.IPAddress.TryParse(value, out var address) && !System.Net.IPAddress.IsLoopback(address);
+        // Buraya gelen değer loopback DEĞİL. Sunucunun KENDİSİNİ gösteren adlar/adresler hâlâ yereldir:
+        // MySQL, ad çözümlemesi açıkken yerel TCP bağlantısını makinenin kendi adıyla ("SUNUCU" ya da
+        // "SUNUCU.local") raporlar.
+        if (LocalHostIdentifiers.Value.Contains(value))
+        {
+            return false;
+        }
+
+        // FQDN biçimi: "SUNUCU.mshome.net" → ilk etiket makine adıysa yine yereldir.
+        var firstLabel = value.Split('.', 2)[0];
+        if (firstLabel.Length > 0 && LocalHostIdentifiers.Value.Contains(firstLabel))
+        {
+            return false;
+        }
+
+        // Geriye kalan her şey DIŞ bağlantıdır — IP olarak ayrıştırılamasa bile.
+        //
+        // Burada eskiden "IP değilse uzak sayma" kuralı vardı ve bu, ekranın VAROLUŞ NEDENİNİ bozuyordu:
+        // MySQL'de ad çözümlemesi (skip-name-resolve kapalı) varsayılan olarak AÇIKTIR, bu yüzden başka
+        // bir sunucudan gelen istemci PROCESSLIST'te "web02.musteri.com:51234" gibi bir ADLA görünür.
+        // Eski kural bunu "yerel" sayıyordu; yani "sitesi başka yerde barındırılan ama veritabanı bizde
+        // olan" bağlantılar — tam olarak işaretlenmek istenen durum — hiçbir zaman işaretlenmiyordu.
+        return true;
     }
+
+    /// <summary>
+    /// Bu sunucuyu gösteren adlar ve IP'ler. Bir kez hesaplanır: her satır için DNS sorgusu yapmak
+    /// izleme ekranını sunucunun ağ gecikmesine bağlar.
+    /// </summary>
+    private static readonly Lazy<HashSet<string>> LocalHostIdentifiers = new(() =>
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Environment.MachineName };
+        try
+        {
+            var hostName = System.Net.Dns.GetHostName();
+            set.Add(hostName);
+            foreach (var address in System.Net.Dns.GetHostAddresses(hostName))
+            {
+                set.Add(address.ToString());
+            }
+        }
+        catch (Exception)
+        {
+            // Ad çözümlemesi yoksa yalnız makine adıyla yetin: kötü durumda birkaç yerel bağlantı
+            // "uzak" görünür — sessizce uzak bağlantı KAÇIRMAKTAN iyidir.
+        }
+
+        return set;
+    });
 
     /// <summary>Sahip adını, kardeş motor (mysql↔mariadb) yedeğiyle birlikte çözer.</summary>
     internal static string ResolveOwnerForDatabase(

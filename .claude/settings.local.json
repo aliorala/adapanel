@@ -88,7 +88,8 @@
       "Bash(.tools/dotnet/dotnet.exe test *)",
       "Bash(echo \"tc $?\")",
       "Bash(echo \"tc-exit $?\")",
-      "WebFetch(domain:gitlab.archlinux.org)"
+      "WebFetch(domain:gitlab.archlinux.org)",
+      "PowerShell(git *)"
     ]
   }
 }

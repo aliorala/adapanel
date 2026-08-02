@@ -32,6 +32,15 @@
       {{ label("credentialsMissing", "{name} kurulu ama panel ona bağlanamıyor: yönetici parolası kayıtlı değil. Veritabanları ekranından kimlik bilgisini kaydedin.", { name: displayName }) }}
     </p>
 
+    <!-- IIS kurulu ve çalışıyor ama canlı istek listesini VEREMİYOR: boş liste göstermek "sorun yok"
+         demek olurdu, oysa panel hiçbir şey göremiyor. Eksik bileşeni ve çözümünü açıkça söyle. -->
+    <p v-else-if="snapshot.statusCode === 'request_monitor_missing'" class="notice warn">
+      {{ label(
+        "requestMonitorMissing",
+        "IIS'in \"İstek İzleyici\" bileşeni kurulu olmadığı için canlı istekler okunamıyor. Liste boş olduğu için değil, görülemediği için boş. Sunucu Yöneticisi → Web Sunucusu (IIS) → Sistem Durumu ve Tanılama → İstek İzleyici'yi ekleyin.",
+      ) }}
+    </p>
+
     <p v-else-if="!snapshot.available" class="notice warn">
       {{ label("unavailable", "{name} şu an sorgulanamadı. Servis durmuş olabilir; liste boş olduğu için değil, okunamadığı için görünmüyor.", { name: displayName }) }}
     </p>

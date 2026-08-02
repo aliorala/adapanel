@@ -97,11 +97,17 @@ public sealed class CronController(
         var scriptContext = string.Equals(request.TaskType, "script", StringComparison.OrdinalIgnoreCase)
             ? string.IsNullOrWhiteSpace(request.SiteName)
                 ? " [mode=server, identity=SYSTEM]"
-                : $" [mode=site:{request.SiteName}, identity={(string.Equals(request.RunAs, "apppool", StringComparison.OrdinalIgnoreCase) ? "app-pool" : "SYSTEM")}]"
+                : $" [mode=site:{request.SiteName}, identity={(IsLimitedRunAs(request.RunAs) ? "LOCAL SERVICE" : "SYSTEM")}]"
             : string.Empty;
         await WriteAuditAsync("cron.created", $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}{scriptContext}", cancellationToken);
         return Ok(ApiResponse<ScheduledTaskDto>.Ok(task, "cron.saved"));
     }
+
+    // "apppool" eski istemcilerin gonderdigi degerdir ve artik sinirli kimlik anlamina gelir;
+    // denetim kaydi da o gorevin GERCEKTE hangi hesapla kostugunu yazmali.
+    private static bool IsLimitedRunAs(string? runAs) =>
+        string.Equals(runAs, "limited", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(runAs, "apppool", StringComparison.OrdinalIgnoreCase);
 
     [HttpPost("{name}/run")]
     public async Task<ActionResult<ApiResponse<object>>> RunTaskAsync(string name, CancellationToken cancellationToken)

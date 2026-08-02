@@ -31,7 +31,8 @@ public sealed class CreateScheduledTaskRequest
 
     /// <summary>
     /// script tipi: görevin hangi kimlikle çalışacağı. "system" (varsayılan, RunLevel Highest) veya
-    /// "apppool" (sitenin uygulama havuzu sanal hesabı — yalnız site betiği modunda seçilebilir).
+    /// "limited" (sınırlı yetkili LOCAL SERVICE — yalnız site betiği modunda seçilebilir; eski
+    /// istemcilerin gönderdiği "apppool" değeri de bu anlama gelir).
     /// </summary>
     public string RunAs { get; set; } = "system";
 

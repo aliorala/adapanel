@@ -35,14 +35,27 @@ public sealed class RemoteClientDetectionTests
         Assert.True(ResourceAttributionService.IsRemoteClientHost(clientHost));
     }
 
-    // Adres olarak ayrıştırılamayan bir değer (makine adı, çöp) "uzak" sayılmamalı: emin olmadığımız
-    // bir şeyi "dışarıdan bağlanıyor" diye etiketlemek yanlış yönlendirir.
+    // ÖNEMLİ: burada eskiden "IP olarak ayrıştırılamayan değer uzak SAYILMAZ" kuralı vardı ve bu kural
+    // ekranın varlık nedenini ortadan kaldırıyordu. MySQL'de ad çözümlemesi (skip-name-resolve) varsayılan
+    // olarak KAPALI DEĞİLDİR; başka bir sunucudan gelen istemci PROCESSLIST'te IP ile değil ADIYLA
+    // ("web02.musteri.com:51234") görünür. Yani asıl işaretlenmesi gereken satırlar — sitesi dışarıda,
+    // veritabanı bizde olan bağlantılar — hiçbir zaman işaretlenmiyordu. Canlı testte doğrulandı.
     [Theory]
     [InlineData("web-sunucu-2")]
     [InlineData("ornek.com:3306")]
-    [InlineData("bozuk-veri")]
-    public void IsRemoteClientHost_IsFalse_WhenTheValueIsNotAnIpAddress(string clientHost)
+    [InlineData("web02.musteri.com:51234")]
+    public void IsRemoteClientHost_IsTrue_ForHostNamesOfOtherMachines(string clientHost)
     {
-        Assert.False(ResourceAttributionService.IsRemoteClientHost(clientHost));
+        Assert.True(ResourceAttributionService.IsRemoteClientHost(clientHost));
+    }
+
+    // Sunucunun KENDİ adı (düz ve FQDN) yereldir: MySQL, yerel TCP bağlantısını çözümleyip makinenin
+    // kendi adıyla raporlar. Bu ayrım olmazsa panelin kendi bağlantıları "dış bağlantı" görünürdü.
+    [Fact]
+    public void IsRemoteClientHost_IsFalse_ForThisServersOwnName()
+    {
+        Assert.False(ResourceAttributionService.IsRemoteClientHost(Environment.MachineName));
+        Assert.False(ResourceAttributionService.IsRemoteClientHost($"{Environment.MachineName}:51344"));
+        Assert.False(ResourceAttributionService.IsRemoteClientHost($"{Environment.MachineName}.mshome.net:51344"));
     }
 }

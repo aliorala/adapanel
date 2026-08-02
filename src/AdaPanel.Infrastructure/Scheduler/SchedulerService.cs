@@ -117,7 +117,7 @@ $tasks | ConvertTo-Json -Depth 5";
             // seçmediği bir yetki yükseltmesi olurdu. Ayrı hata koduyla nedeni açıkça söyle.
             if (plan?.PrincipalUserId is not null)
             {
-                throw new AppException("cron.app_pool_principal_failed", 500, 500, result.StandardError);
+                throw new AppException("cron.limited_principal_failed", 500, 500, result.StandardError);
             }
 
             // Gercek PowerShell hatasini detaya koy: "kaydedilemedi" tek basina teshis edilemiyor.
@@ -203,14 +203,12 @@ $tasks | ConvertTo-Json -Depth 5";
         // SYSTEM baglaminda hesap eslemesinde patlayabiliyor. Ayni desen self-update gorevinde
         // (WindowsUpdateInstallerLauncher) bu sunucuda defalarca KANITLANDI - birebir onu kullaniyoruz.
         //
-        // Uygulama havuzu kimligi seciliyse: "IIS APPPOOL\<havuz>" bir SANAL hesaptir; parolasi yoktur
-        // ama LSA kimlik bilgisini kendisi turetir. Bu yuzden -LogonType Password (parola PARAMETRESI
-        // VERILMEDEN) kullaniliyor — gMSA/sanal hesaplar icin Microsoft'un belgeledigi kalip budur.
-        // ServiceAccount yalnizca LocalSystem/LocalService/NetworkService icin gecerlidir, S4U ise
-        // sanal hesaplarda "hesap adi-SID eslemesi yok" hatasi verir. RunLevel bilerek Limited:
-        // havuz hesabina yonetici yukseltmesi vermek modun tum amacini bozardi.
-        var principal = plan?.PrincipalUserId is { Length: > 0 } appPoolUserId
-            ? $"New-ScheduledTaskPrincipal -UserId '{EscapeSingleQuoted(appPoolUserId)}' -LogonType Password -RunLevel Limited"
+        // Sinirli kimlik seciliyse LOCAL SERVICE kullanilir: ServiceAccount + RunLevel Limited. Bu
+        // birlesim bu makinede CANLI dogrulandi (gorev sonucu 0x0, betik icinden okunan kimlik
+        // "NT AUTHORITY\Local Service"). Uygulama havuzu sanal hesabi neden KULLANILAMIYOR ve neden
+        // schtasks'in "SUCCESS" yaniti guvenilmez: bkz. ScriptTaskPlanner.LimitedUserId.
+        var principal = plan?.PrincipalUserId is { Length: > 0 } limitedUserId
+            ? $"New-ScheduledTaskPrincipal -UserId '{EscapeSingleQuoted(limitedUserId)}' -LogonType ServiceAccount -RunLevel Limited"
             : "New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest";
 
         return $@"$ErrorActionPreference = 'Stop'
@@ -286,7 +284,11 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
                                ?? string.Empty;
 
         var siteName = (request.SiteName ?? string.Empty).Trim();
-        var wantsAppPool = string.Equals((request.RunAs ?? string.Empty).Trim(), "apppool", StringComparison.OrdinalIgnoreCase);
+        // "apppool" eski istemcilerden gelebilir; artık sınırlı yetki anlamına gelir (bkz.
+        // ScriptTaskPlanner.LimitedUserId — havuz kimliği Task Scheduler'da hiç çalışmıyordu).
+        var runAs = (request.RunAs ?? string.Empty).Trim();
+        var wantsLimited = string.Equals(runAs, "limited", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(runAs, "apppool", StringComparison.OrdinalIgnoreCase);
         string? principalUserId = null;
 
         if (siteName.Length > 0)
@@ -300,31 +302,54 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
 
             // Hem betik hem çalışma dizini site kökünün İÇİNDE kalmalı. Çalışma dizinini de denetliyoruz
             // çünkü "cd C:\Windows\System32" ile başlayan bir görev, göreli yollarla site dışına taşar.
+            // Betik için kökün KENDİSİ geçersiz (klasör çalıştırılamaz), çalışma dizini için geçerli:
+            // site kökünde duran bir .bat'ın doğal çalışma dizini kökün ta kendisidir.
             if (!ScriptTaskPlanner.IsInsideRoot(siteRoot, scriptPath) ||
-                !ScriptTaskPlanner.IsInsideRoot(siteRoot, workingDirectory))
+                !ScriptTaskPlanner.IsRootOrInsideRoot(siteRoot, workingDirectory))
             {
                 throw new AppException("cron.script_outside_site", 403, 403);
             }
 
-            if (wantsAppPool)
+            if (wantsLimited)
             {
-                if (string.IsNullOrWhiteSpace(site.ApplicationPoolName))
-                {
-                    throw new AppException("cron.app_pool_unknown", 409, 409);
-                }
-
-                principalUserId = ScriptTaskPlanner.BuildAppPoolUserId(site.ApplicationPoolName);
+                // LOCAL SERVICE'in site klasörünü okuyup çalıştırabilmesi gerekir; erişim verilmezse
+                // görev kaydolur ama her çalışmada sessizce düşer. Bu yüzden erişim BURADA verilir ve
+                // verilemezse görev hiç oluşturulmaz — çalışmayacağı baştan belli bir görev bırakmak,
+                // "SUCCESS" deyip bozuk görev kaydeden schtasks davranışının aynısı olurdu.
+                await GrantLimitedIdentityAccessAsync(siteRoot, cancellationToken);
+                principalUserId = ScriptTaskPlanner.LimitedUserId;
             }
         }
-        else if (wantsAppPool)
+        else if (wantsLimited)
         {
-            // Havuz kimliği bir SİTEYE aittir; site seçilmeden istenirse sessizce SYSTEM'e düşmek
+            // Sınırlı kimlik bir SİTE kökü içindir; site seçilmeden istenirse sessizce SYSTEM'e düşmek
             // kullanıcının seçmediği bir yetki verirdi — hata dön.
-            throw new AppException("cron.app_pool_requires_site", 400, 400);
+            throw new AppException("cron.limited_requires_site", 400, 400);
         }
 
         var (execute, arguments) = ScriptTaskPlanner.BuildAction(scriptPath, request.Arguments);
         return new ScriptPlan(execute, arguments, workingDirectory, principalUserId);
+    }
+
+    /// <summary>
+    /// Sınırlı kimliğe site kökü üzerinde okuma/çalıştırma ve yazma hakkı verir.
+    /// <para>
+    /// Neden Modify: site betikleri hemen her zaman kendi klasörlerine günlük/çıktı yazar; yalnızca
+    /// okuma verilirse görev "çalıştı" görünür ama betik ilk yazma denemesinde düşer. Verilen hak
+    /// SİTE KÖKÜYLE sınırlıdır ve alternatifin (SYSTEM) yanında hâlâ çok dardır.
+    /// </para>
+    /// </summary>
+    private static async Task GrantLimitedIdentityAccessAsync(string siteRoot, CancellationToken cancellationToken)
+    {
+        var script = $@"$ErrorActionPreference = 'Stop'
+& icacls.exe ""{EscapePowerShell(siteRoot)}"" /grant ""{EscapePowerShell(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M"" /T | Out-Null
+if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("cron.limited_grant_failed", 500, 500, result.StandardError);
+        }
     }
 
     // Görev tipini yürütülebilir eyleme çevirir (Plesk görev tipleri):

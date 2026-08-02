@@ -61,7 +61,7 @@
           <span class="field-label">{{ t("panel.tasks.runAs") }}</span>
           <select v-model="form.runAs">
             <option value="system">{{ t("panel.tasks.runAsSystem") }}</option>
-            <option value="apppool">{{ t("panel.tasks.runAsAppPool") }}</option>
+            <option value="limited">{{ t("panel.tasks.runAsLimited") }}</option>
           </select>
           <small class="field-hint">{{ t("panel.tasks.runAsHint") }}</small>
         </label>

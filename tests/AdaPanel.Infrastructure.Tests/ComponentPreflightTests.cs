@@ -81,4 +81,69 @@ public sealed class ComponentPreflightTests
         Assert.Contains("Get-NetTCPConnection", script);
         Assert.Contains("ConvertTo-Json", script);
     }
+
+    // Bir Windows barındırma sunucusunda IIS'in dinlediği her port "System" (PID 4) olarak görünür.
+    // Yöneticiye bunu söylemek çıkmaz sokaktır: o süreç durdurulamaz. Canlı olarak yaşandı — posta
+    // sunucusu kurulumu "Port 8080: System.exe (PID 4)" diyerek durdu, gerçek sahip bir IIS sitesiydi.
+    [Theory]
+    [InlineData(4, "System", true)]
+    [InlineData(4, "", true)]
+    [InlineData(0, "Idle", true)]
+    [InlineData(1234, "mysqld", false)]
+    [InlineData(9876, "MailEnable", false)]
+    public void IsHttpSysHolder_RecognisesTheKernelListener(int pid, string processName, bool expected)
+    {
+        Assert.Equal(expected, ComponentPreflight.IsHttpSysHolder(pid, processName));
+    }
+
+    [Fact]
+    public void ParseAppcmdSiteBindings_ReadsSiteAndPortFromTextOutput()
+    {
+        const string output = """
+            SITE "Default Web Site" (id:1,bindings:http/*:80:,net.tcp/808:*,state:Started)
+            SITE "test.local" (id:2,bindings:http/*:8080:test.local,https/*:443:test.local,state:Started)
+            """;
+
+        var bindings = ComponentPreflight.ParseAppcmdSiteBindings(output);
+
+        Assert.Contains(bindings, item => item.SiteName == "test.local" && item.Port == 8080);
+        Assert.Contains(bindings, item => item.SiteName == "test.local" && item.Port == 443);
+        Assert.Contains(bindings, item => item.SiteName == "Default Web Site" && item.Port == 80);
+        // "state:Started" bir bağlama DEĞİLDİR; sızarsa mesajda saçma bir satır oluşur.
+        Assert.DoesNotContain(bindings, item => item.Binding.Contains("state", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    [InlineData("beklenmeyen cikti")]
+    public void ParseAppcmdSiteBindings_IsEmpty_ForUnusableOutput(string? output)
+    {
+        Assert.Empty(ComponentPreflight.ParseAppcmdSiteBindings(output));
+    }
+
+    [Fact]
+    public void DescribeHttpSysPortOwner_NamesTheSiteHoldingThePort()
+    {
+        var bindings = new[]
+        {
+            ("test.local", "http/*:8080:test.local", 8080),
+            ("baska.site", "http/*:80:baska.site", 80)
+        };
+
+        var description = ComponentPreflight.DescribeHttpSysPortOwner(8080, bindings);
+
+        Assert.Contains("test.local", description);
+        Assert.DoesNotContain("baska.site", description);
+    }
+
+    // Eşleşme yoksa boş dönmeli: uydurulmuş bir site adı, yöneticiyi var olmayan bir bağlamayı
+    // aramaya gönderir.
+    [Fact]
+    public void DescribeHttpSysPortOwner_IsEmpty_WhenNoSiteUsesThePort()
+    {
+        var bindings = new[] { ("test.local", "http/*:8080:test.local", 8080) };
+
+        Assert.Equal(string.Empty, ComponentPreflight.DescribeHttpSysPortOwner(25, bindings));
+    }
 }

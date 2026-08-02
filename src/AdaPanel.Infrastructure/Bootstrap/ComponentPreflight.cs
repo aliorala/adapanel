@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace AdaPanel.Infrastructure.Bootstrap;
 
 /// <summary>
@@ -101,6 +103,93 @@ public static class ComponentPreflight
         occupancies
             .Where(item => item.Port > 0 && !IsOwnService(item.Service, componentServiceName))
             .ToList();
+
+    /// <summary>
+    /// Portu tutan süreç çekirdeğin HTTP dinleyicisi (HTTP.sys) mi?
+    /// <para>
+    /// Bir Windows barındırma sunucusunda IIS'in dinlediği HER port, netstat/Get-NetTCPConnection
+    /// çıktısında "System" (PID 4) olarak görünür — çünkü bağlantıyı IIS değil çekirdek sürücüsü
+    /// tutar. Yöneticiye "System.exe (PID 4)" demek hiçbir şey söylemez: o süreç durdurulamaz,
+    /// kaldırılamaz. Gerçek sahip, o portu kullanan IIS SİTESİDİR ve çözüm o sitenin bağlamasını
+    /// değiştirmektir. Bu ayrım tam olarak panelin kendi ürününde geçerlidir.
+    /// </para>
+    /// </summary>
+    public static bool IsHttpSysHolder(int pid, string? processName) =>
+        pid == 4 ||
+        string.Equals(processName, "System", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(processName, "Idle", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <c>appcmd list sites</c> metin çıktısındaki bağlamaları ayrıştırır. Örnek satır:
+    /// <c>SITE "test.local" (id:2,bindings:http/*:8080:test.local,state:Started)</c>
+    /// <para>
+    /// Metin biçimi bilerek seçildi: XML biçimi de aynı bilgiyi verir ama bu ayrıştırıcı yalnızca
+    /// "hangi site hangi portta" sorusunu yanıtlar ve metin biçimi appcmd sürümleri arasında bu
+    /// konuda daha kararlıdır.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<(string SiteName, string Binding, int Port)> ParseAppcmdSiteBindings(string? output)
+    {
+        var result = new List<(string SiteName, string Binding, int Port)>();
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return result;
+        }
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var siteStart = line.IndexOf('"');
+            var siteEnd = siteStart >= 0 ? line.IndexOf('"', siteStart + 1) : -1;
+            var bindingsStart = line.IndexOf("bindings:", StringComparison.OrdinalIgnoreCase);
+            if (siteEnd <= siteStart || bindingsStart < 0)
+            {
+                continue;
+            }
+
+            var siteName = line[(siteStart + 1)..siteEnd];
+            var rest = line[(bindingsStart + "bindings:".Length)..];
+
+            // Bağlama listesi ",state:" ile biter; yoksa satır sonuna (kapanış parantezine) kadar.
+            var stateIndex = rest.IndexOf(",state:", StringComparison.OrdinalIgnoreCase);
+            if (stateIndex >= 0)
+            {
+                rest = rest[..stateIndex];
+            }
+
+            rest = rest.TrimEnd(')', '\r', ' ');
+
+            foreach (var binding in rest.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                // "http/*:8080:test.local" → protokol / adres : port : konak
+                var slash = binding.IndexOf('/');
+                var address = slash >= 0 ? binding[(slash + 1)..] : binding;
+                var parts = address.Split(':');
+                if (parts.Length < 2 || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
+                {
+                    continue;
+                }
+
+                result.Add((siteName, binding.Trim(), port));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// HTTP.sys'in tuttuğu bir port için insan tarafından çözülebilir açıklama üretir: portu hangi
+    /// IIS sitesi/bağlaması kullanıyor. Eşleşme bulunamazsa boş döner (mesaj eski hâlinde kalır).
+    /// </summary>
+    public static string DescribeHttpSysPortOwner(int port, IEnumerable<(string SiteName, string Binding, int Port)> bindings)
+    {
+        var matches = bindings
+            .Where(item => item.Port == port && !string.IsNullOrWhiteSpace(item.SiteName))
+            .Select(item => string.IsNullOrWhiteSpace(item.Binding) ? item.SiteName : $"{item.SiteName} ({item.Binding})")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return matches.Count == 0 ? string.Empty : $"IIS sitesi: {string.Join(", ", matches)}";
+    }
 
     /// <summary>
     /// Yabancı çakışan servislerden ENGELLEYİCİ olanları seçer: çalışanlar ve (durmuş olsa da)

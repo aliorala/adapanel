@@ -8,6 +8,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Mail;
 
@@ -28,8 +29,16 @@ public sealed class MailService(
     ISecretProtector secretProtector,
     IPanelPreferencesService panelPreferencesService,
     IIisSiteService iisSiteService,
-    AdaPanelDbContext dbContext) : IMailService
+    AdaPanelDbContext dbContext,
+    ILogger<MailService> logger) : IMailService
 {
+    /// <summary>
+    /// Hesap disk kotasının Stalwart şemasındaki YERİ: <c>quotas</c> haritasının <c>maxDiskQuota</c>
+    /// anahtarı (byte). Tek tamsayılık bir <c>quota</c> alanı YOKTUR — o ad kullanıldığında sunucu
+    /// "unknown field: quota" döndürür ve kota sessizce uygulanmamış olur.
+    /// </summary>
+    private const string AccountQuotaField = "quotas/maxDiskQuota";
+
     private const string ConfigPath = "config/mail.json";
     private const string CertificateStatePath = "config/mail-cert.json";
     // Domain kotalari Stalwart'ta yok → panel-tarafi tutulur (domain→azami toplam MB) ve tahsis toplamiyla dayatilir.
@@ -128,7 +137,7 @@ public sealed class MailService(
                     {
                         Address = address,
                         Active = true,
-                        MaxSizeMB = (int)(GetLongField(detail.Value, "quota") / (1024 * 1024)),
+                        MaxSizeMB = (int)(ReadAccountQuotaBytes(detail.Value) / (1024 * 1024)),
                         CurrentSizeMB = (int)(GetLongField(detail.Value, "usedDiskQuota") / (1024 * 1024))
                     });
                 }
@@ -343,15 +352,30 @@ public sealed class MailService(
             throw MapMailError(result);
         }
 
-        // Kota best-effort: hesap oluştuktan sonra ayrı `update` ile uygulanır. Alan adı sürüme
-        // göre değişebildiğinden başarısızlığı yutarız — kotasız da olsa hesap oluşmuş olur.
+        // Kota hesap oluştuktan SONRA ayrı bir `update` ile uygulanır (yaratma payload'ına "quotas"
+        // eklenince Stalwart 0.16.x reddediyor). Başarısızlık YUTULMAZ, günlüğe yazılır: burada
+        // sessizce yutmak, yöneticinin "512 MB kota koydum" sanıp kutunun sınırsız kalmasına yol
+        // açıyordu — canlı testte tam olarak bu yaşandı (yanlış alan adı yüzünden her çağrı
+        // "unknown field: quota" ile düşüyor, panel yine de "tamam" diyordu).
         if (request.MaxSizeMB > 0)
         {
             var accountId = await FindIdAsync("account", "emailAddress", address, cancellationToken);
             if (accountId is not null)
             {
                 var bytes = (long)request.MaxSizeMB * 1024 * 1024;
-                await RunCliAsync(cli, $"update account {Arg(accountId)} --field quota={bytes}", env, cancellationToken);
+                var quotaResult = await RunCliAsync(
+                    cli,
+                    $"update account {Arg(accountId)} --field {AccountQuotaField}={bytes}",
+                    env,
+                    cancellationToken);
+                if (!quotaResult.Success)
+                {
+                    logger.LogWarning(
+                        "Posta kutusu kotası uygulanamadı ({Address}, {SizeMB} MB): {Error}",
+                        address,
+                        request.MaxSizeMB,
+                        string.IsNullOrWhiteSpace(quotaResult.StandardError) ? quotaResult.StandardOutput : quotaResult.StandardError);
+                }
             }
         }
 
@@ -547,10 +571,12 @@ public sealed class MailService(
         // panel-tarafı domain kotası denetimi: bu kutunun yeni kotası domain toplamını aşarsa reddet.
         await EnsureDomainAllocationAsync(domain, normalized, Math.Max(0, request.MaxSizeMB), cancellationToken);
         var id = await FindIdAsync("account", "emailAddress", normalized, cancellationToken) ?? normalized;
-        // Stalwart account kotası tek tamsayı alan: `quota` (byte). Eski `quotas={maxDiskQuota}`
-        // şeması 0.16.9'da reddediliyordu. 0 = sınırsız.
+        // Stalwart'ta hesap kotası `quotas` HARİTASININ maxDiskQuota anahtarıdır (byte); tek tamsayılık
+        // bir `quota` alanı YOKTUR. Şemadan doğrulandı ve canlı olarak ölçüldü: `--field quota=<byte>`
+        // sunucudan "unknown field: quota" alıyor, `--field quotas/maxDiskQuota=<byte>` uygulanıyor.
+        // Harita alanına JSON pointer yolu ile yazılır. 0 = sınırsız.
         var bytes = (long)Math.Max(0, request.MaxSizeMB) * 1024 * 1024;
-        return await MutateAsync(domain, $"update account {Arg(id)} --field quota={bytes}", cancellationToken);
+        return await MutateAsync(domain, $"update account {Arg(id)} --field {AccountQuotaField}={bytes}", cancellationToken);
     }
 
     // --- Otomatik yanıt (Plesk autoresponder paritesi) ---
@@ -1666,6 +1692,17 @@ public sealed class MailService(
 
         return true;
     }
+
+    /// <summary>
+    /// Hesabın disk kotasını (byte) okur. Kota, üst düzey bir alan değil <c>quotas</c> haritasının
+    /// içindedir; üst düzeyde <c>quota</c> aramak her hesabı "kotasız" gösteriyordu.
+    /// </summary>
+    internal static long ReadAccountQuotaBytes(JsonElement account) =>
+        account.ValueKind == JsonValueKind.Object &&
+        account.TryGetProperty("quotas", out var quotas) &&
+        quotas.ValueKind == JsonValueKind.Object
+            ? GetLongField(quotas, "maxDiskQuota")
+            : 0;
 
     private static long GetLongField(JsonElement element, params string[] names)
     {

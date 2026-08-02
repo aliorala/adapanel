@@ -1226,7 +1226,8 @@ public sealed partial class DnsService(
         return normalized;
     }
 
-    private static string NormalizeHost(string value, string zoneName)
+    /// <summary>Kayıt konağını zone'a göreli biçime indirger; geçersizse <c>dns.invalid_host</c> atar.</summary>
+    internal static string NormalizeHost(string value, string zoneName)
     {
         var normalized = string.IsNullOrWhiteSpace(value) ? "@" : value.Trim().TrimEnd('.').ToLowerInvariant();
         if (string.Equals(normalized, zoneName, StringComparison.OrdinalIgnoreCase))
@@ -1343,6 +1344,20 @@ public sealed partial class DnsService(
     [GeneratedRegex(@"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", RegexOptions.Compiled)]
     private static partial Regex DomainPattern();
 
-    [GeneratedRegex(@"^(?:@|\*|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)$", RegexOptions.Compiled)]
+    /// <summary>
+    /// Kayıt konağı (zone'a göreli ad). Etiketler ALT ÇİZGİYLE başlayabilir.
+    /// <para>
+    /// Alt çizgi izni şart: hizmet kayıtlarının tamamı bu biçimdedir ve panelin kendi özellikleri
+    /// bunlara dayanır — DMARC (<c>_dmarc</c>, üstelik YERLEŞİK ŞABLONDA), DKIM
+    /// (<c>secici._domainkey</c>), SRV (<c>_sip._tcp</c>), TLSA (<c>_25._tcp.mail</c>) ve joker SSL'in
+    /// kullandığı ACME DNS-01 doğrulaması (<c>_acme-challenge</c>).
+    /// </para>
+    /// <para>
+    /// Eski desen ilk karakterin harf/rakam olmasını şart koşuyordu; sonuç olarak bu kayıtların hiçbiri
+    /// eklenemiyordu ve şablonda <c>_dmarc</c> bulunduğu için DNS ekranı zone'u okurken bile
+    /// "dns.invalid_host" ile düşüyordu. Canlı testte tam olarak bu görüldü.
+    /// </para>
+    /// </summary>
+    [GeneratedRegex(@"^(?:@|(?:\*|_?[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?)(?:\.(?:_?[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?))*)$", RegexOptions.Compiled)]
     private static partial Regex HostPattern();
 }
