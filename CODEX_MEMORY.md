@@ -6048,3 +6048,5 @@ Basarili:
   DENEME (`webUnavailable`, kaynak degisince sifirlanir) ve eslestirilecek DB satiri yoksa hic isteme.
 - **0.2.26 PAKET:** `artifacts\release\0.2.26\AdaPanelSetup.exe`, `51,940,503` byte,
   SHA256 `3D1B87ACDB5BD19059B7993D4C796E2B37DC108C7EBA976D630A4E984E317FCC`.
+- **YAYINLANDI (2026-08-02):** commit `67c401d` + yerel `0.2.26` tag'i. GitHub release **0.2.26**.
+  YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `3D1B87AC...4E317FCC` (birebir), `releases/latest` -> 0.2.26.
