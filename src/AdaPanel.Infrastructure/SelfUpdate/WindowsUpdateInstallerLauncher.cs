@@ -85,11 +85,32 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
                 throw "Update package checksum changed before installation."
               }
 
+              # Servisi KURULUMDAN ONCE durdur. Sebebi: panel bir Windows servisidir ve kurulum
+              # yardimcisinin RestartManager'i onu pencere kapatarak durduramaz. Durduramayinca
+              # Abort/Retry/Ignore sorar, /SUPPRESSMSGBOXES altinda bu ABORT'a duser ve kurulum
+              # cikis kodu 5 ile iptal olur; panel kendi kendini hic guncelleyemez. Canli sunucuda
+              # birebir bu yasandi. Asagidaki "guvence" blogu servisi her halukarda geri baslatir.
+              try {
+                $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -ne 'Stopped') {
+                  Write-UpdateLog "Stopping service '$serviceName' before install."
+                  Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+                  for ($i = 0; $i -lt 60; $i++) {
+                    Start-Sleep -Milliseconds 500
+                    $svc.Refresh()
+                    if ($svc.Status -eq 'Stopped') { break }
+                  }
+                  Write-UpdateLog "Service status before install: $($svc.Status)."
+                }
+              }
+              catch {
+                Write-UpdateLog "Could not stop service before install: $($_.Exception.Message)"
+              }
+
               $arguments = @(
                 '/VERYSILENT',
                 '/SUPPRESSMSGBOXES',
                 '/NORESTART',
-                '/CLOSEAPPLICATIONS',
                 "/LOG=`"$logPath`""
               )
               $process = Start-Process -FilePath $packagePath -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait

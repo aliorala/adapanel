@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.30"
+  #define MyAppVersion "0.2.31"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
@@ -27,7 +27,14 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion={#MyAppVersion}
-CloseApplications=yes
+; CloseApplications=no OLMAK ZORUNDA. Panel bir WINDOWS SERVISIDIR; RestartManager onu pencere
+; kapatarak durduramaz. CloseApplications=yes iken sira sudur: RestartManager dosyalari tutan
+; AdaPanel.Api.exe'yi bulur, kapatmayi dener, BASARAMAZ ve Abort/Retry/Ignore sorar. Sessiz
+; guncellemede (/SUPPRESSMSGBOXES) bu soru ABORT'a duser -> kurulum iptal, geri alma, cikis kodu 5.
+; Yani panel kendi kendini HIC guncelleyemiyordu. Canli sunucuda birebir bu yasandi (apply-update.log).
+; Servisi durdurma isini zaten PrepareToInstall dogru sekilde yapiyor (Stop-Service + taskkill yedegi)
+; ve o adim dosyalar kopyalanmadan ONCE calisir; RestartManager'a gerek yok.
+CloseApplications=no
 RestartApplications=no
 
 [Languages]
@@ -188,6 +195,36 @@ begin
     FileExists(ExpandConstant('{autopf}\AdaPanel\{#MyAppExeName}'));
 end;
 
+procedure StopPanelService;
+var
+  ResultCode: Integer;
+begin
+  Exec(
+    'powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command "if (Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue) { Stop-Service -Name ''{#MyAppServiceName}'' -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Milliseconds 500; $svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if (-not $svc -or $svc.Status -eq ''Stopped'') { break } } }; if (Get-Process -Name ''AdaPanel.Api'' -ErrorAction SilentlyContinue) { taskkill /F /IM AdaPanel.Api.exe | Out-Null; Start-Sleep -Seconds 2 }"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode);
+end;
+
+// Servis EN BASTA durdurulur; RestartManager taramasindan da once.
+//
+// Neden burada: panel bir Windows servisidir ve RestartManager onu pencere kapatarak durduramaz.
+// Duramayinca Abort/Retry/Ignore sorar; sessiz guncellemede (/SUPPRESSMSGBOXES) bu soru ABORT'a
+// duser, kurulum iptal olur ve cikis kodu 5 doner. Canli sunucuda birebir bu yasandi.
+//
+// PrepareToInstall'da durdurmak YETMIYOR: o adim RestartManager taramasindan SONRA calisir.
+// CloseApplications=no ayari da tek basina yetmiyor: eski surumlerin guncelleme calistiricisi
+// komut satirindan /CLOSEAPPLICATIONS geciriyor ve KOMUT SATIRI betikteki ayari EZER. Servisi
+// burada durdurunca dosyalari tutan sure kalmiyor ve tarama zaten bir sey bulamiyor.
+function InitializeSetup: Boolean;
+begin
+  if ExistingInstallDetected then
+    StopPanelService;
+  Result := True;
+end;
+
 procedure InitializeWizard;
 var
   ExistingPort: string;
@@ -266,20 +303,12 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): string;
-var
-  ResultCode: Integer;
 begin
   Result := '';
+  // InitializeSetup zaten durdurdu; burada tekrar denemek ucuz bir guvence (kullanici sihirbazda
+  // beklerken servis elle baslatilmis olabilir).
   if ExistingInstallDetected then
-  begin
-    Exec(
-      'powershell.exe',
-      '-NoProfile -ExecutionPolicy Bypass -Command "if (Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue) { Stop-Service -Name ''{#MyAppServiceName}'' -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Milliseconds 500; $svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if (-not $svc -or $svc.Status -eq ''Stopped'') { break } } }; if (Get-Process -Name ''AdaPanel.Api'' -ErrorAction SilentlyContinue) { taskkill /F /IM AdaPanel.Api.exe | Out-Null; Start-Sleep -Seconds 2 }"',
-      '',
-      SW_HIDE,
-      ewWaitUntilTerminated,
-      ResultCode);
-  end;
+    StopPanelService;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
