@@ -6,6 +6,17 @@ public sealed class UpdateStatusDto
 
     public bool IsUpdateAvailable { get; set; }
 
+    /// <summary>
+    /// Sürüm bilgisi GitHub'dan ALINAMADI; aşağıdaki sürüm önbellekten geliyor (ya da hiç yok).
+    /// <para>
+    /// Ayrı bir alan olması şart: kontrol başarısız olduğunda <see cref="IsUpdateAvailable"/> de
+    /// false çıkar ve ekran "✓ Güncelsiniz" gösterirdi. Yani panel, yeni sürümü GÖREMEDİĞİ hâlde
+    /// güncel olduğunuzu söylüyordu. GitHub'ın kimliksiz saatlik sınırına takılmak bunun en sık
+    /// sebebi ve tam olarak bu yaşandı.
+    /// </para>
+    /// </summary>
+    public bool IsCheckFailed { get; set; }
+
     public string LatestVersion { get; set; } = string.Empty;
 
     public string DownloadUrl { get; set; } = string.Empty;

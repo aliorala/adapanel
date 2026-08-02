@@ -98,6 +98,9 @@ public sealed class SelfUpdateService(
             InstallScheduledAtUtc = pendingUpdate.InstallScheduledAtUtc,
             Notes = !string.IsNullOrEmpty(fetchNote) ? fetchNote : (string.IsNullOrWhiteSpace(manifest.Notes) ? defaultNote : manifest.Notes),
             GithubRepo = github.Repo,
+            // Çekme başarısızsa sürüm bilgisi önbellekten geliyor demektir; ekran "güncelsiniz"
+            // DEMEMELİ, çünkü yeni bir sürüm yayınlanmış olabilir ve panel onu görememiştir.
+            IsCheckFailed = !string.IsNullOrEmpty(fetchNote),
             IsUpdateAvailable = IsNewerVersion(currentVersion, latestVersion),
             CheckedAtUtc = DateTime.UtcNow
         };

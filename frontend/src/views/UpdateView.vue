@@ -36,7 +36,10 @@
         </article>
       </div>
 
-      <p v-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
+      <!-- Kontrol BAŞARISIZSA "güncelsiniz" demek yalan olur: yeni sürüm yayınlanmış olabilir
+           ve panel onu görememiştir (en sık sebep GitHub'ın saatlik istek sınırı). -->
+      <p v-if="status.isCheckFailed" class="notice warn">{{ t("panel.update.checkFailed") }}</p>
+      <p v-else-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
 
       <dl class="detail-grid">
         <div><dt>{{ t("panel.update.notes") }}</dt><dd>{{ translate(status.notes) }}</dd></div>
@@ -151,7 +154,11 @@ function startPostInstallWatch(versionBeforeInstall: string) {
   stopPostInstallWatch();
   const startedAt = Date.now();
   postInstallHandle = window.setInterval(async () => {
-    if (Date.now() - startedAt > 5 * 60_000) {
+    // 15 dakika: kurulum servisi durdurur, ~50 MB'lık paketi açar, şema göçlerini çalıştırır ve
+    // servisi yeniden başlatır. Yüklü bir sunucuda (yavaş disk, kurulum dosyasını tarayan antivirüs)
+    // bu 5 dakikayı rahatça aşar. Süre kısa olduğunda kullanıcı, aslında BAŞARIYLA süren bir
+    // güncellemeyi başarısız sanıyordu.
+    if (Date.now() - startedAt > 15 * 60_000) {
       stopPostInstallWatch();
       showNotice(t("panel.update.updateTimeout"), true);
       return;

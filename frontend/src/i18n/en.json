@@ -2360,7 +2360,7 @@
   "panel.update.upToDate": "The panel is up to date — you are running the latest version.",
   "panel.update.waitingRestart": "Installation started. The panel is restarting; this page will refresh automatically once it is back…",
   "panel.update.updated": "Update complete! Reloading the page…",
-  "panel.update.updateTimeout": "The panel did not come back in the expected time. Refresh manually; if the problem persists, check C:\\ProgramData\\AdaPanel\\updates\\apply-update.log on the server.",
+  "panel.update.updateTimeout": "The panel did not come back within the expected time. The update usually still COMPLETES - reload the page and check the version. If the version did not change, look at C:\\ProgramData\\AdaPanel\\updates\\apply-update.log on the server.",
   "panel.dns.title": "DNS and domain management",
   "panel.dns.subtitle": "Manage the selected site's zone, name servers, and DNS records.",
   "panel.dns.selectSiteHint": "Select a site before managing DNS records.",
@@ -2900,5 +2900,6 @@
   "auth.unauthorized": "Your session has ended. Please sign in again.",
   "auth.forbidden": "You do not have permission for this action.",
   "monitoring.source_not_supported": "Live consumption is not supported for this source.",
-  "panel.advisor.checksFailed": "Some checks could not run ({checks}); whether there is a problem in those areas is UNKNOWN. The list below may be incomplete."
+  "panel.advisor.checksFailed": "Some checks could not run ({checks}); whether there is a problem in those areas is UNKNOWN. The list below may be incomplete.",
+  "panel.update.checkFailed": "Version information could not be retrieved, so whether you are up to date is UNKNOWN. The version below may be from the last successful check. Try \"Check\" again in a few minutes."
 }

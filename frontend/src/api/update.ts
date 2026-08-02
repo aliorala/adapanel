@@ -10,6 +10,8 @@ type ApiEnvelope<T> = {
 export type UpdateStatus = {
   currentVersion: string;
   isUpdateAvailable: boolean;
+  /** Sürüm bilgisi GitHub'dan alınamadı; aşağıdaki sürüm önbellekten. "Güncelsiniz" DENMEZ. */
+  isCheckFailed: boolean;
   latestVersion: string;
   downloadUrl: string;
   packageSha256: string;

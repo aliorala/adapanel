@@ -2360,7 +2360,7 @@
   "panel.update.upToDate": "Panel güncel — en son sürümü kullanıyorsunuz.",
   "panel.update.waitingRestart": "Kurulum başladı. Panel yeniden başlatılıyor; hazır olunca bu sayfa otomatik yenilenecek…",
   "panel.update.updated": "Güncelleme tamamlandı! Sayfa yenileniyor…",
-  "panel.update.updateTimeout": "Panel beklenen sürede geri dönmedi. Sayfayı elle yenileyin; sorun sürerse sunucuda C:\\ProgramData\\AdaPanel\\updates\\apply-update.log dosyasına bakın.",
+  "panel.update.updateTimeout": "Panel beklenen sürede geri dönmedi. Güncelleme çoğu zaman yine de TAMAMLANIR — sayfayı elle yenileyip sürümü kontrol edin. Sürüm değişmediyse sunucuda C:\\ProgramData\\AdaPanel\\updates\\apply-update.log dosyasına bakın.",
   "panel.dns.title": "DNS ve alan adı yönetimi",
   "panel.dns.subtitle": "Seçili site için alan adı bölgesini, ad sunucularını ve DNS kayıtlarını yönetin.",
   "panel.dns.selectSiteHint": "DNS kayıtlarını yönetmek için önce bir site seçin.",
@@ -2900,5 +2900,6 @@
   "auth.unauthorized": "Oturumunuz sona ermiş. Lütfen tekrar giriş yapın.",
   "auth.forbidden": "Bu işlem için yetkiniz yok.",
   "monitoring.source_not_supported": "Bu kaynak için canlı tüketim listesi desteklenmiyor.",
-  "panel.advisor.checksFailed": "Bazı kontroller çalıştırılamadı ({checks}); bu alanlarda sorun olup olmadığı BİLİNMİYOR. Aşağıdaki liste eksik olabilir."
+  "panel.advisor.checksFailed": "Bazı kontroller çalıştırılamadı ({checks}); bu alanlarda sorun olup olmadığı BİLİNMİYOR. Aşağıdaki liste eksik olabilir.",
+  "panel.update.checkFailed": "Sürüm bilgisi alınamadı; güncel olup olmadığınız BİLİNMİYOR. Aşağıdaki sürüm son başarılı kontrolden kalma olabilir. Birkaç dakika sonra \"Kontrol et\" ile tekrar deneyin."
 }
