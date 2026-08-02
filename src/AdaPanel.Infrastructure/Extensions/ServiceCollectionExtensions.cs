@@ -111,6 +111,7 @@ public static class ServiceCollectionExtensions
         // Dışarıdan bakan site sağlığı (DNS/HTTP/TLS/mail) + tüm dikkat sinyallerini tek listede
         // toplayan rozet servisi. İkisi de yalnız MEVCUT sinyalleri okur, kalıcı durum tutmaz → Scoped.
         services.AddScoped<ISiteHealthService, Health.SiteHealthService>();
+        services.AddScoped<IDomainRefreshService, Health.DomainRefreshService>();
         services.AddScoped<IAttentionService, Advisor.AttentionService>();
         // Süreç izleyici BİLİNÇLİ İSTİSNA olarak Singleton: CPU yüzdesi iki ölçüm arasındaki
         // işlemci-zamanı farkından hesaplanır, yani servisin önceki anlık görüntüyü HATIRLAMASI

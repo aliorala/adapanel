@@ -59,6 +59,47 @@
       <p class="dns-details">{{ dns.details }}</p>
     </article>
 
+    <!-- Alan adı tazeleme: panel güncellendiğinde YENİ varsayılanlar (DMARC, DKIM, MX…) yalnız yeni
+         alan adlarına uygulanır. Eskiden eklenmiş alan adları eksik kalır ve bu eksiklik kendini
+         aylar sonra "postalarım spam'e düşüyor" olarak belli eder. Panel eksiği kendisi ölçer;
+         uygulama kararı kullanıcıya bırakılır. -->
+    <article :class="['dns-card', domains && domains.updatedSites > 0 ? 'bad' : 'good']">
+      <div class="dns-head">
+        <span :class="['state-dot', domains && domains.updatedSites > 0 ? 'dot-danger' : 'dot-ok']"></span>
+        <div class="health-name">
+          <strong>{{ t("panel.health.domainsTitle") }}</strong>
+          <span class="svc-id">{{ t("panel.health.domainsHint") }}</span>
+        </div>
+        <span v-if="domains" :class="['status-pill', domains.updatedSites > 0 ? 'danger' : 'ok']">
+          {{
+            domains.updatedSites > 0
+              ? t("panel.health.domainsStale", { count: domains.updatedSites, total: domains.totalSites })
+              : t("panel.health.domainsCurrent", { total: domains.totalSites })
+          }}
+        </span>
+        <button class="secondary compact" :disabled="domainsBusy" @click="refreshAllDomains">
+          {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsRefresh") }}
+        </button>
+      </div>
+
+      <!-- Ne yapıldığını kayıt kayıt göster: "onarıldı" demek tek başına güven vermez. -->
+      <dl v-if="domainReport.length" class="dns-facts">
+        <div v-for="row in domainReport" :key="row.siteName">
+          <dt>{{ row.siteName }}</dt>
+          <dd :class="{ warn: row.error }">
+            <template v-if="row.error">{{ row.error }}</template>
+            <template v-else-if="row.alreadyCurrent">{{ t("panel.health.domainsRowCurrent") }}</template>
+            <template v-else>
+              {{ row.addedDnsRecords.join(", ") || "—" }}
+              <span v-if="row.appliedMailRecords">
+                · {{ t("panel.health.domainsRowMail", { count: row.appliedMailRecords }) }}
+              </span>
+            </template>
+          </dd>
+        </div>
+      </dl>
+    </article>
+
     <p v-if="loading && !services.length" class="meta">{{ t("panel.common.loading") }}</p>
 
     <div v-else-if="services.length" class="health-list">
@@ -88,7 +129,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { getServerHealth, restartService, type ServiceHealth } from "../api/health";
+import {
+  getServerHealth,
+  inspectDomains,
+  refreshDomains,
+  restartService,
+  type DomainRefreshResult,
+  type DomainRefreshSummary,
+  type ServiceHealth,
+} from "../api/health";
 import { getDnsServerHealth, repairDnsServer, type DnsServerHealth } from "../api/dns";
 import { extractApiMessage } from "../stores/auth";
 
@@ -101,6 +150,9 @@ const loaded = ref(false);
 const busyName = ref("");
 const notice = ref("");
 const noticeError = ref(false);
+const domains = ref<DomainRefreshSummary | null>(null);
+const domainReport = ref<DomainRefreshResult[]>([]);
+const domainsBusy = ref(false);
 
 onMounted(load);
 
@@ -121,6 +173,35 @@ async function load() {
     dns.value = await getDnsServerHealth();
   } catch {
     dns.value = null;
+  }
+
+  // Alan adı denetimi de bağımsız ve SALT OKUNUR: hiçbir şey değiştirmez, yalnız eksiği sayar.
+  try {
+    domains.value = await inspectDomains();
+    domainReport.value = domains.value.results.filter((row) => row.error || !row.alreadyCurrent);
+  } catch {
+    domains.value = null;
+    domainReport.value = [];
+  }
+}
+
+async function refreshAllDomains() {
+  domainsBusy.value = true;
+  notice.value = "";
+  try {
+    const summary = await refreshDomains();
+    domains.value = summary;
+    // Tazelemeden SONRA tüm satırlar gösterilir: hangi alan adına ne eklendiği (ya da hiçbir şey
+    // eklenmediği) görünmeden işlem "yapıldı mı" belirsiz kalır.
+    domainReport.value = summary.results;
+    showNotice(
+      t("panel.health.domainsDone", { updated: summary.updatedSites, total: summary.totalSites }),
+      summary.failedSites > 0,
+    );
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    domainsBusy.value = false;
   }
 }
 

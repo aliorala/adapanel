@@ -20,6 +20,7 @@ public sealed class AttentionService(
     IComponentBootstrapper componentBootstrapper,
     ISelfUpdateService selfUpdateService,
     IDnsService dnsService,
+    IDomainRefreshService domainRefreshService,
     IHealthService healthService) : IAttentionService
 {
     public async Task<AttentionSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default)
@@ -108,6 +109,36 @@ public sealed class AttentionService(
             }
         }
         catch { failed.Add("dns"); }
+
+        // 4b) Panel güncellendiğinde YENİ varsayılanlar yalnız yeni alan adlarına uygulanır; eskiden
+        // eklenmiş alan adları DMARC/DKIM/MX gibi kayıtlardan habersiz kalır. Bu eksiklik kendini
+        // ancak "giden postalarım spam'e düşüyor" olarak, aylar sonra belli eder. Panel bunu KENDİSİ
+        // fark etmeli: durumu değiştirmeden ölç, tek-tık tazeleme sun (onay kullanıcıda kalsın).
+        try
+        {
+            var stale = await domainRefreshService.InspectAllAsync(cancellationToken);
+            if (stale.UpdatedSites > 0)
+            {
+                var names = stale.Results
+                    .Where(item => item.Error.Length == 0 && !item.AlreadyCurrent)
+                    .Select(item => item.SiteName)
+                    .Take(5)
+                    .ToArray();
+
+                items.Add(new AttentionItemDto
+                {
+                    Id = "domains-stale-defaults",
+                    Severity = "warning",
+                    TitleKey = "attention.domains.staleDefaults",
+                    Detail = $"{stale.UpdatedSites}/{stale.TotalSites}: {string.Join(", ", names)}" +
+                             (stale.UpdatedSites > names.Length ? " …" : string.Empty),
+                    Section = "dns",
+                    ActionEndpoint = "/api/v1/server-health/refresh-domains",
+                    ActionMethod = "POST"
+                });
+            }
+        }
+        catch { failed.Add("domains"); }
 
         // 5) Durmuş Windows servisleri → tek-tık yeniden başlat.
         try

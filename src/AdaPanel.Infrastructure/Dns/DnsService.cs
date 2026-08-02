@@ -120,6 +120,47 @@ public sealed partial class DnsService(
         return await ToDtoAsync(state, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<string>> RepairDefaultsAsync(
+        string siteName,
+        bool applyChanges = true,
+        CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken);
+        var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
+        var defaults = await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken);
+
+        // Eklenenleri sayabilmek için önce/sonra kimlik kümesi karşılaştırılır. "Kaç kayıt eklendi"
+        // bilgisi bu ekranın tek değeri: kullanıcı neyin değiştiğini görmeden bir onarıma güvenmez.
+        var before = state.Records.Select(RecordKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Kuru çalıştırmada state nesnesinin KOPYASI üzerinde çalışılır: GetOrCreateStateAsync geriye
+        // paylaşılan bir nesne verdiği için doğrudan üzerine eklemek, hiçbir şey yazmasak bile aynı
+        // istek içindeki sonraki okumalara "sanki eklenmiş" bir zone gösterirdi.
+        var workingRecords = applyChanges ? state.Records : [.. state.Records];
+        MergeMissingDefaults(workingRecords, defaults);
+
+        var added = workingRecords
+            .Where(record => !before.Contains(RecordKey(record)))
+            .Select(record => $"{record.Type} {record.Host}")
+            .ToList();
+
+        if (!applyChanges || added.Count == 0)
+        {
+            // Yazma yok: dosyaya dokunmadan çık. Kuru çalıştırma zaten yazmamalı; eksik yoksa da
+            // yüzlerce zone için gereksiz yazma + Windows DNS eşitlemesi işlemi dakikalarca uzatırdı.
+            return added;
+        }
+
+        state.DefaultsVersion = CurrentDefaultsVersion;
+        state.Records = SortRecords(state.Records).ToList();
+        await UpsertStateAsync(state, cancellationToken);
+        await TrySyncWindowsDnsAsync(state, cancellationToken);
+        return added;
+    }
+
+    private static string RecordKey(DnsRecordState record) => $"{record.Type}|{record.Host}|{record.Value}";
+
     public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);

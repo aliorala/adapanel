@@ -16,6 +16,22 @@ public interface IDnsService
 
     Task<SiteDnsZoneDto> ResetDefaultsAsync(string siteName, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Eksik varsayılan kayıtları EKLER; var olan hiçbir kaydı silmez veya değiştirmez.
+    /// <para>
+    /// <see cref="ResetDefaultsAsync"/>'ten farkı budur: "sıfırla" yönetilen kayıtları silip yeniden
+    /// kurar ve kullanıcının elle düzelttiği bir MX/SPF değerini geri alır. Tazeleme işlemi eski alan
+    /// adlarında toplu çalıştığı için yıkıcı olmamak ZORUNDA.
+    /// </para>
+    /// </summary>
+    /// <param name="applyChanges">
+    /// false ise HİÇBİR ŞEY YAZILMAZ, yalnızca eksik olanlar hesaplanır. Kuru çalıştırma şart:
+    /// panelin "şu alan adları eski kalmış" uyarısını kendiliğinden gösterebilmesi için durumu
+    /// DEĞİŞTİRMEDEN ölçebilmesi gerekir.
+    /// </param>
+    /// <returns>Eklenen (ya da eklenecek) kayıtlar, "TÜR konak" biçiminde; boş liste = zaten güncel.</returns>
+    Task<IReadOnlyList<string>> RepairDefaultsAsync(string siteName, bool applyChanges = true, CancellationToken cancellationToken = default);
+
     Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default);
 
     Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default);

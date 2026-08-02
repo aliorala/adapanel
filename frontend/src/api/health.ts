@@ -17,3 +17,31 @@ export async function restartService(name: string) {
   const response = await apiClient.post<ApiEnvelope<ServiceHealth>>("/server-health/restart", { name });
   return response.data.data;
 }
+
+export type DomainRefreshResult = {
+  siteName: string;
+  zoneName: string;
+  addedDnsRecords: string[];
+  appliedMailRecords: number;
+  error: string;
+  alreadyCurrent: boolean;
+};
+
+export type DomainRefreshSummary = {
+  results: DomainRefreshResult[];
+  totalSites: number;
+  updatedSites: number;
+  failedSites: number;
+};
+
+/** Değişiklik YAPMADAN kaç alan adının eski kaldığını sorar (uyarı göstermek için). */
+export async function inspectDomains() {
+  const response = await apiClient.get<ApiEnvelope<DomainRefreshSummary>>("/server-health/refresh-domains");
+  return response.data.data;
+}
+
+/** Eksik varsayılanları tamamlar; var olan kayıtlara dokunmaz. */
+export async function refreshDomains() {
+  const response = await apiClient.post<ApiEnvelope<DomainRefreshSummary>>("/server-health/refresh-domains");
+  return response.data.data;
+}

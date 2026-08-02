@@ -6,7 +6,15 @@ type ApiEnvelope<T> = { success: boolean; data: T; message: string; code: number
 export type ConsumerSource = "mysql" | "mariadb" | "postgresql" | "iis";
 
 /** Sabit durum anahtarı — UI i18n'e çevirir, sunucu ASLA çevrilmiş metin döndürmez. */
-export type ConsumerStatusCode = "" | "not_installed" | "credentials_missing" | "unavailable";
+// "request_monitor_missing": IIS kurulu ve çalışıyor ama canlı istek listesi OKUNAMIYOR (IIS "İstek
+// İzleyici" bileşeni kurulu değil). Boş listeden ayrı tutulması şart: aksi hâlde ekran "şu an istek
+// yok" der ve panelin hiçbir şey göremediği gizlenir.
+export type ConsumerStatusCode =
+  | ""
+  | "not_installed"
+  | "credentials_missing"
+  | "unavailable"
+  | "request_monitor_missing";
 
 /**
  * Paylaşılan bir sürecin İÇİNDEKİ tek bir tüketici: bir aktif SQL sorgusu ya da bir açık HTTP isteği.
