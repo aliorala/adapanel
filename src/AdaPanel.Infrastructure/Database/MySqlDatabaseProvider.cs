@@ -225,6 +225,69 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         }
     }
 
+    /// <summary>
+    /// root hesaplarının kimlik doğrulama ZİNCİRİNİ sadeleştirir: yalnızca parola kalsın.
+    /// <para>
+    /// MariaDB'nin Windows kurucusu (<c>mysql_install_db.exe</c>) root'u "parola VEYA gssapi" olarak
+    /// kurar. Sunucu, parolayla gelen istemciye zincirdeki gssapi yöntemini önerebiliyor; PHP'nin
+    /// mysqli'si bunu "auth_gssapi_client bilinmiyor" diye reddediyor ve BAĞLANTI KURULAMIYOR.
+    /// Panelin kendi sürücüsü ilk yöntemi seçtiği için etkilenmiyor — bu yüzden sorun görünmüyordu.
+    /// </para>
+    /// <para>
+    /// Somut etkisi: phpMyAdmin'i belirli bir veritabanı seçmeden açmak root ile giriş yapar ve
+    /// çalışmaz; yöneticinin panelde gördüğü root parolası harici araçlarda da reddedilir. Canlı
+    /// olarak ölçüldü: zincir sadeleştirildikten sonra aynı parola hem PHP'den hem mysql.exe'den
+    /// çalıştı ve panel etkilenmedi.
+    /// </para>
+    /// <para>Parola DEĞİŞTİRİLMEZ; yalnız alternatif yöntem kaldırılır. İdempotenttir.</para>
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> NormalizeRootAuthenticationAsync(
+        MySqlConnection connection,
+        DatabaseConnectionProfile profile,
+        CancellationToken cancellationToken)
+    {
+        var fixedAccounts = new List<string>();
+        if (string.IsNullOrWhiteSpace(profile.AdminPassword))
+        {
+            // Parolayı bilmeden zinciri yeniden yazmak, hesabı erişilemez bırakırdı.
+            return fixedAccounts;
+        }
+
+        var hosts = new List<string>();
+        await using (var query = connection.CreateCommand())
+        {
+            // Zincirde gssapi geçen root satırları. global_priv, yöntem listesini JSON olarak tutar.
+            query.CommandText =
+                "SELECT Host FROM mysql.global_priv " +
+                "WHERE User = 'root' AND JSON_SEARCH(Priv, 'one', 'gssapi') IS NOT NULL;";
+            await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                hosts.Add(reader.GetString(0));
+            }
+        }
+
+        foreach (var host in hosts)
+        {
+            try
+            {
+                await using var alter = connection.CreateCommand();
+                alter.CommandText =
+                    $"ALTER USER 'root'@'{host.Replace("'", "''")}' " +
+                    "IDENTIFIED VIA mysql_native_password USING PASSWORD(@pwd);";
+                alter.Parameters.AddWithValue("@pwd", profile.AdminPassword);
+                await alter.ExecuteNonQueryAsync(cancellationToken);
+                fixedAccounts.Add($"root@{host} (gssapi kaldırıldı)");
+            }
+            catch (MySqlException)
+            {
+                // en iyi çaba: tek satırın hatası diğerlerini ve sıkılaştırmanın kalanını engellemesin
+            }
+        }
+
+        return fixedAccounts;
+    }
+
     // K2 (mysql_secure_installation eşdeğeri, GÜVENLİ): anonim kullanıcıları ve uzak root@'%' hesabını
     // kaldır. root@localhost ve loopback'e DOKUNMA — panel onlarla bağlanıyor, kilitlenme olmaz. İdempotent.
     public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
@@ -258,6 +321,8 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
                 // en iyi çaba — tek hesabın hatası diğerlerini engellemesin
             }
         }
+
+        removed.AddRange(await NormalizeRootAuthenticationAsync(connection, profile, cancellationToken));
 
         if (removed.Count > 0)
         {
