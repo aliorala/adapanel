@@ -183,7 +183,7 @@ public sealed class WinAcmeSslService(
             logger.LogInformation("URL Rewrite modülü kurulu değil; {Site} için otomatik kuruluyor (url-rewrite).", siteName);
             try
             {
-                await componentBootstrapper.InstallAsync("url-rewrite", null, null, cancellationToken);
+                await componentBootstrapper.InstallAsync("url-rewrite", null, null, force: false, cancellationToken: cancellationToken);
                 result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
             }
             catch (Exception exception)

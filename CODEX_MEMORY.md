@@ -6050,3 +6050,30 @@ Basarili:
   SHA256 `3D1B87ACDB5BD19059B7993D4C796E2B37DC108C7EBA976D630A4E984E317FCC`.
 - **YAYINLANDI (2026-08-02):** commit `67c401d` + yerel `0.2.26` tag'i. GitHub release **0.2.26**.
   YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `3D1B87AC...4E317FCC` (birebir), `releases/latest` -> 0.2.26.
+
+## 2026-08-02 (210) — KRITIK: MariaDB "guncelle" calismiyordu VE calissa TUM VERITABANLARINI SILECEKTI
+- **KULLANICI:** "MariaDB 11.8 LTS yeni surume guncelle diyorum ama guncellemiyor."
+- **YAKIN SEBEP:** `InstallWithDependenciesAsync` icinde `if (!forceInstall)` bloğu — bilesen kurulu VE
+  `IsInstalledComponentReadyAsync` true ise kurulum ATLANIR. "Guncelle" dugmesi ayni kurulum ucunu
+  cagirdigi icin sunucu "zaten kurulu" deyip donuyordu. Dugme, backend'in yapmayacagi seyi vaat ediyordu.
+- **ASIL BULGU (VERI KAYBI MAYINI):** `InitializeMariaDbZipAsync` KOSULSUZ olarak
+  `DeleteManagedPath(dataDirectory)` yapiyordu ve MariaDB'nin verisi kurulum klasorunun ICINDE
+  (`%ProgramData%\AdaPanel\runtimes\mariadb\11\data`). Yani atlama kaldirilsa "guncelle" TUM
+  VERITABANLARINI SILERDI. Dahasi: atlama yalniz dogrulama BASARILI oldugunda devreye giriyor —
+  servis durmus/dosya eksikse dogrulama patlar, panel "onarim kurulumu" yapar ve VERIYI SILERDI.
+  Yani guncelleme dugmesine hic dokunulmasa da patlayabilecek bir mayindi.
+  MySQL tarafinda ayni hata YOK (`InitializeMySqlZipAsync` veri dizini BOSSA initialize eder);
+  MariaDB'de bu koruma unutulmus.
+- **DUZELTME 1 (veri):** MariaDB init artik MySQL kalibini izliyor — veri dizini varsa ve bos degilse
+  DOKUNULMAZ; yalniz binary'ler degisir, servis yeni binary'lerle yeniden kaydedilir
+  (`mysqld --install`) ve sema `mariadb-upgrade` ile tasinir.
+- **DUZELTME 2 (guncelleme yolu):** `ComponentInstallRequest.Force` + `IComponentBootstrapper.InstallAsync(..., bool force)`.
+  YALNIZ "Guncelle" dugmesi ve otomasyonun otomatik guncelleme isi force=true gonderir; ilk kurulum ve
+  bagimlilik kurulumlari eskisi gibi atlar. Tum cagri yerleri named-argument'a cevrildi.
+- **DUZELTME 3 (UI):** servisi olan bilesenlerde (mysql/mariadb/postgres/stalwart/redis/memcached/docker)
+  yukseltme ONAY ister: hangi surumden hangi surume + "servis kisa sure duracak" + "once yedek alin".
+  Servissiz araclar dogrudan guncellenir.
+- **CANLI DOGRULANAMADI:** bu makinede MariaDB yok; yukseltme yolu (binary degisimi + mariadb-upgrade)
+  hedef sunucuda YEDEK ALINDIKTAN SONRA denenmeli.
+- **0.2.27 PAKET:** `artifacts\release\0.2.27\AdaPanelSetup.exe`, `51,940,416` byte,
+  SHA256 `B1E040BBD210A89FDACADE7A8AFAB28035D3C1A4D73A3DD216E164161C177CA3`.

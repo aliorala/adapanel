@@ -374,7 +374,7 @@ public sealed class WebmailService(
             return installed;
         }
 
-        var result = await componentBootstrapper.InstallAsync(ComponentId, null, null, cancellationToken);
+        var result = await componentBootstrapper.InstallAsync(ComponentId, null, null, force: false, cancellationToken: cancellationToken);
         return new InstalledRoundcube(result.InstallDir);
     }
 
@@ -390,7 +390,7 @@ public sealed class WebmailService(
             return installedPhp;
         }
 
-        var result = await componentBootstrapper.InstallAsync("php-8.3", null, null, cancellationToken);
+        var result = await componentBootstrapper.InstallAsync("php-8.3", null, null, force: false, cancellationToken: cancellationToken);
         return result.ComponentId;
     }
 

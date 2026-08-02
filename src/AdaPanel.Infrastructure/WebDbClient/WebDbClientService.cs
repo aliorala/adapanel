@@ -368,7 +368,7 @@ public sealed class WebDbClientService(
             return installed;
         }
 
-        var result = await componentBootstrapper.InstallAsync(componentId, null, null, cancellationToken);
+        var result = await componentBootstrapper.InstallAsync(componentId, null, null, force: false, cancellationToken: cancellationToken);
         return new InstalledComponentDto
         {
             ComponentId = result.ComponentId,
@@ -391,7 +391,7 @@ public sealed class WebDbClientService(
             return installedPhp;
         }
 
-        var result = await componentBootstrapper.InstallAsync("php-8.3", null, null, cancellationToken);
+        var result = await componentBootstrapper.InstallAsync("php-8.3", null, null, force: false, cancellationToken: cancellationToken);
         return result.ComponentId;
     }
 

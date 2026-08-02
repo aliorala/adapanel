@@ -359,7 +359,7 @@ public sealed class SiteProvisioningService(
             throw new AppException("appruntime.runtime_not_installed", 404, 404);
         }
 
-        await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, cancellationToken);
+        await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, force: false, cancellationToken: cancellationToken);
     }
 
     private static void WritePhpStarter(string root)

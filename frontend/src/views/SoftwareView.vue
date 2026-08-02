@@ -155,7 +155,7 @@
               v-if="item.installed?.updateAvailable"
               class="compact update-action"
               :disabled="softwareStore.installingComponentId === item.id || softwareStore.removingComponentId === item.id"
-              @click="installComponent(item.id)">
+              @click="updateComponent(item)">
               {{ softwareStore.installingComponentId === item.id ? t("panel.software.installing") : t("panel.software.update") }}
             </button>
             <button
@@ -349,6 +349,40 @@ async function pollProgressWhile<T>(work: Promise<T>): Promise<T> {
 async function installComponent(componentId: string) {
   try {
     const result = await pollProgressWhile(softwareStore.installComponent(componentId));
+    showNotice(translate(result.message), false);
+  } catch (error) {
+    showApiError(error);
+  }
+}
+
+// Servisi olan bileşenler (veritabanı motorları, mail, önbellek) yükseltme sırasında KISA SÜRE DURUR.
+// Bunu sessizce yapmak yanlış olur; onay isteriz. Servissiz araçlar (phpMyAdmin, win-acme...) doğrudan.
+const RESTARTS_ON_UPDATE = ["mysql", "mariadb", "postgres", "stalwart", "redis", "memcached", "docker"];
+
+async function updateComponent(item: { id: string; installed?: { version?: string; availableVersion?: string } | null; displayName?: string }) {
+  const risky = RESTARTS_ON_UPDATE.some((prefix) => item.id.toLowerCase().startsWith(prefix));
+  if (risky) {
+    await confirm({
+      title: t("panel.software.updateConfirmTitle"),
+      message: t("panel.software.updateConfirmMessage"),
+      impact: [
+        `${item.displayName ?? item.id}: ${item.installed?.version ?? "?"} → ${item.installed?.availableVersion ?? "?"}`,
+        t("panel.software.updateConfirmService")
+      ],
+      action: async () => {
+        await runUpdate(item.id);
+      }
+    });
+    return;
+  }
+
+  await runUpdate(item.id);
+}
+
+async function runUpdate(componentId: string) {
+  try {
+    // force=true: sunucu "zaten kurulu" deyip atlamasın — yükseltmenin tek yolu bu.
+    const result = await pollProgressWhile(softwareStore.installComponent(componentId, true));
     showNotice(translate(result.message), false);
   } catch (error) {
     showApiError(error);

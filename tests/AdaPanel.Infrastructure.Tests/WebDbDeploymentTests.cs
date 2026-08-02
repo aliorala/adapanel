@@ -222,7 +222,7 @@ public sealed class WebDbDeploymentTests
         public Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ComponentInstallResultDto> InstallAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
+        public Task<ComponentInstallResultDto> InstallAsync(string componentId, Guid? actorUserId, string? ipAddress, bool force = false, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyCollection<ComponentInstallResultDto>> InstallDefaultsAsync(Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)

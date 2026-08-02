@@ -75,7 +75,7 @@ public sealed class PhpService(
     {
         EnsurePhpComponentId(componentId);
 
-        var result = await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, cancellationToken);
+        var result = await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, force: false, cancellationToken: cancellationToken);
         try
         {
             await RegisterFastCgiAsync(componentId, cancellationToken);

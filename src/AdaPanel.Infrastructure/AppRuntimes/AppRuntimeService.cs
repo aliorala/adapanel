@@ -261,7 +261,7 @@ public sealed partial class AppRuntimeService(
 
         if (!installed)
         {
-            await componentBootstrapper.InstallAsync(componentId, null, null, cancellationToken);
+            await componentBootstrapper.InstallAsync(componentId, null, null, force: false, cancellationToken: cancellationToken);
         }
     }
 

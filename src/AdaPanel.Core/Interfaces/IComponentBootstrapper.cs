@@ -19,10 +19,15 @@ public interface IComponentBootstrapper
     /// </summary>
     Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default);
 
+    /// <param name="force">
+    /// true ise bileşen kurulu ve sağlıklı olsa bile kurulum YENİDEN çalıştırılır. Sürüm
+    /// yükseltmesinin tek yolu budur; aksi halde kurulum "zaten kurulu" deyip hiçbir şey yapmaz.
+    /// </param>
     Task<ComponentInstallResultDto> InstallAsync(
         string componentId,
         Guid? actorUserId,
         string? ipAddress,
+        bool force = false,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyCollection<ComponentInstallResultDto>> InstallDefaultsAsync(

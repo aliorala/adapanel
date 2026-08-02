@@ -31,7 +31,8 @@ public sealed class AntivirusController(
             "clamav",
             User.GetRequiredUserId(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
+            force: false,
+            cancellationToken: cancellationToken);
 
         var status = await antivirusService.GetStatusAsync(cancellationToken);
         return Ok(ApiResponse<AntivirusStatusDto>.Ok(status, "antivirus.installed"));

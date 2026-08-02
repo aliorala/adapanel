@@ -577,7 +577,7 @@ public sealed class AutomationService(
                     try
                     {
                         // Kurulum akışı aynı bileşeni yeni sürümle yeniden kurar (upgrade yolu budur).
-                        var result = await componentBootstrapper.InstallAsync(component.ComponentId, null, null, cancellationToken);
+                        var result = await componentBootstrapper.InstallAsync(component.ComponentId, null, null, force: true, cancellationToken: cancellationToken);
                         if (string.Equals(result.Status, "Installed", StringComparison.OrdinalIgnoreCase))
                         {
                             applied++;

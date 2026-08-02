@@ -272,6 +272,7 @@ public sealed class ComponentBootstrapper(
         string componentId,
         Guid? actorUserId,
         string? ipAddress,
+        bool force = false,
         CancellationToken cancellationToken = default)
     {
         var manifest = await LoadManifestAsync(cancellationToken);
@@ -293,7 +294,7 @@ public sealed class ComponentBootstrapper(
                 ipAddress,
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase),
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-                forceInstall: false,
+                forceInstall: force,
                 cancellationToken);
             operationProgress.Complete();
             return result;
@@ -3525,18 +3526,55 @@ public sealed class ComponentBootstrapper(
         var port = ResolveDatabasePort(component.Id);
         var password = string.IsNullOrWhiteSpace(generatedPassword) ? GeneratePassword() : generatedPassword;
 
-        await TryRemoveServiceAsync(serviceName, cancellationToken);
-        DeleteManagedPath(dataDirectory);
-        Directory.CreateDirectory(dataDirectory);
+        // VERİ KAYBI KORUMASI: burası eskiden KOŞULSUZ olarak veri dizinini siliyordu. O hâliyle
+        // bileşen yeniden kurulduğunda (sürüm yükseltme, ya da yalnızca doğrulama başarısız olduğu
+        // için tetiklenen onarım kurulumu) sunucudaki TÜM VERİTABANLARI yok oluyordu. Artık MySQL
+        // tarafındaki kalıpla aynı: veri dizini VARSA ve BOŞ DEĞİLSE ona DOKUNULMAZ; yalnızca
+        // binary'ler değişir ve şema yeni sürüme yükseltilir (mariadb-upgrade).
+        var hasExistingData = Directory.Exists(dataDirectory) &&
+            Directory.EnumerateFileSystemEntries(dataDirectory).Any();
 
-        await RunProcessAsync(
-            installer,
-            $"--datadir=\"{dataDirectory}\" --service=\"{serviceName}\" --password=\"{password}\" --port={port}",
-            cancellationToken);
+        await TryRemoveServiceAsync(serviceName, cancellationToken);
+
+        if (!hasExistingData)
+        {
+            DeleteManagedPath(dataDirectory);
+            Directory.CreateDirectory(dataDirectory);
+
+            await RunProcessAsync(
+                installer,
+                $"--datadir=\"{dataDirectory}\" --service=\"{serviceName}\" --password=\"{password}\" --port={port}",
+                cancellationToken);
+        }
+        else
+        {
+            // Mevcut veriyle devam: servis kaydını yeni binary'lerle yeniden oluştur.
+            // mysqld.exe MariaDB'de de --install destekler; --defaults-file veri dizinindeki my.ini.
+            var daemon = FindExecutable(installDirectory, "mysqld.exe");
+            var configPath = Path.Combine(dataDirectory, "my.ini");
+            var defaultsArgument = File.Exists(configPath) ? $" --defaults-file=\"{configPath}\"" : string.Empty;
+            await RunProcessAsync(daemon, $"--install \"{serviceName}\"{defaultsArgument}", cancellationToken);
+        }
+
         // B5: mariadb-install-db kendi my.ini'sini uretir ve varsayilanda bind-address YAZMAZ (tum
         // arabirimleri dinler). Servis baslamadan ONCE, gercekten okudugu config'e 127.0.0.1 baglamasini ekle.
         await EnsureMariaDbBindAddressAsync(serviceName, dataDirectory, installDirectory, cancellationToken);
         await RunProcessAsync("sc.exe", $"start \"{serviceName}\"", cancellationToken);
+
+        if (hasExistingData)
+        {
+            // Sürüm yükseltmesinde şema/sistem tabloları yeni sürüme taşınmalı; aksi halde MariaDB
+            // uyarı verir ya da bazı özellikler çalışmaz. Parola mevcut kurulumdan gelir.
+            var upgrade = FindExecutable(installDirectory, "mariadb-upgrade.exe");
+            if (!string.IsNullOrWhiteSpace(upgrade))
+            {
+                await RunProcessAsync(
+                    upgrade,
+                    $"--user=root --password=\"{password}\" --protocol=TCP --host=127.0.0.1 --port={port}",
+                    cancellationToken);
+            }
+        }
+
         await WaitForDatabaseReadyAsync(admin, serviceName, port, password, cancellationToken);
     }
 

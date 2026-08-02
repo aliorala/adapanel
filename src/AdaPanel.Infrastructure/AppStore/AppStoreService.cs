@@ -564,7 +564,7 @@ public sealed class AppStoreService(
         var installed = FindInstalled(catalog, "adminer");
         if (installed is null)
         {
-            await componentBootstrapper.InstallAsync("adminer", null, null, cancellationToken);
+            await componentBootstrapper.InstallAsync("adminer", null, null, force: false, cancellationToken: cancellationToken);
             catalog = await componentBootstrapper.GetCatalogAsync(cancellationToken);
             installed = FindInstalled(catalog, "adminer");
         }
@@ -982,14 +982,14 @@ public sealed class AppStoreService(
         var composer = FindInstalled(catalog, "composer");
         if (composer is null)
         {
-            await componentBootstrapper.InstallAsync("composer", null, null, cancellationToken);
+            await componentBootstrapper.InstallAsync("composer", null, null, force: false, cancellationToken: cancellationToken);
             catalog = await componentBootstrapper.GetCatalogAsync(cancellationToken);
             composer = FindInstalled(catalog, "composer");
         }
 
         if (FindInstalled(catalog, "url-rewrite") is null)
         {
-            await componentBootstrapper.InstallAsync("url-rewrite", null, null, cancellationToken);
+            await componentBootstrapper.InstallAsync("url-rewrite", null, null, force: false, cancellationToken: cancellationToken);
         }
 
         if (composer is null)

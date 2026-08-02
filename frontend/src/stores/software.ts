@@ -104,11 +104,13 @@ export const useSoftwareStore = defineStore("software", {
         this.checkingUpdates = false;
       }
     },
-    async installComponent(componentId: string) {
+    // force: bileşen zaten kurulu ve sağlıklıysa sunucu kurulumu ATLAR. Sürüm yükseltmesi tam
+    // olarak bu atlamayı aşmak ister — "Güncelle" düğmesi force=true gönderir, ilk kurulum göndermez.
+    async installComponent(componentId: string, force = false) {
       this.installingComponentId = componentId;
 
       try {
-        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult>>("/software/install", { componentId });
+        const response = await apiClient.post<ApiEnvelope<ComponentInstallResult>>("/software/install", { componentId, force });
         await this.fetchCatalog();
         return response.data.data;
       } finally {

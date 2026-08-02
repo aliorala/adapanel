@@ -53,6 +53,7 @@ public sealed class SoftwareController(
                 request.ComponentId,
                 actorUserId,
                 ipAddress,
+                request.Force,
                 CancellationToken.None);
 
         return Ok(ApiResponse<ComponentInstallResultDto>.Ok(result, result.Message));
