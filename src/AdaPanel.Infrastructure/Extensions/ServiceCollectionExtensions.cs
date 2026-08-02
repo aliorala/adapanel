@@ -112,6 +112,9 @@ public static class ServiceCollectionExtensions
         // toplayan rozet servisi. İkisi de yalnız MEVCUT sinyalleri okur, kalıcı durum tutmaz → Scoped.
         services.AddScoped<ISiteHealthService, Health.SiteHealthService>();
         services.AddScoped<IDomainRefreshService, Health.DomainRefreshService>();
+        // Panelin kendi alan adiyla disariya acilmasi (ters vekil + Let's Encrypt). Yalniz
+        // mevcut servisleri sirayla cagirir, kalici durum tutmaz -> Scoped.
+        services.AddScoped<IPanelPublicAccessService, Health.PanelPublicAccessService>();
         // Sunucudan sunucuya erisim anahtarlari (MCP baglantilari); bkz. PanelApiToken.
         services.AddScoped<IApiTokenService, Security.ApiTokenService>();
         // Hata bildirimi: maskelenmis kayit + toplayiciya gonderim. Toplayici adresi bos ise

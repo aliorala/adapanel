@@ -346,6 +346,11 @@
         <div class="row-actions">
           <button class="compact" @click="savePanelPreferences">{{ t("panel.settings.saveGeneral") }}</button>
         </div>
+
+        <!-- Panel erişimi: paneli yöneticinin KENDİ alan adıyla ve geçerli sertifikayla dışarıya
+             açar. Yapay zeka istemcileri kendinden imzalı sertifikayı kabul etmiyor, bu yüzden
+             MCP bağlantısının ön koşulu. -->
+        <PanelAccessCard />
         </template>
       </section>
 
@@ -410,6 +415,7 @@ import BackupView from "./BackupView.vue";
 import SubUsersView from "./SubUsersView.vue";
 import UsersView from "./UsersView.vue";
 import AccountView from "./AccountView.vue";
+import PanelAccessCard from "../components/PanelAccessCard.vue";
 import AiConnectionView from "./AiConnectionView.vue";
 import ErrorReportsView from "./ErrorReportsView.vue";
 import SoftwareView from "./SoftwareView.vue";

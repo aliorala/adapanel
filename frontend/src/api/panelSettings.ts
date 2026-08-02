@@ -10,6 +10,15 @@ export type PanelPreferences = {
   defaultSiteRoot: string;
   defaultBackupRoot: string;
   serverAddress: string;
+  /**
+   * Panelin dışarıya açıldığı alan adı (boş = pasif). SALT OKUNUR bir alandır: sahibi
+   * "Panel erişimi" bölümüdür (api/panelAccess.ts). Genel ayarlar PUT'u bu alanı GÖNDERMEZ,
+   * sunucu da önceki değeri korur — buradan yanlışlıkla sıfırlanamaz.
+   *
+   * OPSİYONEL: mevcut varsayılan tercih nesneleri (ör. SetupWizardView'daki reactive literal)
+   * bu alanı eklemek ZORUNDA kalmasın diye. Sunucu her durumda gerçek değeri döner.
+   */
+  panelHostName?: string;
   preferredHttpsPort: number;
   allowHttpFallback: boolean;
   loginLockoutMinutes: number;

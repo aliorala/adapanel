@@ -24,6 +24,8 @@ public sealed class PanelPreferencesService(
         settings.ServerAddress = string.IsNullOrWhiteSpace(settings.ServerAddress)
             ? ResolveServerAddress()
             : settings.ServerAddress.Trim();
+        // Alan adı karşılaştırmaları (IIS binding, SNI, DNS) küçük harf ve noktasızdır.
+        settings.PanelHostName = (settings.PanelHostName ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
         settings.RestartRequired = false;
         return settings;
     }
@@ -40,6 +42,9 @@ public sealed class PanelPreferencesService(
             DefaultSiteRoot = NormalizePath(request.DefaultSiteRoot),
             DefaultBackupRoot = NormalizePath(request.DefaultBackupRoot),
             ServerAddress = string.IsNullOrWhiteSpace(request.ServerAddress) ? ResolveServerAddress() : request.ServerAddress.Trim(),
+            // Panel alan adını Ayarlar > Genel formu YÖNETMEZ (istekte hiç gelmez). Sahibi panel
+            // erişimi ekranıdır; buradan geçerken sessizce sıfırlanmasın diye önceki değer taşınır.
+            PanelHostName = previous.PanelHostName,
             PreferredHttpsPort = request.PreferredHttpsPort,
             AllowHttpFallback = request.AllowHttpFallback,
             LoginLockoutMinutes = request.LoginLockoutMinutes,
