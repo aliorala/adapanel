@@ -28,7 +28,7 @@
           <span>{{ t("panel.attention.summarySites") }}</span>
         </button>
 
-        <button type="button" class="ac-chip" @click="go(pendingUpdateCount ? 'updates' : 'attention')">
+        <button type="button" class="ac-chip" @click="go(pendingUpdateTarget)">
           <strong>{{ pendingUpdateCount }}</strong>
           <span>{{ t("panel.attention.summaryUpdates") }}</span>
         </button>
@@ -325,8 +325,20 @@ const props = defineProps<{
 const { t } = useI18n();
 
 // Bekleyen güncellemeler: bileşen güncellemeleri ("software") + panel güncellemesi ("updates").
-const pendingUpdateCount = computed(() => (props.attention?.items ?? [])
-  .filter((item) => item.section === "software" || item.section === "updates").length);
+const pendingUpdateItems = computed(() => (props.attention?.items ?? [])
+  .filter((item) => item.section === "software" || item.section === "updates"));
+const pendingUpdateCount = computed(() => pendingUpdateItems.value.length);
+
+// Tıklayınca DOĞRU ekrana git. Sayaç iki farklı güncelleme türünü topluyor; hepsini panel
+// güncelleme sayfasına yollamak "1 güncelleme var" deyip "zaten son sürümdesiniz" gösterir.
+// Tek madde varsa kendi bölümüne, birden çoksa hepsini listeleyen çekmeceye gideriz.
+const pendingUpdateTarget = computed(() => {
+  const items = pendingUpdateItems.value;
+  if (items.length === 1) {
+    return items[0].section || "updates";
+  }
+  return items.length > 1 ? "attention" : "attention";
+});
 
 // Süresi dolan/dolmak üzere olan sertifikalar (Danışman'ın SSL maddeleri).
 const expiringCertificateCount = computed(() => (props.attention?.items ?? [])

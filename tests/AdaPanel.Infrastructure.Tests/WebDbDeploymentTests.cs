@@ -219,6 +219,9 @@ public sealed class WebDbDeploymentTests
         public Task<SoftwareCatalogDto> CheckForUpdatesAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<ComponentInstallResultDto> InstallAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

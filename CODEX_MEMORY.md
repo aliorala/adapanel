@@ -6021,3 +6021,19 @@ Basarili:
 - **YAYINLANDI (2026-08-02):** commit `ef1d223` + yerel `0.2.25` tag'i. GitHub release **0.2.25**
   (id 363640088). YAYINDAKI DOSYA INDIRILIP HASH'LENDI: `9FAE4082...16D575DD` (birebir),
   `releases/latest` -> 0.2.25.
+
+## 2026-08-02 (209) — "1 guncelleme bekliyor" ama panel guncel: IKI AYRI HATA
+- **KULLANICI RAPORU:** ozet kartinda "1 guncelleme bekliyor", tiklayinca PANEL guncelleme sayfasi
+  aciliyor ve "zaten son surumdesiniz" diyor.
+- **HATA 1 — YANLIS YONLENDIRME:** `DashboardOverviewView` guncelleme cipi `software` (bilesen) +
+  `updates` (panel) maddelerini TOPLUYOR ama tiklaninca HER ZAMAN `updates`'e gidiyordu. Yani bir
+  BILESEN guncellemesi (PHP/MariaDB...) kullaniciyi panel guncelleme ekranina yolluyordu.
+  Duzeltme: tek madde varsa KENDI bolumune (`software` -> Yazilimlar), birden coksa hepsini
+  listeleyen dikkat cekmecesine gidilir.
+- **HATA 2 — BAYAT SAYAC:** `AttentionService` sayiyi `automation.PendingComponentUpdates`'ten
+  okuyordu; o deger GUNDE BIR yazilir. Kullanici guncellemeyi kurduktan sonra bile sayac 24 saate
+  kadar "1" kalirdi. Iki katmanli duzeltme: (a) `RefreshUpdateCacheEntry` — bilesen kurulumu
+  bitince o bilesenin onbellek bayragi YENI surume gore yeniden hesaplanir; (b) yeni ucuz
+  `IComponentBootstrapper.GetPendingUpdateCountAsync` (yalniz kurulu bilesenler + onbellek; AG YOK,
+  sistem taramasi YOK) ve AttentionService artik sayiyi ondan alir. Kaldirilmis bilesenin onbellekte
+  kalan kaydi da sayilmaz.

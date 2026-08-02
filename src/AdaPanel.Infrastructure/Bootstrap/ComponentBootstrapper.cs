@@ -97,6 +97,25 @@ public sealed class ComponentBootstrapper(
             "vc-redist-x64" or "url-rewrite" or "iis-arr" or "http-platform-handler";
     }
 
+    public async Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
+    {
+        var cache = ReadUpdateCache();
+        if (cache.Count == 0)
+        {
+            return 0;
+        }
+
+        // Yalnız GERÇEKTEN kurulu olanlar sayılır: kaldırılmış bir bileşenin önbellekte kalan
+        // kaydı "bekleyen güncelleme" olarak görünmemeli.
+        var installedIds = await dbContext.InstalledComponents
+            .AsNoTracking()
+            .Where(item => item.Status == ComponentInstallStatus.Installed)
+            .Select(item => item.ComponentId)
+            .ToListAsync(cancellationToken);
+
+        return installedIds.Count(id => cache.TryGetValue(id, out var info) && info.UpdateAvailable);
+    }
+
     public async Task<SoftwareCatalogDto> CheckForUpdatesAsync(CancellationToken cancellationToken = default)
     {
         var manifest = await LoadManifestAsync(cancellationToken);
@@ -744,6 +763,13 @@ public sealed class ComponentBootstrapper(
             }
 
             await dbContext.SaveChangesAsync(cancellationToken);
+
+            // Güncelleme önbelleğini TAZELE. Aksi halde "güncelleme var" bayrağı kurulum bittikten
+            // sonra da doğru sanılır: panel "1 güncelleme bekliyor" der, kullanıcı tıklar ve
+            // "zaten güncelsiniz" ekranıyla karşılaşır. Bayrak yeni kurulan sürüme göre yeniden
+            // hesaplanır (sürüm hâlâ eskiyse — ör. kurulum eski paketi tekrar kurduysa — açık kalır).
+            RefreshUpdateCacheEntry(installedComponent.ComponentId, installedComponent.Version);
+
             await auditService.WriteAsync(
                 "software.install.completed",
                 "software",
@@ -831,6 +857,33 @@ public sealed class ComponentBootstrapper(
             Environment.ExpandEnvironmentVariables(runtimeOptions.DataRoot),
             "config",
             "component-updates.json");
+
+    /// <summary>
+    /// Bir bileşen kurulduktan/güncellendikten sonra o bileşenin güncelleme kaydını yeni sürüme göre
+    /// yeniden değerlendirir. Önbellek yalnız günlük kontrolde yazıldığı için, aksi halde kurulum
+    /// sonrası "bekleyen güncelleme" sayacı 24 saate kadar yanlış kalır.
+    /// </summary>
+    private void RefreshUpdateCacheEntry(string componentId, string installedVersion)
+    {
+        try
+        {
+            var cache = ReadUpdateCache();
+            if (!cache.TryGetValue(componentId, out var info))
+            {
+                return;
+            }
+
+            info.UpdateAvailable = IsNewerVersion(info.AvailableVersion, installedVersion);
+            cache[componentId] = info;
+            WriteUpdateCache(cache);
+        }
+        catch (Exception exception)
+        {
+            // Önbellek tazeleme kurulumu BOZMAMALI: en kötü ihtimalle sayaç bir sonraki kontrole
+            // kadar eski kalır, kurulum yine de başarılıdır.
+            logger.LogDebug(exception, "Güncelleme önbelleği tazelenemedi: {ComponentId}", componentId);
+        }
+    }
 
     private Dictionary<string, ComponentUpdateInfo> ReadUpdateCache()
     {

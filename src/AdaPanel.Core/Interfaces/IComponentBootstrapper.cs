@@ -12,6 +12,13 @@ public interface IComponentBootstrapper
     /// </summary>
     Task<SoftwareCatalogDto> CheckForUpdatesAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Güncellemesi bekleyen kurulu bileşen sayısı. UCUZ: yalnız kurulu bileşenleri ve son kontrolün
+    /// önbelleğini okur — ağa çıkmaz, sistem taraması yapmaz. Rozet/uyarı sayaçları bunu kullanır ki
+    /// sayı kurulumdan hemen sonra doğru olsun (otomasyon durumu günde bir güncellenir, geç kalır).
+    /// </summary>
+    Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default);
+
     Task<ComponentInstallResultDto> InstallAsync(
         string componentId,
         Guid? actorUserId,
