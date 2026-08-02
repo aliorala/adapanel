@@ -1,6 +1,7 @@
 using AdaPanel.Core.Dtos.Health;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Health;
@@ -10,6 +11,7 @@ internal sealed class DomainRefreshService(
     IIisSiteService siteService,
     IDnsService dnsService,
     IMailService mailService,
+    JsonFileStore fileStore,
     ILogger<DomainRefreshService> logger) : IDomainRefreshService
 {
     public Task<DomainRefreshResultDto> RefreshAsync(string siteName, CancellationToken cancellationToken = default)
@@ -63,7 +65,32 @@ internal sealed class DomainRefreshService(
 
     private static DomainRefreshSummaryDto? _cachedInspection;
     private static DateTime _cachedInspectionAtUtc = DateTime.MinValue;
+    private static string _cachedInspectionFingerprint = string.Empty;
     private static readonly SemaphoreSlim InspectionGate = new(1, 1);
+
+    /// <summary>
+    /// Zone durumunun "parmak izi": DNS kayıt dosyasının son yazılma anı + site sayısı.
+    /// <para>
+    /// Süreye ek olarak bu gerekli: yalnız zamana bakan bir önbellek, kullanıcı bir kayıt sildikten
+    /// sonra 10 dakika boyunca "eksik yok" demeye devam ederdi. Yani uyarı, tam da uyarması gereken
+    /// anda susardı. Canlı testte birebir bu görüldü: MX kaydı silindi, denetim yine 0 eksik dedi,
+    /// ama tazeleme çalıştırılınca 1 alan adının güncellendiği ortaya çıktı.
+    /// </para>
+    /// </summary>
+    private string ComputeFingerprint(int siteCount)
+    {
+        try
+        {
+            var path = fileStore.ResolvePath("config/dns-zones.json");
+            var stamp = File.Exists(path) ? File.GetLastWriteTimeUtc(path).Ticks : 0L;
+            return $"{stamp}:{siteCount}";
+        }
+        catch (Exception)
+        {
+            // Parmak izi okunamıyorsa önbelleği GEÇERSİZ say: bayat veri göstermektense yeniden ölç.
+            return Guid.NewGuid().ToString("N");
+        }
+    }
 
     public async Task<DomainRefreshSummaryDto> RefreshAllAsync(CancellationToken cancellationToken = default)
     {
@@ -73,14 +100,24 @@ internal sealed class DomainRefreshService(
         // 10 dakika boyunca "eksik var" demesine yol açardı.
         _cachedInspection = null;
         _cachedInspectionAtUtc = DateTime.MinValue;
+        _cachedInspectionFingerprint = string.Empty;
         return summary;
     }
 
+    private static bool IsCacheUsable(string fingerprint) =>
+        _cachedInspection is not null &&
+        string.Equals(_cachedInspectionFingerprint, fingerprint, StringComparison.Ordinal) &&
+        DateTime.UtcNow - _cachedInspectionAtUtc < InspectionFreshness;
+
     public async Task<DomainRefreshSummaryDto> InspectAllAsync(CancellationToken cancellationToken = default)
     {
-        if (_cachedInspection is not null && DateTime.UtcNow - _cachedInspectionAtUtc < InspectionFreshness)
+        // Önbellek HEM süreye HEM zone durumuna bağlı: kullanıcı bir kayıt sildiği anda parmak izi
+        // değişir ve uyarı hemen görünür. Yalnız süreye bakmak, uyarıyı tam gerektiği anda susturuyordu.
+        var siteCount = (await siteService.GetSitesAsync(cancellationToken)).Count;
+        var fingerprint = ComputeFingerprint(siteCount);
+        if (IsCacheUsable(fingerprint))
         {
-            return _cachedInspection;
+            return _cachedInspection!;
         }
 
         // Tek geçit: birden çok panel sekmesi aynı anda rozetini yenilediğinde aynı ağır taramanın
@@ -88,14 +125,15 @@ internal sealed class DomainRefreshService(
         await InspectionGate.WaitAsync(cancellationToken);
         try
         {
-            if (_cachedInspection is not null && DateTime.UtcNow - _cachedInspectionAtUtc < InspectionFreshness)
+            if (IsCacheUsable(fingerprint))
             {
-                return _cachedInspection;
+                return _cachedInspection!;
             }
 
             var summary = await RunAllAsync(applyChanges: false, cancellationToken);
             _cachedInspection = summary;
             _cachedInspectionAtUtc = DateTime.UtcNow;
+            _cachedInspectionFingerprint = fingerprint;
             return summary;
         }
         finally
