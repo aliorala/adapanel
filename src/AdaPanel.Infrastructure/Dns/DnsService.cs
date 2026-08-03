@@ -1191,9 +1191,7 @@ public sealed partial class DnsService(
     /// </summary>
     internal static string BuildTxtLine(string host, string value, int ttl)
     {
-        // 252, 255 DEGIL. DNS'te tek bir TXT "character-string" en fazla 255 bayttir; asagidaki
-        // yontemde parcalar CRLF ile ayrildigi ve bu iki karakter de parcanin icinde sayildigi icin
-        // guvenli sinir 252'dir (252 + CR + LF = 254).
+        // 252, 255 DEGIL: CRLF ile ayrilan yontemde ayirici da parcanin icinde sayilir.
         const int MaxStringLength = 252;
 
         if (value.Length <= MaxStringLength)
@@ -1202,30 +1200,78 @@ public sealed partial class DnsService(
                    $"-DescriptiveText '{EscapePowerShellLiteral(value)}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
         }
 
+        // UZUN DEGER: UC YOL SIRAYLA DENENIR VE HER DENEMEDEN SONRA KAYIT GERI OKUNUR.
+        //
+        // Neden boyle: 255'ten uzun bir TXT kaydini Windows DNS'e yazmanin tek dogru yolu YOK.
+        // Yonetim arayuzu (MMC) bunu yapabiliyor, yani sunucunun kendisi destekliyor; ama komut
+        // satiri araclari surume ve yapilandirmaya gore farkli davraniyor. Canlida sirasiyla
+        // denendi ve reddedildi: cmdlet'e ayrilmamis uzun deger, dnscmd'ye ayri tirnakli parcalar
+        // (ERROR_INVALID_PARAMETER), cmdlet'e CRLF ile ayrilmis deger.
+        //
+        // Bu yuzden panel artik TEK bir yola bahse girmiyor: uc yolu sirayla dener ve her birinden
+        // sonra kaydin GERCEKTEN olustugunu okuyarak dogrular. Ilk dogrulanan kazanir. Hicbiri
+        // tutmazsa uc yolun da hatasi birlikte bildirilir -- boylece bir sonraki adim tahmine
+        // degil olcume dayanir.
         var chunks = new List<string>();
         for (var index = 0; index < value.Length; index += MaxStringLength)
         {
             chunks.Add(value.Substring(index, Math.Min(MaxStringLength, value.Length - index)));
         }
 
-        // UZUN DEGER: PARCALAR CRLF ILE BIRLESTIRILIR.
-        //
-        // Bu, Windows DNS'te 255'ten uzun TXT yazmanin BELGELENEN yoludur: cmdlet'e tek bir metin
-        // verilir ama metindeki her CRLF, kayitta AYRI bir character-string olur. Dogrulayicilar
-        // parcalari birlestirir (DKIM icin RFC 6376 bunu acikca soyler).
-        //
-        // dnscmd yolu DENENDI VE TERK EDILDI: belgelenen imzasi tek bir <rrdata> alir, birden cok
-        // tirnakli parca verildiginde ERROR_INVALID_PARAMETER (87) donduruyor. Canli sunucuda RSA
-        // DKIM kaydinin hicbir zaman yazilamamasinin sebebi buydu.
-        //
-        // CRLF, ters tirnak kacisiyla degil [char] koduyla uretiliyor: kacis dizileri C# kaynagindan
-        // PowerShell metnine giderken katman katman bozulabiliyor, karakter kodu ise tek anlamlidir.
-        var birlesik = string.Join(
+        var crlfBirlesik = string.Join(
             " + [char]13 + [char]10 + ",
             chunks.Select(chunk => $"'{EscapePowerShellLiteral(chunk)}'"));
 
-        return $"Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name '{EscapePowerShellLiteral(host)}' " +
-               $"-DescriptiveText ({birlesik}) -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
+        var adLiteral = $"'{EscapePowerShellLiteral(host)}'";
+        var tamDeger = $"'{EscapePowerShellLiteral(value)}'";
+        var dnscmdDeger = "\"" + value.Replace("\"", string.Empty) + "\"";
+
+        var satirlar = new List<string>
+        {
+            $"$adaAd = {adLiteral}",
+            $"$adaTam = {tamDeger}",
+            $"$adaCrlf = {crlfBirlesik}",
+            "$adaHata = @()",
+            "$adaVar = $false",
+
+            // Yarim kalmis bir onceki deneme varsa temizlenir: uzerine yazmak, ayni konakta iki
+            // bozuk kayit birakabilir.
+            "Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue | " +
+            "Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction SilentlyContinue",
+
+            // 1) Cmdlet + CRLF ile ayrilmis deger.
+            "try {",
+            $"  Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name $adaAd -DescriptiveText $adaCrlf -TimeToLive ([TimeSpan]::FromSeconds({ttl})) -ErrorAction Stop | Out-Null",
+            "} catch { $adaHata += 'cmdlet-crlf: ' + $_.Exception.Message }",
+            "$adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+
+            // 2) dnscmd'ye TEK metin: belgelenen imza tek <rrdata> aliyor; uzun degeri kendisi
+            //    parcalayabilir. Komut toplu is dosyasindan calisir ki tirnaklama bozulmasin.
+            "if (-not $adaVar) {",
+            "  $adaCmdDosya = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
+            $"  $adaKomut = 'dnscmd . /RecordAdd ' + $zoneName + ' ' + $adaAd + ' TXT {EscapeSingleQuoted(dnscmdDeger)}'",
+            "  Set-Content -LiteralPath $adaCmdDosya -Value $adaKomut -Encoding ASCII",
+            "  $adaCikti = (& $adaCmdDosya 2>&1) -join ' '",
+            "  if ($LASTEXITCODE -ne 0) { $adaHata += 'dnscmd-tek: ' + $adaCikti }",
+            "  Remove-Item -LiteralPath $adaCmdDosya -Force -ErrorAction SilentlyContinue",
+            "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "}",
+
+            // 3) WMI: yonetim arayuzunun (MMC) kullandigi yol. Sunucu bu kaydi yazabiliyor
+            //    oldugundan, komut satiri araclari reddetse bile bu yol tutabilir.
+            "if (-not $adaVar) {",
+            "  try {",
+            @"    $adaWmi = [wmiclass]'\\.\root\MicrosoftDNS:MicrosoftDNS_TXTType'",
+            "    $adaFqdn = $adaAd + '.' + $zoneName",
+            $"    $adaWmi.CreateInstanceFromPropertyData($env:COMPUTERNAME, $zoneName, $adaFqdn, 1, {ttl}, $adaTam) | Out-Null",
+            "  } catch { $adaHata += 'wmi: ' + $_.Exception.Message }",
+            "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "}",
+
+            "if (-not $adaVar) { throw ($adaHata -join ' || ') }"
+        };
+
+        return string.Join(Environment.NewLine, satirlar);
     }
 
     /// <summary>Tek tirnakli PowerShell dizesi icin kacis: yalnizca tek tirnak ikilenir.</summary>

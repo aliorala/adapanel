@@ -17,12 +17,23 @@ public sealed class DnsLongTxtTests
 {
     private static string Key(int length) => "v=DKIM1; k=rsa; p=" + new string('A', length);
 
-    /// <summary>Uretilen komuttaki tek tirnakli parcalari cikarir.</summary>
-    private static IReadOnlyList<string> ExtractChunks(string line) =>
-        System.Text.RegularExpressions.Regex.Matches(line, "'([^']*)'")
+    /// <summary>
+    /// Yalnizca CRLF ile birlestirilen ifadedeki parcalari cikarir.
+    /// <para>
+    /// Script birden cok yol urettigi icin (cmdlet, dnscmd, WMI) tum tirnakli metinleri toplamak
+    /// yanlis olur: tam deger ve komut satiri da tirnak icinde gecer.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<string> ExtractChunks(string script)
+    {
+        var satir = script
+            .Split((char)10)
+            .First(line => line.TrimStart().StartsWith("$adaCrlf =", StringComparison.Ordinal));
+
+        return System.Text.RegularExpressions.Regex.Matches(satir, "'([^']*)'")
             .Select(match => match.Groups[1].Value)
-            .Where(value => !value.EndsWith("._domainkey", StringComparison.Ordinal) && value != "@")
             .ToList();
+    }
 
     [Fact]
     public void BuildTxtLine_ShortValue_StaysOnASingleString()
@@ -34,13 +45,37 @@ public sealed class DnsLongTxtTests
     }
 
     // dnscmd YOLU TERK EDILDI: belgelenen imzasi tek bir <rrdata> alir.
-    [Fact]
-    public void BuildTxtLine_LongValue_DoesNotUseDnscmd()
+    // Uzun deger icin UC yol da uretilmeli: tek bir yola bahse girmek, bu oturumda ust uste
+    // uc kez yanlis cikti.
+    [Theory]
+    [InlineData("Add-DnsServerResourceRecord")]
+    [InlineData("dnscmd")]
+    [InlineData("MicrosoftDNS_TXTType")]
+    public void BuildTxtLine_LongValue_OffersEveryKnownStrategy(string beklenen)
     {
         var line = DnsService.BuildTxtLine("v1-rsa-20260626._domainkey", Key(400), 3600);
 
-        Assert.DoesNotContain("dnscmd", line, StringComparison.Ordinal);
-        Assert.Contains("Add-DnsServerResourceRecord", line, StringComparison.Ordinal);
+        Assert.Contains(beklenen, line, StringComparison.Ordinal);
+    }
+
+    // Her denemeden sonra kayit GERI OKUNUR: "komut hata vermedi" ile "kayit yazildi" ayni sey
+    // degildir -- bu oturumda dnscmd tam olarak boyle yaniltti.
+    [Fact]
+    public void BuildTxtLine_LongValue_VerifiesTheRecordAfterEachAttempt()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(line, "Get-DnsServerResourceRecord").Count - 1);
+    }
+
+    // Hicbiri tutmazsa UC hatanin da bildirilmesi sart: tek hata gostermek, sonraki turu yine
+    // tahmine birakirdi.
+    [Fact]
+    public void BuildTxtLine_LongValue_ReportsEveryFailureTogether()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        Assert.Contains("$adaHata -join", line, StringComparison.Ordinal);
     }
 
     // Parcalar CRLF ile ayrilmali: Windows DNS her ayrimi ayri bir character-string yapar.
