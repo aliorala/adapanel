@@ -1173,6 +1173,16 @@ public sealed class MailService(
             return false;
         }
 
+        // AYARLARI YENIDEN OKUT.
+        //
+        // Stalwart ayarlari BELLEKTE tutar; yazmak tek basina karsilamayi degistirmez. Canli
+        // sunucuda ad dogru yazildigi halde karsilama "vm-185-7-242-225" kalmaya devam etmesinin
+        // sebebi buydu -- eksik olan tek sey bu cagriydi.
+        //
+        // Yerelde olculdu: defaultHostname degistirilip ReloadSettings gonderildiginde karsilama
+        // aninda yeni adi gosteriyor.
+        await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+
         logger.LogInformation("Posta sunucusunun karsilama adi '{HostName}' olarak ayarlandi.", hostName);
         return true;
     }
