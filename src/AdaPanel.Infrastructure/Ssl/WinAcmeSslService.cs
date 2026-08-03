@@ -37,14 +37,47 @@ public sealed class WinAcmeSslService(
             HostNames = site.Bindings
                 .Where(binding => !string.IsNullOrWhiteSpace(binding.HostName))
                 .Select(binding => binding.HostName)
+                .Where(host => !IsPreviewHost(host))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
             Certificates = states
                 .Where(item => string.Equals(item.SiteName, site.Name, StringComparison.OrdinalIgnoreCase))
+                .Where(item => !IsPreviewHost(item.HostName))
                 .OrderByDescending(item => item.NotAfterUtc)
                 .ToArray(),
             HttpsRedirectEnabled = await IsHttpsRedirectEnabledAsync(site.Name, cancellationToken)
         };
+    }
+
+    /// <summary>
+    /// Bu bir GERCEK alan adi mi, yoksa domainsiz onizlemenin urettigi gecici host mu?
+    /// <para>
+    /// Onizleme host'u (<c>&lt;site&gt;.&lt;ip&gt;.nip.io</c>) kullanicinin sahip oldugu bir alan adi degildir;
+    /// yalnizca alan adi yonlendirilmeden siteyi acabilmek icin uretilir ve kendinden imzali bir
+    /// sertifika alir. Bu host SSL listesinde gercek bir alan adi gibi gorunuyordu -- kullanici
+    /// "bu da nereden cikti" diye hakli olarak sordu. Baglamanin kendisi KALIR (onizleme linki
+    /// calismaya devam etsin), yalnizca listelerde gosterilmez.
+    /// </para>
+    /// </summary>
+    internal static bool IsPreviewHost(string? hostName) =>
+        !string.IsNullOrWhiteSpace(hostName)
+        && hostName.EndsWith(".nip.io", StringComparison.OrdinalIgnoreCase);
+
+    public async Task<int> RemovePreviewCertificatesAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var states = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var kalan = states
+            .Where(item => !(string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)
+                             && IsPreviewHost(item.HostName)))
+            .ToArray();
+
+        var silinen = states.Length - kalan.Length;
+        if (silinen > 0)
+        {
+            await fileStore.WriteAsync(StatePath, kalan, cancellationToken);
+        }
+
+        return silinen;
     }
 
     public async Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request, CancellationToken cancellationToken = default)

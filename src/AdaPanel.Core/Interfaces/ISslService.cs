@@ -19,6 +19,13 @@ public interface ISslService
     Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Domainsiz önizlemenin bıraktığı geçici host'a ait sertifika kayıtlarını siler ve kaç tane
+    /// silindiğini döner. Önizleme host'u gerçek bir alan adı değildir; bağlaması kaldırıldığında
+    /// sertifika kaydı öksüz kalır ve listede gerçek bir sertifika gibi görünür.
+    /// </summary>
+    Task<int> RemovePreviewCertificatesAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Best-effort: bir host'u (ör. webmail.&lt;domain&gt;) verilen IIS sitesinde HTTPS yapar — önce host'u
     /// KAPSAYAN mevcut bir sertifika varsa (yüklenen wildcard dahil) onu bağlar, yoksa Let's Encrypt dener.
     /// HTTP→HTTPS yönlendirmesi EKLEMEZ (paylaşımlı webmail sitesini bozmaz). Başarılıysa true.

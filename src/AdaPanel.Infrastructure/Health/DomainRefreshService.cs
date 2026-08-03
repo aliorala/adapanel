@@ -14,6 +14,7 @@ internal sealed class DomainRefreshService(
     IDnsService dnsService,
     IMailService mailService,
     IFirewallService firewallService,
+    ISslService sslService,
     JsonFileStore fileStore,
     ILogger<DomainRefreshService> logger) : IDomainRefreshService
 {
@@ -143,6 +144,9 @@ internal sealed class DomainRefreshService(
                 //     Sertifikanin adiyla ayni deger yazilir, boylece karsilama + sertifika + PTR
                 //     ayni adi gosterir. Degisiklik yoksa hicbir sey yapmaz.
                 await TryEnsureMailHostnameAsync(cancellationToken);
+
+                // 5) Domainsiz onizlemenin biraktigi gecici host'u temizle.
+                result.RemovedPreviewBindings = await TryRemovePreviewBindingsAsync(siteName, cancellationToken);
             }
 
             // 4) Ucuz saglik kontrolleri. Hicbiri kendiliginden YIKICI is yapmaz; duzeltilebilenler
@@ -391,6 +395,64 @@ internal sealed class DomainRefreshService(
         }
 
         return findings;
+    }
+
+    /// <summary>
+    /// Domainsiz onizlemenin biraktigi gecici bagalamalari kaldirir ve kac tane kaldirildigini doner.
+    /// <para>
+    /// Onizleme host'u (<c>&lt;site&gt;.&lt;ip&gt;.nip.io</c>) kullanicinin sahip oldugu bir alan adi
+    /// DEGILDIR; yalnizca alan adi yonlendirilmeden siteyi acabilmek icin uretilir. Kalinca panelde
+    /// gercek bir alan adi gibi listeleniyor ve yer kapliyordu.
+    /// </para>
+    /// <para>
+    /// Silmek KAYIP DEGIL: onizleme ucu idempotenttir, kullanici tekrar "Onizleme" dediginde
+    /// baglamayi yeniden olusturur. Yani temizlik ozelligi bozmaz, yalnizca artigi kaldirir.
+    /// </para>
+    /// </summary>
+    private async Task<int> TryRemovePreviewBindingsAsync(string siteName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var site = await siteService.GetSiteAsync(siteName, cancellationToken);
+            var previews = site.Bindings
+                .Where(binding => !string.IsNullOrWhiteSpace(binding.HostName)
+                                  && binding.HostName.EndsWith(".nip.io", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var kaldirilan = 0;
+            foreach (var binding in previews)
+            {
+                try
+                {
+                    await siteService.RemoveBindingAsync(
+                        siteName,
+                        new RemoveSiteBindingRequest
+                        {
+                            Protocol = binding.Protocol,
+                            HostName = binding.HostName,
+                            IpAddress = binding.IpAddress,
+                            Port = binding.Port
+                        },
+                        cancellationToken);
+                    kaldirilan++;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    logger.LogDebug(exception, "Onizleme baglamasi kaldirilamadi: {Host}", binding.HostName);
+                }
+            }
+
+            // Baglamayla birlikte SERTIFIKA KAYDI da gider: aksi halde oksuz kayit SSL listesinde
+            // gercek bir sertifika gibi durmaya devam ederdi.
+            await sslService.RemovePreviewCertificatesAsync(siteName, cancellationToken);
+
+            return kaldirilan;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Onizleme baglamalari okunamadi ({SiteName}).", siteName);
+            return 0;
+        }
     }
 
     /// <summary>

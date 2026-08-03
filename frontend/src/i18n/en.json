@@ -3132,5 +3132,6 @@
   "panel.health.siteRepair": "Repair",
   "panel.health.siteRepairing": "Repairing...",
   "panel.health.siteRepaired": "Repair completed.",
-  "panel.health.domainsLoading": "Checking..."
+  "panel.health.domainsLoading": "Checking...",
+  "panel.common.copied": "Copied"
 }

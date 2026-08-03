@@ -3132,5 +3132,6 @@
   "panel.health.siteRepair": "Onar",
   "panel.health.siteRepairing": "Onarılıyor...",
   "panel.health.siteRepaired": "Onarma tamamlandı.",
-  "panel.health.domainsLoading": "Denetleniyor..."
+  "panel.health.domainsLoading": "Denetleniyor...",
+  "panel.common.copied": "Kopyalandı"
 }

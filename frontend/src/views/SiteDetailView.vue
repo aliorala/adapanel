@@ -55,20 +55,31 @@
       </dl>
 
       <!-- Domainsiz önizleme: iframe çoğu sitede (X-Frame-Options/CSP) engellendiğinden nip.io linkini yeni sekmede açtırırız. -->
-      <section v-if="primaryUrl" class="preview-block">
-        <div class="section-head">
-          <h4>{{ t("panel.sites.previewTitle") }}</h4>
-          <button class="secondary compact" type="button" :disabled="previewLoading" @click="loadPreview">
-            {{ previewLoading ? t("panel.common.loading") : t("panel.sites.preview") }}
+      <!-- Onizleme ikincil bir eylemdir: alan adi yonlendirilene kadar bir kez kullanilir.
+           Onceden basligiyla birlikte tam genislikte bir bolum kapliyor ve sayfanin asil isi olan
+           ozet/araclar kadar agirlik tasiyordu. Artik tek satirlik sessiz bir seride duruyor;
+           sonuc ancak ISTENDIGINDE aciliyor. -->
+      <section v-if="primaryUrl" class="preview-strip">
+        <span class="preview-label">{{ t("panel.sites.previewTitle") }}</span>
+        <button class="ghost compact" type="button" :disabled="previewLoading" @click="loadPreview">
+          {{ previewLoading ? t("panel.common.loading") : t("panel.sites.preview") }}
+        </button>
+
+        <template v-if="preview">
+          <a class="preview-url" :href="preview.url" target="_blank" rel="noopener" :title="preview.url">
+            {{ preview.url }} ↗
+          </a>
+          <button
+            v-if="preview.hostsLine"
+            class="ghost compact"
+            type="button"
+            :title="preview.hostsLine"
+            @click="copyHostsLine">
+            {{ hostsCopied ? t("panel.common.copied") : t("panel.sites.previewHostsHint") }}
           </button>
-        </div>
-        <div v-if="preview" class="preview-card">
-          <a class="link-btn compact" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
-          <a class="preview-url" :href="preview.url" target="_blank" rel="noopener">{{ preview.url }}</a>
-          <p class="meta">{{ t("panel.sites.previewHostsHint") }}</p>
-          <code v-if="preview.hostsLine" class="preview-hosts">{{ preview.hostsLine }}</code>
-        </div>
-        <p v-if="previewError" class="notice error">{{ previewError }}</p>
+        </template>
+
+        <span v-if="previewError" class="preview-error">{{ previewError }}</span>
       </section>
 
       <!-- profesyonel panel benzeri "domain araçları" ızgarası: özet altında tek tık kısayollar. -->
@@ -114,8 +125,11 @@
           </button>
         </div>
 
-        <div v-if="site.bindings.length > 0" class="binding-list">
-          <article v-for="binding in site.bindings" :key="binding.bindingInformation" class="binding-item">
+        <!-- Onizleme host'u (nip.io) LISTELENMEZ: kullanicinin sahip oldugu bir alan adi degildir,
+             yalnizca alan adi yonlendirilmeden siteyi acmak icin uretilir. Listede gercek bir
+             baglama gibi durup yer kapliyordu. -->
+        <div v-if="gercekBaglamalar.length > 0" class="binding-list">
+          <article v-for="binding in gercekBaglamalar" :key="binding.bindingInformation" class="binding-item">
             <div>
               <strong>{{ binding.protocol.toUpperCase() }}</strong>
               <p class="meta">{{ binding.bindingInformation }}</p>
@@ -270,6 +284,26 @@ function submitSubdomain() {
 
 const isStarted = computed(() => props.site?.state.toLowerCase() === "started");
 const isStopped = computed(() => props.site?.state.toLowerCase() === "stopped");
+const hostsCopied = ref(false);
+
+// hosts satiri uzun ve teknik: ekrani doldurmasi yerine tek tikla panoya alinir.
+async function copyHostsLine() {
+  if (!preview.value?.hostsLine) return;
+  try {
+    await navigator.clipboard.writeText(preview.value.hostsLine);
+    hostsCopied.value = true;
+    setTimeout(() => (hostsCopied.value = false), 2000);
+  } catch {
+    hostsCopied.value = false;
+  }
+}
+
+const gercekBaglamalar = computed(() =>
+  (props.site?.bindings ?? []).filter(
+    (binding) => !binding.hostName || !binding.hostName.toLowerCase().endsWith(".nip.io")
+  )
+);
+
 const primaryUrl = computed(() => {
   // nip.io önizleme bağlamalarını ATLA → asıl domain gösterilsin/açılsın.
   const binding = props.site?.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
@@ -389,38 +423,47 @@ function translateState(state: string): string {
 }
 
 .tools-block,
-.subdomain-block,
-.preview-block {
+.subdomain-block {
   display: grid;
   gap: 10px;
 }
 
-.preview-card {
-  display: grid;
+/* Onizleme SERIDI: ikincil bir eylem oldugu icin tek satirda, sessiz bir yuzeyde durur.
+   Kendi basligi ve kart cercevesi yok -- sayfadaki asil bilgiyle gorsel olarak yarismamali. */
+.preview-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md, 8px);
-  background: color-mix(in srgb, var(--accent-1) 8%, transparent);
+  background: color-mix(in srgb, var(--panel-border) 18%, transparent);
 }
 
-.preview-card .preview-url {
+.preview-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.65;
+  margin-right: 2px;
+}
+
+/* Adres uzun olabilir: seridi bozmasin diye buyuyup kirpilir, tamami baslikta (title) durur. */
+.preview-strip .preview-url {
+  flex: 1 1 220px;
+  min-width: 0;
   font-size: 0.82rem;
-  word-break: break-all;
-  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.9;
 }
 
-.preview-card .preview-hosts {
-  display: block;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--surface-0, #0b1418);
-  border: 1px solid var(--panel-border);
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+.preview-error {
+  flex-basis: 100%;
   font-size: 0.8rem;
-  white-space: pre-wrap;
-  word-break: break-all;
-  user-select: all;
+  color: var(--danger-1, #d64545);
 }
 
 .subdomain-form {

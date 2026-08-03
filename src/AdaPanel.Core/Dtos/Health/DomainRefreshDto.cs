@@ -32,6 +32,9 @@ public sealed class DomainRefreshResultDto
     /// </summary>
     public bool MailCertificateRefreshed { get; set; }
 
+    /// <summary>Kaldırılan geçici önizleme bağlaması sayısı (nip.io). Gerçek alan adı değildir.</summary>
+    public int RemovedPreviewBindings { get; set; }
+
     /// <summary>Bu alan adında bulunan sorunlar: düzeltilenler, onay bekleyenler ve bildirilenler.</summary>
     public IReadOnlyList<RepairFindingDto> Findings { get; set; } = [];
 
@@ -43,7 +46,8 @@ public sealed class DomainRefreshResultDto
         && AddedDnsRecords.Count == 0
         && AppliedMailRecords == 0
         && !MailCertificateRefreshed
-        && Findings.Count == 0;
+        && Findings.Count == 0
+        && RemovedPreviewBindings == 0;
 }
 
 
