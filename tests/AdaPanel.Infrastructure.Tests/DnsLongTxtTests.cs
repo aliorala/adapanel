@@ -71,4 +71,26 @@ public sealed class DnsLongTxtTests
         Assert.Contains("$adaKod", line, StringComparison.Ordinal);
         Assert.Contains("throw", line, StringComparison.Ordinal);
     }
+
+    // CANLI KOK NEDEN: komuta TTL eklenmisti. dnscmd'in belgelenen imzasi
+    // "/recordadd <zone> <node> <rrtype> <rrdata>" seklindedir; araya konan TTL degeri KAYIT TURU
+    // sanilir ve dnscmd ERROR_INVALID_PARAMETER (87) dondurup kullanim metnini basar. RSA DKIM
+    // kaydi bu yuzden hicbir zaman yazilamadi.
+    [Fact]
+    public void BuildTxtLine_LongValue_DoesNotPassTtlToDnscmd()
+    {
+        var line = DnsService.BuildTxtLine("v1-rsa-20260626._domainkey", Key(400), 3600);
+
+        Assert.Contains("dnscmd", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("3600", line, StringComparison.Ordinal);
+    }
+
+    // Kayit turu, konak adindan HEMEN SONRA gelmeli.
+    [Fact]
+    public void BuildTxtLine_LongValue_PutsRecordTypeRightAfterTheNodeName()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        Assert.Contains("selector._domainkey TXT ", line, StringComparison.Ordinal);
+    }
 }

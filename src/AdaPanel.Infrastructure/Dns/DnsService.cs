@@ -1221,7 +1221,14 @@ public sealed partial class DnsService(
         var satirlar = new[]
         {
             "$adaCmd = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
-            $"$adaKomut = 'dnscmd . /RecordAdd ' + $zoneName + ' {EscapeSingleQuoted(safeHost)} {ttl} TXT {EscapeSingleQuoted(quoted)}'",
+            // TTL PARAMETRESI YOK -- kasitli.
+            //
+            // Belgelenen imza: dnscmd [<servername>] /recordadd <zonename> <nodename> <rrtype> <rrdata>
+            // Araya TTL konuldugunda dnscmd o degeri KAYIT TURU sanir, gecersiz bulur ve
+            // ERROR_INVALID_PARAMETER (87) dondurup kullanim metnini basar. Canlida tam olarak bu
+            // oldu: "3600" tur sanildigi icin DKIM'in RSA kaydi hicbir zaman yazilamadi.
+            // Kayit bolgenin varsayilan TTL'ini alir; DKIM icin bunun pratik bir sakincasi yoktur.
+            $"$adaKomut = 'dnscmd . /RecordAdd ' + $zoneName + ' {EscapeSingleQuoted(safeHost)} TXT {EscapeSingleQuoted(quoted)}'",
             "Set-Content -LiteralPath $adaCmd -Value $adaKomut -Encoding ASCII",
             "$adaCikti = (& $adaCmd 2>&1) -join ' '",
             "$adaKod = $LASTEXITCODE",
