@@ -1295,14 +1295,25 @@ public sealed partial class DnsService(
             "  try {",
             "    $adaZonePath = Join-Path $env:SystemRoot ('System32' + [char]92 + 'dns' + [char]92 + $zoneName + '.dns')",
             "    if (Test-Path -LiteralPath $adaZonePath) {",
+            // Bolge dosyasi son satirda yeni satirla bitmiyorsa eklenen satir ONCEKI satira
+            // YAPISIR ve iki kayit da bozulur. Once dosyanin sonuna yeni satir garantilenir.
+            "      $adaHam = [System.IO.File]::ReadAllText($adaZonePath)",
+            "      if ($adaHam.Length -gt 0 -and -not $adaHam.EndsWith([string][char]10)) { [System.IO.File]::AppendAllText($adaZonePath, [string][char]13 + [string][char]10) }",
             $"      $adaSatir = $adaAd + ' {ttl} IN TXT ( ' + $adaParcali + ' )'",
             "      Add-Content -LiteralPath $adaZonePath -Value $adaSatir -Encoding ASCII",
             "      $adaYukle = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
             "      Set-Content -LiteralPath $adaYukle -Value ('@echo off' + [char]13 + [char]10 + 'dnscmd . /ZoneReload ' + $zoneName) -Encoding ASCII",
-            "      (& $adaYukle 2>&1) | Out-Null",
+            "      $adaReload = (& $adaYukle 2>&1) -join ' '",
+            "      $adaReloadKod = $LASTEXITCODE",
             "      Remove-Item -LiteralPath $adaYukle -Force -ErrorAction SilentlyContinue",
-            "      Start-Sleep -Milliseconds 500",
-            "    } else { $adaHata += 'zonefile: bolge dosyasi bulunamadi (AD tumlesik olabilir)' }",
+            "      Start-Sleep -Milliseconds 800",
+            // SESSIZ DAL KAPATILDI: satir eklenip yeniden yukleme yapildigi halde kayit
+            // gorunmuyorsa bunu SOYLEMEK gerekir. Onceki surumde bu durumda hicbir mesaj
+            // uretilmiyordu ve raporda dorduncu yol hic gecmiyordu -- kullanici hakli olarak
+            // \"bu yol calisti mi calismadi mi\" diye soramadi bile.
+            "      $adaSonrasi = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "      if (-not $adaSonrasi) { $adaHata += 'zonefile: satir eklendi, ZoneReload(' + $adaReloadKod + ') ' + $adaKirp.Invoke($adaReload) + ' -- kayit yine gorunmedi' }",
+            "    } else { $adaHata += 'zonefile: bolge dosyasi bulunamadi: ' + $adaZonePath }",
             "  } catch { $adaHata += 'zonefile: ' + $adaKirp.Invoke($_.Exception.Message) }",
             "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
             "}",
