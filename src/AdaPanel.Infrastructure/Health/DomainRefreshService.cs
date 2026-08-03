@@ -621,6 +621,43 @@ internal sealed class DomainRefreshService(
         // Bolge BIR KEZ okunur ve posta bulgularina gecirilir. Eskiden her iki yer de ayri ayri
         // GetZoneAsync cagiriyordu; her cagri 3 PowerShell sureci baslatiyor, yani site basina 3
         // gereksiz surec. 40 siteli bir sunucuda denetim bu yuzden dakikalara ciakabiliyordu.
+        // PANELIN DOSYASI ILE GERCEKTEN YAYINLANANI KARSILASTIR.
+        //
+        // RepairDefaultsAsync yalnizca "sablonda olup panelin dosyasinda olmayan" kayitlari sayar.
+        // Kayit dosyaya yazilmis ama Windows DNS'e islenememisse (yazma hatasi, bolge kilidi,
+        // script calistirilamamasi) panel "eksik yok" der ve SUSAR. Canlida tam olarak bu oldu:
+        // istemci otomatik yapilandirma (SRV) kayitlari panelin dosyasindaydi ama bolgede yoktu,
+        // ve panel hicbir uyari vermedi.
+        //
+        // Karsilastirma DEGERE degil "TUR|konak" ikilisine yapilir: Windows uzun TXT'i parcalara
+        // bolerek sakladigi icin deger esitligi beklemek her turda yanlis alarm uretirdi.
+        try
+        {
+            var yayinlanan = await dnsService.GetPublishedRecordKeysAsync(siteName, cancellationToken);
+            if (yayinlanan is not null && zoneKayitlari.Count > 0)
+            {
+                var eksik = zoneKayitlari
+                    .Select(record => $"{record.Type}|{record.Host}")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(key => !yayinlanan.Contains(key))
+                    .ToList();
+
+                if (eksik.Count > 0)
+                {
+                    findings.Add(new RepairFindingDto
+                    {
+                        Key = "repair.records_not_published",
+                        Severity = "fail",
+                        Detail = string.Join(", ", eksik.Take(6)) + (eksik.Count > 6 ? " …" : string.Empty)
+                    });
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Yayinlanmis kayitlar okunamadi ({SiteName}).", siteName);
+        }
+
         await AddMailFindingsAsync(siteName, zoneKayitlari, findings, cancellationToken);
         return findings;
     }

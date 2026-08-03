@@ -3142,5 +3142,6 @@
   "panel.attention.noticeTitle": "Things needing attention on this page",
   "panel.attention.openDrawer": "See all",
   "panel.attention.badgeMore": "and {count} more",
-  "repair.mail_hostname_mismatch": "The mail server introduces itself with the machine name; outgoing mail may be marked as spam."
+  "repair.mail_hostname_mismatch": "The mail server introduces itself with the machine name; outgoing mail may be marked as spam.",
+  "repair.records_not_published": "Some DNS records are defined in the panel but not published on the server."
 }
