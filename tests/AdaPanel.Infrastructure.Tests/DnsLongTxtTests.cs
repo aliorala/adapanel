@@ -50,6 +50,7 @@ public sealed class DnsLongTxtTests
     [InlineData("Add-DnsServerResourceRecord")]
     [InlineData("dnscmd")]
     [InlineData("MicrosoftDNS_TXTType")]
+    [InlineData("ZoneReload")]
     public void BuildTxtLine_LongValue_OffersEveryKnownStrategy(string beklenen)
     {
         var line = DnsService.BuildTxtLine("v1-rsa-20260626._domainkey", Key(400), 3600);
@@ -64,7 +65,7 @@ public sealed class DnsLongTxtTests
     {
         var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
 
-        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(line, "Get-DnsServerResourceRecord").Count - 1);
+        Assert.Equal(4, System.Text.RegularExpressions.Regex.Matches(line, "Get-DnsServerResourceRecord").Count - 1);
     }
 
     // Hicbiri tutmazsa UC hatanin da bildirilmesi sart: tek hata gostermek, sonraki turu yine

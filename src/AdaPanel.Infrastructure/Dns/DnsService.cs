@@ -1222,6 +1222,11 @@ public sealed partial class DnsService(
             " + [char]13 + [char]10 + ",
             chunks.Select(chunk => $"'{EscapePowerShellLiteral(chunk)}'"));
 
+        // Her parca cift tirnak icinde, aralarinda bosluk: '"p1" "p2"'
+        var parcaliBirlesik = string.Join(
+            " + ' ' + ",
+            chunks.Select(chunk => $"[char]34 + '{EscapePowerShellLiteral(chunk)}' + [char]34"));
+
         var adLiteral = $"'{EscapePowerShellLiteral(host)}'";
         var tamDeger = $"'{EscapePowerShellLiteral(value)}'";
         var dnscmdDeger = "\"" + value.Replace("\"", string.Empty) + "\"";
@@ -1231,6 +1236,9 @@ public sealed partial class DnsService(
             $"$adaAd = {adLiteral}",
             $"$adaTam = {tamDeger}",
             $"$adaCrlf = {crlfBirlesik}",
+            // Bolge dosyasi soz dizimi: ardisik tirnakli parcalar. Cift tirnak PowerShell dizesine
+            // [char]34 ile konuyor -- kacis dizileri bu zincirde tekrar tekrar bozuldu.
+            $"$adaParcali = {parcaliBirlesik}",
             // Her yolun mesaji AYRI kirpilir: aksi halde tek bir yolun uzun ciktisi digerlerinin
             // mesajini rapordan kaydirir. Canlida tam olarak bu oldu -- ucuncu yolun (WMI) ne
             // dedigi hic gorunmedi.
@@ -1269,6 +1277,33 @@ public sealed partial class DnsService(
             "    $adaFqdn = $adaAd + '.' + $zoneName",
             $"    $adaWmi.CreateInstanceFromPropertyData($env:COMPUTERNAME, $zoneName, $adaFqdn, 1, {ttl}, $adaTam) | Out-Null",
             "  } catch { $adaHata += 'wmi: ' + $adaKirp.Invoke($_.Exception.Message) }",
+            "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "}",
+
+            // 4) BOLGE DOSYASINA DOGRUDAN YAZ.
+            //
+            // Neden gerekli: yukaridaki uc yol da AYNI duvara carpiyor -- bu sunucunun DNS API'si
+            // tek bir character-string'de 255 bayti asmayi kabul etmiyor (cmdlet "invalid value",
+            // dnscmd kullanim metni, WMI "Generic failure"). Bolge dosyasi ise API'nin altindadir:
+            // standart bolge dosyasi soz dizimi, parantez icinde ARDISIK tirnakli parcalari
+            // dogrudan destekler ve DNS servisi bolgeyi yeniden yukledi mi kaydi coklu parca olarak
+            // belleğe alir. Yonetim arayuzunun (MMC) yaptigi bolme de sonucta budur.
+            //
+            // Yalnizca DOSYA TABANLI bolgelerde calisir; AD tumlesik bolgede dosya yoktur, o durumda
+            // bu adim sessizce atlanir ve hata raporu digerlerini bildirir.
+            "if (-not $adaVar) {",
+            "  try {",
+            "    $adaZonePath = Join-Path $env:SystemRoot ('System32' + [char]92 + 'dns' + [char]92 + $zoneName + '.dns')",
+            "    if (Test-Path -LiteralPath $adaZonePath) {",
+            $"      $adaSatir = $adaAd + ' {ttl} IN TXT ( ' + $adaParcali + ' )'",
+            "      Add-Content -LiteralPath $adaZonePath -Value $adaSatir -Encoding ASCII",
+            "      $adaYukle = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
+            "      Set-Content -LiteralPath $adaYukle -Value ('@echo off' + [char]13 + [char]10 + 'dnscmd . /ZoneReload ' + $zoneName) -Encoding ASCII",
+            "      (& $adaYukle 2>&1) | Out-Null",
+            "      Remove-Item -LiteralPath $adaYukle -Force -ErrorAction SilentlyContinue",
+            "      Start-Sleep -Milliseconds 500",
+            "    } else { $adaHata += 'zonefile: bolge dosyasi bulunamadi (AD tumlesik olabilir)' }",
+            "  } catch { $adaHata += 'zonefile: ' + $adaKirp.Invoke($_.Exception.Message) }",
             "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
             "}",
 
