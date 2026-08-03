@@ -3117,5 +3117,19 @@
   "panel.account.passwordTokensRevoked": "{count} API anahtarı iptal edildi.",
   "auth.password_changed": "Parolanız değiştirildi.",
   "auth.password_unchanged": "Yeni parola mevcut parolayla aynı olamaz.",
-  "notifications.smtp_tls_failed": "TLS el sıkışması başarısız. En sık sebep port ile şifreleme kipinin uyuşmamasıdır: 465 örtük TLS (SSL), 587 ise STARTTLS ister. Portu 587 yapıp tekrar deneyin."
+  "notifications.smtp_tls_failed": "TLS el sıkışması başarısız. En sık sebep port ile şifreleme kipinin uyuşmamasıdır: 465 örtük TLS (SSL), 587 ise STARTTLS ister. Portu 587 yapıp tekrar deneyin.",
+  "repair.site_stopped": "Site durdurulmuş durumda. Bilerek durdurduysanız bu uyarıyı yok sayabilirsiniz.",
+  "repair.zone_not_published": "DNS bölgesi Windows DNS'e yayınlanamadı. DNS Server rolü kurulu olmayabilir.",
+  "repair.mail_domain_missing": "DNS'te MX kaydı var ama posta sunucusunda bu alan adı tanımlı değil. Gelen postalar teslim edilemez.",
+  "repair.mail_certificate_selfsigned": "Posta sunucusu kendinden imzalı sertifika kullanıyor. Posta istemcileri uyarı verir.",
+  "repair.mail_certificate_expiring": "Posta sunucusu sertifikasının süresi yakında doluyor.",
+  "repair.mail_certificate_expired": "Posta sunucusu sertifikasının süresi dolmuş.",
+  "repair.firewall_blocked": "Güvenlik duvarında gerekli bir port kapalı; hizmet dışarıdan erişilemez.",
+  "panel.health.findingsTitle": "Bulunan sorunlar",
+  "panel.health.findingRepaired": "onarıldı",
+  "panel.health.findingNeedsConfirmation": "onayınız gerekiyor",
+  "panel.health.siteNeedsRepair": "Bu sitede onarılması gereken şeyler var.",
+  "panel.health.siteRepair": "Onar",
+  "panel.health.siteRepairing": "Onarılıyor...",
+  "panel.health.siteRepaired": "Onarma tamamlandı."
 }

@@ -32,11 +32,51 @@ public sealed class DomainRefreshResultDto
     /// </summary>
     public bool MailCertificateRefreshed { get; set; }
 
+    /// <summary>Bu alan adında bulunan sorunlar: düzeltilenler, onay bekleyenler ve bildirilenler.</summary>
+    public IReadOnlyList<RepairFindingDto> Findings { get; set; } = [];
+
     /// <summary>Bu alan adı için işlem yapılamadıysa sebebi; boşsa sorun yok.</summary>
     public string Error { get; set; } = string.Empty;
 
     /// <summary>Hiçbir eksik bulunmadıysa true — "zaten güncel" demenin dürüst yolu.</summary>
-    public bool AlreadyCurrent => Error.Length == 0 && AddedDnsRecords.Count == 0 && AppliedMailRecords == 0 && !MailCertificateRefreshed;
+    public bool AlreadyCurrent => Error.Length == 0
+        && AddedDnsRecords.Count == 0
+        && AppliedMailRecords == 0
+        && !MailCertificateRefreshed
+        && Findings.Count == 0;
+}
+
+
+/// <summary>
+/// Onarmanın tek bir bulgusu.
+/// <para>
+/// Neden ayrı bir liste: onarma artık üç sınıf iş yapıyor — kendiliğinden düzelttikleri,
+/// düzeltebileceği ama ONAY beklediği, ve yalnız bildirdikleri. Hepsini tek bir "güncellendi"
+/// sayısına indirmek, kullanıcının hangi işi kendisinin yapması gerektiğini gizlerdi.
+/// </para>
+/// </summary>
+public sealed class RepairFindingDto
+{
+    /// <summary>Çeviri anahtarı (ör. "repair.site_stopped"). Metin arayüzde üretilir.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>"warn" (çalışıyor ama eksik) veya "fail" (bozuk).</summary>
+    public string Severity { get; set; } = "warn";
+
+    /// <summary>Onarma bunu GERÇEKTEN düzelttiyse true.</summary>
+    public bool Repaired { get; set; }
+
+    /// <summary>
+    /// Panel bunu düzeltebilir ama KENDİLİĞİNDEN yapmaz; kullanıcı onayı ister.
+    /// <para>
+    /// Örnek: durmuş bir siteyi başlatmak. Kullanıcı siteyi bilerek durdurmuş olabilir; onarma
+    /// bunu sessizce geri almamalı. Aynı şekilde servis yeniden başlatmak açık oturumları koparır.
+    /// </para>
+    /// </summary>
+    public bool NeedsConfirmation { get; set; }
+
+    /// <summary>Teknik ayrıntı (hangi port, hangi tarih, hangi hata).</summary>
+    public string Detail { get; set; } = string.Empty;
 }
 
 /// <summary>Sunucudaki TÜM alan adları için tazeleme sonucu.</summary>
@@ -49,4 +89,13 @@ public sealed class DomainRefreshSummaryDto
     public int UpdatedSites { get; set; }
 
     public int FailedSites { get; set; }
+
+    /// <summary>
+    /// Tek bir alan adına değil SUNUCUYA ait bulgular (güvenlik duvarı, servisler).
+    /// <para>
+    /// Ayrı tutuluyor çünkü site başına tekrarlanmaları anlamsız olurdu: kapalı bir güvenlik
+    /// duvarı portu 40 sitede 40 kez raporlanırsa rapor okunamaz hâle gelir.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<RepairFindingDto> ServerFindings { get; set; } = [];
 }

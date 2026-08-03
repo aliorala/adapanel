@@ -3,6 +3,7 @@ using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
+using AdaPanel.Core.Dtos.Firewall;
 
 namespace AdaPanel.Infrastructure.Health;
 
@@ -11,6 +12,7 @@ internal sealed class DomainRefreshService(
     IIisSiteService siteService,
     IDnsService dnsService,
     IMailService mailService,
+    IFirewallService firewallService,
     JsonFileStore fileStore,
     ILogger<DomainRefreshService> logger) : IDomainRefreshService
 {
@@ -68,6 +70,10 @@ internal sealed class DomainRefreshService(
                 //    gereksiz yeniden gonderim olmaz.
                 result.MailCertificateRefreshed = await TrySyncMailCertificateAsync(cancellationToken);
             }
+
+            // 4) Ucuz saglik kontrolleri. Hicbiri kendiliginden YIKICI is yapmaz; duzeltilebilenler
+            //    duzeltilir, geri kalanlar onay/bilgi olarak raporlanir.
+            result.Findings = await CollectFindingsAsync(siteName, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -190,7 +196,8 @@ internal sealed class DomainRefreshService(
             Results = results,
             TotalSites = results.Count,
             UpdatedSites = results.Count(item => item.Error.Length == 0 && !item.AlreadyCurrent),
-            FailedSites = results.Count(item => item.Error.Length > 0)
+            FailedSites = results.Count(item => item.Error.Length > 0),
+            ServerFindings = await CollectServerFindingsAsync(applyChanges, cancellationToken)
         };
     }
 
@@ -253,6 +260,190 @@ internal sealed class DomainRefreshService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Bolge yeniden yayinlanamadi ({SiteName}).", siteName);
+        }
+    }
+
+    /// <summary>
+    /// Sunucu geneli bulgular. Site basina DEGIL, tum tarama icin BIR KEZ calisir.
+    /// <para>
+    /// Guvenlik duvari kurallari otomatik acilir: bu duzeltme geri alinabilir, veri silmez ve
+    /// eksikligi dogrudan "hizmet disaridan erisilemiyor" demektir. Panel portu bilerek
+    /// DISARIDA birakilir -- onu acmak panelin yonetim arayuzunu internete acmaktir ve bu bir
+    /// guvenlik karari, onarma isi degil.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<RepairFindingDto>> CollectServerFindingsAsync(bool applyChanges, CancellationToken cancellationToken)
+    {
+        var findings = new List<RepairFindingDto>();
+
+        try
+        {
+            // panelPort=0: katalogdaki panel girdisi zaten disarida birakiliyor.
+            var ports = await firewallService.GetPortStatusAsync(0, cancellationToken);
+            foreach (var port in ports.Where(item => item.Required && !item.FirewallAllowed && !string.Equals(item.Category, "panel", StringComparison.OrdinalIgnoreCase)))
+            {
+                var finding = new RepairFindingDto
+                {
+                    Key = "repair.firewall_blocked",
+                    Severity = "fail",
+                    Detail = $"{port.Protocol}/{port.Port} ({port.ServiceKey})"
+                };
+
+                if (applyChanges)
+                {
+                    try
+                    {
+                        await firewallService.AllowPortAsync(
+                            new UpdateFirewallRuleRequest
+                            {
+                                Port = port.Port,
+                                Protocol = port.Protocol,
+                                RuleName = $"AdaPanel {port.ServiceKey} ({port.Protocol}/{port.Port})"
+                            },
+                            cancellationToken);
+                        finding.Repaired = true;
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        logger.LogWarning(exception, "Guvenlik duvari kurali acilamadi: {Port}", port.Port);
+                        finding.Detail += " - " + exception.Message;
+                    }
+                }
+
+                findings.Add(finding);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Guvenlik duvari durumu okunamadi.");
+        }
+
+        return findings;
+    }
+
+    private async Task<IReadOnlyList<RepairFindingDto>> CollectFindingsAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var findings = new List<RepairFindingDto>();
+
+        // --- Site durumu ---
+        // IIS API'si uzerinden okunur (PowerShell degil), bu yuzden ucuzdur.
+        try
+        {
+            var site = await siteService.GetSiteAsync(siteName, cancellationToken);
+            if (!string.Equals(site.State, "Started", StringComparison.OrdinalIgnoreCase))
+            {
+                // ONAY ISTER: kullanici siteyi BILEREK durdurmus olabilir (bakim, odeme, ihlal).
+                // Onarmanin bunu sessizce geri almasi, kullanicinin kararini ezmek olurdu.
+                findings.Add(new RepairFindingDto
+                {
+                    Key = "repair.site_stopped",
+                    Severity = "fail",
+                    NeedsConfirmation = true,
+                    Detail = site.State
+                });
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Site durumu okunamadi ({SiteName}).", siteName);
+        }
+
+        // --- Bolge Windows DNS'te var mi ---
+        try
+        {
+            var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            if (!zone.IsWindowsZonePresent)
+            {
+                // Yayinlama adimi (2b) bunu zaten denedi; hala yoksa gercek bir sorun var
+                // (DNS rolu kurulu degil, yetki yok vb.) ve kullaniciya SOYLENMELI.
+                findings.Add(new RepairFindingDto
+                {
+                    Key = "repair.zone_not_published",
+                    Severity = "fail",
+                    Detail = zone.ZoneName
+                });
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Bolge durumu okunamadi ({SiteName}).", siteName);
+        }
+
+        await AddMailFindingsAsync(siteName, findings, cancellationToken);
+        return findings;
+    }
+
+    /// <summary>
+    /// Posta tarafinin bulgulari.
+    /// <para>
+    /// En kritigi "DNS'te MX var ama posta sunucusunda alan yok": bu durumda dunya bu alana posta
+    /// gondermeye baslar ve karsiliginda hicbir sey yoktur. Panel bunu eskiden "posta
+    /// kullanilmiyor" ile AYNI gosteriyordu (istisna yutuluyordu), yani en bozuk hal en saglikli
+    /// hal gibi gorunuyordu.
+    /// </para>
+    /// </summary>
+    private async Task AddMailFindingsAsync(string siteName, List<RepairFindingDto> findings, CancellationToken cancellationToken)
+    {
+        var mailExpected = false;
+        try
+        {
+            var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            mailExpected = zone.Records.Any(record => string.Equals(record.Type, "MX", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "MX kaydi okunamadi ({SiteName}).", siteName);
+        }
+
+        if (mailExpected)
+        {
+            try
+            {
+                await mailService.GetDnsRecordsAsync(siteName, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                findings.Add(new RepairFindingDto
+                {
+                    Key = "repair.mail_domain_missing",
+                    Severity = "fail",
+                    NeedsConfirmation = true,
+                    Detail = exception.Message
+                });
+            }
+        }
+
+        // --- Posta sertifikasi ---
+        // Dosyadan okunur, ucuzdur. Yenileme BILEREK otomatik yapilmaz: sertifika alma basarisiz
+        // olursa mevcut gecerli sertifikayi silip self-signed'a dusuruyor ve otomatik yenilemeyi
+        // kalici olarak kapatiyor. Onarmanin her sitede bunu tetiklemesi felaket olurdu.
+        try
+        {
+            var certificate = await mailService.GetCertificateStatusAsync(cancellationToken);
+            if (certificate.Active && string.Equals(certificate.Source, "self-signed", StringComparison.OrdinalIgnoreCase))
+            {
+                findings.Add(new RepairFindingDto
+                {
+                    Key = "repair.mail_certificate_selfsigned",
+                    Severity = "warn",
+                    NeedsConfirmation = true,
+                    Detail = certificate.HostName
+                });
+            }
+            else if (certificate.Active && certificate.NotAfterUtc is { } expiry && expiry - DateTime.UtcNow < TimeSpan.FromDays(15))
+            {
+                findings.Add(new RepairFindingDto
+                {
+                    Key = expiry <= DateTime.UtcNow ? "repair.mail_certificate_expired" : "repair.mail_certificate_expiring",
+                    Severity = expiry <= DateTime.UtcNow ? "fail" : "warn",
+                    NeedsConfirmation = true,
+                    Detail = expiry.ToString("yyyy-MM-dd")
+                });
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Posta sertifikasi durumu okunamadi.");
         }
     }
 

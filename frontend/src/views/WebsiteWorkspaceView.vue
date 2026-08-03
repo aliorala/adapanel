@@ -25,6 +25,10 @@
            Tek ölçüm site başına: her araç sekmesinde görünür kalır ama yeniden ölçmez. -->
       <SiteHealthStrip v-if="selectedSiteName" :site-name="selectedSiteName" />
 
+      <!-- Onarilacak bir sey varsa BURADA soylenir. Kullanici sorunu, sorunun oldugu sayfada
+           gormeli; Sunucu Sagligi ekranindaki toplu sayi hangi sitenin bozuk oldugunu soylemiyordu. -->
+      <SiteRepairNotice v-if="selectedSiteName" :site-name="selectedSiteName" @notify="showNotice" />
+
       <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
 
       <!-- panel ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
@@ -116,6 +120,7 @@ import { getPanelPreferences } from "../api/panelSettings";
 import type { SiteBindingPayload, SiteDefaultsResult } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import SiteHealthStrip from "../components/SiteHealthStrip.vue";
+import SiteRepairNotice from "../components/SiteRepairNotice.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import AppStoreView from "./AppStoreView.vue";

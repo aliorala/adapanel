@@ -3117,5 +3117,19 @@
   "panel.account.passwordTokensRevoked": "{count} API key(s) revoked.",
   "auth.password_changed": "Your password has been changed.",
   "auth.password_unchanged": "The new password cannot be the same as the current one.",
-  "notifications.smtp_tls_failed": "TLS handshake failed. The most common cause is a port/encryption mismatch: 465 uses implicit TLS (SSL), while 587 uses STARTTLS. Try port 587 instead."
+  "notifications.smtp_tls_failed": "TLS handshake failed. The most common cause is a port/encryption mismatch: 465 uses implicit TLS (SSL), while 587 uses STARTTLS. Try port 587 instead.",
+  "repair.site_stopped": "The site is stopped. If you stopped it deliberately, you can ignore this warning.",
+  "repair.zone_not_published": "The DNS zone could not be published to Windows DNS. The DNS Server role may not be installed.",
+  "repair.mail_domain_missing": "DNS has an MX record but the mail server has no such domain. Incoming mail cannot be delivered.",
+  "repair.mail_certificate_selfsigned": "The mail server uses a self-signed certificate. Mail clients will warn about it.",
+  "repair.mail_certificate_expiring": "The mail server certificate expires soon.",
+  "repair.mail_certificate_expired": "The mail server certificate has expired.",
+  "repair.firewall_blocked": "A required port is blocked in the firewall; the service is unreachable from outside.",
+  "panel.health.findingsTitle": "Problems found",
+  "panel.health.findingRepaired": "repaired",
+  "panel.health.findingNeedsConfirmation": "needs your confirmation",
+  "panel.health.siteNeedsRepair": "This site has things that need repairing.",
+  "panel.health.siteRepair": "Repair",
+  "panel.health.siteRepairing": "Repairing...",
+  "panel.health.siteRepaired": "Repair completed."
 }

@@ -67,3 +67,45 @@ export async function getSiteHealth(siteName: string) {
   );
   return response.data.data;
 }
+
+/** Onarma bulgusu: panelin bulduğu, düzelttiği ya da onay beklediği tek bir sorun. */
+export type RepairFinding = {
+  /** Çeviri anahtarı (ör. "repair.site_stopped"). */
+  key: string;
+  severity: "warn" | "fail";
+  repaired: boolean;
+  /** Panel düzeltebilir ama kullanıcı onayı olmadan yapmaz. */
+  needsConfirmation: boolean;
+  detail: string;
+};
+
+export type SiteRepairResult = {
+  siteName: string;
+  zoneName: string;
+  addedDnsRecords: string[];
+  appliedMailRecords: number;
+  mailCertificateRefreshed: boolean;
+  findings: RepairFinding[];
+  error: string;
+  alreadyCurrent: boolean;
+};
+
+/**
+ * Bu sitede onarılacak bir şey var mı? HİÇBİR ŞEY DEĞİŞTİRMEZ.
+ *
+ * Sayfa açılışında çağrılır: kullanıcı bir sorunu, aramaya gitmeden, bulunduğu yerde görmeli.
+ */
+export async function inspectSiteRepair(siteName: string) {
+  const response = await apiClient.get<ApiEnvelope<SiteRepairResult>>(
+    `/sites/${encodeURIComponent(siteName)}/health/repair`
+  );
+  return response.data.data;
+}
+
+/** Eksikleri tamamlar ve NE YAPILDIĞINI döner. */
+export async function repairSite(siteName: string) {
+  const response = await apiClient.post<ApiEnvelope<SiteRepairResult>>(
+    `/sites/${encodeURIComponent(siteName)}/health/repair`
+  );
+  return response.data.data;
+}
