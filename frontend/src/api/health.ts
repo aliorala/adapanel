@@ -27,11 +27,25 @@ export type DomainRefreshResult = {
   alreadyCurrent: boolean;
 };
 
+/** Tek bir alan adına değil SUNUCUYA ait bulgu (posta sunucusu adı, kapalı port). */
+export type ServerFinding = {
+  key: string;
+  severity: "warn" | "fail";
+  repaired: boolean;
+  needsConfirmation: boolean;
+  detail: string;
+};
+
 export type DomainRefreshSummary = {
   results: DomainRefreshResult[];
   totalSites: number;
   updatedSites: number;
   failedSites: number;
+  /**
+   * Sunucu geneli bulgular. Bunlar hiçbir alan adına ait olmadığı için updatedSites'a
+   * yansımaz; ayrıca sayılmazlarsa onarma düğmesi hiç görünmez ve sorun kalıcı olur.
+   */
+  serverFindings: ServerFinding[];
 };
 
 /** Değişiklik YAPMADAN kaç alan adının eski kaldığını sorar (uyarı göstermek için). */

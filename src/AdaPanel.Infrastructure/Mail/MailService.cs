@@ -1110,7 +1110,19 @@ public sealed class MailService(
     public async Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
     {
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
-        var hostName = state?.HostName?.Trim().ToLowerInvariant();
+        // ONCE TERS DNS (PTR): karsilama adi sertifikayla degil, PTR ILE tutmali.
+        //
+        // Teslim edilebilirligin aradigi sey "ileri-dogrulanmis ters DNS"tir: sunucunun kendini
+        // tanittigi ad, IP'nin PTR kaydiyla ayni olmali ve o ad da ayni IP'ye cozulmeli. Sertifika
+        // adi bundan FARKLI olabilir ve olmasi da normaldir -- sertifika istemcilerin baglandigi
+        // adi kapsar, PTR ise sunucunun kimligini dogrular.
+        //
+        // Eskiden ad yalnizca sertifikadan turetiliyordu. Sunucunun PTR'si baska bir ad ise
+        // (yaygin durum: saglayici sunucuya kendi ana adini vermistir) karsilama PTR ile tutmuyor
+        // ve panel, kullaniciyi PTR'sini degistirmeye zorlamis oluyordu. Oysa dogrusu, zaten
+        // dogrulanmis olan adi kullanmak.
+        var hostName = await ResolveVerifiedReverseNameAsync(cancellationToken)
+                       ?? state?.HostName?.Trim().ToLowerInvariant();
 
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var settings = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
@@ -1209,6 +1221,44 @@ public sealed class MailService(
 
         logger.LogInformation("Posta sunucusunun karsilama adi '{HostName}' olarak ayarlandi.", hostName);
         return true;
+    }
+
+    /// <summary>
+    /// Sunucunun IP'sinin PTR kaydini okur ve o adin AYNI IP'ye cozuldugunu dogrular.
+    /// Dogrulanamazsa null doner.
+    /// <para>
+    /// Neden dogrulama sart: yalnizca PTR'ye guvenmek yeterli degildir. Ad ileri yonde baska bir
+    /// yere cozuluyorsa (ya da hic cozulmuyorsa) alici sunucular bunu gecersiz sayar; boyle bir
+    /// adi karsilamaya yazmak durumu iyilestirmez, kotulestirir.
+    /// </para>
+    /// </summary>
+    private async Task<string?> ResolveVerifiedReverseNameAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var preferences = await panelPreferencesService.GetAsync(cancellationToken);
+            var address = preferences.ServerAddress?.Trim() ?? string.Empty;
+            if (!System.Net.IPAddress.TryParse(address, out var ip))
+            {
+                return null;
+            }
+
+            var ptr = await System.Net.Dns.GetHostEntryAsync(address);
+            var name = ptr.HostName?.Trim().TrimEnd('.').ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(name) || !name.Contains('.'))
+            {
+                return null;
+            }
+
+            // ILERI DOGRULAMA: ad ayni IP'ye cozulmeli.
+            var forward = await System.Net.Dns.GetHostAddressesAsync(name);
+            return forward.Any(candidate => candidate.Equals(ip)) ? name : null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Ters DNS adi dogrulanamadi; karsilama adi sertifikadan turetilecek.");
+            return null;
+        }
     }
 
     private async Task<bool> TryIssueWithWinAcmeAsync(

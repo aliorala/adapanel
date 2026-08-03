@@ -88,7 +88,7 @@
              hiç eksik yokken de düğmeyi görüp basıyor, hiçbir şey değişmiyor ve panel çalışmıyor
              sanıyordu. (İşlem zaten idempotent; sorun düğmenin varlığının yanlış sinyal vermesiydi.) -->
         <button
-          v-if="!domainsLoading && domains && domains.updatedSites > 0"
+          v-if="!domainsLoading && onarilacakVar"
           class="secondary compact"
           :disabled="domainsBusy"
           @click="refreshAllDomains">
@@ -141,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getServerHealth,
@@ -169,6 +169,18 @@ const domainReport = ref<DomainRefreshResult[]>([]);
 const domainsBusy = ref(false);
 // Ilk denetim bitene kadar true: kart bu sure boyunca notr gorunur.
 const domainsLoading = ref(true);
+
+/**
+ * Onarmanın yapacağı bir iş var mı?
+ *
+ * Yalnız updatedSites'a bakmak yetmiyordu: sunucu geneli bulgular (posta sunucusunun adı,
+ * kapalı güvenlik duvarı portu) hiçbir alan adına ait değil, dolayısıyla o sayıya girmiyor.
+ * Girmeyince düğme çıkmıyor, düğme çıkmayınca onarma hiç çalışmıyordu — panelin düzeltebildiği
+ * bir sorun kullanıcıya hiç ulaşmıyordu.
+ */
+const onarilacakVar = computed(
+  () => (domains.value?.updatedSites ?? 0) > 0 || (domains.value?.serverFindings?.length ?? 0) > 0
+);
 
 onMounted(load);
 
