@@ -1107,6 +1107,76 @@ public sealed class MailService(
         };
     }
 
+    public async Task<bool> EnsureServerHostnameAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        var hostName = state?.HostName?.Trim().ToLowerInvariant();
+
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var settings = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
+        if (settings is null)
+        {
+            return false;
+        }
+
+        var currentHost = GetField(settings.Value, "defaultHostname") ?? string.Empty;
+        var currentDomainId = GetField(settings.Value, "defaultDomainId") ?? string.Empty;
+
+        // SARKAN REFERANS ONARIMI.
+        //
+        // defaultDomainId silinmis bir alan adina isaret ediyor olabilir (ilk kurulan alan
+        // silindiginde oluyor). Guncelleme TUM nesneyi yeniden dogruladigi icin bu sarkan referans
+        // SystemSettings uzerindeki HER degisikligi engeller ve hata mesaji ("defaultDomainId:
+        // required") sebebi hic anlatmaz. Bu yuzden once gecerli bir alana onariliyor.
+        var domainIds = (await QueryAsync(cli, "domain", env, cancellationToken))
+            .Select(item => GetField(item, "id"))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToList();
+
+        if (domainIds.Count == 0)
+        {
+            return false;
+        }
+
+        var domainId = domainIds.Contains(currentDomainId, StringComparer.Ordinal)
+            ? currentDomainId
+            : domainIds[0]!;
+
+        // Sertifika panelden alinmamissa (kendinden imzali kurulumlar, elle kurulum) hedef adi
+        // SUNUCUNUN KENDI varsayilan alanindan turet: "mail.<alan>". Boylece ozellik yalnizca
+        // sertifikayi panelden alanlarda degil, HER kurulumda calisir. Makine adini tahmin etmek
+        // yerine yapilandirmadan turetmek, yanlis bir adi kalicilastirma riskini de ortadan kaldirir.
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            var domain = await GetObjectAsync(cli, "domain", domainId, env, cancellationToken);
+            var domainName = domain is null ? null : GetField(domain.Value, "name");
+            if (string.IsNullOrWhiteSpace(domainName))
+            {
+                return false;
+            }
+
+            hostName = $"mail.{domainName.Trim().ToLowerInvariant()}";
+        }
+
+        if (string.Equals(currentHost, hostName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(domainId, currentDomainId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Yamada "id" alani BULUNMAMALI: sunucu onu "invalidPatch" ile reddediyor.
+        var payload = $"{{\"defaultHostname\":{JsonValue(hostName)},\"defaultDomainId\":{JsonValue(domainId)}}}";
+        var result = await RunCliJsonAsync(cli, "update SystemSettings", payload, env, cancellationToken);
+        if (!result.Success)
+        {
+            logger.LogWarning("Posta sunucusunun karsilama adi ayarlanamadi: {Error}", CombineError(result));
+            return false;
+        }
+
+        logger.LogInformation("Posta sunucusunun karsilama adi '{HostName}' olarak ayarlandi.", hostName);
+        return true;
+    }
+
     private async Task<bool> TryIssueWithWinAcmeAsync(
         string domain,
         string hostName,

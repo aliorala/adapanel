@@ -417,6 +417,9 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new MailCertificateDto { Active = true, Source = "mailenable" });
 
+    /// <summary>MailEnable tarafinda karsilama adi panelden yonetilmiyor.</summary>
+    public Task<bool> EnsureServerHostnameAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
+
     public Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<MailCertificateDto?>(null);
 

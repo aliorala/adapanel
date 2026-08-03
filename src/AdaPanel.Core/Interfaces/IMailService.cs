@@ -26,6 +26,19 @@ public interface IMailService
     /// <summary>win-acme yenilemesi sonrası PEM dosyaları değiştiyse sertifikayı Stalwart'a yeniden yükler.</summary>
     Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Posta sunucusunun SMTP karşılamasında kullandığı ana adı, sertifikanın adıyla AYNI değere
+    /// getirir. Bir değişiklik yapıldıysa true döner.
+    /// <para>
+    /// Neden önemli: ayarlanmadığında Stalwart makine adına düşer (ör. "vm-185-7-242-225") ve bu
+    /// bir FQDN bile değildir. Gmail ve Outlook, karşılama adının çözülmesini ve ters DNS ile
+    /// tutarlı olmasını bekler; tutmuyorsa posta spam'e düşer ya da reddedilir. Ana adın
+    /// SERTİFİKAYLA aynı olması şart değil ama doğrusu budur: karşılama, sertifika ve PTR aynı adı
+    /// göstermelidir.
+    /// </para>
+    /// </summary>
+    Task<bool> EnsureServerHostnameAsync(CancellationToken cancellationToken = default);
+
     Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default);
 
     Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default);

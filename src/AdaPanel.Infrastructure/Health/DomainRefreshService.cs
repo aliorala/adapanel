@@ -69,6 +69,13 @@ internal sealed class DomainRefreshService(
                 //    karsilastirdigi icin degisiklik yoksa hicbir sey yapmaz -- her onarmada
                 //    gereksiz yeniden gonderim olmaz.
                 result.MailCertificateRefreshed = await TrySyncMailCertificateAsync(cancellationToken);
+
+                // 3b) Posta sunucusunun SMTP karsilama adi. Ayarlanmadiginda Stalwart MAKINE ADINA
+                //     duser ("vm-185-7-242-225" gibi) ve bu bir FQDN bile degildir; Gmail/Outlook
+                //     karsilama adinin cozulmesini ve ters DNS ile tutarli olmasini bekler.
+                //     Sertifikanin adiyla ayni deger yazilir, boylece karsilama + sertifika + PTR
+                //     ayni adi gosterir. Degisiklik yoksa hicbir sey yapmaz.
+                await TryEnsureMailHostnameAsync(cancellationToken);
             }
 
             // 4) Ucuz saglik kontrolleri. Hicbiri kendiliginden YIKICI is yapmaz; duzeltilebilenler
@@ -319,6 +326,21 @@ internal sealed class DomainRefreshService(
         }
 
         return findings;
+    }
+
+    /// <summary>
+    /// Posta sunucusunun karsilama adini garanti eder. Posta sunucusu kurulu degilse sessizce atlar.
+    /// </summary>
+    private async Task TryEnsureMailHostnameAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await mailService.EnsureServerHostnameAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Posta karsilama adi ayarlanamadi; posta sunucusu kurulu olmayabilir.");
+        }
     }
 
     private async Task<IReadOnlyList<RepairFindingDto>> CollectFindingsAsync(string siteName, CancellationToken cancellationToken)
