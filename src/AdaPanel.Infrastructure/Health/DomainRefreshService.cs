@@ -16,8 +16,26 @@ internal sealed class DomainRefreshService(
     JsonFileStore fileStore,
     ILogger<DomainRefreshService> logger) : IDomainRefreshService
 {
-    public Task<DomainRefreshResultDto> RefreshAsync(string siteName, CancellationToken cancellationToken = default)
-        => RunAsync(siteName, applyChanges: true, cancellationToken);
+    public async Task<DomainRefreshResultDto> RefreshAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var result = await RunAsync(siteName, applyChanges: true, cancellationToken);
+
+        // TEK SITE onarildiginda da denetim onbellegi dusurulur.
+        //
+        // Onceden yalnizca TOPLU onarma dusuruyordu; site sayfasindan onaran kullanici, sorun
+        // gercekten cozulmus olsa bile "Dikkat" rozetinin 10 dakika boyunca ayni uyariyi
+        // gostermesini izliyordu ve haklı olarak "onardim ama gitmedi" diyordu.
+        InvalidateInspectionCache();
+        return result;
+    }
+
+    /// <summary>Denetim sonucu artik bayat: durum degisti.</summary>
+    private static void InvalidateInspectionCache()
+    {
+        _cachedInspection = null;
+        _cachedInspectionAtUtc = DateTime.MinValue;
+        _cachedInspectionFingerprint = string.Empty;
+    }
 
     public Task<DomainRefreshResultDto> InspectAsync(string siteName, CancellationToken cancellationToken = default)
         => RunAsync(siteName, applyChanges: false, cancellationToken);
@@ -144,9 +162,7 @@ internal sealed class DomainRefreshService(
 
         // Tazeleme durumu DEĞİŞTİRDİ: bayat denetim sonucunu tutmak, rozetin düzeltilmiş bir sunucuda
         // 10 dakika boyunca "eksik var" demesine yol açardı.
-        _cachedInspection = null;
-        _cachedInspectionAtUtc = DateTime.MinValue;
-        _cachedInspectionFingerprint = string.Empty;
+        InvalidateInspectionCache();
         return summary;
     }
 

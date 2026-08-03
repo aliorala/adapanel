@@ -16,6 +16,12 @@ public sealed class DnsLongTxtTests
 {
     private static string Key(int length) => "v=DKIM1; k=rsa; p=" + new string('A', length);
 
+    /// <summary>Uretilen komut satirindaki "" ile sarilmis parcalari cikarir.</summary>
+    private static IReadOnlyList<string> ExtractChunks(string line) =>
+        System.Text.RegularExpressions.Regex.Matches(line, "\"\"(.*?)\"\"")
+            .Select(match => match.Groups[1].Value)
+            .ToList();
+
     [Fact]
     public void BuildTxtLine_UsesTheProvenCmdletForShortValues()
     {
@@ -40,10 +46,9 @@ public sealed class DnsLongTxtTests
         var line = DnsService.BuildTxtLine("selector._domainkey", Key(700), 3600);
 
         // dnscmd argumanlari tek tirnakli parcalar hâlinde verilir; hicbiri 255'i asmamali.
-        var parts = line.Split('\'');
-        for (var index = 1; index < parts.Length; index += 2)
+        foreach (var chunk in ExtractChunks(line))
         {
-            Assert.True(parts[index].Length <= 255, $"parca {index} cok uzun: {parts[index].Length}");
+            Assert.True(chunk.Length <= 255, $"parca cok uzun: {chunk.Length}");
         }
     }
 
@@ -54,11 +59,7 @@ public sealed class DnsLongTxtTests
         var line = DnsService.BuildTxtLine("selector._domainkey", key, 3600);
 
         // Parcalar birlestirildiginde ORIJINAL deger cikmali: DKIM dogrulayicisi tam olarak bunu yapar.
-        var parts = line.Split('\'');
-        var birlesik = string.Concat(
-            Enumerable.Range(0, parts.Length).Where(i => i % 2 == 1 && parts[i] != "selector._domainkey").Select(i => parts[i]));
-
-        Assert.Equal(key, birlesik);
+        Assert.Equal(key, string.Concat(ExtractChunks(line)));
     }
 
     // Cikis kodu denetlenmezse kayit yazilmadigi halde "tamam" denirdi.

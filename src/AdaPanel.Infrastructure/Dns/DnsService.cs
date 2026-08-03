@@ -1154,13 +1154,25 @@ public sealed partial class DnsService(
             chunks.Add(value.Substring(index, Math.Min(MaxStringLength, value.Length - index)));
         }
 
-        var quoted = string.Join(" ", chunks.Select(chunk => $"'{EscapePowerShellLiteral(chunk)}'"));
+        // TIRNAKLAMA ELDE YAPILIR.
+        //
+        // Neden: DKIM degeri BOSLUK icerir ("v=DKIM1; k=rsa; p=..."). PowerShell 5.1'in yerel
+        // programlara argüman gecirirken tirnaklama davranisi guvenilmezdir; bosluklu bir parca
+        // dnscmd'e iki ayri argüman gibi ulasabilir ve kayit ya reddedilir ya da yanlis yazilir.
+        // Komut cmd.exe'ye TEK bir metin olarak veriliyor ve her parca acikca cift tirnaga
+        // aliniyor, boylece bosluklar parcayi bolmuyor.
+        //
+        // Deger icindeki cift tirnak dnscmd icin anlamlidir; DKIM/SPF/DMARC degerlerinde bulunmaz
+        // ama yine de temizleniyor -- guvenlik degil, dogruluk gerekcesiyle.
+        var quoted = string.Join(" ", chunks.Select(chunk => "\"\"" + chunk.Replace("\"", string.Empty) + "\"\""));
+        var cmdLine = $"dnscmd . /RecordAdd %ZONE% {host.Replace("\"", string.Empty)} {ttl} TXT {quoted}";
 
         // dnscmd sessizce basarisiz olabilir, bu yuzden cikis kodu DENETLENIR: kayit yazilmadigi
-        // halde "tamam" demek, tam da bu panelde ayikladigimiz hata sinifi.
-        return $"& dnscmd . /RecordAdd $zoneName '{EscapePowerShellLiteral(host)}' {ttl} TXT {quoted} | Out-Null" +
-               Environment.NewLine +
-               $"if ($LASTEXITCODE -ne 0) {{ throw \"dnscmd TXT ekleyemedi ({EscapePowerShellLiteral(host)}): $LASTEXITCODE\" }}";
+        // halde "tamam" demek, tam da bu panelde ayikladigimiz hata sinifi. Cikti da yakalaniyor ki
+        // hata mesaji kullaniciya ulasabilsin.
+        return $"$env:ZONE = $zoneName" + Environment.NewLine +
+               $"$dnscmdCikti = cmd /c \"{cmdLine} 2>&1\"" + Environment.NewLine +
+               $"if ($LASTEXITCODE -ne 0) {{ throw \"dnscmd TXT ekleyemedi ({EscapePowerShellLiteral(host)}): $dnscmdCikti\" }}";
     }
 
     internal static string BuildSrvLine(string host, string value, int? priority, int ttl)
