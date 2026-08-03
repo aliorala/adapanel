@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Security.Claims;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using ModelContextProtocol.Server;
@@ -21,6 +22,7 @@ namespace AdaPanel.Api.Mcp;
 /// </summary>
 [McpServerToolType]
 public sealed class AdaPanelWriteTools(
+    ICustomerScopeService customerScopes,
     IIisSiteService siteService,
     IDnsService dnsService,
     IMailService mailService,
@@ -33,6 +35,7 @@ public sealed class AdaPanelWriteTools(
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         var site = await siteService.StartSiteAsync(siteName, cancellationToken);
         await WriteAuditAsync(user, "mcp.site.start", siteName, cancellationToken);
         return new { site.Name, site.State };
@@ -46,6 +49,7 @@ public sealed class AdaPanelWriteTools(
         CancellationToken cancellationToken)
     {
         McpCapability.RequireDestructive(user);
+        await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         var site = await siteService.StopSiteAsync(siteName, cancellationToken);
         await WriteAuditAsync(user, "mcp.site.stop", siteName, cancellationToken);
         return new { site.Name, site.State };
@@ -65,6 +69,9 @@ public sealed class AdaPanelWriteTools(
         // Kayıt ÜZERİNE YAZMA ihtimali taşıdığı için yıkıcı sayılıyor: var olan bir MX'i
         // değiştirmek postayı kesebilir.
         McpCapability.RequireDestructive(user);
+        // SAHİPLİK: bu denetim olmadan bir müşteri anahtarı BAŞKA bir müşterinin DNS kaydını
+        // değiştirebilirdi. Controller'lar bunu yapıyor; araçların da yapması şart.
+        await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
 
         var zone = await dnsService.UpsertRecordAsync(
             siteName,
@@ -83,6 +90,7 @@ public sealed class AdaPanelWriteTools(
         CancellationToken cancellationToken)
     {
         McpCapability.RequireDestructive(user);
+        await CustomerAccess.EnsureSiteAsync(customerScopes, user, domain, cancellationToken);
 
         var dns = await mailService.GetDnsRecordsAsync(domain, cancellationToken);
         var applied = 0;

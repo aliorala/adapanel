@@ -20,6 +20,7 @@ namespace AdaPanel.Api.Mcp;
 /// </summary>
 [McpServerToolType]
 public sealed class AdaPanelReadTools(
+    ICustomerScopeService customerScopes,
     IIisSiteService siteService,
     ISiteHealthService siteHealthService,
     ISystemMonitoringService systemMonitoringService,
@@ -29,9 +30,18 @@ public sealed class AdaPanelReadTools(
 {
     [McpServerTool(Name = "sites_list")]
     [Description("Sunucudaki web sitelerini listeler: ad, durum, uygulama havuzu, fiziksel yol ve bağlamalar.")]
-    public async Task<object> ListSitesAsync(CancellationToken cancellationToken)
+    public async Task<object> ListSitesAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
         var sites = await siteService.GetSitesAsync(cancellationToken);
+
+        // KAPSAM FİLTRESİ: SitesController bunu yapıyor, buranın da yapması ŞART. Yapılmazsa bir
+        // müşteri anahtarı sunucudaki BÜTÜN siteleri görürdü — başka müşterilerinkiler dahil.
+        var allowed = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, user, cancellationToken);
+        if (allowed is not null)
+        {
+            sites = sites.Where(site => allowed.Contains(site.Name, StringComparer.OrdinalIgnoreCase)).ToArray();
+        }
+
         return sites.Select(site => new
         {
             site.Name,
@@ -46,8 +56,10 @@ public sealed class AdaPanelReadTools(
     [Description("Bir sitenin DIŞARIDAN görünen sağlığı: DNS çözümlemesi, DNS'in sunucuyu gösterip göstermediği, HTTP yanıtı, TLS sertifikası ve kalan gün, posta kayıtları (MX/SPF/DKIM/DMARC).")]
     public async Task<object> GetSiteHealthAsync(
         [Description("Site adı, örneğin ornek.com")] string siteName,
+        ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         return await siteHealthService.GetSiteHealthAsync(siteName, cancellationToken);
     }
 
@@ -76,8 +88,10 @@ public sealed class AdaPanelReadTools(
     [Description("Bir sitenin DNS bölgesindeki kayıtları döner (A, MX, TXT/SPF, DKIM, DMARC, NS...).")]
     public async Task<object> GetDnsZoneAsync(
         [Description("Site adı, örneğin ornek.com")] string siteName,
+        ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         return await dnsService.GetZoneAsync(siteName, cancellationToken);
     }
 
