@@ -313,8 +313,25 @@ internal sealed class DomainRefreshService(
                 return 0;
             }
 
-            var mevcut = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
-            return applicable.Count(record => !mevcut.Contains($"{record.Type}|{record.Host}|{record.Value}"));
+            // GERCEKTEN YAYINLANMIS kayitlara bakilir, panelin kendi dosyasina DEGIL.
+            //
+            // Neden: panel kaydi once durum dosyasina yazar, sonra Windows DNS'e basar. Basma
+            // basarisiz olursa dosyada kayit VARDIR ama bolgede YOKTUR. Dosyaya bakan denetim
+            // "eksik yok" der ve panel, kayit yayinlanmamisken SUSAR. Canlida tam olarak bu oldu:
+            // DKIM'in RSA kaydi bolgede yokken panel hicbir uyari vermiyordu.
+            //
+            // Deger DEGIL, "TUR|konak" karsilastirilir: Windows DNS uzun TXT'i parcalara bolerek
+            // saklar, dolayisiyla degerin birebir esitligini beklemek her turda yanlis alarm uretir.
+            var yayinlanan = await dnsService.GetPublishedRecordKeysAsync(siteName, cancellationToken);
+            if (yayinlanan is null)
+            {
+                // Olcemedik. "Eksik yok" demek yerine panelin kendi dosyasina duseriz -- ama bu
+                // yalnizca Windows DNS hic yokken olur (o durumda zaten ayri bir bulgu uretiliyor).
+                var dosya = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
+                return applicable.Count(record => !dosya.Contains($"{record.Type}|{record.Host}|{record.Value}"));
+            }
+
+            return applicable.Count(record => !yayinlanan.Contains($"{record.Type}|{record.Host}"));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

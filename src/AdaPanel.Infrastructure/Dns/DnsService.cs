@@ -193,6 +193,37 @@ public sealed partial class DnsService(
         return trimmed.StartsWith("v=DMARC1", StringComparison.OrdinalIgnoreCase) ? "v=DMARC1" : null;
     }
 
+    public async Task<IReadOnlyCollection<string>?> GetPublishedRecordKeysAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken);
+
+        if (!await IsWindowsDnsAvailableAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        // Tek PowerShell turunda tum bolge okunur: kayit basina surec baslatmak, 40 siteli bir
+        // sunucuda denetimi dakikalara cikarirdi.
+        var script =
+            $"Get-DnsServerResourceRecord -ZoneName '{EscapePowerShellLiteral(state.ZoneName)}' -ErrorAction Stop | " +
+            "ForEach-Object { $_.RecordType + '|' + $_.HostName }";
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            // Olcemedik: "eksik yok" DEMEK YERINE bilmedigimizi soyluyoruz. Yanlis bir "temiz"
+            // raporu, sorunu gizlemenin en kolay yolu.
+            return null;
+        }
+
+        return result.StandardOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Contains('|'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     private static string RecordKey(DnsRecordState record) => $"{record.Type}|{record.Host}|{record.Value}";
 
     public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)

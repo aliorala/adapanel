@@ -32,6 +32,18 @@ public interface IDnsService
     /// <returns>Eklenen (ya da eklenecek) kayıtlar, "TÜR konak" biçiminde; boş liste = zaten güncel.</returns>
     Task<IReadOnlyList<string>> RepairDefaultsAsync(string siteName, bool applyChanges = true, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Windows DNS'te GERÇEKTEN yayınlanmış kayıtların "TÜR|konak" kimliklerini döner.
+    /// <para>
+    /// Neden panelin kendi dosyası yetmiyor: panel kaydı önce durum dosyasına yazar, sonra Windows
+    /// DNS'e basar. Basma başarısız olursa dosyada kayıt VARDIR ama bölgede YOKTUR. Denetim dosyaya
+    /// bakarsa "eksik yok" der ve panel, kayıt yayınlanmamışken susar — kullanıcı sorunu ancak
+    /// postaları spam'e düşmeye başlayınca fark eder. Doğruyu söylemek için kaynağa sormak gerekir.
+    /// </para>
+    /// <para>Windows DNS yoksa ya da bölge okunamıyorsa null döner (ölçemedik ≠ eksik yok).</para>
+    /// </summary>
+    Task<IReadOnlyCollection<string>?> GetPublishedRecordKeysAsync(string siteName, CancellationToken cancellationToken = default);
+
     Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default);
 
     Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default);
