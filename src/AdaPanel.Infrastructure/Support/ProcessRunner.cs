@@ -84,13 +84,27 @@ internal static class ProcessRunner
         };
     }
 
+    /// <summary>
+    /// UZUN scriptler komut satirina SIGMAZ; bu esigin ustunde gecici bir .ps1 dosyasindan
+    /// calistirilir.
+    /// <para>
+    /// Windows'ta komut satiri 32767 karakterle sinirlidir ve -EncodedCommand base64 oldugu icin
+    /// metni ~2.7 katina cikarir. Yani ~12 KB'lik bir script bile "Dosya adi veya uzantisi cok
+    /// uzun" hatasiyla HIC CALISTIRILAMAZ. Canlida tam olarak bu oldu: uzun TXT icin eklenen
+    /// yollar birikince bolge senkron scripti sinirı asti ve TUM kayitlar bu hatayi verdi --
+    /// yani duzeltmeler birbirini bogdu.
+    /// </para>
+    /// </summary>
+    private const int EncodedCommandLimit = 8000;
+
     public static async Task<CommandResult> RunPowerShellAsync(string command, CancellationToken cancellationToken = default)
     {
-        var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
-        var result = await RunAsync(
-            "powershell.exe",
-            $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}",
-            cancellationToken: cancellationToken);
+        var result = command.Length > EncodedCommandLimit
+            ? await RunPowerShellFromFileAsync(command, cancellationToken)
+            : await RunAsync(
+                "powershell.exe",
+                $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(command))}",
+                cancellationToken: cancellationToken);
 
         return new CommandResult
         {
@@ -98,6 +112,31 @@ internal static class ProcessRunner
             StandardOutput = NormalizePowerShellStream(result.StandardOutput),
             StandardError = NormalizePowerShellStream(result.StandardError)
         };
+    }
+
+    /// <summary>
+    /// Scripti gecici bir dosyaya yazip <c>-File</c> ile calistirir. Uzunluk siniri kalmaz.
+    /// <para>
+    /// Dosya UTF-8 BOM ile yazilir: PowerShell 5.1 BOM yoksa dosyayi sistem kod sayfasiyla okur ve
+    /// Turkce karakterler (alan adlarinda, mesajlarda) bozulur.
+    /// </para>
+    /// </summary>
+    private static async Task<CommandResult> RunPowerShellFromFileAsync(string command, CancellationToken cancellationToken)
+    {
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"ada-ps-{Guid.NewGuid():N}.ps1");
+        try
+        {
+            await File.WriteAllTextAsync(scriptPath, command, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), cancellationToken);
+
+            return await RunAsync(
+                "powershell.exe",
+                $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            try { File.Delete(scriptPath); } catch { /* en iyi caba */ }
+        }
     }
 
     private static string NormalizePowerShellStream(string value)

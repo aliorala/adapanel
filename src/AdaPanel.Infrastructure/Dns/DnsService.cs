@@ -1353,11 +1353,13 @@ public sealed partial class DnsService(
             // kilide carpiyor. Kilit gecicidir, bu yuzden kisa araliklarla birkac kez denenir.
             "      $adaReload = ''",
             "      $adaReloadKod = -1",
-            "      for ($adaDeneme = 0; $adaDeneme -lt 6; $adaDeneme++) {",
+            "      for ($adaDeneme = 0; $adaDeneme -lt 8; $adaDeneme++) {",
             "        $adaReload = (& $adaYukle 2>&1) -join ' '",
             "        $adaReloadKod = $LASTEXITCODE",
             "        if ($adaReloadKod -eq 0) { break }",
-            "        Start-Sleep -Milliseconds 700",
+                    // Artan bekleme: kilit senkron scriptinin kendi islemlerinden kaynaklaniyor ve
+            // sabit kisa aralik yetmiyordu (canlida 6x700ms sonrasi hala 9607).
+            "        Start-Sleep -Milliseconds (400 + ($adaDeneme * 500))",
             "      }",
             "      Remove-Item -LiteralPath $adaYukle -Force -ErrorAction SilentlyContinue",
             "      Start-Sleep -Milliseconds 800",
