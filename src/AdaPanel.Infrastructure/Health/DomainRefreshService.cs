@@ -166,7 +166,7 @@ internal sealed class DomainRefreshService(
             // Tek alan adının hatası TOPLU işlemi durdurmamalı: 40 sitelik bir sunucuda ilk hatada
             // durmak, kalan 39 sitenin eksik kalmasına ve bunun görünmemesine yol açardı.
             logger.LogWarning(exception, "Alan adı tazelenemedi: {SiteName}", siteName);
-            result.Error = exception.Message;
+            result.Error = DescribeError(exception);
         }
 
         return result;
@@ -394,7 +394,13 @@ internal sealed class DomainRefreshService(
                 {
                     Key = "repair.mail_hostname_mismatch",
                     Severity = "warn",
-                    Repaired = applyChanges
+                    // Repaired = false, applyChanges DEGIL.
+                    //
+                    // Bu bulgu yalnizca uyumsuzluk HALA VARKEN uretiliyor (olcum applyChanges:false
+                    // ile yapiliyor). Onarma denendigi halde basarisiz olduysa "onarildi" demek
+                    // duz yalan olurdu -- ustelik AttentionService onarilmis bulgulari eliyor,
+                    // yani rozet gercek sorunu GIZLERDI.
+                    Repaired = false
                 });
             }
         }
@@ -413,6 +419,9 @@ internal sealed class DomainRefreshService(
                 {
                     Key = "repair.firewall_blocked",
                     Severity = "fail",
+                    // Port bilgisi ayrinti alaninda: rozet tarafi bulgulari Key'e gore
+                    // tekillestirdigi icin, uc kapali port varken tek madde gorunuyordu.
+                    // Tekillestirme anahtarina port da giriyor (asagida Detail'den uretiliyor).
                     Detail = $"{port.Protocol}/{port.Port} ({port.ServiceKey})"
                 };
 

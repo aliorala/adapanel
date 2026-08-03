@@ -65,8 +65,10 @@ public sealed class DnsLongTxtTests
     {
         var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
 
-        // 1 temizlik + her yoldan sonra bir dogrulama + bolge dosyasi yolunda ek bir denetim.
-        Assert.True(System.Text.RegularExpressions.Regex.Matches(line, "Get-DnsServerResourceRecord").Count >= 5);
+        // Olcum artik tek bir script blogunda tanimlanip her yoldan sonra CAGIRILIYOR
+        // ($adaOlcum.Invoke()) -- tekrar tekrar ayni sorguyu yazmak yerine.
+        Assert.Contains("$adaOlcum =", line, StringComparison.Ordinal);
+        Assert.True(System.Text.RegularExpressions.Regex.Matches(line, @"\$adaOlcum\.Invoke\(\)").Count >= 4);
     }
 
     // Hicbiri tutmazsa UC hatanin da bildirilmesi sart: tek hata gostermek, sonraki turu yine
@@ -139,5 +141,28 @@ public sealed class DnsLongTxtTests
 
         Assert.Contains("for ($adaDeneme", line, StringComparison.Ordinal);
         Assert.Contains("if ($adaReloadKod -eq 0) { break }", line, StringComparison.Ordinal);
+    }
+
+    // AJAN BULGUSU: dogrulama "bu konakta HERHANGI bir TXT var mi" diye soruyordu. Ayni konakta
+    // baska bir TXT bulunmasi yeterdi (ornegin '@' konagindaki SPF): olcum true doner, kalan
+    // yollar atlanir ve panel kayit yazilmamisken TAM BASARI raporlardi.
+    [Fact]
+    public void BuildTxtLine_LongValue_VerifiesOurOwnValueNotJustAnyTxtRecord()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        Assert.Contains("$adaTam", line, StringComparison.Ordinal);
+        Assert.Contains("DescriptiveText -join", line, StringComparison.Ordinal);
+    }
+
+    // AJAN BULGUSU: yollardan biri sonlandirici hata firlatirsa geri yukleme satirina hic
+    // gelinmiyor ve $ErrorActionPreference 'Continue' olarak siziyordu. O durumda scriptin geri
+    // kalanindaki hatalar ne firlar ne toplanir -- panel "onarildi" der, kayitlar yoktur.
+    [Fact]
+    public void BuildTxtLine_LongValue_RestoresErrorPreferenceEvenWhenAStrategyThrows()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        Assert.Contains("} finally { $ErrorActionPreference = $adaEskiEap }", line, StringComparison.Ordinal);
     }
 }

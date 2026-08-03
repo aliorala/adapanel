@@ -1258,8 +1258,21 @@ public sealed partial class DnsService(
             // satiri NativeCommandError'a sarar; scriptin basindaki $ErrorActionPreference='Stop'
             // altinda bu SONLANDIRICI hataya doner ve blok oracikta biter -- yani sonraki yollara
             // (WMI, bolge dosyasi) HIC GELINMEZ. Blok boyunca gecici olarak gevsetiliyor.
+            // DOGRULAMA BIZIM DEGERIMIZI ARAR, "herhangi bir TXT var mi" diye SORMAZ.
+            //
+            // Ayni konakta baska bir TXT bulunmasi yeterdi (ornegin '@' konagindaki SPF): olcum
+            // true doner, kalan yollar atlanir ve panel kayit yazilmamisken TAM BASARI raporlardi.
+            // Windows uzun TXT'i parcalara boldugu icin parcalar birlestirilip karsilastiriliyor.
+            "$adaOlcum = { [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue | " +
+            "Where-Object { ($_.RecordData.DescriptiveText -join '') -eq $adaTam }) }",
             "$adaEskiEap = $ErrorActionPreference",
             "$ErrorActionPreference = 'Continue'",
+            // TRY/FINALLY: asagidaki yollardan biri sonlandirici bir hata firlatirsa (ornegin
+            // gecici dosya olusturulamazsa) geri yukleme satirina HIC GELINMEZ ve EAP 'Continue'
+            // olarak sizardi. O durumda scriptin geri kalanindaki Add komutlarinin hatalari ne
+            // firlar ne toplanir -- panel "onarildi" der, kayitlar yoktur. Tam da ayikladigimiz
+            // hata sinifi, bu kez kendi duzeltmemin icinde.
+            "try {",
             @"$adaKirp = { param($m) $m = ($m -replace '\s+', ' ').Trim(); if ($m.Length -gt 200) { $m.Substring(0, 200) + '...' } else { $m } }",
             "$adaHata = @()",
             "$adaVar = $false",
@@ -1275,7 +1288,7 @@ public sealed partial class DnsService(
             "try {",
             $"  Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name $adaAd -DescriptiveText $adaCrlf -TimeToLive ([TimeSpan]::FromSeconds({ttl})) -ErrorAction Stop | Out-Null",
             "} catch { $adaHata += 'cmdlet-crlf: ' + $adaKirp.Invoke($_.Exception.Message) }",
-            "$adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "$adaVar = $adaOlcum.Invoke()",
 
             // 2) dnscmd'ye TEK metin: belgelenen imza tek <rrdata> aliyor; uzun degeri kendisi
             //    parcalayabilir. Komut toplu is dosyasindan calisir ki tirnaklama bozulmasin.
@@ -1286,7 +1299,7 @@ public sealed partial class DnsService(
             "  $adaCikti = (& $adaCmdDosya 2>&1) -join ' '",
             "  if ($LASTEXITCODE -ne 0) { $adaHata += 'dnscmd-tek: ' + $adaKirp.Invoke($adaCikti) }",
             "  Remove-Item -LiteralPath $adaCmdDosya -Force -ErrorAction SilentlyContinue",
-            "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "  $adaVar = $adaOlcum.Invoke()",
             "}",
 
             // 3) WMI: yonetim arayuzunun (MMC) kullandigi yol. Sunucu bu kaydi yazabiliyor
@@ -1297,7 +1310,7 @@ public sealed partial class DnsService(
             "    $adaFqdn = $adaAd + '.' + $zoneName",
             $"    $adaWmi.CreateInstanceFromPropertyData($env:COMPUTERNAME, $zoneName, $adaFqdn, 1, {ttl}, $adaTam) | Out-Null",
             "  } catch { $adaHata += 'wmi: ' + $adaKirp.Invoke($_.Exception.Message) }",
-            "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "  $adaVar = $adaOlcum.Invoke()",
             "}",
 
             // 4) BOLGE DOSYASINA DOGRUDAN YAZ.
@@ -1352,14 +1365,14 @@ public sealed partial class DnsService(
             // gorunmuyorsa bunu SOYLEMEK gerekir. Onceki surumde bu durumda hicbir mesaj
             // uretilmiyordu ve raporda dorduncu yol hic gecmiyordu -- kullanici hakli olarak
             // \"bu yol calisti mi calismadi mi\" diye soramadi bile.
-            "      $adaSonrasi = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "      $adaSonrasi = $adaOlcum.Invoke()",
             "      if (-not $adaSonrasi) { $adaHata += 'zonefile: satir eklendi, ZoneReload(' + $adaReloadKod + ') ' + $adaKirp.Invoke($adaReload) + ' -- kayit yine gorunmedi' }",
             "    } else { $adaHata += 'zonefile: bolge dosyasi bulunamadi: ' + $adaZonePath }",
             "  } catch { $adaHata += 'zonefile: ' + $adaKirp.Invoke($_.Exception.Message) }",
-            "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
+            "  $adaVar = $adaOlcum.Invoke()",
             "}",
 
-            "$ErrorActionPreference = $adaEskiEap",
+            "} finally { $ErrorActionPreference = $adaEskiEap }",
             "if (-not $adaVar) { throw ($adaHata -join ' || ') }"
         };
 

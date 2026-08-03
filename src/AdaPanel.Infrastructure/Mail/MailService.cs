@@ -1184,7 +1184,19 @@ public sealed class MailService(
             hostName = $"mail.{domainName.Trim().ToLowerInvariant()}";
         }
 
-        if (string.Equals(currentHost, hostName, StringComparison.OrdinalIgnoreCase)
+        // AYARIN YAZILI DEGERI YETMEZ -- SUNUCUNUN GERCEKTEN NE DEDIGINE BAKILIR.
+        //
+        // Ayar dogru yazilmis ama Stalwart onu henuz okumamis olabilir (ReloadSettings gitmemis,
+        // yazma yarim kalmis, servis yeniden baslamis). O durumda panel "esit, yapacak is yok"
+        // deyip susuyor, karsilama ise hala makine adini gosteriyordu -- canlida tam olarak bu
+        // oldu: ayar yerindeydi, uyari cikmadi, sorun surdu.
+        //
+        // Bu, oturum boyunca avladigimiz hatanin ta kendisi: panelin NIYETI ile SUNUCUNUN HALI
+        // ayni sey degildir. Dogruyu ogrenmek icin kaynaga sormak gerekir.
+        var karsilamaDogru = await SmtpGreetingMatchesAsync(hostName, cancellationToken);
+
+        if (karsilamaDogru
+            && string.Equals(currentHost, hostName, StringComparison.OrdinalIgnoreCase)
             && string.Equals(domainId, currentDomainId, StringComparison.Ordinal))
         {
             return false;
@@ -1197,6 +1209,15 @@ public sealed class MailService(
         // ama panel eksigi gormedigi icin kullaniciya hic soylemedi.
         if (!applyChanges)
         {
+            return true;
+        }
+
+        // Ayar zaten dogruysa yeniden yazmaya gerek yok; eksik olan tek sey yeniden okutmaktir.
+        if (string.Equals(currentHost, hostName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(domainId, currentDomainId, StringComparison.Ordinal))
+        {
+            await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+            logger.LogInformation("Posta sunucusu ayarlari yeniden okutuldu; karsilama adi '{HostName}'.", hostName);
             return true;
         }
 
@@ -1221,6 +1242,43 @@ public sealed class MailService(
 
         logger.LogInformation("Posta sunucusunun karsilama adi '{HostName}' olarak ayarlandi.", hostName);
         return true;
+    }
+
+    /// <summary>
+    /// Posta sunucusunun CANLI SMTP karsilamasini okur ve beklenen adi icerip icermedigini soyler.
+    /// Olcum yapilamazsa true doner (bilmiyorsak "bozuk" demeyiz).
+    /// <para>
+    /// Neden gerekli: ayarin yazili degeri sunucunun o an ne dedigini GARANTI ETMEZ. Ayar dogru
+    /// olup Stalwart henuz okumamis olabilir; o durumda panel susar ve sorun kalici olur.
+    /// </para>
+    /// </summary>
+    private async Task<bool> SmtpGreetingMatchesAsync(string hostName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            var connect = client.ConnectAsync("127.0.0.1", 25, cancellationToken).AsTask();
+            if (await Task.WhenAny(connect, Task.Delay(3000, cancellationToken)) != connect)
+            {
+                return true;
+            }
+
+            await connect;
+            using var reader = new StreamReader(client.GetStream());
+            var readLine = reader.ReadLineAsync(cancellationToken).AsTask();
+            if (await Task.WhenAny(readLine, Task.Delay(3000, cancellationToken)) != readLine)
+            {
+                return true;
+            }
+
+            var banner = await readLine ?? string.Empty;
+            return banner.Contains(hostName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "SMTP karsilamasi okunamadi; ayarin yazili degerine guvenilecek.");
+            return true;
+        }
     }
 
     /// <summary>

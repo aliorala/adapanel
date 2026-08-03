@@ -156,7 +156,9 @@ public sealed class AttentionService(
             {
                 items.Add(new AttentionItemDto
                 {
-                    Id = $"server-finding:{finding.Key}",
+                    // Ayrinti kimlige giriyor: uc kapali port ayni Key'i tasiyor ve Id'ye
+                    // girmezse tekillestirme ucunu tek maddeye indiriyordu.
+                    Id = $"server-finding:{finding.Key}:{finding.Detail}",
                     Severity = string.Equals(finding.Severity, "fail", StringComparison.OrdinalIgnoreCase) ? "critical" : "warning",
                     TitleKey = finding.Key,
                     Detail = finding.Detail,

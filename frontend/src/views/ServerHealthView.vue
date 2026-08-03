@@ -69,9 +69,9 @@
     <!-- Yuklenirken kart NE IYI NE KOTU gorunur. Onceden veri gelmeden 'good' + yesil nokta
          basiliyordu: kullanici "her sey yolunda" diye bakip gecerken kart birden kirmiziya
          donuyordu. Olculmemis bir seyi "saglikli" gostermek, panelin en cok tekrarlanan hatasi. -->
-    <article :class="['dns-card', domainsLoading ? 'idle' : (domains && domains.updatedSites > 0 ? 'bad' : 'good')]">
+    <article :class="['dns-card', domainsLoading ? 'idle' : (onarilacakVar ? 'bad' : 'good')]">
       <div class="dns-head">
-        <span :class="['state-dot', domainsLoading ? 'dot-idle' : (domains && domains.updatedSites > 0 ? 'dot-danger' : 'dot-ok')]"></span>
+        <span :class="['state-dot', domainsLoading ? 'dot-idle' : (onarilacakVar ? 'dot-danger' : 'dot-ok')]"></span>
         <div class="health-name">
           <strong>{{ t("panel.health.domainsTitle") }}</strong>
           <span class="svc-id">{{ t("panel.health.domainsHint") }}</span>
@@ -95,6 +95,16 @@
           {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsRefresh") }}
         </button>
       </div>
+
+      <!-- SUNUCU GENELI bulgular: kapali port, posta sunucusunun adi gibi tek bir alan adina
+           ait olmayan sorunlar. Bunlar hicbir yerde yazmiyordu; kart yesil "N/N guncel" derken
+           yaninda onarma dugmesi cikiyor, kullanici neyin eksik oldugunu goremiyordu. -->
+      <ul v-if="domains?.serverFindings?.length" class="server-findings">
+        <li v-for="bulgu in domains.serverFindings" :key="bulgu.key + bulgu.detail" :class="bulgu.severity">
+          {{ t(bulgu.key) }}
+          <small v-if="bulgu.detail">{{ bulgu.detail }}</small>
+        </li>
+      </ul>
 
       <!-- Ne yapıldığını kayıt kayıt göster: "onarıldı" demek tek başına güven vermez. -->
       <dl v-if="domainReport.length" class="dns-facts">
@@ -377,6 +387,21 @@ function showNotice(message: string, isError: boolean) {
 
 /* Yukleniyor: notr gri + hafif nabiz. Yesil/kirmizi BILEREK kullanilmiyor -- henuz olculmemis
    bir durumu renkle yorumlamak, kullaniciyi yaniltmanin en kolay yolu. */
+.server-findings {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+}
+
+.server-findings li.fail {
+  color: var(--danger-1, #d64545);
+}
+
+.server-findings small {
+  display: block;
+  opacity: 0.7;
+}
+
 .state-dot.dot-idle {
   background: var(--text-muted);
   animation: dot-pulse 1.2s ease-in-out infinite;
