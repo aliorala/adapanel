@@ -16,6 +16,7 @@
   <ItemGroup>
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="FluentFTP" Version="52.0.0" />
+    <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="SSH.NET" Version="2024.1.0" />
     <PackageReference Include="MySqlConnector" Version="2.6.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.3" />

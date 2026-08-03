@@ -3116,5 +3116,6 @@
   "panel.account.passwordRevokesTokens": "Güvenlik gereği, parola değiştiğinde bu hesaba ait API anahtarları geçersiz olur. Yapay zeka bağlantısı kullanıyorsanız yeni bir anahtar oluşturmanız gerekir.",
   "panel.account.passwordTokensRevoked": "{count} API anahtarı iptal edildi.",
   "auth.password_changed": "Parolanız değiştirildi.",
-  "auth.password_unchanged": "Yeni parola mevcut parolayla aynı olamaz."
+  "auth.password_unchanged": "Yeni parola mevcut parolayla aynı olamaz.",
+  "notifications.smtp_tls_failed": "TLS el sıkışması başarısız. En sık sebep port ile şifreleme kipinin uyuşmamasıdır: 465 örtük TLS (SSL), 587 ise STARTTLS ister. Portu 587 yapıp tekrar deneyin."
 }

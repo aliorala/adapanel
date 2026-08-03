@@ -3116,5 +3116,6 @@
   "panel.account.passwordRevokesTokens": "For security, changing the password invalidates this account's API keys. If you use the AI connection, you will need to create a new key.",
   "panel.account.passwordTokensRevoked": "{count} API key(s) revoked.",
   "auth.password_changed": "Your password has been changed.",
-  "auth.password_unchanged": "The new password cannot be the same as the current one."
+  "auth.password_unchanged": "The new password cannot be the same as the current one.",
+  "notifications.smtp_tls_failed": "TLS handshake failed. The most common cause is a port/encryption mismatch: 465 uses implicit TLS (SSL), while 587 uses STARTTLS. Try port 587 instead."
 }

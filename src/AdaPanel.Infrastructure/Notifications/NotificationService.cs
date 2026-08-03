@@ -1,11 +1,13 @@
 using System.Net;
-using System.Net.Mail;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Notifications;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
 
 namespace AdaPanel.Infrastructure.Notifications;
 
@@ -56,21 +58,7 @@ public sealed class NotificationService(
             throw new AppException("notifications.smtp_not_configured", 400, 400);
         }
 
-        using var client = new SmtpClient(settings.SmtpHost, settings.SmtpPort)
-        {
-            EnableSsl = settings.UseSsl,
-            Credentials = string.IsNullOrWhiteSpace(settings.SmtpUserName)
-                ? CredentialCache.DefaultNetworkCredentials
-                : new NetworkCredential(settings.SmtpUserName, GetPlaintextPassword(settings.SmtpPassword))
-        };
-
-        using var message = new MailMessage(settings.FromEmail, settings.ToEmail, subject, body)
-        {
-            BodyEncoding = Encoding.UTF8,
-            SubjectEncoding = Encoding.UTF8
-        };
-
-        await client.SendMailAsync(message, cancellationToken);
+        await SendViaSmtpAsync(settings, settings.ToEmail, subject, body, cancellationToken);
     }
 
     public async Task SendEmailToAsync(string toEmail, string subject, string body, CancellationToken cancellationToken = default)
@@ -86,21 +74,7 @@ public sealed class NotificationService(
             throw new AppException("notifications.smtp_not_configured", 400, 400);
         }
 
-        using var client = new SmtpClient(settings.SmtpHost, settings.SmtpPort)
-        {
-            EnableSsl = settings.UseSsl,
-            Credentials = string.IsNullOrWhiteSpace(settings.SmtpUserName)
-                ? CredentialCache.DefaultNetworkCredentials
-                : new NetworkCredential(settings.SmtpUserName, GetPlaintextPassword(settings.SmtpPassword))
-        };
-
-        using var message = new MailMessage(settings.FromEmail, toEmail.Trim(), subject, body)
-        {
-            BodyEncoding = Encoding.UTF8,
-            SubjectEncoding = Encoding.UTF8
-        };
-
-        await client.SendMailAsync(message, cancellationToken);
+        await SendViaSmtpAsync(settings, toEmail.Trim(), subject, body, cancellationToken);
     }
 
     public async Task<bool> IsEmailConfiguredAsync(CancellationToken cancellationToken = default)
@@ -173,6 +147,86 @@ public sealed class NotificationService(
             UseSsl = settings.UseSsl,
             WebhookUrl = settings.WebhookUrl
         };
+    }
+
+    /// <summary>
+    /// SMTP gönderiminin TEK yolu. Şifreleme kipi PORTA göre seçilir.
+    /// <para>
+    /// Neden MailKit: panel önceden <c>System.Net.Mail.SmtpClient</c> kullanıyordu ve o sınıf ÖRTÜK
+    /// TLS'i (port 465) hiç desteklemez — <c>EnableSsl</c> orada yalnız STARTTLS demektir. 465 yazan
+    /// kullanıcı düz metin bağlanıyor, sunucu TLS beklediği için el sıkışma kopuyor ve panel
+    /// "TLS el sıkışması başarısız" diyordu. 465 hemen her sağlayıcının belgelediği porttur, yani
+    /// bu ayarı yapanların çoğu doğrudan bu duvara çarpıyordu. Microsoft da SmtpClient'ı yeni
+    /// geliştirmeler için önermiyor ve MailKit'e yönlendiriyor.
+    /// </para>
+    /// <para>
+    /// STARTTLS bilerek ZORUNLU (WhenAvailable değil): kullanıcı şifreleme istediğinde, sunucu
+    /// STARTTLS duyurmuyorsa sessizce düz metne düşmek parolayı ağa açık göndermek olurdu.
+    /// </para>
+    /// </summary>
+    private async Task SendViaSmtpAsync(
+        NotificationSettingsDto settings,
+        string toEmail,
+        string subject,
+        string body,
+        CancellationToken cancellationToken)
+    {
+        var message = new MimeMessage();
+        message.From.Add(MailboxAddress.Parse(settings.FromEmail));
+        message.To.Add(MailboxAddress.Parse(toEmail));
+        message.Subject = subject;
+        message.Body = new TextPart("plain") { Text = body };
+
+        var options = ResolveSecureSocketOptions(settings.UseSsl, settings.SmtpPort);
+
+        using var client = new SmtpClient();
+        try
+        {
+            await client.ConnectAsync(settings.SmtpHost, settings.SmtpPort, options, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(settings.SmtpUserName))
+            {
+                await client.AuthenticateAsync(
+                    settings.SmtpUserName,
+                    GetPlaintextPassword(settings.SmtpPassword),
+                    cancellationToken);
+            }
+
+            await client.SendAsync(message, cancellationToken);
+        }
+        catch (System.Security.Authentication.AuthenticationException exception)
+        {
+            // El sıkışma hatasının EN SIK sebebi port/kip uyuşmazlığıdır. Çıplak "TLS el sıkışması
+            // başarısız" mesajı kullanıcıya ne yapacağını söylemez; hangi kipin denendiği ve doğru
+            // eşleşmenin ne olduğu yazılır.
+            throw new AppException(
+                "notifications.smtp_tls_failed",
+                400,
+                400,
+                $"{settings.SmtpHost}:{settings.SmtpPort} ({options}) - {exception.Message}");
+        }
+        finally
+        {
+            if (client.IsConnected)
+            {
+                await client.DisconnectAsync(true, cancellationToken);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Port + "şifreleme açık mı" bilgisinden kip seçer. 465 örtük TLS içindir (bağlantı daha ilk
+    /// bayttan şifrelidir), 587/25 ise düz metin başlayıp STARTTLS ile yükselir. Bu ikisi
+    /// birbirinin yerine kullanılamaz; karıştırıldığında el sıkışma kopar.
+    /// </summary>
+    internal static SecureSocketOptions ResolveSecureSocketOptions(bool useSsl, int port)
+    {
+        if (!useSsl)
+        {
+            return SecureSocketOptions.None;
+        }
+
+        return port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
     }
 
     private string GetPlaintextPassword(string storedPassword)

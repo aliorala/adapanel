@@ -9,6 +9,7 @@ using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using AdaPanel.Core.Dtos.Sites;
 
 namespace AdaPanel.Infrastructure.Mail;
 
@@ -29,6 +30,7 @@ public sealed class MailService(
     ISecretProtector secretProtector,
     IPanelPreferencesService panelPreferencesService,
     IIisSiteService iisSiteService,
+    IDnsService dnsService,
     AdaPanelDbContext dbContext,
     ILogger<MailService> logger) : IMailService
 {
@@ -237,10 +239,62 @@ public sealed class MailService(
             return await GetWorkspaceAsync(domain, cancellationToken);
         }
 
-        return await MutateAsync(
+        var workspace = await MutateAsync(
             domain,
             $"create domain --field name={Arg(domain)} --field isEnabled=true",
             cancellationToken);
+
+        // Kayitlar HEMEN yayinlanir; kullanicinin bir dugmeye basmasi beklenmez.
+        //
+        // Neden: Stalwart domain olusturulurken DKIM anahtarlarini kendisi uretir ve giden her
+        // postayi o anahtarlarla IMZALAR. Karsilik gelen DNS kaydi yayinlanmazsa alici imzayi
+        // dogrulayamaz -- posta imzali ama DOGRULANAMAZ gider, yani DKIM basarisiz sayilir ve
+        // spam'e duser. Canli sunucuda tam olarak bu oldu: iletiler v1-rsa-*/v1-ed25519-* seciciyle
+        // imzaliydi, iki TXT kaydinin ikisi de bolgede yoktu. Plesk de posta acilirken kaydi
+        // kendisi yayinlar.
+        await TryPublishDnsRecordsAsync(domain, cancellationToken);
+        return workspace;
+    }
+
+    /// <summary>
+    /// Posta DNS kayitlarini (MX, SPF, DKIM, DMARC) panelin bolgesine yazar.
+    /// <para>
+    /// EN IYI CABA: bolge baska bir saglayicida olabilir ya da DNS rolu kurulu olmayabilir. Boyle
+    /// bir durumda posta alaninin OLUSMASI engellenmemeli -- kullanici kayitlari elle de girebilir.
+    /// Sessiz kalmamak icin sonuc gunlugue yazilir.
+    /// </para>
+    /// </summary>
+    private async Task TryPublishDnsRecordsAsync(string domain, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var dns = await GetDnsRecordsAsync(domain, cancellationToken);
+            var yazilan = 0;
+            foreach (var record in dns.Records.Where(item => !string.IsNullOrWhiteSpace(item.Value)))
+            {
+                await dnsService.UpsertRecordAsync(
+                    dns.Domain,
+                    new UpsertDnsRecordRequest
+                    {
+                        Type = record.Type,
+                        Host = record.Host,
+                        Value = record.Value,
+                        Priority = record.Priority,
+                        Ttl = 3600
+                    },
+                    cancellationToken);
+                yazilan++;
+            }
+
+            logger.LogInformation("Mail DNS records published for {Domain}: {Count} record(s).", domain, yazilan);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Mail DNS records could not be published automatically for {Domain}. The zone is probably hosted elsewhere; the records must be added manually.",
+                domain);
+        }
     }
 
     public async Task<MailWorkspaceDto> DeleteDomainAsync(string domainName, CancellationToken cancellationToken = default)
@@ -1145,35 +1199,95 @@ public sealed class MailService(
             .FirstOrDefault()
             ?? throw new AppException("mail.certificate_files_missing", 500, 500, pemDirectory);
 
-        var certificateParts = new List<string>();
-        var leaf = Directory.EnumerateFiles(pemDirectory, "*-crt.pem")
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-        if (leaf is not null)
-        {
-            certificateParts.Add(File.ReadAllText(leaf).Trim());
-        }
+        // SIRA ÖNEMLİ: yaprak önce, ara sertifikalar sonra. TLS bunu şart koşar.
+        //
+        // Neden dosyaları birleştirip TEKİLLEŞTİRİYORUZ: win-acme sürümüne göre -chain.pem bazen
+        // yalnız ara sertifikaları, bazen yaprak DAHİL tam zinciri içerir. Önceki kod "yaprak
+        // yinelenmesin" diye bakıp zinciri içinde yaprağı görünce zincirin TAMAMINI atıyordu —
+        // ara sertifika da gidiyordu. Sonuç: sunucu yalnız yaprağı sunuyor, OpenSSL tabanlı
+        // istemciler (PHP, Python, çoğu posta istemcisi) zinciri kuramayıp bağlantıyı kesiyordu.
+        // Windows istemcileri eksik ara sertifikayı kendi indirdiği için sorun uzun süre GÖRÜNMEZ
+        // kalır; bu yüzden metinsel karşılaştırma değil, blok bazında tekilleştirme yapılıyor.
+        var blocks = new List<string>();
 
-        var chain = Directory.EnumerateFiles(pemDirectory, "*-chain.pem")
-            .Where(file => !file.EndsWith("-chain-only.pem", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-        if (chain is not null)
+        void Topla(string? file)
         {
-            var chainContent = File.ReadAllText(chain).Trim();
-            // Bazı sürümlerde -chain.pem yaprak dahil tam zincirdir; yaprak zaten eklendiyse yinelenmesin.
-            if (certificateParts.Count == 0 || !chainContent.Contains(certificateParts[0], StringComparison.Ordinal))
+            if (file is null)
             {
-                certificateParts.Add(chainContent);
+                return;
+            }
+
+            foreach (var block in ExtractCertificateBlocks(File.ReadAllText(file)))
+            {
+                if (!blocks.Contains(block, StringComparer.Ordinal))
+                {
+                    blocks.Add(block);
+                }
             }
         }
 
-        if (certificateParts.Count == 0)
+        string? Sonuncu(string pattern) => Directory.EnumerateFiles(pemDirectory, pattern)
+            .Where(file => !file.EndsWith("-chain-only.pem", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+
+        Topla(Sonuncu("*-crt.pem"));
+        Topla(Sonuncu("*-chain.pem"));
+        // Yalnız ara sertifikaları içeren dosya: -chain.pem hiç üretilmediyse tek zincir kaynağıdır.
+        Topla(Directory.EnumerateFiles(pemDirectory, "*-chain-only.pem")
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault());
+
+        if (blocks.Count == 0)
         {
             throw new AppException("mail.certificate_files_missing", 500, 500, pemDirectory);
         }
 
-        return (string.Join("\n", certificateParts) + "\n", File.ReadAllText(keyFile));
+        return (string.Join("\n", blocks) + "\n", File.ReadAllText(keyFile));
+    }
+
+    /// <summary>
+    /// Bir PEM metnindeki sertifika bloklarını sırayla çıkarır ve satır sonlarını normalleştirir.
+    /// <para>
+    /// Normalleştirme tekilleştirme için şart: aynı sertifika bir dosyada CRLF, diğerinde LF ile
+    /// yazılmış olabilir ve ham metin karşılaştırması onları FARKLI sanar — o zaman yaprak zincire
+    /// ikinci kez eklenir ve bazı istemciler bunu bozuk zincir sayar.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string> ExtractCertificateBlocks(string pem)
+    {
+        const string begin = "-----BEGIN CERTIFICATE-----";
+        const string end = "-----END CERTIFICATE-----";
+
+        var blocks = new List<string>();
+        var index = 0;
+        while (true)
+        {
+            var start = pem.IndexOf(begin, index, StringComparison.Ordinal);
+            if (start < 0)
+            {
+                break;
+            }
+
+            var stop = pem.IndexOf(end, start, StringComparison.Ordinal);
+            if (stop < 0)
+            {
+                break;
+            }
+
+            var raw = pem[start..(stop + end.Length)];
+            var lines = raw
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0);
+
+            blocks.Add(string.Join("\n", lines));
+            index = stop + end.Length;
+        }
+
+        return blocks;
     }
 
     private async Task PushCertificateToStalwartAsync(string hostName, string certificatePem, string privateKeyPem, CancellationToken cancellationToken)
