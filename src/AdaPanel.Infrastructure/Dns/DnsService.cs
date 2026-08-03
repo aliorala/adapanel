@@ -169,6 +169,30 @@ public sealed partial class DnsService(
         return added;
     }
 
+    /// <summary>
+    /// Bu kayit, konak basina yalnizca BIR tane bulunabilecek bir TXT politikasi mi?
+    /// Oyleyse politikanin onekini doner (eslesme degere degil ONEKE gore yapilir).
+    /// <para>
+    /// DKIM burada YOKTUR ve olmamalidir: her secici (selector) icin ayri bir kayit gerekir,
+    /// zaten konaklari da farklidir (&lt;secici&gt;._domainkey).
+    /// </para>
+    /// </summary>
+    private static string? ResolveSingletonTxtPrefix(string type, string value)
+    {
+        if (!string.Equals(type, "TXT", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var trimmed = value.TrimStart();
+        if (trimmed.StartsWith("v=spf1", StringComparison.OrdinalIgnoreCase))
+        {
+            return "v=spf1";
+        }
+
+        return trimmed.StartsWith("v=DMARC1", StringComparison.OrdinalIgnoreCase) ? "v=DMARC1" : null;
+    }
+
     private static string RecordKey(DnsRecordState record) => $"{record.Type}|{record.Host}|{record.Value}";
 
     public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
@@ -191,10 +215,26 @@ public sealed partial class DnsService(
         }
         else
         {
-            var duplicate = state.Records.FirstOrDefault(item =>
-                string.Equals(item.Type, record.Type, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(item.Host, record.Host, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(item.Value, record.Value, StringComparison.OrdinalIgnoreCase));
+            // TEK ORNEKLI politika kayitlari: bir konakta yalnizca BIR SPF ve BIR DMARC olabilir.
+            // Standart bunu acikca soyler; ikinci bir kayit dogrulamayi "permerror" yapar, yani
+            // politika hic yokmus gibi -- hatta daha kotusu, gonderen sunucular postayi reddeder.
+            //
+            // Neden gerekliydi: eslesme TUR+KONAK+DEGER uzerindendi. SPF degeri panelde iki ayri
+            // yerde uretiliyor (DNS sablonu sitenin baglama IP'sini tercih ediyor, posta tarafi
+            // yalnizca panel tercihindeki adrese bakiyor ve o adres IPv4 degilse "ip4:" bolumunu
+            // hic yazmiyor). Degerler farkli oldugu icin upsert IKINCI bir SPF ekliyordu; her
+            // onarmada fark yeniden goruluyor ve kullanici "onardim ama uyari geri geliyor"
+            // diyordu. Artik ayni politikanin eskisi DEGISTIRILIYOR, yenisi eklenmiyor.
+            var policyPrefix = ResolveSingletonTxtPrefix(record.Type, record.Value);
+            var duplicate = policyPrefix is not null
+                ? state.Records.FirstOrDefault(item =>
+                    string.Equals(item.Type, "TXT", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Host, record.Host, StringComparison.OrdinalIgnoreCase) &&
+                    item.Value.StartsWith(policyPrefix, StringComparison.OrdinalIgnoreCase))
+                : state.Records.FirstOrDefault(item =>
+                    string.Equals(item.Type, record.Type, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Host, record.Host, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Value, record.Value, StringComparison.OrdinalIgnoreCase));
 
             if (duplicate is not null)
             {
@@ -1029,12 +1069,23 @@ public sealed partial class DnsService(
             lines.Add($"Get-DnsServerResourceRecord -ZoneName $zoneName -Name '{EscapePowerShellLiteral(group.Host)}' -RRType '{group.Type}' -ErrorAction SilentlyContinue | Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction SilentlyContinue");
         }
 
+        // TEK BOZUK KAYIT BOLGENIN TAMAMINI GOTURMEMELI.
+        //
+        // Script tek bir PowerShell calistirmasidir ve basinda $ErrorActionPreference='Stop' vardir.
+        // Once TUM gruplar silinip sonra tek tek yeniden eklendigi icin, ortadaki bir kayit
+        // patladiginda script komple duruyordu: o noktadan sonraki hicbir kayit yazilmiyor,
+        // basta silinenler de silinmis kaliyordu. Canlida tam olarak bu oldu -- 255 karakteri asan
+        // DKIM kaydi yuzunden bolgede _dmarc dahil hicbir sey kalmadi, ustelik panel "onarildi"
+        // diyordu. Artik her ekleme kendi icinde yakalaniyor: saglam kayitlar yazilir, basarisizlar
+        // toplanip SONUNDA bildirilir (cikis kodu yine sifirdan farkli olur, yani hata gizlenmez).
+        lines.Add("$basarisiz = @()");
+
         foreach (var record in SortRecords(state.Records))
         {
             var host = EscapePowerShellLiteral(record.Host);
             var value = EscapePowerShellLiteral(record.Value);
             var ttl = Math.Clamp(record.Ttl, 60, 86400);
-            lines.Add(record.Type.ToUpperInvariant() switch
+            var command = record.Type.ToUpperInvariant() switch
             {
                 "A" => $"Add-DnsServerResourceRecordA -ZoneName $zoneName -Name '{host}' -IPv4Address '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "AAAA" => $"Add-DnsServerResourceRecordAAAA -ZoneName $zoneName -Name '{host}' -IPv6Address '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
@@ -1048,8 +1099,24 @@ public sealed partial class DnsService(
                 // CAA: Windows DNS'te native parametre yok → RFC 3597 bilinmeyen-kayıt yolu.
                 "CAA" => BuildCaaLine(host, record.Value, ttl),
                 _ => string.Empty
-            });
+            };
+
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                continue;
+            }
+
+            // Kayit tanimi hata mesajinda gorunsun ki hangi kaydin reddedildigi bilinsin.
+            var etiket = EscapePowerShellLiteral($"{record.Type} {record.Host}");
+            lines.Add("try {");
+            lines.Add(command);
+            lines.Add($"}} catch {{ $basarisiz += \"{etiket}: $($_.Exception.Message)\" }}");
         }
+
+        lines.Add("if ($basarisiz.Count -gt 0) {");
+        lines.Add("  Write-Error (\"Su kayitlar yazilamadi: \" + ($basarisiz -join ' | '))");
+        lines.Add("  exit 22");
+        lines.Add("}");
 
         return string.Join(Environment.NewLine, lines.Where(line => !string.IsNullOrWhiteSpace(line)));
     }
