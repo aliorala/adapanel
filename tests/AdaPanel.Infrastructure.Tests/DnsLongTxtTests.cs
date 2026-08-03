@@ -114,4 +114,30 @@ public sealed class DnsLongTxtTests
 
         Assert.Contains("FromSeconds(3600)", line, StringComparison.Ordinal);
     }
+
+    // CANLI BULGU: bolge dosyasina eklemek TEK BASINA yetmiyordu.
+    // DNS servisi bolgeyi bellekte tutuyor; once bellek dosyaya yazilmazsa (ZoneWriteBack)
+    // servis kendi kopyasini uzerine yaziyor ve eklenen satir kayboluyor -- ZoneReload
+    // "basarili" diyor ama kayit ortada yok.
+    [Fact]
+    public void BuildTxtLine_ZoneFilePath_FlushesMemoryToDiskBeforeAppending()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        var writeBack = line.IndexOf("ZoneWriteBack", StringComparison.Ordinal);
+        var append = line.IndexOf("Add-Content", StringComparison.Ordinal);
+
+        Assert.True(writeBack >= 0, "ZoneWriteBack uretilmemis");
+        Assert.True(writeBack < append, "ZoneWriteBack, dosyaya eklemeden ONCE calismali");
+    }
+
+    // DNS_ERROR_ZONE_LOCKED (9607) gecicidir: senkron ayni bolgede calisirken kilit olusuyor.
+    [Fact]
+    public void BuildTxtLine_ZoneFilePath_RetriesWhileTheZoneIsLocked()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        Assert.Contains("for ($adaDeneme", line, StringComparison.Ordinal);
+        Assert.Contains("if ($adaReloadKod -eq 0) { break }", line, StringComparison.Ordinal);
+    }
 }

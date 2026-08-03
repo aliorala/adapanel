@@ -1294,6 +1294,17 @@ public sealed partial class DnsService(
             "if (-not $adaVar) {",
             "  try {",
             "    $adaZonePath = Join-Path $env:SystemRoot ('System32' + [char]92 + 'dns' + [char]92 + $zoneName + '.dns')",
+            // ONCE BELLEGI DOSYAYA YAZ.
+            //
+            // DNS servisi bolgeyi BELLEKTE tutar ve degisiklikleri kendi zamaninda dosyaya yazar.
+            // Dosyaya once eklersek, servis bellek kopyasini uzerine yazdiginda eklenen satir
+            // kaybolur -- canlida tam olarak bu oldu: ZoneReload "basarili" dedi ama kayit yoktu.
+            // ZoneWriteBack, bellekteki guncel hali dosyaya dokerek bizim eklememizi guvenli kilar.
+            "  $adaWb = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
+            "  Set-Content -LiteralPath $adaWb -Value ('@echo off' + [char]13 + [char]10 + 'dnscmd . /ZoneWriteBack ' + $zoneName) -Encoding ASCII",
+            "  (& $adaWb 2>&1) | Out-Null",
+            "  Remove-Item -LiteralPath $adaWb -Force -ErrorAction SilentlyContinue",
+            "  Start-Sleep -Milliseconds 400",
             "    if (Test-Path -LiteralPath $adaZonePath) {",
             // Bolge dosyasi son satirda yeni satirla bitmiyorsa eklenen satir ONCEKI satira
             // YAPISIR ve iki kayit da bozulur. Once dosyanin sonuna yeni satir garantilenir.
@@ -1303,8 +1314,18 @@ public sealed partial class DnsService(
             "      Add-Content -LiteralPath $adaZonePath -Value $adaSatir -Encoding ASCII",
             "      $adaYukle = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
             "      Set-Content -LiteralPath $adaYukle -Value ('@echo off' + [char]13 + [char]10 + 'dnscmd . /ZoneReload ' + $zoneName) -Encoding ASCII",
-            "      $adaReload = (& $adaYukle 2>&1) -join ' '",
-            "      $adaReloadKod = $LASTEXITCODE",
+            // BOLGE KILITLIYSE (DNS_ERROR_ZONE_LOCKED 9607) TEKRAR DENE.
+            //
+            // Senkron scripti ayni bolgede kayit silip ekliyor; ortasinda yeniden yukleme istemek
+            // kilide carpiyor. Kilit gecicidir, bu yuzden kisa araliklarla birkac kez denenir.
+            "      $adaReload = ''",
+            "      $adaReloadKod = -1",
+            "      for ($adaDeneme = 0; $adaDeneme -lt 6; $adaDeneme++) {",
+            "        $adaReload = (& $adaYukle 2>&1) -join ' '",
+            "        $adaReloadKod = $LASTEXITCODE",
+            "        if ($adaReloadKod -eq 0) { break }",
+            "        Start-Sleep -Milliseconds 700",
+            "      }",
             "      Remove-Item -LiteralPath $adaYukle -Force -ErrorAction SilentlyContinue",
             "      Start-Sleep -Milliseconds 800",
             // SESSIZ DAL KAPATILDI: satir eklenip yeniden yukleme yapildigi halde kayit
