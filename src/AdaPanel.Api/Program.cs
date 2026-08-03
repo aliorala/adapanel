@@ -142,6 +142,20 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0
             });
     });
+    // Parola degisimi: mevcut parolayi dogruluyoruz, yani bu uc bir parola tahmin yuzeyidir.
+    // Cerez calinmis olsa bile mevcut parola deneme yanilmayla asilamasin.
+    options.AddPolicy("password-change", context =>
+    {
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            remoteIp,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(15),
+                QueueLimit = 0
+            });
+    });
     options.AddPolicy("setup", context =>
     {
         var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";

@@ -186,6 +186,35 @@ public sealed class AuthController(
         return Ok(ApiResponse<CurrentUserDto>.Ok(user, "auth.2fa.disabled"));
     }
 
+    /// <summary>
+    /// Kullanıcının KENDİ parolasını değiştirmesi.
+    /// <para>
+    /// Yalnız ÇEREZ şeması kabul edilir. API anahtarıyla parola değiştirilebilseydi, sınırlı bir
+    /// anahtarı ele geçiren biri parolayı değiştirip hesabın tamamını devralabilirdi — anahtarın
+    /// yetkisi hesabın yetkisine yükselirdi. Anahtar sunucudan sunucuya iş içindir, hesap yönetimi
+    /// için değil.
+    /// </para>
+    /// <para>
+    /// Hız sınırı mevcut parolayı deneme yanılmaya karşı korur: çerez çalınmış olsa bile parola
+    /// tahmin edilerek doğrulama aşılamasın.
+    /// </para>
+    /// </summary>
+    [Authorize(AuthenticationSchemes = CookieAuthenticationDefaults.AuthenticationScheme)]
+    [EnableRateLimiting("password-change")]
+    [HttpPost("change-password")]
+    public async Task<ActionResult<ApiResponse<ChangePasswordResultDto>>> ChangePasswordAsync(
+        [FromBody] ChangePasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await authService.ChangePasswordAsync(
+            User.GetRequiredUserId(),
+            request,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<ChangePasswordResultDto>.Ok(result, "auth.password_changed"));
+    }
+
     private Task SignInAsync(CurrentUserDto user, bool isPersistent, Guid? impersonatorId = null, string? impersonatorName = null)
     {
         var claims = new List<Claim>

@@ -3102,5 +3102,19 @@
   "panel.panelAccess.copied": "Kopyalandı",
   "panel.processes.category.apppool": "Uygulama havuzu",
   "apitoken.invalid_name": "Anahtara en az 2 karakterli bir ad verin.",
-  "apitoken.not_found": "Anahtar bulunamadı. Silinmiş ya da başka bir hesaba ait olabilir."
+  "apitoken.not_found": "Anahtar bulunamadı. Silinmiş ya da başka bir hesaba ait olabilir.",
+  "panel.account.passwordTitle": "Parola",
+  "panel.account.passwordHint": "Hesabınızın parolasını buradan değiştirebilirsiniz. Mevcut parolanız sorulur.",
+  "panel.account.currentPassword": "Mevcut parola",
+  "panel.account.newPassword": "Yeni parola",
+  "panel.account.confirmPassword": "Yeni parola (tekrar)",
+  "panel.account.changePassword": "Parolayı değiştir",
+  "panel.account.passwordChanging": "Değiştiriliyor...",
+  "panel.account.passwordChanged": "Parolanız değiştirildi.",
+  "panel.account.passwordMismatch": "Yeni parolalar birbiriyle eşleşmiyor.",
+  "panel.account.passwordTooShort": "Parola en az 12 karakter olmalı.",
+  "panel.account.passwordRevokesTokens": "Güvenlik gereği, parola değiştiğinde bu hesaba ait API anahtarları geçersiz olur. Yapay zeka bağlantısı kullanıyorsanız yeni bir anahtar oluşturmanız gerekir.",
+  "panel.account.passwordTokensRevoked": "{count} API anahtarı iptal edildi.",
+  "auth.password_changed": "Parolanız değiştirildi.",
+  "auth.password_unchanged": "Yeni parola mevcut parolayla aynı olamaz."
 }

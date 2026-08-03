@@ -3102,5 +3102,19 @@
   "panel.panelAccess.copied": "Copied",
   "panel.processes.category.apppool": "Application pool",
   "apitoken.invalid_name": "Give the key a name of at least 2 characters.",
-  "apitoken.not_found": "Key not found. It may have been deleted or belong to another account."
+  "apitoken.not_found": "Key not found. It may have been deleted or belong to another account.",
+  "panel.account.passwordTitle": "Password",
+  "panel.account.passwordHint": "Change your account password here. Your current password is required.",
+  "panel.account.currentPassword": "Current password",
+  "panel.account.newPassword": "New password",
+  "panel.account.confirmPassword": "New password (repeat)",
+  "panel.account.changePassword": "Change password",
+  "panel.account.passwordChanging": "Changing...",
+  "panel.account.passwordChanged": "Your password has been changed.",
+  "panel.account.passwordMismatch": "The new passwords do not match.",
+  "panel.account.passwordTooShort": "The password must be at least 12 characters.",
+  "panel.account.passwordRevokesTokens": "For security, changing the password invalidates this account's API keys. If you use the AI connection, you will need to create a new key.",
+  "panel.account.passwordTokensRevoked": "{count} API key(s) revoked.",
+  "auth.password_changed": "Your password has been changed.",
+  "auth.password_unchanged": "The new password cannot be the same as the current one."
 }

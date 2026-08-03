@@ -65,6 +65,40 @@
         </div>
       </div>
     </section>
+
+    <section class="form-surface settings-section">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.account.passwordTitle") }}</h3>
+          <p class="meta">{{ t("panel.account.passwordHint") }}</p>
+        </div>
+      </div>
+
+      <div class="form-grid two">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.account.currentPassword") }}</span>
+          <input v-model="currentPassword" type="password" autocomplete="current-password" />
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.account.newPassword") }}</span>
+          <input v-model="newPassword" type="password" minlength="12" autocomplete="new-password" />
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.account.confirmPassword") }}</span>
+          <input v-model="confirmPassword" type="password" minlength="12" autocomplete="new-password" />
+        </label>
+      </div>
+
+      <!-- Anahtarların düşeceği ÖNCEDEN söylenir: kullanıcı yapay zeka bağlantısını yeniden
+           kurması gerekeceğini işlemden sonra değil, öncesinde bilmeli. -->
+      <p class="meta">{{ t("panel.account.passwordRevokesTokens") }}</p>
+
+      <div class="settings-inline-action">
+        <button class="compact" :disabled="changingPassword" @click="changePassword">
+          {{ changingPassword ? t("panel.account.passwordChanging") : t("panel.account.changePassword") }}
+        </button>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -80,9 +114,10 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
 
 const i18n = useI18n();
-const t = (key: string) => {
+// params: "{count} anahtar iptal edildi" gibi sayı iceren metinler icin. Verilmezse davranis aynidir.
+const t = (key: string, params?: Record<string, unknown>) => {
   try {
-    const value = i18n.t(key);
+    const value = params ? i18n.t(key, params) : i18n.t(key);
     if (typeof value !== "string") {
       console.error("Unexpected i18n value", key, value);
       return key;
@@ -100,6 +135,11 @@ const authStore = useAuthStore();
 const twoFactorVerificationCode = ref("");
 const disableTwoFactorPassword = ref("");
 const recoveryCodes = ref<string[]>([]);
+
+const currentPassword = ref("");
+const newPassword = ref("");
+const confirmPassword = ref("");
+const changingPassword = ref(false);
 
 async function startTwoFactor() {
   try {
@@ -146,6 +186,41 @@ async function disableTwoFactor() {
     notify(t("panel.account.disabledMessage"), false);
   } catch (error) {
     notify(resolveApiMessage(error), true);
+  }
+}
+
+async function changePassword() {
+  // Eşleşme denetimi İSTEMCİDE yapılır: sunucuya gitmeye gerek yok ve kullanıcı anında görür.
+  // Uzunluk/geçerlilik denetimi ise sunucuda da vardır — istemci denetimi atlanabilir bir şeydir.
+  if (newPassword.value !== confirmPassword.value) {
+    notify(t("panel.account.passwordMismatch"), true);
+    return;
+  }
+
+  if (newPassword.value.length < 12) {
+    notify(t("panel.account.passwordTooShort"), true);
+    return;
+  }
+
+  changingPassword.value = true;
+  try {
+    const result = await authStore.changePassword(currentPassword.value, newPassword.value);
+    currentPassword.value = "";
+    newPassword.value = "";
+    confirmPassword.value = "";
+
+    // Kaç anahtarın düştüğü SÖYLENİR. Sessizce kesilirse kullanıcı yapay zeka bağlantısının neden
+    // çalışmadığını anlamaz ve hatayı panelde arar.
+    notify(
+      result.revokedApiTokens > 0
+        ? `${t("panel.account.passwordChanged")} ${t("panel.account.passwordTokensRevoked", { count: result.revokedApiTokens })}`
+        : t("panel.account.passwordChanged"),
+      false
+    );
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  } finally {
+    changingPassword.value = false;
   }
 }
 

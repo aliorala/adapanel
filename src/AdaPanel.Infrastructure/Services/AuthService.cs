@@ -311,6 +311,52 @@ public sealed class AuthService(
         return MapCurrentUser(user);
     }
 
+    public async Task<ChangePasswordResultDto> ChangePasswordAsync(
+        Guid userId,
+        ChangePasswordRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await GetUserAsync(userId, cancellationToken);
+
+        // MEVCUT parola şart. Aksi hâlde çalınmış bir oturum çerezi tek başına hesabı kalıcı olarak
+        // devralmaya yeterdi: saldırgan parolayı değiştirir, gerçek sahibi dışarıda kalırdı.
+        var verification = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword);
+        if (verification == PasswordVerificationResult.Failed)
+        {
+            throw new InvalidOperationException("auth.invalid_credentials");
+        }
+
+        // Aynı parolayı "değiştirmek" işlemi anlamsız kılar ve kullanıcıya yanlış bir güvenlik
+        // duygusu verir — özellikle sızıntı şüphesiyle geldiyse.
+        if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.NewPassword) != PasswordVerificationResult.Failed)
+        {
+            throw new InvalidOperationException("auth.password_unchanged");
+        }
+
+        user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
+        user.UpdatedAtUtc = DateTime.UtcNow;
+        // Parola değişimi kilidi de açar: kullanıcı zaten kimliğini mevcut parolayla kanıtladı.
+        user.FailedLoginCount = 0;
+        user.LockedUntilUtc = null;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        // Anahtarlar paroladan BAĞIMSIZ kimlik bilgileridir. Parola değiştiren kişi çoğu zaman
+        // "erişimi kesmek" istediği için gelir; anahtar ayakta kalırsa MCP üzerinden erişim sürer ve
+        // kullanıcı bunu fark etmez. Kaç anahtarın düştüğü yanıtta bildirilir, sessizce kesilmez.
+        var revoked = await apiTokenService.RevokeAllForUserAsync(user.Id, cancellationToken);
+
+        await auditService.WriteAsync(
+            "auth.password_changed",
+            "auth",
+            $"Password changed by '{user.UserName}'. {revoked} API token(s) revoked.",
+            user.Id,
+            ipAddress,
+            cancellationToken);
+
+        return new ChangePasswordResultDto { RevokedApiTokens = revoked };
+    }
+
     private async Task<IReadOnlyCollection<string>> GenerateAndStoreRecoveryCodesAsync(Guid userId, CancellationToken cancellationToken)
     {
         var codes = new List<string>(RecoveryCodeCount);

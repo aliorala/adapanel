@@ -29,5 +29,15 @@ public interface IAuthService
 
     /// <summary>Geçerli tek kullanımlık token ile yeni parola belirler.</summary>
     Task ResetPasswordAsync(string token, string newPassword, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Oturumu açık kullanıcının kendi parolasını değiştirir. Mevcut parolayı doğrular ve
+    /// kullanıcının API anahtarlarını düşürür; iptal edilen anahtar sayısını döner.
+    /// </summary>
+    Task<ChangePasswordResultDto> ChangePasswordAsync(
+        Guid userId,
+        ChangePasswordRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default);
 }
 

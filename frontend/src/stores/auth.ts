@@ -214,6 +214,13 @@ export const useAuthStore = defineStore("auth", {
       }
       return response.data.data;
     },
+    async changePassword(currentPassword: string, newPassword: string) {
+      const response = await apiClient.post<ApiEnvelope<{ revokedApiTokens: number }>>("/auth/change-password", {
+        currentPassword,
+        newPassword
+      });
+      return response.data.data;
+    },
     async fetchUsers() {
       const response = await apiClient.get<ApiEnvelope<ManagedUser[]>>("/users");
       this.users = response.data.data;
