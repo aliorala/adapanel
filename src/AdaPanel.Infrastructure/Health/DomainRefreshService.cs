@@ -597,10 +597,12 @@ internal sealed class DomainRefreshService(
 
         // --- Bolge Windows DNS'te var mi ---
         IReadOnlyList<SiteDnsRecordDto> zoneKayitlari = [];
+        var windowsDnsHazir = false;
         try
         {
             var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
             zoneKayitlari = zone.Records.ToList();
+            windowsDnsHazir = zone.IsWindowsDnsAvailable && zone.IsWindowsZonePresent;
             if (!zone.IsWindowsZonePresent)
             {
                 // Yayinlama adimi (2b) bunu zaten denedi; hala yoksa gercek bir sorun var
@@ -634,6 +636,23 @@ internal sealed class DomainRefreshService(
         try
         {
             var yayinlanan = await dnsService.GetPublishedRecordKeysAsync(siteName, cancellationToken);
+
+            // "OLCEMEDIK" ILE "SORUN YOK" AYNI SEY DEGIL.
+            //
+            // Okuma basarisiz oldugunda sessizce geciyordum -- yani kendi uyardigim hatayi kendim
+            // yapiyordum. Windows DNS kurulu ve bolge yerinde oldugu halde kayitlar okunamiyorsa
+            // bu BASLI BASINA bir sorundur ve soylenmelidir; aksi halde panel bilmedigi seye
+            // "iyi" demis olur.
+            if (yayinlanan is null && windowsDnsHazir)
+            {
+                findings.Add(new RepairFindingDto
+                {
+                    Key = "repair.publish_state_unknown",
+                    Severity = "warn",
+                    NeedsConfirmation = true
+                });
+            }
+
             if (yayinlanan is not null && zoneKayitlari.Count > 0)
             {
                 var eksik = zoneKayitlari

@@ -18,16 +18,7 @@ export async function restartService(name: string) {
   return response.data.data;
 }
 
-export type DomainRefreshResult = {
-  siteName: string;
-  zoneName: string;
-  addedDnsRecords: string[];
-  appliedMailRecords: number;
-  error: string;
-  alreadyCurrent: boolean;
-};
-
-/** Tek bir alan adına değil SUNUCUYA ait bulgu (posta sunucusu adı, kapalı port). */
+/** Bulgu: onarmanın bulduğu, düzelttiği ya da onay beklediği tek bir sorun. */
 export type ServerFinding = {
   key: string;
   severity: "warn" | "fail";
@@ -35,6 +26,18 @@ export type ServerFinding = {
   needsConfirmation: boolean;
   detail: string;
 };
+
+export type DomainRefreshResult = {
+  siteName: string;
+  zoneName: string;
+  addedDnsRecords: string[];
+  appliedMailRecords: number;
+  /** Bu alan adında bulunan sorunlar; eklenen kayıt sayısıyla anlatılamayanlar burada. */
+  findings: ServerFinding[];
+  error: string;
+  alreadyCurrent: boolean;
+};
+
 
 export type DomainRefreshSummary = {
   results: DomainRefreshResult[];

@@ -115,6 +115,11 @@
             <template v-else-if="row.alreadyCurrent">{{ t("panel.health.domainsRowCurrent") }}</template>
             <template v-else>
               {{ row.addedDnsRecords.join(", ") || "—" }}
+              <!-- Bulgular: eklenen kayit sayisiyla anlatilamayan sorunlar. Gosterilmezse
+                   uretilseler bile kullaniciya HIC ULASMIYORLAR. -->
+              <span v-for="bulgu in row.findings ?? []" :key="bulgu.key" class="row-finding">
+                · {{ t(bulgu.key) }}
+              </span>
               <span v-if="row.appliedMailRecords">
                 · {{ t("panel.health.domainsRowMail", { count: row.appliedMailRecords }) }}
               </span>
@@ -387,6 +392,10 @@ function showNotice(message: string, isError: boolean) {
 
 /* Yukleniyor: notr gri + hafif nabiz. Yesil/kirmizi BILEREK kullanilmiyor -- henuz olculmemis
    bir durumu renkle yorumlamak, kullaniciyi yaniltmanin en kolay yolu. */
+.row-finding {
+  opacity: 0.85;
+}
+
 .server-findings {
   margin: 0.5rem 0 0;
   padding-left: 1.1rem;

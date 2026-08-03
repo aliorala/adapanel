@@ -3143,5 +3143,6 @@
   "panel.attention.openDrawer": "Tümünü gör",
   "panel.attention.badgeMore": "ve {count} tane daha",
   "repair.mail_hostname_mismatch": "Posta sunucusu kendini makine adıyla tanıtıyor; giden postalar spam'e düşebilir.",
-  "repair.records_not_published": "Bazı DNS kayıtları panelde tanımlı ama sunucuda yayınlanmamış."
+  "repair.records_not_published": "Bazı DNS kayıtları panelde tanımlı ama sunucuda yayınlanmamış.",
+  "repair.publish_state_unknown": "DNS kayıtları sunucudan okunamadı; yayınlanmış kayıtların durumu doğrulanamıyor."
 }
