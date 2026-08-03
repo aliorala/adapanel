@@ -7,13 +7,15 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Dns;
 
 public sealed partial class DnsService(
     IIisSiteService iisSiteService,
     IPanelPreferencesService panelPreferencesService,
-    JsonFileStore fileStore) : IDnsService
+    JsonFileStore fileStore,
+    ILogger<DnsService> logger) : IDnsService
 {
     private const string StatePath = "config/dns-zones.json";
     private const string TemplatePath = "config/dns-template.json";
@@ -50,9 +52,16 @@ public sealed partial class DnsService(
             var state = await GetOrCreateStateAsync(site, cancellationToken);
             await TrySyncWindowsDnsAsync(state, cancellationToken);
         }
-        catch
+        catch (Exception exception)
         {
-            // Best-effort: Windows DNS yoksa/yazilamazsa site olusturmayi bozmamak icin sessiz gec.
+            // En iyi caba: Windows DNS yoksa/yazilamazsa SITE OLUSTURMAYI bozmayiz. Ama sessiz de
+            // kalmayiz -- eskiden bos catch vardi ve kurulusta yayinlanamayan bir bolge HICBIR
+            // yerde gorunmuyordu; kullanici alan adinin neden cozulmedigini aylarca arayabilirdi.
+            // Onarma bu durumu ayrica tespit edip yeniden yayinlar.
+            logger.LogWarning(
+                exception,
+                "Bolge Windows DNS'e yayinlanamadi ({SiteName}). Sunucu Sagligi > Eksikleri tamamla ile yeniden denenebilir.",
+                siteName);
         }
     }
 
@@ -952,14 +961,47 @@ public sealed partial class DnsService(
         {
             throw new AppException("dns.sync_failed", 500, 500, BuildCommandDetails(result));
         }
+
+        // Yazma BASARILI olduktan sonra kaydedilir: basarisiz bir senkrondan sonra listeyi
+        // guncellemek, aslinda yazilmamis gruplari "yazilmis" saymak olurdu.
+        var yayinlanan = DesiredGroups(state).ToList();
+        if (!yayinlanan.SequenceEqual(state.PublishedGroups, StringComparer.OrdinalIgnoreCase))
+        {
+            state.PublishedGroups = yayinlanan;
+            await UpsertStateAsync(state, cancellationToken);
+        }
     }
+
+    /// <summary>Panelin bu bolgede olmasini istedigi "TUR|konak" gruplari.</summary>
+    private static IEnumerable<string> DesiredGroups(DnsZoneState state) => state.Records
+        .Select(record => $"{record.Type.ToUpperInvariant()}|{record.Host}")
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(key => key, StringComparer.OrdinalIgnoreCase);
 
     private static string BuildSyncScript(DnsZoneState state)
     {
-        var groups = state.Records
-            .GroupBy(record => $"{record.Type}|{record.Host}", StringComparer.OrdinalIgnoreCase)
+        // Silinecek gruplar = SIMDI istenenler + ESKIDEN panelin yazdiklari.
+        //
+        // Ikincisi olmadan sizinti oluyordu: bir grubun son kaydi panelden silininde grup listeden
+        // duser, silme komutu uretilmez ve kayit Windows DNS'te canli kalir. Bir MX ya da TXT'nin
+        // boyle "hayalet" kalmasi postayi yanlis sunucuya yonlendirebilir.
+        var istenen = state.Records
+            .GroupBy(record => $"{record.Type.ToUpperInvariant()}|{record.Host}", StringComparer.OrdinalIgnoreCase)
             .Select(group => new { Type = group.First().Type.ToUpperInvariant(), Host = group.First().Host })
-            .ToArray();
+            .ToList();
+
+        var istenenAnahtarlar = istenen.Select(item => $"{item.Type}|{item.Host}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var oksuzler = state.PublishedGroups
+            .Where(key => !istenenAnahtarlar.Contains(key))
+            .Select(key => key.Split('|', 2))
+            .Where(parts => parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
+            // SOA ve zone kokundeki NS bilerek DISARIDA: Windows bunlari bolgeyle birlikte kendisi
+            // olusturur, silinmeleri bolgeyi bozar.
+            .Where(parts => !string.Equals(parts[0], "SOA", StringComparison.OrdinalIgnoreCase))
+            .Select(parts => new { Type = parts[0].ToUpperInvariant(), Host = parts[1] });
+
+        var groups = istenen.Concat(oksuzler).ToArray();
 
         var lines = new List<string>
         {
@@ -1420,6 +1462,22 @@ public sealed partial class DnsService(
         public List<DnsRecordState> Records { get; set; } = [];
 
         public List<string> ZoneTransferIps { get; set; } = [];
+
+        /// <summary>
+        /// Panelin Windows DNS'e EN SON yazdigi "TUR|konak" gruplari.
+        /// <para>
+        /// Neden tutuluyor: senkron scripti yalnizca panelde HALEN duran gruplari silip yeniden
+        /// yaziyordu. Kullanici bir grubun son kaydini panelden silince o grup listeden dustugu icin
+        /// silme komutu hic uretilmiyor ve kayit Windows DNS'te CANLI kaliyordu -- hicbir onarma da
+        /// temizlemiyordu. Bu liste sayesinde "eskiden yazdigim ama artik istemedigim" gruplar
+        /// hedefli olarak temizlenir.
+        /// </para>
+        /// <para>
+        /// Neden "panelde olmayan her seyi sil" DEGIL: yonetici DNS Manager'dan elle kayit eklemis
+        /// olabilir. Panelin hic yazmadigi bir kaydi silmek, kullanicinin verisini yok etmek olurdu.
+        /// </para>
+        /// </summary>
+        public List<string> PublishedGroups { get; set; } = [];
 
         public int DefaultsVersion { get; set; }
     }

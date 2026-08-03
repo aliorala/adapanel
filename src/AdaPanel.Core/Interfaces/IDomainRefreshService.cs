@@ -17,6 +17,17 @@ public interface IDomainRefreshService
     /// <summary>Tek alan adını tazeler.</summary>
     Task<DomainRefreshResultDto> RefreshAsync(string siteName, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// TEK alan adını hiçbir şey değiştirmeden denetler.
+    /// <para>
+    /// Site detay sayfasının "bu sitede onarılması gereken şeyler var" uyarısı için gerekli.
+    /// Öncesinde yalnız sunucu geneli denetim vardı; kullanıcı bir sitenin sorunlu olduğunu
+    /// ancak Sunucu Sağlığı ekranına gidip toplam sayıya bakarak öğrenebiliyordu — hangi site
+    /// olduğunu değil.
+    /// </para>
+    /// </summary>
+    Task<DomainRefreshResultDto> InspectAsync(string siteName, CancellationToken cancellationToken = default);
+
     /// <summary>Sunucudaki tüm alan adlarını tazeler; bir alan adının hatası diğerlerini durdurmaz.</summary>
     Task<DomainRefreshSummaryDto> RefreshAllAsync(CancellationToken cancellationToken = default);
 

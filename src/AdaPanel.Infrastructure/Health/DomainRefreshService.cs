@@ -17,6 +17,9 @@ internal sealed class DomainRefreshService(
     public Task<DomainRefreshResultDto> RefreshAsync(string siteName, CancellationToken cancellationToken = default)
         => RunAsync(siteName, applyChanges: true, cancellationToken);
 
+    public Task<DomainRefreshResultDto> InspectAsync(string siteName, CancellationToken cancellationToken = default)
+        => RunAsync(siteName, applyChanges: false, cancellationToken);
+
     private async Task<DomainRefreshResultDto> RunAsync(string siteName, bool applyChanges, CancellationToken cancellationToken)
     {
         var result = new DomainRefreshResultDto { SiteName = siteName, ZoneName = siteName };
@@ -46,6 +49,16 @@ internal sealed class DomainRefreshService(
             if (applyChanges)
             {
                 result.AppliedMailRecords = await ApplyMailRecordsAsync(siteName, cancellationToken);
+
+                // 2b) Bolgeyi Windows DNS'e YENIDEN YAYINLA.
+                //
+                // Neden sart: RepairDefaultsAsync eksik kayit yoksa erken donuyor ve Windows DNS'e
+                // hic yazmiyor. Oysa panelin dosyasi dogru, Windows tarafi bozuk olabilir -- kayit
+                // yazilirken hata almis (canlida DKIM'de tam olarak bu oldu), bolge elle silinmis
+                // ya da kurulusta yayinlanamamis olabilir. O durumda onarma "eksik yok" deyip
+                // geciyor ve kullanici duzeltmeye hic ulasamiyordu. Yayinlama panelin durumunu
+                // oldugu gibi basar; kullanicinin kayitlarina dokunmaz.
+                await TryRepublishZoneAsync(siteName, cancellationToken);
 
                 // 3) Posta sunucusunun TLS sertifikasi. Stalwart'a yalniz YENILENIRKEN gonderilir;
                 //    dolayisiyla panelin sertifika birlestirmesindeki bir kusur guncelleme sonrasi
@@ -224,6 +237,22 @@ internal sealed class DomainRefreshService(
         {
             logger.LogDebug(exception, "Posta kayitlari denetlenemedi ({SiteName}); posta alan adi yok olabilir.", siteName);
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// Bolgeyi Windows DNS'e yeniden yayinlar. Yikici degildir: panelin durumunu oldugu gibi yazar,
+    /// yeni kayit uretmez, kullanicinin ekledigi kayitlari silmez.
+    /// </summary>
+    private async Task TryRepublishZoneAsync(string siteName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await dnsService.EnsureZonePublishedAsync(siteName, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Bolge yeniden yayinlanamadi ({SiteName}).", siteName);
         }
     }
 
