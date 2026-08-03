@@ -66,14 +66,18 @@
          alan adlarına uygulanır. Eskiden eklenmiş alan adları eksik kalır ve bu eksiklik kendini
          aylar sonra "postalarım spam'e düşüyor" olarak belli eder. Panel eksiği kendisi ölçer;
          uygulama kararı kullanıcıya bırakılır. -->
-    <article :class="['dns-card', domains && domains.updatedSites > 0 ? 'bad' : 'good']">
+    <!-- Yuklenirken kart NE IYI NE KOTU gorunur. Onceden veri gelmeden 'good' + yesil nokta
+         basiliyordu: kullanici "her sey yolunda" diye bakip gecerken kart birden kirmiziya
+         donuyordu. Olculmemis bir seyi "saglikli" gostermek, panelin en cok tekrarlanan hatasi. -->
+    <article :class="['dns-card', domainsLoading ? 'idle' : (domains && domains.updatedSites > 0 ? 'bad' : 'good')]">
       <div class="dns-head">
-        <span :class="['state-dot', domains && domains.updatedSites > 0 ? 'dot-danger' : 'dot-ok']"></span>
+        <span :class="['state-dot', domainsLoading ? 'dot-idle' : (domains && domains.updatedSites > 0 ? 'dot-danger' : 'dot-ok')]"></span>
         <div class="health-name">
           <strong>{{ t("panel.health.domainsTitle") }}</strong>
           <span class="svc-id">{{ t("panel.health.domainsHint") }}</span>
         </div>
-        <span v-if="domains" :class="['status-pill', domains.updatedSites > 0 ? 'danger' : 'ok']">
+        <span v-if="domainsLoading" class="status-pill">{{ t("panel.health.domainsLoading") }}</span>
+        <span v-else-if="domains" :class="['status-pill', domains.updatedSites > 0 ? 'danger' : 'ok']">
           {{
             domains.updatedSites > 0
               ? t("panel.health.domainsStale", { count: domains.updatedSites, total: domains.totalSites })
@@ -84,7 +88,7 @@
              hiç eksik yokken de düğmeyi görüp basıyor, hiçbir şey değişmiyor ve panel çalışmıyor
              sanıyordu. (İşlem zaten idempotent; sorun düğmenin varlığının yanlış sinyal vermesiydi.) -->
         <button
-          v-if="domains && domains.updatedSites > 0"
+          v-if="!domainsLoading && domains && domains.updatedSites > 0"
           class="secondary compact"
           :disabled="domainsBusy"
           @click="refreshAllDomains">
@@ -163,6 +167,8 @@ const noticeError = ref(false);
 const domains = ref<DomainRefreshSummary | null>(null);
 const domainReport = ref<DomainRefreshResult[]>([]);
 const domainsBusy = ref(false);
+// Ilk denetim bitene kadar true: kart bu sure boyunca notr gorunur.
+const domainsLoading = ref(true);
 
 onMounted(load);
 
@@ -192,6 +198,8 @@ async function load() {
   } catch {
     domains.value = null;
     domainReport.value = [];
+  } finally {
+    domainsLoading.value = false;
   }
 }
 
@@ -353,6 +361,18 @@ function showNotice(message: string, isError: boolean) {
 .state-dot.dot-ok {
   background: var(--ok-1);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok-1) 22%, transparent);
+}
+
+/* Yukleniyor: notr gri + hafif nabiz. Yesil/kirmizi BILEREK kullanilmiyor -- henuz olculmemis
+   bir durumu renkle yorumlamak, kullaniciyi yaniltmanin en kolay yolu. */
+.state-dot.dot-idle {
+  background: var(--text-muted);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 
 .state-dot.dot-danger {

@@ -3131,5 +3131,6 @@
   "panel.health.siteNeedsRepair": "Bu sitede onarılması gereken şeyler var.",
   "panel.health.siteRepair": "Onar",
   "panel.health.siteRepairing": "Onarılıyor...",
-  "panel.health.siteRepaired": "Onarma tamamlandı."
+  "panel.health.siteRepaired": "Onarma tamamlandı.",
+  "panel.health.domainsLoading": "Denetleniyor..."
 }
