@@ -1191,7 +1191,10 @@ public sealed partial class DnsService(
     /// </summary>
     internal static string BuildTxtLine(string host, string value, int ttl)
     {
-        const int MaxStringLength = 255;
+        // 252, 255 DEGIL. DNS'te tek bir TXT "character-string" en fazla 255 bayttir; asagidaki
+        // yontemde parcalar CRLF ile ayrildigi ve bu iki karakter de parcanin icinde sayildigi icin
+        // guvenli sinir 252'dir (252 + CR + LF = 254).
+        const int MaxStringLength = 252;
 
         if (value.Length <= MaxStringLength)
         {
@@ -1205,40 +1208,24 @@ public sealed partial class DnsService(
             chunks.Add(value.Substring(index, Math.Min(MaxStringLength, value.Length - index)));
         }
 
-        // KOMUT GECICI BIR TOPLU IS DOSYASINA YAZILIP CALISTIRILIR.
+        // UZUN DEGER: PARCALAR CRLF ILE BIRLESTIRILIR.
         //
-        // Neden bu kadar dolambacli: DKIM degeri BOSLUK icerir ("v=DKIM1; k=rsa; p=...") ve dnscmd
-        // her parcayi CIFT TIRNAK icinde bekler. Komutu PowerShell uzerinden gecirmek guvenilir
-        // degil: PowerShell 5.1, icinde tirnak bulunan bir argümani disariya verirken ters bolu ile
-        // kacirir, cmd.exe ise bu bicimi ANLAMAZ -- tirnaklar veriye karisir, kayit reddedilir.
-        // Toplu is dosyasinin ICERIGI ise aradan hicbir yorumlayici gecmeden dnscmd'e ulasir.
+        // Bu, Windows DNS'te 255'ten uzun TXT yazmanin BELGELENEN yoludur: cmdlet'e tek bir metin
+        // verilir ama metindeki her CRLF, kayitta AYRI bir character-string olur. Dogrulayicilar
+        // parcalari birlestirir (DKIM icin RFC 6376 bunu acikca soyler).
         //
-        // Dosya ASCII yazilir: DKIM degeri base64'tur ve BOM komutun ilk baytlarini bozar.
-        var quoted = string.Join(" ", chunks.Select(chunk => "\"" + chunk.Replace("\"", string.Empty) + "\""));
-        var safeHost = host.Replace("\"", string.Empty);
-        var etiket = EscapeSingleQuoted($"TXT {safeHost}");
+        // dnscmd yolu DENENDI VE TERK EDILDI: belgelenen imzasi tek bir <rrdata> alir, birden cok
+        // tirnakli parca verildiginde ERROR_INVALID_PARAMETER (87) donduruyor. Canli sunucuda RSA
+        // DKIM kaydinin hicbir zaman yazilamamasinin sebebi buydu.
+        //
+        // CRLF, ters tirnak kacisiyla degil [char] koduyla uretiliyor: kacis dizileri C# kaynagindan
+        // PowerShell metnine giderken katman katman bozulabiliyor, karakter kodu ise tek anlamlidir.
+        var birlesik = string.Join(
+            " + [char]13 + [char]10 + ",
+            chunks.Select(chunk => $"'{EscapePowerShellLiteral(chunk)}'"));
 
-        var satirlar = new[]
-        {
-            "$adaCmd = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
-            // TTL PARAMETRESI YOK -- kasitli.
-            //
-            // Belgelenen imza: dnscmd [<servername>] /recordadd <zonename> <nodename> <rrtype> <rrdata>
-            // Araya TTL konuldugunda dnscmd o degeri KAYIT TURU sanir, gecersiz bulur ve
-            // ERROR_INVALID_PARAMETER (87) dondurup kullanim metnini basar. Canlida tam olarak bu
-            // oldu: "3600" tur sanildigi icin DKIM'in RSA kaydi hicbir zaman yazilamadi.
-            // Kayit bolgenin varsayilan TTL'ini alir; DKIM icin bunun pratik bir sakincasi yoktur.
-            $"$adaKomut = 'dnscmd . /RecordAdd ' + $zoneName + ' {EscapeSingleQuoted(safeHost)} TXT {EscapeSingleQuoted(quoted)}'",
-            "Set-Content -LiteralPath $adaCmd -Value $adaKomut -Encoding ASCII",
-            "$adaCikti = (& $adaCmd 2>&1) -join ' '",
-            "$adaKod = $LASTEXITCODE",
-            "Remove-Item -LiteralPath $adaCmd -Force -ErrorAction SilentlyContinue",
-            // Cikis kodu DENETLENIR: kayit yazilmadigi halde "tamam" demek, tam da bu panelde
-            // ayikladigimiz hata sinifi. Ciktinin kendisi de mesaja konur ki sebep gorunsun.
-            $"if ($adaKod -ne 0) {{ throw '{etiket}: dnscmd(' + $adaKod + ') ' + $adaCikti }}"
-        };
-
-        return string.Join(Environment.NewLine, satirlar);
+        return $"Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name '{EscapePowerShellLiteral(host)}' " +
+               $"-DescriptiveText ({birlesik}) -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
     }
 
     /// <summary>Tek tirnakli PowerShell dizesi icin kacis: yalnizca tek tirnak ikilenir.</summary>

@@ -16,13 +16,14 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class DnsSyncResilienceTests
 {
-    // Uzun TXT satiri artik dnscmd'e dusuyor; onun da cikis kodu denetleniyor.
+    // Uzun TXT artik dnscmd'e DUSMEZ: cmdlet'e tek metin verilir, parcalar CRLF ile ayrilir.
     [Fact]
-    public void BuildTxtLine_LongValue_StillChecksTheExitCode()
+    public void BuildTxtLine_LongValue_UsesTheCmdletWithSeparatedChunks()
     {
         var line = DnsService.BuildTxtLine("selector._domainkey", "v=DKIM1; p=" + new string('A', 400), 3600);
 
-        Assert.Contains("$LASTEXITCODE", line, StringComparison.Ordinal);
+        Assert.Contains("Add-DnsServerResourceRecord", line, StringComparison.Ordinal);
+        Assert.Contains("[char]13 + [char]10", line, StringComparison.Ordinal);
     }
 
     // Kisa deger kanitlanmis cmdlet yolunu kullanmaya devam etmeli.

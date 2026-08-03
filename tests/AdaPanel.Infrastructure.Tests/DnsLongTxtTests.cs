@@ -4,51 +4,61 @@ using Xunit;
 namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>
-/// Uzun TXT kayitlari (DKIM RSA acik anahtari).
+/// 255 karakteri asan TXT kayitlari (DKIM'in RSA anahtari).
 /// <para>
-/// Canli bulgu: <c>Add-DnsServerResourceRecord -Txt</c> 255 karakteri asan degeri
-/// "InputObject for resource record has an invalid value" (WIN32 203) ile REDDEDIYOR. RSA DKIM
-/// anahtari ~450 karakterdir, yani RSA DKIM kaydi hicbir kurulumda yazilamiyordu. Ed25519 kaydi
-/// kisa oldugu icin geciyor ve sorun yarim gorunuyordu.
+/// Canli olay: RSA DKIM kaydi HICBIR kurulumda yazilamiyordu. Once cmdlet uzun degeri reddediyor
+/// sanildi ve dnscmd'e gecildi; dnscmd de birden cok tirnakli parcayi kabul etmeyip
+/// ERROR_INVALID_PARAMETER (87) dondurdu. Dogru yol, cmdlet'e TEK bir metin verip parcalari
+/// CRLF ile ayirmakmis -- Windows DNS her CRLF ayrimini ayri bir character-string olarak kaydeder.
+/// Ed25519 kaydi kisa oldugu icin hep yaziliyordu; "biri oluyor digeri olmuyor" tablosu bundandi.
 /// </para>
 /// </summary>
 public sealed class DnsLongTxtTests
 {
     private static string Key(int length) => "v=DKIM1; k=rsa; p=" + new string('A', length);
 
-    /// <summary>Uretilen komut satirindaki "" ile sarilmis parcalari cikarir.</summary>
+    /// <summary>Uretilen komuttaki tek tirnakli parcalari cikarir.</summary>
     private static IReadOnlyList<string> ExtractChunks(string line) =>
-        System.Text.RegularExpressions.Regex.Matches(line, "\"([^\"]*?)\"")
+        System.Text.RegularExpressions.Regex.Matches(line, "'([^']*)'")
             .Select(match => match.Groups[1].Value)
+            .Where(value => !value.EndsWith("._domainkey", StringComparison.Ordinal) && value != "@")
             .ToList();
 
     [Fact]
-    public void BuildTxtLine_UsesTheProvenCmdletForShortValues()
+    public void BuildTxtLine_ShortValue_StaysOnASingleString()
     {
         var line = DnsService.BuildTxtLine("@", "v=spf1 mx a ~all", 3600);
 
         Assert.Contains("Add-DnsServerResourceRecord", line, StringComparison.Ordinal);
-        Assert.DoesNotContain("dnscmd", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("[char]13", line, StringComparison.Ordinal);
     }
 
+    // dnscmd YOLU TERK EDILDI: belgelenen imzasi tek bir <rrdata> alir.
     [Fact]
-    public void BuildTxtLine_SplitsValuesLongerThan255Characters()
+    public void BuildTxtLine_LongValue_DoesNotUseDnscmd()
     {
         var line = DnsService.BuildTxtLine("v1-rsa-20260626._domainkey", Key(400), 3600);
 
-        Assert.Contains("dnscmd", line, StringComparison.Ordinal);
-        Assert.DoesNotContain("Add-DnsServerResourceRecord", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("dnscmd", line, StringComparison.Ordinal);
+        Assert.Contains("Add-DnsServerResourceRecord", line, StringComparison.Ordinal);
     }
 
+    // Parcalar CRLF ile ayrilmali: Windows DNS her ayrimi ayri bir character-string yapar.
     [Fact]
-    public void BuildTxtLine_ProducesChunksThatNeverExceedTheProtocolLimit()
+    public void BuildTxtLine_LongValue_JoinsChunksWithCarriageReturnLineFeed()
     {
-        var line = DnsService.BuildTxtLine("selector._domainkey", Key(700), 3600);
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
 
-        // dnscmd argumanlari tek tirnakli parcalar hâlinde verilir; hicbiri 255'i asmamali.
-        foreach (var chunk in ExtractChunks(line))
+        Assert.Contains("[char]13 + [char]10", line, StringComparison.Ordinal);
+    }
+
+    // 252, 255 DEGIL: CRLF de parcanin icinde sayiliyor.
+    [Fact]
+    public void BuildTxtLine_ChunksStayWithinTheProtocolLimitIncludingTheSeparator()
+    {
+        foreach (var chunk in ExtractChunks(DnsService.BuildTxtLine("selector._domainkey", Key(700), 3600)))
         {
-            Assert.True(chunk.Length <= 255, $"parca cok uzun: {chunk.Length}");
+            Assert.True(chunk.Length <= 252, $"parca cok uzun: {chunk.Length}");
         }
     }
 
@@ -56,41 +66,16 @@ public sealed class DnsLongTxtTests
     public void BuildTxtLine_KeepsEveryCharacterOfTheOriginalValue()
     {
         var key = Key(600);
-        var line = DnsService.BuildTxtLine("selector._domainkey", key, 3600);
 
-        // Parcalar birlestirildiginde ORIJINAL deger cikmali: DKIM dogrulayicisi tam olarak bunu yapar.
-        Assert.Equal(key, string.Concat(ExtractChunks(line)));
+        Assert.Equal(key, string.Concat(ExtractChunks(DnsService.BuildTxtLine("selector._domainkey", key, 3600))));
     }
 
-    // Cikis kodu denetlenmezse kayit yazilmadigi halde "tamam" denirdi.
+    // TTL kayitla birlikte yazilmali: dnscmd yolunda kaybediliyordu.
     [Fact]
-    public void BuildTxtLine_FailsLoudlyWhenDnscmdReturnsAnError()
+    public void BuildTxtLine_LongValue_StillSetsTheTimeToLive()
     {
         var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
 
-        Assert.Contains("$adaKod", line, StringComparison.Ordinal);
-        Assert.Contains("throw", line, StringComparison.Ordinal);
-    }
-
-    // CANLI KOK NEDEN: komuta TTL eklenmisti. dnscmd'in belgelenen imzasi
-    // "/recordadd <zone> <node> <rrtype> <rrdata>" seklindedir; araya konan TTL degeri KAYIT TURU
-    // sanilir ve dnscmd ERROR_INVALID_PARAMETER (87) dondurup kullanim metnini basar. RSA DKIM
-    // kaydi bu yuzden hicbir zaman yazilamadi.
-    [Fact]
-    public void BuildTxtLine_LongValue_DoesNotPassTtlToDnscmd()
-    {
-        var line = DnsService.BuildTxtLine("v1-rsa-20260626._domainkey", Key(400), 3600);
-
-        Assert.Contains("dnscmd", line, StringComparison.Ordinal);
-        Assert.DoesNotContain("3600", line, StringComparison.Ordinal);
-    }
-
-    // Kayit turu, konak adindan HEMEN SONRA gelmeli.
-    [Fact]
-    public void BuildTxtLine_LongValue_PutsRecordTypeRightAfterTheNodeName()
-    {
-        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
-
-        Assert.Contains("selector._domainkey TXT ", line, StringComparison.Ordinal);
+        Assert.Contains("FromSeconds(3600)", line, StringComparison.Ordinal);
     }
 }
