@@ -56,4 +56,19 @@ public sealed class DnsHostValidationTests
         var exception = Assert.Throws<AppException>(() => DnsService.NormalizeHost(host, Zone));
         Assert.Equal("dns.invalid_host", exception.Message);
     }
+
+    // Surum 3 varsayilanlari: istemci otomatik yapilandirma (RFC 6186) ve TLS raporlama konaklari
+    // COK etiketli alt cizgi tasir. Bunlar reddedilseydi sablon YAZILAMAZ, uustelik hata bolge
+    // olusturulurken cikacagi icin site kurulumu bile bozulurdu.
+    [Theory]
+    [InlineData("_submissions._tcp")]
+    [InlineData("_submission._tcp")]
+    [InlineData("_imaps._tcp")]
+    [InlineData("_pop3s._tcp")]
+    [InlineData("_smtp._tls")]
+    [InlineData("_mta-sts")]
+    public void NormalizeHost_AcceptsAutoconfigurationHosts(string host)
+    {
+        Assert.Equal(host, DnsService.NormalizeHost(host, Zone));
+    }
 }

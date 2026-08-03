@@ -21,11 +21,22 @@ public sealed class DomainRefreshResultDto
     /// <summary>Posta sunucusundan alınıp zone'a yazılan kayıt sayısı (DKIM dahil). 0 = posta alan adı yok.</summary>
     public int AppliedMailRecords { get; set; }
 
+    /// <summary>
+    /// Posta sunucusunun TLS sertifikası yeniden gönderildiyse true.
+    /// <para>
+    /// Neden onarma kapsamında: sertifika Stalwart'a yalnız YENİLENİRKEN gönderilir. Panelin
+    /// sertifika birleştirmesinde bir kusur olsaydı (canlıda oldu: ara sertifika düşüyordu), mevcut
+    /// sunucular güncelleme sonrası bile bozuk zinciri taşımaya devam ederdi -- ta ki üç ay sonraki
+    /// yenilemeye kadar. Onarma bunu beklemez.
+    /// </para>
+    /// </summary>
+    public bool MailCertificateRefreshed { get; set; }
+
     /// <summary>Bu alan adı için işlem yapılamadıysa sebebi; boşsa sorun yok.</summary>
     public string Error { get; set; } = string.Empty;
 
     /// <summary>Hiçbir eksik bulunmadıysa true — "zaten güncel" demenin dürüst yolu.</summary>
-    public bool AlreadyCurrent => Error.Length == 0 && AddedDnsRecords.Count == 0 && AppliedMailRecords == 0;
+    public bool AlreadyCurrent => Error.Length == 0 && AddedDnsRecords.Count == 0 && AppliedMailRecords == 0 && !MailCertificateRefreshed;
 }
 
 /// <summary>Sunucudaki TÜM alan adları için tazeleme sonucu.</summary>

@@ -23,7 +23,8 @@ public sealed partial class DnsService(
     // 2: posta kayitlari (mail A, webmail A, MX, SPF, DMARC) varsayilan sete eklendi. Surum artinca
     // MevcutDefaults birlestirmesi calisir -> ESKI bolgeler de eksik posta kayitlarini kendiliginden alir
     // (kullanicinin ekledigi kayitlara dokunulmaz, yalniz EKSIK olanlar eklenir).
-    private const int CurrentDefaultsVersion = 2;
+    // 3: istemci otomatik yapilandirma (RFC 6186 SRV) + TLS raporlama eklendi.
+    private const int CurrentDefaultsVersion = 3;
     // Desteklenen kayıt tipleri. SRV/PTR/TLSA'nın Windows DNS'te NATIVE cmdlet parametresi vardır;
     // CAA'nın yoktur, RFC 3597 "bilinmeyen kayıt" yolu (-Unknown -Type 257 + ham RDATA) ile yazılır.
     // Değer biçimleri (UI'da da gösterilir):
@@ -771,7 +772,25 @@ public sealed partial class DnsService(
             new DnsTemplateRecordDto { Type = "A", Host = "webmail", Value = "{ip}", Ttl = 3600 },
             new DnsTemplateRecordDto { Type = "MX", Host = "@", Value = "mail.{domain}", Ttl = 3600, Priority = 10 },
             new DnsTemplateRecordDto { Type = "TXT", Host = "@", Value = "v=spf1 mx a ip4:{ip} ~all", Ttl = 3600 },
-            new DnsTemplateRecordDto { Type = "TXT", Host = "_dmarc", Value = "v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}", Ttl = 3600 }
+            new DnsTemplateRecordDto { Type = "TXT", Host = "_dmarc", Value = "v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}", Ttl = 3600 },
+
+            // ISTEMCI OTOMATIK YAPILANDIRMA (RFC 6186). Thunderbird, Apple Mail, K-9 ve daha bircok
+            // istemci bu kayitlari okuyup sunucu/port/sifreleme ayarlarini KENDISI doldurur; kullanici
+            // yalniz e-posta ve parola yazar. Plesk'in otomatik yapilandirma ozelliginin DNS ayagi budur.
+            //
+            // Neden bu bicim: SRV degeri "<agirlik> <port> <hedef>", oncelik ayri alanda.
+            // 465 = ortuk TLS, 587 = STARTTLS; ikisi de duyurulur ki istemci hangisini
+            // destekliyorsa onu secsin. Port 25 BILEREK duyurulmaz: o MTA'lar arasidir,
+            // istemci gonderimi icin kullanilmamalidir.
+            new DnsTemplateRecordDto { Type = "SRV", Host = "_submissions._tcp", Value = "1 465 mail.{domain}", Ttl = 3600, Priority = 0 },
+            new DnsTemplateRecordDto { Type = "SRV", Host = "_submission._tcp", Value = "1 587 mail.{domain}", Ttl = 3600, Priority = 10 },
+            new DnsTemplateRecordDto { Type = "SRV", Host = "_imaps._tcp", Value = "1 993 mail.{domain}", Ttl = 3600, Priority = 0 },
+            new DnsTemplateRecordDto { Type = "SRV", Host = "_pop3s._tcp", Value = "1 995 mail.{domain}", Ttl = 3600, Priority = 10 },
+
+            // TLS RAPORLAMA (RFC 8460): baska sunucular bu alan adina posta gonderirken TLS
+            // kurulamazsa gunluk ozet raporu buraya yollar. Tamamen DNS tabanlidir, ek bir servis
+            // gerektirmez -- bu yuzden MTA-STS'ten farkli olarak tek basina calisir.
+            new DnsTemplateRecordDto { Type = "TXT", Host = "_smtp._tls", Value = "v=TLSRPTv1; rua=mailto:postmaster@{domain}", Ttl = 3600 }
         ]
     };
 

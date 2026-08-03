@@ -34,6 +34,14 @@ internal sealed class DomainRefreshService(
             if (applyChanges)
             {
                 result.AppliedMailRecords = await ApplyMailRecordsAsync(siteName, cancellationToken);
+
+                // 3) Posta sunucusunun TLS sertifikasi. Stalwart'a yalniz YENILENIRKEN gonderilir;
+                //    dolayisiyla panelin sertifika birlestirmesindeki bir kusur guncelleme sonrasi
+                //    bile kendiliginden duzelmez, uc ay sonraki yenilemeyi bekler. Canlida tam
+                //    olarak bu oldu (ara sertifika dusuyordu). Senkron icerik karmasini
+                //    karsilastirdigi icin degisiklik yoksa hicbir sey yapmaz -- her onarmada
+                //    gereksiz yeniden gonderim olmaz.
+                result.MailCertificateRefreshed = await TrySyncMailCertificateAsync(cancellationToken);
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -165,6 +173,23 @@ internal sealed class DomainRefreshService(
     /// Posta sunucusunun ürettiği kayıtları (MX/SPF/DKIM/DMARC) zone'a yazar.
     /// Posta kurulu değilse ya da bu alan adının posta alan adı yoksa 0 döner.
     /// </summary>
+    /// <summary>
+    /// Posta sertifikasini gerekiyorsa yeniden gonderir. Posta sunucusu kurulu degilse ya da
+    /// sertifika Let's Encrypt kaynakli degilse sessizce atlanir -- bu bir hata degildir.
+    /// </summary>
+    private async Task<bool> TrySyncMailCertificateAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await mailService.SyncCertificateAsync(cancellationToken) is not null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Posta sertifikasi senkronize edilemedi; posta sunucusu kurulu olmayabilir.");
+            return false;
+        }
+    }
+
     private async Task<int> ApplyMailRecordsAsync(string siteName, CancellationToken cancellationToken)
     {
         try
