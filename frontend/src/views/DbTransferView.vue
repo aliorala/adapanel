@@ -20,7 +20,7 @@
       <div class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.database.transfer.sourceHost") }}</span>
-          <input v-model.trim="form.sourceHost" placeholder="185.7.242.225" :disabled="busy" />
+          <input v-model.trim="form.sourceHost" placeholder="192.0.2.10" :disabled="busy" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.transfer.sourcePort") }}</span>

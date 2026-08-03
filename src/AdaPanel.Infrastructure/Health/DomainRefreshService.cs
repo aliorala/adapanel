@@ -31,6 +31,18 @@ internal sealed class DomainRefreshService(
             //    varsayılanlarında yoktur. Posta alan adı yoksa bu adım sessizce atlanır — posta
             //    kullanmayan bir siteye DKIM yazmak anlamsız olurdu.
             //    Denetim (kuru) modunda hiç çağrılmaz: yazma yapan tek adım budur.
+            if (!applyChanges)
+            {
+                // DENETIM (kuru) modu da posta kayitlarina BAKAR -- yalnizca yazmaz.
+                //
+                // Neden sart: "Eksikleri tamamla" dugmesi bu denetimin sonucuna gore gorunuyor.
+                // Denetim yalnizca DNS sablonuna baksaydi (eski hali), DKIM kaydi eksik olan bir
+                // alan adi "guncel" sayilir, dugme GIZLENIR ve kullanici duzeltmeye hic ulasamazdi.
+                // Canli sunucuda tam olarak bu oldu: DKIM eksikti, onarma bunu duzeltebiliyordu,
+                // ama dugme gorunmedigi icin kullanici "onar butonu nerede" diye sordu.
+                result.AppliedMailRecords = await CountMissingMailRecordsAsync(siteName, cancellationToken);
+            }
+
             if (applyChanges)
             {
                 result.AppliedMailRecords = await ApplyMailRecordsAsync(siteName, cancellationToken);
@@ -187,6 +199,31 @@ internal sealed class DomainRefreshService(
         {
             logger.LogDebug(exception, "Posta sertifikasi senkronize edilemedi; posta sunucusu kurulu olmayabilir.");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Posta sunucusunun urettigi kayitlardan KACININ bolgede eksik oldugunu sayar. Hicbir sey
+    /// yazmaz -- denetim modunun yazma yapmama sozu korunur.
+    /// </summary>
+    private async Task<int> CountMissingMailRecordsAsync(string siteName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var dns = await mailService.GetDnsRecordsAsync(siteName, cancellationToken);
+            var applicable = dns.Records.Where(record => !string.IsNullOrWhiteSpace(record.Value)).ToList();
+            if (applicable.Count == 0)
+            {
+                return 0;
+            }
+
+            var mevcut = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
+            return applicable.Count(record => !mevcut.Contains($"{record.Type}|{record.Host}|{record.Value}"));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Posta kayitlari denetlenemedi ({SiteName}); posta alan adi yok olabilir.", siteName);
+            return 0;
         }
     }
 

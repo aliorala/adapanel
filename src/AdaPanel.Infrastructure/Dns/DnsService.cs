@@ -998,7 +998,7 @@ public sealed partial class DnsService(
                 "AAAA" => $"Add-DnsServerResourceRecordAAAA -ZoneName $zoneName -Name '{host}' -IPv6Address '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "CNAME" => $"Add-DnsServerResourceRecordCName -ZoneName $zoneName -Name '{host}' -HostNameAlias '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "MX" => $"Add-DnsServerResourceRecordMX -ZoneName $zoneName -Name '{host}' -MailExchange '{value}' -Preference {record.Priority ?? 10} -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
-                "TXT" => $"Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name '{host}' -DescriptiveText '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
+                "TXT" => BuildTxtLine(host, record.Value, ttl),
                 "NS" => $"Add-DnsServerResourceRecord -ZoneName $zoneName -NS -Name '{host}' -NameServer '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "PTR" => $"Add-DnsServerResourceRecordPtr -ZoneName $zoneName -Name '{host}' -PtrDomainName '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "SRV" => BuildSrvLine(host, record.Value, record.Priority, ttl),
@@ -1014,6 +1014,46 @@ public sealed partial class DnsService(
 
     // Aşağıdaki üç üretici test edilebilir olsun diye ayrı: Windows DNS'e yazılan komut satırının
     // birebir doğru olması gerekiyor (yanlış parametre = kayıt sessizce yayınlanmaz).
+    /// <summary>
+    /// TXT kaydi. 255 KARAKTERI ASAN degerler icin farkli bir yol kullanilir.
+    /// <para>
+    /// Neden: DNS'te tek bir TXT "character-string" en fazla 255 bayttir; daha uzun degerler BIRDEN
+    /// COK parcaya bolunerek yazilir (RFC 1035) ve dogrulayicilar parcalari birlestirir (DKIM icin
+    /// RFC 6376 bunu acikca soyler). <c>Add-DnsServerResourceRecord -Txt</c> bu bolmeyi YAPMAZ;
+    /// uzun degerde "InputObject for resource record has an invalid value" (WIN32 203) ile reddeder.
+    /// </para>
+    /// <para>
+    /// Bu, canli sunucuda DKIM'i tamamen calismaz kiliyordu: RSA acik anahtari ~450 karakterdir,
+    /// yani RSA DKIM kaydi HICBIR kurulumda yazilamiyordu. Ed25519 kaydi kisa oldugu icin geciyor
+    /// ve sorun yarim gorunuyordu. Kisa degerlerde kanitlanmis cmdlet yolu KORUNUR; yalnizca uzun
+    /// degerde dnscmd'e dusulur, cunku dnscmd birden cok parcayi ayri argüman olarak kabul eder.
+    /// </para>
+    /// </summary>
+    internal static string BuildTxtLine(string host, string value, int ttl)
+    {
+        const int MaxStringLength = 255;
+
+        if (value.Length <= MaxStringLength)
+        {
+            return $"Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name '{EscapePowerShellLiteral(host)}' " +
+                   $"-DescriptiveText '{EscapePowerShellLiteral(value)}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null";
+        }
+
+        var chunks = new List<string>();
+        for (var index = 0; index < value.Length; index += MaxStringLength)
+        {
+            chunks.Add(value.Substring(index, Math.Min(MaxStringLength, value.Length - index)));
+        }
+
+        var quoted = string.Join(" ", chunks.Select(chunk => $"'{EscapePowerShellLiteral(chunk)}'"));
+
+        // dnscmd sessizce basarisiz olabilir, bu yuzden cikis kodu DENETLENIR: kayit yazilmadigi
+        // halde "tamam" demek, tam da bu panelde ayikladigimiz hata sinifi.
+        return $"& dnscmd . /RecordAdd $zoneName '{EscapePowerShellLiteral(host)}' {ttl} TXT {quoted} | Out-Null" +
+               Environment.NewLine +
+               $"if ($LASTEXITCODE -ne 0) {{ throw \"dnscmd TXT ekleyemedi ({EscapePowerShellLiteral(host)}): $LASTEXITCODE\" }}";
+    }
+
     internal static string BuildSrvLine(string host, string value, int? priority, int ttl)
     {
         var (weight, port, target) = ParseSrvValue(value);
