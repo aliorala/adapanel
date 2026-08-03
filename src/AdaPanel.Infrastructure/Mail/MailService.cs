@@ -1148,6 +1148,20 @@ public sealed class MailService(
         // yerine yapilandirmadan turetmek, yanlis bir adi kalicilastirma riskini de ortadan kaldirir.
         if (string.IsNullOrWhiteSpace(hostName))
         {
+            // YALNIZ SUNUCUNUN KENDI varsayilan alani kullanilir; "sorgudan gelen ilk alan" DEGIL.
+            //
+            // Sorgu sirasi garantili degildir: sarkan bir defaultDomainId varsa ilk sirada BASKA
+            // BIR MUSTERININ alan adi gelebilir ve sunucu kendini onun adiyla tanitir. Bu hem
+            // yanlis hem de PTR ile tutmayacagi icin teslimati bozar. Referans gecerli degilse
+            // karsilama adi ayarlanmaz -- yanlis bir adi kalicilastirmaktansa dokunmamak dogrudur.
+            if (!domainIds.Contains(currentDomainId, StringComparer.Ordinal))
+            {
+                logger.LogInformation(
+                    "Posta karsilama adi turetilemedi: varsayilan alan referansi gecersiz. " +
+                    "Posta sertifikasi alindiginda ad kendiliginden ayarlanacak.");
+                return false;
+            }
+
             var domain = await GetObjectAsync(cli, "domain", domainId, env, cancellationToken);
             var domainName = domain is null ? null : GetField(domain.Value, "name");
             if (string.IsNullOrWhiteSpace(domainName))

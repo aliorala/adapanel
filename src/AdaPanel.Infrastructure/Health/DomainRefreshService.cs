@@ -22,6 +22,10 @@ internal sealed class DomainRefreshService(
     {
         var result = await RunAsync(siteName, applyChanges: true, cancellationToken);
 
+        // Tek site onarilirken de sunucu geneli adimlar bir kez calisir: kullanici site
+        // sayfasindan onardiginda posta sertifikasi ve karsilama adi geride kalmamali.
+        result.MailCertificateRefreshed = await RunServerWideAsync(cancellationToken);
+
         // TEK SITE onarildiginda da denetim onbellegi dusurulur.
         //
         // Onceden yalnizca TOPLU onarma dusuruyordu; site sayfasindan onaran kullanici, sorun
@@ -117,7 +121,14 @@ internal sealed class DomainRefreshService(
                 {
                     // Hata METNI kullaniciya ulasmali: "yazilamadi" demek yetmez, isletim
                     // sisteminin verdigi sebep olmadan sorun korlemesine aranir.
-                    result.Error = string.Join(" | ", MailRecordErrors);
+                    //
+                    // EKLENIR, uzerine YAZILMAZ: 1. adim (DNS varsayilanlari) da patlamis olabilir
+                    // ve o hata daha onemli olabilir. Uzerine yazmak, tam da bu turlarda ayikladigimiz
+                    // "hatayi gizleme" davranisinin baska bir bicimi olurdu.
+                    var postaHatasi = string.Join(" | ", MailRecordErrors);
+                    result.Error = string.IsNullOrWhiteSpace(result.Error)
+                        ? postaHatasi
+                        : result.Error + " || " + postaHatasi;
                 }
 
                 // 2b) Bolgeyi Windows DNS'e YENIDEN YAYINLA.
@@ -136,14 +147,11 @@ internal sealed class DomainRefreshService(
                 //    olarak bu oldu (ara sertifika dusuyordu). Senkron icerik karmasini
                 //    karsilastirdigi icin degisiklik yoksa hicbir sey yapmaz -- her onarmada
                 //    gereksiz yeniden gonderim olmaz.
-                result.MailCertificateRefreshed = await TrySyncMailCertificateAsync(cancellationToken);
-
-                // 3b) Posta sunucusunun SMTP karsilama adi. Ayarlanmadiginda Stalwart MAKINE ADINA
-                //     duser ("vm-185-7-242-225" gibi) ve bu bir FQDN bile degildir; Gmail/Outlook
-                //     karsilama adinin cozulmesini ve ters DNS ile tutarli olmasini bekler.
-                //     Sertifikanin adiyla ayni deger yazilir, boylece karsilama + sertifika + PTR
-                //     ayni adi gosterir. Degisiklik yoksa hicbir sey yapmaz.
-                await TryEnsureMailHostnameAsync(cancellationToken);
+                // SUNUCU GENELI adimlar (posta sertifikasi, SMTP karsilama adi) burada DEGIL,
+                // RunServerWideAsync icinde -- tarama basina BIR KEZ. Ikisi de sunucuda tektir;
+                // site dongusunde calistirmak 40 siteli bir sunucuda ayni isi 40 kez yapar ve
+                // her biri birkac CLI sureci baslatir. Ayrica sunucu geneli bir olayi ILK sitenin
+                // sonucuna yazmak raporu keyfi bir siteye baglardi.
 
                 // 5) Domainsiz onizlemenin biraktigi gecici host'u temizle.
                 result.RemovedPreviewBindings = await TryRemovePreviewBindingsAsync(siteName, cancellationToken);
@@ -211,6 +219,10 @@ internal sealed class DomainRefreshService(
 
     public async Task<DomainRefreshSummaryDto> RefreshAllAsync(CancellationToken cancellationToken = default)
     {
+        // Sunucu geneli adimlar taramadan ONCE bir kez: sertifika ve karsilama adi tum
+        // sitelerin ortak altyapisidir, site basina tekrarlanmasi anlamsizdir.
+        await RunServerWideAsync(cancellationToken);
+
         var summary = await RunAllAsync(applyChanges: true, cancellationToken);
 
         // Tazeleme durumu DEĞİŞTİRDİ: bayat denetim sonucunu tutmak, rozetin düzeltilmiş bir sunucuda
@@ -431,10 +443,33 @@ internal sealed class DomainRefreshService(
         try
         {
             var site = await siteService.GetSiteAsync(siteName, cancellationToken);
+
+            // ONIZLEME HALA GEREKLIYSE SILINMEZ.
+            //
+            // Onizleme host'u, alan adi henuz sunucuya yonlendirilmemis siteler icin TEK erisim
+            // yoludur. Alan adini yeni almis bir musteri "Eksikleri tamamla"ya bastiginda sitesine
+            // erisimini kaybetmemeli. Bu yuzden yalnizca site GERCEK bir alan adiyla erisilebilir
+            // durumdayken temizlik yapilir; aksi halde artik degil, hala kullanilan bir baglantidir.
+            var gercekBaglama = site.Bindings.Any(binding =>
+                !string.IsNullOrWhiteSpace(binding.HostName)
+                && !binding.HostName.EndsWith(".nip.io", StringComparison.OrdinalIgnoreCase));
+
+            if (!gercekBaglama)
+            {
+                return 0;
+            }
+
             var previews = site.Bindings
                 .Where(binding => !string.IsNullOrWhiteSpace(binding.HostName)
                                   && binding.HostName.EndsWith(".nip.io", StringComparison.OrdinalIgnoreCase))
                 .ToList();
+
+            if (previews.Count == 0)
+            {
+                // Temizlenecek bir sey yoksa sertifika deposuna dokunma: her sitede gereksiz
+                // okuma/yazma yapmanin anlami yok.
+                return 0;
+            }
 
             var kaldirilan = 0;
             foreach (var binding in previews)
@@ -470,6 +505,21 @@ internal sealed class DomainRefreshService(
             logger.LogDebug(exception, "Onizleme baglamalari okunamadi ({SiteName}).", siteName);
             return 0;
         }
+    }
+
+    /// <summary>
+    /// SUNUCU GENELI onarma adimlari: posta sertifikasi senkronu ve SMTP karsilama adi.
+    /// Sertifika yeniden gonderildiyse true doner.
+    /// <para>
+    /// Site dongusunun DISINDA calisir. Ikisi de sunucuda tektir; site basina calistirmak ayni
+    /// isi N kez yapar (her biri birkac CLI sureci) ve sonucu keyfi bir siteye yazar.
+    /// </para>
+    /// </summary>
+    private async Task<bool> RunServerWideAsync(CancellationToken cancellationToken)
+    {
+        var sertifika = await TrySyncMailCertificateAsync(cancellationToken);
+        await TryEnsureMailHostnameAsync(cancellationToken);
+        return sertifika;
     }
 
     /// <summary>
@@ -515,9 +565,11 @@ internal sealed class DomainRefreshService(
         }
 
         // --- Bolge Windows DNS'te var mi ---
+        IReadOnlyList<SiteDnsRecordDto> zoneKayitlari = [];
         try
         {
             var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            zoneKayitlari = zone.Records.ToList();
             if (!zone.IsWindowsZonePresent)
             {
                 // Yayinlama adimi (2b) bunu zaten denedi; hala yoksa gercek bir sorun var
@@ -535,7 +587,10 @@ internal sealed class DomainRefreshService(
             logger.LogDebug(exception, "Bolge durumu okunamadi ({SiteName}).", siteName);
         }
 
-        await AddMailFindingsAsync(siteName, findings, cancellationToken);
+        // Bolge BIR KEZ okunur ve posta bulgularina gecirilir. Eskiden her iki yer de ayri ayri
+        // GetZoneAsync cagiriyordu; her cagri 3 PowerShell sureci baslatiyor, yani site basina 3
+        // gereksiz surec. 40 siteli bir sunucuda denetim bu yuzden dakikalara ciakabiliyordu.
+        await AddMailFindingsAsync(siteName, zoneKayitlari, findings, cancellationToken);
         return findings;
     }
 
@@ -548,18 +603,14 @@ internal sealed class DomainRefreshService(
     /// hal gibi gorunuyordu.
     /// </para>
     /// </summary>
-    private async Task AddMailFindingsAsync(string siteName, List<RepairFindingDto> findings, CancellationToken cancellationToken)
+    private async Task AddMailFindingsAsync(
+        string siteName,
+        IReadOnlyList<SiteDnsRecordDto> zoneKayitlari,
+        List<RepairFindingDto> findings,
+        CancellationToken cancellationToken)
     {
-        var mailExpected = false;
-        try
-        {
-            var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
-            mailExpected = zone.Records.Any(record => string.Equals(record.Type, "MX", StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            logger.LogDebug(exception, "MX kaydi okunamadi ({SiteName}).", siteName);
-        }
+        // Bolge zaten okundu; tekrar okumak gereksiz PowerShell sureci demek.
+        var mailExpected = zoneKayitlari.Any(record => string.Equals(record.Type, "MX", StringComparison.OrdinalIgnoreCase));
 
         if (mailExpected)
         {
