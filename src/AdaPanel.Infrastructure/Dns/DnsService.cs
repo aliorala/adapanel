@@ -1154,26 +1154,37 @@ public sealed partial class DnsService(
             chunks.Add(value.Substring(index, Math.Min(MaxStringLength, value.Length - index)));
         }
 
-        // TIRNAKLAMA ELDE YAPILIR.
+        // KOMUT GECICI BIR TOPLU IS DOSYASINA YAZILIP CALISTIRILIR.
         //
-        // Neden: DKIM degeri BOSLUK icerir ("v=DKIM1; k=rsa; p=..."). PowerShell 5.1'in yerel
-        // programlara argüman gecirirken tirnaklama davranisi guvenilmezdir; bosluklu bir parca
-        // dnscmd'e iki ayri argüman gibi ulasabilir ve kayit ya reddedilir ya da yanlis yazilir.
-        // Komut cmd.exe'ye TEK bir metin olarak veriliyor ve her parca acikca cift tirnaga
-        // aliniyor, boylece bosluklar parcayi bolmuyor.
+        // Neden bu kadar dolambacli: DKIM degeri BOSLUK icerir ("v=DKIM1; k=rsa; p=...") ve dnscmd
+        // her parcayi CIFT TIRNAK icinde bekler. Komutu PowerShell uzerinden gecirmek guvenilir
+        // degil: PowerShell 5.1, icinde tirnak bulunan bir argümani disariya verirken ters bolu ile
+        // kacirir, cmd.exe ise bu bicimi ANLAMAZ -- tirnaklar veriye karisir, kayit reddedilir.
+        // Toplu is dosyasinin ICERIGI ise aradan hicbir yorumlayici gecmeden dnscmd'e ulasir.
         //
-        // Deger icindeki cift tirnak dnscmd icin anlamlidir; DKIM/SPF/DMARC degerlerinde bulunmaz
-        // ama yine de temizleniyor -- guvenlik degil, dogruluk gerekcesiyle.
-        var quoted = string.Join(" ", chunks.Select(chunk => "\"\"" + chunk.Replace("\"", string.Empty) + "\"\""));
-        var cmdLine = $"dnscmd . /RecordAdd %ZONE% {host.Replace("\"", string.Empty)} {ttl} TXT {quoted}";
+        // Dosya ASCII yazilir: DKIM degeri base64'tur ve BOM komutun ilk baytlarini bozar.
+        var quoted = string.Join(" ", chunks.Select(chunk => "\"" + chunk.Replace("\"", string.Empty) + "\""));
+        var safeHost = host.Replace("\"", string.Empty);
+        var etiket = EscapeSingleQuoted($"TXT {safeHost}");
 
-        // dnscmd sessizce basarisiz olabilir, bu yuzden cikis kodu DENETLENIR: kayit yazilmadigi
-        // halde "tamam" demek, tam da bu panelde ayikladigimiz hata sinifi. Cikti da yakalaniyor ki
-        // hata mesaji kullaniciya ulasabilsin.
-        return $"$env:ZONE = $zoneName" + Environment.NewLine +
-               $"$dnscmdCikti = cmd /c \"{cmdLine} 2>&1\"" + Environment.NewLine +
-               $"if ($LASTEXITCODE -ne 0) {{ throw \"dnscmd TXT ekleyemedi ({EscapePowerShellLiteral(host)}): $dnscmdCikti\" }}";
+        var satirlar = new[]
+        {
+            "$adaCmd = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
+            $"$adaKomut = 'dnscmd . /RecordAdd ' + $zoneName + ' {EscapeSingleQuoted(safeHost)} {ttl} TXT {EscapeSingleQuoted(quoted)}'",
+            "Set-Content -LiteralPath $adaCmd -Value $adaKomut -Encoding ASCII",
+            "$adaCikti = (& $adaCmd 2>&1) -join ' '",
+            "$adaKod = $LASTEXITCODE",
+            "Remove-Item -LiteralPath $adaCmd -Force -ErrorAction SilentlyContinue",
+            // Cikis kodu DENETLENIR: kayit yazilmadigi halde "tamam" demek, tam da bu panelde
+            // ayikladigimiz hata sinifi. Ciktinin kendisi de mesaja konur ki sebep gorunsun.
+            $"if ($adaKod -ne 0) {{ throw '{etiket}: dnscmd(' + $adaKod + ') ' + $adaCikti }}"
+        };
+
+        return string.Join(Environment.NewLine, satirlar);
     }
+
+    /// <summary>Tek tirnakli PowerShell dizesi icin kacis: yalnizca tek tirnak ikilenir.</summary>
+    private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
 
     internal static string BuildSrvLine(string host, string value, int? priority, int ttl)
     {

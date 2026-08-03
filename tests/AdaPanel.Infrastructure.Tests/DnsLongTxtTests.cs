@@ -18,7 +18,7 @@ public sealed class DnsLongTxtTests
 
     /// <summary>Uretilen komut satirindaki "" ile sarilmis parcalari cikarir.</summary>
     private static IReadOnlyList<string> ExtractChunks(string line) =>
-        System.Text.RegularExpressions.Regex.Matches(line, "\"\"(.*?)\"\"")
+        System.Text.RegularExpressions.Regex.Matches(line, "\"([^\"]*?)\"")
             .Select(match => match.Groups[1].Value)
             .ToList();
 
@@ -68,7 +68,7 @@ public sealed class DnsLongTxtTests
     {
         var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
 
-        Assert.Contains("$LASTEXITCODE", line, StringComparison.Ordinal);
+        Assert.Contains("$adaKod", line, StringComparison.Ordinal);
         Assert.Contains("throw", line, StringComparison.Ordinal);
     }
 }

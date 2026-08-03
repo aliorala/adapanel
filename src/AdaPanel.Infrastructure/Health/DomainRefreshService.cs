@@ -4,6 +4,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 using AdaPanel.Core.Dtos.Firewall;
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Infrastructure.Health;
 
@@ -27,6 +28,33 @@ internal sealed class DomainRefreshService(
         // gostermesini izliyordu ve haklı olarak "onardim ama gitmedi" diyordu.
         InvalidateInspectionCache();
         return result;
+    }
+
+    /// <summary>
+    /// Bir istisnanin KULLANICIYA ANLATAN metnini uretir.
+    /// <para>
+    /// Neden gerekli: panelin ic hatalari <c>AppException</c> ile firlatilir ve
+    /// <c>Message</c> yalnizca bir ceviri anahtaridir ("dns.sync_failed"). Asil sebep
+    /// (isletim sisteminin verdigi metin) <c>Details</c> alanindadir. Rapor yalnizca
+    /// Message'i tasidigi icin kullanici alti kez "dns.sync_failed" goruyor ve HICBIR
+    /// sey ogrenmiyordu -- hata gosteriliyor ama anlatmiyordu.
+    /// </para>
+    /// </summary>
+    private static string DescribeError(Exception exception)
+    {
+        if (exception is AppException app && !string.IsNullOrWhiteSpace(app.Details))
+        {
+            var details = app.Details.Trim();
+            const int maxLength = 600;
+            if (details.Length > maxLength)
+            {
+                details = details[..maxLength] + "...";
+            }
+
+            return $"{app.MessageKey}: {details}";
+        }
+
+        return exception.Message;
     }
 
     /// <summary>Denetim sonucu artik bayat: durum degisti.</summary>
@@ -61,7 +89,7 @@ internal sealed class DomainRefreshService(
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 logger.LogWarning(exception, "DNS varsayilanlari uygulanamadi ({SiteName}).", siteName);
-                result.Error = exception.Message;
+                result.Error = DescribeError(exception);
             }
 
             // 2) Posta kayıtları (DKIM dahil): DKIM anahtarları posta sunucusunda üretilir, DNS
@@ -550,7 +578,7 @@ internal sealed class DomainRefreshService(
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
                     logger.LogWarning(exception, "Posta kaydi yazilamadi: {Type} {Host}", record.Type, record.Host);
-                    hatalar.Add($"{record.Type} {record.Host}: {exception.Message}");
+                    hatalar.Add($"{record.Type} {record.Host}: {DescribeError(exception)}");
                 }
             }
 
