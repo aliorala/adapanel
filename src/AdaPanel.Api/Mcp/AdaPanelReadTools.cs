@@ -72,15 +72,17 @@ public sealed class AdaPanelReadTools(
 
     [McpServerTool(Name = "server_health")]
     [Description("Kritik Windows servislerinin durumu (IIS, DNS, veritabanı, posta vb.).")]
-    public async Task<object> GetServerHealthAsync(CancellationToken cancellationToken)
+    public async Task<object> GetServerHealthAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
+        McpCapability.RequireAdministrator(user);
         return await healthService.GetHealthAsync(cancellationToken);
     }
 
     [McpServerTool(Name = "advisor_report")]
     [Description("Panelin kendi öneri raporu: SSL bitişi, disk/bellek doluluğu, güvenlik ayarları, bekleyen güncellemeler. Çalıştırılamayan kontroller ayrıca bildirilir.")]
-    public async Task<object> GetAdvisorReportAsync(CancellationToken cancellationToken)
+    public async Task<object> GetAdvisorReportAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
+        McpCapability.RequireAdministrator(user);
         return await advisorService.GetReportAsync(cancellationToken);
     }
 

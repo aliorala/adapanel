@@ -68,6 +68,53 @@ public static partial class ErrorReportSanitizer
     [GeneratedRegex(@"(?i)\b(bearer|basic|negotiate)\s+[A-Za-z0-9._\-+/=]{8,}", RegexOptions.CultureInvariant)]
     private static partial Regex AuthSchemePattern();
 
+    /// <summary>
+    /// PANELIN KENDI erisim anahtari ("adap_" + onaltilik). En kritik kacak buydu: anahtar bir hata
+    /// mesajina duserse toplayiciya DUZ METIN giderdi ve o anahtar paneli yonetmeye yeter. Anahtar=deger
+    /// kalibina takilmaz, cunku metinde ciplak da gecebilir.
+    /// </summary>
+    [GeneratedRegex(@"adap_[0-9a-fA-F]{16,}", RegexOptions.CultureInvariant)]
+    private static partial Regex PanelApiKeyPattern();
+
+    /// <summary>Ciplak JWT: "eyJ" ile baslar ve nokta icerir; hicbir anahtar adina bagli degildir.</summary>
+    [GeneratedRegex(@"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}(\.[A-Za-z0-9_\-]+)?", RegexOptions.CultureInvariant)]
+    private static partial Regex BareJwtPattern();
+
+    /// <summary>
+    /// Veritabani/katalog/sunucu adi. Musteri veritabani adlari musteri adini tasir (musteri_wp_db
+    /// gibi) ve baglanti dizesi hatalarinda oldugu gibi gorunur.
+    /// </summary>
+    [GeneratedRegex(@"(?i)\b(database|initial\s+catalog|data\s+source)\b\s*=\s*([^\s;,\)\]}""']+)", RegexOptions.CultureInvariant)]
+    private static partial Regex DatabaseTargetPattern();
+
+    /// <summary>
+    /// Komut satiri parola bayragi: sqlcmd/mysql gibi araclar -P/-p/--password ile parola alir ve
+    /// panel bu komutlari ProcessRunner ile calistiriyor; hata metninde komut satiri gorunebilir.
+    /// </summary>
+    [GeneratedRegex(@"(?i)(\s-{1,2}(?:p|password|pwd)[=\s]+)(\S+)", RegexOptions.CultureInvariant)]
+    private static partial Regex CommandLinePasswordPattern();
+
+    /// <summary>
+    /// Uygulama havuzu kimliği: "IIS APPPOOL\musterisite". Havuz adı SİTE adını taşır, yani doğrudan
+    /// müşteri kimliğidir. Tek ters bölülü olduğu için UNC kalıbına (iki ters bölü) takılmıyordu.
+    /// </summary>
+    [GeneratedRegex(@"(?i)\bIIS\s+APPPOOL\\[A-Za-z0-9_.$\-]{1,64}", RegexOptions.CultureInvariant)]
+    private static partial Regex AppPoolAccountPattern();
+
+    /// <summary>
+    /// Adlandırılmış hesap: "Login failed for user 'WIN-SRV01\ahmet'", "identity: SUNUCU\ftpuser".
+    /// <para>
+    /// Neden anahtar kelime şart: "SUNUCU\ahmet" biçimi tek başına yol parçasından ayırt edilemez —
+    /// genel bir <c>kelime\kelime</c> kalıbı <c>D:\musteriler\ahmet\rapor.txt</c> yolunu da yer ve
+    /// teşhis için gereken dosya adını yok eder. Bu yüzden yalnız hesap BAĞLAMI olan yerde uygulanır.
+    /// </para>
+    /// </summary>
+    [GeneratedRegex(
+        @"(?i)\b(user|account|logon|identity|username)\b(?:\s*[:=]\s*|\s+)'?(?:[A-Za-z0-9_.\-]{1,32}\\)?[A-Za-z0-9_.$\-]{1,64}'?",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex NamedAccountPattern();
+
+
     [GeneratedRegex(@"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+", RegexOptions.CultureInvariant)]
     private static partial Regex EmailPattern();
 
@@ -190,6 +237,12 @@ public static partial class ErrorReportSanitizer
         //    kuralı yalnız "Bearer" kelimesini yutar, asıl token dışarıda kalırdı.
         text = AuthSchemePattern().Replace(text, match => match.Groups[1].Value + " <redacted>");
         text = SecretAssignmentPattern().Replace(text, match => match.Groups[1].Value + "=<redacted>");
+        // Anahtar adına BAĞLI OLMAYAN sırlar: metinde çıplak geçtikleri için yukarıdaki iki kalıba
+        // takılmazlar. Panelin kendi anahtarı en önemlisi.
+        text = PanelApiKeyPattern().Replace(text, "<redacted>");
+        text = BareJwtPattern().Replace(text, "<redacted>");
+        text = CommandLinePasswordPattern().Replace(text, match => match.Groups[1].Value + "<redacted>");
+        text = DatabaseTargetPattern().Replace(text, match => match.Groups[1].Value + "=<redacted>");
 
         // 2) Sorgu dizesi DEĞERLERİ hiç gönderilmez.
         text = QueryStringPattern().Replace(text, "?<query>");
@@ -256,6 +309,10 @@ public static partial class ErrorReportSanitizer
         text = ProgramFilesPattern().Replace(text, "<program-files>");
         text = WindowsDirPattern().Replace(text, "<windows>");
         text = UncPathPattern().Replace(text, "<unc>");
+        // Windows hesapları UNC'den SONRA: UNC iki ters bölü ister, bunlar tek ters bölülü olanı
+        // yakalar. Sıra ters olsaydı "\\sunucu\pay" yolunun ikinci yarısı hesap sanılırdı.
+        text = AppPoolAccountPattern().Replace(text, "<account>");
+        text = NamedAccountPattern().Replace(text, match => match.Groups[1].Value + " <account>");
 
         // Kalan mutlak yollar: dizin yapısı müşteriye özgü olabilir (D:\musteriler\ahmet\...),
         // ama dosya adı hatayı bulmak için gerekli → yalnız son parça bırakılır.

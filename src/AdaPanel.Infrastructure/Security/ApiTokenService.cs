@@ -76,6 +76,27 @@ internal sealed class ApiTokenService(AdaPanelDbContext dbContext) : IApiTokenSe
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<int> RevokeAllForUserAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var active = await dbContext.ApiTokens
+            .Where(token => token.UserId == userId && token.RevokedAtUtc == null)
+            .ToListAsync(cancellationToken);
+
+        if (active.Count == 0)
+        {
+            return 0;
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var token in active)
+        {
+            token.RevokedAtUtc = now;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return active.Count;
+    }
+
     public async Task<PanelApiToken?> ValidateAsync(string presentedToken, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(presentedToken) || !presentedToken.StartsWith(TokenPrefix, StringComparison.Ordinal))

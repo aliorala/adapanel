@@ -19,6 +19,26 @@ namespace AdaPanel.Api.Mcp;
 /// </summary>
 internal static class McpCapability
 {
+    /// <summary>
+    /// Sunucu GENELİ bilgi döndüren araçların başında çağrılır.
+    /// <para>
+    /// Neden gerekli: aynı bilgiyi veren REST uçları <c>[Authorize(Roles = "Administrator")]</c> ile
+    /// korunuyor. MCP tarafında bu denetim yapılmazsa bir müşteri anahtarı, panelin REST üzerinden
+    /// vermediği sunucu geneli bilgiyi (SSL bitiş tarihleri, güvenlik ayarları, bekleyen
+    /// güncellemeler, disk doluluğu) okuyabilir — yani saldırı yüzeyi haritası. Aynı yeteneğin iki
+    /// kapısı varsa ikisi de aynı kilidi taşımalı.
+    /// </para>
+    /// </summary>
+    public static void RequireAdministrator(ClaimsPrincipal user)
+    {
+        if (!user.IsInRole("Administrator"))
+        {
+            throw new McpProtocolException(
+                "Bu araç sunucu geneli bilgi döndürür ve yalnızca yönetici hesabına ait anahtarlarla kullanılabilir.",
+                McpErrorCode.InvalidRequest);
+        }
+    }
+
     /// <summary>Silme/üzerine yazma/servis durdurma gerektiren araçların başında çağrılır.</summary>
     public static void RequireDestructive(ClaimsPrincipal user)
     {

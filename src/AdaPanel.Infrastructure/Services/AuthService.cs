@@ -27,6 +27,7 @@ public sealed class AuthService(
     IPanelPreferencesService preferencesService,
     IPanelSecurityService securityService,
     ICustomerScopeService customerScopeService,
+    IApiTokenService apiTokenService,
     JsonFileStore fileStore,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     ILogger<AuthService> logger) : IAuthService
@@ -429,7 +430,23 @@ public sealed class AuthService(
         await fileStore.WriteAsync(PasswordResetStorePath, store, cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
 
+        // Parola KURTARILDI: hesabın ele geçirilmiş olabileceği varsayılır. Anahtarlar parolaya bağlı
+        // olmayan ayrı kimlik bilgileridir; düşürülmezlerse saldırgan parola sıfırlansa bile MCP
+        // üzerinden erişimini sürdürür. Kullanıcı yeni anahtarı panelden üretir.
+        var revokedTokens = await apiTokenService.RevokeAllForUserAsync(user.Id, cancellationToken);
+
         await auditService.WriteAsync("auth.password_reset.completed", "auth", $"Password reset completed for '{user.UserName}'.", user.Id, null, cancellationToken);
+
+        if (revokedTokens > 0)
+        {
+            await auditService.WriteAsync(
+                "apitoken.revoked_on_reset",
+                "auth",
+                $"{revokedTokens} API token(s) revoked because the password of '{user.UserName}' was reset.",
+                user.Id,
+                null,
+                cancellationToken);
+        }
     }
 
     private async Task TrySendResetEmailAsync(PanelUser user, string token, CancellationToken cancellationToken)

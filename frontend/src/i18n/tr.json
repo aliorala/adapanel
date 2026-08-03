@@ -3099,5 +3099,8 @@
   "panel.panelAccess.setupDone": "Panel artık kendi alan adıyla ve geçerli sertifikayla dışarıya açık.",
   "panel.panelAccess.setupIncomplete": "Kurulum tamamlanmadı. Aşağıdaki adımlardan hangisinin başarısız olduğuna bakın.",
   "panel.panelAccess.copy": "Kopyala",
-  "panel.panelAccess.copied": "Kopyalandı"
+  "panel.panelAccess.copied": "Kopyalandı",
+  "panel.processes.category.apppool": "Uygulama havuzu",
+  "apitoken.invalid_name": "Anahtara en az 2 karakterli bir ad verin.",
+  "apitoken.not_found": "Anahtar bulunamadı. Silinmiş ya da başka bir hesaba ait olabilir."
 }

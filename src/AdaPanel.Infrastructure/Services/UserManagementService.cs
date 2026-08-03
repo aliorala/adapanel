@@ -22,7 +22,8 @@ public sealed class UserManagementService(
     IIisSiteService iisSiteService,
     IDatabaseOwnershipService databaseOwnership,
     ISchedulerService schedulerService,
-    ISiteCascadeDeletionService siteCascadeDeletion) : IUserManagementService
+    ISiteCascadeDeletionService siteCascadeDeletion,
+    IApiTokenService apiTokenService) : IUserManagementService
 {
     public async Task<IReadOnlyCollection<UserSummaryDto>> GetUsersAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
@@ -703,6 +704,10 @@ public sealed class UserManagementService(
             }
 
             user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
+
+            // Parolayi BASKASI degistirdi: alt kullanicinin urettigi API anahtarlari da dusurulur.
+            // Aksi halde erisimi kesilen kisi anahtariyla MCP uzerinden calismaya devam edebilirdi.
+            await apiTokenService.RevokeAllForUserAsync(user.Id, cancellationToken);
         }
 
         user.Email = normalizedEmail;

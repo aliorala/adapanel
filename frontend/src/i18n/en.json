@@ -3099,5 +3099,8 @@
   "panel.panelAccess.setupDone": "The panel is now published on its own host name with a valid certificate.",
   "panel.panelAccess.setupIncomplete": "Setup did not complete. Check which of the steps below failed.",
   "panel.panelAccess.copy": "Copy",
-  "panel.panelAccess.copied": "Copied"
+  "panel.panelAccess.copied": "Copied",
+  "panel.processes.category.apppool": "Application pool",
+  "apitoken.invalid_name": "Give the key a name of at least 2 characters.",
+  "apitoken.not_found": "Key not found. It may have been deleted or belong to another account."
 }

@@ -16,6 +16,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using AdaPanel.Core.Dtos.Ai;
 
 namespace AdaPanel.Infrastructure.Tests;
 
@@ -170,6 +171,7 @@ public sealed class LoginLockoutTests
                 new ThrowingPreferencesService(),
                 new ThrowingSecurityService(),
                 new ThrowingCustomerScopeService(),
+                new ThrowingApiTokenService(),
                 new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot })),
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot, LoginLockoutMinutes = 15 }),
                 NullLogger<AuthService>.Instance);
@@ -292,6 +294,20 @@ public sealed class LoginLockoutTests
         public Task<string> GetSecureEntryPathAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<bool> IsIpAllowedAsync(string? ipAddress, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>Giris testi anahtar servisine hic dokunmamali; dokunursa test patlar.</summary>
+    private sealed class ThrowingApiTokenService : IApiTokenService
+    {
+        public Task<IReadOnlyList<ApiTokenDto>> GetForUserAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<CreatedApiTokenDto> CreateAsync(Guid userId, CreateApiTokenRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task RevokeAsync(Guid userId, Guid tokenId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<int> RevokeAllForUserAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<PanelApiToken?> ValidateAsync(string presentedToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class ThrowingCustomerScopeService : ICustomerScopeService

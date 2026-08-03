@@ -18,6 +18,17 @@ public interface IApiTokenService
     Task RevokeAsync(Guid userId, Guid tokenId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Kullanıcının TÜM etkin anahtarlarını iptal eder ve iptal edilen sayıyı döner.
+    /// <para>
+    /// Parola KURTARMA yolunda çağrılır: parolasını unutup sıfırlayan ya da parolası yönetici
+    /// tarafından değiştirilen bir hesapta "ele geçirilmiş olabilir" varsayımı geçerlidir. Anahtar
+    /// ayrı bir kimlik bilgisidir ve parola değişiminden etkilenmez; bu yüzden açıkça düşürülmezse
+    /// saldırgan parola sıfırlansa bile MCP üzerinden erişimini sürdürür.
+    /// </para>
+    /// </summary>
+    Task<int> RevokeAllForUserAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sunulan düz metin anahtarı doğrular. Geçerliyse anahtar kaydını döner, değilse null.
     /// Son kullanım anını günceller.
     /// </summary>

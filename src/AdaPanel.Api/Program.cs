@@ -121,6 +121,27 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0
             });
     });
+    // MCP: yapay zeka istemcisi otomatik ve hızlı çağırır; anahtar sızarsa da ilk fark edilen şey
+    // bu uçtan gelen yığın olur. Bölümleme ANAHTARA göre yapılır (IP'ye göre değil): sağlayıcı
+    // paylaşımlı çıkış adresleri kullandığı için bir müşterinin trafiği diğerini kilitlememeli.
+    // Sınır cömert — meşru bir oturum dakikada onlarca araç çağırabilir; amaç kötüye kullanımı
+    // yavaşlatmak, normal kullanımı engellemek değil.
+    options.AddPolicy("mcp", context =>
+    {
+        var authorization = context.Request.Headers.Authorization.ToString();
+        var partition = authorization.Length > 16
+            ? authorization[^12..]
+            : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partition,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            });
+    });
     options.AddPolicy("setup", context =>
     {
         var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
@@ -255,12 +276,27 @@ app.MapMcp("/mcp")
     {
         AuthenticationSchemes = AdaPanel.Api.Security.PanelTokenAuthenticationHandler.SchemeName
     })
-    .WithMetadata(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute());
+    .WithMetadata(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute())
+    .RequireRateLimiting("mcp");
+// Eşleşmeyen API/MCP yolları SPA'ya DÜŞMEMELİ. Öncesinde tek bir MapFallbackToFile vardı ve
+// "/api/v1/yanlis" ya da "/mcp/x" gibi her yol 200 + index.html döndürüyordu: istemci JSON beklerken
+// HTML alıyor ("Unexpected token '<'" hatası), MCP istemcisi ise sunucuyu ayakta ama bozuk sanıyordu.
+// Bu iki kalıp SPA yedeğinden daha özgüldür, bu yüzden önce eşleşir.
+app.MapFallback("/api/{**rest}", NotFoundJsonAsync);
+app.MapFallback("/mcp/{**rest}", NotFoundJsonAsync);
 app.MapFallbackToFile("index.html");
 
 await EnsureDatabaseAsync(app, dataRoot);
 
 app.Run();
+
+static Task NotFoundJsonAsync(HttpContext context)
+{
+    context.Response.StatusCode = StatusCodes.Status404NotFound;
+    context.Response.ContentType = "application/json; charset=utf-8";
+    return context.Response.WriteAsJsonAsync(
+        AdaPanel.Core.Dtos.Common.ApiResponse<object?>.Fail("not_found", StatusCodes.Status404NotFound));
+}
 
 static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
 {

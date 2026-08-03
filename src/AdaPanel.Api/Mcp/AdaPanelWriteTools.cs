@@ -22,6 +22,7 @@ namespace AdaPanel.Api.Mcp;
 /// </summary>
 [McpServerToolType]
 public sealed class AdaPanelWriteTools(
+    IHttpContextAccessor httpContextAccessor,
     ICustomerScopeService customerScopes,
     IIisSiteService siteService,
     IDnsService dnsService,
@@ -122,6 +123,13 @@ public sealed class AdaPanelWriteTools(
     private Task WriteAuditAsync(ClaimsPrincipal user, string action, string resource, CancellationToken cancellationToken)
     {
         var userId = Guid.TryParse(user.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var parsed) ? parsed : (Guid?)null;
-        return auditService.WriteAsync(action, resource, $"MCP aracı çağrıldı: {action}", userId, null, cancellationToken);
+
+        // Kaynak adres denetim kaydına YAZILIR. Önce null geçiliyordu; oysa panelden yapılan her
+        // işlemde bu alan dolu ve "bu değişikliği kim/nereden yaptı" sorusunun yanıtı buna bağlı.
+        // MCP çağrısı yapay zeka sağlayıcısının sunucusundan gelir, yani adres kullanıcının kendi
+        // adresi değildir — ama sızan bir anahtarın nereden kullanıldığını gösteren tek iz odur.
+        var ipAddress = httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        return auditService.WriteAsync(action, resource, $"MCP aracı çağrıldı: {action}", userId, ipAddress, cancellationToken);
     }
 }

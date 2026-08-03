@@ -87,38 +87,23 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
             || path.StartsWithSegments("/api/v1/health", out _);
     }
 
+    /// <summary>
+    /// Gizli giriş yolu başlığı ZORUNLU MU?
+    /// <para>
+    /// Kural TERSİNE çevrildi: <c>/api</c> altındaki HER ŞEY başlık ister, yalnız aşağıdaki kısa
+    /// muafiyet listesi istemez. Önceki hâli bunun tersiydi — korunan uçlar tek tek sayılıyordu ve
+    /// listeye eklenmeyen her YENİ denetleyici sessizce korumasız kalıyordu. Denetimde tam olarak bu
+    /// oldu: advisor, antivirus, attention, dns/server, dns/template, monitoring/*, server-health,
+    /// sub-users, wordpress, migration, service-plans, dbtools, api-tokens, error-reports ve
+    /// panel-access uçları listeye hiç girmemişti. Sayıma dayalı koruma, unutmayı "açık" olarak
+    /// cezalandırır; kurala dayalı koruma ise en fazla gereksiz sıkılık üretir.
+    /// </para>
+    /// </summary>
     private static bool RequiresSecureEntryHeader(PathString path)
     {
-        return path.StartsWithSegments("/api/v1/auth", out _)
-            || path.StartsWithSegments("/api/v1/users", out _)
-            || path.StartsWithSegments("/api/v1/security", out _)
-            || path.StartsWithSegments("/api/v1/audit-logs", out _)
-            || path.StartsWithSegments("/api/v1/system", out _)
-            || path.StartsWithSegments("/api/v1/php", out _)
-            || path.StartsWithSegments("/api/v1/sites", out _)
-            || path.StartsWithSegments("/api/v1/db", out _)
-            || path.StartsWithSegments("/api/v1/my-databases", out _)
-            || path.StartsWithSegments("/api/v1/software", out _)
-            || path.StartsWithSegments("/api/v1/webdb", out _)
-            || path.StartsWithSegments("/api/v1/cache", out _)
-            || path.StartsWithSegments("/api/v1/files", out _)
-            || path.StartsWithSegments("/api/v1/ssl", out _)
-            || path.StartsWithSegments("/api/v1/ftp", out _)
-            || path.StartsWithSegments("/api/v1/mail", out _)
-            || path.StartsWithSegments("/api/v1/cron", out _)
-            || path.StartsWithSegments("/api/v1/automation", out _)
-            || path.StartsWithSegments("/api/v1/firewall", out _)
-            || path.StartsWithSegments("/api/v1/nginx", out _)
-            || path.StartsWithSegments("/api/v1/docker", out _)
-            || path.StartsWithSegments("/api/v1/git", out _)
-            || path.StartsWithSegments("/api/v1/logs", out _)
-            || path.StartsWithSegments("/api/v1/notify", out _)
-            || path.StartsWithSegments("/api/v1/backup", out _)
-            || path.StartsWithSegments("/api/v1/store", out _)
-            || path.StartsWithSegments("/api/v1/update", out _)
-            || path.StartsWithSegments("/api/v1/panel-settings", out _)
-            || path.StartsWithSegments("/api/v1/scope", out _)
-            || path.StartsWithSegments("/api/v1/terminal", out _);
+        // Anonim uclar (health, setup) daha yukarida IsAlwaysPublicPath ile ayrildi; buraya gelen
+        // her /api istegi kimlige bagli veri tasir ve basligi ister.
+        return path.StartsWithSegments("/api", out _);
     }
 
     private static Task RejectApiRequestAsync(HttpContext context, int statusCode, string message)
