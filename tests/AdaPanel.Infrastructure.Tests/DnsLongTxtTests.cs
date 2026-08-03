@@ -6,11 +6,11 @@ namespace AdaPanel.Infrastructure.Tests;
 /// <summary>
 /// 255 karakteri asan TXT kayitlari (DKIM'in RSA anahtari).
 /// <para>
-/// Canli olay: RSA DKIM kaydi HICBIR kurulumda yazilamiyordu. Once cmdlet uzun degeri reddediyor
-/// sanildi ve dnscmd'e gecildi; dnscmd de birden cok tirnakli parcayi kabul etmeyip
-/// ERROR_INVALID_PARAMETER (87) dondurdu. Dogru yol, cmdlet'e TEK bir metin verip parcalari
-/// CRLF ile ayirmakmis -- Windows DNS her CRLF ayrimini ayri bir character-string olarak kaydeder.
-/// Ed25519 kaydi kisa oldugu icin hep yaziliyordu; "biri oluyor digeri olmuyor" tablosu bundandi.
+/// Canli olay: RSA DKIM kaydi HICBIR kurulumda yazilamiyordu ve tek bir yontem secip gondermek
+/// ust uste UC kez yanlis cikti (cmdlet'e ayrilmamis deger, dnscmd'ye ayri parcalar, cmdlet'e
+/// CRLF ile ayrilmis deger). Bu yuzden panel artik tek yola bahse girmez: bilinen yollari sirayla
+/// dener ve HER BIRINDEN SONRA kaydi geri okuyarak dogrular. Ed25519 kaydi 255'in altinda kaldigi
+/// icin hep yaziliyordu; "biri oluyor digeri olmuyor" tablosu bu uzunluk farkindan geliyordu.
 /// </para>
 /// </summary>
 public sealed class DnsLongTxtTests
@@ -44,7 +44,6 @@ public sealed class DnsLongTxtTests
         Assert.DoesNotContain("[char]13", line, StringComparison.Ordinal);
     }
 
-    // dnscmd YOLU TERK EDILDI: belgelenen imzasi tek bir <rrdata> alir.
     // Uzun deger icin UC yol da uretilmeli: tek bir yola bahse girmek, bu oturumda ust uste
     // uc kez yanlis cikti.
     [Theory]

@@ -46,7 +46,7 @@ internal sealed class DomainRefreshService(
         if (exception is AppException app && !string.IsNullOrWhiteSpace(app.Details))
         {
             var details = app.Details.Trim();
-            const int maxLength = 600;
+            const int maxLength = 1500;
             if (details.Length > maxLength)
             {
                 details = details[..maxLength] + "...";

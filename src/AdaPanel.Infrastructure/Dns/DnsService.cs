@@ -1231,6 +1231,10 @@ public sealed partial class DnsService(
             $"$adaAd = {adLiteral}",
             $"$adaTam = {tamDeger}",
             $"$adaCrlf = {crlfBirlesik}",
+            // Her yolun mesaji AYRI kirpilir: aksi halde tek bir yolun uzun ciktisi digerlerinin
+            // mesajini rapordan kaydirir. Canlida tam olarak bu oldu -- ucuncu yolun (WMI) ne
+            // dedigi hic gorunmedi.
+            @"$adaKirp = { param($m) $m = ($m -replace '\s+', ' ').Trim(); if ($m.Length -gt 200) { $m.Substring(0, 200) + '...' } else { $m } }",
             "$adaHata = @()",
             "$adaVar = $false",
 
@@ -1242,17 +1246,17 @@ public sealed partial class DnsService(
             // 1) Cmdlet + CRLF ile ayrilmis deger.
             "try {",
             $"  Add-DnsServerResourceRecord -ZoneName $zoneName -Txt -Name $adaAd -DescriptiveText $adaCrlf -TimeToLive ([TimeSpan]::FromSeconds({ttl})) -ErrorAction Stop | Out-Null",
-            "} catch { $adaHata += 'cmdlet-crlf: ' + $_.Exception.Message }",
+            "} catch { $adaHata += 'cmdlet-crlf: ' + $adaKirp.Invoke($_.Exception.Message) }",
             "$adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
 
             // 2) dnscmd'ye TEK metin: belgelenen imza tek <rrdata> aliyor; uzun degeri kendisi
             //    parcalayabilir. Komut toplu is dosyasindan calisir ki tirnaklama bozulmasin.
             "if (-not $adaVar) {",
             "  $adaCmdDosya = Join-Path $env:TEMP ('ada-dns-' + [guid]::NewGuid().ToString('N') + '.cmd')",
-            $"  $adaKomut = 'dnscmd . /RecordAdd ' + $zoneName + ' ' + $adaAd + ' TXT {EscapeSingleQuoted(dnscmdDeger)}'",
+            $"  $adaKomut = '@echo off' + [char]13 + [char]10 + 'dnscmd . /RecordAdd ' + $zoneName + ' ' + $adaAd + ' TXT {EscapeSingleQuoted(dnscmdDeger)}'",
             "  Set-Content -LiteralPath $adaCmdDosya -Value $adaKomut -Encoding ASCII",
             "  $adaCikti = (& $adaCmdDosya 2>&1) -join ' '",
-            "  if ($LASTEXITCODE -ne 0) { $adaHata += 'dnscmd-tek: ' + $adaCikti }",
+            "  if ($LASTEXITCODE -ne 0) { $adaHata += 'dnscmd-tek: ' + $adaKirp.Invoke($adaCikti) }",
             "  Remove-Item -LiteralPath $adaCmdDosya -Force -ErrorAction SilentlyContinue",
             "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
             "}",
@@ -1264,7 +1268,7 @@ public sealed partial class DnsService(
             @"    $adaWmi = [wmiclass]'\\.\root\MicrosoftDNS:MicrosoftDNS_TXTType'",
             "    $adaFqdn = $adaAd + '.' + $zoneName",
             $"    $adaWmi.CreateInstanceFromPropertyData($env:COMPUTERNAME, $zoneName, $adaFqdn, 1, {ttl}, $adaTam) | Out-Null",
-            "  } catch { $adaHata += 'wmi: ' + $_.Exception.Message }",
+            "  } catch { $adaHata += 'wmi: ' + $adaKirp.Invoke($_.Exception.Message) }",
             "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
             "}",
 
