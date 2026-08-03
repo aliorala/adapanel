@@ -224,6 +224,9 @@ public sealed partial class DnsService(
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>Satir ayiricilari; PowerShell ciktisi CRLF de LF de olabilir.</summary>
+    private static readonly char[] NewLineSeparators = [(char)13, (char)10];
+
     private static string RecordKey(DnsRecordState record) => $"{record.Type}|{record.Host}|{record.Value}";
 
     public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
@@ -1030,7 +1033,17 @@ public sealed partial class DnsService(
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
-            throw new AppException("dns.sync_failed", 500, 500, BuildCommandDetails(result));
+            // Script kendi hazirladigi OZET satirini birakiyorsa onu kullan: tam script dokumu
+            // yerine "hangi kayit, neden" bilgisini gostermek, sorunu aramayi degil GORMEYI saglar.
+            var ozet = result.StandardOutput
+                .Split(NewLineSeparators, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault(line => line.StartsWith("ADAPANEL-FAIL:", StringComparison.Ordinal));
+
+            throw new AppException(
+                "dns.sync_failed",
+                500,
+                500,
+                ozet is null ? BuildCommandDetails(result) : ozet["ADAPANEL-FAIL:".Length..].Trim());
         }
 
         // Yazma BASARILI olduktan sonra kaydedilir: basarisiz bir senkrondan sonra listeyi
@@ -1144,8 +1157,15 @@ public sealed partial class DnsService(
             lines.Add($"}} catch {{ $basarisiz += \"{etiket}: $($_.Exception.Message)\" }}");
         }
 
+        // BASARISIZLIK LISTESI STANDART CIKTIYA yazilir, Write-Error ILE DEGIL.
+        //
+        // Neden: scriptin basinda $ErrorActionPreference='Stop' var. Write-Error bu kipte
+        // SONLANDIRICI hataya doner; script "exit 22"ye hic ulasamaz, PowerShell 1 ile cikar ve
+        // hata akisina asil mesaj yerine hatanin gectigi SATIR BAGLAMINI (yani scriptin metnini)
+        // basar. Sonuc: kullaniciya sayfalarca script gorunur, gercek sebep gorunmez. Teshis
+        // mekanizmasini kendi kendine bogan bir kurulumdu.
         lines.Add("if ($basarisiz.Count -gt 0) {");
-        lines.Add("  Write-Error (\"Su kayitlar yazilamadi: \" + ($basarisiz -join ' | '))");
+        lines.Add("  [Console]::Out.WriteLine('ADAPANEL-FAIL: ' + ($basarisiz -join ' | '))");
         lines.Add("  exit 22");
         lines.Add("}");
 
