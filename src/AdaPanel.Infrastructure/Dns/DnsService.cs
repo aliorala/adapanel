@@ -894,6 +894,29 @@ public sealed partial class DnsService(
             return CreateDefaultRecords(site, zoneName, serverAddress).ToList();
         }
 
+        // KAYITLI SABLON, YERLESIK SABLONU TAMAMEN GOLGELEMEZ.
+        //
+        // Eskiden kayitli sablon varsa YALNIZCA o kullaniliyordu. Sonuc: panelin yeni surumleriyle
+        // gelen varsayilanlar (istemci otomatik yapilandirma SRV kayitlari, TLS raporlama) sablonu
+        // bir kez kaydetmis kurulumlara HIC ULASMIYORDU -- ve panel kendi sablonuna gore "eksik
+        // yok" dedigi icin bu sessizce oluyordu. Canlida tam olarak bu oldu: kayitlar aylarca
+        // eksikti, hicbir uyari cikmadi.
+        //
+        // Birlestirme TUR|KONAK ikilisine gore: kullanicinin sablonda ozellestirdigi bir kayit
+        // (ornegin kendi MX'i) KORUNUR, yalnizca sablonda hic bulunmayan yeni varsayilanlar eklenir.
+        var mevcutAnahtarlar = template.Records
+            .Select(record => $"{record.Type}|{record.Host}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var eksikVarsayilanlar = BuiltInTemplate().Records
+            .Where(record => !mevcutAnahtarlar.Contains($"{record.Type}|{record.Host}"))
+            .ToList();
+
+        if (eksikVarsayilanlar.Count > 0)
+        {
+            template = new DnsTemplateDto { Records = [.. template.Records, .. eksikVarsayilanlar] };
+        }
+
         var ip = ResolveDefaultIpv4Address(site, serverAddress);
         var ns1 = $"ns1.{zoneName}";
         var ns2 = $"ns2.{zoneName}";
