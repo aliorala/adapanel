@@ -48,7 +48,21 @@ internal sealed class DomainRefreshService(
         {
             // 1) DNS varsayılanları: eksik olanlar EKLENİR, var olanlara dokunulmaz. Yıkıcı olmama
             //    şartı burada kritik — kullanıcı MX ya da SPF değerini elle düzeltmiş olabilir.
-            result.AddedDnsRecords = await dnsService.RepairDefaultsAsync(siteName, applyChanges, cancellationToken);
+            // ADIM YALITIMI: bir adimin hatasi digerlerini IPTAL ETMEMELI.
+            //
+            // Onceden hepsi tek try icindeydi. Yazilamayan tek bir DKIM kaydi yuzunden DNS
+            // varsayilanlari adimi firlatinca, ondan sonraki HER SEY atlaniyordu: posta kayitlari,
+            // bolgenin yeniden yayinlanmasi, sertifika senkronu ve SMTP karsilama adi. Canlida tam
+            // olarak bu oldu -- kullanici "onar" diyor, hicbiri calismiyor ve sebep gorunmuyor.
+            try
+            {
+                result.AddedDnsRecords = await dnsService.RepairDefaultsAsync(siteName, applyChanges, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "DNS varsayilanlari uygulanamadi ({SiteName}).", siteName);
+                result.Error = exception.Message;
+            }
 
             // 2) Posta kayıtları (DKIM dahil): DKIM anahtarları posta sunucusunda üretilir, DNS
             //    varsayılanlarında yoktur. Posta alan adı yoksa bu adım sessizce atlanır — posta
@@ -68,7 +82,14 @@ internal sealed class DomainRefreshService(
 
             if (applyChanges)
             {
+                MailRecordErrors = [];
                 result.AppliedMailRecords = await ApplyMailRecordsAsync(siteName, cancellationToken);
+                if (MailRecordErrors.Count > 0)
+                {
+                    // Hata METNI kullaniciya ulasmali: "yazilamadi" demek yetmez, isletim
+                    // sisteminin verdigi sebep olmadan sorun korlemesine aranir.
+                    result.Error = string.Join(" | ", MailRecordErrors);
+                }
 
                 // 2b) Bolgeyi Windows DNS'e YENIDEN YAYINLA.
                 //
@@ -485,6 +506,9 @@ internal sealed class DomainRefreshService(
         }
     }
 
+    /// <summary>Son posta kaydi uygulamasinda olusan hatalar; cagiran bunu rapora tasir.</summary>
+    private IReadOnlyList<string> MailRecordErrors { get; set; } = [];
+
     private async Task<int> ApplyMailRecordsAsync(string siteName, CancellationToken cancellationToken)
     {
         try
@@ -502,20 +526,35 @@ internal sealed class DomainRefreshService(
             // diye gösterir ve rapor güvenilmez hâle gelir.
             var before = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
 
+            // Kayit basina yalitim: bir kaydin yazilamamasi DIGERLERINI engellememeli ve
+            // sebebi SESSIZ kalmamali. Onceden tek bir hata tum donguyu kesiyor, disaridaki
+            // catch "0 kayit uygulandi" diyordu -- yani panel hicbir sey yapmamis olmasina
+            // ragmen hata da gostermiyordu. Bu, tam olarak ayikladigimiz hata sinifi.
+            var hatalar = new List<string>();
             foreach (var record in applicable)
             {
-                await dnsService.UpsertRecordAsync(
-                    dns.Domain,
-                    new UpsertDnsRecordRequest
-                    {
-                        Type = record.Type,
-                        Host = record.Host,
-                        Value = record.Value,
-                        Priority = record.Priority,
-                        Ttl = 3600
-                    },
-                    cancellationToken);
+                try
+                {
+                    await dnsService.UpsertRecordAsync(
+                        dns.Domain,
+                        new UpsertDnsRecordRequest
+                        {
+                            Type = record.Type,
+                            Host = record.Host,
+                            Value = record.Value,
+                            Priority = record.Priority,
+                            Ttl = 3600
+                        },
+                        cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    logger.LogWarning(exception, "Posta kaydi yazilamadi: {Type} {Host}", record.Type, record.Host);
+                    hatalar.Add($"{record.Type} {record.Host}: {exception.Message}");
+                }
             }
+
+            MailRecordErrors = hatalar;
 
             var after = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
             return after.Count(key => !before.Contains(key));
