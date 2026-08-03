@@ -381,6 +381,28 @@ internal sealed class DomainRefreshService(
     {
         var findings = new List<RepairFindingDto>();
 
+        // SMTP KARSILAMA ADI.
+        //
+        // Bu bulgu olmadan kisir dongu olusuyordu: onarma adi duzeltebiliyor ama hicbir denetim
+        // eksikligi gormuyor, dolayisiyla dugme cikmiyor, dolayisiyla onarma hic calismiyordu.
+        // Canlida tam olarak bu oldu -- karsilama "vm-185-7-242-225" kaldigi halde panel sustu.
+        try
+        {
+            if (await mailService.EnsureServerHostnameAsync(applyChanges: false, cancellationToken))
+            {
+                findings.Add(new RepairFindingDto
+                {
+                    Key = "repair.mail_hostname_mismatch",
+                    Severity = "warn",
+                    Repaired = applyChanges
+                });
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogDebug(exception, "Posta karsilama adi denetlenemedi; posta sunucusu kurulu olmayabilir.");
+        }
+
         try
         {
             // panelPort=0: katalogdaki panel girdisi zaten disarida birakiliyor.
@@ -529,7 +551,7 @@ internal sealed class DomainRefreshService(
     {
         try
         {
-            await mailService.EnsureServerHostnameAsync(cancellationToken);
+            await mailService.EnsureServerHostnameAsync(true, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

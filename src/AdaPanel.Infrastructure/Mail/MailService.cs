@@ -1107,7 +1107,7 @@ public sealed class MailService(
         };
     }
 
-    public async Task<bool> EnsureServerHostnameAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default)
     {
         var state = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
         var hostName = state?.HostName?.Trim().ToLowerInvariant();
@@ -1176,6 +1176,16 @@ public sealed class MailService(
             && string.Equals(domainId, currentDomainId, StringComparison.Ordinal))
         {
             return false;
+        }
+
+        // DENETIM MODU: degisiklik GEREKTIGINI bildirir ama hicbir sey yazmaz.
+        //
+        // Bu sart: eksikligi olcmeyen bir denetim, onarma dugmesinin hic cikmamasina ve sorunun
+        // kalici olmasina yol aciyordu -- karsilama adi yanlisti, onarma bunu duzeltebiliyordu,
+        // ama panel eksigi gormedigi icin kullaniciya hic soylemedi.
+        if (!applyChanges)
+        {
+            return true;
         }
 
         // Yamada "id" alani BULUNMAMALI: sunucu onu "invalidPatch" ile reddediyor.

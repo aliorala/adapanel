@@ -144,6 +144,27 @@ public sealed class AttentionService(
                     ActionMethod = "POST"
                 });
             }
+
+            // SUNUCU GENELI bulgular da rozete girmeli.
+            //
+            // Bunlar bir alan adina degil sunucuya aittir (posta karsilama adi, kapali guvenlik
+            // duvari portu), dolayisiyla UpdatedSites'a hic yansimazlar. Yansimayinca rozet
+            // cikmiyor, dugme gorunmuyor ve onarma hic calismiyordu -- kisir dongu. Canlida tam
+            // olarak bu oldu: karsilama adi yanlisti, onarma bunu duzeltebiliyordu ama panel
+            // eksigi hic gostermedi.
+            foreach (var finding in stale.ServerFindings.Where(item => !item.Repaired))
+            {
+                items.Add(new AttentionItemDto
+                {
+                    Id = $"server-finding:{finding.Key}",
+                    Severity = string.Equals(finding.Severity, "fail", StringComparison.OrdinalIgnoreCase) ? "critical" : "warning",
+                    TitleKey = finding.Key,
+                    Detail = finding.Detail,
+                    Section = "health",
+                    ActionEndpoint = finding.NeedsConfirmation ? string.Empty : "/api/v1/server-health/refresh-domains",
+                    ActionMethod = finding.NeedsConfirmation ? string.Empty : "POST"
+                });
+            }
         }
         catch { failed.Add("domains"); }
 

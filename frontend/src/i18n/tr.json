@@ -3141,5 +3141,6 @@
   "attention.service.stopped.desc": "Bir Windows servisi durmuş; bağlı hizmetler çalışmıyor olabilir.",
   "panel.attention.noticeTitle": "Bu sayfada dikkat edilmesi gerekenler",
   "panel.attention.openDrawer": "Tümünü gör",
-  "panel.attention.badgeMore": "ve {count} tane daha"
+  "panel.attention.badgeMore": "ve {count} tane daha",
+  "repair.mail_hostname_mismatch": "Posta sunucusu kendini makine adıyla tanıtıyor; giden postalar spam'e düşebilir."
 }

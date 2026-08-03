@@ -37,7 +37,12 @@ public interface IMailService
     /// göstermelidir.
     /// </para>
     /// </summary>
-    Task<bool> EnsureServerHostnameAsync(CancellationToken cancellationToken = default);
+    /// <param name="applyChanges">
+    /// false ise HİÇBİR ŞEY YAZILMAZ, yalnızca "değişmesi gerekiyor mu" ölçülür. Denetim bunu
+    /// kullanır: eksikliği görmeyen bir denetim, onarma düğmesinin hiç çıkmamasına ve dolayısıyla
+    /// sorunun kalıcı olmasına yol açar.
+    /// </param>
+    Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default);
 
     Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default);
 
