@@ -579,38 +579,9 @@ internal sealed class DomainRefreshService(
             }
         }
 
-        // --- Posta sertifikasi ---
-        // Dosyadan okunur, ucuzdur. Yenileme BILEREK otomatik yapilmaz: sertifika alma basarisiz
-        // olursa mevcut gecerli sertifikayi silip self-signed'a dusuruyor ve otomatik yenilemeyi
-        // kalici olarak kapatiyor. Onarmanin her sitede bunu tetiklemesi felaket olurdu.
-        try
-        {
-            var certificate = await mailService.GetCertificateStatusAsync(cancellationToken);
-            if (certificate.Active && string.Equals(certificate.Source, "self-signed", StringComparison.OrdinalIgnoreCase))
-            {
-                findings.Add(new RepairFindingDto
-                {
-                    Key = "repair.mail_certificate_selfsigned",
-                    Severity = "warn",
-                    NeedsConfirmation = true,
-                    Detail = certificate.HostName
-                });
-            }
-            else if (certificate.Active && certificate.NotAfterUtc is { } expiry && expiry - DateTime.UtcNow < TimeSpan.FromDays(15))
-            {
-                findings.Add(new RepairFindingDto
-                {
-                    Key = expiry <= DateTime.UtcNow ? "repair.mail_certificate_expired" : "repair.mail_certificate_expiring",
-                    Severity = expiry <= DateTime.UtcNow ? "fail" : "warn",
-                    NeedsConfirmation = true,
-                    Detail = expiry.ToString("yyyy-MM-dd")
-                });
-            }
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            logger.LogDebug(exception, "Posta sertifikasi durumu okunamadi.");
-        }
+        // NOT: posta sertifikasi bulgulari BURADA DEGIL, CollectServerFindingsAsync icinde.
+        // Sertifika sunucu genelinde TEKTIR; site basina raporlanirsa 40 siteli bir sunucuda ayni
+        // uyari 40 kez cikar ve "40/40 alan adi guncel degil" gibi anlamsiz bir tablo olusur.
     }
 
     /// <summary>Son posta kaydi uygulamasinda olusan hatalar; cagiran bunu rapora tasir.</summary>

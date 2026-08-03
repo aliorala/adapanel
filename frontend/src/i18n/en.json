@@ -3133,5 +3133,13 @@
   "panel.health.siteRepairing": "Repairing...",
   "panel.health.siteRepaired": "Repair completed.",
   "panel.health.domainsLoading": "Checking...",
-  "panel.common.copied": "Copied"
+  "panel.common.copied": "Copied",
+  "attention.software.updates.desc": "Newer versions are available for installed components; you can update them from the Software screen.",
+  "attention.update.panel.desc": "A new panel version has been released; you can install it from Settings > Update.",
+  "attention.dns.notPubliclyBound.desc": "The DNS server does not answer from outside; your domains may fail to resolve.",
+  "attention.domains.staleDefaults.desc": "Some domains have not picked up the panel's current defaults (DMARC, DKIM, MX). One click completes them.",
+  "attention.service.stopped.desc": "A Windows service is stopped; the services depending on it may not be working.",
+  "panel.attention.noticeTitle": "Things needing attention on this page",
+  "panel.attention.openDrawer": "See all",
+  "panel.attention.badgeMore": "and {count} more"
 }

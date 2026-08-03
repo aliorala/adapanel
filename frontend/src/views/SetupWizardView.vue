@@ -161,6 +161,11 @@
     @attention-refresh="loadAttention(false)">
     <template #banner>
       <div class="banner-stack">
+        <!-- Bulundugunuz sayfaya ait dikkat maddeleri. Tek yerden beslenir; hedef sayfalarin
+             hicbirine ayri ayri eklemek gerekmez. Madde yoksa hicbir sey gorunmez. -->
+        <AttentionSectionNotice
+          :items="attentionItemsFor(activeSection)"
+          @open="attentionOpen = true" />
         <p v-if="showDefaultPortWarning" class="notice warn-banner">
           {{ t("panel.dashboard.defaultPortWarning") }}
         </p>
@@ -403,6 +408,7 @@ import CronView from "./CronView.vue";
 import DatabasesView from "./DatabasesView.vue";
 import MigrationView from "./MigrationView.vue";
 import MyDatabasesView from "./MyDatabasesView.vue";
+import AttentionSectionNotice from "../components/AttentionSectionNotice.vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import AdvisorView from "./AdvisorView.vue";
 import FilesView from "./FilesView.vue";
@@ -425,15 +431,24 @@ import { getAttentionSummary, type AttentionSummary } from "../api/attention";
 import WebsiteWorkspaceView from "./WebsiteWorkspaceView.vue";
 
 type ViewMode = "setup" | "auth" | "dashboard";
-type SectionItem = { id: string; label: string; description: string; glyph: string; badge?: string };
+type SectionItem = {
+  id: string;
+  label: string;
+  description: string;
+  glyph: string;
+  badge?: string;
+  /** Rozetin üzerine gelince görünen açıklama: eksikleri ADIYLA sayar. */
+  badgeTitle?: string;
+};
 // Hesap yönetimi ("accounts" → UsersView) ve "Hesabım" ("account" → AccountView) artık ayrı bölümler;
 // Ayarlar yalnızca yönetici kapsamındaki sunucu/panel ayarlarını barındırır.
 type SettingsTab = "general" | "security" | "notifications" | "errorReports" | "updates";
 
 const i18n = useI18n();
-const t = (key: string) => {
+// params: "{count} tane daha" gibi sayi iceren metinler icin. Verilmezse davranis aynidir.
+const t = (key: string, params?: Record<string, unknown>) => {
   try {
-    const value = i18n.t(key);
+    const value = params ? i18n.t(key, params) : i18n.t(key);
     if (typeof value !== "string") {
       console.error("Unexpected i18n value", key, value);
       return key;
@@ -570,6 +585,35 @@ function attentionBadge(sectionId: string): string | undefined {
   return count > 0 ? String(count) : undefined;
 }
 
+/**
+ * Bir bölüme ait dikkat maddeleri (takma adlar katlanmış hâlde).
+ *
+ * Rozet şimdiye kadar yalnız SectionCounts okuyordu, yani öğelerin kendisi arayüze hiç
+ * ulaşmıyordu; kullanıcı "3" görüyor ama neyin eksik olduğunu ancak tıklayıp arayarak
+ * öğrenebiliyordu.
+ */
+function attentionItemsFor(sectionId: string) {
+  return (attentionSummary.value?.items ?? []).filter(
+    (item) => (ATTENTION_SECTION_ALIASES[item.section] ?? item.section) === sectionId
+  );
+}
+
+/** Rozetin üzerine gelince görünecek metin: maddeleri ADIYLA sayar. */
+function attentionBadgeTitle(sectionId: string): string | undefined {
+  const items = attentionItemsFor(sectionId);
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  // En fazla üç ad; gerisi "ve N tane daha" olarak özetlenir ki ipucu okunabilir kalsin.
+  const names = items.slice(0, 3).map((item) => t(item.titleKey));
+  const kalan = items.length - names.length;
+
+  return kalan > 0
+    ? `${names.join(" · ")} — ${t("panel.attention.badgeMore", { count: kalan })}`
+    : names.join(" · ");
+}
+
 const dashboardSections = computed<SectionItem[]>(() => {
   const sections: SectionItem[] = [
     // panel sırası: Web Siteleri → Posta → Dosyalar → Veritabanları → İstatistikler →
@@ -582,21 +626,21 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
-    { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badge: attentionBadge("monitor") },
+    { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badgeTitle: attentionBadgeTitle("monitor"), badge: attentionBadge("monitor") },
     // Danışman rozeti = bekleyen dikkat maddesi sayısı; Mağaza rozeti = bekleyen güncelleme
     // sayısı (yoksa eskisi gibi kurulu bileşen sayısı).
-    { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD", badge: attentionBadge("advisor") },
-    { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badge: attentionBadge("software") ?? (installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined) },
+    { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD", badgeTitle: attentionBadgeTitle("advisor"), badge: attentionBadge("advisor") },
+    { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badgeTitle: attentionBadgeTitle("software"), badge: attentionBadge("software") ?? (installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined) },
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
-    { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC", badge: attentionBadge("security") },
-    { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badge: attentionBadge("tools") },
+    { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC", badgeTitle: attentionBadgeTitle("security"), badge: attentionBadge("security") },
+    { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badgeTitle: attentionBadgeTitle("tools"), badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
     // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.
     // Yapay zeka baglantisi HER role acik: anahtarin yetkisi sahibinin rolunden turer, yani
     // musteri anahtari musterinin gordugu kadarini gorur. (Plesk yalniz yoneticiye izin veriyor.)
     { id: "ai", label: t("panel.navigation.aiConnection"), description: t("panel.aiConnection.subtitle"), glyph: "YZ" },
     { id: "account", label: t("panel.settings.tab.account"), description: t("panel.account.title"), glyph: "HS" },
-    { id: "settings", label: t("panel.navigation.settings"), description: t("panel.settings.subtitle"), glyph: "AY", badge: attentionBadge("settings") },
+    { id: "settings", label: t("panel.navigation.settings"), description: t("panel.settings.subtitle"), glyph: "AY", badgeTitle: attentionBadgeTitle("settings"), badge: attentionBadge("settings") },
     { id: "exit", label: t("panel.navigation.exit"), description: t("panel.auth.logout"), glyph: "EX" }
   ];
 

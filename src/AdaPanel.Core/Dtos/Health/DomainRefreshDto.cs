@@ -1,3 +1,4 @@
+using System.Linq;
 namespace AdaPanel.Core.Dtos.Health;
 
 /// <summary>
@@ -46,8 +47,15 @@ public sealed class DomainRefreshResultDto
         && AddedDnsRecords.Count == 0
         && AppliedMailRecords == 0
         && !MailCertificateRefreshed
-        && Findings.Count == 0
-        && RemovedPreviewBindings == 0;
+        && RemovedPreviewBindings == 0
+        // ONAY BEKLEYEN bulgular burada SAYILMAZ.
+        //
+        // "Güncel mi" sorusunun anlamı: onarmanın yapacağı bir iş kaldı mı? Onay bekleyen bir
+        // bulgu (bilerek durdurulmuş site, kendinden imzalı sertifika) onarmanın düzeltebileceği
+        // bir şey değildir. Sayılırsa rozet HİÇ SÖNMEZ: kullanıcı "Eksikleri tamamla" der, hiçbir
+        // şey değişmez, uyarı geri gelir. Bu bulgular yine raporlanır — yalnızca "yapılacak iş"
+        // sayısını şişirmez.
+        && Findings.All(finding => finding.NeedsConfirmation);
 }
 
 

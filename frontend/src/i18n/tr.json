@@ -3133,5 +3133,13 @@
   "panel.health.siteRepairing": "Onarılıyor...",
   "panel.health.siteRepaired": "Onarma tamamlandı.",
   "panel.health.domainsLoading": "Denetleniyor...",
-  "panel.common.copied": "Kopyalandı"
+  "panel.common.copied": "Kopyalandı",
+  "attention.software.updates.desc": "Kurulu bileşenler için yeni sürüm var; Yazılım ekranından güncelleyebilirsiniz.",
+  "attention.update.panel.desc": "Panelin yeni sürümü yayınlandı; Ayarlar > Güncelleme ekranından kurabilirsiniz.",
+  "attention.dns.notPubliclyBound.desc": "DNS sunucusu dışarıdan yanıt vermiyor; alan adlarınız çözülmeyebilir.",
+  "attention.domains.staleDefaults.desc": "Bazı alan adları panelin güncel ayarlarını almamış (DMARC, DKIM, MX gibi). Tek tıkla tamamlanabilir.",
+  "attention.service.stopped.desc": "Bir Windows servisi durmuş; bağlı hizmetler çalışmıyor olabilir.",
+  "panel.attention.noticeTitle": "Bu sayfada dikkat edilmesi gerekenler",
+  "panel.attention.openDrawer": "Tümünü gör",
+  "panel.attention.badgeMore": "ve {count} tane daha"
 }

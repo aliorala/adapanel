@@ -260,8 +260,15 @@ public sealed partial class DnsService(
             // onarmada fark yeniden goruluyor ve kullanici "onardim ama uyari geri geliyor"
             // diyordu. Artik ayni politikanin eskisi DEGISTIRILIYOR, yenisi eklenmiyor.
             var policyPrefix = ResolveSingletonTxtPrefix(record.Type, record.Value);
+            // YALNIZ PANELIN YONETTIGI kayit degistirilir.
+            //
+            // Kullanici SPF'ine "include:_spf.google.com" eklemis ya da DMARC'i "p=reject" yapmis
+            // olabilir. Tek-ornek kurali bunlari da ezerse, onarma her calistiginda kullanicinin
+            // eli emegini panel varsayilanina geri dondururdu -- ki panelin sozu tam tersi:
+            // "eksikler eklenir, var olana dokunulmaz".
             var duplicate = policyPrefix is not null
                 ? state.Records.FirstOrDefault(item =>
+                    item.IsManaged &&
                     string.Equals(item.Type, "TXT", StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(item.Host, record.Host, StringComparison.OrdinalIgnoreCase) &&
                     item.Value.StartsWith(policyPrefix, StringComparison.OrdinalIgnoreCase))
@@ -1082,7 +1089,12 @@ public sealed partial class DnsService(
             .Where(parts => parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
             // SOA ve zone kokundeki NS bilerek DISARIDA: Windows bunlari bolgeyle birlikte kendisi
             // olusturur, silinmeleri bolgeyi bozar.
+            // SOA ve BOLGE KOKUNDEKI NS disarida: Windows bunlari bolgeyle birlikte kendisi
+            // olusturur. Kok NS'lerin silinmesi bolgeyi YETKISIZ birakir (lame delegation) ve alan
+            // adi tumuyle cozulmez olur. Yorum bunu soyluyordu ama kod yalnizca SOA'yi disliyordu.
             .Where(parts => !string.Equals(parts[0], "SOA", StringComparison.OrdinalIgnoreCase))
+            .Where(parts => !(string.Equals(parts[0], "NS", StringComparison.OrdinalIgnoreCase)
+                              && string.Equals(parts[1], "@", StringComparison.Ordinal)))
             .Select(parts => new { Type = parts[0].ToUpperInvariant(), Host = parts[1] });
 
         var groups = istenen.Concat(oksuzler).ToArray();
@@ -1242,14 +1254,22 @@ public sealed partial class DnsService(
             // Her yolun mesaji AYRI kirpilir: aksi halde tek bir yolun uzun ciktisi digerlerinin
             // mesajini rapordan kaydirir. Canlida tam olarak bu oldu -- ucuncu yolun (WMI) ne
             // dedigi hic gorunmedi.
+            // Yerel programlarin (dnscmd) stderr'i 2>&1 ile akisa alindiginda PowerShell 5.1 her
+            // satiri NativeCommandError'a sarar; scriptin basindaki $ErrorActionPreference='Stop'
+            // altinda bu SONLANDIRICI hataya doner ve blok oracikta biter -- yani sonraki yollara
+            // (WMI, bolge dosyasi) HIC GELINMEZ. Blok boyunca gecici olarak gevsetiliyor.
+            "$adaEskiEap = $ErrorActionPreference",
+            "$ErrorActionPreference = 'Continue'",
             @"$adaKirp = { param($m) $m = ($m -replace '\s+', ' ').Trim(); if ($m.Length -gt 200) { $m.Substring(0, 200) + '...' } else { $m } }",
             "$adaHata = @()",
             "$adaVar = $false",
 
-            // Yarim kalmis bir onceki deneme varsa temizlenir: uzerine yazmak, ayni konakta iki
-            // bozuk kayit birakabilir.
-            "Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue | " +
-            "Remove-DnsServerResourceRecord -ZoneName $zoneName -Force -ErrorAction SilentlyContinue",
+            // NOT: burada TEMIZLIK YAPILMAZ.
+            //
+            // Eskiden bu noktada "$adaAd konagindaki tum TXT kayitlarini sil" komutu vardi ve bu
+            // AYNI KONAKTAKI DIGER TXT'leri de siliyordu -- ornegin '@' konaginda hem SPF hem uzun
+            // bir dogrulama kaydi varsa, uzun kayit yazilirken SPF sessizce yok oluyordu. Ustelik
+            // gereksizdi: BuildSyncScript zaten her "TUR|konak" grubunu bu satirlardan ONCE siliyor.
 
             // 1) Cmdlet + CRLF ile ayrilmis deger.
             "try {",
@@ -1339,6 +1359,7 @@ public sealed partial class DnsService(
             "  $adaVar = [bool](Get-DnsServerResourceRecord -ZoneName $zoneName -Name $adaAd -RRType Txt -ErrorAction SilentlyContinue)",
             "}",
 
+            "$ErrorActionPreference = $adaEskiEap",
             "if (-not $adaVar) { throw ($adaHata -join ' || ') }"
         };
 

@@ -15,6 +15,17 @@ public sealed class AttentionItemDto
     /// <summary>Başlığın i18n ANAHTARI (metin DEĞİL).</summary>
     public string TitleKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// AÇIKLAMANIN i18n anahtarı — "ne yapılabilir"i insan diliyle söyler
+    /// (ör. "PHP sürümü güncellenebilir"). Boş olabilir.
+    /// <para>
+    /// Neden ayrı: <see cref="TitleKey"/> yalnızca sorunun ADIDIR ve rozette/çekmecede tek başına
+    /// bir şey anlatmaz. Danışman tarafında bu açıklama ZATEN üretiliyordu ama buraya kopyalanırken
+    /// düşürülüyordu — yani panel elindeki bilgiyi kullanıcıya göstermiyordu.
+    /// </para>
+    /// </summary>
+    public string DescriptionKey { get; set; } = string.Empty;
+
     /// <summary>Dile bağımsız teknik ayrıntı (servis adı, sürüm, IP). Boş olabilir.</summary>
     public string Detail { get; set; } = string.Empty;
 

@@ -17,6 +17,8 @@ export type AttentionItem = {
   id: string;
   severity: AttentionSeverity;
   titleKey: string;
+  /** Açıklamanın çeviri anahtarı: "ne yapılabilir"i insan diliyle söyler. Boş olabilir. */
+  descriptionKey: string;
   detail: string;
   section: string;
   actionEndpoint: string;
@@ -47,6 +49,7 @@ function normalizeItem(raw: Partial<AttentionItem> | null | undefined): Attentio
     id: raw?.id ?? "",
     severity: toSeverity(raw?.severity),
     titleKey: raw?.titleKey ?? "",
+    descriptionKey: raw?.descriptionKey ?? "",
     detail: raw?.detail ?? "",
     section: raw?.section ?? "",
     actionEndpoint: raw?.actionEndpoint ?? "",

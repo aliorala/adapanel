@@ -40,6 +40,9 @@ public sealed class AttentionService(
                     Id = item.Id,
                     Severity = item.Severity,
                     TitleKey = item.TitleKey,
+                    // Danisman ACIKLAMAYI zaten uretiyor; eskiden burada dusuruluyordu ve
+                    // kullanici yalnizca sorunun adini goruyordu.
+                    DescriptionKey = item.DetailKey,
                     Detail = item.Detail,
                     Section = string.IsNullOrWhiteSpace(item.ActionSection) ? "advisor" : item.ActionSection
                 });
@@ -62,6 +65,7 @@ public sealed class AttentionService(
                     Id = "component-updates",
                     Severity = "warning",
                     TitleKey = "attention.software.updates",
+                    DescriptionKey = "attention.software.updates.desc",
                     Detail = string.IsNullOrWhiteSpace(automation.LastUpdateCheckDetails)
                         ? $"{pendingUpdates}"
                         : automation.LastUpdateCheckDetails,
@@ -82,6 +86,7 @@ public sealed class AttentionService(
                     Id = "panel-update",
                     Severity = "warning",
                     TitleKey = "attention.update.panel",
+                    DescriptionKey = "attention.update.panel.desc",
                     Detail = update.LatestVersion,
                     Section = "updates"
                 });
@@ -101,6 +106,7 @@ public sealed class AttentionService(
                     Id = "dns-not-publicly-bound",
                     Severity = "critical",
                     TitleKey = "attention.dns.notPubliclyBound",
+                    DescriptionKey = "attention.dns.notPubliclyBound.desc",
                     Detail = dns.Details,
                     Section = "dns",
                     ActionEndpoint = "/api/v1/dns/server/repair",
@@ -130,6 +136,7 @@ public sealed class AttentionService(
                     Id = "domains-stale-defaults",
                     Severity = "warning",
                     TitleKey = "attention.domains.staleDefaults",
+                    DescriptionKey = "attention.domains.staleDefaults.desc",
                     Detail = $"{stale.UpdatedSites}/{stale.TotalSites}: {string.Join(", ", names)}" +
                              (stale.UpdatedSites > names.Length ? " …" : string.Empty),
                     Section = "dns",
@@ -155,6 +162,7 @@ public sealed class AttentionService(
                     Id = $"service-stopped:{service.Name}",
                     Severity = ServiceSeverity(service.Name),
                     TitleKey = "attention.service.stopped",
+                    DescriptionKey = "attention.service.stopped.desc",
                     Detail = string.IsNullOrWhiteSpace(service.Label) ? service.Name : service.Label,
                     Section = "health",
                     ActionEndpoint = "/api/v1/server-health/restart",

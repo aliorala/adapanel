@@ -28,7 +28,7 @@
           <span class="nav-copy">
             <strong>{{ section.label }}</strong>
           </span>
-          <span v-if="section.badge" class="nav-badge">{{ section.badge }}</span>
+          <span v-if="section.badge" class="nav-badge" :title="section.badgeTitle">{{ section.badge }}</span>
         </button>
       </nav>
 
@@ -331,6 +331,12 @@ type SectionItem = {
   description?: string;
   glyph: string;
   badge?: string;
+  /**
+   * Rozetin üzerine gelince görünen açıklama: hangi eksikler olduğunu ADIYLA söyler.
+   * Sayı tek başına "bir şey var" der ama NE olduğunu söylemez; kullanıcı öğrenmek için
+   * tıklamak zorunda kalır.
+   */
+  badgeTitle?: string;
 };
 
 const props = defineProps<{
