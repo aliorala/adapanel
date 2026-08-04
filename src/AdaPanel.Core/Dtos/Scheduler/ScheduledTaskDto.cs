@@ -32,4 +32,24 @@ public sealed class ScheduledTaskDto
     /// panel bunu görüp kullanıcıya çıktı kaydını açmayı önerebilir.
     /// </summary>
     public bool CapturesOutput { get; set; }
+
+    // Aşağıdakiler DÜZENLEME içindir.
+    //
+    // Bu alanlar okunmadan bir görevi düzenlemek, dokunulmayan her ayarı SESSİZCE varsayılana
+    // döndürürdü: 6 saatte bir çalışan bir görev 1 saate, 03:30'daki bir yedek 00:00'a, sınırlı
+    // kimlikle çalışan bir betik SYSTEM'e düşerdi. Kullanıcı yalnızca komutu değiştirdiğini sanıp
+    // aslında görevi baştan tanımlamış olurdu — bu oturumda tekrar tekrar ayıkladığımız hata
+    // sınıfının aynısı: panelin kendi varsayılanını kullanıcının ayarı sanması.
+
+    /// <summary>Saat/dakika tipinde tekrar aralığı (ör. 6 = altı saatte bir).</summary>
+    public int Interval { get; set; } = 1;
+
+    /// <summary>Günlük tipinde çalışma saati ("HH:mm").</summary>
+    public string TimeOfDay { get; set; } = "00:00";
+
+    /// <summary>php tipinde kayıtlı php.exe yolundan çözülen sürüm (ör. "8.3").</summary>
+    public string PhpVersion { get; set; } = string.Empty;
+
+    /// <summary>"system" ya da "limited" — görevin kayıtlı kimliğinden çözülür.</summary>
+    public string RunAs { get; set; } = "system";
 }

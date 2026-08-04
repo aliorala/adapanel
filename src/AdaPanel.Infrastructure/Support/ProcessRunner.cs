@@ -97,13 +97,37 @@ internal static class ProcessRunner
     /// </summary>
     private const int EncodedCommandLimit = 8000;
 
+    /// <summary>
+    /// Her scriptin başına eklenir: PowerShell'in çıktısını UTF-8 yazmasını sağlar.
+    /// <para>
+    /// KÖK NEDEN (ölçülerek bulundu): PowerShell 5.1 yönlendirilmiş çıktısını konsolun kod
+    /// sayfasıyla yazar, panel ise <see cref="Encoding.UTF8"/> ile okur. İki taraf anlaşmadığı için
+    /// ASCII DIŞINDAKİ HER KARAKTER yok olur. Ölçüm: <c>epey ürün çekme botu ĞÜŞİÖÇ</c> adı
+    /// <c>epey ?r?n ?ekme botu ??????</c> olarak geri geldi; bu satır eklendiğinde birebir doğru döndü.
+    /// </para>
+    /// <para>
+    /// Görünen etkisi: panel görev listesini bozuk adlarla okuyor, kullanıcı "Şimdi çalıştır"a
+    /// bastığında o bozuk adı geri gönderiyor ve Görev Zamanlayıcı görevi bulamıyordu
+    /// (0x80070002). Ama sorun cron'a özel DEĞİL: PowerShell'den okunan Türkçe karakterli her
+    /// değer aynı şekilde bozuluyordu — site adları, dosya yolları, hata mesajları.
+    /// </para>
+    /// <para>
+    /// Yalnızca ÇIKTI yönü düzelir. Yerli araçların (dnscmd, icacls, netsh) kendi kod sayfasında
+    /// yazdığı ASCII dışı metin bu satırdan önce de bozuktu, sonra da bozuk kalır; bu ayrı ve
+    /// daha dar bir sorundur.
+    /// </para>
+    /// </summary>
+    private const string OutputEncodingPrefix = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n";
+
     public static async Task<CommandResult> RunPowerShellAsync(string command, CancellationToken cancellationToken = default)
     {
-        var result = command.Length > EncodedCommandLimit
-            ? await RunPowerShellFromFileAsync(command, cancellationToken)
+        var script = OutputEncodingPrefix + command;
+
+        var result = script.Length > EncodedCommandLimit
+            ? await RunPowerShellFromFileAsync(script, cancellationToken)
             : await RunAsync(
                 "powershell.exe",
-                $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(command))}",
+                $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {Convert.ToBase64String(Encoding.Unicode.GetBytes(script))}",
                 cancellationToken: cancellationToken);
 
         return new CommandResult

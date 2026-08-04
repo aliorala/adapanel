@@ -130,14 +130,36 @@ public sealed class SchedulerService(
   $info = Get-ScheduledTaskInfo -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue
   $trigger = if ($_.Triggers.Count -gt 0) {{ $_.Triggers[0] }} else {{ $null }}
   $scheduleType = ''
+  $interval = 1
+  $timeOfDay = '00:00'
   if ($trigger) {{
-    if ($trigger.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger') {{ $scheduleType = 'daily' }}
-    elseif ($trigger.Repetition -and $trigger.Repetition.Interval -match '^PT\d+M$') {{ $scheduleType = 'minute' }}
-    else {{ $scheduleType = 'hourly' }}
+    if ($trigger.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger') {{
+      $scheduleType = 'daily'
+      # Gunluk gorevde calisma saati StartBoundary'de durur. Duzenlemede geri okunmazsa
+      # kullanicinin sectigi saat sessizce 00:00'a duserdi.
+      if ($trigger.StartBoundary) {{
+        try {{ $timeOfDay = ([datetime]$trigger.StartBoundary).ToString('HH:mm') }} catch {{ }}
+      }}
+    }}
+    elseif ($trigger.Repetition -and $trigger.Repetition.Interval -match '^PT(\d+)M$') {{
+      $scheduleType = 'minute'
+      $interval = [int]$Matches[1]
+    }}
+    else {{
+      $scheduleType = 'hourly'
+      if ($trigger.Repetition -and $trigger.Repetition.Interval -match '^PT(\d+)H$') {{ $interval = [int]$Matches[1] }}
+    }}
   }}
+  # Kimlik: sinirli hesapla calisan gorev duzenlemede SYSTEM'e dusmemeli -- bu, kullanicinin
+  # istemedigi bir YETKI YUKSELTMESI olurdu.
+  $runAs = 'system'
+  if ($_.Principal -and $_.Principal.UserId -and $_.Principal.RunLevel -ne 'Highest') {{ $runAs = 'limited' }}
   [pscustomobject]@{{
     Name = $_.TaskName
     ScheduleType = $scheduleType
+    Interval = $interval
+    TimeOfDay = $timeOfDay
+    RunAs = $runAs
     State = $_.State.ToString()
     Command = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].Execute }} else {{ '' }}
     Arguments = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].Arguments }} else {{ '' }}
@@ -184,6 +206,16 @@ $tasks | ConvertTo-Json -Depth 5";
             else if (task.Command.EndsWith("php.exe", StringComparison.OrdinalIgnoreCase))
             {
                 task.TaskType = "php";
+                task.PhpVersion = ResolvePhpVersionFromPath(task.Command);
+
+                // php tipinde form "Command" alaninda BETIGI bekler, php.exe'yi degil: argumanlarin
+                // ilk tirnakli parcasi betiktir. Duzenleme ekraninin dogru dolmasi icin ayristirilir.
+                var betik = Regex.Match(task.Arguments, "^\"([^\"]+)\"");
+                if (betik.Success)
+                {
+                    task.Command = betik.Groups[1].Value;
+                    task.Arguments = task.Arguments[betik.Length..].Trim();
+                }
             }
             else if (ScriptTaskPlanner.IsScriptAction(task.Command, task.Arguments))
             {
@@ -729,6 +761,26 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
         !string.IsNullOrWhiteSpace(command) &&
         command.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0 &&
         !string.IsNullOrWhiteSpace(Path.GetDirectoryName(command));
+
+    /// <summary>
+    /// Kayıtlı php.exe yolundan sürümü çözer (ör. ...\runtimes\php\8.3\php.exe → "8.3").
+    /// <para>
+    /// Düzenleme için gerekli: sürüm geri okunmazsa, kullanıcı yalnızca betiği değiştirdiğinde
+    /// görev sessizce "kurulu en yeni PHP"ye geçerdi. 7.4 isteyen eski bir uygulama 8.3'e taşınır
+    /// ve bir daha çalışmazdı.
+    /// </para>
+    /// </summary>
+    internal static string ResolvePhpVersionFromPath(string phpExecutablePath)
+    {
+        if (string.IsNullOrWhiteSpace(phpExecutablePath))
+        {
+            return string.Empty;
+        }
+
+        // Yoldaki SON sürüm benzeri parça alınır: kök klasörde de sayı geçebilir.
+        var eslesmeler = Regex.Matches(phpExecutablePath, @"(?<![\d.])(\d+\.\d+)(?![\d.])");
+        return eslesmeler.Count > 0 ? eslesmeler[^1].Groups[1].Value : string.Empty;
+    }
 
     private static string ResolvePhpExecutable(string? version)
     {

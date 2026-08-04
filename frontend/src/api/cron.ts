@@ -21,6 +21,12 @@ export type ScheduledTask = {
   lastTaskResult: number | null;
   // Çıktı yakalama eklenmeden önce kaydedilmiş görevlerde false olur.
   capturesOutput: boolean;
+  // Aşağıdakiler DÜZENLEME içindir: tabloda görünmezler ama okunmazlarsa düzenleme sırasında
+  // sessizce varsayılana döner ve kullanıcı farkında olmadan görevi baştan tanımlamış olur.
+  interval: number;
+  timeOfDay: string;
+  phpVersion: string;
+  runAs: string;
 };
 
 export async function getScheduledTasks() {

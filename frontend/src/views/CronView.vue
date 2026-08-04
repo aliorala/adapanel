@@ -14,7 +14,7 @@
 
     <div class="module-toolbar">
       <div class="toolbar-group">
-        <button @click="formOpen = !formOpen">
+        <button @click="toggleForm">
           {{ formOpen ? t("panel.tasks.closeForm") : t("panel.tasks.add") }}
         </button>
         <span class="status-pill ok">{{ tasks.length }} {{ t("panel.tasks.taskCount") }}</span>
@@ -23,6 +23,9 @@
     </div>
 
     <section v-if="formOpen" class="form-surface">
+      <!-- Hangi gorevi duzenledigimiz yazili olsun: form sayfanin tepesinde, gorev satiri asagida
+           kaliyor; baslik olmadan kullanici hangi gorevi degistirdigini kaybediyor. -->
+      <p v-if="editingName" class="editing-banner">{{ t("panel.tasks.editing", { name: editingName }) }}</p>
       <div class="form-grid">
         <label><span class="field-label">{{ t("panel.tasks.name") }}</span><input v-model.trim="form.name" /></label>
         <label v-if="isAdmin">
@@ -93,9 +96,11 @@
       </div>
       <div class="row-actions">
         <button :disabled="saving || !form.name || !formComplete" @click="saveTask">
-          {{ saving ? t("panel.tasks.saving") : t("panel.tasks.save") }}
+          {{ saving ? t("panel.tasks.saving") : t(editingName ? "panel.tasks.update" : "panel.tasks.save") }}
         </button>
-        <button class="secondary compact" @click="resetForm">{{ t("panel.tasks.reset") }}</button>
+        <button class="secondary compact" @click="editingName ? cancelEdit() : resetForm()">
+          {{ t(editingName ? "panel.tasks.cancelEdit" : "panel.tasks.reset") }}
+        </button>
       </div>
     </section>
 
@@ -146,6 +151,7 @@
           <button class="secondary compact" :disabled="runningName === item.name" @click="runTask(item.name)">
             {{ runningName === item.name ? t("panel.tasks.running") : t("panel.tasks.runNow") }}
           </button>
+          <button class="secondary compact" @click="editTask(item)">{{ t("panel.tasks.edit") }}</button>
           <button class="secondary compact" :disabled="togglingName === item.name" @click="toggleTask(item)">
             {{ isDisabled(item) ? t("panel.tasks.enableTask") : t("panel.tasks.disableTask") }}
           </button>
@@ -293,14 +299,88 @@ async function refresh() {
   }
 }
 
+/**
+ * Düzenlenen görevin ADI. Boşsa yeni görev ekleniyordur.
+ *
+ * Ad ayrıca "hangi görevi değiştiriyoruz"un tek kimliğidir: Görev Zamanlayıcı'da görevler adla
+ * anılır, ayrı bir kimlik yoktur.
+ */
+const editingName = ref("");
+
+/**
+ * Görevi düzenlemeye açar: formu görevin GERÇEK değerleriyle doldurur.
+ *
+ * Sunucudan okunan alanlar kullanılır, ekranda görünenler değil. Aralık, çalışma saati, PHP sürümü
+ * ve kimlik tablodaki sütunlarda hiç görünmüyor; formu yalnız görünenlerle doldurmak, dokunulmayan
+ * her ayarı sessizce varsayılana döndürürdü.
+ */
+function editTask(item: ScheduledTask) {
+  editingName.value = item.name;
+  Object.assign(form, {
+    name: item.name,
+    taskType: item.taskType,
+    command: item.command,
+    arguments: item.arguments,
+    workingDirectory: item.workingDirectory,
+    url: item.url,
+    phpVersion: item.phpVersion,
+    siteName: "",
+    runAs: item.runAs || "system",
+    scheduleType: item.scheduleType || "hourly",
+    interval: item.interval || 1,
+    timeOfDay: item.timeOfDay || "00:00"
+  });
+
+  // Betik görevinde kapsam: sınırlı kimlik yalnızca SİTE betiğinde seçilebilir, dolayısıyla
+  // "limited" görmek kapsamın site olduğunu söyler.
+  scriptScope.value = item.taskType === "script" && item.runAs === "limited" ? "site" : "server";
+
+  formOpen.value = true;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/** Formu acar/kapatir. Acarken duzenleme modu BIRAKILIR: dugmenin adi "Ekle". */
+function toggleForm() {
+  if (formOpen.value) {
+    formOpen.value = false;
+    return;
+  }
+
+  if (editingName.value) {
+    editingName.value = "";
+    resetForm();
+  }
+
+  formOpen.value = true;
+}
+
+function cancelEdit() {
+  editingName.value = "";
+  resetForm();
+  formOpen.value = false;
+}
+
 async function saveTask() {
   saving.value = true;
+  const oncekiAd = editingName.value;
   try {
     await createScheduledTask({ ...form });
+
+    // AD DEĞİŞTİYSE eskisi silinir. Kayıt, aynı adlı görevi yerine yazar; ad değiştiğinde ise yeni
+    // bir görev oluşur ve eskisi ORTADA KALIR. Kullanıcı "adını düzelttim" der, sunucuda iki görev
+    // birden çalışmaya devam ederdi.
+    //
+    // Sıra bilerek böyle: önce yeni kayıt BAŞARILI olur, sonra eski silinir. Tersi olsaydı kayıt
+    // başarısız olduğunda kullanıcı hiç görevsiz kalırdı.
+    if (oncekiAd && oncekiAd !== form.name.trim()) {
+      await deleteScheduledTask(oncekiAd);
+    }
+
     await refresh();
+    editingName.value = "";
     resetForm();
     formOpen.value = false;
-    showNotice(t("panel.tasks.saved"), false);
+    showNotice(t(oncekiAd ? "panel.tasks.updated" : "panel.tasks.saved"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
@@ -725,6 +805,14 @@ function resolveApiMessage(error: unknown) {
   display: block;
   opacity: 0.75;
   margin-top: 0.2rem;
+}
+
+.editing-banner {
+  margin: 0 0 0.8rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-1, #4b7bec) 10%, transparent);
+  font-size: 0.86rem;
 }
 
 .run-output {
