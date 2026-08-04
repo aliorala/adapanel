@@ -129,6 +129,36 @@ public sealed class CronController(
     }
 
     /// <summary>
+    /// Görevlerin çalışacağı ortam: sunucuda hangi Python kurulu, SYSTEM onu görebiliyor mu.
+    /// </summary>
+    [HttpGet("environment")]
+    public async Task<ActionResult<ApiResponse<TaskEnvironmentDto>>> GetEnvironmentAsync(CancellationToken cancellationToken)
+    {
+        var ortam = await schedulerService.GetEnvironmentAsync(cancellationToken);
+        return Ok(ApiResponse<TaskEnvironmentDto>.Ok(ortam, "cron.environment"));
+    }
+
+    /// <summary>
+    /// Bulunan Python'u makine PATH'ine ekler.
+    /// <para>
+    /// YALNIZCA YÖNETİCİ: sunucu genelini etkileyen bir değişikliktir; tek bir sitenin sahibi
+    /// bunu yapamamalı.
+    /// </para>
+    /// </summary>
+    [HttpPost("environment/python-path")]
+    public async Task<ActionResult<ApiResponse<object>>> AddPythonToPathAsync(CancellationToken cancellationToken)
+    {
+        if (!IsAdmin)
+        {
+            return StatusCode(403, ApiResponse<object>.Fail("common.forbidden", 403));
+        }
+
+        var eklenen = await schedulerService.AddPythonToMachinePathAsync(cancellationToken);
+        await WriteAuditAsync("cron.python_path", $"Python added to machine PATH ({eklenen} folder(s)).", cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { added = eklenen }, "cron.python_path_added"));
+    }
+
+    /// <summary>
     /// Görevin son çalışmasında ürettiği çıktı (stdout + stderr).
     /// </summary>
     [HttpGet("{name}/output")]

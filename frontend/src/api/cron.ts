@@ -81,6 +81,24 @@ export async function getScheduledTaskStatus(name: string) {
   return response.data.data;
 }
 
+export type TaskEnvironment = {
+  pythonInterpreters: string[];
+  pythonOnPath: string;
+  canRepairPython: boolean;
+};
+
+// Görevlerin çalışacağı ortam: SYSTEM hesabı Python'u görebiliyor mu.
+export async function getTaskEnvironment() {
+  const response = await apiClient.get<ApiEnvelope<TaskEnvironment>>("/cron/environment");
+  return response.data.data;
+}
+
+// Bulunan Python'u makine PATH'ine ekler; kaç klasör eklendiğini döndürür (0 = zaten vardı).
+export async function addPythonToMachinePath() {
+  const response = await apiClient.post<ApiEnvelope<{ added: number }>>("/cron/environment/python-path");
+  return response.data.data.added;
+}
+
 export type ScheduledTaskOutput = {
   name: string;
   available: boolean;

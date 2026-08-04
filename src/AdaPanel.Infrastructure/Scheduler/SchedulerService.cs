@@ -410,6 +410,51 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
         return durum;
     }
 
+    public async Task<TaskEnvironmentDto> GetEnvironmentAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await ProcessRunner.RunPowerShellAsync(RuntimeLocator.DiscoveryScript, cancellationToken);
+            var (yorumlayicilar, pathte) = RuntimeLocator.ParseDiscovery(result.StandardOutput);
+
+            return new TaskEnvironmentDto
+            {
+                PythonInterpreters = yorumlayicilar,
+                PythonOnPath = pathte
+            };
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Olcemedik. BOS bir sonuc "Python yok" DEMEK DEGILDIR; DTO'da ikisi de bos kalir ve
+            // CanRepairPython false doner -- yani panel var olmayan bir sorunu onarmayi onermez.
+            logger.LogWarning(exception, "Gorev ortami olculemedi.");
+            return new TaskEnvironmentDto();
+        }
+    }
+
+    public async Task<int> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default)
+    {
+        var ortam = await GetEnvironmentAsync(cancellationToken);
+        if (ortam.PythonInterpreters.Count == 0)
+        {
+            throw new AppException("cron.python_not_found", 404, 404);
+        }
+
+        // EN YENI surum secilir (liste zaten sirali). Eski bir yorumlayiciyi PATH'in basina koymak,
+        // kullanicinin yeni kurdugu surumu golgeleyerek yeni bir sorun uretirdi.
+        var script = RuntimeLocator.BuildAddToMachinePathScript(ortam.PythonInterpreters[0]);
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("cron.path_update_failed", 500, 500, result.StandardError);
+        }
+
+        var eslesme = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-DEGISIKLIK=(\d+)");
+        var eklenen = eslesme.Success ? int.Parse(eslesme.Groups[1].Value) : 0;
+        logger.LogInformation("Python makine PATH'ine eklendi: {Path} ({Count} klasor).", ortam.PythonInterpreters[0], eklenen);
+        return eklenen;
+    }
+
     public async Task StopTaskAsync(string name, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -588,6 +633,18 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
         switch (taskType)
         {
             case "url":
+                // Adres yerine DOSYA YOLU yazildiysa ayri bir mesaj verilir.
+                //
+                // Neden: kullanici "C:\...\imdb-cron.php" yazip "gecersiz adres" cevabini aldiginda
+                // neyin yanlis oldugunu anlamiyor -- dosya orada, yol da dogru. Eksik olan sey
+                // dosyanin yanlis TIPTE aranmasi. Genel bir hata mesaji burada kullaniciyi dogru
+                // secenege goturmuyordu; artik hangi tipi secmesi gerektigi soyleniyor.
+                if (LooksLikeFilePath(request.Url ?? string.Empty) ||
+                    Path.IsPathFullyQualified((request.Url ?? string.Empty).Trim()))
+                {
+                    throw new AppException("cron.url_is_a_file_path", 400, 400);
+                }
+
                 if (!Uri.TryCreate(request.Url?.Trim(), UriKind.Absolute, out var uri) ||
                     (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
                 {
@@ -611,6 +668,15 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
                 if (IsBareInteractiveShell(request.Command, request.Arguments))
                 {
                     throw new AppException("cron.bare_shell", 400, 400);
+                }
+
+                // Kullanicinin ELLE yazdigi calisma klasoru yoksa SESSIZCE atilmaz, soylenir:
+                // turetilmis bir klasoru dusurmek yardimdir, kullanicinin yazdigini yok saymak
+                // ise onu neyin bozuldugunu bilmeden birakmak olurdu.
+                if (!string.IsNullOrWhiteSpace(request.WorkingDirectory) &&
+                    !Directory.Exists(request.WorkingDirectory.Trim()))
+                {
+                    throw new AppException("cron.working_directory_missing", 400, 400);
                 }
                 break;
         }
@@ -794,6 +860,19 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
                     workingDirectory = Path.GetDirectoryName(command) ?? string.Empty;
                 }
 
+                // VAR OLMAYAN bir klasor ASLA yazilmaz.
+                //
+                // Task Scheduler, calisma klasoru gecersizse gorevi HIC BASLATMAZ ve 0x8007010B
+                // ("Dizin adi gecersiz") dondurur -- komut dogru olsa bile. Canlida boyle bir gorev
+                // uc saniyede bu kodla dustu ve hicbir cikti uretmedi, cunku surec hic olusmadi.
+                // Turetilmis bir klasor ugruna gorevi calisamaz hale getirmek, kolaylik adina asil
+                // isi bozmak olurdu; boyle bir durumda klasoru hic vermeyip Windows'un varsayilanina
+                // birakmak her zaman daha iyidir.
+                if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
+                {
+                    workingDirectory = string.Empty;
+                }
+
                 return (command, request.Arguments?.Trim() ?? string.Empty, workingDirectory);
             }
         }
@@ -830,12 +909,13 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
 
     private static string ResolvePhpExecutable(string? version)
     {
-        var phpRoot = Environment.ExpandEnvironmentVariables("%ProgramData%\\AdaPanel\\runtimes\\php");
-        var candidates = Directory.Exists(phpRoot)
-            ? Directory.EnumerateFiles(phpRoot, "php.exe", SearchOption.AllDirectories)
-                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToList()
-            : [];
+        // SUNUCUNUN TAMAMINA bakilir, yalnizca panelin kendi klasorune degil.
+        //
+        // Onceden yalnizca %ProgramData%\AdaPanel\runtimes\php taraniyordu. Sunucuda PHP zaten
+        // kuruluysa (IIS ile gelen, elle kurulan ya da baska bir panelden kalan) gorev "PHP kurulu
+        // degil" diye REDDEDILIYORDU -- kullanici sitesinin PHP ile calistigini gozuyle gorurken.
+        // Python'daki hatanin aynisi: panel kendi bildigi tek yeri gercegin tamami saniyordu.
+        var candidates = RuntimeLocator.FindPhpExecutables();
 
         if (candidates.Count == 0)
         {

@@ -101,19 +101,51 @@ public sealed class SchedulerTaskSettingsTests
     [Fact]
     public void CreateScript_CommandTask_DefaultsTheWorkingDirectoryToTheFilesOwnFolder()
     {
+        // GERCEKTEN VAR OLAN bir klasor kullanilir: turetilen klasor artik diskte dogrulaniyor
+        // (bkz. bir alttaki test), dolayisiyla hayali bir yol bu kurali sinayamaz.
+        var klasor = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+
         var script = SchedulerService.BuildCreateScript(
             new CreateScheduledTaskRequest
             {
                 Name = "bot",
                 TaskType = "command",
-                Command = @"C:\inetpub\wwwroot\ornek.test\httpdocs\scripts\bot.bat",
+                Command = Path.Combine(klasor, "bot.bat"),
                 ScheduleType = "daily",
                 TimeOfDay = "03:30",
                 Interval = 1
             },
             plan: null);
 
-        Assert.Contains(@"-WorkingDirectory 'C:\inetpub\wwwroot\ornek.test\httpdocs\scripts'", script, StringComparison.Ordinal);
+        Assert.Contains($"-WorkingDirectory '{klasor}'", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Turetilen calisma klasoru diskte YOKSA hic yazilmaz.
+    /// <para>
+    /// CANLI OLAY: bir gorev uc saniyede 0x8007010B ("Dizin adi gecersiz") ile dustu ve hicbir
+    /// cikti uretmedi -- cunku Task Scheduler, calisma klasoru gecersizse sureci HIC OLUSTURMAZ.
+    /// Komut dogru olsa bile gorev calismaz. Kolaylik olsun diye turettigimiz bir klasor ugruna
+    /// gorevi calisamaz hale getirmek, yardimin isi bozmasi olurdu; boyle bir durumda klasoru hic
+    /// vermeyip Windows'un varsayilanina birakmak her zaman daha iyidir.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void CreateScript_CommandTask_OmitsAWorkingDirectoryThatDoesNotExist()
+    {
+        var script = SchedulerService.BuildCreateScript(
+            new CreateScheduledTaskRequest
+            {
+                Name = "bot",
+                TaskType = "command",
+                Command = @"C:\boyle-bir-klasor-yok-98765\bot.bat",
+                ScheduleType = "daily",
+                TimeOfDay = "03:30",
+                Interval = 1
+            },
+            plan: null);
+
+        Assert.DoesNotContain("-WorkingDirectory", script, StringComparison.Ordinal);
     }
 
     // PATH uzerinden cozulen komutlarda klasor TURETILMEZ: "ipconfig" bir dosya yolu degildir.

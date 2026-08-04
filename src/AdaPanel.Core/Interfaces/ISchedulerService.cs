@@ -24,6 +24,18 @@ public interface ISchedulerService
     /// </summary>
     Task<ScheduledTaskOutputDto> GetTaskOutputAsync(string name, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Görevlerin çalışacağı ortamı ölçer: sunucuda hangi Python'lar kurulu ve SYSTEM bunları
+    /// PATH'inden görebiliyor mu.
+    /// </summary>
+    Task<TaskEnvironmentDto> GetEnvironmentAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bulunan Python'u makine PATH'ine ekler; kaç klasörün eklendiğini döndürür (0 = zaten vardı).
+    /// Yalnızca yönetici çağırmalıdır: sunucu geneli bir değişikliktir.
+    /// </summary>
+    Task<int> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Görevi silmeden geçici olarak açar/kapatır.</summary>
     Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default);
 

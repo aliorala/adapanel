@@ -87,6 +87,21 @@
              hatadan SONRA değil, komut yazılırken burada duruyor. -->
         <p v-if="form.taskType === 'command' || form.taskType === 'script'" class="span-2 field-hint env-hint">
           {{ t("panel.tasks.systemEnvHint") }}
+
+          <!-- Ölçülmüş durum. Genel uyarının altında somut cevap: bu sunucuda Python var mı,
+               SYSTEM görüyor mu, görmüyorsa tek tıkla düzeltiliyor. -->
+          <template v-if="environment">
+            <span v-if="environment.pythonOnPath" class="env-ok">
+              {{ t("panel.tasks.pythonOnPath", { path: environment.pythonOnPath }) }}
+            </span>
+            <span v-else-if="environment.canRepairPython" class="env-fix">
+              <strong>{{ t("panel.tasks.pythonFoundTitle") }}</strong>
+              {{ t("panel.tasks.pythonFoundBody", { path: environment.pythonInterpreters[0] }) }}
+              <button v-if="isAdmin" class="secondary compact" :disabled="fixingPython" @click="fixPython">
+                {{ t("panel.tasks.pythonFix") }}
+              </button>
+            </span>
+          </template>
         </p>
         <!-- Çalışma klasörü ipucu HER ZAMAN görünür. Önceden yalnızca yer tutucu metindi ve alana
              bir şey yazılınca kayboluyordu; kullanıcı "buraya ne yazacağım" diye takılıp kaldı.
@@ -215,7 +230,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, getScheduledTaskOutput, getScheduledTaskStatus, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask, type ScheduledTaskOutput } from "../api/cron";
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, addPythonToMachinePath, getScheduledTaskOutput, getScheduledTaskStatus, getTaskEnvironment, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask, type ScheduledTaskOutput, type TaskEnvironment } from "../api/cron";
 import { getSites, type SiteRecord } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
@@ -298,6 +313,36 @@ const filteredTasks = computed(() => {
     : tasks.value;
 });
 
+/**
+ * Görev ortamı: sunucuda Python var mı, SYSTEM onu görüyor mu.
+ *
+ * Ölçüm sunucudan gelir; tahmin yok. Okunamazsa null kalır ve hiçbir şey iddia edilmez —
+ * "Python yok" demek ile "ölçemedik" demek aynı şey değildir.
+ */
+const environment = ref<TaskEnvironment | null>(null);
+const fixingPython = ref(false);
+
+async function loadEnvironment() {
+  try {
+    environment.value = await getTaskEnvironment();
+  } catch {
+    environment.value = null;
+  }
+}
+
+async function fixPython() {
+  fixingPython.value = true;
+  try {
+    const eklenen = await addPythonToMachinePath();
+    showNotice(t(eklenen > 0 ? "panel.tasks.pythonFixed" : "panel.tasks.pythonAlready"), false);
+    await loadEnvironment();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    fixingPython.value = false;
+  }
+}
+
 // Arama kutusu takılı görevi gizlemesin: uyarı TÜM görevlere bakar, süzülmüş listeye değil.
 const stuckTasks = computed(() => tasks.value.filter(isStuck));
 
@@ -306,6 +351,7 @@ onMounted(() => {
     form.taskType = "url";
   }
   void refresh();
+  void loadEnvironment();
 });
 
 async function refresh() {
@@ -646,6 +692,9 @@ async function toggleTask(item: ScheduledTask) {
 // arama motoruna havale etmektir: "Hata (0x800710E0)" satırı hiçbir şey anlatmıyordu.
 const SKIPPED = 2148007648; // 0x800710E0 — önceki tur hâlâ sürerken yeni tur reddedildi
 const TERMINATED = 267014; // 0x41306 — süre sınırı ya da elle durdurma
+// 0x8007010B — Windows görevi HİÇ başlatamadı: çalışma klasörü yok. Süreç hiç oluşmadığı için
+// çıktı da yoktur; kod çevrilmezse kullanıcı olmayan bir çıktıyı arar.
+const BAD_DIRECTORY = 2147942667;
 
 // curl çıkış kodları: SADECE "url" tipinde geçerlidir. Aynı küçük sayılar bir .bat ya da .exe
 // görevinde o programın kendi çıkış kodudur ve curl'ün anlamıyla okumak yanlış olur.
@@ -668,6 +717,7 @@ function resultLabelForCode(code: number | null | undefined, taskType: string) {
   if (code === 267009 || code === 267045) return t("panel.tasks.running");
   if (code === SKIPPED) return t("panel.tasks.resultSkipped");
   if (code === TERMINATED) return t("panel.tasks.resultTerminated");
+  if (code === BAD_DIRECTORY) return t("panel.tasks.resultBadDirectory");
   if (code === 2 || code === 3) return t("panel.tasks.resultNotFound");
   if (taskType === "url" && CURL_CODES[code]) return t(CURL_CODES[code]);
   return t("panel.tasks.resultFail", { code: "0x" + code.toString(16).toUpperCase() });
@@ -682,6 +732,7 @@ function resultHint(item: ScheduledTask) {
   const code = item.lastTaskResult;
   if (code === SKIPPED) return t("panel.tasks.resultSkippedHint");
   if (code === 2 || code === 3) return t("panel.tasks.resultNotFoundHint");
+  if (code === BAD_DIRECTORY) return t("panel.tasks.resultBadDirectoryHint");
   return "";
 }
 
@@ -825,6 +876,27 @@ function resolveApiMessage(error: unknown) {
   display: block;
   opacity: 0.75;
   margin-top: 0.2rem;
+}
+
+.env-ok,
+.env-fix {
+  display: block;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.env-ok {
+  opacity: 0.85;
+}
+
+.env-fix strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.env-fix button {
+  margin-top: 0.5rem;
 }
 
 .env-hint {
