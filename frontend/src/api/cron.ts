@@ -50,12 +50,17 @@ export async function deleteScheduledTask(name: string) {
   await apiClient.delete<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}`);
 }
 
-// Görevi beklemeden hemen tetikler (Plesk "Run Now") — yeni kurulan cron'u anında test etmek için.
+// Görevi beklemeden hemen tetikler — yeni kurulan cron'u anında test etmek için.
 export async function runScheduledTask(name: string) {
   await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/run`);
 }
 
-// Görevi silmeden aç/kapat (Plesk satır anahtarı).
+// Takılı kalmış çalışmayı sonlandırır. Görev silinmez; bir sonraki zamanında normal çalışır.
+export async function stopScheduledTask(name: string) {
+  await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/stop`);
+}
+
+// Görevi silmeden aç/kapat.
 export async function setScheduledTaskEnabled(name: string, enabled: boolean) {
   await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/${enabled ? "enable" : "disable"}`);
 }

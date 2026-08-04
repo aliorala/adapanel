@@ -5,10 +5,11 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Scheduler;
 
-public sealed class SchedulerService(IIisSiteService siteService) : ISchedulerService
+public sealed class SchedulerService(IIisSiteService siteService, ILogger<SchedulerService> logger) : ISchedulerService
 {
     private const string TaskPath = "\\AdaPanel\\";
 
@@ -16,7 +17,7 @@ public sealed class SchedulerService(IIisSiteService siteService) : ISchedulerSe
     /// "script" görevinin çözülmüş hâli: hangi program, hangi argümanlar, hangi klasör ve hangi kimlik.
     /// <paramref name="PrincipalUserId"/> null ise görev bugünkü gibi SYSTEM olarak çalışır.
     /// </summary>
-    private sealed record ScriptPlan(string Execute, string Arguments, string WorkingDirectory, string? PrincipalUserId);
+    internal sealed record ScriptPlan(string Execute, string Arguments, string WorkingDirectory, string? PrincipalUserId);
 
     public async Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default)
     {
@@ -87,6 +88,52 @@ $tasks | ConvertTo-Json -Depth 5";
         return tasks;
     }
 
+    public async Task<int> RepairTaskSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        // Yalnizca GERCEKTEN yanlis olanlara dokunulur ve KAC TANESI duzeltildigi geri dondurulur.
+        // "Hepsini yeniden yaz, tamam de" demek, panelin bu oturumda defalarca ayikladigimiz
+        // aliskanligi olurdu: kendi niyetini olcum yerine koymak.
+        //
+        // Set-ScheduledTask kullanilir, Register degil: tetikleyici, eylem ve principal oldugu gibi
+        // kalir -- yalnizca ayarlar degisir. Kullanicinin gorev tanimina dokunulmaz.
+        var script = $@"$duzeltilen = 0
+foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction SilentlyContinue)) {{
+  $s = $gorev.Settings
+  if ($s.DisallowStartIfOnBatteries -or $s.StopIfGoingOnBatteries -or -not $s.StartWhenAvailable -or $s.ExecutionTimeLimit -eq 'PT72H') {{
+    $s.DisallowStartIfOnBatteries = $false
+    $s.StopIfGoingOnBatteries = $false
+    $s.StartWhenAvailable = $true
+    if ($s.ExecutionTimeLimit -eq 'PT72H') {{ $s.ExecutionTimeLimit = 'PT4H' }}
+    try {{
+      Set-ScheduledTask -TaskPath $gorev.TaskPath -TaskName $gorev.TaskName -Settings $s -ErrorAction Stop | Out-Null
+      $duzeltilen++
+    }} catch {{
+      [Console]::Out.WriteLine('ADAPANEL-UYARI: ' + $gorev.TaskName + ': ' + $_.Exception.Message)
+    }}
+  }}
+}}
+[Console]::Out.WriteLine('ADAPANEL-DUZELTILEN=' + $duzeltilen)";
+
+        try
+        {
+            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            var match = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-DUZELTILEN=(\d+)");
+            var duzeltilen = match.Success ? int.Parse(match.Groups[1].Value) : 0;
+            if (duzeltilen > 0)
+            {
+                logger.LogInformation("Zamanlanmis gorev ayarlari duzeltildi: {Count} gorev.", duzeltilen);
+            }
+
+            return duzeltilen;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Gorev zamanlayici okunamiyorsa panel yine de acilmali; bu bir onarim, bir onkosul degil.
+            logger.LogWarning(exception, "Zamanlanmis gorev ayarlari denetlenemedi.");
+            return 0;
+        }
+    }
+
     public async Task RunTaskAsync(string name, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -99,6 +146,21 @@ $tasks | ConvertTo-Json -Depth 5";
         if (!result.Success)
         {
             throw new AppException("cron.run_failed", 500, 500, result.StandardError);
+        }
+    }
+
+    public async Task StopTaskAsync(string name, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new AppException("cron.invalid_name", 400, 400);
+        }
+
+        var script = $@"Stop-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction Stop";
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("cron.stop_failed", 500, 500, result.StandardError);
         }
     }
 
@@ -170,7 +232,7 @@ $tasks | ConvertTo-Json -Depth 5";
         }
     }
 
-    private static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan)
+    internal static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan)
     {
         var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
         var interval = Math.Max(1, request.Interval);
@@ -211,6 +273,28 @@ $tasks | ConvertTo-Json -Depth 5";
             ? $"New-ScheduledTaskPrincipal -UserId '{EscapeSingleQuoted(limitedUserId)}' -LogonType ServiceAccount -RunLevel Limited"
             : "New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest";
 
+        // AYARLARI ACIKCA VER. -Settings atlanirsa Windows'un DIZUSTU BILGISAYAR icin secilmis
+        // varsayilanlari uygulanir ve bir sunucu zamanlayicisi icin uctan uca yanlistir. Olculdu
+        // (New-ScheduledTaskSettingsSet, varsayilan hali):
+        //
+        //   DisallowStartIfOnBatteries = True   -> makine batarya bildiriyorsa gorev REDDEDILIR
+        //   StopIfGoingOnBatteries     = True   -> calisirken batarya gorulurse ORTASINDA kesilir
+        //   StartWhenAvailable         = False  -> sunucu kapali/yeniden baslarken kacan tur TELAFI EDILMEZ
+        //   ExecutionTimeLimit         = PT72H  -> takilan bir tur slotu UC GUN tutar
+        //
+        // Ilk ikisi kullanicinin gordugu 0x800710E0'i (ERROR_OPERATOR_OR_ADMINISTRATOR_HAS_REFUSED_
+        // THE_REQUEST) dogrudan uretir. Sanallastirilmis sunucular (Hyper-V, cesitli VPS'ler) sik sik
+        // bir batarya/UPS aygiti bildirir; panel bunu hic denetlemiyordu.
+        //
+        // MultipleInstances = IgnoreNew BILEREK korunur: bir onceki tur hala suruyorken ikincisini
+        // baslatmak, yavas bir gorevde surekli buyuyen bir surec yigini olusturur. Ama bu secim ancak
+        // ExecutionTimeLimit ile birlikte guvenlidir -- yoksa takilan TEK bir tur zamanlamanin
+        // tamamini uc gun boyunca sessizce oldururdu. 4 saat: gercekci her panel gorevine yeter,
+        // takilan bir tur ise ayni gun icinde kendiliginden temizlenir.
+        const string settings =
+            "New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries " +
+            "-StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)";
+
         return $@"$ErrorActionPreference = 'Stop'
 if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -ErrorAction SilentlyContinue) {{
   Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
@@ -218,7 +302,8 @@ if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(reque
 $action = {action}
 $trigger = {trigger}
 $principal = {principal}
-Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null";
+$settings = {settings}
+Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null";
     }
 
     private static void ValidateRequest(CreateScheduledTaskRequest request)
@@ -385,9 +470,36 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
                 return (ResolvePhpExecutable(request.PhpVersion), arguments, workingDirectory);
             }
             default:
-                return (request.Command.Trim(), request.Arguments?.Trim() ?? string.Empty, workingDirectory);
+            {
+                var command = request.Command.Trim();
+
+                // Calisma klasoru verilmemisse DOSYANIN KENDI KLASORU kullanilir -- "php" tipinde
+                // zaten boyle yapiliyordu, "command" tipinde unutulmustu.
+                //
+                // Neden onemli: gorev SYSTEM olarak calisir ve SYSTEM'in calisma klasoru
+                // C:\Windows\system32'dir. Bir .bat/.cmd dosyasi neredeyse her zaman kendi
+                // klasorunde oldugunu varsayar (yanindaki betigi cagirir, ciktisini yanina yazar).
+                // Klasor verilmezse bu varsayimlarin hepsi bozulur; gorev "calisti" gorunur ama
+                // hicbir sey yapmaz ya da anlasilmaz bir cikis koduyla duser. Kullanicinin cift
+                // tiklayarak elde ettigi davranis budur; zamanlanmis hâli de ayni olmali.
+                if (string.IsNullOrWhiteSpace(workingDirectory) && LooksLikeFilePath(command))
+                {
+                    workingDirectory = Path.GetDirectoryName(command) ?? string.Empty;
+                }
+
+                return (command, request.Arguments?.Trim() ?? string.Empty, workingDirectory);
+            }
         }
     }
+
+    /// <summary>
+    /// Komut, bir klasoru olan gercek bir dosya yolu mu? "python", "ipconfig" gibi PATH uzerinden
+    /// cozulen komutlarda klasor turetmek yanlis olur -- bu yuzden ayri ayri bakilir.
+    /// </summary>
+    internal static bool LooksLikeFilePath(string command) =>
+        !string.IsNullOrWhiteSpace(command) &&
+        command.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0 &&
+        !string.IsNullOrWhiteSpace(Path.GetDirectoryName(command));
 
     private static string ResolvePhpExecutable(string? version)
     {

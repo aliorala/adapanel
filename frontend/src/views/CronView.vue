@@ -99,6 +99,22 @@
       </div>
     </section>
 
+    <!-- Takılı görevler tablonun ÜSTÜNDE, adıyla ve çözümüyle birlikte. Satırdaki tek bir hata
+         rozeti fark edilmiyordu: kullanıcı "Running" görüp sorun yok sanıyor, oysa görev fiilen
+         ölmüş ve bütün turlar reddediliyor. -->
+    <section v-if="stuckTasks.length" class="stuck-notice">
+      <strong>{{ t("panel.tasks.stuckTitle") }}</strong>
+      <p>{{ t("panel.tasks.stuckBody") }}</p>
+      <ul>
+        <li v-for="item in stuckTasks" :key="item.name">
+          <span>{{ item.name }}</span>
+          <button class="secondary compact" :disabled="stoppingName === item.name" @click="stopStuck(item)">
+            {{ t("panel.tasks.stopStuck") }}
+          </button>
+        </li>
+      </ul>
+    </section>
+
     <div class="data-table">
       <div class="data-row table-head cron-row">
         <span>{{ t("panel.tasks.name") }}</span>
@@ -121,7 +137,8 @@
         </span>
         <span>{{ scheduleLabel(item.scheduleType) }}</span>
         <span :class="['status-pill', taskStateClass(item.state)]">{{ item.state || "-" }}</span>
-        <span :class="['status-pill', resultClass(item)]">{{ resultLabel(item) }}</span>
+        <!-- Kodun ne demek olduğu satırda yazılı; "neden ve ne yapmalı" ipucu üzerine gelince. -->
+        <span :class="['status-pill', resultClass(item)]" :title="resultHint(item) || undefined">{{ resultLabel(item) }}</span>
         <span>{{ formatUtc(item.nextRunTimeUtc) }}</span>
         <span>{{ formatUtc(item.lastRunTimeUtc) }}</span>
         <span class="row-actions">
@@ -145,7 +162,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, type ScheduledTask } from "../api/cron";
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask } from "../api/cron";
 import { getSites, type SiteRecord } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
@@ -227,6 +244,9 @@ const filteredTasks = computed(() => {
         .some((value) => value?.toLocaleLowerCase().includes(needle)))
     : tasks.value;
 });
+
+// Arama kutusu takılı görevi gizlemesin: uyarı TÜM görevlere bakar, süzülmüş listeye değil.
+const stuckTasks = computed(() => tasks.value.filter(isStuck));
 
 onMounted(() => {
   if (!isAdmin.value) {
@@ -349,13 +369,52 @@ async function toggleTask(item: ScheduledTask) {
   }
 }
 
-// Son çalışma sonucu: 0 = başarılı; 267009/267011/267045 = koşuyor/hiç çalışmadı/kuyrukta (nötr); diğerleri hata kodu.
+// Kullanıcının GERÇEKTEN gördüğü kodlar. Ham onaltılık bir sayı göstermek, sorunu kullanıcının
+// arama motoruna havale etmektir: "Hata (0x800710E0)" satırı hiçbir şey anlatmıyordu.
+const SKIPPED = 2148007648; // 0x800710E0 — önceki tur hâlâ sürerken yeni tur reddedildi
+const TERMINATED = 267014; // 0x41306 — süre sınırı ya da elle durdurma
+
+// curl çıkış kodları: SADECE "url" tipinde geçerlidir. Aynı küçük sayılar bir .bat ya da .exe
+// görevinde o programın kendi çıkış kodudur ve curl'ün anlamıyla okumak yanlış olur.
+const CURL_CODES: Record<number, string> = {
+  6: "panel.tasks.resultUrlDns",
+  7: "panel.tasks.resultUrlConnect",
+  22: "panel.tasks.resultUrlHttp",
+  28: "panel.tasks.resultUrlTimeout",
+  35: "panel.tasks.resultUrlTls",
+  60: "panel.tasks.resultUrlTls"
+};
+
+// Son çalışma sonucu: 0 = başarılı; 267009/267011/267045 = koşuyor/hiç çalışmadı/kuyrukta (nötr).
 function resultLabel(item: ScheduledTask) {
   const code = item.lastTaskResult;
   if (code === null || code === undefined || code === 267011) return "-";
   if (code === 0) return t("panel.tasks.resultOk");
   if (code === 267009 || code === 267045) return t("panel.tasks.running");
+  if (code === SKIPPED) return t("panel.tasks.resultSkipped");
+  if (code === TERMINATED) return t("panel.tasks.resultTerminated");
+  if (code === 2 || code === 3) return t("panel.tasks.resultNotFound");
+  if (item.taskType === "url" && CURL_CODES[code]) return t(CURL_CODES[code]);
   return t("panel.tasks.resultFail", { code: "0x" + code.toString(16).toUpperCase() });
+}
+
+/** Satırın altında gösterilen "peki ne yapmalıyım" cümlesi. Yoksa boş döner. */
+function resultHint(item: ScheduledTask) {
+  const code = item.lastTaskResult;
+  if (code === SKIPPED) return t("panel.tasks.resultSkippedHint");
+  if (code === 2 || code === 3) return t("panel.tasks.resultNotFoundHint");
+  return "";
+}
+
+/**
+ * Görev TAKILI KALMIŞ mı: hâlâ "çalışıyor" görünüyor ve son sonucu "atlandı".
+ *
+ * Bu ikisi bir arada, tek bir turun bitmediğini ve o yüzden sonraki bütün turların reddedildiğini
+ * söyler — görev fiilen ölmüştür ama panel bunu "çalışıyor" diye gösterdiği için sorun sağlıklı
+ * görünür. Kullanıcının canlı sunucusunda bir .bat görevi tam olarak bu durumdaydı.
+ */
+function isStuck(item: ScheduledTask) {
+  return item.lastTaskResult === SKIPPED && item.state?.toLocaleLowerCase() === "running";
 }
 
 function resultClass(item: ScheduledTask) {
@@ -363,6 +422,21 @@ function resultClass(item: ScheduledTask) {
   if (code === 0) return "ok";
   if (code === null || code === undefined || code === 267011 || code === 267009 || code === 267045) return "";
   return "warn";
+}
+
+// Takılı çalışmayı durdur: görev bir sonraki zamanında normal çalışmaya döner.
+const stoppingName = ref("");
+async function stopStuck(item: ScheduledTask) {
+  stoppingName.value = item.name;
+  try {
+    await stopScheduledTask(item.name);
+    showNotice(t("panel.tasks.stopStuckDone"), false);
+    await refresh();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    stoppingName.value = "";
+  }
 }
 
 function typeLabel(value: string) {
@@ -421,5 +495,34 @@ function resolveApiMessage(error: unknown) {
 
 .search-control {
   width: min(300px, 50vw);
+}
+
+.stuck-notice {
+  border: 1px solid var(--warn-border, #e0b400);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  margin-bottom: 0.9rem;
+  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
+}
+
+.stuck-notice p {
+  margin: 0.35rem 0 0;
+  font-size: 0.86rem;
+}
+
+.stuck-notice ul {
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.stuck-notice li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 </style>

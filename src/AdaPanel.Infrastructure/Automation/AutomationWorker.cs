@@ -30,6 +30,29 @@ public sealed class AutomationWorker(
             return;
         }
 
+        // Acilista BIR KEZ: onceki surumlerin kaydettigi zamanlanmis gorevlerin ayarlarini duzelt.
+        //
+        // Neden burada: gorevler Windows Gorev Zamanlayici'da yasar, panelin veritabaninda degil --
+        // yani panel guncellemesi onlara kendiliginden dokunmaz. Eski gorevler Windows'un dizustu
+        // varsayilanlariyla kayitliydi ("bataryada calistirma", "kaciran turu telafi etme") ve
+        // calistirilmalari 0x800710E0 ile REDDEDILIYORDU. Kullanicinin gorevi silip yeniden
+        // kurmasini beklemek, panelin isini kullaniciya yikmak olurdu.
+        try
+        {
+            await using var acilisScope = scopeFactory.CreateAsyncScope();
+            var scheduler = acilisScope.ServiceProvider.GetRequiredService<ISchedulerService>();
+            await scheduler.RepairTaskSettingsAsync(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception)
+        {
+            // Onarim yapilamamasi paneli durdurmaz; otomasyon turu yine calismali.
+            logger.LogWarning(exception, "Zamanlanmis gorev ayarlari acilista duzeltilemedi.");
+        }
+
         using var timer = new PeriodicTimer(PollInterval);
 
         do

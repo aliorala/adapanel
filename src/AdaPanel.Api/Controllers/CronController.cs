@@ -117,6 +117,18 @@ public sealed class CronController(
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.run_started"));
     }
 
+    /// <summary>
+    /// Takılı kalmış bir çalışmayı durdurur. Görev SİLİNMEZ, devre dışı da bırakılmaz; yalnızca
+    /// sürmekte olan tur sonlandırılır ve görev bir sonraki zamanında normal çalışmaya döner.
+    /// </summary>
+    [HttpPost("{name}/stop")]
+    public async Task<ActionResult<ApiResponse<object>>> StopTaskAsync(string name, CancellationToken cancellationToken)
+    {
+        await schedulerService.StopTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
+        await WriteAuditAsync("cron.stopped", $"Scheduled task '{name}' run stopped.", cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { name }, "cron.stopped"));
+    }
+
     [HttpPost("{name}/enable")]
     public async Task<ActionResult<ApiResponse<object>>> EnableTaskAsync(string name, CancellationToken cancellationToken)
     {
