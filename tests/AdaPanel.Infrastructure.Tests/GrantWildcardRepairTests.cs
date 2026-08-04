@@ -72,3 +72,54 @@ public sealed class GrantWildcardRepairTests
         Assert.Equal(birKez, GrantWildcardRepair.Tighten(birKez));
     }
 }
+
+/// <summary>
+/// Daraltmanin CALISAN ERISIMI KOPARMAMASI.
+/// <para>
+/// Genis bir yetki, var olan BIRDEN COK veritabanini kapsiyor olabilir ve kullanicinin uygulamasi
+/// gercekten hepsini kullaniyor olabilir. Yalnizca adi desene birebir esit olana dar yetki verip
+/// genis olani geri almak, digerlerine erisimi SESSIZCE koparirdi -- yani bir guvenlik duzeltmesi
+/// calisan bir siteyi bozardi.
+/// </para>
+/// </summary>
+public sealed class GrantPatternMatchTests
+{
+    // "_" TEK karakter jokeridir: acigin ta kendisi budur.
+    [Theory]
+    [InlineData("rsmc_alarmm", "rsmc_alarmm", true)]   // kendisi
+    [InlineData("rsmcXalarmm", "rsmc_alarmm", true)]   // komsu -- acigin kurbani
+    [InlineData("rsmc-alarmm", "rsmc_alarmm", true)]
+    [InlineData("rsmcXXalarmm", "rsmc_alarmm", false)] // iki karakter: "_" tek karakter eslesir
+    [InlineData("baska_db", "rsmc_alarmm", false)]
+    public void Underscore_MatchesExactlyOneCharacter(string ad, string desen, bool beklenen)
+    {
+        Assert.Equal(beklenen, AdaPanel.Infrastructure.Database.GrantWildcardRepair.MatchesPattern(ad, desen));
+    }
+
+    // "%" sifir veya daha cok karakter.
+    [Theory]
+    [InlineData("site", "site%", true)]
+    [InlineData("siteveri", "site%", true)]
+    [InlineData("bakasite", "site%", false)]
+    public void Percent_MatchesAnyNumberOfCharacters(string ad, string desen, bool beklenen)
+    {
+        Assert.Equal(beklenen, AdaPanel.Infrastructure.Database.GrantWildcardRepair.MatchesPattern(ad, desen));
+    }
+
+    // Kacirilmis joker HARFI HARFINE eslesir -- zaten daraltilmis bir yetki komsuyu kapsamaz.
+    [Theory]
+    [InlineData("rsmc_alarmm", @"rsmc\_alarmm", true)]
+    [InlineData("rsmcXalarmm", @"rsmc\_alarmm", false)]
+    public void EscapedWildcards_MatchThemselvesOnly(string ad, string desen, bool beklenen)
+    {
+        Assert.Equal(beklenen, AdaPanel.Infrastructure.Database.GrantWildcardRepair.MatchesPattern(ad, desen));
+    }
+
+    // Windows'ta veritabani adlari buyuk/kucuk harf duyarsizdir; karsilastirma da oyle olmali,
+    // yoksa gercekte kapsanan bir veritabani gozden kacar ve erisimi koparilir.
+    [Fact]
+    public void MatchingIsCaseInsensitiveLikeWindowsDatabaseNames()
+    {
+        Assert.True(AdaPanel.Infrastructure.Database.GrantWildcardRepair.MatchesPattern("RSMC_Alarmm", "rsmc_alarmm"));
+    }
+}

@@ -77,6 +77,43 @@ internal static class GrantWildcardRepair
     }
 
     /// <summary>
+    /// Bir veritabanı adı, <c>mysql.db</c> desenine uyuyor mu (MySQL'in LIKE semantiği).
+    /// <para>
+    /// <c>_</c> tek karakter, <c>%</c> sıfır veya daha çok karakter demektir; ters bölü ile
+    /// korunmuş olanlar harfi harfine eşleşir. Karşılaştırma büyük/küçük harf duyarsızdır —
+    /// Windows'ta veritabanı adları da öyledir.
+    /// </para>
+    /// </summary>
+    internal static bool MatchesPattern(string name, string pattern)
+    {
+        var desen = new System.Text.StringBuilder("^");
+
+        for (var sira = 0; sira < pattern.Length; sira++)
+        {
+            if (pattern[sira] == '\\' && sira + 1 < pattern.Length)
+            {
+                desen.Append(System.Text.RegularExpressions.Regex.Escape(pattern[sira + 1].ToString()));
+                sira++;
+                continue;
+            }
+
+            desen.Append(pattern[sira] switch
+            {
+                '_' => ".",
+                '%' => ".*",
+                var karakter => System.Text.RegularExpressions.Regex.Escape(karakter.ToString())
+            });
+        }
+
+        desen.Append('$');
+
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            name,
+            desen.ToString(),
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
     /// Geniş yetkileri daraltır; daraltılan her yetkinin açıklamasını döndürür.
     /// <para>
     /// Yalnızca desenin GERÇEKTEN var olan bir veritabanına karşılık geldiği durumlarda işlem
@@ -115,8 +152,26 @@ internal static class GrantWildcardRepair
 
         foreach (var (kullanici, konak, desen) in adaylar)
         {
-            if (!IsOverBroad(desen) || !semalar.Contains(desen))
+            if (!IsOverBroad(desen))
             {
+                continue;
+            }
+
+            // DESENİN GERÇEKTE KAPSADIĞI HER VERİTABANI bulunur -- yalnızca adı desene birebir
+            // eşit olan değil.
+            //
+            // Neden şart: geniş yetki, var olan BİRDEN ÇOK veritabanını kapsıyor olabilir ve
+            // kullanıcının uygulaması gerçekten hepsini kullanıyor olabilir. Yalnızca birebir
+            // eşleşene dar yetki verip geniş olanı geri almak, diğerlerine erişimi SESSİZCE
+            // koparırdı -- yani bir güvenlik düzeltmesi çalışan bir siteyi bozardı. Kapsanan her
+            // veritabanına ayrı ayrı dar yetki verilir; hiçbir erişim kaybolmaz, yalnızca
+            // GELECEKTE açılacak eşleşen adlar kapsam dışı kalır.
+            var kapsanan = semalar.Where(sema => MatchesPattern(sema, desen)).ToList();
+            if (kapsanan.Count == 0)
+            {
+                // Desenin karşılığı olan hiçbir veritabanı yok. Bu, panelin ürettiği bir kayıt
+                // değil, kullanıcının bilerek verdiği toplu bir yetki olabilir; dokunmak onun
+                // kararını ezmek olurdu.
                 continue;
             }
 
@@ -124,10 +179,11 @@ internal static class GrantWildcardRepair
 
             try
             {
-                // 1) ÖNCE dar yetkiyi ver: erişim tek an bile kesilmesin.
-                await using (var grant = connection.CreateCommand())
+                // 1) ÖNCE kapsanan HER veritabanına dar yetki: erişim tek an bile kesilmesin.
+                foreach (var sema in kapsanan)
                 {
-                    grant.CommandText = $"GRANT ALL PRIVILEGES ON `{Tighten(desen)}`.* TO {kullaniciAlan};";
+                    await using var grant = connection.CreateCommand();
+                    grant.CommandText = $"GRANT ALL PRIVILEGES ON `{Tighten(sema)}`.* TO {kullaniciAlan};";
                     await grant.ExecuteNonQueryAsync(cancellationToken);
                 }
 
@@ -138,7 +194,7 @@ internal static class GrantWildcardRepair
                     await revoke.ExecuteNonQueryAsync(cancellationToken);
                 }
 
-                daraltilan.Add($"{kullanici}@{konak} → {desen}");
+                daraltilan.Add($"{kullanici}@{konak} → {string.Join(", ", kapsanan)}");
             }
             catch (MySqlException)
             {
