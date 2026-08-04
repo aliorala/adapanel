@@ -36,5 +36,14 @@ public interface IDatabaseService
     Task<DatabaseTransferResultDto> TransferDatabaseAsync(DatabaseTransferRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>K2: güvensiz DB yönetici hesaplarını (anonim + uzak root) kaldırır. Kaldırılanların listesini döner.</summary>
+    /// <summary>Tek veritabaninin detay karti: baglanti ucu, kullanicilari, boyutu.</summary>
+    Task<DatabaseDetailDto> GetDetailAsync(string engine, string databaseName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Veritabanini denetler; <paramref name="repairTables"/> bos degilse SECILEN tablolari onarir.
+    /// Iki fazli: once yalnizca okuyan denetim, sonra kullanicinin sectigi tablolarda onarim.
+    /// </summary>
+    Task<DatabaseCheckResultDto> CheckAndRepairAsync(string engine, string databaseName, IReadOnlyCollection<string> repairTables, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default);
 }

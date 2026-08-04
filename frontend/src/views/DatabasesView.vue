@@ -225,9 +225,14 @@
             <div class="form-grid">
               <label>
                 <span class="field-label">{{ t("panel.database.databaseName") }}</span>
+                <!-- FORM listeleri arama kutusundan ETKİLENMEZ.
+                     Arama, alttaki TABLOYU daraltmak içindir. Buraya bağlanınca kutuda bir şey
+                     yazılı olduğu anda açılır liste boşalıyor, yanındaki kullanıcı listesi ise
+                     (filtresiz beslendiği için) dolu kalıyordu: kullanıcı "veritabanları
+                     listelenmiyor ama kullanıcılar dolu" diyordu ve haklıydı. -->
                 <select v-model="importForm.databaseName">
                   <option value="">{{ t("panel.database.selectDatabase") }}</option>
-                  <option v-for="db in filteredDatabases" :key="db.name" :value="db.name">{{ db.name }}</option>
+                  <option v-for="db in (workspace?.databases ?? [])" :key="db.name" :value="db.name">{{ db.name }}</option>
                 </select>
               </label>
               <label>
@@ -267,15 +272,26 @@
               <span>{{ t("panel.database.collation") }}</span>
               <span>{{ t("panel.files.actions") }}</span>
             </div>
-            <div v-for="item in filteredDatabases" :key="item.name" class="data-row database-row">
+            <template v-for="item in filteredDatabases" :key="item.name">
+            <div class="data-row database-row">
               <span class="cell-main">
                 <strong>{{ item.name }}</strong>
                 <small>{{ workspace.displayName }}</small>
               </span>
-              <span :class="{ 'cell-muted': !item.users.length }">{{ item.users.length ? item.users.join(", ") : (item.owner || t("panel.database.noDbUser")) }}</span>
+              <span :class="{ 'cell-muted': !item.users.length }">
+                <!-- Kullanıcısız veritabanı bir UYARIDIR, nötr bir bilgi değil: o hâliyle hiçbir
+                     uygulama bağlanamaz. Gri bir "—" ile geçiştirmek sorunu görünmez kılıyordu. -->
+                <span v-if="item.users.length">{{ item.users.join(", ") }}</span>
+                <span v-else class="status-pill warn" :title="t('panel.database.noUserWarnHint')">
+                  {{ t("panel.database.noUserWarn") }}
+                </span>
+              </span>
               <span>{{ item.encoding || "-" }}</span>
               <span class="cell-muted">{{ item.collation || "-" }}</span>
               <span class="row-actions">
+                <button class="secondary compact" @click="toggleDetail(item.name)">
+                  {{ openDetail === item.name ? t("panel.database.detailClose") : t("panel.database.detailOpen") }}
+                </button>
                 <button
                   v-if="selectedEngine === 'mariadb' || selectedEngine === 'mysql'"
                   class="secondary compact"
@@ -291,6 +307,122 @@
                 </button>
               </span>
             </div>
+
+            <!-- DETAY KARTI: veritabanının kendi satırının hemen altında. -->
+            <section v-if="openDetail === item.name" class="db-detail">
+              <div v-if="!detail" class="db-detail-loading">{{ t("panel.common.loading") }}</div>
+              <template v-else>
+                <div class="db-detail-grid">
+                  <div>
+                    <span class="db-label">{{ t("panel.database.host") }}</span>
+                    <strong>{{ detail.host }}:{{ detail.port }} ({{ detail.engineName }})</strong>
+                  </div>
+                  <div>
+                    <span class="db-label">{{ t("panel.database.size") }}</span>
+                    <!-- "Ölçülemedi" ile "0 bayt" AYRI gösterilir: biri bilmediğimiz, diğeri boş
+                         bir veritabanı. Aynı göstermek sorunu yokmuş gibi okuturdu. -->
+                    <strong v-if="detail.sizeBytes === null">{{ t("panel.database.sizeUnknown") }}</strong>
+                    <strong v-else :title="t('panel.database.sizeApprox')">
+                      {{ formatBytes(detail.sizeBytes) }}
+                      <small>· {{ t("panel.database.tableCount", { count: detail.tableCount }) }}</small>
+                    </strong>
+                  </div>
+                  <div>
+                    <span class="db-label">{{ t("panel.database.linkedSite") }}</span>
+                    <strong>{{ detail.siteName || t("panel.database.linkedSiteNone") }}</strong>
+                  </div>
+                </div>
+
+                <!-- KULLANICILAR -->
+                <div class="db-block">
+                  <span class="db-label">{{ t("panel.database.dbUsers") }}</span>
+                  <p v-if="detail.users.length" class="db-users">
+                    <span v-for="u in detail.users" :key="`${u.userName}@${u.host}`" class="status-pill">
+                      {{ u.userName }}@{{ u.host }}
+                    </span>
+                  </p>
+                  <p v-else class="db-warn">{{ t("panel.database.noUserWarnHint") }}</p>
+
+                  <div class="db-attach">
+                    <select v-model="attachUserName">
+                      <option value="">{{ t("panel.database.attachExisting") }}</option>
+                      <option v-for="u in (workspace?.users ?? [])" :key="`${u.userName}@${u.host}`" :value="`${u.userName}|${u.host}`">
+                        {{ u.userName }}@{{ u.host }}
+                      </option>
+                    </select>
+                    <button class="compact" :disabled="!attachUserName || attaching" @click="attachUser(item.name)">
+                      {{ attaching ? t("panel.database.saving") : t("panel.database.attachDo") }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- BAĞLANTI BİLGİSİ -->
+                <div class="db-block">
+                  <span class="db-label">{{ t("panel.database.connectionInfo") }}</span>
+                  <pre class="db-conn">{{ connectionSnippet(detail) }}</pre>
+                  <div class="row-actions">
+                    <button class="secondary compact" @click="copyConnection(detail)">
+                      {{ copied ? t("panel.database.copied") : t("panel.database.copy") }}
+                    </button>
+                  </div>
+                  <!-- Parola GÖSTERİLMEZ. Panel kullanıcı parolalarını geri döndürülebilir
+                       biçimde saklamamalı; bilmiyorsa kullanıcı yenisini belirler. -->
+                  <small class="field-hint">{{ t("panel.database.passwordNotShown") }}</small>
+                </div>
+
+                <!-- DENETLE VE ONAR -->
+                <div class="db-block">
+                  <div class="row-actions">
+                    <button class="secondary compact" :disabled="checking" @click="runCheck(item.name)">
+                      {{ checking ? t("panel.database.checking") : t("panel.database.checkRepair") }}
+                    </button>
+                  </div>
+
+                  <template v-if="checkResult && checkResult.database === item.name">
+                    <p v-if="checkResult.problemCount === 0" class="db-ok">
+                      {{ t("panel.database.checkClean", { count: checkResult.tables.length }) }}
+                    </p>
+                    <p v-else class="db-warn">
+                      {{ t("panel.database.checkProblems", { count: checkResult.problemCount }) }}
+                    </p>
+
+                    <div class="db-tables">
+                      <div v-for="tbl in checkResult.tables" :key="tbl.table" class="db-table-row">
+                        <!-- MOTOR SÜTUNU ZORUNLU: kullanıcının bazı tablolarda neden "Onar"
+                             düğmesi olmadığını anlamasının tek yolu budur. -->
+                        <label>
+                          <input
+                            v-if="tbl.status === 'problem' && (tbl.canRepair || tbl.canRebuild)"
+                            v-model="selectedTables"
+                            type="checkbox"
+                            :value="tbl.table" />
+                          <code>{{ tbl.table }}</code>
+                        </label>
+                        <span class="cell-muted">{{ tbl.engine }}</span>
+                        <span :class="['status-pill', tbl.status === 'problem' ? 'warn' : tbl.status === 'healthy' ? 'ok' : '']">
+                          {{ tbl.status === "healthy" ? t("panel.database.statusHealthy")
+                            : tbl.status === "problem" ? t("panel.database.statusProblem")
+                            : t("panel.database.statusUnsupported") }}
+                        </span>
+                        <small v-if="tbl.status === 'problem' && !tbl.canRepair && tbl.canRebuild" :title="t('panel.database.rebuildHint')">
+                          {{ t("panel.database.rebuild") }}
+                        </small>
+                        <small v-else-if="tbl.status === 'problem' && !tbl.canRepair && !tbl.canRebuild">
+                          {{ t("panel.database.repairUnsupportedHint") }}
+                        </small>
+                      </div>
+                    </div>
+
+                    <div v-if="selectedTables.length" class="row-actions">
+                      <button class="compact" :disabled="checking" @click="runRepair(item.name)">
+                        {{ checking ? t("panel.database.repairing") : t("panel.database.repairSelected") }}
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </section>
+            </template>
             <p v-if="databasesStore.loadingEngine === selectedEngine && filteredDatabases.length === 0" class="empty-state">
               {{ t("panel.common.loading") }}
             </p>
@@ -407,7 +539,14 @@ import CacheView from "./CacheView.vue";
 import DbToolSettingsView from "./DbToolSettingsView.vue";
 import DbTransferView from "./DbTransferView.vue";
 import WebDbView from "./WebDbView.vue";
-import { hardenDatabase, openPhpMyAdmin } from "../api/databases";
+import {
+  checkAndRepairDatabase,
+  getDatabaseDetail,
+  hardenDatabase,
+  openPhpMyAdmin,
+  type DatabaseCheckResult,
+  type DatabaseDetail
+} from "../api/databases";
 import { openReachable } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
@@ -450,6 +589,122 @@ const userForm = reactive({
   password: "",
   databaseName: ""
 });
+
+/**
+ * Veritabani DETAY karti.
+ *
+ * Boyut listeye DEGIL karta konur: information_schema'nin boyut sutunlari sunucunun en yavas
+ * sutunlaridir ve listeye katmak, on veritabanli bir sayfanin acilisini onlara baglardi. Kullanici
+ * ise cogu zaman TEK bir veritabaninin boyutunu merak eder.
+ */
+const openDetail = ref("");
+const detail = ref<DatabaseDetail | null>(null);
+const attachUserName = ref("");
+const attaching = ref(false);
+const copied = ref(false);
+const checking = ref(false);
+const checkResult = ref<DatabaseCheckResult | null>(null);
+const selectedTables = ref<string[]>([]);
+
+async function toggleDetail(name: string) {
+  if (openDetail.value === name) {
+    openDetail.value = "";
+    return;
+  }
+
+  openDetail.value = name;
+  // Onceki veritabaninin verisi yeni kartta gorunmesin.
+  detail.value = null;
+  checkResult.value = null;
+  selectedTables.value = [];
+  attachUserName.value = "";
+
+  try {
+    detail.value = await getDatabaseDetail(selectedEngine.value, name);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+    openDetail.value = "";
+  }
+}
+
+async function attachUser(databaseName: string) {
+  const [userName, host] = attachUserName.value.split("|");
+  if (!userName) return;
+
+  attaching.value = true;
+  try {
+    await databasesStore.grantAccess(selectedEngine.value, databaseName, userName, host || "%");
+    showNotice(t("panel.database.attached"), false);
+    detail.value = await getDatabaseDetail(selectedEngine.value, databaseName);
+    attachUserName.value = "";
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    attaching.value = false;
+  }
+}
+
+/** Uygulamanin kopyalayip kullanabilecegi baglanti bilgisi. Parola YER TUTUCUDUR. */
+function connectionSnippet(d: DatabaseDetail) {
+  const user = d.users.length ? d.users[0].userName : "KULLANICI_ADI";
+  return [
+    `Host:      ${d.host}`,
+    `Port:      ${d.port}`,
+    `Database:  ${d.name}`,
+    `User:      ${user}`,
+    `Password:  ********`
+  ].join("\n");
+}
+
+async function copyConnection(d: DatabaseDetail) {
+  try {
+    await navigator.clipboard.writeText(connectionSnippet(d));
+    copied.value = true;
+    window.setTimeout(() => { copied.value = false; }, 2000);
+  } catch {
+    // Pano yalnizca guvenli baglamda (HTTPS/localhost) calisir. Sessizce basarili gostermek
+    // yerine kullaniciya metni zaten ekranda birakiyoruz; secip kopyalayabilir.
+    showNotice(t("panel.database.copy"), true);
+  }
+}
+
+async function runCheck(name: string) {
+  checking.value = true;
+  selectedTables.value = [];
+  try {
+    checkResult.value = await checkAndRepairDatabase(selectedEngine.value, name, []);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    checking.value = false;
+  }
+}
+
+async function runRepair(name: string) {
+  checking.value = true;
+  try {
+    // Onarim sonrasi sonuc, sunucunun YENIDEN DENETLEDIGI hali doner; "onarildi" sozu olcume
+    // dayanir, niyete degil.
+    checkResult.value = await checkAndRepairDatabase(selectedEngine.value, name, selectedTables.value);
+    selectedTables.value = [];
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    checking.value = false;
+  }
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  const birimler = ["KB", "MB", "GB", "TB"];
+  let sayi = value / 1024;
+  let sira = 0;
+  while (sayi >= 1024 && sira < birimler.length - 1) {
+    sayi /= 1024;
+    sira++;
+  }
+  return `${sayi.toFixed(sayi < 10 ? 1 : 0)} ${birimler[sira]}`;
+}
 
 const showImportForm = ref(false);
 const importForm = reactive({
@@ -857,6 +1112,71 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.db-detail {
+  padding: 0.9rem 1.1rem 1.1rem;
+  border-left: 3px solid var(--accent-1, #4b7bec);
+  background: color-mix(in srgb, var(--accent-1, #4b7bec) 5%, transparent);
+  display: grid;
+  gap: 0.9rem;
+}
+
+.db-detail-loading { opacity: 0.7; font-size: 0.88rem; }
+
+.db-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
+}
+
+.db-label {
+  display: block;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+  margin-bottom: 0.15rem;
+}
+
+.db-block { display: grid; gap: 0.4rem; }
+
+.db-users { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0; }
+
+.db-attach { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.db-attach select { min-width: 220px; }
+
+.db-conn {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.16));
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.db-warn { margin: 0; color: var(--warn-border, #e0b400); font-size: 0.86rem; }
+.db-ok { margin: 0; font-size: 0.86rem; opacity: 0.85; }
+
+.db-tables { display: grid; gap: 0.3rem; max-height: 20rem; overflow: auto; }
+
+.db-table-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.4fr;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.82rem;
+  padding: 0.25rem 0;
+}
+
+.db-table-row label { display: flex; align-items: center; gap: 0.4rem; }
+
+/* Dar ekranda tablo satiri kendi icinde kaysin, sayfa yatay kaymasin. */
+@media (max-width: 720px) {
+  .db-table-row { grid-template-columns: 1fr; gap: 0.15rem; }
+}
+
 .primary-tabs {
   width: fit-content;
   max-width: 100%;

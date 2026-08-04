@@ -4,6 +4,7 @@ import {
   createDatabaseUser,
   importDatabase,
   deleteDatabase,
+  grantDatabaseAccess,
   deleteDatabaseUser,
   setDatabaseUserPassword,
   getDatabaseEngines,
@@ -26,6 +27,7 @@ export const useDatabasesStore = defineStore("databases", {
     loadingEngine: "",
     creatingEngine: "",
     deletingKey: "",
+    grantingKey: "",
     creatingUserEngine: "",
     deletingUserKey: "",
     registeringEngine: ""
@@ -102,6 +104,24 @@ export const useDatabasesStore = defineStore("databases", {
         await this.fetchWorkspace(engine);
       } finally {
         this.deletingKey = "";
+      }
+    },
+    /**
+     * Var olan bir kullaniciya bir veritabani uzerinde yetki verir.
+     *
+     * Panelde bir veritabanina SONRADAN kullanici baglamanin arayuzde karsiligi yoktu; disaridan
+     * gelmis ya da kullanicisi silinmis bir veritabani kullanicisiz kaliyor ve o hâliyle hicbir
+     * uygulama ona baglanamiyordu.
+     */
+    async grantAccess(engine: string, databaseName: string, userName: string, allowedHost: string) {
+      this.grantingKey = `${engine}:${databaseName}`;
+
+      try {
+        const workspace = await grantDatabaseAccess({ engine, databaseName, userName, allowedHost });
+        this.workspaces[engine] = workspace;
+        return workspace;
+      } finally {
+        this.grantingKey = "";
       }
     },
     async createUser(payload: CreateDatabaseUserPayload) {

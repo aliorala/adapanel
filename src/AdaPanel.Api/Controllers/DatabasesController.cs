@@ -49,6 +49,42 @@ public sealed class DatabasesController(
 
     // K2 (panel mysql_secure_installation gibi): güvensiz yönetici hesaplarını (anonim + uzak root) kaldırır.
     // root@localhost'a dokunmaz → panel DB erişimi kopmaz. Admin-only.
+    /// <summary>Tek veritabanının detay kartı: bağlantı ucu, kullanıcıları, boyutu.</summary>
+    [HttpGet("{name}/detail")]
+    public async Task<ActionResult<ApiResponse<DatabaseDetailDto>>> GetDetailAsync(
+        string name,
+        [FromQuery] string engine,
+        CancellationToken cancellationToken)
+    {
+        var detay = await databaseService.GetDetailAsync(engine, name, cancellationToken);
+        return Ok(ApiResponse<DatabaseDetailDto>.Ok(detay));
+    }
+
+    /// <summary>
+    /// Veritabanını denetler; gövdede tablo adı verilirse SEÇİLENLERİ onarır.
+    /// <para>
+    /// Onarım kör yapılmaz: önce denetim sonucu gösterilir, kullanıcı hangi tablonun
+    /// onarılacağını seçer. Onarım yıkıcı olabilir ve kullanıcının neyin değişeceğini görmesi
+    /// gerekir.
+    /// </para>
+    /// </summary>
+    [HttpPost("{name}/check")]
+    public async Task<ActionResult<ApiResponse<DatabaseCheckResultDto>>> CheckAndRepairAsync(
+        string name,
+        [FromQuery] string engine,
+        [FromBody] string[]? repairTables,
+        CancellationToken cancellationToken)
+    {
+        var sonuc = await databaseService.CheckAndRepairAsync(engine, name, repairTables ?? [], cancellationToken);
+
+        if (repairTables is { Length: > 0 })
+        {
+            await WriteAuditAsync("database.repaired", engine, $"Database '{name}' tables repaired: {string.Join(", ", repairTables)}.", cancellationToken);
+        }
+
+        return Ok(ApiResponse<DatabaseCheckResultDto>.Ok(sonuc));
+    }
+
     [HttpPost("harden")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<string>>>> HardenAsync(
         [FromQuery] string engine,

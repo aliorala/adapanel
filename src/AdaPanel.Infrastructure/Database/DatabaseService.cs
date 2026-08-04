@@ -154,6 +154,82 @@ internal sealed partial class DatabaseService(
         return await ResolveProvider(dbEngine).GetWorkspaceAsync(profile, cancellationToken);
     }
 
+
+    /// <summary>
+    /// Tek veritabanının detay kartı.
+    /// <para>
+    /// Liste ekranı bunu VERİTABANI BAŞINA, kart açıldığında çeker. Boyutu liste sorgusuna
+    /// katmak, on veritabanlı bir sunucuda sayfa açılışını information_schema'nın en yavaş
+    /// sütunlarına bağlardı — oysa kullanıcı çoğu zaman tek bir veritabanının boyutunu merak eder.
+    /// </para>
+    /// </summary>
+    public async Task<DatabaseDetailDto> GetDetailAsync(string engine, string databaseName, CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+        var name = NormalizeDatabaseName(databaseName);
+
+        if (dbEngine is not (DbEngine.MariaDb or DbEngine.MySql))
+        {
+            // Diğer motorlarda ayrıntı okuyucu yok. Uydurma bir kart göstermek yerine bağlantı
+            // ucunu verip boyutu BİLİNMİYOR bırakırız — yanlış bilgi, bilgi yokluğundan kötüdür.
+            return new DatabaseDetailDto
+            {
+                Engine = profile.EngineKey,
+                Name = name,
+                Host = "localhost",
+                Port = profile.Port,
+                EngineName = profile.DisplayName,
+                SiteName = await ResolveLinkedSiteAsync(profile.EngineKey, name, cancellationToken)
+            };
+        }
+
+        return await MySqlDetailReader.ReadAsync(
+            profile,
+            name,
+            await ResolveLinkedSiteAsync(profile.EngineKey, name, cancellationToken),
+            cancellationToken);
+    }
+
+    public async Task<DatabaseCheckResultDto> CheckAndRepairAsync(
+        string engine,
+        string databaseName,
+        IReadOnlyCollection<string> repairTables,
+        CancellationToken cancellationToken = default)
+    {
+        var dbEngine = ParseEngine(engine);
+        if (dbEngine is not (DbEngine.MariaDb or DbEngine.MySql))
+        {
+            throw new AppException("database.check_not_supported", 400, 400);
+        }
+
+        var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
+
+        return await MySqlMaintenanceRunner.RunAsync(
+            profile,
+            profile.EngineKey,
+            NormalizeDatabaseName(databaseName),
+            repairTables ?? [],
+            cancellationToken);
+    }
+
+    /// <summary>Veritabanının bağlı olduğu site (panelin kendi kaydı); yoksa boş.</summary>
+    private async Task<string> ResolveLinkedSiteAsync(string engineKey, string databaseName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var baglar = await siteDatabaseLinks.GetAllAsync(cancellationToken);
+            return baglar.FirstOrDefault(bag =>
+                string.Equals(bag.Engine, engineKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(bag.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase))?.SiteName ?? string.Empty;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Site bağı okunamadıysa kart yine de açılmalı; bu alan bilgilendirici, zorunlu değil.
+            return string.Empty;
+        }
+    }
+
     public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(engine);

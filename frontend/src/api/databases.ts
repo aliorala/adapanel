@@ -179,6 +179,72 @@ export type DatabaseTransferResult = {
 };
 
 // profesyonel paneller gibi sunucu taraflı taşıma: kaynak DB bilgileri → sistem mysqldump→mysql ile otomatik aktarır.
+export type DatabaseUserRef = { userName: string; host: string };
+
+export type DatabaseDetail = {
+  engine: string;
+  name: string;
+  host: string;
+  port: number;
+  engineName: string;
+  users: DatabaseUserRef[];
+  // null = OLCULEMEDI (0 degil). "0 bayt" bos bir veritabani demektir; ikisi ayri seylerdir.
+  sizeBytes: number | null;
+  tableCount: number;
+  siteName: string;
+};
+
+export async function getDatabaseDetail(engine: string, name: string) {
+  const response = await apiClient.get<ApiEnvelope<DatabaseDetail>>(
+    `/db/${encodeURIComponent(name)}/detail?engine=${encodeURIComponent(engine)}`
+  );
+  return response.data.data;
+}
+
+export type DatabaseTableCheck = {
+  table: string;
+  engine: string;
+  sizeBytes: number;
+  status: string;
+  canRepair: boolean;
+  canRebuild: boolean;
+  messages: string[];
+};
+
+export type DatabaseCheckResult = {
+  engine: string;
+  database: string;
+  tables: DatabaseTableCheck[];
+  healthyCount: number;
+  problemCount: number;
+  skippedCount: number;
+  repairAttempted: boolean;
+};
+
+// repairTables bos ise YALNIZCA denetler (hicbir sey degistirmez).
+export async function checkAndRepairDatabase(engine: string, name: string, repairTables: string[] = []) {
+  const response = await apiClient.post<ApiEnvelope<DatabaseCheckResult>>(
+    `/db/${encodeURIComponent(name)}/check?engine=${encodeURIComponent(engine)}`,
+    repairTables
+  );
+  return response.data.data;
+}
+
+// Var olan bir kullaniciya bir veritabani uzerinde yetki verir.
+// Panelde bir veritabanina SONRADAN kullanici baglamanin tek yolu buydu ve arayuzde karsiligi yoktu:
+// disaridan gelmis (ya da kullanicisi silinmis) bir veritabani kullanicisiz kaliyor ve ona
+// dokunulamiyordu -- yani veritabani fiilen erisilemez oluyordu.
+export async function grantDatabaseAccess(payload: {
+  engine: string;
+  databaseName: string;
+  userName: string;
+  allowedHost?: string;
+  privileges?: string[];
+}) {
+  const response = await apiClient.post<ApiEnvelope<DatabaseWorkspace>>("/db/grant", payload);
+  return response.data.data;
+}
+
 export async function transferDatabase(payload: DatabaseTransferPayload) {
   const response = await apiClient.post<ApiEnvelope<DatabaseTransferResult>>("/db/transfer", payload);
   return response.data.data;
