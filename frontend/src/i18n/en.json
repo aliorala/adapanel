@@ -2868,6 +2868,7 @@
   "cron.disabled": "Task suspended (not deleted).",
   "cron.stopped": "The running instance was stopped.",
   "cron.stop_failed": "The running instance could not be stopped.",
+  "cron.bare_shell": "A bare shell (cmd.exe / powershell.exe) with no arguments cannot be saved as a task: it never finishes and blocks every later run. Write the full path of the file you want to run.",
   "cron.url_forbidden": "This address cannot be targeted; please use your site's public (external) address.",
   "cron.quota_exceeded": "Your scheduled task quota is full. Delete an existing task or ask your hosting provider for a quota increase.",
   "cron.read_failed": "Could not read scheduled tasks.",

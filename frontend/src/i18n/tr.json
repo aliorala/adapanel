@@ -2868,6 +2868,7 @@
   "cron.disabled": "Görev durduruldu (silinmedi).",
   "cron.stopped": "Süren çalışma durduruldu.",
   "cron.stop_failed": "Süren çalışma durdurulamadı.",
+  "cron.bare_shell": "Argümansız bir kabuk (cmd.exe / powershell.exe) görev olarak kaydedilemez: böyle bir görev hiç bitmez ve sonraki bütün çalışmaları engeller. Çalıştırmak istediğiniz dosyanın tam yolunu yazın.",
   "cron.url_forbidden": "Bu adres hedeflenemez; lütfen sitenizin genel (dış) adresini kullanın.",
   "cron.quota_exceeded": "Planlı görev kotanız doldu. Yeni görev için mevcut bir görevi silin ya da barındırma sağlayıcınızdan kota artışı isteyin.",
   "cron.read_failed": "Zamanlanmış görevler okunamadı.",

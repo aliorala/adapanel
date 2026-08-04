@@ -607,8 +607,44 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
                 {
                     throw new AppException("cron.invalid_name", 400, 400);
                 }
+
+                if (IsBareInteractiveShell(request.Command, request.Arguments))
+                {
+                    throw new AppException("cron.bare_shell", 400, 400);
+                }
                 break;
         }
+    }
+
+    /// <summary>
+    /// Komut, argümansız bir kabuk mu (cmd.exe / powershell.exe)?
+    /// <para>
+    /// Böyle bir görev HİÇBİR ZAMAN BİTMEZ: argümansız cmd.exe etkileşimli bir kabuk açar ve girdi
+    /// bekler; görevin altında konsol olmadığı için sonsuza kadar bekler. Çalışma süresi sınırı
+    /// dolana dek gelen her tetikleme "önceki tur sürüyor" diye reddedilir (0x800710E0) ve görev
+    /// fiilen ölür.
+    /// </para>
+    /// <para>
+    /// Neden GERÇEKTEN oluyor, teorik değil: betik görevleri Windows'a <c>cmd.exe /c "...bat"</c>
+    /// olarak kaydedilir ve panel bir süre bunu geri çözmüyordu (0.2.70'te düzeltildi) — düzenleme
+    /// ekranı komut alanına <c>cmd.exe</c> yazıyordu. Kullanıcı hiçbir şeyi bilerek değiştirmeden
+    /// kaydettiğinde görev, betiği yerine argümansız bir kabuk çalıştıran bir göreve dönüşüyordu.
+    /// Sebebi ortadan kaldırdık; bu denetim aynı sonucu başka bir yoldan üretmeyi de engeller.
+    /// </para>
+    /// </summary>
+    internal static bool IsBareInteractiveShell(string? command, string? arguments)
+    {
+        if (!string.IsNullOrWhiteSpace(arguments))
+        {
+            return false;
+        }
+
+        var dosyaAdi = Path.GetFileName((command ?? string.Empty).Trim().Trim('"'));
+        return string.Equals(dosyaAdi, "cmd.exe", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(dosyaAdi, "cmd", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(dosyaAdi, "powershell.exe", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(dosyaAdi, "powershell", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(dosyaAdi, "pwsh.exe", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

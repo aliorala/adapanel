@@ -126,3 +126,50 @@ public sealed class SchedulerTaskSettingsTests
         Assert.Equal(beklenen, SchedulerService.LooksLikeFilePath(komut));
     }
 }
+
+/// <summary>
+/// Argumansiz kabuk gorevi (cmd.exe / powershell.exe) reddedilmeli.
+/// <para>
+/// CANLI OLAY: kullanicinin gorevi "Running" durumunda takildi ve her tetikleme 0x800710E0 ile
+/// reddedildi. Sebep zinciri: betik gorevleri Windows'a "cmd.exe /c ...bat" olarak kaydedilir ve
+/// panel bir sure bunu geri cozmuyordu (0.2.70'te duzeltildi) -- duzenleme ekrani komut alanina
+/// "cmd.exe" yaziyordu. Kullanici hicbir seyi bilerek degistirmeden kaydettiginde gorev, betigi
+/// yerine ARGUMANSIZ BIR KABUK calistiran bir goreve donusuyordu.
+/// </para>
+/// <para>
+/// Boyle bir gorev hicbir zaman bitmez: argumansiz cmd.exe etkilesimli kabuk acar ve girdi bekler,
+/// gorevin altinda konsol olmadigi icin sonsuza kadar bekler. Sebep ortadan kaldirildi; bu denetim
+/// ayni sonucu BASKA bir yoldan uretmeyi de engeller.
+/// </para>
+/// </summary>
+public sealed class BareShellTaskTests
+{
+    [Theory]
+    [InlineData("cmd.exe")]
+    [InlineData("CMD.EXE")]
+    [InlineData("powershell.exe")]
+    [InlineData(@"C:\Windows\System32\cmd.exe")]
+    [InlineData("\"cmd.exe\"")]
+    public void BareShell_IsRecognisedWhateverItLooksLike(string komut)
+    {
+        Assert.True(SchedulerService.IsBareInteractiveShell(komut, string.Empty));
+    }
+
+    // Argumanli kabuk MESRUDUR: "cmd.exe /c ..." tam olarak betik gorevlerinin calisma bicimidir.
+    [Theory]
+    [InlineData("cmd.exe", @"/c ""C:\site\bot.bat""")]
+    [InlineData("powershell.exe", @"-File ""C:\betik\temizlik.ps1""")]
+    public void ShellWithArguments_StaysAllowed(string komut, string argumanlar)
+    {
+        Assert.False(SchedulerService.IsBareInteractiveShell(komut, argumanlar));
+    }
+
+    [Theory]
+    [InlineData("curl.exe")]
+    [InlineData(@"C:\site\bot.bat")]
+    [InlineData("ipconfig")]
+    public void OrdinaryCommands_AreNotMistakenForAShell(string komut)
+    {
+        Assert.False(SchedulerService.IsBareInteractiveShell(komut, string.Empty));
+    }
+}
