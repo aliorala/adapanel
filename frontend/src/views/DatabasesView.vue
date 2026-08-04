@@ -351,7 +351,12 @@
 
                   <div class="db-attach">
                     <select v-model="attachUserName">
-                      <option value="">{{ t("panel.database.attachExisting") }}</option>
+                      <!-- Etiket duruma gore: kullanicisi olan bir veritabanina BASKA bir
+                           kullanici eklemek de mesrudur (uygulama kullanicisi + salt-okunur rapor
+                           kullanicisi gibi), ama birincil cagri olmamali. -->
+                      <option value="">
+                        {{ detail.users.length ? t("panel.database.attachAnother") : t("panel.database.attachExisting") }}
+                      </option>
                       <option v-for="u in (workspace?.users ?? [])" :key="`${u.userName}@${u.host}`" :value="`${u.userName}|${u.host}`">
                         {{ u.userName }}@{{ u.host }}
                       </option>
@@ -374,6 +379,21 @@
                   <!-- Parola GÖSTERİLMEZ. Panel kullanıcı parolalarını geri döndürülebilir
                        biçimde saklamamalı; bilmiyorsa kullanıcı yenisini belirler. -->
                   <small class="field-hint">{{ t("panel.database.passwordNotShown") }}</small>
+                </div>
+
+                <!-- ABONELIGE TASI -->
+                <div class="db-block">
+                  <span class="db-label">{{ t("panel.database.moveTo") }}</span>
+                  <div class="db-attach">
+                    <select v-model="moveTarget">
+                      <option value="">{{ t("panel.database.moveSelect") }}</option>
+                      <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
+                    </select>
+                    <button class="compact" :disabled="!moveTarget || moving" @click="doMove(item.name)">
+                      {{ moving ? t("panel.database.saving") : t("panel.database.moveDo") }}
+                    </button>
+                  </div>
+                  <small class="field-hint">{{ t("panel.database.moveHint") }}</small>
                 </div>
 
                 <!-- DENETLE VE ONAR -->
@@ -548,6 +568,7 @@ import WebDbView from "./WebDbView.vue";
 import {
   checkAndRepairDatabase,
   getDatabaseDetail,
+  moveDatabase,
   hardenDatabase,
   openPhpMyAdmin,
   type DatabaseCheckResult,
@@ -671,6 +692,23 @@ async function copyConnection(d: DatabaseDetail) {
     // Pano yalnizca guvenli baglamda (HTTPS/localhost) calisir. Sessizce basarili gostermek
     // yerine kullaniciya metni zaten ekranda birakiyoruz; secip kopyalayabilir.
     showNotice(t("panel.database.copy"), true);
+  }
+}
+
+const moveTarget = ref("");
+const moving = ref(false);
+
+async function doMove(databaseName: string) {
+  moving.value = true;
+  try {
+    await moveDatabase(selectedEngine.value, databaseName, moveTarget.value);
+    showNotice(t("panel.database.moved"), false);
+    detail.value = await getDatabaseDetail(selectedEngine.value, databaseName);
+    moveTarget.value = "";
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    moving.value = false;
   }
 }
 

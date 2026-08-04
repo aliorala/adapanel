@@ -447,7 +447,8 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
     {
         // DB → yetkili kullanıcı(lar) eşlemesi (mysql.db per-DB grant tablosu; sistem hesapları hariç).
         // Böylece listede her DB'nin kullanıcısı görünür; kullanıcısı olmayan (yetim) DB'ler ayırt edilir.
-        var databaseUsers = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        // Ham (Db deseni, kullanici) ciftleri; eslestirme asagida DESEN olarak yapilir.
+        var grants = new List<(string Pattern, string User)>();
         await using (var mapCommand = connection.CreateCommand())
         {
             mapCommand.CommandText = """
@@ -460,17 +461,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             await using var mapReader = await mapCommand.ExecuteReaderAsync(cancellationToken);
             while (await mapReader.ReadAsync(cancellationToken))
             {
-                var db = mapReader.GetString(0);
-                var user = mapReader.GetString(1);
-                if (!databaseUsers.TryGetValue(db, out var list))
-                {
-                    list = new List<string>();
-                    databaseUsers[db] = list;
-                }
-                if (!list.Contains(user, StringComparer.OrdinalIgnoreCase))
-                {
-                    list.Add(user);
-                }
+                grants.Add((mapReader.GetString(0), mapReader.GetString(1)));
             }
         }
 
@@ -500,7 +491,18 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
                 Owner = string.Empty,
                 Encoding = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
                 Collation = reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
-                Users = databaseUsers.TryGetValue(name, out var mapped) ? mapped : []
+                // KULLANICI ESLESTIRMESI DESENLE yapilir, esitlikle DEGIL.
+                //
+                // mysql.db'nin Db sutunu bir LIKE desenidir. Panel artik yetkileri kacirarak
+                // veriyor (guvenlik: kacirilmamis "_" komsu veritabanlarini da kapsiyordu), yani
+                // kayit "musteri\_db" olarak saklaniyor. Birebir esitlik arayan eski kod bunu
+                // BULAMIYOR ve panel, yetkisi VERILMIS bir veritabani icin "kullanicisi yok"
+                // diyordu -- kullanici yetkiyi verip sonucun degismedigini goruyordu.
+                Users = grants
+                    .Where(grant => GrantWildcardRepair.MatchesPattern(name, grant.Pattern))
+                    .Select(grant => grant.User)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList()
             });
         }
 

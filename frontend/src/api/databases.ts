@@ -179,6 +179,15 @@ export type DatabaseTransferResult = {
 };
 
 // profesyonel paneller gibi sunucu taraflı taşıma: kaynak DB bilgileri → sistem mysqldump→mysql ile otomatik aktarır.
+// Veritabanini baska bir siteye tasir. MySQL yetkilerine DOKUNULMAZ; calisan uygulamanin
+// baglantisi kopmaz. Degisen sey panelde kimin gordugu ve kimin kotasina sayildigidir.
+export async function moveDatabase(engine: string, name: string, targetSiteName: string) {
+  await apiClient.post<ApiEnvelope<object>>(
+    `/db/${encodeURIComponent(name)}/move?engine=${encodeURIComponent(engine)}`,
+    { targetSiteName }
+  );
+}
+
 export type DatabaseUserRef = { userName: string; host: string };
 
 export type DatabaseDetail = {

@@ -14,6 +14,8 @@ public sealed class DatabasesController(
     IDatabaseService databaseService,
     IRemoteDbAccessService remoteDbAccessService,
     IDatabaseOwnershipService dbOwnership,
+    ISiteDatabaseLinkService siteDatabaseLinks,
+    IIisSiteService iisSiteService,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet("engines")]
@@ -83,6 +85,41 @@ public sealed class DatabasesController(
         }
 
         return Ok(ApiResponse<DatabaseCheckResultDto>.Ok(sonuc));
+    }
+
+    /// <summary>
+    /// Veritabanini baska bir siteye (abonelige) tasir.
+    /// <para>
+    /// MySQL YETKILERINE DOKUNULMAZ. Tasima, panelin kendi sahiplik/baglanti kaydinin
+    /// degismesidir; veritabani kullanicilari ve GRANT'lari oldugu gibi kalir. Bu bilincli:
+    /// yetkilere dokunmak, o an calisan uygulamanin baglantisini KOPARIRDI (wp-config.php'deki
+    /// kimlik bilgileri degismedigi halde erisim kaybolurdu). Degisen sey panelde kimin gordugu
+    /// ve kimin kotasina sayildigidir.
+    /// </para>
+    /// </summary>
+    [HttpPost("{name}/move")]
+    public async Task<ActionResult<ApiResponse<object>>> MoveDatabaseAsync(
+        string name,
+        [FromQuery] string engine,
+        [FromBody] MoveDatabaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        // HEDEF SITE GERCEKTEN VAR MI: olmayan bir siteye baglamak, veritabanini panelde
+        // hicbir yerde gorunmeyen bir kayda hapsederdi.
+        var site = await iisSiteService.GetSiteAsync(request.TargetSiteName, cancellationToken);
+
+        await siteDatabaseLinks.LinkAsync(engine, name, site.Name, cancellationToken);
+
+        // Sahiplik de tasinir; yoksa veritabani yeni sahibin kotasina sayilmaz ve eski sahip onu
+        // gormeye devam ederdi.
+        var owner = await dbOwnership.GetOwnerAsync(engine, name, cancellationToken);
+        if (owner is { } mevcutSahip)
+        {
+            await dbOwnership.RecordAsync(engine, name, mevcutSahip, site.Name, cancellationToken);
+        }
+
+        await WriteAuditAsync("database.moved", engine, $"Database '{name}' moved to site '{site.Name}'.", cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { name, site = site.Name }, "database.moved"));
     }
 
     [HttpPost("harden")]
