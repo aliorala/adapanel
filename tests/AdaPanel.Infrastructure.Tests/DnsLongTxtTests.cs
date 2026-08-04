@@ -165,4 +165,19 @@ public sealed class DnsLongTxtTests
 
         Assert.Contains("} finally { $ErrorActionPreference = $adaEskiEap }", line, StringComparison.Ordinal);
     }
+
+    // CANLI KOK NEDEN: uzun TXT icin gereken bolge dosyasi + ZoneReload adimlari BOLGEYI
+    // KILITLIYOR. Ana senkron scriptinin icinde yapildiginda sonraki kayit islemleri sessizce
+    // dusuyor ve SPF/DMARC "zaten var, silinemedi, eklenemedi" durumunda kaliyordu -- yani uzun
+    // TXT cozumu senkronun GERI KALANINI bozuyordu. Uzun kayitlar artik ayri turda yaziliyor.
+    [Fact]
+    public void BuildTxtLine_LongValue_IsSelfContainedForItsOwnRun()
+    {
+        var line = DnsService.BuildTxtLine("selector._domainkey", Key(400), 3600);
+
+        // Ayri turda calisacagi icin kendi degiskenlerini kendisi kurmali.
+        Assert.Contains("$adaAd =", line, StringComparison.Ordinal);
+        Assert.Contains("$adaTam =", line, StringComparison.Ordinal);
+        Assert.Contains("$adaOlcum =", line, StringComparison.Ordinal);
+    }
 }

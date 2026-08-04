@@ -1076,6 +1076,11 @@ public sealed partial class DnsService(
                 ozet is null ? BuildCommandDetails(result) : ozet["ADAPANEL-FAIL:".Length..].Trim());
         }
 
+        // UZUN TXT KAYITLARI: ana senkron bittikten ve bolge kilidi birakildiktan SONRA,
+        // her biri KENDI PowerShell turunda yazilir. Ayni script icinde yapmak bolgeyi
+        // kilitleyip diger kayitlari dusuruyordu.
+        await WriteLongTxtRecordsAsync(state, cancellationToken);
+
         // Yazma BASARILI olduktan sonra kaydedilir: basarisiz bir senkrondan sonra listeyi
         // guncellemek, aslinda yazilmamis gruplari "yazilmis" saymak olurdu.
         var yayinlanan = DesiredGroups(state).ToList();
@@ -1091,6 +1096,44 @@ public sealed partial class DnsService(
         .Select(record => $"{record.Type.ToUpperInvariant()}|{record.Host}")
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .OrderBy(key => key, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 252 karakteri asan TXT kayitlarini, ana senkrondan AYRI turlarda yazar.
+    /// <para>
+    /// Neden ayri: uzun deger icin gereken bolge dosyasi duzenlemesi ve ZoneReload, bolgeyi
+    /// kilitliyor. Ayni script icinde yapildiginda sonraki kayit islemleri sessizce dusuyor ve
+    /// SPF/DMARC gibi kayitlar "zaten var, silinemedi, eklenemedi" durumunda kaliyordu.
+    /// </para>
+    /// <para>
+    /// Hata FIRLATILMAZ: uzun kayit yazilamasa bile bolgenin geri kalani gecerlidir. Basarisizlik
+    /// gunluge yazilir ve denetim zaten "yayinlanmamis kayit" olarak bunu gorur.
+    /// </para>
+    /// </summary>
+    private async Task WriteLongTxtRecordsAsync(DnsZoneState state, CancellationToken cancellationToken)
+    {
+        var uzunlar = state.Records
+            .Where(record => string.Equals(record.Type, "TXT", StringComparison.OrdinalIgnoreCase)
+                             && record.Value.Length > 252)
+            .ToList();
+
+        foreach (var record in uzunlar)
+        {
+            var script =
+                "$ErrorActionPreference = 'Stop'" + Environment.NewLine +
+                $"$zoneName = '{EscapePowerShellLiteral(state.ZoneName)}'" + Environment.NewLine +
+                BuildTxtLine(EscapePowerShellLiteral(record.Host), record.Value, Math.Clamp(record.Ttl, 60, 86400));
+
+            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            if (!result.Success)
+            {
+                logger.LogWarning(
+                    "Uzun TXT kaydi yazilamadi ({Zone} / {Host}): {Error}",
+                    state.ZoneName,
+                    record.Host,
+                    BuildCommandDetails(result));
+            }
+        }
+    }
 
     private static string BuildSyncScript(DnsZoneState state)
     {
@@ -1170,7 +1213,15 @@ public sealed partial class DnsService(
                 "AAAA" => $"Add-DnsServerResourceRecordAAAA -ZoneName $zoneName -Name '{host}' -IPv6Address '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "CNAME" => $"Add-DnsServerResourceRecordCName -ZoneName $zoneName -Name '{host}' -HostNameAlias '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "MX" => $"Add-DnsServerResourceRecordMX -ZoneName $zoneName -Name '{host}' -MailExchange '{value}' -Preference {record.Priority ?? 10} -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
-                "TXT" => BuildTxtLine(host, record.Value, ttl),
+                // UZUN TXT ANA SENKRONDA DENENMEZ.
+                //
+                // Uzun deger icin gereken bolge dosyasi + ZoneReload adimlari BOLGEYI KILITLIYOR
+                // ve ayni script icindeki sonraki kayit islemleri (silme/ekleme) sessizce
+                // dusuyor. Canlida tam olarak bu oldu: SPF ve DMARC "zaten var" oldugu icin
+                // silinemiyor, sonra "Failed to create resource record" ile eklenemiyordu --
+                // yani uzun TXT icin yazdigim cozum senkronun GERI KALANINI bozuyordu.
+                // Uzun kayitlar ana senkron BITTIKTEN SONRA ayri bir turda yazilir.
+                "TXT" => record.Value.Length <= 252 ? BuildTxtLine(host, record.Value, ttl) : string.Empty,
                 "NS" => $"Add-DnsServerResourceRecord -ZoneName $zoneName -NS -Name '{host}' -NameServer '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "PTR" => $"Add-DnsServerResourceRecordPtr -ZoneName $zoneName -Name '{host}' -PtrDomainName '{value}' -TimeToLive ([TimeSpan]::FromSeconds({ttl})) | Out-Null",
                 "SRV" => BuildSrvLine(host, record.Value, record.Priority, ttl),
