@@ -622,8 +622,76 @@ $settings = {settings}
 Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null";
     }
 
+    /// <summary>
+    /// Yola yapışan GÖRÜNMEZ karakterleri temizler.
+    /// <para>
+    /// CANLI OLAY: kullanıcının yazdığı yol ekranda kusursuz görünüyordu ama panel "böyle bir
+    /// klasör yok" diyordu. Sebep, yolun başındaki U+202A (LEFT-TO-RIGHT EMBEDDING) karakteriydi:
+    /// Windows Gezgini'nin "Yol olarak kopyala" komutu bunu kendiliğinden ekler. Karakterin hiçbir
+    /// görüntüsü yoktur, dolayısıyla kullanıcı ne yazdığına baksa da farkı GÖREMEZ; panel ise
+    /// "‪C:\..." diye bir yol arar ve bulamaz.
+    /// </para>
+    /// <para>
+    /// Bu, teşhis edilmesi en zor hata türüdür: her iki taraf da kendince haklıdır. Kullanıcıyı
+    /// görünmez bir karakteri kovalamaya bırakmak yerine panel sessizce temizler — çünkü bu
+    /// karakterlerin bir dosya yolunda hiçbir meşru işlevi yoktur.
+    /// </para>
+    /// </summary>
+    internal static string StripInvisibleCharacters(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        // Karakterler KOD NOKTASIYLA yazılır, harfiyle değil: kaynak dosyada görünmez bir karakter
+        // tutmak, ilerideki bir kopyala-yapıştırda ya da kodlama dönüşümünde sessizce kaybolur ve
+        // düzeltme kimse fark etmeden ortadan kalkardı. Ayrıca okuyan kişi ne filtrelendiğini
+        // ancak böyle görebilir.
+        return new string(value.Where(karakter => (int)karakter switch
+        {
+            0x200B => false, // ZERO WIDTH SPACE
+            0x200E => false, // LEFT-TO-RIGHT MARK
+            0x200F => false, // RIGHT-TO-LEFT MARK
+            0x2060 => false, // WORD JOINER
+            0xFEFF => false, // BYTE ORDER MARK
+            >= 0x202A and <= 0x202E => false, // yön gömme/geçersiz kılma — "Yol olarak kopyala" bunu ekler
+            >= 0x2066 and <= 0x2069 => false, // yön yalıtma
+            _ => true
+        }).ToArray()).Trim();
+    }
+
+    /// <summary>
+    /// İstekteki bütün yol/adres alanlarını görünmez karakterlerden arındırır.
+    /// Doğrulamadan ÖNCE çalışır ki denetimler kullanıcının gerçekte kastettiği değeri görsün.
+    /// </summary>
+    private static void SanitizeRequest(CreateScheduledTaskRequest request)
+    {
+        request.Command = StripInvisibleCharacters(request.Command);
+        request.Arguments = StripInvisibleCharacters(request.Arguments);
+        request.WorkingDirectory = StripInvisibleCharacters(request.WorkingDirectory);
+        request.Url = StripInvisibleCharacters(request.Url);
+
+        // KULLANILMAYAN alanlar temizlenir.
+        //
+        // Çalışma klasörü alanı yalnızca "komut" ve "betik" tiplerinde EKRANDA GÖRÜNÜR. Kullanıcı
+        // bir .bat görevini düzenlerken tipi PHP'ye çevirdiğinde alan gizlenir ama formdaki eski
+        // değeri taşımaya devam eder; panel de görünmeyen bir alan yüzünden kaydı reddeder.
+        // Kullanıcının göremediği bir değere göre hata vermek, çözülemez bir hatadır.
+        var taskType = (request.TaskType ?? "command").Trim().ToLowerInvariant();
+        if (taskType is "url" or "php")
+        {
+            request.WorkingDirectory = string.Empty;
+        }
+    }
+
+    /// <summary>Testlerin temizleme kurallarini dogrudan olcebilmesi icin.</summary>
+    internal static void SanitizeForTests(CreateScheduledTaskRequest request) => SanitizeRequest(request);
+
     private static void ValidateRequest(CreateScheduledTaskRequest request)
     {
+        SanitizeRequest(request);
+
         if (string.IsNullOrWhiteSpace(request.Name))
         {
             throw new AppException("cron.invalid_name", 400, 400);

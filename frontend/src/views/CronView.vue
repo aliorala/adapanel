@@ -256,6 +256,23 @@ const notice = ref("");
 const noticeError = ref(false);
 const form = reactive(defaultForm());
 const isScriptForm = computed(() => isAdmin.value && form.taskType === "script");
+
+/**
+ * Tip değişince o tipte KULLANILMAYAN alanları temizle.
+ *
+ * Çalışma klasörü alanı yalnızca "komut" ve "betik" tiplerinde görünür. Kullanıcı bir .bat
+ * görevini düzenlerken tipi PHP'ye çevirdiğinde alan gizleniyor ama formdaki eski değeri
+ * taşımaya devam ediyordu; kayıt, kullanıcının EKRANDA GÖREMEDİĞİ bir alan yüzünden
+ * reddediliyordu. Görünmeyen bir değere göre verilen hata, çözülemeyen bir hatadır.
+ */
+watch(() => form.taskType, (yeniTip) => {
+  if (yeniTip === "url" || yeniTip === "php") {
+    form.workingDirectory = "";
+  }
+  if (yeniTip !== "url") {
+    form.url = "";
+  }
+});
 const selectedSiteRoot = computed(() => {
   const site = sites.value.find((item) => item.name === form.siteName);
   return site ? site.applicationRootPath || site.physicalPath : "";
