@@ -94,11 +94,35 @@
           @click="refreshAllDomains">
           {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsRefresh") }}
         </button>
+
+        <!-- KOSULSUZ CALISTIRMA.
+             Dugme yalnizca panel bir eksik GORDUGUNDE cikiyor; panelin goremedigi bir eksik
+             varsa kullanicinin elinde hicbir yol kalmiyordu. Islem zaten idempotent ve var olan
+             kayitlara dokunmuyor, dolayisiyla calistirmanin zarari yok -- ama sessizce oturmak
+             yerine denemek mumkun olmali. Sessiz bir baglanti olarak duruyor ki asil dugmeyle
+             karistirilmasin. -->
+        <button
+          v-if="!domainsLoading && !onarilacakVar"
+          class="ghost compact"
+          :disabled="domainsBusy"
+          @click="refreshAllDomains">
+          {{ domainsBusy ? t("panel.health.domainsRefreshing") : t("panel.health.domainsForce") }}
+        </button>
       </div>
 
       <!-- SUNUCU GENELI bulgular: kapali port, posta sunucusunun adi gibi tek bir alan adina
            ait olmayan sorunlar. Bunlar hicbir yerde yazmiyordu; kart yesil "N/N guncel" derken
            yaninda onarma dugmesi cikiyor, kullanici neyin eksik oldugunu goremiyordu. -->
+      <!-- PANELIN NE OLCTUGU. Kara kutu olmamali: "eksik yok" derken neye baktigini
+           gostermezse, yanlis olcum sessizce dogru sonuc gibi gorunur. -->
+      <p v-if="!domainsLoading && domains" class="measure-line">
+        {{ t("panel.health.domainsMeasured", {
+          total: domains.totalSites,
+          stale: domains.updatedSites,
+          findings: (domains.serverFindings?.length ?? 0)
+        }) }}
+      </p>
+
       <ul v-if="domains?.serverFindings?.length" class="server-findings">
         <li v-for="bulgu in domains.serverFindings" :key="bulgu.key + bulgu.detail" :class="bulgu.severity">
           {{ t(bulgu.key) }}
@@ -392,6 +416,12 @@ function showNotice(message: string, isError: boolean) {
 
 /* Yukleniyor: notr gri + hafif nabiz. Yesil/kirmizi BILEREK kullanilmiyor -- henuz olculmemis
    bir durumu renkle yorumlamak, kullaniciyi yaniltmanin en kolay yolu. */
+.measure-line {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.65;
+}
+
 .row-finding {
   opacity: 0.85;
 }

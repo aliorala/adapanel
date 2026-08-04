@@ -3144,5 +3144,7 @@
   "panel.attention.badgeMore": "ve {count} tane daha",
   "repair.mail_hostname_mismatch": "Posta sunucusu kendini makine adıyla tanıtıyor; giden postalar spam'e düşebilir.",
   "repair.records_not_published": "Bazı DNS kayıtları panelde tanımlı ama sunucuda yayınlanmamış.",
-  "repair.publish_state_unknown": "DNS kayıtları sunucudan okunamadı; yayınlanmış kayıtların durumu doğrulanamıyor."
+  "repair.publish_state_unknown": "DNS kayıtları sunucudan okunamadı; yayınlanmış kayıtların durumu doğrulanamıyor.",
+  "panel.health.domainsForce": "Yine de çalıştır",
+  "panel.health.domainsMeasured": "{total} alan adı denetlendi · {stale} tanesinde eksik bulundu · {findings} sunucu geneli bulgu"
 }
