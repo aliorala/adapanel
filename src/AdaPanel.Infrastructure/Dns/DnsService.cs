@@ -26,7 +26,16 @@ public sealed partial class DnsService(
     // MevcutDefaults birlestirmesi calisir -> ESKI bolgeler de eksik posta kayitlarini kendiliginden alir
     // (kullanicinin ekledigi kayitlara dokunulmaz, yalniz EKSIK olanlar eklenir).
     // 3: istemci otomatik yapilandirma (RFC 6186 SRV) + TLS raporlama eklendi.
-    private const int CurrentDefaultsVersion = 3;
+    // 4: 3 numarali birlestirme HICBIR ESKI BOLGEDE ISE YARAMADI ve bunu olcerek gorduk.
+    //    Sebep: o sirada BuildDefaultRecordsAsync kayitli DNS sablonunu bulunca yerlesik
+    //    varsayilanlari tamamen golgeliyordu (0.2.62'de duzeltildi). Yani birlestirme calisti,
+    //    eklenecek kayit olarak SADECE sablondakileri gordu, SRV'leri hic uretmedi -- ama surum
+    //    yine de 3 olarak damgalandi. Damga atildigi icin duzeltilmis birlestirme BIR DAHA
+    //    calismayacakti: canli sunucuda iki alan adinda da 4 SRV + _smtp._tls eksik kaldi
+    //    (harici DNS sorgusuyla dogrulandi). Surumu artirmak, duzeltilmis birlestirmeyi eski
+    //    bolgelerde bir kez daha calistirir. Birlestirme yalnizca EKSIK olani ekler, bu yuzden
+    //    kullanicinin sildigi ya da degistirdigi kayitlar icin risk yok.
+    internal const int CurrentDefaultsVersion = 4;
     // Desteklenen kayıt tipleri. SRV/PTR/TLSA'nın Windows DNS'te NATIVE cmdlet parametresi vardır;
     // CAA'nın yoktur, RFC 3597 "bilinmeyen kayıt" yolu (-Unknown -Type 257 + ham RDATA) ile yazılır.
     // Değer biçimleri (UI'da da gösterilir):
@@ -229,16 +238,38 @@ public sealed partial class DnsService(
 
     private static string RecordKey(DnsRecordState record) => $"{record.Type}|{record.Host}|{record.Value}";
 
-    public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
+    public async Task<SiteDnsZoneDto> UpsertRecordsAsync(string siteName, IReadOnlyList<UpsertDnsRecordRequest> requests, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
-        var record = NormalizeRecord(request, state.ZoneName);
+
+        // Tum kayitlar duruma yazilir, senkron SONDA BIR KEZ calisir.
+        //
+        // Tek tek yazmak her seferinde bolgenin tamamini yeniden yazan bir senkron baslatiyordu:
+        // hem cok yavas hem de pes pese gelen senkronlar birbirinin bolge kilidine carpiyor,
+        // kayitlar "zaten var, silinemedi, eklenemedi" durumunda kaliyordu.
+        foreach (var request in requests)
+        {
+            ApplyRecordToState(state, NormalizeRecord(request, state.ZoneName), request.Id);
+        }
+
+        state.Records = SortRecords(state.Records).ToList();
+        await UpsertStateAsync(state, cancellationToken);
+        await TrySyncWindowsDnsAsync(state, cancellationToken);
+        return await ToDtoAsync(state, cancellationToken);
+    }
+
+    /// <summary>
+    /// Bir kaydi durum listesine uygular (guncelle ya da ekle). Yazma/senkron YAPMAZ -- cagiran
+    /// toplu isleyip tek seferde senkronlayabilsin diye ayrildi.
+    /// </summary>
+    private static void ApplyRecordToState(DnsZoneState state, DnsRecordState record, string? requestId)
+    {
         record.IsManaged = false;
 
-        if (!string.IsNullOrWhiteSpace(request.Id))
+        if (!string.IsNullOrWhiteSpace(requestId))
         {
-            var index = state.Records.FindIndex(item => string.Equals(item.Id, request.Id, StringComparison.OrdinalIgnoreCase));
+            var index = state.Records.FindIndex(item => string.Equals(item.Id, requestId, StringComparison.OrdinalIgnoreCase));
             if (index < 0)
             {
                 throw new AppException("dns.record_not_found", 404, 404);
@@ -287,6 +318,14 @@ public sealed partial class DnsService(
                 state.Records.Add(record);
             }
         }
+
+    }
+
+    public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken);
+        ApplyRecordToState(state, NormalizeRecord(request, state.ZoneName), request.Id);
 
         state.Records = SortRecords(state.Records).ToList();
         await UpsertStateAsync(state, cancellationToken);
@@ -847,7 +886,7 @@ public sealed partial class DnsService(
     // o alan adına posta HİÇ ULAŞMAZ, giden posta da spam'e düşer; webmail adresi de çözülmez.
     // (Karşılaştırma: Plesk'in ürettiği bölgede MX, mail A, webmail A, SPF ve DMARC standarttır.)
     // DKIM burada YOK: anahtar mail domaini oluşturulunca üretilir → EnsureMailRecordsAsync ekler.
-    private static DnsTemplateDto BuiltInTemplate() => new()
+    internal static DnsTemplateDto BuiltInTemplate() => new()
     {
         Records =
         [

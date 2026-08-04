@@ -46,6 +46,17 @@ public interface IDnsService
 
     Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Birden çok kaydı TEK seferde yazar ve bölgeyi BİR KEZ senkronize eder.
+    /// <para>
+    /// Neden gerekli: kayıtları tek tek yazmak her seferinde bölgenin tamamını yeniden yazan bir
+    /// senkron başlatır. Bu hem çok yavaştır (8 posta kaydı = 8 tam senkron) hem de bölgeyi
+    /// kilitler; peş peşe gelen senkronlar birbirinin kilidine çarpar ve kayıtlar "zaten var,
+    /// silinemedi, eklenemedi" durumunda kalır. Canlıda tam olarak bu oldu.
+    /// </para>
+    /// </summary>
+    Task<SiteDnsZoneDto> UpsertRecordsAsync(string siteName, IReadOnlyList<UpsertDnsRecordRequest> requests, CancellationToken cancellationToken = default);
+
     Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default);
 
     /// <summary>Site silindiğinde panel DNS bölgesini (config kaydı) tamamen kaldırır. IIS sitesi

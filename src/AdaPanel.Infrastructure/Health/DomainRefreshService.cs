@@ -742,32 +742,33 @@ internal sealed class DomainRefreshService(
             // diye gösterir ve rapor güvenilmez hâle gelir.
             var before = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
 
-            // Kayit basina yalitim: bir kaydin yazilamamasi DIGERLERINI engellememeli ve
-            // sebebi SESSIZ kalmamali. Onceden tek bir hata tum donguyu kesiyor, disaridaki
-            // catch "0 kayit uygulandi" diyordu -- yani panel hicbir sey yapmamis olmasina
-            // ragmen hata da gostermiyordu. Bu, tam olarak ayikladigimiz hata sinifi.
+            // TEK SENKRON, tum kayitlar birden.
+            //
+            // CANLI KOK NEDEN: kayitlar tek tek yaziliyordu ve HER yazma bolgenin tamamini
+            // yeniden yazan bir senkron baslatiyordu. DKIM gibi uzun TXT'ler bu senkronun
+            // ardindan bolge dosyasina yaziliyor ve bolgeyi KILITLIYOR; hemen arkasindan gelen
+            // kaydin senkronu kilide carpiyordu. Sonuc, kullanicinin gonderdigi tabloydu:
+            // "TXT @" ve "TXT _dmarc" icin ust uste "Failed to create resource record ...".
+            // Silme basarisiz oluyor, ardindan ekleme "zaten var" diye reddediliyordu.
             var hatalar = new List<string>();
-            foreach (var record in applicable)
+            try
             {
-                try
-                {
-                    await dnsService.UpsertRecordAsync(
-                        dns.Domain,
-                        new UpsertDnsRecordRequest
-                        {
-                            Type = record.Type,
-                            Host = record.Host,
-                            Value = record.Value,
-                            Priority = record.Priority,
-                            Ttl = 3600
-                        },
-                        cancellationToken);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    logger.LogWarning(exception, "Posta kaydi yazilamadi: {Type} {Host}", record.Type, record.Host);
-                    hatalar.Add($"{record.Type} {record.Host}: {DescribeError(exception)}");
-                }
+                await dnsService.UpsertRecordsAsync(
+                    dns.Domain,
+                    applicable.Select(record => new UpsertDnsRecordRequest
+                    {
+                        Type = record.Type,
+                        Host = record.Host,
+                        Value = record.Value,
+                        Priority = record.Priority,
+                        Ttl = 3600
+                    }).ToList(),
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Posta kayitlari yazilamadi: {Domain}", dns.Domain);
+                hatalar.Add(DescribeError(exception));
             }
 
             MailRecordErrors = hatalar;

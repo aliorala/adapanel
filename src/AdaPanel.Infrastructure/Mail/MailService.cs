@@ -269,24 +269,27 @@ public sealed class MailService(
         try
         {
             var dns = await GetDnsRecordsAsync(domain, cancellationToken);
-            var yazilan = 0;
-            foreach (var record in dns.Records.Where(item => !string.IsNullOrWhiteSpace(item.Value)))
+
+            // TEK senkron: kayitlari tek tek yazmak her seferinde bolgeyi bastan yaziyor ve
+            // uzun DKIM TXT'sinin bolge kilidi bir sonraki yazmayi dusuruyordu.
+            var yazilacak = dns.Records
+                .Where(item => !string.IsNullOrWhiteSpace(item.Value))
+                .Select(record => new UpsertDnsRecordRequest
+                {
+                    Type = record.Type,
+                    Host = record.Host,
+                    Value = record.Value,
+                    Priority = record.Priority,
+                    Ttl = 3600
+                })
+                .ToList();
+
+            if (yazilacak.Count > 0)
             {
-                await dnsService.UpsertRecordAsync(
-                    dns.Domain,
-                    new UpsertDnsRecordRequest
-                    {
-                        Type = record.Type,
-                        Host = record.Host,
-                        Value = record.Value,
-                        Priority = record.Priority,
-                        Ttl = 3600
-                    },
-                    cancellationToken);
-                yazilan++;
+                await dnsService.UpsertRecordsAsync(dns.Domain, yazilacak, cancellationToken);
             }
 
-            logger.LogInformation("Mail DNS records published for {Domain}: {Count} record(s).", domain, yazilan);
+            logger.LogInformation("Mail DNS records published for {Domain}: {Count} record(s).", domain, yazilacak.Count);
         }
         catch (Exception exception)
         {
