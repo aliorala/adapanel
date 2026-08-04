@@ -133,3 +133,51 @@ public sealed class SchedulerOutputCaptureTests
             SchedulerService.ResolveLogFileName("gece yedegi"));
     }
 }
+
+/// <summary>
+/// Betik gorevinin kayitli eyleminden BETIK YOLUNUN geri cozulmesi.
+/// <para>
+/// CANLI OLAY: kullanici duzenlemeye bastiginda komut alaninda kendi .bat dosyasi yerine
+/// <c>cmd.exe</c> goruyordu. Sebep: bir .bat gorevi Windows'a <c>cmd.exe /c "...bat"</c> olarak
+/// kaydedilir ve panel bunu geri cozmuyordu. Yalnizca kozmetik degil: kullanici oyle kaydetse
+/// gorev betigini KAYBEDER, yalnizca cmd.exe calistiran bir goreve donerdi.
+/// </para>
+/// </summary>
+public sealed class ScriptActionUnwrapTests
+{
+    [Theory]
+    [InlineData(@"C:\inetpub\wwwroot\ornek.test\httpdocs\scripts\bot.bat", "")]
+    [InlineData(@"C:\bosluklu klasor\gece yedegi.cmd", "--tam")]
+    [InlineData(@"C:\betikler\temizlik.ps1", "")]
+    [InlineData(@"C:\betikler\temizlik.ps1", "-Gun 30")]
+    public void ScriptAction_RoundTripsBackToTheScriptPath(string yol, string ekArgumanlar)
+    {
+        var (execute, arguments) = ScriptTaskPlanner.BuildAction(yol, ekArgumanlar);
+
+        Assert.True(ScriptTaskPlanner.TryResolveScriptPath(execute, arguments, out var cozulenYol, out var cozulenArgs));
+        Assert.Equal(yol, cozulenYol);
+        Assert.Equal(ekArgumanlar, cozulenArgs);
+    }
+
+    // Cikti yakalama sarmali ile BIRLIKTE de calismali: gercek gorevlerde iki katman ust uste.
+    [Fact]
+    public void ScriptAction_RoundTripsEvenThroughTheOutputCaptureWrapper()
+    {
+        const string yol = @"C:\inetpub\wwwroot\ornek.test\httpdocs\scripts\bot.bat";
+        var (execute, arguments) = ScriptTaskPlanner.BuildAction(yol, string.Empty);
+        var sarili = SchedulerService.BuildLoggedArguments(execute, arguments, @"C:\gunluk\bot.log");
+
+        // Once cikti sarmali cozulur...
+        Assert.True(SchedulerService.TryUnwrapLoggedAction("cmd.exe", sarili, out var icExe, out var icArgs));
+        // ...sonra betik sarmali.
+        Assert.True(ScriptTaskPlanner.TryResolveScriptPath(icExe, icArgs, out var cozulenYol, out _));
+        Assert.Equal(yol, cozulenYol);
+    }
+
+    [Fact]
+    public void ScriptAction_IgnoresActionsItDidNotProduce()
+    {
+        Assert.False(ScriptTaskPlanner.TryResolveScriptPath("cmd.exe", "/c dir C:\\", out _, out _));
+        Assert.False(ScriptTaskPlanner.TryResolveScriptPath("curl.exe", "-fsSL \"https://ornek.test/\"", out _, out _));
+    }
+}

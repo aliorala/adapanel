@@ -75,10 +75,26 @@
           <small v-if="form.taskType === 'php'" class="field-hint">{{ t("panel.tasks.phpHint") }}</small>
           <small v-else-if="form.taskType === 'script'" class="field-hint">{{ t("panel.tasks.scriptHint") }}</small>
         </label>
-        <label v-if="form.taskType !== 'url'"><span class="field-label">{{ t("panel.tasks.arguments") }}</span><input v-model="form.arguments" /></label>
+        <label v-if="form.taskType !== 'url'">
+          <span class="field-label">{{ t("panel.tasks.arguments") }}</span>
+          <input v-model="form.arguments" />
+          <small class="field-hint">{{ t("panel.tasks.argumentsHint") }}</small>
+        </label>
+
+        <!-- SYSTEM ortamı uyarısı. Kullanıcının en pahalı yanılgısı bu: komut kendi terminalinde
+             çalıştığı için görevde de çalışacağını sanıyor. Oysa SYSTEM'in PATH'i ayrıdır ve
+             "yalnızca benim için" kurulan araçlar (Python, node, git) ona hiç görünmez. Uyarı
+             hatadan SONRA değil, komut yazılırken burada duruyor. -->
+        <p v-if="form.taskType === 'command' || form.taskType === 'script'" class="span-2 field-hint env-hint">
+          {{ t("panel.tasks.systemEnvHint") }}
+        </p>
+        <!-- Çalışma klasörü ipucu HER ZAMAN görünür. Önceden yalnızca yer tutucu metindi ve alana
+             bir şey yazılınca kayboluyordu; kullanıcı "buraya ne yazacağım" diye takılıp kaldı.
+             Doğru cevap "boş bırakın" olduğu için bunun okunması gerekiyor. -->
         <label v-if="form.taskType === 'command' || form.taskType === 'script'">
           <span class="field-label">{{ t("panel.tasks.workingDirectory") }}</span>
-          <input v-model.trim="form.workingDirectory" :placeholder="form.taskType === 'script' ? t('panel.tasks.workingDirectoryScriptHint') : ''" />
+          <input v-model.trim="form.workingDirectory" />
+          <small class="field-hint">{{ t("panel.tasks.workingDirectoryHint") }}</small>
         </label>
         <label>
           <span class="field-label">{{ t("panel.tasks.scheduleType") }}</span>
@@ -88,7 +104,11 @@
             <option value="minute">{{ t("panel.tasks.minutely") }}</option>
           </select>
         </label>
-        <label><span class="field-label">{{ t("panel.tasks.interval") }}</span><input v-model.number="form.interval" type="number" min="1" /></label>
+        <label>
+          <span class="field-label">{{ t("panel.tasks.interval") }}</span>
+          <input v-model.number="form.interval" type="number" min="1" />
+          <small class="field-hint">{{ t("panel.tasks.intervalHint") }}</small>
+        </label>
         <label v-if="form.scheduleType === 'daily'">
           <span class="field-label">{{ t("panel.tasks.timeOfDay") }}</span>
           <input v-model="form.timeOfDay" type="time" />
@@ -805,6 +825,15 @@ function resolveApiMessage(error: unknown) {
   display: block;
   opacity: 0.75;
   margin-top: 0.2rem;
+}
+
+.env-hint {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  border-left: 3px solid var(--warn-border, #e0b400);
+  background: var(--warn-bg, rgba(224, 180, 0, 0.07));
+  line-height: 1.5;
 }
 
 .editing-banner {

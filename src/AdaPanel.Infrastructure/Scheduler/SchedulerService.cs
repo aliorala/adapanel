@@ -220,6 +220,16 @@ $tasks | ConvertTo-Json -Depth 5";
             else if (ScriptTaskPlanner.IsScriptAction(task.Command, task.Arguments))
             {
                 task.TaskType = "script";
+
+                // Betik gorevinde form "Komut" alaninda BETIK DOSYASINI bekler. Kayitta ise
+                // "cmd.exe /c ..." ya da "powershell.exe -File ..." durur. Geri cozulmezse hem
+                // listede hem duzenleme ekraninda "cmd.exe" gorunur; kullanici oyle kaydederse
+                // gorev BETIGINI KAYBEDER ve yalnizca cmd.exe calistiran bir goreve doner.
+                if (ScriptTaskPlanner.TryResolveScriptPath(task.Command, task.Arguments, out var betikYolu, out var ekArgumanlar))
+                {
+                    task.Command = betikYolu;
+                    task.Arguments = ekArgumanlar;
+                }
             }
             else
             {

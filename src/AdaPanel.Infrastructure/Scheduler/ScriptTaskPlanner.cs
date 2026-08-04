@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace AdaPanel.Infrastructure.Scheduler;
 
 /// <summary>
@@ -173,6 +175,61 @@ internal static class ScriptTaskPlanner
     internal const string LimitedUserId = @"NT AUTHORITY\LOCAL SERVICE";
 
     /// <summary>Kayıtlı bir görevin eyleminden "script" tipini geri türetir (liste ekranı için).</summary>
+    /// <summary>
+    /// Kayıtlı eylemden BETİK DOSYASININ yolunu ve kullanıcının verdiği ek argümanları geri çözer.
+    /// <para>
+    /// Neden gerekli: bir .bat görevi Windows'a <c>cmd.exe /c "C:\...\bot.bat"</c> olarak kaydedilir,
+    /// .ps1 görevi ise <c>powershell.exe -File "C:\...\bot.ps1"</c> olarak. Panel bunları geri
+    /// çözmezse listede ve düzenleme ekranında komut olarak <c>cmd.exe</c> görünür — kullanıcı kendi
+    /// betiğini göremez ve düzenlemeye bastığında forma yanlış değer dolar. Kaydederse görev
+    /// <c>cmd.exe</c> çalıştıran bir göreve dönüşür, yani betiğini kaybeder.
+    /// </para>
+    /// </summary>
+    internal static bool TryResolveScriptPath(string? execute, string? arguments, out string scriptPath, out string extraArguments)
+    {
+        scriptPath = string.Empty;
+        extraArguments = string.Empty;
+
+        var command = execute ?? string.Empty;
+        var argument = (arguments ?? string.Empty).Trim();
+
+        if (command.EndsWith("powershell.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            var match = Regex.Match(argument, "-File\\s+\"(?<yol>[^\"]+)\"(?<kalan>.*)$", RegexOptions.Singleline);
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            scriptPath = match.Groups["yol"].Value;
+            extraArguments = match.Groups["kalan"].Value.Trim();
+            return true;
+        }
+
+        if (!command.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase) ||
+            !argument.StartsWith("/c", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // /c "<"yol" ek argumanlar>" -- dis tirnak cifti soyulur, sonra ilk tirnakli parca yoldur.
+        var ic = argument[2..].Trim();
+        if (ic.StartsWith('"') && ic.EndsWith('"') && ic.Length > 1)
+        {
+            ic = ic[1..^1];
+        }
+
+        var yolEslesme = Regex.Match(ic, "^\"(?<yol>[^\"]+)\"(?<kalan>.*)$", RegexOptions.Singleline);
+        if (!yolEslesme.Success)
+        {
+            return false;
+        }
+
+        scriptPath = yolEslesme.Groups["yol"].Value;
+        extraArguments = yolEslesme.Groups["kalan"].Value.Trim();
+        return true;
+    }
+
     internal static bool IsScriptAction(string? execute, string? arguments)
     {
         var command = execute ?? string.Empty;
