@@ -139,6 +139,213 @@ public sealed class WebDbClientService(
         return new WebDbSignonDto { Url = $"/api/v1/dbtools/phpmyadmin/adapanel-signon.php?token={token}" };
     }
 
+
+    /// <summary>
+    /// Adminer'i TEK TIKLA acacak baglantiyi uretir.
+    /// <para>
+    /// Adminer'in phpMyAdmin gibi bir "signon" kipi YOKTUR. Bunun yerine belgelenmis eklenti
+    /// mekanizmasi kullanilir: adminer_object() ile dondurulen sinifta credentials() ve login()
+    /// gecersiz kilinirsa Adminer o kimlikle oturum acar. Sarmalayici PHP asagida yaziliyor.
+    /// </para>
+    /// <para>
+    /// Kimlik secimi phpMyAdmin ile AYNI: veritabaninin kendi kullanicisinin parolasi panelde
+    /// kayitliysa onunla girilir (gercek izolasyon), degilse root'a dusulur. Root'a dusuldugunde
+    /// bile sarmalayicidaki databases() filtresi listeyi TEK veritabaniyla sinirlar -- yoksa
+    /// yonetici yetkisiyle acilan bir oturum diger musterilerin veritabanlarini goz onune sererdi.
+    /// </para>
+    /// </summary>
+    public async Task<WebDbSignonDto> CreateAdminerSignonAsync(
+        string engine,
+        string? databaseName,
+        CancellationToken cancellationToken = default)
+    {
+        var states = await fileStore.ReadAsync(StatePath, Array.Empty<WebDbState>(), cancellationToken);
+        var state = states.FirstOrDefault(item => item.Provider == "adminer");
+        if (state is null || string.IsNullOrWhiteSpace(state.EntryFilePath))
+        {
+            throw new AppException("webdb.health.not_deployed", 409, 409);
+        }
+
+        var entryRoot = Path.GetDirectoryName(state.EntryFilePath)!;
+        await EnsureAdminerSignonAsync(entryRoot, cancellationToken);
+        HardenWebDbWebConfig(entryRoot);
+
+        var engineKey = (engine ?? string.Empty).Trim().ToLowerInvariant();
+        var (port, rootComponentId) = engineKey == "mysql"
+            ? (3307, "mysql-8")
+            : (3306, "mariadb-11");
+
+        var user = "root";
+        var password = await ResolveRootPasswordAsync(rootComponentId, cancellationToken);
+        string? onlyDb = null;
+
+        if (!string.IsNullOrWhiteSpace(databaseName))
+        {
+            onlyDb = databaseName.Trim();
+            var cred = await credentialStore.FindForDatabaseAsync(engineKey, onlyDb, cancellationToken);
+            if (cred is not null && !string.IsNullOrWhiteSpace(cred.Value.Password))
+            {
+                user = cred.Value.UserName;
+                password = cred.Value.Password;
+            }
+        }
+
+        var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
+        Directory.CreateDirectory(tokensDir);
+        // Sarmalayici belirteci OKUYUP SILER: uygulama havuzuna yazma izni gerekir.
+        GrantAppPoolWrite(tokensDir);
+        CleanupOldTokens(tokensDir);
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            user,
+            password,
+            host = "127.0.0.1",
+            port = port.ToString(),
+            only_db = onlyDb ?? string.Empty
+        });
+        await File.WriteAllTextAsync(
+            Path.Combine(tokensDir, token + ".json"),
+            payload,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            cancellationToken);
+
+        // Adres panel-GORELI: tarayici ham IIS portuna degil panelin kimlik-dogrulamali vekiline
+        // gider. Ham port loopback'e bagli oldugu icin disaridan zaten 400 donerdi.
+        return new WebDbSignonDto { Url = $"/api/v1/dbtools/adminer/adapanel-signon.php?token={token}" };
+    }
+
+    /// <summary>
+    /// Adminer sarmalayicisini diske yazar. Her acilista tazelenir ki panel guncellemesiyle gelen
+    /// duzeltmeler yeniden dagitim beklemeden uygulansin.
+    /// </summary>
+    private static async Task EnsureAdminerSignonAsync(string entryRoot, CancellationToken cancellationToken)
+    {
+        const string signon = """
+<?php
+/*
+ * AdaPanel — Adminer tek tıkla giriş.
+ *
+ * phpMyAdmin'in "signon" kipinin Adminer karşılığı. Adminer'in signon diye bir kipi YOKTUR;
+ * bunun yerine belgelenmiş eklenti mekanizması kullanılır: adminer_object() ile döndürülen
+ * sınıfta credentials() ve login() geçersiz kılınırsa Adminer o kimlikle oturum açar.
+ *
+ * Belirteç TEK KULLANIMLIKTIR ve okunur okunmaz silinir. Kalıcı olsaydı, tarayıcı geçmişinde
+ * ya da sunucu günlüğünde kalan bir adres veritabanına sınırsız erişim verirdi.
+ */
+
+// Belirteç yalnızca onaltılık olabilir. Bu, dosya adının yola çevrilmesinden ÖNCE yapılır:
+// "../" gibi bir girdi panelin veri klasörünün dışına çıkabilirdi.
+$adaToken = isset($_GET['token']) ? preg_replace('/[^a-f0-9]/', '', (string) $_GET['token']) : '';
+if ($adaToken === '' || strlen($adaToken) < 16) {
+    http_response_code(403);
+    exit('Gecersiz baglanti.');
+}
+
+$adaFile = __DIR__ . DIRECTORY_SEPARATOR . 'adapanel-tokens' . DIRECTORY_SEPARATOR . $adaToken . '.json';
+if (!is_file($adaFile)) {
+    // Belirteç yok ya da zaten kullanılmış. İkisi de aynı mesajı alır: hangisinin olduğunu
+    // söylemek, geçerli belirteç aramaya çalışan birine bilgi vermek olurdu.
+    http_response_code(403);
+    exit('Baglanti suresi dolmus. Panelden yeniden acin.');
+}
+
+$adaRaw = file_get_contents($adaFile);
+@unlink($adaFile); // TEK KULLANIMLIK: okundu, artık yok.
+
+$adaData = json_decode($adaRaw, true);
+if (!is_array($adaData) || !isset($adaData['user'])) {
+    http_response_code(500);
+    exit('Baglanti bilgisi okunamadi.');
+}
+
+$GLOBALS['ADA_LOGIN'] = $adaData;
+
+/*
+ * Adminer bir oturum denemesi olduğunu anlamak için POST/GET'te kimlik alanı arar. Alanlar
+ * doldurulmazsa credentials() hiç çağrılmaz ve kullanıcı yine giriş formunu görür — yani
+ * otomatik giriş sessizce çalışmaz.
+ */
+$_POST['auth'] = array(
+    'driver'   => 'server',
+    'server'   => $adaData['host'] . ':' . $adaData['port'],
+    'username' => $adaData['user'],
+    'password' => isset($adaData['password']) ? $adaData['password'] : '',
+    'db'       => isset($adaData['only_db']) ? $adaData['only_db'] : '',
+);
+
+function adminer_object()
+{
+    class AdaPanelAdminer extends Adminer
+    {
+        public function name()
+        {
+            return 'AdaPanel';
+        }
+
+        public function credentials()
+        {
+            $ada = $GLOBALS['ADA_LOGIN'];
+            return array(
+                $ada['host'] . ':' . $ada['port'],
+                $ada['user'],
+                isset($ada['password']) ? $ada['password'] : '',
+            );
+        }
+
+        /**
+         * Kimlik doğrulaması PANEL TARAFINDA zaten yapıldı: kullanıcı panele giriş yapmış,
+         * yönetici yetkisi doğrulanmış ve belirteç tek kullanımlık üretilmişti. Adminer'in
+         * kendi form doğrulamasını burada tekrarlamak, aynı kararı ikinci kez ve daha zayıf
+         * bilgiyle vermek olurdu.
+         */
+        public function login($login, $password)
+        {
+            return true;
+        }
+
+        public function database()
+        {
+            $ada = $GLOBALS['ADA_LOGIN'];
+            return isset($ada['only_db']) && $ada['only_db'] !== '' ? $ada['only_db'] : null;
+        }
+
+        /**
+         * Tek bir veritabanı için açıldıysa YALNIZCA o listelenir.
+         * <p>
+         * Panel bağlantıyı o veritabanının kendi kullanıcısıyla kurduğunda zaten başkasını
+         * göremez; ama kullanıcı bilinmediği için root'a düşüldüğünde bu filtre, yönetici
+         * yetkisiyle açılmış bir oturumda diğer müşterilerin veritabanlarını göz önüne
+         * sermemeyi sağlar.
+         * </p>
+         */
+        public function databases($flush = true)
+        {
+            $ada = $GLOBALS['ADA_LOGIN'];
+            if (isset($ada['only_db']) && $ada['only_db'] !== '') {
+                return array($ada['only_db']);
+            }
+
+            return parent::databases($flush);
+        }
+    }
+
+    return new AdaPanelAdminer();
+}
+
+// Adminer'in kendisi dağıtım sırasında webroot'a index.php olarak kopyalanır.
+require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
+
+""";
+
+        await File.WriteAllTextAsync(
+            Path.Combine(entryRoot, "adapanel-signon.php"),
+            signon,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            cancellationToken);
+    }
+
     // Panel reverse-proxy (B3) hedef portu: dağıtılmış aracın yerel IIS portu (IIS fallback seçmiş olabilir).
     public async Task<int> GetDeployedToolPortAsync(string provider, CancellationToken cancellationToken = default)
     {

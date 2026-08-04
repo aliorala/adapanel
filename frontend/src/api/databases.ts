@@ -188,6 +188,16 @@ export async function moveDatabase(engine: string, name: string, targetSiteName:
   );
 }
 
+// Adminer'i tek tikla acar: panel tek kullanimlik bir belirtec uretir, Adminer o kimlikle
+// oturum acar. Adminer'in signon kipi yoktur; eklenti mekanizmasi kullanilir.
+export async function openAdminer(engine: string, databaseName: string) {
+  const response = await apiClient.post<ApiEnvelope<{ url: string }>>("/webdb/adminer/open", {
+    engine,
+    databaseName
+  });
+  return response.data.data;
+}
+
 export type DatabaseUserRef = { userName: string; host: string };
 
 export type DatabaseDetail = {

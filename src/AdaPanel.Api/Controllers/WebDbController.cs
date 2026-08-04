@@ -41,6 +41,16 @@ public sealed class WebDbController(IWebDbClientService webDbClientService) : Co
         var signon = await webDbClientService.CreatePhpMyAdminSignonAsync(request.Engine, request.DatabaseName, cancellationToken);
         return Ok(ApiResponse<WebDbSignonDto>.Ok(signon));
     }
+
+    /// <summary>Adminer'i tek tıkla açacak tek seferlik URL üretir (DB başına izole).</summary>
+    [HttpPost("adminer/open")]
+    public async Task<ActionResult<ApiResponse<WebDbSignonDto>>> OpenAdminerAsync(
+        [FromBody] WebDbOpenRequest request,
+        CancellationToken cancellationToken)
+    {
+        var signon = await webDbClientService.CreateAdminerSignonAsync(request.Engine, request.DatabaseName, cancellationToken);
+        return Ok(ApiResponse<WebDbSignonDto>.Ok(signon));
+    }
 }
 
 public sealed class WebDbOpenRequest

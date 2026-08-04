@@ -20,5 +20,8 @@ public interface IWebDbClientService
     /// Dağıtılmış DB aracının (phpmyadmin/adminer) yerel IIS portunu döndürür (panel reverse-proxy hedefi).
     /// Dağıtılmamışsa 0.
     /// </summary>
+    /// <summary>Adminer'i tek tikla acacak baglantiyi uretir (tek kullanimlik belirtec).</summary>
+    Task<WebDbSignonDto> CreateAdminerSignonAsync(string engine, string? databaseName, CancellationToken cancellationToken = default);
+
     Task<int> GetDeployedToolPortAsync(string provider, CancellationToken cancellationToken = default);
 }
