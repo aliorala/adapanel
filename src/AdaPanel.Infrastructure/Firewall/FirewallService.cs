@@ -122,34 +122,56 @@ public sealed class FirewallService : IFirewallService
     // Etkin inbound Allow (TCP veya Any protokol) kurallarını okuyup port kapsamını çıkarır.
     // "Any" port -> tüm TCP kapsanır; "5000-5100" -> aralık; "587" -> tek port. AdaPanel kuralları DAHİL
     // tüm kurallara bakar (IIS'in 80/443 kuralları da sayılır). Hata olursa kapsam boş döner (engelli görünür).
-    private static async Task<(bool CoversAllTcp, List<(int Lo, int Hi)> Ranges)> ReadAllowCoverageAsync(CancellationToken cancellationToken)
+    private static async Task<(bool CoversAllTcp, List<(int Lo, int Hi)>? Ranges)> ReadAllowCoverageAsync(CancellationToken cancellationToken)
     {
         var script = """
-            Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction SilentlyContinue | ForEach-Object {
-              $pf = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $_ -ErrorAction SilentlyContinue | Select-Object -First 1;
+            # HIZ: kural basina Get-NetFirewallPortFilter cagirmak COM uzerinden N ayri sorgu demek
+            # ve yuzlerce kurali olan bir sunucuda DAKIKALAR surer. Sure asiminda sonuc bos doner ve
+            # panel butun portlari "kapali" sanardi. Iki TOPLU sorgu + bellekte birlestirme yapilir.
+            $kurallar = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction SilentlyContinue)
+            $sizintilar = @{}
+            foreach ($pf in @(Get-NetFirewallPortFilter -ErrorAction SilentlyContinue)) {
+              $sizintilar[[string]$pf.InstanceID] = $pf
+            }
+            $cikti = foreach ($kural in $kurallar) {
+              $pf = $sizintilar[[string]$kural.InstanceID]
               if ($pf) {
                 [pscustomobject]@{
                   Protocol = [string]$pf.Protocol
                   LocalPort = ($pf.LocalPort -join ',')
                 }
               }
-            } | ConvertTo-Json -Depth 3
+            }
+            [Console]::Out.WriteLine('ADAPANEL-KURAL=' + @($kurallar).Count)
+            $cikti | ConvertTo-Json -Depth 3
             """;
 
         try
         {
             var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-            if (!result.Success)
+
+            // OLCEMEDIK ile "kapali" AYRI seylerdir.
+            //
+            // Eski davranis: sorgu basarisiz olursa kapsam bos donuyordu ve panel butun portlari
+            // KAPALI sayiyordu. Canlida tam olarak bu oldu -- 80, 443, 143, 587 disaridan
+            // ERISILEBILIR oldugu halde panel hepsi icin "guvenlik duvarinda kapali" uyarisi
+            // verdi. Olcememeyi sorun saymak, kullaniciyi olmayan bir sorunu kovalamaya iter ve
+            // gercek uyarilara olan guveni yok eder.
+            if (!result.Success || !result.StandardOutput.Contains("ADAPANEL-KURAL=", StringComparison.Ordinal))
             {
-                return (false, new List<(int Lo, int Hi)>());
+                return (false, null);
             }
 
             var rows = DeserializeArray<FirewallPortFilterRow>(result.StandardOutput);
-            return ParseAllowCoverage(rows.Select(row => (row.Protocol, row.LocalPort)));
+            var (coversAll, ranges) = ParseAllowCoverage(rows.Select(row => (row.Protocol, row.LocalPort)));
+
+            // Hic kural okunamadiysa da olcum SAYILMAZ: bir Windows sunucusunda etkin gelen
+            // izin kuralinin sifir olmasi gercekci degildir, okuma basarisiz olmustur.
+            return rows.Count() == 0 ? (false, null) : (coversAll, ranges);
         }
         catch
         {
-            return (false, new List<(int Lo, int Hi)>());
+            return (false, null);
         }
     }
 
@@ -195,9 +217,19 @@ public sealed class FirewallService : IFirewallService
     }
 
     // Bir portun firewall kapsamında olup olmadığı (coversAll ise ya da bir aralığa düşüyorsa).
-    internal static bool IsPortCovered(int port, bool coversAllTcp, IReadOnlyList<(int Lo, int Hi)> ranges)
+    /// <summary>
+    /// Port guvenlik duvarinda ACIK mi?
+    /// <para>
+    /// <paramref name="ranges"/> null ise OLCUM YAPILAMAMISTIR ve "kapali" DENMEZ. Eski davranis
+    /// bunun tersiydi: sorgu basarisiz olunca kapsam bos donuyor, panel butun portlari kapali
+    /// sayiyordu. Canlida 80, 443, 143 ve 587 disaridan ERISILEBILIR oldugu halde panel hepsi
+    /// icin uyari verdi. Olcememeyi sorun saymak, kullaniciyi olmayan bir sorunu kovalamaya iter
+    /// ve gercek uyarilara olan guveni yok eder.
+    /// </para>
+    /// </summary>
+    internal static bool IsPortCovered(int port, bool coversAllTcp, IReadOnlyList<(int Lo, int Hi)>? ranges)
     {
-        if (coversAllTcp)
+        if (coversAllTcp || ranges is null)
         {
             return true;
         }
