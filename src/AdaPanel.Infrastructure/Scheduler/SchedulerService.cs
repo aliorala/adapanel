@@ -633,22 +633,9 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
         switch (taskType)
         {
             case "url":
-                // Adres yerine DOSYA YOLU yazildiysa ayri bir mesaj verilir.
-                //
-                // Neden: kullanici "C:\...\imdb-cron.php" yazip "gecersiz adres" cevabini aldiginda
-                // neyin yanlis oldugunu anlamiyor -- dosya orada, yol da dogru. Eksik olan sey
-                // dosyanin yanlis TIPTE aranmasi. Genel bir hata mesaji burada kullaniciyi dogru
-                // secenege goturmuyordu; artik hangi tipi secmesi gerektigi soyleniyor.
-                if (LooksLikeFilePath(request.Url ?? string.Empty) ||
-                    Path.IsPathFullyQualified((request.Url ?? string.Empty).Trim()))
+                if (!IsAcceptableTaskUrl(request.Url, out var urlHataKodu))
                 {
-                    throw new AppException("cron.url_is_a_file_path", 400, 400);
-                }
-
-                if (!Uri.TryCreate(request.Url?.Trim(), UriKind.Absolute, out var uri) ||
-                    (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-                {
-                    throw new AppException("cron.invalid_url", 400, 400);
+                    throw new AppException(urlHataKodu, 400, 400);
                 }
                 break;
             case "script":
@@ -681,6 +668,44 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
                 break;
         }
     }
+
+    /// <summary>
+    /// URL görevinin adresi kabul edilebilir mi; değilse HANGİ nedenle olmadığı.
+    /// <para>
+    /// SIRA ÖNEMLİ ve bunu bir kez yanlış yaptım: önce "dosya yolu mu" diye bakıyordum, oysa her
+    /// URL eğik çizgi içerir ve eğik çizgi Windows'ta da bir dizin ayırıcısıdır. Sonuç: geçerli
+    /// <c>https://…</c> adresleri de "bu bir dosya yolu" diye reddedildi — yani yardım etmek için
+    /// eklediğim mesaj, çalışan özelliği bozdu. Doğrusu ÖNCE gerçek ölçüm (bu, http/https bir
+    /// adres mi), yalnızca değilse tahmin (dosya yoluna mı benziyor).
+    /// </para>
+    /// </summary>
+    internal static bool IsAcceptableTaskUrl(string? url, out string errorCode)
+    {
+        var deger = (url ?? string.Empty).Trim();
+
+        if (Uri.TryCreate(deger, UriKind.Absolute, out var adres) &&
+            (adres.Scheme == Uri.UriSchemeHttp || adres.Scheme == Uri.UriSchemeHttps))
+        {
+            errorCode = string.Empty;
+            return true;
+        }
+
+        // Adres değil. Kullanıcı buraya sunucudaki bir dosyanın yolunu yazmış olabilir; o durumda
+        // "geçersiz adres" demek yardımcı olmuyor — dosya orada, yol da doğru, eksik olan tek şey
+        // dosyanın yanlış TİPTE aranması. Doğru seçeneğe yönlendiriyoruz.
+        errorCode = LooksLikeWindowsPath(deger) ? "cron.url_is_a_file_path" : "cron.invalid_url";
+        return false;
+    }
+
+    /// <summary>
+    /// Metin bir Windows dosya yoluna mı benziyor: "C:\…" ya da "\\sunucu\paylasim".
+    /// <para>
+    /// Yalnızca eğik çizgi aramak YETMEZ; her URL eğik çizgi içerir. Ayırt edici olan sürücü
+    /// harfi ya da UNC önekidir.
+    /// </para>
+    /// </summary>
+    internal static bool LooksLikeWindowsPath(string value) =>
+        Regex.IsMatch(value, @"^[a-zA-Z]:[\\/]") || value.StartsWith(@"\\", StringComparison.Ordinal);
 
     /// <summary>
     /// Komut, argümansız bir kabuk mu (cmd.exe / powershell.exe)?
