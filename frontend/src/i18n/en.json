@@ -645,7 +645,7 @@
   "panel.database.refresh": "Refresh database state",
   "panel.database.harden": "Harden security",
   "panel.database.hardening": "Hardening…",
-  "panel.database.hardenHint": "Sets a strong root password if it has none (stored by the panel), removes anonymous and remote (root@'%') accounts, and drops the empty default 'test' database. root@localhost keeps working (panel access stays).",
+  "panel.database.hardenHint": "Sets a strong password if root has none (the panel stores it), removes anonymous and remote (root@'%') accounts, drops the empty default 'test' database, and TIGHTENS OVER-BROAD DATABASE GRANTS (so one customer's grant cannot cover another customer's database). root@localhost keeps working — panel access is not lost.",
   "panel.database.hardenedClean": "Database already secure — no insecure accounts to remove.",
   "panel.database.hardenedRemoved": "Security applied: {items}",
   "database.hardened": "Database security hardened.",
