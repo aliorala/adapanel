@@ -99,8 +99,26 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
     /// cezalandırır; kurala dayalı koruma ise en fazla gereksiz sıkılık üretir.
     /// </para>
     /// </summary>
-    private static bool RequiresSecureEntryHeader(PathString path)
+    internal static bool RequiresSecureEntryHeader(PathString path)
     {
+        // TARAYICININ KENDİSİNİN GEZDİĞİ yollar başlık isteyemez.
+        //
+        // /api/v1/dbtools, phpMyAdmin'in TAMAMINI panelin HTTPS'i arkasından sunan bir ters
+        // vekildir: HTML sayfaları, CSS/JS varlıkları, AJAX çağrıları ve form gönderimleri
+        // hepsi oradan geçer. Bunlar tarayıcının kendi istekleridir; bir sayfaya gidilirken ya
+        // da bir form gönderilirken özel başlık EKLENEMEZ. Kural buraya da uygulandığında
+        // "phpMyAdmin'de aç" düğmesi ham bir 404 JSON'ı gösterir hâle geldi.
+        //
+        // Koruma kaybolmuyor: bu denetleyici [Authorize(Roles = "Administrator")] ile ÇEREZ
+        // tabanlı kimlik doğrular, giriş bağlantısı tek kullanımlık yüksek entropili bir
+        // belirteç taşır ve IP kısıtlaması bu metottan ÖNCE zaten uygulanmıştır. Gizli giriş
+        // yolu başlığı programatik API erişimine karşı bir tarama önlemidir; tarayıcının
+        // gezdiği bir yüzeyde işlevi yoktur. Aynı gerekçeyle /mcp de muaf tutulmuştu.
+        if (path.StartsWithSegments("/api/v1/dbtools", out _))
+        {
+            return false;
+        }
+
         // Anonim uclar (health, setup) daha yukarida IsAlwaysPublicPath ile ayrildi; buraya gelen
         // her /api istegi kimlige bagli veri tasir ve basligi ister.
         return path.StartsWithSegments("/api", out _);
