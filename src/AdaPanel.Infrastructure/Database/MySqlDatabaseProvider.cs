@@ -206,7 +206,7 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         {
             await using var command = connection.CreateCommand();
             command.CommandText = $"""
-                GRANT {BuildPrivilegeClause(privileges)} ON {QuoteIdentifier(databaseName)}.* TO '{userName.Replace("'", "''")}'@'{allowedHost.Replace("'", "''")}';
+                GRANT {BuildPrivilegeClause(privileges)} ON {EscapeGrantDatabaseName(databaseName)}.* TO '{userName.Replace("'", "''")}'@'{allowedHost.Replace("'", "''")}';
                 FLUSH PRIVILEGES;
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -337,6 +337,22 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             {
                 // en iyi çaba — tek hesabın hatası diğerlerini engellemesin
             }
+        }
+
+        // JOKER YETKİ TEMİZLİĞİ.
+        //
+        // Panel yetkileri uzun süre kaçırmadan verdi: `musteri1_db` için verilen yetki, MySQL'in
+        // joker semantiği yüzünden `musteri1Xdb` gibi desene uyan BAŞKA müşterilerin
+        // veritabanlarını da kapsıyordu. Üretim tarafı düzeltildi ama ESKİ yetkiler sunucuda
+        // olduğu gibi durur; kod düzeltmesi onlara dokunmaz. Burada daraltılırlar.
+        try
+        {
+            var daraltilan = await GrantWildcardRepair.RepairAsync(connection, cancellationToken);
+            removed.AddRange(daraltilan.Select(kayit => $"yetki daraltıldı: {kayit}"));
+        }
+        catch (MySqlException)
+        {
+            // Temizlik yapılamaması diğer sertleştirme adımlarını geçersiz kılmamalı.
         }
 
         // Kimlik zinciri sadeleştirmesi sertleştirmenin SON adımıdır ve başarısızlığı ondan önceki
@@ -530,6 +546,37 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
     private static string QuoteIdentifier(string value)
     {
         return $"`{value}`";
+    }
+
+    /// <summary>
+    /// GRANT ifadesindeki VERİTABANI ADI için tanımlayıcıyı kaçırır.
+    /// <para>
+    /// GÜVENLİK — burada <see cref="QuoteIdentifier"/> YETMEZ. GRANT ifadesinin veritabanı adı
+    /// bölümünde <c>_</c> ve <c>%</c> karakterleri ters tırnak içinde bile JOKER olarak
+    /// yorumlanır. Yani:
+    /// </para>
+    /// <code>
+    /// GRANT ALL ON `musteri1_db`.* TO 'u'@'localhost';
+    /// </code>
+    /// <para>
+    /// yalnızca <c>musteri1_db</c>'ye değil, <c>musteri1Xdb</c>, <c>musteri1-db</c> gibi desene
+    /// uyan HER veritabanına yetki verir. Panelin veritabanı adı kuralı alt çizgiye izin veriyor
+    /// ve alt çizgi hosting adlarında neredeyse kuraldır (<c>site_wp</c>, <c>musteri_db</c>).
+    /// </para>
+    /// <para>
+    /// Çok kiracılı bir panelde sonucu şudur: bir müşterinin veritabanı kullanıcısı, adı desene
+    /// uyan BAŞKA bir müşterinin veritabanını okuyup yazabilir. Yani yatay yetki yükseltmesi.
+    /// Kaçırma bu yüzden GRANT'a özgüdür ve atlanamaz.
+    /// </para>
+    /// </summary>
+    internal static string EscapeGrantDatabaseName(string value)
+    {
+        var kacirilmis = (value ?? string.Empty)
+            .Replace("\\", "\\\\")
+            .Replace("_", "\\_")
+            .Replace("%", "\\%");
+
+        return $"`{kacirilmis}`";
     }
 
     private static string BuildPrivilegeClause(IReadOnlyCollection<string> privileges)
