@@ -129,6 +129,16 @@ public sealed class CronController(
     }
 
     /// <summary>
+    /// Görevin son çalışmasında ürettiği çıktı (stdout + stderr).
+    /// </summary>
+    [HttpGet("{name}/output")]
+    public async Task<ActionResult<ApiResponse<ScheduledTaskOutputDto>>> GetTaskOutputAsync(string name, CancellationToken cancellationToken)
+    {
+        var cikti = await schedulerService.GetTaskOutputAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
+        return Ok(ApiResponse<ScheduledTaskOutputDto>.Ok(cikti, "cron.output"));
+    }
+
+    /// <summary>
     /// Takılı kalmış bir çalışmayı durdurur. Görev SİLİNMEZ, devre dışı da bırakılmaz; yalnızca
     /// sürmekte olan tur sonlandırılır ve görev bir sonraki zamanında normal çalışmaya döner.
     /// </summary>

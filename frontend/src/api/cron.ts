@@ -19,6 +19,8 @@ export type ScheduledTask = {
   nextRunTimeUtc: string | null;
   lastRunTimeUtc: string | null;
   lastTaskResult: number | null;
+  // Çıktı yakalama eklenmeden önce kaydedilmiş görevlerde false olur.
+  capturesOutput: boolean;
 };
 
 export async function getScheduledTasks() {
@@ -69,6 +71,22 @@ export type ScheduledTaskStatus = {
 export async function getScheduledTaskStatus(name: string) {
   const response = await apiClient.get<ApiEnvelope<ScheduledTaskStatus>>(
     `/cron/${encodeURIComponent(name)}/status`
+  );
+  return response.data.data;
+}
+
+export type ScheduledTaskOutput = {
+  name: string;
+  available: boolean;
+  truncated: boolean;
+  writtenAtUtc: string | null;
+  content: string;
+};
+
+// Görevin son çalışmasında ürettiği çıktı (stdout + stderr).
+export async function getScheduledTaskOutput(name: string) {
+  const response = await apiClient.get<ApiEnvelope<ScheduledTaskOutput>>(
+    `/cron/${encodeURIComponent(name)}/output`
   );
   return response.data.data;
 }

@@ -5,11 +5,16 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using AdaPanel.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Scheduler;
 
-public sealed class SchedulerService(IIisSiteService siteService, ILogger<SchedulerService> logger) : ISchedulerService
+public sealed class SchedulerService(
+    IIisSiteService siteService,
+    IOptions<PanelRuntimeOptions> runtimeOptions,
+    ILogger<SchedulerService> logger) : ISchedulerService
 {
     private const string TaskPath = "\\AdaPanel\\";
 
@@ -18,6 +23,102 @@ public sealed class SchedulerService(IIisSiteService siteService, ILogger<Schedu
     /// <paramref name="PrincipalUserId"/> null ise görev bugünkü gibi SYSTEM olarak çalışır.
     /// </summary>
     internal sealed record ScriptPlan(string Execute, string Arguments, string WorkingDirectory, string? PrincipalUserId);
+
+    /// <summary>Görev çıktılarının tutulduğu klasör (panel veri kökü altında).</summary>
+    private string TaskLogDirectory => Path.Combine(
+        Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot)),
+        "logs",
+        "tasks");
+
+    /// <summary>
+    /// Görev adından güvenli bir dosya adı üretir.
+    /// <para>
+    /// Ad kullanıcıdan gelir ve "../" ya da ":" içerebilir; doğrudan yola eklemek panelin veri
+    /// kökünün DIŞINA yazmasına yol açardı. Ada ek olarak adın SHA-256 önekini de koyarız: yalnız
+    /// temizlenmiş ad kullanılsa, "yedek/gece" ile "yedek-gece" aynı dosyaya yazardı.
+    /// </para>
+    /// </summary>
+    internal static string ResolveLogFileName(string taskName)
+    {
+        var temiz = new string(taskName.Trim()
+            .Select(karakter => Path.GetInvalidFileNameChars().Contains(karakter) ? '_' : karakter)
+            .ToArray());
+
+        if (temiz.Length > 60)
+        {
+            temiz = temiz[..60];
+        }
+
+        var ozet = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(taskName.Trim())))[..8];
+
+        return $"{temiz}-{ozet}.log";
+    }
+
+    /// <summary>
+    /// Eylemi, çıktısı bir dosyaya yazılacak biçimde cmd.exe'ye sarar.
+    /// <para>
+    /// Windows Görev Zamanlayıcı komut çıktısını SAKLAMAZ; yalnızca çıkış kodunu tutar. Kullanıcı
+    /// "görev çalışmıyor" dediğinde elimizde sadece bir sayı oluyordu. Çıktıyı yakalamanın tek
+    /// yolu, komutu bir kabuğa sarıp yönlendirmektir.
+    /// </para>
+    /// <para>
+    /// ÇIKIŞ KODU KORUNUR: cmd /c, çalıştırdığı komutun çıkış kodunu döndürür — yani "son sonuç"
+    /// sütunu aynı anlamı taşımaya devam eder. Bu olmasaydı çıktı kazanıp teşhisi kaybederdik.
+    /// </para>
+    /// <para>
+    /// ">" kullanılır, ">>" DEĞİL: dosyada yalnızca SON çalışmanın çıktısı durur. Dakikada bir
+    /// çalışan bir görevde ekleme yapmak, kimsenin okumadığı ve sınırsız büyüyen bir dosya bırakırdı.
+    /// </para>
+    /// </summary>
+    internal static string BuildLoggedArguments(string execute, string arguments, string logPath)
+    {
+        // cmd /c "..." ayristirmasi: dis tirnaklar tamamen atilir ve ic kisim oldugu gibi calisir.
+        // Bu yuzden bosluklu yollari ic tirnakla sarmak SART, ve komutun tamami ek bir tirnak
+        // ciftinin icinde olmali -- yoksa cmd ilk tirnaktan son tirnaga kadarki her seyi program
+        // adi sanar. Bu bicim ("" ile baslayip "" ile biten) Microsoft'un belgeledigi calisan bicimdir.
+        var komut = $"\"{execute}\"";
+        if (!string.IsNullOrWhiteSpace(arguments))
+        {
+            komut += " " + arguments;
+        }
+
+        return $"/c \"{komut} > \"{logPath}\" 2>&1\"";
+    }
+
+    /// <summary>
+    /// Sarmalanmış bir eylemi geri çözer: cmd.exe kaydından asıl program ve argümanları çıkarır.
+    /// <para>
+    /// Gerekli çünkü panel görev tipini KAYITLI EYLEMDEN türetir (curl.exe → url, php.exe → php).
+    /// Sarmalama sonrası her görev "cmd.exe" görünürdü: tipler bozulur, URL sütunu boşalır ve
+    /// düzenleme ekranı yanlış dolardı. Yani çıktı kazanıp listeyi kaybederdik.
+    /// </para>
+    /// </summary>
+    internal static bool TryUnwrapLoggedAction(string execute, string arguments, out string realExecute, out string realArguments)
+    {
+        realExecute = execute;
+        realArguments = arguments;
+
+        if (!execute.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // /c "<"program" argumanlar> > "<gunluk>" 2>&1"
+        var match = Regex.Match(
+            arguments ?? string.Empty,
+            "^/c\\s+\"\"(?<exe>[^\"]+)\"(?<args>.*?)\\s*>\\s*\"[^\"]+\"\\s*2>&1\"$",
+            RegexOptions.Singleline);
+
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        realExecute = match.Groups["exe"].Value;
+        realArguments = match.Groups["args"].Value.Trim();
+        return true;
+    }
 
     public async Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default)
     {
@@ -60,6 +161,15 @@ $tasks | ConvertTo-Json -Depth 5";
             // JSON'dan null sizarsa NRE atmasin (PS tarafi [string] zorluyor ama kemer-askı).
             task.Command ??= string.Empty;
             task.Arguments ??= string.Empty;
+
+            // Cikti yakalama sarmalini GERI COZ: tip turetmesi ve ekranda gorunen komut, kullanicinin
+            // yazdigi sey olmali -- panelin onu nasil calistirdigi degil.
+            if (TryUnwrapLoggedAction(task.Command, task.Arguments, out var gercekKomut, out var gercekArgumanlar))
+            {
+                task.Command = gercekKomut;
+                task.Arguments = gercekArgumanlar;
+                task.CapturesOutput = true;
+            }
 
             // Görev tipini kayıtlı eylemden türet (URL curl ile, PHP php.exe ile çalışır).
             if (task.Command.EndsWith("curl.exe", StringComparison.OrdinalIgnoreCase))
@@ -149,6 +259,76 @@ foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction Silent
         }
     }
 
+    /// <summary>
+    /// Günlük dosyasının yolunu hazırlar; hazırlanamazsa null döner ve görev çıktı yakalamadan
+    /// kaydedilir.
+    /// <para>
+    /// SESSİZCE VAZGEÇMEK burada DOĞRU: çıktı kaydı bir kolaylıktır, görevin ön koşulu değildir.
+    /// Klasör oluşturulamadı diye kullanıcının görevini hiç kurmamak, kolaylık uğruna asıl işi
+    /// engellemek olurdu.
+    /// </para>
+    /// </summary>
+    private async Task<string?> PrepareLogPathAsync(string taskName, string? principalUserId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var klasor = TaskLogDirectory;
+            Directory.CreateDirectory(klasor);
+
+            // Sinirli kimlikle calisan gorev de kendi ciktisini yazabilmeli. Yazamazsa cmd
+            // yonlendirmesi basarisiz olur ve gorev HIC calismaz -- yani kolaylik, isi bozar.
+            if (!string.IsNullOrWhiteSpace(principalUserId))
+            {
+                var script = $@"& icacls.exe ""{EscapePowerShell(klasor)}"" /grant ""{EscapePowerShell(principalUserId)}:(OI)(CI)M"" | Out-Null";
+                await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            }
+
+            return Path.Combine(klasor, ResolveLogFileName(taskName));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Gorev cikti gunlugu hazirlanamadi ({TaskName}); gorev cikti kaydi olmadan kurulacak.", taskName);
+            return null;
+        }
+    }
+
+    public async Task<ScheduledTaskOutputDto> GetTaskOutputAsync(string name, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new AppException("cron.invalid_name", 400, 400);
+        }
+
+        var dosya = Path.Combine(TaskLogDirectory, ResolveLogFileName(name));
+        if (!File.Exists(dosya))
+        {
+            return new ScheduledTaskOutputDto { Name = name, Available = false };
+        }
+
+        // SON kisim okunur, tamami degil: bir gorev megabaytlarca cikti uretebilir ve tamamini
+        // tarayiciya tasimak hem sunucuyu hem sayfayi bogar. Kullanicinin aradigi hata mesaji da
+        // neredeyse her zaman SONDADIR.
+        const int EnFazlaBayt = 64 * 1024;
+        await using var akis = new FileStream(dosya, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var kirpildi = akis.Length > EnFazlaBayt;
+        if (kirpildi)
+        {
+            akis.Seek(-EnFazlaBayt, SeekOrigin.End);
+        }
+
+        using var okuyucu = new StreamReader(akis);
+        var icerik = await okuyucu.ReadToEndAsync(cancellationToken);
+
+        return new ScheduledTaskOutputDto
+        {
+            Name = name,
+            Available = true,
+            Truncated = kirpildi,
+            WrittenAtUtc = File.GetLastWriteTimeUtc(dosya),
+            Content = icerik.TrimEnd()
+        };
+    }
+
     public async Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -211,7 +391,8 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
         // saf yol/komut mantığı ScriptTaskPlanner'da, IIS'e bağımlı kısmı burada duruyor.
         var plan = await ResolveScriptPlanAsync(request, cancellationToken);
 
-        var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request, plan), cancellationToken);
+        var logPath = await PrepareLogPathAsync(request.Name, plan?.PrincipalUserId, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request, plan, logPath), cancellationToken);
         if (!result.Success)
         {
             // Uygulama havuzu kimliğiyle kayıt başarısızsa SYSTEM'e SESSİZCE DÜŞME — bu, kullanıcının
@@ -271,13 +452,22 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
         }
     }
 
-    internal static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan)
+    internal static string BuildCreateScript(CreateScheduledTaskRequest request, ScriptPlan? plan, string? logPath = null)
     {
         var scheduleType = request.ScheduleType.Trim().ToLowerInvariant();
         var interval = Math.Max(1, request.Interval);
         var (execute, arguments, workingDirectory) = plan is null
             ? ResolveAction(request)
             : (plan.Execute, plan.Arguments, plan.WorkingDirectory);
+
+        // Cikti yakalama: komut cmd.exe'ye sarilir ve ciktisi gunluk dosyasina yonlendirilir.
+        // Cikis kodu korunur (cmd /c calistirdigi komutun kodunu dondurur), bu yuzden "son sonuc"
+        // sutunu ayni anlami tasimaya devam eder.
+        if (!string.IsNullOrWhiteSpace(logPath))
+        {
+            arguments = BuildLoggedArguments(execute, arguments, logPath);
+            execute = "cmd.exe";
+        }
 
         // Tek tırnak + '' kaçışı: URL/komut içindeki $, ", & karakterleri PowerShell tarafından yorumlanmasın.
         var action = $"New-ScheduledTaskAction -Execute '{EscapeSingleQuoted(execute)}'";

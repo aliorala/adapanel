@@ -26,4 +26,10 @@ public sealed class ScheduledTaskDto
 
     /// <summary>Son çalışmanın çıkış kodu (0 = başarılı). Hiç çalışmadıysa/koşuyorsa Task Scheduler özel kodları döner.</summary>
     public long? LastTaskResult { get; set; }
+
+    /// <summary>
+    /// Görevin çıktısı bir dosyaya yazılıyor mu. Bu sürümden önce kaydedilmiş görevlerde false olur;
+    /// panel bunu görüp kullanıcıya çıktı kaydını açmayı önerebilir.
+    /// </summary>
+    public bool CapturesOutput { get; set; }
 }

@@ -18,6 +18,12 @@ public interface ISchedulerService
     /// </summary>
     Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Görevin SON çalışmasında ürettiği çıktı. Windows Görev Zamanlayıcı çıktıyı saklamaz; panel
+    /// görevi bir kabuğa sarıp kendi dosyasına yönlendirir ve buradan okur.
+    /// </summary>
+    Task<ScheduledTaskOutputDto> GetTaskOutputAsync(string name, CancellationToken cancellationToken = default);
+
     /// <summary>Görevi silmeden geçici olarak açar/kapatır.</summary>
     Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default);
 

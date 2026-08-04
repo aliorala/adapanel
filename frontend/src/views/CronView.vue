@@ -161,9 +161,21 @@
         <span class="run-dot" :class="{ spinning: runStates[item.name].phase === 'running' || runStates[item.name].phase === 'starting' }" aria-hidden="true"></span>
         <span class="run-text">
           {{ runMessage(item.name) }}
-          <!-- Görev Zamanlayıcı komut ÇIKTISINI saklamaz. Bunu söylememek, kullanıcının olmayan
-               bir çıktıyı aramasına yol açardı. -->
-          <small v-if="runStates[item.name].phase === 'done'">{{ t("panel.tasks.runNoOutput") }}</small>
+
+          <!-- Çıktı, sonucun HEMEN ALTINDA: "başarısız" demek yetmez, kullanıcının görmesi
+               gereken şey komutun ne yazdığıdır. -->
+          <template v-if="runStates[item.name].phase === 'done'">
+            <small v-if="outputLoading[item.name]">{{ t("panel.tasks.outputLoading") }}</small>
+            <template v-else-if="outputs[item.name]">
+              <small v-if="!outputs[item.name].available">{{ t("panel.tasks.outputNone") }}</small>
+              <small v-else-if="!outputs[item.name].content">{{ t("panel.tasks.outputEmpty") }}</small>
+              <template v-else>
+                <small>{{ t("panel.tasks.outputTitle") }}</small>
+                <small v-if="outputs[item.name].truncated">{{ t("panel.tasks.outputTruncated") }}</small>
+                <pre class="run-output">{{ outputs[item.name].content }}</pre>
+              </template>
+            </template>
+          </template>
         </span>
         <button class="ghost compact" @click="closeRunPanel(item.name)">{{ t("panel.tasks.runClose") }}</button>
       </div>
@@ -177,7 +189,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, getScheduledTaskStatus, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask } from "../api/cron";
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, getScheduledTaskOutput, getScheduledTaskStatus, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask, type ScheduledTaskOutput } from "../api/cron";
 import { getSites, type SiteRecord } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
@@ -369,6 +381,26 @@ type RunState = {
 };
 
 const runStates = reactive<Record<string, RunState>>({});
+const outputs = reactive<Record<string, ScheduledTaskOutput>>({});
+const outputLoading = reactive<Record<string, boolean>>({});
+
+/**
+ * Görev bittiğinde çıktısını çeker.
+ *
+ * Neden bitince ve tek sefer: dosyaya yalnızca çalışma boyunca yazılır ve son hâli asıl aranan
+ * şeydir. Çalışırken saniyede bir okumak, yarım yazılmış satırlar gösterirdi.
+ */
+async function loadOutput(name: string) {
+  outputLoading[name] = true;
+  try {
+    outputs[name] = await getScheduledTaskOutput(name);
+  } catch {
+    // Çıktı okunamadıysa BOŞ göstermeyiz: "çıktı yok" ile "okuyamadık" farklı şeylerdir.
+    delete outputs[name];
+  } finally {
+    outputLoading[name] = false;
+  }
+}
 
 // Aynı görev iki kez başlatılırsa ESKİ takip durmalı: yoksa iki döngü aynı satıra yazar.
 const runTimers: Record<string, number> = {};
@@ -383,11 +415,15 @@ function stopWatching(name: string) {
 function closeRunPanel(name: string) {
   stopWatching(name);
   delete runStates[name];
+  delete outputs[name];
+  delete outputLoading[name];
 }
 
 async function runTask(name: string) {
   runningName.value = name;
   stopWatching(name);
+  // Onceki calismanin ciktisi yeni turun ciktisi sanilmasin.
+  delete outputs[name];
   runStates[name] = { phase: "starting", seconds: 0, resultCode: null };
 
   try {
@@ -445,6 +481,7 @@ function watchRun(name: string) {
         runStates[name].phase = "done";
         runStates[name].resultCode = status.lastTaskResult;
         stopWatching(name);
+        void loadOutput(name);
         void refresh();
       })
       .catch(() => {
@@ -688,6 +725,21 @@ function resolveApiMessage(error: unknown) {
   display: block;
   opacity: 0.75;
   margin-top: 0.2rem;
+}
+
+.run-output {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.7rem;
+  max-height: 18rem;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.16));
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  /* Uzun satirlar sayfayi YATAY kaydirmasin; kutunun kendi icinde kalsin. */
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .run-dot {
