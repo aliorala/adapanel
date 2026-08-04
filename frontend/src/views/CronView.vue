@@ -128,6 +128,18 @@
           <span class="field-label">{{ t("panel.tasks.timeOfDay") }}</span>
           <input v-model="form.timeOfDay" type="time" />
         </label>
+        <!-- Süre sınırı ARTIK kullanıcının kararı. Sabit 4 saat, uzun süren meşru görevleri
+             her seferinde ortasında öldürüyordu. -->
+        <label class="span-2">
+          <span class="field-label">{{ t("panel.tasks.timeLimit") }}</span>
+          <select v-model.number="form.timeLimitHours">
+            <option :value="0">{{ t("panel.tasks.timeLimitNone") }}</option>
+            <option v-for="saat in [1, 4, 12, 24, 48]" :key="saat" :value="saat">
+              {{ t("panel.tasks.timeLimitHours", { hours: saat }) }}
+            </option>
+          </select>
+          <small class="field-hint">{{ t("panel.tasks.timeLimitHint") }}</small>
+        </label>
       </div>
       <div class="row-actions">
         <button :disabled="saving || !form.name || !formComplete" @click="saveTask">
@@ -416,7 +428,8 @@ function editTask(item: ScheduledTask) {
     runAs: item.runAs || "system",
     scheduleType: item.scheduleType || "hourly",
     interval: item.interval || 1,
-    timeOfDay: item.timeOfDay || "00:00"
+    timeOfDay: item.timeOfDay || "00:00",
+    timeLimitHours: item.timeLimitHours || 0
   });
 
   // Betik görevinde kapsam: sınırlı kimlik yalnızca SİTE betiğinde seçilebilir, dolayısıyla
@@ -516,7 +529,10 @@ function defaultForm() {
     runAs: "system",
     scheduleType: "hourly",
     interval: 1,
-    timeOfDay: "00:00"
+    timeOfDay: "00:00",
+    // 0 = sınırsız. Uzun süren meşru bir görevi ortasında kesmemek, takılan bir görevi
+    // beklemekten daha önemli: takılanı panel görüyor ve tek düğmeyle durdurulabiliyor.
+    timeLimitHours: 0
   };
 }
 

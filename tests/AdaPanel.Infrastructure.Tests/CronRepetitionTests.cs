@@ -86,3 +86,80 @@ public sealed class CronRepetitionTests
         Assert.Equal(beklenenAralik, aralik);
     }
 }
+
+/// <summary>
+/// Tek calismanin sure siniri.
+/// <para>
+/// CANLI OLAY: 0.2.66'da her goreve sabit 4 saatlik bir sinir koymustum. Kullanicinin uzun suren
+/// gorevi bu sinira takildi ve "Sure sinirina takildi, sonlandirildi" ile ORTASINDA olduruldu --
+/// kullanici da hakli olarak "cronlarda sure olmasin" dedi.
+/// </para>
+/// <para>
+/// Sinir artik gorev basina secilir ve varsayilani SINIRSIZ. Gerekce: sinir koymamanin riski
+/// takilan bir calismanin sonraki turlari engellemesidir, ama panel artik takilan calismayi GORUP
+/// tek dugmeyle durdurabiliyor -- yani o risk gorunur ve geri alinabilir. Yarida kesilen bir is
+/// ise geri alinamaz.
+/// </para>
+/// </summary>
+public sealed class CronTimeLimitTests
+{
+    private static string Script(int timeLimitHours) => SchedulerService.BuildCreateScript(
+        new AdaPanel.Core.Dtos.Scheduler.CreateScheduledTaskRequest
+        {
+            Name = "gorev",
+            TaskType = "url",
+            Url = "https://ornek.test/cron",
+            ScheduleType = "hourly",
+            Interval = 1,
+            TimeLimitHours = timeLimitHours
+        },
+        plan: null);
+
+    // Windows'ta sinirsiz PT0S ile ifade edilir; TimeSpan::Zero tam olarak onu uretir (olculdu).
+    [Fact]
+    public void ZeroHours_MeansNoLimitAtAll()
+    {
+        Assert.Contains("-ExecutionTimeLimit ([TimeSpan]::Zero)", Script(0), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    [InlineData(24)]
+    public void AChosenLimit_IsWrittenAsGiven(int saat)
+    {
+        Assert.Contains($"-ExecutionTimeLimit (New-TimeSpan -Hours {saat})", Script(saat), StringComparison.Ordinal);
+    }
+
+    // Gecersiz deger sessizce bir SINIR uretmemeli: negatif bir sayi yuzunden gorevin aninda
+    // oldurulmesi, kullanicinin hic beklemedigi bir davranis olurdu.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public void NegativeValues_FallBackToNoLimitInsteadOfAnAbsurdOne(int saat)
+    {
+        Assert.Contains("-ExecutionTimeLimit ([TimeSpan]::Zero)", Script(saat), StringComparison.Ordinal);
+    }
+
+    // Geri okuma: 24 saat P1D olarak saklanir. "PT<n>H" disindaki bicimleri kacirmamak icin ayni
+    // ISO 8601 cozumleyicisi kullanilir.
+    [Theory]
+    [InlineData("PT4H", 4)]
+    [InlineData("P1D", 24)]
+    [InlineData("PT12H", 12)]
+    public void StoredLimits_AreReadBackCorrectly(string iso, int beklenenSaat)
+    {
+        var dakika = SchedulerService.ParseRepetitionMinutes(iso);
+
+        Assert.NotNull(dakika);
+        Assert.Equal(beklenenSaat, dakika!.Value / 60);
+    }
+
+    // PT0S = sinirsiz; cozumleyici bunu "sifir" olarak degil, DEGER YOK olarak dondurmeli ki
+    // panel 0 (sinirsiz) gostersin.
+    [Fact]
+    public void UnlimitedIsReadBackAsUnlimited()
+    {
+        Assert.Null(SchedulerService.ParseRepetitionMinutes("PT0S"));
+    }
+}

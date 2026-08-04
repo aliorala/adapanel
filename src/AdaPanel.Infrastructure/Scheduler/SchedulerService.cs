@@ -152,12 +152,16 @@ public sealed class SchedulerService(
   # istemedigi bir YETKI YUKSELTMESI olurdu.
   $runAs = 'system'
   if ($_.Principal -and $_.Principal.UserId -and $_.Principal.RunLevel -ne 'Highest') {{ $runAs = 'limited' }}
+  # Sure siniri de HAM gonderilir; 24 saat P1D olarak saklandigi icin C# tarafinda cozulur.
+  $executionLimit = ''
+  if ($_.Settings) {{ $executionLimit = [string]$_.Settings.ExecutionTimeLimit }}
   [pscustomobject]@{{
     Name = $_.TaskName
     ScheduleType = $scheduleType
     RepetitionInterval = $repetitionInterval
     TimeOfDay = $timeOfDay
     RunAs = $runAs
+    ExecutionTimeLimit = $executionLimit
     State = $_.State.ToString()
     Command = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].Execute }} else {{ '' }}
     Arguments = if ($_.Actions.Count -gt 0) {{ [string]$_.Actions[0].Arguments }} else {{ '' }}
@@ -185,6 +189,12 @@ $tasks | ConvertTo-Json -Depth 5";
             // Tekrar araligi HAM haliyle geldi; burada cozulur. Cozulemeyen bir bicimde
             // "saatlik 1" varsayilanina DUSULMEZ -- o varsayilan, kullanicinin 24 saatlik gorevini
             // duzenledigi anda saatte bire cevirip gunde 24 kat daha sik calistiriyordu.
+            // Sure siniri: PT0S = sinirsiz (0). 24 saat P1D olarak saklanir, bu yuzden ayni
+            // ISO 8601 cozumleyicisi kullanilir -- "PT4H" disindaki her bicimi kacirmamak icin.
+            task.TimeLimitHours = ParseRepetitionMinutes(task.ExecutionTimeLimit) is { } limitDakika
+                ? limitDakika / 60
+                : 0;
+
             if (string.IsNullOrEmpty(task.ScheduleType) && ParseRepetitionMinutes(task.RepetitionInterval) is { } dakika)
             {
                 var (tip, aralik) = DescribeRepetition(dakika);
@@ -266,11 +276,19 @@ $tasks | ConvertTo-Json -Depth 5";
         var script = $@"$duzeltilen = 0
 foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction SilentlyContinue)) {{
   $s = $gorev.Settings
-  if ($s.DisallowStartIfOnBatteries -or $s.StopIfGoingOnBatteries -or -not $s.StartWhenAvailable -or $s.ExecutionTimeLimit -eq 'PT72H') {{
+  # Sure siniri artik KULLANICININ karari; onarim pasi genelde ona DOKUNMAZ.
+  #
+  # TEK ISTISNA, PANELIN KENDI DAYATTIGI 4 SAAT: 0.2.66-0.2.74 arasinda her gorev sorulmadan
+  # PT4H ile kaydedildi ve kullanicinin secme sansi hic olmadi. Yani bir gorevde PT4H gormek,
+  # kullanicinin tercihi degil BIZIM birakigimiz izdir; onu geri almak kullanicinin ayarini
+  # ezmek olmaz, tersine kendi hatamizi temizlemektir. Kullanicinin bilerek sectigi baska her
+  # deger (PT1H, P1D, PT0S...) oldugu gibi kalir.
+  $adaSureDuzeltilecek = ($s.ExecutionTimeLimit -eq 'PT4H')
+  if ($s.DisallowStartIfOnBatteries -or $s.StopIfGoingOnBatteries -or -not $s.StartWhenAvailable -or $adaSureDuzeltilecek) {{
     $s.DisallowStartIfOnBatteries = $false
     $s.StopIfGoingOnBatteries = $false
     $s.StartWhenAvailable = $true
-    if ($s.ExecutionTimeLimit -eq 'PT72H') {{ $s.ExecutionTimeLimit = 'PT4H' }}
+    if ($adaSureDuzeltilecek) {{ $s.ExecutionTimeLimit = 'PT0S' }}
     try {{
       Set-ScheduledTask -TaskPath $gorev.TaskPath -TaskName $gorev.TaskName -Settings $s -ErrorAction Stop | Out-Null
       $duzeltilen++
@@ -618,13 +636,23 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
         // bir batarya/UPS aygiti bildirir; panel bunu hic denetlemiyordu.
         //
         // MultipleInstances = IgnoreNew BILEREK korunur: bir onceki tur hala suruyorken ikincisini
-        // baslatmak, yavas bir gorevde surekli buyuyen bir surec yigini olusturur. Ama bu secim ancak
-        // ExecutionTimeLimit ile birlikte guvenlidir -- yoksa takilan TEK bir tur zamanlamanin
-        // tamamini uc gun boyunca sessizce oldururdu. 4 saat: gercekci her panel gorevine yeter,
-        // takilan bir tur ise ayni gun icinde kendiliginden temizlenir.
-        const string settings =
+        // baslatmak, yavas bir gorevde surekli buyuyen bir surec yigini olusturur.
+        //
+        // SURE SINIRI ARTIK KULLANICININ: 0.2.66'da sabit 4 saat koymustum ve bu, uzun suren
+        // MESRU bir gorevi (buyuk bir veri cekme, tam yedek) her seferinde ORTASINDA olduruyordu --
+        // kullanicinin gordugu tek sey "sure sinirina takildi" oluyordu. Sinir koymamanin riski
+        // takilan bir calismanin sonraki turlari engellemesi; ama panel artik takilan calismayi
+        // GORUP tek dugmeyle durdurabiliyor, yani o risk gorunur ve geri alinabilir. Yarida
+        // kesilen bir is ise geri alinamaz. Bu yuzden varsayilan SINIRSIZ.
+        //
+        // Windows'ta sinirsiz PT0S ile ifade edilir (olculdu).
+        var sureSiniri = Math.Max(0, request.TimeLimitHours) is var saat && saat > 0
+            ? $"(New-TimeSpan -Hours {saat})"
+            : "([TimeSpan]::Zero)";
+
+        var settings =
             "New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries " +
-            "-StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)";
+            $"-StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit {sureSiniri}";
 
         return $@"$ErrorActionPreference = 'Stop'
 if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -ErrorAction SilentlyContinue) {{

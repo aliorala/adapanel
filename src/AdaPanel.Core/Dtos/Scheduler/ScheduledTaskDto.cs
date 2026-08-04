@@ -64,4 +64,10 @@ public sealed class ScheduledTaskDto
 
     /// <summary>"system" ya da "limited" — görevin kayıtlı kimliğinden çözülür.</summary>
     public string RunAs { get; set; } = "system";
+
+    /// <summary>Tek çalışmanın süre sınırı (saat). 0 = sınırsız.</summary>
+    public int TimeLimitHours { get; set; }
+
+    /// <summary>Windows'un sakladığı HAM süre sınırı ("PT0S" = sınırsız, "P1D" = 24 saat).</summary>
+    public string ExecutionTimeLimit { get; set; } = string.Empty;
 }

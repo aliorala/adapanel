@@ -30,6 +30,8 @@ export type ScheduledTask = {
   timeOfDay: string;
   phpVersion: string;
   runAs: string;
+  // 0 = sinirsiz.
+  timeLimitHours: number;
 };
 
 export async function getScheduledTasks() {
@@ -52,6 +54,7 @@ export async function createScheduledTask(payload: {
   scheduleType: string;
   interval: number;
   timeOfDay: string;
+  timeLimitHours: number;
 }) {
   const response = await apiClient.post<ApiEnvelope<ScheduledTask>>("/cron", payload);
   return response.data.data;

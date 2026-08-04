@@ -41,4 +41,17 @@ public sealed class CreateScheduledTaskRequest
     public int Interval { get; set; } = 1;
 
     public string TimeOfDay { get; set; } = "00:00";
+
+    /// <summary>
+    /// Tek bir çalışmanın en çok kaç saat sürebileceği. 0 = SINIRSIZ.
+    /// <para>
+    /// Neden ayarlanabilir ve neden varsayılanı sınırsız: bir sınır koymak, uzun süren meşru bir
+    /// görevi (büyük bir veri çekme, tam yedek) her seferinde ORTASINDA öldürür — kullanıcı
+    /// görevin neden hiç bitmediğini anlamaz. Sınır koymamanın riski ise takılan bir çalışmanın
+    /// sonraki bütün turları engellemesidir; ama panel artık takılan çalışmayı GÖRÜP tek düğmeyle
+    /// durdurabildiği için bu risk görünür ve geri alınabilir. Yarıda kesilen bir iş ise geri
+    /// alınamaz.
+    /// </para>
+    /// </summary>
+    public int TimeLimitHours { get; set; }
 }
