@@ -118,6 +118,17 @@ public sealed class CronController(
     }
 
     /// <summary>
+    /// Tek görevin anlık durumu. "Şimdi çalıştır"dan sonra sayfa bunu kısa aralıklarla okuyup
+    /// kullanıcıya "çalışıyor / bitti / şu sonuçla bitti" der.
+    /// </summary>
+    [HttpGet("{name}/status")]
+    public async Task<ActionResult<ApiResponse<ScheduledTaskStatusDto>>> GetTaskStatusAsync(string name, CancellationToken cancellationToken)
+    {
+        var durum = await schedulerService.GetTaskStatusAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
+        return Ok(ApiResponse<ScheduledTaskStatusDto>.Ok(durum, "cron.status"));
+    }
+
+    /// <summary>
     /// Takılı kalmış bir çalışmayı durdurur. Görev SİLİNMEZ, devre dışı da bırakılmaz; yalnızca
     /// sürmekte olan tur sonlandırılır ve görev bir sonraki zamanında normal çalışmaya döner.
     /// </summary>

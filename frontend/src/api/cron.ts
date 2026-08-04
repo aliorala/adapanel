@@ -55,6 +55,24 @@ export async function runScheduledTask(name: string) {
   await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/run`);
 }
 
+export type ScheduledTaskStatus = {
+  name: string;
+  state: string;
+  isRunning: boolean;
+  lastTaskResult: number | null;
+  lastRunTimeUtc: string | null;
+};
+
+// Tek görevin anlık durumu — "Şimdi çalıştır"dan sonra canlı bilgi vermek için kısa aralıklarla
+// okunur. Tüm listeyi tazelemek yerine tek görevi sorar: liste turu her görevi gezen bir
+// PowerShell çalıştırması demek.
+export async function getScheduledTaskStatus(name: string) {
+  const response = await apiClient.get<ApiEnvelope<ScheduledTaskStatus>>(
+    `/cron/${encodeURIComponent(name)}/status`
+  );
+  return response.data.data;
+}
+
 // Takılı kalmış çalışmayı sonlandırır. Görev silinmez; bir sonraki zamanında normal çalışır.
 export async function stopScheduledTask(name: string) {
   await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/stop`);

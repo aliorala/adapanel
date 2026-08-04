@@ -149,6 +149,45 @@ foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction Silent
         }
     }
 
+    public async Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new AppException("cron.invalid_name", 400, 400);
+        }
+
+        // "Calisiyor mu" durum METNINDEN degil, Task Scheduler'in kendi durum sabitinden okunur:
+        // metin sunucunun diline gore degisir ve 'Running' kelimesini aramak Turkce bir Windows'ta
+        // sessizce yanlis cevap verir. State=4 (TASK_STATE_RUNNING) her dilde aynidir.
+        var script = $@"$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction SilentlyContinue
+if (-not $gorev) {{ '{{}}'; exit 0 }}
+$info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPath -ErrorAction SilentlyContinue
+[pscustomobject]@{{
+  Name = $gorev.TaskName
+  State = $gorev.State.ToString()
+  IsRunning = ([int]$gorev.State -eq 4)
+  LastTaskResult = if ($info) {{ [long]$info.LastTaskResult }} else {{ $null }}
+  LastRunTimeUtc = if ($info -and $info.LastRunTime -and ([datetime]$info.LastRunTime).Year -gt 2000) {{ ([datetime]$info.LastRunTime).ToUniversalTime().ToString('o') }} else {{ $null }}
+}} | ConvertTo-Json -Depth 3";
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("cron.read_failed", 500, 500, result.StandardError);
+        }
+
+        var durum = JsonSerializer.Deserialize<ScheduledTaskStatusDto>(
+            result.StandardOutput.Trim(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (durum is null || string.IsNullOrWhiteSpace(durum.Name))
+        {
+            throw new AppException("cron.not_found", 404, 404);
+        }
+
+        return durum;
+    }
+
     public async Task StopTaskAsync(string name, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name))

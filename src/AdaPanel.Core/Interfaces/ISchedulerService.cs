@@ -13,6 +13,11 @@ public interface ISchedulerService
     /// <summary>Görevi beklemeden hemen tetikler ("Şimdi çalıştır").</summary>
     Task RunTaskAsync(string name, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Tek bir görevin anlık durumu — "Şimdi çalıştır"dan sonra sayfanın canlı bilgi verebilmesi için.
+    /// </summary>
+    Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default);
+
     /// <summary>Görevi silmeden geçici olarak açar/kapatır.</summary>
     Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default);
 

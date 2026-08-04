@@ -126,7 +126,8 @@
         <span>{{ t("panel.tasks.lastRun") }}</span>
         <span>{{ t("panel.files.actions") }}</span>
       </div>
-      <div v-for="item in filteredTasks" :key="item.name" class="data-row cron-row">
+      <template v-for="item in filteredTasks" :key="item.name">
+      <div class="data-row cron-row">
         <span class="cell-main">
           <strong>{{ item.name }}</strong>
           <small>{{ typeLabel(item.taskType) }}</small>
@@ -153,6 +154,20 @@
           </button>
         </span>
       </div>
+
+      <!-- Canlı bilgi, görevin KENDİ satırının hemen altında: kullanıcı gözünü tablonun başka bir
+           yerine kaydırmadan ne olduğunu görür. -->
+      <div v-if="runStates[item.name]" :class="['run-live', runClass(item.name)]">
+        <span class="run-dot" :class="{ spinning: runStates[item.name].phase === 'running' || runStates[item.name].phase === 'starting' }" aria-hidden="true"></span>
+        <span class="run-text">
+          {{ runMessage(item.name) }}
+          <!-- Görev Zamanlayıcı komut ÇIKTISINI saklamaz. Bunu söylememek, kullanıcının olmayan
+               bir çıktıyı aramasına yol açardı. -->
+          <small v-if="runStates[item.name].phase === 'done'">{{ t("panel.tasks.runNoOutput") }}</small>
+        </span>
+        <button class="ghost compact" @click="closeRunPanel(item.name)">{{ t("panel.tasks.runClose") }}</button>
+      </div>
+      </template>
       <p v-if="loading && filteredTasks.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
       <p v-else-if="filteredTasks.length === 0" class="empty-state">{{ t("panel.tasks.empty") }}</p>
     </div>
@@ -160,9 +175,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask } from "../api/cron";
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, getScheduledTaskStatus, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask } from "../api/cron";
 import { getSites, type SiteRecord } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
@@ -340,18 +355,139 @@ async function loadSites() {
 }
 
 // Görevi hemen tetikle; birkaç saniye sonra listeyi yenile ki "son çalışma" sütunu sonucu göstersin.
+/**
+ * "Şimdi çalıştır" sonrası CANLI bilgi.
+ *
+ * Öncesinde düğmeye basmak sessizdi: görev tetikleniyor, sayfa 4 saniye sonra bir kez tazeleniyordu.
+ * 10 saniye süren bir görevde kullanıcı hiçbir şey görmüyor, bittiğini de nereden anlayacağını
+ * bilmiyordu. Artık görevin kendi satırının altında "çalışıyor → bitti: <sonuç>" yazıyor.
+ */
+type RunState = {
+  phase: "starting" | "running" | "done" | "unknown";
+  seconds: number;
+  resultCode: number | null;
+};
+
+const runStates = reactive<Record<string, RunState>>({});
+
+// Aynı görev iki kez başlatılırsa ESKİ takip durmalı: yoksa iki döngü aynı satıra yazar.
+const runTimers: Record<string, number> = {};
+
+function stopWatching(name: string) {
+  if (runTimers[name]) {
+    window.clearInterval(runTimers[name]);
+    delete runTimers[name];
+  }
+}
+
+function closeRunPanel(name: string) {
+  stopWatching(name);
+  delete runStates[name];
+}
+
 async function runTask(name: string) {
   runningName.value = name;
+  stopWatching(name);
+  runStates[name] = { phase: "starting", seconds: 0, resultCode: null };
+
   try {
     await runScheduledTask(name);
-    showNotice(t("panel.tasks.runStarted"), false);
-    window.setTimeout(() => void refresh(), 4000);
+    watchRun(name);
   } catch (error) {
+    delete runStates[name];
     showNotice(resolveApiMessage(error), true);
   } finally {
     runningName.value = "";
   }
 }
+
+/**
+ * Görev bitene kadar durumunu izler.
+ *
+ * Sonsuza kadar sormaz: bir üst sınır vardır ve dolduğunda "hâlâ çalışıyor" der. Süresiz bir
+ * yoklama, sekme açık kaldığı sürece sunucuda saniyede bir PowerShell çalıştırmak demekti.
+ */
+function watchRun(name: string) {
+  const POLL_MS = 2500;
+  const MAX_SECONDS = 300;
+  const basladi = Date.now();
+  let sorguSuruyor = false;
+
+  runTimers[name] = window.setInterval(() => {
+    const gecen = Math.round((Date.now() - basladi) / 1000);
+    const durum = runStates[name];
+    if (!durum) {
+      stopWatching(name);
+      return;
+    }
+
+    durum.seconds = gecen;
+
+    if (gecen >= MAX_SECONDS) {
+      durum.phase = "running";
+      stopWatching(name);
+      void refresh();
+      return;
+    }
+
+    // Bir önceki sorgu hâlâ sürüyorsa yenisini açma: yavaş bir sunucuda sorgular üst üste binerdi.
+    if (sorguSuruyor) return;
+    sorguSuruyor = true;
+
+    void getScheduledTaskStatus(name)
+      .then((status) => {
+        if (!runStates[name]) return;
+        if (status.isRunning) {
+          runStates[name].phase = "running";
+          return;
+        }
+
+        runStates[name].phase = "done";
+        runStates[name].resultCode = status.lastTaskResult;
+        stopWatching(name);
+        void refresh();
+      })
+      .catch(() => {
+        // Durum okunamadı: "bitti, başarılı" demek YANLIŞ olurdu — bilmediğimizi söyleriz.
+        if (!runStates[name]) return;
+        runStates[name].phase = "unknown";
+        stopWatching(name);
+      })
+      .finally(() => {
+        sorguSuruyor = false;
+      });
+  }, POLL_MS);
+}
+
+/** Canlı satırda gösterilecek metin. */
+function runMessage(name: string) {
+  const durum = runStates[name];
+  if (!durum) return "";
+  if (durum.phase === "starting") return t("panel.tasks.runStarting");
+  if (durum.phase === "unknown") return t("panel.tasks.runUnknown");
+  if (durum.phase === "running") {
+    return durum.seconds >= 300
+      ? t("panel.tasks.runStillGoing", { seconds: durum.seconds })
+      : t("panel.tasks.runLive", { seconds: durum.seconds });
+  }
+
+  // Bitiş: kodu ham göstermek yerine, tablodakiyle AYNI sözlükten geçir.
+  const sonuc = resultLabelForCode(durum.resultCode, tasks.value.find((item) => item.name === name)?.taskType ?? "command");
+  return t("panel.tasks.runFinished", { seconds: durum.seconds, result: sonuc });
+}
+
+function runClass(name: string) {
+  const durum = runStates[name];
+  if (!durum) return "";
+  if (durum.phase === "done") return durum.resultCode === 0 ? "ok" : "warn";
+  if (durum.phase === "unknown") return "warn";
+  return "";
+}
+
+onUnmounted(() => {
+  // Sayfadan çıkılınca yoklama sürmemeli.
+  Object.keys(runTimers).forEach(stopWatching);
+});
 
 function isDisabled(item: ScheduledTask) {
   return item.state.toLocaleLowerCase().includes("disabled");
@@ -386,16 +522,22 @@ const CURL_CODES: Record<number, string> = {
 };
 
 // Son çalışma sonucu: 0 = başarılı; 267009/267011/267045 = koşuyor/hiç çalışmadı/kuyrukta (nötr).
-function resultLabel(item: ScheduledTask) {
-  const code = item.lastTaskResult;
+//
+// TEK sözlük: tablodaki rozet de "şimdi çalıştır" sonrası canlı satır da buradan geçer. İki ayrı
+// yerde çevirmek, birini güncelleyip diğerini unutmanın kestirme yoludur.
+function resultLabelForCode(code: number | null | undefined, taskType: string) {
   if (code === null || code === undefined || code === 267011) return "-";
   if (code === 0) return t("panel.tasks.resultOk");
   if (code === 267009 || code === 267045) return t("panel.tasks.running");
   if (code === SKIPPED) return t("panel.tasks.resultSkipped");
   if (code === TERMINATED) return t("panel.tasks.resultTerminated");
   if (code === 2 || code === 3) return t("panel.tasks.resultNotFound");
-  if (item.taskType === "url" && CURL_CODES[code]) return t(CURL_CODES[code]);
+  if (taskType === "url" && CURL_CODES[code]) return t(CURL_CODES[code]);
   return t("panel.tasks.resultFail", { code: "0x" + code.toString(16).toUpperCase() });
+}
+
+function resultLabel(item: ScheduledTask) {
+  return resultLabelForCode(item.lastTaskResult, item.taskType);
 }
 
 /** Satırın altında gösterilen "peki ne yapmalıyım" cümlesi. Yoksa boş döner. */
@@ -516,6 +658,64 @@ function resolveApiMessage(error: unknown) {
   list-style: none;
   display: grid;
   gap: 0.4rem;
+}
+
+.run-live {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  border-left: 3px solid var(--accent-1, #4b7bec);
+  background: color-mix(in srgb, var(--accent-1, #4b7bec) 7%, transparent);
+  font-size: 0.86rem;
+}
+
+.run-live.ok {
+  border-left-color: var(--success-1, #2e9e5b);
+  background: color-mix(in srgb, var(--success-1, #2e9e5b) 8%, transparent);
+}
+
+.run-live.warn {
+  border-left-color: var(--warn-border, #e0b400);
+  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
+}
+
+.run-text {
+  flex: 1;
+}
+
+.run-text small {
+  display: block;
+  opacity: 0.75;
+  margin-top: 0.2rem;
+}
+
+.run-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  margin-top: 0.32rem;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  flex: none;
+}
+
+/* Dönen halka yalnızca çalışırken; bittiğinde hareket durur ki "bitti" gözle anlaşılsın. */
+.run-dot.spinning {
+  background: none;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.8;
+  animation: run-spin 0.9s linear infinite;
+}
+
+@keyframes run-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Hareketi azalt ayarı açıksa dönme yerine yanıp sönme bile yok: sabit halka. */
+@media (prefers-reduced-motion: reduce) {
+  .run-dot.spinning { animation: none; }
 }
 
 .stuck-notice li {
