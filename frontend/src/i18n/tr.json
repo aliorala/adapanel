@@ -2827,6 +2827,7 @@
   "panel.database.deleteUser": "Sil",
   "panel.database.changePassword": "Parola değiştir",
   "panel.database.openInPhpMyAdmin": "phpMyAdmin'de aç",
+  "panel.database.openInAdminer": "Adminer'de aç",
   "panel.database.opening": "Açılıyor…",
   "panel.database.newPasswordPrompt": "{user} kullanıcısı için yeni parola:",
   "panel.database.passwordTooShort": "Parola en az 6 karakter olmalı.",

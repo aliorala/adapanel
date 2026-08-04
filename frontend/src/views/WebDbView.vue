@@ -184,13 +184,24 @@ function actionLabel(item: WebDbDeployment) {
       : t("panel.webdb.deploy");
 }
 
+/**
+ * Aracin PANEL UZERINDEN erisim adresi.
+ *
+ * Ham IIS portuna (http://sunucu:8897/) GIDILMEZ. Iki sebep:
+ *
+ * 1) O siteler yalnizca loopback'e baglidir; disaridan gelen bir istegin Host basligi bagla
+ *    uymadigi icin IIS "400 - Invalid Hostname" dondurur. Kullanicinin gordugu hata buydu.
+ * 2) Panelin kendi tasarimi (B3) zaten bunu yasakliyor: tarayici dis duz-HTTP portuna degil,
+ *    panelin kimlik-dogrulamali HTTPS ters vekiline gitmeli. Ham porta yonlendirmek, araci
+ *    kimlik dogrulamasiz bir yuzeye tasimak olurdu.
+ */
 function accessUrl(item: WebDbDeployment) {
-  if (!item.url) {
+  if (!item.url || !item.isDeployed) {
     return "";
   }
 
   try {
-    return toReachableUrl(item.url);
+    return `/api/v1/dbtools/${encodeURIComponent(item.provider)}/`;
   } catch {
     return item.url;
   }

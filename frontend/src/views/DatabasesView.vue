@@ -299,6 +299,12 @@
                   @click="openInPhpMyAdmin(item.name)">
                   {{ openingDb === item.name ? t("panel.database.opening") : t("panel.database.openInPhpMyAdmin") }}
                 </button>
+                <!-- Adminer'in phpMyAdmin gibi tek-tik giris mekanizmasi YOKTUR; kendi giris
+                     formunu gosterir. Bu yuzden yalnizca PANEL VEKILI uzerinden acilir --
+                     ham IIS portu loopback'e bagli oldugu icin disaridan 400 dondurur. -->
+                <button class="secondary compact" @click="openInAdminer()">
+                  {{ t("panel.database.openInAdminer") }}
+                </button>
                 <button
                   class="danger compact"
                   :disabled="databasesStore.deletingKey === `${selectedEngine}:${item.name}`"
@@ -1047,6 +1053,16 @@ async function removeUser(userName: string, host: string) {
 }
 
 const openingDb = ref("");
+/**
+ * Adminer'i panelin kimlik-dogrulamali vekili uzerinden acar.
+ *
+ * Ham porta (http://sunucu:8897/) gitmek IIS'ten "400 - Invalid Hostname" aliyordu: o site
+ * yalnizca loopback'e baglidir ve disaridan gelen istegin Host basligi bagla uymaz.
+ */
+function openInAdminer() {
+  window.open("/api/v1/dbtools/adminer/", "_blank", "noopener");
+}
+
 async function openInPhpMyAdmin(databaseName: string) {
   openingDb.value = databaseName;
   try {

@@ -2827,6 +2827,7 @@
   "panel.database.deleteUser": "Delete",
   "panel.database.changePassword": "Change password",
   "panel.database.openInPhpMyAdmin": "Open in phpMyAdmin",
+  "panel.database.openInAdminer": "Open in Adminer",
   "panel.database.opening": "Opening…",
   "panel.database.newPasswordPrompt": "New password for user {user}:",
   "panel.database.passwordTooShort": "Password must be at least 6 characters.",
