@@ -44,6 +44,18 @@ public sealed class ScheduledTaskDto
     /// <summary>Saat/dakika tipinde tekrar aralığı (ör. 6 = altı saatte bir).</summary>
     public int Interval { get; set; } = 1;
 
+    /// <summary>
+    /// Windows'un sakladığı HAM tekrar aralığı (ISO 8601: "PT5M", "PT1H30M", "P1D").
+    /// <see cref="ScheduleType"/> ve <see cref="Interval"/> bundan türetilir.
+    /// </summary>
+    public string RepetitionInterval { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Tetikleyici panelin tanıdığı biçimlerden hiçbirine uymadı. Arayüz bunu söylemeli: aksi
+    /// hâlde kullanıcı uydurulmuş bir zamanlamayı gerçek sanır ve kaydedince onu KALICI yapar.
+    /// </summary>
+    public bool ScheduleUnknown { get; set; }
+
     /// <summary>Günlük tipinde çalışma saati ("HH:mm").</summary>
     public string TimeOfDay { get; set; } = "00:00";
 

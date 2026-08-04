@@ -24,6 +24,9 @@ export type ScheduledTask = {
   // Aşağıdakiler DÜZENLEME içindir: tabloda görünmezler ama okunmazlarsa düzenleme sırasında
   // sessizce varsayılana döner ve kullanıcı farkında olmadan görevi baştan tanımlamış olur.
   interval: number;
+  repetitionInterval: string;
+  // Tetikleyici panelin tanidigi bicimlerden hicbirine uymadi.
+  scheduleUnknown: boolean;
   timeOfDay: string;
   phpVersion: string;
   runAs: string;

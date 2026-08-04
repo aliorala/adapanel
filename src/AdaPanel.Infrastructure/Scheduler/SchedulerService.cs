@@ -130,7 +130,7 @@ public sealed class SchedulerService(
   $info = Get-ScheduledTaskInfo -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue
   $trigger = if ($_.Triggers.Count -gt 0) {{ $_.Triggers[0] }} else {{ $null }}
   $scheduleType = ''
-  $interval = 1
+  $repetitionInterval = ''
   $timeOfDay = '00:00'
   if ($trigger) {{
     if ($trigger.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger') {{
@@ -141,13 +141,11 @@ public sealed class SchedulerService(
         try {{ $timeOfDay = ([datetime]$trigger.StartBoundary).ToString('HH:mm') }} catch {{ }}
       }}
     }}
-    elseif ($trigger.Repetition -and $trigger.Repetition.Interval -match '^PT(\d+)M$') {{
-      $scheduleType = 'minute'
-      $interval = [int]$Matches[1]
-    }}
-    else {{
-      $scheduleType = 'hourly'
-      if ($trigger.Repetition -and $trigger.Repetition.Interval -match '^PT(\d+)H$') {{ $interval = [int]$Matches[1] }}
+    elseif ($trigger.Repetition) {{
+      # HAM deger gonderilir; cozumleme C# tarafinda yapilir. PowerShell icinde iki desenle
+      # ('^PT(\d+)M$' ve '^PT(\d+)H$') ugrasmak, Windows'un urettigi PT1H30M ve P1D gibi
+      # bicimleri kaciriyor ve gorev sessizce saatlik-1 varsayilanina dusuyordu.
+      $repetitionInterval = [string]$trigger.Repetition.Interval
     }}
   }}
   # Kimlik: sinirli hesapla calisan gorev duzenlemede SYSTEM'e dusmemeli -- bu, kullanicinin
@@ -157,7 +155,7 @@ public sealed class SchedulerService(
   [pscustomobject]@{{
     Name = $_.TaskName
     ScheduleType = $scheduleType
-    Interval = $interval
+    RepetitionInterval = $repetitionInterval
     TimeOfDay = $timeOfDay
     RunAs = $runAs
     State = $_.State.ToString()
@@ -183,6 +181,23 @@ $tasks | ConvertTo-Json -Depth 5";
             // JSON'dan null sizarsa NRE atmasin (PS tarafi [string] zorluyor ama kemer-askı).
             task.Command ??= string.Empty;
             task.Arguments ??= string.Empty;
+
+            // Tekrar araligi HAM haliyle geldi; burada cozulur. Cozulemeyen bir bicimde
+            // "saatlik 1" varsayilanina DUSULMEZ -- o varsayilan, kullanicinin 24 saatlik gorevini
+            // duzenledigi anda saatte bire cevirip gunde 24 kat daha sik calistiriyordu.
+            if (string.IsNullOrEmpty(task.ScheduleType) && ParseRepetitionMinutes(task.RepetitionInterval) is { } dakika)
+            {
+                var (tip, aralik) = DescribeRepetition(dakika);
+                task.ScheduleType = tip;
+                task.Interval = aralik;
+            }
+            else if (string.IsNullOrEmpty(task.ScheduleType))
+            {
+                // Tetikleyici tanınmadı. Panelin uydurması, kullanıcının ayarını yanlış göstermek
+                // ve düzenlemede o yanlışı KALICI hâle getirmek olurdu.
+                task.ScheduleType = "hourly";
+                task.ScheduleUnknown = true;
+            }
 
             // Cikti yakalama sarmalini GERI COZ: tip turetmesi ve ekranda gorunen komut, kullanicinin
             // yazdigi sey olmali -- panelin onu nasil calistirdigi degil.
@@ -736,6 +751,56 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
                 break;
         }
     }
+
+    /// <summary>
+    /// Tekrar aralığını (ISO 8601 süresi) DAKİKAYA çevirir. Çözülemezse null.
+    /// <para>
+    /// KANITLANMIŞ HATA: panel yalnızca <c>PT&lt;n&gt;M</c> ve <c>PT&lt;n&gt;H</c> biçimlerini
+    /// tanıyordu. Oysa Windows aynı süreyi kendi normalleştirdiği biçimde saklıyor — ölçüldü:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>60 dakika → <c>PT1H</c></item>
+    /// <item>90 dakika → <c>PT1H30M</c></item>
+    /// <item>24 saat → <c>P1D</c></item>
+    /// </list>
+    /// <para>
+    /// Tanınmayan biçim "saatlik, 1" varsayılanına düşüyordu. Sonuç sessiz ve ağır: 24 saatte bir
+    /// çalışan bir görevi düzenleyip kaydeden kullanıcı, hiçbir uyarı almadan onu SAATTE BİR
+    /// çalışır hâle getiriyordu — yani görev günde 24 kat daha sık çalışmaya başlıyordu.
+    /// </para>
+    /// </summary>
+    internal static int? ParseRepetitionMinutes(string? isoDuration)
+    {
+        var deger = (isoDuration ?? string.Empty).Trim();
+        var eslesme = Regex.Match(
+            deger,
+            @"^P(?:(?<gun>\d+)D)?(?:T(?:(?<saat>\d+)H)?(?:(?<dakika>\d+)M)?(?:(?<saniye>\d+)S)?)?$",
+            RegexOptions.IgnoreCase);
+
+        if (!eslesme.Success || deger.Length < 2)
+        {
+            return null;
+        }
+
+        var toplam =
+            (eslesme.Groups["gun"].Success ? int.Parse(eslesme.Groups["gun"].Value) * 1440 : 0) +
+            (eslesme.Groups["saat"].Success ? int.Parse(eslesme.Groups["saat"].Value) * 60 : 0) +
+            (eslesme.Groups["dakika"].Success ? int.Parse(eslesme.Groups["dakika"].Value) : 0);
+
+        return toplam > 0 ? toplam : null;
+    }
+
+    /// <summary>
+    /// Dakika cinsinden aralığı, panelin formundaki (tip, sayı) ikilisine çevirir.
+    /// <para>
+    /// Tam saat katları SAAT olarak gösterilir: kullanıcı "1440 dakika" değil "24 saat" okumak
+    /// ister ve ikisi aynı zamanlamadır — kaydedildiğinde birebir aynı aralığı üretir.
+    /// </para>
+    /// </summary>
+    internal static (string ScheduleType, int Interval) DescribeRepetition(int minutes) =>
+        minutes >= 60 && minutes % 60 == 0
+            ? ("hourly", minutes / 60)
+            : ("minute", minutes);
 
     /// <summary>
     /// URL görevinin adresi kabul edilebilir mi; değilse HANGİ nedenle olmadığı.

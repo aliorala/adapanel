@@ -180,7 +180,12 @@
         <span :class="['status-pill', taskStateClass(item.state)]">{{ item.state || "-" }}</span>
         <!-- Kodun ne demek olduğu satırda yazılı; "neden ve ne yapmalı" ipucu üzerine gelince. -->
         <span :class="['status-pill', resultClass(item)]" :title="resultHint(item) || undefined">{{ resultLabel(item) }}</span>
-        <span>{{ formatUtc(item.nextRunTimeUtc) }}</span>
+        <!-- Bos bir hucre "sorun yok" demek degil: gorev hic calismayacak olabilir. Sebebi
+             uzerine gelince yaziyor. -->
+        <span v-if="item.nextRunTimeUtc">{{ formatUtc(item.nextRunTimeUtc) }}</span>
+        <span v-else class="status-pill warn" :title="t('panel.tasks.noNextRunHint')">
+          {{ t("panel.tasks.noNextRun") }}
+        </span>
         <span>{{ formatUtc(item.lastRunTimeUtc) }}</span>
         <span class="row-actions">
           <button class="secondary compact" :disabled="runningName === item.name" @click="runTask(item.name)">
