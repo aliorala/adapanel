@@ -22,6 +22,10 @@ public sealed class SiteCascadeDeletionService(
     IDiskQuotaService diskQuotaService,
     ICustomerScopeService customerScopeService,
     ISslService sslService,
+    ISiteHostingSettingsService siteHostingSettingsService,
+    IWafService wafService,
+    IDirectoryProtectionService directoryProtectionService,
+    ISchedulerService schedulerService,
     JsonFileStore fileStore,
     ILogger<SiteCascadeDeletionService> logger) : ISiteCascadeDeletionService
 {
@@ -42,7 +46,8 @@ public sealed class SiteCascadeDeletionService(
             HasReverseProxy = await SafeBoolAsync(async () => (await reverseProxyService.GetSiteConfigurationAsync(site.Name, cancellationToken)).IsProxyEnabled),
             HasDiskQuota = await SafeBoolAsync(async () => (await diskQuotaService.GetQuotaAsync(site.Name, cancellationToken)).QuotaEnabled),
             HasGitDeployment = File.Exists(fileStore.ResolvePath(GitConfigRelativePath(site.Name))),
-            CustomerAssignments = await CountCustomerAssignmentsAsync(site.Name, cancellationToken)
+            CustomerAssignments = await CountCustomerAssignmentsAsync(site.Name, cancellationToken),
+            ScheduledTasks = await CountScheduledTasksAsync(site, cancellationToken)
         };
     }
 
@@ -121,6 +126,37 @@ public sealed class SiteCascadeDeletionService(
         // 8) Git dağıtım yapılandırması.
         TryDeleteFile(result, "Git dağıtım yapılandırması", fileStore.ResolvePath(GitConfigRelativePath(siteName)));
 
+        // 8c) Barındırma ayarları + ARKA PLAN GÖREVLERİ (kuyruk işçisi, Laravel zamanlayıcı).
+        //     Bunlar zamanlanmış görevdir: site gitse de tetiklenmeye devam ederler.
+        await StepAsync(result, "Barındırma ayarları", () => siteHostingSettingsService.RemoveSiteAsync(siteName, cancellationToken));
+
+        // 8d) Site güvenlik durumu (izolasyon / klasör izni / hız sınırı kaydı).
+        await StepAsync(result, "Güvenlik durumu", () => wafService.RemoveSiteAsync(siteName, cancellationToken));
+
+        // 8e) Korumalı dizin kayıtları (parola korumalı klasörler).
+        await StepAsync(result, "Korumalı dizinler", () => directoryProtectionService.RemoveSiteAsync(siteName, cancellationToken));
+
+        // 8f) Sitenin KLASÖRÜ İÇİNDEN çalışan zamanlanmış görevler.
+        //     DOSYALAR SİLİNMEDEN ÖNCE yapılır: eşleştirme görevin komut/çalışma klasörü yoluna
+        //     bakar, dolayısıyla site kökünün ne olduğunu hâlâ bilmemiz gerekir.
+        if (!string.IsNullOrWhiteSpace(physicalPath))
+        {
+            await StepAsync(result, "Zamanlanmış görevler", async () =>
+            {
+                var silinen = await schedulerService.RemoveTasksUnderRootAsync(physicalPath, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(appRoot) &&
+                    !string.Equals(appRoot, physicalPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    silinen += await schedulerService.RemoveTasksUnderRootAsync(appRoot, cancellationToken);
+                }
+
+                if (silinen > 0)
+                {
+                    result.Warnings.Add($"{silinen} zamanlanmış görev kaldırıldı (sitenin klasöründen çalışıyordu).");
+                }
+            });
+        }
+
         // 9) IIS sitesi + app pool.
         await StepAsync(result, "IIS sitesi", () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken));
 
@@ -136,6 +172,36 @@ public sealed class SiteCascadeDeletionService(
     }
 
     // ---- Kaynak çözümleyiciler ----
+
+    /// <summary>
+    /// Sitenin klasörü içinden çalışan zamanlanmış görevleri SAYAR (silmez).
+    /// <para>
+    /// Silme mantığıyla aynı ölçütü kullanır: görevin komutu ya da çalışma klasörü site kökünün
+    /// altındaysa o siteye aittir. Önizlemede gösterilen sayı ile gerçekte silinen sayı böylece
+    /// aynı kuraldan gelir — kullanıcıya söylediğimizden farklı bir şey yapmayız.
+    /// </para>
+    /// </summary>
+    private async Task<int> CountScheduledTasksAsync(SiteDto site, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var gorevler = await schedulerService.GetTasksAsync(cancellationToken);
+            var kokler = new[] { site.PhysicalPath, site.ApplicationRootPath }
+                .Where(yol => !string.IsNullOrWhiteSpace(yol))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            return gorevler.Count(gorev => kokler.Any(kok =>
+                Scheduler.ScriptTaskPlanner.IsInsideRoot(kok, gorev.Command) ||
+                Scheduler.ScriptTaskPlanner.IsInsideRoot(kok, gorev.WorkingDirectory)));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Sayamadıysak 0 gösteririz; önizleme bir tahmindir, silme adımı kendi ölçümünü yapar.
+            logger.LogWarning(exception, "Site gorevleri sayilamadi ({SiteName}).", site.Name);
+            return 0;
+        }
+    }
 
     private async Task<bool> HasDnsZoneAsync(string siteName, CancellationToken cancellationToken)
     {

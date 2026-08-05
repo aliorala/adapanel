@@ -93,6 +93,22 @@ public sealed class DirectoryProtectionService(
         return dto;
     }
 
+    public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        // YALNIZCA kayıt temizlenir; klasördeki web.config dosyalarına dokunulmaz.
+        //
+        // Neden: bu metot site SİLİNİRKEN çağrılır. Site dosyaları ya kullanıcının isteğiyle
+        // zaten siliniyordur ya da BİLEREK saklanıyordur — ikinci durumda korunan klasörlerin
+        // içine girip dosya silmek, kullanıcının sakladığı içeriği değiştirmek olurdu.
+        var all = (await fileStore.ReadAsync(StatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken)).ToList();
+        var kaldirilan = all.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
+
+        if (kaldirilan > 0)
+        {
+            await fileStore.WriteAsync(StatePath, all, cancellationToken);
+        }
+    }
+
     public async Task UnprotectAsync(string siteName, string relativePath, CancellationToken cancellationToken = default)
     {
         var relative = SanitizeRelativePath(relativePath);

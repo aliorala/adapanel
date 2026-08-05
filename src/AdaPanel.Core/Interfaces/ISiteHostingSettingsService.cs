@@ -51,4 +51,15 @@ public interface ISiteHostingSettingsService
 
     /// <summary>Laravel scheduler görevini siler.</summary>
     Task<QueueWorkerStatusDto> StopLaravelSchedulerAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Site silindiğinde onun barındırma ayarlarını ve ARKA PLAN GÖREVLERİNİ kaldırır.
+    /// <para>
+    /// Yalnızca ayar kaydı değil: kuyruk işçisi ve Laravel zamanlayıcı birer Windows zamanlanmış
+    /// görevidir. Site gittikten sonra da tetiklenmeye devam ederler — çalıştıracakları dosya
+    /// artık yoktur, yani her turda hata üretip günlüğü kirletirler ve panelde "başarısız görev"
+    /// olarak görünürler.
+    /// </para>
+    /// </summary>
+    Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
 }

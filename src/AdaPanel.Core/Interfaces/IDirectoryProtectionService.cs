@@ -13,4 +13,13 @@ public interface IDirectoryProtectionService
     Task<ProtectedDirectoryDto> ProtectAsync(string siteName, ProtectDirectoryRequest request, CancellationToken cancellationToken = default);
 
     Task UnprotectAsync(string siteName, string relativePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Site silindiğinde onun korumalı dizin kayıtlarını kaldırır.
+    /// <para>
+    /// Kayıt kalırsa aynı adla açılan yeni bir sitede, hiç kurulmamış parola korumaları
+    /// listelenir.
+    /// </para>
+    /// </summary>
+    Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
 }

@@ -32,6 +32,16 @@ public sealed class SiteDeletionPlanDto
 
     /// <summary>Bu siteye atanmış müşteri sayısı (atama temizlenecek).</summary>
     public int CustomerAssignments { get; set; }
+
+    /// <summary>
+    /// Sitenin KLASÖRÜ İÇİNDEN çalışan zamanlanmış görev sayısı (kaldırılacak).
+    /// <para>
+    /// Onayda ayrıca gösterilir çünkü kullanıcının en çok şaşıracağı kalem budur: bunlar site
+    /// silinse de tetiklenmeye devam eden gerçek Windows görevleridir ve panelde artık hangi
+    /// siteye ait olduklarını gösteren bir şey kalmaz.
+    /// </para>
+    /// </summary>
+    public int ScheduledTasks { get; set; }
 }
 
 /// <summary>Cascade silme sonucu: silinenler + bloke olmayan uyarılar.</summary>

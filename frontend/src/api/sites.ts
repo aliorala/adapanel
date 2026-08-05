@@ -110,6 +110,9 @@ export type SiteDeletionPlan = {
   hasDiskQuota: boolean;
   hasGitDeployment: boolean;
   customerAssignments: number;
+  // Sitenin klasöründen çalışan zamanlanmış görev sayısı; site silinse de tetiklenmeye
+  // devam edecekleri için kaldırılırlar.
+  scheduledTasks: number;
 };
 
 export type SiteDeletionResult = {

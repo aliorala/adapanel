@@ -265,6 +265,54 @@ $tasks | ConvertTo-Json -Depth 5";
         return tasks;
     }
 
+    public async Task<int> RemoveTasksUnderRootAsync(string siteRootPath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(siteRootPath))
+        {
+            return 0;
+        }
+
+        IReadOnlyCollection<ScheduledTaskDto> gorevler;
+        try
+        {
+            gorevler = await GetTasksAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Görev listesi okunamadıysa site silme akışı DURMAZ; bu bir temizlik adımıdır.
+            logger.LogWarning(exception, "Site gorevleri okunamadi ({Root}); temizlik atlandi.", siteRootPath);
+            return 0;
+        }
+
+        var silinen = 0;
+        foreach (var gorev in gorevler)
+        {
+            // YOL ÜZERİNDEN eşleştirme. Ad benzerliğine bakmak yanlış görev silerdi; kök-adı
+            // öneki tuzağı (site1 / site1-evil) ScriptTaskPlanner.IsInsideRoot içinde kapalı.
+            var komutIcerde = ScriptTaskPlanner.IsInsideRoot(siteRootPath, gorev.Command);
+            var klasorIcerde = ScriptTaskPlanner.IsInsideRoot(siteRootPath, gorev.WorkingDirectory);
+
+            if (!komutIcerde && !klasorIcerde)
+            {
+                continue;
+            }
+
+            try
+            {
+                await DeleteTaskAsync(gorev.Name, cancellationToken);
+                silinen++;
+                logger.LogInformation("Silinen sitenin gorevi kaldirildi: {TaskName} ({Root})", gorev.Name, siteRootPath);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Tek bir görev silinemezse diğerleri denenmeye devam eder.
+                logger.LogWarning(exception, "Site gorevi kaldirilamadi: {TaskName}", gorev.Name);
+            }
+        }
+
+        return silinen;
+    }
+
     public async Task<int> RepairTaskSettingsAsync(CancellationToken cancellationToken = default)
     {
         // Yalnizca GERCEKTEN yanlis olanlara dokunulur ve KAC TANESI duzeltildigi geri dondurulur.

@@ -60,4 +60,20 @@ public interface ISchedulerService
     /// </para>
     /// </summary>
     Task<int> RepairTaskSettingsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir site silinirken, o sitenin klasörü içinden çalışan zamanlanmış görevleri kaldırır;
+    /// kaldırılan görev sayısını döner.
+    /// <para>
+    /// Site gidince bu görevler Windows Görev Zamanlayıcı'da KALIR ve tetiklenmeye devam eder.
+    /// Çalıştıracakları dosya artık yoktur: her turda hata üretir, günlüğü kirletir ve panelin
+    /// cron ekranında "başarısız" olarak görünürler — üstelik kullanıcı hangi siteye ait
+    /// olduklarını anlayamaz, çünkü site listede yoktur.
+    /// </para>
+    /// <para>
+    /// Eşleştirme YOL ÜZERİNDEN yapılır: görevin komutu ya da çalışma klasörü site kökünün
+    /// içindeyse o göreve aittir. Yalnızca ad benzerliğine bakmak yanlış görev silerdi.
+    /// </para>
+    /// </summary>
+    Task<int> RemoveTasksUnderRootAsync(string siteRootPath, CancellationToken cancellationToken = default);
 }

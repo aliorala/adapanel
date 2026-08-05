@@ -3324,5 +3324,6 @@
   "files.invalid_principal": "Kullanıcı/grup adı geçersiz. Yalnızca harf, rakam, boşluk, nokta, tire ve alt çizgi kullanın (ör. IIS_IUSRS ya da SUNUCU\\kullanici).",
   "files.invalid_rights": "Geçersiz izin. Kullanılabilir değerler: R (okuma), RX (okuma+çalıştırma), W (yazma), M (değiştirme), F (tam denetim).",
   "webdb.signon_write_failed": "Veritabanı aracının giriş dosyası sunucuya yazılamadı. Bu yüzden araç eski (bozuk olabilecek) sürümle çalışmaya devam ederdi; işlem durduruldu. Ayrıntı aşağıdaki teknik bilgide.",
-  "sites.reserved_name": "Bu site adı panele ayrılmıştır. \"AdaPanel.\" ile başlayan adları panel kendi araçları için kullanır (webmail, phpMyAdmin, Adminer); \"Default Web Site\" ise Windows'un kendi sitesidir. Siteniz için başka bir ad seçin — genellikle alan adının kendisi (ör. ornek.com)."
+  "sites.reserved_name": "Bu site adı panele ayrılmıştır. \"AdaPanel.\" ile başlayan adları panel kendi araçları için kullanır (webmail, phpMyAdmin, Adminer); \"Default Web Site\" ise Windows'un kendi sitesidir. Siteniz için başka bir ad seçin — genellikle alan adının kendisi (ör. ornek.com).",
+  "panel.sites.deletePlan.scheduledTasks": "Zamanlanmış görevler (sitenin klasöründen çalışanlar)"
 }

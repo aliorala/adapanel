@@ -556,6 +556,11 @@ async function handleDeleteSite(siteName: string) {
     if (plan.customerAssignments > 0) {
       items.push(`${t("panel.sites.deletePlan.customers")}: ${plan.customerAssignments}`);
     }
+    // Zamanlanmış görevler ayrıca yazılır: bunlar site silinse de tetiklenmeye devam eden
+    // gerçek Windows görevleridir, yani kullanıcının en çok şaşıracağı kalem budur.
+    if (plan.scheduledTasks > 0) {
+      items.push(`${t("panel.sites.deletePlan.scheduledTasks")}: ${plan.scheduledTasks}`);
+    }
     items.push(`${t("panel.sites.deletePlan.files")}: ${plan.applicationRootPath || plan.physicalPath}`);
     lines = items;
   } catch {

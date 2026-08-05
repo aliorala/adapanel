@@ -13,4 +13,13 @@ public interface IWafService
     Task<SiteSecurityConfigurationDto> SetRateLimitAsync(string siteName, SetSiteRateLimitRequest request, CancellationToken cancellationToken = default);
 
     Task<SiteSecurityConfigurationDto> EnableBasicRulesAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Site silindiğinde onun güvenlik durum kaydını (izolasyon, klasör izni, hız sınırı) kaldırır.
+    /// <para>
+    /// Kayıt kalırsa AYNI ADLA açılan yeni bir site, hiç uygulanmamış korumaları uygulanmış
+    /// gösterir — panel yine kendi kaydını gerçek sanmış olur.
+    /// </para>
+    /// </summary>
+    Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
 }

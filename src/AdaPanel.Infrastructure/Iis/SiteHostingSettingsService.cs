@@ -329,6 +329,29 @@ public sealed class SiteHostingSettingsService(
         return new QueueWorkerStatusDto { Running = true, TaskName = QueueTaskName(siteName) };
     }
 
+    public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        // ÖNCE ARKA PLAN GÖREVLERİ, sonra ayar kaydı.
+        //
+        // Kuyruk işçisi ve Laravel zamanlayıcı birer Windows zamanlanmış görevidir; site
+        // gittikten sonra da tetiklenmeye devam ederler. Çalıştıracakları dosya artık yoktur:
+        // her turda hata üretir, günlüğü kirletir ve panelde "başarısız görev" olarak görünürler.
+        // Kullanıcı da silinmiş bir siteye ait bu görevleri panelde göremediği için bağ kuramaz.
+        //
+        // Her ikisi de best-effort: görev zaten yoksa DeleteTaskAsync sessizce geçer (aşağıdaki
+        // metotlar kendi try/catch'leriyle sarılı) ve silme akışı durmaz.
+        await StopQueueWorkerAsync(siteName, cancellationToken);
+        await StopLaravelSchedulerAsync(siteName, cancellationToken);
+
+        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
+        var kaldirilan = states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
+
+        if (kaldirilan > 0)
+        {
+            await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        }
+    }
+
     public async Task<QueueWorkerStatusDto> StopQueueWorkerAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var taskName = QueueTaskName(siteName);

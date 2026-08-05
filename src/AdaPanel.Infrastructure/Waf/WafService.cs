@@ -200,6 +200,19 @@ public sealed class WafService(
         return await SaveStateAsync(site, basicRulesEnabled: true, cancellationToken: cancellationToken);
     }
 
+    public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SecurityState>(), cancellationToken)).ToList();
+        var kaldirilan = states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
+
+        // Kayıt yoksa dosyaya DOKUNMA: silme işlemi idempotent olmalı ve gereksiz yazma,
+        // eşzamanlı bir güncellemeyi ezme riski taşır.
+        if (kaldirilan > 0)
+        {
+            await fileStore.WriteAsync(StatePath, states, cancellationToken);
+        }
+    }
+
     private async Task<SiteSecurityConfigurationDto> SaveStateAsync(
         AdaPanel.Core.Dtos.Sites.SiteDto site,
         bool? isIsolated = null,
