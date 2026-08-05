@@ -118,6 +118,51 @@ public sealed class AdminerSignonContractTests
     }
 
     /// <summary>
+    /// ADMINER'IN KENDI BELIRTECI oturumda OLMALI.
+    /// <para>
+    /// Adminer, oturumda bir <c>token</c> degeri tutar ve sonraki her istekte onu arar:
+    /// "cerez var ama oturumda token yok" durumunu OTURUM DUSMUS sayar ve
+    /// "Session expired, please login again." diyerek 403 doner (kaynak: <c>auth_error</c>,
+    /// kosul <c>($_COOKIE[$bi] || $_GET[$bi]) &amp;&amp; !$_SESSION["token"]</c>).
+    /// </para>
+    /// <para>
+    /// O deger normalde giris FORMU cizilirken olusur. Panelin otomatik girisi formu hic
+    /// gostermedigi icin hic olusmuyordu: giris basariyla tamamlaniyor, yonlendirilen ILK sayfa
+    /// "oturum dustu" ile oluyordu. Gercek Adminer + gercek vekil yolu ile olculdu.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheAdminerCsrfToken_IsSeededInTheSession()
+    {
+        var php = OkuSarmalayici();
+
+        Assert.Contains("$_SESSION['token']", php, StringComparison.Ordinal);
+        Assert.Contains("random_int(1, 1000000)", php, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Oturum ADMINER'DAN ONCE baslatilir. Iki isi birden gorur: yukaridaki belirteci yazabilmek
+    /// ve cerezi KOK yola baglamak.
+    /// <para>
+    /// Adminer cerez yolunu kendi gordugu adresten turetiyor (REQUEST_URI); panelin vekilinin
+    /// arkasinda o yol tarayicinin gittigi yolla eslesmiyor ve cerez bir daha gonderilmiyordu.
+    /// Oturum burada baslatilinca Adminer kendi <c>session_start</c> blogunu atlar.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheSessionIsStartedBeforeAdminer_WithARootCookiePath()
+    {
+        var php = OkuSarmalayici();
+
+        var oturum = php.IndexOf("session_start()", StringComparison.Ordinal);
+        var yukleme = php.IndexOf("require __DIR__", StringComparison.Ordinal);
+
+        Assert.True(oturum > 0, "Oturum sarmalayicida hic baslatilmiyor.");
+        Assert.True(yukleme > oturum, "Oturum, Adminer yuklendikten SONRA baslatiliyor.");
+        Assert.Contains("session_set_cookie_params(0, '/'", php, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Yol asimi korumasi: belirtec dosya adina cevrilmeden ONCE temizlenmeli.
     /// </summary>
     [Fact]

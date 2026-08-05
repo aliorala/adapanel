@@ -278,6 +278,31 @@ public sealed class WebDbClientService(
  * kendi mekanizmasını kullanır.
  */
 
+/*
+ * OTURUM BURADA BAŞLATILIR — Adminer'dan ÖNCE. İki ayrı hatayı birden kapatır:
+ *
+ * 1) ADMINER'IN KENDİ BELİRTECİ. Adminer, oturumda bir `token` değeri tutar ve sonraki her
+ *    istekte onu arar: "çerez var ama oturumda token yok" durumunu OTURUM DÜŞMÜŞ sayar ve
+ *    "Session expired, please login again." diyerek 403 döner. O değer normalde giriş FORMU
+ *    çizilirken oluşur; panelin otomatik girişi formu hiç göstermediği için oluşmuyordu.
+ *    Sonuç: giriş başarılı oluyor, yönlendirilen ilk sayfa "oturum düştü" ile ölüyordu.
+ *
+ * 2) ÇEREZ YOLU. Adminer oturum çerezinin yolunu kendi gördüğü adresten türetir
+ *    (session_set_cookie_params + REQUEST_URI). Panelin vekilinin arkasında bu yol tarayıcının
+ *    gittiği yolla eşleşmiyor ve çerez bir daha gönderilmiyordu. Oturumu burada başlatmak
+ *    Adminer'ın o çağrısını devre dışı bırakır (kendi kodu `SID` tanımlıysa atlar) ve çerez
+ *    kök yola bağlanır — hangi yoldan gelinirse gelinsin geçerli olur.
+ */
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_name('adminer_sid');
+    session_set_cookie_params(0, '/', '', !empty($_SERVER['HTTPS']), true);
+    session_start();
+}
+
+if (empty($_SESSION['token'])) {
+    $_SESSION['token'] = random_int(1, 1000000);
+}
+
 // Belirteç yalnızca onaltılık olabilir. Bu, dosya adının yola çevrilmesinden ÖNCE yapılır:
 // "../" gibi bir girdi panelin veri klasörünün dışına çıkabilirdi.
 $adaToken = isset($_GET['token']) ? preg_replace('/[^a-f0-9]/', '', (string) $_GET['token']) : '';
