@@ -115,7 +115,15 @@ public sealed class WinAcmeSslService(
         await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
 
         // Kaynak SERTİFİKANIN KENDİSİNDEN okunur, FriendlyName'den değil.
-        var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), MeasureHttpsBinding(site, hostName));
+        // Bağlama ÖLÇÜMÜ İSE TAZE SİTEDEN: elimizdeki `site` nesnesi bu metodun BAŞINDA alındı,
+        // yani HTTPS bağlaması daha kurulmamışken. Onu okumak, az önce kurduğumuz bağlamayı
+        // "yok" saymak olurdu — üstelik sonuç ssl.json'a yazıldığı için yanlış cevap kalıcı olurdu.
+        var dto = ToDto(
+            site.Name,
+            hostName,
+            certificate,
+            ResolveCertificateSource(certificate),
+            await MeasureHttpsBindingAsync(site.Name, hostName, cancellationToken));
         dto.FallbackReason = acmeSonucu.Certificate is null ? acmeSonucu.FailureReason : string.Empty;
 
         await UpsertAsync(dto, cancellationToken);
@@ -152,7 +160,13 @@ public sealed class WinAcmeSslService(
 
         // Elle içe aktarılan sertifikada da kaynak ÖLÇÜLÜR: kullanıcı kendinden imzalı bir dosya
         // yüklediyse panel ona "manual" deyip güvenilir sanmamalı.
-        var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), MeasureHttpsBinding(site, hostName));
+        // Bağlama az önce kuruldu → ölçüm TAZE siteden (eldeki anlık görüntü onu göremez).
+        var dto = ToDto(
+            site.Name,
+            hostName,
+            certificate,
+            ResolveCertificateSource(certificate),
+            await MeasureHttpsBindingAsync(site.Name, hostName, cancellationToken));
         await UpsertAsync(dto, cancellationToken);
         return dto;
     }
@@ -641,7 +655,15 @@ public sealed class WinAcmeSslService(
         PersistCertificate(certificate);
         await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
 
-        var dto = ToDto(site.Name, $"*.{domain}", certificate, ResolveCertificateSource(certificate), MeasureHttpsBinding(site, $"*.{domain}"));
+        // Joker sertifikada bağlamayı win-acme kuruyor ve host başlığı "*.domain" OLMAK ZORUNDA
+        // DEĞİL (alt alan adı başına ayrı bağlama açabilir). O yüzden burada belirli bir host
+        // aranmaz; sitede HERHANGİ bir HTTPS bağlaması olması sorulur.
+        var dto = ToDto(
+            site.Name,
+            $"*.{domain}",
+            certificate,
+            ResolveCertificateSource(certificate),
+            await MeasureHttpsBindingAsync(site.Name, string.Empty, cancellationToken));
         await UpsertAsync(dto, cancellationToken);
         return dto;
     }
@@ -727,7 +749,31 @@ public sealed class WinAcmeSslService(
     }
 
     /// <summary>
-    /// Sitede gerçekten HTTPS bağlaması var mı — ÖLÇÜLÜR. Site bilgisi okunamadıysa null döner.
+    /// Sitede gerçekten HTTPS bağlaması var mı — IIS'ten TAZE okunarak ölçülür.
+    /// <para>
+    /// Bağlama bu sınıfın kendi çağrıları sırasında oluşuyor; elde tutulan eski bir
+    /// <see cref="AdaPanel.Core.Dtos.Sites.SiteDto"/> anlık görüntüsü (bağlama listesi
+    /// değişmez bir kopyadır) onu göremez ve az önce kurulan bağlamayı "yok" gösterir.
+    /// Bu cevap ssl.json'a yazıldığı için yanlışlık kalıcı olur.
+    /// </para>
+    /// </summary>
+    private async Task<bool?> MeasureHttpsBindingAsync(string siteName, string hostName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+            return MeasureHttpsBinding(site, hostName);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Okuyamadık: "bağlama yok" DEMEYİZ, bilmediğimizi söyleriz.
+            logger.LogWarning(exception, "HTTPS baglamasi olculemedi ({SiteName}).", siteName);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Verilen site anlık görüntüsünde HTTPS bağlaması var mı. Site okunamadıysa null döner.
     /// </summary>
     private static bool? MeasureHttpsBinding(AdaPanel.Core.Dtos.Sites.SiteDto? site, string hostName)
     {
@@ -737,9 +783,14 @@ public sealed class WinAcmeSslService(
             return null;
         }
 
+        // hostName boş verildiğinde (joker sertifika) belirli bir host aranmaz: sitede HERHANGİ
+        // bir HTTPS bağlaması olması yeterlidir.
+        var herhangiBiri = string.IsNullOrWhiteSpace(hostName);
+
         return site.Bindings.Any(binding =>
             string.Equals(binding.Protocol, "https", StringComparison.OrdinalIgnoreCase)
-            && (string.IsNullOrWhiteSpace(binding.HostName)
+            && (herhangiBiri
+                || string.IsNullOrWhiteSpace(binding.HostName)
                 || string.Equals(binding.HostName, hostName, StringComparison.OrdinalIgnoreCase)));
     }
 

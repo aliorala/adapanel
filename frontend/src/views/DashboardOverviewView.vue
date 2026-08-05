@@ -85,6 +85,11 @@
           <button class="secondary compact access-copy" @click="copyAccess(link.url)">
             {{ copiedUrl === link.url ? t("panel.dashboard.access.copied") : t("panel.dashboard.access.copy") }}
           </button>
+          <!-- Kopyalanamadıysa SESSİZ kalınmaz: adres zaten yanda duruyor, kullanıcı seçip
+               elle kopyalayabilsin diye sebebi söylenir. -->
+          <small v-if="copyFailed === link.url" class="access-copy-failed" role="alert">
+            {{ t("panel.common.copyFailed") }}
+          </small>
         </li>
       </ul>
 
@@ -369,6 +374,7 @@ function go(sectionId: string) {
 // pencereden, güvenli yol prop'tan; IP'ler API'den. Kurulumdan sonra "nasıl erişirim" sorusunu yanıtlar.
 const serverIps = ref<string[]>([]);
 const copiedUrl = ref("");
+const copyFailed = ref("");
 
 onMounted(async () => {
   try {
@@ -399,10 +405,17 @@ const primaryHost = computed(() => serverIps.value[0] || window.location.hostnam
 
 async function copyAccess(url: string) {
   // window.prompt kaldırıldı: tarayıcı diyalogları engellendiğinde akış sessizce ölüyordu.
-  // Ortak yardımcı http bağlamında da kopyalar; olmadıysa "kopyalandı" işareti verilmez.
+  // Ama SESSİZ de kalınmaz: eski hâli en azından adresi bir kutuda gösteriyordu, yani
+  // kullanıcının elle kopyalama şansı vardı. Kopyalanamadıysa bunu SÖYLERİZ.
   if (!(await copyToClipboard(url))) {
+    copyFailed.value = url;
+    window.setTimeout(() => {
+      if (copyFailed.value === url) copyFailed.value = "";
+    }, 4000);
     return;
   }
+
+  copyFailed.value = "";
 
   copiedUrl.value = url;
   window.setTimeout(() => {
@@ -604,6 +617,12 @@ function formatTimeSpan(value: string): string {
 
 .access-copy {
   flex: none;
+}
+
+.access-copy-failed {
+  flex-basis: 100%;
+  color: var(--warn-text, #a07800);
+  font-size: 0.78rem;
 }
 
 .ext-conn {

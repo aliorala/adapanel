@@ -116,11 +116,24 @@ public sealed class WebDbClientService(
         var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
-        // phpMyAdmin (IIS app pool) token dosyasını okuyup siler → yazma izni gerekir.
-        // Dizin, parola YAZILMADAN ÖNCE yalnızca bu araca kilitlenir; kilitlenemezse işlem DURUR.
-        if (!SecureTokenDirectory(tokensDir, await ResolveToolAppPoolNameAsync(state.SiteName, cancellationToken)))
+        // Dizin, parola YAZILMADAN ÖNCE diğer müşterilerin uygulama havuzlarına kapatılır.
+        //
+        // Kilitlenemezse işlem KOŞULSUZ DURDURULMAZ — çünkü bu, aracı tamamen kullanılamaz
+        // yapıyordu. Ayrım riskin büyüklüğünde: kapatılamayan bir dizine MOTORUN ROOT PAROLASI
+        // yazılmaz (sunucudaki tüm veritabanlarını açar), ama tek bir veritabanının kendi
+        // kullanıcısı yazılabilir — o parola zaten yalnız o veritabanına erişir ve panelin
+        // tercih ettiği yol da odur.
+        var dizinKilitli = SecureTokenDirectory(tokensDir, await ResolveToolAppPoolNameAsync(state.SiteName, cancellationToken));
+        if (!dizinKilitli)
         {
-            throw new AppException("webdb.token_dir_unprotected", 500, 500);
+            logger.LogWarning(
+                "Belirtec dizini diger uygulama havuzlarina kapatilamadi: {Directory}. Root parolasi bu dizine yazilmayacak.",
+                tokensDir);
+
+            if (string.Equals(user, "root", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AppException("webdb.token_dir_unprotected", 500, 500);
+            }
         }
 
         CleanupOldTokens(tokensDir);
@@ -565,10 +578,21 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
             }
 
             var havuz = appPoolName.Trim();
+
+            // MIRAS KIRILMAZ. Ilk surumde "/inheritance:r" kullaniliyordu ve bu, PANELIN KENDI
+            // dosyasini erisilemez hale getirdi: bu dizinde panelin HTTP korumasi icin yazdigi bir
+            // web.config duruyor ve miras kesilince ona yazilamaz oldu
+            // ("Access to the path ...\adapanel-tokens\web.config is denied") -- yani guvenlik
+            // duzeltmesi araci tamamen kirdi.
+            //
+            // Gereken sey mirasi kesmek degil, GENIS GRUBU KALDIRMAKTI. "/remove:g" tam olarak
+            // bunu yapar ve SYSTEM/Administrators erisimi miras yoluyla oldugu gibi kalir.
+            //
+            // "/inheritance:e" ilk basta: onceki surumun kirdigi mirasi GERI ACAR, yani bu
+            // duzeltme kendinden onceki hasari da onarir.
             var arguments =
-                $"\"{directory}\" /inheritance:r " +
-                "/grant \"*S-1-5-18:(OI)(CI)F\" " +      // SYSTEM — SID kullanilir: Turkce Windows'ta hesap ADI farklidir
-                "/grant \"*S-1-5-32-544:(OI)(CI)F\" " +  // Administrators
+                $"\"{directory}\" /inheritance:e " +
+                $"/remove:g \"*{IisIusrsSid}\" " +       // IIS_IUSRS: sunucudaki TUM havuzlari kapsar
                 $"/grant \"IIS AppPool\\{havuz}:(OI)(CI)M\" /T /C /Q";
 
             var psi = new System.Diagnostics.ProcessStartInfo("icacls.exe", arguments)
@@ -610,11 +634,9 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
         {
             var guvenlik = new DirectoryInfo(directory).GetAccessControl();
 
-            if (guvenlik.AreAccessRulesProtected == false)
-            {
-                return false;
-            }
-
+            // Miras KAPALI OLMAK ZORUNDA DEGIL: aranan sey, IIS_IUSRS'in bu dizine erisiminin
+            // KALMAMASI. Kurallar miras dahil okunur (ikinci parametre true), yani grup ust
+            // klasorden geliyorsa da yakalanir.
             var kurallar = guvenlik.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier));
             foreach (System.Security.AccessControl.FileSystemAccessRule kural in kurallar)
             {

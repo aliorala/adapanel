@@ -82,6 +82,15 @@ export interface PromptOptions {
   minLength?: number;
   hint?: string;
   confirmLabel?: string;
+  /**
+   * Boş değer gönderilebilsin mi.
+   * <p>
+   * `window.prompt` boş dizeye izin veriyordu ve bazı akışlar buna DAYANIYOR: posta dağıtım
+   * listesinin alıcılarını temizlemenin tek yolu alanı boşaltmaktı. Varsayılan olarak boş
+   * değer kapalıdır (parola alanları için doğrusu budur), ama bu akışlar için açılabilir.
+   * </p>
+   */
+  allowEmpty?: boolean;
 }
 
 interface PromptState {
@@ -102,6 +111,12 @@ export const promptState = reactive<PromptState>({ open: false, options: null })
 let pending: ((value: string | null) => void) | null = null;
 
 function ask(options: PromptOptions): Promise<string | null> {
+  // YENIDEN GIRIS KORUMASI: ikinci bir çağrı `pending`'i ezerse ilk promise HİÇ çözülmez ve
+  // onu bekleyen fonksiyon sonsuza kadar asılı kalır. Aynı koruma ConfirmDialog'da da var.
+  if (promptState.open) {
+    return Promise.resolve(null);
+  }
+
   promptState.options = options;
   promptState.open = true;
   return new Promise((resolve) => {
@@ -138,6 +153,10 @@ let lastFocused: HTMLElement | null = null;
 const titleId = "prompt-dialog-title";
 const inputType = computed(() => (state.options?.password && !revealed.value ? "password" : "text"));
 const canAccept = computed(() => {
+  if (state.options?.allowEmpty && !state.options?.minLength) {
+    return true;
+  }
+
   const min = state.options?.minLength ?? 1;
   return value.value.trim().length >= Math.max(1, min);
 });
@@ -227,7 +246,9 @@ function trapFocus(event: KeyboardEvent) {
   place-items: center;
   padding: 1rem;
   background: rgba(0, 0, 0, 0.45);
-  z-index: 1000;
+  /* Onay diyaloğunun (1200) ÜSTÜNDE: bir onay akışı içinden değer sorulursa, sorulan şey
+     arkada kalıp kullanılamaz hale gelmemeli. */
+  z-index: 1300;
 }
 
 .prompt-dialog {

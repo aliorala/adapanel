@@ -2948,7 +2948,7 @@
   "panel.tasks.timeLimit": "Time limit",
   "panel.tasks.timeLimitNone": "No limit (recommended)",
   "panel.tasks.timeLimitHours": "{hours} hours",
-  "panel.tasks.timeLimitHint": "How long a single run may take. Leave it unlimited so a long job (a large scrape, a full backup) is not cut off half-way. With a limit, a run that exceeds it is killed and the unfinished work is lost. If a task gets stuck, the panel tells you in the yellow box above and you can stop it with one click.",
+  "panel.tasks.timeLimitHint": "If a task runs longer than this, Windows stops it. With \"Unlimited\" the task runs until it finishes on its own; the \"Tasks running right now\" box at the top of the page shows how long it has been going and lets you stop it whenever you want.",
   "panel.tasks.systemEnvHint": "Tasks run as SYSTEM — your own session's PATH and per-user installations do NOT apply. If you installed tools like Python, node or git \"for me only\", the task will not find them. Fix: write the full path in the command (e.g. C:\\Python311\\python.exe), or install the tool \"for all users\".",
   "cron.run_failed": "The task could not be triggered.",
   "cron.run_started": "Task triggered.",

@@ -25,12 +25,40 @@ public sealed class WebDbTokenDirectoryTests
     }
 
     /// <summary>
-    /// Miras KIRILMALI: ust klasorden gelen genis izinler duruyorsa "yalniz bu havuz" sozu tutulamaz.
+    /// MIRAS KIRILMAZ — bu, PANELIN KENDI DOSYASINI erisilemez yapiyordu.
+    /// <para>
+    /// Ilk surumde "/inheritance:r" kullanildi. Bu dizinde panelin HTTP korumasi icin yazdigi bir
+    /// web.config duruyor; miras kesilince panel ona yazamaz oldu ve kullanici
+    /// "Access to the path ...\adapanel-tokens\web.config is denied" hatasi aldi -- yani guvenlik
+    /// duzeltmesi araci tamamen kirdi. Bu makinede birebir uretildi ve dogrulandi.
+    /// </para>
+    /// <para>
+    /// Gereken sey mirasi kesmek degil, GENIS GRUBU KALDIRMAKTI. Ayrica "/inheritance:e" onceki
+    /// surumun kirdigi mirasi geri acar, yani duzeltme kendinden onceki hasari da onarir.
+    /// </para>
     /// </summary>
     [Fact]
-    public void TheTokenDirectory_BreaksInheritance()
+    public void TheTokenDirectory_NeverBreaksInheritance()
     {
-        Assert.Contains("/inheritance:r", OkuKaynak(), StringComparison.Ordinal);
+        var kaynak = OkuKaynak();
+
+        // Aciklamalarda gecebilir; aranan sey KOMUTUN KENDISI.
+        Assert.DoesNotContain("{directory}\\\" /inheritance:r", kaynak, StringComparison.Ordinal);
+        Assert.Contains("{directory}\\\" /inheritance:e", kaynak, StringComparison.Ordinal);
+        Assert.Contains("/remove:g", kaynak, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Dizin kapatilamadiginda arac KOSULSUZ KIRILMAZ; ayrim riskin buyuklugundedir.
+    /// Root parolasi (sunucudaki tum veritabanlarini acar) korumasiz dizine yazilmaz, ama tek bir
+    /// veritabaninin kendi kullanicisi yazilabilir -- o parola zaten yalniz o veritabanina erisir.
+    /// </summary>
+    [Fact]
+    public void WhenTheDirectoryCannotBeLocked_OnlyTheRootPasswordIsWithheld()
+    {
+        var kaynak = OkuKaynak();
+
+        Assert.Contains("if (string.Equals(user, \"root\", StringComparison.OrdinalIgnoreCase))", kaynak, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -85,16 +113,16 @@ public sealed class WebDbTokenDirectoryTests
     }
 
     /// <summary>
-    /// Hesap adlari DILE BAGLIDIR: Turkce Windows'ta "SYSTEM"/"Administrators" adlari farklidir,
-    /// bu yuzden sabit SID kullanilir.
+    /// Grup DILE BAGLI ADIYLA DEGIL, sabit SID ile kaldirilir: Turkce Windows'ta yerlesik grup
+    /// adlari farklidir ve ada gore yapilan bir kaldirma sessizce hicbir sey yapmazdi.
     /// </summary>
     [Fact]
-    public void WellKnownAccounts_AreReferencedBySidNotByLocalisedName()
+    public void TheWideGroup_IsReferencedBySidNotByLocalisedName()
     {
         var kaynak = OkuKaynak();
 
-        Assert.Contains("*S-1-5-18", kaynak, StringComparison.Ordinal);
-        Assert.Contains("*S-1-5-32-544", kaynak, StringComparison.Ordinal);
+        Assert.Contains($"/remove:g \\\"*{{IisIusrsSid}}\\\"", kaynak, StringComparison.Ordinal);
+        Assert.DoesNotContain("/remove:g \"IIS_IUSRS\"", kaynak, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -107,8 +135,9 @@ public sealed class WebDbTokenDirectoryTests
         var kaynak = OkuKaynak();
 
         Assert.Contains("VerifyTokenDirectoryLocked", kaynak, StringComparison.Ordinal);
-        Assert.Contains("AreAccessRulesProtected", kaynak, StringComparison.Ordinal);
         Assert.Contains("S-1-5-32-568", kaynak, StringComparison.Ordinal);
+        // Kurallar MIRAS DAHIL okunur: grup ust klasorden geliyorsa da yakalanmali.
+        Assert.Contains("GetAccessRules(true, true,", kaynak, StringComparison.Ordinal);
     }
 
     /// <summary>

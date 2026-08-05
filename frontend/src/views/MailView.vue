@@ -1047,7 +1047,10 @@ async function editListRecipients(address: string, current: string[]) {
     title: t("panel.mail.listEditPrompt"),
     message: address,
     label: t("panel.mail.listRecipients"),
-    defaultValue: current.join(", ")
+    defaultValue: current.join(", "),
+    // Alanı boşaltmak, listenin alıcılarını temizlemenin TEK yolu — window.prompt buna
+    // izin veriyordu, yeni diyalog da vermeli.
+    allowEmpty: true
   });
   if (value === null) return;
   await run(async () => {
