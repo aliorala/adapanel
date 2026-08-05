@@ -6116,3 +6116,72 @@ Basarili:
   SHA256 `358681007665DA493B904C8AC5DB3B9A4DDD538B99D999CE386D961363B76174`. Yayindaki dosya
   indirilip hash'lendi: birebir. Ayrica **0.2.27 release notuna UYARI eklendi** (API PATCH ile):
   "bu surumu kullanmayin, veritabani motorlarinda Guncelle verinizi silebilir, 0.2.28'e gecin".
+
+## 2026-08-05 (212) — 0.2.87-0.2.90: notlardaki dort is (cron sunumu, Adminer, arayuz, SSL)
+
+> NOT: bu dosya 0.2.28'den 0.2.86'ya kadar GUNCELLENMEMIS. Aradaki surumlerin devir notlari
+> yalnizca git commit mesajlarinda duruyor (`git log --oneline`); oradaki mesajlar ayrintili.
+
+### 0.2.87 — cron ekrani "neden calismadi" sorusuna cevap vermiyordu
+- Panel veriye ZATEN sahipti (State, LastRunTimeUtc, LastTaskResult); eksik olan sunumdu.
+- Devre disi gorevde "sonraki calisma" tarihi GOSTERILMIYOR ("Devre disi -- calismayacak") ve satir
+  gorsel olarak ayrisiyor. Satir altinda TEK CUMLELIK sebep. 0x1 artik "cikis kodu 1" + cikti dugmesi.
+- "Takildi" kelimesi yalnizca kullanicinin O GOREV icin verdigi sure siniri asilinca kullaniliyor;
+  yoksa notr "Su anda calisan gorevler" kutusu (kullanicinin botu gunlerce surebilir, bu NORMAL).
+- Calisan satirda birincil dugme artik "Suren calismayi durdur" (onceden en gorunur dugme "Devre disi
+  birak"ti ve o, calisan turu DURDURMAZ).
+- **Durdurma artik surec AGACINI olduruyor** (Schedule.Service EnginePID + gorev gunluk yolundan
+  OKSUZ surec). **SIRA KRITIK, canlida olculdu:** Stop-ScheduledTask ONCE cagrilirsa ust surec
+  aninda oluyor, Get-Process bulamiyor, oldurme dongusu HICBIR SEY YAPMIYOR (OLDURULEN=0) ve is
+  nesnesinden kopan surecler (Chrome/chromedriver) hayatta kaliyor. Once agac, sonra Stop.
+- **taskhostw ASLA oldurulmez:** bu makinede olculdu, COM isleyicili iki ayri Windows gorevi ayni
+  taskhostw'u EnginePID olarak bildiriyor; /T ile oldurmek ilgisiz gorevleri dusururdu.
+- Devre disi gorev tetiklenince ham PowerShell yigini yerine `cron.task_disabled`.
+- Panelde gorevi devre disi birakan TEK yol satirdaki gecis dugmesi (kod tarandi).
+
+### 0.2.88 — Adminer tek tik girisi HIC ACILMIYORDU
+- Panel **Adminer 5.4.2** indiriyor; sarmalayici **4.x** sozlesmesine gore yazilmisti.
+- Gercek adminer-5.4.2.php + gercek PHP 8.3 ile UC hata bulundu, ilki duzeltilmeden ikincisi
+  gorunmuyordu:
+  1. `Class "Adminer" not found` — 5'te temel sinif `\Adminer\Adminer`. display_errors kapali
+     oldugu icin canlida BOS SAYFA goruluyordu. Artik hangi sinifin var oldugu OLCULUYOR (5.x+4.x).
+  2. Adminer giristen sonra KENDI giris noktasina yonlendiriyor; belirtec tek kullanimlik oldugu
+     icin ikinci istek 403 "Baglanti suresi dolmus" veriyordu. Belirtec artik yalnizca otomatik
+     girisi baslatiyor, sonrasinda Adminer'in KENDI oturumu is goruyor.
+  3. Veritabani suzgeci ilk sayfadan sonra kayboluyordu (DB secici TUM veritabanlarini
+     listeliyordu). Adminer'in oturumuna yazmak DENENDI: sarmalayici cagrildiginda
+     `session_status()` PHP_SESSION_NONE donuyor. Suzgec artik Adminer'in kendi `db` parametresinden.
+- `adminer_object()` KURESEL ad alaninda kalmali: `function_exists('adminer_object')` dizgeyi ad
+  alanina gore cozmez.
+- Bu bir yetki siniri degil gosterim sinirdir: Adminer'i acan uclarin ikisi de Administrator-only.
+- **Canli dogrulama yontemi:** panel API'sinden gercek DB+kullanici olusturuldu (`POST /api/v1/db`,
+  alan adi `engine`), `php -S` ile gercek HTTP uzerinden test edildi, sonra DB silindi.
+  Giris alani: `userNameOrEmail` (`userName` DEGIL), CSRF yaniti `data.requestToken`.
+
+### 0.2.89 — ham hata anahtari ekranda + olu kopyala dugmeleri + 33 eksik "İ"
+- `common.unexpected_error` hicbir dilde YOKTU (middleware'in yakalanmayan HER istisnasi bu kodu
+  donduruyor) + 5 anahtar daha. **Yeni test `MessageKeyCoverageTests` bu SINIFI kapatiyor.**
+  Test iki kez dogrulandi: anahtar silinince patliyor, ve tarama bozulup 0 anahtar bulursa
+  sessizce gecmesin diye alt sinir var — ILK YAZIMDA tam da bu oluyordu (kok yolu
+  `...\bin\Debug\..\..\..` seklinde birikince bin/obj filtresi butun kaynaklari atliyordu).
+  Tarama bilerek yalnizca HATA yollarini kapsiyor (basari mesajlarini arayuz kendi metniyle gosterir).
+- `utils/clipboard.ts`: modern API yoksa execCommand yedegi -> dugmeler http'de de GERCEKTEN
+  kopyaliyor. 8 cagri yerinin hepsi cevrildi (2FA kurtarma kodlari dahil), 2 yerde `window.prompt`
+  kaldirildi. Sonuc olculuyor: kopyalanmadiysa "kopyalandi" DENMIYOR.
+- Form acilir listeleri artik tablo aramasina bagli degil (arama yapinca "yetki verilecek
+  veritabani" listesi bosaliyordu).
+- Goc ekraninda kaynak panel adlari ICERIKTE bilerek KALDI (islevsel); yalnizca sabit kodlu sekme
+  etiketleri i18n'e tasindi.
+
+### 0.2.90 — gercek Let's Encrypt sertifikasi "self-signed" gorunuyordu
+- Kaynak `FriendlyName` icinde "Let's Encrypt" aranarak bulunuyordu; o adi win-acme yazar
+  (`[win-acme] ornek.com @ ...`) ve kosul HICBIR ZAMAN dogru olmuyordu. Kullanici sertifikanin
+  alinmadigini sanip tekrar deniyor ve LE haftalik limitini yakiyordu. Artik veren/konu
+  iliskisinden okunuyor; baska otorite imzaladiysa "manual" (ona "self-signed" demek de yanlisti).
+- `IsHttpsBindingPresent` sabit `true` idi -> artik `bool?` ve GERCEKTEN olculuyor; null = olculemedi.
+- Tekil sertifika yolunda 120 sn -> 10 dk (mesru yayinlamayi ortasinda kesiyordu) ve kendinden
+  imzaliya dusus artik SESSIZ DEGIL: sebep DTO'da tasinip sertifika satirinin altinda yaziliyor.
+
+### BU TURDA PAKET URETILMEDI
+- 0.2.86 GitHub'da yayinda; 0.2.87-0.2.90 yalnizca commit'lendi, installer uretilmedi/yayinlanmadi.
+- Canli sunucuya cikmadan once: `dotnet publish` + ISCC ile paket, SHA256 kaydi, GitHub release.
