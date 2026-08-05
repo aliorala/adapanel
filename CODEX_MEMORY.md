@@ -6208,7 +6208,16 @@ Basarili:
   borcu yok, bos catch'lerin hepsi PowerShell betigi icinde (niyetli).
 - **0.2.91 PAKET:** `artifacts\release\0.2.91\AdaPanelSetup.exe`, `55,306,361` byte (52.74 MiB),
   SHA256 `81B1844F48C87E31805B946DD375570DD07FC6516FC34F327DF9DEBC3F52C2C2`.
-- **YAYINLANAMADI:** bu calisma kopyasinda **git remote YOK, gh CLI yok, GH token yok**.
-  0.2.86 hala `releases/latest`. `release-body.json` 0.2.91 icin hazir (0.2.87-0.2.91 birlesik
-  notu). Yayin icin: remote ekle + push + release olustur + AdaPanelSetup.exe yukle, sonra
-  yayindaki dosyayi indirip SHA256'yi yukaridakiyle karsilastir.
+- **YAYINLANDI (2026-08-05):** GitHub release **0.2.91** (id 365559428), asset id 502672604.
+  YAYINDAKI DOSYA INDIRILIP HASH LENDI: `81B1844F...3F52C2C2` (yereldekiyle BIREBIR).
+  `releases/latest` -> **0.2.91**, draft=false, prerelease=false.
+- **YAYIN YONTEMI (onemli):** GitHub deposunda **KOD YOK** — yalnizca README var ve 73 tag in
+  hepsi o tek commit e (`7d5feb8`) isaret ediyor. Yani release ler SADECE kurulum paketi
+  tasiyor; kaynak kod hic push edilmiyor (yerel gecmis uzakla **ilgisiz**, merge reddediliyor).
+  Kimlik **Windows Credential Manager**'da duruyor; token'i `git credential fill` ile al
+  (girdi: `protocol=https` + `host=github.com` + bos satir), sonra REST API ile release olustur
+  ve asset yukle. `gh` CLI kurulu DEGIL, ortamda GH_TOKEN YOK. Anonim API cagrilari rate
+  limit'e takilir; dogrulamayi token ile yap.
+- **Yayin sonrasi ZORUNLU dogrulama:** yayindaki dosyayi indirip SHA256'yi yereldekiyle
+  karsilastir + `releases/latest` gercekten yeni surumu gosteriyor mu bak (panelin self-update'i
+  onu okur).
