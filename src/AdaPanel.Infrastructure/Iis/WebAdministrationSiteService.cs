@@ -52,9 +52,14 @@ public sealed partial class WebAdministrationSiteService(
             var sites = GetSitesCollection(serverManager);
             var normalizedName = NormalizeSiteName(request.Name);
 
+            EnsureSiteNameIsNotReserved(normalizedName, request.IsManagedInfrastructure);
+
             // Aynı isimde IIS sitesi zaten varsa (genelde önceki bir AdaPanel kurulumu
             // kaldırılınca IIS'te kalan artık site), onu KALDIR ve yeniden oluştur. Böylece
             // kullanıcı domaini tekrar ekleyebilir (profesyonel paneller gibi: aynı domain = aynı site).
+            //
+            // Bu davranış BİLİNÇLİDİR; tehlikeli olan tarafı yukarıdaki ad kontrolü kapatır:
+            // panelin kendi araçları da birer IIS sitesidir ve o adlar artık devralınamaz.
             var existingSite = EnumerateSites(sites).FirstOrDefault(site =>
                 string.Equals(GetStringProperty(site, "Name"), normalizedName, StringComparison.OrdinalIgnoreCase));
             if (existingSite is not null)
@@ -733,6 +738,37 @@ public sealed partial class WebAdministrationSiteService(
         }
 
         return normalized;
+    }
+
+    /// <summary>"AdaPanel." öneki panelin kendi altyapısına ayrılmıştır.</summary>
+    private const string ManagedSitePrefix = "AdaPanel.";
+
+    /// <summary>
+    /// Panelin kendi altyapı sitelerinin adlarını kullanıcı isteklerine kapatır.
+    /// <para>
+    /// Site oluşturma, aynı adlı IIS sitesini onay sormadan kaldırır. Bu davranış artık siteleri
+    /// devralmak için bilinçli konmuştur — ama panelin araçları da birer IIS sitesidir
+    /// (<c>AdaPanel.Webmail</c>, <c>AdaPanel.WebDb.PhpMyAdmin</c>, <c>AdaPanel.WebDb.Adminer</c>).
+    /// Kullanıcı o adlardan birini yazdığında çalışan araç ve yönetilen uygulama havuzu sessizce
+    /// yok oluyordu; kullanıcı da neden phpMyAdmin'in kaybolduğunu anlayamazdı.
+    /// </para>
+    /// <para>
+    /// <c>Default Web Site</c> de korunur: panel onu yönetmez, dolayısıyla silme kararı da panelin
+    /// değildir.
+    /// </para>
+    /// </summary>
+    private static void EnsureSiteNameIsNotReserved(string siteName, bool isManagedInfrastructure)
+    {
+        if (isManagedInfrastructure)
+        {
+            return;
+        }
+
+        if (siteName.StartsWith(ManagedSitePrefix, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(siteName, "Default Web Site", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("sites.reserved_name", 409, 409);
+        }
     }
 
     private static string NormalizeProtocol(string protocol)

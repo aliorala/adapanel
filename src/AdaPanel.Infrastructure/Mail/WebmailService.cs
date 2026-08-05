@@ -751,7 +751,9 @@ public sealed class WebmailService(
             IpAddress = "*",
             Port = port,
             Protocol = "http",
-            AutoStart = true
+            AutoStart = true,
+            // Panelin KENDİ altyapı sitesi: "AdaPanel." önekli adlar kullanıcı isteklerine kapalıdır.
+            IsManagedInfrastructure = true
         }, cancellationToken);
     }
 

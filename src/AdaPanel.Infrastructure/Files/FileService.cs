@@ -96,10 +96,6 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
     }
 
-    /// <summary>İzin verilen haklar. Serbest metin KABUL EDİLMEZ; aşağıya bakınız.</summary>
-    private static readonly HashSet<string> AllowedAclRights =
-        new(StringComparer.OrdinalIgnoreCase) { "R", "RX", "M", "F", "W" };
-
     /// <summary>
     /// Klasöre bir kullanıcı/grup için izin verir.
     /// <para>
@@ -123,25 +119,14 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         // Site kökünün TAMAMINA /T ile izin uygulamak diğer işlemlerde de yasak; burada eksikti.
         EnsureNotSiteRoot(target);
 
-        var principal = (request.Principal ?? string.Empty).Trim();
-        var rights = (request.Rights ?? string.Empty).Trim();
-
-        // Hesap adı: harf/rakam/boşluk/nokta/tire/alt çizgi ve alan ayıracı (\ veya @). Tırnak,
-        // noktalı virgül, iki nokta ve eğik çizgi YOK — bunlar icacls söz dizimini kırar.
-        if (principal.Length is 0 or > 256 ||
-            !System.Text.RegularExpressions.Regex.IsMatch(principal, @"^[\w .\-]+(?:[\\@][\w .\-]+)?$"))
-        {
-            throw new AppException("files.invalid_principal", 400, 400);
-        }
-
-        if (!AllowedAclRights.Contains(rights))
-        {
-            throw new AppException("files.invalid_rights", 400, 400);
-        }
+        // Doğrulama TEK KAYNAKTAN gelir (bkz. AclInputValidator): aynı kural site izolasyonunda da
+        // geçerli ve kopyalanmış bir kural, birini sıkılaştırıp diğerini unutmanın yoludur.
+        var principal = AclInputValidator.EnsurePrincipal(request.Principal);
+        var rights = AclInputValidator.EnsureRights(request.Rights);
 
         var result = await ProcessRunner.RunAsync(
             "icacls.exe",
-            $"\"{target.PhysicalPath}\" /grant \"{principal}:{rights.ToUpperInvariant()}\" /T /C",
+            $"\"{target.PhysicalPath}\" /grant \"{principal}:{rights}\" /T /C",
             cancellationToken: cancellationToken);
 
         if (!result.Success)

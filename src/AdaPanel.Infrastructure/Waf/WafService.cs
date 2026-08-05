@@ -76,20 +76,49 @@ public sealed class WafService(
             throw MapIisException(exception);
         }
 
-        return await SaveStateAsync(site, isIsolated: true, cancellationToken: cancellationToken);
+        var durum = await SaveStateAsync(site, isIsolated: true, cancellationToken: cancellationToken);
+
+        /*
+         * KLASÖR İZNİ HAVUZU TAKİP ETMELİ.
+         *
+         * Klasör ACL'i bir HAVUZ KİMLİĞİNE verilir. Bu metot ise sitenin havuzunu değiştirir —
+         * yani daha önce uygulanmış izin artık ESKİ kimliğe yazılıdır. Üstelik ACL uygulanırken
+         * miras kırıldığı için IIS_IUSRS üzerinden yedek bir erişim de kalmaz: site 401.3/500
+         * verir ve kullanıcı bunu izolasyona bağlayamaz.
+         *
+         * İzin daha önce uygulanmadıysa dokunulmaz — izolasyon, kullanıcının istemediği bir
+         * kısıtlamayı kendiliğinden getirmemeli.
+         */
+        if (durum.FolderAclApplied)
+        {
+            // Principal boş: ApplyFolderAclAsync siteyi TAZE okur ve yeni havuz kimliğini kullanır.
+            return await ApplyFolderAclAsync(
+                siteName,
+                new ApplyFolderAclRequest { Principal = string.Empty, Rights = string.Empty },
+                cancellationToken);
+        }
+
+        return durum;
     }
 
     public async Task<SiteSecurityConfigurationDto> ApplyFolderAclAsync(string siteName, ApplyFolderAclRequest request, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        // Boş bırakılırsa sitenin O ANKİ havuz kimliği kullanılır — site taze okunduğu için
+        // izolasyondan sonra da doğru havuza yazar.
         var principal = string.IsNullOrWhiteSpace(request.Principal)
             ? $"IIS AppPool\\{site.ApplicationPoolName}"
-            : request.Principal.Trim();
+            : Support.AclInputValidator.EnsurePrincipal(request.Principal);
 
         var applicationRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
             ? site.PhysicalPath
             : site.ApplicationRootPath;
-        var rights = string.IsNullOrWhiteSpace(request.Rights) ? "M" : request.Rights.Trim();
+        // Doğrulanmadan icacls'e giden bir izin dizesi, sitenin kendi kökünü erişilemez
+        // bırakabilir (ör. "R" verilirse PHP kendi klasörüne yazamaz) ya da komuta bayrak
+        // sızdırabilirdi. Kural AclInputValidator'da, dosya yöneticisiyle ORTAK.
+        var rights = string.IsNullOrWhiteSpace(request.Rights)
+            ? "M"
+            : Support.AclInputValidator.EnsureRights(request.Rights);
         var rootLiteral = applicationRoot.Replace("'", "''");
         var poolLiteral = principal.Replace("'", "''");
         var siteLiteral = site.Name.Replace("'", "''");

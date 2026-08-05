@@ -80,4 +80,21 @@ public sealed class CreateSiteRequest
 
     [StringLength(256)]
     public string FtpPassword { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Bu istek PANELİN KENDİ altyapı sitesini kuruyor (webmail, phpMyAdmin, Adminer).
+    /// <para>
+    /// Kullanıcıdan gelen isteklerde <b>false kalmalıdır</b> ve API bağlamasına da girmez
+    /// (JSON'dan okunmaz): aksi hâlde bir kullanıcı bayrağı göndererek korumayı devre dışı
+    /// bırakabilirdi.
+    /// </para>
+    /// <para>
+    /// Neden var: site oluşturma, aynı adlı IIS sitesini onay sormadan kaldırır (kaldırılmış bir
+    /// kurulumdan kalan artık siteyi devralabilmek için — bu davranış bilinçlidir). Ama panelin
+    /// kendi araçları da birer IIS sitesidir; kullanıcı o adlardan birini yazdığında çalışan
+    /// phpMyAdmin/Adminer/webmail sessizce yok oluyordu.
+    /// </para>
+    /// </summary>
+    [global::System.Text.Json.Serialization.JsonIgnore]
+    public bool IsManagedInfrastructure { get; init; }
 }

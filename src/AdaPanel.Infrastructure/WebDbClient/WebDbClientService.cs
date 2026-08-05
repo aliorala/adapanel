@@ -1224,7 +1224,9 @@ exit;
             IpAddress = "127.0.0.1",
             Port = port,
             Protocol = "http",
-            AutoStart = true
+            AutoStart = true,
+            // Panelin KENDİ altyapı sitesi: "AdaPanel." önekli adlar kullanıcı isteklerine kapalıdır.
+            IsManagedInfrastructure = true
         }, cancellationToken);
     }
 
