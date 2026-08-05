@@ -235,58 +235,149 @@ public sealed class WebDbClientService(
  * ya da sunucu günlüğünde kalan bir adres veritabanına sınırsız erişim verirdi.
  */
 
+/*
+ * BU DOSYA ADMINER'IN GİRİŞ NOKTASIDIR: yalnızca ilk tıklamada değil, kullanıcı Adminer içinde
+ * gezerken AÇILAN HER SAYFADA yeniden çalışır.
+ *
+ * İlk sürüm bunu gözden kaçırıyordu: belirteç tek kullanımlık olduğu için ilk istekte siliniyor,
+ * Adminer giriş sonrası kendi giriş noktasına (yani buraya) yönlendiriyor ve ikinci istekte
+ * belirteç bulunamadığı için kullanıcı "Baglanti suresi dolmus" görüyordu. Yani tek tık girişi,
+ * sınıf hatası olmasa bile ilk yönlendirmede ölürdü. (Gerçek Adminer 5.4.2 ile ölçüldü.)
+ *
+ * Doğru davranış: belirteç YALNIZCA otomatik girişi başlatır. Sonraki isteklerde Adminer'ın
+ * KENDİ oturumu iş görür — panel paralel bir oturum mekanizması icat etmez, aracın kanıtlanmış
+ * kendi mekanizmasını kullanır.
+ */
+
 // Belirteç yalnızca onaltılık olabilir. Bu, dosya adının yola çevrilmesinden ÖNCE yapılır:
 // "../" gibi bir girdi panelin veri klasörünün dışına çıkabilirdi.
 $adaToken = isset($_GET['token']) ? preg_replace('/[^a-f0-9]/', '', (string) $_GET['token']) : '';
-if ($adaToken === '' || strlen($adaToken) < 16) {
-    http_response_code(403);
-    exit('Gecersiz baglanti.');
+
+if ($adaToken !== '' && strlen($adaToken) >= 16) {
+    $adaFile = __DIR__ . DIRECTORY_SEPARATOR . 'adapanel-tokens' . DIRECTORY_SEPARATOR . $adaToken . '.json';
+    if (is_file($adaFile)) {
+        $adaRaw = file_get_contents($adaFile);
+        @unlink($adaFile); // TEK KULLANIMLIK: okundu, artık yok.
+
+        $adaData = json_decode($adaRaw, true);
+        if (is_array($adaData) && isset($adaData['user'])) {
+            $GLOBALS['ADA_LOGIN'] = $adaData;
+
+            /*
+             * Adminer bir oturum denemesi olduğunu anlamak için POST/GET'te kimlik alanı arar.
+             * Alanlar doldurulmazsa credentials() hiç çağrılmaz ve kullanıcı giriş formunu görür.
+             *
+             * Bu alanlar YALNIZCA belirteçli ilk istekte doldurulur. Her istekte doldurmak,
+             * Adminer'in her sayfada yeniden giriş yapıp yönlendirmesine — yani bir yönlendirme
+             * döngüsüne — yol açardı.
+             */
+            $_POST['auth'] = array(
+                'driver'   => 'server',
+                'server'   => $adaData['host'] . ':' . $adaData['port'],
+                'username' => $adaData['user'],
+                'password' => isset($adaData['password']) ? $adaData['password'] : '',
+                'db'       => isset($adaData['only_db']) ? $adaData['only_db'] : '',
+            );
+        }
+    }
+    // Belirteç geçersiz/kullanılmışsa HATA VERİLMEZ: bu, Adminer içindeki gezinmenin normal
+    // hâlidir (tarayıcı eski adresi tekrar isteyebilir). Adminer kendi oturumuna bakar; oturum
+    // yoksa kendi giriş formunu gösterir. Panelin vekili zaten kimlik doğruluyor.
 }
-
-$adaFile = __DIR__ . DIRECTORY_SEPARATOR . 'adapanel-tokens' . DIRECTORY_SEPARATOR . $adaToken . '.json';
-if (!is_file($adaFile)) {
-    // Belirteç yok ya da zaten kullanılmış. İkisi de aynı mesajı alır: hangisinin olduğunu
-    // söylemek, geçerli belirteç aramaya çalışan birine bilgi vermek olurdu.
-    http_response_code(403);
-    exit('Baglanti suresi dolmus. Panelden yeniden acin.');
-}
-
-$adaRaw = file_get_contents($adaFile);
-@unlink($adaFile); // TEK KULLANIMLIK: okundu, artık yok.
-
-$adaData = json_decode($adaRaw, true);
-if (!is_array($adaData) || !isset($adaData['user'])) {
-    http_response_code(500);
-    exit('Baglanti bilgisi okunamadi.');
-}
-
-$GLOBALS['ADA_LOGIN'] = $adaData;
 
 /*
- * Adminer bir oturum denemesi olduğunu anlamak için POST/GET'te kimlik alanı arar. Alanlar
- * doldurulmazsa credentials() hiç çağrılmaz ve kullanıcı yine giriş formunu görür — yani
- * otomatik giriş sessizce çalışmaz.
+ * Adminer'in eklenti giriş noktası. Bu fonksiyon KÜRESEL ad alanında kalmalı: Adminer,
+ * "function_exists('adminer_object')" ile bakar ve dizge biçiminde verilen ad, bulunduğu ad
+ * alanına GÖRE çözülmez — her zaman küresel ada bakar. Fonksiyonu "Adminer" ad alanına taşımak,
+ * Adminer'in eklentiyi hiç görmemesine yol açardı.
  */
-$_POST['auth'] = array(
-    'driver'   => 'server',
-    'server'   => $adaData['host'] . ':' . $adaData['port'],
-    'username' => $adaData['user'],
-    'password' => isset($adaData['password']) ? $adaData['password'] : '',
-    'db'       => isset($adaData['only_db']) ? $adaData['only_db'] : '',
-);
-
 function adminer_object()
 {
-    class AdaPanelAdminer extends Adminer
+    /*
+     * ADMINER SÜRÜMÜ ÖLÇÜLÜR, TAHMİN EDİLMEZ.
+     *
+     * Adminer 5'te her şey "Adminer" ad alanına taşındı: temel sınıfın adı artık
+     * \Adminer\Adminer. Panelin dağıttığı sürüm 5.x olduğu hâlde sarmalayıcı 4.x'in küresel
+     * \Adminer sınıfından türüyordu; sayfa "Class \"Adminer\" not found" ile ölüyordu ve
+     * sunucuda display_errors kapalı olduğundan kullanıcı bu satırı hiç görmeden yalnızca boş
+     * bir sayfa görüyordu.
+     *
+     * Bu kontrol, sınıflar TANIMLANDIKTAN sonra (yani index.php yüklenirken, Adminer bu
+     * fonksiyonu çağırdığı anda) çalışır. Dosyanın başında yapılsaydı hiçbir sınıf henüz
+     * yüklenmemiş olurdu.
+     */
+    $adaBase = null;
+    if (class_exists('Adminer\\Adminer')) {
+        $adaBase = 'Adminer\\Adminer';   // Adminer 5.x
+    } elseif (class_exists('Adminer')) {
+        $adaBase = 'Adminer';            // Adminer 4.x
+    }
+
+    if ($adaBase === null) {
+        // Sessizce boş sayfa DÖNMEYİZ: teşhis edilemeyen bir hata, çözülemeyen bir hatadır.
+        http_response_code(500);
+        exit('Adminer surumu taninmadi: temel sinif bulunamadi. Panelden Adminer bilesenini yeniden kurun.');
+    }
+
+    class_alias($adaBase, 'AdaPanelAdminerBase');
+
+    class AdaPanelAdminer extends \AdaPanelAdminerBase
     {
         public function name()
         {
             return 'AdaPanel';
         }
 
+        /*
+         * Aşağıdaki geçersiz kılmaların HEPSİ, panel kimliği YOKKEN Adminer'in kendi davranışına
+         * düşer. Belirteç tek kullanımlıktır: kullanıcı Adminer içinde gezerken ADA_LOGIN artık
+         * yoktur ve bu geçersiz kılmalar o istekte de çalışır. Diziye körlemesine erişmek her
+         * sayfada ölümcül hata verirdi.
+         */
+
+        /**
+         * Hangi veritabanıyla sınırlıyız: ilk istekte belirteçten, sonraki isteklerde Adminer'ın
+         * adres satırında ZATEN taşıdığı seçili veritabanından.
+         * <p>
+         * Belirteç tek kullanımlıktır; yalnızca ona bakılırsa süzgeç ilk sayfadan sonra hiçbir
+         * yerde uygulanmaz. Gerçek Adminer 5.4.2 ile ölçüldüğünde, ilk sayfadan sonra üstteki "DB"
+         * seçici sunucudaki bütün veritabanlarını listeliyordu — yani panel tutamadığı bir söz
+         * veriyordu.
+         * </p>
+         * <p>
+         * Adminer'in oturumuna yazmak DENENDI VE OLCULDU: adaOnlyDb çağrıldığı anda
+         * session_status() PHP_SESSION_NONE döner (Adminer oturum kilidini erkenden bırakıyor),
+         * yani oraya hiçbir şey yazılamıyor. Bu yüzden kaynak olarak Adminer'in kendi "db"
+         * parametresi kullanılır.
+         * </p>
+         * <p>
+         * Bu bir YETKİ SINIRI DEĞİL, bir gösterim sınırıdır ve öyle olması yeterlidir: Adminer'i
+         * açan uç yalnızca yöneticiye açıktır (WebDbController ve DbToolsProxyController
+         * "Administrator" rolü ister) ve yönetici zaten bütün veritabanlarını görmeye yetkilidir.
+         * Gerçek kiracı izolasyonu, bağlantının veritabanının KENDİ kullanıcısıyla kurulmasıyla
+         * sağlanır; root'a yalnızca o kullanıcı bilinmediğinde düşülür.
+         * </p>
+         */
+        private function adaOnlyDb()
+        {
+            $ada = isset($GLOBALS['ADA_LOGIN']) ? $GLOBALS['ADA_LOGIN'] : null;
+            if (is_array($ada) && isset($ada['only_db']) && $ada['only_db'] !== '') {
+                return $ada['only_db'];
+            }
+
+            if (isset($_GET['db']) && is_string($_GET['db']) && $_GET['db'] !== '') {
+                return $_GET['db'];
+            }
+
+            return '';
+        }
         public function credentials()
         {
-            $ada = $GLOBALS['ADA_LOGIN'];
+            $ada = isset($GLOBALS['ADA_LOGIN']) ? $GLOBALS['ADA_LOGIN'] : null;
+            if (!is_array($ada)) {
+                return parent::credentials();
+            }
+
             return array(
                 $ada['host'] . ':' . $ada['port'],
                 $ada['user'],
@@ -299,16 +390,23 @@ function adminer_object()
          * yönetici yetkisi doğrulanmış ve belirteç tek kullanımlık üretilmişti. Adminer'in
          * kendi form doğrulamasını burada tekrarlamak, aynı kararı ikinci kez ve daha zayıf
          * bilgiyle vermek olurdu.
+         *
+         * Panel kimliği yoksa karar Adminer'a bırakılır — kendi giriş formundan gelen bir
+         * denemeyi panel adına onaylamak, vermediğimiz bir güvence vermek olurdu.
          */
         public function login($login, $password)
         {
+            if (!isset($GLOBALS['ADA_LOGIN'])) {
+                return parent::login($login, $password);
+            }
+
             return true;
         }
 
         public function database()
         {
-            $ada = $GLOBALS['ADA_LOGIN'];
-            return isset($ada['only_db']) && $ada['only_db'] !== '' ? $ada['only_db'] : null;
+            $ada = $this->adaOnlyDb();
+            return $ada !== '' ? $ada : parent::database();
         }
 
         /**
@@ -322,9 +420,9 @@ function adminer_object()
          */
         public function databases($flush = true)
         {
-            $ada = $GLOBALS['ADA_LOGIN'];
-            if (isset($ada['only_db']) && $ada['only_db'] !== '') {
-                return array($ada['only_db']);
+            $ada = $this->adaOnlyDb();
+            if ($ada !== '') {
+                return array($ada);
             }
 
             return parent::databases($flush);
