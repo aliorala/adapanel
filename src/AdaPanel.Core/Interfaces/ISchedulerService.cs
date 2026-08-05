@@ -40,10 +40,14 @@ public interface ISchedulerService
     Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sürmekte olan çalışmayı sonlandırır. Görev silinmez, devre dışı bırakılmaz; bir sonraki
-    /// zamanında normal çalışmaya döner.
+    /// Sürmekte olan çalışmayı SÜREÇ AĞACIYLA birlikte sonlandırır. Görev silinmez, devre dışı
+    /// bırakılmaz; bir sonraki zamanında normal çalışmaya döner.
+    /// <para>
+    /// Sonuç ölçülerek döner: kaç süreç ağacı sonlandırıldı ve görev hâlâ çalışıyor mu. Arayüz
+    /// "durduruldu" sözünü ancak ölçüme dayanarak verebilsin diye.
+    /// </para>
     /// </summary>
-    Task StopTaskAsync(string name, CancellationToken cancellationToken = default);
+    Task<StopScheduledTaskResultDto> StopTaskAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Daha önce kaydedilmiş görevlerin ayarlarını sunucuya uygun hâle getirir; kaç görevin

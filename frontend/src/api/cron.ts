@@ -121,9 +121,21 @@ export async function getScheduledTaskOutput(name: string) {
   return response.data.data;
 }
 
-// Takılı kalmış çalışmayı sonlandırır. Görev silinmez; bir sonraki zamanında normal çalışır.
+export type StopScheduledTaskResult = {
+  // Ağacıyla birlikte sonlandırılan süreç sayısı (0 = durdurulacak canlı süreç bulunamadı).
+  killedProcesses: number;
+  // Durdurmadan sonra görev HÂLÂ çalışıyor görünüyorsa panel bunu söylemeli.
+  stillRunning: boolean;
+};
+
+// Süren çalışmayı süreç ağacıyla birlikte sonlandırır. Görev silinmez; bir sonraki zamanında
+// normal çalışır. Sonuç ölçülmüş olarak döner: "durduruldu" demek için gerçekten durduğunu görmek
+// gerekir.
 export async function stopScheduledTask(name: string) {
-  await apiClient.post<ApiEnvelope<object>>(`/cron/${encodeURIComponent(name)}/stop`);
+  const response = await apiClient.post<ApiEnvelope<StopScheduledTaskResult>>(
+    `/cron/${encodeURIComponent(name)}/stop`
+  );
+  return response.data.data;
 }
 
 // Görevi silmeden aç/kapat.

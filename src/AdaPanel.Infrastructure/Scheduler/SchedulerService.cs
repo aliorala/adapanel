@@ -326,13 +326,47 @@ foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction Silent
             throw new AppException("cron.invalid_name", 400, 400);
         }
 
-        var script = $@"Start-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction Stop";
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        if (!result.Success)
+        var result = await ProcessRunner.RunPowerShellAsync(BuildRunScript(name.Trim()), cancellationToken);
+        var cikti = result.StandardOutput ?? string.Empty;
+
+        if (cikti.Contains("ADAPANEL-YOK", StringComparison.Ordinal))
+        {
+            throw new AppException("cron.not_found", 404, 404);
+        }
+
+        if (cikti.Contains("ADAPANEL-DEVREDISI", StringComparison.Ordinal))
+        {
+            throw new AppException("cron.task_disabled", 409, 409);
+        }
+
+        if (!result.Success || !cikti.Contains("ADAPANEL-BASLATILDI", StringComparison.Ordinal))
         {
             throw new AppException("cron.run_failed", 500, 500, result.StandardError);
         }
     }
+
+    /// <summary>
+    /// "Şimdi çalıştır" betiği: DEVRE DIŞI GÖREV ÖNCE ÖLÇÜLÜR, sonra tetiklenir.
+    /// <para>
+    /// <c>Start-ScheduledTask</c> devre dışı bir görevde ham PowerShell yığını döndürür
+    /// ("Start-ScheduledTask : Görev devre dışı ... HRESULT 0x80041326") ve panel bunu olduğu gibi
+    /// ekrana basıyordu. Kullanıcının yapması gereken şey (önce Etkinleştir) o metinde YOK; hata
+    /// teşhis edilebilir olmalı ki çözülebilsin.
+    /// </para>
+    /// <para>
+    /// Başarı POZİTİF BİR İŞARETLE ölçülür: PowerShell 5.1 sonlandırıcı olmayan hatalarda 0 döner,
+    /// yani yalnızca çıkış koduna bakmak "tetiklendi" demeye yetmez.
+    /// </para>
+    /// </summary>
+    internal static string BuildRunScript(string taskName) => $@"$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction SilentlyContinue
+if (-not $gorev) {{
+  [Console]::Out.WriteLine('ADAPANEL-YOK')
+}} elseif ($gorev.State -eq 'Disabled') {{
+  [Console]::Out.WriteLine('ADAPANEL-DEVREDISI')
+}} else {{
+  Start-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction Stop
+  [Console]::Out.WriteLine('ADAPANEL-BASLATILDI')
+}}";
 
     /// <summary>
     /// Günlük dosyasının yolunu hazırlar; hazırlanamazsa null döner ve görev çıktı yakalamadan
@@ -488,20 +522,119 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
         return eklenen;
     }
 
-    public async Task StopTaskAsync(string name, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Süren çalışmayı durdurur — SÜREÇ AĞACIYLA BİRLİKTE.
+    /// <para>
+    /// <c>Stop-ScheduledTask</c> tek başına YETMİYOR. Kullanıcının canlı sunucusunda Chrome/Selenium
+    /// açan bir .bat görevi vardı: Zamanlayıcı yalnızca kendi başlattığı süreci sonlandırıyor, o
+    /// sürecin doğurduğu altı kademelik zincir (cmd → python → chromedriver → chrome → ...) hayatta
+    /// kalıyordu. Panel "durduruldu" diyor, iş sürüyordu.
+    /// </para>
+    /// <para>
+    /// İkinci vaka: görev sonradan yeniden kaydedilince Zamanlayıcı çalışan turun izini kaybediyor.
+    /// Süreç yaşamaya devam ediyor ama <c>Stop-ScheduledTask</c> onu artık tanımıyor. Bu ÖKSÜZ süreç
+    /// yalnızca tek bir işaretten bulunabilir: panelin sardığı komut satırında görevin kendi günlük
+    /// dosyasının yolu geçer, ve o yol göreve özeldir.
+    /// </para>
+    /// <para>
+    /// Sonuç ÖLÇÜLÜR: durdurma sonrası görev hâlâ "Running" ise arayüz bunu söyler. "Durduruldu"
+    /// demek, gerçekten durduğunu görmeden verilebilecek bir söz değildir.
+    /// </para>
+    /// </summary>
+    public async Task<StopScheduledTaskResultDto> StopTaskAsync(string name, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new AppException("cron.invalid_name", 400, 400);
         }
 
-        var script = $@"Stop-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction Stop";
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        if (!result.Success)
+        var temizAd = name.Trim();
+        var gunlukYolu = Path.Combine(TaskLogDirectory, ResolveLogFileName(temizAd));
+
+        var result = await ProcessRunner.RunPowerShellAsync(BuildStopScript(temizAd, gunlukYolu), cancellationToken);
+        var cikti = result.StandardOutput ?? string.Empty;
+        var oldurulenEslesme = Regex.Match(cikti, @"ADAPANEL-OLDURULEN=(\d+)");
+        var calisiyorEslesme = Regex.Match(cikti, @"ADAPANEL-CALISIYOR=(\d+)");
+
+        // Betik hiç bir işaret bırakmadıysa ölçüm yapılmamıştır; "durduruldu" demek yalan olur.
+        if (!oldurulenEslesme.Success || !calisiyorEslesme.Success)
         {
             throw new AppException("cron.stop_failed", 500, 500, result.StandardError);
         }
+
+        var durum = new StopScheduledTaskResultDto
+        {
+            KilledProcesses = int.Parse(oldurulenEslesme.Groups[1].Value, CultureInfo.InvariantCulture),
+            StillRunning = calisiyorEslesme.Groups[1].Value == "1"
+        };
+
+        logger.LogInformation(
+            "Gorev calismasi durduruldu ({TaskName}): {Killed} surec agaci sonlandirildi, hala calisiyor = {StillRunning}.",
+            temizAd,
+            durum.KilledProcesses,
+            durum.StillRunning);
+
+        return durum;
     }
+
+    /// <summary>
+    /// Durdurma betiği. PID'ler ÖNCE toplanır: <c>Stop-ScheduledTask</c>'tan sonra görev, çalışanlar
+    /// listesinden düşer ve hayatta kalan alt süreçleri o göreve bağlayacak hiçbir iz kalmaz.
+    /// </summary>
+    internal static string BuildStopScript(string taskName, string logPath) => $@"$hedefYol = '{TaskPath}{EscapeSingleQuoted(taskName)}'
+$gunluk = '{EscapeSingleQuoted(logPath)}'
+$pidler = New-Object System.Collections.ArrayList
+
+# 1) Zamanlayicinin BILDIGI calisan tur. EnginePID, Windows 8'den beri gorevin eylemini calistiran
+#    surecin kendisidir (eski taskeng.exe araciligi kalkti).
+try {{
+  $servis = New-Object -ComObject Schedule.Service
+  $servis.Connect()
+  foreach ($calisan in $servis.GetRunningTasks(1)) {{
+    if ($calisan.Path -eq $hedefYol -and $calisan.EnginePID) {{ [void]$pidler.Add([int]$calisan.EnginePID) }}
+  }}
+}} catch {{ }}
+
+# 2) Zamanlayicinin IZINI KAYBETTIGI oksuz surecler: panelin sarmaladigi komut satirinda bu gorevin
+#    gunluk dosyasinin TAM yolu gecer. Eslesme tam metin uzerinden yapilir (joker yok).
+try {{
+  foreach ($surec in (Get-CimInstance Win32_Process -Filter ""Name='cmd.exe'"" -ErrorAction SilentlyContinue)) {{
+    if ($surec.CommandLine -and $surec.CommandLine.Contains($gunluk)) {{ [void]$pidler.Add([int]$surec.ProcessId) }}
+  }}
+}} catch {{ }}
+
+# SIRA ONEMLI: agac ONCE oldurulur, Stop-ScheduledTask SONRA cagrilir.
+#
+# BU MAKINEDE OLCULDU: Stop-ScheduledTask once cagrilirsa ust surec aninda olur, Get-Process artik
+# onu bulamaz ve oldurme dongusu HICBIR SEY YAPMAZ (olculen cikti: OLDURULEN=0). Zamanlayici
+# gorevi bir is nesnesi (job object) icinde calistirdigi icin normal cocuklar yine de olur --
+# ama is nesnesinden KOPAN surecler (Chrome/chromedriver tam olarak bunu yapar) hayatta kalir ve
+# artik onlari o goreve baglayan hicbir iz kalmamistir. Kullanicinin canli sunucusunda yasanan
+# durum buydu. Once oldurmek, agaci HENUZ BUTUNKEN yakalar.
+$oldurulen = 0
+foreach ($surecId in ($pidler | Select-Object -Unique)) {{
+  # Sistem sureclerine ASLA dokunma: yanlis bir PID ile /T /F sunucuyu dusurur.
+  if ($surecId -le 4) {{ continue }}
+  $surec = Get-Process -Id $surecId -ErrorAction SilentlyContinue
+  if (-not $surec) {{ continue }}
+  # taskhostw PAYLASILAN bir konaktir: COM isleyicili gorevlerde EnginePID ayni taskhostw'u
+  # gosterir ve orada AYNI ANDA baska Windows gorevleri de barinir (bu makinede olculdu: tek bir
+  # taskhostw altinda iki ayri sistem gorevi). Onu /T ile oldurmek ilgisiz gorevleri de dusururdu.
+  # Panelin kendi gorevleri her zaman dogrudan calistirilabilir bir eylemdir, taskhostw'da
+  # barinmazlar; yani bu atlama hicbir mesru durdurmayi engellemez.
+  if ('svchost','services','lsass','wininit','csrss','smss','System','taskhostw','taskeng' -contains $surec.ProcessName) {{ continue }}
+  & taskkill.exe /PID $surecId /T /F 2>&1 | Out-Null
+  $oldurulen++
+}}
+
+# Agac oldukten SONRA Zamanlayici durumu temizlenir: gorev hala calisiyor isaretli kalabilir.
+try {{ Stop-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction Stop | Out-Null }} catch {{ }}
+
+Start-Sleep -Milliseconds 500
+$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction SilentlyContinue
+$halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }}
+[Console]::Out.WriteLine('ADAPANEL-OLDURULEN=' + $oldurulen)
+[Console]::Out.WriteLine('ADAPANEL-CALISIYOR=' + $halaCalisiyor)";
 
     public async Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default)
     {

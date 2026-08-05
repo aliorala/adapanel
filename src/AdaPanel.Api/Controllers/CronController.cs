@@ -169,15 +169,22 @@ public sealed class CronController(
     }
 
     /// <summary>
-    /// Takılı kalmış bir çalışmayı durdurur. Görev SİLİNMEZ, devre dışı da bırakılmaz; yalnızca
-    /// sürmekte olan tur sonlandırılır ve görev bir sonraki zamanında normal çalışmaya döner.
+    /// Süren bir çalışmayı durdurur. Görev SİLİNMEZ, devre dışı da bırakılmaz; yalnızca sürmekte
+    /// olan tur sonlandırılır ve görev bir sonraki zamanında normal çalışmaya döner.
+    /// <para>
+    /// Sonuç ölçülür ve olduğu gibi bildirilir: kaç süreç ağacı sonlandırıldı, görev hâlâ çalışıyor
+    /// mu. Arayüz "durduruldu" derken bu ölçüme dayanır.
+    /// </para>
     /// </summary>
     [HttpPost("{name}/stop")]
-    public async Task<ActionResult<ApiResponse<object>>> StopTaskAsync(string name, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<StopScheduledTaskResultDto>>> StopTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.StopTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
-        await WriteAuditAsync("cron.stopped", $"Scheduled task '{name}' run stopped.", cancellationToken);
-        return Ok(ApiResponse<object>.Ok(new { name }, "cron.stopped"));
+        var sonuc = await schedulerService.StopTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
+        await WriteAuditAsync(
+            "cron.stopped",
+            $"Scheduled task '{name}' run stopped (killed={sonuc.KilledProcesses}, stillRunning={sonuc.StillRunning}).",
+            cancellationToken);
+        return Ok(ApiResponse<StopScheduledTaskResultDto>.Ok(sonuc, sonuc.StillRunning ? "cron.stop_incomplete" : "cron.stopped"));
     }
 
     [HttpPost("{name}/enable")]
