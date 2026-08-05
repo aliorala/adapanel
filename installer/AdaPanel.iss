@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.92"
+  #define MyAppVersion "0.2.93"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"

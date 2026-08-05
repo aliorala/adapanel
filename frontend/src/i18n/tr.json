@@ -3312,5 +3312,6 @@
   "panel.ftp.changePassword": "Parolayı değiştir",
   "panel.prompt.show": "Göster",
   "panel.prompt.hide": "Gizle",
-  "panel.prompt.minLength": "En az {count} karakter olmalı."
+  "panel.prompt.minLength": "En az {count} karakter olmalı.",
+  "panel.tasks.explainRunningSkipping": "Şu anda çalışıyor — {duration} önce başladı ({started}). Bu çalışma sürerken gelen turlar atlanıyor; bittiğinde zamanlama normale döner."
 }

@@ -116,6 +116,8 @@ public sealed class WebDbClientService(
         var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
+        // 0.2.91 bu dizinde mirasi kirmis olabilir; YAZMADAN ONCE onarilir.
+        RestoreDirectoryInheritance(tokensDir);
         // Dizin, parola YAZILMADAN ÖNCE diğer müşterilerin uygulama havuzlarına kapatılır.
         //
         // Kilitlenemezse işlem KOŞULSUZ DURDURULMAZ — çünkü bu, aracı tamamen kullanılamaz
@@ -213,6 +215,8 @@ public sealed class WebDbClientService(
         var token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
+        // 0.2.91 bu dizinde mirasi kirmis olabilir; YAZMADAN ONCE onarilir.
+        RestoreDirectoryInheritance(tokensDir);
         // Sarmalayici belirteci OKUYUP SILER: uygulama havuzuna yazma izni gerekir.
         // Dizin, parola YAZILMADAN ÖNCE yalnızca bu araca kilitlenir; kilitlenemezse işlem DURUR.
         if (!SecureTokenDirectory(tokensDir, await ResolveToolAppPoolNameAsync(state.SiteName, cancellationToken)))
@@ -535,6 +539,52 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
     /// </summary>
     /// <summary>IIS_IUSRS grubunun sabit SID'i — sunucudaki TÜM uygulama havuzlarını kapsar.</summary>
     private const string IisIusrsSid = "S-1-5-32-568";
+
+    /// <summary>
+    /// Bir klasörün devralınan izinlerini geri açar — 0.2.91'in bıraktığı hasarı onarır.
+    /// <para>
+    /// 0.2.91, güvenlik amacıyla üç klasöre <c>icacls /inheritance:r</c> uyguluyordu: iki aracın
+    /// belirteç klasörü ve phpMyAdmin'in şablon önbelleği. Miras kesilince panel kendi
+    /// dosyalarına yazamaz oldu ("Access to the path ... is denied") ve araçlar hiç açılmadı.
+    /// </para>
+    /// <para>
+    /// Onarım, bu klasörlere YAZAN HER YOLDAN ÖNCE çağrılmalı. Yalnızca kilitleme adımına
+    /// koymak yetmiyordu: patlama kilitlemeden önce oluyor, dolayısıyla panel kendi bıraktığı
+    /// hasarı hiçbir zaman onaramıyordu.
+    /// </para>
+    /// <para>Zararsız ve tekrarlanabilir: mirası zaten açık olan bir klasörde hiçbir şey değiştirmez.</para>
+    /// </summary>
+    private static void RestoreDirectoryInheritance(string directory)
+    {
+        try
+        {
+            if (!Directory.Exists(directory))
+            {
+                return;
+            }
+
+            // Miras zaten açıksa dokunma: her açılışta gereksiz icacls çalıştırmayalım.
+            if (!new DirectoryInfo(directory).GetAccessControl().AreAccessRulesProtected)
+            {
+                return;
+            }
+
+            var psi = new System.Diagnostics.ProcessStartInfo("icacls.exe", $"\"{directory}\" /inheritance:e /T /C /Q")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            using var process = System.Diagnostics.Process.Start(psi);
+            process?.WaitForExit(20000);
+        }
+        catch
+        {
+            // Onarılamadıysa çağıran zaten kendi hatasını verecek; burada yeni bir hata üretmeyiz.
+        }
+    }
 
     /// <summary>
     /// Aracın uygulama havuzunun GERÇEK adını IIS'ten okur.
@@ -931,6 +981,8 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
         // phpMyAdmin AÇILIŞTA Twig şablon motorunu kullanır; TempDir yazılabilir olmalı.
         var tempDir = Path.Combine(entryRoot, "tmp");
         Directory.CreateDirectory(tempDir);
+        // Ayni hasar burada da olabilir: phpMyAdmin sablon onbellegine yazamazsa hic acilmaz.
+        RestoreDirectoryInheritance(tempDir);
         // Burada sır YOK (yalnız Twig şablon önbelleği), ama izin yine de tek havuza daraltılır:
         // "her havuza açık" olmasının hiçbir gerekçesi yok.
         //
@@ -995,6 +1047,15 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
     {
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
+
+        // ÖNCE ONAR, SONRA YAZ.
+        //
+        // 0.2.91 bu dizinde mirası kırmıştı (`icacls /inheritance:r`) ve panel kendi web.config'ine
+        // yazamaz hâle geldi ("Access to the path ...\adapanel-tokens\web.config is denied").
+        // Onarımı yalnızca kilitleme adımına koymak YETMEDİ: kilitleme bu satırlardan SONRA
+        // çalışıyor, yani patlama ona sıra gelmeden oluyordu ve panel kendi bıraktığı hasarı
+        // hiçbir zaman onaramıyordu. Onarım, dizine YAZAN HER YOLDAN ÖNCE gelmeli.
+        RestoreDirectoryInheritance(tokensDir);
 
         // Token dosyaları parola içerir; HTTP ile OKUNMASINI engelle (handlers temizlenir).
         await File.WriteAllTextAsync(

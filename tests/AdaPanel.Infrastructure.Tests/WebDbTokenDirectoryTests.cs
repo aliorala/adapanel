@@ -84,6 +84,32 @@ public sealed class WebDbTokenDirectoryTests
     }
 
     /// <summary>
+    /// 0.2.91'in kirdigi miras, o klasorlere YAZAN HER YOLDAN ONCE onarilmali.
+    /// <para>
+    /// Onarimi yalnizca kilitleme adimina koymak YETMEDI: kilitleme, yazma denemesinden SONRA
+    /// calisiyor; yani panel kendi biraktigi hasari hicbir zaman onaramiyor ve kullanici
+    /// "Beklenmeyen bir hata olustu" almaya devam ediyordu. Hasarli uc klasor vardi: iki aracin
+    /// belirtec klasoru ve phpMyAdmin'in sablon onbellegi (oraya yazamazsa phpMyAdmin hic acilmaz).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheInheritanceRepair_RunsBeforeEveryWriteToThoseDirectories()
+    {
+        var kaynak = OkuKaynak();
+
+        Assert.Contains("private static void RestoreDirectoryInheritance", kaynak, StringComparison.Ordinal);
+
+        // Klasoru olusturan her yer, hemen ardindan onarimi cagirmali.
+        var olusturma = System.Text.RegularExpressions.Regex.Matches(kaynak, @"Directory\.CreateDirectory\((tokensDir|tempDir)\);");
+        Assert.True(olusturma.Count >= 4, $"Beklenen klasor olusturma sayisi degisti: {olusturma.Count}");
+
+        var onarim = System.Text.RegularExpressions.Regex.Matches(kaynak, @"RestoreDirectoryInheritance\((tokensDir|tempDir)\);");
+        Assert.True(
+            onarim.Count >= olusturma.Count,
+            $"Klasor {olusturma.Count} yerde olusturuluyor ama onarim yalnizca {onarim.Count} yerde cagriliyor.");
+    }
+
+    /// <summary>
     /// Havuz adi okunamadiysa TAHMINE DUSULMEZ: bilinmeyen bir hesap adiyla icacls calistirmak
     /// dizini korumasiz birakir ve araci kirar.
     /// </summary>

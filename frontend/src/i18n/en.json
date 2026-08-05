@@ -3312,5 +3312,6 @@
   "panel.ftp.changePassword": "Change password",
   "panel.prompt.show": "Show",
   "panel.prompt.hide": "Hide",
-  "panel.prompt.minLength": "Must be at least {count} characters."
+  "panel.prompt.minLength": "Must be at least {count} characters.",
+  "panel.tasks.explainRunningSkipping": "Running right now — started {duration} ago ({started}). Runs that come due while this one is going are being skipped; scheduling returns to normal once it finishes."
 }

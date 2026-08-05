@@ -946,9 +946,19 @@ function explain(item: ScheduledTask) {
     if (gecen === null) return t("panel.tasks.explainRunningUnknown");
     const sure = formatDuration(gecen);
     const baslangic = formatUtc(item.lastRunTimeUtc);
-    return isOverTimeLimit(item)
-      ? t("panel.tasks.explainRunningOverLimit", { duration: sure, started: baslangic, limit: item.timeLimitHours })
-      : t("panel.tasks.explainRunning", { duration: sure, started: baslangic });
+
+    if (isOverTimeLimit(item)) {
+      return t("panel.tasks.explainRunningOverLimit", { duration: sure, started: baslangic, limit: item.timeLimitHours });
+    }
+
+    // ÇALIŞIYOR + son sonuç "atlandı": bu ikisi birlikte, kullanıcının asıl merak ettiği
+    // durumdur — iş sürerken gelen turların reddedildiği an. Yalnızca "çalışıyor" demek,
+    // atlanma bilgisini rozete hapsedip cümleden düşürüyordu.
+    if (item.lastTaskResult === SKIPPED) {
+      return t("panel.tasks.explainRunningSkipping", { duration: sure, started: baslangic });
+    }
+
+    return t("panel.tasks.explainRunning", { duration: sure, started: baslangic });
   }
 
   const kod = item.lastTaskResult;
