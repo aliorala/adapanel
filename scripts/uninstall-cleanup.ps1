@@ -234,6 +234,52 @@ foreach ($certificatePath in @("Cert:\LocalMachine\My", "Cert:\LocalMachine\Root
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
+# KLASOR BAGLANTILARI (junction) SILMEDEN ONCE KALDIRILIR.
+#
+# NEDEN: veri kokunun altinda FTP kullanicilari icin junction'lar durur
+# (ftp-root\LocalUser\<kullanici>) ve bunlarin HEDEFI panelin disindadir -- musterinin SITE
+# KOKUDUR. Windows PowerShell 5.1'in bilinen reparse-point hatasinda "Remove-Item -Recurse"
+# baglantiyi TAKIP EDER; yani panelin kaldirilmasi musterilerin butun site dosyalarini
+# silebilir. Yedekten donmeden geri alinamayan bir kayiptir.
+#
+# Asagidaki dolasim baglantilarin ICINE GIRMEZ: bir klasor reparse point ise yalniz baglanti
+# kaldirilir (IO.Directory::Delete hedefi takip etmez), degilse alt klasorlerine inilir.
+function Remove-AdaReparsePoints {
+    param([Parameter(Mandatory = $true)][string] $Root)
+
+    if (-not [System.IO.Directory]::Exists($Root)) {
+        return
+    }
+
+    $bekleyen = New-Object 'System.Collections.Generic.Stack[string]'
+    $bekleyen.Push($Root)
+
+    while ($bekleyen.Count -gt 0) {
+        $simdiki = $bekleyen.Pop()
+
+        try {
+            $altKlasorler = [System.IO.Directory]::EnumerateDirectories($simdiki)
+        } catch {
+            continue
+        }
+
+        foreach ($alt in $altKlasorler) {
+            try {
+                $nitelikler = [System.IO.File]::GetAttributes($alt)
+            } catch {
+                continue
+            }
+
+            if ($nitelikler -band [System.IO.FileAttributes]::ReparsePoint) {
+                # Yalnizca baglantiyi kaldirir; hedefteki dosyalara DOKUNMAZ.
+                try { [System.IO.Directory]::Delete($alt) } catch { }
+            } else {
+                $bekleyen.Push($alt)
+            }
+        }
+    }
+}
+
 foreach ($path in @($DataRoot, $InstallDir)) {
     if ([string]::IsNullOrWhiteSpace($path)) {
         continue
@@ -241,6 +287,7 @@ foreach ($path in @($DataRoot, $InstallDir)) {
 
     $expandedPath = [Environment]::ExpandEnvironmentVariables($path)
     if (Test-Path -LiteralPath $expandedPath) {
+        Remove-AdaReparsePoints -Root $expandedPath
         Remove-Item -LiteralPath $expandedPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

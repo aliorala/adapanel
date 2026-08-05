@@ -351,6 +351,32 @@ public sealed partial class FtpService(
         }
     }
 
+    /// <summary>
+    /// <c>$userRoot</c> klasör bağlantısını GÜVENLE kaldıran PowerShell parçası.
+    /// <para>
+    /// NEDEN ÖZEL BİR YOL: <c>$userRoot</c> bir junction'dır ve HEDEFİ müşterinin site köküdür
+    /// (bkz. <see cref="ResolveHomePathAsync"/>). Windows PowerShell 5.1'in bilinen reparse-point
+    /// hatasında <c>Remove-Item -Recurse</c> bağlantıyı TAKİP EDER ve hedefteki dosyaları siler —
+    /// yani bir FTP kullanıcısını silmek ya da ana dizinini değiştirmek, müşterinin bütün site
+    /// dosyalarını götürebilir. Yedekten dönmeden geri alınamaz.
+    /// </para>
+    /// <para>
+    /// <c>[IO.Directory]::Delete</c> bağlantıyı takip etmez; yalnızca bağlantının kendisini kaldırır.
+    /// Bu yüzden önce "bu bir bağlantı mı" diye bakılır. Windows sürümünden bağımsız güvenlidir,
+    /// dolayısıyla hatanın giderilmiş olduğu sürümlerde de doğru davranır.
+    /// </para>
+    /// </summary>
+    private const string RemoveUserRootSnippet = """
+        if (Test-Path -LiteralPath $userRoot) {
+          $adaOge = Get-Item -LiteralPath $userRoot -Force
+          if ($adaOge.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            [IO.Directory]::Delete($userRoot)
+          } else {
+            Remove-Item -LiteralPath $userRoot -Force -Recurse
+          }
+        }
+        """;
+
     private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken)
     {
         var userRoot = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
@@ -360,9 +386,7 @@ public sealed partial class FtpService(
             $userName = '{{EscapePowerShellLiteral(userName)}}'
             $userRoot = '{{EscapePowerShellLiteral(userRoot)}}'
             $homePath = '{{EscapePowerShellLiteral(homePath)}}'
-            if (Test-Path -LiteralPath $userRoot) {
-              Remove-Item -LiteralPath $userRoot -Force -Recurse
-            }
+            {{RemoveUserRootSnippet}}
             New-Item -ItemType Junction -Path $userRoot -Target $homePath | Out-Null
             Clear-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -AtElement @{users=$userName} -ErrorAction SilentlyContinue
             Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions=3}
@@ -382,12 +406,11 @@ public sealed partial class FtpService(
             Import-Module WebAdministration -ErrorAction SilentlyContinue
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $userName = '{{EscapePowerShellLiteral(userName)}}'
+            $userRoot = '{{EscapePowerShellLiteral(userRoot)}}'
             if (Test-Path "IIS:\Sites\$siteName") {
               Clear-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -AtElement @{users=$userName} -ErrorAction SilentlyContinue
             }
-            if (Test-Path -LiteralPath '{{EscapePowerShellLiteral(userRoot)}}') {
-              Remove-Item -LiteralPath '{{EscapePowerShellLiteral(userRoot)}}' -Force -Recurse
-            }
+            {{RemoveUserRootSnippet}}
             """;
 
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
