@@ -66,7 +66,8 @@ public sealed class WebDbDeploymentTests
             new PassthroughSecretProtector(),
             new AdaPanel.Infrastructure.Database.DatabaseCredentialStore(fileStore, new PassthroughSecretProtector()),
             new StubHttpClientFactory(),
-            fileStore);
+            fileStore,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WebDbClientService>.Instance);
 
         try
         {

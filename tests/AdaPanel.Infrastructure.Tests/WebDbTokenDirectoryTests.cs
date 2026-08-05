@@ -34,14 +34,54 @@ public sealed class WebDbTokenDirectoryTests
     }
 
     /// <summary>
-    /// HAVUZ ADI SITE ADI DEGILDIR: site "AdaPanel.WebDb.Adminer" ise havuz
-    /// "AdaPanel.AdaPanel.WebDb.Adminer"dir (CreateSiteAsync one ek koyar). Bu makinede olculdu:
-    /// yanlis hesap adi verilince icacls 1332 ile HICBIR SEYI uygulamiyor -- yani araci kirardi.
+    /// HAVUZ ADI TAHMIN EDILMEZ, IIS'TEN OKUNUR.
+    /// <para>
+    /// Ilk yazimda ad "AdaPanel.{siteAdi}" formuluyle turetiliyordu. Bu bir UYGULAMA AYRINTISIDIR:
+    /// eski surumlerle dagitilmis kurulumlarda ad farkli olabilir, yonetici IIS'ten degistirmis
+    /// olabilir. Yanlis hesap adi verilince icacls HICBIR SEY uygulamadan cikiyor (bu makinede
+    /// olculdu: hata 1332) -- yani tahmin, dizini korumasiz birakmakla kalmaz, araci da tamamen
+    /// acilamaz hale getirir. Kullanicinin canli sunucusunda tam olarak bu oldu.
+    /// </para>
     /// </summary>
     [Fact]
-    public void TheApplicationPoolName_IsDerivedFromTheSiteNameWithThePanelPrefix()
+    public void TheApplicationPoolName_IsReadFromIisNotGuessed()
     {
-        Assert.Contains("$\"AdaPanel.{(string.IsNullOrWhiteSpace(toolSiteName)", OkuKaynak(), StringComparison.Ordinal);
+        var kaynak = OkuKaynak();
+
+        Assert.Contains("ResolveToolAppPoolNameAsync", kaynak, StringComparison.Ordinal);
+        Assert.Contains("site?.ApplicationPoolName", kaynak, StringComparison.Ordinal);
+
+        // Formulle turetme geri gelmemeli.
+        Assert.DoesNotContain("$\"AdaPanel.{(string.IsNullOrWhiteSpace(toolSiteName)", kaynak, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Havuz adi okunamadiysa TAHMINE DUSULMEZ: bilinmeyen bir hesap adiyla icacls calistirmak
+    /// dizini korumasiz birakir ve araci kirar.
+    /// </summary>
+    [Fact]
+    public void WhenTheApplicationPoolNameIsUnknown_NoGuessIsMade()
+    {
+        var kaynak = OkuKaynak();
+
+        Assert.Contains("if (string.IsNullOrWhiteSpace(appPoolName))", kaynak, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// phpMyAdmin'in SIR ICERMEYEN sablon onbellegi klasoru, kilitlenemedi diye araci
+    /// KIRMAMALI: orada parola yok ve phpMyAdmin o klasore yazamazsa hic acilmaz.
+    /// </summary>
+    [Fact]
+    public void TheTemplateCacheDirectory_NeverBlocksTheTool()
+    {
+        var kaynak = OkuKaynak();
+        var tempBlok = kaynak.IndexOf("var pmaHavuzu = await ResolveToolAppPoolNameAsync", StringComparison.Ordinal);
+
+        Assert.True(tempBlok > 0, "Sablon onbellegi kilidi bulunamadi.");
+
+        // Bu bloktan sonraki 400 karakterde "throw" OLMAMALI.
+        var pencere = kaynak.Substring(tempBlok, Math.Min(400, kaynak.Length - tempBlok));
+        Assert.DoesNotContain("throw new AppException", pencere, StringComparison.Ordinal);
     }
 
     /// <summary>

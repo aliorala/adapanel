@@ -8,6 +8,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.WebDbClient;
 
@@ -19,7 +20,8 @@ public sealed class WebDbClientService(
     ISecretProtector secretProtector,
     Database.DatabaseCredentialStore credentialStore,
     IHttpClientFactory httpClientFactory,
-    JsonFileStore fileStore) : IWebDbClientService
+    JsonFileStore fileStore,
+    ILogger<WebDbClientService> logger) : IWebDbClientService
 {
     private const string StatePath = "config/webdb.json";
     private const string GeneratedPasswordKey = "generatedPassword";
@@ -116,7 +118,7 @@ public sealed class WebDbClientService(
         Directory.CreateDirectory(tokensDir);
         // phpMyAdmin (IIS app pool) token dosyasını okuyup siler → yazma izni gerekir.
         // Dizin, parola YAZILMADAN ÖNCE yalnızca bu araca kilitlenir; kilitlenemezse işlem DURUR.
-        if (!SecureTokenDirectory(tokensDir, state.SiteName))
+        if (!SecureTokenDirectory(tokensDir, await ResolveToolAppPoolNameAsync(state.SiteName, cancellationToken)))
         {
             throw new AppException("webdb.token_dir_unprotected", 500, 500);
         }
@@ -200,7 +202,7 @@ public sealed class WebDbClientService(
         Directory.CreateDirectory(tokensDir);
         // Sarmalayici belirteci OKUYUP SILER: uygulama havuzuna yazma izni gerekir.
         // Dizin, parola YAZILMADAN ÖNCE yalnızca bu araca kilitlenir; kilitlenemezse işlem DURUR.
-        if (!SecureTokenDirectory(tokensDir, state.SiteName))
+        if (!SecureTokenDirectory(tokensDir, await ResolveToolAppPoolNameAsync(state.SiteName, cancellationToken)))
         {
             throw new AppException("webdb.token_dir_unprotected", 500, 500);
         }
@@ -521,15 +523,48 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
     /// <summary>IIS_IUSRS grubunun sabit SID'i — sunucudaki TÜM uygulama havuzlarını kapsar.</summary>
     private const string IisIusrsSid = "S-1-5-32-568";
 
-    private static bool SecureTokenDirectory(string directory, string toolSiteName)
+    /// <summary>
+    /// Aracın uygulama havuzunun GERÇEK adını IIS'ten okur.
+    /// <para>
+    /// Ad TAHMİN EDİLMEZ. Panel siteyi <c>AdaPanel.{siteAdı}</c> havuzuyla kuruyor ama bu bir
+    /// uygulama ayrıntısıdır: daha eski sürümlerle dağıtılmış kurulumlarda ad farklı olabilir,
+    /// yönetici IIS'ten değiştirmiş olabilir. Yanlış hesap adı verildiğinde <c>icacls</c>
+    /// hiçbir şey uygulamadan çıkıyor (bu makinede ölçüldü: hata 1332) — yani tahmin, dizini
+    /// korumasız bırakmakla kalmaz, aracı da tamamen açılamaz hale getirir.
+    /// </para>
+    /// <para>Okunamazsa boş döner; çağıran o zaman işlemi durdurur.</para>
+    /// </summary>
+    private async Task<string> ResolveToolAppPoolNameAsync(string toolSiteName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(toolSiteName))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var site = await iisSiteService.GetSiteAsync(toolSiteName.Trim(), cancellationToken);
+            return site?.ApplicationPoolName?.Trim() ?? string.Empty;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "DB araci uygulama havuzu adi okunamadi ({SiteName}).", toolSiteName);
+            return string.Empty;
+        }
+    }
+
+    private static bool SecureTokenDirectory(string directory, string appPoolName)
     {
         try
         {
-            // HAVUZ ADI SITE ADI DEGILDIR: site "AdaPanel.WebDb.Adminer" ise havuz
-            // "AdaPanel.AdaPanel.WebDb.Adminer" olur (CreateSiteAsync: ApplicationPoolName =
-            // $"AdaPanel.{siteName}"). Bu makinede olculdu: yanlis hesap adi verilince icacls
-            // 1332 ile HICBIR SEYI uygulamiyor -- yani araci tamamen kirardi.
-            var havuz = $"AdaPanel.{(string.IsNullOrWhiteSpace(toolSiteName) ? "WebDb" : toolSiteName.Trim())}";
+            if (string.IsNullOrWhiteSpace(appPoolName))
+            {
+                // Havuz adi bilinmiyorsa TAHMIN ETMEYIZ: yanlis hesap adi verilince icacls
+                // hicbir seyi uygulamiyor (bu makinede olculdu: 1332) ve dizin korumasiz kalir.
+                return false;
+            }
+
+            var havuz = appPoolName.Trim();
             var arguments =
                 $"\"{directory}\" /inheritance:r " +
                 "/grant \"*S-1-5-18:(OI)(CI)F\" " +      // SYSTEM — SID kullanilir: Turkce Windows'ta hesap ADI farklidir
@@ -875,9 +910,15 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
         var tempDir = Path.Combine(entryRoot, "tmp");
         Directory.CreateDirectory(tempDir);
         // Burada sır YOK (yalnız Twig şablon önbelleği), ama izin yine de tek havuza daraltılır:
-        // "her havuza açık" olmasının hiçbir gerekçesi yok. Başarısız olursa işlem durmaz.
-        // Parametre SITE adidir; havuz adini fonksiyon kendisi tureter ("AdaPanel." oneki).
-        SecureTokenDirectory(tempDir, "AdaPanel.WebDb.PhpMyAdmin");
+        // "her havuza açık" olmasının hiçbir gerekçesi yok.
+        //
+        // Başarısız olursa işlem DURMAZ: bu klasörde parola yok, ve phpMyAdmin şablon önbelleğini
+        // yazamazsa açılmaz. Güvenlik kazancı burada, aracı kırma riskini haklı çıkarmaz.
+        var pmaHavuzu = await ResolveToolAppPoolNameAsync("AdaPanel.WebDb.PhpMyAdmin", cancellationToken);
+        if (!string.IsNullOrWhiteSpace(pmaHavuzu))
+        {
+            SecureTokenDirectory(tempDir, pmaHavuzu);
+        }
         var tempDirPhp = tempDir.Replace('\\', '/');
 
         // ÜRETİM: phpMyAdmin public portta açık; PHP hatalarını EKRANA YAZDIRMA (yol/iç bilgi sızmasın).
