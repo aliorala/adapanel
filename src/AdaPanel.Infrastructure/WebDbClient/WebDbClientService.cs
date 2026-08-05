@@ -256,246 +256,148 @@ public sealed class WebDbClientService(
 /*
  * AdaPanel — Adminer tek tıkla giriş.
  *
- * phpMyAdmin'in "signon" kipinin Adminer karşılığı. Adminer'in signon diye bir kipi YOKTUR;
- * bunun yerine belgelenmiş eklenti mekanizması kullanılır: adminer_object() ile döndürülen
- * sınıfta credentials() ve login() geçersiz kılınırsa Adminer o kimlikle oturum açar.
+ * TASARIM: bu dosya YALNIZCA BİR KEZ çalışır. Oturumu Adminer'ın beklediği biçimde kurar ve
+ * kullanıcıyı Adminer'ın KENDİ adresine yönlendirir. Adminer buradan YÜKLENMEZ.
  *
- * Belirteç TEK KULLANIMLIKTIR ve okunur okunmaz silinir. Kalıcı olsaydı, tarayıcı geçmişinde
- * ya da sunucu günlüğünde kalan bir adres veritabanına sınırsız erişim verirdi.
+ * NEDEN BÖYLE — pahalı bir dersin sonucu: önceki tasarımda bu dosya Adminer'ın GİRİŞ NOKTASIYDI
+ * (sonunda `require index.php`). O zaman Adminer'ın her isteği bu dosyadan geçiyordu ve her geçiş
+ * ayrı bir kırılma noktası üretti:
+ *   - Adminer'ın eklenti sözleşmesi 4.x/5.x arasında değişti (sınıf ad alanı),
+ *   - tek kullanımlık belirteç ikinci istekte yoktu,
+ *   - Adminer oturum çerezinin yolunu KENDİ gördüğü adresten türetiyor; panelin vekilinin
+ *     arkasında o yol tarayıcınınkiyle eşleşmiyordu,
+ *   - Adminer oturumda kendi belirtecini arıyor; otomatik giriş form akışını atladığı için
+ *     o değer hiç oluşmuyor ve "Session expired" alınıyordu.
+ * Dördü de aynı kökten geliyordu: aracın giriş noktasını değiştirmek. Artık değiştirmiyoruz —
+ * yalnızca oturuma yazıp aracın kendi adresine bırakıyoruz. Bu adres zaten çalışan yoldur.
+ *
+ * Oturum yapısı Adminer'ın kendi biçimidir (gerçek Adminer 5.4.2 oturumu okunarak doğrulandı):
+ *   $_SESSION['pwds'][sürücü][sunucu][kullanıcı] = parola
+ *   $_SESSION['db']  [sürücü][sunucu][kullanıcı][veritabanı] = 1
+ *   $_SESSION['token'] = sayı   (Adminer bunu her istekte arar; yoksa oturumu düşmüş sayar)
  */
 
-/*
- * BU DOSYA ADMINER'IN GİRİŞ NOKTASIDIR: yalnızca ilk tıklamada değil, kullanıcı Adminer içinde
- * gezerken AÇILAN HER SAYFADA yeniden çalışır.
- *
- * İlk sürüm bunu gözden kaçırıyordu: belirteç tek kullanımlık olduğu için ilk istekte siliniyor,
- * Adminer giriş sonrası kendi giriş noktasına (yani buraya) yönlendiriyor ve ikinci istekte
- * belirteç bulunamadığı için kullanıcı "Baglanti suresi dolmus" görüyordu. Yani tek tık girişi,
- * sınıf hatası olmasa bile ilk yönlendirmede ölürdü. (Gerçek Adminer 5.4.2 ile ölçüldü.)
- *
- * Doğru davranış: belirteç YALNIZCA otomatik girişi başlatır. Sonraki isteklerde Adminer'ın
- * KENDİ oturumu iş görür — panel paralel bir oturum mekanizması icat etmez, aracın kanıtlanmış
- * kendi mekanizmasını kullanır.
- */
+// Ölümcül bir hata olursa BOŞ SAYFA dönmesin: bu sayfada display_errors kapalıdır ve kapalı
+// olduğu için kullanıcı yalnızca "bu sayfa çalışmıyor" görüyordu.
+register_shutdown_function(function () {
+    $adaSon = error_get_last();
+    if (!$adaSon || !in_array($adaSon['type'], array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR), true)) {
+        return;
+    }
 
-/*
- * OTURUM BURADA BAŞLATILIR — Adminer'dan ÖNCE. İki ayrı hatayı birden kapatır:
- *
- * 1) ADMINER'IN KENDİ BELİRTECİ. Adminer, oturumda bir `token` değeri tutar ve sonraki her
- *    istekte onu arar: "çerez var ama oturumda token yok" durumunu OTURUM DÜŞMÜŞ sayar ve
- *    "Session expired, please login again." diyerek 403 döner. O değer normalde giriş FORMU
- *    çizilirken oluşur; panelin otomatik girişi formu hiç göstermediği için oluşmuyordu.
- *    Sonuç: giriş başarılı oluyor, yönlendirilen ilk sayfa "oturum düştü" ile ölüyordu.
- *
- * 2) ÇEREZ YOLU. Adminer oturum çerezinin yolunu kendi gördüğü adresten türetir
- *    (session_set_cookie_params + REQUEST_URI). Panelin vekilinin arkasında bu yol tarayıcının
- *    gittiği yolla eşleşmiyor ve çerez bir daha gönderilmiyordu. Oturumu burada başlatmak
- *    Adminer'ın o çağrısını devre dışı bırakır (kendi kodu `SID` tanımlıysa atlar) ve çerez
- *    kök yola bağlanır — hangi yoldan gelinirse gelinsin geçerli olur.
- */
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_name('adminer_sid');
-    session_set_cookie_params(0, '/', '', !empty($_SERVER['HTTPS']), true);
-    session_start();
-}
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: text/plain; charset=utf-8');
+    }
 
-if (empty($_SESSION['token'])) {
-    $_SESSION['token'] = random_int(1, 1000000);
-}
+    echo "AdaPanel: veritabani araci acilamadi.\n\n";
+    echo "Sebep: " . $adaSon['message'] . "\n";
+    echo "Yer  : " . $adaSon['file'] . ':' . $adaSon['line'] . "\n";
+});
 
 // Belirteç yalnızca onaltılık olabilir. Bu, dosya adının yola çevrilmesinden ÖNCE yapılır:
 // "../" gibi bir girdi panelin veri klasörünün dışına çıkabilirdi.
 $adaToken = isset($_GET['token']) ? preg_replace('/[^a-f0-9]/', '', (string) $_GET['token']) : '';
-
-if ($adaToken !== '' && strlen($adaToken) >= 16) {
-    $adaFile = __DIR__ . DIRECTORY_SEPARATOR . 'adapanel-tokens' . DIRECTORY_SEPARATOR . $adaToken . '.json';
-    if (is_file($adaFile)) {
-        $adaRaw = file_get_contents($adaFile);
-        @unlink($adaFile); // TEK KULLANIMLIK: okundu, artık yok.
-
-        $adaData = json_decode($adaRaw, true);
-        if (is_array($adaData) && isset($adaData['user'])) {
-            $GLOBALS['ADA_LOGIN'] = $adaData;
-
-            /*
-             * Adminer bir oturum denemesi olduğunu anlamak için POST/GET'te kimlik alanı arar.
-             * Alanlar doldurulmazsa credentials() hiç çağrılmaz ve kullanıcı giriş formunu görür.
-             *
-             * Bu alanlar YALNIZCA belirteçli ilk istekte doldurulur. Her istekte doldurmak,
-             * Adminer'in her sayfada yeniden giriş yapıp yönlendirmesine — yani bir yönlendirme
-             * döngüsüne — yol açardı.
-             */
-            $_POST['auth'] = array(
-                'driver'   => 'server',
-                'server'   => $adaData['host'] . ':' . $adaData['port'],
-                'username' => $adaData['user'],
-                'password' => isset($adaData['password']) ? $adaData['password'] : '',
-                'db'       => isset($adaData['only_db']) ? $adaData['only_db'] : '',
-            );
-        }
-    }
-    // Belirteç geçersiz/kullanılmışsa HATA VERİLMEZ: bu, Adminer içindeki gezinmenin normal
-    // hâlidir (tarayıcı eski adresi tekrar isteyebilir). Adminer kendi oturumuna bakar; oturum
-    // yoksa kendi giriş formunu gösterir. Panelin vekili zaten kimlik doğruluyor.
+if ($adaToken === '' || strlen($adaToken) < 16) {
+    http_response_code(403);
+    exit('Gecersiz baglanti. Paneli kullanarak yeniden acin.');
 }
+
+$adaFile = __DIR__ . DIRECTORY_SEPARATOR . 'adapanel-tokens' . DIRECTORY_SEPARATOR . $adaToken . '.json';
+if (!is_file($adaFile)) {
+    // Belirteç yok ya da zaten kullanılmış. İkisi de aynı mesajı alır: hangisi olduğunu söylemek,
+    // geçerli belirteç aramaya çalışan birine bilgi vermek olurdu.
+    http_response_code(403);
+    exit('Baglanti suresi dolmus. Panelden yeniden acin.');
+}
+
+$adaRaw = file_get_contents($adaFile);
+@unlink($adaFile); // TEK KULLANIMLIK: okundu, artık yok.
+
+$adaData = json_decode($adaRaw, true);
+if (!is_array($adaData) || !isset($adaData['user'])) {
+    http_response_code(500);
+    exit('Baglanti bilgisi okunamadi.');
+}
+
+$adaSunucu = $adaData['host'] . ':' . $adaData['port'];
+$adaKullanici = (string) $adaData['user'];
+$adaParola = isset($adaData['password']) ? (string) $adaData['password'] : '';
+$adaDb = isset($adaData['only_db']) ? (string) $adaData['only_db'] : '';
 
 /*
- * Adminer'in eklenti giriş noktası. Bu fonksiyon KÜRESEL ad alanında kalmalı: Adminer,
- * "function_exists('adminer_object')" ile bakar ve dizge biçiminde verilen ad, bulunduğu ad
- * alanına GÖRE çözülmez — her zaman küresel ada bakar. Fonksiyonu "Adminer" ad alanına taşımak,
- * Adminer'in eklentiyi hiç görmemesine yol açardı.
+ * Oturum, Adminer'ın kendi adıyla ve KÖK yola bağlı açılır.
+ *
+ * Kök yol önemli: Adminer kendi çağrısında yolu gördüğü adresten türetiyor ve panelin vekilinin
+ * arkasında o yol tarayıcının gittiği yolla eşleşmiyor — çerez bir daha gönderilmiyordu.
  */
-function adminer_object()
-{
-    /*
-     * ADMINER SÜRÜMÜ ÖLÇÜLÜR, TAHMİN EDİLMEZ.
-     *
-     * Adminer 5'te her şey "Adminer" ad alanına taşındı: temel sınıfın adı artık
-     * \Adminer\Adminer. Panelin dağıttığı sürüm 5.x olduğu hâlde sarmalayıcı 4.x'in küresel
-     * \Adminer sınıfından türüyordu; sayfa "Class \"Adminer\" not found" ile ölüyordu ve
-     * sunucuda display_errors kapalı olduğundan kullanıcı bu satırı hiç görmeden yalnızca boş
-     * bir sayfa görüyordu.
-     *
-     * Bu kontrol, sınıflar TANIMLANDIKTAN sonra (yani index.php yüklenirken, Adminer bu
-     * fonksiyonu çağırdığı anda) çalışır. Dosyanın başında yapılsaydı hiçbir sınıf henüz
-     * yüklenmemiş olurdu.
-     */
-    $adaBase = null;
-    if (class_exists('Adminer\\Adminer')) {
-        $adaBase = 'Adminer\\Adminer';   // Adminer 5.x
-    } elseif (class_exists('Adminer')) {
-        $adaBase = 'Adminer';            // Adminer 4.x
-    }
-
-    if ($adaBase === null) {
-        // Sessizce boş sayfa DÖNMEYİZ: teşhis edilemeyen bir hata, çözülemeyen bir hatadır.
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_name('adminer_sid');
+    session_set_cookie_params(0, '/', '', !empty($_SERVER['HTTPS']), true);
+    if (!@session_start()) {
         http_response_code(500);
-        exit('Adminer surumu taninmadi: temel sinif bulunamadi. Panelden Adminer bilesenini yeniden kurun.');
+        exit('Oturum baslatilamadi. PHP oturum klasoru yazilabilir olmali (session.save_path).');
     }
-
-    class_alias($adaBase, 'AdaPanelAdminerBase');
-
-    class AdaPanelAdminer extends \AdaPanelAdminerBase
-    {
-        public function name()
-        {
-            return 'AdaPanel';
-        }
-
-        /*
-         * Aşağıdaki geçersiz kılmaların HEPSİ, panel kimliği YOKKEN Adminer'in kendi davranışına
-         * düşer. Belirteç tek kullanımlıktır: kullanıcı Adminer içinde gezerken ADA_LOGIN artık
-         * yoktur ve bu geçersiz kılmalar o istekte de çalışır. Diziye körlemesine erişmek her
-         * sayfada ölümcül hata verirdi.
-         */
-
-        /**
-         * Hangi veritabanıyla sınırlıyız: ilk istekte belirteçten, sonraki isteklerde Adminer'ın
-         * adres satırında ZATEN taşıdığı seçili veritabanından.
-         * <p>
-         * Belirteç tek kullanımlıktır; yalnızca ona bakılırsa süzgeç ilk sayfadan sonra hiçbir
-         * yerde uygulanmaz. Gerçek Adminer 5.4.2 ile ölçüldüğünde, ilk sayfadan sonra üstteki "DB"
-         * seçici sunucudaki bütün veritabanlarını listeliyordu — yani panel tutamadığı bir söz
-         * veriyordu.
-         * </p>
-         * <p>
-         * Adminer'in oturumuna yazmak DENENDI VE OLCULDU: adaOnlyDb çağrıldığı anda
-         * session_status() PHP_SESSION_NONE döner (Adminer oturum kilidini erkenden bırakıyor),
-         * yani oraya hiçbir şey yazılamıyor. Bu yüzden kaynak olarak Adminer'in kendi "db"
-         * parametresi kullanılır.
-         * </p>
-         * <p>
-         * Bu bir YETKİ SINIRI DEĞİL, bir gösterim sınırıdır ve öyle olması yeterlidir: Adminer'i
-         * açan uç yalnızca yöneticiye açıktır (WebDbController ve DbToolsProxyController
-         * "Administrator" rolü ister) ve yönetici zaten bütün veritabanlarını görmeye yetkilidir.
-         * Gerçek kiracı izolasyonu, bağlantının veritabanının KENDİ kullanıcısıyla kurulmasıyla
-         * sağlanır; root'a yalnızca o kullanıcı bilinmediğinde düşülür.
-         * </p>
-         */
-        private function adaOnlyDb()
-        {
-            $ada = isset($GLOBALS['ADA_LOGIN']) ? $GLOBALS['ADA_LOGIN'] : null;
-            if (is_array($ada) && isset($ada['only_db']) && $ada['only_db'] !== '') {
-                return $ada['only_db'];
-            }
-
-            if (isset($_GET['db']) && is_string($_GET['db']) && $_GET['db'] !== '') {
-                return $_GET['db'];
-            }
-
-            return '';
-        }
-        public function credentials()
-        {
-            $ada = isset($GLOBALS['ADA_LOGIN']) ? $GLOBALS['ADA_LOGIN'] : null;
-            if (!is_array($ada)) {
-                return parent::credentials();
-            }
-
-            return array(
-                $ada['host'] . ':' . $ada['port'],
-                $ada['user'],
-                isset($ada['password']) ? $ada['password'] : '',
-            );
-        }
-
-        /**
-         * Kimlik doğrulaması PANEL TARAFINDA zaten yapıldı: kullanıcı panele giriş yapmış,
-         * yönetici yetkisi doğrulanmış ve belirteç tek kullanımlık üretilmişti. Adminer'in
-         * kendi form doğrulamasını burada tekrarlamak, aynı kararı ikinci kez ve daha zayıf
-         * bilgiyle vermek olurdu.
-         *
-         * Panel kimliği yoksa karar Adminer'a bırakılır — kendi giriş formundan gelen bir
-         * denemeyi panel adına onaylamak, vermediğimiz bir güvence vermek olurdu.
-         */
-        public function login($login, $password)
-        {
-            if (!isset($GLOBALS['ADA_LOGIN'])) {
-                return parent::login($login, $password);
-            }
-
-            return true;
-        }
-
-        public function database()
-        {
-            $ada = $this->adaOnlyDb();
-            return $ada !== '' ? $ada : parent::database();
-        }
-
-        /**
-         * Tek bir veritabanı için açıldıysa YALNIZCA o listelenir.
-         * <p>
-         * Panel bağlantıyı o veritabanının kendi kullanıcısıyla kurduğunda zaten başkasını
-         * göremez; ama kullanıcı bilinmediği için root'a düşüldüğünde bu filtre, yönetici
-         * yetkisiyle açılmış bir oturumda diğer müşterilerin veritabanlarını göz önüne
-         * sermemeyi sağlar.
-         * </p>
-         */
-        public function databases($flush = true)
-        {
-            $ada = $this->adaOnlyDb();
-            if ($ada !== '') {
-                return array($ada);
-            }
-
-            return parent::databases($flush);
-        }
-    }
-
-    return new AdaPanelAdminer();
 }
 
-// Adminer'in kendisi dağıtım sırasında webroot'a index.php olarak kopyalanır.
-require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
+// MySQL/MariaDB icin Adminer'in surucu anahtari "server"dir.
+$adaSurucu = 'server';
 
+if (!isset($_SESSION['pwds']) || !is_array($_SESSION['pwds'])) {
+    $_SESSION['pwds'] = array();
+}
+
+$_SESSION['pwds'][$adaSurucu][$adaSunucu][$adaKullanici] = $adaParola;
+
+if ($adaDb !== '') {
+    if (!isset($_SESSION['db']) || !is_array($_SESSION['db'])) {
+        $_SESSION['db'] = array();
+    }
+
+    $_SESSION['db'][$adaSurucu][$adaSunucu][$adaKullanici][$adaDb] = 1;
+}
+
+// Adminer bu degeri HER istekte arar; yoksa "Session expired" der.
+if (empty($_SESSION['token'])) {
+    $_SESSION['token'] = random_int(1, 1000000);
+}
+
+// Oturum diske YAZILDIKTAN sonra yönlendir: yönlendirme hedefi oturumu okuyacak.
+session_write_close();
+
+// Adminer'ın KENDİ adresi (aynı klasördeki index.php). Bundan sonra bu dosyaya bir daha uğranmaz.
+$adaHedef = './?' . http_build_query(array_filter(array(
+    'server' => $adaSunucu,
+    'username' => $adaKullanici,
+    'db' => $adaDb
+), static function ($deger) {
+    return $deger !== '';
+}));
+
+header('Location: ' . $adaHedef, true, 302);
+exit;
 """;
 
-        await File.WriteAllTextAsync(
-            Path.Combine(entryRoot, "adapanel-signon.php"),
-            signon,
-            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            cancellationToken);
+        // SARMALAYICI YAZILAMAZSA SESSİZ KALINMAZ.
+        //
+        // Bu dosya her açılışta tazelenir ki panel güncellemesiyle gelen düzeltmeler yeniden
+        // dağıtım beklemeden uygulansın. Ama yazma başarısız olursa (klasör izinleri) diskte ESKİ
+        // sürüm kalır ve panel yeni sürümdeymiş gibi davranmaya devam eder: kullanıcı güncelledikçe
+        // aynı hatayı alır, günlükte de hiçbir iz olmaz. Sorunu söylemek, sessizce eski dosyayla
+        // devam etmekten iyidir.
+        var signonPath = Path.Combine(entryRoot, "adapanel-signon.php");
+        try
+        {
+            await File.WriteAllTextAsync(
+                signonPath,
+                signon,
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new AppException("webdb.signon_write_failed", 500, 500, $"{signonPath}: {exception.Message}");
+        }
     }
 
     // Panel reverse-proxy (B3) hedef portu: dağıtılmış aracın yerel IIS portu (IIS fallback seçmiş olabilir).

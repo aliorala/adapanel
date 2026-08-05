@@ -3322,5 +3322,6 @@
   "firewall.invalid_rule_name": "Invalid rule name.",
   "firewall.rule_removed": "Rule removed.",
   "files.invalid_principal": "Invalid user/group name. Use only letters, digits, spaces, dots, hyphens and underscores (e.g. IIS_IUSRS or SERVER\\user).",
-  "files.invalid_rights": "Invalid permission. Allowed values: R (read), RX (read+execute), W (write), M (modify), F (full control)."
+  "files.invalid_rights": "Invalid permission. Allowed values: R (read), RX (read+execute), W (write), M (modify), F (full control).",
+  "webdb.signon_write_failed": "The database tool's sign-on file could not be written to the server. The tool would have kept running on the old (possibly broken) copy, so the operation was stopped. Details are in the technical information below."
 }

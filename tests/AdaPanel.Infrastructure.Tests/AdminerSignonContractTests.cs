@@ -4,169 +4,106 @@ using Xunit;
 namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>
-/// Adminer tek tik girisinin GERCEK Adminer 5.x ile calismasini kilitleyen sozlesmeler.
+/// Adminer tek tik girisinin sozlesmesi.
 /// <para>
-/// Canlida "sayfa goruntulenemiyor" veriyordu. Gercek adminer-5.4.2.php ile calistirilinca sebep
-/// goruldu: <c>Class "Adminer" not found</c>. Adminer 5'te her sey "Adminer" ad alanina tasindi;
-/// temel sinifin adi artik <c>\Adminer\Adminer</c>. Sunucuda display_errors kapali oldugu icin
-/// kullanici bu satiri hic gormuyor, yalnizca bos sayfa goruyordu.
+/// TASARIM DEGISTI (0.2.97): sarmalayici artik Adminer'in GIRIS NOKTASI DEGIL. Yalnizca oturumu
+/// kurar ve kullaniciyi Adminer'in KENDI adresine yonlendirir; Adminer'i hic yuklemez.
 /// </para>
 /// <para>
-/// Ikinci hata, ilki duzeltilince ortaya cikti: Adminer giristen sonra KENDI giris noktasina
-/// (yani sarmalayiciya) yonlendiriyor. Belirtec tek kullanimlik oldugu icin ikinci istekte
-/// bulunamiyor ve sarmalayici 403 "Baglanti suresi dolmus" veriyordu -- yani tek tik girisi ilk
-/// yonlendirmede oluyordu.
+/// Onceki tasarim (sonunda <c>require index.php</c>) Adminer'in HER istegini bu dosyadan
+/// geciriyordu ve her gecis ayri bir kirilma noktasi uretti — dordu de canlida yasandi:
+/// eklenti sinifi 5.x'te ad alanina tasinmisti; tek kullanimlik belirtec ikinci istekte yoktu;
+/// Adminer cerez yolunu kendi gordugu adresten turetiyordu ve vekilin arkasinda eslesmiyordu;
+/// Adminer oturumda kendi belirtecini ariyordu ve otomatik giris form akisini atladigi icin o
+/// deger hic olusmuyordu ("Session expired").
+/// </para>
+/// <para>
+/// Kullanicinin kendi gozlemi yolu gosterdi: aracin KENDI adresi
+/// (<c>/api/v1/dbtools/adminer/?server=...</c>) zaten sorunsuz calisiyordu.
 /// </para>
 /// </summary>
 public sealed class AdminerSignonContractTests
 {
     /// <summary>
-    /// Adminer 5.x'te temel sinif ad alanina tasindi; kuresel <c>\Adminer</c> sinifi YOKTUR.
+    /// Sarmalayici Adminer'i YUKLEMEZ. Bu satirin geri gelmesi, yukaridaki dort hatanin da
+    /// yuzeyini geri getirir.
     /// </summary>
     [Fact]
-    public void Wrapper_ResolvesTheBaseClassInsteadOfAssumingTheOldGlobalOne()
+    public void TheWrapper_NeverLoadsAdminerItself()
     {
         var php = OkuSarmalayici();
 
-        Assert.Contains("class_exists('Adminer\\\\Adminer')", php, StringComparison.Ordinal);
-        Assert.Contains("extends \\AdaPanelAdminerBase", php, StringComparison.Ordinal);
+        Assert.DoesNotContain("require __DIR__", php, StringComparison.Ordinal);
+        Assert.DoesNotContain("adminer_object", php, StringComparison.Ordinal);
+        Assert.DoesNotContain("extends", php, StringComparison.Ordinal);
+    }
 
-        // Eski (4.x) varsayimi geri gelmemeli.
-        Assert.DoesNotContain("class AdaPanelAdminer extends Adminer\n", php, StringComparison.Ordinal);
+    /// <summary>Is bitince kullanici Adminer'in KENDI adresine birakilir.</summary>
+    [Fact]
+    public void TheUser_IsHandedOverToAdminersOwnAddress()
+    {
+        var php = OkuSarmalayici();
+
+        Assert.Contains("header('Location: ' . $adaHedef", php, StringComparison.Ordinal);
+        Assert.Contains("'./?'", php, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Surum taninmazsa BOS SAYFA donulmez: teshis edilemeyen hata, cozulemeyen hatadir.
+    /// Oturum, Adminer'in KENDI bicimiyle doldurulur (gercek Adminer 5.4.2 oturumu okunarak
+    /// dogrulandi). Uc anahtarin ucu de gerekli: parola, secili veritabani ve Adminer'in
+    /// her istekte aradigi belirtec.
     /// </summary>
     [Fact]
-    public void Wrapper_SaysSomethingUsefulWhenTheAdminerVersionIsUnknown()
+    public void TheSession_IsFilledInAdminersOwnShape()
     {
         var php = OkuSarmalayici();
 
-        Assert.Contains("Adminer surumu taninmadi", php, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Eklenti giris noktasi KURESEL ad alaninda kalmali: Adminer onu
-    /// <c>function_exists('adminer_object')</c> ile arar ve dizge biciminde verilen ad, bulundugu
-    /// ad alanina gore cozulmez.
-    /// </summary>
-    [Fact]
-    public void Wrapper_KeepsTheEntryPointInTheGlobalNamespace()
-    {
-        var php = OkuSarmalayici();
-
-        Assert.DoesNotContain("namespace Adminer", php, StringComparison.Ordinal);
-        Assert.Contains("function adminer_object()", php, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Belirtec bulunamadiginda SAYFA OLMEZ. Bu, Adminer icinde gezinmenin NORMAL halidir:
-    /// belirtec tek kullanimliktir ve ilk istekte silinir.
-    /// </summary>
-    [Fact]
-    public void Wrapper_DoesNotDieWhenTheOneTimeTokenIsAlreadyUsed()
-    {
-        var php = OkuSarmalayici();
-
-        // Metin sarmalayicinin ACIKLAMASINDA gecebilir; aranan sey, sayfayi olduren CAGRI.
-        Assert.DoesNotContain("exit('Baglanti suresi dolmus", php, StringComparison.Ordinal);
-        Assert.DoesNotContain("exit('Gecersiz baglanti.')", php, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Otomatik giris alanlari YALNIZCA belirtecli ilk istekte doldurulmali; her istekte
-    /// doldurmak Adminer'i her sayfada yeniden giris yapmaya zorlar (yonlendirme dongusu).
-    /// </summary>
-    [Fact]
-    public void Wrapper_FillsTheLoginFieldsOnlyOnTheTokenRequest()
-    {
-        var php = OkuSarmalayici();
-
-        var belirtecBlogu = php.IndexOf("if ($adaToken !== ''", StringComparison.Ordinal);
-        var authAlani = php.IndexOf("$_POST['auth']", StringComparison.Ordinal);
-
-        Assert.True(belirtecBlogu >= 0, "Belirtec blogu bulunamadi.");
-        Assert.True(authAlani > belirtecBlogu, "Otomatik giris alanlari belirtec blogunun disinda dolduruluyor.");
-    }
-
-    /// <summary>
-    /// Panel kimligi yokken (gezinme sirasinda) gecersiz kilmalar Adminer'in kendi davranisina
-    /// dusmeli; diziye korlemesine erismek her sayfada olumcul hata verirdi.
-    /// </summary>
-    [Fact]
-    public void Wrapper_FallsBackToAdminerWhenThePanelIdentityIsGone()
-    {
-        var php = OkuSarmalayici();
-
-        Assert.Contains("return parent::credentials();", php, StringComparison.Ordinal);
-        Assert.Contains("return parent::login($login, $password);", php, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Veritabani suzgeci ilk sayfadan SONRA da uygulanmali. Yalnizca belirtece bakilirsa, gercek
-    /// Adminer ile olculdugu gibi, ust taraftaki "DB" secici sunucudaki butun veritabanlarini
-    /// listeliyor -- yani panel tutamadigi bir soz veriyordu.
-    /// </summary>
-    [Fact]
-    public void Wrapper_KeepsTheDatabaseFilterWhileBrowsing()
-    {
-        var php = OkuSarmalayici();
-
-        Assert.Contains("private function adaOnlyDb()", php, StringComparison.Ordinal);
-        Assert.Contains("$_GET['db']", php, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// ADMINER'IN KENDI BELIRTECI oturumda OLMALI.
-    /// <para>
-    /// Adminer, oturumda bir <c>token</c> degeri tutar ve sonraki her istekte onu arar:
-    /// "cerez var ama oturumda token yok" durumunu OTURUM DUSMUS sayar ve
-    /// "Session expired, please login again." diyerek 403 doner (kaynak: <c>auth_error</c>,
-    /// kosul <c>($_COOKIE[$bi] || $_GET[$bi]) &amp;&amp; !$_SESSION["token"]</c>).
-    /// </para>
-    /// <para>
-    /// O deger normalde giris FORMU cizilirken olusur. Panelin otomatik girisi formu hic
-    /// gostermedigi icin hic olusmuyordu: giris basariyla tamamlaniyor, yonlendirilen ILK sayfa
-    /// "oturum dustu" ile oluyordu. Gercek Adminer + gercek vekil yolu ile olculdu.
-    /// </para>
-    /// </summary>
-    [Fact]
-    public void TheAdminerCsrfToken_IsSeededInTheSession()
-    {
-        var php = OkuSarmalayici();
-
+        Assert.Contains("$_SESSION['pwds'][$adaSurucu][$adaSunucu][$adaKullanici] = $adaParola;", php, StringComparison.Ordinal);
+        Assert.Contains("$_SESSION['db'][$adaSurucu][$adaSunucu][$adaKullanici][$adaDb] = 1;", php, StringComparison.Ordinal);
         Assert.Contains("$_SESSION['token']", php, StringComparison.Ordinal);
-        Assert.Contains("random_int(1, 1000000)", php, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Oturum ADMINER'DAN ONCE baslatilir. Iki isi birden gorur: yukaridaki belirteci yazabilmek
-    /// ve cerezi KOK yola baglamak.
-    /// <para>
-    /// Adminer cerez yolunu kendi gordugu adresten turetiyor (REQUEST_URI); panelin vekilinin
-    /// arkasinda o yol tarayicinin gittigi yolla eslesmiyor ve cerez bir daha gonderilmiyordu.
-    /// Oturum burada baslatilinca Adminer kendi <c>session_start</c> blogunu atlar.
-    /// </para>
+    /// Cerez KOK yola baglanir: Adminer kendi cagrisinda yolu gordugu adresten turetiyor ve
+    /// panelin vekilinin arkasinda o yol tarayicininkiyle eslesmiyordu.
     /// </summary>
     [Fact]
-    public void TheSessionIsStartedBeforeAdminer_WithARootCookiePath()
+    public void TheSessionCookie_IsBoundToTheRootPath()
+    {
+        Assert.Contains("session_set_cookie_params(0, '/'", OkuSarmalayici(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Oturum, yonlendirmeden ONCE diske yazilmali; yoksa hedef sayfa oturumu okuyamaz.
+    /// </summary>
+    [Fact]
+    public void TheSession_IsCommittedBeforeTheRedirect()
     {
         var php = OkuSarmalayici();
 
-        var oturum = php.IndexOf("session_start()", StringComparison.Ordinal);
-        var yukleme = php.IndexOf("require __DIR__", StringComparison.Ordinal);
+        var yazma = php.IndexOf("session_write_close()", StringComparison.Ordinal);
+        var yonlendirme = php.IndexOf("header('Location: '", StringComparison.Ordinal);
 
-        Assert.True(oturum > 0, "Oturum sarmalayicida hic baslatilmiyor.");
-        Assert.True(yukleme > oturum, "Oturum, Adminer yuklendikten SONRA baslatiliyor.");
-        Assert.Contains("session_set_cookie_params(0, '/'", php, StringComparison.Ordinal);
+        Assert.True(yazma > 0, "Oturum hic kapatilmiyor.");
+        Assert.True(yonlendirme > yazma, "Yonlendirme, oturum diske yazilmadan yapiliyor.");
     }
 
-    /// <summary>
-    /// Yol asimi korumasi: belirtec dosya adina cevrilmeden ONCE temizlenmeli.
-    /// </summary>
+    /// <summary>Belirtec TEK KULLANIMLIK kalmali: okunur okunmaz silinir.</summary>
     [Fact]
-    public void Wrapper_SanitizesTheTokenBeforeBuildingAPath()
+    public void TheToken_StaysSingleUse()
+    {
+        var php = OkuSarmalayici();
+
+        Assert.Contains("@unlink($adaFile);", php, StringComparison.Ordinal);
+
+        var okuma = php.IndexOf("file_get_contents($adaFile)", StringComparison.Ordinal);
+        var silme = php.IndexOf("@unlink($adaFile)", StringComparison.Ordinal);
+        Assert.True(okuma > 0 && silme > okuma, "Belirtec okunmadan siliniyor.");
+    }
+
+    /// <summary>Yol asimi korumasi: belirtec dosya adina cevrilmeden ONCE temizlenmeli.</summary>
+    [Fact]
+    public void TheToken_IsSanitisedBeforeBuildingAPath()
     {
         var php = OkuSarmalayici();
 
@@ -177,11 +114,38 @@ public sealed class AdminerSignonContractTests
         Assert.True(yolKurulumu > temizleme, "Belirtec, yola cevrildikten SONRA temizleniyor.");
     }
 
-    /// <summary>Belirtec TEK KULLANIMLIK kalmali: okunur okunmaz silinir.</summary>
+    /// <summary>
+    /// OLUMCUL HATA BOS SAYFA DONMEMELI. Bu sayfada display_errors kapali oldugu icin olumcul bir
+    /// PHP hatasi tarayiciya bos yanit olarak gidiyor ve kullanici yalnizca "bu sayfa calismiyor"
+    /// goruyordu -- ne kullanici ne de gunluk neyin patladigini soyleyebiliyordu.
+    /// </summary>
     [Fact]
-    public void Wrapper_KeepsTheTokenSingleUse()
+    public void AFatalError_ExplainsItselfInsteadOfReturningABlankPage()
     {
-        Assert.Contains("@unlink($adaFile);", OkuSarmalayici(), StringComparison.Ordinal);
+        var php = OkuSarmalayici();
+
+        Assert.Contains("register_shutdown_function", php, StringComparison.Ordinal);
+        Assert.Contains("error_get_last()", php, StringComparison.Ordinal);
+        Assert.Contains("E_PARSE", php, StringComparison.Ordinal);
+    }
+
+    /// <summary>Oturum baslatilamazsa sebep SOYLENIR (sessizce devam edilmez).</summary>
+    [Fact]
+    public void AFailedSessionStart_IsReported()
+    {
+        Assert.Contains("Oturum baslatilamadi", OkuSarmalayici(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Sarmalayici diske yazilamazsa panel SESSIZ KALMAZ: eski (bozuk olabilecek) dosya diskte
+    /// kalir ve panel guncelmis gibi davranmaya devam ederdi.
+    /// </summary>
+    [Fact]
+    public void AFailedWrapperWrite_IsNotSwallowed()
+    {
+        var kaynak = OkuKaynak();
+
+        Assert.Contains("webdb.signon_write_failed", kaynak, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -190,16 +154,20 @@ public sealed class AdminerSignonContractTests
     /// </summary>
     private static string OkuSarmalayici()
     {
+        var eslesme = Regex.Match(OkuKaynak(), "const string signon = \"\"\"\r?\n(.*?)\r?\n\"\"\";", RegexOptions.Singleline);
+        Assert.True(eslesme.Success, "Adminer sarmalayicisi kaynakta bulunamadi.");
+        return eslesme.Groups[1].Value;
+    }
+
+    private static string OkuKaynak()
+    {
         var klasor = AppContext.BaseDirectory;
         for (var derinlik = 0; derinlik < 8; derinlik++)
         {
             var aday = Path.Combine(klasor, "src", "AdaPanel.Infrastructure", "WebDbClient", "WebDbClientService.cs");
             if (File.Exists(aday))
             {
-                var kaynak = File.ReadAllText(aday);
-                var eslesme = Regex.Match(kaynak, "const string signon = \"\"\"\r?\n(.*?)\r?\n\"\"\";", RegexOptions.Singleline);
-                Assert.True(eslesme.Success, "Adminer sarmalayicisi kaynakta bulunamadi.");
-                return eslesme.Groups[1].Value;
+                return File.ReadAllText(aday);
             }
 
             klasor = Path.Combine(klasor, "..");
