@@ -65,15 +65,29 @@
         <span>{{ t("panel.ssl.expires") }}</span>
         <span>HTTPS</span>
       </div>
-      <div v-for="item in workspace?.certificates ?? []" :key="`${item.thumbprint}:${item.hostName}`" class="data-row cert-row">
+      <template v-for="item in workspace?.certificates ?? []" :key="`${item.thumbprint}:${item.hostName}`">
+      <div class="data-row cert-row">
         <span class="cell-main"><strong>{{ item.hostName }}</strong><small>{{ item.thumbprint }}</small></span>
-        <span>{{ item.source }}</span>
+        <!-- Ham değer ("self-signed") yerine kullanıcının dili. -->
+        <span :class="['status-pill', item.source === 'self-signed' ? 'warn' : 'ok']">{{ sourceLabel(item.source) }}</span>
         <span class="cell-muted">{{ item.subject || "-" }}</span>
         <span :class="['status-pill', expiryClass(item.notAfterUtc)]" :title="formatUtc(item.notAfterUtc)">{{ formatUtc(item.notAfterUtc) }} · {{ expiryLabel(item.notAfterUtc) }}</span>
-        <span :class="['status-pill', item.isHttpsBindingPresent ? 'ok' : 'warn']">
+        <!-- ÖLÇÜLEMEDİ ayrı gösterilir: "bağlama yok" demek, bakamadığımızda yanlış olur. -->
+        <span v-if="item.isHttpsBindingPresent === null" class="status-pill" :title="t('panel.ssl.bindingUnknownHint')">
+          {{ t("panel.ssl.bindingUnknown") }}
+        </span>
+        <span v-else :class="['status-pill', item.isHttpsBindingPresent ? 'ok' : 'warn']">
           {{ item.isHttpsBindingPresent ? `${item.port}` : t("panel.ssl.notBound") }}
         </span>
       </div>
+
+      <!-- SESSİZ DÜŞÜŞ ARTIK SESSİZ DEĞİL. Let's Encrypt alınamayıp kendinden imzalıya
+           düşüldüğünde işlem "başarılı" dönüyor, kullanıcı SSL'in kurulduğunu sanıyor ve
+           sorunu ancak tarayıcı "bu bağlantı güvenli değil" dediğinde fark ediyordu. -->
+      <p v-if="item.fallbackReason" class="cert-fallback">
+        {{ t("panel.ssl.fallbackTitle") }} — {{ t(item.fallbackReason) }}
+      </p>
+      </template>
       <!-- Liste yüklenmeden "sertifika yok" yazıyordu; henüz bilinmiyor ile gerçekten yok
            ekranda ayırt edilemiyordu. -->
       <p v-if="!workspace" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
@@ -157,7 +171,17 @@ const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const issueForm = reactive({ contactEmail: "", hostName: "", useStaging: false, wildcard: false });
 const importForm = reactive({ hostName: "", password: "", fileName: "", base64Content: "" });
-const httpsBindingCount = computed(() => workspace.value?.certificates.filter((item) => item.isHttpsBindingPresent).length ?? 0);
+// Yalnızca GERÇEKTEN ölçülüp "var" çıkanlar sayılır; ölçülemeyenler sayıya katılmaz.
+const httpsBindingCount = computed(() =>
+  workspace.value?.certificates.filter((item) => item.isHttpsBindingPresent === true).length ?? 0);
+
+/** Ham kaynak değerini kullanıcının diline çevirir. */
+function sourceLabel(source: string) {
+  if (source === "letsencrypt") return "Let's Encrypt";
+  if (source === "self-signed") return t("panel.ssl.sourceSelfSigned");
+  if (source === "manual") return t("panel.ssl.sourceManual");
+  return source || "-";
+}
 const canIssue = computed(() => Boolean(selectedSiteName.value && issueForm.hostName && issueForm.contactEmail));
 
 onMounted(async () => {
@@ -315,6 +339,16 @@ function resolveApiMessage(error: unknown) {
 
 .cert-row {
   grid-template-columns: 1.2fr 0.75fr 1.45fr 1fr 0.65fr;
+}
+
+/* Kendinden imzalıya düşme sebebi: sertifika satırının hemen altında, göz kaçırmasın. */
+.cert-fallback {
+  margin: 0;
+  padding: 0.4rem 0.9rem 0.6rem;
+  font-size: 0.84rem;
+  color: var(--warn-text, #a07800);
+  border-left: 3px solid var(--warn-border, #e0b400);
+  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 
 .site-select {

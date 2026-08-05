@@ -3296,5 +3296,14 @@
   "repair.records_not_published": "Bazı DNS kayıtları panelde tanımlı ama sunucuda yayınlanmamış.",
   "repair.publish_state_unknown": "DNS kayıtları sunucudan okunamadı; yayınlanmış kayıtların durumu doğrulanamıyor.",
   "panel.health.domainsForce": "Yine de çalıştır",
-  "panel.health.domainsMeasured": "{total} alan adı denetlendi · {stale} tanesinde eksik bulundu · {findings} sunucu geneli bulgu"
+  "panel.health.domainsMeasured": "{total} alan adı denetlendi · {stale} tanesinde eksik bulundu · {findings} sunucu geneli bulgu",
+  "panel.ssl.sourceSelfSigned": "Kendinden imzalı",
+  "panel.ssl.sourceManual": "Elle yüklenen sertifika",
+  "panel.ssl.bindingUnknown": "Ölçülemedi",
+  "panel.ssl.bindingUnknownHint": "Sitenin bağlamaları okunamadığı için HTTPS bağlaması olup olmadığı belirlenemedi. \"Bağlama yok\" demek yanlış olurdu.",
+  "panel.ssl.fallbackTitle": "Let's Encrypt sertifikası ALINAMADI; site şimdilik kendinden imzalı bir sertifikayla çalışıyor (tarayıcı \"güvenli değil\" uyarısı verir)",
+  "ssl.fallback.winacme_missing": "Sunucuda win-acme kurulu değil. Mağaza bölümünden win-acme bileşenini kurun, sonra tekrar deneyin.",
+  "ssl.fallback.email_missing": "İletişim e-postası verilmedi. Let's Encrypt sertifika vermek için bir e-posta adresi ister.",
+  "ssl.fallback.acme_failed": "Let's Encrypt doğrulaması başarısız oldu. En sık sebepleri: alan adı bu sunucuya işaret etmiyor, 80 portu dışarıya kapalı ya da haftalık sertifika limiti dolmuş.",
+  "ssl.fallback.certificate_not_found": "win-acme hatasız bitti ama sertifika deposunda yeni bir sertifika bulunamadı. Günlüklere bakın."
 }

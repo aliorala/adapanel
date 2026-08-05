@@ -227,7 +227,16 @@ public sealed partial class SiteHealthService(
                 if (stored is not null)
                 {
                     daysLeft = DaysLeft(stored.NotAfterUtc, DateTime.UtcNow);
-                    detail = $"443'te yanıt yok; panel kaydı: {stored.HostName} ({stored.NotAfterUtc:yyyy-MM-dd}), https binding={stored.IsHttpsBindingPresent}. {detail}".Trim();
+                    // "Ölçülemedi" ile "var/yok" AYRI yazılır. Bu alan bir zamanlar hiç ölçülmeden
+                    // sabit true yazılıyordu ve bu satır, 443 el sıkışması başarısızken bile
+                    // "https binding=True" diyerek kullanıcıyı yanlış yöne gönderiyordu.
+                    var bindingDurumu = stored.IsHttpsBindingPresent switch
+                    {
+                        true => "var",
+                        false => "yok",
+                        null => "ölçülemedi"
+                    };
+                    detail = $"443'te yanıt yok; panel kaydı: {stored.HostName} ({stored.NotAfterUtc:yyyy-MM-dd}), https bağlaması: {bindingDurumu}. {detail}".Trim();
                 }
             }
             catch { /* ssl.json okunamazsa daysLeft null kalır → "sertifika yok" olarak raporlanır */ }

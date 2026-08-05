@@ -14,9 +14,14 @@ export type SslCertificate = {
   friendlyName: string;
   subject: string;
   notAfterUtc: string;
+  // "letsencrypt" | "self-signed" | "manual" (başka bir sertifika otoritesi ya da elle yüklenmiş).
   source: string;
-  isHttpsBindingPresent: boolean;
+  // null = ÖLÇÜLEMEDİ. "Bağlama yok" ile "bakamadık" aynı şey değildir.
+  isHttpsBindingPresent: boolean | null;
   port: number;
+  // Let's Encrypt alınamadığı için kendinden imzalıya düşüldüyse sebebin çeviri anahtarı.
+  // Boş değilse ekran "SSL kuruldu" gibi davranmamalı.
+  fallbackReason: string;
 };
 
 export type SslWorkspace = {

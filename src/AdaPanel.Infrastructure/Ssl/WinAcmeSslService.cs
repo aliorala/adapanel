@@ -90,8 +90,13 @@ public sealed class WinAcmeSslService(
         }
 
         var hostName = ResolveHostName(site, request.HostName);
-        var certificate = await TryIssueWithWinAcmeAsync(site, hostName, request.ContactEmail, request.UseStaging, cancellationToken)
-            ?? CreateSelfSignedCertificate(hostName, site.Name);
+
+        // Sonuç SEBEBİYLE birlikte gelir: Let's Encrypt alınamadığında kendinden imzalıya
+        // düşülüyor ama bu SESSİZ olmamalı. Öncesinde işlem "başarılı" dönüyor, kullanıcı SSL'in
+        // kurulduğunu sanıyor ve sorunu ancak tarayıcı "bu bağlantı güvenli değil" dediğinde
+        // fark ediyordu; sebep hiçbir yerde yazmıyordu.
+        var acmeSonucu = await TryIssueWithWinAcmeAsync(site, hostName, request.ContactEmail, request.UseStaging, cancellationToken);
+        var certificate = acmeSonucu.Certificate ?? CreateSelfSignedCertificate(hostName, site.Name);
 
         // İletişim e-postasını panel geneline kaydet ki mail sertifikası otomatik alınırken
         // (MailService) tekrar sorulmasın. Best-effort.
@@ -109,9 +114,9 @@ public sealed class WinAcmeSslService(
         // profesyonel paneller gibi: SSL kurulunca HTTP→HTTPS yönlendirmesi otomatik açılır (best-effort).
         await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
 
-        var dto = ToDto(site.Name, hostName, certificate, certificate.FriendlyName?.Contains("Let's Encrypt", StringComparison.OrdinalIgnoreCase) == true
-            ? "letsencrypt"
-            : "self-signed");
+        // Kaynak SERTİFİKANIN KENDİSİNDEN okunur, FriendlyName'den değil.
+        var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), MeasureHttpsBinding(site, hostName));
+        dto.FallbackReason = acmeSonucu.Certificate is null ? acmeSonucu.FailureReason : string.Empty;
 
         await UpsertAsync(dto, cancellationToken);
         return dto;
@@ -145,7 +150,9 @@ public sealed class WinAcmeSslService(
         await EnsureHttpsBindingAsync(site.Name, hostName, request.Port <= 0 ? 443 : request.Port, certificate, cancellationToken);
         await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
 
-        var dto = ToDto(site.Name, hostName, certificate, "manual");
+        // Elle içe aktarılan sertifikada da kaynak ÖLÇÜLÜR: kullanıcı kendinden imzalı bir dosya
+        // yüklediyse panel ona "manual" deyip güvenilir sanmamalı.
+        var dto = ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), MeasureHttpsBinding(site, hostName));
         await UpsertAsync(dto, cancellationToken);
         return dto;
     }
@@ -297,13 +304,14 @@ public sealed class WinAcmeSslService(
             }
 
             var issued = await TryIssueWithWinAcmeAsync(site, hostName, contactEmail, false, cancellationToken);
-            if (issued is null)
+            if (issued.Certificate is null)
             {
+                logger.LogInformation("Otomatik SSL alinamadi ({Host}): {Reason}", hostName, issued.FailureReason);
                 return false;
             }
 
-            PersistCertificate(issued);
-            await EnsureHttpsBindingAsync(site.Name, hostName, 443, issued, cancellationToken);
+            PersistCertificate(issued.Certificate);
+            await EnsureHttpsBindingAsync(site.Name, hostName, 443, issued.Certificate, cancellationToken);
             return true;
         }
         catch (Exception exception)
@@ -633,12 +641,15 @@ public sealed class WinAcmeSslService(
         PersistCertificate(certificate);
         await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
 
-        var dto = ToDto(site.Name, $"*.{domain}", certificate, "letsencrypt");
+        var dto = ToDto(site.Name, $"*.{domain}", certificate, ResolveCertificateSource(certificate), MeasureHttpsBinding(site, $"*.{domain}"));
         await UpsertAsync(dto, cancellationToken);
         return dto;
     }
 
-    private async Task<X509Certificate2?> TryIssueWithWinAcmeAsync(
+    /// <summary>Let's Encrypt denemesinin sonucu: sertifika ya da NEDEN alınamadığı.</summary>
+    private sealed record AcmeIssueResult(X509Certificate2? Certificate, string FailureReason);
+
+    private async Task<AcmeIssueResult> TryIssueWithWinAcmeAsync(
         AdaPanel.Core.Dtos.Sites.SiteDto site,
         string hostName,
         string contactEmail,
@@ -646,9 +657,14 @@ public sealed class WinAcmeSslService(
         CancellationToken cancellationToken)
     {
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(wacs) || string.IsNullOrWhiteSpace(contactEmail))
+        if (string.IsNullOrWhiteSpace(wacs))
         {
-            return null;
+            return new AcmeIssueResult(null, "ssl.fallback.winacme_missing");
+        }
+
+        if (string.IsNullOrWhiteSpace(contactEmail))
+        {
+            return new AcmeIssueResult(null, "ssl.fallback.email_missing");
         }
 
         var baseUri = useStaging
@@ -657,16 +673,74 @@ public sealed class WinAcmeSslService(
 
         var before = FindBestCertificate(hostName);
         var args = $"--target iis --siteid {site.Id} --host {hostName} --installation iis --emailaddress {contactEmail} --accepttos --baseuri {baseUri}";
-        // HTTP-01 doğrulaması domain sunucuya işaret etmiyorsa/80 kapalıysa win-acme uzun
-        // süre takılabilir. 120 sn sonra iptal et ki istek sonsuza kadar dönmesin (self-signed'a düşer).
-        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken, timeout: TimeSpan.FromSeconds(120));
+
+        // SÜRE SINIRI 10 DAKİKA. Eskiden 120 saniyeydi ve bu, MEŞRU bir yayınlamayı ortasında
+        // kesiyordu: Let's Encrypt doğrulaması DNS yayılmasını, yeniden denemeleri ve hız
+        // sınırı beklemelerini içerebilir. Süre dolunca süreç öldürülüyor, sessizce kendinden
+        // imzalı üretiliyor ve işlem BAŞARILI dönüyordu. Aynı dosyadaki joker karakter yolu
+        // (IssueWildcardAsync) zaten 10 dakika kullanıyor; tekil yol ondan geri kalmıştı.
+        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken, timeout: TimeSpan.FromMinutes(10));
         if (!result.Success)
         {
-            return null;
+            logger.LogWarning(
+                "win-acme sertifika alamadi ({Host}): cikis={ExitCode}. {Error}",
+                hostName,
+                result.ExitCode,
+                Kirp(result.StandardError));
+            return new AcmeIssueResult(null, "ssl.fallback.acme_failed");
         }
 
         var after = FindBestCertificate(hostName);
-        return after?.Thumbprint != before?.Thumbprint ? after : before;
+        var certificate = after?.Thumbprint != before?.Thumbprint ? after : before;
+
+        // win-acme "basarili" cikis kodu dondurup ORTADA SERTIFIKA BIRAKMAYABILIR. Cikis kodunu
+        // sonuc yerine koymak, bu dosyada bir kez daha duzeltilen hatanin ta kendisiydi.
+        return certificate is null
+            ? new AcmeIssueResult(null, "ssl.fallback.certificate_not_found")
+            : new AcmeIssueResult(certificate, string.Empty);
+    }
+
+    private static string Kirp(string? value)
+        => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim()[..Math.Min(value.Trim().Length, 500)];
+
+    /// <summary>
+    /// Sertifikanın kaynağını SERTİFİKADAN okur.
+    /// <para>
+    /// Kendinden imzalı olmanın tanımı: veren ile konu aynıdır. Önceki sürüm bunun yerine
+    /// <c>FriendlyName</c> içinde "Let's Encrypt" arıyordu; o adı win-acme yazar ve biçimi
+    /// "[win-acme] example.com @ ..." olduğu için koşul hiçbir zaman doğru olmuyordu.
+    /// </para>
+    /// </summary>
+    internal static string ResolveCertificateSource(X509Certificate2 certificate)
+    {
+        if (string.Equals(certificate.Issuer, certificate.Subject, StringComparison.OrdinalIgnoreCase))
+        {
+            return "self-signed";
+        }
+
+        return certificate.Issuer.Contains("Let's Encrypt", StringComparison.OrdinalIgnoreCase)
+            || certificate.Issuer.Contains("ISRG", StringComparison.OrdinalIgnoreCase)
+            ? "letsencrypt"
+            // Başka bir sertifika otoritesi imzalamış: "self-signed" demek yanlış olurdu, çünkü
+            // tarayıcı bu sertifikaya güvenebilir. Elle içe aktarılanlarla aynı sınıfa girer.
+            : "manual";
+    }
+
+    /// <summary>
+    /// Sitede gerçekten HTTPS bağlaması var mı — ÖLÇÜLÜR. Site bilgisi okunamadıysa null döner.
+    /// </summary>
+    private static bool? MeasureHttpsBinding(AdaPanel.Core.Dtos.Sites.SiteDto? site, string hostName)
+    {
+        if (site?.Bindings is null || site.Bindings.Count == 0)
+        {
+            // Bağlama listesi hiç okunamadıysa "yok" DEMEYİZ; bilmediğimizi söyleriz.
+            return null;
+        }
+
+        return site.Bindings.Any(binding =>
+            string.Equals(binding.Protocol, "https", StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrWhiteSpace(binding.HostName)
+                || string.Equals(binding.HostName, hostName, StringComparison.OrdinalIgnoreCase)));
     }
 
     private async Task<string> ResolveWinAcmeExecutableAsync(CancellationToken cancellationToken)
@@ -866,7 +940,12 @@ public sealed class WinAcmeSslService(
         }, cancellationToken);
     }
 
-    private static SslCertificateDto ToDto(string siteName, string hostName, X509Certificate2 certificate, string source)
+    private static SslCertificateDto ToDto(
+        string siteName,
+        string hostName,
+        X509Certificate2 certificate,
+        string source,
+        bool? httpsBindingPresent)
     {
         return new SslCertificateDto
         {
@@ -877,7 +956,10 @@ public sealed class WinAcmeSslService(
             Subject = certificate.Subject,
             NotAfterUtc = certificate.NotAfter.ToUniversalTime(),
             Source = source,
-            IsHttpsBindingPresent = true,
+            // ÖLÇÜLMÜŞ değer. Burada sabit "true" yazmak, site sağlığı ekranının 443 el sıkışması
+            // başarısızken bile "https binding=True" demesine ve kullanıcıyı yanlış yöne
+            // göndermesine yol açıyordu.
+            IsHttpsBindingPresent = httpsBindingPresent,
             Port = 443
         };
     }
