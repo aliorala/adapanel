@@ -99,8 +99,10 @@ public sealed class DbToolsProxyController(
 
         Response.StatusCode = (int)backendResponse.StatusCode;
 
-        CopyResponseHeaders(backendResponse.Headers);
-        CopyResponseHeaders(backendResponse.Content.Headers);
+        // Araç bu önekin altında yaşıyor; çerezleri de bu yola bağlanmalı.
+        var cookiePathPrefix = $"/api/v1/dbtools/{provider}/";
+        CopyResponseHeaders(backendResponse.Headers, cookiePathPrefix);
+        CopyResponseHeaders(backendResponse.Content.Headers, cookiePathPrefix);
         Response.Headers.Remove("transfer-encoding");
 
         // Panelin global katı CSP'si phpMyAdmin'i bozar (inline/asset). phpMyAdmin kendi CSP'sini gönderiyorsa
@@ -182,7 +184,7 @@ public sealed class DbToolsProxyController(
         return index < 0 ? html : html.Insert(index, LayoutFixStyle);
     }
 
-    private void CopyResponseHeaders(System.Net.Http.Headers.HttpHeaders headers)
+    private void CopyResponseHeaders(System.Net.Http.Headers.HttpHeaders headers, string? cookiePathPrefix = null)
     {
         foreach (var header in headers)
         {
@@ -194,12 +196,55 @@ public sealed class DbToolsProxyController(
             // Kestrel bazı başlıkları doğrudan atamada reddedebilir; güvenli tarafta kal.
             try
             {
-                Response.Headers[header.Key] = header.Value.ToArray();
+                var values = header.Value.ToArray();
+
+                // ÇEREZ YOLU VEKİL YOLUNA ÇEVRİLİR — yoksa oturum çerezi hiç geri gelmez.
+                //
+                // Adminer çerez yolunu kendi gördüğü adresten üretiyor:
+                //   session_set_cookie_params(0, preg_replace('~\?.*~', '', $_SERVER["REQUEST_URI"]), ...)
+                // Vekilin arkasında PHP "/adapanel-signon.php" görür, ama tarayıcı adrese
+                // "/api/v1/dbtools/adminer/adapanel-signon.php" olarak gider. İki yol eşleşmediği
+                // için tarayıcı çerezi BİR DAHA GÖNDERMEZ: Adminer'ın oturumu her istekte kaybolur
+                // ve giriş yaptıktan sonraki ilk sayfa açılmaz.
+                //
+                // Yolu vekil önekiyle yeniden yazmak, ters vekillerin standart işidir
+                // (nginx'te proxy_cookie_path). Aracın kendi kodu değişmez.
+                if (cookiePathPrefix is not null && header.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    values = values.Select(value => RewriteCookiePath(value, cookiePathPrefix)).ToArray();
+                }
+
+                Response.Headers[header.Key] = values;
             }
             catch
             {
                 // atlanabilir başlık (ör. korumalı) — yoksay
             }
         }
+    }
+
+    /// <summary>
+    /// Bir <c>Set-Cookie</c> başlığındaki <c>Path=</c> değerini vekil önekiyle değiştirir.
+    /// <para>
+    /// Path yoksa eklenir: PHP her zaman yazmayabilir ve o durumda tarayıcı yolu istekten türetir —
+    /// aracın alt yolları arasında çerez yine kaybolabilirdi.
+    /// </para>
+    /// </summary>
+    internal static string RewriteCookiePath(string setCookieValue, string pathPrefix)
+    {
+        if (string.IsNullOrWhiteSpace(setCookieValue))
+        {
+            return setCookieValue;
+        }
+
+        var replaced = System.Text.RegularExpressions.Regex.Replace(
+            setCookieValue,
+            @"(?i)(;\s*)path\s*=\s*[^;]*",
+            $"$1Path={pathPrefix}");
+
+        // Hiç Path yoksa ekle (Regex eşleşmediyse metin aynı kalır).
+        return ReferenceEquals(replaced, setCookieValue) || replaced == setCookieValue
+            ? $"{setCookieValue}; Path={pathPrefix}"
+            : replaced;
     }
 }

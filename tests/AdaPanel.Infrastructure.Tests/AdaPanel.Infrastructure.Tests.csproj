@@ -14,5 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AdaPanel.Infrastructure\AdaPanel.Infrastructure.csproj" />
+    <!-- Vekilin (DbToolsProxyController) cerez yolu mantigini dogrulamak icin. -->
+    <ProjectReference Include="..\..\src\AdaPanel.Api\AdaPanel.Api.csproj" />
   </ItemGroup>
 </Project>

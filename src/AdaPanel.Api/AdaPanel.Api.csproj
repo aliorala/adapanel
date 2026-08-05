@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Vekilin cerez yolu mantigi testlerden dogrulanir (Infrastructure ile ayni kalip). -->
+    <InternalsVisibleTo Include="AdaPanel.Infrastructure.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\AdaPanel.Core\AdaPanel.Core.csproj" />
     <ProjectReference Include="..\AdaPanel.Data\AdaPanel.Data.csproj" />
     <ProjectReference Include="..\AdaPanel.Infrastructure\AdaPanel.Infrastructure.csproj" />
