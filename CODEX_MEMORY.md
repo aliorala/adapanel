@@ -6185,3 +6185,30 @@ Basarili:
 ### BU TURDA PAKET URETILMEDI
 - 0.2.86 GitHub'da yayinda; 0.2.87-0.2.90 yalnizca commit'lendi, installer uretilmedi/yayinlanmadi.
 - Canli sunucuya cikmadan once: `dotnet publish` + ISCC ile paket, SHA256 kaydi, GitHub release.
+
+## 2026-08-05 (213) — 0.2.91: tam sistem taramasi + GUVENLIK duzeltmesi + PAKET
+
+- **KRITIK ACIK (K7 kapandi):** DB araci belirtec dizini `icacls /grant IIS_IUSRS:(OI)(CI)M` ile
+  aciliyordu. IIS_IUSRS **butun uygulama havuzlarini** kapsar; dizinde motorun **root parolasi duz
+  metin**. Her musterinin PHP kodu okuyabiliyordu. Artik yalnizca aracin KENDI havuzu + miras
+  kirik + hiddenSegments. **Kilit dogrulanamazsa parola YAZILMIYOR** (fail-closed).
+  - **OLCULEN 1:** havuz adi SITE ADI DEGIL — `CreateSiteAsync` one `AdaPanel.` ekliyor, yani
+    site `AdaPanel.WebDb.Adminer` icin havuz `AdaPanel.AdaPanel.WebDb.Adminer`. Yanlis hesap
+    adinda icacls **1332 ile HICBIR SEYI uygulamiyor** → duzeltme araci tamamen kirardi.
+  - **OLCULEN 2:** icacls bir alt ogeye erisemedigi halde **cikis kodu 0** donuyor. Sonuc bu
+    yuzden dizinin KENDI ACL'inden dogrulaniyor (`AreAccessRulesProtected` + IIS_IUSRS SID
+    `S-1-5-32-568` yok mu).
+  - Hesap adlari **SID ile** verilir (`*S-1-5-18`, `*S-1-5-32-544`): Turkce Windows'ta adlar farkli.
+- **Sessiz basarisizlik:** FilesView kaydet/klasor/sil + yedek listesi ve UsersView plan
+  ekle/sil hata yakalamiyordu. "Kaydet" en pahalisiydi → sessizce basarisiz, kullanici
+  kaydedildigini sanip sekmeyi kapatiyor = VERI KAYBI.
+- **window.prompt ile parola (6 yer) kaldirildi:** yeni `PromptDialog.vue` (gizli alan +
+  "goster" secimi + asgari uzunluk ONDEN yazili + odak tuzagi). Panelde artik window.prompt YOK.
+- **Taramada TEMIZ:** kurulum ucu loopback sinirli, Git webhook token dogruluyor, TODO/FIXME
+  borcu yok, bos catch'lerin hepsi PowerShell betigi icinde (niyetli).
+- **0.2.91 PAKET:** `artifacts\release\0.2.91\AdaPanelSetup.exe`, `55,306,361` byte (52.74 MiB),
+  SHA256 `81B1844F48C87E31805B946DD375570DD07FC6516FC34F327DF9DEBC3F52C2C2`.
+- **YAYINLANAMADI:** bu calisma kopyasinda **git remote YOK, gh CLI yok, GH token yok**.
+  0.2.86 hala `releases/latest`. `release-body.json` 0.2.91 icin hazir (0.2.87-0.2.91 birlesik
+  notu). Yayin icin: remote ekle + push + release olustur + AdaPanelSetup.exe yukle, sonra
+  yayindaki dosyayi indirip SHA256'yi yukaridakiyle karsilastir.
