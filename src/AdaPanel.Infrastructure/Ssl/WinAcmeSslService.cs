@@ -155,18 +155,36 @@ public sealed class WinAcmeSslService(
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
         if (string.IsNullOrWhiteSpace(wacs))
         {
+            // OLCUM YAPILAMADI. "0 sertifika yenilendi" DEMEK DEGIL -- yenileme hic denenemedi.
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
+                Measured = false,
+                FailureReason = "win-acme kurulu degil; sertifikalar yenilenemiyor.",
                 Output = "win-acme kurulu degil."
             };
         }
 
         var result = await ProcessRunner.RunAsync(wacs, "--renew --baseuri https://acme-v02.api.letsencrypt.org/", cancellationToken: cancellationToken);
+        var cikti = string.IsNullOrWhiteSpace(result.StandardOutput) ? result.StandardError : result.StandardOutput;
+
+        // SAYIM CIKTIDAN OKUNUR, cikis kodundan DEGIL.
+        //
+        // wacs --renew, yenilenecek bir sey olmadiginda da tek tek yenilemeler basarisiz
+        // oldugunda da 0 doner. Eski kod bunu "1 sertifika yenilendi" sayiyordu: bes sertifika
+        // yenilense de "1", hicbiri yenilenmese de "1" diyordu -- yani sayi hicbir gercegi
+        // olcmuyordu.
+        var yenilenen = System.Text.RegularExpressions.Regex.Matches(
+            cikti ?? string.Empty,
+            @"(?im)^\s*.*renew(al|ed).*succe",
+            System.Text.RegularExpressions.RegexOptions.Multiline).Count;
+
         return new RenewAllResultDto
         {
-            RenewedCount = result.Success ? 1 : 0,
-            Output = string.IsNullOrWhiteSpace(result.StandardOutput) ? result.StandardError : result.StandardOutput
+            RenewedCount = yenilenen,
+            Measured = result.Success,
+            FailureReason = result.Success ? string.Empty : "win-acme yenileme komutu basarisiz oldu.",
+            Output = cikti
         };
     }
 

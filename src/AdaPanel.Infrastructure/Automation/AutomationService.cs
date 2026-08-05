@@ -446,8 +446,14 @@ public sealed class AutomationService(
             }
 
             state.LastSslRunUtc = DateTime.UtcNow;
-            state.LastSslStatus = "completed";
-            state.LastSslDetails = $"{result.RenewedCount} sertifika yenilendi.{mailSync}";
+
+            // OLCULEMEDIYSE "tamamlandi" DENMEZ. Aksi halde ekranda her gun basarili bir satir
+            // gorunur, gercekte hicbir sertifika yenilenmez ve bu ancak 90 gun sonra tum siteler
+            // ayni anda dustugunde anlasilir.
+            state.LastSslStatus = result.Measured ? "completed" : "failed";
+            state.LastSslDetails = result.Measured
+                ? $"{result.RenewedCount} sertifika yenilendi.{mailSync}"
+                : result.FailureReason;
         }
         catch (OperationCanceledException)
         {
