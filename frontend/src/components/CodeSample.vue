@@ -9,6 +9,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
+import { copyToClipboard } from "../utils/clipboard";
 
 /**
  * Kısa, kopyalanabilir kod/yol kutusu. Kullanıcıya "ne yazacağını" anlatmak yerine
@@ -27,10 +28,9 @@ const copied = ref(false);
 let resetTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function copy() {
-  try {
-    await navigator.clipboard.writeText(props.code);
-  } catch {
-    // Pano izni yoksa (http veya eski tarayıcı) seçilebilir metin zaten ekranda; sessiz geç.
+  // Ortak yardımcı güvenli olmayan bağlamda (panel henüz sertifika almadan) da kopyalar.
+  // Yine de olmazsa "kopyalandı" işareti GÖSTERİLMEZ: metin zaten ekranda, seçilebilir.
+  if (!(await copyToClipboard(props.code))) {
     return;
   }
 

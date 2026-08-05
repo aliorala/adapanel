@@ -140,6 +140,7 @@ import {
   type ConsumerSource,
   type ResourceConsumerSnapshot
 } from "../api/consumers";
+import { copyToClipboard } from "../utils/clipboard";
 
 /**
  * Paylaşılan bir sürecin İÇİNİ gösteren liste.
@@ -192,10 +193,9 @@ async function copyStatement(statement: string) {
     return;
   }
 
-  try {
-    await navigator.clipboard.writeText(statement);
-  } catch {
-    // Pano izni yoksa (http bağlamı vb.) sessizce geç — kullanıcı metni zaten seçip kopyalayabilir.
+  // Ortak yardımcı http bağlamında da kopyalar; yine de olmazsa "kopyalandı" işareti yanıp
+  // sönmez — kullanıcı metni zaten seçip kopyalayabilir.
+  if (!(await copyToClipboard(statement))) {
     return;
   }
 

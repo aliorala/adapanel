@@ -109,6 +109,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { copyToClipboard } from "../utils/clipboard";
 
 // Bildirimler üst bandda (MainLayout > banner) gösterilsin diye kabuk bileşene iletilir.
 const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
@@ -170,12 +171,10 @@ async function regenerateRecoveryCodes() {
 }
 
 async function copyRecoveryCodes() {
-  try {
-    await navigator.clipboard.writeText(recoveryCodes.value.join("\n"));
-    notify(t("panel.account.recoveryCopied"), false);
-  } catch {
-    notify(t("panel.account.recoveryCopyFailed"), true);
-  }
+  // Kurtarma kodları kritik: panel henüz sertifika almamışken (http) tarayıcının pano API'si
+  // yoktur ve düğme sessizce ölüyordu. Ortak yardımcı o durumda da kopyalar.
+  const oldu = await copyToClipboard(recoveryCodes.value.join("\n"));
+  notify(t(oldu ? "panel.account.recoveryCopied" : "panel.account.recoveryCopyFailed"), !oldu);
 }
 
 async function disableTwoFactor() {

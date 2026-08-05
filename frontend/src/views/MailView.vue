@@ -578,6 +578,7 @@ import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { copyToClipboard } from "../utils/clipboard";
 
 // Site bağlamından (Web Siteleri > site > Mail) gelindiğinde o sitenin alan adını
 // önceden seçmek için opsiyonel prop (profesyonel paneller gibi domain-içi Mail sekmesi).
@@ -862,12 +863,9 @@ async function runDiagnostics() {
 }
 
 async function copyDnsValue(value: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-    showNotice(t("panel.mail.dnsCopied"), false);
-  } catch {
-    window.prompt(t("panel.mail.dnsCopy"), value);
-  }
+  // window.prompt kaldırıldı: tarayıcı diyalogları engellenirse kullanıcı hiçbir şey görmüyordu.
+  const oldu = await copyToClipboard(value);
+  showNotice(t(oldu ? "panel.mail.dnsCopied" : "panel.common.copyFailed"), !oldu);
 }
 
 async function configure() {

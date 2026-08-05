@@ -25,9 +25,16 @@
       <h3 class="section-label">{{ t("panel.migration.discoverTitle") }}</h3>
       <p class="meta create-hint">{{ t("panel.migration.discoverHint") }}</p>
 
+      <!-- Sekme etiketleri i18n'den gelir. Sabit kodlu metin, çeviri parite denetiminden kaçar ve
+           dil değişince Türkçe kalır. Kaynak panelin ADI burada işlevseldir: kullanıcı taşımayı
+           hangi panelden yaptığını seçebilmeli. -->
       <div class="segmented-tabs source-tabs">
-        <button type="button" :class="{ active: source === 'plesk' }" @click="source = 'plesk'">Plesk</button>
-        <button type="button" :class="{ active: source === 'cpanel' }" @click="source = 'cpanel'">cPanel / WHM</button>
+        <button type="button" :class="{ active: source === 'plesk' }" @click="source = 'plesk'">
+          {{ t("panel.migration.sourcePlesk") }}
+        </button>
+        <button type="button" :class="{ active: source === 'cpanel' }" @click="source = 'cpanel'">
+          {{ t("panel.migration.sourceCpanel") }}
+        </button>
       </div>
 
       <div v-if="source === 'plesk'" class="form-grid">

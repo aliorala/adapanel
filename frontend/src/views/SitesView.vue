@@ -249,6 +249,7 @@ import { getPanelPreferences } from "../api/panelSettings";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { copyToClipboard } from "../utils/clipboard";
 import { useSoftwareStore } from "../stores/software";
 
 const { t } = useI18n();
@@ -634,10 +635,17 @@ function showNotice(message: string, isError: boolean) {
   noticeError.value = isError;
 }
 
+/**
+ * Kimlik bilgilerini panoya kopyalar.
+ *
+ * Sonuç ÖLÇÜLÜR: `navigator.clipboard` yalnızca güvenli bağlamda vardır ve panel daha sertifika
+ * almadan — yani tam da yeni sitenin parolasının gösterildiği anda — düğme sessizce ölüyordu.
+ * Artık yedek yol denenir; o da olmazsa "kopyalandı" DENMEZ, ne yapılacağı yazılır.
+ */
 async function copyCredential(credential: { service: string; userName: string; password: string }) {
-  await navigator.clipboard.writeText(
-    `${credential.service}\n${t("panel.database.userName")}: ${credential.userName}\n${t("panel.form.password")}: ${credential.password}`);
-  showNotice(t("panel.sites.credentials.copied"), false);
+  const metin = `${credential.service}\n${t("panel.database.userName")}: ${credential.userName}\n${t("panel.form.password")}: ${credential.password}`;
+  const oldu = await copyToClipboard(metin);
+  showNotice(oldu ? t("panel.sites.credentials.copied") : t("panel.common.copyFailed"), !oldu);
 }
 </script>
 

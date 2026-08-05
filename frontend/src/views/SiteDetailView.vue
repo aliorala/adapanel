@@ -195,6 +195,7 @@ import { getSitePreview } from "../api/sites";
 import { getServerIpAddresses, type ServerIpAddress } from "../api/system";
 import { openReachable } from "../utils/url";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { copyToClipboard } from "../utils/clipboard";
 
 // Site oluşturma içeren işlemler (subdomain) + server-level araçlar yalnız admin'e gösterilir.
 const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");
@@ -289,13 +290,15 @@ const hostsCopied = ref(false);
 // hosts satiri uzun ve teknik: ekrani doldurmasi yerine tek tikla panoya alinir.
 async function copyHostsLine() {
   if (!preview.value?.hostsLine) return;
-  try {
-    await navigator.clipboard.writeText(preview.value.hostsLine);
-    hostsCopied.value = true;
-    setTimeout(() => (hostsCopied.value = false), 2000);
-  } catch {
+
+  // Ortak yardımcı güvenli olmayan bağlamda da kopyalar; olmadıysa "kopyalandı" DENMEZ.
+  if (!(await copyToClipboard(preview.value.hostsLine))) {
     hostsCopied.value = false;
+    return;
   }
+
+  hostsCopied.value = true;
+  setTimeout(() => (hostsCopied.value = false), 2000);
 }
 
 const gercekBaglamalar = computed(() =>

@@ -263,6 +263,7 @@ import { useI18n } from "vue-i18n";
 import { getServerIpAddresses } from "../api/system";
 import type { UpdateStatus } from "../api/update";
 import type { AttentionSummary } from "../api/attention";
+import { copyToClipboard } from "../utils/clipboard";
 
 type DiskUsage = {
   name: string;
@@ -397,11 +398,12 @@ const accessLinks = computed(() => {
 const primaryHost = computed(() => serverIps.value[0] || window.location.hostname || "127.0.0.1");
 
 async function copyAccess(url: string) {
-  try {
-    await navigator.clipboard.writeText(url);
-  } catch {
-    window.prompt(t("panel.dashboard.access.copy"), url);
+  // window.prompt kaldırıldı: tarayıcı diyalogları engellendiğinde akış sessizce ölüyordu.
+  // Ortak yardımcı http bağlamında da kopyalar; olmadıysa "kopyalandı" işareti verilmez.
+  if (!(await copyToClipboard(url))) {
+    return;
   }
+
   copiedUrl.value = url;
   window.setTimeout(() => {
     if (copiedUrl.value === url) copiedUrl.value = "";

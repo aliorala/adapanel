@@ -474,9 +474,12 @@
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.grantToDatabase") }}</span>
+                <!-- TÜM veritabanları listelenir, süzülmüş liste DEĞİL. Arama kutusu tablodaki
+                     satırları daraltmak içindir; bu açılır liste ona bağlanınca kullanıcı arama
+                     yaptığı anda "yetki verilecek veritabanı" seçeneksiz kalıyordu. -->
                 <select v-model="userForm.databaseName">
                   <option value="">{{ t("panel.database.grantNone") }}</option>
-                  <option v-for="db in filteredDatabases" :key="db.name" :value="db.name">{{ db.name }}</option>
+                  <option v-for="db in allDatabases" :key="db.name" :value="db.name">{{ db.name }}</option>
                 </select>
               </label>
             </div>
@@ -579,6 +582,7 @@ import {
   type DatabaseDetail
 } from "../api/databases";
 import { openReachable } from "../utils/url";
+import { copyToClipboard } from "../utils/clipboard";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
@@ -688,15 +692,16 @@ function connectionSnippet(d: DatabaseDetail) {
 }
 
 async function copyConnection(d: DatabaseDetail) {
-  try {
-    await navigator.clipboard.writeText(connectionSnippet(d));
+  const oldu = await copyToClipboard(connectionSnippet(d));
+  if (oldu) {
     copied.value = true;
     window.setTimeout(() => { copied.value = false; }, 2000);
-  } catch {
-    // Pano yalnizca guvenli baglamda (HTTPS/localhost) calisir. Sessizce basarili gostermek
-    // yerine kullaniciya metni zaten ekranda birakiyoruz; secip kopyalayabilir.
-    showNotice(t("panel.database.copy"), true);
+    return;
   }
+
+  // Kırmızı kutuda tek kelime "Kopyala" yazıyordu; bu bir hata mesajı değil, düğme adıdır.
+  // Kullanıcının ne yapacağını söylemek gerekir: metin zaten ekranda, seçip kopyalayabilir.
+  showNotice(t("panel.common.copyFailed"), true);
 }
 
 const moveTarget = ref("");
@@ -799,6 +804,11 @@ const defaultAdminUser = computed(() =>
   selectedEngine.value === "postgresql" ? "postgres" : "root");
 
 const workspace = computed(() => databasesStore.currentWorkspace);
+
+// Arama kutusundan ETKİLENMEYEN tam liste: form açılır listeleri bunu kullanır. Bir formdaki
+// seçenekleri tablo aramasına bağlamak, kullanıcının aradığı anda seçim yapamamasına yol açar.
+const allDatabases = computed(() => workspace.value?.databases ?? []);
+
 const filteredDatabases = computed(() => {
   const query = databaseSearch.value.trim().toLowerCase();
   const rows = workspace.value?.databases ?? [];
