@@ -3305,5 +3305,12 @@
   "ssl.fallback.winacme_missing": "Sunucuda win-acme kurulu değil. Mağaza bölümünden win-acme bileşenini kurun, sonra tekrar deneyin.",
   "ssl.fallback.email_missing": "İletişim e-postası verilmedi. Let's Encrypt sertifika vermek için bir e-posta adresi ister.",
   "ssl.fallback.acme_failed": "Let's Encrypt doğrulaması başarısız oldu. En sık sebepleri: alan adı bu sunucuya işaret etmiyor, 80 portu dışarıya kapalı ya da haftalık sertifika limiti dolmuş.",
-  "ssl.fallback.certificate_not_found": "win-acme hatasız bitti ama sertifika deposunda yeni bir sertifika bulunamadı. Günlüklere bakın."
+  "ssl.fallback.certificate_not_found": "win-acme hatasız bitti ama sertifika deposunda yeni bir sertifika bulunamadı. Günlüklere bakın.",
+  "webdb.token_dir_unprotected": "Veritabanı aracı açılamadı: parolanın yazılacağı geçici klasör güvenli hale getirilemedi. İşlem güvenlik gereği durduruldu — parola korumasız bir klasöre yazılmaz. Sunucu günlüklerine bakın.",
+  "panel.files.folderCreated": "Klasör oluşturuldu.",
+  "panel.files.deleted": "Silindi.",
+  "panel.ftp.changePassword": "Parolayı değiştir",
+  "panel.prompt.show": "Göster",
+  "panel.prompt.hide": "Gizle",
+  "panel.prompt.minLength": "En az {count} karakter olmalı."
 }

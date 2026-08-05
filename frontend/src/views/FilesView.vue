@@ -213,8 +213,10 @@ import {
 } from "../api/files";
 import { extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { usePrompt } from "../components/PromptDialog.vue";
 
 const { t } = useI18n();
+const { prompt } = usePrompt();
 const sitesStore = useSitesStore();
 
 const activeTab = ref<"files" | "backups">("files");
@@ -348,20 +350,42 @@ async function savePermissions() {
   }
 }
 
+/*
+ * Aşağıdaki dört işlemin hiçbirinde hata yakalama YOKTU: sunucu reddettiğinde (izin yok, disk
+ * dolu, yol kilitli) kullanıcı EKRANDA HİÇBİR ŞEY görmüyordu.
+ *
+ * En pahalısı "kaydet"ti: kullanıcı dosyayı düzenler, Kaydet'e basar, istek başarısız olur,
+ * hiçbir uyarı çıkmaz — kaydedildiğini sanıp sekmeyi kapatır ve emeği kaybolur. Sessiz
+ * başarısızlık burada doğrudan VERİ KAYBIDIR.
+ */
 async function createFolder() {
-  const folderName = window.prompt(t("panel.files.folderPrompt"), "new-folder");
+  const folderName = await prompt({
+    title: t("panel.files.folderPrompt"),
+    label: t("panel.files.name"),
+    defaultValue: "new-folder"
+  });
   if (!folderName) {
     return;
   }
 
   const basePath = workspace.value?.path ? `${workspace.value.path}/${folderName}` : `${siteRootPath.value}/${folderName}`;
-  await createDirectory(basePath);
-  await refresh(workspace.value?.path || "");
+  try {
+    await createDirectory(basePath);
+    await refresh(workspace.value?.path || "");
+    showNotice(t("panel.files.folderCreated"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
 }
 
 async function removePath(path: string) {
-  await deletePath(path);
-  await refresh(workspace.value?.path || "");
+  try {
+    await deletePath(path);
+    await refresh(workspace.value?.path || "");
+    showNotice(t("panel.files.deleted"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
 }
 
 async function saveCurrentFile() {
@@ -369,12 +393,24 @@ async function saveCurrentFile() {
     return;
   }
 
-  await saveFile(workspace.value.path, fileContent.value);
-  showNotice(t("panel.files.saved"), false);
+  try {
+    await saveFile(workspace.value.path, fileContent.value);
+    // "Kaydedildi" ancak istek GERÇEKTEN başarılı dönünce yazılır.
+    showNotice(t("panel.files.saved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
 }
 
 async function refreshBackups() {
-  backups.value = await getBackups();
+  try {
+    backups.value = await getBackups();
+  } catch (error) {
+    // Yedek listesi okunamadıysa ESKİ liste bırakılmaz: bayat bir listeyi güncel sanmak,
+    // olmayan bir yedeğe güvenmek demektir.
+    backups.value = [];
+    showNotice(resolveApiMessage(error), true);
+  }
 }
 
 async function createSiteBackup() {

@@ -154,12 +154,14 @@ import { useI18n } from "vue-i18n";
 import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { usePrompt } from "../components/PromptDialog.vue";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
 // göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (profesyonel paneller gibi site-bağlamı).
 const props = defineProps<{ siteName?: string }>();
 
 const { t } = useI18n();
+const { prompt } = usePrompt();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -320,7 +322,15 @@ async function createUser() {
 }
 
 async function changeFtpPassword(userName: string) {
-  const password = window.prompt(t("panel.ftp.newPasswordPrompt", { user: userName }));
+  // window.prompt DEĞİL: parola açıkta görünüyordu ve diyaloglar engellenirse akış ölüyordu.
+  const password = await prompt({
+    title: t("panel.ftp.newPasswordPrompt", { user: userName }),
+    label: t("panel.form.password"),
+    password: true,
+    minLength: 8,
+    confirmLabel: t("panel.ftp.changePassword")
+  });
+
   if (password === null) {
     return;
   }

@@ -584,6 +584,7 @@ import {
 import { openReachable } from "../utils/url";
 import { copyToClipboard } from "../utils/clipboard";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import { usePrompt } from "../components/PromptDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
 import { useSoftwareStore } from "../stores/software";
@@ -594,6 +595,7 @@ type WorkspaceSection = "databases" | "users" | "connection";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+const { prompt } = usePrompt();
 const databasesStore = useDatabasesStore();
 const softwareStore = useSoftwareStore();
 const sitesStore = useSitesStore();
@@ -1137,7 +1139,16 @@ async function openInPhpMyAdmin(databaseName: string) {
 }
 
 async function changeUserPassword(userName: string, host: string) {
-  const password = window.prompt(t("panel.database.newPasswordPrompt", { user: userName }));
+  // window.prompt DEĞİL: parolayı ekranda açık gösteriyordu ve tarayıcı diyalogları
+  // engellendiğinde akış sessizce ölüyordu. Asgari uzunluk da artık ÖNDEN yazılı.
+  const password = await prompt({
+    title: t("panel.database.newPasswordPrompt", { user: userName }),
+    label: t("panel.database.userPassword"),
+    password: true,
+    minLength: 6,
+    confirmLabel: t("panel.database.changePassword")
+  });
+
   if (password === null) {
     return;
   }

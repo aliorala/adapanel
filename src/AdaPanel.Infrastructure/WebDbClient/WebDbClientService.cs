@@ -115,7 +115,12 @@ public sealed class WebDbClientService(
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
         // phpMyAdmin (IIS app pool) token dosyasını okuyup siler → yazma izni gerekir.
-        GrantAppPoolWrite(tokensDir);
+        // Dizin, parola YAZILMADAN ÖNCE yalnızca bu araca kilitlenir; kilitlenemezse işlem DURUR.
+        if (!SecureTokenDirectory(tokensDir, state.SiteName))
+        {
+            throw new AppException("webdb.token_dir_unprotected", 500, 500);
+        }
+
         CleanupOldTokens(tokensDir);
 
         var payload = System.Text.Json.JsonSerializer.Serialize(new
@@ -194,7 +199,12 @@ public sealed class WebDbClientService(
         var tokensDir = Path.Combine(entryRoot, "adapanel-tokens");
         Directory.CreateDirectory(tokensDir);
         // Sarmalayici belirteci OKUYUP SILER: uygulama havuzuna yazma izni gerekir.
-        GrantAppPoolWrite(tokensDir);
+        // Dizin, parola YAZILMADAN ÖNCE yalnızca bu araca kilitlenir; kilitlenemezse işlem DURUR.
+        if (!SecureTokenDirectory(tokensDir, state.SiteName))
+        {
+            throw new AppException("webdb.token_dir_unprotected", 500, 500);
+        }
+
         CleanupOldTokens(tokensDir);
 
         var payload = System.Text.Json.JsonSerializer.Serialize(new
@@ -489,23 +499,103 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
 
     // IIS app pool kimliği (IIS_IUSRS üyesi) bir dizine YAZABİLSİN (phpMyAdmin tmp/şablon önbelleği,
     // signon token dosyalarını okuma+silme). Best-effort; netsh/icacls yoksa sessizce geçer.
-    private static void GrantAppPoolWrite(string directory)
+    /// <summary>
+    /// Belirteç dizinini YALNIZCA o aracın kendi uygulama havuzuna açar.
+    /// <para>
+    /// GÜVENLİK — DÜZELTİLEN AÇIK: burada eskiden <c>IIS_IUSRS</c> grubuna izin veriliyordu. O grup
+    /// sunucudaki BÜTÜN uygulama havuzlarını kapsar; yani her müşterinin PHP kodu bu dizini
+    /// okuyabiliyordu. Dizinde ise veritabanı motorunun <b>root parolası düz metin</b> duruyor.
+    /// Bir kiracının sitesine konan üç satırlık bir PHP dosyası, yönetici Adminer'ı her açtığında
+    /// bu parolayı toplayıp sunucudaki TÜM müşterilerin veritabanlarına erişebilirdi.
+    /// </para>
+    /// <para>
+    /// Miras da kırılır: üst klasörden gelen geniş izinler yoksa "yalnızca bu havuz" sözü
+    /// tutulamaz. Kalanlar: SYSTEM (panel bu hesapla çalışır ve dosyayı o yazar) ve
+    /// Administrators.
+    /// </para>
+    /// <para>
+    /// Sonuç ÖLÇÜLÜR ve başarısızsa çağıran işlemi DURDURUR: parolayı korumasız bir dizine
+    /// yazmaktansa aracı hiç açmamak doğrudur.
+    /// </para>
+    /// </summary>
+    /// <summary>IIS_IUSRS grubunun sabit SID'i — sunucudaki TÜM uygulama havuzlarını kapsar.</summary>
+    private const string IisIusrsSid = "S-1-5-32-568";
+
+    private static bool SecureTokenDirectory(string directory, string toolSiteName)
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("icacls.exe", $"\"{directory}\" /grant \"IIS_IUSRS:(OI)(CI)M\" /T /C /Q")
+            // HAVUZ ADI SITE ADI DEGILDIR: site "AdaPanel.WebDb.Adminer" ise havuz
+            // "AdaPanel.AdaPanel.WebDb.Adminer" olur (CreateSiteAsync: ApplicationPoolName =
+            // $"AdaPanel.{siteName}"). Bu makinede olculdu: yanlis hesap adi verilince icacls
+            // 1332 ile HICBIR SEYI uygulamiyor -- yani araci tamamen kirardi.
+            var havuz = $"AdaPanel.{(string.IsNullOrWhiteSpace(toolSiteName) ? "WebDb" : toolSiteName.Trim())}";
+            var arguments =
+                $"\"{directory}\" /inheritance:r " +
+                "/grant \"*S-1-5-18:(OI)(CI)F\" " +      // SYSTEM — SID kullanilir: Turkce Windows'ta hesap ADI farklidir
+                "/grant \"*S-1-5-32-544:(OI)(CI)F\" " +  // Administrators
+                $"/grant \"IIS AppPool\\{havuz}:(OI)(CI)M\" /T /C /Q";
+
+            var psi = new System.Diagnostics.ProcessStartInfo("icacls.exe", arguments)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+
             using var process = System.Diagnostics.Process.Start(psi);
-            process?.WaitForExit(20000);
+            if (process is null)
+            {
+                return false;
+            }
+
+            process.WaitForExit(20000);
+
+            // CIKIS KODUNA GUVENILMEZ: bu makinede olculdu, icacls bir alt ogeye erisemedigi
+            // halde ("Failed processing 1 files") 0 donuyor. Sonucu SONUCTAN okuruz.
+            return VerifyTokenDirectoryLocked(directory);
         }
         catch
         {
-            // En iyi çaba; izin verilemese de health-check sonucu yönlendirir.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Kilidin GERÇEKTEN uygulandığını dizinin kendi erişim listesinden doğrular.
+    /// <para>
+    /// Aranan iki şey: miras kapalı olmalı (yoksa üst klasörün geniş izinleri geçerli kalır) ve
+    /// listede IIS_IUSRS bulunmamalı (o grup bütün müşteri havuzlarını kapsar).
+    /// </para>
+    /// </summary>
+    private static bool VerifyTokenDirectoryLocked(string directory)
+    {
+        try
+        {
+            var guvenlik = new DirectoryInfo(directory).GetAccessControl();
+
+            if (guvenlik.AreAccessRulesProtected == false)
+            {
+                return false;
+            }
+
+            var kurallar = guvenlik.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier));
+            foreach (System.Security.AccessControl.FileSystemAccessRule kural in kurallar)
+            {
+                if (kural.AccessControlType == System.Security.AccessControl.AccessControlType.Allow &&
+                    string.Equals(kural.IdentityReference.Value, IisIusrsSid, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch
+        {
+            // Okuyamadiysak "kilitli" DEMEYIZ: parolayi yazmak icin kanit gerekir.
+            return false;
         }
     }
 
@@ -784,7 +874,10 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
         // phpMyAdmin AÇILIŞTA Twig şablon motorunu kullanır; TempDir yazılabilir olmalı.
         var tempDir = Path.Combine(entryRoot, "tmp");
         Directory.CreateDirectory(tempDir);
-        GrantAppPoolWrite(tempDir);
+        // Burada sır YOK (yalnız Twig şablon önbelleği), ama izin yine de tek havuza daraltılır:
+        // "her havuza açık" olmasının hiçbir gerekçesi yok. Başarısız olursa işlem durmaz.
+        // Parametre SITE adidir; havuz adini fonksiyon kendisi tureter ("AdaPanel." oneki).
+        SecureTokenDirectory(tempDir, "AdaPanel.WebDb.PhpMyAdmin");
         var tempDirPhp = tempDir.Replace('\\', '/');
 
         // ÜRETİM: phpMyAdmin public portta açık; PHP hatalarını EKRANA YAZDIRMA (yol/iç bilgi sızmasın).
@@ -999,7 +1092,11 @@ require __DIR__ . DIRECTORY_SEPARATOR . 'index.php';
             foreach (var segment in new[]
                      {
                          "composer.json", "composer.lock", "package.json",
-                         "package-lock.json", "yarn.lock", ".git", ".github", "examples", "test", "node_modules"
+                         "package-lock.json", "yarn.lock", ".git", ".github", "examples", "test", "node_modules",
+                         // Belirteç dizini web kökünün İÇİNDE duruyor ve içinde veritabanı parolası
+                         // var. Asıl koruma dosya sistemi izinleridir (SecureTokenDirectory); bu,
+                         // HTTP tarafını da kapatan ikinci katmandır.
+                         "adapanel-tokens"
                      })
             {
                 AddXmlAttributeChildIfMissing(hiddenSegments, "add", "segment", segment);

@@ -400,24 +400,35 @@ async function loadServicePlans() {
   plansLoaded.value = true;
 }
 
+// Hata yakalama YOKTU: sunucu planı reddettiğinde (aynı ad, geçersiz kota) form sessizce
+// kapanıyor ve kullanıcı planın oluştuğunu sanıyordu. Form ancak istek BAŞARILI dönünce sıfırlanır.
 async function addServicePlan() {
   if (!planForm.name.trim()) {
     return;
   }
-  await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases, maxMailboxes: planForm.maxMailboxes, maxScheduledTasks: planForm.maxScheduledTasks });
-  planForm.name = "";
-  planForm.maxSites = 0;
-  planForm.maxDiskMb = 0;
-  planForm.maxDatabases = 0;
-  planForm.maxMailboxes = 0;
-  planForm.maxScheduledTasks = 0;
-  showPlanForm.value = false;
-  await loadServicePlans();
+
+  try {
+    await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases, maxMailboxes: planForm.maxMailboxes, maxScheduledTasks: planForm.maxScheduledTasks });
+    planForm.name = "";
+    planForm.maxSites = 0;
+    planForm.maxDiskMb = 0;
+    planForm.maxDatabases = 0;
+    planForm.maxMailboxes = 0;
+    planForm.maxScheduledTasks = 0;
+    showPlanForm.value = false;
+    await loadServicePlans();
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  }
 }
 
 async function removeServicePlan(id: string) {
-  await deleteServicePlan(id);
-  await loadServicePlans();
+  try {
+    await deleteServicePlan(id);
+    await loadServicePlans();
+  } catch (error) {
+    notify(resolveApiMessage(error), true);
+  }
 }
 
 function applyPlanToCreate() {

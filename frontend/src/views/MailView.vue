@@ -576,6 +576,7 @@ import {
 } from "../api/mail";
 import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import { usePrompt } from "../components/PromptDialog.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
@@ -586,6 +587,7 @@ const props = defineProps<{ domain?: string }>();
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+const { prompt } = usePrompt();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 // Sunucu seviyesi mail araçları (dinleyiciler, rDNS, sertifika, spam) yalnız admin'e gösterilir;
@@ -972,7 +974,14 @@ async function saveAutoResponder() {
 }
 
 async function changePassword(address: string) {
-  const password = window.prompt(t("panel.mail.enterNewPassword"));
+  // window.prompt DEĞİL: posta parolası açıkta görünüyordu.
+  const password = await prompt({
+    title: t("panel.mail.enterNewPassword"),
+    message: address,
+    label: t("panel.form.password"),
+    password: true,
+    minLength: 8
+  });
   if (!password) return;
   if (password.trim().length < 8) {
     showNotice(t("mail.weak_password"), true);
@@ -1034,7 +1043,12 @@ async function addList() {
 }
 
 async function editListRecipients(address: string, current: string[]) {
-  const value = window.prompt(t("panel.mail.listEditPrompt"), current.join(", "));
+  const value = await prompt({
+    title: t("panel.mail.listEditPrompt"),
+    message: address,
+    label: t("panel.mail.listRecipients"),
+    defaultValue: current.join(", ")
+  });
   if (value === null) return;
   await run(async () => {
     apply(await setMailListRecipients(address, parseRecipients(value)));
@@ -1114,7 +1128,12 @@ async function saveDomainQuota() {
 }
 
 async function changeAccountQuota(address: string, currentMax: number) {
-  const value = window.prompt(t("panel.mail.enterQuota"), String(currentMax));
+  const value = await prompt({
+    title: t("panel.mail.enterQuota"),
+    message: address,
+    label: t("panel.mail.quota"),
+    defaultValue: String(currentMax)
+  });
   if (value === null) return;
   const mb = Number(value);
   if (Number.isNaN(mb) || mb < 0) return;
