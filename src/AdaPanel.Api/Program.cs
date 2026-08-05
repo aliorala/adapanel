@@ -356,7 +356,11 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
         await database.MigrateAsync();
         logger.LogInformation("Veritabanı şeması migration ile güncel.");
 
-        await ApplyAccessRecoveryFlagAsync(dataRoot, dbContext, logger);
+        await ApplyAccessRecoveryFlagAsync(
+            dataRoot,
+            dbContext,
+            scope.ServiceProvider.GetRequiredService<AdaPanel.Core.Interfaces.IFirewallService>(),
+            logger);
     }
     catch (Exception exception)
     {
@@ -386,6 +390,7 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
 static async Task ApplyAccessRecoveryFlagAsync(
     string dataRoot,
     AdaPanelDbContext dbContext,
+    AdaPanel.Core.Interfaces.IFirewallService firewallService,
     Microsoft.Extensions.Logging.ILogger<Program> logger)
 {
     try
@@ -424,13 +429,28 @@ static async Task ApplyAccessRecoveryFlagAsync(
             logger.LogWarning(banException, "Erişim kurtarma: IP engelleri temizlenemedi.");
         }
 
+        // Panelin kendi ENGELLEME kuralları da temizlenir. Yönetici yanlışlıkla panel portunu
+        // (ya da uzak masaüstünü) engellemiş olabilir; Windows'ta engelleme izni ezdiği için
+        // panele bir daha ulaşılamaz ve panelden geri almak imkânsız hâle gelirdi. Bu bayrak,
+        // sunucu konsolundan atılabilen tek kurtarma kolu olduğu için o kuralları da kaldırır.
+        var blockRulesCleared = 0;
+        try
+        {
+            blockRulesCleared = await firewallService.ClearManagedBlockRulesAsync();
+        }
+        catch (Exception firewallException)
+        {
+            logger.LogWarning(firewallException, "Erişim kurtarma: engelleme kuralları temizlenemedi.");
+        }
+
         await dbContext.SaveChangesAsync();
         File.Delete(flagPath);
 
         logger.LogWarning(
-            "ERİŞİM KURTARMA uygulandı (recover-access.flag): {Count} kullanıcının giriş kilidi temizlendi, IP engelleri temizlendi={Bans}. Bayrak dosyası silindi.",
+            "ERİŞİM KURTARMA uygulandı (recover-access.flag): {Count} kullanıcının giriş kilidi temizlendi, IP engelleri temizlendi={Bans}, {BlockRules} panel engelleme kuralı kaldırıldı. Bayrak dosyası silindi.",
             locked.Count,
-            bansCleared);
+            bansCleared,
+            blockRulesCleared);
     }
     catch (Exception exception)
     {

@@ -37,7 +37,18 @@ public sealed class FirewallController(IFirewallService firewallService) : Contr
     [HttpPost("block")]
     public async Task<ActionResult<ApiResponse<FirewallRuleDto>>> BlockPortAsync([FromBody] UpdateFirewallRuleRequest request, CancellationToken cancellationToken)
     {
-        var rule = await firewallService.BlockPortAsync(request, cancellationToken);
+        // Panelin O ANKİ portu servise iletilir ki panel kendi kapısını kilitleyemesin.
+        var rule = await firewallService.BlockPortAsync(request, HttpContext.Connection.LocalPort, cancellationToken);
         return Ok(ApiResponse<FirewallRuleDto>.Ok(rule, "firewall.rule_saved"));
+    }
+
+    /// <summary>
+    /// Panelin oluşturduğu bir kuralı kaldırır — yanlışlıkla eklenen bir engellemeyi geri almanın yolu.
+    /// </summary>
+    [HttpDelete("rules/{ruleName}")]
+    public async Task<ActionResult<ApiResponse<object>>> RemoveRuleAsync(string ruleName, CancellationToken cancellationToken)
+    {
+        await firewallService.RemoveRuleAsync(ruleName, cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { ruleName }, "firewall.rule_removed"));
     }
 }

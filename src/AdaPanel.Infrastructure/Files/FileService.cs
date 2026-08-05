@@ -96,18 +96,57 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
     }
 
+    /// <summary>İzin verilen haklar. Serbest metin KABUL EDİLMEZ; aşağıya bakınız.</summary>
+    private static readonly HashSet<string> AllowedAclRights =
+        new(StringComparer.OrdinalIgnoreCase) { "R", "RX", "M", "F", "W" };
+
+    /// <summary>
+    /// Klasöre bir kullanıcı/grup için izin verir.
+    /// <para>
+    /// GİRDİ KATI DOĞRULANIR. Önceki hâlde <c>Principal</c> ve <c>Rights</c> doğrudan bir
+    /// PowerShell dizesine gömülüyordu; içine tırnak koyan biri <c>icacls</c>'e istediği bayrağı
+    /// (<c>/inheritance:r</c>, <c>/deny</c>, <c>/remove</c>) geçirebilir, noktalı virgülle de
+    /// istediği PowerShell komutunu çalıştırabilirdi — panel LocalSystem olarak koştuğu için
+    /// bunun ağırlığı SYSTEM seviyesindedir. Uç yalnız yöneticiye açık olsa da, geri alınamayan
+    /// bir izin değişikliğinin hiçbir korkuluğu yoktu.
+    /// </para>
+    /// <para>
+    /// Ayrıca komut PowerShell'e hiç uğramadan doğrudan <c>icacls.exe</c>'ye argüman dizisiyle
+    /// verilir: kabuk ayrıştırması devreden çıkar.
+    /// </para>
+    /// </summary>
     public async Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default)
     {
         var normalizedPath = NormalizeVirtualPath(request.Path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
         EnsureSiteTarget(target);
-        var result = await ProcessRunner.RunPowerShellAsync(
-            $"""icacls "{target.PhysicalPath}" /grant "{request.Principal}:{request.Rights}" /T /C""",
-            cancellationToken);
+        // Site kökünün TAMAMINA /T ile izin uygulamak diğer işlemlerde de yasak; burada eksikti.
+        EnsureNotSiteRoot(target);
+
+        var principal = (request.Principal ?? string.Empty).Trim();
+        var rights = (request.Rights ?? string.Empty).Trim();
+
+        // Hesap adı: harf/rakam/boşluk/nokta/tire/alt çizgi ve alan ayıracı (\ veya @). Tırnak,
+        // noktalı virgül, iki nokta ve eğik çizgi YOK — bunlar icacls söz dizimini kırar.
+        if (principal.Length is 0 or > 256 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(principal, @"^[\w .\-]+(?:[\\@][\w .\-]+)?$"))
+        {
+            throw new AppException("files.invalid_principal", 400, 400);
+        }
+
+        if (!AllowedAclRights.Contains(rights))
+        {
+            throw new AppException("files.invalid_rights", 400, 400);
+        }
+
+        var result = await ProcessRunner.RunAsync(
+            "icacls.exe",
+            $"\"{target.PhysicalPath}\" /grant \"{principal}:{rights.ToUpperInvariant()}\" /T /C",
+            cancellationToken: cancellationToken);
 
         if (!result.Success)
         {
-            throw new AppException("files.acl_failed", 500, 500);
+            throw new AppException("files.acl_failed", 500, 500, result.StandardError);
         }
 
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);

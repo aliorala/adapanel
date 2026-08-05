@@ -3313,5 +3313,14 @@
   "panel.prompt.show": "Show",
   "panel.prompt.hide": "Hide",
   "panel.prompt.minLength": "Must be at least {count} characters.",
-  "panel.tasks.explainRunningSkipping": "Running right now — started {duration} ago ({started}). Runs that come due while this one is going are being skipped; scheduling returns to normal once it finishes."
+  "panel.tasks.explainRunningSkipping": "Running right now — started {duration} ago ({started}). Runs that come due while this one is going are being skipped; scheduling returns to normal once it finishes.",
+  "panel.firewall.confirmRemoveTitle": "Remove firewall rule? ({name})",
+  "panel.firewall.confirmRemove": "This rule will be removed from Windows Firewall. If it is a block rule the port becomes reachable again; if it is an allow rule access closes.",
+  "panel.firewall.removed": "Firewall rule removed.",
+  "firewall.protected_port": "This port is protected: the panel's own port, remote desktop (3389) and 80/443 cannot be blocked. On Windows a block rule overrides an allow rule, so closing this port would lock you out of the panel with no way back from inside it.",
+  "firewall.rule_not_managed": "Only rules created by the panel (names starting with \"AdaPanel\") can be removed.",
+  "firewall.invalid_rule_name": "Invalid rule name.",
+  "firewall.rule_removed": "Rule removed.",
+  "files.invalid_principal": "Invalid user/group name. Use only letters, digits, spaces, dots, hyphens and underscores (e.g. IIS_IUSRS or SERVER\\user).",
+  "files.invalid_rights": "Invalid permission. Allowed values: R (read), RX (read+execute), W (write), M (modify), F (full control)."
 }

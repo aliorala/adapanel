@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Firewall;
 using AdaPanel.Core.Interfaces;
@@ -257,9 +259,72 @@ public sealed class FirewallService : IFirewallService
         return UpsertRuleAsync(request, "Allow", cancellationToken);
     }
 
-    public Task<FirewallRuleDto> BlockPortAsync(UpdateFirewallRuleRequest request, CancellationToken cancellationToken = default)
+    /// <summary>Uzak masaüstü — engellenirse sunucuya uzaktan girişin son yolu da kapanır.</summary>
+    private const int RemoteDesktopPort = 3389;
+
+    public Task<FirewallRuleDto> BlockPortAsync(UpdateFirewallRuleRequest request, int panelPort, CancellationToken cancellationToken = default)
     {
+        EnsurePortIsNotSelfLocking(request.Port, panelPort);
         return UpsertRuleAsync(request, "Block", cancellationToken);
+    }
+
+    /// <summary>
+    /// Panelin KENDİ kapısını kilitlemesini engeller.
+    /// <para>
+    /// Windows'ta engelleme kuralı izin kuralını EZER. Panel portu engellenirse panel dışarıdan
+    /// erişilemez olur ve "İzin ver"e basmak da işe yaramaz — çünkü panele artık ulaşılamıyordur.
+    /// Panelin kural silme yolu da yoktu, yani işlem geri alınamıyordu: tek çıkış sunucu konsolu.
+    /// Aynı gerekçe uzak masaüstü için de geçerli; 80/443 ise engellenirse barındırılan bütün
+    /// siteler birden düşer ve bu neredeyse hiçbir zaman istenen şey değildir.
+    /// </para>
+    /// </summary>
+    private static void EnsurePortIsNotSelfLocking(int port, int panelPort)
+    {
+        var korunan = panelPort > 0 && port == panelPort;
+
+        if (korunan || port == RemoteDesktopPort || port == 80 || port == 443)
+        {
+            throw new AppException("firewall.protected_port", 409, 409);
+        }
+    }
+
+    public async Task<int> ClearManagedBlockRulesAsync(CancellationToken cancellationToken = default)
+    {
+        var script = """
+            $kurallar = @(Get-NetFirewallRule -DisplayName "AdaPanel Block*" -ErrorAction SilentlyContinue)
+            if ($kurallar.Count -gt 0) { $kurallar | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
+            [Console]::Out.WriteLine('ADAPANEL-KALDIRILAN=' + $kurallar.Count)
+            """;
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var eslesme = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-KALDIRILAN=(\d+)");
+        return eslesme.Success ? int.Parse(eslesme.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+    }
+
+    public async Task RemoveRuleAsync(string ruleName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(ruleName))
+        {
+            throw new AppException("firewall.invalid_rule_name", 400, 400);
+        }
+
+        // YALNIZCA panelin kendi kurallarını siler: yöneticinin ya da Windows'un kurduğu kuralları
+        // panelden silmek, panelin sorumluluğu dışında bir sistemi sessizce değiştirmek olurdu.
+        var temiz = ruleName.Trim();
+        if (!temiz.StartsWith("AdaPanel ", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("firewall.rule_not_managed", 409, 409);
+        }
+
+        var script = $"""
+            Remove-NetFirewallRule -DisplayName "{EscapePowerShellString(temiz)}" -ErrorAction Stop | Out-Null
+            """;
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("firewall.write_failed", 500, 500, result.StandardError);
+        }
     }
 
     private static async Task<FirewallRuleDto> UpsertRuleAsync(

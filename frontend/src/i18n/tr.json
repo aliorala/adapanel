@@ -3313,5 +3313,14 @@
   "panel.prompt.show": "Göster",
   "panel.prompt.hide": "Gizle",
   "panel.prompt.minLength": "En az {count} karakter olmalı.",
-  "panel.tasks.explainRunningSkipping": "Şu anda çalışıyor — {duration} önce başladı ({started}). Bu çalışma sürerken gelen turlar atlanıyor; bittiğinde zamanlama normale döner."
+  "panel.tasks.explainRunningSkipping": "Şu anda çalışıyor — {duration} önce başladı ({started}). Bu çalışma sürerken gelen turlar atlanıyor; bittiğinde zamanlama normale döner.",
+  "panel.firewall.confirmRemoveTitle": "Güvenlik duvarı kuralı kaldırılsın mı? ({name})",
+  "panel.firewall.confirmRemove": "Bu kural Windows Güvenlik Duvarı'ndan kaldırılacak. Engelleme kuralıysa ilgili port yeniden erişilebilir olur; izin kuralıysa erişim kapanır.",
+  "panel.firewall.removed": "Güvenlik duvarı kuralı kaldırıldı.",
+  "firewall.protected_port": "Bu port korumalı: panelin kendi portu, uzak masaüstü (3389) ve 80/443 engellenemez. Windows'ta engelleme kuralı izin kuralını ezer; bu portu kapatmak panele bir daha ulaşamamanıza yol açardı ve panelden geri alınamazdı.",
+  "firewall.rule_not_managed": "Yalnızca panelin oluşturduğu kurallar (adı \"AdaPanel\" ile başlayanlar) kaldırılabilir.",
+  "firewall.invalid_rule_name": "Kural adı geçersiz.",
+  "firewall.rule_removed": "Kural kaldırıldı.",
+  "files.invalid_principal": "Kullanıcı/grup adı geçersiz. Yalnızca harf, rakam, boşluk, nokta, tire ve alt çizgi kullanın (ör. IIS_IUSRS ya da SUNUCU\\kullanici).",
+  "files.invalid_rights": "Geçersiz izin. Kullanılabilir değerler: R (okuma), RX (okuma+çalıştırma), W (yazma), M (değiştirme), F (tam denetim)."
 }

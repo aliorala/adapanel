@@ -146,12 +146,24 @@
           <span>{{ t("panel.firewall.protocol") }}</span>
           <span>{{ t("panel.sites.port") }}</span>
           <span>{{ t("panel.sites.state") }}</span>
+          <span>{{ t("panel.files.actions") }}</span>
         </div>
         <div v-for="rule in firewallRules" :key="rule.displayName" class="data-row firewall-row">
           <strong>{{ rule.displayName }}</strong>
           <span>{{ rule.protocol }}</span>
           <span>{{ rule.localPort }}</span>
           <span :class="['status-pill', rule.action.toLowerCase() === 'allow' ? 'ok' : 'warn']">{{ rule.action }}</span>
+          <!-- Panelin kendi kuralları GERİ ALINABİLİR olmalı: kural yazıp silememek tek yönlü bir
+               kapıydı, yanlışlıkla eklenen bir engelleme panelden kaldırılamıyordu. -->
+          <span class="row-actions">
+            <button
+              v-if="rule.displayName.startsWith('AdaPanel ')"
+              class="danger compact"
+              :disabled="busyAction === `remove:${rule.displayName}`"
+              @click="removeRule(rule.displayName)">
+              {{ busyAction === `remove:${rule.displayName}` ? t("panel.security.busy") : t("panel.sites.delete") }}
+            </button>
+          </span>
         </div>
         <p v-if="loading && firewallRules.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
         <p v-else-if="firewallRules.length === 0" class="empty-state">{{ t("panel.firewall.empty") }}</p>
@@ -325,7 +337,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { allowPort, blockPort, getFirewallRules, type FirewallRule } from "../api/firewall";
+import { allowPort, blockPort, getFirewallRules, removeFirewallRule, type FirewallRule } from "../api/firewall";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import {
   applyAcl,
   enableBasicRules,
@@ -350,6 +363,7 @@ import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const securityConfig = ref<SiteSecurityConfiguration | null>(null);
 const firewallRules = ref<FirewallRule[]>([]);
@@ -365,7 +379,10 @@ const showFirewallForm = ref(false);
 const showSiteForm = ref(false);
 const aclForm = reactive({ principal: "", rights: "M" });
 const rateForm = reactive({ requestsPerMinute: 120 });
-const firewallForm = reactive({ ruleName: "", port: 8890, protocol: "TCP" });
+// Varsayılan port BOŞ. Eskiden 8890 (panelin KENDİ portu) yazılı geliyordu ve "İzin ver" ile
+// "Engelle" düğmeleri yan yana duruyordu: yanlış düğmeye tek tık, paneli dışarıya kapatmaya
+// yetiyordu. Sunucu artık bunu reddediyor, ama tehlikeli bir değeri hazır sunmanın da gereği yok.
+const firewallForm = reactive({ ruleName: "", port: 0, protocol: "TCP" });
 const bannedIps = ref<BannedIp[]>([]);
 // Ayarlar okunmadan önceki varsayılanlar gerçek yapılandırma sanılıyordu.
 const bruteForceLoaded = ref(false);
@@ -540,6 +557,27 @@ async function saveFirewall(allow: boolean) {
   }
 }
 
+/** Panelin kendi güvenlik duvarı kuralını kaldırır (yanlışlıkla eklenen engellemenin geri alma yolu). */
+async function removeRule(ruleName: string) {
+  await confirm({
+    title: t("panel.firewall.confirmRemoveTitle", { name: ruleName }),
+    message: t("panel.firewall.confirmRemove"),
+    impact: [ruleName],
+    action: async () => {
+      busyAction.value = `remove:${ruleName}`;
+      try {
+        await removeFirewallRule(ruleName);
+        firewallRules.value = await getFirewallRules();
+        showNotice(t("panel.firewall.removed"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busyAction.value = "";
+      }
+    }
+  });
+}
+
 function resolveApiMessage(error: unknown) {
   const key = extractApiMessage(error);
   const translated = t(key);
@@ -576,7 +614,7 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .firewall-row {
-  grid-template-columns: minmax(240px, 1.5fr) 0.6fr 0.7fr 0.7fr;
+  grid-template-columns: minmax(240px, 1.5fr) 0.6fr 0.7fr 0.7fr 0.8fr;
 }
 
 .bruteforce-row {

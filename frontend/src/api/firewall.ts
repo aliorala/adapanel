@@ -47,6 +47,8 @@ export async function allowPort(port: number, protocol: string, ruleName: string
   return response.data.data;
 }
 
+// Panelin kendi portu, uzak masaüstü ve 80/443 sunucu tarafında REDDEDİLİR: panel kendi kapısını
+// kilitleyemez (Windows'ta engelleme izni ezer, geri almak da mümkün olmazdı).
 export async function blockPort(port: number, protocol: string, ruleName: string) {
   const response = await apiClient.post<ApiEnvelope<FirewallRule>>("/firewall/block", {
     port,
@@ -54,4 +56,10 @@ export async function blockPort(port: number, protocol: string, ruleName: string
     ruleName
   });
   return response.data.data;
+}
+
+// Panelin oluşturduğu bir kuralı kaldırır. Yazma yetkisi olup silme yetkisi olmaması tek yönlü
+// bir kapıydı: yanlışlıkla eklenen bir engelleme kuralı panelden geri alınamıyordu.
+export async function removeFirewallRule(ruleName: string) {
+  await apiClient.delete<ApiEnvelope<object>>(`/firewall/rules/${encodeURIComponent(ruleName)}`);
 }
