@@ -575,7 +575,12 @@ async function handleDeleteSite(siteName: string) {
     requireText: siteName,
     action: async () => {
       try {
-        // profesyonel paneller gibi cascade: siteyle aynı adı taşıyan veritabanları da silinir (plan yukarıda gösterildi/onaylandı).
+        // Cascade silme: yalnızca SAHİPLİĞİ DOĞRULANMIŞ veritabanları düşer (sahiplik kaydı ya da
+        // açık site↔DB bağı). Adı siteye benzeyen ama sahipliği doğrulanamayan veritabanları
+        // silinmez; sonuçtaki uyarılarda bildirilir ve aşağıda kullanıcıya gösterilir.
+        // deleteDatabases burada açıkça true: kullanıcı planı gördü ve site adını yazarak onayladı.
+        // Sunucu varsayılanı bilerek false — panel dışı çağıranlar (MCP, API anahtarı, betikler)
+        // istemeden veritabanı düşürmesin.
         const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true });
         if (result && result.warnings.length) {
           showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);

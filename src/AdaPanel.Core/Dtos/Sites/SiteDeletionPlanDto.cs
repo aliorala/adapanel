@@ -21,7 +21,16 @@ public sealed class SiteDeletionPlanDto
     /// <summary>Siteye ait FTP kullanıcıları.</summary>
     public string[] FtpUsers { get; set; } = [];
 
-    /// <summary>Adı siteyle eşleşen veritabanları (motor:ad).</summary>
+    /// <summary>
+    /// GERÇEKTEN silinecek veritabanları (motor:ad) — yalnızca sahiplik kaydı ya da açık
+    /// site↔DB bağı olanlar.
+    /// <para>
+    /// Burada ad benzerliğine göre tahmin YAPILMAZ: adı siteye benzeyen ama sahipliği
+    /// doğrulanamayan veritabanları silinmez, silme sonucundaki uyarılarda "silinmedi ve neden"
+    /// olarak bildirilir. Onay ekranı bu listeyi "gidecekler" diye gösterdiği için liste
+    /// silinecek olanla BİREBİR aynı olmak zorundadır; tahmin eklemek kullanıcıya yalan söyler.
+    /// </para>
+    /// </summary>
     public string[] Databases { get; set; } = [];
 
     public bool HasReverseProxy { get; set; }

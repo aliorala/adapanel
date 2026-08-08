@@ -340,9 +340,16 @@ async function handleDelete(siteName: string) {
     requireText: siteName,
     action: async () => {
       try {
-        // Plesk gibi TAM cascade: siteye bağlı veritabanları + site dosyaları da silinir → geriye hiçbir şey kalmaz.
-        await sitesStore.deleteSite(siteName, { deleteDatabases: true, deleteFiles: true });
-        showNotice(t("panel.sites.deleted"), false);
+        // Cascade: site dosyaları + SAHİPLİĞİ DOĞRULANMIŞ veritabanları silinir. Adı siteye
+        // benzeyen ama sahipliği doğrulanamayan veritabanları bilerek silinmez.
+        const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true, deleteFiles: true });
+        // Uyarılar YUTULMAZ: silinemeyen/atlanan kaynak varsa kullanıcı bunu görmeli, yoksa
+        // "silindi" yazısına güvenip arkada kalan veritabanını/görevi hiç fark etmez.
+        if (result && result.warnings.length) {
+          showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);
+        } else {
+          showNotice(t("panel.sites.deleted"), false);
+        }
         backToSites();
       } catch (error) {
         showNotice(resolveApiMessage(error), true);
