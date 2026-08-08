@@ -16,7 +16,20 @@ public interface IFileService
 
     Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default);
 
-    Task<(string FileName, string ContentType, byte[] Content)> DownloadAsync(string path, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// İndirilecek dosyanın FİZİKSEL YOLUNU döndürür — içeriğini değil.
+    /// <para>
+    /// Önceden <c>byte[]</c> dönüyordu, yani dosya TAMAMEN belleğe alınıyordu ve boyut sınırı
+    /// yoktu. Kiracının FTP/git ile koyduğu 3 GB'lık bir dosyayı indirmek tek bir dizi tahsisi
+    /// demekti (2 GB üstü .NET'te zaten atılır) → OutOfMemoryException → panel süreci TÜM
+    /// kiracılar için çöker. Yükleme 200 MB ile sınırlıydı, indirmede hiçbir sınır yoktu.
+    /// </para>
+    /// <para>
+    /// Yol döndürmek, çağıranın dosyayı akış hâlinde vermesini sağlar (<c>PhysicalFile</c>) —
+    /// yedek indirme akışında zaten kullanılan ve kanıtlanmış yöntem.
+    /// </para>
+    /// </summary>
+    Task<(string FileName, string ContentType, string PhysicalPath)> DownloadAsync(string path, CancellationToken cancellationToken = default);
 
     Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
 

@@ -333,6 +333,71 @@ public sealed partial class DnsService(
         return await ToDtoAsync(state, cancellationToken);
     }
 
+    public async Task<SubdomainRecordResult> EnsureSubdomainRecordAsync(
+        string parentSiteName,
+        string label,
+        CancellationToken cancellationToken = default)
+    {
+        var etiket = (label ?? string.Empty).Trim().Trim('.').ToLowerInvariant();
+        if (etiket.Length == 0)
+        {
+            return new SubdomainRecordResult { Error = "label_empty" };
+        }
+
+        // BÖLGE VAR MI — yoksa OLUŞTURULMAZ.
+        //
+        // Burada bilerek GetOrCreateStateAsync çağrılmıyor: o metot bölgesi olmayan siteye bölge
+        // KURAR. Alt alan adı sitesi açmak, üst alan adı için panelde DNS yönetimini başlatmak
+        // demek değildir; alan adının DNS'i başka bir sağlayıcıda olabilir ve panel birden bire
+        // yetkili bölge sahibiymiş gibi davranmaya başlardı.
+        var states = await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken);
+        var state = states.FirstOrDefault(item =>
+            string.Equals(item.SiteName, parentSiteName, StringComparison.OrdinalIgnoreCase));
+        if (state is null)
+        {
+            return new SubdomainRecordResult { ZoneMissing = true };
+        }
+
+        // ÜSTÜNE YAZMA. Etiket zaten bir yere (başka sunucu, CDN, doğrulama kaydı) işaret ediyor
+        // olabilir; site açmak onu sessizce ele geçirmek için yeterli bir gerekçe değil.
+        var mevcut = state.Records.FirstOrDefault(record =>
+            string.Equals(record.Host, etiket, StringComparison.OrdinalIgnoreCase));
+        var adres = await ResolvePreferredServerAddressAsync(cancellationToken);
+
+        if (mevcut is not null)
+        {
+            // "Kayıt var" ile "kayıt YANLIŞ yeri gösteriyor" ayrı şeyler.
+            //
+            // Varsayılan bölge şablonu zaten www / mail / ftp / webmail / ns1 / ns2 kayıtlarını
+            // oluşturuyor. Bu ayrım olmadan, biri "mail.ornek.com" sitesi açtığında panel kendi
+            // doğru kaydı için uyarı basıyordu. Her şey yolundayken uyarı basmak, gerçek
+            // uyarıların da okunmamasına yol açar.
+            var zatenDogru = DnsSubdomainDecision.ZatenDogruMu(
+                mevcut.Type, mevcut.Value, mevcut.IsManaged, adres, state.ZoneName);
+
+            return new SubdomainRecordResult
+            {
+                AlreadyExists = true,
+                AlreadyCorrect = zatenDogru,
+                ExistingRecord = $"{mevcut.Type} {mevcut.Value}".Trim()
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(adres))
+        {
+            // Adres ÖLÇÜLEMEDİ. Uydurma bir değer yazmak (127.0.0.1 gibi) alan adını çalışmaz
+            // hâle getirir ve kullanıcı kaydın doğru olduğunu sanır.
+            return new SubdomainRecordResult { Error = "server_address_unknown" };
+        }
+
+        await UpsertRecordAsync(
+            parentSiteName,
+            new UpsertDnsRecordRequest { Type = "A", Host = etiket, Value = adres, Ttl = 3600 },
+            cancellationToken);
+
+        return new SubdomainRecordResult { Created = true, Address = adres };
+    }
+
     public async Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);

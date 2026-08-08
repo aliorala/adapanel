@@ -1,3 +1,5 @@
+using AdaPanel.Core.Dtos.Users;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 
@@ -9,6 +11,7 @@ namespace AdaPanel.Infrastructure.Security;
 /// </summary>
 public sealed class CustomerScopeService(
     JsonFileStore fileStore,
+    IServicePlanService servicePlans,
     IIisSiteService iisSiteService) : ICustomerScopeService
 {
     private const string StatePath = "config/customer-scopes.json";
@@ -23,9 +26,36 @@ public sealed class CustomerScopeService(
     {
         var state = await LoadAsync(cancellationToken);
         var entry = ResolveEffective(state, userId);
-        return entry is null
-            ? new CustomerScope([], 0, 0, 0, 0, 0)
-            : new CustomerScope(entry.Sites, entry.MaxSites, entry.MaxDiskMb, entry.MaxDatabases, entry.MaxMailboxes, entry.MaxScheduledTasks);
+        if (entry is null)
+        {
+            return new CustomerScope([], 0, 0, 0, 0, 0);
+        }
+
+        // LİMİTLER PLANDAN ÇÖZÜLÜR. Kayıttaki değerler yalnız plana bağlı OLMAYAN abonelikler
+        // (özel limit) içindir. Bu sıralama sayesinde bir planı düzenlemek, ona bağlı bütün
+        // müşterileri anında etkiler — plan bir kopya değil bağdır.
+        ServicePlanDto? plan = null;
+        if (!string.IsNullOrWhiteSpace(entry.PlanId))
+        {
+            plan = await servicePlans.GetPlanAsync(entry.PlanId!, cancellationToken);
+            // Plan SİLİNMİŞSE kayıttaki son değerlerle devam edilir: limitleri birden sıfırlamak
+            // (yani "sınırsız" yapmak) sessiz bir kota kaybı olurdu.
+        }
+
+        return new CustomerScope(
+            entry.Sites,
+            plan?.MaxSites ?? entry.MaxSites,
+            plan?.MaxDiskMb ?? entry.MaxDiskMb,
+            plan?.MaxDatabases ?? entry.MaxDatabases,
+            plan?.MaxMailboxes ?? entry.MaxMailboxes,
+            plan?.MaxScheduledTasks ?? entry.MaxScheduledTasks,
+            plan?.MaxFtpUsers ?? entry.MaxFtpUsers,
+            plan?.MaxTrafficGbPerMonth ?? entry.MaxTrafficGbPerMonth,
+            entry.PlanId ?? string.Empty,
+            plan?.Name ?? string.Empty,
+            entry.ExpiresAtUtc,
+            entry.SuspendedAtUtc,
+            entry.SuspendReason ?? string.Empty);
     }
 
     // Alt-kullanıcı (ParentUserId set) parent'ın kaydını miras alır. TEK sıçrama: parent'ın kendisi
@@ -265,6 +295,30 @@ public sealed class CustomerScopeService(
         /// null = kısıtsız. Yalnız ParentUserId doluyken anlamlıdır.
         /// </summary>
         public List<string>? SubUserSections { get; set; }
+
+        /// <summary>
+        /// Bağlı servis planının kimliği; boş ise limitler bu kayıttaki değerlerden okunur.
+        /// <para>
+        /// Plan bir KOPYA değil BAĞ: doluyken limitler okuma anında plandan çözülür, dolayısıyla
+        /// planı değiştirmek bağlı bütün abonelikleri aynı anda etkiler. Önceden plan yalnızca
+        /// oluşturma formuna kopyalanıyordu ve sonradan yapılan plan değişikliği hiçbir müşteriye
+        /// yansımıyordu.
+        /// </para>
+        /// </summary>
+        public string? PlanId { get; set; }
+
+        /// <summary>Aboneliğin bitiş tarihi; null = süresiz.</summary>
+        public DateTime? ExpiresAtUtc { get; set; }
+
+        /// <summary>Askıya alındıysa ne zaman; null = etkin.</summary>
+        public DateTime? SuspendedAtUtc { get; set; }
+
+        /// <summary>Askı sebebi (sabit anahtar: "traffic" | "expired" | "manual").</summary>
+        public string? SuspendReason { get; set; }
+
+        public int MaxFtpUsers { get; set; }
+
+        public int MaxTrafficGbPerMonth { get; set; }
     }
 
     public async Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default)
@@ -472,4 +526,120 @@ public sealed class CustomerScopeService(
 
         return null;
     }
+
+    // --- Abonelik iş modeli ---
+
+    /// <inheritdoc />
+    public async Task SetPlanAsync(Guid userId, string? planId, CancellationToken cancellationToken = default)
+    {
+        var kirpilmis = (planId ?? string.Empty).Trim();
+
+        // Plan ÖNCE okunur: geçerlilik süresini buradan hesaplayacağız ve olmayan bir plana
+        // bağlanmak sessizce "limitsiz"e düşmek olurdu.
+        ServicePlanDto? plan = null;
+        if (kirpilmis.Length > 0)
+        {
+            plan = await servicePlans.GetPlanAsync(kirpilmis, cancellationToken)
+                   ?? throw new AppException("plans.not_found", 404, 404);
+        }
+
+        await fileStore.UpdateAsync(StatePath, NewState(), existing =>
+        {
+            var state = Wrap(existing);
+            var key = userId.ToString("N");
+            if (!state.TryGetValue(key, out var entry))
+            {
+                entry = new ScopeEntry();
+                state[key] = entry;
+            }
+
+            entry.PlanId = plan is null ? null : plan.Id;
+
+            if (plan is not null)
+            {
+                // Bağ kurulurken kayda da yazıyoruz: plan sonradan SİLİNİRSE limitler sıfırlanıp
+                // abonelik sessizce "sınırsız" hâle gelmesin (bkz. GetScopeAsync).
+                entry.MaxSites = plan.MaxSites;
+                entry.MaxDiskMb = plan.MaxDiskMb;
+                entry.MaxDatabases = plan.MaxDatabases;
+                entry.MaxMailboxes = plan.MaxMailboxes;
+                entry.MaxScheduledTasks = plan.MaxScheduledTasks;
+                entry.MaxFtpUsers = plan.MaxFtpUsers;
+                entry.MaxTrafficGbPerMonth = plan.MaxTrafficGbPerMonth;
+
+                // Süre YALNIZCA daha önce belirlenmemişse hesaplanır. Aksi hâlde plan her
+                // güncellendiğinde müşterinin bitiş tarihi ileri kayar ve süre fiilen işlemezdi.
+                if (plan.ValidityDays > 0 && entry.ExpiresAtUtc is null)
+                {
+                    entry.ExpiresAtUtc = DateTime.UtcNow.Date.AddDays(plan.ValidityDays);
+                }
+            }
+
+            return state;
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task SetExpiryAsync(Guid userId, DateTime? expiresAtUtc, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry => entry.ExpiresAtUtc = expiresAtUtc, cancellationToken);
+
+    /// <inheritdoc />
+    public Task SuspendAsync(Guid userId, string reason, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry =>
+        {
+            // ZATEN ASKIDAYSA tarih GÜNCELLENMEZ: her denetim turunda tazelemek, "ne zamandır
+            // askıda" bilgisini yok ederdi.
+            if (entry.SuspendedAtUtc is null)
+            {
+                entry.SuspendedAtUtc = DateTime.UtcNow;
+            }
+
+            entry.SuspendReason = string.IsNullOrWhiteSpace(reason) ? "manual" : reason.Trim();
+        }, cancellationToken);
+
+    /// <inheritdoc />
+    public Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default)
+        => DuzenleAsync(userId, entry =>
+        {
+            entry.SuspendedAtUtc = null;
+            entry.SuspendReason = null;
+        }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<Guid>> GetSuspendedUserIdsAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state
+            .Where(item => item.Value.SuspendedAtUtc is not null && Guid.TryParseExact(item.Key, "N", out _))
+            .Select(item => Guid.ParseExact(item.Key, "N"))
+            .ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<Guid>> GetSubscriptionUserIdsAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken);
+        return state
+            // Alt-kullanıcının kendi aboneliği yoktur; parent'ınkini miras alır.
+            .Where(item => string.IsNullOrEmpty(item.Value.ParentUserId) && Guid.TryParseExact(item.Key, "N", out _))
+            .Select(item => Guid.ParseExact(item.Key, "N"))
+            .ToArray();
+    }
+
+    /// <summary>Tek bir abonelik kaydını atomik olarak düzenler (yol başına kilit).</summary>
+    private Task DuzenleAsync(Guid userId, Action<ScopeEntry> duzenle, CancellationToken cancellationToken)
+        => fileStore.UpdateAsync(StatePath, NewState(), existing =>
+        {
+            var state = Wrap(existing);
+            var key = userId.ToString("N");
+            if (!state.TryGetValue(key, out var entry))
+            {
+                entry = new ScopeEntry();
+                state[key] = entry;
+            }
+
+            duzenle(entry);
+            return state;
+        }, cancellationToken);
+
 }

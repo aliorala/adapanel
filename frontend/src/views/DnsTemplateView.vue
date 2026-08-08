@@ -12,7 +12,7 @@
       <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.dnsTemplate.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <p v-if="loading && records.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
 

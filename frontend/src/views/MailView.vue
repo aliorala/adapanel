@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="loading" @click="refresh">{{ t("panel.mail.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
     <details v-if="noticeError && noticeDetails" class="notice-details" open>
       <summary>{{ t("panel.common.technicalDetails") }}</summary>
       <pre>{{ noticeDetails }}</pre>
@@ -87,6 +87,28 @@
         <button class="secondary compact" :disabled="busy" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
       </div>
 
+      <!-- GİDEN POSTA LİMİTİ: sunucunun itibarını koruyan sınır. Yalnız yönetici değiştirebilir —
+           kendi limitini müşterinin yükseltebilmesi korumayı anlamsız kılardı. -->
+      <div v-if="selectedDomain && isAdmin" class="form-surface quota-strip">
+        <label class="inline-field">
+          <span class="field-label">{{ t("panel.mail.outboundLimit") }}</span>
+          <input v-model.number="outboundLimit" type="number" min="0" />
+          <span class="hint">{{ t("panel.mail.outboundLimitPerHour") }} ({{ t("panel.mail.zeroUnlimited") }})</span>
+        </label>
+        <!-- "Kurulu değil" ile "limitsiz" AYRI şeyler: ilki panelin sınır kuramadığı, yani
+             sunucunun korumasız olduğu anlamına gelir. -->
+        <span
+          v-if="outboundLimitState && !outboundLimitState.configured"
+          class="status-pill warn"
+          :title="t('panel.mail.outboundLimitNotConfiguredHint')">
+          {{ t("panel.mail.outboundLimitNotConfigured") }}
+        </span>
+        <button class="secondary compact" :disabled="busy" @click="saveOutboundLimit">
+          {{ t("panel.mail.outboundLimitSave") }}
+        </button>
+      </div>
+      <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
+
       <template v-if="selectedDomain">
         <div class="section-head">
           <div>
@@ -162,10 +184,19 @@
               <h3>{{ t("panel.mail.webmailTitle") }}</h3>
               <p class="meta">{{ t("panel.mail.webmailHint") }}</p>
             </div>
-            <button class="compact" :disabled="busy" @click="openWebmail">
-              {{ busy && webmailOpening ? t("panel.mail.webmailOpening") : t("panel.mail.webmailOpen") }}
-            </button>
+            <span class="row-actions">
+              <button class="compact" :disabled="busy" @click="openWebmail">
+                {{ busy && webmailOpening ? t("panel.mail.webmailOpening") : t("panel.mail.webmailOpen") }}
+              </button>
+              <!-- TANILA: uç ve çevirisi vardı ama çağıran yoktu. "Webmail açılmıyor" durumunda
+                   hazır olan tek teşhis aracına kullanıcı erişemiyordu. Uç admin-only. -->
+              <button v-if="isAdmin" class="secondary compact" :disabled="webmailDiagnosing" @click="runWebmailDiagnose">
+                {{ webmailDiagnosing ? t("panel.common.loading") : t("panel.mail.webmailDiagnose") }}
+              </button>
+            </span>
           </div>
+
+          <pre v-if="webmailReport" class="webmail-report">{{ webmailReport }}</pre>
 
           <div class="client-settings">
             <h4>{{ t("panel.mail.clientSettingsTitle") }}</h4>
@@ -565,6 +596,10 @@ import {
   setMailAccountQuota,
   setMailDomainQuota,
   updateMailSpam,
+  diagnoseWebmail as diagnoseWebmailApi,
+  getOutboundLimit,
+  setOutboundLimit,
+  type MailOutboundLimit,
   openWebmail as openWebmailApi,
   type MailCertificate,
   type MailDiagnostics,
@@ -609,6 +644,22 @@ const certificate = ref<MailCertificate | null>(null);
 const certForm = reactive({ hostName: "", contactEmail: "" });
 const certAutoTried = ref(false);
 const webmailOpening = ref(false);
+const webmailDiagnosing = ref(false);
+const webmailReport = ref("");
+
+async function runWebmailDiagnose() {
+  webmailDiagnosing.value = true;
+  webmailReport.value = "";
+  try {
+    const sonuc = await diagnoseWebmailApi();
+    webmailReport.value = sonuc.report;
+    showNotice(t(sonuc.healthy ? "mail.webmail.diag_ok" : "mail.webmail.diag_fail"), !sonuc.healthy);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    webmailDiagnosing.value = false;
+  }
+}
 const mailHost = computed(() => `mail.${selectedDomain.value}`);
 const diagnostics = ref<MailDiagnostics | null>(null);
 const diagLoading = ref(false);
@@ -621,6 +672,35 @@ const listeners = ref<MailListener[] | null>(null);
 const loading = ref(false);
 const busy = ref(false);
 const domainQuota = ref(0);
+const outboundLimit = ref(0);
+const outboundLimitState = ref<MailOutboundLimit | null>(null);
+
+async function loadOutboundLimit() {
+  if (!selectedDomain.value || !isAdmin.value) {
+    outboundLimitState.value = null;
+    return;
+  }
+  try {
+    outboundLimitState.value = await getOutboundLimit(selectedDomain.value);
+    outboundLimit.value = outboundLimitState.value.messagesPerHour;
+  } catch {
+    // Okunamadıysa "limitsiz" GÖSTERMİYORUZ: durum bilinmiyor demek, bilgi vermek değil.
+    outboundLimitState.value = null;
+  }
+}
+
+async function saveOutboundLimit() {
+  busy.value = true;
+  try {
+    outboundLimitState.value = await setOutboundLimit(selectedDomain.value, outboundLimit.value);
+    outboundLimit.value = outboundLimitState.value.messagesPerHour;
+    showNotice(t("mail.outbound_limit_saved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
 const selectedDomainInfo = computed(() =>
   workspace.value?.domains.find((item) => item.name.toLowerCase() === selectedDomain.value.toLowerCase()) ?? null);
 const notice = ref("");
@@ -1098,6 +1178,9 @@ function apply(next: MailWorkspace) {
   }
   const domain = next.domains.find((item) => item.name === selectedDomain.value);
   domainQuota.value = domain?.maxSizeMB ?? 0;
+  // Giden posta limiti de seçili alan adıyla birlikte tazelenir; aksi halde kart başka bir
+  // alan adının değerini gösterirdi.
+  void loadOutboundLimit();
   // Spam + sertifika uçları admin-only; müşteri/bayide çağırma (gereksiz 403 olmasın).
   if (isAdmin.value && next.configured && !spam.value) {
     void loadSpam();
@@ -1168,6 +1251,20 @@ function showError(error: unknown) {
 </script>
 
 <style scoped>
+.webmail-report {
+  margin: 0.6rem 0 0;
+  padding: 0.6rem 0.75rem;
+  max-height: 20rem;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.16));
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .mail-loading {
   display: inline-flex;
   align-items: center;

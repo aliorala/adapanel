@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       {{ notice }}
     </p>
 
@@ -27,9 +27,44 @@
       <button :class="{ active: activeModule === 'settings' }" @click="activeModule = 'settings'">
         {{ t("panel.database.module.settings") }}
       </button>
+      <!-- "Şu an kim kullanıyor" veritabanı ekranında da olmalı: bir sorgu yavaşladığında
+           kullanıcı zaten buradadır; cevabı görmek için İzleme sayfasına gitmek zorunda
+           kalmasın. Bileşen ve ucu aynı — yeni bir kopya yok. -->
+      <button v-if="isAdmin" :class="{ active: activeModule === 'consumers' }" @click="activeModule = 'consumers'">
+        {{ t("panel.database.module.consumers") }}
+      </button>
     </div>
 
-    <WebDbView v-if="activeModule === 'webdb'" />
+    <section v-if="activeModule === 'consumers'" class="panel">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.consumers.title") }}</h3>
+          <p class="meta">{{ t("panel.consumers.subtitle", { name: consumerSourceLabel }) }}</p>
+        </div>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.consumers.source") }}</span>
+          <select v-model="consumerSource" class="compact-select">
+            <option value="mariadb">MariaDB</option>
+            <option value="mysql">MySQL</option>
+            <option value="postgresql">PostgreSQL</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="segmented-tabs" role="tablist">
+        <button :class="{ active: consumerTab === 'live' }" @click="consumerTab = 'live'">
+          {{ t("panel.consumers.tabLive") }}
+        </button>
+        <button :class="{ active: consumerTab === 'history' }" @click="consumerTab = 'history'">
+          {{ t("panel.consumers.tabHistory") }}
+        </button>
+      </div>
+
+      <ResourceConsumers v-if="consumerTab === 'live'" :source="consumerSource" />
+      <QueryHistory v-else />
+    </section>
+
+    <WebDbView v-else-if="activeModule === 'webdb'" />
     <CacheView v-else-if="activeModule === 'cache'" />
     <DbTransferView v-else-if="activeModule === 'transfer'" />
     <DbToolSettingsView v-else-if="activeModule === 'settings'" />
@@ -61,7 +96,11 @@
             @click="refreshWorkspace">
             {{ t("panel.database.refresh") }}
           </button>
+          <!-- Sertleştirme adımlarının hepsi MySQL/MariaDB'ye özgü (anonim kullanıcılar, uzak
+               root@'%', parolasız root, boş 'test' veritabanı). Diğer motorlarda düğme GÖSTERİLMEZ:
+               önceden görünüyor ve basılınca hiçbir şey yapmadan "sertleştirildi" diyordu. -->
           <button
+            v-if="hardeningSupported"
             class="secondary compact"
             :disabled="!selectedEngineInstalled || hardening"
             :title="t('panel.database.hardenHint')"
@@ -569,6 +608,10 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import CacheView from "./CacheView.vue";
 import DbToolSettingsView from "./DbToolSettingsView.vue";
+import QueryHistory from "../components/QueryHistory.vue";
+import ResourceConsumers from "../components/ResourceConsumers.vue";
+import type { ConsumerSource } from "../api/consumers";
+import { useAuthStore } from "../stores/auth";
 import DbTransferView from "./DbTransferView.vue";
 import WebDbView from "./WebDbView.vue";
 import {
@@ -590,7 +633,7 @@ import { useDatabasesStore } from "../stores/databases";
 import { useSoftwareStore } from "../stores/software";
 import { useSitesStore } from "../stores/sites";
 
-type DatabaseModule = "databases" | "webdb" | "cache" | "transfer" | "settings";
+type DatabaseModule = "databases" | "webdb" | "cache" | "transfer" | "settings" | "consumers";
 type WorkspaceSection = "databases" | "users" | "connection";
 
 const { t } = useI18n();
@@ -609,7 +652,17 @@ onMounted(() => {
 const notice = ref("");
 const noticeError = ref(false);
 const databaseSearch = ref("");
+// Kaynak tüketicileri ucu yönetici-özel (yanıt BAŞKA müşterilerin sorgu metinlerini içerir);
+// arayüz de bunu yansıtır, aksi halde sekme görünüp 403 alınırdı.
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+
 const activeModule = ref<DatabaseModule>("databases");
+const consumerTab = ref<"live" | "history">("live");
+const consumerSource = ref<ConsumerSource>("mariadb");
+const consumerSourceLabel = computed(() =>
+  consumerSource.value === "mysql" ? "MySQL" : consumerSource.value === "postgresql" ? "PostgreSQL" : "MariaDB"
+);
 const activeSection = ref<WorkspaceSection>("databases");
 const showDatabaseForm = ref(false);
 const showUserForm = ref(false);
@@ -1165,6 +1218,8 @@ async function changeUserPassword(userName: string, host: string) {
 }
 
 const hardening = ref(false);
+// Sertleştirme yalnız MySQL/MariaDB'de anlamlı; backend de diğerlerinde artık 400 dönüyor.
+const hardeningSupported = computed(() => selectedEngine.value === "mysql" || selectedEngine.value === "mariadb");
 
 async function hardenSecurity() {
   if (!selectedEngineInstalled.value) {

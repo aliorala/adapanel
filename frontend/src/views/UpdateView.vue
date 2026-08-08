@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- Sürüm durumu gelmeden ekran boştu; yükleniyor ile "veri yok" ayırt edilemiyordu. -->
     <p v-if="!status" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>

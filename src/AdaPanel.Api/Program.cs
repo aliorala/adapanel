@@ -20,6 +20,30 @@ using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Settings.Configuration;
 
+// TEPSI PROGRAMI — panel HIC acilmadiginda elde kalan tek arac.
+//
+// Buradan once hicbir sey yapilmaz: yapilandirma okunmaz, servis kurulmaz, port dinlenmez.
+// Amac tam da panelin calismadigi durumda calisabilmek; host kurulumu sirasinda bir hata
+// olsaydi kurtarma araci da acilmazdi.
+//
+// WinForms STA is parcacigi ister; ust duzey deyimlerde [STAThread] kullanilamadigi icin
+// kendi is parcacigimizi aciyoruz.
+if (AdaPanel.Api.Tray.TepsiUygulamasi.BuBizim(args))
+{
+    var tepsiSonuc = 0;
+    var tepsiIsParcacigi = new Thread(() => tepsiSonuc = AdaPanel.Api.Tray.TepsiUygulamasi.Calistir(args));
+    tepsiIsParcacigi.SetApartmentState(ApartmentState.STA);
+    tepsiIsParcacigi.Start();
+    tepsiIsParcacigi.Join();
+
+    // Environment.Exit, "return" DEGIL: ust duzey deyimlerde tek bir yerden deger dondurmek,
+    // dosyanin geri kalanini da deger dondurmeye zorlar ve panelin normal acilis yolunu
+    // gereksizce degistirirdi. Burada surec zaten bitiyor.
+    Environment.Exit(tepsiSonuc);
+    return;
+}
+
+
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
@@ -277,7 +301,52 @@ if (app.Environment.IsDevelopment())
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+
+// ÖNBELLEK BAŞLIKLARI — güncelleme sonrası BEYAZ EKRANIN kök nedeni buradaydı.
+//
+// Hiç Cache-Control gönderilmiyordu. Başlık yokken tarayıcı SEZGİSEL önbellekleme uygular:
+// Last-Modified'a bakıp dosyayı bir süre DOĞRULAMADAN yeniden kullanır. Panel güncellendiğinde
+// wwwroot tamamen yenilenir ve varlıkların içerik-hash'li adları değişir; tarayıcıdaki ESKİ
+// index.html ise artık var olmayan /assets/index-ESKIHASH.js dosyasını istiyordu → 404 → boş sayfa.
+// Kullanıcı tarafında bu "güncelleme paneli bozdu" gibi görünüyordu; oysa sunucudaki dosyalar
+// doğruydu, tarayıcı eski giriş noktasını tutuyordu.
+//
+// Doğru ayrım ikili:
+//   • index.html  → içerik-hash'i YOK, her zaman doğrulanmalı  → no-cache
+//   • /assets/*   → adı içeriğinden türüyor, değişirse adı da değişir → bir yıl, immutable
+// Bu ayrım olmadan ya her güncellemede beyaz ekran olur ya da her açılışta her şey yeniden iner.
+// Aynı seçenek İKİ yerde gerekiyor (aşağıda MapFallbackToFile). Tek nesne: biri güncellenip
+// diğeri unutulduğunda panelin giriş sayfası sessizce başlıksız kalırdı — nitekim ilk denemede
+// tam olarak bu oldu ve ancak başlıklar ölçülünce görüldü.
+var statikSecenekler = new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        var yol = context.Context.Request.Path.Value ?? string.Empty;
+        var basliklar = context.Context.Response.GetTypedHeaders();
+
+        if (yol.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase))
+        {
+            basliklar.CacheControl = new Microsoft.Net.Http.Headers.CacheControlHeaderValue
+            {
+                Public = true,
+                MaxAge = TimeSpan.FromDays(365),
+                Extensions = { new Microsoft.Net.Http.Headers.NameValueHeaderValue("immutable") }
+            };
+            return;
+        }
+
+        // index.html ve hash'siz her şey: sunucuya SOR. NoCache "saklama" değil "doğrulamadan
+        // kullanma" demektir; dosya değişmediyse 304 döner, maliyeti tek bir koşullu istektir.
+        basliklar.CacheControl = new Microsoft.Net.Http.Headers.CacheControlHeaderValue
+        {
+            NoCache = true,
+            MustRevalidate = true
+        };
+    }
+};
+
+app.UseStaticFiles(statikSecenekler);
 
 app.MapControllers();
 
@@ -298,7 +367,10 @@ app.MapMcp("/mcp")
 // Bu iki kalıp SPA yedeğinden daha özgüldür, bu yüzden önce eşleşir.
 app.MapFallback("/api/{**rest}", NotFoundJsonAsync);
 app.MapFallback("/mcp/{**rest}", NotFoundJsonAsync);
-app.MapFallbackToFile("index.html");
+// SPA yedeği de AYNI başlıkları almalı. Panelin gerçek giriş yolu (gizli /panel) statik dosya
+// ara katmanından DEĞİL buradan geçiyor: seçenekler verilmezse index.html başlıksız gider ve
+// güncelleme sonrası beyaz ekran — düzeltmenin asıl hedefi — aynen sürerdi.
+app.MapFallbackToFile("index.html", statikSecenekler);
 
 await EnsureDatabaseAsync(app, dataRoot);
 

@@ -94,3 +94,52 @@ export async function copyWordPressData(siteName: string, payload: { targetSiteN
   );
   return response.data.data;
 }
+
+/** Güncellenebilir öğe (çekirdek, eklenti ya da tema). */
+export type WordPressUpdatable = {
+  /** "core" | "plugin" | "theme" */
+  kind: string;
+  name: string;
+  title: string;
+  currentVersion: string;
+  availableVersion: string;
+  updateAvailable: boolean;
+  status: string;
+};
+
+export type WordPressUpdates = {
+  siteName: string;
+  /**
+   * Liste OKUNABİLDİ mi. false ise boş liste "güncelleme yok" DEMEK DEĞİLDİR — wp-cli
+   * çalışamamış olabilir. Ölçememeyi "her şey güncel" saymak, açığı olan bir siteyi güvende
+   * göstermek olurdu.
+   */
+  measured: boolean;
+  error: string;
+  items: WordPressUpdatable[];
+};
+
+export type WordPressUpdateItemResult = {
+  kind: string;
+  name: string;
+  success: boolean;
+  message: string;
+};
+
+export async function getWordPressUpdates(siteName: string) {
+  const response = await apiClient.get<ApiEnvelope<WordPressUpdates>>(
+    `/wordpress/${encodeURIComponent(siteName)}/updates`
+  );
+  return response.data.data;
+}
+
+export async function applyWordPressUpdates(
+  siteName: string,
+  payload: { core: boolean; plugins: string[]; themes: string[] }
+) {
+  const response = await apiClient.post<ApiEnvelope<{ siteName: string; results: WordPressUpdateItemResult[] }>>(
+    `/wordpress/${encodeURIComponent(siteName)}/updates`,
+    payload
+  );
+  return response.data.data;
+}

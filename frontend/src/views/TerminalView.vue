@@ -8,7 +8,7 @@
       <span class="shell-label">PowerShell</span>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="terminal-toolbar">
       <label class="path-field">

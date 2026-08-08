@@ -223,7 +223,20 @@
         </label>
       </div>
 
-      <ResourceConsumers :source="consumerSource" />
+      <!-- CANLI ile GEÇMİŞ ayrı sekmeler: canlı liste "şu an ne oluyor", geçmiş "ne olmuştu"
+           sorusunu cevaplar. İkisini tek listede karıştırmak, canlı ekranın okunabilirliğini
+           bozardı. -->
+      <div class="segmented-tabs consumer-tabs">
+        <button :class="{ active: consumerTab === 'live' }" @click="consumerTab = 'live'">
+          {{ t("panel.consumers.tabLive") }}
+        </button>
+        <button :class="{ active: consumerTab === 'history' }" @click="consumerTab = 'history'">
+          {{ t("panel.consumers.tabHistory") }}
+        </button>
+      </div>
+
+      <ResourceConsumers v-if="consumerTab === 'live'" :source="consumerSource" />
+      <QueryHistory v-else />
     </section>
   </div>
 </template>
@@ -233,6 +246,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSystemStore } from "../stores/system";
 import { getProcessSnapshot, type ProcessSnapshot } from "../api/processes";
+import QueryHistory from "../components/QueryHistory.vue";
 import ResourceConsumers from "../components/ResourceConsumers.vue";
 import type { ConsumerSource } from "../api/consumers";
 
@@ -295,6 +309,7 @@ const hasNetTrend = computed(() => systemStore.history.length > 1);
 
 // --- "Şu an kim kullanıyor?" kaynak seçimi ---
 const consumerSource = ref<ConsumerSource>("mariadb");
+const consumerTab = ref<"live" | "history">("live");
 const consumerSourceLabel = computed(() => ({
   mariadb: "MariaDB",
   mysql: "MySQL",

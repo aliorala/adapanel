@@ -132,3 +132,79 @@ public sealed class WordPressCloneResultDto
 
     public string DatabasePassword { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// Bir WordPress kurulumundaki güncellenebilir öğe (çekirdek, eklenti ya da tema).
+/// </summary>
+public sealed class WordPressUpdatableDto
+{
+    /// <summary>"core" | "plugin" | "theme".</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>Teknik ad (wp-cli'nin beklediği slug).</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Kullanıcıya gösterilecek ad.</summary>
+    public string Title { get; set; } = string.Empty;
+
+    public string CurrentVersion { get; set; } = string.Empty;
+
+    /// <summary>Güncelleme varsa yeni sürüm; yoksa boş.</summary>
+    public string AvailableVersion { get; set; } = string.Empty;
+
+    public bool UpdateAvailable { get; set; }
+
+    /// <summary>"active" | "inactive" | "must-use" vb. (çekirdekte boş).</summary>
+    public string Status { get; set; } = string.Empty;
+}
+
+/// <summary>Bir sitenin güncelleme durumu.</summary>
+public sealed class WordPressUpdatesDto
+{
+    public string SiteName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Liste OKUNABİLDİ mi. false ise aşağıdaki liste boş olabilir ama bu "güncelleme yok"
+    /// DEMEK DEĞİLDİR — WordPress'in veritabanına ulaşılamamış ya da wp-cli çalışamamış olabilir.
+    /// Ölçememeyi "her şey güncel" saymak, güvenlik açığı olan bir siteyi güvende göstermek olurdu.
+    /// </summary>
+    public bool Measured { get; set; }
+
+    /// <summary>Ölçülemediyse sebebi (ham çıktı; ekranda ayrıntı olarak gösterilir).</summary>
+    public string Error { get; set; } = string.Empty;
+
+    public IReadOnlyCollection<WordPressUpdatableDto> Items { get; set; } = [];
+}
+
+/// <summary>Güncellenecek öğeler.</summary>
+public sealed class WordPressUpdateRequest
+{
+    /// <summary>Çekirdeği güncelle.</summary>
+    public bool Core { get; set; }
+
+    /// <summary>Güncellenecek eklenti slug'ları.</summary>
+    public IReadOnlyCollection<string> Plugins { get; set; } = [];
+
+    /// <summary>Güncellenecek tema slug'ları.</summary>
+    public IReadOnlyCollection<string> Themes { get; set; } = [];
+}
+
+/// <summary>Güncelleme sonucu — her öğe için ayrı, çünkü biri başarısız olsa diğerleri geçerlidir.</summary>
+public sealed class WordPressUpdateResultDto
+{
+    public string SiteName { get; set; } = string.Empty;
+
+    public IReadOnlyCollection<WordPressUpdateItemResultDto> Results { get; set; } = [];
+}
+
+public sealed class WordPressUpdateItemResultDto
+{
+    public string Kind { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public bool Success { get; set; }
+
+    /// <summary>Başarısızsa wp-cli'nin çıktısı (kısaltılmış).</summary>
+    public string Message { get; set; } = string.Empty;
+}

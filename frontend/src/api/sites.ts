@@ -226,7 +226,14 @@ export async function linkSiteDatabase(siteName: string, engine: string, name: s
   );
 }
 
-// Veritabanının siteyle bağını kaldır (veritabanını silmez).
+// Veritabanının siteyle bağını kaldır (veritabanını SİLMEZ).
+export async function unlinkSiteDatabase(siteName: string, engine: string, name: string) {
+  await apiClient.delete<ApiEnvelope<object>>(
+    `/sites/${encodeURIComponent(siteName)}/databases/link`,
+    { params: { engine, name } },
+  );
+}
+
 
 export async function deleteSite(
   siteName: string,

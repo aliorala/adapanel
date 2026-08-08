@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- Ayarlar/kayıtlar gelmeden "kayıt yok" veya "kapalı" göstermek yanıltıcı olurdu:
          yönetici açık bir gönderimi kapalı sanabilir ya da biriken kayıtları göremeyebilir. -->

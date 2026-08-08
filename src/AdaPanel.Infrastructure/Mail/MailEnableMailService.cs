@@ -345,6 +345,26 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)
         => GetWorkspaceAsync(request.Domain.Trim().ToLowerInvariant(), cancellationToken);
 
+    /// <summary>
+    /// MailEnable'da giden posta limiti panel üzerinden kurulamıyor: durum "limitsiz" DEĞİL,
+    /// "yapılandırılmadı" olarak bildiriliyor. İkisini karıştırmak, sınırsız sanılan bir sunucuda
+    /// tek müşterinin IP'yi kara listeye düşürmesine yol açardı.
+    /// </summary>
+    public Task<MailOutboundLimitDto> GetOutboundLimitAsync(string domain, CancellationToken cancellationToken = default)
+        => Task.FromResult(new MailOutboundLimitDto
+        {
+            Domain = (domain ?? string.Empty).Trim().ToLowerInvariant(),
+            MessagesPerHour = 0,
+            Configured = false
+        });
+
+    /// <summary>
+    /// Desteklenmiyor — ve BAŞARILI DÖNMÜYOR. Sessizce "tamam" demek, yöneticinin limit koyduğunu
+    /// sanmasına ve gerçekte hiçbir sınır olmamasına yol açardı.
+    /// </summary>
+    public Task<MailOutboundLimitDto> SetOutboundLimitAsync(string domain, int messagesPerHour, CancellationToken cancellationToken = default)
+        => throw new AppException("mail.outbound_limit_not_supported", 400, 400);
+
     public async Task<MailAutoResponderDto> GetAutoResponderAsync(string address, CancellationToken cancellationToken = default)
     {
         var (local, domain) = SplitAddress(address);

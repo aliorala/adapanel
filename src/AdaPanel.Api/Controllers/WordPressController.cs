@@ -77,9 +77,24 @@ public sealed class WordPressController(
     public async Task<ActionResult<ApiResponse<WordPressCloneResultDto>>> CloneAsync(
         string siteName,
         [FromBody] CloneWordPressRequest request,
+        [FromServices] IIisSiteService iisSiteService,
+        [FromServices] IMailService mailService,
+        [FromServices] ILogger<WordPressController> logger,
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): klon YENİ BİR SİTE OLUŞTURUR ve host adını buradan alır, yani
+        // site oluşturma/bağlama uçlarıyla aynı alan adı iddiasını üretir. Burada denetlenmezse
+        // kısıt bu yoldan dolanılırdı: hedefe "kurban.com" yazan bayi, kurbanın izinli mail
+        // domainlerini devralır (GetAllowedMailDomainsAsync bağlamalardan türetir) ve kurbanın
+        // posta hesaplarını yönetmeye başlar. Dahası klon SİLİNİRKEN cascade, kurbanın mail
+        // domainini hesaplarıyla birlikte siler.
+        //
+        // Hedef site YENİ olduğu için ownSiteName geçilmiyor: kaynak sitenin kendi host adı bu
+        // iddiaya gerekçe olamaz.
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.TargetHostName, null, logger, cancellationToken);
 
         // Kaynağın sahibi müşteri varsa: önce kota denetimi (Plesk gibi). Sahibi yoksa (yönetici sitesi) sınırsız.
         var ownerId = await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
@@ -119,4 +134,31 @@ public sealed class WordPressController(
         var result = await wordPressToolkitService.CopyDataAsync(siteName, request, cancellationToken);
         return Ok(ApiResponse<WordPressCopyDataResultDto>.Ok(result, "wp.copy_done"));
     }
+
+    /// <summary>Sitedeki güncellenebilir öğeler (çekirdek + eklenti + tema).</summary>
+    [HttpGet("{siteName}/updates")]
+    public async Task<ActionResult<ApiResponse<WordPressUpdatesDto>>> GetUpdatesAsync(string siteName, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        return Ok(ApiResponse<WordPressUpdatesDto>.Ok(await wordPressToolkitService.GetUpdatesAsync(siteName, cancellationToken)));
+    }
+
+    /// <summary>Seçilen öğeleri günceller.</summary>
+    [HttpPost("{siteName}/updates")]
+    public async Task<ActionResult<ApiResponse<WordPressUpdateResultDto>>> ApplyUpdatesAsync(
+        string siteName,
+        [FromBody] WordPressUpdateRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var result = await wordPressToolkitService.ApplyUpdatesAsync(siteName, request, cancellationToken);
+
+        // Kısmi başarı GİZLENMEZ: bir öğe güncellenemediyse mesaj bunu söyler, çünkü kullanıcının
+        // hangi eklentinin geride kaldığını bilmesi gerekir.
+        var basarisiz = result.Results.Count(item => !item.Success);
+        return Ok(ApiResponse<WordPressUpdateResultDto>.Ok(
+            result,
+            basarisiz == 0 ? "wp.updates_applied" : "wp.updates_partial"));
+    }
+
 }

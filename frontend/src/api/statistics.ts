@@ -20,6 +20,8 @@ export type WebStatistics = {
   hasData: boolean;
   totalRequests: number;
   uniqueVisitors: number;
+  /** true ise sayı üst sınıra dayandı ve gerçek sayının ALTINDA; ekranda "+" ile gösterilir. */
+  uniqueVisitorsApproximate: boolean;
   totalBytes: number;
   status2xx: number;
   status3xx: number;

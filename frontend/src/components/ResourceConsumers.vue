@@ -64,7 +64,7 @@
       <div
         v-for="row in rows"
         :key="row.key"
-        :class="['consumer-row', { slow: row.slow, 'with-page': showPageColumn }]">
+        :class="['consumer-row', { slow: row.slow, finished: row.finished, 'with-page': showPageColumn }]">
         <div class="consumer-who">
           <strong :title="row.who">
             {{ row.who }}
@@ -78,6 +78,7 @@
         </div>
 
         <span class="consumer-duration">
+          <span v-if="row.finished" class="finished-badge">{{ label("finished", "bitti") }}</span>
           <span v-if="row.slow" class="slow-dot" :title="label('slowHint', '5 saniyeden uzun sürüyor')">!</span>
           {{ row.durationText }}
         </span>
@@ -138,6 +139,7 @@ import { useI18n } from "vue-i18n";
 import {
   getResourceConsumers,
   type ConsumerSource,
+  type ResourceConsumer,
   type ResourceConsumerSnapshot
 } from "../api/consumers";
 import { copyToClipboard } from "../utils/clipboard";
@@ -302,13 +304,64 @@ function pageHintFor(siteName: string, durationSeconds: number) {
   };
 }
 
+/**
+ * BİTEN SORGULAR HEMEN KAYBOLMAZ.
+ *
+ * Motorun oturum listesi yalnız O ANI gösterir: bir sorgu bitince satır anında yok olur. Ekran
+ * saniyede bir yenilendiği için okumak neredeyse imkânsızdı — kullanıcı satırı görüyor, okumaya
+ * başlıyor, satır gidiyor. Artık listeden düşen sorgu "bitti" olarak İŞARETLENİP yeşile dönüyor
+ * ve bir süre daha duruyor; böylece ne çalıştığı okunabiliyor.
+ *
+ * Bu yalnız görüntüdür: kalıcı kayıt sunucudaki sorgu geçmişinde tutulur (Geçmiş sekmesi).
+ */
+const finishedHoldMs = 10 * 60 * 1000;
+const finished = ref(new Map<string, { item: ResourceConsumer; at: number }>());
+// Zamanın geçmesiyle listeden düşme, yalnız veri değişince değil: bu sayaç tetikler.
+const clockTick = ref(0);
+
+function rowIdentity(item: ResourceConsumer) {
+  return `${item.connectionId || ""}|${item.statement || ""}`;
+}
+
+/** Yeni anlık listeyle karşılaştır: kaybolanları "bitti" defterine al, süresi dolanları at. */
+function trackFinished(current: ResourceConsumer[]) {
+  const now = Date.now();
+  const live = new Set(current.map(rowIdentity));
+  const next = new Map(finished.value);
+
+  for (const [key, entry] of next) {
+    // Aynı sorgu geri geldiyse (yeniden çalışıyorsa) "bitti" damgası kalkar.
+    if (live.has(key) || now - entry.at > finishedHoldMs) {
+      next.delete(key);
+    }
+  }
+
+  for (const [key, item] of previousLive) {
+    if (!live.has(key) && !next.has(key)) {
+      next.set(key, { item, at: now });
+    }
+  }
+
+  previousLive = new Map(current.map((item) => [rowIdentity(item), item]));
+  finished.value = next;
+}
+
+let previousLive = new Map<string, ResourceConsumer>();
+
 const rows = computed(() => {
+  void clockTick.value; // süre dolunca yeniden hesaplansın
   const data = snapshot.value;
   if (!data || !data.available) {
     return [];
   }
 
-  return data.consumers.map((item, index) => {
+  const now = Date.now();
+  const bitenler = [...finished.value.entries()]
+    .filter(([, entry]) => now - entry.at <= finishedHoldMs)
+    .map(([, entry]) => ({ ...entry.item, __finished: true as const }));
+
+  return [...data.consumers, ...bitenler].map((item, index) => {
+    const isFinished = "__finished" in item;
     // Site bilinmiyorsa teknik hedefe (veritabanı / app pool) düşeriz — asla boş satır göstermeyiz.
     const who = item.siteName || item.target || label("unknownSite", "Bilinmeyen");
 
@@ -333,11 +386,13 @@ const rows = computed(() => {
       who,
       whoDetail: detailParts.join(" · "),
       durationText: formatDuration(item.durationSeconds),
-      slow: item.durationSeconds >= props.slowSeconds,
+      slow: !isFinished && item.durationSeconds >= props.slowSeconds,
       stateText: item.state,
       statement: item.statement,
       redacted: item.redacted,
       remote: !isWeb.value && item.remoteClient,
+      // Biten satır "yavaş" boyanmaz: iş bitti, artık uyarı değil bilgi.
+      finished: isFinished,
       page: isWeb.value ? null : pageHintFor(item.siteName ?? "", item.durationSeconds)
     };
   });
@@ -383,6 +438,11 @@ async function load() {
     }
 
     snapshot.value = result;
+    // Bu turda listeden düşenleri "bitti" defterine al (gerekçe: trackFinished).
+    // Yalnız liste GÜVENİLİRSE: okunamayan tur "hepsi bitti" sayılmamalı.
+    if (result.available) {
+      trackFinished(result.consumers.filter((item) => item.resourceType === "database"));
+    }
     failed.value = false;
   } catch {
     // Ağ/yetki hatası: son iyi listeyi silmeyiz (titreme olmasın), yalnız uyarı satırı çıkarırız.
@@ -399,6 +459,7 @@ async function load() {
 
 function startTimer() {
   stopTimer();
+  startClock();
   if (props.intervalMs > 0) {
     timer = window.setInterval(() => void load(), props.intervalMs);
   }
@@ -408,6 +469,21 @@ function stopTimer() {
   if (timer !== null) {
     window.clearInterval(timer);
     timer = null;
+  }
+  if (clockTimer !== null) {
+    window.clearInterval(clockTimer);
+    clockTimer = null;
+  }
+}
+
+// Biten satırın süresi, YENİ VERİ GELMESE DE dolmalı: kaynak sessizleşirse (hiç sorgu yok) yeni
+// anlık liste gelmez ve yalnız veriye bağlı bir hesap satırı sonsuza kadar ekranda tutardı.
+let clockTimer: number | null = null;
+function startClock() {
+  if (clockTimer === null) {
+    clockTimer = window.setInterval(() => {
+      clockTick.value++;
+    }, 15_000);
   }
 }
 
@@ -427,6 +503,9 @@ watch(
     inFlight = false;
     snapshot.value = null;
     webSnapshot.value = null;
+    // Biten-sorgu defteri KAYNAĞA aittir; motor değişince taşınmamalı.
+    finished.value = new Map();
+    previousLive = new Map();
     // IIS "okunamıyor" damgasını sıfırla: kullanıcı bu arada IIS'i düzeltmiş olabilir.
     webUnavailable = false;
     expandedRows.value = new Set();
@@ -452,6 +531,25 @@ defineExpose({ refresh: load });
 </script>
 
 <style scoped>
+/* BİTEN sorgu: yeşil şerit + soluk zemin. Satır hemen kaybolmuyor ki okunabilsin; 10 dakika
+   sonra kendiliğinden düşer. Kalıcı kayıt Geçmiş sekmesinde. */
+.consumer-row.finished {
+  border-left: 3px solid var(--ok-1, #2e9e5b);
+  background: color-mix(in srgb, var(--ok-1, #2e9e5b) 7%, transparent);
+  opacity: 0.85;
+}
+
+.finished-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .consumers {
   display: grid;
   gap: 10px;

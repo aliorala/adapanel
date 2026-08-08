@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="loading || !siteName" @click="load">{{ t("panel.siteDb.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
     <p v-if="!siteName" class="meta">{{ t("panel.php.selectSite") }}</p>
 
     <template v-else>
@@ -54,6 +54,16 @@
           </div>
           <span class="db-actions">
             <button class="secondary compact" :disabled="opening" @click="openPma(db)">phpMyAdmin ↗</button>
+            <!-- BAĞLANTIYI KALDIR: veritabanını SİLMEZ. Bu düğme yoktu ve yanlış veritabanını
+                 siteye bağlayan kullanıcının tek seçeneği onu SİLMEKTİ — üstelik site silinince
+                 cascade o veritabanını zaten DROP ediyordu, yani geri dönüşü olmayan veri kaybı.
+                 Uç ve çevirileri hazırdı, yalnız arayüzü eksikti. -->
+            <button
+              class="secondary compact"
+              :disabled="unlinkingKey === db.engine + ':' + db.name"
+              @click="unlinkDb(db)">
+              {{ unlinkingKey === db.engine + ':' + db.name ? t("panel.siteDb.unlinking") : t("panel.siteDb.unlink") }}
+            </button>
             <button
               v-if="isAdmin"
               class="danger compact"
@@ -75,7 +85,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { getSiteDatabases, linkSiteDatabase, type SiteDatabaseRef } from "../api/sites";
+import { getSiteDatabases, linkSiteDatabase, unlinkSiteDatabase, type SiteDatabaseRef } from "../api/sites";
 import { createDatabase, deleteDatabase, openPhpMyAdmin } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
@@ -170,6 +180,22 @@ async function openPma(db: LinkedDb) {
     showNotice(resolveApiMessage(error), true);
   } finally {
     opening.value = false;
+  }
+}
+
+const unlinkingKey = ref("");
+
+async function unlinkDb(db: LinkedDb) {
+  unlinkingKey.value = db.engine + ":" + db.name;
+  notice.value = "";
+  try {
+    await unlinkSiteDatabase(siteName.value, db.engine, db.name);
+    showNotice(t("panel.siteDb.unlinked"), false);
+    await load();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    unlinkingKey.value = "";
   }
 }
 

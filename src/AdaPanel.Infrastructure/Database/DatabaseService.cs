@@ -233,6 +233,21 @@ internal sealed partial class DatabaseService(
     public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(engine);
+
+        // DESTEKLENMEYEN MOTORDA "BASARILI" DONMEZ.
+        //
+        // Sertleştirme adımlarının hepsi MySQL/MariaDB'ye özgü (anonim kullanıcılar, uzak root@'%',
+        // parolasız root, boş 'test' veritabanı). Diğer motorlarda aşağıdaki blok atlanıyor ve
+        // metot BOŞ LİSTE dönüyordu; uç bunu "sertleştirildi" diye raporluyor, denetim günlüğü de
+        // "güvensiz yönetici hesabı bulunamadı" yazıyordu. Yani hiçbir şey bakılmamışken kullanıcıya
+        // "baktık, temiz" deniyordu — sunucusunu güvende sanmasına yol açan bir yanlış bilgi.
+        //
+        // Aynı kararın karşılığı CheckAndRepairAsync'te zaten var (database.check_not_supported).
+        if (dbEngine is not (DbEngine.MariaDb or DbEngine.MySql))
+        {
+            throw new AppException("database.harden_not_supported", 400, 400);
+        }
+
         var provider = ResolveProvider(dbEngine);
         var results = new List<string>();
 
@@ -1026,18 +1041,44 @@ internal sealed partial class DatabaseService(
         throw new AppException("database.engine_not_installed", 404, 404);
     }
 
+    /// <summary>
+    /// Motorun komut satırı aracını (mysqldump, pg_dump vb.) bulur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Adaylar SABİT SÜRÜM klasörleriyle yazılıydı: "MariaDB 11.4", "MySQL Server 8.4",
+    /// "PostgreSQL". Sunucuda zaten kurulu (panelin kurmadığı) bir MariaDB 10.11 ya da
+    /// PostgreSQL 15 varsa hiçbiri eşleşmiyordu ve yedekleme, dışa/içe aktarma, veritabanı taşıma
+    /// yollarının hepsi "dump aracı bulunamadı" ile düşüyordu.
+    /// </para>
+    /// <para>
+    /// Artık sürüm klasörleri TARANIYOR (en yeni önce) ve son çare olarak PATH'e bakılıyor.
+    /// </para>
+    /// </remarks>
     private static string FindExecutable(string installDir, string fileName)
     {
-        var candidates = new[]
-        {
-            installDir,
-            Path.Combine(installDir, "bin"),
-            Environment.ExpandEnvironmentVariables("%ProgramFiles%\\MariaDB 11.4\\bin"),
-            Environment.ExpandEnvironmentVariables("%ProgramFiles%\\MySQL\\MySQL Server 8.4\\bin"),
-            Environment.ExpandEnvironmentVariables("%ProgramFiles%\\PostgreSQL\\16\\bin")
-        };
+        var candidates = new List<string> { installDir, Path.Combine(installDir, "bin") };
 
-        foreach (var directory in candidates.Where(Directory.Exists))
+        foreach (var kok in new[] { "%ProgramFiles%", "%ProgramFiles(x86)%" })
+        {
+            var taban = Environment.ExpandEnvironmentVariables(kok);
+            if (!Directory.Exists(taban))
+            {
+                continue;
+            }
+
+            // MariaDB doğrudan "MariaDB <sürüm>" klasörüne, MySQL/PostgreSQL bir ara klasörün
+            // altına kurulur; ikisi de kapsanıyor.
+            candidates.AddRange(SurumKlasorleri(taban, "MariaDB*"));
+            candidates.AddRange(SurumKlasorleri(Path.Combine(taban, "MySQL"), "*"));
+            candidates.AddRange(SurumKlasorleri(Path.Combine(taban, "PostgreSQL"), "*"));
+        }
+
+        // PATH: araç ortamda tanımlıysa sürüm klasörü aramaya gerek yok.
+        candidates.AddRange((Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        foreach (var directory in candidates.Where(item => !string.IsNullOrWhiteSpace(item) && Directory.Exists(item)))
         {
             var direct = Path.Combine(directory, fileName);
             if (File.Exists(direct))
@@ -1053,6 +1094,33 @@ internal sealed partial class DatabaseService(
         }
 
         throw new AppException("database.dump_tool_missing", 404, 404);
+    }
+
+    /// <summary>
+    /// Bir tabanın altındaki sürüm klasörlerini (ve bin alt klasörlerini) EN YENİDEN eskiye döndürür.
+    /// </summary>
+    private static IEnumerable<string> SurumKlasorleri(string taban, string desen)
+    {
+        if (!Directory.Exists(taban))
+        {
+            yield break;
+        }
+
+        string[] klasorler;
+        try
+        {
+            klasorler = Directory.GetDirectories(taban, desen, SearchOption.TopDirectoryOnly);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            yield break;
+        }
+
+        foreach (var klasor in klasorler.OrderByDescending(item => item, StringComparer.OrdinalIgnoreCase))
+        {
+            yield return Path.Combine(klasor, "bin");
+            yield return klasor;
+        }
     }
 
     private static EngineDescriptor ResolveDescriptor(DbEngine engine)

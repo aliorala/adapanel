@@ -19,7 +19,7 @@
       </div>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- Durum sunucudan gelmeden "kurulu değil" ekranı gösteriliyordu; kurulu bir Nginx'i
          yöneticinin yeniden kurmaya çalışmasına yol açan yanıltıcı bir varsayılandı. -->

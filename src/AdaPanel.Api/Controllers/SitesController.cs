@@ -1,6 +1,8 @@
 using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -26,7 +28,9 @@ public sealed class SitesController(
     ISiteDatabaseLinkService siteDatabaseLinks,
     IPanelPreferencesService panelPreferences,
     ISslService sslService,
-    IAuditService auditService) : ControllerBase
+    IAuditService auditService,
+    IConcurrencyLock concurrencyLock,
+    ILogger<SitesController> logger) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<SiteDto>>>> GetSitesAsync(CancellationToken cancellationToken)
@@ -230,10 +234,20 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 string.Equals(link.DatabaseName, reference.Name, StringComparison.OrdinalIgnoreCase)) ||
             wantedNames.Contains(reference.Name);
 
+        // GÜVENLİK (sızıntı): aday listesi kullanıcının SAHİP OLDUĞU veritabanlarıyla sınırlıdır.
+        // Bağlı olanlar filtrelenmez: bir site zaten bağlıysa kullanıcı onu görmeli, aksi hâlde
+        // ekranında sebepsiz kaybolurdu.
+        var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
+        var adaylar = all.Where(reference => !IsLinked(reference));
+        if (baglanabilir is not null)
+        {
+            adaylar = adaylar.Where(reference => baglanabilir.Icerir(reference.Engine, reference.Name));
+        }
+
         var result = new SiteDatabasesDto
         {
             Linked = all.Where(IsLinked).ToList(),
-            Candidates = all.Where(reference => !IsLinked(reference)).ToList()
+            Candidates = adaylar.ToList()
         };
         return Ok(ApiResponse<SiteDatabasesDto>.Ok(result));
     }
@@ -246,6 +260,16 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): site kapsamı doğrulanıyordu ama veritabanı adı SERBESTTİ.
+        // Başkasının veritabanını kendi sitesine bağlayan kiracı, sitesini silince cascade o
+        // veritabanını DROP ediyordu. Gerekçe: ResolveLinkableDatabasesAsync.
+        var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
+        if (baglanabilir is not null && !baglanabilir.Icerir(request.Engine, request.Name))
+        {
+            return StatusCode(403, ApiResponse<object>.Fail("sites.database_forbidden", 403));
+        }
+
         await siteDatabaseLinks.LinkAsync(request.Engine, request.Name, siteName, cancellationToken);
         await WriteAuditAsync("sites.database.linked", $"{siteName}:{request.Engine}:{request.Name}", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { }, "sites.database.linked"));
@@ -260,6 +284,18 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): kaldırma da BAĞLAMA ile aynı sahiplik denetiminden geçer.
+        // UnlinkAsync imzasında site adı YOK ve kaydı yalnız motor+ad eşleşmesiyle siliyor; yani
+        // denetimsiz bırakılırsa kendi sitesinin adını yazan bir kiracı, BAŞKASININ site↔DB bağını
+        // sessizce koparabilirdi. Sonuç kurbanda görünmez bir bozulma: veritabanı site panelinden
+        // kaybolur ve site silinirken cascade ile temizlenmediği için yetim kalır.
+        var baglanabilir = await ResolveLinkableDatabasesAsync(cancellationToken);
+        if (baglanabilir is not null && !baglanabilir.Icerir(engine, name))
+        {
+            return StatusCode(403, ApiResponse<object>.Fail("sites.database_forbidden", 403));
+        }
+
         await siteDatabaseLinks.UnlinkAsync(engine, name, cancellationToken);
         await WriteAuditAsync("sites.database.unlinked", $"{siteName}:{engine}:{name}", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { }, "sites.database.unlinked"));
@@ -274,6 +310,31 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): admin DIŞINDAKİ kullanıcılar belge kökünü sitenin KENDİ
+        // klasörünün dışına taşıyamaz.
+        //
+        // Site OLUŞTURULURKEN yol zaten zorlanıyor (ResolveScopedPhysicalPath) — ama bu kontrol
+        // olmadan aynı kısıtlama SONRADAN belge kökü değiştirilerek aşılabiliyordu: ön kapı
+        // kapalı, yan kapı açıktı. Kiracı belge kökünü başka bir müşterinin klasörüne (ya da
+        // C:\ gibi bir sistem yoluna) çevirip o içeriği web üzerinden okuyabilir, IIS'in o
+        // klasöre yazma iznini kendi lehine kullanabilirdi.
+        //
+        // Sitenin kökünün KENDİSİ geçerlidir: "public"ten proje köküne geri dönmek meşru bir
+        // işlemdir ve en olağan durumdur.
+        if (!User.IsInRole("Administrator"))
+        {
+            var mevcut = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+            var kok = string.IsNullOrWhiteSpace(mevcut.ApplicationRootPath)
+                ? mevcut.PhysicalPath
+                : mevcut.ApplicationRootPath;
+
+            if (!PathContainment.IsRootOrInside(kok, request.PhysicalPath))
+            {
+                return StatusCode(403, ApiResponse<SiteDto>.Fail("sites.document_root_outside_site", 403));
+            }
+        }
+
         var site = await siteProvisioningService.SetDocumentRootAsync(siteName, request.PhysicalPath, cancellationToken);
         await WriteAuditAsync("sites.document_root.updated", $"{siteName}:{site.PhysicalPath}", cancellationToken);
         return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
@@ -290,6 +351,52 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     }
 
     // #5 izin onar — mevcut siteye yazma iznini yeniden uygula (app pool kök Modify).
+    // --- Alan adı takma adları (ör. ornek.com + ornek.com.tr aynı siteye) ---
+
+    [HttpGet("{siteName}/aliases")]
+    public async Task<ActionResult<ApiResponse<SiteAliasWorkspaceDto>>> GetAliasesAsync(
+        string siteName,
+        [FromServices] ISiteAliasService aliasService,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        return Ok(ApiResponse<SiteAliasWorkspaceDto>.Ok(await aliasService.GetAliasesAsync(siteName, cancellationToken)));
+    }
+
+    [HttpPost("{siteName}/aliases")]
+    public async Task<ActionResult<ApiResponse<SiteAliasWorkspaceDto>>> AddAliasAsync(
+        string siteName,
+        [FromBody] AddSiteAliasRequest request,
+        [FromServices] ISiteAliasService aliasService,
+        [FromServices] IMailService mailService,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): takma ad eklemek, bağlama eklemekle AYNI alan adı iddiasını
+        // üretir — mail sahipliği bağlamalardan türetildiği için denetlenmezse bir kiracı
+        // başkasının alan adını (ve postasını) bu yoldan devralabilirdi.
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.HostName, siteName, logger, cancellationToken);
+
+        var workspace = await aliasService.AddAliasAsync(siteName, request, cancellationToken);
+        await WriteAuditAsync("sites.alias.added", $"{siteName}:{request.HostName}", cancellationToken);
+        return Ok(ApiResponse<SiteAliasWorkspaceDto>.Ok(workspace, "alias.added"));
+    }
+
+    [HttpDelete("{siteName}/aliases")]
+    public async Task<ActionResult<ApiResponse<SiteAliasWorkspaceDto>>> RemoveAliasAsync(
+        string siteName,
+        [FromQuery] string hostName,
+        [FromServices] ISiteAliasService aliasService,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        var workspace = await aliasService.RemoveAliasAsync(siteName, hostName, cancellationToken);
+        await WriteAuditAsync("sites.alias.removed", $"{siteName}:{hostName}", cancellationToken);
+        return Ok(ApiResponse<SiteAliasWorkspaceDto>.Ok(workspace, "alias.removed"));
+    }
+
     [HttpPost("{siteName}/repair-permissions")]
     public async Task<ActionResult<ApiResponse<SiteDto>>> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken)
     {
@@ -360,22 +467,67 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         {
             var prefs = await panelPreferences.GetAsync(cancellationToken);
             request.PhysicalPath = ResolveScopedPhysicalPath(request, prefs.DefaultSiteRoot);
+
+            // GÜVENLİK (çapraz-kiracı): uygulama havuzu da SEÇİLEMEZ.
+            //
+            // Yol zorlanıyor ama havuz serbest kalırsa kiracı, sitesini BAŞKA bir müşterinin
+            // havuzunda çalıştırabilir. Site o havuzun kimliğiyle koşar; o kimliğe verilmiş
+            // klasör izinleri (diğer müşterinin dosyaları) sitenin PHP koduna açılır — yani
+            // yol kısıtlaması hiç yokmuş gibi olur.
+            //
+            // Boş bırakılınca panel yönetilen adı kendisi üretir (BuildManagedPoolName).
+            request.ApplicationPoolName = string.Empty;
+
+            // Host adı başkasının olamaz — gerekçe CustomerAccess.EnsureDomainClaimAsync'te.
+            await CustomerAccess.EnsureDomainClaimAsync(
+                customerScopes, iisSiteService, mailService, User, request.HostName, null, logger, cancellationToken);
         }
 
-        // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
-        await EnsureSiteQuotaAsync(cancellationToken);
+        // KOTA KONTROLÜ İLE KAYIT ARASINDA BAŞKA İSTEK GİREMEZ.
+        //
+        // Kontrol (oku) ile atama (yaz) arasında uzun süren IIS kurulumu var ve arada hiçbir kilit
+        // yoktu: MaxSites=1 olan bir müşteri iki isteği aynı anda gönderdiğinde İKİSİ DE kotayı boş
+        // görüyor ve iki site birden açılıyordu. Kotanın kendisi doğru sayıyordu; sorun sayımın
+        // ne zaman yapıldığındaydı.
+        //
+        // Kuyruk ABONELİK BAŞINA: farklı müşterilerin site kurulumları birbirini beklemez. Kilit
+        // sırası da tutarlı (önce kota, sonra IIS) — IIS kuyruğunu bekleyen bir istek asla kota
+        // kuyruğunu tutmuyor, dolayısıyla kilitlenme oluşmaz.
+        var aboneligim = User.IsInRole("Administrator")
+            ? Guid.Empty
+            : await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
 
-        var site = await siteProvisioningService.CreateAndProvisionAsync(
-            request,
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
+        var site = await concurrencyLock.RunExclusiveAsync(
+            $"site-quota:{aboneligim}",
+            async () =>
+            {
+                // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
+                await EnsureSiteQuotaAsync(cancellationToken);
+
+                var olusan = await siteProvisioningService.CreateAndProvisionAsync(
+                    request,
+                    User.GetRequiredUserId(),
+                    HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    cancellationToken);
+
+                // M1: admin değilse yeni siteyi oluşturanın kapsamına EKLE (erişebilsin + kota sayımı doğru olsun).
+                await AssignSiteToActorAsync(olusan.Name, cancellationToken);
+                return olusan;
+            },
             cancellationToken);
-
-        // M1: admin değilse yeni siteyi oluşturanın kapsamına EKLE (erişebilsin + kota sayımı doğru olsun).
-        await AssignSiteToActorAsync(site.Name, cancellationToken);
         await WriteAuditAsync("sites.create.completed", site.Name, cancellationToken);
 
         var result = new SiteCreationResultDto { Site = site };
+
+        // ALT ALAN ADI: yeni site başka bir yönetilen sitenin ALTINDAysa, üst bölgeye A kaydı düşer.
+        //
+        // Bu adım eksikti: alt alan adı sitesi kuruluyor, IIS bağlaması hazır oluyor, ama alan adı
+        // hiçbir yere çözmüyordu. Kullanıcı "site açtım, açılmıyor" diyor ve kaydı elle aramak
+        // zorunda kalıyordu. Kaydı panel atmalı — çünkü üst alan adının bölgesi de panelde.
+        //
+        // BEST-EFFORT: burada bir sorun çıkarsa site yine durur, sadece uyarı yazılır. Site
+        // oluşturmayı DNS'e bağlamak, çalışan bir akışı DNS'in durumuna teslim etmek olurdu.
+        await TryEnsureSubdomainRecordAsync(result, site, request.HostName, dnsService, cancellationToken);
         var installedComponents = (await componentBootstrapper.GetCatalogAsync(cancellationToken))
             .Installed
             .Where(component => string.Equals(component.Status, "Installed", StringComparison.OrdinalIgnoreCase))
@@ -585,9 +737,12 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     public async Task<ActionResult<ApiResponse<SiteDto>>> AddBindingAsync(
         string siteName,
         [FromBody] SiteBindingRequest request,
+        [FromServices] IMailService mailService,
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.HostName, siteName, logger, cancellationToken);
         var site = await iisSiteService.AddBindingAsync(siteName, request, cancellationToken);
         await WriteAuditAsync("sites.binding.added", site.Name, cancellationToken);
         return Ok(ApiResponse<SiteDto>.Ok(site, "sites.binding.add.success"));
@@ -693,6 +848,83 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         // Alt-kullanıcıda sayım abonelik (parent) kimliğiyle yapılır → kota abonelik genelinde tektir.
         var subscriptionId = await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken);
         return await dbOwnership.CountForOwnerAsync(subscriptionId, cancellationToken) >= scope.MaxDatabases;
+    }
+
+    /// <summary>
+    /// Bu kullanıcının BAĞLAYABİLECEĞİ/GÖREBİLECEĞİ veritabanlarını belirler. <c>null</c> =
+    /// kısıtsız (yönetici).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki açığı birden kapatır ve ikisi de aynı soruyu sorduğu için kural TEK yerde:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>
+    /// <b>Aday listesi sızıntısı:</b> uç, kurulu her motordaki TÜM veritabanlarını "aday" diye
+    /// döndürüyordu; bir müşteri sunucudaki bütün veritabanı adlarını (dolayısıyla diğer
+    /// kiracıların müşteri/proje adlarını) görüyordu.
+    /// </item>
+    /// <item>
+    /// <b>Bağlama:</b> site kapsamı doğrulanıyordu ama veritabanı adı serbestti. Başkasının
+    /// veritabanını kendi sitesine bağlayan kiracı, sonra sitesini silince cascade o
+    /// veritabanını <b>DROP</b> ediyordu.
+    /// </item>
+    /// </list>
+    /// <para>
+    /// Sahiplik iki kaynaktan okunur: (1) sahiplik kaydı (<see cref="IDatabaseOwnershipService"/>),
+    /// (2) ad eşleşmesi — sitenin adı ya da <c>DatabaseNameFromSite</c>. İkincisi şart: panel
+    /// dışında ya da sahiplik kaydı tutulmadan önce açılmış veritabanlarının kaydı yoktur ve
+    /// yalnız kayda bakmak, bugün çalışan meşru bağlamayı kırardı.
+    /// </para>
+    /// </remarks>
+    private async Task<LinkableDatabases?> ResolveLinkableDatabasesAsync(CancellationToken cancellationToken)
+    {
+        var kapsamdakiSiteler = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, cancellationToken);
+        if (kapsamdakiSiteler is null)
+        {
+            return null; // yönetici
+        }
+
+        // (1) sahiplik kaydı — MOTOR + AD birlikte eşleşmeli. Yalnız ada bakmak, MySQL'de "test"
+        // veritabanı olan birine PostgreSQL'deki BAŞKASININ "test"ini açardı.
+        var sahipli = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sahipler = new List<Guid> { await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken) };
+        if (CustomerAccess.IsReseller(User))
+        {
+            sahipler.AddRange(await customerScopes.GetOwnedUserIdsAsync(User.GetRequiredUserId(), cancellationToken));
+        }
+
+        foreach (var sahip in sahipler.Distinct())
+        {
+            foreach (var (engine, databaseName) in await dbOwnership.GetOwnedAsync(sahip, cancellationToken))
+            {
+                sahipli.Add(LinkableDatabases.Anahtar(engine, databaseName));
+            }
+        }
+
+        // (2) ad eşleşmesi — kapsamdaki her site için. Burada motor ayrımı YOK: bu kural, sahiplik
+        // kaydı hiç tutulmamış (panel dışında ya da kayıt öncesi açılmış) veritabanları içindir ve
+        // hangi motorda olduğu bilinmez. Ada göre siteye ait sayılan bir veritabanı zaten o
+        // kiracınındır.
+        var adEslesen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var site in kapsamdakiSiteler)
+        {
+            adEslesen.Add(site.Trim());
+            adEslesen.Add(AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(site));
+        }
+
+        return new LinkableDatabases(sahipli, adEslesen);
+    }
+
+    /// <summary>Kiracının bağlayabileceği veritabanları: motor+ad ile sahipli olanlar + ada göre siteye ait olanlar.</summary>
+    private sealed record LinkableDatabases(HashSet<string> Sahipli, HashSet<string> AdEslesen)
+    {
+        public static string Anahtar(string? engine, string? name) =>
+            $"{(engine ?? string.Empty).Trim()}|{(name ?? string.Empty).Trim()}";
+
+        public bool Icerir(string? engine, string? name) =>
+            Sahipli.Contains(Anahtar(engine, name)) ||
+            AdEslesen.Contains((name ?? string.Empty).Trim());
     }
 
     // M1: admin olmayan oluşturucunun yeni sitesini kendi kapsamına ekler (yoksa). OwnerId korunur (SetScopeAsync).
@@ -807,5 +1039,79 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         }
 
         return new string(chars.ToArray());
+    }
+
+    /// <summary>
+    /// Yeni site bir alt alan adıysa üst alan adının DNS bölgesine A kaydı düşürür.
+    /// </summary>
+    /// <remarks>
+    /// Üst alan adı, YÖNETİLEN siteler arasında aranır: panelin bölgesini yönetmediği bir alan adına
+    /// kayıt atmak zaten mümkün değildir. En UZUN eşleşen üst alan seçilir — hem <c>ornek.com</c>
+    /// hem <c>ic.ornek.com</c> yönetiliyorsa, <c>test.ic.ornek.com</c> için doğru bölge ikincisidir;
+    /// en kısası seçilseydi kayıt yanlış bölgeye düşer ve hiç çözmezdi.
+    /// </remarks>
+    private async Task TryEnsureSubdomainRecordAsync(
+        SiteCreationResultDto result,
+        SiteDto site,
+        string? requestedHostName,
+        IDnsService dnsService,
+        CancellationToken cancellationToken)
+    {
+        var host = DomainNames.Normalize(
+            string.IsNullOrWhiteSpace(requestedHostName) ? site.Name : requestedHostName);
+        if (host.Length == 0 || !host.Contains('.'))
+        {
+            return;
+        }
+
+        try
+        {
+            var siteler = await iisSiteService.GetSitesAsync(cancellationToken);
+            var ust = siteler
+                .Where(item => !string.Equals(item.Name, site.Name, StringComparison.OrdinalIgnoreCase))
+                .Select(item => item.Name)
+                .Where(ad => DomainNames.IsSubdomainOf(host, ad))
+                .OrderByDescending(ad => ad.Length)
+                .FirstOrDefault();
+
+            if (ust is null)
+            {
+                return;
+            }
+
+            var etiket = DomainNames.LabelUnder(host, ust);
+            var sonuc = await dnsService.EnsureSubdomainRecordAsync(ust, etiket, cancellationToken);
+
+            if (sonuc.Created)
+            {
+                result.Created.Add($"dns: {etiket}.{ust} A {sonuc.Address}");
+            }
+            else if (sonuc.AlreadyExists && sonuc.AlreadyCorrect)
+            {
+                // Kayıt zaten doğru (panelin kendi varsayılanı ya da bu sunucuyu gösteriyor):
+                // yapılacak bir şey yok, uyarı DEĞİL bilgi.
+                result.Created.Add($"dns: {etiket}.{ust} zaten mevcut ({sonuc.ExistingRecord})");
+            }
+            else if (sonuc.AlreadyExists)
+            {
+                // Kayıt BAŞKA bir yeri gösteriyor. Üstüne yazılmadı ve bu sessiz geçilmez:
+                // kullanıcı sitesinin neden açılmadığını anlayamazdı.
+                result.Warnings.Add(
+                    $"dns ({etiket}.{ust}): record already exists and points elsewhere ({sonuc.ExistingRecord}); left unchanged.");
+            }
+            else if (sonuc.ZoneMissing)
+            {
+                result.Warnings.Add(
+                    $"dns ({etiket}.{ust}): parent zone is not managed here; add the record at your DNS provider.");
+            }
+            else if (sonuc.Error.Length > 0)
+            {
+                result.Warnings.Add($"dns ({etiket}.{ust}): {sonuc.Error}");
+            }
+        }
+        catch (Exception exception)
+        {
+            result.Warnings.Add($"dns ({host}): {DescribeProvisionError(exception)}");
+        }
     }
 }

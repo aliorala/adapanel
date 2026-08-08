@@ -97,7 +97,7 @@ public sealed class AutomationService(
 
     public async Task<AutomationStatusDto> RunBackupNowAsync(CancellationToken cancellationToken = default)
     {
-        await concurrencyLock.RunExclusiveAsync(async () =>
+        await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Automation, async () =>
         {
             var state = await LoadAsync(cancellationToken);
             await RunBackupAsync(state, cancellationToken);
@@ -109,7 +109,7 @@ public sealed class AutomationService(
 
     public async Task<AutomationStatusDto> RunSslRenewNowAsync(CancellationToken cancellationToken = default)
     {
-        await concurrencyLock.RunExclusiveAsync(async () =>
+        await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Automation, async () =>
         {
             var state = await LoadAsync(cancellationToken);
             await RunSslRenewAsync(state, cancellationToken);
@@ -231,7 +231,7 @@ public sealed class AutomationService(
             logger.LogWarning(exception, "Bileşen güncelleme kontrolü çalıştırılamadı.");
         }
 
-        await concurrencyLock.RunExclusiveAsync(async () =>
+        await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Automation, async () =>
         {
             var state = await LoadAsync(cancellationToken);
             var now = DateTime.UtcNow;
@@ -511,9 +511,8 @@ public sealed class AutomationService(
         try
         {
             var cutoff = DateTime.UtcNow.AddDays(-Math.Max(1, state.LogRetentionDays));
-            var logRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System).Replace("System32", "inetpub\\logs\\LogFiles"),
-                string.Empty);
+            // IIS'in GERÇEK günlük kökü (sabit kodlu değil) — gerekçe: IisLogPaths.
+            var logRoot = IisLogPaths.ResolveRoot();
             var sites = await iisSiteService.GetSitesAsync(cancellationToken);
             foreach (var site in sites)
             {

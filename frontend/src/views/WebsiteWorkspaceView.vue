@@ -29,7 +29,7 @@
            gormeli; Sunucu Sagligi ekranindaki toplu sayi hangi sitenin bozuk oldugunu soylemiyordu. -->
       <SiteRepairNotice v-if="selectedSiteName" :site-name="selectedSiteName" @notify="showNotice" />
 
-      <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+      <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
       <!-- panel ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
       <nav class="primary-nav" :aria-label="t('panel.sites.toolsBar')">
@@ -157,8 +157,25 @@ const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
-// Server-level araçlar (yazılım mağazası, web DB kurulumu, önbellek) yalnız admin'e açık.
-const adminOnlyTools = new Set(["store", "webdb", "cache", "cron"]);
+const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
+
+// GÖRÜNÜRLÜK, BACKEND'İN ROL LİSTESİYLE AYNI OLMALI.
+//
+// Burada yalnız dört araç kısıtlanıyordu; geri kalan her şey müşteriye görünüyordu ama
+// controller'ların çoğu "Administrator,Reseller" istiyor. Sonuç: müşteri PHP, SSL, FTP, DNS,
+// istatistik gibi 13 araca tıklıyor ve her birinde 403 alıyordu — panel ona olmayan bir yetki
+// vaat ediyordu.
+//
+// Server-level araçlar (yazılım mağazası, web DB kurulumu, önbellek, cron) yalnız admin'e açık.
+const adminOnlyTools = new Set(["store", "webdb", "cache", "cron", "logs", "migrate"]);
+
+// Bayi ve admin'e açık, MÜŞTERİYE KAPALI olanlar — karşılıkları:
+//   hosting/toolkit → SiteHostingSettingsController, php → PhpController, asp → AspController,
+//   dns → DnsController, ssl → SslController, proxy → ProxyController, ftp → FtpController,
+//   stats → StatisticsController, wp → WordPressController, apps → AppRuntimeController
+const resellerAndAdminTools = new Set([
+  "hosting", "toolkit", "php", "asp", "dns", "ssl", "proxy", "ftp", "stats", "wp", "apps"
+]);
 
 const inWorkspace = ref(false);
 const primary = ref<PrimaryTab>("pano");
@@ -215,7 +232,17 @@ const allTools = computed<ToolDef[]>(() => [
   { id: "apps", group: "start", glyph: "JS", label: t("panel.sites.tools.apps"), description: t("panel.sites.tools.appsHint") }
 ]);
 
-const visibleTools = computed(() => allTools.value.filter((tool) => isAdmin.value || !adminOnlyTools.has(tool.id)));
+const visibleTools = computed(() =>
+  allTools.value.filter((tool) => {
+    if (isAdmin.value) {
+      return true;
+    }
+    if (adminOnlyTools.has(tool.id)) {
+      return false;
+    }
+    return isReseller.value || !resellerAndAdminTools.has(tool.id);
+  })
+);
 function toolsFor(group: PrimaryTab): ToolDef[] {
   return visibleTools.value.filter((tool) => tool.group === group);
 }
@@ -357,7 +384,7 @@ async function handleAddSubdomain(label: string) {
   }
   const host = `${label}.${parent}`.toLowerCase();
   try {
-    await sitesStore.createSite({
+    const sonuc = await sitesStore.createSite({
       name: host,
       hostName: host,
       physicalPath: `${defaultSiteRoot.value}\\${host}`,
@@ -372,7 +399,20 @@ async function handleAddSubdomain(label: string) {
       startupFile: "",
       provisionDefaultServices: false
     });
-    showNotice(t("panel.sites.subdomainCreated", { host }), false);
+    // UYARILAR YUTULMUYORDU: site kuruluyor, DNS kaydı düşmüyor ve kullanıcı "başarılı" mesajını
+    // görüp alan adının çözmesini bekliyordu. Sunucunun söylediği neyse o yazılır.
+    if (sonuc.warnings.length > 0) {
+      showNotice(`${t("panel.sites.subdomainCreated", { host })} — ${sonuc.warnings.join(" · ")}`, true);
+      return;
+    }
+
+    const dnsKaydi = sonuc.created.find((satir) => satir.startsWith("dns:"));
+    showNotice(
+      dnsKaydi
+        ? `${t("panel.sites.subdomainCreated", { host })} — ${dnsKaydi}`
+        : t("panel.sites.subdomainCreated", { host }),
+      false
+    );
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }

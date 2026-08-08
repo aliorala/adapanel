@@ -7,7 +7,7 @@
           <strong>{{ t("panel.plans.title") }}</strong>
           <p class="meta">{{ t("panel.plans.hint") }}</p>
         </div>
-        <button type="button" class="compact" @click="showPlanForm = !showPlanForm">
+        <button type="button" class="compact" @click="planFormunuAcKapa">
           {{ showPlanForm ? t("panel.common.cancel") : t("panel.plans.add") }}
         </button>
       </div>
@@ -16,7 +16,10 @@
         <article v-for="plan in servicePlans" :key="plan.id" class="plan-card">
           <div class="plan-card-head">
             <strong class="plan-name">{{ plan.name }}</strong>
-            <button class="secondary compact danger" @click="removeServicePlan(plan.id)">{{ t("panel.common.delete") }}</button>
+            <span class="plan-card-actions">
+              <button type="button" class="secondary compact" @click="planiDuzenle(plan)">{{ t("panel.common.edit") }}</button>
+              <button type="button" class="secondary compact danger" @click="removeServicePlan(plan.id)">{{ t("panel.common.delete") }}</button>
+            </span>
           </div>
           <ul class="plan-limits">
             <li><span>{{ t("panel.plans.sitesLabel") }}</span><b>{{ plan.maxSites || "∞" }}</b></li>
@@ -24,6 +27,9 @@
             <li><span>{{ t("panel.plans.databasesLabel") }}</span><b>{{ plan.maxDatabases || "∞" }}</b></li>
             <li><span>{{ t("panel.plans.mailboxesLabel") }}</span><b>{{ plan.maxMailboxes || "∞" }}</b></li>
             <li><span>{{ t("panel.plans.scheduledTasksLabel") }}</span><b>{{ plan.maxScheduledTasks || "∞" }}</b></li>
+            <li><span>{{ t("panel.plans.ftpLabel") }}</span><b>{{ plan.maxFtpUsers || "∞" }}</b></li>
+            <li><span>{{ t("panel.plans.trafficLabel") }}</span><b>{{ plan.maxTrafficGbPerMonth ? plan.maxTrafficGbPerMonth + " GB" : "∞" }}</b></li>
+            <li><span>{{ t("panel.plans.validityLabel") }}</span><b>{{ plan.validityDays ? plan.validityDays + " " + t("panel.plans.days") : "∞" }}</b></li>
           </ul>
         </article>
       </div>
@@ -31,9 +37,15 @@
       <p v-else-if="!plansLoaded" class="empty-state plans-empty" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
+      <!-- ÇEKİLEMEDİ ile YOK ayrı gösterilir; ikisini birleştirmek yöneticiye var olan planları
+           yok diye sunmak olurdu. -->
+      <p v-else-if="plansError" class="notice error plans-empty" role="alert">{{ plansError }}</p>
       <p v-else class="empty-state plans-empty">{{ t("panel.plans.empty") }}</p>
 
-      <form v-if="showPlanForm" class="plan-form-grid" @submit.prevent="addServicePlan">
+      <form v-if="showPlanForm" class="plan-form-grid" @submit.prevent="planiKaydet">
+        <!-- Plan ABONELIKLERE BAGLI: duzenlemek bagli butun musterilerin limitlerini degistirir.
+             Bunu sessizce yapmak, bir kotayi farkinda olmadan dusurmeye yol acardi. -->
+        <p v-if="duzenlenenPlanId" class="notice warn plan-form-hint">{{ t("panel.plans.editWarning") }}</p>
         <label class="stacked-field plan-name-cell">
           <span class="field-label">{{ t("panel.plans.name") }}</span>
           <input v-model.trim="planForm.name" :placeholder="t('panel.plans.namePlaceholder')" />
@@ -58,9 +70,25 @@
           <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
           <input v-model.number="planForm.maxScheduledTasks" type="number" min="0" />
         </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.plans.ftpLabel") }}</span>
+          <input v-model.number="planForm.maxFtpUsers" type="number" min="0" />
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.plans.trafficLabel") }}</span>
+          <input v-model.number="planForm.maxTrafficGbPerMonth" type="number" min="0" />
+          <small class="field-hint">{{ t("panel.plans.trafficHint") }}</small>
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.plans.validityLabel") }}</span>
+          <input v-model.number="planForm.validityDays" type="number" min="0" />
+          <small class="field-hint">{{ t("panel.plans.validityHint") }}</small>
+        </label>
         <p class="plan-form-hint">{{ t("panel.plans.formHint") }}</p>
         <div class="plan-form-actions">
-          <button type="submit" class="compact" :disabled="!planForm.name">{{ t("panel.plans.add") }}</button>
+          <button type="submit" class="compact" :disabled="!planForm.name || planKaydediliyor">
+            {{ duzenlenenPlanId ? t("panel.common.save") : t("panel.plans.add") }}
+          </button>
         </div>
       </form>
     </div>
@@ -186,14 +214,20 @@
           </small>
         </div>
         <span>{{ user.role }}</span>
-        <span :class="['status-pill', user.isActive ? 'ok' : 'warn']">
-          {{ user.isActive ? t("panel.status.active") : t("panel.status.inactive") }}
+        <!-- "Kilitli" rozeti DURUM hücresinin İÇİNDE. Önceden ayrı bir ızgara çocuğuydu ve
+             başlık 5 sütunluk olduğu için, bir kullanıcı kilitlendiğinde satır 6 hücreye çıkıp
+             "İşlem" düğmelerini alt satıra atıyordu — tam da acilen "Kilidi aç"a basılması
+             gereken satır bozuluyordu. -->
+        <span class="user-status-cell">
+          <span :class="['status-pill', user.isActive ? 'ok' : 'warn']">
+            {{ user.isActive ? t("panel.status.active") : t("panel.status.inactive") }}
+          </span>
+          <span v-if="user.lockedUntilUtc" class="status-pill danger" :title="t('panel.users.lockedHint')">
+            {{ t("panel.users.locked") }}
+          </span>
         </span>
         <span :class="['status-pill', user.isTwoFactorEnabled ? 'ok' : 'warn']">
           {{ user.isTwoFactorEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
-        </span>
-        <span v-if="user.lockedUntilUtc" class="status-pill danger" :title="t('panel.users.lockedHint')">
-          {{ t("panel.users.locked") }}
         </span>
         <span class="user-row-actions">
           <!-- Hatalı giriş kilidi: beklemeden aç (doğru parolayla da kalkar, bu kısayol). -->
@@ -219,6 +253,13 @@
           </button>
         </span>
       </div>
+    </div>
+
+    <!-- ABONELİK: plan bağı, kullanım ve askı denetimi seçili müşterinin yanında.
+         Kota/askı işlemleri kullanıcı düzenlemenin parçasıdır; ayrı bir ekrana göndermek
+         yöneticiyi iki yer arasında gezdirirdi. -->
+    <div v-if="selectedUserId && selectedUserIsCustomer" class="form-surface">
+      <SubscriptionCard :user-id="selectedUserId" manageable />
     </div>
 
     <form v-if="selectedUserId" class="form-surface form-grid user-edit-grid" @submit.prevent="saveUserChanges">
@@ -298,8 +339,9 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { getServicePlans, createServicePlan, deleteServicePlan, type ServicePlan } from "../api/servicePlans";
+import { getServicePlans, createServicePlan, updateServicePlan, deleteServicePlan, type ServicePlan } from "../api/servicePlans";
 import { extractApiDetails, extractApiMessage, useAuthStore, type ManagedUser } from "../stores/auth";
+import SubscriptionCard from "../components/SubscriptionCard.vue";
 import { useSitesStore } from "../stores/sites";
 
 // Bildirimler üst bandda (MainLayout > banner) gösterilsin diye kabuk bileşene iletilir.
@@ -329,6 +371,9 @@ const isAdmin = computed(() => authStore.session?.user?.role === "Administrator"
 const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
 
 const selectedUserId = ref("");
+const selectedUserIsCustomer = computed(() =>
+  authStore.users.some((user) => user.id === selectedUserId.value && user.role === "Customer")
+);
 const unlockingUserId = ref("");
 const showUserCreateForm = ref(false);
 const showPlanForm = ref(false);
@@ -376,7 +421,25 @@ const parentCandidates = computed(() => authStore.users.filter((user) => user.ro
 const servicePlans = ref<ServicePlan[]>([]);
 // Yüklenmemiş plan listesi "plan yok" olarak görünüyordu.
 const plansLoaded = ref(false);
-const planForm = reactive({ name: "", maxSites: 0, maxDiskMb: 0, maxDatabases: 0, maxMailboxes: 0, maxScheduledTasks: 0 });
+/** Plan listesi ÇEKİLEMEDİ. Boş listeyle karıştırılmamalı: biri "yok", diğeri "bilmiyoruz". */
+const plansError = ref("");
+// Formun BOS hali tek kaynakta: hem baslangic hem de sifirlama bunu kullanir. Iki ayri elle
+// yazilmis liste tutmak, birinin guncellenip digerinin unutulmasi demekti.
+const BOS_PLAN_FORMU = {
+  name: "",
+  maxSites: 0,
+  maxDiskMb: 0,
+  maxDatabases: 0,
+  maxMailboxes: 0,
+  maxScheduledTasks: 0,
+  maxFtpUsers: 0,
+  maxTrafficGbPerMonth: 0,
+  validityDays: 0
+};
+const planForm = reactive({ ...BOS_PLAN_FORMU });
+/** Dolu ise form YENI plan degil, bu planin duzenlemesidir. */
+const duzenlenenPlanId = ref<string | null>(null);
+const planKaydediliyor = ref(false);
 const createPlanId = ref("");
 
 onMounted(async () => {
@@ -396,29 +459,78 @@ onMounted(async () => {
 });
 
 async function loadServicePlans() {
-  servicePlans.value = await getServicePlans().catch(() => []);
-  plansLoaded.value = true;
+  // HATA YUTULMUYORDU: `.catch(() => [])` istek başarısız olduğunda BOŞ liste döndürüyor,
+  // ekran da "tanımlı servis planı yok" yazıyordu. Yani var olan planlar YOK gibi görünüyor,
+  // yönetici yenisini oluşturmaya kalkıyor ve aynı adla çakışma alıyordu. "Ölçemedik" ile
+  // "yok" ayrı şeyler; panelin geri kalanı bu ayrımı yapıyor, burası yapmıyordu.
+  try {
+    servicePlans.value = await getServicePlans();
+    plansError.value = "";
+  } catch (error) {
+    servicePlans.value = [];
+    plansError.value = resolveApiMessage(error);
+  } finally {
+    plansLoaded.value = true;
+  }
 }
 
 // Hata yakalama YOKTU: sunucu planı reddettiğinde (aynı ad, geçersiz kota) form sessizce
 // kapanıyor ve kullanıcı planın oluştuğunu sanıyordu. Form ancak istek BAŞARILI dönünce sıfırlanır.
-async function addServicePlan() {
+function planFormunuSifirla() {
+  Object.assign(planForm, BOS_PLAN_FORMU);
+  duzenlenenPlanId.value = null;
+}
+
+function planFormunuAcKapa() {
+  if (showPlanForm.value) {
+    showPlanForm.value = false;
+    // Kapatirken duzenleme kipinden de cikilir; aksi halde bir sonraki "Plan ekle" tiklamasi
+    // eski planin degerleriyle dolu bir form acar ve kullanici yeni plan olusturdugunu sanirdi.
+    planFormunuSifirla();
+    return;
+  }
+  planFormunuSifirla();
+  showPlanForm.value = true;
+}
+
+function planiDuzenle(plan: ServicePlan) {
+  duzenlenenPlanId.value = plan.id;
+  // Alanlar tek tek degil, planin KENDISINDEN kopyalaniyor: yeni bir limit eklendiginde
+  // burada da unutulup bos gitmesin.
+  Object.assign(planForm, BOS_PLAN_FORMU);
+  for (const alan of Object.keys(BOS_PLAN_FORMU) as (keyof typeof BOS_PLAN_FORMU)[]) {
+    const deger = (plan as unknown as Record<string, unknown>)[alan];
+    if (deger !== undefined && deger !== null) {
+      (planForm as Record<string, unknown>)[alan] = deger;
+    }
+  }
+  showPlanForm.value = true;
+}
+
+async function planiKaydet() {
   if (!planForm.name.trim()) {
     return;
   }
 
+  planKaydediliyor.value = true;
   try {
-    await createServicePlan({ name: planForm.name.trim(), maxSites: planForm.maxSites, maxDiskMb: planForm.maxDiskMb, maxDatabases: planForm.maxDatabases, maxMailboxes: planForm.maxMailboxes, maxScheduledTasks: planForm.maxScheduledTasks });
-    planForm.name = "";
-    planForm.maxSites = 0;
-    planForm.maxDiskMb = 0;
-    planForm.maxDatabases = 0;
-    planForm.maxMailboxes = 0;
-    planForm.maxScheduledTasks = 0;
+    // Alanlari ELLE saymak tam da su hataya yol acmisti: plana FTP hesabi, aylik trafik ve
+    // gecerlilik eklendi, bu liste guncellenmedi. Kullanici "50 GB" yaziyordu, istege 0 gidiyordu,
+    // API "basarili" donuyordu ve kota konuldugu sanilirken hicbir zaman uygulanmiyordu.
+    // Istek artik formun KENDISINDEN turuyor: yeni alan eklenir eklenmez gonderilir.
+    const istek = { ...planForm, name: planForm.name.trim() };
+    if (duzenlenenPlanId.value) {
+      await updateServicePlan(duzenlenenPlanId.value, istek);
+    } else {
+      await createServicePlan(istek);
+    }
+    planFormunuSifirla();
     showPlanForm.value = false;
     await loadServicePlans();
   } catch (error) {
     notify(resolveApiMessage(error), true);
+  } finally {
+    planKaydediliyor.value = false;
   }
 }
 
@@ -433,12 +545,19 @@ async function removeServicePlan(id: string) {
 
 function applyPlanToCreate() {
   const plan = servicePlans.value.find((item) => item.id === createPlanId.value);
-  if (plan) {
-    createUserForm.maxSites = plan.maxSites;
-    createUserForm.maxDiskMb = plan.maxDiskMb;
-    createUserForm.maxDatabases = plan.maxDatabases;
-    createUserForm.maxMailboxes = plan.maxMailboxes;
-    createUserForm.maxScheduledTasks = plan.maxScheduledTasks;
+  if (!plan) {
+    return;
+  }
+  // Alanlar ELLE sayılmıyor: plan ile formun ORTAK limit alanları taranıyor. Elle yazılan liste,
+  // plana yeni bir limit eklendiğinde sessizce eksik kalır ve kullanıcı planı seçtiği hâlde
+  // o limitin dolmadığını fark etmezdi.
+  for (const alan of Object.keys(plan) as (keyof typeof plan)[]) {
+    if (alan === "id" || alan === "name") {
+      continue;
+    }
+    if (alan in createUserForm && typeof plan[alan] === "number") {
+      (createUserForm as unknown as Record<string, number>)[alan] = plan[alan] as number;
+    }
   }
 }
 
@@ -473,7 +592,11 @@ async function impersonateUser(user: ManagedUser) {
     // Müşteri arayüzüne temiz geçiş için paneli yeniden yükle.
     window.location.reload();
   } catch (error) {
-    void error;
+    // Hata YUTULMAZ. Önceden sessizce geçiliyordu: istek 403/kilitli hesap/ağ hatasıyla dönünce
+    // reload çalışmıyor, ekranda tek satır uyarı çıkmıyordu — kullanıcı düğmeye basıp hiçbir şey
+    // olmadığını görüyor ve tekrar tekrar basıyordu. Bu dosyadaki diğer tüm işlemler zaten
+    // notify(...) kullanıyor; burası tek istisnaydı.
+    notify(resolveApiMessage(error), true);
   }
 }
 
@@ -600,6 +723,13 @@ function resolveApiMessage(error: unknown): string {
   grid-template-columns: minmax(220px, 1.5fr) 0.75fr 0.7fr 0.7fr auto;
 }
 
+.user-status-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
 .user-row-actions {
   display: inline-flex;
   gap: 6px;
@@ -620,8 +750,10 @@ function resolveApiMessage(error: unknown): string {
 }
 
 .plans-grid {
+  /* 190px, plan adı + "Sil" düğmesinin YAN YANA sığması için dardı: ad üç satıra bölünüyor ve
+     kart bozuk görünüyordu. 240px, tipik plan adlarını tek satırda tutuyor. */
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
 }
 
@@ -645,7 +777,23 @@ function resolveApiMessage(error: unknown): string {
 .plan-card-head .plan-name {
   font-size: 0.98rem;
   min-width: 0;
-  overflow-wrap: anywhere;
+  /* `anywhere` DEĞİL: "E2E Başlangıç" adını "Baslang" / "ic" diye kelime ortasından bölüyordu ve
+     plan adı bozuk görünüyordu. `break-word` yalnızca kelimenin kendisi satıra sığmadığında böler. */
+  overflow-wrap: break-word;
+}
+
+/* Düğmeler ne büyür ne küçülür: adın uzunluğu değiştikçe kartlar arasında yerleri kaymasın.
+   Bu ancak düğmeler DOĞAL genişlikteyken güvenlidir; görünümdeki `button { width: 100% }`
+   kuralıyla birlikteyken düğme kartı doldurup adı harf harf alt alta düşürüyordu. */
+.plan-card-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.plan-card-head button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .plan-limits {
@@ -686,7 +834,9 @@ function resolveApiMessage(error: unknown): string {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
-  align-items: end;
+  /* USTTEN hizala. "end" iken, altinda ipuc yazisi olan hucreler (aylik trafik, gecerlilik)
+     digerlerinden uzun oldugu icin girdileri yukari kaciyor ve etiketler kademeli duruyordu. */
+  align-items: start;
   padding-top: 14px;
   border-top: 1px solid var(--panel-border);
 }
@@ -725,7 +875,14 @@ function resolveApiMessage(error: unknown): string {
   align-items: end;
 }
 
-label {
+/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
+   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
+   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
+   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
+   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
+   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
+   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
+label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
   gap: 8px;
 }
@@ -745,16 +902,20 @@ label {
   margin-left: 8px;
 }
 
-input,
+/* FORM ALANLARI gerilir, DÜĞMELER gerilmez.
+   Bu kural düğmeleri de kapsıyordu ve görünümdeki HER düğmeyi tam genişlik yapıyordu: "Plan ekle"
+   ve "Kullanıcı oluştur" sayfayı baştan sona kaplıyor, plan kartlarındaki "Sil" düğmesi ise kartı
+   doldurup plan adını harf harf alt alta düşürüyordu. İstisna listesi (.row-button, .row-actions)
+   yalnız satır içi düğmeleri kurtarıyor, geri kalanı kurtarmıyordu.
+   Tam genişlik isteyen düğme bunu KENDİ sınıfıyla söyler (aşağıdaki .wide-button). */
+input:not([type="checkbox"]):not([type="radio"]),
 select,
-textarea,
-button {
+textarea {
   width: 100%;
 }
 
-.row-button,
-.row-actions button {
-  width: auto;
+.wide-button {
+  width: 100%;
 }
 
 .user-create-grid {

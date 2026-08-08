@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.database.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <form class="form-surface my-db-form" @submit.prevent="create">
       <div class="form-grid">

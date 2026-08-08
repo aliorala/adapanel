@@ -19,6 +19,13 @@ public sealed class WebStatisticsDto
 
     public long UniqueVisitors { get; set; }
 
+    /// <summary>
+    /// Ayrı ziyaretçi sayısı üst sınıra dayandı mı. true ise <see cref="UniqueVisitors"/> gerçek
+    /// sayının ALTINDADIR ve ekranda "+" ile gösterilir; doymuş bir sayacı kesin sayı gibi sunmak
+    /// yanlış bilgi olurdu.
+    /// </summary>
+    public bool UniqueVisitorsApproximate { get; set; }
+
     public long TotalBytes { get; set; }
 
     public long Status2xx { get; set; }

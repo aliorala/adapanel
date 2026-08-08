@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.health.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- DNS erişilebilirliği: servisin "Running" olması YETMEZ, 53 portunun genel IP'de
          dinlemesi gerekir. Bu kart o farkı gösterir ve tek tıkla onarır. -->

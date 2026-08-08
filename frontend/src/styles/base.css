@@ -321,7 +321,14 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.form-grid label,
+/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
+   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
+   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
+   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
+   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
+   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
+   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
+.form-grid label:not(:where(.check-field, .checkbox-field, .checkbox-row)),
 .stacked-field {
   display: grid;
   gap: 6px;
@@ -344,6 +351,19 @@ select {
   width: auto;
 }
 
+/* Ayni isi goren ikinci bir isim: iki bilesende BIREBIR ayni tanimla tekrarlanmisti.
+   Paylasilan tanim paylasilan yerde dursun ki yeni bir bilesen de bedavaya dogru calissin. */
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+}
+
+.checkbox-field input {
+  width: auto;
+}
+
 .data-table {
   min-width: 0;
   overflow-x: auto;
@@ -359,6 +379,18 @@ select {
   gap: 12px;
   align-items: center;
   border-bottom: 1px solid var(--panel-border);
+}
+
+/* SÜTUNLARIN BİRBİRİNE GİRMESİNİ ENGELLEYEN KURAL — panelin BÜTÜN tablolarını ilgilendirir.
+   Bir grid çocuğunun varsayılan `min-width` değeri `auto`dur: içeriğinden dar olamaz. Uzun bir
+   komut yolu, URL ya da veritabanı adı bu yüzden kendi sütununu `fr` payından geniş yapar,
+   yandaki sütunları ezer ve satır kayar. `.cell-main` bunu zaten kapatıyordu ama düz `<span>`
+   hücreleri kapatmıyordu — sorun da hep onlarda çıkıyordu.
+   `anywhere`: kırılacak boşluğu olmayan tek parça diziler (C:\uzun\yol\...) hücrenin dışına
+   taşmak yerine içeride kırılır. */
+.data-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .data-row:last-child {
@@ -466,7 +498,12 @@ select {
   word-break: break-word;
 }
 
-input,
+/* Onay kutusu ve radyo DISARIDA: bunlar metin alani degil. Kural onlari da kapsayinca
+   onay kutusu hucrenin tamamini kapliyor (olculdu: 516px), 34px'e uzuyor ve yanindaki
+   etiket alt satira dusuyordu. Alttaki `.check-field input` korumasi bunu duzeltmek icin
+   vardi ama gorunumlerin kendi kapsamli `input { width: 100% }` kurali AYNI ozgullukte
+   olup daha sonra yuklendigi icin korumayi eziyordu. Kaynagi duzeltmek gerekiyordu. */
+input:not([type="checkbox"]):not([type="radio"]),
 textarea,
 select {
   width: 100%;
@@ -597,5 +634,72 @@ button:disabled {
   .cell-muted,
   .meta {
     overflow-wrap: anywhere;
+  }
+}
+
+/* AYAR SATIRI — etiket | denetim | ipucu (3 sutun).
+   Bu duzen yalnizca SiteHostingView'in KAPSAMLI stilinde tanimliydi. Kapsamli CSS bilesenler
+   arasi gecmedigi icin ayni sinif adini kullanan SubscriptionCard hicbir stil almiyordu:
+   <label> varsayilan `inline` kaliyor, ardindan gelen alanin etiketi bir onceki ipucunun
+   yanina akiyor ve "...anida etkiler.Bitis tarihi" gibi birbirine girmis metin cikiyordu.
+   Paylasilan sinifin tanimi da paylasilan yerde durmali. */
+.setting-row {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 0.52fr) minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 0;
+  border-top: 1px solid var(--panel-border);
+}
+
+.setting-row:first-child {
+  border-top: 0;
+}
+
+.setting-row.align-start {
+  align-items: start;
+}
+
+.setting-row > span {
+  color: var(--text-soft);
+  font-size: 0.79rem;
+  font-weight: 850;
+}
+
+/* Dar ekranda tek sutuna dus: uc sutun 190+220px taban ile tasardi. */
+@media (max-width: 1080px) {
+  .setting-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* SAYFA DUZEYI BILDIRIM — islem sonucu.
+   Sorun suydu: mesaj sayfanin en ustunde, akis icinde ciziliyordu. Uzun bir sayfada asagida
+   calisan kullanici "Kaydet"e bastiginda sonucu HIC gormuyor, islemin gectigini bilmedigi
+   icin ikinci kez basiyordu (kayit ekranlarinda cift islem demek).
+   `sticky` ile mesaj, kapsayicisi ekranda oldugu surece ustte asili kalir. Akistan cikarilmadigi
+   icin -- yani `fixed` degil -- var olan yerlesimlerin hicbiri kaymaz; 43 gorunumun sablonuna
+   dokunmadan davranis duzelir.
+   Rolu (`alert` / `status`) sablonda hataya gore veriliyor: ekran okuyucu da duysun. */
+.page-notice {
+  /* `sticky` DENENDI ve YETMEDI (olculdu: 900px kaydirinca top -650'ye dustu).
+     Panel gorunumlerinin koku bir IZGARA; yapiskan bir ogenin kapsayici blogu yalnizca kendi
+     izgara satiri kadardir, dolayisiyla asagi kaydirildiginda tutunacak yeri kalmiyor.
+     Gercek cozum ekrana sabitlemek: mesaj, kullanici sayfanin neresinde olursa olsun gorunur. */
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  max-width: min(420px, calc(100vw - 32px));
+  margin: 0;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 32%);
+}
+
+/* Dar ekranda kose yerine tam genislik: 420px'lik bir kutu telefonda ekranin yarisini kaplardi. */
+@media (max-width: 520px) {
+  .page-notice {
+    right: 12px;
+    left: 12px;
+    max-width: none;
   }
 }

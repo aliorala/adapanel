@@ -1,7 +1,35 @@
 namespace AdaPanel.Core.Interfaces;
 
 /// <summary>Bir müşteri hesabının kaynak kapsamı: atanmış siteler + limitler.</summary>
-public sealed record CustomerScope(IReadOnlyList<string> Sites, int MaxSites, int MaxDiskMb, int MaxDatabases, int MaxMailboxes, int MaxScheduledTasks);
+/// <summary>
+/// Bir aboneliğin etkin kaynak kapsamı ve durumu.
+/// </summary>
+/// <remarks>
+/// Yeni alanlar SONA ve varsayılanlı eklendi: mevcut çağrı yerleri (testler dahil) olduğu gibi
+/// derlenmeye devam etsin diye. Limitler bir plana bağlıysa <see cref="PlanId"/> doludur ve
+/// değerler okuma anında PLANDAN çözülür — plan değişince bağlı bütün abonelikler değişir.
+/// </remarks>
+public sealed record CustomerScope(
+    IReadOnlyList<string> Sites,
+    int MaxSites,
+    int MaxDiskMb,
+    int MaxDatabases,
+    int MaxMailboxes,
+    int MaxScheduledTasks,
+    int MaxFtpUsers = 0,
+    int MaxTrafficGbPerMonth = 0,
+    string PlanId = "",
+    string PlanName = "",
+    DateTime? ExpiresAtUtc = null,
+    DateTime? SuspendedAtUtc = null,
+    string SuspendReason = "")
+{
+    /// <summary>Abonelik şu an askıda mı (askı, giriş engelinden AYRI bir durumdur).</summary>
+    public bool IsSuspended => SuspendedAtUtc is not null;
+
+    /// <summary>Süresi dolmuş mu (süresiz aboneliklerde daima false).</summary>
+    public bool IsExpired => ExpiresAtUtc is { } bitis && bitis <= DateTime.UtcNow;
+}
 
 /// <summary>
 /// Müşteri panelinin bölüm anahtarları (alt-kullanıcı izin matrisinin evreni).
@@ -83,4 +111,37 @@ public interface ICustomerScopeService
 
     /// <summary>Alt-kullanıcının izinli bölümleri; null = kısıtsız veya alt-kullanıcı değil.</summary>
     Task<IReadOnlyCollection<string>?> GetSubUserSectionsAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    // --- Abonelik iş modeli: plan bağı, süre, askıya alma ---
+
+    /// <summary>
+    /// Aboneliği bir servis planına BAĞLAR (planId boş ise bağı kaldırıp özel limitlere döner).
+    /// </summary>
+    /// <remarks>
+    /// Plan bağlıyken limitler okuma anında plandan çözülür; bu yüzden planı düzenlemek bağlı
+    /// bütün müşterileri anında etkiler. Planın <c>ValidityDays</c> değeri varsa bitiş tarihi de
+    /// buradan hesaplanır.
+    /// </remarks>
+    Task SetPlanAsync(Guid userId, string? planId, CancellationToken cancellationToken = default);
+
+    /// <summary>Aboneliğin bitiş tarihini elle ayarlar (null = süresiz).</summary>
+    Task SetExpiryAsync(Guid userId, DateTime? expiresAtUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aboneliği askıya alır. <paramref name="reason"/> sabit anahtardır: "traffic" | "expired" | "manual".
+    /// </summary>
+    /// <remarks>
+    /// Askı, giriş engelinden (IsActive) AYRI bir durumdur: müşteri panele girip faturasını görebilmeli
+    /// ama siteleri yayında olmamalıdır. Siteleri durdurmak çağıranın işidir (SuspensionEnforcer).
+    /// </remarks>
+    Task SuspendAsync(Guid userId, string reason, CancellationToken cancellationToken = default);
+
+    /// <summary>Askıyı kaldırır.</summary>
+    Task ResumeAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>Askıda olan bütün aboneliklerin kimlikleri.</summary>
+    Task<IReadOnlyCollection<Guid>> GetSuspendedUserIdsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Plana bağlı olsun olmasın, TOP-LEVEL bütün abonelik kimlikleri (alt-kullanıcılar hariç).</summary>
+    Task<IReadOnlyCollection<Guid>> GetSubscriptionUserIdsAsync(CancellationToken cancellationToken = default);
 }

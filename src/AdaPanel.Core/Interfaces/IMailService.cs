@@ -76,6 +76,26 @@ public interface IMailService
 
     Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Bir alan adının GİDEN posta limitini okur (0 = limitsiz).</summary>
+    Task<MailOutboundLimitDto> GetOutboundLimitAsync(string domain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir alan adına saatlik GİDEN posta limiti koyar; 0 verilirse limit kaldırılır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gerekli:</b> hacklenen ya da kötüye kullanan TEK bir müşteri, sunucunun IP'sini
+    /// kara listeye düşürür ve o sunucudaki HERKESİN postası teslim edilmez olur. Panelde giden
+    /// posta için hiçbir sınır yoktu.
+    /// </para>
+    /// <para>
+    /// Uygulama mail sunucusunun kendi hız sınırlayıcısıyla yapılır (<c>MtaOutboundThrottle</c>,
+    /// <c>senderDomain</c> anahtarı) — yani sınır gerçekten TESLİMATTA uygulanır, panel sonradan
+    /// sayıp uyarmakla yetinmez. Şema canlı sunucudan ölçülerek doğrulandı.
+    /// </para>
+    /// </remarks>
+    Task<MailOutboundLimitDto> SetOutboundLimitAsync(string domain, int messagesPerHour, CancellationToken cancellationToken = default);
+
     Task<MailWorkspaceDto> SetAccountQuotaAsync(SetMailAccountQuotaRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>Bir posta kutusunun otomatik yanıt (autoresponder) durumunu okur.</summary>

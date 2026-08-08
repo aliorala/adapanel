@@ -273,7 +273,14 @@ function resolveApiMessage(error: unknown): string {
   grid-column: 1 / -1;
 }
 
-label {
+/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
+   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
+   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
+   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
+   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
+   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
+   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
+label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
   gap: 8px;
 }

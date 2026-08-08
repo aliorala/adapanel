@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Interfaces;
 
 namespace AdaPanel.Api.Security;
@@ -95,6 +96,162 @@ public static class CustomerAccess
         {
             throw new AppException("auth.site_forbidden", 403, 403);
         }
+    }
+
+    /// <summary>
+    /// Bir kiracının, BAŞKA bir kiracıya ait alan adını sahiplenmesini engeller.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu kontrolün varlık sebebi mail: panelde bir kullanıcının hangi mail domainlerini
+    /// yönetebileceği <see cref="GetEffectiveMailDomainsAsync"/> tarafından <b>site
+    /// bağlamalarından</b> türetilir. Yani alan adı iddiası, mail sahipliğinin güven kökü. Bu
+    /// iddia doğrulanmadığında zincir şöyle işliyordu: kiracı kendi sitesine
+    /// <c>kurban.com</c> bağlaması ekler → izinli mail domainleri artık <c>kurban.com</c>'u da
+    /// içerir → <see cref="EnsureMailDomainAsync"/> geçer → kurbanın mail domainini yönetir,
+    /// hesap açar, postasını alır.
+    /// </para>
+    /// <para>
+    /// İkinci etki SSL/DNS: alan adı bu sunucuya çözülüyorsa HTTP-01 doğrulaması saldırganın
+    /// sitesinden yanıtlanır ve kurbanın alan adı için geçerli sertifika alınabilir; DNS bölgesi
+    /// sahiplenildiğinde ise kayıtlar tümüyle saldırganın denetimine geçer.
+    /// </para>
+    /// <para>
+    /// Aynı soru panelde ÜÇ yerde soruluyor: site oluşturma (host adı), bağlama ekleme ve DNS
+    /// bölge adı. Tek uygulama burada — ayrı ayrı yazılsaydı biri doğru diğeri eksik olurdu.
+    /// </para>
+    /// <para>
+    /// Yalnızca <b>başkasının sahip olduğu</b> adı reddeder; sahipsiz bir ad serbesttir. Bu
+    /// bilinçli: mevcut meşru akışlar (yeni alan adı bağlama) aynen çalışmaya devam eder.
+    /// </para>
+    /// </remarks>
+    public static async Task EnsureDomainClaimAsync(
+        ICustomerScopeService scopes,
+        IIisSiteService iisSiteService,
+        IMailService? mailService,
+        ClaimsPrincipal user,
+        string? domainName,
+        string? ownSiteName,
+        ILogger? logger,
+        CancellationToken cancellationToken)
+    {
+        if (!IsScoped(user))
+        {
+            return;
+        }
+
+        var iddia = DomainClaimForms(domainName);
+        if (iddia.Count == 0)
+        {
+            return;
+        }
+
+        var kapsamdakiSiteler = await GetEffectiveSitesAsync(scopes, user, cancellationToken);
+        if (kapsamdakiSiteler is null)
+        {
+            return;
+        }
+
+        // 1) Alan adı kapsam DIŞINDAKİ bir siteye zaten bağlı mı?
+        foreach (var site in await iisSiteService.GetSitesAsync(cancellationToken))
+        {
+            if (string.Equals(site.Name, ownSiteName, StringComparison.OrdinalIgnoreCase)
+                || kapsamdakiSiteler.Contains(site.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Sitenin sahiplendiği bütün adlar: site adının kendisi + bağlamalarındaki host adları.
+            var sitenin = DomainClaimForms(site.Name);
+            foreach (var binding in site.Bindings)
+            {
+                sitenin.UnionWith(DomainClaimForms(binding.HostName));
+            }
+
+            // TAM eşleşme.
+            if (sitenin.Overlaps(iddia))
+            {
+                throw new AppException("sites.host_name_taken", 403, 403);
+            }
+
+            // ALT ALAN ADI: iddia edilen ad, başkasının alan adının ALTINDA mı?
+            //
+            // Bu denetim eskiden yoktu ve yalnız tam eşleşmeye bakılıyordu: "kurban.com" başkasınınken
+            // "blog.kurban.com" serbestçe alınabiliyordu. Bedeli sadece içerik değildi — mail sahipliği
+            // site BAĞLAMALARINDAN türetildiği için alt alan adının postası da saldırgana geçiyordu,
+            // panel o ad için sertifika isteyebiliyordu ve `.kurban.com` kapsamlı çerezler açığa çıkıyordu.
+            //
+            // Yalnız bu YÖN kapatılır (başkasının alanının altına girmek). Tersi — birinin
+            // "blog.kurban.com"u varken "kurban.com" iddia etmek — serbest bırakıldı: yönetici bir
+            // kurumsal alan adını bilerek birden çok müşteriye bölmüş olabilir ve o yönü de kapatmak
+            // var olan kurulumları kırardı.
+            if (iddia.Any(istenen => sitenin.Any(sahip => DomainNames.IsSubdomainOf(istenen, sahip))))
+            {
+                throw new AppException("sites.host_name_taken", 403, 403);
+            }
+        }
+
+        // 2) Alan adı kapsam DIŞINDA var olan bir mail domaini mi?
+        var kendiDomainleri = await GetEffectiveMailDomainsAsync(scopes, user, cancellationToken);
+        if (kendiDomainleri is not null && kendiDomainleri.Any(iddia.Contains))
+        {
+            return; // zaten onun; yeniden sahiplenmesi meşru
+        }
+
+        if (mailService is null)
+        {
+            return;
+        }
+
+        MailWorkspaceDto? calismaAlani = null;
+        try
+        {
+            calismaAlani = await mailService.GetWorkspaceAsync(null, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // ÖLÇEMEDİK. Bunu "sorun yok" saymıyoruz, ama işlemi de kilitlemiyoruz: mail
+            // sunucusu okunamayan bir makinede genellikle hiç mail domaini YOKTUR, dolayısıyla
+            // bu yoldan bir sahiplenme de olamaz. Asıl kontrol (1) her hâlükârda çalıştı.
+            // Sessizce yutmuyoruz — sorun çıkarsa günlükte görünsün.
+            logger?.LogWarning(
+                exception,
+                "Alan adi sahiplik denetiminde mail domainleri okunamadi ({Domain}); yalniz site baglamalari denetlendi.",
+                domainName);
+        }
+
+        if (calismaAlani is { Installed: true }
+            && calismaAlani.Domains.Any(domain => DomainClaimForms(domain.Name).Overlaps(iddia)))
+        {
+            throw new AppException("sites.host_name_taken", 403, 403);
+        }
+    }
+
+    /// <summary>
+    /// Bir alan adının mail sahipliği bakımından karşılık geldiği adlar.
+    /// <para>
+    /// <see cref="GetAllowedMailDomainsAsync"/> ile <b>aynı kuralı</b> uygular: <c>www.</c> ön eki
+    /// olan bir bağlama, öneksiz domaini de sahiplenir. Kontrolün, koruduğu şeyle aynı kuralı
+    /// kullanması şart — aksi hâlde <c>www.kurban.com</c> bağlayıp <c>kurban.com</c> mailini almak
+    /// gibi bir aralık açık kalırdı.
+    /// </para>
+    /// </summary>
+    private static HashSet<string> DomainClaimForms(string? domainName)
+    {
+        var formlar = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ad = (domainName ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
+        if (ad.Length == 0)
+        {
+            return formlar;
+        }
+
+        formlar.Add(ad);
+        if (ad.StartsWith("www.", StringComparison.Ordinal))
+        {
+            formlar.Add(ad[4..]);
+        }
+
+        return formlar;
     }
 
     public static async Task EnsureMailDomainAsync(

@@ -23,7 +23,12 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
     }
 
     [HttpPost("letsencrypt")]
-    public async Task<ActionResult<ApiResponse<SslCertificateDto>>> IssueLetsEncryptAsync([FromBody] IssueLetsEncryptRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<SslCertificateDto>>> IssueLetsEncryptAsync(
+        [FromBody] IssueLetsEncryptRequest request,
+        [FromServices] IIisSiteService iisSiteService,
+        [FromServices] IMailService mailService,
+        [FromServices] ILogger<SslController> logger,
+        CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
 
@@ -33,15 +38,35 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
             throw new AdaPanel.Core.Common.AppException("ssl.wildcard_admin_only", 403, 403);
         }
 
+        // GÜVENLİK (çapraz-kiracı): host adı bağlama ucundakiyle AYNI denetimden geçmek zorunda.
+        //
+        // Buradaki akış sertifikayı almakla kalmıyor, o host adını siteye BAĞLAMA olarak da ekliyor
+        // (WinAcmeSslService.EnsureHttpsBindingAsync). Yani denetimsiz bırakılırsa, bağlama ucuna
+        // konan kısıt bu uçtan dolanılır ve mail sahipliği zinciri yeniden açılırdı. Üstelik ACME
+        // başarısız olsa bile akış self-signed sertifikaya düşüp bağlamayı YİNE ekliyor — yani
+        // "nasılsa doğrulama tutmaz" diye güvenmek yanlış olurdu.
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.HostName, request.SiteName, logger, cancellationToken);
+
         var certificate = await sslService.IssueLetsEncryptAsync(request, cancellationToken);
         await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
     }
 
     [HttpPost("import")]
-    public async Task<ActionResult<ApiResponse<SslCertificateDto>>> ImportAsync([FromBody] ImportCertificateRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<SslCertificateDto>>> ImportAsync(
+        [FromBody] ImportCertificateRequest request,
+        [FromServices] IIisSiteService iisSiteService,
+        [FromServices] IMailService mailService,
+        [FromServices] ILogger<SslController> logger,
+        CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+
+        // İçe aktarma da bağlama ekler (EnsureHttpsBindingAsync) — gerekçe yukarıda.
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.HostName, request.SiteName, logger, cancellationToken);
+
         var certificate = await sslService.ImportCertificateAsync(request, cancellationToken);
         await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));

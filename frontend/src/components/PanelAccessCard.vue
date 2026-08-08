@@ -18,7 +18,7 @@
          bir alan adı girdiğini altı ay sonra da hatırlamalı. -->
     <p class="notice warning">{{ t("panel.panelAccess.selfSignedWarning") }}</p>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- Veri gelmeden DURUM GÖSTERME: yarım veriyle "kurulu değil" demek yöneticiyi ikinci kez
          kurulum yapmaya iter (panelin yeni kuralı). -->

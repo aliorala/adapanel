@@ -20,7 +20,7 @@
       </div>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       {{ notice }}
     </p>
 
@@ -972,7 +972,14 @@ async function copyCredential(credential: { service: string; userName: string; p
   background: currentColor;
 }
 
-label {
+/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
+   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
+   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
+   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
+   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
+   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
+   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
+label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
   gap: 8px;
 }
@@ -988,9 +995,14 @@ label {
   margin: 0;
 }
 
-input,
-button {
+/* bkz. base.css: onay kutusu/radyo ve dugmeler gerilmez. */
+input:not([type="checkbox"]):not([type="radio"]) {
   width: 100%;
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+button {
   border-radius: var(--radius-sm);
   font: inherit;
 }

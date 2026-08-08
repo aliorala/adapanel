@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="loading" @click="refresh">{{ t("panel.docker.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div v-if="loading && !workspace" class="empty-state">{{ t("panel.common.loading") }}</div>
     <div v-else-if="workspace && !workspace.installed" class="empty-state">{{ t("panel.docker.notInstalled") }}</div>

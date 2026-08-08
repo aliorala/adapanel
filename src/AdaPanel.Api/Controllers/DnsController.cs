@@ -25,9 +25,20 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> UpdateZoneAsync(
         string siteName,
         [FromBody] UpdateDnsZoneRequest request,
+        [FromServices] IIisSiteService iisSiteService,
+        [FromServices] IMailService mailService,
+        [FromServices] ILogger<DnsController> logger,
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): site kapsamı doğrulanıyordu ama BÖLGE ADI serbestti
+        // (DnsService: state.ZoneName = request.ZoneName). Kendi sitesinin bölge adını
+        // "kurban.com" yapan bir kiracı, kurbanın alan adının DNS kayıtlarını yönetir hâle
+        // geliyordu — A kaydını istediği yere çevirmek, sertifika almak dahil.
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.ZoneName, siteName, logger, cancellationToken);
+
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.UpdateZoneAsync(siteName, request, cancellationToken), "dns.zone_saved"));
     }
 

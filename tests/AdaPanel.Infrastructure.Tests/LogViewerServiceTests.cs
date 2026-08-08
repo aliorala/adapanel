@@ -61,4 +61,55 @@ public sealed class LogViewerServiceTests
         public Task<SiteDto> RemoveBindingAsync(string siteName, RemoveSiteBindingRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<SiteDto>> ImportExistingSitesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
+
+    /// <summary>
+    /// Kuyruk okuması artık dosyanın SONUNDAN yapılıyor (gigabaytlık IIS günlüğü baştan sona
+    /// taranmasın diye). Bu okumanın kenar durumları sinsidir: pencereden küçük dosya, tam sınırda
+    /// dosya, boş dosya ve pencerenin ortasında kalan YARIM ilk satır.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 10)]      // boş dosya
+    [InlineData(1, 10)]      // tek satır
+    [InlineData(9, 10)]      // istenenden az satır
+    [InlineData(10, 10)]     // tam istenildiği kadar
+    [InlineData(5000, 10)]   // pencereyi aşan dosya → sondan okuma yolu
+    [InlineData(5000, 200)]
+    public async Task Kuyruk_okumasi_her_boyutta_son_satirlari_dogru_verir(int satirSayisi, int istenen)
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"adapanel-tail-{Guid.NewGuid():N}");
+        var logsDirectory = Path.Combine(dataRoot, "logs");
+        Directory.CreateDirectory(logsDirectory);
+
+        try
+        {
+            var logPath = Path.Combine(logsDirectory, "adapanel-tail.log");
+            // Satırları uzun tutuyoruz ki 5000 satır 2 MB'lık pencereyi gerçekten aşsın.
+            var dolgu = new string('x', 600);
+            await File.WriteAllLinesAsync(
+                logPath,
+                Enumerable.Range(1, satirSayisi).Select(index => $"line-{index}-{dolgu}"));
+
+            var service = new LogViewerService(
+                new UnusedIisSiteService(),
+                Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot }));
+
+            var result = await service.TailPanelLogAsync(istenen);
+
+            var beklenenAdet = Math.Min(satirSayisi, istenen);
+            Assert.Equal(beklenenAdet, result.Lines.Length);
+
+            if (beklenenAdet > 0)
+            {
+                // SON satır her zaman dosyanın son satırı olmalı.
+                Assert.StartsWith($"line-{satirSayisi}-", result.Lines.Last());
+                // İlk döndürülen satır YARIM OLMAMALI: pencere ortasından başlansa da atılır.
+                Assert.StartsWith($"line-{satirSayisi - beklenenAdet + 1}-", result.Lines.First());
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dataRoot, recursive: true); } catch { /* en iyi çaba */ }
+        }
+    }
+
 }

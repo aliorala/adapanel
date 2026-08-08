@@ -232,6 +232,20 @@ export async function openWebmail() {
   return response.data.data;
 }
 
+export type WebmailDiagnostics = {
+  healthy: boolean;
+  report: string;
+  url?: string | null;
+};
+
+/// Webmail tanılama: "neden açılmıyor"u tek raporda toplar (IIS binding, FastCGI eklentileri,
+/// Roundcube kök yanıtı, hata günlüğü). Uç ve çevirileri vardı ama arayüzde çağıran yoktu —
+/// yani webmail açılmadığında hazır olan tek teşhis aracına kullanıcı erişemiyordu.
+export async function diagnoseWebmail() {
+  const response = await apiClient.get<ApiEnvelope<WebmailDiagnostics>>("/mail/webmail/diagnose");
+  return response.data.data;
+}
+
 export async function getMailSpam() {
   const response = await apiClient.get<ApiEnvelope<MailSpamSettings>>("/mail/spam");
   return response.data.data;
@@ -239,5 +253,32 @@ export async function getMailSpam() {
 
 export async function updateMailSpam(settings: MailSpamSettings) {
   const response = await apiClient.put<ApiEnvelope<MailSpamSettings>>("/mail/spam", settings);
+  return response.data.data;
+}
+
+export type MailOutboundLimit = {
+  domain: string;
+  /** Saatte gönderilebilecek en fazla ileti; 0 = limitsiz. */
+  messagesPerHour: number;
+  /**
+   * Limit mail sunucusunda GERÇEKTEN kurulu mu. "0" iki ayrı şey olabilirdi — "limitsiz seçildi"
+   * ve "kurulamadı"; ikisini karıştırmak sınırsız sanılan bir sunucu demek olurdu.
+   */
+  configured: boolean;
+};
+
+export async function getOutboundLimit(domain: string) {
+  const response = await apiClient.get<ApiEnvelope<MailOutboundLimit>>("/mail/domains/outbound-limit", {
+    params: { domain }
+  });
+  return response.data.data;
+}
+
+/** Giden posta limiti (0 = kaldır). Yalnız yönetici. */
+export async function setOutboundLimit(domain: string, messagesPerHour: number) {
+  const response = await apiClient.put<ApiEnvelope<MailOutboundLimit>>("/mail/domains/outbound-limit", {
+    domain,
+    messagesPerHour
+  });
   return response.data.data;
 }

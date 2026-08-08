@@ -126,6 +126,27 @@ public sealed class AuthService(
             var recoveryUsed = !totpValid && await TryConsumeRecoveryCodeAsync(user.Id, request.TwoFactorCode, cancellationToken);
             if (!totpValid && !recoveryUsed)
             {
+                // İKİNCİ ADIM DA HESAP KİLİDİNİ BESLER.
+                //
+                // Burada yalnız IP sayacı besleniyordu; hesabın kendi sayacı hiç artmıyordu. Yani
+                // parolayı ele geçirmiş bir saldırgan için hesap başına deneme sınırı YOKTU: 6
+                // haneli TOTP ve kurtarma kodları sadece IP katmanına karşı korunuyordu. O katman
+                // da tek başına yeterli değil — firewall kuralı yazılamadığında engel gerçekleşmiyor
+                // (BruteForceProtectionService.ApplyFirewallBlockAsync false döner) ve saldırgan
+                // IP değiştirerek de dolaşabilir.
+                //
+                // Parola yolundaki kilitle AYNI eşik ve süre kullanılıyor; iki yol arasında farklı
+                // davranmak için bir sebep yok.
+                user.FailedLoginCount += 1;
+                user.UpdatedAtUtc = DateTime.UtcNow;
+                if (user.FailedLoginCount >= 5)
+                {
+                    user.LockedUntilUtc = DateTime.UtcNow.AddMinutes(runtimeOptions.LoginLockoutMinutes);
+                    user.FailedLoginCount = 0;
+                }
+
+                await dbContext.SaveChangesAsync(cancellationToken);
+
                 await auditService.WriteAsync("auth.2fa.failed", "auth", $"Invalid two-factor code provided for '{user.UserName}'.", user.Id, ipAddress, cancellationToken);
                 await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
                 throw new InvalidOperationException("auth.invalid_two_factor_code");
@@ -380,22 +401,36 @@ public sealed class AuthService(
             return false;
         }
 
-        var store = await fileStore.ReadAsync(RecoveryStorePath(userId), new RecoveryCodeStore(), cancellationToken);
-        if (store.Codes.Count == 0)
-        {
-            return false;
-        }
-
         var hash = HashRecoveryCode(normalized);
-        if (!store.Codes.Any(stored => string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase)))
-        {
-            return false;
-        }
 
-        // Tek kullanımlık: eşleşen kodu kaldır.
-        var remaining = store.Codes.Where(stored => !string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase)).ToList();
-        await fileStore.WriteAsync(RecoveryStorePath(userId), new RecoveryCodeStore { Codes = remaining }, cancellationToken);
-        return true;
+        // TEK KULLANIMLIK GÜVENCESİ KİLİT İSTER. Önceden oku → eşleştir → yaz sırası kilitsizdi:
+        // aynı kodu taşıyan iki eşzamanlı istek, ikisi de dosyayı yazılmadan önce okur, ikisi de
+        // kodu listede bulur ve İKİSİ DE true döner. Kurtarma kodu TOTP'yi tamamen atladığı için
+        // bu, iki adımlı doğrulamanın eşzamanlılık altında delinmesi demekti.
+        //
+        // UpdateAsync yol başına kilit tutar; okuma, karar ve yazma tek parçadır.
+        var tuketildi = false;
+        await fileStore.UpdateAsync(
+            RecoveryStorePath(userId),
+            new RecoveryCodeStore(),
+            mevcut =>
+            {
+                if (!mevcut.Codes.Any(stored => string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return mevcut;
+                }
+
+                tuketildi = true;
+                return new RecoveryCodeStore
+                {
+                    Codes = mevcut.Codes
+                        .Where(stored => !string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase))
+                        .ToList()
+                };
+            },
+            cancellationToken);
+
+        return tuketildi;
     }
 
     // ---- Parola sıfırlama ----
@@ -426,19 +461,30 @@ public sealed class AuthService(
         }
 
         var token = GenerateResetToken();
-        var store = await fileStore.ReadAsync(PasswordResetStorePath, new PasswordResetStore(), cancellationToken);
         var now = DateTime.UtcNow;
-        // Süresi dolmuş kayıtları ve aynı kullanıcının eski taleplerini temizle.
-        store.Entries = store.Entries
-            .Where(entry => entry.ExpiresUtc > now && entry.UserId != user.Id)
-            .ToList();
-        store.Entries.Add(new PasswordResetEntry
-        {
-            UserId = user.Id,
-            TokenHash = HashToken(token),
-            ExpiresUtc = now.Add(PasswordResetLifetime)
-        });
-        await fileStore.WriteAsync(PasswordResetStorePath, store, cancellationToken);
+
+        // TEK DOSYA, TÜM KULLANICILAR ORTAK. Kilitsiz oku-değiştir-yaz burada iki yönde de
+        // bozuluyordu: A talep ederken B sıfırlamasını tamamlarsa ya A'nın yeni token'ı kaybolur
+        // (link hiç çalışmaz) ya da B'nin TÜKETİLMİŞ token'ı geri dirilir ve süresi dolana kadar
+        // yeniden kullanılabilir kalır.
+        await fileStore.UpdateAsync(
+            PasswordResetStorePath,
+            new PasswordResetStore(),
+            mevcut =>
+            {
+                // Süresi dolmuş kayıtları ve aynı kullanıcının eski taleplerini temizle.
+                var kalan = mevcut.Entries
+                    .Where(entry => entry.ExpiresUtc > now && entry.UserId != user.Id)
+                    .ToList();
+                kalan.Add(new PasswordResetEntry
+                {
+                    UserId = user.Id,
+                    TokenHash = HashToken(token),
+                    ExpiresUtc = now.Add(PasswordResetLifetime)
+                });
+                return new PasswordResetStore { Entries = kalan };
+            },
+            cancellationToken);
 
         await TrySendResetEmailAsync(user, token, cancellationToken);
         await auditService.WriteAsync("auth.password_reset.requested", "auth", $"Password reset requested for '{user.UserName}'.", user.Id, null, cancellationToken);
@@ -452,11 +498,26 @@ public sealed class AuthService(
             throw new AppException("auth.reset_token_invalid", 400, 400);
         }
 
-        var store = await fileStore.ReadAsync(PasswordResetStorePath, new PasswordResetStore(), cancellationToken);
         var hash = HashToken(normalizedToken);
         var now = DateTime.UtcNow;
-        var entry = store.Entries.FirstOrDefault(item =>
-            string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase) && item.ExpiresUtc > now);
+
+        // Token'ı BULMAK ve TÜKETMEK tek parça olmalı; ayrı yapılırsa aynı link iki kez
+        // kullanılabilir. Kullanıcı bulunamazsa aşağıda hata atılır — token yine de tüketilmiştir,
+        // bu bilinçli: geçersiz bir token'ı ayakta tutmanın bir yararı yok.
+        PasswordResetEntry? entry = null;
+        await fileStore.UpdateAsync(
+            PasswordResetStorePath,
+            new PasswordResetStore(),
+            mevcut =>
+            {
+                entry = mevcut.Entries.FirstOrDefault(item =>
+                    string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase) && item.ExpiresUtc > now);
+
+                return entry is null
+                    ? mevcut
+                    : new PasswordResetStore { Entries = mevcut.Entries.Where(item => item.UserId != entry.UserId).ToList() };
+            },
+            cancellationToken);
 
         if (entry is null)
         {
@@ -471,9 +532,7 @@ public sealed class AuthService(
         user.LockedUntilUtc = null;
         user.UpdatedAtUtc = now;
 
-        // Token tek kullanımlık: kullanıcının tüm sıfırlama kayıtlarını sil.
-        store.Entries = store.Entries.Where(item => item.UserId != entry.UserId).ToList();
-        await fileStore.WriteAsync(PasswordResetStorePath, store, cancellationToken);
+        // Token yukarıda ATOMİK olarak tüketildi; burada ayrıca silmeye gerek yok.
         await dbContext.SaveChangesAsync(cancellationToken);
 
         // Parola KURTARILDI: hesabın ele geçirilmiş olabileceği varsayılır. Anahtarlar parolaya bağlı

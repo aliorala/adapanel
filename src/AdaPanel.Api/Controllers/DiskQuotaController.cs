@@ -34,4 +34,13 @@ public sealed class DiskQuotaController(IDiskQuotaService diskQuotaService) : Co
         var quota = await diskQuotaService.RemoveQuotaAsync(siteName, cancellationToken);
         return Ok(ApiResponse<SiteDiskQuotaDto>.Ok(quota, "quota.removed"));
     }
+
+    /// <summary>Disk kotası için gereken Windows rolünü (FSRM) kurar — gerekçe: IDiskQuotaService.</summary>
+    [HttpPost("install")]
+    public async Task<ActionResult<ApiResponse<SiteDiskQuotaDto>>> InstallFsrmAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var quota = await diskQuotaService.InstallFsrmAsync(siteName, cancellationToken);
+        return Ok(ApiResponse<SiteDiskQuotaDto>.Ok(quota, "quota.fsrm_installed"));
+    }
+
 }

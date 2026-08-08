@@ -127,18 +127,30 @@ public sealed partial class FtpService(
             CreatedAtUtc = DateTime.UtcNow
         };
 
-        var records = (await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken)).ToList();
-        var index = records.FindIndex(item => string.Equals(item.UserName, userName, StringComparison.OrdinalIgnoreCase));
-        if (index >= 0)
-        {
-            records[index] = record;
-        }
-        else
-        {
-            records.Add(record);
-        }
+        // KAYIT ATOMİK YAZILMALI. Kilitsiz oku-değiştir-yaz burada ÖKSÜZ WINDOWS HESABI bırakıyordu:
+        // gerçek hesap yukarıda `net user /add` ile çoktan açılıyor, panel kaydı ancak burada
+        // yazılıyor. Eşzamanlı bir silme işlemi bu yazımı ezerse hesap Windows'ta parolasıyla
+        // var olmaya devam eder ama panel onu HİÇ görmez: listelenemez, silinemez, denetlenemez —
+        // ve site klasöründeki ACL'i durur.
+        await fileStore.UpdateAsync(
+            StatePath,
+            Array.Empty<FtpUserState>(),
+            mevcut =>
+            {
+                var liste = mevcut.ToList();
+                var index = liste.FindIndex(item => string.Equals(item.UserName, userName, StringComparison.OrdinalIgnoreCase));
+                if (index >= 0)
+                {
+                    liste[index] = record;
+                }
+                else
+                {
+                    liste.Add(record);
+                }
 
-        await fileStore.WriteAsync(StatePath, records, cancellationToken);
+                return liste.ToArray();
+            },
+            cancellationToken);
         return new FtpUserDto
         {
             UserName = record.UserName,
@@ -201,11 +213,15 @@ public sealed partial class FtpService(
             }
         }
 
-        var records = (await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken))
-            .Where(item => !string.Equals(item.UserName, normalizedUserName, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        await fileStore.WriteAsync(StatePath, records, cancellationToken);
+        // Silme de atomik: aksi hâlde eşzamanlı bir oluşturma bu silmeyi ezip kaldırılmış hesabı
+        // panelde geri getirirdi (gerekçe: CreateFtpUserAsync).
+        await fileStore.UpdateAsync(
+            StatePath,
+            Array.Empty<FtpUserState>(),
+            mevcut => mevcut
+                .Where(item => !string.Equals(item.UserName, normalizedUserName, StringComparison.OrdinalIgnoreCase))
+                .ToArray(),
+            cancellationToken);
     }
 
     private async Task EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken)
@@ -366,7 +382,8 @@ public sealed partial class FtpService(
     /// dolayısıyla hatanın giderilmiş olduğu sürümlerde de doğru davranır.
     /// </para>
     /// </summary>
-    private const string RemoveUserRootSnippet = """
+    // internal: testler KOPYASINI degil BU dizeyi calistirir; kopya test etmek hicbir sey kanitlamaz.
+    internal const string RemoveUserRootSnippet = """
         if (Test-Path -LiteralPath $userRoot) {
           $adaOge = Get-Item -LiteralPath $userRoot -Force
           if ($adaOge.Attributes -band [IO.FileAttributes]::ReparsePoint) {

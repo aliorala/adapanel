@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- Ayarlar sunucudan gelmeden bütün otomasyon anahtarları varsayılan (kapalı) görünüyordu;
          yönetici "hiçbir otomasyon açık değil" sanıp yanlış karar veriyordu. -->

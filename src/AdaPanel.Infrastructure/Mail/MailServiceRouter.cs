@@ -80,6 +80,12 @@ public sealed class MailServiceRouter(
     public Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)
         => Active.SetDomainQuotaAsync(request, cancellationToken);
 
+    public Task<MailOutboundLimitDto> GetOutboundLimitAsync(string domain, CancellationToken cancellationToken = default)
+        => Active.GetOutboundLimitAsync(domain, cancellationToken);
+
+    public Task<MailOutboundLimitDto> SetOutboundLimitAsync(string domain, int messagesPerHour, CancellationToken cancellationToken = default)
+        => Active.SetOutboundLimitAsync(domain, messagesPerHour, cancellationToken);
+
     public Task<MailWorkspaceDto> SetAccountQuotaAsync(SetMailAccountQuotaRequest request, CancellationToken cancellationToken = default)
         => Active.SetAccountQuotaAsync(request, cancellationToken);
 

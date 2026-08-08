@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- (a) Bağlantı bilgisi: uç nokta adresi TARAYICIDAN türetilir; panel her sunucuda
          farklı alan adı/port ile çalıştığı için hiçbir adres koda gömülmez. -->

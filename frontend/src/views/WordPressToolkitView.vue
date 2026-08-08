@@ -9,7 +9,7 @@
       <button class="secondary compact" :disabled="loading || !siteName" @click="refresh">{{ t("panel.backup.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
     <p v-if="!siteName" class="empty-state">{{ t("panel.php.selectSite") }}</p>
     <p v-else-if="loading && !wp" class="empty-state">{{ t("panel.common.loading") }}</p>
 
@@ -41,6 +41,12 @@
         </button>
       </div>
       <p class="meta">{{ t("panel.wp.maintenanceHint") }}</p>
+
+      <!-- GÜNCELLEMELER en üstte: eklenti listesini okumadan önce görülmesi gereken şey,
+           hangilerinin eski kaldığıdır. Panel bugüne kadar WordPress'i yalnız OKUYORDU. -->
+      <div class="wp-updates-block">
+        <WordPressUpdates :site-name="wp.siteName" />
+      </div>
 
       <div class="wp-section-head">
         <h3>{{ t("panel.wp.plugins") }}</h3>
@@ -85,6 +91,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import WordPressUpdates from "../components/WordPressUpdates.vue";
 import { useSitesStore } from "../stores/sites";
 import { getWordPress, setWordPressMaintenance, type WordPressSite } from "../api/wordpress";
 import { extractApiMessage } from "../stores/auth";
@@ -138,6 +145,14 @@ async function toggleMaintenance() {
 </script>
 
 <style scoped>
+.wp-updates-block {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-0);
+}
+
 .wp-view {
   display: grid;
   gap: 16px;

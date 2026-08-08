@@ -506,7 +506,7 @@ public sealed class ComponentBootstrapper(
         }
     }
 
-    public async Task RemoveAsync(
+    public async Task<IReadOnlyCollection<string>> RemoveAsync(
         string componentId,
         Guid? actorUserId,
         string? ipAddress,
@@ -636,6 +636,9 @@ public sealed class ComponentBootstrapper(
                 actorUserId,
                 ipAddress,
                 cancellationToken);
+
+            // Temizlenemeyenler ÇAĞIRANA döner; kullanıcı "kaldırıldı" yerine neyin kaldığını görür.
+            return cleanupErrors;
         }
         catch (Exception exception)
         {

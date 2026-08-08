@@ -147,7 +147,7 @@ public sealed class UserManagementService(
         }
         else
         {
-            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
+            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, actorIsReseller ? actorUserId : null, cancellationToken);
             if (role == UserRole.Customer)
             {
                 await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
@@ -302,7 +302,7 @@ public sealed class UserManagementService(
         }
         else
         {
-            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, cancellationToken);
+            scope = await ApplyScopeAsync(user, request.AssignedSites, request.MaxSites, request.MaxDiskMb, request.MaxDatabases, request.MaxMailboxes, request.MaxScheduledTasks, actorIsReseller ? actorUserId : null, cancellationToken);
             if (user.Role == UserRole.Customer)
             {
                 await customerScopeService.SetOwnerAsync(user.Id, ownerId, cancellationToken);
@@ -329,7 +329,7 @@ public sealed class UserManagementService(
     }
 
     /// <summary>Customer rolünde kapsamı (siteler + limitler) kaydeder; diğer rollerde varsa temizler.</summary>
-    private async Task<CustomerScope> ApplyScopeAsync(PanelUser user, string[] assignedSites, int maxSites, int maxDiskMb, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken)
+    private async Task<CustomerScope> ApplyScopeAsync(PanelUser user, string[] assignedSites, int maxSites, int maxDiskMb, int maxDatabases, int maxMailboxes, int maxScheduledTasks, Guid? resellerActorId, CancellationToken cancellationToken)
     {
         if (user.Role == UserRole.Customer)
         {
@@ -337,6 +337,29 @@ public sealed class UserManagementService(
             if (maxSites > 0 && assignedSites.Length > maxSites)
             {
                 throw new InvalidOperationException("users.too_many_sites");
+            }
+
+            // GÜVENLİK (çapraz-kiracı): bayi YALNIZ kendi kapsamındaki siteleri atayabilir.
+            //
+            // Burada eskiden sadece SAYI denetleniyordu; sitelerin KİME ait olduğu hiç
+            // sorulmuyordu. Bu, bayi için tam bir kiracı kaçışıydı: müşterisine başkasının
+            // sitesini atayan bayi, o siteyi kendi etkin kapsamına da sokuyordu
+            // (GetResellerSitesAsync = kendi siteleri + sahip olduğu müşterilerin siteleri).
+            // Ardından EnsureSiteAsync geçiyor ve dosyalar, veritabanı, mail, hatta silme
+            // açılıyordu.
+            //
+            // Yönetici kısıtsızdır (mevcut davranış). Bayinin kendi sitelerini ve mevcut
+            // müşterilerinin sitelerini atamaya devam etmesi de bozulmaz: kontrol tam olarak
+            // o kümeye bakıyor.
+            if (resellerActorId is { } bayiId)
+            {
+                var izinli = await customerScopeService.GetResellerSitesAsync(bayiId, cancellationToken);
+                var yabanci = assignedSites.FirstOrDefault(site =>
+                    !izinli.Contains(site, StringComparer.OrdinalIgnoreCase));
+                if (yabanci is not null)
+                {
+                    throw new AppException("users.site_forbidden", 403, 403);
+                }
             }
 
             await customerScopeService.SetScopeAsync(user.Id, assignedSites, maxSites, maxDiskMb, cancellationToken);

@@ -139,4 +139,38 @@ public sealed class DiskQuotaService(IIisSiteService iisSiteService) : IDiskQuot
         root.TryGetProperty(name, out var value) && value.TryGetInt64(out var parsed) ? parsed : 0;
 
     private static string EscapePowerShellLiteral(string value) => value.Replace("'", "''");
+
+    /// <inheritdoc />
+    public async Task<SiteDiskQuotaDto> InstallFsrmAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        // Sunucu sürümünde rol, istemci sürümünde karşılığı YOK. İkisini ayırt edip net konuşuyoruz:
+        // "kurulamadı" demek, kullanıcıyı olmayan bir çözümü aramaya iter.
+        const string script = """
+            if (-not (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue)) {
+              Write-Error 'FSRM yalnizca Windows Server surumlerinde bulunur.'
+              exit 2
+            }
+            Install-WindowsFeature -Name FS-Resource-Manager -IncludeManagementTools -ErrorAction Stop | Out-Null
+            if (-not (Get-Command Get-FsrmQuota -ErrorAction SilentlyContinue)) {
+              Write-Error 'FSRM kuruldu ama komutlari yuklenmedi; sunucuyu yeniden baslatmak gerekebilir.'
+              exit 3
+            }
+            """;
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            // ProcessRunner istisna FIRLATMAZ, sonuç döndürür — çıkış kodu okunmazsa hata sessizce
+            // "başarı" olurdu. (Bu depoda tam olarak o hata bir kez yaşandı.)
+            throw new AppException(
+                "quota.fsrm_install_failed",
+                500,
+                500,
+                string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
+        }
+
+        // Kurulum sonrası durumu TAZE oku: kullanıcı kartın gerçekten açıldığını görsün.
+        return await GetQuotaAsync(siteName, cancellationToken);
+    }
+
 }

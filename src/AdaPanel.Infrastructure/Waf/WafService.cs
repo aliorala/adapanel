@@ -11,6 +11,7 @@ namespace AdaPanel.Infrastructure.Waf;
 
 public sealed class WafService(
     IIisSiteService iisSiteService,
+    IConcurrencyLock concurrencyLock,
     JsonFileStore fileStore) : IWafService
 {
     private const string StatePath = "config/waf.json";
@@ -55,17 +56,25 @@ public sealed class WafService(
 
         try
         {
-            using var serverManager = CreateServerManager();
-            var sites = GetPropertyObject(serverManager, "Sites");
-            var siteObject = FindByName(sites, site.Name) ?? throw new AppException("sites.site_not_found", 404, 404);
-            var applications = GetPropertyObject(siteObject, "Applications");
-            var rootApplication = Enumerate(applications).First(item => string.Equals(GetStringProperty(item, "Path"), "/", StringComparison.OrdinalIgnoreCase));
-            var pools = GetPropertyObject(serverManager, "ApplicationPools");
-            var pool = FindByName(pools, targetPool) ?? InvokeMethod(pools, "Add", targetPool);
-            SetPropertyValue(pool, "ManagedRuntimeVersion", string.Empty);
-            SetPropertyValue(pool, "AutoStart", true);
-            SetPropertyValue(rootApplication, "ApplicationPoolName", targetPool);
-            InvokeMethod(serverManager, "CommitChanges");
+            // IIS KUYRUĞUNA GİRİYOR. applicationHost.config TEK bir dosyadır; iki ServerManager
+            // aynı anda oku-değiştir-yaz yaparsa biri sessizce kaybolur ya da CommitChanges
+            // paylaşım ihlaliyle düşer. Panelin diğer IIS yazıcıları (site, PHP, ASP.NET, reverse
+            // proxy, nginx, app runtime) zaten bu kuyruktaydı — bu sınıf dışarıda kalmıştı.
+            await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Iis, () =>
+            {
+                using var serverManager = CreateServerManager();
+                var sites = GetPropertyObject(serverManager, "Sites");
+                var siteObject = FindByName(sites, site.Name) ?? throw new AppException("sites.site_not_found", 404, 404);
+                var applications = GetPropertyObject(siteObject, "Applications");
+                var rootApplication = Enumerate(applications).First(item => string.Equals(GetStringProperty(item, "Path"), "/", StringComparison.OrdinalIgnoreCase));
+                var pools = GetPropertyObject(serverManager, "ApplicationPools");
+                var pool = FindByName(pools, targetPool) ?? InvokeMethod(pools, "Add", targetPool);
+                SetPropertyValue(pool, "ManagedRuntimeVersion", string.Empty);
+                SetPropertyValue(pool, "AutoStart", true);
+                SetPropertyValue(rootApplication, "ApplicationPoolName", targetPool);
+                InvokeMethod(serverManager, "CommitChanges");
+                return Task.CompletedTask;
+            }, cancellationToken);
         }
         catch (AppException)
         {

@@ -149,5 +149,15 @@ public sealed class WebAdministrationSiteServiceTests
         public Task<T> RunExclusiveAsync<T>(
             Func<Task<T>> operation,
             CancellationToken cancellationToken = default) => operation();
+
+        public Task RunExclusiveAsync(
+            string key,
+            Func<Task> operation,
+            CancellationToken cancellationToken = default) => operation();
+
+        public Task<T> RunExclusiveAsync<T>(
+            string key,
+            Func<Task<T>> operation,
+            CancellationToken cancellationToken = default) => operation();
     }
 }

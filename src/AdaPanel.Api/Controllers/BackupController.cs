@@ -130,8 +130,17 @@ public sealed class BackupController(
     {
         await EnsureBackupOwnershipAsync(request.BackupId, cancellationToken);
 
-        // Customer hedef yol seçemez: her zaman sitenin orijinal konumuna yüklenir.
-        if (CustomerAccess.IsCustomer(User))
+        // GÜVENLİK (çapraz-kiracı): yönetici DIŞINDA kimse hedef yol seçemez; içerik her zaman
+        // sitenin kendi konumuna yüklenir.
+        //
+        // Burada önceden yalnız `IsCustomer` bakılıyordu, yani BAYİ dışarıda kalıyordu. Oysa bayi
+        // de bir kiracıdır: serbest hedef yolla bu uç, yedeğin içindeki dosyaları diskte istenen
+        // yere yazan bir araca dönüşüyordu — panel LocalSystem olarak çalıştığı için başka
+        // müşterilerin site klasörleri de, Windows'un kendi klasörleri de dahil.
+        //
+        // Tam geri yükleme (`POST restore`) zaten yönetici-özel; kapsamlı kullanıcıya açık olan
+        // tek yol burasıydı.
+        if (CustomerAccess.IsScoped(User))
         {
             request.TargetPath = string.Empty;
         }

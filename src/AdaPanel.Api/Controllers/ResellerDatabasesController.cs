@@ -21,7 +21,8 @@ public sealed class ResellerDatabasesController(
     IDatabaseService databaseService,
     IDatabaseOwnershipService dbOwnership,
     ICustomerScopeService customerScopes,
-    IAuditService auditService) : ControllerBase
+    IAuditService auditService,
+    ILogger<ResellerDatabasesController> logger) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<OwnedDatabaseDto>>>> GetMineAsync(CancellationToken cancellationToken)
@@ -55,8 +56,41 @@ public sealed class ResellerDatabasesController(
             }
         }
 
+        // GÜVENLİK (çapraz-kiracı): istek bir SİTE adı taşıyabiliyor ve servis onu doğrudan
+        // siteDatabaseLinks.LinkAsync'e veriyor. Denetlenmezse kiracı kendi veritabanını
+        // BAŞKASININ sitesine bağlayabilirdi — o site silindiğinde cascade veritabanını DROP eder.
+        if (!string.IsNullOrWhiteSpace(request.SiteName))
+        {
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+        }
+
+        // Veritabanı ile sahiplik kaydı TEK PARÇA olmalı. Önceden veritabanı yaratılıyor, sonra
+        // kayıt yazılıyordu; arada bir hata (ör. kullanıcı adı zaten var → 409) sahiplik kaydını
+        // hiç yazdırmıyor ve sunucuda YETİM bir veritabanı bırakıyordu: kiracı onu listede
+        // göremiyor, kotasına sayılmıyor, silmeye kalkınca "size ait değil" hatası alıyordu.
+        // Artık kısmi başarı temizleniyor.
         await databaseService.CreateDatabaseAsync(request, cancellationToken);
-        await dbOwnership.RecordAsync(request.Engine, request.Name, subscriptionId, null, cancellationToken);
+        try
+        {
+            await dbOwnership.RecordAsync(request.Engine, request.Name, subscriptionId, null, cancellationToken);
+        }
+        catch
+        {
+            try
+            {
+                await databaseService.DeleteDatabaseAsync(request.Engine, request.Name, CancellationToken.None);
+            }
+            catch (Exception cleanupException)
+            {
+                logger.LogError(
+                    cleanupException,
+                    "Sahiplik kaydı yazılamadı ve veritabanı geri alınamadı; YETİM kalmış olabilir: [{Engine}] {Name}",
+                    request.Engine,
+                    request.Name);
+            }
+
+            throw;
+        }
         await auditService.WriteAsync(
             "database.create.completed",
             "database",

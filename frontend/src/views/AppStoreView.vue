@@ -15,7 +15,7 @@
       </div>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       {{ notice }}
     </p>
 

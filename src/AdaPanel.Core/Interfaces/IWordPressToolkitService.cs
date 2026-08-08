@@ -39,4 +39,17 @@ public interface IWordPressToolkitService
     /// (ör. staging→canlı). Hedefin DB bağlantısı korunur, URL arama-değiştir yapılır. ÖNCE hedefin yedeği alınır.
     /// </summary>
     Task<WordPressCopyDataResultDto> CopyDataAsync(string sourceSiteName, CopyWordPressDataRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sitedeki güncellenebilir öğeleri (çekirdek + eklenti + tema) listeler.
+    /// </summary>
+    /// <remarks>
+    /// Panel bugüne kadar WordPress'i yalnız OKUYORDU; güncelleme yönetimi yoktu. Oysa güncel
+    /// olmayan eklenti, barındırmada sitelerin ele geçirilme sebeplerinin başında gelir.
+    /// </remarks>
+    Task<WordPressUpdatesDto> GetUpdatesAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>Seçilen öğeleri günceller; her biri için ayrı sonuç döner.</summary>
+    Task<WordPressUpdateResultDto> ApplyUpdatesAsync(string siteName, WordPressUpdateRequest request, CancellationToken cancellationToken = default);
+
 }

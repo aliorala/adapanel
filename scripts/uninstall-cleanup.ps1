@@ -234,6 +234,58 @@ foreach ($certificatePath in @("Cert:\LocalMachine\My", "Cert:\LocalMachine\Root
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
+# FTP KULLANICILARI GERCEK WINDOWS HESABIDIR -- panel kaldirilinca onlar da gitmeli.
+#
+# Panel her FTP hesabi icin "net user <ad> <parola> /add" ile bir YEREL WINDOWS HESABI acar.
+# Kaldirma betigi servisleri, gorevleri, IIS sitelerini, firewall kurallarini ve sertifikalari
+# temizliyordu ama bu hesaplara hic dokunmuyordu: panel kaldirildiktan sonra sunucuda, parolalari
+# musterilerde olan N adet yerel hesap kaliyordu. Bu bir guvenlik artigidir.
+#
+# HESAPLAR TAHMINLE BULUNMAZ. Ad desenine bakip silmek (ornegin "ftp*") panelin acmadigi bir
+# hesabi silebilirdi ve yerel hesap silmek geri alinamaz. Bu yuzden yalnizca PANELIN KENDI
+# KAYDINDA (configtp-users.json) yazan adlar silinir.
+function Remove-AdaFtpAccounts {
+    param([Parameter(Mandatory = $true)][string] $DataRoot)
+
+    $kayit = Join-Path $DataRoot "configtp-users.json"
+    if (-not (Test-Path -LiteralPath $kayit)) {
+        Write-Host "FTP kullanici kaydi yok; silinecek hesap aranmadi."
+        return
+    }
+
+    try {
+        $kullanicilar = Get-Content -LiteralPath $kayit -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        Write-Warning "FTP kullanici kaydi okunamadi: $($_.Exception.Message)"
+        return
+    }
+
+    if (-not $kullanicilar) { return }
+
+    foreach ($kullanici in @($kullanicilar)) {
+        $ad = "$($kullanici.UserName)".Trim()
+        if ([string]::IsNullOrWhiteSpace($ad)) { continue }
+
+        # Hesap gercekten var mi (elle silinmis olabilir).
+        $var = $false
+        try { $var = [bool](Get-LocalUser -Name $ad -ErrorAction Stop) } catch { $var = $false }
+        if (-not $var) {
+            Write-Host "FTP hesabi zaten yok: $ad"
+            continue
+        }
+
+        try {
+            Remove-LocalUser -Name $ad -ErrorAction Stop
+            Write-Host "FTP hesabi silindi: $ad"
+        } catch {
+            Write-Warning "FTP hesabi silinemedi ($ad): $($_.Exception.Message)"
+        }
+    }
+}
+
+# Hesaplar veri koku SILINMEDEN once temizlenir: kayit dosyasi veri kokunun altinda duruyor.
+Remove-AdaFtpAccounts -DataRoot $DataRoot
+
 # KLASOR BAGLANTILARI (junction) SILMEDEN ONCE KALDIRILIR.
 #
 # NEDEN: veri kokunun altinda FTP kullanicilari icin junction'lar durur

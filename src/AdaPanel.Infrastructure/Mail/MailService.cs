@@ -2108,4 +2108,138 @@ public sealed class MailService(
     {
         public string AdminPasswordProtected { get; set; } = string.Empty;
     }
+
+    // --- Giden posta limiti (MtaOutboundThrottle) ---
+
+    /// <summary>
+    /// Panelin kurduğu throttle kurallarının açıklamasındaki ÖNEK.
+    /// </summary>
+    /// <remarks>
+    /// Kendi kuralımızı bu önekle tanıyoruz: yöneticinin elle eklediği kurallara asla dokunmayız
+    /// ve güncellerken kendi kuralımızı bulup değiştiririz (her seferinde yenisini eklemek yerine).
+    /// </remarks>
+    private const string OutboundThrottlePrefix = "AdaPanel outbound limit: ";
+
+    /// <inheritdoc />
+    public async Task<MailOutboundLimitDto> GetOutboundLimitAsync(string domain, CancellationToken cancellationToken = default)
+    {
+        var normalized = (domain ?? string.Empty).Trim().ToLowerInvariant();
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+
+        var kural = await BulOutboundThrottleAsync(cli, env, normalized, cancellationToken);
+        return new MailOutboundLimitDto
+        {
+            Domain = normalized,
+            MessagesPerHour = kural?.Count ?? 0,
+            Configured = kural is not null
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<MailOutboundLimitDto> SetOutboundLimitAsync(string domain, int messagesPerHour, CancellationToken cancellationToken = default)
+    {
+        var normalized = (domain ?? string.Empty).Trim().ToLowerInvariant();
+        if (normalized.Length == 0)
+        {
+            throw new AppException("mail.domain_required", 400, 400);
+        }
+
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var mevcut = await BulOutboundThrottleAsync(cli, env, normalized, cancellationToken);
+
+        // 0 = limiti KALDIR. Kuralı "count=0" ile bırakmak, sıfır ileti gönderilebilir anlamına
+        // gelirdi — yani limiti kaldırmak isterken alan adını tamamen susturmak.
+        if (messagesPerHour <= 0)
+        {
+            if (mevcut is not null)
+            {
+                var sil = await RunCliAsync(cli, $"delete MtaOutboundThrottle {Arg(mevcut.Value.Id)}", env, cancellationToken);
+                if (!sil.Success)
+                {
+                    throw new AppException("mail.outbound_limit_failed", 500, 500, sil.StandardError);
+                }
+            }
+
+            return new MailOutboundLimitDto { Domain = normalized, MessagesPerHour = 0, Configured = false };
+        }
+
+        // Şema canlı sunucudan ÖLÇÜLEREK doğrulandı:
+        //   key   → harita: {"senderDomain": true}   (liste DEĞİL)
+        //   rate  → {"count": N, "period": <milisaniye>}
+        //   match → {"match": {}, "else": "<ifade>"}
+        // Tahminle yazılsaydı sunucu alanı sessizce yok sayar ve limit hiç kurulmamış olurdu;
+        // bu depoda kota alanında tam olarak öyle bir hata yaşandı.
+        var aciklama = OutboundThrottlePrefix + normalized;
+        var alanlar =
+            $"--field {Arg("description=" + aciklama)} " +
+            "--field enable=true " +
+            $"--field {CliJsonArg("key={\"senderDomain\":true}")} " +
+            $"--field {CliJsonArg($"rate={{\"count\":{messagesPerHour},\"period\":3600000}}")} " +
+            $"--field {CliJsonArg($"match={{\"match\":{{}},\"else\":\"sender_domain = '{normalized.Replace("'", "''")}'\"}}")}";
+
+        var komut = mevcut is null
+            ? $"create MtaOutboundThrottle {alanlar}"
+            : $"update MtaOutboundThrottle {Arg(mevcut.Value.Id)} {alanlar}";
+
+        var sonuc = await RunCliAsync(cli, komut, env, cancellationToken);
+        if (!sonuc.Success)
+        {
+            throw new AppException("mail.outbound_limit_failed", 500, 500, sonuc.StandardError);
+        }
+
+        // DOĞRULA: komut başarılı çıksa da alan sunucuda tutulmamış olabilir. Kuralı geri okuyup
+        // istenen değeri gerçekten görüyor muyuz diye bakıyoruz — "uyguladım" demeden önce.
+        var dogrulama = await BulOutboundThrottleAsync(cli, env, normalized, cancellationToken);
+        if (dogrulama is null || dogrulama.Value.Count != messagesPerHour)
+        {
+            throw new AppException("mail.outbound_limit_unverified", 500, 500);
+        }
+
+        return new MailOutboundLimitDto { Domain = normalized, MessagesPerHour = messagesPerHour, Configured = true };
+    }
+
+    /// <summary>Bu alan adına ait, PANELİN kurduğu throttle kuralını bulur.</summary>
+    private async Task<(string Id, int Count)?> BulOutboundThrottleAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        string domain,
+        CancellationToken cancellationToken)
+    {
+        var liste = await RunCliAsync(cli, "query MtaOutboundThrottle --json", env, cancellationToken);
+        if (!liste.Success)
+        {
+            return null;
+        }
+
+        var aranan = OutboundThrottlePrefix + domain;
+        foreach (var satir in ParseItems(liste.StandardOutput))
+        {
+            if (!string.Equals(GetField(satir, "description")?.Trim(), aranan, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var id = GetField(satir, "id");
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                continue;
+            }
+
+            // Liste yanıtı yalnız özet döner; sayıyı öğrenmek için nesnenin tamamı okunur.
+            var detay = await GetObjectAsync(cli, "MtaOutboundThrottle", id, env, cancellationToken);
+            var count = 0;
+            if (detay is { } nesne &&
+                nesne.TryGetProperty("rate", out var rate) &&
+                rate.TryGetProperty("count", out var sayi) &&
+                sayi.TryGetInt32(out var deger))
+            {
+                count = deger;
+            }
+
+            return (id, count);
+        }
+
+        return null;
+    }
+
 }

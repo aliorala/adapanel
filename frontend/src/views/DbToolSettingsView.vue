@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.database.toolSettings.refresh") }}</button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div v-if="loaded" class="form-surface">
       <div class="form-grid">
@@ -53,10 +53,13 @@
           <h4>{{ t("panel.database.remote.title") }}</h4>
           <p class="meta">{{ t("panel.database.remote.subtitle") }}</p>
         </div>
-        <span :class="['status-pill', remote.enabled ? 'ok' : '']">
+        <!-- Okunamadıysa DURUM ROZETİ GÖSTERİLMEZ: "Kapalı" demek, ölçemediğimizi ölçtük gibi
+             sunmaktı ve kullanıcı açık olan bir erişimi kapalı sanıyordu. -->
+        <span v-if="!remoteError" :class="['status-pill', remote.enabled ? 'ok' : '']">
           {{ remote.enabled ? t("panel.database.remote.on") : t("panel.database.remote.off") }}
         </span>
       </div>
+      <p v-if="remoteError" class="notice error" role="alert">{{ remoteError }}</p>
       <div class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.database.remote.ip") }}</span>
@@ -163,15 +166,22 @@ async function enableRedis() {
   }
 }
 
+const remoteError = ref("");
+
 async function loadRemote() {
+  remoteError.value = "";
   try {
     const data = await getRemoteDbAccess();
     remote.enabled = data.enabled;
     remote.allowedIp = data.allowedIp;
     remote.serverHost = data.serverHost;
     remote.port = data.port;
-  } catch {
-    // sessiz geç; kullanıcı yine de aç/kapat yapabilir
+  } catch (error) {
+    // ÖLÇEMEDİK ≠ KAPALI. Sessizce geçilince `remote` başlangıç değerlerinde kalıyor
+    // (enabled: false) ve rozet "Kapalı" diyordu — uzak erişim sunucuda AÇIK olsa bile.
+    // Kullanıcı güvenlik durumunu yanlış okuyor, "Etkinleştir"e basıp izin listesini boş IP ile
+    // ezebiliyordu.
+    remoteError.value = resolveApiMessage(error);
   }
 }
 
@@ -209,7 +219,14 @@ function showNotice(message: string, isError: boolean) {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
-label { display: grid; gap: 6px; }
+/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
+   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
+   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
+   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
+   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
+   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
+   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
+label:not(:where(.check-field, .checkbox-field, .checkbox-row)) { display: grid; gap: 6px; }
 .row-actions { margin-top: 14px; }
 .row-actions button { width: auto; }
 .hint { color: var(--text-muted, #94a3b8); font-size: 13px; margin-top: 10px; }

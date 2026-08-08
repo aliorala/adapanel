@@ -100,7 +100,27 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
 
             Write-UpdateState 'starting' '' $null
 
+            # KURULUMDAN ONCEKI SURUM. Basari, sonunda buna gore yargilanir: asil soru "servis
+            # kac saniyede kalkti" degil, "panel dosyasi yenilendi mi"dir.
+            $serviceImagePath = ''
+            $versionBefore = ''
+            try {
+              $kayit = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" -Name ImagePath -ErrorAction Stop
+              if ($kayit.ImagePath -match '^\s*"([^"]+)"') { $serviceImagePath = $Matches[1] }
+              elseif ($kayit.ImagePath -match '^\s*(\S+)') { $serviceImagePath = $Matches[1] }
+              if ($serviceImagePath -and (Test-Path -LiteralPath $serviceImagePath)) {
+                $versionBefore = (Get-Item -LiteralPath $serviceImagePath).VersionInfo.ProductVersion
+              }
+            }
+            catch { }
+            Write-UpdateLog "Version before install: '$versionBefore' ($serviceImagePath)"
+
             $failed = $false
+            # SEBEP KORUNUR. Onceden son satir 'Kurulum tamamlanamadi.' yazip gercek hatayi ve
+            # kurulum cikis kodunu EZIYORDU; panel kullaniciya yalnizca genel bir cumle
+            # gosterebiliyor, sunucuya baglanmadan sebebi ogrenmek mumkun olmuyordu.
+            $failReason = ''
+            $failExitCode = $null
             try {
               Start-Sleep -Seconds 5
               $actualHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256 -ErrorAction Stop).Hash
@@ -147,48 +167,93 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
             }
             catch {
               $failed = $true
+              $failReason = $_.Exception.Message
+              if ($null -ne $process -and $null -ne $process.ExitCode) { $failExitCode = $process.ExitCode }
               Write-UpdateLog $_.Exception.ToString()
-              Write-UpdateState 'failed' $_.Exception.Message $null
+              Write-UpdateState 'failed' $failReason $failExitCode
             }
 
-            # GUVENCE: installer hangi adimda biterse bitsin panel servisi olu birakilamaz.
-            # (Kurulum yarim kalirsa/baslama adimi bozulursa buradaki tekrar denemeler paneli ayaga kaldirir.)
+            # KURULUM OLDU MU? Cevap SUREDEN bagimsiz: kurulumdan hemen sonra disktekI panel
+            # dosyasinin surumune bakilir. Eskiden hukum "servis 40 saniyede kalkti mi" sorusuna
+            # gore veriliyordu; yuklu bir sunucuda panel acilirken IIS sitelerini, bilesenleri ve
+            # sema gocunu tarar, bu sure rahatca asilir ve KURULUM BASARILI OLDUGU HALDE
+            # "tamamlanamadi" yaziliyordu. Bir surenin dolmasi bir seyin basarisiz oldugu anlamina
+            # gelmez; olcut sonucun kendisidir.
+            $kuruldu = $false
+            try {
+              if ($serviceImagePath -and (Test-Path -LiteralPath $serviceImagePath)) {
+                $versionAfter = (Get-Item -LiteralPath $serviceImagePath).VersionInfo.ProductVersion
+                Write-UpdateLog "Version after install: '$versionAfter' (before: '$versionBefore')"
+                $kuruldu = $versionAfter -and $versionBefore -and ($versionAfter -ne $versionBefore)
+              }
+            }
+            catch { Write-UpdateLog "Could not read version after install: $($_.Exception.Message)" }
+
+            if ($kuruldu) {
+              # Kurulum OLDU. Bundan sonra olacaklar (servisin gec kalkmasi gibi) bu gercegi
+              # degistirmez; ayri bir durum olarak bildirilir.
+              $failed = $false
+              $failReason = ''
+            }
+
+            # GUVENCE: panel servisi olu birakilamaz. Bu dongu bir HUKUM degil, bir KURTARMA
+            # denemesidir; sonucu "kurulum basarili miydi" sorusunu etkilemez.
+            $servisCalisiyor = $false
             try {
               $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
               if ($null -eq $service) {
-                Write-UpdateLog "Service '$serviceName' not found after install; nothing to start."
-                $failed = $true
+                Write-UpdateLog "Service '$serviceName' not found; nothing to start."
+                if (-not $kuruldu) { $failed = $true }
+                if ($failReason -eq '') { $failReason = "Panel servisi bulunamadi." }
               }
               else {
-                for ($attempt = 1; $attempt -le 8; $attempt++) {
+                # Servis calisana kadar denenir. Buradaki ust sinir bir "basari suresi" DEGILDIR;
+                # yalnizca betigin sonsuza kadar asili kalmamasi icindir ve sonuca etki etmez.
+                $sonDeneme = (Get-Date).AddMinutes(10)
+                $deneme = 0
+                while ((Get-Date) -lt $sonDeneme) {
                   $service.Refresh()
                   if ($service.Status -eq 'Running') { break }
-                  try {
-                    Start-Service -Name $serviceName -ErrorAction Stop
-                  }
-                  catch {
-                    Write-UpdateLog "Service start attempt $attempt failed: $($_.Exception.Message)"
-                  }
+                  $deneme++
+                  try { Start-Service -Name $serviceName -ErrorAction Stop }
+                  catch { Write-UpdateLog "Service start attempt $deneme failed: $($_.Exception.Message)" }
                   Start-Sleep -Seconds 5
                 }
 
                 $service.Refresh()
-                if ($service.Status -eq 'Running') {
+                $servisCalisiyor = $service.Status -eq 'Running'
+                if ($servisCalisiyor) {
                   Write-UpdateLog "Service '$serviceName' is running."
                 }
                 else {
-                  Write-UpdateLog "Service '$serviceName' is NOT running after retries (status: $($service.Status))."
+                  Write-UpdateLog "Service '$serviceName' is NOT running (status: $($service.Status))."
+                  # Panel ayakta degilse kullanici bunu MUTLAKA bilmeli -- kurulum olmus olsa bile.
                   $failed = $true
+                  $failReason = "Kurulum tamamlandi ancak panel servisi baslatilamadi (durum: $($service.Status))."
                 }
               }
             }
             catch {
               $failed = $true
+              if ($failReason -eq '') { $failReason = "Servis kurtarma adimi basarisiz: $($_.Exception.Message)" }
               Write-UpdateLog "Service recovery failed: $($_.Exception.ToString())"
             }
 
             # SON DURUM: panel geri donunce bunu okuyup kullaniciya sonucu soyleyecek.
-            if ($failed) { Write-UpdateState 'failed' 'Kurulum tamamlanamadi.' $null }
+            if ($failed) {
+              if ($failReason -eq '') { $failReason = 'Kurulum tamamlanamadi.' }
+
+              # KURULUM GUNLUGUNUN SONU da tasiniyor. Asil sebep cogu zaman burada yaziyor
+              # ("Cannot create file ... being used by another process" gibi) ve kullanicinin
+              # bunu gormek icin sunucuya baglanip dosya aramasi gerekiyordu.
+              try {
+                $kuyruk = Get-Content -LiteralPath $logPath -Tail 25 -ErrorAction SilentlyContinue
+                if ($kuyruk) { $failReason = $failReason + "`n---- kurulum gunlugu (son satirlar) ----`n" + ($kuyruk -join "`n") }
+              }
+              catch { }
+
+              Write-UpdateState 'failed' $failReason $failExitCode
+            }
             else { Write-UpdateState 'succeeded' '' 0 }
 
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null

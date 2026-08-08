@@ -149,7 +149,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return normalizedPath;
     }
 
-    public async Task<(string FileName, string ContentType, byte[] Content)> DownloadAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<(string FileName, string ContentType, string PhysicalPath)> DownloadAsync(string path, CancellationToken cancellationToken = default)
     {
         var normalizedPath = NormalizeVirtualPath(path);
         var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
@@ -159,7 +159,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             throw new AppException("files.not_found", 404, 404);
         }
 
-        return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", await File.ReadAllBytesAsync(target.PhysicalPath, cancellationToken));
+        return (Path.GetFileName(target.PhysicalPath), "application/octet-stream", target.PhysicalPath);
     }
 
     public async Task<FileWorkspaceDto> CompressAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default)

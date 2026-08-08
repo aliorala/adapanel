@@ -152,7 +152,11 @@
       <main class="content-column">
         <div v-if="authStore.session?.isImpersonating" class="impersonation-banner">
           <span>{{ t("panel.users.impersonatingAs", { name: authStore.session?.user?.userName }) }}</span>
-          <button class="compact" @click="returnToAdmin">{{ t("panel.users.returnToAdmin") }}</button>
+          <button class="compact" :disabled="returningToAdmin" @click="returnToAdmin">{{ t("panel.users.returnToAdmin") }}</button>
+          <!-- Hata BURADA görünür. Önceden sessizce yutuluyordu ve "Yöneticiye dön" başarısız
+               olunca kullanıcının elinde çıkış yolu kalmıyordu: bant duruyor, sayfa yenilenmiyor,
+               sebep hiç öğrenilemiyor. -->
+          <span v-if="returnError" class="impersonation-error" role="alert">{{ returnError }}</span>
         </div>
         <slot name="banner" />
         <slot />
@@ -176,7 +180,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import AttentionDrawer from "../components/AttentionDrawer.vue";
 import type { AttentionSummary } from "../api/attention";
-import { useAuthStore } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 
 const authStore = useAuthStore();
 
@@ -316,12 +320,29 @@ function shortTime(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
 }
 
+function resolveApiMessage(error: unknown): string {
+  const key = extractApiMessage(error);
+  const translated = t(key);
+  const message = translated === key ? key : translated;
+  const details = extractApiDetails(error);
+  return details ? `${message}
+
+${details}` : message;
+}
+
+const returningToAdmin = ref(false);
+const returnError = ref("");
+
 async function returnToAdmin() {
+  returningToAdmin.value = true;
+  returnError.value = "";
   try {
     await authStore.stopImpersonate();
     window.location.reload();
   } catch (error) {
-    void error;
+    returnError.value = resolveApiMessage(error);
+  } finally {
+    returningToAdmin.value = false;
   }
 }
 
@@ -866,6 +887,12 @@ const twoFactorLabel = computed(() =>
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.impersonation-error {
+  color: var(--danger-text);
+  font-weight: 600;
+  flex-basis: 100%;
 }
 
 .impersonation-banner {

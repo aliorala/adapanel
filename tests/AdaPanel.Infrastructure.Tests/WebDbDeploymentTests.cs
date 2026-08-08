@@ -229,7 +229,7 @@ public sealed class WebDbDeploymentTests
         public Task<IReadOnlyCollection<ComponentInstallResultDto>> InstallDefaultsAsync(Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task RemoveAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyCollection<string>> RemoveAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
     }
 

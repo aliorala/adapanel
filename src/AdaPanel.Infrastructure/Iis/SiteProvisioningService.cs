@@ -4,6 +4,7 @@ using AdaPanel.Core.Dtos.AppRuntimes;
 using AdaPanel.Core.Dtos.Asp;
 using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Dtos.Waf;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,7 @@ public sealed class SiteProvisioningService(
     IAspNetService aspNetService,
     IAppRuntimeService appRuntimeService,
     ISiteDefaultsService siteDefaultsService,
+    IWafService wafService,
     ILogger<SiteProvisioningService> logger) : ISiteProvisioningService
 {
     public async Task<SiteDto> CreateAndProvisionAsync(
@@ -114,6 +116,74 @@ public sealed class SiteProvisioningService(
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Site yazma izni verilemedi (en iyi çaba): {Site}", site.Name);
+        }
+
+        await IsolateSiteAsync(site, cancellationToken);
+    }
+
+    /// <summary>
+    /// Site kökünü diğer kiracılardan YALITIR. Yeni sitede ve "İzinleri Onar" akışında çalışır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gerekliydi:</b> site kökü yalnızca kendi havuz kimliğine yazma hakkı alıyordu ama
+    /// üst klasörden gelen ACL <b>mirası hiç kırılmıyordu</b>. Miras kırılmadığında üstten gelen
+    /// <c>IIS_IUSRS</c>/<c>Users</c> okuma hakkı TÜM havuz kimliklerine geçer (havuz sanal
+    /// hesapları IIS_IUSRS üyesidir) — yani A sitesinin PHP'si B sitesinin <c>wp-config.php</c>
+    /// dosyasını, dolayısıyla veritabanı parolasını okuyabiliyordu.
+    /// </para>
+    /// <para>
+    /// <b>Uygulama yeni değil:</b> izolasyonun kendisi (<c>WafService.ApplyFolderAclAsync</c>)
+    /// zaten vardı ve doğruydu — anonim kimliği IUSR yerine havuz kimliğine çeviriyor (yoksa
+    /// statik dosyalar 401 verirdi), SYSTEM/Administrators haklarını SID ile (locale bağımsız)
+    /// bırakıyor ve anonim kimlik ayarlanamazsa icacls'e hiç geçmiyor. Eksik olan tek şey,
+    /// bunun <b>varsayılan olarak uygulanmamasıydı</b>: her site için elle basılması gerekiyordu,
+    /// yani yeni açılan her site yalıtımsız kalıyordu.
+    /// </para>
+    /// <para>
+    /// <b>En iyi çaba:</b> yalıtım uygulanamazsa site oluşturma BAŞARISIZ SAYILMAZ. Aksi hâlde
+    /// tek bir ACL sorunu kullanıcının site açmasını tümden engellerdi; bunun yerine uyarı
+    /// günlüğe yazılır ve kullanıcı "İzinleri Onar" ile tekrar deneyebilir.
+    /// </para>
+    /// </remarks>
+    /// <summary>Panelin kendi altyapı sitelerinin ad öneki (webmail, phpMyAdmin, Adminer).</summary>
+    private const string ManagedSitePrefix = "AdaPanel.";
+
+    private async Task IsolateSiteAsync(SiteDto site, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(site.PhysicalPath))
+            {
+                return;
+            }
+
+            // PANELİN KENDİ ARAÇ SİTELERİ HARİÇ (webmail, phpMyAdmin, Adminer — "AdaPanel." önekli).
+            //
+            // Bunlar kiracı değil, panelin parçası; onları diğer kiracılardan yalıtmanın güvenlik
+            // kazancı YOK. Buna karşılık risk gerçek ve ölçülmüş: bu depoda araç sitelerinin ACL'ini
+            // sıkılaştırmak üç ayrı sürümde (0.2.91, 0.2.92, 0.2.93) phpMyAdmin/Adminer'i kırdı ve
+            // her seferinde kullanıcı hatayı canlıda buldu. Kazancı olmayan bir değişiklik için o
+            // riski almıyoruz.
+            if (site.Name.StartsWith(ManagedSitePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Principal boş: WafService siteyi taze okuyup O ANKİ havuz kimliğini kullanır.
+            await wafService.ApplyFolderAclAsync(
+                site.Name,
+                new ApplyFolderAclRequest { Principal = string.Empty, Rights = string.Empty },
+                cancellationToken);
+
+            logger.LogInformation("Site kiracı izolasyonu uygulandı: {Site} -> {Path}", site.Name, site.PhysicalPath);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Site kiracı izolasyonu uygulanamadı (en iyi çaba, site yine de kuruldu): {Site}",
+                site.Name);
         }
     }
 

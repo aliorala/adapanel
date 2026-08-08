@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
       <div class="segmented-tabs">
@@ -25,14 +25,15 @@
     </div>
 
     <div v-if="activeView === 'list'" class="data-table backup-table">
+      <!-- BEŞ sütun. Önceden sekizdi ve dördü (tür, hedef türü, boyut, tarih) tek kelimelik
+           değerler için tam sütun harcıyordu; ad, yol ve dört düğme aynı satırda sıkışıyordu.
+           Birbirine ait olanlar tek hücrede: kaynağın türü kaynağın parçası, boyut hedefin
+           parçası, oluşturma zamanı durumun parçası. -->
       <div class="data-row table-head backup-row">
         <span>{{ t("panel.backup.name") }}</span>
-        <span>{{ t("panel.backup.type") }}</span>
         <span>{{ t("panel.backup.source") }}</span>
         <span>{{ t("panel.backup.targetType") }}</span>
-        <span>{{ t("panel.backup.size") }}</span>
         <span>{{ t("panel.backup.statusColumn") }}</span>
-        <span>{{ t("panel.backup.createdAt") }}</span>
         <span>{{ t("panel.software.action") }}</span>
       </div>
       <div v-for="backup in backups" :key="backup.id" class="data-row backup-row">
@@ -40,12 +41,18 @@
           <strong>{{ backup.name }}</strong>
           <small>{{ backup.id }}</small>
         </div>
-        <span>{{ backup.type }}</span>
-        <span>{{ backup.source }}</span>
-        <span>{{ backup.remoteUri ? t("panel.backup.remoteTarget") : t("panel.backup.localTarget") }}</span>
-        <span>{{ formatBytes(backup.size) }}</span>
-        <span class="status-pill ok">{{ formatStatus(backup.status) }}</span>
-        <span class="cell-muted">{{ new Date(backup.createdAtUtc).toLocaleString() }}</span>
+        <div class="cell-main">
+          <strong>{{ backup.source }}</strong>
+          <small>{{ backup.type }}</small>
+        </div>
+        <div class="cell-main">
+          <strong>{{ backup.remoteUri ? t("panel.backup.remoteTarget") : t("panel.backup.localTarget") }}</strong>
+          <small>{{ formatBytes(backup.size) }}</small>
+        </div>
+        <div class="cell-main">
+          <span class="status-pill ok">{{ formatStatus(backup.status) }}</span>
+          <small>{{ new Date(backup.createdAtUtc).toLocaleString() }}</small>
+        </div>
         <div class="row-actions">
           <button class="secondary compact row-button" :disabled="busy" @click="restore(backup)">
             {{ t("panel.backup.restore") }}
@@ -637,8 +644,16 @@ function showNotice(message: string, isError: boolean) {
   flex-wrap: wrap;
 }
 
+/* Eylem sütunu SABİT genişlikte: dört düğme her satırda aynı düzende otursun, satırdan satıra
+   yeri kaymasın (oransal genişlikte uzun yedek adları düğme sütununu daraltıp diziliş bozuyordu). */
 .backup-row {
-  grid-template-columns: minmax(210px, 1.4fr) 0.5fr 0.75fr 0.65fr 0.55fr 0.8fr 1fr auto;
+  grid-template-columns: minmax(200px, 1.3fr) minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(0, 1fr) 246px;
+  align-items: start;
+}
+
+.backup-row .row-actions {
+  align-content: start;
+  gap: 6px;
 }
 
 .entry-row {

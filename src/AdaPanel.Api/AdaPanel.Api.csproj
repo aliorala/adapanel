@@ -1,12 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- TEPSI PROGRAMI (Tray/) icin. Panel servis olarak calisirken WinForms HIC baslatilmaz;
+         yalniz tray anahtariyla acilir. Ayri bir exe yapilsaydi kendi .NET calisma zamanini
+         tasimasi gerekir ve kurulum paketi ~70 MB buyurdu. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Panelin kendi isareti: gorev cubugu, kisayollar ve TEPSI simgesi bunu kullanir.
+         Once hic .ico yoktu ve tepsi simgesi genel bir uygulama ikonuna dusuyordu; kullanici
+         bildirim alaninda hangisinin AdaPanel oldugunu ayirt edemiyordu. -->
+    <ApplicationIcon>adapanel.ico</ApplicationIcon>
     <AssemblyName>AdaPanel.Api</AssemblyName>
     <RootNamespace>AdaPanel.Api</RootNamespace>
     <UserSecretsId>adapanel-api-local</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Yayin ciktisina da kopyalanir: tepsi programi calisirken dosyadan okuyor. -->
+    <None Update="adapanel.ico" CopyToOutputDirectory="PreserveNewest" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
+    <!-- Servis adi -> surec kimligi (portu surece baglamak icin). -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.0.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />

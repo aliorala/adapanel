@@ -167,6 +167,7 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> CreateAccountAsync([FromBody] CreateMailAccountRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
+        await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
         await EnsureMailboxQuotaAsync(cancellationToken);
         var workspace = await mailService.CreateAccountAsync(request, cancellationToken);
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_created"));
@@ -208,6 +209,8 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> CreateAliasAsync([FromBody] CreateMailAliasRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
+        await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
+        await EnsureAddressDomainAsync(request.Target, request.Domain, cancellationToken);
         var workspace = await mailService.CreateAliasAsync(request, cancellationToken);
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_created"));
     }
@@ -224,6 +227,7 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> CreateListAsync([FromBody] CreateMailListRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
+        await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
         var workspace = await mailService.CreateMailListAsync(request, cancellationToken);
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_created"));
     }
@@ -250,6 +254,34 @@ public sealed class MailController(
     {
         var listeners = await mailService.GetListenersAsync(cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<MailListenerDto>>.Ok(listeners));
+    }
+
+    /// <summary>Alan adının GİDEN posta limiti (saatlik).</summary>
+    [HttpGet("domains/outbound-limit")]
+    public async Task<ActionResult<ApiResponse<MailOutboundLimitDto>>> GetOutboundLimitAsync(
+        [FromQuery] string domain,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+        return Ok(ApiResponse<MailOutboundLimitDto>.Ok(await mailService.GetOutboundLimitAsync(domain, cancellationToken)));
+    }
+
+    /// <summary>
+    /// Giden posta limitini ayarlar (0 = kaldır). YALNIZ YÖNETİCİ.
+    /// </summary>
+    /// <remarks>
+    /// Bu limit sunucunun itibarını korur: hacklenen tek müşteri IP'yi kara listeye düşürünce
+    /// o sunucudaki HERKESİN postası teslim edilmez olur. Dolayısıyla kendi limitini müşterinin
+    /// (ya da bayinin) yükseltebilmesi, korumanın kendisini anlamsız kılardı.
+    /// </remarks>
+    [HttpPut("domains/outbound-limit")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<MailOutboundLimitDto>>> SetOutboundLimitAsync(
+        [FromBody] SetMailOutboundLimitRequest request,
+        CancellationToken cancellationToken)
+    {
+        var limit = await mailService.SetOutboundLimitAsync(request.Domain, request.MessagesPerHour, cancellationToken);
+        return Ok(ApiResponse<MailOutboundLimitDto>.Ok(limit, "mail.outbound_limit_saved"));
     }
 
     [HttpPost("domains/quota")]
@@ -423,4 +455,46 @@ public sealed class MailController(
         var index = (address ?? string.Empty).IndexOf('@');
         return index >= 0 ? address![(index + 1)..].Trim() : string.Empty;
     }
+
+    /// <summary>
+    /// İstekteki bir ADRESİN alan adını, kullanıcının izinli mail domainlerine göre doğrular.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrıca gerekli:</b> bu uçlarda <c>request.Domain</c> doğrulanıyordu ama servis
+    /// adresi <c>NormalizeAddress(address, domain)</c> ile çözüyor ve o metot, adres bir "@"
+    /// içeriyorsa alan adını <b>tamamen adresten</b> alıyor — doğrulanan <c>Domain</c> yok
+    /// sayılıyor. Yani kapsam denetimi bir alan adına, işlem başka bir alan adına yapılıyordu.
+    /// </para>
+    /// <para>
+    /// Somut sonuç: <c>{ Domain: "benim.com", Target: "ceo@kurban.com" }</c> ile alias, kurbanın
+    /// POSTA HESABI NESNESİNE yazılıyordu (Stalwart'ta alias hedef hesabın üzerinde durur), ve
+    /// <c>{ Domain: "benim.com", Address: "info@kurban.com", MaxSizeMB: 1 }</c> ile kurbanın
+    /// kutusu 1 MB'a düşürülüp gelen postası reddedilir hâle geliyordu.
+    /// </para>
+    /// <para>
+    /// Kontrol, koruduğu şeyle <b>aynı kuralı</b> uygular: adres "@" içeriyorsa alan adı ondan,
+    /// içermiyorsa istekteki <paramref name="fallbackDomain"/>'den alınır.
+    /// </para>
+    /// </remarks>
+    private Task EnsureAddressDomainAsync(string? address, string? fallbackDomain, CancellationToken cancellationToken)
+    {
+        var trimmed = (address ?? string.Empty).Trim();
+        if (trimmed.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var domain = trimmed.Contains('@') ? ExtractDomain(trimmed) : (fallbackDomain ?? string.Empty).Trim();
+        return CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+    }
+}
+
+/// <summary>Giden posta limiti isteği.</summary>
+public sealed class SetMailOutboundLimitRequest
+{
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>Saatte en fazla ileti; 0 = limiti kaldır.</summary>
+    public int MessagesPerHour { get; set; }
 }

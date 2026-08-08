@@ -91,12 +91,18 @@ public sealed class SoftwareController(
     [HttpDelete("{componentId}")]
     public async Task<ActionResult<ApiResponse<object>>> RemoveAsync(string componentId)
     {
-        await componentBootstrapper.RemoveAsync(
+        var temizlenemeyenler = await componentBootstrapper.RemoveAsync(
             componentId,
             User.GetRequiredUserId(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             CancellationToken.None);
 
-        return Ok(ApiResponse<object>.Ok(new { componentId }, "software.remove.completed"));
+        // KISMİ TEMİZLİK "tamamlandı" DEĞİLDİR. Servis durdurulamadıysa ya da dosyalar kilitliyse
+        // kullanıcı bunu bilmeli: sunucuda kalan artığı ancak o temizleyebilir.
+        return Ok(temizlenemeyenler.Count == 0
+            ? ApiResponse<object>.Ok(new { componentId }, "software.remove.completed")
+            : ApiResponse<object>.Ok(
+                new { componentId, warnings = temizlenemeyenler },
+                "software.remove.partial"));
     }
 }

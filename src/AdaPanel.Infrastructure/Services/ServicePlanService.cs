@@ -42,7 +42,13 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
             MaxDiskMb = Math.Max(0, request.MaxDiskMb),
             MaxDatabases = Math.Max(0, request.MaxDatabases),
             MaxMailboxes = Math.Max(0, request.MaxMailboxes),
-            MaxScheduledTasks = Math.Max(0, request.MaxScheduledTasks)
+            MaxScheduledTasks = Math.Max(0, request.MaxScheduledTasks),
+            // Bu üç alan eklendiğinde eşleştirme GÜNCELLENMEMİŞTİ: istek doluyken kayda 0 yazılıyor,
+            // API "başarılı" dönüyor ve kullanıcı limiti koyduğunu sanıyordu. Trafik kotası
+            // özelliği fiilen ölüydü. Uçtan uca test yakaladı; birim testleri yakalayamamıştı.
+            MaxFtpUsers = Math.Max(0, request.MaxFtpUsers),
+            MaxTrafficGbPerMonth = Math.Max(0, request.MaxTrafficGbPerMonth),
+            ValidityDays = Math.Max(0, request.ValidityDays)
         };
         plans.Add(plan);
         await fileStore.WriteAsync(StatePath, plans, cancellationToken);
@@ -66,6 +72,9 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
         plan.MaxDatabases = Math.Max(0, request.MaxDatabases);
         plan.MaxMailboxes = Math.Max(0, request.MaxMailboxes);
         plan.MaxScheduledTasks = Math.Max(0, request.MaxScheduledTasks);
+        plan.MaxFtpUsers = Math.Max(0, request.MaxFtpUsers);
+        plan.MaxTrafficGbPerMonth = Math.Max(0, request.MaxTrafficGbPerMonth);
+        plan.ValidityDays = Math.Max(0, request.ValidityDays);
         await fileStore.WriteAsync(StatePath, plans, cancellationToken);
         return plan;
     }

@@ -47,6 +47,27 @@ public interface IDnsService
     Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Alt alan adı için ÜST bölgeye A kaydı yazar (<c>blog.ornek.com</c> → <c>ornek.com</c> bölgesinde
+    /// <c>blog</c>). Kayıt zaten varsa dokunmaz.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Alt alan adı sitesi açılabiliyordu ama üst bölgeye kayıt DÜŞMÜYORDU: IIS bağlaması hazırdı,
+    /// alan adı ise hiçbir yere çözmüyordu. Kullanıcı "site açtım ama açılmıyor" diye kaydı elle
+    /// aramak zorunda kalıyordu.
+    /// </para>
+    /// <para>
+    /// VAR OLAN KAYDIN ÜSTÜNE YAZMAZ. Alt alan adı başka bir sunucuya ya da bir CDN'e yönlendirilmiş
+    /// olabilir; site açmak, o yönlendirmeyi sessizce ele geçirmek için yeterli bir gerekçe değildir.
+    /// Kaydın gerçekte ne olduğu <see cref="SubdomainRecordResult.AlreadyExists"/> ile bildirilir.
+    /// </para>
+    /// </remarks>
+    Task<SubdomainRecordResult> EnsureSubdomainRecordAsync(
+        string parentSiteName,
+        string label,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Birden çok kaydı TEK seferde yazar ve bölgeyi BİR KEZ senkronize eder.
     /// <para>
     /// Neden gerekli: kayıtları tek tek yazmak her seferinde bölgenin tamamını yeniden yazan bir

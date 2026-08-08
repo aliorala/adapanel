@@ -68,11 +68,27 @@ internal static class ProcessRunner
         catch (OperationCanceledException) when (timeout is not null && !cancellationToken.IsCancellationRequested)
         {
             try { process.Kill(entireProcessTree: true); } catch { /* en iyi çaba */ }
+
+            // OKUMA GÖREVLERİ SAHİPSİZ BIRAKILMAZ.
+            //
+            // Bu iki görev süreç boruları üzerinde çalışıyor. Beklenmeden dönülürse `using var
+            // process` boruları kapatır, görevler ObjectDisposedException/IOException ile düşer ve
+            // hiç gözlemlenmedikleri için "unobserved task exception" olurlar. Zaman aşımına uğrayan
+            // her dış araç çağrısı (win-acme, git clone, DB CLI) böyle bir görev + tutulan boru
+            // kaynağı bırakıyordu.
+            //
+            // Süreç öldürüldüğü için borular kapanır ve okumalar hemen biter; yine de kısa bir
+            // tavan konuyor ki bu temizlik hiçbir koşulda isteği askıya almasın. Toplanan çıktı
+            // ATILMIYOR: araç zaman aşımından önce bir şey yazdıysa (çoğu zaman asıl sebep orada
+            // yazılıdır) kullanıcıya gösteriliyor.
+            var (kismiCikti, kismiHata) = await TopluyorAsync(outputTask, errorTask);
+
+            var mesaj = $"Process timed out after {timeout.Value.TotalSeconds:0} s and was terminated.";
             return new CommandResult
             {
                 ExitCode = -1,
-                StandardOutput = string.Empty,
-                StandardError = $"Process timed out after {timeout.Value.TotalSeconds:0} s and was terminated."
+                StandardOutput = kismiCikti,
+                StandardError = string.IsNullOrWhiteSpace(kismiHata) ? mesaj : $"{mesaj}{Environment.NewLine}{kismiHata}"
             };
         }
 
@@ -82,6 +98,48 @@ internal static class ProcessRunner
             StandardOutput = await outputTask,
             StandardError = await errorTask
         };
+    }
+
+    /// <summary>
+    /// Zaman aşımı sonrası okuma görevlerini gözlemler; ne kadar okunabildiyse onu döndürür.
+    /// Görevlerin kendi hataları yutulur — burada amaç veri toplamak değil, görevi SAHİPSİZ
+    /// bırakmamak.
+    /// </summary>
+    private static async Task<(string Output, string Error)> TopluyorAsync(Task<string> outputTask, Task<string> errorTask)
+    {
+        try
+        {
+            var tamamlanan = await Task.WhenAny(
+                Task.WhenAll(outputTask, errorTask),
+                Task.Delay(TimeSpan.FromSeconds(5)));
+
+            if (tamamlanan is not Task<string[]>)
+            {
+                // 5 sn içinde bitmediler; yine de gözlemlenmiş sayılsınlar ki süreç düzeyinde
+                // "unobserved exception" olayı tetiklenmesin.
+                _ = outputTask.ContinueWith(static task => _ = task.Exception, TaskScheduler.Default);
+                _ = errorTask.ContinueWith(static task => _ = task.Exception, TaskScheduler.Default);
+                return (string.Empty, string.Empty);
+            }
+        }
+        catch
+        {
+            // Borular kapandığı için okuma düşmüş olabilir; bu beklenen bir durum.
+        }
+
+        return (Guvenli(outputTask), Guvenli(errorTask));
+
+        static string Guvenli(Task<string> task)
+        {
+            try
+            {
+                return task.IsCompletedSuccessfully ? task.Result : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
     }
 
     /// <summary>

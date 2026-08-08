@@ -100,9 +100,13 @@
         </div>
       </section>
 
-      <!-- profesyonel panel benzeri subdomain ekleme: <etiket>.<alanadı> için yeni yönetilen site.
-           Yeni site oluşturur → yalnız admin (bayi/müşteri site oluşturamaz). -->
-      <section v-if="isAdmin" class="subdomain-block">
+      <!-- Alt alan adı: <etiket>.<alanadı> için yeni yönetilen site + üst bölgeye A kaydı.
+           ARTIK YALNIZ ADMIN DEĞİL. Kısıt "bayi/müşteri site oluşturamaz" gerekçesiyle konmuştu ama
+           bu doğru değildi: site oluşturma ucu Customer ve Reseller'a da açık ve kota orada zaten
+           uygulanıyor. Asıl risk başkasının alan adının altına girmekti; o, alan adı iddia
+           denetiminde kapatıldı (bkz. CustomerAccess.EnsureDomainClaimAsync). Site sahibi kendi
+           alan adının altına alt alan adı açabilir. -->
+      <section class="subdomain-block">
         <div class="section-head">
           <h4>{{ t("panel.sites.subdomainTitle") }}</h4>
         </div>
@@ -115,6 +119,9 @@
             {{ t("panel.sites.subdomainAdd") }}
           </button>
         </form>
+        <!-- İki şeyi ÖNDEN söylüyoruz: alt alan adı ayrı bir site sayılır (kotadan düşer) ve
+             DNS kaydı ancak üst alan adının bölgesi panelde yönetiliyorsa atılabilir. -->
+        <small class="field-hint">{{ t("panel.sites.subdomainHint") }}</small>
       </section>
 
       <div class="binding-block">
@@ -585,15 +592,28 @@ function translateState(state: string): string {
   align-items: end;
 }
 
-label {
+/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
+   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
+   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
+   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
+   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
+   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
+   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
+label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
   gap: 8px;
 }
 
-input,
-select,
-button {
+/* Onay kutusu/radyo ve DUGMELER disarida: gerilmeleri gereken metin alanlaridir.
+   Dugmeleri kapsayinca satir ici islem dugmeleri hucreyi doldurup yanindaki metni eziyordu. */
+input:not([type="checkbox"]):not([type="radio"]),
+select {
   width: 100%;
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+button {
   border-radius: var(--radius-sm);
   font: inherit;
 }

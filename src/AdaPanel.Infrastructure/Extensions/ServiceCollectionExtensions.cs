@@ -130,6 +130,16 @@ public static class ServiceCollectionExtensions
         // paylaşır — CPU'yu kimin yediğini ancak sürecin İÇİNDEKİ aktif sorgulara bakarak söyleyebiliriz.
         // Süreç izleyicinin aksine çağrılar arası durum tutmaz (DbContext kullanır) → Scoped.
         services.AddScoped<IResourceAttributionService, Monitoring.ResourceAttributionService>();
+
+        services.AddScoped<ISiteAliasService, Iis.SiteAliasService>();
+
+        // Abonelik iş modeli: kotayı DOLDURANDA uygulayan taraf (askıya alma) arka planda koşar.
+        services.AddScoped<ISubscriptionEnforcementService, Subscriptions.SubscriptionEnforcementService>();
+        services.AddHostedService<Subscriptions.SubscriptionEnforcementWorker>();
+
+        // Sorgu geçmişi: örnekleyici arka planda koşar (panel açık olmasa da kayıt tutulur).
+        services.AddScoped<IQueryLogService, Monitoring.QueryLogService>();
+        services.AddHostedService<Monitoring.QueryLogWorker>();
         services.AddScoped<IAntivirusService, Antivirus.AntivirusService>();
         // K1 güvenlik: veri kökü hassas klasörlerini her açılışta SYSTEM/Admins'e kilitle (AutomationWorker'dan ÖNCE).
         // NOT: DataRootHardeningService artık hosted service DEĞİL — Program.cs'te DB açılmadan ÖNCE

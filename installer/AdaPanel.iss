@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.99"
+  #define MyAppVersion "0.4.22"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
@@ -25,7 +25,8 @@ DisableWelcomePage=no
 AppContact=AdaPanel
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\adapanel.ico
+SetupIconFile=adapanel.ico
 VersionInfoVersion={#MyAppVersion}
 ; CloseApplications=no OLMAK ZORUNDA. Panel bir WINDOWS SERVISIDIR; RestartManager onu pencere
 ; kapatarak durduramaz. CloseApplications=yes iken sira sudur: RestartManager dosyalari tutan
@@ -48,12 +49,14 @@ tr.FinishedHeadingLabel=AdaPanel kurulumu tamamlandi
 
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "adapanel.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\components.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\scripts\enable-iis-features.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\initialize-panel-certificate.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\install-service.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\configure-firewall.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\harden-adapanel.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\install-tray-task.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\uninstall-cleanup.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; AfterInstall: ConfigureInstallation
 
 [InstallDelete]
@@ -61,17 +64,47 @@ Type: filesandordirs; Name: "{app}\wwwroot"
 Type: files; Name: "{app}\components.json"
 
 [Run]
+; TEPSIYI AYAKTA TUTAN ZAMANLANMIS GOREV.
+; Baslangic klasoru yalnizca OTURUM ACILISINDA calisir. Panel kendi kendini guncellerken kurulumu
+; SERVIS kimligiyle (oturum 0) calistirdigi icin kullanicinin oturumunda hicbir sey baslatamiyor,
+; calisan tepsi sureci de exe degistirilebilsin diye sonlandiriliyordu: her guncellemeden sonra
+; simge kayboluyor ve kullanici Baslat menusunden ELLE baslatmak zorunda kaliyordu. Gorev belirli
+; arayla denetler; "--tray" zaten calisiyorsa sessizce cikar, tekrarlanmasi zararsizdir.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-tray-task.ps1"" -InstallDir ""{app}"""; Flags: runhidden waituntilterminated; Tasks: trayicon
+
+; Kurulumdan HEMEN sonra baslat: kullanici bir sonraki oturum acilisini beklemesin.
+; `skipifsilent` KALDIRILDI: panelin kendi kendini guncellemesi sessiz kurulum yapiyor ve bu bayrak
+; yuzunden tepsi hic baslatilmiyordu. Etkilesimli oturum yoksa calistirma zaten sessizce basarisiz
+; olur; zarari yok, faydasi var.
+Filename: "{app}\AdaPanel.Api.exe"; Parameters: "--tray"; Flags: nowait runasoriginaluser; Tasks: trayicon
 Filename: "{code:GetPanelUrl}"; Description: "AdaPanel arayuzunu ac"; Flags: postinstall shellexec skipifsilent
 
 [Tasks]
 Name: "desktopicon"; Description: "Masaustune AdaPanel kisayolu olustur"; GroupDescription: "Kisayollar:"
+; Tepsi programi: panel HIC acilmadiginda servisleri gorup yeniden baslatmanin tek yolu.
+; Varsayilan ACIK -- kurtarma araci, ihtiyac duyulmadan once kurulu olmali.
+Name: "trayicon"; Description: "Saat yanindaki bildirim alaninda AdaPanel simgesi (servis durumu ve yeniden baslatma)"; GroupDescription: "Kisayollar:"
 
 [Icons]
-Name: "{group}\AdaPanel"; Filename: "{code:GetPanelUrl}"
+Name: "{group}\AdaPanel"; Filename: "{code:GetPanelUrl}"; IconFilename: "{app}\adapanel.ico"
 Name: "{group}\AdaPanel'i Kaldir"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\AdaPanel"; Filename: "{code:GetPanelUrl}"; Tasks: desktopicon
+Name: "{autodesktop}\AdaPanel"; Filename: "{code:GetPanelUrl}"; IconFilename: "{app}\adapanel.ico"; Tasks: desktopicon
+; OTURUM ACILISINDA baslar. Yonetici ISTEMEZ (manifest asInvoker): her acilista UAC penceresi
+; cikarsa kullanici programi kapatir ve tam ihtiyac aninda elinde bir sey kalmaz.
+;
+; {commonstartup} -- TUM KULLANICILAR icin. Onceden {userstartup} yaziyordu ve SUNUCUDA HIC
+; GORUNMUYORDU: panel kendi kendini guncellerken kurulumu SERVIS kimligiyle (LocalSystem)
+; calistiriyor, dolayisiyla "kurulumu yapan kullanici" SYSTEM oluyor ve kisayol SYSTEM'in
+; Baslangic klasorune dusuyordu. Yonetici RDP ile baglandiginda oradan hicbir sey acilmiyordu.
+Name: "{commonstartup}\AdaPanel Tepsi"; Filename: "{app}\AdaPanel.Api.exe"; Parameters: "--tray"; Tasks: trayicon
+; "--tray-goster": pencereyi ACAR. Duz "--tray" zaten calisiyorsa sessizce cikar (dogru davranis,
+; ama kisayola basan kullanici bir sey gormek ister).
+Name: "{group}\AdaPanel Servis Durumu"; Filename: "{app}\AdaPanel.Api.exe"; Parameters: "--tray-goster"; IconFilename: "{app}\adapanel.ico"
 
 [UninstallRun]
+; Gorev kaldirilmazsa, program silindikten sonra her birkac dakikada bir var olmayan bir exe
+; calistirilmaya calisilir ve Gorev Zamanlayici hata biriktirir.
+Filename: "schtasks.exe"; Parameters: "/Delete /TN ""AdaPanel Tepsi"" /F"; Flags: runhidden; RunOnceId: "AdaPanelTepsiGorevSil"
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-cleanup.ps1"" -InstallDir ""{app}"" -DataRoot ""{commonappdata}\AdaPanel"" -KeepData {code:GetUninstallKeepData}"; Flags: runhidden waituntilterminated; RunOnceId: "AdaPanelCleanUninstall"
 
 [UninstallDelete]

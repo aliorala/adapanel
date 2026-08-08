@@ -6,9 +6,147 @@
     <meta name="theme-color" content="#0c1714" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>AdaPanel</title>
+
+    <!--
+      DİNLEYİCİ EN BAŞTA KURULMALI — <body>'de geç kalıyordu.
+
+      Derleyici uygulama betiğini <head> içine koyuyor. Dinleyici <body>'de kurulunca, betiğin
+      indirilmesi ORADA başladığı için 404 hatası dinleyici var olmadan tetikleniyor ve emniyet
+      ağı hiç devreye girmiyordu (ölçüldü: varlık kaldırıldı, sayfa yine bomboş kaldı).
+      Bu blok bu yüzden uygulama betiğinden ÖNCE, sayfanın en üstünde duruyor.
+    -->
+    <script>
+      window.__adaAcilis = { hata: "" };
+      window.addEventListener(
+        "error",
+        function (olay) {
+          var hedef = olay && olay.target;
+          if (hedef && (hedef.tagName === "SCRIPT" || hedef.tagName === "LINK")) {
+            window.__adaAcilis.hata = "Yüklenemedi: " + (hedef.src || hedef.href || "");
+            if (typeof window.__adaAcilisGoster === "function") {
+              window.__adaAcilisGoster();
+            }
+          }
+        },
+        true
+      );
+    </script>
   </head>
   <body>
     <div id="app"></div>
+
+    <!--
+      AÇILAMAMA EMNİYET AĞI.
+
+      Panel güncellendiğinde tarayıcıda kalan ESKİ index.html, artık var olmayan bir varlık
+      dosyasını isteyebiliyordu; istek 404 dönünce uygulama hiç başlamıyor ve kullanıcı BOMBOŞ
+      beyaz bir sayfa görüyordu. Beyaz sayfa hiçbir şey söylemez: kullanıcı sunucunun mu çöktüğünü,
+      panelin mi bozulduğunu, yoksa kendi tarayıcısında mı sorun olduğunu bilemez.
+
+      Asıl neden sunucu tarafında düzeltildi (index.html artık no-cache ile gönderiliyor). Bu blok
+      geriye kalan bütün açılamama hâlleri için: uygulama belirli sürede kendini bağlamadıysa
+      ekrana ne yapılacağını YAZAR. Uygulama açıldığında blok kendini siler; normal çalışmada
+      kullanıcı bunu hiç görmez.
+    -->
+    <div id="acilis-hatasi" hidden>
+      <div class="kutu">
+        <h1>Panel açılamadı</h1>
+        <p>
+          Panel arayüzü yüklenemedi. En sık sebebi, güncelleme sonrası tarayıcıda kalan eski
+          sayfa dosyasıdır.
+        </p>
+        <ol>
+          <li><b>Sayfayı sert yenileyin:</b> <kbd>Ctrl</kbd> + <kbd>F5</kbd> (Mac: <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd>)</li>
+          <li>Düzelmezse tarayıcı önbelleğini bu site için temizleyin.</li>
+          <li>Yine açılmazsa sunucuda <b>AdaPanel</b> servisini yeniden başlatın.</li>
+        </ol>
+        <button type="button" onclick="location.reload(true)">Sayfayı yenile</button>
+        <p class="ayrinti" id="acilis-hatasi-ayrinti"></p>
+      </div>
+    </div>
+
+    <style>
+      #acilis-hatasi:not([hidden]) {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: #0c1714;
+        color: #e6eeea;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      #acilis-hatasi .kutu {
+        max-width: 560px;
+        padding: 22px 24px;
+        border: 1px solid #23423a;
+        border-radius: 12px;
+        background: #10201c;
+        line-height: 1.55;
+      }
+      #acilis-hatasi h1 { margin: 0 0 10px; font-size: 1.15rem; }
+      #acilis-hatasi p { margin: 0 0 10px; color: #b9cbc4; }
+      #acilis-hatasi ol { margin: 0 0 14px; padding-left: 20px; color: #b9cbc4; }
+      #acilis-hatasi li { margin-bottom: 5px; }
+      #acilis-hatasi kbd {
+        padding: 1px 5px;
+        border: 1px solid #2f5a4e;
+        border-radius: 4px;
+        background: #17302a;
+        font-size: 0.85em;
+      }
+      #acilis-hatasi button {
+        padding: 8px 16px;
+        border: 0;
+        border-radius: 7px;
+        background: #2f8f6f;
+        color: #fff;
+        font: inherit;
+        cursor: pointer;
+      }
+      #acilis-hatasi .ayrinti {
+        margin: 12px 0 0;
+        color: #7f938c;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 0.78rem;
+        word-break: break-word;
+      }
+    </style>
+
+    <script>
+      (function () {
+        var kok = document.getElementById("acilis-hatasi");
+        var ayrinti = document.getElementById("acilis-hatasi-ayrinti");
+        var bitti = false;
+
+        function goster() {
+          if (bitti || !kok) return;
+          bitti = true;
+          if (ayrinti) ayrinti.textContent = window.__adaAcilis.hata;
+          kok.hidden = false;
+        }
+
+        // <head>'deki dinleyici bu işlevi çağırır. Hata biz gelmeden ÖNCE oluştuysa (sık durum:
+        // betik indirilemedi) kayıt __adaAcilis.hata'da bekliyordur; hemen gösterilir.
+        window.__adaAcilisGoster = goster;
+        if (window.__adaAcilis.hata) {
+          goster();
+        }
+
+        // Hata olmadan da açılmamış olabilir (uygulama içinde takılma). Uygulama kendini
+        // bağladıysa #app doludur; 10 saniye yavaş bir sunucu için de fazlasıyla yeterli.
+        setTimeout(function () {
+          var uygulama = document.getElementById("app");
+          if (uygulama && uygulama.children.length > 0) {
+            if (kok && kok.parentNode) kok.parentNode.removeChild(kok);
+            return;
+          }
+          window.__adaAcilis.hata = window.__adaAcilis.hata || "Arayüz 10 saniye içinde başlamadı.";
+          goster();
+        }, 10000);
+      })();
+    </script>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

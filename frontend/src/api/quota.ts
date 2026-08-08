@@ -34,3 +34,17 @@ export async function removeQuota(siteName: string) {
   const response = await apiClient.delete<ApiEnvelope<SiteDiskQuota>>(`/sites/${encodeURIComponent(siteName)}/quota`);
   return response.data.data;
 }
+
+/**
+ * Disk kotası için gereken Windows rolünü (FSRM) kurar.
+ *
+ * Arayüz "önce FSRM özelliğini ekleyin" diyordu ama panelde ekleme yolu yoktu — çıkmaz sokaktı.
+ * Panel diğer Windows rollerini (DNS, FTP, ASP.NET) zaten kendisi kuruyor.
+ */
+export async function installFsrm(siteName: string) {
+  const response = await apiClient.post<ApiEnvelope<SiteDiskQuota>>(
+    `/sites/${encodeURIComponent(siteName)}/quota/install`,
+    {}
+  );
+  return response.data.data;
+}

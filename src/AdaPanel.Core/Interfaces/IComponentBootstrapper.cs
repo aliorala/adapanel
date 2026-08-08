@@ -35,7 +35,16 @@ public interface IComponentBootstrapper
         string? ipAddress,
         CancellationToken cancellationToken = default);
 
-    Task RemoveAsync(
+    /// <summary>
+    /// Bileşeni kaldırır ve TEMİZLENEMEYENLERİ döndürür (boş liste = tam temizlik).
+    /// </summary>
+    /// <remarks>
+    /// Uyarılar önceden yalnızca denetim günlüğüne yazılıyordu; API her hâlükârda "kaldırıldı"
+    /// diyordu. Yani servis durdurulamamış, dosyalar kilitli kalmış olsa bile kullanıcı BAŞARI
+    /// görüyordu — bileşen listeden kayboluyor ama disk ve servis sunucuda duruyordu, üstelik
+    /// panel onu artık bilmediği için yeniden kurmak da bozuk duruma düşüyordu.
+    /// </remarks>
+    Task<IReadOnlyCollection<string>> RemoveAsync(
         string componentId,
         Guid? actorUserId,
         string? ipAddress,

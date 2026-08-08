@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" class="notice error">{{ notice }}</p>
+    <p v-if="notice" class="notice page-notice error" role="alert">{{ notice }}</p>
 
     <div v-if="report" class="advisor-summary">
       <span class="sev-pill critical">{{ report.criticalCount }} {{ t("panel.advisor.critical") }}</span>

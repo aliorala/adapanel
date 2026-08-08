@@ -1,4 +1,5 @@
 using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ftp;
 using AdaPanel.Core.Interfaces;
@@ -13,7 +14,10 @@ namespace AdaPanel.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller")]
 [Route("api/v1/ftp")]
-public sealed class FtpController(IFtpService ftpService, ICustomerScopeService customerScopes) : ControllerBase
+public sealed class FtpController(
+    IFtpService ftpService,
+    ICustomerScopeService customerScopes,
+    IIisSiteService iisSiteService) : ControllerBase
 {
     [HttpPost("ensure")]
     [Authorize(Roles = "Administrator")]
@@ -63,6 +67,28 @@ public sealed class FtpController(IFtpService ftpService, ICustomerScopeService 
     public async Task<ActionResult<ApiResponse<FtpUserDto>>> CreateUserAsync([FromBody] CreateFtpUserRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+
+        // GÜVENLİK (çapraz-kiracı): admin DIŞINDAKİ kullanıcılar ana dizini kendi sitelerinin
+        // klasörünün dışına gösteremez.
+        //
+        // Bu alan boş bırakılabilir ve o zaman sitenin kökü kullanılır (olağan durum). Ama
+        // doldurulduğunda hiç doğrulanmıyordu: verilen yola FTP hesabı için DEĞİŞTİRME izni
+        // uygulanıyor (icacls ... /T). Yani "C:\" ya da başka bir müşterinin klasörü yazan bir
+        // kiracı, o ağacın tamamına yazma hakkı olan bir FTP hesabı elde ederdi.
+        if (!User.IsInRole("Administrator") && !string.IsNullOrWhiteSpace(request.HomePath))
+        {
+            var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
+            var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                ? site.PhysicalPath
+                : site.ApplicationRootPath;
+
+            // Kökün kendisi geçerlidir: en olağan seçim sitenin ta kendisidir.
+            if (!PathContainment.IsRootOrInside(kok, request.HomePath))
+            {
+                return StatusCode(403, ApiResponse<FtpUserDto>.Fail("ftp.home_outside_site", 403));
+            }
+        }
+
         var user = await ftpService.CreateFtpUserAsync(request, cancellationToken);
         return Ok(ApiResponse<FtpUserDto>.Ok(user, "ftp.user_created"));
     }

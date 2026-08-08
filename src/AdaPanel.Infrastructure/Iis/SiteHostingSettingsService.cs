@@ -19,6 +19,7 @@ public sealed class SiteHostingSettingsService(
     IComponentBootstrapper componentBootstrapper,
     ISchedulerService schedulerService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
+    IConcurrencyLock concurrencyLock,
     JsonFileStore fileStore) : ISiteHostingSettingsService
 {
     private readonly string dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
@@ -49,7 +50,19 @@ public sealed class SiteHostingSettingsService(
         };
         states.Add(state);
         await fileStore.WriteAsync(StatePath, states, cancellationToken);
-        UpdateWebConfig(site.PhysicalPath, ToUpdateRequest(state));
+
+        // BURADA web.config YAZILMAZ. Okuma işleminin yan etkisi olmamalı — hele ki müşterinin
+        // sitesini düşürebilecek bir yan etkisi.
+        //
+        // Eskiden bu satırda UpdateWebConfig çağrılıyordu. UpdateWebConfig ise ipSecurity,
+        // httpRedirect ve urlCompression bölümlerini KOŞULSUZ yazıyor; bu bölümler sırasıyla
+        // IP and Domain Restrictions, HTTP Redirection ve sıkıştırma rol hizmetlerini gerektirir
+        // ve panelin kurulum betiği (scripts/enable-iis-features.ps1) bunların HİÇBİRİNİ kurmuyor.
+        // IIS tanımlanmamış bir config bölümü görünce sitenin tamamına 500.19 döner.
+        //
+        // Yani kullanıcı hiçbir ayar kaydetmeden, yalnızca "Barındırma ayarları" sekmesini AÇARAK
+        // siteyi düşürebiliyordu. Ayarlar zaten Update akışında yazılıyor; burada yazmanın bir
+        // kazancı yoktu.
         return state;
     }
 
@@ -63,7 +76,13 @@ public sealed class SiteHostingSettingsService(
         UpdateWebConfig(site.PhysicalPath, request);
         try
         {
-            UpdateIisLimits(siteName, request.MaximumBandwidthBytesPerSecond, request.MaximumConnections);
+            // IIS KUYRUĞUNA GİRİYOR: applicationHost.config'e yazıyor ve tek dosyadır — eşzamanlı
+            // yazımda biri sessizce kaybolur. Gerekçe WafService.IsolateAppPoolAsync'te.
+            await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Iis, () =>
+            {
+                UpdateIisLimits(siteName, request.MaximumBandwidthBytesPerSecond, request.MaximumConnections);
+                return Task.CompletedTask;
+            }, cancellationToken);
         }
         catch (AppException)
         {
@@ -121,10 +140,13 @@ public sealed class SiteHostingSettingsService(
             throw new AppException("composer.components_required", 409, 409);
         }
 
-        var result = await ProcessRunner.RunAsync(
+        var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+        var result = await LimitedIdentityRunner.RunAsync(
             phpPath,
             $"\"{composerPath}\" install --no-interaction --prefer-dist --optimize-autoloader",
-            string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath,
+            kok,
+            kok,
+            TimeSpan.FromMinutes(10),
             cancellationToken);
 
         return new ComposerRunResultDto
@@ -176,10 +198,13 @@ public sealed class SiteHostingSettingsService(
             throw new AppException("composer.components_required", 409, 409);
         }
 
-        var result = await ProcessRunner.RunAsync(
+        var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+        var result = await LimitedIdentityRunner.RunAsync(
             phpPath,
             $"\"{composerPath}\" {trimmed} --no-interaction --no-ansi",
-            string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath,
+            kok,
+            kok,
+            TimeSpan.FromMinutes(10),
             cancellationToken);
 
         return new ComposerRunResultDto
@@ -237,10 +262,12 @@ public sealed class SiteHostingSettingsService(
             throw new AppException("composer.components_required", 409, 409);
         }
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await LimitedIdentityRunner.RunAsync(
             phpPath,
             $"\"{artisanPath}\" {trimmed} --no-interaction --no-ansi",
             workDir,
+            workDir,
+            TimeSpan.FromMinutes(10),
             cancellationToken);
 
         return new ComposerRunResultDto
@@ -279,12 +306,13 @@ public sealed class SiteHostingSettingsService(
             throw new AppException("node.not_installed", 409, 409);
         }
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await LimitedIdentityRunner.RunAsync(
             nodeExe,
             $"\"{npmCli}\" {trimmed} --no-fund --no-audit",
             workDir,
-            cancellationToken,
-            timeout: TimeSpan.FromMinutes(20));
+            workDir,
+            TimeSpan.FromMinutes(20),
+            cancellationToken);
 
         return new ComposerRunResultDto
         {
@@ -520,12 +548,13 @@ public sealed class SiteHostingSettingsService(
         var phpPath = await ResolvePhpExecutableAsync(cancellationToken);
         var wpCli = await EnsureWpCliAsync(cancellationToken);
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await LimitedIdentityRunner.RunAsync(
             phpPath,
             $"\"{wpCli}\" {trimmed} --no-color",
             workDir,
-            cancellationToken,
-            timeout: TimeSpan.FromMinutes(10));
+            workDir,
+            TimeSpan.FromMinutes(10),
+            cancellationToken);
 
         return new ComposerRunResultDto
         {
@@ -701,19 +730,46 @@ public sealed class SiteHostingSettingsService(
         var configuration = document.Element("configuration")!;
         var systemWebServer = Ensure(configuration, "system.webServer");
         var security = Ensure(systemWebServer, "security");
-        var ipSecurity = Ensure(security, "ipSecurity");
-        ipSecurity.SetAttributeValue("allowUnlisted", "true");
-        ipSecurity.Elements("add").Remove();
-        foreach (var ip in request.DeniedIpAddresses.Select(item => item.Trim()).Where(item => item.Length > 0))
+
+        // KULLANILMAYAN BÖLÜM YAZILMAZ.
+        //
+        // ipSecurity "IP and Domain Restrictions", httpRedirect ise "HTTP Redirection" rol
+        // hizmetini gerektirir; panelin kurulum betiği (scripts/enable-iis-features.ps1) bunların
+        // hiçbirini kurmuyor. IIS tanımlanmamış bir config bölümü görünce sitenin TAMAMINA 500.19
+        // döner — yani bir ayarı hiç kullanmayan site, sırf bölüm yazıldığı için düşüyordu.
+        //
+        // Yazılmadıklarında davranış aynı kalır: ipSecurity'nin varsayılanı zaten "listelenmeyene
+        // izin ver", httpRedirect'inki de "kapalı". Yani bu bölümler ancak GERÇEKTEN bir şey
+        // değiştirdiklerinde yazılıyor; kapatıldıklarında ise kaldırılıyor ki artık kalmasın.
+        var engellenenler = request.DeniedIpAddresses.Select(item => item.Trim()).Where(item => item.Length > 0).ToArray();
+        if (engellenenler.Length > 0)
         {
-            ipSecurity.Add(new XElement("add", new XAttribute("ipAddress", ip), new XAttribute("allowed", "false")));
+            var ipSecurity = Ensure(security, "ipSecurity");
+            ipSecurity.SetAttributeValue("allowUnlisted", "true");
+            ipSecurity.Elements("add").Remove();
+            foreach (var ip in engellenenler)
+            {
+                ipSecurity.Add(new XElement("add", new XAttribute("ipAddress", ip), new XAttribute("allowed", "false")));
+            }
+        }
+        else
+        {
+            security.Element("ipSecurity")?.Remove();
         }
 
-        var httpRedirect = Ensure(systemWebServer, "httpRedirect");
-        httpRedirect.SetAttributeValue("enabled", string.IsNullOrWhiteSpace(request.RedirectUrl) ? "false" : "true");
-        httpRedirect.SetAttributeValue("destination", request.RedirectUrl.Trim());
-        httpRedirect.SetAttributeValue("exactDestination", "false");
-        httpRedirect.SetAttributeValue("httpResponseStatus", "Permanent");
+        var yonlendirme = request.RedirectUrl.Trim();
+        if (yonlendirme.Length > 0)
+        {
+            var httpRedirect = Ensure(systemWebServer, "httpRedirect");
+            httpRedirect.SetAttributeValue("enabled", "true");
+            httpRedirect.SetAttributeValue("destination", yonlendirme);
+            httpRedirect.SetAttributeValue("exactDestination", "false");
+            httpRedirect.SetAttributeValue("httpResponseStatus", "Permanent");
+        }
+        else
+        {
+            systemWebServer.Element("httpRedirect")?.Remove();
+        }
 
         var directoryBrowse = Ensure(systemWebServer, "directoryBrowse");
         directoryBrowse.SetAttributeValue("enabled", request.DirectoryBrowsingEnabled ? "true" : "false");
@@ -731,9 +787,18 @@ public sealed class SiteHostingSettingsService(
         httpErrors.SetAttributeValue("errorMode", request.DetailedErrorsEnabled ? "Detailed" : "DetailedLocalOnly");
         httpErrors.SetAttributeValue("existingResponse", request.DetailedErrorsEnabled ? "PassThrough" : "Auto");
 
-        var compression = Ensure(systemWebServer, "urlCompression");
-        compression.SetAttributeValue("doStaticCompression", request.StaticCompressionEnabled ? "true" : "false");
-        compression.SetAttributeValue("doDynamicCompression", request.DynamicCompressionEnabled ? "true" : "false");
+        // urlCompression sıkıştırma modüllerini gerektirir (yine kurulum betiğinde yok). Statik
+        // açık + dinamik kapalı IIS'in kendi varsayılanıdır; o durumda bölüm hiç yazılmaz.
+        if (request.StaticCompressionEnabled && !request.DynamicCompressionEnabled)
+        {
+            systemWebServer.Element("urlCompression")?.Remove();
+        }
+        else
+        {
+            var compression = Ensure(systemWebServer, "urlCompression");
+            compression.SetAttributeValue("doStaticCompression", request.StaticCompressionEnabled ? "true" : "false");
+            compression.SetAttributeValue("doDynamicCompression", request.DynamicCompressionEnabled ? "true" : "false");
+        }
 
         var requestFiltering = Ensure(security, "requestFiltering");
         var requestLimits = Ensure(requestFiltering, "requestLimits");

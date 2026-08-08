@@ -54,8 +54,10 @@ public sealed class FilesController(
     public async Task<IActionResult> DownloadAsync([FromQuery] string path, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, path, allowRoot: false, cancellationToken);
-        var (fileName, contentType, content) = await fileService.DownloadAsync(path, cancellationToken);
-        return File(content, contentType, fileName);
+        var (fileName, contentType, physicalPath) = await fileService.DownloadAsync(path, cancellationToken);
+
+        // PhysicalFile: dosya AKIŞ hâlinde verilir, belleğe alınmaz. Gerekçe IFileService'te.
+        return PhysicalFile(physicalPath, contentType, fileName);
     }
 
     [HttpPost("upload")]

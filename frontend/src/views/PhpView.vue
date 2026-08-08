@@ -13,7 +13,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
       <div class="segmented-tabs">
@@ -122,6 +122,9 @@
           <p class="meta">{{ t("panel.php.settingsHint") }}</p>
         </div>
       </div>
+      <!-- Okunamadıysa FORM GÖSTERİLMEZ: aksi halde ekrandaki değerler bu siteye ait sanılır. -->
+      <p v-if="settingsError" class="notice error" role="alert">{{ settingsError }}</p>
+      <template v-if="settingsLoaded">
       <div class="form-grid">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.php.memoryLimit") }}</span>
@@ -154,6 +157,7 @@
           {{ savingSettings ? t("panel.database.saving") : t("panel.common.save") }}
         </button>
       </div>
+      </template>
     </div>
   </section>
 </template>
@@ -189,7 +193,16 @@ const settings = reactive({
 });
 const savingSettings = ref(false);
 
+// Ayarların O SİTE için gerçekten okunup okunmadığı. Bu bayrak olmadan form, okuma başarısız
+// olduğunda ÖNCEKİ sitenin değerlerini gösteriyordu ve "Kaydet" onları yanlış siteye yazıyordu:
+// A sitesi seçilir (memory_limit 512M yüklenir) → B sitesine geçilir, B'nin okuması düşer →
+// ekranda hâlâ 512M yazar, hiçbir uyarı yoktur → Kaydet'e basılır → A'nın limitleri B'ye gider.
+const settingsLoaded = ref(false);
+const settingsError = ref("");
+
 async function loadSettings(siteName: string) {
+  settingsLoaded.value = false;
+  settingsError.value = "";
   if (!siteName) {
     return;
   }
@@ -201,13 +214,16 @@ async function loadSettings(siteName: string) {
     settings.postMaxSize = data.postMaxSize;
     settings.displayErrors = data.displayErrors;
     settings.openBasedirEnabled = data.openBasedirEnabled ?? false;
-  } catch {
-    // site PHP ayarı okunamadıysa varsayılanlar kalır
+    settingsLoaded.value = true;
+  } catch (error) {
+    // ÖNCEKİ SİTENİN DEĞERLERİ EKRANDA KALMAZ. Okuyamadığımızı da söylüyoruz: sessizce
+    // varsayılan göstermek, ölçülmemiş değerleri ölçülmüş gibi sunmaktı.
+    settingsError.value = resolveApiMessage(error);
   }
 }
 
 async function saveSettings() {
-  if (!selectedSiteName.value) {
+  if (!selectedSiteName.value || !settingsLoaded.value) {
     return;
   }
   savingSettings.value = true;

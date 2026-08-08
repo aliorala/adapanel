@@ -51,7 +51,7 @@ public sealed class BruteForceProtectionService(
 
     public async Task<BruteForceStatusDto> UpdateSettingsAsync(UpdateBruteForceSettingsRequest request, CancellationToken cancellationToken = default)
     {
-        return await concurrencyLock.RunExclusiveAsync(async () =>
+        return await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Auth, async () =>
         {
             var state = await LoadAsync(cancellationToken);
             state.Enabled = request.Enabled;
@@ -77,7 +77,7 @@ public sealed class BruteForceProtectionService(
             string? ipToBan = null;
             BanRecord? banRecord = null;
 
-            await concurrencyLock.RunExclusiveAsync(async () =>
+            await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Auth, async () =>
             {
                 var state = await LoadAsync(cancellationToken);
                 if (!state.Enabled || IsWhitelisted(state, ip) || state.Bans.Any(ban => ban.IpAddress == ip))
@@ -157,7 +157,7 @@ public sealed class BruteForceProtectionService(
 
         try
         {
-            await concurrencyLock.RunExclusiveAsync(async () =>
+            await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Auth, async () =>
             {
                 var state = await LoadAsync(cancellationToken);
                 var removed = state.Attempts.RemoveAll(item => item.IpAddress == ip);
@@ -178,7 +178,7 @@ public sealed class BruteForceProtectionService(
         var ip = Normalize(ipAddress) ?? throw new AppException("security.bruteforce.invalid_ip", 400, 400);
 
         BanRecord? removedBan = null;
-        var status = await concurrencyLock.RunExclusiveAsync(async () =>
+        var status = await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Auth, async () =>
         {
             var state = await LoadAsync(cancellationToken);
             removedBan = state.Bans.FirstOrDefault(ban => ban.IpAddress == ip);
@@ -201,12 +201,27 @@ public sealed class BruteForceProtectionService(
         try
         {
             var expired = new List<BanRecord>();
-            await concurrencyLock.RunExclusiveAsync(async () =>
+            await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Auth, async () =>
             {
                 var state = await LoadAsync(cancellationToken);
                 var now = DateTime.UtcNow;
                 expired = state.Bans.Where(ban => ban.ExpiresAtUtc is not null && ban.ExpiresAtUtc <= now).ToList();
-                if (expired.Count == 0)
+
+                // DENEME KAYITLARI DA BUDANMALI — burada yalnız ban'lar temizleniyordu ve
+                // `Attempts` sonsuza kadar büyüyordu.
+                //
+                // Eşiğe hiç ulaşmayan IP'lerin kaydı hiç silinmiyordu: 200.000 farklı IP'den 3'er
+                // deneme yapan dağıtık bir dalga hiçbir ban üretmez ama 200.000 kayıt bırakır.
+                // Ondan sonra HER giriş denemesi (IsBannedAsync, girişin sıcak yolu) bu dosyanın
+                // tamamını okuyup ayrıştırır, her başarısız deneme de tamamını yeniden yazar.
+                // Yani korumanın kendisi bir DoS vektörüne dönüşüyordu.
+                //
+                // Pencere dışındaki kayıtlar zaten sayıma girmiyor (RegisterFailedAttemptAsync
+                // penceredekilere bakar), dolayısıyla silmek hiçbir bilgi kaybettirmez.
+                var window = TimeSpan.FromMinutes(Math.Max(1, state.WindowMinutes));
+                var eskiDeneme = state.Attempts.RemoveAll(attempt => attempt.LastSeenUtc < now - window);
+
+                if (expired.Count == 0 && eskiDeneme == 0)
                 {
                     return;
                 }

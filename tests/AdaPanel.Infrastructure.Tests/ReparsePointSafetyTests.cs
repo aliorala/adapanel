@@ -27,6 +27,14 @@ public sealed class ReparsePointSafetyTests
     /// <summary>
     /// FTP kullanici kokunu kaldiran parca, once "bu bir baglanti mi" diye sorar.
     /// </summary>
+    /// <remarks>
+    /// Bu denetim METİN tabanlıdır ve kırılgandır (yazım değişirse yanıltır) — ama BİLEREK
+    /// duruyor. Yerine yazılan gerçek davranış testi (<see cref="FtpUserRootDeletionBehaviourTests"/>)
+    /// ölçüldü: koruma kaldırılınca bile GEÇİYOR, çünkü bu makinedeki PowerShell 5.1 yapısı
+    /// junction'ı zaten takip etmiyor (hata sonraki yapılarda düzeltilmiş). Yani tehlikeli davranış
+    /// burada üretilemiyor ve koruyucu dalın VARLIĞINI doğrulayan tek şey bu metin denetimi.
+    /// Silinseydi kapsam artmaz, azalırdı.
+    /// </remarks>
     [Fact]
     public void TheFtpUserRoot_IsNeverDeletedRecursivelyWhenItIsALink()
     {
@@ -45,7 +53,10 @@ public sealed class ReparsePointSafetyTests
     {
         var kaynak = OkuKaynak("src", "AdaPanel.Infrastructure", "Ftp", "FtpService.cs");
 
-        Assert.Contains("private const string RemoveUserRootSnippet", kaynak, StringComparison.Ordinal);
+        // Görünürlük anahtarına BAĞLANMA. Bu satır "private const" arıyordu ve sabit testten
+        // erişilebilsin diye "internal" yapılınca test kırmızıya döndü — davranış hiç değişmemişken.
+        // Metin tabanlı denetimin kırılganlığının canlı örneği; kapsamı daraltmadan gevşetiliyor.
+        Assert.Contains("const string RemoveUserRootSnippet", kaynak, StringComparison.Ordinal);
 
         // Bir tanim + iki kullanim.
         var kullanim = System.Text.RegularExpressions.Regex.Matches(kaynak, @"\{\{RemoveUserRootSnippet\}\}").Count;

@@ -13,8 +13,10 @@ public sealed class CreateSiteRequest
     // set: SitesController non-admin (bayi/müşteri) için yolu güvenli köke ZORLAR (çapraz-kiracı yolu engellenir).
     public string PhysicalPath { get; set; } = string.Empty;
 
+    // set: SitesController admin OLMAYAN istekte bunu TEMİZLER — havuz seçimi kiracıya bırakılamaz
+    // (aşağıdaki gerekçe orada yazılı). Boş bırakıldığında panel yönetilen adı kendisi üretir.
     [StringLength(128)]
-    public string ApplicationPoolName { get; init; } = string.Empty;
+    public string ApplicationPoolName { get; set; } = string.Empty;
 
     [StringLength(255)]
     public string HostName { get; init; } = string.Empty;

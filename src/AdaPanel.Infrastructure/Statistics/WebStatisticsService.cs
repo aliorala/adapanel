@@ -1,3 +1,4 @@
+using AdaPanel.Infrastructure.Support;
 using AdaPanel.Core.Dtos.Statistics;
 using AdaPanel.Core.Interfaces;
 
@@ -19,9 +20,8 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         var periodDays = Math.Clamp(days, 1, 365);
         var cutoff = DateTime.UtcNow.Date.AddDays(-(periodDays - 1));
 
-        var logsDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.System).Replace("System32", "inetpub\\logs\\LogFiles"),
-            $"W3SVC{site.Id}");
+        // IIS'in GERÇEK günlük dizini (sabit kodlu değil) — gerekçe: IisLogPaths.
+        var logsDirectory = IisLogPaths.ResolveSiteDirectory(site.Id);
 
         var result = new WebStatisticsDto
         {
@@ -160,12 +160,53 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         return map;
     }
 
+    /// <summary>
+    /// Ayrı ziyaretçi kümesinin üst sınırı. Aşılırsa sayaç doyar ve DTO bunu "yaklaşık" diye
+    /// bildirir — 250.000'i "gerçek sayı" gibi göstermek yanlış bilgi olurdu.
+    /// </summary>
+    private const int MaxUniqueVisitors = 250_000;
+
+    /// <summary>
+    /// Sayfa/kaynak sözlüklerinin üst sınırı. Anahtarlar İSTEMCİNİN yazdığı değerlerdir
+    /// (URL yolu, Referer başlığı) ve IIS 404'leri de günlüğe yazar; sınırsız bırakılırsa bir
+    /// güvenlik tarayıcısı tek istekte yüzlerce MB biriktirir.
+    /// </summary>
+    private const int MaxDistinctKeys = 50_000;
+
     private sealed class Aggregator
     {
         private readonly HashSet<string> uniqueVisitors = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, long> pages = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, long> referrers = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, long> daily = new(StringComparer.Ordinal);
+
+        /// <summary>Ziyaretçi kümesi sınıra dayandı mı (sayı artık kesin değil).</summary>
+        public bool VisitorsApproximate { get; private set; }
+
+        /// <summary>
+        /// Sözlüğü sınır içinde tutar. Dolduğunda EN SEYREK anahtarlar atılır, yenileri değil:
+        /// tersi yapılsaydı önce gelen çöp sözlüğü doldurur ve sonradan gelen GERÇEK popüler
+        /// sayfalar hiç sayılamazdı. Yalnız ilk 15 gösterildiği için seyrek kuyruğu atmak
+        /// cevabı değiştirmez.
+        /// </summary>
+        private static void Budala(Dictionary<string, long> map)
+        {
+            if (map.Count <= MaxDistinctKeys)
+            {
+                return;
+            }
+
+            var esik = 1L;
+            while (map.Count > MaxDistinctKeys / 2 && esik < 1_000_000)
+            {
+                foreach (var anahtar in map.Where(item => item.Value <= esik).Select(item => item.Key).ToArray())
+                {
+                    map.Remove(anahtar);
+                }
+
+                esik *= 2;
+            }
+        }
 
         private long totalRequests;
         private long totalBytes;
@@ -190,19 +231,28 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
             var clientIp = Get(columns, fieldIndex, "c-ip");
             if (!string.IsNullOrEmpty(clientIp) && clientIp != "-")
             {
-                uniqueVisitors.Add(clientIp);
+                if (uniqueVisitors.Count < MaxUniqueVisitors)
+                {
+                    uniqueVisitors.Add(clientIp);
+                }
+                else
+                {
+                    VisitorsApproximate = true;
+                }
             }
 
             var uri = Get(columns, fieldIndex, "cs-uri-stem");
             if (!string.IsNullOrEmpty(uri) && uri != "-")
             {
                 Increment(pages, uri);
+                Budala(pages);
             }
 
             var referer = Get(columns, fieldIndex, "cs(Referer)");
             if (!string.IsNullOrEmpty(referer) && referer != "-")
             {
                 Increment(referrers, NormalizeReferer(referer));
+                Budala(referrers);
             }
 
             if (!string.IsNullOrEmpty(date))
@@ -234,6 +284,7 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
             result.HasData = totalRequests > 0;
             result.TotalRequests = totalRequests;
             result.UniqueVisitors = uniqueVisitors.Count;
+            result.UniqueVisitorsApproximate = VisitorsApproximate;
             result.TotalBytes = totalBytes;
             result.Status2xx = status2xx;
             result.Status3xx = status3xx;

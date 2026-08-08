@@ -1,3 +1,4 @@
+using AdaPanel.Infrastructure.Support;
 using AdaPanel.Core.Dtos.Logs;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
@@ -36,9 +37,8 @@ public sealed class LogViewerService(
     public async Task<LogTailDto> TailSiteLogAsync(string siteName, int lines, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var logsDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.System).Replace("System32", "inetpub\\logs\\LogFiles"),
-            $"W3SVC{site.Id}");
+        // IIS'in GERÇEK günlük dizini (sabit kodlu değil) — gerekçe: IisLogPaths.
+        var logsDirectory = IisLogPaths.ResolveSiteDirectory(site.Id);
 
         Directory.CreateDirectory(logsDirectory);
         var logFile = new DirectoryInfo(logsDirectory)
@@ -72,6 +72,28 @@ public sealed class LogViewerService(
         };
     }
 
+    /// <summary>Sondan geriye okunacak en fazla bayt. 2 MB, 100 satırlık bir kuyruğa fazlasıyla yeter.</summary>
+    private const int TailWindowBytes = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// Dosyanın SON satırlarını, dosyanın tamamını okumadan getirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Önceden dosya baştan sona taranıyordu. Bellek güvenliydi (sınırlı kuyruk) ama G/Ç değildi:
+    /// yoğun bir sitenin günlük IIS günlüğü gigabaytlarca olur ve "son 100 satır" isteği o
+    /// gigabaytların tamamını diskten okurdu. Sayfa otomatik yenilendiğinde istekler üst üste
+    /// binip iş parçacığı havuzunu tüketirdi.
+    /// </para>
+    /// <para>
+    /// Bu, 0.3.6'ya kadar fark edilmiyordu: günlük dizini yanlış hesaplandığı için dosya zaten
+    /// hiç bulunamıyordu. Yol düzeltilince bu yol İLK KEZ gerçek dosyalarla çalışır hâle geldi.
+    /// </para>
+    /// <para>
+    /// Artık dosyanın sonundan sabit bir pencere okunur. İlk satır yarım kalmış olabileceği için
+    /// atılır — aksi hâlde ekranda bozuk bir satır görünürdü.
+    /// </para>
+    /// </remarks>
     private static string[] ReadTailLines(string path, int lineCount)
     {
         using var stream = new FileStream(
@@ -79,11 +101,27 @@ public sealed class LogViewerService(
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
+
+        var pencere = Math.Min(stream.Length, TailWindowBytes);
+        var bastanMi = pencere == stream.Length;
+        stream.Seek(-pencere, SeekOrigin.End);
+
         using var reader = new StreamReader(stream);
         var tail = new Queue<string>(lineCount);
+        var ilkSatir = true;
 
         while (reader.ReadLine() is { } line)
         {
+            // Pencerenin ortasından başladıysak ilk satır yarımdır.
+            if (ilkSatir)
+            {
+                ilkSatir = false;
+                if (!bastanMi)
+                {
+                    continue;
+                }
+            }
+
             if (tail.Count == lineCount)
             {
                 tail.Dequeue();

@@ -830,4 +830,189 @@ add_action('template_redirect', function () {
     // Eklenti/tema başlık satırı: olası yorum işaretlerinden sonra "Anahtar: Değer".
     [GeneratedRegex(@"(?m)^[ \t/*#@]*([A-Za-z][A-Za-z ]+):[ \t]*(.+?)[ \t]*$")]
     private static partial Regex HeaderRegex();
+
+    // --- Guncelleme yonetimi ---
+
+    /// <inheritdoc />
+    public async Task<WordPressUpdatesDto> GetUpdatesAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var sonuc = new WordPressUpdatesDto { SiteName = siteName };
+        var ogeler = new List<WordPressUpdatableDto>();
+        var hatalar = new List<string>();
+
+        // CEKIRDEK. Guncelleme yoksa wp-cli BOS dizi doner; bu hata degildir.
+        var cekirdek = await WpCliJsonAsync(siteName, "core check-update --format=json --fields=version,update_type", cancellationToken);
+        if (cekirdek.Error.Length > 0)
+        {
+            hatalar.Add(cekirdek.Error);
+        }
+        else if (cekirdek.Items is not null)
+        {
+            var mevcut = await WpCliRawAsync(siteName, "core version", cancellationToken);
+            foreach (var oge in cekirdek.Items)
+            {
+                ogeler.Add(new WordPressUpdatableDto
+                {
+                    Kind = "core",
+                    Name = "core",
+                    Title = "WordPress",
+                    CurrentVersion = mevcut,
+                    AvailableVersion = Alan(oge, "version"),
+                    UpdateAvailable = true
+                });
+            }
+        }
+
+        // EKLENTI ve TEMA.
+        foreach (var (tur, komut) in new[]
+                 {
+                     ("plugin", "plugin list --format=json --fields=name,title,status,version,update,update_version"),
+                     ("theme", "theme list --format=json --fields=name,title,status,version,update,update_version")
+                 })
+        {
+            var liste = await WpCliJsonAsync(siteName, komut, cancellationToken);
+            if (liste.Error.Length > 0)
+            {
+                hatalar.Add(liste.Error);
+                continue;
+            }
+
+            foreach (var oge in liste.Items ?? Array.Empty<JsonElement>())
+            {
+                var guncelVar = string.Equals(Alan(oge, "update"), "available", StringComparison.OrdinalIgnoreCase);
+                var baslik = Alan(oge, "title");
+                ogeler.Add(new WordPressUpdatableDto
+                {
+                    Kind = tur,
+                    Name = Alan(oge, "name"),
+                    Title = baslik.Length > 0 ? baslik : Alan(oge, "name"),
+                    CurrentVersion = Alan(oge, "version"),
+                    AvailableVersion = guncelVar ? Alan(oge, "update_version") : string.Empty,
+                    UpdateAvailable = guncelVar,
+                    Status = Alan(oge, "status")
+                });
+            }
+        }
+
+        // OLCULEMEDIYSE "guncelleme yok" DEMIYORUZ. Bos liste, guvenlik acigi olan bir siteyi
+        // guvende gosterebilirdi; okunamayan durum ayri bildiriliyor.
+        sonuc.Measured = hatalar.Count == 0;
+        sonuc.Error = string.Join(" | ", hatalar);
+        sonuc.Items = ogeler
+            .OrderByDescending(item => item.UpdateAvailable)
+            .ThenBy(item => item.Kind, StringComparer.Ordinal)
+            .ThenBy(item => item.Title, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return sonuc;
+    }
+
+    /// <inheritdoc />
+    public async Task<WordPressUpdateResultDto> ApplyUpdatesAsync(string siteName, WordPressUpdateRequest request, CancellationToken cancellationToken = default)
+    {
+        var sonuclar = new List<WordPressUpdateItemResultDto>();
+
+        // HER OGE AYRI calistirilir. Tek komutta toplamak, biri patlayinca kalanlarin da
+        // yapilmamasina yol acardi; kullanici hangisinin gectigini de goremezdi.
+        if (request.Core)
+        {
+            sonuclar.Add(await GuncelleAsync(siteName, "core", "core", "core update", cancellationToken));
+        }
+
+        foreach (var eklenti in request.Plugins.Select(Slug).Where(item => item.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            sonuclar.Add(await GuncelleAsync(siteName, "plugin", eklenti, "plugin update " + eklenti, cancellationToken));
+        }
+
+        foreach (var tema in request.Themes.Select(Slug).Where(item => item.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            sonuclar.Add(await GuncelleAsync(siteName, "theme", tema, "theme update " + tema, cancellationToken));
+        }
+
+        return new WordPressUpdateResultDto { SiteName = siteName, Results = sonuclar };
+    }
+
+    private async Task<WordPressUpdateItemResultDto> GuncelleAsync(string siteName, string tur, string ad, string komut, CancellationToken cancellationToken)
+    {
+        var sonuc = await hostingSettings.RunWpCliCommandAsync(siteName, komut, cancellationToken);
+        return new WordPressUpdateItemResultDto
+        {
+            Kind = tur,
+            Name = ad,
+            Success = sonuc.ExitCode == 0,
+            Message = sonuc.ExitCode == 0
+                ? string.Empty
+                : Kisalt(string.IsNullOrWhiteSpace(sonuc.Error) ? sonuc.Output : sonuc.Error)
+        };
+    }
+
+    /// <summary>
+    /// wp-cli'yi calistirip JSON dizisini ayristirir.
+    /// </summary>
+    /// <remarks>
+    /// Cikis kodu 0 olsa bile cikti JSON olmayabilir (uyari satirlari). Ayristirilamayan cikti
+    /// "bos liste" SAYILMAZ, hata sayilir -- aksi halde okunamayan bir site "guncel" gorunurdu.
+    /// </remarks>
+    private async Task<(IReadOnlyList<JsonElement>? Items, string Error)> WpCliJsonAsync(string siteName, string komut, CancellationToken cancellationToken)
+    {
+        var sonuc = await hostingSettings.RunWpCliCommandAsync(siteName, komut, cancellationToken);
+        if (sonuc.ExitCode != 0)
+        {
+            return (null, Kisalt(string.IsNullOrWhiteSpace(sonuc.Error) ? sonuc.Output : sonuc.Error));
+        }
+
+        var metin = (sonuc.Output ?? string.Empty).Trim();
+        var bas = metin.IndexOf('[');
+        var son = metin.LastIndexOf(']');
+        if (bas < 0 || son <= bas)
+        {
+            // wp-cli bos liste icin "[]" yazar; hic kose parantez yoksa cikti beklenmedik demektir.
+            return (null, Kisalt(metin.Length == 0 ? "wp-cli bos cikti dondu" : metin));
+        }
+
+        try
+        {
+            using var belge = JsonDocument.Parse(metin.Substring(bas, son - bas + 1));
+            return (belge.RootElement.EnumerateArray().Select(item => item.Clone()).ToArray(), string.Empty);
+        }
+        catch (JsonException exception)
+        {
+            return (null, Kisalt(exception.Message));
+        }
+    }
+
+    private async Task<string> WpCliRawAsync(string siteName, string komut, CancellationToken cancellationToken)
+    {
+        var sonuc = await hostingSettings.RunWpCliCommandAsync(siteName, komut, cancellationToken);
+        return sonuc.ExitCode == 0 ? (sonuc.Output ?? string.Empty).Trim() : string.Empty;
+    }
+
+    private static string Alan(JsonElement oge, string ad)
+    {
+        if (oge.ValueKind != JsonValueKind.Object || !oge.TryGetProperty(ad, out var deger))
+        {
+            return string.Empty;
+        }
+
+        return deger.ValueKind == JsonValueKind.String ? deger.GetString() ?? string.Empty : deger.ToString();
+    }
+
+    /// <summary>
+    /// Eklenti/tema adini GUVENLI hale getirir: ad wp-cli komut satirina gidiyor.
+    /// </summary>
+    /// <remarks>
+    /// WordPress slug'lari yalniz harf, rakam, tire ve alt cizgi icerir. Suzgec, kullanicidan gelen
+    /// adin komuta ek arguman ya da bayrak sokmasini engeller.
+    /// </remarks>
+    private static string Slug(string? value)
+    {
+        var kaynak = (value ?? string.Empty).Trim();
+        return new string(kaynak.Where(ch => char.IsLetterOrDigit(ch) || ch == '-' || ch == '_').ToArray());
+    }
+
+    private static string Kisalt(string? value)
+    {
+        var metin = (value ?? string.Empty).Trim();
+        return metin.Length <= 500 ? metin : metin.Substring(0, 500) + "...";
+    }
+
 }

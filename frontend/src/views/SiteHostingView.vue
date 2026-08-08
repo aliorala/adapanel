@@ -27,7 +27,7 @@
           <button class="secondary compact" :disabled="!siteName || busy" @click="load">{{ t("panel.hosting.refresh") }}</button>
         </div>
 
-        <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+        <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
         <p v-if="!siteName" class="empty-state">{{ t("panel.hosting.selectSiteHint") }}</p>
 
         <!-- Veri gelmeden ayar anahtarlarını göstermiyoruz: kapalı görünen bir anahtar,
@@ -87,6 +87,13 @@
 
             <div class="action-row">
               <button :disabled="busy" @click="save">{{ t("panel.hosting.save") }}</button>
+            </div>
+
+            <!-- ALAN ADI TAKMA ADLARI: ".com + .com.tr aynı siteye" en sık gelen talep ve panelde
+                 hiç yoktu (kullanıcı ikinci bir site açmak zorunda kalıyordu). Genel bölümde,
+                 belge kökünün yanında: alan adıyla ilgili iş zaten burada yapılıyor. -->
+            <div class="alias-block">
+              <SiteAliases :site-name="siteName" />
             </div>
           </section>
 
@@ -217,9 +224,17 @@
               </button>
             </div>
 
-            <p v-if="quota && !quota.fsrmAvailable" class="notice error">{{ t("panel.hosting.quotaUnavailable") }}</p>
+            <!-- ÇIKMAZ SOKAK DEĞİL: rol eksikse kurma düğmesi de burada. -->
+            <div v-if="quota && !quota.fsrmAvailable" class="notice error fsrm-missing">
+              <span>{{ t("panel.hosting.quotaUnavailable") }}</span>
+              <button class="secondary compact" :disabled="installingFsrm" @click="installFsrmRole">
+                {{ installingFsrm ? t("panel.hosting.quotaInstalling") : t("panel.hosting.quotaInstall") }}
+              </button>
+            </div>
+            <!-- Okunamadıysa ÖZET GÖSTERİLMEZ: sıfırlar ölçüm sanılıyordu. -->
+            <p v-if="quotaError" class="notice error" role="alert">{{ quotaError }}</p>
 
-            <div class="summary-strip quota-summary">
+            <div v-if="!quotaError" class="summary-strip quota-summary">
               <div class="summary-item">
                 <span>{{ t("panel.hosting.quotaStatus") }}</span>
                 <strong :class="['status-pill', quota?.quotaEnabled ? 'ok' : 'warn']">
@@ -277,7 +292,7 @@
                 </div>
                 <div class="summary-item">
                   <span>{{ t("panel.hosting.statsVisitors") }}</span>
-                  <strong>{{ stats.uniqueVisitors.toLocaleString() }}</strong>
+                  <strong>{{ stats.uniqueVisitors.toLocaleString() }}{{ stats.uniqueVisitorsApproximate ? "+" : "" }}</strong>
                 </div>
                 <div class="summary-item">
                   <span>{{ t("panel.hosting.statsBandwidth") }}</span>
@@ -404,8 +419,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import SiteAliases from "../components/SiteAliases.vue";
 import { getSiteHostingSettings, runArtisanCommand, runComposerCommand, runComposerInstall, updateSiteHostingSettings } from "../api/siteHosting";
-import { getQuota, removeQuota, setQuota, type SiteDiskQuota } from "../api/quota";
+import { getQuota, removeQuota, setQuota, type SiteDiskQuota, installFsrm } from "../api/quota";
 import { configureGitDeployment, deployGit, getGitDeployment, type GitDeployment } from "../api/git";
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
@@ -630,7 +646,24 @@ async function runArtisanCmd() {
   }
 }
 
+const quotaError = ref("");
+const installingFsrm = ref(false);
+
+async function installFsrmRole() {
+  installingFsrm.value = true;
+  quotaError.value = "";
+  try {
+    quota.value = await installFsrm(siteName.value);
+    showNotice(t("panel.hosting.quotaInstalled"), false);
+  } catch (error) {
+    quotaError.value = resolveApiMessage(error);
+  } finally {
+    installingFsrm.value = false;
+  }
+}
+
 async function loadQuota() {
+  quotaError.value = "";
   if (!siteName.value) return;
   try {
     quota.value = await getQuota(siteName.value);
@@ -638,8 +671,12 @@ async function loadQuota() {
       quotaForm.limitMegabytes = Math.max(1, Math.round(quota.value.limitBytes / 1_048_576));
       quotaForm.softLimit = quota.value.softLimit;
     }
-  } catch {
+  } catch (error) {
+    // ÖLÇEMEDİK ≠ KAPALI. Önceden yalnız quota=null yapılıyordu ve kart "Durum: Kapalı,
+    // Kullanılan: 0 B, Sınır: Sınırsız" gösteriyordu — bunlar ölçüm değil, null'ın varsayılanı.
+    // Kullanıcı kotanın gerçekten kapalı olduğuna inanıyordu.
     quota.value = null;
+    quotaError.value = resolveApiMessage(error);
   }
 }
 
@@ -756,6 +793,20 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+.alias-block {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.fsrm-missing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .hosting-workspace,
 .hosting-main,
 .settings-card,
@@ -872,28 +923,7 @@ function showNotice(message: string, isError: boolean) {
   background: color-mix(in srgb, var(--accent-2) 42%, transparent);
 }
 
-.setting-row {
-  display: grid;
-  grid-template-columns: 190px minmax(0, 0.52fr) minmax(220px, 1fr);
-  gap: 12px;
-  align-items: center;
-  padding: 11px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.setting-row:first-child {
-  border-top: 0;
-}
-
-.setting-row.align-start {
-  align-items: start;
-}
-
-.setting-row > span {
-  color: var(--text-soft);
-  font-size: 0.79rem;
-  font-weight: 850;
-}
+/* .setting-row duzeni base.css'te (paylasilan sinif, paylasilan tanim). */
 
 .checkbox-row input {
   width: 18px;

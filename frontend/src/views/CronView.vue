@@ -10,7 +10,7 @@
       </button>
     </div>
 
-    <p v-if="notice" :class="['notice', { error: noticeError }]">{{ notice }}</p>
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
       <div class="toolbar-group">
@@ -173,43 +173,64 @@
     </section>
 
     <div class="data-table">
+      <!-- BEŞ sütun. Önceden sekiz vardı ve her biri ekranda ~100 piksele düşüyordu: komut yolu,
+           tarihler ve dört düğme aynı satırda birbirinin üstüne biniyordu. Birbiriyle ilgili
+           alanlar tek hücrede toplandı — "sonraki çalışma" zamanlamanın, "son çalışma" ve "son
+           sonuç" durumun parçasıdır; ayrı sütun olmaları bilgiyi çoğaltmıyor, sadece daraltıyordu. -->
       <div class="data-row table-head cron-row">
         <span>{{ t("panel.tasks.name") }}</span>
         <span>{{ t("panel.tasks.command") }}</span>
         <span>{{ t("panel.tasks.scheduleType") }}</span>
         <span>{{ t("panel.sites.state") }}</span>
-        <span>{{ t("panel.tasks.lastResult") }}</span>
-        <span>{{ t("panel.tasks.nextRun") }}</span>
-        <span>{{ t("panel.tasks.lastRun") }}</span>
         <span>{{ t("panel.files.actions") }}</span>
       </div>
       <template v-for="item in filteredTasks" :key="item.name">
-      <!-- Devre dışı satır GÖRSEL OLARAK ayrışır. Soluk bir rozet yetmiyordu: kullanıcı görevin
-           devre dışı olduğunu ancak PowerShell'de fark etti, panelde geçip gitti. -->
+      <!-- BİR GÖREV = BİR GRUP. Ayırıcı çizgi eskiden satırın kendisine çiziliyordu; görevin
+           açıklaması ("Şu anda çalışıyor — ... önce başladı") o çizginin ALTINDA kalıyor ve bir
+           alttaki göreve aitmiş gibi okunuyordu. Artık çizgi grubun sonunda: açıklama, ait
+           olduğu satırla aynı bandın içinde. -->
+      <div class="cron-item">
       <div :class="['data-row', 'cron-row', { 'row-disabled': isDisabled(item), 'row-running': isRunning(item) }]">
         <span class="cell-main">
           <strong>{{ item.name }}</strong>
           <small>{{ typeLabel(item.taskType) }}</small>
         </span>
-        <span class="cell-main">
+        <!-- Komut tek parça uzun bir yol olur; okunması için tek aralıklı yazı tipi, taşmaması
+             için hücre içinde kırılıyor (.data-row > * kuralı). -->
+        <span class="cell-main cell-command">
           <strong>{{ item.taskType === "url" ? item.url || item.arguments : item.command }}</strong>
           <small>{{ item.taskType === "url" ? "-" : item.arguments || "-" }}</small>
         </span>
-        <span>{{ scheduleLabel(item.scheduleType) }}</span>
-        <span :class="['status-pill', taskStateClass(item.state)]">{{ stateLabel(item.state) }}</span>
-        <!-- Kodun ne demek olduğu satırda yazılı; "neden ve ne yapmalı" ipucu üzerine gelince. -->
-        <span :class="['status-pill', resultClass(item)]" :title="resultHint(item) || undefined">{{ resultLabel(item) }}</span>
-        <!-- DEVRE DIŞI görevde tarih GÖSTERİLMEZ. Windows devre dışı görevler için de bir sonraki
-             zamanı hesaplar; onu olduğu gibi yazmak, hiç çalışmayacak bir görev için kullanıcıya
-             randevu vermektir. Boş hücre de "sorun yok" demek değildir: sebebi yazılır. -->
-        <span v-if="isDisabled(item)" class="status-pill warn" :title="t('panel.tasks.disabledNextRunHint')">
-          {{ t("panel.tasks.disabledNextRun") }}
+
+        <!-- Zamanlama + SONRAKİ çalışma birlikte: ikisi aynı sorunun parçası ("bu ne zaman
+             çalışacak"), ayrı sütunlarda dururken kullanıcı gözünü ileri geri gezdiriyordu. -->
+        <span class="cell-main">
+          <strong>{{ scheduleLabel(item.scheduleType) }}</strong>
+          <!-- DEVRE DIŞI görevde tarih GÖSTERİLMEZ. Windows devre dışı görevler için de bir
+               sonraki zamanı hesaplar; onu olduğu gibi yazmak, hiç çalışmayacak bir görev için
+               kullanıcıya randevu vermektir. Boş bırakmak da "sorun yok" demek değildir: sebebi
+               yazılır. -->
+          <small v-if="isDisabled(item)" class="cell-flag" :title="t('panel.tasks.disabledNextRunHint')">
+            {{ t("panel.tasks.disabledNextRun") }}
+          </small>
+          <small v-else-if="item.nextRunTimeUtc">
+            {{ t("panel.tasks.nextRun") }}: {{ formatUtc(item.nextRunTimeUtc) }}
+          </small>
+          <small v-else class="cell-flag" :title="t('panel.tasks.noNextRunHint')">
+            {{ t("panel.tasks.noNextRun") }}
+          </small>
         </span>
-        <span v-else-if="item.nextRunTimeUtc">{{ formatUtc(item.nextRunTimeUtc) }}</span>
-        <span v-else class="status-pill warn" :title="t('panel.tasks.noNextRunHint')">
-          {{ t("panel.tasks.noNextRun") }}
+
+        <!-- Durum + son sonuç + son çalışma birlikte: "en son ne oldu" sorusunun tamamı. -->
+        <span class="cell-status">
+          <span class="pill-row">
+            <span :class="['status-pill', taskStateClass(item.state)]">{{ stateLabel(item.state) }}</span>
+            <!-- Kodun ne demek olduğu rozette yazılı; "neden ve ne yapmalı" ipucu üzerine gelince. -->
+            <span :class="['status-pill', resultClass(item)]" :title="resultHint(item) || undefined">{{ resultLabel(item) }}</span>
+          </span>
+          <small>{{ t("panel.tasks.lastRun") }}: {{ formatUtc(item.lastRunTimeUtc) }}</small>
         </span>
-        <span>{{ formatUtc(item.lastRunTimeUtc) }}</span>
+
         <span class="row-actions">
           <!-- ÇALIŞAN görevde birincil eylem "durdur"dur. Önceden en görünür düğme "Devre dışı
                bırak"tı ve kullanıcı süren işi durdurmak için ona basıyordu; oysa o düğme çalışan
@@ -295,6 +316,7 @@
           <small v-else>{{ t("panel.tasks.outputUnreadable") }}</small>
         </span>
         <button class="ghost compact" @click="closeOutput(item.name)">{{ t("panel.tasks.runClose") }}</button>
+      </div>
       </div>
       </template>
       <p v-if="loading && filteredTasks.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
@@ -1099,8 +1121,52 @@ function resolveApiMessage(error: unknown) {
 </script>
 
 <style scoped>
+/* Eylem sütunu SABİT: dört düğme 2x2 oturur ve satırdan satıra yeri değişmez. Oransal (fr)
+   verildiğinde uzun görev adları düğme sütununu daraltıp düğmeleri alt alta diziyordu — bir
+   satırda iki, diğerinde dört sıra hâlinde; tablo tırtıklı görünüyordu. */
 .cron-row {
-  grid-template-columns: 1.1fr 1.6fr 0.65fr 0.7fr 0.8fr 0.95fr 0.95fr 1.25fr;
+  grid-template-columns: 1.15fr 2fr 1fr 1.05fr 232px;
+  align-items: start;
+}
+
+/* Hücre içi eylem düğmeleri kendi kutularında kalsın; satırın dikey hizasını bozmasın. */
+.cron-row .row-actions {
+  align-content: start;
+  gap: 6px;
+}
+
+/* Komut = kod. Değişken genişlikli yazı tipinde "l1I" ve "O0" ayırt edilemiyor, oysa buradaki
+   metin kullanıcının birebir doğrulaması gereken bir yol. */
+.cell-command strong,
+.cell-command small {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.cell-status {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.cell-status small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* Uyarı niteliğindeki alt satır (çalışma zamanı yok / devre dışı): rozete gerek yok, ama düz
+   gri de olmamalı — kullanıcı bunun bir bilgi değil bir eksiklik olduğunu görmeli. */
+.cell-flag {
+  color: var(--warn-text, #a07800);
+  font-weight: 600;
 }
 
 .span-2 {
@@ -1159,31 +1225,61 @@ function resolveApiMessage(error: unknown) {
   border-left: 3px solid var(--accent-1, #4b7bec);
 }
 
-/* Tek cümlelik sebep satırı: tablodaki satırın hemen altında, aynı hizada. */
+/* BİR GÖREV = BİR GRUP. Ayırıcı çizgi artık satırın değil GRUBUN sonunda; böylece görevin
+   açıklaması çizginin altında kalıp bir alttaki göreve aitmiş gibi görünmüyor.
+   min-width: satır 720px'e kadar genişleyebiliyor (.data-row); grup da aynı genişlikte olmazsa
+   tablo yatay kaydırıldığında açıklama satırla hizasını kaybederdi. */
+.cron-item {
+  min-width: 720px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.cron-item:last-child {
+  border-bottom: 0;
+}
+
+.cron-item .data-row {
+  border-bottom: 0;
+}
+
+/* Tek cümlelik sebep satırı: ait olduğu satıra GÖRSEL OLARAK bağlı.
+   Önceden hiçbir bağı yoktu — iki satır arasında boşta duran gri bir yazıydı ve okuyan onu
+   alttaki göreve ait sanıyordu. Sol şerit + hafif zemin, hangi göreve ait olduğunu belirsiz
+   bırakmıyor. */
 .row-explain {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
-  padding: 0.35rem 0.9rem 0.55rem;
+  margin: 0 0.9rem 0.55rem;
+  padding: 0.4rem 0.7rem;
+  border-left: 3px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--text-muted) 7%, transparent);
   font-size: 0.84rem;
   color: var(--text-muted);
 }
 
 .row-explain.warn {
   color: var(--warn-text, #a07800);
+  border-left-color: var(--warn-border, #e0b400);
+  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 
 .row-explain.live {
   color: var(--accent-1, #4b7bec);
+  border-left-color: var(--accent-1, #4b7bec);
+  background: color-mix(in srgb, var(--accent-1, #4b7bec) 8%, transparent);
 }
 
 .run-live {
   display: flex;
   align-items: flex-start;
   gap: 0.6rem;
-  padding: 0.5rem 0.9rem;
+  margin: 0 0.9rem 0.55rem;
+  padding: 0.5rem 0.7rem;
   border-left: 3px solid var(--accent-1, #4b7bec);
+  border-radius: 0 6px 6px 0;
   background: color-mix(in srgb, var(--accent-1, #4b7bec) 7%, transparent);
   font-size: 0.86rem;
 }
