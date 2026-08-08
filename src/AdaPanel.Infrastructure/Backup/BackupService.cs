@@ -617,26 +617,102 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         return root;
     }
 
+    /// <summary>Süreç gerçekten durdu mu diye kaç tur denenir (her tur arası 1 sn).</summary>
+    private const int StalwartStopAttempts = 10;
+
+    /// <summary>
+    /// Stalwart'ı durdurur ve DURDUĞUNU DOĞRULAR.
+    /// <para>
+    /// Eski hâlde <c>schtasks /End</c> sonucu okunmuyor, <c>Kill</c> çıplak bir <c>catch { }</c> ile
+    /// yutuluyor ve ardından yalnızca 1 saniye bekleniyordu. Süreç ayaktayken RocksDB dosyaları
+    /// kopyalanırsa GERİ YÜKLENEMEYEN bir posta yedeği üretilir — üstelik "yedeklendi" denerek.
+    /// Bozuk yedeği başarılı saymaktansa yedek almayı reddetmek gerekir: kullanıcı o zaman gerçek
+    /// bir yedeği olmadığını bilir.
+    /// </para>
+    /// </summary>
     private static async Task StopStalwartAsync(string installDirectory, CancellationToken cancellationToken)
     {
-        await ProcessRunner.RunAsync("schtasks.exe", $"/End /TN \"{StalwartTaskName}\"", cancellationToken: cancellationToken);
+        // schtasks başarısız olabilir (görev yok, zaten durmuş). TEK BAŞINA KARAR VERMEZ; asıl ölçüm
+        // aşağıdaki süreç doğrulamasıdır, bu yüzden sonucu yalnızca teşhis metnine taşınır.
+        var end = await ProcessRunner.RunAsync(
+            "schtasks.exe",
+            $"/End /TN \"{StalwartTaskName}\"",
+            cancellationToken: cancellationToken);
 
-        // RocksDB kilitlerinin bırakıldığından emin olmak için dizinden çalışan süreçleri sonlandır.
         var prefix = Path.GetFullPath(installDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var blockers = Array.Empty<string>();
+        for (var attempt = 0; attempt < StalwartStopAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            blockers = KillStalwartProcesses(prefix);
+            if (blockers.Length == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+
+        var teshis = $"schtasks /End exit={end.ExitCode} {end.StandardError}".Trim() +
+                     $"\r\nHalen calisan/dogrulanamayan surecler: {string.Join(", ", blockers)}";
+        throw new AppException("backup.mail_stop_failed", 409, 409, teshis);
+    }
+
+    /// <summary>
+    /// Kurulum dizininden çalışan stalwart süreçlerini sonlandırmayı dener ve denemeden SONRA hâlâ
+    /// engel olanları tanımlarıyla döner. Boş dizi = "dizin gerçekten serbest".
+    /// <para>
+    /// Yolu okunamayan bir süreç de engel sayılır: onun bizim örneğimiz OLMADIĞINI ölçemiyoruz ve
+    /// ölçemediğimiz şeye "sorun yok" demek, bu hatanın ta kendisiydi.
+    /// </para>
+    /// </summary>
+    private static string[] KillStalwartProcesses(string prefix)
+    {
+        var blockers = new List<string>();
         foreach (var process in System.Diagnostics.Process.GetProcessesByName("stalwart"))
         {
             try
             {
-                var path = process.MainModule?.FileName;
-                if (!string.IsNullOrEmpty(path) && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                if (process.HasExited)
+                {
+                    continue;
+                }
+
+                string? path;
+                try
+                {
+                    path = process.MainModule?.FileName;
+                }
+                catch (Exception exception)
+                {
+                    blockers.Add($"pid {process.Id} (yol okunamadi: {exception.Message})");
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(path) || !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue; // başka bir kurulumun süreci — bizim veri dizinimizi tutmuyor
+                }
+
+                try
                 {
                     process.Kill(entireProcessTree: true);
                     process.WaitForExit(10000);
                 }
+                catch (Exception exception)
+                {
+                    blockers.Add($"pid {process.Id} sonlandirilamadi: {exception.Message}");
+                    continue;
+                }
+
+                if (!process.HasExited)
+                {
+                    blockers.Add($"pid {process.Id} halen calisiyor");
+                }
             }
-            catch
+            catch (InvalidOperationException)
             {
-                // erişilemeyen/zaten çıkmış süreçler atlanır
+                // Süreç bu arada çıkmış; engel değil.
             }
             finally
             {
@@ -644,7 +720,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             }
         }
 
-        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        return blockers.ToArray();
     }
 
     private static Task StartStalwartAsync(CancellationToken cancellationToken) =>
@@ -661,6 +737,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             throw new AppException("backup.not_found", 404, 404);
         }
 
+        // Önceki bir geri yüklemeden kalan uyarılar bu çalışmanın sonucu sanılmasın.
+        record.Warnings = [];
+        record.PreservedPath = string.Empty;
+
         if (string.Equals(record.Type, "mail", StringComparison.OrdinalIgnoreCase))
         {
             await RestoreMailAsync(record, cancellationToken);
@@ -675,8 +755,14 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase) &&
             IsCombinedSiteArchive(record.Path))
         {
-            await RestoreCombinedSiteAsync(record, request.TargetPath, cancellationToken);
-            record.Status = "restored";
+            var (warnings, preservedPath) = await RestoreCombinedSiteAsync(record, request.TargetPath, cancellationToken);
+            record.Warnings = warnings;
+            record.PreservedPath = preservedPath;
+
+            // YARIM KALAN İŞE "restored" DENMEZ. Dosyalar canlı kökün üzerine zaten yazıldığı için
+            // bu durumda kullanıcının elinde ne eski hâl ne de dönmüş bir veritabanı vardır;
+            // farkında olmadan devam etmesi en pahalı sonuçtur.
+            record.Status = warnings.Count == 0 ? "restored" : "restored_with_errors";
             await UpsertRecordAsync(record, cancellationToken);
             return record;
         }
@@ -839,7 +925,6 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
 
         Directory.CreateDirectory(targetRoot);
-        var rootWithSeparator = Path.GetFullPath(targetRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var restored = 0;
 
         using var archive = ZipFile.OpenRead(record.Path);
@@ -861,8 +946,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             }
 
             var destination = Path.GetFullPath(Path.Combine(targetRoot, name.Replace('/', Path.DirectorySeparatorChar)));
-            // Zip-slip koruması: hedef her zaman kök altında kalmalı.
-            if (!destination.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+            // Zip-slip koruması: hedef her zaman kök altında kalmalı (tek doğru cevap: PathContainment).
+            if (!PathContainment.IsInsideRoot(targetRoot, destination))
             {
                 throw new AppException("backup.invalid_entry_path", 400, 400, name);
             }
@@ -916,10 +1001,33 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var records = (await GetBackupsAsync(cancellationToken)).ToList();
         var removedIds = new HashSet<string>(StringComparer.Ordinal);
 
+        // KAYNAK BAZINDA KORUMA.
+        //
+        // Budama yalnızca tarihe bakarsa, yedekler HİÇ alınamazken de çalışır. Gecelik otomasyon her
+        // kaynağı ayrı try/catch ile yedekler ve hepsi patlasa bile buraya gelir: MariaDB 14 gün
+        // kapalı kalırsa her gece yedek başarısız olur, budama eskiyi silmeye devam eder ve 15. gün
+        // geri yüklenecek TEK bir yedek kalmaz. Bu sessiz yol, panelin verebileceği en pahalı zarardır.
+        //
+        // Kural: bir kaynağın (site/veritabanı/mail/panel) cutoff'tan SONRA alınmış kullanılabilir bir
+        // yedeği yoksa, o kaynağın eski yedeklerine DOKUNULMAZ. Yenisini üretemiyorsak eski olan son
+        // savunmadır; disk dolması, geri dönülemez veri kaybından iyidir. (Bu durum sessiz de kalmaz:
+        // otomasyon "yedekleme sağlıklı değil" uyarısı gönderir.)
+        //
+        // Kayıt = BAŞARILI yedek: kayıtlar yalnızca yedek dosyası üretildikten sonra eklenir.
+        var protectedSources = records
+            .Where(item => item.CreatedAtUtc >= cutoff && IsUsableBackup(item))
+            .Select(BuildSourceKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var record in records)
         {
             // Süresi dolmuş yedekleri buda (yerel + off-site uzak kopya).
             if (record.CreatedAtUtc >= cutoff)
+            {
+                continue;
+            }
+
+            if (!protectedSources.Contains(BuildSourceKey(record)))
             {
                 continue;
             }
@@ -966,6 +1074,28 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
 
         return removedIds.Count;
+    }
+
+    /// <summary>
+    /// Budama korumasının "kaynak" tanımı: aynı siteyi/veritabanını/mail sunucusunu temsil eden
+    /// yedekler tek küme sayılır. Bir sitenin yedeği, başka bir sitenin eskilerini silmeye YETKİ VERMEZ.
+    /// </summary>
+    private static string BuildSourceKey(BackupRecordDto record) =>
+        $"{record.Type}|{record.Source}";
+
+    /// <summary>
+    /// Kayıt hâlâ GERÇEK bir geri yükleme noktası mı? Dosyası elle silinmiş bir kaydın "taze yedek
+    /// var" sayılması, koruma varmış gibi görünüp eskileri sildirirdi — ölçmediğimiz şeye güvenmeyiz.
+    /// </summary>
+    private static bool IsUsableBackup(BackupRecordDto record)
+    {
+        if (!string.IsNullOrWhiteSpace(record.RemoteUri))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(record.Path) &&
+               (File.Exists(record.Path) || Directory.Exists(record.Path));
     }
 
     public async Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default)
@@ -1414,9 +1544,13 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             normalizedType = "s3";
         }
 
-        if (normalizedType is "drive")
+        // "drive" SESSİZCE "webdav"e çevriliyordu. Google Drive WebDAV KONUŞMAZ: yedek hiçbir zaman
+        // karşıya gitmez, ama panel gitmiş gibi davranır ve kullanıcı off-site kopyası olduğunu sanır.
+        // Sessizce yanlış hedefe yazmak en kötü seçenektir; desteklenmeyen hedef AÇIKÇA reddedilir.
+        // (Gerçek Google Drive desteği ayrı bir iştir: OAuth 2.0 + Drive REST API, WebDAV değil.)
+        if (normalizedType is "drive" or "gdrive" or "google-drive" or "googledrive")
         {
-            normalizedType = "webdav";
+            throw new AppException("backup.remote_target_unsupported", 400, 400, normalizedType);
         }
 
         if (normalizedType is not ("ftp" or "s3" or "webdav" or "http"))
@@ -1568,7 +1702,24 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
     }
 
-    private async Task RestoreCombinedSiteAsync(BackupRecordDto record, string? targetPath, CancellationToken cancellationToken)
+    /// <summary>Geri yükleme öncesi canlı içeriğin taşındığı kardeş klasörün etiketi.</summary>
+    private const string RestoreSidelineLabel = "geri_yukleme_yedegi";
+
+    /// <summary>
+    /// Birleşik site yedeğini geri yükler ve YARIM KALAN adımların listesini döner.
+    /// <para>
+    /// İki kural burada geçerlidir:
+    /// (1) <b>Önce koru, sonra yaz.</b> <c>files/*</c> canlı site kökünün ÜZERİNE yazılır; yazmaya
+    /// başladıktan sonra eski hâl artık yoktur. Bu yüzden mevcut kök içeriği önce kardeş bir
+    /// klasöre taşınır; taşıma başarısızsa geri yükleme HİÇ BAŞLAMAZ.
+    /// (2) <b>Sessiz başarısızlık yok.</b> Atlanan her adım uyarı olarak toplanır ve çağıran kaydı
+    /// <c>restored_with_errors</c> işaretler.
+    /// </para>
+    /// </summary>
+    private async Task<(List<BackupRestoreWarningDto> Warnings, string PreservedPath)> RestoreCombinedSiteAsync(
+        BackupRecordDto record,
+        string? targetPath,
+        CancellationToken cancellationToken)
     {
         // Hedef: belirtilmişse o yol, değilse sitenin gerçek fiziksel kökü (canlı siteyi geri yükle).
         string siteRoot;
@@ -1584,7 +1735,34 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
         Directory.CreateDirectory(siteRoot);
 
+        var warnings = new List<BackupRestoreWarningDto>();
         using var archive = ZipFile.OpenRead(record.Path);
+
+        // Yalnızca arşivde GERÇEKTEN dosya varsa kökü boşalt. Aksi halde yalnız veritabanı içeren
+        // bir yedek, canlı sitenin bütün dosyalarını yana alıp siteyi boş bırakırdı.
+        var replacesFiles = archive.Entries.Any(entry =>
+            entry.FullName.StartsWith("files/", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(entry.Name));
+
+        var preservedPath = string.Empty;
+        if (replacesFiles && Directory.EnumerateFileSystemEntries(siteRoot).Any())
+        {
+            // Site göçündeki (_goc_yedek_) ve bileşen kurulumundaki (PreserveDataDirectories) kalıbın
+            // aynısı: üzerine yazmadan önce yana al. Taşıyamıyorsak veriyi koruyamıyoruz demektir ve
+            // koruyamadığımız veriyi ezmeye devam etmek kabul edilemez.
+            var candidate = string.Empty;
+            try
+            {
+                candidate = ContentSideline.BuildSiblingPath(siteRoot, RestoreSidelineLabel);
+                ContentSideline.MoveAside(siteRoot, candidate);
+                preservedPath = candidate;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new AppException("backup.restore_preserve_failed", 500, 500, $"Root={siteRoot}\r\nSideline={candidate}\r\n{exception.Message}");
+            }
+        }
+
         foreach (var entry in archive.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1600,9 +1778,18 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 var relative = entry.FullName["files/".Length..].Replace('/', Path.DirectorySeparatorChar);
                 var destinationPath = Path.GetFullPath(Path.Combine(siteRoot, relative));
 
-                // Zip-slip koruması: hedef site kökünün dışına çıkamaz.
-                if (!destinationPath.StartsWith(Path.GetFullPath(siteRoot), StringComparison.OrdinalIgnoreCase))
+                // Zip-slip koruması: hedef site kökünün dışına çıkamaz. Ayırıcı denetimi olmadan
+                // "C:\sites\ada" öneki "C:\sites\ada2\..." ile de eşleşirdi; tek doğru cevap
+                // PathContainment'tadır (RestoreItemsAsync da aynısını kullanır).
+                if (!PathContainment.IsInsideRoot(siteRoot, destinationPath))
                 {
+                    // Sessizce atlamak, bozuk/kötücül bir arşivi "geri yüklendi" saymak olurdu.
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.invalid_entry_path",
+                        Target = entry.FullName,
+                        Detail = destinationPath
+                    });
                     continue;
                 }
 
@@ -1618,6 +1805,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 var split = fileName.Split('-', 2);
                 if (split.Length != 2)
                 {
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.invalid_entry_path",
+                        Target = entry.FullName,
+                        Detail = "Girdi adi 'motor-veritabani' bicimine uymuyor."
+                    });
                     continue;
                 }
 
@@ -1632,9 +1825,29 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                         FilePath = tempDump
                     }, cancellationToken);
                 }
-                catch
+                catch (OperationCanceledException)
                 {
-                    // Tek bir DB içe aktarımı başarısızsa diğerleriyle/dosyalarla devam et.
+                    throw;
+                }
+                catch (AppException exception)
+                {
+                    // Diğer veritabanları/dosyalarla devam edilir AMA sonuç sessizce "restored"
+                    // sayılmaz: sebep kullanıcıya döner.
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = exception.MessageKey,
+                        Target = $"{split[0]}/{split[1]}",
+                        Detail = exception.Details
+                    });
+                }
+                catch (Exception exception)
+                {
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "database.restore_failed",
+                        Target = $"{split[0]}/{split[1]}",
+                        Detail = exception.Message
+                    });
                 }
                 finally
                 {
@@ -1645,6 +1858,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 }
             }
         }
+
+        return (warnings, preservedPath);
     }
 
     private sealed record BackupTarget(string Type, Uri? Uri, string UserName, string Password, string Region);

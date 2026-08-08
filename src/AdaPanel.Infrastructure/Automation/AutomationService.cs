@@ -403,6 +403,11 @@ public sealed class AutomationService(
                     Password = ResolveRemotePassword(state),
                     Region = state.BackupRemoteRegion
                 };
+            // DIKKAT: buraya hasError=true iken de gelinir (her kaynak ayri try/catch ile yedeklenir).
+            // Budamanin kendisi bu yuzden KAYNAK BAZINDA korumali: cutoff sonrasi kullanilabilir
+            // yedegi olmayan bir kaynagin eskilerine dokunmaz (bkz. BackupService.PruneAsync).
+            // Burada "hata varsa hic budama" demek, tek bir sitenin hatasi yuzunden butun sunucunun
+            // saklama politikasini durdurmak olurdu.
             var pruned = await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken);
 
             state.LastBackupRunUtc = DateTime.UtcNow;
@@ -465,6 +470,71 @@ public sealed class AutomationService(
             state.LastSslStatus = "failed";
             state.LastSslDetails = exception.Message;
             logger.LogError(exception, "Otomatik SSL yenileme job'u başarısız oldu.");
+        }
+    }
+
+    /// <summary>
+    /// Yedeklemenin GERCEKTEN calisip calismadigini uyariya cevirir.
+    /// <para>
+    /// Iki soru sorulur ve ikisi de tasinir: "son calisma nasil bitti" ve "EN SON BASARILI YEDEK NE
+    /// ZAMAN". Yalnizca birincisi yeterli degildir: is hic tetiklenmemis de olabilir, o zaman durum
+    /// eski bir "completed" olarak kalir ve hicbir sey yanlis gorunmez.
+    /// </para>
+    /// </summary>
+    private async Task AddBackupHealthAlertsAsync(
+        AutomationStateRecord state,
+        List<(string Key, string Subject, string Body)> alerts,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        if (!state.AutoBackupEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            // Kayit = BASARILI yedek (kayitlar yalnizca dosya uretildikten sonra eklenir).
+            var backups = await backupService.GetBackupsAsync(cancellationToken);
+            DateTime? lastSuccess = backups.Count == 0 ? null : backups.Max(item => item.CreatedAtUtc);
+
+            // Iki dongu kacirildiysa artik tesaduf degildir; ama cok sik araliklarda gurultu
+            // yapmamak icin en az 48 saat beklenir.
+            var staleAfter = TimeSpan.FromHours(Math.Max(48, Math.Max(1, state.BackupIntervalHours) * 2));
+            var runFailed = state.LastBackupStatus is "failed" or "completed_with_errors";
+            var stale = lastSuccess is null || now - lastSuccess.Value > staleAfter;
+            if (!runFailed && !stale)
+            {
+                return;
+            }
+
+            var lastSuccessText = lastSuccess is null
+                ? "HIC BASARILI YEDEK YOK."
+                : $"En son basarili yedek: {lastSuccess.Value:yyyy-MM-dd HH:mm} UTC ({(now - lastSuccess.Value).TotalDays:F1} gun once).";
+
+            // Saklama suresinden eski tek yedek: budama korumasi onu tutuyor ama artik ESKI veriyi
+            // geri yukluyorsunuz demektir. Bunu ayrica soylemek gerekir.
+            var retentionNote = state.BackupRetentionDays > 0 &&
+                                lastSuccess is not null &&
+                                now - lastSuccess.Value > TimeSpan.FromDays(state.BackupRetentionDays)
+                ? $" DIKKAT: bu yedek saklama suresinden ({state.BackupRetentionDays} gun) de eski."
+                : string.Empty;
+
+            var runText = state.LastBackupRunUtc is null
+                ? "Otomatik yedekleme HIC calismadi."
+                : $"Son calisma: {state.LastBackupStatus} ({state.LastBackupRunUtc.Value:yyyy-MM-dd HH:mm} UTC).";
+
+            alerts.Add((
+                "backup-health",
+                "AdaPanel uyari: otomatik yedekleme saglikli degil",
+                $"{runText}\r\n{state.LastBackupDetails}\r\n\r\n{lastSuccessText}{retentionNote}\r\n\r\n" +
+                "Yeni yedek uretilemedigi surece eski yedekler budanmaz (kaynak bazinda koruma devrede), " +
+                "ancak elinizde GUNCEL bir geri yukleme noktasi olusmaz. Yedekleme ekranindan elle bir " +
+                "yedek deneyip donen hatayi giderin."));
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Yedek sagligi uyari kontrolu basarisiz.");
         }
     }
 
@@ -846,6 +916,12 @@ public sealed class AutomationService(
         {
             logger.LogWarning(exception, "Planli gorev uyari kontrolu basarisiz.");
         }
+
+        // Yedekleme sagligi. Disk, RAM, sertifika, durmus servis ve basarisiz cron icin uyari
+        // vardi ama YEDEK icin YOKTU -- panelin verebilecegi en pahali sessizlik buydu: gecelik is
+        // her kaynagi ayri try/catch ile yedekler, hepsi patlasa bile "tamamlandi (hatali)" der ve
+        // otomasyon ekranini acmayan yonetici bunu hicbir zaman gormez.
+        await AddBackupHealthAlertsAsync(state, alerts, now, cancellationToken);
 
         var changed = false;
         foreach (var (key, subject, body) in alerts)

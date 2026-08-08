@@ -589,7 +589,7 @@ public sealed class AppStoreService(
 
         var site = await iisSiteService.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
         var applicationRoot = ResolveApplicationRoot(site);
-        EnsureLaravelDestinationReady(applicationRoot, request.CleanInstall);
+        var prepared = EnsureLaravelDestinationReady(applicationRoot, request.CleanInstall);
 
         var php = await EnsurePhpRuntimeAsync(cancellationToken);
         var workspace = Path.Combine(dataRoot, "temp", "app-installs", Guid.NewGuid().ToString("N"));
@@ -606,7 +606,7 @@ public sealed class AppStoreService(
             await WriteRoundcubeConfigAsync(stagingRoot, cancellationToken);
             await WriteRoundcubeWebConfigAsync(stagingRoot, cancellationToken);
 
-            deployment = DeployApplication(stagingRoot, applicationRoot, workspace);
+            deployment = DeployApplication(stagingRoot, applicationRoot, prepared);
             await InitRoundcubeSqliteAsync(php.PhpExecutable, applicationRoot, cancellationToken);
             await ApplyRoundcubeAclAsync(applicationRoot, site.ApplicationPoolName, cancellationToken);
             await phpService.SetSitePhpVersionAsync(
@@ -616,12 +616,12 @@ public sealed class AppStoreService(
         }
         catch (AppException)
         {
-            await RollbackLaravelDeploymentAsync(site, deployment, cancellationToken);
+            await RollbackLaravelDeploymentAsync(site, deployment, prepared, applicationRoot, cancellationToken);
             throw;
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            await RollbackLaravelDeploymentAsync(site, deployment, cancellationToken);
+            await RollbackLaravelDeploymentAsync(site, deployment, prepared, applicationRoot, cancellationToken);
             throw new AppException("store.install_failed", 500, 500, BuildDiagnosticDetails(exception));
         }
         finally
@@ -882,7 +882,7 @@ public sealed class AppStoreService(
 
         var site = await iisSiteService.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
         var applicationRoot = ResolveApplicationRoot(site);
-        EnsureLaravelDestinationReady(applicationRoot, request.CleanInstall);
+        var prepared = EnsureLaravelDestinationReady(applicationRoot, request.CleanInstall);
 
         var dependencies = await EnsureLaravelDependenciesAsync(cancellationToken);
         var workspace = Path.Combine(dataRoot, "temp", "app-installs", Guid.NewGuid().ToString("N"));
@@ -915,7 +915,7 @@ public sealed class AppStoreService(
             await RunArtisanAsync(dependencies.PhpExecutable, stagingRoot, "migrate --force", cancellationToken);
             await RunArtisanAsync(dependencies.PhpExecutable, stagingRoot, "optimize", cancellationToken);
 
-            deployment = DeployApplication(stagingRoot, applicationRoot, workspace);
+            deployment = DeployApplication(stagingRoot, applicationRoot, prepared);
             await ApplyLaravelAclAsync(applicationRoot, site.ApplicationPoolName, cancellationToken);
 
             await phpService.SetSitePhpVersionAsync(
@@ -934,12 +934,12 @@ public sealed class AppStoreService(
         }
         catch (AppException)
         {
-            await RollbackLaravelDeploymentAsync(site, deployment, cancellationToken);
+            await RollbackLaravelDeploymentAsync(site, deployment, prepared, applicationRoot, cancellationToken);
             throw;
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            await RollbackLaravelDeploymentAsync(site, deployment, cancellationToken);
+            await RollbackLaravelDeploymentAsync(site, deployment, prepared, applicationRoot, cancellationToken);
             throw new AppException("store.install_failed", 500, 500, BuildDiagnosticDetails(exception));
         }
         finally
@@ -1087,47 +1087,96 @@ public sealed class AppStoreService(
             """, new UTF8Encoding(false), cancellationToken);
     }
 
-    private static DeploymentState DeployApplication(string source, string destination, string workspace)
+    /// <summary>
+    /// Hazırlanan uygulamayı sitenin CANLI köküne yerleştirir.
+    /// <para>
+    /// ÖNCEKİ HÂLDEKİ VERİ KAYBI: yalnızca 5 sabit DOSYA adı (<see cref="ReplaceableStarterFiles"/>)
+    /// yedeğe alınıyordu, ama geri alma arşivin HER üst düzey girdisini hedefte siliyordu
+    /// (<c>Directory.Delete(recursive: true)</c>) ve geri koyarken yalnızca üst düzey DOSYALARI
+    /// kopyalıyordu. Yedekte olmayan bir klasör (müşterinin <c>App_Data</c>'sı ya da adı pakettekiyle
+    /// çakışan herhangi bir klasörü) kurulum sonraki adımlardan birinde patladığında kökünden
+    /// siliniyor ve GERİ GELMİYORDU.
+    /// </para>
+    /// <para>
+    /// KURAL: üzerine yazılacak HER üst düzey girdi (klasör dahil) önce yana alınır; taşıma
+    /// başarısızsa kurulum HİÇ BAŞLAMAZ. Böylece geri alma yalnızca BİZİM oluşturduğumuz girdileri
+    /// siler ve yana alınan her şey — dosya ya da klasör — yerine konabilir.
+    /// </para>
+    /// </summary>
+    /// <param name="prepared">
+    /// <see cref="EnsureLaravelDestinationReady"/> zaten yana almışsa onun sonucu. Aynı geri alma
+    /// adımına ve AYNI kardeş klasöre bağlanır; aksi halde müşterinin içeriği orada ÖKSÜZ kalır
+    /// (eski davranış: dönüş değeri iki çağıranda da atılıyordu, kurulum patlayınca site boş kalıyordu).
+    /// </param>
+    internal static DeploymentState DeployApplication(
+        string source,
+        string destination,
+        DestinationPreparation? prepared = null)
     {
         Directory.CreateDirectory(destination);
-        var backup = Path.Combine(workspace, "previous");
-        Directory.CreateDirectory(backup);
 
-        foreach (var fileName in ReplaceableStarterFiles)
-        {
-            var existingPath = Path.Combine(destination, fileName);
-            if (!File.Exists(existingPath))
-            {
-                continue;
-            }
-
-            File.Copy(existingPath, Path.Combine(backup, fileName), overwrite: true);
-            File.Delete(existingPath);
-        }
-
-        var deployedEntries = new DirectoryInfo(source)
+        var sourceEntries = new DirectoryInfo(source)
             .EnumerateFileSystemInfos()
             .Select(item => item.Name)
             .ToArray();
+        var collisions = new HashSet<string>(sourceEntries, StringComparer.OrdinalIgnoreCase);
+
+        // Yana alma yeri KARDEŞ klasördür, çalışma alanı (workspace) DEĞİL. İki sebep:
+        // 1) workspace kurulum sonunda silinir; müşteri içeriğinin ömrü ona bağlanamaz,
+        // 2) workspace veri kökünde, site kökü başka bir birimde olabilir — Directory.Move
+        //    birimler arasında çalışmaz.
+        var sideline = prepared?.SidelineDirectory ?? ContentSideline.BuildSiblingPath(destination, "onceki");
+        IReadOnlyList<SidelinedEntry> movedAside;
+        try
+        {
+            movedAside = ContentSideline.MoveAside(
+                destination,
+                sideline,
+                // Paketle çakışan her şey + yerine yenisi gelecek başlangıç dosyaları.
+                item => collisions.Contains(item.Name) || ReplaceableStarterFiles.Contains(item.Name));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Veriyi koruyamıyorsak KOPYALAMAYA BAŞLAMAYIZ. Aksi halde müşterinin klasörü hem
+            // yerinde kalır hem paket dosyalarıyla karışır; geri alma da onu silmek zorunda kalırdı.
+            throw new AppException("store.preserve_failed", 500, 500, $"Destination={destination}\r\n{exception.Message}");
+        }
+
+        var state = new DeploymentState(
+            destination,
+            sideline,
+            sourceEntries,
+            [.. prepared?.Sidelined ?? [], .. movedAside]);
 
         try
         {
             CopyDirectory(source, destination);
-            return new DeploymentState(destination, backup, deployedEntries);
+            return state;
         }
         catch
         {
-            RestoreDeployment(new DeploymentState(destination, backup, deployedEntries));
+            RestoreDeployment(state);
             throw;
         }
     }
 
+    /// <summary>
+    /// Kurulumu geri alır.
+    /// <para>
+    /// <paramref name="prepared"/> ayrıca verilir çünkü kurulum <see cref="DeployApplication"/>'a
+    /// GELMEDEN de patlayabilir (composer, indirme, doğrulama). O anda müşterinin içeriği çoktan
+    /// kardeş klasöre taşınmıştır; yalnızca <paramref name="deployment"/>'a bakan bir geri alma
+    /// siteyi BOŞ bırakırdı.
+    /// </para>
+    /// </summary>
     private async Task RollbackLaravelDeploymentAsync(
         SiteDto site,
         DeploymentState? deployment,
+        DestinationPreparation? prepared,
+        string applicationRoot,
         CancellationToken cancellationToken)
     {
-        if (deployment is null)
+        if (deployment is null && (prepared is null || prepared.Sidelined.Count == 0))
         {
             return;
         }
@@ -1143,7 +1192,11 @@ public sealed class AppStoreService(
 
         try
         {
-            RestoreDeployment(deployment);
+            // Yerleştirmeye gelindiyse DeploymentState hazırlığı ZATEN kapsar (birleşik liste);
+            // gelinmediyse yalnız hazırlık aşamasında yana alınanlar geri konur.
+            RestoreDeployment(
+                deployment ?? new DeploymentState(applicationRoot, prepared!.SidelineDirectory, [], prepared.Sidelined),
+                logger);
         }
         catch (Exception exception)
         {
@@ -1151,8 +1204,14 @@ public sealed class AppStoreService(
         }
     }
 
-    private static void RestoreDeployment(DeploymentState state)
+    /// <summary>
+    /// Kurulumu geri alır: BİZİM kopyaladığımız girdiler silinir, yana alınan müşteri içeriği
+    /// (dosya VE klasör) yerine konur. Yerine konamayan bir girdi silinmez; nerede durduğu loglanır.
+    /// </summary>
+    private static void RestoreDeployment(DeploymentState state, ILogger? logger = null)
     {
+        // Yalnızca bu kurulumun oluşturduğu girdiler silinir: çakışan her şey zaten yana alındığı
+        // için burada müşterinin klasörü kalmış olamaz.
         foreach (var entryName in state.DeployedEntries)
         {
             var path = Path.Combine(state.Destination, entryName);
@@ -1166,15 +1225,17 @@ public sealed class AppStoreService(
             }
         }
 
-        if (!Directory.Exists(state.Backup))
-        {
-            return;
-        }
+        ContentSideline.MoveBack(
+            state.Destination,
+            state.Sidelined,
+            (entry, exception) => logger?.LogError(
+                exception,
+                "'{Entry}' geri konamadi. VERI KAYBOLMADI, surada duruyor: {Path}",
+                entry.Name,
+                entry.SidelinePath));
 
-        foreach (var file in Directory.EnumerateFiles(state.Backup))
-        {
-            File.Copy(file, Path.Combine(state.Destination, Path.GetFileName(file)), overwrite: true);
-        }
+        // Her şey yerine konduysa kardeş klasörü ortalıkta bırakma; bir şey kaldıysa DOKUNMA.
+        ContentSideline.RemoveIfEmpty(state.SidelineDirectory);
     }
 
     private static async Task ApplyLaravelAclAsync(
@@ -1316,10 +1377,16 @@ public sealed class AppStoreService(
 
     /// <summary>
     /// Hedef klasörü kuruluma hazırlar. Boş değilse: cleanInstall=false → 409 (Existing entries...);
-    /// cleanInstall=true → panel "yedekle + temizle": mevcut içeriği kardeş "_yedek_&lt;tarih&gt;" klasörüne
-    /// taşır, klasörü boşaltır. Taşındıysa yedek klasör yolunu döner (yoksa null).
+    /// cleanInstall=true → panel "yedekle + temizle": mevcut içeriği kardeş "_yedek_&lt;tarih&gt;"
+    /// klasörüne taşır, klasörü boşaltır.
+    /// <para>
+    /// Taşınanların LİSTESİ döner ve <see cref="DeployApplication"/> üzerinden geri alma adımına
+    /// bağlanır. Eskiden yalnızca klasör yolu dönüyor, iki çağıran da bunu ATIYORDU: kurulum
+    /// sonraki adımlardan birinde patlayınca müşterinin bütün içeriği kardeş klasörde öksüz kalıyor,
+    /// site boş kalıyor ve kimse nereye gittiğini söylemiyordu.
+    /// </para>
     /// </summary>
-    private static string? EnsureLaravelDestinationReady(string destination, bool cleanInstall)
+    internal static DestinationPreparation EnsureLaravelDestinationReady(string destination, bool cleanInstall)
     {
         Directory.CreateDirectory(destination);
         var unexpectedEntries = new DirectoryInfo(destination)
@@ -1328,11 +1395,12 @@ public sealed class AppStoreService(
                 !ReplaceableStarterFiles.Contains(item.Name) &&
                 !(item is DirectoryInfo &&
                   string.Equals(item.Name, "App_Data", StringComparison.OrdinalIgnoreCase)))
+            .Select(item => item.Name)
             .ToArray();
 
         if (unexpectedEntries.Length == 0)
         {
-            return null;
+            return DestinationPreparation.None;
         }
 
         if (!cleanInstall)
@@ -1341,26 +1409,23 @@ public sealed class AppStoreService(
                 "store.site_has_content",
                 409,
                 409,
-                $"Existing entries: {string.Join(", ", unexpectedEntries.Select(item => item.Name).Take(10))}");
+                $"Existing entries: {string.Join(", ", unexpectedEntries.Take(10))}");
         }
 
         // Yedekle + temizle: kardeş klasör (destination'ın DIŞINDA) → klasör gerçekten boşalır.
-        var backup = $"{destination.TrimEnd('\\', '/')}_yedek_{DateTime.Now:yyyyMMdd_HHmmss}";
-        Directory.CreateDirectory(backup);
-        foreach (var item in unexpectedEntries)
+        var backup = ContentSideline.BuildSiblingPath(destination, "yedek");
+        var wanted = new HashSet<string>(unexpectedEntries, StringComparer.OrdinalIgnoreCase);
+        try
         {
-            var target = Path.Combine(backup, item.Name);
-            if (item is DirectoryInfo dir)
-            {
-                Directory.Move(dir.FullName, target);
-            }
-            else
-            {
-                File.Move(item.FullName, target);
-            }
+            var moved = ContentSideline.MoveAside(destination, backup, item => wanted.Contains(item.Name));
+            return new DestinationPreparation(backup, moved);
         }
-
-        return backup;
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Veriyi koruyamıyorsak kuruluma BAŞLAMAYIZ. Yarım taşınmış bir kökün üzerine kurmak,
+            // müşterinin dosyalarını kurtarılamaz biçimde karıştırmak demektir.
+            throw new AppException("store.preserve_failed", 500, 500, $"Destination={destination}\r\n{exception.Message}");
+        }
     }
 
     private static void ValidateLaravelProject(string applicationRoot)
@@ -1672,10 +1737,23 @@ public sealed class AppStoreService(
         string PhpExecutable,
         string ComposerPath);
 
-    private sealed record DeploymentState(
+    /// <summary>Hedef klasör kuruluma hazırlanırken yana alınanlar.</summary>
+    /// <param name="SidelineDirectory">Yana alınanların durduğu kardeş klasör (yoksa null).</param>
+    /// <param name="Sidelined">Taşınan üst düzey girdiler; geri alma bunları yerine koyar.</param>
+    internal sealed record DestinationPreparation(
+        string? SidelineDirectory,
+        IReadOnlyList<SidelinedEntry> Sidelined)
+    {
+        public static DestinationPreparation None { get; } = new(null, []);
+    }
+
+    /// <param name="DeployedEntries">Kopyaladığımız üst düzey girdiler; geri alma YALNIZ bunları siler.</param>
+    /// <param name="Sidelined">Üzerine yazmadan önce yana alınan müşteri içeriği; geri alma bunları geri taşır.</param>
+    internal sealed record DeploymentState(
         string Destination,
-        string Backup,
-        string[] DeployedEntries);
+        string? SidelineDirectory,
+        string[] DeployedEntries,
+        IReadOnlyList<SidelinedEntry> Sidelined);
 
     private sealed record WordPressPackage(
         string Version,
