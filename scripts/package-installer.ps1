@@ -1,13 +1,22 @@
 # AdaPanel installer paketleme (npm typecheck/test adimlarini ATLAR).
 # Frontend dist'in ve testlerin onceden gectigi varsayilir.
-# Kullanim: powershell -File scripts\package-installer.ps1 [-Version 0.2.4]
-# -Version: panelin RAPOR ETTIGI surum. Self-update icin GitHub release tag'i ile AYNI olmali
-# (ornek: -Version 0.2.5 ile paketle -> release'i "0.2.5" tag'iyle yayinla). Yoksa panel surumu
-# release tag'iyle esitlenmez ve "guncelleme var" uyarisi hic kaybolmaz.
-param([string]$Version = "0.2.28")
+# Kullanim: powershell -File scripts\package-installer.ps1
+#
+# -Version VERILMEZSE surum Directory.Build.props'tan OKUNUR. Verilirse kaynakla AYNI olmalidir.
+# Burada eskiden "0.2.28" varsayilani duruyordu ve hicbir script kaynak surumu okumuyordu; sonuc
+# yanlis damgalanmis exe -> panelin surumu release tag'inin altina duser -> self-update her gun
+# ayni paketi indirip kurar (sonsuz dongu). Bkz. scripts\version-guard.ps1.
+param(
+    [string]$Version,
+    [switch]$SkipComponentAudit
+)
 $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+. (Join-Path $PSScriptRoot "version-guard.ps1")
+$Version = Resolve-AdaReleaseVersion -RepoRoot $repo -RequestedVersion $Version
+Write-Host "Surum (Directory.Build.props): $Version"
 $publishDir = Join-Path $repo "artifacts\publish\win-x64"
 $dotnet = Join-Path $repo ".tools\dotnet\dotnet.exe"
 if (-not (Test-Path $dotnet)) { $dotnet = (Get-Command dotnet).Source }
@@ -25,6 +34,18 @@ if ($LASTEXITCODE -ne 0) { throw "Publish basarisiz." }
 
 Copy-Item (Join-Path $repo "components.json") (Join-Path $publishDir "components.json") -Force
 
+if ($SkipComponentAudit) {
+    Write-Warning "Bilesen paketleri denetimi ATLANDI (-SkipComponentAudit). Yayinlanacak paket icin ATLAMAYIN."
+} else {
+    & (Join-Path $repo "scripts\audit-component-packages.ps1") -SkipLargePackages
+    if ($LASTEXITCODE -ne 0) { throw "Bilesen paketleri denetimi basarisiz oldu." }
+}
+
+# Paketlenecek icerigin denetimi -- beklenmeyen ikili / bulasma imzasi varsa DUR.
+& (Join-Path $repo "scripts\verify-publish-output.ps1") `
+    -PublishDir $publishDir `
+    -ManifestPath (Join-Path $repo "artifacts\publish-manifest.json")
+
 $isccCandidates = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
@@ -37,6 +58,10 @@ if ($LASTEXITCODE -ne 0) { throw "Inno Setup derlemesi basarisiz." }
 
 $exe = Join-Path $repo "artifacts\installer\AdaPanelSetup.exe"
 $f = Get-Item $exe
+# ASAGIDAKI SATIRLAR BIR KAYITTIR, DOGRULAMA DEGIL. "Yayindaki dosyayi indir, yereldekiyle hash
+# karsilastir" yontemi kaynaktaki bulasmaya KORDUR: yereldeki dosya zaten bulasiksa iki hash de
+# birebir tutar. Gercek dogrulama yukaridaki verify-publish-output.ps1 adimindadir; icerik
+# dokumu artifacts\publish-manifest.json dosyasindadir.
 Write-Host ("Version: {0}  (release tag'i BUNUNLA AYNI olmali)" -f $Version)
 Write-Host ("Size  : {0:N0} byte ({1:N2} MiB)" -f $f.Length, ($f.Length / 1MB))
 Write-Host ("SHA256: {0}" -f (Get-FileHash $exe -Algorithm SHA256).Hash)

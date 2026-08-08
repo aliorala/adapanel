@@ -60,8 +60,19 @@ Source: "..\scripts\install-tray-task.ps1"; DestDir: "{app}\scripts"; Flags: ign
 Source: "..\scripts\uninstall-cleanup.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; AfterInstall: ConfigureInstallation
 
 [InstallDelete]
-Type: filesandordirs; Name: "{app}\wwwroot"
-Type: files; Name: "{app}\components.json"
+; DIKKAT: {app}\wwwroot BURADA SILINMEZ.
+;
+; [InstallDelete] dosyalar kopyalanmadan ONCE calisir ve Inno'nun geri alma (rollback) mekanizmasi
+; [InstallDelete] ile silinenleri GERI GETIRMEZ. ConfigureInstallation icindeki install-service.ps1
+; "KRITIK" isaretlidir ve RaiseException ile kurulumu iptal eder. Eski dizi suydu:
+;   wwwroot silinir -> dosyalar kopyalanir -> install-service patlar -> rollback eski exe'yi geri
+;   getirir ama wwwroot BOSTUR -> servis "Running" gorunur, tarayicida BOS SAYFA cikar.
+; Teshisi zor, sessiz bir bozulma. Artik wwwroot .bak'e TASINIR (PrepareToInstall), basarida
+; silinir, basarisizlikta GERI KONUR -- bkz. [Code] bolumundeki BackupWwwRoot/RestoreWwwRoot.
+;
+; components.json girdisi de AYNI SEBEPLE kaldirildi ve GEREKSIZDI: [Files] bolumundeki iki girdi
+; de "ignoreversion" ile zaten uzerine yaziyor. Silinip sonra kurulum patlarsa rollback onu geri
+; getirmiyordu -> panel bilesen listesi olmadan aciliyordu.
 
 [Run]
 ; TEPSIYI AYAKTA TUTAN ZAMANLANMIS GOREV.
@@ -115,6 +126,13 @@ var
   PortPage: TInputQueryWizardPage;
   IsUpdateInstall: Boolean;
   WipeAllData: Boolean;
+  { InitializeSetup sihirbaz acilmadan ONCE servisi durdurur (bkz. oradaki aciklama). Kullanici
+    ilk ekranda Iptal'e basarsa servis DURMUS kalirdi: siteler IIS'te calismaya devam ettigi icin
+    kimse fark etmez, panel sessizce olur. Bu bayrak "biz durdurduk mu" bilgisini tasir. }
+  ServiceWasStoppedByUs: Boolean;
+  InstallCompleted: Boolean;
+  { wwwroot yedegi alindi mi (basarisiz yukseltmede geri koymak icin). }
+  WwwRootBackedUp: Boolean;
 
 function GetPanelPort(Param: string): string;
 forward;
@@ -241,6 +259,72 @@ begin
     ResultCode);
 end;
 
+{ Servisi GERI BASLATIR. Boyle bir prosedur HIC YOKTU: kurulum yarida kesildiginde servisi
+  yeniden baslatan tek bir kod yolu bile bulunmuyordu. }
+procedure StartPanelService;
+var
+  ResultCode: Integer;
+begin
+  Exec(
+    'powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command "$svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne ''Running'') { Start-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue }"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode);
+end;
+
+{ wwwroot'u .bak'e TASIR (kopyalamaz: tasima atomiktir ve disk yeri istemez). }
+function BackupWwwRoot: Boolean;
+var
+  Source: string;
+  Backup: string;
+begin
+  Result := False;
+  Source := ExpandConstant('{app}\wwwroot');
+  Backup := ExpandConstant('{app}\wwwroot.bak');
+
+  if not DirExists(Source) then
+    Exit;
+
+  if DirExists(Backup) then
+    DelTree(Backup, True, True, True);
+
+  Result := RenameFile(Source, Backup);
+  if not Result then
+    Log('AdaPanel: wwwroot yedeklenemedi; eski icerik yerinde birakiliyor.');
+end;
+
+procedure RestoreWwwRoot;
+var
+  Source: string;
+  Backup: string;
+begin
+  Source := ExpandConstant('{app}\wwwroot');
+  Backup := ExpandConstant('{app}\wwwroot.bak');
+
+  if not DirExists(Backup) then
+    Exit;
+
+  { Yarim kopyalanmis yeni icerik varsa once o gider; yoksa geri koyma basarisiz olur. }
+  if DirExists(Source) then
+    DelTree(Source, True, True, True);
+
+  if RenameFile(Backup, Source) then
+    Log('AdaPanel: wwwroot yedekten geri konuldu.')
+  else
+    Log('AdaPanel: wwwroot GERI KONULAMADI: ' + Backup);
+end;
+
+procedure DiscardWwwRootBackup;
+var
+  Backup: string;
+begin
+  Backup := ExpandConstant('{app}\wwwroot.bak');
+  if DirExists(Backup) then
+    DelTree(Backup, True, True, True);
+end;
+
 // Servis EN BASTA durdurulur; RestartManager taramasindan da once.
 //
 // Neden burada: panel bir Windows servisidir ve RestartManager onu pencere kapatarak durduramaz.
@@ -253,9 +337,37 @@ end;
 // burada durdurunca dosyalari tutan sure kalmiyor ve tarama zaten bir sey bulamiyor.
 function InitializeSetup: Boolean;
 begin
+  ServiceWasStoppedByUs := False;
+  InstallCompleted := False;
+  WwwRootBackedUp := False;
+
   if ExistingInstallDetected then
+  begin
     StopPanelService;
+    ServiceWasStoppedByUs := True;
+  end;
+
   Result := True;
+end;
+
+{ KURULUM TAMAMLANMADIYSA SERVISI GERI BASLAT.
+  Bu prosedur dosyada HIC YOKTU. InitializeSetup servisi sihirbaz acilmadan durdurdugu icin,
+  kullanicinin ilk ekranda Iptal'e basmasi paneli OLU birakiyordu -- ve siteler IIS'te calismaya
+  devam ettigi icin bunu kimse fark etmiyordu. Ayni sey wwwroot yedegi icin de gecerli:
+  kurulum yarida kaldiysa eski arayuz geri konur, yoksa panel bos sayfa acar. }
+procedure DeinitializeSetup;
+begin
+  if InstallCompleted then
+  begin
+    DiscardWwwRootBackup;
+    Exit;
+  end;
+
+  if WwwRootBackedUp then
+    RestoreWwwRoot;
+
+  if ServiceWasStoppedByUs then
+    StartPanelService;
 end;
 
 procedure InitializeWizard;
@@ -341,7 +453,26 @@ begin
   // InitializeSetup zaten durdurdu; burada tekrar denemek ucuz bir guvence (kullanici sihirbazda
   // beklerken servis elle baslatilmis olabilir).
   if ExistingInstallDetected then
+  begin
     StopPanelService;
+    ServiceWasStoppedByUs := True;
+  end;
+
+  // Eski arayuz dosyalarini kopyalama BASLAMADAN once kenara al. Yerinde silmek (eski
+  // [InstallDelete] girdisi) geri alinamazdi; tasima geri alinabilir.
+  WwwRootBackedUp := BackupWwwRoot;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    // Buraya ulasildiysa dosyalar kopyalandi VE ConfigureInstallation (install-service.ps1 dahil)
+    // hatasiz bitti. Kurulum basarilidir: yedek artik gereksiz, servisi de install-service basladi.
+    InstallCompleted := True;
+    DiscardWwwRootBackup;
+    WwwRootBackedUp := False;
+  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

@@ -217,6 +217,15 @@ npm --prefix frontend run build
 .\scripts\build-installer.ps1   # çıktı: artifacts\installer\AdaPanelSetup.exe
 ```
 
+#### Sürüm
+Sürümün **tek kaynağı `Directory.Build.props`**'tur. Paketleme betiklerine `-Version` vermeyin —
+sürüm oradan okunur. `frontend/package.json`, `installer/AdaPanel.iss` ve `release-body.json`
+(`tag_name`) bununla **aynı** olmalıdır; değilse `scripts/version-guard.ps1` paketlemeyi durdurur.
+
+Yeni sürüm çıkarken sıra: `Directory.Build.props` → aynı değeri diğer üç dosyaya yaz →
+`.\scripts\build-installer.ps1` → GitHub release etiketi de **aynı** olsun. Etiket ile exe farklı
+olursa panel her gün aynı güncellemeyi indirip kurar (sonsuz döngü).
+
 ---
 
 <div align="center">
