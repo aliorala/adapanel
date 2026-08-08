@@ -1,7 +1,19 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace AdaPanel.Core.Dtos.Scheduler;
 
 public sealed class CreateScheduledTaskRequest
 {
+    /// <summary>
+    /// Görevin adı — DAR bir beyaz listeyle sınırlıdır (bkz. <see cref="TaskNameRules"/>).
+    /// <para>
+    /// Ad, Görev Zamanlayıcı'yı süren PowerShell betiklerinin içine gömülür ve panel servisi
+    /// LocalSystem olarak koşar. Kaçış katmanı (tek tırnaklı dize) tek başına yeterli sayılmıyor:
+    /// burada model bağlamada, ayrıca <c>SchedulerService.ValidateRequest</c> içinde de doğrulanır.
+    /// İki katman bağımsız olduğu için birinin ileride bozulması açığa dönüşmez.
+    /// </para>
+    /// </summary>
+    [RegularExpression(TaskNameRules.CreatablePattern, ErrorMessage = "cron.invalid_name")]
     public string Name { get; set; } = string.Empty;
 
     /// <summary>

@@ -481,6 +481,31 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             // Host adı başkasının olamaz — gerekçe CustomerAccess.EnsureDomainClaimAsync'te.
             await CustomerAccess.EnsureDomainClaimAsync(
                 customerScopes, iisSiteService, mailService, User, request.HostName, null, logger, cancellationToken);
+
+            // SİTE ADI DA BİR SAHİPLİK İDDİASIDIR — ve denetlenmiyordu.
+            //
+            // Panel bugüne kadar sahiplik sorusunu yalnız HOST ADI için soruyordu. Oysa site adının
+            // kendisi de tam olarak aynı ağırlıkta bir iddia:
+            //   * CustomerScopeService.GetAllowedMailDomainsAsync atanan site ADINI izinli mail
+            //     domaini sayar → "kurban.com" adlı bir site açan kiracı, kurbanın posta kutularını
+            //     listeler, PAROLALARINI DEĞİŞTİRİR, alias ile postasını kendine yönlendirir;
+            //   * DnsService varsayılan bölge adını site adından türetir → DNS bölgesi de devralınır;
+            //   * CustomerAccess.EnsureDomainClaimAsync zaten BAŞKA sitelerin ADINI bir sahiplik
+            //     kaynağı sayıyordu — yani panel bu adı "iddia" kabul ediyor ama iddia edilirken
+            //     hiç sormuyordu. Asimetri açığın ta kendisiydi.
+            //
+            // Aynı fonksiyon kullanılıyor, ikinci bir kural yazılmıyor: kontrol ile koruduğu şey
+            // aynı kuraldan gelmezse arada sessiz bir aralık kalır.
+            await CustomerAccess.EnsureDomainClaimAsync(
+                customerScopes, iisSiteService, mailService, User, request.Name, null, logger, cancellationToken);
+
+            // ...ve ad boşta olsa bile ÜZERİNE YAZILAMAZ.
+            //
+            // EnsureDomainClaimAsync yalnız "başkasının" adını reddeder ve GetSitesAsync sistem
+            // sitelerini listeden düşürür. Oysa IIS'te var olan bir siteyi kaldırmak yıkıcı bir
+            // iştir; kiracıya ancak KENDİ sitesi için verilebilir.
+            await CustomerAccess.EnsureSiteNameIsClaimableAsync(
+                customerScopes, iisSiteService, User, request.Name, cancellationToken);
         }
 
         // KOTA KONTROLÜ İLE KAYIT ARASINDA BAŞKA İSTEK GİREMEZ.
@@ -701,12 +726,22 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     /// Siteyi ve ona bağlı tüm kaynakları (mail domaini, veritabanı, FTP, DNS, proxy, kota,
     /// git, müşteri atamaları ve isteğe bağlı dosyalar) profesyonel paneller gibi cascade siler.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// YIKICI PARAMETRELERİN VARSAYILANI <c>false</c>: veritabanı düşürmek ve site dosyalarını
+    /// silmek geri alınamaz işlerdir; "istemedim" diyen bir çağrı bunları yapmamalıdır. Eskiden
+    /// ikisi de <c>true</c> idi, yani parametreyi hiç göndermeyen bir istemci (kendi betiği, MCP,
+    /// API anahtarıyla otomasyon) siteyle birlikte veritabanını ve dosyaları da sessizce yok
+    /// ediyordu. Panelin kendi arayüzü iki parametreyi de HER ZAMAN açıkça gönderiyor
+    /// (frontend/src/api/sites.ts), dolayısıyla bu değişiklik arayüzün davranışını değiştirmez.
+    /// </para>
+    /// </remarks>
     [HttpDelete("{siteName}")]
     public async Task<ActionResult<ApiResponse<SiteDeletionResultDto>>> DeleteSiteAsync(
         string siteName,
         CancellationToken cancellationToken,
-        [FromQuery] bool deleteFiles = true,
-        [FromQuery] bool deleteDatabases = true)
+        [FromQuery] bool deleteFiles = false,
+        [FromQuery] bool deleteDatabases = false)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await siteCascadeDeletionService.DeleteAsync(siteName, deleteFiles, deleteDatabases, cancellationToken);

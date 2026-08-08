@@ -182,6 +182,25 @@ public sealed class CustomerScopeService(
 
         foreach (var siteName in assigned)
         {
+            // SİTE ADI da bir mail domaini sayılır — ve bu BİLİNÇLİ bir karar, denetimde tartışıldı.
+            //
+            // Denetimin haklı itirazı şuydu: atanan site adı doğrudan izinli mail domaini oluyordu ve
+            // site adı hiçbir yerde sahiplik açısından doğrulanmıyordu. Yani "kurban.com" adlı bir
+            // site açan kiracı, kurbanın posta kutularını devralıyordu.
+            //
+            // KÖK NEDEN ADIN KULLANILMASI DEĞİL, DOĞRULANMAMASIYDI. Artık site adı, tıpkı bağlama
+            // host adı gibi, oluşturma anında CustomerAccess.EnsureDomainClaimAsync'ten geçiyor
+            // (SitesController.CreateSiteAsync) — yani ikisi de aynı ağırlıkta ve aynı kuralla
+            // doğrulanmış iddialar.
+            //
+            // Satırı kaldırmak ise MEŞRU kullanıcıları kırardı: host adı verilmeden (IP tabanlı)
+            // kurulmuş bir sitenin bağlamasında host adı BOŞTUR; o abonelikte site adı, mail
+            // sahipliğinin tek kaynağıdır. Kaldırsaydık o müşteriler kendi posta kutularına
+            // erişimini kaybederdi.
+            //
+            // Ayrıca EnsureDomainClaimAsync de BAŞKA sitelerin ADINI bir sahiplik kaynağı sayıyor;
+            // buradan çıkarmak, kontrol ile koruduğu şeyi farklı kurallara bağlamak olurdu — bu
+            // dosyada ve DomainClaimTests'te tam olarak bundan kaçınılıyor.
             domains.Add(siteName.ToLowerInvariant());
             try
             {

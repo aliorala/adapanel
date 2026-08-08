@@ -58,8 +58,23 @@ public sealed partial class WebAdministrationSiteService(
             // kaldırılınca IIS'te kalan artık site), onu KALDIR ve yeniden oluştur. Böylece
             // kullanıcı domaini tekrar ekleyebilir (profesyonel paneller gibi: aynı domain = aynı site).
             //
-            // Bu davranış BİLİNÇLİDİR; tehlikeli olan tarafı yukarıdaki ad kontrolü kapatır:
-            // panelin kendi araçları da birer IIS sitesidir ve o adlar artık devralınamaz.
+            // ===> BU SATIR BAŞKASININ SİTESİNİ SİLEBİLİR. Sınırı burası ÇİZMEZ. <===
+            //
+            // Eskiden burada "tehlikeli olan tarafı yukarıdaki ad kontrolü kapatır" yazıyordu ve bu
+            // YANLIŞ BİR GÜVENCEYDİ: EnsureSiteNameIsNotReserved yalnızca "AdaPanel." önekini ve
+            // "Default Web Site"ı korur — yani PANELİN KENDİ altyapısını. MÜŞTERİLERİN siteleri o
+            // kontrolün kapsamında hiç değildi; bir kiracı, kurbanın site adıyla site açarak onun
+            // IIS sitesini sessizce kaldırabiliyordu.
+            //
+            // Çapraz-kiracı sınırı, TEK doğru katmanda duruyor: çağıranın kim olduğunu yalnızca API
+            // bilir. SitesController.EnsureSiteNameIsClaimableAsync, admin olmayan bir istekte adın
+            // ya boşta ya da çağıranın KENDİ kapsamında olmasını şart koşar (aksi hâlde 409
+            // sites.name_taken) ve bu kontrol provisyon çağrısından ÖNCE gelir.
+            //
+            // YENİ BİR ÇAĞIRAN EKLENİYORSA: bu servis güvenilmez girdi ile çağrılacaksa aynı
+            // sahiplik sorusunu ÇAĞIRAN sormak zorundadır. Bugünkü diğer çağıranların hepsi panelin
+            // kendi bileşenleridir (webmail, phpMyAdmin/Adminer, yedek geri yükleme, WP klonlama —
+            // sonuncusu adın boşta olduğunu ayrıca doğrular).
             var existingSite = EnumerateSites(sites).FirstOrDefault(site =>
                 string.Equals(GetStringProperty(site, "Name"), normalizedName, StringComparison.OrdinalIgnoreCase));
             if (existingSite is not null)

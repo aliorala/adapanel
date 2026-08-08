@@ -1,3 +1,4 @@
+using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
@@ -18,6 +19,7 @@ public sealed class SiteCascadeDeletionService(
     IMailService mailService,
     IDatabaseService databaseService,
     ISiteDatabaseLinkService siteDatabaseLinks,
+    IDatabaseOwnershipService databaseOwnership,
     IReverseProxyService reverseProxyService,
     IDiskQuotaService diskQuotaService,
     ICustomerScopeService customerScopeService,
@@ -42,7 +44,10 @@ public sealed class SiteCascadeDeletionService(
             HasDnsZone = await HasDnsZoneAsync(site.Name, cancellationToken),
             MailDomains = (await ResolveExistingMailDomainsAsync(site, site.Name, cancellationToken)).ToArray(),
             FtpUsers = (await ResolveFtpUsersAsync(site.Name, cancellationToken)).ToArray(),
-            Databases = (await ResolveDatabasesAsync(site.Name, cancellationToken)).ToArray(),
+            // Önizleme, GERÇEKTE SİLİNECEK kümeyi gösterir — ne fazlası ne eksiği. Adı eşleşen ama
+            // sahiplik kaydı olmayan veritabanları burada YOKTUR çünkü silinmeyecekler; silme
+            // sonucunda ayrıca uyarı olarak bildirilirler (SiteDeletionResultDto.Warnings).
+            Databases = (await ResolveOwnedDatabasesAsync(site.Name, cancellationToken)).ToArray(),
             HasReverseProxy = await SafeBoolAsync(async () => (await reverseProxyService.GetSiteConfigurationAsync(site.Name, cancellationToken)).IsProxyEnabled),
             HasDiskQuota = await SafeBoolAsync(async () => (await diskQuotaService.GetQuotaAsync(site.Name, cancellationToken)).QuotaEnabled),
             HasGitDeployment = File.Exists(fileStore.ResolvePath(GitConfigRelativePath(site.Name))),
@@ -78,15 +83,26 @@ public sealed class SiteCascadeDeletionService(
             await StepAsync(result, $"Mail domaini ({domain})", () => mailService.DeleteDomainAsync(domain, cancellationToken));
         }
 
-        // 2) Adı eşleşen veritabanları (istenirse).
+        // 2) SAHİPLİK KAYDI OLAN veritabanları (istenirse). Ad tahminiyle bulunanlar SİLİNMEZ;
+        //    yalnızca uyarı olarak bildirilir — bkz. ResolveOwnedDatabasesAsync.
         if (deleteDatabases)
         {
-            foreach (var db in await ResolveDatabasesAsync(siteName, cancellationToken))
+            var sahipli = await ResolveOwnedDatabasesAsync(siteName, cancellationToken);
+            foreach (var db in sahipli)
             {
                 var separator = db.IndexOf(':');
                 var engine = db[..separator];
                 var name = db[(separator + 1)..];
                 await StepAsync(result, $"Veritabanı ({db})", () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken));
+            }
+
+            // SESSİZ KALMIYORUZ: kullanıcı eskiden bu veritabanlarının da silineceğini varsayıyordu.
+            // "Silmedik ve NEDEN silmedik" demek, hem veriyi korur hem de kullanıcıyı kendi kararını
+            // verebilecek durumda bırakır.
+            foreach (var db in await ResolveProbableDatabasesAsync(siteName, sahipli, cancellationToken))
+            {
+                result.Warnings.Add(
+                    $"Veritabanı ({db}): adı siteyle eşleşiyor ama panelde bu siteye ait bir sahiplik/bağ kaydı yok — SİLİNMEDİ, gerekiyorsa Veritabanları ekranından elle silin.");
             }
         }
 
@@ -256,10 +272,125 @@ public sealed class SiteCascadeDeletionService(
         }
     }
 
-    private async Task<IReadOnlyList<string>> ResolveDatabasesAsync(string siteName, CancellationToken cancellationToken)
+    /// <summary>
+    /// Siteye GERÇEKTEN ait olan veritabanları — yani cascade'in düşürmeye yetkili olduğu küme.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki OTORİTE kaynağı vardır ve ikisi de panelin kendi kaydıdır:
+    /// <see cref="ISiteDatabaseLinkService"/> (açık site↔DB bağı) ve
+    /// <see cref="IDatabaseOwnershipService"/> (veritabanı oluşturulurken yazılan sahiplik kaydı;
+    /// site adını da taşır). Panel bu kayıtları zaten tutuyor ve silmeden hemen sonra
+    /// <c>RemoveBySiteAsync</c> ile temizliyordu — yani otorite elimizdeydi ama SİLME KARARINDA
+    /// kullanılmıyordu.
+    /// </para>
+    /// <para>
+    /// AD TAHMİNİ ARTIK SİLMEZ. Eskiden "adı siteyle eşleşen" her veritabanı düşürülüyordu; bu,
+    /// veritabanının kime ait olduğunu ADINDAN VARSAYMAKTIR. Bir kiracının sitesini silmesi,
+    /// aynı adı taşıyan (ama başkasına ait ya da hiç kimseye bağlanmamış) bir veritabanını
+    /// DROP edebiliyordu — geri alınamaz bir iş, doğrulanmamış bir varsayıma dayanıyordu.
+    /// <c>SitesController.ResolveLinkableDatabasesAsync</c> doğru kuralı zaten uyguluyordu;
+    /// artık silme yolu da aynı kuralı kullanıyor.
+    /// </para>
+    /// </remarks>
+    private async Task<IReadOnlyList<string>> ResolveOwnedDatabasesAsync(string siteName, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<SiteDatabaseLinkDto> baglar = [];
+        try
+        {
+            baglar = await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // ÖLÇEMEDİK. Okunamayan bir kaydı "sahipli" saymak veri kaybettirir, "sahipsiz" saymak
+            // yalnızca fazladan bir şey bırakır. Bu depodaki kural gereği ikincisini seçiyoruz.
+            logger.LogWarning(exception, "Site-DB baglari okunamadi ({Site}); bagli veritabanlari silinmeyecek.", siteName);
+        }
+
+        IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)> sahiplik = [];
+        try
+        {
+            sahiplik = await databaseOwnership.GetAllAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Veritabani sahiplik kayitlari okunamadi ({Site}).", siteName);
+        }
+
+        return SelectDeletableDatabases(siteName, baglar, sahiplik);
+    }
+
+    /// <summary>
+    /// SİLME KARARI — saf işlev, I/O yok. Testler kararı doğrudan ölçebilsin diye ayrıldı:
+    /// "sahipsiz veritabanı silinmiyor" iddiası, on beş servisi taklit etmeden kanıtlanabilmeli.
+    /// </summary>
+    internal static IReadOnlyList<string> SelectDeletableDatabases(
+        string siteName,
+        IEnumerable<SiteDatabaseLinkDto> links,
+        IEnumerable<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)> ownership)
     {
         var matches = new List<string>();
-        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { siteName.Trim(), AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(siteName) };
+
+        void Ekle(string? engine, string? databaseName)
+        {
+            var entry = $"{(engine ?? string.Empty).Trim()}:{(databaseName ?? string.Empty).Trim()}";
+            if (entry.Length > 1 && !matches.Contains(entry, StringComparer.OrdinalIgnoreCase))
+            {
+                matches.Add(entry);
+            }
+        }
+
+        // 1) Açık site↔DB bağı (Plesk mantığı): siteyle aynı adı taşımayan DB'ler de buradan gelir.
+        foreach (var link in links)
+        {
+            Ekle(link.Engine, link.DatabaseName);
+        }
+
+        // 2) Sahiplik kaydı: DB oluşturulurken hangi siteye ait olduğu zaten yazılmıştı.
+        foreach (var (engine, databaseName, _, kayitliSite) in ownership)
+        {
+            if (string.Equals((kayitliSite ?? string.Empty).Trim(), siteName.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                Ekle(engine, databaseName);
+            }
+        }
+
+        return matches;
+    }
+
+    /// <summary>
+    /// "Muhtemelen bu siteye ait" kümesi — saf işlev. Adı siteyle eşleşen ama otorite kaydı
+    /// bulunmayan veritabanları; silinmezler, yalnızca bildirilirler.
+    /// </summary>
+    internal static IReadOnlyList<string> SelectProbableDatabases(
+        string siteName,
+        IEnumerable<(string Engine, string DatabaseName)> allDatabases,
+        IReadOnlyCollection<string> owned)
+    {
+        var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            siteName.Trim(),
+            AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(siteName)
+        };
+
+        return allDatabases
+            .Where(item => wanted.Contains(item.DatabaseName.Trim()))
+            .Select(item => $"{item.Engine}:{item.DatabaseName}")
+            .Where(entry => !owned.Contains(entry, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Adı siteyle eşleşen ama SAHİPLİK KAYDI OLMAYAN veritabanları — "muhtemelen bu siteye ait".
+    /// Silinmezler; kullanıcıya silme sonucunda uyarı olarak bildirilir ki elle karar verebilsin.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ResolveProbableDatabasesAsync(
+        string siteName,
+        IReadOnlyCollection<string> owned,
+        CancellationToken cancellationToken)
+    {
+        var hepsi = new List<(string Engine, string DatabaseName)>();
 
         foreach (var engine in DatabaseEngines)
         {
@@ -268,10 +399,7 @@ public sealed class SiteCascadeDeletionService(
                 var workspace = await databaseService.GetWorkspaceAsync(engine, cancellationToken);
                 foreach (var database in workspace.Databases)
                 {
-                    if (wanted.Contains(database.Name.Trim()))
-                    {
-                        matches.Add($"{engine}:{database.Name}");
-                    }
+                    hepsi.Add((engine, database.Name));
                 }
             }
             catch
@@ -280,18 +408,7 @@ public sealed class SiteCascadeDeletionService(
             }
         }
 
-        // GERÇEK site↔DB BAĞI (isim tahmininden bağımsız): siteye explicit bağlanmış DB'leri de ekle (Plesk gibi).
-        // Böylece "karsilastir" gibi siteyle aynı adı taşımayan DB'ler de site silinince temizlenir.
-        foreach (var link in await siteDatabaseLinks.GetForSiteAsync(siteName, cancellationToken))
-        {
-            var entry = $"{link.Engine}:{link.DatabaseName}";
-            if (!matches.Contains(entry, StringComparer.OrdinalIgnoreCase))
-            {
-                matches.Add(entry);
-            }
-        }
-
-        return matches;
+        return SelectProbableDatabases(siteName, hepsi, owned);
     }
 
     private async Task<int> CountCustomerAssignmentsAsync(string siteName, CancellationToken cancellationToken)

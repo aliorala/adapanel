@@ -369,12 +369,7 @@ foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction Silent
 
     public async Task RunTaskAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new AppException("cron.invalid_name", 400, 400);
-        }
-
-        var result = await ProcessRunner.RunPowerShellAsync(BuildRunScript(name.Trim()), cancellationToken);
+        var result = await ProcessRunner.RunPowerShellAsync(BuildRunScript(EnsureUsableName(name)), cancellationToken);
         var cikti = result.StandardOutput ?? string.Empty;
 
         if (cikti.Contains("ADAPANEL-YOK", StringComparison.Ordinal))
@@ -406,13 +401,13 @@ foreach ($gorev in (Get-ScheduledTask -TaskPath '{TaskPath}' -ErrorAction Silent
     /// yani yalnızca çıkış koduna bakmak "tetiklendi" demeye yetmez.
     /// </para>
     /// </summary>
-    internal static string BuildRunScript(string taskName) => $@"$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction SilentlyContinue
+    internal static string BuildRunScript(string taskName) => $@"$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(taskName)}' -ErrorAction SilentlyContinue
 if (-not $gorev) {{
   [Console]::Out.WriteLine('ADAPANEL-YOK')
 }} elseif ($gorev.State -eq 'Disabled') {{
   [Console]::Out.WriteLine('ADAPANEL-DEVREDISI')
 }} else {{
-  Start-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction Stop
+  Start-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(taskName)}' -ErrorAction Stop
   [Console]::Out.WriteLine('ADAPANEL-BASLATILDI')
 }}";
 
@@ -436,7 +431,7 @@ if (-not $gorev) {{
             // yonlendirmesi basarisiz olur ve gorev HIC calismaz -- yani kolaylik, isi bozar.
             if (!string.IsNullOrWhiteSpace(principalUserId))
             {
-                var script = $@"& icacls.exe ""{EscapePowerShell(klasor)}"" /grant ""{EscapePowerShell(principalUserId)}:(OI)(CI)M"" | Out-Null";
+                var script = $@"& icacls.exe '{EscapeSingleQuoted(klasor)}' /grant '{EscapeSingleQuoted(principalUserId)}:(OI)(CI)M' | Out-Null";
                 await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
             }
 
@@ -451,10 +446,7 @@ if (-not $gorev) {{
 
     public async Task<ScheduledTaskOutputDto> GetTaskOutputAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new AppException("cron.invalid_name", 400, 400);
-        }
+        name = EnsureUsableName(name);
 
         var dosya = Path.Combine(TaskLogDirectory, ResolveLogFileName(name));
         if (!File.Exists(dosya))
@@ -488,15 +480,12 @@ if (-not $gorev) {{
 
     public async Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new AppException("cron.invalid_name", 400, 400);
-        }
+        name = EnsureUsableName(name);
 
         // "Calisiyor mu" durum METNINDEN degil, Task Scheduler'in kendi durum sabitinden okunur:
         // metin sunucunun diline gore degisir ve 'Running' kelimesini aramak Turkce bir Windows'ta
         // sessizce yanlis cevap verir. State=4 (TASK_STATE_RUNNING) her dilde aynidir.
-        var script = $@"$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction SilentlyContinue
+        var script = $@"$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(name.Trim())}' -ErrorAction SilentlyContinue
 if (-not $gorev) {{ '{{}}'; exit 0 }}
 $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPath -ErrorAction SilentlyContinue
 [pscustomobject]@{{
@@ -591,12 +580,7 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
     /// </summary>
     public async Task<StopScheduledTaskResultDto> StopTaskAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new AppException("cron.invalid_name", 400, 400);
-        }
-
-        var temizAd = name.Trim();
+        var temizAd = EnsureUsableName(name);
         var gunlukYolu = Path.Combine(TaskLogDirectory, ResolveLogFileName(temizAd));
 
         var result = await ProcessRunner.RunPowerShellAsync(BuildStopScript(temizAd, gunlukYolu), cancellationToken);
@@ -676,10 +660,10 @@ foreach ($surecId in ($pidler | Select-Object -Unique)) {{
 }}
 
 # Agac oldukten SONRA Zamanlayici durumu temizlenir: gorev hala calisiyor isaretli kalabilir.
-try {{ Stop-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction Stop | Out-Null }} catch {{ }}
+try {{ Stop-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(taskName)}' -ErrorAction Stop | Out-Null }} catch {{ }}
 
 Start-Sleep -Milliseconds 500
-$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(taskName)}"" -ErrorAction SilentlyContinue
+$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(taskName)}' -ErrorAction SilentlyContinue
 $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }}
 [Console]::Out.WriteLine('ADAPANEL-OLDURULEN=' + $oldurulen)
 [Console]::Out.WriteLine('ADAPANEL-CALISIYOR=' + $halaCalisiyor)";
@@ -724,12 +708,7 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
 
     public async Task DeleteTaskAsync(string name, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new AppException("cron.invalid_name", 400, 400);
-        }
-
-        var script = $@"Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -Confirm:$false -ErrorAction Stop";
+        var script = $@"Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(EnsureUsableName(name))}' -Confirm:$false -ErrorAction Stop";
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
@@ -739,13 +718,8 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
 
     public async Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new AppException("cron.invalid_name", 400, 400);
-        }
-
         var verb = enabled ? "Enable-ScheduledTask" : "Disable-ScheduledTask";
-        var script = $@"{verb} -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(name.Trim())}"" -ErrorAction Stop | Out-Null";
+        var script = $@"{verb} -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(EnsureUsableName(name))}' -ErrorAction Stop | Out-Null";
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
@@ -836,14 +810,14 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
             $"-StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit {sureSiniri}";
 
         return $@"$ErrorActionPreference = 'Stop'
-if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -ErrorAction SilentlyContinue) {{
-  Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+if (Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(request.Name.Trim())}' -ErrorAction SilentlyContinue) {{
+  Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(request.Name.Trim())}' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 }}
 $action = {action}
 $trigger = {trigger}
 $principal = {principal}
 $settings = {settings}
-Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(request.Name.Trim())}"" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null";
+Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(request.Name.Trim())}' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null";
     }
 
     /// <summary>
@@ -916,7 +890,19 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
     {
         SanitizeRequest(request);
 
-        if (string.IsNullOrWhiteSpace(request.Name))
+        // GÖREV ADI BİR GÜVENLİK SINIRIDIR, bir etiket değil.
+        //
+        // Ad, Görev Zamanlayıcı'yı süren PowerShell betiklerine gömülür ve panel servisi LocalSystem
+        // olarak koşar. Kaçış (tek tırnaklı dize) artık doğru, ama TEK savunma olarak bırakılmıyor:
+        // ileride biri yine çift tırnaklı bir dize yazarsa beyaz liste o hatayı da tutar.
+        //
+        // Doğrulama İKİ yerde: burada ve DTO'nun RegularExpression özniteliğinde. Aynı deseni
+        // kopyalamıyoruz — ikisi de TaskNameRules'tan okuyor.
+        //
+        // Panelin müşteri görevlerine eklediği "u<guid>--" öneki AYRILARAK ölçülür: önek desene
+        // uyar (u + onaltılık + tire) ama 35 karakter tutar; ayrılmasaydı kullanıcının 60 karakterlik
+        // hakkı sessizce 25'e düşerdi.
+        if (!TaskNameRules.IsCreatable(request.Name))
         {
             throw new AppException("cron.invalid_name", 400, 400);
         }
@@ -1167,7 +1153,7 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName ""{EscapePowerShell(requ
     private static async Task GrantLimitedIdentityAccessAsync(string siteRoot, CancellationToken cancellationToken)
     {
         var script = $@"$ErrorActionPreference = 'Stop'
-& icacls.exe ""{EscapePowerShell(siteRoot)}"" /grant ""{EscapePowerShell(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M"" /T | Out-Null
+& icacls.exe '{EscapeSingleQuoted(siteRoot)}' /grant '{EscapeSingleQuoted(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M' /T | Out-Null
 if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
 
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
@@ -1308,9 +1294,40 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
             : "00:00";
     }
 
-    private static string EscapePowerShell(string value) => value.Replace("\"", "`\"");
-
+    /// <summary>
+    /// PowerShell TEK TIRNAKLI dizesi için kaçış: tek tırnak ikilenir.
+    /// <para>
+    /// Bu dosyada başka bir kaçış YOKTUR ve olmamalı. Eskiden bir de <c>EscapePowerShell</c> vardı
+    /// (yalnızca <c>"</c> karakterini kaçırıyordu) ve çıktısı ÇİFT TIRNAKLI dizelerin içine
+    /// giriyordu. PowerShell'de çift tırnaklı dize <c>$(...)</c> alt-ifadesini ÇALIŞTIRIR; panel
+    /// servisi de LocalSystem olarak koştuğu için görev adına <c>$(...)</c> yazan bir hosting
+    /// müşterisi sunucuda SYSTEM olarak kod çalıştırabiliyordu. Tek tırnaklı dizede <c>$</c>
+    /// genişlemesi ve alt-ifade YOKTUR; tek gereken kaçış budur.
+    /// </para>
+    /// <para>
+    /// Kaçış tek başına savunma sayılmıyor: adın kendisi ayrıca <see cref="TaskNameRules"/> beyaz
+    /// listesinden geçer (bkz. <see cref="EnsureUsableName"/> ve <see cref="ValidateRequest"/>).
+    /// </para>
+    /// </summary>
     private static string EscapeSingleQuoted(string value) => value.Replace("'", "''");
+
+    /// <summary>
+    /// Var olan bir göreve dokunmadan önce adın kabuk için zararsız olduğunu doğrular.
+    /// <para>
+    /// Bütün işlem uçları (çalıştır, durdur, sil, etkinleştir, durum, çıktı) buradan geçer —
+    /// tek tek yazılsaydı biri unutulurdu ve bu dosyada tam olarak o olmuştu.
+    /// </para>
+    /// </summary>
+    private static string EnsureUsableName(string? name)
+    {
+        var temiz = (name ?? string.Empty).Trim();
+        if (!TaskNameRules.IsUsable(temiz))
+        {
+            throw new AppException("cron.invalid_name", 400, 400);
+        }
+
+        return temiz;
+    }
 
     private static T[] DeserializeArray<T>(string json)
     {

@@ -203,6 +203,17 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.Cookie.SecurePolicy = panelOptions.AllowHttpFallback ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
         options.SlidingExpiration = true;
         options.ExpireTimeSpan = TimeSpan.FromHours(12);
+
+        // OTURUM ÇEREZİ ARTIK GERÇEKLE KARŞILAŞTIRILIYOR.
+        //
+        // Buraya kadar hiçbir olay bağlı değildi: çerez bir kez verildikten sonra 12 saat (kalıcıysa
+        // 14 gün) sorgusuz geçerliydi. Parola değiştirmek, kullanıcıyı pasife almak, rolünü düşürmek
+        // ve kullanıcıyı SİLMEK açık oturumu düşürmüyordu — yani bir güvenlik olayına verilecek ilk
+        // yanıt (parolayı değiştir / hesabı kapat) fiilen çalışmıyordu. Gerekçenin tamamı ve neden
+        // UpdatedAtUtc'nin ölçüt OLAMAYACAĞI CookieSessionValidator'da yazılı.
+        options.Events.OnSigningIn = CookieSessionValidator.OnSigningInAsync;
+        options.Events.OnValidatePrincipal = CookieSessionValidator.OnValidatePrincipalAsync;
+
         options.Events.OnRedirectToLogin = context =>
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;

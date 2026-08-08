@@ -193,7 +193,7 @@ exit $p.ExitCode";
         return $@"$ErrorActionPreference = 'Stop'
 $yol = '{TekTirnak(TaskPath)}'
 $ad = '{TekTirnak(gorevAdi)}'
-$eylem = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{Cift(sarmalayiciYolu)}""'
+$eylem = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{TekTirnak(sarmalayiciYolu)}""'
 $kimlik = New-ScheduledTaskPrincipal -UserId '{TekTirnak(ScriptTaskPlanner.LimitedUserId)}' -LogonType ServiceAccount -RunLevel Limited
 $ayar = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds {saniye})
 
@@ -234,7 +234,7 @@ try {{
         }
 
         var betik = $@"$ErrorActionPreference = 'Stop'
-& icacls.exe ""{Cift(root)}"" /grant ""{Cift(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M"" /T | Out-Null
+& icacls.exe '{TekTirnak(root)}' /grant '{TekTirnak(ScriptTaskPlanner.LimitedUserId)}:(OI)(CI)M' /T | Out-Null
 if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
 
         var sonuc = await ProcessRunner.RunPowerShellAsync(betik, cancellationToken);
@@ -260,7 +260,7 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
         }
 
         var betik = $@"$ErrorActionPreference = 'Stop'
-& icacls.exe ""{Cift(root)}"" /remove:g ""{Cift(ScriptTaskPlanner.LimitedUserId)}"" /T /C /Q | Out-Null";
+& icacls.exe '{TekTirnak(root)}' /remove:g '{TekTirnak(ScriptTaskPlanner.LimitedUserId)}' /T /C /Q | Out-Null";
 
         // İptal edilmiş bir istekte de temizlik ÇALIŞMALI; aksi hâlde iptal, izni kalıcı bırakmanın
         // yolu olurdu. Bu yüzden CancellationToken.None.
@@ -335,7 +335,15 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
         }
     }
 
+    /// <summary>
+    /// PowerShell TEK TIRNAKLI dizesi için kaçış — bu dosyadaki TEK kaçış, ve öyle kalmalı.
+    /// <para>
+    /// Eskiden bir de <c>Cift</c> vardı (yalnız <c>"</c> kaçırırdı) ve çıktısı ÇİFT TIRNAKLI
+    /// dizelerin içine giriyordu: <c>icacls</c> çağrılarında site kökü, görev betiğinde ise
+    /// sarmalayıcı dosyanın yolu. PowerShell'de çift tırnaklı dize <c>$(...)</c> alt-ifadesini
+    /// ÇALIŞTIRIR; yol kısmen kiracıdan türediği için bu, panelin kendi yetkisiyle (LocalSystem)
+    /// keyfi kod çalıştırmaya açık bir kapıydı. Tek tırnaklı dizede genişleme YOKTUR.
+    /// </para>
+    /// </summary>
     private static string TekTirnak(string value) => (value ?? string.Empty).Replace("'", "''");
-
-    private static string Cift(string value) => (value ?? string.Empty).Replace("\"", "`\"");
 }

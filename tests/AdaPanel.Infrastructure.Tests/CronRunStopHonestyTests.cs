@@ -51,13 +51,19 @@ public sealed class CronRunStopHonestyTests
 
     /// <summary>
     /// Gorev adi tirnak icerse bile betik bozulmamali: ad tirnakli baglama ACIK sekilde kacilir.
+    /// <para>
+    /// KACIS MEKANIZMASI DEGISTI (bkz. CronTaskNameInjectionTests). Bu test eskiden
+    /// <c>gece`"yedek</c> bekliyordu -- yani adin CIFT TIRNAKLI bir PowerShell dizesine girdigini
+    /// ve yalnizca <c>"</c> karakterinin kacildigini. O tasarim aciktı: cift tirnakli dizede
+    /// <c>$(...)</c> CALISIR ve panel LocalSystem'dir. Ad artik TEK TIRNAKLI dizeye giriyor; orada
+    /// cift tirnak zararsizdir ve kacilmasi gereken tek karakter tek tirnaktir.
+    /// </para>
     /// </summary>
     [Fact]
     public void RunScript_EscapesQuotesInTheTaskName()
     {
-        var betik = SchedulerService.BuildRunScript("gece\"yedek");
-
-        Assert.Contains("gece`\"yedek", betik, StringComparison.Ordinal);
+        Assert.Contains("'gece\"yedek'", SchedulerService.BuildRunScript("gece\"yedek"), StringComparison.Ordinal);
+        Assert.Contains("'gece''yedek'", SchedulerService.BuildRunScript("gece'yedek"), StringComparison.Ordinal);
     }
 
     /// <summary>

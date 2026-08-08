@@ -228,6 +228,73 @@ public static class CustomerAccess
     }
 
     /// <summary>
+    /// Kapsamlı bir kullanıcı, VAR OLAN bir IIS sitesinin adıyla yeni site kuramaz — o site zaten
+    /// kendi kapsamında değilse. Aksi hâlde 409 <c>sites.duplicate_name</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gerekli:</b> <c>WebAdministrationSiteService.CreateSiteAsync</c> aynı adlı IIS
+    /// sitesini ONAY SORMADAN kaldırıp yeniden kurar. Bu davranış bilinçli (kaldırılmış bir
+    /// kurulumdan kalan artık siteyi devralabilmek için) ama oradaki tek koruma
+    /// <c>EnsureSiteNameIsNotReserved</c>'dı ve o yalnızca PANELİN KENDİ altyapısını (AdaPanel.*,
+    /// Default Web Site) korur. Müşterilerin siteleri hiç korunmuyordu: bir kiracı, kurbanın site
+    /// adıyla site açarak onun IIS sitesini sessizce kaldırabiliyordu.
+    /// </para>
+    /// <para>
+    /// <b>Neden burada:</b> altyapı katmanı çağıranın kim olduğunu bilmez; sahiplik bir
+    /// yetkilendirme sorusudur ve panelde bu soruların tek adresi bu sınıftır.
+    /// </para>
+    /// <para>
+    /// <b>Neden <see cref="IIisSiteService.GetSiteAsync"/>:</b> liste ucu sistem sitelerini
+    /// (panelin araçları, yalnız loopback dinleyen iç siteler) gizler. Gizlenmiş bir siteyi "yok"
+    /// saymak, tam da üzerine yazılmasına izin vermek olurdu.
+    /// </para>
+    /// <para>
+    /// Kendi sitesinin adını yeniden kullanmak SERBEST: bugün çalışan meşru bir akış (aynı domaini
+    /// yeniden ekleme) ve kiracı zaten o siteyi silebiliyor.
+    /// </para>
+    /// </remarks>
+    public static async Task EnsureSiteNameIsClaimableAsync(
+        ICustomerScopeService scopes,
+        IIisSiteService iisSiteService,
+        ClaimsPrincipal user,
+        string? siteName,
+        CancellationToken cancellationToken)
+    {
+        if (!IsScoped(user))
+        {
+            return;
+        }
+
+        var ad = (siteName ?? string.Empty).Trim();
+        if (ad.Length == 0)
+        {
+            return;
+        }
+
+        string mevcutAd;
+        try
+        {
+            mevcutAd = (await iisSiteService.GetSiteAsync(ad, cancellationToken)).Name;
+        }
+        catch (AppException exception) when (exception.HttpStatusCode == 404)
+        {
+            return; // ad boşta
+        }
+
+        var kapsam = await GetEffectiveSitesAsync(scopes, user, cancellationToken);
+        if (kapsam is null || kapsam.Contains(mevcutAd, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // Anahtar YENİDEN ÜRETİLMİYOR: "sites.duplicate_name" panelde zaten var ve iki dilde de
+        // çevrili ("Bu site adı zaten IIS içinde kullanılıyor."). Aynı anlam için ikinci bir anahtar
+        // açmak, kullanıcının ekranda ham anahtar görmesi riskini bedava üretmek olurdu.
+        throw new AppException("sites.duplicate_name", 409, 409);
+    }
+
+    /// <summary>
     /// Bir alan adının mail sahipliği bakımından karşılık geldiği adlar.
     /// <para>
     /// <see cref="GetAllowedMailDomainsAsync"/> ile <b>aynı kuralı</b> uygular: <c>www.</c> ön eki
