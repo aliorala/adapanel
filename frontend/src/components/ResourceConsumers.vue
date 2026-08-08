@@ -20,7 +20,7 @@
 
     <!-- Henüz hiç veri yok: ya ilk tur sürüyor ya da hata aldık. (Sekme arka plandayken de buraya
          düşeriz — "aktif sorgu yok" DEMEYİZ, çünkü ölçüm hiç yapılmadı; yanlış güven vermemeli.) -->
-    <p v-if="!snapshot && failed" class="notice error">{{ label("failed", "Tüketici listesi alınamadı.") }}</p>
+    <p v-if="!snapshot && failed" class="notice error" role="alert">{{ label("failed", "Tüketici listesi alınamadı.") }}</p>
     <p v-else-if="!snapshot" class="meta" role="status">{{ label("loading", "Okunuyor…") }}</p>
 
     <!-- Kurulu değil: bu bir HATA DEĞİL. Sakin, bilgilendirici mesaj. -->

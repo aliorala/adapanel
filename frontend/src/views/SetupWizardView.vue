@@ -8,7 +8,8 @@
         <p class="lead">{{ subtitle }}</p>
       </div>
 
-      <p v-if="banner" :class="['notice', { error: bannerError }]">
+      <!-- GİRİŞ EKRANI HATA ŞERİDİ: role olmadan ekran okuyucu yanlış parolayı hiç duymuyordu. -->
+      <p v-if="banner" :class="['notice', { error: bannerError }]" :role="bannerError ? 'alert' : 'status'">
         {{ banner }}
       </p>
 
@@ -29,8 +30,8 @@
             <span class="step-name">{{ t("panel.setup.progress.preparing") }}</span>
           </li>
         </ul>
-        <p v-if="installProgress?.completed" class="notice">{{ t("panel.setup.progress.redirecting") }}</p>
-        <p v-if="installProgress?.failed" class="notice error">{{ installProgress?.error }}</p>
+        <p v-if="installProgress?.completed" class="notice" role="status">{{ t("panel.setup.progress.redirecting") }}</p>
+        <p v-if="installProgress?.failed" class="notice error" role="alert">{{ installProgress?.error }}</p>
       </section>
 
       <form v-if="mode === 'setup' && !installing" class="form-grid" @submit.prevent="submitSetup">
@@ -166,10 +167,10 @@
         <AttentionSectionNotice
           :items="attentionItemsFor(activeSection)"
           @open="attentionOpen = true" />
-        <p v-if="showDefaultPortWarning" class="notice warn-banner">
+        <p v-if="showDefaultPortWarning" class="notice warn-banner" role="status">
           {{ t("panel.dashboard.defaultPortWarning") }}
         </p>
-        <p v-if="banner" :class="['notice', { error: bannerError }]">
+        <p v-if="banner" :class="['notice', { error: bannerError }]" :role="bannerError ? 'alert' : 'status'">
           {{ banner }}
         </p>
       </div>
@@ -188,8 +189,10 @@
       :audit-items="authStore.auditLogs"
       :allowed-sections="dashboardSections.map((section) => section.id)"
       :panel-update="panelUpdate"
+      :panel-update-error="panelUpdateLoad.message.value"
       :attention="attentionSummary"
-      @navigate="handleNavigation" />
+      @navigate="handleNavigation"
+      @retry-panel-update="loadPanelUpdate" />
 
     <WebsiteWorkspaceView v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)" />
 
@@ -427,6 +430,7 @@ import ErrorReportsView from "./ErrorReportsView.vue";
 import SoftwareView from "./SoftwareView.vue";
 import UpdateView from "./UpdateView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
+import { useSectionError } from "../composables/useNotice";
 import { getAttentionSummary, type AttentionSummary } from "../api/attention";
 import WebsiteWorkspaceView from "./WebsiteWorkspaceView.vue";
 
@@ -484,6 +488,8 @@ const settingsTab = ref<SettingsTab>("general");
 const activeSection = ref("home");
 // Ana sayfa "yeni sürüm" bandı için panel güncelleme durumu (yalnızca admin doldurur).
 const panelUpdate = ref<UpdateStatus | null>(null);
+// Denetim yapılamadıysa bunu SÖYLERİZ; sessizlik "güncel" gibi okunuyordu.
+const panelUpdateLoad = useSectionError();
 const ftpUserCount = ref(0);
 // "Dikkat" toplayıcısı (menü rozetleri + üst bar çekmecesi). Yalnız admin doldurur (uç admin-only).
 const attentionSummary = ref<AttentionSummary | null>(null);
@@ -1127,8 +1133,10 @@ async function loadPanelUpdate() {
 
   try {
     panelUpdate.value = await checkForUpdate();
-  } catch {
+    panelUpdateLoad.clear();
+  } catch (error) {
     panelUpdate.value = null;
+    panelUpdateLoad.capture(error);
   }
 }
 

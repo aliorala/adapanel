@@ -47,9 +47,9 @@
         </span>
       </div>
 
-      <p v-if="loadError" class="notice error">{{ loadError }}</p>
+      <p v-if="loadError" class="notice error" role="alert">{{ loadError }}</p>
 
-      <p v-if="summary && summary.failedSources.length" class="notice">
+      <p v-if="summary && summary.failedSources.length" class="notice" role="status">
         {{ t("panel.attention.failedSources") }}: {{ summary.failedSources.join(", ") }}
       </p>
 

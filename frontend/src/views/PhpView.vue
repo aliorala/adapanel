@@ -239,7 +239,9 @@ async function saveSettings() {
     settings.memoryLimit = data.memoryLimit;
     showNotice(t("panel.php.settingsSaved"), false);
   } catch (error) {
-    showNotice(extractApiMessage(error), true);
+    // `extractApiMessage` HAM anahtar döndürür (ör. `php.settings_locked`); çevirmeden basmak
+    // kullanıcıya anlamsız bir dizge gösteriyordu. Aynı dosyanın diğer 5 noktası zaten doğruydu.
+    showNotice(resolveApiMessage(error), true);
   } finally {
     savingSettings.value = false;
   }

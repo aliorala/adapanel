@@ -13,7 +13,7 @@
       <summary>{{ t("panel.common.technicalDetails") }}</summary>
       <pre>{{ noticeDetails }}</pre>
     </details>
-    <p v-if="workspace?.statusMessage" class="notice error">{{ workspace.statusMessage }}</p>
+    <p v-if="workspace?.statusMessage" class="notice error" role="alert">{{ workspace.statusMessage }}</p>
 
     <div v-if="loading && !workspace" class="empty-state mail-loading">
       <span class="mail-spinner" aria-hidden="true"></span>
@@ -107,6 +107,10 @@
           {{ t("panel.mail.outboundLimitSave") }}
         </button>
       </div>
+      <SectionLoadError
+        v-if="isAdmin && selectedDomain && outboundLimitLoad.message.value"
+        :message="outboundLimitLoad.message.value"
+        @retry="loadOutboundLimit" />
       <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
 
       <template v-if="selectedDomain">
@@ -357,7 +361,7 @@
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.listAddress") }}</span>
               <div class="address-field">
-                <input v-model.trim="listForm.localPart" placeholder="duyuru" />
+                <input v-model.trim="listForm.localPart" :placeholder="t('panel.mail.listAddressPlaceholder')" />
                 <span>@{{ selectedDomain }}</span>
               </div>
             </label>
@@ -483,6 +487,11 @@
           </div>
         </div>
 
+        <SectionLoadError
+          v-if="certificateLoad.message.value"
+          :message="certificateLoad.message.value"
+          @retry="loadCertificate" />
+
         <div class="form-surface">
           <p v-if="certificate?.active" class="meta">
             <span :class="['status-pill', certificate.source === 'letsencrypt' ? 'ok' : 'warn']">
@@ -511,6 +520,8 @@
         </template>
         </template>
       </template>
+
+      <SectionLoadError v-if="spamLoad.message.value" :message="spamLoad.message.value" @retry="loadSpam" />
 
       <section v-if="spam && spam.installed && spam.configured" class="form-surface">
         <div class="section-head">
@@ -612,6 +623,8 @@ import {
 import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useSectionError } from "../composables/useNotice";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
@@ -636,11 +649,13 @@ const autoResponderFor = ref("");
 const autoResponderForm = reactive({ enabled: false, subject: "", message: "" });
 const aliasForm = reactive({ localPart: "", target: "" });
 const spam = ref<MailSpamSettings | null>(null);
+const spamLoad = useSectionError();
 const dns = ref<MailDns | null>(null);
 const rdns = ref<RdnsCheck | null>(null);
 const rdnsHost = ref("");
 const spamAdvanced = ref(false);
 const certificate = ref<MailCertificate | null>(null);
+const certificateLoad = useSectionError();
 const certForm = reactive({ hostName: "", contactEmail: "" });
 const certAutoTried = ref(false);
 const webmailOpening = ref(false);
@@ -674,18 +689,24 @@ const busy = ref(false);
 const domainQuota = ref(0);
 const outboundLimit = ref(0);
 const outboundLimitState = ref<MailOutboundLimit | null>(null);
+// "Okunamadı" BOŞ durumdan ayrı tutulur; şablonda SectionLoadError ile görünür + tekrar denenebilir.
+const outboundLimitLoad = useSectionError();
 
 async function loadOutboundLimit() {
   if (!selectedDomain.value || !isAdmin.value) {
     outboundLimitState.value = null;
+    outboundLimitLoad.clear();
     return;
   }
   try {
     outboundLimitState.value = await getOutboundLimit(selectedDomain.value);
     outboundLimit.value = outboundLimitState.value.messagesPerHour;
-  } catch {
+    outboundLimitLoad.clear();
+  } catch (error) {
     // Okunamadıysa "limitsiz" GÖSTERMİYORUZ: durum bilinmiyor demek, bilgi vermek değil.
+    // Hata da YUTULMUYOR: aksi halde boş alan "limit yok" sanılırdı.
     outboundLimitState.value = null;
+    outboundLimitLoad.capture(error);
   }
 }
 
@@ -845,6 +866,7 @@ async function loadCertificate() {
   try {
     const result = await getMailCertificate();
     certificate.value = result;
+    certificateLoad.clear();
     // Formu otomatik doldur ki kullanıcı mail sunucu adını/e-postayı elle yazmasın.
     if (!certForm.hostName) certForm.hostName = `mail.${selectedDomain.value}`;
     if (!certForm.contactEmail && result.suggestedContactEmail) {
@@ -857,8 +879,9 @@ async function loadCertificate() {
       certAutoTried.value = true;
       void autoIssueCert();
     }
-  } catch {
+  } catch (error) {
     certificate.value = null;
+    certificateLoad.capture(error);
   }
 }
 
@@ -1193,8 +1216,10 @@ function apply(next: MailWorkspace) {
 async function loadSpam() {
   try {
     spam.value = await getMailSpam();
-  } catch {
+    spamLoad.clear();
+  } catch (error) {
     spam.value = null;
+    spamLoad.capture(error);
   }
 }
 

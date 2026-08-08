@@ -225,7 +225,7 @@
             </div>
 
             <!-- ÇIKMAZ SOKAK DEĞİL: rol eksikse kurma düğmesi de burada. -->
-            <div v-if="quota && !quota.fsrmAvailable" class="notice error fsrm-missing">
+            <div v-if="quota && !quota.fsrmAvailable" class="notice error fsrm-missing" role="alert">
               <span>{{ t("panel.hosting.quotaUnavailable") }}</span>
               <button class="secondary compact" :disabled="installingFsrm" @click="installFsrmRole">
                 {{ installingFsrm ? t("panel.hosting.quotaInstalling") : t("panel.hosting.quotaInstall") }}
@@ -344,6 +344,8 @@
               </button>
             </div>
 
+            <SectionLoadError v-if="gitLoad.message.value" :message="gitLoad.message.value" @retry="loadGit" />
+
             <div class="settings-rows">
               <label class="setting-row">
                 <span>{{ t("panel.hosting.gitRepo") }}</span>
@@ -420,6 +422,8 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import SiteAliases from "../components/SiteAliases.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useSectionError } from "../composables/useNotice";
 import { getSiteHostingSettings, runArtisanCommand, runComposerCommand, runComposerInstall, updateSiteHostingSettings } from "../api/siteHosting";
 import { getQuota, removeQuota, setQuota, type SiteDiskQuota, installFsrm } from "../api/quota";
 import { configureGitDeployment, deployGit, getGitDeployment, type GitDeployment } from "../api/git";
@@ -450,6 +454,8 @@ const composerOutput = ref("");
 const quota = ref<SiteDiskQuota | null>(null);
 const quotaForm = reactive({ limitMegabytes: 1024, softLimit: false });
 const git = ref<GitDeployment | null>(null);
+// "Okunamadı" ile "kurulu değil" AYRI durumlar; ikincisi boş form, ilki uyarı + tekrar dene.
+const gitLoad = useSectionError();
 const gitForm = reactive({ repositoryUrl: "", branch: "main" });
 const gitOutput = ref("");
 const stats = ref<WebStatistics | null>(null);
@@ -721,8 +727,12 @@ async function loadGit() {
       gitForm.repositoryUrl = git.value.repositoryUrl;
       gitForm.branch = git.value.branch;
     }
-  } catch {
+    gitLoad.clear();
+  } catch (error) {
+    // Hata YUTULMUYOR: boş form "git kurulu değil" sanılıyordu; kullanıcı var olan
+    // dağıtımı yeniden kurmaya kalkabilirdi.
     git.value = null;
+    gitLoad.capture(error);
   }
 }
 

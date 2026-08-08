@@ -7,7 +7,7 @@
       </div>
     </header>
 
-    <p v-if="notice" :class="['inline-notice', noticeError ? 'error' : 'ok']">{{ notice }}</p>
+    <p v-if="notice" :class="['inline-notice', noticeError ? 'error' : 'ok']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="form-surface migration-how">
       <h3 class="section-label">{{ t("panel.migration.howTitle") }}</h3>
@@ -123,7 +123,7 @@
       <div class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.migration.siteName") }}</span>
-          <input v-model="form.siteName" placeholder="ornek.com" spellcheck="false" />
+          <input v-model="form.siteName" :placeholder="t('panel.migration.siteNamePlaceholder')" spellcheck="false" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.sites.physicalPath") }}</span>

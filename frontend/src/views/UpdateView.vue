@@ -41,7 +41,7 @@
 
       <!-- Kontrol BAŞARISIZSA "güncelsiniz" demek yalan olur: yeni sürüm yayınlanmış olabilir
            ve panel onu görememiştir (en sık sebep GitHub'ın saatlik istek sınırı). -->
-      <p v-if="status.isCheckFailed" class="notice warn">{{ t("panel.update.checkFailed") }}</p>
+      <p v-if="status.isCheckFailed" class="notice warn" role="alert">{{ t("panel.update.checkFailed") }}</p>
       <p v-else-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
 
       <dl class="detail-grid">

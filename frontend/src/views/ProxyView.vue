@@ -214,16 +214,16 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { extractApiMessage } from "../stores/auth";
 import { useProxyStore } from "../stores/proxy";
 import { useSitesStore } from "../stores/sites";
+import { useConfirm } from "../components/ConfirmDialog.vue";
+import { useNotice } from "../composables/useNotice";
 
 const { t } = useI18n();
 const proxyStore = useProxyStore();
 const sitesStore = useSitesStore();
-
-const notice = ref("");
-const noticeError = ref(false);
+const { confirm } = useConfirm();
+const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const activeSection = ref<"proxy" | "rewrite">("proxy");
 
 const selectedSiteName = computed({
@@ -315,15 +315,25 @@ async function removeProxy() {
     return;
   }
 
-  try {
-    await proxyStore.removeProxy(selectedSiteName.value);
-    proxyForm.destinationUrl = "";
-    proxyForm.mountPath = "/";
-    proxyForm.enableHtmlLinkRewrite = true;
-    showNotice(t("proxy.proxy_removed"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  // Kaldırma sitenin YÖNLENDİRMESİNİ keser (site anında erişilemez hâle gelebilir): onaysız yapılmaz.
+  const site = selectedSiteName.value;
+  await confirm({
+    title: t("panel.proxy.confirmRemoveTitle"),
+    message: t("panel.proxy.confirmRemoveMessage", { name: site }),
+    impact: [site, currentConfiguration.value?.destinationUrl || ""].filter((line) => line.length > 0),
+    confirmLabel: t("panel.proxy.remove"),
+    action: async () => {
+      try {
+        await proxyStore.removeProxy(site);
+        proxyForm.destinationUrl = "";
+        proxyForm.mountPath = "/";
+        proxyForm.enableHtmlLinkRewrite = true;
+        showNotice(t("proxy.proxy_removed"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    }
+  });
 }
 
 async function saveRewriteRule() {
@@ -341,16 +351,6 @@ async function saveRewriteRule() {
   }
 }
 
-function resolveApiMessage(error: unknown): string {
-  const key = extractApiMessage(error);
-  const translated = t(key);
-  return translated === key ? key : translated;
-}
-
-function showNotice(message: string, isError: boolean) {
-  notice.value = message;
-  noticeError.value = isError;
-}
 </script>
 
 <style scoped>

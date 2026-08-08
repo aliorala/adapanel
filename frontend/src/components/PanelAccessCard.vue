@@ -85,7 +85,7 @@
           · {{ t("panel.panelAccess.backendUrl") }}: <strong>{{ status?.backendUrl }}</strong>
         </p>
 
-        <p v-if="status?.certificateIsSelfSigned" class="notice error">
+        <p v-if="status?.certificateIsSelfSigned" class="notice error" role="alert">
           {{ t("panel.panelAccess.certificateSelfSigned") }}
         </p>
 

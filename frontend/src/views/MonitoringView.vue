@@ -158,7 +158,7 @@
         </div>
       </div>
 
-      <p v-if="processError" class="notice error">{{ processError }}</p>
+      <p v-if="processError" class="notice error" role="alert">{{ processError }}</p>
       <p v-else-if="!snapshot" class="meta">{{ t("panel.common.loading") }}</p>
       <p v-else-if="!snapshot.cpuBaselineReady" class="field-hint">{{ t("panel.processes.baselineHint") }}</p>
 

@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <div v-if="notice" :class="['notice', { error: noticeError }]">
+    <div v-if="notice" :class="['notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       <p>{{ notice }}</p>
       <details v-if="noticeDetails" class="technical-details">
         <summary>{{ t("panel.common.technicalDetails") }}</summary>
@@ -154,6 +154,7 @@ import { useI18n } from "vue-i18n";
 import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
@@ -162,6 +163,7 @@ const props = defineProps<{ siteName?: string }>();
 
 const { t } = useI18n();
 const { prompt } = usePrompt();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -349,18 +351,29 @@ async function changeFtpPassword(userName: string) {
   }
 }
 
+/**
+ * Silme ONAYSIZ yapılmaz: FTP hesabı Windows kullanıcısıyla birlikte gider ve geri alınamaz.
+ * (Parola değiştirmede zaten PromptDialog kullanılıyordu; silmede onay atlanmıştı.)
+ */
 async function removeUser(userName: string) {
-  deletingUser.value = userName;
-
-  try {
-    await deleteFtpUser(userName);
-    await refresh();
-    showNotice(t("panel.ftp.deleted"), false);
-  } catch (error) {
-    showApiError(error);
-  } finally {
-    deletingUser.value = "";
-  }
+  await confirm({
+    title: t("panel.ftp.confirmDeleteTitle"),
+    message: t("panel.ftp.confirmDeleteMessage", { name: userName }),
+    impact: [userName],
+    requireText: userName,
+    action: async () => {
+      deletingUser.value = userName;
+      try {
+        await deleteFtpUser(userName);
+        await refresh();
+        showNotice(t("panel.ftp.deleted"), false);
+      } catch (error) {
+        showApiError(error);
+      } finally {
+        deletingUser.value = "";
+      }
+    }
+  });
 }
 
 function showNotice(message: string, isError: boolean) {

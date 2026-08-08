@@ -93,7 +93,7 @@
             <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" @click="extract(entry.path)">
               {{ t("panel.files.extract") }}
             </button>
-            <button class="danger compact" @click="removePath(entry.path)">{{ t("panel.sites.delete") }}</button>
+            <button class="danger compact" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
           </div>
         </div>
       </div>
@@ -211,12 +211,14 @@ import {
   type FileEntry,
   type FileWorkspace
 } from "../api/files";
-import { extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
+import { useNotice } from "../composables/useNotice";
 
 const { t } = useI18n();
 const { prompt } = usePrompt();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 
 const activeTab = ref<"files" | "backups">("files");
@@ -225,8 +227,7 @@ const fileContent = ref("");
 const backups = ref<BackupRecord[]>([]);
 const backupSiteName = ref("");
 const backupEngine = ref("mariadb");
-const notice = ref("");
-const noticeError = ref(false);
+const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const searchQuery = ref("");
 const searchResults = ref<FileEntry[]>([]);
 const permissionPrincipal = ref("IIS_IUSRS");
@@ -378,14 +379,33 @@ async function createFolder() {
   }
 }
 
-async function removePath(path: string) {
-  try {
-    await deletePath(path);
-    await refresh(workspace.value?.path || "");
-    showNotice(t("panel.files.deleted"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+/**
+ * Silme ONAYSIZ yapılmaz.
+ *
+ * Arkasında `Directory.Delete(recursive: true)` var: klasörde tek tıkla BÜTÜN ağaç gider ve
+ * geri dönüşü yoktur. Bu yüzden klasörlerde `requireText` ile klasör adının yazılması istenir;
+ * dosyada normal onay yeter. Onay metni NEYİN silineceğini (tam yol) açıkça söyler.
+ */
+async function removePath(entry: FileEntry) {
+  const isFolder = entry.isDirectory;
+  await confirm({
+    title: isFolder ? t("panel.files.confirmDeleteFolderTitle") : t("panel.files.confirmDeleteFileTitle"),
+    message: isFolder
+      ? t("panel.files.confirmDeleteFolderMessage", { name: entry.name })
+      : t("panel.files.confirmDeleteFileMessage", { name: entry.name }),
+    impact: [entry.path],
+    // Klasör = geri dönüşsüz özyinelemeli silme: adın birebir yazılması istenir.
+    requireText: isFolder ? entry.name : undefined,
+    action: async () => {
+      try {
+        await deletePath(entry.path);
+        await refresh(workspace.value?.path || "");
+        showNotice(t("panel.files.deleted"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    }
+  });
 }
 
 async function saveCurrentFile() {
@@ -443,16 +463,6 @@ async function restore(backupId: string) {
   }
 }
 
-function showNotice(message: string, isError: boolean) {
-  notice.value = message;
-  noticeError.value = isError;
-}
-
-function resolveApiMessage(error: unknown) {
-  const key = extractApiMessage(error);
-  const translated = t(key);
-  return translated === key ? key : translated;
-}
 </script>
 
 <style scoped>

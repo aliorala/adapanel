@@ -39,7 +39,7 @@
         </label>
         <label v-if="form.taskType === 'url'" class="span-2">
           <span class="field-label">{{ t("panel.tasks.url") }}</span>
-          <input v-model.trim="form.url" placeholder="https://ornek.com/cron/calistir?key=..." spellcheck="false" />
+          <input v-model.trim="form.url" :placeholder="t('panel.tasks.urlPlaceholder')" spellcheck="false" />
           <small class="field-hint">{{ t("panel.tasks.urlHint") }}</small>
         </label>
 
@@ -103,6 +103,11 @@
             </span>
           </template>
         </p>
+        <SectionLoadError
+          v-if="(form.taskType === 'command' || form.taskType === 'script') && environmentLoad.message.value"
+          class="span-2"
+          :message="environmentLoad.message.value"
+          @retry="loadEnvironment" />
         <!-- Çalışma klasörü ipucu HER ZAMAN görünür. Önceden yalnızca yer tutucu metindi ve alana
              bir şey yazılınca kayboluyordu; kullanıcı "buraya ne yazacağım" diye takılıp kaldı.
              Doğru cevap "boş bırakın" olduğu için bunun okunması gerekiyor. -->
@@ -331,6 +336,8 @@ import { useI18n } from "vue-i18n";
 import { createScheduledTask, deleteScheduledTask, getScheduledTasks, addPythonToMachinePath, getScheduledTaskOutput, getScheduledTaskStatus, getTaskEnvironment, runScheduledTask, setScheduledTaskEnabled, stopScheduledTask, type ScheduledTask, type ScheduledTaskOutput, type TaskEnvironment } from "../api/cron";
 import { getSites, type SiteRecord } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useSectionError } from "../composables/useNotice";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 
 const { t } = useI18n();
@@ -435,13 +442,17 @@ const filteredTasks = computed(() => {
  * "Python yok" demek ile "ölçemedik" demek aynı şey değildir.
  */
 const environment = ref<TaskEnvironment | null>(null);
+// Ölçüm okunamadıysa bunu SÖYLERİZ: sessizce hiçbir şey göstermek, "ortam sorunsuz" izlenimi verirdi.
+const environmentLoad = useSectionError();
 const fixingPython = ref(false);
 
 async function loadEnvironment() {
   try {
     environment.value = await getTaskEnvironment();
-  } catch {
+    environmentLoad.clear();
+  } catch (error) {
     environment.value = null;
+    environmentLoad.capture(error);
   }
 }
 

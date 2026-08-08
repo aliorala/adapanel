@@ -72,7 +72,7 @@
           </label>
         </div>
 
-        <p v-if="settings.lastError" class="notice error">
+        <p v-if="settings.lastError" class="notice error" role="alert">
           {{ t("panel.errorReports.lastError") }}: {{ settings.lastError }}
         </p>
 

@@ -47,7 +47,18 @@ const i18n = createI18n({
   legacy: false,
   locale: "tr",
   fallbackLocale: "en",
-  flatJson: true,
+  // flatJson KAPALI — bilinçli.
+  //
+  // tr.json/en.json ZATEN DÜZ: anahtarlar noktalı dizgeler, iç içe nesne yok. `flatJson: true`
+  // bu düz anahtarları iç içe bir ağaca AÇMAYA çalışır; bir anahtar hem yaprak hem önek olduğunda
+  // (ör. "attention.update.panel" + "attention.update.panel.desc") ağaç kurulamaz ve vue-i18n
+  // her yüklemede "[intlify] Ignore object flatten" uyarısı basar. Bugün 12 uyarı vardı ve yeni
+  // bir ".desc" kardeşi eklendiğinde sınıf büyüyordu.
+  //
+  // ÖLÇÜLDÜ (3469 anahtar × 2 dil, iki mod karşılaştırıldı): flatJson kapalıyken çözümlenen
+  // değerler BİREBİR aynı; uyarı sayısı 12 → 0. Anahtarları yeniden adlandırmak gerekmiyor —
+  // zaten adlar backend'den (AttentionService TitleKey/DescriptionKey) geliyor ve orayı
+  // değiştirmeden yeniden adlandırma çeviriyi kırardı.
   messageCompiler: safeMessageCompiler,
   messages: { tr, en }
 });

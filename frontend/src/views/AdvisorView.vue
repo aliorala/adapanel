@@ -21,7 +21,7 @@
 
     <!-- Bazı kontroller ÇALIŞTIRILAMADIYSA "her şey yolunda" demek yalan olur: hiçbir şey
          ölçülememişken de öneri listesi boş çıkar. Bu durumu ayrı ve açık şekilde göster. -->
-    <div v-if="report && report.failedChecks?.length" class="notice warn">
+    <div v-if="report && report.failedChecks?.length" class="notice warn" role="status">
       {{ t("panel.advisor.checksFailed", { checks: report.failedChecks.join(", ") }) }}
     </div>
 

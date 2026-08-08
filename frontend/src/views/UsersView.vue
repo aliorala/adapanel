@@ -18,7 +18,7 @@
             <strong class="plan-name">{{ plan.name }}</strong>
             <span class="plan-card-actions">
               <button type="button" class="secondary compact" @click="planiDuzenle(plan)">{{ t("panel.common.edit") }}</button>
-              <button type="button" class="secondary compact danger" @click="removeServicePlan(plan.id)">{{ t("panel.common.delete") }}</button>
+              <button type="button" class="secondary compact danger" @click="removeServicePlan(plan)">{{ t("panel.common.delete") }}</button>
             </span>
           </div>
           <ul class="plan-limits">
@@ -348,9 +348,10 @@ import { useSitesStore } from "../stores/sites";
 const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
 
 const i18n = useI18n();
-const t = (key: string) => {
+// params: "'{name}' planı silinecek" gibi yer tutuculu metinler için. Verilmezse davranış aynı.
+const t = (key: string, params?: Record<string, unknown>) => {
   try {
-    const value = i18n.t(key);
+    const value = params ? i18n.t(key, params) : i18n.t(key);
     if (typeof value !== "string") {
       console.error("Unexpected i18n value", key, value);
       return key;
@@ -534,13 +535,25 @@ async function planiKaydet() {
   }
 }
 
-async function removeServicePlan(id: string) {
-  try {
-    await deleteServicePlan(id);
-    await loadServicePlans();
-  } catch (error) {
-    notify(resolveApiMessage(error), true);
-  }
+/**
+ * Onay + BAŞARI bildirimi eklendi. Öncesinde ikisi de yoktu: kullanıcı tek tıkla planı siliyor,
+ * ekranda hiçbir şey yazmıyordu — "sildim mi, silemedim mi?" ayırt edilemiyordu.
+ */
+async function removeServicePlan(plan: ServicePlan) {
+  await confirm({
+    title: t("panel.plans.confirmDeleteTitle"),
+    message: t("panel.plans.confirmDeleteMessage", { name: plan.name }),
+    impact: [plan.name],
+    action: async () => {
+      try {
+        await deleteServicePlan(plan.id);
+        await loadServicePlans();
+        notify(t("panel.plans.deleted"), false);
+      } catch (error) {
+        notify(resolveApiMessage(error), true);
+      }
+    }
+  });
 }
 
 function applyPlanToCreate() {

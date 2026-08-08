@@ -558,6 +558,20 @@ async function installWindowsDns() {
 
 async function toggleDnssec(enable: boolean) {
   if (!siteName.value) return;
+
+  // KAPATMAK yıkıcıdır: bölgenin imzası kalkar, üst kayıttaki DS kaydı geçersizleşir ve
+  // doğrulayan çözümleyiciler alan adını GEÇİCİ OLARAK ÇÖZEMEZ. Onaysız yapılmaz.
+  if (!enable) {
+    const onay = await confirm({
+      title: t("panel.dns.confirmDnssecDisableTitle"),
+      message: t("panel.dns.confirmDnssecDisableMessage", { zone: zone.value?.zoneName || siteName.value }),
+      confirmLabel: t("panel.dns.dnssecDisable")
+    });
+    if (!onay) {
+      return;
+    }
+  }
+
   dnssecBusy.value = true;
   try {
     zone.value = await setDnssec(siteName.value, enable);

@@ -109,6 +109,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { copyToClipboard } from "../utils/clipboard";
 
 // Bildirimler üst bandda (MainLayout > banner) gösterilsin diye kabuk bileşene iletilir.
@@ -132,6 +133,7 @@ const t = (key: string, params?: Record<string, unknown>) => {
 };
 
 const authStore = useAuthStore();
+const { confirm } = useConfirm();
 
 const twoFactorVerificationCode = ref("");
 const disableTwoFactorPassword = ref("");
@@ -177,7 +179,20 @@ async function copyRecoveryCodes() {
   notify(t(oldu ? "panel.account.recoveryCopied" : "panel.account.recoveryCopyFailed"), !oldu);
 }
 
+/**
+ * İki adımlı doğrulamayı KAPATMAK hesabın güvenlik seviyesini düşürür; onay alınmadan yapılmaz.
+ * (Yıkıcı değil ama geri alınması yeni kurulum + yeni kurtarma kodu gerektirir.)
+ */
 async function disableTwoFactor() {
+  const onay = await confirm({
+    title: t("panel.account.confirmDisable2faTitle"),
+    message: t("panel.account.confirmDisable2faMessage"),
+    confirmLabel: t("panel.account.disable2fa")
+  });
+  if (!onay) {
+    return;
+  }
+
   try {
     await authStore.disableTwoFactor(disableTwoFactorPassword.value);
     disableTwoFactorPassword.value = "";

@@ -251,7 +251,7 @@
               {{ t(`panel.antivirus.status.${avStatus.lastScan.status}`) }}
             </span>
           </div>
-          <p v-if="avStatus.lastScan.status === 'failed'" class="notice error">{{ avStatus.lastScan.detail }}</p>
+          <p v-if="avStatus.lastScan.status === 'failed'" class="notice error" role="alert">{{ avStatus.lastScan.detail }}</p>
           <div v-else-if="avStatus.lastScan.infected.length > 0" class="data-table">
             <div class="data-row table-head av-finding-row">
               <span>{{ t("panel.antivirus.file") }}</span>

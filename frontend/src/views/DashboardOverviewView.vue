@@ -12,6 +12,13 @@
       <button class="ub-action" @click="go('updates')">{{ t("panel.dashboard.update.action") }}</button>
     </section>
 
+    <!-- Güncelleme DENETİMİ yapılamadıysa bu SÖYLENİR. Sessizce hiçbir şey göstermek,
+         "son sürümdesiniz" demekle aynı etkiyi yapıyor ve bekleyen güncelleme gizli kalıyordu. -->
+    <SectionLoadError
+      v-else-if="panelUpdateError"
+      :message="panelUpdateError"
+      @retry="emit('retryPanelUpdate')" />
+
     <!--
       Dikkat özeti: panele girer girmez "N site · N güncelleme bekliyor · N sertifika yakında
       bitiyor" görünür. Tıklanan parça ya ilgili ekrana ya da dikkat çekmecesine götürür.
@@ -269,6 +276,7 @@ import { getServerIpAddresses } from "../api/system";
 import type { UpdateStatus } from "../api/update";
 import type { AttentionSummary } from "../api/attention";
 import { copyToClipboard } from "../utils/clipboard";
+import SectionLoadError from "../components/SectionLoadError.vue";
 
 type DiskUsage = {
   name: string;
@@ -324,6 +332,8 @@ const props = defineProps<{
   allowedSections: string[];
   // Panel self-update durumu (yalnızca admin doldurur; null ise banner gizli).
   panelUpdate: UpdateStatus | null;
+  // Güncelleme denetimi OKUNAMADIYSA hata metni; boş ise sorun yok demektir.
+  panelUpdateError?: string;
   // Dikkat özeti (yalnızca admin doldurur; null ise özet kartı gizli).
   attention?: AttentionSummary | null;
 }>();
@@ -359,7 +369,10 @@ const attentionTone = computed(() => {
 });
 
 // profesyonel panel benzeri: hizli erisim kartlari + ozet kutulari ilgili bolume gider.
-const emit = defineEmits<{ (event: "navigate", sectionId: string): void }>();
+const emit = defineEmits<{
+  (event: "navigate", sectionId: string): void;
+  (event: "retryPanelUpdate"): void;
+}>();
 
 // Yalnızca kullanıcının rolünde mevcut olan bölümlere kısayol göster (boş ekrana götürmesin).
 function can(sectionId: string): boolean {

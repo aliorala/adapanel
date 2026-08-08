@@ -52,9 +52,9 @@
         :runner="wpcliRunner" />
 
       <div v-else-if="tab === 'wordpress'" class="wp-panel">
-        <p v-if="wpNotice" :class="['notice', { error: wpNoticeError }]">{{ wpNotice }}</p>
+        <p v-if="wpNotice" :class="['notice', { error: wpNoticeError }]" :role="wpNoticeError ? 'alert' : 'status'">{{ wpNotice }}</p>
         <p v-if="wpLoading" class="meta">{{ t("panel.wpkit.loading") }}</p>
-        <p v-else-if="wp && !wp.isWordPress" class="notice warn">{{ t("panel.wpkit.notWordpress") }}</p>
+        <p v-else-if="wp && !wp.isWordPress" class="notice warn" role="status">{{ t("panel.wpkit.notWordpress") }}</p>
 
         <template v-else-if="wp">
           <div class="wp-status">
@@ -132,8 +132,8 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.searchReplace") }}</span>
             <div class="wp-row">
-              <input v-model.trim="wpForm.srFrom" placeholder="http://eski.com" :disabled="!!wpBusy" />
-              <input v-model.trim="wpForm.srTo" placeholder="https://yeni.com" :disabled="!!wpBusy" />
+              <input v-model.trim="wpForm.srFrom" :placeholder="t('panel.wpkit.srFromPlaceholder')" :disabled="!!wpBusy" />
+              <input v-model.trim="wpForm.srTo" :placeholder="t('panel.wpkit.srToPlaceholder')" :disabled="!!wpBusy" />
               <button class="secondary compact" :disabled="!!wpBusy || !wpForm.srFrom || !wpForm.srTo" @click="wpSearchReplace">{{ wpBusy === 'sr' ? t("panel.wpkit.working") : t("panel.wpkit.replace") }}</button>
             </div>
             <small class="hint">{{ t("panel.wpkit.searchReplaceHint") }}</small>
@@ -145,18 +145,18 @@
               <input v-model.trim="wpForm.adminUser" placeholder="admin" :disabled="!!wpBusy" />
               <button class="secondary compact" :disabled="!!wpBusy || !wpForm.adminUser" @click="wpResetPassword">{{ wpBusy === 'pass' ? t("panel.wpkit.working") : t("panel.wpkit.reset") }}</button>
             </div>
-            <div v-if="wpNewPassword" class="notice wp-cred">{{ t("panel.wpkit.newPassword") }}: <code>{{ wpNewPassword }}</code><br /><small>{{ t("panel.wpkit.newPasswordHint") }}</small></div>
+            <div v-if="wpNewPassword" class="notice wp-cred" role="status">{{ t("panel.wpkit.newPassword") }}: <code>{{ wpNewPassword }}</code><br /><small>{{ t("panel.wpkit.newPasswordHint") }}</small></div>
           </div>
 
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.clone") }}</span>
             <div class="wp-row">
               <input v-model.trim="wpClone.targetSiteName" :placeholder="t('panel.wpkit.cloneSiteName')" :disabled="!!wpBusy" />
-              <input v-model.trim="wpClone.targetHostName" placeholder="staging.ornek.com" :disabled="!!wpBusy" />
+              <input v-model.trim="wpClone.targetHostName" :placeholder="t('panel.wpkit.cloneHostPlaceholder')" :disabled="!!wpBusy" />
               <button class="secondary compact" :disabled="!!wpBusy || !wpClone.targetSiteName || !wpClone.targetHostName" @click="wpDoClone">{{ wpBusy === 'clone' ? t("panel.wpkit.working") : t("panel.wpkit.cloneBtn") }}</button>
             </div>
             <small class="hint">{{ t("panel.wpkit.cloneHint") }}</small>
-            <div v-if="wpCloneResult" class="notice wp-cred">
+            <div v-if="wpCloneResult" class="notice wp-cred" role="status">
               <a :href="wpCloneResult.targetUrl" target="_blank" rel="noopener">{{ wpCloneResult.targetUrl }}</a>
               · DB: <code>{{ wpCloneResult.targetDatabase }}</code>
               · {{ t("panel.wpkit.cloneUser") }}: <code>{{ wpCloneResult.databaseUser }}</code>
@@ -173,7 +173,7 @@
               <button class="secondary compact" :disabled="!!wpBusy || !wpCopy.targetSiteName || (!wpCopy.files && !wpCopy.database)" @click="wpDoCopy">{{ wpBusy === 'copy' ? t("panel.wpkit.working") : t("panel.wpkit.copyBtn") }}</button>
             </div>
             <small class="hint">⚠ {{ t("panel.wpkit.copyHint") }}</small>
-            <div v-if="wpCopyResult" class="notice wp-cred">{{ t("panel.wpkit.copyDone") }}<br /><small>{{ t("panel.wpkit.copyBackup") }}: <code>{{ wpCopyResult.backupPath }}</code></small></div>
+            <div v-if="wpCopyResult" class="notice wp-cred" role="status">{{ t("panel.wpkit.copyDone") }}<br /><small>{{ t("panel.wpkit.copyBackup") }}: <code>{{ wpCopyResult.backupPath }}</code></small></div>
           </div>
 
           <pre v-if="wpOutput" class="wp-output">{{ wpOutput }}</pre>
@@ -184,13 +184,16 @@
         <h4>{{ t("panel.toolkit.queue.title") }}</h4>
         <p class="meta">{{ t("panel.toolkit.queue.desc") }}</p>
 
-        <p v-if="queueNotice" :class="['notice', { error: queueNoticeError }]">{{ queueNotice }}</p>
+        <p v-if="queueNotice" :class="['notice', { error: queueNoticeError }]" :role="queueNoticeError ? 'alert' : 'status'">{{ queueNotice }}</p>
+
+        <SectionLoadError v-if="queueLoad.message.value" :message="queueLoad.message.value" @retry="loadQueue" />
 
         <div class="queue-status">
-          <span :class="['pill', { stopped: !queueRunning }]">
+          <span v-if="queueLoaded" :class="['pill', { stopped: !queueRunning }]">
             <span class="state-dot"></span>
             {{ queueRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
           </span>
+          <span v-else class="pill stopped">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
           <button v-if="!queueRunning" class="compact" :disabled="queueBusy" @click="startQueue">
             {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
           </button>
@@ -203,11 +206,14 @@
 
         <h4 class="sched-head">{{ t("panel.toolkit.scheduler.title") }}</h4>
         <p class="meta">{{ t("panel.toolkit.scheduler.desc") }}</p>
+        <SectionLoadError v-if="schedulerLoad.message.value" :message="schedulerLoad.message.value" @retry="loadScheduler" />
+
         <div class="queue-status">
-          <span :class="['pill', { stopped: !schedulerRunning }]">
+          <span v-if="schedulerLoaded" :class="['pill', { stopped: !schedulerRunning }]">
             <span class="state-dot"></span>
             {{ schedulerRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
           </span>
+          <span v-else class="pill stopped">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
           <button v-if="!schedulerRunning" class="compact" :disabled="schedulerBusy" @click="startScheduler">
             {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
           </button>
@@ -239,12 +245,15 @@ import {
 } from "../api/siteHosting";
 import { getWordPress, setWordPressMaintenance, createWordPressLoginLink, cloneWordPress, hardenWordPress, copyWordPressData, type WordPressSite, type WordPressCloneResult, type WordPressCopyDataResult } from "../api/wordpress";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { extractApiMessage } from "../stores/auth";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useNotice, useSectionError } from "../composables/useNotice";
 import { useSitesStore } from "../stores/sites";
 
 type ToolkitTab = "composer" | "artisan" | "node" | "wpcli" | "wordpress" | "queue";
 
 const { t } = useI18n();
+// resolveApiMessage TEK KAYNAKTAN (useNotice); bu dosyadaki elle kopyası kaldırıldı.
+const { resolveApiMessage } = useNotice();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
@@ -593,9 +602,13 @@ async function wpResetPassword() {
 const queueRunning = ref(false);
 const queueBusy = ref(false);
 const queueLoaded = ref(false);
+// Durum OKUNAMADIYSA "Durduruldu" DEMEYİZ: çalışan bir işçiyi durmuş göstermek yanlış bilgidir.
+const queueLoad = useSectionError();
 const queueNotice = ref("");
 const queueNoticeError = ref(false);
 const schedulerRunning = ref(false);
+const schedulerLoaded = ref(false);
+const schedulerLoad = useSectionError();
 const schedulerBusy = ref(false);
 
 function selectQueue() {
@@ -614,8 +627,12 @@ async function loadQueue() {
     const status = await getQueueWorker(siteName.value);
     queueRunning.value = status.running;
     queueLoaded.value = true;
-  } catch {
-    // Durum okunamazsa sessiz geç; kullanıcı başlat/durdur ile yine yönetebilir.
+    queueLoad.clear();
+  } catch (error) {
+    // Sessiz geçilmiyordu-geçiliyordu: durum okunamadığında ekran "Durduruldu" gösteriyor,
+    // kullanıcı çalışan işçiyi durmuş sanıp ikinci bir tane başlatabiliyordu.
+    queueLoaded.value = false;
+    queueLoad.capture(error);
   }
 }
 
@@ -625,6 +642,7 @@ async function startQueue() {
   try {
     const status = await startQueueWorker(siteName.value);
     queueRunning.value = status.running;
+    queueLoaded.value = true;
     showQueueNotice(t("panel.toolkit.queue.started"), false);
   } catch (error) {
     showQueueNotice(resolveApiMessage(error), true);
@@ -639,6 +657,7 @@ async function stopQueue() {
   try {
     const status = await stopQueueWorker(siteName.value);
     queueRunning.value = status.running;
+    queueLoaded.value = true;
     showQueueNotice(t("panel.toolkit.queue.stopped"), false);
   } catch (error) {
     showQueueNotice(resolveApiMessage(error), true);
@@ -654,8 +673,11 @@ async function loadScheduler() {
   try {
     const status = await getLaravelScheduler(siteName.value);
     schedulerRunning.value = status.running;
-  } catch {
-    // Durum okunamazsa sessiz geç.
+    schedulerLoaded.value = true;
+    schedulerLoad.clear();
+  } catch (error) {
+    schedulerLoaded.value = false;
+    schedulerLoad.capture(error);
   }
 }
 
@@ -665,6 +687,7 @@ async function startScheduler() {
   try {
     const status = await startLaravelScheduler(siteName.value);
     schedulerRunning.value = status.running;
+    schedulerLoaded.value = true;
     showQueueNotice(t("panel.toolkit.scheduler.started"), false);
   } catch (error) {
     showQueueNotice(resolveApiMessage(error), true);
@@ -679,18 +702,13 @@ async function stopScheduler() {
   try {
     const status = await stopLaravelScheduler(siteName.value);
     schedulerRunning.value = status.running;
+    schedulerLoaded.value = true;
     showQueueNotice(t("panel.toolkit.scheduler.stopped"), false);
   } catch (error) {
     showQueueNotice(resolveApiMessage(error), true);
   } finally {
     schedulerBusy.value = false;
   }
-}
-
-function resolveApiMessage(error: unknown) {
-  const key = extractApiMessage(error);
-  const translated = t(key);
-  return translated === key ? key : translated;
 }
 
 function showQueueNotice(message: string, isError: boolean) {

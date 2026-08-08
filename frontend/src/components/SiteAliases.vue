@@ -83,9 +83,11 @@ import { onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { addSiteAlias, getSiteAliases, removeSiteAlias, type SiteAliasWorkspace } from "../api/aliases";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { useConfirm } from "./ConfirmDialog.vue";
 
 const props = defineProps<{ siteName: string }>();
 const { t } = useI18n();
+const { confirm } = useConfirm();
 
 const workspace = ref<SiteAliasWorkspace | null>(null);
 const loading = ref(false);
@@ -138,16 +140,28 @@ async function add() {
   }
 }
 
+/**
+ * Takma adı kaldırmak IIS bağlamasını siler: o alan adından gelen ziyaretçi ANINDA siteye
+ * ulaşamaz. Onaysız yapılmaz; onay metni hangi alan adının kalkacağını söyler.
+ */
 async function remove(hostName: string) {
-  busy.value = true;
-  error.value = "";
-  try {
-    workspace.value = await removeSiteAlias(props.siteName, hostName);
-  } catch (err) {
-    error.value = resolveApiMessage(err);
-  } finally {
-    busy.value = false;
-  }
+  await confirm({
+    title: t("panel.alias.confirmRemoveTitle"),
+    message: t("panel.alias.confirmRemoveMessage", { host: hostName }),
+    impact: [hostName],
+    confirmLabel: t("panel.alias.remove"),
+    action: async () => {
+      busy.value = true;
+      error.value = "";
+      try {
+        workspace.value = await removeSiteAlias(props.siteName, hostName);
+      } catch (err) {
+        error.value = resolveApiMessage(err);
+      } finally {
+        busy.value = false;
+      }
+    }
+  });
 }
 
 watch(() => props.siteName, () => void load());

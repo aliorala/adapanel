@@ -10,6 +10,8 @@
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
+    <SectionLoadError v-if="dnsLoad.message.value" :message="dnsLoad.message.value" @retry="load" />
+
     <!-- DNS erişilebilirliği: servisin "Running" olması YETMEZ, 53 portunun genel IP'de
          dinlemesi gerekir. Bu kart o farkı gösterir ve tek tıkla onarır. -->
     <article v-if="dns && dns.installed" :class="['dns-card', dns.needsRepair ? 'bad' : 'good']">
@@ -115,6 +117,8 @@
            yaninda onarma dugmesi cikiyor, kullanici neyin eksik oldugunu goremiyordu. -->
       <!-- PANELIN NE OLCTUGU. Kara kutu olmamali: "eksik yok" derken neye baktigini
            gostermezse, yanlis olcum sessizce dogru sonuc gibi gorunur. -->
+      <SectionLoadError v-if="domainsLoad.message.value" :message="domainsLoad.message.value" @retry="load" />
+
       <p v-if="!domainsLoading && domains" class="measure-line">
         {{ t("panel.health.domainsMeasured", {
           total: domains.totalSites,
@@ -192,18 +196,20 @@ import {
   type ServiceHealth,
 } from "../api/health";
 import { getDnsServerHealth, repairDnsServer, type DnsServerHealth } from "../api/dns";
-import { extractApiMessage } from "../stores/auth";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useNotice, useSectionError } from "../composables/useNotice";
 
 const { t } = useI18n();
 const services = ref<ServiceHealth[]>([]);
 const dns = ref<DnsServerHealth | null>(null);
+const dnsLoad = useSectionError();
 const dnsBusy = ref(false);
 const loading = ref(false);
 const loaded = ref(false);
 const busyName = ref("");
-const notice = ref("");
-const noticeError = ref(false);
+const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const domains = ref<DomainRefreshSummary | null>(null);
+const domainsLoad = useSectionError();
 const domainReport = ref<DomainRefreshResult[]>([]);
 const domainsBusy = ref(false);
 // Ilk denetim bitene kadar true: kart bu sure boyunca notr gorunur.
@@ -238,17 +244,23 @@ async function load() {
   // DNS kartı bağımsız yüklenir: ölçüm başarısız olsa bile servis listesi görünmeye devam eder.
   try {
     dns.value = await getDnsServerHealth();
-  } catch {
+    dnsLoad.clear();
+  } catch (error) {
+    // Kartın kaybolması "DNS kurulu değil" gibi okunuyordu; ölçülemediğini AÇIKÇA söylüyoruz.
     dns.value = null;
+    dnsLoad.capture(error);
   }
 
   // Alan adı denetimi de bağımsız ve SALT OKUNUR: hiçbir şey değiştirmez, yalnız eksiği sayar.
   try {
     domains.value = await inspectDomains();
     domainReport.value = domains.value.results.filter((row) => row.error || !row.alreadyCurrent);
-  } catch {
+    domainsLoad.clear();
+  } catch (error) {
+    // Ölçüm YAPILAMADI ile "eksik yok" ayrı şeyler; ikincisini göstermek yeşil yalan olurdu.
     domains.value = null;
     domainReport.value = [];
+    domainsLoad.capture(error);
   } finally {
     domainsLoading.value = false;
   }
@@ -332,16 +344,6 @@ function dotClass(status: string) {
   return "dot-muted";
 }
 
-function resolveApiMessage(error: unknown) {
-  const key = extractApiMessage(error);
-  const translated = t(key);
-  return translated === key ? key : translated;
-}
-
-function showNotice(message: string, isError: boolean) {
-  notice.value = message;
-  noticeError.value = isError;
-}
 </script>
 
 <style scoped>

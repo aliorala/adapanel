@@ -21,11 +21,11 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.myDb.name") }}</span>
-          <input v-model.trim="form.name" placeholder="db_adi" />
+          <input v-model.trim="form.name" :placeholder="t('panel.myDb.namePlaceholder')" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.myDb.user") }}</span>
-          <input v-model.trim="form.userName" placeholder="db_kullanici" />
+          <input v-model.trim="form.userName" :placeholder="t('panel.myDb.userPlaceholder')" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.myDb.password") }}</span>
@@ -62,14 +62,15 @@
 import { onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getMyDatabases, createMyDatabase, deleteMyDatabase, type OwnedDatabase } from "../api/myDatabases";
-import { extractApiMessage } from "../stores/auth";
+import { useConfirm } from "../components/ConfirmDialog.vue";
+import { useNotice } from "../composables/useNotice";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
+const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const databases = ref<OwnedDatabase[]>([]);
 const loading = ref(false);
 const busy = ref(false);
-const notice = ref("");
-const noticeError = ref(false);
 const form = reactive({ engine: "mariadb", name: "", userName: "", password: "" });
 
 onMounted(load);
@@ -79,7 +80,7 @@ async function load() {
   try {
     databases.value = await getMyDatabases();
   } catch (error) {
-    showNotice(resolveMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     loading.value = false;
   }
@@ -94,33 +95,34 @@ async function create() {
     form.userName = "";
     form.password = "";
   } catch (error) {
-    showNotice(resolveMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
 }
 
+/**
+ * Bu ekran MÜŞTERİYE açık ve veritabanı silmenin geri dönüşü yok: içindeki tüm tablolar gider.
+ * Bu yüzden `requireText` ile veritabanı adının birebir yazılması istenir.
+ */
 async function remove(db: OwnedDatabase) {
-  busy.value = true;
-  try {
-    databases.value = await deleteMyDatabase(db.engine, db.name);
-    showNotice(t("panel.myDb.deleted"), false);
-  } catch (error) {
-    showNotice(resolveMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
-}
-
-function resolveMessage(error: unknown) {
-  const key = extractApiMessage(error);
-  const translated = t(key);
-  return translated === key ? key : translated;
-}
-
-function showNotice(message: string, isError: boolean) {
-  notice.value = message;
-  noticeError.value = isError;
+  await confirm({
+    title: t("panel.confirm.deleteDatabaseTitle"),
+    message: t("panel.confirm.deleteDatabaseMessage", { name: db.name }),
+    impact: [`${db.engine} — ${db.name}`],
+    requireText: db.name,
+    action: async () => {
+      busy.value = true;
+      try {
+        databases.value = await deleteMyDatabase(db.engine, db.name);
+        showNotice(t("panel.myDb.deleted"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    }
+  });
 }
 </script>
 

@@ -19,6 +19,11 @@
         <label class="chk"><input v-model="scope.includeMail" type="checkbox" /> {{ t("panel.backup.scopeMail") }}</label>
       </div>
 
+      <SectionLoadError
+        v-if="databasesLoad.message.value"
+        :message="databasesLoad.message.value"
+        @retry="loadDatabases" />
+
       <div v-if="availableDatabases.length > 0" class="db-block">
         <span class="field-label">{{ t("panel.backup.scopeDatabases") }}</span>
         <div class="scope-grid">
@@ -72,7 +77,8 @@ import { useSitesStore } from "../stores/sites";
 import { backupSite, downloadBackup, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { extractApiMessage } from "../stores/auth";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useNotice, useSectionError } from "../composables/useNotice";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -85,10 +91,14 @@ const listLoaded = ref(false);
 const busy = ref(false);
 const downloadingId = ref("");
 const restoringId = ref("");
-const notice = ref("");
-const noticeError = ref(false);
+// TEK KAYNAK: bu ekran ham `extractApiMessage` basıyordu (4 nokta) — kullanıcı çevrilmemiş
+// anahtar görüyordu.
+const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const backups = ref<BackupRecord[]>([]);
 const availableDatabases = ref<{ engine: string; name: string }[]>([]);
+// Boş liste "yedeklenecek veritabanı yok" demektir; okunamadıysa AYRI söylenir — aksi hâlde
+// kullanıcı veritabanı seçmeden yedek alıp yedeğini eksik sanmadan taşırdı.
+const databasesLoad = useSectionError();
 const selectedDbKeys = ref<string[]>([]);
 
 const scope = reactive({ includeFiles: true, includeConfig: true, includeMail: false });
@@ -107,7 +117,7 @@ async function refresh() {
     backups.value = await getBackups();
     listLoaded.value = true;
   } catch (error) {
-    showNotice(extractApiMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     loading.value = false;
   }
@@ -128,8 +138,10 @@ async function loadDatabases() {
       }
     }
     availableDatabases.value = list;
-  } catch {
+    databasesLoad.clear();
+  } catch (error) {
     availableDatabases.value = [];
+    databasesLoad.capture(error);
   }
 }
 
@@ -152,7 +164,7 @@ async function createBackup() {
     showNotice(t("panel.backup.created"), false);
     await refresh();
   } catch (error) {
-    showNotice(extractApiMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
@@ -163,7 +175,7 @@ async function download(record: BackupRecord) {
   try {
     await downloadBackup(record.id, record.name);
   } catch (error) {
-    showNotice(extractApiMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     downloadingId.value = "";
   }
@@ -192,17 +204,12 @@ async function restore(record: BackupRecord) {
         await restoreBackup(record.id, "");
         showNotice(t("panel.backup.restored"), false);
       } catch (error) {
-        showNotice(extractApiMessage(error), true);
+        showNotice(resolveApiMessage(error), true);
       } finally {
         restoringId.value = "";
       }
     },
   });
-}
-
-function showNotice(message: string, isError: boolean) {
-  notice.value = message;
-  noticeError.value = isError;
 }
 
 function formatSize(bytes: number): string {

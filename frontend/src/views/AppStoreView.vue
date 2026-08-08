@@ -24,7 +24,7 @@
       <pre>{{ noticeDetails }}</pre>
     </details>
 
-    <div v-if="wpAdmin.adminPassword" class="notice wp-creds">
+    <div v-if="wpAdmin.adminPassword" class="notice wp-creds" role="status">
       <strong>{{ t("panel.appStore.wpReady") }}</strong>
       <div class="wp-cred-line">{{ t("panel.appStore.wpAdminUrl") }}: <a :href="wpAdmin.adminUrl" target="_blank" rel="noopener">{{ wpAdmin.adminUrl }}</a></div>
       <div class="wp-cred-line">{{ t("panel.appStore.wpUser") }}: <code>{{ wpAdmin.adminUser }}</code></div>
@@ -32,7 +32,7 @@
       <small>{{ t("panel.appStore.wpCredHint") }}</small>
     </div>
 
-    <p v-if="sitesUnavailable" class="notice warn">
+    <p v-if="sitesUnavailable" class="notice warn" role="alert">
       {{ t("panel.appStore.sitesUnavailable") }}
     </p>
 
@@ -48,7 +48,7 @@
           type="button"
           :class="['category-tab', { active: activeCategory === category }]"
           @click="activeCategory = category">
-          {{ category === "all" ? t("panel.appStore.all") : category }}
+          {{ categoryLabel(category) }}
         </button>
       </div>
       <label class="store-search">
@@ -90,7 +90,7 @@
 
         <div class="runtime-cell">
           <span class="runtime-pill">{{ template.runtime }}</span>
-          <small>{{ template.category }}</small>
+          <small>{{ categoryLabel(template.category) }}</small>
         </div>
 
         <div class="automation-list">
@@ -161,6 +161,20 @@ const categories = computed(() => [
   "all",
   ...Array.from(new Set(templates.value.map((template) => template.category))).sort()
 ]);
+
+/**
+ * Kategori adı backend'den SABİT ve dilden bağımsız gelir ("CMS", "Database", "E-Ticaret"…).
+ * Ham basılınca İngilizce arayüzde "E-Ticaret", Türkçe arayüzde "Database" görünüyordu.
+ * i18n anahtarı yoksa HAM DEĞER gösterilir — backend yeni bir kategori eklerse boşluk çıkmaz.
+ */
+function categoryLabel(category: string): string {
+  if (category === "all") {
+    return t("panel.appStore.all");
+  }
+  const key = `panel.appStore.category.${category.toLocaleLowerCase("en").replace(/[^a-z0-9]+/g, "")}`;
+  const translated = t(key);
+  return translated === key ? category : translated;
+}
 
 const filteredTemplates = computed(() => {
   const query = search.value.trim().toLocaleLowerCase();

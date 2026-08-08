@@ -47,7 +47,7 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.migration.ftp.host") }}</span>
-          <input v-model.trim="ftp.host" placeholder="eski-sunucu.com" :disabled="ftpBusy" />
+          <input v-model.trim="ftp.host" :placeholder="t('panel.migration.ftp.hostPlaceholder')" :disabled="ftpBusy" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.migration.ftp.port") }}</span>

@@ -17,7 +17,7 @@
       <div class="pd-grid">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.protected.path") }}</span>
-          <input v-model.trim="form.relativePath" placeholder="yonetim" />
+          <input v-model.trim="form.relativePath" :placeholder="t('panel.protected.pathPlaceholder')" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.protected.user") }}</span>
@@ -44,7 +44,7 @@
             <strong>/{{ item.relativePath }}</strong>
             <span class="meta">{{ t("panel.protected.user") }}: {{ item.userName }}</span>
           </div>
-          <button class="danger compact" :disabled="removing === item.relativePath" @click="remove(item.relativePath)">
+          <button class="danger compact" :disabled="removing === item.relativePath" @click="remove(item)">
             {{ t("panel.protected.remove") }}
           </button>
         </article>
@@ -63,9 +63,14 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import { getProtectedDirs, protectDir, unprotectDir, type ProtectedDirectory } from "../api/sites";
-import { extractApiMessage } from "../stores/auth";
+import { useConfirm } from "../components/ConfirmDialog.vue";
+import { useNotice } from "../composables/useNotice";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
+// resolveApiMessage TEK KAYNAKTAN: bu ekran ham `extractApiMessage` basıyordu, yani
+// kullanıcı `sites.path_outside_root` gibi ÇEVRİLMEMİŞ anahtar görüyordu.
+const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
@@ -75,8 +80,6 @@ const listLoaded = ref(false);
 const loading = ref(false);
 const busy = ref(false);
 const removing = ref("");
-const notice = ref("");
-const noticeError = ref(false);
 const form = reactive({ relativePath: "", userName: "", password: "" });
 
 onMounted(refresh);
@@ -93,7 +96,7 @@ async function refresh() {
     items.value = await getProtectedDirs(siteName.value);
     listLoaded.value = true;
   } catch (error) {
-    showNotice(extractApiMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     loading.value = false;
   }
@@ -112,29 +115,37 @@ async function create() {
     showNotice(t("panel.protected.created"), false);
     await refresh();
   } catch (error) {
-    showNotice(extractApiMessage(error), true);
+    showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
 }
 
-async function remove(relativePath: string) {
-  removing.value = relativePath;
-  try {
-    await unprotectDir(siteName.value, relativePath);
-    showNotice(t("panel.protected.removed"), false);
-    await refresh();
-  } catch (error) {
-    showNotice(extractApiMessage(error), true);
-  } finally {
-    removing.value = "";
-  }
+/**
+ * Korumayı kaldırmak dizini HERKESE AÇIK hâle getirir — sessiz bir güvenlik kaybı.
+ * Onay metni hangi dizinin açılacağını açıkça söyler.
+ */
+async function remove(item: ProtectedDirectory) {
+  await confirm({
+    title: t("panel.protected.confirmRemoveTitle"),
+    message: t("panel.protected.confirmRemoveMessage", { path: `/${item.relativePath}` }),
+    impact: [`/${item.relativePath}`, `${t("panel.protected.user")}: ${item.userName}`],
+    confirmLabel: t("panel.protected.remove"),
+    action: async () => {
+      removing.value = item.relativePath;
+      try {
+        await unprotectDir(siteName.value, item.relativePath);
+        showNotice(t("panel.protected.removed"), false);
+        await refresh();
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        removing.value = "";
+      }
+    }
+  });
 }
 
-function showNotice(message: string, isError: boolean) {
-  notice.value = message;
-  noticeError.value = isError;
-}
 </script>
 
 <style scoped>

@@ -8,7 +8,7 @@
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
-    <div v-if="created.userName" class="notice cred-box">
+    <div v-if="created.userName" class="notice cred-box" role="status">
       <strong>{{ t("panel.database.transfer.userCreated") }}</strong>
       <div class="cred-line">{{ t("panel.database.transfer.userLabel") }}: <code>{{ created.userName }}</code></div>
       <div v-if="created.password" class="cred-line">{{ t("panel.database.transfer.passLabel") }}: <code>{{ created.password }}</code></div>
@@ -36,7 +36,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.transfer.sourceDb") }}</span>
-          <input v-model.trim="form.sourceDatabase" placeholder="eski_db" :disabled="busy" />
+          <input v-model.trim="form.sourceDatabase" :placeholder="t('panel.database.transfer.sourceDbPlaceholder')" :disabled="busy" />
         </label>
       </div>
 

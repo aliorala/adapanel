@@ -103,6 +103,7 @@ import {
 } from "../api/subscriptions";
 import { getServicePlans, type ServicePlan } from "../api/servicePlans";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { useConfirm } from "./ConfirmDialog.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -115,6 +116,7 @@ const props = withDefaults(
 );
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 
 const usage = ref<SubscriptionUsage | null>(null);
 const plans = ref<ServicePlan[]>([]);
@@ -210,7 +212,19 @@ async function calistir(islem: () => Promise<SubscriptionUsage>) {
 const savePlan = () => calistir(() => setSubscriptionPlan(props.userId, selectedPlanId.value));
 const saveExpiry = () =>
   calistir(() => setSubscriptionExpiry(props.userId, expiryInput.value ? new Date(expiryInput.value).toISOString() : null));
-const suspend = () => calistir(() => suspendSubscription(props.userId));
+/**
+ * Askıya alma MÜŞTERİNİN SİTELERİNİ DURDURUR (ziyaretçi siteye ulaşamaz). Onaysız yapılmaz;
+ * onay metni sonucun ne olduğunu açıkça söyler. Geri alınabilir olduğu için `requireText` yok.
+ */
+async function suspend() {
+  await confirm({
+    title: t("panel.subscription.confirmSuspendTitle"),
+    message: t("panel.subscription.confirmSuspendMessage"),
+    confirmLabel: t("panel.subscription.suspendAction"),
+    busyLabel: t("panel.confirm.working"),
+    action: () => calistir(() => suspendSubscription(props.userId))
+  });
+}
 const resume = () => calistir(() => resumeSubscription(props.userId));
 
 watch(() => props.userId, () => void load());
