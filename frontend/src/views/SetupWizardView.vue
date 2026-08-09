@@ -215,6 +215,10 @@
       :loading="systemStore.loading" />
 
     <SecurityView v-else-if="activeSection === 'security' && isAdmin" />
+    <!-- Denetim kayıtları HER role açık: uç kapsamı kendisi uyguluyor (AuditVisibility), müşteri
+         kendi aboneliğini, bayi kendi müşterilerini, yönetici sunucu genelini görür. Ekranı yalnız
+         yöneticiye göstermek, kiracının kendi hesabında ne olduğunu göremediği anlamına gelirdi. -->
+    <AuditLogsView v-else-if="activeSection === 'audit'" />
 
     <FilesView v-else-if="activeSection === 'files' && (isAdmin || isCustomer || isReseller)" />
 
@@ -432,6 +436,7 @@ import { lazyView } from "../utils/lazyView";
  * DashboardOverviewView BİLEREK statik: her girişte açılan ilk ekran o; onu da ayırmak her
  * oturum açılışına bir gidiş-dönüş ve bir "Yükleniyor…" titremesi eklerdi.
  */
+const AuditLogsView = lazyView(() => import("./AuditLogsView.vue"));
 const CronView = lazyView(() => import("./CronView.vue"));
 const DatabasesView = lazyView(() => import("./DatabasesView.vue"));
 const MigrationView = lazyView(() => import("./MigrationView.vue"));
@@ -658,6 +663,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badgeTitle: attentionBadgeTitle("software"), badge: attentionBadge("software") ?? (installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined) },
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
     { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC", badgeTitle: attentionBadgeTitle("security"), badge: attentionBadge("security") },
+    { id: "audit", label: t("panel.navigation.audit"), description: t("panel.audit.subtitleAdmin"), glyph: "DK" },
     { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badgeTitle: attentionBadgeTitle("tools"), badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
     // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.
@@ -682,6 +688,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "files" ||
       section.id === "database" ||
       section.id === "tasks" ||
+      section.id === "audit" ||
       section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");
@@ -696,6 +703,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "database" ||
       section.id === "files" ||
       section.id === "tasks" ||
+      section.id === "audit" ||
       section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");

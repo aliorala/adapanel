@@ -2,6 +2,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,7 +26,11 @@ namespace AdaPanel.Api.Controllers;
 [Authorize(Roles = "Administrator,Reseller,Customer")]
 [RequireSubUserSection("sites")]
 [Route("api/v1/ssl")]
-public sealed class SslController(ISslService sslService, ICustomerScopeService customerScopes, IWebmailService webmailService) : ControllerBase
+public sealed class SslController(
+    ISslService sslService,
+    ICustomerScopeService customerScopes,
+    IWebmailService webmailService,
+    IAuditService auditService) : ControllerBase
 {
     [HttpGet("{siteName}")]
     public async Task<ActionResult<ApiResponse<SslWorkspaceDto>>> GetWorkspaceAsync(string siteName, CancellationToken cancellationToken)
@@ -118,5 +123,41 @@ public sealed class SslController(ISslService sslService, ICustomerScopeService 
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
         var workspace = await sslService.SetHttpsRedirectAsync(request, cancellationToken);
         return Ok(ApiResponse<SslWorkspaceDto>.Ok(workspace, "ssl.https_redirect_saved"));
+    }
+
+    /// <summary>
+    /// Sitenin HTTPS bağlamasını kaldırır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu uç uzun süre YOKTU: <c>RemoveSslCertificateRequest</c> DTO'su yazılmış ama ne servis
+    /// metodu ne uç ne de ekran yapılmıştı — yani panelde bir HTTPS bağlamasını kaldırmanın
+    /// hiçbir yolu bulunmuyordu. Yanlış alan adına sertifika bağlayan kullanıcının tek çaresi
+    /// IIS Yöneticisi'ne düşmekti.
+    /// </para>
+    /// <para>
+    /// Yıkıcı sayılır ve bu yüzden denetim kaydı yazar: sertifikanın ne zaman, kim tarafından
+    /// kaldırıldığı sonradan sorulabilecek bir sorudur.
+    /// </para>
+    /// </remarks>
+    [HttpPost("remove")]
+    public async Task<ActionResult<ApiResponse<RemoveSslCertificateResultDto>>> RemoveCertificateAsync(
+        [FromBody] RemoveSslCertificateRequest request,
+        CancellationToken cancellationToken)
+    {
+        // Kapsam denetimi diğer uçlarla AYNI: müşteri yalnızca kendi sitesinin bağlamasını kaldırabilir.
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+
+        var result = await sslService.RemoveCertificateAsync(request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "ssl.binding_removed",
+            $"ssl:{result.SiteName}",
+            $"HTTPS bağlaması kaldırıldı: {result.HostName}:{result.Port}. " +
+            $"Doğrulandı={result.BindingRemoved}, yönlendirme kapatıldı={result.HttpsRedirectDisabled}, " +
+            $"sertifika={result.CertificateAction}.");
+
+        return Ok(ApiResponse<RemoveSslCertificateResultDto>.Ok(result, "ssl.binding_removed"));
     }
 }

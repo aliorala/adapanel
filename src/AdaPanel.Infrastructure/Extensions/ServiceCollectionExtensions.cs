@@ -151,6 +151,11 @@ public static class ServiceCollectionExtensions
         // statik HardenAsync ile çağrılır (açık db'ye icacls /T uygulanıp ACL'in bozulmasını önlemek için).
         services.AddHostedService<Automation.AutomationWorker>();
 
+        // Denetim kaydı saklama temizliği. Kayıt buraya bağlanmadan temizlik YALNIZCA elle
+        // (POST /api/v1/audit-logs/purge) çalışırdı; ölçüldü: AuditLogs tablosunu silen başka
+        // hiçbir kod yoktu, yani kayıtlar sonsuza kadar birikiyordu.
+        services.AddHostedService<Audit.AuditRetentionWorker>();
+
         return services;
     }
 }
