@@ -54,15 +54,19 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
-import AutomationView from "./AutomationView.vue";
-import BackupView from "./BackupView.vue";
-import DockerView from "./DockerView.vue";
-import FirewallView from "./FirewallView.vue";
-import LogsView from "./LogsView.vue";
-import NginxView from "./NginxView.vue";
-import TerminalView from "./TerminalView.vue";
-import ServerHealthView from "./ServerHealthView.vue";
-import DnsTemplateView from "./DnsTemplateView.vue";
+import { lazyView } from "../utils/lazyView";
+
+// Sekmeler talep üzerine iner (bkz. utils/lazyView.ts): dokuz aracın kodu, hiçbirine
+// tıklanmasa bile indiriliyordu.
+const AutomationView = lazyView(() => import("./AutomationView.vue"));
+const BackupView = lazyView(() => import("./BackupView.vue"));
+const DockerView = lazyView(() => import("./DockerView.vue"));
+const FirewallView = lazyView(() => import("./FirewallView.vue"));
+const LogsView = lazyView(() => import("./LogsView.vue"));
+const NginxView = lazyView(() => import("./NginxView.vue"));
+const TerminalView = lazyView(() => import("./TerminalView.vue"));
+const ServerHealthView = lazyView(() => import("./ServerHealthView.vue"));
+const DnsTemplateView = lazyView(() => import("./DnsTemplateView.vue"));
 
 const { t } = useI18n();
 const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "logs" | "terminal" | "docker" | "dnstemplate">("health");

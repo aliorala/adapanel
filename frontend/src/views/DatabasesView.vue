@@ -311,7 +311,7 @@
               <span>{{ t("panel.database.collation") }}</span>
               <span>{{ t("panel.files.actions") }}</span>
             </div>
-            <template v-for="item in filteredDatabases" :key="item.name">
+            <template v-for="item in databasePager.items.value" :key="item.name">
             <div class="data-row database-row">
               <span class="cell-main">
                 <strong>{{ item.name }}</strong>
@@ -497,6 +497,7 @@
             <p v-else-if="filteredDatabases.length === 0" class="empty-state">
               {{ t("panel.database.noDatabases") }}
             </p>
+            <TablePager :state="databasePager" />
           </section>
         </template>
 
@@ -542,7 +543,7 @@
               <span>{{ t("panel.database.loginState") }}</span>
               <span>{{ t("panel.files.actions") }}</span>
             </div>
-            <div v-for="item in filteredUsers" :key="`${item.userName}:${item.host}`" class="data-row user-row">
+            <div v-for="item in userPager.items.value" :key="`${item.userName}:${item.host}`" class="data-row user-row">
               <span class="cell-main">
                 <strong>{{ item.userName }}</strong>
                 <small>{{ workspace.displayName }}</small>
@@ -569,6 +570,7 @@
             <p v-else-if="filteredUsers.length === 0" class="empty-state">
               {{ t("panel.database.noUsers") }}
             </p>
+            <TablePager :state="userPager" />
           </section>
         </template>
 
@@ -606,14 +608,19 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import CacheView from "./CacheView.vue";
-import DbToolSettingsView from "./DbToolSettingsView.vue";
 import QueryHistory from "../components/QueryHistory.vue";
 import ResourceConsumers from "../components/ResourceConsumers.vue";
+import TablePager from "../components/TablePager.vue";
 import type { ConsumerSource } from "../api/consumers";
+import { usePagination } from "../composables/usePagination";
 import { useAuthStore } from "../stores/auth";
-import DbTransferView from "./DbTransferView.vue";
-import WebDbView from "./WebDbView.vue";
+import { lazyView } from "../utils/lazyView";
+
+// Yan sekmeler talep üzerine iner (bkz. utils/lazyView.ts).
+const CacheView = lazyView(() => import("./CacheView.vue"));
+const DbToolSettingsView = lazyView(() => import("./DbToolSettingsView.vue"));
+const DbTransferView = lazyView(() => import("./DbTransferView.vue"));
+const WebDbView = lazyView(() => import("./WebDbView.vue"));
 import {
   checkAndRepairDatabase,
   getDatabaseDetail,
@@ -886,6 +893,17 @@ const filteredUsers = computed(() => {
   return rows.filter((item) =>
     [item.userName, item.host]
       .some((value) => (value ?? "").toLowerCase().includes(query)));
+});
+
+// Sayfalama ARAMADAN SONRA gelir: kullanıcı bütün listede arar, yalnız görüneni sayfalarız
+// (bkz. composables/usePagination.ts).
+const databasePager = usePagination(filteredDatabases);
+const userPager = usePagination(filteredUsers);
+
+// Arama değişince ilk sayfaya dön: 4. sayfadayken filtre daralınca boş tabloya düşülüyordu.
+watch(databaseSearch, () => {
+  databasePager.reset();
+  userPager.reset();
 });
 
 onMounted(async () => {

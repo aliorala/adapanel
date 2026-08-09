@@ -53,7 +53,7 @@
             <span>{{ t("panel.sites.state") }}</span>
             <span>{{ t("panel.software.action") }}</span>
           </div>
-          <div v-for="item in mailDomains" :key="item.name" class="data-row maildomain-row">
+          <div v-for="item in domainPager.items.value" :key="item.name" class="data-row maildomain-row">
             <strong>{{ item.name }}</strong>
             <span>{{ item.active ? item.accountCount : "—" }}</span>
             <span :class="['status-pill', item.active ? 'ok' : 'warn']">
@@ -65,6 +65,7 @@
           </div>
           <p v-if="mailDomains.length === 0" class="empty-state">{{ t("panel.mail.noSiteDomainsList") }}</p>
         </div>
+        <TablePager :state="domainPager" :disabled="busy" />
       </template>
 
       <div v-if="selectedDomain" class="module-toolbar mail-domain-bar">
@@ -150,14 +151,38 @@
           </div>
         </div>
 
+        <div v-if="accountSelection.count.value > 0" class="bulk-bar" role="status">
+          <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: accountSelection.count.value }) }}</span>
+          <button class="danger compact" :disabled="busy || bulk.busy.value" @click="removeSelectedAccounts">
+            {{ t("panel.bulk.deleteSelected", { count: accountSelection.count.value }) }}
+          </button>
+          <button class="secondary compact" :disabled="bulk.busy.value" @click="accountSelection.clear">
+            {{ t("panel.bulk.clearSelection") }}
+          </button>
+        </div>
+
         <div class="data-table">
           <div class="data-row table-head mail-row">
+            <span class="select-cell">
+              <input
+                type="checkbox"
+                :checked="accountSelection.allSelected(visibleAccountAddresses)"
+                :aria-label="t('panel.bulk.selectAll')"
+                @change="accountSelection.toggleAll(visibleAccountAddresses)" />
+            </span>
             <span>{{ t("panel.mail.address") }}</span>
             <span>{{ t("panel.mail.maxSize") }}</span>
             <span>{{ t("panel.sites.state") }}</span>
             <span>{{ t("panel.software.action") }}</span>
           </div>
-          <div v-for="account in workspace.accounts" :key="account.address" class="data-row mail-row">
+          <div v-for="account in accountPager.items.value" :key="account.address" class="data-row mail-row">
+            <span class="select-cell">
+              <input
+                type="checkbox"
+                :checked="accountSelection.isSelected(account.address)"
+                :aria-label="t('panel.bulk.selectRow', { name: account.address })"
+                @change="accountSelection.toggle(account.address)" />
+            </span>
             <strong>{{ account.address }}</strong>
             <span>{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} MB` : "∞" }}</span>
             <span :class="['status-pill', account.active ? 'ok' : 'warn']">
@@ -180,6 +205,7 @@
           </div>
           <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t("panel.mail.noMailboxes") }}</p>
         </div>
+        <TablePager :state="accountPager" :disabled="busy || bulk.busy.value" />
 
         <!-- Webmail + posta istemci ayarları (profesyonel paneller gibi). -->
         <section class="form-surface">
@@ -624,7 +650,10 @@ import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
+import TablePager from "../components/TablePager.vue";
 import { useSectionError } from "../composables/useNotice";
+import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection";
+import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
@@ -761,6 +790,48 @@ const mailDomains = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name));
 });
 
+// 500 posta kutusu / yüzlerce alan adı tek seferde DOM'a basılmaz (bkz. composables/usePagination.ts).
+const mailAccounts = computed(() => workspace.value?.accounts ?? []);
+const domainPager = usePagination(mailDomains);
+const accountPager = usePagination(mailAccounts);
+const accountSelection = useBulkSelection();
+const bulk = useBulkAction();
+const visibleAccountAddresses = computed(() => accountPager.items.value.map((account) => account.address));
+
+/**
+ * TOPLU POSTA KUTUSU SİLME — ONAY ZORUNLU, KISMİ BAŞARISIZLIK SESSİZ KALMAZ.
+ *
+ * Onay kaç kutunun ve HANGİ ADRESLERİN gideceğini yazar. Posta kutusu silmek kutudaki bütün
+ * iletileri de siler; geri dönüşü yoktur. `DELETE /mail/accounts/{address}` tek adresliktir,
+ * toplu ucu yoktur: adresler tek tek denenir, biri patlarsa döngü durmaz ve özet dürüst kalır.
+ */
+async function removeSelectedAccounts() {
+  const targets = mailAccounts.value.filter((account) => accountSelection.isSelected(account.address));
+  if (targets.length === 0) {
+    return;
+  }
+
+  const onay = await confirm({
+    title: t("panel.bulk.confirmDeleteTitle", { count: targets.length }),
+    message: t("panel.mail.confirmBulkDelete", { count: targets.length }),
+    impact: bulk.impactList(targets.map((account) => account.address)),
+    requireText: String(targets.length)
+  });
+  if (!onay) {
+    return;
+  }
+
+  const outcome = await bulk.runBulk(
+    targets,
+    (account) => account.address,
+    async (account) => {
+      apply(await deleteMailAccount(account.address));
+    }
+  );
+  accountSelection.keepOnly((workspace.value?.accounts ?? []).map((account) => account.address));
+  showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
+}
+
 // Listeden bir alan adi secilince: postasi yoksa otomatik olustur (profesyonel paneller gibi), sonra
 // o domaini yukle ve DNS kayitlarini hazirla.
 async function openDomain(name: string) {
@@ -774,6 +845,9 @@ async function openDomain(name: string) {
     // Domaine özgü durumları sıfırla ki önceki domainin sonucu yanlışlıkla görünmesin.
     diagnostics.value = null;
     certForm.hostName = "";
+    // Önceki alan adında yapılan seçim taşınmaz: başka domainin kutularını silmeye yol açardı.
+    accountSelection.clear();
+    accountPager.reset();
     apply(await getMailWorkspace(lower));
     dns.value = await getMailDns(lower).catch(() => null);
   });
@@ -785,6 +859,7 @@ function backToDomains() {
   rdns.value = null;
   rdnsHost.value = "";
   diagnostics.value = null;
+  accountSelection.clear();
 }
 
 onMounted(async () => {
@@ -1360,7 +1435,33 @@ function showError(error: unknown) {
 }
 
 .mail-row {
-  grid-template-columns: minmax(200px, 1.6fr) 0.7fr 0.7fr auto;
+  grid-template-columns: 30px minmax(200px, 1.6fr) 0.7fr 0.7fr auto;
+}
+
+.select-cell {
+  display: flex;
+  align-items: center;
+}
+
+.select-cell input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.bulk-bar button {
+  width: auto;
 }
 
 .client-row {

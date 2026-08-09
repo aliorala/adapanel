@@ -114,9 +114,11 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, getPortStatus, type FirewallRule, type PortStatus } from "../api/firewall";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const rules = ref<FirewallRule[]>([]);
 const portStatus = ref<PortStatus[]>([]);
 const loading = ref(false);
@@ -132,6 +134,35 @@ const requiredOpenCount = computed(
   () => portStatus.value.filter((p) => p.required && p.listening && p.firewallAllowed).length
 );
 const missingRequired = computed(() => portStatus.value.filter((p) => p.required && !p.firewallAllowed));
+
+/**
+ * PANELİN KENDİ PORTU — TAHMİN DEĞİL, ÖLÇÜM.
+ *
+ * `/firewall/ports` kataloğunda "panel" anahtarlı satırın portu sunucuda HttpContext'ten
+ * doldurulur (FirewallService.BuildCatalog), yani panelin GERÇEKTEN dinlediği porttur. Ayrı bir
+ * ayar okumak (panel-settings.preferredHttpsPort) yanıltıcı olurdu: orası "tercih edilen" portu
+ * tutar, yeniden başlatılmamış bir panelde çalışan porttan farklı olabilir.
+ *
+ * Satır okunamadıysa 0 döner: o durumda panel portunu BİLMEDİĞİMİZİ kabul eder, uydurmayız —
+ * sunucudaki koruma (EnsurePortIsNotSelfLocking) son sözü zaten söyler.
+ */
+const panelPort = computed(() => portStatus.value.find((p) => p.serviceKey === "panel")?.port ?? 0);
+
+// Sunucunun reddettiği portlarla AYNI liste: uzak masaüstü + 80/443 + panelin kendi portu.
+const REMOTE_DESKTOP_PORT = 3389;
+
+function protectedPortReasonKey(port: number): string {
+  if (panelPort.value > 0 && port === panelPort.value) {
+    return "panel.firewall.protectedReason.panel";
+  }
+  if (port === REMOTE_DESKTOP_PORT) {
+    return "panel.firewall.protectedReason.rdp";
+  }
+  if (port === 80 || port === 443) {
+    return "panel.firewall.protectedReason.web";
+  }
+  return "";
+}
 
 onMounted(refreshAll);
 
@@ -238,7 +269,44 @@ async function openAllMissing() {
   }
 }
 
+/**
+ * ENGELLEME ONAYSIZ YAPILMAZ.
+ *
+ * "Engelle" düğmesi formun hemen yanındaydı ve tek tıkla uygulanıyordu. Windows'ta engelleme
+ * kuralı izin kuralını EZER: yanlış porta basmak yönetim panelini ya da uzak masaüstünü kendine
+ * kapatmak demektir ve panelden geri alınamaz. Onay metni HANGİ PORT ve HANGİ PROTOKOL için
+ * kural kurulacağını açıkça yazar; korumalı bir portta ayrıca uyarır ve port numarasının
+ * birebir yazılmasını ister (refleksle onaylanamasın).
+ *
+ * "İzin ver" onaysız kalır: kapıyı açmak geri alınabilir bir işlemdir.
+ */
 async function saveRule(action: "allow" | "block") {
+  if (action === "block") {
+    const port = form.port;
+    const protocol = form.protocol;
+    const reasonKey = protectedPortReasonKey(port);
+    const impact = [
+      t("panel.firewall.confirmBlockTarget", { port, protocol }),
+      t("panel.firewall.confirmBlockRuleName", { name: form.ruleName.trim() || t("panel.firewall.ruleNameAuto") })
+    ];
+    if (reasonKey) {
+      impact.push(t(reasonKey, { port }));
+      impact.push(t("panel.firewall.confirmBlockServerRefuses"));
+    }
+
+    const onay = await confirm({
+      title: t("panel.firewall.confirmBlockTitle", { port, protocol }),
+      message: t("panel.firewall.confirmBlockMessage", { port, protocol }),
+      impact,
+      // Korumalı port: sunucu zaten reddeder, ama kullanıcı NE yaptığını bilerek ilerlesin.
+      requireText: reasonKey ? String(port) : undefined,
+      confirmLabel: t("panel.firewall.block")
+    });
+    if (!onay) {
+      return;
+    }
+  }
+
   busy.value = true;
   try {
     const operation = action === "allow" ? allowPort : blockPort;

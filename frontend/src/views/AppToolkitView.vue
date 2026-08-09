@@ -53,7 +53,8 @@
 
       <div v-else-if="tab === 'wordpress'" class="wp-panel">
         <p v-if="wpNotice" :class="['notice', { error: wpNoticeError }]" :role="wpNoticeError ? 'alert' : 'status'">{{ wpNotice }}</p>
-        <p v-if="wpLoading" class="meta">{{ t("panel.wpkit.loading") }}</p>
+        <p v-if="wpLoading" class="empty-state" role="status" aria-live="polite">{{ t("panel.wpkit.loading") }}</p>
+        <SectionLoadError v-else-if="wpLoad.message.value" :message="wpLoad.message.value" @retry="loadWp" />
         <p v-else-if="wp && !wp.isWordPress" class="notice warn" role="status">{{ t("panel.wpkit.notWordpress") }}</p>
 
         <template v-else-if="wp">
@@ -99,9 +100,12 @@
             <small class="hint">{{ t("panel.wpkit.installPluginHint") }}</small>
           </div>
 
-          <div v-if="wp.plugins.length" class="wp-form">
+          <!-- Eklenti/tema listesi BOŞKEN bölüm tamamen kayboluyordu: kullanıcı listenin
+               yüklenmediğini mi yoksa gerçekten eklenti olmadığını mı bilemiyordu. -->
+          <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.plugins") }} ({{ wp.plugins.length }})</span>
-            <div class="wp-list">
+            <p v-if="wp.plugins.length === 0" class="empty-state">{{ t("panel.wpkit.noPlugins") }}</p>
+            <div v-else class="wp-list">
               <div v-for="p in wp.plugins" :key="p.slug" class="wp-list-row">
                 <span class="wp-list-name"><span v-if="p.active" class="state-dot"></span>{{ p.name }} <small v-if="p.version">v{{ p.version }}</small></span>
                 <span class="wp-list-actions">
@@ -114,9 +118,10 @@
             </div>
           </div>
 
-          <div v-if="wp.themes.length" class="wp-form">
+          <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.themes") }} ({{ wp.themes.length }})</span>
-            <div class="wp-list">
+            <p v-if="wp.themes.length === 0" class="empty-state">{{ t("panel.wpkit.noThemes") }}</p>
+            <div v-else class="wp-list">
               <div v-for="th in wp.themes" :key="th.slug" class="wp-list-row">
                 <span class="wp-list-name"><span v-if="th.active" class="state-dot"></span>{{ th.name }} <small v-if="th.version">v{{ th.version }}</small></span>
                 <span class="wp-list-actions">
@@ -283,6 +288,8 @@ const wpcliRunner = routed(runWpCliCommand);
 const wp = ref<WordPressSite | null>(null);
 const wpLoading = ref(false);
 const wpLoaded = ref(false);
+// "Yükleniyor" / "WordPress değil" / "okunamadı" üç ayrı durum.
+const wpLoad = useSectionError();
 const wpBusy = ref<"" | "login" | "update" | "harden" | "plugin" | "sr" | "pass" | "maint" | "autoOn" | "autoOff" | "clone" | "comp" | "copy">("");
 const wpOutput = ref("");
 const wpNotice = ref("");
@@ -309,7 +316,12 @@ async function loadWp() {
   try {
     wp.value = await getWordPress(siteName.value);
     wpLoaded.value = true;
+    wpLoad.clear();
   } catch (error) {
+    // "Okunamadı" BOŞ durumdan ayrı: hata yalnız geçici şeritte kalınca sekme bomboş görünüyor
+    // ve kullanıcı sitede WordPress olmadığını sanıyordu.
+    wp.value = null;
+    wpLoad.capture(error);
     showWpNotice(resolveApiMessage(error), true);
   } finally {
     wpLoading.value = false;

@@ -86,7 +86,23 @@
         </button>
       </div>
 
-      <div v-if="discoveredDomains.length" class="discovered-list">
+      <!--
+        ÜÇ DURUM AYRI: taranıyor / hiç alan adı yok / okunamadı.
+        Önceden yalnız "dolu liste" çiziliyordu; tarama sürerken de, kaynak panelde hiç alan adı
+        yokken de, bağlantı reddedildiğinde de ekranda AYNI hiçlik vardı — kullanıcı düğmenin
+        çalışıp çalışmadığını bile bilemiyordu.
+      -->
+      <p v-if="discovering" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.migration.discovering") }}
+      </p>
+
+      <SectionLoadError v-else-if="discoverError.message.value" :message="discoverError.message.value" @retry="discover" />
+
+      <p v-else-if="discoverRan && discoveredDomains.length === 0" class="empty-state">
+        {{ t("panel.migration.noDomains") }}
+      </p>
+
+      <div v-else-if="discoveredDomains.length" class="discovered-list">
         <p class="meta">{{ t("panel.migration.discovered", { count: discoveredDomains.length }) }}</p>
         <div class="domain-rows">
           <div v-for="d in discoveredDomains" :key="d.name" class="domain-row">
@@ -229,8 +245,9 @@
       </div>
     </div>
 
-    <section v-if="checks.length" class="form-surface">
+    <section v-if="checks.length || validating" class="form-surface">
       <h3 class="section-label">{{ t("panel.migration.checksTitle") }}</h3>
+      <p v-if="validating" class="empty-state" role="status" aria-live="polite">{{ t("panel.migration.validating") }}</p>
       <div v-for="(check, index) in checks" :key="index" class="data-row">
         <span :class="['status-pill', check.ok ? 'ok' : 'danger']">{{ check.ok ? "✓" : "✗" }}</span>
         <span class="cell-muted">{{ t(check.message) }}</span>
@@ -240,6 +257,10 @@
     <section v-if="liveSteps.length || busy" class="form-surface">
       <h3 class="section-label">{{ t("panel.migration.liveTitle") }}</h3>
       <p v-if="busy" class="meta create-hint">{{ t("panel.migration.liveHint") }}</p>
+      <!-- Sunucudan ilk adım listesi gelene kadar bölüm tamamen boştu: göç başlamamış sanılıyordu. -->
+      <p v-if="busy && liveSteps.length === 0" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
       <div v-for="(step, index) in liveSteps" :key="index" class="data-row live-step" :class="step.status">
         <span class="status-pill" :class="stepPillClass(step.status)">{{ stepPillIcon(step.status) }}</span>
         <div class="live-step-body">
@@ -282,6 +303,8 @@ import {
   type MigrationCheck
 } from "../api/migration";
 import { extractApiMessage, extractApiDetails } from "../stores/auth";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useSectionError } from "../composables/useNotice";
 
 const { t } = useI18n();
 
@@ -322,6 +345,9 @@ const plesk = reactive({ host: "", port: 8443, apiKey: "", userName: "", passwor
 const cpanel = reactive({ host: "", port: 2087, userName: "root", apiToken: "" });
 const discovering = ref(false);
 const discoveredDomains = ref<PleskDomain[]>([]);
+// "Hiç taranmadı" ile "tarandı, sonuç boş" ve "okunamadı" birbirinden ayrı tutulur.
+const discoverRan = ref(false);
+const discoverError = useSectionError();
 const discoverHost = computed(() => (source.value === "cpanel" ? cpanel.host : plesk.host).trim());
 
 // Keşfedebilmek için host + kimlik gerekir. Plesk: API anahtarı YA DA (kullanıcı + parola). cPanel: API token.
@@ -385,6 +411,8 @@ async function discover() {
   notice.value = "";
   discoveredDomains.value = [];
   selectedDomains.value = [];
+  discoverRan.value = false;
+  discoverError.clear();
   try {
     const result = source.value === "cpanel"
       ? await discoverCpanel({
@@ -401,11 +429,12 @@ async function discover() {
           password: plesk.password
         });
     discoveredDomains.value = result.domains;
-    if (result.domains.length === 0) {
-      notice.value = t("panel.migration.noDomains");
-      noticeError.value = false;
-    }
+    // "Tarandı ve hiçbir şey çıkmadı" ile "hiç taranmadı" ayrı: boş liste artık kendi
+    // metniyle görünür, şeritteki geçici uyarıya bağlı değil.
+    discoverRan.value = true;
   } catch (error) {
+    // Hata hem şeritte hem listenin yerinde: boş alan "kaynakta alan adı yok" sanılmasın.
+    discoverError.capture(error);
     notice.value = apiErrorText(error);
     noticeError.value = true;
   } finally {

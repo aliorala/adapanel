@@ -114,7 +114,7 @@
       </div>
 
       <template v-if="filteredUsers.length">
-        <div v-for="user in filteredUsers" :key="user.userName" class="data-row ftp-row">
+        <div v-for="user in pager.items.value" :key="user.userName" class="data-row ftp-row">
           <span class="cell-main">
             <strong>{{ user.userName }}</strong>
             <small>{{ formatCreatedAt(user.createdAtUtc) }}</small>
@@ -144,6 +144,8 @@
       <p v-else class="empty-state">
         {{ t("panel.ftp.noUsers") }}
       </p>
+
+      <TablePager :state="pager" />
     </section>
   </section>
 </template>
@@ -156,6 +158,8 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
+import TablePager from "../components/TablePager.vue";
+import { usePagination } from "../composables/usePagination";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
 // göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (profesyonel paneller gibi site-bağlamı).
@@ -238,6 +242,11 @@ const filteredUsers = computed(() => {
     [user.userName, user.siteName, user.homePath]
       .some((value) => (value ?? "").toLowerCase().includes(query)));
 });
+
+// Sayfalama ARAMADAN SONRA gelir (bkz. composables/usePagination.ts).
+const pager = usePagination(filteredUsers);
+// Arama daralınca 3. sayfada kalıp boş tabloya düşülmesin.
+watch(search, () => pager.reset());
 
 watch(
   () => props.siteName,

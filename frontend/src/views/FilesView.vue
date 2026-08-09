@@ -65,40 +65,85 @@
         <button type="submit" class="secondary compact">{{ t("panel.files.search") }}</button>
       </form>
 
-      <div v-if="searchResults.length" class="search-results">
-        <button v-for="entry in searchResults" :key="entry.path" class="search-result" @click="openPath(entry.path)">
-          <strong>{{ entry.name }}</strong>
-          <small>{{ entry.path }}</small>
-        </button>
-      </div>
-
-      <div v-if="workspace?.isDirectory" class="data-table">
-        <div class="data-row table-head files-row">
-          <span>{{ t("panel.files.name") }}</span>
-          <span>{{ t("panel.files.kind") }}</span>
-          <span>{{ t("panel.files.actions") }}</span>
-        </div>
-
-        <div v-for="entry in workspace?.entries ?? []" :key="entry.path" class="data-row files-row">
-          <div class="cell-main">
-            <button class="link-button" @click="openPath(entry.path)">{{ entry.name }}</button>
+      <template v-if="searchRan">
+        <div v-if="searchResults.length" class="search-results">
+          <button
+            v-for="entry in searchPager.items.value"
+            :key="entry.path"
+            class="search-result"
+            @click="openPath(entry.path)">
+            <strong>{{ entry.name }}</strong>
             <small>{{ entry.path }}</small>
-          </div>
-          <span>{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
-          <div class="entry-actions">
-            <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
-              {{ t("panel.files.download") }}
-            </a>
-            <button class="secondary compact" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
-            <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" @click="extract(entry.path)">
-              {{ t("panel.files.extract") }}
-            </button>
-            <button class="danger compact" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
-          </div>
+          </button>
+          <TablePager :state="searchPager" />
         </div>
-      </div>
+        <p v-else class="empty-state">{{ t("panel.files.searchEmpty") }}</p>
+      </template>
 
-      <label v-else>
+      <!-- "Yükleniyor", "klasör boş" ve "okunamadı" AYRI durumlar: üçü de aynı boş tabloya
+           düşüyordu ve kullanıcı listenin gelmediğini mi yoksa klasörün gerçekten boş mu
+           olduğunu ayırt edemiyordu. -->
+      <p v-if="loading" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+
+      <SectionLoadError v-else-if="workspaceLoad.message.value" :message="workspaceLoad.message.value" @retry="() => refresh()" />
+
+      <template v-else-if="workspace?.isDirectory">
+        <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
+          <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
+          <button class="danger compact" :disabled="bulk.busy.value" @click="removeSelected">
+            {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
+          </button>
+          <button class="secondary compact" :disabled="bulk.busy.value" @click="selection.clear">
+            {{ t("panel.bulk.clearSelection") }}
+          </button>
+        </div>
+
+        <div class="data-table">
+          <div class="data-row table-head files-row">
+            <span class="select-cell">
+              <input
+                type="checkbox"
+                :checked="selection.allSelected(visiblePaths)"
+                :aria-label="t('panel.bulk.selectAll')"
+                @change="selection.toggleAll(visiblePaths)" />
+            </span>
+            <span>{{ t("panel.files.name") }}</span>
+            <span>{{ t("panel.files.kind") }}</span>
+            <span>{{ t("panel.files.actions") }}</span>
+          </div>
+
+          <div v-for="entry in filePager.items.value" :key="entry.path" class="data-row files-row">
+            <span class="select-cell">
+              <input
+                type="checkbox"
+                :checked="selection.isSelected(entry.path)"
+                :aria-label="t('panel.bulk.selectRow', { name: entry.name })"
+                @change="selection.toggle(entry.path)" />
+            </span>
+            <div class="cell-main">
+              <button class="link-button" @click="openPath(entry.path)">{{ entry.name }}</button>
+              <small>{{ entry.path }}</small>
+            </div>
+            <span>{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
+            <div class="entry-actions">
+              <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
+                {{ t("panel.files.download") }}
+              </a>
+              <button class="secondary compact" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
+              <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" @click="extract(entry.path)">
+                {{ t("panel.files.extract") }}
+              </button>
+              <button class="danger compact" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
+            </div>
+          </div>
+
+          <p v-if="entries.length === 0" class="empty-state">{{ t("panel.files.emptyFolder") }}</p>
+        </div>
+
+        <TablePager :state="filePager" :disabled="bulk.busy.value" />
+      </template>
+
+      <label v-else-if="workspace">
         <span>{{ t("panel.files.editor") }}</span>
         <textarea v-model="fileContent" rows="14"></textarea>
       </label>
@@ -214,7 +259,11 @@ import {
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
-import { useNotice } from "../composables/useNotice";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import TablePager from "../components/TablePager.vue";
+import { useNotice, useSectionError } from "../composables/useNotice";
+import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection";
+import { usePagination } from "../composables/usePagination";
 
 const { t } = useI18n();
 const { prompt } = usePrompt();
@@ -223,6 +272,10 @@ const sitesStore = useSitesStore();
 
 const activeTab = ref<"files" | "backups">("files");
 const workspace = ref<FileWorkspace | null>(null);
+// Dosya listesi sunucudan gelene kadar tablo BOŞ görünüyordu: 2000 dosyalı bir klasör "boş
+// klasör" sanılabiliyordu. Yükleniyor / boş / okunamadı artık üç ayrı durum.
+const loading = ref(false);
+const workspaceLoad = useSectionError();
 const fileContent = ref("");
 const backups = ref<BackupRecord[]>([]);
 const backupSiteName = ref("");
@@ -230,6 +283,15 @@ const backupEngine = ref("mariadb");
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const searchQuery = ref("");
 const searchResults = ref<FileEntry[]>([]);
+const searchRan = ref(false);
+
+// Klasör tek seferde DOM'a basılmaz (bkz. composables/usePagination.ts).
+const entries = computed(() => workspace.value?.entries ?? []);
+const filePager = usePagination(entries);
+const searchPager = usePagination(searchResults);
+const selection = useBulkSelection();
+const bulk = useBulkAction();
+const visiblePaths = computed(() => filePager.items.value.map((entry) => entry.path));
 const permissionPrincipal = ref("IIS_IUSRS");
 const permissionRights = ref("M");
 const selectedSiteName = computed({
@@ -266,6 +328,8 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
 
   workspace.value = null;
   searchResults.value = [];
+  searchRan.value = false;
+  selection.clear();
   if (siteName) {
     await refresh(`sites/${siteName}`);
   }
@@ -274,14 +338,23 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
 async function refresh(path = workspace.value?.path || siteRootPath.value) {
   if (!selectedSiteName.value || !path.startsWith(siteRootPath.value)) {
     workspace.value = null;
+    workspaceLoad.clear();
     return;
   }
 
+  loading.value = true;
   try {
     workspace.value = await getFileWorkspace(path);
     fileContent.value = workspace.value.content || "";
+    workspaceLoad.clear();
+    // Artık listede olmayan yollar seçili kalmasın (silme/klasör değişimi sonrası).
+    selection.keepOnly(workspace.value.entries.map((entry) => entry.path));
   } catch (error) {
+    // Hata hem şeritte hem listenin yerinde görünür: boş bir tablo "klasör boş" sanılmasın.
+    workspaceLoad.capture(error);
     showNotice(resolveApiMessage(error), true);
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -291,6 +364,9 @@ async function openPath(path: string) {
   }
 
   searchResults.value = [];
+  searchRan.value = false;
+  selection.clear();
+  filePager.reset();
   await refresh(path);
 }
 
@@ -315,7 +391,12 @@ async function uploadSelectedFile(event: Event) {
 async function runSearch() {
   try {
     searchResults.value = await searchFiles(workspace.value?.path || "", searchQuery.value);
+    searchPager.reset();
+    // "Sonuç yok" ile "henüz aranmadı" ayrı: boş sonuç listesi sessizce kaybolmasın.
+    searchRan.value = true;
   } catch (error) {
+    searchResults.value = [];
+    searchRan.value = false;
     showNotice(resolveApiMessage(error), true);
   }
 }
@@ -406,6 +487,43 @@ async function removePath(entry: FileEntry) {
       }
     }
   });
+}
+
+/**
+ * TOPLU SİLME — ONAY ZORUNLU, KISMİ BAŞARISIZLIK SESSİZ KALMAZ.
+ *
+ * Onay kaç öğenin gideceğini ve HANGİLERİNİ (tam yol listesi) yazar. Seçimde klasör varsa
+ * arkasında özyinelemeli silme vardır; bu yüzden öğe SAYISININ birebir yazılması istenir —
+ * "8 öğe" görüp refleksle onaylamak mümkün olmasın.
+ *
+ * Silme tek uçlu (`DELETE /files`), toplu ucu YOK: öğeler tek tek denenir. Biri başarısız
+ * olursa döngü durmaz; özet "kaçı silindi, kaçı silinemedi ve neden" der.
+ */
+async function removeSelected() {
+  const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
+  if (targets.length === 0) {
+    return;
+  }
+
+  const folderCount = targets.filter((entry) => entry.isDirectory).length;
+  const impact = bulk.impactList(targets.map((entry) => entry.path));
+  if (folderCount > 0) {
+    impact.unshift(t("panel.files.bulkFolderWarn", { count: folderCount }));
+  }
+
+  const onay = await confirm({
+    title: t("panel.bulk.confirmDeleteTitle", { count: targets.length }),
+    message: t("panel.bulk.confirmDeleteMessage", { count: targets.length }),
+    impact,
+    requireText: String(targets.length)
+  });
+  if (!onay) {
+    return;
+  }
+
+  const outcome = await bulk.runBulk(targets, (entry) => entry.path, (entry) => deletePath(entry.path));
+  await refresh(workspace.value?.path || "");
+  showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
 }
 
 async function saveCurrentFile() {
@@ -508,7 +626,33 @@ async function restore(backupId: string) {
 }
 
 .files-row {
-  grid-template-columns: minmax(220px, 1fr) 110px minmax(330px, auto);
+  grid-template-columns: 30px minmax(220px, 1fr) 110px minmax(330px, auto);
+}
+
+.select-cell {
+  display: flex;
+  align-items: center;
+}
+
+.select-cell input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.bulk-bar button {
+  width: auto;
 }
 
 .entry-actions,

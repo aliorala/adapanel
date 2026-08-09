@@ -107,6 +107,12 @@
             </span>
             <span class="chev">›</span>
           </button>
+
+          <!-- Rolün yetkisi olmayan bir sekmede liste TAMAMEN boş çiziliyordu: kullanıcı sayfanın
+               yüklenmediğini sanıyordu. Boş durum artık sebebiyle söylenir. -->
+          <p v-if="toolsFor(primary).length === 0" class="empty-state">
+            {{ t("panel.sites.noToolsForRole") }}
+          </p>
         </div>
       </template>
     </template>
@@ -114,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getPanelPreferences } from "../api/panelSettings";
 import type { SiteBindingPayload, SiteDefaultsResult } from "../api/sites";
@@ -123,34 +129,50 @@ import SiteHealthStrip from "../components/SiteHealthStrip.vue";
 import SiteRepairNotice from "../components/SiteRepairNotice.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
-import AppStoreView from "./AppStoreView.vue";
-import AppsView from "./AppsView.vue";
-import AppToolkitView from "./AppToolkitView.vue";
-import AspView from "./AspView.vue";
-import CacheView from "./CacheView.vue";
-import CronView from "./CronView.vue";
-import SiteDatabasesView from "./SiteDatabasesView.vue";
-// NOT: per-site "Web DB" (araç kurulumu) kaldırıldı; DB yönetimi tek "Veritabanları" sekmesinde (SiteDatabasesView).
-// phpMyAdmin/Adminer KURULUMU global Veritabanları bölümünde (WebDbView) kalır.
-import SiteLogsView from "./SiteLogsView.vue";
-import SiteMigrationView from "./SiteMigrationView.vue";
-import FilesView from "./FilesView.vue";
-import MailView from "./MailView.vue";
-import SiteBackupView from "./SiteBackupView.vue";
-import SiteDetailView from "./SiteDetailView.vue";
-import SiteStatisticsView from "./SiteStatisticsView.vue";
-import ProtectedDirsView from "./ProtectedDirsView.vue";
-import WordPressToolkitView from "./WordPressToolkitView.vue";
-import DnsView from "./DnsView.vue";
-import FtpView from "./FtpView.vue";
-import PhpView from "./PhpView.vue";
-import ProxyView from "./ProxyView.vue";
+import { lazyView } from "../utils/lazyView";
 import SitesView from "./SitesView.vue";
-import SiteHostingView from "./SiteHostingView.vue";
-import SslView from "./SslView.vue";
+import SiteDetailView from "./SiteDetailView.vue";
+
+/*
+ * ALAN ADI ARAÇLARI TALEP ÜZERİNE İNDİRİLİR (bkz. utils/lazyView.ts).
+ *
+ * Bu ekran 21 araç görünümünü statik import ediyordu; hiçbirine tıklanmasa bile hepsinin kodu
+ * indiriliyordu. SitesView (liste) ve SiteDetailView (Pano) BİLEREK statik: çalışma alanına
+ * girildiğinde ilk çizilen ikisi bunlar.
+ *
+ * NOT: per-site "Web DB" (araç kurulumu) kaldırıldı; DB yönetimi tek "Veritabanları" sekmesinde
+ * (SiteDatabasesView). phpMyAdmin/Adminer KURULUMU global Veritabanları bölümünde (WebDbView) kalır.
+ */
+const AppStoreView = lazyView(() => import("./AppStoreView.vue"));
+const AppsView = lazyView(() => import("./AppsView.vue"));
+const AppToolkitView = lazyView(() => import("./AppToolkitView.vue"));
+const AspView = lazyView(() => import("./AspView.vue"));
+const CacheView = lazyView(() => import("./CacheView.vue"));
+const CronView = lazyView(() => import("./CronView.vue"));
+const SiteDatabasesView = lazyView(() => import("./SiteDatabasesView.vue"));
+const SiteLogsView = lazyView(() => import("./SiteLogsView.vue"));
+const SiteMigrationView = lazyView(() => import("./SiteMigrationView.vue"));
+const FilesView = lazyView(() => import("./FilesView.vue"));
+const MailView = lazyView(() => import("./MailView.vue"));
+const SiteBackupView = lazyView(() => import("./SiteBackupView.vue"));
+const SiteStatisticsView = lazyView(() => import("./SiteStatisticsView.vue"));
+const ProtectedDirsView = lazyView(() => import("./ProtectedDirsView.vue"));
+const WordPressToolkitView = lazyView(() => import("./WordPressToolkitView.vue"));
+const DnsView = lazyView(() => import("./DnsView.vue"));
+const FtpView = lazyView(() => import("./FtpView.vue"));
+const PhpView = lazyView(() => import("./PhpView.vue"));
+const ProxyView = lazyView(() => import("./ProxyView.vue"));
+const SiteHostingView = lazyView(() => import("./SiteHostingView.vue"));
+const SslView = lazyView(() => import("./SslView.vue"));
 
 type PrimaryTab = "pano" | "hostingdns" | "mail" | "start";
 type ToolDef = { id: string; group: PrimaryTab; glyph: string; label: string; description: string };
+
+/**
+ * Üst bardaki aramadan gelen "bu siteyi aç" isteği. `seq` sayacıyla gelir: aynı site arka arkaya
+ * seçildiğinde de tetiklenmesi gerekir (değer aynı kalırsa izleyici çalışmazdı).
+ */
+const props = defineProps<{ openRequest?: { siteName: string; seq: number } | null }>();
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -198,6 +220,21 @@ const primaryUrl = computed(() => {
     (binding.protocol === "https" && binding.port === 443);
   return `${binding.protocol}://${host}${standard ? "" : `:${binding.port}`}`;
 });
+
+watch(
+  () => props.openRequest,
+  (request) => {
+    if (!request?.siteName) {
+      return;
+    }
+    sitesStore.selectSite(request.siteName);
+    notice.value = "";
+    primary.value = "pano";
+    openToolId.value = "";
+    inWorkspace.value = true;
+  },
+  { immediate: true }
+);
 
 onMounted(async () => {
   await getPanelPreferences()

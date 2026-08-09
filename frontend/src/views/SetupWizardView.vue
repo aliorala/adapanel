@@ -154,6 +154,8 @@
     :attention-error="attentionError"
     :attention-open="attentionOpen"
     @navigate="handleNavigation"
+    @open-site="openSiteFromSearch"
+    @open-mail-domain="openMailDomainFromSearch"
     @refresh="refreshDashboard"
     @toggle-theme="toggleTheme"
     @logout="logout"
@@ -194,13 +196,18 @@
       @navigate="handleNavigation"
       @retry-panel-update="loadPanelUpdate" />
 
-    <WebsiteWorkspaceView v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)" />
+    <WebsiteWorkspaceView
+      v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)"
+      :open-request="siteOpenRequest" />
 
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
     <MyDatabasesView v-else-if="activeSection === 'database' && (isReseller || isCustomer)" />
 
-    <MailView v-else-if="activeSection === 'mail' && (isAdmin || isCustomer || isReseller)" />
+    <MailView
+      v-else-if="activeSection === 'mail' && (isAdmin || isCustomer || isReseller)"
+      :key="mailDomainFromSearch"
+      :domain="mailDomainFromSearch" />
 
     <MonitoringView
       v-else-if="activeSection === 'monitor'"
@@ -407,32 +414,44 @@ import { useSetupStore, type OperationProgress } from "../stores/setup";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
 import { useSystemStore } from "../stores/system";
-import CronView from "./CronView.vue";
-import DatabasesView from "./DatabasesView.vue";
-import MigrationView from "./MigrationView.vue";
-import MyDatabasesView from "./MyDatabasesView.vue";
 import AttentionSectionNotice from "../components/AttentionSectionNotice.vue";
-import DashboardOverviewView from "./DashboardOverviewView.vue";
-import AdvisorView from "./AdvisorView.vue";
-import FilesView from "./FilesView.vue";
-import MailView from "./MailView.vue";
-import MonitoringView from "./MonitoringView.vue";
-import NotificationsView from "./NotificationsView.vue";
-import SecurityView from "./SecurityView.vue";
-import ServerToolsView from "./ServerToolsView.vue";
-import BackupView from "./BackupView.vue";
-import SubUsersView from "./SubUsersView.vue";
-import UsersView from "./UsersView.vue";
-import AccountView from "./AccountView.vue";
 import PanelAccessCard from "../components/PanelAccessCard.vue";
-import AiConnectionView from "./AiConnectionView.vue";
-import ErrorReportsView from "./ErrorReportsView.vue";
-import SoftwareView from "./SoftwareView.vue";
-import UpdateView from "./UpdateView.vue";
+import DashboardOverviewView from "./DashboardOverviewView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";
 import { getAttentionSummary, type AttentionSummary } from "../api/attention";
-import WebsiteWorkspaceView from "./WebsiteWorkspaceView.vue";
+import { lazyView } from "../utils/lazyView";
+
+/*
+ * BÖLÜMLER TALEP ÜZERİNE İNDİRİLİR (bkz. utils/lazyView.ts).
+ *
+ * Bu kabuk bölüm görünümlerini statik import ediyordu: giriş ekranını görmek için bile tüm
+ * panelin kodu (tek parça 1,1 MB) indiriliyordu. Artık her bölüm kendi paketinde ve yalnız
+ * açıldığında iner.
+ *
+ * DashboardOverviewView BİLEREK statik: her girişte açılan ilk ekran o; onu da ayırmak her
+ * oturum açılışına bir gidiş-dönüş ve bir "Yükleniyor…" titremesi eklerdi.
+ */
+const CronView = lazyView(() => import("./CronView.vue"));
+const DatabasesView = lazyView(() => import("./DatabasesView.vue"));
+const MigrationView = lazyView(() => import("./MigrationView.vue"));
+const MyDatabasesView = lazyView(() => import("./MyDatabasesView.vue"));
+const AdvisorView = lazyView(() => import("./AdvisorView.vue"));
+const FilesView = lazyView(() => import("./FilesView.vue"));
+const MailView = lazyView(() => import("./MailView.vue"));
+const MonitoringView = lazyView(() => import("./MonitoringView.vue"));
+const NotificationsView = lazyView(() => import("./NotificationsView.vue"));
+const SecurityView = lazyView(() => import("./SecurityView.vue"));
+const ServerToolsView = lazyView(() => import("./ServerToolsView.vue"));
+const BackupView = lazyView(() => import("./BackupView.vue"));
+const SubUsersView = lazyView(() => import("./SubUsersView.vue"));
+const UsersView = lazyView(() => import("./UsersView.vue"));
+const AccountView = lazyView(() => import("./AccountView.vue"));
+const AiConnectionView = lazyView(() => import("./AiConnectionView.vue"));
+const ErrorReportsView = lazyView(() => import("./ErrorReportsView.vue"));
+const SoftwareView = lazyView(() => import("./SoftwareView.vue"));
+const UpdateView = lazyView(() => import("./UpdateView.vue"));
+const WebsiteWorkspaceView = lazyView(() => import("./WebsiteWorkspaceView.vue"));
 
 type ViewMode = "setup" | "auth" | "dashboard";
 type SectionItem = {
@@ -1059,6 +1078,34 @@ async function refreshDashboard() {
   }
 }
 
+/*
+ * ÜST BARDAKİ ARAMADAN GELEN VARLIK SEÇİMİ.
+ *
+ * Arama artık site/alan adı da buluyor; sonuç tıklanınca kullanıcıyı "Web Siteleri" listesine
+ * bırakmak yetmez — aradığı sitenin panosunda olmalı. `seq` sayacı ŞART: aynı siteyi arka arkaya
+ * seçmek prop değerini değiştirmediği için izleyici tetiklenmez ve ikinci tıklama ölü kalırdı.
+ */
+const siteOpenRequest = ref<{ siteName: string; seq: number } | null>(null);
+const mailDomainFromSearch = ref("");
+let siteOpenSeq = 0;
+
+function openSiteFromSearch(siteName: string) {
+  sitesStore.selectSite(siteName);
+  siteOpenSeq += 1;
+  siteOpenRequest.value = { siteName, seq: siteOpenSeq };
+  activeSection.value = "sites";
+  window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+function openMailDomainFromSearch(domain: string) {
+  // MailView seçili alan adını YALNIZ kurulum anında okur (`selectedDomain` ref'i props.domain
+  // ile başlatılır). Bu yüzden `:key` ile yeniden kurulur: zaten Posta bölümündeyken başka bir
+  // alan adı aramak aksi halde hiçbir şey yapmazdı.
+  mailDomainFromSearch.value = domain;
+  activeSection.value = "mail";
+  window.scrollTo({ top: 0, behavior: "auto" });
+}
+
 function handleNavigation(sectionId: string) {
   if (sectionId === "exit") {
     void logout();
@@ -1081,6 +1128,11 @@ function handleNavigation(sectionId: string) {
 
   // Dikkat maddelerinin mantıksal bölümleri ("dns" → Web Siteleri, "health" → Sunucu Araçları).
   activeSection.value = ATTENTION_SECTION_ALIASES[sectionId] ?? sectionId;
+  // Menüden Posta'ya gitmek her zaman alan adı LİSTESİNDEN başlar: aramayla açılmış eski bir
+  // alan adı burada seçili kalsaydı kullanıcı yanlış alan adında işlem yapabilirdi.
+  if (activeSection.value === "mail") {
+    mailDomainFromSearch.value = "";
+  }
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 

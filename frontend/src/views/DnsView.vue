@@ -138,15 +138,39 @@
           </div>
         </form>
 
+        <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
+          <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
+          <button class="danger compact" :disabled="busy || bulk.busy.value" @click="removeSelectedRecords">
+            {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
+          </button>
+          <button class="secondary compact" :disabled="bulk.busy.value" @click="selection.clear">
+            {{ t("panel.bulk.clearSelection") }}
+          </button>
+        </div>
+
         <div class="data-table">
           <div class="data-row table-head dns-row">
+            <span class="select-cell">
+              <input
+                type="checkbox"
+                :checked="selection.allSelected(visibleRecordIds)"
+                :aria-label="t('panel.bulk.selectAll')"
+                @change="selection.toggleAll(visibleRecordIds)" />
+            </span>
             <span>{{ t("panel.dns.type") }}</span>
             <span>{{ t("panel.dns.host") }}</span>
             <span>{{ t("panel.dns.value") }}</span>
             <span>{{ t("panel.dns.ttl") }}</span>
             <span>{{ t("panel.dns.actions") }}</span>
           </div>
-          <div v-for="record in zone?.records ?? []" :key="record.id" class="data-row dns-row">
+          <div v-for="record in recordPager.items.value" :key="record.id" class="data-row dns-row">
+            <span class="select-cell">
+              <input
+                type="checkbox"
+                :checked="selection.isSelected(record.id)"
+                :aria-label="t('panel.bulk.selectRow', { name: displayHost(record.host) })"
+                @change="selection.toggle(record.id)" />
+            </span>
             <strong class="status-pill ok">{{ record.type }}</strong>
             <div class="cell-main">
               <strong>{{ displayHost(record.host) }}</strong>
@@ -163,6 +187,8 @@
           <p v-if="!zone" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
           <p v-else-if="!zone.records.length" class="empty-state">{{ t("panel.dns.noRecords") }}</p>
         </div>
+
+        <TablePager :state="recordPager" :disabled="busy || bulk.busy.value" />
       </template>
 
       <!-- Bölge ayarları gelmeden alanlar boş görünüyordu; dolu bir zone tanımsız sanılıp
@@ -243,6 +269,9 @@ import { useI18n } from "vue-i18n";
 import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, setDnssec, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import FieldHint from "../components/FieldHint.vue";
+import TablePager from "../components/TablePager.vue";
+import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection";
+import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -286,6 +315,13 @@ const recordForm = reactive({
   tlsaMatching: "1",
   tlsaCert: ""
 });
+
+// Büyük bölgeler (yüzlerce kayıt) tek seferde DOM'a basılmaz (bkz. composables/usePagination.ts).
+const zoneRecords = computed(() => zone.value?.records ?? []);
+const recordPager = usePagination(zoneRecords);
+const selection = useBulkSelection();
+const bulk = useBulkAction();
+const visibleRecordIds = computed(() => recordPager.items.value.map((record) => record.id));
 
 const zoneStatus = computed(() => zone.value ? t(zone.value.statusMessage) : t("panel.dns.loading"));
 const zoneNameOrExample = computed(() => zone.value?.zoneName ?? "example.com");
@@ -339,6 +375,8 @@ async function load() {
     zoneForm.zoneName = zone.value.zoneName;
     nameServersText.value = zone.value.nameServers.join("\n");
     zoneTransferText.value = (zone.value.zoneTransferIps ?? []).join("\n");
+    // Başka bir bölgenin/eski listenin seçimi taşınmasın.
+    selection.keepOnly(zone.value.records.map((record) => record.id));
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
@@ -497,6 +535,54 @@ async function removeRecord(recordId: string) {
       }
     },
   });
+}
+
+/**
+ * TOPLU DNS KAYDI SİLME — ONAY ZORUNLU, KISMİ BAŞARISIZLIK SESSİZ KALMAZ.
+ *
+ * DNS kaydı silmek alan adını dünyaya karşı bozabilir (A/MX gidince site ve posta düşer), bu
+ * yüzden onay kaç kaydın gideceğini VE hangilerini (tip + host + değer) yazar. Panelin YÖNETTİĞİ
+ * kayıtlar ayrıca sayılır: onlar silinse bile "Varsayılanlara dön" ile geri gelir, kullanıcının
+ * bunu bilmesi kararı değiştirir.
+ *
+ * `DELETE` tek kayıt alır; kayıtlar tek tek denenir ve özet kaçının silindiğini/silinemediğini
+ * sebebiyle söyler.
+ */
+async function removeSelectedRecords() {
+  if (!siteName.value) return;
+
+  const targets = zoneRecords.value.filter((record) => selection.isSelected(record.id));
+  if (targets.length === 0) {
+    return;
+  }
+
+  const labels = targets.map((record) =>
+    `${record.type} ${displayHost(record.host)} → ${displayValue(record)}`);
+  const impact = bulk.impactList(labels);
+  const managed = targets.filter((record) => record.isManaged).length;
+  if (managed > 0) {
+    impact.unshift(t("panel.dns.bulkManagedWarn", { count: managed }));
+  }
+
+  const onay = await confirm({
+    title: t("panel.bulk.confirmDeleteTitle", { count: targets.length }),
+    message: t("panel.dns.confirmBulkDelete", { count: targets.length }),
+    impact,
+    requireText: String(targets.length)
+  });
+  if (!onay) {
+    return;
+  }
+
+  const outcome = await bulk.runBulk(
+    targets,
+    (record) => `${record.type} ${displayHost(record.host)}`,
+    async (record) => {
+      zone.value = await deleteDnsRecord(siteName.value, record.id);
+    }
+  );
+  selection.keepOnly(zoneRecords.value.map((record) => record.id));
+  showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
 }
 
 function resetRecordForm() {
@@ -672,7 +758,33 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .dns-row {
-  grid-template-columns: 82px minmax(120px, 0.7fr) minmax(220px, 1.2fr) 80px minmax(170px, auto);
+  grid-template-columns: 30px 82px minmax(120px, 0.7fr) minmax(220px, 1.2fr) 80px minmax(170px, auto);
+}
+
+.select-cell {
+  display: flex;
+  align-items: center;
+}
+
+.select-cell input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.bulk-bar button {
+  width: auto;
 }
 
 .record-value {

@@ -45,7 +45,7 @@
         <span>{{ t("panel.myDb.engine") }}</span>
         <span>{{ t("panel.files.actions") }}</span>
       </div>
-      <div v-for="db in databases" :key="db.engine + ':' + db.name" class="data-row my-db-row">
+      <div v-for="db in pager.items.value" :key="db.engine + ':' + db.name" class="data-row my-db-row">
         <span><strong>{{ db.name }}</strong></span>
         <span>{{ db.engine }}</span>
         <span class="row-actions">
@@ -55,6 +55,8 @@
       <p v-if="loading && databases.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
       <p v-else-if="databases.length === 0" class="empty-state">{{ t("panel.myDb.empty") }}</p>
     </div>
+
+    <TablePager :state="pager" :disabled="busy" />
   </section>
 </template>
 
@@ -63,7 +65,9 @@ import { onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getMyDatabases, createMyDatabase, deleteMyDatabase, type OwnedDatabase } from "../api/myDatabases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import TablePager from "../components/TablePager.vue";
 import { useNotice } from "../composables/useNotice";
+import { usePagination } from "../composables/usePagination";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -72,6 +76,8 @@ const databases = ref<OwnedDatabase[]>([]);
 const loading = ref(false);
 const busy = ref(false);
 const form = reactive({ engine: "mariadb", name: "", userName: "", password: "" });
+// Yüzlerce veritabanı tek seferde DOM'a basılmaz (bkz. composables/usePagination.ts).
+const pager = usePagination(databases);
 
 onMounted(load);
 

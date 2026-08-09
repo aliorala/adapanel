@@ -141,7 +141,14 @@
     <section class="domain-list">
       <div class="section-head">
         <h3>{{ t("panel.sites.title") }}</h3>
-        <span class="meta">{{ sitesStore.sites.length }}</span>
+        <!-- Arama SAYFALAMADAN ÖNCE uygulanır: kullanıcı bütün listede arar, sayfalama yalnız
+             görüneni sınırlar. Aksi halde 3. sayfadaki site aranınca bulunamıyor sanılırdı. -->
+        <input
+          v-model="siteSearch"
+          class="site-search"
+          type="search"
+          :placeholder="t('panel.sites.searchPlaceholder')" />
+        <span class="meta">{{ filteredSites.length }} / {{ sitesStore.sites.length }}</span>
       </div>
 
       <div v-if="preview" class="preview-card">
@@ -157,9 +164,9 @@
         <code v-if="preview.hostsLine" class="preview-hosts">{{ preview.hostsLine }}</code>
       </div>
 
-      <div v-if="sitesStore.sites.length > 0" class="domain-rows">
+      <div v-if="filteredSites.length > 0" class="domain-rows">
         <article
-          v-for="site in sitesStore.sites"
+          v-for="site in pager.items.value"
           :key="site.id"
           :class="['domain-row', { active: site.name === sitesStore.selectedSiteName }]">
           <div class="domain-row-main" @click="openTool(site.name, 'pano')">
@@ -226,6 +233,10 @@
         </article>
       </div>
 
+      <!-- "Hiç site yok" ile "aramaya uyan site yok" AYRI şeyler: ikincisinde kurulum daveti
+           göstermek, var olan siteleri kaybolmuş gibi gösterirdi. -->
+      <p v-else-if="sitesStore.sites.length > 0" class="empty-state">{{ t("panel.sites.searchEmpty") }}</p>
+
       <div v-else class="empty-onboard">
         <svg viewBox="0 0 24 24" class="empty-icon" aria-hidden="true">
           <circle cx="12" cy="12" r="9" />
@@ -235,6 +246,8 @@
         <p class="meta">{{ t("panel.sites.noSitesHint") }}</p>
         <button v-if="canCreateSite" class="compact" @click="showCreateForm = true">{{ t("panel.sites.create") }}</button>
       </div>
+
+      <TablePager :state="pager" />
     </section>
 
   </section>
@@ -247,6 +260,8 @@ import type { SiteBindingPayload, SiteDefaultsResult, SiteRecord, SitePreview } 
 import { getSiteDeletionPlan, getSitePreview } from "../api/sites";
 import { getPanelPreferences } from "../api/panelSettings";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import TablePager from "../components/TablePager.vue";
+import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
@@ -267,6 +282,21 @@ const canCreateSite = computed(() => {
 
 // profesyonel panel benzeri domain kartlarindaki hizli eylemler -> ilgili site araci sekmesine git.
 const emit = defineEmits<{ (event: "open-tool", payload: { siteName: string; tool: string }): void }>();
+
+// Site listesi: ada, fiziksel yola ve bağlama host adlarına göre aranır; sonra sayfalanır
+// (bkz. composables/usePagination.ts). Yüzlerce site tek seferde DOM'a basılıyordu.
+const siteSearch = ref("");
+const filteredSites = computed(() => {
+  const query = siteSearch.value.trim().toLowerCase();
+  if (!query) {
+    return sitesStore.sites;
+  }
+  return sitesStore.sites.filter((site) =>
+    [site.name, site.physicalPath, ...site.bindings.map((binding) => binding.hostName)]
+      .some((value) => (value ?? "").toLowerCase().includes(query)));
+});
+const pager = usePagination(filteredSites);
+watch(siteSearch, () => pager.reset());
 
 const quickTools = computed(() => [
   { id: "hosting", glyph: "⚙", label: t("panel.sites.tools.hosting") },
@@ -682,6 +712,17 @@ async function copyCredential(credential: { service: string; userName: string; p
 .section-head {
   justify-content: space-between;
   align-items: flex-start;
+}
+
+.section-head {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.site-search {
+  flex: 1 1 200px;
+  max-width: 320px;
+  min-width: 0;
 }
 
 .sites-actions {

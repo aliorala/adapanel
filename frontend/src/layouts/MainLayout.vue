@@ -74,19 +74,32 @@
             class="search-input"
             type="search"
             :placeholder="t('panel.layout.searchPlaceholder')"
+            @focus="warmEntityIndex"
             @keydown.esc="searchQuery = ''"
             @keydown.enter="goToFirstResult" />
-          <div v-if="searchQuery && searchResults.length" class="search-results">
+          <div v-if="searchQuery.trim()" class="search-results">
             <button
               v-for="result in searchResults"
-              :key="result.id"
+              :key="result.key"
               class="search-result"
-              @click="selectSearch(result.id)">
+              @click="selectSearch(result)">
               <span class="nav-glyph">
-                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="iconFor(result.id)"></svg>
+                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="iconFor(result.sectionId)"></svg>
               </span>
-              <span>{{ result.label }}</span>
+              <span class="search-result-copy">
+                <strong>{{ result.label }}</strong>
+                <small>{{ result.hint }}</small>
+              </span>
+              <span class="search-kind">{{ kindLabel(result.kind) }}</span>
             </button>
+
+            <p v-if="searchResults.length === 0" class="search-note" role="status">
+              {{ entityIndexLoading ? t("panel.common.loading") : t("panel.layout.searchNoResults") }}
+            </p>
+
+            <!-- Varlık dizini kurulamadıysa SESSİZ KALMAZ: aksi halde kullanıcı var olan bir
+                 veritabanını "yok" sanırdı. -->
+            <p v-if="entityIndexError" class="search-note error" role="alert">{{ entityIndexError }}</p>
           </div>
         </div>
 
@@ -180,9 +193,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import AttentionDrawer from "../components/AttentionDrawer.vue";
 import type { AttentionSummary } from "../api/attention";
+import { getMailWorkspace } from "../api/mail";
+import { getMyDatabases } from "../api/myDatabases";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { useDatabasesStore } from "../stores/databases";
+import { useSitesStore } from "../stores/sites";
 
 const authStore = useAuthStore();
+const sitesStore = useSitesStore();
+const databasesStore = useDatabasesStore();
 
 // profesyonel panel benzeri stroke ikonlar (bölüm id → SVG iç içeriği). 24x24, currentColor stroke.
 const NAV_ICONS: Record<string, string> = {
@@ -206,21 +225,223 @@ function iconFor(id: string): string {
   return NAV_ICONS[id] ?? '<circle cx="12" cy="12" r="7"/>';
 }
 
-// Global arama (profesyonel panel benzeri "git"): menü bölümlerinde ada göre filtrele.
+/*
+ * GLOBAL ARAMA — MENÜ ETİKETİ DEĞİL, GERÇEK VARLIKLAR.
+ *
+ * Önceden yalnız `props.sections` ada göre süzülüyordu: kullanıcı "example.com" yazınca hiçbir
+ * şey bulamıyor, aradığı siteye menüden elle gitmek zorunda kalıyordu.
+ *
+ * Şimdi arama; bölüm + site + alan adı (bağlama host'ları) + veritabanı + posta alan adı
+ * üzerinde çalışır ve seçim DOĞRU EKRANI SEÇİLİ VARLIKLA açar.
+ *
+ * HER TUŞTA AĞ İSTEĞİ YOK: siteler zaten pano tarafından yüklenmiş durumda; veritabanı ve posta
+ * alan adları arama kutusuna İLK ODAKLANILDIĞINDA bir kez çekilir (oturum başına bir kez),
+ * sonrası tamamen bellekten süzülür.
+ *
+ * POSTA KUTULARI ARAMAYA DAHİL DEĞİL: `GET /mail` yalnız TEK bir alan adının kutularını döndürür;
+ * tüm kutuları veren bir uç yok. Alan adı başına istek atmak arama kutusunu ağ trafiğine
+ * çevirirdi, bu yüzden bu varlık türü bilerek dışarıda bırakıldı.
+ */
+type SearchKind = "section" | "site" | "domain" | "database" | "mailDomain";
+type SearchHit = {
+  key: string;
+  kind: SearchKind;
+  label: string;
+  hint: string;
+  /** Sonuç seçilince gidilecek menü bölümü (ikon da bundan gelir). */
+  sectionId: string;
+  siteName?: string;
+  engine?: string;
+  domain?: string;
+};
+
 const searchQuery = ref("");
-const searchResults = computed(() => {
+const entityIndexLoading = ref(false);
+const entityIndexError = ref("");
+const mailDomains = ref<string[]>([]);
+const ownedDatabases = ref<{ engine: string; name: string }[]>([]);
+let entityIndexRequested = false;
+
+function kindLabel(kind: SearchKind): string {
+  return t(`panel.layout.searchKind.${kind}`);
+}
+
+/** Bölüm menüde yoksa (rol yetkisi) o varlık türü aramaya girmez: 403'e yollamak yardım değildir. */
+function sectionAllowed(sectionId: string) {
+  return props.sections.some((section) => section.id === sectionId);
+}
+
+const siteHits = computed<SearchHit[]>(() => {
+  if (!sectionAllowed("sites")) {
+    return [];
+  }
+  const hits: SearchHit[] = [];
+  const seenHosts = new Set<string>();
+  for (const site of sitesStore.sites) {
+    hits.push({
+      key: `site:${site.name}`,
+      kind: "site",
+      label: site.name,
+      hint: site.physicalPath,
+      sectionId: "sites",
+      siteName: site.name
+    });
+    for (const binding of site.bindings ?? []) {
+      const host = (binding.hostName ?? "").trim();
+      if (!host || host.toLowerCase() === site.name.toLowerCase() || seenHosts.has(host.toLowerCase())) {
+        continue;
+      }
+      seenHosts.add(host.toLowerCase());
+      hits.push({
+        key: `domain:${host}`,
+        kind: "domain",
+        label: host,
+        hint: site.name,
+        sectionId: "sites",
+        siteName: site.name
+      });
+    }
+  }
+  return hits;
+});
+
+const databaseHits = computed<SearchHit[]>(() => {
+  if (!sectionAllowed("database")) {
+    return [];
+  }
+  const hits: SearchHit[] = [];
+  const seen = new Set<string>();
+  const push = (engine: string, name: string, hint: string) => {
+    const key = `db:${engine}:${name}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    hits.push({ key, kind: "database", label: name, hint, sectionId: "database", engine });
+  };
+
+  for (const workspace of Object.values(databasesStore.workspaces)) {
+    for (const database of workspace.databases) {
+      push(workspace.engine, database.name, workspace.displayName || workspace.engine);
+    }
+  }
+  for (const database of ownedDatabases.value) {
+    push(database.engine, database.name, database.engine);
+  }
+  return hits;
+});
+
+const mailHits = computed<SearchHit[]>(() => {
+  if (!sectionAllowed("mail")) {
+    return [];
+  }
+  return mailDomains.value.map((domain) => ({
+    key: `mail:${domain}`,
+    kind: "mailDomain",
+    label: domain,
+    hint: t("panel.layout.searchKind.mailDomain"),
+    sectionId: "mail",
+    domain
+  }));
+});
+
+const sectionHits = computed<SearchHit[]>(() =>
+  props.sections
+    .filter((section) => section.id !== "exit")
+    .map((section) => ({
+      key: `section:${section.id}`,
+      kind: "section" as const,
+      label: section.label,
+      hint: section.description ?? "",
+      sectionId: section.id
+    })));
+
+const searchResults = computed<SearchHit[]>(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
   if (!query) {
     return [];
   }
-  return props.sections
-    .filter((section) => section.id !== "exit" && section.label.toLocaleLowerCase().includes(query))
-    .slice(0, 8);
+  // Bölümler önce (bilinen hedef), sonra varlıklar.
+  const all = [...sectionHits.value, ...siteHits.value, ...mailHits.value, ...databaseHits.value];
+  return all
+    .filter((hit) =>
+      hit.label.toLocaleLowerCase().includes(query) || hit.hint.toLocaleLowerCase().includes(query))
+    .slice(0, 12);
 });
 
-function selectSearch(id: string) {
+/**
+ * Veritabanı + posta alan adı dizini: oturum başına BİR KEZ, arama kutusuna odaklanılınca.
+ * Yeni bir uç istenmez; var olan uçlar kullanılır. Yetkisi olmayan rol için istek hiç atılmaz.
+ */
+async function warmEntityIndex() {
+  if (entityIndexRequested) {
+    return;
+  }
+  entityIndexRequested = true;
+  entityIndexLoading.value = true;
+  const failures: string[] = [];
+
+  if (sitesStore.sites.length === 0 && !sitesStore.loading) {
+    try {
+      await sitesStore.fetchSites();
+    } catch (error) {
+      failures.push(resolveApiMessage(error));
+    }
+  }
+
+  if (sectionAllowed("database")) {
+    try {
+      if (props.role === "Administrator") {
+        const engines = await databasesStore.fetchEngines();
+        for (const engine of engines.filter((item) => item.ready)) {
+          await databasesStore.fetchWorkspace(engine.engine);
+        }
+      } else {
+        ownedDatabases.value = await getMyDatabases();
+      }
+    } catch (error) {
+      failures.push(resolveApiMessage(error));
+    }
+  }
+
+  if (sectionAllowed("mail")) {
+    try {
+      const workspace = await getMailWorkspace();
+      mailDomains.value = workspace.domains.map((domain) => domain.name);
+    } catch (error) {
+      failures.push(resolveApiMessage(error));
+    }
+  }
+
+  entityIndexLoading.value = false;
+  // Başarısızlık yutulmaz: eksik dizinle "bulunamadı" demek yalan olurdu.
+  entityIndexError.value = failures.length > 0
+    ? `${t("panel.layout.searchIndexFailed")} ${failures.join(" · ")}`
+    : "";
+}
+
+function selectSearch(hit: SearchHit) {
   searchQuery.value = "";
-  handleNavigate(id);
+
+  if (hit.kind === "site" || hit.kind === "domain") {
+    emit("open-site", hit.siteName ?? hit.label);
+    closeMenu();
+    return;
+  }
+
+  if (hit.kind === "database" && hit.engine) {
+    databasesStore.selectEngine(hit.engine);
+    handleNavigate("database");
+    return;
+  }
+
+  if (hit.kind === "mailDomain" && hit.domain) {
+    emit("open-mail-domain", hit.domain);
+    closeMenu();
+    return;
+  }
+
+  handleNavigate(hit.sectionId);
 }
 
 // --- Dar ekran kabuğu: açılır kenar menü -----------------------------------
@@ -303,7 +524,7 @@ onBeforeUnmount(() => {
 
 function goToFirstResult() {
   if (searchResults.value.length > 0) {
-    selectSearch(searchResults.value[0].id);
+    selectSearch(searchResults.value[0]);
   }
 }
 
@@ -384,6 +605,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: "navigate", sectionId: string): void;
+  /** Aramadan seçilen site/alan adı: Web Siteleri bölümü O SİTENİN panosuyla açılır. */
+  (event: "open-site", siteName: string): void;
+  /** Aramadan seçilen posta alan adı: Posta bölümü o alan adı seçili açılır. */
+  (event: "open-mail-domain", domain: string): void;
   (event: "refresh"): void;
   (event: "logout"): void;
   (event: "toggle-theme"): void;
@@ -658,6 +883,8 @@ const twoFactorLabel = computed(() =>
   right: 0;
   display: grid;
   gap: 2px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
   padding: 6px;
   border-radius: var(--radius-md);
   border: 1px solid var(--panel-border);
@@ -675,6 +902,51 @@ const twoFactorLabel = computed(() =>
   color: var(--text-strong);
   text-align: left;
   cursor: pointer;
+}
+
+.search-result-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.search-result-copy strong {
+  font-size: 0.84rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-copy small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-kind {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.search-note {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.search-note.error {
+  color: var(--danger-text);
 }
 
 .search-result:hover {

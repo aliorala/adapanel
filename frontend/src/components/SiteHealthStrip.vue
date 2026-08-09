@@ -1,6 +1,13 @@
 <template>
-  <!-- Ölçüm başarısızsa hiçbir şey çizmeyiz: şerit sessizce kaybolur, sayfa bozulmaz. -->
-  <section v-if="loading || health" class="site-health-strip" :aria-busy="loading ? 'true' : 'false'">
+  <!--
+    ÖLÇÜM BAŞARISIZSA ŞERİT KAYBOLMAZ.
+
+    Eskiden `health` null kalıyor ve bütün şerit sessizce yok oluyordu: kullanıcı "dışarıdan
+    görünüm" diye bir şeyin var olduğunu bile bilmiyordu. Oysa bu bileşenin varlık sebebi tam
+    olarak "ölçemedik"i "sorun yok"tan ayırmak. Üç durum artık ayrı: ölçülüyor / ölçüm sonucu /
+    ölçüm yapılamadı (+ tekrar dene).
+  -->
+  <section v-if="loading || health || loadError.message.value" class="site-health-strip" :aria-busy="loading ? 'true' : 'false'">
     <div class="health-head">
       <span class="health-label">
         {{ label("title", "Dışarıdan görünüm") }}
@@ -52,6 +59,12 @@
       </span>
     </div>
 
+    <SectionLoadError
+      v-else-if="loadError.message.value"
+      :message="loadError.message.value"
+      :busy="loading"
+      @retry="load" />
+
     <div class="row-actions health-foot">
       <span v-if="health" class="meta">
         {{ label("checkedAt", "Ölçüm: {time}", { time: checkedAtText }) }}
@@ -69,7 +82,9 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getSiteHealth, type SiteHealth, type SiteHealthCheck, type SiteHealthStatus } from "../api/siteHealth";
+import { useSectionError } from "../composables/useNotice";
 import FieldHint from "./FieldHint.vue";
+import SectionLoadError from "./SectionLoadError.vue";
 
 /**
  * Bir sitenin DIŞARIDAN görünen sağlığını tek satırda gösteren şerit.
@@ -82,7 +97,8 @@ const { t } = useI18n();
 
 const health = ref<SiteHealth | null>(null);
 const loading = ref(false);
-// Ölçüm başarısız → şerit sessizce kaybolur (health null kalır, hata kutusu göstermeyiz).
+// Ölçüm başarısız → "okunamadı" durumu; BOŞ durumdan ayrı tutulur ve tekrar denenebilir.
+const loadError = useSectionError();
 let requestId = 0;
 
 // i18n anahtarları başka bir ajanda; anahtar henüz yoksa ham anahtar yerine TR metni göster
@@ -213,6 +229,7 @@ async function load() {
   const siteName = props.siteName?.trim();
   if (!siteName) {
     health.value = null;
+    loadError.clear();
     return;
   }
 
@@ -224,10 +241,12 @@ async function load() {
       return;
     }
     health.value = result;
-  } catch {
-    // Sessiz başarısızlık: ölçüm yapılamadıysa şerit görünmez, sayfanın geri kalanı çalışmaya devam eder.
+    loadError.clear();
+  } catch (error) {
+    // Hata YUTULMAZ: ölçüm yapılamadığını söylemek, ölçüm yokmuş gibi davranmaktan iyidir.
     if (current === requestId) {
       health.value = null;
+      loadError.capture(error);
     }
   } finally {
     if (current === requestId) {
