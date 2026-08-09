@@ -1,7 +1,7 @@
-using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -35,8 +35,8 @@ public sealed class DatabasesController(
         await WriteAuditAsync(
             "database.credentials.registered",
             request.Engine,
-            $"Existing '{request.Engine}' server credentials were registered for management.",
-            cancellationToken);
+            request.Engine,
+            $"Existing '{request.Engine}' server credentials were registered for management.");
         return Ok(ApiResponse<DatabaseEngineStatusDto>.Ok(status, "database.credentials_saved"));
     }
 
@@ -81,7 +81,7 @@ public sealed class DatabasesController(
 
         if (repairTables is { Length: > 0 })
         {
-            await WriteAuditAsync("database.repaired", engine, $"Database '{name}' tables repaired: {string.Join(", ", repairTables)}.", cancellationToken);
+            await WriteAuditAsync("database.repaired", engine, name, $"Tables repaired: {string.Join(", ", repairTables)}.");
         }
 
         return Ok(ApiResponse<DatabaseCheckResultDto>.Ok(sonuc));
@@ -118,7 +118,7 @@ public sealed class DatabasesController(
             await dbOwnership.RecordAsync(engine, name, mevcutSahip, site.Name, cancellationToken);
         }
 
-        await WriteAuditAsync("database.moved", engine, $"Database '{name}' moved to site '{site.Name}'.", cancellationToken);
+        await WriteAuditAsync("database.moved", engine, name, $"Database moved to site '{site.Name}'.");
         return Ok(ApiResponse<object>.Ok(new { name, site = site.Name }, "database.moved"));
     }
 
@@ -131,10 +131,10 @@ public sealed class DatabasesController(
         await WriteAuditAsync(
             "database.hardened",
             engine,
+            engine,
             removed.Count == 0
-                ? $"Hardening '{engine}': no insecure admin accounts found."
-                : $"Hardening '{engine}': removed {string.Join(", ", removed)}.",
-            cancellationToken);
+                ? "Hardening: no insecure admin accounts found."
+                : $"Hardening: removed {string.Join(", ", removed)}.");
         return Ok(ApiResponse<IReadOnlyList<string>>.Ok(removed, "database.hardened"));
     }
 
@@ -144,7 +144,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.CreateDatabaseAsync(request, cancellationToken);
-        await WriteAuditAsync("database.create.completed", request.Engine, $"Database '{request.Name}' was created.", cancellationToken);
+        await WriteAuditAsync("database.create.completed", request.Engine, request.Name, "Database was created.");
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.create.success"));
     }
 
@@ -156,7 +156,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.ImportDatabaseAsync(request, cancellationToken);
-        await WriteAuditAsync("database.import.completed", request.Engine, $"Database '{request.DatabaseName}' bound to user '{request.UserName}'.", cancellationToken);
+        await WriteAuditAsync("database.import.completed", request.Engine, request.DatabaseName, $"Database bound to user '{request.UserName}'.");
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.import.success"));
     }
 
@@ -168,7 +168,7 @@ public sealed class DatabasesController(
     {
         await databaseService.DeleteDatabaseAsync(engine, name, cancellationToken);
         await dbOwnership.RemoveAsync(engine, name, cancellationToken); // M1: sahiplik kaydını temizle (kota over-count olmasın)
-        await WriteAuditAsync("database.delete.completed", engine, $"Database '{name}' was removed.", cancellationToken);
+        await WriteAuditAsync("database.delete.completed", engine, name, "Database was removed.");
         return Ok(ApiResponse<object>.Ok(new { engine, name }, "database.delete.success"));
     }
 
@@ -178,7 +178,17 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.CreateUserAsync(request, cancellationToken);
-        await WriteAuditAsync("database.user.created", request.Engine, $"Database user '{request.UserName}' was created.", cancellationToken);
+        // PAROLA YAZILMAZ: request.Password kayda hiç girmez. Yazılan şey kullanıcının kimliği,
+        // hangi host'tan bağlanabildiği ve (varsa) doğrudan tam yetki aldığı veritabanıdır —
+        // "bu hesap neye erişebiliyordu" sorusunun cevabı bunlar.
+        await WriteAuditAsync(
+            "database.user.created",
+            request.Engine,
+            request.UserName,
+            $"Database user created for host '{request.AllowedHost}'"
+            + (string.IsNullOrWhiteSpace(request.DatabaseName)
+                ? " with no grants."
+                : $" with full access to '{request.DatabaseName}'."));
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.user_created"));
     }
 
@@ -188,7 +198,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.SetUserPasswordAsync(request, cancellationToken);
-        await WriteAuditAsync("database.user.password_changed", request.Engine, $"Password changed for database user '{request.UserName}'.", cancellationToken);
+        await WriteAuditAsync("database.user.password_changed", request.Engine, request.UserName, "Database user password was changed.");
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.user_password_changed"));
     }
 
@@ -200,7 +210,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         await databaseService.DeleteUserAsync(engine, userName, host, cancellationToken);
-        await WriteAuditAsync("database.user.deleted", engine, $"Database user '{userName}' was removed.", cancellationToken);
+        await WriteAuditAsync("database.user.deleted", engine, userName, $"Database user for host '{host}' was removed.");
         return Ok(ApiResponse<object>.Ok(new { engine, userName }, "database.user_deleted"));
     }
 
@@ -210,11 +220,14 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.GrantAccessAsync(request, cancellationToken);
+        // GRANT bir YETKİLENDİRME değişikliğidir: hangi hakların verildiği yazılmazsa kayıt
+        // "bir şey değişti" demekten öteye geçmez ve uyuşmazlıkta işe yaramaz.
         await WriteAuditAsync(
             "database.grant.updated",
             request.Engine,
-            $"Access for user '{request.UserName}' on database '{request.DatabaseName}' was updated.",
-            cancellationToken);
+            request.DatabaseName,
+            $"Access for user '{request.UserName}'@'{request.AllowedHost}' set to: "
+            + (request.Privileges.Length == 0 ? "ALL" : string.Join(", ", request.Privileges)));
 
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.grant_updated"));
     }
@@ -229,8 +242,8 @@ public sealed class DatabasesController(
         await WriteAuditAsync(
             "database.transfer.completed",
             request.Engine,
-            $"Database '{result.SourceDatabase}' from {request.SourceHost} was transferred to '{result.TargetDatabase}'.",
-            cancellationToken);
+            result.TargetDatabase,
+            $"Database '{result.SourceDatabase}' from {request.SourceHost} was transferred here.");
         return Ok(ApiResponse<DatabaseTransferResultDto>.Ok(result, "database.transfer.success"));
     }
 
@@ -251,19 +264,26 @@ public sealed class DatabasesController(
         await WriteAuditAsync(
             request.Enabled ? "database.remote.enabled" : "database.remote.disabled",
             "mariadb",
-            $"Remote DB access enabled={request.Enabled}, ip={request.AllowedIp ?? "(any)"}.",
-            cancellationToken);
+            "mariadb",
+            $"Remote DB access enabled={request.Enabled}, ip={request.AllowedIp ?? "(any)"}.");
         return Ok(ApiResponse<RemoteDbAccessDto>.Ok(dto, request.Enabled ? "database.remote_enabled" : "database.remote_disabled"));
     }
 
-    private Task WriteAuditAsync(string action, string engine, string detail, CancellationToken cancellationToken)
-    {
-        return auditService.WriteAsync(
-            action,
-            "database",
-            $"[{engine}] {detail}",
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
-    }
+    /// <summary>
+    /// Bu denetleyicinin denetim kaydı yazma kalıbı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kimlik/IP çözümü ve hata yalıtımı artık ORTAK yardımcıya (<c>HttpAuditExtensions</c>)
+    /// devredildi — burada yalnızca bu modüle özgü kısım kalıyor: motor etiketi ve hedefin adı.
+    /// Önceden bu metot kimliği/IP'yi kendi çözüyordu ve aynı kod panelin başka uçlarında da
+    /// tekrarlanacaktı; kopya olduğu sürece biri eksik kalırdı.
+    /// </para>
+    /// <para>
+    /// <c>resource</c> artık "database" gibi sabit bir tür değil, işlemin HEDEFİ (veritabanı ya da
+    /// kullanıcı adı). Denetim kaydının cevaplaması gereken soru "neye" — motor bilgisi ayrıntıya taşındı.
+    /// </para>
+    /// </remarks>
+    private Task WriteAuditAsync(string action, string engine, string target, string detail) =>
+        auditService.AuditAsync(HttpContext, action, target, $"[{engine}] {detail}");
 }

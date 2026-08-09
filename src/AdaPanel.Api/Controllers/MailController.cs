@@ -3,11 +3,17 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
+// DENETİM KAYDI: posta kutusu açma, PAROLA DEĞİŞTİRME ve alias oluşturma buradan yapılır ve
+// bunların hiçbiri iz bırakmıyordu. Bu, kapatılan çapraz-kiracı açığının ana istismar yüzeyiydi:
+// saldırgan kurbanın alan adında hesap açıp alias tanımlayarak postasını alabiliyordu ve panelde
+// bunun HİÇBİR kaydı kalmıyordu — açık kapatıldıktan sonra bile "daha önce istismar edildi mi"
+// sorusu cevapsızdı. Artık her durum değiştiren işlem yazılıyor; PAROLA DEĞERİ asla.
 [ApiController]
 [Authorize(Roles = "Administrator,Customer,Reseller")]
 [RequireSubUserSection("mail")]
@@ -15,7 +21,8 @@ namespace AdaPanel.Api.Controllers;
 public sealed class MailController(
     IMailService mailService,
     IWebmailService webmailService,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IAuditService auditService) : ControllerBase
 {
     /// <summary>
     /// Tek tık webmail (Roundcube): gerekirse kurar/yapılandırır ve açılacak URL'i döndürür.
@@ -24,7 +31,10 @@ public sealed class MailController(
     [HttpPost("webmail/open")]
     public async Task<ActionResult<ApiResponse<WebmailOpenDto>>> OpenWebmailAsync(CancellationToken cancellationToken)
     {
+        // "Aç" masum görünür ama gerekirse Roundcube'u KURAR/yapılandırır — yani sunucuda durum
+        // değiştirir. Bu yüzden kayda geçer.
         var result = await webmailService.OpenAsync(Request.Host.Host, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "mail.webmail.opened", "webmail", "Webmail was opened (installed/configured if needed).");
         return Ok(ApiResponse<WebmailOpenDto>.Ok(result));
     }
 
@@ -69,6 +79,10 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> ConfigureAsync([FromBody] ConfigureMailRequest request, CancellationToken cancellationToken)
     {
         var workspace = await mailService.ConfigureAsync(request, cancellationToken);
+
+        // request.AdminPassword KAYDA GİRMEZ — posta sunucusunun yönetici parolasıdır.
+        await auditService.AuditAsync(HttpContext, "mail.configured", "mail-server", "Mail server was configured.");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.configured"));
     }
 
@@ -98,6 +112,12 @@ public sealed class MailController(
                 request.DomainName,
                 exception.Message);
         }
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.domain.created",
+            request.DomainName,
+            $"Mail domain created (DNS records auto-applied: {dnsApplied}).");
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, dnsApplied ? "mail.domain_created_dns" : "mail.domain_created"));
     }
@@ -140,6 +160,10 @@ public sealed class MailController(
             }
         }
 
+        // Alan adı silmek, o alandaki BÜTÜN posta kutularını ve içeriğini götürür — panelin en
+        // yıkıcı posta işlemi; iz bırakmaması düşünülemez.
+        await auditService.AuditAsync(HttpContext, "mail.domain.deleted", domainName, "Mail domain and its mailboxes were deleted.");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.domain_deleted"));
     }
 
@@ -170,6 +194,14 @@ public sealed class MailController(
         await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
         await EnsureMailboxQuotaAsync(cancellationToken);
         var workspace = await mailService.CreateAccountAsync(request, cancellationToken);
+
+        // request.Password KAYDA GİRMEZ.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.account.created",
+            NormalizeAddress(request.Address, request.Domain),
+            $"Mailbox created with {request.MaxSizeMB} MB quota.");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_created"));
     }
 
@@ -178,6 +210,7 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteAccountAsync(address, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "mail.account.deleted", address, "Mailbox and its messages were deleted.");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_deleted"));
     }
 
@@ -186,6 +219,15 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
         var workspace = await mailService.SetAccountPasswordAsync(request, cancellationToken);
+
+        // Posta kutusu parolasını değiştirmek, o kutunun TÜM geçmiş yazışmasını ele geçirmektir.
+        // Bu yüzden en kritik izlerden biri — ama yazılan şey OLGUDUR, parolanın kendisi değil.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.account.password_changed",
+            request.Address,
+            "Mailbox password was changed.");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.password_changed"));
     }
 
@@ -202,6 +244,14 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
         var dto = await mailService.SetAutoResponderAsync(request, cancellationToken);
+
+        // Otomatik yanıt METNİ yazılmaz (kişisel/serbest içerik); yalnız açıldı/kapandı olgusu.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.autoresponder.updated",
+            request.Address,
+            $"Auto-responder enabled={request.Enabled}.");
+
         return Ok(ApiResponse<MailAutoResponderDto>.Ok(dto, "mail.autoresponder_saved"));
     }
 
@@ -212,6 +262,16 @@ public sealed class MailController(
         await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
         await EnsureAddressDomainAsync(request.Target, request.Domain, cancellationToken);
         var workspace = await mailService.CreateAliasAsync(request, cancellationToken);
+
+        // ALIAS = SESSİZ POSTA YÖNLENDİRME. Kurbanın adresine tanımlanan bir alias, gelen postayı
+        // saldırgana kopyalar ve kutuda hiçbir iz bırakmaz. HEDEF adres de yazılır: "nereye
+        // yönlendirildi" sorusunun cevabı olmadan bu kayıt işe yaramaz.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.alias.created",
+            NormalizeAddress(request.Address, request.Domain),
+            $"Alias forwards to '{request.Target}'.");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_created"));
     }
 
@@ -220,6 +280,7 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteAliasAsync(address, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "mail.alias.deleted", address, "Mail alias was removed.");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_deleted"));
     }
 
@@ -229,6 +290,11 @@ public sealed class MailController(
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
         await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
         var workspace = await mailService.CreateMailListAsync(request, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.list.created",
+            NormalizeAddress(request.Address, request.Domain),
+            $"Mailing list created with {request.Recipients.Count} recipient(s).");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_created"));
     }
 
@@ -237,6 +303,15 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
         var workspace = await mailService.SetMailListRecipientsAsync(request, cancellationToken);
+
+        // Alıcı listesine yabancı bir adres eklemek, listeye giden her postayı dışarı taşır —
+        // alias ile aynı sınıftan bir sızdırma yolu. Bu yüzden alıcılar da yazılır (uzunsa kırpılır).
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.list.recipients_updated",
+            request.Address,
+            $"Recipients set to: {string.Join(", ", request.Recipients)}");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_updated"));
     }
 
@@ -245,6 +320,7 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteMailListAsync(address, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "mail.list.deleted", address, "Mailing list was removed.");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_deleted"));
     }
 
@@ -281,6 +357,11 @@ public sealed class MailController(
         CancellationToken cancellationToken)
     {
         var limit = await mailService.SetOutboundLimitAsync(request.Domain, request.MessagesPerHour, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.outbound_limit.updated",
+            request.Domain,
+            $"Outbound limit set to {request.MessagesPerHour} message(s)/hour (0 = unlimited).");
         return Ok(ApiResponse<MailOutboundLimitDto>.Ok(limit, "mail.outbound_limit_saved"));
     }
 
@@ -289,6 +370,11 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
         var workspace = await mailService.SetDomainQuotaAsync(request, cancellationToken);
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.domain.quota_updated",
+            request.Domain,
+            $"Domain mail quota set to {request.MaxSizeMB} MB.");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.quota_saved"));
     }
 
@@ -297,6 +383,15 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
         var workspace = await mailService.SetAccountQuotaAsync(request, cancellationToken);
+
+        // Kotayı KÜÇÜLTMEK gelen postanın reddedilmesine yol açar; sessiz bir hizmet kesintisi
+        // yoludur (kapatılan çapraz-kiracı açığının somut etkilerinden biriydi).
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.account.quota_updated",
+            request.Address,
+            $"Mailbox quota set to {request.MaxSizeMB} MB.");
+
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.quota_saved"));
     }
 
@@ -350,6 +445,11 @@ public sealed class MailController(
         try
         {
             var result = await ApplyDnsRecordsAsync(domain, dnsService, cancellationToken);
+            await auditService.AuditAsync(
+                HttpContext,
+                "mail.dns.applied",
+                domain,
+                $"{result.AppliedCount} mail DNS record(s) written to zone '{result.ZoneName}'.");
             return Ok(ApiResponse<ApplyMailDnsResultDto>.Ok(result, "mail.dns_applied"));
         }
         catch (Core.Common.AppException exception) when (exception.HttpStatusCode == 404)
@@ -398,6 +498,11 @@ public sealed class MailController(
     {
         // Sertifika alma uzun sürebilir (ACME doğrulaması); istemci iptaline bağlanmaz.
         var status = await mailService.IssueCertificateAsync(request, CancellationToken.None);
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.certificate.issued",
+            string.IsNullOrWhiteSpace(request.HostName) ? request.Domain : request.HostName,
+            "Mail server TLS certificate was issued.");
         return Ok(ApiResponse<MailCertificateDto>.Ok(status, "mail.certificate_issued"));
     }
 
@@ -414,6 +519,14 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailSpamSettingsDto>>> UpdateSpamAsync([FromBody] UpdateMailSpamSettingsRequest request, CancellationToken cancellationToken)
     {
         var settings = await mailService.UpdateSpamSettingsAsync(request, cancellationToken);
+
+        // Spam korumasını kapatmak sunucu genelini etkiler (itibar/kara liste riski).
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.spam.updated",
+            "mail-server",
+            $"Spam filtering enabled={request.Enabled}, spam score={request.ScoreSpam}, reject={request.ScoreReject}, greylist={request.GreylistEnabled}.");
+
         return Ok(ApiResponse<MailSpamSettingsDto>.Ok(settings, "mail.spam_saved"));
     }
 
@@ -454,6 +567,23 @@ public sealed class MailController(
     {
         var index = (address ?? string.Empty).IndexOf('@');
         return index >= 0 ? address![(index + 1)..].Trim() : string.Empty;
+    }
+
+    /// <summary>
+    /// Denetim kaydının "neye" alanı için tam adres. İstekte adres yerel kısım ("info") ya da tam
+    /// adres ("info@example.com") olabilir; kayıtta HER ZAMAN tam adres durmalı, yoksa iki farklı
+    /// alan adındaki aynı yerel kısım kayıtta ayırt edilemez.
+    /// </summary>
+    private static string NormalizeAddress(string? address, string? fallbackDomain)
+    {
+        var trimmed = (address ?? string.Empty).Trim();
+        if (trimmed.Length == 0 || trimmed.Contains('@'))
+        {
+            return trimmed;
+        }
+
+        var domain = (fallbackDomain ?? string.Empty).Trim();
+        return domain.Length == 0 ? trimmed : $"{trimmed}@{domain}";
     }
 
     /// <summary>

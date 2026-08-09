@@ -3,6 +3,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ftp;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,19 +12,26 @@ namespace AdaPanel.Api.Controllers;
 // Reseller (Bayi) yalnız kendi müşterilerinin sitelerine FTP kullanıcısı yönetebilir. FTP sunucusu
 // KURULUMU (ensure) server-level → admin-only. Liste, etkin sitelere göre filtrelenir; parola/silme
 // işleminde kullanıcının ait olduğu site çözülüp kapsam doğrulanır.
+//
+// DENETİM KAYDI: buradaki uçlar GERÇEK BİR WINDOWS YEREL HESABI açar/siler/parolasını değiştirir ve
+// bir klasör ağacına yazma izni verir. Yani panel dışında da sonucu olan işlemlerdir; iz bırakmazsa
+// sunucuda "bu hesabı kim açtı" sorusunun cevabı Windows tarafında da yoktur. Parola DEĞERİ asla
+// yazılmaz — yalnızca "değiştirildi" olgusu.
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller")]
 [Route("api/v1/ftp")]
 public sealed class FtpController(
     IFtpService ftpService,
     ICustomerScopeService customerScopes,
-    IIisSiteService iisSiteService) : ControllerBase
+    IIisSiteService iisSiteService,
+    IAuditService auditService) : ControllerBase
 {
     [HttpPost("ensure")]
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpServerStatusDto>>> EnsureServerAsync(CancellationToken cancellationToken)
     {
         var status = await ftpService.EnsureServerAsync(cancellationToken);
+        await auditService.AuditAsync(HttpContext, "ftp.server.ensured", "ftp-server", "FTP server installation/configuration ensured.");
         return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, "ftp.server_ready"));
     }
 
@@ -41,6 +49,15 @@ public sealed class FtpController(
     public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> SetTlsAsync([FromBody] FtpTlsRequest request, CancellationToken cancellationToken)
     {
         var requireSsl = await ftpService.SetRequireSslAsync(request.RequireSsl, cancellationToken);
+
+        // FTPS zorunluluğunun KAPATILMASI, bütün müşterilerin parolasını düz metne indirir —
+        // sunucu genelinde güvenlik seviyesini düşüren bir karardır ve kim aldığı bilinmelidir.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ftp.tls.updated",
+            "ftp-server",
+            $"FTPS requirement set to {requireSsl}.");
+
         return Ok(ApiResponse<FtpTlsStatusDto>.Ok(
             new FtpTlsStatusDto { RequireSsl = requireSsl },
             requireSsl ? "ftp.tls_required" : "ftp.tls_optional"));
@@ -90,6 +107,16 @@ public sealed class FtpController(
         }
 
         var user = await ftpService.CreateFtpUserAsync(request, cancellationToken);
+
+        // PAROLA YAZILMAZ: request.Password kayda hiç girmez. Yazılan şey hesabın kimliği,
+        // hangi siteye bağlandığı ve hangi ana dizine yazma hakkı aldığıdır — bir olaydan sonra
+        // "bu hesap neye erişebiliyordu" sorusunu cevaplayan alanlar bunlar.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ftp.user.created",
+            user.UserName,
+            $"FTP account created for site '{user.SiteName}' with home '{user.HomePath}'.");
+
         return Ok(ApiResponse<FtpUserDto>.Ok(user, "ftp.user_created"));
     }
 
@@ -98,6 +125,14 @@ public sealed class FtpController(
     {
         await EnsureFtpUserScopeAsync(request.UserName, cancellationToken);
         await ftpService.SetFtpPasswordAsync(request, cancellationToken);
+
+        // Yalnız OLGU yazılır ("değiştirildi"), değer değil.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ftp.user.password_changed",
+            request.UserName,
+            "FTP account password was changed.");
+
         return Ok(ApiResponse<object>.Ok(new { request.UserName }, "ftp.password_changed"));
     }
 
@@ -106,6 +141,7 @@ public sealed class FtpController(
     {
         await EnsureFtpUserScopeAsync(userName, cancellationToken);
         await ftpService.DeleteFtpUserAsync(userName, cancellationToken);
+        await auditService.AuditAsync(HttpContext, "ftp.user.deleted", userName, "FTP account was removed.");
         return Ok(ApiResponse<object>.Ok(new { userName }, "ftp.user_deleted"));
     }
 

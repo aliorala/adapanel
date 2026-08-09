@@ -39,6 +39,27 @@ internal sealed class RecordingAuditService : IAuditService
 
     public Task<IReadOnlyCollection<AuditLogDto>> GetRecentAsync(int take, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<AuditLogDto>>([]);
+
+    // OKUMA/SAKLAMA uclari bu sahtede kasten patlar (dosyanin basindaki "Throwing" kurali):
+    // AuthService bunlara DOKUNMAMALI; dokunursa test sessizce gecmek yerine kirilsin.
+    // Denetim kaydi OKUMA davranisi AuditLogReadTests'te GERCEK AuditService ile dogrulanir.
+    public Task<AuditLogPageDto> SearchAsync(AuditLogQuery query, AuditVisibility visibility, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Bu testlerde denetim kaydi okunmamali.");
+
+    public IAsyncEnumerable<AuditLogDto> StreamAsync(AuditLogQuery query, AuditVisibility visibility, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Bu testlerde denetim kaydi disa aktarilmamali.");
+
+    public Task<AuditVisibility> ResolveVisibilityAsync(Guid userId, UserRole role, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Bu testlerde kapsam cozulmemeli.");
+
+    public Task<AuditRetentionSettingsDto> GetRetentionAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Bu testlerde saklama politikasi okunmamali.");
+
+    public Task<AuditRetentionSettingsDto> SetRetentionAsync(int retentionDays, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Bu testlerde saklama politikasi degistirilmemeli.");
+
+    public Task<int> PurgeAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Bu testlerde temizlik calistirilmamali.");
 }
 
 internal sealed class CountingBruteForceProtection : IBruteForceProtectionService
