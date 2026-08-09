@@ -85,6 +85,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFirewallService, Firewall.FirewallService>();
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
+        // Yedek şifreleme parolasının DPAPI korumalı kasası (zamanlanmış yedekler için şart).
+        services.AddScoped<Backup.BackupEncryptionStore>();
         services.AddScoped<IBackupService, Backup.BackupService>();
         services.AddScoped<IFileMigrationService, Migration.FileMigrationService>();
         services.AddScoped<ISiteMigrationService, Migration.SiteMigrationService>();

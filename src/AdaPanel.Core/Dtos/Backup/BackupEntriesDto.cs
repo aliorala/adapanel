@@ -41,6 +41,11 @@ public sealed class RestoreBackupItemsRequest
 
     /// <summary>Boşsa sitenin orijinal kök dizinine geri yüklenir.</summary>
     public string TargetPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Şifreli yedeğin parolası. Boş bırakılırsa panelde KAYITLI parola denenir.
+    /// </summary>
+    public string EncryptionPassword { get; set; } = string.Empty;
 }
 
 public sealed class RestoreBackupItemsResultDto

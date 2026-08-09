@@ -960,6 +960,247 @@ public sealed class WinAcmeSslService(
         }
     }
 
+    // =====================================================================================
+    // HTTPS BAĞLAMASINI KALDIRMA
+    //
+    // Denetimde ölçülen durum: RemoveSslCertificateRequest DTO'su yazılmış ama servis metodu, uç ve
+    // ekran hiç yapılmamıştı — yani panelde HTTPS bağlamasını kaldırmanın HİÇBİR yolu yoktu.
+    // Kullanıcı yanlış sertifika bağladığında ya da alan adını bıraktığında elle IIS'e girmek
+    // zorundaydı.
+    //
+    // Buradaki iki kural pazarlık konusu değildir:
+    //  (1) Siteyi ERİŞİLEMEZ BIRAKMA. "Force HTTPS" açıkken son HTTPS bağlamasını kaldırmak,
+    //      siteyi olmayan bir dinleyiciye yönlendirmek demektir; yönlendirme önce kapatılır,
+    //      kapatılamıyorsa işlem yapılmaz.
+    //  (2) Sertifikayı TAHMİNLE silme. "Başka site kullanıyor mu" sorusu IIS'ten OKUNARAK
+    //      yanıtlanır; okunamıyorsa silinmez.
+    // =====================================================================================
+
+    public async Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(
+        RemoveSslCertificateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
+        var port = request.Port <= 0 ? 443 : request.Port;
+
+        var allBindings = await ReadHttpsBindingsAsync(cancellationToken);
+        var siteBindings = allBindings
+            .Where(binding => string.Equals(binding.SiteName, site.Name, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        var (target, errorKey) = SslRemovalPlan.SelectTarget(siteBindings, request.HostName, port);
+        if (target is null)
+        {
+            throw new AppException(errorKey, 404, errorKey == SslRemovalPlan.HostNameRequiredKey ? 400 : 404);
+        }
+
+        var result = new RemoveSslCertificateResultDto
+        {
+            SiteName = site.Name,
+            HostName = target.HostName,
+            Port = target.Port,
+            CertificateThumbprint = target.Thumbprint
+        };
+
+        // (1) ÖNCE yönlendirme. Sıralama bilinçlidir: önce bağlama kaldırılsaydı, yönlendirme
+        // kapatılana kadar site erişilemez kalırdı. Bu sırada ise en kötü ihtimalle site HTTPS'i
+        // korur ama zorlaması kalkar — erişilebilirlik bozulmaz.
+        var sonBaglama = SslRemovalPlan.IsLastHttpsBindingOfSite(siteBindings, target);
+        if (sonBaglama && await IsHttpsRedirectEnabledAsync(site.Name, cancellationToken))
+        {
+            await ApplyHttpsRedirectAsync(site.Name, false, cancellationToken);
+
+            // ApplyHttpsRedirectAsync best-effort'tur (URL Rewrite yoksa sessizce geçer): kapandığını
+            // VARSAYMAYIZ, ÖLÇERİZ. Hâlâ açıksa bağlamaya dokunmayız.
+            if (await IsHttpsRedirectEnabledAsync(site.Name, cancellationToken))
+            {
+                throw new AppException(
+                    "ssl.remove_would_break_site",
+                    409,
+                    409,
+                    $"Site '{site.Name}' HTTP->HTTPS yonlendirmesi kapatilamadi; son HTTPS baglamasi kaldirilirsa site erisilemez kalir.");
+            }
+
+            result.HttpsRedirectDisabled = true;
+        }
+
+        // (2) Bağlamayı kaldır ve KALKTIĞINI DOĞRULA.
+        await RemoveHttpsBindingAsync(site.Name, target, cancellationToken);
+
+        var afterBindings = await ReadHttpsBindingsAsync(cancellationToken);
+        var halaVar = afterBindings.Any(binding =>
+            string.Equals(binding.SiteName, target.SiteName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(binding.BindingInformation, target.BindingInformation, StringComparison.OrdinalIgnoreCase));
+        if (halaVar)
+        {
+            throw new AppException("ssl.remove_binding_failed", 500, 500, target.BindingInformation);
+        }
+
+        result.BindingRemoved = true;
+
+        // (3) Panel kaydı (ssl.json) temizlenir; yoksa liste öksüz bir sertifika göstermeye devam ederdi.
+        await RemoveCertificateStateAsync(site.Name, target.HostName, target.Port, cancellationToken);
+
+        // (4) Sertifika deposu kararı — ÖLÇÜMLE.
+        var digerKullananlar = SslRemovalPlan.FindOtherUsersOfCertificate(afterBindings, target);
+        result.CertificateUsedBy = digerKullananlar;
+
+        if (!request.RemoveCertificateFromStore)
+        {
+            result.CertificateAction = "kept";
+        }
+        else if (digerKullananlar.Length > 0)
+        {
+            // İSTENDİ AMA YAPILMADI ve bu SÖYLENİR. Sessizce silmek başka siteleri anında bozardı;
+            // sessizce atlamak da kullanıcıya sildiğimizi düşündürürdü.
+            result.CertificateAction = "kept_in_use";
+            result.Detail = string.Join(", ", digerKullananlar);
+        }
+        else
+        {
+            var (silindi, detay) = await TryDeleteCertificateAsync(target.Thumbprint, cancellationToken);
+            result.CertificateAction = silindi ? "removed" : "remove_failed";
+            result.Detail = detay;
+        }
+
+        result.Workspace = await GetSiteWorkspaceAsync(site.Name, cancellationToken);
+        return result;
+    }
+
+    /// <summary>
+    /// TÜM sitelerin HTTPS bağlamalarını (parmak izi + depo dahil) IIS'ten okur.
+    /// <para>
+    /// Okunamazsa <c>ssl.bindings_unreadable</c> ile durur — boş liste DÖNMEZ. Boş liste dönmek
+    /// "hiçbir site bu sertifikayı kullanmıyor" anlamına gelirdi ve sertifika silme kararını
+    /// ölçüm yerine cehalete dayandırırdı.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyCollection<IisHttpsBinding>> ReadHttpsBindingsAsync(CancellationToken cancellationToken)
+    {
+        const string script = """
+            Import-Module WebAdministration -ErrorAction Stop
+            $ErrorActionPreference = 'Stop'
+            $liste = @()
+            foreach ($s in Get-Website) {
+              foreach ($b in $s.Bindings.Collection) {
+                if ($b.protocol -ne 'https') { continue }
+                $thumb = ''
+                try { if ($b.certificateHash) { $thumb = ($b.certificateHash | ForEach-Object { $_.ToString('x2') }) -join '' } } catch { }
+                $store = ''
+                try { $store = [string]$b.certificateStoreName } catch { }
+                $liste += [pscustomobject]@{
+                  siteName = [string]$s.Name
+                  bindingInformation = [string]$b.bindingInformation
+                  thumbprint = $thumb
+                  storeName = $store
+                }
+              }
+            }
+            ConvertTo-Json @($liste) -Depth 3 -Compress
+            """;
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException(
+                "ssl.bindings_unreadable",
+                503,
+                503,
+                string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
+        }
+
+        var json = (result.StandardOutput ?? string.Empty).Trim();
+        if (json.Length == 0)
+        {
+            // Gerçekten hiç HTTPS bağlaması yoksa ConvertTo-Json "[]" yazar. Boş çıktı, ölçümün
+            // yapılamadığı anlamına gelir.
+            throw new AppException("ssl.bindings_unreadable", 503, 503, "IIS baglama listesi bos dondu.");
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<IisHttpsBinding>>(
+                json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+        }
+        catch (System.Text.Json.JsonException exception)
+        {
+            throw new AppException("ssl.bindings_unreadable", 503, 503, Kirp(exception.Message));
+        }
+    }
+
+    private async Task RemoveHttpsBindingAsync(string siteName, IisHttpsBinding target, CancellationToken cancellationToken)
+    {
+        var site = siteName.Replace("'", "''");
+        var dn = target.HostName.Replace("'", "''");
+
+        var script = $$"""
+            Import-Module WebAdministration -ErrorAction Stop
+            $ErrorActionPreference = 'Stop'
+            $site = '{{site}}'; $dn = '{{dn}}'; $port = {{target.Port}}
+            $b = Get-WebBinding -Name $site -Protocol https -Port $port -HostHeader $dn -ErrorAction SilentlyContinue
+            if (-not $b) { 'NOTFOUND'; return }
+            $b | Remove-WebBinding
+            'OK'
+            """;
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException(
+                "ssl.remove_binding_failed",
+                500,
+                500,
+                string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
+        }
+    }
+
+    /// <summary>
+    /// Sertifikayı LocalMachine depolarından siler. Çağrılmadan ÖNCE başka kullanan olmadığı
+    /// ölçülmüş olmalıdır (bkz. <see cref="SslRemovalPlan.FindOtherUsersOfCertificate"/>).
+    /// </summary>
+    private async Task<(bool Removed, string Detail)> TryDeleteCertificateAsync(string thumbprint, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(thumbprint))
+        {
+            return (false, "Sertifika parmak izi okunamadi.");
+        }
+
+        var thumb = thumbprint.Replace("'", "''");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $thumb = '{{thumb}}'
+            $silinen = @()
+            foreach ($store in 'My','WebHosting') {
+              $yol = "Cert:\LocalMachine\$store\$thumb"
+              if (Test-Path $yol) { Remove-Item $yol -Force; $silinen += $store }
+            }
+            if ($silinen.Count -eq 0) { 'NONE' } else { ($silinen -join ',') }
+            """;
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            logger.LogWarning("Sertifika {Thumbprint} depodan silinemedi: {Error}", thumbprint, result.StandardError);
+            return (false, Kirp(string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError));
+        }
+
+        var cikti = (result.StandardOutput ?? string.Empty).Trim();
+        return cikti.Contains("NONE", StringComparison.Ordinal)
+            ? (false, "Sertifika depoda bulunamadi (zaten yok).")
+            : (true, cikti);
+    }
+
+    /// <summary>Panelin ssl.json kaydından tek bir bağlamayı siler (öksüz sertifika satırı kalmasın).</summary>
+    private async Task RemoveCertificateStateAsync(string siteName, string hostName, int port, CancellationToken cancellationToken)
+    {
+        await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing => existing
+            .Where(item => !(string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase) &&
+                             string.Equals(item.HostName, hostName, StringComparison.OrdinalIgnoreCase) &&
+                             (item.Port == port || item.Port == 0)))
+            .ToArray(), cancellationToken);
+    }
+
     public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
     {
         await fileStore.UpdateAsync(StatePath, Array.Empty<SslCertificateDto>(), existing => existing

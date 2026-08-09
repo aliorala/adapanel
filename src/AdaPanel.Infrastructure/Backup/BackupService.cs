@@ -15,7 +15,10 @@ public sealed class BackupService(
     IPanelPreferencesService preferencesService,
     IFtpService ftpService,
     JsonFileStore fileStore,
-    IHttpClientFactory httpClientFactory) : IBackupService
+    IHttpClientFactory httpClientFactory,
+    // İSTEĞE BAĞLI: şifreleme kasası. Verilmezse (dar kapsamlı testler) panelde kayıtlı parola
+    // yok sayılır; istekle gelen parola yine çalışır.
+    BackupEncryptionStore? encryptionStore = null) : IBackupService
 {
     private const string IndexPath = "config/backups.json";
 
@@ -38,6 +41,210 @@ public sealed class BackupService(
             .OrderByDescending(record => record.CreatedAtUtc)
             .ToArray();
     }
+
+    // =====================================================================================
+    // ŞİFRELEME (tek kaynak). Yedekler FTP/S3/WebDAV gibi ÜÇÜNCÜ TARAF depolara gidiyor;
+    // şifresiz bir arşiv müşterinin veritabanı dökümünü ve postasını o depoya erişen herkese
+    // açar. Biçim ve kripto BackupArchiveCipher'da; burada yalnızca "ne zaman, hangi parolayla"
+    // kararı verilir. Şifreleme ile yükleme/kayıt akışı tek yerde birleştirilmiştir
+    // (FinalizeBackupAsync): dört yedek türünün her birinde ayrı ayrı yazılsaydı, biri
+    // unutulduğunda o tür sessizce şifresiz kalırdı.
+    // =====================================================================================
+
+    /// <summary>
+    /// Kullanılacak şifreleme parolası: önce istekteki, yoksa panelde KAYITLI olan. İkisi de yoksa
+    /// boş döner = yedek şifresiz alınır. Kayıtlı parola, zamanlanmış (kimse ekranda değilken
+    /// çalışan) yedeklerin şifrelenebilmesinin tek yoludur.
+    /// </summary>
+    private async Task<string> ResolveEncryptionPasswordAsync(string? requestPassword, CancellationToken cancellationToken)
+    {
+        var password = (requestPassword ?? string.Empty).Trim();
+        if (password.Length > 0)
+        {
+            return password;
+        }
+
+        return encryptionStore is null ? string.Empty : await encryptionStore.GetPasswordAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Üretilmiş yedek dosyasını (gerekiyorsa) şifreler. Şifreleme başarısızsa hem yarım şifreli
+    /// dosya hem de DÜZ METİN kopya silinir ve hata yükselir: kullanıcı "şifreli yedek" istediyse
+    /// sessizce şifresiz bir dosya bırakmak, korumayı yalan söylemek olurdu.
+    /// </summary>
+    private static async Task<(string Path, string Name, bool Encrypted)> ProtectArchiveAsync(
+        string localPath,
+        string fileName,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        if (password.Length == 0)
+        {
+            return (localPath, fileName, false);
+        }
+
+        var encryptedPath = localPath + BackupArchiveCipher.EncryptedExtension;
+        try
+        {
+            await BackupArchiveCipher.EncryptFileAsync(localPath, encryptedPath, password, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            TryDeleteFile(encryptedPath);
+            TryDeleteFile(localPath);
+            throw new AppException("backup.encryption_failed", 500, 500, exception.Message);
+        }
+
+        // Düz metin kopya diskte KALMAZ; kalsaydı şifreleme yalnızca uzak kopyayı korur, sunucuda
+        // duran asıl dosya korumasız olurdu.
+        TryDeleteFile(localPath);
+        return (encryptedPath, fileName + BackupArchiveCipher.EncryptedExtension, true);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Temizlik best-effort.
+        }
+    }
+
+    /// <summary>
+    /// Her yedek akışının ORTAK son adımı: şifrele → uzak hedefe yükle → kaydı oluştur ve listeye ekle.
+    /// </summary>
+    private async Task<BackupRecordDto> FinalizeBackupAsync(
+        string localPath,
+        string fileName,
+        string type,
+        string source,
+        string format,
+        BackupTargetRequest request,
+        CancellationToken cancellationToken)
+    {
+        var password = await ResolveEncryptionPasswordAsync(request.EncryptionPassword, cancellationToken);
+        var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(localPath, fileName, password, cancellationToken);
+
+        var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
+        var remoteUri = await UploadToRemoteAsync(finalPath, finalName, target, cancellationToken);
+
+        var record = new BackupRecordDto
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = finalName,
+            Type = type,
+            Source = source,
+            Path = finalPath,
+            // Biçim ANLAMSAL kalır ("zip"/"sql"/"bak"): şifreleme bir sarmalayıcıdır, arşivin türünü
+            // değiştirmez. Geri yükleme yolları bu alana bakmaya devam eder.
+            Format = format,
+            CreatedAtUtc = DateTime.UtcNow,
+            Size = new FileInfo(finalPath).Length,
+            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
+            TargetType = target.Type,
+            RemoteUri = remoteUri,
+            Encrypted = encrypted
+        };
+
+        // Şifresiz yedek üçüncü taraf depoya çıktıysa bunu SÖYLERİZ. Sessiz kalmak, müşteri
+        // verisinin S3/FTP'de düz metin durduğunu kimsenin fark etmemesi demekti (KVKK/GDPR).
+        if (!encrypted && target.Type != "local")
+        {
+            record.Warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.remote_unencrypted",
+                Target = target.Type,
+                Detail = finalName
+            });
+        }
+
+        await AppendRecordAsync(record, cancellationToken);
+        return record;
+    }
+
+    /// <summary>
+    /// Yedeğin OKUNABİLİR hâli: şifresizse dosyanın kendisi, şifreliyse çözülmüş GEÇİCİ kopya.
+    /// Dispose edildiğinde geçici kopya silinir.
+    /// </summary>
+    private sealed class BackupContent(string filePath, string? temporaryPath) : IDisposable
+    {
+        public string FilePath { get; } = filePath;
+
+        public void Dispose()
+        {
+            if (temporaryPath is not null)
+            {
+                TryDeleteFile(temporaryPath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Kaydın arşivini okumaya hazırlar.
+    /// <para>
+    /// Şifreli mi kararı DOSYANIN BAŞLIĞINDAN verilir, kayıttaki bayraktan değil: eski (şifresiz)
+    /// yedekler çalışmaya devam etmeli, dosyası elle taşınmış/kaydı bozulmuş bir yedek de doğru
+    /// tanınmalıdır.
+    /// </para>
+    /// </summary>
+    private async Task<BackupContent> OpenContentAsync(BackupRecordDto record, string? password, CancellationToken cancellationToken)
+    {
+        if (!BackupArchiveCipher.IsEncryptedFile(record.Path))
+        {
+            return new BackupContent(record.Path, null);
+        }
+
+        var parola = await ResolveEncryptionPasswordAsync(password, cancellationToken);
+        if (parola.Length == 0)
+        {
+            // "Bozuk dosya" DEMEYİZ: dosya sağlam, parola eksik. Kullanıcı ne yapacağını bilmeli.
+            throw new AppException("backup.password_required", 400, 400);
+        }
+
+        var temporaryPath = Path.Combine(Path.GetTempPath(), $"adabk-open-{Guid.NewGuid():N}.tmp");
+        await BackupArchiveCipher.DecryptFileAsync(record.Path, temporaryPath, parola, cancellationToken);
+        return new BackupContent(temporaryPath, temporaryPath);
+    }
+
+    public async Task<BackupEncryptionSettingsDto> GetEncryptionSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        if (encryptionStore is null)
+        {
+            return new BackupEncryptionSettingsDto { Algorithm = EncryptionAlgorithmSummary };
+        }
+
+        var state = await encryptionStore.GetStateAsync(cancellationToken);
+        var password = await encryptionStore.GetPasswordAsync(cancellationToken);
+        return new BackupEncryptionSettingsDto
+        {
+            Enabled = state.Enabled,
+            // ÖLÇÜLMÜŞ değer: kayıt var ama çözülemiyorsa (panel taşınmış, DataProtection anahtarları
+            // gitmiş) "parola hazır" demek, zamanlanmış yedeklerin sessizce şifresiz alınmasıydı.
+            PasswordUsable = password.Length > 0,
+            UpdatedAtUtc = state.UpdatedAtUtc,
+            Algorithm = EncryptionAlgorithmSummary
+        };
+    }
+
+    public async Task<BackupEncryptionSettingsDto> SetEncryptionSettingsAsync(SetBackupEncryptionRequest request, CancellationToken cancellationToken = default)
+    {
+        if (encryptionStore is null)
+        {
+            throw new AppException("backup.encryption_unavailable", 503, 503);
+        }
+
+        await encryptionStore.SetPasswordAsync(request.Password, cancellationToken);
+        return await GetEncryptionSettingsAsync(cancellationToken);
+    }
+
+    private static readonly string EncryptionAlgorithmSummary =
+        $"AES-256-GCM / PBKDF2-SHA256 ({BackupArchiveCipher.Pbkdf2Iterations:N0} tur)";
 
     public async Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default)
     {
@@ -133,26 +340,7 @@ public sealed class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
-        var remoteUri = await UploadToRemoteAsync(targetPath, fileName, target, cancellationToken);
-
-        var record = new BackupRecordDto
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = fileName,
-            Type = "site",
-            Source = site.Name,
-            Path = targetPath,
-            Format = "zip",
-            CreatedAtUtc = DateTime.UtcNow,
-            Size = new FileInfo(targetPath).Length,
-            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
-            TargetType = target.Type,
-            RemoteUri = remoteUri
-        };
-
-        await AppendRecordAsync(record, cancellationToken);
-        return record;
+        return await FinalizeBackupAsync(targetPath, fileName, "site", site.Name, "zip", request, cancellationToken);
     }
 
     public async Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default)
@@ -173,26 +361,14 @@ public sealed class BackupService(
             FilePath = targetPath
         }, cancellationToken);
 
-        var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
-        var remoteUri = await UploadToRemoteAsync(targetPath, fileName, target, cancellationToken);
-
-        var record = new BackupRecordDto
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = fileName,
-            Type = "database",
-            Source = $"{dump.Engine}:{dump.DatabaseName}",
-            Path = targetPath,
-            Format = extension,
-            CreatedAtUtc = DateTime.UtcNow,
-            Size = dump.Size,
-            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
-            TargetType = target.Type,
-            RemoteUri = remoteUri
-        };
-
-        await AppendRecordAsync(record, cancellationToken);
-        return record;
+        return await FinalizeBackupAsync(
+            targetPath,
+            fileName,
+            "database",
+            $"{dump.Engine}:{dump.DatabaseName}",
+            extension,
+            request,
+            cancellationToken);
     }
 
     public async Task<BackupRecordDto> BackupPanelAsync(BackupPanelRequest request, CancellationToken cancellationToken = default)
@@ -276,26 +452,7 @@ public sealed class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
-        var remoteUri = await UploadToRemoteAsync(targetPath, fileName, target, cancellationToken);
-
-        var record = new BackupRecordDto
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = fileName,
-            Type = "panel",
-            Source = "panel",
-            Path = targetPath,
-            Format = "zip",
-            CreatedAtUtc = DateTime.UtcNow,
-            Size = new FileInfo(targetPath).Length,
-            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
-            TargetType = target.Type,
-            RemoteUri = remoteUri
-        };
-
-        await AppendRecordAsync(record, cancellationToken);
-        return record;
+        return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, cancellationToken);
     }
 
     // Çalışan süreç kilitlese bile (ör. SQLite adapanel.db) paylaşımlı okuma ile zip'e ekler.
@@ -560,29 +717,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             await StartStalwartAsync(cancellationToken);
         }
 
-        var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
-        var remoteUri = await UploadToRemoteAsync(targetPath, fileName, target, cancellationToken);
-
-        var record = new BackupRecordDto
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Name = fileName,
-            Type = "mail",
-            Source = "stalwart",
-            Path = targetPath,
-            Format = "zip",
-            CreatedAtUtc = DateTime.UtcNow,
-            Size = new FileInfo(targetPath).Length,
-            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
-            TargetType = target.Type,
-            RemoteUri = remoteUri
-        };
-
-        await AppendRecordAsync(record, cancellationToken);
-        return record;
+        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, cancellationToken);
     }
 
-    private async Task RestoreMailAsync(BackupRecordDto record, CancellationToken cancellationToken)
+    private async Task RestoreMailAsync(string archivePath, CancellationToken cancellationToken)
     {
         var installDirectory = ResolveStalwartInstallDirectory();
         var dataDirectory = Path.Combine(installDirectory, "data");
@@ -598,7 +736,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             }
 
             // Yedek "data/..." girdileri içerir; kurulum köküne çıkarılır.
-            ZipFile.ExtractToDirectory(record.Path, installDirectory, overwriteFiles: true);
+            ZipFile.ExtractToDirectory(archivePath, installDirectory, overwriteFiles: true);
         }
         finally
         {
@@ -741,9 +879,13 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         record.Warnings = [];
         record.PreservedPath = string.Empty;
 
+        // Şifreliyse ÖNCE çözülür: yanlış parola / kurcalanmış arşiv burada, canlı içeriğe hiç
+        // dokunulmadan durur. Çözülmüş geçici kopya iş bitince silinir.
+        using var content = await OpenContentAsync(record, request.EncryptionPassword, cancellationToken);
+
         if (string.Equals(record.Type, "mail", StringComparison.OrdinalIgnoreCase))
         {
-            await RestoreMailAsync(record, cancellationToken);
+            await RestoreMailAsync(content.FilePath, cancellationToken);
             record.Status = "restored";
             await UpsertRecordAsync(record, cancellationToken);
             return record;
@@ -753,9 +895,9 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         // dosyaları sitenin köküne, veritabanlarını içe aktararak gerçek geri yükleme yap.
         if (string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase) &&
-            IsCombinedSiteArchive(record.Path))
+            IsCombinedSiteArchive(content.FilePath))
         {
-            var (warnings, preservedPath) = await RestoreCombinedSiteAsync(record, request.TargetPath, cancellationToken);
+            var (warnings, preservedPath) = await RestoreCombinedSiteAsync(record, content.FilePath, request.TargetPath, cancellationToken);
             record.Warnings = warnings;
             record.PreservedPath = preservedPath;
 
@@ -774,7 +916,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetPath.Trim()));
 
             Directory.CreateDirectory(destination);
-            ZipFile.ExtractToDirectory(record.Path, destination, overwriteFiles: true);
+            ZipFile.ExtractToDirectory(content.FilePath, destination, overwriteFiles: true);
 
             // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet
             // + tam-sunucu DR: eksik IIS siteleri + FTP hesapları yeniden kurulur (rapor: iis-restore-report.txt).
@@ -789,6 +931,9 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
             record.Status = "restored";
             record.Path = destination;
+            // Kayıt artık ÇIKARILMIŞ dizini gösteriyor; orası şifreli değildir. Bayrağı "true"
+            // bırakmak, bir sonraki geri yüklemede olmayan bir şifre için parola sordururdu.
+            record.Encrypted = false;
         }
         else if (string.Equals(record.Format, "sql", StringComparison.OrdinalIgnoreCase))
         {
@@ -797,7 +942,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             {
                 Engine = sourceParts[0],
                 DatabaseName = sourceParts.Length > 1 ? sourceParts[1] : string.Empty,
-                FilePath = record.Path
+                FilePath = content.FilePath
             }, cancellationToken);
             record.Status = "restored";
         }
@@ -825,7 +970,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var files = new List<BackupEntryDto>();
         var truncated = false;
 
-        using var archive = ZipFile.OpenRead(record.Path);
+        // GÖZATMA yalnız panelde KAYITLI parolayı kullanır. Parolayı bu GET ucuna sorgu dizesiyle
+        // taşımak, onu IIS erişim günlüklerine ve tarayıcı geçmişine yazmak olurdu.
+        using var content = await OpenContentAsync(record, null, cancellationToken);
+        using var archive = ZipFile.OpenRead(content.FilePath);
         foreach (var entry in archive.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -927,7 +1075,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         Directory.CreateDirectory(targetRoot);
         var restored = 0;
 
-        using var archive = ZipFile.OpenRead(record.Path);
+        using var content = await OpenContentAsync(record, request.EncryptionPassword, cancellationToken);
+        using var archive = ZipFile.OpenRead(content.FilePath);
         foreach (var entry in archive.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1718,6 +1867,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// </summary>
     private async Task<(List<BackupRestoreWarningDto> Warnings, string PreservedPath)> RestoreCombinedSiteAsync(
         BackupRecordDto record,
+        string archivePath,
         string? targetPath,
         CancellationToken cancellationToken)
     {
@@ -1736,7 +1886,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         Directory.CreateDirectory(siteRoot);
 
         var warnings = new List<BackupRestoreWarningDto>();
-        using var archive = ZipFile.OpenRead(record.Path);
+        using var archive = ZipFile.OpenRead(archivePath);
 
         // Yalnızca arşivde GERÇEKTEN dosya varsa kökü boşalt. Aksi halde yalnız veritabanı içeren
         // bir yedek, canlı sitenin bütün dosyalarını yana alıp siteyi boş bırakırdı.

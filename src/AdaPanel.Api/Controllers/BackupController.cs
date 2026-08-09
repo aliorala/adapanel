@@ -35,6 +35,46 @@ public sealed class BackupController(
         return Ok(ApiResponse<IReadOnlyCollection<BackupRecordDto>>.Ok(backups));
     }
 
+    /// <summary>
+    /// Paneldeki varsayılan yedek şifreleme ayarı. Parola ASLA dönmez; yalnızca açık mı ve
+    /// kayıtlı parola gerçekten kullanılabilir mi (çözülebiliyor mu) bilgisi döner.
+    /// </summary>
+    [HttpGet("encryption")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<BackupEncryptionSettingsDto>>> GetEncryptionAsync(CancellationToken cancellationToken)
+    {
+        var settings = await backupService.GetEncryptionSettingsAsync(cancellationToken);
+        return Ok(ApiResponse<BackupEncryptionSettingsDto>.Ok(settings));
+    }
+
+    /// <summary>
+    /// Varsayılan yedek şifreleme parolasını belirler (boş parola = şifrelemeyi kapat).
+    /// <para>
+    /// PAROLA KAYBOLURSA ŞİFRELİ YEDEKLER GERİ GETİRİLEMEZ; panelin kurtarma kapısı yoktur.
+    /// Bu yüzden işlem denetim günlüğüne yazılır (parola YAZILMAZ).
+    /// </para>
+    /// </summary>
+    [HttpPut("encryption")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<BackupEncryptionSettingsDto>>> SetEncryptionAsync(
+        [FromBody] SetBackupEncryptionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var settings = await backupService.SetEncryptionSettingsAsync(request, cancellationToken);
+
+        await auditService.WriteAsync(
+            "backup.encryption_changed",
+            "backup",
+            settings.Enabled
+                ? "Backup encryption password set (AES-256-GCM). Losing the password makes encrypted backups unrecoverable."
+                : "Backup encryption disabled; new backups are stored unencrypted.",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<BackupEncryptionSettingsDto>.Ok(settings, "backup.encryption_saved"));
+    }
+
     [HttpPost("site")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupSiteAsync([FromBody] BackupSiteRequest request, CancellationToken cancellationToken)
     {

@@ -25,6 +25,18 @@ public sealed class BackupRecordDto
     public string RemoteUri { get; set; } = string.Empty;
 
     /// <summary>
+    /// Yedek dosyası AES-256-GCM ile şifreli mi (dosya adı <c>.enc</c> ile biter).
+    /// <para>
+    /// Bu alan EKRAN İÇİNDİR; geri yüklerken biçim kararı dosyanın kendi başlığından verilir
+    /// (eski/elle kopyalanmış dosyalarda kayıt yanılabilir, dosya başlığı yanılmaz).
+    /// </para>
+    /// <para>
+    /// <b>Şifreliyse geri yükleme parola ister ve PAROLA KAYBOLURSA YEDEK GERİ GETİRİLEMEZ.</b>
+    /// </para>
+    /// </summary>
+    public bool Encrypted { get; set; }
+
+    /// <summary>
     /// Son geri yüklemenin YARIM KALAN adımları. Boş değilse <see cref="Status"/> da
     /// <c>restored_with_errors</c> olur — "restored" yazıp sorunu yutmak yasaktır.
     /// </summary>

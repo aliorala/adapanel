@@ -48,4 +48,18 @@ public interface IBackupService
     /// PruneAsync'in işidir); kayıt silinse de uzak kopya hedef depoda durur.
     /// </summary>
     Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Paneldeki varsayılan yedek şifreleme ayarını okur. Parolanın KENDİSİ dönmez; yalnızca
+    /// açık mı ve kayıtlı parola gerçekten KULLANILABİLİR mi (çözülebiliyor mu) bilgisi döner.
+    /// </summary>
+    Task<BackupEncryptionSettingsDto> GetEncryptionSettingsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Varsayılan yedek şifreleme parolasını belirler (boş parola = şifrelemeyi kapat ve kaydı sil).
+    /// Parola panelde DPAPI/DataProtection ile korunarak saklanır; zamanlanmış yedeklerin
+    /// şifrelenebilmesinin tek yolu budur.
+    /// <para><b>PAROLA KAYBOLURSA ŞİFRELİ YEDEKLER GERİ GETİRİLEMEZ.</b></para>
+    /// </summary>
+    Task<BackupEncryptionSettingsDto> SetEncryptionSettingsAsync(SetBackupEncryptionRequest request, CancellationToken cancellationToken = default);
 }

@@ -15,6 +15,22 @@ public interface ISslService
     /// <summary>HTTP→HTTPS kalıcı (301) yönlendirmesini açar/kapatır (panel "Force HTTPS").</summary>
     Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Bir sitenin HTTPS bağlamasını kaldırır (panel kaydı dahil).
+    /// <para>
+    /// <b>Erişilebilirlik güvencesi:</b> kaldırılan bağlama sitenin SON HTTPS bağlamasıysa ve
+    /// "Force HTTPS" yönlendirmesi açıksa, yönlendirme ÖNCE kapatılır — kapatılamıyorsa işlem
+    /// <c>ssl.remove_would_break_site</c> ile reddedilir. Sertifikası olmayan bir siteyi HTTPS'e
+    /// yönlendirmeye devam etmek, siteyi tamamen erişilemez bırakırdı.
+    /// </para>
+    /// <para>
+    /// <b>Sertifika:</b> varsayılan olarak Windows sertifika deposunda BIRAKILIR (bağlama geri
+    /// alınabilir, sertifika silmek geri alınamaz). Açıkça istenirse bile, aynı sertifikayı
+    /// kullanan başka bir IIS bağlaması ÖLÇÜLDÜĞÜNDE silinmez.
+    /// </para>
+    /// </summary>
+    Task<RemoveSslCertificateResultDto> RemoveCertificateAsync(RemoveSslCertificateRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Site silinince panelin SSL durumundaki o siteye ait kayıtları temizler (öksüz kalmasın).</summary>
     Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default);
 
