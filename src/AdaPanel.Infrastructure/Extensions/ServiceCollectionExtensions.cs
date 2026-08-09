@@ -96,6 +96,19 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IUpdateInstallerLauncher, SelfUpdate.WindowsUpdateInstallerLauncher>();
         services.AddScoped<ITerminalService, Terminal.TerminalService>();
         services.AddScoped<ISecretProtector, SecretProtector>();
+
+        // LİSANS / AKTİVASYON.
+        // Varsayılan olarak KAPALI: Panel:License:VerificationUrl boş olduğu sürece panel hiçbir
+        // yere istek atmaz ve hiçbir şey kısıtlanmaz. Ayrıntı: docs/lisans-aktivasyon.md
+        services.Configure<Licensing.LicenseOptions>(configuration.GetSection(Licensing.LicenseOptions.SectionName));
+        // Parmak izi süreç ömrü boyunca DEĞİŞMEZ -> Singleton: kayıt defteri ve install-id dosyası
+        // Lazy ile bir kez okunur. Scoped olsaydı her istekte disk+registry okunurdu.
+        services.AddSingleton<Licensing.IMachineFingerprintProvider, Licensing.MachineFingerprintProvider>();
+        services.AddScoped<Licensing.LicenseStateStore>();
+        services.AddScoped<Licensing.ILicenseVerificationClient, Licensing.HttpLicenseVerificationClient>();
+        // Scoped olmak ZORUNDA: ISecretProtector Scoped, Singleton yapılırsa captive dependency olur.
+        services.AddScoped<ILicenseService, Licensing.LicenseService>();
+
         services.AddSingleton<ITotpService, TotpService>();
         services.AddSingleton<ISystemMonitoringService, SystemMonitoringService>();
         services.AddScoped<IBruteForceProtectionService, Security.BruteForceProtectionService>();
