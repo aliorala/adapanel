@@ -12,6 +12,7 @@ namespace AdaPanel.Infrastructure.Security;
 public sealed class CustomerScopeService(
     JsonFileStore fileStore,
     IServicePlanService servicePlans,
+    IResellerQuotaService resellerQuotas,
     IIisSiteService iisSiteService) : ICustomerScopeService
 {
     private const string StatePath = "config/customer-scopes.json";
@@ -26,9 +27,23 @@ public sealed class CustomerScopeService(
     {
         var state = await LoadAsync(cancellationToken);
         var entry = ResolveEffective(state, userId);
+
+        // BAYİ TAVANI. Bayinin kapsam kaydı olmayabilir (UserManagementService müşteri olmayan
+        // kullanıcının kaydını siler) — bu yüzden tavan, kayıt yokken bile okunur. Tavan yalnız
+        // bayiye atanabilir (IResellerQuotaService rolü doğrular), dolayısıyla müşteri limitlerini
+        // sessizce ezmesi mümkün değildir.
+        //
+        // Buraya konmasının sebebi: "bu kullanıcının site/disk limiti nedir" sorusunun panelde TEK
+        // adresi burasıdır. Örneğin SitesController.EnsureSiteQuotaAsync bu yanıta bakar; tavan
+        // burada çözülmeseydi bayi kotası her çağrı yerine ayrı ayrı eklenmek zorunda kalır ve
+        // eklenmediği yerde sessizce sınırsız kalırdı.
+        var bayiTavani = await resellerQuotas.GetQuotaAsync(userId, cancellationToken);
+
         if (entry is null)
         {
-            return new CustomerScope([], 0, 0, 0, 0, 0);
+            return bayiTavani is null
+                ? new CustomerScope([], 0, 0, 0, 0, 0)
+                : new CustomerScope([], bayiTavani.MaxSites, bayiTavani.MaxDiskMb, 0, 0, 0);
         }
 
         // LİMİTLER PLANDAN ÇÖZÜLÜR. Kayıttaki değerler yalnız plana bağlı OLMAYAN abonelikler
@@ -44,8 +59,8 @@ public sealed class CustomerScopeService(
 
         return new CustomerScope(
             entry.Sites,
-            plan?.MaxSites ?? entry.MaxSites,
-            plan?.MaxDiskMb ?? entry.MaxDiskMb,
+            bayiTavani?.MaxSites ?? plan?.MaxSites ?? entry.MaxSites,
+            bayiTavani?.MaxDiskMb ?? plan?.MaxDiskMb ?? entry.MaxDiskMb,
             plan?.MaxDatabases ?? entry.MaxDatabases,
             plan?.MaxMailboxes ?? entry.MaxMailboxes,
             plan?.MaxScheduledTasks ?? entry.MaxScheduledTasks,

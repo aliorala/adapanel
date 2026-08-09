@@ -25,7 +25,7 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
         return plans.FirstOrDefault(plan => string.Equals(plan.Id, id, StringComparison.OrdinalIgnoreCase));
     }
 
-    public async Task<ServicePlanDto> CreatePlanAsync(ServicePlanRequest request, CancellationToken cancellationToken = default)
+    public async Task<ServicePlanDto> CreatePlanAsync(ServicePlanRequest request, Guid? ownerId = null, CancellationToken cancellationToken = default)
     {
         var name = (request.Name ?? string.Empty).Trim();
         if (name.Length == 0)
@@ -38,6 +38,8 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
         {
             Id = Guid.NewGuid().ToString("N"),
             Name = name,
+            // Sahip yalnız OLUŞTURMADA yazılır; güncelleme sahibi DEĞİŞTİRMEZ (aşağıya bkz.).
+            OwnerId = ownerId?.ToString("N") ?? string.Empty,
             MaxSites = Math.Max(0, request.MaxSites),
             MaxDiskMb = Math.Max(0, request.MaxDiskMb),
             MaxDatabases = Math.Max(0, request.MaxDatabases),
@@ -67,6 +69,9 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
             plan.Name = name;
         }
 
+        // OwnerId BİLEREK güncellenmiyor: sahiplik plan oluşturulurken belirlenir ve düzenleme
+        // isteğiyle devredilemez. Aksi hâlde bir bayi, düzenleme gövdesine sahiplik yazarak planı
+        // kendi üstüne alabilir ya da sistem planına çevirebilirdi.
         plan.MaxSites = Math.Max(0, request.MaxSites);
         plan.MaxDiskMb = Math.Max(0, request.MaxDiskMb);
         plan.MaxDatabases = Math.Max(0, request.MaxDatabases);

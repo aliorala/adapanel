@@ -7,10 +7,23 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Reseller (Bayi) yalnız kendi müşterilerinin siteleri için SSL yönetebilir (EnsureSiteAsync).
-// Tüm sertifikaları yenileme (renew-all) server-level → admin-only.
+// MÜŞTERİ KENDİ SİTESİNİN SSL'İNİ YÖNETİR (Plesk/ISPConfig paritesi).
+//
+// Uç, kodu tamamen yazılmış olmasına rağmen "Administrator,Reseller" ile müşteriye KAPALIYDI:
+// abonelik sahibi kendi alan adına ücretsiz Let's Encrypt sertifikası alamıyor, her HTTPS isteği
+// için yöneticiye başvurmak zorunda kalıyordu. Oysa barındırma panellerinde bu, abonelik
+// sahibinin en temel self-servis işidir.
+//
+// Rol eklemek TEK BAŞINA yetmez; her uç kaynağın çağırana ait olduğunu doğrular:
+//   • Site kapsamı  → CustomerAccess.EnsureSiteAsync (her eylemde)
+//   • Alan adı iddiası → CustomerAccess.EnsureDomainClaimAsync (bağlama EKLEYEN eylemlerde)
+// SUNUCU GENELİ olanlar müşteriye AÇILMADI:
+//   • renew (tüm sertifikaları yenile) → tek çağrıda sunucudaki HER sitenin sertifikasını
+//     yeniler ve win-acme'yi sunucu genelinde çalıştırır: başkasının kaynağı + DoS yüzeyi.
+//   • wildcard (DNS-01) → sunucunun DNS bölgesine kayıt yazar; gövde içinde zaten admin-only.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/ssl")]
 public sealed class SslController(ISslService sslService, ICustomerScopeService customerScopes, IWebmailService webmailService) : ControllerBase
 {

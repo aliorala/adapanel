@@ -255,6 +255,15 @@ builder.Services
     .AddControllersWithViews(options =>
     {
         options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+
+        // ABONELIK ASKISI TEK KAYNAKTAN DAYATILIR.
+        //
+        // Aski daha once yalniz customer-scopes.json'a yaziliyor, API'de hicbir yerde
+        // SORULMUYORDU: askiya alinan musteri panele girip durdurulmus sitesini yeniden
+        // baslatabiliyordu. Kural kuresel filtreye konuyor cunku her controller'a elle eklenen
+        // bir denetim, yeni eklenen controller'da unutulacagi icin fiilen yok sayilir.
+        // Ayrintili gerekce: SubscriptionSuspension.
+        options.Filters.Add<SubscriptionSuspensionFilter>();
     })
     .ConfigureApiBehaviorOptions(options =>
     {

@@ -3,6 +3,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Subscriptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -20,7 +21,9 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/subscriptions")]
 public sealed class SubscriptionsController(
     ISubscriptionEnforcementService enforcement,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IServicePlanService servicePlans,
+    IResellerQuotaService resellerQuotas) : ControllerBase
 {
     /// <summary>Giriş yapmış kullanıcının kendi abonelik kullanımı.</summary>
     [HttpGet("me")]
@@ -51,6 +54,7 @@ public sealed class SubscriptionsController(
         CancellationToken cancellationToken)
     {
         await EnsureManageableAsync(userId, cancellationToken);
+        await EnsurePlanUsableAsync(userId, request.PlanId, cancellationToken);
         await customerScopes.SetPlanAsync(userId, request.PlanId, cancellationToken);
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),
@@ -105,6 +109,45 @@ public sealed class SubscriptionsController(
         return Ok(ApiResponse<IReadOnlyCollection<SubscriptionEnforcementChangeDto>>.Ok(changes, "subscription.enforced"));
     }
 
+    // --- Bayi tavanı (bayinin KENDİ dağıtım sınırı) ---
+
+    /// <summary>
+    /// Bir bayinin tavanı ve tavanın ne kadarının dağıtıldığı.
+    /// </summary>
+    /// <remarks>
+    /// Bayi KENDİ tavanını okuyabilir (ne kadar hakkı kaldığını bilmeden müşteri ekleyemez);
+    /// başkasının tavanını yalnız yönetici okur.
+    /// </remarks>
+    [HttpGet("resellers/{userId:guid}/quota")]
+    [Authorize(Roles = "Administrator,Reseller")]
+    public async Task<ActionResult<ApiResponse<ResellerQuotaUsageDto>>> GetResellerQuotaAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        if (CustomerAccess.IsReseller(User) && userId != User.GetRequiredUserId())
+        {
+            throw new Core.Common.AppException("users.forbidden", 403, 403);
+        }
+
+        var usage = await ResellerQuotaGuard.MeasureAsync(resellerQuotas, customerScopes, userId, cancellationToken);
+        return Ok(ApiResponse<ResellerQuotaUsageDto>.Ok(usage));
+    }
+
+    /// <summary>
+    /// Bayiye tavan atar (0 = sınırsız). YALNIZ yönetici: bayi kendi tavanını yükseltebilseydi
+    /// tavan diye bir şey olmazdı.
+    /// </summary>
+    [HttpPut("resellers/{userId:guid}/quota")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<ResellerQuotaUsageDto>>> SetResellerQuotaAsync(
+        Guid userId,
+        [FromBody] ResellerQuotaRequest request,
+        CancellationToken cancellationToken)
+    {
+        await resellerQuotas.SetQuotaAsync(userId, request, cancellationToken);
+        return Ok(ApiResponse<ResellerQuotaUsageDto>.Ok(
+            await ResellerQuotaGuard.MeasureAsync(resellerQuotas, customerScopes, userId, cancellationToken),
+            "subscription.reseller_quota_saved"));
+    }
+
     /// <summary>
     /// GÜVENLİK (çapraz-kiracı): bayi yalnız KENDİ müşterisinin aboneliğini yönetebilir.
     /// Aksi hâlde bir bayi, başka bir bayinin müşterisini askıya alıp sitelerini kapatabilirdi.
@@ -121,6 +164,58 @@ public sealed class SubscriptionsController(
         {
             throw new Core.Common.AppException("users.forbidden", 403, 403);
         }
+    }
+
+    /// <summary>
+    /// Bayinin bağlamak istediği planın hem ERİŞİLEBİLİR hem de TAVANINA SIĞAN bir plan olduğunu doğrular.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki ayrı açık kapatılıyor:
+    /// </para>
+    /// <list type="number">
+    /// <item>
+    /// <b>Başka bayinin planı:</b> plan kimliği bir GUID metni; tahmin edilemez ama sızabilir
+    /// (ekran görüntüsü, günlük, destek yazışması). Liste ucu başka bayinin planını gizlerken
+    /// bağlama ucunun kabul etmesi, gizlemeyi süse çevirirdi.
+    /// </item>
+    /// <item>
+    /// <b>Tavan aşımı:</b> bayi sistem planlarını da bağlayabildiği için, tavanı 10 site olan bir
+    /// bayi 100 sitelik SİSTEM planını müşterisine bağlayarak tavanını atlayabilirdi. Bu yüzden
+    /// denetim planın sahibine değil, dağıtılan TOPLAMA bakar.
+    /// </item>
+    /// </list>
+    /// </remarks>
+    private async Task EnsurePlanUsableAsync(Guid customerId, string? planId, CancellationToken cancellationToken)
+    {
+        if (!CustomerAccess.IsReseller(User))
+        {
+            return;
+        }
+
+        var bayiId = User.GetRequiredUserId();
+
+        if (string.IsNullOrWhiteSpace(planId))
+        {
+            // Plan bağını KALDIRMAK, müşteriyi kayıttaki özel limitlere döndürür; tavan denetimi
+            // o değerlerle yapılır.
+            var mevcut = await customerScopes.GetScopeAsync(customerId, cancellationToken);
+            await ResellerQuotaGuard.EnsureAllocationFitsAsync(
+                resellerQuotas, customerScopes, bayiId, customerId, mevcut.MaxSites, mevcut.MaxDiskMb, cancellationToken);
+            return;
+        }
+
+        var plan = await servicePlans.GetPlanAsync(planId, cancellationToken)
+            ?? throw new Core.Common.AppException("plans.not_found", 404, 404);
+
+        var benim = bayiId.ToString("N");
+        if (plan.OwnerId.Length > 0 && !string.Equals(plan.OwnerId, benim, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new Core.Common.AppException("users.forbidden", 403, 403);
+        }
+
+        await ResellerQuotaGuard.EnsureAllocationFitsAsync(
+            resellerQuotas, customerScopes, bayiId, customerId, plan.MaxSites, plan.MaxDiskMb, cancellationToken);
     }
 }
 

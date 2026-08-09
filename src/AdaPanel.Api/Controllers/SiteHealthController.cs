@@ -7,10 +7,21 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Sitenin DIŞARIDAN görünen sağlığı. Reseller (Bayi) yalnız kendi müşterilerinin sitelerini
-// ölçebilir → DnsController ile AYNI kapsam denetimi (CustomerAccess.EnsureSiteAsync).
+// Sitenin DIŞARIDAN görünen sağlığı. Kapsam denetimi DnsController ile AYNI
+// (CustomerAccess.EnsureSiteAsync).
+//
+// MÜŞTERİYE AÇILDI — ama yalnız TEŞHİS, ONARIM DEĞİL:
+//   • GET /health ve GET /health/repair hiçbir şey DEĞİŞTİRMEZ; "sitem neden açılmıyor"
+//     sorusunun yanıtı buradadır ve müşterinin bunu kendi görememesi, çözülebilir her sorunu
+//     destek talebine çeviriyordu.
+//   • POST /health/repair müşteriye AÇILMADI. Sebep ölçüldü (DomainRefreshService.RefreshAsync):
+//     tek site onarılırken RunServerWideAsync da çalışıyor — posta sunucusunun SERTİFİKASINI
+//     eşitliyor ve karşılama adını (server hostname) ayarlıyor. Bunlar sunucuda TEKTİR, yani
+//     bir kiracının isteği bütün kiracıları etkiler; ayrıca her çağrı birden çok CLI süreci
+//     başlattığı için ucuz bir DoS yüzeyi olurdu.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/sites/{siteName}/health")]
 public sealed class SiteHealthController(
     ISiteHealthService siteHealthService,
@@ -38,8 +49,14 @@ public sealed class SiteHealthController(
         return Ok(ApiResponse<DomainRefreshResultDto>.Ok(await domainRefreshService.InspectAsync(siteName, cancellationToken)));
     }
 
-    /// <summary>Bu sitenin eksiklerini tamamlar ve NE YAPILDIĞINI döner.</summary>
+    /// <summary>
+    /// Bu sitenin eksiklerini tamamlar ve NE YAPILDIĞINI döner.
+    /// <para>
+    /// SUNUCU GENELİ yan etkileri olduğu için müşteriye kapalı (gerekçe sınıf başlığında).
+    /// </para>
+    /// </summary>
     [HttpPost("repair")]
+    [Authorize(Roles = "Administrator,Reseller")]
     public async Task<ActionResult<ApiResponse<DomainRefreshResultDto>>> RepairAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);

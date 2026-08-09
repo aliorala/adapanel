@@ -8,9 +8,18 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-// Reseller (Bayi) yalnız kendi müşterilerinin sitelerindeki WordPress kurulumlarını görür/yönetir.
+// WORDPRESS TOOLKIT ÜRÜNÜN AMİRAL GEMİSİ MÜŞTERİ ÖZELLİĞİDİR — ve müşteriye kapalıydı.
+//
+// "Administrator,Reseller" kısıtı yüzünden abonelik sahibi kendi WordPress'ini güncelleyemiyor,
+// bakım moduna alamıyor, sertleştiremiyor, staging klonu açamıyordu. Panelin sattığı özelliği
+// tam da onu satın alan kullanamıyordu.
+//
+// Her uç kaynağın çağırana ait olduğunu doğrular: liste kapsamla SÜZÜLÜR
+// (GetEffectiveSitesAsync), tekil eylemler EnsureSiteAsync'ten geçer, klon ayrıca alan adı
+// iddiasını (EnsureDomainClaimAsync) ve abonelik site kotasını denetler.
 [ApiController]
-[Authorize(Roles = "Administrator,Reseller")]
+[Authorize(Roles = "Administrator,Reseller,Customer")]
+[RequireSubUserSection("sites")]
 [Route("api/v1/wordpress")]
 public sealed class WordPressController(
     IWordPressToolkitService wordPressToolkitService,

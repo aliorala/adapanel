@@ -21,6 +21,28 @@ public sealed class ServicePlanDto
 
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Planı TANIMLAYAN bayinin kimliği ("N" biçimi); boş ise plan SİSTEM planıdır (yöneticinin).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bayi kanalı bu alan olmadan işlemiyordu: <c>ServicePlansController</c> tümüyle
+    /// <c>Administrator</c>'a kilitliydi, yani bayi kendi paket/fiyat listesini tanımlayamıyor,
+    /// her yeni paket için yöneticiye başvurmak zorunda kalıyordu. Plesk'te bayinin ilk yaptığı iş
+    /// kendi planlarını kurmaktır.
+    /// </para>
+    /// <para>
+    /// Alan aynı zamanda İZOLASYONUN dayanağı: bayi yalnız kendi sahipli planlarını
+    /// düzenleyip silebilir, sistem planlarını ve başka bayinin planlarını göremez/değiştiremez.
+    /// </para>
+    /// <para>
+    /// <c>ServicePlanRequest</c>'e BİLEREK eklenmedi: sahiplik istekten okunsaydı bayi, gövdeye
+    /// başka bir kimlik yazarak planı başkasının üstüne geçirebilirdi. Sahibi sunucu, oturumdaki
+    /// kimlikten belirler.
+    /// </para>
+    /// </remarks>
+    public string OwnerId { get; set; } = string.Empty;
+
     public int MaxSites { get; set; }
 
     public int MaxDiskMb { get; set; }
