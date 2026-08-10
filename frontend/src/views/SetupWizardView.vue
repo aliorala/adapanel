@@ -164,6 +164,16 @@
     @attention-refresh="loadAttention(false)">
     <template #banner>
       <div class="banner-stack">
+        <!--
+          ASKI ŞERİDİ (P0): askıdaki abonelikte sunucu bütün yazma isteklerini
+          `403 subscription.suspended_readonly` ile reddediyor. Bu şerit olmadan kullanıcı her
+          düğmede kırmızı hata görür ve sebebini ancak hatayı okursa anlar. Sebep ADIYLA yazılır;
+          "askıda" tek kelimesi "ne yapmam gerekiyor" sorusunu cevaplamıyordu.
+        -->
+        <p v-if="subscriptionStore.isSuspended" class="notice error suspended-banner" role="alert">
+          <strong>{{ t("panel.subscription.suspendedBannerTitle") }}</strong>
+          <span>{{ t(`panel.subscription.reason.${subscriptionStore.suspendReason}`) }}</span>
+        </p>
         <!-- Bulundugunuz sayfaya ait dikkat maddeleri. Tek yerden beslenir; hedef sayfalarin
              hicbirine ayri ayri eklemek gerekmez. Madde yoksa hicbir sey gorunmez. -->
         <AttentionSectionNotice
@@ -222,7 +232,10 @@
 
     <FilesView v-else-if="activeSection === 'files' && (isAdmin || isCustomer || isReseller)" />
 
-    <BackupView v-else-if="activeSection === 'backup' && isCustomer" />
+    <!-- Yedek bölümü müşteride VE bayide: BackupController `Reseller` rolüne izin veriyor
+         (kapsam EnsureSiteAsync ile kendi müşterilerinin siteleriyle sınırlı). Menüde yoktu,
+         yani bayi kendi müşterisinin yedeğini alamıyordu. -->
+    <BackupView v-else-if="activeSection === 'backup' && (isCustomer || isReseller)" />
 
     <CronView v-else-if="activeSection === 'tasks' && (isAdmin || isReseller || isCustomer)" />
 
@@ -269,6 +282,12 @@
           </button>
           <button v-if="isAdmin" :class="{ active: settingsTab === 'updates' }" @click="settingsTab = 'updates'">
             {{ t("panel.settings.tab.updates") }}
+          </button>
+          <!-- Lisans YALNIZ yöneticide (uç de `Administrator`). Lisanslama kapalı kurulumlarda
+               sekme yine görünür ama içerik "kapalı" bilgi kutusundan ibaret olur: kullanıcı
+               "acaba lisans ekranı var mı" diye panelde aramasın. -->
+          <button v-if="isAdmin" :class="{ active: settingsTab === 'license' }" @click="settingsTab = 'license'">
+            {{ t("panel.license.title") }}
           </button>
         </div>
         <div class="settings-account">
@@ -398,6 +417,7 @@
       <NotificationsView v-else-if="settingsTab === 'notifications' && isAdmin" />
       <ErrorReportsView v-else-if="settingsTab === 'errorReports' && isAdmin" />
       <UpdateView v-else-if="settingsTab === 'updates' && isAdmin" />
+      <LicenseView v-else-if="settingsTab === 'license' && isAdmin" />
     </section>
   </MainLayout>
 </template>
@@ -417,6 +437,7 @@ import { useProxyStore } from "../stores/proxy";
 import { useSetupStore, type OperationProgress } from "../stores/setup";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
+import { useSubscriptionStore } from "../stores/subscription";
 import { useSystemStore } from "../stores/system";
 import AttentionSectionNotice from "../components/AttentionSectionNotice.vue";
 import PanelAccessCard from "../components/PanelAccessCard.vue";
@@ -454,6 +475,7 @@ const UsersView = lazyView(() => import("./UsersView.vue"));
 const AccountView = lazyView(() => import("./AccountView.vue"));
 const AiConnectionView = lazyView(() => import("./AiConnectionView.vue"));
 const ErrorReportsView = lazyView(() => import("./ErrorReportsView.vue"));
+const LicenseView = lazyView(() => import("./LicenseView.vue"));
 const SoftwareView = lazyView(() => import("./SoftwareView.vue"));
 const UpdateView = lazyView(() => import("./UpdateView.vue"));
 const WebsiteWorkspaceView = lazyView(() => import("./WebsiteWorkspaceView.vue"));
@@ -470,7 +492,7 @@ type SectionItem = {
 };
 // Hesap yönetimi ("accounts" → UsersView) ve "Hesabım" ("account" → AccountView) artık ayrı bölümler;
 // Ayarlar yalnızca yönetici kapsamındaki sunucu/panel ayarlarını barındırır.
-type SettingsTab = "general" | "security" | "notifications" | "errorReports" | "updates";
+type SettingsTab = "general" | "security" | "notifications" | "errorReports" | "updates" | "license";
 
 const i18n = useI18n();
 // params: "{count} tane daha" gibi sayi iceren metinler icin. Verilmezse davranis aynidir.
@@ -497,6 +519,7 @@ const systemStore = useSystemStore();
 const sitesStore = useSitesStore();
 const phpStore = usePhpStore();
 const databasesStore = useDatabasesStore();
+const subscriptionStore = useSubscriptionStore();
 
 const mode = ref<ViewMode>("setup");
 const installing = ref(false);
@@ -644,6 +667,22 @@ function attentionBadgeTitle(sectionId: string): string | undefined {
     : names.join(" · ");
 }
 
+/**
+ * Kiracı menüsüne "Yedekler" bölümünü ekler (Dosyalar'dan hemen sonra, yoksa sondan bir önceye).
+ *
+ * TEK KAYNAK: müşteri ve bayi aynı ekranı görür (`BackupController` her ikisine de açık, kapsamı
+ * kendi sitelerine kilitli). İki yere elle kopyalandığında bayi dalı unutulmuştu.
+ */
+function injectBackupSection(list: SectionItem[]) {
+  const filesIndex = list.findIndex((section) => section.id === "files");
+  list.splice(filesIndex >= 0 ? filesIndex + 1 : Math.max(list.length - 1, 0), 0, {
+    id: "backup",
+    label: t("panel.navigation.backup"),
+    description: t("panel.backup.subtitle"),
+    glyph: "YD"
+  });
+}
+
 const dashboardSections = computed<SectionItem[]>(() => {
   const sections: SectionItem[] = [
     // panel sırası: Web Siteleri → Posta → Dosyalar → Veritabanları → İstatistikler →
@@ -680,7 +719,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     // kaynakları (Web Siteleri hub'ı: PHP/SSL/DNS/FTP/Proxy/WP/Stats/Backup/Hosting — hepsi
     // sahip-kapsamına göre EnsureSiteAsync ile filtreli; server-level araçlar hub'da gizli).
     // Panel ayarları bayiye kapalı olduğundan "Ayarlar" yerine "Hesabım" görünür.
-    return sections.filter((section) =>
+    const resellerSections = sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
       section.id === "accounts" ||
@@ -692,6 +731,16 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");
+
+    // Yedek bölümü bayide de olmalı: BackupController `Reseller` rolüne izin veriyor ama menüde
+    // yoktu, yani bayi kendi müşterisinin yedeğini panelden hiç alamıyordu.
+    injectBackupSection(resellerSections);
+
+    if (!resellerSections.some((section) => section.id === activeSection.value)) {
+      activeSection.value = "home";
+    }
+
+    return resellerSections;
   }
 
   if (isCustomer.value) {
@@ -707,14 +756,8 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "ai" ||
       section.id === "account" ||
       section.id === "exit");
-    // Müşteriye özel yedek bölümü (kendi sitelerinin yedekleri) — Dosyalar'dan hemen sonra.
-    const filesIndex = customerSections.findIndex((section) => section.id === "files");
-    customerSections.splice(filesIndex >= 0 ? filesIndex + 1 : customerSections.length - 1, 0, {
-      id: "backup",
-      label: t("panel.navigation.backup"),
-      description: t("panel.backup.subtitle"),
-      glyph: "YD"
-    });
+    // Kiracıya özel yedek bölümü (kendi kapsamındaki sitelerin yedekleri) — Dosyalar'dan sonra.
+    injectBackupSection(customerSections);
 
     if (isSubUser.value) {
       // Alt-kullanıcı: izin listesi doluysa menü ona göre daraltılır (home/account/exit hep açık).
@@ -953,6 +996,8 @@ async function logout() {
     attentionOpen.value = false;
     attentionSummary.value = null;
     requiresTwoFactor.value = false;
+    // Salt okunur bayrağı bir sonraki kullanıcıya sızmamalı.
+    subscriptionStore.reset();
     showBanner(t("panel.auth.logoutSuccess"), false);
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
@@ -960,6 +1005,16 @@ async function logout() {
 }
 
 async function loadDashboardData() {
+  /*
+   * ASKI DURUMU HER ŞEYDEN ÖNCE ölçülür: salt okunur kapısı (api/client.ts) bu çağrıda
+   * kuruluyor. Yönetici askıya takılmadığı için sorulmaz, bayrak da temizlenir.
+   */
+  if (isCustomer.value || isReseller.value) {
+    await subscriptionStore.fetchMine();
+  } else {
+    subscriptionStore.reset();
+  }
+
   await systemStore.fetchOverview();
 
   if (isCustomer.value) {
@@ -1400,6 +1455,12 @@ function formatUtc(value: string | null) {
   border-color: color-mix(in srgb, var(--warn-1) 20%, transparent);
   background: color-mix(in srgb, var(--warn-1) 12%, transparent);
   color: var(--warn-text);
+}
+
+/* Askı şeridi: başlık + sebep iki satır. `.notice.error` renklendirmeyi zaten veriyor. */
+.suspended-banner {
+  display: grid;
+  gap: 4px;
 }
 
 .audit-item {

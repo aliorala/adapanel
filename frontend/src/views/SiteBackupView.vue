@@ -34,6 +34,17 @@
         </div>
       </div>
 
+      <!-- Bu yedeğe özel şifreleme parolası. Boş = panelde kayıtlı parola; o da yoksa şifresiz.
+           UYARI parola BELİRLENİRKEN görünür, geri yükleme anında değil. -->
+      <label class="stacked-field">
+        <span class="field-label">{{ t("panel.backup.perBackupPassword") }}</span>
+        <input v-model="encryptionPassword" type="password" autocomplete="new-password" />
+        <small class="field-hint">{{ t("panel.backup.perBackupPasswordHint") }}</small>
+      </label>
+      <p v-if="encryptionPassword" class="notice encryption-loss" role="status">
+        {{ t("panel.backup.encryptionLossWarning") }}
+      </p>
+
       <button class="compact" :disabled="busy" @click="createBackup">
         {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
       </button>
@@ -48,7 +59,13 @@
       <div v-if="siteBackups.length > 0" class="bk-rows">
         <article v-for="record in siteBackups" :key="record.id" class="bk-row">
           <div class="bk-id">
-            <strong>{{ record.name }}</strong>
+            <strong>
+              {{ record.name }}
+              <!-- Kilit rozeti: geri yüklerken parola isteneceği LİSTEDE görünsün. -->
+              <span v-if="record.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
+                {{ t("panel.backup.encryptedBadge") }}
+              </span>
+            </strong>
             <span class="meta">{{ formatDate(record.createdAtUtc) }} · {{ formatSize(record.size) }}</span>
           </div>
           <div class="bk-actions">
@@ -77,11 +94,13 @@ import { useSitesStore } from "../stores/sites";
 import { backupSite, downloadBackup, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import { usePrompt } from "../components/PromptDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+const { prompt } = usePrompt();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
@@ -102,6 +121,8 @@ const databasesLoad = useSectionError();
 const selectedDbKeys = ref<string[]>([]);
 
 const scope = reactive({ includeFiles: true, includeConfig: true, includeMail: false });
+// Bu yedeğe özel şifreleme parolası (boş = panelde kayıtlı parola, o da yoksa şifresiz).
+const encryptionPassword = ref("");
 
 const siteBackups = computed(() =>
   backups.value.filter((record) => record.type === "site" && record.source === siteName.value));
@@ -160,7 +181,9 @@ async function createBackup() {
       includeConfig: scope.includeConfig,
       includeMail: scope.includeMail,
       databases
-    });
+    }, { encryptionPassword: encryptionPassword.value });
+    // Parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce taşınmaz.
+    encryptionPassword.value = "";
     showNotice(t("panel.backup.created"), false);
     await refresh();
   } catch (error) {
@@ -182,6 +205,26 @@ async function download(record: BackupRecord) {
 }
 
 async function restore(record: BackupRecord) {
+  // Şifreli yedekte parola ÖNCE sorulur: yüksek riskli onayı geçtikten sonra "parola lazım"
+  // demek, kullanıcıya site adını ikinci kez yazdırmak olurdu.
+  let password = "";
+  if (record.encrypted) {
+    const entered = await prompt({
+      title: t("panel.backup.restorePasswordTitle"),
+      message: t("panel.backup.encryptionLossWarning"),
+      label: t("panel.backup.encryptionPassword"),
+      hint: t("panel.backup.restorePasswordHint"),
+      password: true,
+      allowEmpty: true,
+      confirmLabel: t("panel.backup.restore")
+    });
+    if (entered === null) {
+      return;
+    }
+
+    password = entered;
+  }
+
   // Canlı siteyi geri yükleme yıkıcıdır — YÜKSEK RİSKLİ onay: üzerine yazılacak site adı yazılmadan devam edilemez.
   const target = record.source || siteName.value;
   const impact = [
@@ -201,12 +244,28 @@ async function restore(record: BackupRecord) {
     action: async () => {
       restoringId.value = record.id;
       try {
-        await restoreBackup(record.id, "");
-        showNotice(t("panel.backup.restored"), false);
+        const restored = await restoreBackup(record.id, "", password);
+        // Yarım kalan adımlar SÖYLENİR: koşulsuz "geri yüklendi" demek, veritabanı dönmemişken
+        // kullanıcıya "tamam" dedirtirdi. Üzerine yazılan içeriğin taşındığı klasör de yazılır.
+        const warnings = restored.warnings ?? [];
+        const lines = [warnings.length > 0 ? t("panel.backup.restoredWithErrors") : t("panel.backup.restored")];
+        if (warnings.length > 0) {
+          lines.push(`${t("panel.backup.restoreWarningsTitle")}:`);
+          for (const warning of warnings) {
+            const translated = t(warning.messageKey);
+            const message = translated === warning.messageKey ? warning.messageKey : translated;
+            lines.push(warning.target ? `${warning.target}: ${message}` : message);
+          }
+        }
+        if (restored.preservedPath) {
+          lines.push(t("panel.backup.preservedPath", { path: restored.preservedPath }));
+        }
+        showNotice(lines.join("\n"), warnings.length > 0);
       } catch (error) {
         showNotice(resolveApiMessage(error), true);
       } finally {
         restoringId.value = "";
+        password = "";
       }
     },
   });
@@ -300,5 +359,10 @@ function formatDate(iso: string): string {
 
 .meta {
   color: var(--text-muted);
+}
+
+/* Parola kaybı geri dönüşsüz: uyarı satırı gövde metninden ayrışsın. */
+.encryption-loss {
+  font-weight: 600;
 }
 </style>

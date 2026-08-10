@@ -50,7 +50,17 @@
           <small>{{ formatBytes(backup.size) }}</small>
         </div>
         <div class="cell-main">
-          <span class="status-pill ok">{{ formatStatus(backup.status) }}</span>
+          <span class="pill-row">
+            <span class="status-pill ok">{{ formatStatus(backup.status) }}</span>
+            <!-- Kilit rozeti: geri yüklerken parola isteneceğini kullanıcı LİSTEDE görsün. -->
+            <span v-if="backup.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
+              {{ t("panel.backup.encryptedBadge") }}
+            </span>
+            <!-- Yarım kalan/riskli adımlar sessizce yutulmaz; ipucunda sebepleri çevrilmiş olarak durur. -->
+            <span v-if="backup.warnings?.length" class="status-pill warn" :title="warningText(backup)">
+              {{ t("panel.backup.warningsBadge", { count: backup.warnings.length }) }}
+            </span>
+          </span>
           <small>{{ new Date(backup.createdAtUtc).toLocaleString() }}</small>
         </div>
         <div class="row-actions">
@@ -121,6 +131,65 @@
       <div class="row-actions">
         <button class="compact" :disabled="busy" @click="saveAutoBackup">
           {{ t("panel.backup.autoSave") }}
+        </button>
+      </div>
+    </section>
+
+    <!--
+      YEDEK ŞİFRELEME (yalnız yönetici; uç de `Administrator`).
+
+      Parola alanları GERÇEK form alanı: `window.prompt` bu panelde yasak (parolayı düz metin
+      gösterir ve tarayıcı diyalogları kapattığında sessizce null döner).
+    -->
+    <section v-if="activeView === 'list' && isAdmin && encryption" class="form-surface encryption-card">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.backup.encryptionTitle") }}</h3>
+          <p class="meta">{{ t("panel.backup.encryptionHint") }}</p>
+        </div>
+        <span :class="['status-pill', encryptionTone]">{{ t(encryptionStateKey) }}</span>
+      </div>
+
+      <!-- Kayıt var ama ÇÖZÜLEMİYOR: zamanlanmış yedekler şifrelenemez. Sessiz kalmak,
+           yedeklerin sessizce şifresiz alınması demekti. -->
+      <p v-if="encryption.enabled && !encryption.passwordUsable" class="notice error" role="alert">
+        {{ t("panel.backup.encryptionBroken") }}
+      </p>
+
+      <!-- ZORUNLU UYARI: parolayı BELİRLERKEN görünür, geri yükleme anında değil. -->
+      <p class="notice encryption-loss" role="status">{{ t("panel.backup.encryptionLossWarning") }}</p>
+
+      <div class="form-grid two">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.encryptionPassword") }}</span>
+          <input v-model="encryptionForm.password" type="password" autocomplete="new-password" />
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.encryptionPasswordConfirm") }}</span>
+          <input v-model="encryptionForm.confirm" type="password" autocomplete="new-password" />
+        </label>
+      </div>
+
+      <label class="check-field">
+        <input v-model="encryptionForm.acknowledged" type="checkbox" />
+        <span>{{ t("panel.backup.encryptionAck") }}</span>
+      </label>
+
+      <p v-if="encryptionMismatch" class="notice error" role="alert">{{ t("panel.backup.encryptionMismatch") }}</p>
+
+      <p class="field-hint">
+        {{ t("panel.backup.encryptionAlgorithm") }}: {{ encryption.algorithm }}
+        <template v-if="encryption.enabled">
+          · {{ t("panel.backup.encryptionUpdatedAt") }}: {{ new Date(encryption.updatedAtUtc).toLocaleString() }}
+        </template>
+      </p>
+
+      <div class="row-actions">
+        <button class="compact" :disabled="busy || !canSaveEncryption" @click="saveEncryption">
+          {{ t("panel.backup.encryptionSave") }}
+        </button>
+        <button v-if="encryption.enabled" class="danger compact" :disabled="busy" @click="disableEncryption">
+          {{ t("panel.backup.encryptionDisable") }}
         </button>
       </div>
     </section>
@@ -256,6 +325,20 @@
         </label>
       </div>
 
+      <div class="form-grid">
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.perBackupPassword") }}</span>
+          <input v-model="targetForm.encryptionPassword" type="password" autocomplete="new-password" />
+          <small class="field-hint">{{ t("panel.backup.perBackupPasswordHint") }}</small>
+        </label>
+      </div>
+
+      <!-- Uzak hedefe ŞİFRESİZ gitmek üzere: uyarı gönderimden ÖNCE, kullanıcı parolayı hâlâ
+           yazabilecekken görünür (sonradan gelen `backup.remote_unencrypted` rozeti geç kalır). -->
+      <p v-if="remoteUnencryptedRisk" class="notice encryption-loss" role="status">
+        {{ t("panel.backup.remoteUnencryptedWarning") }}
+      </p>
+
       <p class="field-hint">{{ t("panel.backup.targetHint") }}</p>
       <div class="row-actions">
         <button class="compact" :disabled="busy" @click="createSelectedBackup">
@@ -277,21 +360,26 @@ import {
   backupPanel,
   deleteBackup,
   downloadBackup,
+  getBackupEncryption,
   getBackupEntries,
   getBackups,
   restoreBackup,
   restoreBackupItems,
+  setBackupEncryption,
+  type BackupEncryptionSettings,
   type BackupEntry,
   type BackupRecord,
   type BackupTargetPayload
 } from "../api/backup";
 import { getAutomation, updateAutomation, type AutomationSettings, type AutomationStatus } from "../api/automation";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import { usePrompt } from "../components/PromptDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+const { prompt } = usePrompt();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
@@ -317,8 +405,45 @@ const targetForm = reactive<BackupTargetPayload>({
   remoteUrl: "",
   remoteUserName: "",
   remotePassword: "",
-  remoteRegion: ""
+  remoteRegion: "",
+  encryptionPassword: ""
 });
+
+// Panelin varsayılan yedek şifreleme ayarı (uç yalnız yöneticiye açık).
+const encryption = ref<BackupEncryptionSettings | null>(null);
+const encryptionForm = reactive({ password: "", confirm: "", acknowledged: false });
+
+const encryptionMismatch = computed(() =>
+  encryptionForm.confirm.length > 0 && encryptionForm.password !== encryptionForm.confirm);
+
+// Kaydetme şartları: iki alan dolu ve EŞİT + "anladım" işaretli. Parola kaybı geri dönüşsüz
+// olduğu için onay kutusu olmadan kaydetmeyiz.
+const canSaveEncryption = computed(() =>
+  encryptionForm.password.length > 0 &&
+  encryptionForm.password === encryptionForm.confirm &&
+  encryptionForm.acknowledged);
+
+const encryptionStateKey = computed(() => {
+  if (!encryption.value?.enabled) return "panel.status.disabled";
+  return encryption.value.passwordUsable ? "panel.status.enabled" : "panel.backup.encryptionUnusable";
+});
+
+const encryptionTone = computed(() => {
+  if (!encryption.value?.enabled) return "";
+  return encryption.value.passwordUsable ? "ok" : "danger";
+});
+
+/*
+ * Uzak hedefe ŞİFRESİZ gitme riski.
+ *
+ * Yönetici için kesin ölçülür (kayıtlı parola durumu elimizde). Kiracıda `GET /backup/encryption`
+ * kapalı olduğundan kayıtlı parolanın varlığı BİLİNMEZ; bu yüzden uyarı metni "panelde kayıtlı
+ * parola yoksa" koşuluyla yazılmıştır — iki durumda da doğrudur.
+ */
+const remoteUnencryptedRisk = computed(() =>
+  targetForm.targetType !== "local" &&
+  targetForm.encryptionPassword.length === 0 &&
+  !(encryption.value?.enabled && encryption.value.passwordUsable));
 
 // Granüler geri yükleme (zip içeriğine gözatma).
 const browseRecord = ref<BackupRecord | null>(null);
@@ -379,8 +504,67 @@ onMounted(async () => {
   await refresh();
   if (isAdmin.value) {
     await loadAutoBackup();
+    await loadEncryption();
   }
 });
+
+async function loadEncryption() {
+  try {
+    encryption.value = await getBackupEncryption();
+  } catch (error) {
+    // Kasa bu kurulumda yoksa (`backup.encryption_unavailable`) kart gizlenir; yedek listesi
+    // etkilenmez. Sebep yine de şeritte söylenir — sessizce kaybolmaz.
+    encryption.value = null;
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+async function saveEncryption() {
+  if (!canSaveEncryption.value) {
+    return;
+  }
+
+  busy.value = true;
+  try {
+    encryption.value = await setBackupEncryption(encryptionForm.password);
+    resetEncryptionForm();
+    showNotice(t("backup.encryption_saved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function disableEncryption() {
+  // Yıkıcı: bundan sonraki yedekler şifresiz alınır. MEVCUT şifreli yedekler yine parola ister —
+  // onay metni bunu açıkça söylüyor.
+  await confirm({
+    title: t("panel.backup.encryptionDisableTitle"),
+    message: t("panel.backup.encryptionDisableMessage"),
+    confirmLabel: t("panel.backup.encryptionDisable"),
+    action: async () => {
+      busy.value = true;
+      try {
+        // Boş parola = kaydı sil + şifrelemeyi kapat (sunucu sözleşmesi).
+        encryption.value = await setBackupEncryption("");
+        resetEncryptionForm();
+        showNotice(t("backup.encryption_saved"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      } finally {
+        busy.value = false;
+      }
+    }
+  });
+}
+
+function resetEncryptionForm() {
+  // Parola bellekte/ekranda ASILI KALMAZ.
+  encryptionForm.password = "";
+  encryptionForm.confirm = "";
+  encryptionForm.acknowledged = false;
+}
 
 async function loadAutoBackup() {
   try {
@@ -463,6 +647,9 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
     await operation();
     await refresh();
     activeView.value = "list";
+    // Bu yedeğe özel parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce
+    // taşınmaz (kullanıcı hangi parolayla şifrelediğini karıştırmasın).
+    targetForm.encryptionPassword = "";
     showNotice(t("panel.backup.created"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
@@ -472,6 +659,18 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
 }
 
 async function restore(backup: BackupRecord) {
+  // Şifreli yedekte parola ÖNCE sorulur: onay diyaloğunu geçtikten sonra "parola lazım" demek,
+  // kullanıcıyı yüksek riskli onayı ikinci kez yapmaya zorlardı.
+  let password = "";
+  if (backup.encrypted) {
+    const entered = await askBackupPassword();
+    if (entered === null) {
+      return;
+    }
+
+    password = entered;
+  }
+
   // Yüksek riskli onay: geri yükleme canlı veriyi ÜZERİNE yazar → yedek adı yazılmadan devam edilemez.
   await confirm({
     title: t("panel.confirm.restoreBackupTitle", { name: backup.name }),
@@ -483,16 +682,69 @@ async function restore(backup: BackupRecord) {
     action: async () => {
       busy.value = true;
       try {
-        await restoreBackup(backup.id, "");
+        const restored = await restoreBackup(backup.id, "", password);
         await refresh();
-        showNotice(t("panel.backup.restored"), false);
+        reportRestoreResult(restored);
       } catch (error) {
         showNotice(resolveApiMessage(error), true);
       } finally {
         busy.value = false;
+        password = "";
       }
     },
   });
+}
+
+/**
+ * Şifreli yedeğin parolasını sorar. Boş bırakılabilir: sunucu o zaman panelde KAYITLI parolayı
+ * dener. İptalde `null` döner (akış durur).
+ */
+async function askBackupPassword() {
+  return prompt({
+    title: t("panel.backup.restorePasswordTitle"),
+    message: t("panel.backup.encryptionLossWarning"),
+    label: t("panel.backup.encryptionPassword"),
+    hint: t("panel.backup.restorePasswordHint"),
+    password: true,
+    allowEmpty: true,
+    confirmLabel: t("panel.backup.restore")
+  });
+}
+
+/**
+ * Geri yükleme sonucunu OLDUĞU GİBİ söyler.
+ *
+ * NEDEN: sunucu yarım kalan adımları `warnings[]` ile döndürüyor ve durumu
+ * `restored_with_errors` yapıyor. Koşulsuz "geri yüklendi" demek, kullanıcının elinde ne eski
+ * hâl ne de dönmüş veritabanı varken ona "tamam" dedirtirdi. Üzerine yazılan içeriğin taşındığı
+ * klasör (`preservedPath`) de söylenir: "yanlış yedeği geri yükledim" denince dönülecek tek yer orası.
+ */
+function reportRestoreResult(record: BackupRecord) {
+  const lines: string[] = [];
+  const failed = (record.warnings ?? []).length > 0;
+
+  lines.push(failed ? t("panel.backup.restoredWithErrors") : t("panel.backup.restored"));
+
+  if (failed) {
+    lines.push(`${t("panel.backup.restoreWarningsTitle")}:`, warningText(record));
+  }
+
+  if (record.preservedPath) {
+    lines.push(t("panel.backup.preservedPath", { path: record.preservedPath }));
+  }
+
+  showNotice(lines.join("\n"), failed);
+}
+
+/** Kayıt üzerindeki uyarıların çevrilmiş özeti (rozetin `title` ipucu). */
+function warningText(backup: BackupRecord) {
+  return (backup.warnings ?? [])
+    .map((warning) => {
+      const translated = t(warning.messageKey);
+      const message = translated === warning.messageKey ? warning.messageKey : translated;
+      return warning.target ? `${warning.target}: ${message}` : message;
+    })
+    .join("\n");
 }
 
 // Onay kutusundaki "etkilenecekler" listesi: ekranın zaten elinde olan yedek bilgileri.
@@ -566,7 +818,16 @@ async function navigateTo(prefix: string) {
     browseEntries.value = result.entries;
     browseTruncated.value = result.truncated;
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    /*
+     * Gözatma ucu parola ALMAZ (bilerek: parolayı sorgu dizesine koymak onu IIS erişim
+     * günlüklerine ve tarayıcı geçmişine yazmak olurdu). Şifreli yedekte gözatma yalnız panelde
+     * KAYITLI parola varsa çalışır — genel "parolayı girin" metni burada yanlış yol gösterirdi.
+     */
+    if (extractApiMessage(error) === "backup.password_required") {
+      showNotice(t("panel.backup.browseEncryptedHint"), true);
+    } else {
+      showNotice(resolveApiMessage(error), true);
+    }
   } finally {
     busy.value = false;
   }
@@ -575,6 +836,18 @@ async function navigateTo(prefix: string) {
 async function restoreSelectedItems() {
   const record = browseRecord.value;
   if (!record || selectedItems.value.length === 0) return;
+
+  // Şifreli yedekte parola önce sorulur (gözatma kayıtlı parolayla çalışmış olabilir, ama
+  // geri yükleme ucu isteğe ait parolayı da kabul eder).
+  let password = "";
+  if (record.encrypted) {
+    const entered = await askBackupPassword();
+    if (entered === null) {
+      return;
+    }
+
+    password = entered;
+  }
 
   const impact = [
     `${t("panel.backup.name")}: ${record.name}`,
@@ -593,13 +866,14 @@ async function restoreSelectedItems() {
     action: async () => {
       busy.value = true;
       try {
-        const result = await restoreBackupItems(record.id, selectedItems.value, itemsTargetPath.value);
+        const result = await restoreBackupItems(record.id, selectedItems.value, itemsTargetPath.value, password);
         selectedItems.value = [];
         showNotice(t("panel.backup.itemsRestoredNotice", { count: result.restoredCount, target: result.targetRoot }), false);
       } catch (error) {
         showNotice(resolveApiMessage(error), true);
       } finally {
         busy.value = false;
+        password = "";
       }
     },
   });
@@ -695,6 +969,24 @@ function showNotice(message: string, isError: boolean) {
 
 .remote-url {
   grid-column: span 1;
+}
+
+.encryption-card {
+  align-content: start;
+  display: grid;
+  gap: 12px;
+}
+
+/* Parola kaybı geri dönüşsüz: uyarı satırı gövde metninden ayrışsın. */
+.encryption-loss {
+  font-weight: 600;
+}
+
+/* Durum + kilit + uyarı rozetleri aynı satırda, dar ekranda alt satıra sarar. */
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 @media (max-width: 720px) {

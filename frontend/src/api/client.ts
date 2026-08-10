@@ -1,4 +1,4 @@
-import axios, { type InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -84,6 +84,54 @@ export function readSecureEntryPath(): string {
   return resolveSecureEntryPath();
 }
 
+/*
+ * SALT OKUNUR MOD (askıya alınmış abonelik) — TEK KAPI.
+ *
+ * Sunucu askıdaki abonelik için BÜTÜN POST/PUT/PATCH/DELETE isteklerini
+ * `403 subscription.suspended_readonly` ile reddediyor. Bu kapı aynı kuralı istemcide de
+ * uygular: istek AĞA HİÇ ÇIKMAZ ve çağıran ekran, sunucudan gelmiş gibi çevrilebilir bir
+ * `messageKey` görür (her ekranın `resolveApiMessage`'ı bunu zaten çeviriyor).
+ *
+ * Kuralın tek yerde olması şart: elli ekranın her düğmesine ayrı ayrı koşul yazmak, bir tanesi
+ * unutulduğunda kullanıcıyı yine ham 403'e sürerdi.
+ *
+ * İSTİSNA — `/auth/*`: sunucu da bu yolları askıya takmıyor. Aksi hâlde askıdaki kullanıcı
+ * çıkış yapamaz, parolasını değiştiremez, iki adımlı doğrulamasını yönetemez görünürdü.
+ */
+const MUTATING_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+let readOnlyMessageKey = "";
+
+/** Salt okunur modu açar (mesaj anahtarıyla) ya da boş dizgiyle kapatır. Tek çağıran: abonelik store'u. */
+export function setReadOnlyMode(messageKey: string): void {
+  readOnlyMessageKey = messageKey;
+}
+
+export function isReadOnlyMode(): boolean {
+  return readOnlyMessageKey.length > 0;
+}
+
+function isAuthPath(url: string | undefined): boolean {
+  // `config.url` baseURL'e göredir: "/auth/logout", "auth/logout" ya da tam yol gelebilir.
+  return (url ?? "").replace(/^\/?(api\/v1\/)?/, "").startsWith("auth/");
+}
+
+/** Ağa çıkmadan, sunucunun döndüreceğiyle AYNI biçimde reddeder (çağıranlar tek kalıp kullanır). */
+function readOnlyRejection(config: InternalAxiosRequestConfig): AxiosError {
+  return new AxiosError(
+    readOnlyMessageKey,
+    "ERR_SUBSCRIPTION_READONLY",
+    config,
+    null,
+    {
+      status: 403,
+      statusText: "Forbidden",
+      data: { success: false, data: null, message: readOnlyMessageKey, code: 403 },
+      headers: {},
+      config
+    }
+  );
+}
+
 export const apiClient = axios.create({
   baseURL: "/api/v1",
   withCredentials: true,
@@ -101,7 +149,11 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
   }
 
   const method = (config.method ?? "get").toUpperCase();
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+  if (MUTATING_METHODS.includes(method)) {
+    if (isReadOnlyMode() && !isAuthPath(config.url)) {
+      throw readOnlyRejection(config);
+    }
+
     const token = await fetchCsrfToken();
     headers["X-CSRF-TOKEN"] = token;
   }
