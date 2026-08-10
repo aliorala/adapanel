@@ -6221,3 +6221,92 @@ Basarili:
 - **Yayin sonrasi ZORUNLU dogrulama:** yayindaki dosyayi indirip SHA256'yi yereldekiyle
   karsilastir + `releases/latest` gercekten yeni surumu gosteriyor mu bak (panelin self-update'i
   onu okur).
+
+## 2026-08-08/10 (214) — GELİŞTİRME MAKİNESİNDE VİRÜS + iki dalgalık tam denetim ve düzeltme
+
+> NOT: bu dosya 0.2.92'den 0.4.22'ye kadar GÜNCELLENMEMİŞTİ. O aralığın kararları yalnızca
+> git commit mesajlarında; 0.3.0-0.4.22 arası ise hiç commit'lenmemişti (aşağıya bak).
+
+### A. GELİŞTİRME MAKİNESİNDE AKTİF EXE BULAŞTIRICI BULUNDU (kritik)
+
+`artifacts\release\0.2.91\AdaPanelSetup.exe` 56.077.824 bayt görününce ölçtüm: bu dosyanın
+CODEX kaydındaki boyutu 55.306.361 ve GitHub'daki asset digest'i kayıtla BİREBİR. Yerel dosya
+263. bayttan itibaren farklıydı ve `VersionInfo` **"Synaptics Pointing Device Driver"** diyordu.
+
+- Zararlı: `C:\ProgramData\Synaptics\Synaptics.exe` (771.584 bayt), kalıcılık
+  `HKLM\Software\Wow6432Node\...\Run` → "Synaptics Pointing Device Driver".
+  `SSLLibrary.ddl` 23 GB'a ulaşmış (içeriği tekrar tekrar indirilmiş 404 HTML'i).
+  `%AppData%\WinSl` = klavye günlüğü; en eski günlük **11.11.2021** ve içeriği WinOLS pencereleri.
+- Bulaşma anı ölçüldü: **8 Eylül 2025 11:52:43**. 11:52:48'de Temp'e makrolu `.xlsm` düştü,
+  11:52:49'da masaüstüne 771.584 baytlık `~$cache1`. Yani vektör **makrolu bir Excel dosyası**;
+  kaynak büyük olasılıkla kırık WinOLS/tuning ekosistemi (keylogger günlükleri 2021'e gidiyor).
+- Her açılıştan ~6 dk sonra diskteki EXE'leri yeniden bulaştırıyordu (8 Ağu 14:15'te 87 dosya).
+- **Defender sistemde YOKTU**: `DisableAntiSpyware=1`, `DisableRealtimeMonitoring=1` ve
+  `WinDefend` servisi hiç kayıtlı değil.
+- Temizlik: kullanıcı alanındaki 96 öğe + 27,33 GB silindi; sistem tarafı (ProgramData, HKLM,
+  Defender politikaları) yükseltilmiş bir betikle kullanıcı tarafından temizlendi ve DOĞRULANDI.
+
+**KALICI DERS — YAYIN ÖNCESİ ZORUNLU:** "yayındaki dosyayı indirip yereldekiyle SHA256
+karşılaştır" doğrulaması bu sınıfa KÖRDÜR: yerel bulaşıksa GitHub'daki de aynı bulaşık dosyadır,
+hash'ler birebir tutar ve doğrulama "TEMİZ" der. Paket üretmeden önce
+`(Get-Item $exe).VersionInfo.CompanyName -eq 'Synaptics'` kontrolü ŞART. Bu kontrol artık
+`scripts\verify-publish-output.ps1` içinde ve her iki paketleme hattına bağlı.
+
+**Temiz doğrulandı:** yayındaki 0.2.91 (`81b1844f…`) ve 0.4.22 (`0db89e16…6ee730e4`) paketleri,
+publish çıktısı, kurulu panel, ISCC ve x64 apphost/singlefilehost şablonları. Müşteriye
+bulaşık paket GİTMEDİ (0.4.22 02:11'de üretilip 02:13'te yüklendi, bulaşma 14:15'te oldu).
+
+### B. 0.3.0-0.4.22 COMMIT'LENMEMİŞTİ
+
+Son commit 0.2.99 (5 Ağu) idi; 6-7-8 Ağustos'ta yapılan ve **0.4.22 olarak GitHub'a yayınlanan**
+işin tamamı yalnızca çalışma ağacında duruyordu (178 dosya, +12194/-385). Elektrik kesintisi bu
+işi silebilirdi. Tek commit'te güvence altına alındı (`32cbcaf`).
+
+### C. BEŞ AJANLI TAM DENETİM — bulunan ve KAPATILAN P0'lar
+
+- **Cron görev adından SYSTEM olarak kod çalıştırma.** `EscapePowerShell` yalnız `"` kaçırıyordu,
+  çıktısı ÇİFT TIRNAKLI PowerShell dizesine giriyordu → `$(...)` çalışıyordu. `Name` doğrulamasız,
+  `CronController` Customer'a açık, servis LocalSystem (canlı ölçüldü). Çözüm: tek tırnak +
+  `EscapeSingleQuoted` (aynı dosyada zaten vardı) + `TaskNameRules` beyaz listesi.
+- **Site ADI hiç doğrulanmıyordu.** Host adı için sahiplik iddiası vardı, `Name` için yoktu →
+  başkasının IIS sitesini devralma, `CustomerScopeService.cs:185` yüzünden mail domaini ve DNS
+  bölgesi devralma, cascade'in adı benzeyen veritabanını DROP etmesi.
+- **Oturum çerezi hiçbir olayda geçersizleşmiyordu.** `OnValidatePrincipal` yoktu.
+  ÖLÇÜM: `UpdatedAtUtc` ölçüt YAPILAMAZ — AuthService onu BAŞARISIZ girişte de güncelliyor,
+  yani saldırganın tek başarısız denemesi kurbanı oturumdan atardı. Parola karmasından türetilen
+  damga çereze yazıldı (EF göçü gerekmedi).
+- **Geri yükleme, DB import patlarken "restored" diyordu** (çıplak `catch {}`), üstelik dosyalar
+  zaten canlının üzerine yazılmıştı. Artık içerik önce kardeş klasöre taşınıyor; taşınamıyorsa
+  işlem HİÇ BAŞLAMIYOR.
+- **Yedek budama, yedekler hiç alınamasa da çalışıyordu** ve yedek başarısızlığı için uyarı yoktu.
+- **`uninstall-cleanup.ps1:250` `configtp-users.json`** — ters bölü kayıp, FTP hesap temizliği
+  hiç çalışmıyordu. Üstelik KeepData=1 dalı `:28`'de `exit 0` yaptığı için o koda zaten
+  ulaşılmıyordu: iki bağımsız hata aynı özelliği iki kez öldürmüş.
+- **Paketleme scriptleri `$Version = "0.2.28"`** varsayılanı taşıyordu ve hiçbiri
+  `Directory.Build.props` okumuyordu; README komutu parametresiz veriyordu → yayınlansa
+  SONSUZ GÜNCELLEME DÖNGÜSÜ (panel her turda 0.2.28'e düşer, yine yeni sürüm görür).
+
+### D. İKİNCİ DALGA — eklenen yetenekler
+
+Abonelik askısı fiilen dayatılıyor (durum değiştiren istek 403, okuma serbest) · SSL, WordPress
+Toolkit, istatistik, site sağlığı ve disk kotası MÜŞTERİYE açıldı (sunucu-geneli olanlar bilerek
+kapalı) · bayi kendi servis planını yönetiyor + bayi tavanı · denetim kaydı (Files/Mail/FTP/DB/
+Terminal + filtre/sayfalama/CSV/saklama + kiracıya kapsamlı açık) · yedek şifreleme
+(AES-256-GCM, PBKDF2 600k) · HTTPS bağlaması kaldırma (`POST /ssl/remove`) · lisans altyapısı
+(VARSAYILAN KAPALI) · WHMCS provisioning modülü · `docs/` (8 dosya) · arayüzde sayfalama, toplu
+işlem, varlık araması, kod bölme (en büyük chunk 1.133 kB → ~600 kB).
+
+**ÖLÇÜM NOTU (lisans):** makine parmak izi = `SHA-256(MachineGuid + kurulum kimliği)`.
+MAC reddedildi (panelin KENDİSİ Docker kurunca sanal arayüz doğuruyor); SMBIOS reddedildi,
+bu makinede ölçüldü: `Win32_BIOS.SerialNumber` = "To Be Filled By O.E.M".
+
+### E. DURUM ve AÇIK KALANLAR
+
+- Test **976 → 1232**, hepsi yeşil. i18n **TR 3672 = EN 3672**, tek yönlü fark 0.
+- Sürüm hâlâ **0.4.22**; PAKET ÜRETİLMEDİ, GitHub'a bir şey gönderilmedi. Yayın için sürüm
+  artırılmalı — `scripts\version-guard.ps1` artık uyuşmazlıkta DURDURUR.
+- **AÇIK:** kişisel API anahtarları REST API'de çalışmıyor (`PanelToken` şeması yalnız `/mcp`'ye
+  bağlı, `/api/v1` varsayılan çerez şemasını kullanıyor, `Authorization` başlığı okunmuyor) ·
+  MCP yazma araçları abonelik askısını ve alt-kullanıcı bölüm izinlerini atlıyor · yöneticinin
+  kiracı kaynağındaki işlemi kiracının denetim görünümünde çıkmıyor · dosya taşıma ucu yok ·
+  bayi menüsünde yedekleme yok · lisans/şifreleme ekranları arayüzde yok · 155 ölü i18n anahtarı.
