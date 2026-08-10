@@ -100,4 +100,22 @@ public sealed class MailServiceRouter(
 
     public Task<MailSpamSettingsDto> UpdateSpamSettingsAsync(UpdateMailSpamSettingsRequest request, CancellationToken cancellationToken = default)
         => Active.UpdateSpamSettingsAsync(request, cancellationToken);
+
+    public Task<MailQueueDto> GetQueueAsync(int limit, CancellationToken cancellationToken = default)
+        => Active.GetQueueAsync(limit, cancellationToken);
+
+    public Task<MailQueueMessageDto?> GetQueueMessageAsync(string id, CancellationToken cancellationToken = default)
+        => Active.GetQueueMessageAsync(id, cancellationToken);
+
+    public Task<bool> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken = default)
+        => Active.DeleteQueueMessageAsync(id, cancellationToken);
+
+    public Task<MailRelayDto> GetRelayAsync(CancellationToken cancellationToken = default)
+        => Active.GetRelayAsync(cancellationToken);
+
+    public Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default)
+        => Active.SetRelayAsync(request, cancellationToken);
+
+    public Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default)
+        => Active.GetClientSettingsAsync(domain, cancellationToken);
 }

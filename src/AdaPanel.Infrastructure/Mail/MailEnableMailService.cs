@@ -322,6 +322,35 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<MailListenerDto>>([]);
 
+    /// <summary>
+    /// MailEnable kuyruğu bu panelden okunmuyor: durum "kuyruk boş" DEĞİL, "yapılandırılmadı"
+    /// olarak bildirilir. Boş liste dönmek, takılı iletileri olan bir sunucuda yöneticiye
+    /// "gönderilecek bir şey yok" göstermek olurdu.
+    /// </summary>
+    public Task<MailQueueDto> GetQueueAsync(int limit, CancellationToken cancellationToken = default)
+        => Task.FromResult(new MailQueueDto { Installed = true, Configured = false });
+
+    public Task<MailQueueMessageDto?> GetQueueMessageAsync(string id, CancellationToken cancellationToken = default)
+        => Task.FromResult<MailQueueMessageDto?>(null);
+
+    /// <summary>Desteklenmiyor — ve BAŞARILI DÖNMÜYOR (silinmemiş iletiyi silindi sanmak en kötüsü).</summary>
+    public Task<bool> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken = default)
+        => throw new AppException("mail.queue_not_supported", 400, 400);
+
+    /// <summary>MailEnable'da röle panelden yönetilmiyor; "kapalı" değil "yapılandırılmadı" bildirilir.</summary>
+    public Task<MailRelayDto> GetRelayAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(new MailRelayDto { Installed = true, Configured = false });
+
+    public Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default)
+        => throw new AppException("mail.relay_not_supported", 400, 400);
+
+    /// <summary>
+    /// İstemci ayarları ölçülemiyor → null. Autodiscover ucu bu durumda 404 döner; uydurma
+    /// port/ad yayınlamak, istemciyi çalışmayan bir yapılandırmaya kilitlerdi.
+    /// </summary>
+    public Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default)
+        => Task.FromResult<MailClientSettingsDto?>(null);
+
     public async Task<MailWorkspaceDto> SetAccountQuotaAsync(SetMailAccountQuotaRequest request, CancellationToken cancellationToken = default)
     {
         var (local, domain) = SplitAddress(request.Address);

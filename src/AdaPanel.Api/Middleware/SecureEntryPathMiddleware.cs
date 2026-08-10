@@ -77,7 +77,14 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
         context.Response.StatusCode = StatusCodes.Status404NotFound;
     }
 
-    private static bool IsAlwaysPublicPath(PathString path)
+    /// <summary>
+    /// Gizli giriş yolu (ve IP) denetiminden tamamen muaf yollar.
+    /// <para>
+    /// <c>internal</c>: muafiyet listesinin İÇERİĞİ test edilebilmeli. Bir yolun listede olduğunu
+    /// varsaymak, o yolun sessizce 404 döndüğünü fark etmemek demektir.
+    /// </para>
+    /// </summary>
+    internal static bool IsAlwaysPublicPath(PathString path)
     {
         return path.StartsWithSegments("/assets", out _)
             || path.StartsWithSegments("/swagger", out _)
@@ -85,8 +92,30 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
             || path.StartsWithSegments("/robots.txt", out _)
             || path.StartsWithSegments("/index.html", out _)
             || path.StartsWithSegments("/api/v1/setup", out _)
-            || path.StartsWithSegments("/api/v1/health", out _);
+            || path.StartsWithSegments("/api/v1/health", out _)
+            || IsMailAutoconfigPath(path);
     }
+
+    /// <summary>
+    /// Posta istemcisi otomatik yapılandırma yolları (Outlook autodiscover / Thunderbird autoconfig).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu yollar SABİTTİR: istemciler tam olarak bu adresleri çağırır, gizli giriş yolunun
+    /// arkasına alınamaz ve özel bir başlık gönderemezler. Muafiyet yazılmasaydı uçlar eklenmiş
+    /// ama HER istekte 404 dönüyor olurdu — yani özellik var görünüp hiç çalışmazdı.
+    /// </para>
+    /// <para>
+    /// Muafiyet IP kısıtlamasını da atlar ve bu KASITLIDIR: posta istemcileri son kullanıcının
+    /// rastgele IP'sinden bağlanır, panel yöneticisinin izin listesinden değil. Yeni bir yüzey
+    /// açmıyor — arkasındaki denetleyici salt-okunurdur, durum değiştirmez, kimlik/sır taşımaz ve
+    /// yalnızca panelde TANIMLI alan adları için ad/port/şifreleme döner; tanımsız alan 404 alır.
+    /// </para>
+    /// </remarks>
+    internal static bool IsMailAutoconfigPath(PathString path) =>
+        path.StartsWithSegments("/autodiscover", out _)
+        || path.StartsWithSegments("/.well-known/autoconfig", out _)
+        || string.Equals(path.Value, "/mail/config-v1.1.xml", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Gizli giriş yolu başlığı ZORUNLU MU?

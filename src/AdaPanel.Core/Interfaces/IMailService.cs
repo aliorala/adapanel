@@ -107,4 +107,32 @@ public interface IMailService
     Task<MailSpamSettingsDto> GetSpamSettingsAsync(CancellationToken cancellationToken = default);
 
     Task<MailSpamSettingsDto> UpdateSpamSettingsAsync(UpdateMailSpamSettingsRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Giden posta kuyruğunu listeler (en yeniden eskiye).
+    /// </summary>
+    /// <param name="limit">Listeye alınacak azami ileti sayısı; toplam sayı ayrıca bildirilir.</param>
+    Task<MailQueueDto> GetQueueAsync(int limit, CancellationToken cancellationToken = default);
+
+    /// <summary>Tek bir kuyruk iletisinin ayrıntısı; ileti yoksa <c>null</c>.</summary>
+    Task<MailQueueMessageDto?> GetQueueMessageAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>Kuyruktaki iletiyi siler (teslim edilmez). Silinecek ileti yoksa <c>false</c>.</summary>
+    Task<bool> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>Giden posta rölesi (smarthost) ayarını okur. Parola ASLA dönmez.</summary>
+    Task<MailRelayDto> GetRelayAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Giden posta rölesini kurar ya da kaldırır. Parola panelde DPAPI ile şifreli saklanır,
+    /// yanıtta dönmez. Değişikliğin sunucuda gerçekten uygulandığı geri okunarak DOĞRULANIR.
+    /// </summary>
+    Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir alan adının posta istemcisi ayarları (autodiscover/autoconfig kaynağı).
+    /// Alan adı panelde tanımlı değilse ya da ayarlar ölçülemiyorsa <c>null</c> döner —
+    /// böylece uç, uydurma değer yayınlamak yerine 404 verebilir.
+    /// </summary>
+    Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default);
 }

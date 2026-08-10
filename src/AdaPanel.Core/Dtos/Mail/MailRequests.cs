@@ -120,3 +120,44 @@ public sealed class SetMailListRecipientsRequest
 
     public IReadOnlyCollection<string> Recipients { get; set; } = [];
 }
+
+/// <summary>
+/// Giden posta rölesi (smarthost) ayarı.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Parola neden isteğe bağlı:</b> yönetici yalnız portu ya da TLS ayarını değiştirmek
+/// istediğinde parolayı yeniden yazmak zorunda kalmamalı. Boş bırakılırsa panelde saklı olan
+/// (DPAPI ile şifreli) parola korunur; sunucuya yeniden o yazılır. Bu ayrım olmadan her küçük
+/// düzeltme, kullanıcıyı parolayı bir yere not etmeye ve düz metin taşımaya zorlardı.
+/// </para>
+/// </remarks>
+public sealed class SetMailRelayRequest
+{
+    /// <summary>false ise röle KALDIRILIR: yönlendirme eski hâline döner ve saklı parola silinir.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Röle sunucusunun adresi (ad ya da IP). Enabled=true iken zorunlu.</summary>
+    [StringLength(255)]
+    public string Host { get; set; } = string.Empty;
+
+    [Range(1, 65535)]
+    public int Port { get; set; } = 587;
+
+    /// <summary><c>smtp</c> (varsayılan) ya da <c>lmtp</c>.</summary>
+    [StringLength(8)]
+    public string Protocol { get; set; } = "smtp";
+
+    /// <summary>Bağlantı doğrudan TLS ile açılsın mı (465 gibi)? false = STARTTLS.</summary>
+    public bool ImplicitTls { get; set; }
+
+    /// <summary>Röle sertifikası doğrulanmasın mı? Yalnız iç ağdaki röleler için.</summary>
+    public bool AllowInvalidCerts { get; set; }
+
+    [StringLength(255)]
+    public string Username { get; set; } = string.Empty;
+
+    /// <summary>Yeni parola. BOŞ = panelde saklı parolayı koru (bkz. sınıf açıklaması).</summary>
+    [StringLength(512)]
+    public string? Password { get; set; }
+}

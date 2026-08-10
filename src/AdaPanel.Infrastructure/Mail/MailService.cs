@@ -2242,4 +2242,750 @@ public sealed class MailService(
         return null;
     }
 
+    // --- Giden posta kuyruğu (QueuedMessage) ---
+
+    /// <summary>Kuyruk listesinde varsayılan olarak gösterilen ileti sayısı.</summary>
+    private const int VarsayilanKuyrukLimiti = 100;
+
+    /// <summary>
+    /// Kuyruk listesinin sert üst sınırı.
+    /// </summary>
+    /// <remarks>
+    /// Sınır KEYFİ DEĞİL, maliyetten geliyor: liste yanıtı özet dönerse ileti başına ayrı bir CLI
+    /// süreci açılır. Sınırsız bir "hepsini getir", kuyruğu on binlerce iletiye çıkmış (yani tam da
+    /// bakılması gereken) bir sunucuda mail sayfasını süresiz kilitlerdi.
+    /// </remarks>
+    private const int AzamiKuyrukLimiti = 500;
+
+    /// <inheritdoc />
+    public async Task<MailQueueDto> GetQueueAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        var cli = await ResolveCliAsync(cancellationToken);
+        if (cli is null)
+        {
+            return new MailQueueDto { Installed = false };
+        }
+
+        var password = await GetAdminPasswordAsync(cancellationToken);
+        if (password is null)
+        {
+            return new MailQueueDto { Installed = true, Configured = false };
+        }
+
+        var env = BuildEnvironment(password);
+        var liste = await RunCliAsync(cli, "query QueuedMessage --json", env, cancellationToken);
+        if (!liste.Success)
+        {
+            // "Kuyruk boş" DEĞİL: sunucuya bağlanılamadı. İkisini aynı görüntüye indirmek,
+            // posta sunucusu çökmüşken yöneticiye "her şey yolunda" göstermek olurdu.
+            return new MailQueueDto { Installed = true, Configured = false };
+        }
+
+        var kayitlar = ParseItems(liste.StandardOutput);
+        var sinir = Math.Clamp(limit <= 0 ? VarsayilanKuyrukLimiti : limit, 1, AzamiKuyrukLimiti);
+
+        var iletiler = new List<MailQueueMessageDto>();
+        foreach (var kayit in kayitlar.Take(sinir))
+        {
+            var ileti = ParseQueueMessage(kayit);
+
+            // Liste yanıtı ÖZET dönebilir (hesap listesinde de öyle: yalnız id + bir iki alan).
+            // Zarf bilgisi gelmediyse iletinin tamamı okunur; yoksa ekranda kimlikten başka bir şey
+            // olmaz ve "hangi ileti takıldı" sorusu yine cevapsız kalır.
+            if (KuyrukOzetiEksik(ileti) && !string.IsNullOrWhiteSpace(ileti.Id))
+            {
+                var detay = await GetObjectAsync(cli, "QueuedMessage", ileti.Id, env, cancellationToken);
+                if (detay is not null)
+                {
+                    ileti = ParseQueueMessage(detay.Value, ileti.Id);
+                }
+            }
+
+            iletiler.Add(ileti);
+        }
+
+        return new MailQueueDto
+        {
+            Installed = true,
+            Configured = true,
+            TotalCount = kayitlar.Count,
+            // En yeni ileti en üstte: operatörün aradığı şey "az önce gönderdiğim posta nerede".
+            Messages = iletiler.OrderByDescending(item => item.CreatedAtUtc ?? DateTimeOffset.MinValue).ToArray()
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<MailQueueMessageDto?> GetQueueMessageAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var kimlik = (id ?? string.Empty).Trim();
+        if (kimlik.Length == 0)
+        {
+            return null;
+        }
+
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var detay = await GetObjectAsync(cli, "QueuedMessage", kimlik, env, cancellationToken);
+        return detay is null ? null : ParseQueueMessage(detay.Value, kimlik);
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var kimlik = (id ?? string.Empty).Trim();
+        if (kimlik.Length == 0)
+        {
+            return false;
+        }
+
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+
+        // Zaten yoksa "sildim" demeyiz: çağıran 404 görmeli, yoksa var olmayan bir kimliği silen
+        // her istek başarıyla dönerdi ve denetim kaydı olmayan bir işlemi kaydederdik.
+        if (await GetObjectAsync(cli, "QueuedMessage", kimlik, env, cancellationToken) is null)
+        {
+            return false;
+        }
+
+        var sonuc = await RunCliAsync(cli, $"delete QueuedMessage --ids {Arg(kimlik)}", env, cancellationToken);
+        if (!sonuc.Success)
+        {
+            throw new AppException("mail.queue_delete_failed", 502, 502, CombineError(sonuc));
+        }
+
+        // DOĞRULA: komut sıfırla dönse bile nesne yerinde kalmış olabilir. "Sildim" demeden önce
+        // gerçekten gitmiş mi diye bakılır — bu depoda kota alanında tam tersi yaşandı.
+        if (await GetObjectAsync(cli, "QueuedMessage", kimlik, env, cancellationToken) is not null)
+        {
+            throw new AppException("mail.queue_delete_unverified", 502, 502);
+        }
+
+        return true;
+    }
+
+    /// <summary>Zarf bilgisi gelmemiş (yalnız kimlik taşıyan) bir özet mi?</summary>
+    private static bool KuyrukOzetiEksik(MailQueueMessageDto ileti) =>
+        ileti.Recipients.Count == 0 && ileti.CreatedAtUtc is null && ileti.SizeBytes == 0;
+
+    /// <summary>
+    /// Stalwart <c>QueuedMessage</c> nesnesini panel görünümüne çevirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Alan adları şema referansından alındı: <c>createdAt</c>, <c>nextRetry</c>,
+    /// <c>returnPath</c>, <c>size</c>, <c>receivedFromIp</c> ve <c>recipients</c> (anahtarı
+    /// e-posta adresi olan HARİTA). Alıcı nesnesinde <c>retryCount</c>, <c>retryDue</c>,
+    /// <c>queueName</c> ve <c>status</c> bulunur.
+    /// </para>
+    /// <para>
+    /// <c>status</c>'ün İÇİ bilerek ayrıştırılmıyor: varyantın içindeki hata alanlarının adları
+    /// doğrulanamadı. Uydurma bir addan okumak, hata sebebini her zaman BOŞ gösterirdi — özellik
+    /// var görünür ama hiç çalışmazdı. Bunun yerine varyant adı + ham metin taşınıyor.
+    /// </para>
+    /// </remarks>
+    internal static MailQueueMessageDto ParseQueueMessage(JsonElement message, string? fallbackId = null)
+    {
+        var kimlik = GetField(message, "id");
+        var alicilar = new List<MailQueueRecipientDto>();
+
+        if (message.ValueKind == JsonValueKind.Object
+            && message.TryGetProperty("recipients", out var harita)
+            && harita.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var girdi in harita.EnumerateObject())
+            {
+                var (durum, durumMetni) = ReadRecipientStatus(girdi.Value);
+                alicilar.Add(new MailQueueRecipientDto
+                {
+                    Address = girdi.Name,
+                    Status = durum,
+                    StatusDetail = durumMetni,
+                    RetryCount = (int)GetLongField(girdi.Value, "retryCount"),
+                    RetryDueUtc = ParseUtc(girdi.Value, "retryDue"),
+                    QueueName = GetField(girdi.Value, "queueName")
+                });
+            }
+        }
+
+        return new MailQueueMessageDto
+        {
+            Id = string.IsNullOrWhiteSpace(kimlik) ? (fallbackId ?? string.Empty) : kimlik,
+            ReturnPath = GetField(message, "returnPath"),
+            CreatedAtUtc = ParseUtc(message, "createdAt"),
+            NextRetryUtc = ParseUtc(message, "nextRetry"),
+            SizeBytes = GetLongField(message, "size"),
+            ReceivedFromIp = GetField(message, "receivedFromIp"),
+            Recipients = alicilar
+        };
+    }
+
+    /// <summary>Alıcı durumunu (varyant adı, ham metin) olarak okur; string ya da nesne olabilir.</summary>
+    private static (string Ad, string Metin) ReadRecipientStatus(JsonElement recipient)
+    {
+        if (recipient.ValueKind != JsonValueKind.Object || !recipient.TryGetProperty("status", out var durum))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        return durum.ValueKind switch
+        {
+            JsonValueKind.String => (durum.GetString() ?? string.Empty, durum.GetString() ?? string.Empty),
+            JsonValueKind.Object => (GetField(durum, "@type", "type"), durum.GetRawText()),
+            _ => (string.Empty, durum.GetRawText())
+        };
+    }
+
+    /// <summary>ISO-8601 tarih alanını okur; okunamıyorsa null (tarihi uydurmaktansa göstermemek doğru).</summary>
+    private static DateTimeOffset? ParseUtc(JsonElement element, params string[] names)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        foreach (var name in names)
+        {
+            if (element.TryGetProperty(name, out var value)
+                && value.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(
+                    value.GetString(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                    out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    // --- Giden posta rölesi / smarthost (MtaRoute + MtaOutboundStrategy) ---
+
+    /// <summary>Panelin kurduğu röle rotasının adı. Yöneticinin elle eklediği rotalara dokunulmaz.</summary>
+    private const string RelayRouteName = "adapanel-relay";
+
+    /// <summary>Yönlendirme ifadesinde rota adı TIRNAK İÇİNDE geçer (ifade dili bir string bekler).</summary>
+    private const string RelayRouteExpression = "'" + RelayRouteName + "'";
+
+    /// <summary>Stalwart'ın belgelenmiş varsayılan yönlendirmesi: MX çözümlemesiyle doğrudan teslim.</summary>
+    private const string DefaultRouteExpression = "'mx'";
+
+    private const string RelayStorePath = "config/mail-relay.json";
+
+    /// <summary>
+    /// Rölenin panel tarafındaki kaydı. PAROLA BURADA DA DÜZ DEĞİLDİR: DPAPI ile korunmuş
+    /// metin saklanır (<see cref="ISecretProtector"/>), çünkü bu dosya yedeklere girer ve
+    /// yedek, panelin kendisinden daha çok elden ele dolaşır.
+    /// </summary>
+    internal sealed class MailRelayStore
+    {
+        public bool Enabled { get; set; }
+
+        public string Host { get; set; } = string.Empty;
+
+        public int Port { get; set; }
+
+        public string Protocol { get; set; } = "smtp";
+
+        public bool ImplicitTls { get; set; }
+
+        public bool AllowInvalidCerts { get; set; }
+
+        public string Username { get; set; } = string.Empty;
+
+        /// <summary>DPAPI ile korunmuş parola. Hiçbir DTO'ya, günlüğe ya da denetim kaydına geçmez.</summary>
+        public string PasswordProtected { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Röle açılmadan ÖNCEKİ yönlendirme ifadesi. Kapatınca buraya dönülür; yoksa yöneticinin
+        /// kendi kurduğu yönlendirme, rölenin kapatılmasıyla sessizce varsayılana ezilirdi.
+        /// </summary>
+        public string PreviousRouteExpression { get; set; } = string.Empty;
+    }
+
+    /// <inheritdoc />
+    public async Task<MailRelayDto> GetRelayAsync(CancellationToken cancellationToken = default)
+    {
+        var cli = await ResolveCliAsync(cancellationToken);
+        if (cli is null)
+        {
+            return new MailRelayDto { Installed = false };
+        }
+
+        var password = await GetAdminPasswordAsync(cancellationToken);
+        if (password is null)
+        {
+            return new MailRelayDto { Installed = true, Configured = false };
+        }
+
+        var env = BuildEnvironment(password);
+        var kayit = await fileStore.ReadAsync<MailRelayStore?>(RelayStorePath, null, cancellationToken);
+        var parolaVar = !string.IsNullOrWhiteSpace(kayit?.PasswordProtected);
+
+        var strateji = await GetObjectAsync(cli, "MtaOutboundStrategy", "singleton", env, cancellationToken);
+        if (strateji is null)
+        {
+            return new MailRelayDto { Installed = true, Configured = false, HasPassword = parolaVar };
+        }
+
+        // ETKİN Mİ sorusunun cevabı rotanın VARLIĞI değil, giden yönlendirmenin gerçekten onu
+        // göstermesidir. Rota tanımlı ama yönlendirme hâlâ MX ise posta röleye HİÇ uğramaz;
+        // paneli "röle açık" göstermek, tam da teşhis edilmek istenen sorunu gizlerdi.
+        var etkin = string.Equals(ReadRouteElse(strateji.Value), RelayRouteExpression, StringComparison.Ordinal);
+
+        var rotaId = await FindIdAsync("MtaRoute", "name", RelayRouteName, cancellationToken);
+        var rota = rotaId is null ? null : await GetObjectAsync(cli, "MtaRoute", rotaId, env, cancellationToken);
+
+        var dto = rota is null
+            ? new MailRelayDto { Enabled = etkin }
+            : ParseRelayRoute(rota.Value, etkin);
+
+        dto.Installed = true;
+        dto.Configured = true;
+        dto.HasPassword = parolaVar;
+        return dto;
+    }
+
+    /// <inheritdoc />
+    public async Task<MailRelayDto> SetRelayAsync(SetMailRelayRequest request, CancellationToken cancellationToken = default)
+    {
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+
+        if (request.Enabled && string.IsNullOrWhiteSpace(request.Host))
+        {
+            throw new AppException("mail.relay_host_required", 400, 400);
+        }
+
+        var mevcutKayit = await fileStore.ReadAsync<MailRelayStore?>(RelayStorePath, null, cancellationToken);
+        var yeniKayit = MergeRelayStore(mevcutKayit, request, secretProtector);
+
+        var strateji = await GetObjectAsync(cli, "MtaOutboundStrategy", "singleton", env, cancellationToken)
+            ?? throw new AppException("mail.relay_strategy_unavailable", 502, 502);
+        var mevcutIfade = ReadRouteElse(strateji);
+        var mevcutEslesmeler = ReadRouteMatchRaw(strateji);
+        var rotaId = await FindIdAsync("MtaRoute", "name", RelayRouteName, cancellationToken);
+
+        if (!request.Enabled)
+        {
+            // SIRA ÖNEMLİ: önce yönlendirme geri alınır, sonra rota silinir. Ters sırada,
+            // yönlendirme bir an için var olmayan bir rotayı gösterir ve o aralıkta giden
+            // postanın tamamı teslim edilemez.
+            var geriIfade = string.IsNullOrWhiteSpace(mevcutKayit?.PreviousRouteExpression)
+                ? DefaultRouteExpression
+                : mevcutKayit!.PreviousRouteExpression;
+
+            if (string.Equals(mevcutIfade, RelayRouteExpression, StringComparison.Ordinal))
+            {
+                await UpdateRouteExpressionAsync(cli, env, mevcutEslesmeler, geriIfade, cancellationToken);
+            }
+
+            if (rotaId is not null)
+            {
+                // Rota SİLİNİR (devre dışı bırakılmaz): kapatılmış bir rölenin kimlik bilgilerini
+                // sunucuda bırakmak, kullanılmayan bir sırrı süresiz saklamak olurdu.
+                var sil = await RunCliAsync(cli, $"delete MtaRoute --ids {Arg(rotaId)}", env, cancellationToken);
+                if (!sil.Success)
+                {
+                    throw new AppException("mail.relay_failed", 502, 502, CombineError(sil));
+                }
+            }
+
+            await ReloadMailSettingsAsync(cli, env, cancellationToken);
+            await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
+
+            var kapali = await GetRelayAsync(cancellationToken);
+            if (kapali.Enabled)
+            {
+                throw new AppException("mail.relay_unverified", 502, 502);
+            }
+
+            return kapali;
+        }
+
+        var parola = ResolveRelayPassword(yeniKayit, secretProtector);
+        if (!string.IsNullOrWhiteSpace(yeniKayit.Username) && string.IsNullOrWhiteSpace(parola))
+        {
+            throw new AppException("mail.relay_password_required", 400, 400);
+        }
+
+        // `name` şemada oluşturulduktan sonra değiştirilemez; güncellemede gönderilmez.
+        var payload = BuildRelayRouteJson(yeniKayit, parola, includeName: rotaId is null);
+        var upsert = rotaId is null
+            ? await RunCliJsonAsync(cli, "create MtaRoute", payload, env, cancellationToken)
+            : await RunCliJsonAsync(cli, $"update MtaRoute {Arg(rotaId)}", payload, env, cancellationToken);
+
+        if (!upsert.Success)
+        {
+            throw new AppException("mail.relay_failed", 502, 502, CombineError(upsert));
+        }
+
+        yeniKayit.PreviousRouteExpression = string.Equals(mevcutIfade, RelayRouteExpression, StringComparison.Ordinal)
+            ? (mevcutKayit?.PreviousRouteExpression ?? DefaultRouteExpression)
+            : (string.IsNullOrWhiteSpace(mevcutIfade) ? DefaultRouteExpression : mevcutIfade);
+
+        await UpdateRouteExpressionAsync(cli, env, mevcutEslesmeler, RelayRouteExpression, cancellationToken);
+        await ReloadMailSettingsAsync(cli, env, cancellationToken);
+        await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
+
+        // "KAYDEDİLDİ" DEMEK YETMEZ. Ayarı geri okuyup sunucunun gerçekten röleye yönlendirdiğini
+        // ölçüyoruz; aksi halde 25/tcp'si kapalı bir sunucuda kullanıcı röleyi kurduğunu sanır ve
+        // posta yine hiç gitmez — yani özellik, çözdüğünü iddia ettiği sorunu çözmemiş olur.
+        var dogrulama = await GetRelayAsync(cancellationToken);
+        if (!dogrulama.Enabled
+            || !string.Equals(dogrulama.Host, yeniKayit.Host, StringComparison.OrdinalIgnoreCase)
+            || dogrulama.Port != yeniKayit.Port)
+        {
+            throw new AppException("mail.relay_unverified", 502, 502);
+        }
+
+        return dogrulama;
+    }
+
+    /// <summary>İstek + mevcut kayıttan yeni röle kaydını üretir. PAROLA ŞİFRELENEREK konur.</summary>
+    /// <remarks>
+    /// Ayrı ve saf bir metot: parolanın düz metin saklanmadığı ancak burada ölçülebilir. Kural
+    /// akışın içine gömülseydi, doğrulaması için canlı bir posta sunucusu gerekirdi ve pratikte
+    /// hiç test edilmezdi.
+    /// </remarks>
+    internal static MailRelayStore MergeRelayStore(MailRelayStore? mevcut, SetMailRelayRequest istek, ISecretProtector koruyucu)
+    {
+        if (!istek.Enabled)
+        {
+            // Kapatınca saklı parola da SİLİNİR: kullanılmayan bir sırrı tutmanın tek etkisi,
+            // sızma yüzeyini büyütmektir.
+            return new MailRelayStore { Enabled = false, PreviousRouteExpression = mevcut?.PreviousRouteExpression ?? string.Empty };
+        }
+
+        var korunmus = string.IsNullOrEmpty(istek.Password)
+            ? (mevcut?.PasswordProtected ?? string.Empty)
+            : koruyucu.Protect(istek.Password);
+
+        return new MailRelayStore
+        {
+            Enabled = true,
+            Host = (istek.Host ?? string.Empty).Trim().ToLowerInvariant(),
+            Port = Math.Clamp(istek.Port, 1, 65535),
+            Protocol = string.Equals((istek.Protocol ?? string.Empty).Trim(), "lmtp", StringComparison.OrdinalIgnoreCase) ? "lmtp" : "smtp",
+            ImplicitTls = istek.ImplicitTls,
+            AllowInvalidCerts = istek.AllowInvalidCerts,
+            Username = (istek.Username ?? string.Empty).Trim(),
+            PasswordProtected = korunmus,
+            PreviousRouteExpression = mevcut?.PreviousRouteExpression ?? string.Empty
+        };
+    }
+
+    /// <summary>Saklı parolayı çözer; çözülemiyorsa null (bozuk bir sırla sunucuya yazmayız).</summary>
+    internal static string? ResolveRelayPassword(MailRelayStore kayit, ISecretProtector koruyucu)
+    {
+        if (string.IsNullOrWhiteSpace(kayit.PasswordProtected))
+        {
+            return null;
+        }
+
+        try
+        {
+            return koruyucu.Unprotect(kayit.PasswordProtected);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Stalwart <c>MtaRoute</c> (Relay varyantı) gövdesi.
+    /// </summary>
+    /// <remarks>
+    /// Alan adları şema referansından: <c>address</c>, <c>port</c>, <c>protocol</c>,
+    /// <c>implicitTls</c>, <c>allowInvalidCerts</c>, <c>authUsername</c> ve <c>authSecret</c>.
+    /// <c>authSecret</c> ZORUNLUDUR; kimlik doğrulama kullanılmıyorsa <c>{"@type":"None"}</c>
+    /// verilir — alanı hiç göndermemek nesneyi geçersiz kılar.
+    /// </remarks>
+    internal static string BuildRelayRouteJson(MailRelayStore kayit, string? duzParola, bool includeName)
+    {
+        var alanlar = new List<string>
+        {
+            "\"@type\":\"Relay\""
+        };
+
+        if (includeName)
+        {
+            alanlar.Add($"\"name\":{JsonValue(RelayRouteName)}");
+        }
+
+        alanlar.Add($"\"address\":{JsonValue(kayit.Host)}");
+        alanlar.Add($"\"port\":{kayit.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        alanlar.Add($"\"protocol\":{JsonValue(kayit.Protocol)}");
+        alanlar.Add($"\"implicitTls\":{(kayit.ImplicitTls ? "true" : "false")}");
+        alanlar.Add($"\"allowInvalidCerts\":{(kayit.AllowInvalidCerts ? "true" : "false")}");
+
+        if (!string.IsNullOrWhiteSpace(kayit.Username))
+        {
+            alanlar.Add($"\"authUsername\":{JsonValue(kayit.Username)}");
+        }
+
+        alanlar.Add(string.IsNullOrEmpty(duzParola)
+            ? "\"authSecret\":{\"@type\":\"None\"}"
+            : $"\"authSecret\":{{\"@type\":\"Value\",\"secret\":{JsonValue(duzParola)}}}");
+
+        return "{" + string.Join(",", alanlar) + "}";
+    }
+
+    /// <summary>Canlı <c>MtaRoute</c> nesnesini panel görünümüne çevirir (parola sunucudan da dönmez).</summary>
+    internal static MailRelayDto ParseRelayRoute(JsonElement rota, bool etkin) => new()
+    {
+        Enabled = etkin,
+        Host = GetField(rota, "address"),
+        Port = (int)GetLongField(rota, "port"),
+        Protocol = GetField(rota, "protocol"),
+        ImplicitTls = GetBoolOr(rota, "implicitTls", false),
+        AllowInvalidCerts = GetBoolOr(rota, "allowInvalidCerts", false),
+        Username = GetField(rota, "authUsername")
+    };
+
+    /// <summary>
+    /// Yönlendirme ifadesini günceller: yöneticinin kendi <c>match</c> kuralları KORUNUR, yalnız
+    /// <c>else</c> dalı değiştirilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Neden yalnız <c>else</c>: şemadaki varsayılan <c>{"else":"'mx'"}</c>'tir ve varsayılan
+    /// kurulumda yerel posta kutuları sorunsuz teslim edilir — yani YEREL teslim bu ifadeye bağlı
+    /// değildir. Dolayısıyla <c>else</c>'i röleyle değiştirmek tam olarak "dışarı giden postayı
+    /// röleye ver" demektir. <c>match</c>'e dokunmak ise yöneticinin kendi kurallarını silerdi.
+    /// </para>
+    /// <para>
+    /// <c>match</c> sunucudan geldiği HÂLİYLE geri yazılır; biçimini yeniden üretmeye çalışmak,
+    /// doğrulanmamış bir şema varsayımı olurdu.
+    /// </para>
+    /// </remarks>
+    private async Task UpdateRouteExpressionAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        string eslesmelerHam,
+        string elseIfadesi,
+        CancellationToken cancellationToken)
+    {
+        var ifade = $"route={{\"match\":{eslesmelerHam},\"else\":{JsonValue(elseIfadesi)}}}";
+        var sonuc = await RunCliAsync(
+            cli,
+            $"update MtaOutboundStrategy singleton --field {CliJsonArg(ifade)}",
+            env,
+            cancellationToken);
+
+        if (!sonuc.Success)
+        {
+            throw new AppException("mail.relay_failed", 502, 502, CombineError(sonuc));
+        }
+    }
+
+    /// <summary>Yönlendirme ifadesinin <c>else</c> dalı (ör. <c>'mx'</c>).</summary>
+    internal static string ReadRouteElse(JsonElement strateji) =>
+        strateji.ValueKind == JsonValueKind.Object
+        && strateji.TryGetProperty("route", out var rota)
+        && rota.ValueKind == JsonValueKind.Object
+        && rota.TryGetProperty("else", out var elseDegeri)
+        && elseDegeri.ValueKind == JsonValueKind.String
+            ? elseDegeri.GetString() ?? string.Empty
+            : string.Empty;
+
+    /// <summary>Yönlendirme ifadesinin <c>match</c> dalının HAM JSON metni; yoksa boş liste.</summary>
+    internal static string ReadRouteMatchRaw(JsonElement strateji) =>
+        strateji.ValueKind == JsonValueKind.Object
+        && strateji.TryGetProperty("route", out var rota)
+        && rota.ValueKind == JsonValueKind.Object
+        && rota.TryGetProperty("match", out var eslesme)
+        && eslesme.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+            ? eslesme.GetRawText()
+            : "[]";
+
+    /// <summary>Ayar değişikliğini yeniden başlatmadan devreye alır.</summary>
+    private static async Task ReloadMailSettingsAsync(string cli, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
+        => _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+
+    /// <summary>
+    /// Bool alanı okur; alan YOKSA verilen varsayılan döner.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="GetBoolField"/> alan bulunmadığında <c>true</c> döner (etkinlik alanları için
+    /// doğru varsayım). Röle bayrakları için o varsayım tehlikelidir: sunucu <c>implicitTls</c>
+    /// göndermediğinde panel "doğrudan TLS açık" gösterir ve yönetici yanlış portu ayarlar.
+    /// </remarks>
+    private static bool GetBoolOr(JsonElement element, string name, bool varsayilan)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out var value))
+        {
+            return varsayilan;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => string.Equals(value.GetString(), "true", StringComparison.OrdinalIgnoreCase),
+            _ => varsayilan
+        };
+    }
+
+    // --- Posta istemcisi ayarları (autodiscover/autoconfig kaynağı) ---
+
+    /// <inheritdoc />
+    public async Task<MailClientSettingsDto?> GetClientSettingsAsync(string domain, CancellationToken cancellationToken = default)
+    {
+        var normalized = (domain ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
+        if (normalized.Length == 0)
+        {
+            return null;
+        }
+
+        var cli = await ResolveCliAsync(cancellationToken);
+        var password = cli is null ? null : await GetAdminPasswordAsync(cancellationToken);
+        if (cli is null || password is null)
+        {
+            return null;
+        }
+
+        var env = BuildEnvironment(password);
+
+        // PANELDE TANIMLI MI? Bu uçlar kimlik doğrulamasız çağrılır (istemciler öyle çağırır).
+        // Tanımsız alan adına cevap vermek, sunucuyu "burada hangi alanlar barınıyor" sorusunun
+        // ücretsiz tarayıcısına çevirirdi.
+        if (await FindIdAsync("domain", "name", normalized, cancellationToken) is null)
+        {
+            return null;
+        }
+
+        var hostName = await ResolveClientHostNameAsync(cli, env, normalized, cancellationToken);
+        if (string.IsNullOrWhiteSpace(hostName))
+        {
+            return null;
+        }
+
+        var sunucular = new List<MailClientServerDto>();
+        foreach (var dinleyici in await GetListenersAsync(cancellationToken))
+        {
+            var protokol = NormalizeClientProtocol(dinleyici.Protocol);
+            if (protokol is null)
+            {
+                continue;
+            }
+
+            foreach (var port in ListenerPorts(dinleyici.Binds))
+            {
+                // SMTP 25 istemciye VERİLMEZ: RFC 6409 gereği ileti gönderimi (submission) 25'ten
+                // değil, kimlik doğrulamalı gönderim portundan yapılır. 25'i yayınlamak, istemciyi
+                // kimlik doğrulamayan MTA portuna yönlendirmek olurdu.
+                if (protokol == "smtp" && port == 25)
+                {
+                    continue;
+                }
+
+                if (sunucular.Any(item => item.Protocol == protokol && item.Port == port))
+                {
+                    continue;
+                }
+
+                sunucular.Add(new MailClientServerDto
+                {
+                    Protocol = protokol,
+                    Host = hostName,
+                    Port = port,
+                    SocketType = SocketTypeForPort(port)
+                });
+            }
+        }
+
+        // Ölçemediysek YAYINLAMAYIZ. Uydurma bir port listesi, kullanıcıyı elle kurmaktan daha
+        // kötü bir yere düşürür: ayarlar "otomatik geldi" ama çalışmaz.
+        if (sunucular.Count == 0)
+        {
+            return null;
+        }
+
+        return new MailClientSettingsDto
+        {
+            Domain = normalized,
+            HostName = hostName,
+            Servers = sunucular.OrderBy(item => item.Protocol, StringComparer.Ordinal).ThenBy(item => item.Port).ToArray()
+        };
+    }
+
+    /// <summary>
+    /// İstemcinin bağlanacağı sunucu adı.
+    /// </summary>
+    /// <remarks>
+    /// Sıra kasıtlı: (1) panelin aldığı TLS sertifikasının adı — istemci sertifikayı bu ada göre
+    /// doğrular, (2) sunucunun SMTP karşılama adı, (3) panelin DNS panelinin zaten yayınladığı
+    /// <c>mail.&lt;alan&gt;</c>. Üçü de yapılandırmadan gelir; makine adı gibi tahminler kullanılmaz.
+    /// </remarks>
+    private async Task<string> ResolveClientHostNameAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        string domain,
+        CancellationToken cancellationToken)
+    {
+        var sertifika = await fileStore.ReadAsync<MailCertificateState?>(CertificateStatePath, null, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(sertifika?.HostName))
+        {
+            return sertifika!.HostName.Trim().ToLowerInvariant();
+        }
+
+        var ayarlar = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
+        var karsilama = ayarlar is null ? string.Empty : GetField(ayarlar.Value, "defaultHostname");
+        return string.IsNullOrWhiteSpace(karsilama)
+            ? $"mail.{domain}"
+            : karsilama.Trim().ToLowerInvariant();
+    }
+
+    /// <summary>Dinleyici protokolünü istemci protokolüne eşler; istemciye ait olmayanlar null.</summary>
+    private static string? NormalizeClientProtocol(string? protocol)
+    {
+        var deger = (protocol ?? string.Empty).Trim().ToLowerInvariant();
+        if (deger.Contains("imap", StringComparison.Ordinal))
+        {
+            return "imap";
+        }
+
+        if (deger.Contains("pop", StringComparison.Ordinal))
+        {
+            return "pop3";
+        }
+
+        // "smtp" ve "submission" aynı protokoldür; ikisi de istemci gönderimi içindir.
+        return deger.Contains("smtp", StringComparison.Ordinal) || deger.Contains("submission", StringComparison.Ordinal)
+            ? "smtp"
+            : null;
+    }
+
+    /// <summary>"0.0.0.0:143" / "[::]:993" gibi bağlama dizgilerinden port numaralarını çıkarır.</summary>
+    private static IEnumerable<int> ListenerPorts(IEnumerable<string> binds)
+    {
+        foreach (var bind in binds ?? [])
+        {
+            var deger = (bind ?? string.Empty).Trim();
+            var index = deger.LastIndexOf(':');
+            if (index < 0 || index == deger.Length - 1)
+            {
+                continue;
+            }
+
+            if (int.TryParse(deger[(index + 1)..], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var port)
+                && port is > 0 and <= 65535)
+            {
+                yield return port;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Portun şifreleme biçimi.
+    /// </summary>
+    /// <remarks>
+    /// IANA'nın örtük-TLS portları (465 submissions, 993 imaps, 995 pop3s) doğrudan TLS ile
+    /// açılır; kalanlar STARTTLS ile yükseltilir. Bu tablo bir tahmin değil, protokollerin
+    /// kendi tanımıdır — PORTLARIN KENDİSİ sunucunun gerçek dinleyicilerinden okunur, burada
+    /// yalnız o portun standart anlamı uygulanır. (Dinleyici nesnesinde TLS'i doğrudan bildiren
+    /// bir alan bu panelde doğrulanamadı; doğrulanınca buranın yerini alabilir.)
+    /// </remarks>
+    private static string SocketTypeForPort(int port) => port is 465 or 993 or 995 ? "SSL" : "STARTTLS";
 }

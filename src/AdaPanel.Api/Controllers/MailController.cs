@@ -530,6 +530,107 @@ public sealed class MailController(
         return Ok(ApiResponse<MailSpamSettingsDto>.Ok(settings, "mail.spam_saved"));
     }
 
+    /// <summary>
+    /// Giden posta kuyruğu (Plesk'teki "Mail Queue" ekranının karşılığı). YALNIZ YÖNETİCİ.
+    /// </summary>
+    /// <remarks>
+    /// Kuyruk, sunucudaki BÜTÜN kiracıların zarf gönderici/alıcı adreslerini içerir; müşteriye
+    /// açılması, komşusunun kiminle yazıştığını göstermek olurdu. Bu yüzden kapsam filtresiyle
+    /// değil, doğrudan rolle sınırlandı.
+    /// </remarks>
+    [HttpGet("queue")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<MailQueueDto>>> GetQueueAsync(
+        [FromQuery] int limit,
+        CancellationToken cancellationToken)
+    {
+        var queue = await mailService.GetQueueAsync(limit, cancellationToken);
+        return Ok(ApiResponse<MailQueueDto>.Ok(queue));
+    }
+
+    /// <summary>Kuyruktaki tek bir iletinin ayrıntısı (alıcı başına durum). YALNIZ YÖNETİCİ.</summary>
+    [HttpGet("queue/{id}")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<MailQueueMessageDto>>> GetQueueMessageAsync(string id, CancellationToken cancellationToken)
+    {
+        var message = await mailService.GetQueueMessageAsync(id, cancellationToken);
+        return message is null
+            ? throw new Core.Common.AppException("mail.queue_message_not_found", 404, 404)
+            : Ok(ApiResponse<MailQueueMessageDto>.Ok(message));
+    }
+
+    /// <summary>
+    /// Kuyruktaki iletiyi siler (teslim edilmez). YALNIZ YÖNETİCİ.
+    /// </summary>
+    /// <remarks>
+    /// Bir iletiyi kuyruktan silmek, GÖNDERİLMEMİŞ bir postayı geri dönülemez biçimde yok
+    /// etmektir. Kimin hangi iletiyi düşürdüğü kayda geçmezse, "postam gitmedi" şikâyeti
+    /// sonsuza kadar cevapsız kalır.
+    /// </remarks>
+    [HttpDelete("queue/{id}")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<bool>>> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken)
+    {
+        var deleted = await mailService.DeleteQueueMessageAsync(id, cancellationToken);
+        if (!deleted)
+        {
+            throw new Core.Common.AppException("mail.queue_message_not_found", 404, 404);
+        }
+
+        await auditService.AuditAsync(HttpContext, "mail.queue.message_deleted", id, "Queued message was deleted before delivery.");
+        return Ok(ApiResponse<bool>.Ok(true, "mail.queue_message_deleted"));
+    }
+
+    /// <summary>Giden posta rölesi (smarthost) ayarı. YALNIZ YÖNETİCİ; parola ASLA dönmez.</summary>
+    [HttpGet("relay")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<MailRelayDto>>> GetRelayAsync(CancellationToken cancellationToken)
+    {
+        var relay = await mailService.GetRelayAsync(cancellationToken);
+        return Ok(ApiResponse<MailRelayDto>.Ok(relay));
+    }
+
+    /// <summary>
+    /// Giden posta rölesini kurar ya da kaldırır. YALNIZ YÖNETİCİ.
+    /// </summary>
+    /// <remarks>
+    /// Sunucunun TÜM giden postasının hangi üçüncü tarafa teslim edildiğini belirler; müşteri ya
+    /// da bayinin değiştirebilmesi, bütün kiracıların postasını başka bir sunucuya yönlendirme
+    /// yetkisi vermek olurdu.
+    /// </remarks>
+    [HttpPut("relay")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<MailRelayDto>>> SetRelayAsync([FromBody] SetMailRelayRequest request, CancellationToken cancellationToken)
+    {
+        var relay = await mailService.SetRelayAsync(request, cancellationToken);
+
+        // request.Password KAYDA GİRMEZ — kayıt, korumaya çalıştığı sırrın ikinci deposu olmamalı.
+        // Yazılan şey OLGUDUR: giden postanın nereye teslim edildiği ve kimlik doğrulaması olup olmadığı.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.relay.updated",
+            request.Enabled ? $"{request.Host}:{request.Port}" : "mail-server",
+            request.Enabled
+                ? $"Outbound mail relayed through '{request.Host}:{request.Port}' (implicit TLS: {request.ImplicitTls}, authenticated: {!string.IsNullOrWhiteSpace(request.Username)})."
+                : "Outbound mail relay was removed; delivery returned to direct MX routing.");
+
+        return Ok(ApiResponse<MailRelayDto>.Ok(relay, request.Enabled ? "mail.relay_saved" : "mail.relay_removed"));
+    }
+
+    /// <summary>
+    /// Bir alan adının posta istemcisi ayarları (sunucu adı/port/şifreleme) — panel arayüzünün
+    /// "posta istemci ayarları" kartı için. Autodiscover uçlarıyla AYNI kaynaktan gelir.
+    /// </summary>
+    [HttpGet("client-settings/{domain}")]
+    public async Task<ActionResult<ApiResponse<MailClientSettingsDto>>> GetClientSettingsAsync(string domain, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, domain, cancellationToken);
+        var settings = await mailService.GetClientSettingsAsync(domain, cancellationToken);
+        return settings is null
+            ? throw new Core.Common.AppException("mail.client_settings_unavailable", 404, 404)
+            : Ok(ApiResponse<MailClientSettingsDto>.Ok(settings));
+    }
+
     // M1 (panel MaxMailboxes): admin olmayan kullanıcının posta kutusu kotası doldu mu? Müşterinin etkin
     // mail domainlerindeki kutuları sayar. Admin sınırsız; MaxMailboxes=0 = limitsiz.
     private async Task EnsureMailboxQuotaAsync(CancellationToken cancellationToken)
