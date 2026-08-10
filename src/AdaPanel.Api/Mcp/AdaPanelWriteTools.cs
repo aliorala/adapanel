@@ -36,6 +36,10 @@ public sealed class AdaPanelWriteTools(
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
+        // ORTAK YAZMA KAPISI: abonelik askısı + alt-kullanıcı bölüm izni. Askı MVC filtresiyle
+        // uygulanıyordu ve /mcp o boru hattından geçmediği için askıdaki abonelik buradan
+        // YAZMAYA DEVAM EDEBİLİYORDU. Gerekçe McpCapability.EnsureWriteAllowedAsync'te.
+        await McpCapability.EnsureWriteAllowedAsync(customerScopes, user, "sites", cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         var site = await siteService.StartSiteAsync(siteName, cancellationToken);
         await WriteAuditAsync(user, "mcp.site.start", siteName, cancellationToken);
@@ -50,6 +54,7 @@ public sealed class AdaPanelWriteTools(
         CancellationToken cancellationToken)
     {
         McpCapability.RequireDestructive(user);
+        await McpCapability.EnsureWriteAllowedAsync(customerScopes, user, "sites", cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         var site = await siteService.StopSiteAsync(siteName, cancellationToken);
         await WriteAuditAsync(user, "mcp.site.stop", siteName, cancellationToken);
@@ -70,6 +75,9 @@ public sealed class AdaPanelWriteTools(
         // Kayıt ÜZERİNE YAZMA ihtimali taşıdığı için yıkıcı sayılıyor: var olan bir MX'i
         // değiştirmek postayı kesebilir.
         McpCapability.RequireDestructive(user);
+        // ROL PARİTESİ: REST ikizi (DnsController) yalnız yönetici ve bayiye açık.
+        McpCapability.RequireDnsRole(user);
+        await McpCapability.EnsureWriteAllowedAsync(customerScopes, user, "sites", cancellationToken);
         // SAHİPLİK: bu denetim olmadan bir müşteri anahtarı BAŞKA bir müşterinin DNS kaydını
         // değiştirebilirdi. Controller'lar bunu yapıyor; araçların da yapması şart.
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
@@ -91,6 +99,9 @@ public sealed class AdaPanelWriteTools(
         CancellationToken cancellationToken)
     {
         McpCapability.RequireDestructive(user);
+        // Bölüm "mail": REST ikizi (MailController → POST mail/dns/{domain}/apply) müşteriye açık ve
+        // "mail" bölümüyle korunuyor; buradaki kilit de aynı olmalı.
+        await McpCapability.EnsureWriteAllowedAsync(customerScopes, user, "mail", cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, domain, cancellationToken);
 
         var dns = await mailService.GetDnsRecordsAsync(domain, cancellationToken);

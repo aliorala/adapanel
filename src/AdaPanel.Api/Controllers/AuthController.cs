@@ -12,7 +12,19 @@ using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
+/// <remarks>
+/// <b>YALNIZ ÇEREZ ŞEMASI.</b> <c>/api/v1/**</c> uçları artık kişisel API anahtarını da kabul ediyor;
+/// oturum ve hesap güvenliği uçları kabul ETMEMELİ. Sebep yetki yükseltmesi: sınırlı bir anahtarı ele
+/// geçiren biri parolayı değiştirip, iki adımlı doğrulamayı kapatıp ya da kurtarma kodlarını
+/// yenileyerek hesabın tamamını devralabilirdi — anahtarın yetkisi hesabın yetkisine yükselirdi.
+/// Anahtar sunucudan sunucuya iş içindir, hesap yönetimi için değil.
+/// <para>
+/// <c>[AllowAnonymous]</c> uçlar (giriş, csrf, oturum sorgusu) bundan etkilenmez; bir entegrasyon
+/// <c>GET /api/v1/auth/session</c> ile anahtarının kimin adına çalıştığını hâlâ sorabilir.
+/// </para>
+/// </remarks>
 [ApiController]
+[Authorize(AuthenticationSchemes = CookieAuthenticationDefaults.AuthenticationScheme)]
 [Route("api/v1/auth")]
 public sealed class AuthController(
     IAntiforgery antiforgery,

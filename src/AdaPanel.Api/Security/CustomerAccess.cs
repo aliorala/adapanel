@@ -42,6 +42,48 @@ public static class CustomerAccess
         return userId;
     }
 
+    /// <summary>
+    /// Alt-kullanıcı (abonelik altı ek kullanıcı) BÖLÜM İZNİ denetimi — Plesk'in "additional user"
+    /// izin matrisinin karşılığı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden burada, neden yalnız öznitelikte değil:</b> kural <c>RequireSubUserSectionAttribute</c>
+    /// içinde yazılıydı ve öznitelik bir MVC filtresidir — MCP araçları MVC boru hattından GEÇMEZ.
+    /// Sonuç ölçüldü: bölüm izinleri kısıtlanmış bir alt-kullanıcı, kendi API anahtarıyla
+    /// <c>sites_list</c> / <c>dns_upsert_record</c> gibi araçlara erişebiliyordu; yani panelde
+    /// kapatılan kapı MCP'de açıktı. Karar buraya (kapsam denetimlerinin tek adresine) taşındı;
+    /// öznitelik ve MCP araçları AYNI fonksiyonu çağırıyor.
+    /// </para>
+    /// <para>
+    /// Top-level müşteri, bayi ve yönetici etkilenmez: izin listesi yalnız alt-kullanıcıda bulunur.
+    /// Liste <c>null</c> ise (bütün bölümler seçili) kısıt yoktur.
+    /// </para>
+    /// </remarks>
+    public static async Task EnsureSectionAsync(
+        ICustomerScopeService scopes,
+        ClaimsPrincipal user,
+        string section,
+        CancellationToken cancellationToken)
+    {
+        if (!IsCustomer(user))
+        {
+            return;
+        }
+
+        var userId = user.GetRequiredUserId();
+        if (await scopes.GetParentSubscriptionAsync(userId, cancellationToken) is null)
+        {
+            return;
+        }
+
+        var allowed = await scopes.GetSubUserSectionsAsync(userId, cancellationToken);
+        if (allowed is not null && !allowed.Contains(section, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new AppException("auth.section_forbidden", 403, 403);
+        }
+    }
+
     /// <summary>Kullanıcının erişebileceği site adları; kapsamsız rol (admin/operator) için null.</summary>
     public static async Task<IReadOnlyCollection<string>?> GetEffectiveSitesAsync(
         ICustomerScopeService scopes,

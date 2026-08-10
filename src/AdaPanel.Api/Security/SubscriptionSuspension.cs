@@ -46,9 +46,6 @@ public static class SubscriptionSuspension
     /// </summary>
     public const string MessageKey = "subscription.suspended_readonly";
 
-    /// <summary>Durum DEĞİŞTİRMEYEN yöntemler. Beyaz liste: bilinmeyen fiil değiştiriyor sayılır.</summary>
-    private static readonly string[] SafeMethods = ["GET", "HEAD", "OPTIONS", "TRACE"];
-
     /// <summary>
     /// Askı DIŞINDA tutulan yollar.
     /// <para>
@@ -67,9 +64,15 @@ public static class SubscriptionSuspension
     /// </summary>
     private static readonly string[] ExemptPathPrefixes = ["/api/v1/auth"];
 
-    /// <summary>İstek durum değiştiriyor mu (yani askının konusu mu)?</summary>
-    public static bool IsStateChanging(string? httpMethod) =>
-        !SafeMethods.Contains((httpMethod ?? string.Empty).Trim(), StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// İstek durum değiştiriyor mu (yani askının konusu mu)?
+    /// <para>
+    /// Fiil listesi burada DEĞİL <see cref="PanelAuthentication.IsStateChanging"/> içinde: aynı ayrımı
+    /// CSRF doğrulaması ve anahtar yetenekleri de soruyor, üç kopya olsaydı biri güncellenip
+    /// diğerleri unutulurdu.
+    /// </para>
+    /// </summary>
+    public static bool IsStateChanging(string? httpMethod) => PanelAuthentication.IsStateChanging(httpMethod);
 
     /// <summary>Yol askı denetiminden muaf mı?</summary>
     public static bool IsExemptPath(string? path)

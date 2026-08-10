@@ -133,6 +133,32 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // ANAHTARLA GELEN İSTEKLERİN TAVANI — /api/v1/** artık kişisel API anahtarını kabul ediyor.
+    //
+    // Neden küresel sınırlayıcı: uç sayısı 50'yi aşan controller'a yayılmış durumda; politikayı tek
+    // tek eklemek unutulacağı için fiilen eklememekle aynı. Neden yalnız anahtarlı istekler:
+    // ÇEREZ yolunda sınır YOK, çünkü panelin tek bir sayfası onlarca istek atar ve arayüzü kendi
+    // sınırına takmak, düzeltmenin yaratacağı tek gerçek gerileme olurdu; çerez yolunun kendi
+    // korumaları zaten var ("login" politikası, "password-change", oturum doğrulaması).
+    //
+    // 300/dk her ANAHTAR için: bir WHMCS eşitleme turu ya da izleme aracı tek turda onlarca uç
+    // çağırır (MCP'nin 120'lik tavanı yapay zeka istemcisi içindi, dış entegrasyon daha konuşkandır).
+    // Amaç meşru kullanımı engellemek değil, SIZAN bir anahtarla veri kazımayı ölçülebilir biçimde
+    // yavaşlatmak. /mcp ucu ayrıca kendi 120'lik politikasını taşır; ikisi birlikte uygulandığı için
+    // orada etkin sınır yine 120'dir.
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        PanelAuthentication.CarriesToken(context.Request)
+            ? RateLimitPartition.GetFixedWindowLimiter(
+                PanelAuthentication.RateLimitPartitionKey(context),
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 300,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0
+                })
+            : RateLimitPartition.GetNoLimiter("cookie"));
+
     options.AddPolicy("login", context =>
     {
         var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
@@ -152,13 +178,10 @@ builder.Services.AddRateLimiter(options =>
     // yavaşlatmak, normal kullanımı engellemek değil.
     options.AddPolicy("mcp", context =>
     {
-        var authorization = context.Request.Headers.Authorization.ToString();
-        var partition = authorization.Length > 16
-            ? authorization[^12..]
-            : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
         return RateLimitPartition.GetFixedWindowLimiter(
-            partition,
+            // Bölümleme anahtarı PanelAuthentication'dan: anahtarın kendisi yerine özeti kullanılır
+            // ve aynı türetme küresel sınırlayıcıda da geçerli olur (iki kopya, iki farklı bölüm).
+            PanelAuthentication.RateLimitPartitionKey(context),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 120,
@@ -194,8 +217,21 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(options =>
+// PANELİN İKİ KİMLİK YOLU TEK VARSAYILAN ŞEMADA BİRLEŞTİRİLDİ.
+//
+// Önce varsayılan şema doğrudan ÇEREZ'di ve PanelToken yalnızca /mcp ucuna bağlıydı; /api/v1/**
+// controller'larının hiçbiri AuthenticationSchemes belirtmediği için "Authorization: Bearer adap_…"
+// başlığı HİÇ OKUNMUYORDU. Yani panelin "kişisel API anahtarı" özelliği REST'te fiilen yoktu ve dış
+// entegrasyonlar (WHMCS modülü, müşteri betikleri, izleme araçları) çerez oturumu açmak zorunda
+// kalıyordu. Varsayılan şema artık bir YÖNLENDİRİCİ: isteğin taşıdığı kimliğe bakıp doğru şemayı
+// seçer, böylece tek kayıt bütün uçları kapsar ve yeni controller'da unutulamaz.
+// Gerekçenin tamamı PanelAuthentication'da.
+builder.Services.AddAuthentication(PanelAuthentication.SchemeName)
+    .AddPolicyScheme(PanelAuthentication.SchemeName, PanelAuthentication.SchemeName, options =>
+    {
+        options.ForwardDefaultSelector = PanelAuthentication.SelectScheme;
+    })
+    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.Cookie.Name = panelOptions.AuthCookieName;
         options.Cookie.HttpOnly = true;
@@ -254,7 +290,23 @@ builder.Services.AddAntiforgery(options =>
 builder.Services
     .AddControllersWithViews(options =>
     {
-        options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+        // CSRF DOGRULAMASI ARTIK KIMLIK YOLUNA GORE KARAR VERIYOR.
+        //
+        // Onceki kayit AutoValidateAntiforgeryTokenAttribute'du ve karari UC meta verisinden
+        // veriyordu, yani istek basina degistirilemiyordu. CSRF korumasi CEREZE karsidir;
+        // Authorization basligi tarayici tarafindan kendiliginden gonderilmez, dolayisiyla anahtarla
+        // gelen istekte antiforgery koruma degil yalnizca engeldir (dis entegrasyonun once
+        // /auth/csrf cagirip cerez tasimasi gerekirdi). Cerezle gelen istekte ise kesinlikle
+        // uygulanmaya devam eder. Ayrintili gerekce: PanelAntiforgeryFilter.
+        options.Filters.Add<PanelAntiforgeryFilter>();
+
+        // ANAHTARIN YETENEKLERI REST'TE DE BAGLAYICI.
+        //
+        // AllowDestructive/AllowTerminal bugune kadar yalniz MCP araclarinda sorgulaniyordu; REST
+        // anahtari kabul etmeye baslayinca bu denetim olmasaydi "yikici islemlere izin vermeyen"
+        // bir anahtar tek HTTP cagrisiyla silme yapabilir, sunucuda komut calistirabilirdi.
+        // Ayrintili gerekce: PanelTokenCapabilities.
+        options.Filters.Add<PanelTokenCapabilityFilter>();
 
         // ABONELIK ASKISI TEK KAYNAKTAN DAYATILIR.
         //

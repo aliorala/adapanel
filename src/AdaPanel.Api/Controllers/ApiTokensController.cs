@@ -2,6 +2,7 @@ using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Ai;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,8 +16,16 @@ namespace AdaPanel.Api.Controllers;
 /// (Plesk'in MCP eklentisi yalnız yöneticiye izin veriyor; burada bilerek daha ileri gidiliyor.)
 /// </para>
 /// </summary>
+/// <remarks>
+/// <b>YALNIZ ÇEREZ ŞEMASI.</b> <c>/api/v1/**</c> uçları artık kişisel anahtarı da kabul ediyor; bu
+/// controller kabul ETMEMELİ. Sebep yetki yükseltmesi: salt-okur (yıkıcı yetkisi kapalı) bir anahtar
+/// buradan kendine <c>AllowDestructive</c>/<c>AllowTerminal</c> açık YENİ bir anahtar basabilseydi,
+/// anahtarın kısıtı kâğıt üzerinde kalırdı — sızan bir anahtar tek çağrıyla tam yetkiye dönüşürdü.
+/// Anahtar sunucudan sunucuya iş içindir; kimlik bilgisi üretmek panelde oturum açmayı gerektirir.
+/// (Aynı gerekçe <c>AuthController</c> için de geçerli.)
+/// </remarks>
 [ApiController]
-[Authorize]
+[Authorize(AuthenticationSchemes = CookieAuthenticationDefaults.AuthenticationScheme)]
 [Route("api/v1/api-tokens")]
 public sealed class ApiTokensController(
     IApiTokenService apiTokenService,

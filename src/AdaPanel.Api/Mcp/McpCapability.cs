@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
+using AdaPanel.Core.Interfaces;
 using ModelContextProtocol;
 
 namespace AdaPanel.Api.Mcp;
@@ -64,5 +66,104 @@ internal static class McpCapability
                 "anahtarlarında ve açıkça etkinleştirildiğinde kullanılabilir.",
                 McpErrorCode.InvalidRequest);
         }
+    }
+
+    /// <summary>
+    /// DNS araçlarının kapısı: yönetici ya da bayi.
+    /// <para>
+    /// Neden: aynı yeteneğin REST kapısı olan <c>DnsController</c>
+    /// <c>[Authorize(Roles = "Administrator,Reseller")]</c> ile korunuyor — DNS bölgesi bir sunucu
+    /// yeteneğidir ve müşteriye açılmamış. MCP tarafında bu denetim yoktu: bir MÜŞTERİ anahtarı,
+    /// panelin REST üzerinden hiç vermediği bölge okuma/yazma yeteneğine erişebiliyordu (MX'i
+    /// değiştirmek postayı kesmek, A'yı değiştirmek trafiği kaçırmak demektir). Aynı yeteneğin iki
+    /// kapısı varsa ikisi de aynı kilidi taşımalı.
+    /// </para>
+    /// </summary>
+    public static void RequireDnsRole(ClaimsPrincipal user)
+    {
+        if (!user.IsInRole("Administrator") && !user.IsInRole("Reseller"))
+        {
+            throw new McpProtocolException(
+                "DNS bölgesi yönetimi yalnızca yönetici ve bayi hesaplarına açıktır; panelin REST " +
+                "arayüzünde de aynı kısıt geçerli.",
+                McpErrorCode.InvalidRequest);
+        }
+    }
+
+    /// <summary>
+    /// OKUYAN araçların ortak kapısı: alt-kullanıcının BÖLÜM İZNİ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bulunan hata:</b> bölüm izni <c>RequireSubUserSectionAttribute</c> ile uygulanıyordu ve o
+    /// bir MVC filtresidir — <c>/mcp</c> MVC boru hattından GEÇMEZ. Ölçüldü: bölümleri kısıtlanmış
+    /// bir alt-kullanıcı, kendi API anahtarıyla <c>sites_list</c>/<c>site_health</c> gibi araçlara
+    /// erişebiliyordu; panelde kapatılan kapı MCP'de açıktı.
+    /// </para>
+    /// <para>
+    /// Karar <see cref="CustomerAccess.EnsureSectionAsync"/> içinde TEK yerde; burada yalnızca
+    /// MCP'nin hata biçimine çevriliyor.
+    /// </para>
+    /// </remarks>
+    public static async Task EnsureReadAllowedAsync(
+        ICustomerScopeService scopes,
+        ClaimsPrincipal user,
+        string section,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await CustomerAccess.EnsureSectionAsync(scopes, user, section, cancellationToken);
+        }
+        catch (AppException)
+        {
+            // Neden özel durum çevrilir: araçtan dönen normal bir "hata" nesnesi modele metin olarak
+            // verilir ve model devam eder; burada istenen, işlemin YAPILMAMASI ve açıkça bildirilmesi.
+            throw new McpProtocolException(
+                $"Bu kullanıcının '{section}' bölümüne erişim izni yok. İzni abonelik sahibi verir.",
+                McpErrorCode.InvalidRequest);
+        }
+    }
+
+    /// <summary>
+    /// YAZAN araçların ortak kapısı: abonelik askısı + alt-kullanıcının bölüm izni.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bulunan hata:</b> <c>SubscriptionSuspensionFilter</c> bir MVC filtresidir, <c>/mcp</c> ise
+    /// MVC boru hattından geçmez. Yani askıya alınmış bir abonelik, panelde "Başlat" düğmesine
+    /// basamazken <c>AdaPanelWriteTools</c> üzerinden AYNI işi yapmaya devam edebiliyordu — abonelik
+    /// iş modelinin yaptırımı yapay zeka kapısından delinebiliyordu.
+    /// </para>
+    /// <para>
+    /// <b>Neden uç seviyesinde toptan engel değil:</b> <c>/mcp</c> tek bir JSON-RPC ucudur; gövde
+    /// okunmadan okuma ile yazma ayrılamaz. Bu yüzden kapı her YAZAN aracın ilk satırında.
+    /// </para>
+    /// <para>
+    /// Karar <see cref="SubscriptionSuspension"/> içinde tek yerde. Yöntem olarak "POST", yol olarak
+    /// gerçek istek yolu "/mcp" verilir: kural durum değiştiren isteklere bakar ve MCP yazma aracı
+    /// tanımı gereği durum değiştirir.
+    /// </para>
+    /// </remarks>
+    public static async Task EnsureWriteAllowedAsync(
+        ICustomerScopeService scopes,
+        ClaimsPrincipal user,
+        string section,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SubscriptionSuspension.EnsureAllowedAsync(scopes, user, "POST", "/mcp", cancellationToken);
+        }
+        catch (AppException exception)
+        {
+            throw new McpProtocolException(
+                "Bu abonelik askıya alınmış; yalnızca okuma yapılabilir. Sebep: " +
+                (string.IsNullOrWhiteSpace(exception.Details) ? "bilinmiyor" : exception.Details) +
+                ". Askıyı panel yöneticisi kaldırır.",
+                McpErrorCode.InvalidRequest);
+        }
+
+        await EnsureReadAllowedAsync(scopes, user, section, cancellationToken);
     }
 }

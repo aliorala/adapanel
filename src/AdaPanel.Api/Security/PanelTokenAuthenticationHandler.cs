@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using Microsoft.AspNetCore.Authentication;
@@ -41,18 +42,15 @@ public sealed class PanelTokenAuthenticationHandler(
     {
         // Başlık yoksa BAŞARISIZ değil "sonuç yok" dönülür: aynı istek başka bir şemayla
         // (çerez) doğrulanabilir ve buradan hata dönmek onu engellerdi.
-        if (!Request.Headers.TryGetValue("Authorization", out var header))
+        // Başlığın çözümlenmesi PanelAuthentication'da tek yerde: şema SEÇİMİ de aynı kuralı
+        // kullanıyor, iki kopya olsaydı "yönlendirildiği hâlde okunamayan" bir başlık biçimi
+        // sessiz 401 üretirdi.
+        var presented = PanelAuthentication.ExtractToken(Request);
+        if (presented is null)
         {
             return AuthenticateResult.NoResult();
         }
 
-        var raw = header.ToString();
-        if (!raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        {
-            return AuthenticateResult.NoResult();
-        }
-
-        var presented = raw["Bearer ".Length..].Trim();
         var token = await apiTokenService.ValidateAsync(presented, Context.RequestAborted);
         if (token is null)
         {
@@ -87,5 +85,29 @@ public sealed class PanelTokenAuthenticationHandler(
         var identity = new ClaimsIdentity(claims, SchemeName);
         var principal = new ClaimsPrincipal(identity);
         return AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName));
+    }
+
+    /// <summary>
+    /// Kimliksiz istek: 401 + panelin standart JSON zarfı.
+    /// <para>
+    /// Varsayılan davranış GÖVDESİZ bir 401'dir. Çerez şemasında karşılığı zaten JSON yazıyor
+    /// (<c>OnRedirectToLogin</c>); anahtar yolu REST'e açıldığına göre dış entegrasyonun da aynı
+    /// biçimi görmesi gerekir — aksi hâlde istemci "boş 401" ile "sunucu çöktü"yü ayırt edemez ve
+    /// hata mesajını kullanıcısına gösteremez.
+    /// </para>
+    /// </summary>
+    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
+    {
+        Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await Response.WriteAsJsonAsync(
+            ApiResponse<object?>.Fail("auth.unauthorized", StatusCodes.Status401Unauthorized));
+    }
+
+    /// <summary>Kimlik doğru ama yetki yok: 403 + aynı JSON zarfı.</summary>
+    protected override async Task HandleForbiddenAsync(AuthenticationProperties properties)
+    {
+        Response.StatusCode = StatusCodes.Status403Forbidden;
+        await Response.WriteAsJsonAsync(
+            ApiResponse<object?>.Fail("auth.forbidden", StatusCodes.Status403Forbidden));
     }
 }

@@ -32,6 +32,10 @@ public sealed class AdaPanelReadTools(
     [Description("Sunucudaki web sitelerini listeler: ad, durum, uygulama havuzu, fiziksel yol ve bağlamalar.")]
     public async Task<object> ListSitesAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
+        // BÖLÜM İZNİ: panelde "sites" bölümü kapatılmış bir alt-kullanıcı bu listeyi göremez;
+        // MCP'de de görememeli. Gerekçe McpCapability.EnsureReadAllowedAsync'te.
+        await McpCapability.EnsureReadAllowedAsync(customerScopes, user, "sites", cancellationToken);
+
         var sites = await siteService.GetSitesAsync(cancellationToken);
 
         // KAPSAM FİLTRESİ: SitesController bunu yapıyor, buranın da yapması ŞART. Yapılmazsa bir
@@ -59,14 +63,28 @@ public sealed class AdaPanelReadTools(
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
+        await McpCapability.EnsureReadAllowedAsync(customerScopes, user, "sites", cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         return await siteHealthService.GetSiteHealthAsync(siteName, cancellationToken);
     }
 
+    /// <summary>
+    /// Sunucu geneli durum. Rol denetimi eklendi: bu araç tek bir kiracıya ait değil SUNUCUYA ait
+    /// bilgi döndürür ve diğer sunucu geneli araçlarda (server_health, advisor_report) kilit zaten
+    /// vardı; yalnız bu tanesi açıktı.
+    /// <para>
+    /// ÖLÇÜM NOTU: REST ikizi <c>/api/v1/system/overview</c> bugün <c>[Authorize]</c> ile HER role
+    /// açık (müşteri panosu da onu çağırıyor), yani burada MCP bilerek REST'ten SIKI. Gerekçe:
+    /// MCP çıktısı makineden çıkıp yapay zeka sağlayıcısına gider; müşterinin kendi ekranında
+    /// gördüğü bir değeri üçüncü tarafa taşımak ayrı bir karardır ve varsayılan olarak
+    /// verilmemelidir. REST tarafını daraltmak arayüzü etkileyeceği için ayrı bir iştir.
+    /// </para>
+    /// </summary>
     [McpServerTool(Name = "system_overview")]
     [Description("Sunucunun anlık durumu: CPU, bellek, disk kullanımı ve çalışma süresi.")]
-    public async Task<object> GetSystemOverviewAsync(CancellationToken cancellationToken)
+    public async Task<object> GetSystemOverviewAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
+        McpCapability.RequireAdministrator(user);
         return await systemMonitoringService.GetOverviewAsync(cancellationToken);
     }
 
@@ -93,6 +111,9 @@ public sealed class AdaPanelReadTools(
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
+        // ROL PARİTESİ: REST ikizi (DnsController) yalnız yönetici ve bayiye açık; müşteri anahtarı
+        // bu bilgiye MCP üzerinden de ulaşamamalı.
+        McpCapability.RequireDnsRole(user);
         await CustomerAccess.EnsureSiteAsync(customerScopes, user, siteName, cancellationToken);
         return await dnsService.GetZoneAsync(siteName, cancellationToken);
     }
