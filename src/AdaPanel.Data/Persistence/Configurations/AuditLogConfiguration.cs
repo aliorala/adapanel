@@ -25,6 +25,12 @@ public sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
 
         builder.Property(log => log.IpAddress)
             .HasMaxLength(64);
+
+        // Kiracı görünürlüğü HER sorguda bu iki sütuna bakar (AuditLogQueryEngine.ApplyVisibility).
+        // Dizin olmadan, kayıt tablosu büyüdükçe kiracının kendi denetim ekranı tam tablo taraması
+        // yapardı — yani özellik, en çok işe yaradığı yerde (uzun geçmişte) kullanılamaz hâle gelirdi.
+        builder.HasIndex(log => log.UserId).HasDatabaseName("ix_audit_logs_user");
+        builder.HasIndex(log => log.SubscriptionUserId).HasDatabaseName("ix_audit_logs_subscription");
     }
 }
 

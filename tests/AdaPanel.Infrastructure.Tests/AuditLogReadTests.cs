@@ -445,8 +445,12 @@ public sealed class AuditLogReadTests : IDisposable
     /// <summary>
     /// Kiracı grafiğinin sahtesi: yalnız kapsam çözümünde kullanılan üç metodu gerçekten uygular.
     /// Diğerleri çağrılırsa test yanlış kurulmuş demektir → sessizce geçmek yerine patlar.
+    /// <para>
+    /// <c>internal</c>: aynı grafiği <see cref="AuditSubscriptionVisibilityTests"/> de kuruyor.
+    /// İkinci bir kopya çıkarmak, birini güncelleyip diğerini unutmanın yoluydu.
+    /// </para>
     /// </summary>
-    private sealed class SahteKapsam : ICustomerScopeService
+    internal sealed class SahteKapsam : ICustomerScopeService
     {
         public Dictionary<Guid, Guid[]> AltKullanicilar { get; } = [];
 

@@ -20,11 +20,25 @@ public sealed class AuditService(
     /// <summary>Varsayılan saklama: 365 gün. Sıfır (sınırsız) DEĞİL — bkz. <see cref="GetRetentionAsync"/>.</summary>
     private const int DefaultRetentionDays = 365;
 
-    public async Task WriteAsync(
+    /// <inheritdoc />
+    public Task WriteAsync(
         string action,
         string resource,
         string details,
         Guid? userId,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+        // Tek yazma yolu: konu belirtilmeyen çağrı da aynı geçitten geçer, yoksa sır temizliği gibi
+        // korumaların birinde uygulanıp diğerinde unutulması an meselesi olurdu.
+        => WriteForSubscriptionAsync(action, resource, details, userId, null, ipAddress, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task WriteForSubscriptionAsync(
+        string action,
+        string resource,
+        string details,
+        Guid? userId,
+        Guid? subscriptionUserId,
         string? ipAddress,
         CancellationToken cancellationToken = default)
     {
@@ -32,6 +46,7 @@ public sealed class AuditService(
         var entry = new AuditLog
         {
             UserId = userId,
+            SubscriptionUserId = subscriptionUserId,
             Action = AuditSecretRedactor.SanitizeShortField(action),
             Resource = AuditSecretRedactor.SanitizeShortField(resource),
             Details = AuditSecretRedactor.SanitizeDetails(details),

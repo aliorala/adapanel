@@ -83,11 +83,7 @@ public sealed class FilesController(
         }
         else if (CustomerAccess.IsReseller(User))
         {
-            var segments = (path ?? string.Empty).Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (segments.Length >= 2 && string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase))
-            {
-                quotaOwner = await customerScopes.GetSiteOwnerUserIdAsync(segments[1], cancellationToken);
-            }
+            quotaOwner = await ResolveSiteOwnerAsync(path, cancellationToken);
         }
 
         if (quotaOwner is { } ownerId)
@@ -107,7 +103,7 @@ public sealed class FilesController(
         await using var stream = file.OpenReadStream();
         var virtualPath = $"{(path ?? string.Empty).TrimEnd('/', '\\')}/{file.FileName}".TrimStart('/', '\\');
         var savedPath = await fileService.SaveUploadAsync(virtualPath, stream, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "files.uploaded", savedPath, $"File uploaded ({file.Length} bytes).");
+        await WriteAuditAsync("files.uploaded", savedPath, $"File uploaded ({file.Length} bytes).", cancellationToken);
         return Ok(ApiResponse<object>.Ok(new { path = savedPath }, "files.uploaded"));
     }
 
@@ -120,11 +116,11 @@ public sealed class FilesController(
         // İÇERİK YAZILMAZ, yalnız boyutu: bir dosyanın gövdesi (yapılandırma, bağlantı dizesi,
         // müşteri verisi) denetim kaydına kopyalanırsa kayıt, korumaya çalıştığı sırların ikinci
         // bir deposuna dönüşür.
-        await auditService.AuditAsync(
-            HttpContext,
+        await WriteAuditAsync(
             "files.written",
             request.Path,
-            $"File content saved ({(request.Content ?? string.Empty).Length} characters).");
+            $"File content saved ({(request.Content ?? string.Empty).Length} characters).",
+            cancellationToken);
 
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.saved"));
     }
@@ -134,7 +130,7 @@ public sealed class FilesController(
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
         var workspace = await fileService.DeleteAsync(request, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "files.deleted", request.Path, "File or directory deleted.");
+        await WriteAuditAsync("files.deleted", request.Path, "File or directory deleted.", cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.deleted"));
     }
 
@@ -143,8 +139,48 @@ public sealed class FilesController(
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
         var workspace = await fileService.CreateDirectoryAsync(request, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "files.directory_created", request.Path, "Directory created.");
+        await WriteAuditAsync("files.directory_created", request.Path, "Directory created.", cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.directory_created"));
+    }
+
+    /// <summary>
+    /// Bir ya da birden çok ögeyi başka klasöre taşır; tek öge + <c>NewName</c> ile yeniden adlandırır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kapsam denetimi HER YOL İÇİN AYRI yapılır.</b> Yalnız hedefi doğrulamak, kiracının
+    /// göremeyeceği bir kaynağı kendi klasörüne çekmesine; yalnız kaynağı doğrulamak ise dosyayı
+    /// başka kiracının klasörüne bırakmasına izin verirdi. İki yön de birer izolasyon açığıdır,
+    /// bu yüzden ikisi de sorulur.
+    /// </para>
+    /// </remarks>
+    [HttpPost("move")]
+    public async Task<ActionResult<ApiResponse<MoveFilesResultDto>>> MoveAsync([FromBody] MoveFilesRequest request, CancellationToken cancellationToken)
+    {
+        foreach (var source in request.Paths ?? [])
+        {
+            await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, source, allowRoot: false, cancellationToken);
+        }
+
+        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
+
+        var result = await fileService.MoveAsync(request, cancellationToken);
+
+        // Kayıt, kısmi başarısızlığı da yazar: "hepsi taşındı" diyen bir iz, taşınmayan dosyanın
+        // nereye gittiğini soran kişiyi yanlış yönlendirirdi.
+        var failures = result.Items
+            .Where(item => !item.Moved)
+            .Select(item => $"{item.SourcePath} ({item.ErrorKey})")
+            .ToArray();
+
+        await WriteAuditAsync(
+            "files.moved",
+            request.DestinationPath,
+            $"{result.MovedCount} of {result.MovedCount + result.FailedCount} item(s) moved."
+                + (failures.Length > 0 ? $" Not moved: {string.Join("; ", failures)}." : string.Empty),
+            cancellationToken);
+
+        return Ok(ApiResponse<MoveFilesResultDto>.Ok(result, "files.moved"));
     }
 
     // ACL değişikliği sistem genelini etkileyebilir (örn. Everyone'a izin); yalnız yönetici.
@@ -156,11 +192,11 @@ public sealed class FilesController(
 
         // ACL değişikliği bir yetkilendirme olayıdır: kimin neye erişebildiğini değiştirir.
         // Kimin, hangi kullanıcıya, hangi hakkı verdiği tam olarak yazılır.
-        await auditService.AuditAsync(
-            HttpContext,
+        await WriteAuditAsync(
             "files.acl_updated",
             request.Path,
-            $"Permission '{request.Rights}' granted to '{request.Principal}'.");
+            $"Permission '{request.Rights}' granted to '{request.Principal}'.",
+            cancellationToken);
 
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.acl_updated"));
     }
@@ -174,11 +210,11 @@ public sealed class FilesController(
             await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
         }
         var workspace = await fileService.CompressAsync(request, cancellationToken);
-        await auditService.AuditAsync(
-            HttpContext,
+        await WriteAuditAsync(
             "files.compressed",
             request.Path,
-            $"Archived to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.");
+            $"Archived to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.",
+            cancellationToken);
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.compressed"));
     }
 
@@ -194,11 +230,11 @@ public sealed class FilesController(
 
         // Çıkarma, arşivin içeriğiyle var olan dosyaların ÜZERİNE yazabilir; yani içerik kaybının
         // sessiz yollarından biridir. Hedef de kayda geçer.
-        await auditService.AuditAsync(
-            HttpContext,
+        await WriteAuditAsync(
             "files.extracted",
             request.Path,
-            $"Extracted to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.");
+            $"Extracted to '{(string.IsNullOrWhiteSpace(request.DestinationPath) ? "(default)" : request.DestinationPath)}'.",
+            cancellationToken);
 
         return Ok(ApiResponse<FileWorkspaceDto>.Ok(workspace, "files.extracted"));
     }
@@ -209,5 +245,42 @@ public sealed class FilesController(
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
         var results = await fileService.SearchAsync(request, cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<FileEntryDto>>.Ok(results));
+    }
+
+    /// <summary>
+    /// Bu denetleyicideki denetim kaydı yazmanın TEK yolu.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aktörün yanına eylemin KONUSU olan aboneliği de koyar. Gerekçe: kayıtlar yalnız aktöre göre
+    /// kapsamlandığında, bir YÖNETİCİNİN kiracının sitesinde yaptığı silme/yazma işlemi kiracının
+    /// kendi denetim görünümünde hiç çıkmıyordu; "benim siteme kim dokundu" sorusu cevapsız
+    /// kalıyordu. Sahibi her çağrı yerinde elle çözmek yerine burada bir kez çözülür — kopyalanmış
+    /// bir kalıpta birini doldurup diğerini unutmak an meselesidir.
+    /// </para>
+    /// </remarks>
+    private async Task WriteAuditAsync(string action, string? path, string details, CancellationToken cancellationToken)
+    {
+        await auditService.AuditAsync(
+            HttpContext,
+            action,
+            path ?? string.Empty,
+            details,
+            await ResolveSiteOwnerAsync(path, cancellationToken));
+    }
+
+    /// <summary>
+    /// Sanal dosya yolundan (<c>sites/&lt;site&gt;/...</c>) o sitenin sahibi müşteriyi çözer.
+    /// Yol bir siteye işaret etmiyorsa ya da site kimseye atanmamışsa <c>null</c> döner.
+    /// </summary>
+    private async Task<Guid?> ResolveSiteOwnerAsync(string? path, CancellationToken cancellationToken)
+    {
+        var segments = (path ?? string.Empty).Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2 || !string.Equals(segments[0], "sites", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return await customerScopes.GetSiteOwnerUserIdAsync(segments[1], cancellationToken);
     }
 }

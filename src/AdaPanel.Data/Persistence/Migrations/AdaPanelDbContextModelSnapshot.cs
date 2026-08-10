@@ -45,10 +45,19 @@ namespace AdaPanel.Data.Persistence.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("SubscriptionUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("UserId")
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("SubscriptionUserId")
+                        .HasDatabaseName("ix_audit_logs_subscription");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_audit_logs_user");
 
                     b.ToTable("audit_logs", (string)null);
                 });

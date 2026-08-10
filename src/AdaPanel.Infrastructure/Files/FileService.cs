@@ -96,6 +96,211 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>HANGİ HATA İSTEĞİ DÜŞÜRÜR, HANGİSİ RAPORA GİRER:</b> ayrım bilinçlidir.
+    /// İsteğin BİÇİMİ geçersizse (hedef sanal alan dışında, hedef klasör yok, yeni ad bir yol
+    /// parçası içeriyor, yol üzerinde bağlantı var) istek TÜMÜYLE reddedilir — bunlar kullanıcı
+    /// hatası değil, ya bozuk istemci ya da saldırı denemesidir ve 200 dönüp "kısmen başarılı"
+    /// demek onları sessizleştirirdi. Tek tek ögelerin durumu (hedefte aynı ad var, kaynak yok,
+    /// klasör kendi içine taşınıyor, disk hatası) ise RAPORA girer; bir ögenin takılması diğer
+    /// yedisinin taşınmasını engellemez.
+    /// </para>
+    /// </remarks>
+    public async Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default)
+    {
+        var sources = (request.Paths ?? [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToArray();
+        if (sources.Length == 0)
+        {
+            throw new AppException("files.move_source_required", 400, 400);
+        }
+
+        // Yeniden adlandırma TEK ögeye özgüdür: sekiz dosyaya aynı adı vermek, yedisinin sessizce
+        // kaybolması demek olurdu.
+        if (!string.IsNullOrWhiteSpace(request.NewName) && sources.Length > 1)
+        {
+            throw new AppException("files.move_rename_single_only", 400, 400);
+        }
+
+        var destinationPath = NormalizeVirtualPath(request.DestinationPath);
+        var destination = await ResolveTargetAsync(destinationPath, cancellationToken);
+        EnsureSiteTarget(destination);
+        EnsureInsideSandbox(destination);
+
+        // Hedef klasör YARATILMAZ, var olması istenir: yazım hatası yüzünden oluşan bir klasöre
+        // sekiz dosya taşımak, onları "kaybolmuş" hâle getirir.
+        if (!Directory.Exists(destination.PhysicalPath))
+        {
+            throw new AppException("files.move_destination_missing", 404, 404);
+        }
+
+        var results = new List<MoveFileResultDto>(sources.Length);
+        foreach (var rawSource in sources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var sourcePath = NormalizeVirtualPath(rawSource);
+
+            // Kaynağın çözümü sanal alan + bağlantı (junction/symlink) denetimini de yapar; bir
+            // bağlantıyı taşımak, hedefindeki müşteri sitesini başka bir yere bağlamak demektir.
+            var source = await ResolveTargetAsync(sourcePath, cancellationToken);
+            EnsureSiteTarget(source);
+            EnsureNotSiteRoot(source);
+            EnsureInsideSandbox(source);
+
+            var name = string.IsNullOrWhiteSpace(request.NewName)
+                ? Path.GetFileName(source.PhysicalPath)
+                : EnsureSimpleName(request.NewName);
+
+            var targetPath = CombineVirtualPath(destinationPath, name);
+
+            // Hedef de AYNI kapıdan geçer: adı ben ürettiğim için "güvenli varsayıp" atlamak,
+            // korumanın tam da yeni uçta delinmesi olurdu.
+            var target = await ResolveTargetAsync(targetPath, cancellationToken);
+            EnsureSiteTarget(target);
+            EnsureNotSiteRoot(target);
+            EnsureInsideSandbox(target);
+
+            results.Add(MoveOne(source, target, sourcePath, targetPath, request.Overwrite));
+        }
+
+        return new MoveFilesResultDto
+        {
+            MovedCount = results.Count(item => item.Moved),
+            FailedCount = results.Count(item => !item.Moved),
+            Items = results.ToArray(),
+            Workspace = await GetWorkspaceAsync(destinationPath, cancellationToken)
+        };
+    }
+
+    /// <summary>Tek ögeyi taşır; başarısızlığı İSTİSNA olarak değil, rapor satırı olarak döner.</summary>
+    private static MoveFileResultDto MoveOne(
+        ResolvedTarget source,
+        ResolvedTarget target,
+        string sourcePath,
+        string targetPath,
+        bool overwrite)
+    {
+        var basarisiz = (string anahtar) => new MoveFileResultDto
+        {
+            SourcePath = sourcePath,
+            Moved = false,
+            ErrorKey = anahtar
+        };
+
+        var kaynakKlasor = Directory.Exists(source.PhysicalPath);
+        if (!kaynakKlasor && !File.Exists(source.PhysicalPath))
+        {
+            return basarisiz("files.not_found");
+        }
+
+        if (string.Equals(source.PhysicalPath, target.PhysicalPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return basarisiz("files.move_same_path");
+        }
+
+        // KLASÖRÜ KENDİ ALT AĞACINA taşımak: dosya sistemi bunu ya reddeder ya da klasörü kendi
+        // içine gömerek ERİŞİLEMEZ kılar. İki durumda da kullanıcının verisi kaybolmuş sayılır.
+        if (kaynakKlasor && PathContainment.IsInsideRoot(source.PhysicalPath, target.PhysicalPath))
+        {
+            return basarisiz("files.move_into_itself");
+        }
+
+        if (Directory.Exists(target.PhysicalPath))
+        {
+            // KLASÖR, Overwrite ile bile EZİLMEZ. Ezmek, hedef klasörün özyinelemeli silinmesi
+            // demektir; bu panelde özyinelemeli silme bir kez müşteri sitesini götürmeye
+            // ramak kalmış bir hata sınıfıdır. Kullanıcı gerçekten istiyorsa önce kendisi siler.
+            return basarisiz("files.move_target_exists");
+        }
+
+        if (File.Exists(target.PhysicalPath))
+        {
+            if (!overwrite)
+            {
+                return basarisiz("files.move_target_exists");
+            }
+
+            if (kaynakKlasor)
+            {
+                // Klasörü bir dosyanın üstüne yazmak anlamsız; sessizce "başarılı" demek yerine söylenir.
+                return basarisiz("files.move_target_exists");
+            }
+
+            File.Delete(target.PhysicalPath);
+        }
+
+        try
+        {
+            if (kaynakKlasor)
+            {
+                Directory.Move(source.PhysicalPath, target.PhysicalPath);
+            }
+            else
+            {
+                File.Move(source.PhysicalPath, target.PhysicalPath);
+            }
+        }
+        catch (IOException)
+        {
+            // En sık sebebi: klasörün BAŞKA BİR BİRİME taşınması (Directory.Move bunu yapamaz) ya da
+            // dosyanın kullanımda olması. Yalanlamak yerine bu ögenin taşınmadığı raporlanır.
+            return basarisiz("files.move_failed");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return basarisiz("files.move_denied");
+        }
+
+        return new MoveFileResultDto
+        {
+            SourcePath = sourcePath,
+            TargetPath = targetPath,
+            Moved = true
+        };
+    }
+
+    /// <summary>
+    /// Yeni adın gerçekten bir AD olduğunu doğrular.
+    /// <para>
+    /// Ad alanı bir YOL kabul etseydi ("../../evil"), hedef klasör denetimi anlamını yitirirdi:
+    /// kullanıcı hedefi meşru gösterip dosyayı bambaşka bir yere yazdırabilirdi.
+    /// </para>
+    /// </summary>
+    private static string EnsureSimpleName(string? name)
+    {
+        var kirpilmis = (name ?? string.Empty).Trim();
+        if (kirpilmis.Length == 0
+            || kirpilmis is "." or ".."
+            || kirpilmis.IndexOfAny(['/', '\\', ':']) >= 0
+            || kirpilmis.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new AppException("files.invalid_name", 400, 400);
+        }
+
+        return kirpilmis;
+    }
+
+    /// <summary>
+    /// "Bu yol sanal alanın içinde mi?" — cevabı <see cref="PathContainment"/> verir.
+    /// <para>
+    /// Burada elle <c>StartsWith</c> yazılmaz: "C:\sites\a" ile "C:\sites\a-evil" ön ek olarak
+    /// eşleşir ve o sınıf tam da bu ayırıcı hatası yüzünden yazıldı. Kökün KENDİSİ geçerlidir
+    /// (hedef klasör pekâlâ site kökü olabilir); "site kökünün kendisi taşınamaz/ezilemez" ayrı
+    /// bir kuraldır ve <see cref="EnsureNotSiteRoot"/> ile uygulanır.
+    /// </para>
+    /// </summary>
+    private static void EnsureInsideSandbox(ResolvedTarget target)
+    {
+        if (!PathContainment.IsRootOrInside(target.SandboxRoot, target.PhysicalPath))
+        {
+            throw new AppException("files.path_outside_root", 400, 400);
+        }
+    }
+
     /// <summary>
     /// Klasöre bir kullanıcı/grup için izin verir.
     /// <para>

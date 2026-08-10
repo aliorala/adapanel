@@ -5,11 +5,40 @@ namespace AdaPanel.Core.Interfaces;
 
 public interface IAuditService
 {
+    /// <summary>
+    /// Kaydı yazar. Kaydın KONUSU bir kiracıya aitse <see cref="WriteForSubscriptionAsync"/>
+    /// kullanılmalıdır; bu aşırı yükleme konuyu boş bırakır (sunucu geneli eylemler).
+    /// </summary>
     Task WriteAsync(
         string action,
         string resource,
         string details,
         Guid? userId,
+        string? ipAddress,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Kaydı, eylemin KONUSU olan aboneliği de belirterek yazar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="userId"/> eylemi YAPAN, <paramref name="subscriptionUserId"/> ise eylemin
+    /// ÜZERİNDE yapıldığı kaynağın sahibidir. İkisi çoğu zaman aynıdır (kiracı kendi dosyasına
+    /// dokunur); ayrıldıkları an tam da kaydın en çok gerektiği andır: yönetici ya da bayi,
+    /// kiracının kaynağına dokunur. İkinci sütun olmadan kiracı bu izi hiç göremezdi.
+    /// </para>
+    /// <para>
+    /// Ayrı bir metot (isteğe bağlı parametre değil) olmasının sebebi, <c>WriteAsync</c> çağıranların
+    /// iptal belirtecini KONUM olarak geçirmesidir; araya parametre eklemek onları sessizce yanlış
+    /// argümana bağlardı.
+    /// </para>
+    /// </remarks>
+    Task WriteForSubscriptionAsync(
+        string action,
+        string resource,
+        string details,
+        Guid? userId,
+        Guid? subscriptionUserId,
         string? ipAddress,
         CancellationToken cancellationToken = default);
 

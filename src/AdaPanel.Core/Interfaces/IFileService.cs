@@ -12,6 +12,30 @@ public interface IFileService
 
     Task<FileWorkspaceDto> CreateDirectoryAsync(CreateDirectoryRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Bir ya da birden çok ögeyi başka klasöre TAŞIR; tek öge + <c>NewName</c> ile YENİDEN ADLANDIRIR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden vardı olmalı:</b> panelde taşıma/yeniden adlandırma hiç yoktu — kullanıcı bir dosyayı
+    /// komşu klasöre almak için indirip tekrar yüklemek zorundaydı (büyük dosyada pratikte imkânsız,
+    /// klasörde ise hiç mümkün değil).
+    /// </para>
+    /// <para>
+    /// <b>Sözleşme (uygulamanın uyması ZORUNLU olan kısım):</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>Kaynak ve hedef sanal alanın içinde olmalıdır; dışarı çıkan istek REDDEDİLİR (istisna).</item>
+    /// <item>Yol üzerindeki hiçbir bağlantı (junction/symlink) TAKİP EDİLMEZ — bir bağlantıyı taşımak
+    /// ya da üzerine yazmak, hedefindeki müşteri sitesini yok edebilir.</item>
+    /// <item>Hedefte aynı adlı öge varsa VARSAYILAN davranış REDDETMEKTİR; üzerine yazma yalnız
+    /// <c>Overwrite</c> ile ve yalnız DOSYALAR için mümkündür.</item>
+    /// <item>Bir klasör KENDİ ALT AĞACINA taşınamaz.</item>
+    /// <item>Kısmi başarısızlık istisna değil, öge başına RAPOR üretir.</item>
+    /// </list>
+    /// </remarks>
+    Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default);
+
     Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default);
 
     Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default);

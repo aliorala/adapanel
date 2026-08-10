@@ -30,20 +30,27 @@ namespace AdaPanel.Infrastructure.Audit;
 /// </remarks>
 public static class HttpAuditExtensions
 {
+    /// <param name="subscriptionUserId">
+    /// Eylemin KONUSU olan kaynağın sahibi (biliniyorsa). Verildiğinde kaynağın sahibi kiracı, bu
+    /// izi kendi denetim görünümünde görür — eylemi bir yönetici yapmış olsa bile. Verilmezse
+    /// kaydın görünürlüğü yalnız aktöre bağlı kalır (eski davranış).
+    /// </param>
     public static async Task AuditAsync(
         this IAuditService auditService,
         HttpContext httpContext,
         string action,
         string resource,
-        string details)
+        string details,
+        Guid? subscriptionUserId = null)
     {
         try
         {
-            await auditService.WriteAsync(
+            await auditService.WriteForSubscriptionAsync(
                 action,
                 resource,
                 details,
                 ResolveUserId(httpContext.User),
+                subscriptionUserId,
                 httpContext.Connection.RemoteIpAddress?.ToString(),
                 CancellationToken.None);
         }

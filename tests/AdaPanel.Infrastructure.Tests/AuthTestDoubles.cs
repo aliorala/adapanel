@@ -32,6 +32,9 @@ internal sealed class RecordingAuditService : IAuditService
     public List<string> Actions { get; } = [];
 
     public Task WriteAsync(string action, string resource, string details, Guid? userId = null, string? ipAddress = null, CancellationToken cancellationToken = default)
+        => WriteForSubscriptionAsync(action, resource, details, userId, null, ipAddress, cancellationToken);
+
+    public Task WriteForSubscriptionAsync(string action, string resource, string details, Guid? userId, Guid? subscriptionUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
         Actions.Add(action);
         return Task.CompletedTask;

@@ -49,10 +49,22 @@ public static class AuditLogQueryEngine
 
         var izinli = visibility.UserIds.ToArray();
 
-        // UserId'si olmayan ("system") kayıtlar kapsamlı role GÖSTERİLMEZ: sahibi belirsiz bir
-        // kaydın hangi aboneliğe ait olduğunu söyleyemeyiz, dolayısıyla göstermek çapraz-kiracı
-        // sızıntı riskidir.
-        return source.Where(log => log.UserId != null && izinli.Contains(log.UserId.Value));
+        // İKİ SORU birden sorulur:
+        //   1) kaydı BEN (ya da aboneliğimdeki biri) mi yazdı?           → UserId
+        //   2) kayıt BENİM kaynağım üzerinde mi yapıldı?                 → SubscriptionUserId
+        // İkincisi eklenmeden önce, bir YÖNETİCİNİN kiracının sitesinde yaptığı işlem kiracının
+        // görünümünde hiç çıkmıyordu — "benim siteme kim dokundu" cevapsız kalıyordu.
+        //
+        // SubscriptionUserId'si NULL olan kayıtlar (sütun eklenmeden önce yazılmış olanların
+        // tamamı) yalnız birinci koşula tabidir; yani eski kayıtların görünürlüğü BİREBİR aynı
+        // kalır, ne daralır ne genişler.
+        //
+        // UserId'si de konusu da olmayan ("system") kayıtlar kapsamlı role GÖSTERİLMEZ: sahibi
+        // belirsiz bir kaydın hangi aboneliğe ait olduğunu söyleyemeyiz, dolayısıyla göstermek
+        // çapraz-kiracı sızıntı riskidir.
+        return source.Where(log =>
+            (log.UserId != null && izinli.Contains(log.UserId.Value))
+            || (log.SubscriptionUserId != null && izinli.Contains(log.SubscriptionUserId.Value)));
     }
 
     /// <summary>
