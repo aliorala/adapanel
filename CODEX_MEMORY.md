@@ -6310,3 +6310,78 @@ bu makinede ölçüldü: `Win32_BIOS.SerialNumber` = "To Be Filled By O.E.M".
   MCP yazma araçları abonelik askısını ve alt-kullanıcı bölüm izinlerini atlıyor · yöneticinin
   kiracı kaynağındaki işlemi kiracının denetim görünümünde çıkmıyor · dosya taşıma ucu yok ·
   bayi menüsünde yedekleme yok · lisans/şifreleme ekranları arayüzde yok · 155 ölü i18n anahtarı.
+
+## 2026-08-10 (215) — Üçüncü dalga: kimlik, dosya, posta, arayüz + 0.5.0 hazırlığı
+
+### A. KİŞİSEL API ANAHTARLARI REST'TE HİÇ ÇALIŞMIYORDU (ve düzeltmesi bir açık açacaktı)
+
+Ölçüldü: `PanelToken` şeması YALNIZCA `/mcp`'ye bağlıydı; `/api/v1/**` controller'ları
+`AuthenticationSchemes` belirtmediği için varsayılan ÇEREZ şemasını kullanıyor ve
+`Authorization` başlığını hiç okumuyordu. Yani "kişisel API anahtarı" özelliği fiilen
+yalnızca yapay zekâ istemcisi içindi; WHMCS modülü bu yüzden çerez oturumu açmak zorunda kaldı.
+
+Çözüm: 50+ controller'a öznitelik yazmak yerine **policy scheme yönlendirici**
+(`PanelAuthentication`, Program.cs) — istek `Bearer adap_` taşıyorsa anahtar şemasına,
+taşımıyorsa çereze. Yeni controller'da unutulamaz.
+
+**KRİTİK YAN BULGU:** `AllowDestructive`/`AllowTerminal` yetenekleri YALNIZ MCP araçlarında
+sorgulanıyordu. REST anahtarı kabul edilir edilmez "yıkıcı işleme izin vermeyen" bir anahtar
+tek HTTP çağrısıyla site silebilir/komut çalıştırabilirdi. `PanelTokenCapabilities` eklendi:
+anahtar varsayılan SALT OKUR, terminal ayrıca `AllowTerminal` ister. `AuthController` ve
+`ApiTokensController` çerez şemasına SABİTLENDİ — yoksa salt-okur anahtar kendine tam yetkili
+yeni anahtar basardı.
+
+CSRF kararı uç bazında değil **isteğin kimlik yoluna** göre çalışma anında veriliyor
+(`PanelAntiforgeryFilter`): çerezde aynen uygulanır, anahtarda atlanır — çünkü antiforgery
+ÇEREZE karşı bir korumadır ve `Authorization` başlığı tarayıcıdan otomatik gitmez.
+
+**BEDELİ OLAN BİR KARAR:** `SecureEntryPathMiddleware` artık anahtar taşıyan isteği gizli giriş
+yolu başlığından muaf tutuyor (aksi hâlde WHMCS gizli yolu da bilmek zorunda kalır ve yönetici
+yolu değiştirdiğinde entegrasyon sebebi görünmeyen bir 404 ile sessizce kırılır). Bedeli:
+burada yalnız başlığın BİÇİMİNE bakılır, anahtar henüz doğrulanmamıştır — sahte bir
+`Bearer adap_…` gönderen taraf eskiden 404 alırken artık 401 alır. Kaybedilen şey ucun
+VARLIĞININ gizlenmesi, erişim değil; aynı özellik `/mcp` muafiyetiyle zaten kaybedilmişti.
+
+### B. DİĞER İŞLER
+
+- `POST /files/move`: tek/çoklu taşıma + yeniden adlandırma. Yeniden adlandırma ayrı uç DEĞİL,
+  "hedefi kendi klasörü olan taşıma" — korumalar iki yerde yazılmasın diye. Klasör `Overwrite`
+  bayrağıyla bile EZİLMEZ (özyinelemeli silme bu depoda yaşanmış hata sınıfı).
+  ÖLÇÜM: `PathContainment` kapısı tek başına yetiyor — eski `StartsWith` kontrolü kapatılınca
+  16 taşıma testi hâlâ geçti, ikisi birden kapatılınca patladı.
+- `AuditLog.SubscriptionUserId` (nullable, EF göçüyle): yöneticinin KİRACI kaynağında yaptığı
+  işlem artık kiracının denetim görünümünde çıkıyor. Eski kayıtlar NULL → görünürlük aynı.
+- Posta: kuyruk görüntüleyici, smarthost/relay (parola DPAPI ile; kapatmada ÖNCE yönlendirme
+  geri alınır SONRA rota silinir — ters sıra gideni bir süre tamamen durdururdu),
+  autodiscover/autoconfig uçları.
+  ÖLÇÜM: Stalwart v1'de REST kuyruk API'si YOK (`/api/queue/messages` → 404), nesne modeline
+  taşınmış. Alan adları resmî şema referansından alınıp sunucu binary'sinde arandı.
+  Doğrulanamayan tek şey `RecipientStatus` içindeki hata alan adları — UYDURULMADI, varyant adı
+  + ham JSON taşınıyor.
+- Arayüz: lisans ekranı, yedek şifreleme alanları, askı modu (axios kesicisinde TEK kapı,
+  gerçek axios ile ölçüldü), bayi yedek menüsü (`injectBackupSection` tek kaynağa çıkarıldı --
+  elle kopyalanmıştı ve EKSİK OLAN kopya bayininkiydi), 150 ölü i18n anahtarı silindi.
+
+**ÖLÇÜM DERSİ (ölü anahtar taraması):** yapı çıktısı bu ölçümü SESSİZCE zehirliyor —
+`artifacts/`, `wwwroot/`, `bin/`, `obj/` dahil edilince tüm i18n paketi derlenmiş JS'in içinde
+görünür ve ölü sayısı 152'den 5'e düşer. Ayrıca `.md` belgelerinde anılmak KULLANIM DEĞİLDİR.
+
+### C. AÇIK KALANLAR
+
+- **Autodiscover istemcilere ULAŞMIYOR:** uçlar panel API'sinde, müşterinin alan adı IIS'te
+  80/443'ten servis ediliyor. `autodiscover.<alan>` binding'i + URL Rewrite ya da site köküne
+  statik XML gerekiyor.
+- Düğme bazında salt-okunur devre dışı bırakma yapılmadı (yazma/okuma düğmesini ayırt eden bir
+  işaret yok; kırılgan CSS sezgisi uydurmak yerine kalıcı bildirim + istek kapısı verildi).
+- `system_overview` MCP'de yönetici ister, REST ikizi her role açık — bilinçli asimetri, kodda
+  gerekçeli (MCP çıktısı üçüncü tarafa gider).
+- Beyaz etiket, slave DNS, per-site Node sürümü, WAF kural seti, posta/lisans ekranlarının bir
+  kısmı.
+
+### D. 0.5.0 HAZIRLIĞI
+
+Test **976 → 1346**, i18n **TR 3574 = EN 3574**. Sürüm 0.4.22 → **0.5.0** (yalnız düzeltme değil;
+lisans, yedek şifreleme, denetim kaydı, çalışan API anahtarları yeni yetenekler).
+Yayındaki sürüm API'den DOĞRULANDI (0.4.22) — yayınlanmış tag'in üzerine paket üretilmedi.
+Beş yer güncellendi ve `scripts\version-guard.ps1` GEÇTİ.
+**PAKET HENÜZ ÜRETİLMEDİ, GitHub'a hiçbir şey gönderilmedi.**
