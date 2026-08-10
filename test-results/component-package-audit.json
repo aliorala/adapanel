@@ -8,8 +8,8 @@
     {
         "id":  "php-8.3",
         "status":  "Passed",
-        "bytes":  33761120,
-        "sha256":  "389C1327D325F6B6B3B892A5B2E1484CA5B5DF775B6C4DDF5D1B5DC3B34AC761"
+        "bytes":  33852188,
+        "sha256":  "534399107056313246F424ADBBB7937337E40FBBF6AA7BC26287BA9CFD2E4A2A"
     },
     {
         "id":  "mariadb-11",
@@ -19,33 +19,36 @@
     },
     {
         "id":  "mysql-8",
-        "status":  "Passed",
-        "bytes":  280452577,
-        "sha256":  "5795BA250E89290F7507ED3BCC6A655BE373616ABB58B877ACDEA71E1B8F4E8C"
+        "status":  "Skipped",
+        "detail":  "Large package"
     },
     {
         "id":  "postgresql-16",
-        "status":  "Passed",
-        "bytes":  365689952,
-        "sha256":  "D389834DF279A9B7CE4B4A030B6545FD0BEFB05385FF66932AC37454AD9B9312"
+        "status":  "Skipped",
+        "detail":  "Large package"
     },
     {
         "id":  "pgadmin4",
-        "status":  "Passed",
-        "bytes":  231272544,
-        "sha256":  "BBEFD88E62CE9D8C51588E24BF7234C3002116925519CBB94DE16C287657A0CA"
+        "status":  "Skipped",
+        "detail":  "Large package"
     },
     {
         "id":  "composer",
         "status":  "Passed",
-        "bytes":  3565131,
-        "sha256":  "345B9C6A98DA5C30DCBD4B0D99FC8710BF0AE98A3898EEA18F7B2AD9DEC93F06"
+        "bytes":  3639279,
+        "sha256":  "5EE7125F8A30A34D246CEFDC0BC85B8A783B28F2AEC968994118512350D28027"
     },
     {
         "id":  "phpmyadmin",
         "status":  "Passed",
         "bytes":  16431330,
         "sha256":  "2D2E13C735366D318425C78E4EE2CC8FC648D77FABA3DDEA2CD516E43885733F"
+    },
+    {
+        "id":  "roundcube",
+        "status":  "Passed",
+        "bytes":  6335172,
+        "sha256":  "1E0382BCEFD627AB0B6285D3181DDFBA5B444FDCF6D49F33F5EA15FBF97864EF"
     },
     {
         "id":  "adminer",
@@ -112,6 +115,18 @@
         "status":  "Passed",
         "bytes":  41635660,
         "sha256":  "C80D56C6B425F5232ED93FC61F9FDB52CE78DD27B1C047F7270A4825054ED532"
+    },
+    {
+        "id":  "mailenable-standard",
+        "status":  "Passed",
+        "bytes":  88238216,
+        "sha256":  "3E173C995F3653C10B50307A820693930165B339517D2981DFAFA810441B3F91"
+    },
+    {
+        "id":  "clamav",
+        "status":  "Passed",
+        "bytes":  229959640,
+        "sha256":  "E998B3B98C2812726CA7F4DB06BF89C4B52A7EB7160AB93403C3EC790A9BE6B6"
     },
     {
         "id":  "docker-engine",

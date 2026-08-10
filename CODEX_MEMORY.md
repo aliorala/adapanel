@@ -6385,3 +6385,31 @@ lisans, yedek şifreleme, denetim kaydı, çalışan API anahtarları yeni yeten
 Yayındaki sürüm API'den DOĞRULANDI (0.4.22) — yayınlanmış tag'in üzerine paket üretilmedi.
 Beş yer güncellendi ve `scripts\version-guard.ps1` GEÇTİ.
 **PAKET HENÜZ ÜRETİLMEDİ, GitHub'a hiçbir şey gönderilmedi.**
+
+### E-1. 0.5.0 YAYINLANDI (2026-08-11)
+
+- **Paket:** `artifacts\installer\AdaPanelSetup.exe`, **89.665.087 bayt** (85,51 MiB),
+  SHA256 **`970B603AA5E47EC234811C518289B24D231982E96163FC1E8DD04EF2B624B758`**.
+- **GitHub release 0.5.0** (id `368241558`, asset id `509356877`). `releases/latest` → 0.5.0,
+  draft=false, prerelease=false.
+- **YAYIN SONRASI DOĞRULAMA YAPILDI:** yayındaki dosya indirilip hash'lendi → yereldekiyle
+  BİREBİR. İndirilen dosyanın `CompanyName` = "AdaPanel" (bulaşma imzası YOK).
+  Publish çıktısındaki tüm PE dosyaları da tarandı: bulaşık dosya 0.
+
+**PAKETLEME SIRASINDA BULUNAN GERÇEK KOPUKLUK:** `components.json`'daki `php-8.3` yedek indirme
+adresi **404** veriyordu (8.3.31 arşive taşınmış). Kurulum bozuk DEĞİLDİ — `ComponentBootstrapper`
+php-8.3 için canlı sürüm çözümleyicisi taşıyor (`releases.json`'dan güncel yamayı alır). Ama
+manifest URL'si canlı çözümleme başarısız olduğunda düşülecek YEDEK yoldur ve o yedek ölüydü.
+24 bileşenin tamamı tek tek yoklandı; kırık olan YALNIZCA php-8.3 idi. Manifest resmî
+`releases.json`'dan 8.3.31 → **8.3.33** (sha256 dahil) güncellendi ve bileşen denetimi
+`php-8.3 -> Passed` ile doğruladı.
+
+**NOTLAR (sonraki tur için):**
+- `scripts\audit-component-packages.ps1` içindeki `Download-File`, hedef dosya varsa
+  BOYUT/HASH BAKMADAN "indirilmiş" sayıp geçiyor. Şu an `finally` temizliği bunu maskeliyor;
+  `-KeepDownloads` ile çalıştırılırsa yarım kalmış dosya sessizce "geçerli" muamelesi görür.
+- Denetim, canlı sürüm çözümleyicisi olan bileşenlerin STATİK manifest URL'sini test ediyor.
+  O bileşenlerde üst kaynak yeni yama yayınladığı anda denetim yayını bloke eder. Ya canlı
+  çözümleme sonucunu test etmeli ya da bu bileşenleri ayrı raporlamalı.
+- Paketleme sırasında `vc-redist-x64` indirmesi iki koşuda ağ okuma hatası verdi (aynı URL
+  curl ile 1,5 sn'de indi, PowerShell'de elle tekrarlanınca da başarılı). Oynak CDN.
