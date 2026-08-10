@@ -1,3 +1,4 @@
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
 
@@ -43,7 +44,7 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
 
         if (path.StartsWithSegments("/api", out _))
         {
-            if (RequiresSecureEntryHeader(path))
+            if (RequiresSecureEntryHeader(path) && !CarriesApiToken(context.Request))
             {
                 var expectedPath = await securityService.GetSecureEntryPathAsync(context.RequestAborted);
                 var providedPath = context.Request.Headers["X-AdaPanel-Entry-Path"].ToString().Trim().Trim('/').ToLowerInvariant();
@@ -123,6 +124,27 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
         // her /api istegi kimlige bagli veri tasir ve basligi ister.
         return path.StartsWithSegments("/api", out _);
     }
+
+    /// <summary>
+    /// API ANAHTARIYLA gelen istek gizli giriş yolu başlığından muaftır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Gerekçe /mcp muafiyetiyle AYNI: kimlik yüksek entropili, tek tek iptal edilebilen bir
+    /// anahtarla kanıtlanır. Muafiyet olmadan dış entegrasyonlar (WHMCS modülü, müşterinin kendi
+    /// betikleri) gizli giriş yolunu da bilmek zorunda kalır — ve yönetici yolu değiştirdiği anda
+    /// entegrasyon, sebebi görünmeyen bir 404 ile sessizce kırılır.
+    /// </para>
+    /// <para>
+    /// <b>BEDELİ ÖLÇÜLDÜ ve kabul edildi:</b> burada yalnız başlığın BİÇİMİNE bakılır, anahtar
+    /// henüz doğrulanmamıştır (doğrulama kimlik katmanında olur). Yani sahte bir
+    /// <c>Authorization: Bearer adap_…</c> gönderen bir tarayıcı, eskiden aldığı 404 yerine artık
+    /// 401 alır. Kaybedilen şey ucun VARLIĞININ gizlenmesidir, erişim değil — istek yine kimlik
+    /// doğrulamasında durur. Aynı özellik /mcp muafiyetiyle zaten kaybedilmişti; IP kısıtlaması da
+    /// bu metottan ÖNCE uygulanır ve kaldırılmıyor.
+    /// </para>
+    /// </remarks>
+    internal static bool CarriesApiToken(HttpRequest request) => PanelAuthentication.CarriesToken(request);
 
     private static Task RejectApiRequestAsync(HttpContext context, int statusCode, string message)
     {
