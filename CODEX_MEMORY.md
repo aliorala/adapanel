@@ -6413,3 +6413,33 @@ manifest URL'si canlı çözümleme başarısız olduğunda düşülecek YEDEK y
   çözümleme sonucunu test etmeli ya da bu bileşenleri ayrı raporlamalı.
 - Paketleme sırasında `vc-redist-x64` indirmesi iki koşuda ağ okuma hatası verdi (aynı URL
   curl ile 1,5 sn'de indi, PowerShell'de elle tekrarlanınca da başarılı). Oynak CDN.
+
+### E-2. 0.5.1 YAYINLANDI (2026-08-17) — otomatik yedek düzeltmesi
+
+- **Paket:** 89.666.969 bayt (85,51 MiB),
+  SHA256 **`46374F1C72DB9C6C9DE21D625A5F77ED18136D96E0FD588277345505392D8D26`**.
+- **GitHub release 0.5.1** (id `371439141`). `releases/latest` → 0.5.1. Yayındaki dosya indirilip
+  hash'lendi → yereldekiyle BİREBİR; `CompanyName` = "AdaPanel", publish çıktısında bulaşık PE = 0.
+- Yerel etiket `0.5.1` → `f0be0f2`.
+
+**İKİ DÜZELTME:**
+1. **Site başına TEK arşiv.** Otomatik yedek siteyi dosyalarıyla ayrı, veritabanlarını tek tek
+   ayrı, postayı bambaşka bir arşivle alıyordu. Artık tek zip: `files/ + databases/ + mail/ +
+   config/ + manifest.json`. Hangi DB'nin hangi siteye gireceği **sahiplik kaydından**
+   (`IDatabaseOwnershipService.GetAllAsync`) okunuyor, ad benzerliğinden DEĞİL. Karar saf bir
+   fonksiyona çıkarıldı (`AutomationService.GroupDatabasesBySite`) çünkü otomasyon işi 19
+   bağımlılıkla kuruluyor. Sahipsiz DB'ler kendi başlarına yedeklenmeye DEVAM eder.
+2. **Uzak hedef hatası artık yerel yedeği götürmüyor.** `FinalizeBackupAsync` kaydı YÜKLEMEDEN
+   SONRA yazıyordu; FTP patlayınca istisna yukarı çıkıyor ve kayıt HİÇ oluşmuyordu → alınmış,
+   sağlam, yerel bir yedek diskte duruyor ama panelde GÖRÜNMÜYOR (listede yok, geri yüklenemiyor,
+   saklama temizliğine takılmıyor). FTP'nin bir gecelik arızası o gecenin yedeğini fiilen yok
+   ediyordu. Artık üç durum: `created` / `created_remote_synced` / `created_remote_failed`.
+
+**YAYIN YÖNTEMİ NOTU (ilk kez yapıldı):** paket, ana depodan DEĞİL, commit'e bağlı **ayrı bir
+worktree'den** üretildi — çünkü ana depoda bir ajanın yarım arayüz işi duruyordu ve yayına
+girmemeliydi. Worktree'de `.tools` (gitignored) yok; `mklink /J` ile ana depoya junction verildi,
+`npm ci` + `npm run build` worktree içinde çalıştırıldı. Bu, "yayına yalnızca commit'li ve
+testten geçmiş kod girer" garantisini veren pratik yol.
+
+**Test:** 1354 (+8). Korumalar MUTASYONLA doğrulandı: uzak hata yok sayılınca ve sahiplik süzgeci
+kaldırılınca 4 test kırmızıya döndü.
