@@ -72,12 +72,22 @@
       <div v-if="form.autoBackupEnabled" class="form-grid">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.automation.remoteTarget") }}</span>
+          <!--
+            SEÇENEK ADLARI GERÇEĞİ SÖYLEMELİ. Eskiden liste "Yalnızca yerel disk / FTP / S3 /
+            WebDAV" diyordu ve kullanıcı bunu "ya yerel YA uzak" diye okuyordu -- oysa uzak hedef
+            seçildiğinde yedek ÖNCE yerel diske alınır, sonra oraya kopyalanır: ikisi birden.
+            "İki yere birden nasıl yedeklerim, hangi ayarı seçmeliyim?" sorusu tam da bu yanlış
+            adlandırmadan doğdu; davranış doğruydu, etiket yanlıştı.
+          -->
           <select v-model="form.backupTargetType">
             <option value="local">{{ t("panel.automation.remoteLocal") }}</option>
-            <option value="ftp">FTP</option>
-            <option value="s3">S3 (AWS / MinIO / R2 / Wasabi)</option>
-            <option value="webdav">WebDAV</option>
+            <option value="ftp">{{ t("panel.automation.targetFtpBoth") }}</option>
+            <option value="s3">{{ t("panel.automation.targetS3Both") }}</option>
+            <option value="webdav">{{ t("panel.automation.targetWebdavBoth") }}</option>
           </select>
+          <small v-if="form.backupTargetType !== 'local'" class="field-hint">
+            {{ t("panel.automation.dualDestinationHint") }}
+          </small>
         </label>
         <label v-if="form.backupTargetType !== 'local'" class="stacked-field">
           <span class="field-label">{{ t("panel.automation.remoteUrl") }}</span>
