@@ -36,7 +36,7 @@
       <div class="wp-actions">
         <a v-if="wp.adminUrl" class="secondary compact link-btn" :href="wp.adminUrl" target="_blank" rel="noopener">{{ t("panel.wp.openAdmin") }}</a>
         <a v-if="wp.updateAvailable && wp.adminUrl" class="compact link-btn" :href="`${wp.adminUrl}update-core.php`" target="_blank" rel="noopener">{{ t("panel.wp.runUpdate") }}</a>
-        <button class="secondary compact" :disabled="busy" @click="toggleMaintenance">
+        <button class="secondary compact" v-bind="writeGate(busy)" @click="toggleMaintenance">
           {{ wp.maintenanceMode ? t("panel.wp.maintenanceOff") : t("panel.wp.maintenanceOn") }}
         </button>
       </div>
@@ -95,8 +95,12 @@ import WordPressUpdates from "../components/WordPressUpdates.vue";
 import { useSitesStore } from "../stores/sites";
 import { getWordPress, setWordPressMaintenance, type WordPressSite } from "../api/wordpress";
 import { extractApiMessage } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 

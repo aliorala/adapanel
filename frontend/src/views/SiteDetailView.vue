@@ -16,19 +16,19 @@
           </button>
           <button
             class="secondary compact"
-            :disabled="busySiteName === site.name || isStopped"
+            v-bind="writeGate(busySiteName === site.name || isStopped)"
             @click="$emit('start', site.name)">
             {{ t("panel.sites.start") }}
           </button>
           <button
             class="secondary compact"
-            :disabled="busySiteName === site.name || isStarted"
+            v-bind="writeGate(busySiteName === site.name || isStarted)"
             @click="$emit('stop', site.name)">
             {{ t("panel.sites.stop") }}
           </button>
           <button
             class="danger compact"
-            :disabled="busySiteName === site.name"
+            v-bind="writeGate(busySiteName === site.name)"
             @click="$emit('delete', site.name)">
             {{ t("panel.sites.delete") }}
           </button>
@@ -115,7 +115,7 @@
             <input v-model.trim="subdomainLabel" placeholder="blog" pattern="[a-zA-Z0-9-]+" />
             <span>.{{ site.name }}</span>
           </div>
-          <button type="submit" class="compact" :disabled="!subdomainLabel || busySiteName === site.name">
+          <button type="submit" class="compact" v-bind="writeGate(!subdomainLabel || busySiteName === site.name)">
             {{ t("panel.sites.subdomainAdd") }}
           </button>
         </form>
@@ -144,7 +144,7 @@
 
             <button
               class="secondary compact"
-              :disabled="busyBindingKey === toBindingKey(binding)"
+              v-bind="writeGate(busyBindingKey === toBindingKey(binding))"
               @click="emitRemoveBinding(binding)">
               {{ t("panel.sites.removeBinding") }}
             </button>
@@ -182,7 +182,7 @@
           <input v-model.number="bindingForm.port" type="number" min="1" max="65535" required />
         </label>
 
-        <button type="submit" :disabled="busySiteName === site.name">
+        <button type="submit" v-bind="writeGate(busySiteName === site.name)">
           {{ t("panel.sites.addBinding") }}
         </button>
       </form>
@@ -203,6 +203,7 @@ import { getServerIpAddresses, type ServerIpAddress } from "../api/system";
 import { openReachable } from "../utils/url";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { copyToClipboard } from "../utils/clipboard";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 // Site oluşturma içeren işlemler (subdomain) + server-level araçlar yalnız admin'e gösterilir.
 const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");
@@ -225,6 +226,9 @@ const emit = defineEmits<{
   (event: "remove-binding", payload: { siteName: string; binding: SiteBindingPayload }): void;
 }>();
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 
 // panel "Websites & Domains" domain araç kısayolları.
 const siteTools = computed(() => [

@@ -66,10 +66,10 @@
           </div>
 
           <div class="wp-actions">
-            <button class="compact" :disabled="!!wpBusy" @click="wpLogin">{{ wpBusy === 'login' ? t("panel.wpkit.working") : t("panel.wpkit.login") }}</button>
-            <button class="secondary compact" :disabled="!!wpBusy" @click="wpUpdate">{{ wpBusy === 'update' ? t("panel.wpkit.working") : t("panel.wpkit.update") }}</button>
-            <button class="secondary compact" :disabled="!!wpBusy" @click="wpHarden">{{ wpBusy === 'harden' ? t("panel.wpkit.working") : t("panel.wpkit.harden") }}</button>
-            <button class="secondary compact" :disabled="!!wpBusy" @click="wpToggleMaintenance">{{ wp.maintenanceMode ? t("panel.wpkit.maintenanceOff") : t("panel.wpkit.maintenanceOn") }}</button>
+            <button class="compact" v-bind="writeGate(!!wpBusy)" @click="wpLogin">{{ wpBusy === 'login' ? t("panel.wpkit.working") : t("panel.wpkit.login") }}</button>
+            <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpUpdate">{{ wpBusy === 'update' ? t("panel.wpkit.working") : t("panel.wpkit.update") }}</button>
+            <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpHarden">{{ wpBusy === 'harden' ? t("panel.wpkit.working") : t("panel.wpkit.harden") }}</button>
+            <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpToggleMaintenance">{{ wp.maintenanceMode ? t("panel.wpkit.maintenanceOff") : t("panel.wpkit.maintenanceOn") }}</button>
           </div>
 
           <div class="wp-form">
@@ -85,8 +85,8 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.autoUpdates") }}</span>
             <div class="wp-row">
-              <button class="secondary compact" :disabled="!!wpBusy" @click="wpAutoUpdate(true)">{{ wpBusy === 'autoOn' ? t("panel.wpkit.working") : t("panel.wpkit.autoUpdatesOn") }}</button>
-              <button class="secondary compact" :disabled="!!wpBusy" @click="wpAutoUpdate(false)">{{ wpBusy === 'autoOff' ? t("panel.wpkit.working") : t("panel.wpkit.autoUpdatesOff") }}</button>
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpAutoUpdate(true)">{{ wpBusy === 'autoOn' ? t("panel.wpkit.working") : t("panel.wpkit.autoUpdatesOn") }}</button>
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpAutoUpdate(false)">{{ wpBusy === 'autoOff' ? t("panel.wpkit.working") : t("panel.wpkit.autoUpdatesOff") }}</button>
             </div>
             <small class="hint">{{ t("panel.wpkit.autoUpdatesHint") }}</small>
           </div>
@@ -94,8 +94,8 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.installPlugin") }}</span>
             <div class="wp-row">
-              <input v-model.trim="wpForm.pluginSlug" placeholder="akismet" :disabled="!!wpBusy" />
-              <button class="secondary compact" :disabled="!!wpBusy || !wpForm.pluginSlug" @click="wpInstallPlugin">{{ wpBusy === 'plugin' ? t("panel.wpkit.working") : t("panel.wpkit.install") }}</button>
+              <input v-model.trim="wpForm.pluginSlug" placeholder="akismet" v-bind="writeGate(!!wpBusy)" />
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpForm.pluginSlug)" @click="wpInstallPlugin">{{ wpBusy === 'plugin' ? t("panel.wpkit.working") : t("panel.wpkit.install") }}</button>
             </div>
             <small class="hint">{{ t("panel.wpkit.installPluginHint") }}</small>
           </div>
@@ -109,10 +109,10 @@
               <div v-for="p in wp.plugins" :key="p.slug" class="wp-list-row">
                 <span class="wp-list-name"><span v-if="p.active" class="state-dot"></span>{{ p.name }} <small v-if="p.version">v{{ p.version }}</small></span>
                 <span class="wp-list-actions">
-                  <button v-if="p.active" class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('plugin', 'deactivate', p.slug)">{{ t("panel.wpkit.deactivate") }}</button>
-                  <button v-else class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('plugin', 'activate', p.slug)">{{ t("panel.wpkit.activate") }}</button>
-                  <button class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('plugin', 'update', p.slug)">{{ t("panel.wpkit.compUpdate") }}</button>
-                  <button v-if="!p.active" class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('plugin', 'delete', p.slug)">{{ t("panel.wpkit.compDelete") }}</button>
+                  <button v-if="p.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'deactivate', p.slug)">{{ t("panel.wpkit.deactivate") }}</button>
+                  <button v-else class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'activate', p.slug)">{{ t("panel.wpkit.activate") }}</button>
+                  <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'update', p.slug)">{{ t("panel.wpkit.compUpdate") }}</button>
+                  <button v-if="!p.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'delete', p.slug)">{{ t("panel.wpkit.compDelete") }}</button>
                 </span>
               </div>
             </div>
@@ -126,9 +126,9 @@
                 <span class="wp-list-name"><span v-if="th.active" class="state-dot"></span>{{ th.name }} <small v-if="th.version">v{{ th.version }}</small></span>
                 <span class="wp-list-actions">
                   <span v-if="th.active" class="pill">{{ t("panel.wpkit.activeLabel") }}</span>
-                  <button v-else class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('theme', 'activate', th.slug)">{{ t("panel.wpkit.activate") }}</button>
-                  <button class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('theme', 'update', th.slug)">{{ t("panel.wpkit.compUpdate") }}</button>
-                  <button v-if="!th.active" class="secondary compact" :disabled="!!wpBusy" @click="wpComponent('theme', 'delete', th.slug)">{{ t("panel.wpkit.compDelete") }}</button>
+                  <button v-else class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'activate', th.slug)">{{ t("panel.wpkit.activate") }}</button>
+                  <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'update', th.slug)">{{ t("panel.wpkit.compUpdate") }}</button>
+                  <button v-if="!th.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'delete', th.slug)">{{ t("panel.wpkit.compDelete") }}</button>
                 </span>
               </div>
             </div>
@@ -137,9 +137,9 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.searchReplace") }}</span>
             <div class="wp-row">
-              <input v-model.trim="wpForm.srFrom" :placeholder="t('panel.wpkit.srFromPlaceholder')" :disabled="!!wpBusy" />
-              <input v-model.trim="wpForm.srTo" :placeholder="t('panel.wpkit.srToPlaceholder')" :disabled="!!wpBusy" />
-              <button class="secondary compact" :disabled="!!wpBusy || !wpForm.srFrom || !wpForm.srTo" @click="wpSearchReplace">{{ wpBusy === 'sr' ? t("panel.wpkit.working") : t("panel.wpkit.replace") }}</button>
+              <input v-model.trim="wpForm.srFrom" :placeholder="t('panel.wpkit.srFromPlaceholder')" v-bind="writeGate(!!wpBusy)" />
+              <input v-model.trim="wpForm.srTo" :placeholder="t('panel.wpkit.srToPlaceholder')" v-bind="writeGate(!!wpBusy)" />
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpForm.srFrom || !wpForm.srTo)" @click="wpSearchReplace">{{ wpBusy === 'sr' ? t("panel.wpkit.working") : t("panel.wpkit.replace") }}</button>
             </div>
             <small class="hint">{{ t("panel.wpkit.searchReplaceHint") }}</small>
           </div>
@@ -147,8 +147,8 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.resetPassword") }}</span>
             <div class="wp-row">
-              <input v-model.trim="wpForm.adminUser" placeholder="admin" :disabled="!!wpBusy" />
-              <button class="secondary compact" :disabled="!!wpBusy || !wpForm.adminUser" @click="wpResetPassword">{{ wpBusy === 'pass' ? t("panel.wpkit.working") : t("panel.wpkit.reset") }}</button>
+              <input v-model.trim="wpForm.adminUser" placeholder="admin" v-bind="writeGate(!!wpBusy)" />
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpForm.adminUser)" @click="wpResetPassword">{{ wpBusy === 'pass' ? t("panel.wpkit.working") : t("panel.wpkit.reset") }}</button>
             </div>
             <div v-if="wpNewPassword" class="notice wp-cred" role="status">{{ t("panel.wpkit.newPassword") }}: <code>{{ wpNewPassword }}</code><br /><small>{{ t("panel.wpkit.newPasswordHint") }}</small></div>
           </div>
@@ -156,9 +156,9 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.clone") }}</span>
             <div class="wp-row">
-              <input v-model.trim="wpClone.targetSiteName" :placeholder="t('panel.wpkit.cloneSiteName')" :disabled="!!wpBusy" />
-              <input v-model.trim="wpClone.targetHostName" :placeholder="t('panel.wpkit.cloneHostPlaceholder')" :disabled="!!wpBusy" />
-              <button class="secondary compact" :disabled="!!wpBusy || !wpClone.targetSiteName || !wpClone.targetHostName" @click="wpDoClone">{{ wpBusy === 'clone' ? t("panel.wpkit.working") : t("panel.wpkit.cloneBtn") }}</button>
+              <input v-model.trim="wpClone.targetSiteName" :placeholder="t('panel.wpkit.cloneSiteName')" v-bind="writeGate(!!wpBusy)" />
+              <input v-model.trim="wpClone.targetHostName" :placeholder="t('panel.wpkit.cloneHostPlaceholder')" v-bind="writeGate(!!wpBusy)" />
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpClone.targetSiteName || !wpClone.targetHostName)" @click="wpDoClone">{{ wpBusy === 'clone' ? t("panel.wpkit.working") : t("panel.wpkit.cloneBtn") }}</button>
             </div>
             <small class="hint">{{ t("panel.wpkit.cloneHint") }}</small>
             <div v-if="wpCloneResult" class="notice wp-cred" role="status">
@@ -172,10 +172,10 @@
           <div class="wp-form">
             <span class="field-label">{{ t("panel.wpkit.copyData") }}</span>
             <div class="wp-row">
-              <input v-model.trim="wpCopy.targetSiteName" :placeholder="t('panel.wpkit.copyTarget')" :disabled="!!wpBusy" />
-              <label class="wp-check"><input v-model="wpCopy.files" type="checkbox" :disabled="!!wpBusy" /> {{ t("panel.wpkit.copyFiles") }}</label>
-              <label class="wp-check"><input v-model="wpCopy.database" type="checkbox" :disabled="!!wpBusy" /> {{ t("panel.wpkit.copyDatabase") }}</label>
-              <button class="secondary compact" :disabled="!!wpBusy || !wpCopy.targetSiteName || (!wpCopy.files && !wpCopy.database)" @click="wpDoCopy">{{ wpBusy === 'copy' ? t("panel.wpkit.working") : t("panel.wpkit.copyBtn") }}</button>
+              <input v-model.trim="wpCopy.targetSiteName" :placeholder="t('panel.wpkit.copyTarget')" v-bind="writeGate(!!wpBusy)" />
+              <label class="wp-check"><input v-model="wpCopy.files" type="checkbox" v-bind="writeGate(!!wpBusy)" /> {{ t("panel.wpkit.copyFiles") }}</label>
+              <label class="wp-check"><input v-model="wpCopy.database" type="checkbox" v-bind="writeGate(!!wpBusy)" /> {{ t("panel.wpkit.copyDatabase") }}</label>
+              <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpCopy.targetSiteName || (!wpCopy.files && !wpCopy.database))" @click="wpDoCopy">{{ wpBusy === 'copy' ? t("panel.wpkit.working") : t("panel.wpkit.copyBtn") }}</button>
             </div>
             <small class="hint">⚠ {{ t("panel.wpkit.copyHint") }}</small>
             <div v-if="wpCopyResult" class="notice wp-cred" role="status">{{ t("panel.wpkit.copyDone") }}<br /><small>{{ t("panel.wpkit.copyBackup") }}: <code>{{ wpCopyResult.backupPath }}</code></small></div>
@@ -199,10 +199,10 @@
             {{ queueRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
           </span>
           <span v-else class="pill stopped">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
-          <button v-if="!queueRunning" class="compact" :disabled="queueBusy" @click="startQueue">
+          <button v-if="!queueRunning" class="compact" v-bind="writeGate(queueBusy)" @click="startQueue">
             {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
           </button>
-          <button v-else class="secondary compact" :disabled="queueBusy" @click="stopQueue">
+          <button v-else class="secondary compact" v-bind="writeGate(queueBusy)" @click="stopQueue">
             {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.stop") }}
           </button>
         </div>
@@ -219,10 +219,10 @@
             {{ schedulerRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
           </span>
           <span v-else class="pill stopped">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
-          <button v-if="!schedulerRunning" class="compact" :disabled="schedulerBusy" @click="startScheduler">
+          <button v-if="!schedulerRunning" class="compact" v-bind="writeGate(schedulerBusy)" @click="startScheduler">
             {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
           </button>
-          <button v-else class="secondary compact" :disabled="schedulerBusy" @click="stopScheduler">
+          <button v-else class="secondary compact" v-bind="writeGate(schedulerBusy)" @click="stopScheduler">
             {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.stop") }}
           </button>
         </div>
@@ -253,10 +253,14 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 type ToolkitTab = "composer" | "artisan" | "node" | "wpcli" | "wordpress" | "queue";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 // resolveApiMessage TEK KAYNAKTAN (useNotice); bu dosyadaki elle kopyası kaldırıldı.
 const { resolveApiMessage } = useNotice();
 const { confirm } = useConfirm();

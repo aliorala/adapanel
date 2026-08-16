@@ -61,7 +61,7 @@
           </div>
 
           <div class="row-actions">
-            <button :disabled="busy || secili.length === 0" @click="uygula">
+            <button v-bind="writeGate(busy || secili.length === 0)" @click="uygula">
               {{ busy ? t("panel.wpUpdates.updating") : t("panel.wpUpdates.updateSelected", { count: secili.length }) }}
             </button>
           </div>
@@ -95,9 +95,13 @@ import {
   type WordPressUpdates
 } from "../api/wordpress";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const props = defineProps<{ siteName: string }>();
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 
 const updates = ref<WordPressUpdates | null>(null);
 const sonuclar = ref<WordPressUpdateItemResult[]>([]);

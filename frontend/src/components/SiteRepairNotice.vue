@@ -4,7 +4,7 @@
   <div v-if="findings.length" class="repair-notice" :class="worstSeverity">
     <div class="repair-head">
       <strong>{{ t("panel.health.siteNeedsRepair") }}</strong>
-      <button class="secondary compact" :disabled="busy" @click="runRepair">
+      <button class="secondary compact" v-bind="writeGate(busy)" @click="runRepair">
         {{ busy ? t("panel.health.siteRepairing") : t("panel.health.siteRepair") }}
       </button>
     </div>
@@ -35,11 +35,15 @@
 import { onMounted, ref, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { inspectSiteRepair, repairSite, type RepairFinding } from "../api/siteHealth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const props = defineProps<{ siteName: string }>();
 const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
 
 const i18n = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts).
+const { writeGate } = useSubscriptionGate();
 const t = (key: string) => {
   const value = i18n.t(key);
   return typeof value === "string" ? value : key;

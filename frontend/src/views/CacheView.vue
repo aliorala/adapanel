@@ -59,28 +59,28 @@
           <button
             v-if="!item.isInstalled"
             class="compact"
-            :disabled="isBusy(item.componentId)"
+            v-bind="writeGate(isBusy(item.componentId))"
             @click="install(item.componentId)">
             {{ isBusy(item.componentId) ? t("panel.cache.busy") : t("panel.cache.install") }}
           </button>
           <button
             v-else-if="!isRunning(item)"
             class="compact"
-            :disabled="isBusy(item.componentId)"
+            v-bind="writeGate(isBusy(item.componentId))"
             @click="toggle(item.componentId, true)">
             {{ isBusy(item.componentId) ? t("panel.cache.busy") : t("panel.cache.start") }}
           </button>
           <button
             v-else
             class="secondary compact"
-            :disabled="isBusy(item.componentId)"
+            v-bind="writeGate(isBusy(item.componentId))"
             @click="toggle(item.componentId, false)">
             {{ isBusy(item.componentId) ? t("panel.cache.busy") : t("panel.cache.stop") }}
           </button>
           <button
             v-if="item.isInstalled && !isRunning(item)"
             class="danger compact"
-            :disabled="isBusy(item.componentId)"
+            v-bind="writeGate(isBusy(item.componentId))"
             @click="remove(item.componentId)">
             {{ t("panel.cache.remove") }}
           </button>
@@ -98,8 +98,12 @@ import { getCacheStatus, startMemcached, startRedis, stopMemcached, stopRedis, t
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const softwareStore = useSoftwareStore();
 const status = ref<CacheStatus | null>(null);

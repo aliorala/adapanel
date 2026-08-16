@@ -23,7 +23,7 @@
       </label>
 
       <div class="row-actions">
-        <button :disabled="busy || !archiveUrl.trim()" @click="run">
+        <button v-bind="writeGate(busy || !archiveUrl.trim())" @click="run">
           {{ busy ? t("panel.siteImport.running") : t("panel.migration.run") }}
         </button>
       </div>
@@ -69,7 +69,7 @@
       </div>
 
       <div class="row-actions">
-        <button :disabled="ftpBusy || !ftp.host.trim() || !ftp.userName.trim()" @click="runFtp">
+        <button v-bind="writeGate(ftpBusy || !ftp.host.trim() || !ftp.userName.trim())" @click="runFtp">
           {{ ftpBusy ? t("panel.migration.ftp.running") : t("panel.migration.ftp.run") }}
         </button>
       </div>
@@ -86,8 +86,12 @@ import { useI18n } from "vue-i18n";
 import { importSiteArchive, migrateSiteFiles } from "../api/siteHosting";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const archiveUrl = ref("");

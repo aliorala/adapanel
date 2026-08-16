@@ -13,14 +13,14 @@
 
     <template v-else>
       <div v-if="isAdmin" class="db-create">
-        <button class="secondary compact" type="button" @click="showForm = !showForm">
+        <button class="secondary compact" type="button" v-bind="writeGate()" @click="showForm = !showForm">
           {{ showForm ? t("panel.common.cancel") : t("panel.siteDb.create") }}
         </button>
         <form v-if="showForm" class="db-create-form" @submit.prevent="createDb">
           <input v-model.trim="form.name" :placeholder="t('panel.siteDb.dbName')" :disabled="creating" />
           <input v-model.trim="form.userName" :placeholder="t('panel.siteDb.userName')" :disabled="creating" />
           <input v-model="form.password" type="password" autocomplete="off" :placeholder="t('panel.siteDb.password')" :disabled="creating" />
-          <button type="submit" :disabled="creating || !form.name.trim()">
+          <button type="submit" v-bind="writeGate(creating || !form.name.trim())">
             {{ creating ? t("panel.siteDb.creating") : t("panel.siteDb.create") }}
           </button>
         </form>
@@ -35,7 +35,7 @@
               {{ db.name }} ({{ db.engine }})
             </option>
           </select>
-          <button class="secondary compact" type="button" :disabled="linking || !selectedCandidate" @click="linkDb">
+          <button class="secondary compact" type="button" v-bind="writeGate(linking || !selectedCandidate)" @click="linkDb">
             {{ linking ? t("panel.siteDb.linking") : t("panel.siteDb.link") }}
           </button>
         </div>
@@ -60,14 +60,14 @@
                  Uç ve çevirileri hazırdı, yalnız arayüzü eksikti. -->
             <button
               class="secondary compact"
-              :disabled="unlinkingKey === db.engine + ':' + db.name"
+              v-bind="writeGate(unlinkingKey === db.engine + ':' + db.name)"
               @click="unlinkDb(db)">
               {{ unlinkingKey === db.engine + ':' + db.name ? t("panel.siteDb.unlinking") : t("panel.siteDb.unlink") }}
             </button>
             <button
               v-if="isAdmin"
               class="danger compact"
-              :disabled="deletingKey === db.engine + ':' + db.name"
+              v-bind="writeGate(deletingKey === db.engine + ':' + db.name)"
               @click="deleteDb(db)">
               {{ deletingKey === db.engine + ':' + db.name ? t("panel.siteDb.deleting") : t("panel.siteDb.delete") }}
             </button>
@@ -90,10 +90,14 @@ import { createDatabase, deleteDatabase, openPhpMyAdmin } from "../api/databases
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 type LinkedDb = SiteDatabaseRef;
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const isAdmin = computed(() => useAuthStore().session?.user?.role === "Administrator");

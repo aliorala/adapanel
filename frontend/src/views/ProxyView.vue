@@ -91,14 +91,14 @@
 
           <div class="action-row">
             <button
-              :disabled="!selectedSiteName || proxyStore.savingSiteName === selectedSiteName"
+              v-bind="writeGate(!selectedSiteName || proxyStore.savingSiteName === selectedSiteName)"
               @click="saveProxy">
               {{ proxyStore.savingSiteName === selectedSiteName ? t("panel.proxy.saving") : t("panel.proxy.save") }}
             </button>
 
             <button
               class="danger"
-              :disabled="!currentConfiguration?.isProxyEnabled || proxyStore.removingSiteName === selectedSiteName"
+              v-bind="writeGate(!currentConfiguration?.isProxyEnabled || proxyStore.removingSiteName === selectedSiteName)"
               @click="removeProxy">
               {{ proxyStore.removingSiteName === selectedSiteName ? t("panel.proxy.removing") : t("panel.proxy.remove") }}
             </button>
@@ -166,7 +166,7 @@
           </div>
 
           <button
-            :disabled="!selectedSiteName || proxyStore.rewritingSiteName === selectedSiteName"
+            v-bind="writeGate(!selectedSiteName || proxyStore.rewritingSiteName === selectedSiteName)"
             @click="saveRewriteRule">
             {{ proxyStore.rewritingSiteName === selectedSiteName ? t("panel.proxy.savingRule") : t("panel.proxy.saveRule") }}
           </button>
@@ -218,8 +218,12 @@ import { useProxyStore } from "../stores/proxy";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useNotice } from "../composables/useNotice";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const proxyStore = useProxyStore();
 const sitesStore = useSitesStore();
 const { confirm } = useConfirm();

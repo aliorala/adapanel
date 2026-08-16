@@ -77,7 +77,7 @@
             <button
               v-if="hasQuickFix(item)"
               class="compact"
-              :disabled="busyId === item.id"
+              v-bind="writeGate(busyId === item.id)"
               @click="applyFix(item)">
               {{ busyId === item.id ? t("panel.attention.fixing") : t("panel.attention.fix") }}
             </button>
@@ -99,6 +99,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { hasQuickFix, runAttentionAction, type AttentionItem, type AttentionSummary } from "../api/attention";
 import { extractApiMessage } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const props = defineProps<{
   open: boolean;
@@ -116,6 +117,9 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 
 const panelRef = ref<HTMLElement | null>(null);
 const closeRef = ref<HTMLElement | null>(null);

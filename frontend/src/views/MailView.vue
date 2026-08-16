@@ -36,7 +36,7 @@
         </label>
       </div>
       <div class="row-actions">
-        <button class="compact" :disabled="busy || !adminPassword" @click="configure">{{ t("panel.mail.connect") }}</button>
+        <button class="compact" v-bind="writeGate(busy || !adminPassword)" @click="configure">{{ t("panel.mail.connect") }}</button>
       </div>
     </section>
 
@@ -59,7 +59,7 @@
             <span :class="['status-pill', item.active ? 'ok' : 'warn']">
               {{ item.active ? t("panel.status.enabled") : t("panel.mail.mailOff") }}
             </span>
-            <button class="compact row-button" :disabled="busy" @click="openDomain(item.name)">
+            <button class="compact row-button" v-bind="item.active ? { disabled: busy } : writeGate(busy)" @click="openDomain(item.name)">
               {{ t("panel.mail.manage") }}
             </button>
           </div>
@@ -71,7 +71,7 @@
       <div v-if="selectedDomain" class="module-toolbar mail-domain-bar">
         <button class="secondary compact" @click="backToDomains">← {{ t("panel.mail.allDomains") }}</button>
         <strong class="current-domain">{{ selectedDomain }}</strong>
-        <button class="secondary compact danger" :disabled="busy" @click="removeDomain">
+        <button class="secondary compact danger" v-bind="writeGate(busy)" @click="removeDomain">
           {{ t("panel.mail.deleteDomain") }}
         </button>
       </div>
@@ -85,7 +85,7 @@
         <span v-if="selectedDomainInfo && selectedDomainInfo.maxSizeMB > 0" class="hint">
           {{ t("panel.mail.domainQuotaUsage", { used: selectedDomainInfo.allocatedMB, limit: selectedDomainInfo.maxSizeMB }) }}
         </span>
-        <button class="secondary compact" :disabled="busy" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
+        <button class="secondary compact" v-bind="writeGate(busy)" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
       </div>
 
       <!-- GİDEN POSTA LİMİTİ: sunucunun itibarını koruyan sınır. Yalnız yönetici değiştirebilir —
@@ -145,7 +145,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="compact" :disabled="busy || !accountForm.localPart || !accountForm.password" @click="addAccount">
+            <button class="compact" v-bind="writeGate(busy || !accountForm.localPart || !accountForm.password)" @click="addAccount">
               {{ t("panel.mail.create") }}
             </button>
           </div>
@@ -153,7 +153,7 @@
 
         <div v-if="accountSelection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: accountSelection.count.value }) }}</span>
-          <button class="danger compact" :disabled="busy || bulk.busy.value" @click="removeSelectedAccounts">
+          <button class="danger compact" v-bind="writeGate(busy || bulk.busy.value)" @click="removeSelectedAccounts">
             {{ t("panel.bulk.deleteSelected", { count: accountSelection.count.value }) }}
           </button>
           <button class="secondary compact" :disabled="bulk.busy.value" @click="accountSelection.clear">
@@ -189,16 +189,16 @@
               {{ account.active ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
             <div class="row-actions">
-              <button class="secondary compact row-button" :disabled="busy" @click="changeAccountQuota(account.address, account.maxSizeMB)">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="changeAccountQuota(account.address, account.maxSizeMB)">
                 {{ t("panel.mail.quota") }}
               </button>
-              <button class="secondary compact row-button" :disabled="busy" @click="changePassword(account.address)">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="changePassword(account.address)">
                 {{ t("panel.mail.changePassword") }}
               </button>
               <button class="secondary compact row-button" :disabled="busy" @click="openAutoResponder(account.address)">
                 {{ t("panel.mail.autoResponder") }}
               </button>
-              <button class="secondary compact row-button danger" :disabled="busy" @click="removeAccount(account.address)">
+              <button class="secondary compact row-button danger" v-bind="writeGate(busy)" @click="removeAccount(account.address)">
                 {{ t("panel.mail.delete") }}
               </button>
             </div>
@@ -215,7 +215,7 @@
               <p class="meta">{{ t("panel.mail.webmailHint") }}</p>
             </div>
             <span class="row-actions">
-              <button class="compact" :disabled="busy" @click="openWebmail">
+              <button class="compact" v-bind="writeGate(busy)" @click="openWebmail">
                 {{ busy && webmailOpening ? t("panel.mail.webmailOpening") : t("panel.mail.webmailOpen") }}
               </button>
               <!-- TANILA: uç ve çevirisi vardı ama çağıran yoktu. "Webmail açılmıyor" durumunda
@@ -228,28 +228,40 @@
 
           <pre v-if="webmailReport" class="webmail-report">{{ webmailReport }}</pre>
 
+          <!--
+            İSTEMCİ AYARLARI SUNUCUDAN ÖLÇÜLÜR (`GET /mail/client-settings/{domain}`).
+            Önce burada sabit "mail.<alan> / 143 / 587 / STARTTLS" yazılıydı: sunucu o portu
+            dinlemiyorsa ya da sertifika başka bir adı kapsıyorsa panel kullanıcıya ÇALIŞMAYAN
+            bir ayar dağıtıyordu — "panel yanlış söyledi" hatası, elle kurmaktan daha kötüdür.
+            Aynı kaynak autodiscover/autoconfig XML'lerini de besler, yani ekran ile istemcinin
+            kendiliğinden bulduğu ayar bir daha ayrışamaz.
+          -->
           <div class="client-settings">
             <h4>{{ t("panel.mail.clientSettingsTitle") }}</h4>
             <p class="meta">{{ t("panel.mail.clientSettingsHint") }}</p>
-            <div class="data-table">
+            <SectionLoadError
+              v-if="clientSettingsLoad.message.value"
+              :message="clientSettingsLoad.message.value"
+              @retry="loadClientSettings" />
+            <div v-else-if="clientSettings" class="data-table">
               <div class="data-row table-head client-row">
                 <span>{{ t("panel.mail.clientField") }}</span>
                 <span>{{ t("panel.mail.clientServer") }}</span>
                 <span>{{ t("panel.mail.clientPort") }}</span>
                 <span>{{ t("panel.mail.clientSecurity") }}</span>
               </div>
-              <div class="data-row client-row">
-                <strong>{{ t("panel.mail.clientIncoming") }} (IMAP)</strong>
-                <span class="copyable" @click="copyDnsValue(mailHost)">{{ mailHost }}</span>
-                <span>143</span>
-                <span>STARTTLS</span>
+              <div
+                v-for="server in clientSettings.servers"
+                :key="`${server.protocol}-${server.port}`"
+                class="data-row client-row">
+                <strong>{{ clientProtocolLabel(server.protocol) }}</strong>
+                <span class="copyable" @click="copyDnsValue(server.host)">{{ server.host }}</span>
+                <span>{{ server.port }}</span>
+                <span>{{ server.socketType }}</span>
               </div>
-              <div class="data-row client-row">
-                <strong>{{ t("panel.mail.clientOutgoing") }} (SMTP)</strong>
-                <span class="copyable" @click="copyDnsValue(mailHost)">{{ mailHost }}</span>
-                <span>587</span>
-                <span>STARTTLS</span>
-              </div>
+              <p v-if="clientSettings.servers.length === 0" class="empty-state">
+                {{ t("panel.mail.clientSettingsNone") }}
+              </p>
             </div>
             <p class="meta client-username">
               {{ t("panel.mail.clientUsername") }}:
@@ -316,7 +328,7 @@
           <div class="row-actions">
             <button
               class="compact"
-              :disabled="busy || (autoResponderForm.enabled && !autoResponderForm.message.trim())"
+              v-bind="writeGate(busy || (autoResponderForm.enabled && !autoResponderForm.message.trim()))"
               @click="saveAutoResponder">
               {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
             </button>
@@ -350,7 +362,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="compact" :disabled="busy || !aliasForm.localPart || !aliasForm.target" @click="addAlias">
+            <button class="compact" v-bind="writeGate(busy || !aliasForm.localPart || !aliasForm.target)" @click="addAlias">
               {{ t("panel.mail.create") }}
             </button>
           </div>
@@ -365,7 +377,7 @@
           <div v-for="alias in workspace.aliases" :key="alias.address" class="data-row alias-row">
             <strong>{{ alias.address }}</strong>
             <span>{{ alias.target }}</span>
-            <button class="secondary compact row-button danger" :disabled="busy" @click="removeAlias(alias.address)">
+            <button class="secondary compact row-button danger" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
               {{ t("panel.mail.delete") }}
             </button>
           </div>
@@ -398,7 +410,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="compact" :disabled="busy || !listForm.localPart || !parseRecipients(listForm.recipients).length" @click="addList">
+            <button class="compact" v-bind="writeGate(busy || !listForm.localPart || !parseRecipients(listForm.recipients).length)" @click="addList">
               {{ t("panel.mail.create") }}
             </button>
           </div>
@@ -414,10 +426,10 @@
             <strong>{{ list.address }}</strong>
             <span class="list-recipients">{{ list.recipients.join(", ") || "—" }}</span>
             <div class="row-actions">
-              <button class="secondary compact row-button" :disabled="busy" @click="editListRecipients(list.address, list.recipients)">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
                 {{ t("panel.mail.listEdit") }}
               </button>
-              <button class="secondary compact row-button danger" :disabled="busy" @click="removeList(list.address)">
+              <button class="secondary compact row-button danger" v-bind="writeGate(busy)" @click="removeList(list.address)">
                 {{ t("panel.mail.delete") }}
               </button>
             </div>
@@ -462,7 +474,7 @@
           </div>
           <div class="row-actions">
             <button class="secondary compact" :disabled="busy" @click="loadDns">{{ t("panel.mail.dnsShow") }}</button>
-            <button v-if="dns" class="compact" :disabled="busy" @click="applyDns">{{ t("panel.mail.dnsApply") }}</button>
+            <button v-if="dns" class="compact" v-bind="writeGate(busy)" @click="applyDns">{{ t("panel.mail.dnsApply") }}</button>
           </div>
         </div>
 
@@ -600,6 +612,18 @@
           <button class="compact" :disabled="busy" @click="saveSpam">{{ t("panel.common.save") }}</button>
         </div>
       </section>
+
+      <!--
+        SUNUCU DÜZEYİ POSTA ARAÇLARI — YALNIZ YÖNETİCİ.
+        Kuyruk bütün kiracıların gönderici/alıcı adreslerini, röle ise sunucunun TÜM giden
+        postasının nereye teslim edildiğini içerir; uçlar `Administrator` ile sınırlı.
+        Alan adı bağlamında (site çalışma alanı → Posta) GÖSTERİLMEZ: orada ekran o alan adına
+        aittir, sunucu geneline değil.
+      -->
+      <template v-if="isAdmin && !props.domain && workspace.installed && workspace.configured">
+        <MailQueueCard />
+        <MailRelayCard />
+      </template>
     </template>
   </section>
 </template>
@@ -621,6 +645,7 @@ import {
   deleteMailAlias,
   deleteMailDomain,
   getMailCertificate,
+  getMailClientSettings,
   getMailDns,
   getMailDiagnostics,
   getMailListeners,
@@ -639,6 +664,7 @@ import {
   type MailOutboundLimit,
   openWebmail as openWebmailApi,
   type MailCertificate,
+  type MailClientSettings,
   type MailDiagnostics,
   type MailDns,
   type MailListener,
@@ -648,10 +674,13 @@ import {
 } from "../api/mail";
 import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import MailQueueCard from "../components/MailQueueCard.vue";
+import MailRelayCard from "../components/MailRelayCard.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import TablePager from "../components/TablePager.vue";
 import { useSectionError } from "../composables/useNotice";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection";
 import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
@@ -665,6 +694,9 @@ const props = defineProps<{ domain?: string }>();
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const { prompt } = usePrompt();
+// Askıdaki abonelikte YAZMA düğmeleri baştan devre dışı + sebebi title/aria ile söylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma düğmeleri (yenile, tanıla, göster) kapıya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 // Sunucu seviyesi mail araçları (dinleyiciler, rDNS, sertifika, spam) yalnız admin'e gösterilir;
@@ -704,7 +736,40 @@ async function runWebmailDiagnose() {
     webmailDiagnosing.value = false;
   }
 }
-const mailHost = computed(() => `mail.${selectedDomain.value}`);
+const clientSettings = ref<MailClientSettings | null>(null);
+const clientSettingsLoad = useSectionError();
+
+/**
+ * İstemci ayarları sunucunun GERÇEK dinleyicilerinden ölçülür; panel sabit port yazmaz.
+ * Okunamadıysa tablo GİZLENİR ve "okunamadı" gösterilir — yanlış bir ayarı doğruymuş gibi
+ * dağıtmak, hiç göstermemekten kötüdür.
+ */
+async function loadClientSettings() {
+  if (!selectedDomain.value) {
+    clientSettings.value = null;
+    clientSettingsLoad.clear();
+    return;
+  }
+  try {
+    clientSettings.value = await getMailClientSettings(selectedDomain.value);
+    clientSettingsLoad.clear();
+  } catch (error) {
+    clientSettings.value = null;
+    clientSettingsLoad.capture(error);
+  }
+}
+
+/** Protokol adları (IMAP/POP3/SMTP) marka değil sabit protokol adlarıdır; yön bilgisi çevrilir. */
+function clientProtocolLabel(protocol: string): string {
+  const name = (protocol || "").toLowerCase();
+  if (name === "smtp") {
+    return `${t("panel.mail.clientOutgoing")} (SMTP)`;
+  }
+  if (name === "imap" || name === "pop3") {
+    return `${t("panel.mail.clientIncoming")} (${name.toUpperCase()})`;
+  }
+  return protocol.toUpperCase();
+}
 const diagnostics = ref<MailDiagnostics | null>(null);
 const diagLoading = ref(false);
 const showAccountForm = ref(false);
@@ -859,6 +924,9 @@ function backToDomains() {
   rdns.value = null;
   rdnsHost.value = "";
   diagnostics.value = null;
+  // Alan adına bağlı ölçümler taşınmaz: başka bir alan adının sunucu/port bilgisi gösterilirdi.
+  clientSettings.value = null;
+  clientSettingsLoad.clear();
   accountSelection.clear();
 }
 
@@ -1277,8 +1345,9 @@ function apply(next: MailWorkspace) {
   const domain = next.domains.find((item) => item.name === selectedDomain.value);
   domainQuota.value = domain?.maxSizeMB ?? 0;
   // Giden posta limiti de seçili alan adıyla birlikte tazelenir; aksi halde kart başka bir
-  // alan adının değerini gösterirdi.
+  // alan adının değerini gösterirdi. İstemci ayarları da aynı sebeple alan adına bağlı tazelenir.
   void loadOutboundLimit();
+  void loadClientSettings();
   // Spam + sertifika uçları admin-only; müşteri/bayide çağırma (gereksiz 403 olmasın).
   if (isAdmin.value && next.configured && !spam.value) {
     void loadSpam();

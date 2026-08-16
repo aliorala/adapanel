@@ -46,7 +46,7 @@
       </fieldset>
 
       <div class="row-actions">
-        <button class="compact" type="submit" :disabled="busy || !canSubmit">
+        <button class="compact" type="submit" v-bind="writeGate(busy || !canSubmit)">
           {{ busy ? t("panel.database.saving") : (editingId ? t("panel.subUsers.saveChanges") : t("panel.subUsers.create")) }}
         </button>
         <button v-if="editingId" class="secondary compact" type="button" :disabled="busy" @click="resetForm">
@@ -71,8 +71,8 @@
           {{ user.isActive ? t("panel.status.enabled") : t("panel.status.disabled") }}
         </span>
         <span class="row-actions">
-          <button class="secondary compact" :disabled="busy" @click="startEdit(user)">{{ t("panel.subUsers.edit") }}</button>
-          <button class="danger compact" :disabled="busy" @click="remove(user)">{{ t("panel.subUsers.delete") }}</button>
+          <button class="secondary compact" v-bind="writeGate(busy)" @click="startEdit(user)">{{ t("panel.subUsers.edit") }}</button>
+          <button class="danger compact" v-bind="writeGate(busy)" @click="remove(user)">{{ t("panel.subUsers.delete") }}</button>
         </span>
       </div>
       <p v-if="loading && subUsers.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
@@ -94,8 +94,12 @@ import {
 } from "../api/subUsers";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const subUsers = ref<SubUser[]>([]);
 const loading = ref(false);

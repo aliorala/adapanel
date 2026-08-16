@@ -109,7 +109,7 @@
 
         <button
           class="install-button"
-          :disabled="busyTemplate !== '' || sitesUnavailable || sitesStore.sites.length === 0 || !siteMap[template.id]"
+          v-bind="writeGate(busyTemplate !== '' || sitesUnavailable || sitesStore.sites.length === 0 || !siteMap[template.id])"
           @click="install(template.id)">
           {{ busyTemplate === template.id ? t("panel.appStore.installing") : t("panel.appStore.install") }}
         </button>
@@ -140,8 +140,12 @@ import { getAppTemplates, installAppTemplate, type AppTemplate } from "../api/st
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 

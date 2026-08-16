@@ -14,7 +14,7 @@
 
     <div class="module-toolbar">
       <div class="toolbar-group">
-        <button @click="toggleForm">
+        <button v-bind="writeGate()" @click="toggleForm">
           {{ formOpen ? t("panel.tasks.closeForm") : t("panel.tasks.add") }}
         </button>
         <span class="status-pill ok">{{ tasks.length }} {{ t("panel.tasks.taskCount") }}</span>
@@ -97,7 +97,7 @@
             <span v-else-if="environment.canRepairPython" class="env-fix">
               <strong>{{ t("panel.tasks.pythonFoundTitle") }}</strong>
               {{ t("panel.tasks.pythonFoundBody", { path: environment.pythonInterpreters[0] }) }}
-              <button v-if="isAdmin" class="secondary compact" :disabled="fixingPython" @click="fixPython">
+              <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(fixingPython)" @click="fixPython">
                 {{ t("panel.tasks.pythonFix") }}
               </button>
             </span>
@@ -147,7 +147,7 @@
         </label>
       </div>
       <div class="row-actions">
-        <button :disabled="saving || !form.name || !formComplete" @click="saveTask">
+        <button v-bind="writeGate(saving || !form.name || !formComplete)" @click="saveTask">
           {{ saving ? t("panel.tasks.saving") : t(editingName ? "panel.tasks.update" : "panel.tasks.save") }}
         </button>
         <button class="secondary compact" @click="editingName ? cancelEdit() : resetForm()">
@@ -170,7 +170,7 @@
             <strong>{{ item.name }}</strong>
             <small>{{ runningForLabel(item) }}</small>
           </span>
-          <button class="secondary compact" :disabled="stoppingName === item.name" @click="stopRun(item)">
+          <button class="secondary compact" v-bind="writeGate(stoppingName === item.name)" @click="stopRun(item)">
             {{ stoppingName === item.name ? t("panel.tasks.stopping") : t("panel.tasks.stopRunning") }}
           </button>
         </li>
@@ -240,22 +240,21 @@
           <!-- ÇALIŞAN görevde birincil eylem "durdur"dur. Önceden en görünür düğme "Devre dışı
                bırak"tı ve kullanıcı süren işi durdurmak için ona basıyordu; oysa o düğme çalışan
                turu DURDURMAZ, yalnızca gelecek turları engeller. -->
-          <button v-if="isRunning(item)" class="secondary compact" :disabled="stoppingName === item.name" @click="stopRun(item)">
+          <button v-if="isRunning(item)" class="secondary compact" v-bind="writeGate(stoppingName === item.name)" @click="stopRun(item)">
             {{ stoppingName === item.name ? t("panel.tasks.stopping") : t("panel.tasks.stopRunning") }}
           </button>
-          <button v-else class="secondary compact" :disabled="runningName === item.name" @click="runTask(item.name)">
+          <button v-else class="secondary compact" v-bind="writeGate(runningName === item.name)" @click="runTask(item.name)">
             {{ runningName === item.name ? t("panel.tasks.running") : t("panel.tasks.runNow") }}
           </button>
           <button class="secondary compact" @click="editTask(item)">{{ t("panel.tasks.edit") }}</button>
           <button
             class="secondary compact"
-            :disabled="togglingName === item.name"
-            :title="isRunning(item) ? t('panel.tasks.disableHintWhileRunning') : undefined"
+            v-bind="writeGate(togglingName === item.name, isRunning(item) ? t('panel.tasks.disableHintWhileRunning') : undefined)"
             @click="toggleTask(item)"
           >
             {{ isDisabled(item) ? t("panel.tasks.enableTask") : t("panel.tasks.disableTask") }}
           </button>
-          <button class="danger compact" :disabled="deletingName === item.name" @click="removeTask(item.name)">
+          <button class="danger compact" v-bind="writeGate(deletingName === item.name)" @click="removeTask(item.name)">
             {{ deletingName === item.name ? t("panel.database.removing") : t("panel.sites.delete") }}
           </button>
         </span>
@@ -339,8 +338,12 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useSectionError } from "../composables/useNotice";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const authStore = useAuthStore();
 // Müşteri/bayi yalnızca URL görevi kurar (backend de zorlar); tip seçici yalnız admin'de görünür.

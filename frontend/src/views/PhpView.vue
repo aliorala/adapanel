@@ -8,7 +8,7 @@
       <button class="secondary compact" :disabled="phpStore.loading" @click="refreshAll">
         {{ t("panel.php.refresh") }}
       </button>
-      <button class="secondary compact" :disabled="enablingRedis" @click="enableRedis">
+      <button class="secondary compact" v-bind="writeGate(enablingRedis)" @click="enableRedis">
         {{ enablingRedis ? t("panel.php.enablingRedis") : t("panel.php.enableRedis") }}
       </button>
     </div>
@@ -71,13 +71,13 @@
         <span class="row-actions">
           <button
             class="compact"
-            :disabled="!selectedSiteName || phpStore.assigningComponentId === version.componentId || version.status.toLowerCase() !== 'installed'"
+            v-bind="writeGate(!selectedSiteName || phpStore.assigningComponentId === version.componentId || version.status.toLowerCase() !== 'installed')"
             @click="assignVersion(version.componentId)">
             {{ phpStore.assigningComponentId === version.componentId ? t("panel.php.applying") : t("panel.php.assignToSite") }}
           </button>
           <button
             class="danger compact"
-            :disabled="softwareStore.removingComponentId === version.componentId"
+            v-bind="writeGate(softwareStore.removingComponentId === version.componentId)"
             @click="removeVersion(version.componentId)">
             {{ softwareStore.removingComponentId === version.componentId ? t("panel.database.removing") : t("panel.php.remove") }}
           </button>
@@ -105,7 +105,7 @@
           <button
             v-else
             class="compact"
-            :disabled="phpStore.installingComponentId === component.id"
+            v-bind="writeGate(phpStore.installingComponentId === component.id)"
             @click="installVersion(component.id)">
             {{ phpStore.installingComponentId === component.id ? t("panel.php.installing") : t("panel.php.install") }}
           </button>
@@ -153,7 +153,7 @@
       </div>
       <p class="meta">{{ t("panel.php.openBasedirHint") }}</p>
       <div class="row-actions">
-        <button class="compact" :disabled="savingSettings" @click="saveSettings">
+        <button class="compact" v-bind="writeGate(savingSettings)" @click="saveSettings">
           {{ savingSettings ? t("panel.database.saving") : t("panel.common.save") }}
         </button>
       </div>
@@ -171,8 +171,12 @@ import { extractApiMessage } from "../stores/auth";
 import { usePhpStore } from "../stores/php";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const phpStore = usePhpStore();
 const sitesStore = useSitesStore();

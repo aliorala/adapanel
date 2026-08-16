@@ -24,15 +24,14 @@
           <button
             v-if="zone && !zone.isWindowsDnsAvailable"
             class="secondary compact"
-            :disabled="installingWindowsDns"
-            :title="t('panel.dns.installWindowsHint')"
+            v-bind="writeGate(installingWindowsDns, t('panel.dns.installWindowsHint'))"
             @click="installWindowsDns">
             {{ installingWindowsDns ? t("panel.dns.installingWindows") : t("panel.dns.installWindows") }}
           </button>
-          <button v-if="activeTab === 'records'" class="compact" @click="showRecordForm = !showRecordForm">
+          <button v-if="activeTab === 'records'" class="compact" v-bind="writeGate()" @click="showRecordForm = !showRecordForm">
             {{ showRecordForm ? t("panel.common.cancel") : t("panel.dns.addRecordAction") }}
           </button>
-          <button class="secondary compact" :disabled="busy" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
+          <button class="secondary compact" v-bind="writeGate(busy)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
         </div>
       </div>
 
@@ -67,7 +66,7 @@
               <input v-model.number="recordForm.ttl" type="number" min="60" max="86400" />
             </label>
             <div class="row-actions form-actions">
-              <button class="compact" :disabled="busy">{{ editingId ? t("panel.dns.updateRecord") : t("panel.dns.addRecordAction") }}</button>
+              <button class="compact" v-bind="writeGate(busy)">{{ editingId ? t("panel.dns.updateRecord") : t("panel.dns.addRecordAction") }}</button>
               <button type="button" class="secondary compact" @click="resetRecordForm">{{ t("panel.common.cancel") }}</button>
             </div>
           </div>
@@ -140,7 +139,7 @@
 
         <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
-          <button class="danger compact" :disabled="busy || bulk.busy.value" @click="removeSelectedRecords">
+          <button class="danger compact" v-bind="writeGate(busy || bulk.busy.value)" @click="removeSelectedRecords">
             {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
           </button>
           <button class="secondary compact" :disabled="bulk.busy.value" @click="selection.clear">
@@ -180,7 +179,7 @@
             <span>{{ record.ttl }}</span>
             <span class="row-actions">
               <button class="secondary compact" @click="editRecord(record)">{{ t("panel.dns.edit") }}</button>
-              <button class="danger compact" :disabled="busy" @click="removeRecord(record.id)">{{ t("panel.dns.delete") }}</button>
+              <button class="danger compact" v-bind="writeGate(busy)" @click="removeRecord(record.id)">{{ t("panel.dns.delete") }}</button>
             </span>
           </div>
           <!-- Bölge gelmeden "kayıt yok" yazıyordu; dolu bir DNS bölgesi boş sanılabiliyordu. -->
@@ -201,7 +200,7 @@
             <h4>{{ t("panel.dns.zoneSettings") }}</h4>
             <p class="meta">{{ t("panel.dns.zoneSettingsHint") }}</p>
           </div>
-          <button class="compact" :disabled="busy">{{ t("panel.dns.saveZone") }}</button>
+          <button class="compact" v-bind="writeGate(busy)">{{ t("panel.dns.saveZone") }}</button>
         </div>
         <div class="form-grid two">
           <!-- for/id şart: etiketin içindeki "?" düğmesi aksi halde etiketin örtük kontrolü olur. -->
@@ -242,10 +241,10 @@
         <p v-if="!zone.isWindowsDnsAvailable" class="field-hint">{{ t("panel.dns.dnssecRequiresWindows") }}</p>
         <template v-else>
           <div class="row-actions">
-            <button v-if="!zone.isDnssecSigned" class="compact" :disabled="dnssecBusy" @click="toggleDnssec(true)">
+            <button v-if="!zone.isDnssecSigned" class="compact" v-bind="writeGate(dnssecBusy)" @click="toggleDnssec(true)">
               {{ dnssecBusy ? t("panel.dns.dnssecWorking") : t("panel.dns.dnssecEnable") }}
             </button>
-            <button v-else class="secondary compact danger" :disabled="dnssecBusy" @click="toggleDnssec(false)">
+            <button v-else class="secondary compact danger" v-bind="writeGate(dnssecBusy)" @click="toggleDnssec(false)">
               {{ dnssecBusy ? t("panel.dns.dnssecWorking") : t("panel.dns.dnssecDisable") }}
             </button>
           </div>
@@ -274,8 +273,12 @@ import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection
 import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);

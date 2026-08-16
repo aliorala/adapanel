@@ -33,7 +33,7 @@
         </label>
       </div>
       <div class="row-actions">
-        <button class="compact" type="submit" :disabled="busy || !form.name || !form.userName || !form.password">
+        <button class="compact" type="submit" v-bind="writeGate(busy || !form.name || !form.userName || !form.password)">
           {{ busy ? t("panel.database.saving") : t("panel.myDb.create") }}
         </button>
       </div>
@@ -49,7 +49,7 @@
         <span><strong>{{ db.name }}</strong></span>
         <span>{{ db.engine }}</span>
         <span class="row-actions">
-          <button class="danger compact" :disabled="busy" @click="remove(db)">{{ t("panel.myDb.delete") }}</button>
+          <button class="danger compact" v-bind="writeGate(busy)" @click="remove(db)">{{ t("panel.myDb.delete") }}</button>
         </span>
       </div>
       <p v-if="loading && databases.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
@@ -68,8 +68,12 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import TablePager from "../components/TablePager.vue";
 import { useNotice } from "../composables/useNotice";
 import { usePagination } from "../composables/usePagination";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const databases = ref<OwnedDatabase[]>([]);

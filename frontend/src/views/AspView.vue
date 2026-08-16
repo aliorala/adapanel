@@ -72,7 +72,7 @@
           </label>
 
           <button
-            :disabled="aspStore.classicBusySiteName === selectedSiteName"
+            v-bind="writeGate(aspStore.classicBusySiteName === selectedSiteName)"
             @click="saveClassicAsp">
             {{ aspStore.classicBusySiteName === selectedSiteName ? t("panel.asp.saving") : t("panel.asp.saveClassicAsp") }}
           </button>
@@ -107,7 +107,7 @@
           </label>
 
           <button
-            :disabled="aspStore.dotNetBusySiteName === selectedSiteName"
+            v-bind="writeGate(aspStore.dotNetBusySiteName === selectedSiteName)"
             @click="saveDotNet">
             {{ aspStore.dotNetBusySiteName === selectedSiteName ? t("panel.asp.saving") : t("panel.asp.saveDotNet") }}
           </button>
@@ -164,7 +164,7 @@
         </div>
 
         <button
-          :disabled="!mixedForm.phpComponentId || aspStore.mixedBusySiteName === selectedSiteName"
+          v-bind="writeGate(!mixedForm.phpComponentId || aspStore.mixedBusySiteName === selectedSiteName)"
           @click="enableMixedMode">
           {{ aspStore.mixedBusySiteName === selectedSiteName ? t("panel.asp.applyingMixed") : t("panel.asp.enableMixedMode") }}
         </button>
@@ -190,8 +190,12 @@ import { extractApiMessage } from "../stores/auth";
 import { useAspStore } from "../stores/asp";
 import { usePhpStore } from "../stores/php";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const aspStore = useAspStore();
 const phpStore = usePhpStore();
 const sitesStore = useSitesStore();

@@ -28,7 +28,7 @@
           <input v-model="form.password" type="password" autocomplete="new-password" />
         </label>
       </div>
-      <button class="compact" :disabled="busy || !form.relativePath || !form.userName || !form.password" @click="create">
+      <button class="compact" v-bind="writeGate(busy || !form.relativePath || !form.userName || !form.password)" @click="create">
         {{ busy ? t("panel.protected.protecting") : t("panel.protected.protect") }}
       </button>
     </div>
@@ -44,7 +44,7 @@
             <strong>/{{ item.relativePath }}</strong>
             <span class="meta">{{ t("panel.protected.user") }}: {{ item.userName }}</span>
           </div>
-          <button class="danger compact" :disabled="removing === item.relativePath" @click="remove(item)">
+          <button class="danger compact" v-bind="writeGate(removing === item.relativePath)" @click="remove(item)">
             {{ t("panel.protected.remove") }}
           </button>
         </article>
@@ -65,8 +65,12 @@ import { useSitesStore } from "../stores/sites";
 import { getProtectedDirs, protectDir, unprotectDir, type ProtectedDirectory } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useNotice } from "../composables/useNotice";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 // resolveApiMessage TEK KAYNAKTAN: bu ekran ham `extractApiMessage` basıyordu, yani
 // kullanıcı `sites.path_outside_root` gibi ÇEVRİLMEMİŞ anahtar görüyordu.

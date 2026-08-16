@@ -68,7 +68,7 @@
         <span class="row-actions">
           <button
             class="compact"
-            :disabled="busyProvider === item.provider || (item.provider === 'pgadmin' && item.isInstalled)"
+            v-bind="writeGate(busyProvider === item.provider || (item.provider === 'pgadmin' && item.isInstalled))"
             @click="runAction(item.provider, item.componentId)">
             {{ actionLabel(item) }}
           </button>
@@ -104,8 +104,12 @@ import { openPhpMyAdmin } from "../api/databases";
 import { openReachable, toReachableUrl } from "../utils/url";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSoftwareStore } from "../stores/software";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const softwareStore = useSoftwareStore();
 const workspace = ref<WebDbWorkspace | null>(null);
 const busyProvider = ref("");

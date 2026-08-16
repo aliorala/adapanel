@@ -17,7 +17,7 @@
 
     <section class="module-toolbar ftp-toolbar">
       <div class="toolbar-group">
-        <button class="compact" @click="toggleCreateForm">
+        <button class="compact" v-bind="writeGate()" @click="toggleCreateForm">
           {{ showCreateForm ? t("panel.ftp.cancelCreate") : t("panel.ftp.addUser") }}
         </button>
         <span class="ftp-address">
@@ -95,7 +95,7 @@
       </div>
 
       <div class="row-actions">
-        <button class="compact" :disabled="creating" @click="createUser">
+        <button class="compact" v-bind="writeGate(creating)" @click="createUser">
           {{ creating ? t("panel.database.saving") : t("panel.ftp.createAction") }}
         </button>
         <button class="secondary compact" @click="showCreateForm = false">
@@ -125,10 +125,10 @@
             {{ user.isEnabled && user.existsOnSystem ? t("panel.status.active") : t("panel.status.inactive") }}
           </span>
           <span class="row-actions">
-            <button class="secondary compact" :disabled="changingPassword === user.userName" @click="changeFtpPassword(user.userName)">
+            <button class="secondary compact" v-bind="writeGate(changingPassword === user.userName)" @click="changeFtpPassword(user.userName)">
               {{ changingPassword === user.userName ? t("panel.database.saving") : t("panel.database.changePassword") }}
             </button>
-            <button class="danger compact" :disabled="deletingUser === user.userName" @click="removeUser(user.userName)">
+            <button class="danger compact" v-bind="writeGate(deletingUser === user.userName)" @click="removeUser(user.userName)">
               {{ deletingUser === user.userName ? t("panel.database.removing") : t("panel.sites.delete") }}
             </button>
           </span>
@@ -160,12 +160,16 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 import TablePager from "../components/TablePager.vue";
 import { usePagination } from "../composables/usePagination";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 // siteName verilince (web sitesi çalışma alanı sekmesi) FTP yalnızca o siteye
 // göre filtrelenir ve yeni kullanıcı o siteye sabitlenir (profesyonel paneller gibi site-bağlamı).
 const props = defineProps<{ siteName?: string }>();
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { prompt } = usePrompt();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();

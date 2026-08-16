@@ -35,7 +35,7 @@
         autocapitalize="off"
         autocomplete="off"
         @keyup.enter="run" />
-      <button class="compact" :disabled="busy || !command.trim()" @click="run">
+      <button class="compact" v-bind="writeGate(busy || !command.trim())" @click="run">
         {{ busy ? t("panel.console.running") : t("panel.console.run") }}
       </button>
     </div>
@@ -46,6 +46,7 @@
 import { nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const props = defineProps<{
   title: string;
@@ -56,6 +57,9 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const command = ref("");
 const busy = ref(false);
 const lines = ref<string[]>([]);

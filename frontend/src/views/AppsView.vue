@@ -86,7 +86,7 @@
               <button
                 v-if="!runtimeInstalled"
                 class="secondary compact"
-                :disabled="!activeComponent || softwareStore.installingComponentId === activeComponent.id"
+                v-bind="writeGate(!activeComponent || softwareStore.installingComponentId === activeComponent.id)"
                 @click="installRuntime(activeComponent?.id)">
                 {{ softwareStore.installingComponentId === activeComponent?.id
                   ? t("panel.php.installing")
@@ -168,7 +168,7 @@
             <p class="field-hint">{{ t("panel.apps.stepApplyHint", { site: selectedSiteName }) }}</p>
 
             <div class="row-actions">
-              <button :disabled="!canApply" @click="applyRuntime">
+              <button v-bind="writeGate(!canApply)" @click="applyRuntime">
                 {{ busy
                   ? t("panel.apps.saving")
                   : (activeRuntime === "node" ? t("panel.apps.applyNode") : t("panel.apps.applyPython")) }}
@@ -257,8 +257,12 @@ import { extractApiMessage } from "../stores/auth";
 import { useAppsStore } from "../stores/apps";
 import { useSitesStore } from "../stores/sites";
 import { useSoftwareStore } from "../stores/software";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const appsStore = useAppsStore();
 const sitesStore = useSitesStore();
 const softwareStore = useSoftwareStore();

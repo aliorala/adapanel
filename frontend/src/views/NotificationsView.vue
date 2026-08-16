@@ -96,20 +96,20 @@
 
     <div class="module-toolbar">
       <div class="toolbar-group">
-        <button :disabled="busy === 'save'" @click="save">
+        <button v-bind="writeGate(busy === 'save')" @click="save">
           {{ busy === "save" ? t("panel.notifications.saving") : t("panel.notifications.save") }}
         </button>
         <button
           v-if="activeTab === 'email'"
           class="secondary compact"
-          :disabled="busy === 'email' || !smtpReady"
+          v-bind="writeGate(busy === 'email' || !smtpReady)"
           @click="test('email')">
           {{ busy === "email" ? t("panel.notifications.testing") : t("panel.notifications.testEmail") }}
         </button>
         <button
           v-else
           class="secondary compact"
-          :disabled="busy === 'webhook' || !form.webhookUrl"
+          v-bind="writeGate(busy === 'webhook' || !form.webhookUrl)"
           @click="test('webhook')">
           {{ busy === "webhook" ? t("panel.notifications.testing") : t("panel.notifications.testWebhook") }}
         </button>
@@ -125,8 +125,12 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getNotificationSettings, saveNotificationSettings, sendNotificationTest } from "../api/notifications";
 import { extractApiMessage } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const activeTab = ref<"email" | "webhook">("email");
 const busy = ref("");
 // Yüklenmemiş durumu "yapılandırılmamış/boş" göstermek yanıltıcıydı.

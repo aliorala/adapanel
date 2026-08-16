@@ -14,7 +14,7 @@
         <button v-if="isAdmin" class="secondary compact" :disabled="sitesStore.importing" @click="importExistingSites">
           {{ t("panel.sites.import") }}
         </button>
-        <button v-if="canCreateSite" class="compact" @click="showCreateForm = !showCreateForm">
+        <button v-if="canCreateSite" class="compact" v-bind="writeGate()" @click="showCreateForm = !showCreateForm">
           {{ showCreateForm ? t("panel.sites.cancelCreate") : t("panel.sites.create") }}
         </button>
       </div>
@@ -132,7 +132,7 @@
 
       <div class="create-actions">
         <p class="meta">{{ t("panel.sites.automatic.submitHint") }}</p>
-        <button type="submit" :disabled="sitesStore.creating">
+        <button type="submit" v-bind="writeGate(sitesStore.creating)">
           {{ sitesStore.creating ? t("panel.sites.creating") : t("panel.sites.createAndPublish") }}
         </button>
       </div>
@@ -212,20 +212,20 @@
             <button
               v-if="!isRunning(site)"
               class="secondary compact"
-              :disabled="sitesStore.busySiteName === site.name"
+              v-bind="writeGate(sitesStore.busySiteName === site.name)"
               @click="handleStartSite(site.name)">
               {{ t("panel.sites.start") }}
             </button>
             <button
               v-else
               class="secondary compact"
-              :disabled="sitesStore.busySiteName === site.name"
+              v-bind="writeGate(sitesStore.busySiteName === site.name)"
               @click="handleStopSite(site.name)">
               {{ t("panel.sites.stop") }}
             </button>
             <button
               class="danger compact"
-              :disabled="sitesStore.busySiteName === site.name"
+              v-bind="writeGate(sitesStore.busySiteName === site.name)"
               @click="handleDeleteSite(site.name)">
               {{ t("panel.sites.delete") }}
             </button>
@@ -244,7 +244,7 @@
         </svg>
         <h3>{{ t("panel.sites.noSites") }}</h3>
         <p class="meta">{{ t("panel.sites.noSitesHint") }}</p>
-        <button v-if="canCreateSite" class="compact" @click="showCreateForm = true">{{ t("panel.sites.create") }}</button>
+        <button v-if="canCreateSite" class="compact" v-bind="writeGate()" @click="showCreateForm = true">{{ t("panel.sites.create") }}</button>
       </div>
 
       <TablePager :state="pager" />
@@ -266,8 +266,12 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
 import { useSoftwareStore } from "../stores/software";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const softwareStore = useSoftwareStore();

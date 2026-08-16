@@ -37,7 +37,7 @@
           <input v-model="form.includeWww" type="checkbox" />
           <span>{{ t("panel.alias.includeWww") }}</span>
         </label>
-        <button class="compact" :disabled="busy || !form.hostName" @click="add">
+        <button class="compact" v-bind="writeGate(busy || !form.hostName)" @click="add">
           {{ busy ? t("panel.common.saving") : t("panel.alias.add") }}
         </button>
       </div>
@@ -68,7 +68,7 @@
             {{ alias.hasHttps ? t("panel.status.enabled") : t("panel.alias.noHttps") }}
           </span>
           <span class="row-actions">
-            <button class="danger compact" :disabled="busy" @click="remove(alias.hostName)">
+            <button class="danger compact" v-bind="writeGate(busy)" @click="remove(alias.hostName)">
               {{ t("panel.alias.remove") }}
             </button>
           </span>
@@ -84,9 +84,13 @@ import { useI18n } from "vue-i18n";
 import { addSiteAlias, getSiteAliases, removeSiteAlias, type SiteAliasWorkspace } from "../api/aliases";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useConfirm } from "./ConfirmDialog.vue";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const props = defineProps<{ siteName: string }>();
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 
 const workspace = ref<SiteAliasWorkspace | null>(null);

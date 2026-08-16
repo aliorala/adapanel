@@ -54,7 +54,7 @@
           <button class="secondary compact" :disabled="!canGoUp" @click="openPath(workspace?.parentPath || siteRootPath)">
             {{ t("panel.files.up") }}
           </button>
-          <button class="secondary compact" @click="createFolder">
+          <button class="secondary compact" v-bind="writeGate()" @click="createFolder">
             {{ t("panel.files.createFolder") }}
           </button>
         </div>
@@ -90,7 +90,7 @@
       <template v-else-if="workspace?.isDirectory">
         <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
-          <button class="danger compact" :disabled="bulk.busy.value" @click="removeSelected">
+          <button class="danger compact" v-bind="writeGate(bulk.busy.value)" @click="removeSelected">
             {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
           </button>
           <button class="secondary compact" :disabled="bulk.busy.value" @click="selection.clear">
@@ -129,11 +129,11 @@
               <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
                 {{ t("panel.files.download") }}
               </a>
-              <button class="secondary compact" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
-              <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" @click="extract(entry.path)">
+              <button class="secondary compact" v-bind="writeGate()" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
+              <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate()" @click="extract(entry.path)">
                 {{ t("panel.files.extract") }}
               </button>
-              <button class="danger compact" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
+              <button class="danger compact" v-bind="writeGate()" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
             </div>
           </div>
 
@@ -149,7 +149,7 @@
       </label>
 
       <div v-if="workspace && !workspace.isDirectory" class="action-row">
-        <button @click="saveCurrentFile">
+        <button v-bind="writeGate()" @click="saveCurrentFile">
           {{ t("panel.files.save") }}
         </button>
         <a class="secondary compact action-link" :href="getDownloadUrl(workspace.path)">
@@ -170,7 +170,7 @@
             <option value="F">F</option>
           </select>
         </label>
-        <button type="submit" class="secondary compact">{{ t("panel.files.permissions") }}</button>
+        <button type="submit" class="secondary compact" v-bind="writeGate()">{{ t("panel.files.permissions") }}</button>
       </form>
     </section>
 
@@ -206,10 +206,10 @@
       </div>
 
       <div class="action-row">
-        <button :disabled="!backupSiteName" @click="createSiteBackup">
+        <button v-bind="writeGate(!backupSiteName)" @click="createSiteBackup">
           {{ t("panel.backup.siteAction") }}
         </button>
-        <button class="secondary compact" @click="createDatabaseBackup">
+        <button class="secondary compact" v-bind="writeGate()" @click="createDatabaseBackup">
           {{ t("panel.backup.dbAction") }}
         </button>
       </div>
@@ -229,7 +229,7 @@
           </div>
           <span>{{ item.type }}</span>
           <span>{{ item.status }}</span>
-          <button class="secondary compact" @click="restore(item.id)">
+          <button class="secondary compact" v-bind="writeGate()" @click="restore(item.id)">
             {{ t("panel.backup.restore") }}
           </button>
         </div>
@@ -264,8 +264,12 @@ import TablePager from "../components/TablePager.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection";
 import { usePagination } from "../composables/usePagination";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { prompt } = usePrompt();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();

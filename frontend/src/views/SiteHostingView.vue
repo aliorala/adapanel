@@ -52,16 +52,16 @@
                 <small>{{ t("panel.hosting.documentRootHelp") }}</small>
               </label>
               <div class="setting-row doc-root-actions">
-                <button class="compact" :disabled="busy || !documentRoot.trim()" @click="saveDocumentRoot">
+                <button class="compact" v-bind="writeGate(busy || !documentRoot.trim())" @click="saveDocumentRoot">
                   {{ busy ? t("panel.hosting.saving") : t("panel.hosting.saveDocumentRoot") }}
                 </button>
-                <button type="button" class="secondary compact" :disabled="busy" @click="useLaravelPublic">
+                <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="useLaravelPublic">
                   {{ t("panel.hosting.useLaravelPublic") }}
                 </button>
-                <button type="button" class="secondary compact" :disabled="busy" @click="enableRewrite">
+                <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="enableRewrite">
                   {{ t("panel.hosting.enableRewrite") }}
                 </button>
-                <button type="button" class="secondary compact" :disabled="busy" @click="repairPermissions">
+                <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="repairPermissions">
                   {{ t("panel.hosting.repairPermissions") }}
                 </button>
               </div>
@@ -86,7 +86,7 @@
             </div>
 
             <div class="action-row">
-              <button :disabled="busy" @click="save">{{ t("panel.hosting.save") }}</button>
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
             </div>
 
             <!-- ALAN ADI TAKMA ADLARI: ".com + .com.tr aynı siteye" en sık gelen talep ve panelde
@@ -110,7 +110,7 @@
               <small>{{ t("panel.hosting.defaultDocumentsHelp") }}</small>
             </label>
             <div class="action-row">
-              <button :disabled="busy" @click="save">{{ t("panel.hosting.save") }}</button>
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
             </div>
           </section>
 
@@ -136,7 +136,7 @@
             </div>
 
             <div class="action-row">
-              <button :disabled="busy" @click="save">{{ t("panel.hosting.save") }}</button>
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
             </div>
           </section>
 
@@ -175,7 +175,7 @@
             </div>
 
             <div class="action-row">
-              <button :disabled="busy" @click="save">{{ t("panel.hosting.save") }}</button>
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
             </div>
           </section>
 
@@ -209,7 +209,7 @@
               </label>
             </div>
             <div class="action-row">
-              <button :disabled="busy" @click="save">{{ t("panel.hosting.save") }}</button>
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
             </div>
           </section>
 
@@ -219,7 +219,7 @@
                 <h4>{{ t("panel.hosting.quota") }}</h4>
                 <p class="meta">{{ t("panel.hosting.quotaHint") }}</p>
               </div>
-              <button class="secondary compact" :disabled="busy || !quota?.quotaEnabled" @click="removeSiteQuota">
+              <button class="secondary compact" v-bind="writeGate(busy || !quota?.quotaEnabled)" @click="removeSiteQuota">
                 {{ t("panel.hosting.quotaRemove") }}
               </button>
             </div>
@@ -227,7 +227,7 @@
             <!-- ÇIKMAZ SOKAK DEĞİL: rol eksikse kurma düğmesi de burada. -->
             <div v-if="quota && !quota.fsrmAvailable" class="notice error fsrm-missing" role="alert">
               <span>{{ t("panel.hosting.quotaUnavailable") }}</span>
-              <button class="secondary compact" :disabled="installingFsrm" @click="installFsrmRole">
+              <button class="secondary compact" v-bind="writeGate(installingFsrm)" @click="installFsrmRole">
                 {{ installingFsrm ? t("panel.hosting.quotaInstalling") : t("panel.hosting.quotaInstall") }}
               </button>
             </div>
@@ -265,7 +265,7 @@
             </div>
 
             <div class="action-row">
-              <button :disabled="busy" @click="saveSiteQuota">{{ t("panel.hosting.save") }}</button>
+              <button v-bind="writeGate(busy)" @click="saveSiteQuota">{{ t("panel.hosting.save") }}</button>
             </div>
           </section>
 
@@ -339,7 +339,7 @@
                 <h4>{{ t("panel.hosting.git") }}</h4>
                 <p class="meta">{{ t("panel.hosting.gitHint") }}</p>
               </div>
-              <button class="compact" :disabled="busy || !git?.configured" @click="deploySite">
+              <button class="compact" v-bind="writeGate(busy || !git?.configured)" @click="deploySite">
                 {{ t("panel.hosting.gitDeploy") }}
               </button>
             </div>
@@ -360,8 +360,8 @@
             </div>
 
             <div class="action-row">
-              <button :disabled="busy" @click="saveGit()">{{ t("panel.hosting.save") }}</button>
-              <button class="secondary compact" :disabled="busy || !git?.configured" @click="regenerateSecret">
+              <button v-bind="writeGate(busy)" @click="saveGit()">{{ t("panel.hosting.save") }}</button>
+              <button class="secondary compact" v-bind="writeGate(busy || !git?.configured)" @click="regenerateSecret">
                 {{ t("panel.hosting.gitRegenerate") }}
               </button>
             </div>
@@ -388,7 +388,7 @@
                 <h4>{{ t("panel.hosting.tools") }}</h4>
                 <p class="meta">{{ t("panel.hosting.toolsHint") }}</p>
               </div>
-              <button class="secondary compact" :disabled="busy" @click="runComposer">{{ t("panel.hosting.composer") }}</button>
+              <button class="secondary compact" v-bind="writeGate(busy)" @click="runComposer">{{ t("panel.hosting.composer") }}</button>
             </div>
 
             <div class="composer-table">
@@ -431,8 +431,12 @@ import { getSiteStatistics, type WebStatistics } from "../api/statistics";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);

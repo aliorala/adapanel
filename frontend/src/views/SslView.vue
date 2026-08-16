@@ -114,10 +114,10 @@
       </label>
       <p v-if="issueForm.wildcard" class="field-hint">{{ t("panel.ssl.wildcardHint") }}</p>
       <div class="row-actions">
-        <button :disabled="!canIssue || busyAction === 'issue'" @click="issue">
+        <button v-bind="writeGate(!canIssue || busyAction === 'issue')" @click="issue">
           {{ busyAction === "issue" ? t("panel.ssl.busy") : t("panel.ssl.issue") }}
         </button>
-        <button class="secondary compact" :disabled="busyAction === 'renew'" @click="renew">
+        <button class="secondary compact" v-bind="writeGate(busyAction === 'renew')" @click="renew">
           {{ busyAction === "renew" ? t("panel.ssl.busy") : t("panel.ssl.renew") }}
         </button>
       </div>
@@ -140,7 +140,7 @@
         </label>
       </div>
       <div class="row-actions">
-        <button :disabled="!selectedSiteName || busyAction === 'import' || !importForm.base64Content" @click="submitImport">
+        <button v-bind="writeGate(!selectedSiteName || busyAction === 'import' || !importForm.base64Content)" @click="submitImport">
           {{ busyAction === "import" ? t("panel.ssl.busy") : t("panel.ssl.importAction") }}
         </button>
         <span class="field-hint">{{ importForm.fileName || t("panel.ssl.noFile") }}</span>
@@ -155,8 +155,12 @@ import { useI18n } from "vue-i18n";
 import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, setHttpsRedirect, type SslWorkspace } from "../api/ssl";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const workspace = ref<SslWorkspace | null>(null);
 const activeTab = ref<"current" | "letsencrypt" | "import">("current");

@@ -282,3 +282,133 @@ export async function setOutboundLimit(domain: string, messagesPerHour: number) 
   });
   return response.data.data;
 }
+
+/** Kuyruktaki iletinin TEK alıcısı için teslim durumu. */
+export type MailQueueRecipient = {
+  address: string;
+  /** Durumun KISA adı (rozet). */
+  status: string;
+  /**
+   * Sunucunun durum nesnesinin HAM metni. Sunucu tarafında bilerek ayrıştırılmadı (alan adları
+   * doğrulanmadı) — arayüz de AYRIŞTIRMAZ, olduğu gibi gösterir. Uydurma bir alandan okumak,
+   * hata sebebini sessizce boş gösterirdi.
+   */
+  statusDetail: string;
+  retryCount: number;
+  retryDueUtc: string | null;
+  queueName: string;
+};
+
+export type MailQueueMessage = {
+  id: string;
+  /** Zarf göndericisi. Boş = geri dönüş iletisi (bounce). */
+  returnPath: string;
+  createdAtUtc: string | null;
+  nextRetryUtc: string | null;
+  sizeBytes: number;
+  receivedFromIp: string;
+  recipients: MailQueueRecipient[];
+};
+
+export type MailQueue = {
+  /** Posta sunucusu kurulu mu? */
+  installed: boolean;
+  /**
+   * Yönetim arayüzüne bağlanılıp kuyruk GERÇEKTEN okunabildi mi? false iken liste boş gelir —
+   * bunu "kuyruk boş" diye göstermek, sunucu çökmüşken yöneticiye "her şey yolunda" demek olurdu.
+   */
+  configured: boolean;
+  /** Sunucudaki gerçek kuyruk uzunluğu; `messages` kırpılmış olabilir. */
+  totalCount: number;
+  messages: MailQueueMessage[];
+};
+
+/** Sunucunun kırptığı üst sınır; arayüz de aynı sınırı kullanır ki istenen ile gelen aynı olsun. */
+export const MAIL_QUEUE_MAX_LIMIT = 500;
+
+/** Giden posta kuyruğu. Yalnız yönetici. */
+export async function getMailQueue(limit: number) {
+  const response = await apiClient.get<ApiEnvelope<MailQueue>>("/mail/queue", {
+    params: { limit: Math.min(Math.max(1, limit), MAIL_QUEUE_MAX_LIMIT) }
+  });
+  return response.data.data;
+}
+
+/** Tek iletinin ayrıntısı (alıcı başına durum). 404 = `mail.queue_message_not_found`. */
+export async function getMailQueueMessage(id: string) {
+  const response = await apiClient.get<ApiEnvelope<MailQueueMessage>>(`/mail/queue/${encodeURIComponent(id)}`);
+  return response.data.data;
+}
+
+/** İletiyi teslim edilmeden siler (geri dönüşü yok). Yalnız yönetici. */
+export async function deleteMailQueueMessage(id: string) {
+  const response = await apiClient.delete<ApiEnvelope<boolean>>(`/mail/queue/${encodeURIComponent(id)}`);
+  return response.data.data;
+}
+
+export type MailRelay = {
+  installed: boolean;
+  configured: boolean;
+  enabled: boolean;
+  host: string;
+  port: number;
+  /** `smtp` ya da `lmtp`. */
+  protocol: string;
+  implicitTls: boolean;
+  allowInvalidCerts: boolean;
+  username: string;
+  /**
+   * Panelde saklı bir röle parolası VAR MI — parolanın kendisi hiçbir yanıtta dönmez. Arayüz de
+   * parolayı göstermeye çalışmaz; yalnızca "kayıtlı" durumunu yazar.
+   */
+  hasPassword: boolean;
+};
+
+export type SetMailRelayPayload = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  protocol: string;
+  implicitTls: boolean;
+  allowInvalidCerts: boolean;
+  username: string;
+  /** BOŞ gönderilirse sunucudaki saklı parola KORUNUR (silinmez). */
+  password: string;
+};
+
+/** Giden posta rölesi (smarthost) ayarı. Yalnız yönetici. */
+export async function getMailRelay() {
+  const response = await apiClient.get<ApiEnvelope<MailRelay>>("/mail/relay");
+  return response.data.data;
+}
+
+/** Röleyi kurar ya da (enabled=false) kaldırır. Yalnız yönetici. */
+export async function setMailRelay(payload: SetMailRelayPayload) {
+  const response = await apiClient.put<ApiEnvelope<MailRelay>>("/mail/relay", payload);
+  return response.data.data;
+}
+
+export type MailClientServer = {
+  /** `imap`, `pop3` ya da `smtp`. */
+  protocol: string;
+  host: string;
+  port: number;
+  /** `SSL` (doğrudan TLS) ya da `STARTTLS`. */
+  socketType: string;
+};
+
+export type MailClientSettings = {
+  domain: string;
+  hostName: string;
+  servers: MailClientServer[];
+};
+
+/**
+ * Bir alan adının posta istemcisi ayarları — sunucunun GERÇEK dinleyicilerinden türetilir.
+ * 404 (`mail.client_settings_unavailable`) = alan adı panelde tanımsız ya da dinleyici okunamadı.
+ */
+export async function getMailClientSettings(domain: string) {
+  const response = await apiClient.get<ApiEnvelope<MailClientSettings>>(
+    `/mail/client-settings/${encodeURIComponent(domain)}`);
+  return response.data.data;
+}

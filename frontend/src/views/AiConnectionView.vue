@@ -59,7 +59,7 @@
           <h3>{{ t("panel.aiConnection.formTitle") }}</h3>
           <p class="meta">{{ t("panel.aiConnection.formHint") }}</p>
         </div>
-        <button class="secondary compact" @click="showForm = !showForm">
+        <button class="secondary compact" v-bind="writeGate()" @click="showForm = !showForm">
           {{ showForm ? t("panel.common.cancel") : t("panel.aiConnection.newToken") }}
         </button>
       </div>
@@ -97,7 +97,7 @@
         </template>
 
         <div class="row-actions">
-          <button class="compact" :disabled="creating" @click="create">
+          <button class="compact" v-bind="writeGate(creating)" @click="create">
             {{ creating ? t("panel.aiConnection.creating") : t("panel.aiConnection.create") }}
           </button>
         </div>
@@ -145,7 +145,7 @@
           </div>
           <button
             class="danger compact row-button"
-            :disabled="token.isRevoked || busyTokenId === token.id"
+            v-bind="writeGate(token.isRevoked || busyTokenId === token.id)"
             @click="revoke(token)">
             {{ t("panel.aiConnection.revoke") }}
           </button>
@@ -217,8 +217,12 @@ import {
   type ApiToken
 } from "../api/apiTokens";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const authStore = useAuthStore();
 
