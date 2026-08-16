@@ -47,4 +47,49 @@ public sealed class BackupRecordDto
     /// Kullanıcının "geri yükleme yanlış yedekti" dediğinde döneceği tek yer burasıdır.
     /// </summary>
     public string PreservedPath { get; set; } = string.Empty;
+
+    // =================================================================================
+    // ARTIMSAL (INCREMENTAL) ZİNCİR — Plesk'in kanıtlanmış modeli.
+    //
+    // Plesk'te bir TAM yedek + ardından gelen ARTIMSAL yedekler bir ZİNCİR oluşturur:
+    // artimsal yedek yalnızca "son yedekten beri DEĞİŞEN"i taşır, geri yükleme ise tam
+    // yedekten başlayıp halkaları SIRAYLA uygular. Halkalar birbirine BAĞIMLIDIR:
+    // ortadaki bir halka giderse ondan SONRAKİ bütün halkalar çöpe döner.
+    //
+    // Bu alanlar eski kayıtlarda BOŞ kalır ve boş değerler "zincirsiz tekil tam yedek"
+    // anlamına gelir — geriye dönük uyumluluk bu yüzden kendiliğinden sağlanır.
+    // =================================================================================
+
+    /// <summary>
+    /// Zincir kimliği. Aynı <c>ChainId</c>'yi taşıyan kayıtlar TEK bir geri yükleme zinciridir.
+    /// Boş ise kayıt zincire ait değildir (tekil, kendi başına yeterli tam yedek).
+    /// </summary>
+    public string ChainId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Zincirdeki sıra: <c>0</c> TAM yedek, <c>1..n</c> artımsal halkalar. Geri yükleme bu
+    /// sıraya göre uygulanır; sıra bozulursa eski dosya yenisinin üzerine yazılır.
+    /// </summary>
+    public int ChainIndex { get; set; }
+
+    /// <summary>"full" (tam) veya "incremental" (artımsal). Varsayılan tam.</summary>
+    public string BackupMode { get; set; } = "full";
+
+    /// <summary>
+    /// Bu artımsal halkanın DAYANDIĞI bir önceki halkanın kimliği (tam yedekte boş).
+    /// Zincirin kopup kopmadığı bu bağdan ölçülür.
+    /// </summary>
+    public string BaseBackupId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Abonelik yedeğinde sahibinin kullanıcı kimliği ("N" biçimi). Kiracı izolasyonunun
+    /// kaydı: bir aboneliğin yedeği yalnızca kendi sahibine gösterilir/geri yüklenir.
+    /// </summary>
+    public string SubscriptionUserId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Yedeğin İÇİNDEKİ mantıksal öğe sayısı (site, veritabanı, posta alanı, FTP hesabı).
+    /// Abonelik yedeğinde ekranda "8 öğe" demeyi mümkün kılar; 0 = ölçülmedi.
+    /// </summary>
+    public int ItemCount { get; set; }
 }

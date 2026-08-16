@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using AdaPanel.Core.Common;
@@ -22,7 +22,13 @@ public sealed class BackupService(
     BackupEncryptionStore? encryptionStore = null,
     // İSTEĞE BAĞLI: dar kapsamlı testler bu servisi doğrudan kuruyor; günlükçüyü zorunlu yapmak
     // onlarca test kurulumunu kırardı. Üretimde DI her zaman verir.
-    ILogger<BackupService>? logger = null) : IBackupService
+    ILogger<BackupService>? logger = null,
+    // İSTEĞE BAĞLI: ABONELİK yedeği için gerekenler. Yeni bağımlılıklar SONA ve varsayılanlı
+    // eklendi — mevcut dar kapsamlı testler (site/şifreleme/budama) olduğu gibi derlenmeye devam
+    // etsin diye. Bunlar verilmemişse abonelik yedeği AÇIKÇA reddedilir (sessizce eksik yedek
+    // üretmek yerine).
+    ICustomerScopeService? customerScopes = null,
+    IDatabaseOwnershipService? databaseOwnership = null) : IBackupService
 {
     private const string IndexPath = "config/backups.json";
 
@@ -123,6 +129,16 @@ public sealed class BackupService(
     /// <summary>
     /// Her yedek akışının ORTAK son adımı: şifrele → uzak hedefe yükle → kaydı oluştur ve listeye ekle.
     /// </summary>
+    /// <param name="chain">
+    /// Artımsal zincir damgası (zincirsiz yedeklerde <c>null</c>). Damganın kayda yazılması TEK
+    /// yerde olur: dört yedek akışının her birinde ayrı ayrı yazılsaydı, biri unutulduğunda o tür
+    /// zincire ait olduğunu bilmeyen — ve bu yüzden budamada zinciri kıran — kayıtlar üretirdi.
+    /// </param>
+    /// <param name="fileIndex">
+    /// Arşivin dosya indeksi. Diskteki yan kayıt (<c>backups/index/&lt;id&gt;.json</c>) bir sonraki
+    /// artımsal halkanın karşılaştırma temelidir; ŞİFRELİ arşivde indeksi arşivden okumak bütün
+    /// dosyayı çözmeyi gerektirdiği için yan kayıt olmadan artımsal fiilen çalışmazdı.
+    /// </param>
     private async Task<BackupRecordDto> FinalizeBackupAsync(
         string localPath,
         string fileName,
@@ -130,7 +146,11 @@ public sealed class BackupService(
         string source,
         string format,
         BackupTargetRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ChainStamp? chain = null,
+        BackupFileIndex? fileIndex = null,
+        string subscriptionUserId = "",
+        int itemCount = 0)
     {
         var password = await ResolveEncryptionPasswordAsync(request.EncryptionPassword, cancellationToken);
         var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(localPath, fileName, password, cancellationToken);
@@ -185,8 +205,29 @@ public sealed class BackupService(
             Status = DescribeDestinationStatus(remoteUri, remoteFailure),
             TargetType = target.Type,
             RemoteUri = remoteUri,
-            Encrypted = encrypted
+            Encrypted = encrypted,
+            ChainId = chain?.ChainId ?? string.Empty,
+            ChainIndex = chain?.ChainIndex ?? 0,
+            BackupMode = chain?.Mode ?? BackupChainPlanner.ModeFull,
+            BaseBackupId = chain?.BaseBackupId ?? string.Empty,
+            SubscriptionUserId = subscriptionUserId,
+            ItemCount = itemCount
         };
+
+        // İNDEKS YAN KAYDI kayıttan ÖNCE yazılır: kayıt listede görünüp indeksi olmayan bir halka,
+        // bir sonraki turda "temel okunamadı" diye zorunlu tam yedeğe düşürür (zararsız ama
+        // gereksiz). Yazamazsak da yedek geçerlidir; yalnızca sonraki tur tam yedek olur.
+        if (fileIndex is not null)
+        {
+            try
+            {
+                await fileStore.WriteAsync(IndexSidecarPath(record.Id), fileIndex, cancellationToken);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogWarning(exception, "Yedek dosya indeksi diske yazilamadi: {File}", finalName);
+            }
+        }
 
         // Uzak kopya alınamadıysa SEBEBİ kayda taşınır. "Uzak hedefe gönderilemedi" demeden
         // sessizce yerel yedekle yetinmek, kullanıcının off-site kopyası olduğunu sanmasına yol
@@ -323,7 +364,12 @@ public sealed class BackupService(
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
         var preferences = await preferencesService.GetAsync(cancellationToken);
         var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "sites");
-        var fileName = $"{site.Name}-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";
+
+        // ZİNCİR KARARI ARŞİVDEN ÖNCE VERİLİR: hangi dosyaların yazılacağı buna bağlı.
+        var plan = await ResolveChainPlanAsync("site", site.Name, request, cancellationToken);
+        var artimsal = plan.Stamp is { } damga && damga.Mode == BackupChainPlanner.ModeIncremental;
+
+        var fileName = $"{site.Name}-{DateTime.UtcNow:yyyyMMddHHmmss}{(artimsal ? "-inc" : string.Empty)}.zip";
         var targetPath = Path.Combine(backupsDirectory, fileName);
 
         if (File.Exists(targetPath))
@@ -335,15 +381,21 @@ public sealed class BackupService(
             ? site.PhysicalPath
             : site.ApplicationRootPath;
 
+        // Dosya listesi bir kez taranır: hem indeksin hem de arşive girecek kümenin kaynağı budur.
+        var taranan = request.IncludeFiles ? ScanFiles(applicationRoot, "files") : [];
+        var indeks = BuildIndex(plan.Stamp, taranan);
+        var fark = BackupChainPlanner.Diff(plan.PreviousIndex, indeks);
+        var yazilacak = fark.Changed.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         // profesyonel panel benzeri tam-site yedeği: tek .zip içinde files/ + config/ + databases/ + mail/.
         var includedParts = new List<string>();
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            if (request.IncludeFiles && Directory.Exists(applicationRoot))
+            var yazilan = AddFilesToArchive(archive, taranan, yazilacak);
+            if (yazilan > 0)
             {
-                AddDirectoryToArchive(archive, applicationRoot, "files");
-                includedParts.Add("files");
+                includedParts.Add(artimsal ? $"files(+{yazilan})" : "files");
             }
 
             if (request.IncludeConfig)
@@ -360,30 +412,9 @@ public sealed class BackupService(
                     continue;
                 }
 
-                var ext = db.Engine.Equals("mssql", StringComparison.OrdinalIgnoreCase) ||
-                          db.Engine.Equals("sqlserver", StringComparison.OrdinalIgnoreCase) ? "bak" : "sql";
-                var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-{Guid.NewGuid():N}.{ext}");
-                try
+                if (await TryAddDatabaseDumpAsync(archive, db.Engine, db.DatabaseName, "databases", cancellationToken))
                 {
-                    await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
-                    {
-                        Engine = db.Engine,
-                        DatabaseName = db.DatabaseName,
-                        FilePath = tempDump
-                    }, cancellationToken);
-
-                    if (File.Exists(tempDump))
-                    {
-                        archive.CreateEntryFromFile(tempDump, $"databases/{db.Engine}-{db.DatabaseName}.{ext}", CompressionLevel.Optimal);
-                        includedParts.Add($"db:{db.DatabaseName}");
-                    }
-                }
-                finally
-                {
-                    if (File.Exists(tempDump))
-                    {
-                        File.Delete(tempDump);
-                    }
+                    includedParts.Add($"db:{db.DatabaseName}");
                 }
             }
 
@@ -403,16 +434,330 @@ public sealed class BackupService(
                 }
             }
 
+            WriteChainEntries(archive, plan.Stamp, indeks, fark);
+
             var manifest = System.Text.Json.JsonSerializer.Serialize(new
             {
                 site = site.Name,
                 createdAtUtc = DateTime.UtcNow,
-                parts = includedParts
+                parts = includedParts,
+                mode = plan.Stamp?.Mode ?? BackupChainPlanner.ModeFull,
+                chainId = plan.Stamp?.ChainId ?? string.Empty,
+                chainIndex = plan.Stamp?.ChainIndex ?? 0,
+                note = artimsal
+                    ? "Incremental link: files/ carries CHANGED files only; database dumps are always FULL."
+                    : "Full backup."
             }, BackupJsonOptions);
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        return await FinalizeBackupAsync(targetPath, fileName, "site", site.Name, "zip", request, cancellationToken);
+        return await FinalizeBackupAsync(
+            targetPath,
+            fileName,
+            "site",
+            site.Name,
+            "zip",
+            request,
+            cancellationToken,
+            plan.Stamp,
+            plan.Stamp is null ? null : indeks);
+    }
+
+    // =====================================================================================
+    // ARTIMSAL (INCREMENTAL) YEDEK ALTYAPISI
+    //
+    // Model Plesk'ten alınmıştır: ilk yedek her zaman TAM'dır; sonrakiler yalnızca son yedekten
+    // beri DEĞİŞENİ taşır ve tam yedekle birlikte bir ZİNCİR oluşturur. Değişiklik kararı bir
+    // İNDEKS üzerinden verilir (dosya arşivde var mıydı, boyutu/değişiklik tarihi aynı mı).
+    //
+    // ŞİFRELEME + ARTIMSAL: bir zincirin bütün halkaları aynı politikayla şifrelenir. Parola
+    // kaybolursa TEK bir halka değil ZİNCİRİN TAMAMI (tam yedek dahil) geri getirilemez.
+    // =====================================================================================
+
+    /// <summary>Arşive girecek tek bir dosya: arşiv adı + disk yolu + indeks ölçüleri.</summary>
+    private sealed record ArchiveFile(string EntryName, string FullPath, long Size, long ModifiedUtcTicks);
+
+    /// <summary>Kayda basılacak zincir damgası.</summary>
+    private sealed record ChainStamp(string ChainId, int ChainIndex, string Mode, string BaseBackupId);
+
+    /// <summary>
+    /// Bu yedeğin zincirdeki yeri + karşılaştırma temeli. <see cref="Stamp"/> <c>null</c> ise
+    /// yedek zincire ait değildir (klasik, kendi başına yeterli tam yedek).
+    /// </summary>
+    private sealed record ChainPlan(ChainStamp? Stamp, BackupFileIndex? PreviousIndex);
+
+    /// <summary>Arşiv içindeki indeks girdisi (zincirin kendi kendini anlatması için).</summary>
+    private const string ArchiveIndexEntry = "index.json";
+
+    /// <summary>Arşiv içindeki "bu halkada SİLİNMİŞ dosyalar" girdisi.</summary>
+    private const string ArchiveDeletedEntry = "deleted.json";
+
+    private static string IndexSidecarPath(string backupId) => $"backups/index/{backupId}.json";
+
+    /// <summary>
+    /// Yeni yedeğin TAM mı ARTIMSAL mı olacağını çözer ve artımsalsa karşılaştırma temelini yükler.
+    /// </summary>
+    private async Task<ChainPlan> ResolveChainPlanAsync(
+        string type,
+        string source,
+        BackupArchiveRequest request,
+        CancellationToken cancellationToken)
+    {
+        // Artımsal istenmiyorsa zincir de kurulmaz: zincirsiz yedek tek başına geri yüklenir ve
+        // hiçbir budama kuralını kısıtlamaz. (Eski davranış birebir korunur.)
+        if (!request.Incremental)
+        {
+            return new ChainPlan(null, null);
+        }
+
+        var kayitlar = await GetBackupsAsync(cancellationToken);
+        var sonZincir = kayitlar
+            .Where(record => string.Equals(record.Type, type, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(record.Source, source, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(record.ChainId))
+            .OrderByDescending(record => record.CreatedAtUtc)
+            .Select(record => record.ChainId)
+            .FirstOrDefault();
+
+        BackupRecordDto? sonHalka = null;
+        DateTime? tamYedekZamani = null;
+        BackupFileIndex? oncekiIndeks = null;
+
+        if (!string.IsNullOrWhiteSpace(sonZincir))
+        {
+            var zincir = BackupChainPlanner.GetChain(kayitlar, sonZincir);
+            sonHalka = zincir.LastOrDefault();
+            tamYedekZamani = zincir.FirstOrDefault(record => record.ChainIndex == 0)?.CreatedAtUtc;
+
+            // Son halkanın DOSYASI yerinde değilse üstüne artımsal koymak, doğduğu anda kopuk bir
+            // zincir üretmek olurdu. Ölçülmeyen şeye güvenilmez.
+            if (sonHalka is not null && IsUsableBackup(sonHalka))
+            {
+                oncekiIndeks = await ReadFileIndexAsync(sonHalka, cancellationToken);
+            }
+        }
+
+        var tamGerekli = BackupChainPlanner.TamYedekGerekli(
+            sonHalka,
+            tamYedekZamani,
+            request.FullBackupEveryDays,
+            oncekiIndeks is not null,
+            DateTime.UtcNow);
+
+        if (tamGerekli)
+        {
+            return new ChainPlan(
+                new ChainStamp(Guid.NewGuid().ToString("N"), 0, BackupChainPlanner.ModeFull, string.Empty),
+                null);
+        }
+
+        return new ChainPlan(
+            new ChainStamp(sonHalka!.ChainId, sonHalka.ChainIndex + 1, BackupChainPlanner.ModeIncremental, sonHalka.Id),
+            oncekiIndeks);
+    }
+
+    /// <summary>
+    /// Bir halkanın dosya indeksini okur: önce diskteki yan kayıt, olmazsa (ŞİFRESİZ) arşivin
+    /// içindeki <c>index.json</c>. İkisi de yoksa <c>null</c> → çağıran TAM yedeğe düşer.
+    /// </summary>
+    private async Task<BackupFileIndex?> ReadFileIndexAsync(BackupRecordDto record, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sidecar = await fileStore.ReadAsync<BackupFileIndex?>(IndexSidecarPath(record.Id), null, cancellationToken);
+            if (sidecar is not null)
+            {
+                return sidecar;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or System.Text.Json.JsonException)
+        {
+            logger?.LogWarning(exception, "Yedek indeksi okunamadi: {Backup}", record.Name);
+        }
+
+        // Yan kayıt yoksa arşivden okumayı dene. ŞİFRELİ arşivde bu, bütün dosyayı geçici diske
+        // çözmek demektir (50 GB'lık bir yedekte kabul edilemez) → şifreli arşivde denenmez ve
+        // sonuç zorunlu tam yedektir. Bu, güvenlik ile maliyetin ölçülmüş dengesidir.
+        if (record.Encrypted || BackupArchiveCipher.IsEncryptedFile(record.Path))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var archive = ZipFile.OpenRead(record.Path);
+            var entry = archive.GetEntry(ArchiveIndexEntry);
+            if (entry is null)
+            {
+                return null;
+            }
+
+            await using var stream = entry.Open();
+            return await System.Text.Json.JsonSerializer.DeserializeAsync<BackupFileIndex>(
+                stream,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            logger?.LogWarning(exception, "Yedek arsivinden indeks okunamadi: {Backup}", record.Name);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Bir dizini tarar ve indeks ölçülerini (boyut + değişiklik tarihi) toplar.
+    /// Okunamayan dosya ATLANIR: erişilemeyen tek bir dosya bütün yedeği düşürmemeli.
+    /// </summary>
+    private static List<ArchiveFile> ScanFiles(string root, string entryPrefix)
+    {
+        var sonuc = new List<ArchiveFile>();
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+        {
+            return sonuc;
+        }
+
+        var tam = Path.GetFullPath(root);
+        IEnumerable<string> dosyalar;
+        try
+        {
+            dosyalar = Directory.EnumerateFiles(tam, "*", SearchOption.AllDirectories);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return sonuc;
+        }
+
+        foreach (var dosya in dosyalar)
+        {
+            try
+            {
+                var bilgi = new FileInfo(dosya);
+                if (!bilgi.Exists)
+                {
+                    continue;
+                }
+
+                var goreli = Path.GetRelativePath(tam, dosya).Replace('\\', '/');
+                sonuc.Add(new ArchiveFile(
+                    $"{entryPrefix}/{goreli}",
+                    dosya,
+                    bilgi.Length,
+                    bilgi.LastWriteTimeUtc.Ticks));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Kilitli/erişilemeyen dosya atlanır (mevcut davranışın aynısı).
+            }
+        }
+
+        return sonuc;
+    }
+
+    private static BackupFileIndex BuildIndex(ChainStamp? stamp, IReadOnlyCollection<ArchiveFile> files) => new()
+    {
+        ChainId = stamp?.ChainId ?? string.Empty,
+        ChainIndex = stamp?.ChainIndex ?? 0,
+        CreatedAtUtc = DateTime.UtcNow,
+        Entries = files
+            .Select(file => new BackupFileIndexEntry
+            {
+                Path = file.EntryName,
+                Size = file.Size,
+                ModifiedUtcTicks = file.ModifiedUtcTicks
+            })
+            .ToList()
+    };
+
+    /// <summary>Seçili dosyaları arşive ekler ve GERÇEKTEN eklenen sayısını döner.</summary>
+    private static int AddFilesToArchive(ZipArchive archive, IReadOnlyCollection<ArchiveFile> files, HashSet<string> selected)
+    {
+        var eklenen = 0;
+        foreach (var file in files)
+        {
+            if (!selected.Contains(file.EntryName))
+            {
+                continue;
+            }
+
+            try
+            {
+                archive.CreateEntryFromFile(file.FullPath, file.EntryName, CompressionLevel.Optimal);
+                eklenen++;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Kilitli/erişilemeyen dosyayı atla; yedek geri kalanıyla devam eder.
+            }
+        }
+
+        return eklenen;
+    }
+
+    /// <summary>
+    /// Zincir girdilerini arşive yazar: TAM indeks + bu halkada silinen dosyalar.
+    /// </summary>
+    /// <remarks>
+    /// İndeks artımsal halkada da TAM tutulur; aksi hâlde bir sonraki halka "neyin silindiğini"
+    /// hesaplayamazdı. Silinenler taşınmazsa geri yükleme, kullanıcının bilerek kaldırdığı
+    /// dosyaları (ör. temizlenmiş bir zararlı eklentiyi) geri getirirdi.
+    /// </remarks>
+    private static void WriteChainEntries(
+        ZipArchive archive,
+        ChainStamp? stamp,
+        BackupFileIndex index,
+        BackupChainPlanner.IndexDiff diff)
+    {
+        if (stamp is null)
+        {
+            return;
+        }
+
+        AddTextEntry(archive, ArchiveIndexEntry, System.Text.Json.JsonSerializer.Serialize(index, BackupJsonOptions));
+        if (diff.Deleted.Count > 0)
+        {
+            AddTextEntry(archive, ArchiveDeletedEntry, System.Text.Json.JsonSerializer.Serialize(diff.Deleted, BackupJsonOptions));
+        }
+    }
+
+    /// <summary>
+    /// Bir veritabanının dökümünü arşive ekler. Dökümü alınamayan veritabanı için <c>false</c> döner
+    /// (çağıran bunu uyarıya çevirir); yedeğin geri kalanı durmaz.
+    /// </summary>
+    private async Task<bool> TryAddDatabaseDumpAsync(
+        ZipArchive archive,
+        string engine,
+        string databaseName,
+        string entryPrefix,
+        CancellationToken cancellationToken)
+    {
+        var ext = engine.Equals("mssql", StringComparison.OrdinalIgnoreCase) ||
+                  engine.Equals("sqlserver", StringComparison.OrdinalIgnoreCase) ? "bak" : "sql";
+        var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-{Guid.NewGuid():N}.{ext}");
+        try
+        {
+            await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
+            {
+                Engine = engine,
+                DatabaseName = databaseName,
+                FilePath = tempDump
+            }, cancellationToken);
+
+            if (!File.Exists(tempDump))
+            {
+                return false;
+            }
+
+            archive.CreateEntryFromFile(tempDump, $"{entryPrefix}/{engine}-{databaseName}.{ext}", CompressionLevel.Optimal);
+            return true;
+        }
+        finally
+        {
+            if (File.Exists(tempDump))
+            {
+                File.Delete(tempDump);
+            }
+        }
     }
 
     public async Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default)
@@ -525,6 +870,284 @@ public sealed class BackupService(
         }
 
         return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, cancellationToken);
+    }
+
+    // =====================================================================================
+    // ABONELİK YEDEĞİ (Plesk paritesi)
+    //
+    // Plesk site başına değil ABONELİK başına yedek alır: bir müşterinin bütün siteleri +
+    // veritabanları + posta alan adları + FTP hesapları TEK arşivde. Bir müşteriyi başka
+    // sunucuya taşımak ya da tek hamlede geri getirmek ancak böyle mümkündür.
+    //
+    // KİRACI İZOLASYONU buradaki tek gerçek risktir ve kararı SubscriptionBackupPlanner verir:
+    // arşive giren her kaynak, aboneliğin kapsamından ÖLÇÜLEREK seçilir; ad benzerliğine
+    // güvenilmez. Arşivi indiren müşterinin eline başkasının verisi geçemez.
+    // =====================================================================================
+
+    /// <summary>Abonelik arşivindeki FTP hesabı kaydı (parola YEDEĞE GİREMEZ, dışa aktarılamaz).</summary>
+    private sealed record SubscriptionFtpEntry(string UserName, string SiteName, string HomePath);
+
+    public async Task<BackupRecordDto> BackupSubscriptionAsync(BackupSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        if (customerScopes is null || databaseOwnership is null)
+        {
+            // Kapsam/sahiplik okunamıyorsa hangi verinin bu aboneliğe ait olduğunu ÖLÇEMEYİZ.
+            // Ölçemediğimiz hâlde arşiv üretmek, başkasının verisini içeren bir yedek üretme
+            // riskidir; açıkça reddetmek tek doğru cevaptır.
+            //
+            // Bu bir KULLANICI HATASI DEĞİL, kapsayıcı yapılandırma hatasıdır: üretimde DI bu iki
+            // servisi her zaman verir, yalnızca dar kapsamlı testlerde boş kalabilir. Bu yüzden
+            // kullanıcıya "şunu düzelt" diyen bir mesaj anahtarı üretilmez; ortak beklenmeyen-hata
+            // yoluna (common.unexpected_error) düşer.
+            throw new InvalidOperationException(
+                "BackupService abonelik yedegi icin ICustomerScopeService ve IDatabaseOwnershipService gerektirir.");
+        }
+
+        var scope = await customerScopes.GetScopeAsync(request.UserId, cancellationToken);
+        var mailDomains = request.IncludeMail
+            ? await customerScopes.GetAllowedMailDomainsAsync(request.UserId, cancellationToken)
+            : [];
+
+        var ownership = request.IncludeDatabases
+            ? await databaseOwnership.GetAllAsync(cancellationToken)
+            : [];
+
+        IReadOnlyCollection<(string UserName, string SiteName, string HomePath)> ftpUsers = [];
+        if (request.IncludeFtp)
+        {
+            try
+            {
+                ftpUsers = (await ftpService.GetFtpUsersAsync(cancellationToken))
+                    .Select(user => (user.UserName, user.SiteName, user.HomePath))
+                    .ToArray();
+            }
+            catch (Exception exception)
+            {
+                // FTP rolü kurulu değilse abonelik yedeği yine alınır.
+                logger?.LogWarning(exception, "Abonelik yedegi icin FTP hesaplari okunamadi.");
+            }
+        }
+
+        var plan = SubscriptionBackupPlanner.BuildPlan(request.UserId, scope.Sites, mailDomains, ownership, ftpUsers);
+        var kaynak = request.UserId.ToString("N");
+
+        var preferences = await preferencesService.GetAsync(cancellationToken);
+        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "subscriptions");
+        var chainPlan = await ResolveChainPlanAsync("subscription", kaynak, request, cancellationToken);
+        var artimsal = chainPlan.Stamp is { } damga && damga.Mode == BackupChainPlanner.ModeIncremental;
+
+        // Dosya adında kullanıcı kimliğinin ilk 8 hanesi: aynı gün içinde alınan farklı
+        // aboneliklerin arşivleri diskte birbirinden ayırt edilebilir olmalı.
+        var fileName = $"abonelik-{kaynak[..8]}-{DateTime.UtcNow:yyyyMMddHHmmss}{(artimsal ? "-inc" : string.Empty)}.zip";
+        var targetPath = Path.Combine(backupsDirectory, fileName);
+        if (File.Exists(targetPath))
+        {
+            File.Delete(targetPath);
+        }
+
+        // Bütün sitelerin dosyaları TEK bir indekste toplanır: zincir kararı abonelik bütünü
+        // üzerinden verilir, site site değil. Aksi hâlde bir sitenin tam yedeği başka bir siteyi
+        // artımsal bırakır ve zincir anlamını kaybederdi.
+        var taranan = new List<ArchiveFile>();
+        var siteBilgileri = new Dictionary<string, AdaPanel.Core.Dtos.Sites.SiteDto>(StringComparer.OrdinalIgnoreCase);
+        var uyarilar = new List<BackupRestoreWarningDto>();
+
+        foreach (var siteAdi in plan.Sites)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var site = await iisSiteService.GetSiteAsync(siteAdi, cancellationToken);
+                siteBilgileri[siteAdi] = site;
+
+                if (request.IncludeFiles)
+                {
+                    var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files"));
+                }
+            }
+            catch (Exception exception)
+            {
+                // Site IIS'te yoksa/okunamıyorsa SESSİZ GEÇİLMEZ: kullanıcı yedeğinde o sitenin
+                // OLMADIĞINI bilmelidir.
+                uyarilar.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.site_unavailable",
+                    Target = siteAdi,
+                    Detail = exception.Message
+                });
+            }
+        }
+
+        var indeks = BuildIndex(chainPlan.Stamp, taranan);
+        var fark = BackupChainPlanner.Diff(chainPlan.PreviousIndex, indeks);
+        var yazilacak = fark.Changed.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var parcalar = new List<string>();
+        await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
+        using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
+        {
+            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak);
+            if (yazilanDosya > 0)
+            {
+                parcalar.Add(artimsal ? $"files(+{yazilanDosya})" : $"files({yazilanDosya})");
+            }
+
+            foreach (var (siteAdi, site) in siteBilgileri)
+            {
+                AddTextEntry(
+                    archive,
+                    $"sites/{siteAdi}/config/site.json",
+                    System.Text.Json.JsonSerializer.Serialize(site, BackupJsonOptions));
+            }
+
+            if (siteBilgileri.Count > 0)
+            {
+                parcalar.Add($"sites({siteBilgileri.Count})");
+            }
+
+            // VERİTABANLARI: artımsal halkada bile HER ZAMAN TAM döküm. Bir SQL dökümünü "değişen
+            // dosyalar" gibi parçalamak, geri yüklenmeyen bir yedek üretirdi.
+            var dbSayisi = 0;
+            foreach (var db in plan.Databases)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (await TryAddDatabaseDumpAsync(archive, db.Engine, db.DatabaseName, "databases", cancellationToken))
+                    {
+                        dbSayisi++;
+                    }
+                    else
+                    {
+                        uyarilar.Add(new BackupRestoreWarningDto
+                        {
+                            MessageKey = "backup.database_dump_empty",
+                            Target = $"{db.Engine}/{db.DatabaseName}"
+                        });
+                    }
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.database_dump_failed",
+                        Target = $"{db.Engine}/{db.DatabaseName}",
+                        Detail = exception.Message
+                    });
+                }
+            }
+
+            if (dbSayisi > 0)
+            {
+                parcalar.Add($"databases({dbSayisi})");
+            }
+
+            // POSTA: burada taşınan şey posta KUTUSU ENVANTERİDİR (hesaplar, alias'lar, kotalar),
+            // iletilerin kendisi DEĞİL. İletiler mail sunucusunun veri dizinindedir ve sunucu
+            // geneli posta yedeğiyle (BackupMailAsync) alınır. Bu ayrım manifeste de yazılır;
+            // "posta yedeklendi" deyip iletilerin gelmediğini geri yüklerken öğrenmek kabul edilemez.
+            var postaSayisi = 0;
+            foreach (var domain in plan.MailDomains)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var workspace = await mailService.GetWorkspaceAsync(domain, cancellationToken);
+                    AddTextEntry(
+                        archive,
+                        $"mail/{domain}.json",
+                        System.Text.Json.JsonSerializer.Serialize(workspace, BackupJsonOptions));
+                    postaSayisi++;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.mail_domain_failed",
+                        Target = domain,
+                        Detail = exception.Message
+                    });
+                }
+            }
+
+            if (postaSayisi > 0)
+            {
+                parcalar.Add($"mail({postaSayisi})");
+            }
+
+            if (plan.FtpUsers.Count > 0)
+            {
+                var ftpKayitlari = plan.FtpUsers
+                    .Select(user => new SubscriptionFtpEntry(user.UserName, user.SiteName, user.HomePath))
+                    .ToArray();
+                AddTextEntry(archive, "ftp/accounts.json", System.Text.Json.JsonSerializer.Serialize(ftpKayitlari, BackupJsonOptions));
+                parcalar.Add($"ftp({ftpKayitlari.Length})");
+            }
+
+            AddTextEntry(archive, "subscription.json", System.Text.Json.JsonSerializer.Serialize(new
+            {
+                userId = kaynak,
+                planId = scope.PlanId,
+                planName = scope.PlanName,
+                expiresAtUtc = scope.ExpiresAtUtc,
+                maxSites = scope.MaxSites,
+                maxDiskMb = scope.MaxDiskMb,
+                sites = plan.Sites,
+                databases = plan.Databases.Select(db => $"{db.Engine}:{db.DatabaseName}"),
+                mailDomains = plan.MailDomains,
+                ftpUsers = plan.FtpUsers.Select(user => user.UserName)
+            }, BackupJsonOptions));
+
+            WriteChainEntries(archive, chainPlan.Stamp, indeks, fark);
+
+            AddTextEntry(archive, "manifest.json", System.Text.Json.JsonSerializer.Serialize(new
+            {
+                kind = "subscription",
+                userId = kaynak,
+                createdAtUtc = DateTime.UtcNow,
+                parts = parcalar,
+                items = plan.ItemCount,
+                mode = chainPlan.Stamp?.Mode ?? BackupChainPlanner.ModeFull,
+                chainId = chainPlan.Stamp?.ChainId ?? string.Empty,
+                chainIndex = chainPlan.Stamp?.ChainIndex ?? 0,
+                note = "Mail entries are MAILBOX INVENTORY (accounts/aliases/quotas), not messages. " +
+                       "Database dumps are always FULL, even in incremental links. " +
+                       "FTP and mailbox PASSWORDS cannot be exported and must be reset after restore."
+            }, BackupJsonOptions));
+        }
+
+        var record = await FinalizeBackupAsync(
+            targetPath,
+            fileName,
+            "subscription",
+            kaynak,
+            "zip",
+            request,
+            cancellationToken,
+            chainPlan.Stamp,
+            chainPlan.Stamp is null ? null : indeks,
+            kaynak,
+            plan.ItemCount);
+
+        // Yedek ALINIRKEN atlanan her şey kayda taşınır. "Yedeklendi" deyip içinde olmayan bir
+        // veritabanını geri yüklerken keşfetmek, panelin verebileceği en pahalı sürprizdir.
+        if (uyarilar.Count > 0)
+        {
+            record.Warnings.AddRange(uyarilar);
+
+            // Uzak hedef durumu ZATEN bir hata anlatıyorsa (created_remote_failed) onu EZMEYİZ:
+            // off-site kopyanın olmadığını söylemek, eksik öğe uyarısından daha az önemli değildir.
+            // İkisi de kayıtta durur; biri durumda, diğeri uyarı listesinde.
+            if (record.Status == "created" || record.Status == "created_remote_synced")
+            {
+                record.Status = "created_with_errors";
+            }
+
+            await UpsertRecordAsync(record, cancellationToken);
+        }
+
+        return record;
     }
 
     // Çalışan süreç kilitlese bile (ör. SQLite adapanel.db) paylaşımlı okuma ile zip'e ekler.
@@ -951,6 +1574,22 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         record.Warnings = [];
         record.PreservedPath = string.Empty;
 
+        // ZİNCİR SAĞLAMLIĞI CANLI İÇERİĞE DOKUNMADAN ÖNCE ÖLÇÜLÜR.
+        //
+        // Artımsal bir halka, tam yedek + aradaki bütün halkalar uygulanmadan anlam ifade etmez.
+        // Eksik halkayla "elimizdekini uygulayalım" demek, sitenin hangi dosyalarının eski
+        // kaldığını kimsenin bilmemesi demektir. Plesk kopuk zinciri işaretler ve geri yüklerken
+        // eksik yedeklerin ADINI söyler; panel de aynısını yapar ama işi hiç başlatmaz.
+        var chain = BackupChainPlanner.Resolve(backups, record.Id, IsUsableBackup);
+        if (chain.Broken)
+        {
+            throw new AppException(
+                "backup.chain_broken",
+                409,
+                409,
+                $"Eksik halkalar: {string.Join(", ", chain.MissingLinks)}");
+        }
+
         // Şifreliyse ÖNCE çözülür: yanlış parola / kurcalanmış arşiv burada, canlı içeriğe hiç
         // dokunulmadan durur. Çözülmüş geçici kopya iş bitince silinir.
         using var content = await OpenContentAsync(record, request.EncryptionPassword, cancellationToken);
@@ -963,20 +1602,48 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return record;
         }
 
+        // ABONELİK yedeği: sitelerin dosyaları kendi köklerine, veritabanları içe aktarılarak,
+        // posta/FTP hesapları yeniden kurularak geri yüklenir. Zincirin bütün halkaları sırayla.
+        if (string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase))
+        {
+            var sonuc = await RestoreSubscriptionChainAsync(
+                record,
+                content.FilePath,
+                chain,
+                backups,
+                request.EncryptionPassword,
+                cancellationToken);
+
+            record.Warnings = sonuc.Warnings;
+            record.PreservedPath = sonuc.PreservedPath;
+            record.Status = sonuc.Warnings.Count == 0 ? "restored" : "restored_with_errors";
+            await UpsertRecordAsync(record, cancellationToken);
+            return record;
+        }
+
         // profesyonel panel benzeri tam-site yedeği (files/ + databases/ + config/ içeren birleşik .zip):
         // dosyaları sitenin köküne, veritabanlarını içe aktararak gerçek geri yükleme yap.
         if (string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase) &&
             IsCombinedSiteArchive(content.FilePath))
         {
-            var (warnings, preservedPath) = await RestoreCombinedSiteAsync(record, content.FilePath, request.TargetPath, cancellationToken);
-            record.Warnings = warnings;
-            record.PreservedPath = preservedPath;
+            var sonuc = await RestoreSiteChainAsync(
+                record,
+                content.FilePath,
+                chain,
+                backups,
+                request.TargetPath,
+                request.EncryptionPassword,
+                cancellationToken);
+
+            record.Warnings = sonuc.Warnings;
+            record.PreservedPath = sonuc.PreservedPath;
 
             // YARIM KALAN İŞE "restored" DENMEZ. Dosyalar canlı kökün üzerine zaten yazıldığı için
             // bu durumda kullanıcının elinde ne eski hâl ne de dönmüş bir veritabanı vardır;
             // farkında olmadan devam etmesi en pahalı sonuçtur.
-            record.Status = warnings.Count == 0 ? "restored" : "restored_with_errors";
+            record.Status = sonuc.Warnings.Count == 0 ? "restored" : "restored_with_errors";
             await UpsertRecordAsync(record, cancellationToken);
             return record;
         }
@@ -1218,68 +1885,77 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return 0;
         }
 
-        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
-        var records = (await GetBackupsAsync(cancellationToken)).ToList();
+        var records = (await GetBackupsAsync(cancellationToken)).ToArray();
+        return await PruneRecordsAsync(records, retentionDays, keepCount: 0, remote, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> PruneSubscriptionAsync(
+        Guid userId,
+        int retentionDays,
+        int keepCount,
+        BackupPruneRemoteOptions? remote = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (retentionDays <= 0 && keepCount <= 0)
+        {
+            return 0;
+        }
+
+        var kimlik = userId.ToString("N");
+
+        // KAPSAM DARALTILIR: bir aboneliğin saklama politikası YALNIZCA kendi yedeklerini
+        // etkileyebilir. Bu daraltma olmadan bir müşterinin "3 gün sakla" ayarı, başka bir
+        // müşterinin yedeklerini silen bir düğmeye dönerdi.
+        var records = (await GetBackupsAsync(cancellationToken))
+            .Where(record => string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(record.SubscriptionUserId, kimlik, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        return await PruneRecordsAsync(records, retentionDays, keepCount, remote, cancellationToken);
+    }
+
+    /// <summary>
+    /// Budamanın TEK uygulaması: kararı <see cref="BackupPrunePlanner"/> verir, burada yalnızca
+    /// silme ve kayıt güncelleme yapılır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kararın ayrı olmasının sebebi: budama yalnızca tarihe bakarsa, yedekler HİÇ alınamazken de
+    /// çalışır. Gecelik otomasyon her kaynağı ayrı try/catch ile yedekler ve hepsi patlasa bile
+    /// buraya gelir: MariaDB 14 gün kapalı kalırsa her gece yedek başarısız olur, naif bir budama
+    /// eskiyi silmeye devam eder ve 15. gün geri yüklenecek TEK bir yedek kalmaz.
+    /// </para>
+    /// <para>
+    /// Artımsal zincirlerde ikinci bir tuzak vardır: zincirin ortasındaki (özellikle 0 numaralı)
+    /// yedeği silmek, sonraki halkaları sessizce çöpe çevirir. Planlayıcı bu yüzden zinciri TEK
+    /// bir geri yükleme noktası sayar ve ancak en yeni halkası da süresini doldurduğunda budar.
+    /// </para>
+    /// </remarks>
+    private async Task<int> PruneRecordsAsync(
+        IReadOnlyCollection<BackupRecordDto> records,
+        int retentionDays,
+        int keepCount,
+        BackupPruneRemoteOptions? remote,
+        CancellationToken cancellationToken)
+    {
+        // retentionDays <= 0 → süreye göre silme yok; yalnızca sayı limiti çalışsın diye cutoff
+        // ULAŞILAMAZ bir geçmişe alınır (hiçbir kayıt "süresi dolmuş" sayılmaz).
+        var cutoff = retentionDays > 0 ? DateTime.UtcNow.AddDays(-retentionDays) : DateTime.MinValue;
+        var silinecekler = BackupPrunePlanner.Select(records, cutoff, keepCount, IsUsableBackup);
         var removedIds = new HashSet<string>(StringComparer.Ordinal);
 
-        // KAYNAK BAZINDA KORUMA.
-        //
-        // Budama yalnızca tarihe bakarsa, yedekler HİÇ alınamazken de çalışır. Gecelik otomasyon her
-        // kaynağı ayrı try/catch ile yedekler ve hepsi patlasa bile buraya gelir: MariaDB 14 gün
-        // kapalı kalırsa her gece yedek başarısız olur, budama eskiyi silmeye devam eder ve 15. gün
-        // geri yüklenecek TEK bir yedek kalmaz. Bu sessiz yol, panelin verebileceği en pahalı zarardır.
-        //
-        // Kural: bir kaynağın (site/veritabanı/mail/panel) cutoff'tan SONRA alınmış kullanılabilir bir
-        // yedeği yoksa, o kaynağın eski yedeklerine DOKUNULMAZ. Yenisini üretemiyorsak eski olan son
-        // savunmadır; disk dolması, geri dönülemez veri kaybından iyidir. (Bu durum sessiz de kalmaz:
-        // otomasyon "yedekleme sağlıklı değil" uyarısı gönderir.)
-        //
-        // Kayıt = BAŞARILI yedek: kayıtlar yalnızca yedek dosyası üretildikten sonra eklenir.
-        var protectedSources = records
-            .Where(item => item.CreatedAtUtc >= cutoff && IsUsableBackup(item))
-            .Select(BuildSourceKey)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var record in records)
+        foreach (var record in silinecekler)
         {
-            // Süresi dolmuş yedekleri buda (yerel + off-site uzak kopya).
-            if (record.CreatedAtUtc >= cutoff)
+            cancellationToken.ThrowIfCancellationRequested();
+            var sebep = await TryDeleteBackupFilesAsync(record, remote, cancellationToken);
+            if (sebep is null)
             {
-                continue;
-            }
-
-            if (!protectedSources.Contains(BuildSourceKey(record)))
-            {
-                continue;
-            }
-
-            try
-            {
-                // Uzak rotasyon: off-site (S3/FTP/WebDAV) kopyayı kaydı silmeden ÖNCE sil (best-effort).
-                if (remote is not null
-                    && !string.IsNullOrWhiteSpace(record.RemoteUri)
-                    && record.TargetType is "s3" or "ftp" or "webdav" or "http")
-                {
-                    await TryDeleteRemoteBackupAsync(record, remote, cancellationToken);
-                }
-
-                if (!string.IsNullOrWhiteSpace(record.Path) && File.Exists(record.Path))
-                {
-                    File.Delete(record.Path);
-                }
-                else if (!string.IsNullOrWhiteSpace(record.Path) && Directory.Exists(record.Path))
-                {
-                    Directory.Delete(record.Path, recursive: true);
-                }
-
                 removedIds.Add(record.Id);
             }
-            catch (IOException)
+            else
             {
-                // Dosya kilitliyse kaydı koru, bir sonraki budamada tekrar denenir.
-            }
-            catch (UnauthorizedAccessException)
-            {
+                logger?.LogWarning("Suresi dolmus yedek silinemedi, kayit korundu: {Sebep}", sebep);
             }
         }
 
@@ -1298,11 +1974,46 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     }
 
     /// <summary>
-    /// Budama korumasının "kaynak" tanımı: aynı siteyi/veritabanını/mail sunucusunu temsil eden
-    /// yedekler tek küme sayılır. Bir sitenin yedeği, başka bir sitenin eskilerini silmeye YETKİ VERMEZ.
+    /// Bir yedeğin uzak kopyasını, yerel dosyasını ve indeks yan kaydını siler.
     /// </summary>
-    private static string BuildSourceKey(BackupRecordDto record) =>
-        $"{record.Type}|{record.Source}";
+    /// <returns>
+    /// Silinebildiyse <c>null</c>; silinemediyse GERÇEK SEBEP (kilitli dosya, erişim reddi).
+    /// Sebebi taşımak şart: "silinemedi" deyip nedenini yutmak, kullanıcının diskin neden
+    /// boşalmadığını asla anlayamaması demektir. Bu durumda KAYIT DA KORUNUR (kör kayıt kaybı
+    /// olmasın; bir sonraki budamada tekrar denenir).
+    /// </returns>
+    private async Task<string?> TryDeleteBackupFilesAsync(
+        BackupRecordDto record,
+        BackupPruneRemoteOptions? remote,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Uzak rotasyon: off-site (S3/FTP/WebDAV) kopyayı kaydı silmeden ÖNCE sil (best-effort).
+            if (remote is not null
+                && !string.IsNullOrWhiteSpace(record.RemoteUri)
+                && record.TargetType is "s3" or "ftp" or "webdav" or "http")
+            {
+                await TryDeleteRemoteBackupAsync(record, remote, cancellationToken);
+            }
+
+            if (!string.IsNullOrWhiteSpace(record.Path) && File.Exists(record.Path))
+            {
+                File.Delete(record.Path);
+            }
+            else if (!string.IsNullOrWhiteSpace(record.Path) && Directory.Exists(record.Path))
+            {
+                Directory.Delete(record.Path, recursive: true);
+            }
+
+            TryDeleteFile(fileStore.ResolvePath(IndexSidecarPath(record.Id)));
+            return null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return $"{record.Name}: {exception.Message}";
+        }
+    }
 
     /// <summary>
     /// Kayıt hâlâ GERÇEK bir geri yükleme noktası mı? Dosyası elle silinmiş bir kaydın "taze yedek
@@ -1319,26 +2030,42 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                (File.Exists(record.Path) || Directory.Exists(record.Path));
     }
 
+    public async Task<BackupChainDto> GetChainAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        var records = await GetBackupsAsync(cancellationToken);
+        if (records.All(item => item.Id != backupId))
+        {
+            throw new AppException("backup.not_found", 404, 404);
+        }
+
+        return BackupChainPlanner.Resolve(records, backupId, IsUsableBackup);
+    }
+
     public async Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default)
     {
-        var record = (await GetBackupsAsync(cancellationToken)).FirstOrDefault(item => item.Id == backupId)
+        var records = await GetBackupsAsync(cancellationToken);
+        var record = records.FirstOrDefault(item => item.Id == backupId)
             ?? throw new AppException("backup.not_found", 404, 404);
 
-        // Yerel dosya kilitliyse kayıt KORUNUR (kör kayıt kaybı olmasın); kullanıcı gerçek nedeni görür.
-        try
+        // ZİNCİR TUZAĞI: bu yedek silinirse ondan SONRAKİ artımsal halkalar geri yüklenemez hâle
+        // gelir — ama panelde "yedek" olarak görünmeye devam ederler. Kullanıcı bunu ancak felaket
+        // anında öğrenir. Bu yüzden tek yedek silme isteği REDDEDİLİR; bağımlı halkaların adı
+        // döner ve kullanıcı ne kaybedeceğini görerek "zinciri sil" der.
+        var bagimlilar = BackupChainPlanner.GetDependents(records, record);
+        if (bagimlilar.Count > 0)
         {
-            if (!string.IsNullOrWhiteSpace(record.Path) && File.Exists(record.Path))
-            {
-                File.Delete(record.Path);
-            }
-            else if (!string.IsNullOrWhiteSpace(record.Path) && Directory.Exists(record.Path))
-            {
-                Directory.Delete(record.Path, recursive: true);
-            }
+            throw new AppException(
+                "backup.chain_has_dependents",
+                409,
+                409,
+                $"Bu yedek silinirse su artimsal halkalar geri yuklenemez hale gelir: " +
+                $"{string.Join(", ", bagimlilar.Select(item => item.Name))}");
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+
+        if (await TryDeleteBackupFilesAsync(record, null, cancellationToken) is { } silmeHatasi)
         {
-            throw new AppException("backup.delete_failed", 409, 409, exception.Message);
+            // Yerel dosya kilitliyse kayıt KORUNUR (kör kayıt kaybı olmasın); kullanıcı gerçek nedeni görür.
+            throw new AppException("backup.delete_failed", 409, 409, silmeHatasi);
         }
 
         // ATOMİK: yalnız bu ID çıkarılır → eşzamanlı eklenen yeni kayıtlar (otomatik yedek) korunur.
@@ -1347,6 +2074,57 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             Array.Empty<BackupRecordDto>(),
             existing => existing.Where(item => item.Id != backupId).ToArray(),
             cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupDeleteResultDto> DeleteBackupChainAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        var records = await GetBackupsAsync(cancellationToken);
+        var record = records.FirstOrDefault(item => item.Id == backupId)
+            ?? throw new AppException("backup.not_found", 404, 404);
+
+        // Plesk davranışı: bir halka silinince ondan sonraki bütün halkalar da silinir. Fark şu ki
+        // panel bunu KENDİLİĞİNDEN yapmaz — kullanıcı bu ucu bilerek çağırır ve neyin gideceğini
+        // DeleteBackupAsync'in verdiği hatadan zaten görmüştür.
+        var hedefler = new List<BackupRecordDto> { record };
+        hedefler.AddRange(BackupChainPlanner.GetDependents(records, record));
+
+        var silinen = new List<BackupRecordDto>();
+        var kilitli = new List<string>();
+        foreach (var hedef in hedefler)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await TryDeleteBackupFilesAsync(hedef, null, cancellationToken) is { } sebep)
+            {
+                kilitli.Add(sebep);
+            }
+            else
+            {
+                silinen.Add(hedef);
+            }
+        }
+
+        if (silinen.Count > 0)
+        {
+            var silinenIds = silinen.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+            await fileStore.UpdateAsync(
+                IndexPath,
+                Array.Empty<BackupRecordDto>(),
+                existing => existing.Where(item => !silinenIds.Contains(item.Id)).ToArray(),
+                cancellationToken);
+        }
+
+        // Hiçbiri silinemediyse SESSİZ "tamam" DEMEYİZ: kullanıcı diskin boşaldığını sanmamalı.
+        if (silinen.Count == 0 && kilitli.Count > 0)
+        {
+            throw new AppException("backup.delete_failed", 409, 409, string.Join(", ", kilitli));
+        }
+
+        return new BackupDeleteResultDto
+        {
+            DeletedIds = silinen.Select(item => item.Id).ToArray(),
+            DeletedNames = silinen.Select(item => item.Name).ToArray()
+        };
     }
 
     // Off-site yedeğin UZAK kopyasını siler (uzak rotasyon). Best-effort: hata/yoksa sessizce geçer, budamayı BOZMAZ.
@@ -1926,21 +2704,31 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// <summary>Geri yükleme öncesi canlı içeriğin taşındığı kardeş klasörün etiketi.</summary>
     private const string RestoreSidelineLabel = "geri_yukleme_yedegi";
 
-    /// <summary>
-    /// Birleşik site yedeğini geri yükler ve YARIM KALAN adımların listesini döner.
-    /// <para>
-    /// İki kural burada geçerlidir:
-    /// (1) <b>Önce koru, sonra yaz.</b> <c>files/*</c> canlı site kökünün ÜZERİNE yazılır; yazmaya
-    /// başladıktan sonra eski hâl artık yoktur. Bu yüzden mevcut kök içeriği önce kardeş bir
-    /// klasöre taşınır; taşıma başarısızsa geri yükleme HİÇ BAŞLAMAZ.
-    /// (2) <b>Sessiz başarısızlık yok.</b> Atlanan her adım uyarı olarak toplanır ve çağıran kaydı
-    /// <c>restored_with_errors</c> işaretler.
-    /// </para>
-    /// </summary>
-    private async Task<(List<BackupRestoreWarningDto> Warnings, string PreservedPath)> RestoreCombinedSiteAsync(
+    /// <summary>Zincir geri yüklemesinin sonucu: yarım kalan adımlar + yana alınan içeriğin yeri.</summary>
+    private sealed record RestoreOutcome(List<BackupRestoreWarningDto> Warnings, string PreservedPath);
+
+    // =====================================================================================
+    // ZİNCİR GERİ YÜKLEME
+    //
+    // Üç kural burada geçerlidir:
+    // (1) ÖNCE KORU, SONRA YAZ. files/* canlı kökün ÜZERİNE yazılır; yazmaya başladıktan sonra
+    //     eski hâl yoktur. Mevcut içerik önce kardeş klasöre taşınır; taşıma başarısızsa geri
+    //     yükleme HİÇ BAŞLAMAZ. Zincirde bu YALNIZCA BİR KEZ, ilk halkadan önce yapılır —
+    //     her halkada tekrarlansaydı ikinci halka birincinin yazdıklarını yana alır ve sonuç
+    //     yalnızca son halkanın taşıdığı birkaç dosyadan ibaret kalırdı.
+    // (2) SIRA ÖNEMLİ. Halkalar 0'dan hedefe doğru uygulanır; ters sırada eski dosya yeninin
+    //     üzerine yazılır ve geri yükleme sessizce YANLIŞ içerik üretir.
+    // (3) SESSİZ BAŞARISIZLIK YOK. Atlanan her adım uyarıya çevrilir; çağıran kaydı
+    //     restored_with_errors işaretler.
+    // =====================================================================================
+
+    private async Task<RestoreOutcome> RestoreSiteChainAsync(
         BackupRecordDto record,
-        string archivePath,
+        string targetArchivePath,
+        BackupChainDto chain,
+        IReadOnlyCollection<BackupRecordDto> allRecords,
         string? targetPath,
+        string? password,
         CancellationToken cancellationToken)
     {
         // Hedef: belirtilmişse o yol, değilse sitenin gerçek fiziksel kökü (canlı siteyi geri yükle).
@@ -1958,130 +2746,657 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         Directory.CreateDirectory(siteRoot);
 
         var warnings = new List<BackupRestoreWarningDto>();
-        using var archive = ZipFile.OpenRead(archivePath);
-
-        // Yalnızca arşivde GERÇEKTEN dosya varsa kökü boşalt. Aksi halde yalnız veritabanı içeren
-        // bir yedek, canlı sitenin bütün dosyalarını yana alıp siteyi boş bırakırdı.
-        var replacesFiles = archive.Entries.Any(entry =>
-            entry.FullName.StartsWith("files/", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrEmpty(entry.Name));
-
         var preservedPath = string.Empty;
-        if (replacesFiles && Directory.EnumerateFileSystemEntries(siteRoot).Any())
+        var ilkHalka = true;
+
+        for (var i = 0; i < chain.Links.Length; i++)
         {
-            // Site göçündeki (_goc_yedek_) ve bileşen kurulumundaki (PreserveDataDirectories) kalıbın
-            // aynısı: üzerine yazmadan önce yana al. Taşıyamıyorsak veriyi koruyamıyoruz demektir ve
-            // koruyamadığımız veriyi ezmeye devam etmek kabul edilemez.
-            var candidate = string.Empty;
+            cancellationToken.ThrowIfCancellationRequested();
+            var halka = chain.Links[i];
+            var halkaKaydi = allRecords.First(item => item.Id == halka.BackupId);
+            var sonHalka = i == chain.Links.Length - 1;
+
+            BackupContent? acilan = null;
             try
             {
-                candidate = ContentSideline.BuildSiblingPath(siteRoot, RestoreSidelineLabel);
-                ContentSideline.MoveAside(siteRoot, candidate);
-                preservedPath = candidate;
+                // Hedef halkanın arşivi çağıran tarafından ZATEN açıldı (şifreliyse çözüldü);
+                // ikinci kez çözmek büyük arşivlerde iki katı süre ve geçici disk demektir.
+                var arsivYolu = string.Equals(halkaKaydi.Id, record.Id, StringComparison.Ordinal)
+                    ? targetArchivePath
+                    : (acilan = await OpenContentAsync(halkaKaydi, password, cancellationToken)).FilePath;
+
+                using var archive = ZipFile.OpenRead(arsivYolu);
+
+                if (ilkHalka)
+                {
+                    ilkHalka = false;
+                    preservedPath = SidelineIfArchiveReplacesFiles(archive, "files/", siteRoot);
+                }
+
+                ExtractPrefixedEntries(archive, "files/", siteRoot, warnings, cancellationToken);
+                await ApplyDeletedEntriesAsync(archive, "files/", siteRoot, warnings, cancellationToken);
+
+                // VERİTABANLARI YALNIZCA SON HALKADAN: her halka TAM döküm taşır, hepsini sırayla
+                // içe aktarmak aynı veritabanını n kez yazmak (ve n kat beklemek) olurdu.
+                if (sonHalka)
+                {
+                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+                }
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            finally
             {
-                throw new AppException("backup.restore_preserve_failed", 500, 500, $"Root={siteRoot}\r\nSideline={candidate}\r\n{exception.Message}");
+                acilan?.Dispose();
             }
         }
 
-        foreach (var entry in archive.Entries)
+        return new RestoreOutcome(warnings, preservedPath);
+    }
+
+    /// <summary>
+    /// ABONELİK zincirini geri yükler: her sitenin dosyaları kendi köküne, veritabanları içe
+    /// aktarılarak, posta ve FTP hesapları yeniden kurularak.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>PAROLALAR YEDEĞE GİREMEZ.</b> Ne Windows yerel hesap parolaları (FTP) ne de posta kutusu
+    /// parolaları (sunucu yalnızca özetlerini tutar) dışa aktarılabilir. Bu yüzden hesaplar
+    /// RASTGELE parolayla kurulur ve her biri için "parolayı sıfırlayın" uyarısı üretilir —
+    /// kullanıcı hesabın çalıştığını sanıp neden giriş yapamadığını aramamalıdır.
+    /// </para>
+    /// </remarks>
+    private async Task<RestoreOutcome> RestoreSubscriptionChainAsync(
+        BackupRecordDto record,
+        string targetArchivePath,
+        BackupChainDto chain,
+        IReadOnlyCollection<BackupRecordDto> allRecords,
+        string? password,
+        CancellationToken cancellationToken)
+    {
+        var warnings = new List<BackupRestoreWarningDto>();
+        var korunanlar = new List<string>();
+        var siteKokleri = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var ilkHalka = true;
+
+        for (var i = 0; i < chain.Links.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var halka = chain.Links[i];
+            var halkaKaydi = allRecords.First(item => item.Id == halka.BackupId);
+            var sonHalka = i == chain.Links.Length - 1;
 
-            // 1) files/* -> site köküne ("files/" öneki sıyrılarak).
-            if (entry.FullName.StartsWith("files/", StringComparison.OrdinalIgnoreCase))
+            BackupContent? acilan = null;
+            try
             {
-                if (string.IsNullOrEmpty(entry.Name))
-                {
-                    continue; // dizin girdisi
-                }
+                var arsivYolu = string.Equals(halkaKaydi.Id, record.Id, StringComparison.Ordinal)
+                    ? targetArchivePath
+                    : (acilan = await OpenContentAsync(halkaKaydi, password, cancellationToken)).FilePath;
 
-                var relative = entry.FullName["files/".Length..].Replace('/', Path.DirectorySeparatorChar);
-                var destinationPath = Path.GetFullPath(Path.Combine(siteRoot, relative));
+                using var archive = ZipFile.OpenRead(arsivYolu);
 
-                // Zip-slip koruması: hedef site kökünün dışına çıkamaz. Ayırıcı denetimi olmadan
-                // "C:\sites\ada" öneki "C:\sites\ada2\..." ile de eşleşirdi; tek doğru cevap
-                // PathContainment'tadır (RestoreItemsAsync da aynısını kullanır).
-                if (!PathContainment.IsInsideRoot(siteRoot, destinationPath))
+                if (ilkHalka)
                 {
-                    // Sessizce atlamak, bozuk/kötücül bir arşivi "geri yüklendi" saymak olurdu.
-                    warnings.Add(new BackupRestoreWarningDto
+                    ilkHalka = false;
+                    await ResolveSubscriptionSiteRootsAsync(archive, siteKokleri, warnings, cancellationToken);
+
+                    foreach (var (siteAdi, kok) in siteKokleri)
                     {
-                        MessageKey = "backup.invalid_entry_path",
-                        Target = entry.FullName,
-                        Detail = destinationPath
-                    });
-                    continue;
+                        var korunan = SidelineIfArchiveReplacesFiles(archive, $"sites/{siteAdi}/files/", kok);
+                        if (korunan.Length > 0)
+                        {
+                            korunanlar.Add(korunan);
+                        }
+                    }
                 }
 
-                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-                entry.ExtractToFile(destinationPath, overwrite: true);
+                foreach (var (siteAdi, kok) in siteKokleri)
+                {
+                    var onek = $"sites/{siteAdi}/files/";
+                    ExtractPrefixedEntries(archive, onek, kok, warnings, cancellationToken);
+                    await ApplyDeletedEntriesAsync(archive, onek, kok, warnings, cancellationToken);
+                }
+
+                if (sonHalka)
+                {
+                    await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+                    await RestoreSubscriptionMailAsync(archive, warnings, cancellationToken);
+                    await RestoreSubscriptionFtpAsync(archive, warnings, cancellationToken);
+                }
             }
-            // 2) databases/*.sql -> ilgili motora içe aktar.
-            else if (entry.FullName.StartsWith("databases/", StringComparison.OrdinalIgnoreCase) &&
-                     entry.FullName.EndsWith(".sql", StringComparison.OrdinalIgnoreCase) &&
-                     !string.IsNullOrEmpty(entry.Name))
+            finally
             {
-                var fileName = Path.GetFileNameWithoutExtension(entry.Name); // "engine-dbname"
-                var split = fileName.Split('-', 2);
-                if (split.Length != 2)
-                {
-                    warnings.Add(new BackupRestoreWarningDto
-                    {
-                        MessageKey = "backup.invalid_entry_path",
-                        Target = entry.FullName,
-                        Detail = "Girdi adi 'motor-veritabani' bicimine uymuyor."
-                    });
-                    continue;
-                }
+                acilan?.Dispose();
+            }
+        }
 
-                var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-restore-{Guid.NewGuid():N}.sql");
+        return new RestoreOutcome(warnings, string.Join(" | ", korunanlar));
+    }
+
+    /// <summary>
+    /// Abonelik arşivindeki site adlarını bulur ve her biri için canlı kökü çözer. Site IIS'te
+    /// yoksa arşivdeki yapılandırmasından YENİDEN KURULUR (tam-sunucu felaket kurtarma yolu);
+    /// kurulamıyorsa o sitenin dosyaları atlanır ve sebebi uyarı olur.
+    /// </summary>
+    private async Task ResolveSubscriptionSiteRootsAsync(
+        ZipArchive archive,
+        Dictionary<string, string> siteKokleri,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        var siteAdlari = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in archive.Entries)
+        {
+            var ad = NormalizeArchivePath(entry.FullName);
+            if (!ad.StartsWith("sites/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var kalan = ad["sites/".Length..];
+            var bolum = kalan.IndexOf('/');
+            if (bolum > 0)
+            {
+                siteAdlari.Add(kalan[..bolum]);
+            }
+        }
+
+        foreach (var siteAdi in siteAdlari)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var site = await iisSiteService.GetSiteAsync(siteAdi, cancellationToken);
+                siteKokleri[siteAdi] = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                    ? site.PhysicalPath
+                    : site.ApplicationRootPath;
+                Directory.CreateDirectory(siteKokleri[siteAdi]);
+                continue;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Site yok: arşivdeki yapılandırmadan yeniden kurmayı dene.
+                logger?.LogInformation(exception, "Abonelik geri yuklemesi: {Site} IIS'te yok, arsivden kurulacak.", siteAdi);
+            }
+
+            var kuruldu = await TryRecreateSiteFromArchiveAsync(archive, siteAdi, warnings, cancellationToken);
+            if (kuruldu is not null)
+            {
+                siteKokleri[siteAdi] = kuruldu;
+            }
+        }
+    }
+
+    private async Task<string?> TryRecreateSiteFromArchiveAsync(
+        ZipArchive archive,
+        string siteAdi,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        var entry = archive.GetEntry($"sites/{siteAdi}/config/site.json");
+        if (entry is null)
+        {
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.site_config_missing",
+                Target = siteAdi
+            });
+            return null;
+        }
+
+        try
+        {
+            await using var stream = entry.Open();
+            var site = await System.Text.Json.JsonSerializer.DeserializeAsync<AdaPanel.Core.Dtos.Sites.SiteDto>(
+                stream,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                cancellationToken);
+            if (site is null)
+            {
+                warnings.Add(new BackupRestoreWarningDto { MessageKey = "backup.site_config_missing", Target = siteAdi });
+                return null;
+            }
+
+            // Panel yedeğindeki tam-sunucu DR yoluyla AYNI kanıtlanmış plan (HTTPS bağlamaları
+            // bilerek kurulmaz; sertifika makineye bağlıdır ve SSL ekranından yeniden verilir).
+            var (create, extraBindings) = IisSnapshotRestore.ToProvisioningPlan(site);
+            if (!string.IsNullOrWhiteSpace(create.PhysicalPath))
+            {
+                Directory.CreateDirectory(create.PhysicalPath);
+            }
+
+            await iisSiteService.CreateSiteAsync(create, cancellationToken);
+            foreach (var binding in extraBindings)
+            {
                 try
                 {
-                    entry.ExtractToFile(tempDump, overwrite: true);
-                    await databaseService.ImportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
-                    {
-                        Engine = split[0],
-                        DatabaseName = split[1],
-                        FilePath = tempDump
-                    }, cancellationToken);
+                    await iisSiteService.AddBindingAsync(siteAdi, binding, cancellationToken);
                 }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (AppException exception)
-                {
-                    // Diğer veritabanları/dosyalarla devam edilir AMA sonuç sessizce "restored"
-                    // sayılmaz: sebep kullanıcıya döner.
-                    warnings.Add(new BackupRestoreWarningDto
-                    {
-                        MessageKey = exception.MessageKey,
-                        Target = $"{split[0]}/{split[1]}",
-                        Detail = exception.Details
-                    });
-                }
-                catch (Exception exception)
+                catch (Exception exception) when (exception is not OperationCanceledException)
                 {
                     warnings.Add(new BackupRestoreWarningDto
                     {
-                        MessageKey = "database.restore_failed",
-                        Target = $"{split[0]}/{split[1]}",
+                        MessageKey = "backup.site_binding_failed",
+                        Target = $"{siteAdi}:{binding.Port}",
                         Detail = exception.Message
                     });
                 }
-                finally
+            }
+
+            var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+            Directory.CreateDirectory(kok);
+            return kok;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.site_create_failed",
+                Target = siteAdi,
+                Detail = exception.Message
+            });
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Arşivdeki posta ENVANTERİNDEN alan adlarını, hesapları ve alias'ları yeniden kurar.
+    /// İletiler burada DEĞİLDİR (sunucu geneli posta yedeğindedir) ve parolalar sıfırlanmalıdır.
+    /// </summary>
+    private async Task RestoreSubscriptionMailAsync(
+        ZipArchive archive,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        foreach (var entry in archive.Entries.Where(item =>
+                     NormalizeArchivePath(item.FullName).StartsWith("mail/", StringComparison.OrdinalIgnoreCase) &&
+                     item.Name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var domain = Path.GetFileNameWithoutExtension(entry.Name);
+
+            AdaPanel.Core.Dtos.Mail.MailWorkspaceDto? workspace;
+            try
+            {
+                await using var stream = entry.Open();
+                workspace = await System.Text.Json.JsonSerializer.DeserializeAsync<AdaPanel.Core.Dtos.Mail.MailWorkspaceDto>(
+                    stream,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                warnings.Add(new BackupRestoreWarningDto { MessageKey = "backup.mail_inventory_unreadable", Target = domain, Detail = exception.Message });
+                continue;
+            }
+
+            if (workspace is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await mailService.CreateDomainAsync(new AdaPanel.Core.Dtos.Mail.CreateMailDomainRequest { DomainName = domain }, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Alan zaten varsa sorun yok; gerçekten kurulamadıysa hesaplar da kurulamaz ve
+                // her biri kendi uyarısını üretir.
+                logger?.LogInformation(exception, "Posta alani zaten var ya da kurulamadi: {Domain}", domain);
+            }
+
+            foreach (var account in workspace.Accounts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
                 {
-                    if (File.Exists(tempDump))
+                    await mailService.CreateAccountAsync(new AdaPanel.Core.Dtos.Mail.CreateMailAccountRequest
                     {
-                        File.Delete(tempDump);
-                    }
+                        Domain = domain,
+                        Address = account.Address,
+                        // Parola dışa aktarılamaz → rastgele. Aşağıdaki uyarı bunu SÖYLER.
+                        Password = $"Dr{Guid.NewGuid():N}aA1!",
+                        MaxSizeMB = account.MaxSizeMB
+                    }, cancellationToken);
+
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.mail_password_reset_required",
+                        Target = account.Address
+                    });
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.mail_account_failed",
+                        Target = account.Address,
+                        Detail = exception.Message
+                    });
+                }
+            }
+
+            foreach (var alias in workspace.Aliases)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await mailService.CreateAliasAsync(new AdaPanel.Core.Dtos.Mail.CreateMailAliasRequest
+                    {
+                        Domain = domain,
+                        Address = alias.Address,
+                        Target = alias.Target
+                    }, cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.mail_alias_failed",
+                        Target = alias.Address,
+                        Detail = exception.Message
+                    });
                 }
             }
         }
+    }
 
-        return (warnings, preservedPath);
+    private async Task RestoreSubscriptionFtpAsync(
+        ZipArchive archive,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        var entry = archive.GetEntry("ftp/accounts.json");
+        if (entry is null)
+        {
+            return;
+        }
+
+        SubscriptionFtpEntry[] hesaplar;
+        try
+        {
+            await using var stream = entry.Open();
+            hesaplar = await System.Text.Json.JsonSerializer.DeserializeAsync<SubscriptionFtpEntry[]>(
+                stream,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                cancellationToken) ?? [];
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            warnings.Add(new BackupRestoreWarningDto { MessageKey = "backup.ftp_inventory_unreadable", Detail = exception.Message });
+            return;
+        }
+
+        foreach (var hesap in hesaplar.Where(item => !string.IsNullOrWhiteSpace(item.UserName)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await ftpService.CreateFtpUserAsync(new AdaPanel.Core.Dtos.Ftp.CreateFtpUserRequest
+                {
+                    UserName = hesap.UserName,
+                    Password = $"Dr{Guid.NewGuid():N}aA1",
+                    SiteName = hesap.SiteName,
+                    HomePath = hesap.HomePath
+                }, cancellationToken);
+
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.ftp_password_reset_required",
+                    Target = hesap.UserName
+                });
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.ftp_account_failed",
+                    Target = hesap.UserName,
+                    Detail = exception.Message
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Arşiv bu kökün dosyalarını GERÇEKTEN değiştiriyorsa mevcut içeriği kardeş klasöre taşır ve
+    /// o klasörü döner; değiştirmiyorsa boş dizge.
+    /// </summary>
+    /// <remarks>
+    /// Yalnızca veritabanı içeren bir yedek, canlı sitenin bütün dosyalarını yana alıp siteyi boş
+    /// bırakmamalı — bu yüzden önce arşivde o önek altında gerçek dosya var mı diye BAKILIR.
+    /// </remarks>
+    private static string SidelineIfArchiveReplacesFiles(ZipArchive archive, string prefix, string root)
+    {
+        var replacesFiles = archive.Entries.Any(entry =>
+            NormalizeArchivePath(entry.FullName).StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(entry.Name));
+
+        if (!replacesFiles || !Directory.Exists(root) || !Directory.EnumerateFileSystemEntries(root).Any())
+        {
+            return string.Empty;
+        }
+
+        // Site göçündeki (_goc_yedek_) ve bileşen kurulumundaki (PreserveDataDirectories) kalıbın
+        // aynısı: üzerine yazmadan önce yana al. Taşıyamıyorsak veriyi koruyamıyoruz demektir ve
+        // koruyamadığımız veriyi ezmeye devam etmek kabul edilemez.
+        var candidate = string.Empty;
+        try
+        {
+            candidate = ContentSideline.BuildSiblingPath(root, RestoreSidelineLabel);
+            ContentSideline.MoveAside(root, candidate);
+            return candidate;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new AppException("backup.restore_preserve_failed", 500, 500, $"Root={root}\r\nSideline={candidate}\r\n{exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Verilen önek altındaki arşiv girdilerini köke çıkarır (önek sıyrılarak). Zip-slip
+    /// denetimi burada yapılır; kökün dışına düşen girdi YAZILMAZ ve uyarıya çevrilir.
+    /// </summary>
+    private static void ExtractPrefixedEntries(
+        ZipArchive archive,
+        string prefix,
+        string root,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        foreach (var entry in archive.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(entry.Name))
+            {
+                continue; // dizin girdisi
+            }
+
+            var hedef = ResolveInsideRoot(NormalizeArchivePath(entry.FullName), prefix, root, warnings);
+            if (hedef is null)
+            {
+                continue;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(hedef)!);
+            entry.ExtractToFile(hedef, overwrite: true);
+        }
+    }
+
+    /// <summary>
+    /// Artımsal halkanın <c>deleted.json</c> listesini uygular: o halkada SİLİNMİŞ dosyalar
+    /// hedeften de silinir.
+    /// </summary>
+    /// <remarks>
+    /// Bu adım olmadan geri yükleme, kullanıcının bilerek kaldırdığı dosyaları (temizlenmiş bir
+    /// zararlı eklenti, silinmiş eski bir sürüm) geri getirirdi — yani geri yükleme, sitenin
+    /// yedeğin alındığı andaki hâline DEĞİL, hâllerin birleşimine dönerdi.
+    /// </remarks>
+    private static async Task ApplyDeletedEntriesAsync(
+        ZipArchive archive,
+        string prefix,
+        string root,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        var entry = archive.GetEntry(ArchiveDeletedEntry);
+        if (entry is null)
+        {
+            return;
+        }
+
+        string[] silinecekler;
+        try
+        {
+            await using var stream = entry.Open();
+            silinecekler = await System.Text.Json.JsonSerializer.DeserializeAsync<string[]>(
+                stream,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                cancellationToken) ?? [];
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            warnings.Add(new BackupRestoreWarningDto { MessageKey = "backup.deleted_list_unreadable", Detail = exception.Message });
+            return;
+        }
+
+        foreach (var yol in silinecekler)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var hedef = ResolveInsideRoot(NormalizeArchivePath(yol), prefix, root, warnings);
+            if (hedef is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (File.Exists(hedef))
+                {
+                    File.Delete(hedef);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.delete_entry_failed",
+                    Target = yol,
+                    Detail = exception.Message
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Arşiv yolunu köke göre çözer. Önek uymuyorsa <c>null</c> (ilgisiz girdi); kökün DIŞINA
+    /// düşüyorsa <c>null</c> + uyarı (zip-slip).
+    /// </summary>
+    private static string? ResolveInsideRoot(string archivePath, string prefix, string root, List<BackupRestoreWarningDto> warnings)
+    {
+        if (!archivePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var relative = archivePath[prefix.Length..].Replace('/', Path.DirectorySeparatorChar);
+        if (relative.Length == 0)
+        {
+            return null;
+        }
+
+        var hedef = Path.GetFullPath(Path.Combine(root, relative));
+
+        // Zip-slip koruması: hedef kökün dışına çıkamaz. Ayırıcı denetimi olmadan "C:\sites\ada"
+        // öneki "C:\sites\ada2\..." ile de eşleşirdi; tek doğru cevap PathContainment'tadır.
+        if (!PathContainment.IsInsideRoot(root, hedef))
+        {
+            // Sessizce atlamak, bozuk/kötücül bir arşivi "geri yüklendi" saymak olurdu.
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.invalid_entry_path",
+                Target = archivePath,
+                Detail = hedef
+            });
+            return null;
+        }
+
+        return hedef;
+    }
+
+    /// <summary>Arşivdeki <c>*.sql</c> dökümlerini ilgili motorlara içe aktarır.</summary>
+    private async Task ImportDatabasesFromArchiveAsync(
+        ZipArchive archive,
+        string prefix,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        foreach (var entry in archive.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ad = NormalizeArchivePath(entry.FullName);
+            if (!ad.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+                !ad.EndsWith(".sql", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrEmpty(entry.Name))
+            {
+                continue;
+            }
+
+            var fileName = Path.GetFileNameWithoutExtension(entry.Name); // "engine-dbname"
+            var split = fileName.Split('-', 2);
+            if (split.Length != 2)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.invalid_entry_path",
+                    Target = entry.FullName,
+                    Detail = "Girdi adi 'motor-veritabani' bicimine uymuyor."
+                });
+                continue;
+            }
+
+            var tempDump = Path.Combine(Path.GetTempPath(), $"adabk-restore-{Guid.NewGuid():N}.sql");
+            try
+            {
+                entry.ExtractToFile(tempDump, overwrite: true);
+                await databaseService.ImportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
+                {
+                    Engine = split[0],
+                    DatabaseName = split[1],
+                    FilePath = tempDump
+                }, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (AppException exception)
+            {
+                // Diğer veritabanları/dosyalarla devam edilir AMA sonuç sessizce "restored"
+                // sayılmaz: sebep kullanıcıya döner.
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = exception.MessageKey,
+                    Target = $"{split[0]}/{split[1]}",
+                    Detail = exception.Details
+                });
+            }
+            catch (Exception exception)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "database.restore_failed",
+                    Target = $"{split[0]}/{split[1]}",
+                    Detail = exception.Message
+                });
+            }
+            finally
+            {
+                if (File.Exists(tempDump))
+                {
+                    File.Delete(tempDump);
+                }
+            }
+        }
     }
 
     private sealed record BackupTarget(string Type, Uri? Uri, string UserName, string Password, string Region);

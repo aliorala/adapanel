@@ -8,6 +8,24 @@ public interface IBackupService
 
     Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// ABONELİK bazında yedek: bir müşterinin bütün siteleri + veritabanları + posta alan adları +
+    /// FTP hesapları TEK arşivde (Plesk'in abonelik yedeği paritesi).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Arşive giren her kaynak, aboneliğin KAPSAMINDAN ölçülerek seçilir; ad benzerliğine
+    /// güvenilmez. Böylece bir müşterinin arşivinde başka bir müşterinin verisi bulunamaz.
+    /// </para>
+    /// <para>
+    /// Posta bölümü posta kutusu ENVANTERİDİR (hesaplar/alias/kota), iletiler değil; iletiler
+    /// sunucu geneli posta yedeğindedir (<see cref="BackupMailAsync"/>). FTP ve posta PAROLALARI
+    /// dışa aktarılamaz ve geri yüklemede sıfırlanmalıdır — ikisi de manifestte ve geri yükleme
+    /// uyarılarında açıkça söylenir.
+    /// </para>
+    /// </remarks>
+    Task<BackupRecordDto> BackupSubscriptionAsync(BackupSubscriptionRequest request, CancellationToken cancellationToken = default);
+
     Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -44,10 +62,41 @@ public interface IBackupService
     Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Bir aboneliğin YALNIZCA kendi yedeklerini budar: süre (<paramref name="retentionDays"/>) ve
+    /// sayı (<paramref name="keepCount"/>) limitleri birlikte uygulanır. Kapsam daraltması ŞARTTIR:
+    /// bir müşterinin saklama ayarı başka bir müşterinin yedeklerine dokunamaz.
+    /// </summary>
+    Task<int> PruneSubscriptionAsync(
+        Guid userId,
+        int retentionDays,
+        int keepCount,
+        BackupPruneRemoteOptions? remote = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir yedeğin geri yüklenebilmesi için gereken artımsal ZİNCİRİ çözer (tam yedekten hedefe
+    /// doğru sıralı halkalar + kopukluk bilgisi). Ekran, kopuk zinciri geri yüklemeyi denemeden
+    /// önce uyarabilsin diye vardır.
+    /// </summary>
+    Task<BackupChainDto> GetChainAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Tek bir yedeği siler: yerel dosya/dizin + kayıt. Off-site UZAK kopyaya DOKUNMAZ (uzak rotasyon
     /// PruneAsync'in işidir); kayıt silinse de uzak kopya hedef depoda durur.
+    /// <para>
+    /// Yedeğe BAĞIMLI artımsal halkalar varsa istek <c>backup.chain_has_dependents</c> ile
+    /// REDDEDİLİR: onları sessizce çöpe çevirmek, panelde duran ama geri yüklenemeyen yedekler
+    /// bırakmak olurdu. Kullanıcı ne kaybedeceğini gördükten sonra
+    /// <see cref="DeleteBackupChainAsync"/> ile devam eder.
+    /// </para>
     /// </summary>
     Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Yedeği ve ona bağımlı BÜTÜN artımsal halkaları siler (Plesk'in zincire yayılan silmesi).
+    /// Silinen kayıtların kimlik ve adlarını döner; hiçbiri silinemediyse hata verir.
+    /// </summary>
+    Task<BackupDeleteResultDto> DeleteBackupChainAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Paneldeki varsayılan yedek şifreleme ayarını okur. Parolanın KENDİSİ dönmez; yalnızca

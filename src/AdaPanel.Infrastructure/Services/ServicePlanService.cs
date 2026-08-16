@@ -50,7 +50,10 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
             // özelliği fiilen ölüydü. Uçtan uca test yakaladı; birim testleri yakalayamamıştı.
             MaxFtpUsers = Math.Max(0, request.MaxFtpUsers),
             MaxTrafficGbPerMonth = Math.Max(0, request.MaxTrafficGbPerMonth),
-            ValidityDays = Math.Max(0, request.ValidityDays)
+            ValidityDays = Math.Max(0, request.ValidityDays),
+            // Eşleştirme HEM burada HEM UpdatePlanAsync'te olmalı: yukarıdaki yorumda anlatılan
+            // hata (istek dolu, kayda 0) tam olarak eşleştirmenin bir yerde unutulmasıydı.
+            MaxBackupsPerDay = Math.Max(0, request.MaxBackupsPerDay)
         };
         plans.Add(plan);
         await fileStore.WriteAsync(StatePath, plans, cancellationToken);
@@ -80,6 +83,7 @@ public sealed class ServicePlanService(JsonFileStore fileStore) : IServicePlanSe
         plan.MaxFtpUsers = Math.Max(0, request.MaxFtpUsers);
         plan.MaxTrafficGbPerMonth = Math.Max(0, request.MaxTrafficGbPerMonth);
         plan.ValidityDays = Math.Max(0, request.ValidityDays);
+        plan.MaxBackupsPerDay = Math.Max(0, request.MaxBackupsPerDay);
         await fileStore.WriteAsync(StatePath, plans, cancellationToken);
         return plan;
     }

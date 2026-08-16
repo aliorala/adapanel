@@ -1,6 +1,6 @@
 namespace AdaPanel.Core.Dtos.Backup;
 
-public sealed class BackupSiteRequest : BackupTargetRequest
+public sealed class BackupSiteRequest : BackupArchiveRequest
 {
     public string SiteName { get; set; } = string.Empty;
 

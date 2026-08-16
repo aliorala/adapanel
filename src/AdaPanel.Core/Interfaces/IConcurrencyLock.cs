@@ -41,4 +41,12 @@ public static class ConcurrencyKeys
 
     /// <summary>Zamanlanmış otomasyon turu (yedek, SSL yenileme). SAATLERCE sürebilir.</summary>
     public const string Automation = "automation";
+
+    /// <summary>
+    /// Abonelik yedek turları. Otomasyon kuyruğundan AYRI olmasının sebebi ölçülmüş bir tuzaktır:
+    /// abonelik yedeği "şimdi yedekle" düğmesiyle de tetiklenir ve o bir HTTP isteğidir. Sunucu
+    /// geneli gece yedeğiyle aynı kuyruğa girseydi, kullanıcının isteği saatlerce askıda kalır ve
+    /// panel donmuş görünürdü. Aynı kuyruk yalnız abonelik yedeklerini birbirine sıraya sokar.
+    /// </summary>
+    public const string SubscriptionBackup = "subscription-backup";
 }

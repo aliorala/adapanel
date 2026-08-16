@@ -157,6 +157,10 @@ public static class ServiceCollectionExtensions
         // olmak zorunda çünkü kapsam servisi de burada kaydediliyor (grafik aynı kapsayıcıda çözülür).
         services.AddScoped<IResellerQuotaService, Subscriptions.ResellerQuotaService>();
         services.AddHostedService<Subscriptions.SubscriptionEnforcementWorker>();
+        // Abonelik başına yedek programı (Plesk paritesi). Sunucu geneli otomasyondan AYRI işçi
+        // ve AYRI kuyruk: birinin saatlerce süren turu diğerini bekletmemeli.
+        services.AddScoped<ISubscriptionBackupScheduleService, Subscriptions.SubscriptionBackupScheduleService>();
+        services.AddHostedService<Subscriptions.SubscriptionBackupWorker>();
 
         // Sorgu geçmişi: örnekleyici arka planda koşar (panel açık olmasa da kayıt tutulur).
         services.AddScoped<IQueryLogService, Monitoring.QueryLogService>();

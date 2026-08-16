@@ -73,6 +73,27 @@ public sealed class ServicePlanDto
     /// buradan hesaplanır; süresi dolan abonelik otomatik askıya alınır.
     /// </summary>
     public int ValidityDays { get; set; }
+
+    /// <summary>
+    /// Aboneliğin GÜNDE en fazla kaç ZAMANLANMIŞ yedek alabileceği (0 = sınırsız).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu, satılabilir bir hizmet farkıdır: "günde 2 kez yedek" üst paketin özelliğidir, çünkü her
+    /// yedek turu disk, CPU ve (off-site hedefte) bant genişliği harcar. Sınır olmadan tek bir
+    /// müşteri saatlik program kurup sunucunun bütün disk alanını tüketebilir.
+    /// </para>
+    /// <para>
+    /// Sınır PROGRAM KURULURKEN uygulanır (aralık, günde bu sayıdan fazla tura yol açamaz) ve
+    /// ayrıca her turda TEKRAR ölçülür: plan sonradan daraltılırsa mevcut program kendiliğinden
+    /// kotaya çekilir — kaydedilmiş eski bir aralığın kotayı sonsuza kadar delmesi kabul edilemez.
+    /// </para>
+    /// <para>
+    /// ELLE alınan yedekler bu sayıya girmez: müşteri riskli bir işlemden önce yedek almak
+    /// istediğinde onu engellemek, korumanın kendisini engellemek olurdu.
+    /// </para>
+    /// </remarks>
+    public int MaxBackupsPerDay { get; set; }
 }
 
 public sealed class ServicePlanRequest
@@ -94,4 +115,7 @@ public sealed class ServicePlanRequest
     public int MaxTrafficGbPerMonth { get; set; }
 
     public int ValidityDays { get; set; }
+
+    /// <summary>Günde en fazla kaç zamanlanmış yedek (0 = sınırsız).</summary>
+    public int MaxBackupsPerDay { get; set; }
 }
