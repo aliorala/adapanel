@@ -6443,3 +6443,33 @@ testten geçmiş kod girer" garantisini veren pratik yol.
 
 **Test:** 1354 (+8). Korumalar MUTASYONLA doğrulandı: uzak hata yok sayılınca ve sahiplik süzgeci
 kaldırılınca 4 test kırmızıya döndü.
+
+### E-3. 0.5.2 ve 0.5.3 YAYINLANDI (2026-08-17)
+
+- **0.5.2** (id 371444223): 89.684.485 bayt, SHA256 `134F07B45A83F9D928A74287B21519AC428B7A6FB7F7CDF807D3AC4671A8B2E9`.
+  Yedek hedefi etiketleri ("Yerel disk + FTP"), posta kuyruğu + smarthost kartları, askıda
+  düğme seviyesinde salt-okunur (31 dosya/156 kontrol), autodiscover artık İSTEMCİLERE ULAŞIYOR,
+  system/overview rol daraltması, bileşen denetiminde canlı-çözümleme ayrımı + atomik indirme.
+- **0.5.3** (id 371455300): 89.640.420 bayt, SHA256 `57873FBE4495E4A742C79D715DA2C4E91F4AA941C1A5722870CF1FB9A2907FCC`.
+  İkisinde de yayındaki dosya indirilip hash'lendi → BİREBİR; CompanyName = AdaPanel.
+  Yerel etiketler: `0.5.2` → `766f96c`, `0.5.3` → `8aa341c`.
+
+**0.5.3'ÜN ASIL BULGUSU — KULLANICININ CANLI PANELİNDEN GELDİ:**
+`AutomationService`'te `DefaultEngines = ["mysql"]` diye SABİT bir liste vardı; AdaPanel
+varsayılan kurulumda **MariaDB** kurar. Gecelik yedek her gece var olmayan motoru soruyor,
+`database.engine_not_installed` alıyor ve **SIFIR veritabanı yedekliyordu**. Özette
+"0 veritabanı yedeklendi" yazdığı için bu bir BİLGİ gibi görünüyordu — oysa sessiz arızaydı ve
+**varsayılan kurulumda herkeste böyleydi**. Motor listesi artık `GetEnginesAsync` ile kurulu
+olandan türetiliyor (Installed && Ready). Karar saf fonksiyona çıkarıldı: `SelectBackupEngines`.
+
+**DERS:** doğru yazılmış bir sayı, yanlış bir gerçeği anlatabilir. "0 veritabanı" satırı panelin
+hatası değil, panelin doğru raporladığı bir arızaydı; kimse sorgulamadığı için aylarca yaşadı.
+
+**Ayrıca 0.5.3'te:** WHMCS'in eksik iki ucu (parola belirleme AuthController'a kondu -- o sınıf
+çerez şemasına sabitli, yani salt-okur olmayan bir anahtarla başkasının parolası belirlenip tam
+yetkili oturum açılamıyor; kendi hesabı için de reddediliyor). Ölçülen asimetri kapandı:
+`CreateSubUserAsync` parola uzunluğunu HİÇ denetlemiyordu. SSH.NET 2024.1.0 → 2026.0.0
+(GHSA-q939-rpr3-3284; ÖLÇÜLDÜ: açık ScpClient'ta, panel SftpClient kullanıyor → etkilenmiyorduk).
+
+**Test: 1446.** Yayın yöntemi: her ikisi de ana depodan değil, commit'e bağlı ayrı worktree'den
+paketlendi (ana depoda ajan işi duruyordu) — `.tools` junction + `npm ci` + `npm run build`.
