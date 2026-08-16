@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using AdaPanel.Core.Dtos.Automation;
 using AdaPanel.Core.Dtos.Backup;
+using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
@@ -43,7 +44,8 @@ public sealed class AutomationService(
     private const string SslStatePath = "config/ssl.json";
     private static readonly TimeSpan AlertCooldown = TimeSpan.FromHours(24);
     private static readonly TimeSpan WatchdogInterval = TimeSpan.FromMinutes(5);
-    private static readonly string[] DefaultEngines = ["mysql"];
+    // NOT: burada `DefaultEngines = ["mysql"]` diye sabit bir liste vardı ve KALDIRILDI.
+    // Motorlar artık kurulu olanlardan türetiliyor (bkz. ResolveInstalledEnginesAsync).
 
     public async Task<AutomationStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -343,7 +345,20 @@ public sealed class AutomationService(
 
             if (state.BackupDatabases)
             {
-                var engines = state.BackupDatabaseEngines.Count > 0 ? state.BackupDatabaseEngines : DefaultEngines;
+                // MOTOR LİSTESİ KURULU OLANDAN TÜRETİLİR, SABİT DEĞİLDİR.
+                //
+                // Burada eskiden `DefaultEngines = ["mysql"]` sabiti vardı. AdaPanel'in kendi
+                // kurduğu motor MariaDB'dir; yani VARSAYILAN kurulumda gecelik yedek her gece
+                // "mysql" motorunu soruyor, `database.engine_not_installed` alıyor ve
+                // **sıfır veritabanı yedekliyordu**. Özet satırı "0 veritabanı yedeklendi" diyordu
+                // ama bu bir bilgi değil, sessiz bir arızaydı: kullanıcı veritabanlarının
+                // yedeklendiğini sanıyordu.
+                //
+                // Kullanıcı motorları AÇIKÇA seçtiyse ona dokunulmaz (kurulu olmayan bir motoru
+                // seçmişse bunu bilmesi gerekir, hata mesajı bilinçli olarak korunur).
+                var engines = state.BackupDatabaseEngines.Count > 0
+                    ? state.BackupDatabaseEngines
+                    : await ResolveInstalledEnginesAsync(cancellationToken);
                 foreach (var engine in engines)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -1005,6 +1020,46 @@ public sealed class AutomationService(
         {
             await fileStore.WriteAsync(AlertCooldownPath, cooldown, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Otomatik yedeğin dokunacağı veritabanı motorları: KURULU ve YÖNETİLEBİLİR olanlar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sabit bir liste tutmak, panelin kendi kurduğu motor değiştiğinde yedeği sessizce
+    /// devre dışı bırakır — nitekim bıraktı: liste <c>["mysql"]</c> idi, panel MariaDB kuruyor.
+    /// </para>
+    /// <para>
+    /// <see cref="DatabaseEngineStatusDto.Ready"/> şartı bilinçli: motor kurulu ama panel ona
+    /// bağlanamıyorsa (yönetici parolası yok) döküm zaten alınamaz. Onu listeye koymak her gece
+    /// bir hata satırı üretir ve gerçek arızaları gürültüye gömerdi.
+    /// </para>
+    /// </remarks>
+    private async Task<IReadOnlyList<string>> ResolveInstalledEnginesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SelectBackupEngines(await databaseService.GetEnginesAsync(cancellationToken));
+        }
+        catch (Exception exception)
+        {
+            // Motor listesi okunamıyorsa SESSİZ KALMA: yedek "0 veritabanı" der ve sebebi
+            // görünmezdi. Boş liste dönüp özet satırında bunu söylemek, uydurma bir motor
+            // listesiyle devam etmekten dürüsttür.
+            logger.LogWarning(exception, "Kurulu veritabanı motorları okunamadı; otomatik veritabanı yedeği atlanıyor.");
+            return [];
+        }
+    }
+
+    /// <summary>Motor durumlarından yedeklenebilir olanları seçer (saf; test edilebilir).</summary>
+    internal static IReadOnlyList<string> SelectBackupEngines(IEnumerable<DatabaseEngineStatusDto> engines)
+    {
+        return engines
+            .Where(engine => engine.Installed && engine.Ready && !string.IsNullOrWhiteSpace(engine.Engine))
+            .Select(engine => engine.Engine.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>
