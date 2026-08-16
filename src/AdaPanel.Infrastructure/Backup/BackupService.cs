@@ -5,6 +5,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Backup;
 
@@ -18,7 +19,10 @@ public sealed class BackupService(
     IHttpClientFactory httpClientFactory,
     // İSTEĞE BAĞLI: şifreleme kasası. Verilmezse (dar kapsamlı testler) panelde kayıtlı parola
     // yok sayılır; istekle gelen parola yine çalışır.
-    BackupEncryptionStore? encryptionStore = null) : IBackupService
+    BackupEncryptionStore? encryptionStore = null,
+    // İSTEĞE BAĞLI: dar kapsamlı testler bu servisi doğrudan kuruyor; günlükçüyü zorunlu yapmak
+    // onlarca test kurulumunu kırardı. Üretimde DI her zaman verir.
+    ILogger<BackupService>? logger = null) : IBackupService
 {
     private const string IndexPath = "config/backups.json";
 
@@ -132,7 +136,39 @@ public sealed class BackupService(
         var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(localPath, fileName, password, cancellationToken);
 
         var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
-        var remoteUri = await UploadToRemoteAsync(finalPath, finalName, target, cancellationToken);
+
+        // YEDEK HER ZAMAN ÖNCE YEREL DİSKE ALINIR; uzak hedef bunun YERİNE değil ÜSTÜNE gelir.
+        //
+        // Uzak yükleme hatası ESKİDEN İSTİSNA OLARAK YUKARI ÇIKIYORDU ve kayıt bu satırdan sonra
+        // yazıldığı için hiç oluşmuyordu. Sonuç: alınmış, sağlam, YEREL bir yedek diskte duruyor
+        // ama panelde GÖRÜNMÜYOR — listede yok, geri yüklenemiyor, saklama temizliğine de
+        // takılmadığı için sonsuza kadar yer kaplıyor. FTP'nin bir gecelik arızası, o gecenin
+        // yedeğini fiilen yok ediyordu.
+        //
+        // Artık yerel kopya HER KOŞULDA kaydedilir; uzak kopya başarısızsa bu, kaydın durumunda
+        // ve uyarısında AÇIKÇA söylenir. Bir hedefin başarısızlığı diğerini götürmez.
+        var remoteUri = string.Empty;
+        string? remoteFailure = null;
+        if (target.Type != "local")
+        {
+            try
+            {
+                remoteUri = await UploadToRemoteAsync(finalPath, finalName, target, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                remoteFailure = exception.Message;
+                logger?.LogWarning(
+                    exception,
+                    "Yedek uzak hedefe gönderilemedi ({Target}); yerel kopya korundu: {File}",
+                    target.Type,
+                    finalName);
+            }
+        }
 
         var record = new BackupRecordDto
         {
@@ -146,11 +182,24 @@ public sealed class BackupService(
             Format = format,
             CreatedAtUtc = DateTime.UtcNow,
             Size = new FileInfo(finalPath).Length,
-            Status = string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced",
+            Status = DescribeDestinationStatus(remoteUri, remoteFailure),
             TargetType = target.Type,
             RemoteUri = remoteUri,
             Encrypted = encrypted
         };
+
+        // Uzak kopya alınamadıysa SEBEBİ kayda taşınır. "Uzak hedefe gönderilemedi" demeden
+        // sessizce yerel yedekle yetinmek, kullanıcının off-site kopyası olduğunu sanmasına yol
+        // açar — felaket anında öğrenilecek en kötü şey budur.
+        if (remoteFailure is not null)
+        {
+            record.Warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.remote_upload_failed",
+                Target = target.Type,
+                Detail = remoteFailure
+            });
+        }
 
         // Şifresiz yedek üçüncü taraf depoya çıktıysa bunu SÖYLERİZ. Sessiz kalmak, müşteri
         // verisinin S3/FTP'de düz metin durduğunu kimsenin fark etmemesi demekti (KVKK/GDPR).
@@ -166,6 +215,29 @@ public sealed class BackupService(
 
         await AppendRecordAsync(record, cancellationToken);
         return record;
+    }
+
+    /// <summary>
+    /// Yedeğin hangi hedeflere ULAŞTIĞINI anlatan durum.
+    /// </summary>
+    /// <remarks>
+    /// Üç durum vardır ve üçü de GERÇEK bir sonucu anlatır:
+    /// <list type="bullet">
+    /// <item><c>created</c> — yalnız yerel disk istendi, alındı.</item>
+    /// <item><c>created_remote_synced</c> — yerel disk + uzak hedef, İKİSİ de tamam.</item>
+    /// <item><c>created_remote_failed</c> — yerel disk tamam, uzak hedef başarısız.
+    /// Yedek VARDIR ama off-site kopyası YOKTUR; ikisini aynı kefeye koymak, kullanıcının
+    /// olmayan bir off-site kopyaya güvenmesi demek olurdu.</item>
+    /// </list>
+    /// </remarks>
+    internal static string DescribeDestinationStatus(string? remoteUri, string? remoteFailure)
+    {
+        if (!string.IsNullOrWhiteSpace(remoteFailure))
+        {
+            return "created_remote_failed";
+        }
+
+        return string.IsNullOrWhiteSpace(remoteUri) ? "created" : "created_remote_synced";
     }
 
     /// <summary>

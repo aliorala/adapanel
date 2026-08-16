@@ -33,6 +33,9 @@ public sealed class AutomationService(
     ISchedulerService schedulerService,
     IErrorReportSender errorReportSender,
     IConcurrencyLock concurrencyLock,
+    // Hangi veritabanının hangi siteye ait olduğunun OTORİTE kaynağı. Otomatik yedek, site
+    // arşivine hangi dökümleri koyacağını buradan öğrenir — ad benzerliğinden DEĞİL.
+    IDatabaseOwnershipService databaseOwnership,
     ILogger<AutomationService> logger) : IAutomationService
 {
     private const string StatePath = "config/automation.json";
@@ -277,26 +280,56 @@ public sealed class AutomationService(
         var siteCount = 0;
         var dbCount = 0;
 
+        // Sitenin arşivine giren veritabanları: aynı dökümü bir de tek başına yedeklemeyelim diye
+        // hangilerinin siteye gittiği burada tutulur (anahtar "motor|ad").
+        var siteIcindeYedeklenen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         try
         {
             if (state.BackupSites)
             {
                 var sites = await iisSiteService.GetSitesAsync(cancellationToken);
                 var remotePassword = ResolveRemotePassword(state);
+
+                // Sahiplik kaydı BİR KEZ okunur ve siteye göre gruplanır: site başına ayrı sorgu
+                // atmak, onlarca siteli bir sunucuda gecelik işi gereksiz yere uzatırdı.
+                var sahiplik = await databaseOwnership.GetAllAsync(cancellationToken);
+                var siteVeritabanlari = GroupDatabasesBySite(sahiplik);
+
                 foreach (var site in sites)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
+                        // TEK ARŞİV, İÇİNDE AYRI AYRI: files/ + config/ + databases/ + mail/.
+                        // Eskiden otomatik yedek siteyi dosyalarıyla, veritabanlarını ayrı ayrı ve
+                        // postayı bambaşka bir arşivle alıyordu; bir siteyi geri getirmek için
+                        // kullanıcının parçaları elle eşleştirmesi gerekiyordu. Artık bir sitenin
+                        // her şeyi tek dosyada ve içinde ayrılmış hâlde duruyor.
+                        siteVeritabanlari.TryGetValue(site.Name, out var dbListesi);
+                        var dbler = (dbListesi ?? [])
+                            .Select(x => new BackupDatabaseRef { Engine = x.Engine, DatabaseName = x.DatabaseName })
+                            .ToList();
+
                         await backupService.BackupSiteAsync(new BackupSiteRequest
                         {
                             SiteName = site.Name,
+                            IncludeFiles = true,
+                            IncludeConfig = true,
+                            IncludeMail = true,
+                            Databases = dbler,
                             TargetType = state.BackupTargetType,
                             RemoteUrl = state.BackupRemoteUrl,
                             RemoteUserName = state.BackupRemoteUserName,
                             RemotePassword = remotePassword,
                             RemoteRegion = state.BackupRemoteRegion
                         }, cancellationToken);
+
+                        foreach (var db in dbler)
+                        {
+                            siteIcindeYedeklenen.Add($"{db.Engine}|{db.DatabaseName}");
+                        }
+
                         siteCount++;
                     }
                     catch (Exception exception)
@@ -319,6 +352,16 @@ public sealed class AutomationService(
                         var workspace = await databaseService.GetWorkspaceAsync(engine, cancellationToken);
                         foreach (var database in workspace.Databases)
                         {
+                            // Bu veritabanı bir sitenin arşivine ZATEN girdiyse tekrar yedeklenmez:
+                            // aynı dökümü iki dosyaya yazmak yeri iki katına çıkarır ve geri
+                            // yüklerken "hangisi güncel" sorusunu doğurur. Sahipsiz (hiçbir siteye
+                            // bağlı olmayan) veritabanları BURADA yedeklenmeye devam eder — yoksa
+                            // panel dışında açılmış bir veritabanı sessizce yedeksiz kalırdı.
+                            if (siteIcindeYedeklenen.Contains($"{engine}|{database.Name}"))
+                            {
+                                continue;
+                            }
+
                             try
                             {
                                 await backupService.BackupDatabaseAsync(new BackupDatabaseRequest
@@ -962,6 +1005,46 @@ public sealed class AutomationService(
         {
             await fileStore.WriteAsync(AlertCooldownPath, cooldown, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Sahiplik kayıtlarını siteye göre gruplar: hangi sitenin arşivine hangi veritabanı dökümü
+    /// girecek.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden saf ve ayrı:</b> otomatik yedek işi on dokuz bağımlılıkla kuruluyor; bu kararı
+    /// oradan test etmek hepsini taklit etmeyi gerektirirdi. Kural burada ölçülebilir hâlde durur.
+    /// </para>
+    /// <para>
+    /// <b>Neden sahiplik kaydı, ad benzerliği DEĞİL:</b> panel hangi veritabanının hangi siteye
+    /// ait olduğunu zaten biliyor. Adı siteye benzeyen bir veritabanını "onundur" diye arşive
+    /// koymak, başka bir müşterinin verisini o sitenin yedeğine sızdırırdı — aynı varsayım site
+    /// silmede gerçek bir veri kaybı hatasına yol açmıştı.
+    /// </para>
+    /// <para>
+    /// Site adı BOŞ olan kayıtlar dışarıda kalır; onlar hiçbir siteye bağlı olmayan
+    /// veritabanlarıdır ve kendi başlarına yedeklenmeye devam ederler.
+    /// </para>
+    /// </remarks>
+    internal static Dictionary<string, List<BackupDatabaseRef>> GroupDatabasesBySite(
+        IReadOnlyCollection<(string Engine, string DatabaseName, Guid OwnerUserId, string SiteName)> ownership)
+    {
+        return ownership
+            .Where(kayit => !string.IsNullOrWhiteSpace(kayit.SiteName)
+                && !string.IsNullOrWhiteSpace(kayit.Engine)
+                && !string.IsNullOrWhiteSpace(kayit.DatabaseName))
+            .GroupBy(kayit => kayit.SiteName.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                grup => grup.Key,
+                grup => grup
+                    .Select(kayit => new BackupDatabaseRef
+                    {
+                        Engine = kayit.Engine.Trim(),
+                        DatabaseName = kayit.DatabaseName.Trim()
+                    })
+                    .ToList(),
+                StringComparer.OrdinalIgnoreCase);
     }
 
     private string ResolveRemotePassword(AutomationStateRecord state)
