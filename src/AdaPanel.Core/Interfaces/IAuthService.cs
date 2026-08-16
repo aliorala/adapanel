@@ -39,5 +39,51 @@ public interface IAuthService
         ChangePasswordRequest request,
         string? ipAddress,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Yönetici (ya da bayi, YALNIZ kendi müşterisi için) BAŞKA bir kullanıcının parolasını belirler.
+    /// Mevcut parola İSTENMEZ; yetki aktörün rolü ve kapsamıyla kanıtlanır (<c>ManagedUserGuard</c>).
+    /// Aktör kendi kimliğini veremez — kendi parolası için <see cref="ChangePasswordAsync"/> vardır.
+    /// </summary>
+    /// <remarks>
+    /// Parola değişince hedefin açık ÇEREZ oturumları (kimlik damgası paroladan türer) ve API
+    /// anahtarları düşer; kaç anahtarın düştüğü yanıtta bildirilir.
+    /// </remarks>
+    Task<SetUserPasswordResultDto> SetPasswordForUserAsync(
+        Guid targetUserId,
+        SetUserPasswordRequest request,
+        Guid actorUserId,
+        string? ipAddress,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hedef kullanıcı için TEK KULLANIMLIK, kısa ömürlü bir giriş bağlantısı üretir (faturalama
+    /// sisteminin "Panele git" düğmesi). Yetki denetimi parola belirlemeyle AYNI kuraldan geçer.
+    /// </summary>
+    /// <param name="requestHost">
+    /// Panel adresi ayarlarda boşsa kullanılacak yedek adres (isteğin <c>Host</c> başlığı).
+    /// </param>
+    Task<SsoLinkDto> CreateSsoLinkAsync(
+        Guid targetUserId,
+        Guid actorUserId,
+        string? requestHost,
+        string? ipAddress,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Giriş belirtecini TÜKETİR ve geçerliyse kullanıcıyı döner; geçersiz/süresi geçmiş/ikinci kez
+    /// kullanılmış ya da hesap pasifse <c>null</c> döner.
+    /// </summary>
+    /// <remarks>
+    /// Neden istisna değil <c>null</c>: bu belirteci TARAYICI taşır ve ucun yanıtı bir SAYFADIR,
+    /// JSON zarfı değil. İstisna fırlatılsaydı hata ara katmanı müşteriye ham bir JSON hata
+    /// gövdesi gösterirdi. Reddin sebebi denetim kaydına yazılır, kullanıcıya değil — geçersiz
+    /// belirtecin NEDEN geçersiz olduğunu söylemek, deneme yapan birine bilgi vermekten başka işe
+    /// yaramaz.
+    /// </remarks>
+    Task<CurrentUserDto?> TryRedeemSsoTokenAsync(
+        string token,
+        string? ipAddress,
+        CancellationToken cancellationToken = default);
 }
 

@@ -18,15 +18,11 @@
  *   POST   /api/v1/subscriptions/{id}/suspend     -> SubscriptionsController.SuspendAsync
  *   POST   /api/v1/subscriptions/{id}/resume      -> SubscriptionsController.ResumeAsync
  *   GET    /api/v1/service-plans                  -> ServicePlansController.GetAsync
+ *   POST   /api/v1/auth/password/set/{id}         -> AuthController.SetUserPasswordAsync
+ *   POST   /api/v1/auth/sso-link/{id}             -> AuthController.CreateSsoLinkAsync
  *
- * PANELDE KARSILIGI OLMAYAN IKI WHMCS ISLEVI (bkz. README "Bilinen sinirlar"):
- *   - ChangePassword: panelde yoneticinin BASKA bir kullanicinin parolasini degistirdigi uc YOK
- *     (`UpdateUserRequest` parola alani tasimaz; `POST /auth/change-password` MEVCUT parolayi ister
- *     ve yalniz cerez semasini kabul eder).
- *   - ServiceSingleSignOn: panelde tek kullanimlik giris baglantisi ureten uc YOK
- *     (`POST /auth/impersonate/{id}` cevabinda oturum CEREZI doner; sunucudan sunucuya alinan bu
- *     cerez musterinin tarayicisina tasinamaz).
- * Ikisi de UYDURULMADI; islev cagrildiginda ne eksik oldugunu SOYLEYEN bir hata doner.
+ * ChangePassword ve ServiceSingleSignOn islevleri bir sure "uc yok" hatasi donuyordu; panele
+ * karsiliklari eklendi (bkz. docs/whmcs-modulu.md) ve artik gercekten calisiyorlar.
  */
 
 if (!defined('WHMCS')) {
@@ -268,40 +264,75 @@ function adapanel_ChangePackage(array $params)
 }
 
 /**
- * Parola degistirme -- PANELDE KARSILIGI YOK.
+ * Musterinin panel parolasini belirler.
  *
- * Olculdu: `PUT /api/v1/users/{id}` govdesi (`UpdateUserRequest`) parola alani TASIMAZ;
- * `POST /api/v1/auth/change-password` MEVCUT parolayi ister ve bilerek yalnizca cerez semasini
- * kabul eder (API anahtariyla parola degistirilememesi kasitli bir guvenlik karari).
- * `POST /api/v1/auth/password/forgot` ise parola belirlemez, e-posta gonderir.
+ * `POST /api/v1/auth/password/set/{id}` govdesi: {"newPassword": "..."} (en az 12 karakter).
+ * Uc, kullanicinin KENDI parolasini degistirdigi `change-password` ucundan ayridir: mevcut parolayi
+ * SORMAZ (faturalama sistemi zaten bilmiyor), yetkiyi cagiran hesabin rolunden ve kapsamindan alir.
+ * Bayi hesabiyla baglanildiginda yalnizca KENDI musterileri icin calisir; baskasinin musterisinde
+ * `users.forbidden` doner.
  *
- * Sessizce "success" donmek en kotu secenek olurdu: WHMCS parolanin degistigini yazar, musteri
- * eski parolayla kalir ve kimse fark etmez. Bu yuzden acikca basarisiz oluyoruz.
+ * ONEMLI YAN ETKI (musteriye soylenmeli): parola degisince o kullanicinin ACIK PANEL OTURUMLARI ve
+ * URETTIGI API ANAHTARLARI dusurulur. Panel kac anahtarin dustugunu doner; WHMCS'in kendi
+ * arayuzunde gosterecek yeri olmadigi icin burada yalnizca 'success' donuyoruz.
  */
 function adapanel_ChangePassword(array $params)
 {
-    return 'AdaPanel su an disaridan parola degistirmeyi desteklemiyor: panelde bir yoneticinin '
-        . 'BASKA bir kullanicinin parolasini belirledigi bir uc yok. Musteri parolasini panelin '
-        . '"Sifremi unuttum" akisiyla ya da panele girip Hesap ekranindan degistirebilir. '
-        . '(Gerekli uc: POST /api/v1/users/{id}/password -- bkz. integrations/whmcs/README.md)';
+    try {
+        $client = new AdaPanelClient($params);
+
+        $password = (string) $params['password'];
+        if (strlen($password) < 12) {
+            // Panelin kurali tek kaynakta: PasswordPolicy.MinimumLength = 12. Sessizce baska bir
+            // parola uretmiyoruz -- musteriye giden parola ile paneldeki parola farkli olurdu.
+            return 'AdaPanel en az 12 karakterlik parola ister; girilen parola '
+                . strlen($password) . ' karakter. Daha uzun bir parola girip tekrar deneyin.';
+        }
+
+        $user = $client->requireUserByName((string) $params['username']);
+        $client->post('/api/v1/auth/password/set/' . $user['id'], array('newPassword' => $password));
+
+        return 'success';
+    } catch (Exception $exception) {
+        return $exception->getMessage();
+    }
 }
 
 /**
- * Tek tikla panele giris -- PANELDE KARSILIGI YOK.
+ * Tek tikla panele giris (SSO).
  *
- * `POST /api/v1/auth/impersonate/{id}` yalniz yoneticinin KENDI tarayici oturumunu hedef
- * kullaniciya cevirir (yanitta `Set-Cookie` doner). WHMCS sunucudan sunucuya cagirdigi icin bu
- * cerez WHMCS sunucusunda kalir; musterinin tarayicisina tasinamaz ve baska bir alan adi icin
- * gecerli de olmaz. Uydurma bir yonlendirme uretmek yerine durum acikca bildirilir.
+ * `POST /api/v1/auth/sso-link/{id}` -> data: { url, expiresAtUtc }. Panel TEK KULLANIMLIK ve
+ * dakikalarla olculen omurde bir belirtec uretir; WHMCS musterinin tarayicisini o adrese
+ * yonlendirir, adres belirteci oturum cereziyle takas eder.
+ *
+ * Neden `impersonate` DEGIL: o uc cagiranin oturum cerezini cevirir ve WHMCS panele sunucudan
+ * sunucuya baglandigi icin cerez WHMCS sunucusunda kalirdi -- musterinin tarayicisina tasinamaz.
+ *
+ * Belirtec adreste gittigi icin sunucu gunlugune ve tarayici gecmisine duser; tek kullanimlik ve
+ * kisa omurlu olmasinin sebebi tam olarak budur. Baglantiyi SAKLAMAYIN, dogrudan yonlendirin.
+ *
+ * ASKIDAKI HIZMET: panelde aski girisi degil SITELERI kapatir, bu yuzden askidaki musteri icin de
+ * baglanti uretilir (musteri panele girip durumunu gorebilmeli). PASIF hesap icin uretilmez.
  */
 function adapanel_ServiceSingleSignOn(array $params)
 {
-    return array(
-        'success' => false,
-        'errorMsg' => 'AdaPanel su an tek tikla giris (SSO) desteklemiyor: panelde tek kullanimlik '
-            . 'giris baglantisi ureten bir uc yok. Musteri panele kendi kullanici adi ve parolasiyla '
-            . 'girer. (Gerekli uc: POST /api/v1/auth/sso-link/{id} -- bkz. integrations/whmcs/README.md)',
-    );
+    try {
+        $client = new AdaPanelClient($params);
+        $user = $client->requireUserByName((string) $params['username']);
+        $sonuc = $client->post('/api/v1/auth/sso-link/' . $user['id']);
+
+        $url = isset($sonuc['data']['url']) ? (string) $sonuc['data']['url'] : '';
+        if ($url === '') {
+            return array(
+                'success' => false,
+                'errorMsg' => 'Panel giris baglantisi dondurmedi.',
+            );
+        }
+
+        return array('success' => true, 'redirectTo' => $url);
+    } catch (Exception $exception) {
+        return array('success' => false, 'errorMsg' => $exception->getMessage());
+    }
 }
 
 /**

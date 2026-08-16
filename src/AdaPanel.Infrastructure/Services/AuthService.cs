@@ -8,6 +8,7 @@ using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Security;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -355,6 +356,10 @@ public sealed class AuthService(
             throw new InvalidOperationException("auth.password_unchanged");
         }
 
+        // Uzunluk kuralı TEK kaynaktan: veri açıklaması yalnız MVC yolunda çalışır, bu servis
+        // MCP araçlarından ve iç akışlardan da çağrılabiliyor (bkz. PasswordPolicy).
+        PasswordPolicy.Ensure(request.NewPassword);
+
         user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
         user.UpdatedAtUtc = DateTime.UtcNow;
         // Parola değişimi kilidi de açar: kullanıcı zaten kimliğini mevcut parolayla kanıtladı.
@@ -376,6 +381,190 @@ public sealed class AuthService(
             cancellationToken);
 
         return new ChangePasswordResultDto { RevokedApiTokens = revoked };
+    }
+
+    public async Task<SetUserPasswordResultDto> SetPasswordForUserAsync(
+        Guid targetUserId,
+        SetUserPasswordRequest request,
+        Guid actorUserId,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+    {
+        // KENDİ hesabı bu uçtan geçemez. Aksi hâlde çalınmış bir yönetici çerezi, mevcut parolayı
+        // hiç bilmeden hesabı kalıcı olarak devralabilirdi — ChangePasswordAsync'teki mevcut-parola
+        // koşulu, yanında böyle bir uç durdukça hiçbir şey korumaz.
+        if (targetUserId == actorUserId)
+        {
+            throw new AppException("users.forbidden", 403, 403);
+        }
+
+        var erisim = await ManagedUserGuard.EnsureManagedAsync(
+            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
+        var target = erisim.Target;
+
+        PasswordPolicy.Ensure(request.NewPassword);
+
+        target.PasswordHash = passwordHasher.HashPassword(target, request.NewPassword);
+        target.UpdatedAtUtc = DateTime.UtcNow;
+        // Kilit de açılır: yönetici parolayı sıfırlarken amacı kullanıcıyı içeri sokmaktır, hatalı
+        // denemelerden kalan kilidi ayrıca temizlemek zorunda kalmamalı (ResetPasswordAsync da böyle).
+        target.FailedLoginCount = 0;
+        target.LockedUntilUtc = null;
+
+        // AÇIKÇA kaydet. Denetim kaydı aynı DbContext'i kullandığı için burada SaveChanges çağırmasa
+        // da yazım tesadüfen kalıcı olurdu; kayıt bir gün başka bir yere taşınırsa parola sessizce
+        // değişmemiş olurdu (aynı gerekçe LoginAsync'te de yazılı).
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        // ÇEREZ oturumları ayrıca düşürülmüyor çünkü zaten düşüyor: CookieSessionValidator çerezdeki
+        // kimlik damgasını parola KARMASINDAN türetir, karma değişince eski çerez en geç bir dakika
+        // içinde reddedilir. İkinci bir mekanizma yazmak, ikisinin birbirinden ayrı düşmesi demekti.
+        //
+        // API anahtarları paroladan BAĞIMSIZ kimlik bilgileridir; düşürülmezlerse parolası sıfırlanan
+        // kişi MCP/REST üzerinden erişimini sürdürür.
+        var revoked = await apiTokenService.RevokeAllForUserAsync(target.Id, cancellationToken);
+
+        // Denetim kaydına PAROLA YAZILMAZ: kayıt, korumaya çalıştığı sırrın ikinci deposu olurdu.
+        await auditService.WriteAsync(
+            "auth.password_set_by_admin",
+            "auth",
+            $"Password set for '{target.UserName}' by '{erisim.Actor?.UserName}'. {revoked} API token(s) revoked.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
+
+        return new SetUserPasswordResultDto { RevokedApiTokens = revoked };
+    }
+
+    // ---- Tek kullanımlık giriş bağlantısı (faturalama sisteminin "Panele git" düğmesi) ----
+
+    /// <summary>
+    /// Belirteç deposu. Disiplinin tamamı parola sıfırlamayla ORTAK bir yerden gelir
+    /// (<see cref="SingleUseTokenStore"/>): dosyada yalnız SHA-256 özeti durur, bulma ve tüketme
+    /// dosya kilidi altında tek parçadır.
+    /// </summary>
+    private const string SsoTokenStorePath = "config/sso-tokens.json";
+
+    /// <summary>
+    /// Belirtecin ömrü.
+    /// <para>
+    /// DAKİKALARLA ölçülür çünkü belirteç URL'de gider: panel istek günlüğüne, önündeki ters vekilin
+    /// günlüğüne ve müşterinin tarayıcı geçmişine DÜŞER. Bunu ortadan kaldıramayız (tarayıcı özel
+    /// başlık gönderemez), ama değersizleştirebiliriz — belirteç tek kullanımlıktır ve günlüğü
+    /// sonradan okuyan biri çoktan tüketilmiş, süresi geçmiş bir dize bulur. İki dakika, faturalama
+    /// sisteminin yönlendirmesi için fazlasıyla yeterli; insanın bağlantıyı kopyalayıp saklaması için
+    /// değil.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan SsoTokenLifetime = TimeSpan.FromMinutes(2);
+
+    public async Task<SsoLinkDto> CreateSsoLinkAsync(
+        Guid targetUserId,
+        Guid actorUserId,
+        string? requestHost,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+    {
+        var erisim = await ManagedUserGuard.EnsureManagedAsync(
+            dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
+        var target = erisim.Target;
+
+        // PASİF hesap için bağlantı ÜRETİLMEZ: normal giriş yolu (LoginAsync) pasif kullanıcıyı
+        // "auth.user_inactive" ile reddediyor. Burada üretmek, hesabı kapatmanın etrafından dolaşan
+        // ikinci bir giriş kapısı açmak olurdu.
+        //
+        // ASKIDAKİ ABONELİK İÇİN İSE BAĞLANTI ÜRETİLİR ve bu bilinçlidir: panelde askı, girişi değil
+        // SİTELERİ kapatır (ISubscriptionEnforcementService belgesi — müşteri panele girip neden
+        // askıda olduğunu, kotasını ve faturasını görebilmeli, çözüm orada). Tam da ödemesi geciken
+        // müşteri için "Panele git" düğmesini ölü bırakmak, askının amacına ters düşerdi.
+        if (!target.IsActive)
+        {
+            throw new AppException("auth.user_inactive", 403, 403);
+        }
+
+        // Belirteç üretimi + depolama ORTAK yerden: aynı kullanıcının önceki bağlantısı da burada
+        // geçersizleşir (parola sıfırlamayla aynı kural).
+        var (token, expiresAt) = await SingleUseTokenStore.IssueAsync(
+            fileStore, SsoTokenStorePath, target.Id, SsoTokenLifetime, cancellationToken);
+
+        var preferences = await preferencesService.GetAsync(cancellationToken);
+
+        // Bağlantı GİZLİ GİRİŞ YOLUNU taşımaz: kullanım ucu (/api/v1/auth/sso) gizli yol başlığından
+        // muaftır çünkü onu TARAYICI gezer (aynı gerekçe /api/v1/dbtools için de yazılı). Belirtecin
+        // kendisi 256 bitlik, tek kullanımlık ve dakikalık ömürlü; IP kısıtlaması da bu uçtan önce
+        // uygulanmaya devam eder.
+        var url = PanelAddress.BuildBaseUrl(preferences.ServerAddress, preferences.PreferredHttpsPort, requestHost)
+            + $"/api/v1/auth/sso?token={Uri.EscapeDataString(token)}";
+
+        // BELİRTEÇ KAYDA YAZILMAZ; yalnız kimin kimin adına, ne zamana kadar geçerli bir bağlantı
+        // ürettiği yazılır.
+        await auditService.WriteAsync(
+            "auth.sso_link.created",
+            "auth",
+            $"One-time sign-in link created for '{target.UserName}' by '{erisim.Actor?.UserName}'; valid until {expiresAt:O}.",
+            actorUserId,
+            ipAddress,
+            cancellationToken);
+
+        return new SsoLinkDto { Url = url, ExpiresAtUtc = expiresAt };
+    }
+
+    public async Task<CurrentUserDto?> TryRedeemSsoTokenAsync(
+        string token,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+
+        // Bulma + TÜKETME tek parça olarak ortak depodan yapılır (SingleUseTokenStore): ikinci
+        // kullanım, süre aşımı ve eşzamanlılık kararlarının tamamı orada, tek yerde.
+        var sahipId = await SingleUseTokenStore.TryConsumeAsync(fileStore, SsoTokenStorePath, token, cancellationToken);
+
+        if (sahipId is not { } tokenUserId)
+        {
+            // Geçersiz / süresi geçmiş / İKİNCİ KEZ kullanılmış. Üçü de aynı yanıtı alır; ayırmak
+            // yalnız deneme yapana bilgi verirdi.
+            await auditService.WriteAsync(
+                "auth.sso_link.rejected",
+                "auth",
+                "A one-time sign-in link was rejected: unknown, expired or already used.",
+                null,
+                ipAddress,
+                cancellationToken);
+            return null;
+        }
+
+        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == tokenUserId, cancellationToken);
+        if (user is null || !user.IsActive)
+        {
+            // Bağlantı üretildikten SONRA hesap kapatılmış olabilir; belirteç o kararı geçersiz kılmamalı.
+            await auditService.WriteAsync(
+                "auth.sso_link.rejected",
+                "auth",
+                "A one-time sign-in link was rejected: the account is deleted or inactive.",
+                user?.Id,
+                ipAddress,
+                cancellationToken);
+            return null;
+        }
+
+        user.LastLoginAtUtc = now;
+        user.UpdatedAtUtc = now;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        // İKİ ADIMLI DOĞRULAMA BU YOLDA SORULMAZ ve bu bilinçli bir karardır: belirteci üretebilen
+        // kimlik zaten yönetici (ya da müşterinin bayisi) yetkisindedir ve aynı hesaba kimliğe bürünme
+        // ya da parola belirleme ile de ulaşabilir. İkinci adımı burada sormak, hiçbir saldırganı
+        // durdurmayıp yalnız meşru "Panele git" düğmesini bozardı. İz denetim kaydında kalır.
+        await auditService.WriteAsync(
+            "auth.sso_link.redeemed",
+            "auth",
+            $"One-time sign-in link redeemed for '{user.UserName}'.",
+            user.Id,
+            ipAddress,
+            cancellationToken);
+
+        return MapCurrentUser(user);
     }
 
     private async Task<IReadOnlyCollection<string>> GenerateAndStoreRecoveryCodesAsync(Guid userId, CancellationToken cancellationToken)
@@ -460,31 +649,12 @@ public sealed class AuthService(
             return;
         }
 
-        var token = GenerateResetToken();
-        var now = DateTime.UtcNow;
-
-        // TEK DOSYA, TÜM KULLANICILAR ORTAK. Kilitsiz oku-değiştir-yaz burada iki yönde de
-        // bozuluyordu: A talep ederken B sıfırlamasını tamamlarsa ya A'nın yeni token'ı kaybolur
-        // (link hiç çalışmaz) ya da B'nin TÜKETİLMİŞ token'ı geri dirilir ve süresi dolana kadar
-        // yeniden kullanılabilir kalır.
-        await fileStore.UpdateAsync(
-            PasswordResetStorePath,
-            new PasswordResetStore(),
-            mevcut =>
-            {
-                // Süresi dolmuş kayıtları ve aynı kullanıcının eski taleplerini temizle.
-                var kalan = mevcut.Entries
-                    .Where(entry => entry.ExpiresUtc > now && entry.UserId != user.Id)
-                    .ToList();
-                kalan.Add(new PasswordResetEntry
-                {
-                    UserId = user.Id,
-                    TokenHash = HashToken(token),
-                    ExpiresUtc = now.Add(PasswordResetLifetime)
-                });
-                return new PasswordResetStore { Entries = kalan };
-            },
-            cancellationToken);
+        // TEK DOSYA, TÜM KULLANICILAR ORTAK ve kilitsiz oku-değiştir-yaz iki yönde de bozulurdu
+        // (A'nın yeni token'ı kaybolur ya da B'nin TÜKETİLMİŞ token'ı geri dirilir). Kilit,
+        // özetleme ve eski kaydın temizlenmesi ortak depoda (SingleUseTokenStore) — giriş
+        // bağlantısıyla aynı yerde, tek uygulama.
+        var (token, _) = await SingleUseTokenStore.IssueAsync(
+            fileStore, PasswordResetStorePath, user.Id, PasswordResetLifetime, cancellationToken);
 
         await TrySendResetEmailAsync(user, token, cancellationToken);
         await auditService.WriteAsync("auth.password_reset.requested", "auth", $"Password reset requested for '{user.UserName}'.", user.Id, null, cancellationToken);
@@ -492,40 +662,22 @@ public sealed class AuthService(
 
     public async Task ResetPasswordAsync(string token, string newPassword, CancellationToken cancellationToken = default)
     {
-        var normalizedToken = (token ?? string.Empty).Trim();
-        if (normalizedToken.Length == 0)
-        {
-            throw new AppException("auth.reset_token_invalid", 400, 400);
-        }
-
-        var hash = HashToken(normalizedToken);
         var now = DateTime.UtcNow;
 
         // Token'ı BULMAK ve TÜKETMEK tek parça olmalı; ayrı yapılırsa aynı link iki kez
         // kullanılabilir. Kullanıcı bulunamazsa aşağıda hata atılır — token yine de tüketilmiştir,
-        // bu bilinçli: geçersiz bir token'ı ayakta tutmanın bir yararı yok.
-        PasswordResetEntry? entry = null;
-        await fileStore.UpdateAsync(
-            PasswordResetStorePath,
-            new PasswordResetStore(),
-            mevcut =>
-            {
-                entry = mevcut.Entries.FirstOrDefault(item =>
-                    string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase) && item.ExpiresUtc > now);
-
-                return entry is null
-                    ? mevcut
-                    : new PasswordResetStore { Entries = mevcut.Entries.Where(item => item.UserId != entry.UserId).ToList() };
-            },
-            cancellationToken);
-
-        if (entry is null)
+        // bu bilinçli: geçersiz bir token'ı ayakta tutmanın bir yararı yok. Uygulaması ortak depoda.
+        var sahipId = await SingleUseTokenStore.TryConsumeAsync(fileStore, PasswordResetStorePath, token, cancellationToken);
+        if (sahipId is not { } tokenUserId)
         {
             throw new AppException("auth.reset_token_invalid", 400, 400);
         }
 
-        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == entry.UserId, cancellationToken)
+        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == tokenUserId, cancellationToken)
             ?? throw new AppException("auth.reset_token_invalid", 400, 400);
+
+        // Uzunluk kuralı TEK kaynaktan (veri açıklaması yalnız MVC yolunda çalışır).
+        PasswordPolicy.Ensure(newPassword);
 
         user.PasswordHash = passwordHasher.HashPassword(user, newPassword);
         user.FailedLoginCount = 0;
@@ -561,9 +713,9 @@ public sealed class AuthService(
             var preferences = await preferencesService.GetAsync(cancellationToken);
             var securePath = await securityService.GetSecureEntryPathAsync(cancellationToken);
             var panelName = string.IsNullOrWhiteSpace(preferences.PanelName) ? "AdaPanel" : preferences.PanelName;
-            var host = string.IsNullOrWhiteSpace(preferences.ServerAddress) ? "<sunucu-adresi>" : preferences.ServerAddress.Trim();
-            var portPart = preferences.PreferredHttpsPort == 443 ? string.Empty : $":{preferences.PreferredHttpsPort}";
-            var resetUrl = $"https://{host}{portPart}/{securePath}?resetToken={Uri.EscapeDataString(token)}";
+            // Adres kurgusu TEK yerde (PanelAddress): aynı üç satır hoş geldin e-postasında da vardı.
+            var resetUrl = PanelAddress.BuildEntryUrl(preferences.ServerAddress, preferences.PreferredHttpsPort, securePath)
+                + $"?resetToken={Uri.EscapeDataString(token)}";
             var isTurkish = user.PreferredLanguage.StartsWith("tr", StringComparison.OrdinalIgnoreCase);
 
             var subject = isTurkish ? $"{panelName} parola sıfırlama" : $"{panelName} password reset";
@@ -593,24 +745,8 @@ public sealed class AuthService(
         }
     }
 
-    private static string GenerateResetToken() =>
-        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
-            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
-
-    private static string HashToken(string token) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token.Trim()))).ToLowerInvariant();
-
-    private sealed class PasswordResetStore
-    {
-        public List<PasswordResetEntry> Entries { get; set; } = [];
-    }
-
-    private sealed class PasswordResetEntry
-    {
-        public Guid UserId { get; set; }
-        public string TokenHash { get; set; } = string.Empty;
-        public DateTime ExpiresUtc { get; set; }
-    }
+    // Belirteç üretimi, özetleme ve depo biçimi SingleUseTokenStore'a taşındı: parola sıfırlama ile
+    // tek tıkla giriş bağlantısı aynı disiplini paylaşıyor, iki kopya bırakılmadı.
 
     private static string RecoveryStorePath(Guid userId) => $"config/2fa/{userId:N}.json";
 

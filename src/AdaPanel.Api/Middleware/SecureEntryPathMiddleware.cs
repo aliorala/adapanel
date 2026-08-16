@@ -149,6 +149,24 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
             return false;
         }
 
+        // TEK KULLANIMLIK GİRİŞ BAĞLANTISI (SSO) da aynı sınıfa girer: müşteri faturalama
+        // sisteminden gelen bir adrese TIKLAR, yani isteği tarayıcı gezinerek yapar ve özel bir
+        // başlık ekleyemez. Kural buraya da uygulansaydı "Panele git" düğmesi ham bir 404 JSON'ı
+        // gösterirdi — dbtools'ta yaşanan canlı olayın aynısı.
+        //
+        // Koruma kaybolmuyor: kimliği belirtecin KENDİSİ taşıyor (256 bit, TEK KULLANIMLIK,
+        // dakikalık ömür, sunucuda özeti saklanıyor) ve IP kısıtlaması bu metottan ÖNCE zaten
+        // uygulandı. Gizli giriş yolu başlığı programatik API taramasına karşı bir önlemdir;
+        // tarayıcının gezdiği bir yüzeyde işlevi yoktur.
+        //
+        // Muafiyet DAR: belirteci ÜRETEN uç (/api/v1/auth/sso-link/{id}) başka bir segmenttir ve
+        // kapsam dışında kalır — StartsWithSegments segment sınırına bakar, "sso-link" ile "sso"
+        // eşleşmez.
+        if (path.StartsWithSegments("/api/v1/auth/sso", out _))
+        {
+            return false;
+        }
+
         // Anonim uclar (health, setup) daha yukarida IsAlwaysPublicPath ile ayrildi; buraya gelen
         // her /api istegi kimlige bagli veri tasir ve basligi ister.
         return path.StartsWithSegments("/api", out _);

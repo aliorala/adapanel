@@ -4,6 +4,8 @@ using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Security;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -75,6 +77,10 @@ public sealed class UserManagementService(
 
     public async Task<UserSummaryDto> CreateUserAsync(CreateUserRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
+        // Parola kuralı TEK kaynaktan. İstek nesnesindeki veri açıklaması yalnız MVC yolunda çalışır;
+        // bu servis MCP araçlarından ve iç akışlardan da çağrılıyor (bkz. PasswordPolicy).
+        PasswordPolicy.Ensure(request.Password);
+
         var normalizedUserName = request.UserName.Trim();
         var normalizedEmail = request.Email.Trim();
         var normalizedUserNameLookup = normalizedUserName.ToLowerInvariant();
@@ -181,7 +187,8 @@ public sealed class UserManagementService(
             var preferences = await preferencesService.GetAsync(cancellationToken);
             var securePath = await securityService.GetSecureEntryPathAsync(cancellationToken);
             var panelName = string.IsNullOrWhiteSpace(preferences.PanelName) ? "AdaPanel" : preferences.PanelName;
-            var loginUrl = BuildLoginUrl(preferences.ServerAddress, preferences.PreferredHttpsPort, securePath);
+            // Adres kurgusu TEK yerde (PanelAddress): aynı satırlar parola sıfırlama e-postasında da vardı.
+            var loginUrl = PanelAddress.BuildEntryUrl(preferences.ServerAddress, preferences.PreferredHttpsPort, securePath);
             var isTurkish = user.PreferredLanguage.StartsWith("tr", StringComparison.OrdinalIgnoreCase);
 
             var subject = isTurkish
@@ -220,20 +227,13 @@ public sealed class UserManagementService(
         }
     }
 
-    private static string BuildLoginUrl(string serverAddress, int httpsPort, string securePath)
-    {
-        var host = string.IsNullOrWhiteSpace(serverAddress) ? "<sunucu-adresi>" : serverAddress.Trim();
-        var portPart = httpsPort == 443 ? string.Empty : $":{httpsPort}";
-        return $"https://{host}{portPart}/{securePath}";
-    }
-
     public async Task<UserSummaryDto> UpdateUserAsync(Guid userId, UpdateUserRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
-        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
-        if (user is null)
-        {
-            throw new InvalidOperationException("users.not_found");
-        }
+        // Kapsam denetimi TEK kaynaktan (ManagedUserGuard): bayi yalnız KENDI müşterisini güncelleyebilir.
+        var erisim = await ManagedUserGuard.EnsureManagedAsync(
+            dbContext, customerScopeService, actorUserId, userId, cancellationToken);
+        var user = erisim.Target;
+        var actorIsReseller = erisim.ActorIsReseller;
 
         var normalizedEmail = request.Email.Trim();
         var normalizedEmailLookup = normalizedEmail.ToLowerInvariant();
@@ -241,18 +241,6 @@ public sealed class UserManagementService(
             await dbContext.Users.AnyAsync(candidate => candidate.Email.ToLower() == normalizedEmailLookup && candidate.Id != userId, cancellationToken))
         {
             throw new InvalidOperationException("users.duplicate_email");
-        }
-
-        // Bayi (Reseller) yalnızca KENDI müşterisini güncelleyebilir; rol/sahip değiştiremez.
-        var actor = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == actorUserId, cancellationToken);
-        var actorIsReseller = actor?.Role == UserRole.Reseller;
-        if (actorIsReseller)
-        {
-            var currentOwner = await customerScopeService.GetOwnerAsync(userId, cancellationToken);
-            if (user.Role != UserRole.Customer || currentOwner != actorUserId)
-            {
-                throw new AppException("users.forbidden", 403, 403);
-            }
         }
 
         var newRole = actorIsReseller ? UserRole.Customer : Enum.Parse<UserRole>(request.Role, ignoreCase: true);
@@ -426,19 +414,10 @@ public sealed class UserManagementService(
 
     public async Task<UserSummaryDto> UnlockUserAsync(Guid userId, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
-        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken)
-            ?? throw new InvalidOperationException("users.not_found");
-
-        // Bayi yalnız KENDİ müşterisinin kilidini açabilir (silme/güncellemeyle aynı kapsam kuralı).
-        var actor = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == actorUserId, cancellationToken);
-        if (actor?.Role == UserRole.Reseller)
-        {
-            var currentOwner = await customerScopeService.GetOwnerAsync(userId, cancellationToken);
-            if (user.Role != UserRole.Customer || currentOwner != actorUserId)
-            {
-                throw new AppException("users.forbidden", 403, 403);
-            }
-        }
+        // Bayi yalnız KENDİ müşterisinin kilidini açabilir (silme/güncellemeyle AYNI kapsam kuralı,
+        // tek kaynak: ManagedUserGuard).
+        var user = (await ManagedUserGuard.EnsureManagedAsync(
+            dbContext, customerScopeService, actorUserId, userId, cancellationToken)).Target;
 
         user.LockedUntilUtc = null;
         user.FailedLoginCount = 0;
@@ -482,24 +461,21 @@ public sealed class UserManagementService(
 
     public async Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default)
     {
-        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken)
-            ?? throw new InvalidOperationException("users.not_found");
-
+        // Kendini silme denetimi kapsam denetiminden ÖNCE: bayi kendi hesabını silmeye çalıştığında
+        // "yetkiniz yok" değil, gerçek sebebi ("kendinizi silemezsiniz") görsün.
         if (userId == actorUserId)
         {
             throw new InvalidOperationException("users.cannot_delete_self");
         }
 
-        // Bayi yalnız KENDİ müşterisini silebilir; yıkıcı mod (site silme) admin'e özeldir.
-        var actor = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == actorUserId, cancellationToken);
-        if (actor?.Role == UserRole.Reseller)
-        {
-            var currentOwner = await customerScopeService.GetOwnerAsync(userId, cancellationToken);
-            if (user.Role != UserRole.Customer || currentOwner != actorUserId)
-            {
-                throw new AppException("users.forbidden", 403, 403);
-            }
+        // Bayi yalnız KENDİ müşterisini silebilir (tek kaynak: ManagedUserGuard); yıkıcı mod
+        // (site silme) admin'e özeldir.
+        var erisim = await ManagedUserGuard.EnsureManagedAsync(
+            dbContext, customerScopeService, actorUserId, userId, cancellationToken);
+        var user = erisim.Target;
 
+        if (erisim.ActorIsReseller)
+        {
             removeSites = false;
         }
 
@@ -663,6 +639,11 @@ public sealed class UserManagementService(
     {
         var parent = await EnsureTopLevelCustomerAsync(parentUserId, cancellationToken);
 
+        // ÖLÇÜLEN ASİMETRİ KAPATILDI: burada uzunluk HİÇ denetlenmiyordu (yalnız UpdateSubUserAsync
+        // denetliyordu), yani abonelik altı ek kullanıcı tek karakterlik parolayla AÇILABİLİYORDU.
+        // Kural artık tek kaynakta (PasswordPolicy) ve parolayı yazan her yol oradan geçiyor.
+        PasswordPolicy.Ensure(request.Password);
+
         var normalizedUserName = request.UserName.Trim();
         var normalizedEmail = request.Email.Trim();
         var userNameLookup = normalizedUserName.ToLowerInvariant();
@@ -721,10 +702,8 @@ public sealed class UserManagementService(
 
         if (!string.IsNullOrWhiteSpace(request.Password))
         {
-            if (request.Password.Length < 12)
-            {
-                throw new InvalidOperationException("users.password_too_short");
-            }
+            // Aynı kural, aynı kaynak (PasswordPolicy) — sayının kopyası burada duruyordu.
+            PasswordPolicy.Ensure(request.Password);
 
             user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
 

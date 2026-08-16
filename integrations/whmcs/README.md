@@ -4,8 +4,8 @@ WHMCS'te satılan bir barındırma ürününü AdaPanel'e bağlar: sipariş öde
 hesabı açılır, ödeme gecikince askıya alınır, iptal edilince silinir.
 
 > Bu belgedeki her uç, panelin C# denetleyicileri **okunarak** doğrulandı. Doğrulanamayan hiçbir
-> davranış yazılmadı; panelde karşılığı olmayan iki WHMCS işlevi "Bilinen sınırlar" başlığında
-> açıkça listelendi.
+> davranış yazılmadı. Bir süre "panelde karşılığı yok" diye işaretli duran iki işlev
+> (`ChangePassword` ve `ServiceSingleSignOn`) artık **çalışıyor**: panele karşılıkları eklendi.
 
 ---
 
@@ -119,6 +119,8 @@ yazmak sessizce etkisiz kalırdı.
 | `ChangePackage` | Plan varsa `PUT /api/v1/subscriptions/{id}/plan`; yoksa plan bağını kaldırıp `PUT /api/v1/users/{id}` ile limitleri yazar |
 | `TestConnection` | Giriş + `GET /api/v1/users` + `GET /api/v1/service-plans` |
 | `AdminServicesTabFields` | `GET /api/v1/subscriptions/{id}` (salt okunur kullanım özeti) |
+| `ChangePassword` | `POST /api/v1/auth/password/set/{id}` — gövde `{ "newPassword": "…" }` |
+| `ServiceSingleSignOn` | `POST /api/v1/auth/sso-link/{id}` → `data.url` adresine yönlendirir |
 
 ### Hesap açarken site kurulmaz — bilerek
 
@@ -141,63 +143,65 @@ müşteri panele girip durumunu görsün, kotasını okusun, ödemesini yapıp �
 
 ---
 
-## 5. Bilinen sınırlar (panelde uç yok — uydurulmadı)
+## 5. Parola belirleme ve tek tıkla giriş
 
-### 5.1 `ChangePassword` çalışmıyor
+### 5.1 `ChangePassword` — `POST /api/v1/auth/password/set/{userId}`
 
-Ölçüldü:
+Gövde: `{ "newPassword": "…" }` (en az 12 karakter — `PasswordPolicy.MinimumLength`).
+Yetki: **Administrator** herkes için; **Reseller** yalnız **kendi** müşterisi için.
 
-* `PUT /api/v1/users/{id}` gövdesi (`UpdateUserRequest`) **parola alanı taşımaz**.
-* `POST /api/v1/auth/change-password` **mevcut parolayı** ister (`ChangePasswordRequest.CurrentPassword`,
-  `[Required]`) ve bilerek yalnızca çerez şemasını kabul eder — API anahtarıyla parola
-  değiştirilememesi kasıtlı bir güvenlik kararıdır (`AuthController` belgesi).
-* `POST /api/v1/auth/password/forgot` parola **belirlemez**, e-posta gönderir.
+Bu uç, kullanıcının kendi parolasını değiştirdiği `change-password` ucundan ayrıdır: **mevcut
+parolayı sormaz** (faturalama sistemi zaten bilmiyor), yetkiyi çağıran hesabın rolünden ve
+kapsamından alır.
 
-Modül bu yüzden açıkça başarısız olur. Sessizce `success` dönmek en kötü seçenek olurdu: WHMCS
-parolanın değiştiğini yazar, müşteri eski parolayla kalır ve kimse fark etmez.
+Bilinmesi gereken yan etkiler:
 
-**Panele eklenmesi gereken uç:**
+* **Hedefin açık panel oturumları düşer.** Oturum çerezinin kimlik damgası parola karmasından
+  türetilir (`CookieSessionValidator`); karma değişince eski çerez en geç bir dakika içinde
+  reddedilir.
+* **Hedefin API anahtarları iptal edilir** (`RevokeAllForUserAsync`). Anahtar paroladan bağımsız bir
+  kimlik bilgisidir; düşürülmezse parolası sıfırlanan kişi MCP/REST üzerinden erişimini sürdürürdü.
+  Panel kaç anahtarın düştüğünü `data.revokedApiTokens` ile döner.
+* **Hesap kilidi açılır** (hatalı giriş sayacı sıfırlanır).
+* Denetim kaydına `auth.password_set_by_admin` yazılır — **parolanın kendisi kayda geçmez**.
 
-```
-POST /api/v1/users/{userId}/password        [Authorize(Roles = "Administrator,Reseller")]
-Body: { "newPassword": "..." }              (en az 12 karakter)
-```
+Hesabın **kendi** kimliğiyle bu uç kullanılamaz (403 `users.forbidden`): mevcut parolayı sormayan
+bir uç kendi hesabına da açık olsaydı, çalınmış bir çerez parolayı hiç bilmeden hesabı kalıcı olarak
+devralabilirdi. Kendi parolanız için `POST /api/v1/auth/change-password`.
 
-Not: aynı akış zaten alt kullanıcılar için var — `UserManagementService.UpdateSubUserAsync` parolayı
-değiştirir **ve** `apiTokenService.RevokeAllForUserAsync` ile o kullanıcının API anahtarlarını
-düşürür. Yeni uç aynı diskini izlemeli.
+### 5.2 `ServiceSingleSignOn` — `POST /api/v1/auth/sso-link/{userId}`
 
-### 5.2 `ServiceSingleSignOn` çalışmıyor
+Yanıt: `data.url` + `data.expiresAtUtc`. Modül müşterinin tarayıcısını `data.url` adresine
+yönlendirir; adres belirteci oturum çereziyle takas eder ve panele geçirir.
 
-`POST /api/v1/auth/impersonate/{id}` yöneticinin **kendi tarayıcı oturumunu** hedef kullanıcıya
-çevirir: yanıtta `Set-Cookie` döner. WHMCS bu çağrıyı sunucudan sunucuya yaptığı için çerez WHMCS
-sunucusunda kalır; müşterinin tarayıcısına taşınamaz ve zaten başka bir alan adı için geçerli
-olmaz (`SameSite=Strict`, `HttpOnly`).
+* Belirteç **tek kullanımlıktır** ve ömrü **dakikalarla** ölçülür. Sebebi: belirteç adreste gittiği
+  için panel istek günlüğüne, önündeki ters vekilin günlüğüne ve müşterinin tarayıcı geçmişine
+  **düşer**. Bunu ortadan kaldıramayız (tarayıcı gezintisi özel başlık gönderemez), ama
+  değersizleştirebiliriz: günlüğü sonradan okuyan biri çoktan tüketilmiş, süresi geçmiş bir dize
+  bulur. **Bağlantıyı saklamayın, kaydetmeyin, e-postayla göndermeyin.**
+* Belirteç sunucuda **yalnız SHA-256 özetiyle** saklanır (`config/sso-tokens.json`).
+* Yeni bağlantı üretmek eskisini geçersiz kılar.
+* **Askıdaki hizmet için de bağlantı üretilir.** Panelde askı girişi değil siteleri kapatır; müşteri
+  panele girip neden askıda olduğunu görebilmeli. Tam da ödemesi geciken müşteri için "Panele git"
+  düğmesini ölü bırakmak, askının amacına ters düşerdi.
+* **Pasif hesap için üretilmez** (`auth.user_inactive`): normal giriş yolu pasif kullanıcıyı zaten
+  reddediyor, burada üretmek hesabı kapatmanın etrafından dolaşan ikinci bir kapı olurdu.
+* Kullanım ucu (`GET /api/v1/auth/sso`) gizli giriş yolu başlığından **muaftır** — onu tarayıcı
+  gezer ve özel başlık ekleyemez. IP kısıtlaması bu uçta da uygulanır.
+* Denetim kaydı: `auth.sso_link.created`, `auth.sso_link.redeemed`, `auth.sso_link.rejected`.
+  **Belirteç kayda geçmez.**
 
-**Panele eklenmesi gereken uç:** tek kullanımlık, kısa ömürlü bir giriş belirteci üreten bir uç —
-panelde bunun kanıtlanmış bir örneği zaten var: `WordPressController.CreateLoginLinkAsync`
-("tek kullanımlık ve kısa ömürlü sihirli bağlantı") ve `WebDbController` signon URL'leri.
+### 5.3 Modül neden kullanıcı adı/parola ile giriş yapıyor?
 
-```
-POST /api/v1/auth/sso-link/{userId}         [Authorize(Roles = "Administrator")]
--> { "url": "https://panel:8888/<gizli-yol>/sso?token=<tek-kullanimlik>" }
-```
+Panelin `Bearer adap_…` API anahtarı artık `/api/v1/**` uçlarında **çalışıyor**
+(`PanelAuthentication` yönlendirici şeması), ama **kimlik bilgisi yöneten uçlar bilerek dışarıda**:
+`AuthController` ve `ApiTokensController` sınıf düzeyinde **çerez şemasına** sabitlenmiştir. Sebep
+yetki yükseltmesi — bir anahtarla başka bir yöneticinin parolası belirlenebilseydi ya da yeni
+anahtar basılabilseydi, anahtarın kısıtı kâğıt üzerinde kalırdı.
 
-### 5.3 API anahtarı (`Bearer adap_…`) REST uçlarında çalışmıyor
-
-Bu, modülün neden kullanıcı adı/parola ile giriş yaptığının sebebidir ve denetimde bulunan gerçek
-bir uyumsuzluktur:
-
-* `Program.cs` `AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)` ile
-  **varsayılan şemayı çerez** yapıyor.
-* `PanelTokenAuthenticationHandler` (Bearer) kayıtlı, ama **yalnızca** `/mcp` uçuna bağlanmış:
-  `app.MapMcp("/mcp").RequireAuthorization(new AuthorizeAttribute { AuthenticationSchemes = PanelToken })`.
-* `/api/v1/**` denetleyicilerindeki `[Authorize]` nitelikleri şema belirtmiyor → varsayılan (çerez)
-  şema kullanılır → `Authorization: Bearer …` başlığı **hiç okunmaz**.
-
-Panelde `AddAuthorization` içinde iki şemayı da kabul eden bir varsayılan politika tanımlanırsa
-(ya da `POST /api-tokens` ile üretilen anahtar denetleyicilerde kabul edilirse) modül parolasız
-çalışabilir ve aşağıdaki oran sınırı sorunu da ortadan kalkar.
+Yukarıdaki iki işlev tam olarak o uçları kullandığı için modül çerez oturumu açar. Anahtar
+kullanmak isterseniz sağlama/askı/iptal işlevleri anahtarla da çalışır, ama parola belirleme ve tek
+tıkla giriş için yönetici hesabı gerekir.
 
 ### 5.4 Giriş oranı sınırı
 
@@ -219,6 +223,9 @@ işlemi tekrar denemek yeterlidir.
 | `Panel hesabinda iki adimli dogrulama acik` | Provisioning hesabında 2FA'yı kapatın |
 | `Bu islem icin panel hesabinin yetkisi yok` | Hesap `Administrator` rolünde değil |
 | `AdaPanel en az 12 karakterlik parola ister` | WHMCS'in otomatik parola uzunluğunu 12+ yapın |
+| `Bu kullanici uzerinde yetki yok…` | Bayi hesabıyla **başka** bir bayinin müşterisine işlem yapılıyor |
+| `Panel hesabi PASIF…` | Tek tıkla giriş pasif hesap için üretilmez; önce hizmeti aktifleştirin |
+| Giriş bağlantısı "geçersiz/süresi dolmuş" sayfası açıyor | Bağlantı tek kullanımlık ve dakikalık ömürlü; kaydedip sonra açmayın, düğmeye yeniden basın |
 | `Panelde "…" adli kullanici bulunamadi` | Panel hesabı elle silinmiş; WHMCS hizmetini yeniden oluşturun |
 
 Modül panel kullanıcısını **kullanıcı adıyla** bulur (`GET /api/v1/users` içinde arayarak); WHMCS

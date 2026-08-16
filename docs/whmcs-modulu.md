@@ -17,61 +17,78 @@ edilince siler.
 | `TerminateAccount` | `DELETE /api/v1/users/{id}?removeSites=` | Çalışıyor |
 | `ChangePackage` | `PUT /api/v1/subscriptions/{id}/plan` ya da `PUT /api/v1/users/{id}` | Çalışıyor |
 | `TestConnection` | Giriş + `GET /api/v1/users` + `GET /api/v1/service-plans` | Çalışıyor |
-| `ChangePassword` | **Uç yok** | Çalışmıyor — açık hata döner |
-| `ServiceSingleSignOn` | **Uç yok** | Çalışmıyor — açık hata döner |
+| `ChangePassword` | `POST /api/v1/auth/password/set/{id}` | Çalışıyor |
+| `ServiceSingleSignOn` | `POST /api/v1/auth/sso-link/{id}` | Çalışıyor |
 
-## Panele eklenmesi gereken iki uç
+## Sonradan eklenen iki uç
 
-Modülün eksik iki işlevi, panel tarafında karşılığı olmadığı için **uydurulmadı**. Eklenmeleri
-hâlinde modül tarafında yapılacak değişiklik küçüktür.
+Bu iki işlev bir süre "panelde karşılığı yok" diyen açık bir hata döndürüyordu (uydurulmamıştı).
+Uçlar eklendi; ikisi de `AuthController` içinde, yani sınıf düzeyinde **çerez şemasına** sabitli.
 
-### 1. Yönetici tarafından parola belirleme
-
-Bugün panelde bir yöneticinin **başka** bir kullanıcının parolasını belirlediği uç yoktur:
-
-* `PUT /api/v1/users/{id}` gövdesi (`UpdateUserRequest`) parola alanı **taşımaz**.
-* `POST /api/v1/auth/change-password` **mevcut** parolayı ister ve bilerek yalnız çerez şemasını
-  kabul eder (API anahtarıyla parola değiştirilememesi kasıtlı bir güvenlik kararıdır).
-* `POST /api/v1/auth/password/forgot` parola **belirlemez**, e-posta gönderir.
-
-Önerilen uç:
+### 1. Yönetici/bayi tarafından parola belirleme
 
 ```
-POST /api/v1/users/{userId}/password     [Authorize(Roles = "Administrator,Reseller")]
-Body: { "newPassword": "..." }           (en az 12 karakter)
+POST /api/v1/auth/password/set/{userId}   [Authorize(Roles = "Administrator,Reseller")]
+Body: { "newPassword": "..." }            (en az 12 karakter)
+->   { "revokedApiTokens": <sayı> }
 ```
 
-Aynı akış zaten alt kullanıcılar için var: `UserManagementService.UpdateSubUserAsync` parolayı
-değiştirir **ve** `apiTokenService.RevokeAllForUserAsync` ile o kullanıcının API anahtarlarını
-düşürür. Yeni uç aynı disiplini izlemelidir.
+* **Yetki:** yönetici herkes için; bayi **yalnız kendi** müşterisi için; müşteri hiç kimse için.
+  Kural tek yerde: `ManagedUserGuard` (aynı guard `UpdateUser`, `UnlockUser`, `DeleteUser` ve
+  SSO bağlantısı tarafından da kullanılıyor — beş kopya yerine tek uygulama).
+* **Kendi hesabınız için kullanılamaz** (403). Bu uç mevcut parolayı sormaz; kendi hesabına da açık
+  olsaydı çalınmış bir çerez, parolayı hiç bilmeden hesabı kalıcı olarak devralabilir ve
+  `change-password` üzerindeki mevcut-parola koşulu anlamsızlaşırdı.
+* **Parola politikası tek kaynaktan:** `PasswordPolicy.Ensure` (min 12). Aynı kaynak artık
+  `CreateUserAsync`, `CreateSubUserAsync`, `UpdateSubUserAsync`, `ChangePasswordAsync` ve
+  `ResetPasswordAsync` yollarında da çağrılıyor. **Ölçülen asimetri kapandı:** `CreateSubUserAsync`
+  uzunluğu HİÇ denetlemiyordu, yani abonelik altı ek kullanıcı tek karakterlik parolayla
+  açılabiliyordu.
+* **Erişim gerçekten kesilir:** açık çerez oturumları düşer (kimlik damgası parola karmasından
+  türer — `CookieSessionValidator`, ikinci bir mekanizma yazılmadı) ve API anahtarları iptal edilir.
+* Denetim kaydı `auth.password_set_by_admin`; **parola kayda yazılmaz**.
 
 ### 2. Tek kullanımlık giriş bağlantısı (SSO)
 
-`POST /api/v1/auth/impersonate/{id}` yöneticinin **kendi tarayıcı oturumunu** hedef kullanıcıya
-çevirir (yanıtta `Set-Cookie`). WHMCS bu çağrıyı sunucudan sunucuya yaptığı için çerez WHMCS
-sunucusunda kalır; müşterinin tarayıcısına taşınamaz.
-
-Önerilen uç:
-
 ```
-POST /api/v1/auth/sso-link/{userId}      [Authorize(Roles = "Administrator")]
--> { "url": "https://panel:8890/<gizli-yol>/sso?token=<tek-kullanimlik>" }
+POST /api/v1/auth/sso-link/{userId}       [Authorize(Roles = "Administrator,Reseller")]
+->   { "url": "https://<panel>/api/v1/auth/sso?token=…", "expiresAtUtc": "…" }
+
+GET  /api/v1/auth/sso?token=…             [AllowAnonymous]  ← müşterinin TARAYICISI gezer
 ```
 
-Panelde bunun kanıtlanmış örnekleri zaten var: `WordPressController.CreateLoginLinkAsync`
-(tek kullanımlık, kısa ömürlü sihirli bağlantı) ve `WebDbController` signon URL'leri.
+* Belirteç **tek kullanımlık**, **2 dakika** ömürlü, hedef kullanıcıya bağlı ve sunucuda yalnız
+  **SHA-256 özetiyle** saklanıyor (`config/sso-tokens.json`). Yeni bağlantı eskisini geçersiz kılar.
+* **Neden bu kadar kısa ömürlü:** belirteç adreste gittiği için panel istek günlüğüne, önündeki ters
+  vekilin günlüğüne ve müşterinin tarayıcı geçmişine **düşer**. Tarayıcı gezintisi özel başlık
+  gönderemediği için bunu ortadan kaldıramayız; tek savunma belirteci değersizleştirmek — günlüğü
+  sonradan okuyan biri çoktan tüketilmiş ve süresi geçmiş bir dize bulur. Panelin küresel
+  `Referrer-Policy: same-origin` başlığı adresin üçüncü taraflara sızmasını da engeller.
+* **Kripto icat edilmedi:** üretim/depolama/tüketim disiplininin tamamı parola sıfırlama
+  belirteciyle **ortak** bir yerden geliyor (`SingleUseTokenStore`); bulma ve tüketme dosya kilidi
+  altında tek parça yapılır, yoksa eşzamanlı iki istek aynı belirteci iki kez kullanabilirdi.
+* **Askıdaki abonelik için bağlantı ÜRETİLİR.** Panelde askı girişi değil siteleri kapatır
+  (`ISubscriptionEnforcementService`): müşteri panele girip neden askıda olduğunu, kotasını ve
+  faturasını görebilmeli — çözüm orada. Tam da ödemesi geciken müşteri için "Panele git" düğmesini
+  ölü bırakmak askının amacına ters düşerdi. **Pasif hesap için üretilmez**
+  (`auth.user_inactive`): normal giriş yolu pasif kullanıcıyı zaten reddediyor.
+* **İki adımlı doğrulama bu yolda sorulmaz.** Belirteci üretebilen kimlik zaten yönetici/bayi
+  yetkisindedir ve aynı hesaba kimliğe bürünme ya da parola belirleme ile de ulaşabilir; ikinci
+  adımı burada sormak hiçbir saldırganı durdurmayıp yalnız meşru düğmeyi bozardı.
+* **Kullanım ucu JSON değil SAYFA döner** ve 302 yerine ara sayfa kullanır: panelin oturum çerezi
+  `SameSite=Strict`, faturalama sisteminden gelen gezinti ise çapraz sitedir. Doğrudan 302 ile
+  panele atsaydık tarayıcı taze çerezi bir sonraki isteğe eklemeyebilir ve müşteri giriş ekranına
+  düşerdi. Ara sayfa panelin kendi kaynağında durur; oradan yapılan gezinti aynı sitedir.
+* Uç, gizli giriş yolu başlığından **muaftır** (`SecureEntryPathMiddleware`) — tarayıcı gezintisi
+  özel başlık ekleyemez; aynı gerekçe `/api/v1/dbtools` için de yazılı. IP kısıtlaması kaldırılmadı.
+* Denetim kaydı: `auth.sso_link.created` / `.redeemed` / `.rejected`; **belirteç kayda yazılmaz**.
 
-## Denetimde çıkan uyumsuzluk: API anahtarı REST uçlarında geçmiyor
+## Modül neden hâlâ kullanıcı adı/parola ile giriş yapıyor?
 
-Modül, kullanıcı adı/parola ile **çerez** oturumu açar — API anahtarı kullanamaz. Sebep:
+API anahtarı (`Bearer adap_…`) artık `/api/v1/**` uçlarında **çalışıyor** (`PanelAuthentication`
+yönlendirici şeması). Ama **kimlik bilgisi yöneten uçlar bilerek dışarıda**: `AuthController` ve
+`ApiTokensController` sınıf düzeyinde çerez şemasına sabitlenmiştir — aksi hâlde salt-okur olmayan
+bir anahtar başka bir yöneticinin parolasını belirleyip tam yetkili bir oturum açabilir, yani
+anahtarın kısıtı kâğıt üzerinde kalırdı.
 
-* `Program.cs` `AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)` ile varsayılan
-  şemayı çerez yapıyor.
-* `PanelTokenAuthenticationHandler` (Bearer `adap_…`) kayıtlı, ama **yalnızca** `/mcp` ucuna
-  bağlanmış.
-* `/api/v1/**` denetleyicilerindeki `[Authorize]` nitelikleri şema belirtmediği için varsayılan
-  (çerez) şema kullanılır → `Authorization` başlığı hiç okunmaz.
-
-`AddAuthorization` içinde iki şemayı da kabul eden bir varsayılan politika tanımlanırsa modül
-parolasız çalışabilir ve `POST /api/v1/auth/login` üzerindeki **dakikada 5 istek** sınırı da
-sorun olmaktan çıkar.
+Yukarıdaki iki uç tam olarak o sınıfta olduğu için modül çerez oturumu açmaya devam ediyor.

@@ -376,7 +376,11 @@ class AdaPanelClient
             'security.invalid_csrf_token' => 'CSRF belirteci gecersiz.',
             'auth.unauthorized' => 'Oturum acilmamis ya da dusmus.',
             'auth.forbidden' => 'Bu islem icin panel hesabinin yetkisi yok (Yonetici olmali).',
-            'users.forbidden' => 'Bu kullanici uzerinde yetki yok.',
+            'users.forbidden' => 'Bu kullanici uzerinde yetki yok (bayi hesabi yalnizca KENDI '
+                . 'musterileri icin parola belirleyebilir ve giris baglantisi uretebilir).',
+            'users.password_too_short' => 'Parola en az 12 karakter olmali.',
+            'auth.user_inactive' => 'Panel hesabi PASIF; pasif hesap icin giris baglantisi uretilmez. '
+                . 'Once hizmeti aktiflestirin.',
             'users.duplicate_username' => 'Panelde ayni kullanici adi zaten var.',
             'users.duplicate_email' => 'Panelde ayni e-posta adresi zaten var.',
             'validation.failed' => 'Panel istegi dogrulayamadi (alan kurallari: parola en az 12 karakter, '
