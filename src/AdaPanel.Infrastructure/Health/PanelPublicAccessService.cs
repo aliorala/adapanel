@@ -758,45 +758,13 @@ public sealed partial class PanelPublicAccessService(
 
     /// <summary>
     /// Ters vekilin ileteceği YEREL panel adresi.
-    /// <para>
-    /// "localhost" bilinçli seçimdir: panelin kendinden imzalı sertifikası (bkz.
-    /// scripts/initialize-panel-certificate.ps1) SAN olarak "localhost" içerir VE kurulumda
-    /// LocalMachine\Root deposuna eklenir. Böylece ARR arka uca bağlanırken hem ad hem zincir
-    /// doğrulaması geçer; 127.0.0.1 kullanılsaydı ad uyuşmazlığı 502 üretebilirdi.
-    /// </para>
     /// </summary>
-    private string ResolveBackendUrl()
-    {
-        var dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
-        var hasCertificate =
-            File.Exists(Path.Combine(dataRoot, "certs", "panel.pfx")) &&
-            File.Exists(Path.Combine(dataRoot, "certs", "panel.password"));
-
-        var port = ResolveListenerPort(
-            configuration["ASPNETCORE_URLS"] ?? configuration["urls"],
-            runtimeOptions.Value.PreferredHttpsPort);
-
-        return hasCertificate ? $"https://localhost:{port}" : $"http://localhost:{port}";
-    }
-
-    /// <summary>Program.cs'teki dinleyici portu çözümlemesinin aynısı (panel gerçekte hangi portta dinliyor).</summary>
-    private static int ResolveListenerPort(string? configuredUrls, int fallbackPort)
-    {
-        if (string.IsNullOrWhiteSpace(configuredUrls))
-        {
-            return fallbackPort;
-        }
-
-        foreach (var segment in configuredUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (Uri.TryCreate(segment, UriKind.Absolute, out var uri) && uri.Port > 0)
-            {
-                return uri.Port;
-            }
-        }
-
-        return fallbackPort;
-    }
+    /// <remarks>
+    /// Hesap <see cref="PanelBackendUrl"/>'e taşındı: posta otomatik yapılandırma vekili de aynı
+    /// adrese ihtiyaç duyuyor ve ikinci bir kopya, panelin portu/sertifika durumu değiştiğinde
+    /// birinin unutulmasına — yani sessiz bir 502'ye — açık kapı bırakırdı.
+    /// </remarks>
+    private string ResolveBackendUrl() => PanelBackendUrl.Resolve(configuration, runtimeOptions.Value);
 
     /// <summary>
     /// Alan adı hem IIS bağlamasına hem PowerShell scriptine gider → katı doğrulama (enjeksiyon yok).

@@ -1,6 +1,9 @@
 using System.Text;
 using System.Xml;
+using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Mail;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -94,17 +97,36 @@ public sealed class MailAutodiscoverController(IMailService mailService) : Contr
     /// Hangi alan adı soruluyor?
     /// </summary>
     /// <remarks>
-    /// Önce istemcinin bildirdiği e-posta adresinin alan adı; yoksa isteğin ana adı. Ana addaki
-    /// hizmet öneki (<c>autodiscover.</c>/<c>autoconfig.</c>) atılır — istemci uçlara tam olarak
-    /// bu adlardan gelir ve "autodiscover.example.com" panelde tanımlı bir posta alanı değildir.
+    /// <para>
+    /// Sıra: (1) istemcinin bildirdiği e-posta adresinin alan adı, (2) isteği ileten VEKİLİN
+    /// açıkça yazdığı <c>domain</c> parametresi, (3) isteğin ana adı. Ana addaki hizmet öneki
+    /// (<c>autodiscover.</c>/<c>autoconfig.</c>) atılır — istemci uçlara tam olarak bu adlardan
+    /// gelir ve "autodiscover.example.com" panelde tanımlı bir posta alanı değildir.
+    /// </para>
+    /// <para>
+    /// <b>(2) neden var:</b> istekler artık müşterinin IIS sitesinden ARR ile buraya iletiliyor
+    /// (bkz. <c>MailAutodiscoverPublisher</c>). ARR arka uca giderken Host başlığını hedefin adıyla
+    /// (<c>localhost</c>) değiştirir; ana ada bakan bir çözümleme her istekte 404 dönerdi. Vekil
+    /// kuralı alan adını zaten bildiği için onu açıkça yazar.
+    /// </para>
+    /// <para>
+    /// <b>Güvenlik:</b> bu parametre isteyen tarafından uydurulabilir — ama ana ad da öyle.
+    /// Yanıt yalnız PANELDE TANIMLI alanlar için üretilir ve sır taşımaz; yeni bir yüzey yok.
+    /// </para>
     /// </remarks>
-    internal static string? ResolveDomainFrom(string? emailAddress, string? requestHost)
+    internal static string? ResolveDomainFrom(string? emailAddress, string? requestHost, string? proxyDomain = null)
     {
         var adres = (emailAddress ?? string.Empty).Trim();
         var at = adres.IndexOf('@');
         if (at > 0 && at < adres.Length - 1)
         {
             return Normalize(adres[(at + 1)..]);
+        }
+
+        var vekilden = Normalize(proxyDomain);
+        if (vekilden is not null)
+        {
+            return vekilden;
         }
 
         var host = Normalize(requestHost);
@@ -124,7 +146,13 @@ public sealed class MailAutodiscoverController(IMailService mailService) : Contr
         return host;
     }
 
-    private string? ResolveDomain(string? emailAddress) => ResolveDomainFrom(emailAddress, Request.Host.Host);
+    /// <remarks>
+    /// <c>domain</c> sorgu parametresi metot imzasına DEĞİL buraya okunuyor: uçların imzaları
+    /// istemcilerin gerçekten gönderdiği alanları (yalnız <c>emailaddress</c>) yansıtmalı; vekilin
+    /// eklediği iç parametre onların yanında bir istemci alanı gibi durmamalı.
+    /// </remarks>
+    private string? ResolveDomain(string? emailAddress)
+        => ResolveDomainFrom(emailAddress, Request.Host.Host, Request.Query["domain"].ToString());
 
     private static string? Normalize(string? value)
     {
@@ -168,5 +196,79 @@ public sealed class MailAutodiscoverController(IMailService mailService) : Contr
         }
 
         return null;
+    }
+}
+
+/// <summary>
+/// Otomatik yapılandırmayı müşterinin alan adına BAĞLAYAN yönetim uçları.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden aynı dosyada ama AYRI sınıf:</b> yukarıdaki denetleyicinin değişmezi "her uç
+/// kimlik doğrulamasız"dır ve istemciler oraya sabit adreslerden gelir. Yönetim eylemlerini
+/// oraya karıştırmak o değişmezi bozardı. Ayrı sınıf, ayrı yetki kapısı.
+/// </para>
+/// <para>
+/// <b>Neden yönetici:</b> bu eylem müşterinin IIS sitesinin <c>web.config</c>'ine yazar, IIS
+/// bağlaması ekler, DNS bölgesine kayıt basar ve sertifika ister. Bunların hiçbiri kiracı
+/// yetkisi değildir.
+/// </para>
+/// <para>
+/// <b>Neden otomatik değil, açık eylem:</b> işlem sunucu geneli bileşen (ARR) kurabilir,
+/// sertifika otoritesine istek yapar ve müşterinin <c>web.config</c>'ini değiştirir. Bunu her
+/// alan adı eklendiğinde sessizce yapmak, kullanıcının görmediği ve geri alamadığı bir yan etki
+/// olurdu. Uçlar idempotenttir; <c>DELETE</c> yapılanı tam olarak geri alır ve durum ucu
+/// arayüzün "kurulu değil" diyebilmesi için her an ölçüm verir.
+/// </para>
+/// </remarks>
+[ApiController]
+[Authorize(Roles = "Administrator")]
+[Route("api/v1/mail/autoconfig")]
+public sealed class MailAutodiscoverSetupController(
+    IMailAutodiscoverPublisher publisher,
+    IAuditService auditService) : ControllerBase
+{
+    /// <summary>Zinciri ölçer; hiçbir şey yazmaz.</summary>
+    [HttpGet("{domain}")]
+    public async Task<ActionResult<ApiResponse<MailAutodiscoverPublicationDto>>> GetAsync(
+        string domain,
+        CancellationToken cancellationToken)
+        => Ok(ApiResponse<MailAutodiscoverPublicationDto>.Ok(await publisher.GetStatusAsync(domain, cancellationToken)));
+
+    /// <summary>Otomatik yapılandırmayı alan adının servis edildiği siteye bağlar.</summary>
+    [HttpPost("{domain}")]
+    public async Task<ActionResult<ApiResponse<MailAutodiscoverPublicationDto>>> PublishAsync(
+        string domain,
+        [FromQuery] string? contactEmail,
+        CancellationToken cancellationToken)
+    {
+        var report = await publisher.PublishAsync(domain, contactEmail ?? string.Empty, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.autoconfig.published",
+            report.Domain,
+            $"Autodiscover/autoconfig published on site '{report.SiteName}' (reachable: {report.IsPublished}).");
+
+        return Ok(ApiResponse<MailAutodiscoverPublicationDto>.Ok(
+            report,
+            report.IsPublished ? "mail.autoconfig_published" : "mail.autoconfig_published_partial"));
+    }
+
+    /// <summary>Yayını geri alır: panelin yazdığı kurallar ve eklediği bağlamalar kaldırılır.</summary>
+    [HttpDelete("{domain}")]
+    public async Task<ActionResult<ApiResponse<MailAutodiscoverPublicationDto>>> UnpublishAsync(
+        string domain,
+        CancellationToken cancellationToken)
+    {
+        var report = await publisher.UnpublishAsync(domain, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.autoconfig.unpublished",
+            report.Domain,
+            "Autodiscover/autoconfig rules and service bindings were removed.");
+
+        return Ok(ApiResponse<MailAutodiscoverPublicationDto>.Ok(report, "mail.autoconfig_unpublished"));
     }
 }

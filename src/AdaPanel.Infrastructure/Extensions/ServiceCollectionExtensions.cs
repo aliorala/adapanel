@@ -120,6 +120,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Mail.MailService>();
         services.AddScoped<Mail.MailEnableMailService>();
         services.AddScoped<IMailService, Mail.MailServiceRouter>();
+        // Otomatik yapılandırmayı müşterinin alan adına bağlar (uçlar çalışıyordu ama istemciler
+        // panele hiç ulaşmıyordu — istek IIS'e düşüyordu).
+        services.AddScoped<IMailAutodiscoverPublisher, Mail.MailAutodiscoverPublisher>();
         services.AddScoped<IDockerService, Docker.DockerService>();
         services.AddScoped<IAutomationService, Automation.AutomationService>();
         services.AddScoped<IAdvisorService, Advisor.AdvisorService>();

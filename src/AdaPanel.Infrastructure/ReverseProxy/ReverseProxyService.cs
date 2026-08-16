@@ -113,6 +113,21 @@ public sealed partial class ReverseProxyService(
         }, site.Name, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task EnsureArrPrerequisitesAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        await EnsureComponentInstalledAsync("url-rewrite", cancellationToken);
+        await EnsureComponentInstalledAsync("iis-arr", cancellationToken);
+
+        await ExecuteWriteAsync<object?>(serverManager =>
+        {
+            EnsureRewriteAvailable(serverManager, site.Name);
+            EnsureArrProxyEnabled(serverManager);
+            return null;
+        }, site.Name, cancellationToken);
+    }
+
     private async Task EnsureComponentInstalledAsync(string componentId, CancellationToken cancellationToken)
     {
         var catalog = await componentBootstrapper.GetCatalogAsync(cancellationToken);
