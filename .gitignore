@@ -20,3 +20,13 @@ artifacts/
 *.pfx
 *.password
 
+# Koşum artefaktları: her kosumda YENIDEN URETILIR, depoda tutulmalari anlamsiz fark uretir.
+# test-results/component-package-audit.json her bilesen denetiminde bastan yaziliyordu; yani
+# her yayin hazirliginda "degismis dosya" olarak cikiyor ve gercek degisiklikleri gizliyordu.
+.tmp/
+.preview-data/
+test-results/
+
+# Yanlislikla olusan bos dosya (yonlendirme kazasi); veri kokleri depoda tutulmaz.
+veritabani
+
