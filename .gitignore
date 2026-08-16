@@ -30,3 +30,6 @@ test-results/
 # Yanlislikla olusan bos dosya (yonlendirme kazasi); veri kokleri depoda tutulmaz.
 veritabani
 
+
+# Ajan worktree'leri: gecici calisma kopyalari, depoya girmemeli.
+.claude/worktrees/
