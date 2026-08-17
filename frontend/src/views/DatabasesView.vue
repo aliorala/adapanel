@@ -146,7 +146,7 @@
           </label>
           <label>
             <span class="field-label">{{ t("panel.database.adminPassword") }}</span>
-            <input v-model="credForm.password" type="password" @keyup.enter="submitRegisterCredentials" />
+            <PasswordField v-model="credForm.password" @keyup.enter="submitRegisterCredentials" />
           </label>
           <label>
             <span class="field-label">{{ t("panel.database.portLabel") }}</span>
@@ -238,7 +238,7 @@
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.userPassword") }}</span>
-                <input v-model="databaseForm.password" type="password" :placeholder="t('panel.database.optional')" />
+                <PasswordField v-model="databaseForm.password" :placeholder="t('panel.database.optional')" />
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.linkSite") }}</span>
@@ -283,7 +283,7 @@
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.userPassword") }}</span>
-                <input v-model="importForm.password" type="password" />
+                <PasswordField v-model="importForm.password" />
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.linkSite") }}</span>
@@ -510,7 +510,7 @@
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.userPassword") }}</span>
-                <input v-model="userForm.password" type="password" />
+                <PasswordField v-model="userForm.password" />
               </label>
               <label>
                 <span class="field-label">{{ t("panel.database.grantToDatabase") }}</span>
@@ -608,6 +608,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import QueryHistory from "../components/QueryHistory.vue";
 import ResourceConsumers from "../components/ResourceConsumers.vue";
 import TablePager from "../components/TablePager.vue";

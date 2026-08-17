@@ -99,9 +99,8 @@
         </label>
         <label v-if="form.backupTargetType !== 'local'" class="stacked-field">
           <span class="field-label">{{ form.backupTargetType === 's3' ? t("panel.automation.remoteSecretKey") : t("panel.automation.remotePassword") }}</span>
-          <input
+          <PasswordField
             v-model="remotePassword"
-            type="password"
             autocomplete="new-password"
             :placeholder="form.backupRemotePasswordSet ? t('panel.automation.remotePasswordKept') : ''" />
         </label>
@@ -268,6 +267,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import {
   getAutomation,
   runAutomationBackup,

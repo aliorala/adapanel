@@ -406,11 +406,11 @@
       <div class="form-grid two">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.backup.encryptionPassword") }}</span>
-          <input v-model="encryptionForm.password" type="password" autocomplete="new-password" />
+          <PasswordField v-model="encryptionForm.password" autocomplete="new-password" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.backup.encryptionPasswordConfirm") }}</span>
-          <input v-model="encryptionForm.confirm" type="password" autocomplete="new-password" />
+          <PasswordField v-model="encryptionForm.confirm" autocomplete="new-password" />
         </label>
       </div>
 
@@ -650,7 +650,7 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ targetForm.targetType === 's3' ? t("panel.backup.remoteSecretKey") : t("panel.backup.remotePassword") }}</span>
-          <input v-model="targetForm.remotePassword" type="password" autocomplete="new-password" />
+          <PasswordField v-model="targetForm.remotePassword" autocomplete="new-password" />
         </label>
         <label v-if="targetForm.targetType === 's3'" class="stacked-field">
           <span class="field-label">{{ t("panel.backup.remoteRegion") }}</span>
@@ -661,7 +661,7 @@
       <div class="form-grid">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.backup.perBackupPassword") }}</span>
-          <input v-model="targetForm.encryptionPassword" type="password" autocomplete="new-password" />
+          <PasswordField v-model="targetForm.encryptionPassword" autocomplete="new-password" />
           <small class="field-hint">{{ t("panel.backup.perBackupPasswordHint") }}</small>
         </label>
       </div>
@@ -884,7 +884,7 @@
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ scheduleForm.targetType === 's3' ? t("panel.backup.remoteSecretKey") : t("panel.backup.remotePassword") }}</span>
-              <input v-model="scheduleForm.remotePassword" type="password" autocomplete="new-password" />
+              <PasswordField v-model="scheduleForm.remotePassword" autocomplete="new-password" />
               <small class="field-hint">
                 {{ scheduleForm.remotePasswordSet
                   ? t("panel.backup.schedule.passwordKept")
@@ -914,6 +914,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import {
   backupDatabase,
   backupMail,

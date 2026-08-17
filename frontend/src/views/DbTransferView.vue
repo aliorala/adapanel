@@ -32,7 +32,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.transfer.sourcePassword") }}</span>
-          <input v-model="form.sourcePassword" type="password" autocomplete="off" :disabled="busy" />
+          <PasswordField v-model="form.sourcePassword" autocomplete="off" :disabled="busy" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.transfer.sourceDb") }}</span>
@@ -60,7 +60,10 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.database.transfer.targetPassword") }}</span>
-          <input v-model="form.targetPassword" type="text" autocomplete="off" :disabled="busy" />
+          <!-- `type="text"` idi: hedef veritabaninin parolasi ekranda SUREKLI aciktı. Kaynak
+               parolasi gizliydi, hedef parolasi degildi -- ayni formda iki farkli kural.
+               Simdi ikisi de varsayilan gizli, gormek isteyen "Goster"e basar. -->
+          <PasswordField v-model="form.targetPassword" autocomplete="off" :disabled="busy" />
         </label>
       </div>
       <p class="hint">{{ t("panel.database.transfer.targetUserHint") }}</p>
@@ -80,6 +83,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { transferDatabase } from "../api/databases";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 

@@ -47,7 +47,7 @@
           <button class="secondary compact" @click="regenerateRecoveryCodes">{{ t("panel.account.regenerateRecovery") }}</button>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.account.disablePassword") }}</span>
-            <input v-model="disableTwoFactorPassword" type="password" minlength="12" />
+            <PasswordField v-model="disableTwoFactorPassword" minlength="12" />
           </label>
           <button class="danger compact" @click="disableTwoFactor">{{ t("panel.account.disable2fa") }}</button>
         </template>
@@ -77,15 +77,15 @@
       <div class="form-grid two">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.account.currentPassword") }}</span>
-          <input v-model="currentPassword" type="password" autocomplete="current-password" />
+          <PasswordField v-model="currentPassword" autocomplete="current-password" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.account.newPassword") }}</span>
-          <input v-model="newPassword" type="password" minlength="12" autocomplete="new-password" />
+          <PasswordField v-model="newPassword" minlength="12" autocomplete="new-password" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.account.confirmPassword") }}</span>
-          <input v-model="confirmPassword" type="password" minlength="12" autocomplete="new-password" />
+          <PasswordField v-model="confirmPassword" minlength="12" autocomplete="new-password" />
         </label>
       </div>
 
@@ -108,6 +108,7 @@
 // davranış birebir korunmuştur.
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { copyToClipboard } from "../utils/clipboard";

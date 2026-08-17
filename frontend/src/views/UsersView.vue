@@ -120,7 +120,7 @@
       </label>
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.form.password") }}</span>
-        <input v-model="createUserForm.password" type="password" minlength="12" required />
+        <PasswordField v-model="createUserForm.password" minlength="12" required />
       </label>
       <label v-if="isAdmin" class="stacked-field">
         <span class="field-label">{{ t("panel.users.role") }}</span>
@@ -344,6 +344,7 @@
 // Daha önce SetupWizardView > Ayarlar > Kullanıcılar sekmesindeydi; davranış birebir korunmuştur.
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { getServicePlans, createServicePlan, updateServicePlan, deleteServicePlan, type ServicePlan } from "../api/servicePlans";
 import { extractApiDetails, extractApiMessage, useAuthStore, type ManagedUser } from "../stores/auth";

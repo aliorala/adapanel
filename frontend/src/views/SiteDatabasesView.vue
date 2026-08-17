@@ -19,7 +19,7 @@
         <form v-if="showForm" class="db-create-form" @submit.prevent="createDb">
           <input v-model.trim="form.name" :placeholder="t('panel.siteDb.dbName')" :disabled="creating" />
           <input v-model.trim="form.userName" :placeholder="t('panel.siteDb.userName')" :disabled="creating" />
-          <input v-model="form.password" type="password" autocomplete="off" :placeholder="t('panel.siteDb.password')" :disabled="creating" />
+          <PasswordField v-model="form.password" autocomplete="off" :placeholder="t('panel.siteDb.password')" :disabled="creating" />
           <button type="submit" v-bind="writeGate(creating || !form.name.trim())">
             {{ creating ? t("panel.siteDb.creating") : t("panel.siteDb.create") }}
           </button>
@@ -85,6 +85,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { getSiteDatabases, linkSiteDatabase, unlinkSiteDatabase, type SiteDatabaseRef } from "../api/sites";
 import { createDatabase, deleteDatabase, openPhpMyAdmin } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -344,9 +345,19 @@ function showNotice(message: string, isError: boolean) {
   width: 100%;
 }
 
-.db-create-form input {
+/* Parola alani artik bir BILESEN (PasswordField): satirdaki yeri kendi kok elemani tutar.
+   Kapsamli CSS bilesenin ICINE gecmez, ama kok elemani ust bilesenin kapsam damgasini ALIR --
+   bu yuzden esnek payi ic `input`e degil `.password-field`e verilir, yoksa alan satirda
+   buzusuyor ve "Goster" dugmesi alt satira dusuyordu. Payi biraz genis: alanin yaninda
+   dugme de duruyor. */
+.db-create-form input,
+.db-create-form .password-field {
   flex: 1 1 160px;
   width: auto;
+}
+
+.db-create-form .password-field {
+  flex-basis: 220px;
 }
 
 .db-create-form button {

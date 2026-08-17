@@ -69,7 +69,7 @@
             <span class="field-label">{{ t("panel.mail.relayPassword") }}</span>
             <!-- Gerçek gizli alan: window.prompt ile parola sormak YASAK (tarayıcı diyalogu
                  engellenirse kullanıcı hiçbir şey görmüyordu) ve parola açıkta kalıyordu. -->
-            <input v-model="form.password" type="password" autocomplete="new-password" :disabled="busy" />
+            <PasswordField v-model="form.password" autocomplete="new-password" :disabled="busy" />
             <small class="field-hint">
               {{ relay.hasPassword ? t("panel.mail.relayPasswordKeep") : t("panel.mail.relayPasswordHint") }}
             </small>
@@ -100,6 +100,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "./PasswordField.vue";
 
 import { getMailRelay, setMailRelay, type MailRelay } from "../api/mail";
 import { useConfirm } from "./ConfirmDialog.vue";

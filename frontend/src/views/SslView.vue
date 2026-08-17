@@ -132,7 +132,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.form.password") }}</span>
-          <input v-model="importForm.password" type="password" />
+          <PasswordField v-model="importForm.password" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.ssl.file") }}</span>
@@ -152,6 +152,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, setHttpsRedirect, type SslWorkspace } from "../api/ssl";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";

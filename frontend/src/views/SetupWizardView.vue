@@ -45,11 +45,11 @@
         </label>
         <label>
           <span>{{ t("panel.form.password") }}</span>
-          <input v-model="setupForm.password" type="password" minlength="12" required />
+          <PasswordField v-model="setupForm.password" minlength="12" required />
         </label>
         <label>
           <span>{{ t("panel.form.confirmPassword") }}</span>
-          <input v-model="setupForm.confirmPassword" type="password" minlength="12" required />
+          <PasswordField v-model="setupForm.confirmPassword" minlength="12" required />
         </label>
         <label>
           <span>{{ t("panel.form.securePath") }}</span>
@@ -83,7 +83,7 @@
         </label>
         <label>
           <span>{{ t("panel.form.password") }}</span>
-          <input v-model="loginForm.password" type="password" minlength="12" required />
+          <PasswordField v-model="loginForm.password" minlength="12" required />
         </label>
         <label v-if="requiresTwoFactor">
           <span>{{ t("panel.auth.twoFactorCode") }}</span>
@@ -119,11 +119,11 @@
         <p class="lead">{{ t("panel.auth.resetHint") }}</p>
         <label>
           <span>{{ t("panel.auth.newPassword") }}</span>
-          <input v-model="resetForm.newPassword" type="password" minlength="12" required />
+          <PasswordField v-model="resetForm.newPassword" minlength="12" required />
         </label>
         <label>
           <span>{{ t("panel.auth.newPasswordConfirm") }}</span>
-          <input v-model="resetForm.confirmPassword" type="password" minlength="12" required />
+          <PasswordField v-model="resetForm.confirmPassword" minlength="12" required />
         </label>
         <button type="submit" :disabled="authStore.loading">{{ t("panel.auth.resetSubmit") }}</button>
         <button type="button" class="secondary link-button" @click="authView = 'login'">
@@ -425,6 +425,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
 import { readSecureEntryPath } from "../api/client";
 import { getFtpUsers } from "../api/ftp";

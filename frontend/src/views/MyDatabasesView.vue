@@ -29,7 +29,12 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.myDb.password") }}</span>
-          <input v-model="form.password" type="text" />
+          <!-- `type="text"` idi: kiracinin veritabani parolasi ekranda SUREKLI aciktı.
+               `autocomplete="new-password"` EKLENDI (once hic yoktu): alan artik gercek bir
+               parola alani oldugu icin, deger verilmezse tarayici burayi PANEL parolasiyla
+               doldurmaya calisir. "new-password" bunu keser ve dogru davranistir: burada
+               YENI bir parola belirleniyor. -->
+          <PasswordField v-model="form.password" autocomplete="new-password" />
         </label>
       </div>
       <div class="row-actions">
@@ -63,6 +68,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { getMyDatabases, createMyDatabase, deleteMyDatabase, type OwnedDatabase } from "../api/myDatabases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import TablePager from "../components/TablePager.vue";

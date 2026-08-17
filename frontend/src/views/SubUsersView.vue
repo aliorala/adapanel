@@ -23,7 +23,7 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ editingId ? t("panel.subUsers.passwordOptional") : t("panel.subUsers.password") }}</span>
-          <input v-model="form.password" type="password" autocomplete="new-password" />
+          <PasswordField v-model="form.password" autocomplete="new-password" />
         </label>
         <label v-if="editingId" class="stacked-field">
           <span class="field-label">{{ t("panel.subUsers.active") }}</span>
@@ -84,6 +84,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import {
   SUB_USER_SECTIONS,
   createSubUser,

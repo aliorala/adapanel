@@ -59,7 +59,7 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.migration.ftp.password") }}</span>
-          <input v-model="ftp.password" type="password" autocomplete="new-password" :disabled="ftpBusy" />
+          <PasswordField v-model="ftp.password" autocomplete="new-password" :disabled="ftpBusy" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.migration.ftp.remotePath") }}</span>
@@ -83,6 +83,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { importSiteArchive, migrateSiteFiles } from "../api/siteHosting";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";

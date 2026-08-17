@@ -125,7 +125,7 @@
           </label>
           <label>
             <span class="field-label">{{ t("panel.database.userPassword") }}</span>
-            <input v-model="createForm.databasePassword" type="password" :placeholder="t('panel.database.optional')" />
+            <PasswordField v-model="createForm.databasePassword" :placeholder="t('panel.database.optional')" />
           </label>
         </div>
       </div>
@@ -256,6 +256,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import type { SiteBindingPayload, SiteDefaultsResult, SiteRecord, SitePreview } from "../api/sites";
 import { getSiteDeletionPlan, getSitePreview } from "../api/sites";
 import { getPanelPreferences } from "../api/panelSettings";
@@ -1057,7 +1058,12 @@ button {
   font: inherit;
 }
 
-input {
+/* `:deep()` ZORUNLU: bu gorunum alan yuksekligini base.css'ten BUYUK tutuyor (12/14 dolgu).
+   Kapsamli CSS bir bilesenin ic elemanlarina gecmedigi icin PasswordField'in icindeki alan
+   olcusuz kalir ve komsu alanlardan ~12px kisa gorunurdu -- ayni izgarada iki farkli yukseklik.
+   Kural yalnizca bu gorunume ozgu olculeri tasir; goster/gizle davranisi bilesende kalir. */
+input,
+:deep(.password-field input) {
   border: 1px solid var(--panel-border);
   padding: 12px 14px;
   background: var(--input-bg);

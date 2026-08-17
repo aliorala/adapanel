@@ -25,7 +25,7 @@
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.protected.password") }}</span>
-          <input v-model="form.password" type="password" autocomplete="new-password" />
+          <PasswordField v-model="form.password" autocomplete="new-password" />
         </label>
       </div>
       <button class="compact" v-bind="writeGate(busy || !form.relativePath || !form.userName || !form.password)" @click="create">
@@ -61,6 +61,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { useSitesStore } from "../stores/sites";
 import { getProtectedDirs, protectDir, unprotectDir, type ProtectedDirectory } from "../api/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";

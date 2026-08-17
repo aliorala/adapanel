@@ -63,9 +63,8 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.notifications.smtpPassword") }}</span>
-          <input
+          <PasswordField
             v-model="form.smtpPassword"
-            type="password"
             autocomplete="new-password"
             :placeholder="form.hasSmtpPassword ? t('panel.notifications.passwordSaved') : ''" />
           <small class="field-hint">{{ t("panel.notifications.passwordHint") }}</small>
@@ -123,6 +122,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { getNotificationSettings, saveNotificationSettings, sendNotificationTest } from "../api/notifications";
 import { extractApiMessage } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";

@@ -32,7 +32,7 @@
       <div class="form-grid">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.mail.adminPassword") }}</span>
-          <input v-model="adminPassword" type="password" autocomplete="new-password" />
+          <PasswordField v-model="adminPassword" autocomplete="new-password" />
         </label>
       </div>
       <div class="row-actions">
@@ -136,7 +136,7 @@
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.mail.password") }}</span>
-              <input v-model="accountForm.password" type="password" minlength="8" autocomplete="new-password" />
+              <PasswordField v-model="accountForm.password" minlength="8" autocomplete="new-password" />
               <small class="field-hint">{{ t("panel.mail.passwordHint") }}</small>
             </label>
             <label class="stacked-field">
@@ -631,6 +631,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import {
   applyMailDns,
   checkRdns,

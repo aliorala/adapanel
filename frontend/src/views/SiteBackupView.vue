@@ -56,7 +56,7 @@
            UYARI parola BELİRLENİRKEN görünür, geri yükleme anında değil. -->
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.backup.perBackupPassword") }}</span>
-        <input v-model="encryptionPassword" type="password" autocomplete="new-password" />
+        <PasswordField v-model="encryptionPassword" autocomplete="new-password" />
         <small class="field-hint">{{ t("panel.backup.perBackupPasswordHint") }}</small>
       </label>
       <p v-if="encryptionPassword" class="notice encryption-loss" role="status">
@@ -199,6 +199,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { useSitesStore } from "../stores/sites";
 import { backupSite, downloadBackup, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";

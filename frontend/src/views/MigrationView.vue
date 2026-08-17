@@ -48,7 +48,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.pleskApiKey") }}</span>
-          <input v-model="plesk.apiKey" type="password" spellcheck="false" autocomplete="off" />
+          <PasswordField v-model="plesk.apiKey" spellcheck="false" autocomplete="off" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.pleskUser") }}</span>
@@ -56,7 +56,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.pleskPassword") }}</span>
-          <input v-model="plesk.password" type="password" autocomplete="off" />
+          <PasswordField v-model="plesk.password" autocomplete="off" />
         </label>
       </div>
       <p v-if="source === 'plesk'" class="meta create-hint">{{ t("panel.migration.pleskAuthHint") }}</p>
@@ -76,7 +76,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.cpanelApiToken") }}</span>
-          <input v-model="cpanel.apiToken" type="password" spellcheck="false" />
+          <PasswordField v-model="cpanel.apiToken" spellcheck="false" />
         </label>
       </div>
 
@@ -179,7 +179,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.ftp.password") }}</span>
-          <input v-model="form.filePassword" type="password" />
+          <PasswordField v-model="form.filePassword" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.ftp.remotePath") }}</span>
@@ -214,7 +214,7 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.ftp.password") }}</span>
-          <input v-model="form.dbPassword" type="password" />
+          <PasswordField v-model="form.dbPassword" />
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.sourceDb") }}</span>
@@ -230,7 +230,9 @@
         </label>
         <label>
           <span class="field-label">{{ t("panel.migration.targetDbPassword") }}</span>
-          <input v-model="form.targetDatabasePassword" type="text" spellcheck="false" autocomplete="off" />
+          <!-- `type="text"` idi: ayni sayfadaki kaynak parolalari gizliyken hedef veritabani
+               parolasi ekranda aciktı. Kural her parola alaninda ayni olmali. -->
+          <PasswordField v-model="form.targetDatabasePassword" autocomplete="off" />
         </label>
       </div>
       <p v-if="form.transferDatabase" class="meta create-hint db-user-hint">{{ t("panel.migration.targetDbUserHint") }}</p>
@@ -292,6 +294,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import {
   migrateSite,
   migrateSiteStream,

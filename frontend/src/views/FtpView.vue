@@ -77,7 +77,7 @@
         </label>
         <label>
           <span>{{ t("panel.form.password") }}</span>
-          <input v-model="form.password" type="password" />
+          <PasswordField v-model="form.password" />
         </label>
         <label v-if="!siteName">
           <span>{{ t("panel.php.targetSite") }}</span>
@@ -153,6 +153,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import PasswordField from "../components/PasswordField.vue";
 import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
