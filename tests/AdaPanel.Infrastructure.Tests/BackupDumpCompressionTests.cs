@@ -18,18 +18,23 @@ namespace AdaPanel.Infrastructure.Tests;
 /// <para>
 /// DENETIMDE OLCULEN DURUM: tek basina alinan veritabani yedekleri ham <c>.sql</c> olarak
 /// saklaniyordu. SQL dokumu duz metindir ve <c>INSERT INTO</c> onekini, sutun adlarini, tarih
-/// bicimini satir satir tekrar eder. Gercek bir mysqldump ciktisinda (65 MiB) olculdu: GZip
-/// <b>4,19 kat</b> kucultuyor. Sikistirilmadigi icin disk, FTP yukleme suresi ve saklama penceresi
+/// bicimini satir satir tekrar eder. Gercek bir mysqldump ciktisinda (65,07 MiB) olculdu: ZSTD-3
+/// <b>4,31 kat</b> kucultuyor. Sikistirilmadigi icin disk, FTP yukleme suresi ve saklama penceresi
 /// boyunca biriken toplam dort katina cikiyordu.
+/// </para>
+/// <para>
+/// Bicim ZSTD'dir (Plesk paritesi: Plesk Obsidian 18.0.40'tan beri GZIP yerine ZSTD kullaniyor).
 /// </para>
 /// <para>
 /// Bu testler "dosya kuculdu mu"yu degil, ozelligin GUVENILIR olmasini korur:
 /// (1) sikistir-ac turu birebir ayni baytlari verir (cok tamponlu dosyada da),
 /// (2) SIKISTIRILMIS DOKUM GERCEKTEN GERI YUKLENIR -- ImportDumpAsync'e GERCEK .sql dosyasi gider,
 /// (3) ESKI duz <c>.sql</c> yedekler calismaya devam eder (karar dosya BASLIGINDAN),
-/// (4) kayittaki etiket yanlis olsa bile dosya basligi kazanir,
-/// (5) SIRA: once SIKISTIR sonra SIFRELE (ters olsa kazanc sifir olurdu),
-/// (6) ZATEN sikisik bicimler (zip / MSSQL .bak) tekrar sikistirilmaz.
+/// (4) GZip'li bir dokum de okunabilir (panel uretmez ama okur),
+/// (5) kayittaki etiket yanlis olsa bile dosya basligi kazanir,
+/// (6) SIRA: once SIKISTIR sonra SIFRELE (ters olsa kazanc sifir olurdu),
+/// (7) ZATEN sikisik bicimler (zip / MSSQL .bak) tekrar sikistirilmaz,
+/// (8) BOZUK arsiv net hata verir ve hicbir sey geri yuklenmez.
 /// </para>
 /// </summary>
 public sealed class BackupDumpCompressionTests
@@ -51,12 +56,14 @@ public sealed class BackupDumpCompressionTests
         var kaynak = alan.DokumDosyasi("kaynak.sql", uzunluk);
         var beklenen = await File.ReadAllBytesAsync(kaynak);
 
-        var sikisik = Path.Combine(alan.Kok, "kaynak.sql.gz");
+        var sikisik = Path.Combine(alan.Kok, "kaynak.sql.zst");
         var acilan = Path.Combine(alan.Kok, "acilan.sql");
 
         await BackupDumpCompression.CompressFileAsync(kaynak, sikisik);
 
-        // Sikisik dosya GZip olarak TANINIR; duz kaynak tanINMAZ.
+        // Sikisik dosya ZSTD olarak TANINIR; duz kaynak tanINMAZ.
+        Assert.Equal(BackupDumpCompression.DumpFormat.Zstandard, BackupDumpCompression.DetectFormat(sikisik));
+        Assert.Equal(BackupDumpCompression.DumpFormat.None, BackupDumpCompression.DetectFormat(kaynak));
         Assert.True(BackupDumpCompression.IsCompressedFile(sikisik));
         Assert.False(BackupDumpCompression.IsCompressedFile(kaynak));
 
@@ -73,7 +80,7 @@ public sealed class BackupDumpCompressionTests
     {
         using var alan = new GeciciAlan();
         var kaynak = alan.DokumDosyasi("dump.sql", 2_000_000);
-        var sikisik = Path.Combine(alan.Kok, "dump.sql.gz");
+        var sikisik = Path.Combine(alan.Kok, "dump.sql.zst");
 
         await BackupDumpCompression.CompressFileAsync(kaynak, sikisik);
 
@@ -92,9 +99,34 @@ public sealed class BackupDumpCompressionTests
     [InlineData("zip", false)]  // site/abonelik/panel arsivi: icindeki her girdi zaten Deflate'li
     [InlineData("bak", false)]  // MSSQL: BACKUP ... WITH COMPRESSION ile zaten sikistirilmis
     [InlineData("gz", false)]
+    [InlineData("zst", false)]
+    [InlineData("zstd", false)]
     [InlineData("", false)]
     public void ShouldCompress_IsDecidedInOnePlace(string bicim, bool beklenen) =>
         Assert.Equal(beklenen, BackupDumpCompression.ShouldCompress(bicim));
+
+    /// <summary>
+    /// Uretilen dosya GERCEKTEN ZSTD olmali. Uzanti <c>.zst</c> deyip icine baska bir bicim
+    /// koymak, kullanicinin dosyayi <c>zstd -d</c> ile acmaya calisip basarisiz olmasi demekti.
+    /// </summary>
+    [Fact]
+    public async Task ProducedFile_CarriesTheZstandardFrameMagic()
+    {
+        using var alan = new GeciciAlan();
+        var kaynak = alan.DokumDosyasi("dump.sql", 50_000);
+        var sikisik = Path.Combine(alan.Kok, "dump.sql.zst");
+
+        await BackupDumpCompression.CompressFileAsync(kaynak, sikisik);
+
+        var baslik = new byte[4];
+        await using (var akis = File.OpenRead(sikisik))
+        {
+            Assert.Equal(4, await akis.ReadAsync(baslik));
+        }
+
+        // RFC 8878: 0xFD2FB528 kucuk-endian.
+        Assert.Equal(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }, baslik);
+    }
 
     // ---------------------------------------------------------------------------------------
     // 3) Servis seviyesi: yedek gercekten sikisik ve GERCEKTEN GERI GELIYOR
@@ -113,11 +145,11 @@ public sealed class BackupDumpCompressionTests
         });
 
         Assert.True(kayit.Compressed);
-        Assert.EndsWith(".sql.gz", kayit.Name, StringComparison.Ordinal);
+        Assert.EndsWith(".sql.zst", kayit.Name, StringComparison.Ordinal);
         Assert.True(BackupDumpCompression.IsCompressedFile(kayit.Path));
 
         // DUZ KOPYA DISKTE KALMAZ: kalsaydi kazanc sifir olurdu (iki dosya birden dururdu).
-        Assert.False(File.Exists(kayit.Path[..^".gz".Length]));
+        Assert.False(File.Exists(kayit.Path[..^".zst".Length]));
 
         // Bicim ANLAMSAL kalir: sikistirma bir sarmalayicidir, yedegin turunu degistirmez.
         Assert.Equal("sql", kayit.Format);
@@ -148,7 +180,7 @@ public sealed class BackupDumpCompressionTests
         Assert.NotNull(alan.IceAktarilanIcerik);
 
         // 1) Motora GZip baytlari DEGIL, gercek SQL metni gitti.
-        Assert.False(alan.IceAktarilanGzipMiydi, "Motora sikistirilmis baytlar gonderildi!");
+        Assert.False(alan.IceAktarilanSikisikMiydi, "Motora sikistirilmis baytlar gonderildi!");
         Assert.Equal(alan.UretilenDokum, alan.IceAktarilanIcerik);
 
         // 2) Dosya adi da motorun bekledigi bicimde (arti: teshiste ne oldugu okunabiliyor).
@@ -172,7 +204,7 @@ public sealed class BackupDumpCompressionTests
 
         Assert.True(kayit.Compressed);
         Assert.True(kayit.Encrypted);
-        Assert.EndsWith(".sql.gz.enc", kayit.Name, StringComparison.Ordinal);
+        Assert.EndsWith(".sql.zst.enc", kayit.Name, StringComparison.Ordinal);
 
         var sonuc = await servis.RestoreAsync(new RestoreBackupRequest { BackupId = kayit.Id });
 
@@ -206,7 +238,7 @@ public sealed class BackupDumpCompressionTests
         var cozulen = Path.Combine(alan.Kok, "cozulen.bin");
         await BackupArchiveCipher.DecryptFileAsync(kayit.Path, cozulen, Parola);
 
-        // Sifrenin ALTINDAN gzip cikmali. Ters sirada burada duz SQL metni olurdu.
+        // Sifrenin ALTINDAN ZSTD cercevesi cikmali. Ters sirada burada duz SQL metni olurdu.
         Assert.True(BackupDumpCompression.IsCompressedFile(cozulen), "Sifrenin altindan GZip cikmadi: sira ters!");
 
         // Ve gercekten kucculmus olmali (sifreli veri sikistirilsaydi boyut ~ayni kalirdi).
@@ -251,7 +283,7 @@ public sealed class BackupDumpCompressionTests
 
     /// <summary>
     /// Kayit "sikisik" diyor ama dosya DUZ (kullanici dosyayi elle acmis / kayit bozulmus).
-    /// Karar etiketten verilseydi panel duz SQL'i gzip sanip acmaya kalkar ve saglam bir yedek
+    /// Karar etiketten verilseydi panel duz SQL'i sikisik sanip acmaya kalkar ve saglam bir yedek
     /// "bozuk" ilan edilirdi.
     /// </summary>
     [Fact]
@@ -267,7 +299,7 @@ public sealed class BackupDumpCompressionTests
             new BackupRecordDto
             {
                 Id = "etiket",
-                Name = "yanlis-etiket.sql.gz",
+                Name = "yanlis-etiket.sql.zst",
                 Type = "database",
                 Source = "mariadb:musteri_wp",
                 Path = duzDokum,
@@ -285,8 +317,149 @@ public sealed class BackupDumpCompressionTests
     }
 
     /// <summary>
-    /// Tersi de dogru olmali: kayit "sikisik degil" diyor ama dosya GZip (kayit eski surumden
-    /// kalmis / elle tasinmis). Etikete guvenilseydi gzip baytlari ham SQL sanilip motora
+    /// GZIP'LI BIR DOKUM DE OKUNUR. Panel artik GZip URETMEZ (bicim ZSTD'ye cevrildi), ama okuma
+    /// yolunda taniniyor: bedeli .NET'te zaten bulunan GZipStream'e bir dallanma, karsiligi ise ara
+    /// bir surumle uretilmis ya da yonetici tarafindan elle <c>gzip</c>'lenmis bir dokumun SESSIZCE
+    /// geri yuklenemez olmamasi. Bir yedegi okuyamamanin bedeli birkac satir kodun bedelinden kat
+    /// kat yuksektir.
+    /// </summary>
+    [Fact]
+    public async Task GzipCompressedDump_IsStillReadable()
+    {
+        using var alan = new GeciciAlan();
+
+        // Panelin URETMEDIGI ama okuyabildigi bicim: elle gzip'lenmis bir dokum.
+        var gzipli = Path.Combine(alan.Kok, "elle-gziplenmis.sql.gz");
+        await using (var kaynak = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(alan.UretilenDokum)))
+        await using (var hedef = File.Create(gzipli))
+        await using (var gzip = new GZipStream(hedef, CompressionLevel.Optimal, leaveOpen: true))
+        {
+            await kaynak.CopyToAsync(gzip);
+        }
+
+        Assert.Equal(BackupDumpCompression.DumpFormat.GZip, BackupDumpCompression.DetectFormat(gzipli));
+
+        await alan.DosyaDeposu.WriteAsync("config/backups.json", new[]
+        {
+            new BackupRecordDto
+            {
+                Id = "gzipli",
+                Name = "elle-gziplenmis.sql.gz",
+                Type = "database",
+                Source = "mariadb:musteri_wp",
+                Path = gzipli,
+                Format = "sql",
+                CreatedAtUtc = DateTime.UtcNow
+            }
+        });
+
+        var servis = alan.ServisKur();
+        var sonuc = await servis.RestoreAsync(new RestoreBackupRequest { BackupId = "gzipli" });
+
+        Assert.Equal("restored", sonuc.Status);
+        Assert.False(alan.IceAktarilanSikisikMiydi, "Motora sikistirilmis baytlar gonderildi!");
+        Assert.Equal(alan.UretilenDokum, alan.IceAktarilanIcerik);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 6) BOZUK arsiv: net hata, hicbir sey geri yuklenmez
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// BU TESTIN KORUDUGU SEY, BICIM DEGISIKLIGINDE NEREDEYSE SESSIZCE KAYBOLUYORDU.
+    /// <para>
+    /// ZSTD'nin cerceve saglama toplami (checksum) VARSAYILAN OLARAK KAPALIDIR; GZip'in sonundaki
+    /// CRC32 ise her zaman vardir. Olculdu: saglama kapaliyken sikistirilmis govdeye atilan 40
+    /// rastgele bit cevirmesinin <b>19'u hicbir hata vermeden SESSIZCE BOZUK SQL uretti</b> --
+    /// yani bit curumus bir yedek, musterinin canli veritabanina cop olarak "geri yuklenirdi".
+    /// Saglama acikken 40/40 yakalandi (bedeli 4 bayt).
+    /// </para>
+    /// <para>
+    /// Bu test govdenin BIRCOK yerini ayri ayri bozar: tek bir bayta bakan bir test, saglama
+    /// kapatilsa bile sansa gecebilirdi.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task CorruptedCompressedBytes_AreAlwaysDetected_NeverSilentlyRestoredAsGarbage()
+    {
+        using var alan = new GeciciAlan();
+        var kaynak = alan.DokumDosyasi("dump.sql", 300_000);
+        var beklenen = await File.ReadAllBytesAsync(kaynak);
+        var sikisik = Path.Combine(alan.Kok, "dump.sql.zst");
+        await BackupDumpCompression.CompressFileAsync(kaynak, sikisik);
+
+        var saglam = await File.ReadAllBytesAsync(sikisik);
+        var bozuk = Path.Combine(alan.Kok, "bozuk.zst");
+        var acilan = Path.Combine(alan.Kok, "acilan.sql");
+        var sessizBozulma = new List<int>();
+
+        // Cerceve basligini (ilk 6 bayt) atlayip govdeye dagilmis 20 ayri noktayi boz.
+        for (var adim = 0; adim < 20; adim++)
+        {
+            var yer = 6 + (adim * (saglam.Length - 8) / 20);
+            var kopya = (byte[])saglam.Clone();
+            kopya[yer] ^= 0xFF;
+            await File.WriteAllBytesAsync(bozuk, kopya);
+
+            try
+            {
+                await BackupDumpCompression.DecompressFileAsync(bozuk, acilan);
+            }
+            catch (AppException hata)
+            {
+                Assert.Equal("backup.decrypt_corrupt", hata.MessageKey);
+                continue; // Yakalandi: dogru davranis.
+            }
+
+            // Hata VERMEDIYSE, cikan icerik ASLIYLA birebir ayni olmak ZORUNDA.
+            if (!beklenen.SequenceEqual(await File.ReadAllBytesAsync(acilan)))
+            {
+                sessizBozulma.Add(yer);
+            }
+        }
+
+        Assert.True(
+            sessizBozulma.Count == 0,
+            $"Bozuk arsiv SESSIZCE farkli veri uretti ({sessizBozulma.Count}/20 nokta: " +
+            $"{string.Join(", ", sessizBozulma)}). ZSTD saglama toplami kapali olmali -- bu, bozuk " +
+            "bir yedegin musterinin veritabanina cop olarak yazilmasi demektir.");
+    }
+
+    /// <summary>
+    /// Kesilmis/bozulmus bir ZSTD cercevesi NET bir hata vermeli. Sarmalanmasaydi kullanici
+    /// "Dictionary mismatch" gibi hicbir sey anlatmayan bir ic hata gorurdu (middleware bunu
+    /// common.unexpected_error'a cevirirdi) ve saglam sanip yedegini silebilirdi.
+    /// </summary>
+    [Fact]
+    public async Task CorruptCompressedArchive_IsRejectedClearly_AndNothingIsImported()
+    {
+        using var alan = new GeciciAlan();
+        var servis = alan.ServisKur();
+
+        var kayit = await servis.BackupDatabaseAsync(new BackupDatabaseRequest
+        {
+            Engine = "mariadb",
+            DatabaseName = "musteri_wp"
+        });
+
+        // Cercevenin ortasindan tek bir bit cevrilir (imza saglam kalir, govde bozulur).
+        var ham = await File.ReadAllBytesAsync(kayit.Path);
+        ham[ham.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(kayit.Path, ham);
+
+        var hata = await Assert.ThrowsAsync<AppException>(
+            () => servis.RestoreAsync(new RestoreBackupRequest { BackupId = kayit.Id }));
+
+        Assert.Equal("backup.decrypt_corrupt", hata.MessageKey);
+
+        // HICBIR SEY ICE AKTARILMADI: yarim bir dokumu veritabanina yazmak, hic yazmamaktan
+        // cok daha pahaliya mal olurdu.
+        Assert.Null(alan.IceAktarilanIcerik);
+    }
+
+    /// <summary>
+    /// Tersi de dogru olmali: kayit "sikisik degil" diyor ama dosya sikisik (kayit eski surumden
+    /// kalmis / elle tasinmis). Etikete guvenilseydi sikisik baytlar ham SQL sanilip motora
     /// gonderilirdi.
     /// </summary>
     [Fact]
@@ -296,7 +469,7 @@ public sealed class BackupDumpCompressionTests
 
         var duzDokum = Path.Combine(alan.Kok, "gizli-sikisik.sql");
         await File.WriteAllTextAsync(duzDokum, alan.UretilenDokum);
-        var sikisik = duzDokum + ".gz";
+        var sikisik = duzDokum + ".zst";
         await BackupDumpCompression.CompressFileAsync(duzDokum, sikisik);
 
         await alan.DosyaDeposu.WriteAsync("config/backups.json", new[]
@@ -318,7 +491,7 @@ public sealed class BackupDumpCompressionTests
         var sonuc = await servis.RestoreAsync(new RestoreBackupRequest { BackupId = "gizli" });
 
         Assert.Equal("restored", sonuc.Status);
-        Assert.False(alan.IceAktarilanGzipMiydi, "Motora sikistirilmis baytlar gonderildi!");
+        Assert.False(alan.IceAktarilanSikisikMiydi, "Motora sikistirilmis baytlar gonderildi!");
         Assert.Equal(alan.UretilenDokum, alan.IceAktarilanIcerik);
     }
 
@@ -404,7 +577,7 @@ public sealed class BackupDumpCompressionTests
 
         public string IceAktarilanYol { get; private set; } = string.Empty;
 
-        public bool IceAktarilanGzipMiydi { get; private set; }
+        public bool IceAktarilanSikisikMiydi { get; private set; }
 
         public string KlasorAc(params string[] parcalar)
         {
@@ -497,7 +670,10 @@ public sealed class BackupDumpCompressionTests
         {
             IceAktarilanYol = istek.FilePath;
             var ham = File.ReadAllBytes(istek.FilePath);
-            IceAktarilanGzipMiydi = ham.Length > 1 && ham[0] == 0x1F && ham[1] == 0x8B;
+            // ZSTD (28 B5 2F FD) ya da GZip (1F 8B) -- ikisi de "motora ham SQL gitmedi" demektir.
+            IceAktarilanSikisikMiydi =
+                (ham.Length > 3 && ham[0] == 0x28 && ham[1] == 0xB5 && ham[2] == 0x2F && ham[3] == 0xFD)
+                || (ham.Length > 1 && ham[0] == 0x1F && ham[1] == 0x8B);
             IceAktarilanIcerik = System.Text.Encoding.UTF8.GetString(ham);
         }
 

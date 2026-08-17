@@ -37,8 +37,8 @@ public sealed class BackupRecordDto
     public bool Encrypted { get; set; }
 
     /// <summary>
-    /// Yedek dosyası GZip ile sıkıştırılmış mı (dosya adı <c>.gz</c> ile biter; şifreliyse
-    /// <c>.sql.gz.enc</c>).
+    /// Yedek dosyası ZSTD ile sıkıştırılmış mı (dosya adı <c>.zst</c> ile biter; şifreliyse
+    /// <c>.sql.zst.enc</c>).
     /// <para>
     /// Bu alan da EKRAN İÇİNDİR — <see cref="Encrypted"/> ile aynı disiplin: geri yüklerken
     /// "açılacak mı" kararı dosyanın KENDİ BAŞLIĞINDAN verilir. Sıkıştırma öncesi alınmış eski düz
