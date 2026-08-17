@@ -127,7 +127,56 @@ public sealed class BackupService(
     }
 
     /// <summary>
-    /// Her yedek akışının ORTAK son adımı: şifrele → uzak hedefe yükle → kaydı oluştur ve listeye ekle.
+    /// Üretilmiş yedek dosyasını (gerekiyorsa) sıkıştırır. Hangi biçimin sıkıştırılacağı kararı
+    /// <see cref="BackupDumpCompression.ShouldCompress"/>'tedir — burada "ne zaman" değil yalnızca
+    /// "nasıl" vardır.
+    /// </summary>
+    /// <remarks>
+    /// <b>Sıkıştırma başarısızsa YEDEK ÖLMEZ:</b> düz dosya olduğu gibi korunur, kayda görünür bir
+    /// uyarı düşer. Bu, <see cref="ProtectArchiveAsync"/>'in tam TERSİ davranıştır ve fark bilinçlidir:
+    /// şifreleme bir GÜVENLİK SÖZÜDÜR, tutulamıyorsa sessizce şifresiz dosya bırakmak yalan olur;
+    /// sıkıştırma ise yalnızca bir BOYUT iyileştirmesidir — disk dolduğu için gzip yazılamadı diye
+    /// o gecenin yedeğini hiç almamak, korumasız değil YEDEKSİZ bırakmak olurdu. Geri yükleme her
+    /// iki durumda da çalışır: biçim kararı dosya başlığından verilir.
+    /// </remarks>
+    private async Task<(string Path, string Name, bool Compressed)> CompressArchiveAsync(
+        string localPath,
+        string fileName,
+        string format,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        if (!BackupDumpCompression.ShouldCompress(format))
+        {
+            return (localPath, fileName, false);
+        }
+
+        var compressedPath = localPath + BackupDumpCompression.CompressedExtension;
+        try
+        {
+            await BackupDumpCompression.CompressFileAsync(localPath, compressedPath, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            TryDeleteFile(compressedPath);
+            logger?.LogWarning(exception, "Yedek sikistirilamadi, duz dosya korundu: {File}", fileName);
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.compression_failed",
+                Target = format,
+                Detail = exception.Message
+            });
+            return (localPath, fileName, false);
+        }
+
+        // Düz kopya diskte KALMAZ; kalsaydı kazanç sıfır olurdu (iki dosya birden dururdu).
+        TryDeleteFile(localPath);
+        return (compressedPath, fileName + BackupDumpCompression.CompressedExtension, true);
+    }
+
+    /// <summary>
+    /// Her yedek akışının ORTAK son adımı: sıkıştır → şifrele → uzak hedefe yükle → kaydı oluştur
+    /// ve listeye ekle. (Sıkıştırmanın şifrelemeden ÖNCE gelmesi zorunludur; gerekçe aşağıda.)
     /// </summary>
     /// <param name="chain">
     /// Artımsal zincir damgası (zincirsiz yedeklerde <c>null</c>). Damganın kayda yazılması TEK
@@ -158,8 +207,20 @@ public sealed class BackupService(
         string subscriptionUserId = "",
         int itemCount = 0)
     {
+        // SIRA KİLİTLİ: ÖNCE SIKIŞTIR, SONRA ŞİFRELE.
+        //
+        // Şifrelenmiş veri rastgeleye yakındır ve SIKIŞMAZ; ters sırada dosya küçülmez, yalnızca
+        // CPU harcanırdı. Bu yüzden sıkıştırma tam burada — ProtectArchiveAsync'ten ÖNCE — durur ve
+        // sıra bir testle korunur (BackupDumpCompressionTests).
+        //
+        // İkisi de FinalizeBackupAsync'te toplanmıştır: dört yedek akışının her birinde ayrı ayrı
+        // yazılsaydı, biri unutulduğunda o tür sessizce ham (ve/veya şifresiz) kalırdı.
+        var warnings = new List<BackupRestoreWarningDto>();
+        var (compressedPath, compressedName, compressed) =
+            await CompressArchiveAsync(localPath, fileName, format, warnings, cancellationToken);
+
         var password = await ResolveEncryptionPasswordAsync(request.EncryptionPassword, cancellationToken);
-        var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(localPath, fileName, password, cancellationToken);
+        var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(compressedPath, compressedName, password, cancellationToken);
 
         var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
 
@@ -203,8 +264,9 @@ public sealed class BackupService(
             Type = type,
             Source = source,
             Path = finalPath,
-            // Biçim ANLAMSAL kalır ("zip"/"sql"/"bak"): şifreleme bir sarmalayıcıdır, arşivin türünü
-            // değiştirmez. Geri yükleme yolları bu alana bakmaya devam eder.
+            // Biçim ANLAMSAL kalır ("zip"/"sql"/"bak"): şifreleme ve sıkıştırma birer SARMALAYICIDIR,
+            // arşivin türünü değiştirmez. Geri yükleme yolları bu alana bakmaya devam eder
+            // (sarmalayıcılar dosya BAŞLIĞINDAN tanınır, bu etiketten değil).
             Format = format,
             CreatedAtUtc = DateTime.UtcNow,
             Size = new FileInfo(finalPath).Length,
@@ -212,6 +274,7 @@ public sealed class BackupService(
             TargetType = target.Type,
             RemoteUri = remoteUri,
             Encrypted = encrypted,
+            Compressed = compressed,
             ChainId = chain?.ChainId ?? string.Empty,
             ChainIndex = chain?.ChainIndex ?? 0,
             BackupMode = chain?.Mode ?? BackupChainPlanner.ModeFull,
@@ -234,6 +297,10 @@ public sealed class BackupService(
                 logger?.LogWarning(exception, "Yedek dosya indeksi diske yazilamadi: {File}", finalName);
             }
         }
+
+        // Sıkıştırma denendi ama başarısız olduysa (disk dolu vb.) SESSİZ KALINMAZ: yedek geçerlidir
+        // ama beklenenden ~4 kat büyüktür ve sebebi ancak burada görünür.
+        record.Warnings.AddRange(warnings);
 
         // Uzak kopya alınamadıysa SEBEBİ kayda taşınır. "Uzak hedefe gönderilemedi" demeden
         // sessizce yerel yedekle yetinmek, kullanıcının off-site kopyası olduğunu sanmasına yol
@@ -331,16 +398,18 @@ public sealed class BackupService(
     }
 
     /// <summary>
-    /// Yedeğin OKUNABİLİR hâli: şifresizse dosyanın kendisi, şifreliyse çözülmüş GEÇİCİ kopya.
-    /// Dispose edildiğinde geçici kopya silinir.
+    /// Yedeğin OKUNABİLİR hâli: sarmalayıcısı yoksa dosyanın kendisi; şifreli ve/veya sıkıştırılmış
+    /// ise çözülmüş/açılmış GEÇİCİ kopya. Dispose edildiğinde geçici kopyaların HEPSİ silinir.
     /// </summary>
-    private sealed class BackupContent(string filePath, string? temporaryPath) : IDisposable
+    private sealed class BackupContent(string filePath, IReadOnlyList<string> temporaryPaths) : IDisposable
     {
         public string FilePath { get; } = filePath;
 
         public void Dispose()
         {
-            if (temporaryPath is not null)
+            // Sarmalayıcı başına bir geçici dosya olabilir (çözülmüş kopya + açılmış kopya);
+            // hepsi silinir, yoksa çözülmüş DÜZ METİN müşteri verisi %TEMP%'te kalırdı.
+            foreach (var temporaryPath in temporaryPaths)
             {
                 TryDeleteFile(temporaryPath);
             }
@@ -348,30 +417,75 @@ public sealed class BackupService(
     }
 
     /// <summary>
-    /// Kaydın arşivini okumaya hazırlar.
+    /// Kaydın arşivini okumaya hazırlar: gerekiyorsa ÇÖZER, gerekiyorsa AÇAR.
     /// <para>
-    /// Şifreli mi kararı DOSYANIN BAŞLIĞINDAN verilir, kayıttaki bayraktan değil: eski (şifresiz)
-    /// yedekler çalışmaya devam etmeli, dosyası elle taşınmış/kaydı bozulmuş bir yedek de doğru
-    /// tanınmalıdır.
+    /// Sarmalayıcıların varlığı DOSYANIN BAŞLIĞINDAN okunur, kayıttaki bayraklardan değil: eski
+    /// (şifresiz ve sıkıştırmasız) yedekler çalışmaya devam etmeli, dosyası elle taşınmış/kaydı
+    /// bozulmuş bir yedek de doğru tanınmalıdır. Etikete güvenip başlığa bakmamak, "yedek var
+    /// görünüyor ama geri gelmiyor" sınıfının ta kendisidir.
+    /// </para>
+    /// <para>
+    /// <b>Sıra, yazma sırasının TERSİDİR:</b> yazarken sıkıştır→şifrele, okurken çöz→aç. Bütün
+    /// okuma yolları (geri yükleme, gözatma, ayrıntılı geri yükleme, zincir halkaları) tek elden
+    /// buradan geçer; ayrı ayrı yazılsaydı biri unutulduğunda o yol sıkıştırılmış baytları ham SQL
+    /// sanıp veritabanına aktarmaya kalkardı.
     /// </para>
     /// </summary>
     private async Task<BackupContent> OpenContentAsync(BackupRecordDto record, string? password, CancellationToken cancellationToken)
     {
-        if (!BackupArchiveCipher.IsEncryptedFile(record.Path))
-        {
-            return new BackupContent(record.Path, null);
-        }
+        var currentPath = record.Path;
+        var temporaryPaths = new List<string>();
 
-        var parola = await ResolveEncryptionPasswordAsync(password, cancellationToken);
-        if (parola.Length == 0)
+        try
         {
-            // "Bozuk dosya" DEMEYİZ: dosya sağlam, parola eksik. Kullanıcı ne yapacağını bilmeli.
-            throw new AppException("backup.password_required", 400, 400);
-        }
+            if (BackupArchiveCipher.IsEncryptedFile(currentPath))
+            {
+                var parola = await ResolveEncryptionPasswordAsync(password, cancellationToken);
+                if (parola.Length == 0)
+                {
+                    // "Bozuk dosya" DEMEYİZ: dosya sağlam, parola eksik. Kullanıcı ne yapacağını bilmeli.
+                    throw new AppException("backup.password_required", 400, 400);
+                }
 
-        var temporaryPath = Path.Combine(Path.GetTempPath(), $"adabk-open-{Guid.NewGuid():N}.tmp");
-        await BackupArchiveCipher.DecryptFileAsync(record.Path, temporaryPath, parola, cancellationToken);
-        return new BackupContent(temporaryPath, temporaryPath);
+                var decryptedPath = Path.Combine(Path.GetTempPath(), $"adabk-open-{Guid.NewGuid():N}.tmp");
+                temporaryPaths.Add(decryptedPath);
+                await BackupArchiveCipher.DecryptFileAsync(currentPath, decryptedPath, parola, cancellationToken);
+                currentPath = decryptedPath;
+            }
+
+            // SIKIŞTIRILMIŞ DÖKÜM GERİ YÜKLENİRKEN ÖNCE AÇILMALI: ImportDumpAsync gerçek bir .sql
+            // DOSYASI bekler (mysql istemcisine "source <yol>" olarak verilir). Bu adım atlanırsa
+            // özellik "yedek küçüldü" der ama geri yükleme çalışmaz — yedek fiilen yok olur.
+            if (BackupDumpCompression.IsCompressedFile(currentPath))
+            {
+                var decompressedPath = Path.Combine(Path.GetTempPath(), $"adabk-open-{Guid.NewGuid():N}.{SafeTempExtension(record.Format)}");
+                temporaryPaths.Add(decompressedPath);
+                await BackupDumpCompression.DecompressFileAsync(currentPath, decompressedPath, cancellationToken);
+                currentPath = decompressedPath;
+            }
+
+            return new BackupContent(currentPath, temporaryPaths);
+        }
+        catch
+        {
+            // Yarım kalan geçici kopyalar %TEMP%'te ÇÖZÜLMÜŞ müşteri verisi olarak kalmaz.
+            foreach (var temporaryPath in temporaryPaths)
+            {
+                TryDeleteFile(temporaryPath);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Açılmış geçici kopyanın uzantısı. Kayıttaki biçim etiketi kullanıcı verisi sayılır: yola
+    /// giren her şey temizlenir, tanınmayan/boş değer <c>tmp</c>'ye düşer.
+    /// </summary>
+    private static string SafeTempExtension(string? format)
+    {
+        var temiz = new string((format ?? string.Empty).Where(char.IsLetterOrDigit).ToArray());
+        return temiz.Length is > 0 and <= 8 ? temiz.ToLowerInvariant() : "tmp";
     }
 
     public async Task<BackupEncryptionSettingsDto> GetEncryptionSettingsAsync(CancellationToken cancellationToken = default)

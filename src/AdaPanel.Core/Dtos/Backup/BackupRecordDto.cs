@@ -37,6 +37,17 @@ public sealed class BackupRecordDto
     public bool Encrypted { get; set; }
 
     /// <summary>
+    /// Yedek dosyası GZip ile sıkıştırılmış mı (dosya adı <c>.gz</c> ile biter; şifreliyse
+    /// <c>.sql.gz.enc</c>).
+    /// <para>
+    /// Bu alan da EKRAN İÇİNDİR — <see cref="Encrypted"/> ile aynı disiplin: geri yüklerken
+    /// "açılacak mı" kararı dosyanın KENDİ BAŞLIĞINDAN verilir. Sıkıştırma öncesi alınmış eski düz
+    /// <c>.sql</c> yedeklerde bu alan yoktur/false'tur ve onlar aynen çalışmaya devam eder.
+    /// </para>
+    /// </summary>
+    public bool Compressed { get; set; }
+
+    /// <summary>
     /// Son geri yüklemenin YARIM KALAN adımları. Boş değilse <see cref="Status"/> da
     /// <c>restored_with_errors</c> olur — "restored" yazıp sorunu yutmak yasaktır.
     /// </summary>
