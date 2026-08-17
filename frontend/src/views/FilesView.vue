@@ -214,7 +214,7 @@
         </button>
       </div>
 
-      <div v-if="backups.length" class="data-table">
+      <div v-if="gorunenYedekler.length" class="data-table">
         <div class="data-row table-head backup-row">
           <span>{{ t("panel.files.name") }}</span>
           <span>{{ t("panel.backup.type") }}</span>
@@ -222,7 +222,7 @@
           <span></span>
         </div>
 
-        <div v-for="item in backups" :key="item.id" class="data-row backup-row">
+        <div v-for="item in gorunenYedekler" :key="item.id" class="data-row backup-row">
           <div class="cell-main">
             <strong>{{ item.name }}</strong>
             <small>{{ item.source }}</small>
@@ -282,6 +282,24 @@ const loading = ref(false);
 const workspaceLoad = useSectionError();
 const fileContent = ref("");
 const backups = ref<BackupRecord[]>([]);
+
+/**
+ * SEÇİLİ SİTENİN yedekleri.
+ *
+ * Bu ekran bir alan adının içindedir (Web Siteleri → site → Dosyalar → Yedekler), ama liste
+ * sunucudaki BÜTÜN yedekleri basıyordu: kullanıcı bir sitenin içindeyken başka sitelerin,
+ * veritabanlarının ve panelin yedeklerini görüyordu. Bağlamda olmayan satırlar yalnızca
+ * gürültü değil, yanlış satıra basma riskidir (geri yükleme yıkıcıdır).
+ *
+ * Süzgeç `SiteBackupView` ile AYNI kuraldır: tür "site" VE kaynak seçili site. Site
+ * seçilmemişse (sunucu geneli Dosyalar ekranı) liste OLDUĞU GİBİ kalır — orada bağlam yoktur
+ * ve süzmek her şeyi gizlerdi.
+ */
+const gorunenYedekler = computed(() =>
+  selectedSiteName.value
+    ? backups.value.filter((record) => record.type === "site" && record.source === selectedSiteName.value)
+    : backups.value);
+
 const backupSiteName = ref("");
 const backupEngine = ref("mariadb");
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();

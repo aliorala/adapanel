@@ -24,8 +24,27 @@
           {{ t("panel.backup.schedules") }}
         </button>
       </div>
-      <span class="status-pill">{{ backups.length }} {{ t("panel.backup.records") }}</span>
+
+      <!-- Arama TÜM listede çalışır (gün grupları ve sayfalama ÜSTÜNDE): kapalı bir günün ya da
+           başka bir sayfanın içindeki yedeği kaçırmayalım. Sayfalamadan ÖNCE uygulanır. -->
+      <label v-if="activeView === 'list'" class="toolbar-search">
+        <span class="meta">{{ t("panel.backup.search") }}</span>
+        <input v-model.trim="search" type="search" :placeholder="t('panel.backup.searchPlaceholder')" />
+      </label>
+
+      <span class="status-pill">
+        {{ search
+          ? t("panel.backup.recordsFiltered", { shown: filteredBackups.length, total: backups.length })
+          : `${backups.length} ${t("panel.backup.records")}` }}
+      </span>
     </div>
+
+    <!-- Yedek ALINIRKEN ekran donmuş görünmesin: uç işi arka plana almıyor, istek uçuştayken
+         yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts). -->
+    <RunningTaskBanner
+      :running="runningBackup.running.value"
+      :label="runningBackup.label.value"
+      :elapsed-text="runningBackup.elapsedText.value" />
 
     <div v-if="activeView === 'list'" class="data-table backup-table">
       <!-- BEŞ sütun. Önceden sekizdi ve dördü (tür, hedef türü, boyut, tarih) tek kelimelik
@@ -39,91 +58,186 @@
         <span>{{ t("panel.backup.statusColumn") }}</span>
         <span>{{ t("panel.software.action") }}</span>
       </div>
-      <template v-for="backup in pager.items.value" :key="backup.id">
-        <div class="data-row backup-row">
-          <div class="cell-main">
-            <strong>{{ backup.name }}</strong>
-            <span class="pill-row">
-              <!-- Zincirdeki YER: artımsal halka mı, zincirin tam yedeği mi. Zinciri olmayan
-                   tekil yedekte rozet YOKTUR (yanlış bir bağ hissi vermesin). -->
-              <span v-if="backup.chainId && backup.backupMode === 'incremental'" class="status-pill chain-link">
-                {{ t("panel.backup.chain.linkBadge", { index: backup.chainIndex }) }}
+      <!--
+        GÜN GRUPLARI. Gruplama `createdAtUtc`ten KULLANICININ YEREL gününe çevrilerek yapılır
+        (bkz. composables/useDayGroups.ts); dosya YOLU ayrıştırılmaz — gün klasörü olmadan
+        alınmış ESKİ yedekler de bu sayede doğru günün altında durur.
+
+        SAYFALAMA KAYITLARA uygulanır, günlere değil (gerekçe: `pageGroups` yorumunda).
+        Gün başlığındaki sayı/boyut özeti ise SÜZÜLMÜŞ LİSTENİN TAMAMINDAN ölçülür, açık
+        sayfadan değil — yoksa "3 yedek" yazan bir gün başlığı aslında 40 yedeği olan bir günü
+        anlatıyor olurdu.
+      -->
+      <template v-for="group in pageGroups" :key="group.key">
+        <div class="day-group-head">
+          <button
+            type="button"
+            class="day-toggle"
+            :aria-expanded="isDayOpen(group.key)"
+            @click="toggleDay(group.key)">
+            <span class="day-caret" aria-hidden="true">{{ isDayOpen(group.key) ? "▾" : "▸" }}</span>
+            <strong>{{ group.label }}</strong>
+          </button>
+          <span class="pill-row day-summary">
+            <span class="status-pill">{{ t("panel.backup.day.count", { count: dayStats(group.key).count }) }}</span>
+            <span class="status-pill">{{ formatBytes(dayStats(group.key).size) }}</span>
+            <!-- Gün, sayfa sınırında BÖLÜNDÜ: kullanıcı geri kalanının kaybolmadığını bilsin. -->
+            <small v-if="group.items.length < dayStats(group.key).count" class="cell-muted">
+              {{ t("panel.backup.day.partial", { shown: group.items.length, total: dayStats(group.key).count }) }}
+            </small>
+          </span>
+        </div>
+        <template v-for="backup in (isDayOpen(group.key) ? group.items : [])" :key="backup.id">
+          <div class="data-row backup-row">
+            <div class="cell-main">
+              <strong>{{ backup.name }}</strong>
+              <span class="pill-row">
+                <!-- Zincirdeki YER: artımsal halka mı, zincirin tam yedeği mi. Zinciri olmayan
+                     tekil yedekte rozet YOKTUR (yanlış bir bağ hissi vermesin). -->
+                <span v-if="backup.chainId && backup.backupMode === 'incremental'" class="status-pill chain-link">
+                  {{ t("panel.backup.chain.linkBadge", { index: backup.chainIndex }) }}
+                </span>
+                <span v-else-if="backup.chainId" class="status-pill chain-head">
+                  {{ t("panel.backup.chain.headBadge") }}
+                </span>
+                <span v-if="backup.itemCount > 0" class="status-pill">
+                  {{ t("panel.backup.itemCount", { count: backup.itemCount }) }}
+                </span>
               </span>
-              <span v-else-if="backup.chainId" class="status-pill chain-head">
-                {{ t("panel.backup.chain.headBadge") }}
-              </span>
-              <span v-if="backup.itemCount > 0" class="status-pill">
-                {{ t("panel.backup.itemCount", { count: backup.itemCount }) }}
-              </span>
-            </span>
-            <small>{{ backup.id }}</small>
-          </div>
-          <div class="cell-main">
-            <strong>{{ backupSourceLabel(backup) }}</strong>
-            <small>{{ backupKindLabel(backup.type) }}</small>
-          </div>
-          <div class="cell-main">
-            <strong>{{ backup.remoteUri ? t("panel.backup.remoteTarget") : t("panel.backup.localTarget") }}</strong>
-            <small>{{ formatBytes(backup.size) }}</small>
-          </div>
-          <div class="cell-main">
-            <span class="pill-row">
-              <span :class="['status-pill', statusTone(backup.status)]">{{ formatStatus(backup.status) }}</span>
-              <!-- Kilit rozeti: geri yüklerken parola isteneceğini kullanıcı LİSTEDE görsün. -->
-              <span v-if="backup.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
-                {{ t("panel.backup.encryptedBadge") }}
-              </span>
-              <!-- Yarım kalan/riskli adımlar sessizce yutulmaz: rozet TIKLANIR ve sebepler açılır
-                   (ipucu metni dokunmatik ekranda hiç görünmüyordu). -->
+              <small>{{ backup.id }}</small>
+            </div>
+            <div class="cell-main">
+              <strong>{{ backupSourceLabel(backup) }}</strong>
+              <small>{{ backupKindLabel(backup.type) }}</small>
+            </div>
+            <div class="cell-main">
+              <strong>{{ backup.remoteUri ? t("panel.backup.remoteTarget") : t("panel.backup.localTarget") }}</strong>
+              <small>{{ formatBytes(backup.size) }}</small>
+              <!-- Yedeğin DİSKTEKİ yeri. Satırın içine basılmaz: tam yol satırı bozacak kadar
+                   uzundur ve her satırda yer kaplaması listeyi okunmaz yapardı. -->
               <button
-                v-if="backup.warnings?.length"
                 type="button"
-                class="status-pill warn warning-toggle"
-                :aria-expanded="expandedWarnings === backup.id"
-                @click="toggleWarnings(backup.id)">
-                {{ t("panel.backup.warningsBadge", { count: backup.warnings.length }) }}
+                class="secondary compact location-toggle"
+                :aria-expanded="expandedLocation === backup.id"
+                @click="toggleLocation(backup.id)">
+                {{ t("panel.backup.location.toggle") }}
               </button>
-            </span>
-            <small>{{ new Date(backup.createdAtUtc).toLocaleString() }}</small>
+            </div>
+            <div class="cell-main">
+              <span class="pill-row">
+                <span :class="['status-pill', statusTone(backup.status)]">{{ formatStatus(backup.status) }}</span>
+                <!-- Kilit rozeti: geri yüklerken parola isteneceğini kullanıcı LİSTEDE görsün. -->
+                <span v-if="backup.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
+                  {{ t("panel.backup.encryptedBadge") }}
+                </span>
+                <!-- Yarım kalan/riskli adımlar sessizce yutulmaz: rozet TIKLANIR ve sebepler açılır
+                     (ipucu metni dokunmatik ekranda hiç görünmüyordu). -->
+                <button
+                  v-if="backup.warnings?.length"
+                  type="button"
+                  class="status-pill warn warning-toggle"
+                  :aria-expanded="expandedWarnings === backup.id"
+                  @click="toggleWarnings(backup.id)">
+                  {{ t("panel.backup.warningsBadge", { count: backup.warnings.length }) }}
+                </button>
+              </span>
+              <small>{{ new Date(backup.createdAtUtc).toLocaleString() }}</small>
+            </div>
+            <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
+                {{ t("panel.backup.restore") }}
+              </button>
+              <button
+                v-if="backup.format === 'zip'"
+                class="secondary compact row-button"
+                :disabled="busy"
+                @click="openBrowser(backup)">
+                {{ t("panel.backup.browse") }}
+              </button>
+              <button
+                v-if="backup.chainId"
+                class="secondary compact row-button"
+                :disabled="busy"
+                @click="openChain(backup)">
+                {{ t("panel.backup.chain.view") }}
+              </button>
+              <button class="secondary compact row-button" :disabled="busy" @click="download(backup)">
+                {{ t("panel.backup.download") }}
+              </button>
+              <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeBackup(backup)">
+                {{ t("panel.backup.delete") }}
+              </button>
+            </div>
           </div>
-          <div class="row-actions">
-            <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
-              {{ t("panel.backup.restore") }}
-            </button>
-            <button
-              v-if="backup.format === 'zip'"
-              class="secondary compact row-button"
-              :disabled="busy"
-              @click="openBrowser(backup)">
-              {{ t("panel.backup.browse") }}
-            </button>
-            <button
-              v-if="backup.chainId"
-              class="secondary compact row-button"
-              :disabled="busy"
-              @click="openChain(backup)">
-              {{ t("panel.backup.chain.view") }}
-            </button>
-            <button class="secondary compact row-button" :disabled="busy" @click="download(backup)">
-              {{ t("panel.backup.download") }}
-            </button>
-            <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeBackup(backup)">
-              {{ t("panel.backup.delete") }}
-            </button>
+          <div v-if="expandedWarnings === backup.id" class="warning-detail">
+            <strong>{{ t("panel.backup.warningsListTitle") }}</strong>
+            <ul>
+              <li v-for="(warning, index) in backup.warnings" :key="index">
+                {{ warningLine(warning) }}
+                <small v-if="warning.detail">{{ warning.detail }}</small>
+              </li>
+            </ul>
           </div>
-        </div>
-        <div v-if="expandedWarnings === backup.id" class="warning-detail">
-          <strong>{{ t("panel.backup.warningsListTitle") }}</strong>
-          <ul>
-            <li v-for="(warning, index) in backup.warnings" :key="index">
-              {{ warningLine(warning) }}
-              <small v-if="warning.detail">{{ warning.detail }}</small>
-            </li>
-          </ul>
-        </div>
+
+          <!-- YEDEĞİN YERİ. Kayıt yolu OLDUĞU GİBİ gösterilir (kısaltılmaz): kullanıcı bu yolu
+               kopyalayıp Dosya Gezgini'ne/FTP'ye yapıştıracak. Uzun yol satırı bozmasın diye
+               kutu KENDİ İÇİNDE yatay kayar. -->
+          <div v-if="expandedLocation === backup.id" class="location-detail">
+            <div class="location-line">
+              <span class="field-label">{{ t("panel.backup.location.local") }}</span>
+              <code v-if="backup.path" class="path-box">{{ backup.path }}</code>
+              <span v-else class="cell-muted">{{ t("panel.backup.location.unknown") }}</span>
+              <button
+                v-if="backup.path"
+                type="button"
+                class="secondary compact"
+                @click="copyPath(backup.path)">
+                {{ t("panel.backup.location.copy") }}
+              </button>
+            </div>
+
+            <!-- UZAK kopya. Adres KİMLİKSİZ basılır: sunucu `user:pass@` kısmını arındırıyor,
+                 biz ek olarak SORGU DİZESİNİ de düşürüyoruz (S3 "presigned" hedefinde imza
+                 orada durur ve ekran görüntüsüyle paylaşılırsa hedef depo devredilmiş olur). -->
+            <div v-if="backup.remoteUri" class="location-line">
+              <span class="field-label">{{ t("panel.backup.location.remote") }}</span>
+              <code v-if="safeRemote(backup.remoteUri).text" class="path-box">{{ safeRemote(backup.remoteUri).text }}</code>
+              <span v-else class="cell-muted">{{ t("panel.backup.location.remoteHidden") }}</span>
+              <button
+                v-if="safeRemote(backup.remoteUri).text"
+                type="button"
+                class="secondary compact"
+                @click="copyPath(safeRemote(backup.remoteUri).text)">
+                {{ t("panel.backup.location.copy") }}
+              </button>
+            </div>
+            <p v-if="backup.remoteUri && safeRemote(backup.remoteUri).masked" class="field-hint">
+              {{ t("panel.backup.location.remoteMasked") }}
+            </p>
+
+            <!-- Kayıt, dosyanın diskte HÂLÂ DURUP DURMADIĞINI taşımıyor: uç bunu ölçmüyor.
+                 "Dosya yerinde" demek ölçmediğimiz şeye güvenmek olurdu; onun yerine ne
+                 bilmediğimizi söylüyoruz. -->
+            <p class="field-hint">{{ t("panel.backup.location.existenceUnknown") }}</p>
+          </div>
+        </template>
       </template>
+
+      <!-- Yedek KÖK klasörü: gün klasörleri bunun altında açılıyor. Değer Ayarlar'daki
+           `defaultBackupRoot` tercihinden OKUNUR (uydurulmaz); uç yalnız yöneticiye açık
+           olduğundan okunamadığında satır HİÇ çizilmez. -->
+      <p v-if="backupRoot" class="location-root">
+        <span class="field-label">{{ t("panel.backup.location.root") }}</span>
+        <code class="path-box">{{ backupRoot }}</code>
+        <button type="button" class="secondary compact" @click="copyPath(backupRoot)">
+          {{ t("panel.backup.location.copy") }}
+        </button>
+        <small class="cell-muted">{{ t("panel.backup.location.rootHint") }}</small>
+      </p>
+
       <!-- "Yükleniyor" / "kayıt yok" / "okunamadı" ÜÇÜ AYRI: birini diğerinin yerine göstermek,
-           var olan yedekleri yok gibi sunmak olurdu. -->
+           var olan yedekleri yok gibi sunmak olurdu. Aramanın boşa düşmesi DÖRDÜNCÜ bir durumdur:
+           "hiç yedek yok" demek, süzgeci fark etmeyen kullanıcıya yedekleri yok gibi gösterirdi. -->
       <p v-if="loading && backups.length === 0" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
       <SectionLoadError
         v-else-if="listLoad.message.value"
@@ -131,6 +245,7 @@
         :busy="loading"
         @retry="refresh" />
       <p v-else-if="backups.length === 0" class="empty-state">{{ t("panel.backup.empty") }}</p>
+      <p v-else-if="filteredBackups.length === 0" class="empty-state">{{ t("panel.backup.emptyFiltered") }}</p>
     </div>
 
     <TablePager v-if="activeView === 'list'" :state="pager" :disabled="busy" />
@@ -239,13 +354,23 @@
           <input v-model.number="autoForm.backupRetentionDays" type="number" min="0" />
         </label>
       </div>
-      <p class="field-hint">
+      <!--
+        SON ÇALIŞMANIN SONUCU. Önceden yalnız son/sonraki ZAMAN yazıyordu: kullanıcı "çalıştı"
+        ile "çalıştı ama başarısız oldu"yu ayırt edemiyordu. `lastBackupStatus` ve
+        `lastBackupDetails` zaten `GET /automation` yanıtında geliyor ve kısmi başarısızlığın
+        sebebi ayrıntıda duruyor — göstermemek, sonucu yutmaktı.
+      -->
+      <p class="field-hint auto-run-line">
         {{ t("panel.backup.autoRuns", {
           last: autoStatus?.lastBackupRunUtc ? new Date(autoStatus.lastBackupRunUtc).toLocaleString() : "-",
           next: autoStatus?.nextBackupRunUtc ? new Date(autoStatus.nextBackupRunUtc).toLocaleString() : "-"
         }) }}
-        {{ t("panel.backup.autoAdvancedHint") }}
+        <span v-if="autoStatus?.lastBackupStatus" :class="['status-pill', lastStatusTone(autoStatus.lastBackupStatus)]">
+          {{ lastStatusText(autoStatus.lastBackupStatus) }}
+        </span>
       </p>
+      <p v-if="autoStatus?.lastBackupDetails" class="cell-muted last-details">{{ autoStatus.lastBackupDetails }}</p>
+      <p class="field-hint">{{ t("panel.backup.autoAdvancedHint") }}</p>
       <div class="row-actions">
         <button class="compact" :disabled="busy" @click="saveAutoBackup">
           {{ t("panel.backup.autoSave") }}
@@ -558,8 +683,10 @@
 
       <p class="field-hint">{{ t("panel.backup.targetHint") }}</p>
       <div class="row-actions">
+        <!-- Düğme metni İŞ SÜRERKEN değişir: `disabled` tek başına "sürüyor" demiyordu ve
+             kullanıcı ekranın donduğunu sanıp sayfayı yeniliyordu (ikinci bir yedek tetikler). -->
         <button class="compact" v-bind="writeGate(busy)" @click="createSelectedBackup">
-          {{ createButtonLabel }}
+          {{ busy ? t("panel.backup.creating") : createButtonLabel }}
         </button>
         <button class="secondary compact" @click="activeView = 'list'">{{ t("panel.common.cancel") }}</button>
       </div>
@@ -817,17 +944,23 @@ import {
   type SubscriptionBackupSchedule
 } from "../api/backup";
 import { getAutomation, updateAutomation, type AutomationSettings, type AutomationStatus } from "../api/automation";
+import { getPanelPreferences } from "../api/panelSettings";
 import { getMySubscription } from "../api/subscriptions";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
+import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import TablePager from "../components/TablePager.vue";
 import { useBulkAction } from "../composables/useBulkSelection";
+import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { usePagination } from "../composables/usePagination";
+import { useRunningTask } from "../composables/useRunningTask";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { copyToClipboard } from "../utils/clipboard";
+import { maskSecretsInUri } from "../utils/url";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -840,13 +973,169 @@ const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
 const backups = ref<BackupRecord[]>([]);
-const pager = usePagination(backups);
 const activeView = ref<"list" | "create" | "schedules">("list");
 const backupKind = ref<"site" | "subscription" | "database" | "mail" | "panel">("site");
 const expandedWarnings = ref("");
+/** Yolu açık olan kayıt (tek seferde bir tane): tam yollar uzun, hepsi birden açık kalmasın. */
+const expandedLocation = ref("");
+const search = ref("");
 
 /** Yedek listesi ÇEKİLEMEDİ. Boş listeyle karıştırılmaz: biri "yok", diğeri "bilmiyoruz". */
 const listLoad = useSectionError();
+
+// Süren yedek işi GÖRÜNÜR (bkz. composables/useRunningTask.ts): uç işi arka plana almadığı için
+// istek uçuştayken yedek gerçekten sürüyor.
+const runningBackup = useRunningTask();
+const { groupByDay } = useDayGroups();
+
+/**
+ * Kapsamlı kullanıcının KENDİ aboneliği (alt-kullanıcıda ana aboneliğin kimliği).
+ *
+ * Burada duruyor çünkü `backupSourceLabel` bunu okuyor ve o da ARAMA süzgecinden çağrılıyor:
+ * `const` bildirimleri hoisted DEĞİLDİR, aşağıda kalsaydı süzgecin ilk değerlendirmesi
+ * "Cannot access before initialization" ile paneli çökertebilirdi.
+ */
+const ownSubscriptionId = ref("");
+const ownSubscriptionName = ref("");
+
+/**
+ * SÜZÜLMÜŞ ve zamana göre SIRALI liste — gruplamanın ve sayfalamanın tek kaynağı.
+ *
+ * Arama TÜM kayıtlarda çalışır (kapalı gün ya da başka sayfa fark etmez) ve sayfalamadan ÖNCE
+ * uygulanır; aksi hâlde kullanıcı yalnız açık sayfanın içinde aradığını sanır (bkz.
+ * composables/usePagination.ts).
+ *
+ * SIRALAMA burada da yapılır: uç şu an `createdAtUtc` azalan döndürüyor, ama gün gruplamasının
+ * DOĞRULUĞU (bir günün listede tek bir grup olması) sunucunun sıralamasına bağlı bırakılamaz.
+ */
+const filteredBackups = computed(() => {
+  const query = search.value.trim().toLowerCase();
+  const rows = query
+    ? backups.value.filter((backup) => [
+        backup.name,
+        backup.source,
+        backupSourceLabel(backup),
+        backupKindLabel(backup.type),
+        backup.status,
+        backup.path,
+        backup.id
+      ].some((field) => (field ?? "").toLowerCase().includes(query)))
+    : [...backups.value];
+
+  return rows.sort((left, right) => compareNewestFirst(left.createdAtUtc, right.createdAtUtc));
+});
+
+/**
+ * SAYFALAMA KAYITLARA uygulanır, GÜNLERE değil — bilinçli.
+ *
+ * Günleri sayfalamak DOM'u sınırlamaz: tek bir günde yüzlerce yedek olabilir (abonelik başına
+ * program + saatlik sıklık) ve o gün açıkken tarayıcı yine kilitlenirdi; `usePagination`ın var
+ * olma sebebi tam olarak budur. Kayıt sayfalaması ise üst sınırı KULLANICI NE YAPARSA YAPSIN
+ * korur. Liste zamana göre sıralı olduğundan bir sayfa her zaman kesintisiz bir zaman aralığıdır
+ * ve bir gün en fazla bir sayfa sınırında bölünür; bölündüğünde başlıkta "bu sayfada N / M" yazar.
+ *
+ * Gün grubunu KAPATMAK yalnızca çizimi etkiler, sayfalamayı DEĞİŞTİRMEZ: kapatmanın sayfa
+ * içeriğini değiştirmesi, kullanıcının bir günü kapatınca başka bir günün satırlarının
+ * kaymasına yol açardı.
+ */
+const pager = usePagination(filteredBackups);
+const pageGroups = computed(() => groupByDay(pager.items.value, (backup) => backup.createdAtUtc));
+
+/**
+ * Gün başlığındaki özet, SÜZÜLMÜŞ LİSTENİN TAMAMINDAN ölçülür (açık sayfadan değil): bir gün
+ * sayfa sınırında bölündüğünde başlıktaki "kaç yedek / toplam boyut" yine o GÜNÜN gerçeğidir.
+ */
+const dayTotals = computed(() => {
+  const totals = new Map<string, { count: number; size: number }>();
+  for (const backup of filteredBackups.value) {
+    const key = localDayKey(backup.createdAtUtc);
+    const current = totals.get(key) ?? { count: 0, size: 0 };
+    current.count += 1;
+    current.size += backup.size;
+    totals.set(key, current);
+  }
+  return totals;
+});
+
+function dayStats(key: string) {
+  return dayTotals.value.get(key) ?? { count: 0, size: 0 };
+}
+
+/**
+ * Kapalı gün anahtarları.
+ *
+ * "Kapalı olanları" tutuyoruz, "açık olanları" değil: en yeni gün AÇIK başlamalı ve yeni bir gün
+ * geldiğinde de kendiliğinden açık olmalı. Açık kümesi tutulsaydı, yarın alınan ilk yedek kapalı
+ * bir günün altına düşer ve kullanıcı onu göremezdi.
+ */
+const collapsedDays = ref(new Set<string>());
+
+function isDayOpen(key: string) {
+  return !collapsedDays.value.has(key);
+}
+
+function toggleDay(key: string) {
+  // Set YERİNDE değiştirilirse `ref` tetiklenmez; yeni bir Set atanır.
+  const next = new Set(collapsedDays.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  collapsedDays.value = next;
+}
+
+/**
+ * En yeni gün AÇIK, geri kalan günler KAPALI başlar.
+ *
+ * Yalnız İLK yüklemede uygulanır (`dayDefaultsApplied`): her yenilemede yeniden uygulanmak,
+ * kullanıcının elle açtığı eski bir günü her yenilemede kapatmak olurdu.
+ */
+const dayDefaultsApplied = ref(false);
+
+watch(filteredBackups, (rows) => {
+  if (dayDefaultsApplied.value || rows.length === 0) {
+    return;
+  }
+
+  const keys = [...new Set(rows.map((backup) => localDayKey(backup.createdAtUtc)))];
+  // Liste zamana göre azalan sıralı: ilk anahtar EN YENİ gündür.
+  collapsedDays.value = new Set(keys.slice(1));
+  dayDefaultsApplied.value = true;
+}, { immediate: true });
+
+// Arama listeyi daralttığında açık sayfa aralık dışında kalabilir; `usePagination` sayfayı
+// geçerli aralığa çekiyor ama kullanıcı 4. sayfada arama yaptığında BAŞA dönmesi gerekir.
+watch(search, () => pager.reset());
+
+// --- YEDEĞİN DİSKTEKİ YERİ ---
+
+/**
+ * Yedeklerin KÖK klasörü (gün klasörleri bunun altında). Kaynak: Ayarlar'daki
+ * `defaultBackupRoot` tercihi — uydurulmaz. `GET /panel-settings` YALNIZ yöneticiye açık
+ * olduğundan kiracıda boş kalır ve satır hiç çizilmez ("okunamadıysa gösterme").
+ */
+const backupRoot = ref("");
+
+function toggleLocation(backupId: string) {
+  expandedLocation.value = expandedLocation.value === backupId ? "" : backupId;
+}
+
+/** Uzak adresi kimliksiz + imzasız gösterime çevirir (bkz. utils/url.ts). */
+function safeRemote(remoteUri: string) {
+  return maskSecretsInUri(remoteUri);
+}
+
+async function copyPath(value: string) {
+  if (!value) {
+    return;
+  }
+
+  // Kopyalanmadıysa "kopyalandı" DEMEYİZ: `copyToClipboard` gerçekten kopyalayıp kopyalamadığını
+  // döndürür (HTTP üzerinde pano izni verilmeyebilir).
+  const copied = await copyToClipboard(value);
+  showNotice(copied ? t("panel.common.copied") : t("panel.common.copyFailed"), !copied);
+}
 
 const backupKindHint = computed(() => {
   if (backupKind.value === "site") return t("panel.backup.siteHint");
@@ -896,9 +1185,6 @@ const subscriptionScope = reactive({
 
 // --- Abonelik seçimi ---
 const subscriptionUserId = ref("");
-/** Kapsamlı kullanıcının KENDİ aboneliği (alt-kullanıcıda ana aboneliğin kimliği). */
-const ownSubscriptionId = ref("");
-const ownSubscriptionName = ref("");
 const canPickSubscription = computed(() => isAdmin.value || isReseller.value);
 
 /**
@@ -1133,8 +1419,25 @@ onMounted(async () => {
   if (isAdmin.value) {
     await loadAutoBackup();
     await loadEncryption();
+    await loadBackupRoot();
   }
 });
+
+/**
+ * Yedek kök klasörünü Ayarlar tercihinden OKUR (uydurmaz).
+ *
+ * `GET /panel-settings` yalnız yöneticiye açık. Okunamazsa satır GÖSTERİLMEZ; yerine tahmini
+ * bir yol basmak, kullanıcıyı var olmayan bir klasöre gönderirdi. Yedek listesi bu yüzden
+ * etkilenmez — kök yolu bir kolaylıktır, listenin koşulu değildir.
+ */
+async function loadBackupRoot() {
+  try {
+    const preferences = await getPanelPreferences();
+    backupRoot.value = preferences.defaultBackupRoot ?? "";
+  } catch {
+    backupRoot.value = "";
+  }
+}
 
 /**
  * Abonelik seçicisinin kaynakları.
@@ -1327,8 +1630,29 @@ async function createDatabaseBackup() {
   await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, buildTargetPayload()));
 }
 
+/** Süren yedeğin şeritte yazacağı metin: NE alınıyor (tür + kaynak). */
+function runningLabel() {
+  if (backupKind.value === "site") {
+    return `${t("panel.backup.running.creating")}: ${t("panel.backup.kind.site")} — ${siteName.value}`;
+  }
+
+  if (backupKind.value === "subscription") {
+    const choice = subscriptionChoices.value.find((item) => item.id === subscriptionUserId.value);
+    return `${t("panel.backup.running.creating")}: ${t("panel.backup.kind.subscription")} — ${choice?.label ?? subscriptionUserId.value}`;
+  }
+
+  if (backupKind.value === "database") {
+    return `${t("panel.backup.running.creating")}: ${t("panel.backup.kind.database")} — ${databaseName.value || t("panel.backup.allDatabases")}`;
+  }
+
+  return `${t("panel.backup.running.creating")}: ${backupKindLabel(backupKind.value)}`;
+}
+
 async function runBackup(operation: () => Promise<BackupRecord>) {
   busy.value = true;
+  // Yedek uçları işi ARKA PLANA ALMIYOR: istek uçuştayken yedek gerçekten sürüyor, bu yüzden
+  // şeritte gösterilen süre işin gerçek süresidir.
+  runningBackup.begin(runningLabel());
   try {
     const created = await operation();
     await refresh();
@@ -1341,6 +1665,7 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
     showError(error);
   } finally {
     busy.value = false;
+    runningBackup.end();
   }
 }
 
@@ -2005,14 +2330,25 @@ function targetLabel(targetType: string) {
   return translated === key ? targetType : translated;
 }
 
-function lastStatusLabel(schedule: SubscriptionBackupSchedule) {
-  if (!schedule.lastStatus) {
+/**
+ * Bir "son çalışma" durumunun okunur karşılığı — TEK KAYNAK.
+ *
+ * Abonelik programı (`lastStatus`) ve sunucu geneli otomatik yedek (`lastBackupStatus`) AYNI
+ * sözlüğü kullanıyor ("completed" | "completed_with_errors" | "failed"), bu yüzden iki ekran
+ * için iki ayrı eşleme yazılmaz.
+ */
+function lastStatusText(status: string) {
+  if (!status) {
     return t("panel.backup.schedule.never");
   }
 
-  const key = `panel.backup.schedule.lastStatus.${schedule.lastStatus}`;
+  const key = `panel.backup.schedule.lastStatus.${status}`;
   const translated = t(key);
-  return translated === key ? schedule.lastStatus : translated;
+  return translated === key ? status : translated;
+}
+
+function lastStatusLabel(schedule: SubscriptionBackupSchedule) {
+  return lastStatusText(schedule.lastStatus);
 }
 
 function lastStatusTone(status: string) {
@@ -2110,6 +2446,117 @@ function statusTone(status: string) {
   gap: 8px;
   padding: 8px 4px 2px;
   border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+
+/* ===================== GÜN GRUPLARI ===================== */
+
+/* Gün başlığı, kaydırılabilir tablonun İÇİNDE durur ve satırlarla aynı en az genişliği alır:
+   aksi hâlde tablo yana kaydırıldığında başlık yerinde kalıp satırlardan kopuk görünüyordu. */
+.day-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 720px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--surface-2);
+}
+
+/* Başlığın TAMAMI tıklanır: küçük bir oka isabet ettirmek dokunmatik ekranda zordu. */
+.day-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.day-caret {
+  width: 1em;
+  color: var(--text-muted);
+}
+
+.day-summary {
+  align-items: center;
+}
+
+/* ===================== YEDEĞİN YERİ ===================== */
+
+.location-toggle {
+  width: auto;
+  justify-self: start;
+}
+
+.location-detail {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.location-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.location-line button,
+.location-root button {
+  width: auto;
+}
+
+/* Tam yol KISALTILMAZ (kullanıcı kopyalayıp yapıştıracak) ama satırı da bozmaz: kutu KENDİ
+   içinde yatay kayar. `nowrap` bilinçli — sarılmış bir yol yanlış okunuyor. */
+.path-box {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.location-root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.toolbar-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.toolbar-search input {
+  min-width: 0;
+}
+
+.auto-run-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .entry-link {

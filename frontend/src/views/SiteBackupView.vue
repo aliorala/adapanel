@@ -34,6 +34,24 @@
         </div>
       </div>
 
+      <!--
+        ARTIMSAL / TAM seçimi. Sunucu bunu ZATEN destekliyordu (`BackupSiteRequest` →
+        `BackupArchiveRequest.Incremental` + `FullBackupEveryDays`, aralık 1..365) ve
+        `api/backup.ts` alanları gönderiyordu; bu ekran seçeneği GÖSTERMİYORDU, yani kullanıcı
+        yalnız tam yedek alabiliyordu. "Mümkünse artımsal": ilk yedek, tam yedek periyodu
+        dolduğunda ve temel indeks okunamadığında yine TAM alınır.
+      -->
+      <div class="scope-grid incremental-row">
+        <label class="chk">
+          <input v-model="scope.incremental" type="checkbox" /> {{ t("panel.backup.incremental") }}
+        </label>
+        <label v-if="scope.incremental" class="stacked-field full-every">
+          <span class="field-label">{{ t("panel.backup.schedule.fullEvery") }}</span>
+          <input v-model.number="scope.fullBackupEveryDays" type="number" min="1" max="365" />
+        </label>
+      </div>
+      <p v-if="scope.incremental" class="field-hint">{{ t("panel.backup.incrementalHint") }}</p>
+
       <!-- Bu yedeğe özel şifreleme parolası. Boş = panelde kayıtlı parola; o da yoksa şifresiz.
            UYARI parola BELİRLENİRKEN görünür, geri yükleme anında değil. -->
       <label class="stacked-field">
@@ -44,6 +62,24 @@
       <p v-if="encryptionPassword" class="notice encryption-loss" role="status">
         {{ t("panel.backup.encryptionLossWarning") }}
       </p>
+
+      <!--
+        ŞİFRELİ + ARTIMSAL: parola kaybı TEK HALKAYI değil ZİNCİRİN TAMAMINI götürür (tam yedek
+        dahil). Uyarı, kararın VERİLDİĞİ yerde durur: artımsal işaretliyken görünür. Parola
+        alanının boş olması riski kaldırmaz — panelde KAYITLI bir parola varsa zincir yine
+        şifreli alınır ve bu ekran o kaydı okuyamaz (uç yalnız yöneticiye açık), bu yüzden uyarı
+        parolaya bakılmadan gösterilir.
+      -->
+      <p v-if="scope.incremental" class="notice encryption-loss" role="status">
+        {{ t("panel.backup.encryptionChainWarning") }}
+      </p>
+
+      <!-- Yedek ALINIRKEN ekran donmuş görünmesin: uç işi arka plana almıyor, istek uçuştayken
+           yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts). -->
+      <RunningTaskBanner
+        :running="runningBackup.running.value"
+        :label="runningBackup.label.value"
+        :elapsed-text="runningBackup.elapsedText.value" />
 
       <button class="compact" :disabled="busy" @click="createBackup">
         {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
@@ -56,27 +92,100 @@
         <span class="meta">{{ listLoaded ? siteBackups.length : "…" }}</span>
       </div>
 
-      <div v-if="siteBackups.length > 0" class="bk-rows">
-        <article v-for="record in siteBackups" :key="record.id" class="bk-row">
-          <div class="bk-id">
-            <strong>
-              {{ record.name }}
-              <!-- Kilit rozeti: geri yüklerken parola isteneceği LİSTEDE görünsün. -->
-              <span v-if="record.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
-                {{ t("panel.backup.encryptedBadge") }}
-              </span>
-            </strong>
-            <span class="meta">{{ formatDate(record.createdAtUtc) }} · {{ formatSize(record.size) }}</span>
-          </div>
-          <div class="bk-actions">
-            <button class="secondary compact" :disabled="downloadingId === record.id" @click="download(record)">
-              {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
+      <!--
+        GÜN GRUPLARI (Yedekler ekranıyla AYNI kaynaktan: composables/useDayGroups.ts). Gruplama
+        `createdAtUtc`ten KULLANICININ YEREL gününe çevrilerek yapılır — dosya yolu
+        ayrıştırılmaz, böylece gün klasörü olmadan alınmış eski yedekler de doğru günde durur.
+      -->
+      <div v-if="siteBackups.length > 0" class="bk-days">
+        <section v-for="group in dayGroups" :key="group.key" class="bk-day">
+          <header class="bk-day-head">
+            <button
+              type="button"
+              class="day-toggle"
+              :aria-expanded="isDayOpen(group.key)"
+              @click="toggleDay(group.key)">
+              <span class="day-caret" aria-hidden="true">{{ isDayOpen(group.key) ? "▾" : "▸" }}</span>
+              <strong>{{ group.label }}</strong>
             </button>
-            <button class="secondary compact" :disabled="restoringId === record.id" @click="restore(record)">
-              {{ restoringId === record.id ? t("panel.backup.restoring") : t("panel.backup.restore") }}
-            </button>
+            <span class="bk-day-summary">
+              <span class="status-pill">{{ t("panel.backup.day.count", { count: group.items.length }) }}</span>
+              <span class="status-pill">{{ formatSize(dayBytes(group.items)) }}</span>
+            </span>
+          </header>
+
+          <div v-if="isDayOpen(group.key)" class="bk-rows">
+            <article v-for="record in group.items" :key="record.id" class="bk-row">
+              <div class="bk-id">
+                <strong>
+                  {{ record.name }}
+                  <!-- Kilit rozeti: geri yüklerken parola isteneceği LİSTEDE görünsün. -->
+                  <span v-if="record.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
+                    {{ t("panel.backup.encryptedBadge") }}
+                  </span>
+                  <!-- Zincirdeki YER: artımsal halka mı, zincirin tam yedeği mi. Zinciri olmayan
+                       tekil yedekte rozet YOKTUR (yanlış bir bağ hissi vermesin). -->
+                  <span v-if="record.chainId && record.backupMode === 'incremental'" class="status-pill">
+                    {{ t("panel.backup.chain.linkBadge", { index: record.chainIndex }) }}
+                  </span>
+                  <span v-else-if="record.chainId" class="status-pill">
+                    {{ t("panel.backup.chain.headBadge") }}
+                  </span>
+                </strong>
+                <span class="meta">{{ formatDate(record.createdAtUtc) }} · {{ formatSize(record.size) }}</span>
+
+                <!-- Yedeğin DİSKTEKİ yeri. Tam yol satırı bozmasın diye açılır bir alanda ve
+                     KENDİ İÇİNDE yatay kayan bir kutuda; kısaltılmaz, çünkü kullanıcı bu yolu
+                     kopyalayıp Dosya Gezgini'ne/FTP'ye yapıştıracak. -->
+                <button
+                  type="button"
+                  class="secondary compact location-toggle"
+                  :aria-expanded="expandedLocation === record.id"
+                  @click="toggleLocation(record.id)">
+                  {{ t("panel.backup.location.toggle") }}
+                </button>
+                <div v-if="expandedLocation === record.id" class="location-detail">
+                  <div class="location-line">
+                    <span class="field-label">{{ t("panel.backup.location.local") }}</span>
+                    <code v-if="record.path" class="path-box">{{ record.path }}</code>
+                    <span v-else class="meta">{{ t("panel.backup.location.unknown") }}</span>
+                    <button
+                      v-if="record.path"
+                      type="button"
+                      class="secondary compact"
+                      @click="copyPath(record.path)">
+                      {{ t("panel.backup.location.copy") }}
+                    </button>
+                  </div>
+                  <!-- UZAK kopyanın adresi KİMLİKSİZ + İMZASIZ basılır (bkz. utils/url.ts):
+                       S3 "presigned" hedefinde imza sorgu dizesinde durur ve bir ekran
+                       görüntüsüyle paylaşılırsa hedef depoyu devretmiş olurduk. -->
+                  <div v-if="record.remoteUri" class="location-line">
+                    <span class="field-label">{{ t("panel.backup.location.remote") }}</span>
+                    <code v-if="safeRemote(record.remoteUri).text" class="path-box">
+                      {{ safeRemote(record.remoteUri).text }}
+                    </code>
+                    <span v-else class="meta">{{ t("panel.backup.location.remoteHidden") }}</span>
+                  </div>
+                  <p v-if="record.remoteUri && safeRemote(record.remoteUri).masked" class="field-hint">
+                    {{ t("panel.backup.location.remoteMasked") }}
+                  </p>
+                  <!-- Kayıt dosyanın diskte HÂLÂ durup durmadığını taşımıyor (uç ölçmüyor):
+                       "yerinde" demek ölçmediğimiz şeye güvenmek olurdu. -->
+                  <p class="field-hint">{{ t("panel.backup.location.existenceUnknown") }}</p>
+                </div>
+              </div>
+              <div class="bk-actions">
+                <button class="secondary compact" :disabled="downloadingId === record.id" @click="download(record)">
+                  {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
+                </button>
+                <button class="secondary compact" :disabled="restoringId === record.id" @click="restore(record)">
+                  {{ restoringId === record.id ? t("panel.backup.restoring") : t("panel.backup.restore") }}
+                </button>
+              </div>
+            </article>
           </div>
-        </article>
+        </section>
       </div>
       <!-- Yedek listesi gelmeden "yedek yok" yazıyordu; var olan yedekler yokmuş gibi görünüyordu. -->
       <p v-else-if="!listLoaded" class="empty-state" role="status" aria-live="polite">
@@ -88,15 +197,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import { backupSite, downloadBackup, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
+import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
+import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
 import { useNotice, useSectionError } from "../composables/useNotice";
+import { useRunningTask } from "../composables/useRunningTask";
+import { copyToClipboard } from "../utils/clipboard";
+import { maskSecretsInUri } from "../utils/url";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -120,12 +234,100 @@ const availableDatabases = ref<{ engine: string; name: string }[]>([]);
 const databasesLoad = useSectionError();
 const selectedDbKeys = ref<string[]>([]);
 
-const scope = reactive({ includeFiles: true, includeConfig: true, includeMail: false });
+/**
+ * Yedek kapsamı + ARTIMSAL seçimi.
+ *
+ * `incremental` / `fullBackupEveryDays` sunucu sözleşmesinde ZATEN vardı
+ * (`BackupSiteRequest : BackupArchiveRequest`; `FullBackupEveryDays` için `[Range(1, 365)]`) ve
+ * `api/backup.ts` alanları gönderiyordu — eksik olan yalnızca bu ekrandaki seçimdi.
+ */
+const scope = reactive({
+  includeFiles: true,
+  includeConfig: true,
+  includeMail: false,
+  incremental: false,
+  fullBackupEveryDays: 7
+});
 // Bu yedeğe özel şifreleme parolası (boş = panelde kayıtlı parola, o da yoksa şifresiz).
 const encryptionPassword = ref("");
 
+// Süren yedek GÖRÜNÜR: uç işi arka plana almadığı için istek uçuştayken yedek gerçekten sürüyor.
+const runningBackup = useRunningTask();
+const { groupByDay } = useDayGroups();
+
+/** Yolu açık olan kayıt (tek seferde bir tane): tam yollar uzun, hepsi birden açık kalmasın. */
+const expandedLocation = ref("");
+
+/**
+ * Bu sitenin yedekleri, zamana göre AZALAN.
+ *
+ * Sıralama burada da yapılır: uç şu an `createdAtUtc` azalan döndürüyor, ama gün gruplamasının
+ * doğruluğu (bir günün listede TEK bir grup olması) sunucunun sıralamasına bırakılamaz.
+ */
 const siteBackups = computed(() =>
-  backups.value.filter((record) => record.type === "site" && record.source === siteName.value));
+  backups.value
+    .filter((record) => record.type === "site" && record.source === siteName.value)
+    .sort((left, right) => compareNewestFirst(left.createdAtUtc, right.createdAtUtc)));
+
+const dayGroups = computed(() => groupByDay(siteBackups.value, (record) => record.createdAtUtc));
+
+function dayBytes(records: BackupRecord[]) {
+  return records.reduce((total, record) => total + record.size, 0);
+}
+
+/**
+ * KAPALI gün anahtarları tutulur, açık olanlar değil: en yeni gün AÇIK başlamalı ve yarın
+ * alınan ilk yedek de kendiliğinden açık bir günün altına düşmeli.
+ */
+const collapsedDays = ref(new Set<string>());
+const dayDefaultsApplied = ref(false);
+
+function isDayOpen(key: string) {
+  return !collapsedDays.value.has(key);
+}
+
+function toggleDay(key: string) {
+  // Set YERİNDE değiştirilirse `ref` tetiklenmez; yeni bir Set atanır.
+  const next = new Set(collapsedDays.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  collapsedDays.value = next;
+}
+
+// En yeni gün açık, geri kalanı kapalı — YALNIZ ilk yüklemede. Her yenilemede uygulanmak,
+// kullanıcının elle açtığı eski günü her yenilemede kapatmak olurdu.
+watch(siteBackups, (records) => {
+  if (dayDefaultsApplied.value || records.length === 0) {
+    return;
+  }
+
+  const keys = [...new Set(records.map((record) => localDayKey(record.createdAtUtc)))];
+  collapsedDays.value = new Set(keys.slice(1));
+  dayDefaultsApplied.value = true;
+}, { immediate: true });
+
+function toggleLocation(recordId: string) {
+  expandedLocation.value = expandedLocation.value === recordId ? "" : recordId;
+}
+
+/** Uzak adresi kimliksiz + imzasız gösterime çevirir (bkz. utils/url.ts). */
+function safeRemote(remoteUri: string) {
+  return maskSecretsInUri(remoteUri);
+}
+
+async function copyPath(value: string) {
+  if (!value) {
+    return;
+  }
+
+  // Kopyalanmadıysa "kopyalandı" DEMEYİZ: `copyToClipboard` gerçekten kopyalayıp kopyalamadığını
+  // döndürür (HTTP üzerinde pano izni verilmeyebilir).
+  const copied = await copyToClipboard(value);
+  showNotice(copied ? t("panel.common.copied") : t("panel.common.copyFailed"), !copied);
+}
 
 onMounted(async () => {
   await refresh();
@@ -171,6 +373,7 @@ async function createBackup() {
     return;
   }
   busy.value = true;
+  runningBackup.begin(`${t("panel.backup.running.creating")}: ${siteName.value}`);
   try {
     const databases = selectedDbKeys.value.map((key) => {
       const [engine, ...rest] = key.split(":");
@@ -180,7 +383,11 @@ async function createBackup() {
       includeFiles: scope.includeFiles,
       includeConfig: scope.includeConfig,
       includeMail: scope.includeMail,
-      databases
+      databases,
+      // "Mümkünse artımsal": sunucu ilk yedekte, tam yedek periyodu dolduğunda ve temel indeks
+      // okunamadığında yine TAM yedek alır.
+      incremental: scope.incremental,
+      fullBackupEveryDays: scope.fullBackupEveryDays
     }, { encryptionPassword: encryptionPassword.value });
     // Parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce taşınmaz.
     encryptionPassword.value = "";
@@ -190,6 +397,7 @@ async function createBackup() {
     showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
+    runningBackup.end();
   }
 }
 
@@ -332,10 +540,106 @@ function formatDate(iso: string): string {
   font-weight: 700;
 }
 
+.bk-days {
+  display: grid;
+  gap: 12px;
+}
+
+.bk-day {
+  display: grid;
+  gap: 8px;
+}
+
+.bk-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+/* Başlığın TAMAMI tıklanır: küçük bir oka isabet ettirmek dokunmatik ekranda zordu. */
+.day-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.day-caret {
+  width: 1em;
+  color: var(--text-muted);
+}
+
+.bk-day-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .bk-rows {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.location-toggle {
+  width: auto;
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.location-detail {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.location-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.location-line button {
+  width: auto;
+}
+
+/* Tam yol KISALTILMAZ (kopyalanıp yapıştırılacak) ama satırı da bozmaz: kutu KENDİ içinde
+   yatay kayar. `nowrap` bilinçli — sarılmış bir yol yanlış okunuyor. */
+.path-box {
+  flex: 1 1 240px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.incremental-row {
+  align-items: end;
+}
+
+.full-every {
+  display: grid;
+  gap: 4px;
+  max-width: 200px;
 }
 
 .bk-row {

@@ -30,10 +30,39 @@ public sealed class BackupController(
             var abonelikler = await GetAllowedSubscriptionIdsAsync(cancellationToken);
             backups = backups
                 .Where(record => IsVisibleToScope(record, scope, abonelikler))
+                .Select(HideServerPaths)
                 .ToArray();
         }
 
         return Ok(ApiResponse<IReadOnlyCollection<BackupRecordDto>>.Ok(backups));
+    }
+
+    /// <summary>
+    /// Kapsamlı kullanıcıya (müşteri/bayi) dönen kayıttan SUNUCU YOLLARINI düşürür.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>Path</c> mutlak bir sunucu yoludur (<c>C:\ProgramData\AdaPanel\backups\…</c>). Kiracının
+    /// ona ihtiyacı yoktur — dosyayı panelden indirir — ama sunucunun dizin düzenini öğrenmesi,
+    /// başka bir açığı hedeflemeyi kolaylaştırır. Kapsam süzgeci hangi KAYITLARI göreceğini
+    /// belirliyordu; hangi ALANLARI göreceğini belirlemiyordu.
+    /// </para>
+    /// <para>
+    /// Yönetici/operatör için yol AYNEN kalır: onların işi zaten sunucuyu yönetmek ve panel
+    /// "yedek diskte nerede" sorusunu cevaplayabilmeli.
+    /// </para>
+    /// <para>
+    /// <b>DİKKAT — nesne yerinde değiştiriliyor.</b> Bu güvenlidir çünkü
+    /// <c>BackupService.GetBackupsAsync</c> kayıtları her çağrıda diskten TAZE deserialize eder
+    /// (<c>JsonFileStore.ReadAsync</c>), yani her isteğin kendi nesne kopyası vardır. O katmana
+    /// bir gün önbellek eklenirse burası KOPYA ÜRETMELİDİR; yoksa bir kiracının isteği
+    /// yöneticinin gördüğü yolları da siler ve bu sessizce olur.
+    /// </para>
+    /// </remarks>
+    private static BackupRecordDto HideServerPaths(BackupRecordDto record)
+    {
+        record.Path = string.Empty;
+        return record;
     }
 
     /// <summary>

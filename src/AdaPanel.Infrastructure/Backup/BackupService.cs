@@ -2675,12 +2675,30 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         return normalizedLeft + Uri.EscapeDataString(right);
     }
 
+    /// <summary>
+    /// Kayda yazılacak uzak adresten SIR taşıyan her parçayı düşürür.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eskiden yalnızca <c>kullanıcı:parola@</c> kısmı siliniyordu ve bu YETMİYORDU: S3
+    /// <i>presigned</i> hedefte adres <c>X-Amz-Signature</c> ve <c>X-Amz-Credential</c>
+    /// parametrelerini SORGU DİZESİNDE taşır. O adres <c>GET /backup</c> ile panele geliyor,
+    /// yani imza tarayıcının ağ sekmesinde ve ara katman günlüklerinde görünür hâle geliyordu —
+    /// imzayı ele geçiren, süresi dolana kadar o hedefe yazabilir.
+    /// </para>
+    /// <para>
+    /// Sorgu ve parça (fragment) tamamen atılır. Kayıp bilgi yok: yedeğin uzakta NEREDE
+    /// olduğunu şema + konak + yol zaten söyler; sorgu dizesi kimlik taşır, konum değil.
+    /// </para>
+    /// </remarks>
     private static string SanitizeUri(Uri uri)
     {
         var builder = new UriBuilder(uri)
         {
             UserName = string.Empty,
-            Password = string.Empty
+            Password = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty
         };
 
         return builder.Uri.ToString();
