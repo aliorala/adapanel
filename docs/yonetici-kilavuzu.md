@@ -158,6 +158,26 @@ Bu dosyayı oluşturup **AdaPanel servisini yeniden başlatın**. Panel açılı
 Dosyayı oluşturmak yönetici ACL'i gerektirir; sunucuya erişimi olan kişi zaten paneli
 sıfırlayabilirdi, yeni bir açık doğmaz.
 
+> Bu bayrak **parolayı sıfırlamaz** — yalnız kilitleri ve engelleri açar.
+
+### Parolanızı unutursanız
+
+Sunucuda, **yönetici** olarak açılmış bir komut isteminde:
+
+```powershell
+& "C:\Program Files\AdaPanel\AdaPanel.Api.exe" --parola-belirle
+```
+
+Komut yönetici hesaplarını listeler, hangisinin parolasını belirlediğinizi size seçtirir ve yeni
+parolayı iki kez sorar (parola ekrana yazılmaz, komut satırına da yazılmaz). Parola değişince o
+kullanıcının **açık oturumları düşer** ve **API anahtarları iptal edilir**; işlem denetim kaydına
+`auth.password_set_from_console` olarak düşer (parolanın kendisi kaydedilmez).
+
+İki adımlı doğrulama **varsayılan olarak korunur**. Doğrulayıcınızı da kaybettiyseniz önce kurtarma
+kodunuzu deneyin; o da yoksa `--2fa-kapat` ekleyin (komut ayrıca `EVET` yazmanızı ister).
+
+Tam yordam ve gerekçeler: [Yönetici parolasını sunucudan belirleme](parola-kurtarma.md).
+
 ## 8. Otomasyon
 
 **Sol menü → Sunucu Araçları → Otomasyon.**

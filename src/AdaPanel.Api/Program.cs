@@ -43,6 +43,20 @@ if (AdaPanel.Api.Tray.TepsiUygulamasi.BuBizim(args))
     return;
 }
 
+// PAROLA BELIRLEME — panele giremeyen yoneticinin tek cikis yolu.
+//
+// Tepsi programiyla AYNI yerde duruyor ve ayni gerekcesi var: bu yol tam da panel acilamadiginda
+// lazim, dolayisiyla web sunucusu/servis grafigi kurulmadan calismali. Yalniz veritabanini acar.
+//
+// UZAKTAN ERISILEBILIR DEGIL ve olmayacak: sunucuda oturum acmis olmayi sart kosar (yonetici
+// yetkisi ayrica denetlenir). Ag uzerinden cagrilabilen bir esdegeri, kimlik dogrulamayi tamamen
+// atlayan bir arka kapi olurdu.
+if (AdaPanel.Api.Recovery.ParolaBelirlemeKomutu.BuBizim(args))
+{
+    Environment.Exit(await AdaPanel.Api.Recovery.ParolaBelirlemeKomutu.CalistirAsync(args));
+    return;
+}
+
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {

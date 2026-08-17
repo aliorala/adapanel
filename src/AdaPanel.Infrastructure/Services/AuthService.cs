@@ -327,7 +327,7 @@ public sealed class AuthService(
         user.PendingTwoFactorSecretProtected = null;
         user.UpdatedAtUtc = DateTime.UtcNow;
 
-        await fileStore.WriteAsync(RecoveryStorePath(user.Id), new RecoveryCodeStore(), cancellationToken);
+        await TwoFactorRecoveryCodes.ClearAsync(fileStore, user.Id, cancellationToken);
 
         await auditService.WriteAsync("auth.2fa.disabled", "auth", $"Two-factor authentication disabled for '{user.UserName}'.", user.Id, ipAddress, cancellationToken);
         return MapCurrentUser(user);
@@ -356,21 +356,11 @@ public sealed class AuthService(
             throw new InvalidOperationException("auth.password_unchanged");
         }
 
-        // Uzunluk kuralı TEK kaynaktan: veri açıklaması yalnız MVC yolunda çalışır, bu servis
-        // MCP araçlarından ve iç akışlardan da çağrılabiliyor (bkz. PasswordPolicy).
-        PasswordPolicy.Ensure(request.NewPassword);
-
-        user.PasswordHash = passwordHasher.HashPassword(user, request.NewPassword);
-        user.UpdatedAtUtc = DateTime.UtcNow;
-        // Parola değişimi kilidi de açar: kullanıcı zaten kimliğini mevcut parolayla kanıtladı.
-        user.FailedLoginCount = 0;
-        user.LockedUntilUtc = null;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        // Anahtarlar paroladan BAĞIMSIZ kimlik bilgileridir. Parola değiştiren kişi çoğu zaman
-        // "erişimi kesmek" istediği için gelir; anahtar ayakta kalırsa MCP üzerinden erişim sürer ve
-        // kullanıcı bunu fark etmez. Kaç anahtarın düştüğü yanıtta bildirilir, sessizce kesilmez.
-        var revoked = await apiTokenService.RevokeAllForUserAsync(user.Id, cancellationToken);
+        // Yazma, kilit açma, anahtar düşürme ve uzunluk kuralı TEK gövdeden geçer
+        // (bkz. PasswordAssignment): parolayı yazan her yol aynı üçlüyü uygulamak zorundadır ve
+        // burada elle tekrarlanan kopya, üçüncü bir çağrı yolu eklendiğinde eksik kalırdı.
+        var revoked = await PasswordAssignment.ApplyAsync(
+            dbContext, passwordHasher, apiTokenService, user, request.NewPassword, cancellationToken);
 
         await auditService.WriteAsync(
             "auth.password_changed",
@@ -402,27 +392,15 @@ public sealed class AuthService(
             dbContext, customerScopeService, actorUserId, targetUserId, cancellationToken);
         var target = erisim.Target;
 
-        PasswordPolicy.Ensure(request.NewPassword);
-
-        target.PasswordHash = passwordHasher.HashPassword(target, request.NewPassword);
-        target.UpdatedAtUtc = DateTime.UtcNow;
-        // Kilit de açılır: yönetici parolayı sıfırlarken amacı kullanıcıyı içeri sokmaktır, hatalı
-        // denemelerden kalan kilidi ayrıca temizlemek zorunda kalmamalı (ResetPasswordAsync da böyle).
-        target.FailedLoginCount = 0;
-        target.LockedUntilUtc = null;
-
-        // AÇIKÇA kaydet. Denetim kaydı aynı DbContext'i kullandığı için burada SaveChanges çağırmasa
-        // da yazım tesadüfen kalıcı olurdu; kayıt bir gün başka bir yere taşınırsa parola sessizce
-        // değişmemiş olurdu (aynı gerekçe LoginAsync'te de yazılı).
-        await dbContext.SaveChangesAsync(cancellationToken);
-
+        // Parola yazma disiplininin tamamı (uzunluk kuralı, kilit açma, anahtar düşürme) TEK
+        // gövdeden geçer: bkz. PasswordAssignment. Buradaki yetki/kapsam denetimi yukarıda kaldı,
+        // çünkü onun kuralı her çağrı yolunda farklıdır ve ortak gövdeye taşınamaz.
+        //
         // ÇEREZ oturumları ayrıca düşürülmüyor çünkü zaten düşüyor: CookieSessionValidator çerezdeki
         // kimlik damgasını parola KARMASINDAN türetir, karma değişince eski çerez en geç bir dakika
-        // içinde reddedilir. İkinci bir mekanizma yazmak, ikisinin birbirinden ayrı düşmesi demekti.
-        //
-        // API anahtarları paroladan BAĞIMSIZ kimlik bilgileridir; düşürülmezlerse parolası sıfırlanan
-        // kişi MCP/REST üzerinden erişimini sürdürür.
-        var revoked = await apiTokenService.RevokeAllForUserAsync(target.Id, cancellationToken);
+        // içinde reddedilir.
+        var revoked = await PasswordAssignment.ApplyAsync(
+            dbContext, passwordHasher, apiTokenService, target, request.NewPassword, cancellationToken);
 
         // Denetim kaydına PAROLA YAZILMAZ: kayıt, korumaya çalıştığı sırrın ikinci deposu olurdu.
         await auditService.WriteAsync(
@@ -578,7 +556,10 @@ public sealed class AuthService(
             hashes.Add(HashRecoveryCode(code));
         }
 
-        await fileStore.WriteAsync(RecoveryStorePath(userId), new RecoveryCodeStore { Codes = hashes }, cancellationToken);
+        await fileStore.WriteAsync(
+            TwoFactorRecoveryCodes.PathFor(userId),
+            new TwoFactorRecoveryCodes.Store { Codes = hashes },
+            cancellationToken);
         return codes;
     }
 
@@ -600,8 +581,8 @@ public sealed class AuthService(
         // UpdateAsync yol başına kilit tutar; okuma, karar ve yazma tek parçadır.
         var tuketildi = false;
         await fileStore.UpdateAsync(
-            RecoveryStorePath(userId),
-            new RecoveryCodeStore(),
+            TwoFactorRecoveryCodes.PathFor(userId),
+            new TwoFactorRecoveryCodes.Store(),
             mevcut =>
             {
                 if (!mevcut.Codes.Any(stored => string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase)))
@@ -610,7 +591,7 @@ public sealed class AuthService(
                 }
 
                 tuketildi = true;
-                return new RecoveryCodeStore
+                return new TwoFactorRecoveryCodes.Store
                 {
                     Codes = mevcut.Codes
                         .Where(stored => !string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase))
@@ -662,8 +643,6 @@ public sealed class AuthService(
 
     public async Task ResetPasswordAsync(string token, string newPassword, CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow;
-
         // Token'ı BULMAK ve TÜKETMEK tek parça olmalı; ayrı yapılırsa aynı link iki kez
         // kullanılabilir. Kullanıcı bulunamazsa aşağıda hata atılır — token yine de tüketilmiştir,
         // bu bilinçli: geçersiz bir token'ı ayakta tutmanın bir yararı yok. Uygulaması ortak depoda.
@@ -676,21 +655,12 @@ public sealed class AuthService(
         var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Id == tokenUserId, cancellationToken)
             ?? throw new AppException("auth.reset_token_invalid", 400, 400);
 
-        // Uzunluk kuralı TEK kaynaktan (veri açıklaması yalnız MVC yolunda çalışır).
-        PasswordPolicy.Ensure(newPassword);
-
-        user.PasswordHash = passwordHasher.HashPassword(user, newPassword);
-        user.FailedLoginCount = 0;
-        user.LockedUntilUtc = null;
-        user.UpdatedAtUtc = now;
-
+        // Parola KURTARILDI: hesabın ele geçirilmiş olabileceği varsayılır. Uzunluk kuralı, kilit
+        // açma ve anahtarların düşürülmesi ortak gövdeden gelir (bkz. PasswordAssignment) —
+        // anahtarlar düşmezse saldırgan parola sıfırlansa bile MCP üzerinden erişimini sürdürür.
         // Token yukarıda ATOMİK olarak tüketildi; burada ayrıca silmeye gerek yok.
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        // Parola KURTARILDI: hesabın ele geçirilmiş olabileceği varsayılır. Anahtarlar parolaya bağlı
-        // olmayan ayrı kimlik bilgileridir; düşürülmezlerse saldırgan parola sıfırlansa bile MCP
-        // üzerinden erişimini sürdürür. Kullanıcı yeni anahtarı panelden üretir.
-        var revokedTokens = await apiTokenService.RevokeAllForUserAsync(user.Id, cancellationToken);
+        var revokedTokens = await PasswordAssignment.ApplyAsync(
+            dbContext, passwordHasher, apiTokenService, user, newPassword, cancellationToken);
 
         await auditService.WriteAsync("auth.password_reset.completed", "auth", $"Password reset completed for '{user.UserName}'.", user.Id, null, cancellationToken);
 
@@ -748,8 +718,6 @@ public sealed class AuthService(
     // Belirteç üretimi, özetleme ve depo biçimi SingleUseTokenStore'a taşındı: parola sıfırlama ile
     // tek tıkla giriş bağlantısı aynı disiplini paylaşıyor, iki kopya bırakılmadı.
 
-    private static string RecoveryStorePath(Guid userId) => $"config/2fa/{userId:N}.json";
-
     private static string GenerateRecoveryCode()
     {
         // Belirsizlik yaratan karakterler (0/O, 1/I) çıkarıldı. Format: XXXXX-XXXXX
@@ -780,11 +748,6 @@ public sealed class AuthService(
     }
 
     private const int RecoveryCodeCount = 10;
-
-    private sealed class RecoveryCodeStore
-    {
-        public List<string> Codes { get; set; } = [];
-    }
 
     private async Task<PanelUser> GetUserAsync(Guid userId, CancellationToken cancellationToken)
     {

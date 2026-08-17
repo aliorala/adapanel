@@ -33,7 +33,7 @@ public sealed class AuditService(
         => WriteForSubscriptionAsync(action, resource, details, userId, null, ipAddress, cancellationToken);
 
     /// <inheritdoc />
-    public async Task WriteForSubscriptionAsync(
+    public Task WriteForSubscriptionAsync(
         string action,
         string resource,
         string details,
@@ -41,34 +41,10 @@ public sealed class AuditService(
         Guid? subscriptionUserId,
         string? ipAddress,
         CancellationToken cancellationToken = default)
-    {
-        // SIR TEMİZLİĞİ + KIRPMA burada, yazma yolunun tek geçidinde. Gerekçe: AuditSecretRedactor.
-        var entry = new AuditLog
-        {
-            UserId = userId,
-            SubscriptionUserId = subscriptionUserId,
-            Action = AuditSecretRedactor.SanitizeShortField(action),
-            Resource = AuditSecretRedactor.SanitizeShortField(resource),
-            Details = AuditSecretRedactor.SanitizeDetails(details),
-            IpAddress = ipAddress,
-            CreatedAtUtc = DateTime.UtcNow
-        };
-
-        dbContext.AuditLogs.Add(entry);
-
-        try
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch
-        {
-            // Yazılamayan kaydı İZLEMEDEN ÇIKAR. Aksi hâlde aynı DbContext'i kullanan bir sonraki
-            // SaveChanges (asıl işlemin kendi kaydı) bu bozuk girişi tekrar denerdi; yani denetim
-            // yazımının hatası, alakasız bir işlemi de düşürürdü.
-            dbContext.Entry(entry).State = EntityState.Detached;
-            throw;
-        }
-    }
+        // Yazımın kendisi AuditWriter'da: aynı gövde sunucu konsolundan çalışan kurtarma aracı
+        // tarafından da kullanılıyor ve sır temizliği iki kopyaya bölünemez.
+        => AuditWriter.WriteAsync(
+            dbContext, action, resource, details, userId, subscriptionUserId, ipAddress, cancellationToken);
 
     public async Task<IReadOnlyCollection<AuditLogDto>> GetRecentAsync(int take, CancellationToken cancellationToken = default)
     {

@@ -93,24 +93,28 @@ public sealed class SelfUpdateService(
         // HUKUM BURADA VERILIR -- bekleyen kayit silinmeden ONCE, cunku hukmun tek kaniti odur.
         var lastAttempt = await ReconcileLastAttemptAsync(pendingUpdate, currentVersion, cancellationToken);
 
-        // Guncelleme UYGULANDIYSA (calisan surum == bekleyen paketin surumu) bekleyen durumu temizle:
-        // "kurulum planlandi" etiketi sonsuza dek kalmasin, eski ~50MB paket updates klasorunde birikmesin.
-        if (!string.IsNullOrWhiteSpace(pendingUpdate.Version) &&
-            string.Equals(pendingUpdate.Version, currentVersion, StringComparison.OrdinalIgnoreCase))
+        // Bekleyen kayit ARTIK ANLAMSIZSA temizlenir; olcut IsPendingUpdateObsolete'te, hukumle
+        // AYNI surum karsilastirmasindan gelir.
+        if (IsPendingUpdateObsolete(
+                pendingUpdate.Version,
+                currentVersion,
+                pendingUpdate.InstallScheduledAtUtc,
+                SurecBaslangici()))
         {
-            try
+            // IKI SILME AYRI DENENIR ve bu bir uslup tercihi degil, olculen bir hatanin duzeltmesi:
+            // ikisi tek try icindeyken kilitli bir paket dosyasi (antivirus taramasi, Explorer'in
+            // acik tuttugu ~50 MB exe) once patliyor ve KAYIT DOSYASINA HIC SIRA GELMIYORDU. Yani
+            // en gurultulu artik (paket) temizlenemedigi icin en yaniltici olan (bekleyen kayit)
+            // kaliyordu.
+            TemizlemeyiDene(() =>
             {
                 if (!string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) && File.Exists(pendingUpdate.PackagePath))
                 {
                     File.Delete(pendingUpdate.PackagePath);
                 }
+            });
 
-                File.Delete(fileStore.ResolvePath(PendingUpdatePath));
-            }
-            catch
-            {
-                // Temizlik best-effort: dosya kilitliyse bir sonraki kontrolde tekrar denenir.
-            }
+            TemizlemeyiDene(() => File.Delete(fileStore.ResolvePath(PendingUpdatePath)));
 
             pendingUpdate = new PendingUpdate();
         }
@@ -247,9 +251,8 @@ public sealed class SelfUpdateService(
             return AttemptVerdict.Keep;
         }
 
-        // Hedefe ULASILDI MI: esitlik yetmez, "daha yeni surum calisiyor" da hedefe ulasmis sayilir
-        // (elle daha yeni bir paket kurulmus olabilir).
-        if (!IsNewerVersion(currentVersion, pendingVersion))
+        // Hedefe ULASILDI MI: olcut bekleyen kaydin temizligiyle AYNI (IsPendingTargetReached).
+        if (IsPendingTargetReached(pendingVersion, currentVersion))
         {
             // Zaten 'succeeded' yaziyorsa dosyayi bos yere yeniden yazma (her kontrolde yazim olmasin).
             return attempt is not null && string.Equals(attempt.Phase, "succeeded", StringComparison.OrdinalIgnoreCase)
@@ -273,6 +276,101 @@ public sealed class SelfUpdateService(
         }
 
         return nowUtc - sonIsaret >= AttemptVerdictGrace ? AttemptVerdict.NoVerdict : AttemptVerdict.Keep;
+    }
+
+    /// <summary>
+    /// Bekleyen paketin HEDEFINE ULASILDI MI: calisan surum, bekleyen surumden geri degil.
+    /// </summary>
+    /// <remarks>
+    /// Esitlik YETMEZ, "daha yeni surum calisiyor" da hedefe ulasmis sayilir: kullanici arada elle
+    /// daha yeni bir paket kurmus olabilir. Hem hukum (<see cref="DecideAttemptVerdict"/>) hem de
+    /// bekleyen kaydin temizligi bu TEK olcutu kullanir.
+    /// </remarks>
+    internal static bool IsPendingTargetReached(string pendingVersion, string currentVersion)
+        => !string.IsNullOrWhiteSpace(pendingVersion) && !IsNewerVersion(currentVersion, pendingVersion);
+
+    /// <summary>
+    /// Bekleyen kurulum kaydi (<c>updates/pending-update.json</c>) hala anlamli mi, yoksa artik
+    /// HAYALET mi?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Olculen olay:</b> kurulum 22:29'da BASARIYLA bitti, ama bekleyen kayit 0.5.6'yi
+    /// gostermeye devam etti (22:28'den kalma) ve saatler sonra hala oradaydi; panel her acilista o
+    /// bayat kaydi okuyup kullaniciya yanlis durum ("paket hazir", "kurulum planlandi") gosterdi.
+    /// </para>
+    /// <para>
+    /// <b>Kok sebep:</b> temizlik olcutu <c>pendingVersion == currentVersion</c> ESITLIGIYDI, oysa
+    /// hukum veren yer "hedefe ULASILDI MI" diye soruyordu. Iki olcut ayni govdede, on bes satir
+    /// arayla farkliydi: calisan surum bekleyen surumden DAHA YENIYSE (kullanici arada 0.5.8'i
+    /// kurdu) esitlik tutmaz ve kayit HIC silinmezdi. Artik ikisi de
+    /// <see cref="IsPendingTargetReached"/> kullaniyor.
+    /// </para>
+    /// <para>
+    /// <b>"Tamamlandi" ile "henuz baslamadi" ayrimi TAHMIN EDILMEZ, OLCULUR</b> ve iki olcum
+    /// birlikte kullanilir:
+    /// </para>
+    /// <list type="number">
+    /// <item><b>Surum</b> — bekleyen surum calisan surumden yeniyse is bitmemistir; kayit gercekten
+    /// bekliyordur (paket indirilmis ya da kurulum suruyor) ve ASLA silinmez.</item>
+    /// <item><b>Surecin baslama ani</b> — kurulum planlandi ama panel O ANDAN BERI YENIDEN
+    /// BASLAMADIYSA kurulum tamamlanmis olamaz (kurulum panelin servisini durdurup yerine yenisini
+    /// koyar). Bu, AYNI ya da DAHA ESKI surumu yeniden kurma durumunda sarttir: orada surum olcutu
+    /// daha kurulum baslamadan "ulasildi" der ve kayit, kurulum kuyrukta beklerken silinirdi.</item>
+    /// </list>
+    /// <para>
+    /// Hukumden daha muhafazakar olmasi bilincli: hukum bir dosyaya yazilir ve bir sonraki kontrolde
+    /// duzeltilebilir, bekleyen kaydin silinmesi ise GERI ALINAMAZ (paket de silinir).
+    /// </para>
+    /// </remarks>
+    internal static bool IsPendingUpdateObsolete(
+        string pendingVersion,
+        string currentVersion,
+        DateTime? installScheduledAtUtc,
+        DateTime processStartUtc)
+    {
+        if (!IsPendingTargetReached(pendingVersion, currentVersion))
+        {
+            return false;
+        }
+
+        // Kurulum planlandi ve panel O ANDAN BU YANA yeniden baslamadi: is daha bitmedi.
+        return installScheduledAtUtc is not { } planlanma || planlanma < processStartUtc;
+    }
+
+    /// <summary>
+    /// Su an calisan panel surecinin baslama ani (UTC). Kurulumun tamamlanip tamamlanmadigini
+    /// olcmenin dogrudan yolu: kurulum, panelin servisini durdurup yeniden baslatir.
+    /// </summary>
+    private static DateTime SurecBaslangici()
+    {
+        try
+        {
+            return System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+        }
+        catch
+        {
+            // Olculemedi. "Su an baslamis" varsayilir: en muhafazakar deger, cunku planlanmis her
+            // kurulum "henuz tamamlanmadi" sayilir ve hicbir kayit yanlislikla SILINMEZ.
+            return DateTime.UtcNow;
+        }
+    }
+
+    /// <summary>
+    /// Artik temizligi: basarisizlik AKISI BOZMAZ ama bir sonraki islemi de ENGELLEMEZ.
+    /// Her adim ayri ayri denenir (bkz. CheckForUpdateAsync icindeki gerekce).
+    /// </summary>
+    private static void TemizlemeyiDene(Action islem)
+    {
+        try
+        {
+            islem();
+        }
+        catch
+        {
+            // Dosya kilitliyse bir sonraki kontrolde tekrar denenir; kullanicinin gordugu durum
+            // zaten bellekte duzeltilmis oluyor.
+        }
     }
 
     public async Task<UpdateStatusDto> SetGithubRepoAsync(string repo, CancellationToken cancellationToken = default)

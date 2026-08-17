@@ -63,6 +63,28 @@ C:\ProgramData\AdaPanel\config\recover-access.flag
 Panel açılışta bütün giriş kilitlerini temizler, brute-force IP engellerini kaldırır, panelin kendi
 **engelleme** güvenlik duvarı kurallarını siler ve bayrağı kendisi siler.
 
+> Bu bayrak **parolayı sıfırlamaz**. Parolanızı unuttuysanız bir sonraki maddeye bakın.
+
+### 6. Yönetici parolamı unuttum
+
+**Veritabanını silmeyin.** `data\adapanel.db` panel kullanıcılarını, ayarlarını ve kurulu bileşen
+kayıtlarını da taşır; silinirse hepsi gider. Doğru yol, parolayı sunucu konsolundan belirlemektir:
+
+```powershell
+# Komut istemini "Yönetici olarak çalıştır" ile açın
+& "C:\Program Files\AdaPanel\AdaPanel.Api.exe" --parola-belirle
+```
+
+Komut yönetici hesaplarını listeler, hangisi olduğunu **size sordurur**, sonra yeni parolayı iki kez
+sorar (ekrana yazılmaz). Doğrudan hedef vermek isterseniz:
+
+```powershell
+& "C:\Program Files\AdaPanel\AdaPanel.Api.exe" --parola-belirle yonetici
+```
+
+Ayrıntı ve güvenlik gerekçeleri: [Yönetici parolasını sunucudan
+belirleme](parola-kurtarma.md).
+
 ---
 
 ## Güncellemeden sonra boş beyaz sayfa

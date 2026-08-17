@@ -10,6 +10,7 @@ tek EXE olarak dağıtılır).
 | [Müşteri kılavuzu](musteri-kilavuzu.md) | Abonelik sahibi son kullanıcı |
 | [Yedekleme ve geri yükleme](yedekleme-ve-geri-yukleme.md) | Yönetici + müşteri |
 | [Sorun giderme](sorun-giderme.md) | Yönetici |
+| [Yönetici parolasını sunucudan belirleme](parola-kurtarma.md) | Panele giremeyen yönetici |
 | [Lisans ve aktivasyon](lisans-aktivasyon.md) | Panelin sahibi + lisans sunucusunu yazacak geliştirici |
 | [WHMCS modülü](whmcs-modulu.md) | Panelini WHMCS ile satan bayi |
 
