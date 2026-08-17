@@ -139,6 +139,11 @@ public sealed class BackupService(
     /// artımsal halkanın karşılaştırma temelidir; ŞİFRELİ arşivde indeksi arşivden okumak bütün
     /// dosyayı çözmeyi gerektirdiği için yan kayıt olmadan artımsal fiilen çalışmazdı.
     /// </param>
+    /// <param name="placement">
+    /// Yedeğin YERİ (gün + kategori). ZORUNLU tutuldu: isteğe bağlı olsaydı yeni bir yedek türü
+    /// eklendiğinde parametreyi vermemek DERLENİR ve o tür sessizce uzak hedefin köküne düz
+    /// yüklenirdi — düzeltilen hatanın ta kendisi. Şimdi vermeyi unutmak derleme hatasıdır.
+    /// </param>
     private async Task<BackupRecordDto> FinalizeBackupAsync(
         string localPath,
         string fileName,
@@ -146,6 +151,7 @@ public sealed class BackupService(
         string source,
         string format,
         BackupTargetRequest request,
+        BackupPlacement placement,
         CancellationToken cancellationToken,
         ChainStamp? chain = null,
         BackupFileIndex? fileIndex = null,
@@ -173,7 +179,7 @@ public sealed class BackupService(
         {
             try
             {
-                remoteUri = await UploadToRemoteAsync(finalPath, finalName, target, cancellationToken);
+                remoteUri = await UploadToRemoteAsync(finalPath, finalName, target, placement, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -181,7 +187,7 @@ public sealed class BackupService(
             }
             catch (Exception exception)
             {
-                remoteFailure = exception.Message;
+                remoteFailure = DescribeRemoteFailure(exception);
                 logger?.LogWarning(
                     exception,
                     "Yedek uzak hedefe gönderilemedi ({Target}); yerel kopya korundu: {File}",
@@ -299,6 +305,21 @@ public sealed class BackupService(
         return $"{Temizle(record.Type, gecersiz)}-{Temizle(record.Source, gecersiz)}-{DateTime.UtcNow:yyyyMMddHHmmss}";
     }
 
+    /// <summary>
+    /// Uzak yükleme hatasının KAYDA yazılacak hâli.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AppException"/>'ın <c>Message</c>'ı yalnızca çeviri ANAHTARIDIR
+    /// ("backup.remote_upload_failed"); sunucunun gerçekten ne dediği (<c>550 Permission denied</c>,
+    /// hangi klasör, hangi adres) <c>Details</c> içinde durur. Kayda yalnız anahtarı yazmak,
+    /// kullanıcıya "gönderilemedi" deyip SEBEBİ yutmaktı — hatayı görüp de nedenini asla
+    /// öğrenememek, düzeltilemeyen bir arıza demektir.
+    /// </remarks>
+    internal static string DescribeRemoteFailure(Exception exception) =>
+        exception is AppException app && !string.IsNullOrWhiteSpace(app.Details)
+            ? $"{app.MessageKey}: {app.Details}"
+            : exception.Message;
+
     internal static string DescribeDestinationStatus(string? remoteUri, string? remoteFailure)
     {
         if (!string.IsNullOrWhiteSpace(remoteFailure))
@@ -391,7 +412,9 @@ public sealed class BackupService(
     {
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "sites");
+        // YER kararı bir kez verilir; hem yerel klasör hem UZAK yol bundan türetilir.
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "sites");
+        var backupsDirectory = placement.LocalDirectory;
 
         // ZİNCİR KARARI ARŞİVDEN ÖNCE VERİLİR: hangi dosyaların yazılacağı buna bağlı.
         var plan = await ResolveChainPlanAsync("site", site.Name, request, cancellationToken);
@@ -486,6 +509,7 @@ public sealed class BackupService(
             site.Name,
             "zip",
             request,
+            placement,
             cancellationToken,
             plan.Stamp,
             plan.Stamp is null ? null : indeks);
@@ -791,7 +815,8 @@ public sealed class BackupService(
     public async Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default)
     {
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "databases");
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "databases");
+        var backupsDirectory = placement.LocalDirectory;
         var safeDatabaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? "all" : request.DatabaseName.Trim();
         var extension = request.Engine.Equals("mssql", StringComparison.OrdinalIgnoreCase) ||
                         request.Engine.Equals("sqlserver", StringComparison.OrdinalIgnoreCase)
@@ -813,13 +838,15 @@ public sealed class BackupService(
             $"{dump.Engine}:{dump.DatabaseName}",
             extension,
             request,
+            placement,
             cancellationToken);
     }
 
     public async Task<BackupRecordDto> BackupPanelAsync(BackupPanelRequest request, CancellationToken cancellationToken = default)
     {
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "panel");
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "panel");
+        var backupsDirectory = placement.LocalDirectory;
         var fileName = $"panel-config-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";
         var targetPath = Path.Combine(backupsDirectory, fileName);
         if (File.Exists(targetPath))
@@ -897,7 +924,7 @@ public sealed class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, cancellationToken);
+        return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, placement, cancellationToken);
     }
 
     // =====================================================================================
@@ -960,7 +987,8 @@ public sealed class BackupService(
         var kaynak = request.UserId.ToString("N");
 
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "subscriptions");
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "subscriptions");
+        var backupsDirectory = placement.LocalDirectory;
         var chainPlan = await ResolveChainPlanAsync("subscription", kaynak, request, cancellationToken);
         var artimsal = chainPlan.Stamp is { } damga && damga.Mode == BackupChainPlanner.ModeIncremental;
 
@@ -1152,6 +1180,7 @@ public sealed class BackupService(
             kaynak,
             "zip",
             request,
+            placement,
             cancellationToken,
             chainPlan.Stamp,
             chainPlan.Stamp is null ? null : indeks,
@@ -1426,7 +1455,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
 
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var backupsDirectory = EnsureBackupDirectory(preferences.DefaultBackupRoot, "mail");
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "mail");
+        var backupsDirectory = placement.LocalDirectory;
         var fileName = $"stalwart-mail-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";
         var targetPath = Path.Combine(backupsDirectory, fileName);
 
@@ -1440,7 +1470,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             await StartStalwartAsync(cancellationToken);
         }
 
-        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, cancellationToken);
+        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement, cancellationToken);
     }
 
     private async Task RestoreMailAsync(string archivePath, CancellationToken cancellationToken)
@@ -1832,7 +1862,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 // altında tarih damgalı ayrı bir klasöre arşivdeki yapısıyla çıkarılır;
                 // kullanıcı ne aldığını görür ve istediğini oradan taşır.
                 var preferences = await preferencesService.GetAsync(cancellationToken);
-                var restoreRoot = EnsureBackupDirectory(preferences.DefaultBackupRoot, "restored");
+                var restoreRoot = BackupLayout.Ensure(preferences.DefaultBackupRoot, "restored").LocalDirectory;
                 targetRoot = Path.Combine(restoreRoot, BuildRestoreFolderName(record));
                 Directory.CreateDirectory(targetRoot);
             }
@@ -2299,8 +2329,20 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 cancellationToken);
 
             var target = ResolveTarget(targetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
-            // Sabit ad: her test aynı dosyayı üzerine yazar → hedefte birikme olmaz.
-            await UploadToRemoteAsync(tempFile, "adapanel-connection-test.txt", target, cancellationToken);
+
+            // TEST DE GERÇEK YEDEĞİN YOLUNU KULLANIR: <taban>/<gün>/connection-test/<sabit ad>.
+            //
+            // Neden gün klasörü açılıyor: gecelik yedeğin uzak hedefe inememesinin en olası sebebi
+            // artık "yazma izni yok" değil, "ALT DİZİN AÇILAMIYOR"dur (FTP'de MKD, WebDAV'da MKCOL
+            // izni ayrıdır; chroot'lu hesaplarda sık kapalıdır). Testi tabana düz bir dosya atarak
+            // yapmak, bu kurulumlarda "bağlantı tamam" deyip geceleri sessizce başarısız olmak
+            // demekti — kullanıcının kontrol düğmesine güvenip yanılmasının tam tarifi.
+            //
+            // Kategori BİLEREK "connection-test": gerçek kategori klasörlerini kirletmez, insan
+            // baktığında ne olduğunu anlar. Dosya adı sabittir → her test öncekinin üzerine yazar,
+            // hedefte birikme olmaz.
+            var testPlacement = BackupLayout.RemoteOnly("connection-test", DateTime.Now);
+            await UploadToRemoteAsync(tempFile, "adapanel-connection-test.txt", target, testPlacement, cancellationToken);
             return new BackupRemoteTestResultDto { Success = true, Message = "backup.remote_test.ok" };
         }
         catch (AppException exception)
@@ -2327,10 +2369,31 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
     }
 
+    /// <summary>
+    /// Dosyayı uzak hedefe yükler ve KAYDA yazılacak (kimliksiz) uzak adresi döndürür.
+    /// </summary>
+    /// <param name="placement">
+    /// Yedeğin yeri; uzak hedefte taban adresin altına <c>&lt;gün&gt;/&lt;kategori&gt;</c> olarak
+    /// açılır. ZORUNLUDUR — "yer verilmezse köke yaz" gibi bir yol bırakmak, düzeltilen hatanın
+    /// (uzakta düz yığın) sessizce geri gelmesine açık kapı olurdu. Yedeğe ait olmayan yüklemeler
+    /// de kendi yerini verir (bkz. bağlantı testi).
+    /// </param>
+    /// <remarks>
+    /// Protokoller dizin konusunda birbirine BENZEMEZ, bu yüzden burada üç ayrı karar var:
+    /// <list type="bullet">
+    /// <item><b>FTP</b>: ara dizinler kendiliğinden oluşmaz, her seviye için MKD gerekir.</item>
+    /// <item><b>WebDAV</b>: ara koleksiyonlar için MKCOL gerekir; yoksa PUT 409 Conflict döner.</item>
+    /// <item><b>S3</b>: DİZİN KAVRAMI YOKTUR. "Klasör" yalnızca anahtarın önekidir; MKD/MKCOL
+    /// denemek anlamsız (ve S3 API'sinde karşılığı olmayan) bir istektir. Anahtara önek eklemek
+    /// yeterlidir — SigV4 imzası anahtarın tamamını kapsar (bkz. <see cref="S3RequestSigner"/>,
+    /// kanonik yol segment segment kodlanır), aksi hâlde istek imza uyuşmazlığıyla reddedilirdi.</item>
+    /// </list>
+    /// </remarks>
     private async Task<string> UploadToRemoteAsync(
         string localPath,
         string fileName,
         BackupTarget target,
+        BackupPlacement placement,
         CancellationToken cancellationToken)
     {
         if (target.Type == "local")
@@ -2347,7 +2410,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         {
             if (target.Type == "ftp")
             {
-                var ftpUri = AppendFileNameIfDirectory(target.Uri, fileName);
+                var ftpUri = AppendRemotePath(target.Uri, placement, fileName).Uri;
                 await UploadFtpAsync(localPath, ftpUri, target, cancellationToken);
                 return SanitizeUri(ftpUri);
             }
@@ -2356,18 +2419,32 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             // Anahtarsız S3: presigned URL'e düz PUT (geri uyumluluk).
             if (target.Type == "s3" && !string.IsNullOrWhiteSpace(target.UserName))
             {
-                var s3Uri = AppendFileNameIfDirectory(target.Uri, fileName);
+                // MKD/MKCOL YOK: S3'te dizin diye bir nesne yoktur, önek yeter.
+                var s3Uri = AppendRemotePath(target.Uri, placement, fileName).Uri;
                 await UploadS3SignedAsync(localPath, s3Uri, target, cancellationToken);
                 return SanitizeUri(s3Uri);
             }
 
-            if (target.Type is "s3" or "webdav" or "http")
+            if (target.Type == "webdav")
             {
-                var httpUri = target.Type == "webdav"
-                    ? AppendFileNameIfDirectory(target.Uri, fileName)
-                    : target.Uri;
-                await UploadHttpPutAsync(localPath, httpUri, target, cancellationToken);
-                return SanitizeUri(httpUri);
+                var (webdavUri, klasorler) = AppendRemotePath(target.Uri, placement, fileName);
+                var koleksiyonSorunu = await EnsureWebDavCollectionsAsync(target.Uri, klasorler, target, cancellationToken);
+                await UploadHttpPutAsync(localPath, webdavUri, target, cancellationToken, koleksiyonSorunu);
+                return SanitizeUri(webdavUri);
+            }
+
+            if (target.Type is "s3" or "http")
+            {
+                // ANAHTARSIZ S3 ve düz HTTP hedefi: adres OLDUĞU GİBİ kullanılır.
+                //
+                // Ölçülen davranış: bu iki yol kullanıcının verdiği URL'e (imzalı/tek kullanımlık
+                // presigned URL ya da yükleme uç noktası) tek bir PUT atar; dosya adı bile
+                // eklenmez. Buraya gün/kategori öneki eklemek presigned URL'in imzasını geçersiz
+                // kılar (imza tam yolu kapsar) ve "/upload" gibi bir uç noktayı 404'e düşürür —
+                // yani ÇALIŞAN kurulumları bozardı. Klasör düzeni bu iki hedefte hedefin
+                // sözleşmesi gereği YOKTUR; adres neyi gösteriyorsa yedek oraya gider.
+                await UploadHttpPutAsync(localPath, target.Uri, target, cancellationToken);
+                return SanitizeUri(target.Uri);
             }
         }
         catch (AppException)
@@ -2438,11 +2515,16 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength];
 
+    /// <param name="directoryFailure">
+    /// Klasör hazırlığında (MKCOL) alınan açıklanamayan yanıt. Yükleme BAŞARILIYSA hiç kullanılmaz
+    /// (klasör gerçekten vardı); başarısızsa kök sebep olarak hata ayrıntısına eklenir.
+    /// </param>
     private async Task UploadHttpPutAsync(
         string localPath,
         Uri uri,
         BackupTarget target,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? directoryFailure = null)
     {
         if (uri.Scheme is not ("http" or "https"))
         {
@@ -2480,7 +2562,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 "backup.remote_upload_failed",
                 (int)response.StatusCode,
                 502,
-                $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.ReasonPhrase}");
+                $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.ReasonPhrase}"
+                + (directoryFailure is null ? string.Empty : $"\r\nKlasor hazirligi: {directoryFailure}"));
         }
     }
 
@@ -2499,8 +2582,38 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var credential = ResolveCredential(target, uri)
             ?? throw new AppException("backup.remote_target_invalid", 400, 400);
 
-        await EnsureFtpDirectoriesAsync(uri, credential);
+        var dizinSorunu = await EnsureFtpDirectoriesAsync(uri, credential);
 
+        try
+        {
+            await StoreFtpFileAsync(localPath, uri, credential, cancellationToken);
+        }
+        catch (AppException exception) when (dizinSorunu is not null)
+        {
+            // Yükleme BAŞARISIZ ve klasör hazırlığında da bir yanıt almışız: kök sebep büyük
+            // olasılıkla o yanıttır ("550 Permission denied"). Yutulmaz, mesaja eklenir.
+            throw new AppException(
+                exception.MessageKey,
+                exception.Code,
+                exception.HttpStatusCode,
+                $"{exception.Details}\r\nKlasor hazirligi: {dizinSorunu}".Trim());
+        }
+        catch (Exception exception) when (dizinSorunu is not null && !cancellationToken.IsCancellationRequested)
+        {
+            throw new AppException(
+                "backup.remote_upload_failed",
+                502,
+                502,
+                $"{exception.Message}\r\nKlasor hazirligi: {dizinSorunu}");
+        }
+    }
+
+    private static async Task StoreFtpFileAsync(
+        string localPath,
+        Uri uri,
+        NetworkCredential credential,
+        CancellationToken cancellationToken)
+    {
         var request = (FtpWebRequest)WebRequest.Create(uri);
         request.Method = WebRequestMethods.Ftp.UploadFile;
         request.UseBinary = true;
@@ -2524,11 +2637,24 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         using var response = (FtpWebResponse)await request.GetResponseAsync();
         if (response.StatusCode is not (FtpStatusCode.ClosingData or FtpStatusCode.CommandOK))
         {
-            throw new AppException("backup.remote_upload_failed", (int)response.StatusCode, 502);
+            throw new AppException(
+                "backup.remote_upload_failed",
+                (int)response.StatusCode,
+                502,
+                $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
         }
     }
 
-    private static async Task EnsureFtpDirectoriesAsync(Uri uri, NetworkCredential credential)
+    /// <summary>
+    /// FTP'de dosyanın bulunduğu dizine kadar HER seviyeyi MKD ile açar (ara dizinler
+    /// kendiliğinden oluşmaz; STOR yolun tamamını hazır bekler).
+    /// </summary>
+    /// <returns>
+    /// "Zaten var" ile açıklanamayan sunucu yanıtlarının özeti; her şey yolundaysa <c>null</c>.
+    /// Dönen metin bir HATA DEĞİLDİR — yükleme başarısız olursa ayrıntıya eklenecek kanıttır
+    /// (gerekçe: yukarıdaki "UZAK HEDEFTE KLASÖR AÇMA" bölümü).
+    /// </returns>
+    private static async Task<string?> EnsureFtpDirectoriesAsync(Uri uri, NetworkCredential credential)
     {
         var segments = uri.AbsolutePath
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
@@ -2537,34 +2663,53 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
         if (segments.Length <= 1)
         {
-            return;
+            return null;
         }
 
-        var builder = new UriBuilder(uri)
-        {
-            Path = "/",
-            Query = string.Empty,
-            Fragment = string.Empty,
-            UserName = string.Empty,
-            Password = string.Empty
-        };
+        // Taban dizin de dahil, kökten dosyanın dizinine kadar HER seviye denenir: gün/kategori
+        // klasörleri taban dizinin altına iner ve ara seviye yokken MKD başarısız olur.
+        var path = "/";
+        var sorunlar = new List<string>();
 
         for (var index = 0; index < segments.Length - 1; index++)
         {
-            builder.Path = CombineUriPath(builder.Path, segments[index]);
+            path = CombineUriPath(path, segments[index]);
+            var builder = new UriBuilder(uri)
+            {
+                Path = path,
+                Query = string.Empty,
+                Fragment = string.Empty,
+                UserName = string.Empty,
+                Password = string.Empty
+            };
+
             var request = (FtpWebRequest)WebRequest.Create(builder.Uri);
             request.Method = WebRequestMethods.Ftp.MakeDirectory;
             request.Credentials = credential;
+            request.UsePassive = true;
+            request.KeepAlive = false;
+            // Klasör açma da sonsuz beklememeli: bu akış otomatik yedeklemede GLOBAL KİLİDİN
+            // içindedir (bkz. yükleme zaman aşımı gerekçesi).
+            request.Timeout = (int)RemoteUploadStallTimeout.TotalMilliseconds;
 
             try
             {
                 using var response = (FtpWebResponse)await request.GetResponseAsync();
             }
-            catch (WebException exception) when ((exception.Response as FtpWebResponse)?.StatusCode == FtpStatusCode.ActionNotTakenFileUnavailable)
+            catch (WebException exception)
             {
-                // Existing directories are reported as 550 by many FTP servers.
+                var response = exception.Response as FtpWebResponse;
+                var kod = response is null ? "-" : ((int)response.StatusCode).ToString();
+                var aciklama = (response?.StatusDescription ?? exception.Message).Trim();
+
+                // "Zaten var" (çoğu sunucuda 550, bazılarında 521) ile "izin yok" AYNI kodu
+                // kullanır; hangisi olduğu buradan bilinemez. Yanıt kaydedilir, karar yüklemenin
+                // sonucuna bırakılır: yükleme geçerse dizin vardı, geçmezse bu satır kök sebeptir.
+                sorunlar.Add($"MKD {SanitizeUri(builder.Uri)} -> {kod} {aciklama}");
             }
         }
+
+        return sorunlar.Count == 0 ? null : string.Join("; ", sorunlar);
     }
 #pragma warning restore SYSLIB0014
 
@@ -2645,23 +2790,131 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : string.Empty);
     }
 
-    private static Uri AppendFileNameIfDirectory(Uri uri, string fileName)
+    /// <summary>
+    /// Uzak adresi tamamlar: <c>&lt;taban&gt;/&lt;gün&gt;/&lt;kategori&gt;/&lt;dosya adı&gt;</c>.
+    /// </summary>
+    /// <returns>
+    /// Yüklenecek tam adres ve TABAN ADRESİN ALTINA eklenen klasör seviyeleri — FTP'de MKD,
+    /// WebDAV'da MKCOL bu seviyeler için gerekir (S3'te hiçbiri gerekmez).
+    /// </returns>
+    private static (Uri Uri, string[] Folders) AppendRemotePath(Uri uri, BackupPlacement placement, string fileName)
     {
         var path = Uri.UnescapeDataString(uri.AbsolutePath);
         var lastSegment = path.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(lastSegment) && Path.HasExtension(lastSegment))
         {
-            return uri;
+            // Kullanıcı TEK BİR DOSYA adresi vermiş (".../yedek.zip"): ne klasör ne de dosya adı
+            // eklenir. Adresi bilerek sabitleyen kurulumların ölçülmüş davranışı budur, korunur.
+            return (uri, []);
         }
+
+        var folders = placement.RemoteFolders;
+        var directoryPath = folders.Aggregate(path, CombineUriPath);
 
         var builder = new UriBuilder(uri)
         {
-            Path = CombineUriPath(path, fileName),
+            Path = CombineUriPath(directoryPath, fileName),
             UserName = string.Empty,
             Password = string.Empty
         };
 
-        return builder.Uri;
+        return (builder.Uri, folders);
+    }
+
+    // =====================================================================================
+    // UZAK HEDEFTE KLASÖR AÇMA (FTP: MKD, WebDAV: MKCOL)
+    //
+    // İki protokolde de aynı iki tuzak var ve ikisi de sessizliğe davetiye çıkarıyor:
+    //
+    // (1) "ZATEN VAR" bir hatadır. FTP'de MKD var olan dizin için 550, WebDAV'da MKCOL 405
+    //     döndürür. Bu, İLK GECEDEN SONRAKİ HER GECENİN NORMALİ'dir. Hatayı olduğu gibi
+    //     yükseltmek, yedeğin ikinci geceden itibaren "uzak hedefe gönderilemedi" ile
+    //     bitmesi demek olurdu.
+    //
+    // (2) "İZİN YOK" da aynı kodları döndürür (550 / 403). Hatayı görmezden gelmek bu kez
+    //     ters tarafa düşer: klasör hiç oluşmaz, dosya karşıya gitmez, panel yine de sessiz
+    //     kalır ve kullanıcı olmayan bir off-site kopyaya güvenir.
+    //
+    // KARAR: yanıt koduna bakıp "bu hangisiydi" diye TAHMİN ETMİYORUZ (aynı kod, iki farklı
+    // sebep; sunucudan sunucuya metin de değişir). Klasör açma sonucu ÖLÇÜLEBİLİR tek şeye
+    // bağlanır: dosya karşıya gidebildi mi?
+    //   - Yükleme BAŞARILIYSA klasör gerçekten vardı → MKD/MKCOL hatası zararsızdı, susulur.
+    //     (Dizinlerin elle önceden açıldığı ve MKD'nin hiç izinli olmadığı kurulumlar da böylece
+    //      çalışmaya devam eder — bunları baştan reddetmek gereksiz bir arıza olurdu.)
+    //   - Yükleme BAŞARISIZSA klasör hazırlığındaki sunucu yanıtı hata ayrıntısına EKLENİR; kök
+    //     sebep ("550 Permission denied") kullanıcının gördüğü mesajda durur, yutulmaz.
+    // =====================================================================================
+
+    /// <summary>
+    /// WebDAV'da taban adresin altındaki ara koleksiyonları MKCOL ile açar.
+    /// </summary>
+    /// <returns>
+    /// Klasör hazırlığında alınan ve "zaten var" ile açıklanamayan sunucu yanıtlarının özeti;
+    /// her şey yolundaysa <c>null</c>. Dönen metin bir HATA DEĞİLDİR, yükleme başarısız olursa
+    /// ayrıntıya eklenecek KANITTIR.
+    /// </returns>
+    private async Task<string?> EnsureWebDavCollectionsAsync(
+        Uri baseUri,
+        IReadOnlyList<string> folders,
+        BackupTarget target,
+        CancellationToken cancellationToken)
+    {
+        if (folders.Count == 0)
+        {
+            return null;
+        }
+
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = RemoteUploadTimeout;
+
+        var credential = ResolveCredential(target, baseUri);
+        var path = Uri.UnescapeDataString(baseUri.AbsolutePath);
+        var sorunlar = new List<string>();
+
+        // YUKARIDAN AŞAĞIYA: ara koleksiyon yokken alt koleksiyonu açmak 409 Conflict verir.
+        foreach (var folder in folders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            path = CombineUriPath(path, folder);
+
+            // Koleksiyon adresi SONU '/' ile biter (RFC 4918); bazı sunucular aksi hâlde
+            // koleksiyonu dosya sanıp reddeder.
+            var builder = new UriBuilder(baseUri)
+            {
+                Path = path + "/",
+                Query = string.Empty,
+                Fragment = string.Empty,
+                UserName = string.Empty,
+                Password = string.Empty
+            };
+
+            using var request = new HttpRequestMessage(new HttpMethod("MKCOL"), builder.Uri);
+            if (credential is not null)
+            {
+                var token = Convert.ToBase64String(
+                    System.Text.Encoding.UTF8.GetBytes($"{credential.UserName}:{credential.Password}"));
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
+            }
+
+            try
+            {
+                using var response = await client.SendAsync(request, cancellationToken);
+                if (response.IsSuccessStatusCode
+                    // 405 = kaynak zaten var (RFC 4918 9.3.1). İkinci geceden sonra BEKLENEN yanıt.
+                    || response.StatusCode == HttpStatusCode.MethodNotAllowed)
+                {
+                    continue;
+                }
+
+                sorunlar.Add($"MKCOL {SanitizeUri(builder.Uri)} -> {(int)response.StatusCode} {response.ReasonPhrase}");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                sorunlar.Add($"MKCOL {SanitizeUri(builder.Uri)} -> {exception.Message}");
+            }
+        }
+
+        return sorunlar.Count == 0 ? null : string.Join("; ", sorunlar);
     }
 
     private static string CombineUriPath(string left, string right)
@@ -2711,40 +2964,6 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         return details.Length <= maxLength
             ? details
             : details[..maxLength] + "\r\n... (diagnostic output truncated)";
-    }
-
-    /// <summary>
-    /// Yedek klasörü: <c>&lt;kök&gt;\&lt;GÜN&gt;\&lt;kategori&gt;</c>. Gün klasörü YEREL tarihe göre.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Neden gün klasörü:</b> önceden bütün yedekler <c>backups\sites\</c> gibi tek bir
-    /// klasöre yığılıyordu. Aylık yedeği olan bir sunucuda o klasör yüzlerce dosya oluyor,
-    /// "dün gece ne alındı" sorusu ancak dosya adındaki zaman damgasını okuyarak
-    /// cevaplanabiliyordu. Günlük klasör, hem panelden hem FTP'den hem de doğrudan diskten
-    /// bakan biri için tarihi ilk bakışta görünür kılar ve bir günün tamamını taşımayı/silmeyi
-    /// tek işleme indirir.
-    /// </para>
-    /// <para>
-    /// <b>Neden yerel tarih, UTC değil:</b> klasör adı İNSAN içindir. Yedek 03:00'te alınıyorsa
-    /// yöneticinin takvimindeki gün neyse o klasöre girmeli; UTC kullanmak Türkiye'de gece
-    /// yarısından sonra alınan yedeği "bir önceki gün" klasörüne düşürürdü. Dosya adındaki
-    /// zaman damgası UTC olarak KALIR (sıralama ve çakışma için) — ikisi farklı işler.
-    /// </para>
-    /// <para>
-    /// <b>Geriye dönük:</b> eski yedeklerin yolu kayıtta (<c>record.Path</c>) tam olarak
-    /// saklandığı için listeleme, geri yükleme ve saklama temizliği eski düzendeki dosyaları
-    /// bulmaya devam eder. Yeni düzen yalnızca YENİ yedekler için geçerlidir.
-    /// </para>
-    /// </remarks>
-    private static string EnsureBackupDirectory(string root, string category)
-    {
-        var path = Path.Combine(
-            Environment.ExpandEnvironmentVariables(root),
-            DateTime.Now.ToString("yyyy-MM-dd"),
-            category);
-        Directory.CreateDirectory(path);
-        return path;
     }
 
     // Bir dizini tüm alt içeriğiyle arşive verilen önek altında ekler (örn. "files/...").
