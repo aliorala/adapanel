@@ -196,7 +196,7 @@ public static class BackupDumpCompression
     /// </para>
     /// </summary>
     /// <exception cref="AppException">
-    /// <c>backup.decrypt_corrupt</c> — arşiv bozuk/kesilmiş, açılamadı.
+    /// <c>backup.archive_corrupt</c> — arşiv bozuk/kesilmiş, açılamadı.
     /// </exception>
     public static async Task DecompressFileAsync(string sourcePath, string targetPath, CancellationToken cancellationToken = default)
     {
@@ -227,7 +227,7 @@ public static class BackupDumpCompression
                         break;
 
                     default:
-                        throw new AppException("backup.decrypt_corrupt", 400, 400, "Dosya taninan bir sikistirma bicimi tasimiyor.");
+                        throw new AppException("backup.archive_corrupt", 400, 400, "Dosya taninan bir sikistirma bicimi tasimiyor.");
                 }
             }
 
@@ -238,11 +238,11 @@ public static class BackupDumpCompression
             // BOZUK ARŞİV NET SÖYLENİR. Sarmalanmasaydı kullanıcı "Dictionary mismatch" gibi hiçbir
             // şey anlatmayan bir iç hata görürdü (middleware bunu common.unexpected_error yapardı).
             //
-            // Anahtar bilerek MEVCUT bir anahtardır: kullanıcıya giden metin ("Yedek dosyası bozuk
-            // ya da değiştirilmiş... Hiçbir şey geri yüklenmedi.") bu durumu birebir anlatıyor ve
-            // bu görevde i18n dosyalarına dokunulmuyor. Ayrı bir backup.archive_corrupt anahtarı
-            // eklenecekse çeviriyle BİRLİKTE eklenmelidir (bkz. scratchpad/i18n-sikistirma.md).
-            throw new AppException("backup.decrypt_corrupt", 400, 400, exception.Message);
+            // Anahtar SIKIŞTIRMAYA aittir: burada başarısız olan şey açma (decompress) adımıdır,
+            // şifre çözme değil. Önceden ödünç alınan backup.decrypt_corrupt anahtarı "değiştirilmiş
+            // / bütünlük doğrulaması başarısız" diyerek ŞİFRELEME şüphesi doğuruyordu; ham (şifresiz)
+            // ama yarım kalmış bir .zst dosyasında bu yanlış izdir.
+            throw new AppException("backup.archive_corrupt", 400, 400, exception.Message);
         }
         finally
         {

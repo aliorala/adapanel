@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Update;
+﻿using AdaPanel.Core.Dtos.Update;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
@@ -24,6 +24,33 @@ public sealed class SelfUpdateService(
     /// 15 dakika, sınırı saatte ~4 isteğe indirirken yeni sürümü fark etmeyi de yeterince hızlı tutar.
     /// </summary>
     private static readonly TimeSpan ManifestFreshness = TimeSpan.FromMinutes(15);
+
+    private const string LastAttemptPath = "updates/last-attempt.json";
+
+    /// <summary>
+    /// Çalıştırıcı son bir işaret verdikten sonra hükmün ne kadar bekleneceği. Süre dolduğunda ve
+    /// sürüm HÂLÂ değişmemişse deneme "hüküm verilemedi" diye kapatılır.
+    /// <para>
+    /// 30 dakika ölçüme dayanır: çalıştırıcı 'installing' satırını Start-Process'ten hemen önce yazar;
+    /// gözlenen kurulum (paketin açılması + dosya kopyalama + servisin geri başlaması) 35 saniye sürdü.
+    /// Yavaş disk, antivirüs taraması ve şema göçü payıyla bunun ~50 katı bırakıldı. Kayıt SONSUZA
+    /// KADAR "kuruluyor"da kalamaz: kullanıcı, bir daha asla sonuçlanmayacak bir ilerlemeye bakar.
+    /// </para>
+    /// </summary>
+    internal static readonly TimeSpan AttemptVerdictGrace = TimeSpan.FromMinutes(30);
+
+    /// <summary>Panelin kendi ölçümüyle vardığı sonuç.</summary>
+    internal enum AttemptVerdict
+    {
+        /// <summary>Karışma: çalıştırıcının yazdığı ne ise o geçerli.</summary>
+        Keep,
+
+        /// <summary>Çalışan sürüm hedef sürüme ULAŞMIŞ: kurulum olmuştur.</summary>
+        Succeeded,
+
+        /// <summary>Sürüm değişmedi ve hüküm verecek kimse kalmadı: deneme sonuçsuz kapanır.</summary>
+        NoVerdict
+    }
 
     public async Task<UpdateStatusDto> CheckForUpdateAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
     {
@@ -63,6 +90,9 @@ public sealed class SelfUpdateService(
         var latestVersion = string.IsNullOrWhiteSpace(manifest.LatestVersion) ? currentVersion : manifest.LatestVersion;
         var pendingUpdate = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
 
+        // HUKUM BURADA VERILIR -- bekleyen kayit silinmeden ONCE, cunku hukmun tek kaniti odur.
+        var lastAttempt = await ReconcileLastAttemptAsync(pendingUpdate, currentVersion, cancellationToken);
+
         // Guncelleme UYGULANDIYSA (calisan surum == bekleyen paketin surumu) bekleyen durumu temizle:
         // "kurulum planlandi" etiketi sonsuza dek kalmasin, eski ~50MB paket updates klasorunde birikmesin.
         if (!string.IsNullOrWhiteSpace(pendingUpdate.Version) &&
@@ -101,7 +131,7 @@ public sealed class SelfUpdateService(
             // Çekme başarısızsa sürüm bilgisi önbellekten geliyor demektir; ekran "güncelsiniz"
             // DEMEMELİ, çünkü yeni bir sürüm yayınlanmış olabilir ve panel onu görememiştir.
             IsCheckFailed = !string.IsNullOrEmpty(fetchNote),
-            LastAttempt = await ReadLastAttemptAsync(cancellationToken),
+            LastAttempt = lastAttempt,
             IsUpdateAvailable = IsNewerVersion(currentVersion, latestVersion),
             CheckedAtUtc = DateTime.UtcNow
         };
@@ -115,7 +145,7 @@ public sealed class SelfUpdateService(
     {
         try
         {
-            var path = Path.Combine(fileStore.EnsureDirectory("updates"), "last-attempt.json");
+            var path = fileStore.ResolvePath(LastAttemptPath);
             if (!File.Exists(path))
             {
                 return null;
@@ -131,6 +161,118 @@ public sealed class SelfUpdateService(
             // Durum dosyası okunamadıysa güncelleme akışını bozmamalı: bu yalnız bilgilendirme.
             return null;
         }
+    }
+
+    /// <summary>
+    /// Kurulum denemesinin sonucunu PANELIN KENDI OLCUMUYLE karara baglar ve gerekiyorsa durum
+    /// dosyasini duzeltir.
+    /// <para>
+    /// KOK SEBEP: hukmu yazacak olan calistirici, hukum verilecek anda oldurulen seyin ta kendisine
+    /// baglidir -- kurulum panelin servisini durdurur ve calistirici cogu zaman 'installing'
+    /// satirini yazdiktan sonra bir daha hicbir sey yazamaz. Canli iki makinede de gorulen tablo
+    /// buydu: kurulum gunlugu "Installation process succeeded" derken durum dosyasi 'installing'de
+    /// donmustu ve panel BASARILI bir guncellemeyi "tamamlanamadi" diye raporladi. Hukum, olmesi
+    /// muhtemel bir surece birakilamaz; PANEL kendi CALISAN surumune bakarak karar verir.
+    /// </para>
+    /// </summary>
+    private async Task<UpdateAttemptDto?> ReconcileLastAttemptAsync(
+        PendingUpdate pendingUpdate,
+        string currentVersion,
+        CancellationToken cancellationToken)
+    {
+        var attempt = await ReadLastAttemptAsync(cancellationToken);
+        var verdict = DecideAttemptVerdict(
+            attempt,
+            pendingUpdate.Version,
+            pendingUpdate.InstallScheduledAtUtc,
+            currentVersion,
+            DateTime.UtcNow);
+        if (verdict == AttemptVerdict.Keep)
+        {
+            return attempt;
+        }
+
+        var karar = new UpdateAttemptDto
+        {
+            Phase = verdict == AttemptVerdict.Succeeded ? "succeeded" : "failed",
+            // Cikis kodu TASINIR: calistirici olmeden once bir kod yazabildiyse teshis degeri vardir.
+            InstallerExitCode = attempt?.InstallerExitCode,
+            Error = string.Empty,
+            ErrorKey = verdict == AttemptVerdict.Succeeded ? string.Empty : "update.attempt_no_verdict",
+            IsDecidedByPanel = true,
+            UpdatedAtUtc = DateTime.UtcNow
+        };
+
+        try
+        {
+            // Hukum KALICI yazilir: bekleyen kayit birazdan silinecek, yani ayni karari bir daha
+            // veremeyecegiz. Yazamazsak (disk/izin) rapor yine dogrudur, yalniz kalici olmaz.
+            await fileStore.WriteAsync(LastAttemptPath, karar, cancellationToken);
+        }
+        catch
+        {
+            // En iyi caba; durum dosyasi yalnizca bilgilendirmedir, guncelleme akisini bozmamali.
+        }
+
+        return karar;
+    }
+
+    /// <summary>
+    /// Iki kaynak (calistiricinin yazdigi hukum ve panelin olctugu surum) celisirse hangisinin
+    /// kazandigini belirler.
+    /// <list type="bullet">
+    /// <item><b>Calisan surum hedefe ulastiysa OLCUM kazanir</b> (<see cref="AttemptVerdict.Succeeded"/>):
+    /// calistiricinin "basarisiz" diyebilecegi iki sey vardir -- kurulum yapilamadi ya da servis
+    /// kalkmadi. Bu istegi YENI surumle yanitlayan bir panelin varligi ikisini de curutur. Iddia
+    /// degil, olculen son durum esastir.</item>
+    /// <item><b>Surum hedefe ulasmadiysa CALISTIRICI kazanir</b> (<see cref="AttemptVerdict.Keep"/>):
+    /// gercek basarisizligin SEBEBINI (kurulum cikis kodu, gunluk kuyrugu) yalniz o bilir. Bu
+    /// duzeltme gercek basarisizligi gizlememeli.</item>
+    /// <item><b>Kimse hukum vermediyse ve sure dolduysa</b> (<see cref="AttemptVerdict.NoVerdict"/>):
+    /// kayit "kuruluyor"da sonsuza kadar birakilamaz; sonucsuz kapatilir ve kullaniciya SEBEP
+    /// uydurulmadan "hukum alinamadi" denir.</item>
+    /// </list>
+    /// </summary>
+    internal static AttemptVerdict DecideAttemptVerdict(
+        UpdateAttemptDto? attempt,
+        string pendingVersion,
+        DateTime? installScheduledAtUtc,
+        string currentVersion,
+        DateTime nowUtc)
+    {
+        // Kurulum HIC baslatilmadiysa ortada hukum verilecek bir deneme yok. Onceki denemeden kalan
+        // sonuc (kurulumdan sonra silinen bekleyen kayit) oldugu gibi korunur.
+        if (!installScheduledAtUtc.HasValue || string.IsNullOrWhiteSpace(pendingVersion))
+        {
+            return AttemptVerdict.Keep;
+        }
+
+        // Hedefe ULASILDI MI: esitlik yetmez, "daha yeni surum calisiyor" da hedefe ulasmis sayilir
+        // (elle daha yeni bir paket kurulmus olabilir).
+        if (!IsNewerVersion(currentVersion, pendingVersion))
+        {
+            // Zaten 'succeeded' yaziyorsa dosyayi bos yere yeniden yazma (her kontrolde yazim olmasin).
+            return attempt is not null && string.Equals(attempt.Phase, "succeeded", StringComparison.OrdinalIgnoreCase)
+                ? AttemptVerdict.Keep
+                : AttemptVerdict.Succeeded;
+        }
+
+        // Surum degismedi. Calistirici sonuclandirdiysa (basarili/basarisiz) SEBEBIYLE birlikte
+        // onun hukmu gecerlidir.
+        if (attempt is not null && attempt.IsFinished)
+        {
+            return AttemptVerdict.Keep;
+        }
+
+        // Kimse sonuclandirmadi. Son isaretin uzerinden ne kadar gectigine bak: hala suruyor olabilir.
+        var sonIsaret = attempt?.UpdatedAtUtc ?? installScheduledAtUtc.Value;
+        if (sonIsaret < installScheduledAtUtc.Value)
+        {
+            // Durum dosyasi ONCEKI denemeden kalmis; bu denemenin baslangicini esas al.
+            sonIsaret = installScheduledAtUtc.Value;
+        }
+
+        return nowUtc - sonIsaret >= AttemptVerdictGrace ? AttemptVerdict.NoVerdict : AttemptVerdict.Keep;
     }
 
     public async Task<UpdateStatusDto> SetGithubRepoAsync(string repo, CancellationToken cancellationToken = default)
@@ -385,6 +527,19 @@ public sealed class SelfUpdateService(
                 400,
                 400,
                 $"Expected={expectedHash}\r\nActual={actualHash}");
+        }
+
+        // ONCEKI denemenin durum dosyasi SILINIR. Aksi halde eski bir "failed" kaydi yeni denemenin
+        // uzerine golge duser: panel, daha kurulum baslamadan gecmis bir basarisizligi bu denemenin
+        // sonucu gibi raporlar. Silince kural netlesir: last-attempt.json HER ZAMAN son denemeye aittir
+        // ve dosyanin YOKLUGU "calistirici henuz hicbir sey yazmadi" demektir.
+        try
+        {
+            File.Delete(fileStore.ResolvePath(LastAttemptPath));
+        }
+        catch
+        {
+            // En iyi caba: dosya kilitliyse hukum yine surum karsilastirmasindan cikar.
         }
 
         await installerLauncher.ScheduleAsync(packagePath, actualHash, cancellationToken);

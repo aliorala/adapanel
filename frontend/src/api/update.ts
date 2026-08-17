@@ -11,6 +11,10 @@ export type UpdateAttempt = {
   phase: string;
   installerExitCode: number | null;
   error: string;
+  /** Hükmü panel verdiyse çeviri anahtarı; serbest metin `error` yerine bu gösterilir. */
+  errorKey: string;
+  /** Hüküm çalıştırıcıdan DEĞİL, panelin kendi sürüm ölçümünden geldi. */
+  isDecidedByPanel: boolean;
   updatedAtUtc: string | null;
   /** Deneme sonuçlandı mı? true ise arayüz beklemeyi bırakmalı. */
   isFinished: boolean;

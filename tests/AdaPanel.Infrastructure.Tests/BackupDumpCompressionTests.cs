@@ -407,7 +407,7 @@ public sealed class BackupDumpCompressionTests
             }
             catch (AppException hata)
             {
-                Assert.Equal("backup.decrypt_corrupt", hata.MessageKey);
+                Assert.Equal("backup.archive_corrupt", hata.MessageKey);
                 continue; // Yakalandi: dogru davranis.
             }
 
@@ -450,7 +450,9 @@ public sealed class BackupDumpCompressionTests
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RestoreAsync(new RestoreBackupRequest { BackupId = kayit.Id }));
 
-        Assert.Equal("backup.decrypt_corrupt", hata.MessageKey);
+        // SIKISTIRMA acmasi basarisiz: anahtar da bunu soylemeli. "decrypt" diyen anahtar,
+        // sifresiz bir yedekte kullaniciyi yanlis ize (parola/sifreleme) surukluyordu.
+        Assert.Equal("backup.archive_corrupt", hata.MessageKey);
 
         // HICBIR SEY ICE AKTARILMADI: yarim bir dokumu veritabanina yazmak, hic yazmamaktan
         // cok daha pahaliya mal olurdu.

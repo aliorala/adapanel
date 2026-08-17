@@ -270,11 +270,21 @@ function startPostInstallWatch(versionBeforeInstall: string) {
       // sonucu ne sebebini görüyordu. Çalıştırıcının yazdığı durum bu soruyu kesin yanıtlar.
       const attempt = fresh.lastAttempt;
       if (attempt?.isFinished && attemptIsNewerThan(attempt, installStartedAtIso)) {
-        installPhase.value = "failed";
+        // BASARILI biten bir deneme "failed" sayilamaz. Eskiden burada yalnizca isFinished'a
+        // bakiliyordu ve isFinished BASARIYI DA kapsiyor: kurulum bittigi halde surum dizesi
+        // ayni kaldiysa (ayni surumun yeniden kurulmasi) panel, BASARILI kurulumu "tamamlanamadi"
+        // diye raporluyordu.
+        installPhase.value = attempt.isFailed ? "failed" : "done";
         installAttempt.value = attempt;
         stopPostInstallWatch(true);
         status.value = fresh;
-        showNotice(describeAttemptFailure(attempt), true);
+        if (attempt.isFailed) {
+          showNotice(describeAttemptFailure(attempt), true);
+          return;
+        }
+
+        showNotice(t("panel.update.updated"), false);
+        window.setTimeout(() => window.location.reload(), 1500);
         return;
       }
 
@@ -326,6 +336,11 @@ function describeAttemptFailure(attempt: UpdateAttempt) {
   // yerine ne oldugunu soyle.
   if (attempt.installerExitCode === 5) {
     return t("panel.update.attemptAborted");
+  }
+
+  // Hukmu panel verdiyse sebep serbest metin degil bir ceviri anahtaridir (dil secimine uyar).
+  if (attempt.errorKey) {
+    return translate(attempt.errorKey);
   }
 
   return attempt.error

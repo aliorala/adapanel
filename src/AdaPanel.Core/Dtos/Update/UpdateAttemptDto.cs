@@ -16,6 +16,22 @@ public sealed class UpdateAttemptDto
 
     public string Error { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Hükmü PANEL verdiyse gösterilecek çeviri anahtarı (<see cref="Error"/> serbest metni yerine).
+    /// Boşsa metin çalıştırıcıdan gelmiştir ve olduğu gibi gösterilir.
+    /// </summary>
+    public string ErrorKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Hüküm çalıştırıcının değil PANELİN kendi ölçümünden çıktı (çalışan sürüm = hedef sürüm).
+    /// <para>
+    /// Gerekli: kurulum panelin servisini durdurur ve çalıştırıcı çoğu zaman hükmü yazamadan ölür;
+    /// durum dosyası "kuruluyor"da donar. O dosyaya bakıp "tamamlanamadı" demek, BAŞARILI bir
+    /// güncellemeyi başarısız ilan etmekti — canlıda iki makinede birden yaşandı.
+    /// </para>
+    /// </summary>
+    public bool IsDecidedByPanel { get; set; }
+
     public DateTime? UpdatedAtUtc { get; set; }
 
     /// <summary>Deneme sonuçlandı mı? true ise arayüz beklemeyi BIRAKMALI ve sonucu göstermeli.</summary>

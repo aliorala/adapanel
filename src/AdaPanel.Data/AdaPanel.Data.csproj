@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <AssemblyName>AdaPanel.Data</AssemblyName>
     <RootNamespace>AdaPanel.Data</RootNamespace>
@@ -11,6 +11,15 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.27" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.27" />
+    <!-- GUVENLIK: EF Core 8.0.27 gecisli olarak SQLitePCLRaw 2.1.6 getiriyor; onun icindeki yerel
+         SQLite kitapligi CVE-2025-6965'ten (SQLite < 3.50.2, toplama terimi sayisi sutun sayisini
+         asinca bellek bozulmasi, GHSA-2m69-gcr7-jv3q, HIGH) etkileniyor. Panel bu kod yoluna
+         ULASILABILIR bir yer birakmiyor (kendi SQLite veritabanina yalniz EF Core uzerinden,
+         parametreli sorgularla gidilir; hicbir uctan kullanici SQL metni SQLite'a verilemez), yani
+         somurulme yolumuz yok, ama yerel kitapligi eski birakmanin da bir faydasi yok.
+         2.1.13, EF Core surumune DOKUNMADAN yalniz yerel SQLite'i yeniler (uyumluluk: EF Core
+         "SQLitePCLRaw.core >= 2.1.6" istiyor). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <!-- Yalnız tasarım zamanı (dotnet ef migrations); uygulamayla SEVK EDİLMEZ (PrivateAssets=all). -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.27">
       <PrivateAssets>all</PrivateAssets>

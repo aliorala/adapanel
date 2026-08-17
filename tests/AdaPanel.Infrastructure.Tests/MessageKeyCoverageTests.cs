@@ -59,14 +59,21 @@ public sealed class MessageKeyCoverageTests
         // Anahtar bicimi: kucuk harfle baslar ve en az bir nokta icerir ("cron.run_failed").
         // Dosya adlari, yollar ve SQL parcalari bu bicime uymaz.
         //
-        // YALNIZCA HATA YOLLARI taranir (AppException, Fail, middleware'in yazdigi kodlar).
+        // YALNIZCA HATA YOLLARI taranir (AppException, Fail, middleware'in yazdigi kodlar,
+        // bir de DTO'lara ATANAN anahtarlar: "MessageKey = ..." / "ErrorKey = ...").
+        //
+        // ATAMA BICIMI SONRADAN EKLENDI ve HEMEN BIR ACIK YAKALADI: BackupService yedek
+        // sikistirilamadiginda BackupRestoreWarningDto.MessageKey = "backup.compression_failed"
+        // uretiyordu, ama bu anahtarin hicbir dilde karsiligi yoktu -- kullanici uyari kutusunda
+        // birebir "backup.compression_failed" yazisini goruyordu. Desen yalnizca "new AppException("
+        // ve ".Fail(" cagrilarina baktigi icin sinifin bu yarisi korumasizdi.
         // Sebep: ekranda ham anahtar goren yol budur -- her ekran hatayi
         // "resolveApiMessage(error) -> t(anahtar)" ile basar ve ceviri yoksa anahtarin KENDISI
         // gorunur. Basari mesajlarinda ise arayuz sunucunun anahtarini kullanmaz, kendi metnini
         // gosterir ("panel.tasks.saved" gibi); onlari da zorunlu tutmak, hicbir yerde
         // gorunmeyen 80'den fazla anahtar icin ceviri istemek olurdu.
         var desen = new Regex(
-            @"(?:new AppException\(|\.Fail\(|WriteResponseAsync\([^,]+,\s*[^,]+,\s*)""([a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)""",
+            @"(?:new AppException\(|\.Fail\(|WriteResponseAsync\([^,]+,\s*[^,]+,\s*|(?:Message|Error)Key\s*=\s*)""([a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)""",
             RegexOptions.Compiled);
 
         var anahtarlar = new HashSet<string>(StringComparer.Ordinal);
