@@ -2695,9 +2695,36 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             : details[..maxLength] + "\r\n... (diagnostic output truncated)";
     }
 
+    /// <summary>
+    /// Yedek klasörü: <c>&lt;kök&gt;\&lt;GÜN&gt;\&lt;kategori&gt;</c>. Gün klasörü YEREL tarihe göre.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gün klasörü:</b> önceden bütün yedekler <c>backups\sites\</c> gibi tek bir
+    /// klasöre yığılıyordu. Aylık yedeği olan bir sunucuda o klasör yüzlerce dosya oluyor,
+    /// "dün gece ne alındı" sorusu ancak dosya adındaki zaman damgasını okuyarak
+    /// cevaplanabiliyordu. Günlük klasör, hem panelden hem FTP'den hem de doğrudan diskten
+    /// bakan biri için tarihi ilk bakışta görünür kılar ve bir günün tamamını taşımayı/silmeyi
+    /// tek işleme indirir.
+    /// </para>
+    /// <para>
+    /// <b>Neden yerel tarih, UTC değil:</b> klasör adı İNSAN içindir. Yedek 03:00'te alınıyorsa
+    /// yöneticinin takvimindeki gün neyse o klasöre girmeli; UTC kullanmak Türkiye'de gece
+    /// yarısından sonra alınan yedeği "bir önceki gün" klasörüne düşürürdü. Dosya adındaki
+    /// zaman damgası UTC olarak KALIR (sıralama ve çakışma için) — ikisi farklı işler.
+    /// </para>
+    /// <para>
+    /// <b>Geriye dönük:</b> eski yedeklerin yolu kayıtta (<c>record.Path</c>) tam olarak
+    /// saklandığı için listeleme, geri yükleme ve saklama temizliği eski düzendeki dosyaları
+    /// bulmaya devam eder. Yeni düzen yalnızca YENİ yedekler için geçerlidir.
+    /// </para>
+    /// </remarks>
     private static string EnsureBackupDirectory(string root, string category)
     {
-        var path = Path.Combine(Environment.ExpandEnvironmentVariables(root), category);
+        var path = Path.Combine(
+            Environment.ExpandEnvironmentVariables(root),
+            DateTime.Now.ToString("yyyy-MM-dd"),
+            category);
         Directory.CreateDirectory(path);
         return path;
     }
