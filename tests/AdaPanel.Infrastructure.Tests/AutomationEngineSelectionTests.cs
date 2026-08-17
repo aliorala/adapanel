@@ -1,4 +1,6 @@
+using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Databases;
+using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Automation;
 using Xunit;
 
@@ -82,5 +84,59 @@ public sealed class AutomationEngineSelectionTests
 
         Assert.Single(secilen);
         Assert.Equal("mariadb", secilen[0]);
+    }
+}
+
+/// <summary>
+/// Site dışı arşivlerden (abonelik/panel/mail) seçerek geri yükleme, hedef yol verilmeden de
+/// çalışmalı: kapsamlı kullanıcı güvenlik gereği hedef yol VEREMEZ, o yüzden eskiden bu yol
+/// kiracıda hiç çalışmıyordu (özellik vardı, kapısı kilitliydi).
+/// </summary>
+public sealed class RestoreFolderNameTests
+{
+    private static BackupRecordDto Kayit(string tur, string kaynak) =>
+        new() { Type = tur, Source = kaynak };
+
+    [Fact]
+    public void Klasor_adi_tur_ve_kaynagi_tasir()
+    {
+        var ad = BackupService.BuildRestoreFolderName(Kayit("subscription", "musteri-42"));
+
+        Assert.StartsWith("subscription-musteri-42-", ad);
+    }
+
+    [Fact]
+    public void Dizin_kacisi_denemesi_ada_SIZMAZ()
+    {
+        // Kaynak alanı kullanıcı verisidir. Temizlenmezse çıkarma klasörü yedek kökünün
+        // DIŞINA taşınabilirdi.
+        var ad = BackupService.BuildRestoreFolderName(Kayit("subscription", @"..\..\Windows\System32"));
+
+        Assert.DoesNotContain("..", ad);
+        Assert.DoesNotContain("/", ad);
+        Assert.DoesNotContain("\\", ad);
+        Assert.Equal(-1, ad.IndexOfAny(Path.GetInvalidFileNameChars()));
+    }
+
+    [Fact]
+    public void Bos_kaynak_ada_dusmez_sabit_karsilik_kullanilir()
+    {
+        var ad = BackupService.BuildRestoreFolderName(Kayit("panel", "   "));
+
+        Assert.Contains("yedek", ad);
+        Assert.Equal(-1, ad.IndexOfAny(Path.GetInvalidFileNameChars()));
+    }
+
+    [Fact]
+    public void Ayni_yedekten_iki_geri_yukleme_AYRI_klasorlere_gider()
+    {
+        // Aynı klasöre yazsalardı ikinci geri yükleme birincinin üzerine yazardı ve kullanıcı
+        // neyin nereden geldiğini ayırt edemezdi.
+        var kayit = Kayit("subscription", "musteri-42");
+        var birinci = BackupService.BuildRestoreFolderName(kayit);
+        Thread.Sleep(1100);
+        var ikinci = BackupService.BuildRestoreFolderName(kayit);
+
+        Assert.NotEqual(birinci, ikinci);
     }
 }

@@ -30,6 +30,55 @@ export type BackupRecord = {
   encrypted: boolean;
   warnings: BackupRestoreWarning[];
   preservedPath: string;
+
+  // --- ARTIMSAL ZİNCİR (Plesk modeli) ---
+  // Eski kayıtlarda bu alanlar BOŞ gelir ve boş değerler "zincirsiz tekil tam yedek" demektir;
+  // ekran bu yüzden `chainId` doluluğuna bakar, `backupMode`a değil.
+
+  /** Zincir kimliği; boş = zincire ait değil (kendi başına yeterli tam yedek). */
+  chainId: string;
+  /** 0 = TAM yedek (zincir başı), 1..n = artımsal halkalar. */
+  chainIndex: number;
+  /** "full" | "incremental". */
+  backupMode: string;
+  /** Artımsal halkanın dayandığı önceki halka; tam yedekte boş. */
+  baseBackupId: string;
+  /** Abonelik yedeğinde sahibinin kullanıcı kimliği ("N" biçimi, tiresiz). */
+  subscriptionUserId: string;
+  /** Arşivdeki mantıksal öğe sayısı (site + veritabanı + posta alanı + FTP); 0 = ölçülmedi. */
+  itemCount: number;
+};
+
+/** Zincirdeki tek bir halka. */
+export type BackupChainLink = {
+  backupId: string;
+  name: string;
+  chainIndex: number;
+  backupMode: "full" | "incremental";
+  createdAtUtc: string;
+  size: number;
+  /** Halkanın dosyası GERÇEKTEN yerinde mi (kayıt duruyor ama dosya silinmiş olabilir). */
+  available: boolean;
+};
+
+/**
+ * Bir yedeğin geri yüklenebilmesi için gereken zincirin çözümü.
+ *
+ * `broken` ise geri yükleme BAŞLATILMAMALI: sunucu da `backup.chain_broken` ile reddeder, ama
+ * kullanıcı bunu düğmeye basmadan ÖNCE görmelidir.
+ */
+export type BackupChain = {
+  chainId: string;
+  /** TAM yedekten hedefe SIRALI halkalar. */
+  links: BackupChainLink[];
+  broken: boolean;
+  /** Kopuksa eksik halkaların adı ya da "#2" gibi sıra numarası. */
+  missingLinks: string[];
+};
+
+export type BackupDeleteResult = {
+  deletedIds: string[];
+  deletedNames: string[];
 };
 
 export type BackupTargetPayload = {
@@ -82,6 +131,10 @@ export type SiteBackupScope = {
   includeConfig: boolean;
   includeMail: boolean;
   databases: BackupDatabaseRef[];
+  /** "Mümkünse artımsal": ilk yedek ve tam yedek periyodu dolduğunda yine TAM alınır. */
+  incremental: boolean;
+  /** Artımsal zincirin kaç günde bir TAM yedekle yenileneceği (1..365). */
+  fullBackupEveryDays: number;
 };
 
 export async function backupSite(siteName: string, scope?: Partial<SiteBackupScope>, target?: Partial<BackupTargetPayload>) {
@@ -91,9 +144,65 @@ export async function backupSite(siteName: string, scope?: Partial<SiteBackupSco
     includeConfig: scope?.includeConfig ?? true,
     includeMail: scope?.includeMail ?? false,
     databases: scope?.databases ?? [],
+    incremental: scope?.incremental ?? false,
+    fullBackupEveryDays: scope?.fullBackupEveryDays ?? 7,
     ...(target ?? {})
   });
 
+  return response.data.data;
+}
+
+/** Abonelik yedeğinin kapsamı; hepsi kapatılırsa arşivde manifestten başka bir şey kalmaz. */
+export type SubscriptionBackupScope = {
+  includeFiles: boolean;
+  includeDatabases: boolean;
+  includeMail: boolean;
+  includeFtp: boolean;
+  incremental: boolean;
+  fullBackupEveryDays: number;
+};
+
+/**
+ * ABONELİK yedeği: müşterinin bütün siteleri + veritabanları + posta alan adları + FTP hesapları
+ * TEK arşivde.
+ *
+ * `userId` ZORUNLU: kapsamlı kullanıcı (müşteri/bayi) başka bir abonelik kimliği yazamaz —
+ * sunucu `403 auth.subscription_forbidden` döner.
+ */
+export async function backupSubscription(
+  userId: string,
+  scope?: Partial<SubscriptionBackupScope>,
+  target?: Partial<BackupTargetPayload>
+) {
+  const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/subscription", {
+    userId,
+    includeFiles: scope?.includeFiles ?? true,
+    includeDatabases: scope?.includeDatabases ?? true,
+    includeMail: scope?.includeMail ?? true,
+    includeFtp: scope?.includeFtp ?? true,
+    incremental: scope?.incremental ?? false,
+    fullBackupEveryDays: scope?.fullBackupEveryDays ?? 7,
+    ...(target ?? {})
+  });
+
+  return response.data.data;
+}
+
+/** Yedeğin zinciri: TAM yedekten bu yedeğe kadar halkalar + kopuk mu. */
+export async function getBackupChain(backupId: string) {
+  const response = await apiClient.get<ApiEnvelope<BackupChain>>(`/backup/${encodeURIComponent(backupId)}/chain`);
+  return response.data.data;
+}
+
+/**
+ * Yedeği VE ona bağımlı bütün artımsal halkaları siler.
+ *
+ * Yalnız kullanıcı neyi kaybedeceğini GÖRDÜKTEN sonra çağrılır: tek yedek silme
+ * (`deleteBackup`) bağımlı halka varsa `409 backup.chain_has_dependents` ile reddedilir.
+ */
+export async function deleteBackupChain(backupId: string) {
+  const response = await apiClient.delete<ApiEnvelope<BackupDeleteResult>>(
+    `/backup/${encodeURIComponent(backupId)}/chain`);
   return response.data.data;
 }
 
@@ -170,6 +279,100 @@ export async function restoreBackupItems(backupId: string, items: string[], targ
     targetPath,
     encryptionPassword
   });
+  return response.data.data;
+}
+
+// =====================================================================================
+// ABONELİK BAŞINA YEDEK PROGRAMI
+// =====================================================================================
+
+/**
+ * Tek bir aboneliğin kendi yedek programı.
+ *
+ * `intervalHours` sunucudan KOTAYA ÇEKİLMİŞ hâliyle döner (istenen değerle değil); ekran formu
+ * her zaman DÖNEN değerle tazelemelidir, yoksa kullanıcı kabul edilmemiş bir sıklığı kayıtlı sanır.
+ */
+export type SubscriptionBackupSchedule = {
+  userId: string;
+  /** Boş olabilir (ad çözülemedi); ekran kimliğe düşmelidir. */
+  userName: string;
+  enabled: boolean;
+  intervalHours: number;
+  /** 0 = süreye göre silme yok. */
+  retentionDays: number;
+  /** 0 = sayıya göre silme yok. */
+  keepCount: number;
+  incremental: boolean;
+  fullBackupEveryDays: number;
+  includeFiles: boolean;
+  includeDatabases: boolean;
+  includeMail: boolean;
+  includeFtp: boolean;
+  targetType: string;
+  remoteUrl: string;
+  remoteUserName: string;
+  remoteRegion: string;
+  /** Parolanın KENDİSİ asla dönmez; yalnız kayıtlı olup olmadığı bilinir. */
+  remotePasswordSet: boolean;
+  lastRunUtc: string | null;
+  /** "" | "completed" | "completed_with_errors" | "failed". */
+  lastStatus: string;
+  /** İnsan okur özet; kısmi başarısızlıkta hangi öğenin neden alınamadığı burada. */
+  lastDetails: string;
+  nextRunUtc: string | null;
+  planId: string;
+  planName: string;
+  /** Planın günlük yedek sınırı (0 = sınırsız). */
+  maxBackupsPerDay: number;
+  /** İstenen sıklık plan kotasına ÇEKİLDİ mi. */
+  throttledByQuota: boolean;
+};
+
+export type SubscriptionBackupSchedulePayload = {
+  enabled: boolean;
+  intervalHours: number;
+  retentionDays: number;
+  keepCount: number;
+  incremental: boolean;
+  fullBackupEveryDays: number;
+  includeFiles: boolean;
+  includeDatabases: boolean;
+  includeMail: boolean;
+  includeFtp: boolean;
+  targetType: string;
+  remoteUrl: string;
+  remoteUserName: string;
+  remoteRegion: string;
+  /** BOŞ gönderilirse KAYITLI parola korunur (silinmez); ekran parolayı geri okuyamaz. */
+  remotePassword: string;
+};
+
+export async function getBackupSchedules() {
+  const response = await apiClient.get<ApiEnvelope<SubscriptionBackupSchedule[]>>("/backup/schedules");
+  return response.data.data;
+}
+
+/** Programı olmayan abonelikte VARSAYILANLARLA dolu bir kayıt döner (yeni program formu için). */
+export async function getBackupSchedule(userId: string) {
+  const response = await apiClient.get<ApiEnvelope<SubscriptionBackupSchedule>>(
+    `/backup/schedules/${encodeURIComponent(userId)}`);
+  return response.data.data;
+}
+
+export async function updateBackupSchedule(userId: string, payload: SubscriptionBackupSchedulePayload) {
+  const response = await apiClient.put<ApiEnvelope<SubscriptionBackupSchedule>>(
+    `/backup/schedules/${encodeURIComponent(userId)}`, payload);
+  return response.data.data;
+}
+
+export async function deleteBackupSchedule(userId: string) {
+  await apiClient.delete<ApiEnvelope<object>>(`/backup/schedules/${encodeURIComponent(userId)}`);
+}
+
+/** Programı beklemeden şimdi çalıştırır (günlük kota bu yolu engellemez). */
+export async function runBackupScheduleNow(userId: string) {
+  const response = await apiClient.post<ApiEnvelope<SubscriptionBackupSchedule>>(
+    `/backup/schedules/${encodeURIComponent(userId)}/run`, {});
   return response.data.data;
 }
 

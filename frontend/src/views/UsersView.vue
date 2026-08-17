@@ -30,6 +30,7 @@
             <li><span>{{ t("panel.plans.ftpLabel") }}</span><b>{{ plan.maxFtpUsers || "∞" }}</b></li>
             <li><span>{{ t("panel.plans.trafficLabel") }}</span><b>{{ plan.maxTrafficGbPerMonth ? plan.maxTrafficGbPerMonth + " GB" : "∞" }}</b></li>
             <li><span>{{ t("panel.plans.validityLabel") }}</span><b>{{ plan.validityDays ? plan.validityDays + " " + t("panel.plans.days") : "∞" }}</b></li>
+            <li><span>{{ t("panel.plans.backupsLabel") }}</span><b>{{ plan.maxBackupsPerDay || "∞" }}</b></li>
           </ul>
         </article>
       </div>
@@ -83,6 +84,11 @@
           <span class="field-label">{{ t("panel.plans.validityLabel") }}</span>
           <input v-model.number="planForm.validityDays" type="number" min="0" />
           <small class="field-hint">{{ t("panel.plans.validityHint") }}</small>
+        </label>
+        <label class="stacked-field">
+          <span class="field-label">{{ t("panel.plans.maxBackupsPerDay") }}</span>
+          <input v-model.number="planForm.maxBackupsPerDay" type="number" min="0" max="24" />
+          <small class="field-hint">{{ t("panel.plans.backupsHint") }}</small>
         </label>
         <p class="plan-form-hint">{{ t("panel.plans.formHint") }}</p>
         <div class="plan-form-actions">
@@ -435,7 +441,11 @@ const BOS_PLAN_FORMU = {
   maxScheduledTasks: 0,
   maxFtpUsers: 0,
   maxTrafficGbPerMonth: 0,
-  validityDays: 0
+  validityDays: 0,
+  // Bu alan formda YOKSA `ServicePlanRequest.MaxBackupsPerDay` her kayıtta 0'a düşer ve
+  // aboneliklerin günlük yedek kotası sessizce kalkar. Aynı sınıftan bir unutma trafik kotasını
+  // ölü bırakmıştı; istek `planForm`un KENDİSİNDEN türediği için alan burada tanımlı olmalıdır.
+  maxBackupsPerDay: 0
 };
 const planForm = reactive({ ...BOS_PLAN_FORMU });
 /** Dolu ise form YENI plan degil, bu planin duzenlemesidir. */

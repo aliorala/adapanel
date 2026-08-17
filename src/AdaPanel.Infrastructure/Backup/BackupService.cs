@@ -271,6 +271,34 @@ public sealed class BackupService(
     /// olmayan bir off-site kopyaya güvenmesi demek olurdu.</item>
     /// </list>
     /// </remarks>
+    /// <summary>
+    /// Site dışı arşivlerin çıkarılacağı klasör adı: tür + kaynak + zaman damgası.
+    /// </summary>
+    /// <remarks>
+    /// Kaynak alanı kullanıcı verisidir (site adı, abonelik kimliği) ve doğrudan yola girerse
+    /// dizin kaçışına açık olur; bu yüzden dosya adında geçersiz olan HER karakter atılır ve
+    /// sonuç boşsa sabit bir ada düşülür. Zaman damgası, aynı yedekten ikinci kez seçerek geri
+    /// yüklemenin öncekinin üzerine yazmasını engeller.
+    /// </remarks>
+    internal static string BuildRestoreFolderName(BackupRecordDto record)
+    {
+        var gecersiz = Path.GetInvalidFileNameChars();
+
+        static string Temizle(string? deger, char[] gecersizler)
+        {
+            var ham = new string((deger ?? string.Empty)
+                .Where(karakter => !gecersizler.Contains(karakter)
+                    && karakter != Path.DirectorySeparatorChar
+                    && karakter != Path.AltDirectorySeparatorChar)
+                .ToArray())
+                .Trim()
+                .Trim('.');
+            return ham.Length == 0 ? "yedek" : ham[..Math.Min(ham.Length, 64)];
+        }
+
+        return $"{Temizle(record.Type, gecersiz)}-{Temizle(record.Source, gecersiz)}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+    }
+
     internal static string DescribeDestinationStatus(string? remoteUri, string? remoteFailure)
     {
         if (!string.IsNullOrWhiteSpace(remoteFailure))
@@ -1790,25 +1818,43 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         {
             if (!string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase))
             {
-                throw new AppException("backup.target_path_required", 400, 400);
+                // SITE DIŞI ARŞİVLER (abonelik/panel/mail) İÇİN AYRILMIŞ BİR ÇIKARMA KLASÖRÜ.
+                //
+                // Eskiden burada koşulsuz `backup.target_path_required` fırlatılıyordu. Sonuç:
+                // kapsamlı kullanıcı (müşteri/bayi) hedef yol VEREMEDİĞİ için — güvenlik gereği
+                // o alan zorla boşaltılır — abonelik arşivinden seçerek geri yükleme kiracıda
+                // HİÇBİR ZAMAN çalışmıyordu. Özellik vardı, kapısı kilitliydi.
+                //
+                // Tek bir "doğru" canlı hedef YOKTUR: abonelik arşivi birden çok sitenin
+                // dosyalarını, veritabanı dökümlerini ve posta envanterini bir arada taşır.
+                // Bu yüzden canlı içeriğin üzerine yazmaya ÇALIŞMIYORUZ (site arşivinde de
+                // yazılmıyor; oraya da sitenin YANINA çıkarılıyor). İçerik, panelin yedek kökü
+                // altında tarih damgalı ayrı bir klasöre arşivdeki yapısıyla çıkarılır;
+                // kullanıcı ne aldığını görür ve istediğini oradan taşır.
+                var preferences = await preferencesService.GetAsync(cancellationToken);
+                var restoreRoot = EnsureBackupDirectory(preferences.DefaultBackupRoot, "restored");
+                targetRoot = Path.Combine(restoreRoot, BuildRestoreFolderName(record));
+                Directory.CreateDirectory(targetRoot);
             }
-
-            AdaPanel.Core.Dtos.Sites.SiteDto site;
-            try
+            else
             {
-                site = await iisSiteService.GetSiteAsync(record.Source, cancellationToken);
-            }
-            catch (AppException)
-            {
-                // Site artık yoksa kullanıcı açık bir hedef yol vermelidir.
-                throw new AppException("backup.target_path_required", 404, 404);
-            }
+                AdaPanel.Core.Dtos.Sites.SiteDto site;
+                try
+                {
+                    site = await iisSiteService.GetSiteAsync(record.Source, cancellationToken);
+                }
+                catch (AppException)
+                {
+                    // Site artık yoksa kullanıcı açık bir hedef yol vermelidir.
+                    throw new AppException("backup.target_path_required", 404, 404);
+                }
 
-            var applicationRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
-                ? site.PhysicalPath
-                : site.ApplicationRootPath;
-            targetRoot = Path.GetDirectoryName(Path.GetFullPath(applicationRoot))
-                ?? throw new AppException("backup.target_path_required", 400, 400);
+                var applicationRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                    ? site.PhysicalPath
+                    : site.ApplicationRootPath;
+                targetRoot = Path.GetDirectoryName(Path.GetFullPath(applicationRoot))
+                    ?? throw new AppException("backup.target_path_required", 400, 400);
+            }
         }
 
         Directory.CreateDirectory(targetRoot);

@@ -20,6 +20,11 @@ export type ServicePlan = {
   maxTrafficGbPerMonth: number;
   /** Geçerlilik süresi gün (0 = süresiz). Atandığında bitiş tarihi buradan hesaplanır. */
   validityDays: number;
+  /**
+   * Aboneliğin GÜNDE en fazla kaç ZAMANLANMIŞ yedek alabileceği (0 = sınırsız).
+   * Elle alınan yedekler sayılmaz. Program kurulurken sıklık bu kotaya ÇEKİLİR.
+   */
+  maxBackupsPerDay: number;
 };
 
 export type ServicePlanPayload = {
@@ -32,6 +37,12 @@ export type ServicePlanPayload = {
   maxFtpUsers?: number;
   maxTrafficGbPerMonth?: number;
   validityDays?: number;
+  /**
+   * GÖNDERİLMEZSE sunucu 0 yazar (sınırsız) — yani formun bu alanı atlaması, her plan kaydında
+   * yedek kotasını sessizce SIFIRLAR. Aynı hata daha önce trafik kotasında yaşandı; bu yüzden
+   * `UsersView` isteği formun kendisinden türetir ve alan `BOS_PLAN_FORMU` içinde tanımlıdır.
+   */
+  maxBackupsPerDay?: number;
 };
 
 export async function getServicePlans() {
