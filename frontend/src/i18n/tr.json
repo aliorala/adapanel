@@ -3071,7 +3071,7 @@
   "auth.user_not_found": "Kullanıcı bulunamadı.",
   "backup.not_found": "Yedek bulunamadı.",
   "backup.remote_target_invalid": "Uzak yedek hedefi geçersiz.",
-  "backup.remote_target_unsupported": "Bu uzak yedek hedefi desteklenmiyor. Google Drive WebDAV protokolünü konuşmaz; hedefi FTP, S3 (uyumlu) veya WebDAV olarak seçin.",
+  "backup.remote_target_unsupported": "Bu uzak yedek hedefi desteklenmiyor. Google Drive WebDAV protokolünü konuşmaz; hedefi FTP, S3 (uyumlu), WebDAV, Dropbox, OneDrive veya Azure Blob olarak seçin.",
   "backup.remote_upload_failed": "Uzak hedefe yedek yüklenemedi.",
   "backup.remote_auth_failed": "Uzak hedefin kimlik doğrulaması başarısız. Dropbox/OneDrive jetonu süresi dolmuş ya da geçersiz olabilir; yenileme jetonu kullanıyorsanız uygulama kimliğini de girdiğinizden emin olun.",
   "backup.remote_delete_failed": "Yedeğin uzak kopyası silinemedi. Yerel dosya silindi ama hedefteki kopya duruyor; kayıt bilerek korundu, yoksa panel o dosyayı bir daha ne görebilir ne silebilirdi. Erişimi düzeltip tekrar silmeyi deneyin.",

@@ -94,8 +94,8 @@ public sealed class SubscriptionBackupScheduleService(
                 kayit.IncludeMail = request.IncludeMail;
                 kayit.IncludeFtp = request.IncludeFtp;
 
-                var hedef = (request.TargetType ?? "local").Trim().ToLowerInvariant();
-                kayit.TargetType = hedef is "ftp" or "s3" or "webdav" ? hedef : "local";
+                // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
+                kayit.TargetType = Backup.BackupService.NormalizeScheduleTargetType(request.TargetType);
                 kayit.RemoteUrl = request.RemoteUrl?.Trim() ?? string.Empty;
                 kayit.RemoteUserName = request.RemoteUserName?.Trim() ?? string.Empty;
                 kayit.RemoteRegion = request.RemoteRegion?.Trim() ?? string.Empty;

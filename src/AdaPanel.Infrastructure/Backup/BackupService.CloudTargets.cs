@@ -101,6 +101,22 @@ public sealed partial class BackupService
         !string.IsNullOrWhiteSpace(targetType)
         && RemoteTargetTypes.Contains(targetType.Trim().ToLowerInvariant(), StringComparer.Ordinal);
 
+    /// <summary>
+    /// Zamanlama kayıtlarının hedef alanını normalleştirir: TANINMAYAN hedef "local"e düşer.
+    ///
+    /// NEDEN BURADA: bu kural iki ayrı zamanlayıcıda (AutomationService, SubscriptionBackupSchedule
+    /// Service) ELLE yazılmış bir listeyle kopyalanmıştı. Ölçüldü: yeni hedefler (dropbox/onedrive/
+    /// azure) o listelerde olmadığı için kullanıcı "Dropbox" seçip kaydettiğinde ayar sessizce
+    /// "local"e düşüyor, panel kaydı kabul etmiş gibi görünüyor ve GECE YEDEĞİ UZAĞA HİÇ GİTMİYORDU.
+    /// Kullanıcı bunu ancak yedeğe ihtiyaç duyduğunda öğrenirdi. Liste tek kaynağa bağlandı ki
+    /// "yeni hedef ekledim, üç ayrı listeyi güncellemeyi unuttum" hatası bir daha yazılamasın.
+    /// </summary>
+    internal static string NormalizeScheduleTargetType(string? targetType)
+    {
+        var normalized = (targetType ?? "local").Trim().ToLowerInvariant();
+        return RemoteTargetTypes.Contains(normalized, StringComparer.Ordinal) ? normalized : "local";
+    }
+
     /// <summary>Jetonla (OAuth 2.0) konuşan hedefler.</summary>
     private static bool IsOAuthTarget(string targetType) => targetType is "dropbox" or "onedrive";
 
