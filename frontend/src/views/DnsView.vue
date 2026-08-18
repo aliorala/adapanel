@@ -28,15 +28,23 @@
             @click="installWindowsDns">
             {{ installingWindowsDns ? t("panel.dns.installingWindows") : t("panel.dns.installWindows") }}
           </button>
-          <button v-if="activeTab === 'records'" class="compact" v-bind="writeGate()" @click="showRecordForm = !showRecordForm">
+          <button
+            v-if="activeTab === 'records' && !isSecondary"
+            class="compact"
+            v-bind="writeGate()"
+            @click="showRecordForm = !showRecordForm">
             {{ showRecordForm ? t("panel.common.cancel") : t("panel.dns.addRecordAction") }}
           </button>
-          <button class="secondary compact" v-bind="writeGate(busy)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
+          <button v-if="!isSecondary" class="secondary compact" v-bind="writeGate(busy)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
         </div>
       </div>
 
       <template v-if="activeTab === 'records'">
-        <form v-if="showRecordForm || editingId" class="form-surface record-form" @submit.prevent="saveRecord">
+        <!-- İkincil bölgede kayıtlar master'dan gelir; panelden düzenlenemez. Düğmeleri gizleyip
+             sebebini YAZMAK şart: yoksa kullanıcı "kayıt ekle düğmesi nerede" diye arar. -->
+        <p v-if="isSecondary" class="notice page-notice" role="status">{{ t("panel.dns.secondaryRecordsReadOnly") }}</p>
+
+        <form v-if="!isSecondary && (showRecordForm || editingId)" class="form-surface record-form" @submit.prevent="saveRecord">
           <div class="record-main">
             <label class="stacked-field type-field">
               <span class="field-label">{{ t("panel.dns.type") }}</span>
@@ -137,7 +145,7 @@
           </div>
         </form>
 
-        <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
+        <div v-if="!isSecondary && selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
           <button class="danger compact" v-bind="writeGate(busy || bulk.busy.value)" @click="removeSelectedRecords">
             {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
@@ -151,6 +159,7 @@
           <div class="data-row table-head dns-row">
             <span class="select-cell">
               <input
+                v-if="!isSecondary"
                 type="checkbox"
                 :checked="selection.allSelected(visibleRecordIds)"
                 :aria-label="t('panel.bulk.selectAll')"
@@ -165,6 +174,7 @@
           <div v-for="record in recordPager.items.value" :key="record.id" class="data-row dns-row">
             <span class="select-cell">
               <input
+                v-if="!isSecondary"
                 type="checkbox"
                 :checked="selection.isSelected(record.id)"
                 :aria-label="t('panel.bulk.selectRow', { name: displayHost(record.host) })"
@@ -178,8 +188,11 @@
             <span class="record-value">{{ displayValue(record) }}</span>
             <span>{{ record.ttl }}</span>
             <span class="row-actions">
-              <button class="secondary compact" @click="editRecord(record)">{{ t("panel.dns.edit") }}</button>
-              <button class="danger compact" v-bind="writeGate(busy)" @click="removeRecord(record.id)">{{ t("panel.dns.delete") }}</button>
+              <template v-if="!isSecondary">
+                <button class="secondary compact" @click="editRecord(record)">{{ t("panel.dns.edit") }}</button>
+                <button class="danger compact" v-bind="writeGate(busy)" @click="removeRecord(record.id)">{{ t("panel.dns.delete") }}</button>
+              </template>
+              <small v-else>{{ t("panel.dns.secondaryReadOnlyTag") }}</small>
             </span>
           </div>
           <!-- Bölge gelmeden "kayıt yok" yazıyordu; dolu bir DNS bölgesi boş sanılabiliyordu. -->
@@ -228,7 +241,61 @@
         </div>
       </form>
 
-      <div v-if="zone" class="form-surface dnssec-card">
+      <!-- BÖLGE TÜRÜ: birincil (master) ↔ ikincil (slave). Plesk'in "Switch to Secondary" /
+           "Switch to Primary" düğmelerinin karşılığı; ikincilde master IP listesi girilir. -->
+      <div v-if="zone && activeTab === 'settings'" class="form-surface zone-mode-card">
+        <div class="section-head">
+          <div>
+            <h4>{{ t("panel.dns.zoneTypeTitle") }}</h4>
+            <p class="meta">{{ t("panel.dns.zoneTypeHint") }}</p>
+          </div>
+          <span :class="['status-pill', isSecondary ? 'warn' : 'ok']">
+            {{ isSecondary ? t("panel.dns.zoneTypeSecondary") : t("panel.dns.zoneTypePrimary") }}
+          </span>
+        </div>
+
+        <!-- Panelin kaydı ile Windows'un gerçeği ayrıldıysa SUSMAYIZ: bu durumda ya kayıt yazma
+             sessizce başarısız olur ya da bölge master'dan hiç beslenmez. -->
+        <p v-if="zone.statusMessage === 'dns.zone_type_mismatch'" class="notice page-notice error" role="alert">
+          {{ t("dns.zone_type_mismatch") }} ({{ t("panel.dns.windowsZoneType") }}: {{ zone.windowsZoneType || "—" }})
+        </p>
+
+        <template v-if="isSecondary">
+          <p class="field-hint">{{ t("panel.dns.secondaryActiveHint", { masters: zone.masterServers.join(", ") || "—" }) }}</p>
+          <div class="row-actions">
+            <button class="secondary compact" v-bind="writeGate(modeBusy)" @click="transferNow">
+              {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.transferNow") }}
+            </button>
+            <button class="secondary compact" v-bind="writeGate(modeBusy)" @click="switchToPrimary">
+              {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.switchToPrimary") }}
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <!-- Sunucu geneli listeden gelen IP'ler de burada gösterilir: bölgede tek IP görünürken
+               transferi fiilen üç sunucunun alabiliyor olması, okunamayan bir güvenlik ayarıdır. -->
+          <p v-if="zone.effectiveNotifyServers.length" class="field-hint">
+            {{ t("panel.dns.effectiveNotifyHint", { list: zone.effectiveNotifyServers.join(", ") }) }}
+          </p>
+        </template>
+
+        <!-- İkincile geçiş formu birincil kipte gösterilir; master listesi kipten bağımsız saklanır. -->
+        <form v-if="!isSecondary" class="mode-form" @submit.prevent="switchToSecondary">
+          <label class="stacked-field" for="dns-master-servers">
+            <span class="field-label">
+              {{ t("panel.dns.masterServers") }}
+              <FieldHint :label="t('panel.dns.masterServers')" :text="t('panel.dns.masterServersHelp')" />
+            </span>
+            <textarea id="dns-master-servers" v-model="masterServersText" rows="2" placeholder="192.0.2.53&#10;2001:db8::53"></textarea>
+          </label>
+          <button class="secondary compact danger" v-bind="writeGate(modeBusy)">
+            {{ modeBusy ? t("panel.dns.zoneTypeWorking") : t("panel.dns.switchToSecondary") }}
+          </button>
+        </form>
+      </div>
+
+      <div v-if="zone && !isSecondary" class="form-surface dnssec-card">
         <div class="section-head">
           <div>
             <h4>{{ t("panel.dns.dnssecTitle") }}</h4>
@@ -265,7 +332,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, setDnssec, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
+import { deleteDnsRecord, getDnsZone, installWindowsDns as installWindowsDnsApi, resetDnsDefaults, setDnsZoneMode, setDnssec, transferDnsZoneNow, updateDnsZone, upsertDnsRecord, type DnsRecord, type DnsZone } from "../api/dns";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import FieldHint from "../components/FieldHint.vue";
 import TablePager from "../components/TablePager.vue";
@@ -290,6 +357,9 @@ const notice = ref("");
 const noticeError = ref(false);
 const nameServersText = ref("");
 const zoneTransferText = ref("");
+// İkincil (slave) kip: master DNS sunucularının IP'leri + kip değiştirme işlemi sürüyor mu.
+const masterServersText = ref("");
+const modeBusy = ref(false);
 const editingId = ref("");
 const activeTab = ref<"records" | "settings">("records");
 const showRecordForm = ref(false);
@@ -327,6 +397,8 @@ const bulk = useBulkAction();
 const visibleRecordIds = computed(() => recordPager.items.value.map((record) => record.id));
 
 const zoneStatus = computed(() => zone.value ? t(zone.value.statusMessage) : t("panel.dns.loading"));
+// Bölge yüklenmeden ikincil SAYILMAZ: aksi hâlde ilk render'da kayıt düğmeleri bir an gizlenirdi.
+const isSecondary = computed(() => zone.value?.isSecondary === true);
 const zoneNameOrExample = computed(() => zone.value?.zoneName ?? "example.com");
 const isMultiPartType = computed(() => multiPartTypes.includes(recordForm.type));
 // Standart dışı bir etiketle kaydedilmiş CAA kaydı düzenlenirken listeden düşmesin.
@@ -374,17 +446,29 @@ async function load() {
   if (!siteName.value) return;
   busy.value = true;
   try {
-    zone.value = await getDnsZone(siteName.value);
-    zoneForm.zoneName = zone.value.zoneName;
-    nameServersText.value = zone.value.nameServers.join("\n");
-    zoneTransferText.value = (zone.value.zoneTransferIps ?? []).join("\n");
+    applyZone(await getDnsZone(siteName.value));
     // Başka bir bölgenin/eski listenin seçimi taşınmasın.
-    selection.keepOnly(zone.value.records.map((record) => record.id));
+    selection.keepOnly(zone.value?.records.map((record) => record.id) ?? []);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
     busy.value = false;
   }
+}
+
+/**
+ * Sunucudan gelen bölgeyi ekrana yansıtır.
+ *
+ * Tek yerde toplandı: aynı kopyalama yükleme, varsayılana sıfırlama ve kip değiştirme yollarında
+ * ayrı ayrı yazılıydı; yeni bir alan (master sunucular) eklendiğinde bir yolda güncellenip
+ * diğerinde unutulması kaçınılmazdı — ekran o zaman eski değeri gösterip kaydederdi.
+ */
+function applyZone(next: DnsZone) {
+  zone.value = next;
+  zoneForm.zoneName = next.zoneName;
+  nameServersText.value = next.nameServers.join("\n");
+  zoneTransferText.value = (next.zoneTransferIps ?? []).join("\n");
+  masterServersText.value = (next.masterServers ?? []).join("\n");
 }
 
 async function saveZone() {
@@ -618,10 +702,7 @@ async function restoreDefaults() {
     action: async () => {
       busy.value = true;
       try {
-        zone.value = await resetDnsDefaults(siteName.value);
-        zoneForm.zoneName = zone.value.zoneName;
-        nameServersText.value = zone.value.nameServers.join("\n");
-        zoneTransferText.value = (zone.value.zoneTransferIps ?? []).join("\n");
+        applyZone(await resetDnsDefaults(siteName.value));
         showNotice(t("panel.dns.defaultsRestored"), false);
       } catch (error) {
         showNotice(resolveApiMessage(error), true);
@@ -630,6 +711,70 @@ async function restoreDefaults() {
       }
     },
   });
+}
+
+/**
+ * BÖLGEYİ İKİNCİL (slave) YAP — ONAY ZORUNLU.
+ *
+ * Yıkıcı bir karardır: bölgenin yetkili kaynağı bu sunucudan alınıp master'a devredilir. Panelin
+ * kayıtları silinmez ama YAYINDAN DÜŞER; master'da eksik bir kayıt varsa (örneğin MX) o alan adının
+ * postası anında durur. Bu yüzden bölge adı yazdırılarak onaylatılır.
+ */
+async function switchToSecondary() {
+  if (!siteName.value) return;
+
+  const masters = splitLines(masterServersText.value);
+  if (masters.length === 0) {
+    showNotice(t("dns.master_required"), true);
+    return;
+  }
+
+  const onay = await confirm({
+    title: t("panel.dns.confirmSecondaryTitle"),
+    message: t("panel.dns.confirmSecondaryMessage", { zone: zone.value?.zoneName || siteName.value }),
+    impact: [
+      `${t("panel.dns.zone")}: ${zone.value?.zoneName || siteName.value}`,
+      `${t("panel.dns.masterServers")}: ${masters.join(", ")}`,
+      `${t("panel.dns.records")}: ${zone.value?.records.length ?? 0}`
+    ],
+    requireText: zone.value?.zoneName || siteName.value,
+    confirmLabel: t("panel.dns.switchToSecondary")
+  });
+  if (!onay) return;
+
+  await runModeChange(() => setDnsZoneMode(siteName.value, true, masters), "panel.dns.secondaryEnabledMsg");
+}
+
+/** Birincile dönüş: panelin kayıtları yeniden yayınlanır (Plesk de eski kayıtları geri getirir). */
+async function switchToPrimary() {
+  if (!siteName.value) return;
+
+  const onay = await confirm({
+    title: t("panel.dns.confirmPrimaryTitle"),
+    message: t("panel.dns.confirmPrimaryMessage", { zone: zone.value?.zoneName || siteName.value }),
+    confirmLabel: t("panel.dns.switchToPrimary")
+  });
+  if (!onay) return;
+
+  await runModeChange(() => setDnsZoneMode(siteName.value, false, []), "panel.dns.primaryRestoredMsg");
+}
+
+/** Master'dan tam transferi (AXFR) hemen başlatır; onay istemez çünkü yıkıcı değildir. */
+async function transferNow() {
+  if (!siteName.value) return;
+  await runModeChange(() => transferDnsZoneNow(siteName.value), "panel.dns.transferStartedMsg");
+}
+
+async function runModeChange(action: () => Promise<DnsZone>, successKey: string) {
+  modeBusy.value = true;
+  try {
+    applyZone(await action());
+    showNotice(t(successKey), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    modeBusy.value = false;
+  }
 }
 
 async function installWindowsDns() {
@@ -762,6 +907,24 @@ function showNotice(message: string, isError: boolean) {
 
 .dns-row {
   grid-template-columns: 30px 82px minmax(120px, 0.7fr) minmax(220px, 1.2fr) 80px minmax(170px, auto);
+}
+
+.zone-mode-card {
+  display: grid;
+  gap: 10px;
+}
+
+/* Master listesi ile düğme aynı satırda; dar ekranda alt alta iner. */
+.mode-form {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.mode-form .stacked-field {
+  flex: 1 1 260px;
+  min-width: 0;
 }
 
 .select-cell {

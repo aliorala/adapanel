@@ -114,10 +114,20 @@ public sealed partial class DnsService(
         state.ZoneName = NormalizeZoneName(string.IsNullOrWhiteSpace(request.ZoneName) ? state.ZoneName : request.ZoneName);
         state.NameServers = NormalizeNameServers(request.NameServers, state.ZoneName);
         state.ZoneTransferIps = NormalizeZoneTransferIps(request.ZoneTransferIps);
-        state.Records.RemoveAll(record => record.IsManaged);
-        state.Records.AddRange(await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
-        state.DefaultsVersion = CurrentDefaultsVersion;
-        state.Records = SortRecords(state.Records).ToList();
+
+        // İKİNCİL BÖLGEDE YÖNETİLEN KAYITLAR YENİDEN KURULMAZ.
+        //
+        // Bölge ayarlarını kaydetmek (ad, ad sunucuları) ikincil kipte de anlamlıdır — bunlar
+        // panelin kendi kaydıdır ve birincile dönüldüğünde kullanılır. Ama varsayılan kayıt setini
+        // yeniden üretmek, master'dan gelen içeriğin ÜSTÜNE panelin tahminini koymaya çalışmaktır;
+        // senkron bunu zaten yazmaz, geriye yalnızca panelde yanlış görünen bir liste kalırdı.
+        if (!state.IsSecondary)
+        {
+            state.Records.RemoveAll(record => record.IsManaged);
+            state.Records.AddRange(await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
+            state.DefaultsVersion = CurrentDefaultsVersion;
+            state.Records = SortRecords(state.Records).ToList();
+        }
 
         await UpsertStateAsync(state, cancellationToken);
         await TrySyncWindowsDnsAsync(state, cancellationToken);
@@ -128,6 +138,7 @@ public sealed partial class DnsService(
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+        EnsureZoneIsWritable(state);
         var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
         state.Records.RemoveAll(record => record.IsManaged);
         state.Records.AddRange(await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
@@ -139,6 +150,92 @@ public sealed partial class DnsService(
         return await ToDtoAsync(state, cancellationToken);
     }
 
+    public async Task<SiteDnsZoneDto> SetZoneModeAsync(
+        string siteName,
+        SetDnsZoneModeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken);
+
+        if (request.Secondary)
+        {
+            // MASTER ZORUNLU. Master'sız bir ikincil bölge hiçbir zaman veri çekemez; bölgeyi
+            // ikincile çevirip listeyi boş bırakmak, alan adını dünyaya karşı çözülemez yapmanın
+            // en hızlı yoludur. Bu yüzden bölge kipi DEĞİŞMEDEN önce reddedilir.
+            var masters = NormalizeIpList(request.MasterServers, "dns.invalid_master_ip");
+            if (masters.Count == 0)
+            {
+                throw new AppException("dns.master_required", 400, 400);
+            }
+
+            state.MasterServers = masters;
+            state.IsSecondary = true;
+        }
+        else
+        {
+            state.IsSecondary = false;
+            // Master listesi SİLİNMEZ: kullanıcı kipler arasında gidip gelirken IP'leri yeniden
+            // yazmak zorunda kalmasın. Birincil kipte hiçbir yerde kullanılmaz.
+        }
+
+        await UpsertStateAsync(state, cancellationToken);
+
+        // Windows DNS yoksa kip yine de KAYDEDİLİR (panel durumu doğrudur), ama sessiz kalmayız:
+        // senkron hatası çağırana AppException olarak çıkar.
+        await TrySyncWindowsDnsAsync(state, cancellationToken);
+        return await ToDtoAsync(state, cancellationToken);
+    }
+
+    public async Task<SiteDnsZoneDto> TransferZoneNowAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken);
+
+        // Birincil bölgede AXFR başlatmak anlamsızdır (çekilecek bir master yok) ve Windows da
+        // reddeder. "Hiçbir şey olmadı" yerine sebebi söylüyoruz.
+        if (!state.IsSecondary)
+        {
+            throw new AppException("dns.transfer_requires_secondary", 409, 409);
+        }
+
+        if (!await IsWindowsDnsAvailableAsync(cancellationToken))
+        {
+            throw new AppException("dns.transfer_requires_windows", 409, 409);
+        }
+
+        var script =
+            "$ErrorActionPreference = 'Stop'" + Environment.NewLine +
+            $"Start-DnsServerZoneTransfer -Name '{EscapePowerShellLiteral(state.ZoneName)}' -FullTransfer | Out-Null";
+
+        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!result.Success)
+        {
+            throw new AppException("dns.transfer_failed", 500, 500, BuildCommandDetails(result));
+        }
+
+        return await ToDtoAsync(state, cancellationToken);
+    }
+
+    /// <summary>
+    /// Bölge ikincilse KAYIT YAZMA girişimini reddeder.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Neden sessizce yazıp geçmiyoruz: ikincil bölgenin içeriği master'dan gelir. Kaydı panel
+    /// dosyasına yazıp "kaydedildi" demek, kullanıcıya var olmayan bir kayıt göstermek olurdu —
+    /// hem panelde görünür hem de dünyada YOK. Panelin en pahalı hata sınıfı tam olarak budur:
+    /// yapılmamış işi yapılmış saymak.
+    /// </para>
+    /// </remarks>
+    private static void EnsureZoneIsWritable(DnsZoneState state)
+    {
+        if (state.IsSecondary)
+        {
+            throw new AppException("dns.zone_is_secondary", 409, 409);
+        }
+    }
+
     public async Task<IReadOnlyList<string>> RepairDefaultsAsync(
         string siteName,
         bool applyChanges = true,
@@ -146,6 +243,17 @@ public sealed partial class DnsService(
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+
+        // İKİNCİL BÖLGEDE ONARILACAK BİR ŞEY YOK — ve hata da FIRLATILMAZ.
+        //
+        // Bu metot "alan adlarını tazele" toplu akışından her site için çağrılıyor. Tek bir ikincil
+        // bölge yüzünden fırlatmak, o çağrıdaki DİĞER sitelerin onarımını da durdururdu. Boş liste
+        // doğru cevap: bu bölgede panelin ekleyeceği kayıt yok.
+        if (state.IsSecondary)
+        {
+            return [];
+        }
+
         var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
         var defaults = await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken);
 
@@ -243,6 +351,32 @@ public sealed partial class DnsService(
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
 
+        // IKINCIL BOLGE: OTOMASYON DURDURULMAZ, yalnizca bolgeye YAZILMAZ.
+        //
+        // Bu asiri yukleme kullanicinin dogrudan bir eylemi degil; posta kutusu acma, otomatik
+        // yapilandirma ve alan adi tazeleme akislari cagiriyor. AppException firlatmak, DNS'i
+        // baska bir yerde barindiran bir musterinin posta kutusu ACAMAMASINA yol acardi -- oysa
+        // ikisinin birbirine bagli olmasi icin bir sebep yok (Plesk'te de yok).
+        //
+        // Kayitlar panel durumuna YAZILIR: bolge birincile dondugunde hepsi yeniden yayinlanir.
+        // Yayinlanmadiklari da gizlenmez; bolge DTO'su ikincil oldugunu soyler ve "yayinlanmis
+        // kayitlar" denetimi (GetPublishedRecordKeysAsync) bunlari eksik olarak gosterir.
+        if (state.IsSecondary)
+        {
+            foreach (var request in requests)
+            {
+                ApplyRecordToState(state, NormalizeRecord(request, state.ZoneName), request.Id);
+            }
+
+            state.Records = SortRecords(state.Records).ToList();
+            await UpsertStateAsync(state, cancellationToken);
+            logger.LogInformation(
+                "Bolge ikincil ({Zone}); {Sayi} kayit panelde saklandi ama Windows DNS'e YAZILMADI (kaynak master).",
+                state.ZoneName,
+                requests.Count);
+            return await ToDtoAsync(state, cancellationToken);
+        }
+
         // Tum kayitlar duruma yazilir, senkron SONDA BIR KEZ calisir.
         //
         // Tek tek yazmak her seferinde bolgenin tamamini yeniden yazan bir senkron baslatiyordu:
@@ -325,6 +459,7 @@ public sealed partial class DnsService(
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+        EnsureZoneIsWritable(state);
         ApplyRecordToState(state, NormalizeRecord(request, state.ZoneName), request.Id);
 
         state.Records = SortRecords(state.Records).ToList();
@@ -356,6 +491,14 @@ public sealed partial class DnsService(
         if (state is null)
         {
             return new SubdomainRecordResult { ZoneMissing = true };
+        }
+
+        // ÜST BÖLGE İKİNCİLSE KAYIT YAZILAMAZ. Sonuç nesnesiyle bildiriliyor, fırlatılmıyor:
+        // alt alan adı sitesinin kurulması bu yüzden yarıda kalmamalı — kullanıcı kaydı master'da
+        // açacaktır, ama bunu BİLMESİ gerekir (sessiz sonuç, aranamayan bir arıza demektir).
+        if (state.IsSecondary)
+        {
+            return new SubdomainRecordResult { Error = "zone_is_secondary" };
         }
 
         // ÜSTÜNE YAZMA. Etiket zaten bir yere (başka sunucu, CDN, doğrulama kaydı) işaret ediyor
@@ -402,6 +545,7 @@ public sealed partial class DnsService(
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+        EnsureZoneIsWritable(state);
         var removed = state.Records.RemoveAll(item => string.Equals(item.Id, recordId, StringComparison.OrdinalIgnoreCase));
         if (removed == 0)
         {
@@ -453,6 +597,7 @@ public sealed partial class DnsService(
             state.ZoneName = NormalizeZoneName(state.ZoneName);
             state.NameServers = NormalizeNameServers(state.NameServers, state.ZoneName);
             state.ZoneTransferIps = NormalizeZoneTransferIps(state.ZoneTransferIps?.ToArray());
+            state.MasterServers = NormalizeIpList(state.MasterServers?.ToArray(), "dns.invalid_master_ip");
             state.Records = SortRecords(state.Records.Select(record => NormalizeRecord(record, state.ZoneName))).ToList();
             if (state.DefaultsVersion < CurrentDefaultsVersion)
             {
@@ -492,26 +637,68 @@ public sealed partial class DnsService(
     private async Task<SiteDnsZoneDto> ToDtoAsync(DnsZoneState state, CancellationToken cancellationToken)
     {
         var isDnsAvailable = await IsWindowsDnsAvailableAsync(cancellationToken);
-        var isZonePresent = isDnsAvailable && await IsWindowsZonePresentAsync(state.ZoneName, cancellationToken);
-        var (isSigned, dsRecords) = isZonePresent
+        var windowsZoneType = isDnsAvailable
+            ? await ReadWindowsZoneTypeAsync(state.ZoneName, cancellationToken)
+            : string.Empty;
+        var isZonePresent = windowsZoneType.Length > 0;
+
+        // DNSSEC yalnız BİRİNCİL bölgede sorulur: ikincil bölgenin imzası master'a aittir, burada
+        // ölçülen değer kullanıcıya "bu panelden yönetilebilir" izlenimi verirdi.
+        var (isSigned, dsRecords) = isZonePresent && !state.IsSecondary
             ? await ReadDnssecAsync(state.ZoneName, cancellationToken)
             : (false, Array.Empty<string>());
+
         return new SiteDnsZoneDto
         {
             SiteName = state.SiteName,
             ZoneName = state.ZoneName,
             NameServers = state.NameServers,
             ZoneTransferIps = (state.ZoneTransferIps ?? []).ToArray(),
+            IsSecondary = state.IsSecondary,
+            MasterServers = (state.MasterServers ?? []).ToArray(),
+            // İkincil bölgede NOTIFY/AXFR listesi anlamsızdır (bölgenin sahibi biz değiliz) → boş.
+            EffectiveNotifyServers = state.IsSecondary
+                ? []
+                : MergeNotifyTargets(state.ZoneTransferIps, await ReadServerWideSecondariesAsync(cancellationToken)).ToArray(),
+            WindowsZoneType = windowsZoneType,
             Records = SortRecords(state.Records).Select(ToDto).ToArray(),
             IsWindowsDnsAvailable = isDnsAvailable,
             IsWindowsZonePresent = isZonePresent,
             Source = isDnsAvailable ? "windows-dns" : "panel-managed",
-            StatusMessage = isDnsAvailable
-                ? isZonePresent ? "dns.windows_zone_present" : "dns.windows_zone_missing"
-                : "dns.windows_dns_unavailable",
+            StatusMessage = ResolveStatusMessage(state, isDnsAvailable, isZonePresent, windowsZoneType),
             IsDnssecSigned = isSigned,
             DnssecDsRecords = dsRecords
         };
+    }
+
+    /// <summary>
+    /// Bölgenin durum satırı. Panelin kaydı ile Windows'un gerçeği AYRILDIĞINDA bunu söyler.
+    /// </summary>
+    /// <remarks>
+    /// Uyuşmazlığı ayrı bir mesajla bildirmek şart: panel "birincil" derken bölge Windows'ta
+    /// "Secondary" ise her kayıt yazma denemesi başarısız olur ve kullanıcı sebebini bulamaz.
+    /// Tersi de aynı derecede yanıltıcıdır — panel "ikincil" derken bölge birincil kalmışsa, alan
+    /// adı master'daki güncel veriyi HİÇ almaz ama ekranda her şey doğru görünür.
+    /// </remarks>
+    private static string ResolveStatusMessage(DnsZoneState state, bool isDnsAvailable, bool isZonePresent, string windowsZoneType)
+    {
+        if (!isDnsAvailable)
+        {
+            return "dns.windows_dns_unavailable";
+        }
+
+        if (!isZonePresent)
+        {
+            return "dns.windows_zone_missing";
+        }
+
+        var windowsSecondary = string.Equals(windowsZoneType, "Secondary", StringComparison.OrdinalIgnoreCase);
+        if (windowsSecondary != state.IsSecondary)
+        {
+            return "dns.zone_type_mismatch";
+        }
+
+        return state.IsSecondary ? "dns.secondary_zone_active" : "dns.windows_zone_present";
     }
 
     private static SiteDnsRecordDto ToDto(DnsRecordState state)
@@ -828,7 +1015,14 @@ public sealed partial class DnsService(
     public async Task<DnsTemplateDto> GetTemplateAsync(CancellationToken cancellationToken = default)
     {
         var saved = await fileStore.ReadAsync(TemplatePath, new DnsTemplateDto(), cancellationToken);
-        return saved.Records.Count > 0 ? saved : BuiltInTemplate();
+
+        // KAYIT LİSTESİ BOŞSA yerleşik şablona düşülür — ama ikincil DNS sunucu listesi KAYITLI
+        // OLANDAN alınır. Aksi hâlde kayıt satırlarını tek tek silen bir yönetici, farkında olmadan
+        // sunucu-geneli ikincil DNS yapılandırmasını da silmiş olurdu; yedek DNS sessizce beslenmeyi
+        // bırakır ve bunu ancak birincil düştüğünde fark ederdi.
+        var template = saved.Records.Count > 0 ? saved : BuiltInTemplate();
+        template.SecondaryDnsServers = NormalizeIpList(saved.SecondaryDnsServers?.ToArray(), "dns.invalid_secondary_ip");
+        return template;
     }
 
     public async Task<DnsTemplateDto> UpdateTemplateAsync(UpdateDnsTemplateRequest request, CancellationToken cancellationToken = default)
@@ -838,7 +1032,14 @@ public sealed partial class DnsService(
             "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA"
         };
 
-        var clean = new DnsTemplateDto();
+        // Sunucu-geneli ikincil DNS sunucuları: geçersiz IP kaydı SESSİZCE ATLANMAZ, 400 döner.
+        // Kayıt satırlarında atlama makul (bir satır bozuksa şablonun geri kalanı çalışır); burada
+        // değil — "ikincil DNS tanımladım" diyen yönetici, IP'nin düşürüldüğünü fark edemezdi.
+        var clean = new DnsTemplateDto
+        {
+            SecondaryDnsServers = NormalizeIpList(request.SecondaryDnsServers?.ToArray(), "dns.invalid_secondary_ip")
+        };
+
         foreach (var record in request.Records ?? [])
         {
             var type = (record.Type ?? string.Empty).Trim().ToUpperInvariant();
@@ -866,13 +1067,22 @@ public sealed partial class DnsService(
         }
 
         await fileStore.WriteAsync(TemplatePath, clean, cancellationToken);
-        return clean.Records.Count > 0 ? clean : BuiltInTemplate();
+
+        // Dönen görünüm de aynı kuralı uygular: kayıtlar boşsa yerleşik set gösterilir, ama ikincil
+        // DNS listesi KAYDEDİLEN listedir (yerleşik şablonda böyle bir liste yoktur).
+        var effective = clean.Records.Count > 0 ? clean : BuiltInTemplate();
+        effective.SecondaryDnsServers = clean.SecondaryDnsServers;
+        return effective;
     }
 
     public async Task<SiteDnsZoneDto> SetDnssecAsync(string siteName, bool enabled, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
+
+        // İKİNCİL BÖLGE İMZALANAMAZ: imza bölgenin sahibine, yani master'a aittir. Windows da
+        // reddeder; denemek yerine sebebi söylemek kullanıcıyı master'a yönlendirir.
+        EnsureZoneIsWritable(state);
 
         // DNSSEC, Windows DNS Server zone-imzalama gerektirir (Plesk-on-Windows ile aynı). Yoksa net hata.
         if (!await IsWindowsDnsAvailableAsync(cancellationToken))
@@ -1156,6 +1366,25 @@ public sealed partial class DnsService(
         return preferences.ServerAddress;
     }
 
+    /// <summary>
+    /// Sunucu-geneli ikincil (slave) DNS sunucularının IP'leri; şablondan okunur. Okuma başarısız
+    /// olursa BOŞ döner: senkronu bir yapılandırma dosyası yüzünden komple durdurmak, bölgeyi
+    /// güncellenemez hâlde bırakırdı.
+    /// </summary>
+    private async Task<List<string>> ReadServerWideSecondariesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var template = await fileStore.ReadAsync(TemplatePath, new DnsTemplateDto(), cancellationToken);
+            return NormalizeIpList(template.SecondaryDnsServers?.ToArray(), "dns.invalid_secondary_ip");
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Sunucu-geneli ikincil DNS sunucu listesi okunamadi; bolgeye ozel liste kullanilacak.");
+            return [];
+        }
+    }
+
     private async Task TrySyncWindowsDnsAsync(DnsZoneState state, CancellationToken cancellationToken)
     {
         if (!await IsWindowsDnsAvailableAsync(cancellationToken))
@@ -1163,7 +1392,40 @@ public sealed partial class DnsService(
             return;
         }
 
-        var script = BuildSyncScript(state);
+        // IKINCIL BOLGE: yalnizca kip + master listesi uygulanir, KAYIT YAZILMAZ.
+        //
+        // Kayit yazmaya calismak yalnizca hata vermekle kalmazdi: panelin kayit listesi ile
+        // bolgenin gercek icerigi (master'dan gelen) farkli oldugu icin, "yayinlanan gruplar"
+        // listesi de yalan soylemeye baslar ve bir sonraki birincil senkronda master'dan gelen
+        // kayitlar "oksuz" sayilip silinmeye calisilirdi.
+        if (state.IsSecondary)
+        {
+            // MASTER'SIZ IKINCIL BOLGEYE DOKUNULMAZ.
+            //
+            // Bu duruma yalnizca durum dosyasi elle bozulunca dusulur (SetZoneModeAsync en az bir
+            // master sart kosar). Boyle bir durumda bolgeyi birincile cevirmek panel kayitlarini
+            // slave bir bolgenin uzerine yazardi; hicbir sey yapmamak tek guvenli davranistir.
+            if (state.MasterServers is not { Count: > 0 })
+            {
+                logger.LogWarning(
+                    "Bolge ikincil isaretli ama master listesi BOS ({Zone}); Windows DNS'e dokunulmadi.",
+                    state.ZoneName);
+                return;
+            }
+
+            var secondaryResult = await ProcessRunner.RunPowerShellAsync(
+                BuildSecondaryZoneScript(state.ZoneName, state.MasterServers),
+                cancellationToken);
+
+            if (!secondaryResult.Success)
+            {
+                throw new AppException("dns.secondary_apply_failed", 500, 500, BuildCommandDetails(secondaryResult));
+            }
+
+            return;
+        }
+
+        var script = BuildSyncScript(state, MergeNotifyTargets(state.ZoneTransferIps, await ReadServerWideSecondariesAsync(cancellationToken)));
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
@@ -1239,7 +1501,69 @@ public sealed partial class DnsService(
         }
     }
 
-    private static string BuildSyncScript(DnsZoneState state)
+    /// <summary>
+    /// İKİNCİL (slave) bölgeyi Windows DNS'te var eder ve master listesini uygular.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kayıt YAZILMAZ — yazılamaz da: ikincil bölge salt okunurdur, içeriği master'dan AXFR ile
+    /// gelir. Bu yüzden birincil senkronun tüm sil/ekle bölümü burada bilerek YOKTUR.
+    /// </para>
+    /// <para>
+    /// Üç durum ayrı ele alınır çünkü Windows'ta her biri FARKLI cmdlet ister ve yanlış olanı
+    /// çağırmak hata verir: bölge yoksa <c>Add-DnsServerSecondaryZone</c>, birincilse
+    /// <c>ConvertTo-DnsServerSecondaryZone</c>, zaten ikincilse yalnızca master listesini güncelleyen
+    /// <c>Set-DnsServerSecondaryZone</c>. Tek bir cmdlet'e bahse girmek, kipi ikinci kez uygulamayı
+    /// (ya da elle ikincil yapılmış bir bölgeyi) kırardı.
+    /// </para>
+    /// <para>
+    /// Sonda tam transfer TETİKLENİR: aksi hâlde bölge SOA yenileme aralığı dolana kadar BOŞ kalır
+    /// ve alan adı "ikincile geçtim" dendiği andan itibaren saatlerce çözülmez.
+    /// </para>
+    /// </remarks>
+    internal static string BuildSecondaryZoneScript(string zoneName, IReadOnlyList<string> masterServers)
+    {
+        var zone = EscapePowerShellLiteral(zoneName);
+        var masters = string.Join(",", masterServers.Select(ip => $"'{EscapePowerShellLiteral(ip)}'"));
+
+        return string.Join(Environment.NewLine,
+        [
+            "$ErrorActionPreference = 'Stop'",
+            $"$zoneName = '{zone}'",
+            "if (-not (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)) { exit 21 }",
+            $"$masters = @({masters})",
+            "$mevcut = Get-DnsServerZone -Name $zoneName -ErrorAction SilentlyContinue",
+            "if (-not $mevcut) {",
+            "  Add-DnsServerSecondaryZone -Name $zoneName -ZoneFile \"$zoneName.dns\" -MasterServers $masters | Out-Null",
+            "} elseif ($mevcut.ZoneType -ne 'Secondary') {",
+            "  ConvertTo-DnsServerSecondaryZone -Name $zoneName -ZoneFile \"$zoneName.dns\" -MasterServers $masters -Force | Out-Null",
+            "} else {",
+            "  Set-DnsServerSecondaryZone -Name $zoneName -MasterServers $masters | Out-Null",
+            "}",
+            // Transfer BEST-EFFORT: master o an ulaşılamazsa kip değişikliği yine de geçerlidir,
+            // bölge sonraki yenilemede dolar. Burada patlamak, doğru yapılandırmayı geri alırdı.
+            "if (Get-Command Start-DnsServerZoneTransfer -ErrorAction SilentlyContinue) {",
+            "  Start-DnsServerZoneTransfer -Name $zoneName -FullTransfer -ErrorAction SilentlyContinue | Out-Null",
+            "}"
+        ]);
+    }
+
+    /// <summary>
+    /// Birincil bölgenin AXFR/NOTIFY satırı: izin verilen IP varsa yalnız onlara transfer + NOTIFY,
+    /// yoksa transfer TAMAMEN KAPALI (güvenli varsayılan — açık AXFR bölgenin tamamını herkese verir).
+    /// </summary>
+    internal static string BuildTransferAclLine(IReadOnlyList<string> notifyTargets)
+    {
+        if (notifyTargets.Count == 0)
+        {
+            return "Set-DnsServerPrimaryZone -Name $zoneName -SecureSecondaries NoTransfer | Out-Null";
+        }
+
+        var ipList = string.Join(",", notifyTargets.Select(ip => $"'{EscapePowerShellLiteral(ip)}'"));
+        return $"Set-DnsServerPrimaryZone -Name $zoneName -SecureSecondaries TransferToSecureServers -SecondaryServers {ipList} -Notify NotifyServers -NotifyServers {ipList} | Out-Null";
+    }
+
+    private static string BuildSyncScript(DnsZoneState state, IReadOnlyList<string> notifyTargets)
     {
         // Silinecek gruplar = SIMDI istenenler + ESKIDEN panelin yazdiklari.
         //
@@ -1274,21 +1598,24 @@ public sealed partial class DnsService(
             "$ErrorActionPreference = 'Stop'",
             $"$zoneName = '{EscapePowerShellLiteral(state.ZoneName)}'",
             "if (-not (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)) { exit 21 }",
-            "if (-not (Get-DnsServerZone -Name $zoneName -ErrorAction SilentlyContinue)) {",
+            "$mevcut = Get-DnsServerZone -Name $zoneName -ErrorAction SilentlyContinue",
+            "if (-not $mevcut) {",
             "  Add-DnsServerPrimaryZone -Name $zoneName -ZoneFile \"$zoneName.dns\" | Out-Null",
+            // BOLGE IKINCILSE ONCE BIRINCILE CEVRILIR.
+            //
+            // Neden burada: kullanici ikincil kipten birincile donunce Windows'taki bolge HALA
+            // "Secondary" olur ve o bolgeye kayit yazilamaz. Cevirmeden devam etseydik senkron
+            // her kayitta hata verir, panel "bolge yazilamadi" der ama SEBEBI soylemezdi. Cevrim
+            // burada oldugu icin, kipten donusun ardindan panelin kayitlari kendiliginden yeniden
+            // yayinlanir (Plesk de kipten donuste eski kayitlari geri getirir).
+            "} elseif ($mevcut.ZoneType -eq 'Secondary') {",
+            "  ConvertTo-DnsServerPrimaryZone -Name $zoneName -ZoneFile \"$zoneName.dns\" -Force | Out-Null",
             "}"
         };
 
         // panel "zone transfer ACL": izin verilen IP varsa yalnız onlara AXFR + NOTIFY; yoksa transfer KAPALI (güvenli + panel varsayılanı).
-        if (state.ZoneTransferIps is { Count: > 0 })
-        {
-            var ipList = string.Join(",", state.ZoneTransferIps.Select(ip => $"'{EscapePowerShellLiteral(ip)}'"));
-            lines.Add($"Set-DnsServerPrimaryZone -Name $zoneName -SecureSecondaries TransferToSecureServers -SecondaryServers {ipList} -Notify NotifyServers -NotifyServers {ipList} | Out-Null");
-        }
-        else
-        {
-            lines.Add("Set-DnsServerPrimaryZone -Name $zoneName -SecureSecondaries NoTransfer | Out-Null");
-        }
+        // Liste bölgeye özel IP'ler ile SUNUCU-GENELİ ikincil DNS sunucularının birleşimidir.
+        lines.Add(BuildTransferAclLine(notifyTargets));
 
         foreach (var group in groups)
         {
@@ -1589,6 +1916,27 @@ public sealed partial class DnsService(
 
     // İzin verilen AXFR hedef IP'lerini doğrular (IPv4/IPv6), kırpar, tekrarları atar. Geçersiz IP → 400.
     private static List<string> NormalizeZoneTransferIps(string[]? ips)
+        => NormalizeIpList(ips, "dns.invalid_transfer_ip");
+
+    /// <summary>
+    /// Kullanıcıdan gelen IP listesini doğrular ve KANONİK biçimde döner; tekrarları atar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden kanonikleştiriyoruz (sadece doğrulamakla yetinmiyoruz):</b> bu değerler doğrudan
+    /// PowerShell'e gömülüyor. Tırnak kaçırma tek başına savunma olarak zayıftır — bir gün bir
+    /// çağrı yeri tırnaklamayı unutur ya da <c>IPAddress.TryParse</c>'ın kabul ettiği egzotik bir
+    /// biçim (kapsam kimlikli IPv6, baştaki/sondaki boşluk) beklenmedik bir metin taşır. Bu yüzden
+    /// script'e giden metin KULLANICININ yazdığı dizge değil, <see cref="IPAddress"/>'in kendi
+    /// ürettiği metindir; ardından yalnız <c>[0-9a-fA-F:.]</c> içerdiği ayrıca doğrulanır.
+    /// Böylece komut enjeksiyonu tek bir kaçırma hatasına bağlı kalmaz.
+    /// </para>
+    /// <para>
+    /// Kapsam kimliği (<c>fe80::1%12</c>) bu yüzden REDDEDİLİR: hem yüzde işareti ve arayüz adı
+    /// taşır hem de bir master/ikincil DNS sunucusu adresi olarak zaten anlamsızdır.
+    /// </para>
+    /// </remarks>
+    internal static List<string> NormalizeIpList(string[]? ips, string errorCode)
     {
         var result = new List<string>();
         if (ips is null)
@@ -1604,12 +1952,41 @@ public sealed partial class DnsService(
                 continue;
             }
 
-            if (!System.Net.IPAddress.TryParse(ip, out _))
+            if (!IPAddress.TryParse(ip, out var parsed))
             {
-                throw new AppException("dns.invalid_transfer_ip", 400, 400);
+                throw new AppException(errorCode, 400, 400);
             }
 
-            if (!result.Contains(ip, StringComparer.OrdinalIgnoreCase))
+            var kanonik = parsed.ToString();
+            if (!kanonik.All(karakter => Uri.IsHexDigit(karakter) || karakter is '.' or ':'))
+            {
+                throw new AppException(errorCode, 400, 400);
+            }
+
+            if (!result.Contains(kanonik, StringComparer.OrdinalIgnoreCase))
+            {
+                result.Add(kanonik);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Bölgenin FİİLİ AXFR/NOTIFY hedefleri: bölgeye özel liste + sunucu-geneli ikincil DNS
+    /// sunucuları. Sıra korunur, tekrarlar atılır.
+    /// </summary>
+    /// <remarks>
+    /// Birleştirme ŞART: sunucu-geneli ikincil sunucu tanımlayıp bölgede ayrıca IP giren bir
+    /// yönetici, iki listeden birinin diğerini ezmesini beklemez. Ezseydi ya ikincil sunucu
+    /// bölgeyi çekemez (yedek DNS sessizce ölür) ya da bölgeye özel izin kaybolurdu.
+    /// </remarks>
+    internal static List<string> MergeNotifyTargets(IEnumerable<string>? zoneIps, IEnumerable<string>? serverWideIps)
+    {
+        var result = new List<string>();
+        foreach (var ip in (zoneIps ?? []).Concat(serverWideIps ?? []))
+        {
+            if (!string.IsNullOrWhiteSpace(ip) && !result.Contains(ip, StringComparer.OrdinalIgnoreCase))
             {
                 result.Add(ip);
             }
@@ -1887,13 +2264,30 @@ public sealed partial class DnsService(
         return result.Success && result.StandardOutput.Contains("true", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task<bool> IsWindowsZonePresentAsync(string zoneName, CancellationToken cancellationToken)
+    /// <summary>
+    /// Windows DNS'in bölge için bildirdiği TÜRÜ okur (Primary/Secondary/Stub…). Bölge yoksa ya da
+    /// ölçülemezse boş dizge döner.
+    /// </summary>
+    /// <remarks>
+    /// "Bölge var mı" sorusunun yerini aldı: ikincil DNS desteğiyle birlikte varlık tek başına
+    /// yetmiyor. Panel bölgeyi birincil sanarken Windows'ta "Secondary" duruyorsa kayıt yazma
+    /// denemelerinin HEPSİ sessizce başarısız olur; bunu ancak türü ölçerek görebiliriz.
+    /// </remarks>
+    private static async Task<string> ReadWindowsZoneTypeAsync(string zoneName, CancellationToken cancellationToken)
     {
         var result = await ProcessRunner.RunPowerShellAsync(
-            $"if (Get-DnsServerZone -Name '{EscapePowerShellLiteral(zoneName)}' -ErrorAction SilentlyContinue) {{ 'true' }} else {{ 'false' }}",
+            $"$z = Get-DnsServerZone -Name '{EscapePowerShellLiteral(zoneName)}' -ErrorAction SilentlyContinue; if ($z) {{ [string]$z.ZoneType }}",
             cancellationToken);
 
-        return result.Success && result.StandardOutput.Contains("true", StringComparison.OrdinalIgnoreCase);
+        if (!result.Success)
+        {
+            return string.Empty;
+        }
+
+        return result.StandardOutput
+            .Split(NewLineSeparators, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.Length > 0) ?? string.Empty;
     }
 
     private static string EscapePowerShellLiteral(string value)
@@ -1928,6 +2322,17 @@ public sealed partial class DnsService(
         public List<DnsRecordState> Records { get; set; } = [];
 
         public List<string> ZoneTransferIps { get; set; } = [];
+
+        /// <summary>
+        /// Bolge IKINCIL (slave) kipte mi: kayitlarin kaynagi panel degil, dis master sunucudur.
+        /// </summary>
+        public bool IsSecondary { get; set; }
+
+        /// <summary>
+        /// Ikincil kipte bolgenin cekilecegi master DNS sunuculari. Birincil kipte de SAKLANIR:
+        /// kullanici kipi kapatip actiginda master listesini yeniden yazmak zorunda kalmasin.
+        /// </summary>
+        public List<string> MasterServers { get; set; } = [];
 
         /// <summary>
         /// Panelin Windows DNS'e EN SON yazdigi "TUR|konak" gruplari.

@@ -17,6 +17,36 @@ public interface IDnsService
     Task<SiteDnsZoneDto> ResetDefaultsAsync(string siteName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Bölgeyi BİRİNCİL ↔ İKİNCİL (slave) kipleri arasında çevirir (Plesk "Switch to Secondary" /
+    /// "Switch to Primary" karşılığı).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İkincil kipte bölgenin kayıtları dış master'dan AXFR ile gelir; panel kayıt YAZMAZ. Panelin
+    /// kendi kayıt listesi SİLİNMEZ, saklanır: birincil kipe dönüldüğünde bölge eski kayıtlarıyla
+    /// yeniden yayınlanır (Plesk de "the original resource records for the zone will be restored"
+    /// der). Kayıtları silmek, kipi yanlışlıkla değiştiren birine bölgeyi geri getirme şansı
+    /// bırakmazdı.
+    /// </para>
+    /// <para>
+    /// Windows tarafı: <c>Add-DnsServerSecondaryZone</c> / <c>ConvertTo-DnsServerSecondaryZone</c>
+    /// ve geri dönüşte <c>ConvertTo-DnsServerPrimaryZone</c>.
+    /// </para>
+    /// </remarks>
+    Task<SiteDnsZoneDto> SetZoneModeAsync(string siteName, SetDnsZoneModeRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// İkincil bölge için master'dan TAM zone transferini (AXFR) hemen başlatır
+    /// (<c>Start-DnsServerZoneTransfer -FullTransfer</c>).
+    /// </summary>
+    /// <remarks>
+    /// Neden gerekli: ikincil bölge normalde SOA'daki yenileme aralığını bekler (saatler sürebilir)
+    /// ya da master'dan NOTIFY gelmesine güvenir. Master'da kayıt düzeltildikten sonra "şimdi çek"
+    /// diyememek, doğru veriyi saatlerce beklemek demektir.
+    /// </remarks>
+    Task<SiteDnsZoneDto> TransferZoneNowAsync(string siteName, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Eksik varsayılan kayıtları EKLER; var olan hiçbir kaydı silmez veya değiştirmez.
     /// <para>
     /// <see cref="ResetDefaultsAsync"/>'ten farkı budur: "sıfırla" yönetilen kayıtları silip yeniden

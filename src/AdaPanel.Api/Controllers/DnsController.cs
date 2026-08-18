@@ -2,6 +2,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -9,10 +10,18 @@ namespace AdaPanel.Api.Controllers;
 
 // Reseller (Bayi) yalnız kendi müşterilerinin sitelerinin DNS bölgesini yönetebilir
 // (EnsureSiteAsync). Windows DNS özelliği KURULUMU server-level → admin-only.
+//
+// DENETİM KAYDI: durum değiştiren her uç iz bırakır. Bu denetleyicide hiç yoktu; DNS ise
+// panelin en yıkıcı yüzeylerinden biridir — tek bir A ya da MX değişikliği alan adının
+// trafiğini veya postasını başka bir sunucuya taşır. "Kim, ne zaman, neyi değiştirdi"
+// sorusunun cevapsız kalması, bir olaydan sonra elde hiçbir şey bırakmaz.
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller")]
 [Route("api/v1/sites/{siteName}/dns")]
-public sealed class DnsController(IDnsService dnsService, ICustomerScopeService customerScopes) : ControllerBase
+public sealed class DnsController(
+    IDnsService dnsService,
+    ICustomerScopeService customerScopes,
+    IAuditService auditService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> GetAsync(string siteName, CancellationToken cancellationToken)
@@ -39,7 +48,79 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
         await CustomerAccess.EnsureDomainClaimAsync(
             customerScopes, iisSiteService, mailService, User, request.ZoneName, siteName, logger, cancellationToken);
 
-        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.UpdateZoneAsync(siteName, request, cancellationToken), "dns.zone_saved"));
+        var zone = await dnsService.UpdateZoneAsync(siteName, request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.zone_updated",
+            $"dns:{siteName}",
+            $"DNS bölge ayarları kaydedildi: {zone.ZoneName}. " +
+            $"Ad sunucuları={FormatList(zone.NameServers)}, transfer izinli={FormatList(zone.ZoneTransferIps)}.");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.zone_saved"));
+    }
+
+    /// <summary>
+    /// Bölgeyi BİRİNCİL ↔ İKİNCİL (slave) kipleri arasında çevirir — Plesk'in bölge başına
+    /// "Switch to Secondary / Switch to Primary" düğmesinin karşılığı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden admin-only:</b> ikincil kip bölgenin YETKİLİ KAYNAĞINI bu sunucudan alıp dışarıdaki
+    /// bir IP'ye devreder. O IP'yi belirleyen, alan adının tüm kayıtlarını (A, MX, TXT) belirler.
+    /// Bir kiracının bunu kendi başına yapabilmesi, panelin barındırdığı bir alan adını sessizce
+    /// dışarıdan yönetilebilir hâle getirmesi demektir. Aynı gerekçeyle DNSSEC ve Windows DNS
+    /// kurulumu da yönetici işidir.
+    /// </para>
+    /// <para>
+    /// Yönetici olsa bile site kapsamı DOĞRULANIR: bayi rolü bu uca hiç giremez ama kapsam denetimi
+    /// yine de yapılır ki, rol listesi ileride genişletildiğinde koruma kendiliğinden yerinde olsun.
+    /// </para>
+    /// </remarks>
+    [HttpPost("mode")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> SetZoneModeAsync(
+        string siteName,
+        [FromBody] SetDnsZoneModeRequest request,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        var zone = await dnsService.SetZoneModeAsync(siteName, request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            zone.IsSecondary ? "dns.zone_switched_to_secondary" : "dns.zone_switched_to_primary",
+            $"dns:{siteName}",
+            zone.IsSecondary
+                ? $"Bölge İKİNCİL (slave) yapıldı: {zone.ZoneName}. Master sunucular={FormatList(zone.MasterServers)}. " +
+                  "Kayıtların kaynağı artık bu panel değil."
+                : $"Bölge BİRİNCİL yapıldı: {zone.ZoneName}. Panelin kayıtları yeniden yayınlandı.");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(
+            zone,
+            zone.IsSecondary ? "dns.secondary_enabled" : "dns.primary_restored"));
+    }
+
+    /// <summary>İkincil bölge için master'dan tam zone transferini (AXFR) hemen başlatır.</summary>
+    [HttpPost("transfer")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> TransferNowAsync(
+        string siteName,
+        CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        var zone = await dnsService.TransferZoneNowAsync(siteName, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.zone_transfer_started",
+            $"dns:{siteName}",
+            $"İkincil bölge için tam zone transferi (AXFR) başlatıldı: {zone.ZoneName}. " +
+            $"Master sunucular={FormatList(zone.MasterServers)}.");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.transfer_started"));
     }
 
     [HttpPost("windows/install")]
@@ -47,7 +128,17 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> InstallWindowsDnsAsync(
         string siteName,
         CancellationToken cancellationToken)
-        => Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.InstallWindowsDnsAsync(siteName, cancellationToken), "dns.windows_installed"));
+    {
+        var zone = await dnsService.InstallWindowsDnsAsync(siteName, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.windows_installed",
+            $"dns:{siteName}",
+            $"Windows DNS Server rolü kuruldu ve bölge yayınlandı: {zone.ZoneName}.");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.windows_installed"));
+    }
 
     [HttpPost("defaults")]
     public async Task<ActionResult<ApiResponse<SiteDnsZoneDto>>> ResetDefaultsAsync(
@@ -55,7 +146,16 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.ResetDefaultsAsync(siteName, cancellationToken), "dns.defaults_restored"));
+
+        var zone = await dnsService.ResetDefaultsAsync(siteName, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.defaults_restored",
+            $"dns:{siteName}",
+            $"Panelin yönettiği DNS kayıtları varsayılana sıfırlandı: {zone.ZoneName}.");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.defaults_restored"));
     }
 
     // DNSSEC aç/kapat (Windows DNS zone-imzalama). Server-level imzalama → admin-only.
@@ -67,8 +167,17 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        var zone = await dnsService.SetDnssecAsync(siteName, request.Enabled, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            request.Enabled ? "dns.dnssec_enabled" : "dns.dnssec_disabled",
+            $"dns:{siteName}",
+            $"DNSSEC {(request.Enabled ? "açıldı (bölge imzalandı)" : "kapatıldı (imza kaldırıldı)")}: {zone.ZoneName}.");
+
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(
-            await dnsService.SetDnssecAsync(siteName, request.Enabled, cancellationToken),
+            zone,
             request.Enabled ? "dns.dnssec_enabled" : "dns.dnssec_disabled"));
     }
 
@@ -79,7 +188,16 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.UpsertRecordAsync(siteName, request, cancellationToken), "dns.record_saved"));
+
+        var zone = await dnsService.UpsertRecordAsync(siteName, request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.record_saved",
+            $"dns:{siteName}",
+            $"DNS kaydı yazıldı ({zone.ZoneName}): {request.Type} {request.Host} → {request.Value} (TTL {request.Ttl}).");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.record_saved"));
     }
 
     [HttpDelete("records/{recordId}")]
@@ -89,6 +207,27 @@ public sealed class DnsController(IDnsService dnsService, ICustomerScopeService 
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(await dnsService.DeleteRecordAsync(siteName, recordId, cancellationToken), "dns.record_deleted"));
+
+        // Silinen kaydın NE OLDUĞU silmeden ÖNCE okunur: sonrasında yalnız kimlik kalır ve denetim
+        // kaydı "bir kayıt silindi" demekten öteye gidemezdi.
+        var oncesi = await dnsService.GetZoneAsync(siteName, cancellationToken);
+        var silinen = oncesi.Records.FirstOrDefault(record =>
+            string.Equals(record.Id, recordId, StringComparison.OrdinalIgnoreCase));
+
+        var zone = await dnsService.DeleteRecordAsync(siteName, recordId, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.record_deleted",
+            $"dns:{siteName}",
+            silinen is null
+                ? $"DNS kaydı silindi ({zone.ZoneName}): {recordId}."
+                : $"DNS kaydı silindi ({zone.ZoneName}): {silinen.Type} {silinen.Host} → {silinen.Value}.");
+
+        return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.record_deleted"));
     }
+
+    /// <summary>Denetim kaydı için IP/ad listesi; boş liste "yok" olarak yazılır ki satır anlamsız kalmasın.</summary>
+    private static string FormatList(string[] values)
+        => values.Length == 0 ? "(yok)" : string.Join(", ", values);
 }
