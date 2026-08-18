@@ -68,6 +68,33 @@
   --ring-track: rgba(34, 51, 80, 0.1);
 }
 
+/*
+ * ÖZEL MARKA (white-label) VURGU RENGİ.
+ *
+ * Kural bir ÖZNİTELİKLE kapılı: `--brand-accent` yalnızca marka ayarlanmışsa yazılır ve o zaman
+ * `data-brand-accent` işareti de konur. Markasız kurulumlarda bu blok HİÇ eşleşmez, yani panelin
+ * kendi paleti (üstteki iki blok) bire bir aynı kalır — beyaz etiket özelliği, kullanmayanların
+ * görünümünü değiştirmez.
+ *
+ * Değişkeni doğrudan `--accent-1`e yazmak yerine ayrı bir isim kullanılmasının sebebi: satır içi
+ * stil bildirimleri bir stil sayfasındaki kuralı ezer, dolayısıyla `--accent-1` doğrudan satır içi
+ * yazılsaydı AÇIK/KOYU tema geçişleri onu bir daha asla değiştiremezdi (tema değişse de vurgu
+ * rengi ilk yazılan hâlinde donardı). Ayrı değişken sayesinde tema kuralları çalışmaya devam eder.
+ *
+ * Renk DEĞERİ sunucuda `^#[0-9a-fA-F]{6}$` desenine göre doğrulanır (BrandingTextRules) ve
+ * arayüzde de aynı desenle bir kez daha süzülür: bu değer bir CSS bildirimine yazılıyor.
+ */
+:root[data-brand-accent] {
+  --accent-1: var(--brand-accent);
+  --accent-2: color-mix(in srgb, var(--brand-accent) 78%, #000);
+  --accent-text: color-mix(in srgb, var(--brand-accent) 62%, #fff);
+}
+
+/* Açık temada vurgu METNİ koyulaştırılır; aksi halde beyaz zeminde okunmaz. */
+:root[data-brand-accent][data-theme="light"] {
+  --accent-text: color-mix(in srgb, var(--brand-accent) 82%, #000);
+}
+
 :root[data-theme="light"] body {
   background: var(--page-bg);
 }

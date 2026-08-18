@@ -8,13 +8,26 @@
     <div v-if="isNarrow && menuOpen" class="nav-scrim" @click="closeMenu"></div>
 
     <aside id="ap-sidebar" ref="sidebarRef" :class="['sidebar', { open: isNarrow && menuOpen }]">
-      <div class="brand-card">
-        <div class="brand-mark">AP</div>
+      <!--
+        ÖZEL MARKA: logo varsa ürünün "AP" işareti YERİNE geçer (yanına değil) — beyaz etikette
+        sağlayıcının işareti müşterinin ekranında hiç görünmemeli. Logo adresi bir data URI'dir
+        (bkz. api/panelSettings.ts) ve marka adı `{{ }}` ile, yani HTML olarak yorumlanmadan basılır.
+        Bağlantı hedefi sunucuda http/https'e kısıtlanır; `rel` yine de yazılır çünkü hedef sayfa
+        bayinin belirlediği bir dış adrestir (sekme ele geçirmeye karşı).
+      -->
+      <component
+        :is="logoLinkUrl ? 'a' : 'div'"
+        class="brand-card"
+        :href="logoLinkUrl || undefined"
+        :target="logoLinkUrl ? '_blank' : undefined"
+        :rel="logoLinkUrl ? 'noopener noreferrer' : undefined">
+        <img v-if="logoUrl" class="brand-logo" :src="logoUrl" :alt="panelName" />
+        <div v-else class="brand-mark">AP</div>
         <div class="brand-copy">
           <strong>{{ panelName }}</strong>
           <p>{{ subtitle }}</p>
         </div>
-      </div>
+      </component>
 
       <nav class="nav-list">
         <button
@@ -588,6 +601,10 @@ const props = defineProps<{
   description: string;
   subtitle: string;
   panelName: string;
+  /** Özel marka logosu (data URI). Boş/verilmemiş = ürünün kendi işareti gösterilir. */
+  logoUrl?: string;
+  /** Logoya tıklanınca açılacak adres; sunucu tarafında yalnız http/https kabul edilir. */
+  logoLinkUrl?: string;
   machineName: string;
   secureEntryPath: string;
   userName: string;
@@ -683,6 +700,22 @@ const twoFactorLabel = computed(() =>
   background: color-mix(in srgb, var(--accent-1) 12%, transparent);
   color: var(--accent-1);
   font-size: 0.78rem;
+}
+
+/* Özel marka logosu: yüklenen görselin boyutu ne olursa olsun kenar menüyü BOZAMAZ. Yükseklik
+   ürün işaretiyle aynı (34px), genişlik oranına göre serbest ama üst sınırlı. */
+.brand-logo {
+  width: auto;
+  max-width: 92px;
+  height: 34px;
+  object-fit: contain;
+  align-self: center;
+}
+
+/* Logo bir bağlantıysa kart yine kart gibi görünmeli (altı çizili mavi metin değil). */
+a.brand-card {
+  color: inherit;
+  text-decoration: none;
 }
 
 .brand-copy {

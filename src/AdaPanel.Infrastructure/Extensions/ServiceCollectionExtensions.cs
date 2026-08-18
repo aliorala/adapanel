@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICustomerScopeService, Security.CustomerScopeService>();
         services.AddScoped<IPanelSecurityService, PanelSecurityService>();
         services.AddScoped<IPanelPreferencesService, PanelPreferencesService>();
+        services.AddScoped<IBrandingService, Branding.BrandingService>();
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
