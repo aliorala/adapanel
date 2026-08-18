@@ -146,6 +146,60 @@ export async function setRemoteDbAccess(enabled: boolean, allowedIp: string) {
   return response.data.data;
 }
 
+// KULLANICI bazlı uzak erişim. Sunucu geneli tek anahtar yerine her veritabanı kullanıcısı için
+// ayrı kip + kaynak listesi; motor tarafı (MySQL host / pg_hba) ve güvenlik duvarı birlikte yönetilir.
+export type RemoteAccessMode = "closed" | "allowlist" | "anywhere";
+
+export type DatabaseUserRemoteAccess = {
+  engine: string;
+  userName: string;
+  mode: RemoteAccessMode;
+  allowedOrigins: string[];
+  // Motordan OKUNAN gerçek (panelin kaydı değil): hesap fiilen nereden geçerli.
+  engineHosts: string[];
+  remoteOpen: boolean;
+  databases: string[];
+};
+
+export type DatabaseRemoteAccessEngine = {
+  engine: string;
+  displayName: string;
+  installed: boolean;
+  supported: boolean;
+  mechanism: "mysqlHost" | "pgHba" | "none";
+  serverHost: string;
+  port: number;
+  firewallOpen: boolean;
+  firewallAllowedAddresses: string[];
+  // i18n anahtarı; boş = uyarı yok.
+  warningKey: string;
+  users: DatabaseUserRemoteAccess[];
+};
+
+export async function getUserRemoteAccess() {
+  const response = await apiClient.get<ApiEnvelope<{ engines: DatabaseRemoteAccessEngine[] }>>(
+    "/db/remote-access/users"
+  );
+  return response.data.data.engines;
+}
+
+export async function setUserRemoteAccess(payload: {
+  engine: string;
+  userName: string;
+  mode: RemoteAccessMode;
+  allowedOrigins: string[];
+  // "Her yer" açık onay ister; onaysız istek sunucuda reddedilir.
+  confirmAnywhere: boolean;
+  // Güvenlik duvarına yalnız bu bayrak açıkken dokunulur (port sessizce açılmaz).
+  applyFirewall: boolean;
+}) {
+  const response = await apiClient.put<ApiEnvelope<DatabaseRemoteAccessEngine>>(
+    "/db/remote-access/users",
+    payload
+  );
+  return response.data.data;
+}
+
 export async function setDatabaseUserPassword(payload: { engine: string; userName: string; password: string; allowedHost?: string }) {
   const response = await apiClient.post<ApiEnvelope<DatabaseWorkspace>>("/db/users/password", payload);
   return response.data.data;

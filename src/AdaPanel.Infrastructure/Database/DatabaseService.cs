@@ -25,10 +25,10 @@ internal sealed partial class DatabaseService(
         PropertyNameCaseInsensitive = true
     };
 
-    private const string GeneratedPasswordKey = "generatedPassword";
-    private const string AdminUserKey = "adminUser";
-    private const string AdminPortKey = "adminPort";
-    private const string SystemDetectedKey = "systemDetected";
+    private const string GeneratedPasswordKey = DatabaseProfiles.GeneratedPasswordKey;
+    private const string AdminUserKey = DatabaseProfiles.AdminUserKey;
+    private const string AdminPortKey = DatabaseProfiles.AdminPortKey;
+    private const string SystemDetectedKey = DatabaseProfiles.SystemDetectedKey;
 
     public async Task<IReadOnlyCollection<DatabaseEngineStatusDto>> GetEnginesAsync(CancellationToken cancellationToken = default)
     {
@@ -339,16 +339,16 @@ internal sealed partial class DatabaseService(
         await provider.CreateDatabaseAsync(profile, databaseName, cancellationToken);
 
         // profesyonel paneller gibi: kullanıcı adı verildiyse aynı anda kullanıcı oluştur ve bu veritabanına
-        // otomatik TAM yetki ver (host '%' = her yerden; ayrı host/yetki seçimi yok).
+        // otomatik TAM yetki ver. Host YEREL'dir (bkz. NewUserHost) — uzak erişim ayrı ve açık bir karardır.
         if (!string.IsNullOrWhiteSpace(request.UserName))
         {
             var newUser = NormalizeUserName(request.UserName);
-            const string anyHost = "%";
+            var newUserHost = NewUserHost(dbEngine);
             var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
-            await provider.CreateUserAsync(profile, newUser, request.Password, anyHost, cancellationToken);
-            await provider.GrantAccessAsync(profile, databaseName, newUser, anyHost, fullPrivileges, cancellationToken);
+            await provider.CreateUserAsync(profile, newUser, request.Password, newUserHost, cancellationToken);
+            await provider.GrantAccessAsync(profile, databaseName, newUser, newUserHost, fullPrivileges, cancellationToken);
             // phpMyAdmin'i bu kullanıcı olarak açıp yalnız kendi DB'sini göstermek için parolayı şifreli sakla.
-            await credentialStore.UpsertAsync(profile.EngineKey, newUser, anyHost, databaseName, request.Password, cancellationToken);
+            await credentialStore.UpsertAsync(profile.EngineKey, newUser, newUserHost, databaseName, request.Password, cancellationToken);
         }
 
         // Site bağı (Plesk gibi): site verildiyse bu DB'yi siteye bağla → site silinince cascade ile gider.
@@ -451,7 +451,11 @@ internal sealed partial class DatabaseService(
     {
         var dbEngine = ParseEngine(request.Engine);
         var userName = NormalizeUserName(request.UserName);
-        var allowedHost = NormalizeAllowedHost(request.AllowedHost);
+        // OLUŞTURMA yolunda varsayılan YEREL'dir; NormalizeAllowedHost'un '%' varsayılanı ise var
+        // olan hesabı adresleyen yollar (parola, silme, yetki) içindir ve orada değiştirilemez.
+        var allowedHost = string.IsNullOrWhiteSpace(request.AllowedHost)
+            ? NewUserHost(dbEngine)
+            : NormalizeAllowedHost(request.AllowedHost);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
@@ -479,12 +483,25 @@ internal sealed partial class DatabaseService(
         var dbEngine = ParseEngine(request.Engine);
         var databaseName = NormalizeDatabaseName(request.DatabaseName);
         var userName = NormalizeUserName(request.UserName);
-        var allowedHost = NormalizeAllowedHost(request.AllowedHost);
         var privileges = NormalizePrivileges(request.Privileges, dbEngine);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
-        await provider.GrantAccessAsync(profile, databaseName, userName, allowedHost, privileges, cancellationToken);
+        // Host verilmediyse TAHMİN EDİLMEZ, motordan okunur. Eski varsayılan '%' idi; hesap
+        // yerelle sınırlıyken var olmayan bir hesaba yetki yazmaya çalışıyor ya da (GRANT'ın
+        // hesap oluşturabildiği yapılandırmalarda) her yerden geçerli yeni bir hesap doğuruyordu.
+        // Kullanıcının birden çok hesabı varsa (yerel + uzak) yetki HEPSİNE verilir: panel
+        // kullanıcısı için bunlar tek bir kimliktir, birinde olup diğerinde olmayan yetki
+        // "bazen çalışan bağlantı" demek olurdu.
+        var targetHosts = string.IsNullOrWhiteSpace(request.AllowedHost)
+            ? await ResolveExistingHostsAsync(provider, profile, userName, cancellationToken)
+            : [NormalizeAllowedHost(request.AllowedHost)];
+
+        foreach (var host in targetHosts)
+        {
+            await provider.GrantAccessAsync(profile, databaseName, userName, host, privileges, cancellationToken);
+        }
+
         return await provider.GetWorkspaceAsync(profile, cancellationToken);
     }
 
@@ -651,12 +668,12 @@ internal sealed partial class DatabaseService(
                     : NormalizeUserName(request.TargetUserName);
                 var passwordGenerated = string.IsNullOrWhiteSpace(request.TargetPassword);
                 var transferPassword = passwordGenerated ? GenerateDbPassword() : request.TargetPassword;
-                const string anyHost = "%";
+                var transferHost = NewUserHost(engine);
                 var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], engine);
 
                 try
                 {
-                    await provider.CreateUserAsync(targetProfile, transferUser, transferPassword, anyHost, cancellationToken);
+                    await provider.CreateUserAsync(targetProfile, transferUser, transferPassword, transferHost, cancellationToken);
                 }
                 catch
                 {
@@ -665,8 +682,8 @@ internal sealed partial class DatabaseService(
 
                 createdUser = transferUser;
                 createdPassword = passwordGenerated ? transferPassword : string.Empty;
-                await provider.GrantAccessAsync(targetProfile, targetDatabase, transferUser, anyHost, fullPrivileges, cancellationToken);
-                await credentialStore.UpsertAsync(targetProfile.EngineKey, transferUser, anyHost, targetDatabase, transferPassword, cancellationToken);
+                await provider.GrantAccessAsync(targetProfile, targetDatabase, transferUser, transferHost, fullPrivileges, cancellationToken);
+                await credentialStore.UpsertAsync(targetProfile.EngineKey, transferUser, transferHost, targetDatabase, transferPassword, cancellationToken);
             }
             catch
             {
@@ -730,62 +747,10 @@ internal sealed partial class DatabaseService(
         return trimmed.Length > 600 ? trimmed[..600] : trimmed;
     }
 
-    private async Task<DatabaseConnectionProfile> ResolveConnectionProfileAsync(DbEngine engine, CancellationToken cancellationToken, bool allowEmptyPassword = false)
-    {
-        if (engine == DbEngine.MsSql)
-        {
-            return ResolveMsSqlProfile();
-        }
+    private Task<DatabaseConnectionProfile> ResolveConnectionProfileAsync(DbEngine engine, CancellationToken cancellationToken, bool allowEmptyPassword = false)
+        => DatabaseProfiles.ResolveAsync(dbContext, secretProtector, engine, cancellationToken, allowEmptyPassword);
 
-        var descriptor = ResolveDescriptor(engine);
-        var installedComponent = await dbContext.InstalledComponents
-            .FirstOrDefaultAsync(
-                item => item.ComponentId == descriptor.ComponentId && item.Status == ComponentInstallStatus.Installed,
-                cancellationToken);
-
-        if (installedComponent is null)
-        {
-            throw new AppException("database.engine_not_installed", 404, 404);
-        }
-
-        var configuration = ReadProtectedConfiguration(installedComponent);
-        var adminPassword = configuration.TryGetValue(GeneratedPasswordKey, out var storedPassword) ? storedPassword : string.Empty;
-        if (string.IsNullOrWhiteSpace(adminPassword) && !allowEmptyPassword)
-        {
-            throw new AppException("database.admin_password_missing", 409, 409);
-        }
-
-        // Harici (sistemde zaten kurulu) motorlar için kayıtlı kullanıcı/portu kullan;
-        // yoksa AdaPanel'in kendi kurulumundaki varsayılanlara düş.
-        var adminUser = configuration.TryGetValue(AdminUserKey, out var storedUser) && !string.IsNullOrWhiteSpace(storedUser)
-            ? storedUser
-            : descriptor.AdminUserName;
-        var port = configuration.TryGetValue(AdminPortKey, out var storedPort) && int.TryParse(storedPort, out var parsedPort) && parsedPort > 0
-            ? parsedPort
-            : descriptor.DefaultPort;
-
-        return new DatabaseConnectionProfile(
-            engine,
-            descriptor.EngineKey,
-            descriptor.DisplayName,
-            descriptor.ComponentId,
-            installedComponent.ServiceName,
-            "127.0.0.1",
-            port,
-            adminUser,
-            adminPassword,
-            descriptor.SupportsHostScopedUsers,
-            installedComponent.InstallDir);
-    }
-
-    private static int DefaultExternalPort(DbEngine engine)
-        => engine switch
-        {
-            DbEngine.PostgreSql => 5432,
-            // Sistemde kurulu MySQL/MariaDB geleneksel olarak 3306 dinler
-            // (AdaPanel'in kendi MySQL kurulumu 3307 kullanır, çakışmayı önlemek için).
-            _ => 3306
-        };
+    private static int DefaultExternalPort(DbEngine engine) => DatabaseProfiles.DefaultExternalPort(engine);
 
     private DatabaseEngineStatusDto BuildEngineStatus(
         EngineDescriptor descriptor,
@@ -816,32 +781,7 @@ internal sealed partial class DatabaseService(
     }
 
     private Dictionary<string, string> ReadProtectedConfiguration(InstalledComponent component)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(component.ProtectedConfigurationJson))
-        {
-            return result;
-        }
-
-        try
-        {
-            var payload = secretProtector.Unprotect(component.ProtectedConfigurationJson);
-            var configuration = JsonSerializer.Deserialize<Dictionary<string, string>>(payload, SerializerOptions);
-            if (configuration is not null)
-            {
-                foreach (var pair in configuration)
-                {
-                    result[pair.Key] = pair.Value;
-                }
-            }
-        }
-        catch
-        {
-            // Bozuk/okunamayan yapılandırma boş kabul edilir.
-        }
-
-        return result;
-    }
+        => DatabaseProfiles.ReadProtectedConfiguration(secretProtector, component);
 
     private static Task<CommandResult> ExportMySqlAsync(
         DatabaseConnectionProfile profile,
@@ -1011,35 +951,7 @@ internal sealed partial class DatabaseService(
         }.ConnectionString;
     }
 
-    private static DatabaseConnectionProfile ResolveMsSqlProfile()
-    {
-        foreach (var registryView in new[] { RegistryView.Registry64, RegistryView.Registry32 })
-        {
-            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, registryView);
-            using var instancesKey = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL");
-            var instanceName = instancesKey?.GetValueNames().FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(instanceName))
-            {
-                continue;
-            }
-
-            var isDefault = string.Equals(instanceName, "MSSQLSERVER", StringComparison.OrdinalIgnoreCase);
-            return new DatabaseConnectionProfile(
-                DbEngine.MsSql,
-                "mssql",
-                "Microsoft SQL Server",
-                "mssql-existing",
-                isDefault ? "MSSQLSERVER" : $"MSSQL${instanceName}",
-                isDefault ? "localhost" : $@"localhost\{instanceName}",
-                1433,
-                "Windows",
-                string.Empty,
-                false,
-                string.Empty);
-        }
-
-        throw new AppException("database.engine_not_installed", 404, 404);
-    }
+    private static DatabaseConnectionProfile ResolveMsSqlProfile() => DatabaseProfiles.ResolveMsSqlProfile();
 
     /// <summary>
     /// Motorun komut satırı aracını (mysqldump, pg_dump vb.) bulur.
@@ -1123,16 +1035,7 @@ internal sealed partial class DatabaseService(
         }
     }
 
-    private static EngineDescriptor ResolveDescriptor(DbEngine engine)
-    {
-        return engine switch
-        {
-            DbEngine.MariaDb => new EngineDescriptor(engine, "mariadb", "MariaDB", "mariadb-11", "root", 3306, true),
-            DbEngine.MySql => new EngineDescriptor(engine, "mysql", "MySQL", "mysql-8", "root", 3307, true),
-            DbEngine.PostgreSql => new EngineDescriptor(engine, "postgresql", "PostgreSQL", "postgresql-16", "postgres", 5432, false),
-            _ => throw new AppException("database.engine_not_supported", 400, 400)
-        };
-    }
+    private static EngineDescriptor ResolveDescriptor(DbEngine engine) => DatabaseProfiles.ResolveDescriptor(engine);
 
     private IDatabaseEngineProvider ResolveProvider(DbEngine engine)
     {
@@ -1145,17 +1048,7 @@ internal sealed partial class DatabaseService(
         return provider ?? throw new AppException("database.engine_not_supported", 400, 400);
     }
 
-    private static DbEngine ParseEngine(string engine)
-    {
-        return engine.Trim().ToLowerInvariant() switch
-        {
-            "mariadb" => DbEngine.MariaDb,
-            "mysql" => DbEngine.MySql,
-            "postgresql" or "postgres" => DbEngine.PostgreSql,
-            "mssql" or "sqlserver" => DbEngine.MsSql,
-            _ => throw new AppException("database.engine_not_supported", 400, 400)
-        };
-    }
+    private static DbEngine ParseEngine(string engine) => DatabaseProfiles.ParseEngine(engine);
 
     private static string NormalizeDatabaseName(string value)
     {
@@ -1178,6 +1071,63 @@ internal sealed partial class DatabaseService(
 
         return normalized;
     }
+
+    /// <summary>
+    /// Kullanıcının motorda VAR OLAN hesap host'ları; hiç yoksa hata.
+    /// </summary>
+    /// <remarks>
+    /// Rol tabanlı motorlarda (PostgreSQL) host kavramı yoktur; orada tek elemanlı bir liste
+    /// döner ve sağlayıcı bu değeri zaten yok sayar.
+    /// </remarks>
+    private static async Task<IReadOnlyList<string>> ResolveExistingHostsAsync(
+        IDatabaseEngineProvider provider,
+        DatabaseConnectionProfile profile,
+        string userName,
+        CancellationToken cancellationToken)
+    {
+        if (!profile.SupportsHostScopedUsers)
+        {
+            return ["%"];
+        }
+
+        var facts = await provider.ReadRemoteAccessAsync(profile, [userName], cancellationToken);
+        var hosts = facts.TryGetValue(userName, out var found) ? found.Hosts : [];
+
+        return hosts.Count > 0
+            ? [.. hosts]
+            : throw new AppException("database.user_not_found", 404, 404);
+    }
+
+    /// <summary>
+    /// YENİ oluşturulan bir veritabanı kullanıcısının host değeri.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ÖLÇÜLEN DURUM: panel her kullanıcıyı <c>kullanici@'%'</c> olarak açıyordu — veritabanını
+    /// oluştururken de (<see cref="CreateDatabaseAsync"/>), kullanıcı eklerken de
+    /// (<c>CreateDatabaseUserRequest.AllowedHost</c> varsayılanı), taşımada da. Yani her müşteri
+    /// hesabı kimlik doğrulama açısından dünyaya açıktı ve tek engel güvenlik duvarıydı. Bir
+    /// güvenlik sınırını tek bir güvenlik duvarı kuralına bağlamak, o kural bir kez açıldığında
+    /// (yönetici eli, başka bir bileşen, VPN/NAT) sunucudaki BÜTÜN müşteri hesaplarının aynı anda
+    /// dışarıdan denenebilir olması demektir.
+    /// </para>
+    /// <para>
+    /// KARAR: yalnız OLUŞTURMA yolu değişir; var olan hesaplara DOKUNULMAZ. Çalışan kurulumlarda
+    /// <c>%</c> ile açılmış hesaplar olduğu gibi kalır — onları toplu değiştirmek, uzaktan bağlanan
+    /// bir uygulamayı habersiz koparırdı. Geçiş yolu uzak erişim ekranıdır: orada hesabın MOTORDAN
+    /// OKUNAN gerçek host'ları görünür, "her yerden" olanlar işaretlenir ve yönetici tek tek,
+    /// bilerek daraltır.
+    /// </para>
+    /// <para>
+    /// <c>localhost</c> seçilir çünkü Windows'ta uygulamalar motora TCP ile 127.0.0.1 üzerinden
+    /// bağlanır ve ad çözümü açıkken (varsayılan) sunucu bunu <c>localhost</c> olarak eşler.
+    /// Motorda <c>skip-name-resolve</c> açıksa yalnız sayısal karşılık eşleşir; bu durumda uzak
+    /// erişim akışının yerel küme tamamlaması (<see cref="MySqlAccountHosts.LocalHosts"/>) devreye
+    /// girer ve eksik yerel hesaplar oluşturulur.
+    /// </para>
+    /// </remarks>
+    private static string NewUserHost(DbEngine engine)
+        => engine is DbEngine.MariaDb or DbEngine.MySql ? MySqlAccountHosts.SafeCreationHost : "%";
 
     private static string NormalizeAllowedHost(string? value)
     {
@@ -1230,15 +1180,6 @@ internal sealed partial class DatabaseService(
             ? ["ALL PRIVILEGES"]
             : normalized;
     }
-
-    private sealed record EngineDescriptor(
-        DbEngine Engine,
-        string EngineKey,
-        string DisplayName,
-        string ComponentId,
-        string AdminUserName,
-        int DefaultPort,
-        bool SupportsHostScopedUsers);
 
     [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]{1,63}$", RegexOptions.Compiled)]
     private static partial Regex DatabaseNamePattern();

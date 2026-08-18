@@ -1,3 +1,4 @@
+using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Interfaces;
@@ -267,6 +268,64 @@ public sealed class DatabasesController(
             "mariadb",
             $"Remote DB access enabled={request.Enabled}, ip={request.AllowedIp ?? "(any)"}.");
         return Ok(ApiResponse<RemoteDbAccessDto>.Ok(dto, request.Enabled ? "database.remote_enabled" : "database.remote_disabled"));
+    }
+
+    /// <summary>
+    /// KULLANICI bazlı uzak erişim tablosu: hangi veritabanı kullanıcısı nereden bağlanabiliyor.
+    /// </summary>
+    /// <remarks>
+    /// Kurulu motorlar koddan (bileşen kayıtlarından) okunur; liste elle yazılmaz. Her satırdaki
+    /// host bilgisi panelin kaydı değil, MOTORDAN okunan gerçektir.
+    /// </remarks>
+    [HttpGet("remote-access/users")]
+    public async Task<ActionResult<ApiResponse<DatabaseRemoteAccessOverviewDto>>> GetUserRemoteAccessAsync(
+        CancellationToken cancellationToken)
+    {
+        return Ok(ApiResponse<DatabaseRemoteAccessOverviewDto>.Ok(
+            await remoteDbAccessService.GetUserAccessAsync(cancellationToken)));
+    }
+
+    /// <summary>
+    /// Tek bir veritabanı kullanıcısının uzak erişimini değiştirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu uç bir GÜVENLİK SINIRINI değiştirir, bu yüzden denetim kaydı zorunludur ve kaydın
+    /// cevaplaması gereken soru "ne kadar açıldı"dır: kip, izin verilen kaynaklar ve güvenlik
+    /// duvarına dokunulup dokunulmadığı ayrı ayrı yazılır. Yalnız "değişti" demek, bir
+    /// uyuşmazlıkta hiçbir işe yaramazdı.
+    /// </para>
+    /// <para>
+    /// Kapsam denetimi servistedir ve çağıranın kimliği buradan GEÇİRİLİR. Bu denetleyici
+    /// yönetici-only olduğu için burada muafiyet geçerlidir; aynı servis müşteri ucundan
+    /// çağrıldığında sahiplik zorunlu olur.
+    /// </para>
+    /// </remarks>
+    [HttpPut("remote-access/users")]
+    public async Task<ActionResult<ApiResponse<DatabaseRemoteAccessEngineDto>>> SetUserRemoteAccessAsync(
+        [FromBody] UpdateDatabaseUserRemoteAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        var engine = await remoteDbAccessService.SetUserAccessAsync(
+            request,
+            User.GetRequiredUserId(),
+            User.IsInRole("Administrator"),
+            cancellationToken);
+
+        var origins = request.AllowedOrigins is { Length: > 0 }
+            ? string.Join(", ", request.AllowedOrigins)
+            : "(none)";
+
+        await WriteAuditAsync(
+            "database.remote.user_access_changed",
+            request.Engine,
+            request.UserName,
+            $"Remote access set to '{request.Mode}' (origins: {origins}); "
+            + (request.ApplyFirewall
+                ? $"firewall rule for port {engine.Port} was rewritten."
+                : "firewall was NOT touched."));
+
+        return Ok(ApiResponse<DatabaseRemoteAccessEngineDto>.Ok(engine, "database.remote_saved"));
     }
 
     /// <summary>

@@ -16,8 +16,16 @@ public sealed class CreateDatabaseUserRequest
     [StringLength(128, MinimumLength = 8)]
     public string Password { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Hesabın hangi adresten geçerli olacağı. BOŞ BIRAKIN: panel güvenli (yerel) varsayılanı uygular.
+    /// </summary>
+    /// <remarks>
+    /// Varsayılan eskiden <c>%</c> idi: oluşturulan her hesap dünyanın her yerinden geçerliydi ve
+    /// tek engel güvenlik duvarıydı. Uzak erişim artık ayrı, açık onaylı bir karardır
+    /// (<c>/db/remote-access/users</c>).
+    /// </remarks>
     [StringLength(255)]
-    public string AllowedHost { get; init; } = "%";
+    public string AllowedHost { get; init; } = string.Empty;
 
     /// <summary>
     /// İsteğe bağlı: kullanıcı bu veritabanına OTOMATİK tam yetki (GRANT ALL) alır (Plesk gibi). Boşsa yalnız
