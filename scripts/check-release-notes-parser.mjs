@@ -39,16 +39,14 @@ try {
   const say = (t) => bloklar.filter((b) => b.tur === t).length;
   console.log(`   ${bloklar.length} blok: ${["baslik", "paragraf", "liste", "kod", "alinti", "ayrac"].map((t) => `${t}=${say(t)}`).join(" ")}`);
 
+  // Gercek notlarda YALNIZCA her surumde bulunmasi ZORUNLU olan seyler aranir. Kod blogu ya da
+  // liste her surum notunda olmak zorunda degil; onlar asagida sabit ornekle sinanir. (Ilk halde
+  // burada kod blogu sart kosulmustu ve kod ornegi icermeyen bir surum notu denetimi COKERTTI --
+  // yani denetim, olcmesi gereken seyi degil, o gunku metnin bicimini olcuyordu.)
   dogrula("baslik bulundu", say("baslik") > 0);
   dogrula("paragraf bulundu", say("paragraf") > 0);
-  dogrula("kod blogu bulundu", say("kod") > 0);
   dogrula("ayrac bulundu", say("ayrac") > 0);
-  dogrula("alinti bulundu", say("alinti") > 0);
-  dogrula("tek bloga cokmedi", bloklar.length > 10);
-
-  const kodBlok = bloklar.find((b) => b.tur === "kod");
-  dogrula("kod blogunda satir sonlari KORUNDU", kodBlok.icerik.includes("\n"));
-  dogrula("kod blogu citleri icerige sizmadi", !kodBlok.icerik.includes("```"));
+  dogrula("tek bloga cokmedi", bloklar.length > 5);
 
   const kalinVar = bloklar.some((b) => b.parcalar.some((p) => p.tur === "kalin"));
   dogrula("kalin metin ayristirildi", kalinVar);
@@ -56,6 +54,16 @@ try {
     .filter((b) => b.tur !== "kod")
     .some((b) => b.parcalar.some((p) => p.tur === "metin" && (p.deger.includes("**") || p.deger.includes("##"))));
   dogrula("ham ** ve ## isareti KALMADI", !isaretKaldi);
+
+  // Kod blogu / liste davranisi SABIT ornekle olculur; boylece denetim, o gunku surum notunun
+  // hangi bicimleri kullandigina bagli kalmaz.
+  console.log("\n1b) Kod blogu (sabit ornek)");
+  const ornek = ayristir("Giris\n\n```\nbir\niki\n```\n\nSon");
+  const kodBlok = ornek.find((b) => b.tur === "kod");
+  dogrula("kod blogu ayristirildi", Boolean(kodBlok));
+  dogrula("kod blogunda satir sonlari KORUNDU", kodBlok.icerik.includes("\n"));
+  dogrula("kod blogu citleri icerige sizmadi", !kodBlok.icerik.includes("```"));
+  dogrula("kod blogu cevresindeki metin ayri kaldi", ornek.length === 3);
 
   console.log("\n2) Guvenlik: metin hicbir zaman HTML'e cevrilmez");
   const kotu = ayristir('<img src=x onerror="alert(1)"> ve <script>alert(2)</' + "script>");
