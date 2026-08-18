@@ -213,6 +213,95 @@
             </div>
           </section>
 
+          <section v-else-if="activeSection === 'errorPages'" class="settings-card">
+            <div class="settings-card-head">
+              <div>
+                <h4>{{ t("panel.hosting.errorPages") }}</h4>
+                <p class="meta">{{ t("panel.hosting.errorPagesHint") }}</p>
+              </div>
+            </div>
+
+            <!-- ÇIKMAZ SOKAK DEĞİL: ayrıntılı hatalar açıkken bu sayfalar HİÇ görünmez; kullanıcı
+                 "kaydettim ama çalışmıyor" demeden önce sebebini ve nereye gideceğini burada görür. -->
+            <p v-if="form.detailedErrorsEnabled" class="notice error" role="alert">
+              {{ t("panel.hosting.errorPagesDetailedWarning") }}
+            </p>
+
+            <div class="settings-rows">
+              <label class="setting-row align-start">
+                <span>{{ t("panel.hosting.errorPages") }}</span>
+                <textarea v-model="errorPagesText" rows="6" :placeholder="t('panel.hosting.errorPagesPlaceholder')"></textarea>
+                <small>{{ t("panel.hosting.errorPagesHelp") }}</small>
+              </label>
+              <p class="meta">{{ t("panel.hosting.errorPagesFileHint") }}</p>
+            </div>
+
+            <div class="action-row">
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
+            </div>
+          </section>
+
+          <section v-else-if="activeSection === 'mime'" class="settings-card">
+            <div class="settings-card-head">
+              <div>
+                <h4>{{ t("panel.hosting.mime") }}</h4>
+                <p class="meta">{{ t("panel.hosting.mimeHint") }}</p>
+              </div>
+            </div>
+
+            <div class="settings-rows">
+              <label class="setting-row align-start">
+                <span>{{ t("panel.hosting.mime") }}</span>
+                <textarea v-model="mimeTypesText" rows="6" :placeholder="t('panel.hosting.mimePlaceholder')"></textarea>
+                <small>{{ t("panel.hosting.mimeHelp") }}</small>
+              </label>
+              <p class="meta">{{ t("panel.hosting.mimeWhy") }}</p>
+            </div>
+
+            <div class="action-row">
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
+            </div>
+          </section>
+
+          <section v-else-if="activeSection === 'hsts'" class="settings-card">
+            <div class="settings-card-head">
+              <div>
+                <h4>{{ t("panel.hosting.hsts") }}</h4>
+                <p class="meta">{{ t("panel.hosting.hstsHint") }}</p>
+              </div>
+            </div>
+
+            <!-- Geri alınması zor bir karar: uyarı açmadan ÖNCE görünür olmalı. -->
+            <p class="notice error" role="alert">{{ t("panel.hosting.hstsWarning") }}</p>
+
+            <div class="settings-rows">
+              <label class="setting-row checkbox-row">
+                <span>{{ t("panel.hosting.hstsEnabled") }}</span>
+                <input v-model="form.hstsEnabled" type="checkbox" />
+                <small>{{ t("panel.hosting.hstsEnabledHelp") }}</small>
+              </label>
+              <label class="setting-row">
+                <span>{{ t("panel.hosting.hstsMaxAge") }}</span>
+                <input v-model.number="hstsMaxAgeDays" type="number" min="0" max="730" :disabled="!form.hstsEnabled" />
+                <small>{{ t("panel.hosting.hstsMaxAgeHelp") }}</small>
+              </label>
+              <label class="setting-row checkbox-row">
+                <span>{{ t("panel.hosting.hstsIncludeSubDomains") }}</span>
+                <input v-model="form.hstsIncludeSubDomains" type="checkbox" :disabled="!form.hstsEnabled" />
+                <small>{{ t("panel.hosting.hstsIncludeSubDomainsHelp") }}</small>
+              </label>
+              <label class="setting-row checkbox-row">
+                <span>{{ t("panel.hosting.hstsPreload") }}</span>
+                <input v-model="form.hstsPreload" type="checkbox" :disabled="!form.hstsEnabled" />
+                <small>{{ t("panel.hosting.hstsPreloadHelp") }}</small>
+              </label>
+            </div>
+
+            <div class="action-row">
+              <button v-bind="writeGate(busy)" @click="save">{{ t("panel.hosting.save") }}</button>
+            </div>
+          </section>
+
           <section v-else-if="activeSection === 'quota'" class="settings-card">
             <div class="settings-card-head">
               <div>
@@ -424,7 +513,15 @@ import { useI18n } from "vue-i18n";
 import SiteAliases from "../components/SiteAliases.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useSectionError } from "../composables/useNotice";
-import { getSiteHostingSettings, runArtisanCommand, runComposerCommand, runComposerInstall, updateSiteHostingSettings } from "../api/siteHosting";
+import {
+  getSiteHostingSettings,
+  runArtisanCommand,
+  runComposerCommand,
+  runComposerInstall,
+  updateSiteHostingSettings,
+  type SiteErrorPage,
+  type SiteMimeType
+} from "../api/siteHosting";
 import { getQuota, removeQuota, setQuota, type SiteDiskQuota, installFsrm } from "../api/quota";
 import { configureGitDeployment, deployGit, getGitDeployment, type GitDeployment } from "../api/git";
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
@@ -478,7 +575,11 @@ const form = reactive({
   staticCompressionEnabled: true,
   dynamicCompressionEnabled: false,
   maximumUploadBytes: 31_457_280,
-  hotlinkProtectionEnabled: false
+  hotlinkProtectionEnabled: false,
+  hstsEnabled: false,
+  hstsMaxAgeSeconds: 31_536_000,
+  hstsIncludeSubDomains: false,
+  hstsPreload: false
 });
 const maximumUploadMegabytes = computed({
   get: () => Math.max(1, Math.round(form.maximumUploadBytes / 1_048_576)),
@@ -486,6 +587,32 @@ const maximumUploadMegabytes = computed({
     form.maximumUploadBytes = Math.max(1, value || 1) * 1_048_576;
   }
 });
+// Kullanıcı gün düşünür, protokol saniye konuşur. 0 GEÇERLİ bir değerdir: HSTS'i geri almanın
+// tek yolu max-age=0 göndermektir (başlığı silmek tarayıcının hafızasını temizlemez).
+const hstsMaxAgeDays = computed({
+  get: () => Math.round(form.hstsMaxAgeSeconds / 86_400),
+  set: (value: number) => {
+    form.hstsMaxAgeSeconds = Math.max(0, value || 0) * 86_400;
+  }
+});
+// Satır tabanlı düzenleme: "404 /hatalar/404.html" ve ".woff2 font/woff2". Girdi biçimi burada
+// yalnız AYRIŞTIRILIR; geçerlilik kararını sunucu verir (tek doğruluk kaynağı orası).
+const errorPagesText = ref("");
+const mimeTypesText = ref("");
+
+function parseErrorPages(): SiteErrorPage[] {
+  return splitLines(errorPagesText.value).map((line) => {
+    const [code, ...rest] = line.split(/\s+/);
+    return { statusCode: Number(code) || 0, path: rest.join(" ") };
+  });
+}
+
+function parseMimeTypes(): SiteMimeType[] {
+  return splitLines(mimeTypesText.value).map((line) => {
+    const [extension, ...rest] = line.split(/\s+/);
+    return { extension, mimeType: rest.join(" ") };
+  });
+}
 
 const sections = computed(() => [
   { id: "general", label: t("panel.hosting.general"), hint: t("panel.hosting.generalHint") },
@@ -493,6 +620,9 @@ const sections = computed(() => [
   { id: "traffic", label: t("panel.hosting.traffic"), hint: t("panel.hosting.trafficHint") },
   { id: "access", label: t("panel.hosting.access"), hint: t("panel.hosting.accessHint") },
   { id: "errors", label: t("panel.hosting.errorsPerformance"), hint: t("panel.hosting.errorsPerformanceHint") },
+  { id: "errorPages", label: t("panel.hosting.errorPages"), hint: t("panel.hosting.errorPagesHint") },
+  { id: "mime", label: t("panel.hosting.mime"), hint: t("panel.hosting.mimeHint") },
+  { id: "hsts", label: t("panel.hosting.hsts"), hint: t("panel.hosting.hstsHint") },
   { id: "quota", label: t("panel.hosting.quota"), hint: t("panel.hosting.quotaHint") },
   { id: "git", label: t("panel.hosting.git"), hint: t("panel.hosting.gitHint") },
   { id: "tools", label: t("panel.hosting.tools"), hint: t("panel.hosting.toolsHintShort") }
@@ -527,6 +657,12 @@ async function load() {
     form.dynamicCompressionEnabled = settings.dynamicCompressionEnabled;
     form.maximumUploadBytes = settings.maximumUploadBytes;
     form.hotlinkProtectionEnabled = settings.hotlinkProtectionEnabled;
+    form.hstsEnabled = settings.hstsEnabled;
+    form.hstsMaxAgeSeconds = settings.hstsMaxAgeSeconds;
+    form.hstsIncludeSubDomains = settings.hstsIncludeSubDomains;
+    form.hstsPreload = settings.hstsPreload;
+    errorPagesText.value = settings.customErrorPages.map((page) => `${page.statusCode} ${page.path}`).join("\n");
+    mimeTypesText.value = settings.mimeTypes.map((mime) => `${mime.extension} ${mime.mimeType}`).join("\n");
     defaultDocumentsText.value = settings.defaultDocuments.join("\n");
     deniedIps.value = settings.deniedIpAddresses.join("\n");
     allowedReferrers.value = settings.allowedReferrerHosts.join("\n");
@@ -545,13 +681,19 @@ async function save() {
   if (!siteName.value) return;
   busy.value = true;
   try {
-    await updateSiteHostingSettings(siteName.value, {
+    const saved = await updateSiteHostingSettings(siteName.value, {
       ...form,
       defaultDocuments: splitLines(defaultDocumentsText.value),
       deniedIpAddresses: splitLines(deniedIps.value),
       allowedReferrerHosts: splitLines(allowedReferrers.value),
-      protectedExtensions: protectedExtensions.value.split(",").map(item => item.trim()).filter(Boolean)
+      protectedExtensions: protectedExtensions.value.split(",").map(item => item.trim()).filter(Boolean),
+      customErrorPages: parseErrorPages(),
+      mimeTypes: parseMimeTypes()
     });
+    // Sunucu normalleştirilmiş hâli döner ("woff2" -> ".woff2", sıralı liste). Ekran onunla
+    // tazelenir ki kullanıcı SUNUCUDA DURANI görsün, yazdığını değil.
+    errorPagesText.value = saved.customErrorPages.map((page) => `${page.statusCode} ${page.path}`).join("\n");
+    mimeTypesText.value = saved.mimeTypes.map((mime) => `${mime.extension} ${mime.mimeType}`).join("\n");
     showNotice(t("panel.hosting.saved"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);

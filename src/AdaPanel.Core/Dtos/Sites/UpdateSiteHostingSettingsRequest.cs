@@ -27,4 +27,16 @@ public sealed class UpdateSiteHostingSettingsRequest
     public string[] AllowedReferrerHosts { get; set; } = [];
 
     public string[] ProtectedExtensions { get; set; } = [];
+
+    public SiteErrorPageDto[] CustomErrorPages { get; set; } = [];
+
+    public SiteMimeTypeDto[] MimeTypes { get; set; } = [];
+
+    public bool HstsEnabled { get; set; }
+
+    public int HstsMaxAgeSeconds { get; set; } = 31_536_000;
+
+    public bool HstsIncludeSubDomains { get; set; }
+
+    public bool HstsPreload { get; set; }
 }
