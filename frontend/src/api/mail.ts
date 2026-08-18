@@ -10,7 +10,7 @@ type ApiEnvelope<T> = {
 export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number; allocatedMB: number };
 export type MailAccount = { address: string; active: boolean; maxSizeMB: number; currentSizeMB: number };
 export type MailAlias = { address: string; target: string; active: boolean };
-export type MailList = { address: string; recipients: string[] };
+export type MailList = { address: string; description: string; recipients: string[] };
 export type MailListener = { name: string; protocol: string; binds: string[] };
 
 export type MailSpamSettings = {
@@ -88,12 +88,38 @@ export async function deleteMailAlias(address: string) {
   const response = await apiClient.delete<ApiEnvelope<MailWorkspace>>(`/mail/aliases/${encodeURIComponent(address)}`);
   return response.data.data;
 }
-export async function createMailList(domain: string, address: string, recipients: string[]) {
-  const response = await apiClient.post<ApiEnvelope<MailWorkspace>>("/mail/lists", { domain, address, recipients });
+export async function createMailList(domain: string, address: string, recipients: string[], description = "") {
+  const response = await apiClient.post<ApiEnvelope<MailWorkspace>>("/mail/lists", {
+    domain,
+    address,
+    description,
+    recipients
+  });
   return response.data.data;
 }
+
+// Aboneleri KOMPLE degistirir (toplu duzenleme).
 export async function setMailListRecipients(address: string, recipients: string[]) {
   const response = await apiClient.put<ApiEnvelope<MailWorkspace>>("/mail/lists/recipients", { address, recipients });
+  return response.data.data;
+}
+
+// Tek abone ekler/cikarir. `recipients` GONDERILMEZ: sunucu guncel kumeyi kendi okuyup ustune
+// fark uygular. Buradan tam liste gonderilseydi, ekran tazelenmeden once baskasinin ekledigi
+// abone sessizce silinirdi.
+export async function subscribeToMailList(address: string, subscriber: string) {
+  const response = await apiClient.put<ApiEnvelope<MailWorkspace>>("/mail/lists/recipients", {
+    address,
+    add: [subscriber]
+  });
+  return response.data.data;
+}
+
+export async function unsubscribeFromMailList(address: string, subscriber: string) {
+  const response = await apiClient.put<ApiEnvelope<MailWorkspace>>("/mail/lists/recipients", {
+    address,
+    remove: [subscriber]
+  });
   return response.data.data;
 }
 export async function deleteMailList(address: string) {

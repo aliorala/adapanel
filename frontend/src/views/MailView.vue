@@ -404,7 +404,11 @@
               </div>
             </label>
             <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.listRecipients") }}</span>
+              <span class="field-label">{{ t("panel.mail.listDescription") }}</span>
+              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" maxlength="512" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listSubscribers") }}</span>
               <textarea v-model="listForm.recipients" rows="3" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
               <small class="field-hint">{{ t("panel.mail.listRecipientsHint") }}</small>
             </label>
@@ -419,13 +423,36 @@
         <div class="data-table">
           <div class="data-row table-head list-row">
             <span>{{ t("panel.mail.listAddress") }}</span>
-            <span>{{ t("panel.mail.listRecipients") }}</span>
+            <span>{{ t("panel.mail.listSubscribers") }}</span>
             <span>{{ t("panel.software.action") }}</span>
           </div>
           <div v-for="list in workspace.lists" :key="list.address" class="data-row list-row">
-            <strong>{{ list.address }}</strong>
-            <span class="list-recipients">{{ list.recipients.join(", ") || "—" }}</span>
+            <div class="list-identity">
+              <strong>{{ list.address }}</strong>
+              <small v-if="list.description" class="list-description">{{ list.description }}</small>
+            </div>
+            <div class="list-subscribers">
+              <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
+                   yanlis kopyalayip o kisiyi sessizce dusurmek demekti. -->
+              <span v-for="subscriber in list.recipients" :key="subscriber" class="subscriber-chip">
+                {{ subscriber }}
+                <button
+                  type="button"
+                  class="chip-remove"
+                  v-bind="writeGate(busy)"
+                  :title="t('panel.mail.listUnsubscribe', { address: subscriber })"
+                  :aria-label="t('panel.mail.listUnsubscribe', { address: subscriber })"
+                  @click="unsubscribe(list.address, subscriber)"
+                >
+                  ×
+                </button>
+              </span>
+              <span v-if="list.recipients.length === 0" class="meta">{{ t("panel.mail.listNoSubscribers") }}</span>
+            </div>
             <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="subscribe(list.address)">
+                {{ t("panel.mail.listAddSubscriber") }}
+              </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
                 {{ t("panel.mail.listEdit") }}
               </button>
@@ -436,6 +463,11 @@
           </div>
           <p v-if="workspace.lists.length === 0" class="empty-state">{{ t("panel.mail.noLists") }}</p>
         </div>
+
+        <!-- DURUST SINIR: Plesk'te liste basina "kimler gonderebilir" ve "abonelikten cik" bagi
+             vardir; Stalwart'in MailingList nesnesinde bunlarin KARSILIGI YOKTUR (sema sunucudan
+             okundu). Panelde calismayan bir dugme gostermek yerine sinir acikca yazilir. -->
+        <p class="meta list-limitation">{{ t("panel.mail.listPolicyLimitation") }}</p>
 
         <div class="row-actions mail-advanced-toggle">
           <button type="button" class="secondary compact" @click="showMailAdvanced = !showMailAdvanced">
@@ -642,6 +674,8 @@ import {
   createMailList,
   deleteMailList,
   setMailListRecipients,
+  subscribeToMailList,
+  unsubscribeFromMailList,
   deleteMailAccount,
   deleteMailAlias,
   deleteMailDomain,
@@ -776,7 +810,7 @@ const diagLoading = ref(false);
 const showAccountForm = ref(false);
 const showAliasForm = ref(false);
 const showListForm = ref(false);
-const listForm = reactive({ localPart: "", recipients: "" });
+const listForm = reactive({ localPart: "", description: "", recipients: "" });
 const showMailAdvanced = ref(false);
 const listeners = ref<MailListener[] | null>(null);
 const loading = ref(false);
@@ -1281,11 +1315,53 @@ function parseRecipients(text: string): string[] {
 
 async function addList() {
   await run(async () => {
-    apply(await createMailList(selectedDomain.value, listForm.localPart, parseRecipients(listForm.recipients)));
+    apply(
+      await createMailList(
+        selectedDomain.value,
+        listForm.localPart,
+        parseRecipients(listForm.recipients),
+        listForm.description
+      )
+    );
     listForm.localPart = "";
+    listForm.description = "";
     listForm.recipients = "";
     showListForm.value = false;
     showNotice(t("panel.mail.listCreated"), false);
+  });
+}
+
+// Tek abone ekleme: sunucu guncel kumeyi okuyup ustune ekler; ekrandaki kopya gonderilmez.
+async function subscribe(address: string) {
+  const value = await prompt({
+    title: t("panel.mail.listAddSubscriberPrompt"),
+    message: address,
+    label: t("panel.mail.listSubscribers")
+  });
+  if (value === null) return;
+
+  const subscriber = value.trim();
+  if (!subscriber) return;
+
+  await run(async () => {
+    apply(await subscribeToMailList(address, subscriber));
+    showNotice(t("panel.mail.listSubscribed", { address: subscriber }), false);
+  });
+}
+
+// Abonelikten cikarma. Onay istenir cunku geri donusu YOKTUR: cikarilan kisi, bir daha
+// eklenene kadar listeye giden hicbir duyuruyu almaz ve bunu fark etmesinin bir yolu da yoktur.
+async function unsubscribe(address: string, subscriber: string) {
+  await confirm({
+    title: t("panel.confirm.unsubscribeMailListTitle", { name: subscriber }),
+    message: t("panel.mail.confirmUnsubscribe"),
+    impact: [`${t("panel.mail.listAddress")}: ${address}`, `${t("panel.mail.listSubscribers")}: ${subscriber}`],
+    action: async () => {
+      await run(async () => {
+        apply(await unsubscribeFromMailList(address, subscriber));
+        showNotice(t("panel.mail.listUnsubscribed", { address: subscriber }), false);
+      });
+    }
   });
 }
 
@@ -1310,7 +1386,7 @@ async function removeList(address: string) {
   const list = workspace.value?.lists.find((item) => item.address === address) ?? null;
   const impact = [`${t("panel.mail.listAddress")}: ${address}`];
   if (list?.recipients.length) {
-    impact.push(`${t("panel.mail.listRecipients")}: ${list.recipients.length}`);
+    impact.push(`${t("panel.mail.listSubscribers")}: ${list.recipients.length}`);
   }
 
   // Normal onay: yalnız dağıtım listesi silinir, alıcıların posta kutuları etkilenmez.
@@ -1670,6 +1746,69 @@ function showError(error: unknown) {
   overflow-wrap: anywhere;
   font-size: 0.82rem;
   color: var(--text-soft);
+}
+
+.list-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.list-description {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.list-subscribers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subscriber-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border-soft, var(--surface-2));
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+/* Cikarma dugmesi her zaman gorunur: yalnizca uzerine gelince beliren bir "x", dokunmatik
+   ekranda hic bulunamaz ve abone cikarmak imkansiz hale gelirdi. */
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chip-remove:hover:not(:disabled) {
+  background: var(--danger-soft, var(--surface-3, var(--surface-2)));
+  color: var(--danger, inherit);
+}
+
+.chip-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.list-limitation {
+  margin: 8px 0 0;
 }
 
 .dns-row {

@@ -294,7 +294,7 @@ public sealed class MailController(
             HttpContext,
             "mail.list.created",
             NormalizeAddress(request.Address, request.Domain),
-            $"Mailing list created with {request.Recipients.Count} recipient(s).");
+            $"Mailing list created with {request.Recipients.Count} subscriber(s).");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_created"));
     }
 
@@ -302,17 +302,62 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> SetListRecipientsAsync([FromBody] SetMailListRecipientsRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(request.Address), cancellationToken);
+
+        // Hiçbir şey istenmemişse çağrıyı sunucuya taşımayız: "kaydedildi" yanıtı dönüp hiçbir şey
+        // değiştirmemek, kullanıcıya işlem olmuş gibi görünür.
+        if (request.Recipients is null && request.Add.Count == 0 && request.Remove.Count == 0)
+        {
+            throw new Core.Common.AppException("mail.list_no_change", 400, 400);
+        }
+
         var workspace = await mailService.SetMailListRecipientsAsync(request, cancellationToken);
 
-        // Alıcı listesine yabancı bir adres eklemek, listeye giden her postayı dışarı taşır —
-        // alias ile aynı sınıftan bir sızdırma yolu. Bu yüzden alıcılar da yazılır (uzunsa kırpılır).
+        // Abone kümesine yabancı bir adres eklemek, listeye giden her postayı dışarı taşır —
+        // alias ile aynı sınıftan bir sızdırma yolu. Bu yüzden HANGİ adreslerin işlendiği yazılır;
+        // yalnız "güncellendi" demek, sızdırmanın kime yapıldığını cevapsız bırakırdı.
+        var changes = new List<string>();
+        if (request.Recipients is not null)
+        {
+            changes.Add($"set to: {FormatAddresses(request.Recipients)}");
+        }
+
+        if (request.Add.Count > 0)
+        {
+            changes.Add($"subscribed: {FormatAddresses(request.Add)}");
+        }
+
+        if (request.Remove.Count > 0)
+        {
+            changes.Add($"unsubscribed: {FormatAddresses(request.Remove)}");
+        }
+
         await auditService.AuditAsync(
             HttpContext,
             "mail.list.recipients_updated",
             request.Address,
-            $"Recipients set to: {string.Join(", ", request.Recipients)}");
+            $"Mailing list subscribers changed ({string.Join("; ", changes)}).");
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_updated"));
+    }
+
+    /// <summary>
+    /// Denetim kaydı için adres listesi. Uzun listeler KIRPILIR ama kaç adres olduğu yazılır:
+    /// kayıt satırının kendisi bir sızıntı kanalı olmamalı, yine de "kaç kişiye açıldı" sorusu
+    /// cevapsız kalmamalı.
+    /// </summary>
+    private const int AuditAddressLimit = 20;
+
+    private static string FormatAddresses(IReadOnlyCollection<string> addresses)
+    {
+        if (addresses.Count == 0)
+        {
+            return "(none)";
+        }
+
+        var shown = string.Join(", ", addresses.Take(AuditAddressLimit));
+        return addresses.Count > AuditAddressLimit
+            ? $"{shown} (+{addresses.Count - AuditAddressLimit} more, {addresses.Count} total)"
+            : shown;
     }
 
     [HttpDelete("lists/{address}")]
