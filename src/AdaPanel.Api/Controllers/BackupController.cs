@@ -257,6 +257,41 @@ public sealed class BackupController(
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.restored"));
     }
 
+    /// <summary>
+    /// "Yedekleri doğrula": kayıtların GERÇEKTEN durup durmadığını ölçer ve hedefte duran ama
+    /// kaydı olmayan (yetim) dosyaları raporlar. HİÇBİR ŞEYİ SİLMEZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden düğmeye bağlı:</b> uzak ölçüm kayıt başına bir ağ isteğidir. Listelemeye
+    /// bağlanması paneli her açılışta yavaşlatır ve hedefin hız sınırına takardı; ucuz olan
+    /// yerel ölçüm zaten her listelemede yapılıyor.
+    /// </para>
+    /// <para>
+    /// <b>Neden yalnız yönetici:</b> ölçüm sunucu genelindeki BÜTÜN kayıtları tarar ve hedefteki
+    /// dosya adlarını (başka kiracıların yedekleri dâhil) döndürür. Kapsamlı kullanıcıya açmak,
+    /// kiracı izolasyonunu deler.
+    /// </para>
+    /// </remarks>
+    [HttpPost("verify")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<BackupVerificationResultDto>>> VerifyAsync(CancellationToken cancellationToken)
+    {
+        var result = await backupService.VerifyBackupsAsync(cancellationToken);
+
+        await auditService.WriteAsync(
+            "backup.verified",
+            "backup",
+            $"Backup verification: {result.Checked} checked, {result.MissingLocal} missing locally, "
+            + $"{result.MissingRemote} missing remotely, {result.Unreachable} unreachable, "
+            + $"{result.Orphans.Count} orphan file(s).",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<BackupVerificationResultDto>.Ok(result, "backup.verified"));
+    }
+
     /// <summary>Zip yedeğinin içeriğine dizin bazlı gözatma (granüler geri yükleme).</summary>
     [HttpGet("{backupId}/entries")]
     public async Task<ActionResult<ApiResponse<BackupEntriesDto>>> GetEntriesAsync(
@@ -296,9 +331,13 @@ public sealed class BackupController(
     }
 
     /// <summary>
-    /// Yedeği siler (yerel dosya + kayıt; off-site uzak kopyaya dokunulmaz). Admin her yedeği,
-    /// müşteri/bayi yalnız etkin kapsamındaki SITE yedeklerini silebilir.
+    /// Yedeği siler: UZAK kopya + yerel dosya + kayıt. Admin her yedeği, müşteri/bayi yalnız
+    /// etkin kapsamındaki SITE yedeklerini silebilir.
     /// </summary>
+    /// <remarks>
+    /// Uzak kopya silinemezse istek <c>backup.remote_delete_failed</c> ile biter ve KAYIT
+    /// KORUNUR: kaydı silmek, uzak dosyayı panelin bir daha göremeyeceği bir yetime çevirirdi.
+    /// </remarks>
     [HttpDelete("{backupId}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteAsync(string backupId, CancellationToken cancellationToken)
     {
