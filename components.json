@@ -306,6 +306,23 @@
       "default": true
     },
     {
+      "id": "vandelay",
+      "displayName": "Vandelay (Posta Ice/Disa Aktarici)",
+      "version": "1.0.8",
+      "type": "zip",
+      "downloadUrl": "https://github.com/stalwartlabs/vandelay/releases/download/v1.0.8/vandelay-x86_64-pc-windows-msvc.zip",
+      "sha256": "3d43d6417544e7e8f0c8a79edc59f672c4070dd96acbeca31bc881bbabbe12d2",
+      "installDir": "%ProgramData%\\AdaPanel\\runtimes\\vandelay",
+      "postInstall": [],
+      "dependencies": [
+        "stalwart-mail"
+      ],
+      "serviceName": "",
+      "silentArgs": "",
+      "note": "Stalwart'in resmi hesap ice/disa aktaricisi. SITE BASINA posta yedegi bununla alinir: hesap basina tek bir SQLite arsivi, sunucu CALISIRKEN; geri yukleme YALNIZ hedef alan adina yazar. Kurulu degilse site yedegi posta iletilerini ICERMEZ ve bunu acikca soyler.",
+      "default": true
+    },
+    {
       "id": "stalwart-mail",
       "displayName": "Stalwart Mail Server",
       "version": "0.16.8",

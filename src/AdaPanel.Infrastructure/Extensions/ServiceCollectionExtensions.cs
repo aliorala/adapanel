@@ -117,11 +117,16 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWebStatisticsService, Statistics.WebStatisticsService>();
         // Mail: kurulu sunucuya göre yönlendirilen dispatcher. Stalwart sağlayıcısı hiç
         // değişmeden korunur; MailEnable kuruluysa router ona yönlendirir.
+        services.AddScoped<Mail.StalwartRuntime>();
         services.AddScoped<Mail.MailService>();
         services.AddScoped<Mail.MailEnableMailService>();
         services.AddScoped<IMailService, Mail.MailServiceRouter>();
+        // TEK ALAN ADININ postasını (iletiler dahil) arşivler/geri yükler — sunucu geneli posta
+        // yedeğinden farkı: servis DURDURULMAZ ve geri yükleme yalnız hedef alana yazar.
+        services.AddScoped<IMailAccountArchiver, Mail.StalwartAccountArchiver>();
         // Otomatik yapılandırmayı müşterinin alan adına bağlar (uçlar çalışıyordu ama istemciler
         // panele hiç ulaşmıyordu — istek IIS'e düşüyordu).
+        services.AddScoped<Mail.MailJmapProxyPublisher>();
         services.AddScoped<IMailAutodiscoverPublisher, Mail.MailAutodiscoverPublisher>();
         services.AddScoped<IDockerService, Docker.DockerService>();
         services.AddScoped<IAutomationService, Automation.AutomationService>();

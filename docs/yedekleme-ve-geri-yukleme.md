@@ -28,7 +28,7 @@ yeniden girilmeleri gerekir. Kullanıcılar, planlar, kapsamlar ve ayarlar geri 
 |---|---|---|
 | Dosyalar | Açık | Sitenin kök klasörü |
 | Yapılandırma | Açık | IIS binding / havuz / çalışma zamanı, JSON olarak |
-| Posta | Kapalı | Siteye ait posta alan adının hesap/alias listesi |
+| Posta | Kapalı | Hesap/alias listesi **ve** hesap başına gerçek posta kutuları (aşağıya bkz.) |
 | Veritabanları | Boş | Motor + ad çiftleri; boş bırakılırsa veritabanı **eklenmez** |
 
 > Veritabanı listesi boş bırakılan bir "tam site yedeği" aslında tam değildir. WordPress gibi
@@ -37,13 +37,57 @@ yeniden girilmeleri gerekir. Kullanıcılar, planlar, kapsamlar ve ayarlar geri 
 Seçilen veritabanlarının dökümü **aynı zip'in içine** (`databases/` klasörüne) girer; ayrı bir
 dosya aramanız gerekmez.
 
-### ⚠ Site yedeğindeki `mail/` klasörü posta kutusu DEĞİLDİR
+### Site yedeğinde posta: iki ayrı şey
 
-Arşivdeki `mail/<alan-adı>.json` yalnızca **hesap / alias / yönlendirme listesidir** — içinde
-**tek bir e-posta iletisi yoktur**. İletiler Stalwart'ın kendi deposunda yaşar ve o depodan tek bir
-alan adını ayırmak dosya kopyalayarak mümkün değildir. **Posta kutusu içeriği yalnızca sunucu
-geneli posta yedeğiyle korunur** (yukarıdaki tabloda "Posta yedeği"). Bu uyarı arşivin
-`manifest.json` dosyasına da yazılır.
+| Arşivdeki yer | Ne var | Ne yok |
+|---|---|---|
+| `mail/<alan-adı>.json` | Hesap / alias / yönlendirme **listesi** | İleti yok |
+| `mail-messages/<alan-adı>/<adres>.sqlite` | **Gerçek posta kutusu**: iletiler, klasörler, kimlikler | Parola yok (dışa aktarılamaz) |
+
+Posta kutuları Stalwart'ın resmî aracı **vandelay** ile, **hesap başına** ve **sunucu çalışırken**
+alınır. Geri yükleme **yalnız o alan adına** yazar; diğer müşterilerin postasına dokunmaz.
+
+> **Parolalar yedeğe giremez.** Sunucu yalnız özetlerini tutar. Hesap silinip yeniden
+> oluşturulduysa parolayı posta ekranından yeniden belirleyin; iletiler geri gelir.
+
+#### Posta iletileri arşive girmediğinde
+
+Yedek almadan önce bir **ön kontrol** yapılır: vandelay kurulu mu, ve Stalwart'ın duyurduğu JMAP
+adresine bu sunucudan ulaşılabiliyor mu? Ön kontrol geçmezse arşive posta **konmaz** ve bu
+gizlenmez:
+
+* `manifest.json` içindeki `parts` listesinde `mail-messages` **bulunmaz**,
+* `mailNote` alanı "mailbox MESSAGES are NOT included" uyarısını taşır,
+* `mailMessagesError` alanı **nedenini** yazar.
+
+Tek bir hesap bile alınamazsa **hiçbir hesap** arşive konmaz. Yarım bir posta arşivi en tehlikeli
+çıktıdır: kullanıcı postasının yedeklendiğini sanar, eksiği ancak geri yüklerken görür.
+
+#### JMAP vekili (ön koşul)
+
+vandelay, JMAP oturumunun **duyurduğu** adrese gitmek zorundadır ve Stalwart bu adresi her zaman
+`https://<ad>/jmap/` olarak üretir (port eklenemez). AdaPanel ise Stalwart'ın HTTP portunu (8080)
+bilerek yalnız loopback'te tutar. Bu yüzden IIS üzerinde **yalnızca** şu iki yol vekillenir:
+
+| Yol | Sonuç |
+|---|---|
+| `/.well-known/jmap`, `/jmap/…` | 127.0.0.1:8080'e geçer |
+| Aynı yollara dizin çıkma denemesi (`..`, `%2e%2e`, `%5c`) | **403 ile kesilir** |
+| Diğer her şey (Stalwart yönetim API'si `/api/` dâhil) | Vekile **hiç girmez**, sitenin kendi içeriğine düşer |
+
+Vekil **kimlik doğrulamaz**; JMAP'in kendi kimlik doğrulaması devrededir. Kurallar, posta otomatik
+yapılandırması yayınlanırken aynı işlemde yazılır.
+
+### Sunucu geneli posta yedeği neden duruyor?
+
+İkisi farklı işlere yarar ve biri diğerinin yerine geçmez:
+
+| | Site başına (`mail-messages/`) | Sunucu geneli (Posta yedeği) |
+|---|---|---|
+| Kapsam | Tek alan adı | Stalwart deposunun tamamı (yapılandırma, kuyruk, tüm alanlar) |
+| Servis | **Durmaz** | **Durdurulur** (depo açıkken kopyalanan yedek geri yüklenemez) |
+| Geri yükleme | Yalnız o alan adı | Tüm sunucu o günkü hâline döner |
+| Ne zaman | "Tek siteyi geri yükle" | Felaket kurtarma |
 
 ## 3. Yedeklerin klasör düzeni
 

@@ -22,7 +22,12 @@ public sealed partial class MailAutodiscoverPublisher(
     IConcurrencyLock concurrencyLock,
     IConfiguration configuration,
     IOptions<PanelRuntimeOptions> runtimeOptions,
-    ILogger<MailAutodiscoverPublisher> logger) : IMailAutodiscoverPublisher
+    ILogger<MailAutodiscoverPublisher> logger,
+    // İSTEĞE BAĞLI: JMAP vekili. Yayınlama eylemi zaten ARR ön koşullarını kuran ve web.config'e
+    // yazan TEK kullanıcı eylemidir; JMAP kuralları da AYNI eylemde, AYNI kilitle yazılır ki site
+    // başına posta yedeği çalışabilsin. Verilmemişse (dar kapsamlı testler) akış değişmez.
+    StalwartRuntime? stalwartRuntime = null,
+    MailJmapProxyPublisher? jmapPublisher = null) : IMailAutodiscoverPublisher
 {
     /// <summary>Panelin eklediği hizmet ana adları. Geri alma tam olarak bunları kaldırır.</summary>
     private static readonly string[] HizmetOnekleri = ["autodiscover.", "autoconfig."];
@@ -90,8 +95,50 @@ public sealed partial class MailAutodiscoverPublisher(
             await TrySecureAsync(site.Name, host, contactEmail, cancellationToken);
         }
 
+        // 6) JMAP vekili (best-effort). Site BAŞINA posta yedeğinin ön koşuludur: Stalwart'ın
+        //    duyurduğu adres 443'ten karşılanmazsa vandelay oraya ulaşamaz ve site yedekleri posta
+        //    İLETİLERİNİ içeremez. Başarısızlık otomatik yapılandırmayı ÖLDÜRMEZ — ayrı işlerdir;
+        //    ve yedek tarafı zaten kendi ÖN KONTROLÜNÜ yapıp gerçeği söyler.
+        await TryPublishJmapProxyAsync(cancellationToken);
+
         var taze = await FindSiteAsync(alan, cancellationToken) ?? site;
         return await BuildReportAsync(alan, taze, cancellationToken);
+    }
+
+    /// <summary>
+    /// JMAP vekilini, Stalwart'ın DUYURDUĞU ana adı servis eden sitede kurar.
+    /// </summary>
+    /// <remarks>
+    /// Ana ad tahmin EDİLMEZ, sunucudan okunur: kural başka bir ana adın sitesine yazılırsa vekil
+    /// yazılmış ama ölü olurdu ve bunu ancak yedek alınırken fark ederdik.
+    /// </remarks>
+    private async Task TryPublishJmapProxyAsync(CancellationToken cancellationToken)
+    {
+        if (stalwartRuntime is null || jmapPublisher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var apiUrl = await stalwartRuntime.GetAdvertisedApiUrlAsync(cancellationToken);
+            var host = StalwartRuntime.HostOf(apiUrl);
+            if (host.Length == 0)
+            {
+                logger.LogWarning("JMAP vekili kurulamadı: Stalwart bir apiUrl duyurmadı.");
+                return;
+            }
+
+            var siteName = await jmapPublisher.PublishAsync(host, cancellationToken);
+            if (siteName is not null)
+            {
+                logger.LogInformation("JMAP vekili yayınlandı: {Host} → {Site}", host, siteName);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "JMAP vekili yayınlanamadı; site yedekleri posta iletilerini içermeyebilir.");
+        }
     }
 
     // --- Geri alma ---

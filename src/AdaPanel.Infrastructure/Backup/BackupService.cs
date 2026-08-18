@@ -28,7 +28,11 @@ public sealed class BackupService(
     // etsin diye. Bunlar verilmemişse abonelik yedeği AÇIKÇA reddedilir (sessizce eksik yedek
     // üretmek yerine).
     ICustomerScopeService? customerScopes = null,
-    IDatabaseOwnershipService? databaseOwnership = null) : IBackupService
+    IDatabaseOwnershipService? databaseOwnership = null,
+    // İSTEĞE BAĞLI: site yedeğine GERÇEK posta (ileti) koyan arşivleyici. Verilmemişse site yedeği
+    // eskisi gibi yalnız hesap/alias ENVANTERİ taşır ve bunu manifestte AÇIKÇA söyler — sessizce
+    // "posta dahil" demez.
+    IMailAccountArchiver? mailArchiver = null) : IBackupService
 {
     private const string IndexPath = "config/backups.json";
 
@@ -521,13 +525,28 @@ public sealed class BackupService(
     /// de aynı zip'in <c>databases/</c> klasörüne girer; ayrı bir dosya aramak gerekmez.
     /// </para>
     /// <para>
-    /// <b>UYARI — <c>mail/</c> POSTA KUTUSU DEĞİLDİR.</b> Bu klasördeki JSON, alan adının
-    /// hesap/alias/yönlendirme ENVANTERİDİR; hiçbir İLETİ içermez. İletiler Stalwart'ın RocksDB
-    /// deposunda yaşar; tek bir alan adını o depodan dosya kopyalayarak ayırmak mümkün değildir.
-    /// Posta kutusu içeriği YALNIZCA sunucu geneli posta yedeğiyle
-    /// (<see cref="BackupMailAsync"/>) korunur. Bu ayrım arşivin <c>manifest.json</c> dosyasına da
-    /// yazılır: "mail" parçasını görüp postasının yedeklendiğini sanan biri, geri getirilemeyeceğini
-    /// ancak felaket anında öğrenirdi.
+    /// <b>POSTA İKİ AYRI ŞEY OLARAK DURUR:</b>
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>
+    ///   <c>mail/&lt;alan&gt;.json</c> — hesap/alias/yönlendirme ENVANTERİ. İleti İÇERMEZ.
+    ///   </description></item>
+    ///   <item><description>
+    ///   <c>mail-messages/&lt;alan&gt;/&lt;adres&gt;.sqlite</c> — GERÇEK posta kutuları (iletiler,
+    ///   klasörler, kimlikler). Hesap başına, Stalwart'ın resmî aracı <c>vandelay</c> ile, sunucu
+    ///   ÇALIŞIRKEN alınır ve YALNIZ bu alan adına geri yüklenir.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// İletiler alınamazsa (vandelay kurulu değil, JMAP ucu ulaşılamaz, bir hesap düştü) arşiv
+    /// "posta dahil" DEMEZ: <c>mail-messages</c> parçası eklenmez ve <c>manifest.json</c> hem
+    /// uyarıyı hem NEDENİNİ taşır. Bu ayrım hayatidir — geri yüklenemeyecek bir arşive güvenip
+    /// bunu ancak felaket anında öğrenmek, hiç yedek almamaktan kötüdür.
+    /// </para>
+    /// <para>
+    /// Sunucu geneli posta yedeği (<see cref="BackupMailAsync"/>) KALDIRILMADI ve kaldırılmamalı:
+    /// o, Stalwart deposunun tamamını (yapılandırma, kuyruk, bütün alan adları) kapsayan FELAKET
+    /// KURTARMA yedeğidir ve servisi durdurur. Buradaki ise tek siteyi ayağa kaldırmak içindir.
     /// </para>
     /// </remarks>
     public async Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default)
@@ -570,6 +589,7 @@ public sealed class BackupService(
 
         // profesyonel panel benzeri tam-site yedeği: tek .zip içinde files/ + config/ + databases/ + mail/.
         var includedParts = new List<string>();
+        var mailMessages = MailMessageOutcome.NotRequested;
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
@@ -601,19 +621,13 @@ public sealed class BackupService(
 
             if (request.IncludeMail)
             {
+                var mailDomain = site.Name.ToLowerInvariant();
+
                 try
                 {
-                    // DİKKAT — BU BİR POSTA KUTUSU YEDEĞİ DEĞİLDİR.
-                    //
-                    // Yazılan şey hesap/alias/yönlendirme ENVANTERİDİR; TEK BİR İLETİ içermez.
-                    // İletiler Stalwart'ın RocksDB deposunda yaşar ve o depodan tek bir alan adını
-                    // dosya kopyalayarak ayırmak MÜMKÜN DEĞİLDİR (tek depo, paylaşılan indeksler);
-                    // sunucu geneli posta yedeği bu yüzden ayrı bir akıştır (BackupMailAsync).
-                    //
-                    // Bu ayrım arşivin manifest'ine de yazılır: "mail" parçasını görüp postasının
-                    // yedeklendiğini sanan biri, felaket anında geri getirilemeyecek olanı ancak o
-                    // an öğrenirdi. Yarım bir söz, hiç söz vermemekten kötüdür.
-                    var mailDomain = site.Name.ToLowerInvariant();
+                    // (1) ENVANTER: hesap/alias/yönlendirme listesi. TEK BİR İLETİ İÇERMEZ.
+                    // İletiler (2)'de ayrıca arşivlenir; envanter, iletiler alınamasa bile hesapların
+                    // yeniden kurulabilmesi için değerlidir ve bu yüzden korunuyor.
                     var mailWorkspace = await mailService.GetWorkspaceAsync(mailDomain, cancellationToken);
                     var mailJson = System.Text.Json.JsonSerializer.Serialize(mailWorkspace, BackupJsonOptions);
                     AddTextEntry(archive, $"mail/{mailDomain}.json", mailJson);
@@ -622,6 +636,17 @@ public sealed class BackupService(
                 catch
                 {
                     // Mail kurulu değilse/alan adı yoksa sessizce atla — yedek yine de tamam.
+                }
+
+                // (2) GERÇEK POSTA (İLETİLER). Hesap başına vandelay arşivi; sunucu ÇALIŞIRKEN.
+                //
+                // KISMİ BAŞARI DÜRÜSTÇE TAŞINIR: tek bir hesap bile alınamazsa "mail-messages"
+                // parçası EKLENMEZ ve manifest neyin eksik olduğunu söyler. Geri yüklenemeyecek bir
+                // arşiv üretip "yedeklendi" demek, hiç yedeklememekten KÖTÜDÜR.
+                mailMessages = await TryArchiveMailMessagesAsync(archive, mailDomain, cancellationToken);
+                if (mailMessages.Included)
+                {
+                    includedParts.Add("mail-messages");
                 }
             }
 
@@ -638,12 +663,13 @@ public sealed class BackupService(
                 note = artimsal
                     ? "Incremental link: files/ carries CHANGED files only; database dumps are always FULL."
                     : "Full backup.",
-                // Arşivi açan kişi "mail/" klasörünü görüp postasının yedeklendiğini SANMAMALI:
-                // burada yalnız hesap/alias envanteri var, ileti YOK. Yanlış güven, felaket anında
-                // geri getirilemeyen posta demektir.
-                mailNote = includedParts.Contains("mail-inventory")
-                    ? "mail/ holds the ACCOUNT AND ALIAS INVENTORY only. It contains NO messages/mailbox data. Mailbox contents live in the Stalwart store and are covered ONLY by the server-wide mail backup."
-                    : string.Empty
+                // POSTANIN GERÇEĞİ TEK CÜMLEDE. Arşivi açan kişi "mail/" klasörünü görüp
+                // postasının yedeklendiğini SANMAMALI; burada ne olduğu ve neyin OLMADIĞI açıkça
+                // yazılır. Yanlış güven, felaket anında geri getirilemeyen posta demektir.
+                mailNote = MailNote(includedParts, mailMessages),
+                // İletiler istendi ama alınamadıysa NEDENİ de arşivde durur: "posta neden yok"
+                // sorusu yedeğin kendisinden cevaplanabilmeli.
+                mailMessagesError = mailMessages.Reason
             }, BackupJsonOptions);
             AddTextEntry(archive, "manifest.json", manifest);
         }
@@ -659,6 +685,103 @@ public sealed class BackupService(
             cancellationToken,
             plan.Stamp,
             plan.Stamp is null ? null : indeks);
+    }
+
+    // =====================================================================================
+    // SİTE YEDEĞİNDE POSTA (İLETİLER)
+    // =====================================================================================
+
+    /// <summary>Site arşivinde hesap arşivlerinin durduğu klasör.</summary>
+    internal const string MailMessagesPrefix = "mail-messages/";
+
+    /// <summary>Posta iletilerinin arşive girip girmediği ve GİRMEDİYSE nedeni.</summary>
+    internal readonly record struct MailMessageOutcome(bool Included, string Reason)
+    {
+        internal static readonly MailMessageOutcome NotRequested = new(false, string.Empty);
+    }
+
+    /// <summary>
+    /// Alan adının bütün posta kutularını (iletiler dahil) arşive koyar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>HEPSİ YA DA HİÇBİRİ.</b> Bir hesap bile alınamazsa arşive HİÇBİR hesap arşivi konmaz ve
+    /// parça "dahil" işaretlenmez. Yarım bir posta arşivi en tehlikeli çıktıdır: kullanıcı
+    /// postasının yedeklendiğini sanır, geri yüklerken eksiği ancak o an görür.
+    /// </para>
+    /// <para>
+    /// Arşivleyici verilmemişse (dar kapsamlı testler, vandelay kurulu değil) bu bir HATA değildir;
+    /// yedek yine tamamlanır ama "posta dahil" DEMEZ ve nedeni manifeste yazılır.
+    /// </para>
+    /// </remarks>
+    private async Task<MailMessageOutcome> TryArchiveMailMessagesAsync(
+        ZipArchive archive,
+        string mailDomain,
+        CancellationToken cancellationToken)
+    {
+        if (mailArchiver is null)
+        {
+            return new MailMessageOutcome(false,
+                "Posta arşivleyici (vandelay) yapılandırılmamış; bu yedek posta İLETİLERİNİ içermiyor.");
+        }
+
+        // Hesap arşivleri önce geçici bir klasöre yazılır: vandelay dosyaya yazan bir araçtır,
+        // doğrudan zip akışına yazamaz.
+        var temp = Path.Combine(Path.GetTempPath(), "ada-mail-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var sonuc = await mailArchiver.ArchiveDomainAsync(mailDomain, temp, cancellationToken);
+            if (!sonuc.IsComplete)
+            {
+                var neden = sonuc.Failures.Count > 0
+                    ? string.Join(" | ", sonuc.Failures)
+                    : $"'{mailDomain}' için arşivlenecek posta hesabı bulunamadı.";
+                logger?.LogWarning("Site yedeğine posta iletileri KONMADI ({Domain}): {Reason}", mailDomain, neden);
+                return new MailMessageOutcome(false, neden);
+            }
+
+            foreach (var hesap in sonuc.Accounts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                archive.CreateEntryFromFile(
+                    hesap.FilePath,
+                    $"{MailMessagesPrefix}{mailDomain}/{Path.GetFileName(hesap.FilePath)}",
+                    CompressionLevel.Optimal);
+            }
+
+            return new MailMessageOutcome(true, string.Empty);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger?.LogWarning(exception, "Site yedeğine posta iletileri konamadı: {Domain}", mailDomain);
+            return new MailMessageOutcome(false, "Posta arşivlenemedi: " + exception.Message);
+        }
+        finally
+        {
+            try { if (Directory.Exists(temp)) { Directory.Delete(temp, recursive: true); } } catch { /* en iyi çaba */ }
+        }
+    }
+
+    /// <summary>
+    /// Manifest'in posta cümlesi — TEK kaynak. Üç durum vardır ve üçü de farklı şey söyler:
+    /// iletiler var, iletiler istendi ama alınamadı, posta hiç istenmedi.
+    /// </summary>
+    internal static string MailNote(IReadOnlyCollection<string> includedParts, MailMessageOutcome mailMessages)
+    {
+        if (mailMessages.Included)
+        {
+            return "mail-messages/ holds PER-ACCOUNT mailbox archives (messages included) and can be restored for THIS DOMAIN ALONE. mail/ additionally holds the account/alias inventory.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(mailMessages.Reason))
+        {
+            return "WARNING: mailbox MESSAGES are NOT included in this archive (" + mailMessages.Reason +
+                   "). mail/ holds the ACCOUNT AND ALIAS INVENTORY only. Mailbox contents are covered ONLY by the server-wide mail backup.";
+        }
+
+        return includedParts.Contains("mail-inventory")
+            ? "mail/ holds the ACCOUNT AND ALIAS INVENTORY only. It contains NO messages/mailbox data. Mailbox contents live in the Stalwart store and are covered ONLY by the server-wide mail backup."
+            : string.Empty;
     }
 
     // =====================================================================================
@@ -3313,6 +3436,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 if (sonHalka)
                 {
                     await ImportDatabasesFromArchiveAsync(archive, "databases/", warnings, cancellationToken);
+
+                    // POSTA da YALNIZ SON HALKADAN: hesap arşivleri her halkada TAM'dır (artımsal
+                    // değildir), sırayla uygulamak aynı kutuyu n kez yazmak olurdu.
+                    await RestoreMailMessagesFromArchiveAsync(archive, warnings, cancellationToken);
                 }
             }
             finally
@@ -3322,6 +3449,118 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
 
         return new RestoreOutcome(warnings, preservedPath);
+    }
+
+    /// <summary>
+    /// Site arşivindeki hesap posta arşivlerini sunucuya geri yazar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>YALNIZ ARŞİVDEKİ ALAN ADINA YAZAR.</b> Hedef alan adı arşivin klasör yapısından
+    /// (<c>mail-messages/&lt;alan&gt;/</c>) okunur ve her hesap arşivi kendi alan adına uygulanır;
+    /// arşivde olmayan hiçbir alan adına, hiçbir hesaba DOKUNULMAZ. Sunucu geneli posta geri
+    /// yüklemesinin (RestoreMailAsync) aksine burada servis DURDURULMAZ.
+    /// </para>
+    /// <para>
+    /// Arşivde posta yoksa sessizce geçilir — bu bir hata değildir (posta istenmemiş ya da ön
+    /// kontrol geçmemiş olabilir; o durum yedeğin manifestinde zaten yazılıdır).
+    /// </para>
+    /// </remarks>
+    private async Task RestoreMailMessagesFromArchiveAsync(
+        ZipArchive archive,
+        List<BackupRestoreWarningDto> warnings,
+        CancellationToken cancellationToken)
+    {
+        // Alan adı → o alana ait arşiv girdileri.
+        var alanlar = new Dictionary<string, List<ZipArchiveEntry>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in archive.Entries)
+        {
+            if (!entry.FullName.StartsWith(MailMessagesPrefix, StringComparison.OrdinalIgnoreCase) ||
+                !entry.FullName.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var kalan = entry.FullName[MailMessagesPrefix.Length..];
+            var ayirici = kalan.IndexOf('/');
+            if (ayirici <= 0)
+            {
+                continue;
+            }
+
+            var alan = kalan[..ayirici];
+            if (!alanlar.TryGetValue(alan, out var liste))
+            {
+                alanlar[alan] = liste = [];
+            }
+
+            liste.Add(entry);
+        }
+
+        if (alanlar.Count == 0)
+        {
+            return;
+        }
+
+        if (mailArchiver is null)
+        {
+            // Arşivde posta VAR ama geri yükleyecek araç YOK. SESSİZ GEÇİLMEZ: kullanıcı sitesinin
+            // tam geri yüklendiğini sanıp postasının gelmediğini sonra fark ederdi.
+            // MEVCUT ve ÇEVİRİSİ OLAN anahtar kullanılıyor ("Posta kutusu yeniden kurulamadı:
+            // {target}") — durumu birebir anlatıyor. Yeni bir anahtar uydurmak, çevirisi olmayan
+            // HAM bir anahtarın ekranda görünmesi demekti; özgül açıklama Detail'de taşınır.
+            // (Aynı karar MailAutodiscoverPublisher'da da verilmişti.)
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.mail_account_failed",
+                Target = string.Join(", ", alanlar.Keys),
+                Detail = "Arşivde posta kutuları var ama vandelay arşivleyicisi yapılandırılmamış; posta geri YÜKLENMEDİ."
+            });
+            return;
+        }
+
+        foreach (var (alan, girdiler) in alanlar)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var temp = Path.Combine(Path.GetTempPath(), "ada-mailrestore-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(temp);
+            try
+            {
+                foreach (var entry in girdiler)
+                {
+                    // Girdi adı arşivden gelir → yol birleştirmeden ÖNCE yalnız dosya adına indir.
+                    // Ham adı Path.Combine'a vermek, ayırıcı içeren bir adın hedef klasörün DIŞINA
+                    // yazmasına izin verirdi.
+                    var hedef = Path.Combine(temp, Path.GetFileName(entry.FullName));
+                    entry.ExtractToFile(hedef, overwrite: true);
+                }
+
+                var hatalar = await mailArchiver.RestoreDomainAsync(alan, temp, cancellationToken);
+                foreach (var hata in hatalar)
+                {
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.mail_account_failed",
+                        Target = alan,
+                        Detail = hata
+                    });
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.mail_account_failed",
+                    Target = alan,
+                    Detail = exception.Message
+                });
+            }
+            finally
+            {
+                try { Directory.Delete(temp, recursive: true); } catch { /* en iyi çaba */ }
+            }
+        }
     }
 
     /// <summary>

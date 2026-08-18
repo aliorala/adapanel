@@ -32,6 +32,10 @@ public sealed class MailService(
     IIisSiteService iisSiteService,
     IDnsService dnsService,
     AdaPanelDbContext dbContext,
+    // Araç YERİ + yönetici kimliği artık TEK kaynaktan gelir (bkz. StalwartRuntime): aynı çözümleme
+    // vandelay için de gerekiyor ve iki kopya, parolanın yeri değiştiğinde birinin sessizce eski
+    // yere bakmaya devam etmesi demekti.
+    StalwartRuntime runtime,
     ILogger<MailService> logger) : IMailService
 {
     /// <summary>
@@ -1836,85 +1840,15 @@ public sealed class MailService(
         ["STALWART_PASSWORD"] = password
     };
 
-    private async Task<string?> ResolveCliAsync(CancellationToken cancellationToken)
-    {
-        // 1) Panel üzerinden kurulan bileşenin dizini.
-        var component = await dbContext.InstalledComponents
-            .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.ComponentId == CliComponentId && item.Status == ComponentInstallStatus.Installed, cancellationToken);
+    private Task<string?> ResolveCliAsync(CancellationToken cancellationToken)
+        => runtime.ResolveExecutableAsync(
+            CliComponentId,
+            "stalwart-cli.exe",
+            "%ProgramData%\\AdaPanel\\runtimes\\stalwart-cli",
+            cancellationToken);
 
-        if (component is not null && !string.IsNullOrWhiteSpace(component.InstallDir) && Directory.Exists(component.InstallDir))
-        {
-            var found = Directory.EnumerateFiles(component.InstallDir, "stalwart-cli.exe", SearchOption.AllDirectories).FirstOrDefault();
-            if (found is not null)
-            {
-                return found;
-            }
-        }
-
-        // 2) Varsayılan kurulum kökü.
-        var defaultRoot = Environment.ExpandEnvironmentVariables("%ProgramData%\\AdaPanel\\runtimes\\stalwart-cli");
-        if (Directory.Exists(defaultRoot))
-        {
-            var found = Directory.EnumerateFiles(defaultRoot, "stalwart-cli.exe", SearchOption.AllDirectories).FirstOrDefault();
-            if (found is not null)
-            {
-                return found;
-            }
-        }
-
-        // 3) PATH üzerinden.
-        try
-        {
-            var probe = await ProcessRunner.RunAsync("stalwart-cli", "--version", cancellationToken: cancellationToken);
-            if (probe.Success || probe.ExitCode == 0)
-            {
-                return "stalwart-cli";
-            }
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            // bulunamadı
-        }
-
-        return null;
-    }
-
-    private async Task<string?> GetAdminPasswordAsync(CancellationToken cancellationToken)
-    {
-        var config = await fileStore.ReadAsync<MailConfig?>(ConfigPath, null, cancellationToken);
-        if (config is not null && !string.IsNullOrWhiteSpace(config.AdminPasswordProtected))
-        {
-            try
-            {
-                return secretProtector.Unprotect(config.AdminPasswordProtected);
-            }
-            catch
-            {
-                // bileşen parolasına düş
-            }
-        }
-
-        var component = await dbContext.InstalledComponents
-            .AsNoTracking()
-            .FirstOrDefaultAsync(item => item.ComponentId == ServerComponentId && item.Status == ComponentInstallStatus.Installed, cancellationToken);
-
-        if (component is null || string.IsNullOrWhiteSpace(component.ProtectedConfigurationJson))
-        {
-            return null;
-        }
-
-        try
-        {
-            var payload = secretProtector.Unprotect(component.ProtectedConfigurationJson);
-            var configuration = JsonSerializer.Deserialize<Dictionary<string, string>>(payload, SerializerOptions);
-            return configuration is not null && configuration.TryGetValue(GeneratedPasswordKey, out var generated) ? generated : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private Task<string?> GetAdminPasswordAsync(CancellationToken cancellationToken)
+        => runtime.GetAdminPasswordAsync(cancellationToken);
 
     private static IReadOnlyList<JsonElement> ParseItems(string json)
     {
