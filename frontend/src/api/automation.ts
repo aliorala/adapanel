@@ -9,7 +9,20 @@ type ApiEnvelope<T> = {
 
 export type AutomationSettings = {
   autoBackupEnabled: boolean;
+  /**
+   * interval | daily | weekly | monthly.
+   * `interval` eski davranıştır (son çalışmadan N saat sonra) ve varsayılandır; takvim
+   * modlarında yedek SABİT bir saatte alınır ve elle tetikleme o saati kaydırmaz.
+   */
+  backupScheduleMode: string;
   backupIntervalHours: number;
+  /** Takvim modlarında çalışma saati — SUNUCUNUN yerel saati, tarayıcının değil. */
+  backupScheduleHour: number;
+  backupScheduleMinute: number;
+  /** 0 = Pazar … 6 = Cumartesi. */
+  backupScheduleDayOfWeek: number;
+  /** 1-31; ay o günü çekmiyorsa sunucu ayın son gününü kullanır. */
+  backupScheduleDayOfMonth: number;
   backupRetentionDays: number;
   backupSites: boolean;
   backupDatabases: boolean;
@@ -58,6 +71,12 @@ export type AutomationStatus = {
   lastUpdateCheckStatus: string;
   lastUpdateCheckDetails: string;
   pendingComponentUpdates: number;
+  /** Sunucunun saat dilimi kimliği; yedek saatinin hangi saate göre olduğunu ekran bununla söyler. */
+  serverTimeZoneId: string;
+  serverTimeZoneDisplayName: string;
+  serverUtcOffsetMinutes: number;
+  /** Sunucunun şu anki yerel saati (ISO, ofsetsiz). */
+  serverLocalTime: string;
 };
 
 export async function getAutomation() {

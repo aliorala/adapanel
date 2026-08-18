@@ -32,14 +32,13 @@
       </div>
 
       <div v-if="form.autoBackupEnabled" class="form-grid">
-        <label class="stacked-field">
-          <span class="field-label">{{ t("panel.automation.frequency") }}</span>
-          <select v-model.number="form.backupIntervalHours">
-            <option :value="24">{{ t("panel.automation.freqDaily") }}</option>
-            <option :value="168">{{ t("panel.automation.freqWeekly") }}</option>
-            <option :value="720">{{ t("panel.automation.freqMonthly") }}</option>
-          </select>
-        </label>
+        <!--
+          ZAMANLAMA. Eskiden burada YALNIZCA "kaç saatte bir" vardı ve yedeğin SAATİ ilk elle
+          tetiklenen ana kilitleniyordu (17 Ağustos 23:50'de bir kez "Şimdi yedekle" denince
+          gecelik yedek 23:50'ye taşındı). Artık saat seçilebiliyor; alanlar iki ekranda ortak
+          bileşenden geliyor.
+        -->
+        <BackupScheduleFields :plan="schedulePlan" />
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.automation.retentionDays") }}</span>
           <input v-model.number="form.backupRetentionDays" type="number" min="0" max="3650" />
@@ -122,6 +121,15 @@
         <summary>{{ t("panel.common.technicalDetails") }}</summary>
         <pre>{{ remoteTestResult.details }}</pre>
       </details>
+
+      <!-- Saat SUNUCUYA aittir; panele başka bir saat diliminden bağlanan yönetici bunu bilmeli.
+           Bilgi sunucudan gelmediyse satır hiç çizilmez (uydurma dilim gösterilmez). -->
+      <p v-if="form.autoBackupEnabled && scheduleIsCalendar && serverTimeZoneLabel" class="field-hint">
+        {{ t("panel.schedule.serverTimeHint", { zone: serverTimeZoneLabel, now: serverLocalTimeLabel }) }}
+      </p>
+      <p v-if="form.autoBackupEnabled && scheduleIsCalendar" class="field-hint">
+        {{ t("panel.schedule.catchUpHint") }}
+      </p>
 
       <p class="field-hint">
         {{ t("panel.automation.lastRun") }}:
@@ -268,6 +276,8 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
+import BackupScheduleFields from "../components/BackupScheduleFields.vue";
+import { bosProgram, type BackupSchedulePlan } from "../api/schedule";
 import {
   getAutomation,
   runAutomationBackup,
@@ -291,9 +301,25 @@ const noticeError = ref(false);
 const remotePassword = ref("");
 const testingRemote = ref(false);
 const remoteTestResult = ref<BackupRemoteTestResult | null>(null);
+/**
+ * Program alanları ORTAK biçimde tutulur (bkz. api/schedule.ts): alan bileşeni iki ekranda da
+ * aynı nesneyle çalışsın diye. Yükleme ve kaydetme sırasında `form` ile eşlenir.
+ */
+const schedulePlan = reactive<BackupSchedulePlan>(bosProgram());
+const scheduleIsCalendar = computed(() => schedulePlan.mode !== "interval");
+const serverTimeZoneLabel = computed(
+  () => status.value?.serverTimeZoneDisplayName || status.value?.serverTimeZoneId || ""
+);
+const serverLocalTimeLabel = computed(() => (status.value?.serverLocalTime || "").replace("T", " "));
+
 const form = reactive<AutomationSettings>({
   autoBackupEnabled: false,
+  backupScheduleMode: "interval",
   backupIntervalHours: 24,
+  backupScheduleHour: 3,
+  backupScheduleMinute: 0,
+  backupScheduleDayOfWeek: 1,
+  backupScheduleDayOfMonth: 1,
   backupRetentionDays: 14,
   backupSites: true,
   backupDatabases: false,
@@ -346,7 +372,19 @@ async function refresh() {
 
 async function save() {
   await run(async () => {
-    applyStatus(await updateAutomation({ ...form, backupRemotePassword: remotePassword.value }));
+    applyStatus(
+      await updateAutomation({
+        ...form,
+        // Ortak program biçimi burada API alan adlarına çevrilir.
+        backupScheduleMode: schedulePlan.mode,
+        backupIntervalHours: schedulePlan.intervalHours,
+        backupScheduleHour: schedulePlan.hour,
+        backupScheduleMinute: schedulePlan.minute,
+        backupScheduleDayOfWeek: schedulePlan.dayOfWeek,
+        backupScheduleDayOfMonth: schedulePlan.dayOfMonth,
+        backupRemotePassword: remotePassword.value
+      })
+    );
     remotePassword.value = "";
     showNotice(t("panel.automation.saved"), false);
   });
@@ -398,6 +436,16 @@ async function run(operation: () => Promise<void>) {
 function applyStatus(next: AutomationStatus) {
   status.value = next;
   Object.assign(form, next.settings);
+  // Sunucu değerleri NORMALİZE dönüyor (mod/saat/gün sınırları orada uygulanıyor); ekran onları
+  // olduğu gibi alır, kendi kuralını uydurmaz.
+  Object.assign(schedulePlan, {
+    mode: next.settings.backupScheduleMode,
+    intervalHours: next.settings.backupIntervalHours,
+    hour: next.settings.backupScheduleHour,
+    minute: next.settings.backupScheduleMinute,
+    dayOfWeek: next.settings.backupScheduleDayOfWeek,
+    dayOfMonth: next.settings.backupScheduleDayOfMonth
+  });
   settingsLoaded.value = true;
 }
 

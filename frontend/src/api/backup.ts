@@ -297,7 +297,19 @@ export type SubscriptionBackupSchedule = {
   /** Boş olabilir (ad çözülemedi); ekran kimliğe düşmelidir. */
   userName: string;
   enabled: boolean;
+  /**
+   * interval | daily | weekly | monthly. Sunucu geneli programla AYNI kavram; `interval`
+   * varsayılandır, yani mevcut programlar hiç değişmeden sürer.
+   */
+  scheduleMode: string;
   intervalHours: number;
+  /** Takvim modlarında çalışma saati — SUNUCUNUN yerel saati. */
+  scheduleHour: number;
+  scheduleMinute: number;
+  /** 0 = Pazar … 6 = Cumartesi. */
+  scheduleDayOfWeek: number;
+  /** 1-31; ay o günü çekmiyorsa sunucu ayın son gününü kullanır. */
+  scheduleDayOfMonth: number;
   /** 0 = süreye göre silme yok. */
   retentionDays: number;
   /** 0 = sayıya göre silme yok. */
@@ -330,7 +342,12 @@ export type SubscriptionBackupSchedule = {
 
 export type SubscriptionBackupSchedulePayload = {
   enabled: boolean;
+  scheduleMode: string;
   intervalHours: number;
+  scheduleHour: number;
+  scheduleMinute: number;
+  scheduleDayOfWeek: number;
+  scheduleDayOfMonth: number;
   retentionDays: number;
   keepCount: number;
   incremental: boolean;

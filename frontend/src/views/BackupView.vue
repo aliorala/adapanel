@@ -338,22 +338,16 @@
             <option :value="false">{{ t("panel.status.disabled") }}</option>
           </select>
         </label>
-        <label class="stacked-field">
-          <span class="field-label">{{ t("panel.backup.autoFrequency") }}</span>
-          <select v-model="autoFrequency">
-            <option value="daily">{{ t("panel.backup.freq.daily") }}</option>
-            <option value="weekly">{{ t("panel.backup.freq.weekly") }}</option>
-            <option value="monthly">{{ t("panel.backup.freq.monthly") }}</option>
-            <option v-if="autoFrequency === 'custom'" value="custom">
-              {{ t("panel.backup.freq.custom", { hours: autoForm.backupIntervalHours }) }}
-            </option>
-          </select>
-        </label>
+        <BackupScheduleFields :plan="autoSchedule" />
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.backup.autoRetention") }}</span>
           <input v-model.number="autoForm.backupRetentionDays" type="number" min="0" />
         </label>
       </div>
+      <!-- Saatin hangi saat dilimine ait olduğu SÖYLENİR; sunucu bunu bildirmediyse satır çizilmez. -->
+      <p v-if="autoSchedule.mode !== 'interval' && autoServerZone" class="field-hint">
+        {{ t("panel.schedule.serverTimeHint", { zone: autoServerZone, now: autoServerLocalTime }) }}
+      </p>
       <!--
         SON ÇALIŞMANIN SONUCU. Önceden yalnız son/sonraki ZAMAN yazıyordu: kullanıcı "çalıştı"
         ile "çalıştı ama başarısız oldu"yu ayırt edemiyordu. `lastBackupStatus` ve
@@ -708,7 +702,7 @@
         <div class="data-row table-head schedule-row">
           <span>{{ t("panel.backup.schedule.customer") }}</span>
           <span>{{ t("panel.backup.statusColumn") }}</span>
-          <span>{{ t("panel.backup.schedule.interval") }}</span>
+          <span>{{ t("panel.schedule.mode") }}</span>
           <span>{{ t("panel.backup.schedule.retentionColumn") }}</span>
           <span>{{ t("panel.backup.schedule.mode") }}</span>
           <span>{{ t("panel.backup.schedule.lastRun") }}</span>
@@ -728,7 +722,9 @@
             </small>
           </div>
           <div class="cell-main">
-            <strong>{{ t("panel.backup.schedule.every", { hours: schedule.intervalHours }) }}</strong>
+            <!-- Özet metni TEK KAYNAKTAN (api/schedule.ts): "her gün 03:00" ile form alanları
+                 birbirinden sapamasın. -->
+            <strong>{{ programOzeti(scheduleToPlan(schedule), t) }}</strong>
             <small>{{ t("panel.backup.schedule.nextRun") }}: {{ formatDate(schedule.nextRunUtc) }}</small>
           </div>
           <div class="cell-main">
@@ -806,7 +802,7 @@
         <!-- Kota kullanıcının GİRDİĞİ sıklığı kabul etmemiş olabilir: sunucu KOTAYA ÇEKİLMİŞ
              değeri döner ve form onunla tazelenir. -->
         <p v-if="scheduleThrottled" class="notice warn" role="alert">
-          {{ t("panel.backup.schedule.throttled", { hours: scheduleForm.intervalHours }) }}
+          {{ t("panel.backup.schedule.throttled", { hours: scheduleForm.plan.intervalHours }) }}
         </p>
 
         <div class="form-grid">
@@ -814,10 +810,10 @@
             <input v-model="scheduleForm.enabled" type="checkbox" />
             <span>{{ t("panel.backup.schedule.enabled") }}</span>
           </label>
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.backup.schedule.interval") }}</span>
-            <input v-model.number="scheduleForm.intervalHours" type="number" min="1" max="720" />
-          </label>
+          <!-- Abonelik programı da SAAT seçebilir: sunucu geneli programla aynı alanlar, aynı
+               bileşen. Kota YALNIZCA aralık modunda daraltır (takvim modu zaten günde en çok
+               bir tur üretir). -->
+          <BackupScheduleFields :plan="scheduleForm.plan" />
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.backup.schedule.retentionDays") }}</span>
             <input v-model.number="scheduleForm.retentionDays" type="number" min="0" max="3650" />
@@ -915,6 +911,8 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
+import BackupScheduleFields from "../components/BackupScheduleFields.vue";
+import { bosProgram, programOzeti, type BackupSchedulePlan } from "../api/schedule";
 import {
   backupDatabase,
   backupMail,
@@ -1374,7 +1372,8 @@ type ScheduleFormState = {
   maxBackupsPerDay: number;
   remotePasswordSet: boolean;
   enabled: boolean;
-  intervalHours: number;
+  /** Ortak program biçimi; alanlar BackupScheduleFields ile düzenlenir. */
+  plan: BackupSchedulePlan;
   retentionDays: number;
   keepCount: number;
   incremental: boolean;
@@ -1393,23 +1392,33 @@ type ScheduleFormState = {
 const scheduleForm = ref<ScheduleFormState | null>(null);
 const scheduleThrottled = ref(false);
 
+/** Sunucudan gelen abonelik programını ortak biçime çevirir (liste satırı ve form aynı yerden okur). */
+function scheduleToPlan(schedule: SubscriptionBackupSchedule): BackupSchedulePlan {
+  return {
+    mode: schedule.scheduleMode,
+    intervalHours: schedule.intervalHours,
+    hour: schedule.scheduleHour,
+    minute: schedule.scheduleMinute,
+    dayOfWeek: schedule.scheduleDayOfWeek,
+    dayOfMonth: schedule.scheduleDayOfMonth
+  };
+}
+
 // Otomatik yedek programı (yalnız admin; motor = Otomasyon servisi, bu kart en sık kullanılan ayarların kısayolu).
 const autoStatus = ref<AutomationStatus | null>(null);
 const autoForm = ref<AutomationSettings | null>(null);
-// Sıklık ön ayarı ↔ saat eşlemesi: günlük=24, haftalık=168, aylık=720; başka değer "custom" olarak korunur.
-const autoFrequency = computed({
-  get(): "daily" | "weekly" | "monthly" | "custom" {
-    const hours = autoForm.value?.backupIntervalHours ?? 24;
-    if (hours === 24) return "daily";
-    if (hours === 168) return "weekly";
-    if (hours === 720) return "monthly";
-    return "custom";
-  },
-  set(value: "daily" | "weekly" | "monthly" | "custom") {
-    if (!autoForm.value || value === "custom") return;
-    autoForm.value.backupIntervalHours = value === "daily" ? 24 : value === "weekly" ? 168 : 720;
-  }
-});
+/**
+ * Sunucu geneli programın ortak biçimi.
+ *
+ * Burada eskiden "günlük = 24 saat, haftalık = 168 saat" diye bir eşleme vardı: sıklık bir
+ * SAATE değil bir ARALIĞA çevriliyordu ve yedeğin saati ilk tetiklenen ana kilitleniyordu.
+ * Artık mod ve saat doğrudan taşınıyor; eşleme yok, dolayısıyla kayma da yok.
+ */
+const autoSchedule = reactive<BackupSchedulePlan>(bosProgram());
+const autoServerZone = computed(
+  () => autoStatus.value?.serverTimeZoneDisplayName || autoStatus.value?.serverTimeZoneId || ""
+);
+const autoServerLocalTime = computed(() => (autoStatus.value?.serverLocalTime || "").replace("T", " "));
 
 onMounted(async () => {
   if (sitesStore.sites.length === 0) {
@@ -1532,10 +1541,23 @@ function resetEncryptionForm() {
 async function loadAutoBackup() {
   try {
     autoStatus.value = await getAutomation();
-    autoForm.value = { ...autoStatus.value.settings };
+    applyAutoSettings(autoStatus.value.settings);
   } catch {
     // Otomasyon durumu okunamazsa kart gizli kalır; yedek listesi etkilenmez.
   }
+}
+
+/** Sunucudan gelen (normalize edilmiş) ayarları forma ve ortak program biçimine yazar. */
+function applyAutoSettings(settings: AutomationSettings) {
+  autoForm.value = { ...settings };
+  Object.assign(autoSchedule, {
+    mode: settings.backupScheduleMode,
+    intervalHours: settings.backupIntervalHours,
+    hour: settings.backupScheduleHour,
+    minute: settings.backupScheduleMinute,
+    dayOfWeek: settings.backupScheduleDayOfWeek,
+    dayOfMonth: settings.backupScheduleDayOfMonth
+  });
 }
 
 async function saveAutoBackup() {
@@ -1543,8 +1565,17 @@ async function saveAutoBackup() {
   busy.value = true;
   try {
     // backupRemotePassword boş = sunucudaki kayıtlı parola korunur (Otomasyon ekranıyla aynı sözleşme).
-    autoStatus.value = await updateAutomation({ ...autoForm.value, backupRemotePassword: "" });
-    autoForm.value = { ...autoStatus.value.settings };
+    autoStatus.value = await updateAutomation({
+      ...autoForm.value,
+      backupScheduleMode: autoSchedule.mode,
+      backupIntervalHours: autoSchedule.intervalHours,
+      backupScheduleHour: autoSchedule.hour,
+      backupScheduleMinute: autoSchedule.minute,
+      backupScheduleDayOfWeek: autoSchedule.dayOfWeek,
+      backupScheduleDayOfMonth: autoSchedule.dayOfMonth,
+      backupRemotePassword: ""
+    });
+    applyAutoSettings(autoStatus.value.settings);
     showNotice(t("panel.backup.autoSaved"), false);
   } catch (error) {
     showError(error);
@@ -2197,7 +2228,7 @@ function applyScheduleToForm(dto: SubscriptionBackupSchedule) {
     enabled: dto.enabled,
     // KOTAYA ÇEKİLMİŞ değer: formu istenen değerle doldurmak, kabul edilmemiş bir sıklığı
     // kayıtlı göstermek olurdu.
-    intervalHours: dto.intervalHours,
+    plan: reactive(scheduleToPlan(dto)),
     retentionDays: dto.retentionDays,
     keepCount: dto.keepCount,
     incremental: dto.incremental,
@@ -2223,7 +2254,12 @@ async function saveSchedule() {
   try {
     const dto = await updateBackupSchedule(form.userId, {
       enabled: form.enabled,
-      intervalHours: form.intervalHours,
+      scheduleMode: form.plan.mode,
+      intervalHours: form.plan.intervalHours,
+      scheduleHour: form.plan.hour,
+      scheduleMinute: form.plan.minute,
+      scheduleDayOfWeek: form.plan.dayOfWeek,
+      scheduleDayOfMonth: form.plan.dayOfMonth,
       retentionDays: form.retentionDays,
       keepCount: form.keepCount,
       incremental: form.incremental,

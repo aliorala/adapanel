@@ -24,8 +24,27 @@ public sealed class SubscriptionBackupScheduleDto
 
     public bool Enabled { get; set; }
 
-    /// <summary>Kaç saatte bir yedek alınacak (1 = saatlik, 24 = günlük).</summary>
+    /// <summary>
+    /// <c>interval</c> | <c>daily</c> | <c>weekly</c> | <c>monthly</c>. Sunucu geneli programla
+    /// AYNI kavram ve aynı kod (bkz. <c>BackupSchedule</c>); varsayılan <c>interval</c> olduğu
+    /// için mevcut abonelik programları hiç değişmeden çalışmaya devam eder.
+    /// </summary>
+    public string ScheduleMode { get; set; } = "interval";
+
+    /// <summary>Kaç saatte bir yedek alınacak (1 = saatlik, 24 = günlük). Yalnızca <c>interval</c> modunda.</summary>
     public int IntervalHours { get; set; } = 24;
+
+    /// <summary>Takvim modlarında çalışma saati (0-23) — SUNUCUNUN YEREL saati.</summary>
+    public int ScheduleHour { get; set; } = 3;
+
+    /// <summary>Takvim modlarında çalışma dakikası (0-59).</summary>
+    public int ScheduleMinute { get; set; }
+
+    /// <summary>Haftalık modda gün: 0 = Pazar … 6 = Cumartesi.</summary>
+    public int ScheduleDayOfWeek { get; set; } = 1;
+
+    /// <summary>Aylık modda ayın günü (1-31); ay o günü çekmiyorsa ayın son günü kullanılır.</summary>
+    public int ScheduleDayOfMonth { get; set; } = 1;
 
     /// <summary>Saklama süresi, gün (0 = süreye göre silme yok).</summary>
     public int RetentionDays { get; set; } = 14;
@@ -90,8 +109,26 @@ public sealed class UpdateSubscriptionBackupScheduleRequest
 {
     public bool Enabled { get; set; }
 
+    /// <summary>interval | daily | weekly | monthly. Tanınmayan değer <c>interval</c> sayılır.</summary>
+    [StringLength(16)]
+    public string ScheduleMode { get; set; } = "interval";
+
     [Range(1, 24 * 30)]
     public int IntervalHours { get; set; } = 24;
+
+    /// <summary>Takvim modlarında çalışma saati (SUNUCU YEREL saati).</summary>
+    [Range(0, 23)]
+    public int ScheduleHour { get; set; } = 3;
+
+    [Range(0, 59)]
+    public int ScheduleMinute { get; set; }
+
+    /// <summary>0 = Pazar … 6 = Cumartesi.</summary>
+    [Range(0, 6)]
+    public int ScheduleDayOfWeek { get; set; } = 1;
+
+    [Range(1, 31)]
+    public int ScheduleDayOfMonth { get; set; } = 1;
 
     [Range(0, 3650)]
     public int RetentionDays { get; set; } = 14;

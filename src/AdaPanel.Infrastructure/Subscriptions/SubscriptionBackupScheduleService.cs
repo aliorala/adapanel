@@ -1,6 +1,7 @@
 using System.Text;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Automation;
 using AdaPanel.Infrastructure.Backup;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -69,7 +70,21 @@ public sealed class SubscriptionBackupScheduleService(
                 }
 
                 kayit.Enabled = request.Enabled;
-                kayit.IntervalHours = Math.Clamp(request.IntervalHours, 1, 24 * 30);
+
+                // Program NORMALİZE edilerek saklanır; doğrulama tek yerde (BackupSchedule).
+                var plan = BackupSchedule.Normalize(
+                    request.ScheduleMode,
+                    request.IntervalHours,
+                    request.ScheduleHour,
+                    request.ScheduleMinute,
+                    request.ScheduleDayOfWeek,
+                    request.ScheduleDayOfMonth);
+                kayit.ScheduleMode = plan.Mode;
+                kayit.IntervalHours = plan.IntervalHours;
+                kayit.ScheduleHour = plan.Hour;
+                kayit.ScheduleMinute = plan.Minute;
+                kayit.ScheduleDayOfWeek = plan.DayOfWeek;
+                kayit.ScheduleDayOfMonth = plan.DayOfMonth;
                 kayit.RetentionDays = Math.Clamp(request.RetentionDays, 0, 3650);
                 kayit.KeepCount = Math.Clamp(request.KeepCount, 0, 1000);
                 kayit.Incremental = request.Incremental;
@@ -135,7 +150,12 @@ public sealed class SubscriptionBackupScheduleService(
     public async Task RunDueAsync(CancellationToken cancellationToken = default)
     {
         var kayitlar = await LoadAsync(cancellationToken);
+        // ZAMAN BİR KEZ OKUNUR ve bütün abonelikler için aynı ana göre karar verilir. Turun
+        // kendisi saatler sürebilir (elli müşteri = elli arşiv, hepsi tek kilidin içinde sırayla);
+        // her abonelik için saati yeniden okusaydık, sıranın sonundakiler kendi telafi
+        // penceresinin dışına düşer ve sessizce yedeksiz kalırdı.
         var simdi = DateTime.UtcNow;
+        var dilim = TimeZoneInfo.Local;
 
         foreach (var kayit in kayitlar.Where(item => item.Enabled))
         {
@@ -147,8 +167,8 @@ public sealed class SubscriptionBackupScheduleService(
 
             // KOTA HER TURDA YENİDEN ÇÖZÜLÜR: plan sonradan daraltıldığında kaydedilmiş eski
             // aralığın kotayı sonsuza kadar delmesi kabul edilemez.
-            var kota = SubscriptionBackupQuota.Resolve(kayit.IntervalHours, await MaxBackupsPerDayAsync(userId, cancellationToken));
-            if (!ZamaniGeldi(kayit.LastRunUtc, kota.IntervalHours, simdi))
+            var plan = await KotayaCekilmisPlanAsync(kayit, userId, cancellationToken);
+            if (!BackupSchedule.ZamaniGeldi(plan.Plan, kayit.LastRunUtc, simdi, dilim))
             {
                 continue;
             }
@@ -289,8 +309,62 @@ public sealed class SubscriptionBackupScheduleService(
             cancellationToken);
     }
 
-    private static bool ZamaniGeldi(DateTime? sonCalisma, int aralikSaat, DateTime simdi) =>
-        sonCalisma is null || simdi >= sonCalisma.Value.AddHours(Math.Max(1, aralikSaat));
+    /// <summary>Kotaya çekilmiş program + kotanın devreye girip girmediği.</summary>
+    private sealed record KotaliPlan(BackupSchedulePlan Plan, bool Throttled, int MaxBackupsPerDay);
+
+    /// <summary>
+    /// Kayıttaki programı plan kotasına çeker.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kota YALNIZCA aralık modunda anlamlıdır ve bu bir boşluk değil, ölçülmüş bir sonuçtur:</b>
+    /// takvim modlarının hepsi (günlük/haftalık/aylık) en fazla GÜNDE BİR tur üretir. "Günde en
+    /// çok N yedek" sınırı N ≥ 1 için zaten sağlanır, N = 0 ise sınır yoktur. Yani takvim modu
+    /// kotayı hiçbir değerde delemez; aralık modunda ise saatlik program kotayı delebileceği için
+    /// eski daraltma aynen uygulanır.
+    /// </para>
+    /// </remarks>
+    private async Task<KotaliPlan> KotayaCekilmisPlanAsync(ScheduleRecord kayit, Guid userId, CancellationToken cancellationToken)
+    {
+        var maxGunluk = await MaxBackupsPerDayAsync(userId, cancellationToken);
+        return KotayaCek(kayit, maxGunluk);
+    }
+
+    /// <summary>Kota daraltmasının SAF hâli (test edilebilir olması için ayrıldı).</summary>
+    internal static KotaliPlanSonucu KotayaCek(
+        string? mode,
+        int intervalHours,
+        int hour,
+        int minute,
+        int dayOfWeek,
+        int dayOfMonth,
+        int maxBackupsPerDay)
+    {
+        var plan = BackupSchedule.Normalize(mode, intervalHours, hour, minute, dayOfWeek, dayOfMonth);
+        if (plan.Takvimli)
+        {
+            return new KotaliPlanSonucu(plan, false);
+        }
+
+        var kota = SubscriptionBackupQuota.Resolve(plan.IntervalHours, maxBackupsPerDay);
+        return new KotaliPlanSonucu(plan with { IntervalHours = kota.IntervalHours }, kota.Throttled);
+    }
+
+    /// <summary>Kota daraltmasının sonucu (saf hesabın çıktısı).</summary>
+    internal sealed record KotaliPlanSonucu(BackupSchedulePlan Plan, bool Throttled);
+
+    private static KotaliPlan KotayaCek(ScheduleRecord kayit, int maxBackupsPerDay)
+    {
+        var sonuc = KotayaCek(
+            kayit.ScheduleMode,
+            kayit.IntervalHours,
+            kayit.ScheduleHour,
+            kayit.ScheduleMinute,
+            kayit.ScheduleDayOfWeek,
+            kayit.ScheduleDayOfMonth,
+            maxBackupsPerDay);
+        return new KotaliPlan(sonuc.Plan, sonuc.Throttled, maxBackupsPerDay);
+    }
 
     private async Task<int> MaxBackupsPerDayAsync(Guid userId, CancellationToken cancellationToken)
     {
@@ -335,14 +409,19 @@ public sealed class SubscriptionBackupScheduleService(
             logger.LogWarning(exception, "Abonelik kapsami okunamadi: {UserId}", userId);
         }
 
-        var kota = SubscriptionBackupQuota.Resolve(kayit.IntervalHours, maxGunluk);
+        var kota = KotayaCek(kayit, maxGunluk);
 
         return new SubscriptionBackupScheduleDto
         {
             UserId = userId,
             UserName = KullaniciAdi(userId),
             Enabled = kayit.Enabled,
-            IntervalHours = kota.IntervalHours,
+            ScheduleMode = kota.Plan.Mode,
+            IntervalHours = kota.Plan.IntervalHours,
+            ScheduleHour = kota.Plan.Hour,
+            ScheduleMinute = kota.Plan.Minute,
+            ScheduleDayOfWeek = kota.Plan.DayOfWeek,
+            ScheduleDayOfMonth = kota.Plan.DayOfMonth,
             RetentionDays = kayit.RetentionDays,
             KeepCount = kayit.KeepCount,
             Incremental = kayit.Incremental,
@@ -360,7 +439,7 @@ public sealed class SubscriptionBackupScheduleService(
             LastStatus = kayit.LastStatus,
             LastDetails = kayit.LastDetails,
             NextRunUtc = kayit.Enabled
-                ? (kayit.LastRunUtc ?? DateTime.UtcNow).AddHours(kota.IntervalHours)
+                ? BackupSchedule.SonrakiZaman(kota.Plan, kayit.LastRunUtc, DateTime.UtcNow, TimeZoneInfo.Local)
                 : null,
             PlanId = planId,
             PlanName = planAdi,
@@ -422,7 +501,19 @@ public sealed class SubscriptionBackupScheduleService(
 
         public bool Enabled { get; set; }
 
+        // GERİYE DÖNÜK UYUM: eski subscription-backups.json dosyalarında bu alan yoktur ve
+        // "interval" olarak okunur — mevcut abonelik programları hiç değişmeden sürer.
+        public string ScheduleMode { get; set; } = BackupSchedule.Interval;
+
         public int IntervalHours { get; set; } = 24;
+
+        public int ScheduleHour { get; set; } = 3;
+
+        public int ScheduleMinute { get; set; }
+
+        public int ScheduleDayOfWeek { get; set; } = 1;
+
+        public int ScheduleDayOfMonth { get; set; } = 1;
 
         public int RetentionDays { get; set; } = 14;
 

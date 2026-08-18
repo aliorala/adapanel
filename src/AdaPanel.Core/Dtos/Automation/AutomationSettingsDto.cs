@@ -8,8 +8,40 @@ public sealed class AutomationSettingsDto
 {
     public bool AutoBackupEnabled { get; set; }
 
-    /// <summary>Yedekleme job'unun tekrar aralığı (saat). Minimum 1.</summary>
+    /// <summary>
+    /// Yedeğin ne zaman çalışacağı: <c>interval</c> | <c>daily</c> | <c>weekly</c> | <c>monthly</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Plesk'teki tek sıklık seçicinin karşılığı. <c>interval</c> eski davranıştır (son çalışmadan
+    /// N saat sonra) ve VARSAYILANDIR: alan hiç yazılmamış eski kurulumlar buraya düşer, davranış
+    /// değişmez. Takvim modlarında çalışma anı <see cref="BackupScheduleHour"/> ve
+    /// <see cref="BackupScheduleMinute"/> ile SABİTLENİR; artık elle alınan bir yedek programın
+    /// saatini kaydırmaz.
+    /// </para>
+    /// </remarks>
+    public string BackupScheduleMode { get; set; } = "interval";
+
+    /// <summary>Yedekleme job'unun tekrar aralığı (saat). Yalnızca <c>interval</c> modunda kullanılır. Minimum 1.</summary>
     public int BackupIntervalHours { get; set; } = 24;
+
+    /// <summary>
+    /// Takvim modlarında çalışma saati (0-23). <b>SUNUCUNUN YEREL SAATİ</b> — UTC değil, ofset de
+    /// saklanmaz: "03:00" saat dilimi değişse de 03:00 kalır.
+    /// </summary>
+    public int BackupScheduleHour { get; set; } = 3;
+
+    /// <summary>Takvim modlarında çalışma dakikası (0-59), yerel saat.</summary>
+    public int BackupScheduleMinute { get; set; }
+
+    /// <summary>Haftalık modda çalışma günü: 0 = Pazar … 6 = Cumartesi.</summary>
+    public int BackupScheduleDayOfWeek { get; set; } = 1;
+
+    /// <summary>
+    /// Aylık modda ayın günü (1-31). O ay bu günü çekmiyorsa (Şubat'ta 31 gibi) ayın SON günü
+    /// kullanılır; aksi hâlde program yılın yarısında sessizce hiç çalışmazdı.
+    /// </summary>
+    public int BackupScheduleDayOfMonth { get; set; } = 1;
 
     /// <summary>Bu günden eski yerel yedekler silinir. 0 = sınırsız (silme).</summary>
     public int BackupRetentionDays { get; set; } = 14;

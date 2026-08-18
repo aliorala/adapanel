@@ -39,4 +39,24 @@ public sealed class AutomationStatusDto
 
     /// <summary>Son kontrolde güncellemesi bulunan bileşen sayısı.</summary>
     public int PendingComponentUpdates { get; set; }
+
+    /// <summary>
+    /// Sunucunun saat dilimi kimliği (ör. <c>Turkey Standard Time</c>).
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden döndürülüyor:</b> yedek saati SUNUCU yerel saatidir, tarayıcının saati değil.
+    /// Panele başka bir saat diliminden bağlanan yönetici "03:00" yazdığında hangi saatin
+    /// kastedildiğini bilmek zorunda; ekran bunu söyleyebilsin diye dilim ve ANLIK sunucu saati
+    /// yanıtta taşınır. Tahmin ettirmek, yedeği yanlış saate kurdurmak demekti.
+    /// </remarks>
+    public string ServerTimeZoneId { get; set; } = string.Empty;
+
+    /// <summary>Saat diliminin okunabilir adı.</summary>
+    public string ServerTimeZoneDisplayName { get; set; } = string.Empty;
+
+    /// <summary>Sunucunun ŞU ANDAKİ UTC farkı (dakika); yaz saati uygulanmış hâliyle.</summary>
+    public int ServerUtcOffsetMinutes { get; set; }
+
+    /// <summary>Sunucunun şu anki yerel saati (ISO, ofsetsiz) — ekranda "sunucuda şu an ..." satırı için.</summary>
+    public string ServerLocalTime { get; set; } = string.Empty;
 }

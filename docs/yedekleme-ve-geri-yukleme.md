@@ -53,6 +53,58 @@ Budama kuralı: `retentionDays` günden eski yedeklerde yerel dosya + kayıt sil
 verilmişse **uzak kopya da** silinir (uzak rotasyon). **0 ya da negatif gün hiçbir şeyi silmez** —
 yani "saklama süresi" alanını boş bırakmak yedekleri korur, silmez.
 
+### 4.1 Yedeğin SAATİNİ seçmek
+
+**Sol menü → Sunucu Araçları → Otomasyon → Otomatik yedekleme → "Zamanlama".**
+(Aynı alanlar **Sol menü → Yedekleme** ekranındaki "Otomatik yedek" kartında da vardır.)
+
+Dört seçenek var (Plesk'in `hourly | daily | weekly | monthly` seçicisiyle aynı mantık):
+
+| Zamanlama | Sorulan | Ne zaman çalışır |
+| --- | --- | --- |
+| **Belirli aralıklarla** | Kaç saatte bir | Son çalışmadan N saat sonra |
+| **Her gün** | Saat | Her gün o saatte |
+| **Her hafta** | Gün + saat | Seçilen gün, o saatte |
+| **Her ay** | Ayın günü + saat | Seçilen gün, o saatte |
+
+**Saat SUNUCUNUN saatidir**, tarayıcınızın değil. Ekran hangi saat diliminde olduğunuzu ve
+sunucuda o an saatin kaç olduğunu yazar. Kayda giren şey **duvar saatidir** (03:00), UTC damgası
+ya da UTC farkı değil: sunucunun saat dilimi sonradan değişirse yedek yine yerel 03:00'te alınır.
+Bu, yedek klasörlerindeki ayrımla aynıdır — **gün klasörü yerel tarihtir, dosya adındaki damga
+UTC'dir.**
+
+**Neden aralık yerine saat:** aralık modunda yedeğin saati **ilk tetiklenen ana kilitlenir**.
+Bir kez 23:50'de "Şimdi yedekle" derseniz gecelik yedek 23:50'ye taşınır; panel yeniden başlarsa
+ya da bir tur gecikirse saat her seferinde biraz daha ileri kayar ve er ya da geç trafiğin en
+yoğun olduğu saate oturur. Saat seçildiğinde elle alınan yedek programı **kaydırmaz** — yalnızca
+o günün turunu karşılar, yani aynı gün ikinci kez yedek alınmaz.
+
+**Sunucu o saatte kapalıysa:** açılır açılmaz kaçırılan yedek alınır, ertesi gün beklenmez.
+Ama sınırsız değil: kaçırılan an **dönemin yarısından** fazla geride kaldıysa (günlükte 12 saat)
+tur atlanır ve bir sonraki saate bırakılır. Böylece 02:55'te açılan bir sunucu önce telafi turu,
+beş dakika sonra 03:00 turu koşturmaz; atlamanın bedeli de sınırlıdır (bir sonraki tur en fazla
+yarım dönem uzaktadır).
+
+**Yaz saati (DST):** geçiş günlerinde tur ne tekrarlanır ne atlanır. Saat ileri alındığında
+seçilen an o gün hiç yaşanmıyorsa (ör. 02:30) iş, saat atlar atlamaz çalışır; saat geri
+alındığında aynı duvar saati iki kez yaşansa da yedek bir kez alınır.
+
+**Eski kurulumlar:** zamanlama seçilmemiş kurulumlar **"Belirli aralıklarla"** modunda kalır ve
+eski davranış birebir sürer. Saat seçmek isteğe bağlıdır; yükseltme hiçbir programı değiştirmez.
+
+### 4.2 Abonelik başına program
+
+**Sol menü → Yedekleme → Abonelik yedek programları.**
+
+Aynı zamanlama alanları burada da vardır ve aynı kuralla çalışır. Plan kotası (**günde en çok N
+yedek**) yalnızca "belirli aralıklarla" modunu daraltır: günlük/haftalık/aylık program zaten
+günde en çok bir tur ürettiği için kotayı hiçbir değerde delemez.
+
+Sunucu geneli program ile abonelik programları **ayrı kilitlerde** çalışır; ikisi aynı saate
+denk gelirse ikisi de başlar ve disk yükünü paylaşır — hiçbiri atlanmaz. Aynı saate kurulmuş
+çok sayıda abonelik programı ise sırayla koşar: tur başlarken zaman **bir kez** okunduğu için
+sıranın sonundakiler de o turda yedeklenir, kendi telafi penceresinin dışına düşmez.
+
 ## 5. Geri yükleme
 
 ### 5.1 Tam geri yükleme

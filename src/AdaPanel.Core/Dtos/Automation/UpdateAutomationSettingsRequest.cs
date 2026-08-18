@@ -6,8 +6,26 @@ public sealed class UpdateAutomationSettingsRequest
 {
     public bool AutoBackupEnabled { get; set; }
 
+    /// <summary>interval | daily | weekly | monthly. Tanınmayan değer <c>interval</c> sayılır.</summary>
+    [StringLength(16)]
+    public string BackupScheduleMode { get; set; } = "interval";
+
     [Range(1, 24 * 30)]
     public int BackupIntervalHours { get; set; } = 24;
+
+    /// <summary>Takvim modlarında çalışma saati (SUNUCU YEREL saati).</summary>
+    [Range(0, 23)]
+    public int BackupScheduleHour { get; set; } = 3;
+
+    [Range(0, 59)]
+    public int BackupScheduleMinute { get; set; }
+
+    /// <summary>0 = Pazar … 6 = Cumartesi.</summary>
+    [Range(0, 6)]
+    public int BackupScheduleDayOfWeek { get; set; } = 1;
+
+    [Range(1, 31)]
+    public int BackupScheduleDayOfMonth { get; set; } = 1;
 
     [Range(0, 3650)]
     public int BackupRetentionDays { get; set; } = 14;

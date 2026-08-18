@@ -58,7 +58,22 @@ public sealed class AutomationService(
         var state = await LoadAsync(cancellationToken);
 
         state.AutoBackupEnabled = request.AutoBackupEnabled;
-        state.BackupIntervalHours = Math.Clamp(request.BackupIntervalHours, 1, 24 * 30);
+
+        // Program NORMALİZE edilerek saklanır: mod/saat/gün doğrulaması tek yerde (BackupSchedule)
+        // yapılır, ekranın gönderdiği değere güvenilmez.
+        var plan = BackupSchedule.Normalize(
+            request.BackupScheduleMode,
+            request.BackupIntervalHours,
+            request.BackupScheduleHour,
+            request.BackupScheduleMinute,
+            request.BackupScheduleDayOfWeek,
+            request.BackupScheduleDayOfMonth);
+        state.BackupScheduleMode = plan.Mode;
+        state.BackupIntervalHours = plan.IntervalHours;
+        state.BackupScheduleHour = plan.Hour;
+        state.BackupScheduleMinute = plan.Minute;
+        state.BackupScheduleDayOfWeek = plan.DayOfWeek;
+        state.BackupScheduleDayOfMonth = plan.DayOfMonth;
         state.BackupRetentionDays = Math.Clamp(request.BackupRetentionDays, 0, 3650);
         state.BackupSites = request.BackupSites;
         state.BackupDatabases = request.BackupDatabases;
@@ -242,7 +257,11 @@ public sealed class AutomationService(
             var now = DateTime.UtcNow;
             var changed = false;
 
-            if (state.AutoBackupEnabled && IsDue(state.LastBackupRunUtc, state.BackupIntervalHours, now))
+            // YEDEĞİN ZAMANI: karar tek kaynaktan (BackupSchedule) ve SAF olarak gelir. Saat
+            // dilimi her turda yeniden okunur — yönetici sunucunun dilimini değiştirdiğinde
+            // "03:00" yeni dilimde de 03:00 olsun diye (bkz. BackupSchedule notları).
+            if (state.AutoBackupEnabled &&
+                BackupSchedule.ZamaniGeldi(BuildSchedulePlan(state), state.LastBackupRunUtc, now, ServerTimeZone()))
             {
                 await RunBackupAsync(state, cancellationToken);
                 changed = true;
@@ -558,7 +577,9 @@ public sealed class AutomationService(
 
             // Iki dongu kacirildiysa artik tesaduf degildir; ama cok sik araliklarda gurultu
             // yapmamak icin en az 48 saat beklenir.
-            var staleAfter = TimeSpan.FromHours(Math.Max(48, Math.Max(1, state.BackupIntervalHours) * 2));
+            // Dönem artık aralıktan DEĞİL programdan gelir: haftalık bir programda 48 saatlik
+            // eşik her hafta yanlış alarm üretirdi.
+            var staleAfter = TimeSpan.FromHours(Math.Max(48, BuildSchedulePlan(state).Donem.TotalHours * 2));
             var runFailed = state.LastBackupStatus is "failed" or "completed_with_errors";
             var stale = lastSuccess is null || now - lastSuccess.Value > staleAfter;
             if (!runFailed && !stale)
@@ -605,6 +626,22 @@ public sealed class AutomationService(
 
         return now >= lastRunUtc.Value.AddHours(Math.Max(1, intervalHours));
     }
+
+    /// <summary>Kayıttaki program alanlarını normalize edilmiş plana çevirir.</summary>
+    private static BackupSchedulePlan BuildSchedulePlan(AutomationStateRecord state) =>
+        BackupSchedule.Normalize(
+            state.BackupScheduleMode,
+            state.BackupIntervalHours,
+            state.BackupScheduleHour,
+            state.BackupScheduleMinute,
+            state.BackupScheduleDayOfWeek,
+            state.BackupScheduleDayOfMonth);
+
+    /// <summary>
+    /// Sunucunun saat dilimi. Her çağrıda yeniden sorulur (önbelleğe alınmaz): yönetici Windows'ta
+    /// saat dilimini değiştirdiğinde panelin yedek saatinin ESKİ dilimde çakılı kalmaması gerekir.
+    /// </summary>
+    private static TimeZoneInfo ServerTimeZone() => TimeZoneInfo.Local;
 
     private async Task<AutomationStateRecord> LoadAsync(CancellationToken cancellationToken)
     {
@@ -776,12 +813,21 @@ public sealed class AutomationService(
 
     private static AutomationStatusDto ToStatus(AutomationStateRecord state)
     {
+        var zone = ServerTimeZone();
+        var now = DateTime.UtcNow;
+        var plan = BuildSchedulePlan(state);
+
         return new AutomationStatusDto
         {
             Settings = new AutomationSettingsDto
             {
                 AutoBackupEnabled = state.AutoBackupEnabled,
-                BackupIntervalHours = state.BackupIntervalHours,
+                BackupScheduleMode = plan.Mode,
+                BackupIntervalHours = plan.IntervalHours,
+                BackupScheduleHour = plan.Hour,
+                BackupScheduleMinute = plan.Minute,
+                BackupScheduleDayOfWeek = plan.DayOfWeek,
+                BackupScheduleDayOfMonth = plan.DayOfMonth,
                 BackupRetentionDays = state.BackupRetentionDays,
                 BackupSites = state.BackupSites,
                 BackupDatabases = state.BackupDatabases,
@@ -809,7 +855,7 @@ public sealed class AutomationService(
             LastBackupStatus = state.LastBackupStatus,
             LastBackupDetails = state.LastBackupDetails,
             NextBackupRunUtc = state.AutoBackupEnabled
-                ? (state.LastBackupRunUtc ?? DateTime.UtcNow).AddHours(Math.Max(1, state.BackupIntervalHours))
+                ? BackupSchedule.SonrakiZaman(plan, state.LastBackupRunUtc, now, zone)
                 : null,
             LastSslRunUtc = state.LastSslRunUtc,
             LastSslStatus = state.LastSslStatus,
@@ -823,7 +869,14 @@ public sealed class AutomationService(
             LastUpdateCheckRunUtc = state.LastUpdateCheckRunUtc,
             LastUpdateCheckStatus = state.LastUpdateCheckStatus,
             LastUpdateCheckDetails = state.LastUpdateCheckDetails,
-            PendingComponentUpdates = state.PendingComponentUpdates
+            PendingComponentUpdates = state.PendingComponentUpdates,
+
+            // Yedek saati SUNUCU yerel saatidir; ekran bunu tahmin ETMESİN diye dilim ve anlık
+            // sunucu saati yanıtla birlikte gider.
+            ServerTimeZoneId = zone.Id,
+            ServerTimeZoneDisplayName = zone.DisplayName,
+            ServerUtcOffsetMinutes = (int)zone.GetUtcOffset(now).TotalMinutes,
+            ServerLocalTime = TimeZoneInfo.ConvertTimeFromUtc(now, zone).ToString("yyyy-MM-ddTHH:mm:ss")
         };
     }
 
@@ -1124,7 +1177,15 @@ public sealed class AutomationService(
     private sealed class AutomationStateRecord
     {
         public bool AutoBackupEnabled { get; set; }
+
+        // GERİYE DÖNÜK UYUM: bu alan eski automation.json dosyalarında YOKTUR ve "interval"
+        // olarak okunur — yani saat seçmemiş kurulumlarda eski aralık davranışı aynen sürer.
+        public string BackupScheduleMode { get; set; } = BackupSchedule.Interval;
         public int BackupIntervalHours { get; set; } = 24;
+        public int BackupScheduleHour { get; set; } = 3;
+        public int BackupScheduleMinute { get; set; }
+        public int BackupScheduleDayOfWeek { get; set; } = 1;
+        public int BackupScheduleDayOfMonth { get; set; } = 1;
         public int BackupRetentionDays { get; set; } = 14;
         public bool BackupSites { get; set; } = true;
         public bool BackupDatabases { get; set; }
