@@ -83,6 +83,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFtpService, Ftp.FtpService>();
         services.AddScoped<IWafService, Waf.WafService>();
         services.AddScoped<ILogViewerService, Logs.LogViewerService>();
+        // Log döndürme (rotation): kapanmış günlükleri ZSTD ile arşivler, saklama kuralını uygular.
+        // Ölçüldü: IIS erişim günlüklerini küçülten HİÇBİR kod yoktu; otomasyondaki "log temizliği"
+        // yalnızca siliyor ve varsayılan olarak kapalı — yani uzun çalışan sunucuda günlükler sınırsız birikiyordu.
+        services.AddScoped<Logs.ILogRotationService, Logs.LogRotationService>();
         services.AddScoped<IFirewallService, Firewall.FirewallService>();
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
@@ -187,6 +191,10 @@ public static class ServiceCollectionExtensions
         // Scoped olmak ZORUNDA: DbContext ve müşteri kapsamı servisi de Scoped; Singleton yapılırsa
         // captive dependency olur (aynı gerekçe LicenseService'te yazılı).
         services.AddScoped<Billing.IBillingIntegrationService, Billing.BillingIntegrationService>();
+
+        // Log döndürme turu. Kayıt yapılmazsa döndürme YALNIZCA elle (POST /api/v1/logs/rotation/run)
+        // çalışırdı — yani "politika" değil temenni olurdu (AuditRetentionWorker'daki aynı gerekçe).
+        services.AddHostedService<Logs.LogRotationWorker>();
 
         return services;
     }
