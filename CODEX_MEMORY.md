@@ -6473,3 +6473,38 @@ yetkili oturum açılamıyor; kendi hesabı için de reddediliyor). Ölçülen a
 
 **Test: 1446.** Yayın yöntemi: her ikisi de ana depodan değil, commit'e bağlı ayrı worktree'den
 paketlendi (ana depoda ajan işi duruyordu) — `.tools` junction + `npm ci` + `npm run build`.
+
+## 216) 0.6.1 -- site basina POSTA yedegi + kaynak basina klasor duzeni (18.08.2026)
+
+Iki is birlikte cikti (kullanici: "ikisi birlikte ciksin").
+
+**Klasor duzeni:** `gun -> kategori -> kaynak`. Siteye ait DB yedegi o sitenin
+klasorune girer; sahiplik `IDatabaseOwnershipService`ten okunur, isim benzerligine
+BAKILMAZ. Eski yedekler etkilenmez -- yol her kayitta saklaniyor.
+
+**Site basina posta:** vandelay + IIS'te yalnizca `/jmap/` ve `/.well-known/jmap`
+yolunu ileten vekil. Kural sirasi: (1) `..`/`%2e`/`%252e`/`%5c`/`\` iceren istekler
+403, arka uca hic ulasmadan; (2) well-known; (3) jmap/*.
+Ajan benim "`^api/` toptan reddet" talimatimi BILEREK uygulamadi: kurallar
+MUSTERININ web.config'ine giriyor, toptan red musterinin kendi /api/ uygulamasini
+oldururdu. Gercek risk (dizinden cikma) zaten 1. kuralda kesiliyor. Karar dogru.
+
+**On kontrol:** vandelay kurulu mu -> parola cozuluyor mu -> Stalwart'in DUYURDUGU
+apiUrl (tahmin degil, sunucudan okunur) acilyor mu. Gecmezse posta konmaz ve
+GIZLENMEZ (`mailNote` + `mailMessagesError`). Tek hesap bile alinamazsa hicbiri konmaz.
+
+**Testler:** 1653 (+41). Mutasyon dogrulamasi: red kurali sirada asagi -> 11 test
+kirmizi; kismi basari tam sayilinca -> 2; alan adi kapisi naif EndsWith -> 2
+(`kutu@alt.ornek.com` ve `kutu@kotuornek.com` siziyor).
+
+**DOGRULANMADI:** IIS'in kendisi (kurallar .NET Regex ile XML uzerinde denendi,
+URL Rewrite modulu uzerinden DEGIL). Vekilin gercek IIS'te 443'ten calistigi
+gorulmedi -- bu makinede Stalwart yok. ILK CANLI DENEMEDE BAKILACAK YER BURASI.
+`vandelay` components.json'a sha256 ile eklendi ama kurulumu denenmedi.
+
+**Yayin:** SHA256 0FA0AB6517D4E1CFDF70A9DE06DE9DB79194C2C0F27B704E46A4A2E01FC43AAC,
+90.004.937 byte. Indirilen varlikla yerel dosya hash'i ESLESTI, releases/latest = 0.6.1.
+Publish icerik denetimi 155 dosya GECTI, Synaptics imzasi yok.
+
+**Ders:** version-guard release-body.json'i da denetliyor -- surum yukseltmesini
+commit'lerken onu disarida biraktim, guard paketi URETMEDI ve yakaladi. Guard calisiyor.
