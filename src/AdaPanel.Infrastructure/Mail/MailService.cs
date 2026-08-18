@@ -45,6 +45,26 @@ public sealed class MailService(
     /// </summary>
     private const string AccountQuotaField = "quotas/maxDiskQuota";
 
+    /// <summary>
+    /// Dağıtım listesi nesnesinin Stalwart şemasındaki ADI. <c>mailing-list</c> DEĞİLDİR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Ölçüldü (Stalwart 0.16.8 + stalwart-cli 1.0.8):</b> <c>query mailing-list</c>,
+    /// <c>create mailing-list</c> ve <c>delete mailing-list</c> çağrılarının HEPSİ
+    /// <c>error: unknown object: mailing-list</c> ile düşüyor. CLI nesne adını büyük/küçük harf
+    /// duyarsız çözüyor (<c>mailinglist</c> çalışıyor) ama TİRELİ biçimi hiç tanımıyor. Dokümandan
+    /// kopyalanan tireli ad yüzünden panelin dağıtım listesi özelliği baştan sona ölüydü: liste
+    /// oluşturma "işlem tamamlanamadı" veriyor, var olan listeler ekranda HİÇ görünmüyordu.
+    /// </para>
+    /// <para>
+    /// Ad bir kez burada durur; oluşturma/okuma/güncelleme/silme aynı sabiti kullanır. Dört ayrı
+    /// yere yazılsaydı biri düzeltilip diğeri unutulduğunda liste "oluşuyor ama görünmüyor"
+    /// hâline gelirdi — bu depoda tam olarak bu sınıftan arızalar yaşandı.
+    /// </para>
+    /// </remarks>
+    internal const string MailingListObject = "MailingList";
+
     private const string ConfigPath = "config/mail.json";
     private const string CertificateStatePath = "config/mail-cert.json";
     // Domain kotalari Stalwart'ta yok → panel-tarafi tutulur (domain→azami toplam MB) ve tahsis toplamiyla dayatilir.
@@ -137,7 +157,7 @@ public sealed class MailService(
                 }
 
                 var address = GetField(detail.Value, "emailAddress", "name");
-                if (address.EndsWith("@" + normalized, StringComparison.OrdinalIgnoreCase))
+                if (BelongsToDomain(address, normalized))
                 {
                     accounts.Add(new MailAccountDto
                     {
@@ -170,9 +190,14 @@ public sealed class MailService(
                 }
             }
 
-            // Dağıtım listeleri (mailing-list): seçili domain'e ait olanları topla.
+            // Dağıtım listeleri: seçili domain'e ait olanları topla.
+            //
+            // Özet kayıt (query) yalnız description/emailAddress/id taşır — abone kümesi YOKTUR
+            // (ölçüldü). Bu yüzden her liste için detay çekilir; detay okunamazsa liste ATLANIR:
+            // özete düşüp "aboneleri boş" göstermek, yöneticiye listesi boşalmış gibi görünür ve
+            // üzerine "kaydet" derse gerçekten boşaltır.
             var lists = new List<MailListDto>();
-            foreach (var brief in await QueryAsync(cli, "mailing-list", env, cancellationToken))
+            foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
             {
                 var id = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(id))
@@ -180,9 +205,14 @@ public sealed class MailService(
                     continue;
                 }
 
-                var listDetail = await GetObjectAsync(cli, "mailing-list", id, env, cancellationToken) ?? brief;
-                var listAddress = GetField(listDetail, "emailAddress", "name");
-                if (!listAddress.EndsWith("@" + normalized, StringComparison.OrdinalIgnoreCase))
+                var listDetail = await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken);
+                if (listDetail is null)
+                {
+                    continue;
+                }
+
+                var listAddress = GetField(listDetail.Value, "emailAddress");
+                if (!BelongsToDomain(listAddress, normalized))
                 {
                     continue;
                 }
@@ -190,9 +220,12 @@ public sealed class MailService(
                 lists.Add(new MailListDto
                 {
                     Address = listAddress,
-                    Recipients = ReadStringArray(listDetail, "recipients")
+                    Description = GetField(listDetail.Value, "description"),
+                    Recipients = ReadListRecipients(listDetail.Value)
                 });
             }
+
+            lists.Sort((left, right) => string.CompareOrdinal(left.Address, right.Address));
 
             workspace.Accounts = accounts;
             workspace.Aliases = aliases;
@@ -520,7 +553,7 @@ public sealed class MailService(
         throw new AppException("mail.operation_failed", 404, 404, $"alias not found: {normalized}");
     }
 
-    // --- Dağıtım listeleri (Stalwart mailing-list principal) ---
+    // --- Dağıtım listeleri (Stalwart MailingList principal) ---
 
     public async Task<MailWorkspaceDto> CreateMailListAsync(CreateMailListRequest request, CancellationToken cancellationToken = default)
     {
@@ -531,11 +564,12 @@ public sealed class MailService(
         var domainId = await FindIdAsync("domain", "name", domain, cancellationToken)
             ?? throw new AppException("mail.operation_failed", 404, 404, $"domain not found: {domain}");
 
-        // recipients EmailAddress[]; JSON --file ile geçirilir (komut satırı tırnak bozulmasına karşı).
+        // Payload --file ile geçirilir (komut satırı tırnak bozulmasına karşı; create/update için kural).
         var payload =
             $"{{\"name\":{JsonValue(localPart)},\"domainId\":{JsonValue(domainId)}," +
-            $"\"recipients\":{BuildRecipientsJson(request.Recipients, domain)}}}";
-        var result = await RunCliJsonAsync(cli, "create mailing-list", payload, env, cancellationToken);
+            $"\"description\":{JsonValue(request.Description.Trim())}," +
+            $"\"recipients\":{BuildRecipientsMapJson(request.Recipients, domain)}}}";
+        var result = await RunCliJsonAsync(cli, $"create {MailingListObject}", payload, env, cancellationToken);
         if (!result.Success)
         {
             throw MapMailError(result);
@@ -544,22 +578,51 @@ public sealed class MailService(
         return await GetWorkspaceAsync(domain, cancellationToken);
     }
 
+    /// <summary>
+    /// Aboneleri toplu değiştirir ve/veya tek tek ekler/çıkarır (bkz.
+    /// <see cref="SetMailListRecipientsRequest"/>).
+    /// </summary>
+    /// <remarks>
+    /// Sunucuda "abone ekle" diye bir işlem YOKTUR; <c>update</c> kümeyi komple değiştirir. Fark
+    /// uygulanacaksa güncel küme ÖNCE sunucudan okunur — panelin elindeki (ekran tazelenmemiş
+    /// olabilir) kopyaya güvenilirse, o arada başka bir yönetici tarafından eklenen aboneler
+    /// sessizce silinir.
+    /// </remarks>
     public async Task<MailWorkspaceDto> SetMailListRecipientsAsync(SetMailListRecipientsRequest request, CancellationToken cancellationToken = default)
     {
         var normalized = request.Address.Trim().ToLowerInvariant();
         var domain = ExtractDomain(normalized);
-        var id = await FindIdAsync("mailing-list", "emailAddress", normalized, cancellationToken)
-            ?? throw new AppException("mail.operation_failed", 404, 404, $"list not found: {normalized}");
-        var payload = "recipients=" + BuildRecipientsJson(request.Recipients, domain);
-        return await MutateAsync(domain, $"update mailing-list {Arg(id)} --field {CliJsonArg(payload)}", cancellationToken);
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var id = await FindIdAsync(MailingListObject, "emailAddress", normalized, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not found: {normalized}");
+
+        var current = await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not readable: {normalized}");
+
+        var target = ResolveRecipients(
+            ReadListRecipients(current),
+            request.Recipients,
+            request.Add,
+            request.Remove,
+            domain);
+
+        var payload = $"{{\"recipients\":{BuildRecipientsMapJson(target, domain)}}}";
+        var result = await RunCliJsonAsync(cli, $"update {MailingListObject} {Arg(id)}", payload, env, cancellationToken);
+        if (!result.Success)
+        {
+            throw MapMailError(result);
+        }
+
+        return await GetWorkspaceAsync(domain, cancellationToken);
     }
 
     public async Task<MailWorkspaceDto> DeleteMailListAsync(string address, CancellationToken cancellationToken = default)
     {
         var normalized = address.Trim().ToLowerInvariant();
         var domain = ExtractDomain(normalized);
-        var id = await FindIdAsync("mailing-list", "emailAddress", normalized, cancellationToken) ?? normalized;
-        return await MutateAsync(domain, $"delete mailing-list --ids {Arg(id)}", cancellationToken);
+        var id = await FindIdAsync(MailingListObject, "emailAddress", normalized, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not found: {normalized}");
+        return await MutateAsync(domain, $"delete {MailingListObject} --ids {Arg(id)}", cancellationToken);
     }
 
     public async Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
@@ -600,29 +663,174 @@ public sealed class MailService(
             .ToList();
     }
 
-    // Alıcı adreslerini normalize edip JSON dizisine çevirir (boşları atar).
-    private static string BuildRecipientsJson(IEnumerable<string> recipients, string domain)
+    /// <summary>
+    /// Bir posta adresi SEÇİLİ alan adına mı ait? (Hesap ve dağıtım listesi süzgeçlerinin TEK kuralı.)
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden düz <c>EndsWith</c> değil:</b> bu süzgeç, kiracının ekranında hangi kutuların ve
+    /// listelerin görüneceğine karar verir — yani bir GÖRÜNÜRLÜK KAPISIDIR. Alan adı çıplak
+    /// <c>EndsWith(domain)</c> ile karşılaştırılsaydı <c>ornek.com</c> seçen kiracı,
+    /// <c>duyuru@kotuornek.com</c> ve <c>duyuru@alt.ornek.com</c> adreslerini de kendi
+    /// listesindeymiş gibi görürdü: birincisi BAŞKASININ alan adı, ikincisi ayrı bir mail
+    /// domaini. İkisi de adres/abone sızıntısıdır.
+    /// </para>
+    /// <para>
+    /// Kural bu yüzden SON "@"den sonrasının TAM eşitliğidir; ek etiket ya da uzayan ad kabul
+    /// edilmez. Alt alan adı ayrı bir mail domainidir ve kendi seçildiğinde listelenir.
+    /// </para>
+    /// </remarks>
+    internal static bool BelongsToDomain(string? address, string? domain)
     {
-        var items = recipients
-            .Select(value => (value ?? string.Empty).Trim())
-            .Where(value => value.Length > 0)
-            .Select(value => JsonValue(NormalizeAddress(value, domain)));
-        return "[" + string.Join(",", items) + "]";
-    }
-
-    private static IReadOnlyCollection<string> ReadStringArray(JsonElement element, string field)
-    {
-        if (element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(field, out var array)
-            && array.ValueKind == JsonValueKind.Array)
+        var normalizedDomain = DomainNames.Normalize(domain);
+        if (normalizedDomain.Length == 0)
         {
-            return array.EnumerateArray()
-                .Where(item => item.ValueKind == JsonValueKind.String)
-                .Select(item => item.GetString()!)
-                .ToArray();
+            return false;
         }
 
-        return [];
+        var value = (address ?? string.Empty).Trim();
+        var at = value.LastIndexOf('@');
+        if (at < 0 || at == value.Length - 1)
+        {
+            return false;
+        }
+
+        return string.Equals(DomainNames.Normalize(value[(at + 1)..]), normalizedDomain, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Abone adreslerini Stalwart'ın beklediği KÜME (harita) gösterimine çevirir:
+    /// <c>{"ali@ornek.com":true,"veli@ornek.com":true}</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden dizi değil:</b> şemada alan <c>set&lt;emailAddress&gt;</c> ve tel üzerinde
+    /// haritadır. Dizi gönderildiğinde sunucu <c>invalidPatch / Invalid value for object property:
+    /// recipients</c> döndürüyor (canlı ölçüldü) — panel bu yüzden hiçbir liste
+    /// oluşturamıyor/güncelleyemiyordu.
+    /// </para>
+    /// <para>
+    /// <b>Adres doğrulaması burada yapılır çünkü sunucu YAPMIYOR:</b> ölçüldü — Stalwart
+    /// <c>recipients</c> kümesine <c>bu-adres-degil</c> gibi "@" bile içermeyen bir değeri
+    /// itirazsız kabul ediyor. Doğrulanmazsa liste, kimseye ulaşmayan bir aboneyle sessizce
+    /// yaşamaya devam eder; yönetici o kişinin duyuruları aldığını sanır.
+    /// </para>
+    /// </remarks>
+    internal static string BuildRecipientsMapJson(IEnumerable<string> recipients, string domain)
+    {
+        var entries = NormalizeRecipients(recipients, domain)
+            .Select(value => $"{JsonValue(value)}:true");
+        return "{" + string.Join(",", entries) + "}";
+    }
+
+    /// <summary>
+    /// Abone adreslerini kırpar, küçük harfe indirir, yerel kısımları alan adıyla tamamlar,
+    /// doğrular ve TEKRARLARI ayıklar (sıralı döner).
+    /// </summary>
+    internal static IReadOnlyList<string> NormalizeRecipients(IEnumerable<string> recipients, string domain)
+    {
+        var unique = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var raw in recipients ?? [])
+        {
+            var trimmed = (raw ?? string.Empty).Trim();
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            var address = NormalizeAddress(trimmed, domain);
+            if (!IsValidEmailAddress(address))
+            {
+                throw new AppException("mail.invalid_recipient", 400, 400, address);
+            }
+
+            unique.Add(address);
+        }
+
+        return [.. unique];
+    }
+
+    /// <summary>
+    /// Toplu değiştirme ve tek-abone farklarını TEK yerde birleştirir: önce (istenmişse) küme
+    /// komple değiştirilir, sonra eklenenler eklenir, en son çıkarılanlar çıkarılır.
+    /// </summary>
+    /// <remarks>
+    /// <b>Çıkarma en sonda:</b> aynı adres hem <paramref name="add"/> hem
+    /// <paramref name="remove"/> içinde geçerse sonuç "çıkarıldı" olur. Bir aboneyi listeden
+    /// düşürmek isteyip yanlışlıkla iki kutuyu da işaretleyen yönetici için güvenli olan yön
+    /// budur: postanın yanlışlıkla dağıtılmaya devam etmesi, yanlışlıkla durmasından daha zor
+    /// fark edilir ve geri alınamaz.
+    /// </remarks>
+    internal static IReadOnlyList<string> ResolveRecipients(
+        IEnumerable<string> current,
+        IEnumerable<string>? replacement,
+        IEnumerable<string> add,
+        IEnumerable<string> remove,
+        string domain)
+    {
+        var result = new SortedSet<string>(
+            NormalizeRecipients(replacement ?? current, domain),
+            StringComparer.Ordinal);
+
+        result.UnionWith(NormalizeRecipients(add, domain));
+        result.ExceptWith(NormalizeRecipients(remove, domain));
+        return [.. result];
+    }
+
+    /// <summary>
+    /// Sunucudan gelen abone kümesini okur. Şemada <c>set&lt;emailAddress&gt;</c> = JSON HARİTA
+    /// (<c>{"ali@ornek.com":true}</c>) — dizi bekleyen okuma her listeyi "abonesiz" gösteriyordu.
+    /// </summary>
+    /// <remarks>
+    /// Dizi biçimi de kabul edilir: Stalwart dokümanının farklı sürümleri iki gösterimi de
+    /// örnekliyor. Okuma tarafında hoşgörülü olmak bedava; YAZMA tarafı ölçülen tek doğru
+    /// biçimde (harita) kalır.
+    /// </remarks>
+    internal static IReadOnlyCollection<string> ReadListRecipients(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("recipients", out var value))
+        {
+            return [];
+        }
+
+        var addresses = value.ValueKind switch
+        {
+            JsonValueKind.Object => value.EnumerateObject()
+                // Kümeden çıkarılmış girdi false ile işaretlenmiş olabilir; onu abone SAYMAYIZ.
+                .Where(entry => entry.Value.ValueKind != JsonValueKind.False)
+                .Select(entry => entry.Name),
+            JsonValueKind.Array => value.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()!),
+            _ => []
+        };
+
+        return addresses
+            .Where(address => !string.IsNullOrWhiteSpace(address))
+            .OrderBy(address => address, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Adres tek "@" içeriyor, iki yanı da dolu ve alan adı en az bir nokta taşıyor mu?
+    /// </summary>
+    /// <remarks>
+    /// Kasten dar tutuldu: amaç RFC 5322'yi yeniden yazmak değil, sunucunun sessizce kabul ettiği
+    /// AÇIKÇA teslim edilemez değerleri (boşluklu metin, "@" yok, alan adı yok) durdurmak.
+    /// </remarks>
+    internal static bool IsValidEmailAddress(string address)
+    {
+        var at = address.IndexOf('@');
+        if (at <= 0 || at != address.LastIndexOf('@') || at == address.Length - 1)
+        {
+            return false;
+        }
+
+        var domain = address[(at + 1)..];
+        return !address.Any(char.IsWhiteSpace)
+            && domain.Contains('.')
+            && !domain.StartsWith('.')
+            && !domain.EndsWith('.');
     }
 
     public async Task<MailWorkspaceDto> SetAccountQuotaAsync(SetMailAccountQuotaRequest request, CancellationToken cancellationToken = default)
@@ -2026,6 +2234,15 @@ public sealed class MailService(
              lower.Contains("length") || lower.Contains("guessable") || lower.Contains("common")))
         {
             return new AppException("mail.weak_password", 422, 422, detail);
+        }
+
+        // ADRES ZATEN KULLANIMDA. Stalwart bunu `primaryKeyViolation` + `Properties: email` ile
+        // bildirir (ölçüldü: aynı adresle ikinci bir dağıtım listesi açmaya çalışırken). Generic
+        // "işlem tamamlanamadı" gösterildiğinde kullanıcı adresin dolu olduğunu ANLAMIYOR ve aynı
+        // adı denemeye devam ediyor; oysa yapması gereken tek şey başka bir yerel kısım seçmek.
+        if (lower.Contains("primarykeyviolation"))
+        {
+            return new AppException("mail.address_in_use", 409, 409, detail);
         }
 
         return new AppException("mail.operation_failed", defaultStatus, defaultStatus, detail);

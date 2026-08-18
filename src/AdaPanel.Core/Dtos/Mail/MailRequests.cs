@@ -109,16 +109,45 @@ public sealed class CreateMailListRequest
     [Required]
     public string Address { get; set; } = string.Empty;
 
-    /// <summary>Listeye gelen postanın dağıtılacağı alıcı e-posta adresleri.</summary>
+    /// <summary>Listenin amacını anlatan serbest metin; Stalwart'ın <c>description</c> alanına yazılır.</summary>
+    [StringLength(512)]
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>Listeye gelen postanın dağıtılacağı abone e-posta adresleri.</summary>
     public IReadOnlyCollection<string> Recipients { get; set; } = [];
 }
 
+/// <summary>
+/// Dağıtım listesinin abonelerini değiştirir.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden iki ayrı kip (toplu / tek tek):</b> Stalwart'ın <c>update MailingList</c> çağrısı
+/// <c>recipients</c> kümesini KOMPLE değiştirir — "bir abone ekle" diye bir işlem yoktur. Panel
+/// yalnız toplu değiştirmeyi sunarsa, tek bir aboneyi çıkarmak için yöneticinin bütün listeyi
+/// elle yeniden yazması gerekir; bir adresi yanlış kopyalaması, o kişinin listeden SESSİZCE
+/// düşmesi demektir. Bu yüzden tek-abone işlemleri sunucudaki güncel küme OKUNUP üzerine fark
+/// uygulanarak yapılır ve kullanıcı hiçbir zaman listenin tamamını elle taşımak zorunda kalmaz.
+/// </para>
+/// <para>
+/// <see cref="Recipients"/> <c>null</c> ise toplu değiştirme İSTENMEMİŞTİR ve yalnız
+/// <see cref="Add"/>/<see cref="Remove"/> uygulanır. Boş dizi ile <c>null</c> bilinçli olarak
+/// AYRI anlamdadır: boş dizi "listeyi tamamen boşalt" demektir ve bu meşru bir isteme.
+/// </para>
+/// </remarks>
 public sealed class SetMailListRecipientsRequest
 {
     [Required]
     public string Address { get; set; } = string.Empty;
 
-    public IReadOnlyCollection<string> Recipients { get; set; } = [];
+    /// <summary>Kümenin YENİ hâli (toplu değiştirme). <c>null</c> = dokunma, boş dizi = hepsini sil.</summary>
+    public IReadOnlyCollection<string>? Recipients { get; set; }
+
+    /// <summary>Eklenecek aboneler (mevcut kümenin üzerine).</summary>
+    public IReadOnlyCollection<string> Add { get; set; } = [];
+
+    /// <summary>Çıkarılacak aboneler — "abonelikten çıkarma" bu yoldan yapılır.</summary>
+    public IReadOnlyCollection<string> Remove { get; set; } = [];
 }
 
 /// <summary>
