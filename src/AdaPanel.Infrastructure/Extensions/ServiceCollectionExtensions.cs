@@ -162,6 +162,16 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<ISiteAliasService, Iis.SiteAliasService>();
 
+        // ÇOKLU SUNUCU (Plesk Multi Server karşılığı): merkez panel + kayıtlı hizmet düğümleri.
+        // İstemci fabrikası SINGLETON çünkü düğüm başına HTTP işleyicisini (bağlantı havuzu)
+        // önbelleğe alır; Scoped olsaydı her istekte yeni havuz açılır ve düzenli yoklama soket
+        // tüketirdi. Depo ve servis ise Scoped: ISecretProtector Scoped'dır ve Singleton bir
+        // tüketici onu tutsaydı captive dependency olurdu.
+        services.AddSingleton<Cluster.ClusterHttpClientFactory>();
+        services.AddScoped<Cluster.ClusterNodeStore>();
+        services.AddScoped<Cluster.IClusterNodeClient, Cluster.ClusterNodeClient>();
+        services.AddScoped<Cluster.IClusterService, Cluster.ClusterService>();
+
         // Abonelik iş modeli: kotayı DOLDURANDA uygulayan taraf (askıya alma) arka planda koşar.
         services.AddScoped<ISubscriptionEnforcementService, Subscriptions.SubscriptionEnforcementService>();
         // Bayi tavanı (bayinin KENDİ dağıtım sınırı). CustomerScopeService bunu okur; kayıt burada

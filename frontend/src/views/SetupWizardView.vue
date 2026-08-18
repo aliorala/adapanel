@@ -269,6 +269,8 @@
 
     <MigrationView v-else-if="activeSection === 'migration' && isAdmin" />
 
+    <ClusterView v-else-if="activeSection === 'cluster' && isAdmin" />
+
     <SoftwareView v-else-if="activeSection === 'software' && isAdmin" />
 
     <AdvisorView v-else-if="activeSection === 'advisor' && isAdmin" @navigate="handleNavigation" />
@@ -595,6 +597,7 @@ const BillingView = lazyView(() => import("./BillingView.vue"));
 const CronView = lazyView(() => import("./CronView.vue"));
 const DatabasesView = lazyView(() => import("./DatabasesView.vue"));
 const MigrationView = lazyView(() => import("./MigrationView.vue"));
+const ClusterView = lazyView(() => import("./ClusterView.vue"));
 const MyDatabasesView = lazyView(() => import("./MyDatabasesView.vue"));
 const AdvisorView = lazyView(() => import("./AdvisorView.vue"));
 const FilesView = lazyView(() => import("./FilesView.vue"));
@@ -856,6 +859,9 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "billing", label: t("panel.navigation.billing"), description: t("panel.billing.subtitle"), glyph: "FT" },
     { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badgeTitle: attentionBadgeTitle("tools"), badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
+    // Çoklu sunucu (Plesk Multi Server karşılığı). Bu diziye eklenmesi TEK BAŞINA yönetici-only
+    // demektir: bayi/müşteri/operatör dalları aşağıda AÇIK LİSTEYLE süzer, bu kimlik listede yok.
+    { id: "cluster", label: t("panel.navigation.cluster"), description: t("panel.cluster.subtitle"), glyph: "SU" },
     // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.
     // Yapay zeka baglantisi HER role acik: anahtarin yetkisi sahibinin rolunden turer, yani
     // musteri anahtari musterinin gordugu kadarini gorur. (Plesk yalniz yoneticiye izin veriyor.)
