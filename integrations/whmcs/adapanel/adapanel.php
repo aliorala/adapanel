@@ -20,9 +20,15 @@
  *   GET    /api/v1/service-plans                  -> ServicePlansController.GetAsync
  *   POST   /api/v1/auth/password/set/{id}         -> AuthController.SetUserPasswordAsync
  *   POST   /api/v1/auth/sso-link/{id}             -> AuthController.CreateSsoLinkAsync
+ *   GET    /api/v1/billing/usage                  -> BillingController.GetUsageAsync
+ *   GET    /api/v1/billing/terminate-check        -> BillingController.CheckTerminationAsync
  *
  * ChangePassword ve ServiceSingleSignOn islevleri bir sure "uc yok" hatasi donuyordu; panele
  * karsiliklari eklendi (bkz. docs/whmcs-modulu.md) ve artik gercekten calisiyorlar.
+ *
+ * UsageUpdate (disk/trafik kullanimi) ve TerminateAccount'un silme oncesi DOGRULAMASI icin
+ * panele `BillingController` eklendi; ikisi de panelde faturalama entegrasyonunun ACIK olmasini
+ * ister (Panel -> Faturalama).
  */
 
 if (!defined('WHMCS')) {
@@ -208,15 +214,70 @@ function adapanel_TerminateAccount(array $params)
 {
     try {
         $client = new AdaPanelClient($params);
-        $user = $client->requireUserByName((string) $params['username']);
 
+        // SILMEDEN ONCE PANELE SOR. Eskiden hesap yalnizca KULLANICI ADIYLA bulunup dogrudan
+        // siliniyordu; ad panelde elle degistirilmis ya da baska bir role ait bir hesapla
+        // cakismissa, iptal edilen hizmet BASKA BIRININ verisini yok edebilirdi. Panel simdi
+        // kanita bakarak karar veriyor: hesap Customer rolunde mi, hizmetin alan adi gercekten
+        // bu hesabin kapsaminda mi, ada uyan tek bir hesap mi var.
+        $domain = trim((string) $params['domain']);
+        $check = $client->get(
+            '/api/v1/billing/terminate-check'
+            . '?userName=' . rawurlencode((string) $params['username'])
+            . '&domain=' . rawurlencode($domain)
+        );
+
+        $decision = isset($check['data']) && is_array($check['data']) ? $check['data'] : array();
+
+        if (empty($decision['safeToTerminate'])) {
+            // BILEREK "success" DONMUYORUZ: WHMCS hizmeti iptal edilmis sayar ve kimse bir daha
+            // bakmazdi. Hata mesaji yoneticiye neyin dogrulanamadigini soyler.
+            return adapanel_terminateReason(
+                isset($decision['reason']) ? (string) $decision['reason'] : 'unknown',
+                (string) $params['username'],
+                $domain
+            );
+        }
+
+        $userId = isset($decision['userId']) ? (string) $decision['userId'] : '';
+        if ($userId === '') {
+            return 'Panel silme denetimini gecti ama kullanici kimligi dondurmedi; silme YAPILMADI.';
+        }
+
+        // Kimlik PANELIN DONDURDUGU degerdir; modul ayrica arama yapmaz. Ikinci bir arama,
+        // denetimin onayladigi hesaptan BASKA birini bulma ihtimali demek olurdu.
         $removeSites = adapanel_bool($params, 'Iptalde siteleri de sil') ? 'true' : 'false';
-        $client->delete('/api/v1/users/' . $user['id'] . '?removeSites=' . $removeSites);
+        $client->delete('/api/v1/users/' . rawurlencode($userId) . '?removeSites=' . $removeSites);
 
         return 'success';
     } catch (Exception $exception) {
         return $exception->getMessage();
     }
+}
+
+/**
+ * Silme denetiminin reddini WHMCS yoneticisinin okuyabilecegi bir cumleye cevirir.
+ * Bilinmeyen sebep OLDUGU GIBI gosterilir; uydurulmus aciklama zaman kaybettirir.
+ */
+function adapanel_terminateReason($reason, $userName, $domain)
+{
+    $map = array(
+        'not_found' => 'Panelde "' . $userName . '" adli hesap bulunamadi; silinecek bir sey yok '
+            . '(hesap daha once elle silinmis olabilir). Hizmeti WHMCS\'te elle kapatin.',
+        'ambiguous' => 'Panelde "' . $userName . '" adina uyan BIRDEN COK hesap var. Hangisinin '
+            . 'silinecegi kanitlanamadigi icin HICBIRI silinmedi; panelde adlari ayirin.',
+        'role_not_customer' => 'Panelde "' . $userName . '" adli hesap MUSTERI DEGIL '
+            . '(yonetici/bayi/operator olabilir). Faturalama sistemi bu hesabi silemez.',
+        'domain_mismatch' => 'Hizmetin alan adi ("' . $domain . '") panelde "' . $userName
+            . '" hesabinin kapsaminda DEGIL. Yanlis hesabi silmemek icin islem durduruldu; '
+            . 'panelde site atamasini kontrol edin.',
+    );
+
+    if (isset($map[$reason])) {
+        return $map[$reason];
+    }
+
+    return 'Panel silme denetimi gecilemedi (sebep: ' . $reason . '); hesap SILINMEDI.';
 }
 
 /**
@@ -386,6 +447,81 @@ function adapanel_AdminServicesTabFields(array $params)
     } catch (Exception $exception) {
         return array('AdaPanel' => htmlspecialchars($exception->getMessage()));
     }
+}
+
+/**
+ * Disk ve trafik kullanimini panelden okuyup WHMCS'e yazar.
+ *
+ * SOZLESME (developers.whmcs.com/provisioning-modules/usage-update adresinden dogrulandi):
+ *   - Islev WHMCS cron'u tarafindan, etkin HER SUNUCU icin BIR KEZ cagrilir.
+ *   - "Runs per server not per product": $params yalnizca SUNUCU bilgilerini tasir
+ *     (serverid, serverhostname, serverip, serverusername, serverpassword, serveraccesshash,
+ *     serversecure). Hizmet listesi VERILMEZ.
+ *   - Modul, sonuclari `tblhosting` tablosuna yazar: diskusage, disklimit, bwusage, bwlimit,
+ *     lastupdate.
+ *
+ * Bu yuzden panelden TEK bir toplu rapor cekilir (`GET /api/v1/billing/usage`) ve satirlar
+ * eslestirilir. Hizmet basina istek atmak, 500 musterili bir sunucuda cron turunu 500 HTTP
+ * cagrisina cevirirdi.
+ *
+ * ESLESTIRME ANAHTARI = `username`. Resmi ornek `domain` ile eslestiriyor ama panelde bir hesabin
+ * BIRDEN COK sitesi olabilir; alan adiyla eslestirmek ayni hesabin toplam kullanimini her satira
+ * yazip kullanimi KATLARDI. Kullanici adi hizmet omru boyunca degismez ve modulun geri kalani da
+ * hesabi bu adla buluyor.
+ *
+ * BIRIMLER: panel MB gonderir (WHMCS `tblhosting` sutunlari da MB'dir); cevrim panelde yapilir.
+ */
+function adapanel_UsageUpdate(array $params)
+{
+    try {
+        $client = new AdaPanelClient($params);
+        $sonuc = $client->get('/api/v1/billing/usage');
+    } catch (Exception $exception) {
+        // WHMCS bu islevin donus degerini kullanici arayuzunde gostermez; gorunur tek yer
+        // modul gunlugudur. Sessizce yutmak, kullanimin neden guncellenmedigini arastirilamaz
+        // hale getirirdi.
+        logModuleCall('adapanel', 'UsageUpdate', $params, $exception->getMessage(), $exception->getTraceAsString());
+        return array('success' => false, 'error' => $exception->getMessage());
+    }
+
+    $data = isset($sonuc['data']) && is_array($sonuc['data']) ? $sonuc['data'] : array();
+    $accounts = isset($data['accounts']) && is_array($data['accounts']) ? $data['accounts'] : array();
+    $serverId = (int) ($params['serverid'] ?? 0);
+
+    $guncellenen = 0;
+
+    foreach ($accounts as $account) {
+        $userName = isset($account['userName']) ? (string) $account['userName'] : '';
+        if ($userName === '') {
+            continue;
+        }
+
+        $degerler = array(
+            'diskusage' => (int) ($account['diskUsageMb'] ?? 0),
+            'disklimit' => (int) ($account['diskLimitMb'] ?? 0),
+            'bwlimit' => (int) ($account['bandwidthLimitMb'] ?? 0),
+            'lastupdate' => \WHMCS\Database\Capsule::raw('now()'),
+        );
+
+        // OLCULEMEYEN TRAFIK YAZILMAZ. Panel trafigi okuyamadiginda (IIS gunlugu kapali,
+        // klasor erisilemez) bunu "0 MB" diye yazmak, asim faturalamasini sessizce sifirlar ve
+        // gecen ayin gercek kullanimini da silerdi. Eski deger korunur.
+        if (!empty($account['bandwidthMeasured'])) {
+            $degerler['bwusage'] = (int) ($account['bandwidthUsageMb'] ?? 0);
+        }
+
+        try {
+            $guncellenen += \WHMCS\Database\Capsule::table('tblhosting')
+                ->where('server', $serverId)
+                ->where('username', $userName)
+                ->update($degerler);
+        } catch (Exception $exception) {
+            // Tek satirin yazilamamasi turu durdurmamali; digerleri guncellenmeye devam eder.
+            logModuleCall('adapanel', 'UsageUpdate', $userName, $exception->getMessage(), $exception->getTraceAsString());
+        }
+    }
+
+    return array('success' => true, 'updated' => $guncellenen);
 }
 
 // --- kucuk yardimcilar ---

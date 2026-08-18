@@ -232,6 +232,8 @@
          yöneticiye göstermek, kiracının kendi hesabında ne olduğunu göremediği anlamına gelirdi. -->
     <AuditLogsView v-else-if="activeSection === 'audit'" />
 
+    <BillingView v-else-if="activeSection === 'billing' && isAdmin" />
+
     <FilesView v-else-if="activeSection === 'files' && (isAdmin || isCustomer || isReseller)" />
 
     <!-- Yedek bölümü müşteride VE bayide: BackupController `Reseller` rolüne izin veriyor
@@ -461,6 +463,7 @@ import { lazyView } from "../utils/lazyView";
  * oturum açılışına bir gidiş-dönüş ve bir "Yükleniyor…" titremesi eklerdi.
  */
 const AuditLogsView = lazyView(() => import("./AuditLogsView.vue"));
+const BillingView = lazyView(() => import("./BillingView.vue"));
 const CronView = lazyView(() => import("./CronView.vue"));
 const DatabasesView = lazyView(() => import("./DatabasesView.vue"));
 const MigrationView = lazyView(() => import("./MigrationView.vue"));
@@ -708,6 +711,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
     { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC", badgeTitle: attentionBadgeTitle("security"), badge: attentionBadge("security") },
     { id: "audit", label: t("panel.navigation.audit"), description: t("panel.audit.subtitleAdmin"), glyph: "DK" },
+    { id: "billing", label: t("panel.navigation.billing"), description: t("panel.billing.subtitle"), glyph: "FT" },
     { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badgeTitle: attentionBadgeTitle("tools"), badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
     // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.

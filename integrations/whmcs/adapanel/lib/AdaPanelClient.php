@@ -5,26 +5,38 @@
  *
  * TASARIM NOTLARI -- hepsi panelin C# kaynagi OKUNARAK dogrulandi, hicbiri varsayim degil:
  *
- *  1) KIMLIK DOGRULAMA = OTURUM CEREZI. Panelde bir "Bearer adap_..." semasi (PanelToken) var
- *     AMA `Program.cs` onu YALNIZCA `/mcp` ucuna bagliyor
- *     (`app.MapMcp("/mcp").RequireAuthorization(... AuthenticationSchemes = PanelToken)`).
- *     `AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)` varsayilan semayi
- *     cerez yapiyor ve `/api/v1/**` denetleyicilerindeki `[Authorize]` nitelikleri sema
- *     belirtmiyor -> API anahtari REST uclarinda CALISMAZ. Bu yuzden modul kullanici adi/parola
- *     ile giris yapip cerezi tasir.
+ *  1) IKI KIMLIK YOLU VAR; hangisinin kullanilacagi yapilandirmadan gelir.
  *
- *  2) GIZLI GIRIS YOLU BASLIGI ZORUNLU. `SecureEntryPathMiddleware.RequiresSecureEntryHeader`
- *     `/api` altindaki HER yol icin `X-AdaPanel-Entry-Path` bekler (yalniz `/api/v1/setup`,
- *     `/api/v1/health` ve `/api/v1/dbtools` muaf). Basliksiz istek 404 + `security.invalid_entry_path`
- *     doner -- yani "modul calismiyor" gibi gorunur. Yapilandirma alani bu yuzden ZORUNLU.
+ *     a) PANEL ANAHTARI (tercih edilen). `PanelAuthentication` artik bir YONLENDIRICI semadir:
+ *        istek `Authorization: Bearer adap_...` tasiyorsa `/api/v1/**` uclarinda da anahtar semasi
+ *        calisir (eskiden yalniz `/mcp` ucuna bagliydi). Anahtar yolunun uc avantaji var:
+ *        dakikada 5 istekle sinirli `login` politikasina TAKILMAZ, CSRF ISTEMEZ (bkz. madde 3) ve
+ *        gizli giris yolu basligindan MUAFTIR (`SecureEntryPathMiddleware.CarriesApiToken`).
+ *        Kullanim toplama (UsageUpdate) bu yuzden anahtarla calisir ve SALT-OKUR bir anahtar yeter.
  *
- *  3) CSRF ZORUNLU. `Program.cs` global `AutoValidateAntiforgeryTokenAttribute` ekliyor; GET disi
- *     TUM isteklerde `X-CSRF-TOKEN` + antiforgery cerezi gerekir. Ustelik istek belirteci OTURUM
- *     KIMLIGINE baglanir: giristen SONRA yeniden alinmalidir, yoksa 400 `security.invalid_csrf_token`.
+ *     b) OTURUM CEREZI (anahtar verilmediyse). Kullanici adi/parola ile giris yapilir. Parola
+ *        belirleme ve tek tikla giris ZORUNLU olarak bu yolu kullanir: `AuthController` ve
+ *        `ApiTokensController` sinif duzeyinde CEREZ semasina sabitlenmistir (yetki yukseltmesini
+ *        onlemek icin), yani o iki uc anahtarla CALISMAZ.
+ *
+ *     UYARI: anahtarla YAZMA islemi (POST/PUT/DELETE) yapilacaksa anahtarin "yikici islemlere izin
+ *     ver" yetkisi ACIK olmalidir (`PanelTokenCapabilities`); salt-okur anahtar 403
+ *     `auth.forbidden` + `apitoken.read_only` alir.
+ *
+ *  2) GIZLI GIRIS YOLU BASLIGI (cerez yolunda) ZORUNLU.
+ *     `SecureEntryPathMiddleware.RequiresSecureEntryHeader` `/api` altindaki HER yol icin
+ *     `X-AdaPanel-Entry-Path` bekler (yalniz `/api/v1/setup`, `/api/v1/health` ve `/api/v1/dbtools`
+ *     muaf). Basliksiz istek 404 + `security.invalid_entry_path` doner -- yani "modul calismiyor"
+ *     gibi gorunur. Baslik anahtar yolunda da zararsizca gonderilir.
+ *
+ *  3) CSRF (yalniz cerez yolunda). `PanelAntiforgeryFilter` GET disi TUM cerezli isteklerde
+ *     `X-CSRF-TOKEN` + antiforgery cerezi ister. Ustelik istek belirteci OTURUM KIMLIGINE baglanir:
+ *     giristen SONRA yeniden alinmalidir, yoksa 400 `security.invalid_csrf_token`. Anahtarli
+ *     istekte dogrulama HIC calismaz (Authorization basligini tarayici kendiliginden gondermez).
  *
  *  4) IP KISITLAMASI. Ayni ara katman once `IsIpAllowedAsync` calistirir. Panelde IP kisiti
  *     aciksa WHMCS sunucusunun cikis IP'si listeye eklenmelidir; aksi halde 403
- *     `security.ip_not_allowed`.
+ *     `security.ip_not_allowed`. Bu kisit ANAHTAR yolunda da uygulanir.
  *
  *  5) YANIT ZARFI. Tum uclar `ApiResponse<T>`: `{ success, data, message, code, details }`
  *     (camelCase). Hata yolunda da AYNI zarf doner (`ApiExceptionHandlingMiddleware`).
@@ -68,6 +80,9 @@ class AdaPanelClient
     /** @var bool Kendinden imzali sertifikaya izin ver. */
     private $insecureTls;
 
+    /** @var string Panel API anahtari (adap_...). Bos ise cerez yolu kullanilir. */
+    private $apiToken;
+
     /** @var string Cerez kavanozu dosyasi. */
     private $cookieJar;
 
@@ -109,10 +124,12 @@ class AdaPanelClient
         // WHMCS sunucu sinamasini urun baglaminda cagirmaz.
         //
         // Kabul edilen bicimler:
-        //   panel                       (yalniz gizli giris yolu)
-        //   entry=panel;insecure=1      (anahtar=deger, noktali virgulle ayrilmis)
+        //   panel                                 (yalniz gizli giris yolu)
+        //   entry=panel;insecure=1                (anahtar=deger, noktali virgulle ayrilmis)
+        //   entry=panel;token=adap_xxx            (panel API anahtariyla kimlik)
         $secenekler = self::parseAccessHash((string) ($params['serveraccesshash'] ?? ''));
 
+        $this->apiToken = $secenekler['token'];
         $this->entryPath = $secenekler['entry'];
         if ($this->entryPath === '') {
             // Panelin varsayilan gizli giris yolu (PanelRuntimeOptions.SecureEntryPath).
@@ -126,11 +143,11 @@ class AdaPanelClient
     /**
      * "Access Hash" alanini cozer.
      *
-     * @return array{entry: string, insecure: bool}
+     * @return array{entry: string, insecure: bool, token: string}
      */
     private static function parseAccessHash($raw)
     {
-        $sonuc = array('entry' => '', 'insecure' => false);
+        $sonuc = array('entry' => '', 'insecure' => false, 'token' => '');
         $raw = trim($raw);
 
         if ($raw === '') {
@@ -157,6 +174,8 @@ class AdaPanelClient
                 $sonuc['entry'] = trim($deger, " \t\n\r/");
             } elseif ($anahtar === 'insecure') {
                 $sonuc['insecure'] = in_array(strtolower($deger), array('1', 'true', 'yes', 'evet'), true);
+            } elseif ($anahtar === 'token') {
+                $sonuc['token'] = $deger;
             }
         }
 
@@ -177,6 +196,13 @@ class AdaPanelClient
     public function login()
     {
         if ($this->loggedIn) {
+            return;
+        }
+
+        // ANAHTAR VARSA GIRIS YOK. Anahtar zaten bir kimliktir; ustune oturum acmak dakikada 5
+        // istekle sinirli login politikasina gereksiz yere girmek olurdu.
+        if ($this->apiToken !== '') {
+            $this->loggedIn = true;
             return;
         }
 
@@ -300,8 +326,13 @@ class AdaPanelClient
         $headers = array(
             'Accept: application/json',
             // Gizli giris yolu basligi: olmadan panel 404 doner (bkz. dosya basi, madde 2).
+            // Anahtar yolunda panel bu basliktan muaf tutar; yine de gonderilmesi zararsizdir.
             'X-AdaPanel-Entry-Path: ' . $this->entryPath,
         );
+
+        if ($this->apiToken !== '') {
+            $headers[] = 'Authorization: Bearer ' . $this->apiToken;
+        }
 
         if ($this->csrfToken !== '') {
             $headers[] = 'X-CSRF-TOKEN: ' . $this->csrfToken;
@@ -374,8 +405,11 @@ class AdaPanelClient
             'security.invalid_entry_path' => 'Gizli giris yolu yanlis (sunucu tanimindaki Access Hash alani).',
             'security.ip_not_allowed' => 'WHMCS sunucusunun IP adresi panelin izinli IP listesinde degil.',
             'security.invalid_csrf_token' => 'CSRF belirteci gecersiz.',
-            'auth.unauthorized' => 'Oturum acilmamis ya da dusmus.',
-            'auth.forbidden' => 'Bu islem icin panel hesabinin yetkisi yok (Yonetici olmali).',
+            'auth.unauthorized' => 'Oturum acilmamis ya da dusmus (ya da API anahtari gecersiz/iptal edilmis).',
+            'auth.forbidden' => 'Bu islem icin panel hesabinin yetkisi yok (Yonetici olmali). '
+                . 'API anahtari kullaniyorsaniz YAZMA islemleri icin anahtarin "yikici islemlere izin ver" '
+                . 'yetkisi acik olmalidir.',
+            'billing.disabled' => 'Panelde faturalama entegrasyonu KAPALI. Panel -> Faturalama ekranindan acin.',
             'users.forbidden' => 'Bu kullanici uzerinde yetki yok (bayi hesabi yalnizca KENDI '
                 . 'musterileri icin parola belirleyebilir ve giris baglantisi uretebilir).',
             'users.password_too_short' => 'Parola en az 12 karakter olmali.',

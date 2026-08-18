@@ -182,6 +182,11 @@ public static class ServiceCollectionExtensions
         // hiçbir kod yoktu, yani kayıtlar sonsuza kadar birikiyordu.
         services.AddHostedService<Audit.AuditRetentionWorker>();
 
+        // Faturalama (WHMCS) entegrasyonu: toplu kullanım raporu + silme öncesi güvenlik denetimi.
+        // Scoped olmak ZORUNDA: DbContext ve müşteri kapsamı servisi de Scoped; Singleton yapılırsa
+        // captive dependency olur (aynı gerekçe LicenseService'te yazılı).
+        services.AddScoped<Billing.IBillingIntegrationService, Billing.BillingIntegrationService>();
+
         return services;
     }
 }
