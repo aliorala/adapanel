@@ -115,6 +115,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDiskQuotaService, Iis.DiskQuotaService>();
         services.AddScoped<IGitDeploymentService, Git.GitDeploymentService>();
         services.AddScoped<IWebStatisticsService, Statistics.WebStatisticsService>();
+        services.AddScoped<SiteBuilder.ISiteBuilderService, SiteBuilder.SiteBuilderService>();
         // Mail: kurulu sunucuya göre yönlendirilen dispatcher. Stalwart sağlayıcısı hiç
         // değişmeden korunur; MailEnable kuruluysa router ona yönlendirir.
         services.AddScoped<Mail.StalwartRuntime>();

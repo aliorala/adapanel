@@ -1,0 +1,85 @@
+namespace AdaPanel.Infrastructure.SiteBuilder;
+
+/// <summary>Yayın kararı: neyi ezeceğiz, izin var mı.</summary>
+public sealed record PublishDecision(
+    IReadOnlyList<string> FilesToWrite,
+    IReadOnlyList<string> Conflicts,
+    bool RequiresConfirmation,
+    bool Allowed);
+
+/// <summary>
+/// "Bu yayın müşterinin hangi dosyalarını ezer ve izin var mı?" sorusunun TEK cevabı.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden saf bir fonksiyon:</b> bu karar, panelin müşteri verisini yok edebilecek en yakın
+/// olduğu yer. Gerçek dosya sistemiyle sınanan bir kural, ancak kurulabilen senaryolar kadar
+/// sınanır; saf bir karar ise her sınır durumu için tek satırda sınanır — ve mutasyonla
+/// (kuralı kasten bozup testlerin kırmızıya döndüğünü görmek) doğrulanabilir.
+/// </para>
+/// <para>
+/// <b>Neden "yönetilen dosya" listesi:</b> kendi ürettiğimiz <c>index.html</c>'i her yayında
+/// "müşterinin dosyası" sayarsak kullanıcı her seferinde onay kutusu görür. Her seferinde çıkan
+/// bir uyarı, okunmayan bir uyarıdır: kullanıcı onaylamayı refleks hâline getirir ve uyarı, tam
+/// da GERÇEKTEN başkasının dosyası ezilecekken işe yaramaz olur.
+/// </para>
+/// <para>
+/// <b>Silme YOK:</b> bu planlayıcı yalnız YAZILACAK dosyaları döndürür. Hiçbir yerde "artık
+/// üretilmeyen dosyayı sil" adımı yoktur. Sebep bu depoda yaşanmış: FTP klasör bağlantısında
+/// özyinelemeli silme müşteri sitesini silebiliyordu. Yayın, eskiyen bir dosyayı diskte bırakır —
+/// bu, yanlış bir dosyayı silmekten her zaman daha iyidir.
+/// </para>
+/// </remarks>
+public static class SiteBuilderPublishPlanner
+{
+    public static PublishDecision Decide(
+        IReadOnlyCollection<string> filesToWrite,
+        IReadOnlyCollection<string> existingRelativePaths,
+        IReadOnlyCollection<string> managedFiles,
+        bool overwriteConfirmed)
+    {
+        var writes = filesToWrite
+            .Select(Normalize)
+            .Where(path => path.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // KORUMALI YOLLAR: yazma listesine hiçbir koşulda giremezler. Bu bir "ekstra güvence"
+        // değil, kuralın uygulandığı yer: üretici bir gün ".well-known/x" yazmak istese bile
+        // yayın onu taşımaz. (Plesk/Sitejet tarafında yayının .well-known'ı silmesi, sertifika
+        // yenilemesini bozan bilinen bir arızaydı.)
+        writes = writes.Where(path => !SiteBuilderLayout.IsProtected(path)).ToList();
+
+        var existing = new HashSet<string>(
+            existingRelativePaths.Select(Normalize).Where(path => path.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
+
+        var managed = new HashSet<string>(
+            managedFiles.Select(Normalize).Where(path => path.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
+
+        // ÇAKIŞMA = orada duruyor VE daha önce bizim yazdığımız bir dosya değil.
+        var conflicts = writes
+            .Where(path => existing.Contains(path) && !managed.Contains(path))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var requiresConfirmation = conflicts.Count > 0;
+        return new PublishDecision(
+            writes,
+            conflicts,
+            requiresConfirmation,
+            !requiresConfirmation || overwriteConfirmed);
+    }
+
+    /// <summary>
+    /// Göreli yolu karşılaştırılabilir tek biçime getirir.
+    /// </summary>
+    /// <remarks>
+    /// Ayırıcıyı birleştirmezsek "assets/adapanel/site.css" ile "assets\adapanel\site.css" iki ayrı
+    /// dosya sayılır: diskteki dosya çakışma listesinde GÖRÜNMEZ, kullanıcı uyarı almadan ezilir.
+    /// Sessiz veri kaybının klasik biçimi budur.
+    /// </remarks>
+    private static string Normalize(string? path) =>
+        (path ?? string.Empty).Replace('\\', '/').Trim().Trim('/');
+}

@@ -210,6 +210,8 @@
       v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)"
       :open-request="siteOpenRequest" />
 
+    <SiteBuilderView v-else-if="activeSection === 'sitebuilder'" />
+
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
     <MyDatabasesView v-else-if="activeSection === 'database' && (isReseller || isCustomer)" />
@@ -480,6 +482,7 @@ const LicenseView = lazyView(() => import("./LicenseView.vue"));
 const SoftwareView = lazyView(() => import("./SoftwareView.vue"));
 const UpdateView = lazyView(() => import("./UpdateView.vue"));
 const WebsiteWorkspaceView = lazyView(() => import("./WebsiteWorkspaceView.vue"));
+const SiteBuilderView = lazyView(() => import("./SiteBuilderView.vue"));
 
 type ViewMode = "setup" | "auth" | "dashboard";
 type SectionItem = {
@@ -693,6 +696,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi):
     // hesap yönetimi ekranı (UsersView) — kullanıcılar, planlar, kotalar, alt kullanıcılar.
     { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
+    { id: "sitebuilder", label: t("panel.navigation.siteBuilder"), description: t("panel.siteBuilder.subtitle"), glyph: "SK" },
     { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
@@ -723,6 +727,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     const resellerSections = sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
+      section.id === "sitebuilder" ||
       section.id === "accounts" ||
       section.id === "mail" ||
       section.id === "files" ||
@@ -749,6 +754,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     let customerSections = sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
+      section.id === "sitebuilder" ||
       section.id === "mail" ||
       section.id === "database" ||
       section.id === "files" ||
