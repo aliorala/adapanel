@@ -275,6 +275,8 @@
 
     <AdvisorView v-else-if="activeSection === 'advisor' && isAdmin" @navigate="handleNavigation" />
 
+    <SeoView v-else-if="activeSection === 'seo'" />
+
     <!-- Bayi de bu bölüme girer ama YALNIZ "Marka" sekmesini görür: sunucu ayarları (güvenlik,
          bildirim, güncelleme, lisans) hem sekme hem de uç düzeyinde yöneticiye kilitli kalır. -->
     <section v-else-if="activeSection === 'settings' && (isAdmin || isReseller)" class="panel module-shell settings-workspace">
@@ -600,6 +602,7 @@ const MigrationView = lazyView(() => import("./MigrationView.vue"));
 const ClusterView = lazyView(() => import("./ClusterView.vue"));
 const MyDatabasesView = lazyView(() => import("./MyDatabasesView.vue"));
 const AdvisorView = lazyView(() => import("./AdvisorView.vue"));
+const SeoView = lazyView(() => import("./SeoView.vue"));
 const FilesView = lazyView(() => import("./FilesView.vue"));
 const MailView = lazyView(() => import("./MailView.vue"));
 const MonitoringView = lazyView(() => import("./MonitoringView.vue"));
@@ -851,6 +854,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badgeTitle: attentionBadgeTitle("monitor"), badge: attentionBadge("monitor") },
     // Danışman rozeti = bekleyen dikkat maddesi sayısı; Mağaza rozeti = bekleyen güncelleme
     // sayısı (yoksa eskisi gibi kurulu bileşen sayısı).
+    { id: "seo", label: t("panel.navigation.seo"), description: t("panel.seo.subtitle"), glyph: "SE" },
     { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD", badgeTitle: attentionBadgeTitle("advisor"), badge: attentionBadge("advisor") },
     { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badgeTitle: attentionBadgeTitle("software"), badge: attentionBadge("software") ?? (installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined) },
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },

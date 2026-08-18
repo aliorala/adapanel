@@ -192,6 +192,16 @@ public static class ServiceCollectionExtensions
         // statik HardenAsync ile çağrılır (açık db'ye icacls /T uygulanıp ACL'in bozulmasını önlemek için).
         services.AddHostedService<Automation.AutomationWorker>();
 
+        // SEO ARAÇ KUTUSU. Kuyruk SINGLETON olmak zorunda: canlı tarama durumu (kaç sayfa gezildi,
+        // iptal belirteci) istekler ARASINDA yaşar; scoped olsaydı her istek boş bir durum görür ve
+        // "sürüyor mu" sorusu asla cevaplanamazdı. Tarayıcının kendisi scoped (IIS/dosya servislerini
+        // kullanır) ve tek tüketicili işçi tarafından ayrı bir kapsamda koşturulur.
+        services.AddSingleton<Seo.SeoScanQueue>();
+        services.AddScoped<Seo.SeoReportStore>();
+        services.AddScoped<Seo.SeoScanRunner>();
+        services.AddScoped<Seo.ISeoService, Seo.SeoScanService>();
+        services.AddHostedService<Seo.SeoScanWorker>();
+
         // Denetim kaydı saklama temizliği. Kayıt buraya bağlanmadan temizlik YALNIZCA elle
         // (POST /api/v1/audit-logs/purge) çalışırdı; ölçüldü: AuditLogs tablosunu silen başka
         // hiçbir kod yoktu, yani kayıtlar sonsuza kadar birikiyordu.
