@@ -13,7 +13,7 @@ using Xunit;
 namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>
-/// UZAK hedefte gun/kategori duzeni.
+/// UZAK hedefte gun/kategori/kaynak duzeni.
 /// </summary>
 /// <remarks>
 /// OLCULEN DURUM (0.5.5, kullanicinin canli sunucusu): yedekler diskte
@@ -22,7 +22,7 @@ namespace AdaPanel.Infrastructure.Tests;
 /// klasoru yalnizca YEREL yola eklenmisti; uzak yukleme dosya adindan baska bir sey bilmiyordu.
 /// <para>
 /// Bu testler duzeltmeyi degil, KIRILGAN NOKTALARINI korur:
-/// (1) uzak yol yerelle AYNI gun/kategori klasorunu icerir (tek kaynak),
+/// (1) uzak yol yerelle AYNI gun/kategori/KAYNAK klasorunu icerir (tek kaynak),
 /// (2) FTP'de "dizin zaten var" hatasi (ikinci gecenin NORMALI) yedegi BOZMAZ,
 /// (3) "izin yok" YUTULMAZ -- kok sebep kullanicinin gordugu kayda gecer,
 /// (4) S3'te MKD/MKCOL DENENMEZ (dizin kavrami yoktur), yalnizca anahtar oneki kullanilir,
@@ -34,23 +34,27 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupRemoteLayoutTests
 {
+    /// <summary>Testlerdeki sitenin adi; 0.6.1'den beri UZAK yolda da KAYNAK klasoru olarak gecer.</summary>
+    private const string Site = "shop.example.com";
+
     // =======================================================================================
-    // 1) TEK KAYNAK: gun/kategori karari
+    // 1) TEK KAYNAK: gun/kategori/kaynak karari
     // =======================================================================================
 
     [Fact]
     public void Yerel_klasor_ve_uzak_yol_AYNI_karardan_turer()
     {
         var an = new DateTime(2026, 8, 17, 23, 59, 30, DateTimeKind.Local);
-        var yer = BackupLayout.Describe(@"C:\yedek", "sites", an);
+        var yer = BackupLayout.Describe(@"C:\yedek", an, "sites", "ornek.com");
 
         Assert.Equal("2026-08-17", yer.Day);
         Assert.Equal("sites", yer.Category);
-        Assert.Equal(Path.Combine(@"C:\yedek", "2026-08-17", "sites"), yer.LocalDirectory);
+        Assert.Equal("ornek.com", yer.Source);
+        Assert.Equal(Path.Combine(@"C:\yedek", "2026-08-17", "sites", "ornek.com"), yer.LocalDirectory);
 
         // Uzak klasor seviyeleri yerel yolun SIRASIYLA aynisi: ikisi ayri hesaplansaydi gece
         // yarisinda bir gun ayrisir ve ayni yedek iki farkli gunde gorunurdu.
-        Assert.Equal(new[] { "2026-08-17", "sites" }, yer.RemoteFolders);
+        Assert.Equal(new[] { "2026-08-17", "sites", "ornek.com" }, yer.RemoteFolders);
     }
 
     [Fact]
@@ -59,7 +63,7 @@ public sealed class BackupRemoteLayoutTests
         // Kategori bugun sabit bir listeden geliyor; ama bu deger artik UZAK anahtara da giriyor.
         // Icinde ayirici/nokta tasiyan bir deger hem yerel yolu hem uzak anahtari hedefin disina
         // kacirabilirdi.
-        var yer = BackupLayout.Describe(@"C:\yedek", "../../etc", new DateTime(2026, 8, 17));
+        var yer = BackupLayout.Describe(@"C:\yedek", new DateTime(2026, 8, 17), "../../etc");
 
         Assert.DoesNotContain("..", yer.Category, StringComparison.Ordinal);
         Assert.DoesNotContain("/", yer.Category, StringComparison.Ordinal);
@@ -82,15 +86,15 @@ public sealed class BackupRemoteLayoutTests
 
         var gun = alan.YerelGun(kayit);
         Assert.Equal("created_remote_synced", kayit.Status);
-        Assert.Equal($"ftp://127.0.0.1:{sunucu.Port}/yedekler/{gun}/sites/{kayit.Name}", kayit.RemoteUri);
+        Assert.Equal($"ftp://127.0.0.1:{sunucu.Port}/yedekler/{gun}/sites/{Site}/{kayit.Name}", kayit.RemoteUri);
 
         // Dosya GERCEKTEN o yola indi (sunucu ne aldigini soyluyor) ve bos degil.
-        Assert.True(sunucu.Dosyalar.ContainsKey($"/yedekler/{gun}/sites/{kayit.Name}"));
-        Assert.True(sunucu.Dosyalar[$"/yedekler/{gun}/sites/{kayit.Name}"].Length > 0);
+        Assert.True(sunucu.Dosyalar.ContainsKey($"/yedekler/{gun}/sites/{Site}/{kayit.Name}"));
+        Assert.True(sunucu.Dosyalar[$"/yedekler/{gun}/sites/{Site}/{kayit.Name}"].Length > 0);
 
         // ARA DIZINLER KENDILIGINDEN OLUSMAZ: her seviye icin MKD gerekir, YUKARIDAN ASAGIYA.
         Assert.Equal(
-            new[] { "/yedekler", $"/yedekler/{gun}", $"/yedekler/{gun}/sites" },
+            new[] { "/yedekler", $"/yedekler/{gun}", $"/yedekler/{gun}/sites", $"/yedekler/{gun}/sites/{Site}" },
             sunucu.MkdYollari);
     }
 
@@ -117,12 +121,12 @@ public sealed class BackupRemoteLayoutTests
 
         Assert.Equal("created_remote_synced", ikinci.Status);
         Assert.DoesNotContain(ikinci.Warnings, uyari => uyari.MessageKey == "backup.remote_upload_failed");
-        Assert.Contains($"/{alan.YerelGun(ikinci)}/sites/", ikinci.RemoteUri, StringComparison.Ordinal);
+        Assert.Contains($"/{alan.YerelGun(ikinci)}/sites/{Site}/", ikinci.RemoteUri, StringComparison.Ordinal);
 
         // Dosya GERCEKTEN gitti: "durum tamam" demek yetmez, sunucuda karsiligi olmali.
         Assert.Contains(
             sunucu.Dosyalar.Keys,
-            yol => yol.EndsWith($"/{alan.YerelGun(ikinci)}/sites/{ikinci.Name}", StringComparison.Ordinal));
+            yol => yol.EndsWith($"/{alan.YerelGun(ikinci)}/sites/{Site}/{ikinci.Name}", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -193,11 +197,12 @@ public sealed class BackupRemoteLayoutTests
             {
                 $"MKCOL https://bulut.ornek.com/dav/yedek/{gun}/",
                 $"MKCOL https://bulut.ornek.com/dav/yedek/{gun}/sites/",
-                $"PUT https://bulut.ornek.com/dav/yedek/{gun}/sites/{kayit.Name}"
+                $"MKCOL https://bulut.ornek.com/dav/yedek/{gun}/sites/{Site}/",
+                $"PUT https://bulut.ornek.com/dav/yedek/{gun}/sites/{Site}/{kayit.Name}"
             },
             kayitci.Istekler);
 
-        Assert.Equal($"https://bulut.ornek.com/dav/yedek/{gun}/sites/{kayit.Name}", kayit.RemoteUri);
+        Assert.Equal($"https://bulut.ornek.com/dav/yedek/{gun}/sites/{Site}/{kayit.Name}", kayit.RemoteUri);
     }
 
     [Fact]
@@ -215,7 +220,7 @@ public sealed class BackupRemoteLayoutTests
 
         Assert.Equal("created_remote_synced", kayit.Status);
         Assert.DoesNotContain(kayit.Warnings, u => u.MessageKey == "backup.remote_upload_failed");
-        Assert.Contains($"/{alan.YerelGun(kayit)}/sites/", kayit.RemoteUri, StringComparison.Ordinal);
+        Assert.Contains($"/{alan.YerelGun(kayit)}/sites/{Site}/", kayit.RemoteUri, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -265,7 +270,7 @@ public sealed class BackupRemoteLayoutTests
         // (API'de karsiligi da yoktur; denemek her yedekte bir cop istek demektir).
         var tekIstek = Assert.Single(kayitci.Istekler);
         Assert.Equal(
-            $"PUT https://s3.eu-central-1.amazonaws.com/musteri-yedek/{gun}/sites/{kayit.Name}",
+            $"PUT https://s3.eu-central-1.amazonaws.com/musteri-yedek/{gun}/sites/{Site}/{kayit.Name}",
             tekIstek);
         Assert.DoesNotContain(kayitci.Istekler, item => item.StartsWith("MKCOL", StringComparison.Ordinal));
 
@@ -537,13 +542,39 @@ public sealed class BackupRemoteLayoutTests
             DosyaDeposu.WriteAsync("config/backups.json", kayitlar, Iptal);
 
         /// <summary>
-        /// Kaydin YEREL yolundan gun klasorunu okur (<c>...\2026-08-17\sites\dosya.zip</c>).
+        /// Kaydin YEREL yolundan gun klasorunu okur
+        /// (<c>...\2026-08-17\sites\shop.example.com\dosya.zip</c>).
+        /// <para>
         /// Beklenen gunu testte ayrica hesaplamak, gece yarisini gecen bir kosuda testi yanlis
         /// yere bakmaya iterdi; ustelik "uzak yol yerelle AYNI karardan turer" iddiasi ancak
         /// yerelden okuyarak olculebilir.
+        /// </para>
+        /// <para>
+        /// Sabit sayida "Parent" ile YUKARI CIKILMAZ: kaynak klasoru eklendiginde derinlik
+        /// degisti, siteye ait veritabani yedeginde bir kat daha degisiyor. Gun klasoru ADINDAN
+        /// tanindigi icin bu yardimci duzen degistikce kirilmaz.
+        /// </para>
         /// </summary>
-        public string YerelGun(BackupRecordDto kayit) =>
-            new DirectoryInfo(Path.GetDirectoryName(kayit.Path)!).Parent!.Name;
+        public string YerelGun(BackupRecordDto kayit)
+        {
+            var klasor = new DirectoryInfo(Path.GetDirectoryName(kayit.Path)!);
+            while (klasor is not null)
+            {
+                if (DateTime.TryParseExact(
+                        klasor.Name,
+                        "yyyy-MM-dd",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None,
+                        out _))
+                {
+                    return klasor.Name;
+                }
+
+                klasor = klasor.Parent;
+            }
+
+            throw new InvalidOperationException($"Yedek yolunda gun klasoru yok: {kayit.Path}");
+        }
 
         public void Dispose()
         {

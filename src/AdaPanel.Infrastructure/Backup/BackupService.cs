@@ -349,27 +349,16 @@ public sealed class BackupService(
     /// </summary>
     /// <remarks>
     /// Kaynak alanı kullanıcı verisidir (site adı, abonelik kimliği) ve doğrudan yola girerse
-    /// dizin kaçışına açık olur; bu yüzden dosya adında geçersiz olan HER karakter atılır ve
-    /// sonuç boşsa sabit bir ada düşülür. Zaman damgası, aynı yedekten ikinci kez seçerek geri
-    /// yüklemenin öncekinin üzerine yazmasını engeller.
+    /// dizin kaçışına açık olur; bu yüzden temizlik <see cref="BackupPathName"/> üzerinden yapılır
+    /// — yedek klasörü (<see cref="BackupLayout"/>) ile AYNI kural, tek kaynaktan. İkisi ayrı
+    /// yazıldığı sürece biri düzeltilip diğeri unutulabilirdi. Zaman damgası, aynı yedekten ikinci
+    /// kez seçerek geri yüklemenin öncekinin üzerine yazmasını engeller.
     /// </remarks>
     internal static string BuildRestoreFolderName(BackupRecordDto record)
     {
-        var gecersiz = Path.GetInvalidFileNameChars();
-
-        static string Temizle(string? deger, char[] gecersizler)
-        {
-            var ham = new string((deger ?? string.Empty)
-                .Where(karakter => !gecersizler.Contains(karakter)
-                    && karakter != Path.DirectorySeparatorChar
-                    && karakter != Path.AltDirectorySeparatorChar)
-                .ToArray())
-                .Trim()
-                .Trim('.');
-            return ham.Length == 0 ? "yedek" : ham[..Math.Min(ham.Length, 64)];
-        }
-
-        return $"{Temizle(record.Type, gecersiz)}-{Temizle(record.Source, gecersiz)}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+        var tur = BackupPathName.Sanitize(record.Type, "yedek");
+        var kaynak = BackupPathName.Sanitize(record.Source, "yedek");
+        return $"{tur}-{kaynak}-{DateTime.UtcNow:yyyyMMddHHmmss}";
     }
 
     /// <summary>
@@ -522,19 +511,46 @@ public sealed class BackupService(
     private static readonly string EncryptionAlgorithmSummary =
         $"AES-256-GCM / PBKDF2-SHA256 ({BackupArchiveCipher.Pbkdf2Iterations:N0} tur)";
 
+    /// <summary>
+    /// Tek bir sitenin tam yedeği: <c>files/</c> + <c>config/</c> + <c>databases/</c> + <c>mail/</c>
+    /// tek bir zip içinde.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Arşiv siteye ait HER ŞEYİ bir arada tutar</b> — istekte seçilen veritabanlarının dökümü
+    /// de aynı zip'in <c>databases/</c> klasörüne girer; ayrı bir dosya aramak gerekmez.
+    /// </para>
+    /// <para>
+    /// <b>UYARI — <c>mail/</c> POSTA KUTUSU DEĞİLDİR.</b> Bu klasördeki JSON, alan adının
+    /// hesap/alias/yönlendirme ENVANTERİDİR; hiçbir İLETİ içermez. İletiler Stalwart'ın RocksDB
+    /// deposunda yaşar; tek bir alan adını o depodan dosya kopyalayarak ayırmak mümkün değildir.
+    /// Posta kutusu içeriği YALNIZCA sunucu geneli posta yedeğiyle
+    /// (<see cref="BackupMailAsync"/>) korunur. Bu ayrım arşivin <c>manifest.json</c> dosyasına da
+    /// yazılır: "mail" parçasını görüp postasının yedeklendiğini sanan biri, geri getirilemeyeceğini
+    /// ancak felaket anında öğrenirdi.
+    /// </para>
+    /// </remarks>
     public async Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
         var preferences = await preferencesService.GetAsync(cancellationToken);
         // YER kararı bir kez verilir; hem yerel klasör hem UZAK yol bundan türetilir.
-        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "sites");
+        //
+        // Kaynak seviyesi SİTE ADIDIR ve bilinçli olarak zincirin kaynak kimliğiyle (aşağıdaki
+        // ResolveChainPlanAsync çağrısının ikinci parametresi) AYNI değerdir: böylece bir zincirin
+        // bütün halkaları aynı gün içinde aynı klasörde toplanır, elle bakan biri de halkaları
+        // dosya adı ayıklamadan görür.
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "sites", site.Name);
         var backupsDirectory = placement.LocalDirectory;
 
         // ZİNCİR KARARI ARŞİVDEN ÖNCE VERİLİR: hangi dosyaların yazılacağı buna bağlı.
         var plan = await ResolveChainPlanAsync("site", site.Name, request, cancellationToken);
         var artimsal = plan.Stamp is { } damga && damga.Mode == BackupChainPlanner.ModeIncremental;
 
-        var fileName = $"{site.Name}-{DateTime.UtcNow:yyyyMMddHHmmss}{(artimsal ? "-inc" : string.Empty)}.zip";
+        // DOSYA ADI DA aynı temizlikten geçmiş değeri kullanır (placement.Source): klasörü
+        // korurken dosya adını ham bırakmak kapıyı açık bırakmaktı — Path.Combine, ayırıcı içeren
+        // bir dosya adını yol olarak kabul eder ve yedek hedef klasörün DIŞINA yazılırdı.
+        var fileName = $"{placement.Source}-{DateTime.UtcNow:yyyyMMddHHmmss}{(artimsal ? "-inc" : string.Empty)}.zip";
         var targetPath = Path.Combine(backupsDirectory, fileName);
 
         if (File.Exists(targetPath))
@@ -587,11 +603,21 @@ public sealed class BackupService(
             {
                 try
                 {
+                    // DİKKAT — BU BİR POSTA KUTUSU YEDEĞİ DEĞİLDİR.
+                    //
+                    // Yazılan şey hesap/alias/yönlendirme ENVANTERİDİR; TEK BİR İLETİ içermez.
+                    // İletiler Stalwart'ın RocksDB deposunda yaşar ve o depodan tek bir alan adını
+                    // dosya kopyalayarak ayırmak MÜMKÜN DEĞİLDİR (tek depo, paylaşılan indeksler);
+                    // sunucu geneli posta yedeği bu yüzden ayrı bir akıştır (BackupMailAsync).
+                    //
+                    // Bu ayrım arşivin manifest'ine de yazılır: "mail" parçasını görüp postasının
+                    // yedeklendiğini sanan biri, felaket anında geri getirilemeyecek olanı ancak o
+                    // an öğrenirdi. Yarım bir söz, hiç söz vermemekten kötüdür.
                     var mailDomain = site.Name.ToLowerInvariant();
                     var mailWorkspace = await mailService.GetWorkspaceAsync(mailDomain, cancellationToken);
                     var mailJson = System.Text.Json.JsonSerializer.Serialize(mailWorkspace, BackupJsonOptions);
                     AddTextEntry(archive, $"mail/{mailDomain}.json", mailJson);
-                    includedParts.Add("mail");
+                    includedParts.Add("mail-inventory");
                 }
                 catch
                 {
@@ -611,7 +637,13 @@ public sealed class BackupService(
                 chainIndex = plan.Stamp?.ChainIndex ?? 0,
                 note = artimsal
                     ? "Incremental link: files/ carries CHANGED files only; database dumps are always FULL."
-                    : "Full backup."
+                    : "Full backup.",
+                // Arşivi açan kişi "mail/" klasörünü görüp postasının yedeklendiğini SANMAMALI:
+                // burada yalnız hesap/alias envanteri var, ileti YOK. Yanlış güven, felaket anında
+                // geri getirilemeyen posta demektir.
+                mailNote = includedParts.Contains("mail-inventory")
+                    ? "mail/ holds the ACCOUNT AND ALIAS INVENTORY only. It contains NO messages/mailbox data. Mailbox contents live in the Stalwart store and are covered ONLY by the server-wide mail backup."
+                    : string.Empty
             }, BackupJsonOptions);
             AddTextEntry(archive, "manifest.json", manifest);
         }
@@ -929,14 +961,27 @@ public sealed class BackupService(
     public async Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default)
     {
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "databases");
-        var backupsDirectory = placement.LocalDirectory;
         var safeDatabaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? "all" : request.DatabaseName.Trim();
+
+        // KAYNAK KLASÖRÜ dosya adının önekiyle AYNI ("mysql-shop_db"): diskten bakan biri klasör
+        // adıyla dosya adı arasında zihinsel çeviri yapmak zorunda kalmasın.
+        var kaynakKlasoru = $"{request.Engine}-{safeDatabaseName}";
+
+        // VERİTABANI BİR SİTEYE AİTSE onun klasörüne girer: kullanıcının isteği "bir sitenin her
+        // şeyi bir arada dursun". Sahiplik ÖLÇÜLEREK okunur (aşağıya bakınız); okunamıyorsa yedek
+        // kategorinin kendi klasörüne düşer — yanlış siteye koymaktansa gruplamamak yeğdir.
+        var sahipSite = await ResolveDatabaseSiteAsync(request.Engine, request.DatabaseName, cancellationToken);
+        var placement = sahipSite.Length == 0
+            ? BackupLayout.Ensure(preferences.DefaultBackupRoot, "databases", kaynakKlasoru)
+            : BackupLayout.Ensure(preferences.DefaultBackupRoot, "sites", sahipSite, "databases", kaynakKlasoru);
+        var backupsDirectory = placement.LocalDirectory;
         var extension = request.Engine.Equals("mssql", StringComparison.OrdinalIgnoreCase) ||
                         request.Engine.Equals("sqlserver", StringComparison.OrdinalIgnoreCase)
             ? "bak"
             : "sql";
-        var fileName = $"{request.Engine}-{safeDatabaseName}-{DateTime.UtcNow:yyyyMMddHHmmss}.{extension}";
+        // Klasörle AYNI (temizlenmiş) önek: veritabanı adı da kullanıcı verisidir, ham hâliyle
+        // Path.Combine'a verilmesi yedeği hedef klasörün dışına yazabilirdi.
+        var fileName = $"{placement.Source}-{DateTime.UtcNow:yyyyMMddHHmmss}.{extension}";
         var targetPath = Path.Combine(backupsDirectory, fileName);
         var dump = await databaseService.ExportDumpAsync(new AdaPanel.Core.Dtos.Databases.DatabaseDumpRequest
         {
@@ -956,9 +1001,66 @@ public sealed class BackupService(
             cancellationToken);
     }
 
+    /// <summary>
+    /// Veritabanının bağlı olduğu site (yoksa boş metin). Yalnızca YEDEĞİN KLASÖRÜNÜ seçmek için
+    /// kullanılır; erişim/kapsam kararı DEĞİLDİR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden sahiplik kaydı, ad benzerliği değil:</b> "shop_db şu siteye aittir" tahmini bu
+    /// depoda daha önce gerçek bir veri kaybına yol açtı. Bağ, panelin kendi OTORİTE kaydından
+    /// (<see cref="IDatabaseOwnershipService"/>, <c>config/db-ownership.json</c>) okunur; kayıt
+    /// yoksa bağ da YOKTUR.
+    /// </para>
+    /// <para>
+    /// <b>Neden hata yutulmuyor ama yedek de durdurulmuyor:</b> sahiplik okunamazsa bilinen tek
+    /// gerçek "hangi siteye ait olduğunu bilmiyoruz"tur. Bu yüzden yedek eski düzendeki
+    /// <c>databases/</c> klasörüne alınır (yedek KAYBOLMAZ) ve sebep günlüğe yazılır — sessizce
+    /// bir siteye koymak, o siteyi geri yükleyen kişiye ait olmayan bir veritabanını sunardı.
+    /// </para>
+    /// <para>
+    /// <b>Boş veritabanı adı</b> (motorun tamamının dökümü) hiçbir siteye ait olamaz; sahiplik hiç
+    /// sorgulanmaz.
+    /// </para>
+    /// </remarks>
+    private async Task<string> ResolveDatabaseSiteAsync(string engine, string? databaseName, CancellationToken cancellationToken)
+    {
+        if (databaseOwnership is null || string.IsNullOrWhiteSpace(databaseName))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var kayitlar = await databaseOwnership.GetAllAsync(cancellationToken);
+            var ad = databaseName.Trim();
+            foreach (var kayit in kayitlar)
+            {
+                if (string.Equals(kayit.Engine, engine?.Trim(), StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(kayit.DatabaseName, ad, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (kayit.SiteName ?? string.Empty).Trim();
+                }
+            }
+
+            return string.Empty;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger?.LogWarning(
+                exception,
+                "Veritabani sahipligi okunamadi; yedek site klasorune degil 'databases' klasorune alinacak: {Engine}/{Database}",
+                engine,
+                databaseName);
+            return string.Empty;
+        }
+    }
+
     public async Task<BackupRecordDto> BackupPanelAsync(BackupPanelRequest request, CancellationToken cancellationToken = default)
     {
         var preferences = await preferencesService.GetAsync(cancellationToken);
+        // KAYNAK KLASÖRÜ YOK, bilerek: panel yedeğinin kaynağı TEKTİR (panelin kendisi).
+        // "panel\panel\" gibi bir seviye hiçbir şeyi ayırmaz, yalnızca bir tık daha derine gömer.
         var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "panel");
         var backupsDirectory = placement.LocalDirectory;
         var fileName = $"panel-config-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";
@@ -1101,7 +1203,10 @@ public sealed class BackupService(
         var kaynak = request.UserId.ToString("N");
 
         var preferences = await preferencesService.GetAsync(cancellationToken);
-        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "subscriptions");
+        // KAYNAK KLASÖRÜ: aboneliğin TAM kimliği. Dosya adındaki kısaltılmış (8 haneli) önek
+        // BİLEREK kullanılmadı — klasör bir zincirin halkalarını topluyor; iki aboneliğin kimliği
+        // ilk 8 hanede çakışırsa halkaları aynı klasörde karışırdı.
+        var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "subscriptions", kaynak);
         var backupsDirectory = placement.LocalDirectory;
         var chainPlan = await ResolveChainPlanAsync("subscription", kaynak, request, cancellationToken);
         var artimsal = chainPlan.Stamp is { } damga && damga.Mode == BackupChainPlanner.ModeIncremental;
@@ -1569,6 +1674,9 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
 
         var preferences = await preferencesService.GetAsync(cancellationToken);
+        // KAYNAK KLASÖRÜ YOK, bilerek: bu yedeğin kaynağı TEKTİR — Stalwart'ın veri deposunun
+        // TAMAMI. Alan adı başına bir kaynak klasörü açmak, olmayan bir ayrımı varmış gibi
+        // gösterirdi (bkz. BackupMailAsync özeti).
         var placement = BackupLayout.Ensure(preferences.DefaultBackupRoot, "mail");
         var backupsDirectory = placement.LocalDirectory;
         var fileName = $"stalwart-mail-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";

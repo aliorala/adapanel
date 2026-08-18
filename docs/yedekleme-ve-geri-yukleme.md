@@ -34,7 +34,52 @@ yeniden girilmeleri gerekir. Kullanıcılar, planlar, kapsamlar ve ayarlar geri 
 > Veritabanı listesi boş bırakılan bir "tam site yedeği" aslında tam değildir. WordPress gibi
 > veritabanı kullanan bir siteyi yedeklerken veritabanını **açıkça** ekleyin.
 
-## 3. Off-site (uzak) hedefler
+Seçilen veritabanlarının dökümü **aynı zip'in içine** (`databases/` klasörüne) girer; ayrı bir
+dosya aramanız gerekmez.
+
+### ⚠ Site yedeğindeki `mail/` klasörü posta kutusu DEĞİLDİR
+
+Arşivdeki `mail/<alan-adı>.json` yalnızca **hesap / alias / yönlendirme listesidir** — içinde
+**tek bir e-posta iletisi yoktur**. İletiler Stalwart'ın kendi deposunda yaşar ve o depodan tek bir
+alan adını ayırmak dosya kopyalayarak mümkün değildir. **Posta kutusu içeriği yalnızca sunucu
+geneli posta yedeğiyle korunur** (yukarıdaki tabloda "Posta yedeği"). Bu uyarı arşivin
+`manifest.json` dosyasına da yazılır.
+
+## 3. Yedeklerin klasör düzeni
+
+Yedekler diskte **gün → kategori → kaynak** sırasıyla klasörlenir:
+
+```
+backups\2026-08-18\sites\ornek.com\ornek.com-20260818030000.zip
+backups\2026-08-18\databases\mysql-shop_db\mysql-shop_db-20260818030500.sql.zst
+backups\2026-08-18\subscriptions\<abonelik-kimliği>\abonelik-....zip
+backups\2026-08-18\mail\stalwart-mail-....zip
+backups\2026-08-18\panel\panel-config-....zip
+```
+
+**Neden bu sıra:** gün en üstte kaldığı için "bir günü komple taşı / sil" hâlâ **tek işlemdir**;
+kaynak klasörü ise çok siteli bir sunucuda dosya adı okumadan gezinmeyi sağlar.
+
+**Kaynağı tek olan kategoriler** (panel yedeği, sunucu geneli posta yedeği) fazladan bir seviye
+açmaz — ayıracak bir şey yoktur.
+
+**Siteye bağlı veritabanı sitenin klasörüne girer.** Panelden tek bir veritabanının yedeğini
+aldığınızda, o veritabanı bir siteye kayıtlıysa yedek
+`sites\<site>\databases\<motor>-<ad>\` altına düşer; böylece o sitenin her şeyi bir arada durur.
+Bağ, panelin **sahiplik kaydından** okunur (ad benzerliğinden **tahmin edilmez**); kayıt yoksa ya
+da okunamıyorsa yedek `databases\<motor>-<ad>\` altında kalır — yanlış siteye konmaz.
+
+**Uzak (off-site) hedefte de aynı düzen kurulur:** FTP ve WebDAV'da ara klasörler açılır, S3'te
+anahtar öneki olarak uygulanır.
+
+> **Eski yedekler etkilenmez.** Her yedeğin yolu kaydında tam olarak saklanır; eski düzende alınmış
+> yedekler listelenmeye, geri yüklenmeye, indirilmeye ve budanmaya (uzak kopyası dâhil) devam eder.
+> Yeni düzen yalnızca **yeni** yedekler için geçerlidir.
+
+Panelin yedek listesi klasöre değil **yedeğin alındığı ana** göre gün gün gruplanır; klasör düzeni
+değişse de liste aynı kalır.
+
+## 4. Off-site (uzak) hedefler
 
 Yedek yereldeki dosyaya ek olarak uzak bir hedefe de gönderilebilir: **S3**, **FTP**, **WebDAV**.
 
@@ -42,7 +87,7 @@ Uzak hedefi **gerçek yedek almadan** sınayabilirsiniz: panel küçük bir test
 yükleme yoluyla** gönderir; böylece kimlik, bağlantı ve yazma izni birlikte ölçülür. Sınama
 başarısız olursa hata fırlatılmaz, sebebiyle birlikte sonuç gösterilir.
 
-## 4. Otomatik yedekleme
+## 5. Otomatik yedekleme
 
 **Sol menü → Sunucu Araçları → Otomasyon.**
 
@@ -53,7 +98,7 @@ Budama kuralı: `retentionDays` günden eski yedeklerde yerel dosya + kayıt sil
 verilmişse **uzak kopya da** silinir (uzak rotasyon). **0 ya da negatif gün hiçbir şeyi silmez** —
 yani "saklama süresi" alanını boş bırakmak yedekleri korur, silmez.
 
-### 4.1 Yedeğin SAATİNİ seçmek
+### 5.1 Yedeğin SAATİNİ seçmek
 
 **Sol menü → Sunucu Araçları → Otomasyon → Otomatik yedekleme → "Zamanlama".**
 (Aynı alanlar **Sol menü → Yedekleme** ekranındaki "Otomatik yedek" kartında da vardır.)
@@ -92,7 +137,7 @@ alındığında aynı duvar saati iki kez yaşansa da yedek bir kez alınır.
 **Eski kurulumlar:** zamanlama seçilmemiş kurulumlar **"Belirli aralıklarla"** modunda kalır ve
 eski davranış birebir sürer. Saat seçmek isteğe bağlıdır; yükseltme hiçbir programı değiştirmez.
 
-### 4.2 Abonelik başına program
+### 5.2 Abonelik başına program
 
 **Sol menü → Yedekleme → Abonelik yedek programları.**
 
@@ -105,32 +150,32 @@ denk gelirse ikisi de başlar ve disk yükünü paylaşır — hiçbiri atlanmaz
 çok sayıda abonelik programı ise sırayla koşar: tur başlarken zaman **bir kez** okunduğu için
 sıranın sonundakiler de o turda yedeklenir, kendi telafi penceresinin dışına düşmez.
 
-## 5. Geri yükleme
+## 6. Geri yükleme
 
-### 5.1 Tam geri yükleme
+### 6.1 Tam geri yükleme
 
 Yedek listesinden **geri yükle**. İsteğe bağlı bir **hedef yol** verebilirsiniz; boş bırakılırsa
 yedek orijinal site köküne açılır.
 
 Yalnız **yönetici** tam geri yükleme yapabilir.
 
-### 5.2 Granüler (dosya seçerek) geri yükleme
+### 6.2 Granüler (dosya seçerek) geri yükleme
 
 Bir yedeğin içine **dizin dizin göz atabilir** ve yalnız seçtiğiniz dosya/klasörleri geri
 yükleyebilirsiniz. Kazara silinen tek bir dosya için bütün siteyi geri yüklemek gerekmez.
 
-### 5.3 İndirme
+### 6.3 İndirme
 
 Her yerel yedek `.zip` olarak indirilebilir. İndirilen dosyayı sunucu dışında saklamak, off-site
 hedef kurmadığınız durumda en basit güvencedir.
 
-### 5.4 Silme
+### 6.4 Silme
 
 Bir yedeği silmek **yerel dosyayı ve kaydı** siler; **off-site uzak kopyaya dokunmaz** (uzak
 rotasyon budamanın işidir). Yönetici her yedeği, müşteri/bayi yalnız kendi kapsamındaki **site**
 yedeklerini silebilir.
 
-## 6. Geri yükleme öncesi kontrol listesi
+## 7. Geri yükleme öncesi kontrol listesi
 
 1. **Doğru yedeği seçtiğinizden emin olun.** Geri yükleme, hedefteki dosyaların üzerine yazar.
 2. **Veritabanı yedeğe dâhil miydi?** Değilse dosyalar geri gelir ama site veriye bağlıysa yine
@@ -140,7 +185,7 @@ yedeklerini silebilir.
 4. Panel yedeğini **aynı makineye** geri yüklüyorsanız sırlar da çalışmaya devam eder; **başka
    makineye** yüklüyorsanız 1. bölümdeki uyarıyı okuyun.
 
-## 7. Felaket kurtarma (sunucu tamamen gitti)
+## 8. Felaket kurtarma (sunucu tamamen gitti)
 
 Bu akış tek tek adımlarıyla **canlı olarak doğrulanmadı** — buradaki sıra, yukarıdaki doğrulanmış
 davranışlardan çıkarılmış mantıksal sıradır:
