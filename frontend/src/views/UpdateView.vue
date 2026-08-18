@@ -44,8 +44,17 @@
       <p v-if="status.isCheckFailed" class="notice warn" role="alert">{{ t("panel.update.checkFailed") }}</p>
       <p v-else-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
 
+      <!-- Notlar tabloya SIĞMIYORDU: <dd> içinde düz metin olarak basılınca HTML satır
+           sonlarını yutuyor, bütün sürüm notu tek satıra çöküyordu. Kendi bloğunda ve
+           biçimlendirilmiş olarak gösteriliyor. -->
+      <section class="update-notes">
+        <h3>{{ t("panel.update.notes") }}</h3>
+        <p v-if="notlar.anahtar" class="meta">{{ notlar.anahtar }}</p>
+        <ReleaseNotes v-else-if="notlar.metin" :text="notlar.metin" />
+        <p v-else class="meta">-</p>
+      </section>
+
       <dl class="detail-grid">
-        <div><dt>{{ t("panel.update.notes") }}</dt><dd>{{ translate(status.notes) }}</dd></div>
         <div><dt>{{ t("panel.update.sha256") }}</dt><dd>{{ status.packageSha256 || "-" }}</dd></div>
         <div><dt>{{ t("panel.update.packagePath") }}</dt><dd>{{ status.packagePath || "-" }}</dd></div>
       </dl>
@@ -100,6 +109,7 @@ import {
   type UpdateStatus,
 } from "../api/update";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import ReleaseNotes from "../components/ReleaseNotes.vue";
 import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
@@ -357,6 +367,23 @@ function formatElapsed(seconds: number) {
 }
 
 onBeforeUnmount(stopPostInstallWatch);
+
+/**
+ * Arka uç bu alana İKİ farklı şey koyar: ya bir çeviri ANAHTARI ("update.package_staged"),
+ * ya da GitHub sürüm notlarının tam metni. Ayrımı ölçerek yapıyoruz: anahtarlar boşluk ya da
+ * satır sonu içermez.
+ *
+ * Serbest metni t()'ye VERMİYORUZ -- vue-i18n `{...}` gördüğünde onu yer tutucu sanar; kod
+ * örneği ya da JSON içeren bir sürüm notu bu yüzden bozulurdu.
+ */
+const notlar = computed(() => {
+  const ham = (status.value?.notes ?? "").trim();
+  if (!ham) return { anahtar: "", metin: "" };
+  if (/^[A-Za-z0-9_.]+$/.test(ham)) {
+    return { anahtar: translate(ham), metin: "" };
+  }
+  return { anahtar: "", metin: ham };
+});
 
 function translate(key: string) {
   const translated = t(key);
