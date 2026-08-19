@@ -60,6 +60,37 @@ public sealed class BackupRecordDto
     public string PreservedPath { get; set; } = string.Empty;
 
     // =================================================================================
+    // UZLAŞTIRMA (yedek GERÇEKTEN duruyor mu?)
+    //
+    // ÖLÇÜLEN HATA: liste, kaydı JSON'dan okuyup olduğu gibi gösteriyordu. Diskten ya da
+    // FTP'den ELLE silinmiş bir yedek panelde "geri yüklenebilir" olarak durmaya devam
+    // ediyordu; kullanıcı bunu ancak GERİ YÜKLEMEYE ÇALIŞTIĞINDA, yani felaket anında
+    // öğreniyordu. Yedeğin var olduğunu SANMAK, hiç yedeğin olmamasından daha tehlikelidir.
+    //
+    // İki alan ayrı tutuldu çünkü ÖLÇÜM MALİYETLERİ farklı:
+    //  - yerel varlık: bir dosya sistemi sorgusu, her listelemede yapılabilir;
+    //  - uzak varlık: ağ isteği — her listelemede yapılsa panel yavaşlar ve hedefin hız
+    //    sınırına takılırdı. Bu yüzden yalnızca DOĞRULAMA çalıştığında ölçülür ve sonucu
+    //    burada SAKLANIR.
+    // =================================================================================
+
+    /// <summary>
+    /// Yerel dosya listeleme ANINDA yok. Diskte saklanmaz — her listelemede yeniden ölçülür,
+    /// yoksa dosyayı geri koyan bir kullanıcı kalıcı "kayıp" damgasıyla kalırdı.
+    /// </summary>
+    public bool LocalMissing { get; set; }
+
+    /// <summary>
+    /// Uzak kopya SON DOĞRULAMADA yoktu. Varsayılan <c>false</c> "yok" değil "ölçülmedi"
+    /// anlamına gelir; ikisini karıştırmak, hedefe erişilemeyen bir günde bütün yedekleri
+    /// kayıp saymak olurdu.
+    /// </summary>
+    public bool RemoteMissing { get; set; }
+
+    /// <summary>Uzak kopyanın en son ne zaman ölçüldüğü (hiç ölçülmediyse <c>null</c>).</summary>
+    public DateTime? RemoteVerifiedUtc { get; set; }
+
+    // =================================================================================
     // ARTIMSAL (INCREMENTAL) ZİNCİR — Plesk'in kanıtlanmış modeli.
     //
     // Plesk'te bir TAM yedek + ardından gelen ARTIMSAL yedekler bir ZİNCİR oluşturur:

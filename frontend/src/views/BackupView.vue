@@ -5,12 +5,75 @@
         <h3>{{ t("panel.backup.title") }}</h3>
         <p class="meta">{{ t("panel.backup.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading" @click="refresh">
-        {{ t("panel.backup.refresh") }}
-      </button>
+      <div class="row-actions">
+        <!-- "Yedekleri doğrula": listedeki kayıtların GERÇEKTEN durup durmadığını ölçer.
+             Ayrı bir düğme çünkü uzak ölçüm kayıt başına bir AĞ isteğidir; her sayfa açılışında
+             yapılsaydı panel yavaşlar ve hedefin hız sınırına takılırdı. Hiçbir şeyi SİLMEZ. -->
+        <button class="secondary compact" :disabled="loading || verifying" @click="verify">
+          {{ verifying ? t("panel.backup.verify.running") : t("panel.backup.verify.button") }}
+        </button>
+        <button class="secondary compact" :disabled="loading" @click="refresh">
+          {{ t("panel.backup.refresh") }}
+        </button>
+      </div>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+
+    <!-- DOĞRULAMA SONUCU. Üç sayı ayrı ayrı gösterilir; "ulaşılamadı" KAYIP DEĞİLDİR ve
+         karıştırılırsa kullanıcı geçici bir ağ arızasında bütün geçmişini kayıp sanar. -->
+    <section v-if="verification" class="form-surface verify-panel">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.backup.verify.title") }}</h3>
+          <p class="meta">{{ t("panel.backup.verify.hint") }}</p>
+        </div>
+        <button class="secondary compact" @click="verification = null">{{ t("panel.backup.verify.close") }}</button>
+      </div>
+
+      <span class="pill-row">
+        <span class="status-pill">{{ t("panel.backup.verify.checked", { count: verification.checked }) }}</span>
+        <span :class="['status-pill', verification.missingLocal ? 'danger' : '']">
+          {{ t("panel.backup.verify.missingLocal", { count: verification.missingLocal }) }}
+        </span>
+        <span :class="['status-pill', verification.missingRemote ? 'danger' : '']">
+          {{ t("panel.backup.verify.missingRemote", { count: verification.missingRemote }) }}
+        </span>
+        <span :class="['status-pill', verification.unreachable ? 'warn' : '']">
+          {{ t("panel.backup.verify.unreachable", { count: verification.unreachable }) }}
+        </span>
+      </span>
+
+      <p v-if="verification.unreachable" class="notice" role="status">
+        {{ t("panel.backup.verify.unreachableNote") }}
+      </p>
+
+      <ul v-if="verification.issues.length" class="verify-list">
+        <li v-for="issue in verification.issues" :key="`${issue.backupId}-${issue.messageKey}`">
+          <strong>{{ issue.name }}</strong>
+          <span>{{ t(issue.messageKey) }}</span>
+          <small v-if="issue.detail">{{ issue.detail }}</small>
+        </li>
+      </ul>
+
+      <!-- TERS YETİM: hedefte duran ama panelde kaydı olmayan dosyalar. Yalnız LİSTELENİR;
+           otomatik silmek, kullanıcının aynı klasördeki başka dosyalarını yok edebilirdi. -->
+      <template v-if="verification.orphans.length">
+        <h4>{{ t("panel.backup.verify.orphansTitle") }}</h4>
+        <p class="field-hint">{{ t("panel.backup.verify.orphansHint") }}</p>
+        <ul class="verify-list">
+          <li v-for="orphan in verification.orphans" :key="orphan.remotePath">
+            <code class="path-box">{{ orphan.remotePath }}</code>
+            <small>{{ orphan.targetType }}</small>
+          </li>
+        </ul>
+      </template>
+
+      <!-- Boş yetim listesi "yetim yok" DEMEK DEĞİLDİR: taranamayan hedefi söylemek şart. -->
+      <p v-if="verification.orphanScanSkipped.length" class="notice warn" role="status">
+        {{ t("panel.backup.verify.orphanScanSkipped", { targets: verification.orphanScanSkipped.join(", ") }) }}
+      </p>
+    </section>
 
     <div class="module-toolbar">
       <div class="segmented-tabs">
@@ -126,6 +189,24 @@
             <div class="cell-main">
               <span class="pill-row">
                 <span :class="['status-pill', statusTone(backup.status)]">{{ formatStatus(backup.status) }}</span>
+                <!-- DOSYASI YOK rozeti. Kayıt listede durup dosyası olmayan bir yedeğin
+                     "geri yüklenebilir" görünmesi, kullanıcının bunu ancak felaket anında
+                     öğrenmesi demekti. Yerel varlık her listelemede ölçülüyor; rozet o ölçümün
+                     görünen yüzü. -->
+                <span
+                  v-if="backup.localMissing"
+                  class="status-pill danger"
+                  :title="t('panel.backup.missingLocalHint')">
+                  {{ t("panel.backup.missingLocalBadge") }}
+                </span>
+                <!-- Uzak kopya YALNIZCA doğrulama çalıştıysa ölçülmüştür; ölçülmemiş bir kaydı
+                     "uzakta yok" göstermek yalan olurdu, bu yüzden `remoteVerifiedUtc` şart. -->
+                <span
+                  v-if="backup.remoteMissing && backup.remoteVerifiedUtc"
+                  class="status-pill danger"
+                  :title="t('panel.backup.missingRemoteHint')">
+                  {{ t("panel.backup.missingRemoteBadge") }}
+                </span>
                 <!-- Kilit rozeti: geri yüklerken parola isteneceğini kullanıcı LİSTEDE görsün. -->
                 <span v-if="backup.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
                   {{ t("panel.backup.encryptedBadge") }}
@@ -586,6 +667,9 @@
             <option value="ftp">{{ t("panel.backup.target.ftp") }}</option>
             <option value="s3">{{ t("panel.backup.target.s3") }}</option>
             <option value="webdav">{{ t("panel.backup.target.webdav") }}</option>
+            <option value="dropbox">{{ t("panel.backup.target.dropbox") }}</option>
+            <option value="onedrive">{{ t("panel.backup.target.onedrive") }}</option>
+            <option value="azure">{{ t("panel.backup.target.azure") }}</option>
           </select>
         </label>
       </div>
@@ -635,22 +719,33 @@
 
       <div v-if="targetForm.targetType !== 'local'" class="form-grid">
         <label class="stacked-field remote-url">
-          <span class="field-label">{{ t("panel.backup.remoteUrl") }}</span>
+          <!-- Dropbox/OneDrive'da "URL" diye bir kavram YOKTUR; kullanıcı yalnızca hesabındaki
+               KLASÖR YOLUNU yazar. Etiketi de ona göre değişir, yoksa kullanıcı uydurma bir
+               adres arayıp bulamaz. -->
+          <span class="field-label">{{ isFolderPathTarget(targetForm.targetType) ? t("panel.backup.remoteFolder") : t("panel.backup.remoteUrl") }}</span>
           <input v-model="targetForm.remoteUrl" :placeholder="remoteUrlPlaceholder" />
         </label>
         <label class="stacked-field">
-          <span class="field-label">{{ targetForm.targetType === 's3' ? t("panel.backup.remoteAccessKey") : t("panel.backup.remoteUser") }}</span>
+          <span class="field-label">{{ remoteUserLabel(targetForm.targetType) }}</span>
           <input v-model="targetForm.remoteUserName" autocomplete="off" />
         </label>
         <label class="stacked-field">
-          <span class="field-label">{{ targetForm.targetType === 's3' ? t("panel.backup.remoteSecretKey") : t("panel.backup.remotePassword") }}</span>
+          <span class="field-label">{{ remoteSecretLabel(targetForm.targetType) }}</span>
           <PasswordField v-model="targetForm.remotePassword" autocomplete="new-password" />
         </label>
         <label v-if="targetForm.targetType === 's3'" class="stacked-field">
           <span class="field-label">{{ t("panel.backup.remoteRegion") }}</span>
           <input v-model="targetForm.remoteRegion" placeholder="eu-central-1" />
         </label>
+        <label v-if="targetForm.targetType === 'onedrive'" class="stacked-field">
+          <span class="field-label">{{ t("panel.backup.remoteTenant") }}</span>
+          <input v-model="targetForm.remoteRegion" placeholder="common" />
+        </label>
       </div>
+      <!-- Yeni bulut hedeflerinde kimliğin NE olduğu kutunun yanında yazılı olmalı: jeton mu,
+           yenileme jetonu mu, hesap anahtarı mı — yanlış değeri yapıştırmak gece yedeğini
+           sessizce başarısız kılar. -->
+      <p v-if="cloudTargetHint" class="field-hint">{{ cloudTargetHint }}</p>
 
       <div class="form-grid">
         <label class="stacked-field">
@@ -934,12 +1029,14 @@ import {
   runBackupScheduleNow,
   setBackupEncryption,
   updateBackupSchedule,
+  verifyBackups,
   type BackupChain,
   type BackupEncryptionSettings,
   type BackupEntry,
   type BackupRecord,
   type BackupRestoreWarning,
   type BackupTargetPayload,
+  type BackupVerificationResult,
   type SubscriptionBackupSchedule
 } from "../api/backup";
 import { getAutomation, updateAutomation, type AutomationSettings, type AutomationStatus } from "../api/automation";
@@ -1333,17 +1430,96 @@ const breadcrumbs = computed(() => {
   }));
 });
 
+/**
+ * Dropbox ve OneDrive'da adres YOKTUR, yalnızca hesap içindeki klasör yolu vardır. Kullanıcıyı
+ * uydurma bir URL aramaya itmemek için etiket ve örnek metin bu iki hedefte değişir.
+ */
+function isFolderPathTarget(type: string) {
+  return type === "dropbox" || type === "onedrive";
+}
+
 const remoteUrlPlaceholder = computed(() => {
-  if (targetForm.targetType === "ftp") {
-    return "ftp://backup.example.com/adapanel/";
+  switch (targetForm.targetType) {
+    case "ftp":
+      return "ftp://backup.example.com/adapanel/";
+    case "webdav":
+      return "https://dav.example.com/backups/";
+    case "dropbox":
+    case "onedrive":
+      return "/AdaPanel-yedekler";
+    case "azure":
+      return "https://hesap.blob.core.windows.net/yedekler/adapanel/";
+    default:
+      return "https://s3.eu-central-1.amazonaws.com/bucket-adi/yedekler/";
   }
-
-  if (targetForm.targetType === "webdav") {
-    return "https://dav.example.com/backups/";
-  }
-
-  return "https://s3.eu-central-1.amazonaws.com/bucket-adi/yedekler/";
 });
+
+/**
+ * Kimlik alanlarının adı hedefe göre DEĞİŞİR. "Kullanıcı adı / Parola" demek, Dropbox jetonu
+ * ya da Azure hesap anahtarı bekleyen bir kutuda kullanıcıyı yanlış değeri yapıştırmaya iter;
+ * hata da ancak gece yedeği başarısız olunca görünür.
+ */
+function remoteUserLabel(type: string) {
+  switch (type) {
+    case "s3":
+      return t("panel.backup.remoteAccessKey");
+    case "azure":
+      return t("panel.backup.remoteAzureAccount");
+    case "dropbox":
+    case "onedrive":
+      return t("panel.backup.remoteClientId");
+    default:
+      return t("panel.backup.remoteUser");
+  }
+}
+
+function remoteSecretLabel(type: string) {
+  switch (type) {
+    case "s3":
+      return t("panel.backup.remoteSecretKey");
+    case "azure":
+      return t("panel.backup.remoteAzureKey");
+    case "dropbox":
+    case "onedrive":
+      return t("panel.backup.remoteToken");
+    default:
+      return t("panel.backup.remotePassword");
+  }
+}
+
+const cloudTargetHint = computed(() => {
+  switch (targetForm.targetType) {
+    case "dropbox":
+      return t("panel.backup.target.dropboxHint");
+    case "onedrive":
+      return t("panel.backup.target.onedriveHint");
+    case "azure":
+      return t("panel.backup.target.azureHint");
+    default:
+      return "";
+  }
+});
+
+// --- Yedek doğrulama (uzlaştırma) ---
+const verifying = ref(false);
+const verification = ref<BackupVerificationResult | null>(null);
+
+/**
+ * Kayıtların GERÇEKTEN durup durmadığını ölçer. Sonuç ekranda kalır: sayılar bir bildirim
+ * balonunda gösterilseydi kullanıcı hangi yedeğin kayıp olduğunu göremezdi.
+ */
+async function verify() {
+  verifying.value = true;
+  try {
+    verification.value = await verifyBackups();
+    // Ölçüm kayıtlara işlendi (uzak durum); liste tazelenmezse rozetler eski kalırdı.
+    await refresh();
+  } catch (error) {
+    showError(error);
+  } finally {
+    verifying.value = false;
+  }
+}
 
 watch(() => sitesStore.selectedSiteName, (value) => {
   if (value) {

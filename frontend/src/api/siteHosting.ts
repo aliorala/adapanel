@@ -2,6 +2,18 @@ import { apiClient } from "./client";
 
 type ApiEnvelope<T> = { success: boolean; data: T; message: string; code: number };
 
+// Durum koduna göre sitenin kendi hata belgesi (IIS httpErrors/error).
+export type SiteErrorPage = {
+  statusCode: number;
+  path: string;
+};
+
+// Uzantı → MIME türü eşlemesi (IIS staticContent/mimeMap).
+export type SiteMimeType = {
+  extension: string;
+  mimeType: string;
+};
+
 export type SiteHostingSettings = {
   siteName: string;
   maximumBandwidthBytesPerSecond: number;
@@ -17,6 +29,12 @@ export type SiteHostingSettings = {
   hotlinkProtectionEnabled: boolean;
   allowedReferrerHosts: string[];
   protectedExtensions: string[];
+  customErrorPages: SiteErrorPage[];
+  mimeTypes: SiteMimeType[];
+  hstsEnabled: boolean;
+  hstsMaxAgeSeconds: number;
+  hstsIncludeSubDomains: boolean;
+  hstsPreload: boolean;
 };
 
 export async function getSiteHostingSettings(siteName: string) {

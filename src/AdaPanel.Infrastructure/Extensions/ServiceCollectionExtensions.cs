@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICustomerScopeService, Security.CustomerScopeService>();
         services.AddScoped<IPanelSecurityService, PanelSecurityService>();
         services.AddScoped<IPanelPreferencesService, PanelPreferencesService>();
+        services.AddScoped<IBrandingService, Branding.BrandingService>();
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
@@ -82,6 +83,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFtpService, Ftp.FtpService>();
         services.AddScoped<IWafService, Waf.WafService>();
         services.AddScoped<ILogViewerService, Logs.LogViewerService>();
+        // Log döndürme (rotation): kapanmış günlükleri ZSTD ile arşivler, saklama kuralını uygular.
+        // Ölçüldü: IIS erişim günlüklerini küçülten HİÇBİR kod yoktu; otomasyondaki "log temizliği"
+        // yalnızca siliyor ve varsayılan olarak kapalı — yani uzun çalışan sunucuda günlükler sınırsız birikiyordu.
+        services.AddScoped<Logs.ILogRotationService, Logs.LogRotationService>();
         services.AddScoped<IFirewallService, Firewall.FirewallService>();
         services.AddScoped<ISchedulerService, Scheduler.SchedulerService>();
         services.AddScoped<INotificationService, Notifications.NotificationService>();
@@ -115,6 +120,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDiskQuotaService, Iis.DiskQuotaService>();
         services.AddScoped<IGitDeploymentService, Git.GitDeploymentService>();
         services.AddScoped<IWebStatisticsService, Statistics.WebStatisticsService>();
+        services.AddScoped<SiteBuilder.ISiteBuilderService, SiteBuilder.SiteBuilderService>();
         // Mail: kurulu sunucuya göre yönlendirilen dispatcher. Stalwart sağlayıcısı hiç
         // değişmeden korunur; MailEnable kuruluysa router ona yönlendirir.
         services.AddScoped<Mail.StalwartRuntime>();
@@ -156,6 +162,16 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<ISiteAliasService, Iis.SiteAliasService>();
 
+        // ÇOKLU SUNUCU (Plesk Multi Server karşılığı): merkez panel + kayıtlı hizmet düğümleri.
+        // İstemci fabrikası SINGLETON çünkü düğüm başına HTTP işleyicisini (bağlantı havuzu)
+        // önbelleğe alır; Scoped olsaydı her istekte yeni havuz açılır ve düzenli yoklama soket
+        // tüketirdi. Depo ve servis ise Scoped: ISecretProtector Scoped'dır ve Singleton bir
+        // tüketici onu tutsaydı captive dependency olurdu.
+        services.AddSingleton<Cluster.ClusterHttpClientFactory>();
+        services.AddScoped<Cluster.ClusterNodeStore>();
+        services.AddScoped<Cluster.IClusterNodeClient, Cluster.ClusterNodeClient>();
+        services.AddScoped<Cluster.IClusterService, Cluster.ClusterService>();
+
         // Abonelik iş modeli: kotayı DOLDURANDA uygulayan taraf (askıya alma) arka planda koşar.
         services.AddScoped<ISubscriptionEnforcementService, Subscriptions.SubscriptionEnforcementService>();
         // Bayi tavanı (bayinin KENDİ dağıtım sınırı). CustomerScopeService bunu okur; kayıt burada
@@ -176,10 +192,29 @@ public static class ServiceCollectionExtensions
         // statik HardenAsync ile çağrılır (açık db'ye icacls /T uygulanıp ACL'in bozulmasını önlemek için).
         services.AddHostedService<Automation.AutomationWorker>();
 
+        // SEO ARAÇ KUTUSU. Kuyruk SINGLETON olmak zorunda: canlı tarama durumu (kaç sayfa gezildi,
+        // iptal belirteci) istekler ARASINDA yaşar; scoped olsaydı her istek boş bir durum görür ve
+        // "sürüyor mu" sorusu asla cevaplanamazdı. Tarayıcının kendisi scoped (IIS/dosya servislerini
+        // kullanır) ve tek tüketicili işçi tarafından ayrı bir kapsamda koşturulur.
+        services.AddSingleton<Seo.SeoScanQueue>();
+        services.AddScoped<Seo.SeoReportStore>();
+        services.AddScoped<Seo.SeoScanRunner>();
+        services.AddScoped<Seo.ISeoService, Seo.SeoScanService>();
+        services.AddHostedService<Seo.SeoScanWorker>();
+
         // Denetim kaydı saklama temizliği. Kayıt buraya bağlanmadan temizlik YALNIZCA elle
         // (POST /api/v1/audit-logs/purge) çalışırdı; ölçüldü: AuditLogs tablosunu silen başka
         // hiçbir kod yoktu, yani kayıtlar sonsuza kadar birikiyordu.
         services.AddHostedService<Audit.AuditRetentionWorker>();
+
+        // Faturalama (WHMCS) entegrasyonu: toplu kullanım raporu + silme öncesi güvenlik denetimi.
+        // Scoped olmak ZORUNDA: DbContext ve müşteri kapsamı servisi de Scoped; Singleton yapılırsa
+        // captive dependency olur (aynı gerekçe LicenseService'te yazılı).
+        services.AddScoped<Billing.IBillingIntegrationService, Billing.BillingIntegrationService>();
+
+        // Log döndürme turu. Kayıt yapılmazsa döndürme YALNIZCA elle (POST /api/v1/logs/rotation/run)
+        // çalışırdı — yani "politika" değil temenni olurdu (AuditRetentionWorker'daki aynı gerekçe).
+        services.AddHostedService<Logs.LogRotationWorker>();
 
         return services;
     }

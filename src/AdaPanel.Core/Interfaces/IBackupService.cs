@@ -62,6 +62,17 @@ public interface IBackupService
     Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Kayıtlı yedeklerin GERÇEKTEN var olup olmadığını ölçer (uzlaştırma) ve hedefte duran ama
+    /// kaydı olmayan dosyaları (yetim) raporlar. Hiçbir şeyi SİLMEZ.
+    /// </summary>
+    /// <remarks>
+    /// Listede duran ama artık olmayan yedek, panelin verebileceği en pahalı yalandır; kullanıcı
+    /// bunu normalde geri yüklemeye çalışırken, yani felaket anında öğrenirdi. Ulaşılamayan hedef
+    /// "yok" SAYILMAZ — geçici bir ağ arızası bütün yedek geçmişini kayıp göstermemelidir.
+    /// </remarks>
+    Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Bir aboneliğin YALNIZCA kendi yedeklerini budar: süre (<paramref name="retentionDays"/>) ve
     /// sayı (<paramref name="keepCount"/>) limitleri birlikte uygulanır. Kapsam daraltması ŞARTTIR:
     /// bir müşterinin saklama ayarı başka bir müşterinin yedeklerine dokunamaz.
@@ -81,8 +92,12 @@ public interface IBackupService
     Task<BackupChainDto> GetChainAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Tek bir yedeği siler: yerel dosya/dizin + kayıt. Off-site UZAK kopyaya DOKUNMAZ (uzak rotasyon
-    /// PruneAsync'in işidir); kayıt silinse de uzak kopya hedef depoda durur.
+    /// Tek bir yedeği siler: UZAK kopya + yerel dosya/dizin + kayıt.
+    /// <para>
+    /// Uzak kopyanın kimlik bilgileri, otomatik temizliğin kullandığı AYNI kaynaktan (otomasyon
+    /// ayarları) okunur. Uzak kopya silinemezse <c>backup.remote_delete_failed</c> fırlatılır ve
+    /// KAYIT KORUNUR: kaydı silmek, panelin bir daha göremeyeceği bir YETİM dosya bırakırdı.
+    /// </para>
     /// <para>
     /// Yedeğe BAĞIMLI artımsal halkalar varsa istek <c>backup.chain_has_dependents</c> ile
     /// REDDEDİLİR: onları sessizce çöpe çevirmek, panelde duran ama geri yüklenemeyen yedekler

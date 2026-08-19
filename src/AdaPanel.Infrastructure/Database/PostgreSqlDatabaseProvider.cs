@@ -184,6 +184,207 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
         }
     }
 
+    public string RemoteAccessMechanism => "pgHba";
+
+    public async Task<IReadOnlyDictionary<string, RemoteAccessFacts>> ReadRemoteAccessAsync(
+        DatabaseConnectionProfile profile,
+        IReadOnlyCollection<string> userNames,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        try
+        {
+            // Dosya ve listen_addresses kullanıcıdan bağımsızdır: bir kez okunur.
+            var hbaPath = await ShowAsync(connection, "hba_file", cancellationToken);
+            var entries = PostgreSqlHbaEditor.Read(ReadHbaFile(hbaPath));
+            var warning = await DetectListenWarningAsync(connection, cancellationToken);
+            var databases = await ReadAllGrantedDatabasesAsync(connection, cancellationToken);
+
+            var result = new Dictionary<string, RemoteAccessFacts>(StringComparer.OrdinalIgnoreCase);
+            foreach (var userName in userNames)
+            {
+                result[userName] = new RemoteAccessFacts(
+                    entries
+                        .Where(entry => string.Equals(entry.User, userName, StringComparison.Ordinal))
+                        .Select(entry => entry.Address)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray(),
+                    databases.TryGetValue(userName, out var owned) ? owned : [],
+                    warning);
+            }
+
+            return result;
+        }
+        catch (PostgresException exception)
+        {
+            throw MapUnexpectedPostgresException(exception);
+        }
+    }
+
+    /// <summary>
+    /// <c>pg_hba.conf</c>'taki panel bloğunu bu kullanıcı için yeniden yazar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// PostgreSQL'de erişim sınırı rolün kendisinde değil, <c>pg_hba.conf</c>'tadır: "hangi
+    /// veritabanına, hangi rolle, hangi ağdan". Bu yüzden satırlar (veritabanı × adres) çarpımıdır
+    /// ve kullanıcının yetkili OLMADIĞI bir veritabanı için satır yazılmaz — yazılsaydı erişim
+    /// listesi, yetkiden daha geniş bir kapı açardı.
+    /// </para>
+    /// <para>
+    /// Değişiklik <c>pg_reload_conf()</c> ile YÜKLENİR. Yüklenmezse dosya doğru ama sunucu eski
+    /// kuralları uyguluyor olurdu; panel "açıldı" derken erişim açılmamış olurdu. Yeniden başlatma
+    /// GEREKMEZ (<c>pg_hba.conf</c> reload ile okunur), yani çalışan bağlantılar kesilmez.
+    /// </para>
+    /// </remarks>
+    public async Task ApplyRemoteAccessAsync(
+        DatabaseConnectionProfile profile,
+        string userName,
+        IReadOnlyCollection<string> databaseNames,
+        IReadOnlyCollection<RemoteAccessOrigin> origins,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        _ = password; // PostgreSQL'de yeni bir rol oluşturulmaz; yalnız erişim listesi değişir.
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        var hbaPath = await ShowAsync(connection, "hba_file", cancellationToken);
+        var content = ReadHbaFile(hbaPath);
+
+        var entries = new List<HbaEntry>();
+        foreach (var databaseName in databaseNames)
+        {
+            foreach (var origin in origins)
+            {
+                entries.Add(new HbaEntry(databaseName, userName, origin.ToPostgresAddress()));
+
+                // "Her yer" hem IPv4 hem IPv6'yı kapsamalı; tek satır yazmak, IPv6 üzerinden gelen
+                // istemcinin sessizce reddedilmesi demek olurdu (kullanıcı için açıklanamaz bir hata).
+                if (origin.IsAnywhere)
+                {
+                    entries.Add(new HbaEntry(databaseName, userName, "::/0"));
+                }
+            }
+        }
+
+        var updated = PostgreSqlHbaEditor.Apply(content, entries, PostgreSqlHbaEditor.DetectAuthMethod(content));
+
+        try
+        {
+            // İlk değişiklikten önce bir kereye mahsus yedek: yönetici elle yazdığı kuralları
+            // panelin bir hatasından sonra geri alabilsin.
+            var backupPath = hbaPath + ".adapanel.bak";
+            if (!File.Exists(backupPath))
+            {
+                File.Copy(hbaPath, backupPath);
+            }
+
+            File.WriteAllText(hbaPath, updated);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new AppException("database.remote_hba_failed", 500, 500, exception.Message);
+        }
+
+        await using var reload = connection.CreateCommand();
+        reload.CommandText = "SELECT pg_reload_conf();";
+        await reload.ExecuteScalarAsync(cancellationToken);
+    }
+
+    private static string ReadHbaFile(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            throw new AppException("database.remote_hba_failed", 500, 500, exception.Message);
+        }
+    }
+
+    private static async Task<string> ShowAsync(NpgsqlConnection connection, string setting, CancellationToken cancellationToken)
+    {
+        // Yol TAHMİN EDİLMEZ, motora sorulur. Kurulum dizininden yol türetmek, sunucuda zaten
+        // kurulu (panelin kurmadığı) bir PostgreSQL'de yanlış dosyayı düzenlemek demekti.
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SHOW {setting};";
+        var value = (await command.ExecuteScalarAsync(cancellationToken))?.ToString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new AppException("database.remote_hba_failed", 500, 500);
+        }
+
+        return value;
+    }
+
+    /// <summary>
+    /// Sunucu yalnız yerel arayüzü dinliyorsa uyarı anahtarı döner.
+    /// </summary>
+    /// <remarks>
+    /// <c>listen_addresses</c> panel tarafından DEĞİŞTİRİLMEZ: bu ayar yalnız yeniden başlatmayla
+    /// etkinleşir ve canlı bir veritabanını uyarısız yeniden başlatmak, açılan bir porttan daha
+    /// büyük bir sürprizdir. Bunun yerine durum bildirilir; kararı yönetici verir.
+    /// </remarks>
+    private static async Task<string> DetectListenWarningAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        var value = await ShowAsync(connection, "listen_addresses", cancellationToken);
+        var entries = value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+
+        var yalnizYerel = entries.Length > 0 && entries.All(entry =>
+            entry.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            entry.Equals("127.0.0.1", StringComparison.Ordinal) ||
+            entry.Equals("::1", StringComparison.Ordinal));
+
+        return yalnizYerel ? "database.remote_pg_listen_local" : string.Empty;
+    }
+
+    private static async Task<Dictionary<string, List<string>>> ReadAllGrantedDatabasesAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        // has_database_privilege KULLANILMAZ: PUBLIC'e verilmiş CONNECT yetkisi yüzünden HER rol
+        // HER veritabanı için doğru döner ve kapsam denetimi anlamsızlaşırdı. Burada yalnız role
+        // AÇIKÇA verilmiş ACL girdileri (ya da sahiplik) sayılır.
+        const string sql = """
+            SELECT r.rolname, d.datname
+            FROM pg_database d
+            JOIN pg_roles r
+              ON r.oid = d.datdba
+              OR r.oid IN (SELECT a.grantee FROM aclexplode(d.datacl) a)
+            WHERE d.datistemplate = FALSE
+              AND d.datname <> 'postgres'
+              AND r.rolname NOT LIKE 'pg_%'
+            ORDER BY r.rolname, d.datname;
+            """;
+
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var role = reader.GetString(0);
+            if (!result.TryGetValue(role, out var names))
+            {
+                names = [];
+                result[role] = names;
+            }
+
+            var name = reader.GetString(1);
+            if (!names.Contains(name, StringComparer.Ordinal))
+            {
+                names.Add(name);
+            }
+        }
+
+        return result;
+    }
+
     private static async Task<NpgsqlConnection> OpenConnectionAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
     {
         try

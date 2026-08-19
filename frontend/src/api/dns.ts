@@ -17,6 +17,14 @@ export type DnsZone = {
   zoneName: string;
   nameServers: string[];
   zoneTransferIps: string[];
+  /** Bölge ikincil (slave) mi: kayıtların kaynağı panel değil, dış master sunucudur. */
+  isSecondary: boolean;
+  /** İkincil kipte bölgenin çekildiği master DNS sunucularının IP'leri. */
+  masterServers: string[];
+  /** Bölgeye özel + sunucu geneli listelerin birleşimi: AXFR/NOTIFY'ı FİİLEN alanlar. */
+  effectiveNotifyServers: string[];
+  /** Windows DNS'in bildirdiği tür (Primary/Secondary/…); ölçülemediyse boş. */
+  windowsZoneType: string;
   records: DnsRecord[];
   isWindowsDnsAvailable: boolean;
   isWindowsZonePresent: boolean;
@@ -42,6 +50,23 @@ export async function getDnsZone(siteName: string) {
 
 export async function updateDnsZone(siteName: string, payload: { zoneName: string; nameServers: string[]; zoneTransferIps: string[] }) {
   const response = await apiClient.put<ApiEnvelope<DnsZone>>(`/sites/${encodeURIComponent(siteName)}/dns/zone`, payload);
+  return response.data.data;
+}
+
+/**
+ * Bölgeyi birincil ↔ ikincil (slave) kipleri arasında çevirir (Plesk "Switch to Secondary").
+ * İkincile geçerken en az bir master IP zorunludur; sunucu boş listeyi dns.master_required ile reddeder.
+ */
+export async function setDnsZoneMode(siteName: string, secondary: boolean, masterServers: string[]) {
+  const response = await apiClient.post<ApiEnvelope<DnsZone>>(
+    `/sites/${encodeURIComponent(siteName)}/dns/mode`,
+    { secondary, masterServers });
+  return response.data.data;
+}
+
+/** İkincil bölge için master'dan tam zone transferini (AXFR) hemen başlatır. */
+export async function transferDnsZoneNow(siteName: string) {
+  const response = await apiClient.post<ApiEnvelope<DnsZone>>(`/sites/${encodeURIComponent(siteName)}/dns/transfer`, {});
   return response.data.data;
 }
 
@@ -96,15 +121,16 @@ export async function repairDnsServer(applyDelayedAutoStart = true) {
 // Sunucu-geneli DNS şablonu (Plesk "DNS template"): yeni site bölgeleri bununla seed edilir.
 /** priority yalnızca MX (ve SRV) için anlamlıdır; gönderilmezse sunucu MX'e 10 uygular. */
 export type DnsTemplateRecord = { type: string; host: string; value: string; ttl: number; priority?: number | null };
-export type DnsTemplate = { records: DnsTemplateRecord[] };
+/** secondaryDnsServers: sunucu geneli ikincil (slave) DNS sunucuları — HER bölgeye AXFR izni + NOTIFY. */
+export type DnsTemplate = { records: DnsTemplateRecord[]; secondaryDnsServers: string[] };
 
 export async function getDnsTemplate() {
   const response = await apiClient.get<ApiEnvelope<DnsTemplate>>("/dns/template");
   return response.data.data;
 }
 
-export async function updateDnsTemplate(records: DnsTemplateRecord[]) {
-  const response = await apiClient.put<ApiEnvelope<DnsTemplate>>("/dns/template", { records });
+export async function updateDnsTemplate(records: DnsTemplateRecord[], secondaryDnsServers: string[] = []) {
+  const response = await apiClient.put<ApiEnvelope<DnsTemplate>>("/dns/template", { records, secondaryDnsServers });
   return response.data.data;
 }
 

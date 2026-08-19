@@ -84,8 +84,9 @@ public sealed class AutomationService(
         state.SslRenewIntervalHours = Math.Clamp(request.SslRenewIntervalHours, 1, 24 * 30);
 
         // Uzak yedek hedefi: parola DPAPI ile korunur; boş gönderilirse mevcut korunur.
-        var targetType = (request.BackupTargetType ?? "local").Trim().ToLowerInvariant();
-        state.BackupTargetType = targetType is "ftp" or "s3" or "webdav" ? targetType : "local";
+        // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
+        var targetType = Backup.BackupService.NormalizeScheduleTargetType(request.BackupTargetType);
+        state.BackupTargetType = targetType;
         state.BackupRemoteUrl = request.BackupRemoteUrl?.Trim() ?? string.Empty;
         state.BackupRemoteUserName = request.BackupRemoteUserName?.Trim() ?? string.Empty;
         state.BackupRemoteRegion = request.BackupRemoteRegion?.Trim() ?? string.Empty;

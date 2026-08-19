@@ -6,6 +6,14 @@ hesabı açılır, ödeme gecikince askıya alınır, iptal edilince silinir.
 > Bu belgedeki her uç, panelin C# denetleyicileri **okunarak** doğrulandı. Doğrulanamayan hiçbir
 > davranış yazılmadı. Bir süre "panelde karşılığı yok" diye işaretli duran iki işlev
 > (`ChangePassword` ve `ServiceSingleSignOn`) artık **çalışıyor**: panele karşılıkları eklendi.
+>
+> **Sonradan eklenenler:** `UsageUpdate` (disk/trafik kullanımı → fatura, bölüm 6), iptal öncesi
+> **silme doğrulaması** (bölüm 8) ve **API anahtarıyla bağlanma** (bölüm 5.5). WHMCS modül
+> sözleşmesi `developers.whmcs.com/provisioning-modules/` üzerinden doğrulandı.
+>
+> **Bu modül gerçek bir WHMCS kurulumuyla uçtan uca ÇALIŞTIRILMADI** (bu depoda WHMCS+PHP+MySQL
+> yığını yok). Panel tarafı testlidir; PHP tarafı yalnız sözdizimi denetiminden geçti. İlk kurulumda
+> **Test Connection** ve bir deneme siparişiyle doğrulayın.
 
 ---
 
@@ -49,8 +57,9 @@ dışarıdan "modül çalışmıyor" gibi görünür. WHMCS'in sunucu tanımınd
 için bu bilgi **Access Hash** alanında taşınır:
 
 ```
-panel                      # yalnız gizli giriş yolu
-entry=panel;insecure=1     # gizli giriş yolu + sertifika doğrulamasını atla
+panel                              # yalnız gizli giriş yolu
+entry=panel;insecure=1             # gizli giriş yolu + sertifika doğrulamasını atla
+entry=panel;token=adap_xxxxxxxx    # panel API anahtarıyla kimlik (önerilen)
 ```
 
 * `entry` — panelde **sol menü → Güvenlik → gizli giriş yolu** alanındaki değerle **birebir** aynı
@@ -58,6 +67,8 @@ entry=panel;insecure=1     # gizli giriş yolu + sertifika doğrulamasını atla
 * `insecure=1` — panel **kendinden imzalı** bir sertifika kullanıyorsa gerekir. AdaPanel kurulumu
   `panel.pfx`'i kendisi üretir; gerçek bir sertifika koymadıysanız cURL bağlantıyı reddeder.
   Gerçek sertifika varsa bu bayrağı **kullanmayın**.
+* `token` — panel API anahtarı (`adap_…`). Verilirse modül **giriş yapmaz**, her isteği
+  `Authorization: Bearer` başlığıyla gönderir. Bkz. bölüm 5.5.
 
 Alanın tamamında `=` yoksa değer doğrudan giriş yolu sayılır (en sık kullanım).
 
@@ -115,7 +126,8 @@ yazmak sessizce etkisiz kalırdı.
 | `CreateAccount` | `POST /api/v1/users` (rol `Customer`, kotalar, alan adı `assignedSites`'a eklenir) + plan kimliği doluysa `PUT /api/v1/subscriptions/{id}/plan` |
 | `SuspendAccount` | `POST /api/v1/subscriptions/{id}/suspend` |
 | `UnsuspendAccount` | `POST /api/v1/subscriptions/{id}/resume` |
-| `TerminateAccount` | `DELETE /api/v1/users/{id}?removeSites=true|false` |
+| `TerminateAccount` | Önce `GET /api/v1/billing/terminate-check` (silme **güvenli mi**), sonra `DELETE /api/v1/users/{id}?removeSites=true|false` |
+| `UsageUpdate` | `GET /api/v1/billing/usage` → `tblhosting` satırlarına disk/trafik yazar |
 | `ChangePackage` | Plan varsa `PUT /api/v1/subscriptions/{id}/plan`; yoksa plan bağını kaldırıp `PUT /api/v1/users/{id}` ile limitleri yazar |
 | `TestConnection` | Giriş + `GET /api/v1/users` + `GET /api/v1/service-plans` |
 | `AdminServicesTabFields` | `GET /api/v1/subscriptions/{id}` (salt okunur kullanım özeti) |
@@ -210,9 +222,125 @@ istek. Modülün her WHMCS işlevi bir kez giriş yapar. Normal provisioning hac
 ama toplu bir işlemde (örn. 20 hizmeti aynı anda askıya alma) bir kısmı `429` alabilir; WHMCS'te
 işlemi tekrar denemek yeterlidir.
 
+### 5.5 API anahtarı ile bağlanmak (önerilen)
+
+Panelin `Bearer adap_…` anahtarı artık `/api/v1/**` uçlarında **çalışıyor**
+(`PanelAuthentication` yönlendirici şeması). Anahtar yolunun üç somut faydası var:
+
+* **Giriş oranı sınırına takılmaz.** `POST /auth/login` IP başına dakikada 5 istekle sınırlı;
+  anahtar yolu hiç giriş yapmaz.
+* **CSRF istemez** — `Authorization` başlığını tarayıcı kendiliğinden göndermez.
+* **Gizli giriş yolu başlığından muaftır** (`SecureEntryPathMiddleware.CarriesApiToken`), yani
+  yönetici gizli yolu değiştirdiğinde entegrasyon sessizce kırılmaz.
+
+**Anahtar nasıl üretilir:** panelde **sol menü → Yapay Zeka** ekranı → yeni anahtar.
+
+**Hangi yetki gerekir:**
+
+| Kullanım | Gereken anahtar |
+|---|---|
+| Yalnız `UsageUpdate` (kullanım toplama) | **Salt okur** anahtar yeter — hepsi `GET` |
+| Sağlama (`CreateAccount`, `Suspend`, `Terminate`, `ChangePackage`) | "**Yıkıcı işlemlere izin ver**" işaretli anahtar |
+
+Salt-okur anahtarla yazma denenirse panel `403 auth.forbidden` + `apitoken.read_only` döner.
+
+**İki işlev anahtarla ÇALIŞMAZ:** `ChangePassword` ve `ServiceSingleSignOn`. `AuthController` ve
+`ApiTokensController` sınıf düzeyinde çerez şemasına sabitlenmiştir (yetki yükseltmesini önlemek
+için). Bu ikisini kullanacaksanız sunucu tanımında kullanıcı adı/parola da dolu olmalıdır — modül
+o uçlar için çerez oturumuna düşmez, bu yüzden **ikisini birden kullanmak isterseniz token
+KOYMAYIN**; tamamen çerez yolunda kalın.
+
 ---
 
-## 6. Sorun giderme
+## 6. Kullanım verisi (`UsageUpdate`) — disk ve trafik
+
+### 6.1 Sözleşme
+
+WHMCS bu işlevi **sunucu başına** çağırır, ürün/hizmet başına DEĞİL: `$params` yalnız sunucu
+bilgilerini taşır (`serverid`, `serverhostname`, `serverusername`, …) ve **hizmet listesi
+verilmez**. Bu yüzden modül panelden **tek bir toplu rapor** çeker
+(`GET /api/v1/billing/usage`) ve satırları eşleştirir. Hizmet başına istek atmak, 500 müşterili bir
+sunucuda cron turunu 500 HTTP çağrısına çevirirdi.
+
+Yazılan sütunlar: `tblhosting.diskusage`, `disklimit`, `bwusage`, `bwlimit`, `lastupdate`.
+
+### 6.2 Eşleştirme `domain` ile değil `username` ile
+
+WHMCS'in resmî örneği satırları **alan adıyla** eşleştirir. Bu modül **kullanıcı adıyla**
+eşleştirir, çünkü panelde bir hesabın **birden çok sitesi** olabilir; alan adıyla eşleştirmek aynı
+hesabın toplam kullanımını her satıra yazıp kullanımı **katlardı**. Kullanıcı adı hizmet ömrü
+boyunca değişmez ve modülün geri kalanı da hesabı bu adla buluyor.
+
+> Sonuç olarak: **panelde kullanıcı adını elle değiştirmeyin.** Değiştirirseniz o hizmetin
+> kullanımı bir daha güncellenmez (ve askı/iptal de çalışmaz).
+
+### 6.3 Birimler
+
+Panel değerleri **MB** olarak verir; çeviri panelde yapılır (`BillingUnits`). WHMCS `tblhosting`
+sütunları da MB'dir, yani modülde hiçbir bölme/çarpma yoktur — orada yapılacak tek bir birim hatası
+müşteriye yanlış fatura demektir. `0` her iki tarafta da **sınırsız** anlamına gelir.
+
+### 6.4 Ölçülemeyen trafik yazılmaz
+
+Panel bir sitenin trafiğini okuyamazsa (IIS günlüğü kapalı, klasör erişilemez) raporda
+`bandwidthMeasured: false` döner ve modül **o satırın `bwusage` sütununa dokunmaz**; eski değer
+korunur. Sebebi: ölçemediğimiz bir ayı "0 MB" diye yazmak, aşım faturalamasını sessizce sıfırlar ve
+o ayın gerçek kullanımını da silerdi. Panelin abonelik motoru da aynı sebeple ölçülemeyen trafikte
+kota **uygulamaz**.
+
+Kaç aboneliğin ölçülemediği panelde **Faturalama** ekranında uyarı olarak görünür.
+
+---
+
+## 7. Panelde faturalama entegrasyonunu açmak
+
+Faturalama uçları (`/api/v1/billing/**`) panelde **varsayılan olarak KAPALIDIR**. Açmak için:
+
+**sol menü → Faturalama → "Entegrasyon açık" → Kaydet**
+
+Kapalıyken `UsageUpdate` ve `TerminateAccount` `billing.disabled` hatası alır. Bu anahtar
+doğrulamasının *yerine* değil *üstüne* binen ikinci kapıdır: sızmış geçerli bir anahtar olduğunda
+yöneticinin elinde anahtarları tek tek iptal etmeden entegrasyonu kesecek bir düğme olmalıdır.
+
+Aynı ekranda görünürler:
+
+* son başarılı çağrının zamanı ve rapora giren hesap sayısı,
+* **son 20 çağrı** (işlem, sonuç, ayrıntı) — "entegrasyon neden çalışmıyor" sorusunun ilk bakılacak
+  yeri,
+* WHMCS'e verilen kullanım değerlerinin **aynısı** (fatura tartışmasında panel ile faturalama
+  sisteminin aynı sayıyı söylediği buradan doğrulanır).
+
+---
+
+## 8. İptal (`TerminateAccount`) artık önce doğrulanıyor
+
+`TerminateAccount` veri siler; `removeSites` işaretliyse siteler **dosyaları ve eşleşen
+veritabanlarıyla** yok edilir. Modül eskiden hesabı yalnızca **kullanıcı adıyla** bulup doğrudan
+siliyordu — ad panelde elle değiştirilmiş ya da başka bir role ait bir hesapla çakışmışsa iptal
+edilen bir hizmet **başka birinin verisini** yok edebilirdi.
+
+Artık modül silmeden önce `GET /api/v1/billing/terminate-check?userName=…&domain=…` çağırır. Panel
+**varsayılan olarak reddeder** ve yalnız şu üç koşul birden sağlanırsa onay verir:
+
+1. Ada uyan **tam olarak bir** hesap var,
+2. hesabın rolü **Customer** (yönetici/bayi/operatör asla silinmez),
+3. hizmetin alan adı hesabın kapsamında (`www.` ve büyük/küçük harf farkı yok sayılır).
+
+Onay gelmezse modül **silmez** ve WHMCS'e sebebi açıklayan bir hata döndürür (bilerek `success`
+dönmez; aksi hâlde WHMCS hizmeti iptal edilmiş sayar ve kimse bir daha bakmazdı):
+
+| Sebep | Anlamı |
+|---|---|
+| `not_found` | Panelde o adda hesap yok (elle silinmiş olabilir) |
+| `ambiguous` | Ada uyan birden çok hesap var; hangisi olduğu kanıtlanamıyor |
+| `role_not_customer` | Hesap müşteri değil |
+| `domain_mismatch` | Hizmetin alan adı hesabın kapsamında değil |
+
+Alan adı olmayan ürünlerde (yalnız hesap satan paketler) 3. koşul uygulanmaz; 1. ve 2. koşul sürer.
+
+---
+
+## 9. Sorun giderme
 
 | Belirti | Sebep |
 |---|---|
@@ -227,6 +355,11 @@ işlemi tekrar denemek yeterlidir.
 | `Panel hesabi PASIF…` | Tek tıkla giriş pasif hesap için üretilmez; önce hizmeti aktifleştirin |
 | Giriş bağlantısı "geçersiz/süresi dolmuş" sayfası açıyor | Bağlantı tek kullanımlık ve dakikalık ömürlü; kaydedip sonra açmayın, düğmeye yeniden basın |
 | `Panelde "…" adli kullanici bulunamadi` | Panel hesabı elle silinmiş; WHMCS hizmetini yeniden oluşturun |
+| `Panelde faturalama entegrasyonu KAPALI` | Panel → Faturalama → "Entegrasyon açık" işaretleyin (bkz. bölüm 7) |
+| Kullanım hep `0 MB` görünüyor | Panel → Faturalama ekranındaki uyarıya bakın: trafik ölçülemiyorsa (IIS günlüğü kapalı) `bwusage` bilerek yazılmaz |
+| Kullanım hiç güncellenmiyor | Panelde kullanıcı adı elle değiştirilmiş olabilir — eşleştirme `tblhosting.username` üzerinden yapılır (bkz. 6.2) |
+| İptal `Panel silme denetimi gecilemedi` diyor | Silme bilerek durduruldu; tablodaki sebebe göre panelde rolü/site atamasını düzeltin (bkz. bölüm 8) |
+| Anahtar kullanırken `auth.forbidden` + `apitoken.read_only` | Sağlama işlemleri için anahtarın "yıkıcı işlemlere izin ver" yetkisi açık olmalı (bkz. 5.5) |
 
 Modül panel kullanıcısını **kullanıcı adıyla** bulur (`GET /api/v1/users` içinde arayarak); WHMCS
 tarafında panel kimliği (GUID) saklanmaz. Bu yüzden panelde kullanıcı adını elle değiştirmek

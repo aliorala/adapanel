@@ -47,6 +47,52 @@ export type BackupRecord = {
   subscriptionUserId: string;
   /** Arşivdeki mantıksal öğe sayısı (site + veritabanı + posta alanı + FTP); 0 = ölçülmedi. */
   itemCount: number;
+
+  // --- UZLAŞTIRMA: yedek GERÇEKTEN duruyor mu? ---
+  // Kayıt listede görünüp dosyası olmayan bir yedek, panelin verebileceği en pahalı yalandır;
+  // kullanıcı bunu normalde ancak geri yüklemeye çalışırken öğrenirdi.
+
+  /** Yerel dosya listeleme ANINDA yok (sunucu her listelemede ölçer; kayda yazılmaz). */
+  localMissing: boolean;
+  /**
+   * Uzak kopya SON DOĞRULAMADA yoktu. `false` "yok değil" değil, "ölçülmedi" de olabilir —
+   * ölçülüp ölçülmediği `remoteVerifiedUtc` ile anlaşılır.
+   */
+  remoteMissing: boolean;
+  /** Uzak kopyanın en son ne zaman ölçüldüğü; null = hiç doğrulanmadı. */
+  remoteVerifiedUtc: string | null;
+};
+
+/** "Yedekleri doğrula" sonucunda sorunlu bulunan tek bir kayıt. */
+export type BackupVerificationIssue = {
+  backupId: string;
+  name: string;
+  source: string;
+  targetType: string;
+  /** i18n anahtarı: `backup.verify.missing_local` | `..missing_remote` | `..unreachable`. */
+  messageKey: string;
+  detail: string;
+};
+
+/** Hedefte duran ama panelde kaydı olmayan dosya (ters yetim). */
+export type BackupOrphan = {
+  remotePath: string;
+  targetType: string;
+};
+
+export type BackupVerificationResult = {
+  checked: number;
+  missingLocal: number;
+  missingRemote: number;
+  /**
+   * Hedefe ULAŞILAMADIĞI için karar verilemeyen kayıt sayısı. Bunlar KAYIP DEĞİLDİR —
+   * geçici bir ağ arızasını "yedek silinmiş" saymak bütün geçmişi kayıp gösterirdi.
+   */
+  unreachable: number;
+  issues: BackupVerificationIssue[];
+  orphans: BackupOrphan[];
+  /** Yetim taraması YAPILAMAYAN hedefler; boş yetim listesi "yetim yok" demek değildir. */
+  orphanScanSkipped: string[];
 };
 
 /** Zincirdeki tek bir halka. */
@@ -121,6 +167,18 @@ export async function setBackupEncryption(password: string) {
 
 export async function getBackups() {
   const response = await apiClient.get<ApiEnvelope<BackupRecord[]>>("/backup");
+  return response.data.data;
+}
+
+/**
+ * Kayıtların GERÇEKTEN var olup olmadığını ölçer ve hedefte duran ama kaydı olmayan (yetim)
+ * dosyaları listeler. HİÇBİR ŞEYİ SİLMEZ.
+ *
+ * Ayrı bir düğmeye bağlıdır çünkü uzak ölçüm kayıt başına bir AĞ isteğidir; listelemeye
+ * bağlansaydı panel her açılışta yavaşlar ve hedefin hız sınırına takılırdı.
+ */
+export async function verifyBackups() {
+  const response = await apiClient.post<ApiEnvelope<BackupVerificationResult>>("/backup/verify", {});
   return response.data.data;
 }
 

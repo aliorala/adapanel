@@ -25,6 +25,16 @@ public sealed class SiteHostingSettingsService(
     private readonly string dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
     private const string StatePath = "config/site-hosting-settings.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
+    private const string HstsHeaderName = "Strict-Transport-Security";
+
+    // ".woff2" gibi: nokta + harf/rakam ile başlar, ayırıcı/boşluk/yol karakteri içermez.
+    private static readonly Regex MimeExtensionPattern = new(@"^\.[a-z0-9][a-z0-9._-]{0,31}$", RegexOptions.Compiled);
+
+    // "font/woff2" ya da "text/html; charset=utf-8". RFC 6838 token kümesinin güvenli bir alt kümesi:
+    // tırnak, açılı parantez ve noktalı virgül (parametre ayırıcısı dışında) kasten dışarıda.
+    private static readonly Regex MimeTypePattern = new(
+        @"^[a-zA-Z0-9][a-zA-Z0-9!#$&^_+.-]{0,62}/[a-zA-Z0-9][a-zA-Z0-9!#$&^_+.-]{0,62}(; ?charset=[a-zA-Z0-9._-]{1,32})?$",
+        RegexOptions.Compiled);
 
     public async Task<SiteHostingSettingsDto> GetAsync(string siteName, CancellationToken cancellationToken = default)
     {
@@ -72,7 +82,7 @@ public sealed class SiteHostingSettingsService(
         CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        Validate(request);
+        Validate(site.PhysicalPath, request);
         UpdateWebConfig(site.PhysicalPath, request);
         try
         {
@@ -108,7 +118,15 @@ public sealed class SiteHostingSettingsService(
             MaximumUploadBytes = Math.Clamp(request.MaximumUploadBytes, 1_048_576, 4_294_967_295),
             HotlinkProtectionEnabled = request.HotlinkProtectionEnabled,
             AllowedReferrerHosts = request.AllowedReferrerHosts.Select(item => item.Trim()).Where(item => item.Length > 0).Distinct().ToArray(),
-            ProtectedExtensions = request.ProtectedExtensions.Select(item => item.Trim().TrimStart('.')).Where(item => item.Length > 0).Distinct().ToArray()
+            ProtectedExtensions = request.ProtectedExtensions.Select(item => item.Trim().TrimStart('.')).Where(item => item.Length > 0).Distinct().ToArray(),
+            // Kayda web.config'e YAZILAN normalleştirilmiş biçim girer; ekranın gösterdiği ile
+            // sunucuda duran aynı şey olsun (ham girdi saklansa ".woff2" ve "woff2" farklı görünürdü).
+            CustomErrorPages = NormalizeErrorPages(site.PhysicalPath, request.CustomErrorPages),
+            MimeTypes = NormalizeMimeTypes(request.MimeTypes),
+            HstsEnabled = request.HstsEnabled,
+            HstsMaxAgeSeconds = request.HstsMaxAgeSeconds,
+            HstsIncludeSubDomains = request.HstsIncludeSubDomains,
+            HstsPreload = request.HstsPreload
         };
 
         var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SiteHostingSettingsDto>(), cancellationToken)).ToList();
@@ -700,7 +718,7 @@ public sealed class SiteHostingSettingsService(
         return trimmed.Length > 600 ? trimmed[..600] : trimmed;
     }
 
-    private static void Validate(UpdateSiteHostingSettingsRequest request)
+    private static void Validate(string root, UpdateSiteHostingSettingsRequest request)
     {
         if (!string.IsNullOrWhiteSpace(request.RedirectUrl) &&
             (!Uri.TryCreate(request.RedirectUrl.Trim(), UriKind.Absolute, out var uri) ||
@@ -719,9 +737,208 @@ public sealed class SiteHostingSettingsService(
         {
             throw new AppException("sites.invalid_upload_limit", 400, 400);
         }
+
+        _ = NormalizeErrorPages(root, request.CustomErrorPages);
+        _ = NormalizeMimeTypes(request.MimeTypes);
+        _ = BuildHstsValue(request);
     }
 
-    private static void UpdateWebConfig(string root, UpdateSiteHostingSettingsRequest request)
+    /// <summary>
+    /// Özel hata sayfası girdilerini doğrular ve normalleştirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Yol KULLANICIDAN gelir</b> — kiracı buraya ne isterse yazar. İki ayrı savunma var:
+    /// </para>
+    /// <para>
+    /// 1) Biçim: yol site köküne göre olmalı (<c>/</c> ile başlar). <c>..</c>, ters bölü, sürücü
+    /// harfi (<c>:</c>) ve protokol-göreli <c>//</c> reddedilir — bunlar "site dışına çık"manın
+    /// bilinen yazımlarıdır.
+    /// </para>
+    /// <para>
+    /// 2) Kapsama: yol site köküyle birleştirilip <see cref="PathContainment"/> ile ÖLÇÜLÜR.
+    /// Biçim denetimi tek başına yeterli sayılmadı; depoda bu sorunun tek doğru cevabı zaten
+    /// yazılmış durumda ve kaçış yazımlarını (karışık ayırıcı, yüzde kaçışı sonrası normalleşen
+    /// yollar) tek elden kapatıyor. Yeniden yazmak, birini doğru diğerini eksik yapmanın yoludur.
+    /// </para>
+    /// </remarks>
+    internal static SiteErrorPageDto[] NormalizeErrorPages(string root, IEnumerable<SiteErrorPageDto>? values)
+    {
+        var pages = new List<SiteErrorPageDto>();
+        var seen = new HashSet<int>();
+
+        foreach (var entry in values ?? [])
+        {
+            if (entry is null)
+            {
+                continue;
+            }
+
+            var path = (entry.Path ?? string.Empty).Trim();
+            if (path.Length == 0)
+            {
+                // Boş satır "bu kaydı sil" demektir; hata değil.
+                continue;
+            }
+
+            // IIS şeması statusCode için 400-999 aralığını dayatır; dışına çıkan bir değer
+            // web.config'i geçersiz kılar ve site 500.19 ile TAMAMEN düşer.
+            if (entry.StatusCode is < 400 or > 999)
+            {
+                throw new AppException("sites.invalid_error_page", 400, 400);
+            }
+
+            if (!seen.Add(entry.StatusCode))
+            {
+                // Aynı durum kodu iki kez: IIS koleksiyon anahtarı statusCode+subStatusCode'dur,
+                // mükerrer giriş yine 500.19 demektir. Sessizce birini atmak yerine söylüyoruz.
+                throw new AppException("sites.invalid_error_page", 400, 400);
+            }
+
+            // '%' YASAK: IIS şemasında httpErrors/error'ın path özniteliği expanded="true"dur, yani
+            // IIS değerdeki ORTAM DEĞİŞKENLERİNİ genişletir. "%windir%" gibi bir girdi normalleştirme
+            // sonrası kökün altında GÖRÜNDÜĞÜ ölçüldü (C:\site\C:\Windows\...), dolayısıyla kapsama
+            // denetimi tek başına bu yazımı elemez — kaynağında kesiliyor.
+            if (path.Length > 260 ||
+                !path.StartsWith('/') ||
+                path.StartsWith("//", StringComparison.Ordinal) ||
+                path.Contains("..", StringComparison.Ordinal) ||
+                path.Contains('\\') ||
+                path.Contains(':') ||
+                path.IndexOfAny(['%', '?', '#', '*', '"', '<', '>', '|']) >= 0 ||
+                path.Any(char.IsControl))
+            {
+                throw new AppException("sites.invalid_error_page", 400, 400);
+            }
+
+            // ÖLÇÜLEN kapsama denetimi — biçim denetiminin üstüne ikinci hat.
+            // Boş bir tedbir değil: Windows'ta ayrılmış AYGIT ADLARI ("/con", "/nul", "/lpt1")
+            // yukarıdaki biçim denetimlerinin HEPSİNDEN geçer, ama Path.GetFullPath onları
+            // "\\.\con" biçimine çevirir — yani yol site kökünün dışına çıkar. Bunu yalnız gerçek
+            // normalleştirmeye bakan bir denetim görebilir.
+            var physical = Path.Combine(root, path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            if (!PathContainment.IsInsideRoot(root, physical))
+            {
+                throw new AppException("sites.invalid_error_page", 400, 400);
+            }
+
+            pages.Add(new SiteErrorPageDto { StatusCode = entry.StatusCode, Path = path });
+        }
+
+        if (pages.Count > 50)
+        {
+            throw new AppException("sites.invalid_error_page", 400, 400);
+        }
+
+        return [.. pages.OrderBy(page => page.StatusCode)];
+    }
+
+    /// <summary>
+    /// MIME eşlemelerini doğrular ve normalleştirir (uzantı küçük harf + baştaki nokta zorunlu).
+    /// </summary>
+    /// <remarks>
+    /// Uzantı ve tür web.config'e ÖZNİTELİK olarak yazılır. XDocument kaçışı zaten yapar, ama
+    /// biçim burada da daraltılır: IIS bu iki alanı doğrulamaz ve geçersiz bir MIME türü sitenin
+    /// tamamını 500.19 ile düşürür — yani "kötü girdi" değil, "site kapandı" sonucu doğurur.
+    /// </remarks>
+    internal static SiteMimeTypeDto[] NormalizeMimeTypes(IEnumerable<SiteMimeTypeDto>? values)
+    {
+        var mapped = new List<SiteMimeTypeDto>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in values ?? [])
+        {
+            if (entry is null)
+            {
+                continue;
+            }
+
+            var extension = (entry.Extension ?? string.Empty).Trim().ToLowerInvariant();
+            var mimeType = (entry.MimeType ?? string.Empty).Trim();
+            if (extension.Length == 0 && mimeType.Length == 0)
+            {
+                continue;
+            }
+
+            // Kullanıcı "woff2" de yazabilir ".woff2" de; IIS yalnız ikincisini kabul eder.
+            if (!extension.StartsWith('.'))
+            {
+                extension = "." + extension;
+            }
+
+            if (!MimeExtensionPattern.IsMatch(extension) || !MimeTypePattern.IsMatch(mimeType))
+            {
+                throw new AppException("sites.invalid_mime_type", 400, 400);
+            }
+
+            if (!seen.Add(extension))
+            {
+                // Mükerrer uzantı = mükerrer koleksiyon anahtarı = 500.19.
+                throw new AppException("sites.invalid_mime_type", 400, 400);
+            }
+
+            mapped.Add(new SiteMimeTypeDto { Extension = extension, MimeType = mimeType });
+        }
+
+        if (mapped.Count > 100)
+        {
+            throw new AppException("sites.invalid_mime_type", 400, 400);
+        }
+
+        return [.. mapped.OrderBy(item => item.Extension, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// <c>Strict-Transport-Security</c> başlığının değerini kurar; kapalıysa <c>null</c> döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <c>max-age=0</c> serbest:</b> HSTS'in tek geri dönüş yolu budur. Başlığı silmek
+    /// yetmez — tarayıcı süre dolana kadar (yıllarca) siteyi zorla HTTPS'e çevirmeye devam eder.
+    /// Yanlışlıkla HSTS açan bir kullanıcıya "0 yaz" diyebilmek, panelin onu çıkmaza sokmamasıdır.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>preload</c> koşullu:</b> preload listesi kaydı max-age ≥ 1 yıl VE
+    /// includeSubDomains şartına bağlıdır. Bunlar olmadan yazılan <c>preload</c> hiçbir işe
+    /// yaramaz ama kullanıcı korunduğunu sanır — sessiz yanlış güven, hatanın kendisinden kötüdür.
+    /// </para>
+    /// </remarks>
+    internal static string? BuildHstsValue(UpdateSiteHostingSettingsRequest request)
+    {
+        if (!request.HstsEnabled)
+        {
+            return null;
+        }
+
+        // Üst sınır 2 yıl: RFC 6797'de sınır yok ama preload listesinin önerdiği tavan budur ve
+        // daha uzun bir süre hatalı yapılandırmada geri dönüşü fiilen imkânsız kılar.
+        if (request.HstsMaxAgeSeconds is < 0 or > 63_072_000)
+        {
+            throw new AppException("sites.invalid_hsts", 400, 400);
+        }
+
+        if (request.HstsPreload && (!request.HstsIncludeSubDomains || request.HstsMaxAgeSeconds < 31_536_000))
+        {
+            throw new AppException("sites.invalid_hsts", 400, 400);
+        }
+
+        var value = new StringBuilder("max-age=").Append(request.HstsMaxAgeSeconds);
+        if (request.HstsIncludeSubDomains)
+        {
+            value.Append("; includeSubDomains");
+        }
+
+        if (request.HstsPreload)
+        {
+            value.Append("; preload");
+        }
+
+        return value.ToString();
+    }
+
+    // internal: web.config üretimi bu servisin ASIL davranışı ve gerçek IIS olmadan da ölçülebilir
+    // olmalı (testler geçici bir klasöre yazıp XML'i doğruluyor).
+    internal static void UpdateWebConfig(string root, UpdateSiteHostingSettingsRequest request)
     {
         var webConfigPath = Path.Combine(root, "web.config");
         var document = File.Exists(webConfigPath)
@@ -787,6 +1004,37 @@ public sealed class SiteHostingSettingsService(
         httpErrors.SetAttributeValue("errorMode", request.DetailedErrorsEnabled ? "Detailed" : "DetailedLocalOnly");
         httpErrors.SetAttributeValue("existingResponse", request.DetailedErrorsEnabled ? "PassThrough" : "Auto");
 
+        // ÖZEL HATA SAYFALARI (durum koduna göre).
+        //
+        // Koleksiyonun SAHİBİ paneldir: her kayıtta önce bizim yazdıklarımız silinip liste baştan
+        // kurulur. Aksi halde ekrandan kaldırılan bir girdi dosyada yaşamaya devam ederdi —
+        // kullanıcı "sildim" der, IIS hâlâ eski sayfayı sunardı.
+        httpErrors.Elements("error").Remove();
+        httpErrors.Elements("remove").Remove();
+        httpErrors.Elements("clear").Remove();
+        foreach (var page in NormalizeErrorPages(root, request.CustomErrorPages))
+        {
+            // <remove> ŞART. IIS'in kendi applicationHost.config'i 401/403/404/405/406/412/500/501/502
+            // için zaten birer <error> tanımlar; koleksiyon anahtarı statusCode+subStatusCode olduğundan
+            // aynı kodu ikinci kez EKLEMEK "duplicate collection entry" -> sitenin TAMAMINA 500.19 demektir.
+            // Yani <remove> olmadan "404 sayfamı değiştir" isteği siteyi düşürürdü.
+            //
+            // Üst yapılandırmada BULUNMAYAN bir kodu <remove> etmek zararsızdır: IIS koleksiyon birleştirmesi
+            // <remove>'u bir SÜZGEÇ olarak uygular, eşleşme yoksa hiçbir şey olmaz. (Aynı kalıp ".woff2" MIME
+            // düzeltmesi olarak hem uzantının tanımlı OLMADIĞI IIS 8.5'te hem tanımlı olduğu IIS 10'da
+            // yıllardır aynı biçimde dağıtılıyor.)
+            httpErrors.Add(new XElement("remove",
+                new XAttribute("statusCode", page.StatusCode),
+                new XAttribute("subStatusCode", -1)));
+
+            // responseMode=ExecuteURL: yol aynı uygulama içinde ÇALIŞTIRILIR. File (mutlak disk yolu)
+            // ve Redirect (dış URL) kasten desteklenmiyor — gerekçe SiteErrorPageDto'da.
+            httpErrors.Add(new XElement("error",
+                new XAttribute("statusCode", page.StatusCode),
+                new XAttribute("path", page.Path),
+                new XAttribute("responseMode", "ExecuteURL")));
+        }
+
         // urlCompression sıkıştırma modüllerini gerektirir (yine kurulum betiğinde yok). Statik
         // açık + dinamik kapalı IIS'in kendi varsayılanıdır; o durumda bölüm hiç yazılmaz.
         if (request.StaticCompressionEnabled && !request.DynamicCompressionEnabled)
@@ -810,6 +1058,60 @@ public sealed class SiteHostingSettingsService(
         var httpRuntime = Ensure(systemWeb, "httpRuntime");
         httpRuntime.SetAttributeValue("maxRequestLength", (int)Math.Min(uploadBytes / 1024, int.MaxValue));
         httpRuntime.SetAttributeValue("executionTimeout", 600);
+
+        // MIME TÜRLERİ.
+        //
+        // <clear/> KULLANILMAZ: staticContent koleksiyonu temizlenirse .html/.css/.js dahil TÜM
+        // varsayılan eşlemeler gider ve site her statik dosyaya 404.3 döndürür. Bu yüzden yalnız
+        // bizim girdilerimiz silinip yeniden yazılır; <remove> de yine mükerrer anahtar (500.19)
+        // içindir — kullanıcı var olan bir uzantıyı (.json gibi) EZMEK istediğinde tek yol budur.
+        var mimeTypes = NormalizeMimeTypes(request.MimeTypes);
+        var staticContent = mimeTypes.Length > 0 ? Ensure(systemWebServer, "staticContent") : systemWebServer.Element("staticContent");
+        if (staticContent is not null)
+        {
+            staticContent.Elements("mimeMap").Remove();
+            staticContent.Elements("remove").Remove();
+            foreach (var mime in mimeTypes)
+            {
+                staticContent.Add(new XElement("remove", new XAttribute("fileExtension", mime.Extension)));
+                staticContent.Add(new XElement("mimeMap",
+                    new XAttribute("fileExtension", mime.Extension),
+                    new XAttribute("mimeType", mime.MimeType)));
+            }
+
+            // Eşleme kalmadıysa bölümü BÜSBÜTÜN bırakma; ama <clientCache> gibi başka bir ayar
+            // varsa dokunma (o ayarı silmek bizim işimiz değil).
+            if (!staticContent.HasElements && !staticContent.HasAttributes)
+            {
+                staticContent.Remove();
+            }
+        }
+
+        // HSTS.
+        //
+        // Yerli IIS <hsts> öğesi applicationHost.config'te yaşar ve yalnız IIS 10 1709+'ta vardır;
+        // customHeaders ise her IIS sürümünde ve SİTENİN KENDİ web.config'inde çalışır — panelin
+        // zaten kullandığı yol da bu (WafService X-Frame-Options'ı böyle yazıyor).
+        // Başlığın düz HTTP üzerinde de gönderilmesi zararsızdır: RFC 6797, tarayıcının güvensiz
+        // taşımadan gelen HSTS başlığını YOK SAYMASINI zorunlu kılar.
+        var hstsValue = BuildHstsValue(request);
+        var customHeaders = hstsValue is not null
+            ? Ensure(Ensure(systemWebServer, "httpProtocol"), "customHeaders")
+            : systemWebServer.Element("httpProtocol")?.Element("customHeaders");
+        if (customHeaders is not null)
+        {
+            // YALNIZ kendi başlığımıza dokunuruz: customHeaders'ı WafService de kullanıyor,
+            // koleksiyonu temizlemek onun güvenlik başlıklarını sessizce silerdi.
+            customHeaders.Elements()
+                .Where(item => string.Equals((string?)item.Attribute("name"), HstsHeaderName, StringComparison.OrdinalIgnoreCase))
+                .Remove();
+            if (hstsValue is not null)
+            {
+                customHeaders.Add(new XElement("add",
+                    new XAttribute("name", HstsHeaderName),
+                    new XAttribute("value", hstsValue)));
+            }
+        }
 
         var rewrite = systemWebServer.Element("rewrite");
         var rules = rewrite?.Element("rules");
@@ -859,26 +1161,6 @@ public sealed class SiteHostingSettingsService(
         }
 
         return documents;
-    }
-
-    private static UpdateSiteHostingSettingsRequest ToUpdateRequest(SiteHostingSettingsDto state)
-    {
-        return new UpdateSiteHostingSettingsRequest
-        {
-            MaximumBandwidthBytesPerSecond = state.MaximumBandwidthBytesPerSecond,
-            MaximumConnections = state.MaximumConnections,
-            DeniedIpAddresses = state.DeniedIpAddresses,
-            RedirectUrl = state.RedirectUrl,
-            DirectoryBrowsingEnabled = state.DirectoryBrowsingEnabled,
-            DefaultDocuments = state.DefaultDocuments,
-            DetailedErrorsEnabled = state.DetailedErrorsEnabled,
-            StaticCompressionEnabled = state.StaticCompressionEnabled,
-            DynamicCompressionEnabled = state.DynamicCompressionEnabled,
-            MaximumUploadBytes = state.MaximumUploadBytes,
-            HotlinkProtectionEnabled = state.HotlinkProtectionEnabled,
-            AllowedReferrerHosts = state.AllowedReferrerHosts,
-            ProtectedExtensions = state.ProtectedExtensions
-        };
     }
 
     private static void UpdateIisLimits(string siteName, long bandwidth, long connections)

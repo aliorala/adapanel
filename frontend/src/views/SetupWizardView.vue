@@ -1,6 +1,18 @@
 <template>
   <main v-if="mode !== 'dashboard'" class="setup-shell">
     <section class="auth-card">
+      <!--
+        GİRİŞ EKRANI MARKASI: burada gösterilen HER ZAMAN sunucu geneli (yöneticinin) markasıdır.
+        Bayi bazlı marka giriş ekranında GÖSTERİLEMEZ: kullanıcı henüz kimliğini kanıtlamadığı
+        için hangi bayiye ait olduğu bilinmez. Adres/alan adından tahmin etmek ise kimlik
+        doğrulanmadan "bu sunucuda şu bayi var" bilgisini herkese açardı. Plesk'in davranışı da
+        budur (merkezî giriş sayfası bayi bazında markalanmaz).
+      -->
+      <div v-if="brandLogo || brandName" class="auth-brand">
+        <img v-if="brandLogo" class="auth-logo" :src="brandLogo" :alt="brandName" />
+        <span class="auth-brand-name">{{ brandName }}</span>
+      </div>
+
       <div class="auth-copy">
         <span class="status-line"></span>
         <p class="meta">{{ t("panel.layout.subtitle") }}</p>
@@ -140,7 +152,9 @@
     :title="activeSectionMeta.label"
     :description="activeSectionMeta.description"
     :subtitle="t('panel.layout.subtitle')"
-    :panel-name="panelPreferences.panelName"
+    :panel-name="brandName"
+    :logo-url="branding.logoDataUrl"
+    :logo-link-url="branding.logoLinkUrl"
     :machine-name="systemStore.overview?.machineName || t('panel.common.notAvailable')"
     :secure-entry-path="currentSecurePath"
     :user-name="authStore.session?.user?.userName || '-'"
@@ -210,6 +224,8 @@
       v-else-if="activeSection === 'sites' && (isAdmin || isReseller || isCustomer)"
       :open-request="siteOpenRequest" />
 
+    <SiteBuilderView v-else-if="activeSection === 'sitebuilder'" />
+
     <DatabasesView v-else-if="activeSection === 'database' && isAdmin" />
 
     <MyDatabasesView v-else-if="activeSection === 'database' && (isReseller || isCustomer)" />
@@ -229,6 +245,8 @@
          kendi aboneliğini, bayi kendi müşterilerini, yönetici sunucu genelini görür. Ekranı yalnız
          yöneticiye göstermek, kiracının kendi hesabında ne olduğunu göremediği anlamına gelirdi. -->
     <AuditLogsView v-else-if="activeSection === 'audit'" />
+
+    <BillingView v-else-if="activeSection === 'billing' && isAdmin" />
 
     <FilesView v-else-if="activeSection === 'files' && (isAdmin || isCustomer || isReseller)" />
 
@@ -251,11 +269,17 @@
 
     <MigrationView v-else-if="activeSection === 'migration' && isAdmin" />
 
+    <ClusterView v-else-if="activeSection === 'cluster' && isAdmin" />
+
     <SoftwareView v-else-if="activeSection === 'software' && isAdmin" />
 
     <AdvisorView v-else-if="activeSection === 'advisor' && isAdmin" @navigate="handleNavigation" />
 
-    <section v-else-if="activeSection === 'settings' && isAdmin" class="panel module-shell settings-workspace">
+    <SeoView v-else-if="activeSection === 'seo'" />
+
+    <!-- Bayi de bu bölüme girer ama YALNIZ "Marka" sekmesini görür: sunucu ayarları (güvenlik,
+         bildirim, güncelleme, lisans) hem sekme hem de uç düzeyinde yöneticiye kilitli kalır. -->
+    <section v-else-if="activeSection === 'settings' && (isAdmin || isReseller)" class="panel module-shell settings-workspace">
       <div class="module-head">
         <div>
           <h2>{{ t("panel.settings.title") }}</h2>
@@ -270,6 +294,10 @@
         <div class="segmented-tabs settings-tabs">
           <button v-if="isAdmin" :class="{ active: settingsTab === 'general' }" @click="settingsTab = 'general'">
             {{ t("panel.settings.tab.general") }}
+          </button>
+          <!-- Marka sekmesi bayide de var: bayi kendi markasını kendisi yönetir (Plesk modeli). -->
+          <button :class="{ active: settingsTab === 'branding' }" @click="openBrandingTab">
+            {{ t("panel.branding.tab") }}
           </button>
           <button v-if="isAdmin" :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'">
             {{ t("panel.settings.tab.security") }}
@@ -392,6 +420,102 @@
         </template>
       </section>
 
+      <!-- ÖZEL MARKA (white-label). Yönetici sunucu markasını, bayi kendi markasını düzenler;
+           hangi kapsama yazıldığı isteğin GÖVDESİNDEN değil oturumdan belirlenir (BrandingController). -->
+      <section v-else-if="settingsTab === 'branding'" class="form-surface settings-section">
+        <div class="section-head">
+          <div>
+            <h3>{{ t("panel.branding.title") }}</h3>
+            <p class="meta">{{ isReseller ? t("panel.branding.resellerHint") : t("panel.branding.serverHint") }}</p>
+          </div>
+          <span class="status-pill">{{ isReseller ? t("panel.branding.scopeReseller") : t("panel.branding.scopeServer") }}</span>
+        </div>
+
+        <p v-if="!brandingLoaded" class="empty-state" role="status" aria-live="polite">
+          {{ t("panel.common.loading") }}
+        </p>
+
+        <template v-else>
+          <div class="form-grid">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.branding.panelName") }}</span>
+              <input v-model="brandingForm.panelName" maxlength="64" :placeholder="panelPreferences.panelName" />
+              <small class="field-hint">{{ t("panel.branding.panelNameHint") }}</small>
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.branding.accent") }}</span>
+              <span class="accent-row">
+                <input v-model="brandingForm.accentColor" maxlength="7" placeholder="#2563eb" />
+                <input
+                  class="accent-swatch"
+                  type="color"
+                  :value="brandingForm.accentColor || '#2563eb'"
+                  :title="t('panel.branding.accent')"
+                  @input="pickAccentColor" />
+              </span>
+              <small class="field-hint">{{ t("panel.branding.accentHint") }}</small>
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.branding.logoLink") }}</span>
+              <input v-model="brandingForm.logoLinkUrl" maxlength="255" placeholder="https://" />
+              <small class="field-hint">{{ t("panel.branding.logoLinkHint") }}</small>
+            </label>
+          </div>
+          <div class="row-actions">
+            <button class="compact" @click="saveBranding">{{ t("panel.branding.save") }}</button>
+          </div>
+
+          <!--
+            GÖRSELLER SEÇİLİR SEÇİLMEZ yüklenir (ayrı bir "kaydet" yok): dosya seçmek zaten bir
+            onaydır ve iki adımlı akışta kullanıcı, seçtiği logonun kaydedilmediğini ancak sayfayı
+            yenileyince fark ederdi. Kabul kararı SUNUCUDA, dosyanın İÇERİĞİNE bakılarak verilir;
+            buradaki `accept` yalnızca dosya seçicinin varsayılan süzgecidir, bir güvenlik denetimi
+            DEĞİLDİR.
+          -->
+          <div class="brand-assets">
+            <div class="brand-asset">
+              <span class="field-label">{{ t("panel.branding.logo") }}</span>
+              <div class="brand-asset-preview">
+                <img v-if="brandingForm.logoDataUrl" :src="brandingForm.logoDataUrl" :alt="t('panel.branding.logo')" />
+                <span v-else class="meta">{{ t("panel.branding.none") }}</span>
+              </div>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                @change="uploadBrandingAsset('logo', $event)" />
+              <button
+                type="button"
+                class="secondary compact"
+                :disabled="!brandingForm.logoDataUrl"
+                @click="removeBrandingAsset('logo')">
+                {{ t("panel.branding.remove") }}
+              </button>
+              <small class="field-hint">{{ t("panel.branding.logoHint") }}</small>
+            </div>
+
+            <div class="brand-asset">
+              <span class="field-label">{{ t("panel.branding.favicon") }}</span>
+              <div class="brand-asset-preview">
+                <img v-if="brandingForm.faviconDataUrl" :src="brandingForm.faviconDataUrl" :alt="t('panel.branding.favicon')" />
+                <span v-else class="meta">{{ t("panel.branding.none") }}</span>
+              </div>
+              <input
+                type="file"
+                accept="image/png,image/x-icon,image/vnd.microsoft.icon,.ico"
+                @change="uploadBrandingAsset('favicon', $event)" />
+              <button
+                type="button"
+                class="secondary compact"
+                :disabled="!brandingForm.faviconDataUrl"
+                @click="removeBrandingAsset('favicon')">
+                {{ t("panel.branding.remove") }}
+              </button>
+              <small class="field-hint">{{ t("panel.branding.faviconHint") }}</small>
+            </div>
+          </div>
+        </template>
+      </section>
+
       <section v-else-if="settingsTab === 'security' && isAdmin" class="form-surface settings-section">
         <div class="section-head">
           <div>
@@ -429,7 +553,19 @@ import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
 import { readSecureEntryPath } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
-import { getPanelPreferences, updatePanelPreferences, type PanelPreferences } from "../api/panelSettings";
+import {
+  emptyBranding,
+  getBranding,
+  getBrandingSettings,
+  getPanelPreferences,
+  removeBrandingImage,
+  updateBrandingSettings,
+  updatePanelPreferences,
+  uploadBrandingImage,
+  type Branding,
+  type BrandingImageKind,
+  type PanelPreferences
+} from "../api/panelSettings";
 import { useAppsStore } from "../stores/apps";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
@@ -459,11 +595,14 @@ import { lazyView } from "../utils/lazyView";
  * oturum açılışına bir gidiş-dönüş ve bir "Yükleniyor…" titremesi eklerdi.
  */
 const AuditLogsView = lazyView(() => import("./AuditLogsView.vue"));
+const BillingView = lazyView(() => import("./BillingView.vue"));
 const CronView = lazyView(() => import("./CronView.vue"));
 const DatabasesView = lazyView(() => import("./DatabasesView.vue"));
 const MigrationView = lazyView(() => import("./MigrationView.vue"));
+const ClusterView = lazyView(() => import("./ClusterView.vue"));
 const MyDatabasesView = lazyView(() => import("./MyDatabasesView.vue"));
 const AdvisorView = lazyView(() => import("./AdvisorView.vue"));
+const SeoView = lazyView(() => import("./SeoView.vue"));
 const FilesView = lazyView(() => import("./FilesView.vue"));
 const MailView = lazyView(() => import("./MailView.vue"));
 const MonitoringView = lazyView(() => import("./MonitoringView.vue"));
@@ -480,6 +619,7 @@ const LicenseView = lazyView(() => import("./LicenseView.vue"));
 const SoftwareView = lazyView(() => import("./SoftwareView.vue"));
 const UpdateView = lazyView(() => import("./UpdateView.vue"));
 const WebsiteWorkspaceView = lazyView(() => import("./WebsiteWorkspaceView.vue"));
+const SiteBuilderView = lazyView(() => import("./SiteBuilderView.vue"));
 
 type ViewMode = "setup" | "auth" | "dashboard";
 type SectionItem = {
@@ -493,7 +633,7 @@ type SectionItem = {
 };
 // Hesap yönetimi ("accounts" → UsersView) ve "Hesabım" ("account" → AccountView) artık ayrı bölümler;
 // Ayarlar yalnızca yönetici kapsamındaki sunucu/panel ayarlarını barındırır.
-type SettingsTab = "general" | "security" | "notifications" | "errorReports" | "updates" | "license";
+type SettingsTab = "general" | "branding" | "security" | "notifications" | "errorReports" | "updates" | "license";
 
 const i18n = useI18n();
 // params: "{count} tane daha" gibi sayi iceren metinler icin. Verilmezse davranis aynidir.
@@ -588,6 +728,20 @@ const panelPreferences = reactive<PanelPreferences>({
 // Tercihler sunucudan gelmeden yukarıdaki varsayılanlar gerçek ayar sanılıyordu (anahtarlar
 // yanlış konumda görünüp yanlışlıkla üzerine kaydedilebiliyordu).
 const panelPreferencesLoaded = ref(false);
+
+/*
+ * ÖZEL MARKA (white-label).
+ *
+ * İKİ AYRI DURUM, bilerek:
+ *  - `branding`     : oturum açanın GÖRDÜĞÜ marka (giriş ekranı + panel kabuğu). Bayinin
+ *                     müşterisi burada BAYİNİN markasını görür.
+ *  - `brandingForm` : düzenlenen KENDİ kaydı (yöneticide sunucu, bayide bayinin kendisi).
+ * İkisini tek nesnede tutmak, bayinin kendi formunu düzenlerken müşterisinin gördüğü değeri
+ * değiştirdiğini sanmasına ya da tam tersine yol açardı.
+ */
+const branding = ref<Branding>(emptyBranding());
+const brandingForm = ref<Branding>(emptyBranding());
+const brandingLoaded = ref(false);
 
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isCustomer = computed(() => authStore.session?.user?.role === "Customer");
@@ -693,19 +847,25 @@ const dashboardSections = computed<SectionItem[]>(() => {
     // Plesk gibi üst-düzey "Müşteriler & Bayiler" girişi (admin) / "Müşteriler" (bayi):
     // hesap yönetimi ekranı (UsersView) — kullanıcılar, planlar, kotalar, alt kullanıcılar.
     { id: "accounts", label: isReseller.value ? t("panel.navigation.customers") : t("panel.navigation.accounts"), description: t("panel.navigation.accountsDesc"), glyph: "MU" },
+    { id: "sitebuilder", label: t("panel.navigation.siteBuilder"), description: t("panel.siteBuilder.subtitle"), glyph: "SK" },
     { id: "mail", label: t("panel.navigation.mail"), description: t("panel.mail.subtitle"), glyph: "ML" },
     { id: "files", label: t("panel.navigation.files"), description: t("panel.files.subtitle"), glyph: "FL" },
     { id: "database", label: t("panel.navigation.database"), description: t("panel.database.subtitle"), glyph: "DB" },
     { id: "monitor", label: t("panel.navigation.monitor"), description: t("panel.monitor.subtitle"), glyph: "MN", badgeTitle: attentionBadgeTitle("monitor"), badge: attentionBadge("monitor") },
     // Danışman rozeti = bekleyen dikkat maddesi sayısı; Mağaza rozeti = bekleyen güncelleme
     // sayısı (yoksa eskisi gibi kurulu bileşen sayısı).
+    { id: "seo", label: t("panel.navigation.seo"), description: t("panel.seo.subtitle"), glyph: "SE" },
     { id: "advisor", label: t("panel.navigation.advisor"), description: t("panel.advisor.subtitle"), glyph: "AD", badgeTitle: attentionBadgeTitle("advisor"), badge: attentionBadge("advisor") },
     { id: "software", label: t("panel.navigation.store"), description: t("panel.software.subtitle"), glyph: "ST", badgeTitle: attentionBadgeTitle("software"), badge: attentionBadge("software") ?? (installedSoftwareCount.value ? String(installedSoftwareCount.value) : undefined) },
     { id: "tasks", label: t("panel.navigation.tasks"), description: t("panel.tasks.subtitle"), glyph: "TK" },
     { id: "security", label: t("panel.navigation.security"), description: t("panel.security.subtitle"), glyph: "SC", badgeTitle: attentionBadgeTitle("security"), badge: attentionBadge("security") },
     { id: "audit", label: t("panel.navigation.audit"), description: t("panel.audit.subtitleAdmin"), glyph: "DK" },
+    { id: "billing", label: t("panel.navigation.billing"), description: t("panel.billing.subtitle"), glyph: "FT" },
     { id: "tools", label: t("panel.navigation.serverTools"), description: t("panel.serverTools.subtitle"), glyph: "AR", badgeTitle: attentionBadgeTitle("tools"), badge: attentionBadge("tools") },
     { id: "migration", label: t("panel.navigation.migration"), description: t("panel.migration.subtitle"), glyph: "MG" },
+    // Çoklu sunucu (Plesk Multi Server karşılığı). Bu diziye eklenmesi TEK BAŞINA yönetici-only
+    // demektir: bayi/müşteri/operatör dalları aşağıda AÇIK LİSTEYLE süzer, bu kimlik listede yok.
+    { id: "cluster", label: t("panel.navigation.cluster"), description: t("panel.cluster.subtitle"), glyph: "SU" },
     // "Hesabım": oturum açan kullanıcının kendi profili (2FA, kurtarma kodları) — her rolde açık.
     // Yapay zeka baglantisi HER role acik: anahtarin yetkisi sahibinin rolunden turer, yani
     // musteri anahtari musterinin gordugu kadarini gorur. (Plesk yalniz yoneticiye izin veriyor.)
@@ -719,10 +879,14 @@ const dashboardSections = computed<SectionItem[]>(() => {
     // Bayi: kendi müşterilerini yönetir ("Müşteriler" ekranı) + müşterilerinin tüm site
     // kaynakları (Web Siteleri hub'ı: PHP/SSL/DNS/FTP/Proxy/WP/Stats/Backup/Hosting — hepsi
     // sahip-kapsamına göre EnsureSiteAsync ile filtreli; server-level araçlar hub'da gizli).
-    // Panel ayarları bayiye kapalı olduğundan "Ayarlar" yerine "Hesabım" görünür.
+    // "Ayarlar" bayide artık GÖRÜNÜR ama tek sekmesi MARKA'dır: bayinin kendi müşterilerine
+    // gösterdiği logo/ad/renk buradan yönetilir (Plesk'te de bayi kendi markasını kendisi kurar).
+    // Sunucu ayarları — güvenlik, bildirim, güncelleme, lisans — hem sekme hem uç düzeyinde
+    // yöneticiye kilitli kalır.
     const resellerSections = sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
+      section.id === "sitebuilder" ||
       section.id === "accounts" ||
       section.id === "mail" ||
       section.id === "files" ||
@@ -731,6 +895,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
       section.id === "audit" ||
       section.id === "ai" ||
       section.id === "account" ||
+      section.id === "settings" ||
       section.id === "exit");
 
     // Yedek bölümü bayide de olmalı: BackupController `Reseller` rolüne izin veriyor ama menüde
@@ -749,6 +914,7 @@ const dashboardSections = computed<SectionItem[]>(() => {
     let customerSections = sections.filter((section) =>
       section.id === "home" ||
       section.id === "sites" ||
+      section.id === "sitebuilder" ||
       section.id === "mail" ||
       section.id === "database" ||
       section.id === "files" ||
@@ -812,6 +978,9 @@ const activeSectionMeta = computed(() =>
   dashboardSections.value.find((section) => section.id === activeSection.value) ?? dashboardSections.value[0]);
 
 onMounted(async () => {
+  // Marka İLK İŞ olarak istenir ve beklenmez: giriş ekranı marka gelmeden de kullanılabilir
+  // olmalı, ama marka geldiğinde (çoğu zaman form doldurulmadan önce) yerine oturur.
+  void loadBranding();
   await initializeView();
   await loadPanelUpdate();
 });
@@ -977,6 +1146,9 @@ async function submitLogin() {
     loginForm.twoFactorCode = "";
     mode.value = "dashboard";
     activeSection.value = "home";
+    // Giriş yapan kişi bir bayinin müşterisiyse artık O BAYİNİN markasını görmeli; giriş
+    // ekranındaki sunucu markası panelin içine taşınmamalı.
+    void loadBranding();
     // "Giriş başarılı" yalnız ana sayfada bir kez görünüp ~4 sn sonra kaybolur.
     showBanner(t("panel.auth.loginSuccess"), false, 4000);
     await loadDashboardData();
@@ -999,6 +1171,10 @@ async function logout() {
     requiresTwoFactor.value = false;
     // Salt okunur bayrağı bir sonraki kullanıcıya sızmamalı.
     subscriptionStore.reset();
+    // MARKA DA SIZMAMALI: çıkan kullanıcı bir bayinin müşterisiyse, o bayinin logosu/adı bir
+    // sonraki kişinin giriş ekranında asılı kalırdı. Yeniden çözülünce sunucu markasına döner.
+    brandingLoaded.value = false;
+    void loadBranding();
     showBanner(t("panel.auth.logoutSuccess"), false);
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
@@ -1117,6 +1293,113 @@ function applyAppearance(preferences: PanelPreferences) {
   }
 }
 
+/*
+ * ÖZEL MARKA — yükleme ve uygulama.
+ *
+ * Marka, oturum durumu HER DEĞİŞTİĞİNDE yeniden çözülür (açılış, giriş, çıkış): kimin markasını
+ * göreceğimiz kim olduğumuza bağlı. Çıkışta yenilenmezse, çıkan bayi müşterisinin markası bir
+ * sonraki kişinin GİRİŞ ekranında asılı kalırdı.
+ */
+const brandName = computed(() => branding.value.panelName || panelPreferences.panelName || "AdaPanel");
+const brandLogo = computed(() => branding.value.logoDataUrl);
+
+async function loadBranding() {
+  try {
+    applyBranding(await getBranding());
+  } catch {
+    // Marka okunamazsa panel ürün görünümüyle çalışmaya DEVAM eder; giriş ekranını bir marka
+    // isteği yüzünden kilitlemek, çalışan bir paneli görsel bir ayar uğruna erişilemez kılardı.
+  }
+}
+
+function applyBranding(brand: Branding) {
+  branding.value = brand;
+
+  const documentTitle = brand.panelName || panelPreferences.panelName || "AdaPanel";
+  document.title = documentTitle;
+
+  const iconLink = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+  if (iconLink) {
+    iconLink.href = brand.faviconDataUrl || "/favicon.svg";
+  }
+
+  // Vurgu rengi bir CSS bildirimine yazılıyor: sunucu doğrulasa da burada BİR KEZ DAHA süzülür.
+  // Değer stil sayfasındaki `:root[data-brand-accent]` kuralını açar (bkz. styles/base.css).
+  const root = document.documentElement;
+  if (/^#[0-9a-fA-F]{6}$/.test(brand.accentColor)) {
+    root.style.setProperty("--brand-accent", brand.accentColor);
+    root.dataset.brandAccent = "";
+  } else {
+    root.style.removeProperty("--brand-accent");
+    delete root.dataset.brandAccent;
+  }
+}
+
+function openBrandingTab() {
+  settingsTab.value = "branding";
+  void loadBrandingSettings();
+}
+
+async function loadBrandingSettings() {
+  try {
+    brandingForm.value = await getBrandingSettings();
+    brandingLoaded.value = true;
+  } catch (error) {
+    showBanner(resolveApiMessage(error), true);
+  }
+}
+
+async function saveBranding() {
+  try {
+    const saved = await updateBrandingSettings({
+      panelName: brandingForm.value.panelName,
+      accentColor: brandingForm.value.accentColor,
+      logoLinkUrl: brandingForm.value.logoLinkUrl
+    });
+    brandingForm.value = saved;
+    // Kaydeden kişi kendi markasının kapsamındadır (yönetici→sunucu, bayi→kendisi), yani
+    // değişiklik kendi ekranında da GÖRÜNMELİ; aksi halde "kaydettim ama bir şey olmadı" denir.
+    await loadBranding();
+    showBanner(t("panel.branding.saved"), false);
+  } catch (error) {
+    showBanner(resolveApiMessage(error), true);
+  }
+}
+
+async function uploadBrandingAsset(kind: BrandingImageKind, event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    brandingForm.value = await uploadBrandingImage(kind, file);
+    await loadBranding();
+    showBanner(t("panel.branding.saved"), false);
+  } catch (error) {
+    showBanner(resolveApiMessage(error), true);
+  } finally {
+    // Seçim TEMİZLENİR: aynı dosya reddedildikten sonra düzeltilip yeniden seçilebilsin
+    // (tarayıcı aynı dosya adı için `change` olayını tekrar tetiklemez).
+    input.value = "";
+  }
+}
+
+async function removeBrandingAsset(kind: BrandingImageKind) {
+  try {
+    brandingForm.value = await removeBrandingImage(kind);
+    await loadBranding();
+    showBanner(t("panel.branding.saved"), false);
+  } catch (error) {
+    showBanner(resolveApiMessage(error), true);
+  }
+}
+
+function pickAccentColor(event: Event) {
+  brandingForm.value.accentColor = (event.target as HTMLInputElement).value;
+}
+
 const resolvedThemeMode = ref(document.documentElement.dataset.theme === "light" ? "light" : "dark");
 
 // Üst bardaki tema düğmesi: anında uygular, tercihi kalıcılaştırır.
@@ -1192,6 +1475,11 @@ function handleNavigation(sectionId: string) {
 
   // Dikkat maddelerinin mantıksal bölümleri ("dns" → Web Siteleri, "health" → Sunucu Araçları).
   activeSection.value = ATTENTION_SECTION_ALIASES[sectionId] ?? sectionId;
+  // Bayide "Ayarlar"ın tek sekmesi MARKA'dır; varsayılan sekme ("general") yönetici içindir ve
+  // bayide boş bir ekran gösterirdi.
+  if (activeSection.value === "settings" && !isAdmin.value) {
+    openBrandingTab();
+  }
   // Menüden Posta'ya gitmek her zaman alan adı LİSTESİNDEN başlar: aramayla açılmış eski bir
   // alan adı burada seçili kalsaydı kullanıcı yanlış alan adında işlem yapabilirdi.
   if (activeSection.value === "mail") {
@@ -1563,6 +1851,82 @@ select,
 textarea,
 button {
   width: 100%;
+}
+
+/* --- ÖZEL MARKA (white-label) --- */
+
+/* Giriş ekranının marka başlığı. Logo yoksa yalnız ad görünür; ikisi de yoksa blok hiç basılmaz. */
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Yüklenen görselin ölçüsü kartı BOZAMAZ: yükseklik sabit, genişlik oranla ve üst sınırlı. */
+.auth-logo {
+  height: 44px;
+  width: auto;
+  max-width: 220px;
+  object-fit: contain;
+}
+
+.auth-brand-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.accent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accent-swatch {
+  width: 44px;
+  min-width: 44px;
+  height: 34px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.brand-assets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.brand-asset {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+/* Önizleme alanı SABİT yükseklikte: logo yüklendiğinde/kaldırıldığında form zıplamasın. */
+.brand-asset-preview {
+  display: grid;
+  place-items: center;
+  min-height: 72px;
+  padding: 8px;
+  border: 1px dashed var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.brand-asset-preview img {
+  max-height: 56px;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.brand-asset button {
+  width: auto;
+  justify-self: start;
 }
 
 @media (max-width: 980px) {

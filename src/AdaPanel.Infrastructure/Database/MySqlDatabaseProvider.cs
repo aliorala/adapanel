@@ -410,6 +410,269 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         return removed;
     }
 
+    public string RemoteAccessMechanism => "mysqlHost";
+
+    public async Task<IReadOnlyDictionary<string, RemoteAccessFacts>> ReadRemoteAccessAsync(
+        DatabaseConnectionProfile profile,
+        IReadOnlyCollection<string> userNames,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        try
+        {
+            // mysql.user ve mysql.db küçük tablolardır; kullanıcı başına ayrı sorgu yerine iki
+            // toplu okuma yapılır, eşleştirme bellekte olur.
+            var hosts = await ReadAllHostsAsync(connection, cancellationToken);
+            var databases = await ReadAllGrantedDatabasesAsync(connection, cancellationToken);
+
+            var result = new Dictionary<string, RemoteAccessFacts>(StringComparer.OrdinalIgnoreCase);
+            foreach (var userName in userNames)
+            {
+                result[userName] = new RemoteAccessFacts(
+                    hosts.TryGetValue(userName, out var userHosts) ? userHosts : [],
+                    databases.TryGetValue(userName, out var userDatabases) ? userDatabases : [],
+                    string.Empty);
+            }
+
+            return result;
+        }
+        catch (MySqlException exception)
+        {
+            throw MapUnexpectedMySqlException(exception);
+        }
+    }
+
+    /// <summary>
+    /// Kullanıcının hesap host kümesini istenen uzak kaynaklarla eşitler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// MySQL'de "uzaktan da bağlanabilsin" demek, AYNI kullanıcı adının başka bir host değeriyle
+    /// İKİNCİ BİR HESAP olarak var olması demektir. Bu yüzden işlem bir hesap kümesi eşitlemesidir:
+    /// eksik host'lar oluşturulur, listeden çıkanlar düşürülür.
+    /// </para>
+    /// <para>
+    /// Yeni hesap kaynak hesabın yetkilerini alır; yetkiler <c>mysql.db</c> sütunlarından okunur
+    /// (bkz. <see cref="MySqlAccountHosts.BuildGrantClause"/>). Parola panelin sakladığı paroladır —
+    /// panel parolayı bilmiyorsa işlem yapılmaz, çünkü hesabı rastgele bir parolayla oluşturmak
+    /// kullanıcıya "erişim açıldı" deyip bağlanamayacağı bir hesap vermek olurdu.
+    /// </para>
+    /// </remarks>
+    public async Task ApplyRemoteAccessAsync(
+        DatabaseConnectionProfile profile,
+        string userName,
+        IReadOnlyCollection<string> databaseNames,
+        IReadOnlyCollection<RemoteAccessOrigin> origins,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        _ = databaseNames; // MySQL'de kapsam hesabın kendisindedir; yetkiler kaynak hesaptan kopyalanır.
+        MySqlAccountHosts.EnsureManageable(userName);
+
+        var remoteHosts = origins.Select(origin => origin.ToMySqlHost()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        try
+        {
+            var current = await ReadHostsAsync(connection, userName, cancellationToken);
+            if (current.Count == 0)
+            {
+                throw new AppException("database.user_not_found", 404, 404);
+            }
+
+            var plan = MySqlAccountHosts.Plan(current, remoteHosts);
+            if (plan.ToCreate.Count > 0 && string.IsNullOrEmpty(password))
+            {
+                throw new AppException("database.remote_password_unknown", 409, 409);
+            }
+
+            // Yetki kaynağı: önce yerel hesap (uygulamanın gerçekten kullandığı hesap), yoksa eldeki ilk hesap.
+            var source = current.FirstOrDefault(MySqlAccountHosts.IsLocal) ?? current[0];
+            var grants = plan.ToCreate.Count > 0
+                ? await ReadDatabaseGrantsAsync(connection, userName, source, cancellationToken)
+                : [];
+
+            foreach (var host in plan.ToCreate)
+            {
+                await CreateAccountAsync(connection, userName, host, password, grants, cancellationToken);
+            }
+
+            foreach (var host in plan.ToDrop)
+            {
+                await using var drop = connection.CreateCommand();
+                drop.CommandText = $"DROP USER IF EXISTS '{Escape(userName)}'@'{Escape(host)}';";
+                await drop.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var flush = connection.CreateCommand();
+            flush.CommandText = "FLUSH PRIVILEGES;";
+            await flush.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (MySqlException exception)
+        {
+            throw MapUnexpectedMySqlException(exception);
+        }
+    }
+
+    private static async Task CreateAccountAsync(
+        MySqlConnection connection,
+        string userName,
+        string host,
+        string password,
+        IReadOnlyList<(string DatabasePattern, string Clause)> grants,
+        CancellationToken cancellationToken)
+    {
+        // CREATE + ALTER birlikte: hesap zaten varsa (yarış, elle açılmış) parolası da kaynakla
+        // aynı hâle gelir. Aksi hâlde aynı kullanıcı adı host'a göre farklı parolalarla çalışır ve
+        // kullanıcı hangisinin geçerli olduğunu bilemez.
+        await using (var create = connection.CreateCommand())
+        {
+            create.CommandText = $"CREATE USER IF NOT EXISTS '{Escape(userName)}'@'{Escape(host)}' IDENTIFIED BY @password;";
+            create.Parameters.AddWithValue("@password", password);
+            await create.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var alter = connection.CreateCommand())
+        {
+            alter.CommandText = $"ALTER USER '{Escape(userName)}'@'{Escape(host)}' IDENTIFIED BY @password;";
+            alter.Parameters.AddWithValue("@password", password);
+            await alter.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var (databasePattern, clause) in grants)
+        {
+            await using var grant = connection.CreateCommand();
+            // Desen mysql.db'den GELDİĞİ GİBİ yazılır: orada zaten kaçırılmış hâlde durur
+            // ("musteri\_db"). Yeniden kaçırmak yetkiyi başka bir veritabanına kaydırırdı.
+            grant.CommandText =
+                $"GRANT {clause} ON `{databasePattern.Replace("`", "``")}`.* TO '{Escape(userName)}'@'{Escape(host)}';";
+            await grant.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadHostsAsync(
+        MySqlConnection connection,
+        string userName,
+        CancellationToken cancellationToken)
+    {
+        var hosts = new List<string>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Host FROM mysql.user WHERE User = @user ORDER BY Host;";
+        command.Parameters.AddWithValue("@user", userName);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            hosts.Add(reader.GetString(0));
+        }
+
+        return hosts;
+    }
+
+    private static async Task<Dictionary<string, List<string>>> ReadAllHostsAsync(
+        MySqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT User, Host FROM mysql.user WHERE User <> '' AND Host <> '' ORDER BY User, Host;";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var user = reader.GetString(0);
+            if (!result.TryGetValue(user, out var hosts))
+            {
+                hosts = [];
+                result[user] = hosts;
+            }
+
+            hosts.Add(reader.GetString(1));
+        }
+
+        return result;
+    }
+
+    private static async Task<Dictionary<string, List<string>>> ReadAllGrantedDatabasesAsync(
+        MySqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT User, Db FROM mysql.db WHERE User <> '' ORDER BY User, Db;";
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var user = reader.GetString(0);
+            if (!result.TryGetValue(user, out var names))
+            {
+                names = [];
+                result[user] = names;
+            }
+
+            // mysql.db deseni kaçırılmış saklanır ("musteri\_db"); sahiplik denetimi gerçek adla
+            // karşılaştırma yapacağı için kaçırma geri alınır.
+            var name = reader.GetString(1).Replace("\\_", "_").Replace("\\%", "%").Replace("\\\\", "\\");
+            if (!names.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                names.Add(name);
+            }
+        }
+
+        return result;
+    }
+
+    private static async Task<IReadOnlyList<(string DatabasePattern, string Clause)>> ReadDatabaseGrantsAsync(
+        MySqlConnection connection,
+        string userName,
+        string host,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<(string, string)>();
+        await using var command = connection.CreateCommand();
+        // SELECT *: yetki sütunları motor sürümüne göre değişir; var olanlar okunur, olmayanlar
+        // yok sayılır. Sabit bir sütun listesi, yeni sürümde patlayan bir sorgu demek olurdu.
+        command.CommandText = "SELECT * FROM mysql.db WHERE User = @user AND Host = @host;";
+        command.Parameters.AddWithValue("@user", userName);
+        command.Parameters.AddWithValue("@host", host);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var columns = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            string? databasePattern = null;
+
+            for (var index = 0; index < reader.FieldCount; index++)
+            {
+                var name = reader.GetName(index);
+                if (string.Equals(name, "Db", StringComparison.OrdinalIgnoreCase))
+                {
+                    databasePattern = reader.IsDBNull(index) ? null : reader.GetString(index);
+                    continue;
+                }
+
+                if (!name.EndsWith("_priv", StringComparison.OrdinalIgnoreCase) || reader.IsDBNull(index))
+                {
+                    continue;
+                }
+
+                columns[name] = string.Equals(reader.GetValue(index)?.ToString(), "Y", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var clause = MySqlAccountHosts.BuildGrantClause(columns);
+            if (databasePattern is not null && clause is not null)
+            {
+                result.Add((databasePattern, clause));
+            }
+        }
+
+        return result;
+    }
+
+    private static string Escape(string value) => value.Replace("'", "''");
+
     private static async Task<MySqlConnection> OpenConnectionAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
     {
         try

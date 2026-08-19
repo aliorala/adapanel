@@ -1,16 +1,22 @@
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
 // Sunucu-geneli DNS şablonu (Plesk "DNS template" gibi): yeni site bölgeleri bu şablonla seed edilir. Admin-only.
+//
+// Şablon ayrıca SUNUCU-GENELİ İKİNCİL (slave) DNS SUNUCULARINI tutar (Plesk'te bu, "Slave DNS
+// Manager" eklentisi + "Transfer Restrictions Template" ikilisidir). Buradaki her IP, panelin
+// birincil olduğu HER bölgede AXFR izni alır — yani bu uç, sunucudaki tüm alan adlarının zone
+// içeriğini kimin kopyalayabileceğini belirler. Bu yüzden denetim kaydı ZORUNLU.
 [ApiController]
 [Authorize(Roles = "Administrator")]
 [Route("api/v1/dns/template")]
-public sealed class DnsTemplateController(IDnsService dnsService) : ControllerBase
+public sealed class DnsTemplateController(IDnsService dnsService, IAuditService auditService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<DnsTemplateDto>>> GetAsync(CancellationToken cancellationToken)
@@ -20,7 +26,18 @@ public sealed class DnsTemplateController(IDnsService dnsService) : ControllerBa
     public async Task<ActionResult<ApiResponse<DnsTemplateDto>>> UpdateAsync(
         [FromBody] UpdateDnsTemplateRequest request,
         CancellationToken cancellationToken)
-        => Ok(ApiResponse<DnsTemplateDto>.Ok(await dnsService.UpdateTemplateAsync(request, cancellationToken), "dns.template_saved"));
+    {
+        var template = await dnsService.UpdateTemplateAsync(request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.template_saved",
+            "dns:template",
+            $"Sunucu-geneli DNS şablonu kaydedildi: {template.Records.Count} kayıt. " +
+            $"İkincil DNS sunucuları={(template.SecondaryDnsServers.Count == 0 ? "(yok)" : string.Join(", ", template.SecondaryDnsServers))}.");
+
+        return Ok(ApiResponse<DnsTemplateDto>.Ok(template, "dns.template_saved"));
+    }
 }
 
 /// <summary>
@@ -30,7 +47,7 @@ public sealed class DnsTemplateController(IDnsService dnsService) : ControllerBa
 [ApiController]
 [Authorize(Roles = "Administrator")]
 [Route("api/v1/dns/server")]
-public sealed class DnsServerController(IDnsService dnsService) : ControllerBase
+public sealed class DnsServerController(IDnsService dnsService, IAuditService auditService) : ControllerBase
 {
     [HttpGet("health")]
     public async Task<ActionResult<ApiResponse<DnsServerHealthDto>>> GetHealthAsync(CancellationToken cancellationToken)
@@ -41,7 +58,19 @@ public sealed class DnsServerController(IDnsService dnsService) : ControllerBase
         [FromBody] RepairDnsServerRequest? request,
         CancellationToken cancellationToken)
     {
-        var health = await dnsService.RepairServerAsync(request?.ApplyDelayedAutoStart ?? true, cancellationToken);
+        var applyDelayedAutoStart = request?.ApplyDelayedAutoStart ?? true;
+        var health = await dnsService.RepairServerAsync(applyDelayedAutoStart, cancellationToken);
+
+        // DNS servisini yeniden başlatmak SUNUCUDAKİ TÜM alan adlarını birkaç saniyeliğine
+        // çözülemez yapar ve başlangıç türünü değiştirmek kalıcı bir sistem ayarıdır. İz bırakmayan
+        // bir "kısa süreli toptan kesinti", sonradan hiçbir yerde aranamaz.
+        await auditService.AuditAsync(
+            HttpContext,
+            "dns.server_repaired",
+            "dns:server",
+            $"DNS sunucusu yeniden başlatıldı (gecikmeli otomatik başlangıç={applyDelayedAutoStart}). " +
+            $"Sonuç: dinleme={string.Join(", ", health.ListeningAddresses)}, onarım gerekiyor={health.NeedsRepair}.");
+
         return Ok(ApiResponse<DnsServerHealthDto>.Ok(health, "dns.server_repaired"));
     }
 }

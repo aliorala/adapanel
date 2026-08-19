@@ -85,6 +85,32 @@ public sealed class DatabaseCredentialStore(JsonFileStore fileStore, ISecretProt
         return (match.UserName, Unprotect(match.ProtectedPassword), match.Host);
     }
 
+    /// <summary>
+    /// Kullanıcının panelde saklı parolasını döner (host'tan bağımsız); bilinmiyorsa boş.
+    /// </summary>
+    /// <remarks>
+    /// MySQL'de uzak erişim açmak, aynı kullanıcı için BAŞKA bir host kaydı (yani yeni bir hesap)
+    /// oluşturmak demektir ve yeni hesabın parolası mevcut hesapla AYNI olmalıdır. Parola panelde
+    /// yoksa hesap oluşturulmaz: kullanıcıya "erişim açıldı" deyip bağlanamayacağı bir hesap
+    /// vermek, hiç açmamaktan kötüdür.
+    /// </remarks>
+    public async Task<string> FindPasswordAsync(string engine, string userName, CancellationToken cancellationToken)
+    {
+        var records = await fileStore.ReadAsync(StatePath, Array.Empty<Record>(), cancellationToken);
+        foreach (var record in records.Where(item =>
+                     string.Equals(item.Engine, engine, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(item.UserName, userName, StringComparison.OrdinalIgnoreCase)))
+        {
+            var password = Unprotect(record.ProtectedPassword);
+            if (password.Length > 0)
+            {
+                return password;
+            }
+        }
+
+        return string.Empty;
+    }
+
     public async Task RemoveDatabaseAsync(string engine, string databaseName, CancellationToken cancellationToken)
     {
         await fileStore.UpdateAsync(StatePath, Array.Empty<Record>(), existing => existing

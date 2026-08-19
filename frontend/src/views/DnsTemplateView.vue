@@ -45,6 +45,20 @@
       <p v-if="records.length === 0" class="empty-state">{{ t("panel.dnsTemplate.empty") }}</p>
     </div>
 
+    <!-- SUNUCU GENELİ İKİNCİL (slave) DNS SUNUCULARI.
+         Plesk'te bu iki yerde durur ("Slave DNS Manager" + "Transfer Restrictions Template");
+         burada tek yer. Buradaki her IP, panelin birincil olduğu HER bölgeden AXFR alabilir ve
+         bölge değiştiğinde NOTIFY alır — yani bölge bölge IP girmeyi (ve birini unutmayı) bitirir. -->
+    <div class="secondary-dns">
+      <label class="stacked-field" for="dns-secondary-servers">
+        <span class="field-label">
+          {{ t("panel.dnsTemplate.secondaryServers") }}
+          <FieldHint :label="t('panel.dnsTemplate.secondaryServers')" :text="t('panel.dnsTemplate.secondaryServersHelp')" />
+        </span>
+        <textarea id="dns-secondary-servers" v-model="secondaryServersText" rows="3" spellcheck="false" placeholder="192.0.2.53&#10;2001:db8::53"></textarea>
+      </label>
+    </div>
+
     <div class="row-actions">
       <button class="secondary compact" type="button" @click="addRow">{{ t("panel.dnsTemplate.addRow") }}</button>
       <button class="compact" type="button" :disabled="saving" @click="save">
@@ -63,6 +77,8 @@ import { extractApiMessage } from "../stores/auth";
 
 const { t } = useI18n();
 const records = ref<DnsTemplateRecord[]>([]);
+// Sunucu geneli ikincil (slave) DNS sunucuları; her satır bir IP.
+const secondaryServersText = ref("");
 const loading = ref(false);
 const saving = ref(false);
 const notice = ref("");
@@ -75,8 +91,7 @@ async function load() {
   loading.value = true;
   notice.value = "";
   try {
-    const template = await getDnsTemplate();
-    records.value = template.records;
+    applyTemplate(await getDnsTemplate());
   } catch (error) {
     showNotice(resolveMessage(error), true);
   } finally {
@@ -92,14 +107,24 @@ async function save() {
   saving.value = true;
   notice.value = "";
   try {
-    const template = await updateDnsTemplate(records.value);
-    records.value = template.records;
+    applyTemplate(await updateDnsTemplate(records.value, splitLines(secondaryServersText.value)));
     showNotice(t("panel.dnsTemplate.saved"), false);
   } catch (error) {
     showNotice(resolveMessage(error), true);
   } finally {
     saving.value = false;
   }
+}
+
+/** Sunucudan gelen şablonu ekrana yansıtır (yükleme ve kaydetme aynı yolu kullanır). */
+function applyTemplate(template: { records: DnsTemplateRecord[]; secondaryDnsServers: string[] }) {
+  records.value = template.records;
+  secondaryServersText.value = (template.secondaryDnsServers ?? []).join("\n");
+}
+
+/** Satır ya da virgülle ayrılmış listeyi temizler; boş satırlar atılır. */
+function splitLines(value: string) {
+  return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
 function showNotice(message: string, isError: boolean) {
@@ -140,6 +165,10 @@ function resolveMessage(error: unknown) {
 
 .tmpl-row input,
 .tmpl-row select {
+  width: 100%;
+}
+
+.secondary-dns textarea {
   width: 100%;
 }
 

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Backup;
 
-public sealed class BackupService(
+public sealed partial class BackupService(
     IIisSiteService iisSiteService,
     IDatabaseService databaseService,
     IMailService mailService,
@@ -32,8 +32,21 @@ public sealed class BackupService(
     // İSTEĞE BAĞLI: site yedeğine GERÇEK posta (ileti) koyan arşivleyici. Verilmemişse site yedeği
     // eskisi gibi yalnız hesap/alias ENVANTERİ taşır ve bunu manifestte AÇIKÇA söyler — sessizce
     // "posta dahil" demez.
-    IMailAccountArchiver? mailArchiver = null) : IBackupService
+    IMailAccountArchiver? mailArchiver = null,
+    // İSTEĞE BAĞLI: kayıtlı uzak hedef parolasının çözücüsü. ELLE SİLMENİN uzak kopyayı da
+    // silebilmesi için gerekir (kimlik, otomatik temizliğin okuduğu AYNI dosyadan gelir).
+    // Verilmemişse uzak silme kimliksiz denenir ve başarısızlık kullanıcıya AÇIKÇA bildirilir.
+    ISecretProtector? secretProtector = null,
+    // İSTEĞE BAĞLI: yedeğin "dosyası kayıp" işaretlenmesi denetim kaydına düşsün diye. Yedeğin
+    // kendiliğinden buharlaştığı hissi, izi olmayan bir değişiklikten doğar.
+    IAuditService? auditService = null) : IBackupService
 {
+    /// <summary>
+    /// Uzak hedef kimliklerinin TEK kaynağı (otomasyon ayarları). Elle silme ile otomatik
+    /// budamanın aynı kimlikleri kullanmasını sağlar; ikinci bir yapılandırma yolu açılmadı.
+    /// </summary>
+    private BackupRemoteCredentialReader RemoteCredentials => new(fileStore, secretProtector);
+
     private const string IndexPath = "config/backups.json";
 
     /// <summary>
@@ -48,12 +61,68 @@ public sealed class BackupService(
     private static readonly System.Text.Json.JsonSerializerOptions BackupJsonOptions =
         new() { WriteIndented = true };
 
+    /// <summary>
+    /// Kayıtlı yedekler. Her kaydın YEREL dosyası listeleme anında ÖLÇÜLÜR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden yerel ölçüm burada:</b> liste eskiden JSON'u okuyup olduğu gibi dönüyordu; diskten
+    /// elle silinmiş bir yedek panelde "geri yüklenebilir" görünmeye devam ediyordu ve bu ancak
+    /// geri yükleme denemesinde — felaket anında — anlaşılıyordu. Ölçümün maliyeti kayıt başına
+    /// bir <c>File.Exists</c> çağrısıdır (dizin girdisi okuması, ağ yok); yüzlerce kayıtta bile
+    /// milisaniyeler mertebesindedir. Bu yüzden her listelemede yapılır.
+    /// </para>
+    /// <para>
+    /// <b>Neden UZAK kopya burada ölçülmüyor:</b> uzak ölçüm kayıt başına bir AĞ isteğidir. Her
+    /// listelemede yapmak paneli yavaşlatır ve hedefin hız sınırına takar. Uzak ölçüm
+    /// <see cref="VerifyBackupsAsync"/> ile yapılır; sonucu kayıtta saklanır ve burada olduğu
+    /// gibi taşınır.
+    /// </para>
+    /// <para>
+    /// <b>Neden kayıt SİLİNMİYOR:</b> "dosya yok" demek yedeği yok saymaya yeter, kaydı silmeye
+    /// yetmez. Sessizce silinen bir kayıt, yedeğin kendiliğinden buharlaştığı hissini verir;
+    /// kullanıcı ne olduğunu asla öğrenemez. Kayıt İŞARETLENİR, kararı kullanıcı verir.
+    /// </para>
+    /// </remarks>
     public async Task<IReadOnlyCollection<BackupRecordDto>> GetBackupsAsync(CancellationToken cancellationToken = default)
     {
         var records = await fileStore.ReadAsync(IndexPath, Array.Empty<BackupRecordDto>(), cancellationToken);
+        foreach (var record in records)
+        {
+            record.LocalMissing = IsLocalFileMissing(record);
+        }
+
         return records
             .OrderByDescending(record => record.CreatedAtUtc)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Kaydın YEREL dosyası gerçekten yok mu? Yolu hiç olmayan (yalnız uzak) kayıtlar "kayıp"
+    /// SAYILMAZ — onların yereli hiç olmadı, silinmedi.
+    /// </summary>
+    private static bool IsLocalFileMissing(BackupRecordDto record) =>
+        !string.IsNullOrWhiteSpace(record.Path)
+        && !File.Exists(record.Path)
+        && !Directory.Exists(record.Path);
+
+    /// <summary>Denetim kaydı yazar (servis verilmemişse sessizce geçer; dar kapsamlı testler).</summary>
+    private async Task WriteAuditAsync(string action, string resource, string details, CancellationToken cancellationToken)
+    {
+        if (auditService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await auditService.WriteAsync(action, resource, details, null, null, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // Denetim kaydı yazılamaması ASIL işi (silme/doğrulama) durdurmamalı.
+            logger?.LogWarning(exception, "Yedek denetim kaydi yazilamadi: {Action}", action);
+        }
     }
 
     // =====================================================================================
@@ -428,6 +497,18 @@ public sealed class BackupService(
     {
         var currentPath = record.Path;
         var temporaryPaths = new List<string>();
+
+        // DOSYA GERÇEKTEN DURUYOR MU? Listede görünüp diskte olmayan bir yedeği açmaya çalışmak
+        // eskiden ham bir FileNotFoundException'a düşüyordu; kullanıcı felaket anında anlaşılmaz
+        // bir yığın izi görüyordu. Sebep AÇIKÇA söylenir: dosya elle silinmiş/taşınmıştır.
+        if (IsLocalFileMissing(record))
+        {
+            throw new AppException(
+                "backup.file_missing",
+                410,
+                410,
+                $"{record.Name} -> {record.Path}");
+        }
 
         try
         {
@@ -1968,9 +2049,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var record = backups.FirstOrDefault(item => item.Id == request.BackupId)
             ?? throw new AppException("backup.not_found", 404, 404);
 
+        // "backup.not_found" DEMEYİZ: kayıt duruyor, DOSYASI yok. İkisini aynı mesaja bağlamak,
+        // kullanıcıyı felaket anında "yedek listede var ama bulunamadı" çelişkisiyle baş başa
+        // bırakırdı. Ayrı anahtar sebebi (elle silinmiş/taşınmış dosya) açıkça söyler.
         if (!File.Exists(record.Path))
         {
-            throw new AppException("backup.not_found", 404, 404);
+            throw new AppException("backup.file_missing", 410, 410, $"{record.Name} -> {record.Path}");
         }
 
         // Önceki bir geri yüklemeden kalan uyarılar bu çalışmanın sonucu sanılmasın.
@@ -2288,9 +2372,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             throw new AppException("backup.not_browsable", 400, 400);
         }
 
+        // "backup.not_found" DEMEYİZ: kayıt duruyor, DOSYASI yok. İkisini aynı mesaja bağlamak,
+        // kullanıcıyı felaket anında "yedek listede var ama bulunamadı" çelişkisiyle baş başa
+        // bırakırdı. Ayrı anahtar sebebi (elle silinmiş/taşınmış dosya) açıkça söyler.
         if (!File.Exists(record.Path))
         {
-            throw new AppException("backup.not_found", 404, 404);
+            throw new AppException("backup.file_missing", 410, 410, $"{record.Name} -> {record.Path}");
         }
 
         return record;
@@ -2369,14 +2456,22 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         foreach (var record in silinecekler)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sebep = await TryDeleteBackupFilesAsync(record, remote, cancellationToken);
-            if (sebep is null)
+            var sonuc = await TryDeleteBackupFilesAsync(record, remote, cancellationToken);
+            if (sonuc.Success)
             {
                 removedIds.Add(record.Id);
             }
+            else if (sonuc.LocalFailure is not null)
+            {
+                logger?.LogWarning("Suresi dolmus yedek silinemedi, kayit korundu: {Sebep}", sonuc.LocalFailure);
+            }
             else
             {
-                logger?.LogWarning("Suresi dolmus yedek silinemedi, kayit korundu: {Sebep}", sebep);
+                // UZAK kopya silinemedi: kaydı çıkarmak o dosyayı YETİM bırakırdı (bir daha ne
+                // görülür ne silinir). Kayıt işaretlenir ve bir sonraki budamada YENİDEN denenir.
+                await MarkRemoteDeleteFailedAsync(record, sonuc.RemoteFailure!, cancellationToken);
+                logger?.LogWarning(
+                    "Yedegin uzak kopyasi silinemedi, kayit isaretlendi: {Ad}", record.Name);
             }
         }
 
@@ -2394,30 +2489,36 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         return removedIds.Count;
     }
 
+    /// <summary>Bir silme denemesinin İKİ AYRI sonucu: yerel dosya ve uzak kopya.</summary>
+    /// <remarks>
+    /// Tek bir "başarısız" değeri YETMEZ, çünkü iki başarısızlığın sonucu birbirinden farklıdır:
+    /// yerel dosya silinemezse kayıt olduğu gibi korunur (bir sonraki denemede tekrar denenir);
+    /// uzak kopya silinemezse yerel dosya GİTMİŞTİR ve kaydı da silmek uzak dosyayı YETİM
+    /// bırakırdı — panel onu bir daha ne görebilir ne silebilir.
+    /// </remarks>
+    private sealed record BackupDeletionOutcome(string? LocalFailure, string? RemoteFailure)
+    {
+        public bool Success => LocalFailure is null && RemoteFailure is null;
+    }
+
     /// <summary>
     /// Bir yedeğin uzak kopyasını, yerel dosyasını ve indeks yan kaydını siler.
     /// </summary>
-    /// <returns>
-    /// Silinebildiyse <c>null</c>; silinemediyse GERÇEK SEBEP (kilitli dosya, erişim reddi).
-    /// Sebebi taşımak şart: "silinemedi" deyip nedenini yutmak, kullanıcının diskin neden
-    /// boşalmadığını asla anlayamaması demektir. Bu durumda KAYIT DA KORUNUR (kör kayıt kaybı
-    /// olmasın; bir sonraki budamada tekrar denenir).
-    /// </returns>
-    private async Task<string?> TryDeleteBackupFilesAsync(
+    /// <remarks>
+    /// <b>SIRA ÖNEMLİ: önce UZAK, sonra yerel.</b> Uzak kopyayı silmek kaydın adresine muhtaçtır;
+    /// yereli önce silip uzakta takılmak, elde adresten başka bir şey bırakmazdı. Uzak silme
+    /// başarısız olursa yerel dosya YİNE de silinir (kullanıcının istediği buydu) ama kayıt
+    /// KORUNUR ve durumu <c>deleted_remote_failed</c> olur.
+    /// </remarks>
+    private async Task<BackupDeletionOutcome> TryDeleteBackupFilesAsync(
         BackupRecordDto record,
         BackupPruneRemoteOptions? remote,
         CancellationToken cancellationToken)
     {
+        var uzakHata = await TryDeleteRemoteCopyAsync(record, remote, cancellationToken);
+
         try
         {
-            // Uzak rotasyon: off-site (S3/FTP/WebDAV) kopyayı kaydı silmeden ÖNCE sil (best-effort).
-            if (remote is not null
-                && !string.IsNullOrWhiteSpace(record.RemoteUri)
-                && record.TargetType is "s3" or "ftp" or "webdav" or "http")
-            {
-                await TryDeleteRemoteBackupAsync(record, remote, cancellationToken);
-            }
-
             if (!string.IsNullOrWhiteSpace(record.Path) && File.Exists(record.Path))
             {
                 File.Delete(record.Path);
@@ -2428,12 +2529,44 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             }
 
             TryDeleteFile(fileStore.ResolvePath(IndexSidecarPath(record.Id)));
-            return null;
+            return new BackupDeletionOutcome(null, uzakHata);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return $"{record.Name}: {exception.Message}";
+            return new BackupDeletionOutcome($"{record.Name}: {exception.Message}", uzakHata);
         }
+    }
+
+    /// <summary>
+    /// Uzak kopyayı siler. Silinecek bir şey yoksa <c>null</c>; silinemediyse GERÇEK SEBEP.
+    /// </summary>
+    /// <remarks>
+    /// Sebebi yutmak, kullanıcıya "sildim" deyip veriyi üçüncü taraf depoda bırakmaktır — hem
+    /// gizlilik hem de faturalanan yer açısından yanlış. Bu yüzden "silemedim" hâli GÖRÜNÜR.
+    /// </remarks>
+    private async Task<string?> TryDeleteRemoteCopyAsync(
+        BackupRecordDto record,
+        BackupPruneRemoteOptions? remote,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(record.RemoteUri))
+        {
+            return null;
+        }
+
+        if (!SupportsRemoteDeletion(record.TargetType))
+        {
+            return $"Bu hedef turunun uzak kopyasi silinemiyor: {record.TargetType}";
+        }
+
+        if (remote is null)
+        {
+            // Kayıtlı bir uzak hedef yok (kullanıcı yerele döndü ya da hiç kurmadı): kimlik
+            // olmadan silme denenemez. SESSİZ geçmek, uzakta yetim bırakmak demekti.
+            return "Kayitli uzak hedef kimligi yok; uzak kopya silinemedi.";
+        }
+
+        return await TryDeleteRemoteBackupAsync(record, remote, cancellationToken);
     }
 
     /// <summary>
@@ -2442,13 +2575,76 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// </summary>
     private static bool IsUsableBackup(BackupRecordDto record)
     {
-        if (!string.IsNullOrWhiteSpace(record.RemoteUri))
+        // ARTIK SİLİNMİŞ SAYILAN KAYIT: kullanıcı sildi, yerel dosya gitti, yalnız uzak kopya
+        // temizlenemediği için kayıt duruyor. Bunu "geri yükleme noktası" saymak, budamanın
+        // kaynak korumasını yanıltır: panel taze bir yedek olduğunu sanıp GERÇEK eskileri silerdi.
+        if (string.Equals(record.Status, "deleted_remote_failed", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Uzak kopyanın SON ÖLÇÜMÜ "yok" dediyse ona da güvenilmez. Ölçüm yapılmadıysa (varsayılan)
+        // eski davranış korunur — "ölçmedik" ile "yok" karıştırılmaz.
+        if (!string.IsNullOrWhiteSpace(record.RemoteUri) && !record.RemoteMissing)
         {
             return true;
         }
 
         return !string.IsNullOrWhiteSpace(record.Path) &&
                (File.Exists(record.Path) || Directory.Exists(record.Path));
+    }
+
+    /// <summary>
+    /// Uzak kopyası silinemeyen kaydı İŞARETLER (silmez).
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden kayıt silinmiyor:</b> kayıt, panelin uzak dosyaya tutunduğu TEK saptır. Onu
+    /// silmek dosyayı hedefte yetim bırakır — bir daha ne listelenebilir ne silinebilir, üstelik
+    /// müşteri verisi üçüncü taraf depoda kalmaya devam eder. İşaretlenen kayıt hem kullanıcıya
+    /// "yerelden silindi, uzaktan silinemedi" der hem de tekrar silmeye basıldığında/bir sonraki
+    /// budamada uzak silmenin YENİDEN denenmesini sağlar.
+    /// </remarks>
+    private async Task MarkRemoteDeleteFailedAsync(
+        BackupRecordDto record,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        await fileStore.UpdateAsync(
+            IndexPath,
+            Array.Empty<BackupRecordDto>(),
+            existing =>
+            {
+                var list = existing.ToList();
+                var index = list.FindIndex(item => item.Id == record.Id);
+                if (index < 0)
+                {
+                    return existing;
+                }
+
+                var hedef = list[index];
+                hedef.Status = "deleted_remote_failed";
+                // Yerel dosya GERÇEKTEN silindi; yolu bırakmak "dosya orada" yanılgısı üretirdi.
+                hedef.Path = string.Empty;
+                hedef.Warnings.RemoveAll(uyari => uyari.MessageKey == "backup.remote_delete_failed");
+                hedef.Warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.remote_delete_failed",
+                    Target = hedef.TargetType,
+                    Detail = reason
+                });
+
+                list[index] = hedef;
+                return list.ToArray();
+            },
+            cancellationToken);
+
+        await WriteAuditAsync(
+            "backup.remote_delete_failed",
+            record.Name,
+            // KİMLİK BİLGİSİ YOK: sebep metni sunucu yanıtıdır, jeton/parola içermez (üretildiği
+            // yerlerde adresler SanitizeUri'den geçer).
+            $"Yerel kopya silindi, uzak kopya silinemedi ({record.TargetType}): {reason}",
+            cancellationToken);
     }
 
     public async Task<BackupChainDto> GetChainAsync(string backupId, CancellationToken cancellationToken = default)
@@ -2483,10 +2679,25 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 $"{string.Join(", ", bagimlilar.Select(item => item.Name))}");
         }
 
-        if (await TryDeleteBackupFilesAsync(record, null, cancellationToken) is { } silmeHatasi)
+        // UZAK KOPYA DA SİLİNİR. Eskiden buraya `null` geçiliyordu, yani elle silme uzak kopyaya
+        // HİÇ dokunmuyordu: panel kaydı gidiyor, dosya hedefte kalıyordu. Budama kayıtlar
+        // üzerinden çalıştığı için o dosya YETİM oluyordu — panel onu bir daha ne görebiliyor ne
+        // silebiliyordu. Kimlik, otomatik temizliğin okuduğu AYNI kaynaktan gelir.
+        var remote = await RemoteCredentials.ReadAsync(cancellationToken);
+        var sonuc = await TryDeleteBackupFilesAsync(record, remote, cancellationToken);
+
+        if (sonuc.LocalFailure is not null)
         {
             // Yerel dosya kilitliyse kayıt KORUNUR (kör kayıt kaybı olmasın); kullanıcı gerçek nedeni görür.
-            throw new AppException("backup.delete_failed", 409, 409, silmeHatasi);
+            throw new AppException("backup.delete_failed", 409, 409, sonuc.LocalFailure);
+        }
+
+        if (sonuc.RemoteFailure is not null)
+        {
+            // "Sildim" demeyiz: yerel gitti, uzak duruyor. Kayıt işaretlenerek KORUNUR ki kullanıcı
+            // durumu görsün ve tekrar deneyebilsin/elle temizleyebilsin.
+            await MarkRemoteDeleteFailedAsync(record, sonuc.RemoteFailure, cancellationToken);
+            throw new AppException("backup.remote_delete_failed", 409, 409, sonuc.RemoteFailure);
         }
 
         // ATOMİK: yalnız bu ID çıkarılır → eşzamanlı eklenen yeni kayıtlar (otomatik yedek) korunur.
@@ -2510,18 +2721,29 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var hedefler = new List<BackupRecordDto> { record };
         hedefler.AddRange(BackupChainPlanner.GetDependents(records, record));
 
+        // Zincir silme de UZAK kopyaları siler (tekil silmeyle aynı gerekçe: yetim bırakmamak).
+        var remote = await RemoteCredentials.ReadAsync(cancellationToken);
+
         var silinen = new List<BackupRecordDto>();
         var kilitli = new List<string>();
         foreach (var hedef in hedefler)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (await TryDeleteBackupFilesAsync(hedef, null, cancellationToken) is { } sebep)
+            var sonuc = await TryDeleteBackupFilesAsync(hedef, remote, cancellationToken);
+
+            if (sonuc.Success)
             {
-                kilitli.Add(sebep);
+                silinen.Add(hedef);
+            }
+            else if (sonuc.LocalFailure is not null)
+            {
+                kilitli.Add(sonuc.LocalFailure);
             }
             else
             {
-                silinen.Add(hedef);
+                // Uzak kopya kaldı: kayıt işaretlenir, listeden ÇIKARILMAZ (yetim üretmemek için).
+                await MarkRemoteDeleteFailedAsync(hedef, sonuc.RemoteFailure!, cancellationToken);
+                kilitli.Add($"{hedef.Name}: {sonuc.RemoteFailure}");
             }
         }
 
@@ -2548,12 +2770,28 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         };
     }
 
-    // Off-site yedeğin UZAK kopyasını siler (uzak rotasyon). Best-effort: hata/yoksa sessizce geçer, budamayı BOZMAZ.
-    private async Task TryDeleteRemoteBackupAsync(BackupRecordDto record, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    /// <summary>
+    /// Off-site yedeğin UZAK kopyasını siler. Silindiyse <c>null</c>, silinemediyse SEBEP döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Eskiden bu metot her hatayı YUTUYORDU</b> ("best-effort") ve çağıran kaydı yine de
+    /// siliyordu. Sonuç: uzak dosya hedefte kalır, kaydı gider — yani bir daha ne görülebilir ne
+    /// silinebilir bir YETİM. Yutma kaldırıldı; karar çağırana bırakıldı.
+    /// </para>
+    /// <para>
+    /// Hedef türü listesi <see cref="SupportsRemoteDeletion"/> ile TEK kaynaktan gelir; buraya
+    /// yeni bir <c>case</c> eklemeyi unutmak, o hedefte her silmenin yetim üretmesi demekti.
+    /// </para>
+    /// </remarks>
+    private async Task<string?> TryDeleteRemoteBackupAsync(
+        BackupRecordDto record,
+        BackupPruneRemoteOptions remote,
+        CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(record.RemoteUri, UriKind.Absolute, out var uri))
         {
-            return;
+            return $"Kayittaki uzak adres cozulemedi: {record.RemoteUri}";
         }
 
         try
@@ -2562,21 +2800,42 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             {
                 case "ftp":
                     await DeleteFtpAsync(uri, remote, cancellationToken);
-                    break;
+                    return null;
                 case "s3" when !string.IsNullOrWhiteSpace(remote.UserName):
                     await DeleteS3SignedAsync(uri, remote, cancellationToken);
-                    break;
+                    return null;
                 case "webdav":
                 case "http":
                     await DeleteHttpAsync(uri, remote, cancellationToken);
-                    break;
-                // "s3" kimliksiz (presigned URL) → imza atılamaz, silinemez; atlanır.
+                    return null;
+                case "dropbox":
+                    await DeleteDropboxAsync(uri, remote, cancellationToken);
+                    return null;
+                case "onedrive":
+                    await DeleteOneDriveAsync(uri, remote, cancellationToken);
+                    return null;
+                case "azure":
+                    await DeleteAzureBlobAsync(uri, remote, cancellationToken);
+                    return null;
+                case "s3":
+                    // Kimliksiz S3 (presigned URL): imza atılamaz. Sessizce "sildim" demek yerine
+                    // sebebi söyleriz — kullanıcı ya erişim anahtarını girer ya da elle temizler.
+                    return "S3 hedefinde silme icin erisim anahtari gerekir (imzali/presigned adres silinemez).";
+                default:
+                    return $"Bu hedef turunun uzak kopyasi silinemiyor: {record.TargetType}";
             }
         }
-        catch
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Best-effort: uzak silme başarısızsa yerel budama yine sürer (kayıt yine kaldırılır; kalıcı uzak
-            // yetim yalnız erişim/kimlik sorununda olur ve nadirdir).
+            throw;
+        }
+        catch (AppException exception)
+        {
+            return string.IsNullOrWhiteSpace(exception.Details) ? exception.MessageKey : exception.Details;
+        }
+        catch (Exception exception)
+        {
+            return exception.Message;
         }
     }
 
@@ -2654,6 +2913,246 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 return list.ToArray();
             },
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Kayıtların GERÇEKTEN var olup olmadığını ölçer (uzlaştırma).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir uç:</b> uzak ölçüm kayıt başına bir ağ isteğidir; her listelemede yapmak
+    /// paneli yavaşlatır ve hedefin hız sınırına takar. Yerel ölçüm ucuz olduğu için listede
+    /// zaten yapılıyor (bkz. <see cref="GetBackupsAsync"/>); pahalı olan burada, kullanıcının
+    /// bilerek bastığı düğmede toplandı.
+    /// </para>
+    /// <para>
+    /// <b>EN TEHLİKELİ HATA — ulaşılamayan hedefi "yok" saymak.</b> Geçici bir ağ arızası,
+    /// kimlik hatası ya da hız sınırı yanıtı "yedek silinmiş" olarak yorumlanırsa kullanıcının
+    /// BÜTÜN yedek geçmişi kayıp damgası yer. Bu yüzden ölçümün üç sonucu vardır ve yalnızca
+    /// KESİN "yok" (404/410, Dropbox <c>not_found</c>) kayıp sayılır; geri kalan her şey
+    /// "ulaşılamadı" olarak RAPORLANIR ve kayda İŞLENMEZ.
+    /// </para>
+    /// <para>
+    /// <b>Hiçbir kayıt SİLİNMEZ.</b> İşaretleme yeterlidir; silme kararı kullanıcınındır.
+    /// </para>
+    /// </remarks>
+    public async Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default)
+    {
+        var records = await fileStore.ReadAsync(IndexPath, Array.Empty<BackupRecordDto>(), cancellationToken);
+        var remote = await RemoteCredentials.ReadAsync(cancellationToken);
+        var sonuc = new BackupVerificationResultDto { Checked = records.Length };
+
+        // Yalnız DEĞİŞEN kayıtlar yazılır: her doğrulamada bütün indeksi yeniden yazmak,
+        // eşzamanlı yedek kaydıyla yarışa girmek demektir.
+        var uzakDurum = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        foreach (var record in records)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (IsLocalFileMissing(record))
+            {
+                sonuc.MissingLocal++;
+                sonuc.Issues.Add(new BackupVerificationIssueDto
+                {
+                    BackupId = record.Id,
+                    Name = record.Name,
+                    Source = record.Source,
+                    TargetType = record.TargetType,
+                    MessageKey = "backup.verify.missing_local",
+                    Detail = record.Path
+                });
+            }
+
+            if (string.IsNullOrWhiteSpace(record.RemoteUri))
+            {
+                continue;
+            }
+
+            if (remote is null)
+            {
+                // Kayıtlı hedef kimliği yok: ölçemedik. "Yok" DEMEK YASAK.
+                sonuc.Unreachable++;
+                sonuc.Issues.Add(new BackupVerificationIssueDto
+                {
+                    BackupId = record.Id,
+                    Name = record.Name,
+                    Source = record.Source,
+                    TargetType = record.TargetType,
+                    MessageKey = "backup.verify.unreachable",
+                    Detail = "Kayitli uzak hedef kimligi yok."
+                });
+                continue;
+            }
+
+            var (presence, detail) = await ProbeRemoteAsync(record, remote, cancellationToken);
+            switch (presence)
+            {
+                case RemotePresence.Present:
+                    uzakDurum[record.Id] = false;
+                    break;
+
+                case RemotePresence.Missing:
+                    uzakDurum[record.Id] = true;
+                    sonuc.MissingRemote++;
+                    sonuc.Issues.Add(new BackupVerificationIssueDto
+                    {
+                        BackupId = record.Id,
+                        Name = record.Name,
+                        Source = record.Source,
+                        TargetType = record.TargetType,
+                        MessageKey = "backup.verify.missing_remote",
+                        Detail = record.RemoteUri
+                    });
+                    break;
+
+                default:
+                    // ULAŞILAMADI: kayda DOKUNULMAZ (önceki ölçüm neyse o kalır).
+                    sonuc.Unreachable++;
+                    sonuc.Issues.Add(new BackupVerificationIssueDto
+                    {
+                        BackupId = record.Id,
+                        Name = record.Name,
+                        Source = record.Source,
+                        TargetType = record.TargetType,
+                        MessageKey = "backup.verify.unreachable",
+                        Detail = detail
+                    });
+                    break;
+            }
+        }
+
+        if (uzakDurum.Count > 0)
+        {
+            var olcumAni = DateTime.UtcNow;
+            await fileStore.UpdateAsync(
+                IndexPath,
+                Array.Empty<BackupRecordDto>(),
+                existing =>
+                {
+                    foreach (var item in existing)
+                    {
+                        if (uzakDurum.TryGetValue(item.Id, out var eksik))
+                        {
+                            item.RemoteMissing = eksik;
+                            item.RemoteVerifiedUtc = olcumAni;
+                        }
+                    }
+
+                    return existing;
+                },
+                cancellationToken);
+        }
+
+        await AppendOrphansAsync(sonuc, records, remote, cancellationToken);
+
+        if (sonuc.MissingLocal > 0 || sonuc.MissingRemote > 0)
+        {
+            await WriteAuditAsync(
+                "backup.verification",
+                "backups",
+                $"Yedek dogrulama: {sonuc.MissingLocal} yerel dosya, {sonuc.MissingRemote} uzak kopya bulunamadi "
+                + $"({sonuc.Unreachable} kayit icin hedefe ulasilamadi).",
+                cancellationToken);
+        }
+
+        return sonuc;
+    }
+
+    /// <summary>
+    /// TERS YETİM: hedefte duran ama panelde kaydı olmayan dosyalar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bunlar bugüne kadar hiç görünmüyordu: budama kayıtlar üzerinden çalışır, kaydı olmayan
+    /// dosyaya kimse bakmazdı. Elle silinen (ve uzak kopyası kalan) her yedek böyle bir dosya
+    /// bırakıyordu.
+    /// </para>
+    /// <para>
+    /// <b>OTOMATİK SİLME YOK.</b> Hedefteki klasör kullanıcının başka amaçla da kullandığı bir
+    /// yer olabilir; panele ait olmayan dosyayı silmek geri alınamaz bir veri kaybı olurdu.
+    /// Liste gösterilir, karar kullanıcınındır.
+    /// </para>
+    /// </remarks>
+    private async Task AppendOrphansAsync(
+        BackupVerificationResultDto sonuc,
+        IReadOnlyCollection<BackupRecordDto> records,
+        BackupPruneRemoteOptions? remote,
+        CancellationToken cancellationToken)
+    {
+        var (targetType, remoteUrl) = await RemoteCredentials.ReadTargetAsync(cancellationToken);
+        if (remote is null || string.Equals(targetType, "local", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        BackupTarget hedef;
+        try
+        {
+            hedef = ResolveTarget(targetType, remoteUrl, remote.UserName, remote.Password, remote.Region);
+        }
+        catch (AppException exception)
+        {
+            sonuc.OrphanScanSkipped.Add($"{targetType}: {exception.MessageKey}");
+            return;
+        }
+
+        if (hedef.Uri is null)
+        {
+            return;
+        }
+
+        IReadOnlyCollection<string>? uzaktakiler;
+        try
+        {
+            uzaktakiler = await ListRemoteObjectsAsync(hedef.Type, hedef.Uri, remote, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AppException exception)
+        {
+            sonuc.OrphanScanSkipped.Add($"{hedef.Type}: {exception.Details}");
+            return;
+        }
+        catch (Exception exception)
+        {
+            sonuc.OrphanScanSkipped.Add($"{hedef.Type}: {exception.Message}");
+            return;
+        }
+
+        if (uzaktakiler is null)
+        {
+            // Tek istekle özyinelemeli listeleme sunmayan hedef. BOŞ LİSTE DÖNMEK "yetim yok"
+            // yalanı olurdu; taranmadığını söylüyoruz.
+            sonuc.OrphanScanSkipped.Add(hedef.Type);
+            return;
+        }
+
+        var bilinen = records
+            .Where(record => !string.IsNullOrWhiteSpace(record.RemoteUri))
+            .Select(record => Uri.TryCreate(record.RemoteUri, UriKind.Absolute, out var uri)
+                ? Uri.UnescapeDataString(uri.AbsolutePath)
+                : record.RemoteUri)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var yol in uzaktakiler)
+        {
+            if (bilinen.Contains(yol))
+            {
+                continue;
+            }
+
+            // Bağlantı testinin bıraktığı dosya PANELE AİTTİR ve her testte üzerine yazılır;
+            // onu "yetim" diye raporlamak, listeyi her seferinde gürültüyle doldururdu.
+            if (yol.Contains("/connection-test/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            sonuc.Orphans.Add(new BackupOrphanDto { RemotePath = yol, TargetType = hedef.Type });
+        }
     }
 
     public async Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default)
@@ -2776,6 +3275,32 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 var koleksiyonSorunu = await EnsureWebDavCollectionsAsync(target.Uri, klasorler, target, cancellationToken);
                 await UploadHttpPutAsync(localPath, webdavUri, target, cancellationToken, koleksiyonSorunu);
                 return SanitizeUri(webdavUri);
+            }
+
+            // BULUT HEDEFLERİ: üçünde de klasör AÇILMAZ (gerekçe BackupService.CloudTargets.cs'te);
+            // gün/kategori/kaynak düzeni yine de adresin içinde AYNEN taşınır.
+            if (target.Type == "dropbox")
+            {
+                var dropboxUri = AppendRemotePath(target.Uri, placement, fileName).Uri;
+                await UploadDropboxAsync(localPath, dropboxUri, target, cancellationToken);
+                return SanitizeUri(dropboxUri);
+            }
+
+            if (target.Type == "onedrive")
+            {
+                var oneDriveUri = AppendRemotePath(target.Uri, placement, fileName).Uri;
+                await UploadOneDriveAsync(localPath, oneDriveUri, target, cancellationToken);
+                return SanitizeUri(oneDriveUri);
+            }
+
+            if (target.Type == "azure")
+            {
+                // AppendRemotePath taban adresin SORGUSUNU korur; Azure'da SAS jetonu oradadır ve
+                // yükleme için gereklidir. SanitizeUri onu KAYDA yazarken düşürür — imza panele
+                // ve günlüklere sızmaz (S3 X-Amz-Signature ile aynı sınıf).
+                var azureUri = AppendRemotePath(target.Uri, placement, fileName).Uri;
+                await UploadAzureBlobAsync(localPath, azureUri, target, cancellationToken);
+                return SanitizeUri(azureUri);
             }
 
             if (target.Type is "s3" or "http")
@@ -3079,21 +3604,41 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             normalizedType = "s3";
         }
 
+        // Eş adlar TEK yerde çözülür: kullanıcı "azure-blob" ya da "one-drive" yazdığında hedefin
+        // sessizce "geçersiz" sayılıp yerele düşmesi, off-site kopyanın hiç alınmaması demekti.
+        normalizedType = normalizedType switch
+        {
+            "azure-blob" or "azureblob" or "azure-storage" => "azure",
+            "one-drive" or "msgraph" or "graph" => "onedrive",
+            _ => normalizedType
+        };
+
         // "drive" SESSİZCE "webdav"e çevriliyordu. Google Drive WebDAV KONUŞMAZ: yedek hiçbir zaman
         // karşıya gitmez, ama panel gitmiş gibi davranır ve kullanıcı off-site kopyası olduğunu sanır.
         // Sessizce yanlış hedefe yazmak en kötü seçenektir; desteklenmeyen hedef AÇIKÇA reddedilir.
-        // (Gerçek Google Drive desteği ayrı bir iştir: OAuth 2.0 + Drive REST API, WebDAV değil.)
+        // (Gerçek Google Drive desteği ayrı bir iştir: OAuth 2.0 + Drive REST API, WebDAV değil.
+        //  Dropbox ve OneDrive ARTIK kendi API'leriyle destekleniyor; Drive hâlâ desteklenmiyor ve
+        //  bu yüzden burada AÇIKÇA reddedilmeye devam ediyor.)
         if (normalizedType is "drive" or "gdrive" or "google-drive" or "googledrive")
         {
             throw new AppException("backup.remote_target_unsupported", 400, 400, normalizedType);
         }
 
-        if (normalizedType is not ("ftp" or "s3" or "webdav" or "http"))
+        if (!RemoteTargetTypes.Contains(normalizedType, StringComparer.Ordinal))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
 
         var remoteUrlText = remoteUrl?.Trim() ?? string.Empty;
+
+        // Dropbox/OneDrive'da "URL" diye bir kavram yoktur; kullanıcı KLASÖR YOLU yazar
+        // ("/yedekler"). Şemayı burada ekliyoruz ki geri kalan bütün akış (yer kararı, adres
+        // temizliği, silme) tek ve aynı Uri mekanizmasıyla çalışsın.
+        if (IsOAuthTarget(normalizedType))
+        {
+            remoteUrlText = NormalizeCloudFolderUrl(normalizedType, remoteUrlText);
+        }
+
         if (!Uri.TryCreate(remoteUrlText, UriKind.Absolute, out var uri))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
@@ -3104,7 +3649,30 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
 
-        if ((normalizedType is "s3" or "webdav" or "http") && uri.Scheme is not ("http" or "https"))
+        if ((normalizedType is "s3" or "webdav" or "http" or "azure") && uri.Scheme is not ("http" or "https"))
+        {
+            throw new AppException("backup.remote_target_invalid", 400, 400);
+        }
+
+        // Şema hedef türüyle EŞLEŞMELİ: "dropbox" seçip WebDAV adresi vermek, yedeğin hiç
+        // gitmediği ama panelin gittiğini sandığı sınıfın ta kendisidir.
+        if (IsOAuthTarget(normalizedType) && !string.Equals(uri.Scheme, normalizedType, StringComparison.Ordinal))
+        {
+            throw new AppException("backup.remote_target_invalid", 400, 400);
+        }
+
+        // Jetonsuz Dropbox/OneDrive hedefi ANLAMSIZDIR: istek 401 ile döner ve kullanıcı bunu
+        // ancak gece yedeği başarısız olunca görürdü. Hedef kaydedilirken reddedilir.
+        if (IsOAuthTarget(normalizedType) && string.IsNullOrWhiteSpace(remotePassword))
+        {
+            throw new AppException("backup.remote_target_invalid", 400, 400);
+        }
+
+        // Azure: ya hesap anahtarı ya da adreste SAS olmalı. İkisi de yoksa istek anonim gider ve
+        // her zaman 404/403 alır.
+        if (normalizedType == "azure"
+            && string.IsNullOrWhiteSpace(remoteUserName)
+            && string.IsNullOrWhiteSpace(uri.Query))
         {
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }

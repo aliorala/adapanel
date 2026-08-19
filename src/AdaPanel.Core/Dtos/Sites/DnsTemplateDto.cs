@@ -23,10 +23,33 @@ public sealed class DnsTemplateRecordDto
 public sealed class DnsTemplateDto
 {
     public List<DnsTemplateRecordDto> Records { get; set; } = [];
+
+    /// <summary>
+    /// SUNUCU-GENELİ ikincil (slave) DNS sunucularının IP'leri. Buradaki her IP, panelin birincil
+    /// olduğu HER bölgede AXFR izni alır ve bölge değiştiğinde NOTIFY gönderilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Plesk paritesi: Plesk'te bu iki ayrı yerde durur — "Slave DNS Manager" eklentisi ikincil
+    /// sunucuyu tanımlar ve IP'sini otomatik olarak transfer listesine ekler, "DNS Template
+    /// Settings → Transfer Restrictions Template" ise bu listeyi yeni bölgelere uygular.
+    /// AdaPanel'de ikisi tek yer: DNS şablonu.
+    /// </para>
+    /// <para>
+    /// Neden sunucu geneli ŞART: bölge başına <c>ZoneTransferIps</c> zaten vardı, ama ikincil DNS
+    /// altyapısı sunucunun tamamı için kurulur. Yüz alan adı varken IP'yi yüz kere elle girmek,
+    /// er ya da geç unutulan bir bölge demektir — o bölge ikincil sunucuya HİÇ kopyalanmaz ve
+    /// birincil düştüğünde yalnız o alan adı çözülmez. Sessiz, seçici ve fark edilmesi zor bir arıza.
+    /// </para>
+    /// </remarks>
+    public List<string> SecondaryDnsServers { get; set; } = [];
 }
 
 /// <summary>DNS şablonunu güncelleme isteği.</summary>
 public sealed class UpdateDnsTemplateRequest
 {
     public List<DnsTemplateRecordDto> Records { get; set; } = [];
+
+    /// <summary>Sunucu-geneli ikincil (slave) DNS sunucu IP'leri; bkz. <see cref="DnsTemplateDto.SecondaryDnsServers"/>.</summary>
+    public List<string> SecondaryDnsServers { get; set; } = [];
 }

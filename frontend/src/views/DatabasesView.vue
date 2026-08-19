@@ -191,6 +191,9 @@
             <button :class="{ active: activeSection === 'users' }" @click="openSection('users')">
               {{ t("panel.database.section.users") }}
             </button>
+            <button :class="{ active: activeSection === 'remote' }" @click="openSection('remote')">
+              {{ t("panel.database.section.remote") }}
+            </button>
             <button :class="{ active: activeSection === 'connection' }" @click="openSection('connection')">
               {{ t("panel.database.section.connection") }}
             </button>
@@ -574,6 +577,119 @@
           </section>
         </template>
 
+        <template v-else-if="activeSection === 'remote'">
+          <section class="form-surface remote-intro">
+            <p class="meta">{{ t("panel.database.remoteUsers.subtitle") }}</p>
+
+            <p v-if="remoteEngine && !remoteEngine.supported" class="empty-state">
+              {{ remoteEngine.warningKey ? t(remoteEngine.warningKey) : t("panel.database.remoteUsers.unsupported") }}
+            </p>
+
+            <template v-else-if="remoteEngine">
+              <!-- Ne olacağı AÇIKÇA yazılır: motor mekanizması, port ve güvenlik duvarının o anki hâli. -->
+              <div class="remote-facts">
+                <span>
+                  {{ t("panel.database.remoteUsers.endpoint") }}
+                  <strong>{{ remoteEngine.serverHost || "-" }}:{{ remoteEngine.port }}</strong>
+                </span>
+                <span>
+                  {{ t("panel.database.remoteUsers.mechanismLabel") }}
+                  <strong>{{ t(`panel.database.remoteUsers.mechanism.${remoteEngine.mechanism}`) }}</strong>
+                </span>
+                <span :class="['status-pill', remoteEngine.firewallOpen ? 'warn' : 'ok']">
+                  {{ remoteEngine.firewallOpen
+                    ? t("panel.database.remoteUsers.firewallOpen", { addresses: remoteEngine.firewallAllowedAddresses.join(", ") })
+                    : t("panel.database.remoteUsers.firewallClosed") }}
+                </span>
+              </div>
+
+              <p v-if="remoteEngine.warningKey" class="empty-state">{{ t(remoteEngine.warningKey) }}</p>
+
+              <!-- Motorda erişim var ama port kapalıysa kullanıcı bağlanamaz; bunu söylemek şart. -->
+              <p v-if="remoteGrantedButPortClosed" class="empty-state">
+                {{ t("panel.database.remoteUsers.grantedButPortClosed") }}
+              </p>
+            </template>
+          </section>
+
+          <section v-if="remoteEngine && remoteEngine.supported" class="data-table">
+            <div class="data-row table-head remote-row">
+              <span>{{ t("panel.database.userName") }}</span>
+              <span>{{ t("panel.database.remoteUsers.state") }}</span>
+              <span>{{ t("panel.database.remoteUsers.engineHosts") }}</span>
+              <span>{{ t("panel.files.actions") }}</span>
+            </div>
+
+            <template v-for="item in remoteEngine.users" :key="item.userName">
+              <div class="data-row remote-row">
+                <span class="cell-main">
+                  <strong>{{ item.userName }}</strong>
+                  <small>{{ item.databases.join(", ") || t("panel.database.remoteUsers.noDatabases") }}</small>
+                </span>
+                <span :class="['status-pill', item.mode === 'anywhere' ? 'danger' : item.mode === 'allowlist' ? 'warn' : 'ok']">
+                  {{ t(`panel.database.remoteUsers.mode.${item.mode}`) }}
+                </span>
+                <span class="cell-muted">{{ item.engineHosts.join(", ") || "-" }}</span>
+                <span class="row-actions">
+                  <button class="secondary compact" @click="openRemoteEditor(item)">
+                    {{ remoteEditor.userName === item.userName ? t("panel.database.cancelAction") : t("panel.database.remoteUsers.edit") }}
+                  </button>
+                </span>
+              </div>
+
+              <div v-if="remoteEditor.userName === item.userName" class="form-surface remote-editor">
+                <div class="form-grid">
+                  <label>
+                    <span class="field-label">{{ t("panel.database.remoteUsers.modeLabel") }}</span>
+                    <select v-model="remoteEditor.mode">
+                      <option value="closed">{{ t("panel.database.remoteUsers.mode.closed") }}</option>
+                      <option value="allowlist">{{ t("panel.database.remoteUsers.mode.allowlist") }}</option>
+                      <option value="anywhere">{{ t("panel.database.remoteUsers.mode.anywhere") }}</option>
+                    </select>
+                  </label>
+                  <label v-if="remoteEditor.mode === 'allowlist'">
+                    <span class="field-label">{{ t("panel.database.remoteUsers.origins") }}</span>
+                    <input v-model="remoteEditor.origins" :placeholder="t('panel.database.remoteUsers.originsPlaceholder')" />
+                  </label>
+                </div>
+
+                <p v-if="remoteEditor.mode === 'allowlist'" class="meta">
+                  {{ t("panel.database.remoteUsers.originsHint") }}
+                </p>
+
+                <!-- "Her yer" tek tıkla seçilemez: kullanıcı ne yaptığını ayrıca beyan eder. -->
+                <label v-if="remoteEditor.mode === 'anywhere'" class="remote-confirm">
+                  <input v-model="remoteEditor.confirmAnywhere" type="checkbox" />
+                  <span>{{ t("panel.database.remoteUsers.confirmAnywhere") }}</span>
+                </label>
+
+                <!-- Port SESSİZCE açılmaz; ne olacağı yazılır ve ayrıca onay istenir. -->
+                <label class="remote-confirm">
+                  <input v-model="remoteEditor.applyFirewall" type="checkbox" />
+                  <span>{{ t("panel.database.remoteUsers.applyFirewall", { port: remoteEngine.port }) }}</span>
+                </label>
+                <p class="meta">
+                  {{ remoteEditor.applyFirewall
+                    ? t("panel.database.remoteUsers.firewallWillChange", { port: remoteEngine.port })
+                    : t("panel.database.remoteUsers.firewallUntouched") }}
+                </p>
+
+                <div class="row-actions">
+                  <button class="compact" :disabled="remoteSaving" @click="submitRemoteAccess">
+                    {{ remoteSaving ? t("panel.database.saving") : t("panel.database.remoteUsers.save") }}
+                  </button>
+                  <button class="secondary compact" @click="remoteEditor.userName = ''">
+                    {{ t("panel.database.cancelAction") }}
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <p v-if="remoteLoading" class="empty-state">{{ t("panel.common.loading") }}</p>
+            <p v-else-if="remoteEngine.users.length === 0" class="empty-state">{{ t("panel.database.noUsers") }}</p>
+          </section>
+        </template>
+
         <section v-else class="data-table connection-table">
           <div class="data-row table-head connection-row">
             <span>{{ t("panel.database.connectionProperty") }}</span>
@@ -629,8 +745,13 @@ import {
   openAdminer,
   hardenDatabase,
   openPhpMyAdmin,
+  getUserRemoteAccess,
+  setUserRemoteAccess,
   type DatabaseCheckResult,
-  type DatabaseDetail
+  type DatabaseDetail,
+  type DatabaseRemoteAccessEngine,
+  type DatabaseUserRemoteAccess,
+  type RemoteAccessMode
 } from "../api/databases";
 import { openReachable } from "../utils/url";
 import { copyToClipboard } from "../utils/clipboard";
@@ -642,7 +763,7 @@ import { useSoftwareStore } from "../stores/software";
 import { useSitesStore } from "../stores/sites";
 
 type DatabaseModule = "databases" | "webdb" | "cache" | "transfer" | "settings" | "consumers";
-type WorkspaceSection = "databases" | "users" | "connection";
+type WorkspaceSection = "databases" | "users" | "remote" | "connection";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -731,7 +852,8 @@ async function attachUser(databaseName: string) {
 
   attaching.value = true;
   try {
-    await databasesStore.grantAccess(selectedEngine.value, databaseName, userName, host || "%");
+    // Host boşsa '%' UYDURULMAZ: sunucu kullanıcının gerçek hesaplarını motordan okuyup hepsine verir.
+    await databasesStore.grantAccess(selectedEngine.value, databaseName, userName, host || "");
     showNotice(t("panel.database.attached"), false);
     detail.value = await getDatabaseDetail(selectedEngine.value, databaseName);
     attachUserName.value = "";
@@ -984,6 +1106,91 @@ function selectEngine(engine: string) {
 function openSection(section: WorkspaceSection) {
   activeSection.value = section;
   databaseSearch.value = "";
+
+  if (section === "remote") {
+    void loadRemoteAccess();
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Uzak veritabanı erişimi (kullanıcı bazlı)
+// ---------------------------------------------------------------------------------------
+
+const remoteEngines = ref<DatabaseRemoteAccessEngine[]>([]);
+const remoteLoading = ref(false);
+const remoteSaving = ref(false);
+
+const remoteEditor = reactive({
+  userName: "",
+  mode: "closed" as RemoteAccessMode,
+  origins: "",
+  confirmAnywhere: false,
+  applyFirewall: false
+});
+
+const remoteEngine = computed(
+  () => remoteEngines.value.find((item) => item.engine === selectedEngine.value) ?? null
+);
+
+/// Motor tarafında erişim verilmiş ama port kapalıysa kullanıcı yine de bağlanamaz.
+/// Bunu söylemezsek kullanıcı "açtım ama çalışmıyor" ile baş başa kalır.
+const remoteGrantedButPortClosed = computed(() => {
+  const engine = remoteEngine.value;
+  return !!engine && !engine.firewallOpen && engine.users.some((item) => item.remoteOpen);
+});
+
+async function loadRemoteAccess() {
+  remoteLoading.value = true;
+  try {
+    remoteEngines.value = await getUserRemoteAccess();
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    remoteLoading.value = false;
+  }
+}
+
+function openRemoteEditor(item: DatabaseUserRemoteAccess) {
+  if (remoteEditor.userName === item.userName) {
+    remoteEditor.userName = "";
+    return;
+  }
+
+  remoteEditor.userName = item.userName;
+  remoteEditor.mode = item.mode;
+  remoteEditor.origins = item.allowedOrigins.join(", ");
+  // Onaylar her açılışta SIFIRLANIR: bir önceki kullanıcı için verilen onay devralınmamalı.
+  remoteEditor.confirmAnywhere = false;
+  remoteEditor.applyFirewall = false;
+}
+
+async function submitRemoteAccess() {
+  const engine = remoteEngine.value;
+  if (!engine) return;
+
+  remoteSaving.value = true;
+  try {
+    const updated = await setUserRemoteAccess({
+      engine: engine.engine,
+      userName: remoteEditor.userName,
+      mode: remoteEditor.mode,
+      confirmAnywhere: remoteEditor.confirmAnywhere,
+      applyFirewall: remoteEditor.applyFirewall,
+      // Virgül, boşluk ya da noktalı virgülle ayrılmış liste kabul edilir; doğrulama sunucuda.
+      allowedOrigins: remoteEditor.origins
+        .split(/[\s,;]+/)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    });
+
+    remoteEngines.value = remoteEngines.value.map((item) => (item.engine === updated.engine ? updated : item));
+    remoteEditor.userName = "";
+    showNotice(t("panel.database.remoteUsers.saved"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    remoteSaving.value = false;
+  }
 }
 
 function engineStatusFor(engineKey: string) {
@@ -1113,8 +1320,9 @@ async function submitCreateUser() {
       engine: selectedEngine.value,
       userName: userForm.userName,
       password: userForm.password,
-      // profesyonel paneller gibi: host seçtirilmez; her yerden erişim ('%').
-      allowedHost: "%",
+      // Host seçtirilmez; sunucu GÜVENLİ (yerel) varsayılanı uygular. Uzak erişim ayrı bir
+      // ekrandan, açık onayla verilir — yeni hesap her yerden geçerli doğmaz.
+      allowedHost: "",
       // Seçilirse o veritabanına otomatik GRANT ALL (kullanıcı "Access denied to database" almasın).
       databaseName: userForm.databaseName
     });

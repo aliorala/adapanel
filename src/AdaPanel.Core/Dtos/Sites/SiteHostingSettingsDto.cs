@@ -29,4 +29,21 @@ public sealed class SiteHostingSettingsDto
     public string[] AllowedReferrerHosts { get; set; } = [];
 
     public string[] ProtectedExtensions { get; set; } = [];
+
+    /// <summary>Durum koduna göre sitenin kendi hata belgeleri.</summary>
+    public SiteErrorPageDto[] CustomErrorPages { get; set; } = [];
+
+    /// <summary>Site bazlı uzantı → MIME türü eşlemeleri.</summary>
+    public SiteMimeTypeDto[] MimeTypes { get; set; } = [];
+
+    public bool HstsEnabled { get; set; }
+
+    /// <summary>
+    /// <c>max-age</c> saniyesi. Varsayılan 1 yıl (HSTS preload listesinin alt sınırı).
+    /// </summary>
+    public int HstsMaxAgeSeconds { get; set; } = 31_536_000;
+
+    public bool HstsIncludeSubDomains { get; set; }
+
+    public bool HstsPreload { get; set; }
 }

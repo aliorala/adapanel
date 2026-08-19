@@ -25,6 +25,43 @@
       <p v-if="log && log.lastModifiedUtc" class="hint">
         {{ t("panel.siteLogs.updated") }}: {{ formatDate(log.lastModifiedUtc) }}
       </p>
+
+      <section v-if="rotation" class="rotation-card">
+        <div class="rotation-head">
+          <h4>{{ t("panel.siteLogs.rotationTitle") }}</h4>
+          <button class="secondary compact" :disabled="rotationBusy" @click="runRotation">
+            {{ rotationBusy ? t("panel.siteLogs.loading") : t("panel.siteLogs.rotationRun") }}
+          </button>
+        </div>
+        <p class="hint">{{ t("panel.siteLogs.rotationHint") }}</p>
+        <div class="rotation-stats">
+          <div>
+            <span>{{ t("panel.siteLogs.rotationLast") }}</span>
+            <strong>{{ rotation.lastRotationUtc ? formatDate(rotation.lastRotationUtc) : t("panel.siteLogs.rotationNever") }}</strong>
+          </div>
+          <div>
+            <span>{{ t("panel.siteLogs.rotationArchived") }}</span>
+            <strong>{{ rotation.rotatedFiles }}</strong>
+          </div>
+          <div>
+            <span>{{ t("panel.siteLogs.rotationSaved") }}</span>
+            <strong>{{ formatBytes(rotation.freedBytes) }}</strong>
+          </div>
+          <div>
+            <span>{{ t("panel.siteLogs.rotationCurrent") }}</span>
+            <strong>{{ formatBytes(rotation.currentLogBytes) }} + {{ formatBytes(rotation.currentArchiveBytes) }}</strong>
+          </div>
+          <div v-if="rotation.skippedLockedFiles > 0">
+            <span>{{ t("panel.siteLogs.rotationLocked") }}</span>
+            <strong>{{ rotation.skippedLockedFiles }}</strong>
+          </div>
+        </div>
+        <p v-if="rotation.status === 'error'" class="notice error" role="alert">
+          {{ rotation.error === "directory_is_reparse_point"
+            ? t("panel.logs.rotationErrorReparsePoint")
+            : rotation.error }}
+        </p>
+      </section>
     </template>
   </section>
 </template>
@@ -32,7 +69,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { getSiteLog, type LogTail } from "../api/logs";
+import {
+  getSiteLog,
+  getSiteLogRotation,
+  runSiteLogRotation,
+  type LogRotationTarget,
+  type LogTail
+} from "../api/logs";
 import { extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
@@ -40,6 +83,8 @@ const { t } = useI18n();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const log = ref<LogTail | null>(null);
+const rotation = ref<LogRotationTarget | null>(null);
+const rotationBusy = ref(false);
 const lines = ref(120);
 const loading = ref(false);
 const notice = ref("");
@@ -58,14 +103,50 @@ async function load() {
   notice.value = "";
   try {
     log.value = await getSiteLog(siteName.value, lines.value);
+    // Döndürme durumu AYRI yakalanır: bu kartın okunamaması, günlük kuyruğunu göstermeye engel değil.
+    try {
+      rotation.value = await getSiteLogRotation(siteName.value);
+    } catch {
+      rotation.value = null;
+    }
   } catch (error) {
-    const key = extractApiMessage(error);
-    const translated = t(key);
-    notice.value = translated === key ? key : translated;
-    noticeError.value = true;
+    gosterHata(error);
   } finally {
     loading.value = false;
   }
+}
+
+async function runRotation() {
+  if (!siteName.value || !window.confirm(t("panel.siteLogs.rotationConfirm"))) {
+    return;
+  }
+
+  rotationBusy.value = true;
+  notice.value = "";
+  try {
+    rotation.value = await runSiteLogRotation(siteName.value);
+    notice.value = t("panel.logs.rotationCompleted");
+    noticeError.value = false;
+  } catch (error) {
+    gosterHata(error);
+  } finally {
+    rotationBusy.value = false;
+  }
+}
+
+function gosterHata(error: unknown) {
+  const key = extractApiMessage(error);
+  const translated = t(key);
+  notice.value = translated === key ? key : translated;
+  noticeError.value = true;
+}
+
+function formatBytes(value: number) {
+  if (!value) {
+    return "0 MB";
+  }
+  const mb = value / (1024 * 1024);
+  return mb < 1 ? `${Math.max(1, Math.round(value / 1024))} KB` : `${mb.toFixed(1)} MB`;
 }
 
 function formatDate(iso: string) {
@@ -120,5 +201,45 @@ function formatDate(iso: string) {
 .hint {
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+
+.rotation-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.rotation-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.rotation-head h4 {
+  margin: 0;
+}
+
+.rotation-head button {
+  width: auto;
+}
+
+.rotation-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.rotation-stats div {
+  display: grid;
+  gap: 2px;
+}
+
+.rotation-stats span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
 }
 </style>
