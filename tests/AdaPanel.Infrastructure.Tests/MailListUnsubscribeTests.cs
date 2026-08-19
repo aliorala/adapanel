@@ -321,4 +321,135 @@ public sealed class MailListUnsubscribeTests
         Assert.False(SecureEntryPathMiddleware.IsMailListUnsubscribePath(new PathString("/api/v1/public/mail-listsX")));
         Assert.False(SecureEntryPathMiddleware.IsMailListUnsubscribePath(new PathString("/api/v1/mail")));
     }
+
+    // --- 7) Tarayıcı akışı: bağlantı GERÇEKTEN tıklanabilir olmalı ---
+
+    private static string ReadControllerSource()
+    {
+        var klasor = AppContext.BaseDirectory;
+        for (var derinlik = 0; derinlik < 8; derinlik++)
+        {
+            var aday = Path.Combine(klasor, "src", "AdaPanel.Api", "Controllers", "MailListPublicController.cs");
+            if (File.Exists(aday))
+            {
+                return File.ReadAllText(aday);
+            }
+
+            klasor = Path.Combine(klasor, "..");
+        }
+
+        throw new FileNotFoundException("MailListPublicController.cs bulunamadi.");
+    }
+
+    /// <summary>
+    /// REGRESYON: onay ucu bir zamanlar YALNIZ <c>[HttpPost] [FromBody]</c> JSON kabul ediyordu.
+    /// E-postadaki bağlantıya tıklayan tarayıcı GET yapar — yani akış 405 ile ÖLÜYORDU: abone
+    /// tıklıyor, hiçbir şey olmuyordu. Uçların tarayıcının gerçekten yaptığı şeyi kabul etmesi şart.
+    /// </summary>
+    [Fact]
+    public void ConfirmLink_IsReachableWithABrowserGet()
+    {
+        var kaynak = ReadControllerSource();
+
+        Assert.Contains("[HttpGet(\"unsubscribe/confirm\")]", kaynak, StringComparison.Ordinal);
+        Assert.Contains("[HttpGet(\"unsubscribe\")]", kaynak, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Form gönderimleri <c>[FromForm]</c> ile bağlanmalı: tarayıcı formu
+    /// <c>application/x-www-form-urlencoded</c> gönderir, <c>[FromBody]</c> JSON bunu BAĞLAMAZ.
+    /// </summary>
+    [Fact]
+    public void FormPosts_BindFromFormNotFromJsonBody()
+    {
+        // Yalnız KOD sayılır: doküman yorumları eski tasarımı ANLATTIĞI için "[FromBody]" kelimesini
+        // içerir; yorumu koda saymak testi yanlış yerde kırardı.
+        var kod = string.Join(
+            '\n',
+            ReadControllerSource()
+                .Split('\n')
+                .Where(satir => !satir.TrimStart().StartsWith("///", StringComparison.Ordinal)));
+
+        Assert.Contains("[FromForm]", kod, StringComparison.Ordinal);
+        Assert.DoesNotContain("[FromBody]", kod, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// GET, ASLA çıkarma yapmamalı. Posta istemcileri ve kurumsal güvenlik tarayıcıları iletideki
+    /// bağlantıları ÖN-YÜKLER; GET doğrudan çıkarsaydı abone bağlantıya hiç dokunmadan, yalnızca
+    /// iletiyi aldığı için listeden düşerdi. Çıkarma yalnız POST'ta olur.
+    /// </summary>
+    [Fact]
+    public void TheGetEndpointsNeverRemoveAnyone()
+    {
+        var kaynak = ReadControllerSource();
+
+        // ConfirmAsync (servisteki çıkarma çağrısı) yalnız POST eyleminde geçmeli.
+        var getForm = kaynak.IndexOf("public ContentResult ConfirmForm", StringComparison.Ordinal);
+        var postConfirm = kaynak.IndexOf("public async Task<ContentResult> ConfirmAsync", StringComparison.Ordinal);
+        var cagri = kaynak.IndexOf("unsubscribeService.ConfirmAsync", StringComparison.Ordinal);
+
+        Assert.True(getForm >= 0 && postConfirm >= 0 && cagri >= 0);
+        Assert.True(cagri > postConfirm, "Cikarma cagrisi POST eyleminin ICINDE olmali.");
+    }
+
+    // --- 8) Sayfalar: kimliksiz uçta yansıtılmış XSS olmamalı ---
+
+    /// <summary>
+    /// Liste adresi SORGU DİZESİNDEN gelir ve sayfaya basılır. Kaçırılmasaydı kimliksiz bir uçta
+    /// yansıtılmış XSS olurdu — saldırgan, kurbanı panelin alan adında betik çalıştıran bir
+    /// bağlantıya çekebilirdi.
+    /// </summary>
+    [Fact]
+    public void RequestForm_EscapesTheListAddress()
+    {
+        var html = MailListUnsubscribePages.RequestForm("<script>alert(1)</script>", "/x");
+
+        Assert.DoesNotContain("<script>alert(1)</script>", html, StringComparison.Ordinal);
+        Assert.Contains("&lt;script&gt;", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>Belirteç de gizli alana basılır; tırnak kaçışı formu kırıp betik enjekte edebilirdi.</summary>
+    [Fact]
+    public void ConfirmForm_EscapesTheToken()
+    {
+        var html = MailListUnsubscribePages.ConfirmForm("\"><script>alert(1)</script>", "/x");
+
+        Assert.DoesNotContain("<script>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResultPage_EscapesTheListAddress()
+    {
+        var html = MailListUnsubscribePages.Result(removed: true, listAddress: "<img src=x onerror=alert(1)>");
+
+        Assert.DoesNotContain("<img src=x", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>Başarısızlık sayfası "çıkarılmadınız" demeli; "tamam" demek yalan olurdu.</summary>
+    [Fact]
+    public void ResultPage_SaysPlainlyThatNothingHappened_WhenTheTokenWasInvalid()
+    {
+        var html = MailListUnsubscribePages.Result(removed: false, listAddress: string.Empty);
+
+        Assert.Contains("çıkarılmadınız", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NOT removed", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>İstek sayfası, adresin abone OLUP OLMADIĞINI ele vermemeli.</summary>
+    [Fact]
+    public void RequestAcceptedPage_DoesNotRevealWhetherTheAddressWasSubscribed()
+    {
+        var html = MailListUnsubscribePages.RequestAccepted();
+
+        Assert.Contains("aboneyse", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("If the address is subscribed", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>Bu sayfalar arama motorlarına girmemeli.</summary>
+    [Fact]
+    public void ThePagesAreNotIndexable()
+    {
+        Assert.Contains("noindex", MailListUnsubscribePages.RequestAccepted(), StringComparison.Ordinal);
+    }
 }
