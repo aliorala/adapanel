@@ -382,6 +382,45 @@ public sealed class MailController(
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_deleted"));
     }
 
+    /// <summary>
+    /// Panelin DIŞARIDAN erişilen kök adresi. Dağıtım listesi iletilerine konan
+    /// <c>List-Unsubscribe</c> bağlantısı bundan kurulur.
+    /// </summary>
+    /// <remarks>
+    /// Yalnız yönetici: değer, TÜM kiracıların liste abonelerine giden iletilere yazılır.
+    /// Kiracının seçmesine bırakılsaydı, başka bir kiracının abonelerine kendi adresini
+    /// koydurabilirdi (kimlik avı).
+    /// </remarks>
+    [HttpGet("public-base-url")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<string>>> GetPublicBaseUrlAsync(
+        [FromServices] AdaPanel.Infrastructure.Mail.MailService concreteMailService,
+        CancellationToken cancellationToken)
+    {
+        return Ok(ApiResponse<string>.Ok(await concreteMailService.GetPublicBaseUrlAsync(cancellationToken)));
+    }
+
+    [HttpPut("public-base-url")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<string>>> SetPublicBaseUrlAsync(
+        [FromBody] SetMailPublicBaseUrlRequest request,
+        [FromServices] AdaPanel.Infrastructure.Mail.MailService concreteMailService,
+        CancellationToken cancellationToken)
+    {
+        var saved = await concreteMailService.SetPublicBaseUrlAsync(request.BaseUrl, cancellationToken);
+
+        // Bu adres GERÇEK abonelere giden iletilere yazılır; kimin ne zaman değiştirdiği kayıtta durmalı.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.public_base_url.updated",
+            "mail-server",
+            string.IsNullOrEmpty(saved)
+                ? "Panel public base URL cleared; List-Unsubscribe headers disabled."
+                : $"Panel public base URL set to '{saved}'.");
+
+        return Ok(ApiResponse<string>.Ok(saved, "mail.public_base_url_saved"));
+    }
+
     [HttpGet("listeners")]
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<MailListenerDto>>>> GetListenersAsync(CancellationToken cancellationToken)

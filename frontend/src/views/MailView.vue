@@ -487,9 +487,26 @@
           <p v-if="workspace.lists.length === 0" class="empty-state">{{ t("panel.mail.noLists") }}</p>
         </div>
 
-        <!-- DURUST SINIR: "kimler gonderebilir" ARTIK CALISIYOR (RCPT asamasi sieve kurali,
-             canli dogrulandi). Kalan tek Plesk farki self-servis abonelikten cikma: Stalwart'ta
-             abonenin kendi kendini cikarabilecegi bir mekanizma YOK, cikarmayi yonetici yapar. -->
+        <!-- Panelin genel adresi: List-Unsubscribe baglantisi bundan kurulur. TAHMIN EDILMEZ --
+             bos birakilirsa baslik hic eklenmez, cunku calismayan bir baglanti gondermek
+             baslik koymamaktan kotudur. Yalniz yonetici gorur/degistirir. -->
+        <div v-if="isAdmin" class="form-surface list-baseurl">
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.mail.publicBaseUrl") }}</span>
+            <div class="row-actions">
+              <input v-model.trim="publicBaseUrl" placeholder="https://panel.ornek.com" />
+              <button class="compact" v-bind="writeGate(busy)" @click="savePublicBaseUrl">
+                {{ t("panel.common.save") }}
+              </button>
+            </div>
+            <small class="field-hint">{{ t("panel.mail.publicBaseUrlHint") }}</small>
+          </label>
+        </div>
+
+        <!-- DURUST SINIR: "kimler gonderebilir" ve self-servis abonelikten cikma ARTIK CALISIYOR
+             (RCPT sieve kurali + genel onay sayfasi, ikisi de canli dogrulandi). Kalan fark:
+             abone cikarma baglantisi liste basinadir ve e-posta onayi ister -- Stalwart fan-out'u
+             iletiyi kisisellestirmedigi icin aboneye ozel tek-tik baglanti URETILEMEZ. -->
         <p class="meta list-limitation">{{ t("panel.mail.listPolicyLimitation") }}</p>
 
         <div class="row-actions mail-advanced-toggle">
@@ -698,6 +715,8 @@ import {
   deleteMailList,
   setMailListRecipients,
   setMailListPolicy,
+  getMailPublicBaseUrl,
+  setMailPublicBaseUrl,
   subscribeToMailList,
   unsubscribeFromMailList,
   deleteMailAccount,
@@ -1003,6 +1022,7 @@ onMounted(async () => {
   }
   await refresh();
   await ensureSiteDomain();
+  await loadPublicBaseUrl();
 });
 
 // profesyonel paneller gibi: site bağlamından gelince (domain prop) o alan adı için mail otomatik etkin olsun;
@@ -1364,6 +1384,26 @@ async function addList() {
     listForm.allowedSenders = "";
     showListForm.value = false;
     showNotice(t("panel.mail.listCreated"), false);
+  });
+}
+
+// Panelin genel adresi (yalniz yonetici). Bos = List-Unsubscribe basligi eklenmez.
+const publicBaseUrl = ref("");
+
+async function loadPublicBaseUrl() {
+  if (!isAdmin.value) return;
+  try {
+    publicBaseUrl.value = await getMailPublicBaseUrl();
+  } catch {
+    // Okunamamasi liste yonetimini engellememeli; alan bos kalir.
+    publicBaseUrl.value = "";
+  }
+}
+
+async function savePublicBaseUrl() {
+  await run(async () => {
+    publicBaseUrl.value = await setMailPublicBaseUrl(publicBaseUrl.value);
+    showNotice(t("panel.mail.publicBaseUrlSaved"), false);
   });
 }
 

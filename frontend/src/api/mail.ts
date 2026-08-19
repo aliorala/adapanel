@@ -159,6 +159,18 @@ export async function deleteMailList(address: string) {
   const response = await apiClient.delete<ApiEnvelope<MailWorkspace>>(`/mail/lists/${encodeURIComponent(address)}`);
   return response.data.data;
 }
+// Panelin disaridan erisilen kok adresi. Liste iletilerine konan List-Unsubscribe baglantisi
+// bundan kurulur; BOS ise baslik hic eklenmez (tahmin edilmis, calismayan baglanti gondermeyiz).
+export async function getMailPublicBaseUrl() {
+  const response = await apiClient.get<ApiEnvelope<string>>("/mail/public-base-url");
+  return response.data.data;
+}
+
+export async function setMailPublicBaseUrl(baseUrl: string) {
+  const response = await apiClient.put<ApiEnvelope<string>>("/mail/public-base-url", { baseUrl });
+  return response.data.data;
+}
+
 export async function getMailListeners() {
   const response = await apiClient.get<ApiEnvelope<MailListener[]>>("/mail/listeners");
   return response.data.data;
