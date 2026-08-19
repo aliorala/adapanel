@@ -65,6 +65,39 @@ public sealed class MailService(
     /// </remarks>
     internal const string MailingListObject = "MailingList";
 
+    /// <summary>
+    /// Alan adı silinirken ÖNCE temizlenmesi gereken üye türleri.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden burada ve neden yalnız iki tür:</b> Stalwart üyesi olan bir domaini silmeyi
+    /// REDDEDER (<c>objectIsLinked</c>). Bu liste eskiden <c>list</c>, <c>group</c>, <c>account</c>
+    /// idi ve ilk ikisi ŞEMADA YOK: <c>query list</c> ve <c>query group</c> çağrılarının ikisi de
+    /// <c>unknown object</c> ile düşüyor. <see cref="QueryAsync"/> başarısız sorguda BOŞ döndüğü
+    /// (fırlatmadığı) için bu sessizce "bu türden üye yok" sayılıyordu.
+    /// </para>
+    /// <para>
+    /// Ölçülen sonuç: dağıtım listesi olan bir alan adı SİLİNEMİYORDU. Hesaplar temizleniyor,
+    /// listeler duruyor, <c>delete domain</c> şu cevabı veriyordu:
+    /// <c>objectIsLinked ... Linked by: MailingList#b, MailingList#c</c> → panel
+    /// <c>mail.operation_failed</c> gösterip alan adını ekranda takılı bırakıyordu.
+    /// </para>
+    /// <para>
+    /// <c>group</c> ayrıca GEREKSİZDİ: gruplar <c>Account</c> nesnesinin bir varyantıdır
+    /// (<c>Account/User</c> ve <c>Account/Group</c>) ve <c>query account</c> ikisini de döndürür
+    /// (ölçüldü).
+    /// </para>
+    /// <para>
+    /// <b><c>DkimSignature</c> neden listede:</b> üyeler temizlendikten SONRA bile silme
+    /// reddediliyordu — <c>objectIsLinked ... Linked by: DkimSignature#..., DkimSignature#...</c>.
+    /// Stalwart, alan adı oluşturulurken DKIM anahtarlarını KENDİSİ üretir; dolayısıyla her alan
+    /// adında bu bağ vardır ve temizlenmediği sürece HİÇBİR alan adı silinemez. Anahtarlar alan
+    /// adına aittir ve o gidince işe yaramaz; karşılık gelen DNS kayıtları da silme akışında
+    /// zaten kaldırılıyor.
+    /// </para>
+    /// </remarks>
+    internal static readonly string[] DomainCascadeTypes = [MailingListObject, "account", "DkimSignature"];
+
     private const string ConfigPath = "config/mail.json";
     private const string CertificateStatePath = "config/mail-cert.json";
     // Domain kotalari Stalwart'ta yok → panel-tarafi tutulur (domain→azami toplam MB) ve tahsis toplamiyla dayatilir.
@@ -350,11 +383,10 @@ public sealed class MailService(
         }
 
         // profesyonel paneller gibi CASCADE: domaine bağlı TÜM üyeler (hesap + grup + liste) domainle birlikte
-        // gider. Stalwart, ÜYESİ olan bir domaini silmeyi REDDEDER → eskiden yalnız hesaplar siliniyordu; domainde
-        // grup/liste/öksüz üye kalınca "delete domain" patlıyor ve domain UI'de takılı kalıyordu (mail.operation_failed).
-        // QueryAsync bilinmeyen/desteklenmeyen tipte [] döner (fırlatmaz) → grup/liste güvenle denenir. account
-        // turunda ayrıca BAŞKA domaindeki hesaplarda bu domaine işaret eden alias girdileri de temizlenir.
-        foreach (var principalType in new[] { "list", "group", "account" })
+        // gider. Stalwart, ÜYESİ olan bir domaini silmeyi REDDEDER; üye kalırsa "delete domain" patlar ve domain
+        // UI'de takılı kalır. account turunda ayrıca BAŞKA domaindeki hesaplarda bu domaine işaret eden alias
+        // girdileri de temizlenir.
+        foreach (var principalType in DomainCascadeTypes)
         {
             foreach (var brief in await QueryAsync(cli, principalType, env, cancellationToken))
             {
@@ -369,7 +401,7 @@ public sealed class MailService(
                 var memberEmail = detail is null ? GetField(brief, "emailAddress") : GetField(detail.Value, "emailAddress");
                 var belongsToDomain =
                     string.Equals(memberDomainId, domainId, StringComparison.Ordinal) ||
-                    (memberEmail?.EndsWith("@" + domain, StringComparison.OrdinalIgnoreCase) ?? false);
+                    BelongsToDomain(memberEmail, domain);
 
                 if (belongsToDomain)
                 {
