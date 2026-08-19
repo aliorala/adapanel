@@ -8,15 +8,92 @@ using System.Text.Json;
 
 namespace AdaPanel.Infrastructure.SelfUpdate;
 
-public sealed class SelfUpdateService(
-    JsonFileStore fileStore,
-    IHttpClientFactory httpClientFactory,
-    IUpdateInstallerLauncher installerLauncher) : ISelfUpdateService
+/// <summary>Paketin isletim sisteminden okunan kimligi: yayinci bilgisi ve Authenticode durumu.</summary>
+internal sealed record UpdatePackageIdentity(
+    string Company,
+    string Product,
+    string SignatureStatus,
+    string SignatureSubject);
+
+/// <summary>
+/// Paketin kimligini isletim sisteminden okur (Win32 VersionInfo + Authenticode).
+/// </summary>
+/// <remarks>
+/// Ayri bir temsilci, cunku bu isletim sistemine bagli TEK adimdir: karar mantigi
+/// (<see cref="UpdatePackageTrust"/>) saftir ve dogrudan sinanir, okuma ise testlerde yerine
+/// konabilir. Aksi halde "kimligi dogru paket kabul edilir" davranisini dogrulamak icin testin,
+/// surum kaynagi ve imza tasiyan GERCEK bir PE uretmesi gerekirdi -- yani sinanamazdi.
+/// </remarks>
+internal delegate Task<UpdatePackageIdentity> UpdatePackageIdentityReader(
+    string filePath,
+    CancellationToken cancellationToken);
+
+public sealed class SelfUpdateService : ISelfUpdateService
 {
+    private readonly JsonFileStore fileStore;
+    private readonly IHttpClientFactory httpClientFactory;
+    private readonly IUpdateInstallerLauncher installerLauncher;
+    private readonly UpdatePackageIdentityReader kimlikOkuyucu;
+
+    public SelfUpdateService(
+        JsonFileStore fileStore,
+        IHttpClientFactory httpClientFactory,
+        IUpdateInstallerLauncher installerLauncher)
+        : this(fileStore, httpClientFactory, installerLauncher, VarsayilanKimlikOkuyucu)
+    {
+    }
+
+    // DI yalnizca PUBLIC kurucuyu gorur; bu asiri yukleme testler icindir ve uretimde kullanilmaz.
+    internal SelfUpdateService(
+        JsonFileStore fileStore,
+        IHttpClientFactory httpClientFactory,
+        IUpdateInstallerLauncher installerLauncher,
+        UpdatePackageIdentityReader kimlikOkuyucu)
+    {
+        this.fileStore = fileStore;
+        this.httpClientFactory = httpClientFactory;
+        this.installerLauncher = installerLauncher;
+        this.kimlikOkuyucu = kimlikOkuyucu;
+    }
+
+    private static async Task<UpdatePackageIdentity> VarsayilanKimlikOkuyucu(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        var surumBilgisi = System.Diagnostics.FileVersionInfo.GetVersionInfo(filePath);
+        var (imzaDurumu, imzaKonusu) = await ReadAuthenticodeAsync(filePath, cancellationToken);
+        return new UpdatePackageIdentity(
+            surumBilgisi.CompanyName ?? string.Empty,
+            surumBilgisi.ProductName ?? string.Empty,
+            imzaDurumu,
+            imzaKonusu);
+    }
+
     private const string ManifestPath = "config/update-manifest.json";
     private const string GithubConfigPath = "config/update-github.json";
     private const string PendingUpdatePath = "updates/pending-update.json";
+    private const string TrustConfigPath = "config/update-trust.json";
     private const string DefaultRepo = "aliorala/adapanel";
+
+    /// <summary>
+    /// PANELIN KENDI hukmunun kalici kopyasi. Calistirici bu dosyayi HIC yazmaz (yazdigi dosyalar
+    /// yalnizca <c>last-attempt.json</c>, <c>apply-update.log</c>, <c>update-runner.log</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// NEDEN AYRI DOSYA -- olculen K11b arizasi: panel hukmunu <c>last-attempt.json</c>'a yaziyor,
+    /// hemen ardindan bekleyen kaydi siliyor; bekleyen kayit gidince <see cref="DecideAttemptVerdict"/>
+    /// artik HER ZAMAN <see cref="AttemptVerdict.Keep"/> donuyor. Calistirici saniyeler sonra ayni
+    /// dosyaya "failed" yazinca panelin bunu duzeltmesi KALICI OLARAK imkansiz hale geliyordu.
+    /// </para>
+    /// <para>
+    /// Yeni calistiricinin sahiplik kurali ezmeyi zaten engelliyor -- ama calistirici betigini
+    /// KURULU (eski) panel uretir. Yani bu duzeltmenin dagitildigi guncellemede ESKI calistirici
+    /// kosacak ve hukmu bir kez daha ezecek. Panelin, bekleyen kayit olmadan da toparlayabilmesi
+    /// icin kendine ait, calistiricinin dokunmadigi bir kanita ihtiyaci var. Kanit bu dosya.
+    /// </para>
+    /// </remarks>
+    private const string PanelVerdictPath = "updates/panel-verdict.json";
 
     /// <summary>
     /// GitHub sonucunun taze sayıldığı süre. Rozet 60 saniyede bir sorduğu ve GitHub'ın kimliksiz
@@ -56,6 +133,16 @@ public sealed class SelfUpdateService(
     {
         var currentVersion = VersionInfo.Current;
         var github = await fileStore.ReadAsync(GithubConfigPath, new GithubConfig { Repo = DefaultRepo }, cancellationToken);
+
+        // IZIN LISTESI OKUMA ANINDA DA UYGULANIR, yalnizca yazma ucunda degil. Sebep: yapilandirma
+        // diskte bir JSON dosyasidir. Yalnizca SetGithubRepoAsync denetlenirse, o dosyaya yazabilen
+        // biri panelin SYSTEM olarak calistiracagi exe'nin kaynagini yine belirleyebilir. Izinsiz
+        // deger SESSIZCE degil, VARSAYILANA DUSULEREK reddedilir: guncelleme yolu kapanmasin.
+        if (!UpdatePackageTrust.DepoIzinli(github.Repo))
+        {
+            github = new GithubConfig { Repo = DefaultRepo };
+        }
+
         var fetchNote = string.Empty;
 
         var cached = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
@@ -185,40 +272,107 @@ public sealed class SelfUpdateService(
         CancellationToken cancellationToken)
     {
         var attempt = await ReadLastAttemptAsync(cancellationToken);
+        var panelVerdict = await fileStore.ReadAsync(PanelVerdictPath, new PanelVerdict(), cancellationToken);
         var verdict = DecideAttemptVerdict(
             attempt,
             pendingUpdate.Version,
             pendingUpdate.InstallScheduledAtUtc,
             currentVersion,
             DateTime.UtcNow);
+
         if (verdict == AttemptVerdict.Keep)
         {
-            return attempt;
+            // BEKLEYEN KAYIT OLMADAN TOPARLAMA (K11b). Panel daha once "basarili" dedi, calistirici
+            // sonradan ayni dosyaya "basarisiz" yazdi ve bekleyen kayit silindigi icin yukaridaki
+            // hukum artik devreye giremiyor. Panelin kendi kalici kanidi hala duruyorsa ve hedef
+            // surum HALA calisiyorsa dogru olan yeniden yazilir.
+            if (!ShouldRestorePanelVerdict(attempt, panelVerdict.Version, panelVerdict.Phase, currentVersion))
+            {
+                return attempt;
+            }
+
+            var toparlanan = KararOlustur(AttemptVerdict.Succeeded, attempt?.InstallerExitCode);
+            await HukmuYazAsync(toparlanan, panelVerdict.Version, cancellationToken);
+            return toparlanan;
         }
 
-        var karar = new UpdateAttemptDto
-        {
-            Phase = verdict == AttemptVerdict.Succeeded ? "succeeded" : "failed",
-            // Cikis kodu TASINIR: calistirici olmeden once bir kod yazabildiyse teshis degeri vardir.
-            InstallerExitCode = attempt?.InstallerExitCode,
-            Error = string.Empty,
-            ErrorKey = verdict == AttemptVerdict.Succeeded ? string.Empty : "update.attempt_no_verdict",
-            IsDecidedByPanel = true,
-            UpdatedAtUtc = DateTime.UtcNow
-        };
+        var karar = KararOlustur(verdict, attempt?.InstallerExitCode);
+        await HukmuYazAsync(karar, pendingUpdate.Version, cancellationToken);
+        return karar;
+    }
 
+    private static UpdateAttemptDto KararOlustur(AttemptVerdict verdict, int? installerExitCode) => new()
+    {
+        Phase = verdict == AttemptVerdict.Succeeded ? "succeeded" : "failed",
+        // Cikis kodu TASINIR: calistirici olmeden once bir kod yazabildiyse teshis degeri vardir.
+        InstallerExitCode = installerExitCode,
+        Error = string.Empty,
+        ErrorKey = verdict == AttemptVerdict.Succeeded ? string.Empty : "update.attempt_no_verdict",
+        IsDecidedByPanel = true,
+        UpdatedAtUtc = DateTime.UtcNow
+    };
+
+    /// <summary>
+    /// Hukum IKI YERE yazilir: kullaniciya gosterilen ortak dosyaya ve yalnizca panelin sahip
+    /// oldugu <see cref="PanelVerdictPath"/> dosyasina. Ikincisi olmadan hukum, onu ezebilecek
+    /// tarafla ayni dosyada yasar.
+    /// </summary>
+    private async Task HukmuYazAsync(UpdateAttemptDto karar, string hedefSurum, CancellationToken cancellationToken)
+    {
         try
         {
-            // Hukum KALICI yazilir: bekleyen kayit birazdan silinecek, yani ayni karari bir daha
-            // veremeyecegiz. Yazamazsak (disk/izin) rapor yine dogrudur, yalniz kalici olmaz.
             await fileStore.WriteAsync(LastAttemptPath, karar, cancellationToken);
+            await fileStore.WriteAsync(
+                PanelVerdictPath,
+                new PanelVerdict
+                {
+                    Version = hedefSurum,
+                    Phase = karar.Phase,
+                    ErrorKey = karar.ErrorKey,
+                    UpdatedAtUtc = DateTime.UtcNow
+                },
+                cancellationToken);
         }
         catch
         {
             // En iyi caba; durum dosyasi yalnizca bilgilendirmedir, guncelleme akisini bozmamali.
         }
+    }
 
-        return karar;
+    /// <summary>
+    /// Panelin daha once verdigi "basarili" hukmu, calistiricinin sonradan yazdigi bir sonucun
+    /// altinda kalmis mi? Bekleyen kayda IHTIYAC DUYMAZ -- K11b'nin kalicilik sebebi tam olarak
+    /// hukmun o kayda bagli olmasiydi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Yalnizca "basarili" yonu toparlanir. Ters yon (panel "hukum alinamadi" demis, calistirici
+    /// sonradan GERCEK sebebi yazmis) bilerek dokunulmadan birakilir: orada calistiricinin bilgisi
+    /// panelinkinden fazladir ve gercek basarisizlik gizlenmemelidir.
+    /// </para>
+    /// <para>
+    /// Hedef surum HER SEFERINDE yeniden olculur: kullanici arada eski bir surume donduyse eski
+    /// "basarili" hukmu dirilmez.
+    /// </para>
+    /// </remarks>
+    internal static bool ShouldRestorePanelVerdict(
+        UpdateAttemptDto? attempt,
+        string panelVerdictVersion,
+        string panelVerdictPhase,
+        string currentVersion)
+    {
+        if (!string.Equals(panelVerdictPhase, "succeeded", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!IsPendingTargetReached(panelVerdictVersion, currentVersion))
+        {
+            return false;
+        }
+
+        // Zaten "basarili" yaziyorsa toparlanacak bir sey yok (her kontrolde yazim olmasin).
+        return attempt is null || !string.Equals(attempt.Phase, "succeeded", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -376,6 +530,20 @@ public sealed class SelfUpdateService(
     public async Task<UpdateStatusDto> SetGithubRepoAsync(string repo, CancellationToken cancellationToken = default)
     {
         var trimmed = (repo ?? string.Empty).Trim();
+
+        // KEYFI DEPO KABUL EDILMEZ. Buradan gecen deger, panelin bir sonraki adimda indirip
+        // SYSTEM kimligiyle CALISTIRACAGI exe'nin kaynagidir; yani bu uc, dogrulanmadigi surece
+        // "panel yoneticisi -> SYSTEM" yukselmesidir. Panel yoneticisi bir WINDOWS yoneticisi
+        // degildir (kabuk komutu uclari bilerek LOCAL SERVICE olarak kosuyor), dolayisiyla bu
+        // yukselme gercek bir sinir asimidir.
+        //
+        // Not: bu ucu arayuz hic cagirmiyor (frontend'de setUpdateGithubRepo tanimli ama kullanan
+        // ekran yok), yani daraltmanin kullaniciya gorunen bir maliyeti yok.
+        if (!UpdatePackageTrust.DepoIzinli(trimmed))
+        {
+            throw new AppException("update.github_repo_invalid", 400, 400, $"Repo={trimmed}");
+        }
+
         await fileStore.WriteAsync(GithubConfigPath, new GithubConfig { Repo = trimmed }, cancellationToken);
         // Depo AÇIKÇA değiştirildi: önbelleği atla, yeni deponun sürümünü hemen göster.
         return await CheckForUpdateAsync(forceRefresh: true, cancellationToken);
@@ -386,19 +554,16 @@ public sealed class SelfUpdateService(
     // kimlik gerektirmez (User-Agent zorunlu). SHA256 bulunamazsa güvenlik gereği net hata (.sha256 ekleyin) verir.
     private async Task<UpdateManifest?> FetchGithubManifestAsync(string repo, CancellationToken cancellationToken)
     {
-        var clean = repo.Trim().Trim('/');
-        var marker = clean.IndexOf("github.com/", StringComparison.OrdinalIgnoreCase);
-        if (marker >= 0)
-        {
-            clean = clean[(marker + "github.com/".Length)..];
-        }
-        var parts = clean.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
+        // TEK AYRISTIRICI: izin denetimi (UpdatePackageTrust.DepoIzinli) ile burasi ayni koda bakar.
+        // Ikisi ayri ayristirici olsaydi biri "gecerli" digeri "gecersiz" diyebilir ve izin denetimi
+        // ayristirma farkindan atlanabilirdi.
+        if (UpdatePackageTrust.DepoyuCozumle(repo) is not { } cozum)
         {
             throw new AppException("update.github_repo_invalid", 400, 400, $"Repo={repo}");
         }
-        var owner = parts[0];
-        var name = parts[1];
+
+        var owner = cozum.Owner;
+        var name = cozum.Name;
 
         var client = httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(20);
@@ -508,7 +673,18 @@ public sealed class SelfUpdateService(
     {
         // İndirme başlıyor: indirme linki ve SHA256 GÜNCEL olmalı, bayat manifestten indirme yapılmaz.
         var status = await CheckForUpdateAsync(forceRefresh: true, cancellationToken);
-        var url = string.IsNullOrWhiteSpace(request.DownloadUrl) ? status.DownloadUrl : request.DownloadUrl.Trim();
+
+        // ISTEK GOVDESINDEKI adres ve ozet KULLANILMAZ; kaynak yalnizca taze cekilmis manifesttir.
+        //
+        // Eskiden govdeden gelen `downloadUrl` + `packageSha256` oldugu gibi kabul ediliyordu:
+        // panel yoneticisi keyfi bir adresten keyfi bir exe indirtip SYSTEM olarak calistirabiliyordu
+        // -- ozet denetimi de bunu YAKALAMAZ, cunku ozeti de ayni istekte veren o. Yani "SHA256
+        // dogrulaniyor" cumlesi bu yolda hicbir sey ifade etmiyordu.
+        //
+        // Uyumluluk: arayuz zaten manifestten okudugu iki degeri aynen geri gonderiyor
+        // (UpdateView.vue -> applyUpdate(status.downloadUrl, status.packageSha256)), yani gormezden
+        // gelmenin davranissal etkisi yok. Alanlar sozlesmede birakildi ki eski arayuzler kirilmasin.
+        var url = status.DownloadUrl;
         if (string.IsNullOrWhiteSpace(url))
         {
             return new UpdateStatusDto
@@ -526,9 +702,16 @@ public sealed class SelfUpdateService(
         }
 
         var packageUri = ResolvePackageUri(url);
-        var expectedHash = NormalizeSha256(string.IsNullOrWhiteSpace(request.PackageSha256)
-            ? status.PackageSha256
-            : request.PackageSha256);
+
+        // Adres, yapilandirilmis deponun release varligina BAGLANIR. Manifest diskte duran bir
+        // dosyadan da gelebilir (cekme basarisizsa onbellek kullanilir); sunucu/yol denetimi
+        // olmadan o dosyaya yazabilen biri SYSTEM olarak calisacak exe'nin kaynagini belirler.
+        if (!UpdatePackageTrust.IndirmeAdresiIzinli(packageUri.ToString(), status.GithubRepo))
+        {
+            throw new AppException("update.package_url_invalid", 400, 400, $"Url={packageUri}\r\nRepo={status.GithubRepo}");
+        }
+
+        var expectedHash = NormalizeSha256(status.PackageSha256);
         var updatesDirectory = fileStore.EnsureDirectory("updates");
         var destination = Path.Combine(updatesDirectory, ResolvePackageFileName(packageUri));
         var client = httpClientFactory.CreateClient();
@@ -568,6 +751,20 @@ public sealed class SelfUpdateService(
         {
             File.Delete(destination);
             throw new AppException("update.checksum_mismatch", 400, 400, $"Expected={expectedHash}\r\nActual={actualHash}");
+        }
+
+        // OZET TUTTUKTAN SONRA KIMLIK DENETIMI. Sirasi bilincli: ozet "aktarim sirasinda bozulma"
+        // sorusunu cevaplar, "yayinlanan dosyanin kendisi bulasik mi" sorusunu CEVAPLAMAZ -- kaynakta
+        // bulasma varsa yayindaki ozet de bulasik dosyanin ozetidir ve karsilastirma "temiz" der.
+        // Bu depoda tam olarak bu yasandi (Synaptics PE bulastiricisi).
+        try
+        {
+            await EnsureTrustedPackageAsync(destination, cancellationToken);
+        }
+        catch
+        {
+            File.Delete(destination);
+            throw;
         }
 
         var pendingUpdate = new PendingUpdate
@@ -627,18 +824,25 @@ public sealed class SelfUpdateService(
                 $"Expected={expectedHash}\r\nActual={actualHash}");
         }
 
+        // KURULUMDAN HEMEN ONCE SON KIMLIK DENETIMI. Paket indirme ile kurulum arasinda diskte
+        // bekliyor; bu depoda diskteki exe'leri periyodik olarak yeniden bulastiran bir zararli
+        // gorulduğu icin bu araligi denetimsiz birakmak gercek bir riski gormezden gelmek olurdu.
+        // Ozet zaten yukarida yeniden hesaplandi; bu adim ozetin gormedigi soruyu sorar.
+        //
+        // DURUM DOSYALARINDAN ONCE calisir: denetim reddederse ortada YENI bir deneme yoktur ve
+        // onceki denemenin sonucu kullanicidan silinmemelidir.
+        await EnsureTrustedPackageAsync(packagePath, cancellationToken);
+
         // ONCEKI denemenin durum dosyasi SILINIR. Aksi halde eski bir "failed" kaydi yeni denemenin
         // uzerine golge duser: panel, daha kurulum baslamadan gecmis bir basarisizligi bu denemenin
         // sonucu gibi raporlar. Silince kural netlesir: last-attempt.json HER ZAMAN son denemeye aittir
         // ve dosyanin YOKLUGU "calistirici henuz hicbir sey yazmadi" demektir.
-        try
-        {
-            File.Delete(fileStore.ResolvePath(LastAttemptPath));
-        }
-        catch
-        {
-            // En iyi caba: dosya kilitliyse hukum yine surum karsilastirmasindan cikar.
-        }
+        TemizlemeyiDene(() => File.Delete(fileStore.ResolvePath(LastAttemptPath)));
+
+        // PANELIN KENDI KANITI DA SILINIR. Yoksa onceki denemenin "basarili" hukmu, yeni deneme
+        // daha kurulum asamasindayken toparlama yoluna girip (ShouldRestorePanelVerdict) bu
+        // denemenin sonucuymus gibi gorunurdu.
+        TemizlemeyiDene(() => File.Delete(fileStore.ResolvePath(PanelVerdictPath)));
 
         await installerLauncher.ScheduleAsync(packagePath, actualHash, cancellationToken);
         pendingUpdate.InstallScheduledAtUtc = DateTime.UtcNow;
@@ -733,9 +937,107 @@ public sealed class SelfUpdateService(
         }
     }
 
+    /// <summary>
+    /// Paket SYSTEM olarak calistirilmadan once KIMLIGINI dogrular: yayinci bilgisi ve (varsa)
+    /// Authenticode imzasi.
+    /// </summary>
+    /// <remarks>
+    /// Karar mantiginin tamami <see cref="UpdatePackageTrust"/> icinde ve SAF'tir; burasi yalnizca
+    /// olcumu yapip karari uygular. Sebep: bulasik bir paket bu makinede uretilemez, ama karar yine
+    /// de sinanmak zorundadir.
+    /// </remarks>
+    private async Task EnsureTrustedPackageAsync(string filePath, CancellationToken cancellationToken)
+    {
+        await EnsureWindowsExecutableAsync(filePath, cancellationToken);
+
+        var kimlik = await kimlikOkuyucu(filePath, cancellationToken);
+        var kimlikKusuru = UpdatePackageTrust.PaketKimligiKusuru(kimlik.Company, kimlik.Product);
+        if (kimlikKusuru is not null)
+        {
+            throw new AppException(
+                "update.package_invalid",
+                400,
+                400,
+                $"File={Path.GetFileName(filePath)}\r\n{kimlikKusuru}");
+        }
+
+        var guven = await fileStore.ReadAsync(TrustConfigPath, new TrustConfig(), cancellationToken);
+        var imzaKusuru = UpdatePackageTrust.ImzaKusuru(kimlik.SignatureStatus, kimlik.SignatureSubject, guven.RequireSignature);
+        if (imzaKusuru is not null)
+        {
+            throw new AppException(
+                "update.package_invalid",
+                400,
+                400,
+                $"File={Path.GetFileName(filePath)}\r\n{imzaKusuru}");
+        }
+    }
+
+    /// <summary>
+    /// Authenticode durumu ve imzalayan konusu. Okuma BASARISIZ olursa boş durum doner ve
+    /// <see cref="UpdatePackageTrust.ImzaKusuru"/> karari verir.
+    /// </summary>
+    /// <remarks>
+    /// <c>Get-AuthenticodeSignature</c> uzerinden okunur; ayni yontem depoda zaten kanitlanmis
+    /// (<c>ComponentBootstrapper.VerifyAuthenticodeSignatureAsync</c>, bilesen msi/installer paketleri).
+    /// Yonetilen kodda tam Authenticode dogrulamasi WinVerifyTrust P/Invoke gerektirir; kanitlanmis
+    /// bir yol dururken ikinci ve dogrulanmamis bir yol yazmanin gerekcesi yok.
+    /// </remarks>
+    private static async Task<(string Status, string Subject)> ReadAuthenticodeAsync(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var kacirilmisYol = filePath.Replace("'", "''", StringComparison.Ordinal);
+            var script =
+                $"$imza = Get-AuthenticodeSignature -LiteralPath '{kacirilmisYol}'\r\n" +
+                "[Console]::Out.Write($imza.Status.ToString())\r\n" +
+                "[Console]::Out.Write('|')\r\n" +
+                "if ($imza.SignerCertificate) { [Console]::Out.Write($imza.SignerCertificate.Subject) }";
+
+            var sonuc = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            var parcalar = sonuc.StandardOutput.Trim().Split('|', 2);
+            return parcalar.Length == 2 ? (parcalar[0].Trim(), parcalar[1].Trim()) : (string.Empty, string.Empty);
+        }
+        catch
+        {
+            // Olculemedi. Bos durum doner; imza ZORUNLU ise bu reddedilir, degilse (bugunku durum)
+            // gecer. "Olculemedi"yi "gecerli" saymak yok.
+            return (string.Empty, string.Empty);
+        }
+    }
+
     private sealed class GithubConfig
     {
         public string Repo { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// <c>config/update-trust.json</c>. Kod imzalama sertifikasi alindiginda tek yapilacak sey
+    /// <see cref="RequireSignature"/> degerini true yapmaktir; kural zaten yazili ve sinanmis durumda.
+    /// </summary>
+    private sealed class TrustConfig
+    {
+        /// <summary>
+        /// Varsayilan FALSE, cunku OLCULDU: uretilen <c>AdaPanelSetup.exe</c> imzasiz (NotSigned) ve
+        /// depoda hicbir <c>signtool</c> adimi yok. True yapmak, kurulu HER paneli guncellenemez
+        /// birakirdi -- yani isleyen tek guncelleme yolunu guvenlik adina kapatmak olurdu.
+        /// </summary>
+        public bool RequireSignature { get; set; }
+    }
+
+    /// <summary>Panelin kendi hukmunun, calistiricinin dokunmadigi kalici kopyasi.</summary>
+    private sealed class PanelVerdict
+    {
+        /// <summary>Hukmun verildigi HEDEF surum. Toparlamada yeniden olculur.</summary>
+        public string Version { get; set; } = string.Empty;
+
+        public string Phase { get; set; } = string.Empty;
+
+        public string ErrorKey { get; set; } = string.Empty;
+
+        public DateTime UpdatedAtUtc { get; set; }
     }
 
     private sealed class UpdateManifest

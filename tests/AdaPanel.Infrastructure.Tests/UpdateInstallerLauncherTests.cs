@@ -14,10 +14,14 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class UpdateInstallerLauncherTests
 {
+    private const string InnoLogPath = @"C:\ProgramData\AdaPanel\updates\apply-update.log";
+    private const string RunnerLogPath = @"C:\ProgramData\AdaPanel\updates\update-runner.log";
+
     private static string Script() => WindowsUpdateInstallerLauncher.BuildLauncherScript(
         @"C:\ProgramData\AdaPanel\updates\AdaPanelSetup.exe",
         "ABC123",
-        @"C:\ProgramData\AdaPanel\updates\apply-update.log");
+        InnoLogPath,
+        RunnerLogPath);
 
     // Servis KURULUMDAN ÖNCE durdurulmalı: dosyaları tutan süreç kalmazsa kurulum yardımcısının
     // uygulama kapatmaya çalışmasına hiç gerek kalmaz.
@@ -90,5 +94,77 @@ public sealed class UpdateInstallerLauncherTests
         var script = Script();
         Assert.Contains("Get-FileHash", script, StringComparison.Ordinal);
         Assert.Contains("checksum changed", script, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// K11c — KANIT YOK EDILIYORDU. Çalıştırıcının kendi izi ile Inno'nun <c>/LOG=</c> çıktısı AYNI
+    /// DOSYAYDI; Inno dosyayı sıfırdan açtığı için çalıştırıcının o ana kadar yazdığı her satır
+    /// siliniyordu. Ölçüldü: <c>apply-update.log</c>'un ilk satırı "Log opened." ve dosyada tek bir
+    /// <c>[runner]</c> satırı yok. Kök nedenin aylarca bulunamamasının doğrudan sebebi buydu.
+    /// </summary>
+    [Fact]
+    public void RunnerWritesItsOwnLog_NotTheFileInnoTruncates()
+    {
+        var script = Script();
+
+        // Inno'ya verilen /LOG= yolu DEĞİŞMEMELİ: kullanıcıya gösterilen hata metinleri sunucuda
+        // bu dosyaya bakmasını söylüyor ve kurulum arızasının gerçek sebebi orada yazıyor.
+        Assert.Contains($"/LOG=`\"$logPath`\"", script, StringComparison.Ordinal);
+
+        // Çalıştırıcının kendi satırları AYRI dosyaya gitmeli.
+        Assert.Contains("Add-Content -LiteralPath $runnerLogPath", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add-Content -LiteralPath $logPath", script, StringComparison.Ordinal);
+
+        // İki yol gerçekten farklı olmalı (aynı dosyayı gösteren iki değişken hiçbir şeyi çözmez).
+        Assert.NotEqual(InnoLogPath, RunnerLogPath);
+        Assert.Contains(RunnerLogPath, script, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Başarısızlıkta kullanıcıya taşınan kuyruk INNO'nun günlüğünden okunmalı: "Cannot create file
+    /// ... being used by another process" gibi gerçek sebep orada yazar, çalıştırıcının kendi
+    /// izinde değil.
+    /// </summary>
+    [Fact]
+    public void FailureTailIsReadFromTheInstallerLog()
+    {
+        Assert.Contains("Get-Content -LiteralPath $logPath -Tail", Script(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// K11a/K11b — SAHİPLİK. Kurulum, panelin servisini kendi bitişinden ~16 saniye ÖNCE başlatıyor
+    /// (ölçüldü). O aralıkta yeni panel ayağa kalkıp "çalışan sürüm = hedef sürüm" ölçümünü yapıyor
+    /// ve <c>succeeded</c> yazıyor; çalıştırıcı saniyeler sonra kendi daha az bilgili hükmünü
+    /// ÜZERİNE yazıyordu ve panel bunu bir daha düzeltemiyordu (bekleyen kayıt silinmiş oluyor).
+    /// </summary>
+    [Fact]
+    public void RunnerDoesNotOverwriteAVerdictThePanelAlreadyMade()
+    {
+        var script = Script();
+
+        // Yazmadan ÖNCE mevcut dosya okunmalı ve panel sahipliği sorulmalı.
+        Assert.Contains("$panelHukmu.isDecidedByPanel", script, StringComparison.Ordinal);
+
+        // Sahiplik varsa yazım yapılmadan çıkılmalı.
+        Assert.Contains("return", script, StringComparison.Ordinal);
+
+        // TEK İSTİSNA: panelin bilemeyeceği kurulum çıkış kodunu tamamlamak. Panel hükmü verdiği
+        // anda çıkış kodunu henüz kimse bilmiyor; bu yüzden yapısal olarak hep null kalıyordu.
+        Assert.Contains("$panelHukmu.installerExitCode", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Hükmü tamamlarken panelin nesnesi OLDUĞU GİBİ yeniden serileştirilmemeli:
+    /// <c>ConvertFrom-Json</c> <c>updatedAtUtc</c>'yi DateTime'a çevirir, <c>ConvertTo-Json</c> onu
+    /// YEREL saat dilimi ekiyle geri yazar ve panel tarafında UTC olmayan bir damga oluşur
+    /// (süre hesapları kayar). Alanlar tek tek kurulmalı, zaman damgası taze UTC olmalı.
+    /// </summary>
+    [Fact]
+    public void EnrichedVerdictRebuildsFieldsInsteadOfReserializingTheParsedObject()
+    {
+        var script = Script();
+        Assert.DoesNotContain("$panelHukmu | ConvertTo-Json", script, StringComparison.Ordinal);
+        Assert.Contains("$tamamlanmis | ConvertTo-Json", script, StringComparison.Ordinal);
+        Assert.Contains("isDecidedByPanel = $true", script, StringComparison.Ordinal);
     }
 }

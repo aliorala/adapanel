@@ -26,6 +26,20 @@ public sealed class UpdateController(ISelfUpdateService selfUpdateService) : Con
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status));
     }
 
+    /// <param name="request">
+    /// GÖVDEDEKİ <c>downloadUrl</c> ve <c>packageSha256</c> ARTIK KULLANILMIYOR; kaynak yalnızca
+    /// panelin GitHub'dan taze çektiği manifesttir (bkz. <c>SelfUpdateService.ApplyUpdateAsync</c>).
+    /// <para>
+    /// Neden: indirilen paket <b>SYSTEM</b> olarak çalıştırılıyor. Adresi ve özeti aynı isteğin
+    /// göndermesi, özet doğrulamasını anlamsız kılıyordu — saldırgan ikisini de kendisi veriyor.
+    /// Panel yöneticisi bir Windows yöneticisi değildir (kabuk uçları bilerek LOCAL SERVICE olarak
+    /// koşuyor), dolayısıyla bu gerçek bir sınır aşımıydı.
+    /// </para>
+    /// <para>
+    /// Alanlar sözleşmede BIRAKILDI: arayüz zaten manifestten okuduğu iki değeri aynen geri
+    /// gönderiyor, kaldırmak eski arayüzleri gereksiz yere kırardı.
+    /// </para>
+    /// </param>
     [HttpPost("apply")]
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> ApplyAsync([FromBody] ApplyUpdateRequest request, CancellationToken cancellationToken)
     {
@@ -41,6 +55,11 @@ public sealed class UpdateController(ISelfUpdateService selfUpdateService) : Con
     }
 
     // Güncellemelerin çekileceği GitHub deposunu (owner/repo) ayarlar — panel en son Release'i buradan otomatik görür.
+    //
+    // ARTIK KEYFİ DEĞİL: değer `UpdatePackageTrust.IzinliDepolar` listesinden geçmek zorunda, aksi
+    // hâlde `update.github_repo_invalid` döner. Sebep: buradan geçen depo, panelin indirip SYSTEM
+    // olarak çalıştıracağı exe'nin kaynağıdır — denetimsiz bırakıldığında bu uç, panel yöneticisini
+    // doğrudan SYSTEM'e yükseltiyordu. Listeyi genişletmek bilinçli bir kod değişikliği ister.
     [HttpPost("github")]
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> SetGithubAsync([FromBody] SetUpdateGithubRequest request, CancellationToken cancellationToken)
     {

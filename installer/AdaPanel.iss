@@ -57,6 +57,25 @@ Source: "..\scripts\install-service.ps1"; DestDir: "{app}\scripts"; Flags: ignor
 Source: "..\scripts\configure-firewall.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\harden-adapanel.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\install-tray-task.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+; AfterInstall BU GIRDIDE, cunku [Files] bolumunun SON satiri: ConfigureInstallation ancak butun
+; dosyalar kopyalandiktan sonra calisir. Yeni bir [Files] girdisi eklerken BU SATIRIN ALTINA degil
+; USTUNE eklenmeli; yoksa servis, henuz kopyalanmamis dosyalarla baslatilir.
+;
+; ONEMLI (K11a -- olculdu): ConfigureInstallation -> install-service.ps1 servisi BASLATIR, ama
+; kurulum sureci bundan SONRA da devam eder ([Icons], [Run], kaldirici kaydi, gunlugun kapanmasi).
+; Canli olcum: panel istekleri yanitlamaya 00:49:07'de basladi, "Installation process succeeded"
+; 00:49:19, "Log closed" 00:49:23 -- yani yeni panel, kurulum bitmeden ~16 saniye once AYAKTAYDI.
+;
+; Bu ORTUSME KALDIRILAMAZ ve kaldirilmaya calisilmamalidir: servis baslatmayi kurulumun sonuna
+; (ssPostInstall / [Run]) tasimak, install-service.ps1'in "KRITIK" olma ozelligini yok ederdi --
+; bugun servis kurulamazsa RaiseException ile kurulum IPTAL EDILIP geri aliniyor (wwwroot yedegi
+; dahil). O guvenceyi kaybetmek, kazanilan seyden cok daha degerlidir. Kaldi ki kurulum sureci her
+; halukarda servisten sonra bir sure daha yasar; yaris tamamen kapatilamaz.
+;
+; DOGRU COZUM YARISI KAZANMAK DEGIL, HUKME SAHIPLIK KOYMAKTIR ve panel tarafinda yapildi:
+; panel kendi olcumuyle karar verdiyse (isDecidedByPanel) calistirici o hukmu ezemez, yalnizca
+; eksik kurulum cikis kodunu tamamlayabilir. Bkz. WindowsUpdateInstallerLauncher.Write-UpdateState
+; ve SelfUpdateService.ShouldRestorePanelVerdict.
 Source: "..\scripts\uninstall-cleanup.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; AfterInstall: ConfigureInstallation
 
 [InstallDelete]

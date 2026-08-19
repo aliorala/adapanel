@@ -119,5 +119,15 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup derlemesi basarisiz oldu."
 }
 
+# URETILEN PAKETIN KENDISININ DENETIMI -- ISCC'den SONRA olmak ZORUNDA.
+# Yukaridaki publish denetimi "pakete ne giriyor" sorusunu cevaplar ve ISCC'den ONCE kosar; yani
+# uretilen AdaPanelSetup.exe'yi HIC gormuyordu. Bu makinede gorulen PE bulastiricisi tam da diskte
+# duran bitmis exe'leri yeniden bulastiriyordu: bulasik bir installer, ozeti tuttugu icin kurulu
+# TUM panellere SYSTEM olarak dagitilirdi.
+& (Join-Path $repoRoot "scripts\verify-publish-output.ps1") `
+    -InstallerPath (Join-Path $installerOutDir "AdaPanelSetup.exe") `
+    -ExpectedVersion $Version `
+    -ManifestPath (Join-Path $repoRoot "artifacts\installer-manifest.json")
+
 Write-Host "AdaPanelSetup.exe olusturuldu (surum $Version). Cikti klasoru: $installerOutDir"
 Write-Host "ONEMLI: GitHub release tag'ini '$Version' yap (yoksa self-update surumu esitleyemez)."

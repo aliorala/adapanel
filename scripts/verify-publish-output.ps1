@@ -16,10 +16,26 @@
 #
 # Uzantiya DEGIL, dosyanin ICERIGINE bakar: bulastirici yuku ".jpg" adiyla birakabilir.
 
+#
+# IKI AYRI SORU, IKI AYRI ADIM:
+#   -PublishDir     : ISCC'den ONCE -- "pakete NE GIRIYOR?"
+#   -InstallerPath  : ISCC'den SONRA -- "paketin KENDISI ne oldu?"
+#
+# Ikincisi EKSIKTI ve bosluk oldugu gibi duruyordu: betik yalnizca publish klasorunu tariyordu ve
+# build-installer.ps1/package-installer.ps1 icinde ISCC'den ONCE calisiyordu, yani uretilen
+# artifacts\installer\AdaPanelSetup.exe HIC DENETLENMIYORDU. Bu makinedeki PE bulastiricisi tam da
+# diskte duran bitmis exe'leri (her acilistan ~6 dk sonra) yeniden bulastiriyordu; yani en kritik
+# artefakt, denetimin gormedigi tek artefakti.
+
 param(
     # Mandatory DEGIL: -DefineFunctionsOnly ile dot-source edilirken PowerShell zorunlu parametre
     # icin ISTEM ACAR ve test kosumu orada kilitlenir. Zorunluluk asagida ELLE denetlenir.
     [string] $PublishDir,
+    # ISCC'nin urettigi kurulum paketi. -PublishDir ile birlikte de verilebilir, tek basina da.
+    [string] $InstallerPath,
+    # Paketin tasimasi gereken surum. Yanlis damgalanmis paket, kurulu panellerde SONSUZ GUNCELLEME
+    # DONGUSUNE yol acan bilinen bir ariza (bkz. scripts\version-guard.ps1 aciklamasi).
+    [string] $ExpectedVersion,
     [string] $ManifestPath,
     # Yalnizca testler icin: fonksiyonlari tanimla, hicbir sey calistirma.
     [switch] $DefineFunctionsOnly
@@ -64,6 +80,14 @@ $script:IzinliYayincilar = @(
 $script:YasakSirketler = @(
     "Synaptics"
 )
+
+# URETILEN KURULUM PAKETININ TASIMASI GEREKEN KIMLIK.
+# OLCULDU (artifacts\installer\AdaPanelSetup.exe, 0.5.0): CompanyName="AdaPanel",
+# ProductName="AdaPanel", FileDescription="AdaPanel Setup", Authenticode=NotSigned.
+# Degerler installer\AdaPanel.iss icindeki MyAppPublisher/MyAppName tanimlarindan gelir; ikisinin
+# ayrisamamasi InstallerArtifactVerificationTests icinde ayrica sinanir.
+$script:BeklenenPaketSirketi = "AdaPanel"
+$script:BeklenenPaketUrunu = "AdaPanel"
 
 function Test-AdaPortableExecutable {
     <#
@@ -120,10 +144,13 @@ function Get-AdaFileMetadata {
         }
     }
 
+    $surumBilgisi = (Get-Item -LiteralPath $Yol).VersionInfo
     return [pscustomobject]@{
         ImzaDurumu = "$($imza.Status)"
         Yayinci    = $yayinci
-        Sirket     = "$((Get-Item -LiteralPath $Yol).VersionInfo.CompanyName)".Trim()
+        Sirket     = "$($surumBilgisi.CompanyName)".Trim()
+        Urun       = "$($surumBilgisi.ProductName)".Trim()
+        Surum      = "$($surumBilgisi.ProductVersion)".Trim()
     }
 }
 
@@ -233,14 +260,169 @@ function Invoke-AdaPublishVerification {
     }
 }
 
-if ($DefineFunctionsOnly) { return }
+function Get-AdaInstallerFinding {
+    <#
+        URETILEN KURULUM PAKETI icin KARAR. Bulgu dizisi doner; bos dizi = temiz.
+        Saf fonksiyon: dosya sistemine dokunmaz, boylece "bulasik paket" durumu -- bu makinede
+        URETILEMEYECEK bir durum -- yine de sinanabilir.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][bool] $Calistirilabilir,
+        [object] $UstVeri,
+        [long] $Boyut = 0,
+        # ISCC'ye verilen surum. Verilirse paketin damgasiyla eslesmek ZORUNDA: yanlis damgalanmis
+        # paket, kurulu panellerde sonsuz guncelleme dongusune yol acan bilinen bir arizadir.
+        [string] $BeklenenSurum
+    )
 
-if ([string]::IsNullOrWhiteSpace($PublishDir)) {
-    throw "-PublishDir zorunludur."
+    $bulgular = [System.Collections.Generic.List[string]]::new()
+
+    if (-not $Calistirilabilir) {
+        $bulgular.Add("KURULUM PAKETI CALISTIRILABILIR DEGIL: dosya bir PE degil (yarim yazilmis ya da ISCC uretmemis).")
+        return $bulgular.ToArray()
+    }
+
+    # Bos/kucuk dosya = ISCC yarida kalmis. Paketin gercek boyutu ~50-90 MiB; 1 MiB esigi bunu
+    # yakalayacak kadar dusuk, mesru bir kucuk paketi reddetmeyecek kadar gevsek.
+    if ($Boyut -gt 0 -and $Boyut -lt 1MB) {
+        $bulgular.Add("KURULUM PAKETI COK KUCUK: $Boyut bayt. ISCC ciktisi yarim kalmis olabilir.")
+    }
+
+    if ($null -eq $UstVeri) { return $bulgular.ToArray() }
+
+    foreach ($yasak in $script:YasakSirketler) {
+        if (($UstVeri.Sirket -and $UstVeri.Sirket -like "*$yasak*") -or
+            ($UstVeri.Urun -and $UstVeri.Urun -like "*$yasak*")) {
+            $bulgular.Add("BULASMA IMZASI: uretilen kurulum paketi CompanyName='$($UstVeri.Sirket)' " +
+                          "ProductName='$($UstVeri.Urun)'. PAKET YAYINLANMAMALI.")
+        }
+    }
+
+    if ($UstVeri.Sirket -ne $script:BeklenenPaketSirketi) {
+        $bulgular.Add("BEKLENMEDIK YAYINCI: kurulum paketinde CompanyName='$($UstVeri.Sirket)', " +
+                      "beklenen '$script:BeklenenPaketSirketi' (installer\AdaPanel.iss -> MyAppPublisher).")
+    }
+
+    if ($UstVeri.Urun -ne $script:BeklenenPaketUrunu) {
+        $bulgular.Add("BEKLENMEDIK URUN: kurulum paketinde ProductName='$($UstVeri.Urun)', " +
+                      "beklenen '$script:BeklenenPaketUrunu' (installer\AdaPanel.iss -> MyAppName).")
+    }
+
+    if ($BeklenenSurum -and $UstVeri.Surum) {
+        $paketSurumu = $UstVeri.Surum.Split('+')[0].Trim()
+        $esit = $paketSurumu -eq $BeklenenSurum
+        if (-not $esit) {
+            # "0.6.4" ile "0.6.4.0" AYNI surumdur: kaynak uc parcali yazsa da Inno alan sayisini
+            # tamamlayabilir. Duz dize karsilastirmasi burada yanlis alarm uretirdi.
+            $paketNesnesi = $null
+            $beklenenNesnesi = $null
+            if ([version]::TryParse($paketSurumu, [ref]$paketNesnesi) -and
+                [version]::TryParse($BeklenenSurum, [ref]$beklenenNesnesi)) {
+                $esit = ($paketNesnesi.Major -eq $beklenenNesnesi.Major) -and
+                        ($paketNesnesi.Minor -eq $beklenenNesnesi.Minor) -and
+                        ([Math]::Max($paketNesnesi.Build, 0) -eq [Math]::Max($beklenenNesnesi.Build, 0)) -and
+                        ([Math]::Max($paketNesnesi.Revision, 0) -eq [Math]::Max($beklenenNesnesi.Revision, 0))
+            }
+        }
+
+        if (-not $esit) {
+            $bulgular.Add("SURUM DAMGASI TUTMUYOR: pakette '$($UstVeri.Surum)', beklenen '$BeklenenSurum'. " +
+                          "Yanlis damgalanmis paket kurulu panellerde sonsuz guncelleme dongusu yapar.")
+        }
+    }
+
+    # IMZA: paket bugun IMZASIZ uretiliyor (olculdu: Authenticode=NotSigned, depoda signtool adimi
+    # yok). Bu yuzden "imzali olmali" DENMEZ -- yalan bir guvence olurdu. Ama imza VARSA gecerli
+    # olmak zorundadir: imzali bir ikilinin imzasini kaybetmesi, degistirilmis olmasinin en guclu
+    # isaretidir. Sertifika alindiginda burasi "Valid degilse DUR"a cevrilir.
+    if ($UstVeri.ImzaDurumu -eq "Valid") {
+        if ($script:IzinliYayincilar -notcontains $UstVeri.Yayinci -and $UstVeri.Yayinci -ne $script:BeklenenPaketSirketi) {
+            $bulgular.Add("BEKLENMEDIK IMZA SAHIBI: kurulum paketi imzali ama CN='$($UstVeri.Yayinci)'.")
+        }
+    }
+    elseif ($UstVeri.ImzaDurumu -ne "NotSigned") {
+        $bulgular.Add("IMZA GECERSIZ: kurulum paketi imzali gorunuyor ama durum='$($UstVeri.ImzaDurumu)'.")
+    }
+
+    return $bulgular.ToArray()
 }
 
-$sonuc = Invoke-AdaPublishVerification -PublishDir $PublishDir -ManifestPath $ManifestPath
-Write-Host ("Publish icerik denetimi GECTI: {0} dosya denetlendi." -f $sonuc.FileCount)
-if ($sonuc.ManifestPath) {
-    Write-Host ("Manifest: {0}" -f $sonuc.ManifestPath)
+function Invoke-AdaInstallerVerification {
+    <#
+        ISCC'den SONRA calisir: uretilen AdaPanelSetup.exe'nin KENDISINI denetler ve kaydini
+        (boyut + SHA256 + kimlik + imza) manifest'e yazar.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $InstallerPath,
+        [string] $ManifestPath,
+        [string] $BeklenenSurum,
+        [scriptblock] $MetadataProvider
+    )
+
+    if (-not (Test-Path -LiteralPath $InstallerPath)) {
+        throw "Kurulum paketi yok: $InstallerPath"
+    }
+
+    $dosya = Get-Item -LiteralPath $InstallerPath
+    $calistirilabilir = Test-AdaPortableExecutable -Yol $dosya.FullName
+    $ustVeri = $null
+    if ($calistirilabilir) {
+        $ustVeri = if ($MetadataProvider) { & $MetadataProvider $dosya.FullName } else { Get-AdaFileMetadata -Yol $dosya.FullName }
+    }
+
+    $bulgular = @(Get-AdaInstallerFinding `
+        -Calistirilabilir $calistirilabilir `
+        -UstVeri $ustVeri `
+        -Boyut $dosya.Length `
+        -BeklenenSurum $BeklenenSurum)
+
+    # Manifest DENETIM DUSSE BILE yazilir: neyin reddedildigi incelenebilmeli.
+    if ($ManifestPath) {
+        New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | Out-Null
+        [pscustomobject]@{
+            installerPath   = $dosya.FullName
+            generatedAt     = (Get-Date).ToUniversalTime().ToString("o")
+            bytes           = $dosya.Length
+            sha256          = (Get-FileHash -LiteralPath $dosya.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            executable      = $calistirilabilir
+            signatureStatus = $(if ($ustVeri) { $ustVeri.ImzaDurumu } else { $null })
+            publisher       = $(if ($ustVeri) { $ustVeri.Yayinci } else { $null })
+            company         = $(if ($ustVeri) { $ustVeri.Sirket } else { $null })
+            product         = $(if ($ustVeri) { $ustVeri.Urun } else { $null })
+            productVersion  = $(if ($ustVeri) { $ustVeri.Surum } else { $null })
+            findings        = $bulgular
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
+    }
+
+    if ($bulgular.Count -gt 0) {
+        throw "Kurulum paketi denetimi BASARISIZ -- paket YAYINLANMAMALI:`n  " + ($bulgular -join "`n  ")
+    }
+
+    return [pscustomobject]@{
+        InstallerPath = $dosya.FullName
+        Bytes         = $dosya.Length
+        ManifestPath  = $ManifestPath
+    }
+}
+
+if ($DefineFunctionsOnly) { return }
+
+if ([string]::IsNullOrWhiteSpace($PublishDir) -and [string]::IsNullOrWhiteSpace($InstallerPath)) {
+    throw "-PublishDir ya da -InstallerPath zorunludur."
+}
+
+if (-not [string]::IsNullOrWhiteSpace($PublishDir)) {
+    $sonuc = Invoke-AdaPublishVerification -PublishDir $PublishDir -ManifestPath $ManifestPath
+    Write-Host ("Publish icerik denetimi GECTI: {0} dosya denetlendi." -f $sonuc.FileCount)
+    if ($sonuc.ManifestPath) {
+        Write-Host ("Manifest: {0}" -f $sonuc.ManifestPath)
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) {
+    $paket = Invoke-AdaInstallerVerification -InstallerPath $InstallerPath -ManifestPath $ManifestPath -BeklenenSurum $ExpectedVersion
+    Write-Host ("Kurulum paketi denetimi GECTI: {0} ({1:N0} bayt)." -f $paket.InstallerPath, $paket.Bytes)
+    if ($paket.ManifestPath) {
+        Write-Host ("Manifest: {0}" -f $paket.ManifestPath)
+    }
 }

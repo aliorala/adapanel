@@ -57,6 +57,17 @@ if (-not $iscc) { throw "Inno Setup (ISCC.exe) bulunamadi." }
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup derlemesi basarisiz." }
 
 $exe = Join-Path $repo "artifacts\installer\AdaPanelSetup.exe"
+
+# URETILEN PAKETIN KENDISININ DENETIMI -- ISCC'den SONRA olmak ZORUNDA.
+# Yukaridaki publish denetimi ISCC'den ONCE kosar ve yalnizca publish klasorunu tarar; uretilen
+# AdaPanelSetup.exe onun gormedigi tek artefakti. Bu makinedeki PE bulastiricisi diskte duran
+# bitmis exe'leri yeniden bulastiriyordu ve bulasik bir installer ozeti tuttugu icin kurulu TUM
+# panellere SYSTEM olarak dagitilirdi. -Version verildiginde surum damgasi da burada dogrulanir.
+& (Join-Path $repo "scripts\verify-publish-output.ps1") `
+    -InstallerPath $exe `
+    -ExpectedVersion $Version `
+    -ManifestPath (Join-Path $repo "artifacts\installer-manifest.json")
+
 $f = Get-Item $exe
 # ASAGIDAKI SATIRLAR BIR KAYITTIR, DOGRULAMA DEGIL. "Yayindaki dosyayi indir, yereldekiyle hash
 # karsilastir" yontemi kaynaktaki bulasmaya KORDUR: yereldeki dosya zaten bulasiksa iki hash de

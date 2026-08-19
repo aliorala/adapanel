@@ -26,10 +26,21 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
         }
 
         var launcherPath = Path.Combine(updatesDirectory, "apply-update.ps1");
+
+        // IKI AYRI GUNLUK. Onceden calistiricinin kendi izi ile Inno'nun `/LOG=` ciktisi AYNI
+        // DOSYAYDI ve Inno dosyayi SIFIRDAN aciyordu: calistiricinin o ana kadar yazdigi her satir
+        // (surum karsilastirmasi, servis durdurma, hangi adimda ne oldu) YOK OLUYORDU. Olculdu:
+        // apply-update.log'un ilk satiri "Log opened." ve dosyada tek bir [runner] satiri yok.
+        // Kok nedenin aylarca bulunamamasinin dogrudan sebebi buydu -- kanit her kosuda siliniyordu.
+        //
+        // apply-update.log ADI KORUNUR: kullaniciya gosterilen hata metinleri (update.attempt_no_verdict,
+        // panel.update.updateTimeout) sunucuda bu dosyaya bakmasini soyluyor ve kurulum arizasinin
+        // gercek sebebi ("Cannot create file ... being used by another process") Inno'nun gunlugundedir.
         var logPath = Path.Combine(updatesDirectory, "apply-update.log");
+        var runnerLogPath = Path.Combine(updatesDirectory, "update-runner.log");
         await File.WriteAllTextAsync(
             launcherPath,
-            BuildLauncherScript(resolvedPackagePath, packageSha256, logPath),
+            BuildLauncherScript(resolvedPackagePath, packageSha256, logPath, runnerLogPath),
             new UTF8Encoding(false),
             cancellationToken);
 
@@ -62,20 +73,28 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
     internal static string BuildLauncherScript(
         string packagePath,
         string packageSha256,
-        string logPath)
+        string logPath,
+        string runnerLogPath)
     {
         return $$"""
             $ErrorActionPreference = 'Stop'
             $packagePath = '{{EscapePowerShellLiteral(packagePath)}}'
             $expectedHash = '{{EscapePowerShellLiteral(packageSha256)}}'
             $logPath = '{{EscapePowerShellLiteral(logPath)}}'
+            $runnerLogPath = '{{EscapePowerShellLiteral(runnerLogPath)}}'
             $taskName = '{{TaskName}}'
             $serviceName = '{{ServiceName}}'
 
+            # CALISTIRICI KENDI DOSYASINA YAZAR. $logPath'i Inno `/LOG=` ile SIFIRDAN acar; oraya
+            # yazilan her [runner] satiri kurulum basladigi anda silinirdi.
             function Write-UpdateLog([string]$message) {
               $timestamp = (Get-Date).ToString('o')
-              Add-Content -LiteralPath $logPath -Value "$timestamp [runner] $message" -ErrorAction SilentlyContinue
+              Add-Content -LiteralPath $runnerLogPath -Value "$timestamp [runner] $message" -ErrorAction SilentlyContinue
             }
+
+            # Her deneme TEMIZ bir izle baslar: dosya surekli buyumesin ve iki denemenin satirlari
+            # birbirine karismasin. Onceki denemenin HUKMU zaten last-attempt.json'da duruyor.
+            Set-Content -LiteralPath $runnerLogPath -Value "$((Get-Date).ToString('o')) [runner] ---- yeni guncelleme denemesi ----" -Encoding UTF8 -ErrorAction SilentlyContinue
 
             # DURUM DOSYASI: panel kurulum boyunca kapali oldugu icin ilerlemeyi kendisi bildiremez.
             # Bunun yerine calistirici her adimda buraya yaziyor; panel geri donunce dosyayi okuyup
@@ -85,8 +104,54 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
             # baslatiliyor" diyerek 15 dakika bekliyordu, cunku YALNIZCA surum degisti mi diye bakiyor,
             # denemenin sonucunu hic sormuyordu. Kullaniciya ne hata ne sonuc gorunuyordu.
             $statePath = Join-Path (Split-Path -Parent $logPath) 'last-attempt.json'
+
+            # SAHIPLIK KURALI -- iki yazar, tek dosya, ve ONCEDEN HIC SIRA YOKTU.
+            #
+            # OLCULEN OLAY: kurulum panelin servisini ONCE baslatir (install-service.ps1 kurulumun
+            # icinden cagriliyor), Inno ise ondan ~16 saniye SONRA cikar. O aralikta yeni panel
+            # ayaga kalkip "calisan surum = hedef surum" olcumunu yapiyor ve last-attempt.json'a
+            # 'succeeded' yaziyor. Calistirici saniyeler sonra kendi (daha az bilgili) hukmunu
+            # UZERINE yaziyordu: kullanici BASARILI bir guncellemede "Kurulum tamamlanamadi." goruyordu.
+            # Panel de duzeltemiyordu, cunku bekleyen kayit o sirada zaten silinmis oluyor.
+            #
+            # KURAL: panel kendi OLCUMUYLE karar verdiyse (isDecidedByPanel) calistirici o hukmu
+            # EZMEZ. Calistiricinin iddia edebilecegi iki sey vardir -- "kurulum olmadi" ve "servis
+            # kalkmadi"; isteklere YENI surumle cevap veren bir panelin varligi ikisini de curutur.
+            #
+            # TEK ISTISNA: hukmun EKSIK kalan parcasini tamamlamak. Panel karar verdigi anda kurulum
+            # cikis kodunu HENUZ kimse bilmiyor (o yuzden yapisal olarak hep null kaliyordu); onu
+            # yalnizca calistirici bilir. Faz/sebep DEGISMEZ, yalnizca bos olan cikis kodu doldurulur.
             function Write-UpdateState([string]$phase, [string]$errorText, $exitCode) {
               try {
+                $panelHukmu = $null
+                if (Test-Path -LiteralPath $statePath) {
+                  try { $panelHukmu = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop | ConvertFrom-Json }
+                  catch { $panelHukmu = $null }
+                }
+
+                if ($panelHukmu -and $panelHukmu.isDecidedByPanel) {
+                  if (($null -ne $exitCode) -and ($null -eq $panelHukmu.installerExitCode)) {
+                    # Alanlar TEK TEK yeniden kurulur; panelin nesnesi oldugu gibi yeniden
+                    # serilestirilmez. Sebep: ConvertFrom-Json 'updatedAtUtc' alanini DateTime'a
+                    # cevirir, ConvertTo-Json onu YEREL SAAT DILIMI ekiyle geri yazar ve panel
+                    # tarafinda UTC olmayan bir zaman damgasi olusur (sure hesaplari kayar).
+                    $tamamlanmis = [ordered]@{
+                      phase = "$($panelHukmu.phase)"
+                      error = "$($panelHukmu.error)"
+                      errorKey = "$($panelHukmu.errorKey)"
+                      installerExitCode = $exitCode
+                      isDecidedByPanel = $true
+                      updatedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                    }
+                    ($tamamlanmis | ConvertTo-Json -Compress) | Set-Content -LiteralPath $statePath -Encoding UTF8 -ErrorAction SilentlyContinue
+                    Write-UpdateLog "Panel hukmu ('$($panelHukmu.phase)') KORUNDU; yalnizca kurulum cikis kodu ($exitCode) eklendi."
+                  }
+                  else {
+                    Write-UpdateLog "Panel hukmu ('$($panelHukmu.phase)') KORUNDU; '$phase' yazilmadi."
+                  }
+                  return
+                }
+
                 $state = [ordered]@{
                   phase = $phase
                   error = $errorText

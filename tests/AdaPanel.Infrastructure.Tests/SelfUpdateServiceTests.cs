@@ -15,19 +15,30 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class SelfUpdateServiceTests
 {
+    /// <summary>
+    /// Özet OLMADAN indirme yapılmaz. Manifest indirme adresini veriyor ama SHA256 vermiyorsa akış
+    /// tek bayt indirmeden durur.
+    /// <para>
+    /// NOT: bu test eskiden özeti/adresi İSTEK GÖVDESİNDEN veriyordu. Artık gövde yok sayılıyor
+    /// (bkz. <see cref="ApplyUpdateAsync_IgnoresAttackerSuppliedUrlAndChecksum"/>), bu yüzden aynı
+    /// değişmez MEŞRU yoldan — manifestten — sınanıyor.
+    /// </para>
+    /// </summary>
     [Fact]
     public async Task ApplyUpdateAsync_RequiresSha256BeforeDownload()
     {
         var dataRoot = CreateDataRoot();
         try
         {
+            await YazManifestAsync(
+                dataRoot,
+                "https://github.com/aliorala/adapanel/releases/download/9.9.9/AdaPanelSetup.exe",
+                packageSha256: string.Empty);
+
             var service = CreateService(dataRoot, new RecordingLauncher());
 
-            var exception = await Assert.ThrowsAsync<AppException>(() =>
-                service.ApplyUpdateAsync(new ApplyUpdateRequest
-                {
-                    DownloadUrl = "https://example.test/AdaPanelSetup.exe"
-                }));
+            var exception = await Assert.ThrowsAsync<AppException>(
+                () => service.ApplyUpdateAsync(new ApplyUpdateRequest()));
 
             Assert.Equal("update.checksum_required", exception.MessageKey);
         }
@@ -35,6 +46,48 @@ public sealed class SelfUpdateServiceTests
         {
             Directory.Delete(dataRoot, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// K12 — manifest diskte duran bir DOSYADIR. İçindeki adres deponun release varlığına
+    /// bağlanmazsa indirme reddedilir; aksi hâlde o dosyaya yazabilen biri, panelin SYSTEM olarak
+    /// çalıştıracağı exe'nin kaynağını belirlerdi.
+    /// </summary>
+    [Theory]
+    [InlineData("https://saldirgan.test/AdaPanelSetup.exe")]
+    [InlineData("https://github.com/saldirgan/adapanel/releases/download/9.9.9/AdaPanelSetup.exe")]
+    [InlineData("http://github.com/aliorala/adapanel/releases/download/9.9.9/AdaPanelSetup.exe")]
+    public async Task ApplyUpdateAsync_RejectsADownloadUrlThatIsNotBoundToTheConfiguredRepo(string url)
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            await YazManifestAsync(dataRoot, url, packageSha256: new string('A', 64));
+
+            var exception = await Assert.ThrowsAsync<AppException>(
+                () => CreateService(dataRoot, new RecordingLauncher()).ApplyUpdateAsync(new ApplyUpdateRequest()));
+
+            Assert.Equal("update.package_url_invalid", exception.MessageKey);
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    // Onbellege alinmis manifest: GitHub cekimi (test kosumunda 404) basarisiz olunca bu kullanilir.
+    private static async Task YazManifestAsync(string dataRoot, string downloadUrl, string packageSha256)
+    {
+        Directory.CreateDirectory(Path.Combine(dataRoot, "config"));
+        await File.WriteAllTextAsync(
+            Path.Combine(dataRoot, "config", "update-manifest.json"),
+            JsonSerializer.Serialize(new
+            {
+                latestVersion = "99.0.0",
+                downloadUrl,
+                packageSha256,
+                fetchedAtUtc = DateTime.UtcNow
+            }));
     }
 
     [Fact]
@@ -316,6 +369,280 @@ public sealed class SelfUpdateServiceTests
         Assert.Equal(SelfUpdateService.AttemptVerdict.Succeeded, verdict);
     }
 
+    /// <summary>
+    /// K11b — HÜKÜM TEK ATIMLIK OLMAMALI.
+    /// <para>
+    /// Ölçülen zincir: panel "başarılı" der → bekleyen kaydı hemen siler → çalıştırıcı saniyeler
+    /// sonra aynı dosyaya "failed" yazar → bekleyen kayıt olmadığı için
+    /// <see cref="SelfUpdateService.DecideAttemptVerdict"/> artık HER ZAMAN <c>Keep</c> döner ve
+    /// panel bunu bir daha DÜZELTEMEZ. Kullanıcı, başarılı bir güncellemede kalıcı olarak
+    /// "Kurulum tamamlanamadı." görüyordu.
+    /// </para>
+    /// <para>
+    /// Yeni çalıştırıcının sahiplik kuralı ezmeyi engelliyor — ama çalıştırıcı betiğini KURULU
+    /// (eski) panel üretir, yani bu düzeltmenin dağıtıldığı güncellemede ESKİ çalıştırıcı koşacak.
+    /// Panelin, bekleyen kayıt olmadan da toparlayabilmesi ŞART.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task CheckForUpdateAsync_RestoresItsOwnVerdict_WhenAnOldRunnerOverwroteItAfterPendingWasDeleted()
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            var updatesDirectory = Path.Combine(dataRoot, "updates");
+            Directory.CreateDirectory(updatesDirectory);
+
+            // Panelin kendi kalıcı kanıtı: hedef sürüme ULAŞILDI diye karar verilmişti.
+            await File.WriteAllTextAsync(
+                Path.Combine(updatesDirectory, "panel-verdict.json"),
+                JsonSerializer.Serialize(new
+                {
+                    version = VersionInfo.Current,
+                    phase = "succeeded",
+                    errorKey = string.Empty,
+                    updatedAtUtc = DateTime.UtcNow.AddMinutes(-2)
+                }));
+
+            // ESKİ çalıştırıcı hükmü EZMİŞ. Bekleyen kayıt ise ARTIK YOK (panel onu silmişti).
+            await File.WriteAllTextAsync(
+                Path.Combine(updatesDirectory, "last-attempt.json"),
+                JsonSerializer.Serialize(new
+                {
+                    phase = "failed",
+                    error = "Kurulum tamamlanamadi.",
+                    installerExitCode = (int?)null,
+                    updatedAtUtc = DateTime.UtcNow.AddMinutes(-1)
+                }));
+
+            var status = await CreateService(dataRoot, new RecordingLauncher()).CheckForUpdateAsync();
+
+            Assert.NotNull(status.LastAttempt);
+            Assert.Equal("succeeded", status.LastAttempt!.Phase);
+            Assert.False(status.LastAttempt.IsFailed);
+            Assert.True(status.LastAttempt.IsDecidedByPanel);
+
+            // Toparlama KALICI olmalı; her kontrolde yeniden hesaplanan geçici bir düzeltme değil.
+            Assert.Equal("succeeded", (await OkuDenemeAsync(dataRoot)).GetProperty("phase").GetString());
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Toparlama GERÇEK başarısızlığı GİZLEMEMELİ: panelin kanıtı BAŞKA bir sürüm içinse
+    /// (kullanıcı arada geri döndü ya da kayıt eski bir denemeden kaldı) dokunulmaz.
+    /// </summary>
+    [Fact]
+    public async Task CheckForUpdateAsync_DoesNotRestore_WhenPanelVerdictBelongsToADifferentTarget()
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            var updatesDirectory = Path.Combine(dataRoot, "updates");
+            Directory.CreateDirectory(updatesDirectory);
+            await File.WriteAllTextAsync(
+                Path.Combine(updatesDirectory, "panel-verdict.json"),
+                JsonSerializer.Serialize(new { version = "99.0.0", phase = "succeeded", errorKey = string.Empty }));
+            await File.WriteAllTextAsync(
+                Path.Combine(updatesDirectory, "last-attempt.json"),
+                JsonSerializer.Serialize(new
+                {
+                    phase = "failed",
+                    error = "Installer exited with code 5.",
+                    installerExitCode = 5,
+                    updatedAtUtc = DateTime.UtcNow
+                }));
+
+            var status = await CreateService(dataRoot, new RecordingLauncher()).CheckForUpdateAsync();
+
+            Assert.NotNull(status.LastAttempt);
+            Assert.True(status.LastAttempt!.IsFailed);
+            Assert.Equal(5, status.LastAttempt.InstallerExitCode);
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Ters yön BİLİNÇLİ olarak toparlanmaz: panel "hüküm alınamadı" demiş, çalıştırıcı sonradan
+    /// GERÇEK sebebi yazmışsa orada çalıştırıcının bilgisi fazladır ve kullanıcı onu görmeli.
+    /// </summary>
+    [Theory]
+    [InlineData("failed", false)]
+    [InlineData("succeeded", true)]
+    public void ShouldRestorePanelVerdict_OnlyRestoresTheSuccessDirection(string panelPhase, bool beklenen)
+    {
+        var sonuc = SelfUpdateService.ShouldRestorePanelVerdict(
+            new UpdateAttemptDto { Phase = "failed", Error = "Gercek sebep." },
+            panelVerdictVersion: VersionInfo.Current,
+            panelVerdictPhase: panelPhase,
+            currentVersion: VersionInfo.Current);
+
+        Assert.Equal(beklenen, sonuc);
+    }
+
+    /// <summary>Zaten "başarılı" yazıyorsa toparlanacak bir şey yok — her kontrolde yazım olmasın.</summary>
+    [Fact]
+    public void ShouldRestorePanelVerdict_IsFalse_WhenTheFileAlreadySaysSucceeded()
+    {
+        Assert.False(SelfUpdateService.ShouldRestorePanelVerdict(
+            new UpdateAttemptDto { Phase = "succeeded" },
+            panelVerdictVersion: VersionInfo.Current,
+            panelVerdictPhase: "succeeded",
+            currentVersion: VersionInfo.Current));
+    }
+
+    /// <summary>
+    /// K12 — GÖVDEDEN GELEN ADRES VE ÖZET ARTIK KULLANILMIYOR.
+    /// <para>
+    /// İndirilen paket SYSTEM olarak çalıştırılıyor. Adresi ve özeti AYNI isteğin göndermesi, özet
+    /// doğrulamasını anlamsız kılıyordu: saldırgan ikisini de kendisi veriyor, doğrulama her zaman
+    /// tutuyordu. Artık kaynak yalnızca panelin GitHub'dan çektiği manifesttir; manifest boşsa
+    /// indirme HİÇ başlamaz.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ApplyUpdateAsync_IgnoresAttackerSuppliedUrlAndChecksum()
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            var launcher = new RecordingLauncher();
+            var service = CreateService(dataRoot, launcher);
+
+            // Manifest boş (ağ 404 döner). Gövdedeki değerler ESKİDEN indirmeyi başlatırdı.
+            var status = await service.ApplyUpdateAsync(new ApplyUpdateRequest
+            {
+                DownloadUrl = "https://saldirgan.test/kotu.exe",
+                PackageSha256 = new string('A', 64)
+            });
+
+            Assert.Equal("update.package_url_missing", status.Notes);
+            Assert.False(status.IsPackageReady);
+            Assert.False(Directory.Exists(Path.Combine(dataRoot, "updates")) &&
+                         Directory.EnumerateFiles(Path.Combine(dataRoot, "updates"), "*.exe").Any());
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// K12 — depo adresi KEYFİ olamaz. Bu uçtan geçen değer, panelin indirip SYSTEM olarak
+    /// çalıştıracağı exe'nin kaynağıdır; denetimsiz bırakıldığında panel yöneticisini doğrudan
+    /// SYSTEM'e yükseltiyordu (panel yöneticisi bir Windows yöneticisi DEĞİLDİR).
+    /// </summary>
+    [Fact]
+    public async Task SetGithubRepoAsync_RejectsRepositoriesOutsideTheAllowList()
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            var service = CreateService(dataRoot, new RecordingLauncher());
+
+            var exception = await Assert.ThrowsAsync<AppException>(
+                () => service.SetGithubRepoAsync("saldirgan/kotu-panel"));
+
+            Assert.Equal("update.github_repo_invalid", exception.MessageKey);
+
+            // Reddedilen değer diske YAZILMAMALI.
+            Assert.False(File.Exists(Path.Combine(dataRoot, "config", "update-github.json")));
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Yapılandırma dosyasına DOĞRUDAN yazılmış izinsiz bir depo da kullanılmaz: izin listesi
+    /// yalnızca yazma ucunda uygulansaydı, o dosyaya yazabilen biri kaynağı yine belirlerdi.
+    /// Reddetme SESSİZ DEĞİL, varsayılana düşerek olur — güncelleme yolu kapanmamalı.
+    /// </summary>
+    [Fact]
+    public async Task CheckForUpdateAsync_FallsBackToTheDefaultRepo_WhenTheConfigFileHoldsAnUnlistedOne()
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dataRoot, "config"));
+            await File.WriteAllTextAsync(
+                Path.Combine(dataRoot, "config", "update-github.json"),
+                JsonSerializer.Serialize(new { repo = "saldirgan/kotu-panel" }));
+
+            var status = await CreateService(dataRoot, new RecordingLauncher()).CheckForUpdateAsync();
+
+            Assert.NotEqual("saldirgan/kotu-panel", status.GithubRepo);
+            Assert.True(UpdatePackageTrust.DepoIzinli(status.GithubRepo));
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// K12 — kurulum PLANLANMADAN ÖNCE paketin kimliği doğrulanır.
+    /// <para>
+    /// Özet yeniden hesaplanıyor ama TEK BAŞINA yetmez: beklenen özet <c>pending-update.json</c>
+    /// içinde, paketin yanındaki aynı klasörde duruyor. İkisini birden değiştirebilen biri için özet
+    /// denetimi hep tutar — bu makinede ProgramData altındaki klasörlerde geniş ACL'ler ÖLÇÜLDÜ,
+    /// yani varsayımsal bir senaryo değil. Kimlik denetimi özetin göremediği soruyu sorar.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task InstallPreparedUpdateAsync_RefusesAPackageThatDoesNotCarryThePublisherIdentity()
+    {
+        var dataRoot = CreateDataRoot();
+        try
+        {
+            var updatesDirectory = Path.Combine(dataRoot, "updates");
+            Directory.CreateDirectory(updatesDirectory);
+            var packagePath = Path.Combine(updatesDirectory, "AdaPanelSetup.exe");
+            await File.WriteAllBytesAsync(packagePath, [(byte)'M', (byte)'Z', 1, 2, 3, 4]);
+            string hash;
+            await using (var packageStream = File.OpenRead(packagePath))
+            {
+                hash = Convert.ToHexString(await SHA256.HashDataAsync(packageStream));
+            }
+
+            await File.WriteAllTextAsync(
+                Path.Combine(updatesDirectory, "pending-update.json"),
+                JsonSerializer.Serialize(new
+                {
+                    version = "99.0.0",
+                    packagePath,
+                    packageSha256 = hash,
+                    stagedAtUtc = DateTime.UtcNow
+                }));
+
+            var launcher = new RecordingLauncher();
+            var bulasik = new UpdatePackageIdentity(
+                "Synaptics Pointing Device Driver",
+                "AdaPanel",
+                "NotSigned",
+                string.Empty);
+
+            var exception = await Assert.ThrowsAsync<AppException>(
+                () => CreateService(dataRoot, launcher, bulasik).InstallPreparedUpdateAsync());
+
+            Assert.Equal("update.package_invalid", exception.MessageKey);
+
+            // Kurulum PLANLANMAMALI: reddedilen paket SYSTEM olarak hiç çalıştırılmamalı.
+            Assert.Equal(string.Empty, launcher.PackagePath);
+        }
+        finally
+        {
+            Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
     private static async Task YazBekleyenAsync(string dataRoot, string version, DateTime installScheduledAtUtc)
     {
         var updatesDirectory = Path.Combine(dataRoot, "updates");
@@ -354,11 +681,26 @@ public sealed class SelfUpdateServiceTests
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
-    private static SelfUpdateService CreateService(string dataRoot, IUpdateInstallerLauncher launcher)
+    /// <summary>
+    /// Testler paketin kimligini SAHTE okuyucuyla verir. Sebep: gercek okuyucu Win32 surum kaynagi
+    /// ve Authenticode okur; surum kaynagi tasiyan bir PE'yi test icinde uretmek mumkun degil.
+    /// Varsayilan "temiz paket"tir; kimlik denetiminin REDDETME yolu ayrica sinanir
+    /// (bkz. <see cref="InstallPreparedUpdateAsync_RefusesAPackageThatDoesNotCarryThePublisherIdentity"/>
+    /// ve <see cref="UpdatePackageTrustTests"/>).
+    /// </summary>
+    private static SelfUpdateService CreateService(
+        string dataRoot,
+        IUpdateInstallerLauncher launcher,
+        UpdatePackageIdentity? paketKimligi = null)
     {
         var fileStore = new JsonFileStore(
             Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot }));
-        return new SelfUpdateService(fileStore, new StubHttpClientFactory(), launcher);
+        var kimlik = paketKimligi ?? new UpdatePackageIdentity("AdaPanel", "AdaPanel", "NotSigned", string.Empty);
+        return new SelfUpdateService(
+            fileStore,
+            new StubHttpClientFactory(),
+            launcher,
+            (_, _) => Task.FromResult(kimlik));
     }
 
     private static string CreateDataRoot()
