@@ -16,23 +16,58 @@ public sealed record DetectedComponent(
     string UninstallCommand,
     bool DeleteInstallDirectory);
 
+/// <summary>
+/// Y2: Bir keşif turunun SONUCU + o turun NE KADAR ÖLÇEBİLDİĞİ.
+/// "Kurulu değil" hükmü yalnız ölçümün eksiksiz olduğu durumda verilebilir; aksi halde panel
+/// <c>InstalledComponents</c> kaydını (içinde DPAPI korumalı DB root parolası vardır) SİLEMEZ.
+/// </summary>
+/// <param name="Detections">Gerçekten bulunan bileşenler.</param>
+/// <param name="SnapshotFailures">Okunamayan ölçüm kaynakları (registry görünümü, servis kovanı, PATH, IIS config).</param>
+/// <param name="FailedComponentIds">Eşleştirmesi istisna atan bileşenler; bunların yokluğu kanıt değildir.</param>
+public sealed record ComponentDiscoveryResult(
+    IReadOnlyCollection<DetectedComponent> Detections,
+    IReadOnlyCollection<string> SnapshotFailures,
+    IReadOnlyCollection<string> FailedComponentIds)
+{
+    /// <summary>
+    /// Bu bileşenin listede OLMAMASI "kurulu değil" olarak yorumlanabilir mi?
+    /// Ölçüm kaynaklarından biri bile okunamadıysa HAYIR: eksik ölçüm, yokluk kanıtı değildir.
+    /// </summary>
+    public bool CanTrustAbsence(string componentId) =>
+        SnapshotFailures.Count == 0 &&
+        !FailedComponentIds.Contains(componentId, StringComparer.OrdinalIgnoreCase);
+}
+
 public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscoveryService> logger)
 {
     private const string UninstallRegistryPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
     private const string ServicesRegistryPath = @"SYSTEM\CurrentControlSet\Services";
     private const string AppPathsRegistryPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths";
 
-    public Task<IReadOnlyCollection<DetectedComponent>> DiscoverAsync(
+    /// <summary>
+    /// Y2: Keşif sonucu ARTIK "ölçemedim" ile "kurulu değil"i ayırır.
+    ///
+    /// Eskiden bütün okuyucular (registry, servis listesi, PATH, applicationHost.config) hataya karşı
+    /// BOŞ liste dönüyordu; çağıran bunu "kurulu değil" sanıp <c>InstalledComponents</c> kaydını
+    /// SİLİYORDU — kayıtta DPAPI ile korunan veritabanı root parolası, admin kullanıcı ve port vardı ve
+    /// yeni keşifte GERİ GELMİYORDU. Artık her başarısız ölçüm kaydedilir ve
+    /// <see cref="ComponentDiscoveryResult.CanTrustAbsence"/> "yokluğuna güvenilebilir mi" sorusunu
+    /// açıkça cevaplar.
+    /// </summary>
+    public Task<ComponentDiscoveryResult> DiscoverAsync(
         IReadOnlyCollection<ComponentManifestItemDto> manifest,
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows())
         {
-            return Task.FromResult<IReadOnlyCollection<DetectedComponent>>([]);
+            // Windows dışında hiçbir ölçüm YAPILAMAZ; bu "kurulu değil" DEĞİLDİR.
+            return Task.FromResult(new ComponentDiscoveryResult([], ["platform"], []));
         }
 
-        var snapshot = BuildSnapshot(cancellationToken);
+        var snapshotFailures = new List<string>();
+        var snapshot = BuildSnapshot(snapshotFailures, cancellationToken);
         var detected = new List<DetectedComponent>();
+        var failedComponentIds = new List<string>();
 
         foreach (var component in manifest)
         {
@@ -48,6 +83,8 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
             }
             catch (Exception exception)
             {
+                // Bu bileşen ÖLÇÜLEMEDİ; yokluğu kanıt sayılamaz (kaydı silinmemeli).
+                failedComponentIds.Add(component.Id);
                 logger.LogWarning(
                     exception,
                     "Installed component discovery failed for {ComponentId}.",
@@ -55,19 +92,26 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
             }
         }
 
-        return Task.FromResult<IReadOnlyCollection<DetectedComponent>>(detected);
+        if (snapshotFailures.Count > 0)
+        {
+            logger.LogWarning(
+                "Component discovery snapshot is incomplete ({Failures}); installed component records will NOT be removed.",
+                string.Join(", ", snapshotFailures));
+        }
+
+        return Task.FromResult(new ComponentDiscoveryResult(detected, snapshotFailures, failedComponentIds));
     }
 
-    private static DiscoverySnapshot BuildSnapshot(CancellationToken cancellationToken)
+    private static DiscoverySnapshot BuildSnapshot(ICollection<string> failures, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         return new DiscoverySnapshot(
-            ReadUninstallEntries(),
-            ReadServices(),
-            ReadAppPaths(),
-            ReadPathDirectories(),
-            ReadIisConfiguration());
+            ReadUninstallEntries(failures),
+            ReadServices(failures),
+            ReadAppPaths(failures),
+            ReadPathDirectories(failures),
+            ReadIisConfiguration(failures));
     }
 
     private static DetectedComponent? DetectComponent(
@@ -618,7 +662,7 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
         Func<UninstallEntry, bool> predicate)
         => snapshot.UninstallEntries.FirstOrDefault(predicate);
 
-    private static IReadOnlyCollection<UninstallEntry> ReadUninstallEntries()
+    private static IReadOnlyCollection<UninstallEntry> ReadUninstallEntries(ICollection<string> failures)
     {
         var results = new List<UninstallEntry>();
         foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
@@ -653,9 +697,11 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
                             ReadRegistryString(entryKey, "UninstallString")));
                     }
                 }
-                catch
+                catch (Exception)
                 {
-                    // Registry views can be unavailable on older Windows editions.
+                    // Y2: Registry views can be unavailable on older Windows editions. Bu bir ÖLÇÜM
+                    // BAŞARISIZLIĞIDIR; sessizce boş liste dönmek "kurulu değil" anlamına gelemez.
+                    failures.Add($"uninstall:{hive}/{view}");
                 }
             }
         }
@@ -663,7 +709,7 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
         return results;
     }
 
-    private static IReadOnlyCollection<ServiceEntry> ReadServices()
+    private static IReadOnlyCollection<ServiceEntry> ReadServices(ICollection<string> failures)
     {
         var results = new List<ServiceEntry>();
         try
@@ -671,6 +717,8 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
             using var servicesKey = Registry.LocalMachine.OpenSubKey(ServicesRegistryPath);
             if (servicesKey is null)
             {
+                // Servis kovanı hiç açılamadı: ölçüm YOK, "servis yok" DEĞİL.
+                failures.Add("services:key-missing");
                 return results;
             }
 
@@ -690,15 +738,16 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
                     executablePath));
             }
         }
-        catch
+        catch (Exception)
         {
-            // A restricted service account may not be able to enumerate every service.
+            // Y2: A restricted service account may not be able to enumerate every service.
+            failures.Add("services:enumerate");
         }
 
         return results;
     }
 
-    private static IReadOnlyDictionary<string, string> ReadAppPaths()
+    private static IReadOnlyDictionary<string, string> ReadAppPaths(ICollection<string> failures)
     {
         var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
@@ -724,9 +773,10 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
                         }
                     }
                 }
-                catch
+                catch (Exception)
                 {
-                    // Continue with the other registry view.
+                    // Y2: Continue with the other registry view — ama bu görünüm ÖLÇÜLEMEDİ.
+                    failures.Add($"appPaths:{hive}/{view}");
                 }
             }
         }
@@ -734,15 +784,26 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
         return results;
     }
 
-    private static IReadOnlyCollection<string> ReadPathDirectories()
-        => (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(ExpandPath)
-            .Where(Directory.Exists)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+    private static IReadOnlyCollection<string> ReadPathDirectories(ICollection<string> failures)
+    {
+        try
+        {
+            return (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(ExpandPath)
+                .Where(Directory.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception)
+        {
+            // Y2: PATH okunamadı (bozuk girdi, erişim hatası) — ölçüm yok.
+            failures.Add("path");
+            return [];
+        }
+    }
 
-    private static IReadOnlyCollection<string> ReadIisConfiguration()
+    private static IReadOnlyCollection<string> ReadIisConfiguration(ICollection<string> failures)
     {
         var configurationPath = Path.Combine(
             GetWindowsDirectory(),
@@ -772,8 +833,10 @@ public sealed partial class ComponentDiscoveryService(ILogger<ComponentDiscovery
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
-        catch
+        catch (Exception)
         {
+            // Y2: applicationHost.config VAR ama okunamadı — "IIS'te hiçbir şey yok" DEMEK DEĞİL.
+            failures.Add("iis:applicationHost");
             return [];
         }
     }

@@ -525,6 +525,12 @@ static async Task EnsureDatabaseAsync(WebApplication app, string dataRoot)
         // KURTARMA AĞI: db açılamadıysa (ör. ACL herhangi bir sebeple bozuksa) önce 'data' klasörünün erişimini
         // GARANTİ et (ACL sıfırla), sonra yeniden dene; yine olmazsa en azından şemayı oluştur. Böylece panel
         // db yüzünden ASLA kilitlenmez — kullanıcı elle uğraşmak zorunda kalmaz.
+        //
+        // K5: Sıfırlama (icacls /reset) mirası geri açıp K1 sertleştirmesini İPTAL EDER; eskiden açıklık BİR
+        // SONRAKİ SERVİS BAŞLANGICINA kadar sürüyordu (adapanel.db + key-*.xml tüm kiracılara açık kalıyordu).
+        // Yeniden kapatma artık EnsureWritableAsync'in KENDİ İÇİNDE, aynı çağrıda yapılıyor
+        // (DataRootHardeningService.RecoveryStepOrder son adımı "harden") — buradan ayrıca çağrılmasına gerek
+        // yok ve unutulamaz.
         logger.LogError(exception, "Migration başarısız; veri klasörü erişimi garanti edilip yeniden denenecek.");
         await AdaPanel.Infrastructure.Bootstrap.DataRootHardeningService.EnsureWritableAsync(dataRoot, logger);
         try

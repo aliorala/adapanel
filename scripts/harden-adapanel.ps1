@@ -8,10 +8,13 @@
     calistirilir. Tum islemler IDEMPOTENT'tir: tekrar tekrar calistirmak guvenlidir.
 
     Uygulanan duzeltmeler:
-      K1  - C:\ProgramData\AdaPanel ACL'lerini kilitle (hassas dosyalari BUILTIN\Users'tan koru)
-      K3  - Paylasimli PHP php.ini sertlestir (OS komut fonksiyonlarini kapat + surum gizle)
-      B2  - Yinelenen (duplicate) Windows Guvenlik Duvari kurallarini temizle
-      B6  - Web (80/443) ve DNS (53) icin acik guvenlik duvari kurallari
+      K1      - C:\ProgramData\AdaPanel ACL'lerini kilitle (hassas dosyalari BUILTIN\Users'tan koru);
+                DACL SIFIRDAN kurulur, miras kopyalanmaz (K4: eskiden kokteki Everyone=FullControl muhurleniyordu)
+      K2-DATA - runtimes icindeki veritabani veri dizinleri + posta sunucusu agacini kiraciya kapat
+                (php/nodejs/python DOKUNULMAZ: IIS ve zamanlanmis gorevler RX'e muhtac)
+      K3      - Paylasimli PHP php.ini sertlestir (OS komut fonksiyonlarini kapat + surum gizle)
+      B2      - Yinelenen (duplicate) Windows Guvenlik Duvari kurallarini temizle
+      B6      - Web (80/443) her zaman; DNS (53) YALNIZ rol kuruluysa + ozyineleme KAPATILIR (Y10)
       B7  - phpMyAdmin/Adminer PUBLIC portlarini (8896/8897) KAPAT (artik panel proxy arkasinda)
       B8  - (opt-in -HardenManagementPorts) SMB(445)/RPC(135)/NetBIOS/WinRM(5985) gelen baglantilarini engelle
       RDP - (opt-in -RdpAllowFrom <IP>) RDP(3389) erisimini sadece belirtilen kaynak IP'ye kisitla
@@ -77,7 +80,9 @@ $root = "C:\ProgramData\AdaPanel"
 # Cozum (panel servisiyle AYNI .NET yontemi): yalniz HASSAS alt klasorleri (data/keys/certs/config/
 # backups/mail-certs) kilitle. icacls DEGIL .NET ACL kullanilir: izin "bu klasor + alt ogeler"e KESIN
 # uygulanir (icacls (OI)(CI)F bazi Server'larda inherit-only uygulayip SYSTEM erisimini -> SQLite ve
-# DataProtection'i kiriyordu). KOK (root) ve runtimes'a DOKUNULMAZ (runtimes IIS icin RX kalmali).
+# DataProtection'i kiriyordu). KOK (root) klasore DOKUNULMAZ.
+# runtimes TOPLU olarak kapatilmaz (IIS icin RX kalmali) ama icindeki HASSAS yollar K2'de tek tek
+# kapatilir -- asagiya bak.
 
 Write-Host ""
 Write-Host "[K1] C:\ProgramData\AdaPanel ACL kilidi..." -ForegroundColor Yellow
@@ -103,16 +108,17 @@ else {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
         try {
-            $acl = Get-Acl -LiteralPath $dir
-            # Mirasi kapat ama mevcut ACE'leri acik kopya olarak KORU (CREATOR OWNER bozulmaz).
-            $acl.SetAccessRuleProtection($true, $true)
+            # K4 DUZELTMESI: DACL SIFIRDAN kurulur. Eskiden SetAccessRuleProtection($true, $true) ile
+            # miras ACIK KOPYA olarak korunuyordu; kokte ne varsa (bu makinede OLCULDU:
+            # Everyone = FullControl) hassas klasore KALICI explicit ACE olarak gomuluyor ve miras
+            # kapali oldugu icin kok duzeltilse bile BIR DAHA DUSMUYORDU. Simdi listede olmayan
+            # hicbir hesap hayatta kalmaz.
+            $acl = New-Object System.Security.AccessControl.DirectorySecurity
+            $acl.SetAccessRuleProtection($true, $false)
             # SYSTEM + Administrators: bu KLASOR + alt ogelere tam yetki (PropagationFlags.None = nesnenin
             # KENDISINE de uygulanir -> SYSTEM db/anahtar YAZABILIR; icacls inherit-only belirsizligi yok).
             $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, $fullCtrl, $inherit, $noProp, $allow)))
             $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid,  $fullCtrl, $inherit, $noProp, $allow)))
-            # Tenant erisimini KALDIR (Users + Authenticated Users) -> db/anahtar/parola sizmaz.
-            [void]$acl.PurgeAccessRules($usersSid)
-            [void]$acl.PurgeAccessRules($authSid)
             Set-Acl -LiteralPath $dir -AclObject $acl
             Write-Host "[K1]   Kilitlendi: $dir" -ForegroundColor Green
         }
@@ -143,6 +149,85 @@ else {
     }
 
     Write-Host "[K1] Tamamlandi. (Panel servisi de acilista ayni sertlestirmeyi uygular.)" -ForegroundColor Green
+
+    # ===================================================================================
+    # K2-DATA - runtimes ICINDEKI HASSAS YOLLARI KIRACIYA KAPAT
+    # ===================================================================================
+    # Problem (OLCULDU): runtimes\mariadb\11\data\mysql\global_priv.frm YUKSELTILMEMIS bir
+    # kullanici olarak ACILDI (2183 bayt). Ayni agacta butun musteri veritabani dosyalari var;
+    # kiraci PHP'si veri dizinini kopyalayip tum veritabanlarini ve root parola ozetlerini alabilir.
+    # bind-address=127.0.0.1 bu yolu HIC engellemez. Ayni sinifta runtimes\stalwart: posta
+    # sunucusunun super-admin kimligi orada durur.
+    #
+    # "Bu yola kim erismek zorunda" sorusu koddan cevaplanmistir; HEPSINI kapatmak IIS'i KIRAR:
+    #   php      -> IIS FastCGI php-cgi.exe'yi UYGULAMA HAVUZU KIMLIGIYLE calistirir  -> DOKUNMA
+    #   nodejs   -> zamanlanmis gorevler SINIRLI YEREL KULLANICI olarak calisir       -> DOKUNMA
+    #   python   -> ayni sekilde                                                      -> DOKUNMA
+    #   nginx/redis/memcached/clamav/docker -> denetimde bulgu yok, korlemesine kapatma
+    #   <motor>\<surum>\data -> yalniz motorun servis hesabi okur, kiraci TCP ile baglanir -> KAPAT
+    #   stalwart, stalwart-cli, vandelay -> yalniz SYSTEM (gorev) ve panel kullanir        -> KAPAT
+    #
+    # Hassas veri kokunden FARKI: burada DACL sifirdan KURULMAZ, mevcut ACE'ler korunup yalniz
+    # kiraci gruplari dusurulur. NEDEN: PostgreSQL/EDB kurulumu veri dizinine kendi servis hesabini
+    # (genelde NETWORK SERVICE) explicit ACE ile yazar; sifirdan kurmak motoru baslatilamaz yapardi.
+
+    Write-Host ""
+    Write-Host "[K2-DATA] runtimes icindeki hassas yollar kiracıya kapatiliyor..." -ForegroundColor Yellow
+
+    $runtimesRoot = Join-Path $root "runtimes"
+    if (-not (Test-Path -LiteralPath $runtimesRoot)) {
+        Write-Host "[K2-DATA] '$runtimesRoot' yok; atlandi."
+    }
+    else {
+        $everyoneSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::WorldSid, $null)
+        $guestsSid   = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinGuestsSid, $null)
+        $iisSid      = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-568")  # IIS_IUSRS
+
+        # Kapatilacak yollar (goreli). Veri dizinleri surumlu klasorun ALTINDA olabilir.
+        $lockTargets = @()
+        foreach ($panelOwned in "stalwart", "stalwart-cli", "vandelay") {
+            $candidate = Join-Path $runtimesRoot $panelOwned
+            if (Test-Path -LiteralPath $candidate) { $lockTargets += $candidate }
+        }
+        foreach ($engine in "mariadb", "mysql", "postgresql") {
+            $engineRoot = Join-Path $runtimesRoot $engine
+            if (-not (Test-Path -LiteralPath $engineRoot)) { continue }
+            # Surumsuz: <engine>\data ; Surumlu: <engine>\<surum>\data
+            $direct = Join-Path $engineRoot "data"
+            if (Test-Path -LiteralPath $direct) { $lockTargets += $direct }
+            foreach ($versionDir in Get-ChildItem -LiteralPath $engineRoot -Directory -ErrorAction SilentlyContinue) {
+                $versioned = Join-Path $versionDir.FullName "data"
+                if (Test-Path -LiteralPath $versioned) { $lockTargets += $versioned }
+            }
+        }
+
+        if ($lockTargets.Count -eq 0) {
+            Write-Host "[K2-DATA] Kapatilacak bir yol bulunamadi (veritabani/posta bileseni kurulu degil)."
+        }
+
+        foreach ($target in ($lockTargets | Sort-Object -Unique)) {
+            try {
+                $acl = Get-Acl -LiteralPath $target
+                # Mirasi kapat ama mevcut ACE'leri KORU (motorun servis hesabi dusmesin).
+                $acl.SetAccessRuleProtection($true, $true)
+                $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, $fullCtrl, $inherit, $noProp, $allow)))
+                $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid,  $fullCtrl, $inherit, $noProp, $allow)))
+                # Kiraciyi temsil eden her grubu DUSUR.
+                [void]$acl.PurgeAccessRules($usersSid)
+                [void]$acl.PurgeAccessRules($authSid)
+                [void]$acl.PurgeAccessRules($everyoneSid)
+                [void]$acl.PurgeAccessRules($guestsSid)
+                [void]$acl.PurgeAccessRules($iisSid)
+                Set-Acl -LiteralPath $target -AclObject $acl
+                Write-Host "[K2-DATA]   Kilitlendi: $target" -ForegroundColor Green
+            }
+            catch {
+                Write-Warning "[K2-DATA]   '$target' ACL ayarlanamadi: $($_.Exception.Message)"
+            }
+        }
+
+        Write-Host "[K2-DATA] Tamamlandi. (Panel servisi de acilista ayni yollari kapatir.)" -ForegroundColor Green
+    }
 }
 
 # =======================================================================================
@@ -352,15 +437,42 @@ foreach ($webPort in 80, 443) {
     }
 }
 
-foreach ($dnsProto in 'TCP', 'UDP') {
-    $dnsRule = "AdaPanel DNS 53 $dnsProto"
-    try {
-        Get-NetFirewallRule -DisplayName $dnsRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null
-        New-NetFirewallRule -DisplayName $dnsRule -Direction Inbound -Action Allow -Protocol $dnsProto -LocalPort 53 -Profile Any -ErrorAction Stop | Out-Null
-        Write-Host "[B6]   '$dnsRule' olusturuldu." -ForegroundColor Green
+# Y10: 53 yalnizca DNS rolu GERCEKTEN kuruluysa acilir (dinleyicisi olmayan port acmayiz) ve rol
+# varsa OZYINELEME KAPATILIR. Windows varsayilani ozyineleme ACIK oldugu icin, 53'u disariya acip
+# ozyinelemeyi birakmak sunucuyu ilk gunden DNS amplifikasyon reflektoru yapar.
+$dnsInstalled = $false
+try { $dnsInstalled = $null -ne (Get-Service -Name "DNS" -ErrorAction Stop) } catch { $dnsInstalled = $false }
+
+if (-not $dnsInstalled) {
+    Write-Host "[B6]   Windows DNS Server rolu kurulu degil; 53 ACILMADI (varsa eski kural kaldiriliyor)." -ForegroundColor Yellow
+    foreach ($dnsProto in 'TCP', 'UDP') {
+        Get-NetFirewallRule -DisplayName "AdaPanel DNS 53 $dnsProto" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null
     }
-    catch {
-        Write-Warning "[B6]   '$dnsRule' olusturulamadi: $($_.Exception.Message)"
+}
+else {
+    if (Get-Command Set-DnsServerRecursion -ErrorAction SilentlyContinue) {
+        try {
+            Set-DnsServerRecursion -Enable $false -ErrorAction Stop
+            Write-Host "[B6]   DNS ozyinelemesi KAPATILDI (yalniz otoriter yanit; acik cozucu degil)." -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "[B6]   DNS ozyinelemesi kapatilamadi: $($_.Exception.Message). Elle: Set-DnsServerRecursion -Enable `$false"
+        }
+    }
+    else {
+        Write-Warning "[B6]   Set-DnsServerRecursion yok; ozyineleme KAPATILAMADI. 53 aciliyor ama sunucu acik cozucu olabilir."
+    }
+
+    foreach ($dnsProto in 'TCP', 'UDP') {
+        $dnsRule = "AdaPanel DNS 53 $dnsProto"
+        try {
+            Get-NetFirewallRule -DisplayName $dnsRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null
+            New-NetFirewallRule -DisplayName $dnsRule -Direction Inbound -Action Allow -Protocol $dnsProto -LocalPort 53 -Profile Any -ErrorAction Stop | Out-Null
+            Write-Host "[B6]   '$dnsRule' olusturuldu." -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "[B6]   '$dnsRule' olusturulamadi: $($_.Exception.Message)"
+        }
     }
 }
 Write-Host "[B6] Tamamlandi." -ForegroundColor Green

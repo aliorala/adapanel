@@ -190,8 +190,8 @@ public sealed class ComponentBootstrapper(
         IReadOnlyCollection<ComponentManifestItemDto> manifest,
         CancellationToken cancellationToken)
     {
-        var detections = await componentDiscoveryService.DiscoverAsync(manifest, cancellationToken);
-        var detectedById = detections.ToDictionary(
+        var discovery = await componentDiscoveryService.DiscoverAsync(manifest, cancellationToken);
+        var detectedById = discovery.Detections.ToDictionary(
             item => item.ComponentId,
             StringComparer.OrdinalIgnoreCase);
         var installedComponents = await dbContext.InstalledComponents
@@ -207,6 +207,19 @@ public sealed class ComponentBootstrapper(
 
             if (!detectedById.TryGetValue(installedComponent.ComponentId, out var detection))
             {
+                // Y2: "ÖLÇEMEDİM" ile "KURULU DEĞİL" aynı şey değildir. Keşif kaynaklarından biri bile
+                // okunamadıysa kaydı SİLMEYİZ: kayıttaki ProtectedConfigurationJson veritabanı root
+                // parolasını + admin kullanıcıyı + portu taşır ve yeniden keşifte GERİ GELMEZ. Bu yol
+                // GetCatalogAsync (Yazılım ekranı her açılışta) ve CheckForUpdatesAsync (günlük) içinde
+                // çalıştığından tek bir geçici registry hatası kimlik bilgisini kalıcı yok ederdi.
+                if (!discovery.CanTrustAbsence(installedComponent.ComponentId))
+                {
+                    logger.LogWarning(
+                        "Component {ComponentId} could not be measured; keeping the installed record (credentials would be lost).",
+                        installedComponent.ComponentId);
+                    continue;
+                }
+
                 dbContext.InstalledComponents.Remove(installedComponent);
                 continue;
             }
@@ -3965,13 +3978,28 @@ public sealed class ComponentBootstrapper(
         // kalir; panel (MailService) CLI yonetimini bu parolayla yapar.
         var wrapperPath = Path.Combine(installDirectory, "run-stalwart.cmd");
         var stalwartLog = Path.Combine(installDirectory, "logs", "stalwart.log");
+        var secretPath = Path.Combine(etcDirectory, StalwartRecoverySecretFileName);
+
+        // K1 GÜVENLİK — ÖLÇÜLDÜ: run-stalwart.cmd süper-admin parolasını DÜZ METİN taşıyordu ve
+        // %ProgramData%\AdaPanel\runtimes kiracıya RX açık olduğu için barındırılan HERHANGİ bir
+        // sitenin PHP'si dosyayı okuyup sunucudaki BÜTÜN alan adlarının postasına tam yetkiyle
+        // sahip olabiliyordu (yükseltilmemiş kullanıcı olarak okundu, 270 bayt).
+        //
+        // Artık kimlik diske KORUNMUŞ yazılır (DPAPI, LocalMachine kapsamı — servisi SYSTEM olarak
+        // açan zamanlanmış görev aynı makinede çözebilsin diye) ve dosyanın DACL'i sıfırdan
+        // kurulup yalnız SYSTEM/Administrators/servis hesabına bırakılır. Wrapper artık parola
+        // İÇERMEZ; açılışta korunan dosyayı çözer. Ayrıca DataRootHardeningService runtimes\stalwart
+        // ağacını tamamen kiracıya kapatır (iki bağımsız savunma).
+        await File.WriteAllBytesAsync(secretPath, ProtectStalwartSecret($"admin:{adminPassword}"), cancellationToken);
+        DataRootHardeningService.ProtectFile(secretPath, logger);
+
         // Stalwart cikti/hatalarini log'a yaz ki acilis sorunlari (port dinlememe vb.) teshis
         // edilebilsin. Zamanlanmis gorev sessiz calistigindan bu olmadan sebep gorunmuyordu.
-        var wrapperContent =
-            "@echo off\r\n" +
-            $"set \"STALWART_RECOVERY_ADMIN=admin:{adminPassword}\"\r\n" +
-            $"\"{stalwart}\" --config \"{configPath}\" >> \"{stalwartLog}\" 2>&1\r\n";
-        await File.WriteAllTextAsync(wrapperPath, wrapperContent, cancellationToken);
+        await File.WriteAllTextAsync(
+            wrapperPath,
+            BuildStalwartWrapperContent(stalwart, configPath, stalwartLog, secretPath),
+            cancellationToken);
+        DataRootHardeningService.ProtectFile(wrapperPath, logger);
 
         const string taskName = "AdaStalwart";
         // Mevcut gorevi temizle (varsa) ve yeniden olustur.
@@ -4000,6 +4028,99 @@ public sealed class ComponentBootstrapper(
         {
             logger.LogWarning(exception, "Stalwart listener configuration failed; mail server is still reachable over IPv6.");
         }
+    }
+
+    /// <summary>
+    /// Dışarıya AÇIK olması GEREKEN posta portları. Gerekçe koddan: 25 = MX/gelen posta, 587 + 143 =
+    /// istemci/Roundcube STARTTLS (<c>ConfigureStalwartListenersAsync</c> ikisini bilerek oluşturur),
+    /// 465/993/995 = örtük TLS istemci portları (<c>OpenMailServerFirewallPorts</c> ile aynı küme).
+    /// Listede OLMAYAN her dinleyici (ManageSieve 4190, düz metin POP3 110, yönetim 8080) loopback'e alınır.
+    /// </summary>
+    private static readonly int[] PublicMailListenerPorts = [25, 143, 465, 587, 993, 995];
+
+    /// <summary>
+    /// AĞ YÜZEYİ — SAF KARAR: bir Stalwart dinleyicisinin bind kümesini üretir.
+    /// Yalnız <see cref="PublicMailListenerPorts"/> çift yığına (IPv4 + IPv6) çıkar; diğerleri
+    /// <c>127.0.0.1</c> + <c>[::1]</c> ile sınırlanır (Roundcube/panel aynı makinede, işlevsel kayıp yok).
+    /// </summary>
+    internal static SortedSet<string> ResolveStalwartListenerBinds(IReadOnlyCollection<string> binds)
+    {
+        var ports = binds.Select(ParseBindPort).Where(port => port > 0).ToArray();
+
+        // Portu okunamayan (beklenmedik biçimli) dinleyiciye DOKUNMA: tahminle bind yazmak,
+        // çalışan bir posta portunu sessizce kapatmaktan daha kötüdür.
+        if (ports.Length == 0)
+        {
+            return new SortedSet<string>(binds, StringComparer.Ordinal);
+        }
+
+        // Dinleyicinin TEK bir portu olmayabilir; hepsi kamuya açık listede değilse tamamı loopback'e iner.
+        if (!ports.All(PublicMailListenerPorts.Contains))
+        {
+            var loopback = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var port in ports.Distinct())
+            {
+                loopback.Add($"127.0.0.1:{port}");
+                loopback.Add($"[::1]:{port}");
+            }
+
+            return loopback;
+        }
+
+        // Kamuya açık posta portu: Windows'ta "[::]" IPv6-ONLY demektir, IPv4 erişimi için 0.0.0.0 şart.
+        var desired = new SortedSet<string>(binds, StringComparer.Ordinal);
+        foreach (var address in binds)
+        {
+            if (address.StartsWith("[::]:", StringComparison.Ordinal))
+            {
+                desired.Add("0.0.0.0:" + address["[::]:".Length..]);
+            }
+        }
+
+        return desired;
+    }
+
+    /// <summary>"[::]:143" / "0.0.0.0:25" gibi bir bind adresinden port numarasını çıkarır; okunamazsa 0.</summary>
+    private static int ParseBindPort(string address)
+    {
+        var separatorIndex = address.LastIndexOf(':');
+        return separatorIndex >= 0 && int.TryParse(address[(separatorIndex + 1)..], out var port) ? port : 0;
+    }
+
+    /// <summary>Korunan (DPAPI) Stalwart kurtarma-admin kimliğinin dosya adı; <c>etc\</c> altında durur.</summary>
+    internal const string StalwartRecoverySecretFileName = "recovery-admin.dat";
+
+    /// <summary>
+    /// K1: <c>admin:&lt;parola&gt;</c> kimliğini DPAPI ile korur. Kapsam <see cref="DataProtectionScope.LocalMachine"/>'dir
+    /// çünkü çözen taraf panel değil, servisi açan zamanlanmış görevin (SYSTEM) kabuğudur — kullanıcı kapsamı
+    /// servis hesabı değiştiğinde postayı açılamaz hale getirirdi.
+    /// DPAPI tek başına yeterli DEĞİLDİR (aynı makinedeki her süreç çözebilir); asıl kilit dosyanın
+    /// DACL'idir (<see cref="DataRootHardeningService.ProtectFile"/>) — ikisi birlikte kullanılır.
+    /// </summary>
+    internal static byte[] ProtectStalwartSecret(string credential) =>
+        ProtectedData.Protect(Encoding.UTF8.GetBytes(credential), optionalEntropy: null, scope: DataProtectionScope.LocalMachine);
+
+    /// <summary>
+    /// K1 — SAF FONKSİYON: parola İÇERMEYEN <c>run-stalwart.cmd</c> içeriğini üretir. Wrapper, korunan
+    /// kimlik dosyasını açılışta çözüp <c>STALWART_RECOVERY_ADMIN</c>'e koyar; dosya yolu ortam
+    /// değişkeniyle geçilir (PowerShell komutunun içine tırnaklı yol gömmek cmd tarafında kırılgan).
+    /// Diske dokunmaz → içerik testte birebir doğrulanabilir ve wrapper gerçekten çalıştırılabilir.
+    /// </summary>
+    internal static string BuildStalwartWrapperContent(string stalwartExecutable, string configPath, string logPath, string secretPath)
+    {
+        const string decodeCommand =
+            "Add-Type -AssemblyName System.Security; " +
+            "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(" +
+            "[IO.File]::ReadAllBytes($env:ADA_STALWART_SECRET), $null, 'LocalMachine'))";
+
+        return
+            "@echo off\r\n" +
+            "setlocal\r\n" +
+            $"set \"ADA_STALWART_SECRET={secretPath}\"\r\n" +
+            "set \"STALWART_RECOVERY_ADMIN=\"\r\n" +
+            "for /f \"usebackq delims=\" %%A in (`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass " +
+            $"-Command \"{decodeCommand}\"`) do set \"STALWART_RECOVERY_ADMIN=%%A\"\r\n" +
+            $"\"{stalwartExecutable}\" --config \"{configPath}\" >> \"{logPath}\" 2>&1\r\n";
     }
 
     /// <summary>
@@ -4086,27 +4207,11 @@ public sealed class ComponentBootstrapper(
                 }
             }
 
-            // M3 (sertleştirme): yönetim/HTTP portu (8080) YALNIZ LOOPBACK dinlesin — admin arayüzü/JMAP
-            // dışarıya açık olmasın (denetim: "8080 0.0.0.0 → localhost'a al"). Panel zaten localhost
-            // (::1/127.0.0.1) üzerinden yönetir; IMAP/SMTP (25/143/587) AYRI portlardır ve etkilenmez;
-            // standart mail-client autoconfig 443/well-known kullanır, 8080 değil. Best-effort (çağrı try/catch).
-            SortedSet<string> desired;
-            if (binds.Any(address => address.EndsWith(":8080", StringComparison.Ordinal)))
-            {
-                desired = new SortedSet<string>(["127.0.0.1:8080", "[::1]:8080"], StringComparer.Ordinal);
-            }
-            else
-            {
-                // Diğer (mail) dinleyiciler: "[::]:port" varsa "0.0.0.0:port" da ekle (çift yığın, IPv4 erişimi).
-                desired = new SortedSet<string>(binds, StringComparer.Ordinal);
-                foreach (var address in binds)
-                {
-                    if (address.StartsWith("[::]:", StringComparison.Ordinal))
-                    {
-                        desired.Add("0.0.0.0:" + address["[::]:".Length..]);
-                    }
-                }
-            }
+            // M3 (sertleştirme) + AĞ YÜZEYİ (denetim): yönetim/HTTP portu (8080) YALNIZ LOOPBACK dinler.
+            // Eskiden 8080 DIŞINDAKİ HER dinleyiciye "0.0.0.0:port" ekleniyordu — Stalwart'ın varsayılan
+            // ManageSieve (4190) ve düz metin POP3 (110) dinleyicileri dahil, yani temiz bir kurulum bu
+            // servisleri de tüm dünyaya açıyordu. Karar artık tek bir saf fonksiyonda toplanmıştır.
+            var desired = ResolveStalwartListenerBinds(binds);
 
             // İçerik aynıysa (port/kümeler eşit) dokunma. SetEquals: loopback değişiminde sayı eşit ama içerik farklı olabilir.
             if (desired.SetEquals(binds))

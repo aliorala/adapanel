@@ -1,9 +1,46 @@
-param()
+param(
+    # Testler icin: yalnizca fonksiyonlari tanimla, HICBIR Windows ozelligi/rolu kurma.
+    [switch]$DefineFunctionsOnly
+)
 
 # IIS ozellikleri site BARINDIRMA icindir; panelin kendisi (Kestrel Windows servisi) IIS olmadan da
 # calisir. Bu yuzden bu script "best-effort"tur: tek tek ozellik hatalari kurulumu BOZMAZ, yalnizca
 # uyari verir ve cikis kodu 0 doner. Boylece panel servisi her durumda kurulup acilir.
 $ErrorActionPreference = "Stop"
+
+# =======================================================================================
+# Y10 - DNS: OZYINELEMEYI KAPAT (acik cozucu olmayi engelle)
+# =======================================================================================
+# Windows DNS Server rolu kurulunca OZYINELEME (recursion) VARSAYILAN OLARAK ACIKtir. AdaPanel'in
+# DNS'e ihtiyaci YALNIZCA otoriter yayindir (barindirilan alan adlarinin kendi bolgeleri); baskasi
+# adina sorgu cozmesi HIC gerekmez. Ozyineleme acik + 53 disariya acik = DNS amplifikasyon
+# reflektoru: saglayici kotuye kullanim bildirimi ve IP karaliste riski, ILK GUNDEN.
+#
+# Bu yuzden rol kurulur kurulmaz (ve zaten kuruluysa da her calistirmada, idempotent) ozyineleme
+# KAPATILIR. Otoriter yanitlar etkilenmez; yalnizca "senin bolgen olmayan adi benim icin coz"
+# istekleri reddedilir. Cmdlet yoksa SESSIZ GECMEYIZ: elle yapilacak komut basilir (yanlis
+# guvence vermek, acigi bilmemekten daha kotudur).
+function Disable-AdaPanelDnsRecursion {
+    if (-not (Get-Command Set-DnsServerRecursion -ErrorAction SilentlyContinue)) {
+        Write-Warning "Set-DnsServerRecursion bulunamadi; DNS ozyinelemesi KAPATILAMADI. Sunucuda elle: Set-DnsServerRecursion -Enable `$false"
+        return $false
+    }
+
+    try {
+        Set-DnsServerRecursion -Enable $false -ErrorAction Stop
+        Write-Host "DNS recursion disabled (authoritative-only; open resolver riski kapatildi)."
+        return $true
+    }
+    catch {
+        Write-Warning "DNS ozyinelemesi kapatilamadi: $($_.Exception.Message). Sunucuda elle kapatin: Set-DnsServerRecursion -Enable `$false"
+        return $false
+    }
+}
+
+if ($DefineFunctionsOnly) {
+    # Testler yalnizca fonksiyonlari ister; rol/ozellik kurulumu HIC calismaz.
+    return
+}
 
 function Enable-AdaPanelIisFeatures {
     # Windows SERVER: dogru API Install-WindowsFeature (ServerManager). DISM isimleri Server'da
@@ -77,9 +114,13 @@ try {
         if ($dnsFeature -and -not $dnsFeature.Installed) {
             Install-WindowsFeature -Name DNS -IncludeManagementTools -ErrorAction Stop | Out-Null
             Write-Host "Windows DNS Server role installed."
+            # Y10: rol kurulur kurulmaz ozyinelemeyi kapat -- "sonra yapariz" penceresi birakmayiz.
+            [void](Disable-AdaPanelDnsRecursion)
         }
         elseif ($dnsFeature -and $dnsFeature.Installed) {
             Write-Host "Windows DNS Server role already present."
+            # Zaten kuruluysa da her calistirmada uygula (idempotent; eski kurulumlar da duzelir).
+            [void](Disable-AdaPanelDnsRecursion)
         }
     }
     else {
