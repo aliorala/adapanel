@@ -94,6 +94,31 @@ public sealed partial class FtpService(
 
         EnsureCommandSafePassword(request.Password);
 
+        // KULLANICI ADI DA BİR SAHİPLİK İDDİASIDIR — ve hiç sorulmuyordu.
+        //
+        // Bu uç SİTEYİ doğruluyordu (FtpController.EnsureSiteAsync), ama mutasyona uğrayan nesne
+        // site değil GERÇEK BİR WINDOWS YEREL HESABI. Hesabın mevcut sahipliği hiç sorulmadığı için
+        // zincir şöyle işliyordu:
+        //   1. saldırgan kendi sitesi için UserName="Administrator" ile oluşturma isteği atar;
+        //   2. hesap zaten var → `net user /add` atlanır ama akış DEVAM eder;
+        //   3. Administrator'a saldırganın klasöründe (OI)(CI)M verilir, LocalUser junction'ı
+        //      saldırganın klasörüne yönlendirilir;
+        //   4. ftp-users.json kaydındaki SiteName saldırganın sitesiyle EZİLİR;
+        //   5. FtpController.EnsureFtpUserScopeAsync sahipliği tam da o ezilmiş kayıttan okuduğu
+        //      için kapsam denetimi GEÇER;
+        //   6. POST /ftp/users/password → `net user "Administrator" "<yeni parola>" /y`.
+        // Yani kapsam denetimi, saldırganın kendi yazdığı kayda soruyordu. Denetlenen değeri
+        // kiracının değiştirebilmesi hata sınıfının ta kendisi.
+        //
+        // Karar SitesController'daki "SİTE ADI DA BİR SAHİPLİK İDDİASIDIR" desenini izler: iddia
+        // edilen ad başkasınınsa reddedilir. İki kaynak var ve ikisi de sorulur — panelin kendi
+        // kaydı (hangi siteye ait) ve Windows'un kendisi (panel dışı hesap).
+        //
+        // KONUM ÖNEMLİ: bu denetim klasör oluşturma / IIS FTP altyapısı kurulumu / ACL'den ÖNCE.
+        // Reddedilen bir istek sunucuda HİÇBİR yan etki bırakmamalı; eskiden altyapı kurulumu ve
+        // dizin oluşturma denetimden önce çalışıyordu.
+        await EnsureUserNameIsClaimableAsync(userName, request.SiteName, cancellationToken);
+
         var homePath = await ResolveHomePathAsync(request, cancellationToken);
         Directory.CreateDirectory(homePath);
         await EnsureFtpInfrastructureAsync(false, cancellationToken);
@@ -173,6 +198,22 @@ public sealed partial class FtpService(
         }
 
         EnsureCommandSafePassword(request.Password);
+
+        // PANELİN YÖNETMEDİĞİ HESABIN PAROLASI DEĞİŞTİRİLEMEZ (K6 zincirinin son halkası).
+        //
+        // Oluşturma yolu artık ad iddiasını denetliyor; bu ikinci kapı savunma derinliği: kayıt
+        // başka bir yoldan (elle düzenlenmiş ftp-users.json, gelecekteki bir çağıran) kirletilse
+        // bile panel yalnız KENDİ açtığı hesapların parolasını değiştirir. `net user <ad> <parola>`
+        // ayrım yapmaz — Administrator da bir yerel hesaptır.
+        //
+        // Kayıt kontrolü Windows sorgusundan ÖNCE yapılır ve aynı "bulunamadı" hatası döner:
+        // aksi hâlde yanıt farkı, sunucuda hangi yerel hesapların VAR olduğunu sızdıran bir
+        // numaralandırma aracına dönüşürdü.
+        var kayitlar = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
+        if (!kayitlar.Any(item => string.Equals(item.UserName.Trim(), userName, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new AppException("ftp.user_not_found", 404, 404);
+        }
 
         if (!await UserExistsAsync(userName, cancellationToken))
         {
@@ -459,6 +500,113 @@ public sealed partial class FtpService(
     {
         var result = await ProcessRunner.RunAsync("net.exe", $"user \"{userName}\"", cancellationToken: cancellationToken);
         return result.Success;
+    }
+
+    /// <summary>
+    /// Bir FTP kullanıcı adının, istenen site adına göre sahiplik durumu.
+    /// </summary>
+    internal enum FtpUserNameClaim
+    {
+        /// <summary>Ad boşta: panelde kaydı yok, Windows'ta hesabı yok.</summary>
+        Serbest,
+
+        /// <summary>Panel kaydı var ve AYNI siteye ait — yeniden oluşturma/parola sıfırlama meşru.</summary>
+        KendiKaydi,
+
+        /// <summary>Panel kaydı var ama BAŞKA bir siteye ait — çapraz kiracı devralma.</summary>
+        BaskaSitenin,
+
+        /// <summary>Windows'ta hesap var ama panelin kaydı YOK — panelin açmadığı bir hesap.</summary>
+        PanelDisi
+    }
+
+    /// <summary>
+    /// FTP kullanıcı adı sahiplik hükmü. SAF fonksiyon: girdileri dışarıdan alır, yan etkisi yoktur,
+    /// bu yüzden gerçek Windows hesabı açmadan tam doğruluk tablosuyla test edilebilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sıralama bilinçli: <b>önce panel kaydı</b>. Panel kaydı olan bir ad, hesabın Windows'ta o an
+    /// var olup olmamasından bağımsız olarak panele aittir (kayıt varken hesap silinmiş olabilir —
+    /// o zaman meşru sahibi hesabı yeniden açabilmeli). Kayıt yoksa soru Windows'a sorulur.
+    /// </para>
+    /// <para>
+    /// Karşılaştırma <see cref="StringComparison.OrdinalIgnoreCase"/>: Windows yerel hesap adları
+    /// büyük/küçük harfe duyarsızdır, yani "administrator" ile "Administrator" AYNI hesaptır.
+    /// Duyarlı karşılaştırma denetimi harf değiştirerek atlatılabilir bir süse çevirirdi.
+    /// </para>
+    /// </remarks>
+    internal static FtpUserNameClaim ClassifyUserNameClaim(
+        string userName,
+        string siteName,
+        IEnumerable<(string UserName, string SiteName)> kayitlar,
+        bool sistemdeVar)
+    {
+        var ad = (userName ?? string.Empty).Trim();
+        var istenenSite = (siteName ?? string.Empty).Trim();
+
+        foreach (var kayit in kayitlar)
+        {
+            if (!string.Equals((kayit.UserName ?? string.Empty).Trim(), ad, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return string.Equals((kayit.SiteName ?? string.Empty).Trim(), istenenSite, StringComparison.OrdinalIgnoreCase)
+                ? FtpUserNameClaim.KendiKaydi
+                : FtpUserNameClaim.BaskaSitenin;
+        }
+
+        return sistemdeVar ? FtpUserNameClaim.PanelDisi : FtpUserNameClaim.Serbest;
+    }
+
+    /// <summary>
+    /// İddia edilen FTP kullanıcı adı başkasınınsa reddeder (K6). Gerekçe çağrı yerinde.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>GERİYE DÖNÜK UYUM (ölçülerek karar verildi):</b> mevcut kurulumlarda zaten açılmış FTP
+    /// hesaplarının hepsinin <c>ftp-users.json</c>'da kaydı vardır — panel hesabı ancak kaydı da
+    /// yazarak açar. Dolayısıyla bugün çalışan iki meşru akış aynen çalışmaya devam eder:
+    /// yeni ad (<see cref="FtpUserNameClaim.Serbest"/>) ve kendi hesabını yeniden oluşturma
+    /// (<see cref="FtpUserNameClaim.KendiKaydi"/>).
+    /// </para>
+    /// <para>
+    /// Kırılan tek durum ÖKSÜZ hesaptır: Windows'ta duran ama panel kaydı olmayan bir hesabın adı
+    /// artık talep edilemez. Bu bilinçli — öksüz hesap ile <c>Administrator</c> panelin gözünde
+    /// AYNI şeydir, ikisini ayırt edecek bir veri yok. Geçiş yolu panelde zaten mevcut ve
+    /// kapatılmadı: yönetici <c>DELETE /ftp/users/{ad}</c> ile öksüz hesabı siler (silme yolu
+    /// bilerek kayıt şartı aramıyor), sonra ad yeniden serbesttir. Kapsamlı roller o yolu
+    /// kullanamaz, çünkü <c>EnsureFtpUserScopeAsync</c> kayıtsız adı zaten 403'lüyor.
+    /// </para>
+    /// <para>
+    /// "Ölçemedik" durumu sessizce "sorun yok"a çevrilmiyor: <c>net.exe</c> hiç çalıştırılamazsa
+    /// <see cref="ProcessRunner"/> istisna fırlatır ve istek düşer; hesap yoksa çıkış kodu sıfır
+    /// olmaz. Yani <c>false</c> yalnızca gerçekten ölçülmüş "hesap yok" anlamına gelir.
+    /// </para>
+    /// </remarks>
+    private async Task EnsureUserNameIsClaimableAsync(string userName, string siteName, CancellationToken cancellationToken)
+    {
+        var kayitlar = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
+        var hukum = ClassifyUserNameClaim(
+            userName,
+            siteName,
+            kayitlar.Select(item => (item.UserName, item.SiteName)),
+            await UserExistsAsync(userName, cancellationToken));
+
+        switch (hukum)
+        {
+            // Başka bir sitenin FTP hesabı: kapsam denetimi ezilmiş kayıttan okuduğu için
+            // devralma buradan geçiyordu.
+            case FtpUserNameClaim.BaskaSitenin:
+                throw new AppException("ftp.user_name_taken", 409, 409);
+
+            // Panelin açmadığı bir yerel hesap (Administrator, servis hesapları, elle açılmış
+            // hesaplar). Ad deseni bunları kabul ediyor ve FTP adları site adından deterministik
+            // üretildiği için tahmin de edilebilir.
+            case FtpUserNameClaim.PanelDisi:
+                throw new AppException("ftp.user_name_reserved", 409, 409);
+        }
     }
 
     // Parola net.exe argümanına çift tırnak içinde geçiyor. Bir '"' ya da SONDAKİ '\' tırnağı kırıp

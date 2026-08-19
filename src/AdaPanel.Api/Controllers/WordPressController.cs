@@ -105,6 +105,34 @@ public sealed class WordPressController(
         await CustomerAccess.EnsureDomainClaimAsync(
             customerScopes, iisSiteService, mailService, User, request.TargetHostName, null, logger, cancellationToken);
 
+        // HEDEF SİTE ADI DA BİR SAHİPLİK İDDİASIDIR — ve klon yolunda hiç denetlenmiyordu.
+        //
+        // SitesController site oluştururken adı bilinçli olarak iddia sayıp aynı fonksiyondan
+        // geçiriyor; klon ise YALNIZ host adını soruyordu. Oysa klon da tam olarak bir site
+        // oluşturur (CloneAsync → iisSiteService.CreateSiteAsync) ve WordPressToolkitService'teki
+        // ad doğrulaması (IsSafeName) NOKTA KABUL EDER, yani "kurban.com" geçerli bir hedef adıdır.
+        // Açılan yol:
+        //   1. müşteri TargetSiteName="kurban.com" ile klonlar;
+        //   2. aşağıdaki atama yeni siteyi saldırganın kapsamına EKLER;
+        //   3. CustomerScopeService.GetAllowedMailDomainsAsync site ADINI izinli posta alan adı
+        //      sayar → kurbanın posta kutuları listelenir, PAROLALARI DEĞİŞTİRİLİR, alias ile
+        //      postası yönlendirilir;
+        //   4. DNS bölgesi de site adından türediği için devralınır.
+        // Yani host adı denetlenirken adın denetlenmemesi, kısıtın yanından dolaşılan kapıydı.
+        //
+        // İKİNCİ BİR KURAL YAZILMIYOR: host adıyla aynı fonksiyon çağrılıyor. Ayrı yazılsaydı
+        // biri www/alt-alan-adı kuralını alır, diğeri almazdı — panelde bu hata sınıfı zaten
+        // yaşandı. ownSiteName geçilmiyor: hedef YENİ bir site, kaynağın kendi adı bu iddiaya
+        // gerekçe olamaz.
+        await CustomerAccess.EnsureDomainClaimAsync(
+            customerScopes, iisSiteService, mailService, User, request.TargetSiteName, null, logger, cancellationToken);
+
+        // ...ve ad boşta olsa bile ÜZERİNE YAZILAMAZ. CloneAsync'in kendi çakışma denetimi
+        // GetSitesAsync'e bakıyor, o ise SİSTEM SİTELERİNİ gizler — gizlenmiş bir siteyi "yok"
+        // saymak, tam da üzerine yazılmasına izin vermek olurdu. Bu denetim GetSiteAsync kullanır.
+        await CustomerAccess.EnsureSiteNameIsClaimableAsync(
+            customerScopes, iisSiteService, User, request.TargetSiteName, cancellationToken);
+
         // Kaynağın sahibi müşteri varsa: önce kota denetimi (Plesk gibi). Sahibi yoksa (yönetici sitesi) sınırsız.
         var ownerId = await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
         if (ownerId is Guid quotaOwner)
@@ -128,7 +156,11 @@ public sealed class WordPressController(
             }
         }
 
-        return Ok(ApiResponse<WordPressCloneResultDto>.Ok(result, "wp.clone_done"));
+        // KISMİ BAŞARI GİZLENMEZ: adres değiştirilemediyse klon üretim adresini servis eder ve
+        // kullanıcının bunu BİLMESİ gerekir — aksi hâlde staging sandığı yerde canlı veriyi değiştirir.
+        return Ok(ApiResponse<WordPressCloneResultDto>.Ok(
+            result,
+            result.UrlRewritten ? "wp.clone_done" : "wp.clone_url_not_replaced"));
     }
 
     // panel "Veri Kopyala": kaynak WP'nin dosya/DB'sini VAR OLAN hedefe taşır (staging→canlı). İki siteye de erişim gerekir.
@@ -141,7 +173,9 @@ public sealed class WordPressController(
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.TargetSiteName ?? string.Empty, cancellationToken);
         var result = await wordPressToolkitService.CopyDataAsync(siteName, request, cancellationToken);
-        return Ok(ApiResponse<WordPressCopyDataResultDto>.Ok(result, "wp.copy_done"));
+        return Ok(ApiResponse<WordPressCopyDataResultDto>.Ok(
+            result,
+            result.UrlRewritten ? "wp.copy_done" : "wp.copy_url_not_replaced"));
     }
 
     /// <summary>Sitedeki güncellenebilir öğeler (çekirdek + eklenti + tema).</summary>

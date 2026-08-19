@@ -101,6 +101,13 @@ public sealed class WordPressCopyDataResultDto
     public bool CopiedFiles { get; set; }
 
     public bool CopiedDatabase { get; set; }
+
+    /// <summary>
+    /// Hedefin veritabanındaki KAYNAK adresi hedef adresle değiştirilebildi mi (ya da hiç
+    /// gerekmedi mi). <c>false</c> ise hedef hâlâ kaynağın adresini servis eder — kullanıcıya
+    /// söylenmesi gerekir, çünkü WordPress adresi veritabanından okur.
+    /// </summary>
+    public bool UrlRewritten { get; set; } = true;
 }
 
 /// <summary>panel "Klonla": WordPress sitesini yeni bir hedefe (staging) kopyalama isteği.</summary>
@@ -131,6 +138,13 @@ public sealed class WordPressCloneResultDto
     public string DatabaseUser { get; set; } = string.Empty;
 
     public string DatabasePassword { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Klonun veritabanındaki KAYNAK adresi hedef adresle değiştirilebildi mi (ya da hiç gerekmedi
+    /// mi). <c>false</c> ise klon ÜRETİM ADRESİNİ servis eder: staging'de yapılan işlem canlı
+    /// siteye gider. Bu yüzden sonuç gizlenmez, mesaj anahtarı buna göre seçilir.
+    /// </summary>
+    public bool UrlRewritten { get; set; } = true;
 }
 
 /// <summary>

@@ -205,7 +205,7 @@ add_action('init', function () {
             parent,
             cancellationToken,
             timeout: TimeSpan.FromMinutes(30));
-        if (copy.ExitCode >= 8)
+        if (!RobocopyBasarili(copy.ExitCode))
         {
             throw new AppException("wp.clone_copy_failed", 500, 500, copy.StandardError);
         }
@@ -247,17 +247,7 @@ add_action('init', function () {
         }
 
         // 5) URL arama-değiştir (hedef kökte wp-cli) → staging kendi adresinde çalışır.
-        if (sourceUrl.Length > 0 && !string.Equals(sourceUrl, targetUrl, StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                await hostingSettings.RunWpCliCommandAsync(targetName, $"search-replace {sourceUrl} {targetUrl} --all-tables --skip-columns=guid", cancellationToken);
-            }
-            catch
-            {
-                // arama-değiştir başarısızsa klon yine kullanılabilir (panodan tekrar çalıştırılabilir).
-            }
-        }
+        var urlDegistirildi = await TryRewriteSiteUrlAsync(targetName, sourceUrl, targetUrl, cancellationToken);
 
         return new WordPressCloneResultDto
         {
@@ -265,7 +255,8 @@ add_action('init', function () {
             TargetUrl = targetUrl,
             TargetDatabase = transfer.TargetDatabase,
             DatabaseUser = transfer.UserName,
-            DatabasePassword = transfer.Password
+            DatabasePassword = transfer.Password,
+            UrlRewritten = urlDegistirildi
         };
     }
 
@@ -334,12 +325,25 @@ add_action('init', function () {
         // 2) Dosyalar: hedefi yedekle (kopya) → kaynak→hedef aynala (/MIR) → hedef wp-config DB bilgilerini geri yaz.
         if (request.Files)
         {
-            await ProcessRunner.RunAsync(
+            // YEDEĞİN SONUCU DENETLENİR — çünkü bir sonraki adım GERİ DÖNÜLEMEZ.
+            //
+            // Buradaki `/MIR` hedefte kaynakta olmayan HER ŞEYİ siler; yani bu yedek, işlemin tek
+            // geri dönüş noktası. Sonucu okunmadığı için yedek patladığında (disk dolu, kilitli
+            // dosya, erişim reddi, zaman aşımı) aynalama yine de çalışıyor ve müşterinin canlı
+            // sitesi geri dönülemez biçimde eziliyordu — panel de "kopyalandı" diyordu.
+            //
+            // Yedek alınamıyorsa YIKICI ADIM HİÇ ÇALIŞMAZ: hedef olduğu gibi kalır, kullanıcı
+            // gerçek sebebi görür. "Yedeksiz devam et" seçeneği bilerek yok.
+            var backup = await ProcessRunner.RunAsync(
                 "robocopy",
                 $"\"{targetRoot.TrimEnd('\\')}\" \"{Path.Combine(backupRoot, "target-files").TrimEnd('\\')}\" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP",
                 targetParent,
                 cancellationToken,
                 timeout: TimeSpan.FromMinutes(30));
+            if (!RobocopyBasarili(backup.ExitCode))
+            {
+                throw new AppException("wp.copy_backup_failed", 500, 500, backup.StandardError);
+            }
 
             var mirror = await ProcessRunner.RunAsync(
                 "robocopy",
@@ -347,7 +351,7 @@ add_action('init', function () {
                 targetParent,
                 cancellationToken,
                 timeout: TimeSpan.FromMinutes(30));
-            if (mirror.ExitCode >= 8)
+            if (!RobocopyBasarili(mirror.ExitCode))
             {
                 throw new AppException("wp.clone_copy_failed", 500, 500, mirror.StandardError);
             }
@@ -362,17 +366,7 @@ add_action('init', function () {
         }
 
         // 3) URL arama-değiştir (hedef DB'de) → hedef kendi adresinde çalışır.
-        if (sourceUrl.Length > 0 && targetUrl.Length > 0 && !string.Equals(sourceUrl, targetUrl, StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                await hostingSettings.RunWpCliCommandAsync(targetName, $"search-replace {sourceUrl} {targetUrl} --all-tables --skip-columns=guid", cancellationToken);
-            }
-            catch
-            {
-                // arama-değiştir başarısızsa kopya yine kullanılabilir (panodan tekrar çalıştırılabilir)
-            }
-        }
+        var urlDegistirildi = await TryRewriteSiteUrlAsync(targetName, sourceUrl, targetUrl, cancellationToken);
 
         return new WordPressCopyDataResultDto
         {
@@ -380,7 +374,8 @@ add_action('init', function () {
             TargetUrl = targetUrl,
             BackupPath = backupRoot,
             CopiedFiles = request.Files,
-            CopiedDatabase = request.Database
+            CopiedDatabase = request.Database,
+            UrlRewritten = urlDegistirildi
         };
     }
 
@@ -404,6 +399,76 @@ add_action('init', function () {
             // motor listesi alınamazsa varsayılana düş
         }
         return "mariadb";
+    }
+
+    /// <summary>
+    /// robocopy çıkış kodu başarı mı? robocopy 0-7 arasını BAŞARI sayar (0=değişiklik yok,
+    /// 1=kopyalandı, 2=ek dosyalar, 4=uyumsuzluk...); 8 ve üstü gerçek hatadır.
+    /// </summary>
+    /// <remarks>
+    /// NEGATİF KODLAR DA HATADIR ve eski <c>&gt;= 8</c> denetimi bunları KAÇIRIYORDU:
+    /// <see cref="ProcessRunner"/> zaman aşımında süreci öldürüp <c>ExitCode = -1</c> döner.
+    /// 30 dakikada bitmeyen bir kopyalama "başarılı" sayılıyordu — tam da yedeğin/aynalamanın
+    /// yarım kaldığı durum. Tek kaynak: üç çağrı yeri de bu yüklemi kullanır.
+    /// </remarks>
+    internal static bool RobocopyBasarili(int exitCode) => exitCode is >= 0 and < 8;
+
+    /// <summary>
+    /// Kopyalanan WordPress'in veritabanındaki KAYNAK adresini hedef adresle değiştirir.
+    /// Değiştirme gerçekten yapıldıysa (ya da hiç gerekmiyorsa) <c>true</c> döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// BAŞARISIZLIK ARTIK GİZLENMİYOR. Eski hâlinde çıkış kodu hiç okunmuyordu ve <c>catch</c>
+    /// boştu; wp-cli yoksa, PHP çalışmıyorsa ya da DB'ye bağlanamıyorsa panel yine "Klon
+    /// tamamlandı" diyordu. Sonuç sessiz değil AĞIR: WordPress site adresini veritabanından okur,
+    /// yani adresi değişmemiş klon <b>ÜRETİM ADRESİNİ servis eder</b> — staging'de yapılan her
+    /// tıklama canlı siteye gider, canlı veri değişir, arama motoru kopya içerik görür.
+    /// </para>
+    /// <para>
+    /// Yine de İSTİSNA FIRLATILMIYOR: bu noktada hedef site ve veritabanı zaten oluşturulmuş
+    /// durumda. Fırlatmak kullanıcıyı "ne oluştu bilmiyorum" hâlinde bırakırdı; doğru davranış
+    /// panelin aynı dosyadaki <c>wp.updates_partial</c> deseni — kısmi başarıyı SÖYLEMEK.
+    /// Çağıran bu bayrağı DTO'ya koyar, denetleyici de farklı bir mesaj anahtarı döndürür.
+    /// </para>
+    /// <para>
+    /// Hata METNİ dışarı verilmiyor: wp-cli çıktısı wp-config'ten okunan veritabanı kullanıcı
+    /// adı/parolasını içerebilir. Kullanıcının ihtiyacı olan bilgi "adres değişmedi, komutu
+    /// yeniden çalıştır" — kimlik bilgisi değil.
+    /// </para>
+    /// </remarks>
+    /// <remarks>
+    /// <c>internal</c> (private değil): davranışı DIZGE ARAYARAK değil GERÇEKTEN KOŞTURARAK test
+    /// edilebilsin diye. İlk yazımda bu koruma kaynak metninde <c>"sonuc.ExitCode == 0"</c> aranarak
+    /// test edilmişti; mutasyonla denendi ve test YEŞİL KALDI — çünkü aynı dizge dosyanın başka
+    /// yerlerinde de geçiyor. Dizge testi korunan şeyi değil bugünkü yazımını doğrular.
+    /// </remarks>
+    internal async Task<bool> TryRewriteSiteUrlAsync(
+        string targetSiteName,
+        string sourceUrl,
+        string targetUrl,
+        CancellationToken cancellationToken)
+    {
+        // Kaynak adresi okunamadıysa ya da adres zaten aynıysa değiştirilecek bir şey yok.
+        if (sourceUrl.Length == 0 || targetUrl.Length == 0 || string.Equals(sourceUrl, targetUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            var sonuc = await hostingSettings.RunWpCliCommandAsync(
+                targetSiteName,
+                $"search-replace {sourceUrl} {targetUrl} --all-tables --skip-columns=guid",
+                cancellationToken);
+            return sonuc.ExitCode == 0;
+        }
+        catch (Exception)
+        {
+            // wp-cli/PHP hiç çalıştırılamadı (AppException: wpcli.not_wordpress, çalıştırıcı
+            // hatası...). Yutulmuyor — çağırana "olmadı" diye bildiriliyor.
+            return false;
+        }
     }
 
     private static bool IsSafeName(string value) =>
