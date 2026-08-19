@@ -49,6 +49,9 @@ public sealed class SiteDeletionHonestyTests
 
             // ÖLÇÜM: silme yarıda kaldı ama dosyaların bir kısmı GERÇEKTEN gitti.
             Assert.True(duruyor);
+            // ÖLÇÜLDÜ (bu makinede): 4 dosyadan 3'ü silindi, 1 kilitli dosya kaldı. Kesin sayıya
+            // BAĞLANMIYORUZ (silme sırası dosya sistemi sıralamasına bağlıdır); iddia şudur:
+            // silme "başarısız" oldu AMA dosyaların bir kısmı gerçekten gitti.
             Assert.True(kalan < oncesi, $"Bu makinede kısmi silme üretilemedi ({oncesi} -> {kalan}); testin dayanağı ölçüm.");
 
             var sonuc = SiteCascadeDeletionService.ClassifyDeletion(oncesi, kalan, duruyor);
