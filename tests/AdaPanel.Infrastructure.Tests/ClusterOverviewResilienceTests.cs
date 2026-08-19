@@ -96,18 +96,16 @@ public sealed class ClusterOverviewResilienceTests : IDisposable
     public async Task Yavas_dugumler_PARALEL_yoklanir_sirayla_degil()
     {
         var duzenek = await DuzenekAsync(("bir", true), ("iki", true), ("uc", true));
-        duzenek.Istemci.Gecikme = TimeSpan.FromMilliseconds(400);
+        // Kisa bir gecikme, cagrilarin gercekten UST USTE BINEBILMESI icin yeter; olcum saate
+        // degil, ayni anda acik cagri sayisina bakiyor (bkz. SahteIstemci.EszamanliZirve).
+        duzenek.Istemci.Gecikme = TimeSpan.FromMilliseconds(50);
 
-        var saat = Stopwatch.StartNew();
         var pano = await duzenek.Servis.GetOverviewAsync();
-        saat.Stop();
 
         Assert.Equal(3, pano.ReachableCount);
-        // Esik bilerek gevsek (CI makinesi yavas olabilir); olculen sey "sirali mi paralel mi",
-        // milisaniye hassasiyeti degil. Sirali olsaydi >= 1200 ms olurdu.
         Assert.True(
-            saat.ElapsedMilliseconds < 1000,
-            $"Yoklama sirayla yapiliyor gibi gorunuyor: {saat.ElapsedMilliseconds} ms (3 x 400 ms).");
+            duzenek.Istemci.EszamanliZirve > 1,
+            $"Yoklama sirayla yapiliyor: ayni anda en fazla {duzenek.Istemci.EszamanliZirve} cagri acikti.");
     }
 
     /// <summary>
@@ -257,6 +255,17 @@ public sealed class ClusterOverviewResilienceTests : IDisposable
 
         public TimeSpan Gecikme { get; set; } = TimeSpan.Zero;
 
+        private int anlikCagri;
+
+        /// <summary>
+        /// Aynı anda kaç yoklamanın açık olduğunun ZİRVESİ. Paralellik testi eskiden duvar saatiyle
+        /// ölçülüyordu ("3 x 400 ms toplam 1000 ms'nin altında kalmalı") ve tam takım yükü altında
+        /// rastgele kırmızı veriyordu: paralel ideal 400 ms, sıralı 1200 ms, eşik 1000 ms — yani
+        /// "yavaş paralel" ile "sıralı" arasında yalnız 200 ms vardı. Burada ölçülen şey vekil bir
+        /// gösterge değil, sorunun kendisi: sıralı çalışsaydı zirve 1'de kalırdı.
+        /// </summary>
+        public int EszamanliZirve { get; private set; }
+
         public void Basarisiz(string etiket, string kod, string ayrinti) => hatalar[etiket] = (kod, ayrinti);
 
         public async Task<ClusterCallResult<ClusterNodeInfoDto>> FetchInfoAsync(
@@ -267,8 +276,27 @@ public sealed class ClusterOverviewResilienceTests : IDisposable
             lock (Yoklananlar)
             {
                 Yoklananlar.Add(node.Label);
+                anlikCagri++;
+                EszamanliZirve = Math.Max(EszamanliZirve, anlikCagri);
             }
 
+            try
+            {
+                return await YoklaAsync(node, cancellationToken);
+            }
+            finally
+            {
+                lock (Yoklananlar)
+                {
+                    anlikCagri--;
+                }
+            }
+        }
+
+        private async Task<ClusterCallResult<ClusterNodeInfoDto>> YoklaAsync(
+            ClusterNodeRecord node,
+            CancellationToken cancellationToken)
+        {
             if (Patlat.Contains(node.Label))
             {
                 throw new InvalidOperationException("sozlesme ihlali");
