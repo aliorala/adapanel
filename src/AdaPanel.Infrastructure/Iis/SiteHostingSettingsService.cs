@@ -637,41 +637,35 @@ public sealed class SiteHostingSettingsService(
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
                 $"Invoke-WebRequest -Uri '{url}' -OutFile '{archive.Replace("'", "''")}' -UseBasicParsing; " +
                 $"Expand-Archive -Path '{archive.Replace("'", "''")}' -DestinationPath '{extractDir.Replace("'", "''")}' -Force";
-            var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-            if (!result.Success || !Directory.Exists(extractDir))
+
+            // KATI çalıştırma: bu script ÇOK İFADELİDİR ve normal PowerShell çıkış kodu yalnızca SON
+            // ifadeyi yansıtır. Bozuk zip üzerinde Expand-Archive sonlandırıcı OLMAYAN hata verir →
+            // powershell.exe 0 ile çıkar (bu makinede ölçüldü). Kati sürüm hatayı çıkış koduna taşır.
+            var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
+
+            // ÇIKIŞ KODU TEK BAŞINA YETMEZ; SONUÇ ÖLÇÜLÜR.
+            //
+            // Eski ölçüt `result.Success && Directory.Exists(extractDir)` idi ve İKİNCİ KOŞUL HER
+            // ZAMAN DOĞRUYDU: extractDir'i birkaç satır yukarıda BU KOD kendisi oluşturuyor. Yani
+            // URL bir HTML hata sayfası ya da yarım dosya döndürdüğünde akış devam ediyor, sitenin
+            // TÜM kökü yedeğe taşınıyor, 0 dosya kopyalanıyor ve panel "İçe aktarma tamamlandı"
+            // diyordu — site bomboş kalıyordu.
+            //
+            // Doğru kalıp (PhpService'te zaten var): BEKLENEN ÇIKTININ gerçekten üretildiğini
+            // ayrıca doğrula. Burada beklenen çıktı = arşivden çıkan EN AZ BİR DOSYA.
+            var source = ResolveArchiveContentRoot(extractDir);
+            var availableFiles = source is null ? 0 : CountFiles(source);
+            if (!result.Success || availableFiles == 0)
             {
-                throw new AppException("migration.download_failed", 502, 502, TruncateMigrationError(result.StandardError));
+                var detay = result.Success
+                    ? $"Arsiv indirildi ama icinden hicbir dosya cikmadi (URL bir HTML hata sayfasi ya da yarim/bozuk zip olabilir). Indirilen boyut: {SafeFileLength(archive)} bayt."
+                    : TruncateMigrationError(string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError);
+
+                // HİÇBİR ŞEYE DOKUNULMADAN çıkılır: doğrulama, yıkıcı adımdan ÖNCE yapılır.
+                throw new AppException("migration.download_failed", 502, 502, detay);
             }
 
-            // Arşivde tek üst klasör varsa onun içeriğini kök kabul et (yaygın "site/..." paketlemesi).
-            var source = extractDir;
-            var topLevel = new DirectoryInfo(extractDir).GetFileSystemInfos();
-            if (topLevel.Length == 1 && topLevel[0] is DirectoryInfo onlyDirectory)
-            {
-                source = onlyDirectory.FullName;
-            }
-
-            if (cleanFirst)
-            {
-                // Hedef içeriğini kardeş "_goc_yedek_<tarih>" klasörüne taşı (root DIŞINDA → root boşalır).
-                var backup = $"{root.TrimEnd('\\', '/')}_goc_yedek_{DateTime.Now:yyyyMMdd_HHmmss}";
-                Directory.CreateDirectory(backup);
-                foreach (var item in new DirectoryInfo(root).EnumerateFileSystemInfos())
-                {
-                    var destination = Path.Combine(backup, item.Name);
-                    if (item is DirectoryInfo directory)
-                    {
-                        Directory.Move(directory.FullName, destination);
-                    }
-                    else
-                    {
-                        File.Move(item.FullName, destination);
-                    }
-                }
-            }
-
-            var copied = CopyDirectoryRecursive(source, root);
-            return new SiteImportResultDto { SiteName = site.Name, FilesCopied = copied };
+            return ApplyImportedContent(site.Name, source!, root, cleanFirst);
         }
         finally
         {
@@ -685,6 +679,133 @@ public sealed class SiteHostingSettingsService(
             catch
             {
                 // En iyi çaba: geçici klasör silinemezse göçü başarısız sayma.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Arşivden çıkan içeriğin gerçek kökünü bulur. Arşivde tek bir üst klasör varsa onun içi kök
+    /// kabul edilir (yaygın "site/..." paketlemesi). İçerik HİÇ yoksa <c>null</c> döner — çağıran
+    /// bunu "arşiv boş/bozuk" olarak okur.
+    /// </summary>
+    internal static string? ResolveArchiveContentRoot(string extractDirectory)
+    {
+        if (!Directory.Exists(extractDirectory))
+        {
+            return null;
+        }
+
+        var current = extractDirectory;
+
+        // İç içe tek klasörleri (site/httpdocs/... gibi) en çok 5 kademe soyar; sonsuz döngü yok.
+        for (var derinlik = 0; derinlik < 5; derinlik++)
+        {
+            var topLevel = new DirectoryInfo(current).GetFileSystemInfos();
+            if (topLevel.Length == 1 && topLevel[0] is DirectoryInfo onlyDirectory)
+            {
+                current = onlyDirectory.FullName;
+                continue;
+            }
+
+            return topLevel.Length == 0 ? null : current;
+        }
+
+        return current;
+    }
+
+    /// <summary>Ağaçtaki dosya sayısı. "Beklenen çıktı gerçekten üretildi mi" ölçümüdür.</summary>
+    internal static int CountFiles(string directory)
+        => Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Count()
+            : 0;
+
+    private static long SafeFileLength(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Doğrulanmış arşiv içeriğini site köküne yazar.
+    /// <para>
+    /// F7 — YANA ALMA ARTIK TEK KAYNAKTAN. Burada <see cref="ContentSideline"/>'ın satır içi
+    /// yeniden yazılmış, GERİ SARMA ÖZELLİĞİ OLMAYAN dördüncü kopyası vardı: taşıma ortasında tek
+    /// bir kilitli dosya (açık bir log, IIS'in tuttuğu bir DLL) istisna atınca site kökü YARI
+    /// BOŞALMIŞ kalıyordu — ne eski ne yeni hâlde. <see cref="ContentSideline.MoveAside"/> yarım
+    /// kalan taşımayı kendisi geri sarar ve "başlama" der.
+    /// </para>
+    /// <para>
+    /// Kopyalama yarıda kalırsa da site ESKİ hâline döndürülür; "yeni içerik yarım, eskisi kardeş
+    /// klasörde" durumu kullanıcı için veri kaybından ayırt edilemez.
+    /// </para>
+    /// </summary>
+    internal static SiteImportResultDto ApplyImportedContent(string siteName, string source, string root, bool cleanFirst)
+    {
+        Directory.CreateDirectory(root);
+
+        string? sidelineDirectory = null;
+        IReadOnlyList<SidelinedEntry> sidelined = Array.Empty<SidelinedEntry>();
+        if (cleanFirst)
+        {
+            sidelineDirectory = ContentSideline.BuildSiblingPath(root, "goc_yedek");
+            sidelined = ContentSideline.MoveAside(root, sidelineDirectory);
+        }
+
+        try
+        {
+            var copied = CopyDirectoryRecursive(source, root);
+            ContentSideline.RemoveIfEmpty(sidelineDirectory);
+
+            return new SiteImportResultDto
+            {
+                SiteName = siteName,
+                FilesCopied = copied,
+                // Panel eskiden yedeğin NEREDE olduğunu hiç söylemiyordu; kullanıcı kardeş klasörü
+                // bulamayınca "içerik silindi" sanıyordu.
+                BackupPath = sidelined.Count > 0 && Directory.Exists(sidelineDirectory) ? sidelineDirectory! : string.Empty
+            };
+        }
+        catch
+        {
+            if (sidelined.Count > 0)
+            {
+                // Kök yana almadan sonra BOŞTU; içindeki her şey bu yarım kopyalamadan geldi.
+                // Geri sarmadan önce temizlenmezse eski ve yeni içerik karışır.
+                ClearDirectoryContents(root);
+                ContentSideline.MoveBack(root, sidelined);
+                ContentSideline.RemoveIfEmpty(sidelineDirectory);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>Kökün İÇİNİ boşaltır (kökün kendisi kalır). En iyi çaba: silinemeyen girdi atlanır.</summary>
+    private static void ClearDirectoryContents(string root)
+    {
+        foreach (var item in new DirectoryInfo(root).EnumerateFileSystemInfos())
+        {
+            try
+            {
+                if (item is DirectoryInfo directory)
+                {
+                    directory.Delete(true);
+                }
+                else
+                {
+                    item.Delete();
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Silinemeyen girdi geri koymayı engellemesin; ContentSideline.MoveBack çakışan
+                // hedefi kendisi temizlemeye çalışır, başaramazsa veri yana alma klasöründe kalır.
             }
         }
     }

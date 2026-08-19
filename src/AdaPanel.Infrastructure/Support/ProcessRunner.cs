@@ -197,6 +197,179 @@ internal static class ProcessRunner
     }
 
     /// <summary>
+    /// <see cref="RunPowerShellAsync"/>'in KATI sürümü: çok ifadeli bir script'te ARIZAYI ÇIKIŞ
+    /// KODUNA yansıtır.
+    /// <para>
+    /// KÖK NEDEN (bu makinede ölçüldü): PowerShell'in çıkış kodu, script'in SON ifadesinin
+    /// sonucudur. Bozuk bir zip üzerinde <c>Expand-Archive</c> SONLANDIRICI OLMAYAN hata verir;
+    /// script akmaya devam eder ve <c>powershell.exe</c> <b>0</b> ile çıkar. Ölçüm:
+    /// <c>Expand-Archive &lt;bozuk.zip&gt;; Write-Output 'DEVAM-ETTI'</c> → ekrana "DEVAM-ETTI"
+    /// yazıldı, çıkış kodu <b>0</b>. Aynı script bu sarmalayıcıyla → çıkış kodu <b>1</b>.
+    /// </para>
+    /// <para>
+    /// Görünen etkisi: indirilen arşiv bir HTML hata sayfası olduğunda site içe aktarma "başarılı"
+    /// sayılıyor, sitenin kökü boşaltılıyor ve panel "tamamlandı" diyordu. Yani <c>Success</c>
+    /// (yalnız çıkış kodu) çok ifadeli script'lerde TEK BAŞINA YETMEZ.
+    /// </para>
+    /// <para>
+    /// Üç şeyi birden yapar: (1) sonlandırıcı olmayan hataları sonlandırıcıya çevirir
+    /// (<c>$ErrorActionPreference='Stop'</c>), (2) hatayı yakalayıp gerçek mesajı stderr'e yazar ve
+    /// 1 ile çıkar, (3) script'in ORTASINDA patlayan yerli komutun (<c>$LASTEXITCODE</c>) çıkış
+    /// kodunu da yüzeye çıkarır. <b>OPT-IN'dir</b>: mevcut çağıranların davranışı DEĞİŞMEZ —
+    /// depodaki bazı script'ler bilerek <c>-ErrorAction SilentlyContinue</c> ile akmaya güvenir,
+    /// bunu topluca katılaştırmak kendi başına bir regresyon sınıfı olurdu.
+    /// </para>
+    /// <para>
+    /// Yine de tek başına YETERLİ DEĞİLDİR: çıkış kodu "araç şikâyet etmedi" der, "iş oldu" demez.
+    /// Çağıran ayrıca BEKLENEN ÇIKTIYI doğrulamalıdır (depodaki doğru kalıp: <c>PhpService</c>
+    /// indirdiği DLL'in gerçekten orada olduğunu ayrıca kontrol eder).
+    /// </para>
+    /// </summary>
+    public static Task<CommandResult> RunPowerShellStrictAsync(string command, CancellationToken cancellationToken = default)
+    {
+        var strict =
+            "$ErrorActionPreference = 'Stop'\n" +
+            // Önceki bir değerin yanlışlıkla hata sanılmaması için sıfırlanır.
+            "$global:LASTEXITCODE = 0\n" +
+            "try {\n" +
+            command + "\n" +
+            "} catch {\n" +
+            // Gerçek sebep kullanıcıya ulaşsın: panel bu satırı hata ayrıntısı olarak gösterir.
+            "  [Console]::Error.WriteLine($_.Exception.Message)\n" +
+            "  exit 1\n" +
+            "}\n" +
+            // Yerli komut (curl, icacls, schtasks...) SON ifade değilse hatası çıkış koduna
+            // yansımaz; burada elle yansıtılır.
+            "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n";
+
+        return RunPowerShellAsync(strict, cancellationToken);
+    }
+
+    /// <summary>
+    /// Verilen dizinin ALTINDAN çalışan, adı <paramref name="processName"/> olan süreçleri döner.
+    /// <para>
+    /// KÖK NEDEN (bu kuralın tek kaynağa çıkarılma sebebi): aynı karşılaştırma panelde dört ayrı
+    /// yerde elle yazılmıştı ve biri YANLIŞTI — nginx tarafı kurulum dizinini ileri eğik çizgiye
+    /// çevirip ("C:/.../nginx/") sürecin ters eğik çizgili yoluyla ("C:\...\nginx\nginx.exe")
+    /// karşılaştırıyordu. Bu iki dizge ASLA eşleşmez: öldürme kodu fiilen ölüydü, kaldırma
+    /// "başarılı" raporlanıyor ama nginx.exe dizini kilitlemeye devam ediyordu. Aynı sınıfın
+    /// <c>Replace("System32")</c> dersiyle birebir aynısı.
+    /// </para>
+    /// <para>
+    /// <see cref="Path.GetFullPath(string)"/> her iki ayırıcıyı da Windows ayırıcısına
+    /// normalleştirir; karşılaştırma bu yüzden ONUN üzerinden yapılır.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<Process> EnumerateProcessesUnder(string directory, string processName)
+    {
+        var eslesenler = new List<Process>();
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(processName))
+        {
+            return eslesenler;
+        }
+
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            var eslesti = false;
+            try
+            {
+                // MainModule başka bir oturumdaki/64-32 bit uyuşmazlığındaki süreçte erişim hatası
+                // verebilir; o süreç zaten bizim yönettiğimiz süreç değildir.
+                eslesti = IsUnderDirectory(process.MainModule?.FileName, directory);
+            }
+            catch
+            {
+                eslesti = false;
+            }
+
+            if (eslesti)
+            {
+                eslesenler.Add(process);
+            }
+            else
+            {
+                process.Dispose();
+            }
+        }
+
+        return eslesenler;
+    }
+
+    /// <summary>
+    /// <paramref name="candidatePath"/> gerçekten <paramref name="directory"/> ağacının içinde mi?
+    /// Ayırıcı yönünden ve sondaki ayırıcıdan BAĞIMSIZ karşılaştırır.
+    /// <para>
+    /// Sondaki ayırıcı şart: aksi halde "…\nginx" öneki "…\nginx-yedek\nginx.exe" ile de eşleşir ve
+    /// KOMŞU kurulumun süreci öldürülür.
+    /// </para>
+    /// </summary>
+    public static bool IsUnderDirectory(string? candidatePath, string directory)
+    {
+        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(directory))
+        {
+            return false;
+        }
+
+        try
+        {
+            var kok = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var aday = Path.GetFullPath(candidatePath);
+            return aday.StartsWith(kok, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // Geçersiz yol karakteri vb.: "içinde değil" say — asla yanlışlıkla öldürme.
+            return false;
+        }
+    }
+
+    /// <summary>Dizinin altından çalışan süreçlerin sayısını döner (öldürmez).</summary>
+    public static int CountProcessesUnder(string directory, string processName)
+    {
+        var surecler = EnumerateProcessesUnder(directory, processName);
+        try
+        {
+            return surecler.Count;
+        }
+        finally
+        {
+            foreach (var process in surecler)
+            {
+                process.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Dizinin altından çalışan süreçleri (alt süreçleriyle birlikte) öldürür; öldürülen sayısını
+    /// döner. Öldürme başarısız olursa YUTULUR — çağıran sonucu <see cref="CountProcessesUnder"/>
+    /// ile ÖLÇMELİDİR; "komut hata vermedi" ile "süreç gerçekten öldü" aynı şey değildir.
+    /// </summary>
+    public static int KillProcessesUnder(string directory, string processName)
+    {
+        var oldurulen = 0;
+        foreach (var process in EnumerateProcessesUnder(directory, processName))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+                oldurulen++;
+            }
+            catch
+            {
+                // Süreç bu arada kendi kapanmış ya da yetki yok olabilir.
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        return oldurulen;
+    }
+
+    /// <summary>
     /// Scripti gecici bir dosyaya yazip <c>-File</c> ile calistirir. Uzunluk siniri kalmaz.
     /// <para>
     /// Dosya UTF-8 BOM ile yazilir: PowerShell 5.1 BOM yoksa dosyayi sistem kod sayfasiyla okur ve

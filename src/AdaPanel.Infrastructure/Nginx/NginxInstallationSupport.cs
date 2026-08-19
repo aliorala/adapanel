@@ -212,14 +212,22 @@ internal static partial class NginxInstallationSupport
 
     internal static async Task RemoveAsync(string installDirectory, CancellationToken cancellationToken)
     {
+        var durdurmaHatasi = string.Empty;
         try
         {
             await StopAsync(installDirectory, cancellationToken);
         }
-        catch
+        catch (Exception exception)
         {
-            KillManagedProcesses(installDirectory);
+            durdurmaHatasi = exception.Message;
         }
+
+        // ÖNCE SÜREÇ, SONRA GÖREV. Eskiden süreç öldürme YALNIZCA StopAsync istisna atarsa
+        // deneniyordu; oysa "nginx -s quit" hata vermeden dönüp süreci ayakta bırakabilir
+        // (bozuk conf, kapanmayan işçi, PID dosyası eski). O yolda kaldırma "başarılı" görünür,
+        // dizin kilitli kalır ve bir sonraki kurulum "dosya kullanımda" ile patlar. Bu yüzden
+        // sonuç HER DURUMDA ölçülür.
+        var kalanSurec = await DrainManagedProcessesAsync(installDirectory, cancellationToken);
 
         var result = await ProcessRunner.RunPowerShellAsync(
             $"Unregister-ScheduledTask -TaskName '{StartupTaskName}' -Confirm:$false -ErrorAction SilentlyContinue",
@@ -227,6 +235,23 @@ internal static partial class NginxInstallationSupport
         if (!result.Success)
         {
             throw new AppException("nginx.remove_failed", 500, 500, FormatResult(result));
+        }
+
+        if (kalanSurec > 0)
+        {
+            // Kullanıcıya YALAN söylemektense gerçeği söyle: dizin hâlâ kilitli, silme/yeniden
+            // kurma bu yüzden başarısız olacak.
+            throw new AppException(
+                "nginx.remove_failed",
+                500,
+                500,
+                string.Join(
+                    Environment.NewLine,
+                    new[]
+                    {
+                        $"{kalanSurec} adet nginx.exe hala '{installDirectory}' dizininden calisiyor; dizin kilitli kaldi.",
+                        durdurmaHatasi
+                    }.Where(value => !string.IsNullOrWhiteSpace(value))));
         }
     }
 
@@ -438,28 +463,59 @@ internal static partial class NginxInstallationSupport
         return content.Length <= 4000 ? content : content[^4000..];
     }
 
-    private static void KillManagedProcesses(string installDirectory)
+    /// <summary>
+    /// Bu kurulum dizininden çalışan nginx süreçlerini öldürür.
+    /// <para>
+    /// ESKİ HÂLİ HİÇ ÇALIŞMIYORDU: karşılaştırmanın bir tarafı <see cref="EnsureTrailingSeparator"/>
+    /// ile İLERİ eğik çizgiye çevriliyordu ("C:/.../nginx/"), diğer taraf ise
+    /// <c>Path.GetFullPath</c> çıktısıydı ("C:\...\nginx\nginx.exe" — TERS eğik çizgi). Bu iki
+    /// dizge asla eşleşmez; <c>Kill</c> satırına hiç girilmiyordu. Sonuç: nginx kaldırma
+    /// "başarılı" raporlanıyor ama nginx.exe dizini kilitli tutmaya devam ediyordu.
+    /// </para>
+    /// <para>
+    /// Kural artık TEK kaynakta: <see cref="ProcessRunner.KillProcessesUnder"/> karşılaştırmayı
+    /// <c>Path.GetFullPath</c> üzerinden (iki ayırıcıyı da normalleştirerek) yapar.
+    /// </para>
+    /// </summary>
+    private static int KillManagedProcesses(string installDirectory)
+        => ProcessRunner.KillProcessesUnder(installDirectory, "nginx");
+
+    /// <summary>
+    /// Kurulum dizininden çalışan nginx kalmayana kadar bekler; gerekirse öldürür ve SONUCU ÖLÇER.
+    /// Geriye HÂLÂ ayakta kalan süreç sayısını döner (0 = dizin serbest).
+    /// <para>
+    /// NEDEN BEKLEME: <c>nginx -s quit</c> ZARİF kapanmadır — komut hemen döner, işçi süreçler
+    /// açık bağlantıları bitirene kadar yaşamaya devam eder. Hemen ölçen kod "hâlâ çalışıyor"
+    /// sanıp gereksiz yere öldürür; hiç ölçmeyen kod ise kilitli dizini "temizlendi" sayar.
+    /// </para>
+    /// </summary>
+    private static async Task<int> DrainManagedProcessesAsync(string installDirectory, CancellationToken cancellationToken)
     {
-        var managedRoot = EnsureTrailingSeparator(installDirectory);
-        foreach (var process in Process.GetProcessesByName("nginx"))
+        for (var deneme = 0; deneme < 15; deneme++)
         {
-            try
+            if (ProcessRunner.CountProcessesUnder(installDirectory, "nginx") == 0)
             {
-                var processPath = process.MainModule?.FileName;
-                if (!string.IsNullOrWhiteSpace(processPath) &&
-                    Path.GetFullPath(processPath).StartsWith(managedRoot, StringComparison.OrdinalIgnoreCase))
-                {
-                    process.Kill(entireProcessTree: true);
-                }
+                return 0;
             }
-            catch
-            {
-            }
-            finally
-            {
-                process.Dispose();
-            }
+
+            await Task.Delay(200, cancellationToken);
         }
+
+        KillManagedProcesses(installDirectory);
+
+        // Öldürme de anında değildir: çekirdek tanıtıcıları kapatana kadar süreç listede kalır.
+        for (var deneme = 0; deneme < 15; deneme++)
+        {
+            var kalan = ProcessRunner.CountProcessesUnder(installDirectory, "nginx");
+            if (kalan == 0)
+            {
+                return 0;
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return ProcessRunner.CountProcessesUnder(installDirectory, "nginx");
     }
 
     private static string EscapePowerShell(string value) => value.Replace("'", "''", StringComparison.Ordinal);

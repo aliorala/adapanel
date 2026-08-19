@@ -110,7 +110,9 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
         await client.Disconnect(cancellationToken);
 
         var files = results.Where(item => item.IsSuccess && item.Type == FtpObjectType.File).ToList();
-        return new RemoteFileMigrationResult
+        var failed = results.Count(item => !item.IsSuccess);
+
+        var result = new RemoteFileMigrationResult
         {
             SiteName = request.SiteName,
             Protocol = secure ? "ftps" : "ftp",
@@ -118,6 +120,42 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
             BytesDownloaded = files.Sum(item => Math.Max(0, item.Size)),
             TargetPath = target
         };
+
+        EnsureFilesDownloaded(result, remotePath, failed);
+        return result;
+    }
+
+    /// <summary>
+    /// SIFIR DOSYA BAŞARI DEĞİLDİR.
+    /// <para>
+    /// Eski hâlde bu kontrol hiç yoktu: yanlış "Uzak yol" (en sık göç hatası — /httpdocs yerine /,
+    /// ya da kullanıcının ev dizini boş) verildiğinde FluentFTP/SSH.NET istisna atmaz, sadece boş
+    /// bir liste döner. Panel de "Dosyalar çekildi" diye YEŞİL bir adım gösterirdi; kullanıcı
+    /// göçün bittiğini sanıp DNS'i çevirir ve karşısına boş site çıkardı.
+    /// </para>
+    /// <para>
+    /// Mesaj anahtarı bilerek <c>migration.files.path_not_found</c>: kullanıcıya yapması gereken
+    /// şeyi söyler ("Uzak yol'u kontrol et: /httpdocs, /public_html, /").
+    /// </para>
+    /// </summary>
+    internal static void EnsureFilesDownloaded(RemoteFileMigrationResult result, string remotePath, int failedCount)
+    {
+        if (result.FilesDownloaded > 0)
+        {
+            return;
+        }
+
+        var detay = $"'{remotePath}' yolundan hicbir dosya indirilmedi.";
+        if (failedCount > 0)
+        {
+            detay += $" {failedCount} ogenin aktarimi basarisiz oldu (yetki ya da baglanti).";
+        }
+        else
+        {
+            detay += " Uzak dizin bos olabilir ya da yol yanlis olabilir.";
+        }
+
+        throw new AppException("migration.files.path_not_found", 502, 502, detay);
     }
 
     private async Task<RemoteFileMigrationResult> PullSftpAsync(
@@ -139,7 +177,7 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
             DownloadSftpDirectory(client, remotePath, target, counter, cancellationToken);
             client.Disconnect();
 
-            return new RemoteFileMigrationResult
+            var result = new RemoteFileMigrationResult
             {
                 SiteName = request.SiteName,
                 Protocol = "sftp",
@@ -147,6 +185,10 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
                 BytesDownloaded = counter.Bytes,
                 TargetPath = target
             };
+
+            // FTP ile aynı gerçek: SFTP'de de boş/yanlış uzak yol istisna atmaz, sessizce 0 dosya döner.
+            EnsureFilesDownloaded(result, remotePath, failedCount: 0);
+            return result;
         }, cancellationToken);
     }
 

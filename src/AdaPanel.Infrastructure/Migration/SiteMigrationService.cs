@@ -98,7 +98,7 @@ public sealed class SiteMigrationService(
         {
             var filesPulled = await ExecuteStepAsync("files", "migration.step.files_pulled", async () =>
             {
-                await fileMigrationService.PullAsync(
+                var pull = await fileMigrationService.PullAsync(
                     new RemoteFileMigrationRequest
                     {
                         SiteName = request.SiteName,
@@ -110,7 +110,12 @@ public sealed class SiteMigrationService(
                         RemotePath = request.RemotePath
                     },
                     cancellationToken);
-                return null;
+
+                // SONUÇ ARTIK ATILMIYOR. Burada `return null` vardı: dosya çekme servisi kaç dosya
+                // ve kaç bayt indirdiğini hesaplıyor, adım da bir "Detay" alanı taşıyor, ama sayı
+                // arayüze HİÇ ulaşmıyordu. Kullanıcı "Dosyalar çekildi" yazısına bakıp göçün
+                // gerçekten olup olmadığını ayırt edemiyordu.
+                return DescribeFilePull(pull);
             });
 
             // Dosyalar çekildiyse göçen .user.ini'leri temizle: eski Plesk/vhost yolları + bozuk open_basedir
@@ -207,6 +212,34 @@ public sealed class SiteMigrationService(
         });
 
         return result;
+    }
+
+    /// <summary>
+    /// Dosya çekme adımının ÖLÇÜLEBİLİR sonucu: kaç dosya, ne kadar veri, nereye. Kullanıcı bu
+    /// satıra bakarak "gerçekten geldi mi" sorusunu yanıtlayabilir.
+    /// </summary>
+    internal static string DescribeFilePull(RemoteFileMigrationResult result)
+        => $"{result.FilesDownloaded} dosya · {FormatBytes(result.BytesDownloaded)} → {result.TargetPath}";
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+        {
+            return $"{bytes} B";
+        }
+
+        string[] birimler = ["KB", "MB", "GB", "TB"];
+        double deger = bytes;
+        var index = -1;
+        while (deger >= 1024 && index < birimler.Length - 1)
+        {
+            deger /= 1024;
+            index++;
+        }
+
+        // Sabit kültür: sunucunun yerel ayarı ondalık ayırıcıyı değiştirip aynı sayıyı farklı
+        // gösterirse (1.5 GB / 1,5 GB) hem kullanıcı hem testler için kaygan zemin olur.
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#} {1}", deger, birimler[index]);
     }
 
     // Plesk REST keşfi: GET https://host:8443/api/v2/domains (X-API-Key) → domain listesi. Plesk genelde

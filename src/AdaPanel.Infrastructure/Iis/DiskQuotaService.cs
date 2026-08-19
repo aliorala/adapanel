@@ -38,10 +38,18 @@ public sealed class DiskQuotaService(IIisSiteService iisSiteService) : IDiskQuot
             }
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
         if (!result.Success)
         {
-            throw new AppException("quota.read_failed", 500, 500, result.StandardError);
+            throw new AppException("quota.read_failed", 500, 500, Detay(result));
+        }
+
+        // BOŞ ÇIKTIYI "kota yok" SAYMA. MapResult boş metinde her alanı false/0 döner; yani
+        // FSRM sorgusu sessizce patladığında panel "kota yok" gösterirdi. Daha kötüsü: kaldırma
+        // doğrulaması bu okumaya güvenir, o da "gitti" derdi. Okuyamadıysak okuyamadık deriz.
+        if (string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            throw new AppException("quota.read_failed", 500, 500, $"FSRM sorgusu '{path}' icin hic cikti dondurmedi.");
         }
 
         return MapResult(siteName, path, result.StandardOutput);
@@ -64,7 +72,9 @@ public sealed class DiskQuotaService(IIisSiteService iisSiteService) : IDiskQuot
             }
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        // KATI çalıştırma: Set-/New-FsrmQuota hatası SONLANDIRICI DEĞİLDİR; normal çalıştırmada
+        // script akmaya devam eder ve powershell.exe 0 ile çıkar → "kota kuruldu" yalanı.
+        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
         if (result.ExitCode == 21)
         {
             throw new AppException("quota.fsrm_unavailable", 409, 409);
@@ -72,31 +82,66 @@ public sealed class DiskQuotaService(IIisSiteService iisSiteService) : IDiskQuot
 
         if (!result.Success)
         {
-            throw new AppException("quota.write_failed", 500, 500, result.StandardError);
+            throw new AppException("quota.write_failed", 500, 500, Detay(result));
         }
 
-        return await GetQuotaAsync(siteName, cancellationToken);
+        // SONUCU ÖLÇ: çıkış kodu "komut şikâyet etmedi" der, "kota gerçekten kuruldu" demez.
+        var quota = await GetQuotaAsync(siteName, cancellationToken);
+        if (!quota.QuotaEnabled)
+        {
+            throw new AppException(
+                "quota.write_failed",
+                500,
+                500,
+                $"Kota komutu hata vermedi ama '{path}' yolunda kota OKUNAMIYOR (kurulmamis).");
+        }
+
+        return quota;
     }
 
     public async Task<SiteDiskQuotaDto> RemoveQuotaAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var path = await ResolveSitePathAsync(siteName, cancellationToken);
 
+        // ESKİ HÂLİ HİÇBİR ŞEYİ DOĞRULAMIYORDU: `-ErrorAction SilentlyContinue` gerçek hatayı
+        // (yetki yok, kota şablona bağlı, FSRM servisi kapalı) YUTUYOR, tek ölçüt olan çıkış kodu
+        // ise zaten 0 kalıyordu. Sonuç: kota yerinde duruyorken panel "kaldırıldı" diyordu.
+        //
+        // Artık: (1) hata BASTIRILMIYOR, (2) script KATI çalıştırılıyor, (3) kaldırma sonrası
+        // kotanın gerçekten gitmiş olduğu AYRICA okunuyor.
         var script = $$"""
             $path = '{{EscapePowerShellLiteral(path)}}'
-            if (Get-Command Remove-FsrmQuota -ErrorAction SilentlyContinue) {
-              Remove-FsrmQuota -Path $path -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-            }
+            if (-not (Get-Command Remove-FsrmQuota -ErrorAction SilentlyContinue)) { exit 21 }
+            if (-not (Get-FsrmQuota -Path $path -ErrorAction SilentlyContinue)) { exit 22 }
+            Remove-FsrmQuota -Path $path -Confirm:$false | Out-Null
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        if (!result.Success)
+        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
+
+        // 21 = FSRM bu makinede yok → kota da olamaz. 22 = zaten kota yoktu.
+        // İkisi de "kaldırılacak bir şey yok" demektir; kullanıcıya hata göstermek yanıltıcı olur.
+        if (result.ExitCode is not (0 or 21 or 22))
         {
-            throw new AppException("quota.write_failed", 500, 500, result.StandardError);
+            throw new AppException("quota.write_failed", 500, 500, Detay(result));
         }
 
-        return await GetQuotaAsync(siteName, cancellationToken);
+        var quota = await GetQuotaAsync(siteName, cancellationToken);
+        if (quota.QuotaEnabled)
+        {
+            // Komut hata vermedi ama kota HÂLÂ orada: kullanıcıya "kaldırıldı" demek yalan olur.
+            throw new AppException(
+                "quota.write_failed",
+                500,
+                500,
+                $"Kaldirma komutu hata vermedi ama '{path}' yolundaki kota HALA duruyor. FSRM kotasi bir sablona bagli olabilir ya da FSRM servisi calismiyor olabilir.");
+        }
+
+        return quota;
     }
+
+    /// <summary>Hata ayrıntısı: PowerShell bazen sebebi stdout'a yazar, stderr boş kalır.</summary>
+    private static string Detay(CommandResult result)
+        => string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError;
 
     private async Task<string> ResolveSitePathAsync(string siteName, CancellationToken cancellationToken)
     {
