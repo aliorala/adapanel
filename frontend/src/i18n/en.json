@@ -3113,6 +3113,8 @@
   "backup.decrypt_corrupt": "The backup file is corrupted or has been tampered with; its integrity check failed. Nothing was restored.",
   "backup.archive_corrupt": "The backup archive is corrupted or incomplete; it could not be opened. Nothing was restored.",
   "backup.compression_failed": "The backup could not be compressed; it was stored raw (uncompressed). The backup is valid but takes far more space than expected.",
+  "backup.source_file_unreadable": "This file could NOT be added to the backup because it could not be read (locked or access denied). The backup is incomplete; this file will not come back on restore.",
+  "backup.source_files_unreadable_more": "Not all unreadable files are listed; the total count is in the target field. The backup is incomplete.",
   "backup.not_encrypted": "This file is not an AdaPanel encrypted backup.",
   "backup.encryption_unavailable": "The backup encryption vault is not available in this installation.",
   "backup.encryption_saved": "Backup encryption settings saved.",

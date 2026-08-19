@@ -123,6 +123,117 @@ public sealed class BackupPruneProtectionTests
         Assert.False(File.Exists(eski.Path));
     }
 
+    // ===========================================================================================
+    // SAYI LIMITI (keepCount) DALI
+    //
+    // OLCULEN BOSLUK: yukaridaki 6 testin HEPSI keepCount = 0 ile calisiyordu, yani "en yeni N
+    // noktayi koru" dali HIC olculmemisti. O dal `kullanilabilir` yuklemini hic cagirmiyor ve
+    // yorumu "hic yedek kalmama riski yoktur" diyordu -- yanlis: "nokta kalmasi" ile "GERI
+    // YUKLENEBILIR nokta kalmasi" ayni sey degil.
+    // ===========================================================================================
+
+    [Fact]
+    public async Task Prune_KeepCount_SON_KULLANILABILIR_yedegi_asla_silmez()
+    {
+        using var alan = new BudamaAlani();
+        var abone = Guid.NewGuid();
+
+        var eski = alan.AbonelikKaydi(abone, gunOnce: 10);
+        var orta = alan.AbonelikKaydi(abone, gunOnce: 5);
+        var enYeni = alan.AbonelikKaydi(abone, gunOnce: 0);
+
+        // En yeni kaydin DOSYASI yok (yedek yarim kaldi / elle silindi). Kaydi duruyor diye
+        // "elimizde 1 nokta var" demek, olculmemis bir seye guvenmek olurdu.
+        File.Delete(enYeni.Path);
+
+        var servis = alan.ServisKur(eski, orta, enYeni);
+        var silinen = await servis.PruneSubscriptionAsync(abone, retentionDays: 0, keepCount: 1);
+
+        // ESKI DAVRANIS: en yeni (bozuk) nokta korunur, orta+eski silinir -> geri yuklenebilir
+        // yedek sayisi SIFIR. Simdi: en yeni KULLANILABILIR nokta da korunur.
+        Assert.Equal(1, silinen);
+        Assert.True(File.Exists(orta.Path));
+
+        var kalanlar = await servis.GetBackupsAsync();
+        Assert.Equal(2, kalanlar.Count);
+        Assert.Contains(kalanlar, kayit => kayit.Id == orta.Id);
+
+        // ASIL OLCU: budamadan sonra GERI YUKLENEBILIR nokta sayisi. "Kac kayit kaldi" degil.
+        Assert.Equal(1, kalanlar.Count(kayit => File.Exists(kayit.Path)));
+    }
+
+    [Fact]
+    public async Task Prune_KeepCount_her_sey_saglamken_ESKI_davranisi_aynen_korur()
+    {
+        // MUTASYON KONTROLU: koruma "hicbir seyi silme"ye donusmemeli. Butun noktalar
+        // kullanilabilirken keepCount=1 tam olarak 1 nokta birakir.
+        using var alan = new BudamaAlani();
+        var abone = Guid.NewGuid();
+
+        var eski = alan.AbonelikKaydi(abone, gunOnce: 10);
+        var orta = alan.AbonelikKaydi(abone, gunOnce: 5);
+        var enYeni = alan.AbonelikKaydi(abone, gunOnce: 0);
+
+        var servis = alan.ServisKur(eski, orta, enYeni);
+        var silinen = await servis.PruneSubscriptionAsync(abone, retentionDays: 0, keepCount: 1);
+
+        Assert.Equal(2, silinen);
+        Assert.False(File.Exists(eski.Path));
+        Assert.False(File.Exists(orta.Path));
+        Assert.True(File.Exists(enYeni.Path));
+    }
+
+    [Fact]
+    public void Planner_KeepCount_ZINCIRIN_eksik_halkasi_noktayi_KULLANILABILIR_saymaz()
+    {
+        // Zincir TEK bir geri yukleme noktasidir ve ancak BUTUN halkalari yerindeyse geri
+        // yuklenebilir. En yeni nokta bir zincirse ve halkasi eksikse, o nokta "elimizde duran
+        // yedek" sayilamaz -- sayilirsa saglam olan eski tekil yedek silinirdi.
+        var tamHalka = Kayit("z0", gunOnce: 3, zincir: "c1");
+        var artimsalHalka = Kayit("z1", gunOnce: 2, zincir: "c1");
+        var eskiTekil = Kayit("tekil", gunOnce: 40);
+
+        var silinecek = BackupPrunePlanner.Select(
+            [tamHalka, artimsalHalka, eskiTekil],
+            cutoffUtc: DateTime.MinValue,
+            keepCount: 1,
+            // z1'in dosyasi yok: zincir kopuk.
+            kullanilabilir: kayit => kayit.Id != "z1");
+
+        Assert.Empty(silinecek);
+    }
+
+    [Fact]
+    public void Planner_KeepCount_hicbir_nokta_kullanilamiyorsa_yine_de_EN_YENIYI_korur()
+    {
+        // Hicbiri geri yuklenemiyor: yer acmak dogru, ama en yeni kaydi tutmak kullaniciya
+        // "burada bir yedek vardi ve dosyasi kayboldu" demenin tek yoludur (kayit silinirse
+        // yedek kendiliginden buharlasmis gibi gorunur).
+        var a = Kayit("a", gunOnce: 3);
+        var b = Kayit("b", gunOnce: 1);
+
+        var silinecek = BackupPrunePlanner.Select(
+            [a, b],
+            cutoffUtc: DateTime.MinValue,
+            keepCount: 1,
+            kullanilabilir: _ => false);
+
+        Assert.Equal(["a"], silinecek.Select(kayit => kayit.Id).ToArray());
+    }
+
+    private static BackupRecordDto Kayit(string id, int gunOnce, string zincir = "") => new()
+    {
+        Id = id,
+        Name = $"{id}.zip",
+        Type = "site",
+        Source = "shop.example.com",
+        Path = $@"C:\yedek\{id}.zip",
+        Format = "zip",
+        Status = "created",
+        ChainId = zincir,
+        CreatedAtUtc = DateTime.UtcNow.AddDays(-gunOnce)
+    };
+
     private sealed class BudamaAlani : IDisposable
     {
         private readonly string _kok;
@@ -155,6 +266,17 @@ public sealed class BackupPruneProtectionTests
                 Status = "created",
                 CreatedAtUtc = DateTime.UtcNow.AddDays(-gunOnce)
             };
+        }
+
+        /// <summary>
+        /// ABONELIK yedegi kaydi: sayi limiti (keepCount) yalnizca bu yoldan
+        /// (<c>PruneSubscriptionAsync</c>) calisir, saklama budamasindan degil.
+        /// </summary>
+        public BackupRecordDto AbonelikKaydi(Guid abone, int gunOnce)
+        {
+            var kayit = KayitUret(abone.ToString("N"), gunOnce, tur: "subscription");
+            kayit.SubscriptionUserId = abone.ToString("N");
+            return kayit;
         }
 
         public BackupService ServisKur(params BackupRecordDto[] kayitlar)

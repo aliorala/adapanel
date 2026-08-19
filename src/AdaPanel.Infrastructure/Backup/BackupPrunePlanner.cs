@@ -22,7 +22,9 @@ namespace AdaPanel.Infrastructure.Backup;
 /// doldurduğunda budanır. Aksi hâlde 30 gün önceki tam yedeği silmek, dün alınmış artımsal
 /// halkayı sessizce çöpe çevirirdi.</item>
 /// <item><b>Sayı limiti (KeepCount):</b> en yeni N geri yükleme noktası her koşulda korunur;
-/// fazlası, süresi dolmamış olsa bile silinebilir (disk yönetimi).</item>
+/// fazlası, süresi dolmamış olsa bile silinebilir (disk yönetimi). Bu dal da
+/// <b>KULLANILABİLİRLİK</b> yüklemine tabidir: "N nokta kaldı" ile "geri yüklenebilir nokta
+/// kaldı" aynı şey değildir.</item>
 /// </list>
 /// </remarks>
 internal static class BackupPrunePlanner
@@ -36,7 +38,11 @@ internal static class BackupPrunePlanner
     /// </summary>
     /// <param name="records">Değerlendirilecek kayıtlar (çağıran zaten kapsamı daraltmış olabilir).</param>
     /// <param name="cutoffUtc">Bu tarihten eski yedekler süresini doldurmuş sayılır.</param>
-    /// <param name="keepCount">Kaynak başına korunacak en yeni geri yükleme noktası sayısı (0 = sayı limiti yok).</param>
+    /// <param name="keepCount">
+    /// Kaynak başına korunacak en yeni geri yükleme noktası sayısı (0 = sayı limiti yok).
+    /// Bu bir ÜST SINIR DEĞİL ALT GARANTİDİR: kaynağın son KULLANILABİLİR noktası bu limit
+    /// yüzünden silinemez.
+    /// </param>
     /// <param name="kullanilabilir">Kayıt GERÇEKTEN geri yüklenebilir mi (dosya yerinde ya da off-site kopya var).</param>
     public static IReadOnlyList<BackupRecordDto> Select(
         IReadOnlyCollection<BackupRecordDto> records,
@@ -68,17 +74,42 @@ internal static class BackupPrunePlanner
         var silinecek = new List<BackupRecordDto>();
 
         // 3) SAYI LİMİTİ: kaynak başına en yeni N nokta korunur, fazlası (yaşı ne olursa olsun) gider.
-        //    Sayı limiti kaynak korumasından BAĞIMSIZDIR: elde N nokta kalacağı garanti olduğu için
-        //    "hiç yedek kalmama" riski yoktur.
+        //
+        //    ÖLÇÜLEN HATA: bu dal eskiden `kullanilabilir` yüklemini HİÇ çağırmıyordu; yorumu da
+        //    "elde N nokta kalacağı garanti, hiç yedek kalmama riski yok" diyordu. Yanlıştı —
+        //    "nokta kalması" ile "GERİ YÜKLENEBİLİR nokta kalması" aynı şey değil. Ölçüm:
+        //    b1(10 gün, dosya var) + b2(5 gün, dosya var) + b3(bugün, dosyası YOK), keepCount=1
+        //    → en yeni nokta b3 korunur, b1 ve b2 silinirdi ve geri yüklenebilir yedek sayısı
+        //    SIFIRA düşerdi. Kaydı duran ama dosyası olmayan bir yedek, yedek DEĞİLDİR.
+        //
+        //    Kural: sayı limiti, kaynağın SON KULLANILABİLİR noktasını asla silemez. Limit
+        //    dolmuşsa bile, henüz kullanılabilir bir nokta korunmadıysa ilk kullanılabilir nokta
+        //    fazladan korunur. Her şey sağlamken davranış birebir eskisi gibidir (en yeni nokta
+        //    zaten kullanılabilirdir ve limit ilk turda dolar).
         var sayiIleSilinen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (keepCount > 0)
         {
+            var limit = Math.Max(1, keepCount);
             foreach (var kaynak in noktalar.GroupBy(nokta => nokta.SourceKey, StringComparer.OrdinalIgnoreCase))
             {
-                foreach (var fazla in kaynak.OrderByDescending(nokta => nokta.NewestUtc).Skip(Math.Max(1, keepCount)))
+                var korunan = 0;
+                var kullanilabilirKorundu = false;
+
+                foreach (var nokta in kaynak.OrderByDescending(nokta => nokta.NewestUtc))
                 {
-                    sayiIleSilinen.Add(fazla.Key);
-                    silinecek.AddRange(fazla.Records);
+                    // NOKTA kullanılabilirliği ZİNCİRİN TAMAMIDIR: bir halkası eksik olan zincir
+                    // geri yüklenemez, dolayısıyla "elimizde duran nokta" sayılamaz.
+                    var noktaKullanilabilir = nokta.Records.All(kullanilabilir);
+
+                    if (korunan < limit || (!kullanilabilirKorundu && noktaKullanilabilir))
+                    {
+                        korunan++;
+                        kullanilabilirKorundu |= noktaKullanilabilir;
+                        continue;
+                    }
+
+                    sayiIleSilinen.Add(nokta.Key);
+                    silinecek.AddRange(nokta.Records);
                 }
             }
         }

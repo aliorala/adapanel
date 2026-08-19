@@ -182,11 +182,102 @@ public sealed class BackupController(
         return Ok(ApiResponse<BackupEncryptionSettingsDto>.Ok(settings, "backup.encryption_saved"));
     }
 
+    // =====================================================================================
+    // DENETİM İZİ (bu denetleyicinin ORTAK yolu)
+    //
+    // ÖLÇÜLEN BOŞLUK: yedek OLUŞTURMA ve GERİ YÜKLEME uçlarının hiçbiri iz bırakmıyordu.
+    // Geri yükleme, panelin CANLI SİTE VERİSİNİN ÜZERİNE YAZAN işlemidir; "sitem dün geceki
+    // hâline dönmüş, bunu kim yaptı?" sorusunun cevabı hiçbir yerde yoktu. Şifreleme ayarı,
+    // silme ve doğrulama zaten yazıyordu — asıl yıkıcı iki uç yazmıyordu.
+    //
+    // Kayıtlar WriteForSubscriptionAsync ile yazılır: eylemi YAPAN (yönetici/bayi olabilir) ile
+    // eylemin ÜZERİNDE yapıldığı kaynağın SAHİBİ ayrı sütunlardır. İkincisi olmadan kiracı,
+    // kendi sitesine yapılan geri yüklemeyi kendi denetim ekranında GÖREMEZ.
+    // =====================================================================================
+
+    /// <summary>Yedek işleminin izini yazar (yapan = oturumdaki kullanıcı, konu = kaynağın sahibi).</summary>
+    private Task WriteBackupAuditAsync(
+        string action,
+        string resource,
+        string details,
+        Guid? subjectUserId,
+        CancellationToken cancellationToken) =>
+        auditService.WriteForSubscriptionAsync(
+            action,
+            resource,
+            details,
+            User.GetRequiredUserId(),
+            subjectUserId,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+    /// <summary>
+    /// Bir sitenin sahibi (kota/abonelik sahibi). Okunamazsa <c>null</c> — kaydı hiç yazmamaktansa
+    /// konusu boş yazmak yeğdir.
+    /// </summary>
+    private async Task<Guid?> ResolveSiteSubjectAsync(string siteName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(siteName))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Sahiplik dosyası okunamadı: kayıt yine yazılır, yalnızca KONUSU boş kalır.
+            // İptal YUTULMAZ — o bir hata değil, isteğin sonlandırılmasıdır.
+            return null;
+        }
+    }
+
+    /// <summary>Bir yedek KAYDININ konusu: abonelik yedeğinde sahibi, site yedeğinde sitenin sahibi.</summary>
+    private async Task<Guid?> ResolveRecordSubjectAsync(BackupRecordDto? record, CancellationToken cancellationToken)
+    {
+        if (record is null)
+        {
+            return null;
+        }
+
+        if (Guid.TryParseExact(record.SubscriptionUserId, "N", out var abonelik))
+        {
+            return abonelik;
+        }
+
+        return string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase)
+            ? await ResolveSiteSubjectAsync(record.Source, cancellationToken)
+            : null;
+    }
+
+    /// <summary>
+    /// Oluşturulan yedeğin izi. DURUM da yazılır: <c>created_with_errors</c> ile <c>created</c>
+    /// arasındaki fark tam olarak "yedek eksik mi" sorusunun cevabıdır ve denetim kaydından da
+    /// okunabilmelidir.
+    /// </summary>
+    private Task WriteBackupCreatedAuditAsync(BackupRecordDto backup, Guid? subjectUserId, CancellationToken cancellationToken) =>
+        WriteBackupAuditAsync(
+            "backup.created",
+            backup.Name,
+            $"Backup created: {backup.Type}/{backup.Source} -> '{backup.Name}' "
+            + $"(status={backup.Status}, target={backup.TargetType}, encrypted={backup.Encrypted}, "
+            + $"warnings={backup.Warnings.Count}).",
+            subjectUserId,
+            cancellationToken);
+
     [HttpPost("site")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupSiteAsync([FromBody] BackupSiteRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
         var backup = await backupService.BackupSiteAsync(request, cancellationToken);
+
+        await WriteBackupCreatedAuditAsync(
+            backup,
+            await ResolveSiteSubjectAsync(request.SiteName, cancellationToken),
+            cancellationToken);
+
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
@@ -225,6 +316,8 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupDatabaseAsync([FromBody] BackupDatabaseRequest request, CancellationToken cancellationToken)
     {
         var backup = await backupService.BackupDatabaseAsync(request, cancellationToken);
+        // Konu YOK: sunucu geneli/yönetici işlemi (veritabanı sahipliği yedek kaydında taşınmaz).
+        await WriteBackupCreatedAuditAsync(backup, null, cancellationToken);
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
@@ -235,6 +328,11 @@ public sealed class BackupController(
     {
         // Servisi durdurup başlatan akış istemci iptaline bağlanmaz.
         var backup = await backupService.BackupMailAsync(request, CancellationToken.None);
+
+        // MAIL SUNUCUSU KISA SÜRELİĞİNE DURUYOR: bu, dışarıdan "posta kesintisi" olarak görülen
+        // bir olaydır ve izi olmadan sebebi hiç bulunamaz.
+        await WriteBackupCreatedAuditAsync(backup, null, CancellationToken.None);
+
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
@@ -244,6 +342,9 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupPanelAsync([FromBody] BackupPanelRequest? request, CancellationToken cancellationToken)
     {
         var backup = await backupService.BackupPanelAsync(request ?? new BackupPanelRequest(), cancellationToken);
+        // Panel yedeği ADMIN PAROLA ÖZETLERİNİ ve 2FA gizlerini içerir; kimin ne zaman aldığı
+        // izlenebilir olmalı (indirilebilen bir arşiv üretiliyor).
+        await WriteBackupCreatedAuditAsync(backup, null, cancellationToken);
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
@@ -253,7 +354,41 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> RestoreAsync([FromBody] RestoreBackupRequest request, CancellationToken cancellationToken)
     {
-        var backup = await backupService.RestoreAsync(request, cancellationToken);
+        // Kayıt İŞLEMDEN ÖNCE okunur: geri yükleme yarıda patlarsa (dosyalar canlı kökün üzerine
+        // ZATEN yazılmış olabilir) hangi yedekten ne denendiği yine de yazılabilsin.
+        var hedef = (await backupService.GetBackupsAsync(cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.Id, request.BackupId, StringComparison.OrdinalIgnoreCase));
+        var konu = await ResolveRecordSubjectAsync(hedef, cancellationToken);
+        var tanim = $"{hedef?.Type}/{hedef?.Source} ('{hedef?.Name ?? request.BackupId}')";
+
+        BackupRecordDto backup;
+        try
+        {
+            backup = await backupService.RestoreAsync(request, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // BAŞARISIZ geri yükleme de İZ BIRAKIR: canlı veriye dokunulan an burasıdır ve
+            // "denendi ama patladı" bilgisi, hiç denenmemiş olmakla asla karıştırılmamalı.
+            await WriteBackupAuditAsync(
+                "backup.restore_failed",
+                hedef?.Name ?? request.BackupId,
+                $"Restore FAILED from {tanim}"
+                + $"{(string.IsNullOrWhiteSpace(request.TargetPath) ? string.Empty : $" to '{request.TargetPath}'")}: {exception.Message}",
+                konu,
+                CancellationToken.None);
+            throw;
+        }
+
+        await WriteBackupAuditAsync(
+            "backup.restored",
+            backup.Name,
+            $"Restored from {tanim}"
+            + $"{(string.IsNullOrWhiteSpace(request.TargetPath) ? string.Empty : $" to '{request.TargetPath}'")} "
+            + $"(status={backup.Status}, warnings={backup.Warnings.Count}, preserved='{backup.PreservedPath}').",
+            konu,
+            cancellationToken);
+
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.restored"));
     }
 
@@ -326,7 +461,39 @@ public sealed class BackupController(
             request.TargetPath = string.Empty;
         }
 
-        var result = await backupService.RestoreItemsAsync(request, cancellationToken);
+        var hedef = (await backupService.GetBackupsAsync(cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.Id, request.BackupId, StringComparison.OrdinalIgnoreCase));
+        var konu = await ResolveRecordSubjectAsync(hedef, cancellationToken);
+
+        // Seçilen öğe listesi UZUN olabilir; kayıt sınırsız büyümesin diye ilk 10 tanesi adıyla,
+        // kalanı sayıyla yazılır. "Kaç öğe" bilgisi hiçbir koşulda kaybolmaz.
+        var ogeler = string.Join(", ", request.Items.Take(10))
+            + (request.Items.Length > 10 ? $" ... (+{request.Items.Length - 10})" : string.Empty);
+
+        RestoreBackupItemsResultDto result;
+        try
+        {
+            result = await backupService.RestoreItemsAsync(request, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await WriteBackupAuditAsync(
+                "backup.restore_failed",
+                hedef?.Name ?? request.BackupId,
+                $"Granular restore FAILED from {hedef?.Type}/{hedef?.Source}: {ogeler} — {exception.Message}",
+                konu,
+                CancellationToken.None);
+            throw;
+        }
+
+        await WriteBackupAuditAsync(
+            "backup.items_restored",
+            hedef?.Name ?? request.BackupId,
+            $"Granular restore from {hedef?.Type}/{hedef?.Source}: {result.RestoredCount} item(s) "
+            + $"written to '{result.TargetRoot}'. Selected: {ogeler}",
+            konu,
+            cancellationToken);
+
         return Ok(ApiResponse<RestoreBackupItemsResultDto>.Ok(result, "backup.items_restored"));
     }
 
@@ -346,14 +513,16 @@ public sealed class BackupController(
         var record = (await backupService.GetBackupsAsync(cancellationToken))
             .FirstOrDefault(item => string.Equals(item.Id, backupId, StringComparison.OrdinalIgnoreCase));
 
+        // Konu, kayıt SİLİNMEDEN önce çözülür (sonrasında okunamaz).
+        var konu = await ResolveRecordSubjectAsync(record, cancellationToken);
+
         await backupService.DeleteBackupAsync(backupId, cancellationToken);
 
-        await auditService.WriteAsync(
+        await WriteBackupAuditAsync(
             "backup.deleted",
-            "backup",
+            record?.Name ?? backupId,
             $"Backup '{record?.Name ?? backupId}' ({record?.Type}/{record?.Source}) deleted.",
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            konu,
             cancellationToken);
 
         return Ok(ApiResponse<object>.Ok(new { id = backupId }, "backup.deleted"));
@@ -412,6 +581,11 @@ public sealed class BackupController(
         await EnsureSubscriptionAccessAsync(request.UserId, cancellationToken);
 
         var backup = await backupService.BackupSubscriptionAsync(request, cancellationToken);
+
+        // Konu ÖLÇÜLMEZ, İSTEKTEN GELİR ve zaten yukarıda doğrulanmıştır: bu arşiv o aboneliğin
+        // bütün verisini taşır, izi de sahibinin ekranında görünmelidir.
+        await WriteBackupCreatedAuditAsync(backup, request.UserId, cancellationToken);
+
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
 
@@ -438,14 +612,18 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<BackupDeleteResultDto>>> DeleteChainAsync(string backupId, CancellationToken cancellationToken)
     {
         await EnsureBackupOwnershipAsync(backupId, cancellationToken);
+
+        var record = (await backupService.GetBackupsAsync(cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.Id, backupId, StringComparison.OrdinalIgnoreCase));
+        var konu = await ResolveRecordSubjectAsync(record, cancellationToken);
+
         var result = await backupService.DeleteBackupChainAsync(backupId, cancellationToken);
 
-        await auditService.WriteAsync(
+        await WriteBackupAuditAsync(
             "backup.chain_deleted",
-            "backup",
+            record?.Name ?? backupId,
             $"Backup chain deleted ({result.DeletedIds.Length} link(s)): {string.Join(", ", result.DeletedNames)}",
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            konu,
             cancellationToken);
 
         return Ok(ApiResponse<BackupDeleteResultDto>.Ok(result, "backup.chain_deleted"));

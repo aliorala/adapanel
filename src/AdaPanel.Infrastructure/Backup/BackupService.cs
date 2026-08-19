@@ -106,8 +106,34 @@ public sealed partial class BackupService(
         && !File.Exists(record.Path)
         && !Directory.Exists(record.Path);
 
-    /// <summary>Denetim kaydı yazar (servis verilmemişse sessizce geçer; dar kapsamlı testler).</summary>
-    private async Task WriteAuditAsync(string action, string resource, string details, CancellationToken cancellationToken)
+    /// <summary>
+    /// Denetim kaydı yazar (servis verilmemişse sessizce geçer; dar kapsamlı testler).
+    /// </summary>
+    /// <param name="subscriptionUserId">
+    /// Kaydın KONUSU olan aboneliğin sahibi (bilinmiyorsa <c>null</c>).
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden konu ZORUNLU parametre:</b> bu servis kaydı <c>userId: null</c> ile yazıyordu ve
+    /// <c>SubscriptionUserId</c>'yi de doldurmuyordu. İkisi de boş olan kayıt
+    /// (<c>AuditLogQueryEngine.cs:62-67</c>) kapsamlı role — yani KİRACIYA — HİÇ gösterilmez:
+    /// müşterinin yedeği "kayıp" işaretlendiğinde bunun izi kendisine görünmüyordu. Konuyu
+    /// doldurmak, kaydı sahibinin ekranına taşıyan tek şeydir.
+    /// </para>
+    /// <para>
+    /// <b>Eylemi YAPAN neden hâlâ boş:</b> bu yollar (uzlaştırma, doğrulama sonrası işaretleme)
+    /// arka plandaki otomasyondan da çalışır ve servisin HTTP kimliği yoktur. Var olmayan bir
+    /// aktör uydurmak yerine boş bırakılır; kaydın kime ait olduğu KONU sütunundan okunur.
+    /// Uçtan gelen (kullanıcının bastığı) işlemler denetim kaydını <c>BackupController</c>'da,
+    /// gerçek kimlikle yazar.
+    /// </para>
+    /// </remarks>
+    private async Task WriteAuditAsync(
+        string action,
+        string resource,
+        string details,
+        Guid? subscriptionUserId,
+        CancellationToken cancellationToken)
     {
         if (auditService is null)
         {
@@ -116,12 +142,48 @@ public sealed partial class BackupService(
 
         try
         {
-            await auditService.WriteAsync(action, resource, details, null, null, cancellationToken);
+            await auditService.WriteForSubscriptionAsync(
+                action,
+                resource,
+                details,
+                null,
+                subscriptionUserId,
+                null,
+                cancellationToken);
         }
         catch (Exception exception)
         {
             // Denetim kaydı yazılamaması ASIL işi (silme/doğrulama) durdurmamalı.
             logger?.LogWarning(exception, "Yedek denetim kaydi yazilamadi: {Action}", action);
+        }
+    }
+
+    /// <summary>
+    /// Bir yedek kaydının KONUSU olan abonelik sahibi: abonelik yedeğinde kaydın kendi alanı,
+    /// site yedeğinde sitenin atandığı müşteri. Ölçülemezse <c>null</c> (tahmin edilmez).
+    /// </summary>
+    private async Task<Guid?> ResolveAuditSubjectAsync(BackupRecordDto record, CancellationToken cancellationToken)
+    {
+        if (Guid.TryParseExact(record.SubscriptionUserId, "N", out var abonelik))
+        {
+            return abonelik;
+        }
+
+        if (customerScopes is null || !string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await customerScopes.GetSiteOwnerUserIdAsync(record.Source, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Sahiplik okunamadıysa kayıt yine yazılır, yalnızca konusu boş kalır: denetim
+            // kaydını hiç yazmamak, eksik yazmaktan kötüdür.
+            logger?.LogWarning(exception, "Yedek denetim kaydi icin site sahibi okunamadi: {Site}", record.Source);
+            return null;
         }
     }
 
@@ -266,6 +328,13 @@ public sealed partial class BackupService(
     /// eklendiğinde parametreyi vermemek DERLENİR ve o tür sessizce uzak hedefin köküne düz
     /// yüklenirdi — düzeltilen hatanın ta kendisi. Şimdi vermeyi unutmak derleme hatasıdır.
     /// </param>
+    /// <param name="skipped">
+    /// Arşive GİREMEYEN kaynak dosyalar. <paramref name="placement"/> ile aynı gerekçeyle ZORUNLU:
+    /// isteğe bağlı olsaydı yeni bir yedek türü eklendiğinde vermeyi unutmak DERLENİR ve o tür
+    /// atladığı dosyaları sessizce yutmaya devam ederdi. Dosya taraması olmayan türlerde
+    /// (veritabanı dökümü, posta deposu) açıkça <c>null</c> geçilir — "burada taranan dosya yok"
+    /// da bir karardır ve görünür olmalıdır.
+    /// </param>
     private async Task<BackupRecordDto> FinalizeBackupAsync(
         string localPath,
         string fileName,
@@ -274,6 +343,7 @@ public sealed partial class BackupService(
         string format,
         BackupTargetRequest request,
         BackupPlacement placement,
+        BackupSkipLog? skipped,
         CancellationToken cancellationToken,
         ChainStamp? chain = null,
         BackupFileIndex? fileIndex = null,
@@ -400,8 +470,74 @@ public sealed partial class BackupService(
             });
         }
 
+        // ARŞİVE GİREMEYEN DOSYALAR: "created" damgasını hak etmeyen tek durum budur. Kilitli
+        // ya da erişilemeyen dosya atlanabilir (tek bir dosya yüzünden o gecenin yedeğini hiç
+        // almamak daha kötü olurdu) ama ATLANDIĞI SÖYLENMEK ZORUNDA — hangi dosyalar olduğu da
+        // dahil. Kullanıcı eksik bir arşivi "başarılı" sanıp ona güvenmemeli.
+        ApplySkippedFiles(record, skipped, fileName);
+
         await AppendRecordAsync(record, cancellationToken);
         return record;
+    }
+
+    /// <summary>
+    /// Arşive giremeyen dosyaları KAYDA taşır: her biri bir uyarı, durum
+    /// <c>created_with_errors</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Durum neden değişiyor:</b> panelde yedeğin yanında duran tek özet Status'tür; uyarı
+    /// listesi ancak kayıt açıldığında görülür. "created" bırakılsaydı eksik arşiv listede sağlam
+    /// olanlardan AYIRT EDİLEMEZDİ. Mekanizma yeni değil — abonelik yedeği eksik öğe için bunu
+    /// zaten yapıyordu; buradaki hata, dosya atlayan üç yardımcının o mekanizmaya HİÇ
+    /// ulaşamamasıydı.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>created_remote_failed</c> ezilmiyor:</b> off-site kopyanın olmadığını söylemek
+    /// en az eksik dosya kadar önemlidir. O durum kalır, eksik dosyalar uyarı listesinde durur —
+    /// ikisi de kaybolmaz.
+    /// </para>
+    /// </remarks>
+    private void ApplySkippedFiles(BackupRecordDto record, BackupSkipLog? skipped, string fileName)
+    {
+        if (skipped is null || !skipped.Any)
+        {
+            return;
+        }
+
+        // Günlükçü: yardımcılar static olduğu için buraya kadar ulaşamıyordu; artık sunucu
+        // günlüğünde de tek satırda görünür.
+        logger?.LogWarning(
+            "Yedek eksik alindi ({File}): {Ozet}",
+            fileName,
+            skipped.Describe());
+
+        foreach (var atlanan in skipped.Detailed)
+        {
+            record.Warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.source_file_unreadable",
+                Target = atlanan.EntryName,
+                Detail = atlanan.Reason
+            });
+        }
+
+        // Ayrıntısı taşınmayanlar SAYIYLA taşınır: "kaç dosya eksik" bilgisi hiçbir koşulda
+        // kaybolmamalı (bozuk bir ACL yüz binlerce dosyayı birden atlatabilir).
+        if (skipped.Truncated > 0)
+        {
+            record.Warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.source_files_unreadable_more",
+                Target = skipped.Count.ToString(),
+                Detail = $"{skipped.Truncated} dosya daha listelenmedi (toplam {skipped.Count})."
+            });
+        }
+
+        if (record.Status is "created" or "created_remote_synced")
+        {
+            record.Status = "created_with_errors";
+        }
     }
 
     /// <summary>
@@ -663,7 +799,9 @@ public sealed partial class BackupService(
             : site.ApplicationRootPath;
 
         // Dosya listesi bir kez taranır: hem indeksin hem de arşive girecek kümenin kaynağı budur.
-        var taranan = request.IncludeFiles ? ScanFiles(applicationRoot, "files") : [];
+        // ATLANANLAR tek bir defterde toplanır (tarama + arşivleme aşamaları ayrı ayrı atlayabilir).
+        var atlananlar = new BackupSkipLog();
+        var taranan = request.IncludeFiles ? ScanFiles(applicationRoot, "files", atlananlar) : [];
         var indeks = BuildIndex(plan.Stamp, taranan);
         var fark = BackupChainPlanner.Diff(plan.PreviousIndex, indeks);
         var yazilacak = fark.Changed.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -674,7 +812,7 @@ public sealed partial class BackupService(
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            var yazilan = AddFilesToArchive(archive, taranan, yazilacak);
+            var yazilan = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
             if (yazilan > 0)
             {
                 includedParts.Add(artimsal ? $"files(+{yazilan})" : "files");
@@ -763,6 +901,7 @@ public sealed partial class BackupService(
             "zip",
             request,
             placement,
+            atlananlar,
             cancellationToken,
             plan.Stamp,
             plan.Stamp is null ? null : indeks);
@@ -1009,9 +1148,15 @@ public sealed partial class BackupService(
 
     /// <summary>
     /// Bir dizini tarar ve indeks ölçülerini (boyut + değişiklik tarihi) toplar.
-    /// Okunamayan dosya ATLANIR: erişilemeyen tek bir dosya bütün yedeği düşürmemeli.
+    /// Okunamayan dosya ATLANIR — ama <paramref name="skipped"/>'a YAZILARAK: erişilemeyen tek bir
+    /// dosya bütün yedeği düşürmemeli, ama sessizce kaybolmamalı da.
     /// </summary>
-    private static List<ArchiveFile> ScanFiles(string root, string entryPrefix)
+    /// <remarks>
+    /// Burada atlanan dosya arşive HİÇ ADAY OLMAZ (indekse girmez), yani
+    /// <c>AddFilesToArchive</c> onu bir daha göremez. Bu yüzden atlamanın kaydı tam burada
+    /// tutulmalı; bir adım sonrasında ölçülemez.
+    /// </remarks>
+    private static List<ArchiveFile> ScanFiles(string root, string entryPrefix, BackupSkipLog skipped)
     {
         var sonuc = new List<ArchiveFile>();
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
@@ -1020,36 +1165,48 @@ public sealed partial class BackupService(
         }
 
         var tam = Path.GetFullPath(root);
-        IEnumerable<string> dosyalar;
-        try
-        {
-            dosyalar = Directory.EnumerateFiles(tam, "*", SearchOption.AllDirectories);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return sonuc;
-        }
+        var kuyruk = new Stack<string>();
+        kuyruk.Push(tam);
 
-        foreach (var dosya in dosyalar)
+        while (kuyruk.Count > 0)
         {
+            var klasor = kuyruk.Pop();
+            string[] dosyalar;
             try
             {
-                var bilgi = new FileInfo(dosya);
-                if (!bilgi.Exists)
+                foreach (var altKlasor in Directory.GetDirectories(klasor))
                 {
-                    continue;
+                    kuyruk.Push(altKlasor);
                 }
 
-                var goreli = Path.GetRelativePath(tam, dosya).Replace('\\', '/');
-                sonuc.Add(new ArchiveFile(
-                    $"{entryPrefix}/{goreli}",
-                    dosya,
-                    bilgi.Length,
-                    bilgi.LastWriteTimeUtc.Ticks));
+                dosyalar = Directory.GetFiles(klasor);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                // Kilitli/erişilemeyen dosya atlanır (mevcut davranışın aynısı).
+                // Erişilemeyen klasör: BÜTÜN alt ağacı yedeğin dışında kaldı. Eskiden burada
+                // (kökte) sessizce BOŞ liste dönülüyordu — yani sitenin hiçbir dosyası olmayan
+                // bir arşiv "başarılı" diye kaydediliyordu.
+                skipped.Add(GirdiAdi(tam, entryPrefix, klasor), exception);
+                continue;
+            }
+
+            foreach (var dosya in dosyalar)
+            {
+                var girdi = GirdiAdi(tam, entryPrefix, dosya);
+                try
+                {
+                    var bilgi = new FileInfo(dosya);
+                    if (!bilgi.Exists)
+                    {
+                        continue;
+                    }
+
+                    sonuc.Add(new ArchiveFile(girdi, dosya, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    skipped.Add(girdi, exception);
+                }
             }
         }
 
@@ -1071,8 +1228,16 @@ public sealed partial class BackupService(
             .ToList()
     };
 
-    /// <summary>Seçili dosyaları arşive ekler ve GERÇEKTEN eklenen sayısını döner.</summary>
-    private static int AddFilesToArchive(ZipArchive archive, IReadOnlyCollection<ArchiveFile> files, HashSet<string> selected)
+    /// <summary>
+    /// Seçili dosyaları arşive ekler ve GERÇEKTEN eklenen sayısını döner. Eklenemeyen her dosya
+    /// <paramref name="skipped"/>'a yazılır — "yedeklendi" denip arşivde olmayan bir müşteri
+    /// dosyası, geri yükleme gününe saklanan bir sürprizdir.
+    /// </summary>
+    private static int AddFilesToArchive(
+        ZipArchive archive,
+        IReadOnlyCollection<ArchiveFile> files,
+        HashSet<string> selected,
+        BackupSkipLog skipped)
     {
         var eklenen = 0;
         foreach (var file in files)
@@ -1089,7 +1254,7 @@ public sealed partial class BackupService(
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                // Kilitli/erişilemeyen dosyayı atla; yedek geri kalanıyla devam eder.
+                skipped.Add(file.EntryName, exception);
             }
         }
 
@@ -1202,6 +1367,8 @@ public sealed partial class BackupService(
             extension,
             request,
             placement,
+            // Dosya TARAMASI yok: döküm tek dosyadır ve alınamazsa ExportDumpAsync zaten patlar.
+            skipped: null,
             cancellationToken);
     }
 
@@ -1279,6 +1446,7 @@ public sealed partial class BackupService(
         var configDirectory = fileStore.ResolvePath("config");
         var dbPath = fileStore.ResolvePath("data/adapanel.db");
         var includedParts = new List<string>();
+        var atlananlar = new BackupSkipLog();
 
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
@@ -1289,15 +1457,19 @@ public sealed partial class BackupService(
                 var file = dbPath + suffix;
                 if (File.Exists(file))
                 {
-                    AddSharedFileToArchive(archive, file, $"data/{Path.GetFileName(file)}");
-                    includedParts.Add(Path.GetFileName(file));
+                    // "parts" listesi arşivin İÇİNDEKİ manifesttir; GERÇEKTEN eklenmeyeni oraya
+                    // yazmak, arşivi açan kişiye de yalan söylemek olurdu.
+                    if (AddSharedFileToArchive(archive, file, $"data/{Path.GetFileName(file)}", atlananlar))
+                    {
+                        includedParts.Add(Path.GetFileName(file));
+                    }
                 }
             }
 
             // config/ tüm JSON durum dosyaları (backups.json dahil — zararsız).
             if (Directory.Exists(configDirectory))
             {
-                AddDirectoryToArchive(archive, configDirectory, "config");
+                AddDirectoryToArchive(archive, configDirectory, "config", atlananlar);
                 includedParts.Add("config");
             }
 
@@ -1344,7 +1516,7 @@ public sealed partial class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, placement, cancellationToken);
+        return await FinalizeBackupAsync(targetPath, fileName, "panel", "panel", "zip", request, placement, atlananlar, cancellationToken);
     }
 
     // =====================================================================================
@@ -1430,6 +1602,7 @@ public sealed partial class BackupService(
         var taranan = new List<ArchiveFile>();
         var siteBilgileri = new Dictionary<string, AdaPanel.Core.Dtos.Sites.SiteDto>(StringComparer.OrdinalIgnoreCase);
         var uyarilar = new List<BackupRestoreWarningDto>();
+        var atlananlar = new BackupSkipLog();
 
         foreach (var siteAdi in plan.Sites)
         {
@@ -1442,7 +1615,7 @@ public sealed partial class BackupService(
                 if (request.IncludeFiles)
                 {
                     var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
-                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files"));
+                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files", atlananlar));
                 }
             }
             catch (Exception exception)
@@ -1466,7 +1639,7 @@ public sealed partial class BackupService(
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
         {
-            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak);
+            var yazilanDosya = AddFilesToArchive(archive, taranan, yazilacak, atlananlar);
             if (yazilanDosya > 0)
             {
                 parcalar.Add(artimsal ? $"files(+{yazilanDosya})" : $"files({yazilanDosya})");
@@ -1604,6 +1777,7 @@ public sealed partial class BackupService(
             "zip",
             request,
             placement,
+            atlananlar,
             cancellationToken,
             chainPlan.Stamp,
             chainPlan.Stamp is null ? null : indeks,
@@ -1630,8 +1804,17 @@ public sealed partial class BackupService(
         return record;
     }
 
-    // Çalışan süreç kilitlese bile (ör. SQLite adapanel.db) paylaşımlı okuma ile zip'e ekler.
-    private static void AddSharedFileToArchive(ZipArchive archive, string filePath, string entryName)
+    /// <summary>
+    /// Çalışan süreç kilitlese bile (ör. SQLite <c>adapanel.db</c>) paylaşımlı okuma ile zip'e
+    /// ekler; yine de okunamazsa dosya <paramref name="skipped"/>'a YAZILIR ve dönen değer
+    /// <c>false</c> olur.
+    /// </summary>
+    /// <remarks>
+    /// Bu yardımcının atladığı dosya panelin KENDİ VERİTABANIDIR (kullanıcılar, 2FA gizleri,
+    /// denetim kayıtları). Sessizce atlanması, panelin kendini yedeklediğini SANDIĞI ama
+    /// arşivde veritabanının hiç olmadığı bir durum üretiyordu.
+    /// </remarks>
+    private static bool AddSharedFileToArchive(ZipArchive archive, string filePath, string entryName, BackupSkipLog skipped)
     {
         try
         {
@@ -1639,10 +1822,12 @@ public sealed partial class BackupService(
             var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
             using var entryStream = entry.Open();
             source.CopyTo(entryStream);
+            return true;
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // Kilitli/erişilemeyen dosyayı atla; yedek geri kalanıyla devam eder.
+            skipped.Add(entryName, exception);
+            return false;
         }
     }
 
@@ -1896,7 +2081,9 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             await StartStalwartAsync(cancellationToken);
         }
 
-        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement, cancellationToken);
+        // Dosya TARAMASI yok: ZipFile.CreateFromDirectory tek dosyayı bile atlayamaz, atlarsa
+        // istisna atar ve yedek hiç oluşmaz (servis durdurulmuş hâlde alındığı için kilit de yok).
+        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement, skipped: null, cancellationToken);
     }
 
     private async Task RestoreMailAsync(string archivePath, CancellationToken cancellationToken)
@@ -2644,6 +2831,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             // KİMLİK BİLGİSİ YOK: sebep metni sunucu yanıtıdır, jeton/parola içermez (üretildiği
             // yerlerde adresler SanitizeUri'den geçer).
             $"Yerel kopya silindi, uzak kopya silinemedi ({record.TargetType}): {reason}",
+            await ResolveAuditSubjectAsync(record, cancellationToken),
             cancellationToken);
     }
 
@@ -3053,6 +3241,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 "backups",
                 $"Yedek dogrulama: {sonuc.MissingLocal} yerel dosya, {sonuc.MissingRemote} uzak kopya bulunamadi "
                 + $"({sonuc.Unreachable} kayit icin hedefe ulasilamadi).",
+                // KONUSU YOK ve olamaz: doğrulama SUNUCU GENELİNDEKİ bütün kayıtları tarar, tek
+                // bir aboneliğe ait değildir. Uç zaten yalnız yöneticiye açık; kapsamlı role
+                // görünmemesi doğrudur.
+                null,
                 cancellationToken);
         }
 
@@ -3879,25 +4071,69 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             : details[..maxLength] + "\r\n... (diagnostic output truncated)";
     }
 
-    // Bir dizini tüm alt içeriğiyle arşive verilen önek altında ekler (örn. "files/...").
-    private static void AddDirectoryToArchive(ZipArchive archive, string sourceDirectory, string entryPrefix)
+    /// <summary>
+    /// Bir dizini tüm alt içeriğiyle arşive verilen önek altında ekler (örn. "config/...").
+    /// Okunamayan her dosya/klasör <paramref name="skipped"/>'a YAZILIR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Atlama SESSİZ OLAMAZ: bu yardımcı panelin kendi <c>config/</c> klasörünü arşive koyan
+    /// yoldur; tek bir kilitli dosya yüzünden eksik kalan bir "başarılı" yedek, geri yükleme
+    /// gününe kadar fark edilmezdi. <see cref="BackupSkipLog"/> tam bu yüzden ZORUNLU parametre.
+    /// </para>
+    /// <para>
+    /// <b>Neden elle özyineleme:</b> <c>EnumerateFiles(..., AllDirectories)</c> erişilemeyen bir
+    /// ALT KLASÖRE geldiğinde istisna atar ve o noktadan sonrasını hiç görmez — yedeğin tamamı
+    /// düşerdi. Klasör klasör yürümek, erişilemeyen dalı KAYDEDİP diğer dalları arşive almayı
+    /// mümkün kılıyor.
+    /// </para>
+    /// </remarks>
+    private static void AddDirectoryToArchive(ZipArchive archive, string sourceDirectory, string entryPrefix, BackupSkipLog skipped)
     {
         var root = Path.GetFullPath(sourceDirectory);
-        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        var kuyruk = new Stack<string>();
+        kuyruk.Push(root);
+
+        while (kuyruk.Count > 0)
         {
-            var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+            var klasor = kuyruk.Pop();
+            string[] dosyalar;
             try
             {
-                archive.CreateEntryFromFile(file, $"{entryPrefix}/{relative}", CompressionLevel.Optimal);
+                foreach (var altKlasor in Directory.GetDirectories(klasor))
+                {
+                    kuyruk.Push(altKlasor);
+                }
+
+                dosyalar = Directory.GetFiles(klasor);
             }
-            catch (IOException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                // Kilitli/erişilemeyen dosyayı atla; yedek geri kalanıyla devam eder.
+                // Erişilemeyen KLASÖR: içindeki her şey yedeğin dışında kaldı, bu kayda geçer.
+                skipped.Add(GirdiAdi(root, entryPrefix, klasor), exception);
+                continue;
             }
-            catch (UnauthorizedAccessException)
+
+            foreach (var file in dosyalar)
             {
+                var entryName = GirdiAdi(root, entryPrefix, file);
+                try
+                {
+                    archive.CreateEntryFromFile(file, entryName, CompressionLevel.Optimal);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    skipped.Add(entryName, exception);
+                }
             }
         }
+    }
+
+    /// <summary>Kökün kendisi için önek; altındakiler için "önek/göreli yol".</summary>
+    private static string GirdiAdi(string root, string entryPrefix, string path)
+    {
+        var goreli = Path.GetRelativePath(root, path).Replace('\\', '/');
+        return goreli is "." or "" ? entryPrefix : $"{entryPrefix}/{goreli}";
     }
 
     private static void AddTextEntry(ZipArchive archive, string entryName, string content)
