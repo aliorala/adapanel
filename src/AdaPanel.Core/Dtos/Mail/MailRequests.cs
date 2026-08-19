@@ -115,6 +115,12 @@ public sealed class CreateMailListRequest
 
     /// <summary>Listeye gelen postanın dağıtılacağı abone e-posta adresleri.</summary>
     public IReadOnlyCollection<string> Recipients { get; set; } = [];
+
+    /// <summary>Kimler gönderebilir (bkz. <see cref="MailListPostingPolicy"/>). Varsayılan: herkes.</summary>
+    public string PostingPolicy { get; set; } = MailListPostingPolicy.Anyone;
+
+    /// <summary><c>allowed</c> kipinde gönderim izni olan adresler.</summary>
+    public IReadOnlyCollection<string> AllowedSenders { get; set; } = [];
 }
 
 /// <summary>
@@ -148,6 +154,14 @@ public sealed class SetMailListRecipientsRequest
 
     /// <summary>Çıkarılacak aboneler — "abonelikten çıkarma" bu yoldan yapılır.</summary>
     public IReadOnlyCollection<string> Remove { get; set; } = [];
+
+    /// <summary>
+    /// Yeni gönderim politikası (bkz. <see cref="MailListPostingPolicy"/>). <c>null</c> = değiştirme.
+    /// </summary>
+    public string? PostingPolicy { get; set; }
+
+    /// <summary><c>allowed</c> kipinin adres listesi. <c>null</c> = değiştirme.</summary>
+    public IReadOnlyCollection<string>? AllowedSenders { get; set; }
 }
 
 /// <summary>

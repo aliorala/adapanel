@@ -412,6 +412,20 @@
               <textarea v-model="listForm.recipients" rows="3" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
               <small class="field-hint">{{ t("panel.mail.listRecipientsHint") }}</small>
             </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listPostingPolicy") }}</span>
+              <select v-model="listForm.postingPolicy">
+                <option value="anyone">{{ t("panel.mail.listPolicyAnyone") }}</option>
+                <option value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
+                <option value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
+              </select>
+              <small class="field-hint">{{ t("panel.mail.listPostingPolicyHint") }}</small>
+            </label>
+            <label v-if="listForm.postingPolicy !== 'anyone'" class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listAllowedSenders") }}</span>
+              <textarea v-model="listForm.allowedSenders" rows="2" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
+              <small class="field-hint">{{ t("panel.mail.listAllowedSendersHint") }}</small>
+            </label>
           </div>
           <div class="row-actions">
             <button class="compact" v-bind="writeGate(busy || !listForm.localPart || !parseRecipients(listForm.recipients).length)" @click="addList">
@@ -430,6 +444,12 @@
             <div class="list-identity">
               <strong>{{ list.address }}</strong>
               <small v-if="list.description" class="list-description">{{ list.description }}</small>
+              <!-- Politika satirda GORUNUR olmali: "herkes gonderebilir" bir guvenlik durumudur ve
+                   ancak gorulurse fark edilir. -->
+              <small
+                class="list-policy"
+                :class="{ 'policy-open': list.postingPolicy === 'anyone' }"
+              >{{ policyLabel(list.postingPolicy) }}</small>
             </div>
             <div class="list-subscribers">
               <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
@@ -453,6 +473,9 @@
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="subscribe(list.address)">
                 {{ t("panel.mail.listAddSubscriber") }}
               </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
+                {{ t("panel.mail.listPostingPolicy") }}
+              </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
                 {{ t("panel.mail.listEdit") }}
               </button>
@@ -464,9 +487,9 @@
           <p v-if="workspace.lists.length === 0" class="empty-state">{{ t("panel.mail.noLists") }}</p>
         </div>
 
-        <!-- DURUST SINIR: Plesk'te liste basina "kimler gonderebilir" ve "abonelikten cik" bagi
-             vardir; Stalwart'in MailingList nesnesinde bunlarin KARSILIGI YOKTUR (sema sunucudan
-             okundu). Panelde calismayan bir dugme gostermek yerine sinir acikca yazilir. -->
+        <!-- DURUST SINIR: "kimler gonderebilir" ARTIK CALISIYOR (RCPT asamasi sieve kurali,
+             canli dogrulandi). Kalan tek Plesk farki self-servis abonelikten cikma: Stalwart'ta
+             abonenin kendi kendini cikarabilecegi bir mekanizma YOK, cikarmayi yonetici yapar. -->
         <p class="meta list-limitation">{{ t("panel.mail.listPolicyLimitation") }}</p>
 
         <div class="row-actions mail-advanced-toggle">
@@ -674,6 +697,7 @@ import {
   createMailList,
   deleteMailList,
   setMailListRecipients,
+  setMailListPolicy,
   subscribeToMailList,
   unsubscribeFromMailList,
   deleteMailAccount,
@@ -702,6 +726,8 @@ import {
   type MailClientSettings,
   type MailDiagnostics,
   type MailDns,
+  type MailList,
+  type MailListPostingPolicy,
   type MailListener,
   type MailSpamSettings,
   type MailWorkspace,
@@ -810,7 +836,13 @@ const diagLoading = ref(false);
 const showAccountForm = ref(false);
 const showAliasForm = ref(false);
 const showListForm = ref(false);
-const listForm = reactive({ localPart: "", description: "", recipients: "" });
+const listForm = reactive({
+  localPart: "",
+  description: "",
+  recipients: "",
+  postingPolicy: "anyone" as MailListPostingPolicy,
+  allowedSenders: ""
+});
 const showMailAdvanced = ref(false);
 const listeners = ref<MailListener[] | null>(null);
 const loading = ref(false);
@@ -1320,14 +1352,61 @@ async function addList() {
         selectedDomain.value,
         listForm.localPart,
         parseRecipients(listForm.recipients),
-        listForm.description
+        listForm.description,
+        listForm.postingPolicy,
+        parseRecipients(listForm.allowedSenders)
       )
     );
     listForm.localPart = "";
     listForm.description = "";
     listForm.recipients = "";
+    listForm.postingPolicy = "anyone";
+    listForm.allowedSenders = "";
     showListForm.value = false;
     showNotice(t("panel.mail.listCreated"), false);
+  });
+}
+
+function policyLabel(policy: MailListPostingPolicy) {
+  if (policy === "subscribers") return t("panel.mail.listPolicySubscribers");
+  if (policy === "allowed") return t("panel.mail.listPolicyAllowed");
+  return t("panel.mail.listPolicyAnyone");
+}
+
+// Gonderim politikasi degistirme. Aboneler DEGISTIRILMEZ; yalnizca kural gonderilir.
+async function editListPolicy(list: MailList) {
+  const value = await prompt({
+    title: t("panel.mail.listPostingPolicyPrompt"),
+    message: `${list.address} — ${t("panel.mail.listPostingPolicyOptions")}`,
+    label: t("panel.mail.listPostingPolicy"),
+    defaultValue: list.postingPolicy
+  });
+  if (value === null) return;
+
+  const policy = value.trim().toLowerCase();
+  if (policy !== "anyone" && policy !== "subscribers" && policy !== "allowed") {
+    showError(t("panel.mail.listPolicyInvalid"));
+    return;
+  }
+
+  // "herkes" DISI kiplerde izinli gonderenler sorulur: liste yoneticisi burada yoksa, kendi
+  // listesine duyuru yazamaz hale gelir.
+  let allowed = list.allowedSenders;
+  if (policy !== "anyone") {
+    const senders = await prompt({
+      title: t("panel.mail.listAllowedSenders"),
+      message: t("panel.mail.listAllowedSendersHint"),
+      label: t("panel.mail.listAllowedSenders"),
+      defaultValue: list.allowedSenders.join(", "),
+      allowEmpty: true
+    });
+    if (senders === null) return;
+    allowed = parseRecipients(senders);
+  }
+
+  await run(async () => {
+    apply(await setMailListPolicy(list.address, policy, allowed));
+    showNotice(t("panel.mail.listPolicySaved"), false);
   });
 }
 
@@ -1809,6 +1888,16 @@ function showError(error: unknown) {
 
 .list-limitation {
   margin: 8px 0 0;
+}
+
+.list-policy {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* "Herkes gonderebilir" gorsel olarak AYIRT EDILIR: en gevsek durum, gozden kacmamali. */
+.list-policy.policy-open {
+  color: var(--warning, var(--text-soft));
 }
 
 .dns-row {

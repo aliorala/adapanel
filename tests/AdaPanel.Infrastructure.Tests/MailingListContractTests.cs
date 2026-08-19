@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Infrastructure.Mail;
 using Xunit;
 
@@ -433,7 +434,172 @@ public sealed class MailingListContractTests
         Assert.False(MailService.BelongsToDomain(address, domain));
     }
 
-    // --- 6) Adres doğrulayıcı ---
+    // --- 6) Gönderim politikası (Plesk "kimler gönderebilir" paritesi) ---
+
+    private static MailService.ListPolicyRule Rule(string policy, params string[] allowed) =>
+        new("duyuru@ornek.com", policy, allowed);
+
+    /// <summary>
+    /// "Herkes" kipinde script'e KURAL YAZILMAZ. Yazılsaydı, hiçbir şeyi kısıtlamayan ama her
+    /// iletide çalışan ölü bir dal olurdu.
+    /// </summary>
+    [Fact]
+    public void BuildListPolicyScript_EmitsNoRule_WhenEveryListAllowsAnyone()
+    {
+        var script = MailService.BuildListPolicyScript([Rule(MailListPostingPolicy.Anyone)]);
+
+        Assert.DoesNotContain(RejectCommand, script);
+        Assert.DoesNotContain("duyuru@ornek.com", script);
+    }
+
+    /// <summary>
+    /// "reject" kelimesi <c>require [...]</c> satırında da geçer; kuralın gerçekten yazıldığını
+    /// ölçmek için RED KOMUTUNUN kendisi aranmalı. Bu ayrım gerçek bir mutasyonu yakalamadan
+    /// önce testi sessizce yeşil bırakıyordu.
+    /// </summary>
+    private const string RejectCommand = "reject \"550";
+
+    /// <summary>
+    /// Kural yokken bile GEÇERLİ bir script üretilmeli: boş içerik derlenmeyebilir ve bağlama
+    /// bozulurdu (otomatik yanıtta kanıtlanan yol).
+    /// </summary>
+    [Fact]
+    public void BuildListPolicyScript_ProducesACommentOnlyScript_WhenThereAreNoRules()
+    {
+        var script = MailService.BuildListPolicyScript([]);
+
+        Assert.StartsWith("#", script);
+        Assert.NotEmpty(script.Trim());
+        Assert.DoesNotContain(RejectCommand, script);
+    }
+
+    /// <summary>Kısıtlı kipte kural, LİSTE ADRESİNE ve red komutuna sahip olmalı.</summary>
+    [Fact]
+    public void BuildListPolicyScript_RejectsUnauthorizedSenders_ForARestrictedList()
+    {
+        var script = MailService.BuildListPolicyScript(
+            [Rule(MailListPostingPolicy.Subscribers, "ali@ornek.com", "veli@ornek.com")]);
+
+        Assert.Contains("require [\"variables\", \"envelope\", \"reject\"];", script);
+        Assert.Contains("envelope :is :comparator \"i;ascii-casemap\" \"to\" \"duyuru@ornek.com\"", script);
+        Assert.Contains("\"${env.authenticated_as}\" \"ali@ornek.com\"", script);
+        Assert.Contains("\"${env.authenticated_as}\" \"veli@ornek.com\"", script);
+        Assert.Contains(RejectCommand, script);
+    }
+
+    /// <summary>
+    /// Karşılaştırma BÜYÜK/KÜÇÜK HARF duyarsız olmalı: envelope değerleri istemciden gelir ve
+    /// <c>Ali@Ornek.com</c> ile giriş yapan abone aksi hâlde kendi listesine yazamazdı.
+    /// </summary>
+    [Fact]
+    public void BuildListPolicyScript_ComparesAddressesCaseInsensitively()
+    {
+        var script = MailService.BuildListPolicyScript([Rule(MailListPostingPolicy.Subscribers, "ali@ornek.com")]);
+
+        Assert.DoesNotContain("string :is \"${env.authenticated_as}\"", script);
+        Assert.Contains(":comparator \"i;ascii-casemap\"", script);
+    }
+
+    /// <summary>
+    /// İzinli gönderen YOKSA kural "hiç kimse"ye döner. Boş izin listesinin sessizce "herkes"e
+    /// açılması, kısıtlamak isteyen yöneticinin tam tersini elde etmesi olurdu.
+    /// </summary>
+    [Fact]
+    public void BuildListPolicyScript_RejectsEveryone_WhenARestrictedListHasNoAllowedSender()
+    {
+        var script = MailService.BuildListPolicyScript([Rule(MailListPostingPolicy.Subscribers)]);
+
+        Assert.Contains(RejectCommand, script);
+        Assert.DoesNotContain("anyof", script);
+    }
+
+    /// <summary>Sieve string'lerine kaçırma uygulanmalı; tırnak enjeksiyonu script'i bozardı.</summary>
+    [Fact]
+    public void BuildListPolicyScript_EscapesQuotesInAddresses()
+    {
+        var script = MailService.BuildListPolicyScript(
+            [new MailService.ListPolicyRule("a\"b@ornek.com", MailListPostingPolicy.Allowed, ["x@ornek.com"])]);
+
+        Assert.Contains("\"a\\\"b@ornek.com\"", script);
+    }
+
+    /// <summary><c>subscribers</c> kipinde izinli gönderenler ABONELERDEN türetilir.</summary>
+    [Fact]
+    public void ResolveAllowedSenders_IncludesSubscribers_InSubscribersMode()
+    {
+        var result = MailService.ResolveAllowedSenders(
+            MailListPostingPolicy.Subscribers,
+            ["ali@ornek.com", "veli@ornek.com"],
+            []);
+
+        Assert.Equal(["ali@ornek.com", "veli@ornek.com"], result);
+    }
+
+    /// <summary>
+    /// <c>allowed</c> kipinde ABONELER gönderemez — listenin amacı yalnız yöneticinin duyuru
+    /// yapması. Aboneler buraya sızarsa kip anlamsızlaşır.
+    /// </summary>
+    [Fact]
+    public void ResolveAllowedSenders_ExcludesSubscribers_InAllowedMode()
+    {
+        var result = MailService.ResolveAllowedSenders(
+            MailListPostingPolicy.Allowed,
+            ["abone@ornek.com"],
+            ["yonetici@ornek.com"]);
+
+        Assert.Equal(["yonetici@ornek.com"], result);
+    }
+
+    /// <summary>
+    /// Liste yöneticileri HER İKİ kipte de gönderebilir: kendi listesine duyuru yazamayan bir
+    /// yönetici özelliği kullanılamaz kılardı.
+    /// </summary>
+    [Fact]
+    public void ResolveAllowedSenders_AlwaysIncludesTheListAdministrators()
+    {
+        var result = MailService.ResolveAllowedSenders(
+            MailListPostingPolicy.Subscribers,
+            ["abone@ornek.com"],
+            ["yonetici@ornek.com"]);
+
+        Assert.Contains("yonetici@ornek.com", result);
+        Assert.Contains("abone@ornek.com", result);
+    }
+
+    [Fact]
+    public void ResolveAllowedSenders_NormalizesCaseAndDeduplicates()
+    {
+        var result = MailService.ResolveAllowedSenders(
+            MailListPostingPolicy.Subscribers,
+            ["ALI@ORNEK.COM"],
+            [" ali@ornek.com "]);
+
+        Assert.Equal(["ali@ornek.com"], result);
+    }
+
+    /// <summary>Bilinmeyen kip adı sessizce en gevşek kipe düşmemeli diye AYRI doğrulanır.</summary>
+    [Theory]
+    [InlineData("anyone", true)]
+    [InlineData("subscribers", true)]
+    [InlineData("allowed", true)]
+    [InlineData("moderated", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void MailListPostingPolicy_KnowsOnlyTheThreeSupportedModes(string? value, bool expected)
+    {
+        Assert.Equal(expected, MailListPostingPolicy.IsKnown(value));
+    }
+
+    /// <summary>Red mesajı SMTP kalıcı-hata kodu taşımalı; 4xx olsaydı gönderici sonsuza dek denerdi.</summary>
+    [Theory]
+    [InlineData(MailListPostingPolicy.Subscribers)]
+    [InlineData(MailListPostingPolicy.Allowed)]
+    public void BuildPolicyRejectReason_UsesAPermanentSmtpFailureCode(string policy)
+    {
+        Assert.StartsWith("550 5.7.2", MailService.BuildPolicyRejectReason(policy));
+    }
+
+    // --- 7) Adres doğrulayıcı ---
 
     [Theory]
     [InlineData("ali@ornek.com", true)]

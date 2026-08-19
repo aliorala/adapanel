@@ -294,7 +294,7 @@ public sealed class MailController(
             HttpContext,
             "mail.list.created",
             NormalizeAddress(request.Address, request.Domain),
-            $"Mailing list created with {request.Recipients.Count} subscriber(s).");
+            $"Mailing list created with {request.Recipients.Count} subscriber(s), posting policy '{request.PostingPolicy}'.");
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_created"));
     }
 
@@ -305,7 +305,8 @@ public sealed class MailController(
 
         // Hiçbir şey istenmemişse çağrıyı sunucuya taşımayız: "kaydedildi" yanıtı dönüp hiçbir şey
         // değiştirmemek, kullanıcıya işlem olmuş gibi görünür.
-        if (request.Recipients is null && request.Add.Count == 0 && request.Remove.Count == 0)
+        if (request.Recipients is null && request.Add.Count == 0 && request.Remove.Count == 0
+            && request.PostingPolicy is null && request.AllowedSenders is null)
         {
             throw new Core.Common.AppException("mail.list_no_change", 400, 400);
         }
@@ -329,6 +330,18 @@ public sealed class MailController(
         if (request.Remove.Count > 0)
         {
             changes.Add($"unsubscribed: {FormatAddresses(request.Remove)}");
+        }
+
+        // GÖNDERİM POLİTİKASI bir GÜVENLİK ayarıdır: "yalnız aboneler"den "herkes"e geçmek, listeyi
+        // kimliği doğrulanmamış dış göndericilere açar. Kimin ne zaman gevşettiği kayıtta durmalı.
+        if (request.PostingPolicy is not null)
+        {
+            changes.Add($"posting policy: {request.PostingPolicy}");
+        }
+
+        if (request.AllowedSenders is not null)
+        {
+            changes.Add($"allowed senders: {FormatAddresses(request.AllowedSenders)}");
         }
 
         await auditService.AuditAsync(
