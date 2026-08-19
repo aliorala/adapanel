@@ -745,7 +745,18 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await siteCascadeDeletionService.DeleteAsync(siteName, deleteFiles, deleteDatabases, cancellationToken);
-        await dbOwnership.RemoveBySiteAsync(siteName, cancellationToken); // M1: siteye bağlı DB sahiplik kayıtlarını temizle (kota doğru kalsın)
+
+        // SAHİPLİK KAYDI BURADA SİLİNMİYOR — bilerek (denetim Y1).
+        //
+        // Eskiden burada KOŞULSUZ `dbOwnership.RemoveBySiteAsync(siteName)` vardı: `deleteDatabases`
+        // varsayılanı `false` olmasına rağmen kayıt her hâlükârda gidiyordu. Sonuç: veritabanı
+        // motorda duruyor, ama panelde SAHİPSİZ. Sahipsiz bir veritabanına panelden sahip atayan
+        // hiçbir uç yok (DatabasesController mevcut sahip yoksa sessizce atlar) — müşteri onu bir
+        // daha göremiyor, yedekleyemiyor, bağlayamıyordu; kotasından ise düşmeye devam ediyordu.
+        // "Veritabanımı koru" seçeneği, veritabanını erişilemez hâle getiren bir tuzaktı.
+        //
+        // Karar artık GERÇEĞİ bilen yerde: cascade servisi yalnızca DROP'u başarılı olan
+        // veritabanının kaydını siler, hayatta kalanların sahipliğini KORUYUP ölü site adını koparır.
         await WriteAuditAsync("sites.delete.completed", siteName, cancellationToken);
         return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.success"));
     }

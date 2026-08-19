@@ -518,19 +518,38 @@ public sealed class UserManagementService(
 
         // 3) Siteler: removeSites=true → dosyalar + eşleşen DB'lerle cascade silinir. false → siteler
         //    SUNUCUDA KALIR (yönetime devir); yalnız panel kayıtları temizlenir.
+        //
+        // CASCADE'İN UYARILARI ARTIK ATILMIYOR (denetim Y7).
+        //
+        // Buradaki çağrı `SiteDeletionResultDto` döner ve o nesnenin tamamı — "site dosyaları
+        // silinemedi", "veritabanı düşürülemedi", "klasör başka bir siteye ait" — sonucu hiç
+        // okunmadan çöpe gidiyordu. Hemen ardından kullanıcı satırı siliniyor ve uç `200 OK`
+        // dönüyordu: yarım silinmiş site SAHİPSİZ kalıyor, kimin olduğu bilgisi yok oluyor ve
+        // WHMCS bu çağrıya "başarılı" diyordu. Sunucuda ne kaldığını kimse öğrenemiyordu.
+        //
+        // Uyarılar artık iki yere birden yazılıyor: DENETİM KAYDINA (kalıcı, sorgulanabilir —
+        // "bu kullanıcının sitesinden ne kaldı?" sorusunun tek cevabı) ve loglara.
+        var cascadeUyarilari = new List<string>();
         if (removeSites)
         {
             foreach (var siteName in scope.Sites)
             {
                 try
                 {
-                    await siteCascadeDeletion.DeleteAsync(siteName, deleteFiles: true, deleteDatabases: true, cancellationToken);
+                    var sonuc = await siteCascadeDeletion.DeleteAsync(siteName, deleteFiles: true, deleteDatabases: true, cancellationToken);
+                    foreach (var uyari in sonuc.Warnings)
+                    {
+                        cascadeUyarilari.Add($"{siteName}: {uyari}");
+                    }
                 }
                 catch (Exception exception)
                 {
                     logger.LogWarning(exception, "Kullanıcı silme: site cascade silinemedi: {Site}", siteName);
+                    cascadeUyarilari.Add($"{siteName}: cascade silme çalıştırılamadı — {exception.Message}");
                 }
             }
+
+            await RecordCascadeLeftoversAsync(user.UserName, cascadeUyarilari, actorUserId, ipAddress, cancellationToken);
         }
 
         // 4) DB sahiplik KAYITLARI temizlenir (removeSites=false ise veritabanlarının kendisi durur).
@@ -553,10 +572,67 @@ public sealed class UserManagementService(
         await auditService.WriteAsync(
             "users.deleted",
             "users",
-            $"User '{user.UserName}' ({user.Role}) deleted. removeSites={removeSites}; {scope.Sites.Count} site(s) in scope.",
+            $"User '{user.UserName}' ({user.Role}) deleted. removeSites={removeSites}; {scope.Sites.Count} site(s) in scope; " +
+            $"{cascadeUyarilari.Count} cascade warning(s).",
             actorUserId,
             ipAddress,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Cascade'in geride bıraktıklarını KALICI olarak kaydeder.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kullanıcı kaydı birazdan silinecek; silindikten sonra "bu klasör kimindi, neden yarım kaldı"
+    /// sorusuna cevap verebilecek TEK yer denetim kaydıdır. Uyarı yoksa satır yazılmaz — her silmede
+    /// anlamsız bir kayıt üretmek, denetim kaydını okunmaz hâle getirirdi.
+    /// </para>
+    /// <para>
+    /// Denetim yazımı ASIL İŞİN yan ürünüdür: yazılamaması silmeyi geri almaz, bu yüzden hata
+    /// yutulur ama log'a KRİTİK olarak düşer (kaybolan tek kanıt odur).
+    /// </para>
+    /// </remarks>
+    private async Task RecordCascadeLeftoversAsync(
+        string userName,
+        IReadOnlyCollection<string> warnings,
+        Guid actorUserId,
+        string? ipAddress,
+        CancellationToken cancellationToken)
+    {
+        if (warnings.Count == 0)
+        {
+            return;
+        }
+
+        // Denetim kaydı sınırsız büyümesin: ilk 20 uyarı + kaç tane olduğu.
+        var gosterilen = warnings.Take(20).ToArray();
+        var detay =
+            $"User '{userName}' deleted with removeSites=true, but the site cascade reported " +
+            $"{warnings.Count} warning(s); leftovers may remain on disk and are now UNOWNED. " +
+            string.Join(" | ", gosterilen) +
+            (warnings.Count > gosterilen.Length ? $" | (+{warnings.Count - gosterilen.Length} more)" : string.Empty);
+
+        logger.LogError(
+            "Kullanici silme: cascade {Count} uyari birakti ({User}). Sunucuda artik SAHIPSIZ kalinti olabilir: {Detay}",
+            warnings.Count,
+            userName,
+            detay);
+
+        try
+        {
+            await auditService.WriteAsync(
+                "users.delete.site_leftover",
+                "users",
+                detay,
+                actorUserId,
+                ipAddress,
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Kullanici silme: cascade kalinti denetim kaydi yazilamadi.");
+        }
     }
 
     /// <summary>Kullanıcının ad alanındaki (u&lt;id&gt;--) planlı görevleri siler; hata silmeyi durdurmaz.</summary>

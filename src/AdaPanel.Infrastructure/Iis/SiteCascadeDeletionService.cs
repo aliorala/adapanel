@@ -1,8 +1,11 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Iis;
 
@@ -28,6 +31,10 @@ public sealed class SiteCascadeDeletionService(
     IWafService wafService,
     IDirectoryProtectionService directoryProtectionService,
     ISchedulerService schedulerService,
+    // K9: silinecek yolun MEŞRU olduğunu kanıtlamak için panelin kendi site kökü gerekiyor.
+    IPanelPreferencesService panelPreferences,
+    // Panel veri kökü (yedekler + veritabanı + anahtarlar) taşınmış olabilir; yasak listesi ÖLÇÜLEN yoldan kurulur.
+    IOptions<PanelRuntimeOptions> runtimeOptions,
     JsonFileStore fileStore,
     ILogger<SiteCascadeDeletionService> logger) : ISiteCascadeDeletionService
 {
@@ -83,6 +90,11 @@ public sealed class SiteCascadeDeletionService(
             await StepAsync(result, $"Mail domaini ({domain})", () => mailService.DeleteDomainAsync(domain, cancellationToken));
         }
 
+        // SAHİPLİK KAYITLARI SİLMEDEN ÖNCE OKUNUR (Y1): hangi veritabanının GERÇEKTEN silindiğini
+        // ancak silme denemesinden sonra biliriz, ama kaydın sahibini o noktada okumak için geç kalırız.
+        var sahiplikKayitlari = await ReadOwnershipAsync(siteName, cancellationToken);
+        var silinenVeritabanlari = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // 2) SAHİPLİK KAYDI OLAN veritabanları (istenirse). Ad tahminiyle bulunanlar SİLİNMEZ;
         //    yalnızca uyarı olarak bildirilir — bkz. ResolveOwnedDatabasesAsync.
         if (deleteDatabases)
@@ -93,7 +105,12 @@ public sealed class SiteCascadeDeletionService(
                 var separator = db.IndexOf(':');
                 var engine = db[..separator];
                 var name = db[(separator + 1)..];
-                await StepAsync(result, $"Veritabanı ({db})", () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken));
+                if (await StepAsync(result, $"Veritabanı ({db})", () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken)))
+                {
+                    // Y1: sahiplik kaydı YALNIZCA veritabanı gerçekten düştüğünde silinir.
+                    silinenVeritabanlari.Add(db);
+                    await TryRemoveOwnershipAsync(result, engine, name, cancellationToken);
+                }
             }
 
             // SESSİZ KALMIYORUZ: kullanıcı eskiden bu veritabanlarının da silineceğini varsayıyordu.
@@ -105,6 +122,19 @@ public sealed class SiteCascadeDeletionService(
                     $"Veritabanı ({db}): adı siteyle eşleşiyor ama panelde bu siteye ait bir sahiplik/bağ kaydı yok — SİLİNMEDİ, gerekiyorsa Veritabanları ekranından elle silin.");
             }
         }
+
+        // 2b) MOTORDA DURAN veritabanlarının SAHİPLİĞİ KORUNUR (Y1).
+        //
+        // Eskiden SitesController silme çağrısından hemen sonra KOŞULSUZ `RemoveBySiteAsync`
+        // çağırıyordu: "veritabanımı koru" seçilse bile kayıt gidiyor, veritabanı motorda kalıyordu.
+        // Sahipsiz bir veritabanına panelden sahip atayan HİÇBİR uç yok — müşteri onu bir daha
+        // göremiyor, yedekleyemiyor, bağlayamıyordu; ama kotasından düşmeye devam ediyordu.
+        //
+        // Artık kayıt SİLİNMEZ, yalnızca ARTIK VAR OLMAYAN site adı koparılır: sahip aynı kalır,
+        // veritabanı listede/yedekte/kotada görünmeye devam eder. Site adının koparılması ayrıca
+        // aynı adla açılacak YENİ bir sitenin, eski veritabanını "kendi kaydı" sanıp düşürmesini
+        // engeller.
+        await DetachSurvivingDatabasesAsync(result, siteName, sahiplikKayitlari, silinenVeritabanlari, cancellationToken);
 
         // 3) FTP kullanıcıları.
         foreach (var ftpUser in await ResolveFtpUsersAsync(siteName, cancellationToken))
@@ -173,15 +203,21 @@ public sealed class SiteCascadeDeletionService(
             });
         }
 
+        // SİLME POLİTİKASI IIS SİTESİ KALDIRILMADAN ÖNCE ÖLÇÜLÜR: "bu klasör başka bir siteye de
+        // ait mi?" sorusunun cevabı IIS'in site listesinden gelir ve o liste birazdan değişecek.
+        var silmePolitikasi = deleteFiles
+            ? await BuildDeletionPolicyAsync(site, siteName, result, cancellationToken)
+            : null;
+
         // 9) IIS sitesi + app pool.
         await StepAsync(result, "IIS sitesi", () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken));
 
         // 10) Dosyalar (en son; site kaldırıldıktan sonra). Uygulama kökü, fiziksel yolu
         //     da kapsıyorsa onunla birlikte gider.
-        if (deleteFiles)
+        if (deleteFiles && silmePolitikasi is not null)
         {
-            TryDeleteDirectory(result, "Uygulama kök dizini", appRoot);
-            TryDeleteDirectory(result, "Site dosyaları", physicalPath);
+            TryDeleteDirectory(result, "Uygulama kök dizini", appRoot, silmePolitikasi);
+            TryDeleteDirectory(result, "Site dosyaları", physicalPath, silmePolitikasi);
         }
 
         return result;
@@ -451,12 +487,17 @@ public sealed class SiteCascadeDeletionService(
 
     // ---- Yardımcılar ----
 
-    private async Task StepAsync(SiteDeletionResultDto result, string label, Func<Task> action)
+    /// <summary>
+    /// Tek adım. <b>Dönüş değeri "adım GERÇEKTEN başarılı oldu mu"dur</b> ve boşuna değildir:
+    /// veritabanı sahiplik kaydı yalnızca DROP başarılıysa silinir (Y1).
+    /// </summary>
+    private async Task<bool> StepAsync(SiteDeletionResultDto result, string label, Func<Task> action)
     {
         try
         {
             await action();
             result.Removed.Add(label);
+            return true;
         }
         catch (Exception exception)
         {
@@ -464,7 +505,7 @@ public sealed class SiteCascadeDeletionService(
             if (exception.Message?.EndsWith("_not_found", StringComparison.OrdinalIgnoreCase) == true)
             {
                 result.Removed.Add(label);
-                return;
+                return true;
             }
 
             logger.LogWarning(exception, "Cascade silme adımı başarısız: {Label}", label);
@@ -474,6 +515,7 @@ public sealed class SiteCascadeDeletionService(
                 ? $"{appEx.MessageKey} — {appEx.Details}"
                 : exception.Message;
             result.Warnings.Add($"{label}: {reason}");
+            return false;
         }
     }
 
@@ -505,60 +547,290 @@ public sealed class SiteCascadeDeletionService(
         }
     }
 
-    private void TryDeleteDirectory(SiteDeletionResultDto result, string label, string path)
+    /// <summary>
+    /// Silme politikasını ÖLÇEREK kurar: panelin site kökleri + sistem yasakları + BAŞKA sitelerin
+    /// klasörleri. Ölçülemezse <c>null</c> döner ve dosya silme HİÇ YAPILMAZ.
+    /// </summary>
+    /// <remarks>
+    /// "Ölçemedik" ile "sorun yok" ayrımı: başka sitelerin yollarını okuyamadan silmek, Y8'in ta
+    /// kendisini kör bir şekilde yapmak olurdu. Aynı varsayılan <c>SiteBuilderPathGuard</c>'da da
+    /// var: ölçemediğinde REDDEDER.
+    /// </remarks>
+    private async Task<SiteDeletionPathPolicy?> BuildDeletionPolicyAsync(
+        SiteDto? site,
+        string siteName,
+        SiteDeletionResultDto result,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyCollection<SiteDto> digerSiteler;
+        try
+        {
+            digerSiteler = await iisSiteService.GetSitesAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Site listesi okunamadi; {Site} icin dosya silme yapilmayacak.", siteName);
+            result.Warnings.Add(
+                "Site dosyaları: SİLİNMEDİ — sunucudaki diğer sitelerin klasörleri okunamadı, " +
+                "klasörün başka bir siteye ait olup olmadığı doğrulanamıyor.");
+            return null;
+        }
+
+        // Kendi yollarımız "başka site" değildir; aynı siteyi kendi kendine engellemek anlamsız olurdu.
+        var baskaSiteYollari = digerSiteler
+            .Where(diger => !string.Equals(diger.Name, siteName, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(diger => new[] { diger.PhysicalPath, diger.ApplicationRootPath })
+            .Where(yol => !string.IsNullOrWhiteSpace(yol))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        // NOT: GetSitesAsync sistem sitelerini (Default Web Site, panel araçları) listeden düşürür,
+        // dolayısıyla onların yolları burada YOKTUR. Klasik olanı ("Default Web Site" →
+        // C:\inetpub\wwwroot) zaten yasak kapsayıcı listesindedir.
+        var siteKokleri = new List<string> { SiteDeletionPathGuard.DefaultIisSiteRoot() };
+        try
+        {
+            var tercihler = await panelPreferences.GetAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(tercihler.DefaultSiteRoot))
+            {
+                siteKokleri.Add(tercihler.DefaultSiteRoot);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Tercihler okunamadıysa yalnız IIS varsayılanı kalır: kapı DARALIR, açılmaz.
+            logger.LogWarning(exception, "Panel tercihleri okunamadi; site kokleri yalniz IIS varsayilanindan kuruluyor.");
+        }
+
+        // ADANMIŞLIK KANITI: klasör adı siteyle birebir aynıysa (D:\musteri.com) o klasör bu siteye
+        // adanmıştır. Bu kanıt kapıyı yalnızca GENİŞLETİR; yasak listeleri ondan önce çalışır.
+        var adanmisAdlar = BuildHostCandidates(site, siteName);
+
+        return new SiteDeletionPathPolicy
+        {
+            KnownSiteRoots = siteKokleri,
+            ForbiddenSubtrees = SiteDeletionPathGuard.SystemForbiddenSubtrees(runtimeOptions.Value.DataRoot),
+            ForbiddenContainers = SiteDeletionPathGuard.SystemForbiddenContainers(),
+            OtherSitePaths = baskaSiteYollari,
+            DedicatedFolderNames = adanmisAdlar
+        };
+    }
+
+    private void TryDeleteDirectory(SiteDeletionResultDto result, string label, string path, SiteDeletionPathPolicy policy)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
         }
 
+        var full = PathContainment.Normalize(path);
+        if (full is null)
+        {
+            result.Warnings.Add($"{label}: SİLİNMEDİ — yol çözümlenemedi ({path})");
+            return;
+        }
+
+        if (!Directory.Exists(full))
+        {
+            return;
+        }
+
+        // K9 + Y8: kara liste değil, KANIT. Geçemeyen yol silinmez ve SEBEBİ yazılır — eski
+        // "güvenlik nedeniyle atlandı" mesajı yöneticiye hiçbir şey anlatmıyordu.
+        var karar = SiteDeletionPathGuard.Evaluate(full, policy);
+        if (karar != SiteDeletionPathVerdict.Deletable)
+        {
+            logger.LogWarning("Site klasoru silinmedi ({Verdict}): {Path}", karar, full);
+            result.Warnings.Add($"{label}: SİLİNMEDİ — {SiteDeletionPathGuard.Describe(karar)} ({full})");
+            return;
+        }
+
+        // Y7: "ne kadarı gitti" ancak ÖNCEDEN sayarsak bilinebilir.
+        var oncekiDosyaSayisi = CountFilesSafely(full);
+
         try
         {
-            var full = Path.GetFullPath(Environment.ExpandEnvironmentVariables(path));
-            if (!Directory.Exists(full))
-            {
-                return;
-            }
-
-            if (!IsSafeToDelete(full))
-            {
-                result.Warnings.Add($"{label}: güvenlik nedeniyle atlandı ({full})");
-                return;
-            }
-
             Directory.Delete(full, recursive: true);
             result.Removed.Add($"{label} ({full})");
         }
         catch (Exception exception)
         {
-            result.Warnings.Add($"{label}: {exception.Message}");
+            var klasorDuruyor = Directory.Exists(full);
+            var kalanDosyaSayisi = klasorDuruyor ? CountFilesSafely(full) : 0;
+            var sonuc = ClassifyDeletion(oncekiDosyaSayisi, kalanDosyaSayisi, klasorDuruyor);
+
+            logger.LogWarning(
+                exception,
+                "Site klasoru silme sonucu {Outcome}: {Path} ({Before} -> {After} dosya)",
+                sonuc,
+                full,
+                oncekiDosyaSayisi,
+                kalanDosyaSayisi);
+
+            result.Warnings.Add(DescribeDeletionFailure(
+                label, full, sonuc, oncekiDosyaSayisi, kalanDosyaSayisi, exception.Message));
         }
     }
 
-    /// <summary>Sürücü kökü, sistem dizinleri ve çok sığ yolların yanlışlıkla silinmesini engeller.</summary>
-    private static bool IsSafeToDelete(string fullPath)
+    /// <summary>Yarım kalmış silmenin GERÇEK sonucu. Saf işlev: testler kararı doğrudan ölçer.</summary>
+    internal enum DirectoryDeletionOutcome
     {
-        var trimmed = fullPath.TrimEnd('\\', '/');
-        var segments = trimmed.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length < 2)
+        /// <summary>Klasör gitti.</summary>
+        Deleted,
+
+        /// <summary>İstisna atıldı ama dosyaların bir kısmı (çoğu zaman neredeyse hepsi) SİLİNDİ.</summary>
+        PartiallyDeleted,
+
+        /// <summary>Hiçbir şey silinmedi.</summary>
+        NotDeleted
+    }
+
+    /// <summary>
+    /// <b>ÖLÇÜLDÜ (denetim Y7):</b> içinde kavşak bulunan gerçek bir site ağacında
+    /// <c>Directory.Delete(recursive: true)</c> istisna attı, <b>ama <c>index.php</c>,
+    /// <c>uploads\photo.jpg</c> ve <c>wwwroot\a.php</c> silinmişti</b>; yalnız boş <c>wwwroot</c>
+    /// kaldı. Panel bunu "Site dosyaları silinemedi" diye raporluyordu — yani gerçeğin TERSİ.
+    /// Kullanıcı "silinemedi" okuyup dosyalarının durduğunu sanıyordu.
+    /// </summary>
+    internal static DirectoryDeletionOutcome ClassifyDeletion(int oncekiDosyaSayisi, int kalanDosyaSayisi, bool klasorDuruyor)
+    {
+        if (!klasorDuruyor)
         {
-            return false;
+            return DirectoryDeletionOutcome.Deleted;
         }
 
-        var lower = trimmed.ToLowerInvariant();
-        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\', '/').ToLowerInvariant();
-        if (lower == windows || lower.StartsWith(windows + "\\", StringComparison.Ordinal))
+        return kalanDosyaSayisi < oncekiDosyaSayisi
+            ? DirectoryDeletionOutcome.PartiallyDeleted
+            : DirectoryDeletionOutcome.NotDeleted;
+    }
+
+    /// <summary>Kullanıcıya ne yazılacağı — saf işlev, mesajın kendisi de test edilebilir olsun diye.</summary>
+    internal static string DescribeDeletionFailure(
+        string label,
+        string path,
+        DirectoryDeletionOutcome outcome,
+        int oncekiDosyaSayisi,
+        int kalanDosyaSayisi,
+        string reason)
+    {
+        return outcome switch
         {
-            return false;
+            DirectoryDeletionOutcome.Deleted => $"{label}: silindi ({path}) — {reason}",
+            DirectoryDeletionOutcome.PartiallyDeleted =>
+                $"{label}: KISMEN SİLİNDİ — {oncekiDosyaSayisi} dosyadan {oncekiDosyaSayisi - kalanDosyaSayisi} tanesi " +
+                $"silindi, {kalanDosyaSayisi} tanesi kaldı ({path}). Silinenler GERİ GETİRİLEMEZ; " +
+                $"kalanları elle temizlemeniz gerekir. Sebep: {reason}",
+            _ => $"{label}: silinemedi, dosyalar duruyor ({path}) — {reason}"
+        };
+    }
+
+    /// <summary>
+    /// Klasördeki dosya sayısı. <b>Kavşak/sembolik bağlantı klasörlere GİRMEZ</b> — özyinelemeli
+    /// sayımın kavşağı takip ettiği bu depoda ölçüldü (denetim Y6) ve sayım da bir okuma yoludur.
+    /// Üst sınır var: silme yolunda milyonlarca dosyayı saymak işi kilitlerdi; sınır aşılırsa
+    /// "kısmen silindi" kararı yine doğru çalışır (iki ölçüm de aynı sınırla yapılır).
+    /// </summary>
+    internal static int CountFilesSafely(string root, int limit = 20000)
+    {
+        var toplam = 0;
+        var kuyruk = new Queue<string>();
+        kuyruk.Enqueue(root);
+
+        while (kuyruk.Count > 0 && toplam < limit)
+        {
+            var klasor = kuyruk.Dequeue();
+            try
+            {
+                var bilgi = new DirectoryInfo(klasor);
+                if (!bilgi.Exists || bilgi.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    continue;
+                }
+
+                toplam += bilgi.EnumerateFiles().Count();
+                foreach (var alt in bilgi.EnumerateDirectories())
+                {
+                    kuyruk.Enqueue(alt.FullName);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Okunamayan alt klasör sayıma girmez; karar iki ölçümün FARKINA bakar, mutlak sayıya değil.
+            }
         }
 
-        string[] shallowForbidden = ["program files", "program files (x86)"];
-        if (segments.Length <= 2 && shallowForbidden.Contains(segments[^1].ToLowerInvariant()))
-        {
-            return false;
-        }
+        return Math.Min(toplam, limit);
+    }
 
-        return true;
+    /// <summary>Siteye ait sahiplik kayıtları — silme başlamadan önce okunur (Y1).</summary>
+    private async Task<IReadOnlyList<(string Engine, string DatabaseName, Guid OwnerUserId)>> ReadOwnershipAsync(
+        string siteName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var hepsi = await databaseOwnership.GetAllAsync(cancellationToken);
+            return hepsi
+                .Where(kayit => string.Equals((kayit.SiteName ?? string.Empty).Trim(), siteName.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Select(kayit => (kayit.Engine, kayit.DatabaseName, kayit.OwnerUserId))
+                .ToList();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Veritabani sahiplik kayitlari okunamadi ({Site}).", siteName);
+            return [];
+        }
+    }
+
+    private async Task TryRemoveOwnershipAsync(
+        SiteDeletionResultDto result,
+        string engine,
+        string databaseName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await databaseOwnership.RemoveAsync(engine, databaseName, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "Veritabani sahiplik kaydi silinemedi: {Engine}:{Name}", engine, databaseName);
+            result.Warnings.Add($"Veritabanı sahiplik kaydı ({engine}:{databaseName}): silinemedi — {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Silinmeyen (ya da silinemeyen) veritabanlarının sahipliğini KORUR, yalnız ölü site adını koparır.
+    /// </summary>
+    private async Task DetachSurvivingDatabasesAsync(
+        SiteDeletionResultDto result,
+        string siteName,
+        IReadOnlyList<(string Engine, string DatabaseName, Guid OwnerUserId)> ownership,
+        IReadOnlyCollection<string> deletedDatabases,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (engine, databaseName, ownerUserId) in ownership)
+        {
+            if (deletedDatabases.Contains($"{engine}:{databaseName}", StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                // RecordAsync idempotenttir ve kaydı SAHİBİYLE birlikte yeniden yazar; site adı boşalır.
+                await databaseOwnership.RecordAsync(engine, databaseName, ownerUserId, siteName: null, cancellationToken);
+                result.Warnings.Add(
+                    $"Veritabanı ({engine}:{databaseName}): SİLİNMEDİ ve sahipliği KORUNDU — " +
+                    $"'{siteName}' sitesiyle bağı koparıldı, Veritabanları ekranından erişilmeye devam edilebilir.");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Veritabani sahipligi korunamadi: {Engine}:{Name}", engine, databaseName);
+                result.Warnings.Add(
+                    $"Veritabanı sahiplik kaydı ({engine}:{databaseName}): güncellenemedi — {exception.Message}");
+            }
+        }
     }
 
     private static string GitConfigRelativePath(string siteName)

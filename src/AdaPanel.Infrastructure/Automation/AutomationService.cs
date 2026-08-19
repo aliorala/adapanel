@@ -34,6 +34,9 @@ public sealed class AutomationService(
     ISchedulerService schedulerService,
     IErrorReportSender errorReportSender,
     IConcurrencyLock concurrencyLock,
+    // Günlük silmenin TEK kaynağı. Otomasyonun kendi (korumasız, özyinelemeli) kopyası kaldırıldı;
+    // gerekçe RunLogCleanupAsync'te.
+    Logs.ILogRotationService logRotationService,
     // Hangi veritabanının hangi siteye ait olduğunun OTORİTE kaynağı. Otomatik yedek, site
     // arşivine hangi dökümleri koyacağını buradan öğrenir — ad benzerliğinden DEĞİL.
     IDatabaseOwnershipService databaseOwnership,
@@ -664,29 +667,62 @@ public sealed class AutomationService(
     }
 
     /// <summary>
-    /// IIS site erişim loglarının rotasyonu: her sitenin W3SVC&lt;id&gt; dizininden retention'dan eski
-    /// *.log dosyalarını siler (LogViewer/İstatistik ile AYNI kanıtlanmış dizin çözümü). Best-effort.
+    /// Günlük temizliği — <b>artık kendi silme kodu yok</b>, tek kaynağa (log döndürme) delege eder.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN DEĞİŞTİ (denetim Y6, ÖLÇÜLDÜ):</b> panelde günlük silen İKİ kod vardı ve
+    /// <b>aynı klasörlere</b> bakıyorlardı. <c>LogRotationService</c>/<see cref="Logs.LogFileGuard"/>
+    /// sıkı: yalnız doğrudan alt dosyalar, uzantı beyaz listesi, <c>ReparsePoint</c> reddi,
+    /// <c>FileShare.None + DeleteOnClose</c>, özyineleme YOK. Buradaki ikinci kopya
+    /// (<c>SiteLogCleanup</c>) ise korumasızdı: <c>SearchOption.AllDirectories</c> ile
+    /// özyinelemeliydi ve <b>ölçüldü: özyinelemeli sayım kavşağı (junction) TAKİP EDİYOR</b>.
+    /// Bir sitenin <c>W3SVC&lt;id&gt;</c> klasörü müşterinin klasörüne bağlanmışsa gece otomasyonu
+    /// müşterinin dosyalarını siliyordu — <see cref="Logs.LogFileGuard"/>'ın belgesinde adıyla anılan,
+    /// bu depoda BİR KEZ YAŞANMIŞ hata sınıfı. Sıkı kapı varken korumasız ikinci kopyayı yaşatmak,
+    /// korumayı sıfırlamaktır: <c>SiteLogCleanup</c> SİLİNDİ.
+    /// </para>
+    /// <para>
+    /// <b>Saklama süresi artık log döndürme politikasından gelir.</b> Otomasyon ekranındaki gün
+    /// sayısı ikinci bir gerçek kaynağı olurdu; hangisinin geçerli olduğu ölçülüp AÇIKÇA yazılıyor
+    /// (aşağıdaki özet satırı), böylece iki ekran çelişirse kullanıcı bunu okur.
+    /// </para>
+    /// </remarks>
     private async Task RunLogCleanupAsync(AutomationStateRecord state, CancellationToken cancellationToken)
     {
-        var deletedTotal = 0;
-        long freedTotal = 0;
         var hasError = false;
         var summary = new StringBuilder();
+        var ozet = string.Empty;
 
         try
         {
-            var cutoff = DateTime.UtcNow.AddDays(-Math.Max(1, state.LogRetentionDays));
-            // IIS'in GERÇEK günlük kökü (sabit kodlu değil) — gerekçe: IisLogPaths.
-            var logRoot = IisLogPaths.ResolveRoot();
-            var sites = await iisSiteService.GetSitesAsync(cancellationToken);
-            foreach (var site in sites)
+            var durum = await logRotationService.RunAsync(null, cancellationToken);
+            var dondurulen = durum.Targets.Sum(hedef => hedef.RotatedFiles);
+            var silinen = durum.Targets.Sum(hedef => hedef.DeletedArchives);
+            var kazanc = durum.Targets.Sum(hedef => hedef.FreedBytes);
+            var atlanan = durum.Targets.Sum(hedef => hedef.SkippedLockedFiles + hedef.SkippedUnsafeFiles);
+
+            ozet =
+                $"{dondurulen} log file(s) archived, {silinen} archive(s) deleted, {kazanc / (1024 * 1024)} MB reclaimed" +
+                (atlanan > 0 ? $", {atlanan} file(s) skipped (locked or unsafe)" : string.Empty) +
+                $". Retention: site {durum.Settings.SiteLogMaxAgeDays}d / panel {durum.Settings.PanelLogMaxAgeDays}d " +
+                "(managed under Logs -> log rotation).";
+
+            if (durum.Settings.SiteLogMaxAgeDays != state.LogRetentionDays)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var (deleted, freed) = SiteLogCleanup.DeleteOldLogs(Path.Combine(logRoot, $"W3SVC{site.Id}"), cutoff);
-                deletedTotal += deleted;
-                freedTotal += freed;
+                // İki ekran farklı sayı gösteriyorsa GEÇERLİ olanı söyle; sessiz kalmak, kullanıcının
+                // ayarladığını sandığı bir değerin hiç uygulanmadığını gizlemek olurdu.
+                ozet += $" NOTE: the {state.LogRetentionDays}-day value on this screen is not applied.";
             }
+        }
+        catch (AdaPanel.Core.Common.AppException exception) when (
+            string.Equals(exception.MessageKey, "logs.rotation_disabled", StringComparison.Ordinal))
+        {
+            // Politika kapalıyken silme YAPILMAZ. "Tamamlandı" demek, hiçbir şey yapmadan başarı
+            // raporlamak olurdu; kullanıcı bu satırı okuyup açması gereken yeri görür.
+            hasError = true;
+            summary.AppendLine("Log rotation policy is disabled (Logs -> log rotation). No log file was touched.");
+            logger.LogInformation("Otomatik log temizligi atlandi: log dondurme politikasi kapali.");
         }
         catch (Exception exception)
         {
@@ -697,9 +733,7 @@ public sealed class AutomationService(
 
         state.LastLogCleanupRunUtc = DateTime.UtcNow;
         state.LastLogCleanupStatus = hasError ? "completed_with_errors" : "completed";
-        state.LastLogCleanupDetails = BuildDetails(
-            $"{deletedTotal} log file(s) deleted, {freedTotal / (1024 * 1024)} MB freed.",
-            summary.ToString());
+        state.LastLogCleanupDetails = BuildDetails(ozet, summary.ToString());
     }
 
     /// <summary>

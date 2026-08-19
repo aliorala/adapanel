@@ -568,7 +568,26 @@ public sealed partial class WebAdministrationSiteService(
         }
     }
 
-    private static string ResolveApplicationRootPath(string physicalPath)
+    /// <summary>
+    /// Belge kökü <c>...\public</c> ise gerçek uygulama kökü bir seviye YUKARIDADIR (Laravel kalıbı).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>DİKKAT — bu değer YIKICI bir işlemde kullanılıyor:</b> cascade silme önce uygulama kökünü
+    /// siler. Yani buradaki "bir seviye yukarı" kararı, bir klasörün TAMAMININ silinmesi anlamına
+    /// gelir. Denetimde (Y8) tam olarak bu ölçüldü: kanıt yalnızca "klasörün adı <c>public</c>"tı.
+    /// </para>
+    /// <para>
+    /// İki kanıt zaten aranıyordu (<c>artisan</c> + <c>composer.json</c>) ama bir üçüncüsü eksikti:
+    /// üst klasörün BİR SİTE KÖKÜ olmaması. Belge kökü <c>C:\inetpub\wwwroot\public</c> olan bir
+    /// sitede (kimse engellemiyordu) üst klasör <c>C:\inetpub\wwwroot</c> çıkıyor — yani bütün
+    /// sitelerin kökü — ve cascade onu silmeye çalışıyordu. Artık üst klasör
+    /// <see cref="SiteDeletionPathGuard.IsUsableApplicationRoot"/> kapısından geçmek zorunda:
+    /// sistem klasörü, ağ paylaşımı ya da bilinen bir site kökü ise YÜKSELME YAPILMAZ ve belge kökü
+    /// olduğu gibi kalır (güvenli varsayılan: eksik silmek, fazla silmekten iyidir).
+    /// </para>
+    /// </remarks>
+    internal static string ResolveApplicationRootPath(string physicalPath)
     {
         var resolvedPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(physicalPath));
         if (!string.Equals(Path.GetFileName(resolvedPath), "public", StringComparison.OrdinalIgnoreCase))
@@ -577,12 +596,29 @@ public sealed partial class WebAdministrationSiteService(
         }
 
         var parent = Directory.GetParent(resolvedPath)?.FullName;
-        return !string.IsNullOrWhiteSpace(parent) &&
-               File.Exists(Path.Combine(parent, "artisan")) &&
-               File.Exists(Path.Combine(parent, "composer.json"))
+        if (string.IsNullOrWhiteSpace(parent) ||
+            !File.Exists(Path.Combine(parent, "artisan")) ||
+            !File.Exists(Path.Combine(parent, "composer.json")))
+        {
+            return resolvedPath;
+        }
+
+        return SiteDeletionPathGuard.IsUsableApplicationRoot(parent, ApplicationRootPolicy)
             ? parent
             : resolvedPath;
     }
+
+    /// <summary>
+    /// Uygulama kökü yükseltmesinin yasak listesi. Panel tercihleri burada okunamaz (bu sınıf IIS'in
+    /// salt-okuma yolu ve her site eşlemesinde çalışır), bu yüzden İŞLETİM SİSTEMİNDEN ölçülen
+    /// yollar kullanılır; IIS'in kendi site kökü de bilinen kök olarak eklenir.
+    /// </summary>
+    private static readonly SiteDeletionPathPolicy ApplicationRootPolicy = new()
+    {
+        ForbiddenSubtrees = SiteDeletionPathGuard.SystemForbiddenSubtrees(),
+        ForbiddenContainers = SiteDeletionPathGuard.SystemForbiddenContainers(),
+        KnownSiteRoots = [SiteDeletionPathGuard.DefaultIisSiteRoot()]
+    };
 
     private static SiteBindingDto MapBinding(object binding)
     {
