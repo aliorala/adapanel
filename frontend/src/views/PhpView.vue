@@ -16,11 +16,11 @@
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeTab === 'installed' }" @click="activeTab = 'installed'">
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeTab === 'installed'" :class="{ active: activeTab === 'installed' }" @click="activeTab = 'installed'">
           {{ t("panel.php.installed") }} ({{ phpStore.versions.length }})
         </button>
-        <button :class="{ active: activeTab === 'available' }" @click="activeTab = 'available'">
+        <button role="tab" :aria-selected="activeTab === 'available'" :class="{ active: activeTab === 'available' }" @click="activeTab = 'available'">
           {{ t("panel.php.available") }} ({{ availablePhpComponents.length }})
         </button>
       </div>

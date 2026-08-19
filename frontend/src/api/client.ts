@@ -160,3 +160,45 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
 
   return config;
 });
+
+/*
+ * OTURUM DÜŞTÜ KAPISI — TEK YER.
+ *
+ * NEDEN: yanıt interceptor'ı HİÇ YOKTU. Oturum zaman aşımına uğradığında (ya da sunucu yeniden
+ * başladığında) panel ölü ekranda kalıyordu: kullanıcı hâlâ paneli görüyor, bastığı HER düğme
+ * `401` ile kırmızı hata veriyor ve tek çıkış yolu sayfayı ELLE yenilemek oluyordu. Kimse
+ * "oturumun bitti" demiyordu.
+ *
+ * Kabuk (SetupWizardView) buraya bir işleyici kaydeder; 401 gelince giriş ekranına döner.
+ * Kural burada duruyor çünkü elli ekranın her çağrısına ayrı 401 kontrolü yazmak, biri
+ * unutulduğunda kullanıcıyı yine ölü ekranda bırakırdı.
+ */
+type SessionExpiredHandler = () => void;
+let sessionExpiredHandler: SessionExpiredHandler | null = null;
+
+/** Kabuk çağırır. Tek işleyici tutulur: ikinci kayıt öncekinin yerine geçer. */
+export function setSessionExpiredHandler(handler: SessionExpiredHandler | null): void {
+  sessionExpiredHandler = handler;
+}
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    /*
+     * `/auth/*` DIŞARIDA: bu yolların 401'i "oturum düştü" DEĞİLDİR.
+     * - `/auth/login` → parola yanlış (kullanıcı zaten giriş ekranında),
+     * - `/auth/session` → henüz giriş yapılmamış (açılıştaki normal durum).
+     * Bunları oturum düşmesi saymak, kullanıcıyı yanlış parolada "oturumunuz bitti" mesajıyla
+     * karşılardı.
+     */
+    if (error.response?.status === 401 && !isAuthPath(error.config?.url)) {
+      // CSRF jetonu oturuma bağlıdır; ölü jetonla yeniden giriş denemesi 400 verirdi.
+      clearCsrfToken();
+      sessionExpiredHandler?.();
+    }
+
+    // Hata AYNEN ilerler: mesajı çevirmek çağıranın işi (bkz. utils/apiError.ts). Burada
+    // yutulursa ekranların kendi `catch` blokları hiç çalışmaz.
+    return Promise.reject(error);
+  }
+);

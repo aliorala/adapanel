@@ -15,11 +15,11 @@
     </p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeTab === 'files'" :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">
           {{ t("panel.files.tab.files") }}
         </button>
-        <button :class="{ active: activeTab === 'backups' }" @click="activeTab = 'backups'">
+        <button role="tab" :aria-selected="activeTab === 'backups'" :class="{ active: activeTab === 'backups' }" @click="activeTab = 'backups'">
           {{ t("panel.files.tab.backups") }}
         </button>
       </div>

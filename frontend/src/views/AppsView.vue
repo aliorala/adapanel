@@ -70,11 +70,11 @@
             <h3>{{ t("panel.apps.stepRuntimeTitle") }}</h3>
             <p class="field-hint">{{ t("panel.apps.stepRuntimeHint") }}</p>
 
-            <div class="segmented-tabs runtime-choice">
-              <button type="button" :class="{ active: activeRuntime === 'node' }" @click="activeRuntime = 'node'">
+            <div class="segmented-tabs runtime-choice" role="tablist">
+              <button role="tab" :aria-selected="activeRuntime === 'node'" type="button" :class="{ active: activeRuntime === 'node' }" @click="activeRuntime = 'node'">
                 Node.js
               </button>
-              <button type="button" :class="{ active: activeRuntime === 'python' }" @click="activeRuntime = 'python'">
+              <button role="tab" :aria-selected="activeRuntime === 'python'" type="button" :class="{ active: activeRuntime === 'python' }" @click="activeRuntime = 'python'">
                 Python
               </button>
             </div>

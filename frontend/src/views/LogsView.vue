@@ -13,17 +13,17 @@
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeTab === 'panel' }" @click="activeTab = 'panel'">
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeTab === 'panel'" :class="{ active: activeTab === 'panel' }" @click="activeTab = 'panel'">
           {{ t("panel.logs.panelLog") }}
         </button>
-        <button :class="{ active: activeTab === 'site' }" @click="activeTab = 'site'">
+        <button role="tab" :aria-selected="activeTab === 'site'" :class="{ active: activeTab === 'site' }" @click="activeTab = 'site'">
           {{ t("panel.logs.siteLog") }}
         </button>
-        <button :class="{ active: activeTab === 'audit' }" @click="activeTab = 'audit'">
+        <button role="tab" :aria-selected="activeTab === 'audit'" :class="{ active: activeTab === 'audit' }" @click="activeTab = 'audit'">
           {{ t("panel.audit.title") }}
         </button>
-        <button :class="{ active: activeTab === 'rotation' }" @click="activeTab = 'rotation'">
+        <button role="tab" :aria-selected="activeTab === 'rotation'" :class="{ active: activeTab === 'rotation' }" @click="activeTab = 'rotation'">
           {{ t("panel.logs.rotationTab") }}
         </button>
       </div>
@@ -201,9 +201,11 @@ import {
   type LogTail
 } from "../api/logs";
 import { useAuthStore, extractApiMessage } from "../stores/auth";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const authStore = useAuthStore();
 const sitesStore = useSitesStore();
 const activeTab = ref<"panel" | "site" | "audit" | "rotation">("panel");
@@ -322,9 +324,22 @@ async function saveRotation() {
   }
 }
 
+/*
+ * Bu düğme DOSYA SİLEBİLİR (saklama sınırları açıksa) — onaysız çalıştırmıyoruz.
+ *
+ * `window.confirm` KALDIRILDI: tarayıcı diyaloğu engellenmiş bir sekmede (kullanıcı "bu site
+ * daha fazla diyalog göstermesin" dediyse ya da kurumsal politika engelliyorsa) `false` döner ve
+ * düğme SESSİZCE HİÇBİR ŞEY YAPMAZ. Kullanıcı düğmenin bozuk olduğunu sanır. Panelin kendi
+ * onay diyaloğu (57 ekran onu kullanıyor) her zaman çizilir ve neyin kaybedileceğini yazar.
+ */
 async function runRotation() {
-  // Bu düğme DOSYA SİLEBİLİR (saklama sınırları açıksa) — onaysız çalıştırmıyoruz.
-  if (!window.confirm(t("panel.logs.rotationRunConfirm"))) {
+  const approved = await confirm({
+    title: t("panel.logs.rotationRunTitle"),
+    message: t("panel.logs.rotationRunConfirm"),
+    confirmLabel: t("panel.logs.rotationRunConfirmLabel")
+  });
+
+  if (!approved) {
     return;
   }
 

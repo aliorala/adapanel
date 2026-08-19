@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { AxiosError } from "axios";
 import { apiClient, clearCsrfToken } from "../api/client";
+import { resolveFailureDetail, resolveFailureKey, type TransportFailure } from "../utils/apiError";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -271,21 +272,35 @@ export const useAuthStore = defineStore("auth", {
   }
 });
 
-export function extractApiMessage(error: unknown): string {
+/** Axios hatasını, saf çekirdeğin anladığı düz veriye indirger (tek dönüşüm noktası). */
+function toTransportFailure(error: unknown): TransportFailure {
   const axiosError = error as AxiosError<ApiEnvelope<unknown>>;
-  const message = axiosError.response?.data?.message;
-  if (message) {
-    return message;
-  }
-
-  if (axiosError.response?.status) {
-    return `HTTP ${axiosError.response.status}: ${axiosError.response.statusText || "Request failed"}`;
-  }
-
-  return axiosError.message || "common.request_failed";
+  return {
+    status: axiosError.response?.status,
+    statusText: axiosError.response?.statusText,
+    code: axiosError.code,
+    message: axiosError.message,
+    envelope: axiosError.response?.data ?? null,
+    // `isAxiosError` yoksa hata ağdan değil, ekranın kendi kodundan gelmiştir.
+    isAxios: axiosError.isAxiosError === true
+  };
 }
 
+/**
+ * Ekranda gösterilecek ÇEVİRİ ANAHTARI. Karar mantığı `utils/apiError.ts`'te (saf + test edilir).
+ *
+ * İki davranış değişti:
+ * 1) Arka ucun serbest metne gömdüğü bileşik anahtar (`"ftp.user_exists — CreateUser failed…"`)
+ *    ayrıştırılır; artık anahtar kısmı çevrilebilir. Ayrıntı kaybolmaz, `extractApiDetails`
+ *    tarafından ayrı satırda döner.
+ * 2) Ağ/zaman aşımı/durum kodu artık ham İngilizce dizge değil, anahtar döner
+ *    (`common.network_error`, `common.timeout`, …) — Türkçe panelde İngilizce metin kalmasın.
+ */
+export function extractApiMessage(error: unknown): string {
+  return resolveFailureKey(toTransportFailure(error));
+}
+
+/** Anahtarın altına yazılacak ayrıntı: zarfın `details`'i, gömülü ayrıntı ya da HTTP durumu. */
 export function extractApiDetails(error: unknown): string {
-  const axiosError = error as AxiosError<ApiEnvelope<unknown>>;
-  return axiosError.response?.data?.details?.trim() ?? "";
+  return resolveFailureDetail(toTransportFailure(error));
 }

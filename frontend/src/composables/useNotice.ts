@@ -25,6 +25,9 @@ export function useNotice() {
   /**
    * Backend HAM `MessageKey` döndürür (ör. `files.path_outside_root`); metni frontend çevirir.
    * Çeviri yoksa anahtarın kendisi gösterilir — sessizce boş bırakmaktan iyidir.
+   *
+   * Anahtarın serbest metne gömüldüğü ("anahtar — ayrıntı") ve ağ/zaman aşımı durumları
+   * `utils/apiError.ts`'te çözülür; buradan bakınca ikisi de sıradan bir anahtardır.
    */
   function resolveApiMessage(error: unknown): string {
     const key = extractApiMessage(error);

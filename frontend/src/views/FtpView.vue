@@ -7,7 +7,10 @@
       </div>
     </div>
 
-    <div v-if="notice" :class="['notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+    <!-- Sonuç ekrana SABİTLENİR (`page-notice`, bkz. styles/base.css): kullanıcı listesi uzadıkça
+         sayfanın altındaki "Parola değiştir"/"Sil" düğmelerine basan yönetici, en tepedeki sonuç
+         şeridini görmüyordu. -->
+    <div v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
       <p>{{ notice }}</p>
       <details v-if="noticeDetails" class="technical-details">
         <summary>{{ t("panel.common.technicalDetails") }}</summary>
@@ -52,6 +55,15 @@
         <strong>{{ serverStatus.serverAddress }}</strong>
       </div>
     </div>
+
+    <!-- Ayar OKUNAMADIYSA anahtar sessizce yok olmaz. Bu bir GÜVENLİK anahtarı: kaybolduğunda
+         yönetici "panelde FTPS zorunluluğu yok" sanıp şifresiz FTP'yi açık bırakıyordu.
+         "Kapalı" ile "okunamadı" burada aynı şey değildir. -->
+    <SectionLoadError
+      v-if="isAdmin && !siteName && !tlsLoaded && tlsLoad.message.value"
+      :message="`${t('panel.ftp.tlsLoadFailed')} ${tlsLoad.message.value}`"
+      :busy="tlsSaving"
+      @retry="loadTls" />
 
     <!-- FTPS anahtarı sunucudan okunmadan kapalı görünüyordu; TLS zorunluyken kapalı sanılıyordu. -->
     <label v-if="isAdmin && !siteName && tlsLoaded" class="form-surface ftp-tls-bar">
@@ -159,6 +171,8 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useSectionError } from "../composables/useNotice";
 import TablePager from "../components/TablePager.vue";
 import { usePagination } from "../composables/usePagination";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -181,6 +195,8 @@ const users = ref<FtpUser[]>([]);
 // Yüklenmemiş durumu "kayıt yok" / "kapalı" göstermek yanıltıcıydı.
 const usersLoaded = ref(false);
 const tlsLoaded = ref(false);
+// FTPS ayarı OKUNAMADI durumu — anahtarın kapalı olmasından AYRI tutulur.
+const tlsLoad = useSectionError();
 const serverStatus = ref<FtpServerStatus | null>(null);
 const serverCheckCompleted = ref(false);
 const creating = ref(false);
@@ -278,8 +294,11 @@ async function loadTls() {
   try {
     requireSsl.value = (await getFtpTls()).requireSsl;
     tlsLoaded.value = true;
-  } catch {
-    // erişim yoksa toggle gizli kalır
+    tlsLoad.clear();
+  } catch (error) {
+    // Eskiden hata sessizce yutuluyordu ve anahtar HİÇ görünmüyordu. Artık sebebi yazılır.
+    tlsLoaded.value = false;
+    tlsLoad.capture(error);
   }
 }
 

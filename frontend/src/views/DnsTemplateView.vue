@@ -25,13 +25,36 @@
         <span>{{ t("panel.dnsTemplate.priority") }}</span>
         <span></span>
       </div>
+      <!--
+        ERİŞİLEBİLİR AD: bu ızgarada sütun başlıkları AYRI bir satırda (`.tmpl-row.head`) duruyor
+        ve alanlarla programatik bir bağı YOK. Görsel kullanıcı başlığı yukarıda görüp "bu kutu
+        TTL" diyebiliyor; ekran okuyucu ise 5 alanı da adsız okuyordu ("düzenleme, boş"). Beş
+        kayıtlık bir şablonda 25 adsız alan demek, ekranın klavyeyle doldurulamaması demek.
+        Başlık metinleri `aria-label` olarak alana bağlandı; kaçıncı kayıt olduğu da söyleniyor
+        çünkü satırlar birbirinin aynısı.
+      -->
       <div v-for="(record, index) in records" :key="index" class="tmpl-row">
-        <select v-model="record.type">
+        <select
+          v-model="record.type"
+          :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.type'), index: index + 1 })">
           <option v-for="type in types" :key="type" :value="type">{{ type }}</option>
         </select>
-        <input v-model.trim="record.host" placeholder="@" spellcheck="false" />
-        <input v-model.trim="record.value" placeholder="{ip}" spellcheck="false" />
-        <input v-model.number="record.ttl" type="number" min="60" max="604800" />
+        <input
+          v-model.trim="record.host"
+          placeholder="@"
+          spellcheck="false"
+          :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.host'), index: index + 1 })" />
+        <input
+          v-model.trim="record.value"
+          placeholder="{ip}"
+          spellcheck="false"
+          :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.value'), index: index + 1 })" />
+        <input
+          v-model.number="record.ttl"
+          type="number"
+          min="60"
+          max="604800"
+          :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.ttl'), index: index + 1 })" />
         <!-- Öncelik yalnızca MX/SRV için; boş bırakılırsa MX'e 10 uygulanır. -->
         <input
           v-model.number="record.priority"
@@ -39,8 +62,14 @@
           min="0"
           max="65535"
           :disabled="record.type !== 'MX' && record.type !== 'SRV'"
-          placeholder="—" />
-        <button class="danger compact" type="button" @click="records.splice(index, 1)">{{ t("panel.common.delete") }}</button>
+          placeholder="—"
+          :aria-label="t('panel.dnsTemplate.fieldAria', { field: t('panel.dnsTemplate.priority'), index: index + 1 })" />
+        <!-- Düğme metni her satırda "Sil"; hangi kaydı sildiği ancak GÖRSEL konumdan anlaşılıyordu. -->
+        <button
+          class="danger compact"
+          type="button"
+          :aria-label="t('panel.dnsTemplate.removeRecord', { index: index + 1 })"
+          @click="records.splice(index, 1)">{{ t("panel.common.delete") }}</button>
       </div>
       <p v-if="records.length === 0" class="empty-state">{{ t("panel.dnsTemplate.empty") }}</p>
     </div>

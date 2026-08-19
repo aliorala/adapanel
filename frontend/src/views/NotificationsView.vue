@@ -38,11 +38,11 @@
       </div>
     </div>
 
-    <div class="segmented-tabs">
-      <button :class="{ active: activeTab === 'email' }" @click="activeTab = 'email'">
+    <div class="segmented-tabs" role="tablist">
+      <button role="tab" :aria-selected="activeTab === 'email'" :class="{ active: activeTab === 'email' }" @click="activeTab = 'email'">
         {{ t("panel.notifications.emailTab") }}
       </button>
-      <button :class="{ active: activeTab === 'webhook' }" @click="activeTab = 'webhook'">
+      <button role="tab" :aria-selected="activeTab === 'webhook'" :class="{ active: activeTab === 'webhook' }" @click="activeTab = 'webhook'">
         {{ t("panel.notifications.webhookTab") }}
       </button>
     </div>

@@ -13,11 +13,11 @@
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeSection === 'site' }" @click="activeSection = 'site'">{{ t("panel.security.siteTitle") }}</button>
-        <button :class="{ active: activeSection === 'firewall' }" @click="activeSection = 'firewall'">{{ t("panel.firewall.title") }}</button>
-        <button :class="{ active: activeSection === 'bruteforce' }" @click="activeSection = 'bruteforce'">{{ t("panel.bruteforce.title") }}</button>
-        <button :class="{ active: activeSection === 'antivirus' }" @click="activeSection = 'antivirus'">{{ t("panel.antivirus.title") }}</button>
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeSection === 'site'" :class="{ active: activeSection === 'site' }" @click="activeSection = 'site'">{{ t("panel.security.siteTitle") }}</button>
+        <button role="tab" :aria-selected="activeSection === 'firewall'" :class="{ active: activeSection === 'firewall' }" @click="activeSection = 'firewall'">{{ t("panel.firewall.title") }}</button>
+        <button role="tab" :aria-selected="activeSection === 'bruteforce'" :class="{ active: activeSection === 'bruteforce' }" @click="activeSection = 'bruteforce'">{{ t("panel.bruteforce.title") }}</button>
+        <button role="tab" :aria-selected="activeSection === 'antivirus'" :class="{ active: activeSection === 'antivirus' }" @click="activeSection = 'antivirus'">{{ t("panel.antivirus.title") }}</button>
       </div>
       <select v-model="selectedSiteName" class="site-select">
         <option value="">{{ t("panel.php.selectSite") }}</option>
@@ -183,6 +183,15 @@
         </span>
       </div>
 
+      <!-- Kurulum / tanım güncelleme / tarama SAATLERCE sürebilir; şerit ne sürdüğünü ve geçen
+           süreyi söyler. Şeridin yeri bilinçli olarak kartların ÜSTÜ: hangi düğmeye basılmış
+           olursa olsun aynı yerde görünür. -->
+      <RunningTaskBanner
+        :running="avTask.running.value"
+        :label="avTask.label.value"
+        :elapsed-text="avTask.elapsedText.value"
+        :hint="avScanRunningHint" />
+
       <!-- Durum gelmeden "kurulu değil" + kurulum butonu gösteriliyordu; kurulu ClamAV
            yeniden kurulmaya çalışılabiliyordu. -->
       <p v-if="!avStatus" class="empty-state" role="status" aria-live="polite">
@@ -339,6 +348,8 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, removeFirewallRule, type FirewallRule } from "../api/firewall";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import RunningTaskBanner from "../components/RunningTaskBanner.vue";
+import { useRunningTask } from "../composables/useRunningTask";
 import {
   applyAcl,
   enableBasicRules,
@@ -374,6 +385,15 @@ const loading = ref(false);
 const activeSection = ref<"site" | "firewall" | "bruteforce" | "antivirus">("site");
 // ClamAV antivirüs (Güvenlik > Antivirüs). Durum sekme ilk açıldığında yüklenir.
 const avStatus = ref<AntivirusStatus | null>(null);
+// Kurulum / tanım güncelleme / tarama DAKİKALAR–SAATLER sürer; hepsi aynı şeridi kullanır
+// (aynı anda yalnız biri çalışabilir: üçü de `busyAction === "av"` ile kilitli).
+const avTask = useRunningTask();
+// İpucu işe göre değişir: tarama saatler sürebilir, tanım indirmesi ~250 MB'dır. Genel
+// "sayfadan ayrılmayın" metni ikisini de açıklamıyordu.
+const avScanRunningHint = computed(() =>
+  avTask.label.value === t("panel.antivirus.runningDefs")
+    ? t("panel.antivirus.runningDefsHint")
+    : t("panel.antivirus.runningHint"));
 const avSiteName = ref("");
 const showFirewallForm = ref(false);
 const showSiteForm = ref(false);
@@ -425,26 +445,42 @@ async function refreshAvStatus() {
   }
 }
 
+/*
+ * ANTİVİRÜS İŞLERİ "SÜRÜYOR" ŞERİDİNE BAĞLANDI (composables/useRunningTask.ts).
+ *
+ * NEDEN: tarama isteğinin zaman aşımı 125 DAKİKA (api/antivirus.ts). O süre boyunca ekranda
+ * değişen tek şey düğmenin pasifleşmesiydi — düğmenin `disabled` olması "sürüyor" DEMEK
+ * DEĞİLDİR. Kullanıcı ekranı donmuş sanıp sayfayı yeniliyor, taramayı ikinci kez tetikliyordu.
+ * Şerit ne sürdüğünü ve GEÇEN SÜREYİ yazar.
+ *
+ * SINIRI (dürüstlük): bu durum sekmeye aittir. Sunucuda "tarama sürüyor" diye sorulabilecek bir
+ * uç YOK (`/antivirus/status` yalnız SON tamamlanmış taramayı döner), bu yüzden kullanıcı sayfayı
+ * yenilerse şerit kaybolur. Bunu kapatmak arka uçta canlı ilerleme ucu ister — kapsam dışı.
+ */
 async function installAv() {
   busyAction.value = "av";
+  avTask.begin(t("panel.antivirus.runningInstall"));
   try {
     avStatus.value = await installAntivirus();
     showNotice(t("panel.antivirus.installed"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
+    avTask.end();
     busyAction.value = "";
   }
 }
 
 async function updateAvDefs() {
   busyAction.value = "av";
+  avTask.begin(t("panel.antivirus.runningDefs"));
   try {
     avStatus.value = await updateAntivirusDefinitions();
     showNotice(t("panel.antivirus.defsDone"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
+    avTask.end();
     busyAction.value = "";
   }
 }
@@ -452,6 +488,7 @@ async function updateAvDefs() {
 async function runAvScan() {
   if (!avSiteName.value) return;
   busyAction.value = "av";
+  avTask.begin(t("panel.antivirus.runningScan", { site: avSiteName.value }));
   try {
     const result = await scanAntivirus(avSiteName.value);
     await refreshAvStatus();
@@ -463,6 +500,7 @@ async function runAvScan() {
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
+    avTask.end();
     busyAction.value = "";
   }
 }

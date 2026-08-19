@@ -63,7 +63,11 @@
 
       <ul v-else class="ad-list">
         <li v-for="item in items" :key="item.id" :class="['ad-item', item.severity]">
+          <!-- Önem YALNIZ RENKLE anlatılıyordu. Bu çekmece "neyin bozuk olduğunu gör" kapısı;
+               kritik ile bilgi maddesini ayırt edememek burada en pahalıya patlar. Nokta görsel
+               kalıyor, önem ayrıca METİN olarak veriliyor. -->
           <span class="ad-dot" :class="item.severity" aria-hidden="true"></span>
+          <span class="sr-only">{{ severityText(item.severity) }}</span>
 
           <div class="ad-body">
             <strong>{{ t(item.titleKey) }}</strong>
@@ -97,7 +101,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { hasQuickFix, runAttentionAction, type AttentionItem, type AttentionSummary } from "../api/attention";
+import { hasQuickFix, runAttentionAction, type AttentionItem, type AttentionSeverity, type AttentionSummary } from "../api/attention";
 import { extractApiMessage } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
@@ -139,6 +143,16 @@ const DIRECT_SECTIONS = new Set([
   "home", "sites", "accounts", "mail", "files", "database", "monitor",
   "advisor", "software", "tasks", "security", "tools", "migration", "account", "settings"
 ]);
+
+/** Önem noktasının METİN karşılığı — renk tek başına bilgi taşıyamaz. */
+function severityText(severity: AttentionSeverity): string {
+  const keys = {
+    critical: "panel.common.severityCritical",
+    warning: "panel.common.severityWarning",
+    info: "panel.common.severityInfo"
+  } as const;
+  return t(keys[severity]);
+}
 
 function targetSection(item: AttentionItem): string {
   const section = (item.section ?? "").trim();

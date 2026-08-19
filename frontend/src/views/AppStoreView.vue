@@ -41,11 +41,15 @@
     </p>
 
     <div class="store-toolbar">
-      <div class="category-tabs">
+      <div class="category-tabs" role="tablist">
+        <!-- Seçili sekme GÖRSEL olarak yalnız renkle belliydi; `aria-selected` olmadan ekran
+             okuyucu bütün kategori düğmelerini aynı okuyordu. -->
         <button
           v-for="category in categories"
           :key="category"
           type="button"
+          role="tab"
+          :aria-selected="activeCategory === category"
           :class="['category-tab', { active: activeCategory === category }]"
           @click="activeCategory = category">
           {{ categoryLabel(category) }}

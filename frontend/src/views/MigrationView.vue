@@ -7,7 +7,11 @@
       </div>
     </header>
 
-    <p v-if="notice" :class="['inline-notice', noticeError ? 'error' : 'ok']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <!-- Sonuç ekrana SABİTLENİR (`page-notice`, bkz. styles/base.css): göç ekranı çok uzun
+         (kaynak sekmeleri + ön kontroller + toplu liste + canlı akış günlüğü) ve kullanıcı
+         "Taşı"ya bastığında sonuç şeridi sayfanın en tepesinde kalıyordu — görülmeyen bir sonuç,
+         ikinci kez basılan bir düğme demektir. Göçte ikinci basış siteyi yeniden taşımaktır. -->
+    <p v-if="notice" :class="['inline-notice', 'page-notice', noticeError ? 'error' : 'ok']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="form-surface migration-how">
       <h3 class="section-label">{{ t("panel.migration.howTitle") }}</h3>
@@ -28,11 +32,11 @@
       <!-- Sekme etiketleri i18n'den gelir. Sabit kodlu metin, çeviri parite denetiminden kaçar ve
            dil değişince Türkçe kalır. Kaynak panelin ADI burada işlevseldir: kullanıcı taşımayı
            hangi panelden yaptığını seçebilmeli. -->
-      <div class="segmented-tabs source-tabs">
-        <button type="button" :class="{ active: source === 'plesk' }" @click="source = 'plesk'">
+      <div class="segmented-tabs source-tabs" role="tablist">
+        <button role="tab" :aria-selected="source === 'plesk'" type="button" :class="{ active: source === 'plesk' }" @click="source = 'plesk'">
           {{ t("panel.migration.sourcePlesk") }}
         </button>
-        <button type="button" :class="{ active: source === 'cpanel' }" @click="source = 'cpanel'">
+        <button role="tab" :aria-selected="source === 'cpanel'" type="button" :class="{ active: source === 'cpanel' }" @click="source = 'cpanel'">
           {{ t("panel.migration.sourceCpanel") }}
         </button>
       </div>

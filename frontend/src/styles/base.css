@@ -730,3 +730,21 @@ button:disabled {
     max-width: none;
   }
 }
+
+/* YALNIZ EKRAN OKUYUCU ICIN METIN — TEK KAYNAK.
+   Sorun suydu: durum bazi yerlerde YALNIZCA RENKLE anlatiliyordu (onem noktasi, "etkin" isigi).
+   Renk koru kullanici ve ekran okuyucu icin bu bilgi HIC YOKTU; kritik bir bulgu ile bir bilgi
+   maddesi ayirt edilemiyordu.
+   `display: none` OLMAZ: ekran okuyucu onu da atlar. Ogeyi akistan cikarmadan gorunmez yapan
+   kalip budur; `white-space: nowrap` olmadan dar bir sutuna sikisip satir yuksekligini bozardi. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -19,10 +19,10 @@
     </p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeSection === 'classic' }" @click="activeSection = 'classic'">{{ t("panel.asp.classicAsp") }}</button>
-        <button :class="{ active: activeSection === 'dotnet' }" @click="activeSection = 'dotnet'">{{ t("panel.asp.dotNetTitle") }}</button>
-        <button :class="{ active: activeSection === 'mixed' }" @click="activeSection = 'mixed'">{{ t("panel.asp.mixedHandlers") }}</button>
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeSection === 'classic'" :class="{ active: activeSection === 'classic' }" @click="activeSection = 'classic'">{{ t("panel.asp.classicAsp") }}</button>
+        <button role="tab" :aria-selected="activeSection === 'dotnet'" :class="{ active: activeSection === 'dotnet' }" @click="activeSection = 'dotnet'">{{ t("panel.asp.dotNetTitle") }}</button>
+        <button role="tab" :aria-selected="activeSection === 'mixed'" :class="{ active: activeSection === 'mixed' }" @click="activeSection = 'mixed'">{{ t("panel.asp.mixedHandlers") }}</button>
       </div>
       <label class="site-select">
         <select v-model="selectedSiteName">

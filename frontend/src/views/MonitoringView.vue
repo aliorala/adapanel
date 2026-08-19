@@ -158,7 +158,15 @@
         </div>
       </div>
 
-      <p v-if="processError" class="notice error" role="alert">{{ processError }}</p>
+      <!--
+        Ekrana SABİTLENİR (`page-notice`, bkz. styles/base.css).
+        Bu ekranın YAZMA işlemi yok; sabitlenmesi gereken şey bir "işlem sonucu" değil, canlı
+        akışın ÖLDÜĞÜ bilgisi. İzleme sayfası beş bölüm uzunluğunda ve süreç tablosu ortada
+        kalıyor: yoklama başarısız olduğunda kullanıcı aşağıdaki grafiklere bakarken tablodaki
+        DEĞERLERİN DONDUĞUNU fark etmiyor, gördüğü eski anlık görüntüyü canlı sanıyordu.
+        Yoklama düzelince şerit kendiliğinden kaybolur.
+      -->
+      <p v-if="processError" class="notice error page-notice" role="alert">{{ processError }}</p>
       <p v-else-if="!snapshot" class="meta">{{ t("panel.common.loading") }}</p>
       <p v-else-if="!snapshot.cpuBaselineReady" class="field-hint">{{ t("panel.processes.baselineHint") }}</p>
 
@@ -226,11 +234,11 @@
       <!-- CANLI ile GEÇMİŞ ayrı sekmeler: canlı liste "şu an ne oluyor", geçmiş "ne olmuştu"
            sorusunu cevaplar. İkisini tek listede karıştırmak, canlı ekranın okunabilirliğini
            bozardı. -->
-      <div class="segmented-tabs consumer-tabs">
-        <button :class="{ active: consumerTab === 'live' }" @click="consumerTab = 'live'">
+      <div class="segmented-tabs consumer-tabs" role="tablist">
+        <button role="tab" :aria-selected="consumerTab === 'live'" :class="{ active: consumerTab === 'live' }" @click="consumerTab = 'live'">
           {{ t("panel.consumers.tabLive") }}
         </button>
-        <button :class="{ active: consumerTab === 'history' }" @click="consumerTab = 'history'">
+        <button role="tab" :aria-selected="consumerTab === 'history'" :class="{ active: consumerTab === 'history' }" @click="consumerTab = 'history'">
           {{ t("panel.consumers.tabHistory") }}
         </button>
       </div>

@@ -196,7 +196,16 @@
         <p v-if="showDefaultPortWarning" class="notice warn-banner" role="status">
           {{ t("panel.dashboard.defaultPortWarning") }}
         </p>
-        <p v-if="banner" :class="['notice', { error: bannerError }]" :role="bannerError ? 'alert' : 'status'">
+        <!--
+          İŞLEM SONUCU EKRANA SABİTLENİR (`page-notice`, bkz. styles/base.css).
+          Bu şerit kabuğun en üstünde, akış içinde çiziliyordu: uzun bir sayfanın altında
+          "Kaydet"e basan kullanıcı sonucu HİÇ görmüyor, işlemin geçtiğini bilmediği için ikinci
+          kez basıyordu. Bu yuva UsersView ve AccountView'ın `notify` bildirimlerini de taşıdığı
+          için düzeltme o iki ekranı da kapsar.
+          Yığındaki DİĞER şeritler (askı, dikkat, port uyarısı) akışta kalır: onlar bir işlemin
+          sonucu değil, sayfanın kalıcı durumudur.
+        -->
+        <p v-if="banner" :class="['notice', 'page-notice', { error: bannerError }]" :role="bannerError ? 'alert' : 'status'">
           {{ banner }}
         </p>
       </div>
@@ -291,30 +300,30 @@
       </div>
 
       <div class="module-toolbar">
-        <div class="segmented-tabs settings-tabs">
-          <button v-if="isAdmin" :class="{ active: settingsTab === 'general' }" @click="settingsTab = 'general'">
+        <div class="segmented-tabs settings-tabs" role="tablist">
+          <button role="tab" :aria-selected="settingsTab === 'general'" v-if="isAdmin" :class="{ active: settingsTab === 'general' }" @click="settingsTab = 'general'">
             {{ t("panel.settings.tab.general") }}
           </button>
           <!-- Marka sekmesi bayide de var: bayi kendi markasını kendisi yönetir (Plesk modeli). -->
-          <button :class="{ active: settingsTab === 'branding' }" @click="openBrandingTab">
+          <button role="tab" :aria-selected="settingsTab === 'branding'" :class="{ active: settingsTab === 'branding' }" @click="openBrandingTab">
             {{ t("panel.branding.tab") }}
           </button>
-          <button v-if="isAdmin" :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'">
+          <button role="tab" :aria-selected="settingsTab === 'security'" v-if="isAdmin" :class="{ active: settingsTab === 'security' }" @click="settingsTab = 'security'">
             {{ t("panel.settings.tab.security") }}
           </button>
-          <button v-if="isAdmin" :class="{ active: settingsTab === 'errorReports' }" @click="settingsTab = 'errorReports'">
+          <button role="tab" :aria-selected="settingsTab === 'errorReports'" v-if="isAdmin" :class="{ active: settingsTab === 'errorReports' }" @click="settingsTab = 'errorReports'">
             {{ t("panel.settings.tab.errorReports") }}
           </button>
-          <button v-if="isAdmin" :class="{ active: settingsTab === 'notifications' }" @click="settingsTab = 'notifications'">
+          <button role="tab" :aria-selected="settingsTab === 'notifications'" v-if="isAdmin" :class="{ active: settingsTab === 'notifications' }" @click="settingsTab = 'notifications'">
             {{ t("panel.settings.tab.notifications") }}
           </button>
-          <button v-if="isAdmin" :class="{ active: settingsTab === 'updates' }" @click="settingsTab = 'updates'">
+          <button role="tab" :aria-selected="settingsTab === 'updates'" v-if="isAdmin" :class="{ active: settingsTab === 'updates' }" @click="settingsTab = 'updates'">
             {{ t("panel.settings.tab.updates") }}
           </button>
           <!-- Lisans YALNIZ yöneticide (uç de `Administrator`). Lisanslama kapalı kurulumlarda
                sekme yine görünür ama içerik "kapalı" bilgi kutusundan ibaret olur: kullanıcı
                "acaba lisans ekranı var mı" diye panelde aramasın. -->
-          <button v-if="isAdmin" :class="{ active: settingsTab === 'license' }" @click="settingsTab = 'license'">
+          <button role="tab" :aria-selected="settingsTab === 'license'" v-if="isAdmin" :class="{ active: settingsTab === 'license' }" @click="settingsTab = 'license'">
             {{ t("panel.license.title") }}
           </button>
         </div>
@@ -551,7 +560,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
-import { readSecureEntryPath } from "../api/client";
+import { readSecureEntryPath, setSessionExpiredHandler } from "../api/client";
 import { getFtpUsers } from "../api/ftp";
 import {
   emptyBranding,
@@ -981,13 +990,41 @@ onMounted(async () => {
   // Marka İLK İŞ olarak istenir ve beklenmez: giriş ekranı marka gelmeden de kullanılabilir
   // olmalı, ama marka geldiğinde (çoğu zaman form doldurulmadan önce) yerine oturur.
   void loadBranding();
+  // Oturum düşerse (api/client.ts yanıt kapısı) kullanıcı ölü ekranda BEKLETİLMEZ.
+  setSessionExpiredHandler(handleSessionExpired);
   await initializeView();
   await loadPanelUpdate();
 });
 
 onBeforeUnmount(() => {
   stopRefreshLoop();
+  setSessionExpiredHandler(null);
 });
+
+/*
+ * Sunucu 401 dedi: oturum bitmiş. Panelde kalmak yanlış — kullanıcı her düğmede hata alır ve
+ * sayfayı elle yenilemek zorunda kalırdı.
+ *
+ * `mode` KONTROLÜ ŞART: giriş ekranındayken de arka planda istek uçabilir (ör. marka/güncelleme
+ * yoklaması). Zaten giriş ekranındaysak "oturumunuz sona erdi" demek kullanıcıyı boşuna korkutur
+ * ve doldurmakta olduğu formun üstüne kırmızı şerit basardı.
+ */
+function handleSessionExpired() {
+  if (mode.value !== "dashboard") {
+    return;
+  }
+
+  stopRefreshLoop();
+  mode.value = "auth";
+  activeSection.value = "home";
+  attentionOpen.value = false;
+  attentionSummary.value = null;
+  requiresTwoFactor.value = false;
+  // Askı bayrağı ve marka bir sonraki kullanıcıya sızmamalı (çıkış akışıyla aynı temizlik).
+  subscriptionStore.reset();
+  authStore.session = null;
+  showBanner(t("auth.unauthorized"), true);
+}
 
 async function initializeView() {
   try {

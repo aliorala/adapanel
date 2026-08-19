@@ -18,14 +18,14 @@
 
     <template v-else>
       <div class="module-toolbar">
-        <div class="segmented-tabs">
-          <button :class="{ active: tab === 'design' }" @click="tab = 'design'">
+        <div class="segmented-tabs" role="tablist">
+          <button role="tab" :aria-selected="tab === 'design'" :class="{ active: tab === 'design' }" @click="tab = 'design'">
             {{ t("panel.siteBuilder.tab.design") }}
           </button>
-          <button :class="{ active: tab === 'content' }" @click="tab = 'content'">
+          <button role="tab" :aria-selected="tab === 'content'" :class="{ active: tab === 'content' }" @click="tab = 'content'">
             {{ t("panel.siteBuilder.tab.content") }}
           </button>
-          <button :class="{ active: tab === 'publish' }" @click="openPublishTab">
+          <button role="tab" :aria-selected="tab === 'publish'" :class="{ active: tab === 'publish' }" @click="openPublishTab">
             {{ t("panel.siteBuilder.tab.publish") }}
           </button>
         </div>
@@ -280,7 +280,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
-import { extractApiMessage } from "../stores/auth";
+import { useNotice } from "../composables/useNotice";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import {
   deleteSiteBuilderImage,
   getSiteBuilderCatalog,
@@ -299,6 +300,7 @@ import {
 } from "../api/siteBuilder";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 
 const catalog = ref<SiteBuilderCatalog | null>(null);
@@ -314,8 +316,9 @@ const saving = ref(false);
 const publishing = ref(false);
 const previewLoading = ref(false);
 const overwriteConfirmed = ref(false);
-const notice = ref("");
-const noticeError = ref(false);
+// Bildirim + hata ÇEVİRİSİ tek kaynaktan (composables/useNotice.ts). Elle yazılmış `report()`
+// kopyası `t()` çağrısını atlıyordu ve kullanıcıya HAM ANAHTAR basıyordu.
+const { notice, noticeError, showNotice, showError } = useNotice();
 
 const selectedSite = computed({
   get: () => sitesStore.selectedSiteName,
@@ -445,8 +448,23 @@ async function uploadImage(event: Event) {
   }
 }
 
+/*
+ * ONAY ZORUNLU: bu düğme sunucudaki dosyayı GERİ DÖNÜŞSÜZ siliyor ve tek tıkla çalışıyordu.
+ * Resim listesinde silme düğmeleri yan yana; yanlış satıra tek tık, yayındaki bir sayfanın
+ * görselini yok etmeye yetiyordu. Panelin ortak onay diyaloğu (57 ekran onu kullanıyor)
+ * neyin kaybedileceğini de yazar.
+ */
 async function removeImage(name: string) {
   if (!selectedSite.value) {
+    return;
+  }
+
+  const approved = await confirm({
+    title: t("panel.siteBuilder.confirmDeleteImageTitle"),
+    message: t("panel.siteBuilder.confirmDeleteImage", { name })
+  });
+
+  if (!approved) {
     return;
   }
 
@@ -475,13 +493,11 @@ function formatDate(value: string) {
 }
 
 function inform(message: string) {
-  notice.value = message;
-  noticeError.value = false;
+  showNotice(message);
 }
 
 function report(error: unknown) {
-  notice.value = extractApiMessage(error);
-  noticeError.value = true;
+  showError(error);
 }
 </script>
 

@@ -12,25 +12,25 @@
     </p>
 
     <div class="segmented-tabs primary-tabs" role="tablist">
-      <button :class="{ active: activeModule === 'databases' }" @click="activeModule = 'databases'">
+      <button role="tab" :aria-selected="activeModule === 'databases'" :class="{ active: activeModule === 'databases' }" @click="activeModule = 'databases'">
         {{ t("panel.database.module.databases") }}
       </button>
-      <button :class="{ active: activeModule === 'webdb' }" @click="activeModule = 'webdb'">
+      <button role="tab" :aria-selected="activeModule === 'webdb'" :class="{ active: activeModule === 'webdb' }" @click="activeModule = 'webdb'">
         {{ t("panel.database.module.webdb") }}
       </button>
-      <button :class="{ active: activeModule === 'cache' }" @click="activeModule = 'cache'">
+      <button role="tab" :aria-selected="activeModule === 'cache'" :class="{ active: activeModule === 'cache' }" @click="activeModule = 'cache'">
         {{ t("panel.database.module.cache") }}
       </button>
-      <button :class="{ active: activeModule === 'transfer' }" @click="activeModule = 'transfer'">
+      <button role="tab" :aria-selected="activeModule === 'transfer'" :class="{ active: activeModule === 'transfer' }" @click="activeModule = 'transfer'">
         {{ t("panel.database.module.transfer") }}
       </button>
-      <button :class="{ active: activeModule === 'settings' }" @click="activeModule = 'settings'">
+      <button role="tab" :aria-selected="activeModule === 'settings'" :class="{ active: activeModule === 'settings' }" @click="activeModule = 'settings'">
         {{ t("panel.database.module.settings") }}
       </button>
       <!-- "Şu an kim kullanıyor" veritabanı ekranında da olmalı: bir sorgu yavaşladığında
            kullanıcı zaten buradadır; cevabı görmek için İzleme sayfasına gitmek zorunda
            kalmasın. Bileşen ve ucu aynı — yeni bir kopya yok. -->
-      <button v-if="isAdmin" :class="{ active: activeModule === 'consumers' }" @click="activeModule = 'consumers'">
+      <button role="tab" :aria-selected="activeModule === 'consumers'" v-if="isAdmin" :class="{ active: activeModule === 'consumers' }" @click="activeModule = 'consumers'">
         {{ t("panel.database.module.consumers") }}
       </button>
     </div>
@@ -52,10 +52,10 @@
       </div>
 
       <div class="segmented-tabs" role="tablist">
-        <button :class="{ active: consumerTab === 'live' }" @click="consumerTab = 'live'">
+        <button role="tab" :aria-selected="consumerTab === 'live'" :class="{ active: consumerTab === 'live' }" @click="consumerTab = 'live'">
           {{ t("panel.consumers.tabLive") }}
         </button>
-        <button :class="{ active: consumerTab === 'history' }" @click="consumerTab = 'history'">
+        <button role="tab" :aria-selected="consumerTab === 'history'" :class="{ active: consumerTab === 'history' }" @click="consumerTab = 'history'">
           {{ t("panel.consumers.tabHistory") }}
         </button>
       </div>
@@ -185,16 +185,16 @@
 
         <div class="module-toolbar workspace-toolbar">
           <div class="segmented-tabs" role="tablist">
-            <button :class="{ active: activeSection === 'databases' }" @click="openSection('databases')">
+            <button role="tab" :aria-selected="activeSection === 'databases'" :class="{ active: activeSection === 'databases' }" @click="openSection('databases')">
               {{ t("panel.database.section.databases") }}
             </button>
-            <button :class="{ active: activeSection === 'users' }" @click="openSection('users')">
+            <button role="tab" :aria-selected="activeSection === 'users'" :class="{ active: activeSection === 'users' }" @click="openSection('users')">
               {{ t("panel.database.section.users") }}
             </button>
-            <button :class="{ active: activeSection === 'remote' }" @click="openSection('remote')">
+            <button role="tab" :aria-selected="activeSection === 'remote'" :class="{ active: activeSection === 'remote' }" @click="openSection('remote')">
               {{ t("panel.database.section.remote") }}
             </button>
-            <button :class="{ active: activeSection === 'connection' }" @click="openSection('connection')">
+            <button role="tab" :aria-selected="activeSection === 'connection'" :class="{ active: activeSection === 'connection' }" @click="openSection('connection')">
               {{ t("panel.database.section.connection") }}
             </button>
           </div>

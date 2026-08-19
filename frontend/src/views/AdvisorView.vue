@@ -35,7 +35,11 @@
 
     <ul v-else-if="report" class="advisor-list">
       <li v-for="item in report.items" :key="item.id" :class="['advisor-item', item.severity]">
+        <!-- Önem YALNIZ RENKLE anlatılıyordu (kırmızı/sarı/mavi nokta, `aria-hidden`). Renk körü
+             kullanıcı ve ekran okuyucu için madde arasındaki fark YOK OLUYORDU: "kritik" ile
+             "bilgi" aynı görünüyordu. Nokta görsel kalıyor, önem ayrıca METİN olarak veriliyor. -->
         <span class="sev-dot" :class="item.severity" aria-hidden="true"></span>
+        <span class="sr-only">{{ severityText(item.severity) }}</span>
         <div class="advisor-body">
           <strong>{{ t(item.titleKey) }}</strong>
           <p v-if="item.detailKey || item.detail" class="advisor-detail">
@@ -82,6 +86,16 @@ async function refresh() {
 
 function go(sectionId: string) {
   emit("navigate", sectionId);
+}
+
+/** Önem noktasının METİN karşılığı — renk tek başına bilgi taşıyamaz. */
+function severityText(severity: "critical" | "warning" | "info"): string {
+  const keys = {
+    critical: "panel.common.severityCritical",
+    warning: "panel.common.severityWarning",
+    info: "panel.common.severityInfo"
+  } as const;
+  return t(keys[severity]);
 }
 
 function formatUtc(value: string) {

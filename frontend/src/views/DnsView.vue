@@ -15,9 +15,9 @@
 
     <template v-else>
       <div class="module-toolbar">
-        <div class="segmented-tabs">
-          <button :class="{ active: activeTab === 'records' }" @click="activeTab = 'records'">{{ t("panel.dns.records") }}</button>
-          <button :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t("panel.dns.zoneSettings") }}</button>
+        <div class="segmented-tabs" role="tablist">
+          <button role="tab" :aria-selected="activeTab === 'records'" :class="{ active: activeTab === 'records' }" @click="activeTab = 'records'">{{ t("panel.dns.records") }}</button>
+          <button role="tab" :aria-selected="activeTab === 'settings'" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">{{ t("panel.dns.zoneSettings") }}</button>
         </div>
         <div class="toolbar-group">
           <span :class="['status-pill', zone?.isWindowsDnsAvailable ? 'ok' : 'warn']">{{ zoneStatus }}</span>

@@ -77,9 +77,11 @@ import {
   type LogTail
 } from "../api/logs";
 import { extractApiMessage } from "../stores/auth";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const log = ref<LogTail | null>(null);
@@ -116,8 +118,23 @@ async function load() {
   }
 }
 
+/*
+ * Bu düğme DOSYA SİLEBİLİR (saklama sınırları açıksa) — `window.confirm` yerine panelin kendi
+ * onay diyaloğu kullanılır. Tarayıcı diyaloğu engellenmiş bir sekmede `window.confirm` `false`
+ * döner ve düğme SESSİZCE HİÇBİR ŞEY YAPMAZ; kullanıcı düğmeyi bozuk sanır.
+ */
 async function runRotation() {
-  if (!siteName.value || !window.confirm(t("panel.siteLogs.rotationConfirm"))) {
+  if (!siteName.value) {
+    return;
+  }
+
+  const approved = await confirm({
+    title: t("panel.siteLogs.rotationRunTitle"),
+    message: t("panel.siteLogs.rotationConfirm"),
+    confirmLabel: t("panel.logs.rotationRunConfirmLabel")
+  });
+
+  if (!approved) {
     return;
   }
 

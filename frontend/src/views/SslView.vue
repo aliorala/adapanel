@@ -13,10 +13,10 @@
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeTab === 'current' }" @click="activeTab = 'current'">{{ t("panel.ssl.currentTab") }}</button>
-        <button :class="{ active: activeTab === 'letsencrypt' }" @click="activeTab = 'letsencrypt'">Let's Encrypt</button>
-        <button :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">{{ t("panel.ssl.importTitle") }}</button>
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeTab === 'current'" :class="{ active: activeTab === 'current' }" @click="activeTab = 'current'">{{ t("panel.ssl.currentTab") }}</button>
+        <button role="tab" :aria-selected="activeTab === 'letsencrypt'" :class="{ active: activeTab === 'letsencrypt' }" @click="activeTab = 'letsencrypt'">Let's Encrypt</button>
+        <button role="tab" :aria-selected="activeTab === 'import'" :class="{ active: activeTab === 'import' }" @click="activeTab = 'import'">{{ t("panel.ssl.importTitle") }}</button>
       </div>
       <!-- Domain hub'dan gelince site zaten seçili (breadcrumb); tekrar seçici gösterme. -->
       <select v-if="!selectedSiteName" v-model="selectedSiteName" class="site-select">

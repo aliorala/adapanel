@@ -11,12 +11,12 @@
 
     <template v-else>
       <div class="segmented-tabs" role="tablist">
-        <button :class="{ active: tab === 'composer' }" @click="tab = 'composer'">{{ t("panel.toolkit.tabs.composer") }}</button>
-        <button :class="{ active: tab === 'artisan' }" @click="tab = 'artisan'">{{ t("panel.toolkit.tabs.artisan") }}</button>
-        <button :class="{ active: tab === 'node' }" @click="tab = 'node'">{{ t("panel.toolkit.tabs.node") }}</button>
-        <button :class="{ active: tab === 'wordpress' }" @click="selectWordPress">{{ t("panel.toolkit.tabs.wordpress") }}</button>
-        <button :class="{ active: tab === 'wpcli' }" @click="tab = 'wpcli'">{{ t("panel.toolkit.tabs.wpcli") }}</button>
-        <button :class="{ active: tab === 'queue' }" @click="selectQueue">{{ t("panel.toolkit.tabs.queue") }}</button>
+        <button role="tab" :aria-selected="tab === 'composer'" :class="{ active: tab === 'composer' }" @click="tab = 'composer'">{{ t("panel.toolkit.tabs.composer") }}</button>
+        <button role="tab" :aria-selected="tab === 'artisan'" :class="{ active: tab === 'artisan' }" @click="tab = 'artisan'">{{ t("panel.toolkit.tabs.artisan") }}</button>
+        <button role="tab" :aria-selected="tab === 'node'" :class="{ active: tab === 'node' }" @click="tab = 'node'">{{ t("panel.toolkit.tabs.node") }}</button>
+        <button role="tab" :aria-selected="tab === 'wordpress'" :class="{ active: tab === 'wordpress' }" @click="selectWordPress">{{ t("panel.toolkit.tabs.wordpress") }}</button>
+        <button role="tab" :aria-selected="tab === 'wpcli'" :class="{ active: tab === 'wpcli' }" @click="tab = 'wpcli'">{{ t("panel.toolkit.tabs.wpcli") }}</button>
+        <button role="tab" :aria-selected="tab === 'queue'" :class="{ active: tab === 'queue' }" @click="selectQueue">{{ t("panel.toolkit.tabs.queue") }}</button>
       </div>
 
       <CommandConsole
@@ -52,7 +52,10 @@
         :runner="wpcliRunner" />
 
       <div v-else-if="tab === 'wordpress'" class="wp-panel">
-        <p v-if="wpNotice" :class="['notice', { error: wpNoticeError }]" :role="wpNoticeError ? 'alert' : 'status'">{{ wpNotice }}</p>
+        <!-- Sonuç ekrana SABİTLENİR (`page-notice`, bkz. styles/base.css): WordPress sekmesi çok
+             uzun (eklenti + tema listeleri onlarca satır). Kullanıcı listenin dibindeki
+             "Güncelle"/"Sil" düğmesine basıp sonucu görmüyor, ikinci kez basıyordu. -->
+        <p v-if="wpNotice" :class="['notice', 'page-notice', { error: wpNoticeError }]" :role="wpNoticeError ? 'alert' : 'status'">{{ wpNotice }}</p>
         <p v-if="wpLoading" class="empty-state" role="status" aria-live="polite">{{ t("panel.wpkit.loading") }}</p>
         <SectionLoadError v-else-if="wpLoad.message.value" :message="wpLoad.message.value" @retry="loadWp" />
         <p v-else-if="wp && !wp.isWordPress" class="notice warn" role="status">{{ t("panel.wpkit.notWordpress") }}</p>
@@ -107,7 +110,10 @@
             <p v-if="wp.plugins.length === 0" class="empty-state">{{ t("panel.wpkit.noPlugins") }}</p>
             <div v-else class="wp-list">
               <div v-for="p in wp.plugins" :key="p.slug" class="wp-list-row">
-                <span class="wp-list-name"><span v-if="p.active" class="state-dot"></span>{{ p.name }} <small v-if="p.version">v{{ p.version }}</small></span>
+                <!-- "Etkin" YALNIZ yeşil noktayla anlatılıyordu: ekran okuyucu ve renk körü
+                     kullanıcı için etkin eklenti ile pasif eklenti AYNI görünüyordu — üstelik
+                     yanındaki düğme (Etkinleştir / Devre dışı bırak) da buna göre değişiyor. -->
+                <span class="wp-list-name"><span v-if="p.active" class="state-dot" aria-hidden="true"></span><span v-if="p.active" class="sr-only">{{ t("panel.wpkit.activeLabel") }}</span>{{ p.name }} <small v-if="p.version">v{{ p.version }}</small></span>
                 <span class="wp-list-actions">
                   <button v-if="p.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'deactivate', p.slug)">{{ t("panel.wpkit.deactivate") }}</button>
                   <button v-else class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'activate', p.slug)">{{ t("panel.wpkit.activate") }}</button>
@@ -123,7 +129,8 @@
             <p v-if="wp.themes.length === 0" class="empty-state">{{ t("panel.wpkit.noThemes") }}</p>
             <div v-else class="wp-list">
               <div v-for="th in wp.themes" :key="th.slug" class="wp-list-row">
-                <span class="wp-list-name"><span v-if="th.active" class="state-dot"></span>{{ th.name }} <small v-if="th.version">v{{ th.version }}</small></span>
+                <!-- Aynı gerekçe: etkin tema yalnız renkle işaretliydi. -->
+                <span class="wp-list-name"><span v-if="th.active" class="state-dot" aria-hidden="true"></span><span v-if="th.active" class="sr-only">{{ t("panel.wpkit.activeLabel") }}</span>{{ th.name }} <small v-if="th.version">v{{ th.version }}</small></span>
                 <span class="wp-list-actions">
                   <span v-if="th.active" class="pill">{{ t("panel.wpkit.activeLabel") }}</span>
                   <button v-else class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'activate', th.slug)">{{ t("panel.wpkit.activate") }}</button>
@@ -189,7 +196,7 @@
         <h4>{{ t("panel.toolkit.queue.title") }}</h4>
         <p class="meta">{{ t("panel.toolkit.queue.desc") }}</p>
 
-        <p v-if="queueNotice" :class="['notice', { error: queueNoticeError }]" :role="queueNoticeError ? 'alert' : 'status'">{{ queueNotice }}</p>
+        <p v-if="queueNotice" :class="['notice', 'page-notice', { error: queueNoticeError }]" :role="queueNoticeError ? 'alert' : 'status'">{{ queueNotice }}</p>
 
         <SectionLoadError v-if="queueLoad.message.value" :message="queueLoad.message.value" @retry="loadQueue" />
 

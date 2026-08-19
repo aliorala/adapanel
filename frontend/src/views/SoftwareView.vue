@@ -75,10 +75,14 @@
     <template v-else>
     <section class="software-toolbar">
       <div class="category-tabs" role="tablist">
+        <!-- Seçili sekme GÖRSEL olarak yalnız renkle belliydi; `aria-selected` olmadan ekran
+             okuyucu bütün kategori düğmelerini aynı okuyordu. -->
         <button
           v-for="category in categoryTabs"
           :key="category.key"
           type="button"
+          role="tab"
+          :aria-selected="activeCategory === category.key"
           :class="['category-tab', { active: activeCategory === category.key }]"
           @click="activeCategory = category.key">
           {{ category.label }}

@@ -79,7 +79,7 @@
           </button>
         </template>
 
-        <span v-if="previewError" class="preview-error">{{ previewError }}</span>
+        <span v-if="previewLoad.message.value" class="preview-error" role="alert">{{ previewLoad.message.value }}</span>
       </section>
 
       <!-- profesyonel panel benzeri "domain araçları" ızgarası: özet altında tek tık kısayollar. -->
@@ -201,7 +201,8 @@ import type { SiteBinding, SiteBindingPayload, SiteDefaultsResult, SiteRecord, S
 import { getSitePreview } from "../api/sites";
 import { getServerIpAddresses, type ServerIpAddress } from "../api/system";
 import { openReachable } from "../utils/url";
-import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { useAuthStore } from "../stores/auth";
+import { useSectionError } from "../composables/useNotice";
 import { copyToClipboard } from "../utils/clipboard";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
@@ -262,18 +263,20 @@ const subdomainLabel = ref("");
 const showBindingForm = ref(false);
 const preview = ref<SitePreview | null>(null);
 const previewLoading = ref(false);
-const previewError = ref("");
+// Önizleme hatası ÇEVRİLİR: burada `t()` yoktu, kullanıcı `sites.preview_failed` gibi ham
+// anahtar görüyordu. `useSectionError` çeviriyi ve "okunamadı" durumunu tek yerde tutar.
+const previewLoad = useSectionError();
 async function loadPreview() {
   if (!props.site) {
     return;
   }
   previewLoading.value = true;
   preview.value = null;
-  previewError.value = "";
+  previewLoad.clear();
   try {
     preview.value = await getSitePreview(props.site.name);
   } catch (error) {
-    previewError.value = extractApiMessage(error);
+    previewLoad.capture(error);
   } finally {
     previewLoading.value = false;
   }

@@ -19,9 +19,9 @@
     </p>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeSection === 'proxy' }" @click="activeSection = 'proxy'">{{ t("panel.proxy.configTitle") }}</button>
-        <button :class="{ active: activeSection === 'rewrite' }" @click="activeSection = 'rewrite'">{{ t("panel.proxy.rewriteTitle") }}</button>
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeSection === 'proxy'" :class="{ active: activeSection === 'proxy' }" @click="activeSection = 'proxy'">{{ t("panel.proxy.configTitle") }}</button>
+        <button role="tab" :aria-selected="activeSection === 'rewrite'" :class="{ active: activeSection === 'rewrite' }" @click="activeSection = 'rewrite'">{{ t("panel.proxy.rewriteTitle") }}</button>
       </div>
       <label class="site-select">
         <select v-model="selectedSiteName">

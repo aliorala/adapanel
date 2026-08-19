@@ -74,7 +74,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
-import { extractApiMessage } from "../stores/auth";
+import { useNotice } from "../composables/useNotice";
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
@@ -83,7 +83,9 @@ const siteName = computed(() => sitesStore.selectedSiteName);
 const stats = ref<WebStatistics | null>(null);
 const statsDays = ref(7);
 const loading = ref(false);
-const notice = ref("");
+// Hata ÇEVİRİSİ tek kaynaktan (composables/useNotice.ts): burada `t()` unutulmuştu ve
+// istatistik okunamadığında kullanıcı ham anahtar görüyordu.
+const { notice, showError, clearNotice } = useNotice();
 
 onMounted(load);
 watch(siteName, load);
@@ -94,11 +96,11 @@ async function load() {
     return;
   }
   loading.value = true;
-  notice.value = "";
+  clearNotice();
   try {
     stats.value = await getSiteStatistics(siteName.value, statsDays.value);
   } catch (error) {
-    notice.value = extractApiMessage(error);
+    showError(error);
     stats.value = null;
   } finally {
     loading.value = false;

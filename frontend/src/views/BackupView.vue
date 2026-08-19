@@ -76,14 +76,14 @@
     </section>
 
     <div class="module-toolbar">
-      <div class="segmented-tabs">
-        <button :class="{ active: activeView === 'list' }" @click="activeView = 'list'">
+      <div class="segmented-tabs" role="tablist">
+        <button role="tab" :aria-selected="activeView === 'list'" :class="{ active: activeView === 'list' }" @click="activeView = 'list'">
           {{ t("panel.backup.list") }}
         </button>
-        <button :class="{ active: activeView === 'create' }" @click="activeView = 'create'">
+        <button role="tab" :aria-selected="activeView === 'create'" :class="{ active: activeView === 'create' }" @click="activeView = 'create'">
           {{ t("panel.backup.new") }}
         </button>
-        <button :class="{ active: activeView === 'schedules' }" @click="openSchedules">
+        <button role="tab" :aria-selected="activeView === 'schedules'" :class="{ active: activeView === 'schedules' }" @click="openSchedules">
           {{ t("panel.backup.schedules") }}
         </button>
       </div>
@@ -399,6 +399,18 @@
       </template>
     </section>
 
+    <!-- Ayar OKUNAMADIYSA kart yok olmaz: kullanıcı "böyle bir özellik yok" sanmasın diye
+         sebebi yazılır ve tekrar deneme düğmesi verilir. -->
+    <section v-if="activeView === 'list' && isAdmin && !autoForm && autoLoad.message.value" class="form-surface auto-backup-card">
+      <div class="section-head">
+        <div>
+          <h3>{{ t("panel.backup.autoTitle") }}</h3>
+          <p class="meta">{{ t("panel.backup.autoLoadFailed") }}</p>
+        </div>
+      </div>
+      <SectionLoadError :message="autoLoad.message.value" :busy="busy" @retry="loadAutoBackup" />
+    </section>
+
     <!-- Otomatik zamanlanmış yedek (Plesk gibi): motor Otomasyon servisidir; bu kart en çok aranan
          ayarları (sıklık + saklama) yedek ekranının içine taşır. Gelişmiş seçenekler Araçlar > Otomasyon'da. -->
     <section v-if="activeView === 'list' && isAdmin && autoForm" class="form-surface auto-backup-card">
@@ -537,7 +549,15 @@
       </p>
 
       <div class="breadcrumb">
-        <button class="secondary compact" :disabled="busy" @click="navigateTo('')">/</button>
+        <!-- Erişilebilir ad: düğmenin tek içeriği "/" karakteriydi; ekran okuyucu bunu ya hiç
+             okumuyor ya da "eğik çizgi" diye okuyordu — kullanıcı düğmenin ne yaptığını
+             anlayamıyordu. Görsel "/" korunuyor, ad ayrıca veriliyor. -->
+        <button
+          class="secondary compact"
+          :disabled="busy"
+          :aria-label="t('panel.backup.browseRoot')"
+          :title="t('panel.backup.browseRoot')"
+          @click="navigateTo('')">/</button>
         <button
           v-for="crumb in breadcrumbs"
           :key="crumb.prefix"
@@ -610,20 +630,20 @@
           <h3>{{ t("panel.backup.new") }}</h3>
           <p class="meta">{{ backupKindHint }}</p>
         </div>
-        <div class="segmented-tabs">
-          <button :class="{ active: backupKind === 'site' }" @click="backupKind = 'site'">
+        <div class="segmented-tabs" role="tablist">
+          <button role="tab" :aria-selected="backupKind === 'site'" :class="{ active: backupKind === 'site' }" @click="backupKind = 'site'">
             {{ t("panel.backup.siteTitle") }}
           </button>
-          <button :class="{ active: backupKind === 'subscription' }" @click="backupKind = 'subscription'">
+          <button role="tab" :aria-selected="backupKind === 'subscription'" :class="{ active: backupKind === 'subscription' }" @click="backupKind = 'subscription'">
             {{ t("panel.backup.subscription.title") }}
           </button>
-          <button :class="{ active: backupKind === 'database' }" @click="backupKind = 'database'">
+          <button role="tab" :aria-selected="backupKind === 'database'" :class="{ active: backupKind === 'database' }" @click="backupKind = 'database'">
             {{ t("panel.backup.dbTitle") }}
           </button>
-          <button :class="{ active: backupKind === 'mail' }" @click="backupKind = 'mail'">
+          <button role="tab" :aria-selected="backupKind === 'mail'" :class="{ active: backupKind === 'mail' }" @click="backupKind = 'mail'">
             {{ t("panel.backup.mailTitle") }}
           </button>
-          <button v-if="isAdmin" :class="{ active: backupKind === 'panel' }" @click="backupKind = 'panel'">
+          <button role="tab" :aria-selected="backupKind === 'panel'" v-if="isAdmin" :class="{ active: backupKind === 'panel' }" @click="backupKind = 'panel'">
             {{ t("panel.backup.panelTitle") }}
           </button>
         </div>
@@ -1583,6 +1603,8 @@ function scheduleToPlan(schedule: SubscriptionBackupSchedule): BackupSchedulePla
 // Otomatik yedek programı (yalnız admin; motor = Otomasyon servisi, bu kart en sık kullanılan ayarların kısayolu).
 const autoStatus = ref<AutomationStatus | null>(null);
 const autoForm = ref<AutomationSettings | null>(null);
+// Otomatik yedek ayarı OKUNAMADIYSA kart sessizce kaybolmaz; "okunamadı" durumu ayrı tutulur.
+const autoLoad = useSectionError();
 /**
  * Sunucu geneli programın ortak biçimi.
  *
@@ -1714,12 +1736,21 @@ function resetEncryptionForm() {
   encryptionForm.acknowledged = false;
 }
 
+/*
+ * "KAPALI" ile "OKUNAMADI" AYRI ŞEYLER.
+ *
+ * Eskiden hata sessizce yutuluyordu ve otomatik yedek kartı HİÇ ÇİZİLMİYORDU: kullanıcı panelde
+ * zamanlanmış yedek diye bir özellik OLMADIĞINI sanıyordu. Üstelik en kötü hâli şuydu — yedeği
+ * açık olan bir kurulumda kart kaybolduğu için kullanıcı "yedeğim yok" deyip elle yedek almaya
+ * kalkıyordu. Artık okunamadıysa bunu SÖYLÜYORUZ ve tekrar deneme yolu bırakıyoruz.
+ */
 async function loadAutoBackup() {
   try {
     autoStatus.value = await getAutomation();
     applyAutoSettings(autoStatus.value.settings);
-  } catch {
-    // Otomasyon durumu okunamazsa kart gizli kalır; yedek listesi etkilenmez.
+    autoLoad.clear();
+  } catch (error) {
+    autoLoad.capture(error);
   }
 }
 

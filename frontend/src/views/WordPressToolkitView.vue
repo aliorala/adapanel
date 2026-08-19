@@ -94,7 +94,7 @@ import { useI18n } from "vue-i18n";
 import WordPressUpdates from "../components/WordPressUpdates.vue";
 import { useSitesStore } from "../stores/sites";
 import { getWordPress, setWordPressMaintenance, type WordPressSite } from "../api/wordpress";
-import { extractApiMessage } from "../stores/auth";
+import { useNotice } from "../composables/useNotice";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
@@ -107,8 +107,10 @@ const siteName = computed(() => sitesStore.selectedSiteName);
 const wp = ref<WordPressSite | null>(null);
 const loading = ref(false);
 const busy = ref(false);
-const notice = ref("");
-const noticeError = ref(false);
+// Bildirim + hata ÇEVİRİSİ tek kaynaktan (composables/useNotice.ts). Buradaki elle yazılmış
+// kopya `t()` çağrısını atlıyordu: kullanıcı kırmızı şeritte `wpcli.not_wordpress` gibi HAM
+// ANAHTAR görüyordu. Kopya kaldıkça bu hata sınıfı geri gelir.
+const { notice, noticeError, showNotice, showError, clearNotice } = useNotice();
 
 onMounted(refresh);
 watch(siteName, refresh);
@@ -119,12 +121,11 @@ async function refresh() {
     return;
   }
   loading.value = true;
-  notice.value = "";
+  clearNotice();
   try {
     wp.value = await getWordPress(siteName.value);
   } catch (error) {
-    noticeError.value = true;
-    notice.value = extractApiMessage(error);
+    showError(error);
   } finally {
     loading.value = false;
   }
@@ -137,11 +138,9 @@ async function toggleMaintenance() {
   busy.value = true;
   try {
     wp.value = await setWordPressMaintenance(siteName.value, !wp.value.maintenanceMode);
-    noticeError.value = false;
-    notice.value = t("panel.wp.maintenanceUpdated");
+    showNotice(t("panel.wp.maintenanceUpdated"));
   } catch (error) {
-    noticeError.value = true;
-    notice.value = extractApiMessage(error);
+    showError(error);
   } finally {
     busy.value = false;
   }

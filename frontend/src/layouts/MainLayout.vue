@@ -29,11 +29,18 @@
         </div>
       </component>
 
-      <nav class="nav-list">
+      <nav class="nav-list" :aria-label="t('panel.layout.menu')">
+        <!--
+          `aria-current="page"`: hangi bölümde olduğumuz GÖRSEL olarak yalnız `.active` sınıfının
+          rengiyle söyleniyordu. Ekran okuyucu 40 menü maddesini birbirinin AYNI okuyordu; kullanıcı
+          nerede olduğunu ancak sayfa içeriğini dinleyerek tahmin edebiliyordu.
+          `aria-current` bunun standart karşılığıdır ve ekran okuyucu "geçerli sayfa" diye duyurur.
+        -->
         <button
           v-for="section in sections"
           :key="section.id"
           :class="['nav-item', { active: section.id === activeSection }]"
+          :aria-current="section.id === activeSection ? 'page' : undefined"
           @click="handleNavigate(section.id)">
           <span class="nav-glyph">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="iconFor(section.id)"></svg>

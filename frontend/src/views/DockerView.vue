@@ -22,10 +22,10 @@
       </div>
 
       <div class="module-toolbar">
-        <div class="segmented-tabs">
-          <button :class="{ active: tab === 'containers' }" @click="tab = 'containers'">{{ t("panel.docker.containers") }}</button>
-          <button :class="{ active: tab === 'images' }" @click="tab = 'images'">{{ t("panel.docker.images") }}</button>
-          <button :class="{ active: tab === 'run' }" @click="tab = 'run'">{{ t("panel.docker.run") }}</button>
+        <div class="segmented-tabs" role="tablist">
+          <button role="tab" :aria-selected="tab === 'containers'" :class="{ active: tab === 'containers' }" @click="tab = 'containers'">{{ t("panel.docker.containers") }}</button>
+          <button role="tab" :aria-selected="tab === 'images'" :class="{ active: tab === 'images' }" @click="tab = 'images'">{{ t("panel.docker.images") }}</button>
+          <button role="tab" :aria-selected="tab === 'run'" :class="{ active: tab === 'run' }" @click="tab = 'run'">{{ t("panel.docker.run") }}</button>
         </div>
       </div>
 

@@ -599,7 +599,15 @@ async function handleDeleteSite(siteName: string) {
     items.push(`${t("panel.sites.deletePlan.files")}: ${plan.applicationRootPath || plan.physicalPath}`);
     lines = items;
   } catch {
-    // Plan alınamazsa yine de basit onayla devam edilir.
+    /*
+     * Plan OKUNAMADI — bu, "silinecek bir şey yok" DEMEK DEĞİLDİR.
+     *
+     * Eskiden liste sessizce BOŞ kalıyordu ve kullanıcı, etkilenecek kalem olmadığını sanarak
+     * site adını yazıp onaylıyordu; oysa silme yine de veritabanlarını, posta alanlarını ve
+     * zamanlanmış görevleri düşürüyordu. Onay diyaloğunun boş "etkilenecekler" kutusu burada
+     * YALAN söylüyordu. Artık listenin okunamadığı açıkça yazılır.
+     */
+    lines = [t("panel.sites.deletePlan.unavailable")];
   }
 
   // Yüksek riskli onay: kullanıcı devam etmek için site adını birebir yazmalı.
