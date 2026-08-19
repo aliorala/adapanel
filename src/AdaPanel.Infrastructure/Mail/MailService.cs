@@ -616,6 +616,8 @@ public sealed class MailService(
 
         await StoreListPolicyAsync(address, request.PostingPolicy, request.AllowedSenders, domain, cancellationToken);
         await SyncListPolicyScriptAsync(cancellationToken);
+        // Yeni liste -> List-Unsubscribe basligi da uretilmeli.
+        await SyncDataStageScriptAsync(cancellationToken);
 
         return await GetWorkspaceAsync(domain, cancellationToken);
     }
@@ -682,6 +684,8 @@ public sealed class MailService(
         }
 
         await SyncListPolicyScriptAsync(cancellationToken);
+        // Liste silindi -> ona ait List-Unsubscribe kurali da script'ten dusmeli.
+        await SyncDataStageScriptAsync(cancellationToken);
         return workspace;
     }
 
@@ -1254,7 +1258,7 @@ public sealed class MailService(
     private const string AutoResponderStorePath = "config/mail-autoresponders.json";
     private const string AutoResponderScriptName = "adapanel-autoreply";
 
-    private sealed class AutoResponderEntry
+    internal sealed class AutoResponderEntry
     {
         public bool Enabled { get; set; }
         public string Subject { get; set; } = string.Empty;
@@ -1298,7 +1302,7 @@ public sealed class MailService(
         }
 
         await fileStore.WriteAsync(AutoResponderStorePath, store, cancellationToken);
-        await SyncAutoResponderScriptAsync(store, cancellationToken);
+        await SyncDataStageScriptAsync(cancellationToken);
 
         return await GetAutoResponderAsync(normalized, cancellationToken);
     }
@@ -1311,17 +1315,57 @@ public sealed class MailService(
             : new Dictionary<string, AutoResponderEntry>(stored, StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>Mağazadaki TÜM aktif kayıtlardan tek sistem script'ini üretir, upsert eder, DATA aşamasına bağlar ve ayarları yeniden yükletir.</summary>
-    private async Task SyncAutoResponderScriptAsync(Dictionary<string, AutoResponderEntry> store, CancellationToken cancellationToken)
+    /// <summary>
+    /// DATA aşamasının TEK sistem script'ini üretir (otomatik yanıt + liste başlıkları), upsert
+    /// eder, aşamaya bağlar ve ayarları yeniden yükletir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden iki özellik tek script'te:</b> <c>MtaStageData.script</c> TEK bir yuvadır. İkinci
+    /// bir script üretilseydi yalnız sonuncusu bağlanır, diğeri sunucuda ölü dururdu — bu depoda
+    /// zaten yaşanmış arıza sınıfı. Bu yüzden her iki özellik de aynı script'e YAZILIR ve ikisi de
+    /// aynı senkronizasyondan geçer.
+    /// </para>
+    /// <para>
+    /// Aşamaya bağlama kararı RCPT tarafındakiyle AYNI kuralı kullanır
+    /// (<see cref="DecideListPolicySlot"/>): kural yoksa yuvaya dokunulmaz, yuva başkasınınsa
+    /// EZİLMEZ.
+    /// </para>
+    /// </remarks>
+    private async Task SyncDataStageScriptAsync(CancellationToken cancellationToken)
     {
         var (cli, env) = await RequireCliAsync(cancellationToken);
-        var contents = BuildAutoResponderScript(store);
+        var responders = await ReadAutoRespondersAsync(cancellationToken);
+        var listRules = await BuildListUnsubscribeRulesAsync(cli, env, cancellationToken);
+        var contents = BuildDataStageScript(responders, listRules);
+
+        // "Kural sayısı": iki özellikten herhangi biri gerçekten bir şey üretiyor mu?
+        var ruleCount = CountActiveAutoResponders(responders) + listRules.Count;
+
+        var stage = await GetObjectAsync(cli, "MtaStageData", "singleton", env, cancellationToken);
+        var currentScript = stage is { } stageValue
+            && stageValue.TryGetProperty("script", out var scriptExpr)
+            && scriptExpr.TryGetProperty("else", out var elseValue)
+                ? elseValue.GetString() ?? string.Empty
+                : string.Empty;
+
+        var ourExpression = $"'{AutoResponderScriptName}'";
+        var decision = DecideListPolicySlot(ruleCount, currentScript, ourExpression);
+        if (decision == ListPolicySlotAction.None)
+        {
+            return;
+        }
+
+        if (decision == ListPolicySlotAction.Conflict)
+        {
+            throw new AppException("mail.autoresponder_conflict", 409, 409, $"MtaStageData.script={currentScript}");
+        }
 
         var payload = JsonSerializer.Serialize(new
         {
             name = AutoResponderScriptName,
             isActive = true,
-            description = "AdaPanel otomatik yanit (panelden uretilir; elle duzenlemeyin)",
+            description = "AdaPanel DATA asamasi (otomatik yanit + liste basliklari; panelden uretilir, elle duzenlemeyin)",
             contents
         });
 
@@ -1334,16 +1378,7 @@ public sealed class MailService(
             throw new AppException("mail.autoresponder_script_failed", 502, 502, upsert.StandardError.Trim());
         }
 
-        // DATA aşamasına bağla (boş/false ise). Yönetici elle başka script bağladıysa DOKUNMA ve açıkça bildir.
-        var stage = await GetObjectAsync(cli, "MtaStageData", "singleton", env, cancellationToken);
-        var currentScript = stage is { } stageValue
-            && stageValue.TryGetProperty("script", out var scriptExpr)
-            && scriptExpr.TryGetProperty("else", out var elseValue)
-                ? elseValue.GetString() ?? string.Empty
-                : string.Empty;
-
-        var ourExpression = $"'{AutoResponderScriptName}'";
-        if (string.IsNullOrWhiteSpace(currentScript) || currentScript is "false" or "0")
+        if (decision == ListPolicySlotAction.Bind)
         {
             var bind = await RunCliAsync(
                 cli,
@@ -1355,34 +1390,188 @@ public sealed class MailService(
                 throw new AppException("mail.autoresponder_script_failed", 502, 502, bind.StandardError.Trim());
             }
         }
-        else if (!string.Equals(currentScript, ourExpression, StringComparison.Ordinal))
-        {
-            throw new AppException("mail.autoresponder_conflict", 409, 409, $"MtaStageData.script={currentScript}");
-        }
 
         // Değişiklik yeniden başlatma OLMADAN etkinleşir (canlı doğrulandı: ReloadSettings yeterli).
         _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
     }
 
-    /// <summary>
-    /// Sistem sieve script içeriği. Aktif kayıt yoksa yorum-satırı script (derlenir, hiçbir şey yapmaz;
-    /// canlı doğrulandı). RFC 3834: listelere/otomatik iletilere/boş-göndericiye asla yanıt verilmez.
-    /// </summary>
-    private static string BuildAutoResponderScript(Dictionary<string, AutoResponderEntry> store)
+    /// <summary>Panelin ayarlı genel kök adresi (boş = ayarlanmamış).</summary>
+    public async Task<string> GetPublicBaseUrlAsync(CancellationToken cancellationToken = default)
     {
-        var active = store
+        var config = await fileStore.ReadAsync<MailConfig?>(ConfigPath, null, cancellationToken);
+        return (config?.PublicBaseUrl ?? string.Empty).Trim();
+    }
+
+    /// <summary>
+    /// Panelin genel kök adresini kaydeder ve DATA aşaması script'ini yeniden üretir.
+    /// </summary>
+    /// <remarks>
+    /// Adres DOĞRULANIR: yalnız http/https ve yalnız KÖK (yol/sorgu taşıyamaz). Doğrulanmasaydı
+    /// yanlış yazılmış bir değer, GERÇEK abonelere giden iletilere bozuk bir bağlantı olarak
+    /// çıkardı — ve bunu ancak abone tıklayınca fark ederdik.
+    /// </remarks>
+    public async Task<string> SetPublicBaseUrlAsync(string? baseUrl, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizePublicBaseUrl(baseUrl);
+
+        var config = await fileStore.ReadAsync<MailConfig?>(ConfigPath, null, cancellationToken) ?? new MailConfig();
+        config.PublicBaseUrl = normalized;
+        await fileStore.WriteAsync(ConfigPath, config, cancellationToken);
+
+        await SyncDataStageScriptAsync(cancellationToken);
+        return normalized;
+    }
+
+    /// <summary>Boş = özellik kapalı. Aksi hâlde mutlak http/https KÖK adresi olmalı.</summary>
+    internal static string NormalizePublicBaseUrl(string? baseUrl)
+    {
+        var trimmed = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            || !string.IsNullOrEmpty(uri.Query)
+            || uri.AbsolutePath.Trim('/').Length > 0)
+        {
+            throw new AppException("mail.public_base_url_invalid", 400, 400, trimmed);
+        }
+
+        return $"{uri.Scheme}://{uri.Authority}";
+    }
+
+    /// <summary>
+    /// Liste adresi → abonelikten çıkma adresi eşlemesi. Panelin genel adresi ayarlanmamışsa BOŞ
+    /// döner ve hiç başlık eklenmez (bkz. <c>MailConfig.PublicBaseUrl</c>).
+    /// </summary>
+    private async Task<IReadOnlyList<ListUnsubscribeRule>> BuildListUnsubscribeRulesAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        CancellationToken cancellationToken)
+    {
+        var config = await fileStore.ReadAsync<MailConfig?>(ConfigPath, null, cancellationToken);
+        var baseUrl = (config?.PublicBaseUrl ?? string.Empty).Trim().TrimEnd('/');
+        if (baseUrl.Length == 0)
+        {
+            return [];
+        }
+
+        var rules = new List<ListUnsubscribeRule>();
+        foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
+        {
+            var address = GetField(brief, "emailAddress");
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                continue;
+            }
+
+            rules.Add(new ListUnsubscribeRule(
+                address.ToLowerInvariant(),
+                $"{baseUrl}/api/v1/public/mail-lists/unsubscribe?list={Uri.EscapeDataString(address.ToLowerInvariant())}"));
+        }
+
+        rules.Sort((left, right) => string.CompareOrdinal(left.ListAddress, right.ListAddress));
+        return rules;
+    }
+
+    /// <summary>Bir dağıtım listesine eklenecek <c>List-Unsubscribe</c> başlığının kaynağı.</summary>
+    internal sealed record ListUnsubscribeRule(string ListAddress, string UnsubscribeUrl);
+
+    internal static int CountActiveAutoResponders(Dictionary<string, AutoResponderEntry> store) =>
+        store.Count(pair => pair.Value.Enabled && !string.IsNullOrWhiteSpace(pair.Value.Message));
+
+    /// <summary>
+    /// DATA aşaması script'i: önce liste başlıkları, sonra otomatik yanıt.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Sıra ÖNEMLİ ve kasıtlı:</b> otomatik yanıt bloğu RFC 3834 gereği
+    /// <c>not exists ["list-id","list-unsubscribe"]</c> ile korunuyor. Liste başlıkları ÖNCE
+    /// eklendiğinden, bir dağıtım listesine gelen iletiye otomatik yanıt ÜRETİLMEZ — postanın
+    /// listeye geri dönüp döngü yapmasını engelleyen doğru davranış budur ve bedavaya gelir.
+    /// </para>
+    /// <para>
+    /// <b>Koşul <c>envelope</c> değil <c>To:</c> BAŞLIĞI:</b> canlı ölçüldü — DATA aşamasında
+    /// <c>${envelope.to}</c> ZATEN GENİŞLEMİŞ gelir (liste adresi kaybolur, yerine abonelerin
+    /// birleşimi geçer: <c>ali@ornek.comveli@ornek.com</c>). <c>envelope :is "to"</c> bu yüzden
+    /// hiçbir zaman eşleşmiyordu; <c>header :contains "to"</c> ise eşleşiyor.
+    /// </para>
+    /// </remarks>
+    internal static string BuildDataStageScript(
+        Dictionary<string, AutoResponderEntry> responders,
+        IReadOnlyList<ListUnsubscribeRule> listRules)
+    {
+        var activeResponders = responders
             .Where(pair => pair.Value.Enabled && !string.IsNullOrWhiteSpace(pair.Value.Message))
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .ToList();
 
-        if (active.Count == 0)
+        if (activeResponders.Count == 0 && listRules.Count == 0)
         {
-            return "# AdaPanel: aktif otomatik yanit yok / no active auto-replies\r\n";
+            return "# AdaPanel: DATA asamasinda kural yok / no DATA stage rules\r\n";
         }
 
         var builder = new StringBuilder();
-        builder.AppendLine("require [\"envelope\", \"variables\", \"enotify\"];");
-        builder.AppendLine("# AdaPanel tarafindan uretilir; elle duzenlemeyin. / Generated by AdaPanel; do not edit.");
+
+        // require BİRLEŞİMİ tek satırda ve EN ÜSTTE olmalı; sieve başka yerde require kabul etmez.
+        var extensions = new List<string> { "envelope", "variables" };
+        if (listRules.Count > 0)
+        {
+            extensions.Add("editheader");
+        }
+
+        if (activeResponders.Count > 0)
+        {
+            extensions.Add("enotify");
+        }
+
+        builder.Append("require [")
+            .Append(string.Join(", ", extensions.Select(SieveQuoted)))
+            .Append("];\r\n");
+        builder.Append("# AdaPanel tarafindan uretilir; elle duzenlemeyin. / Generated by AdaPanel; do not edit.\r\n");
+
+        AppendListUnsubscribeBlock(builder, listRules);
+        AppendAutoResponderBlock(builder, activeResponders);
+
+        return builder.ToString();
+    }
+
+    private static void AppendListUnsubscribeBlock(StringBuilder builder, IReadOnlyList<ListUnsubscribeRule> rules)
+    {
+        foreach (var rule in rules)
+        {
+            builder.Append($"if header :contains :comparator \"i;ascii-casemap\" \"to\" {SieveQuoted(rule.ListAddress)} {{\r\n");
+            builder.Append($"    addheader \"List-Unsubscribe\" {SieveQuoted($"<{rule.UnsubscribeUrl}>")};\r\n");
+            builder.Append($"    addheader \"List-Id\" {SieveQuoted($"<{rule.ListAddress.Replace('@', '.')}>")};\r\n");
+            builder.Append("}\r\n");
+        }
+    }
+
+    /// <summary>
+    /// Otomatik yanıt BLOĞU (require satırı YOK — o, birleşik script'in en üstünde bir kez yazılır).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Mantık, tek başınayken neyse AYNEN o: RFC 3834 gereği listelere, otomatik iletilere ve
+    /// boş göndericiye asla yanıt verilmez. Blok hâline getirilmesinin tek sebebi, DATA aşamasında
+    /// TEK bir script yuvası olması ve liste başlıklarıyla aynı script'i paylaşmak zorunda olması.
+    /// </para>
+    /// <para>
+    /// Aktif kayıt yoksa HİÇBİR ŞEY yazılmaz; "yorum satırı script" kararı artık birleşik
+    /// üreticinin (<see cref="BuildDataStageScript"/>) sorumluluğunda.
+    /// </para>
+    /// </remarks>
+    private static void AppendAutoResponderBlock(
+        StringBuilder builder,
+        List<KeyValuePair<string, AutoResponderEntry>> active)
+    {
+        if (active.Count == 0)
+        {
+            return;
+        }
+
         builder.AppendLine("if allof(");
         builder.AppendLine("    not exists [\"list-id\", \"list-unsubscribe\"],");
         builder.AppendLine("    not header :is \"precedence\" [\"bulk\", \"list\", \"junk\"],");
@@ -1406,7 +1595,6 @@ public sealed class MailService(
 
         builder.AppendLine("    }");
         builder.AppendLine("}");
-        return builder.ToString();
     }
 
     private static string SieveString(string value) =>
@@ -2653,6 +2841,24 @@ public sealed class MailService(
     private sealed class MailConfig
     {
         public string AdminPasswordProtected { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Panelin DIŞARIDAN erişilen kök adresi (ör. <c>https://panel.ornek.com</c>).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Neden AYAR, neden tahmin değil:</b> liste iletilerine konan <c>List-Unsubscribe</c>
+        /// bağlantısı GERÇEK abonelere gider. Panel her kurulumda başka bir adla yayınlandığından
+        /// adres tahmin edilemez; yanlış tahmin, abonelere ÇALIŞMAYAN bir bağlantı göndermek olur ki
+        /// bu, başlığı hiç koymamaktan kötüdür. İstekteki <c>Host</c> başlığından türetmek de
+        /// yapılmadı: o değer istemciden gelir ve bir kiracı, BAŞKA kiracının abonelerine giden
+        /// iletiye kendi seçtiği adresi koydurabilirdi (kimlik avı).
+        /// </para>
+        /// <para>
+        /// BOŞ bırakılabilir; o zaman başlık hiç eklenmez. Yarım bir bağlantı yerine hiç bağlantı.
+        /// </para>
+        /// </remarks>
+        public string PublicBaseUrl { get; set; } = string.Empty;
     }
 
     // --- Giden posta limiti (MtaOutboundThrottle) ---

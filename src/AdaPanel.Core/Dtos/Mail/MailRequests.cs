@@ -165,6 +165,16 @@ public sealed class SetMailListRecipientsRequest
 }
 
 /// <summary>
+/// Panelin dışarıdan erişilen kök adresi (ör. <c>https://panel.ornek.com</c>).
+/// BOŞ = <c>List-Unsubscribe</c> başlığı hiç eklenmez.
+/// </summary>
+public sealed class SetMailPublicBaseUrlRequest
+{
+    [StringLength(255)]
+    public string BaseUrl { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Giden posta rölesi (smarthost) ayarı.
 /// </summary>
 /// <remarks>
