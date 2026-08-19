@@ -127,6 +127,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Mail.MailService>();
         services.AddScoped<Mail.MailEnableMailService>();
         services.AddScoped<IMailService, Mail.MailServiceRouter>();
+        // Dağıtım listesinden self-servis çıkma (kimliksiz genel uçtan çağrılır).
+        services.AddScoped<Mail.MailListUnsubscribeService>();
         // TEK ALAN ADININ postasını (iletiler dahil) arşivler/geri yükler — sunucu geneli posta
         // yedeğinden farkı: servis DURDURULMAZ ve geri yükleme yalnız hedef alana yazar.
         services.AddScoped<IMailAccountArchiver, Mail.StalwartAccountArchiver>();

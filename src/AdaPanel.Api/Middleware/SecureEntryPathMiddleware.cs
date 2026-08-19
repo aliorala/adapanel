@@ -93,8 +93,35 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
             || path.StartsWithSegments("/index.html", out _)
             || path.StartsWithSegments("/api/v1/setup", out _)
             || path.StartsWithSegments("/api/v1/health", out _)
-            || IsMailAutoconfigPath(path);
+            || IsMailAutoconfigPath(path)
+            || IsMailListUnsubscribePath(path);
     }
+
+    /// <summary>
+    /// Dağıtım listesinden self-servis çıkma ucu.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden muaf:</b> bu ucu çağıran kişi panelin kullanıcısı DEĞİLDİR — listeden çıkmak
+    /// isteyen bir abonedir ve isteği ya e-postadaki bağlantıya tıklayarak ya da genel bir formdan
+    /// yapar. Gizli giriş yolu başlığını gönderemez; muafiyet olmasaydı uç eklenmiş ama HER istekte
+    /// 404 dönüyor olurdu — yani özellik var görünüp hiç çalışmazdı. Posta istemcisi otomatik
+    /// yapılandırma yollarıyla aynı gerekçe.
+    /// </para>
+    /// <para>
+    /// IP kısıtlamasını da atlaması KASITLIDIR ve aynı sebebe dayanır: abone, panel yöneticisinin
+    /// izin listesindeki bir IP'den değil, kendi rastgele adresinden bağlanır.
+    /// </para>
+    /// <para>
+    /// <b>Muafiyetin kapsamı DAR:</b> yalnız <c>/api/v1/public/mail-lists</c> segmenti. Arkasındaki
+    /// denetleyici tek bir şey yapar (bir adresi bir listeden çıkarır), liste/abone LİSTELEMEZ ve
+    /// "bu adres abone mi" sorusunu cevaplamaz; çıkarma ise yalnız o adrese gönderilen, tek
+    /// kullanımlık ve süreli bir belirteçle mümkündür. <c>StartsWithSegments</c> segment sınırına
+    /// baktığı için başka bir <c>/api/v1/public…</c> ucu bu muafiyete SIZAMAZ.
+    /// </para>
+    /// </remarks>
+    internal static bool IsMailListUnsubscribePath(PathString path) =>
+        path.StartsWithSegments("/api/v1/public/mail-lists", out _);
 
     /// <summary>
     /// Posta istemcisi otomatik yapılandırma yolları (Outlook autodiscover / Thunderbird autoconfig).
