@@ -43,6 +43,54 @@ public sealed class MailingListContractTests
         Assert.DoesNotContain('-', MailService.MailingListObject);
     }
 
+    /// <summary>
+    /// Alan adı silme CASCADE'i dağıtım listelerini de temizlemeli ve bunu ŞEMADAKİ adla
+    /// yapmalı.
+    /// </summary>
+    /// <remarks>
+    /// Ölçüldü: cascade <c>list</c> ve <c>group</c> türlerini soruyordu, ikisi de
+    /// <c>unknown object</c>. Sorgu boş dönünce "böyle üye yok" sanılıyor, listeler duruyor ve
+    /// <c>delete domain</c> <c>objectIsLinked ... MailingList#b</c> ile reddediliyordu — dağıtım
+    /// listesi olan bir alan adı panelden SİLİNEMİYORDU.
+    /// </remarks>
+    [Fact]
+    public void DomainCascadeTypes_IncludeMailingLists_UnderTheSchemaName()
+    {
+        Assert.Contains(MailService.MailingListObject, MailService.DomainCascadeTypes);
+    }
+
+    /// <summary>Şemada olmayan tür adları geri gelmemeli: sorgu sessizce boş döner.</summary>
+    [Theory]
+    [InlineData("list")]
+    [InlineData("group")]
+    [InlineData("mailing-list")]
+    public void DomainCascadeTypes_DoNotContainNamesTheServerDoesNotKnow(string unknownType)
+    {
+        Assert.DoesNotContain(unknownType, MailService.DomainCascadeTypes);
+    }
+
+    /// <summary>
+    /// Hesaplar da temizlenmeli — gruplar <c>Account</c>'un bir varyantıdır ve
+    /// <c>query account</c> ikisini de döndürür (ölçüldü), bu yüzden ayrı bir "group" turu
+    /// gerekmez.
+    /// </summary>
+    [Fact]
+    public void DomainCascadeTypes_IncludeAccounts()
+    {
+        Assert.Contains("account", MailService.DomainCascadeTypes);
+    }
+
+    /// <summary>
+    /// DKIM imzaları da temizlenmeli. Stalwart bunları alan adıyla birlikte KENDİSİ üretir; yani
+    /// bu bağ HER alan adında vardır ve temizlenmezse hiçbir alan adı silinemez (ölçüldü:
+    /// üyeler bittikten sonra bile <c>objectIsLinked ... DkimSignature#...</c>).
+    /// </summary>
+    [Fact]
+    public void DomainCascadeTypes_IncludeDkimSignatures()
+    {
+        Assert.Contains("DkimSignature", MailService.DomainCascadeTypes);
+    }
+
     // --- 2) Yazma biçimi: KÜME (harita) ---
 
     /// <summary>
