@@ -230,6 +230,8 @@ public sealed class MailService(
             // özete düşüp "aboneleri boş" göstermek, yöneticiye listesi boşalmış gibi görünür ve
             // üzerine "kaydet" derse gerçekten boşaltır.
             var lists = new List<MailListDto>();
+            // Politika deposu yalnız gerçekten liste varsa okunur (dosya çoğu kurulumda hiç yok).
+            Dictionary<string, ListPolicyEntry>? listPolicies = null;
             foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
             {
                 var id = GetField(brief, "id");
@@ -250,11 +252,16 @@ public sealed class MailService(
                     continue;
                 }
 
+                listPolicies ??= await ReadListPoliciesAsync(cancellationToken);
+                var policy = listPolicies.TryGetValue(listAddress, out var stored) ? stored : new ListPolicyEntry();
+
                 lists.Add(new MailListDto
                 {
                     Address = listAddress,
                     Description = GetField(listDetail.Value, "description"),
-                    Recipients = ReadListRecipients(listDetail.Value)
+                    Recipients = ReadListRecipients(listDetail.Value),
+                    PostingPolicy = MailListPostingPolicy.Normalize(policy.Policy),
+                    AllowedSenders = policy.AllowedSenders
                 });
             }
 
@@ -607,6 +614,9 @@ public sealed class MailService(
             throw MapMailError(result);
         }
 
+        await StoreListPolicyAsync(address, request.PostingPolicy, request.AllowedSenders, domain, cancellationToken);
+        await SyncListPolicyScriptAsync(cancellationToken);
+
         return await GetWorkspaceAsync(domain, cancellationToken);
     }
 
@@ -645,6 +655,12 @@ public sealed class MailService(
             throw MapMailError(result);
         }
 
+        await StoreListPolicyAsync(normalized, request.PostingPolicy, request.AllowedSenders, domain, cancellationToken);
+
+        // Abone kümesi değişmiş olabilir; `subscribers` kipinde izinli gönderenler ondan türediği
+        // için script HER abone değişikliğinde yeniden üretilmelidir.
+        await SyncListPolicyScriptAsync(cancellationToken);
+
         return await GetWorkspaceAsync(domain, cancellationToken);
     }
 
@@ -654,7 +670,149 @@ public sealed class MailService(
         var domain = ExtractDomain(normalized);
         var id = await FindIdAsync(MailingListObject, "emailAddress", normalized, cancellationToken)
             ?? throw new AppException("mail.list_not_found", 404, 404, $"list not found: {normalized}");
-        return await MutateAsync(domain, $"delete {MailingListObject} --ids {Arg(id)}", cancellationToken);
+        var workspace = await MutateAsync(domain, $"delete {MailingListObject} --ids {Arg(id)}", cancellationToken);
+
+        // Politika kaydı da gider: liste silindikten sonra script'te ARTIK OLMAYAN bir adrese
+        // kural kalsaydı, aynı adres yeniden açıldığında eski (belki çok dar) politika sessizce
+        // geri gelirdi.
+        var store = await ReadListPoliciesAsync(cancellationToken);
+        if (store.Remove(normalized))
+        {
+            await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
+        }
+
+        await SyncListPolicyScriptAsync(cancellationToken);
+        return workspace;
+    }
+
+    private async Task<Dictionary<string, ListPolicyEntry>> ReadListPoliciesAsync(CancellationToken cancellationToken)
+    {
+        var stored = await fileStore.ReadAsync<Dictionary<string, ListPolicyEntry>>(ListPolicyStorePath, new(), cancellationToken);
+        return stored is null
+            ? new Dictionary<string, ListPolicyEntry>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, ListPolicyEntry>(stored, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Saklı politikaları SUNUCUDAKİ güncel listelerle birleştirip tek sistem script'ini üretir,
+    /// upsert eder, RCPT aşamasına bağlar ve ayarları yeniden yükletir.
+    /// </summary>
+    /// <remarks>
+    /// Abone kümesi sunucudan OKUNUR (panelin elindeki kopyadan değil): <c>subscribers</c> kipinde
+    /// izinli gönderenler abonelerden türediği için, bayat bir kopya meşru bir aboneyi kendi
+    /// listesinden kilitleyebilirdi.
+    /// </remarks>
+    private async Task SyncListPolicyScriptAsync(CancellationToken cancellationToken)
+    {
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var store = await ReadListPoliciesAsync(cancellationToken);
+
+        var rules = new List<ListPolicyRule>();
+        foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
+        {
+            var listAddress = GetField(brief, "emailAddress");
+            if (string.IsNullOrWhiteSpace(listAddress) || !store.TryGetValue(listAddress, out var entry))
+            {
+                continue;
+            }
+
+            var policy = MailListPostingPolicy.Normalize(entry.Policy);
+            if (policy == MailListPostingPolicy.Anyone)
+            {
+                continue;
+            }
+
+            var id = GetField(brief, "id");
+            var subscribers = string.IsNullOrWhiteSpace(id)
+                ? []
+                : ReadListRecipients(await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken) ?? default);
+
+            rules.Add(new ListPolicyRule(
+                listAddress.ToLowerInvariant(),
+                policy,
+                ResolveAllowedSenders(policy, subscribers, entry.AllowedSenders)));
+        }
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            name = ListPolicyScriptName,
+            isActive = true,
+            description = "AdaPanel liste gonderim politikasi (panelden uretilir; elle duzenlemeyin)",
+            contents = BuildListPolicyScript(rules)
+        });
+
+        var scriptId = await FindIdAsync("SieveSystemScript", "name", ListPolicyScriptName, cancellationToken);
+        var upsert = scriptId is null
+            ? await RunCliJsonAsync(cli, "create SieveSystemScript", payload, env, cancellationToken)
+            : await RunCliJsonAsync(cli, $"update SieveSystemScript {Arg(scriptId)}", payload, env, cancellationToken);
+        if (!upsert.Success)
+        {
+            throw new AppException("mail.list_policy_failed", 502, 502, CombineError(upsert));
+        }
+
+        // RCPT aşamasına bağla. Yönetici elle BAŞKA bir script bağladıysa DOKUNMA ve açıkça bildir —
+        // burada sessizce üzerine yazmak, yöneticinin kendi teslimat kuralını (ör. greylisting)
+        // haberi olmadan kaldırmak olurdu.
+        var stage = await GetObjectAsync(cli, "MtaStageRcpt", "singleton", env, cancellationToken);
+        var currentScript = stage is { } stageValue
+            && stageValue.TryGetProperty("script", out var scriptExpr)
+            && scriptExpr.TryGetProperty("else", out var elseValue)
+                ? elseValue.GetString() ?? string.Empty
+                : string.Empty;
+
+        var ourExpression = $"'{ListPolicyScriptName}'";
+        if (string.IsNullOrWhiteSpace(currentScript) || currentScript is "false" or "0")
+        {
+            var bind = await RunCliAsync(
+                cli,
+                $"update MtaStageRcpt singleton --field {CliJsonArg($"script={{\"match\":{{}},\"else\":\"{ourExpression}\"}}")}",
+                env,
+                cancellationToken);
+            if (!bind.Success)
+            {
+                throw new AppException("mail.list_policy_failed", 502, 502, CombineError(bind));
+            }
+        }
+        else if (!string.Equals(currentScript, ourExpression, StringComparison.Ordinal))
+        {
+            throw new AppException("mail.list_policy_conflict", 409, 409, $"MtaStageRcpt.script={currentScript}");
+        }
+
+        // Yeniden başlatma OLMADAN etkinleşir (otomatik yanıtta kanıtlandı: ReloadSettings yeterli).
+        _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+    }
+
+    /// <summary>Politika kaydını günceller (kip ve/veya izinli gönderenler); <c>null</c> alanlar korunur.</summary>
+    private async Task StoreListPolicyAsync(
+        string address,
+        string? policy,
+        IEnumerable<string>? allowedSenders,
+        string domain,
+        CancellationToken cancellationToken)
+    {
+        if (policy is null && allowedSenders is null)
+        {
+            return;
+        }
+
+        if (policy is not null && !MailListPostingPolicy.IsKnown(policy))
+        {
+            throw new AppException("mail.list_policy_invalid", 400, 400, policy);
+        }
+
+        var store = await ReadListPoliciesAsync(cancellationToken);
+        var entry = store.TryGetValue(address, out var existing) ? existing : new ListPolicyEntry();
+
+        entry.Policy = MailListPostingPolicy.Normalize(policy ?? entry.Policy);
+        if (allowedSenders is not null)
+        {
+            // İzinli gönderenler de doğrulanır: script'e teslim edilemez bir adres yazmak, o satırı
+            // hiçbir zaman eşleşmeyen ölü bir kurala çevirir.
+            entry.AllowedSenders = [.. NormalizeRecipients(allowedSenders, domain)];
+        }
+
+        store[address] = entry;
+        await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
     }
 
     public async Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
@@ -693,6 +851,152 @@ public sealed class MailService(
         return listeners
             .OrderBy(listener => listener.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    // --- Dağıtım listesi gönderim politikası (Plesk "kimler gönderebilir" paritesi) ---
+    //
+    // Stalwart'ın MailingList nesnesinde böyle bir alan YOK (şema sunucudan okundu). Ama kural,
+    // sunucunun KENDİ eklenti noktasıyla uygulanabiliyor: RCPT aşamasına bağlanan tek bir SİSTEM
+    // sieve script'i. Canlı doğrulandı (Stalwart 0.16.8):
+    //   - abone, kimliği doğrulanmış  -> RCPT 250 2.1.5 OK
+    //   - kimliksiz dış gönderici     -> RCPT 550 5.7.2 (reddedildi)
+    //   - normal posta kutusu         -> etkilenmiyor
+    // Panelin otomatik yanıt özelliği AYNI deseni DATA aşamasında kullanıyor; burada DATA yuvası
+    // değil, boştaki RCPT yuvası kullanılır — ikisi çakışmaz.
+    //
+    // Politika RCPT aşamasında uygulanır çünkü reddin ucuz ve DÜRÜST olduğu yer orasıdır:
+    // gönderici iletinin gövdesini hiç yollamadan "yazamazsın" cevabını alır. DATA aşamasında
+    // reddetseydik ileti kabul edilmiş gibi görünüp sonra sessizce düşerdi.
+    private const string ListPolicyStorePath = "config/mail-list-policies.json";
+    private const string ListPolicyScriptName = "adapanel-listpolicy";
+
+    internal sealed class ListPolicyEntry
+    {
+        public string Policy { get; set; } = MailListPostingPolicy.Anyone;
+
+        public string[] AllowedSenders { get; set; } = [];
+    }
+
+    /// <summary>Script üretimi için tek bir listenin ETKİN kuralı.</summary>
+    internal sealed record ListPolicyRule(string Address, string Policy, IReadOnlyList<string> AllowedSenders);
+
+    /// <summary>
+    /// Bütün listelerin kurallarından TEK sistem sieve script'i üretir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden tek script:</b> RCPT aşamasında bağlanacak tek bir yuva var
+    /// (<c>MtaStageRcpt.script</c>). Liste başına script üretilseydi yalnız sonuncusu bağlanır,
+    /// diğerleri sunucuda ölü dururdu.
+    /// </para>
+    /// <para>
+    /// <b>Kural yoksa yorum-satırı script:</b> boş içerik derlenmeyebilir; otomatik yanıtta
+    /// kanıtlanan yol, hiçbir şey yapmayan bir yorum script'i üretmektir. Böylece "politika yok"
+    /// durumu da geçerli bir script'tir ve bağlama bozulmaz.
+    /// </para>
+    /// <para>
+    /// <b>Adres karşılaştırması küçük harfe indirgenir</b> çünkü envelope değerleri istemciden
+    /// gelir; <c>Ali@Ornek.com</c> ile giriş yapan abone aksi hâlde kendi listesine yazamazdı.
+    /// </para>
+    /// </remarks>
+    internal static string BuildListPolicyScript(IEnumerable<ListPolicyRule> rules)
+    {
+        var active = rules
+            .Where(rule => rule.Policy != MailListPostingPolicy.Anyone)
+            .OrderBy(rule => rule.Address, StringComparer.Ordinal)
+            .ToList();
+
+        if (active.Count == 0)
+        {
+            return "# AdaPanel: liste gonderim politikasi yok / no mailing list posting policy\r\n";
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("require [\"variables\", \"envelope\", \"reject\"];\r\n");
+        builder.Append("# AdaPanel tarafindan uretilir; elle duzenlemeyin. / Generated by AdaPanel; do not edit.\r\n");
+
+        foreach (var rule in active)
+        {
+            builder.Append($"if envelope :is :comparator \"i;ascii-casemap\" \"to\" {SieveQuoted(rule.Address)} {{\r\n");
+
+            // İzinli gönderen YOKSA (ör. abonesiz liste + subscribers kipi) kural "hiç kimse"ye
+            // döner. Bu bilinçli: aksi hâlde boş bir izin listesi sessizce "herkes"e açılırdı.
+            if (rule.AllowedSenders.Count == 0)
+            {
+                builder.Append($"    reject {SieveQuoted(BuildPolicyRejectReason(rule.Policy))};\r\n");
+            }
+            else
+            {
+                builder.Append("    if not anyof (\r\n");
+                var tests = rule.AllowedSenders
+                    .Select(sender => $"        string :is :comparator \"i;ascii-casemap\" \"${{env.authenticated_as}}\" {SieveQuoted(sender)}");
+                builder.Append(string.Join(",\r\n", tests));
+                builder.Append("\r\n    ) {\r\n");
+                builder.Append($"        reject {SieveQuoted(BuildPolicyRejectReason(rule.Policy))};\r\n");
+                builder.Append("    }\r\n");
+            }
+
+            builder.Append("}\r\n");
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Red mesajı. SMTP kodu 550 5.7.2 ("mailing list ... not allowed") ve sebep AÇIK yazılır:
+    /// gönderen postasının nereye gittiğini bilmeden sessizce kaybolmasındansa neden
+    /// reddedildiğini görmeli.
+    /// </summary>
+    internal static string BuildPolicyRejectReason(string policy) => policy switch
+    {
+        MailListPostingPolicy.Subscribers =>
+            "550 5.7.2 Only authenticated subscribers may post to this mailing list.",
+        _ => "550 5.7.2 You are not authorized to post to this mailing list."
+    };
+
+    /// <summary>
+    /// TIRNAKLI sieve string literal'i. Kaçırma kuralı <see cref="SieveString"/>'den gelir —
+    /// iki ayrı kopya yazılsaydı biri düzeltildiğinde diğeri sessizce kaçırmayı atlardı.
+    /// </summary>
+    internal static string SieveQuoted(string value) => "\"" + SieveString(value) + "\"";
+
+    /// <summary>
+    /// Bir listenin ETKİN izinli gönderen kümesini hesaplar.
+    /// </summary>
+    /// <remarks>
+    /// <c>subscribers</c> kipinde küme ABONELERDEN türetilir; bu yüzden abone listesi her
+    /// değiştiğinde script yeniden üretilmelidir. Liste yöneticileri (<c>allowed</c> kipinin
+    /// adresleri) <b>her iki</b> kipte de gönderebilir: kendi listesine duyuru yazamayan bir
+    /// yönetici, özelliği kullanılamaz kılardı.
+    /// </remarks>
+    internal static IReadOnlyList<string> ResolveAllowedSenders(
+        string policy,
+        IEnumerable<string> subscribers,
+        IEnumerable<string> allowedSenders)
+    {
+        var result = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var sender in allowedSenders ?? [])
+        {
+            var trimmed = (sender ?? string.Empty).Trim().ToLowerInvariant();
+            if (trimmed.Length > 0)
+            {
+                result.Add(trimmed);
+            }
+        }
+
+        if (policy == MailListPostingPolicy.Subscribers)
+        {
+            foreach (var subscriber in subscribers ?? [])
+            {
+                var trimmed = (subscriber ?? string.Empty).Trim().ToLowerInvariant();
+                if (trimmed.Length > 0)
+                {
+                    result.Add(trimmed);
+                }
+            }
+        }
+
+        return [.. result];
     }
 
     /// <summary>

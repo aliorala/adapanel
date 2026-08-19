@@ -10,7 +10,17 @@ type ApiEnvelope<T> = {
 export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number; allocatedMB: number };
 export type MailAccount = { address: string; active: boolean; maxSizeMB: number; currentSizeMB: number };
 export type MailAlias = { address: string; target: string; active: boolean };
-export type MailList = { address: string; description: string; recipients: string[] };
+// Plesk'in "kimler gonderebilir" karsiligi. Stalwart'in MailingList nesnesinde boyle bir alan
+// YOK; kural RCPT asamasina baglanan sistem sieve script'iyle uygulanir (canli dogrulandi).
+export type MailListPostingPolicy = "anyone" | "subscribers" | "allowed";
+
+export type MailList = {
+  address: string;
+  description: string;
+  recipients: string[];
+  postingPolicy: MailListPostingPolicy;
+  allowedSenders: string[];
+};
 export type MailListener = { name: string; protocol: string; binds: string[] };
 
 export type MailSpamSettings = {
@@ -88,12 +98,35 @@ export async function deleteMailAlias(address: string) {
   const response = await apiClient.delete<ApiEnvelope<MailWorkspace>>(`/mail/aliases/${encodeURIComponent(address)}`);
   return response.data.data;
 }
-export async function createMailList(domain: string, address: string, recipients: string[], description = "") {
+export async function createMailList(
+  domain: string,
+  address: string,
+  recipients: string[],
+  description = "",
+  postingPolicy: MailListPostingPolicy = "anyone",
+  allowedSenders: string[] = []
+) {
   const response = await apiClient.post<ApiEnvelope<MailWorkspace>>("/mail/lists", {
     domain,
     address,
     description,
-    recipients
+    recipients,
+    postingPolicy,
+    allowedSenders
+  });
+  return response.data.data;
+}
+
+// Gonderim politikasini degistirir. Aboneler GONDERILMEZ -> sunucudaki kume korunur.
+export async function setMailListPolicy(
+  address: string,
+  postingPolicy: MailListPostingPolicy,
+  allowedSenders: string[]
+) {
+  const response = await apiClient.put<ApiEnvelope<MailWorkspace>>("/mail/lists/recipients", {
+    address,
+    postingPolicy,
+    allowedSenders
   });
   return response.data.data;
 }
