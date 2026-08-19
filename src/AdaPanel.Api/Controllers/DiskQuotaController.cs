@@ -2,6 +2,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -37,6 +38,12 @@ namespace AdaPanel.Api.Controllers;
 /// işlem değildir.
 /// </item>
 /// </list>
+/// <para>
+/// <b>Denetim kaydı:</b> kota, müşterinin SATIN ALDIĞI sınırdır ve yazma uçları müşterinin kendisine
+/// kapalıdır — yani buradaki her değişikliği BAŞKASI (yönetici ya da bayi) yapar. Kota düşürüldüğünde
+/// müşteri bunu ancak dosya yazamayınca fark eder; kaydın <c>subscriptionUserId</c>'si doldurulmazsa
+/// kiracı, kendi sitesine yapılan bu dokunuşu denetim görünümünde hiç göremez.
+/// </para>
 /// </remarks>
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
@@ -44,7 +51,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/sites/{siteName}/quota")]
 public sealed class DiskQuotaController(
     IDiskQuotaService diskQuotaService,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IAuditService auditService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<SiteDiskQuotaDto>>> GetAsync(string siteName, CancellationToken cancellationToken)
@@ -62,7 +70,22 @@ public sealed class DiskQuotaController(
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // ÖNCEKİ sınır değişiklikten önce ölçülür: FSRM yalnız güncel kotayı tutar, "kaçtan kaça
+        // çekildi" bilgisi yazma anından sonra hiçbir yerde kalmaz.
+        var oncesi = await diskQuotaService.GetQuotaAsync(siteName, cancellationToken);
+
         var quota = await diskQuotaService.SetQuotaAsync(siteName, request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "quota.set",
+            $"site:{siteName}",
+            $"Disk quota set to {request.LimitMegabytes}MB ({(request.SoftLimit ? "soft" : "hard")}); "
+            + $"before: {(oncesi.QuotaEnabled ? $"{oncesi.LimitBytes / 1024 / 1024}MB ({(oncesi.SoftLimit ? "soft" : "hard")})" : "none")}; "
+            + $"applied: {quota.QuotaEnabled}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
+
         return Ok(ApiResponse<SiteDiskQuotaDto>.Ok(quota, "quota.saved"));
     }
 
@@ -71,7 +94,21 @@ public sealed class DiskQuotaController(
     public async Task<ActionResult<ApiResponse<SiteDiskQuotaDto>>> RemoveAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        var oncesi = await diskQuotaService.GetQuotaAsync(siteName, cancellationToken);
         var quota = await diskQuotaService.RemoveQuotaAsync(siteName, cancellationToken);
+
+        // Kotanın KALDIRILMASI, satılan sınırın fiilen sınırsıza çevrilmesidir; ayrıca kaldırma
+        // sessizce başarısız olabildiği (DiskQuotaService, -ErrorAction SilentlyContinue) için
+        // ÖLÇÜLEN sonuç da yazılır — "kaldırıldı" demek ile kalkmış olmak aynı şey değil.
+        await auditService.AuditAsync(
+            HttpContext,
+            "quota.removed",
+            $"site:{siteName}",
+            $"Disk quota removed (was: {(oncesi.QuotaEnabled ? $"{oncesi.LimitBytes / 1024 / 1024}MB" : "none")}); "
+            + $"quota still enabled after removal: {quota.QuotaEnabled}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
+
         return Ok(ApiResponse<SiteDiskQuotaDto>.Ok(quota, "quota.removed"));
     }
 
@@ -81,7 +118,36 @@ public sealed class DiskQuotaController(
     public async Task<ActionResult<ApiResponse<SiteDiskQuotaDto>>> InstallFsrmAsync(string siteName, CancellationToken cancellationToken)
     {
         var quota = await diskQuotaService.InstallFsrmAsync(siteName, cancellationToken);
+
+        // SUNUCU GENELİ bir Windows rolü kurar ve yeniden başlatma gerektirebilir — site başına bir
+        // işlem değildir, bu yüzden kiracıya değil sunucuya yazılır (subscriptionUserId yok).
+        await auditService.AuditAsync(
+            HttpContext,
+            "quota.fsrm.installed",
+            "server",
+            $"FSRM Windows role installation requested (triggered from site '{siteName}'); "
+            + $"FSRM available afterwards: {quota.FsrmAvailable}.");
+
         return Ok(ApiResponse<SiteDiskQuotaDto>.Ok(quota, "quota.fsrm_installed"));
     }
 
+    /// <summary>
+    /// Sitenin abonelik sahibi — kiracının, kotasına yapılan dokunuşu görebilmesi için.
+    /// </summary>
+    /// <remarks>
+    /// Kapsam denetimi (EnsureSiteAsync) çağıranın siteye erişebildiğini doğrular; sahibi ise
+    /// KAYNAĞIN kime ait olduğudur ve çağırandan farklı olabilir (yönetici/bayi dokunuşu). Kaydın
+    /// kiracıya görünmesini sağlayan alan budur.
+    /// </remarks>
+    private async Task<Guid?> SiteSahibiAsync(string siteName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

@@ -5,6 +5,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Docker;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Docker;
 
@@ -12,7 +13,21 @@ namespace AdaPanel.Infrastructure.Docker;
 /// Docker konteyner/imaj yonetimini docker CLI uzerinden saglar. Docker kurulu
 /// degilse veya daemon calismiyorsa durum olarak raporlar, hata firlatmaz.
 /// </summary>
-public sealed partial class DockerService : IDockerService
+/// <remarks>
+/// <para>
+/// <b>Neden günlükçü (ILogger) var:</b> "hata firlatmaz" tasarımı kullanıcı için doğru ama teşhis
+/// için körlük üretiyordu — üç ayrı yerde başarısızlık SESSİZCE boş sonuca dönüşüyor: docker.exe
+/// bulunamaması (kullanıcı "Docker kurulu değil" görür, oysa yalnız PATH bozuk olabilir), konteyner/
+/// imaj listelemesinin patlaması (panel BOŞ liste gösterir; çalışan konteynerler varken "hiç
+/// konteyner yok" demek yanlış bilgidir) ve ayrıştırılamayan CLI satırları (sürüm farkı yüzünden
+/// liste sessizce eksik kalır). Hiçbirinin sebebi hiçbir yere yazılmıyordu.
+/// </para>
+/// <para>
+/// Konteyner/imaj değişikliklerinin DENETİM kaydı burada değil <c>DockerController</c>'da yazılır
+/// (kim/nereden bilgisi HTTP bağlamındadır).
+/// </para>
+/// </remarks>
+public sealed partial class DockerService(ILogger<DockerService> logger) : IDockerService
 {
     public async Task<DockerWorkspaceDto> GetWorkspaceAsync(CancellationToken cancellationToken = default)
     {
@@ -135,6 +150,12 @@ public sealed partial class DockerService : IDockerService
         var result = await TryRunAsync("ps -a --format \"{{json .}}\"", cancellationToken);
         if (result is null || !result.Success)
         {
+            // BOŞ LİSTE ≠ KONTEYNER YOK. Kullanıcıya boş bir tablo göstermek kabul edilebilir
+            // (uydurma veri göstermekten iyidir) ama sebebi kaydedilmezse "konteynerlerim kayboldu"
+            // şikâyetinin arkasındaki gerçek hata (izin, daemon, sürüm) hiç görünmez.
+            logger.LogWarning(
+                "Docker konteyner listesi OKUNAMADI; panel bos liste gosterecek. Cikti: {Error}",
+                result?.StandardError ?? "docker.exe bulunamadi");
             return [];
         }
 
@@ -154,6 +175,10 @@ public sealed partial class DockerService : IDockerService
         var result = await TryRunAsync("images --format \"{{json .}}\"", cancellationToken);
         if (result is null || !result.Success)
         {
+            // Gerekçe: ReadContainersAsync ile aynı.
+            logger.LogWarning(
+                "Docker imaj listesi OKUNAMADI; panel bos liste gosterecek. Cikti: {Error}",
+                result?.StandardError ?? "docker.exe bulunamadi");
             return [];
         }
 
@@ -166,9 +191,11 @@ public sealed partial class DockerService : IDockerService
         });
     }
 
-    private static IReadOnlyCollection<T> ParseLines<T>(string output, Func<JsonElement, T> map)
+    private IReadOnlyCollection<T> ParseLines<T>(string output, Func<JsonElement, T> map)
     {
         var items = new List<T>();
+        var atlanan = 0;
+
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             try
@@ -178,8 +205,18 @@ public sealed partial class DockerService : IDockerService
             }
             catch (JsonException)
             {
-                // Beklenmeyen satirlari atla.
+                // Beklenmeyen satirlari atla — ama SESSİZCE değil: bir docker sürümü çıktı biçimini
+                // değiştirdiğinde liste kendiliğinden eksilir ve panelde bu, "konteyner silinmiş"
+                // gibi görünür. Sayı günlüğe düşerse sebep ilk bakışta anlaşılır.
+                atlanan++;
             }
+        }
+
+        if (atlanan > 0)
+        {
+            logger.LogWarning(
+                "Docker CLI ciktisinda {Atlanan} satir ayristirilamadi; liste EKSIK olabilir (docker surumu cikti bicimini degistirmis olabilir).",
+                atlanan);
         }
 
         return items;
@@ -206,13 +243,13 @@ public sealed partial class DockerService : IDockerService
         "docker",
         "docker.exe");
 
-    private static async Task<CommandResult?> TryRunAsync(string arguments, CancellationToken cancellationToken)
+    private async Task<CommandResult?> TryRunAsync(string arguments, CancellationToken cancellationToken)
     {
         try
         {
             return await ProcessRunner.RunAsync("docker", arguments, cancellationToken: cancellationToken);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception exception)
         {
             // PATH'te yoksa panel kurulum dizinine dus.
             if (File.Exists(FallbackDockerExecutable))
@@ -221,12 +258,22 @@ public sealed partial class DockerService : IDockerService
                 {
                     return await ProcessRunner.RunAsync(FallbackDockerExecutable, arguments, cancellationToken: cancellationToken);
                 }
-                catch (System.ComponentModel.Win32Exception)
+                catch (System.ComponentModel.Win32Exception yedekHatasi)
                 {
+                    // Panel Docker'ı KURMUŞ ama çalıştıramıyor — bu "Docker kurulu değil"den bambaşka
+                    // bir arızadır (izin, eksik bağımlılık, bozuk kurulum) ve kullanıcıya aynı ekran
+                    // gösterildiği için ayrımı yalnız günlük yapabilir.
+                    logger.LogWarning(
+                        yedekHatasi,
+                        "Panelin kurdugu docker.exe CALISTIRILAMADI ({Yol}); panel 'Docker kurulu degil' gosterecek.",
+                        FallbackDockerExecutable);
                     return null;
                 }
             }
 
+            logger.LogDebug(
+                exception,
+                "docker.exe PATH'te bulunamadi ve panel kurulum dizininde de yok; Docker kurulu degil sayiliyor.");
             return null;
         }
     }

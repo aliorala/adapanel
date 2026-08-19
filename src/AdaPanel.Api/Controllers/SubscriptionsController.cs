@@ -3,6 +3,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Subscriptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,8 +14,21 @@ namespace AdaPanel.Api.Controllers;
 /// Abonelik iş modeli: plan bağı, kullanım, askıya alma.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Müşteri KENDİ kullanımını görebilir (kotasının ne kadarını harcadığını bilmeli); askıya
 /// alma/geri açma ve başkasının kullanımını görme yönetici ile bayiye özeldir.
+/// </para>
+/// <para>
+/// <b>Denetim kaydı:</b> buradaki uçlar müşterinin SATIN ALDIĞI şeyi değiştirir — bağlı plan,
+/// bitiş tarihi, bayi tavanı. Hepsi doğrudan faturalama uyuşmazlığına konu olur ("paketimi kim
+/// düşürdü", "aboneliğim neden bir ay erken bitti") ve kaynak kayıtlar yalnız SON durumu tutar,
+/// geçmişi tutmaz. Bu yüzden her yazma ucu ESKİ ve YENİ değeri birlikte kaydeder.
+/// </para>
+/// <para>
+/// Her kayıtta <c>subscriptionUserId</c> = aboneliğin sahibi. Bu olmadan kiracı, kendi aboneliğine
+/// yapılan yönetici/bayi dokunuşunu kendi denetim görünümünde HİÇ göremezdi — sütun tam bu soru
+/// için var.
+/// </para>
 /// </remarks>
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
@@ -23,7 +37,8 @@ public sealed class SubscriptionsController(
     ISubscriptionEnforcementService enforcement,
     ICustomerScopeService customerScopes,
     IServicePlanService servicePlans,
-    IResellerQuotaService resellerQuotas) : ControllerBase
+    IResellerQuotaService resellerQuotas,
+    IAuditService auditService) : ControllerBase
 {
     /// <summary>Giriş yapmış kullanıcının kendi abonelik kullanımı.</summary>
     [HttpGet("me")]
@@ -55,10 +70,24 @@ public sealed class SubscriptionsController(
     {
         await EnsureManageableAsync(userId, cancellationToken);
         await EnsurePlanUsableAsync(userId, request.PlanId, cancellationToken);
+
+        // ÖNCEKİ plan değişiklikten ÖNCE ölçülür: abonelik kaydı yalnız güncel plan kimliğini tutar,
+        // "hangi paketten hangi pakete geçildi" bilgisi yazma anından sonra hiçbir yerde kalmaz.
+        var oncesi = await enforcement.GetUsageAsync(userId, cancellationToken);
+
         await customerScopes.SetPlanAsync(userId, request.PlanId, cancellationToken);
-        return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
-            await enforcement.GetUsageAsync(userId, cancellationToken),
-            "subscription.plan_saved"));
+
+        var sonrasi = await enforcement.GetUsageAsync(userId, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "subscription.plan.changed",
+            $"subscription:{userId:N}",
+            $"Subscription plan changed for '{sonrasi.UserName}': "
+            + $"'{PlanTanimi(oncesi)}' → '{PlanTanimi(sonrasi)}'.",
+            userId);
+
+        return Ok(ApiResponse<SubscriptionUsageDto>.Ok(sonrasi, "subscription.plan_saved"));
     }
 
     /// <summary>Aboneliğin bitiş tarihini ayarlar (null = süresiz).</summary>
@@ -70,10 +99,24 @@ public sealed class SubscriptionsController(
         CancellationToken cancellationToken)
     {
         await EnsureManageableAsync(userId, cancellationToken);
+
+        var oncesi = await enforcement.GetUsageAsync(userId, cancellationToken);
+
         await customerScopes.SetExpiryAsync(userId, request.ExpiresAtUtc, cancellationToken);
-        return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
-            await enforcement.GetUsageAsync(userId, cancellationToken),
-            "subscription.expiry_saved"));
+
+        var sonrasi = await enforcement.GetUsageAsync(userId, cancellationToken);
+
+        // Bitiş tarihi, aboneliğin OTOMATİK ASKIYA ALINMA anıdır: tarihi öne çekmek, müşterinin
+        // sitelerini o gün kapatır. "Aboneliğim neden bir ay erken bitti" sorusunun tek kanıtı budur.
+        await auditService.AuditAsync(
+            HttpContext,
+            "subscription.expiry.changed",
+            $"subscription:{userId:N}",
+            $"Subscription expiry changed for '{sonrasi.UserName}': "
+            + $"{Tarih(oncesi.ExpiresAtUtc)} → {Tarih(sonrasi.ExpiresAtUtc)}.",
+            userId);
+
+        return Ok(ApiResponse<SubscriptionUsageDto>.Ok(sonrasi, "subscription.expiry_saved"));
     }
 
     /// <summary>Aboneliği elle askıya alır (siteleri durur).</summary>
@@ -83,6 +126,19 @@ public sealed class SubscriptionsController(
     {
         await EnsureManageableAsync(userId, cancellationToken);
         await enforcement.SuspendAsync(userId, "manual", cancellationToken);
+
+        // NEDEN İKİNCİ BİR KAYIT: SubscriptionEnforcementService de bir kayıt yazar, ama o kaydın
+        // AKTÖRÜ abonelik sahibinin kendisidir (userId) ve İP adresi yoktur — çünkü aynı metot arka
+        // plan uygulayıcısı tarafından da çağrılır. Yani elle askıya almada kayıt "müşteri kendini
+        // askıya aldı" der; asıl soru olan "hangi yönetici/bayi, nereden" cevapsız kalır. Buradaki
+        // kayıt gerçek aktörü ve İP'yi taşır; servisin kaydı ise kaç sitenin durduğunu.
+        await auditService.AuditAsync(
+            HttpContext,
+            "subscription.suspended.manual",
+            $"subscription:{userId:N}",
+            "Subscription suspended manually from the panel.",
+            userId);
+
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),
             "subscription.suspended"));
@@ -95,6 +151,15 @@ public sealed class SubscriptionsController(
     {
         await EnsureManageableAsync(userId, cancellationToken);
         await enforcement.ResumeAsync(userId, cancellationToken);
+
+        // Gerekçe: SuspendAsync ile aynı (servisin kaydı aktörü aboneliğin kendisi olarak yazar).
+        await auditService.AuditAsync(
+            HttpContext,
+            "subscription.resumed.manual",
+            $"subscription:{userId:N}",
+            "Subscription resumed manually from the panel.",
+            userId);
+
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),
             "subscription.resumed"));
@@ -106,6 +171,16 @@ public sealed class SubscriptionsController(
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<SubscriptionEnforcementChangeDto>>>> EnforceAsync(CancellationToken cancellationToken)
     {
         var changes = await enforcement.EnforceAllAsync(cancellationToken);
+
+        // Elle tetiklenen tur, BÜTÜN abonelikleri askıya alabilir/açabilir. Tek tek değişiklikler
+        // enforcement tarafında kayda geçer; buradaki kayıt turu KİMİN başlattığını söyler — arka
+        // plan turuyla elle turun ayırt edilebilmesi için.
+        await auditService.AuditAsync(
+            HttpContext,
+            "subscription.enforced",
+            "subscriptions",
+            $"Subscription enforcement run manually; {changes.Count} subscription(s) changed state.");
+
         return Ok(ApiResponse<IReadOnlyCollection<SubscriptionEnforcementChangeDto>>.Ok(changes, "subscription.enforced"));
     }
 
@@ -142,11 +217,40 @@ public sealed class SubscriptionsController(
         [FromBody] ResellerQuotaRequest request,
         CancellationToken cancellationToken)
     {
+        var oncesi = await resellerQuotas.GetQuotaAsync(userId, cancellationToken);
+
         await resellerQuotas.SetQuotaAsync(userId, request, cancellationToken);
+
+        // Bayi tavanı, bayinin SATIN ALDIĞI toptan haktır: düşürülmesi bayinin yeni müşteri
+        // açmasını anında durdurur, yükseltilmesi ise faturalanmamış kaynak dağıtımına izin verir.
+        // Her iki yön de ticari uyuşmazlık konusudur.
+        await auditService.AuditAsync(
+            HttpContext,
+            "subscription.reseller_quota.changed",
+            $"reseller:{userId:N}",
+            $"Reseller allowance changed: "
+            + $"{(oncesi is null ? "unset" : $"sites {oncesi.MaxSites}, disk {oncesi.MaxDiskMb}MB")} "
+            + $"→ sites {request.MaxSites}, disk {request.MaxDiskMb}MB.",
+            userId);
+
         return Ok(ApiResponse<ResellerQuotaUsageDto>.Ok(
             await ResellerQuotaGuard.MeasureAsync(resellerQuotas, customerScopes, userId, cancellationToken),
             "subscription.reseller_quota_saved"));
     }
+
+    /// <summary>Kayda yazılacak plan tanımı: ad + kimlik (plan bağı yoksa "no plan").</summary>
+    /// <remarks>
+    /// Yalnız plan ADI yetmez — plan adları yeniden kullanılır ve silinen bir planın adı başka bir
+    /// plana verilebilir; kimlik olmadan kayıt yıllar sonra hangi plana işaret ettiğini söyleyemez.
+    /// </remarks>
+    private static string PlanTanimi(SubscriptionUsageDto usage) =>
+        string.IsNullOrWhiteSpace(usage.PlanId)
+            ? "no plan (custom limits)"
+            : $"{usage.PlanName} [{usage.PlanId}]";
+
+    /// <summary>Bitiş tarihi metni; null = süresiz.</summary>
+    private static string Tarih(DateTime? value) =>
+        value is null ? "unlimited" : value.Value.ToString("u");
 
     /// <summary>
     /// GÜVENLİK (çapraz-kiracı): bayi yalnız KENDİ müşterisinin aboneliğini yönetebilir.

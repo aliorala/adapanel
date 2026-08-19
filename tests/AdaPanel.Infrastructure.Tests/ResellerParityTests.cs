@@ -357,7 +357,10 @@ public sealed class ResellerParityTests : IDisposable
 
     // --- duzenek ---
 
-    private ServicePlansController PlanControllerı(Guid userId, string rol) => new(planlar, tavanlar)
+    // Denetim kaydi bu testlerde ONEMSIZ (burada dogrulanan sey kapsam/tavan izolasyonu), ama
+    // controller artik kaydi ZORUNLU bagimlilik olarak istiyor: kaydi opsiyonel birakmak, denetim
+    // yazmayi yeniden "unutulabilir" hale getirirdi.
+    private ServicePlansController PlanControllerı(Guid userId, string rol) => new(planlar, tavanlar, new RecordingAuditService())
     {
         ControllerContext = new ControllerContext
         {
@@ -366,7 +369,7 @@ public sealed class ResellerParityTests : IDisposable
     };
 
     private SubscriptionsController AbonelikControllerı(Guid userId, string rol) =>
-        new(new SahteDayatma(), kapsamlar, planlar, tavanlar)
+        new(new SahteDayatma(), kapsamlar, planlar, tavanlar, new RecordingAuditService())
         {
             ControllerContext = new ControllerContext
             {

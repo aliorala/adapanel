@@ -1,6 +1,7 @@
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Firewall;
 using AdaPanel.Infrastructure.Firewall;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -20,7 +21,9 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </summary>
 public sealed class SelfLockoutGuardTests
 {
-    private static readonly FirewallService Servis = new();
+    // Gunlukcu bu testlerde ONEMSIZ: burada dogrulanan sey, korunan portun REDDEDILMESI (kural hic
+    // yazilmadan atilan bir AppException). Yutan catch bloklarina hic girilmez.
+    private static readonly FirewallService Servis = new(NullLogger<FirewallService>.Instance);
 
     /// <summary>Panelin kendi portu engellenemez.</summary>
     [Fact]

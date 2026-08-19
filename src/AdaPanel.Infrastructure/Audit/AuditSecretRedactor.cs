@@ -38,8 +38,38 @@ public static class AuditSecretRedactor
 
     // Sır adı taşıyan alanların DEĞERİ maskelenir. Tırnaklı değerler tek parça sayılır ki
     // "password='iki kelime'" içindeki boşluk maskelemeyi yarıda kesmesin.
+    //
+    // NEDEN ANAHTAR ADINDA ÖNEK/SONEK SEGMENTİ VAR: eski desen anahtarı `\b...\b` ile sınırlıyordu
+    // ve alt çizgi bir KELİME KARAKTERİ olduğu için `refresh_token=...` HİÇ eşleşmiyordu — "token"
+    // sınırı alt çizgide açılmıyor. Aynı sebeple `access_token`, `x-amz-signature`, `api.key` de
+    // dışarıda kalıyordu; yani sır adı taşıyan en yaygın biçimler tam olarak kaçıyordu. Artık
+    // anahtar, nokta/alt çizgi/tire ile ayrılmış önek ve sonek parçaları kabul ediyor. Fazla
+    // maskeleme (ör. "password_hint") kabul edilebilir; eksik maskeleme değildir.
+    //
+    // NEDEN AYRICA `authorization` / `signature` / `sig`: bunlar üstlendikleri işi ADINDAN belli
+    // eden alanlar. `sig` özellikle Azure paylaşılan erişim imzasının (SAS) sorgu parametresidir:
+    // `?...&sig=<imza>` tek başına depoya TAM erişim verir — yani parolaya eşdeğerdir. Bugün panelde
+    // bunları kayda yazan bir çağrı yeri YOK (yedek modülü adresleri kendi temizliyor); burası
+    // merkezî geçit olduğu için yarın yazan biri çıkarsa yakalayan yer burası olmalı.
+    //
+    // NEDEN DEĞER KISMINDA "şema + değer" seçeneği: `authorization: Bearer eyJ...` biçiminde değer
+    // İKİ parçadır. Yalnız `\S+` alınsaydı maskelenen parça "Bearer" olur, jetonun kendisi kayda
+    // OLDUĞU GİBİ düşerdi — maskeleme var görünüp tam da korunacak şeyi bırakırdı.
     private static readonly Regex SecretAssignment = new(
-        """(?<key>\b(?:pass|passwd|password|pwd|parola|sifre|şifre|secret|gizli|token|apikey|api[_-]?key|accesskey|connectionstring|credential)s?\b)\s*(?<sep>[:=])\s*(?<value>"[^"]*"|'[^']*'|\S+)""",
+        """(?<![A-Za-z0-9])(?<key>(?:[A-Za-z0-9]+[_.\-])*(?:pass|passwd|password|pwd|parola|sifre|şifre|secret|gizli|token|jeton|apikey|api[_.\-]?key|accesskey|access[_.\-]?key|connectionstring|connection[_.\-]?string|credential|authorization|bearer|signature|sig)s?(?:[_.\-][A-Za-z0-9]+)*)\s*(?<sep>[:=])\s*(?<value>"[^"]*"|'[^']*'|(?:Bearer|Basic|Digest|Negotiate|Token|ApiKey)\s+\S+|\S+)""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromSeconds(1));
+
+    // İKİNCİ DESEN — anahtarsız kimlik şeması: `Bearer eyJhbGciOi...`.
+    //
+    // NEDEN AYRI: ayraç burada BOŞLUKTUR. Boşluğu genel ayraç listesine eklemek felaket olurdu —
+    // "password was changed" gibi İNSAN CÜMLELERİNDE bir sonraki kelimeyi maskeleyip kaydı
+    // okunamaz hâle getirirdi (kaydın var olma sebebi okunabilir olması). Bu yüzden boşluk yalnız
+    // BİLİNEN kimlik şemalarının ardından, ve yalnız ardından gelen parça GERÇEKTEN bir kimlik
+    // bilgisine benziyorsa (jeton alfabesi, en az 16 karakter) sır sayılır. "Bearer token missing"
+    // gibi bir cümle bu ölçüye takılmaz ve olduğu gibi kalır.
+    private static readonly Regex SchemeCredential = new(
+        """(?<![A-Za-z0-9])(?<scheme>Bearer|Basic|Digest|Negotiate)\s+(?<value>[A-Za-z0-9\-._~+/]{16,}={0,2})""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         TimeSpan.FromSeconds(1));
 
@@ -61,8 +91,13 @@ public static class AuditSecretRedactor
 
         try
         {
-            return SecretAssignment.Replace(value, match =>
+            var maskeli = SecretAssignment.Replace(value, match =>
                 $"{match.Groups["key"].Value}{match.Groups["sep"].Value}{Mask}");
+
+            // Anahtarsız "Bearer <jeton>" biçimi ikinci geçişte yakalanır. Şema ADI korunur ki
+            // kayıt "burada bir kimlik bilgisi vardı" bilgisini kaybetmesin.
+            return SchemeCredential.Replace(maskeli, match =>
+                $"{match.Groups["scheme"].Value} {Mask}");
         }
         catch (RegexMatchTimeoutException)
         {

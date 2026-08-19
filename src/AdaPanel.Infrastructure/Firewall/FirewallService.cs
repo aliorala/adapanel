@@ -7,10 +7,29 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Firewall;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Firewall;
 
-public sealed class FirewallService : IFirewallService
+/// <summary>
+/// Windows Defender Firewall kurallarını PowerShell üzerinden yönetir.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden günlükçü (ILogger) var:</b> bu serviste ölçüm başarısızlığını "sorun yok" gibi gösteren
+/// iki yutan <c>catch</c> bloğu var ve ikisi de sunucunun ağ maruziyeti hakkında YANLIŞ bir tablo
+/// çizebilir: TCP dinleyici tablosu okunamazsa açık portlar "dinlenmiyor", kural okuması patlarsa
+/// açık portlar "kapalı" görünür. Kullanıcıya doğru olan davranış zaten seçilmiş (ÖLÇEMEDİK
+/// durumunu güvenli tarafa yuvarlamak), ama sebep hiçbir yere yazılmıyordu — yani panel yanlış
+/// bilgi gösterirken sunucuda bunun izi bile yoktu. Günlükçü, o iki noktada NEDENİ kaydeder.
+/// </para>
+/// <para>
+/// Kural değişikliklerinin DENETİM kaydı burada değil <c>FirewallController</c>'da yazılır: kim/
+/// nereden bilgisi HTTP bağlamındadır ve bu servis arka plan yollarından da (panel erişimi kurulumu,
+/// alan adı onarımı) çağrılır.
+/// </para>
+/// </remarks>
+public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewallService
 {
     public async Task<IReadOnlyCollection<FirewallRuleDto>> GetRulesAsync(CancellationToken cancellationToken = default)
     {
@@ -48,8 +67,14 @@ public sealed class FirewallService : IFirewallService
         {
             listeners = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
         }
-        catch
+        catch (Exception exception)
         {
+            // ÖLÇEMEDİK ≠ SORUN YOK: boş liste, panelde her portun "dinlenmiyor" görünmesine yol
+            // açar. Davranış bilerek böyle (uydurma bir "açık" listesi göstermektense boş göstermek),
+            // ama sebebi günlüğe düşmezse yönetici panelin yanlış bilgi verdiğini hiç öğrenemez.
+            logger.LogWarning(
+                exception,
+                "TCP dinleyici tablosu okunamadi; port durumlari 'dinlenmiyor' olarak gosterilecek.");
             listeners = [];
         }
 
@@ -124,7 +149,7 @@ public sealed class FirewallService : IFirewallService
     // Etkin inbound Allow (TCP veya Any protokol) kurallarını okuyup port kapsamını çıkarır.
     // "Any" port -> tüm TCP kapsanır; "5000-5100" -> aralık; "587" -> tek port. AdaPanel kuralları DAHİL
     // tüm kurallara bakar (IIS'in 80/443 kuralları da sayılır). Hata olursa kapsam boş döner (engelli görünür).
-    private static async Task<(bool CoversAllTcp, List<(int Lo, int Hi)>? Ranges)> ReadAllowCoverageAsync(CancellationToken cancellationToken)
+    private async Task<(bool CoversAllTcp, List<(int Lo, int Hi)>? Ranges)> ReadAllowCoverageAsync(CancellationToken cancellationToken)
     {
         var script = """
             # HIZ: kural basina Get-NetFirewallPortFilter cagirmak COM uzerinden N ayri sorgu demek
@@ -161,6 +186,10 @@ public sealed class FirewallService : IFirewallService
             // gercek uyarilara olan guveni yok eder.
             if (!result.Success || !result.StandardOutput.Contains("ADAPANEL-KURAL=", StringComparison.Ordinal))
             {
+                logger.LogWarning(
+                    "Guvenlik duvari izin kurallari OKUNAMADI (cikis kodu {ExitCode}); port kapsami 'olcemedik' sayiliyor. Hata: {Error}",
+                    result.ExitCode,
+                    result.StandardError);
                 return (false, null);
             }
 
@@ -169,10 +198,20 @@ public sealed class FirewallService : IFirewallService
 
             // Hic kural okunamadiysa da olcum SAYILMAZ: bir Windows sunucusunda etkin gelen
             // izin kuralinin sifir olmasi gercekci degildir, okuma basarisiz olmustur.
-            return rows.Count() == 0 ? (false, null) : (coversAll, ranges);
+            if (rows.Length == 0)
+            {
+                logger.LogWarning(
+                    "Guvenlik duvarinda hic etkin gelen izin kurali cozulemedi; bu gercekci olmadigi icin olcum yapilmamis sayiliyor.");
+                return (false, null);
+            }
+
+            return (coversAll, ranges);
         }
-        catch
+        catch (Exception exception)
         {
+            logger.LogWarning(
+                exception,
+                "Guvenlik duvari kapsami cozulemedi; port durumlari 'olcemedik' olarak dondurulecek.");
             return (false, null);
         }
     }

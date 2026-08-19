@@ -2,6 +2,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Health;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -26,7 +27,8 @@ namespace AdaPanel.Api.Controllers;
 public sealed class SiteHealthController(
     ISiteHealthService siteHealthService,
     IDomainRefreshService domainRefreshService,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IAuditService auditService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<SiteHealthDto>>> GetAsync(string siteName, CancellationToken cancellationToken)
@@ -61,6 +63,34 @@ public sealed class SiteHealthController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await domainRefreshService.RefreshAsync(siteName, cancellationToken);
+
+        // DENETİM KAYDI: "onarım" adı zararsız görünür ama bu uç DNS KAYDI EKLER, posta sunucusunun
+        // TLS sertifikasını değiştirir ve önizleme bağlamalarını KALDIRIR — hepsi sitenin dışarıdan
+        // görünen davranışını değiştirir. Üstelik sunucu geneli yan etkileri vardır (posta sunucusu
+        // TEKTİR, bir kiracının onarımı hepsini etkiler). NE YAPILDIĞI sayı sayı yazılır; "onarıldı"
+        // demek, neyin değiştiğini söylemez.
+        Guid? siteSahibi = null;
+        try
+        {
+            siteSahibi = await customerScopes.GetSiteOwnerUserIdAsync(siteName, cancellationToken);
+        }
+        catch
+        {
+            // Sahip çözülemedi → kayıt sunucu geneli yazılır.
+        }
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "site.health.repaired",
+            $"site:{siteName}",
+            $"Site repair applied to zone '{result.ZoneName}': "
+            + $"{result.AddedDnsRecords.Count} DNS record(s) added, "
+            + $"{result.AppliedMailRecords} mail record(s) applied, "
+            + $"mail certificate refreshed: {result.MailCertificateRefreshed}, "
+            + $"{result.RemovedPreviewBindings} preview binding(s) removed"
+            + (string.IsNullOrWhiteSpace(result.Error) ? "." : $"; error: {result.Error}"),
+            siteSahibi);
+
         return Ok(ApiResponse<DomainRefreshResultDto>.Ok(result, "health.domains_refreshed"));
     }
 }
