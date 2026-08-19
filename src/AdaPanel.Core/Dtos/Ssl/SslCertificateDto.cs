@@ -39,6 +39,32 @@ public sealed class SslCertificateDto
     public int Port { get; set; }
 
     /// <summary>
+    /// Kayıttaki sertifika ŞU AN sertifika deposunda duruyor mu. <c>null</c> = ÖLÇÜLEMEDİ.
+    /// <para>
+    /// Bu kayıt bir zamanlar YALNIZCA sertifika alınırken yazılıyor, sonra bir daha hiç
+    /// doğrulanmıyordu. İki yanlış sonucu vardı: (1) win-acme sertifikayı sorunsuz yenilediğinde
+    /// kayıttaki eski <see cref="NotAfterUtc"/> olduğu yerde kalıyor, panel her gün "süresi doldu"
+    /// e-postası atıyordu (uyarı körlüğü); (2) sertifika depodan silindiğinde kayıt hâlâ
+    /// "geçerli, 60 gün kaldı" diyordu.
+    /// </para>
+    /// <para>
+    /// <b>false ile null aynı şey değildir.</b> false = depo OKUNDU, sertifika YOK. null = depo
+    /// okunamadı; bu durumda kayda dokunulmaz, çünkü geçici bir arızayı kalıcı bir "yok" hükmüne
+    /// çevirmek en kötü sonuçtur.
+    /// </para>
+    /// </summary>
+    public bool? IsPresentInStore { get; set; }
+
+    /// <summary>
+    /// Bu kaydın gerçekle en son NE ZAMAN karşılaştırıldığı (UTC). <c>null</c> = hiç doğrulanmadı.
+    /// <para>
+    /// Kaydın kendisi kadar, kaydın YAŞI da bilgidir: doğrulama tarihi eskiyse ekrandaki "60 gün
+    /// kaldı" ifadesine ne kadar güvenileceği buradan anlaşılır.
+    /// </para>
+    /// </summary>
+    public DateTime? LastVerifiedUtc { get; set; }
+
+    /// <summary>
     /// Let's Encrypt sertifikası alınamadığı için kendinden imzalıya düşüldüyse SEBEBİ.
     /// <para>
     /// Boş değilse: ekranda yeşil bir "SSL kuruldu" satırı gösterilmemeli. Sessiz düşüş,

@@ -67,6 +67,21 @@ public sealed class SslController(
             customerScopes, iisSiteService, mailService, User, request.HostName, request.SiteName, logger, cancellationToken);
 
         var certificate = await sslService.IssueLetsEncryptAsync(request, cancellationToken);
+
+        // Sertifika ALMAK da durum değiştiren bir işlemdir: siteye HTTPS bağlaması ekler,
+        // HTTP→HTTPS yönlendirmesini açar ve sunucu adına Let's Encrypt'e istek yapar (hesap
+        // limitleri paylaşımlıdır). "Bu alan adına sertifikayı kim, ne zaman aldı" sorusunun
+        // cevapsız kalmaması için iz bırakılır. PAROLA/ANAHTAR yazılmaz.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ssl.issued",
+            $"ssl:{certificate.SiteName}",
+            $"Sertifika alindi: {certificate.HostName} (kaynak={certificate.Source}, " +
+            $"joker={request.Wildcard}, staging={request.UseStaging}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}" +
+            (string.IsNullOrWhiteSpace(certificate.FallbackReason)
+                ? ")"
+                : $", kendinden-imzaliya dusuldu: {certificate.FallbackReason})"));
+
         await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
     }
@@ -86,6 +101,22 @@ public sealed class SslController(
             customerScopes, iisSiteService, mailService, User, request.HostName, request.SiteName, logger, cancellationToken);
 
         var certificate = await sslService.ImportCertificateAsync(request, cancellationToken);
+
+        // DENETİM KAYDI BURADA EN ÇOK GEREKİYOR: bu uç sunucuya DIŞARIDAN gelen bir sertifikayı
+        // ÖZEL ANAHTARIYLA birlikte LocalMachine deposuna yazar ve siteye bağlar. Olay sonrası
+        // "bu sertifikayı sunucuya kim koydu" sorusunun cevabı başka hiçbir yerde yok.
+        //
+        // Kayda YALNIZCA sertifikanın kendi kimliği (parmak izi, konu, bitiş) yazılır;
+        // request.Base64Content ve request.Password ASLA yazılmaz — denetim kaydı yedeklere
+        // taşınır ve orada bir özel anahtar/parola kopyası bulunmamalıdır.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ssl.imported",
+            $"ssl:{certificate.SiteName}",
+            $"Sertifika ice aktarildi: {certificate.HostName}:{certificate.Port} " +
+            $"(parmak izi={certificate.Thumbprint}, konu={certificate.Subject}, " +
+            $"kaynak={certificate.Source}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}).");
+
         await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
     }
@@ -114,6 +145,19 @@ public sealed class SslController(
     public async Task<ActionResult<ApiResponse<RenewAllResultDto>>> RenewAllAsync(CancellationToken cancellationToken)
     {
         var result = await sslService.RenewAllAsync(cancellationToken);
+
+        // SUNUCU GENELİ bir işlem: tek çağrıda her sitenin sertifikası yenilenmeye çalışılır ve
+        // Let's Encrypt hız limitleri tüketilir. Kayıt, sonucu OLDUĞU GİBİ yazar — "ölçülemedi"
+        // de bir sonuçtur ve kayıtta "başarılı" görünmemelidir.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ssl.renew_all",
+            "ssl:*",
+            $"Tum sertifikalar icin yenileme calistirildi. Olculdu={result.Measured}, " +
+            $"yenilenen={result.RenewedCount}, dogrulanan={result.VerifiedCount}, " +
+            $"depoda-yok={result.MissingFromStoreCount}, dogrulanamayan={result.UnverifiedCount}" +
+            (string.IsNullOrWhiteSpace(result.FailureReason) ? "." : $". Sebep: {result.FailureReason}"));
+
         return Ok(ApiResponse<RenewAllResultDto>.Ok(result, "ssl.renewed"));
     }
 
@@ -122,6 +166,17 @@ public sealed class SslController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
         var workspace = await sslService.SetHttpsRedirectAsync(request, cancellationToken);
+
+        // Yönlendirmenin KAPATILMASI bir güvenlik gerilemesidir (site düz HTTP'den servis edilmeye
+        // başlar) ve dışarıdan bakan biri için sessizdir. AÇILMASI da erişilebilirliği etkiler:
+        // sertifika yoksa site erişilemez hâle gelebilir. İki yön de kayda geçer.
+        await auditService.AuditAsync(
+            HttpContext,
+            "ssl.https_redirect_changed",
+            $"ssl:{workspace.SiteName}",
+            $"HTTP->HTTPS yonlendirmesi {(request.Enabled ? "ACILDI" : "KAPATILDI")}. " +
+            $"Uygulanan durum (olculmus)={workspace.HttpsRedirectEnabled}.");
+
         return Ok(ApiResponse<SslWorkspaceDto>.Ok(workspace, "ssl.https_redirect_saved"));
     }
 

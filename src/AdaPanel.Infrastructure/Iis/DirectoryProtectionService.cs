@@ -21,10 +21,92 @@ public sealed class DirectoryProtectionService(
     public async Task<IReadOnlyCollection<ProtectedDirectoryDto>> GetProtectedDirectoriesAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var all = await fileStore.ReadAsync(StatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken);
-        return all
+        var kayitlar = all
             .Where(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
             .OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        if (kayitlar.Length == 0)
+        {
+            return kayitlar;
+        }
+
+        // KAYIT DEĞİL, DOSYA. Listeleme uzun süre yalnızca protected-dirs.json'a bakıyordu; oysa
+        // korumanın kendisi klasördeki web.config'de yaşıyor ve o dosya panelin dışından (FTP,
+        // dosya yöneticisi, git dağıtımı, SiteBuilder yayını, WordPress kurulumu) silinebiliyor.
+        // ProtectAsync ve UnprotectAsync bu dosyayı Marker ile okumayı ZATEN biliyor — listeleme
+        // aynı ölçüme başvurmadığı için panel "korumalı" derken klasör herkese açık kalabiliyordu.
+        string? siteRoot = null;
+        try
+        {
+            siteRoot = await GetSiteRootAsync(siteName, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Site kökü okunamadı (IIS yok/erişilemiyor): ÖLÇÜLEMEDİ. Kayıtları "koruma gitti"
+            // diye işaretlemek, IIS'in bir anlık arızasını kalıcı bir güvenlik alarmına çevirirdi.
+        }
+
+        foreach (var kayit in kayitlar)
+        {
+            kayit.IsActive = MeasureProtection(siteRoot, kayit.RelativePath);
+        }
+
+        return kayitlar;
+    }
+
+    /// <summary>
+    /// Korumanın klasörde gerçekten durup durmadığını ÖLÇER.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> = panelin yazdığı (Marker'lı) web.config yerinde. <c>false</c> = klasör okundu,
+    /// koruma yok (dosya silinmiş ya da başkasının web.config'i ile değiştirilmiş).
+    /// <c>null</c> = ÖLÇÜLEMEDİ (site kökü bilinmiyor, yol çözülemedi, dosya kilitli).
+    /// </returns>
+    internal static bool? MeasureProtection(string? siteRoot, string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(siteRoot))
+        {
+            return null;
+        }
+
+        try
+        {
+            return MeasureProtectionInFolder(ResolveFolder(siteRoot, SanitizeRelativePath(relativePath)));
+        }
+        catch (AppException)
+        {
+            // Yol çözülemedi (kayıttaki göreli yol artık geçersiz): ÖLÇEMEDİK.
+            return null;
+        }
+    }
+
+    /// <summary>Verilen klasörde panelin koruma dosyası duruyor mu (aynı sözleşme, klasör verilmiş hâli).</summary>
+    private static bool? MeasureProtectionInFolder(string folder)
+    {
+        try
+        {
+            var webConfig = Path.Combine(folder, "web.config");
+
+            if (!File.Exists(webConfig))
+            {
+                // ÖLÇÜLDÜ: koruma dosyası yok (klasörün kendisi de silinmiş olabilir) → koruma YOK.
+                return false;
+            }
+
+            // Marker YOKSA dosya bizim değildir: kullanıcının/aracın kendi web.config'i korumanın
+            // üzerine yazılmış demektir. "Dosya var" ile "koruma var" aynı şey değildir.
+            return File.ReadAllText(webConfig).Contains(Marker, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or NotSupportedException)
+        {
+            // Kilitli dosya / erişilemeyen yol: ÖLÇEMEDİK. "Koruma yok" DEMİYORUZ.
+            return null;
+        }
     }
 
     public async Task<ProtectedDirectoryDto> ProtectAsync(string siteName, ProtectDirectoryRequest request, CancellationToken cancellationToken = default)
@@ -89,6 +171,11 @@ public sealed class DirectoryProtectionService(
                               string.Equals(item.RelativePath, relative, StringComparison.OrdinalIgnoreCase));
         all.Add(dto);
         await fileStore.WriteAsync(StatePath, all, cancellationToken);
+
+        // ÖLÇÜM, kayıttan SONRA ve dosyanın kendisinden. Burada sabit "true" yazmak, bu düzeltmenin
+        // kapattığı hatanın tam kendisi olurdu: yazma başarısız olduysa (disk dolu, ACL) panel yine
+        // "korumalı" derdi. Kayıt dosyaya IsActive'siz gider; doğruyu her zaman ölçüm söyler.
+        dto.IsActive = MeasureProtectionInFolder(folder);
 
         return dto;
     }

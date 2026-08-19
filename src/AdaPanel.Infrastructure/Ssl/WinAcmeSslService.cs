@@ -29,7 +29,13 @@ public sealed class WinAcmeSslService(
     public async Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var states = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+
+        // KAYIT DEĞİL, GERÇEK. ssl.json bir zamanlar yalnız sertifika ALINIRKEN yazılıyordu ve bir
+        // daha hiç doğrulanmıyordu; ekran da, günlük uyarı e-postası da o donmuş kaydı gerçek
+        // sanıyordu. Listeleme artık kaydı sertifika deposuyla uzlaştırır (bkz. SslStateReconciler).
+        var states = await ReconcileStateAsync(
+            record => string.Equals(record.SiteName, site.Name, StringComparison.OrdinalIgnoreCase),
+            cancellationToken);
 
         return new SslWorkspaceDto
         {
@@ -177,12 +183,20 @@ public sealed class WinAcmeSslService(
         if (string.IsNullOrWhiteSpace(wacs))
         {
             // OLCUM YAPILAMADI. "0 sertifika yenilendi" DEMEK DEGIL -- yenileme hic denenemedi.
+            //
+            // Ama KAYDI DOGRULAMAK win-acme'ye BAGLI DEGIL: sertifika deposu her hâlükârda
+            // okunabilir. win-acme kurulu olmasa da (ör. sertifikalar elle içe aktarılmışsa)
+            // kaydın gerçekle uyuşup uyuşmadığı burada ölçülür.
+            var dogrulamaYok = await ReconcileWithCountsAsync(cancellationToken);
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
                 Measured = false,
                 FailureReason = "win-acme kurulu degil; sertifikalar yenilenemiyor.",
-                Output = "win-acme kurulu degil."
+                Output = "win-acme kurulu degil.",
+                VerifiedCount = dogrulamaYok.Verified,
+                MissingFromStoreCount = dogrulamaYok.MissingFromStore,
+                UnverifiedCount = dogrulamaYok.Unmeasured
             };
         }
 
@@ -200,13 +214,149 @@ public sealed class WinAcmeSslService(
             @"(?im)^\s*.*renew(al|ed).*succe",
             System.Text.RegularExpressions.RegexOptions.Multiline).Count;
 
+        // YENILEMEDEN SONRA KAYIT MUTLAKA TAZELENIR.
+        //
+        // Bu satirin yoklugu, panelin en gurultulu yanlis alarminin kok nedeniydi: win-acme
+        // sertifikayi sorunsuz yeniler, YENI parmak izi ve YENI bitis tarihiyle depoya koyar --
+        // ama ssl.json'daki kayit sertifikanin ILK alindigi gunden kalma tarihi tasimaya devam
+        // ederdi. Danisman ekrani "sertifikanin suresi DOLDU" kritik uyarisini, otomasyon ise her
+        // gun ayni uyari e-postasini uretirdi. Kullanici bir sure sonra butun SSL uyarilarina
+        // bakmaz olur; gercek bir bitis de o gurultunun icinde kaybolurdu.
+        var dogrulama = await ReconcileWithCountsAsync(cancellationToken);
+
         return new RenewAllResultDto
         {
             RenewedCount = yenilenen,
             Measured = result.Success,
             FailureReason = result.Success ? string.Empty : "win-acme yenileme komutu basarisiz oldu.",
-            Output = cikti
+            Output = cikti,
+            VerifiedCount = dogrulama.Verified,
+            MissingFromStoreCount = dogrulama.MissingFromStore,
+            UnverifiedCount = dogrulama.Unmeasured
         };
+    }
+
+    /// <summary>Tüm kayıtları uzlaştırır ve sayımı döner (kayıtların kendisi burada gerekmiyor).</summary>
+    private async Task<SslReconcileResult> ReconcileWithCountsAsync(CancellationToken cancellationToken)
+    {
+        var (_, sonuc) = await ReconcileStateInternalAsync(_ => true, cancellationToken);
+        return sonuc;
+    }
+
+    /// <summary>
+    /// <c>config/ssl.json</c> kayıtlarını sertifika deposundaki gerçekle uzlaştırır ve
+    /// (gerekiyorsa) diske yazar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aynı disiplin bu depoda zaten kanıtlanmıştı: <c>MailService.SyncCertificateAsync</c> PEM'i
+    /// diskten geri okuyup içerik özeti değiştiyse <c>NotAfterUtc</c>'yi tazeliyor. Site SSL'i bu
+    /// disiplinin dışında kalmıştı.
+    /// </para>
+    /// <para>
+    /// ÖLÇÜM dosya kilidinin DIŞINDA yapılır (sertifika deposu okuması yavaş olabilir ve
+    /// ssl.json kilidini o süre boyunca tutmak eşzamanlı sertifika alımını bloklardı); sonuç,
+    /// kilit altında yeniden okunan taze listeye <see cref="SslStateReconciler.Key"/> ile eşlenir.
+    /// </para>
+    /// </remarks>
+    private async Task<SslCertificateDto[]> ReconcileStateAsync(
+        Func<SslCertificateDto, bool> kapsam,
+        CancellationToken cancellationToken)
+    {
+        var (kayitlar, _) = await ReconcileStateInternalAsync(kapsam, cancellationToken);
+        return kayitlar;
+    }
+
+    private async Task<(SslCertificateDto[] Kayitlar, SslReconcileResult Sonuc)> ReconcileStateInternalAsync(
+        Func<SslCertificateDto, bool> kapsam,
+        CancellationToken cancellationToken)
+    {
+        var mevcut = await fileStore.ReadAsync(StatePath, Array.Empty<SslCertificateDto>(), cancellationToken);
+        var hedefler = mevcut.Where(kapsam).ToArray();
+        if (hedefler.Length == 0)
+        {
+            return (mevcut, new SslReconcileResult(false, 0, 0, 0));
+        }
+
+        var olcumler = new Dictionary<string, SslStoreProbe>(StringComparer.Ordinal);
+        foreach (var hedef in hedefler)
+        {
+            olcumler[SslStateReconciler.Key(hedef)] = ProbeCertificate(hedef);
+        }
+
+        SslStoreProbe Olc(SslCertificateDto kayit) =>
+            olcumler.TryGetValue(SslStateReconciler.Key(kayit), out var olcum)
+                ? olcum
+                // Kapsam DIŞINDAKİ kayıt bu turda ölçülmedi; "yok" demek yerine dokunmuyoruz.
+                : SslStoreProbe.Unmeasured();
+
+        var now = DateTime.UtcNow;
+        var sonuc = SslStateReconciler.Reconcile(mevcut, Olc, now);
+
+        if (!sonuc.ShouldPersist)
+        {
+            // Gerçek değişmemiş: gereksiz yazma yok. Elde tutulan liste zaten tazelenmiş durumda.
+            return (mevcut, sonuc);
+        }
+
+        var yazilan = await fileStore.UpdateAsync(
+            StatePath,
+            Array.Empty<SslCertificateDto>(),
+            existing =>
+            {
+                // Kilit ALTINDA taze içerik üzerinde tekrar uygulanır: ölçüm sırasında başka bir
+                // akış (sertifika alma) yeni kayıt eklediyse onu EZMEYELİM.
+                SslStateReconciler.Reconcile(existing, Olc, now);
+                return existing;
+            },
+            cancellationToken);
+
+        return (yazilan, sonuc);
+    }
+
+    /// <summary>
+    /// Tek bir kaydın karşılığını sertifika deposunda ARAR.
+    /// </summary>
+    /// <remarks>
+    /// Depo hiç açılamadıysa <see cref="SslStoreProbe.Unmeasured"/> döner — "sertifika yok"
+    /// DEMEZ. Aksi hâlde erişim hatası yaşayan bir sunucuda bütün kayıtlar tek turda
+    /// "depoda yok" damgası yer ve geçici bir arıza kalıcı yanlış duruma dönüşürdü.
+    /// </remarks>
+    private static SslStoreProbe ProbeCertificate(SslCertificateDto kayit)
+    {
+        if (string.IsNullOrWhiteSpace(kayit.HostName))
+        {
+            // Host adı yoksa arama ölçütü de yok: ÖLÇEMEDİK.
+            return SslStoreProbe.Unmeasured();
+        }
+
+        var sertifika = FindBestCertificate(kayit.HostName, out var depoOkunabildi);
+        return BuildProbe(depoOkunabildi, sertifika);
+    }
+
+    /// <summary>
+    /// Depo aramasının sonucunu ÖLÇÜM SONUCUNA çevirir.
+    /// </summary>
+    /// <remarks>
+    /// Ayrı ve <c>internal</c> olmasının sebebi test edilebilirlik değil, KORUNABİLİRLİKTİR:
+    /// "depo okunamadı" ile "sertifika bulunamadı" arasındaki ayrım bu düzeltmenin tam kalbidir ve
+    /// bir gün birinin <c>storesReadable</c> kontrolünü sadeleştirip silmesi, hatayı sessizce geri
+    /// getirirdi. Sözleşme burada, çalıştırılabilir bir testle sabitlenir.
+    /// </remarks>
+    internal static SslStoreProbe BuildProbe(bool storesReadable, X509Certificate2? certificate)
+    {
+        if (!storesReadable)
+        {
+            // Hiçbir depo okunamadı: "sertifika yok" DEĞİL, "BİLMİYORUZ".
+            return SslStoreProbe.Unmeasured();
+        }
+
+        return certificate is null
+            ? SslStoreProbe.NotFound()
+            : SslStoreProbe.Found(
+                certificate.Thumbprint ?? string.Empty,
+                certificate.NotAfter.ToUniversalTime(),
+                ResolveCertificateSource(certificate));
     }
 
     public async Task<SslWorkspaceDto> SetHttpsRedirectAsync(SetHttpsRedirectRequest request, CancellationToken cancellationToken = default)
@@ -865,6 +1015,15 @@ public sealed class WinAcmeSslService(
     }
 
     private static X509Certificate2? FindBestCertificate(string hostName)
+        => FindBestCertificate(hostName, out _);
+
+    /// <param name="storesReadable">
+    /// EN AZ BİR depo gerçekten açılıp okunabildi mi. false ise sonuç "sertifika yok" değil,
+    /// "BİLMİYORUZ" demektir; çağıran bunu ayırt etmek zorundadır (bkz. <see cref="ProbeCertificate"/>).
+    /// Eskiden depo açma hatası sessizce <c>continue</c> ile yutuluyordu ve dışarıdan
+    /// "bulunamadı"dan ayırt edilemiyordu.
+    /// </param>
+    private static X509Certificate2? FindBestCertificate(string hostName, out bool storesReadable)
     {
         // win-acme, IIS kurulumunda LE sertifikasını LocalMachine\WebHosting deposuna koyar
         // (My DEĞİL). Önce WebHosting taranır; bulunamazsa My. Özel anahtarlı (bağlanabilir)
@@ -876,6 +1035,7 @@ public sealed class WinAcmeSslService(
             ("My", StoreLocation.CurrentUser)
         };
 
+        storesReadable = false;
         X509Certificate2? fallback = null;
         foreach (var (name, location) in stores)
         {
@@ -892,11 +1052,22 @@ public sealed class WinAcmeSslService(
 
             using (store)
             {
-                var matches = store.Certificates
-                    .OfType<X509Certificate2>()
-                    .Where(cert => cert.Subject.Contains($"CN={hostName}", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(cert => cert.NotAfter)
-                    .ToList();
+                List<X509Certificate2> matches;
+                try
+                {
+                    matches = store.Certificates
+                        .OfType<X509Certificate2>()
+                        .Where(cert => cert.Subject.Contains($"CN={hostName}", StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(cert => cert.NotAfter)
+                        .ToList();
+                }
+                catch
+                {
+                    // Depo açıldı ama içeriği okunamadı: bu depo ÖLÇÜLMÜŞ sayılmaz.
+                    continue;
+                }
+
+                storesReadable = true;
 
                 var withKey = matches.FirstOrDefault(cert => cert.HasPrivateKey);
                 if (withKey is not null)
@@ -1252,7 +1423,12 @@ public sealed class WinAcmeSslService(
             // başarısızken bile "https binding=True" demesine ve kullanıcıyı yanlış yöne
             // göndermesine yol açıyordu.
             IsHttpsBindingPresent = httpsBindingPresent,
-            Port = 443
+            Port = 443,
+            // Sertifika bu akışta AZ ÖNCE depoya yazıldı (PersistCertificate) — yani varlığı
+            // tahmin değil, bu isteğin kendi ölçümü. Damgayı burada basmak, ilk uzlaştırmaya
+            // kadar kaydın "hiç doğrulanmadı" görünmesini engeller.
+            IsPresentInStore = true,
+            LastVerifiedUtc = DateTime.UtcNow
         };
     }
 

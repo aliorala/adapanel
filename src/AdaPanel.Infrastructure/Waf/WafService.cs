@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Xml.Linq;
 using AdaPanel.Core.Common;
@@ -15,44 +17,247 @@ public sealed class WafService(
     JsonFileStore fileStore) : IWafService
 {
     private const string StatePath = "config/waf.json";
+
+    /// <summary>
+    /// Panelin yönettiği uygulama havuzu adı öneki. <c>WebAdministrationSiteService</c> ile AYNI
+    /// sözleşme — izolasyonun ölçütü de, site oluşturulurken açılan havuzun adı da budur.
+    /// </summary>
+    private const string ManagedPoolPrefix = "AdaPanel.";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
 
+    /// <summary>
+    /// Sitenin güvenlik durumunu GERÇEKTEN ÖLÇEREK döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eski hâlinde bu metot yalnızca <c>config/waf.json</c>'u okuyordu ve <c>IsIsolated</c>
+    /// gerçeğe SADECE kayıt ilk oluşturulurken bakıyordu. Sonrasında havuz değişse de (elle
+    /// <c>DefaultAppPool</c>'a alınsa da) kayıt "izole" demeye devam ediyordu — üstelik aynı
+    /// DTO'nun içinde gerçek havuz adı yan yana duruyordu, yani ekran kendi kendisiyle çelişiyordu.
+    /// <c>BasicRulesEnabled</c> ile <c>RequestsPerMinute</c> ise sitenin <c>web.config</c>'inde
+    /// yaşıyor: o dosyayı silen/ezen her yol (FTP, dosya yöneticisi, git dağıtımı, SiteBuilder,
+    /// WordPress kurulumu) bu ayarları da götürüyor ve panel bunu hiç görmüyordu.
+    /// </para>
+    /// <para>
+    /// Kayıt tamamen atılmadı: hangi KİMLİĞE ACL verildiği (<c>Principal</c>) dosya sisteminden
+    /// güvenilir biçimde geri türetilemez ve izolasyon sonrası eski kimliğin izni tam da o kayıt
+    /// sayesinde takip ediliyor. Kayıt artık NİYETİ, DTO ise GERÇEĞİ taşır.
+    /// </para>
+    /// <para>
+    /// Okuma yolunda ARTIK YAZMA YOK: eski kod kayıt yoksa dosyaya bir satır ekliyordu; salt-okunur
+    /// bir sorgunun yan etkisi olarak yapılan yazma, eşzamanlı bir güncellemeyle yarışabiliyordu.
+    /// </para>
+    /// </remarks>
     public async Task<SiteSecurityConfigurationDto> GetSiteConfigurationAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var states = (await fileStore.ReadAsync(StatePath, Array.Empty<SecurityState>(), cancellationToken)).ToList();
+        var states = await fileStore.ReadAsync(StatePath, Array.Empty<SecurityState>(), cancellationToken);
         var state = states.FirstOrDefault(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
-        if (state is null)
-        {
-            state = new SecurityState
-            {
-                SiteName = site.Name,
-                IsIsolated = site.ApplicationPoolName.StartsWith("AdaPanel.", StringComparison.OrdinalIgnoreCase),
-                RequestsPerMinute = 0,
-                Principal = $"IIS AppPool\\{site.ApplicationPoolName}"
-            };
-            states.Add(state);
-            await fileStore.WriteAsync(StatePath, states, cancellationToken);
-        }
+
+        var principal = state is null || string.IsNullOrWhiteSpace(state.Principal)
+            ? $"IIS AppPool\\{site.ApplicationPoolName}"
+            : state.Principal;
+
+        var applicationRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+            ? site.PhysicalPath
+            : site.ApplicationRootPath;
+
+        var izolasyon = MeasureIsolation(site.ApplicationPoolName);
+        var acl = MeasureFolderAcl(applicationRoot, principal);
+        var webConfig = MeasureWebConfig(WebConfigPath(site.PhysicalPath));
 
         return new SiteSecurityConfigurationDto
         {
             SiteName = site.Name,
             ApplicationPoolName = site.ApplicationPoolName,
             PhysicalPath = site.PhysicalPath,
-            IsIsolated = state.IsIsolated,
-            FolderAclApplied = state.FolderAclApplied,
-            BasicRulesEnabled = state.BasicRulesEnabled,
-            RequestsPerMinute = state.RequestsPerMinute,
-            Principal = state.Principal
+
+            // ÖLÇÜM ÖNCELİKLİ; ölçülemediyse panelin son bildiği değere düşülür ve bu
+            // *Measured=false ile SÖYLENİR. Ölçülemeyeni "kapalı" göstermek yanlış alarm üretir.
+            IsIsolated = izolasyon ?? state?.IsIsolated ?? false,
+            IsIsolatedMeasured = izolasyon.HasValue,
+
+            FolderAclApplied = acl ?? state?.FolderAclApplied ?? false,
+            FolderAclMeasured = acl.HasValue,
+
+            BasicRulesEnabled = webConfig.BasicRules ?? state?.BasicRulesEnabled ?? false,
+            BasicRulesMeasured = webConfig.BasicRules.HasValue,
+
+            RequestsPerMinute = webConfig.RequestsPerMinute ?? state?.RequestsPerMinute ?? 0,
+            RateLimitMeasured = webConfig.RequestsPerMinute.HasValue,
+
+            Principal = principal
         };
     }
+
+    private static string WebConfigPath(string physicalPath) => Path.Combine(physicalPath ?? string.Empty, "web.config");
+
+    /// <summary>
+    /// Site KENDİ havuzunda mı — IIS'ten taze okunan havuz adından ölçülür.
+    /// </summary>
+    /// <returns><c>null</c> = havuz adı okunamadı (ÖLÇÜLEMEDİ).</returns>
+    /// <remarks>
+    /// Ölçüt, <c>WebAdministrationSiteService</c>'in yönettiği havuz adı önekidir
+    /// (<c>AdaPanel.</c>) — panelin izolasyonda oluşturduğu havuz da (<c>IsolateAppPoolAsync</c>)
+    /// site oluşturulurken açılan havuz da bu öneki taşır.
+    /// </remarks>
+    internal static bool? MeasureIsolation(string? applicationPoolName)
+    {
+        if (string.IsNullOrWhiteSpace(applicationPoolName))
+        {
+            return null;
+        }
+
+        return applicationPoolName.StartsWith(ManagedPoolPrefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Klasör ACL'i GERÇEKTEN uygulanmış mı — dosya sisteminden ölçülür.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> = miras kırılmış VE kimliğe açık (explicit) izin var (yani
+    /// <see cref="ApplyFolderAclAsync"/>'in yaptığı şey yerinde duruyor).
+    /// <c>false</c> = klasör okundu, bu ikisinden biri yok.
+    /// <c>null</c> = ÖLÇÜLEMEDİ (ACL okunamadı, kimlik çözülemedi).
+    /// </returns>
+    internal static bool? MeasureFolderAcl(string? folder, string principal)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || string.IsNullOrWhiteSpace(principal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var info = new DirectoryInfo(folder);
+            if (!info.Exists)
+            {
+                // ÖLÇÜLDÜ: klasör yok → uygulanmış bir ACL de yok.
+                return false;
+            }
+
+            var security = info.GetAccessControl(AccessControlSections.Access);
+
+            // ApplyFolderAclAsync `icacls /inheritance:r` çalıştırır: mirasın kırık OLMAMASI,
+            // izolasyonun geri alındığı (diğer sitelerin havuz kimlikleri tekrar okuyabildiği)
+            // anlamına gelir. Yalnız "izin var mı" diye bakmak bu geri alınışı gizlerdi.
+            if (!security.AreAccessRulesProtected)
+            {
+                return false;
+            }
+
+            foreach (var rule in security.GetAccessRules(true, false, typeof(NTAccount)).Cast<FileSystemAccessRule>())
+            {
+                if (rule.AccessControlType == AccessControlType.Allow &&
+                    string.Equals(rule.IdentityReference.Value, principal, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // ACL okunamadı / SID çözülemedi: ÖLÇEMEDİK. "Uygulanmamış" DEMİYORUZ.
+            return null;
+        }
+    }
+
+    /// <summary>Sitenin <c>web.config</c>'inden okunan ölçüm. Alanlar <c>null</c> ise ÖLÇÜLEMEDİ.</summary>
+    internal sealed record WebConfigMeasurement(bool? BasicRules, int? RequestsPerMinute);
+
+    /// <summary>
+    /// Temel kurallar ve hız sınırı sitenin <c>web.config</c>'inde DURUYOR MU — dosyadan ölçülür.
+    /// </summary>
+    /// <remarks>
+    /// Dosyanın hiç OLMAMASI ölçülebilir bir gerçektir: kural da yoktur, sınır da (false / 0).
+    /// Dosyanın OKUNAMAMASI (kilitli, bozuk XML) ise ölçümün yapılamadığı anlamına gelir; bu iki
+    /// hâli aynı kefeye koymak, panelin bir dosya kilidini "güvenlik kuralları kaldırılmış" diye
+    /// raporlamasına yol açardı.
+    /// </remarks>
+    internal static WebConfigMeasurement MeasureWebConfig(string webConfigPath)
+    {
+        try
+        {
+            if (!File.Exists(webConfigPath))
+            {
+                return new WebConfigMeasurement(false, 0);
+            }
+
+            var systemWebServer = XDocument.Load(webConfigPath)
+                .Element("configuration")?
+                .Element("system.webServer");
+
+            if (systemWebServer is null)
+            {
+                return new WebConfigMeasurement(false, 0);
+            }
+
+            return new WebConfigMeasurement(
+                MeasureBasicRules(systemWebServer),
+                MeasureRateLimit(systemWebServer));
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or System.Xml.XmlException
+                or ArgumentException
+                or NotSupportedException)
+        {
+            return new WebConfigMeasurement(null, null);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EnableBasicRulesAsync"/>'in yazdığı HER ŞEY yerinde mi. Yarısı silinmişse cevap
+    /// "hayır"dır: eksik uygulanmış bir sertleştirmeye "açık" demek, olmayan bir korumaya güvenmektir.
+    /// </summary>
+    private static bool MeasureBasicRules(XElement systemWebServer)
+    {
+        var requestFiltering = systemWebServer.Element("security")?.Element("requestFiltering");
+        if (ReadBool(requestFiltering, "removeServerHeader") != true ||
+            ReadBool(requestFiltering, "allowDoubleEscaping") != false)
+        {
+            return false;
+        }
+
+        var customHeaders = systemWebServer.Element("httpProtocol")?.Element("customHeaders");
+        return HasHeader(customHeaders, "X-Frame-Options")
+               && HasHeader(customHeaders, "X-Content-Type-Options")
+               && HasHeader(customHeaders, "Referrer-Policy");
+    }
+
+    private static int MeasureRateLimit(XElement systemWebServer)
+    {
+        var dynamicIpSecurity = systemWebServer.Element("security")?.Element("dynamicIpSecurity");
+        if (dynamicIpSecurity is null || ReadBool(dynamicIpSecurity, "denyByRequestRate") != true)
+        {
+            // Kural kapalıysa sayının bir anlamı yok: sınır YOK.
+            return 0;
+        }
+
+        return int.TryParse((string?)dynamicIpSecurity.Attribute("maxRequests"), out var value) && value > 0
+            ? value
+            : 0;
+    }
+
+    private static bool? ReadBool(XElement? element, string attributeName)
+    {
+        var raw = (string?)element?.Attribute(attributeName);
+        return bool.TryParse(raw, out var value) ? value : null;
+    }
+
+    private static bool HasHeader(XElement? customHeaders, string name)
+        => customHeaders?.Elements("add").Any(element =>
+               string.Equals((string?)element.Attribute("name"), name, StringComparison.OrdinalIgnoreCase)
+               && !string.IsNullOrWhiteSpace((string?)element.Attribute("value"))) == true;
 
     public async Task<SiteSecurityConfigurationDto> IsolateAppPoolAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var targetPool = $"AdaPanel.{site.Name}";
+        var targetPool = ManagedPoolPrefix + site.Name;
 
         try
         {
@@ -165,7 +370,7 @@ public sealed class WafService(
     public async Task<SiteSecurityConfigurationDto> SetRateLimitAsync(string siteName, SetSiteRateLimitRequest request, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var webConfigPath = Path.Combine(site.PhysicalPath, "web.config");
+        var webConfigPath = WebConfigPath(site.PhysicalPath);
         Directory.CreateDirectory(site.PhysicalPath);
         var document = File.Exists(webConfigPath)
             ? XDocument.Load(webConfigPath, LoadOptions.PreserveWhitespace)
@@ -186,7 +391,7 @@ public sealed class WafService(
     public async Task<SiteSecurityConfigurationDto> EnableBasicRulesAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var webConfigPath = Path.Combine(site.PhysicalPath, "web.config");
+        var webConfigPath = WebConfigPath(site.PhysicalPath);
         Directory.CreateDirectory(site.PhysicalPath);
         var document = File.Exists(webConfigPath)
             ? XDocument.Load(webConfigPath, LoadOptions.PreserveWhitespace)
