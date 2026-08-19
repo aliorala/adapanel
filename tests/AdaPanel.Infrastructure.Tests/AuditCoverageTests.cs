@@ -112,29 +112,12 @@ public sealed class AuditCoverageTests
     private static readonly IReadOnlyDictionary<string, string> BaskaTurdaKapatilacaklar = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         // Yedekleme: denetim raporunun P2 başlığındaki ilk madde (geri yükleme canlı veriyi ezer).
-        ["BackupController.cs#BackupSiteAsync"] = "Yedek modülü ayrı iş kolunda.",
-        ["BackupController.cs#BackupDatabaseAsync"] = "Yedek modülü ayrı iş kolunda.",
-        ["BackupController.cs#BackupMailAsync"] = "Yedek modülü ayrı iş kolunda.",
-        ["BackupController.cs#BackupPanelAsync"] = "Yedek modülü ayrı iş kolunda.",
-        ["BackupController.cs#BackupSubscriptionAsync"] = "Yedek modülü ayrı iş kolunda.",
-        ["BackupController.cs#RestoreAsync"] = "GERİ YÜKLEME canlı veriyi ezer — en yüksek öncelikli boşluk, yedek iş kolunda.",
-        ["BackupController.cs#RestoreItemsAsync"] = "Seçmeli geri yükleme — yedek iş kolunda.",
         ["BackupController.cs#DeleteScheduleAsync"] = "Yedek programı silme — yedek iş kolunda.",
         ["BackupController.cs#RunScheduleNowAsync"] = "Elle tetiklenen yedek turu (budama da yapar) — yedek iş kolunda.",
 
         // SSL: sertifika içe aktarma özel anahtar taşır.
-        ["SslController.cs#IssueLetsEncryptAsync"] = "SSL iş kolunda.",
-        ["SslController.cs#ImportAsync"] = "SSL iş kolunda (özel anahtar içe aktarma).",
-        ["SslController.cs#RenewAllAsync"] = "SSL iş kolunda.",
-        ["SslController.cs#SetHttpsRedirectAsync"] = "SSL iş kolunda.",
 
         // Güvenlik: yasak kaldırma ve site izolasyonu.
-        ["SecurityController.cs#UpdateBruteForceAsync"] = "Güvenlik iş kolunda.",
-        ["SecurityController.cs#UnbanAsync"] = "Kaba-kuvvet yasağı kaldırma — güvenlik iş kolunda.",
-        ["SecurityController.cs#IsolateAsync"] = "Güvenlik iş kolunda.",
-        ["SecurityController.cs#ApplyAclAsync"] = "Güvenlik iş kolunda (dosya sistemi izinleri).",
-        ["SecurityController.cs#SetRateLimitAsync"] = "Güvenlik iş kolunda.",
-        ["SecurityController.cs#EnableBasicRulesAsync"] = "Güvenlik iş kolunda.",
 
         // WordPress: login-link YÖNETİCİ OTURUMU üretir, copy-data yıkıcı aynalama yapar.
         ["WordPressController.cs#SetMaintenanceAsync"] = "WordPress iş kolunda.",

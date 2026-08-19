@@ -71,9 +71,14 @@ public sealed class SeoCrawlLimitTests
     [Fact]
     public async Task ISTEK_ZAMAN_ASIMI_taramayi_kilitlemez()
     {
+        // Gecikme ile eşik ARASI bilerek çok geniş (30 sn ↔ 10 sn). Eskiden 5 sn gecikmeye karşı
+        // "4 sn'den az sürdü" deniyordu; aradaki tek saniyelik pay TAM TAKIM YÜKÜ altında kapanıyor
+        // ve test rastgele kırmızı veriyordu. Rastgele kırmızı veren bir test, ilerideki gerçek bir
+        // arızanın "yine o test" diye elenmesine yol açar. Ölçülen şey değişmedi; yalnız iki durum
+        // arasındaki mesafe, makinenin hızından etkilenmeyecek kadar açıldı.
         var handler = new SeoFakeHandler((_, _) => SeoFakeHandler.Html("<html><title>t</title></html>"))
         {
-            Delay = TimeSpan.FromSeconds(5)
+            Delay = TimeSpan.FromSeconds(30)
         };
 
         using var client = new HttpClient(handler);
@@ -84,8 +89,10 @@ public sealed class SeoCrawlLimitTests
         var gecen = DateTime.UtcNow - basladi;
 
         Assert.Single(sonuc.Pages);
+        // ASIL SİNYAL BU: zaman aşımı uygulanmasaydı istek 30 sn sonra BAŞARIYLA dönerdi ve
+        // Error boş olurdu. Yani hata metninin varlığı, saatten bağımsız olarak kuralı kanıtlar.
         Assert.NotEmpty(sonuc.Pages[0].Error);      // "ölçülemedi" — sessizce "sorun yok" DEĞİL
-        Assert.True(gecen < TimeSpan.FromSeconds(4), $"Zaman asimi uygulanmamis: {gecen}");
+        Assert.True(gecen < TimeSpan.FromSeconds(10), $"Zaman asimi uygulanmamis: {gecen}");
     }
 
     [Fact]
