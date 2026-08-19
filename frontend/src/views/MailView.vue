@@ -271,6 +271,146 @@
           </div>
         </section>
 
+        <!--
+          POSTA İSTEMCİSİ OTOMATİK YAPILANDIRMA (autodiscover / autoconfig).
+
+          YALNIZ YÖNETİCİ: uçlar `[Authorize(Roles = "Administrator")]`. Kart müşteriye
+          gösterilseydi her düğmesi 403 dönerdi.
+
+          Ölçüm zincirin ADIMLARINI gösterir, tek bir "kurulu/kurulu değil" rozetini değil:
+          panelin uçları çalışıyorken istemcilerin oraya HİÇ ulaşamadığı durum tam olarak bu
+          şekilde görünmez kalmıştı.
+        -->
+        <section v-if="isAdmin" class="form-surface autoconfig-card">
+          <div class="section-head">
+            <div>
+              <h3>{{ t("panel.mail.autoconfig.title") }}</h3>
+              <p class="meta">{{ t("panel.mail.autoconfig.subtitle") }}</p>
+            </div>
+            <div class="row-actions">
+              <span v-if="autoconfig" :class="['status-pill', autoconfig.isPublished ? 'ok' : 'warn']">
+                {{ autoconfig.isPublished ? t("panel.mail.autoconfig.published") : t("panel.mail.autoconfig.notPublished") }}
+              </span>
+              <button class="secondary compact" :disabled="autoconfigBusy" @click="loadAutoconfig">
+                {{ autoconfigBusy && !autoconfigPublishing ? t("panel.common.loading") : t("panel.mail.autoconfig.check") }}
+              </button>
+            </div>
+          </div>
+
+          <SectionLoadError
+            v-if="autoconfigLoad.message.value"
+            :message="autoconfigLoad.message.value"
+            @retry="loadAutoconfig" />
+
+          <template v-else-if="autoconfig">
+            <div class="diag-grid">
+              <div
+                v-for="step in autoconfig.steps"
+                :key="step.id"
+                :class="['diag-item', autoconfigStateTone(step.status)]">
+                <span class="diag-dot"></span>
+                <div class="diag-body">
+                  <div class="diag-row">
+                    <strong>{{ autoconfigStepLabel(step.id) }}</strong>
+                    <span
+                      :class="['status-pill', step.status === 'ok' ? 'ok' : step.status === 'fail' ? 'danger' : 'warn']">
+                      {{ autoconfigStateLabel(step.status) }}
+                    </span>
+                  </div>
+                  <!-- Ham ayrıntı HER ZAMAN gösterilir (yalnız hatada değil): "ok" satırında da
+                       hangi site/kural/ana ad ölçüldüğü kullanıcının doğrulayabileceği tek şey. -->
+                  <small class="diag-detail">
+                    <code v-if="step.value">{{ step.value }}</code>
+                    <span v-if="step.detail"> {{ step.detail }}</span>
+                  </small>
+                </div>
+              </div>
+            </div>
+
+            <dl class="autoconfig-meta">
+              <div>
+                <dt>{{ t("panel.mail.autoconfig.site") }}</dt>
+                <dd>{{ autoconfig.siteName || "—" }}</dd>
+              </div>
+              <div>
+                <dt>{{ t("panel.mail.autoconfig.backendUrl") }}</dt>
+                <dd>{{ autoconfig.backendUrl || "—" }}</dd>
+              </div>
+              <div>
+                <dt>{{ t("panel.mail.autoconfig.checkedAt") }}</dt>
+                <dd>{{ new Date(autoconfig.checkedAtUtc).toLocaleString() }}</dd>
+              </div>
+            </dl>
+
+            <!-- GEREKEN DNS KAYITLARI: liste sunucudan yalnızca kayıtlar GERÇEKTEN yayında
+                 DEĞİLKEN dolu gelir. Boş liste "eksik yok" demektir; kendimiz bir şey uydurmayız. -->
+            <div v-if="autoconfig.requiredDnsRecords.length > 0" class="autoconfig-block">
+              <h4>{{ t("panel.mail.autoconfig.requiredDns") }}</h4>
+              <p class="meta">{{ t("panel.mail.autoconfig.requiredDnsHint", { domain: autoconfig.domain }) }}</p>
+              <p v-if="autoconfig.dnsManagedByPanel" class="meta">
+                {{ t("panel.mail.autoconfig.dnsManagedByPanel") }}
+              </p>
+              <div class="data-table">
+                <div class="data-row table-head dns-row">
+                  <span>{{ t("panel.mail.dnsType") }}</span>
+                  <span>{{ t("panel.mail.dnsHost") }}</span>
+                  <span>{{ t("panel.mail.dnsValue") }}</span>
+                  <span>{{ t("panel.software.action") }}</span>
+                </div>
+                <div
+                  v-for="record in autoconfig.requiredDnsRecords"
+                  :key="`${record.type}-${record.host}`"
+                  class="data-row dns-row">
+                  <span class="status-pill">{{ record.type }}</span>
+                  <strong>{{ record.host }}</strong>
+                  <code class="dns-value">{{ record.value || t("panel.mail.dnsValueMissing") }}</code>
+                  <button class="secondary compact row-button" :disabled="!record.value" @click="copyDnsValue(record.value)">
+                    {{ t("panel.mail.dnsCopy") }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- DOĞRULAMA ADRESLERİ: kullanıcı zinciri panele güvenmeden kendi tarayıcısından
+                 sınayabilsin. Panel "yayında" derken tarayıcı 404 veriyorsa gerçek olan ikincisidir. -->
+            <div v-if="autoconfig.probeUrls.length > 0" class="autoconfig-block">
+              <h4>{{ t("panel.mail.autoconfig.probeUrls") }}</h4>
+              <ul class="autoconfig-probes">
+                <li v-for="url in autoconfig.probeUrls" :key="url">
+                  <a :href="url" target="_blank" rel="noopener noreferrer">{{ url }}</a>
+                  <button class="secondary compact row-button" @click="copyDnsValue(url)">
+                    {{ t("panel.mail.dnsCopy") }}
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </template>
+
+          <p v-else class="meta">{{ t("panel.mail.autoconfig.empty") }}</p>
+
+          <p class="meta">{{ t("panel.mail.autoconfig.publishHint") }}</p>
+
+          <div class="form-grid">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.certEmail") }}</span>
+              <input v-model.trim="autoconfigContactEmail" type="email" placeholder="admin@example.com" />
+            </label>
+          </div>
+
+          <div class="row-actions">
+            <button class="compact" v-bind="writeGate(autoconfigBusy)" @click="publishAutoconfig">
+              {{ autoconfigPublishing ? t("panel.mail.autoconfig.publishing") : t("panel.mail.autoconfig.publish") }}
+            </button>
+            <button
+              v-if="autoconfig && autoconfig.isPublished"
+              class="secondary compact danger"
+              v-bind="writeGate(autoconfigBusy)"
+              @click="unpublishAutoconfig">
+              {{ t("panel.mail.autoconfig.unpublish") }}
+            </button>
+          </div>
+        </section>
+
         <!-- Mail teşhis: panel MX/A/SPF/DKIM/DMARC/PTR'yi kendisi kontrol eder (profesyonel paneller gibi). -->
         <section class="form-surface diagnostics-card">
           <div class="section-head">
@@ -752,6 +892,12 @@ import {
   type MailWorkspace,
   type RdnsCheck
 } from "../api/mail";
+import {
+  getMailAutoconfig,
+  publishMailAutoconfig,
+  unpublishMailAutoconfig,
+  type MailAutodiscoverPublication
+} from "../api/autodiscover";
 import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import MailQueueCard from "../components/MailQueueCard.vue";
@@ -850,6 +996,126 @@ function clientProtocolLabel(protocol: string): string {
   }
   return protocol.toUpperCase();
 }
+
+/*
+  OTOMATİK YAPILANDIRMA (autodiscover/autoconfig) — ARAYÜZ BAĞLANTISI.
+
+  Arka uç (`api/v1/mail/autoconfig/{domain}`) ve çevirileri aylardır duruyordu ama HİÇBİR ekran
+  onu çağırmıyordu: kullanıcı ne yayınlayabiliyor, ne zincirin hangi halkasının kırık olduğunu
+  görebiliyor, ne de kendi DNS sağlayıcısında açması gereken kayıtları okuyabiliyordu.
+
+  Uçlar `[Authorize(Roles = "Administrator")]`: kural müşterinin web.config'ine yazar, IIS
+  bağlaması ekler, DNS bölgesine kayıt basar. Bu yüzden kart yalnız yöneticiye gösterilir —
+  kiracıya göstermek, her düğmesi 403 dönen bir ekran olurdu.
+*/
+const autoconfig = ref<MailAutodiscoverPublication | null>(null);
+const autoconfigLoad = useSectionError();
+const autoconfigBusy = ref(false);
+const autoconfigPublishing = ref(false);
+// En son ÖLÇÜLEN alan adı — başarısız ölçüm de sayılır. Sadece `autoconfig`'e bakılsaydı,
+// ölçüm hata verdiğinde her `apply()` çağrısı ucu yeniden dener ve döngüye girerdi.
+const autoconfigDomain = ref("");
+const autoconfigContactEmail = ref("");
+
+/**
+ * Zinciri ölçer; hiçbir şey yazmaz. Sonuç okunamazsa kart "yayında" DEMEZ: bölüm hatası
+ * gösterilir. Ölçemediğimiz bir kurulumu çalışıyor göstermek, kullanıcıyı sessizce ölü bir
+ * autodiscover'a güvendirirdi.
+ */
+async function loadAutoconfig() {
+  if (!selectedDomain.value || !isAdmin.value) {
+    autoconfig.value = null;
+    autoconfigDomain.value = "";
+    autoconfigLoad.clear();
+    return;
+  }
+
+  const domain = selectedDomain.value;
+  autoconfigDomain.value = domain;
+  autoconfigBusy.value = true;
+  try {
+    autoconfig.value = await getMailAutoconfig(domain);
+    autoconfigLoad.clear();
+  } catch (error) {
+    autoconfig.value = null;
+    autoconfigLoad.capture(error);
+  } finally {
+    autoconfigBusy.value = false;
+  }
+}
+
+/**
+ * Yayınlar. Sunucu İKİ ayrı başarı anahtarı döner (`..._published` / `..._published_partial`);
+ * ikisi de "başarı" zarfıyla gelir, bu yüzden bildirimin rengi mesaja değil ölçüme
+ * (`isPublished`) bakar — yarım kalmış bir zinciri yeşil göstermek yalan olurdu.
+ */
+async function publishAutoconfig() {
+  if (!selectedDomain.value) return;
+  autoconfigPublishing.value = true;
+  autoconfigBusy.value = true;
+  try {
+    const envelope = await publishMailAutoconfig(selectedDomain.value, autoconfigContactEmail.value);
+    autoconfig.value = envelope.data;
+    autoconfigDomain.value = selectedDomain.value;
+    autoconfigLoad.clear();
+    showNotice(translateKey(envelope.message), !envelope.data.isPublished);
+  } catch (error) {
+    showError(error);
+  } finally {
+    autoconfigPublishing.value = false;
+    autoconfigBusy.value = false;
+  }
+}
+
+/** Yayını geri alır. Yıkıcı olduğu için ONAY ZORUNLU: istemciler ayarı bir daha bulamaz. */
+async function unpublishAutoconfig() {
+  const domain = selectedDomain.value;
+  if (!domain) return;
+
+  await confirm({
+    title: t("panel.mail.autoconfig.unpublishConfirmTitle"),
+    message: t("panel.mail.autoconfig.unpublishConfirmMessage"),
+    impact: [`${t("panel.mail.domain")}: ${domain}`, `${t("panel.mail.autoconfig.site")}: ${autoconfig.value?.siteName || "—"}`],
+    action: async () => {
+      autoconfigBusy.value = true;
+      try {
+        const envelope = await unpublishMailAutoconfig(domain);
+        autoconfig.value = envelope.data;
+        autoconfigDomain.value = domain;
+        autoconfigLoad.clear();
+        showNotice(translateKey(envelope.message), false);
+      } catch (error) {
+        showError(error);
+      } finally {
+        autoconfigBusy.value = false;
+      }
+    }
+  });
+}
+
+/**
+ * Adım/durum etiketi. Çeviri YOKSA ham anahtar değil ham DEĞER gösterilir: sunucuya yarın
+ * yedinci bir adım eklenirse kullanıcı "panel.mail.autoconfig.step.xyz" değil "xyz" görür.
+ */
+function autoconfigStepLabel(id: string) {
+  return translateKey(`panel.mail.autoconfig.step.${id}`, id);
+}
+
+function autoconfigStateLabel(status: string) {
+  return translateKey(`panel.mail.autoconfig.state.${status}`, status);
+}
+
+/**
+ * Durumun görsel tonu. `warn` ile `unknown` AYRI tutulur: biri "eksik ama çalışır", diğeri
+ * "ölçemedik". İkisini aynı renge boyamak, ölçülemeyen bir adımı bilinen bir eksik gibi
+ * gösterirdi.
+ */
+function autoconfigStateTone(status: string) {
+  if (status === "ok") return "ok";
+  if (status === "fail") return "fail";
+  return status === "warn" ? "warn" : "unknown";
+}
+
 const diagnostics = ref<MailDiagnostics | null>(null);
 const diagLoading = ref(false);
 const showAccountForm = ref(false);
@@ -1013,6 +1279,11 @@ function backToDomains() {
   // Alan adına bağlı ölçümler taşınmaz: başka bir alan adının sunucu/port bilgisi gösterilirdi.
   clientSettings.value = null;
   clientSettingsLoad.clear();
+  // Otomatik yapılandırma raporu da alan adına aittir; taşınırsa başka bir alan adının
+  // "yayında" rozeti gösterilirdi.
+  autoconfig.value = null;
+  autoconfigDomain.value = "";
+  autoconfigLoad.clear();
   accountSelection.clear();
 }
 
@@ -1101,6 +1372,11 @@ async function loadCertificate() {
     if (!certForm.hostName) certForm.hostName = `mail.${selectedDomain.value}`;
     if (!certForm.contactEmail && result.suggestedContactEmail) {
       certForm.contactEmail = result.suggestedContactEmail;
+    }
+    // Otomatik yapılandırma da hizmet ana adları için Let's Encrypt dener; aynı adresi ikinci kez
+    // yazdırmayalım. Kullanıcı isterse kartta değiştirebilir.
+    if (!autoconfigContactEmail.value && result.suggestedContactEmail) {
+      autoconfigContactEmail.value = result.suggestedContactEmail;
     }
     // profesyonel paneller gibi: panel sertifikası yoksa ve iletişim e-postası zaten biliniyorsa
     // (ör. site SSL'i alınırken kaydedildi) sertifikayı bir kez otomatik al — uğraştırma.
@@ -1551,6 +1827,12 @@ function apply(next: MailWorkspace) {
   if (isAdmin.value && next.configured && !certificate.value) {
     void loadCertificate();
   }
+  // Otomatik yapılandırma durumu alan adı BAŞINA ölçülür ve ölçümü pahalıdır (IIS site listesi,
+  // web.config, DNS bölgesi). Bu yüzden her `apply()` çağrısında değil, yalnız ölçülen alan adı
+  // değiştiğinde tazelenir; kullanıcı ayrıca "Durumu ölç" ile her an elle yenileyebilir.
+  if (isAdmin.value && next.configured && selectedDomain.value && autoconfigDomain.value !== selectedDomain.value) {
+    void loadAutoconfig();
+  }
 }
 
 async function loadSpam() {
@@ -1594,10 +1876,20 @@ async function changeAccountQuota(address: string, currentMax: number) {
   });
 }
 
-function resolveApiMessage(error: unknown) {
-  const key = extractApiMessage(error);
+/**
+ * Sunucunun döndürdüğü mesaj ANAHTARINI metne çevirir; çevirisi yoksa `fallback` gösterilir.
+ * Tek kaynak: aynı "çeviri var mı" kontrolü hem hata hem başarı yollarında kopyalanmasın.
+ */
+function translateKey(key: string, fallback = key) {
+  if (!key) {
+    return fallback;
+  }
   const translated = t(key);
-  return translated === key ? key : translated;
+  return translated === key ? fallback : translated;
+}
+
+function resolveApiMessage(error: unknown) {
+  return translateKey(extractApiMessage(error));
 }
 
 function showNotice(message: string, isError: boolean) {
@@ -1780,6 +2072,13 @@ function showError(error: unknown) {
   border-color: color-mix(in srgb, var(--warn-1) 30%, transparent);
 }
 
+/* "warn" (eksik ama çalışır) ile "unknown" (ölçemedik) AYRI görünür: ikisini aynı yapmak,
+   ölçülemeyen bir adımı bilinen bir eksik gibi göstermek olurdu. */
+.diag-item.warn {
+  border-color: color-mix(in srgb, var(--warn-1) 35%, transparent);
+  background: var(--warn-bg);
+}
+
 .diag-dot {
   width: 9px;
   height: 9px;
@@ -1801,6 +2100,11 @@ function showError(error: unknown) {
 
 .diag-item.unknown .diag-dot {
   background: var(--warn-1);
+}
+
+.diag-item.warn .diag-dot {
+  background: var(--warn-1);
+  box-shadow: 0 0 0 3px var(--warn-bg);
 }
 
 .diag-body {
@@ -1827,6 +2131,70 @@ function showError(error: unknown) {
   border-radius: 4px;
   background: var(--surface-2);
   font-size: 0.92em;
+}
+
+.autoconfig-card {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.autoconfig-card h4 {
+  margin: 0 0 2px;
+}
+
+.autoconfig-card .meta {
+  margin: 0;
+}
+
+.autoconfig-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.autoconfig-meta dt {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.autoconfig-meta dd {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.autoconfig-block {
+  display: grid;
+  gap: 6px;
+}
+
+.autoconfig-probes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.autoconfig-probes li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Adres uzun ve kırpılmamalı: kullanıcı tam olarak neyi açacağını görmeli. */
+.autoconfig-probes a {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.autoconfig-probes button {
+  width: auto;
 }
 
 .maildomain-row {
@@ -2058,7 +2426,8 @@ function showError(error: unknown) {
 }
 
 @media (max-width: 760px) {
-  .rdns-meta {
+  .rdns-meta,
+  .autoconfig-meta {
     grid-template-columns: 1fr;
   }
 
