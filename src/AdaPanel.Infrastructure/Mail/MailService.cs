@@ -741,6 +741,27 @@ public sealed class MailService(
             contents = BuildListPolicyScript(rules)
         });
 
+        // RCPT yuvasının MEVCUT durumunu ÖNCE oku: ne yapılacağına script yazmadan önce karar
+        // verilir (bkz. DecideListPolicySlot).
+        var stage = await GetObjectAsync(cli, "MtaStageRcpt", "singleton", env, cancellationToken);
+        var currentScript = stage is { } stageValue
+            && stageValue.TryGetProperty("script", out var scriptExpr)
+            && scriptExpr.TryGetProperty("else", out var elseValue)
+                ? elseValue.GetString() ?? string.Empty
+                : string.Empty;
+
+        var ourExpression = $"'{ListPolicyScriptName}'";
+        var decision = DecideListPolicySlot(rules.Count, currentScript, ourExpression);
+        if (decision == ListPolicySlotAction.None)
+        {
+            return;
+        }
+
+        if (decision == ListPolicySlotAction.Conflict)
+        {
+            throw new AppException("mail.list_policy_conflict", 409, 409, $"MtaStageRcpt.script={currentScript}");
+        }
+
         var scriptId = await FindIdAsync("SieveSystemScript", "name", ListPolicyScriptName, cancellationToken);
         var upsert = scriptId is null
             ? await RunCliJsonAsync(cli, "create SieveSystemScript", payload, env, cancellationToken)
@@ -750,18 +771,7 @@ public sealed class MailService(
             throw new AppException("mail.list_policy_failed", 502, 502, CombineError(upsert));
         }
 
-        // RCPT aşamasına bağla. Yönetici elle BAŞKA bir script bağladıysa DOKUNMA ve açıkça bildir —
-        // burada sessizce üzerine yazmak, yöneticinin kendi teslimat kuralını (ör. greylisting)
-        // haberi olmadan kaldırmak olurdu.
-        var stage = await GetObjectAsync(cli, "MtaStageRcpt", "singleton", env, cancellationToken);
-        var currentScript = stage is { } stageValue
-            && stageValue.TryGetProperty("script", out var scriptExpr)
-            && scriptExpr.TryGetProperty("else", out var elseValue)
-                ? elseValue.GetString() ?? string.Empty
-                : string.Empty;
-
-        var ourExpression = $"'{ListPolicyScriptName}'";
-        if (string.IsNullOrWhiteSpace(currentScript) || currentScript is "false" or "0")
+        if (decision == ListPolicySlotAction.Bind)
         {
             var bind = await RunCliAsync(
                 cli,
@@ -773,13 +783,62 @@ public sealed class MailService(
                 throw new AppException("mail.list_policy_failed", 502, 502, CombineError(bind));
             }
         }
-        else if (!string.Equals(currentScript, ourExpression, StringComparison.Ordinal))
-        {
-            throw new AppException("mail.list_policy_conflict", 409, 409, $"MtaStageRcpt.script={currentScript}");
-        }
 
         // Yeniden başlatma OLMADAN etkinleşir (otomatik yanıtta kanıtlandı: ReloadSettings yeterli).
         _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+    }
+
+    internal enum ListPolicySlotAction
+    {
+        /// <summary>Hiçbir şey yapma — yuvaya dokunma, script bile yazma.</summary>
+        None,
+
+        /// <summary>Script'i güncelle; yuva ZATEN bizim, yeniden bağlamaya gerek yok.</summary>
+        Update,
+
+        /// <summary>Script'i yaz ve yuvaya bağla (yuva boştu).</summary>
+        Bind,
+
+        /// <summary>Yuvada BAŞKASININ kuralı var — dokunma, kullanıcıya bildir.</summary>
+        Conflict
+    }
+
+    /// <summary>
+    /// RCPT yuvasıyla ne yapılacağına karar verir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı ve neden kural yokken HİÇBİR ŞEY yapılmıyor:</b> ilk yazımda politika eşitleme
+    /// her liste oluşturma/silme işleminde koşulsuz çalışıyor, script'i yazıyor ve yuva doluysa
+    /// çakışma fırlatıyordu. Sonucu ölçtüm: yöneticinin RCPT aşamasına kendi kuralını (Stalwart
+    /// dokümanının greylisting örneği tam da budur) bağladığı bir sunucuda, POLİTİKA HİÇ
+    /// İSTENMESE BİLE sıradan bir dağıtım listesi açmak 409 ile kırılırdı. Yani eklediğim özellik,
+    /// kullanmayan kullanıcının çalışan işini bozuyordu.
+    /// </para>
+    /// <para>
+    /// Kural yoksa ve yuva bizim değilse: dokunulmaz. Panelin ihtiyacı olmayan GLOBAL bir yuvayı
+    /// sahiplenmesi için de sebep yok.
+    /// </para>
+    /// <para>
+    /// Yuva zaten BİZİMSE kural sayısı sıfır olsa bile script güncellenir: son politika
+    /// kaldırıldığında sunucuda eski (kısıtlayıcı) kuralın asılı kalmaması için gereklidir.
+    /// </para>
+    /// </remarks>
+    internal static ListPolicySlotAction DecideListPolicySlot(int ruleCount, string? currentScript, string ourExpression)
+    {
+        var current = (currentScript ?? string.Empty).Trim();
+        if (string.Equals(current, ourExpression, StringComparison.Ordinal))
+        {
+            return ListPolicySlotAction.Update;
+        }
+
+        var slotFree = current.Length == 0 || current is "false" or "0";
+        if (ruleCount == 0)
+        {
+            return ListPolicySlotAction.None;
+        }
+
+        return slotFree ? ListPolicySlotAction.Bind : ListPolicySlotAction.Conflict;
     }
 
     /// <summary>Politika kaydını günceller (kip ve/veya izinli gönderenler); <c>null</c> alanlar korunur.</summary>

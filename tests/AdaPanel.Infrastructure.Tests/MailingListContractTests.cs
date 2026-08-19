@@ -599,7 +599,89 @@ public sealed class MailingListContractTests
         Assert.StartsWith("550 5.7.2", MailService.BuildPolicyRejectReason(policy));
     }
 
-    // --- 7) Adres doğrulayıcı ---
+    // --- 7) RCPT yuvası kararı (politikayı KULLANMAYAN kullanıcıyı bozmama) ---
+
+    private const string OurScript = "'adapanel-listpolicy'";
+
+    /// <summary>
+    /// REGRESYON: politika istenmemişken panel RCPT yuvasına DOKUNMAMALI.
+    /// </summary>
+    /// <remarks>
+    /// İlk yazımda eşitleme koşulsuz çalışıyordu; yöneticinin kendi RCPT kuralı (ör. Stalwart
+    /// dokümanının greylisting örneği) olan bir sunucuda, POLİTİKA HİÇ İSTENMESE BİLE sıradan
+    /// bir dağıtım listesi açmak 409 ile kırılıyordu. Eklenen özellik, kullanmayanın çalışan
+    /// işini bozamaz.
+    /// </remarks>
+    [Theory]
+    [InlineData("'greylist'")]
+    [InlineData("'yoneticinin-kurali'")]
+    public void DecideListPolicySlot_DoesNothing_WhenThereAreNoRulesAndSomeoneElseOwnsTheSlot(string current)
+    {
+        Assert.Equal(
+            MailService.ListPolicySlotAction.None,
+            MailService.DecideListPolicySlot(0, current, OurScript));
+    }
+
+    /// <summary>Kural yoksa BOŞ yuva da sahiplenilmez: ihtiyaç olmayan global yuva işgal edilmez.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("false")]
+    [InlineData("0")]
+    [InlineData(null)]
+    public void DecideListPolicySlot_DoesNotClaimAFreeSlot_WhenThereAreNoRules(string? current)
+    {
+        Assert.Equal(
+            MailService.ListPolicySlotAction.None,
+            MailService.DecideListPolicySlot(0, current, OurScript));
+    }
+
+    /// <summary>Kural varsa ve yuva boşsa bağlanır.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("false")]
+    [InlineData("0")]
+    [InlineData(null)]
+    public void DecideListPolicySlot_BindsAFreeSlot_WhenRulesExist(string? current)
+    {
+        Assert.Equal(
+            MailService.ListPolicySlotAction.Bind,
+            MailService.DecideListPolicySlot(1, current, OurScript));
+    }
+
+    /// <summary>
+    /// Kural varken yuvada BAŞKASININ kuralı varsa çakışma bildirilir — sessizce üzerine yazmak,
+    /// yöneticinin teslimat kuralını haberi olmadan kaldırmak olurdu.
+    /// </summary>
+    [Fact]
+    public void DecideListPolicySlot_ReportsAConflict_WhenRulesExistButAnotherScriptOwnsTheSlot()
+    {
+        Assert.Equal(
+            MailService.ListPolicySlotAction.Conflict,
+            MailService.DecideListPolicySlot(1, "'greylist'", OurScript));
+    }
+
+    /// <summary>Yuva zaten bizimse yeniden bağlanmaz, yalnız script güncellenir.</summary>
+    [Fact]
+    public void DecideListPolicySlot_OnlyUpdates_WhenWeAlreadyOwnTheSlot()
+    {
+        Assert.Equal(
+            MailService.ListPolicySlotAction.Update,
+            MailService.DecideListPolicySlot(2, OurScript, OurScript));
+    }
+
+    /// <summary>
+    /// Son politika kaldırıldığında yuva bizimse script YİNE güncellenir; yoksa sunucuda eski
+    /// kısıtlayıcı kural asılı kalır ve kimse listeye yazamamaya devam ederdi.
+    /// </summary>
+    [Fact]
+    public void DecideListPolicySlot_StillUpdates_WhenTheLastRuleIsRemovedFromOurOwnSlot()
+    {
+        Assert.Equal(
+            MailService.ListPolicySlotAction.Update,
+            MailService.DecideListPolicySlot(0, OurScript, OurScript));
+    }
+
+    // --- 8) Adres doğrulayıcı ---
 
     [Theory]
     [InlineData("ali@ornek.com", true)]
