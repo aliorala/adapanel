@@ -51,3 +51,36 @@ gönderme, FTP bağlantısı.
 Denetim raporunu depoya koymak, on ajana bulguları tekrar anlatmadan `dosya:satır` referansı
 vermeyi sağladı. Yeni denetim nöbetçisi ilk turunda kendi borç listesinin bayatladığını yakaladı
 (17 uç kayıt yazmaya başlamıştı) — yani nöbetçi gerçekten çalışıyor.
+
+---
+
+# Ikinci tur — kalan maddeler (KOTA NEDENIYLE DURDURULDU)
+
+Kullanici "antivirus haricinde hepsini duzelt" dedi. Dort ekip basladi, kota
+sinirina takilmamak icin is ortasinda durduruldu. Worktree'leri ve isleri yerinde.
+
+| Ajan kimligi | Kapsam | Durdugu nokta |
+|---|---|---|
+| `a9906ab5b48031bce` | **Kiraci bagi**: 219 denetim kaydinin yalniz 26'sinda `subscriptionUserId` dolu; nobetcideki 22 ucluk borc listesi. Ayrica `SubscriptionEnforcementService.cs:198,225` askiya alma kaydinda AKTORU yanlis yaziyor ("musteri kendini askiya aldi"). | `WordPressController`e geciyordu (o denetleyicide hic denetim servisi yok) |
+| `a30c8c4df96731df0` | **Silme butunlugu**: `UserManagementService.cs:521-534` cascade uyarilarini atiyor, `200 OK` donuyor; yarim silinmis site sahipsiz kaliyor ve WHMCS `success` goruyor. + `SiteCascadeDeletionService.cs:463-468` `_not_found` son ekiyle "zaten silinmis" varsayimi. | Test dosyasini yaziyordu |
+| `ad61a66cb86a73e3e` | **Gozlemlenebilirlik**: `CacheService`, `FileMigrationService`, `WordPressToolkitService` (1018 satir) — `ILogger` hic yok, denetim kaydi da yok. | (durum bildirilmedi) |
+| `acc99529e08e59037` | **Tarama ilerlemesi**: 125 dakikalik virus taramasi sayfa yenilenince kayboluyor (`/antivirus/status` yalniz BITEN taramayi donduruyor; `IOperationProgressService` referans alinacak). + Docker ornek imaji (linux imaj / Windows container motoru), ~14 olu i18n anahtari, "Sil"/"Kaldir" tutarsizligi, firewall "Kapali" ile `status.disabled` "Kapali" karisikligi. | (durum bildirilmedi) |
+
+## Devam ettirirken tekrarlanacak sartlar
+
+- **COMMIT ETMEYI HATIRLAT** — bu oturumda uc ajan isini bitirip commit etmeden durdu.
+- **Silme ekibi:** "tamamen silinsin" daha AGRESIF silme demek DEGIL. Cascade kapilari
+  (`SiteDeletionPathGuard`) yerinde kalsin; istenen sey yarim kalani durustce bildirmek.
+  Olcut: WHMCS gibi bir istemci yanita bakip "hizmet tamamen kaldirildi" diyememeli.
+- **Kiraci bagi:** kiraci OLCULECEK, tahmin edilmeyecek. Cozulemiyorsa alan BOS kalacak --
+  yanlis kiraciya baglamak, hic baglamamaktan kotudur.
+- **Tarama ilerlemesi:** sahte yuzde YASAK. Olculemiyorsa "suruyor, X dakikadir" denecek.
+- **Log ekibi:** o uc serviste parola ve FTP kimlik bilgisi dolasiyor; ILogger merkezi
+  temizleyiciden GECMEZ, sirri kendisi dusurecek.
+
+## Bu turda YAPILMAYACAK (kullanicinin isi ya da ticari karar)
+
+- **Antivirus kurulumu** — kullanici acikca kapsam disi biraktı. Bu makinede `WinDefend`
+  servisi YOK (olculdu) ve daha once aktif PE infector cikmisti; paket uretilen makine burasi.
+- **Kod imzalama** — paket imzasiz; kural yazili ve testli, `RequireSignature` bayragiyla
+  acilir. Sertifika alinmasi ticari karar.
