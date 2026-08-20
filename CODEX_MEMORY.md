@@ -6508,3 +6508,57 @@ Publish icerik denetimi 155 dosya GECTI, Synaptics imzasi yok.
 
 **Ders:** version-guard release-body.json'i da denetliyor -- surum yukseltmesini
 commit'lerken onu disarida biraktim, guard paketi URETMEDI ve yakaladi. Guard calisiyor.
+
+## 217) TAM SISTEM DENETIMI + 10 duzeltme ekibi -> 0.6.5 (19-20.08.2026)
+
+Kullanici "tum sistemi tara, hepsini cikar" dedi. Yedi bagimsiz denetim, HATA SINIFI
+basina bolundu (dosya/modul basina DEGIL -- sinif basina bolmek ayni kok nedeni farkli
+modullerde yakalatti). Bulgular `docs/denetim-2026-08-19.md`'ye yazildi, sonra on
+duzeltme ekibi o dosyaya `dosya:satir` referansiyla calisti.
+
+**Sonuc:** 0.6.5 yayinlandi. Testler 2488 -> 2810 (+322).
+SHA256 488E4F5888671430224F1ACE6D6E5AE5A7AAC98406BB213A6DFFF91EB33C8F0F.
+
+### OLCULEN aciklar (bu makinede yukseltilmemis kullanici olarak dosya ACILARAK)
+
+- Stalwart super-admin parolasi `run-stalwart.cmd` icinde DUZ METIN ve kiraciya okunabilir
+  -> barindirilan her sitenin PHP'si sunucudaki TUM postayi ele geciriyordu.
+- MariaDB veri dizini kiraciya okunabilir -> tum musteri DB'leri + root parola ozetleri.
+- `certs\panel.password` (PFX ozel anahtar parolasi) kiraciya okunabilir.
+- Sertlestirme mirasi KOPYALAYIP MUHURLUYORDU: kokte ne varsa (bu makinede
+  `Everyone=FullControl`) hassas klasorlere kalici gomuluyordu ve kok duzeltilse bile dusmuyordu.
+
+### "Kurulum tamamlanamadi" KOK NEDENI KANITLANDI
+
+Aylardir acikti. Diskteki iki artefakt zinciri kapatti:
+`last-attempt.json` hukmu **21:49:07Z**, `apply-update.log` kurulum bitisi **21:49:23Z**.
+Panel hukmu kurulum bitmeden 16 SANIYE ONCE yaziyor -> `installerExitCode` yapisal olarak null.
+Sonra pending kaydi silindigi icin panel bir daha hukum veremiyor, calistiricinin gec yazdigi
+"failed" KALICI oluyor. Ve kanit yok ediliyordu: calistirici gunlugu ile Inno `/LOG=` AYNI dosya,
+Inno dosyayi sifirdan aciyor -> dosyada `[runner]` satiri HIC yok.
+
+Duzeltme yarisi kazanmaya CALISMADI (kurulum sureci servis baslangicini daima asar);
+panelin hukmune sahiplik konuldu, calistirici yalnizca kendi bildigi cikis koduyla zenginlestiriyor.
+
+### Bu turun en degerli dersleri
+
+1. **Ajan mutasyon testi GERCEK SISTEME yazabilir.** Yetki ajani K6'yi dogrularken bu makinenin
+   yerlesik `Administrator` parolasini GERCEKTEN degistirdi. Hesap devre disi oldugu icin zarar
+   sinirli kaldi. Ders: yikici bir zinciri mutasyonla dogrulatirken YALITILMIS hedef sart kos.
+   Kazanc: K6 artik kagit uzerinde bulgu degil, calistigi olculmus bir zincir.
+2. **Nobetci testin kendisi hata sinifindan olabilir.** `AuditCoverageTests` elle yazilmis
+   5 dosyalik listeye bakiyordu; 63 denetleyiciden 5'ini koruyup yesil kaliyordu. Ters cevrildi:
+   dosyalar DISKTEN okunuyor, kapsanmayanlar GEREKCELI muaf listesinde duruyor ve borc kapaninca
+   listeden DUSURULMEK ZORUNDA. Ilk turunda 17 bayat girdiyi yakaladi -> gercekten calisiyor.
+3. **Koordinatorun 8 on bulgusu YANLIS cikti** (uzak DB, posta listeleri, WHMCS "yok" sanildi;
+   junction takibi .NET 8'de zaten kapali; cascade motor listesi silme yolunda degil).
+   Hepsi aramayi dar tutup AD TAHMIN etmekten. Raporda ayri bolumde kayitli.
+4. **Kirilgan test = ilerideki gercek arizanin elenmesi.** Iki zamanlama testi (cluster paralellik,
+   SEO zaman asimi) yuk altinda rastgele kirmizi veriyordu. Cozum esigi gevsetmek DEGIL:
+   cluster'da duvar saati yerine ESZAMANLILIK olculdu; SEO'da iki durum arasi mesafe acildi.
+
+### Bilerek KAPANMAYANLAR
+
+Imza zorunlulugu (paket imzasiz; zorunlu kilmak kurulu her paneli guncellenemez yapar --
+kural yazili ve testli, `RequireSignature` bayragiyla acilir), kullanici silme ucunun 200
+donmesi (Core imza degisikligi ister), `subscriptionUserId` 219 kaydin 26'sinda dolu.

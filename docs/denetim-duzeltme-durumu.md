@@ -1,61 +1,53 @@
-# Denetim düzeltmeleri — devam durumu
+# Denetim düzeltmeleri — TAMAMLANDI
 
-Kaynak: `docs/denetim-2026-08-19.md`. On ajana bölündü, kota sınırı nedeniyle altısı
-iş ortasında durduruldu. Bu dosya, devam ettirmek için gereken her şeyi tutar.
+Kaynak: `docs/denetim-2026-08-19.md`. On ajana bölündü, **hepsi bitti ve birleşti**.
 
-Son durum: main `0d62744`, **2535 test yeşil**, typecheck + build temiz,
-i18n TR/EN 4373 = 4373 parite tam.
+**Sonuç: 0.6.5 yayınlandı** — SHA256 `488E4F5888671430224F1ACE6D6E5AE5A7AAC98406BB213A6DFFF91EB33C8F0F`,
+90.299.181 byte. İndirilen varlık yerel dosyayla birebir aynı, `releases/latest` = 0.6.5.
 
-## Birleşti (4)
+Testler: **2488 → 2810** (+322). typecheck + build temiz, i18n TR/EN 4378 parite tam.
 
-| Ajan | Kapsam | Sonuç |
-|---|---|---|
-| Posta autoconfig arayüzü | F2 | Ölü özellik bağlandı; arka uç sözleşmesi canlıda **doğrulanmadı** |
-| İşlevsel arızalar | K8, F1, F3, F6, F7, F10 | Arşiv içe aktarma artık siteyi boşaltmıyor; memcached gerçeği ölçülüyor; nginx kill yolu düzeldi |
-| Yedek güvenilirliği | K10, Y9, yedek denetim kaydı | Atlanan dosya `created_with_errors`'a taşınıyor; budama son kullanılabilir noktayı silemiyor |
-| Arayüz | P3 tamamı | Ham anahtarlar, response interceptor + 401, erişilebilirlik, kalan `window.confirm` gitti |
+## Kapatılan kritikler
 
-## Duruldu — kaldığı yerden devam edecek (6)
+| Bulgu | Ne yapıldı |
+|---|---|
+| K1 Stalwart parolası düz metin, kiracıya okunabilir | DPAPI ile korunuyor + dosya kilidi + `runtimes\stalwart` ağacı kapatıldı |
+| K2 MariaDB veri dizini kiracıya okunabilir | Veri dizinleri kapatıldı; PHP/Node/Python dokunulmadı (IIS ve sınırlı kimlik onları çalıştırıyor) |
+| K3 `certs\panel.password` okunabilir | `icacls /reset` kaldırıldı, doğru ACL kuruluyor |
+| K4 Sertleştirme geniş ACE'leri mühürlüyor | `preserveInheritance: false`, DACL sıfırdan; servis hesabı tahmin edilmiyor, okunuyor |
+| K5 Kurtarma yolu K1'i iptal ediyor | Yeniden sertleştirme `EnsureWritableAsync`'in kendi içine kondu — unutulamaz |
+| K6 Bayi → Administrator parola değişimi | Kullanıcı adı artık sahiplik iddiası; koruma serviste, tüm çağıranlar kapsanıyor |
+| K7 WordPress klonu alan adı ele geçirme | Klon, site oluşturmayla aynı iki denetimden geçiyor |
+| K8 Arşiv içe aktarma siteyi boşaltıyor | Arşivin dosya içerdiği yıkıcı adımdan ÖNCE doğrulanıyor; `ContentSideline` geri sarıyor |
+| K9 `IsSafeToDelete` sistem yollarını geçiriyor | Kara liste → KANIT: üç pozitif kanıttan biri şart |
+| K10 Yedek dosya atlayıp "başarılı" diyor | `BackupSkipLog` + `created_with_errors`; atlamak artık derlenmiyor |
+| K11 "Kurulum tamamlanamadı" | Kök neden kanıtlandı; hüküm sahipliği + ayrı çalıştırıcı günlüğü |
+| K12 Üretilen installer taranmıyor | ISCC sonrası denetim iki paketleme betiğine de bağlandı |
+| Y1–Y10 | DB sahipliği, bileşen kaydı, SSL tazeleme, korumalı dizin, WAF, log temizliği, kısmi silme, yol paylaşımı, budama, açık DNS |
 
-Her biri kendi worktree'sinde, işi duruyor. `SendMessage` ile devam ettirilecek.
+## Kapanmayanlar (bilerek, gerekçeli)
 
-| Ajan kimliği | Kapsam | Durduğu nokta |
-|---|---|---|
-| `a97f1dd82ef91c102` | **Sertleştirme** — K1 Stalwart parolası, K2 MariaDB veri dizini, K3 certs, K4 ACL mühürleme, K5 kurtarma yolu, Y2 bileşen kaydı, Y10 açık DNS | Mutasyonla bulduğu iki zayıf testi güçlendiriyordu |
-| `aa63fb4d0ea15ed30` | **Yetki yükselmeleri** — K6 FTP kullanıcı adı sahiplenme, K7 WordPress klon alan adı, F4, F5 | `SitesController` giriş noktasını (müşterinin gönderdiği `FtpUserName`) test ediyordu |
-| `a77458b6ae06bc0c6` | **Güncelleme + yayın** — K11 hüküm yarışı ve günlük çakışması, K12 installer taraması | Tam takımı çalıştırıyordu |
-| `ad4ddeee2b9f7f9ee` | **Silme güvenliği** — K9 `IsSafeToDelete`, Y1 DB sahipliği, Y6 log temizliği, Y7 kısmi silme, Y8 yol paylaşımı | 2531 test yeşil, mutasyon doğrulamasına giriyordu |
-| `a122b259bfd9d5c49` | **Kayıt↔gerçeklik** — Y3 SSL kaydı, Y4 korumalı dizin, Y5 WAF bayrakları + SSL/Security denetim kaydı | 37 test geçmiş, bağlama mutasyonlarını ekliyordu |
-| `a79fe950e31864938` | **Denetim kaydı** — `AuditCoverageTests` yeniden yazımı, 18 denetleyici, redactor | Yeni ctor parametrelerinin kırdığı iki testi onarıyordu |
+- **İmza zorunluluğu açık değil**: üretilen paket imzasız; zorunlu kılmak kurulu her paneli
+  güncellenemez yapardı. Kural yazılı ve testli, `RequireSignature` bayrağıyla açılıyor.
+- **Kullanıcı silme ucu hâlâ 200 dönüyor**: uyarıları yanıta taşımak Core imza değişikliği ister.
+  Kalıntılar denetim kaydında, ama WHMCS hâlâ `success` görüyor.
+- **`subscriptionUserId` 219 kaydın 26'sında dolu**: kalan denetleyicilerin listesi denetim
+  ajanının raporunda; sonraki tura.
+- **`SubscriptionEnforcementService` kaydı aktörü yanlış yazıyor** (elle askıya almada
+  "müşteri kendini askıya aldı" diyor). Denetleyiciye doğru kayıt eklendi, asıl düzeltme kaldı.
 
-## Devam ettirme
+## Canlıda doğrulanmayanlar
 
-Her ajana `SendMessage` ile: "kaldığın yerden devam et; işin bitince worktree'de
-COMMIT et (push etme)". **Commit etmeyi hatırlatmak şart** — iki ajan işini bitirip
-commit etmeden durdu, koordinatör elle commit etti.
+Bu makinede IIS siteleri, Windows DNS, veritabanı motorları, Stalwart, Docker, WHMCS ve bulut
+hesapları yok. Erişim izni değişiklikleri gerçek dosya sistemi üzerinde test edildi ama **kurulu
+bir panelde uygulanmadı**. DNS özyineleme kapatma ve PostgreSQL veri dizini adımları Windows
+Server'da doğrulanmalı.
 
-Devam ederken hatırlatılacak riskler (ilk turda verilmişti, ara verildiği için tekrarlanmalı):
+**İlk kurulumda elle denenecekler:** site açma, site silme, yedek alma ve geri yükleme, posta
+gönderme, FTP bağlantısı.
 
-- **Sertleştirme:** fazla kapatırsan IIS, FTP ve posta çalışmaz. Her kapatma için
-  "bu yola kim erişmek zorunda" sorusunu koddan cevapla.
-- **Güncelleme:** bu yolu bozarsan kurulu paneller bir daha güncellenemez.
-  `AdaPanel.iss` ve `install-service.ps1` yorumları gerçek olay analizlerinden çıkmış.
-- **Silme:** beyaz listeyi fazla dar yaparsan meşru site silme çalışmaz; iki yönü de test et.
-- **Yetki:** mevcut kurulumlarda zaten oluşturulmuş FTP hesapları var, çalışan kurulumları kırma.
+## Bu turdan çıkan ders
 
-## Birleştirme sırası ve bilinen çakışma
-
-`frontend/src/i18n/tr.json` ve `en.json`'a birden çok ajan anahtar ekliyor; cherry-pick
-sırasında çakışırlar. Çözüm: iki tarafın anahtar kümelerini birleştir (aynı anahtara farklı
-değer bugüne kadar hiç çıkmadı), sonra pariteyi doğrula.
-
-`ServiceCollectionExtensions.cs` de birden çok ajanın kayıt eklediği bir nokta — aynı yöntem.
-
-## Bitince
-
-Tam takım + `npm run typecheck` + `npm run build` yeşil olduğunda **0.7.0** olarak yayınla
-(`scripts/publish-github-release.ps1` ile, elle PowerShell yazma). Sürüm güvenlik
-sertleştirmesi ağırlıklı olduğu için küçük sürüm numarası yanıltıcı olur.
-
-Sürüm notlarında **canlıda doğrulanmayanlar** açıkça yazılmalı: bu makinede IIS siteleri,
-Windows DNS, veritabanı motorları, Stalwart, Docker, WHMCS ve bulut yedek hedefleri yok.
+Denetim raporunu depoya koymak, on ajana bulguları tekrar anlatmadan `dosya:satır` referansı
+vermeyi sağladı. Yeni denetim nöbetçisi ilk turunda kendi borç listesinin bayatladığını yakaladı
+(17 uç kayıt yazmaya başlamıştı) — yani nöbetçi gerçekten çalışıyor.
