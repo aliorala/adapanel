@@ -6,7 +6,9 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.AppStore;
 
@@ -15,11 +17,61 @@ namespace AdaPanel.Infrastructure.AppStore;
 /// wp-config.php varlığına göre algılar, wp-includes/version.php'den sürümü okur,
 /// bakım modunu .maintenance dosyasıyla yönetir.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden günlükçü (ILogger) var:</b> bu servisin neredeyse her dış çağrısı BEST-EFFORT
+/// tasarlanmış — wp-cli yoksa, PHP çalışmıyorsa ya da DB'ye bağlanılamıyorsa akış devam ediyor.
+/// Tasarım kullanıcı için doğru (yarım kalan bir klonu istisnayla terk etmek daha kötü olurdu),
+/// ama sonucu şuydu: <b>ölçemediğimiz her şey panelde "sorun yok" gibi görünüyordu.</b> En ağır
+/// üç örnek:
+/// </para>
+/// <list type="bullet">
+///   <item><description><c>GetActiveSlugsAsync</c> — wp-cli sıfır dışı kod dönerse BOŞ küme döner
+///   ve panelde her eklenti "pasif" görünür. Etkin bir eklentiyi pasif göstermek, kullanıcıyı
+///   olmayan bir arızayı kovalamaya iter.</description></item>
+///   <item><description><c>GetLatestCoreVersionAsync</c> — sürüm sorgusu patlarsa
+///   <c>UpdateAvailable</c> BÜTÜN siteler için false olur; yani güvenlik güncellemesi bekleyen
+///   siteler "güncel" görünür.</description></item>
+///   <item><description><c>CloneAsync</c> 4. adımı — hedefte <c>wp-config.php</c> yoksa
+///   <c>if</c> sessizce atlanır ve klon KAYNAĞIN veritabanına yazmaya devam eder. Staging'de
+///   yapılan her işlem canlı veriyi değiştirir.</description></item>
+/// </list>
+/// <para>
+/// <b>Sır sızıntısı — bu dosyada dolaşan sırlar:</b> wp-config'ten okunan <c>DB_PASSWORD</c>,
+/// klonda üretilen hedef DB parolası (<c>transfer.Password</c>) ve tek kullanımlık SSO jetonu.
+/// Kural: bunlar günlüğe HİÇ yazılmaz. Jeton yerine yalnız "bağlantı üretildi" bilgisi, parola
+/// yerine yalnız kullanıcı/veritabanı ADI yazılır. wp-cli çıktısı ise DB kimlik bilgisi
+/// içerebildiği için doğrudan değil <see cref="WpCliGunlukMetni"/> üzerinden — yani merkezî
+/// <see cref="AuditSecretRedactor"/> maskesinden geçirilerek — yazılır. (ILogger denetim kaydının
+/// geçidinden geçmez; temizleyici burada ELLE çağrılır.)
+/// </para>
+/// <para>
+/// Günlükçü İSTEĞE BAĞLI: <c>WordPressUpdateTests</c> bu servisi üç sahte bağımlılıkla doğrudan
+/// kuruyor; zorunlu parametre o kurulumları kırardı. Gerekçenin uzun hâli <c>BackupService</c>'te.
+/// </para>
+/// </remarks>
 public sealed partial class WordPressToolkitService(
     IIisSiteService iisSiteService,
     IDatabaseService databaseService,
-    ISiteHostingSettingsService hostingSettings) : IWordPressToolkitService
+    ISiteHostingSettingsService hostingSettings,
+    ILogger<WordPressToolkitService>? logger = null) : IWordPressToolkitService
 {
+    /// <summary>
+    /// wp-cli çıktısını GÜNLÜĞE YAZILABİLİR hâle getirir: sır maskelenir, uzunluk kırpılır.
+    /// </summary>
+    /// <remarks>
+    /// wp-cli, wp-config'i okuyarak veritabanına bağlanır; hata metinleri
+    /// "Access denied for user 'x'@'localhost' (using password: YES)" ya da doğrudan bağlantı
+    /// dizesi içerebilir. Denetim kaydında bu iş merkezî geçitte yapılıyor; ILogger o geçitten
+    /// GEÇMEZ, bu yüzden aynı temizleyici burada açıkça çağrılır — kuralın ikinci bir kopyasını
+    /// yazmıyoruz, var olanı kullanıyoruz.
+    /// </remarks>
+    private static string WpCliGunlukMetni(ComposerRunResultDto sonuc)
+    {
+        var ham = string.IsNullOrWhiteSpace(sonuc.Error) ? sonuc.Output : sonuc.Error;
+        return AuditSecretRedactor.SanitizeShortField(Kisalt(ham));
+    }
+
     public async Task<WordPressSiteDto> DetectAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
@@ -67,6 +119,14 @@ public sealed partial class WordPressToolkitService(
             File.Delete(maintenanceFile);
         }
 
+        // Bakım modu siteyi ZİYARETÇİYE KAPATIR. Kimin ne zaman açıp kapattığının izi olmalı:
+        // "site kapalı görünüyor" çağrısında bakılacak ilk yer burasıdır.
+        logger?.LogInformation(
+            "WordPress bakim modu {Durum}: {Site} ({Dosya})",
+            enabled ? "ACILDI" : "KAPATILDI",
+            site.Name,
+            maintenanceFile);
+
         var latest = await GetLatestCoreVersionAsync(cancellationToken);
         return BuildDto(site.Name, root, site.Bindings.FirstOrDefault()?.HostName, latest);
     }
@@ -101,6 +161,16 @@ public sealed partial class WordPressToolkitService(
         var host = string.IsNullOrWhiteSpace(binding?.HostName) ? "localhost" : binding!.HostName;
         var port = binding?.Port ?? 0;
         var portPart = port == 0 || (isHttps && port == 443) || (!isHttps && port == 80) ? string.Empty : $":{port}";
+
+        // TEK TIKLA YÖNETİCİ GİRİŞİ üretildi — panelde en yüksek ayrıcalıklı işlemlerden biri.
+        // JETON GÜNLÜĞE YAZILMAZ: geçerlilik süresi 2 dakika olsa da günlük dosyası uzun ömürlüdür
+        // ve okuyabilen herkes o pencerede siteye yönetici olarak girebilirdi. Kaydedilen şey
+        // olayın KENDİSİ: hangi siteye, ne zaman, hangi adres için.
+        logger?.LogInformation(
+            "WordPress tek kullanimlik yonetici giris baglantisi uretildi: {Site} ({Adres}), {Saniye} sn gecerli.",
+            site.Name,
+            $"{scheme}://{host}{portPart}",
+            lifetimeSeconds);
 
         return new WordPressLoginLinkDto
         {
@@ -183,6 +253,13 @@ add_action('init', function () {
         var parent = Path.GetDirectoryName(sourceRoot.TrimEnd('\\', '/')) ?? sourceRoot;
         var targetRoot = Path.Combine(parent, SafeFolder(targetName));
 
+        logger?.LogInformation(
+            "WordPress klonlama basliyor: {Kaynak} -> {Hedef} ({HedefAdres}), dosya kokü {HedefKok}.",
+            sourceSiteName,
+            targetName,
+            targetUrl,
+            targetRoot);
+
         // 1) Hedef siteyi oluştur (PHP runtime). DB'yi ayrıca kopyalayacağız.
         Directory.CreateDirectory(targetRoot);
         await iisSiteService.CreateSiteAsync(new CreateSiteRequest
@@ -207,7 +284,24 @@ add_action('init', function () {
             timeout: TimeSpan.FromMinutes(30));
         if (!RobocopyBasarili(copy.ExitCode))
         {
+            logger?.LogError(
+                "Klon dosya kopyalamasi BASARISIZ: {Kaynak} -> {Hedef}, robocopy cikis kodu {CikisKodu}. Hedef site OLUSTURULMUS durumda kaliyor.",
+                sourceRoot,
+                targetRoot,
+                copy.ExitCode);
             throw new AppException("wp.clone_copy_failed", 500, 500, copy.StandardError);
+        }
+
+        // robocopy 1-7 arası "başarı" ama NÖTR DEĞİL: 2 = hedefte fazladan dosya, 4 = uyumsuz
+        // öğe, 6 = ikisi birden. Klon tertemiz bir dizine yapıldığı için bu kodlar beklenmez;
+        // çıktıkları zaman kopyanın tam olmadığına dair tek işaret budur.
+        if (copy.ExitCode > 1)
+        {
+            logger?.LogWarning(
+                "Klon dosya kopyalamasi UYARILI bitti: robocopy cikis kodu {CikisKodu} ({Kaynak} -> {Hedef}).",
+                copy.ExitCode,
+                sourceRoot,
+                targetRoot);
         }
 
         // 3) Veritabanını AYRI bir hedef DB'ye kopyala (+ yeni kullanıcı, tam yetki, parola üret).
@@ -244,10 +338,39 @@ add_action('init', function () {
             targetConfig = ReplaceDefine(targetConfig, "DB_PASSWORD", transfer.Password);
             targetConfig = ReplaceDefine(targetConfig, "DB_HOST", "127.0.0.1");
             await File.WriteAllTextAsync(targetConfigPath, targetConfig, cancellationToken);
+
+            // PAROLA YAZILMAZ: yalnız hangi DB'ye ve hangi kullanıcıya bağlandığı. Sorun
+            // ayıklamak için gereken bilgi budur; parola gerekmez.
+            logger?.LogInformation(
+                "Klon wp-config yenilendi: {Hedef} artik {Veritabani} veritabanina {Kullanici} kullanicisiyla baglaniyor.",
+                targetName,
+                transfer.TargetDatabase,
+                transfer.UserName);
+        }
+        else
+        {
+            // SESSİZ ATLAMA — bu dosyadaki en tehlikeli "sorun yok" hâli.
+            //
+            // wp-config kopyalanmadıysa (robocopy kısmi başarı, kaynakta simge bağlantı, yetki)
+            // klon ya HİÇ AÇILMAZ ya da daha kötüsü kaynağın konfigürasyonunu kullanmaya devam
+            // eder: staging'de yapılan her yazma CANLI veritabanına gider. Panel yine de
+            // "Klon tamamlandı" der; bu satır o anın tek kanıtı.
+            logger?.LogError(
+                "Klonda wp-config.php BULUNAMADI ({Yol}); hedef {Hedef} KAYNAGIN veritabanina isaret ediyor olabilir. Veritabani {Veritabani} olarak kopyalandi ama baglanti bilgisi yazilamadi.",
+                targetConfigPath,
+                targetName,
+                transfer.TargetDatabase);
         }
 
         // 5) URL arama-değiştir (hedef kökte wp-cli) → staging kendi adresinde çalışır.
         var urlDegistirildi = await TryRewriteSiteUrlAsync(targetName, sourceUrl, targetUrl, cancellationToken);
+
+        logger?.LogInformation(
+            "WordPress klonlama bitti: {Kaynak} -> {Hedef} ({HedefAdres}). Adres degistirildi mi: {AdresDegisti}.",
+            sourceSiteName,
+            targetName,
+            targetUrl,
+            urlDegistirildi);
 
         return new WordPressCloneResultDto
         {
@@ -299,6 +422,17 @@ add_action('init', function () {
         var backupRoot = Path.Combine(targetParent, Path.GetFileName(targetRoot.TrimEnd('\\', '/')) + "_kopyala_yedek_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
         Directory.CreateDirectory(backupRoot);
 
+        // YIKICI İŞ BAŞLIYOR: /MIR hedefte kaynakta olmayan her şeyi silecek. Yedeğin NEREDE
+        // olduğu, iş yarıda kalırsa geri dönüşün tek adresidir — yanıta da konuluyor ama yanıt
+        // kaybolur, günlük kalır.
+        logger?.LogInformation(
+            "WordPress veri kopyalama basliyor: {Kaynak} -> {Hedef} (dosya: {Dosya}, veritabani: {Veritabani}). Geri donus yedegi: {Yedek}",
+            sourceSiteName,
+            targetName,
+            request.Files,
+            request.Database,
+            backupRoot);
+
         // Hedefin korunacak DB bilgileri (dosya kopyalansa bile hedef kendi DB'sinde kalır).
         var targetConfig = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
         var targetDbName = ReadDefine(targetConfig, "DB_NAME");
@@ -320,6 +454,16 @@ add_action('init', function () {
             var sourceDump = Path.Combine(backupRoot, "source-db.sql");
             await databaseService.ExportDumpAsync(new DatabaseDumpRequest { Engine = engine, DatabaseName = sourceDbName, FilePath = sourceDump }, cancellationToken);
             await databaseService.ImportDumpAsync(new DatabaseDumpRequest { Engine = engine, DatabaseName = targetDbName, FilePath = sourceDump }, cancellationToken);
+
+            // Hedefin verisi ÜZERİNE YAZILDI. Hangi veritabanının ne zaman ezildiği ve yedeğinin
+            // nerede olduğu kaydedilmezse "canlı sitede eski içerik var" şikâyeti çözülemez.
+            // DB adları sır değildir; parola bu yolda hiç geçmiyor (motor admin'i kullanılıyor).
+            logger?.LogInformation(
+                "Veritabani kopyalandi: {KaynakDb} -> {HedefDb} ({Motor}). Hedefin oncesi: {Yedek}",
+                sourceDbName,
+                targetDbName,
+                engine,
+                Path.Combine(backupRoot, "target-db.sql"));
         }
 
         // 2) Dosyalar: hedefi yedekle (kopya) → kaynak→hedef aynala (/MIR) → hedef wp-config DB bilgilerini geri yaz.
@@ -342,6 +486,11 @@ add_action('init', function () {
                 timeout: TimeSpan.FromMinutes(30));
             if (!RobocopyBasarili(backup.ExitCode))
             {
+                logger?.LogError(
+                    "Veri kopyalama DURDURULDU: hedefin yedegi alinamadi ({Hedef} -> {Yedek}), robocopy cikis kodu {CikisKodu}. Yikici aynalama CALISTIRILMADI.",
+                    targetRoot,
+                    backupRoot,
+                    backup.ExitCode);
                 throw new AppException("wp.copy_backup_failed", 500, 500, backup.StandardError);
             }
 
@@ -353,7 +502,22 @@ add_action('init', function () {
                 timeout: TimeSpan.FromMinutes(30));
             if (!RobocopyBasarili(mirror.ExitCode))
             {
+                logger?.LogError(
+                    "Veri kopyalama aynalamasi BASARISIZ: {Kaynak} -> {Hedef}, robocopy cikis kodu {CikisKodu}. Hedef YARIM kalmis olabilir; geri donus yedegi: {Yedek}",
+                    sourceRoot,
+                    targetRoot,
+                    mirror.ExitCode,
+                    backupRoot);
                 throw new AppException("wp.clone_copy_failed", 500, 500, mirror.StandardError);
+            }
+
+            if (mirror.ExitCode > 1)
+            {
+                logger?.LogWarning(
+                    "Veri kopyalama aynalamasi UYARILI bitti: robocopy cikis kodu {CikisKodu} ({Kaynak} -> {Hedef}).",
+                    mirror.ExitCode,
+                    sourceRoot,
+                    targetRoot);
             }
 
             // Aynalama kaynağın wp-config'ini getirdi → hedefin kendi DB bilgilerini geri yaz.
@@ -363,10 +527,30 @@ add_action('init', function () {
             rewritten = ReplaceDefine(rewritten, "DB_PASSWORD", targetDbPass);
             rewritten = ReplaceDefine(rewritten, "DB_HOST", targetDbHost.Length > 0 ? targetDbHost : "127.0.0.1");
             await File.WriteAllTextAsync(targetConfigPath, rewritten, cancellationToken);
+
+            // ReplaceDefine, ARANAN define yoksa içeriği SESSİZCE değiştirmeden döner. O durumda
+            // hedef, aynalamayla gelen KAYNAK yapılandırmasıyla kalır: canlı site staging'in
+            // (ya da tersine kaynağın) veritabanına yazar. Ölçülebilir tek kanıt, geri yazdığımız
+            // DB adının dosyada gerçekten bulunmasıdır.
+            if (targetDbName.Length > 0 && !rewritten.Contains(targetDbName, StringComparison.Ordinal))
+            {
+                logger?.LogError(
+                    "Hedef wp-config GERI YAZILAMADI: {Yol} icinde DB_NAME '{HedefDb}' bulunamadi. {Hedef} sitesi KAYNAGIN veritabanina baglaniyor olabilir.",
+                    targetConfigPath,
+                    targetDbName,
+                    targetName);
+            }
         }
 
         // 3) URL arama-değiştir (hedef DB'de) → hedef kendi adresinde çalışır.
         var urlDegistirildi = await TryRewriteSiteUrlAsync(targetName, sourceUrl, targetUrl, cancellationToken);
+
+        logger?.LogInformation(
+            "WordPress veri kopyalama bitti: {Kaynak} -> {Hedef}. Adres degistirildi mi: {AdresDegisti}. Yedek: {Yedek}",
+            sourceSiteName,
+            targetName,
+            urlDegistirildi,
+            backupRoot);
 
         return new WordPressCopyDataResultDto
         {
@@ -393,10 +577,19 @@ add_action('init', function () {
             {
                 return "mysql";
             }
+
+            // Liste OKUNDU ama içinde MariaDB de MySQL de yok. Yine "mariadb" dönülüyor; bu bir
+            // TAHMİNDİR ve sonraki dump/import adımı anlaşılmaz bir hatayla patlayacaktır.
+            logger?.LogWarning(
+                "Kurulu veritabani motorlari arasinda MariaDB/MySQL YOK (bulunanlar: {Motorlar}); varsayilan 'mariadb' kullanilacak.",
+                installed.Count == 0 ? "(hicbiri)" : string.Join(", ", installed));
         }
-        catch
+        catch (Exception exception)
         {
-            // motor listesi alınamazsa varsayılana düş
+            // motor listesi alınamazsa varsayılana düş — ama SESSİZCE DEĞİL. Sunucuda gerçekten
+            // MySQL varsa bu tahmin yanlıştır ve klon/kopyalama, sebebi görünmeyen bir dump
+            // hatasıyla düşer. Tahminin kendisi korunuyor (iş yarıda kesilmesin), gerekçesi kayıtlı.
+            logger?.LogWarning(exception, "Kurulu veritabani motorlari OKUNAMADI; varsayilan 'mariadb' kullanilacak.");
         }
         return "mariadb";
     }
@@ -461,12 +654,41 @@ add_action('init', function () {
                 targetSiteName,
                 $"search-replace {sourceUrl} {targetUrl} --all-tables --skip-columns=guid",
                 cancellationToken);
-            return sonuc.ExitCode == 0;
+
+            if (sonuc.ExitCode != 0)
+            {
+                // Kullanıcı yalnızca "adres değişmedi" bayrağını görür — SEBEBİ göremez, çünkü
+                // wp-cli çıktısı veritabanı kimlik bilgisi içerebildiği için yanıta konmuyor.
+                // O hâlde sebebin yaşayabileceği TEK yer burasıdır; metin, denetim kaydının
+                // kullandığı merkezî maskeden geçirilerek yazılır.
+                logger?.LogError(
+                    "WordPress adres degistirme BASARISIZ: {Site}, {Kaynak} -> {Hedef}, wp-cli cikis kodu {CikisKodu}. Site URETIM adresini servis ediyor olabilir. {Cikti}",
+                    targetSiteName,
+                    sourceUrl,
+                    targetUrl,
+                    sonuc.ExitCode,
+                    WpCliGunlukMetni(sonuc));
+                return false;
+            }
+
+            logger?.LogInformation(
+                "WordPress adres degistirildi: {Site}, {Kaynak} -> {Hedef}.",
+                targetSiteName,
+                sourceUrl,
+                targetUrl);
+            return true;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             // wp-cli/PHP hiç çalıştırılamadı (AppException: wpcli.not_wordpress, çalıştırıcı
-            // hatası...). Yutulmuyor — çağırana "olmadı" diye bildiriliyor.
+            // hatası...). Yutulmuyor — çağırana "olmadı" diye bildiriliyor. Ama "olmadı"nın
+            // NEDENİ (wp-cli kurulu değil mi, PHP mi patladı) çağırana ulaşmıyor; burada kalır.
+            logger?.LogError(
+                exception,
+                "WordPress adres degistirme CALISTIRILAMADI: {Site}, {Kaynak} -> {Hedef}. Site URETIM adresini servis ediyor olabilir.",
+                targetSiteName,
+                sourceUrl,
+                targetUrl);
             return false;
         }
     }
@@ -552,21 +774,58 @@ add_action('init', function () {
         applied.Add("author_enum");
 
         // 2) wp-cli: dosya düzenleyiciyi kapat + güvenlik anahtarlarını yenile (best-effort; wp-cli yoksa atlanır).
+        //
+        // KISMİ BAŞARI, ÜSTELİK GÜVENLİK KONUSUNDA. Panel "Güvenlik uygulandı" der ve listede
+        // hangi maddelerin geçtiğini gösterir; ama bir maddenin NEDEN listede olmadığı hiçbir yere
+        // yazılmıyordu. "file_edit" eksikse WordPress yönetici panelinden PHP dosyası düzenlemek
+        // hâlâ açıktır — yani ele geçirilen bir yönetici hesabı doğrudan kod çalıştırabilir.
+        // Kullanıcının bunu listedeki eksikten çıkarması beklenemez; sebebi burada durur.
         try
         {
-            if ((await hostingSettings.RunWpCliCommandAsync(siteName, "config set DISALLOW_FILE_EDIT true --raw", cancellationToken)).ExitCode == 0)
+            var dosyaDuzenleyici = await hostingSettings.RunWpCliCommandAsync(siteName, "config set DISALLOW_FILE_EDIT true --raw", cancellationToken);
+            if (dosyaDuzenleyici.ExitCode == 0)
             {
                 applied.Add("file_edit");
             }
-            if ((await hostingSettings.RunWpCliCommandAsync(siteName, "config shuffle-salts", cancellationToken)).ExitCode == 0)
+            else
+            {
+                logger?.LogWarning(
+                    "WordPress sertlestirme EKSIK: {Site} icin DISALLOW_FILE_EDIT yazilamadi (wp-cli cikis kodu {CikisKodu}). Yonetici panelinden dosya duzenleme ACIK kaliyor. {Cikti}",
+                    siteName,
+                    dosyaDuzenleyici.ExitCode,
+                    WpCliGunlukMetni(dosyaDuzenleyici));
+            }
+
+            var tuzlar = await hostingSettings.RunWpCliCommandAsync(siteName, "config shuffle-salts", cancellationToken);
+            if (tuzlar.ExitCode == 0)
             {
                 applied.Add("salts");
             }
+            else
+            {
+                logger?.LogWarning(
+                    "WordPress sertlestirme EKSIK: {Site} icin guvenlik anahtarlari (salts) yenilenemedi (wp-cli cikis kodu {CikisKodu}). Calinmis oturum cerezleri GECERLI kalir. {Cikti}",
+                    siteName,
+                    tuzlar.ExitCode,
+                    WpCliGunlukMetni(tuzlar));
+            }
         }
-        catch
+        catch (Exception exception)
         {
-            // wp-cli yoksa runtime (mu-plugin) önlemleri yine de uygulanmıştır
+            // wp-cli yoksa runtime (mu-plugin) önlemleri yine de uygulanmıştır — ama iki wp-cli
+            // maddesi HİÇ denenmemiş olur ve kullanıcı yeşil bir sonuç görür.
+            logger?.LogWarning(
+                exception,
+                "WordPress sertlestirmesinin wp-cli adimlari CALISTIRILAMADI: {Site}. Yalnizca mu-plugin onlemleri uygulandi: {Uygulanan}",
+                siteName,
+                string.Join(", ", applied));
         }
+
+        logger?.LogInformation(
+            "WordPress sertlestirmesi uygulandi: {Site}, {Sayi} onlem ({Uygulanan}).",
+            siteName,
+            applied.Count,
+            string.Join(", ", applied));
 
         return new WordPressHardenResultDto { Applied = applied };
     }
@@ -608,27 +867,50 @@ add_action('template_redirect', function () {
                 theme.Active = activeThemes.Contains(theme.Slug);
             }
         }
-        catch
+        catch (Exception exception)
         {
-            // wp-cli yoksa/çalışmazsa etkin durum gösterilmez (sorun değil)
+            // wp-cli yoksa/çalışmazsa etkin durum gösterilmez. Panelde bunun görüntüsü "hepsi
+            // pasif"tir — yani ÖLÇEMEDİK, KESİN BİR CEVAP gibi çiziliyor. İstisna yutuluyor
+            // (tek eklenti rozeti için pano çökmemeli) ama artık sessiz değil.
+            logger?.LogWarning(
+                exception,
+                "WordPress etkin eklenti/tema durumu OKUNAMADI: {Site}. Panelde hepsi 'pasif' gorunecek.",
+                siteName);
         }
     }
 
+    /// <remarks>
+    /// ÇIKIŞ KODU OKUNUYOR AMA SESSİZ: sıfır değilse BOŞ küme dönüyor ve çağıran bunu "hiçbiri
+    /// etkin değil" diye kullanıyor. Küme yine boş dönüyor (arayüz rozetini kaybetmek, yanlış
+    /// rozet göstermekten iyidir) ama sebep artık kaydediliyor.
+    /// </remarks>
     private async Task<HashSet<string>> GetActiveSlugsAsync(string siteName, string command, CancellationToken cancellationToken)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = await hostingSettings.RunWpCliCommandAsync(siteName, command, cancellationToken);
-        if (result.ExitCode == 0)
+        if (result.ExitCode != 0)
         {
-            foreach (var line in result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                set.Add(line);
-            }
+            logger?.LogWarning(
+                "wp-cli '{Komut}' sifir olmayan kod dondu ({CikisKodu}): {Site}. Etkin oge listesi BOS kabul edilecek. {Cikti}",
+                command,
+                result.ExitCode,
+                siteName,
+                WpCliGunlukMetni(result));
+            return set;
         }
+
+        foreach (var line in result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            set.Add(line);
+        }
+
         return set;
     }
 
-    private static WordPressSiteDto BuildDto(string siteName, string root, string? hostName, string latestVersion = "")
+    // ÖRNEK METOT (static değil): altındaki dosya okuma yardımcıları ölçüm başarısızlıklarını
+    // günlüğe yazabilsin diye. Zincirin tamamı (BuildDto → ReadPlugins/ReadThemes/ReadVersion/
+    // BuildSecurity → ReadHeader) aynı sebeple örnek metoda çevrildi.
+    private WordPressSiteDto BuildDto(string siteName, string root, string? hostName, string latestVersion = "")
     {
         var dto = new WordPressSiteDto { SiteName = siteName, Path = root };
         if (string.IsNullOrWhiteSpace(root) || !File.Exists(Path.Combine(root, "wp-config.php")))
@@ -653,7 +935,7 @@ add_action('template_redirect', function () {
     }
 
     // Güvenlik durumunu dosya tabanlı okur: mu-plugin varlığı (sürüm/xmlrpc/yazar) + wp-config DISALLOW_FILE_EDIT.
-    private static WordPressSecurityDto BuildSecurity(string root)
+    private WordPressSecurityDto BuildSecurity(string root)
     {
         var pluginActive = File.Exists(Path.Combine(root, "wp-content", "mu-plugins", "adapanel-security.php"));
         var fileEditorDisabled = false;
@@ -667,9 +949,16 @@ add_action('template_redirect', function () {
                     @"define\(\s*['""]DISALLOW_FILE_EDIT['""]\s*,\s*true\b",
                     RegexOptions.IgnoreCase);
             }
-            catch
+            catch (Exception exception)
             {
-                // wp-config okunamazsa kapalı say
+                // wp-config okunamazsa kapalı say — GÜVENLİ TARAF, ama yanlış olabilir: dosya
+                // gerçekten sertleştirilmişken panel "dosya düzenleyici AÇIK" gösterir ve
+                // kullanıcı zaten kapalı olan bir şeyi tekrar tekrar kapatmaya çalışır.
+                // DOSYA İÇERİĞİ GÜNLÜĞE YAZILMAZ: wp-config DB_PASSWORD taşır; yalnız yol yazılır.
+                logger?.LogWarning(
+                    exception,
+                    "wp-config OKUNAMADI ({Yol}); dosya duzenleyici 'acik' varsayilacak.",
+                    configPath);
             }
         }
 
@@ -683,7 +972,7 @@ add_action('template_redirect', function () {
     }
 
     // wp-content/plugins: her klasörde "Plugin Name:" başlıklı ana php dosyası + tek-dosyalık eklentiler.
-    private static IReadOnlyCollection<WordPressComponentDto> ReadPlugins(string root)
+    private IReadOnlyCollection<WordPressComponentDto> ReadPlugins(string root)
     {
         var pluginsDir = Path.Combine(root, "wp-content", "plugins");
         var list = new List<WordPressComponentDto>();
@@ -726,16 +1015,23 @@ add_action('template_redirect', function () {
                 }
             }
         }
-        catch
+        catch (Exception exception)
         {
-            // erişilemeyen klasör/dosya atlanır
+            // erişilemeyen klasör/dosya atlanır — LİSTE YARIM DÖNER ve panel bunu TAM liste gibi
+            // gösterir. Görünmeyen eklenti güncellenmez de: güncelleme ekranı bu listeden beslenir,
+            // yani açığı olan bir eklenti hem listede hem güncelleme kuyruğunda YOK olur.
+            logger?.LogWarning(
+                exception,
+                "Eklenti listesi YARIM okundu ({Dizin}); {Sayi} eklenti taranabildi.",
+                pluginsDir,
+                list.Count);
         }
 
         return list.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     // wp-content/themes/*/style.css başlığından temalar.
-    private static IReadOnlyCollection<WordPressComponentDto> ReadThemes(string root)
+    private IReadOnlyCollection<WordPressComponentDto> ReadThemes(string root)
     {
         var themesDir = Path.Combine(root, "wp-content", "themes");
         var list = new List<WordPressComponentDto>();
@@ -763,16 +1059,22 @@ add_action('template_redirect', function () {
                 });
             }
         }
-        catch
+        catch (Exception exception)
         {
-            // erişilemeyen klasör/dosya atlanır
+            // Aynı sessiz yarım-liste durumu temalarda: eksik tema panelde de güncelleme
+            // kuyruğunda da görünmez.
+            logger?.LogWarning(
+                exception,
+                "Tema listesi YARIM okundu ({Dizin}); {Sayi} tema taranabildi.",
+                themesDir,
+                list.Count);
         }
 
         return list.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     // WordPress eklenti/tema başlığı: dosyanın ilk ~8KB'ında "Anahtar: Değer" satırları.
-    private static Dictionary<string, string> ReadHeader(string file)
+    private Dictionary<string, string> ReadHeader(string file)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -790,15 +1092,19 @@ add_action('template_redirect', function () {
                 }
             }
         }
-        catch
+        catch (Exception exception)
         {
-            // okunamayan dosya boş başlık döner
+            // Okunamayan dosya BOŞ başlık döner; çağıran onu "bu bir eklenti değil" diye okur ve
+            // öğe listeden düşer. Dosya başına oluşabildiği için Debug: binlerce dosyada
+            // uyarı seviyesi günlüğü kullanılamaz hâle getirirdi. Toplam etki, üstteki
+            // ReadPlugins/ReadThemes sayaçlarından da görülebilir.
+            logger?.LogDebug(exception, "Eklenti/tema basligi okunamadi: {Dosya}", file);
         }
 
         return result;
     }
 
-    private static string ReadVersion(string root)
+    private string ReadVersion(string root)
     {
         var versionFile = Path.Combine(root, "wp-includes", "version.php");
         if (!File.Exists(versionFile))
@@ -810,10 +1116,21 @@ add_action('template_redirect', function () {
         {
             var content = File.ReadAllText(versionFile);
             var match = VersionRegex().Match(content);
-            return match.Success ? match.Groups[1].Value : string.Empty;
+            if (!match.Success)
+            {
+                // Dosya OKUNDU ama $wp_version yok: sürüm boş kalır, UpdateAvailable false olur
+                // ve site "güncel" görünür. Bozuk/kırpılmış bir çekirdek kurulumunun işareti.
+                logger?.LogWarning("WordPress surumu ayristirilamadi: {Dosya} icinde $wp_version bulunamadi.", versionFile);
+                return string.Empty;
+            }
+
+            return match.Groups[1].Value;
         }
-        catch
+        catch (Exception exception)
         {
+            // Sürüm boş → IsOlderVersion false → "güncelleme yok". Yani ÖLÇEMEDİK, panelde
+            // GÜVENDE gibi görünür. Tam olarak kapatılması istenen desen.
+            logger?.LogWarning(exception, "WordPress surumu OKUNAMADI: {Dosya}. Site 'guncel' gorunecek.", versionFile);
             return string.Empty;
         }
     }
@@ -824,7 +1141,17 @@ add_action('template_redirect', function () {
     private static DateTime cachedLatestAtUtc = DateTime.MinValue;
     private static readonly SemaphoreSlim VersionLock = new(1, 1);
 
-    private static async Task<string> GetLatestCoreVersionAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// BU YOLDAKİ SESSİZLİK PANELİN TAMAMINI ETKİLER: sorgu patlarsa <c>cachedLatestVersion</c>
+    /// boş kalır, <c>IsOlderVersion</c> her zaman false döner ve <b>bütün</b> WordPress siteleri
+    /// "güncel" görünür — güvenlik yaması bekleyenler dâhil. Davranış korunuyor (internet yok diye
+    /// pano çökmemeli) ama "ölçemedik" artık kayıtlı.
+    /// <para>
+    /// Örnek metot: <c>logger</c> alanına erişebilmek için. Önbellek alanları static kalıyor —
+    /// süreç ömrü boyunca tek sorgu yapmak bilinçli bir tercih.
+    /// </para>
+    /// </remarks>
+    private async Task<string> GetLatestCoreVersionAsync(CancellationToken cancellationToken)
     {
         if (cachedLatestVersion.Length > 0 && DateTime.UtcNow - cachedLatestAtUtc < TimeSpan.FromHours(6))
         {
@@ -852,10 +1179,35 @@ add_action('template_redirect', function () {
                 cachedLatestVersion = current.GetString() ?? string.Empty;
                 cachedLatestAtUtc = DateTime.UtcNow;
             }
+            else
+            {
+                // İstek BAŞARILI ama yanıtın şekli beklenmedik (API sözleşmesi değişmiş olabilir).
+                // Sessizce geçilirse panel aylarca "hiçbir site güncelleme beklemiyor" der.
+                logger?.LogWarning(
+                    "WordPress surum API yaniti BEKLENMEDIK sekilde geldi; guncelleme karsilastirmasi yapilamayacak (onbellek: '{Onbellek}').",
+                    cachedLatestVersion.Length == 0 ? "(bos)" : cachedLatestVersion);
+            }
         }
-        catch
+        catch (Exception exception)
         {
-            // İnternet yok / API erişilemez: güncelleme kontrolü sessizce atlanır (mevcut cache korunur).
+            // İnternet yok / API erişilemez: güncelleme kontrolü atlanır (mevcut cache korunur).
+            // BU SESSİZ OLAMAZ: önbellek boşsa BÜTÜN siteler "güncel" görünür. Seviye,
+            // önbellekte kullanılabilir bir değer olup olmamasına göre ayrılıyor — eski bir
+            // değerle devam etmek yalnızca tazelik kaybıdır, boş değerle devam etmek yanlış
+            // güvenlik tablosudur.
+            if (cachedLatestVersion.Length == 0)
+            {
+                logger?.LogWarning(
+                    exception,
+                    "En guncel WordPress surumu OKUNAMADI ve onbellek BOS; tum siteler 'guncel' gorunecek.");
+            }
+            else
+            {
+                logger?.LogInformation(
+                    exception,
+                    "En guncel WordPress surumu okunamadi; bayat onbellek degeri '{Onbellek}' kullanilacak.",
+                    cachedLatestVersion);
+            }
         }
         finally
         {
@@ -961,6 +1313,19 @@ add_action('template_redirect', function () {
 
         // OLCULEMEDIYSE "guncelleme yok" DEMIYORUZ. Bos liste, guvenlik acigi olan bir siteyi
         // guvende gosterebilirdi; okunamayan durum ayri bildiriliyor.
+        //
+        // DTO'daki bayrak arayüze ulaşır ama SUNUCUDA iz bırakmaz: bir siteyi haftalarca
+        // "ölçülemedi" durumunda tutan kalıcı bir arıza (wp-cli silinmiş, PHP sürümü değişmiş)
+        // ancak günlükte biriktiğinde fark edilir.
+        if (hatalar.Count > 0)
+        {
+            logger?.LogWarning(
+                "WordPress guncelleme durumu OLCULEMEDI: {Site}, {Sayi} sorgu basarisiz. Panel bu siteyi 'olculemedi' gosterecek. {Hatalar}",
+                siteName,
+                hatalar.Count,
+                AuditSecretRedactor.SanitizeDetails(string.Join(" | ", hatalar)));
+        }
+
         sonuc.Measured = hatalar.Count == 0;
         sonuc.Error = string.Join(" | ", hatalar);
         sonuc.Items = ogeler
@@ -993,12 +1358,46 @@ add_action('template_redirect', function () {
             sonuclar.Add(await GuncelleAsync(siteName, "theme", tema, "theme update " + tema, cancellationToken));
         }
 
+        // KISMİ BAŞARI ÖZETİ: "3 öğeden 1'i geçti" bilgisi yanıtta var ama yanıt kaybolur. Bir
+        // güncellemenin ne zaman ve kaç kez denendiği, sonradan "site bozuldu" denince bakılacak
+        // ilk kayıttır.
+        var basarisizSayisi = sonuclar.Count(item => !item.Success);
+        if (basarisizSayisi > 0)
+        {
+            logger?.LogWarning(
+                "WordPress guncellemesi KISMEN basarisiz: {Site}, {Basarisiz}/{Toplam} oge guncellenemedi ({Ogeler}).",
+                siteName,
+                basarisizSayisi,
+                sonuclar.Count,
+                string.Join(", ", sonuclar.Where(item => !item.Success).Select(item => $"{item.Kind}:{item.Name}")));
+        }
+        else
+        {
+            logger?.LogInformation(
+                "WordPress guncellemesi tamamlandi: {Site}, {Toplam} oge.",
+                siteName,
+                sonuclar.Count);
+        }
+
         return new WordPressUpdateResultDto { SiteName = siteName, Results = sonuclar };
     }
 
     private async Task<WordPressUpdateItemResultDto> GuncelleAsync(string siteName, string tur, string ad, string komut, CancellationToken cancellationToken)
     {
         var sonuc = await hostingSettings.RunWpCliCommandAsync(siteName, komut, cancellationToken);
+        if (sonuc.ExitCode != 0)
+        {
+            // Güncelleme YARIDA kalmış olabilir (wp-cli dosyaları indirip açarken düşerse site
+            // bozuk kalır). Öğe bazında sebep, yanıttaki kısa mesajdan daha fazlasını gerektirir.
+            logger?.LogWarning(
+                "WordPress {Tur} guncellemesi basarisiz: {Site}/{Ad}, wp-cli cikis kodu {CikisKodu}. {Cikti}",
+                tur,
+                siteName,
+                ad,
+                sonuc.ExitCode,
+                WpCliGunlukMetni(sonuc));
+        }
+
         return new WordPressUpdateItemResultDto
         {
             Kind = tur,
@@ -1045,10 +1444,27 @@ add_action('template_redirect', function () {
         }
     }
 
+    /// <remarks>
+    /// ÇIKIŞ KODU SESSİZCE BOŞ DİZGEYE ÇEVRİLİYORDU. Tek çağrı yeri <c>core version</c>: sonuç boş
+    /// olursa güncelleme listesinde çekirdeğin MEVCUT SÜRÜMÜ boş görünür, yani kullanıcı
+    /// "6.4 → 6.7" yerine " → 6.7" görür ve neyi yükselttiğini bilmez. Dönüş değeri korunuyor,
+    /// sebep kaydediliyor.
+    /// </remarks>
     private async Task<string> WpCliRawAsync(string siteName, string komut, CancellationToken cancellationToken)
     {
         var sonuc = await hostingSettings.RunWpCliCommandAsync(siteName, komut, cancellationToken);
-        return sonuc.ExitCode == 0 ? (sonuc.Output ?? string.Empty).Trim() : string.Empty;
+        if (sonuc.ExitCode != 0)
+        {
+            logger?.LogWarning(
+                "wp-cli '{Komut}' sifir olmayan kod dondu ({CikisKodu}): {Site}. Deger BOS kabul edilecek. {Cikti}",
+                komut,
+                sonuc.ExitCode,
+                siteName,
+                WpCliGunlukMetni(sonuc));
+            return string.Empty;
+        }
+
+        return (sonuc.Output ?? string.Empty).Trim();
     }
 
     private static string Alan(JsonElement oge, string ad)

@@ -1,4 +1,4 @@
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -9,10 +9,40 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Cache;
 
-public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
+/// <summary>
+/// Redis ve memcached bileşenlerinin durumunu ÖLÇER, başlatır ve durdurur.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden günlükçü (ILogger) var:</b> bu servisin verdiği her yanıt bir ÖLÇÜMDÜR ve ölçümün
+/// kendisi başarısız olabilir. Sorun şu ki başarısız ölçüm burada sessizce KESİN BİR CEVABA
+/// yuvarlanıyordu: <c>Get-Service</c> çalıştırılamazsa "servis kayıtlı değil", <c>Get-ScheduledTask</c>
+/// çalıştırılamazsa "görev yok", port sondası patlarsa "durdurulmuş". Yani panelde "Durduruldu"
+/// yazısı iki apayrı gerçeği aynı şekilde gösteriyordu: (a) bileşen gerçekten duruyor,
+/// (b) BİZ ÖLÇEMEDİK. İkincisi için sunucuda hiçbir iz kalmıyordu; kullanıcı "Başlat"a basınca
+/// gelen "bileşeni yeniden kurun" tavsiyesi de o yüzden yanlış olabiliyordu.
+/// </para>
+/// <para>
+/// <b>Gürültü kuralı:</b> port sondasının "bağlantı reddedildi" ile dönmesi bileşen dururken
+/// BEKLENEN sonuçtur ve Debug'a yazılır. Uyarı seviyesi yalnızca ölçüm aracının kendisi
+/// (powershell/schtasks) beklenmedik biçimde başarısız olduğunda kullanılır — çünkü panelin
+/// gösterdiği tabloyu yanlış yapan tek şey odur.
+/// </para>
+/// <para>
+/// <b>Sır sızıntısı:</b> Redis <c>INFO</c> çıktısı ve <c>adapanel-redis.conf</c> içeriği günlüğe
+/// HİÇ yazılmaz; yalnızca ayrıştırılmış sayısal metrikler ve bileşen/port adları yazılır.
+/// </para>
+/// <para>
+/// Günlükçü İSTEĞE BAĞLI: dar kapsamlı testler bu servisi doğrudan kuruyor (bkz.
+/// <c>MemcachedRuntimeTruthTests</c>); zorunlu yapmak o kurulumları kırardı. Üretimde DI daima verir.
+/// Aynı gerekçe <c>BackupService</c>'te de yazılı.
+/// </para>
+/// </remarks>
+public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheService>? logger = null) : ICacheService
 {
     // Redis GERÇEK bir Windows servisidir (redis-server --service-install).
     private static readonly CacheDescriptor RedisDescriptor = new("redis", "Redis", "AdaRedis", 6379, "redis-server.exe", RunsAsScheduledTask: false);
@@ -86,9 +116,18 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
         var result = await ProcessRunner.RunPowerShellAsync($"Start-Service -Name \"{runtime.ServiceName}\" -ErrorAction Stop", cancellationToken);
         if (!result.Success)
         {
+            // İSTİSNA HTTP yanıtına gider ve orada BİTER. Sunucuda bunun izi yoksa "dün akşam
+            // Redis başlamıyordu" şikâyeti sonradan hiç incelenemez.
+            logger?.LogError(
+                "{Bilesen} servisi baslatilamadi: {Servis} (cikis kodu {CikisKodu}). {Detay}",
+                descriptor.DisplayName,
+                runtime.ServiceName,
+                result.ExitCode,
+                Detay(result));
             throw new AppException("cache.start_failed", 500, 500, Detay(result));
         }
 
+        logger?.LogInformation("{Bilesen} servisi baslatildi: {Servis}", descriptor.DisplayName, runtime.ServiceName);
         return await BuildRuntimeAsync(descriptor, cancellationToken);
     }
 
@@ -109,6 +148,15 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
     {
         if (!runtime.IsServiceRegistered)
         {
+            // "Kayıtlı değil" iki farklı gerçeğin ORTAK yanıtıdır: görev gerçekten yok, ya da
+            // Get-ScheduledTask çalıştırılamadı (bkz. ScheduledTaskExistsAsync uyarısı). Kullanıcıya
+            // verilen "yeniden kur" tavsiyesi ikinci durumda YANLIŞTIR; hangi durumda olduğumuz
+            // yalnız günlükten anlaşılır.
+            logger?.LogWarning(
+                "{Bilesen} baslatilamadi: '{Gorev}' zamanlanmis gorevi kayitli GORUNMUYOR (gercekten yok ya da olcum yapilamadi).",
+                descriptor.DisplayName,
+                runtime.ServiceName);
+
             throw new AppException(
                 "cache.service_install_failed",
                 500,
@@ -121,12 +169,38 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
             $"/Run /TN \"{runtime.ServiceName}\"",
             cancellationToken: cancellationToken);
 
+        // DIŞ ARACIN ÇIKIŞ KODU AKIŞI DURDURMUYOR — o hâlde en azından KAYDEDİLMELİ.
+        // Görev zaten çalışıyorken (schtasks 0x41301) ya da tetikleme reddedildiğinde port yine de
+        // yanıt verebilir; o durumda "Başlat" başarılı görünür ama başlatan BİZ olmayız. Bu ayrım
+        // yalnız günlükte durur.
+        if (result.ExitCode != 0)
+        {
+            logger?.LogWarning(
+                "schtasks /Run sifir olmayan kod dondu ama akis surduruluyor: {Gorev} (kod {CikisKodu}). {Detay}",
+                runtime.ServiceName,
+                result.ExitCode,
+                Detay(result));
+        }
+
         // SONUCU ÖLÇ: "schtasks /Run" görevi TETİKLEDİĞİNİ söyler, sürecin ayakta kaldığını değil.
         // Tek dürüst kanıt, önbelleğin kendi portundan yanıt vermesidir.
         if (await WaitForLivenessAsync(descriptor, expectedAlive: true, cancellationToken))
         {
+            logger?.LogInformation(
+                "{Bilesen} zamanlanmis gorevle baslatildi ve 127.0.0.1:{Port} yanit veriyor: {Gorev}",
+                descriptor.DisplayName,
+                descriptor.DefaultPort,
+                runtime.ServiceName);
             return await BuildRuntimeAsync(descriptor, cancellationToken);
         }
+
+        logger?.LogError(
+            "{Bilesen} baslatilamadi: gorev calistirildi ama 127.0.0.1:{Port} yanit vermiyor. Gorev {Gorev}, kod {CikisKodu}. {Detay}",
+            descriptor.DisplayName,
+            descriptor.DefaultPort,
+            runtime.ServiceName,
+            result.ExitCode,
+            Detay(result));
 
         throw new AppException(
             "cache.start_failed",
@@ -147,6 +221,13 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
     {
         if (!runtime.IsServiceRegistered)
         {
+            // HİÇBİR ŞEY YAPMADAN "durduruldu" dönen yol. Servis kaydı okunamadıysa (bkz.
+            // ReadServiceStatusAsync uyarısı) bileşen ÇALIŞMAYA DEVAM ETTİĞİ hâlde panel yeşil
+            // gösterir — memcached'de kanıtlanmış arıza deseni tam olarak buydu.
+            logger?.LogWarning(
+                "{Bilesen} durdurma istegi ISLEM YAPILMADAN dondu: '{Servis}' servisi kayitli gorunmuyor.",
+                descriptor.DisplayName,
+                runtime.ServiceName);
             return runtime;
         }
 
@@ -155,9 +236,16 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
         var result = await ProcessRunner.RunPowerShellStrictAsync($"Stop-Service -Name \"{runtime.ServiceName}\" -ErrorAction Stop", cancellationToken);
         if (!result.Success)
         {
+            logger?.LogError(
+                "{Bilesen} servisi durdurulamadi: {Servis} (cikis kodu {CikisKodu}). {Detay}",
+                descriptor.DisplayName,
+                runtime.ServiceName,
+                result.ExitCode,
+                Detay(result));
             throw new AppException("cache.stop_failed", 500, 500, Detay(result));
         }
 
+        logger?.LogInformation("{Bilesen} servisi durduruldu: {Servis}", descriptor.DisplayName, runtime.ServiceName);
         return await BuildRuntimeAsync(descriptor, cancellationToken);
     }
 
@@ -189,10 +277,36 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
             {
                 detaylar.Add(detay);
             }
+
+            // schtasks /End başarısız olsa bile aşağıdaki canlılık ölçümü "sustu" derse kullanıcı
+            // "durduruldu" görür. Aracın reddettiği bir komutun izi kalmalı: aynı arıza yarın
+            // kalıcı hâle geldiğinde tek başlangıç noktası bu satır olur.
+            if (son.ExitCode != 0)
+            {
+                logger?.LogWarning(
+                    "schtasks /End sifir olmayan kod dondu ama akis surduruluyor: {Gorev} (kod {CikisKodu}). {Detay}",
+                    runtime.ServiceName,
+                    son.ExitCode,
+                    detay);
+            }
+        }
+        else
+        {
+            logger?.LogWarning(
+                "{Bilesen} durdurulurken '{Gorev}' zamanlanmis gorevi kayitli GORUNMUYOR; yalnizca surec avina guveniliyor.",
+                descriptor.DisplayName,
+                runtime.ServiceName);
         }
 
         if (!await WaitForLivenessAsync(descriptor, expectedAlive: false, cancellationToken))
         {
+            // KISMİ BAŞARI: görev bitti ama süreç yaşıyor. Kullanıcı sonunda "Durduruldu" görecek;
+            // hangi kademenin işe yaradığı yalnız burada kayıtlı.
+            logger?.LogWarning(
+                "{Bilesen} gorev sonlandirildiktan sonra hala 127.0.0.1:{Port} adresinden yanit veriyor; surecler oldurulmeye gecildi.",
+                descriptor.DisplayName,
+                descriptor.DefaultPort);
+
             // Görev bittiği hâlde süreç yaşıyor: sarmalayıcı .cmd'nin altındaki memcached.exe.
             // Yol karşılaştırması ORTAK primitiften geliyor (nginx'te bu karşılaştırma elle
             // yazılmıştı ve ayırıcı yönü yüzünden hiç eşleşmiyordu).
@@ -202,10 +316,29 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
                     runtime.InstallDir,
                     Path.GetFileNameWithoutExtension(descriptor.ExecutableName));
                 detaylar.Add($"{oldurulen} surec oldurulmeye calisildi.");
+                logger?.LogWarning(
+                    "{Bilesen}: {Sayi} surec {Dizin} altindan oldurulmeye calisildi.",
+                    descriptor.DisplayName,
+                    oldurulen,
+                    runtime.InstallDir);
+            }
+            else
+            {
+                // Kurulum dizini bilinmiyorsa ikinci kademe HİÇ ÇALIŞMAZ; aşağıdaki ölçüm yine de
+                // "sustu" derse bileşen kendiliğinden durmuş demektir, biz durdurmuş olmayız.
+                logger?.LogWarning(
+                    "{Bilesen}: kurulum dizini bilinmiyor, surec oldurme kademesi ATLANDI.",
+                    descriptor.DisplayName);
             }
 
             if (!await WaitForLivenessAsync(descriptor, expectedAlive: false, cancellationToken))
             {
+                logger?.LogError(
+                    "{Bilesen} durdurulamadi: 127.0.0.1:{Port} hala yanit veriyor. {Detay}",
+                    descriptor.DisplayName,
+                    descriptor.DefaultPort,
+                    string.Join(" ", detaylar));
+
                 throw new AppException(
                     "cache.stop_failed",
                     500,
@@ -214,6 +347,10 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
             }
         }
 
+        logger?.LogInformation(
+            "{Bilesen} durduruldu ve 127.0.0.1:{Port} artik yanit vermiyor.",
+            descriptor.DisplayName,
+            descriptor.DefaultPort);
         return await BuildRuntimeAsync(descriptor, cancellationToken);
     }
 
@@ -221,7 +358,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
     /// Bileşen kendi portundan yanıt verene (ya da susana) kadar bekler; beklenen duruma ulaşıldıysa
     /// true döner. Süreç başlatma/durdurma ANINDA gerçekleşmez — tek ölçüm yanıltıcıdır.
     /// </summary>
-    private static async Task<bool> WaitForLivenessAsync(CacheDescriptor descriptor, bool expectedAlive, CancellationToken cancellationToken)
+    private async Task<bool> WaitForLivenessAsync(CacheDescriptor descriptor, bool expectedAlive, CancellationToken cancellationToken)
     {
         for (var deneme = 0; deneme < 20; deneme++)
         {
@@ -241,7 +378,7 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
     /// memcached'de <c>version\r\n</c> komutu <c>VERSION x.y.z</c> döner (kurulum doğrulaması da
     /// aynı sondayı kullanıyor); Redis'te RESP <c>INFO</c> yanıtı yeterlidir.
     /// </summary>
-    private static async Task<bool> IsAliveAsync(CacheDescriptor descriptor, CancellationToken cancellationToken)
+    private async Task<bool> IsAliveAsync(CacheDescriptor descriptor, CancellationToken cancellationToken)
     {
         if (descriptor.ComponentId == "memcached")
         {
@@ -253,8 +390,17 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
         return info.Length > 0;
     }
 
-    /// <summary>Localhost'ta tek komut gönderip ilk yanıtı okur; erişilemezse boş dizge döner.</summary>
-    private static async Task<string> ProbeTextAsync(int port, string command, CancellationToken cancellationToken)
+    /// <summary>
+    /// Localhost'ta tek komut gönderip ilk yanıtı okur; erişilemezse boş dizge döner.
+    /// </summary>
+    /// <remarks>
+    /// GÜRÜLTÜ AYRIMI: "bağlantı reddedildi" bileşen dururken BEKLENEN yanıttır ve saniyede
+    /// birkaç kez oluşabilir — Debug'a yazılır. Onun DIŞINDAKİ her hata (zaman aşımı, akış hatası,
+    /// yetki) ölçümün kendisinin başarısız olduğu anlamına gelir: 127.0.0.1'de bir şey DİNLİYOR ama
+    /// konuşmuyor. Bu durumda panel "Durduruldu" gösterir, oysa doğrusu "ölçemedik"tir — bu yüzden
+    /// uyarı seviyesindedir.
+    /// </remarks>
+    private async Task<string> ProbeTextAsync(int port, string command, CancellationToken cancellationToken)
     {
         try
         {
@@ -270,8 +416,17 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
             var read = await stream.ReadAsync(buffer, cts.Token);
             return read <= 0 ? string.Empty : Encoding.ASCII.GetString(buffer, 0, read).Trim();
         }
-        catch
+        catch (SocketException exception) when (exception.SocketErrorCode == SocketError.ConnectionRefused)
         {
+            logger?.LogDebug("127.0.0.1:{Port} baglanti reddetti (bilesen durmus kabul ediliyor).", port);
+            return string.Empty;
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(
+                exception,
+                "127.0.0.1:{Port} sondasi OLCUM YAPAMADI; durum 'durduruldu' olarak raporlanacak.",
+                port);
             return string.Empty;
         }
     }
@@ -290,6 +445,18 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
             : Directory.Exists(installDir)
                 ? Directory.GetFiles(installDir, descriptor.ExecutableName, SearchOption.AllDirectories).FirstOrDefault() ?? string.Empty
                 : string.Empty;
+
+        // KAYIT ile DİSK ÇELİŞİYOR: bileşen "Installed" görünüyor ama dizini/çalıştırılabiliri yok.
+        // Panel bileşeni yine KURULU gösterir (IsInstalled kayda bakar); kullanıcı "Başlat"a
+        // bastığında anlamsız bir 404 alır. Çelişkinin sunucuda izi olmalı.
+        if (installedComponent is not null && executablePath.Length == 0)
+        {
+            logger?.LogWarning(
+                "{Bilesen} kayitta 'kurulu' ama {Dosya} diskte bulunamadi (dizin: {Dizin}). Panel kurulu gosterecek, baslatma basarisiz olacak.",
+                descriptor.DisplayName,
+                descriptor.ExecutableName,
+                string.IsNullOrWhiteSpace(installDir) ? "(kayitli degil)" : installDir);
+        }
 
         // GÖREV/SERVİS ADI VARSAYILMAZ, OKUNUR: kurulum bileşen manifestindeki serviceName'i
         // InstalledComponent kaydına yazar; koddaki sabit yalnızca kayıt boşsa yedek olarak kullanılır.
@@ -349,18 +516,46 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
     /// Zamanlanmış görev kayıtlı mı? (memcached bir Windows SERVİSİ değildir; kurulum onu ONSTART
     /// görev olarak kaydeder.)
     /// </summary>
-    private static async Task<bool> ScheduledTaskExistsAsync(string taskName, CancellationToken cancellationToken)
+    /// <remarks>
+    /// "ÖLÇEMEDİK" BURADA "YOK"A YUVARLANIYOR: powershell hiç çalışmazsa ya da beklenmedik bir şey
+    /// yazarsa yüklem <c>false</c> döner ve çağıranlar bunu "görev kayıtlı değil" diye okur —
+    /// Durdur hiçbir şey yapmadan döner, Başlat ise kullanıcıya "bileşeni yeniden kur" der.
+    /// İkisi de yanlış olabilir. Yuvarlama korunuyor (güvenli taraf), sebebi ise artık kayıtlı.
+    /// </remarks>
+    private async Task<bool> ScheduledTaskExistsAsync(string taskName, CancellationToken cancellationToken)
     {
         var result = await ProcessRunner.RunPowerShellAsync(
             $"if (Get-ScheduledTask -TaskName \"{taskName}\" -ErrorAction SilentlyContinue) {{ 'true' }} else {{ 'false' }}",
             cancellationToken);
 
-        return result.Success && bool.TryParse(result.StandardOutput.Trim(), out var registered) && registered;
+        if (!result.Success)
+        {
+            logger?.LogWarning(
+                "Zamanlanmis gorev sorgusu CALISTIRILAMADI: {Gorev} (cikis kodu {CikisKodu}). Gorev 'kayitli degil' varsayilacak. {Detay}",
+                taskName,
+                result.ExitCode,
+                Detay(result));
+            return false;
+        }
+
+        if (!bool.TryParse(result.StandardOutput.Trim(), out var registered))
+        {
+            logger?.LogWarning(
+                "Zamanlanmis gorev sorgusu BEKLENMEDIK cikti verdi: {Gorev}. Gorev 'kayitli degil' varsayilacak.",
+                taskName);
+            return false;
+        }
+
+        return registered;
     }
 
     // Redis'e RESP ile bağlanıp INFO komutunu çalıştırır, metrikleri ayrıştırır. Şifre korumalıysa (NOAUTH)
     // veya erişilemezse null döner (panel kendi AdaRedis'inde parola yok). Sadece localhost, 2.5 sn timeout.
-    private static async Task<CacheMetricsDto?> ReadRedisInfoAsync(int port, CancellationToken cancellationToken)
+    //
+    // SIR SIZINTISI KORUMASI: INFO yanıtının GÖVDESİ günlüğe HİÇ yazılmaz. Yanıt, panelin kendi
+    // Redis'inde masum olsa da kullanıcının kendi yapılandırdığı bir örnekte çalıştırılan komutları
+    // ve bağlantı adreslerini içerebilir. Günlüğe yalnız "okunamadı" bilgisi ve port düşer.
+    private async Task<CacheMetricsDto?> ReadRedisInfoAsync(int port, CancellationToken cancellationToken)
     {
         try
         {
@@ -393,10 +588,23 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
             }
 
             var text = builder.ToString();
-            return text.Contains("NOAUTH", StringComparison.OrdinalIgnoreCase) ? null : ParseRedisInfo(text);
+            if (text.Contains("NOAUTH", StringComparison.OrdinalIgnoreCase))
+            {
+                // Metrik kartı BOŞ görünür ve kullanıcı sebebini hiçbir yerde göremezdi.
+                // Bu bir arıza değil, yapılandırma gerçeği — ama söylenmeyen bir gerçek.
+                logger?.LogInformation(
+                    "Redis metrikleri okunamadi: 127.0.0.1:{Port} kimlik dogrulamasi istiyor (NOAUTH).",
+                    port);
+                return null;
+            }
+
+            return ParseRedisInfo(text);
         }
-        catch
+        catch (Exception exception)
         {
+            // Redis CANLI ölçülmüşken INFO'nun patlaması olağan değildir; metrikler sessizce
+            // kaybolur ve panel "sorun yok" görüntüsü verir.
+            logger?.LogWarning(exception, "Redis INFO okunamadi: 127.0.0.1:{Port}. Metrikler gosterilmeyecek.", port);
             return null;
         }
     }
@@ -470,11 +678,21 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
                 $"{descriptor.DisplayName} servis kaydi panelden yapilamaz; bileseni Yazilim ekranindan yeniden kurun.");
         }
 
+        // NOT: `command` Redis yapılandırma DOSYA YOLUNU içerir, parola içermez (AdaRedis parolasız
+        // ve bind 127.0.0.1). Yine de günlüğe komutun tamamı değil yalnız servis adı yazılır.
         var result = await ProcessRunner.RunPowerShellStrictAsync(command, cancellationToken);
         if (!result.Success)
         {
+            logger?.LogError(
+                "{Bilesen} servis kaydi olusturulamadi: {Servis} (cikis kodu {CikisKodu}). {Detay}",
+                descriptor.DisplayName,
+                runtime.ServiceName,
+                result.ExitCode,
+                Detay(result));
             throw new AppException("cache.service_install_failed", 500, 500, Detay(result));
         }
+
+        logger?.LogInformation("{Bilesen} servis kaydi olusturuldu: {Servis}", descriptor.DisplayName, runtime.ServiceName);
     }
 
     private static string BuildRedisInstallCommand(string executablePath, string installDir, string serviceName, int port)
@@ -493,14 +711,30 @@ public sealed class CacheService(AdaPanelDbContext dbContext) : ICacheService
         return $"& '{executablePath}' --service-install '{configPath}' --service-name {serviceName}";
     }
 
-    private static async Task<string?> ReadServiceStatusAsync(string serviceName, CancellationToken cancellationToken)
+    /// <remarks>
+    /// İKİ AYRI GERÇEK AYNI <c>null</c>'a düşüyor: "böyle bir servis yok" (betik başarıyla çalıştı,
+    /// çıktı boş) ve "servisi SORAMADIK" (betik hiç çalışmadı). İkincisi panelde bileşeni
+    /// "Durduruldu / kayıtlı değil" gösterir; kullanıcı da olmayan bir arızayı kovalar. Dönüş
+    /// değeri aynı kalıyor, ama ölçüm başarısızlığı artık uyarı olarak yazılıyor.
+    /// </remarks>
+    private async Task<string?> ReadServiceStatusAsync(string serviceName, CancellationToken cancellationToken)
     {
         var result = await ProcessRunner.RunPowerShellAsync(
             $@"$service = Get-Service -Name ""{serviceName}"" -ErrorAction SilentlyContinue
 if ($service) {{ [pscustomobject]@{{ Status = $service.Status.ToString() }} | ConvertTo-Json -Depth 2 }}",
             cancellationToken);
 
-        if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
+        if (!result.Success)
+        {
+            logger?.LogWarning(
+                "Servis durumu OKUNAMADI: {Servis} (cikis kodu {CikisKodu}). Servis 'kayitli degil' varsayilacak. {Detay}",
+                serviceName,
+                result.ExitCode,
+                Detay(result));
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(result.StandardOutput))
         {
             return null;
         }

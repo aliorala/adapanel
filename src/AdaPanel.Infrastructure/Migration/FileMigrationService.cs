@@ -2,6 +2,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using FluentFTP;
+using Microsoft.Extensions.Logging;
 using Renci.SshNet;
 
 namespace AdaPanel.Infrastructure.Migration;
@@ -12,7 +13,30 @@ namespace AdaPanel.Infrastructure.Migration;
 /// IIS fiziksel kök dizini. Sertifika/host-key doğrulaması göç senaryosu için gevşektir (kullanıcı kendi
 /// dosyalarını çekiyor).
 /// </summary>
-internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFileMigrationService
+/// <remarks>
+/// <para>
+/// <b>Neden günlükçü (ILogger) var:</b> göç TEK SEFERLİK ve GERİ ALINAMAZ bir iştir — kullanıcı
+/// bittiğini sanıp DNS'i çevirdikten sonra eksik gelen dosyalar geri getirilemez. Buradaki en
+/// tehlikeli durum "hepsi patladı" değil, KISMİ BAŞARI: FluentFTP tek tek öğeler için hata
+/// döndürebilir; bir dosya bile indiyse <see cref="EnsureFilesDownloaded"/> geçer ve panel yeşil
+/// "Dosyalar çekildi" gösterir. Kaç öğenin düştüğü ve hangileri olduğu HİÇBİR YERE yazılmıyordu.
+/// Aynı sessizlik SFTP'de de var: dizin ve normal dosya dışındaki girdiler (sembolik bağlantı,
+/// soket) sayaca hiç girmeden atlanıyor.
+/// </para>
+/// <para>
+/// <b>Sır sızıntısı:</b> bu servisin isteği FTP/SFTP KULLANICI ADI ve PAROLASI taşır. Günlüğe
+/// asla <c>request</c> nesnesi ya da kütüphane bağlantı dizesi yazılmaz; adres
+/// <see cref="GunlugeUygunHedef"/> ile YENİDEN KURULUR — şema, konak, port ve uzak yol; kimlik
+/// bilgisi parçası hiç eklenmez.
+/// </para>
+/// <para>
+/// Günlükçü İSTEĞE BAĞLI: yeni bir zorunlu parametre mevcut dar kapsamlı test kurulumlarını
+/// kırardı; gerekçe <c>BackupService</c>'te yazılı. Üretimde DI daima verir.
+/// </para>
+/// </remarks>
+internal sealed class FileMigrationService(
+    IIisSiteService iisSiteService,
+    ILogger<FileMigrationService>? logger = null) : IFileMigrationService
 {
     public async Task<RemoteFileMigrationResult> PullAsync(RemoteFileMigrationRequest request, CancellationToken cancellationToken = default)
     {
@@ -30,23 +54,82 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
 
         var protocol = (request.Protocol ?? "ftp").Trim().ToLowerInvariant();
         var remotePath = string.IsNullOrWhiteSpace(request.RemotePath) ? "/" : request.RemotePath.Trim();
+        var hedefEtiket = GunlugeUygunHedef(protocol, request.Host, request.Port, remotePath);
+
+        logger?.LogInformation(
+            "Goc dosya cekme basliyor: {Site} <- {UzakHedef} (yerel hedef {YerelYol}).",
+            request.SiteName,
+            hedefEtiket,
+            target);
 
         try
         {
-            return protocol switch
+            var sonuc = protocol switch
             {
                 "sftp" => await PullSftpAsync(request, target, remotePath, cancellationToken),
                 _ => await PullFtpAsync(request, target, remotePath, protocol == "ftps", cancellationToken)
             };
+
+            logger?.LogInformation(
+                "Goc dosya cekme bitti: {Site} <- {UzakHedef}, {Dosya} dosya / {Bayt} bayt -> {YerelYol}.",
+                request.SiteName,
+                hedefEtiket,
+                sonuc.FilesDownloaded,
+                sonuc.BytesDownloaded,
+                sonuc.TargetPath);
+            return sonuc;
         }
-        catch (AppException)
+        catch (AppException exception)
         {
+            // Buraya "sıfır dosya indi" koruması da düşer. İSTİSNA HTTP yanıtına gider ve orada
+            // biter; sunucuda iz kalmazsa "göç neden boş geldi" sorusu sonradan incelenemez.
+            logger?.LogWarning(
+                "Goc dosya cekme BASARISIZ: {Site} <- {UzakHedef}. Anahtar {Anahtar}. {Detay}",
+                request.SiteName,
+                hedefEtiket,
+                exception.MessageKey,
+                exception.Details);
             throw;
         }
         catch (Exception exception)
         {
+            // Ham FTP/SSH istisnası kullanıcıya SINIFLANDIRILMIŞ hâliyle gider; yığın izi (asıl
+            // teşhis malzemesi) yalnız günlükte kalır. Kimlik bilgisi kütüphane istisna
+            // metinlerinde geçmez — parola hiçbir mesaja yazılmaz, kullanıcı adı da bilinçli
+            // olarak `hedefEtiket`in dışında bırakılmıştır.
+            logger?.LogError(
+                exception,
+                "Goc dosya cekme HATASI: {Site} <- {UzakHedef}.",
+                request.SiteName,
+                hedefEtiket);
             throw ClassifyFileError(exception);
         }
+    }
+
+    /// <summary>
+    /// Günlüğe yazılabilir uzak adres: şema, konak, port ve uzak yol. KİMLİK BİLGİSİ İÇERMEZ.
+    /// </summary>
+    /// <remarks>
+    /// Adres, isteği olduğu gibi biçimlendirmek yerine PARÇALARINDAN yeniden kurulur. Sebebi
+    /// tek bir kural: kullanıcı adı/parola alanları buraya HİÇ girmez, dolayısıyla ileride biri
+    /// biçimi değiştirse bile sızdıracak bir alan yoktur. (Denetim kaydındaki merkezî temizleyici
+    /// <c>AuditSecretRedactor</c> ILogger yolunda çalışmaz; koruma çağrı yerinde kurulur.)
+    /// </remarks>
+    internal static string GunlugeUygunHedef(string protocol, string? host, int port, string remotePath)
+    {
+        var sema = string.IsNullOrWhiteSpace(protocol) ? "ftp" : protocol.Trim().ToLowerInvariant();
+        var konak = (host ?? string.Empty).Trim();
+
+        // Kullanıcı konak alanına "kullanici:parola@sunucu" yazmış olabilir; bu biçim FTP
+        // adreslerinde yaygındır ve olduğu gibi yazılırsa PAROLA günlüğe düşerdi.
+        var atIsareti = konak.LastIndexOf('@');
+        if (atIsareti >= 0)
+        {
+            konak = konak[(atIsareti + 1)..];
+        }
+
+        var portParcasi = port > 0 ? $":{port}" : string.Empty;
+        return $"{sema}://{konak}{portParcasi}{remotePath}";
     }
 
     // Ham FTP/SFTP istisnasını anlaşılır bir başlığa (yetkilendirme / uzak yol / bağlantı) eşler ve gerçek teknik
@@ -110,7 +193,24 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
         await client.Disconnect(cancellationToken);
 
         var files = results.Where(item => item.IsSuccess && item.Type == FtpObjectType.File).ToList();
-        var failed = results.Count(item => !item.IsSuccess);
+        var basarisizlar = results.Where(item => !item.IsSuccess).ToList();
+        var failed = basarisizlar.Count;
+
+        // KISMİ BAŞARI — "bazıları oldu, bazıları olmadı".
+        //
+        // Aşağıdaki koruma yalnız SIFIR dosyayı yakalar; 900 dosyadan 40'ı düştüğünde akış geçer
+        // ve panel "Dosyalar çekildi" der. Göç geri alınamaz olduğu için eksik dosyanın hangisi
+        // olduğu SONRADAN sorulur — o an tek kayıt bu satırdır. Yol adları sır değildir,
+        // kimlik bilgisi ise bu listede hiç bulunmaz.
+        if (failed > 0)
+        {
+            logger?.LogWarning(
+                "FTP goc KISMEN basarisiz: {Site} icin {Basarisiz} oge aktarilamadi, {Basarili} dosya indi. Atlanan ilk ogeler: {Ogeler}",
+                request.SiteName,
+                failed,
+                files.Count,
+                string.Join(", ", basarisizlar.Take(20).Select(item => item.RemotePath)));
+        }
 
         var result = new RemoteFileMigrationResult
         {
@@ -177,6 +277,19 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
             DownloadSftpDirectory(client, remotePath, target, counter, cancellationToken);
             client.Disconnect();
 
+            // KISMİ BAŞARI'nın SFTP'deki karşılığı: dizin de normal dosya da olmayan girdiler
+            // (sembolik bağlantı, soket, aygıt) sayaca hiç girmeden ATLANIR. Sembolik bağlantı
+            // paylaşımlı barındırmada yaygındır (ör. wp-content/uploads başka bir birime bağlı);
+            // atlanınca göç "başarılı" görünüp site eksik gelir. Sayı burada kayda geçer.
+            if (counter.Skipped > 0)
+            {
+                logger?.LogWarning(
+                    "SFTP goc: {Site} icin {Atlanan} girdi dosya/dizin olmadigi icin ATLANDI (sembolik baglanti, soket vb.). Ilk ornekler: {Ornekler}",
+                    request.SiteName,
+                    counter.Skipped,
+                    string.Join(", ", counter.SkippedSamples));
+            }
+
             var result = new RemoteFileMigrationResult
             {
                 SiteName = request.SiteName,
@@ -220,6 +333,16 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
                 counter.Files++;
                 counter.Bytes += entry.Length;
             }
+            else
+            {
+                // Sessizce atlanan girdi. Günlüğe TEK TEK yazmak binlerce satır üretebilirdi;
+                // sayaç ve ilk birkaç örnek üst katmanda BİR kez yazılır.
+                counter.Skipped++;
+                if (counter.SkippedSamples.Count < 10)
+                {
+                    counter.SkippedSamples.Add(entry.FullName);
+                }
+            }
         }
     }
 
@@ -227,5 +350,7 @@ internal sealed class FileMigrationService(IIisSiteService iisSiteService) : IFi
     {
         public int Files;
         public long Bytes;
+        public int Skipped;
+        public List<string> SkippedSamples { get; } = [];
     }
 }
