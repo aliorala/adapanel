@@ -27,6 +27,9 @@ public sealed class AntivirusService(
     private const string ComponentId = "clamav";
     private const string StatePath = "config/antivirus.json";
 
+    /// <summary>Süren taramanın kaydı (bkz. <see cref="AntivirusRunningScanState"/>).</summary>
+    private const string RunningStatePath = "config/antivirus-running.json";
+
     // clamscan bulgu satırı: "<dosya yolu>: <Imza.Adi> FOUND"
     private static readonly Regex FoundLine = new(@"^(?<path>.+?): (?<sig>\S+) FOUND\s*$", RegexOptions.Compiled);
     private static readonly Regex ScannedFilesLine = new(@"^Scanned files:\s*(?<count>\d+)", RegexOptions.Compiled);
@@ -36,9 +39,14 @@ public sealed class AntivirusService(
         var component = await FindComponentAsync(cancellationToken);
         var lastScan = await fileStore.ReadAsync<AntivirusScanResultDto?>(StatePath, null, cancellationToken);
 
+        // SÜREN TARAMA burada okunur. Bu uç, sayfa yenilendikten sonra "tarama sürüyor mu"
+        // sorusunun sorulabileceği TEK yerdir; arayüz sekmeyi açar açmaz buraya bakar.
+        var (running, reconciledLastScan) = await ResolveRunningScanAsync(lastScan, cancellationToken);
+        lastScan = reconciledLastScan;
+
         if (component is null)
         {
-            return new AntivirusStatusDto { IsInstalled = false, LastScan = lastScan };
+            return new AntivirusStatusDto { IsInstalled = false, LastScan = lastScan, RunningScan = running };
         }
 
         var databaseDirectory = GetDatabaseDirectory(component.InstallDir);
@@ -50,7 +58,8 @@ public sealed class AntivirusService(
             Version = component.Version,
             DatabaseReady = newestDefinition is not null,
             DatabaseUpdatedAtUtc = newestDefinition,
-            LastScan = lastScan
+            LastScan = lastScan,
+            RunningScan = running
         };
     }
 
@@ -99,16 +108,42 @@ public sealed class AntivirusService(
         }
 
         var (target, path) = await ResolveTargetAsync(request, cancellationToken);
+
+        // AYNI ANDA İKİ TARAMA YOK. Sunucudaki "sürüyor" kaydı tek yuvalıdır; ikinci bir tarama
+        // başlatmak birinci taramanın kaydını ezerdi ve bittiğinde ikisinden hangisinin sonucunun
+        // yazıldığı belirsiz olurdu. Üstelik aynı ağacı iki clamscan ile taramak sunucuyu boşuna
+        // yorar. Kullanıcı 409 ile açıkça uyarılır.
+        if (await ReadLiveRunningScanAsync(cancellationToken) is { } zatenSuren)
+        {
+            throw new AppException(
+                "antivirus.scan_in_progress",
+                409,
+                409,
+                $"A scan of '{zatenSuren.Target}' started at {zatenSuren.StartedAtUtc:O} is still running.");
+        }
+
         var startedAt = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
+        await WriteRunningScanAsync(target, startedAt, cancellationToken);
 
-        // --infected: yalnız bulgular yazılır (dev sitelerde çıktı şişmez); özet (Scanned files) korunur.
-        var result = await ProcessRunner.RunAsync(
-            clamscan,
-            $"--database=\"{databaseDirectory}\" --recursive --infected \"{path}\"",
-            workingDirectory: Path.GetDirectoryName(clamscan),
-            cancellationToken: cancellationToken,
-            timeout: TimeSpan.FromHours(2));
+        CommandResult result;
+        try
+        {
+            // --infected: yalnız bulgular yazılır (dev sitelerde çıktı şişmez); özet (Scanned files) korunur.
+            result = await ProcessRunner.RunAsync(
+                clamscan,
+                $"--database=\"{databaseDirectory}\" --recursive --infected \"{path}\"",
+                workingDirectory: Path.GetDirectoryName(clamscan),
+                cancellationToken: cancellationToken,
+                timeout: TimeSpan.FromHours(2));
+        }
+        catch
+        {
+            // Tarama patlarsa "sürüyor" kaydı DİSKTE KALMAMALI: kalsaydı panel bir daha asla
+            // tarama başlatmaz ve sonsuza kadar "tarama sürüyor" derdi.
+            await ClearRunningScanAsync(CancellationToken.None);
+            throw;
+        }
 
         stopwatch.Stop();
 
@@ -162,8 +197,118 @@ public sealed class AntivirusService(
             };
         }
 
+        // ÖNCE sonuç, SONRA "sürüyor" kaydının temizlenmesi. Ters sırada, iki yazma arasında
+        // gelen bir `status` isteği hem "tarama yok" hem de "son tarama eski" derdi — sonuç bir
+        // an için kaybolmuş görünürdü.
         await fileStore.WriteAsync(StatePath, scan, cancellationToken);
+        await ClearRunningScanAsync(CancellationToken.None);
         return scan;
+    }
+
+    /// <summary>
+    /// Diskteki "sürüyor" kaydını GERÇEĞE göre yorumlar ve gerekiyorsa son tarama kaydını onarır.
+    /// <para>
+    /// Üç durum vardır: (1) kayıt yok → tarama yok. (2) kayıt VAR ve sahibi BU süreç → tarama
+    /// gerçekten sürüyor. (3) kayıt var ama sahibi başka bir süreç → panel tarama sürerken yeniden
+    /// başlamış; o tarama artık koşmuyor ve sonucu HİÇ YAZILAMAYACAK. Üçüncü durumda kayıt
+    /// temizlenir ve son tarama olarak <c>interrupted</c> yazılır: kullanıcı 2 saatlik taramasının
+    /// neden bittiğini göremediğini öğrenmeli, ekran sessizce boş kalmamalı.
+    /// </para>
+    /// </summary>
+    private async Task<(AntivirusRunningScanDto? Running, AntivirusScanResultDto? LastScan)> ResolveRunningScanAsync(
+        AntivirusScanResultDto? lastScan,
+        CancellationToken cancellationToken)
+    {
+        var state = await fileStore.ReadAsync<AntivirusRunningScanState?>(RunningStatePath, null, cancellationToken);
+        if (state is null || state.StartedAtUtc == default)
+        {
+            return (null, lastScan);
+        }
+
+        if (IsOwnedByCurrentProcess(state))
+        {
+            return (new AntivirusRunningScanDto { Target = state.Target, StartedAtUtc = state.StartedAtUtc }, lastScan);
+        }
+
+        logger.LogWarning(
+            "Yarıda kalan antivirüs taraması bulundu ({Target}, başlangıç {StartedAt:O}): panel süreci tarama sürerken yeniden başlamış.",
+            state.Target,
+            state.StartedAtUtc);
+
+        await ClearRunningScanAsync(cancellationToken);
+
+        // Daha YENİ bir sonuç varsa ona dokunulmaz: yarıda kalan tarama eski bir kayıttır ve
+        // sonradan tamamlanmış gerçek bir taramanın üstüne yazmak veri kaybı olurdu.
+        if (lastScan is not null && lastScan.StartedAtUtc >= state.StartedAtUtc)
+        {
+            return (null, lastScan);
+        }
+
+        var interrupted = new AntivirusScanResultDto
+        {
+            Target = state.Target,
+            StartedAtUtc = state.StartedAtUtc,
+            Status = "interrupted"
+        };
+
+        await fileStore.WriteAsync(StatePath, interrupted, cancellationToken);
+        return (null, interrupted);
+    }
+
+    /// <summary>Yalnızca GERÇEKTEN süren taramayı döndürür; sahipsiz kayıt "sürmüyor" sayılır.</summary>
+    private async Task<AntivirusRunningScanState?> ReadLiveRunningScanAsync(CancellationToken cancellationToken)
+    {
+        var state = await fileStore.ReadAsync<AntivirusRunningScanState?>(RunningStatePath, null, cancellationToken);
+        return state is not null && state.StartedAtUtc != default && IsOwnedByCurrentProcess(state) ? state : null;
+    }
+
+    private Task WriteRunningScanAsync(string target, DateTime startedAtUtc, CancellationToken cancellationToken) =>
+        fileStore.WriteAsync<AntivirusRunningScanState?>(
+            RunningStatePath,
+            new AntivirusRunningScanState
+            {
+                Target = target,
+                StartedAtUtc = startedAtUtc,
+                OwnerProcessId = Environment.ProcessId,
+                OwnerProcessStartedAtTicks = CurrentProcessStartTicks()
+            },
+            cancellationToken);
+
+    /// <summary>
+    /// Kaydı boşaltır. Dosya SİLİNMEZ, içine <c>null</c> yazılır: <see cref="JsonFileStore"/>
+    /// silme sunmuyor ve <c>null</c> okunduğunda zaten "kayıt yok" anlamına geliyor. Böylece
+    /// temizleme de yazma kadar atomik olur (yarım kalmış silme diye bir durum kalmaz).
+    /// </summary>
+    private Task ClearRunningScanAsync(CancellationToken cancellationToken) =>
+        fileStore.WriteAsync<AntivirusRunningScanState?>(RunningStatePath, null, cancellationToken);
+
+    /// <summary>Kaydın sahibi bu panel süreci mi (PID + süreç başlangıç anı çifti).</summary>
+    internal static bool IsOwnedByCurrentProcess(AntivirusRunningScanState state)
+    {
+        if (state.OwnerProcessId != Environment.ProcessId)
+        {
+            return false;
+        }
+
+        var ticks = CurrentProcessStartTicks();
+
+        // Başlangıç anı ölçülemediyse (kısıtlı ortam) tek elde kalan kanıt PID'dir; onu da yok
+        // saymak, süren HER taramayı "yarıda kalmış" ilan etmek olurdu.
+        return ticks == 0 || state.OwnerProcessStartedAtTicks == 0 || state.OwnerProcessStartedAtTicks == ticks;
+    }
+
+    private static long CurrentProcessStartTicks()
+    {
+        try
+        {
+            using var current = Process.GetCurrentProcess();
+            return current.StartTime.ToUniversalTime().Ticks;
+        }
+        catch
+        {
+            // Bazı ortamlarda süreç başlangıç anı okunamaz; 0 = "ölçülemedi".
+            return 0;
+        }
     }
 
     /// <summary>Site adı verilmişse IIS'ten kökünü çözer (mutlak yol yalnız admin ucundan gelir; controller admin-only).</summary>

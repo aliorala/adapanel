@@ -58,9 +58,10 @@
         <div class="form-surface">
           <label class="inline-field">
             <span class="field-label">{{ t("panel.docker.pull") }}</span>
-            <input v-model.trim="pullImage" placeholder="nginx:latest" />
+            <input v-model.trim="pullImage" placeholder="mcr.microsoft.com/windows/nanoserver:ltsc2022" />
             <button class="compact" :disabled="busy || !pullImage" @click="pull">{{ t("panel.docker.pullAction") }}</button>
           </label>
+          <p class="field-hint">{{ t("panel.docker.windowsOnlyHint") }}</p>
         </div>
         <div class="data-row table-head image-row">
           <span>{{ t("panel.docker.repository") }}</span>
@@ -77,11 +78,23 @@
         <p v-if="workspace.images.length === 0" class="empty-state">{{ t("panel.docker.noImages") }}</p>
       </div>
 
+      <!--
+        ÖRNEK İMAJLAR WINDOWS İMAJI OLMAK ZORUNDA.
+        Panel Docker'ı `components.json` → `docker-engine` ile kuruyor: resmi STATIC Windows
+        binary'si + Windows "Containers" özelliği (ComponentBootstrapper `installDockerEngine`:
+        `Enable-WindowsOptionalFeature -FeatureName Containers`). Yani motor WINDOWS konteynerleri
+        çalıştırır; WSL2/Linux tarafı hiç kurulmuyor. Eski yer tutucu `nginx:latest` yalnızca
+        linux/amd64 yayımlar, dolayısıyla panelin önerdiği İLK örnek
+        "no matching manifest for windows/amd64" ile GARANTİ hata verirdi.
+        Yer tutucular Microsoft'un Windows temel imajlarıyla değiştirildi.
+        DOĞRULANMADI: bu makinede Docker kurulu değil, bulgu bileşen tanımı ile ekran metni
+        arasındaki çelişkiye dayanıyor; canlı `docker run` ile denenmedi.
+      -->
       <section v-else class="form-surface">
         <div class="form-grid">
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.docker.image") }}</span>
-            <input v-model.trim="runForm.image" placeholder="nginx:latest" />
+            <input v-model.trim="runForm.image" placeholder="mcr.microsoft.com/windows/servercore/iis:windowsservercore-ltsc2022" />
           </label>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.docker.name") }}</span>
@@ -100,6 +113,7 @@
             <span>{{ t("panel.docker.autoRestart") }}</span>
           </label>
         </div>
+        <p class="field-hint">{{ t("panel.docker.windowsOnlyHint") }}</p>
         <div class="row-actions">
           <button class="compact" :disabled="busy || !runForm.image" @click="run">{{ t("panel.docker.runAction") }}</button>
         </div>

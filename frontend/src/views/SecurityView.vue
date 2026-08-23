@@ -185,12 +185,14 @@
 
       <!-- Kurulum / tanım güncelleme / tarama SAATLERCE sürebilir; şerit ne sürdüğünü ve geçen
            süreyi söyler. Şeridin yeri bilinçli olarak kartların ÜSTÜ: hangi düğmeye basılmış
-           olursa olsun aynı yerde görünür. -->
+           olursa olsun aynı yerde görünür.
+           Şerit İKİ kaynaktan beslenir: bu sekmede başlatılan iş (useRunningTask) ve SUNUCUDA
+           süren tarama (/antivirus/status). İkincisi sayfa yenilendikten sonra da doludur. -->
       <RunningTaskBanner
-        :running="avTask.running.value"
-        :label="avTask.label.value"
-        :elapsed-text="avTask.elapsedText.value"
-        :hint="avScanRunningHint" />
+        :running="avBannerRunning"
+        :label="avBannerLabel"
+        :elapsed-text="avBannerElapsedText"
+        :hint="avBannerHint" />
 
       <!-- Durum gelmeden "kurulu değil" + kurulum butonu gösteriliyordu; kurulu ClamAV
            yeniden kurulmaya çalışılabiliyordu. -->
@@ -237,9 +239,17 @@
             </label>
           </div>
           <p class="field-hint">{{ t("panel.antivirus.scanHint") }}</p>
+          <!-- Sunucuda zaten bir tarama sürerken ikinci taramanın reddedileceğini (409) düğmeye
+               basmadan ÖNCE söyler; kullanıcı hatayla karşılaşmasın. -->
+          <p v-if="avServerScan" class="field-hint">
+            {{ t("panel.antivirus.scanBusyHint", { target: avServerScan.target }) }}
+          </p>
           <div class="row-actions">
-            <button class="compact" :disabled="busyAction === 'av' || !avSiteName || !avStatus.databaseReady" @click="runAvScan">
-              {{ busyAction === "av" ? t("panel.antivirus.scanning") : t("panel.antivirus.scan") }}
+            <button
+              class="compact"
+              :disabled="busyAction === 'av' || avServerScan !== null || !avSiteName || !avStatus.databaseReady"
+              @click="runAvScan">
+              {{ busyAction === "av" || avServerScan ? t("panel.antivirus.scanning") : t("panel.antivirus.scan") }}
             </button>
           </div>
         </div>
@@ -248,12 +258,16 @@
           <div class="section-head">
             <div>
               <h4>{{ t("panel.antivirus.lastScanTitle") }}: {{ avStatus.lastScan.target }}</h4>
+              <!-- Yarıda kalan taramada "0 dosya tarandı, 0 sn sürdü" YAZILMAZ: o sayılar hiç
+                   ölçülmedi, yazmak taramanın bittiğini ve boş çıktığını sandırırdı. -->
               <p class="meta">
-                {{ new Date(avStatus.lastScan.startedAtUtc).toLocaleString() }} •
-                {{ t("panel.antivirus.scanSummary", {
-                  files: avStatus.lastScan.scannedFiles,
-                  seconds: avStatus.lastScan.durationSeconds
-                }) }}
+                {{ new Date(avStatus.lastScan.startedAtUtc).toLocaleString() }}
+                <template v-if="avStatus.lastScan.status !== 'interrupted'">
+                  • {{ t("panel.antivirus.scanSummary", {
+                    files: avStatus.lastScan.scannedFiles,
+                    seconds: avStatus.lastScan.durationSeconds
+                  }) }}
+                </template>
               </p>
             </div>
             <span :class="['status-pill', avStatus.lastScan.status === 'clean' ? 'ok' : 'warn']">
@@ -261,6 +275,9 @@
             </span>
           </div>
           <p v-if="avStatus.lastScan.status === 'failed'" class="notice error" role="alert">{{ avStatus.lastScan.detail }}</p>
+          <p v-else-if="avStatus.lastScan.status === 'interrupted'" class="notice error" role="alert">
+            {{ t("panel.antivirus.interruptedHint") }}
+          </p>
           <div v-else-if="avStatus.lastScan.infected.length > 0" class="data-table">
             <div class="data-row table-head av-finding-row">
               <span>{{ t("panel.antivirus.file") }}</span>
@@ -344,7 +361,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, removeFirewallRule, type FirewallRule } from "../api/firewall";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -395,6 +412,51 @@ const avScanRunningHint = computed(() =>
     ? t("panel.antivirus.runningDefsHint")
     : t("panel.antivirus.runningHint"));
 const avSiteName = ref("");
+
+/*
+ * SAYFA YENİLENDİĞİNDE "TARAMA SÜRÜYOR" ARTIK KAYBOLMUYOR.
+ *
+ * ÖNCESİ: durum yalnız bu sekmenin belleğindeydi. Kullanıcı 2 saatlik taramayı başlatıp sayfayı
+ * yenilediğinde panel "tarama yok" diyordu — geri okunacak bir şey yoktu, çünkü `/antivirus/status`
+ * yalnız SON BİTEN taramayı döndürüyordu.
+ *
+ * ŞİMDİ: sunucu tarama süresince `runningScan` (hedef + başlangıç anı) döndürüyor; sekme açılır
+ * açılmaz okunuyor ve şerit oradan besleniyor.
+ *
+ * SÜRE NEDEN DAKİKA CİNSİNDEN: geçen süre SUNUCUNUN verdiği başlangıç anından hesaplanıyor.
+ * `useRunningTask` süreyi kendi `begin()` anından ölçer ve dışarıdan başlangıç almaz (o dosya bu
+ * görevin kapsamında değil), bu yüzden yenilenmiş sayfada onu kullanmak "0:05" yazıp 40 dakikadır
+ * süren bir taramayı YENİ BAŞLAMIŞ göstermek olurdu. Saniye göstermek için ayrı bir saniyelik
+ * zamanlayıcı eklemek yerine, ZATEN VAR OLAN yoklama döngüsü saat işlevi görüyor: 125 dakikalık
+ * bir işte dakika çözünürlüğü dürüst ve yeterli.
+ */
+const avServerScan = computed(() => avStatus.value?.runningScan ?? null);
+// Yoklama her tamamlandığında tazelenir; ekrandaki geçen süre bundan hesaplanır.
+const avClockMs = ref(Date.now());
+let avPollTimer: ReturnType<typeof setTimeout> | undefined;
+
+const avServerElapsedText = computed(() => {
+  const scan = avServerScan.value;
+  if (!scan) return "";
+  const startedAt = new Date(scan.startedAtUtc).getTime();
+  if (Number.isNaN(startedAt)) return "";
+  const minutes = Math.max(0, Math.floor((avClockMs.value - startedAt) / 60_000));
+  return minutes < 60
+    ? t("panel.antivirus.elapsedMinutes", { minutes })
+    : t("panel.antivirus.elapsedHours", { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
+});
+
+// Bu sekmede başlatılan iş varsa ONUN saniyelik sayacı gösterilir (daha hassastır); yoksa
+// sunucudan okunan tarama.
+const avBannerRunning = computed(() => avTask.running.value || avServerScan.value !== null);
+const avBannerLabel = computed(() =>
+  avTask.running.value
+    ? avTask.label.value
+    : t("panel.antivirus.runningScan", { site: avServerScan.value?.target ?? "" }));
+const avBannerElapsedText = computed(() =>
+  avTask.running.value ? avTask.elapsedText.value : avServerElapsedText.value);
+const avBannerHint = computed(() =>
+  avTask.running.value ? avScanRunningHint.value : t("panel.antivirus.resumedHint"));
 const showFirewallForm = ref(false);
 const showSiteForm = ref(false);
 const aclForm = reactive({ principal: "", rights: "M" });
@@ -437,13 +499,74 @@ watch(activeSection, async (section) => {
   }
 });
 
+// Yoklamanın açılıp kapanması TEK yerden yönetilir: sunucuda tarama belirdiğinde başlar, tarama
+// bittiğinde ya da işi bu sekme yürütmeye başladığında durur. Çağrıyı her fonksiyona elle
+// serpiştirmek, bir yolu unutup zamanlayıcıyı sonsuza kadar açık bırakma riski taşırdı.
+watch([avServerScan, avTask.running], avSyncPolling, { immediate: true });
+
 async function refreshAvStatus() {
   try {
     avStatus.value = await getAntivirusStatus();
+    avClockMs.value = Date.now();
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }
 }
+
+/**
+ * Sunucuda tarama sürerken durumu yoklar.
+ *
+ * YALNIZCA sunucuda süren ve BU SEKMEDE başlatılMAMIŞ tarama için çalışır: bu sekme taramayı
+ * kendisi başlattıysa sonucu zaten açık duran istekten alacak, yoklamaya gerek yok.
+ *
+ * 15 saniye: 125 dakikaya kadar süren bir iş için bu sıklık ekranı canlı tutar ve sunucuya yük
+ * bindirmez. Sabit aralık yerine "bir tur bitince bir sonrakini kur" kalıbı kullanılıyor ki yavaş
+ * bir yanıt istekleri ÜST ÜSTE bindirmesin.
+ */
+function avStopPolling() {
+  if (avPollTimer !== undefined) {
+    clearTimeout(avPollTimer);
+    avPollTimer = undefined;
+  }
+}
+
+function avSyncPolling() {
+  if (avServerScan.value !== null && !avTask.running.value) {
+    if (avPollTimer === undefined) {
+      avPollTimer = setTimeout(avPollTick, 15_000);
+    }
+    return;
+  }
+
+  avStopPolling();
+}
+
+async function avPollTick() {
+  avPollTimer = undefined;
+  const oncedenSuruyordu = avServerScan.value !== null;
+  await refreshAvStatus();
+
+  if (avServerScan.value !== null) {
+    avSyncPolling();
+    return;
+  }
+
+  // Tarama BİTTİ. Sonucu bu sekme istemedi (sayfa yenilenmişti), o yüzden sonucu burada duyurmak
+  // gerekiyor; aksi halde şerit sessizce kaybolur ve kullanıcı ne olduğunu anlamaz.
+  if (oncedenSuruyordu && !avTask.running.value) {
+    const son = avStatus.value?.lastScan ?? null;
+    if (son?.status === "infected") {
+      showNotice(t("panel.antivirus.scanInfected", { count: son.infectedCount }), true);
+    } else if (son?.status === "clean") {
+      showNotice(t("panel.antivirus.scanClean"), false);
+    } else if (son?.status === "interrupted") {
+      showNotice(t("panel.antivirus.interruptedHint"), true);
+    }
+  }
+}
+
+// Bileşen yok olduktan sonra yoklamaya devam eden bir zamanlayıcı sızıntıdır.
+onUnmounted(avStopPolling);
 
 /*
  * ANTİVİRÜS İŞLERİ "SÜRÜYOR" ŞERİDİNE BAĞLANDI (composables/useRunningTask.ts).
@@ -453,9 +576,13 @@ async function refreshAvStatus() {
  * DEĞİLDİR. Kullanıcı ekranı donmuş sanıp sayfayı yeniliyor, taramayı ikinci kez tetikliyordu.
  * Şerit ne sürdüğünü ve GEÇEN SÜREYİ yazar.
  *
- * SINIRI (dürüstlük): bu durum sekmeye aittir. Sunucuda "tarama sürüyor" diye sorulabilecek bir
- * uç YOK (`/antivirus/status` yalnız SON tamamlanmış taramayı döner), bu yüzden kullanıcı sayfayı
- * yenilerse şerit kaybolur. Bunu kapatmak arka uçta canlı ilerleme ucu ister — kapsam dışı.
+ * SAYFA YENİLEME ARTIK KAPALI: `/antivirus/status` süren taramayı da döndürüyor (`runningScan`),
+ * bu yüzden yenilenmiş sayfa şeridi sunucudan geri okuyabiliyor. Bkz. `avServerScan` bloğu.
+ *
+ * KALAN SINIR (dürüstlük): bu geri okuma yalnız TARAMA için var. ClamAV KURULUMU ve TANIM
+ * GÜNCELLEMESİ hâlâ yalnız bu sekmede görünür — onlar bileşen kurulum hattından geçiyor ve
+ * sunucuda ayrı bir durum tutmuyorlar. O iki iş dakikalar sürer, tarama ise saatler; kapatılan
+ * gerçek zarar buydu.
  */
 async function installAv() {
   busyAction.value = "av";
@@ -486,7 +613,7 @@ async function updateAvDefs() {
 }
 
 async function runAvScan() {
-  if (!avSiteName.value) return;
+  if (!avSiteName.value || avServerScan.value !== null) return;
   busyAction.value = "av";
   avTask.begin(t("panel.antivirus.runningScan", { site: avSiteName.value }));
   try {

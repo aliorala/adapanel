@@ -38,25 +38,33 @@ public sealed class AntivirusController(
         return Ok(ApiResponse<AntivirusStatusDto>.Ok(status, "antivirus.installed"));
     }
 
+    // TANIM GÜNCELLEME ve TARAMA istek iptal token'ına BAĞLANMAZ (SoftwareController'daki
+    // kurulum uçlarıyla aynı kural).
+    //
+    // KÖK NEDEN: ASP.NET Core, eylem imzasındaki CancellationToken'a HttpContext.RequestAborted'ı
+    // bağlar. Kullanıcı 125 dakikalık taramanın ortasında sayfayı YENİLEDİĞİNDE bağlantı kopar,
+    // token iptal olur ve ProcessRunner.RunAsync istisna fırlatır -- clamscan.exe ise sunucuda
+    // koşmaya DEVAM eder. Yani tarama hem sürer hem de sonucu hiçbir yere yazılmazdı: 2 saatlik
+    // iş sessizce çöpe giderdi. Token bağlanmayınca istek istemcisiz de olsa sunucuda tamamlanır,
+    // sonuç `config/antivirus.json`'a yazılır ve yenilenmiş sayfa onu `status` ucundan okur.
     /// <summary>Virüs tanımlarını günceller (ilk sefer ~250 MB indirme; dakikalar sürebilir).</summary>
     [HttpPost("definitions/update")]
-    public async Task<ActionResult<ApiResponse<AntivirusStatusDto>>> UpdateDefinitionsAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<AntivirusStatusDto>>> UpdateDefinitionsAsync()
     {
-        var status = await antivirusService.UpdateDefinitionsAsync(cancellationToken);
-        await WriteAuditAsync("antivirus.definitions_updated", "Virus definitions updated via freshclam.", cancellationToken);
+        var status = await antivirusService.UpdateDefinitionsAsync(CancellationToken.None);
+        await WriteAuditAsync("antivirus.definitions_updated", "Virus definitions updated via freshclam.", CancellationToken.None);
         return Ok(ApiResponse<AntivirusStatusDto>.Ok(status, "antivirus.definitions_ready"));
     }
 
     [HttpPost("scan")]
     public async Task<ActionResult<ApiResponse<AntivirusScanResultDto>>> ScanAsync(
-        [FromBody] AntivirusScanRequest request,
-        CancellationToken cancellationToken)
+        [FromBody] AntivirusScanRequest request)
     {
-        var result = await antivirusService.ScanAsync(request, cancellationToken);
+        var result = await antivirusService.ScanAsync(request, CancellationToken.None);
         await WriteAuditAsync(
             "antivirus.scan_completed",
             $"Scan of '{result.Target}': {result.Status}, {result.InfectedCount} finding(s), {result.ScannedFiles} file(s).",
-            cancellationToken);
+            CancellationToken.None);
         return Ok(ApiResponse<AntivirusScanResultDto>.Ok(result, "antivirus.scan_done"));
     }
 

@@ -24,12 +24,26 @@ export type AntivirusScanResult = {
   detail: string;
 };
 
+/**
+ * ŞU ANDA süren tarama (sunucudan okunur).
+ *
+ * YÜZDE ALANI YOK ve olmayacak: clamscan ilerleme yüzdesi yayımlamıyor. Uydurulmuş bir yüzde,
+ * kullanıcının "%80'de, birazdan biter" diye beklemesine yol açardı; oysa o sayının gerçekle
+ * hiçbir ilgisi olmazdı. Ölçülebilen iki şey veriliyor: hedef ve başlangıç anı.
+ */
+export type AntivirusRunningScan = {
+  target: string;
+  startedAtUtc: string;
+};
+
 export type AntivirusStatus = {
   isInstalled: boolean;
   version: string;
   databaseReady: boolean;
   databaseUpdatedAtUtc: string | null;
   lastScan: AntivirusScanResult | null;
+  /** Doluysa sunucuda bir tarama SÜRÜYOR; sayfa yenilense de bu bilgi kaybolmaz. */
+  runningScan: AntivirusRunningScan | null;
 };
 
 export async function getAntivirusStatus() {
