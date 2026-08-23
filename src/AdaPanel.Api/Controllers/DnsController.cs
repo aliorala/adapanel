@@ -55,7 +55,8 @@ public sealed class DnsController(
             "dns.zone_updated",
             $"dns:{siteName}",
             $"DNS bölge ayarları kaydedildi: {zone.ZoneName}. " +
-            $"Ad sunucuları={FormatList(zone.NameServers)}, transfer izinli={FormatList(zone.ZoneTransferIps)}.");
+            $"Ad sunucuları={FormatList(zone.NameServers)}, transfer izinli={FormatList(zone.ZoneTransferIps)}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.zone_saved"));
     }
@@ -95,7 +96,8 @@ public sealed class DnsController(
             zone.IsSecondary
                 ? $"Bölge İKİNCİL (slave) yapıldı: {zone.ZoneName}. Master sunucular={FormatList(zone.MasterServers)}. " +
                   "Kayıtların kaynağı artık bu panel değil."
-                : $"Bölge BİRİNCİL yapıldı: {zone.ZoneName}. Panelin kayıtları yeniden yayınlandı.");
+                : $"Bölge BİRİNCİL yapıldı: {zone.ZoneName}. Panelin kayıtları yeniden yayınlandı.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(
             zone,
@@ -118,7 +120,8 @@ public sealed class DnsController(
             "dns.zone_transfer_started",
             $"dns:{siteName}",
             $"İkincil bölge için tam zone transferi (AXFR) başlatıldı: {zone.ZoneName}. " +
-            $"Master sunucular={FormatList(zone.MasterServers)}.");
+            $"Master sunucular={FormatList(zone.MasterServers)}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.transfer_started"));
     }
@@ -135,7 +138,8 @@ public sealed class DnsController(
             HttpContext,
             "dns.windows_installed",
             $"dns:{siteName}",
-            $"Windows DNS Server rolü kuruldu ve bölge yayınlandı: {zone.ZoneName}.");
+            $"Windows DNS Server rolü kuruldu ve bölge yayınlandı: {zone.ZoneName}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.windows_installed"));
     }
@@ -153,7 +157,8 @@ public sealed class DnsController(
             HttpContext,
             "dns.defaults_restored",
             $"dns:{siteName}",
-            $"Panelin yönettiği DNS kayıtları varsayılana sıfırlandı: {zone.ZoneName}.");
+            $"Panelin yönettiği DNS kayıtları varsayılana sıfırlandı: {zone.ZoneName}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.defaults_restored"));
     }
@@ -174,7 +179,8 @@ public sealed class DnsController(
             HttpContext,
             request.Enabled ? "dns.dnssec_enabled" : "dns.dnssec_disabled",
             $"dns:{siteName}",
-            $"DNSSEC {(request.Enabled ? "açıldı (bölge imzalandı)" : "kapatıldı (imza kaldırıldı)")}: {zone.ZoneName}.");
+            $"DNSSEC {(request.Enabled ? "açıldı (bölge imzalandı)" : "kapatıldı (imza kaldırıldı)")}: {zone.ZoneName}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(
             zone,
@@ -195,7 +201,8 @@ public sealed class DnsController(
             HttpContext,
             "dns.record_saved",
             $"dns:{siteName}",
-            $"DNS kaydı yazıldı ({zone.ZoneName}): {request.Type} {request.Host} → {request.Value} (TTL {request.Ttl}).");
+            $"DNS kaydı yazıldı ({zone.ZoneName}): {request.Type} {request.Host} → {request.Value} (TTL {request.Ttl}).",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.record_saved"));
     }
@@ -222,10 +229,24 @@ public sealed class DnsController(
             $"dns:{siteName}",
             silinen is null
                 ? $"DNS kaydı silindi ({zone.ZoneName}): {recordId}."
-                : $"DNS kaydı silindi ({zone.ZoneName}): {silinen.Type} {silinen.Host} → {silinen.Value}.");
+                : $"DNS kaydı silindi ({zone.ZoneName}): {silinen.Type} {silinen.Host} → {silinen.Value}.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<SiteDnsZoneDto>.Ok(zone, "dns.record_deleted"));
     }
+
+    /// <summary>
+    /// Bölgenin ait olduğu sitenin ABONELİK SAHİBİ — kaydın kiracıya görünmesini sağlayan alan.
+    /// </summary>
+    /// <remarks>
+    /// Kapsam denetimi (EnsureSiteAsync) ÇAĞIRANIN siteye erişebildiğini doğrular; buradaki soru
+    /// başka: kaynak KİME ait. İkisi ayrıldığı an tam da kaydın en çok gerektiği andır — bir
+    /// yönetici kiracının bölgesinde A ya da MX kaydını değiştirir. Bu alan olmadan kiracı, kendi
+    /// alan adının trafiğini/postasını taşıyan o değişikliği denetim ekranında HİÇ göremezdi.
+    /// Site sahipsizse (yöneticinin kendi sitesi) boş kalır; tahmin edilmez.
+    /// </remarks>
+    private Task<Guid?> SiteSahibiAsync(string siteName, CancellationToken cancellationToken)
+        => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
 
     /// <summary>Denetim kaydı için IP/ad listesi; boş liste "yok" olarak yazılır ki satır anlamsız kalmasın.</summary>
     private static string FormatList(string[] values)

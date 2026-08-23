@@ -31,10 +31,16 @@ Testler: **2488 → 2810** (+322). typecheck + build temiz, i18n TR/EN 4378 pari
   güncellenemez yapardı. Kural yazılı ve testli, `RequireSignature` bayrağıyla açılıyor.
 - **Kullanıcı silme ucu hâlâ 200 dönüyor**: uyarıları yanıta taşımak Core imza değişikliği ister.
   Kalıntılar denetim kaydında, ama WHMCS hâlâ `success` görüyor.
-- **`subscriptionUserId` 219 kaydın 26'sında dolu**: kalan denetleyicilerin listesi denetim
-  ajanının raporunda; sonraki tura.
-- **`SubscriptionEnforcementService` kaydı aktörü yanlış yazıyor** (elle askıya almada
-  "müşteri kendini askıya aldı" diyor). Denetleyiciye doğru kayıt eklendi, asıl düzeltme kaldı.
+- ~~**`subscriptionUserId` 219 kaydın 26'sında dolu**~~ → **KAPANDI (sonraki tur).** Denetleyici
+  kayıt çağrılarının 26/104'ü konu yazıyordu; artık 70/140. Konu, site sahipliğinden, posta alan
+  adı sahipliğinden ya da `IDatabaseOwnershipService`'ten **ölçülerek** çözülüyor
+  (`AuditSubject`); ölçülemeyen konu **boş bırakılıyor**. Kalan 70 çağrının 65'i gerekçesiyle
+  `AuditCoverageTests.KiraciyaAitOlmayanlar` içinde (sunucu geneli ya da aktör = konu), 5'i
+  `KiraciBagiSonrakiTurda` borç listesinde.
+- ~~**`SubscriptionEnforcementService` kaydı aktörü yanlış yazıyor**~~ → **KAPANDI (sonraki tur).**
+  Kayıt gerçek aktörü ve IP'yi HTTP bağlamından okuyor, konu abonelik sahibi; tetikleyici
+  (panel isteği / arka plan turu) ölçülerek yazılıyor. Denetleyicideki yama niteliğindeki ikinci
+  kayıt kaldırıldı — tek eylem artık tek satır üretiyor.
 
 ## Canlıda doğrulanmayanlar
 

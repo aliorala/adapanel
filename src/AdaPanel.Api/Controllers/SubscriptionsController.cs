@@ -125,19 +125,14 @@ public sealed class SubscriptionsController(
     public async Task<ActionResult<ApiResponse<SubscriptionUsageDto>>> SuspendAsync(Guid userId, CancellationToken cancellationToken)
     {
         await EnsureManageableAsync(userId, cancellationToken);
+        // İKİNCİ KAYIT KALDIRILDI — KÖK NEDEN DÜZELTİLDİ.
+        //
+        // Burada eskiden ayrı bir denetim kaydı yazılıyordu çünkü SubscriptionEnforcementService'in
+        // kaydı aktör olarak ABONELİĞİN SAHİBİNİ yazıyordu ("müşteri kendini askıya aldı") ve IP
+        // taşımıyordu. Yani tek bir eylem iki satır üretiyor, biri yalan söylüyordu. Servis artık
+        // gerçek aktörü ve IP'yi HTTP bağlamından okuyor (SubscriptionEnforcementService.Aktor),
+        // konuyu da aboneliğe bağlıyor; ikinci satır sahte bir çeşitlilikten başka bir şey olmazdı.
         await enforcement.SuspendAsync(userId, "manual", cancellationToken);
-
-        // NEDEN İKİNCİ BİR KAYIT: SubscriptionEnforcementService de bir kayıt yazar, ama o kaydın
-        // AKTÖRÜ abonelik sahibinin kendisidir (userId) ve İP adresi yoktur — çünkü aynı metot arka
-        // plan uygulayıcısı tarafından da çağrılır. Yani elle askıya almada kayıt "müşteri kendini
-        // askıya aldı" der; asıl soru olan "hangi yönetici/bayi, nereden" cevapsız kalır. Buradaki
-        // kayıt gerçek aktörü ve İP'yi taşır; servisin kaydı ise kaç sitenin durduğunu.
-        await auditService.AuditAsync(
-            HttpContext,
-            "subscription.suspended.manual",
-            $"subscription:{userId:N}",
-            "Subscription suspended manually from the panel.",
-            userId);
 
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),
@@ -150,15 +145,8 @@ public sealed class SubscriptionsController(
     public async Task<ActionResult<ApiResponse<SubscriptionUsageDto>>> ResumeAsync(Guid userId, CancellationToken cancellationToken)
     {
         await EnsureManageableAsync(userId, cancellationToken);
+        // İkinci kayıt kaldırıldı; gerekçe SuspendAsync ile aynı (servis artık gerçek aktörü yazıyor).
         await enforcement.ResumeAsync(userId, cancellationToken);
-
-        // Gerekçe: SuspendAsync ile aynı (servisin kaydı aktörü aboneliğin kendisi olarak yazar).
-        await auditService.AuditAsync(
-            HttpContext,
-            "subscription.resumed.manual",
-            $"subscription:{userId:N}",
-            "Subscription resumed manually from the panel.",
-            userId);
 
         return Ok(ApiResponse<SubscriptionUsageDto>.Ok(
             await enforcement.GetUsageAsync(userId, cancellationToken),

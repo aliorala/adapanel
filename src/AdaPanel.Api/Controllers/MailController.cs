@@ -22,6 +22,7 @@ public sealed class MailController(
     IMailService mailService,
     IWebmailService webmailService,
     ICustomerScopeService customerScopes,
+    IIisSiteService iisSiteService,
     IAuditService auditService) : ControllerBase
 {
     /// <summary>
@@ -117,7 +118,8 @@ public sealed class MailController(
             HttpContext,
             "mail.domain.created",
             request.DomainName,
-            $"Mail domain created (DNS records auto-applied: {dnsApplied}).");
+            $"Mail domain created (DNS records auto-applied: {dnsApplied}).",
+            await AlanAdiSahibiAsync(request.DomainName, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, dnsApplied ? "mail.domain_created_dns" : "mail.domain_created"));
     }
@@ -162,7 +164,14 @@ public sealed class MailController(
 
         // Alan adı silmek, o alandaki BÜTÜN posta kutularını ve içeriğini götürür — panelin en
         // yıkıcı posta işlemi; iz bırakmaması düşünülemez.
-        await auditService.AuditAsync(HttpContext, "mail.domain.deleted", domainName, "Mail domain and its mailboxes were deleted.");
+        // SAHİP, posta alan adı silindikten SONRA da çözülebilir: sahiplik SİTE atamasından gelir,
+        // posta sunucusundaki kayıttan değil. Bu yüzden ayrıca önden okumaya gerek yok.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.domain.deleted",
+            domainName,
+            "Mail domain and its mailboxes were deleted.",
+            await AlanAdiSahibiAsync(domainName, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.domain_deleted"));
     }
@@ -200,7 +209,8 @@ public sealed class MailController(
             HttpContext,
             "mail.account.created",
             NormalizeAddress(request.Address, request.Domain),
-            $"Mailbox created with {request.MaxSizeMB} MB quota.");
+            $"Mailbox created with {request.MaxSizeMB} MB quota.",
+            await AdresSahibiAsync(request.Address, request.Domain, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_created"));
     }
@@ -210,7 +220,12 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteAccountAsync(address, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "mail.account.deleted", address, "Mailbox and its messages were deleted.");
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.account.deleted",
+            address,
+            "Mailbox and its messages were deleted.",
+            await AdresSahibiAsync(address, null, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.account_deleted"));
     }
 
@@ -226,7 +241,8 @@ public sealed class MailController(
             HttpContext,
             "mail.account.password_changed",
             request.Address,
-            "Mailbox password was changed.");
+            "Mailbox password was changed.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.password_changed"));
     }
@@ -250,7 +266,8 @@ public sealed class MailController(
             HttpContext,
             "mail.autoresponder.updated",
             request.Address,
-            $"Auto-responder enabled={request.Enabled}.");
+            $"Auto-responder enabled={request.Enabled}.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
 
         return Ok(ApiResponse<MailAutoResponderDto>.Ok(dto, "mail.autoresponder_saved"));
     }
@@ -270,7 +287,8 @@ public sealed class MailController(
             HttpContext,
             "mail.alias.created",
             NormalizeAddress(request.Address, request.Domain),
-            $"Alias forwards to '{request.Target}'.");
+            $"Alias forwards to '{request.Target}'.",
+            await AdresSahibiAsync(request.Address, request.Domain, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_created"));
     }
@@ -280,7 +298,12 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteAliasAsync(address, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "mail.alias.deleted", address, "Mail alias was removed.");
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.alias.deleted",
+            address,
+            "Mail alias was removed.",
+            await AdresSahibiAsync(address, null, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.alias_deleted"));
     }
 
@@ -294,7 +317,8 @@ public sealed class MailController(
             HttpContext,
             "mail.list.created",
             NormalizeAddress(request.Address, request.Domain),
-            $"Mailing list created with {request.Recipients.Count} subscriber(s), posting policy '{request.PostingPolicy}'.");
+            $"Mailing list created with {request.Recipients.Count} subscriber(s), posting policy '{request.PostingPolicy}'.",
+            await AdresSahibiAsync(request.Address, request.Domain, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_created"));
     }
 
@@ -348,7 +372,8 @@ public sealed class MailController(
             HttpContext,
             "mail.list.recipients_updated",
             request.Address,
-            $"Mailing list subscribers changed ({string.Join("; ", changes)}).");
+            $"Mailing list subscribers changed ({string.Join("; ", changes)}).",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_updated"));
     }
@@ -378,7 +403,12 @@ public sealed class MailController(
     {
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, ExtractDomain(address), cancellationToken);
         var workspace = await mailService.DeleteMailListAsync(address, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "mail.list.deleted", address, "Mailing list was removed.");
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.list.deleted",
+            address,
+            "Mailing list was removed.",
+            await AdresSahibiAsync(address, null, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_deleted"));
     }
 
@@ -458,7 +488,8 @@ public sealed class MailController(
             HttpContext,
             "mail.outbound_limit.updated",
             request.Domain,
-            $"Outbound limit set to {request.MessagesPerHour} message(s)/hour (0 = unlimited).");
+            $"Outbound limit set to {request.MessagesPerHour} message(s)/hour (0 = unlimited).",
+            await AlanAdiSahibiAsync(request.Domain, cancellationToken));
         return Ok(ApiResponse<MailOutboundLimitDto>.Ok(limit, "mail.outbound_limit_saved"));
     }
 
@@ -471,7 +502,8 @@ public sealed class MailController(
             HttpContext,
             "mail.domain.quota_updated",
             request.Domain,
-            $"Domain mail quota set to {request.MaxSizeMB} MB.");
+            $"Domain mail quota set to {request.MaxSizeMB} MB.",
+            await AlanAdiSahibiAsync(request.Domain, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.quota_saved"));
     }
 
@@ -487,7 +519,8 @@ public sealed class MailController(
             HttpContext,
             "mail.account.quota_updated",
             request.Address,
-            $"Mailbox quota set to {request.MaxSizeMB} MB.");
+            $"Mailbox quota set to {request.MaxSizeMB} MB.",
+            await AdresSahibiAsync(request.Address, null, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.quota_saved"));
     }
@@ -546,7 +579,8 @@ public sealed class MailController(
                 HttpContext,
                 "mail.dns.applied",
                 domain,
-                $"{result.AppliedCount} mail DNS record(s) written to zone '{result.ZoneName}'.");
+                $"{result.AppliedCount} mail DNS record(s) written to zone '{result.ZoneName}'.",
+                await AlanAdiSahibiAsync(domain, cancellationToken));
             return Ok(ApiResponse<ApplyMailDnsResultDto>.Ok(result, "mail.dns_applied"));
         }
         catch (Core.Common.AppException exception) when (exception.HttpStatusCode == 404)
@@ -760,6 +794,31 @@ public sealed class MailController(
             }
         }
     }
+
+    /// <summary>
+    /// Posta ALAN ADININ abonelik sahibi — kaydın kiracıya görünmesini sağlayan alan.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gerekli:</b> kapsam denetimi (<c>EnsureMailDomainAsync</c>) ÇAĞIRANIN alan adına
+    /// erişebildiğini doğrular. Yönetici her alan adına erişebilir; kiracının posta kutusunu
+    /// sildiğinde kaydın <c>UserId</c>'si YÖNETİCİDİR ve kiracının izinli kimlik kümesinde yoktur.
+    /// Konu yazılmazsa kiracı, KENDİ alan adında yapılan işlemi denetim ekranında hiç göremez —
+    /// "postama kim dokundu" sorusu tam da bu denetleyicide cevapsız kalıyordu.
+    /// </para>
+    /// <para>
+    /// Çözüm <see cref="AuditSubject.MailDomainOwnerAsync"/> ile, panelin posta sahipliğini
+    /// türettiği KAYNAĞIN tersinden yapılır (site adı + bağlama host adları); çözülemezse ya da
+    /// birden çok abonelik aynı adı sahipleniyorsa BOŞ bırakılır. Yanlış kiracıya bağlamak,
+    /// komşusuna başkasının işlemini göstermek olurdu.
+    /// </para>
+    /// </remarks>
+    private Task<Guid?> AlanAdiSahibiAsync(string? domain, CancellationToken cancellationToken)
+        => AuditSubject.MailDomainOwnerAsync(customerScopes, iisSiteService, domain, cancellationToken);
+
+    /// <summary>Posta ADRESİNİN alan adı sahibi (adres yerel kısımsa istekteki alan adına düşer).</summary>
+    private Task<Guid?> AdresSahibiAsync(string? address, string? fallbackDomain, CancellationToken cancellationToken)
+        => AuditSubject.MailAddressOwnerAsync(customerScopes, iisSiteService, address, fallbackDomain, cancellationToken);
 
     private static string ExtractDomain(string address)
     {

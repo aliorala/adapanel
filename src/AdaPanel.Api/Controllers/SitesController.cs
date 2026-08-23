@@ -5,6 +5,7 @@ using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Cryptography;
@@ -271,7 +272,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         }
 
         await siteDatabaseLinks.LinkAsync(request.Engine, request.Name, siteName, cancellationToken);
-        await WriteAuditAsync("sites.database.linked", $"{siteName}:{request.Engine}:{request.Name}", cancellationToken);
+        await WriteAuditAsync("sites.database.linked", siteName, cancellationToken, ayrinti: $"{request.Engine}:{request.Name}");
         return Ok(ApiResponse<object>.Ok(new { }, "sites.database.linked"));
     }
 
@@ -297,7 +298,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         }
 
         await siteDatabaseLinks.UnlinkAsync(engine, name, cancellationToken);
-        await WriteAuditAsync("sites.database.unlinked", $"{siteName}:{engine}:{name}", cancellationToken);
+        await WriteAuditAsync("sites.database.unlinked", siteName, cancellationToken, ayrinti: $"{engine}:{name}");
         return Ok(ApiResponse<object>.Ok(new { }, "sites.database.unlinked"));
     }
 
@@ -336,7 +337,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         }
 
         var site = await siteProvisioningService.SetDocumentRootAsync(siteName, request.PhysicalPath, cancellationToken);
-        await WriteAuditAsync("sites.document_root.updated", $"{siteName}:{site.PhysicalPath}", cancellationToken);
+        await WriteAuditAsync("sites.document_root.updated", siteName, cancellationToken, ayrinti: site.PhysicalPath);
         return Ok(ApiResponse<SiteDto>.Ok(site, "sites.document_root.updated"));
     }
 
@@ -380,7 +381,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             customerScopes, iisSiteService, mailService, User, request.HostName, siteName, logger, cancellationToken);
 
         var workspace = await aliasService.AddAliasAsync(siteName, request, cancellationToken);
-        await WriteAuditAsync("sites.alias.added", $"{siteName}:{request.HostName}", cancellationToken);
+        await WriteAuditAsync("sites.alias.added", siteName, cancellationToken, ayrinti: request.HostName);
         return Ok(ApiResponse<SiteAliasWorkspaceDto>.Ok(workspace, "alias.added"));
     }
 
@@ -393,7 +394,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var workspace = await aliasService.RemoveAliasAsync(siteName, hostName, cancellationToken);
-        await WriteAuditAsync("sites.alias.removed", $"{siteName}:{hostName}", cancellationToken);
+        await WriteAuditAsync("sites.alias.removed", siteName, cancellationToken, ayrinti: hostName);
         return Ok(ApiResponse<SiteAliasWorkspaceDto>.Ok(workspace, "alias.removed"));
     }
 
@@ -428,7 +429,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var dto = await service.ProtectAsync(siteName, request, cancellationToken);
-        await WriteAuditAsync("sites.protected_dir.added", $"{siteName}:{dto.RelativePath}", cancellationToken);
+        await WriteAuditAsync("sites.protected_dir.added", siteName, cancellationToken, ayrinti: dto.RelativePath);
         return Ok(ApiResponse<ProtectedDirectoryDto>.Ok(dto, "protected.created"));
     }
 
@@ -441,7 +442,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         await service.UnprotectAsync(siteName, relativePath, cancellationToken);
-        await WriteAuditAsync("sites.protected_dir.removed", $"{siteName}:{relativePath}", cancellationToken);
+        await WriteAuditAsync("sites.protected_dir.removed", siteName, cancellationToken, ayrinti: relativePath);
         return Ok(ApiResponse<object>.Ok(new { }, "protected.removed"));
     }
 
@@ -744,6 +745,12 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         [FromQuery] bool deleteDatabases = false)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // KAYDIN KONUSU SİLMEDEN ÖNCE ÇÖZÜLÜR. Cascade silme, siteyi bütün müşteri kapsamlarından
+        // da düşürür (RemoveSiteFromAllScopesAsync); sonrasında sorulsaydı sahip DAİMA boş dönerdi
+        // ve panelin en yıkıcı işlemi, tam da sahibinin göremeyeceği tek kayıt olurdu.
+        var sahip = await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
+
         var result = await siteCascadeDeletionService.DeleteAsync(siteName, deleteFiles, deleteDatabases, cancellationToken);
 
         // SAHİPLİK KAYDI BURADA SİLİNMİYOR — bilerek (denetim Y1).
@@ -757,7 +764,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         //
         // Karar artık GERÇEĞİ bilen yerde: cascade servisi yalnızca DROP'u başarılı olan
         // veritabanının kaydını siler, hayatta kalanların sahipliğini KORUYUP ölü site adını koparır.
-        await WriteAuditAsync("sites.delete.completed", siteName, cancellationToken);
+        await WriteAuditAsync("sites.delete.completed", siteName, cancellationToken, sahip);
         return Ok(ApiResponse<SiteDeletionResultDto>.Ok(result, "sites.delete.success"));
     }
 
@@ -815,6 +822,26 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         {
             _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
         }
+
+        // İZ YOKTU. Bu uç IIS'te ELDE kurulmuş siteleri panelin yönetimine alır ve her birine
+        // varsayılanları (uygulama havuzu, izinler, yeniden yazma kuralları) UYGULAR — yani
+        // dokunduğu her site sunucuda değişir. Kaç sitenin ve HANGİLERİNİN devralındığı
+        // yazılmazsa, sonradan "bu sitenin ayarlarını ne değiştirdi" sorusunun başlangıç noktası
+        // bile kalmaz.
+        //
+        // KİRACI BAĞI YOK ve olamaz: içe aktarılan siteler tanım gereği HENÜZ hiçbir aboneliğe
+        // atanmamıştır (atama ayrı bir yönetici işidir), yani bu kaydın bir konusu yoktur.
+        // Sunucu geneli bir yönetici işlemi olarak kalır.
+        await auditService.WriteAsync(
+            "sites.import.completed",
+            "sites",
+            sites.Count == 0
+                ? "No unmanaged IIS site was found to import."
+                : $"{sites.Count} existing IIS site(s) imported and defaults applied: "
+                  + string.Join(", ", sites.Select(site => site.Name)) + ".",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
 
         return Ok(ApiResponse<IReadOnlyCollection<SiteDto>>.Ok(sites, "sites.import.success"));
     }
@@ -995,13 +1022,42 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         await customerScopes.SetScopeAsync(userId, sites, scope.MaxSites, scope.MaxDiskMb, cancellationToken);
     }
 
-    private Task WriteAuditAsync(string action, string siteName, CancellationToken cancellationToken)
+    /// <summary>
+    /// Site işlemlerinin ORTAK denetim izi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kiracı bağı (bu turda kapatıldı):</b> kayıt <c>WriteAsync</c> ile yazılıyordu, yani
+    /// eylemin KONUSU boştu. Bir yönetici kiracının sitesini durdurduğunda ya da SİLDİĞİNDE kaydın
+    /// <c>UserId</c>'si yöneticidir; kiracının izinli kimlik kümesinde bulunmaz. Konu da boş olunca
+    /// kayıt kiracının denetim ekranında HİÇ çıkmıyordu — "sitem neden durdu / kim sildi" sorusu
+    /// panelin en yıkıcı uçlarında cevapsız kalıyordu.
+    /// </para>
+    /// <para>
+    /// <b>Kaynak artık HEDEFİ söylüyor:</b> bütün site kayıtları <c>"sites"</c> yazıyordu; hangi
+    /// siteye ait olduğu yalnızca serbest metin ayrıntının içindeydi ve kaynağa göre süzülemiyordu.
+    /// </para>
+    /// </remarks>
+    /// <param name="sahip">
+    /// Sahip çağrı yerinde ÖNCEDEN çözülmüşse (site silme) yeniden sorulmasın diye: silmeden sonra
+    /// site hiçbir kapsamda kalmaz ve sahibi bir daha okunamaz.
+    /// </param>
+    /// <param name="ayrinti">İşlemin hedefine dair ek bilgi (bağlanan veritabanı, eklenen takma ad).</param>
+    private async Task WriteAuditAsync(
+        string action,
+        string siteName,
+        CancellationToken cancellationToken,
+        Guid? sahip = null,
+        string? ayrinti = null)
     {
-        return auditService.WriteAsync(
+        await auditService.WriteForSubscriptionAsync(
             action,
-            "sites",
-            $"IIS site '{siteName}' operation completed.",
+            $"site:{siteName}",
+            ayrinti is null
+                ? $"IIS site '{siteName}' operation completed."
+                : $"IIS site '{siteName}' operation completed ({ayrinti}).",
             User.GetRequiredUserId(),
+            sahip ?? await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
     }

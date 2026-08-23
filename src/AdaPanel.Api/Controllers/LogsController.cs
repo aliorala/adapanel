@@ -120,10 +120,25 @@ public sealed class LogsController(
         await auditService.AuditAsync(
             HttpContext,
             "logs.rotation_run",
-            "logs",
+            // KAYNAK ARTIK HEDEFİ SÖYLÜYOR: iki uç da "logs" yazıyordu, yani sunucu geneli tur
+            // ile tek bir sitenin turu kayıtta ayırt edilemiyordu.
+            $"logs:{siteName}",
             $"Log rotation was triggered manually for '{siteName}': "
-            + $"{target.RotatedFiles} rotated, {target.DeletedArchives} archive(s) deleted.");
+            + $"{target.RotatedFiles} rotated, {target.DeletedArchives} archive(s) deleted.",
+            await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<LogRotationTargetDto>.Ok(target, "logs.rotation_completed"));
     }
+
+    /// <summary>
+    /// Sitenin ABONELİK SAHİBİ — kaydın kiracıya görünmesini sağlayan alan.
+    /// </summary>
+    /// <remarks>
+    /// Kapsam denetimi ÇAĞIRANIN siteye erişebildiğini doğrular; buradaki soru başka: kaynak KİME
+    /// ait. İkisi ayrıldığı an (yönetici/bayi kiracının sitesine dokunur) tam da kaydın en çok
+    /// gerektiği andır. Bu alan olmadan kiracı, kendi sitesinde yapılan işlemi denetim ekranında
+    /// HİÇ göremezdi. Site sahipsizse (yöneticinin kendi sitesi) boş kalır; tahmin edilmez.
+    /// </remarks>
+    private Task<Guid?> SiteSahibiAsync(string? siteName, CancellationToken cancellationToken)
+        => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
 }

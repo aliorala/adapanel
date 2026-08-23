@@ -108,7 +108,7 @@ public sealed class WordPressCloneDomainClaimTests
         // Klon araç servisi PATLAYAN bir sahte: uca ulaşılırsa test beklediği 403'ü değil onu
         // görür. Yani bu test yalnız "hata döndü mü"yü değil, YIKICI İŞİN HİÇ BAŞLAMADIĞINI de
         // doğruluyor — klon başlasaydı IIS sitesi, veritabanı ve kapsam ataması çoktan oluşurdu.
-        var denetleyici = new WordPressController(new PatlayanArac(), new SahteKapsam(["benim-site"]))
+        var denetleyici = new WordPressController(new PatlayanArac(), new SahteKapsam(["benim-site"]), new RecordingAuditService())
         {
             ControllerContext = new ControllerContext
             {
@@ -137,7 +137,7 @@ public sealed class WordPressCloneDomainClaimTests
     {
         // Aynı uç, meşru istek: düzeltme özelliği kapatmamalı. Buradaki klon araç servisi çalışır
         // ve uç 200 döner.
-        var denetleyici = new WordPressController(new SahteArac(), new SahteKapsam(["benim-site"]))
+        var denetleyici = new WordPressController(new SahteArac(), new SahteKapsam(["benim-site"]), new RecordingAuditService())
         {
             ControllerContext = new ControllerContext
             {

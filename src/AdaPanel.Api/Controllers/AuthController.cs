@@ -344,7 +344,25 @@ public sealed class AuthController(
     [HttpPost("2fa/recovery-codes")]
     public async Task<ActionResult<ApiResponse<RecoveryCodesDto>>> RegenerateRecoveryCodesAsync(CancellationToken cancellationToken)
     {
-        var result = await authService.RegenerateRecoveryCodesAsync(User.GetRequiredUserId(), cancellationToken);
+        var userId = User.GetRequiredUserId();
+        var result = await authService.RegenerateRecoveryCodesAsync(userId, cancellationToken);
+
+        // İZ YOKTU. Kurtarma kodları 2FA'yı ATLAMANIN yoludur: yenilemek eskilerini geçersiz kılar
+        // ve YENİ bir geçerli küme üretir. Ele geçirilmiş bir oturum bunu tek adımda yaparak kalıcı
+        // bir arka kapı bırakabilirdi ve hiçbir iz kalmazdı. KODLARIN KENDİSİ ASLA YAZILMAZ —
+        // yalnızca olgu ve kaç kod üretildiği.
+        //
+        // KİRACI BAĞI YOK: kimlik doğrulama kullanıcının KENDİ hesabına aittir, bir aboneliğin
+        // kaynağına değil; aktör (UserId) zaten konunun ta kendisidir ve kayıt kullanıcının
+        // görünümünde bu yüzden çıkar.
+        await auditService.WriteAsync(
+            "auth.2fa.recovery_regenerated",
+            "auth",
+            $"Two-factor recovery codes were regenerated ({result.Codes.Count} code(s)); previous codes are void.",
+            userId,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
         return Ok(ApiResponse<RecoveryCodesDto>.Ok(result, "auth.2fa.recovery_regenerated"));
     }
 

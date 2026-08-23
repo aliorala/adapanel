@@ -3,6 +3,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Asp;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -62,13 +63,20 @@ public sealed class AspController(
         return Ok(ApiResponse<AspSiteConfigurationDto>.Ok(configuration, "aspnet.mixed_handlers_updated"));
     }
 
-    private Task WriteAuditAsync(string action, string siteName, CancellationToken cancellationToken)
+    /// <remarks>
+    /// <b>Kiracı bağı:</b> kayıt <c>WriteAsync</c> ile konusuz yazılıyordu. Bu uçlar yöneticiye ve
+    /// bayiye de açık; onların kiracının sitesinde yaptığı değişiklik, kaydın <c>UserId</c>'si
+    /// kendileri olduğu için kiracının denetim görünümünde HİÇ çıkmıyordu. Konu artık sitenin
+    /// abonelik sahibidir; site sahipsizse (yöneticinin kendi sitesi) boş kalır.
+    /// </remarks>
+    private async Task WriteAuditAsync(string action, string siteName, CancellationToken cancellationToken)
     {
-        return auditService.WriteAsync(
+        await auditService.WriteForSubscriptionAsync(
             action,
-            "aspnet",
+            $"aspnet:{siteName}",
             $"ASP/ASP.NET settings for '{siteName}' were updated.",
             User.GetRequiredUserId(),
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
     }

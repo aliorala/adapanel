@@ -667,14 +667,16 @@ public sealed class BackupController(
         await EnsureSubscriptionAccessAsync(userId, cancellationToken);
         var schedule = await backupSchedules.UpdateScheduleAsync(userId, request, cancellationToken);
 
-        await auditService.WriteAsync(
+        // KONU = ABONELİĞİN SAHİBİ. Eskiden konusuz yazılıyordu; yönetici bir müşterinin yedek
+        // programını kapattığında müşteri bunu kendi denetim ekranında göremiyor, yedeklerinin ne
+        // zaman ve kimin eliyle durduğunu ancak yedeklerin yokluğundan anlıyordu.
+        await WriteBackupAuditAsync(
             "backup.schedule_changed",
-            "backup",
+            $"backup:schedule:{userId:N}",
             $"Subscription backup schedule updated for {userId:N}: enabled={schedule.Enabled}, " +
             $"every {schedule.IntervalHours}h, keep {schedule.RetentionDays} day(s)/{schedule.KeepCount} copy, " +
             $"incremental={schedule.Incremental}, throttled={schedule.ThrottledByQuota}.",
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            userId,
             cancellationToken);
 
         return Ok(ApiResponse<SubscriptionBackupScheduleDto>.Ok(schedule, "backup.schedule_saved"));
@@ -685,6 +687,18 @@ public sealed class BackupController(
     {
         await EnsureSubscriptionAccessAsync(userId, cancellationToken);
         await backupSchedules.RemoveScheduleAsync(userId, cancellationToken);
+
+        // İZ YOKTU. Programı silmek, aboneliğin OTOMATİK YEDEĞİNİ SESSİZCE DURDURUR: hiçbir hata
+        // görünmez, yalnızca bir daha yedek alınmaz. Felaket anında "yedeğim neden yok" sorusunun
+        // tek cevabı bu satırdır. Konu abonelik sahibidir; müşteri, programını kimin kaldırdığını
+        // kendi ekranından görebilmeli.
+        await WriteBackupAuditAsync(
+            "backup.schedule_deleted",
+            $"backup:schedule:{userId:N}",
+            $"Subscription backup schedule removed for {userId:N}; automatic backups stopped.",
+            userId,
+            cancellationToken);
+
         return Ok(ApiResponse<object>.Ok(new { userId }, "backup.schedule_deleted"));
     }
 
@@ -697,6 +711,18 @@ public sealed class BackupController(
     {
         await EnsureSubscriptionAccessAsync(userId, cancellationToken);
         var schedule = await backupSchedules.RunNowAsync(userId, cancellationToken);
+
+        // İZ YOKTU. Elle tetiklenen tur yalnız yedek ALMAZ, saklama politikasına göre ESKİLERİ DE
+        // BUDAR — yani veri silen bir yoldur. Ayrıca arka plan turundan ayırt edilebilmesi gerekir:
+        // bu kayıt gerçek aktörü ve IP'yi taşır, zamanlayıcının turu taşımaz.
+        await WriteBackupAuditAsync(
+            "backup.schedule_run",
+            $"backup:schedule:{userId:N}",
+            $"Subscription backup run triggered manually for {userId:N} "
+            + $"(retention {schedule.RetentionDays} day(s)/{schedule.KeepCount} copy, incremental={schedule.Incremental}).",
+            userId,
+            cancellationToken);
+
         return Ok(ApiResponse<SubscriptionBackupScheduleDto>.Ok(schedule, "backup.schedule_run"));
     }
 }

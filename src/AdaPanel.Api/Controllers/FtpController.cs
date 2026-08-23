@@ -115,7 +115,8 @@ public sealed class FtpController(
             HttpContext,
             "ftp.user.created",
             user.UserName,
-            $"FTP account created for site '{user.SiteName}' with home '{user.HomePath}'.");
+            $"FTP account created for site '{user.SiteName}' with home '{user.HomePath}'.",
+            await SiteSahibiAsync(user.SiteName, cancellationToken));
 
         return Ok(ApiResponse<FtpUserDto>.Ok(user, "ftp.user_created"));
     }
@@ -131,7 +132,8 @@ public sealed class FtpController(
             HttpContext,
             "ftp.user.password_changed",
             request.UserName,
-            "FTP account password was changed.");
+            "FTP account password was changed.",
+            await FtpKullanicisininSahibiAsync(request.UserName, cancellationToken));
 
         return Ok(ApiResponse<object>.Ok(new { request.UserName }, "ftp.password_changed"));
     }
@@ -140,9 +142,50 @@ public sealed class FtpController(
     public async Task<ActionResult<ApiResponse<object>>> DeleteUserAsync(string userName, CancellationToken cancellationToken)
     {
         await EnsureFtpUserScopeAsync(userName, cancellationToken);
+
+        // SAHİP SİLMEDEN ÖNCE ÇÖZÜLÜR: hesap kaldırıldıktan sonra hangi siteye ait olduğu artık
+        // hiçbir yerden okunamaz; kaydı sonradan kiracıya bağlamak İMKÂNSIZ olurdu.
+        var sahip = await FtpKullanicisininSahibiAsync(userName, cancellationToken);
+
         await ftpService.DeleteFtpUserAsync(userName, cancellationToken);
-        await auditService.AuditAsync(HttpContext, "ftp.user.deleted", userName, "FTP account was removed.");
+        await auditService.AuditAsync(HttpContext, "ftp.user.deleted", userName, "FTP account was removed.", sahip);
         return Ok(ApiResponse<object>.Ok(new { userName }, "ftp.user_deleted"));
+    }
+
+    /// <summary>
+    /// Sitenin ABONELİK SAHİBİ — kaydın kiracıya görünmesini sağlayan alan.
+    /// </summary>
+    /// <remarks>
+    /// Kapsam denetimi ÇAĞIRANIN siteye erişebildiğini doğrular; buradaki soru başka: kaynak KİME
+    /// ait. İkisi ayrıldığı an (yönetici/bayi kiracının sitesine dokunur) tam da kaydın en çok
+    /// gerektiği andır. Bu alan olmadan kiracı, kendi sitesinde yapılan işlemi denetim ekranında
+    /// HİÇ göremezdi. Site sahipsizse (yöneticinin kendi sitesi) boş kalır; tahmin edilmez.
+    /// </remarks>
+    private Task<Guid?> SiteSahibiAsync(string? siteName, CancellationToken cancellationToken)
+        => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
+
+    /// <summary>
+    /// FTP hesabının bağlı olduğu sitenin abonelik sahibi.
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden <see cref="EnsureFtpUserScopeAsync"/> ile aynı çözüm ama ayrı metot:</b> o metot
+    /// yalnız KAPSAMLI rollerde çalışır (yöneticide erken döner) çünkü işi yetkilendirmedir.
+    /// Buradaki soru yetkiyle ilgili değil: kaydın konusu kim. En çok yönetici işlemlerinde
+    /// gerekir — tam da ötekinin çalışmadığı yerde.
+    /// </remarks>
+    private async Task<Guid?> FtpKullanicisininSahibiAsync(string userName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var users = await ftpService.GetFtpUsersAsync(cancellationToken);
+            var siteName = users.FirstOrDefault(item =>
+                string.Equals(item.UserName, userName, StringComparison.OrdinalIgnoreCase))?.SiteName;
+            return await SiteSahibiAsync(siteName, cancellationToken);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // Bayi/müşteri için: FTP kullanıcısının ait olduğu siteyi çözüp kapsamı doğrula. Kullanıcı

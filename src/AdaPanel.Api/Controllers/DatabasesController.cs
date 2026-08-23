@@ -82,7 +82,7 @@ public sealed class DatabasesController(
 
         if (repairTables is { Length: > 0 })
         {
-            await WriteAuditAsync("database.repaired", engine, name, $"Tables repaired: {string.Join(", ", repairTables)}.");
+            await WriteDatabaseAuditAsync("database.repaired", engine, name, $"Tables repaired: {string.Join(", ", repairTables)}.", cancellationToken);
         }
 
         return Ok(ApiResponse<DatabaseCheckResultDto>.Ok(sonuc));
@@ -119,7 +119,10 @@ public sealed class DatabasesController(
             await dbOwnership.RecordAsync(engine, name, mevcutSahip, site.Name, cancellationToken);
         }
 
-        await WriteAuditAsync("database.moved", engine, name, $"Database moved to site '{site.Name}'.");
+        // SAHİP ELDE VAR: yukarıda zaten okundu, ikinci kez sormaya gerek yok. Taşıma sahibi
+        // DEĞİŞTİRMEZ (yalnız bağlı site değişir), yani bu değer taşıma sonrası da geçerlidir.
+        await WriteDatabaseAuditAsync(
+            "database.moved", engine, name, $"Database moved to site '{site.Name}'.", cancellationToken, owner);
         return Ok(ApiResponse<object>.Ok(new { name, site = site.Name }, "database.moved"));
     }
 
@@ -145,7 +148,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.CreateDatabaseAsync(request, cancellationToken);
-        await WriteAuditAsync("database.create.completed", request.Engine, request.Name, "Database was created.");
+        await WriteDatabaseAuditAsync("database.create.completed", request.Engine, request.Name, "Database was created.", cancellationToken);
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.create.success"));
     }
 
@@ -157,7 +160,7 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var workspace = await databaseService.ImportDatabaseAsync(request, cancellationToken);
-        await WriteAuditAsync("database.import.completed", request.Engine, request.DatabaseName, $"Database bound to user '{request.UserName}'.");
+        await WriteDatabaseAuditAsync("database.import.completed", request.Engine, request.DatabaseName, $"Database bound to user '{request.UserName}'.", cancellationToken);
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.import.success"));
     }
 
@@ -167,9 +170,15 @@ public sealed class DatabasesController(
         [FromQuery] string engine,
         CancellationToken cancellationToken)
     {
+        // SAHİP, SAHİPLİK KAYDI SİLİNMEDEN ÖNCE ÇÖZÜLÜR. Sıra tersine dönerse kaydın konusu
+        // kalıcı olarak boş kalır: veritabanı da sahiplik satırı da yok olduktan sonra o
+        // veritabanının kime ait olduğunu söyleyecek hiçbir kaynak kalmaz. Yani panelin EN yıkıcı
+        // veritabanı işlemi, tam da sahibinin göremeyeceği tek işlem olurdu.
+        var sahip = await AuditSubject.DatabaseOwnerAsync(dbOwnership, engine, name, cancellationToken);
+
         await databaseService.DeleteDatabaseAsync(engine, name, cancellationToken);
         await dbOwnership.RemoveAsync(engine, name, cancellationToken); // M1: sahiplik kaydını temizle (kota over-count olmasın)
-        await WriteAuditAsync("database.delete.completed", engine, name, "Database was removed.");
+        await WriteDatabaseAuditAsync("database.delete.completed", engine, name, "Database was removed.", cancellationToken, sahip);
         return Ok(ApiResponse<object>.Ok(new { engine, name }, "database.delete.success"));
     }
 
@@ -223,12 +232,13 @@ public sealed class DatabasesController(
         var workspace = await databaseService.GrantAccessAsync(request, cancellationToken);
         // GRANT bir YETKİLENDİRME değişikliğidir: hangi hakların verildiği yazılmazsa kayıt
         // "bir şey değişti" demekten öteye geçmez ve uyuşmazlıkta işe yaramaz.
-        await WriteAuditAsync(
+        await WriteDatabaseAuditAsync(
             "database.grant.updated",
             request.Engine,
             request.DatabaseName,
             $"Access for user '{request.UserName}'@'{request.AllowedHost}' set to: "
-            + (request.Privileges.Length == 0 ? "ALL" : string.Join(", ", request.Privileges)));
+            + (request.Privileges.Length == 0 ? "ALL" : string.Join(", ", request.Privileges)),
+            cancellationToken);
 
         return Ok(ApiResponse<DatabaseWorkspaceDto>.Ok(workspace, "database.grant_updated"));
     }
@@ -240,11 +250,12 @@ public sealed class DatabasesController(
         CancellationToken cancellationToken)
     {
         var result = await databaseService.TransferDatabaseAsync(request, cancellationToken);
-        await WriteAuditAsync(
+        await WriteDatabaseAuditAsync(
             "database.transfer.completed",
             request.Engine,
             result.TargetDatabase,
-            $"Database '{result.SourceDatabase}' from {request.SourceHost} was transferred here.");
+            $"Database '{result.SourceDatabase}' from {request.SourceHost} was transferred here.",
+            cancellationToken);
         return Ok(ApiResponse<DatabaseTransferResultDto>.Ok(result, "database.transfer.success"));
     }
 
@@ -345,4 +356,38 @@ public sealed class DatabasesController(
     /// </remarks>
     private Task WriteAuditAsync(string action, string engine, string target, string detail) =>
         auditService.AuditAsync(HttpContext, action, target, $"[{engine}] {detail}");
+
+    /// <summary>
+    /// Hedefi bir VERİTABANI olan kayıt: konusu, o veritabanının sahibi abonelik.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir sarmalayıcı:</b> bu denetleyicinin kayıtlarının bir kısmı veritabanına
+    /// (kiracıya ait bir kaynak), bir kısmı ise MOTORA ya da bir veritabanı KULLANICISINA
+    /// (sunucu geneli) yazılır. İkisini tek metotla yazmak, çağıranı her seferinde "bu hedef
+    /// kiracıya ait mi" diye düşünmeye zorlar ve unutulduğu an kayıt sessizce kiracısız kalırdı.
+    /// Hedef türüne göre iki ayrı metot, kararı çağrı yerinde GÖRÜNÜR kılıyor.
+    /// </para>
+    /// <para>
+    /// <b>Neden sahiplik kaydından, GRANT'lardan değil:</b> bir kullanıcının veritabanına yetkisi
+    /// olması onu sahip yapmaz (paylaşılan yetkiler, panel dışında verilmiş GRANT'lar). Panelin
+    /// kendi sahiplik kaydı yoksa konu BOŞ bırakılır — yanlış kiracıya bağlamaktansa boş.
+    /// </para>
+    /// <param name="sahip">
+    /// Sahip çağrı yerinde zaten çözülmüşse (silme/taşıma) yeniden sorulmasın diye.
+    /// </param>
+    /// </remarks>
+    private async Task WriteDatabaseAuditAsync(
+        string action,
+        string engine,
+        string databaseName,
+        string detail,
+        CancellationToken cancellationToken,
+        Guid? sahip = null)
+        => await auditService.AuditAsync(
+            HttpContext,
+            action,
+            databaseName,
+            $"[{engine}] {detail}",
+            sahip ?? await AuditSubject.DatabaseOwnerAsync(dbOwnership, engine, databaseName, cancellationToken));
 }

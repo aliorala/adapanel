@@ -24,6 +24,7 @@ public sealed class SecurityController(
     IPanelSecurityService panelSecurityService,
     IWafService wafService,
     IBruteForceProtectionService bruteForceProtection,
+    ICustomerScopeService customerScopes,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet("bruteforce")]
@@ -158,12 +159,18 @@ public sealed class SecurityController(
     /// "uygulandığı ölçüldü" demek aynı şey değildir; ölçülemeyen bir sonucu kayıtta kesinmiş gibi
     /// göstermek, olay sonrası incelemeyi yanlış yöne sürükler.
     /// </remarks>
-    private Task AuditSiteSecurityAsync(
+    /// <remarks>
+    /// <b>Kiracı bağı:</b> bu dört uç yalnız YÖNETİCİYE açık, yani kaydın <c>UserId</c>'si her
+    /// zaman yöneticidir ve kiracının kimlik kümesinde bulunmaz. Konu yazılmasaydı, sitesinin
+    /// uygulama havuzu izole edilen ya da hız sınırı değiştirilen kiracı bu izi HİÇ göremezdi —
+    /// oysa etkisini (site yavaşladı, bir klasöre yazılamıyor) doğrudan o yaşıyor.
+    /// </remarks>
+    private async Task AuditSiteSecurityAsync(
         string action,
         string siteName,
         string ozet,
         SiteSecurityConfigurationDto configuration)
-        => auditService.AuditAsync(
+        => await auditService.AuditAsync(
             HttpContext,
             action,
             $"site-security:{siteName}",
@@ -172,7 +179,8 @@ public sealed class SecurityController(
             $"klasor-izni={Olculmus(configuration.FolderAclApplied, configuration.FolderAclMeasured)}, " +
             $"temel-kurallar={Olculmus(configuration.BasicRulesEnabled, configuration.BasicRulesMeasured)}, " +
             $"hiz-siniri={Olculmus(configuration.RequestsPerMinute, configuration.RateLimitMeasured)}, " +
-            $"kimlik='{configuration.Principal}'.");
+            $"kimlik='{configuration.Principal}'.",
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, HttpContext.RequestAborted));
 
     private static string Olculmus<T>(T value, bool measured) => measured ? $"{value}" : $"{value} (OLCULEMEDI)";
 }

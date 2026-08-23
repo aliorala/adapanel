@@ -3,6 +3,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Proxy;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -61,13 +62,20 @@ public sealed class ProxyController(
         return Ok(ApiResponse<ReverseProxySiteConfigurationDto>.Ok(configuration, "proxy.rewrite_rule_saved"));
     }
 
-    private Task WriteAuditAsync(string action, string siteName, string detail, CancellationToken cancellationToken)
+    /// <remarks>
+    /// <b>Kiracı bağı:</b> kayıt <c>WriteAsync</c> ile konusuz yazılıyordu. Bu uçlar yöneticiye ve
+    /// bayiye de açık; onların kiracının sitesinde yaptığı değişiklik, kaydın <c>UserId</c>'si
+    /// kendileri olduğu için kiracının denetim görünümünde HİÇ çıkmıyordu. Konu artık sitenin
+    /// abonelik sahibidir; site sahipsizse (yöneticinin kendi sitesi) boş kalır.
+    /// </remarks>
+    private async Task WriteAuditAsync(string action, string siteName, string detail, CancellationToken cancellationToken)
     {
-        return auditService.WriteAsync(
+        await auditService.WriteForSubscriptionAsync(
             action,
-            "proxy",
+            $"proxy:{siteName}",
             $"{detail} Site: '{siteName}'.",
             User.GetRequiredUserId(),
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
     }

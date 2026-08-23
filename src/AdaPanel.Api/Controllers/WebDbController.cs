@@ -22,6 +22,7 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/webdb")]
 public sealed class WebDbController(
     IWebDbClientService webDbClientService,
+    IDatabaseOwnershipService dbOwnership,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet("url")]
@@ -54,7 +55,7 @@ public sealed class WebDbController(
         CancellationToken cancellationToken)
     {
         var signon = await webDbClientService.CreatePhpMyAdminSignonAsync(request.Engine, request.DatabaseName, cancellationToken);
-        await ErisimiKaydetAsync("phpmyadmin", request);
+        await ErisimiKaydetAsync("phpmyadmin", request, cancellationToken);
         return Ok(ApiResponse<WebDbSignonDto>.Ok(signon));
     }
 
@@ -65,7 +66,7 @@ public sealed class WebDbController(
         CancellationToken cancellationToken)
     {
         var signon = await webDbClientService.CreateAdminerSignonAsync(request.Engine, request.DatabaseName, cancellationToken);
-        await ErisimiKaydetAsync("adminer", request);
+        await ErisimiKaydetAsync("adminer", request, cancellationToken);
         return Ok(ApiResponse<WebDbSignonDto>.Ok(signon));
     }
 
@@ -77,14 +78,21 @@ public sealed class WebDbController(
             $"Web database client '{deployment.DisplayName}' deployed to site '{deployment.SiteName}' "
             + $"(port {deployment.Port}, path '{deployment.InstallDir}', engines: {deployment.SupportedEngines}).");
 
-    private Task ErisimiKaydetAsync(string saglayici, WebDbOpenRequest request) =>
-        auditService.AuditAsync(
+    /// <remarks>
+    /// <b>Kiracı bağı:</b> bu uç yalnız yöneticiye açıktır, yani kaydın aktörü daima yöneticidir.
+    /// Veritabanının SAHİBİ panelin kendi sahiplik kaydından okunur; böylece "verilerime panel
+    /// dışından kim erişti" sorusu, veritabanının sahibi kiracının kendi denetim ekranında
+    /// cevaplanabilir. Sahiplik kaydı yoksa (panel dışında açılmış veritabanı) boş bırakılır.
+    /// </remarks>
+    private async Task ErisimiKaydetAsync(string saglayici, WebDbOpenRequest request, CancellationToken cancellationToken) =>
+        await auditService.AuditAsync(
             HttpContext,
             "webdb.session.opened",
             $"database:{request.DatabaseName ?? "(all)"}",
             $"One-time '{saglayici}' session opened for engine '{request.Engine}', "
             + $"database '{request.DatabaseName ?? "(all databases)"}'. "
-            + "Statements executed in that session are NOT recorded by the panel.");
+            + "Statements executed in that session are NOT recorded by the panel.",
+            await AuditSubject.DatabaseOwnerAsync(dbOwnership, request.Engine, request.DatabaseName, cancellationToken));
 }
 
 public sealed class WebDbOpenRequest

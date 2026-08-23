@@ -1,6 +1,7 @@
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Update;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -9,7 +10,18 @@ namespace AdaPanel.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "Administrator")]
 [Route("api/v1/update")]
-public sealed class UpdateController(ISelfUpdateService selfUpdateService) : ControllerBase
+// DENETİM KAYDI: bu denetleyicinin üç durum değiştiren ucunun hiçbiri iz bırakmıyordu — oysa
+// panelin KENDİ İKİLİSİNİ değiştiren yol burasıdır ve indirilen paket SYSTEM olarak çalıştırılır.
+// Bir olaydan sonra "panele bu sürümü kim, ne zaman, nereden kurdu" sorusu cevapsız kalıyordu;
+// üstelik güncelleme kaynağını (GitHub deposu) değiştirmek, gelecekteki her kurulumun kaynağını
+// değiştirmektir ve tek satırlık, izsiz bir işlemdi.
+//
+// KİRACI BAĞI YOK ve olmamalı: panelin kendisi hiçbir aboneliğe ait değildir. Konu alanı bilerek
+// boş bırakılır — sunucu geneli bir kaydı bir kiracıya bağlamak, o kiracıya panelin yönetim
+// işlemlerini göstermek olurdu.
+public sealed class UpdateController(
+    ISelfUpdateService selfUpdateService,
+    IAuditService auditService) : ControllerBase
 {
     /// <param name="force">
     /// Kullanıcı "kontrol et" düğmesine bastığında true: önbellek atlanır, GitHub'a gidilir.
@@ -44,6 +56,14 @@ public sealed class UpdateController(ISelfUpdateService selfUpdateService) : Con
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> ApplyAsync([FromBody] ApplyUpdateRequest request, CancellationToken cancellationToken)
     {
         var status = await selfUpdateService.ApplyUpdateAsync(request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "update.package.downloaded",
+            "panel",
+            $"Update package prepared: current={status.CurrentVersion}, latest={status.LatestVersion}, "
+            + $"package ready={status.IsPackageReady}, sha256={status.PackageSha256}.");
+
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.downloaded"));
     }
 
@@ -51,6 +71,15 @@ public sealed class UpdateController(ISelfUpdateService selfUpdateService) : Con
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> InstallAsync(CancellationToken cancellationToken)
     {
         var status = await selfUpdateService.InstallPreparedUpdateAsync(cancellationToken);
+
+        // KAYIT KURULUMDAN ÖNCE DEĞİL, ZAMANLAMADAN SONRA ama panel DURMADAN önce yazılır: kurulum
+        // paneli yeniden başlatır, yani bu satır yazılamazsa işlemin hiçbir izi kalmaz.
+        await auditService.AuditAsync(
+            HttpContext,
+            "update.install.scheduled",
+            "panel",
+            $"Panel update installation scheduled: {status.CurrentVersion} → {status.LatestVersion}.");
+
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.install_scheduled"));
     }
 
@@ -64,6 +93,14 @@ public sealed class UpdateController(ISelfUpdateService selfUpdateService) : Con
     public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> SetGithubAsync([FromBody] SetUpdateGithubRequest request, CancellationToken cancellationToken)
     {
         var status = await selfUpdateService.SetGithubRepoAsync(request.Repo, cancellationToken);
+
+        // Bu değer, panelin indirip SYSTEM olarak çalıştıracağı exe'nin KAYNAĞIDIR.
+        await auditService.AuditAsync(
+            HttpContext,
+            "update.source.changed",
+            "panel",
+            $"Panel update source repository set to '{request.Repo}'.");
+
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.github_saved"));
     }
 }

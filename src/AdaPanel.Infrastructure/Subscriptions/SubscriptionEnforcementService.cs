@@ -1,19 +1,36 @@
+using System.Security.Claims;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Subscriptions;
 
 /// <inheritdoc />
+/// <param name="httpContextAccessor">
+/// Askıya almanın GERÇEK aktörünü ve IP'sini çözmek için.
+/// <para>
+/// <b>Neden isteğe bağlı ve neden bu yoldan:</b> aynı iki metot iki farklı bağlamdan çağrılır —
+/// panelden (yönetici/bayi düğmeye basar) ve arka plan işçisinden (kota turu). Aktörü
+/// <see cref="ISubscriptionEnforcementService"/> imzasına parametre olarak eklemek, arka plan
+/// çağıranını "aktör yok" değerini elle geçirmeye zorlar ve o parametreyi unutan/yanlış dolduran
+/// her çağıran sessizce yanlış kayıt üretirdi. Bağlam okunduğunda ise varsayılan DOĞRUDUR: HTTP
+/// isteği varsa aktör odur, yoksa kayıt "system" kalır.
+/// </para>
+/// <para>
+/// Varsayılanı <c>null</c>: doğrudan kurulan (testler) örnekler arka plan bağlamı gibi davranır.
+/// </para>
+/// </param>
 public sealed class SubscriptionEnforcementService(
     ICustomerScopeService customerScopes,
     IWebStatisticsService webStatistics,
     IIisSiteService iisSiteService,
     IAuditService auditService,
     AdaPanelDbContext dbContext,
-    ILogger<SubscriptionEnforcementService> logger) : ISubscriptionEnforcementService
+    ILogger<SubscriptionEnforcementService> logger,
+    IHttpContextAccessor? httpContextAccessor = null) : ISubscriptionEnforcementService
 {
     /// <inheritdoc />
     public async Task<SubscriptionUsageDto> GetUsageAsync(Guid userId, CancellationToken cancellationToken = default)
@@ -195,12 +212,15 @@ public sealed class SubscriptionEnforcementService(
             }
         }
 
-        await auditService.WriteAsync(
+        var (aktor, ip, tetikleyici) = Aktor();
+
+        await auditService.WriteForSubscriptionAsync(
             "subscription.suspended",
-            "subscription",
-            $"Subscription suspended (reason: {reason}); {scope.Sites.Count} site(s) stopped.",
+            $"subscription:{userId:N}",
+            $"Subscription suspended (rule: {reason}, trigger: {tetikleyici}); {scope.Sites.Count} site(s) stopped.",
+            aktor,
             userId,
-            null,
+            ip,
             cancellationToken);
     }
 
@@ -222,12 +242,46 @@ public sealed class SubscriptionEnforcementService(
             }
         }
 
-        await auditService.WriteAsync(
+        var (aktor, ip, tetikleyici) = Aktor();
+
+        await auditService.WriteForSubscriptionAsync(
             "subscription.resumed",
-            "subscription",
-            $"Subscription resumed; {scope.Sites.Count} site(s) started.",
+            $"subscription:{userId:N}",
+            $"Subscription resumed (trigger: {tetikleyici}); {scope.Sites.Count} site(s) started.",
+            aktor,
             userId,
-            null,
+            ip,
             cancellationToken);
+    }
+
+    /// <summary>Askı/açma kaydının AKTÖRÜ, IP'si ve tetikleyicisi — ölçülerek.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Düzeltilen hata:</b> bu iki kayıt <c>userId</c> olarak ABONELİĞİN SAHİBİNİ yazıyordu ve IP
+    /// hiç yoktu. Yani bir yönetici müşteriyi elle askıya aldığında kayıt "müşteri kendini askıya
+    /// aldı" diyordu — denetim kaydının cevaplaması gereken tek soru ("kim yaptı") tam tersine
+    /// cevaplanıyordu. Üstelik yanlış olduğu biliniyordu: denetleyiciye, doğru aktörü taşıyan İKİNCİ
+    /// bir kayıt eklenmişti; yani her elle askı iki satır üretiyor, biri yalan söylüyordu.
+    /// </para>
+    /// <para>
+    /// Ayrım TAHMİN EDİLMEZ, ÖLÇÜLÜR: HTTP bağlamı varsa işlemi bir insan panelden tetiklemiştir
+    /// (aktör + IP vardır); yoksa arka plan turudur ve aktörü yoktur. "Kural" (manual/traffic/
+    /// expired) ile "tetikleyici" (panel/arka plan) ayrı yazılır çünkü ayrı şeylerdir: yönetici
+    /// kota turunu elle de başlatabilir; o zaman kural "traffic", tetikleyici "panel"dir.
+    /// </para>
+    /// </remarks>
+    private (Guid? Aktor, string? Ip, string Tetikleyici) Aktor()
+    {
+        var context = httpContextAccessor?.HttpContext;
+        if (context is null)
+        {
+            return (null, null, "automatic background enforcement");
+        }
+
+        var deger = context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        return (
+            Guid.TryParse(deger, out var aktor) ? aktor : null,
+            context.Connection.RemoteIpAddress?.ToString(),
+            "panel request");
     }
 }

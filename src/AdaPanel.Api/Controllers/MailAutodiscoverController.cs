@@ -226,6 +226,7 @@ public sealed class MailAutodiscoverController(IMailService mailService) : Contr
 [Route("api/v1/mail/autoconfig")]
 public sealed class MailAutodiscoverSetupController(
     IMailAutodiscoverPublisher publisher,
+    ICustomerScopeService customerScopes,
     IAuditService auditService) : ControllerBase
 {
     /// <summary>Zinciri ölçer; hiçbir şey yazmaz.</summary>
@@ -248,7 +249,8 @@ public sealed class MailAutodiscoverSetupController(
             HttpContext,
             "mail.autoconfig.published",
             report.Domain,
-            $"Autodiscover/autoconfig published on site '{report.SiteName}' (reachable: {report.IsPublished}).");
+            $"Autodiscover/autoconfig published on site '{report.SiteName}' (reachable: {report.IsPublished}).",
+            await SiteSahibiAsync(report.SiteName, cancellationToken));
 
         return Ok(ApiResponse<MailAutodiscoverPublicationDto>.Ok(
             report,
@@ -267,8 +269,22 @@ public sealed class MailAutodiscoverSetupController(
             HttpContext,
             "mail.autoconfig.unpublished",
             report.Domain,
-            "Autodiscover/autoconfig rules and service bindings were removed.");
+            "Autodiscover/autoconfig rules and service bindings were removed.",
+            await SiteSahibiAsync(report.SiteName, cancellationToken));
 
         return Ok(ApiResponse<MailAutodiscoverPublicationDto>.Ok(report, "mail.autoconfig_unpublished"));
     }
+
+    /// <summary>
+    /// Yayının yapıldığı SİTENİN abonelik sahibi — kaydın kiracıya görünmesini sağlayan alan.
+    /// </summary>
+    /// <remarks>
+    /// Alan adından değil, işlemin GERÇEKTEN dokunduğu siteden çözülür: bu uçlar o sitenin
+    /// <c>web.config</c>'ine yazar ve ona bağlama ekler. Yayıncı hangi siteyi kullandığını
+    /// raporda ölçülmüş olarak döndürüyor; alan adından yeniden türetmek, ölçülmüş bir değerin
+    /// yerine tahmin koymak olurdu. Bu uçlar yalnız yöneticiye açık, yani konu yazılmasa kiracı
+    /// kendi sitesine yapılan bu değişikliği hiç göremezdi.
+    /// </remarks>
+    private Task<Guid?> SiteSahibiAsync(string? siteName, CancellationToken cancellationToken)
+        => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
 }

@@ -3,6 +3,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -17,13 +18,26 @@ namespace AdaPanel.Api.Controllers;
 // Her uç kaynağın çağırana ait olduğunu doğrular: liste kapsamla SÜZÜLÜR
 // (GetEffectiveSitesAsync), tekil eylemler EnsureSiteAsync'ten geçer, klon ayrıca alan adı
 // iddiasını (EnsureDomainClaimAsync) ve abonelik site kotasını denetler.
+//
+// DENETİM KAYDI: bu denetleyicinin durum değiştiren ALTI ucunun hiçbiri iz bırakmıyordu.
+// En ağırı GİRİŞ BAĞLANTISI: uç, WordPress'e YÖNETİCİ OTURUMU açan tek kullanımlık sihirli bir
+// bağlantı üretir — panelin kimliğiyle sitenin içine girmenin yoludur ve panelde hiçbir kaydı
+// yoktu. İkincisi VERİ KOPYALAMA: kaynağın dosya ve veritabanını hedefe YIKICI biçimde aynalar
+// (/MIR), yani canlı içeriği geri dönüşsüz ezebilir. Klonlama YENİ BİR SİTE oluşturur ve onu
+// kaynağın sahibinin kapsamına ekler; bakım kipi siteyi ziyaretçilere kapatır; sertleştirme ve
+// güncelleme sitenin kodunu değiştirir.
+//
+// KİRACI BAĞI: her uç bir SİTE üzerinde çalışır ve bu uçlar yönetici/bayiye de açıktır. Kaydın
+// konusu yazılmazsa, kendi sitesine yönetici oturumu açılan kiracı bunu kendi denetim ekranında
+// göremezdi.
 [ApiController]
 [Authorize(Roles = "Administrator,Reseller,Customer")]
 [RequireSubUserSection("sites")]
 [Route("api/v1/wordpress")]
 public sealed class WordPressController(
     IWordPressToolkitService wordPressToolkitService,
-    ICustomerScopeService customerScopes) : ControllerBase
+    ICustomerScopeService customerScopes,
+    IAuditService auditService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<WordPressSiteDto>>>> GetAllAsync(CancellationToken cancellationToken)
@@ -58,6 +72,14 @@ public sealed class WordPressController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var install = await wordPressToolkitService.SetMaintenanceAsync(siteName, request.Enabled, cancellationToken);
+
+        await WpAuditAsync(
+            "wordpress.maintenance_changed",
+            siteName,
+            $"WordPress maintenance mode set to {request.Enabled}; site is "
+            + (request.Enabled ? "hidden from visitors." : "visible again."),
+            cancellationToken);
+
         return Ok(ApiResponse<WordPressSiteDto>.Ok(install, "wp.maintenance_updated"));
     }
 
@@ -67,6 +89,18 @@ public sealed class WordPressController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var link = await wordPressToolkitService.CreateLoginLinkAsync(siteName, cancellationToken);
+
+        // BAĞLANTININ KENDİSİ ASLA YAZILMAZ: içindeki tek kullanımlık jeton, o siteye yönetici
+        // olarak girmenin ta kendisidir; kayda düşerse denetim kaydı bir giriş anahtarı deposuna
+        // dönüşür ve yedeklere taşınır. Yazılan şey OLGUDUR: kim, hangi siteye, hangi WordPress
+        // kullanıcısı adına oturum açma hakkı üretti.
+        await WpAuditAsync(
+            "wordpress.login_link_created",
+            siteName,
+            "One-time WordPress administrator login link was created "
+            + $"(valid for {link.ExpiresInSeconds} second(s)).",
+            cancellationToken);
+
         return Ok(ApiResponse<WordPressLoginLinkDto>.Ok(link));
     }
 
@@ -77,6 +111,13 @@ public sealed class WordPressController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await wordPressToolkitService.HardenAsync(siteName, cancellationToken);
+
+        await WpAuditAsync(
+            "wordpress.hardened",
+            siteName,
+            $"WordPress hardening applied ({result.Applied.Count} measure(s): {string.Join(", ", result.Applied)}).",
+            cancellationToken);
+
         return Ok(ApiResponse<WordPressHardenResultDto>.Ok(result, "wp.hardened"));
     }
 
@@ -156,6 +197,16 @@ public sealed class WordPressController(
             }
         }
 
+        // KAYDIN KONUSU KAYNAĞIN SAHİBİDİR, hedefin değil: hedef site bu istekle DOĞDU ve kapsama
+        // yukarıda daha yeni eklendi. Kaynağın sahibi, klonun kime ait olduğunu da belirler.
+        await WpAuditAsync(
+            "wordpress.cloned",
+            siteName,
+            $"WordPress site cloned to '{result.TargetSiteName}' (host '{request.TargetHostName}'); "
+            + $"URL rewritten: {result.UrlRewritten}.",
+            cancellationToken,
+            ownerId);
+
         // KISMİ BAŞARI GİZLENMEZ: adres değiştirilemediyse klon üretim adresini servis eder ve
         // kullanıcının bunu BİLMESİ gerekir — aksi hâlde staging sandığı yerde canlı veriyi değiştirir.
         return Ok(ApiResponse<WordPressCloneResultDto>.Ok(
@@ -173,6 +224,17 @@ public sealed class WordPressController(
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.TargetSiteName ?? string.Empty, cancellationToken);
         var result = await wordPressToolkitService.CopyDataAsync(siteName, request, cancellationToken);
+
+        // KAYIT HEDEFE YAZILIR: yıkım orada olur (hedefin dosyaları ve veritabanı kaynağınkiyle
+        // AYNALANIR). "Sitem neden dünkü staging içeriğine döndü" sorusunu soracak olan da hedefin
+        // sahibidir; kaydı kaynağa bağlamak, onu görmesi gereken kiracıdan gizlemek olurdu.
+        await WpAuditAsync(
+            "wordpress.data_copied",
+            request.TargetSiteName ?? string.Empty,
+            $"WordPress data mirrored from '{siteName}' onto '{request.TargetSiteName}' "
+            + $"(destructive mirror; URL rewritten: {result.UrlRewritten}).",
+            cancellationToken);
+
         return Ok(ApiResponse<WordPressCopyDataResultDto>.Ok(
             result,
             result.UrlRewritten ? "wp.copy_done" : "wp.copy_url_not_replaced"));
@@ -199,9 +261,36 @@ public sealed class WordPressController(
         // Kısmi başarı GİZLENMEZ: bir öğe güncellenemediyse mesaj bunu söyler, çünkü kullanıcının
         // hangi eklentinin geride kaldığını bilmesi gerekir.
         var basarisiz = result.Results.Count(item => !item.Success);
+
+        // KISMİ SONUÇ KAYDA DA GİRER: "güncellendi" demek ile hepsinin güncellenmiş olması aynı şey
+        // değil. Kaç öğenin geride kaldığı yazılmazsa kayıt, bir olaydan sonra yanlış hikâye anlatır.
+        await WpAuditAsync(
+            "wordpress.updates_applied",
+            siteName,
+            $"WordPress updates applied: {result.Results.Count - basarisiz} succeeded, {basarisiz} failed.",
+            cancellationToken);
+
         return Ok(ApiResponse<WordPressUpdateResultDto>.Ok(
             result,
             basarisiz == 0 ? "wp.updates_applied" : "wp.updates_partial"));
     }
 
+    /// <summary>
+    /// WordPress işlemlerinin ortak denetim izi (yapan = oturumdaki kullanıcı, konu = sitenin sahibi).
+    /// </summary>
+    /// <param name="sahip">
+    /// Sahip çağrı yerinde zaten çözülmüşse (klonlama kotayı denetlerken okuyor) yeniden sorulmasın diye.
+    /// </param>
+    private async Task WpAuditAsync(
+        string action,
+        string siteName,
+        string ayrinti,
+        CancellationToken cancellationToken,
+        Guid? sahip = null)
+        => await auditService.AuditAsync(
+            HttpContext,
+            action,
+            $"wordpress:{siteName}",
+            ayrinti,
+            sahip ?? await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken));
 }

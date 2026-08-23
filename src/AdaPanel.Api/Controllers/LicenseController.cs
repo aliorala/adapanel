@@ -63,6 +63,20 @@ public sealed class LicenseController(
     public async Task<ActionResult<ApiResponse<LicenseStatusDto>>> RefreshAsync(CancellationToken cancellationToken)
     {
         var status = await licenseService.RefreshAsync(cancellationToken);
+
+        // İZ YOKTU. Doğrulama SONUCU kalıcıdır: sunucu "geçersiz" derse panel o andan itibaren yeni
+        // kaynak açmayı reddeder. Yani bu uç, sonucu ölçüldüğü an durumu değiştiren bir işlemdir ve
+        // "panel neden bir anda lisanssız oldu" sorusunun tek başlangıç noktası budur.
+        //
+        // KİRACI BAĞI YOK: lisans kuruluma aittir, hiçbir aboneliğe değil.
+        await auditService.WriteAsync(
+            "license.refreshed",
+            "license",
+            $"License re-validated on demand. state={status.State}, sku={status.Sku}",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
         return Ok(ApiResponse<LicenseStatusDto>.Ok(status, "license.refreshed"));
     }
 

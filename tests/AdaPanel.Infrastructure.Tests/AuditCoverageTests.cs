@@ -111,31 +111,145 @@ public sealed class AuditCoverageTests
     /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> BaskaTurdaKapatilacaklar = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        // Yedekleme: denetim raporunun P2 başlığındaki ilk madde (geri yükleme canlı veriyi ezer).
-        ["BackupController.cs#DeleteScheduleAsync"] = "Yedek programı silme — yedek iş kolunda.",
-        ["BackupController.cs#RunScheduleNowAsync"] = "Elle tetiklenen yedek turu (budama da yapar) — yedek iş kolunda.",
+        // LİSTE BOŞ — 14 girdinin HEPSİ kapatıldı (bkz. CODEX_MEMORY 218).
+        //
+        // Kapatılanlar: BackupController (program silme + elle tur), WordPressController'ın altı
+        // ucu (bakım kipi, YÖNETİCİ OTURUMU üreten giriş bağlantısı, sertleştirme, klonlama,
+        // yıkıcı veri aynalama, güncelleme), UpdateController'ın üç ucu (paket indirme, kurulum
+        // zamanlama, güncelleme KAYNAĞINI değiştirme), SitesController.ImportExistingSitesAsync,
+        // AuthController.RegenerateRecoveryCodesAsync ve LicenseController.RefreshAsync.
+        //
+        // Liste boş bırakıldı, SİLİNMEDİ: yapısı, bir sonraki turda ertelenen bir borç çıktığında
+        // onu "kalıcı muafiyet" (Muaflar) ile karıştırmadan yazabilmek için duruyor. İkisini aynı
+        // listeye koymak, geçici bir borcu sessizce kalıcı bir gerekçeye dönüştürürdü.
+    };
 
-        // SSL: sertifika içe aktarma özel anahtar taşır.
+    /// <summary>
+    /// Kaydın KONUSUNU (kiracıyı) yazmayan çağrılar ve HER BİRİNİN gerekçesi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bu nöbetçi var:</b> <c>AuditLog.SubscriptionUserId</c> sütunu ve onu sorgulayan
+    /// görünürlük motoru (<c>AuditLogQueryEngine.ApplyVisibility</c>) aylardır vardı ama neredeyse
+    /// hiçbir uç DOLDURMUYORDU — ölçüldü: denetleyicilerdeki 104 kayıt çağrısının yalnız 26'sı.
+    /// Bir YÖNETİCİ kiracının posta kutusunu sildiğinde kaydın <c>UserId</c>'si yöneticidir ve
+    /// kiracının izinli kimlik kümesinde bulunmaz; konu da boş olduğu için kayıt kiracının
+    /// görünümünde HİÇ çıkmıyordu. Yani sütunun var olma sebebi olan soru — "benim siteme kim
+    /// dokundu" — hâlâ cevapsızdı.
+    /// </para>
+    /// <para>
+    /// <b>Neden HARİÇ TUTMA listesi:</b> kapsam diskten geliyor, yani yeni bir kayıt çağrısının
+    /// varsayılanı "konusunu yazmalı"dır. Yazmayacaksa buraya GEREKÇESİYLE yazılmak zorundadır —
+    /// karar görünür olur. Dahil etme listesi olsaydı, yeni uçlar sessizce kiracısız doğardı.
+    /// </para>
+    /// <para>
+    /// <b>Anahtar:</b> <c>DosyaAdı#eylemArgümanı#kaynakArgümanı</c> (kaynaktaki metin, boşlukları
+    /// sadeleştirilmiş). Metot adı DEĞİL: kayıtların bir kısmı ortak sarmalayıcılardan yazılır
+    /// (<c>AuditSiteSecurityAsync</c>, <c>WriteBackupAuditAsync</c>) ve orada uç adı yoktur.
+    /// Anahtarların dosya içinde BENZERSİZ olması ayrıca doğrulanır — çakışan iki çağrıdan biri
+    /// diğerinin gerekçesine sığınamaz.
+    /// </para>
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> KiraciyaAitOlmayanlar = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        // --- AKTÖR ZATEN KONUNUN KENDİSİ ---
+        //
+        // Kullanıcının kendi hesabına yaptığı işlemler. Kayıt <c>UserId</c> üzerinden zaten o
+        // kullanıcının görünümüne düşer; konuyu ayrıca yazmak aynı bilgiyi iki sütuna kopyalamak
+        // olurdu ve ikisi bir gün ayrı düşebilirdi.
+        ["ApiTokensController.cs#\"apitoken.created\"#\"api-token\""] = "Anahtar çağıranın KENDİ hesabına üretilir (apiTokenService.CreateAsync(User.GetRequiredUserId())); aktör = konu.",
+        ["ApiTokensController.cs#\"apitoken.revoked\"#\"api-token\""] = "Anahtar çağıranın kendi hesabına aittir; aktör = konu.",
+        ["AuthController.cs#\"auth.logout.succeeded\"#\"auth\""] = "Kimlik doğrulama: kullanıcının kendi oturumu; aktör = konu.",
+        ["AuthController.cs#\"auth.2fa.recovery_regenerated\"#\"auth\""] = "2FA kurtarma kodları kullanıcının KENDİ hesabına aittir; aktör = konu.",
+        ["AuthController.cs#\"auth.impersonate.started\"#\"auth\""] = "Kimliğe bürünme bir PANEL YETKİ işlemidir, bir aboneliğin kaynağı üzerinde değil; hedef kullanıcı ayrıntıda yazılı.",
+        ["AuthController.cs#\"auth.impersonate.stopped\"#\"auth\""] = "Yukarıdakinin karşılığı; sunucu/panel düzeyinde yetki işlemi.",
 
-        // Güvenlik: yasak kaldırma ve site izolasyonu.
+        // --- SUNUCU GENELİ: tek bir aboneliğe ait olmayan kaynaklar ---
+        //
+        // Bunları bir kiracıya bağlamak, o kiracıya KOMŞULARINI da kapsayan bir işlemi göstermek
+        // olurdu: kayıt yanlış kişinin görünümüne düşer. "Bir kiracıyı ilgilendiriyor" ile
+        // "bir kiracıya AİT" aynı şey değildir.
+        ["AntivirusController.cs#action#\"antivirus\""] = "ClamAV motoru sunucu geneli tek örnektir; tarama ve imza güncellemesi bütün kiracıları kapsar.",
+        ["AuditLogsController.cs#\"audit.retention.updated\"#\"audit-logs\""] = "Saklama politikası TÜM kiracıların kayıtlarına uygulanır.",
+        ["AuditLogsController.cs#\"audit.retention.purged\"#\"audit-logs\""] = "Temizlik bütün kiracıların kayıtlarını siler; tek bir aboneliğe ait değil.",
+        ["AutomationController.cs#\"automation.settings.updated\"#\"automation\""] = "Sunucu geneli otomasyon ayarı (bütün abonelikleri kapsayan turlar).",
+        ["AutomationController.cs#\"automation.backup.run\"#\"automation\""] = "Bütün abonelikleri gezen yedek turu; tek konusu yok.",
+        ["AutomationController.cs#\"automation.ssl.run\"#\"automation\""] = "Sunucudaki HER sertifikayı yenilemeye çalışan tur.",
+        ["AutomationController.cs#\"automation.backup.remote_tested\"#$\"backup-target:{request.TargetType}\""] = "Uzak yedek HEDEFİ panel genelinde tanımlıdır; bir aboneliğe ait değil.",
+        ["BackupController.cs#\"backup.encryption_changed\"#\"backup\""] = "Şifreleme ayarı panel genelidir; bundan sonraki HER aboneliğin yedeğine uygulanır.",
+        ["BackupController.cs#\"backup.verified\"#\"backup\""] = "Doğrulama sunucudaki bütün yedekleri tarar.",
+        ["CacheController.cs#$\"cache.{motor}.{eylem}\"#$\"cache:{motor}\""] = "Redis/Memcached sunucu geneli tek örnektir; bütün siteler aynı hizmeti paylaşır.",
+        ["ClusterController.cs#action#\"cluster\""] = "Küme düğümleri sunucu/kurulum düzeyindedir, aboneliğe ait değil.",
+        ["DatabasesController.cs#action#target"] = "Bu sarmalayıcı MOTOR ve veritabanı KULLANICISI hedefli kayıtlar içindir (kimlik kaydı, sertleştirme, uzak erişim); veritabanı hedefli olanlar WriteDatabaseAuditAsync ile sahibine bağlanır.",
+        ["DiskQuotaController.cs#\"quota.fsrm.installed\"#\"server\""] = "FSRM bir WINDOWS ROLÜDÜR; kurulum sunucu genelidir, tetikleyen site yalnız bağlamdır.",
+        ["DockerController.cs#\"docker.container.started\"#$\"docker-container:{id}\""] = "Docker uçları admin-only; panelde konteyner↔abonelik sahipliği KAYDI YOK — sahibi ölçülemez, tahmin edilmez.",
+        ["DockerController.cs#\"docker.container.stopped\"#$\"docker-container:{id}\""] = "Konteyner sahipliği panelde kayıtlı değil; ölçülemeyen konu boş bırakılır.",
+        ["DockerController.cs#\"docker.container.restarted\"#$\"docker-container:{id}\""] = "Konteyner sahipliği panelde kayıtlı değil.",
+        ["DockerController.cs#\"docker.container.removed\"#$\"docker-container:{id}\""] = "Konteyner sahipliği panelde kayıtlı değil.",
+        ["DockerController.cs#\"docker.container.run\"#$\"docker-image:{request.Image}\""] = "Yeni konteyner; hiçbir aboneliğe bağlanmamıştır.",
+        ["DockerController.cs#\"docker.image.pulled\"#$\"docker-image:{request.Image}\""] = "İmajlar sunucu genelinde paylaşılır.",
+        ["DockerController.cs#\"docker.image.removed\"#$\"docker-image:{id}\""] = "İmajlar sunucu genelinde paylaşılır.",
+        ["ErrorReportsController.cs#action#\"error-reports\""] = "Hata raporları panelin kendi tanılama verisidir; aboneliğe ait değil.",
+        ["FirewallController.cs#\"firewall.rule.allowed\"#$\"firewall:{rule.DisplayName}\""] = "Windows Güvenlik Duvarı kuralları sunucu genelidir; bir portu açmak bütün kiracıları etkiler.",
+        ["FirewallController.cs#\"firewall.rule.blocked\"#$\"firewall:{rule.DisplayName}\""] = "Güvenlik duvarı kuralı sunucu geneli.",
+        ["FirewallController.cs#\"firewall.rule.removed\"#$\"firewall:{ruleName}\""] = "Güvenlik duvarı kuralı sunucu geneli.",
+        ["FtpController.cs#\"ftp.server.ensured\"#\"ftp-server\""] = "FTP sunucusunun KURULUMU server-level bir işlemdir.",
+        ["FtpController.cs#\"ftp.tls.updated\"#\"ftp-server\""] = "FTPS zorunluluğu bütün kiracıların bağlantılarını aynı anda etkiler.",
+        ["LicenseController.cs#\"license.activated\"#\"license\""] = "Lisans KURULUMA aittir, hiçbir aboneliğe değil.",
+        ["LicenseController.cs#\"license.refreshed\"#\"license\""] = "Lisans kuruluma aittir.",
+        ["LicenseController.cs#\"license.deactivated\"#\"license\""] = "Lisans kuruluma aittir.",
+        ["LogsController.cs#\"logs.rotation_settings_updated\"#\"logs\""] = "Döndürme politikası panelin ve BÜTÜN sitelerin günlüklerine uygulanır.",
+        ["LogsController.cs#\"logs.rotation_run\"#\"logs\""] = "Yönetilen HER dizin için tur; site başına olanı ayrı kayıt yazar ve sahibine bağlanır.",
+        ["MailController.cs#\"mail.webmail.opened\"#\"webmail\""] = "Webmail (Roundcube) sunucu geneli tek kurulumdur; açan kişi zaten aktör olarak yazılı.",
+        ["MailController.cs#\"mail.configured\"#\"mail-server\""] = "Posta SUNUCUSUNUN kurulumu/yapılandırması; bütün alan adlarını kapsar.",
+        ["MailController.cs#\"mail.public_base_url.updated\"#\"mail-server\""] = "Değer TÜM kiracıların liste iletilerine yazılır (bu yüzden zaten admin-only).",
+        ["MailController.cs#\"mail.certificate.issued\"#string.IsNullOrWhiteSpace(request.HostName) ? request.Domain : request.HostName"] = "POSTA SUNUCUSUNUN kendi TLS sertifikası; her kiracının istemcisi bu sertifikayı görür.",
+        ["MailController.cs#\"mail.spam.updated\"#\"mail-server\""] = "Spam filtresi sunucu genelidir (itibar/kara liste riski ortaktır).",
+        ["MailController.cs#\"mail.queue.message_deleted\"#id"] = "Kuyruk kimliğinden alan adına gidilemez: silinen ileti kuyruktan da kalkar, sahibi ÖLÇÜLEMEZ — tahmin edilmez.",
+        ["MailController.cs#\"mail.relay.updated\"#request.Enabled ? $\"{request.Host}:{request.Port}\" : \"mail-server\""] = "Röle, sunucunun TÜM giden postasının teslim yolunu belirler.",
+        ["NotificationsController.cs#\"notifications.settings.updated\"#\"notifications\""] = "Panelin bildirim kanalı (SMTP/webhook) sunucu genelidir.",
+        ["NotificationsController.cs#\"notifications.test_sent\"#\"notifications\""] = "Panel bildirim kanalının sınanması.",
+        ["PanelAccessController.cs#\"panel.access.setup\"#$\"panel-host:{request.HostName}\""] = "PANELİN KENDİ erişim adresi/sertifikası; bir aboneliğin kaynağı değil.",
+        ["PanelSettingsController.cs#\"panel.settings.updated\"#\"panel\""] = "Panel genel ayarları.",
+        ["PhpController.cs#\"php.redis.enabled\"#\"php\""] = "PHP eklentisi FastCGI düzeyinde, bütün siteler için etkinleşir.",
+        ["PhpController.cs#\"php.install.completed\"#\"php\""] = "PHP çalışma zamanı kurulumu sunucu genelidir; siteye ATAMA ayrı uçtadır ve sahibine bağlanır.",
+        ["PhpController.cs#\"php.global.settings.updated\"#\"php\""] = "GENEL php.ini; panelin kendi araçları dahil bütün PHP'yi etkiler.",
+        ["SecurityController.cs#\"security.bruteforce_settings_changed\"#\"security:bruteforce\""] = "Kaba-kuvvet koruması PANEL GİRİŞİNİ korur; bir aboneliğin kaynağı değil.",
+        ["SecurityController.cs#\"security.bruteforce_unbanned\"#$\"security:bruteforce:{request.IpAddress}\""] = "Yasak bir IP'ye aittir, bir aboneliğe değil; IP'den kiracı türetmek tahmindir.",
+        ["ServerHealthController.cs#\"server.domains.refreshed\"#\"server\""] = "Sunucudaki bütün alan adlarının dış-bakış ölçümü.",
+        ["ServerHealthController.cs#\"server.service.restarted\"#$\"service:{request.Name}\""] = "Windows hizmeti sunucu genelidir; yeniden başlatmak bütün kiracıları etkiler.",
+        ["SetupController.cs#\"setup.initialized\"#\"panel\""] = "İlk kurulum: henüz hiçbir abonelik yok.",
+        ["SitesController.cs#\"sites.import.completed\"#\"sites\""] = "İçe aktarılan siteler tanım gereği HENÜZ hiçbir aboneliğe atanmamıştır; atama ayrı bir işlemdir.",
+        ["SslController.cs#\"ssl.renew_all\"#\"ssl:*\""] = "Tek çağrıda sunucudaki HER sitenin sertifikası yenilenir; tek konusu yok.",
+        ["SubscriptionsController.cs#\"subscription.enforced\"#\"subscriptions\""] = "Bütün abonelikleri gezen tur; tek tek değişiklikler SubscriptionEnforcementService'te kendi sahibine yazılır.",
+        ["TerminalController.cs#\"terminal.command.executed\"#\"terminal\""] = "Sunucuda SYSTEM yetkisiyle komut; panel/sunucu düzeyinde, aboneliğe ait değil.",
+        ["UpdateController.cs#\"update.package.downloaded\"#\"panel\""] = "PANELİN KENDİ ikilisi; hiçbir aboneliğe ait değil.",
+        ["UpdateController.cs#\"update.install.scheduled\"#\"panel\""] = "Panelin kendi kurulumu.",
+        ["UpdateController.cs#\"update.source.changed\"#\"panel\""] = "Panelin güncelleme kaynağı.",
+        ["WebDbController.cs#\"webdb.deployed\"#$\"webdb:{deployment.Provider}\""] = "phpMyAdmin/Adminer panelin kendi sitesine kurulur; oturum AÇMA ayrı kayıttır ve veritabanının sahibine bağlanır.",
+    };
 
-        // WordPress: login-link YÖNETİCİ OTURUMU üretir, copy-data yıkıcı aynalama yapar.
-        ["WordPressController.cs#SetMaintenanceAsync"] = "WordPress iş kolunda.",
-        ["WordPressController.cs#CreateLoginLinkAsync"] = "YÖNETİCİ OTURUMU üretir — WordPress iş kolunda.",
-        ["WordPressController.cs#HardenAsync"] = "WordPress iş kolunda.",
-        ["WordPressController.cs#CloneAsync"] = "WordPress iş kolunda.",
-        ["WordPressController.cs#CopyDataAsync"] = "Yıkıcı /MIR aynalama — WordPress iş kolunda.",
-        ["WordPressController.cs#ApplyUpdatesAsync"] = "WordPress iş kolunda.",
-
-        // Panel güncellemesi: panelin kendi ikilisini değiştirir.
-        ["UpdateController.cs#ApplyAsync"] = "Güncelleme iş kolunda.",
-        ["UpdateController.cs#InstallAsync"] = "Güncelleme iş kolunda.",
-        ["UpdateController.cs#SetGithubAsync"] = "Güncelleme iş kolunda.",
-
-        // Diğer sahipli denetleyiciler.
-        ["SitesController.cs#ImportExistingSitesAsync"] = "Site modülü ayrı iş kolunda.",
-        ["AuthController.cs#RegenerateRecoveryCodesAsync"] = "2FA kurtarma kodu üretimi — kimlik iş kolunda.",
-        ["LicenseController.cs#RefreshAsync"] = "Lisans iş kolunda.",
+    /// <summary>
+    /// KİRACIYA AİT ama konusu bu turda yazılmayan çağrılar — sonraki tura kalan borç.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <see cref="KiraciyaAitOlmayanlar"/>'dan ayrı:</b> bunlar "kiracıya ait değil"
+    /// DEĞİL, "kiracıya ait ama konusu henüz çözülmüyor" demektir. İkisini aynı listeye koymak,
+    /// geçici bir borcu kalıcı bir gerekçeye dönüştürürdü ve bir yıl sonra kimse ayrımı bilemezdi
+    /// — bu depoda tam olarak bu olmuştu.
+    /// </para>
+    /// <para>
+    /// Liste yalnız KÜÇÜLEBİLİR: <see cref="Kiraci_bagi_borcu_KAPANINCA_listeden_dusurulur"/>.
+    /// </para>
+    /// </remarks>
+    private static readonly IReadOnlyDictionary<string, string> KiraciBagiSonrakiTurda = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["BillingController.cs#action#\"billing\""] = "Fatura kayıtları bir aboneliğe AİT; sarmalayıcı abonelik kimliğini almıyor ve ölçmeden bağlamak yanlış kiracıya yazmak olurdu.",
+        ["CronController.cs#action#\"cron\""] = "Zamanlanmış görevler aboneliğe AİT (ScopeNameAsync görev adını abonelikle önekliyor); sarmalayıcı yalnız serbest metin alıyor, sahibi çözmek için imza değişikliği gerekiyor.",
+        ["MailListPublicController.cs#\"mail.list.unsubscribe_requested\"#SafeResource(list)"] = "Dağıtım listesi kiracının alan adına AİT; uç KİMLİK DOĞRULAMASIZ (abonelikten çıkma bağlantısı) ve alan adı sahipliği çözümü IIS okuması gerektiriyor — bu yolda maliyeti ölçülmedi.",
+        ["MailListPublicController.cs#\"mail.list.unsubscribe_confirmed\"#SafeResource(result.List)"] = "Yukarıdakiyle aynı: kiracıya ait, kimlik doğrulamasız uç.",
+        ["SiteHostingSettingsController.cs#action#\"sites\""] = "Barındırma ayarları SİTEYE ait; ortak sarmalayıcı yalnız açıklama metni alıyor, site adını almıyor.",
     };
 
     [Fact]
@@ -257,6 +371,374 @@ public sealed class AuditCoverageTests
             curuyenler.Length == 0,
             "Muaf/erteleme listesinde artik var olmayan uclar var (silin, yoksa ayni adla eklenen yeni bir uc sessizce muaf olur):\n  "
             + string.Join("\n  ", curuyenler));
+    }
+
+    // ------------------------------------------------------------------
+    // KİRACI BAĞI (SubscriptionUserId)
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Bir denetleyicideki kayıt çağrısının KONUSUNU nasıl yazdığı.
+    /// </summary>
+    /// <remarks>
+    /// Depoda kiracı taşıyabilen iki biçim var; üçüncüsü (<c>WriteAsync</c>) yapısal olarak
+    /// taşıyamaz — onu seçmek, "bu kaydın konusu yok" demenin ta kendisidir ve bu yüzden
+    /// gerekçelendirilmesi gerekir.
+    /// </remarks>
+    private sealed record KayitCagrisi(string Dosya, string Anahtar, bool KonuTasiyor, int Satir);
+
+    [Fact]
+    public void Kiraciya_ait_kaynaktaki_her_kayit_KONUSUNU_yazar()
+    {
+        var kok = KaynakKoku();
+        var eksik = new List<string>();
+        var tasiyan = 0;
+        var toplam = 0;
+
+        foreach (var cagri in KayitCagrilari(kok))
+        {
+            toplam++;
+            if (cagri.KonuTasiyor)
+            {
+                tasiyan++;
+                continue;
+            }
+
+            if (KiraciyaAitOlmayanlar.ContainsKey(cagri.Anahtar) || KiraciBagiSonrakiTurda.ContainsKey(cagri.Anahtar))
+            {
+                continue;
+            }
+
+            eksik.Add($"{cagri.Anahtar}   (satir {cagri.Satir})");
+        }
+
+        // ÖLÇEMEDİK ile SORUN YOK ayrımı: ayrıştırma bozulursa hiçbir çağrı bulunamaz ve test
+        // sessizce yeşil kalırdı. Eşik, bu turda ölçülen 139 çağrının epey altında bırakıldı —
+        // amaç kaymayı değil, TARAMANIN ÇÖKMESİNİ yakalamak.
+        Assert.True(toplam >= 100, $"Kayit cagrisi taramasi bozulmus olabilir: yalnizca {toplam} cagri bulundu.");
+        Assert.True(tasiyan >= 60, $"Kiraci bagi taramasi bozulmus olabilir: yalnizca {tasiyan} cagri konu yaziyor.");
+
+        Assert.True(
+            eksik.Count == 0,
+            $"Denetim kaydinin KONUSU (SubscriptionUserId) yazilmayan cagri(lar) var ({eksik.Count} adet).\n"
+            + "Kaynak kiraciya aitse konuyu OLCEREK yazin (AuditSubject.SiteOwnerAsync / MailDomainOwnerAsync / "
+            + "DatabaseOwnerAsync); degilse GEREKCESIYLE KiraciyaAitOlmayanlar'a ekleyin.\n"
+            + "Konu yazilmayan kaydi kiraci KENDI denetim ekraninda HIC goremez:\n  "
+            + string.Join("\n  ", eksik));
+    }
+
+    /// <summary>Borç kapandığında girdi listeden DÜŞMEK zorunda.</summary>
+    [Fact]
+    public void Kiraci_bagi_borcu_KAPANINCA_listeden_dusurulur()
+    {
+        var kapananlar = KayitCagrilari(KaynakKoku())
+            .Where(cagri => cagri.KonuTasiyor && KiraciBagiSonrakiTurda.ContainsKey(cagri.Anahtar))
+            .Select(cagri => cagri.Anahtar)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            kapananlar.Length == 0,
+            "Bu cagrilar artik kiraci bagini TASIYOR — KiraciBagiSonrakiTurda listesinden CIKARIN:\n  "
+            + string.Join("\n  ", kapananlar));
+    }
+
+    /// <summary>
+    /// Kiracı bağı listeleri çürümüş girdi içeremez ve anahtarlar BENZERSİZ olmalıdır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki ayrı çürüme var, ikisi de sessizdir. Birincisi: silinen/değişen bir çağrının gerekçesi
+    /// listede kalır ve bir gün aynı anahtarla doğan YENİ bir çağrı sessizce muaf olur. İkincisi:
+    /// aynı dosyada aynı anahtarı üreten iki çağrı olursa, biri diğerinin gerekçesine sığınır —
+    /// yani tek bir gerekçe iki farklı kararı örter. İkisi de nöbetçiyi yeşil ama kör bırakır.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Kiraci_bagi_listeleri_CURUMUS_veya_CAKISAN_girdi_icermez()
+    {
+        var cagrilar = KayitCagrilari(KaynakKoku()).ToArray();
+        var mevcut = new HashSet<string>(cagrilar.Select(cagri => cagri.Anahtar), StringComparer.Ordinal);
+
+        var curuyenler = KiraciyaAitOlmayanlar.Keys
+            .Concat(KiraciBagiSonrakiTurda.Keys)
+            .Where(anahtar => !mevcut.Contains(anahtar))
+            .ToArray();
+
+        Assert.True(
+            curuyenler.Length == 0,
+            "Kiraci bagi listelerinde artik var olmayan cagrilar var (silin; yoksa ayni anahtarla eklenen yeni bir cagri sessizce muaf olur):\n  "
+            + string.Join("\n  ", curuyenler));
+
+        var cakisanlar = cagrilar
+            .GroupBy(cagri => cagri.Anahtar, StringComparer.Ordinal)
+            .Where(grup => grup.Count() > 1 && grup.Any(cagri => !cagri.KonuTasiyor))
+            .Select(grup => $"{grup.Key}  (satirlar: {string.Join(", ", grup.Select(cagri => cagri.Satir))})")
+            .ToArray();
+
+        Assert.True(
+            cakisanlar.Length == 0,
+            "Ayni anahtari ureten birden cok kayit cagrisi var; tek gerekce iki karari orter. "
+            + "Kaynak (resource) argumanini HEDEFI soyleyecek sekilde ayirin:\n  "
+            + string.Join("\n  ", cakisanlar));
+    }
+
+    /// <summary>
+    /// Denetim servisi denetleyicilerde TEK bir değişken adıyla çağrılır.
+    /// </summary>
+    /// <remarks>
+    /// Bu, yukarıdaki nöbetçinin ATLANAMAMASI içindir. Tarama, kayıt çağrılarını
+    /// <c>auditService.Write…</c> kalıbından bulur; bağımlılık başka bir adla enjekte edilseydi
+    /// (<c>audit</c>, <c>log</c>) o denetleyicinin bütün çağrıları taramanın DIŞINDA kalır ve
+    /// kiracı bağı kuralı orada sessizce uygulanmaz olurdu. Adın tekliğini ölçmek, kuralın
+    /// kapsamını ölçmektir.
+    /// </remarks>
+    [Fact]
+    public void Denetim_servisi_denetleyicilerde_TEK_ADLA_enjekte_edilir()
+    {
+        var bildirim = new Regex(@"IAuditService\s+(?<ad>\w+)", RegexOptions.Compiled);
+        var yanlislar = new List<string>();
+        var bulunan = 0;
+
+        foreach (var yol in DenetleyiciDosyalari(KaynakKoku()))
+        {
+            foreach (Match eslesme in bildirim.Matches(File.ReadAllText(yol)))
+            {
+                bulunan++;
+                var ad = eslesme.Groups["ad"].Value;
+                if (!string.Equals(ad, "auditService", StringComparison.Ordinal))
+                {
+                    yanlislar.Add($"{Path.GetFileName(yol)}: IAuditService {ad}");
+                }
+            }
+        }
+
+        Assert.True(bulunan >= 20, $"IAuditService taramasi bozulmus olabilir: yalnizca {bulunan} bildirim bulundu.");
+        Assert.True(
+            yanlislar.Count == 0,
+            "Denetim servisi 'auditService' disinda bir adla enjekte edilmis; kiraci bagi nobetcisi o dosyayi GOREMEZ:\n  "
+            + string.Join("\n  ", yanlislar));
+    }
+
+    /// <summary>
+    /// Denetleyicilerdeki BÜTÜN kayıt çağrıları: anahtar + konu taşıyor mu.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden yalnız iki kalıp:</b> <c>auditService.AuditAsync(HttpContext, …)</c> (HTTP yolu) ve
+    /// <c>auditService.Write…Async(…)</c> (doğrudan servis çağrısı). Denetleyiciye özgü
+    /// sarmalayıcılar (<c>WriteAuditAsync</c>) BİLEREK taranmaz: onların gövdesi zaten bu iki
+    /// kalıptan biriyle biter ve kararın verildiği yer orasıdır. Sarmalayıcı çağrılarını da saymak,
+    /// aynı kararı iki kez listelemek olurdu.
+    /// </para>
+    /// </remarks>
+    private static IEnumerable<KayitCagrisi> KayitCagrilari(string kok)
+    {
+        var kalip = new Regex(@"\.AuditAsync\s*\(|(?<![.\w])auditService\.Write(?<konulu>ForSubscription)?Async\s*\(", RegexOptions.Compiled);
+
+        foreach (var yol in DenetleyiciDosyalari(kok))
+        {
+            var dosyaAdi = Path.GetFileName(yol);
+            var metin = File.ReadAllText(yol);
+
+            foreach (Match eslesme in kalip.Matches(metin))
+            {
+                var http = eslesme.Value.Contains(".AuditAsync", StringComparison.Ordinal);
+                var acilis = metin.IndexOf('(', eslesme.Index);
+                var kapanis = MetinFarkindaKapanis(metin, acilis);
+                if (kapanis < 0)
+                {
+                    continue;
+                }
+
+                var parcalar = ArgumanlariAyir(metin[(acilis + 1)..kapanis]);
+
+                // HTTP yolunda ilk argüman HttpContext'tir; servis yolunda yoktur.
+                var kayma = http ? 1 : 0;
+                var eylem = Sadelestir(Parca(parcalar, kayma));
+                var kaynak = Sadelestir(Parca(parcalar, kayma + 1));
+
+                // Konu, iki biçimde de 5. argümandır (0 tabanlı 4):
+                //   AuditAsync(ctx, action, resource, details, subject)
+                //   WriteForSubscriptionAsync(action, resource, details, userId, subject, ip, ct)
+                // WriteAsync'te böyle bir argüman YOKTUR — yapısal olarak konu taşıyamaz.
+                var konuluBicim = http || eslesme.Groups["konulu"].Success;
+                var konu = konuluBicim ? Sadelestir(Parca(parcalar, 4)) : string.Empty;
+
+                yield return new KayitCagrisi(
+                    dosyaAdi,
+                    $"{dosyaAdi}#{eylem}#{kaynak}",
+                    konu.Length > 0 && !string.Equals(konu, "null", StringComparison.Ordinal),
+                    metin[..eslesme.Index].Count(karakter => karakter == '\n') + 1);
+            }
+        }
+    }
+
+    private static string Parca(IReadOnlyList<string> parcalar, int indeks) =>
+        indeks < parcalar.Count ? parcalar[indeks] : string.Empty;
+
+    private static string Sadelestir(string deger) =>
+        Regex.Replace(deger, @"\s+", " ").Trim();
+
+    /// <summary>
+    /// Dengeli kapanış parantezi — ama METİN FARKINDA.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir uygulama:</b> ölçüldü — sayaç tabanlı basit eşleştirme, argümanların
+    /// içindeki <c>")"</c> gibi bir DİZGİYİ gerçek kapanış sanıp çağrıyı ERKEN bitiriyordu.
+    /// Somut sonuç: <c>SslController</c>'ın sertifika kaydı, konusu YAZILI olduğu hâlde
+    /// "yazmıyor" görünüyordu. Yani nöbetçi doğru kodu suçlayacak, geliştirici de onu susturmak
+    /// için gerekçe listesine yalan bir satır yazacaktı.
+    /// </para>
+    /// </remarks>
+    private static int MetinFarkindaKapanis(string metin, int acilis)
+    {
+        var derinlik = 0;
+        var i = acilis;
+
+        while (i < metin.Length)
+        {
+            var karakter = metin[i];
+
+            if (karakter == '"')
+            {
+                var duzMetin = i > 0 && metin[i - 1] == '@';
+                i++;
+                while (i < metin.Length)
+                {
+                    if (duzMetin)
+                    {
+                        if (metin[i] == '"')
+                        {
+                            // @"..." içinde "" kaçırılmış tırnaktır, dizgi bitmez.
+                            if (i + 1 < metin.Length && metin[i + 1] == '"')
+                            {
+                                i += 2;
+                                continue;
+                            }
+
+                            i++;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        if (metin[i] == '\\')
+                        {
+                            i += 2;
+                            continue;
+                        }
+
+                        if (metin[i] == '"')
+                        {
+                            i++;
+                            break;
+                        }
+                    }
+
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (karakter == '(')
+            {
+                derinlik++;
+            }
+            else if (karakter == ')')
+            {
+                derinlik--;
+                if (derinlik == 0)
+                {
+                    return i;
+                }
+            }
+
+            i++;
+        }
+
+        return -1;
+    }
+
+    /// <summary>Argüman metnini ÜST DÜZEY virgüllerden ayırır (dizgi ve iç parantezler korunur).</summary>
+    private static IReadOnlyList<string> ArgumanlariAyir(string argumanlar)
+    {
+        var parcalar = new List<string>();
+        var mevcut = new System.Text.StringBuilder();
+        var derinlik = 0;
+        var i = 0;
+
+        while (i < argumanlar.Length)
+        {
+            var karakter = argumanlar[i];
+
+            if (karakter == '"')
+            {
+                var son = MetinSonu(argumanlar, i);
+                mevcut.Append(argumanlar[i..son]);
+                i = son;
+                continue;
+            }
+
+            if (karakter is '(' or '[' or '{')
+            {
+                derinlik++;
+            }
+            else if (karakter is ')' or ']' or '}')
+            {
+                derinlik--;
+            }
+            else if (karakter == ',' && derinlik == 0)
+            {
+                parcalar.Add(mevcut.ToString());
+                mevcut.Clear();
+                i++;
+                continue;
+            }
+
+            mevcut.Append(karakter);
+            i++;
+        }
+
+        if (mevcut.ToString().Trim().Length > 0)
+        {
+            parcalar.Add(mevcut.ToString());
+        }
+
+        return parcalar;
+    }
+
+    /// <summary>Bir dizginin açılış tırnağından bir SONRAKİ karaktere kadar olan indeks.</summary>
+    private static int MetinSonu(string metin, int acilis)
+    {
+        var duzMetin = acilis > 0 && metin[acilis - 1] == '@';
+        var i = acilis + 1;
+
+        while (i < metin.Length)
+        {
+            if (!duzMetin && metin[i] == '\\')
+            {
+                i += 2;
+                continue;
+            }
+
+            if (metin[i] == '"')
+            {
+                if (duzMetin && i + 1 < metin.Length && metin[i + 1] == '"')
+                {
+                    i += 2;
+                    continue;
+                }
+
+                return i + 1;
+            }
+
+            i++;
+        }
+
+        return metin.Length;
     }
 
     [Fact]

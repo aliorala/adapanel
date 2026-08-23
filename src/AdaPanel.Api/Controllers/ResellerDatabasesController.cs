@@ -4,6 +4,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -91,11 +92,16 @@ public sealed class ResellerDatabasesController(
 
             throw;
         }
-        await auditService.WriteAsync(
+        // KONU = ABONELİK, aktör ise oturumdaki kullanıcı. İkisi self-serviste bile AYRILIR:
+        // aboneliğin alt kullanıcısı (Plesk "additional user") veritabanını kendi adına açar ama
+        // kaynak PARENT aboneliğe aittir ve kotasından düşer. Konu yazılmasaydı, abonelik sahibi
+        // kendi kotasını tüketen bu işlemi denetim ekranında göremezdi.
+        await auditService.WriteForSubscriptionAsync(
             "database.create.completed",
-            "database",
+            $"database:{request.Name}",
             $"[{request.Engine}] '{request.Name}' (self-servis)",
             userId,
+            subscriptionId,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
         return await GetMineAsync(cancellationToken);
@@ -119,13 +125,18 @@ public sealed class ResellerDatabasesController(
             }
         }
 
+        // SAHİP, SAHİPLİK KAYDI SİLİNMEDEN ÖNCE OKUNUR: sıra tersine dönerse kaydın konusu kalıcı
+        // olarak boş kalır ve veritabanını kaybeden abonelik, kaybın izini kendi ekranında bulamaz.
+        var sahip = await AuditSubject.DatabaseOwnerAsync(dbOwnership, engine, name, cancellationToken);
+
         await databaseService.DeleteDatabaseAsync(engine, name, cancellationToken);
         await dbOwnership.RemoveAsync(engine, name, cancellationToken);
-        await auditService.WriteAsync(
+        await auditService.WriteForSubscriptionAsync(
             "database.delete.completed",
-            "database",
+            $"database:{name}",
             $"[{engine}] '{name}' (self-servis)",
             userId,
+            sahip,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
         return await GetMineAsync(cancellationToken);

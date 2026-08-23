@@ -80,7 +80,8 @@ public sealed class SslController(
             $"joker={request.Wildcard}, staging={request.UseStaging}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}" +
             (string.IsNullOrWhiteSpace(certificate.FallbackReason)
                 ? ")"
-                : $", kendinden-imzaliya dusuldu: {certificate.FallbackReason})"));
+                : $", kendinden-imzaliya dusuldu: {certificate.FallbackReason})"),
+            await SiteSahibiAsync(certificate.SiteName, cancellationToken));
 
         await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
@@ -115,7 +116,8 @@ public sealed class SslController(
             $"ssl:{certificate.SiteName}",
             $"Sertifika ice aktarildi: {certificate.HostName}:{certificate.Port} " +
             $"(parmak izi={certificate.Thumbprint}, konu={certificate.Subject}, " +
-            $"kaynak={certificate.Source}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}).");
+            $"kaynak={certificate.Source}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}).",
+            await SiteSahibiAsync(certificate.SiteName, cancellationToken));
 
         await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
@@ -175,7 +177,8 @@ public sealed class SslController(
             "ssl.https_redirect_changed",
             $"ssl:{workspace.SiteName}",
             $"HTTP->HTTPS yonlendirmesi {(request.Enabled ? "ACILDI" : "KAPATILDI")}. " +
-            $"Uygulanan durum (olculmus)={workspace.HttpsRedirectEnabled}.");
+            $"Uygulanan durum (olculmus)={workspace.HttpsRedirectEnabled}.",
+            await SiteSahibiAsync(workspace.SiteName, cancellationToken));
 
         return Ok(ApiResponse<SslWorkspaceDto>.Ok(workspace, "ssl.https_redirect_saved"));
     }
@@ -211,8 +214,21 @@ public sealed class SslController(
             $"ssl:{result.SiteName}",
             $"HTTPS bağlaması kaldırıldı: {result.HostName}:{result.Port}. " +
             $"Doğrulandı={result.BindingRemoved}, yönlendirme kapatıldı={result.HttpsRedirectDisabled}, " +
-            $"sertifika={result.CertificateAction}.");
+            $"sertifika={result.CertificateAction}.",
+            await SiteSahibiAsync(result.SiteName, cancellationToken));
 
         return Ok(ApiResponse<RemoveSslCertificateResultDto>.Ok(result, "ssl.binding_removed"));
     }
+
+    /// <summary>
+    /// Sitenin ABONELİK SAHİBİ — kaydın kiracıya görünmesini sağlayan alan.
+    /// </summary>
+    /// <remarks>
+    /// Kapsam denetimi ÇAĞIRANIN siteye erişebildiğini doğrular; buradaki soru başka: kaynak KİME
+    /// ait. İkisi ayrıldığı an (yönetici/bayi kiracının sitesine dokunur) tam da kaydın en çok
+    /// gerektiği andır. Bu alan olmadan kiracı, kendi sitesinde yapılan işlemi denetim ekranında
+    /// HİÇ göremezdi. Site sahipsizse (yöneticinin kendi sitesi) boş kalır; tahmin edilmez.
+    /// </remarks>
+    private Task<Guid?> SiteSahibiAsync(string? siteName, CancellationToken cancellationToken)
+        => AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken);
 }

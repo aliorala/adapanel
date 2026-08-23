@@ -4,6 +4,7 @@ using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Components;
 using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -74,11 +75,15 @@ public sealed class PhpController(
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var assignment = await phpService.SetSitePhpVersionAsync(siteName, request, cancellationToken);
 
-        await auditService.WriteAsync(
+        // KONU = SİTENİN SAHİBİ. PHP sürümünü değiştirmek sitenin çalışıp çalışmadığını belirler;
+        // yönetici bunu kiracının sitesinde yaptığında kiracı, "sitem neden 500 veriyor" sorusunun
+        // cevabını kendi denetim ekranında görebilmeli.
+        await auditService.WriteForSubscriptionAsync(
             "php.site.assignment.completed",
-            "php",
+            $"php:{siteName}",
             $"PHP runtime '{request.ComponentId}' assigned to site '{siteName}'.",
             User.GetRequiredUserId(),
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
@@ -103,11 +108,12 @@ public sealed class PhpController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var settings = await phpService.UpdateSitePhpSettingsAsync(siteName, request, cancellationToken);
-        await auditService.WriteAsync(
+        await auditService.WriteForSubscriptionAsync(
             "php.site.settings.updated",
-            "php",
+            $"php:{siteName}",
             $"PHP settings updated for site '{siteName}'.",
             User.GetRequiredUserId(),
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
