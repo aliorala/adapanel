@@ -1,4 +1,5 @@
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
@@ -459,7 +460,7 @@ public sealed class UserManagementService(
             await ResolveOwnerNameAsync(parentId, cancellationToken));
     }
 
-    public async Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default)
+    public async Task<UserDeletionResultDto> DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default)
     {
         // Kendini silme denetimi kapsam denetiminden ÖNCE: bayi kendi hesabını silmeye çalıştığında
         // "yetkiniz yok" değil, gerçek sebebi ("kendinizi silemezsiniz") görsün.
@@ -516,10 +517,19 @@ public sealed class UserManagementService(
         // 2) Aboneliğin cron görevleri (u<id>-- ad alanı) Görev Zamanlayıcı'dan temizlenir (best-effort).
         await TryDeleteOwnedCronTasksAsync(userId, cancellationToken);
 
+        // Sonuç nesnesi BAŞTAN kurulur: aşağıdaki her adım "ne kaldı"yı buraya yazar ve nesne
+        // çağırana döner. Eskiden bu bilgi hiçbir yere yazılmıyordu (denetim Y7).
+        var rapor = new UserDeletionResultDto
+        {
+            UserId = userId,
+            UserName = user.UserName,
+            SiteRemovalRequested = removeSites
+        };
+
         // 3) Siteler: removeSites=true → dosyalar + eşleşen DB'lerle cascade silinir. false → siteler
         //    SUNUCUDA KALIR (yönetime devir); yalnız panel kayıtları temizlenir.
         //
-        // CASCADE'İN UYARILARI ARTIK ATILMIYOR (denetim Y7).
+        // CASCADE'İN SONUCU ARTIK ATILMIYOR (denetim Y7).
         //
         // Buradaki çağrı `SiteDeletionResultDto` döner ve o nesnenin tamamı — "site dosyaları
         // silinemedi", "veritabanı düşürülemedi", "klasör başka bir siteye ait" — sonucu hiç
@@ -527,8 +537,9 @@ public sealed class UserManagementService(
         // dönüyordu: yarım silinmiş site SAHİPSİZ kalıyor, kimin olduğu bilgisi yok oluyor ve
         // WHMCS bu çağrıya "başarılı" diyordu. Sunucuda ne kaldığını kimse öğrenemiyordu.
         //
-        // Uyarılar artık iki yere birden yazılıyor: DENETİM KAYDINA (kalıcı, sorgulanabilir —
-        // "bu kullanıcının sitesinden ne kaldı?" sorusunun tek cevabı) ve loglara.
+        // Sonuç artık ÜÇ yere birden gidiyor: çağırana (yanıt gövdesi + 2xx OLMAYAN durum kodu),
+        // DENETİM KAYDINA (kalıcı, sorgulanabilir — kullanıcı satırı silindikten sonra "bu klasör
+        // kimindi" sorusunun tek cevabı) ve loglara.
         var cascadeUyarilari = new List<string>();
         if (removeSites)
         {
@@ -541,42 +552,116 @@ public sealed class UserManagementService(
                     {
                         cascadeUyarilari.Add($"{siteName}: {uyari}");
                     }
+
+                    foreach (var kalinti in sonuc.Leftovers)
+                    {
+                        rapor.Leftovers.Add(new UserDeletionLeftoverDto
+                        {
+                            SiteName = siteName,
+                            Kind = kalinti.Kind,
+                            Name = kalinti.Name,
+                            Reason = kalinti.Reason,
+                            Deliberate = kalinti.Deliberate
+                        });
+                    }
+
+                    if (sonuc.FullyDeleted)
+                    {
+                        rapor.DeletedSites.Add(siteName);
+                    }
                 }
                 catch (Exception exception)
                 {
                     logger.LogWarning(exception, "Kullanıcı silme: site cascade silinemedi: {Site}", siteName);
                     cascadeUyarilari.Add($"{siteName}: cascade silme çalıştırılamadı — {exception.Message}");
+
+                    // Cascade HİÇ çalışamadı: site olduğu gibi duruyor. En ağır kalıntı budur.
+                    rapor.Leftovers.Add(new UserDeletionLeftoverDto
+                    {
+                        SiteName = siteName,
+                        Kind = SiteLeftoverKinds.Site,
+                        Name = siteName,
+                        Reason = $"cascade silme çalıştırılamadı — {exception.Message}"
+                    });
                 }
             }
 
             await RecordCascadeLeftoversAsync(user.UserName, cascadeUyarilari, actorUserId, ipAddress, cancellationToken);
         }
+        else
+        {
+            // BİLİNÇLİ: siteler yönetime devrediliyor. Yine de ADIYLA bildirilir — kullanıcı
+            // silindikten sonra bu sitelerin kime ait olduğunu gösteren hiçbir kayıt kalmıyor.
+            foreach (var siteName in scope.Sites)
+            {
+                rapor.Leftovers.Add(new UserDeletionLeftoverDto
+                {
+                    SiteName = siteName,
+                    Kind = SiteLeftoverKinds.Site,
+                    Name = siteName,
+                    Reason = "siteleri silme seçilmedi — site sunucuda kaldı ve artık sahibi yok",
+                    Deliberate = true
+                });
+            }
+        }
 
         // 4) DB sahiplik KAYITLARI temizlenir (removeSites=false ise veritabanlarının kendisi durur).
+        //
+        // BURADA HÂLÂ KAYIT VARSA O VERİTABANI MOTORDA DURUYOR demektir: cascade sildiklerinin
+        // kaydını zaten düşürdü. Kaydı silmek onu panelden GÖRÜNMEZ yapar — sahipsiz bir
+        // veritabanına panelden sahip atayan hiçbir uç yok. Bu yüzden silmeden ÖNCE adları rapora
+        // yazılır; aksi hâlde veritabanı motorda kalır ve varlığından kimsenin haberi olmaz.
         try
         {
             foreach (var owned in await databaseOwnership.GetOwnedAsync(userId, cancellationToken))
             {
+                rapor.Leftovers.Add(new UserDeletionLeftoverDto
+                {
+                    Kind = SiteLeftoverKinds.Database,
+                    Name = $"{owned.Engine}:{owned.DatabaseName}",
+                    Reason = removeSites
+                        ? "kullanıcının veritabanı hiçbir siteye bağlı değildi, cascade kapsamına girmedi — motorda duruyor"
+                        : "siteleri silme seçilmedi — veritabanı motorda duruyor, panel kaydı kaldırıldı",
+                    // removeSites=true "her şey gitsin" demekti; giden bir şey kaldıysa bu bir arızadır.
+                    Deliberate = !removeSites
+                });
+
                 await databaseOwnership.RemoveAsync(owned.Engine, owned.DatabaseName, cancellationToken);
             }
         }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Kullanıcı silme: DB sahiplik kayıtları temizlenemedi.");
+            rapor.Leftovers.Add(new UserDeletionLeftoverDto
+            {
+                Kind = SiteLeftoverKinds.Database,
+                Name = user.UserName,
+                Reason = $"kullanıcının veritabanı sahiplik kayıtları okunamadı/temizlenemedi — {exception.Message}"
+            });
         }
 
         // 5) Kapsam kaydı + kullanıcı satırı. Audit yazımı SaveChanges'ı tetikler (mevcut desen).
+        //
+        // KULLANICI SATIRI KALINTI VARSA DA SİLİNİR — bilerek. Alternatifi ("kalıntı varsa
+        // kullanıcıyı silme, önce temizlensin") ÖLÇÜLDÜ ve daha kötü: cascade siteyi dosyaları
+        // silmeden ÖNCE kapsamdan düşürüyor (SiteCascadeDeletionService, 8. adım), dolayısıyla
+        // ikinci deneme boş bir kapsam görüp HİÇBİR uyarı üretmeden "başarılı" derdi — yalan
+        // aynı yerden geri gelirdi. Ayrıca iptal edilmiş bir müşterinin panel girişi açık kalırdı.
+        // Dürüstlük panel kaydında değil YANITTA sağlanıyor: kalıntı varsa uç 2xx dönmez.
         await customerScopeService.RemoveUserAsync(userId, cancellationToken);
         dbContext.Users.Remove(user);
+        rapor.UserDeleted = true;
 
         await auditService.WriteAsync(
             "users.deleted",
             "users",
             $"User '{user.UserName}' ({user.Role}) deleted. removeSites={removeSites}; {scope.Sites.Count} site(s) in scope; " +
-            $"{cascadeUyarilari.Count} cascade warning(s).",
+            $"{cascadeUyarilari.Count} cascade warning(s); {rapor.Leftovers.Count(kalinti => !kalinti.Deliberate)} unresolved leftover(s).",
             actorUserId,
             ipAddress,
             cancellationToken);
+
+        return rapor;
     }
 
     /// <summary>

@@ -79,6 +79,10 @@ public sealed class SiteCascadeDeletionService(
         catch (Exception exception)
         {
             result.Warnings.Add($"Site bilgisi okunamadı: {exception.Message}");
+
+            // Site okunamadıysa fiziksel yolu da bilmiyoruz: dosyalar SİLİNEMEZ ve bu bir arızadır.
+            // Sessiz kalmak, "site tamamen silindi" izlenimi bırakırdı.
+            Kalinti(result, SiteLeftoverKinds.Site, siteName, $"site bilgisi okunamadı ({exception.Message}); klasörü/kaynakları çözümlenemedi");
         }
 
         var physicalPath = site?.PhysicalPath ?? string.Empty;
@@ -87,7 +91,12 @@ public sealed class SiteCascadeDeletionService(
         // 1) Mail domainleri (hesaplar + alias dahil cascade).
         foreach (var domain in await ResolveExistingMailDomainsAsync(site, siteName, cancellationToken))
         {
-            await StepAsync(result, $"Mail domaini ({domain})", () => mailService.DeleteDomainAsync(domain, cancellationToken));
+            await StepAsync(
+                result,
+                $"Mail domaini ({domain})",
+                () => mailService.DeleteDomainAsync(domain, cancellationToken),
+                SiteLeftoverKinds.MailDomain,
+                domain);
         }
 
         // SAHİPLİK KAYITLARI SİLMEDEN ÖNCE OKUNUR (Y1): hangi veritabanının GERÇEKTEN silindiğini
@@ -105,7 +114,12 @@ public sealed class SiteCascadeDeletionService(
                 var separator = db.IndexOf(':');
                 var engine = db[..separator];
                 var name = db[(separator + 1)..];
-                if (await StepAsync(result, $"Veritabanı ({db})", () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken)))
+                if (await StepAsync(
+                        result,
+                        $"Veritabanı ({db})",
+                        () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken),
+                        SiteLeftoverKinds.Database,
+                        db))
                 {
                     // Y1: sahiplik kaydı YALNIZCA veritabanı gerçekten düştüğünde silinir.
                     silinenVeritabanlari.Add(db);
@@ -120,6 +134,15 @@ public sealed class SiteCascadeDeletionService(
             {
                 result.Warnings.Add(
                     $"Veritabanı ({db}): adı siteyle eşleşiyor ama panelde bu siteye ait bir sahiplik/bağ kaydı yok — SİLİNMEDİ, gerekiyorsa Veritabanları ekranından elle silin.");
+
+                // BİLİNÇLİ karar: sahipliği kanıtlanmamış veritabanı düşürülmez. Sonucu başarısız
+                // yapmaz ama sunucuda durduğu için ADIYLA bildirilir.
+                Kalinti(
+                    result,
+                    SiteLeftoverKinds.Database,
+                    db,
+                    "adı siteyle eşleşiyor ama sahiplik/bağ kaydı yok — panel kanıtsız veritabanı düşürmez",
+                    deliberate: true);
             }
         }
 
@@ -134,30 +157,40 @@ public sealed class SiteCascadeDeletionService(
         // veritabanı listede/yedekte/kotada görünmeye devam eder. Site adının koparılması ayrıca
         // aynı adla açılacak YENİ bir sitenin, eski veritabanını "kendi kaydı" sanıp düşürmesini
         // engeller.
-        await DetachSurvivingDatabasesAsync(result, siteName, sahiplikKayitlari, silinenVeritabanlari, cancellationToken);
+        await DetachSurvivingDatabasesAsync(result, siteName, sahiplikKayitlari, silinenVeritabanlari, deleteDatabases, cancellationToken);
 
         // 3) FTP kullanıcıları.
         foreach (var ftpUser in await ResolveFtpUsersAsync(siteName, cancellationToken))
         {
-            await StepAsync(result, $"FTP kullanıcısı ({ftpUser})", () => ftpService.DeleteFtpUserAsync(ftpUser, cancellationToken));
+            await StepAsync(
+                result,
+                $"FTP kullanıcısı ({ftpUser})",
+                () => ftpService.DeleteFtpUserAsync(ftpUser, cancellationToken),
+                SiteLeftoverKinds.FtpUser,
+                ftpUser);
         }
 
         // 4) Reverse proxy (yalnızca etkinse).
         if (await SafeBoolAsync(async () => (await reverseProxyService.GetSiteConfigurationAsync(siteName, cancellationToken)).IsProxyEnabled))
         {
-            await StepAsync(result, "Reverse proxy", () => reverseProxyService.RemoveProxyAsync(siteName, cancellationToken));
+            await StepAsync(result, "Reverse proxy", () => reverseProxyService.RemoveProxyAsync(siteName, cancellationToken), name: siteName);
         }
 
         // 5) Disk kotası (yalnızca etkinse).
         if (await SafeBoolAsync(async () => (await diskQuotaService.GetQuotaAsync(siteName, cancellationToken)).QuotaEnabled))
         {
-            await StepAsync(result, "Disk kotası", () => diskQuotaService.RemoveQuotaAsync(siteName, cancellationToken));
+            await StepAsync(result, "Disk kotası", () => diskQuotaService.RemoveQuotaAsync(siteName, cancellationToken), name: siteName);
         }
 
         // 6) DNS bölgesi.
         if (await HasDnsZoneAsync(siteName, cancellationToken))
         {
-            await StepAsync(result, "DNS bölgesi", () => dnsService.DeleteZoneAsync(siteName, cancellationToken));
+            await StepAsync(
+                result,
+                "DNS bölgesi",
+                () => dnsService.DeleteZoneAsync(siteName, cancellationToken),
+                SiteLeftoverKinds.DnsZone,
+                siteName);
         }
 
         // 7) SSL durumu (panelin ssl.json'undaki o siteye ait sertifika kayıtları).
@@ -210,7 +243,12 @@ public sealed class SiteCascadeDeletionService(
             : null;
 
         // 9) IIS sitesi + app pool.
-        await StepAsync(result, "IIS sitesi", () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken));
+        await StepAsync(
+            result,
+            "IIS sitesi",
+            () => iisSiteService.DeleteSiteAsync(siteName, cancellationToken),
+            SiteLeftoverKinds.Site,
+            siteName);
 
         // 10) Dosyalar (en son; site kaldırıldıktan sonra). Uygulama kökü, fiziksel yolu
         //     da kapsıyorsa onunla birlikte gider.
@@ -218,6 +256,18 @@ public sealed class SiteCascadeDeletionService(
         {
             TryDeleteDirectory(result, "Uygulama kök dizini", appRoot, silmePolitikasi);
             TryDeleteDirectory(result, "Site dosyaları", physicalPath, silmePolitikasi);
+        }
+        else if (!deleteFiles)
+        {
+            // BİLİNÇLİ: kullanıcı "dosyaları koru" dedi. Sonuç başarısız değildir ama dosyalar
+            // sunucuda duruyor ve artık onları hangi sitenin bıraktığını gösteren bir kayıt yok —
+            // yol ADIYLA bildirilir.
+            foreach (var yol in new[] { appRoot, physicalPath }
+                .Where(aday => !string.IsNullOrWhiteSpace(aday))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                Kalinti(result, SiteLeftoverKinds.Files, yol, "dosyaları silme seçilmedi — klasör sunucuda bırakıldı", deliberate: true);
+            }
         }
 
         return result;
@@ -491,7 +541,20 @@ public sealed class SiteCascadeDeletionService(
     /// Tek adım. <b>Dönüş değeri "adım GERÇEKTEN başarılı oldu mu"dur</b> ve boşuna değildir:
     /// veritabanı sahiplik kaydı yalnızca DROP başarılıysa silinir (Y1).
     /// </summary>
-    private async Task<bool> StepAsync(SiteDeletionResultDto result, string label, Func<Task> action)
+    /// <param name="kind">Kalıntı olarak bildirilecek kaynak tipi (bkz. <see cref="SiteLeftoverKinds"/>).</param>
+    /// <param name="name">Kaynağın ADI — başarısızlıkta yöneticiye gösterilecek olan budur.</param>
+    /// <remarks>
+    /// <c>internal</c>: bu metot "yıkıcı adım başarısız olunca ne olur" kararının TAMAMINI taşıyor
+    /// (kaynak zaten yok mu, uyarı ne yazacak, kalıntı listesine ne girecek). Testler bu kararı
+    /// on dokuz servisi taklit etmeden ölçebilmeli — aksi hâlde en kritik kablo test edilmeden kalır
+    /// (bir mutasyon turunda tam olarak bu oldu: kalıntı satırı silindi ve hiçbir test kırılmadı).
+    /// </remarks>
+    internal async Task<bool> StepAsync(
+        SiteDeletionResultDto result,
+        string label,
+        Func<Task> action,
+        string kind = SiteLeftoverKinds.Other,
+        string? name = null)
     {
         try
         {
@@ -501,8 +564,7 @@ public sealed class SiteCascadeDeletionService(
         }
         catch (Exception exception)
         {
-            // Kaynak zaten yoksa ("*_not_found") temizlenmiş say — cascade silme idempotenttir.
-            if (exception.Message?.EndsWith("_not_found", StringComparison.OrdinalIgnoreCase) == true)
+            if (KaynakZatenYokMu(exception))
             {
                 result.Removed.Add(label);
                 return true;
@@ -511,12 +573,52 @@ public sealed class SiteCascadeDeletionService(
             logger.LogWarning(exception, "Cascade silme adımı başarısız: {Label}", label);
             // GERÇEK sebebi göster: AppException.Details (ör. Stalwart CLI çıktısı) varsa onu da ekle; yoksa yalnız mesaj.
             // Eskiden sadece exception.Message (mail.operation_failed gibi anahtar) görünüyordu → neden anlaşılmıyordu.
-            var reason = exception is AdaPanel.Core.Common.AppException appEx && !string.IsNullOrWhiteSpace(appEx.Details)
+            var reason = exception is AppException appEx && !string.IsNullOrWhiteSpace(appEx.Details)
                 ? $"{appEx.MessageKey} — {appEx.Details}"
                 : exception.Message;
             result.Warnings.Add($"{label}: {reason}");
+            Kalinti(result, kind, name ?? label, reason);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Yıkıcı bir adımın <b>başarı sayılabileceği tek durum</b>: kaynak zaten yoktu.
+    /// Saf işlev — kararın kendisi test edilebilsin diye ayrıldı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ESKİ KURAL DİZGEYE BAKIYORDU: istisnanın mesajı <c>_not_found</c> ile bitiyorsa kaynak
+    /// "kaldırıldı" sayılıyordu. Depoda 35 <c>*_not_found</c> anahtarı var ve bir kısmı kaynağın
+    /// yokluğunu DEĞİL <b>aracın/yolun</b> yokluğunu bildiriyor: <c>php.executable_not_found</c>,
+    /// <c>nginx.executable_not_found</c>, <c>cron.script_not_found</c>, <c>quota.path_not_found</c>,
+    /// <c>git.path_not_found</c>. Böyle bir hata yıkıcı bir adımda yüzeye çıksaydı panel kaynağı
+    /// silinmiş sayardı — kaynak duruyor, panel "kaldırıldı" diyor.
+    /// </para>
+    /// <para>
+    /// DÜRÜSTLÜK: bugün bu yolda ulaşılabilir bir örnek BULUNAMADI (cascade'in çağırdığı silme
+    /// uçları — IIS, FTP, DNS, mail, veritabanı — kaynağı bulamayınca zaten sessizce dönüyor,
+    /// istisna atmıyor). Yani istismarı kanıtlanmış değil; <b>tasarım</b> kırılgandı ve kural
+    /// artık dizgeye değil <see cref="AppException.ResourceAlreadyGone"/> bayrağına bakıyor.
+    /// Bayrağı yalnız fırlatan taraf koyar, çünkü kaynağın var olup olmadığını yalnız o bilir.
+    /// </para>
+    /// </remarks>
+    internal static bool KaynakZatenYokMu(Exception exception)
+        => exception is AppException { ResourceAlreadyGone: true };
+
+    /// <summary>
+    /// Sunucuda kalan bir kaynağı sonuca YAZAR. Tek giriş noktası olması bilerek: kalıntının
+    /// sessizce eklendiği ikinci bir yol açılırsa "ne kaldı" listesi yine eksik olur.
+    /// </summary>
+    private static void Kalinti(SiteDeletionResultDto result, string kind, string name, string reason, bool deliberate = false)
+    {
+        result.Leftovers.Add(new SiteLeftoverDto
+        {
+            Kind = kind,
+            Name = name,
+            Reason = reason,
+            Deliberate = deliberate
+        });
     }
 
     private static async Task<bool> SafeBoolAsync(Func<Task<bool>> probe)
@@ -544,6 +646,7 @@ public sealed class SiteCascadeDeletionService(
         catch (Exception exception)
         {
             result.Warnings.Add($"{label}: {exception.Message}");
+            Kalinti(result, SiteLeftoverKinds.Files, fullPath, exception.Message);
         }
     }
 
@@ -573,6 +676,19 @@ public sealed class SiteCascadeDeletionService(
             result.Warnings.Add(
                 "Site dosyaları: SİLİNMEDİ — sunucudaki diğer sitelerin klasörleri okunamadı, " +
                 "klasörün başka bir siteye ait olup olmadığı doğrulanamıyor.");
+
+            // Kapı bilerek kapandı ama SONUÇ yine de "site tamamen silindi" değildir: dosyalar duruyor.
+            foreach (var yol in new[] { site?.ApplicationRootPath, site?.PhysicalPath }
+                .Where(aday => !string.IsNullOrWhiteSpace(aday))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                Kalinti(
+                    result,
+                    SiteLeftoverKinds.Files,
+                    yol!,
+                    "diğer sitelerin klasörleri okunamadığı için silme yapılmadı (yanlış klasörü silmemek için)");
+            }
+
             return null;
         }
 
@@ -616,7 +732,12 @@ public sealed class SiteCascadeDeletionService(
         };
     }
 
-    private void TryDeleteDirectory(SiteDeletionResultDto result, string label, string path, SiteDeletionPathPolicy policy)
+    /// <remarks>
+    /// <c>internal</c>: Y7'nin merkezi burasıdır — "yarım kaldı" ölçümü ve kalıntı kaydı. Gerçek
+    /// dosyalarla, gerçek bir kilitle ölçülebilmeli. Kapının kendisi (<see cref="SiteDeletionPathGuard"/>)
+    /// bu görünürlükten etkilenmez: politika hâlâ ÇAĞIRAN tarafından ölçülerek kurulur.
+    /// </remarks>
+    internal void TryDeleteDirectory(SiteDeletionResultDto result, string label, string path, SiteDeletionPathPolicy policy)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -627,6 +748,7 @@ public sealed class SiteCascadeDeletionService(
         if (full is null)
         {
             result.Warnings.Add($"{label}: SİLİNMEDİ — yol çözümlenemedi ({path})");
+            Kalinti(result, SiteLeftoverKinds.Files, path, "yol çözümlenemedi, klasör silinmedi");
             return;
         }
 
@@ -642,6 +764,11 @@ public sealed class SiteCascadeDeletionService(
         {
             logger.LogWarning("Site klasoru silinmedi ({Verdict}): {Path}", karar, full);
             result.Warnings.Add($"{label}: SİLİNMEDİ — {SiteDeletionPathGuard.Describe(karar)} ({full})");
+
+            // Kapı BİLEREK kapandı (yanlış klasörü silmemek için) ama klasör duruyor: "bilinçli"
+            // DEĞİL diye işaretlenir, çünkü kullanıcı bu klasörün silinmesini istemişti ve
+            // silinmedi — birinin gidip bakması gerekiyor.
+            Kalinti(result, SiteLeftoverKinds.Files, full, SiteDeletionPathGuard.Describe(karar));
             return;
         }
 
@@ -667,8 +794,21 @@ public sealed class SiteCascadeDeletionService(
                 oncekiDosyaSayisi,
                 kalanDosyaSayisi);
 
-            result.Warnings.Add(DescribeDeletionFailure(
-                label, full, sonuc, oncekiDosyaSayisi, kalanDosyaSayisi, exception.Message));
+            var mesaj = DescribeDeletionFailure(
+                label, full, sonuc, oncekiDosyaSayisi, kalanDosyaSayisi, exception.Message);
+            result.Warnings.Add(mesaj);
+
+            // "Klasör gitti ama istisna atıldı" bir kalıntı DEĞİLDİR: diskte bir şey kalmadı.
+            if (sonuc != DirectoryDeletionOutcome.Deleted)
+            {
+                Kalinti(
+                    result,
+                    SiteLeftoverKinds.Files,
+                    full,
+                    sonuc == DirectoryDeletionOutcome.PartiallyDeleted
+                        ? $"KISMEN silindi — {kalanDosyaSayisi} dosya kaldı ({exception.Message})"
+                        : $"silinemedi, dosyalar duruyor ({exception.Message})");
+            }
         }
     }
 
@@ -807,6 +947,7 @@ public sealed class SiteCascadeDeletionService(
         string siteName,
         IReadOnlyList<(string Engine, string DatabaseName, Guid OwnerUserId)> ownership,
         IReadOnlyCollection<string> deletedDatabases,
+        bool deleteDatabases,
         CancellationToken cancellationToken)
     {
         foreach (var (engine, databaseName, ownerUserId) in ownership)
@@ -823,12 +964,34 @@ public sealed class SiteCascadeDeletionService(
                 result.Warnings.Add(
                     $"Veritabanı ({engine}:{databaseName}): SİLİNMEDİ ve sahipliği KORUNDU — " +
                     $"'{siteName}' sitesiyle bağı koparıldı, Veritabanları ekranından erişilmeye devam edilebilir.");
+
+                // Kalıntı YALNIZCA "veritabanlarını silme" seçildiğinde buradan bildirilir.
+                // Silme İSTENDİĞİ hâlde hayatta kalan bir veritabanı zaten DROP adımında
+                // başarısız olmuştur ve orada kalıntı olarak yazılmıştır — ikinci kez yazmak
+                // aynı veritabanını listede iki kere gösterirdi.
+                if (!deleteDatabases)
+                {
+                    Kalinti(
+                        result,
+                        SiteLeftoverKinds.Database,
+                        $"{engine}:{databaseName}",
+                        "veritabanlarını silme seçilmedi — motorda duruyor, sahipliği korundu",
+                        deliberate: true);
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 logger.LogWarning(exception, "Veritabani sahipligi korunamadi: {Engine}:{Name}", engine, databaseName);
                 result.Warnings.Add(
                     $"Veritabanı sahiplik kaydı ({engine}:{databaseName}): güncellenemedi — {exception.Message}");
+
+                // Kayıt güncellenemedi: veritabanı motorda, panelde ise ÖLÜ bir site adına bağlı
+                // görünmeye devam ediyor. Sessiz geçilirse kimse fark etmez.
+                Kalinti(
+                    result,
+                    SiteLeftoverKinds.Database,
+                    $"{engine}:{databaseName}",
+                    $"sahiplik kaydı güncellenemedi, silinmiş '{siteName}' sitesine bağlı görünüyor — {exception.Message}");
             }
         }
     }

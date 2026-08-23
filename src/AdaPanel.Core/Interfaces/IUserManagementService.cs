@@ -21,7 +21,13 @@ public interface IUserManagementService
     /// <paramref name="removeSites"/> true ise (yalnız admin) atanan siteler dosya+eşleşen DB'lerle cascade silinir;
     /// false ise siteler/veriler SUNUCUDA KALIR (yönetime devredilmiş olur).
     /// </summary>
-    Task DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default);
+    /// <returns>
+    /// Ne silindi, <b>ne kaldı</b>. Dönüş tipi <c>void</c> değil çünkü <c>void</c> olduğu sürece
+    /// cascade'in "yarım kaldı" bilgisi hiçbir yere ulaşamıyordu (denetim Y7): çağıran, sunucuda
+    /// sahipsiz kalıntı bırakmış bir silmeyi başarılı silmeden ayırt EDEMİYORDU.
+    /// <see cref="UserDeletionResultDto.Completed"/> <c>false</c> ise uç 2xx dönmez.
+    /// </returns>
+    Task<UserDeletionResultDto> DeleteUserAsync(Guid userId, Guid actorUserId, bool removeSites, string? ipAddress, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Hatalı giriş denemeleri yüzünden kilitlenmiş kullanıcının kilidini açar (LockedUntilUtc +

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { AxiosError } from "axios";
 import { apiClient, clearCsrfToken } from "../api/client";
+import { deleteUser as deleteUserRequest } from "../api/users";
 import { resolveFailureDetail, resolveFailureKey, type TransportFailure } from "../utils/apiError";
 
 type ApiEnvelope<T> = {
@@ -244,9 +245,22 @@ export const useAuthStore = defineStore("auth", {
       return response.data.data;
     },
     // Siteler/veriler sunucuda kalır (yönetime devir); alt-kullanıcıları ve panel kayıtları backend'de temizlenir.
-    async deleteUser(userId: string) {
-      await apiClient.delete<ApiEnvelope<object>>(`/users/${userId}`);
-      await this.fetchUsers();
+    //
+    // SONUÇ ARTIK GERİ VERİLİYOR: uç "ne silindi, ne kaldı" raporu döner (denetim Y7). Eskiden
+    // yanıt hiç okunmuyordu; ekran her koşulda "kullanıcı silindi" yazıyor, sunucuda kalan
+    // sahipsiz site/veritabanı görünmüyordu.
+    async deleteUser(userId: string, removeSites = false) {
+      try {
+        const sonuc = await deleteUserRequest(userId, removeSites);
+        await this.fetchUsers();
+        return sonuc;
+      } catch (error) {
+        // 409 = kullanıcı KAYDI silindi ama sunucuda kalıntı var. Liste yine tazelenmeli, yoksa
+        // ekranda artık var olmayan bir kullanıcı görünmeye devam eder. Tazeleme hatası ASIL
+        // hatayı gölgelemesin diye yutuluyor: kalıntı raporu her şeyden önemli.
+        await this.fetchUsers().catch(() => undefined);
+        throw error;
+      }
     },
     async fetchSecuritySettings() {
       const response = await apiClient.get<ApiEnvelope<SecuritySettings>>("/security/settings");

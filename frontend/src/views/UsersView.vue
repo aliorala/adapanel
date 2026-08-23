@@ -348,6 +348,7 @@ import PasswordField from "../components/PasswordField.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { getServicePlans, createServicePlan, updateServicePlan, deleteServicePlan, type ServicePlan } from "../api/servicePlans";
 import { extractApiDetails, extractApiMessage, useAuthStore, type ManagedUser } from "../stores/auth";
+import { extractDeletionLeftovers, type UserDeletionLeftover } from "../api/users";
 import SubscriptionCard from "../components/SubscriptionCard.vue";
 import { useSitesStore } from "../stores/sites";
 
@@ -643,16 +644,48 @@ async function deleteUser(user: ManagedUser) {
     requireText: user.userName,
     action: async () => {
       try {
-        await authStore.deleteUser(user.id);
+        const sonuc = await authStore.deleteUser(user.id);
         if (selectedUserId.value === user.id) {
           selectedUserId.value = "";
         }
-        notify(t("panel.users.deleted"), false);
+
+        // KALINTILAR ARTIK GÖRÜNÜYOR. Silme başarılı olsa bile sunucuda kalanlar (site klasörleri,
+        // veritabanları) ADIYLA yazılır: eskiden ekran "kullanıcı silindi" deyip susuyordu ve
+        // yönetici, sahibi kalmamış onlarca kaynağın orada durduğunu hiç öğrenmiyordu.
+        const kalintilar = sonuc?.leftovers ?? [];
+        notify(`${t("panel.users.deleted")}${kalintiMetni(kalintilar)}`, false);
       } catch (error) {
-        notify(resolveApiMessage(error), true);
+        // 409 (kısmi silme) da buraya düşer; gövdedeki kalıntı listesi hata metnine eklenir.
+        notify(`${resolveApiMessage(error)}${kalintiMetni(extractDeletionLeftovers(error))}`, true);
       }
     }
   });
+}
+
+/**
+ * Kalıntı listesini okunabilir satırlara çevirir. Boş listede BOŞ dizge döner ki mesaj
+ * gereksiz yere şişmesin.
+ *
+ * "Bir şeyler kaldı" demek yöneticiyi aramaya gönderir; burada TİP + AD yazılır (hangi site,
+ * hangi veritabanı, hangi alan adı) çünkü temizliği yapacak kişinin ihtiyacı olan tek şey odur.
+ */
+function kalintiMetni(leftovers: UserDeletionLeftover[]): string {
+  if (leftovers.length === 0) {
+    return "";
+  }
+
+  const satirlar = leftovers.map((leftover) => {
+    const site = leftover.siteName ? `${leftover.siteName} › ` : "";
+    // Sunucu yeni bir kaynak tipi eklerse ekranda HAM ANAHTAR görünmesin: çeviri yoksa
+    // genel "Kaynak" başlığına düşülür — ad ve sebep zaten yazılıyor, bilgi kaybolmaz.
+    const tipAnahtari = `panel.users.leftoverKind.${leftover.kind}`;
+    const cevrilen = t(tipAnahtari);
+    const tip = cevrilen === tipAnahtari ? t("panel.users.leftoverKind.other") : cevrilen;
+    const bilincli = leftover.deliberate ? ` (${t("panel.users.leftoverDeliberate")})` : "";
+    return `• ${site}${tip}: ${leftover.name} — ${leftover.reason}${bilincli}`;
+  });
+
+  return `\n\n${t("panel.users.leftoversTitle")}\n${satirlar.join("\n")}`;
 }
 
 // Hatalı giriş kilidini beklemeden açar (yönetici kısayolu; bayi yalnız kendi müşterisini açabilir).

@@ -152,10 +152,13 @@ public sealed class SiteDeletionHonestyTests
         var kaynak = OkuKaynak("src", "AdaPanel.Infrastructure", "Iis", "SiteCascadeDeletionService.cs");
 
         // Silme adımının SONUCU okunuyor (StepAsync artık bool döner).
-        Assert.Contains(
-            "if (await StepAsync(result, $\"Veritabanı ({db})\", () => databaseService.DeleteDatabaseAsync(engine, name, cancellationToken)))",
-            kaynak,
-            StringComparison.Ordinal);
+        //
+        // İddia adımın TAM ARGÜMAN LİSTESİNE bağlanmıyor: `StepAsync` sonradan kalıntı tipi/adı
+        // da alıyor ve o eklemeyi "kırılma" saymak, testi gerçekliğin değil metnin bekçisi yapardı.
+        // Korunan davranış şu: DROP çağrısının dönüşü BİR KOŞULDA kullanılıyor ve sahiplik kaydı
+        // ancak o koşulun içinde siliniyor.
+        Assert.Contains("if (await StepAsync(", kaynak, StringComparison.Ordinal);
+        Assert.Contains("databaseService.DeleteDatabaseAsync(engine, name, cancellationToken)", kaynak, StringComparison.Ordinal);
         Assert.Contains("await TryRemoveOwnershipAsync(result, engine, name, cancellationToken);", kaynak, StringComparison.Ordinal);
 
         // Hayatta kalan veritabanının sahipliği KORUNUYOR, yalnız ölü site adı koparılıyor.
