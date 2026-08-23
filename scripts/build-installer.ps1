@@ -83,6 +83,39 @@ if ($LASTEXITCODE -ne 0) {
 
 Copy-Item (Join-Path $repoRoot "components.json") (Join-Path $publishDir "components.json") -Force
 
+# .HTACCESS IIS MODULU (net48).
+# AYRI derlenir cunku yukaridaki publish YALNIZ AdaPanel.Api'yi ve net8 self-contained olarak
+# uretiyor; bu modul ise net48 hedeflidir (IIS'in yonetilen modul sozlesmesi System.Web'dir ve
+# System.Web .NET Core'da YOKTUR). Ayni publish cagrisina sokulamaz.
+#
+# Cikti dogrudan publish klasorune kopyalanir; kurulum betigi onu oradan GAC'a kurar.
+# DLL'in KENDISI paket icinde tasinir, GAC'a kurulum HEDEF SUNUCUDA yapilir -- GAC yollari
+# makineye ozgudur, paketin icine gomulmez.
+$htaccessModuleProject = Join-Path $repoRoot "src\AdaPanel.HtaccessModule\AdaPanel.HtaccessModule.csproj"
+& $dotnetExe build $htaccessModuleProject -c $Configuration "/p:Version=$Version"
+if ($LASTEXITCODE -ne 0) {
+    throw ".htaccess IIS modulu derlenemedi."
+}
+
+$htaccessDll = Join-Path $repoRoot "src\AdaPanel.HtaccessModule\bin\$Configuration\net48\AdaPanel.HtaccessModule.dll"
+if (-not (Test-Path $htaccessDll)) {
+    throw ".htaccess modul DLL'i uretilmedi: $htaccessDll"
+}
+
+# GUCLU AD DENETIMI. Guclu adsiz derleme GAC'a KURULAMAZ; bu durumda kurulum sessizce
+# "modul yok" moduna duser ve ozellik hicbir zaman calismaz. Paketleme aninda YAKALANMALI.
+$htaccessName = [System.Reflection.AssemblyName]::GetAssemblyName($htaccessDll)
+if (-not $htaccessName.GetPublicKeyToken() -or $htaccessName.GetPublicKeyToken().Length -eq 0) {
+    throw ".htaccess modulu GUCLU ADLI DEGIL -> GAC'a kurulamaz. SignAssembly/AssemblyOriginatorKeyFile kontrol edin."
+}
+if ($htaccessName.Version.ToString() -ne "1.0.0.0") {
+    # GAC kimligi panel surumunu TAKIP ETMEMELI; ederse her surumde yan yana kurulum olusur ve
+    # applicationHost.config eski surumu gostermeye devam eder (modul sessizce eski kalir).
+    throw ".htaccess modul AssemblyVersion'i 1.0.0.0 olmali, su an $($htaccessName.Version)."
+}
+
+Copy-Item $htaccessDll (Join-Path $publishDir "AdaPanel.HtaccessModule.dll") -Force
+
 # BILESEN PAKETLERI DENETIMI. Bu betik VARDI ama hicbir yerden CAGRILMIYORDU: indirilecek
 # php/mariadb/nginx... paketlerinin SHA256'sini ve imzasini dogruluyor, yani musteri sunucusuna
 # inecek ikilileri denetliyor. Cagrilmayan bir denetim, olmayan bir denetimdir.

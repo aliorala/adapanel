@@ -49,6 +49,11 @@ $ErrorActionPreference = "Stop"
 # birinin BAKIP onaylamasi gerekssin.
 $script:BeklenenIkililer = @(
     "AdaPanel.Api.exe",
+    # .htaccess IIS modulu (net48, guclu adli, AnyCPU). Publish ciktisindan GELMEZ; onu
+    # build-installer.ps1 ayrica derleyip buraya kopyalar (net48 hedefi net8 publish'e giremez).
+    # Hedef sunucuda GAC'a kurulur ve applicationHost.config'e kaydedilir. Bu satir, "yeni bir
+    # ikili sessizce paketlenemesin" kuralinin BILINCLI onayidir.
+    "AdaPanel.HtaccessModule.dll",
     "aspnetcorev2_inprocess.dll",
     "D3DCompiler_47_cor3.dll",
     "e_sqlite3.dll",
@@ -65,6 +70,9 @@ $script:BeklenenIkililer = @(
 # degistirilmis olmasinin en sik isaretidir.
 $script:ImzasizIzinliler = @(
     "AdaPanel.Api.exe",
+    # Kendi urettigimiz derleme; paket henuz KOD IMZASIZ (bkz. docs/calisma-durumu.md, ticari karar).
+    # GUCLU AD imzasi AYRI bir seydir ve VARDIR -- GAC kurulumunun on kosulu odur, Authenticode degil.
+    "AdaPanel.HtaccessModule.dll",
     "e_sqlite3.dll"
 )
 

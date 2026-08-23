@@ -16,6 +16,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdaPanel.Core.Tests", "test
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdaPanel.Infrastructure.Tests", "tests\AdaPanel.Infrastructure.Tests\AdaPanel.Infrastructure.Tests.csproj", "{011A76F5-8A56-4795-BF89-B3D69AB7206F}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{75A8CD9D-13B5-4A6A-A2AD-6F75E1BD7C09}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdaPanel.HtaccessModule", "src\AdaPanel.HtaccessModule\AdaPanel.HtaccessModule.csproj", "{89664566-DAD5-4D1A-BE9F-712160A195DA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -46,6 +50,10 @@ Global
 		{011A76F5-8A56-4795-BF89-B3D69AB7206F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{011A76F5-8A56-4795-BF89-B3D69AB7206F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{011A76F5-8A56-4795-BF89-B3D69AB7206F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{89664566-DAD5-4D1A-BE9F-712160A195DA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{89664566-DAD5-4D1A-BE9F-712160A195DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{89664566-DAD5-4D1A-BE9F-712160A195DA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{89664566-DAD5-4D1A-BE9F-712160A195DA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -53,5 +61,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{16EBB1C1-E8ED-4D7D-B60C-11513C4155F4} = {E6D8A974-D8A5-4CEB-B020-16B51237F43B}
 		{011A76F5-8A56-4795-BF89-B3D69AB7206F} = {E6D8A974-D8A5-4CEB-B020-16B51237F43B}
+		{89664566-DAD5-4D1A-BE9F-712160A195DA} = {75A8CD9D-13B5-4A6A-A2AD-6F75E1BD7C09}
 	EndGlobalSection
 EndGlobal

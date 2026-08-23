@@ -57,6 +57,9 @@ Source: "..\scripts\install-service.ps1"; DestDir: "{app}\scripts"; Flags: ignor
 Source: "..\scripts\configure-firewall.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\harden-adapanel.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\install-tray-task.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+; .htaccess IIS modulunun kurulum/kaldirma betigi. AYRI bir betik cunku iki yerden cagriliyor:
+; kurulumda (ConfigureInstallation) ve kaldirmada ([UninstallRun], -Remove ile).
+Source: "..\scripts\install-htaccess-module.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 ; AfterInstall BU GIRDIDE, cunku [Files] bolumunun SON satiri: ConfigureInstallation ancak butun
 ; dosyalar kopyalandiktan sonra calisir. Yeni bir [Files] girdisi eklerken BU SATIRIN ALTINA degil
 ; USTUNE eklenmeli; yoksa servis, henuz kopyalanmamis dosyalarla baslatilir.
@@ -132,6 +135,13 @@ Name: "{commonstartup}\AdaPanel Tepsi"; Filename: "{app}\AdaPanel.Api.exe"; Para
 Name: "{group}\AdaPanel Servis Durumu"; Filename: "{app}\AdaPanel.Api.exe"; Parameters: "--tray-goster"; IconFilename: "{app}\adapanel.ico"
 
 [UninstallRun]
+; .HTACCESS MODULU EN BASTA KALDIRILIR ve bu SIRA ONEMLIDIR.
+; Modul GAC'ta ve applicationHost.config'te yasiyor; ikisi de {app} klasorunun DISINDA.
+; [UninstallDelete] {app}'i silse bile bu iki kayit KALIRDI ve sonuc su olurdu: IIS her istekte
+; artik var olmayan bir derlemeyi yuklemeye calisir -> sunucudaki TUM siteler 500 verir.
+; Yani bu satir olmadan "AdaPanel'i kaldirmak" musterinin butun sitelerini dusururdu.
+; Once kayit gider, sonra dosyalar.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-htaccess-module.ps1"" -Remove -ModulePath ""{app}\AdaPanel.HtaccessModule.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "AdaPanelHtaccessModulKaldir"
 ; Gorev kaldirilmazsa, program silindikten sonra her birkac dakikada bir var olmayan bir exe
 ; calistirilmaya calisilir ve Gorev Zamanlayici hata biriktirir.
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""AdaPanel Tepsi"" /F"; Flags: runhidden; RunOnceId: "AdaPanelTepsiGorevSil"
@@ -212,6 +222,20 @@ begin
     GetPanelPort('') + '" -PreferredHttpsPort ' + GetPanelPort(''));
   { Firewall = uzaktan erisim; panel local acilir -> best-effort. }
   TryRunPowerShellScript('configure-firewall.ps1', '-Port ' + GetPanelPort(''));
+  { .htaccess IIS modulu = best-effort. IKI SEBEPLE kurulumu ASLA bozmamali:
+    1) Panel bu modul olmadan da TAM calisir; .htaccess yalnizca bir ozelliktir.
+    2) Adim GAC'a yaziyor ve applicationHost.config'e dokunuyor -- yani IIS'i etkileyen en riskli
+       adim. Basarisiz olursa DOGRU davranis, kurulumu iptal etmek degil, ozelligi ATLAMAKTIR.
+    Betik zaten IIS yoksa / DLL yoksa sessizce cikiyor.
+
+    KRITIK: bu adim modulu ACMAZ. Genel anahtar dosyasini OLUSTURMAZ, dolayisiyla kurulumdan
+    sonra sunucudaki HICBIR sitenin davranisi degismez. Modul kayitli ama OLUDUR; acmak
+    panelden, site site yapilir. Urunun en yuksek etki alanli degisikligi icin kabul edilebilir
+    tek varsayilan budur. }
+  TryRunPowerShellScript(
+    'install-htaccess-module.ps1',
+    '-ModulePath "' + ExpandConstant('{app}\AdaPanel.HtaccessModule.dll') +
+    '" -DataRoot "' + ExpandConstant('{commonappdata}\AdaPanel') + '"');
 end;
 
 function ExtractPortFromMarker(ImagePath: string; Marker: string): string;

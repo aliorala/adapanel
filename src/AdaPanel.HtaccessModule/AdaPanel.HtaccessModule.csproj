@@ -1,0 +1,94 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net48 ZORUNLU, tercih DEGIL. IIS'in yonetilen modul sozlesmesi System.Web.IHttpModule'dur;
+         System.Web .NET (Core) icinde YOKTUR ve net8 derlemesi CLR 4 icinde yuklenemez. Bu yuzden
+         bu proje deponun geri kalanindan (net8.0) AYRI bir hedef cerceve kullanir ve
+         Directory.Build.props'taki <TargetFramework>net8.0</TargetFramework> degerini EZER.
+
+         OLCULDU: bu makinede net48 derlemesi CEVRIMDISI yapilabiliyor &#8212; .NET Framework hedefleme
+         paketi kurulu DEGIL, ama Microsoft.NETFramework.ReferenceAssemblies paketi NuGet
+         onbelleginde mevcut ve derleme onunla yesil gecti. -->
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>AdaPanel.HtaccessModule</AssemblyName>
+    <RootNamespace>AdaPanel.HtaccessModule</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+
+    <!-- Bu proje w3wp icinde calisir; hicbir testi kendisi barindirmaz. Paylasilan mantik
+         AdaPanel.Infrastructure icinde net8 olarak DA derlenir ve testler ORADAN kosar. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- GUCLU AD: GAC'a kurulmanin ON KOSULU. GAC secildi cunku applicationHost.config'e global
+         kaydedilen yonetilen bir modulun derlemesi, uygulamalarin /bin klasorunde OLAMAZ
+         (her uygulamanin ayri bir probing yolu var) &#8212; Microsoft'un modules/add belgesi de
+         ornekleri GAC uzerinden veriyor.
+
+         .snk DEPOYA GIRIYOR ve bu BILEREK boyle. Guclu ad bir GUVENLIK siniri DEGILDIR (Microsoft
+         bunu acikca soyler): kimlik/surumleme icindir. Gizli tutulmasi gereken sey KOD IMZALAMA
+         sertifikasidir, o ayri bir konudur ve depoda yoktur. Anahtari gizleseydik derleme
+         yeniden uretilemez olurdu; kazanc sifir, bedel buyuk olurdu. -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>AdaPanel.HtaccessModule.snk</AssemblyOriginatorKeyFile>
+
+    <!-- ASSEMBLYVERSION SABITLENDI (1.0.0.0) ve panel surumunu TAKIP ETMEZ.
+         Bu bir suslemem degil, olculmus bir arizanin onlenmesi:
+
+         Directory.Build.props butun projelere <Version>0.6.6</Version> veriyor ve AssemblyVersion
+         bundan TUREMEKTEYDI (ilk derlemede olculdu: "AdaPanel.HtaccessModule, Version=0.6.6.0").
+         GAC kimligi AssemblyVersion'i ICERIR ve applicationHost.config'teki `type` dizesi de
+         Version=... yazar. Yani her panel surumunde:
+           - GAC'a YENI bir yan yana surum kurulurdu (eskiler asla temizlenmezdi),
+           - applicationHost.config'teki kayit ESKI surumu gostermeye devam ederdi,
+           - IIS eski DLL'i yuklemeye devam ederdi -> guncelleme YAPILMIS gorunur, modul ESKI kalirdi.
+         Sessiz, birikimli ve teshisi cok zor bir ariza. Sabit AssemblyVersion ile GAC kimligi
+         degismez, kurulum ayni girdiyi YERINDE degistirir, kayit satirina hic dokunulmaz.
+
+         Hangi yapinin kurulu oldugu FileVersion'dan okunur (panel surumunu o tasir). -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <!-- AssemblyVersion sabitlenince FileVersion de ona esitlenmisti (olculdu). Panel surumunu
+         geri baglar: sunucuda "hangi yapi kurulu" sorusunun tek dogru cevabi budur. -->
+    <FileVersion>$(Version)</FileVersion>
+
+    <!-- AnyCPU: PHP siteleri icin 32-bit havuz (enable32BitAppOnAppPool) COK yaygin. Platformu
+         sabitlemek o havuzlarda modulu sessizce olduraurdu. Bu yuzden kayitta da bitness on kosulu
+         YOK (bkz. HtaccessModuleRegistration.PreCondition). -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+
+  <!-- PAYLASILAN BARINDIRMA MANTIGI &#8212; KAYNAK OLARAK baglanir, derleme basvurusu olarak DEGIL.
+       ============================================================================
+       Bu, projenin en onemli yapi kararidir ve sebebi olculmus bir kisittir:
+       cekirdek motor ve panel net8.0'dir, bu modul net48'dir. Bir net8 derlemesi net48 CLR'inda
+       YUKLENEMEZ &#8212; ProjectReference vermek derleme zamaninda bile calismaz.
+
+       Uc secenek vardi:
+         (a) Mantigi bu projeye KOPYALAMAK  -> iki kaynak, kacinilmaz sapma. Deponun "tekrari tek
+             kaynaga cikar" kuralina dogrudan aykiri. ELENDI.
+         (b) AdaPanel.Infrastructure'i cok hedefli yapmak -> baska ekibin dosyasi; ayrica
+             Infrastructure MailKit/Npgsql/EF gibi net48'de olmayan bagimliliklar tasiyor. ELENDI.
+         (c) AYNI .cs dosyalarini iki projede DERLEMEK. Tek kaynak, iki cikti. SECILDI.
+
+       Baglanan dosyalar net48 uyumlu olmak ZORUNDA (System.Text.Json, Path.Join, HashCode.Combine,
+       string.Contains(char) YOK). Bu kural dosyalarin kendi basliklarinda da yaziyor.
+
+       Dosyalar TEK TEK sayiliyor, joker (*.cs) KULLANILMIYOR: Hosting klasorune ileride net8'e ozgu
+       bir dosya eklendiginde joker onu sessizce buraya da cekip net48 derlemesini kirardi. Acik
+       liste, o hatayi "derleme kirildi" yerine "listeye eklemedim" seviyesinde tutar. -->
+  <ItemGroup>
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessHostingPaths.cs" Link="Shared\HtaccessHostingPaths.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessSwitchFile.cs" Link="Shared\HtaccessSwitchFile.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessRuntimeGate.cs" Link="Shared\HtaccessRuntimeGate.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessFailSafe.cs" Link="Shared\HtaccessFailSafe.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessFileCache.cs" Link="Shared\HtaccessFileCache.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessModuleRegistration.cs" Link="Shared\HtaccessModuleRegistration.cs" />
+  </ItemGroup>
+
+</Project>
