@@ -6562,3 +6562,46 @@ panelin hukmune sahiplik konuldu, calistirici yalnizca kendi bildigi cikis koduy
 Imza zorunlulugu (paket imzasiz; zorunlu kilmak kurulu her paneli guncellenemez yapar --
 kural yazili ve testli, `RequireSignature` bayragiyla acilir), kullanici silme ucunun 200
 donmesi (Core imza degisikligi ister), `subscriptionUserId` 219 kaydin 26'sinda dolu.
+
+## 218) Denetim duzeltmelerinin ikinci turu -> 0.6.6 (24.08.2026)
+
+Dort ekip: silme butunlugu, kiraci bagi, gozlemlenebilirlik, tarama ilerlemesi.
+Testler 2810 -> 2885. Kullanicinin haftalik kota siniri yuzunden birkac kez durdurulup
+kaldigi yerden devam ettirildi.
+
+**Kullanici silme artik yarim isi basari saymiyor.** Yarim silmede 409 + yapisal kalinti
+listesi (tip + AD + sebep + "bilerek mi"). Ajan "kalinti varsa kullaniciyi hic silme"
+secenegini OLCUP ELEDI: cascade siteyi dosyalari silmeden ONCE kapsamdan dusuruyor, yani
+ikinci deneme bos kapsam gorup "basarili" derdi -- yalan ayni yerden geri gelirdi.
+WHMCS modulu HTTP durumuna degil zarftaki `success` alanina baktigi icin olcut karsilandi.
+`_not_found` son ek kurali kaldirildi: `AppException.ResourceAlreadyGone` bayragi.
+
+**Kiraci bagi 26 -> 70 kayit, borc listesi 14 -> 0.** Sahiplik OLCULUYOR (site sahibi,
+`IDatabaseOwnershipService`, posta alan adi tersinden). Belirsizse null. YIKICI yollarda
+sahip silmeden ONCE okunuyor -- sonra okunsaydi panelin en yikici kayitlari tam da
+sahibinin goremedigi kayitlar olurdu. Askiya alma kaydi artik gercek aktoru + IP yaziyor
+(eskiden "musteri kendini askiya aldi" diyordu); denetleyicideki ikinci yama kaydi kaldirildi.
+
+**Virus taramasi sayfa yenilenince kaybolmuyor.** IKI hata vardi: status yalniz BITEN
+taramayi donduruyordu VE tarama ucu iptal belirtecini isteğe bagliyordu -> yenileme
+`clamscan.exe`'yi OKSUZ birakiyor, iki saatlik is bosa gidiyordu. `IOperationProgressService`
+okundu ve UYMADIGI gerekcelendirildi (tek yuvali, bellekte). Bayat kayit yalan soyleyemiyor:
+panel PID + surec baslangic tiki saklaniyor.
+
+**Uc serviste ILogger** (Cache, FileMigration, WordPressToolkit). Log eklerken DORT gizli
+ariza cikti: onbellek durumu okunamayinca yanlis cozum onerisi, eklenti listesi hatasinda
+"her eklenti pasif", surum API'si patlayinca "tum siteler guncel", gocte 900 dosyadan 40'i
+dusse yesil "tamamlandi".
+
+### Dersler
+
+1. **Ajanlarin kendi testlerinin zayifligini bulmasi degerli.** Silme ekibinin iki mutasyonu
+   ILK TURDA sag kaldi; sebebini gormus: testler "cascade kalinti bildirirse ne olur"u
+   olcuyormus, "cascade kalinti bildiriyor mu"yu degil. Gercek dosya + gercek kilitle
+   yeniden yazinca ikisi de yakalandi.
+2. **Olu i18n anahtarinda kendi olcumune guven.** Denetim "~14" dedi, ilk tarama 22 buldu,
+   11'i YANLIS POZITIFTI (site kurucu anahtarlari C# tarafinda birlestiriliyor). Tersine
+   uydurma bir `mail.` oneki gercek yetimi GIZLIYORDU. Sonuc 13.
+3. **Durum kaydi depoda tutulmali.** `docs/calisma-durumu.md` olusturuldu; elektrik/kota
+   kesintisinde "kaldigimiz yerden devam" oradan okunuyor. Bu turda uc ajan isini bitirip
+   COMMIT ETMEDEN durdu -- ajan durdurulunca commit kontrolu sart.
