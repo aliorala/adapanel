@@ -1,0 +1,625 @@
+<template>
+  <section class="htaccess-panel">
+    <div class="section-head">
+      <div>
+        <h4>{{ t("panel.htaccess.title") }}</h4>
+        <p class="meta">{{ t("panel.htaccess.subtitle") }}</p>
+      </div>
+      <button class="secondary compact" :disabled="!siteName || busy" @click="load">
+        {{ t("panel.htaccess.refresh") }}
+      </button>
+    </div>
+
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
+      {{ notice }}
+    </p>
+
+    <p v-if="!siteName" class="empty-state">{{ t("panel.php.selectSite") }}</p>
+
+    <!-- Rapor gelmeden hicbir anahtar cizilmiyor: kapali gorunen bir anahtar "kapali" demektir,
+         oysa henuz OKUNMAMISTIR. Bu ayrimi gizlemek panelin en pahali yalanlarindan biri. -->
+    <p v-else-if="!report" class="empty-state" role="status" aria-live="polite">
+      {{ t("panel.common.loading") }}
+    </p>
+
+    <template v-else>
+      <!-- ============================ DÜRÜSTLÜK ŞERİDİ ============================
+           Sirasi ONEM sirasidir: en ustte "hicbir sey olmaz" diyen engel durur. Kullanici
+           once en guclu sebebi gormeli, yoksa alttaki kucuk uyariyi cozup yine hicbir sey
+           olmadigini gorurdu. -->
+      <div class="truth-strip">
+        <p v-if="report.engineBlockers.length > 0" class="notice error" role="alert">
+          <strong>{{ t("panel.htaccess.warn.engineNotLoaded") }}</strong>
+          <span v-for="key in report.engineBlockers" :key="key"> {{ t(key) }}</span>
+        </p>
+
+        <p v-if="report.support === 'no_managed_code'" class="notice error" role="alert">
+          {{ t("panel.htaccess.warn.noManagedCode") }}
+        </p>
+        <p v-else-if="report.support === 'runtime_version'" class="notice error" role="alert">
+          {{ t("panel.htaccess.warn.runtimeVersion", { version: report.managedRuntimeVersion }) }}
+        </p>
+        <p v-else-if="report.support === 'unknown'" class="notice" role="status">
+          {{ t("panel.htaccess.warn.supportUnknown") }}
+        </p>
+
+        <p v-if="report.serverMode === 'off'" class="notice" role="status">
+          {{ t("panel.htaccess.warn.serverOff") }}
+        </p>
+
+        <!-- ASIL SIKAYET: dosya duruyor, destek kapali, kimse sebebini soylemiyor. -->
+        <p v-if="report.hasFiles && report.mode === 'off'" class="notice error" role="alert">
+          {{ t("panel.htaccess.warn.filesButDisabled", { count: report.files.length }) }}
+        </p>
+
+        <p v-if="report.hasFiles && !report.hasRootFile" class="notice" role="status">
+          {{ t("panel.htaccess.warn.noRootFile") }}
+        </p>
+
+        <p v-if="!report.hasFiles" class="notice" role="status">
+          {{ t("panel.htaccess.warn.noFiles") }}
+        </p>
+      </div>
+
+      <!-- ============================ KİP ============================ -->
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>{{ t("panel.htaccess.mode.title") }}</h4>
+            <p class="meta">{{ t("panel.htaccess.mode.hint") }}</p>
+          </div>
+        </div>
+
+        <div class="mode-choices" role="radiogroup" :aria-label="t('panel.htaccess.mode.title')">
+          <label v-for="choice in modeChoices" :key="choice.id" class="mode-choice">
+            <input v-model="selectedMode" type="radio" :value="choice.id" name="htaccess-mode" />
+            <span class="mode-text">
+              <strong>{{ choice.label }}</strong>
+              <small>{{ choice.hint }}</small>
+            </span>
+          </label>
+        </div>
+
+        <label class="setting-row">
+          <span>{{ t("panel.htaccess.mode.note") }}</span>
+          <input v-model="note" :placeholder="t('panel.htaccess.mode.notePlaceholder')" maxlength="200" />
+          <small>{{ t("panel.htaccess.mode.noteHelp") }}</small>
+        </label>
+
+        <div class="action-row">
+          <button v-bind="writeGate(busy || selectedMode === report.mode)" @click="saveMode">
+            {{ busy ? t("panel.htaccess.saving") : t("panel.htaccess.mode.save") }}
+          </button>
+          <span class="meta">{{ t("panel.htaccess.mode.current", { mode: modeLabel(report.mode) }) }}</span>
+        </div>
+      </section>
+
+      <!-- ============================ DOSYALAR ============================ -->
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>{{ t("panel.htaccess.files.title") }}</h4>
+            <p class="meta">{{ t("panel.htaccess.files.hint") }}</p>
+          </div>
+        </div>
+
+        <p v-if="report.files.length === 0" class="empty-state">{{ t("panel.htaccess.files.none") }}</p>
+        <table v-else class="data-table">
+          <thead>
+            <tr>
+              <th>{{ t("panel.htaccess.files.path") }}</th>
+              <th>{{ t("panel.htaccess.files.size") }}</th>
+              <th>{{ t("panel.htaccess.files.modified") }}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="file in report.files" :key="file.relativeDirectory">
+              <td><code>{{ file.virtualPath }}.htaccess</code></td>
+              <td>{{ file.sizeBytes }} B</td>
+              <td>{{ formatDate(file.lastWriteUtc) }}</td>
+              <td>
+                <button
+                  class="secondary compact"
+                  :disabled="inspecting"
+                  @click="inspect(file.relativeDirectory)">
+                  {{ t("panel.htaccess.files.inspect") }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ============================ İNCELEME ============================ -->
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>{{ t("panel.htaccess.inspect.title", { path: inspection?.virtualPath ?? "/" }) }}</h4>
+            <p class="meta">{{ t("panel.htaccess.inspect.hint") }}</p>
+          </div>
+        </div>
+
+        <template v-if="inspection">
+          <div class="summary-strip">
+            <article class="summary-item">
+              <span class="tile-label">{{ t("panel.htaccess.inspect.rewriteEngine") }}</span>
+              <strong>{{ inspection.rewriteEngineEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}</strong>
+            </article>
+            <article class="summary-item">
+              <span class="tile-label">{{ t("panel.htaccess.inspect.ruleCount") }}</span>
+              <strong>{{ inspection.rewriteRuleCount }}</strong>
+            </article>
+            <article class="summary-item">
+              <span class="tile-label">{{ t("panel.htaccess.inspect.fileCount") }}</span>
+              <strong>{{ inspection.files.length }}</strong>
+            </article>
+            <article class="summary-item">
+              <span class="tile-label">{{ t("panel.htaccess.inspect.unsupportedCount") }}</span>
+              <strong>{{ inspection.unsupported.length }}</strong>
+            </article>
+          </div>
+
+          <!-- RewriteEngine kapaliyken kural saymak yaniltir: kurallar VAR ama HICBIRI calismaz. -->
+          <p v-if="!inspection.rewriteEngineEnabled && inspection.rewriteRuleCount > 0" class="notice error" role="alert">
+            {{ t("panel.htaccess.inspect.rewriteEngineOff") }}
+          </p>
+
+          <p v-if="redosFindings.length > 0" class="notice error" role="alert">
+            {{ t("panel.htaccess.inspect.redosWarning", { count: redosFindings.length }) }}
+          </p>
+
+          <p v-if="inspection.diagnostics.length === 0" class="empty-state">
+            {{ t("panel.htaccess.inspect.noFindings") }}
+          </p>
+          <ul v-else class="finding-list">
+            <li v-for="(finding, index) in sortedDiagnostics" :key="`${finding.code}-${index}`" class="finding">
+              <span :class="['finding-badge', diagnosticLevelName(finding.level)]">
+                {{ t(`panel.htaccess.level.${diagnosticLevelName(finding.level)}`) }}
+              </span>
+              <div class="finding-body">
+                <strong>{{ finding.directive || finding.code }}</strong>
+                <!-- MESAJ SUNUCUDAN OLDUGU GIBI GELIR. Motorun katalogunda her desteklenmeyen
+                     direktifin GEREKCESI yazili; arayuz burada kendi metnini uydurursa iki
+                     anlatim olusur ve biri guncellenmeden kalir. -->
+                <p>{{ finding.message }}</p>
+                <small>
+                  <code>{{ finding.code }}</code>
+                  <template v-if="finding.file"> · {{ shortFile(finding.file) }}</template>
+                  <template v-if="finding.line > 0">:{{ finding.line }}</template>
+                </small>
+              </div>
+            </li>
+          </ul>
+        </template>
+        <p v-else class="empty-state">{{ t("panel.htaccess.inspect.pick") }}</p>
+      </section>
+
+      <!-- ============================ SÖZ DİZİMİ DENETİMİ ============================ -->
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>{{ t("panel.htaccess.validate.title") }}</h4>
+            <p class="meta">{{ t("panel.htaccess.validate.hint") }}</p>
+          </div>
+        </div>
+
+        <label class="setting-row align-start">
+          <span>{{ t("panel.htaccess.validate.content") }}</span>
+          <textarea v-model="draft" rows="10" spellcheck="false" :placeholder="validatePlaceholder"></textarea>
+          <small>{{ t("panel.htaccess.validate.contentHelp") }}</small>
+        </label>
+
+        <label class="setting-row">
+          <span>{{ t("panel.htaccess.validate.virtualPath") }}</span>
+          <input v-model="draftPath" spellcheck="false" placeholder="/" />
+          <small>{{ t("panel.htaccess.validate.virtualPathHelp") }}</small>
+        </label>
+
+        <div class="action-row">
+          <button class="secondary" :disabled="validating || draft.trim().length === 0" @click="runValidate">
+            {{ validating ? t("panel.htaccess.validate.running") : t("panel.htaccess.validate.run") }}
+          </button>
+        </div>
+
+        <template v-if="validation">
+          <p v-if="validation.usable" class="notice" role="status">
+            {{ t("panel.htaccess.validate.usable") }}
+          </p>
+          <p v-else class="notice error" role="alert">
+            {{ t("panel.htaccess.validate.notUsable") }}
+          </p>
+
+          <ul v-if="validation.diagnostics.length > 0" class="finding-list">
+            <li v-for="(finding, index) in validation.diagnostics" :key="`v-${index}`" class="finding">
+              <span :class="['finding-badge', diagnosticLevelName(finding.level)]">
+                {{ t(`panel.htaccess.level.${diagnosticLevelName(finding.level)}`) }}
+              </span>
+              <div class="finding-body">
+                <strong>{{ finding.directive || finding.code }}</strong>
+                <p>{{ finding.message }}</p>
+                <small><code>{{ finding.code }}</code><template v-if="finding.line > 0"> · {{ t("panel.htaccess.line", { line: finding.line }) }}</template></small>
+              </div>
+            </li>
+          </ul>
+          <p v-else class="empty-state">{{ t("panel.htaccess.validate.noFindings") }}</p>
+        </template>
+      </section>
+
+      <!-- ============================ URL BENZETİMİ ============================ -->
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>{{ t("panel.htaccess.simulate.title") }}</h4>
+            <p class="meta">{{ t("panel.htaccess.simulate.hint") }}</p>
+          </div>
+        </div>
+
+        <label class="setting-row">
+          <span>{{ t("panel.htaccess.simulate.path") }}</span>
+          <input v-model="simulatePath" spellcheck="false" placeholder="/urun/5" />
+          <small>{{ t("panel.htaccess.simulate.pathHelp") }}</small>
+        </label>
+
+        <label class="setting-row">
+          <span>{{ t("panel.htaccess.simulate.method") }}</span>
+          <select v-model="simulateMethod">
+            <option v-for="verb in methods" :key="verb" :value="verb">{{ verb }}</option>
+          </select>
+        </label>
+
+        <label class="setting-row checkbox-row">
+          <span>{{ t("panel.htaccess.simulate.https") }}</span>
+          <input v-model="simulateHttps" type="checkbox" />
+          <small>{{ t("panel.htaccess.simulate.httpsHelp") }}</small>
+        </label>
+
+        <div class="action-row">
+          <button class="secondary" :disabled="simulating || simulatePath.trim().length === 0" @click="runSimulate">
+            {{ simulating ? t("panel.htaccess.simulate.running") : t("panel.htaccess.simulate.run") }}
+          </button>
+        </div>
+
+        <div v-if="simulation" class="summary-strip">
+          <article class="summary-item">
+            <span class="tile-label">{{ t("panel.htaccess.simulate.result") }}</span>
+            <strong>{{ t(`panel.htaccess.simulate.action.${simulation.action}`) }}</strong>
+          </article>
+          <article v-if="simulation.target" class="summary-item">
+            <span class="tile-label">{{ t("panel.htaccess.simulate.target") }}</span>
+            <strong><code>{{ simulation.target }}</code></strong>
+          </article>
+          <article v-if="simulation.statusCode > 0" class="summary-item">
+            <span class="tile-label">{{ t("panel.htaccess.simulate.status") }}</span>
+            <strong>{{ simulation.statusCode }}</strong>
+          </article>
+          <article class="summary-item">
+            <span class="tile-label">{{ t("panel.htaccess.simulate.appliedFiles") }}</span>
+            <strong>{{ simulation.detail.appliedFiles.length }}</strong>
+          </article>
+        </div>
+
+        <!-- Benzetim CANLI DEGILDIR: motor IIS icinde yuklu degilse gercek istek bu karari
+             ALMAZ. Bunu her sonucun yaninda soylemek zorundayiz. -->
+        <p v-if="simulation && !report.engineLoadedInIis" class="notice" role="status">
+          {{ t("panel.htaccess.simulate.notLive") }}
+        </p>
+      </section>
+
+      <!-- ============================ BİLİNÇLİ SAPMALAR ============================ -->
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <h4>{{ t("panel.htaccess.deviations.title") }}</h4>
+            <p class="meta">{{ t("panel.htaccess.deviations.hint") }}</p>
+          </div>
+        </div>
+        <ul class="deviation-list">
+          <li v-for="key in report.deviations" :key="key">{{ t(key) }}</li>
+        </ul>
+      </section>
+    </template>
+  </section>
+</template>
+
+<script setup lang="ts">
+/*
+ * SITE BASINA .htaccess EKRANI.
+ *
+ * NEDEN AYRI BIR GORUNUM, SiteHostingView'in ICINE GOMULU DEGIL:
+ * SiteHostingView zaten 1270 satir ve on bir bolumu var. Bu ekran tek basina bes bolum
+ * (kip, dosyalar, inceleme, dogrulama, benzetim) ve kendi yukleme/hata durumlarini tasiyor;
+ * icine gomseydik o dosya yariya yakin buyur ve iki farkli konunun durumu ayni script blogunda
+ * karisirdi. Ayri bir gorunum olarak, SiteHostingView'in sol menusune TEK bolum olarak
+ * baglaniyor (WebsiteWorkspaceView'in gorunumleri cocuk olarak kullanmasiyla ayni desen).
+ *
+ * NEDEN YENI BIR ARAC SEKMESI DEGIL: .htaccess site basina bir BARINDIRMA ayaridir; PHP surumu
+ * ve varsayilan belgelerle ayni yerde aranir. Ayri bir arac satiri, kullaniciyi "Barindirma"
+ * icinde aramaktan alikoymazdi ve WebsiteWorkspaceView (baska bir is kolunun dosyasi)
+ * degistirilmek zorunda kalirdi.
+ */
+import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import {
+  diagnosticLevelName,
+  getHtaccessReport,
+  inspectHtaccess,
+  setHtaccessMode,
+  simulateHtaccess,
+  validateHtaccess,
+  type HtaccessDiagnostic,
+  type HtaccessInspectionResult,
+  type HtaccessMode,
+  type HtaccessParseResult,
+  type HtaccessSimulationResult,
+  type HtaccessSiteReport
+} from "../api/htaccess";
+import { extractApiMessage } from "../stores/auth";
+import { useSitesStore } from "../stores/sites";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+
+const { t } = useI18n();
+// Askidaki abonelikte YAZMA dugmesi bastan devre disi + sebebi title/aria ile soylenir.
+// Okuma dugmeleri (incele, denetle, benzet) kapiya girmez.
+const { writeGate } = useSubscriptionGate();
+const sitesStore = useSitesStore();
+const siteName = computed(() => sitesStore.selectedSiteName);
+
+const report = ref<HtaccessSiteReport | null>(null);
+const inspection = ref<HtaccessInspectionResult | null>(null);
+const validation = ref<HtaccessParseResult | null>(null);
+const simulation = ref<HtaccessSimulationResult | null>(null);
+
+const busy = ref(false);
+const inspecting = ref(false);
+const validating = ref(false);
+const simulating = ref(false);
+const notice = ref("");
+const noticeError = ref(false);
+
+const selectedMode = ref<HtaccessMode>("off");
+const note = ref("");
+const draft = ref("");
+const draftPath = ref("/");
+const simulatePath = ref("/");
+const simulateMethod = ref("GET");
+const simulateHttps = ref(false);
+
+const methods = ["GET", "POST", "HEAD", "PUT", "DELETE"];
+
+const validatePlaceholder = "RewriteEngine On\nRewriteRule ^urun/([0-9]+)$ /index.php?id=$1 [L]";
+
+const modeChoices = computed(() => [
+  { id: "off" as const, label: t("panel.htaccess.mode.off"), hint: t("panel.htaccess.mode.offHint") },
+  { id: "observe" as const, label: t("panel.htaccess.mode.observe"), hint: t("panel.htaccess.mode.observeHint") },
+  { id: "enforce" as const, label: t("panel.htaccess.mode.enforce"), hint: t("panel.htaccess.mode.enforceHint") }
+]);
+
+function modeLabel(mode: HtaccessMode): string {
+  return t(`panel.htaccess.mode.${mode}`);
+}
+
+/**
+ * ReDoS riski TAŞIYAN desenler. Kod METNE değil KODA bakar: motor mesajı iyileştirse ya da
+ * çevirse bile bu süzgeç çalışmaya devam eder (motorun kendi kuralı da bu).
+ */
+const redosFindings = computed<HtaccessDiagnostic[]>(() =>
+  (inspection.value?.diagnostics ?? []).filter((d) => d.code === "RISKLI_DUZENLI_IFADE")
+);
+
+/**
+ * Bulgular AĞIRLIĞA göre sıralanır (ölümcül önce).
+ *
+ * Motorun döndürdüğü sıra DOSYA sırasıdır; kullanıcıya olduğu gibi göstermek, kökteki bir
+ * "bilgi" satırını alt dizindeki ölümcül hatanın ÜSTÜNE koyardı. Sıralama kopyalanmıyor:
+ * `slice()` ile yeni dizi üretiliyor, yoksa `sort` gelen diziyi yerinde değiştirir ve
+ * `redosFindings` gibi diğer türetilmiş değerler beklenmedik sırayla yeniden hesaplanırdı.
+ */
+const sortedDiagnostics = computed<HtaccessDiagnostic[]>(() =>
+  (inspection.value?.diagnostics ?? []).slice().sort((a, b) => b.level - a.level)
+);
+
+function shortFile(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts.slice(-2).join("/");
+}
+
+function formatDate(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "-" : parsed.toLocaleString();
+}
+
+function fail(error: unknown, fallbackKey: string) {
+  notice.value = extractApiMessage(error) || t(fallbackKey);
+  noticeError.value = true;
+}
+
+async function load() {
+  if (!siteName.value) {
+    report.value = null;
+    return;
+  }
+
+  busy.value = true;
+  notice.value = "";
+  try {
+    const loaded = await getHtaccessReport(siteName.value);
+    report.value = loaded;
+    selectedMode.value = loaded.mode;
+    inspection.value = loaded.inspection;
+    // Taslak, KOK dosyanin sanal yoluyla baslar: kullanicinin en sik duzenledigi dosya odur.
+    draftPath.value = "/";
+  } catch (error) {
+    report.value = null;
+    fail(error, "panel.htaccess.loadFailed");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function saveMode() {
+  if (!siteName.value || !report.value) return;
+
+  busy.value = true;
+  notice.value = "";
+  try {
+    const saved = await setHtaccessMode(siteName.value, selectedMode.value, note.value.trim());
+    report.value = saved;
+    selectedMode.value = saved.mode;
+    inspection.value = saved.inspection;
+    notice.value = t("panel.htaccess.mode.saved", { mode: modeLabel(saved.mode) });
+    noticeError.value = false;
+  } catch (error) {
+    // Kaydedilemedi -> secim SUNUCUDAKI degere geri alinir. Aksi halde ekranda "enforce"
+    // gorunur, sunucuda "off" olurdu: panelin soyleyebilecegi en pahali yalan.
+    selectedMode.value = report.value.mode;
+    fail(error, "panel.htaccess.saveFailed");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function inspect(directory: string) {
+  if (!siteName.value) return;
+
+  inspecting.value = true;
+  notice.value = "";
+  try {
+    inspection.value = await inspectHtaccess(siteName.value, directory);
+  } catch (error) {
+    fail(error, "panel.htaccess.inspectFailed");
+  } finally {
+    inspecting.value = false;
+  }
+}
+
+async function runValidate() {
+  if (!siteName.value) return;
+
+  validating.value = true;
+  notice.value = "";
+  try {
+    validation.value = await validateHtaccess(siteName.value, draft.value, draftPath.value.trim() || "/");
+  } catch (error) {
+    validation.value = null;
+    fail(error, "panel.htaccess.validate.failed");
+  } finally {
+    validating.value = false;
+  }
+}
+
+async function runSimulate() {
+  if (!siteName.value) return;
+
+  simulating.value = true;
+  notice.value = "";
+  try {
+    simulation.value = await simulateHtaccess(siteName.value, {
+      requestPath: simulatePath.value.trim(),
+      method: simulateMethod.value,
+      https: simulateHttps.value
+    });
+  } catch (error) {
+    simulation.value = null;
+    fail(error, "panel.htaccess.simulate.failed");
+  } finally {
+    simulating.value = false;
+  }
+}
+
+watch(siteName, load, { immediate: true });
+</script>
+
+<style scoped>
+.htaccess-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.truth-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mode-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.mode-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border, #d8dee9);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mode-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.mode-text small {
+  opacity: 0.75;
+}
+
+.finding-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.finding {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--border, #d8dee9);
+  background: rgba(127, 127, 127, 0.06);
+  border-radius: 4px;
+}
+
+.finding-body p {
+  margin: 0.2rem 0;
+}
+
+.finding-body small {
+  opacity: 0.7;
+}
+
+/* Rozet renkleri AGIRLIGA gore. "unsupported" bilerek uyari renginde: kullanicinin kurali
+   CALISMIYOR ve bunu bir bilgi satiri gibi gostermek, tam da gizlemeye calistigimiz sey olurdu. */
+.finding-badge {
+  flex: 0 0 auto;
+  min-width: 6.5rem;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.finding-badge.info { background: rgba(90, 150, 220, 0.2); }
+.finding-badge.unsupported { background: rgba(230, 160, 40, 0.25); }
+.finding-badge.warning { background: rgba(230, 160, 40, 0.25); }
+.finding-badge.error { background: rgba(220, 80, 80, 0.25); }
+.finding-badge.fatal { background: rgba(200, 40, 40, 0.35); }
+
+.deviation-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+</style>

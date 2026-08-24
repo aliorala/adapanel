@@ -471,6 +471,13 @@
             <pre v-if="gitOutput" class="composer-output">{{ gitOutput }}</pre>
           </section>
 
+          <!-- .htaccess: site basina BARINDIRMA ayaridir (PHP surumu ve varsayilan belgelerle
+               ayni yerde aranir), bu yuzden ayri bir arac sekmesi degil bu menunun bir bolumu.
+               Icerigi kendi gorunumunde: bu dosya zaten 1270 satir. -->
+          <section v-else-if="activeSection === 'htaccess'" class="settings-card">
+            <SiteHtaccessView />
+          </section>
+
           <section v-else class="settings-card">
             <div class="settings-card-head">
               <div>
@@ -511,6 +518,8 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import SiteAliases from "../components/SiteAliases.vue";
+// .htaccess bolumu AYRI bir gorunumde: gerekcesi o dosyanin script blogunda yazili.
+import SiteHtaccessView from "./SiteHtaccessView.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useSectionError } from "../composables/useNotice";
 import {
@@ -617,6 +626,7 @@ function parseMimeTypes(): SiteMimeType[] {
 const sections = computed(() => [
   { id: "general", label: t("panel.hosting.general"), hint: t("panel.hosting.generalHint") },
   { id: "documents", label: t("panel.hosting.defaultDocuments"), hint: t("panel.hosting.defaultDocumentsHint") },
+  { id: "htaccess", label: t("panel.htaccess.title"), hint: t("panel.htaccess.navHint") },
   { id: "traffic", label: t("panel.hosting.traffic"), hint: t("panel.hosting.trafficHint") },
   { id: "access", label: t("panel.hosting.access"), hint: t("panel.hosting.accessHint") },
   { id: "errors", label: t("panel.hosting.errorsPerformance"), hint: t("panel.hosting.errorsPerformanceHint") },

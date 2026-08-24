@@ -164,6 +164,21 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<ISiteAliasService, Iis.SiteAliasService>();
 
+        // .htaccess MOTORU — SINGLETON, ve bu motorun KENDİ sözleşmesi: sınıf yorumu
+        // "iş parçacığı güvenlidir ve tekil olarak kaydedilmek üzere tasarlandı" diyor.
+        // Ayrıştırma önbelleği (dosya damgası + boyut) ve desen önbelleği örnek alanlarında;
+        // Scoped kaydedilseydi her panel isteğinde bütün .htaccess'ler yeniden ayrıştırılır ve
+        // her düzenli ifade yeniden derlenirdi. Bayatlama riski YOK: önbellek dosya damgasına
+        // bağlı, dosya değişince kendiliğinden düşer.
+        services.AddSingleton<IHtaccessEngine, Htaccess.HtaccessEngine>();
+
+        // .htaccess PANEL YÜZÜ. SCOPED — kendisi durumsuz ama IIisSiteService/IAspNetService
+        // bağımlılıkları Scoped; Singleton olsaydı onları TUTSAK EDERDİ (captive dependency).
+        //
+        // ARAYÜZ YOK, SOMUT TİP KAYITLI: Core/Interfaces bu iş kolunun kapsamı dışında ve
+        // depoda aynı desenin örnekleri var (ClusterNodeStore, MailJmapProxyPublisher).
+        services.AddScoped<Htaccess.HtaccessPanelService>();
+
         // ÇOKLU SUNUCU (Plesk Multi Server karşılığı): merkez panel + kayıtlı hizmet düğümleri.
         // İstemci fabrikası SINGLETON çünkü düğüm başına HTTP işleyicisini (bağlantı havuzu)
         // önbelleğe alır; Scoped olsaydı her istekte yeni havuz açılır ve düzenli yoklama soket
