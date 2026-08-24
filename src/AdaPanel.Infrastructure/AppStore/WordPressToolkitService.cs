@@ -245,6 +245,28 @@ add_action('init', function () {
         {
             throw new AppException("wp.clone_config_unreadable", 409, 409);
         }
+        // ÖN DENETİM — HİÇBİR KAYNAK ÜRETİLMEDEN ÖNCE (IIS sitesi, veritabanı, DB kullanıcısı yok).
+        //
+        // Klonun 4. adımı, kopyalanan wp-config'e YENİ veritabanı bilgilerini yazar. Yazılamazsa
+        // klon KAYNAĞIN — yani canlı sitenin — veritabanına bağlı kalır: staging'de yapılan her
+        // tıklama üretim verisini değiştirir. Bu, veri kopyalamadaki hatanın aynadaki eşidir ve
+        // aynı sebeple ölçülebilir: klonlanacak dosya, ŞU AN elimizdeki kaynak wp-config'in
+        // birebir kopyası olacak.
+        //
+        // Bu yordam zaten "kaynak wp-config OKUNAMIYORSA klonlama" diyor (`wp.clone_config_unreadable`,
+        // hemen yukarıda). "YAZILAMIYORSA da klonlama" aynı kuralın eksik kalmış yarısı; burada
+        // durmanın bedeli sıfırdır, çünkü henüz hiçbir şey oluşturulmadı.
+        var kaynakYazilamayan = DbDefineYazilamayanlar(sourceConfig);
+        if (kaynakYazilamayan.Count > 0)
+        {
+            logger?.LogError(
+                "Klonlama DURDURULDU: kaynak wp-config'e yeni DB bilgileri GERI YAZILAMAZ ({Sebep}). "
+                + "Klon olusturulsaydi KAYNAGIN ({Kaynak}) veritabanina baglanacakti. Hicbir kaynak olusturulmadi.",
+                string.Join(", ", kaynakYazilamayan),
+                sourceSiteName);
+            throw new AppException("wp.clone_config_not_rewritable", 409, 409, string.Join(", ", kaynakYazilamayan));
+        }
+
         var (srcDbHost, srcDbPort) = SplitHostPort(ReadDefine(sourceConfig, "DB_HOST"));
         var sourceUrl = BuildHttpBase(source.Bindings);
         var targetUrl = $"http://{targetHost}";
@@ -329,32 +351,69 @@ add_action('init', function () {
         }, cancellationToken);
 
         // 4) Hedef wp-config DB bilgilerini yenile (kopyalanan dosya hâlâ kaynağın DB'sine işaret ediyor).
+        //
+        // Bayrak SONUCA KONUR: bu adım artık sessizce atlanamaz. Site ve veritabanı bu noktada ZATEN
+        // OLUŞTU, bu yüzden istisna atılmaz (gerekçenin uzun hâli TryRewriteSiteUrlAsync'te); doğru
+        // davranış panelin `wp.updates_partial` deseni — kısmi başarıyı SÖYLEMEK.
+        var configYazildi = true;
         var targetConfigPath = Path.Combine(targetRoot, "wp-config.php");
         if (File.Exists(targetConfigPath))
         {
             var targetConfig = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
-            targetConfig = ReplaceDefine(targetConfig, "DB_NAME", transfer.TargetDatabase);
-            targetConfig = ReplaceDefine(targetConfig, "DB_USER", transfer.UserName);
-            targetConfig = ReplaceDefine(targetConfig, "DB_PASSWORD", transfer.Password);
-            targetConfig = ReplaceDefine(targetConfig, "DB_HOST", "127.0.0.1");
-            await File.WriteAllTextAsync(targetConfigPath, targetConfig, cancellationToken);
+            var yazilamayan = new List<string>();
+            foreach (var (anahtar, deger) in new[]
+                     {
+                         ("DB_NAME", transfer.TargetDatabase),
+                         ("DB_USER", transfer.UserName),
+                         ("DB_PASSWORD", transfer.Password),
+                         ("DB_HOST", "127.0.0.1")
+                     })
+            {
+                if (TryReplaceDefine(targetConfig, anahtar, deger, out var sonraki, out var durum))
+                {
+                    targetConfig = sonraki;
+                }
+                else
+                {
+                    yazilamayan.Add($"{anahtar}={durum}");
+                }
+            }
 
-            // PAROLA YAZILMAZ: yalnız hangi DB'ye ve hangi kullanıcıya bağlandığı. Sorun
-            // ayıklamak için gereken bilgi budur; parola gerekmez.
-            logger?.LogInformation(
-                "Klon wp-config yenilendi: {Hedef} artik {Veritabani} veritabanina {Kullanici} kullanicisiyla baglaniyor.",
-                targetName,
-                transfer.TargetDatabase,
-                transfer.UserName);
+            if (yazilamayan.Count == 0)
+            {
+                await File.WriteAllTextAsync(targetConfigPath, targetConfig, cancellationToken);
+
+                // PAROLA YAZILMAZ: yalnız hangi DB'ye ve hangi kullanıcıya bağlandığı. Sorun
+                // ayıklamak için gereken bilgi budur; parola gerekmez.
+                logger?.LogInformation(
+                    "Klon wp-config yenilendi: {Hedef} artik {Veritabani} veritabanina {Kullanici} kullanicisiyla baglaniyor.",
+                    targetName,
+                    transfer.TargetDatabase,
+                    transfer.UserName);
+            }
+            else
+            {
+                // Ön denetim bu durumu elemiş olmalıydı; buraya ancak KOPYALANAN dosya kaynağınkinden
+                // farklıysa gelinir (kaynak iş sırasında değişti, robocopy kısmi kopyaladı). Dosya
+                // YARIM YAZILMAZ: klon kaynağın DB'sine bağlı kalır ve bayrak bunu söyler.
+                configYazildi = false;
+                logger?.LogError(
+                    "Klon wp-config'i YENILENEMEDI ({Sebep}); {Hedef} KAYNAGIN veritabanina baglaniyor olabilir. "
+                    + "Veritabani {Veritabani} olarak kopyalandi ama baglanti bilgisi yazilamadi.",
+                    string.Join(", ", yazilamayan),
+                    targetName,
+                    transfer.TargetDatabase);
+            }
         }
         else
         {
-            // SESSİZ ATLAMA — bu dosyadaki en tehlikeli "sorun yok" hâli.
+            // SESSİZ ATLAMA ARTIK SESSİZ DEĞİL — bu dosyadaki en tehlikeli "sorun yok" hâliydi.
             //
             // wp-config kopyalanmadıysa (robocopy kısmi başarı, kaynakta simge bağlantı, yetki)
             // klon ya HİÇ AÇILMAZ ya da daha kötüsü kaynağın konfigürasyonunu kullanmaya devam
             // eder: staging'de yapılan her yazma CANLI veritabanına gider. Panel yine de
-            // "Klon tamamlandı" der; bu satır o anın tek kanıtı.
+            // "Klon tamamlandı" diyordu; bayrak o hükmü artık engelliyor.
+            configYazildi = false;
             logger?.LogError(
                 "Klonda wp-config.php BULUNAMADI ({Yol}); hedef {Hedef} KAYNAGIN veritabanina isaret ediyor olabilir. Veritabani {Veritabani} olarak kopyalandi ama baglanti bilgisi yazilamadi.",
                 targetConfigPath,
@@ -379,7 +438,8 @@ add_action('init', function () {
             TargetDatabase = transfer.TargetDatabase,
             DatabaseUser = transfer.UserName,
             DatabasePassword = transfer.Password,
-            UrlRewritten = urlDegistirildi
+            UrlRewritten = urlDegistirildi,
+            ConfigRewritten = configYazildi
         };
     }
 
@@ -415,6 +475,83 @@ add_action('init', function () {
 
         var sourceUrl = BuildHttpBase(source.Bindings);
         var targetUrl = BuildHttpBase(target.Bindings);
+
+        // Hedefin korunacak DB bilgileri (dosya kopyalansa bile hedef kendi DB'sinde kalır).
+        var targetConfig = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
+        var targetDbName = ReadDefine(targetConfig, "DB_NAME");
+        var targetDbUser = ReadDefine(targetConfig, "DB_USER");
+        var targetDbHost = ReadDefine(targetConfig, "DB_HOST");
+
+        // ------------------------------------------------------------------------------------
+        // ÖN DENETİM — HİÇBİR ŞEY BOZULMADAN ÖNCE.
+        //
+        // Buradan sonrası geri dönülemez: `robocopy /MIR` hedefte kaynakta olmayan HER ŞEYİ siler
+        // ve hedefin wp-config'ini kaynağınkiyle ezer. Geri yazım (hedefin kendi DB bilgilerinin
+        // wp-config'e yeniden konması) o EZİLMİŞ dosya üzerinde çalışır; yapılamazsa canlı hedef
+        // site staging'in veritabanına bağlanmaya devam eder.
+        //
+        // NEDEN "ÖNCE ENGELLE", "SONRA UYAR" DEĞİL — ölçüldü, seçildi:
+        //  1) Denetim TAHMİN DEĞİL: /MIR birebir aynaladığı için aynalamadan sonraki hedef
+        //     wp-config'i, kaynağınkinin bayt bayt kopyasıdır. Kaynağın metni üzerinde şimdi
+        //     ölçülen yanıt, sonra ölçülecek yanıtla aynıdır. Yani beklemenin bilgi kazancı SIFIR,
+        //     bedeli müşterinin canlı sitesidir.
+        //  2) "Sonra uyar" kullanıcıya ULAŞMIYOR: panelin kopyalama ekranı (AppToolkitView) başarı
+        //     yanıtındaki mesaj anahtarını okumaz, sabit "kopyalandı" metnini gösterir; yalnız
+        //     İSTİSNA yolu sunucudan gelen metni ekrana basar. Uyarıyı yanıta koymak, tam da
+        //     düzeltmeye çalıştığımız "ölçüldü ama kimseye söylenmedi" hâlini tekrar üretirdi.
+        //  3) Bu yordamın 20 satır aşağısında AYNI KARAR zaten verilmiş: yedek alınamazsa aynalama
+        //     hiç çalışmaz ve "yedeksiz devam et" seçeneği bilerek yoktur. Aynı sınıftaki iki riske
+        //     iki farklı kural koymak, birini unutulmaya açık bırakmak olurdu.
+        //     (Aynı kalıp: SiteBuilderService `sitebuilder.overwrite_confirmation_required`.)
+        //
+        // "YİNE DE YAP" SEÇENEĞİ BİLEREK YOK: onaylanacak şey "evet, canlı sitem yanlış
+        // veritabanına bağlansın" olurdu. Yapılandırması env tabanlı olan kullanıcının yıkıcı
+        // olmayan çıkış yolu zaten var — dosyaları kopyalamadan yalnız veritabanını kopyalamak.
+        // ------------------------------------------------------------------------------------
+        if (request.Files)
+        {
+            // (a) Hedefin KENDİ bilgileri okunabiliyor mu? Okunamayan bir değeri geri yazmak
+            //     `define('DB_PASSWORD','')` demektir — hedef site açılmaz. Eski kod bunu yalnız
+            //     DB_NAME için ve yalnız `request.Database` yolunda denetliyordu.
+            //     DB_PASSWORD'ün BOŞ olması meşrudur; BULUNAMAMASI değil — bu yüzden değere değil
+            //     define'ın varlığına bakılıyor.
+            var okunamayan = new List<string>();
+            if (targetDbName.Length == 0)
+            {
+                okunamayan.Add("DB_NAME");
+            }
+            if (targetDbUser.Length == 0)
+            {
+                okunamayan.Add("DB_USER");
+            }
+            if (!TryReadDefine(targetConfig, "DB_PASSWORD", out _))
+            {
+                okunamayan.Add("DB_PASSWORD");
+            }
+            if (okunamayan.Count > 0)
+            {
+                logger?.LogError(
+                    "Veri kopyalama DURDURULDU: hedefin kendi wp-config'i okunamadi ({Yol}), eksik: {Eksik}. Hicbir sey degistirilmedi.",
+                    targetConfigPath,
+                    string.Join(", ", okunamayan));
+                throw new AppException("wp.copy_target_config_unreadable", 409, 409, string.Join(", ", okunamayan));
+            }
+
+            // (b) Aynalamadan SONRAKİ dosyaya (= kaynağın wp-config'i) geri yazım yapılabilecek mi?
+            var kaynakConfigMetni = await File.ReadAllTextAsync(Path.Combine(sourceRoot, "wp-config.php"), cancellationToken);
+            var yazilamayan = DbDefineYazilamayanlar(kaynakConfigMetni);
+            if (yazilamayan.Count > 0)
+            {
+                logger?.LogError(
+                    "Veri kopyalama DURDURULDU: kaynagin wp-config'ine hedefin DB bilgileri GERI YAZILAMAZ ({Sebep}). "
+                    + "Yikici aynalama CALISTIRILMADI; {Hedef} sitesi oldugu gibi duruyor. Kaynak: {Kaynak}",
+                    string.Join(", ", yazilamayan),
+                    targetName,
+                    sourceSiteName);
+                throw new AppException("wp.copy_config_not_rewritable", 409, 409, string.Join(", ", yazilamayan));
+            }
+        }
+
         var engine = await ResolveDbEngineAsync(cancellationToken);
 
         // Kopyalamadan ÖNCE hedefin yedeği (dosya + DB) → hedef kökünün kardeşi "_kopyala_yedek_<tarih>".
@@ -433,12 +570,12 @@ add_action('init', function () {
             request.Database,
             backupRoot);
 
-        // Hedefin korunacak DB bilgileri (dosya kopyalansa bile hedef kendi DB'sinde kalır).
-        var targetConfig = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
-        var targetDbName = ReadDefine(targetConfig, "DB_NAME");
-        var targetDbUser = ReadDefine(targetConfig, "DB_USER");
         var targetDbPass = ReadDefine(targetConfig, "DB_PASSWORD");
-        var targetDbHost = ReadDefine(targetConfig, "DB_HOST");
+
+        // Kaynağın wp-config'i hedefin DB bilgileriyle BİRLEŞTİRİLEBİLDİ mi. false ⇒ birleştirme
+        // yapılamadı ve hedefin kendi wp-config'i yedekten geri konuldu (bağlantı doğru, kaynağın
+        // ayarları taşınmadı). Sonuca konur, denetleyici farklı mesaj anahtarı döndürür.
+        var configGeriYazildi = true;
 
         // 1) Veritabanı: hedef DB'yi yedekle → kaynak DB'yi hedefin DB'sine aktar.
         if (request.Database)
@@ -522,22 +659,65 @@ add_action('init', function () {
 
             // Aynalama kaynağın wp-config'ini getirdi → hedefin kendi DB bilgilerini geri yaz.
             var rewritten = await File.ReadAllTextAsync(targetConfigPath, cancellationToken);
-            rewritten = ReplaceDefine(rewritten, "DB_NAME", targetDbName);
-            rewritten = ReplaceDefine(rewritten, "DB_USER", targetDbUser);
-            rewritten = ReplaceDefine(rewritten, "DB_PASSWORD", targetDbPass);
-            rewritten = ReplaceDefine(rewritten, "DB_HOST", targetDbHost.Length > 0 ? targetDbHost : "127.0.0.1");
-            await File.WriteAllTextAsync(targetConfigPath, rewritten, cancellationToken);
-
-            // ReplaceDefine, ARANAN define yoksa içeriği SESSİZCE değiştirmeden döner. O durumda
-            // hedef, aynalamayla gelen KAYNAK yapılandırmasıyla kalır: canlı site staging'in
-            // (ya da tersine kaynağın) veritabanına yazar. Ölçülebilir tek kanıt, geri yazdığımız
-            // DB adının dosyada gerçekten bulunmasıdır.
-            if (targetDbName.Length > 0 && !rewritten.Contains(targetDbName, StringComparison.Ordinal))
+            var yazilamayan = new List<string>();
+            foreach (var (anahtar, deger) in new[]
+                     {
+                         ("DB_NAME", targetDbName),
+                         ("DB_USER", targetDbUser),
+                         ("DB_PASSWORD", targetDbPass),
+                         ("DB_HOST", targetDbHost.Length > 0 ? targetDbHost : "127.0.0.1")
+                     })
             {
-                logger?.LogError(
-                    "Hedef wp-config GERI YAZILAMADI: {Yol} icinde DB_NAME '{HedefDb}' bulunamadi. {Hedef} sitesi KAYNAGIN veritabanina baglaniyor olabilir.",
-                    targetConfigPath,
-                    targetDbName,
+                if (TryReplaceDefine(rewritten, anahtar, deger, out var sonraki, out var durum))
+                {
+                    rewritten = sonraki;
+                }
+                else
+                {
+                    yazilamayan.Add($"{anahtar}={durum}");
+                }
+            }
+
+            if (yazilamayan.Count == 0)
+            {
+                await File.WriteAllTextAsync(targetConfigPath, rewritten, cancellationToken);
+
+                // PAROLA YAZILMAZ: yalnız hangi DB'ye bağlandığı. Sorun ayıklamak için yeten bilgi budur.
+                logger?.LogInformation(
+                    "Hedef wp-config geri yazildi: {Hedef} kendi veritabanina ({HedefDb}) baglanmaya devam ediyor.",
+                    targetName,
+                    targetDbName);
+            }
+            else
+            {
+                // BURAYA NORMALDE HİÇ GELİNMEZ — ön denetim aynı ölçümü aynalamadan önce yapıp
+                // yolu keser. Yine de KORUMASIZ BIRAKILMIYOR: aynalama beklenmedik bir şey getirmiş
+                // olabilir (kaynak dosya iş sırasında değişti, /MIR kısmi kopyaladı). O durumda
+                // seçenek "yarım yazılmış bir config bırakmak" DEĞİL:
+                //
+                // hedefin KENDİ wp-config'i, yıkıcı adımdan önce alınan yedeğin içinde DURUYOR ve
+                // hedefin doğru veritabanına bağlanmasının TANIMI odur. Geri konur. Bedeli, yalnız
+                // kaynağın wp-config'inde tanımlı ayarların (WP_DEBUG, özel sabitler, salt'lar)
+                // taşınmamasıdır — canlı sitenin staging veritabanına yazmasının yanında hiçtir.
+                var yedekConfig = Path.Combine(backupRoot, "target-files", "wp-config.php");
+                if (!File.Exists(yedekConfig))
+                {
+                    logger?.LogError(
+                        "Hedef wp-config GERI YAZILAMADI ({Sebep}) ve yedekteki kopyasi da YOK ({Yedek}). "
+                        + "{Hedef} sitesi KAYNAGIN veritabanina baglaniyor olabilir — ELLE mudahale gerekir.",
+                        string.Join(", ", yazilamayan),
+                        yedekConfig,
+                        targetName);
+                    throw new AppException("wp.copy_config_not_rewritable", 500, 500, string.Join(", ", yazilamayan));
+                }
+
+                File.Copy(yedekConfig, targetConfigPath, overwrite: true);
+                configGeriYazildi = false;
+                logger?.LogWarning(
+                    "Hedef wp-config'e geri yazim YAPILAMADI ({Sebep}); hedefin KENDI wp-config'i yedekten geri konuldu ({Yedek}). "
+                    + "{Hedef} kendi veritabanina bagli kaliyor ama kaynagin wp-config ayarlari TASINMADI.",
+                    string.Join(", ", yazilamayan),
+                    yedekConfig,
                     targetName);
             }
         }
@@ -559,7 +739,8 @@ add_action('init', function () {
             BackupPath = backupRoot,
             CopiedFiles = request.Files,
             CopiedDatabase = request.Database,
-            UrlRewritten = urlDegistirildi
+            UrlRewritten = urlDegistirildi,
+            ConfigRewritten = configGeriYazildi
         };
     }
 
@@ -736,21 +917,348 @@ add_action('init', function () {
         return $"{scheme}://{binding.HostName}{portPart}";
     }
 
-    // wp-config'ten define('KEY','deger') değerini okur (tek/çift tırnak; basit kaçış çözümü).
-    private static string ReadDefine(string content, string key)
+    /// <summary>
+    /// Bir wp-config <c>define</c>'ının YENİDEN YAZILABİLİRLİK durumu — "yazamadım"ın SEBEBİ.
+    /// </summary>
+    /// <remarks>
+    /// Sebep, yalnız günlük süsü değil: kullanıcıya ne yapması gerektiğini söyleyen tek bilgi.
+    /// <c>KalipYok</c> "değer düz metin değil (getenv/$_ENV/sabit)" demektir ve elle düzeltme ister;
+    /// <c>KosulluTanim</c> "gerçek değer BAŞKA dosyadan geliyor" demektir ve o dosyayı gösterir.
+    /// </remarks>
+    internal enum DefineYazimDurumu
     {
-        var match = Regex.Match(content, @"define\(\s*['""]" + Regex.Escape(key) + @"['""]\s*,\s*['""]([^'""]*)['""]");
-        return match.Success
-            ? match.Groups[1].Value.Replace("\\'", "'").Replace("\\\"", "\"").Replace("\\\\", "\\")
-            : string.Empty;
+        /// <summary>Gerçek (yorumda olmayan, koşulsuz) bir define bulundu ve DEĞİŞTİRİLDİ.</summary>
+        Yazildi,
+
+        /// <summary>
+        /// Anahtar için düz metin değerli <c>define</c> HİÇ YOK: değer <c>getenv()</c>,
+        /// <c>$_ENV</c>, <c>$_SERVER</c> ya da başka bir sabitten geliyor olabilir — ya da
+        /// wp-config bağlantı bilgisini hiç tanımlamıyor (<c>require</c> ile başka dosyadan).
+        /// </summary>
+        KalipYok,
+
+        /// <summary>
+        /// Bulunan tek eşleşme YORUM SATIRINDA. Bu, "yazabildim"in en tehlikeli yalanıydı:
+        /// yorumdaki eski bir define değiştirilip iş bitmiş sayılabilirdi.
+        /// </summary>
+        YalnizYorumda,
+
+        /// <summary>
+        /// Define <c>defined('KEY')</c> koruması altında (<c>defined(...) or define(...)</c> ya da
+        /// <c>if ( ! defined(...) ) { define(...); }</c>). Bu kalıpta gerçek değer neredeyse her
+        /// zaman daha önce <c>require</c> edilen bir dosyadan gelir; buradaki değeri değiştirmek
+        /// HİÇBİR ŞEY YAPMAZ ama "yazdım" gibi görünür.
+        /// </summary>
+        KosulluTanim
     }
 
-    // wp-config'teki define('KEY', '...') değerini yenisiyle değiştirir (yoksa içerik değişmez).
-    private static string ReplaceDefine(string content, string key, string value)
+    /// <summary>Veri kopyalama/klonlamada hedefe GERİ YAZILMASI gereken bağlantı define'ları.</summary>
+    /// <remarks>
+    /// Dördü de zorunlu: yalnız biri kaynağınkinde kalırsa bağlantı yine yanlış veritabanına gider
+    /// (ör. DB_NAME doğru ama DB_HOST kaynağın uzak sunucusu).
+    /// </remarks>
+    internal static readonly string[] DbBaglantiAnahtarlari = ["DB_NAME", "DB_USER", "DB_PASSWORD", "DB_HOST"];
+
+    /// <summary>
+    /// <c>define( 'KEY', '<i>değer</i>' )</c> — tek/çift tırnak, tırnak içinde KAÇIŞ, boşluk ve
+    /// satır sonu serbest. Değer grubu tırnaklarıyla birlikte yakalanır.
+    /// </summary>
+    /// <remarks>
+    /// Eski kalıptaki <c>['"][^'"]*['"]</c> iki ayrı hata yapıyordu: (1) kaçışlı tırnak taşıyan bir
+    /// parolada (<c>'p\'ass'</c>) hiç eşleşmiyordu — yani parola okunamıyor ve geri yazılamıyordu;
+    /// (2) açılış ve kapanış tırnağının AYNI olmasını şart koşmuyordu (<c>'x"</c> eşleşiyordu).
+    /// </remarks>
+    private static Regex DefineKalibi(string key) => new(
+        @"(?<bas>define\s*\(\s*(?<t>['""])" + Regex.Escape(key) + @"\k<t>\s*,\s*)"
+        + @"(?<deger>'(?:\\.|[^'\\])*'|""(?:\\.|[^""\\])*"")(?<son>\s*\))",
+        RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(5));
+
+    /// <summary>
+    /// wp-config'ten <c>define('KEY','değer')</c> değerini okur. <paramref name="value"/> yalnız
+    /// GERÇEK KODDA bulunduğunda doldurulur; bulunamazsa <c>false</c> döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>"Bulundu mu" ile "boş mu" AYRI SORULARDIR.</b> Eski sürüm ikisini de boş dizgeyle
+    /// yanıtlıyordu; oysa <c>DB_PASSWORD</c>'ün boş olması meşrudur (parolasız yerel kullanıcı) ve
+    /// bulunamaması felakettir — hedefin parolası "" olarak geri yazılırsa canlı site açılmaz.
+    /// </para>
+    /// <para>
+    /// <b>Yorumlar atlanır.</b> Yorumdaki eski bir <c>define('DB_NAME','eski_db')</c> satırından
+    /// hedefin veritabanı adını okumak, geri yazımda YANLIŞ veritabanını yazmak demekti.
+    /// </para>
+    /// </remarks>
+    /// <remarks>
+    /// <c>internal</c> (private değil): yazma/okuma GİDİŞ-DÖNÜŞÜ gerçekten koşturularak test
+    /// edilebilsin diye. Parola önce okunup sonra geri yazıldığı için kaçış kuralının iki yönde de
+    /// tutması şart; yalnız yazma yolunu ölçen bir test bunu yakalayamaz.
+    /// </remarks>
+    internal static bool TryReadDefine(string content, string key, out string value)
     {
-        var escaped = value.Replace("\\", "\\\\").Replace("'", "\\'").Replace("$", "$$");
-        var pattern = @"(define\(\s*['""]" + Regex.Escape(key) + @"['""]\s*,\s*)['""][^'""]*['""](\s*\))";
-        return Regex.Replace(content, pattern, "${1}'" + escaped + "'${2}");
+        foreach (Match match in DefineKalibi(key).Matches(content))
+        {
+            if (!KodBolgesindeMi(content, match.Index))
+            {
+                continue;
+            }
+
+            value = PhpDizgeCoz(match.Groups["deger"].Value);
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    /// <summary>Değeri okur; bulunamazsa boş dizge (çağrı yerlerinin çoğu ikisini ayırmaz).</summary>
+    private static string ReadDefine(string content, string key)
+        => TryReadDefine(content, key, out var value) ? value : string.Empty;
+
+    /// <summary>
+    /// wp-config'teki <c>define('KEY', '...')</c> değerini yenisiyle değiştirir ve
+    /// <b>DEĞİŞTİREBİLDİĞİNİ SÖYLER</b>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bu metodun VAR OLMA SEBEBİ.</b> Öncesi düz bir <c>Regex.Replace</c>'ti: aranan kalıp
+    /// yoksa içeriği <b>değiştirmeden döndürüyor ve kimseye söylemiyordu</b>. Veri kopyalamada bu,
+    /// geri dönüşsüz <c>robocopy /MIR</c>'dan SONRA çalıştığı için sonucu şuydu: hedefin
+    /// wp-config'i kaynağınkiyle ezilir, geri yazım sessizce hiçbir şey yapmaz ve
+    /// <b>canlı site staging'in veritabanına bağlanmaya devam eder</b> — panel "kopyalandı" der.
+    /// </para>
+    /// <para>
+    /// Kaynak siteler wp-config'i tek biçimde yazmaz; ölçülen gerçek biçimler:
+    /// WordPress'in kendi <c>wp-config-sample.php</c>'si <c>define( 'DB_NAME', 'x' );</c> (paren
+    /// içinde boşluklu), resmî Docker imajı <c>define( 'DB_NAME', getenv_docker('WORDPRESS_DB_NAME',
+    /// 'wordpress') );</c> (düz metin DEĞİL), belgelenmiş "local-config" kalıbı ise
+    /// <c>defined('DB_NAME') or define('DB_NAME','varsayilan');</c> ile değeri <c>require</c> edilen
+    /// başka dosyadan alır. Son ikisinde eski kod sessizce hiçbir şey yapıyordu.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>MatchEvaluator</c>:</b> eski sürüm değeri <c>Regex.Replace</c>'in yerine koyma
+    /// diline karşı <c>$</c> → <c>$$</c> diye kaçırmak ZORUNDAYDI. Bu, PHP'nin kaçış kuralıyla
+    /// alakasız bir kural; unutulduğu gün <c>$</c> içeren bir parola sessizce bozulurdu. Değer artık
+    /// düz metin olarak konuyor, geriye YALNIZ PHP kaçışı kalıyor (tek tırnaklı dizgede <c>\</c> ve
+    /// <c>'</c>).
+    /// </para>
+    /// </remarks>
+    /// <returns>Gerçek bir define değiştirildiyse <c>true</c>.</returns>
+    internal static bool TryReplaceDefine(string content, string key, string value, out string result, out DefineYazimDurumu durum)
+    {
+        var kacirilmis = "'" + value.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
+
+        var gercekEslesmeVar = false;
+        var kosulluGoruldu = false;
+        var yorumdaGoruldu = false;
+
+        var yeni = DefineKalibi(key).Replace(content, match =>
+        {
+            if (!KodBolgesindeMi(content, match.Index))
+            {
+                yorumdaGoruldu = true;
+                return match.Value;
+            }
+
+            if (KosulluTanimMi(content, key, match.Index))
+            {
+                kosulluGoruldu = true;
+                return match.Value;
+            }
+
+            gercekEslesmeVar = true;
+            return match.Groups["bas"].Value + kacirilmis + match.Groups["son"].Value;
+        });
+
+        if (gercekEslesmeVar)
+        {
+            result = yeni;
+            durum = DefineYazimDurumu.Yazildi;
+            return true;
+        }
+
+        // BAŞARISIZLIKTA İÇERİK DEĞİŞMEZ: yarım yazılmış bir wp-config, hiç yazılmamışından kötüdür.
+        result = content;
+        durum = kosulluGoruldu ? DefineYazimDurumu.KosulluTanim
+            : yorumdaGoruldu ? DefineYazimDurumu.YalnizYorumda
+            : DefineYazimDurumu.KalipYok;
+        return false;
+    }
+
+    /// <summary>
+    /// Bu wp-config metninde DB bağlantı define'larının hepsi geri yazılabilir mi? Yazılamayanları
+    /// <c>ANAHTAR=sebep</c> biçiminde döner (boş liste = hepsi yazılabilir).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>YIKICI ADIMDAN ÖNCE ÇALIŞIR ve bu bir TAHMİN DEĞİLDİR.</b> <c>robocopy /MIR</c> kaynağı
+    /// hedefe birebir aynalar; yani aynalamadan sonra hedefin wp-config'i KAYNAĞINKİNİN BAYT BAYT
+    /// KOPYASIDIR. Dolayısıyla kaynağın metni üzerinde ölçülen "geri yazılabilir mi" sorusunun
+    /// yanıtı, aynalamadan sonraki yanıtla AYNIDIR. Ölçüm, yıkımdan önce yapılabilecek durumdayken
+    /// yıkımdan sonra yapılıyordu — tek değişiklik sırasıdır.
+    /// </para>
+    /// <para>
+    /// Deneme değeri zararsızdır: metot saf, girdiyi değiştirmez, sonucu atılır.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyList<string> DbDefineYazilamayanlar(string content)
+    {
+        var engeller = new List<string>();
+        foreach (var anahtar in DbBaglantiAnahtarlari)
+        {
+            if (!TryReplaceDefine(content, anahtar, "adapanel_on_denetim", out _, out var durum))
+            {
+                engeller.Add($"{anahtar}={durum}");
+            }
+        }
+
+        return engeller;
+    }
+
+    /// <summary>
+    /// PHP kaynağında verilen konum GERÇEK KOD mu (yorumun ve dizgenin dışında mı)?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Basit bir "satırda <c>//</c> var mı" denetimi YETMEZ: <c>define('WP_HOME','http://x');</c>
+    /// satırındaki <c>//</c> dizgenin içindedir ve aynı satırdaki gerçek bir define'ı yanlışlıkla
+    /// "yorumda" saydırırdı. Bu yüzden dosya baştan taranıp tırnak/yorum durumu izleniyor.
+    /// </para>
+    /// <para>
+    /// BİLİNEN SINIR: PHP 8 <c>#[Attribute]</c> sözdizimi burada yorum sayılır. wp-config.php'de
+    /// öznitelik bulunmaz; bulunursa sonuç KORUYUCU yönde yanlış olur (yazamadım der, yanlış
+    /// veritabanına bağlamaz).
+    /// </para>
+    /// </remarks>
+    private static bool KodBolgesindeMi(string icerik, int konum)
+    {
+        var i = 0;
+        while (i < konum && i < icerik.Length)
+        {
+            var karakter = icerik[i];
+
+            if (karakter is '\'' or '"')
+            {
+                var tirnak = karakter;
+                i++;
+                while (i < icerik.Length)
+                {
+                    if (icerik[i] == '\\')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    if (icerik[i] == tirnak)
+                    {
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+
+                // Konum dizgenin İÇİNDE kaldı: bu bir define değeri ya da başka bir metin.
+                if (i > konum)
+                {
+                    return false;
+                }
+                continue;
+            }
+
+            var satirYorumu = (karakter == '/' && i + 1 < icerik.Length && icerik[i + 1] == '/') || karakter == '#';
+            if (satirYorumu)
+            {
+                var son = icerik.IndexOf('\n', i);
+                son = son < 0 ? icerik.Length : son;
+                if (konum < son)
+                {
+                    return false;
+                }
+                i = son;
+                continue;
+            }
+
+            if (karakter == '/' && i + 1 < icerik.Length && icerik[i + 1] == '*')
+            {
+                var kapanis = icerik.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                var son = kapanis < 0 ? icerik.Length : kapanis + 2;
+                if (konum < son)
+                {
+                    return false;
+                }
+                i = son;
+                continue;
+            }
+
+            i++;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// <c>define</c>'ın hemen öncesinde aynı anahtar için <c>defined(...)</c> koruması var mı?
+    /// </summary>
+    /// <remarks>
+    /// Belgelenmiş "local-config" kalıbı: sürüm kontrolündeki wp-config önce
+    /// <c>require_once 'wp-config-local.php'</c> yapar, sonra <c>defined('DB_NAME') or
+    /// define('DB_NAME','varsayilan');</c> ile YALNIZCA tanımlanmamışsa varsayılanı koyar. Bu
+    /// satırdaki değeri değiştirmek çalışan yapılandırmayı hiç etkilemez — ama regex "değiştirdim"
+    /// der. Pencere 160 karakter: <c>if ( ! defined( 'DB_NAME' ) ) {</c> + girinti rahatça sığar,
+    /// dosyanın uzağındaki alakasız bir <c>defined()</c> ise sığmaz.
+    /// </remarks>
+    private static bool KosulluTanimMi(string icerik, string key, int defineKonumu)
+    {
+        var pencereBas = Math.Max(0, defineKonumu - 160);
+        var pencere = icerik[pencereBas..defineKonumu];
+        return Regex.IsMatch(
+            pencere,
+            @"defined\s*\(\s*(['""])" + Regex.Escape(key) + @"\1\s*\)",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>PHP dizge sabitini (tırnaklar dâhil) düz metne çevirir.</summary>
+    /// <remarks>
+    /// Tek tırnaklı PHP dizgesinde YALNIZ <c>\\</c> ve <c>\'</c> kaçıştır; <c>\n</c> iki karakterdir
+    /// ve öyle kalmalıdır. Eski kod ikisini ayırmadan sırayla <c>Replace</c> çağırıyordu.
+    /// </remarks>
+    private static string PhpDizgeCoz(string ham)
+    {
+        if (ham.Length < 2)
+        {
+            return string.Empty;
+        }
+
+        var tirnak = ham[0];
+        var govde = ham[1..^1];
+        var yapici = new System.Text.StringBuilder(govde.Length);
+        for (var i = 0; i < govde.Length; i++)
+        {
+            if (govde[i] != '\\' || i + 1 >= govde.Length)
+            {
+                yapici.Append(govde[i]);
+                continue;
+            }
+
+            var sonraki = govde[i + 1];
+            if (sonraki == '\\' || sonraki == tirnak)
+            {
+                yapici.Append(sonraki);
+                i++;
+                continue;
+            }
+
+            if (tirnak == '"' && sonraki is 'n' or 't' or 'r' or '$')
+            {
+                yapici.Append(sonraki switch { 'n' => '\n', 't' => '\t', 'r' => '\r', _ => '$' });
+                i++;
+                continue;
+            }
+
+            yapici.Append(govde[i]);
+        }
+
+        return yapici.ToString();
     }
 
     // panel "Güvenlik": Plesk WP Toolkit önlem demetini uygular (mu-plugin runtime önlemleri + wp-cli config).

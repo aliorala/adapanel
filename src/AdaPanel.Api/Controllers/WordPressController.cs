@@ -209,9 +209,15 @@ public sealed class WordPressController(
 
         // KISMİ BAŞARI GİZLENMEZ: adres değiştirilemediyse klon üretim adresini servis eder ve
         // kullanıcının bunu BİLMESİ gerekir — aksi hâlde staging sandığı yerde canlı veriyi değiştirir.
+        //
+        // SIRA ÖNEMLİ: wp-config yazılamamış olması adresin değişmemesinden AĞIRDIR. Adres yanlışsa
+        // klon üretim adresini servis eder; wp-config yanlışsa klon doğrudan ÜRETİM VERİTABANINA
+        // yazar. İki durum aynı anda olabilir ve kullanıcıya önce ağır olan söylenir.
         return Ok(ApiResponse<WordPressCloneResultDto>.Ok(
             result,
-            result.UrlRewritten ? "wp.clone_done" : "wp.clone_url_not_replaced"));
+            !result.ConfigRewritten ? "wp.clone_config_not_written"
+            : !result.UrlRewritten ? "wp.clone_url_not_replaced"
+            : "wp.clone_done"));
     }
 
     // panel "Veri Kopyala": kaynak WP'nin dosya/DB'sini VAR OLAN hedefe taşır (staging→canlı). İki siteye de erişim gerekir.
@@ -232,12 +238,18 @@ public sealed class WordPressController(
             "wordpress.data_copied",
             request.TargetSiteName ?? string.Empty,
             $"WordPress data mirrored from '{siteName}' onto '{request.TargetSiteName}' "
-            + $"(destructive mirror; URL rewritten: {result.UrlRewritten}).",
+            + $"(destructive mirror; URL rewritten: {result.UrlRewritten}; "
+            + $"source wp-config merged: {result.ConfigRewritten}).",
             cancellationToken);
 
+        // wp-config birleştirilemediyse hedefin KENDİ wp-config'i yedekten geri konmuştur: bağlantı
+        // doğrudur ama kaynağın ayarları taşınmamıştır. Bu, adresin değişmemesinden daha çok
+        // açıklama ister (kullanıcı eksik ayarı aramasın diye), o yüzden önce söylenir.
         return Ok(ApiResponse<WordPressCopyDataResultDto>.Ok(
             result,
-            result.UrlRewritten ? "wp.copy_done" : "wp.copy_url_not_replaced"));
+            !result.ConfigRewritten ? "wp.copy_config_not_merged"
+            : !result.UrlRewritten ? "wp.copy_url_not_replaced"
+            : "wp.copy_done"));
     }
 
     /// <summary>Sitedeki güncellenebilir öğeler (çekirdek + eklenti + tema).</summary>

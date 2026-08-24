@@ -108,6 +108,29 @@ public sealed class WordPressCopyDataResultDto
     /// söylenmesi gerekir, çünkü WordPress adresi veritabanından okur.
     /// </summary>
     public bool UrlRewritten { get; set; } = true;
+
+    /// <summary>
+    /// Kaynağın <c>wp-config.php</c>'si hedefin veritabanı bilgileriyle BİRLEŞTİRİLEBİLDİ mi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aynalama (<c>robocopy /MIR</c>) kaynağın wp-config'ini hedefe getirir; panel sonra hedefin
+    /// kendi DB bilgilerini o dosyaya geri yazar. Geri yazım bir regex değiştirmesidir ve kaynak
+    /// wp-config'i düz metin <c>define</c> kullanmıyorsa (<c>getenv()</c>, <c>$_ENV</c>,
+    /// <c>require</c> edilen ayrı dosya) yapılamaz.
+    /// </para>
+    /// <para>
+    /// <c>false</c> ⇒ birleştirme YAPILAMADI ve hedefin KENDİ wp-config'i, yıkıcı adımdan önce
+    /// alınan yedekten geri konuldu: <b>hedef kendi veritabanına bağlı kalır</b> ama yalnız kaynağın
+    /// wp-config'inde tanımlı ayarlar (WP_DEBUG, özel sabitler, salt'lar) TAŞINMAMIŞTIR. Sessiz
+    /// bırakılamaz; denetleyici bu bayrağa göre farklı bir mesaj anahtarı döndürür.
+    /// </para>
+    /// <para>
+    /// Normal koşulda hep <c>true</c>'dur: aynı ölçüm yıkıcı adımdan ÖNCE yapılır ve yazılamayacak
+    /// bir kopyalama hiç başlatılmaz (<c>wp.copy_config_not_rewritable</c>).
+    /// </para>
+    /// </remarks>
+    public bool ConfigRewritten { get; set; } = true;
 }
 
 /// <summary>panel "Klonla": WordPress sitesini yeni bir hedefe (staging) kopyalama isteği.</summary>
@@ -145,6 +168,19 @@ public sealed class WordPressCloneResultDto
     /// siteye gider. Bu yüzden sonuç gizlenmez, mesaj anahtarı buna göre seçilir.
     /// </summary>
     public bool UrlRewritten { get; set; } = true;
+
+    /// <summary>
+    /// Klonun <c>wp-config.php</c>'sine YENİ veritabanı bilgileri yazılabildi mi.
+    /// </summary>
+    /// <remarks>
+    /// <c>false</c> ⇒ klon, kopyalanan dosyalarla birlikte gelen KAYNAK yapılandırmasında kaldı:
+    /// staging sandığı sitede yapılan her yazma <b>canlı veritabanına</b> gidiyor olabilir. Bu,
+    /// adresin değişmemesinden (<see cref="UrlRewritten"/>) daha ağırdır ve mesaj seçiminde önceliği
+    /// vardır. Sebebi ikisinden biridir: kopyalamada <c>wp-config.php</c> hiç oluşmadı, ya da dosya
+    /// düz metin <c>define</c> kullanmıyor. İkincisi klonlama BAŞLAMADAN elenir
+    /// (<c>wp.clone_config_not_rewritable</c>).
+    /// </remarks>
+    public bool ConfigRewritten { get; set; } = true;
 }
 
 /// <summary>

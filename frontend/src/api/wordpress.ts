@@ -69,6 +69,14 @@ export type WordPressCloneResult = {
   targetDatabase: string;
   databaseUser: string;
   databasePassword: string;
+  /**
+   * Klonun `wp-config.php`'sine YENİ veritabanı bilgileri yazılabildi mi.
+   *
+   * `false` ise klon KAYNAĞIN veritabanına bağlanıyor olabilir: staging sanılan sitede yapılan her
+   * değişiklik canlı veriyi değiştirir. Sunucu bu durumda `wp.clone_config_not_written` mesaj
+   * anahtarını döndürür.
+   */
+  configRewritten: boolean;
 };
 
 export async function cloneWordPress(siteName: string, payload: { targetSiteName: string; targetHostName: string }) {
@@ -85,6 +93,17 @@ export type WordPressCopyDataResult = {
   backupPath: string;
   copiedFiles: boolean;
   copiedDatabase: boolean;
+  /**
+   * Kaynağın `wp-config.php` ayarları hedefe taşınabildi mi.
+   *
+   * `false` ise taşınamadı ve hedefin KENDİ `wp-config.php`'si yedekten geri konuldu: bağlantı
+   * doğru (hedef kendi veritabanında), yalnız kaynağa özel ayarlar taşınmadı. Sunucu bu durumda
+   * `wp.copy_config_not_merged` mesaj anahtarını döndürür.
+   *
+   * Tehlikeli olan durum — geri yazımın hiç yapılamayacağı yapılandırma — kopyalama BAŞLAMADAN
+   * `wp.copy_config_not_rewritable` hatasıyla reddedilir, yani buraya hiç ulaşmaz.
+   */
+  configRewritten: boolean;
 };
 
 export async function copyWordPressData(siteName: string, payload: { targetSiteName: string; files: boolean; database: boolean }) {
