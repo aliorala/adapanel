@@ -4,8 +4,8 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **24.08.2026** · Yayındaki sürüm: **0.6.6** · main: temiz
-Testler: **2885 yeşil** · typecheck + build temiz · i18n TR/EN 4383 = 4383
+Son güncelleme: **24.08.2026** · Yayındaki sürüm: **0.7.0** · main: temiz
+Testler: **3232 yeşil** · typecheck + build temiz · i18n TR/EN 4383 = 4383
 
 ---
 
@@ -25,6 +25,7 @@ Testler: **2885 yeşil** · typecheck + build temiz · i18n TR/EN 4383 = 4383
 | 0.6.4 | Posta listeleri (gönderim kuralı + self-servis abonelikten çıkma) |
 | 0.6.5 | Güvenlik sertleştirmesi (7 denetim, 10 düzeltme ekibi) |
 | 0.6.6 | Silme bütünlüğü, tarama ilerlemesi, kiracı bağı, gözlemlenebilirlik |
+| 0.7.0 | **Kendi `.htaccess` desteğimiz** — Plesk for Windows'da olmayan özellik |
 
 ---
 
@@ -74,6 +75,23 @@ sayfa yenilenince "sürüyor" bilgisini hâlâ kaybediyor.
 SEO sıra takibi ve rakip analizi (SERP sağlayıcısı olmadan üretilecek sıra numarası uydurma
 olurdu), log dosyası analizi (ayrıştırıcı zaten istatistik servisinde), site kurucuda çok
 sayfalı site / iletişim formu / sürükle-bırak, posta listesi alias'ları.
+
+### 8. `.htaccess` — gerçek IIS'te hiç çalıştırılmadı
+Motorun net48'de yüklendiği ve bir `RewriteRule`'u gerçekten uyguladığı KANITLANDI (ayrı bir
+CLR 4 sürecinde ölçüldü). Kanıtlanmayan: GAC kurulumu, `applicationHost.config` kaydı, `w3wp`
+içinde yükleme ve gerçek bir HTTP isteğinin yeniden yazılması. Özellik bu yüzden **varsayılan
+KAPALI** geliyor. İlk denemede: deneme sitesinde "yalnız gözlem" kipi → panel raporu → "uygula".
+
+Bilinen sapmalar (kodda ve arayüzde yazılı): erişim denetimi yeniden yazmadan ÖNCE çalışıyor
+(Apache'de tersi, biz daha kısıtlayıcıyız); `IsSymbolicLink` `FileAttributes.ReparsePoint`
+kullanıyor, yani OneDrive yer tutucusu gibi şeylere de "bağlantı" diyor (koruyucu yönde).
+`EngineLoadedInIis = true` "şu anda yüklü" demek DEĞİL — panel `w3wp`'nin içini göremez,
+ölçülebilen tek ön koşuldan türetiliyor; `false` tarafı kesin, `true` tarafı değil.
+
+### 9. `.snk` özel anahtarı depoda
+Strong-name kimlik mekanizmasıdır, güvenlik sınırı değil; ve `origin/main` yalnız README
+içerdiği için anahtar bu makineden ÇIKMIYOR. Ama depo bir gün kaynak olarak yayınlanırsa
+anahtar değiştirilmeli.
 
 ### 7. Düşük öncelik
 Windows ayrılmış aygıt adları (`CON`, `NUL`) sanitize edilmiyor — ölçüldü, sessiz veri kaybı
