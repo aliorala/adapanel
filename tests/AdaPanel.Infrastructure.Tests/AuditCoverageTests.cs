@@ -177,6 +177,8 @@ public sealed class AuditCoverageTests
         ["AutomationController.cs#\"automation.ssl.run\"#\"automation\""] = "Sunucudaki HER sertifikayı yenilemeye çalışan tur.",
         ["AutomationController.cs#\"automation.backup.remote_tested\"#$\"backup-target:{request.TargetType}\""] = "Uzak yedek HEDEFİ panel genelinde tanımlıdır; bir aboneliğe ait değil.",
         ["BackupController.cs#\"backup.encryption_changed\"#\"backup\""] = "Şifreleme ayarı panel genelidir; bundan sonraki HER aboneliğin yedeğine uygulanır.",
+        ["BillingController.cs#action#\"billing\""] = "Bu sarmalayıcının İKİ çağıranı ölçüldü ve ikisi de panel genelidir: entegrasyon anahtarı (açılınca BÜTÜN abonelikler dışa aktarılır olur) ve toplu kullanım raporu (tanım gereği her aboneliği kapsar). Hesap hedefli tek kayıt (billing.terminate_checked) konusunu AYRICA yazar.",
+        ["CronController.cs#action#\"cron:server\""] = "Makine PATH'ine Python eklemek sunucu genelidir (yalnız yönetici çağırabilir); bütün kiracıların görevlerini aynı anda etkiler. Göreve ait kayıtlar ayrı sarmalayıcıdan yazılır ve sahibini görev adından ölçer.",
         ["BackupController.cs#\"backup.verified\"#\"backup\""] = "Doğrulama sunucudaki bütün yedekleri tarar.",
         ["CacheController.cs#$\"cache.{motor}.{eylem}\"#$\"cache:{motor}\""] = "Redis/Memcached sunucu geneli tek örnektir; bütün siteler aynı hizmeti paylaşır.",
         ["ClusterController.cs#action#\"cluster\""] = "Küme düğümleri sunucu/kurulum düzeyindedir, aboneliğe ait değil.",
@@ -245,11 +247,22 @@ public sealed class AuditCoverageTests
     /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> KiraciBagiSonrakiTurda = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["BillingController.cs#action#\"billing\""] = "Fatura kayıtları bir aboneliğe AİT; sarmalayıcı abonelik kimliğini almıyor ve ölçmeden bağlamak yanlış kiracıya yazmak olurdu.",
-        ["CronController.cs#action#\"cron\""] = "Zamanlanmış görevler aboneliğe AİT (ScopeNameAsync görev adını abonelikle önekliyor); sarmalayıcı yalnız serbest metin alıyor, sahibi çözmek için imza değişikliği gerekiyor.",
-        ["MailListPublicController.cs#\"mail.list.unsubscribe_requested\"#SafeResource(list)"] = "Dağıtım listesi kiracının alan adına AİT; uç KİMLİK DOĞRULAMASIZ (abonelikten çıkma bağlantısı) ve alan adı sahipliği çözümü IIS okuması gerektiriyor — bu yolda maliyeti ölçülmedi.",
-        ["MailListPublicController.cs#\"mail.list.unsubscribe_confirmed\"#SafeResource(result.List)"] = "Yukarıdakiyle aynı: kiracıya ait, kimlik doğrulamasız uç.",
-        ["SiteHostingSettingsController.cs#action#\"sites\""] = "Barındırma ayarları SİTEYE ait; ortak sarmalayıcı yalnız açıklama metni alıyor, site adını almıyor.",
+        // LİSTE BOŞ — kalan 5 girdinin HEPSİ kapatıldı. Kapatılan borcun özeti (hepsinde sahiplik
+        // ÖLÇÜLÜYOR, çağıranın kimliğinden türetilmiyor):
+        //
+        //   SiteHostingSettingsController — sarmalayıcı artık SİTE ADINI alıyor; sahip
+        //     AuditSubject.SiteOwnerAsync ile çözülüyor (yöneticinin kendi sitesinde null).
+        //   CronController — sahip GÖREV ADININ ad alanı önekinden ("u<abonelikId>--") okunuyor;
+        //     yani yönetici bir kiracının görevini sildiğinde de doğru konuya yazılıyor. Sunucu
+        //     geneli tek kayıt (python_path) ayrı bir sarmalayıcıya alındı ve aşağıda gerekçeli.
+        //   BillingController — hesap hedefli tek kayıt (terminate_checked) panelin ÖLÇTÜĞÜ eşleşen
+        //     hesabı konu yazıyor; panel geneli iki kayıt aşağıda gerekçeli.
+        //   MailListPublicController — kimliksiz uç ama kiracıya ait; konu, liste ADRESİNİN alan
+        //     adından çözülüyor. Konu yazılmasaydı kayıt (UserId da boş olduğu için) kiracının
+        //     görünümüne HİÇ düşmezdi.
+        //
+        // Liste boş bırakıldı, SİLİNMEDİ: bir sonraki turda ertelenen bir borç çıktığında onu
+        // "kalıcı muafiyet" (KiraciyaAitOlmayanlar) ile karıştırmadan yazabilmek için duruyor.
     };
 
     [Fact]

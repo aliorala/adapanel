@@ -8,12 +8,17 @@ hesabı açılır, ödeme gecikince askıya alınır, iptal edilince silinir.
 > (`ChangePassword` ve `ServiceSingleSignOn`) artık **çalışıyor**: panele karşılıkları eklendi.
 >
 > **Sonradan eklenenler:** `UsageUpdate` (disk/trafik kullanımı → fatura, bölüm 6), iptal öncesi
-> **silme doğrulaması** (bölüm 8) ve **API anahtarıyla bağlanma** (bölüm 5.5). WHMCS modül
-> sözleşmesi `developers.whmcs.com/provisioning-modules/` üzerinden doğrulandı.
+> **silme doğrulaması** (bölüm 8), **iptalde sunucuda kalanların not olarak yazılması** (bölüm 8.1)
+> ve **API anahtarıyla bağlanma** (bölüm 5.5). Kullanılan WHMCS sözleşmelerinin **hepsi**
+> `developers.whmcs.com` üzerinden doğrulandı; kullanılan sayfalar `adapanel.php` başında adres
+> adres yazılı.
 >
 > **Bu modül gerçek bir WHMCS kurulumuyla uçtan uca ÇALIŞTIRILMADI** (bu depoda WHMCS+PHP+MySQL
-> yığını yok). Panel tarafı testlidir; PHP tarafı yalnız sözdizimi denetiminden geçti. İlk kurulumda
-> **Test Connection** ve bir deneme siparişiyle doğrulayın.
+> yığını yok). Panel tarafı testlidir. PHP tarafında iki ölçüm var: sözdizimi denetimi (`php -l`)
+> ve WHMCS'e bağlı olmayan karar noktalarını gerçekten çalıştıran bir davranış betiği
+> (`php integrations/whmcs/tests/leftover-note.test.php` — `localAPI` ve `logModuleCall` orada
+> casus olarak tanımlanır). **Hiçbiri gerçek WHMCS'te denenmedi.** İlk kurulumda **Test Connection**
+> ve bir deneme siparişiyle doğrulayın.
 
 ---
 
@@ -57,9 +62,10 @@ dışarıdan "modül çalışmıyor" gibi görünür. WHMCS'in sunucu tanımınd
 için bu bilgi **Access Hash** alanında taşınır:
 
 ```
-panel                              # yalnız gizli giriş yolu
-entry=panel;insecure=1             # gizli giriş yolu + sertifika doğrulamasını atla
-entry=panel;token=adap_xxxxxxxx    # panel API anahtarıyla kimlik (önerilen)
+panel                                        # yalnız gizli giriş yolu
+entry=panel;insecure=1                       # gizli giriş yolu + sertifika doğrulamasını atla
+entry=panel;token=adap_xxxxxxxx              # panel API anahtarıyla kimlik (önerilen)
+entry=panel;token=adap_xx;admin=whmcsadmin   # + kalıntı notlarını yazacak WHMCS yöneticisi
 ```
 
 * `entry` — panelde **sol menü → Güvenlik → gizli giriş yolu** alanındaki değerle **birebir** aynı
@@ -69,6 +75,11 @@ entry=panel;token=adap_xxxxxxxx    # panel API anahtarıyla kimlik (önerilen)
   Gerçek sertifika varsa bu bayrağı **kullanmayın**.
 * `token` — panel API anahtarı (`adap_…`). Verilirse modül **giriş yapmaz**, her isteği
   `Authorization: Bearer` başlığıyla gönderir. Bkz. bölüm 5.5.
+* `admin` — **WHMCS yönetici kullanıcı adı**. Modül, iptalde sunucuda kalanları WHMCS'e not olarak
+  yazarken Local API'yi kullanır ve bu API'nin imzası `localAPI($command, $values, $adminuser)`'dır.
+  Üçüncü parametrenin boş bırakılabildiği WHMCS belgelerinde **yazmıyor**, o yüzden tahmin
+  edilmiyor: burada bir yönetici adı verin. Boş bırakılırsa modül yine dener, **sonucu ölçer** ve
+  yazamazsa not metnini modül günlüğüne düşürür (bkz. bölüm 8.1).
 
 Alanın tamamında `=` yoksa değer doğrudan giriş yolu sayılır (en sık kullanım).
 
@@ -126,7 +137,7 @@ yazmak sessizce etkisiz kalırdı.
 | `CreateAccount` | `POST /api/v1/users` (rol `Customer`, kotalar, alan adı `assignedSites`'a eklenir) + plan kimliği doluysa `PUT /api/v1/subscriptions/{id}/plan` |
 | `SuspendAccount` | `POST /api/v1/subscriptions/{id}/suspend` |
 | `UnsuspendAccount` | `POST /api/v1/subscriptions/{id}/resume` |
-| `TerminateAccount` | Önce `GET /api/v1/billing/terminate-check` (silme **güvenli mi**), sonra `DELETE /api/v1/users/{id}?removeSites=true|false` |
+| `TerminateAccount` | Önce `GET /api/v1/billing/terminate-check` (silme **güvenli mi**), sonra `DELETE /api/v1/users/{id}?removeSites=true|false`; yanıttaki **kalıntılar** müşteri notuna yazılır (bkz. 8.1) |
 | `UsageUpdate` | `GET /api/v1/billing/usage` → `tblhosting` satırlarına disk/trafik yazar |
 | `ChangePackage` | Plan varsa `PUT /api/v1/subscriptions/{id}/plan`; yoksa plan bağını kaldırıp `PUT /api/v1/users/{id}` ile limitleri yazar |
 | `TestConnection` | Giriş + `GET /api/v1/users` + `GET /api/v1/service-plans` |
@@ -338,6 +349,45 @@ dönmez; aksi hâlde WHMCS hizmeti iptal edilmiş sayar ve kimse bir daha bakmaz
 
 Alan adı olmayan ürünlerde (yalnız hesap satan paketler) 3. koşul uygulanmaz; 1. ve 2. koşul sürer.
 
+### 8.1 İptalde **sunucuda kalanlar** artık WHMCS'e yazılıyor
+
+**Kapatılan boşluk:** modülün varsayılanı `removeSites=false`'tur, yani siteler **bilerek**
+sunucuda bırakılır. O yolda panel `200 OK` + `success: true` döner — bu "her şey silindi" **demek
+değildir**. Panel ne kaldığını yanıt gövdesinde `data.leftovers` ile **adıyla** sayar (hangi site,
+hangi veritabanı, hangi klasör, neden kaldı, bilerek mi). Modül gövdeyi okumadığı için bu liste
+WHMCS tarafında **hiç görünmüyordu**: panelde kalıntılar duruyor, yönetici hizmeti iptal ediyor ve
+sunucuda ne kaldığını hiç öğrenmiyordu.
+
+Artık modül **her iki yolda da** gövdeyi okur:
+
+| Panel yanıtı | Anlamı | Modül ne yapar |
+|---|---|---|
+| `200` + `success:true`, `leftovers` boş | Temiz silme | WHMCS'e `success`, **not yazılmaz** |
+| `200` + `success:true`, `leftovers` dolu | Siteler **bilerek** bırakıldı | WHMCS'e `success` + **müşteri notu** |
+| `409 users.delete.incomplete` | İş **yarım** kaldı | Hizmet iptal edilmiş sayılmaz (hata döner) + **müşteri notu** |
+
+**Not nereye yazılır:** `AddClientNote` (WHMCS Local API) ile **müşterinin** notlarına, `sticky`
+işaretiyle — yani not müşterinin hesabında ve açtığı biletlerde görünür. `UpdateClientProduct`'ın
+`notes` alanı **bilerek kullanılmadı**: o alan hizmetin mevcut yönetici notunun **üzerine yazar** ve
+başka birinin yazdığı notu sessizce yok ederdi. `AddClientNote` yeni bir kayıt **ekler**, hiçbir
+şeyi silmez.
+
+Notun içeriği: panel hesabı, WHMCS hizmet numarası, alan adı, `removeSites` seçeneğinin değeri,
+gerçekten silinen siteler, işin eksiksiz tamamlanıp tamamlanmadığı ve **kalıntı satırları**. Her
+satırda kaynağın türü, **adı** ve **neden kaldığı** yazılıdır; ayrıca `[bilerek bırakıldı]` /
+`[BAŞARISIZ]` ayrımı vardır — yönetici neyin karar, neyin arıza olduğunu ayırt edebilmeli.
+
+**Not yazılamazsa ne olur:** çağrının sonucu **ölçülür**. Yazılamayan bir not, hiç yazılmamış
+nottan kötüdür çünkü yazıldığı sanılır. Başarısızlıkta **notun tam metni** modül günlüğüne düşer
+(`Utilities → Logs → Module Log`, işlem adı `TerminateAccount.note_failed`). Kalıntı listesi ayrıca
+**her zaman** modül günlüğüne yazılır (`TerminateAccount.leftovers`) — not silinse bile iz kalır.
+
+> Local API'nin admin kullanıcı adını **Access Hash** alanındaki `admin=…` ile verin (bölüm 1).
+> Verilmezse çağrı yine denenir ama WHMCS reddedebilir; o zaman not yalnız modül günlüğünde kalır.
+
+**Kalıntılar sunucuda DURUYOR.** Not bir bilgilendirmedir, temizlik değildir; panelden elle
+temizleyin.
+
 ---
 
 ## 9. Sorun giderme
@@ -360,6 +410,9 @@ Alan adı olmayan ürünlerde (yalnız hesap satan paketler) 3. koşul uygulanma
 | Kullanım hiç güncellenmiyor | Panelde kullanıcı adı elle değiştirilmiş olabilir — eşleştirme `tblhosting.username` üzerinden yapılır (bkz. 6.2) |
 | İptal `Panel silme denetimi gecilemedi` diyor | Silme bilerek durduruldu; tablodaki sebebe göre panelde rolü/site atamasını düzeltin (bkz. bölüm 8) |
 | Anahtar kullanırken `auth.forbidden` + `apitoken.read_only` | Sağlama işlemleri için anahtarın "yıkıcı işlemlere izin ver" yetkisi açık olmalı (bkz. 5.5) |
+| İptalden sonra müşteriye **"sunucuda kalan kaynaklar"** notu düştü | Beklenen davranış: `removeSites` kapalıysa siteler bilerek bırakılır. Not neyin kaldığını adıyla söyler; panelden elle temizleyin (bkz. 8.1) |
+| İptal `Panel kullaniciyi sildi ama sunucuda temizlenemeyen kaynaklar KALDI` diyor | İş **yarım** kaldı (`409`). Hizmeti tamamen kaldırılmış saymayın; listedeki kaynakları panelden temizleyip WHMCS'te elle kapatın |
+| Kalıntı notu müşteride görünmüyor | Local API çağrısı reddedilmiş olabilir. `Utilities → Logs → Module Log` içinde `TerminateAccount.note_failed` kaydına bakın; notun tam metni oradadır. Access Hash alanına `admin=<whmcs yöneticisi>` ekleyin (bkz. 8.1) |
 
 Modül panel kullanıcısını **kullanıcı adıyla** bulur (`GET /api/v1/users` içinde arayarak); WHMCS
 tarafında panel kimliği (GUID) saklanmaz. Bu yüzden panelde kullanıcı adını elle değiştirmek

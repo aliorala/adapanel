@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -86,6 +88,11 @@ public sealed class CronController(
         }
 
         var task = await schedulerService.CreateTaskAsync(request, cancellationToken);
+
+        // Zamanlayıcıya YAZILAN ad (abonelik önekiyle) korunur: aşağıda kullanıcıya dönerken önek
+        // kırpılıyor, oysa kaydın konusu tam da o önekten ölçülüyor. Kırpılmış adı kullansaydık
+        // müşteri görevlerinin hepsi sessizce kiracısız kaydedilirdi.
+        var kayitliAd = task.Name;
         if (!IsAdmin && task.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
             task.Name = task.Name[prefix.Length..];
@@ -99,7 +106,7 @@ public sealed class CronController(
                 ? " [mode=server, identity=SYSTEM]"
                 : $" [mode=site:{request.SiteName}, identity={(IsLimitedRunAs(request.RunAs) ? "LOCAL SERVICE" : "SYSTEM")}]"
             : string.Empty;
-        await WriteAuditAsync("cron.created", $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}{scriptContext}", cancellationToken);
+        await WriteAuditAsync("cron.created", kayitliAd, $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}{scriptContext}");
         return Ok(ApiResponse<ScheduledTaskDto>.Ok(task, "cron.saved"));
     }
 
@@ -112,8 +119,9 @@ public sealed class CronController(
     [HttpPost("{name}/run")]
     public async Task<ActionResult<ApiResponse<object>>> RunTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.RunTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
-        await WriteAuditAsync("cron.run", $"Scheduled task '{name}' triggered manually.", cancellationToken);
+        var kapsamliAd = await ScopeNameAsync(name, cancellationToken);
+        await schedulerService.RunTaskAsync(kapsamliAd, cancellationToken);
+        await WriteAuditAsync("cron.run", kapsamliAd, $"Scheduled task '{name}' triggered manually.");
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.run_started"));
     }
 
@@ -154,7 +162,8 @@ public sealed class CronController(
         }
 
         var eklenen = await schedulerService.AddPythonToMachinePathAsync(cancellationToken);
-        await WriteAuditAsync("cron.python_path", $"Python added to machine PATH ({eklenen} folder(s)).", cancellationToken);
+        // SUNUCU GENELİ: makine PATH'i bütün kiracıların görevlerini etkiler, tek bir aboneliğe ait değil.
+        await WriteServerAuditAsync("cron.python_path", $"Python added to machine PATH ({eklenen} folder(s)).");
         return Ok(ApiResponse<object>.Ok(new { added = eklenen }, "cron.python_path_added"));
     }
 
@@ -179,49 +188,91 @@ public sealed class CronController(
     [HttpPost("{name}/stop")]
     public async Task<ActionResult<ApiResponse<StopScheduledTaskResultDto>>> StopTaskAsync(string name, CancellationToken cancellationToken)
     {
-        var sonuc = await schedulerService.StopTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
+        var kapsamliAd = await ScopeNameAsync(name, cancellationToken);
+        var sonuc = await schedulerService.StopTaskAsync(kapsamliAd, cancellationToken);
         await WriteAuditAsync(
             "cron.stopped",
-            $"Scheduled task '{name}' run stopped (killed={sonuc.KilledProcesses}, stillRunning={sonuc.StillRunning}).",
-            cancellationToken);
+            kapsamliAd,
+            $"Scheduled task '{name}' run stopped (killed={sonuc.KilledProcesses}, stillRunning={sonuc.StillRunning}).");
         return Ok(ApiResponse<StopScheduledTaskResultDto>.Ok(sonuc, sonuc.StillRunning ? "cron.stop_incomplete" : "cron.stopped"));
     }
 
     [HttpPost("{name}/enable")]
     public async Task<ActionResult<ApiResponse<object>>> EnableTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.SetTaskEnabledAsync(await ScopeNameAsync(name, cancellationToken), true, cancellationToken);
-        await WriteAuditAsync("cron.enabled", $"Scheduled task '{name}' enabled.", cancellationToken);
+        var kapsamliAd = await ScopeNameAsync(name, cancellationToken);
+        await schedulerService.SetTaskEnabledAsync(kapsamliAd, true, cancellationToken);
+        await WriteAuditAsync("cron.enabled", kapsamliAd, $"Scheduled task '{name}' enabled.");
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.enabled"));
     }
 
     [HttpPost("{name}/disable")]
     public async Task<ActionResult<ApiResponse<object>>> DisableTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.SetTaskEnabledAsync(await ScopeNameAsync(name, cancellationToken), false, cancellationToken);
-        await WriteAuditAsync("cron.disabled", $"Scheduled task '{name}' suspended.", cancellationToken);
+        var kapsamliAd = await ScopeNameAsync(name, cancellationToken);
+        await schedulerService.SetTaskEnabledAsync(kapsamliAd, false, cancellationToken);
+        await WriteAuditAsync("cron.disabled", kapsamliAd, $"Scheduled task '{name}' suspended.");
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.disabled"));
     }
 
     [HttpDelete("{name}")]
     public async Task<ActionResult<ApiResponse<object>>> DeleteTaskAsync(string name, CancellationToken cancellationToken)
     {
-        await schedulerService.DeleteTaskAsync(await ScopeNameAsync(name, cancellationToken), cancellationToken);
-        await WriteAuditAsync("cron.deleted", $"Scheduled task '{name}' deleted.", cancellationToken);
+        // Ad silmeden ÖNCE çözülür: kaydın konusu bu addan ölçülüyor ve görev silindikten sonra
+        // sunucuda ona dair hiçbir kanıt kalmaz.
+        var kapsamliAd = await ScopeNameAsync(name, cancellationToken);
+        await schedulerService.DeleteTaskAsync(kapsamliAd, cancellationToken);
+        await WriteAuditAsync("cron.deleted", kapsamliAd, $"Scheduled task '{name}' deleted.");
         return Ok(ApiResponse<object>.Ok(new { name }, "cron.deleted"));
     }
 
     private async Task<string> ScopeNameAsync(string name, CancellationToken cancellationToken) =>
         IsAdmin ? name : await GetOwnerPrefixAsync(cancellationToken) + name;
 
-    private Task WriteAuditAsync(string action, string details, CancellationToken cancellationToken) =>
-        auditService.WriteAsync(
-            action,
-            "cron",
-            details,
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
+    /// <summary>Abonelik ad alanı öneki: <c>u&lt;32 onaltılık&gt;--</c> (bkz. <see cref="GetOwnerPrefixAsync"/>).</summary>
+    private static readonly Regex SahipOneki = new(@"^u(?<id>[0-9a-fA-F]{32})--", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Görevin sahibi abonelik — GÖREV ADINDAN ÖLÇÜLÜR, çağıranın kimliğinden türetilmez.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden addan:</b> müşteri/bayi görevleri Windows Görev Zamanlayıcı'da abonelik ad alanında
+    /// yaşar (<c>u&lt;abonelikId&gt;--&lt;ad&gt;</c>) — yani sahiplik zaten kaynağın KENDİ adında
+    /// yazılıdır. Çağıranın kimliğini konu yazmak, YÖNETİCİNİN bir kiracının görevini silmesi
+    /// durumunda kaydı yöneticinin aboneliğine (yani hiçbir aboneliğe) bağlardı ve kiracı, kendi
+    /// zamanlanmış görevinin silindiğini kendi denetim ekranında HİÇ göremezdi — oysa bu kaydın var
+    /// olma sebebi tam olarak o.
+    /// </para>
+    /// <para>
+    /// <b>Önek yoksa konu BOŞ kalır:</b> öneksiz ad, yöneticinin sunucu düzeyindeki kendi görevidir
+    /// (komut/betik görevleri yalnız yöneticiye açıktır). Onu çağıran yöneticiye bağlamak,
+    /// sunucu geneli bir işi bir "abonelik kaydı" gibi göstermek olurdu.
+    /// </para>
+    /// </remarks>
+    private static Guid? TaskOwner(string? scopedName)
+    {
+        var eslesme = SahipOneki.Match(scopedName ?? string.Empty);
+
+        return eslesme.Success && Guid.TryParseExact(eslesme.Groups["id"].Value, "N", out var sahip)
+            ? sahip
+            : null;
+    }
+
+    /// <summary>Bir GÖREVE ait kayıt: konusu, görevin ad alanındaki abonelik.</summary>
+    private Task WriteAuditAsync(string action, string scopedName, string details) =>
+        auditService.AuditAsync(HttpContext, action, "cron", details, TaskOwner(scopedName));
+
+    /// <summary>
+    /// SUNUCU GENELİ kayıt — hiçbir aboneliğe ait olmayan zamanlayıcı işlemleri.
+    /// </summary>
+    /// <remarks>
+    /// Ayrı bir metot olması bilinçli: konusu olan ve olmayan kaydı tek sarmalayıcıda toplamak,
+    /// "bu kaynak kiracıya ait mi" kararını çağrı yerinden gizler ve unutulduğu an kayıt sessizce
+    /// kiracısız kalırdı (aynı ayrım DatabasesController'da da var).
+    /// </remarks>
+    private Task WriteServerAuditAsync(string action, string details) =>
+        auditService.AuditAsync(HttpContext, action, "cron:server", details);
 
     // Müşteri URL görevi yalnızca dış (genel) adresleri hedefleyebilir. SSRF koruması: sunucunun kendisi
     // (loopback), iç ağ (10/8, 172.16/12, 192.168/16), link-local ve IPv6 özel adresleri engellenir.

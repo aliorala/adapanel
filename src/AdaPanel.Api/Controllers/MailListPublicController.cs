@@ -1,4 +1,5 @@
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Mail;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +32,13 @@ namespace AdaPanel.Api.Controllers;
 /// CSRF'in koruduğu şey burada zaten yok: uç kimlik doğrulamaz, dolayısıyla "kurbanın oturumunu
 /// kullanmak" mümkün değildir.
 /// </para>
+/// <para>
+/// <b>Kimliksiz ama KİRACIYA AİT.</b> Kayıtların <c>UserId</c>'si yapısal olarak boştur (aktör
+/// yok) — bu yüzden kaydın kiracının görünümüne düşmesinin TEK yolu konusudur. Konu da boş
+/// bırakılsaydı, <c>AuditLogQueryEngine.ApplyVisibility</c>'nin iki koşulu da elerdi ve dağıtım
+/// listesinin sahibi, kendi listesinden birinin çıkarıldığını kendi denetim ekranında HİÇ
+/// göremezdi. Konu, listenin ALAN ADINDAN ölçülür (bkz. <see cref="ListOwnerAsync"/>).
+/// </para>
 /// </remarks>
 [ApiController]
 [AllowAnonymous]
@@ -38,6 +46,8 @@ namespace AdaPanel.Api.Controllers;
 [Route("api/v1/public/mail-lists")]
 public sealed class MailListPublicController(
     MailListUnsubscribeService unsubscribeService,
+    ICustomerScopeService customerScopes,
+    IIisSiteService iisSiteService,
     IAuditService auditService,
     ILogger<MailListPublicController> logger) : ControllerBase
 {
@@ -75,12 +85,23 @@ public sealed class MailListPublicController(
 
         // Kimliksiz uçtan gelen HER istek kayda geçer (userId yok, IP var). İstenen ADRES kayda
         // GİRMEZ — kayıt, korumaya çalıştığımız adres listesinin ikinci kopyası olmamalı.
-        await auditService.WriteAsync(
+        //
+        // DERİN SAHİPLİK ARAMASI YALNIZ `sent` DOĞRUYKEN: bu uçta `list` alanı tamamen İSTEMCİNİN
+        // yazdığı serbest metindir ve uç kimliksiz + oran sınırsızdır (ölçüldü: küresel sınırlayıcı
+        // yalnız Authorization başlığı taşıyan istekleri bölümler, bu yol "no limiter"a düşer).
+        // Alan adı sahipliğinin ikinci adımı IIS'teki BÜTÜN siteleri gezer; onu her anonim POST'ta
+        // çalıştırmak, tek satırlık bir istekle sunucuya iş yaptıran bir yükseltme kaldıracı olurdu.
+        // `sent` doğruysa liste ve abone posta sunucusuna sorularak DOĞRULANMIŞTIR ve o yol ayrıca
+        // 15 dakikalık bekleme süresiyle sınırlıdır — yani derin arama ancak gerçek bir liste için
+        // ve seyrek çalışır. `sent` yanlışken ucuz adım (alan adı = site adı) yine denenir; sahibi
+        // çözülemezse konu BOŞ kalır, tahmin edilmez.
+        await auditService.WriteForSubscriptionAsync(
             "mail.list.unsubscribe_requested",
             SafeResource(list),
             $"Anonymous unsubscribe requested (confirmation sent: {sent}).",
             userId: null,
-            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
+            await ListOwnerAsync(list, derinArama: sent, cancellationToken),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
         return Html(MailListUnsubscribePages.RequestAccepted());
@@ -112,16 +133,46 @@ public sealed class MailListPublicController(
     {
         var result = await unsubscribeService.ConfirmAsync(token ?? string.Empty, cancellationToken);
 
-        await auditService.WriteAsync(
+        // Burada derin arama KOŞULSUZ açık, çünkü liste adı istemciden GELMİYOR: panelin kendi
+        // deposundan, harcanan belirtecin kaydından okunuyor. Belirteç 256 bit rastgeledir, yani
+        // bu yolu tetiklemek için önce o adrese giden postaya erişmiş olmak gerekir. Geçersiz
+        // belirteçte liste boş döner ve çözüm zaten ilk adımda durur.
+        await auditService.WriteForSubscriptionAsync(
             "mail.list.unsubscribe_confirmed",
             SafeResource(result.List),
             $"Anonymous unsubscribe confirmation (removed: {result.Removed}).",
             userId: null,
-            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
+            await ListOwnerAsync(result.List, derinArama: true, cancellationToken),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
         return Html(MailListUnsubscribePages.Result(result.Removed, result.List));
     }
+
+    /// <summary>
+    /// Dağıtım listesinin sahibi abonelik — liste ADRESİNİN alan adından ÖLÇÜLÜR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Liste adresi <c>duyuru@ornek.com</c> biçimindedir; sahiplik, panelin posta alan adı
+    /// sahipliğiyle AYNI kuraldan (<see cref="AuditSubject.MailAddressOwnerAsync"/>) türetilir —
+    /// burada ayrı bir kural yazmak, kiracının erişebildiği bir alan adındaki işlemin başka bir
+    /// sahiple etiketlenmesi demek olurdu. Aynı alan adını iki abonelik sahipleniyorsa ya da
+    /// sahiplik okunamıyorsa sonuç <c>null</c>'dır: yanlış kiracıya bağlamak, hiç bağlamamaktan
+    /// kötüdür (komşu, başkasının kaydını görürdü).
+    /// </para>
+    /// <param name="derinArama">
+    /// IIS bağlamalarına da bakılsın mı. <c>false</c> iken yalnız "alan adı = site adı" durumu
+    /// çözülür; gerekçesi çağrı yerlerinde yazılı (kimliksiz uçta iş yükü kaldıracı).
+    /// </param>
+    /// </remarks>
+    private Task<Guid?> ListOwnerAsync(string? listAddress, bool derinArama, CancellationToken cancellationToken) =>
+        AuditSubject.MailAddressOwnerAsync(
+            customerScopes,
+            derinArama ? iisSiteService : null,
+            listAddress,
+            fallbackDomain: null,
+            cancellationToken);
 
     private ContentResult Html(string html) => new()
     {

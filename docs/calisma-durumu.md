@@ -58,14 +58,19 @@ bağlanmaya devam eder — üstelik yıkıcı `/MIR` aynalamasından SONRA.
 **Şu an ölçülüyor ve loglanıyor ama kullanıcıya SÖYLENMİYOR.** Gerçek düzeltme tasarım
 değişikliği ister: `ReplaceDefine`'ın "değiştiremedim" diyen bir sürümü + kullanıcıya bildirim.
 
-### 3. Denetim kaydında 5 uç kiracıya bağlanamadı
-Billing, Cron, MailListPublic (×2), SiteHostingSettings — kiracıya ait ama paylaşılan
-sarmalayıcıları site/abonelik kimliğini almıyor. `AuditCoverageTests` içinde
-`KiraciBagiSonrakiTurda` listesinde dürüst borç olarak duruyor.
+### ~~3. Denetim kaydında 5 uç kiracıya bağlanamadı~~ — KAPANDI
+`KiraciBagiSonrakiTurda` listesi **boş**. Sahiplik her yerde ÖLÇÜLÜYOR: barındırma ayarlarında
+site sahibi, cron'da görev adının abonelik öneki (`u<id>--`), faturalamada panelin eşleştirdiği
+hesap, posta listesinde liste adresinin alan adı. Kimliksiz abonelikten çıkma ucu kiracıya
+bağlandı — orada `UserId` yapısal olarak boş olduğu için konu, kaydın kiracıya ulaşmasının TEK
+yoluydu. İki kayıt gerekçesiyle `KiraciyaAitOlmayanlar`'a taşındı (panel geneli faturalama
+ayarı/raporu, makine PATH'i).
 
-### 4. WHMCS modülü kalıntı listesini WHMCS notuna yazmıyor
-`removeSites=false` yolunda panel 200 + `success:true` dönüyor (siteler bilerek bırakılmış) ve
-modül gövdeyi okumuyor. Panelde kalıntılar görünüyor, WHMCS tarafında görünmüyor.
+### ~~4. WHMCS modülü kalıntı listesini WHMCS notuna yazmıyor~~ — KAPANDI
+Modül artık **her iki yolda da** gövdeyi okuyor (200 + `success:true` ve 409) ve kalıntıları
+`AddClientNote` ile müşteri notuna yazıyor; not yazılamazsa metin modül günlüğüne düşüyor.
+Sözleşme `developers.whmcs.com`'dan doğrulandı. **Gerçek WHMCS'te hiç çalıştırılmadı** —
+PHP tarafının ölçümü `php integrations/whmcs/tests/leftover-note.test.php`.
 
 ### 5. `useRunningTask` sayfa yenilemeye dayanmıyor
 Yalnız antivirüs taraması sunucu tarafı duruma kavuştu. Diğer uzun işler (yedek, göç, kurulum)

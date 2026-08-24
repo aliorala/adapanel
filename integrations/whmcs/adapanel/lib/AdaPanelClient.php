@@ -55,11 +55,25 @@ class AdaPanelApiException extends Exception
     /** @var int HTTP durum kodu. */
     public $statusCode = 0;
 
-    public function __construct($message, $messageKey = '', $statusCode = 0)
+    /**
+     * Panelin dondurdugu COZULMUS zarfin tamami (`{success, data, message, code, details}`).
+     *
+     * NEDEN VAR: panel hata yolunda da `data` doldurabiliyor ve o veri bazen hatanin KENDISINDEN
+     * daha degerli. Somut ornek: kullanici silme yarim kaldiginda uc 409 doner ve `data.leftovers`
+     * icinde sunucuda KALAN kaynaklari (site, veritabani, klasor) adiyla listeler. Istisna yalniz
+     * metin tasisaydi o yapisal liste catch blogunda kaybolurdu -- yani modul, yoneticiye "neyin
+     * kaldigini" yazamazdi. Basari yolunda ise cagiran zarfi zaten dogrudan aliyor.
+     *
+     * @var array
+     */
+    public $response = array();
+
+    public function __construct($message, $messageKey = '', $statusCode = 0, array $response = array())
     {
         parent::__construct($message);
         $this->messageKey = $messageKey;
         $this->statusCode = (int) $statusCode;
+        $this->response = $response;
     }
 }
 
@@ -127,6 +141,7 @@ class AdaPanelClient
         //   panel                                 (yalniz gizli giris yolu)
         //   entry=panel;insecure=1                (anahtar=deger, noktali virgulle ayrilmis)
         //   entry=panel;token=adap_xxx            (panel API anahtariyla kimlik)
+        //   entry=panel;admin=whmcsadmin          (WHMCS Local API cagrilarinin kosacagi admin)
         $secenekler = self::parseAccessHash((string) ($params['serveraccesshash'] ?? ''));
 
         $this->apiToken = $secenekler['token'];
@@ -143,11 +158,11 @@ class AdaPanelClient
     /**
      * "Access Hash" alanini cozer.
      *
-     * @return array{entry: string, insecure: bool, token: string}
+     * @return array{entry: string, insecure: bool, token: string, admin: string}
      */
-    private static function parseAccessHash($raw)
+    public static function parseAccessHash($raw)
     {
-        $sonuc = array('entry' => '', 'insecure' => false, 'token' => '');
+        $sonuc = array('entry' => '', 'insecure' => false, 'token' => '', 'admin' => '');
         $raw = trim($raw);
 
         if ($raw === '') {
@@ -176,6 +191,13 @@ class AdaPanelClient
                 $sonuc['insecure'] = in_array(strtolower($deger), array('1', 'true', 'yes', 'evet'), true);
             } elseif ($anahtar === 'token') {
                 $sonuc['token'] = $deger;
+            } elseif ($anahtar === 'admin') {
+                // WHMCS Local API'nin ucuncu parametresi (developers.whmcs.com/api/internal-api:
+                // `localAPI($command, $values, $adminuser)`). Belge bu parametrenin bos
+                // birakilabilecegini SOYLEMIYOR, o yuzden tahmin etmiyoruz: yonetici adi buraya
+                // yazilir. Bos birakilirsa modul yine dener ama sonucu OLCER ve basarisizsa
+                // not metnini modul gunlugune yazar (bkz. adapanel_addClientNote).
+                $sonuc['admin'] = $deger;
             }
         }
 
@@ -387,7 +409,10 @@ class AdaPanelClient
             throw new AdaPanelApiException(
                 self::describe($key, $status) . ($details !== '' ? ' (' . $details . ')' : ''),
                 $key,
-                $status
+                $status,
+                // Cozulmus zarf OLDUGU GIBI tasinir: hata yolundaki `data` (ornegin silme
+                // kalintilari) catch blogunda kaybolmasin.
+                $decoded
             );
         }
 
@@ -415,6 +440,8 @@ class AdaPanelClient
             'users.password_too_short' => 'Parola en az 12 karakter olmali.',
             'auth.user_inactive' => 'Panel hesabi PASIF; pasif hesap icin giris baglantisi uretilmez. '
                 . 'Once hizmeti aktiflestirin.',
+            'users.delete.incomplete' => 'Panel kullaniciyi sildi ama sunucuda temizlenemeyen kaynaklar KALDI. '
+                . 'Hizmeti tamamen kaldirilmis saymayin; kalinti listesi asagida ve musteri notlarina yazildi.',
             'users.duplicate_username' => 'Panelde ayni kullanici adi zaten var.',
             'users.duplicate_email' => 'Panelde ayni e-posta adresi zaten var.',
             'validation.failed' => 'Panel istegi dogrulayamadi (alan kurallari: parola en az 12 karakter, '

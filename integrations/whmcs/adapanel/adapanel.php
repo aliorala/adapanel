@@ -29,6 +29,16 @@
  * UsageUpdate (disk/trafik kullanimi) ve TerminateAccount'un silme oncesi DOGRULAMASI icin
  * panele `BillingController` eklendi; ikisi de panelde faturalama entegrasyonunun ACIK olmasini
  * ister (Panel -> Faturalama).
+ *
+ * KULLANILAN WHMCS SOZLESMELERI (hepsi developers.whmcs.com'dan dogrulandi, hafizadan yazilmadi):
+ *   localAPI($command, $values, $adminuser)      -> /api/internal-api/
+ *   AddClientNote {userid, notes, sticky}        -> /api-reference/addclientnote/
+ *   $params['userid'] / ['serviceid']            -> /provisioning-modules/module-parameters/
+ *   logModuleCall($module,$action,$req,$res,$processed,$replaceVars)
+ *                                                -> /provisioning-modules/module-logging/
+ *
+ * PHP tarafinin DAVRANIS testi: `php integrations/whmcs/tests/leftover-note.test.php`.
+ * Bu depoda gercek bir WHMCS kurulumu YOK; modul uctan uca hic calistirilmadi.
  */
 
 if (!defined('WHMCS')) {
@@ -209,6 +219,11 @@ function adapanel_UnsuspendAccount(array $params)
  * birlikte YOK EDILIR (UsersController.DeleteUserAsync belgesi) ve YALNIZ yonetici cagirabilir.
  * Varsayilan `false` birakildi: WHMCS'te yanlislikla iptal edilen bir hizmet, geri alinamaz bir veri
  * kaybina donusmemeli. Sunucu tanimindaki "Siteleri de sil" secenegi ile acilir.
+ *
+ * SUNUCUDA KALANLAR ARTIK WHMCS'E YAZILIYOR. Varsayilan yolda siteler BILEREK birakildigi icin
+ * panel 200 + success:true doner; "her sey silindi" ANLAMINA GELMEZ. Panel ne kaldigini
+ * `data.leftovers` icinde adiyla sayar ve modul bunu musteri notuna yazar. Aksi halde yonetici
+ * hizmeti iptal edip sunucuda kalanlari HIC ogrenemezdi (bkz. adapanel_recordLeftovers).
  */
 function adapanel_TerminateAccount(array $params)
 {
@@ -247,12 +262,160 @@ function adapanel_TerminateAccount(array $params)
         // Kimlik PANELIN DONDURDUGU degerdir; modul ayrica arama yapmaz. Ikinci bir arama,
         // denetimin onayladigi hesaptan BASKA birini bulma ihtimali demek olurdu.
         $removeSites = adapanel_bool($params, 'Iptalde siteleri de sil') ? 'true' : 'false';
-        $client->delete('/api/v1/users/' . rawurlencode($userId) . '?removeSites=' . $removeSites);
+
+        // GOVDE HER IKI YOLDA DA OKUNUR.
+        //
+        // DUZELTILEN ARIZA: modul yalnizca "istek patladi mi" sorusuna bakiyordu. Varsayilan
+        // `removeSites=false` yolunda panel 200 + success:true doner (siteler BILEREK birakilmistir)
+        // ama yanit govdesinde `data.leftovers` ile sunucuda ne kaldigini ADIYLA sayar. Modul
+        // govdeyi okumadigi icin o liste WHMCS tarafinda HIC gorunmuyordu: yonetici hizmeti iptal
+        // ediyor, sunucuda kalan siteleri/veritabanlarini ogrenemiyordu. Kalintilar artik musteri
+        // notuna yaziliyor.
+        try {
+            $silme = $client->delete('/api/v1/users/' . rawurlencode($userId) . '?removeSites=' . $removeSites);
+        } catch (AdaPanelApiException $exception) {
+            // 409 users.delete.incomplete: kullanici kaydi silinmis olabilir ama sunucuda BASARISIZ
+            // kalintilar var. Yapisal liste hata zarfinda gelir; not oraya da yazilir, cunku bu yol
+            // tam olarak "yarim is" yoludur ve unutulmasi en pahali olan yoldur.
+            adapanel_recordLeftovers($params, $exception->response, $decision);
+
+            return $exception->getMessage();
+        }
+
+        adapanel_recordLeftovers($params, $silme, $decision);
 
         return 'success';
     } catch (Exception $exception) {
         return $exception->getMessage();
     }
+}
+
+/**
+ * Panelin silme yanitindaki KALINTILARI WHMCS'e not olarak yazar.
+ *
+ * Kalinti yoksa hicbir sey yapmaz: her iptalde not birakmak, notlari gurultuye bogup gercek
+ * uyarilari gorunmez kilardi -- denetim kaydinda oldugu gibi, degeri seyrekliginde.
+ *
+ * @param array $envelope Panelin cozulmus ApiResponse zarfi (basari ya da 409 hata zarfi).
+ * @param array $decision `terminate-check` karari (hesap adi/kimligi notta yazili olsun diye).
+ */
+function adapanel_recordLeftovers(array $params, $envelope, array $decision)
+{
+    $data = isset($envelope['data']) && is_array($envelope['data']) ? $envelope['data'] : array();
+    $leftovers = isset($data['leftovers']) && is_array($data['leftovers']) ? $data['leftovers'] : array();
+
+    if (count($leftovers) === 0) {
+        return;
+    }
+
+    $not = adapanel_leftoverNote($params, $data, $leftovers, $decision);
+
+    // MODUL GUNLUGU HER ZAMAN yazilir, not yazilabilse bile: not silinebilir ya da yazilamayabilir,
+    // gunluk ise kalicidir ve "hizmet iptal edilirken sunucuda ne kaldi" sorusunun ikinci adresidir.
+    // Imza: logModuleCall($module, $action, $requestString, $responseData, $processedData, $replaceVars)
+    // (developers.whmcs.com/provisioning-modules/module-logging).
+    logModuleCall(
+        'adapanel',
+        'TerminateAccount.leftovers',
+        array('username' => (string) $params['username'], 'serviceid' => (int) ($params['serviceid'] ?? 0)),
+        $data,
+        $not
+    );
+
+    adapanel_addClientNote($params, $not);
+}
+
+/**
+ * Kalinti listesini WHMCS yoneticisinin okuyabilecegi bir nota cevirir.
+ *
+ * BILEREK BIRAKILANLAR DA yazilir ama "[bilerek]" diye isaretlenir: panelin kendi `details` metni
+ * de ayni ayrimi yapiyor. Yonetici neyin ariza, neyin karar oldugunu ayirt edebilmeli -- ikisini
+ * ayni torbaya koymak, "siteleri bilerek biraktik" satirini bir hata sanip aramaya yol acardi.
+ */
+function adapanel_leftoverNote(array $params, array $data, array $leftovers, array $decision)
+{
+    $satirlar = array();
+    foreach ($leftovers as $leftover) {
+        if (!is_array($leftover)) {
+            continue;
+        }
+
+        $site = isset($leftover['siteName']) ? trim((string) $leftover['siteName']) : '';
+        $satirlar[] = '- '
+            . ($site !== '' ? $site . ' > ' : '')
+            . (isset($leftover['kind']) ? (string) $leftover['kind'] : 'other') . ': '
+            . (isset($leftover['name']) ? (string) $leftover['name'] : '?')
+            . ' -- ' . (isset($leftover['reason']) ? (string) $leftover['reason'] : '')
+            . (empty($leftover['deliberate']) ? ' [BASARISIZ]' : ' [bilerek birakildi]');
+    }
+
+    $tamamlandi = array_key_exists('completed', $data) ? !empty($data['completed']) : true;
+    $silinen = isset($data['deletedSites']) && is_array($data['deletedSites']) ? $data['deletedSites'] : array();
+
+    return '[AdaPanel] Hizmet iptalinde SUNUCUDA KALAN kaynaklar' . "\n"
+        . 'Panel hesabi: ' . (isset($decision['userName']) ? (string) $decision['userName'] : (string) $params['username'])
+        . ' | Hizmet no: ' . (int) ($params['serviceid'] ?? 0)
+        . ' | Alan adi: ' . trim((string) $params['domain']) . "\n"
+        . 'Siteler de silinsin mi: ' . (empty($data['siteRemovalRequested']) ? 'HAYIR (urun ayari)' : 'evet') . "\n"
+        . 'Silinen siteler: ' . (count($silinen) > 0 ? implode(', ', $silinen) : 'yok') . "\n"
+        . 'Panel isi eksiksiz tamamladi mi: ' . ($tamamlandi ? 'evet' : 'HAYIR') . "\n\n"
+        . implode("\n", $satirlar) . "\n\n"
+        . 'Bu kaynaklar sunucuda DURUYOR. Hizmeti tamamen kaldirilmis saymadan once panelden elle temizleyin.';
+}
+
+/**
+ * Notu WHMCS'e yazar.
+ *
+ * NEDEN `AddClientNote`, `UpdateClientProduct` DEGIL: ikisi de belgeli (developers.whmcs.com/
+ * api-reference/addclientnote ve /updateclientproduct) ama `UpdateClientProduct`'in `notes` alani
+ * hizmetin mevcut yonetici notunun UZERINE YAZAR -- yani baska birinin yazdigi notu sessizce yok
+ * ederdi. `AddClientNote` yeni bir kayit EKLER, hicbir seyi silmez; `sticky` de notu musterinin
+ * hesabinda ve acilan biletlerde gosterir, yani iptali yapan kisi gormemezlik edemez.
+ *
+ * `localAPI($command, $values, $adminuser)` imzasi ayni belgeden. Ucuncu parametrenin bos
+ * birakilabilecegi HICBIR YERDE yazmiyor, o yuzden varsayilmiyor: yonetici adi sunucu tanimindaki
+ * Access Hash alanina `admin=...` ile konur. Yoksa cagri yine denenir ama SONUCU OLCULUR ve
+ * basarisizsa not metni modul gunlugune dusurulur -- sessizce kaybolmaz.
+ *
+ * @return bool Not gercekten yazildi mi.
+ */
+function adapanel_addClientNote(array $params, $not)
+{
+    $clientId = (int) ($params['userid'] ?? 0);
+
+    if ($clientId <= 0 || !function_exists('localAPI')) {
+        logModuleCall('adapanel', 'TerminateAccount.note_skipped', $clientId, 'localAPI ya da musteri kimligi yok', $not);
+
+        return false;
+    }
+
+    $secenekler = AdaPanelClient::parseAccessHash((string) ($params['serveraccesshash'] ?? ''));
+
+    $sonuc = localAPI(
+        'AddClientNote',
+        array(
+            'userid' => $clientId,
+            'notes' => $not,
+            'sticky' => true,
+        ),
+        $secenekler['admin']
+    );
+
+    // SONUC OLCULUR. "Cagirdim, oldu saydim" bu depodaki en pahali ariza sinifidir; yazilamayan
+    // not, yazilmamis nottan daha kotudur cunku yazildigi sanilir.
+    if (!is_array($sonuc) || !isset($sonuc['result']) || $sonuc['result'] !== 'success') {
+        logModuleCall(
+            'adapanel',
+            'TerminateAccount.note_failed',
+            array('userid' => $clientId, 'admin' => $secenekler['admin']),
+            $sonuc,
+            'Kalinti notu WHMCS\'e YAZILAMADI; metin burada: ' . "\n" . $not
+        );
+
+        return false;
+    }
+
+    return true;
 }
 
 /**

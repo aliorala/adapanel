@@ -1,8 +1,8 @@
-using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -39,6 +39,7 @@ public sealed class SiteHostingSettingsController(
         // HTTPS'e çevirir. "Kim, ne zaman açtı" sorusu cevapsız kalmamalı.
         await WriteAuditAsync(
             "sites.hosting_settings.updated",
+            siteName,
             $"Hosting settings for '{siteName}' were updated "
             + $"(custom error pages: {settings.CustomErrorPages.Length}, MIME maps: {settings.MimeTypes.Length}, "
             + $"HSTS: {(settings.HstsEnabled ? $"on/max-age={settings.HstsMaxAgeSeconds}" : "off")}).",
@@ -51,7 +52,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await service.RunComposerInstallAsync(siteName, cancellationToken);
-        await WriteAuditAsync("sites.composer.install", $"composer install was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
+        await WriteAuditAsync("sites.composer.install", siteName, $"composer install was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(result, "composer.completed"));
     }
 
@@ -66,7 +67,7 @@ public sealed class SiteHostingSettingsController(
         var result = await service.RunComposerCommandAsync(siteName, request.Command, cancellationToken);
         // ÇALIŞTIRILAN KOMUT kayda girer: yalnız çıkış kodunu yazmak, olay sonrası "sitede ne
         // yapıldı" sorusunu cevapsız bırakır (aynı gerekçe TerminalController'da da geçerli).
-        await WriteAuditAsync("sites.composer.command", $"composer '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
+        await WriteAuditAsync("sites.composer.command", siteName, $"composer '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(result, "composer.completed"));
     }
 
@@ -79,7 +80,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await service.RunArtisanCommandAsync(siteName, request.Command, cancellationToken);
-        await WriteAuditAsync("sites.artisan.command", $"artisan '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
+        await WriteAuditAsync("sites.artisan.command", siteName, $"artisan '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(result, "artisan.completed"));
     }
 
@@ -92,7 +93,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await service.RunNodeCommandAsync(siteName, request.Command, cancellationToken);
-        await WriteAuditAsync("sites.node.command", $"npm '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
+        await WriteAuditAsync("sites.node.command", siteName, $"npm '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(result, "node.completed"));
     }
 
@@ -105,7 +106,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var result = await service.RunWpCliCommandAsync(siteName, request.Command, cancellationToken);
-        await WriteAuditAsync("sites.wpcli.command", $"wp '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
+        await WriteAuditAsync("sites.wpcli.command", siteName, $"wp '{request.Command}' was run for '{siteName}' (exit code {result.ExitCode}).", cancellationToken);
         return Ok(ApiResponse<ComposerRunResultDto>.Ok(result, "wpcli.completed"));
     }
 
@@ -120,6 +121,7 @@ public sealed class SiteHostingSettingsController(
         var result = await service.ImportSiteArchiveAsync(siteName, request.ArchiveUrl, request.CleanFirst, cancellationToken);
         await WriteAuditAsync(
             "sites.archive.imported",
+            siteName,
             $"An archive was imported into '{siteName}' ({result.FilesCopied} files, clean first: {request.CleanFirst}).",
             cancellationToken);
         return Ok(ApiResponse<SiteImportResultDto>.Ok(result, "migration.completed"));
@@ -138,6 +140,7 @@ public sealed class SiteHostingSettingsController(
         // İstek nesnesi uzak sunucunun PAROLASINI taşır; kayda yalnız protokol/host ve sonuç girer.
         await WriteAuditAsync(
             "sites.files.migrated",
+            siteName,
             $"Files were pulled into '{siteName}' over {result.Protocol} from '{request.Host}' ({result.FilesDownloaded} files).",
             cancellationToken);
         return Ok(ApiResponse<RemoteFileMigrationResult>.Ok(result, "migration.completed"));
@@ -156,7 +159,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var status = await service.StartQueueWorkerAsync(siteName, cancellationToken);
-        await WriteAuditAsync("sites.queue.started", $"The queue worker for '{siteName}' was started (task '{status.TaskName}').", cancellationToken);
+        await WriteAuditAsync("sites.queue.started", siteName, $"The queue worker for '{siteName}' was started (task '{status.TaskName}').", cancellationToken);
         return Ok(ApiResponse<QueueWorkerStatusDto>.Ok(status, "queue.started"));
     }
 
@@ -165,7 +168,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var status = await service.StopQueueWorkerAsync(siteName, cancellationToken);
-        await WriteAuditAsync("sites.queue.stopped", $"The queue worker for '{siteName}' was stopped (task '{status.TaskName}').", cancellationToken);
+        await WriteAuditAsync("sites.queue.stopped", siteName, $"The queue worker for '{siteName}' was stopped (task '{status.TaskName}').", cancellationToken);
         return Ok(ApiResponse<QueueWorkerStatusDto>.Ok(status, "queue.stopped"));
     }
 
@@ -182,7 +185,7 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var status = await service.StartLaravelSchedulerAsync(siteName, cancellationToken);
-        await WriteAuditAsync("sites.scheduler.started", $"The Laravel scheduler for '{siteName}' was started (task '{status.TaskName}').", cancellationToken);
+        await WriteAuditAsync("sites.scheduler.started", siteName, $"The Laravel scheduler for '{siteName}' was started (task '{status.TaskName}').", cancellationToken);
         return Ok(ApiResponse<QueueWorkerStatusDto>.Ok(status, "scheduler.started"));
     }
 
@@ -191,19 +194,39 @@ public sealed class SiteHostingSettingsController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var status = await service.StopLaravelSchedulerAsync(siteName, cancellationToken);
-        await WriteAuditAsync("sites.scheduler.stopped", $"The Laravel scheduler for '{siteName}' was stopped (task '{status.TaskName}').", cancellationToken);
+        await WriteAuditAsync("sites.scheduler.stopped", siteName, $"The Laravel scheduler for '{siteName}' was stopped (task '{status.TaskName}').", cancellationToken);
         return Ok(ApiResponse<QueueWorkerStatusDto>.Ok(status, "scheduler.stopped"));
     }
 
-    // Komşu denetleyicilerle (AspController, PhpController) AYNI kalıp: kim / nereden / neye / ne yaptı.
-    private Task WriteAuditAsync(string action, string description, CancellationToken cancellationToken)
+    /// <summary>
+    /// Komşu denetleyicilerle (AspController, PhpController) AYNI kalıp: kim / nereden / neye / ne
+    /// yaptı — ve <b>kimin</b> sitesinde.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden site adını ZORUNLU alıyor:</b> bu denetleyicinin her ucu bir SİTE üzerinde çalışır
+    /// (yol şablonu <c>sites/{siteName}/hosting-settings</c>) ve site kiracıya aittir. Sarmalayıcı
+    /// eskiden yalnız açıklama metni alıyordu, dolayısıyla kaydın konusu boş kalıyordu: bir
+    /// yöneticinin ya da bayinin kiracının sitesinde HSTS açması, Composer komutu çalıştırması,
+    /// dosya göçü başlatması kiracının kendi denetim ekranında HİÇ görünmüyordu (kaydın
+    /// <c>UserId</c>'si yönetici, konusu boş → <c>ApplyVisibility</c> iki koşulda da eleme yapar).
+    /// Bu uçlar panelin kiracıya en çok dokunan uçlarındandır; "benim siteme kim dokundu" sorusu
+    /// tam da burada cevapsız kalıyordu.
+    /// </para>
+    /// <para>
+    /// <b>Sahip ÖLÇÜLÜR, tahmin edilmez:</b> çağıranın kimliği KULLANILMAZ. Yöneticinin kendi
+    /// sitesi hiçbir aboneliğe atanmamıştır ve <see cref="AuditSubject.SiteOwnerAsync"/> orada
+    /// <c>null</c> döner; çağıranın kimliğini konu yazmak, panelin kendi sitesindeki bir değişikliği
+    /// bir "abonelik kaydı" gibi göstermek olurdu.
+    /// </para>
+    /// </remarks>
+    private async Task WriteAuditAsync(string action, string siteName, string description, CancellationToken cancellationToken)
     {
-        return auditService.WriteAsync(
+        await auditService.AuditAsync(
+            HttpContext,
             action,
             "sites",
             description,
-            User.GetRequiredUserId(),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
+            await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken));
     }
 }
