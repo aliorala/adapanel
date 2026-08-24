@@ -37,7 +37,23 @@ public static class PathContainment
             // klasöre işaret edebilir. Aynı karar zamanlanmış görev yolları için de verilmişti
             // (Scheduler/ScriptTaskPlanner.NormalizePath) — orası kendi bağlamına özel kaldığı
             // için birleştirilmedi, ama kural aynıdır.
+#if NET48
+            // BU DOSYA IKI HEDEFTE DERLENIYOR. Panel net8.0-windows'tur; AdaPanel.HtaccessModule
+            // ise net48 OLMAK ZORUNDA (System.Web/IHttpModule yalniz orada var) ve bu dosyayi
+            // KAYNAK OLARAK derliyor. Path.IsPathFullyQualified .NET Core 2.1 ile geldi, net48'de
+            // YOK.
+            //
+            // NEDEN BURADA `#if`, motorun geri kalaninda DEGIL: bu sinif panelin ORTAK guvenlik
+            // yardimcisidir -- silme, belge koku, FTP ana dizini ve zamanlanmis betik yollari buna
+            // dayanir. Panelin CALISTIRDIGI kodu tek satir bile degistirmemek, "tek yazim" kuralindan
+            // daha agir basti: net8 tarafi bugunku BCL cagrisini AYNEN yapmaya devam ediyor.
+            //
+            // Karsiligin ayni olmasi VARSAYILMIYOR: PortableIsPathFullyQualified, net8 testlerinde
+            // BCL uyesiyle yan yana kosturulup denetleniyor (PathContainmentTests).
+            if (!PortableIsPathFullyQualified(expanded))
+#else
             if (!Path.IsPathFullyQualified(expanded))
+#endif
             {
                 return null;
             }
@@ -50,6 +66,58 @@ public static class PathContainment
             return null;
         }
     }
+
+    /// <summary>
+    /// <see cref="Path.IsPathFullyQualified(string)"/>'in hedeften bağımsız karşılığı (Windows).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bu üye ÖLÜ KOD DEĞİL:</b> net48 derlemesinde (IIS <c>.htaccess</c> modülü) çağrılan
+    /// gerçek uygulamadır; net8 derlemesinde ise BCL üyesiyle EŞDEĞERLİĞİNİ ölçen testin ölçtüğü
+    /// şeydir. <b>Panel kodu bunu ÇAĞIRMAMALI</b> — her yol <see cref="Normalize"/> üzerinden
+    /// geçmeli, çünkü asıl güvenlik kararı orada verilen normalleştirmedir. Görünürlüğü yalnızca
+    /// eşdeğerlik testinin okuyabilmesi için <c>public</c>: <c>AdaPanel.Core</c>'da
+    /// <c>InternalsVisibleTo</c> yok ve ölçülmeyen bir karşılık, ölçülmemiş bir güvenlik
+    /// kontrolüdür.
+    /// </para>
+    /// <para>
+    /// Mantık .NET'in kendi <c>PathInternal.IsPartiallyQualified</c> uygulamasının tersidir ve
+    /// TAHMİN DEĞİL: "tam nitelikli" demek, yolun neye çözüleceğinin o anki çalışma dizininden ve
+    /// sürücü başına tutulan geçerli dizinden BAĞIMSIZ olması demektir. Üç durum vardır:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><c>\\sunucu\pay</c>, <c>//sunucu/pay</c>, <c>\\?\C:\x</c> — ayırıcıyla başlayan UNC ya
+    /// da aygıt yolu: tam nitelikli.</item>
+    /// <item><c>C:\x</c>, <c>C:/x</c> — sürücü harfi + iki nokta + ayırıcı: tam nitelikli.</item>
+    /// <item><c>C:x</c> (sürücüye GÖRELİ — o sürücünün geçerli dizinine bağlıdır), <c>\x</c>
+    /// (kökten ama SÜRÜCÜSÜZ), <c>x\y</c>: tam nitelikli DEĞİL.</item>
+    /// </list>
+    /// </remarks>
+    public static bool PortableIsPathFullyQualified(string path)
+    {
+        if (path is null || path.Length < 2)
+        {
+            // "" ve "C" gibi girdiler; "C:" bile (uzunluk 2) sürücüye görelidir ve aşağıda elenir.
+            return false;
+        }
+
+        if (IsDirectorySeparator(path[0]))
+        {
+            // "\\x" (UNC) ve "\\?\x" (aygıt) tam niteliklidir; tek "\x" DEĞİLDİR.
+            return path[1] == '?' || IsDirectorySeparator(path[1]);
+        }
+
+        return path.Length >= 3
+               && path[1] == Path.VolumeSeparatorChar
+               && IsDirectorySeparator(path[2])
+               && IsValidDriveChar(path[0]);
+    }
+
+    private static bool IsDirectorySeparator(char value) =>
+        value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
+
+    private static bool IsValidDriveChar(char value) =>
+        (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
 
     /// <summary>
     /// <paramref name="candidate"/> gerçekten <paramref name="root"/> klasörünün ALTINDA mı?

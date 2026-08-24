@@ -21,7 +21,12 @@ namespace AdaPanel.Infrastructure.Htaccess;
 /// </remarks>
 internal static class HtaccessModules
 {
-    public static IReadOnlySet<string> Default { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    // TIP `IReadOnlySet<>` DEGIL `HashSet<>`: IReadOnlySet<T> net5+ ile geldi, net48'de YOK ve
+    // polyfill edilemez (HashSet<T> orada o arayuzu UYGULAMIYOR -- arayuzu kendimiz tanimlasak da
+    // atama derlenmezdi). Motorun kaynaklari IIS modulunde de derlendigi icin tek yazim gerekiyordu.
+    // Kaybedilen sey yalniz DERLEME ZAMANI salt-okunurlugu; tek tuketici
+    // HtaccessConfigurationBuilder'daki `Contains` cagrisidir ve O(1) davranis AYNI kaldi.
+    public static HashSet<string> Default { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "core.c",
         "mod_rewrite.c",
@@ -63,7 +68,8 @@ internal sealed class HtaccessScope
 
     public string Method { get; init; } = "GET";
 
-    public IReadOnlySet<string> LoadedModules { get; init; } = HtaccessModules.Default;
+    // Bkz. HtaccessModules.Default -- IReadOnlySet<> net48'de yok.
+    public HashSet<string> LoadedModules { get; init; } = HtaccessModules.Default;
 }
 
 /// <summary><c>AuthType</c>/<c>AuthName</c>/<c>AuthUserFile</c> üçlüsü.</summary>

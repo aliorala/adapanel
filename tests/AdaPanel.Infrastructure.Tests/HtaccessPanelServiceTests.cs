@@ -223,15 +223,66 @@ public sealed class HtaccessPanelServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Motor IIS içinde ÇALIŞMIYOR ve panel bunu gerekçesiyle söylüyor.
+    /// Motorun IIS içinde çalışmasını engelleyen bir neden KALMADI — ve panel bunu ölçüme
+    /// dayandırarak söylüyor.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu test eskiden tersini ölçüyordu ("motor yüklü DEĞİL, gerekçesi şu"). Gerekçe gerçekti:
+    /// motor <c>net8.0-windows</c>, IIS modülü <c>net48</c> olmak zorundaydı ve bağlantı fiziksel
+    /// olarak yapılamıyordu. Engel kalktı (motorun kaynağı artık modül projesinde de derleniyor)
+    /// ve panelin "hiçbir şey olmayacak" şeridi bunu göstermeyi BIRAKMALI — yoksa çalışan bir
+    /// özelliği bozuk gösterirdi.
+    /// </para>
+    /// <para>
+    /// <b>Bu test motorun net48'de yüklendiğini KANITLAMAZ</b>, panelin ne rapor ettiğini ölçer.
+    /// Yükleme kanıtı ayrı ve gerçek bir CLR 4 sürecinde: <c>HtaccessNet48EngineLoadTests</c>.
+    /// </para>
+    /// </remarks>
     [Fact]
-    public async Task MOTORUN_IIS_ICINDE_YUKLU_OLMADIGI_gerekcesiyle_RAPORLANIR()
+    public async Task MOTOR_ENGELI_KALMADI_ve_panel_bunu_ENGEL_OLARAK_GOSTERMIYOR()
     {
         var rapor = await Servis().GetReportAsync("ornek.com", CancellationToken.None);
 
+        Assert.Empty(rapor.EngineBlockers);
+
+        // Havuz "v4.0" -> destekleniyor -> panel motorun yuklenebilecegini soyluyor.
+        Assert.True(rapor.EngineLoadedInIis);
+    }
+
+    /// <summary>
+    /// Havuz yönetilen kod çalıştırmıyorsa motor IIS'te YÜKLENEMEZ ve panel bunu <c>true</c>
+    /// göstermez.
+    /// </summary>
+    /// <remarks>
+    /// Ters yön ölçülmezse <c>EngineLoadedInIis</c> sabit <c>true</c> yazılmış olabilirdi — yani
+    /// eski yalanın (sabit <c>false</c>) simetriği. Yönetilen kod olmayan bir havuzda modülün
+    /// yüklenmesi mümkün değildir; bu durumda <c>false</c> TAHMİN değil, kesin bilgidir.
+    /// </remarks>
+    [Theory]
+    [InlineData("")]      // no_managed_code
+    [InlineData("v2.0")]  // runtime_version
+    public async Task HAVUZ_MODULU_YUKLEYEMEZSE_motor_YUKLU_SAYILMAZ(string havuzSurumu)
+    {
+        var rapor = await Servis(havuzSurumu: havuzSurumu).GetReportAsync("ornek.com", CancellationToken.None);
+
         Assert.False(rapor.EngineLoadedInIis);
-        Assert.NotEmpty(rapor.EngineBlockers);
+    }
+
+    /// <summary>
+    /// Havuz OKUNAMADIYSA motor "yüklü" sayılmaz.
+    /// </summary>
+    /// <remarks>
+    /// Bilmemek, iyi haber değildir. Okunamayan bir havuzda <c>true</c> demek, panelin en çok
+    /// güvenilmesi gereken satırında tahmin yürütmek olurdu.
+    /// </remarks>
+    [Fact]
+    public async Task HAVUZ_OKUNAMAZSA_motor_YUKLU_SAYILMAZ()
+    {
+        var rapor = await Servis(havuzHatasi: new InvalidOperationException("IIS yok"))
+            .GetReportAsync("ornek.com", CancellationToken.None);
+
+        Assert.False(rapor.EngineLoadedInIis);
     }
 
     /// <summary>

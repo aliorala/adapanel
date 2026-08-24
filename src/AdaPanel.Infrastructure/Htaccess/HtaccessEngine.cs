@@ -352,13 +352,13 @@ public sealed class HtaccessEngine : IHtaccessEngine
         }
 
         var temiz = yol.Replace('\\', '/');
-        return temiz.StartsWith('/') ? temiz : "/" + temiz;
+        return temiz.StartsWith("/", StringComparison.Ordinal) ? temiz : "/" + temiz;
     }
 
     /// <summary>İstek yolunu (dizin, dosya adı) çiftine ayırır.</summary>
     internal static (string Directory, string FileName) YoluAyir(string istekYolu)
     {
-        if (istekYolu.EndsWith('/'))
+        if (istekYolu.EndsWith("/", StringComparison.Ordinal))
         {
             return (istekYolu.Trim('/'), string.Empty);
         }

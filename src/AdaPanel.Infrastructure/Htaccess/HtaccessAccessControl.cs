@@ -268,12 +268,12 @@ internal static class HtaccessAccessControl
         // Apache'nin ön ek kuralı hiç çalışmaz, üstelik bambaşka bir adresle karşılaştırılırdı —
         // "Allow from 10.0.0" yazan bir yönetici 10.0.0.0/24'ü değil 10.0.0.0 tek adresini açmış olurdu.
         if (uzak.AddressFamily == AddressFamily.InterNetwork &&
-            temiz.All(k => char.IsAsciiDigit(k) || k == '.'))
+            temiz.All(k => HtaccessPortableApi.AsciiRakamMi(k) || k == '.'))
         {
-            var parcalar = temiz.TrimEnd('.').Split('.', StringSplitOptions.RemoveEmptyEntries);
+            var parcalar = temiz.TrimEnd('.').Split(new[] { '.' }, StringSplitOptions.RemoveEmptyEntries);
             if (parcalar.Length is >= 1 and <= 3)
             {
-                var tamamlanmis = string.Join('.', parcalar.Concat(Enumerable.Repeat("0", 4 - parcalar.Length)));
+                var tamamlanmis = string.Join(".", parcalar.Concat(Enumerable.Repeat("0", 4 - parcalar.Length)));
                 return CidrIcinde(tamamlanmis, (parcalar.Length * 8).ToString(), uzak);
             }
         }

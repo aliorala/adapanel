@@ -68,9 +68,11 @@ internal sealed class HtaccessRewriteRunner
             CurrentQuery = istek.QueryString
         };
 
-        foreach (var (ad, deger) in yapilandirma.Env)
+        // COZUMLEME (var (ad, deger)) YAZILMIYOR: KeyValuePair<,>.Deconstruct .NET Core 2.0 ile geldi,
+        // net48'de YOK. Key/Value okumak iki hedefte de ayni.
+        foreach (var giris in yapilandirma.Env)
         {
-            durum.Env[ad] = deger;
+            durum.Env[giris.Key] = giris.Value;
         }
 
         var sonuc = new HtaccessRunOutcome { Path = durum.CurrentPath, Query = durum.CurrentQuery };
@@ -141,9 +143,10 @@ internal sealed class HtaccessRewriteRunner
             }
         }
 
-        foreach (var (ad, deger) in durum.Env)
+        // Bkz. yukarisi: KeyValuePair<,>.Deconstruct net48'de yok.
+        foreach (var giris in durum.Env)
         {
-            sonuc.Env[ad] = deger;
+            sonuc.Env[giris.Key] = giris.Value;
         }
 
         if (sonuc.Outcome == HtaccessOutcome.None &&
@@ -590,7 +593,7 @@ internal sealed class HtaccessRewriteRunner
 
             if (!MutlakMi(hedef))
             {
-                if (!hedef.StartsWith('/'))
+                if (!hedef.StartsWith("/", StringComparison.Ordinal))
                 {
                     hedef = "/" + hedef;
                 }
@@ -674,13 +677,13 @@ internal sealed class HtaccessRewriteRunner
     /// </summary>
     private static string YolBirlestir(HtaccessRewriteRule kural, string hedef)
     {
-        if (hedef.StartsWith('/'))
+        if (hedef.StartsWith("/", StringComparison.Ordinal))
         {
             return Normalize(hedef);
         }
 
         var temel = kural.RewriteBase ?? kural.VirtualPath;
-        if (!temel.EndsWith('/'))
+        if (!temel.EndsWith("/", StringComparison.Ordinal))
         {
             temel += "/";
         }
@@ -720,8 +723,8 @@ internal sealed class HtaccessRewriteRunner
             }
         }
 
-        var sonEgikCizgi = yol.EndsWith('/') && parcalar.Count > 0 ? "/" : string.Empty;
-        return "/" + string.Join('/', parcalar) + sonEgikCizgi;
+        var sonEgikCizgi = yol.EndsWith("/", StringComparison.Ordinal) && parcalar.Count > 0 ? "/" : string.Empty;
+        return "/" + string.Join("/", parcalar) + sonEgikCizgi;
     }
 
     private static bool KokIcinde(string siteRoot, string urlYolu)

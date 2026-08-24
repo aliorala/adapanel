@@ -304,35 +304,59 @@ public sealed class HtaccessEngineBridgeTests
     }
 
     /// <summary>
-    /// Motoru modüle bağlayan uyarlayıcı DOSYASI, modül projesine BAĞLI mı?
+    /// Çekirdek motor modül projesine GERÇEKTEN bağlı ve bağlantı GERİ ALINAMAZ.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Bu test bugün bilerek "bağlı DEĞİL" diyor ve bu bir borç kaydıdır.</b> Ölçüldü: motorun
-    /// ve <c>AdaPanel.Core</c>'daki bağımlılıklarının bütün <c>.cs</c> dosyaları net48 hedefiyle
-    /// derlendi; dokuz dosyada, yalnız .NET (Core) API'lerine dayanan satırlar kaldı ve bunların
-    /// hiçbiri dışarıdan bir tiple telafi edilemez (hepsi BCL tiplerinin static/örnek üyeleri).
-    /// Motor net48 uyumlu hale getirilmeden bağlantı FİZİKSEL OLARAK yapılamaz.
+    /// <b>Bu nöbetçi ters çevrildi.</b> Önceki hâli "bağlı DEĞİL" diyordu ve bir borç kaydıydı:
+    /// motor <c>net8.0-windows</c>, modül <c>net48</c>'di ve motorun dokuz dosyasındaki yirmi beş
+    /// satır yalnız .NET (Core) API'lerine dayandığı için bağlantı FİZİKSEL OLARAK yapılamıyordu.
+    /// O satırlar taşınabilir hâle getirildi (bkz. <c>HtaccessPortableApi</c>) ve motorun
+    /// kaynakları artık modül projesinde DE derleniyor.
     /// </para>
     /// <para>
-    /// <b>Neden yine de test:</b> bu satırlar düzeltilip csproj'a bağlantı eklendiğinde test
-    /// KIRILIR ve o an güncellenmesi gerekir — yani borcun kapandığı gün kimse fark etmeden
-    /// geçemez. Tersi de doğru: bağlantı bugün "var" sanılıyorsa test onu hemen yalanlar.
+    /// <b>Neden hâlâ bir nöbetçi gerekiyor:</b> bağlantı csproj'daki <c>Compile</c> satırlarından
+    /// ibarettir. Biri onları silerse ya da yeniden düzenlerken düşürürse HİÇBİR DERLEME HATASI
+    /// OLUŞMAZ — modül eskisi gibi derlenir, kurulur, kaydedilir ve her isteği DOKUNMADAN geçirir.
+    /// Yani özellik sessizce ölür. Bu testin işi tam olarak o sessizliği engellemektir.
+    /// </para>
+    /// <para>
+    /// Bağlantının üç ayağı da denetleniyor, çünkü üçünden biri eksikse özellik ölüdür:
+    /// motorun giriş noktası, köprü ve uyarlayıcının kendisi.
     /// </para>
     /// </remarks>
     [Fact]
-    public void MOTOR_modul_projesine_HENUZ_BAGLI_DEGIL_ve_sebebi_OLCULDU()
+    public void MOTOR_modul_projesine_BAGLI_ve_baglanti_SESSIZCE_KOPARILAMAZ()
     {
-        var csproj = File.ReadAllText(Path.Combine(ModulKlasoru(), "AdaPanel.HtaccessModule.csproj"));
+        var modulKlasoru = ModulKlasoru();
+        var csproj = File.ReadAllText(Path.Combine(modulKlasoru, "AdaPanel.HtaccessModule.csproj"));
 
-        var bagli = csproj.Contains("HtaccessModuleEngineAdapter.cs", StringComparison.Ordinal);
+        // 1) Motorun giris noktasi net48 projesinde derleniyor mu?
+        Assert.True(
+            csproj.Contains(@"Htaccess\HtaccessEngine.cs", StringComparison.Ordinal),
+            "Motorun giris noktasi (HtaccessEngine.cs) modul projesinde DERLENMIYOR. Bu satir "
+            + "dusturuldugu anda modul her istegi dokunmadan gecirir ve HICBIR derleme hatasi olusmaz.");
 
-        Assert.False(
-            bagli,
-            "Motor artik modul projesine BAGLANMIS gorunuyor. Bu iyi haber -- ama bu nobetci "
-            + "guncellenmeli: HtaccessPanelService.MotorEngelleri() bos donmeli ve "
-            + "HtaccessSiteReport.EngineLoadedInIis artik false sabitlenmemeli, yoksa panel "
-            + "CALISAN bir ozelligi 'calismiyor' diye gosterir.");
+        // 2) Kararlari ceviren kopru?
+        Assert.True(
+            csproj.Contains(@"Hosting\HtaccessEngineBridge.cs", StringComparison.Ordinal),
+            "Kopru (HtaccessEngineBridge.cs) modul projesinde DERLENMIYOR; uyarlayici motorun "
+            + "sonucunu karara ceviremez.");
+
+        // 3) Uyarlayici dosyasi duruyor mu? (Bu proje kendi .cs dosyalarini joker ile derler,
+        //    bu yuzden csproj'da adi gecmez -- varligi DISKTEN olculur.)
+        Assert.True(
+            File.Exists(Path.Combine(modulKlasoru, "HtaccessModuleEngineAdapter.cs")),
+            "HtaccessModuleEngineAdapter.cs YOK. Motoru HtaccessEngineRegistry'ye yerlestiren tek "
+            + "sinif odur; olmadan kayit bos kalir.");
+
+        // 4) Ve modul onu GERCEKTEN cagiriyor mu? Dosyanin var olmasi yetmez; Install() cagrisi
+        //    Init'ten dusurulurse kayit yine bos kalir.
+        var modulKaynagi = ModulKaynagi("HtaccessHttpModule.cs");
+        Assert.True(
+            modulKaynagi.Contains("HtaccessModuleEngineAdapter.Install()", StringComparison.Ordinal),
+            "HtaccessHttpModule motoru KURMUYOR: Install() cagrisi Init yolundan dusmus. "
+            + "Modul yuklenir, kapi acilir, motor null kalir -- ozellik sessizce olur.");
     }
 
     private static string ModulKaynagi(string dosyaAdi)

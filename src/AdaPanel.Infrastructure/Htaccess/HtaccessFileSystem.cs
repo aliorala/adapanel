@@ -41,17 +41,34 @@ internal sealed class HtaccessFileSystem : IHtaccessFileSystem
 
     public bool DirectoryExists(string path) => Guvenli(() => Directory.Exists(path), false);
 
-    public bool IsSymbolicLink(string path) => Guvenli(() =>
-    {
-        var bilgi = new FileInfo(path);
-        if (bilgi.Exists)
-        {
-            return bilgi.LinkTarget is not null;
-        }
-
-        var klasor = new DirectoryInfo(path);
-        return klasor.Exists && klasor.LinkTarget is not null;
-    }, false);
+    /// <remarks>
+    /// <para>
+    /// <b><c>FileInfo.LinkTarget</c> KULLANILMIYOR</b> ve bu bilinçli bir değişiklik: o özellik
+    /// .NET 6 ile geldi, <c>net48</c>'de YOKTUR. Motorun kaynakları IIS modülü için net48'de de
+    /// derleniyor (bkz. <c>HtaccessPortableApi</c>); <c>LinkTarget</c> kalsaydı modül motoru
+    /// yükleyemezdi.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>#if</c> ile iki yazım değil:</b> ikisi AYNI ŞEYİ ÖLÇMÜYOR. <c>LinkTarget</c>
+    /// yalnız sembolik bağlantı/kavşakta doludur; <c>ReparsePoint</c> her yeniden ayrıştırma
+    /// noktasında (OneDrive yer tutucusu, tekilleştirme, AppExecLink) kuruludur. İki hedefte iki
+    /// farklı ölçüm bırakmak, panelin ÖNİZLEMEDE gösterdiği sonucun IIS'te uygulanandan farklı
+    /// olması demekti — bu özellikte kabul edilemez. Tek ölçüm seçildi.
+    /// </para>
+    /// <para>
+    /// <b>Sapma DAHA KORUYUCU yöndedir:</b> <c>RewriteCond ... -l</c> artık biraz daha geniş bir
+    /// kümeye "bağlantı" der. Yanlış yönde hata yapmaz — dosya sisteminde dolaylı bir hedefe işaret
+    /// eden her giriş zaten şüphelidir ve kural yazarının onu ayırt etmesi beklenir.
+    /// </para>
+    /// <para>
+    /// Tek çağrı hem dosyayı hem klasörü kapsar: <c>File.GetAttributes</c> ikisi için de çalışır
+    /// (eski kod <c>FileInfo.Exists</c> dizinlerde <c>false</c> döndüğü için iki adım atıyordu).
+    /// Yol yoksa istisna fırlar ve <c>Guvenli</c> onu <c>false</c>'a çevirir.
+    /// </para>
+    /// </remarks>
+    public bool IsSymbolicLink(string path) => Guvenli(
+        () => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
+        false);
 
     public bool IsNonEmptyFile(string path) => Guvenli(() =>
     {

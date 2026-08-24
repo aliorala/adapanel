@@ -52,7 +52,7 @@ internal sealed class HtaccessCascadeLoader
 
         var parcalar = (goreliDizin ?? string.Empty)
             .Replace('\\', '/')
-            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries)
             .Where(p => p != ".")
             .ToList();
 

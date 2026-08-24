@@ -11,16 +11,28 @@ namespace AdaPanel.Infrastructure.Htaccess.Htpasswd;
 /// </remarks>
 internal static class BlowfishInitialState
 {
-    /// <summary>18 elemanli P-dizisi.</summary>
-    internal static ReadOnlySpan<uint> P => new uint[]
+    /// <summary>18 elemanli P-dizisinin KOPYASI. Cagiran diziyi degistirir (anahtar genisletmesi).</summary>
+    internal static uint[] CopyP() => (uint[])PTablosu.Clone();
+
+    /// <summary>4 x 256 = 1024 elemanli S-kutularinin KOPYASI.</summary>
+    internal static uint[] CopyS() => (uint[])STablosu.Clone();
+
+    // ReadOnlySpan<uint> DEGIL: Span tipleri net48'de yalniz System.Memory NuGet paketiyle gelir ve
+    // bu modul GAC'a kuruluyor -- GAC'taki bir derleme uygulamanin /bin'inden bagimlilik cozemez,
+    // yani ek paket ikinci bir GAC artefakti demekti.
+    //
+    // DAVRANIS AYNI, hatta bir tahsis DAHA AZ: eski yazim bir OZELLIKTI (`=> new uint[]{...}`), yani
+    // her okumada YENI dizi ayiriyordu ve tek tuketici (BCryptVerifier.Hesapla) uzerine bir de
+    // .ToArray() cagirip IKINCI bir kopya cikariyordu. Simdi tablo bir kez kuruluyor, cagiran tek
+    // kopya aliyor. Salt-okunurluk KORUNDU: alanlar private, disari yalniz klon veriliyor.
+    private static readonly uint[] PTablosu =
     {
         0x243f6a88U, 0x85a308d3U, 0x13198a2eU, 0x03707344U, 0xa4093822U, 0x299f31d0U,
         0x082efa98U, 0xec4e6c89U, 0x452821e6U, 0x38d01377U, 0xbe5466cfU, 0x34e90c6cU,
         0xc0ac29b7U, 0xc97c50ddU, 0x3f84d5b5U, 0xb5470917U, 0x9216d5d9U, 0x8979fb1bU,
     };
 
-    /// <summary>4 x 256 = 1024 elemanli S-kutulari, arka arkaya.</summary>
-    internal static ReadOnlySpan<uint> S => new uint[]
+    private static readonly uint[] STablosu =
     {
         0xd1310ba6U, 0x98dfb5acU, 0x2ffd72dbU, 0xd01adfb7U, 0xb8e1afedU, 0x6a267e96U,
         0xba7c9045U, 0xf12c7f99U, 0x24a19947U, 0xb3916cf7U, 0x0801f2e2U, 0x858efc16U,

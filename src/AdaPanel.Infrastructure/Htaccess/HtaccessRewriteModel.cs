@@ -285,12 +285,12 @@ internal static class HtaccessFlagParser
         }
 
         var metin = raw.Trim();
-        if (!metin.StartsWith('[') || !metin.EndsWith(']'))
+        if (!metin.StartsWith("[", StringComparison.Ordinal) || !metin.EndsWith("]", StringComparison.Ordinal))
         {
             yield break;
         }
 
-        foreach (var parca in metin[1..^1].Split(',', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var parca in metin[1..^1].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var kirpik = parca.Trim();
             if (kirpik.Length > 0)
@@ -302,7 +302,7 @@ internal static class HtaccessFlagParser
 
     /// <summary>Bir bayrak öbeği gibi görünüyor mu (<c>[...]</c>)?</summary>
     public static bool LooksLikeFlags(string? value) =>
-        !string.IsNullOrWhiteSpace(value) && value.Trim().StartsWith('[') && value.Trim().EndsWith(']');
+        !string.IsNullOrWhiteSpace(value) && value.Trim().StartsWith("[", StringComparison.Ordinal) && value.Trim().EndsWith("]", StringComparison.Ordinal);
 
     private static (string Ad, string Deger) Ayir(string parca)
     {

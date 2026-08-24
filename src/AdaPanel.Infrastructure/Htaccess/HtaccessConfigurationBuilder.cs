@@ -85,12 +85,12 @@ internal sealed class HtaccessConfigurationBuilder
             }
 
             rewriteBase = d.Argument(0);
-            if (!rewriteBase.StartsWith('/'))
+            if (!rewriteBase.StartsWith("/", StringComparison.Ordinal))
             {
                 rewriteBase = "/" + rewriteBase;
             }
 
-            if (!rewriteBase.EndsWith('/'))
+            if (!rewriteBase.EndsWith("/", StringComparison.Ordinal))
             {
                 rewriteBase += "/";
             }
@@ -194,7 +194,7 @@ internal sealed class HtaccessConfigurationBuilder
                         break;
                     }
 
-                    var girdi = SureCozumle(string.Join(' ', d.Arguments.Skip(1)), dosya.FilePath, d, bulgular);
+                    var girdi = SureCozumle(string.Join(" ", d.Arguments.Skip(1)), dosya.FilePath, d, bulgular);
                     if (girdi is not null)
                     {
                         hedef.ExpiresByType[d.Argument(0)] = girdi;
@@ -203,7 +203,7 @@ internal sealed class HtaccessConfigurationBuilder
                     break;
 
                 case "expiresdefault":
-                    var varsayilan = SureCozumle(string.Join(' ', d.Arguments), dosya.FilePath, d, bulgular);
+                    var varsayilan = SureCozumle(string.Join(" ", d.Arguments), dosya.FilePath, d, bulgular);
                     if (varsayilan is not null)
                     {
                         hedef.ExpiresDefault = varsayilan;
@@ -225,7 +225,7 @@ internal sealed class HtaccessConfigurationBuilder
                     break;
 
                 case "authname":
-                    dosyaAuth.Realm = string.Join(' ', d.Arguments);
+                    dosyaAuth.Realm = string.Join(" ", d.Arguments);
                     break;
 
                 case "authuserfile":
@@ -260,7 +260,7 @@ internal sealed class HtaccessConfigurationBuilder
                         break;
                     }
 
-                    hedef.Env[d.Argument(0)] = string.Join(' ', d.Arguments.Skip(1));
+                    hedef.Env[d.Argument(0)] = string.Join(" ", d.Arguments.Skip(1));
                     break;
             }
         }
@@ -364,7 +364,7 @@ internal sealed class HtaccessConfigurationBuilder
     private bool AdEslesiyor(string arg, string deger, string dosyaYolu, int satir, List<HtaccessDiagnostic> bulgular)
     {
         var temiz = arg.Trim();
-        if (temiz.StartsWith('~'))
+        if (temiz.StartsWith("~", StringComparison.Ordinal))
         {
             return DesenEslesiyor(temiz[1..].Trim(), deger, dosyaYolu, satir, bulgular);
         }
@@ -464,7 +464,7 @@ internal sealed class HtaccessConfigurationBuilder
 
         var desen = ham;
         var olumsuz = false;
-        if (desen.StartsWith('!'))
+        if (desen.StartsWith("!", StringComparison.Ordinal))
         {
             olumsuz = true;
             desen = desen[1..];
@@ -502,7 +502,7 @@ internal sealed class HtaccessConfigurationBuilder
                 else if (desen.StartsWith("-gt", StringComparison.Ordinal)) { tip = HtaccessCondKind.IntegerGreater; desen = desen[3..].Trim(); }
                 else if (desen.StartsWith("-le", StringComparison.Ordinal)) { tip = HtaccessCondKind.IntegerLessEqual; desen = desen[3..].Trim(); }
                 else if (desen.StartsWith("-ge", StringComparison.Ordinal)) { tip = HtaccessCondKind.IntegerGreaterEqual; desen = desen[3..].Trim(); }
-                else if (desen.StartsWith('='))
+                else if (desen.StartsWith("=", StringComparison.Ordinal))
                 {
                     tip = HtaccessCondKind.LexicalEqual;
                     desen = desen[1..];
@@ -518,8 +518,8 @@ internal sealed class HtaccessConfigurationBuilder
                         desen = string.Empty;
                     }
                 }
-                else if (desen.StartsWith('<')) { tip = HtaccessCondKind.LexicalLess; desen = desen[1..]; }
-                else if (desen.StartsWith('>')) { tip = HtaccessCondKind.LexicalGreater; desen = desen[1..]; }
+                else if (desen.StartsWith("<", StringComparison.Ordinal)) { tip = HtaccessCondKind.LexicalLess; desen = desen[1..]; }
+                else if (desen.StartsWith(">", StringComparison.Ordinal)) { tip = HtaccessCondKind.LexicalGreater; desen = desen[1..]; }
                 else if (desen.StartsWith("-strmatch", StringComparison.OrdinalIgnoreCase) ||
                          test.StartsWith("expr", StringComparison.OrdinalIgnoreCase))
                 {
@@ -582,7 +582,7 @@ internal sealed class HtaccessConfigurationBuilder
         }
 
         var olumsuz = false;
-        if (desen.StartsWith('!'))
+        if (desen.StartsWith("!", StringComparison.Ordinal))
         {
             olumsuz = true;
             desen = desen[1..];
@@ -682,11 +682,11 @@ internal sealed class HtaccessConfigurationBuilder
             return;
         }
 
-        var deger = string.Join(' ', d.Arguments.Skip(1));
+        var deger = string.Join(" ", d.Arguments.Skip(1));
 
         // Yol güvenliği: "/../../ProgramData/gizli.html" gibi bir hedef site kökünün dışını
         // gösterirdi. Yüzde kodlaması da çözülür, yoksa "%2e%2e" ile aynı kaçış yapılır.
-        if (deger.StartsWith('/') && YolKacisiVar(deger))
+        if (deger.StartsWith("/", StringComparison.Ordinal) && YolKacisiVar(deger))
         {
             bulgular.Add(HtaccessParser.Bulgu(HtaccessDiagnosticLevel.Error,
                 HtaccessDiagnosticCodes.PathEscapesSiteRoot, dosyaYolu, d.Line, "ErrorDocument",
@@ -853,7 +853,9 @@ internal sealed class HtaccessConfigurationBuilder
 
         // Değeri içinde geçen %{...} genişletmesi mod_headers'a aittir ve BURADA yapılmaz;
         // istek bağlamı gerektirir ve başlık değerine istek verisi enjekte etme yüzeyi açar.
-        if (deger.Contains("%{", StringComparison.Ordinal))
+        // Contains(string, StringComparison) .NET Core 2.1 ile geldi; IndexOf'un ayni asiri yuklemesi
+        // net48'de DE var ve AYNI karsilastirmayi yapar (bkz. HtaccessPortableApi gerekcesi).
+        if (deger.IndexOf("%{", StringComparison.Ordinal) >= 0)
         {
             bulgular.Add(HtaccessParser.Bulgu(HtaccessDiagnosticLevel.Unsupported,
                 HtaccessDiagnosticCodes.UnsupportedDirective, dosyaYolu, d.Line, "Header",
@@ -952,7 +954,7 @@ internal sealed class HtaccessConfigurationBuilder
         var mime = d.Argument(0);
         foreach (var uzanti in d.Arguments.Skip(1))
         {
-            var temiz = uzanti.StartsWith('.') ? uzanti : "." + uzanti;
+            var temiz = uzanti.StartsWith(".", StringComparison.Ordinal) ? uzanti : "." + uzanti;
             hedef.MimeTypes[temiz] = mime;
         }
     }
@@ -969,7 +971,7 @@ internal sealed class HtaccessConfigurationBuilder
         foreach (var a in argumanlar.Where(a =>
                      !a.Equals("all", StringComparison.OrdinalIgnoreCase) &&
                      !a.StartsWith("env=", StringComparison.OrdinalIgnoreCase) &&
-                     !a.Any(char.IsAsciiDigit)))
+                     !a.Any(HtaccessPortableApi.AsciiRakamMi)))
         {
             bulgular.Add(HtaccessParser.Bulgu(HtaccessDiagnosticLevel.Unsupported,
                 HtaccessDiagnosticCodes.UnsupportedDirective, dosyaYolu, d.Line, d.Name,
@@ -991,7 +993,7 @@ internal sealed class HtaccessConfigurationBuilder
     private static string ParolaDosyasi(
         HtaccessDirective d, HtaccessParseResult dosya, string siteRoot, List<HtaccessDiagnostic> bulgular)
     {
-        var ham = string.Join(' ', d.Arguments).Trim();
+        var ham = string.Join(" ", d.Arguments).Trim();
         if (ham.Length == 0)
         {
             Hata(bulgular, dosya.FilePath, d, "AuthUserFile bir dosya yolu ister.");
@@ -1000,7 +1002,10 @@ internal sealed class HtaccessConfigurationBuilder
 
         // Apache yolu eğik çizgiyle yazar; Windows'ta ters bölüye çevrilir.
         var yerel = ham.Replace('/', Path.DirectorySeparatorChar);
-        var mutlak = Path.IsPathFullyQualified(yerel) ? yerel : Path.Combine(siteRoot, yerel.TrimStart(Path.DirectorySeparatorChar));
+        // Path.IsPathFullyQualified DEGIL: net48'de yok. PathContainment'taki tasinabilir karsiligi
+        // net8 tarafinda BCL uyesiyle karsilastirmali olarak DENETLENIYOR (PathContainmentTests) --
+        // ve zaten bu satirin hemen ardindaki kapsam denetimi de ayni sinifa dayaniyor.
+        var mutlak = PathContainment.PortableIsPathFullyQualified(yerel) ? yerel : Path.Combine(siteRoot, yerel.TrimStart(Path.DirectorySeparatorChar));
 
         var normal = PathContainment.Normalize(mutlak);
         if (normal is null || !PathContainment.IsInsideRoot(siteRoot, normal))

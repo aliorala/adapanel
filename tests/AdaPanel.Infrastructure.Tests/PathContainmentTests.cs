@@ -73,4 +73,89 @@ public sealed class PathContainmentTests
             Assert.False(PathContainment.IsRootOrInside(gecersizKok, @"C:\sites\site1\httpdocs"));
         }
     }
+
+    // ---------------------------------------------------------- net48 KARSILIGININ ESDEGERLIGI
+
+    /// <summary>
+    /// <see cref="PathContainment.PortableIsPathFullyQualified"/>, BCL'in
+    /// <see cref="Path.IsPathFullyQualified(string)"/> üyesiyle AYNI cevabı vermek zorunda.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bu test var:</b> bu dosya (<c>PathContainment.cs</c>) iki hedefte derleniyor —
+    /// panel için <c>net8.0-windows</c>, IIS <c>.htaccess</c> modülü için <c>net48</c>.
+    /// <c>Path.IsPathFullyQualified</c> net48'de YOK, bu yüzden orada elle yazılmış karşılık
+    /// çalışıyor. Bu sınıf panelin çapraz-kiracı savunmasının tek ortak parçası olduğu için
+    /// "karşılık aynıdır" cümlesi VARSAYIM OLARAK BIRAKILAMAZ: iki uygulamanın ayrıldığı tek bir
+    /// girdi, IIS tarafında sessiz bir kapsam açığı demektir.
+    /// </para>
+    /// <para>
+    /// Tablo tesadüfi değil: tam nitelikli olma kararının BÜTÜN dallarını gezer — sürücüye göreli
+    /// (<c>C:x</c>), sürücüsüz kök (<c>\x</c>), UNC, aygıt yolu (<c>\\?\</c>), ters/düz eğik çizgi
+    /// karışımı, sınır uzunlukları (0, 1, 2, 3 karakter) ve büyük/küçük sürücü harfi.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    // --- tam nitelikli
+    [InlineData(@"C:\sites\site1")]
+    [InlineData(@"C:/sites/site1")]
+    [InlineData(@"c:\x")]
+    [InlineData(@"Z:\")]
+    [InlineData(@"\\sunucu\pay\klasor")]
+    [InlineData(@"//sunucu/pay")]
+    [InlineData(@"\\?\C:\uzun\yol")]
+    [InlineData(@"\\.\PhysicalDrive0")]
+    // --- tam nitelikli DEGIL
+    [InlineData("")]
+    [InlineData("h")]
+    [InlineData("httpdocs")]
+    [InlineData(@"httpdocs\alt")]
+    [InlineData(@"..\komsu")]
+    [InlineData(@".\burasi")]
+    [InlineData(@"\kokten-ama-surucusuz")]
+    [InlineData(@"/kokten-ama-surucusuz")]
+    [InlineData("C:")]
+    [InlineData(@"C:x")]                 // SURUCUYE GORELI: o surucunun gecerli dizinine bagli
+    [InlineData(@"C:httpdocs\alt")]
+    [InlineData("1:\\x")]                // gecersiz surucu harfi
+    [InlineData(@"::\x")]
+    public void TASINABILIR_KARSILIK_BCL_ile_AYNI_CEVABI_VERIR(string yol)
+    {
+        Assert.Equal(Path.IsPathFullyQualified(yol), PathContainment.PortableIsPathFullyQualified(yol));
+    }
+
+    /// <summary>
+    /// Eşdeğerlik ELLE SEÇİLMİŞ tabloyla sınırlı kalmasın: üretilen girdilerde de aynı cevap.
+    /// </summary>
+    /// <remarks>
+    /// Elle yazılan tablo yalnızca DÜŞÜNÜLEN durumları kapsar. Asıl risk düşünülmeyen bileşimdir
+    /// (örneğin <c>C:/</c> ile <c>C:\\</c> arasındaki fark, ya da iki nokta üst üstenin ikinci
+    /// karakterden başka bir yerde olması). Bu yüzden ön ek/ayırıcı/sürücü parçaları çarpım
+    /// hâlinde üretilip ikisi yan yana koşturuluyor.
+    /// </remarks>
+    [Fact]
+    public void TASINABILIR_KARSILIK_URETILMIS_GIRDILERDE_de_AYRILMAZ()
+    {
+        string[] onekler = ["", @"\", "/", @"\\", "//", @"\\?\", "C:", "c:", @"C:\", "C:/", "1:", ":", "::"];
+        string[] govdeler = ["", "x", "sites", @"sites\site1", "sites/site1", "..", ".", "?"];
+
+        var ayrilan = new List<string>();
+
+        foreach (var onek in onekler)
+        {
+            foreach (var govde in govdeler)
+            {
+                var yol = onek + govde;
+                if (Path.IsPathFullyQualified(yol) != PathContainment.PortableIsPathFullyQualified(yol))
+                {
+                    ayrilan.Add(yol);
+                }
+            }
+        }
+
+        Assert.True(
+            ayrilan.Count == 0,
+            "net48 karsiligi BCL'den AYRILDI. Bu, IIS tarafinda sessiz bir kapsam farki demektir. "
+            + "Ayrilan girdiler: " + string.Join(" | ", ayrilan));
+    }
 }

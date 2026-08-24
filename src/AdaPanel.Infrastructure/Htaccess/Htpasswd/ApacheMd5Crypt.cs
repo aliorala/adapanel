@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using AdaPanel.Infrastructure.Htaccess;
 
 namespace AdaPanel.Infrastructure.Htaccess.Htpasswd;
 
@@ -94,7 +95,9 @@ internal static class ApacheMd5Crypt
         }
 
         // Apache burada "final"i SIFIRLAR; sonraki döngü bu sıfır baytı kullanır.
-        Array.Clear(final);
+        // Tek argümanli Array.Clear(dizi) net8'e ozgu; (dizi, 0, uzunluk) asli iki hedefte de var
+        // ve AYNI isi yapar (bkz. HtaccessPortableApi).
+        HtaccessPortableApi.Sifirla(final);
 
         // "Then something really weird..." (Apache'nin kendi yorumu): parolanın uzunluğunun
         // bitleri, sıfır baytı ile parolanın ilk baytı arasında seçim yaptırır.

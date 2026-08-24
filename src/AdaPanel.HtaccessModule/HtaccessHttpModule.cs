@@ -120,6 +120,16 @@ public sealed class HtaccessHttpModule : IHttpModule
                 budget: TimeSpan.FromMilliseconds(50),
                 log: ModuleLog.Write);
 
+            // ÇEKİRDEK MOTORUN BAĞLANDIĞI TEK SATIR. Uzun süre bu satır YOKTU: motor net8'di ve
+            // net48 CLR'ında yüklenemiyordu, dolayısıyla HtaccessEngineRegistry.Current hep null
+            // kalıyor ve modül HER isteği dokunmadan geçiriyordu — "kod var, ekranı var, hiç
+            // çalışmıyor". Motorun kaynakları artık bu projede de derlendiği için yüklenecek
+            // ikinci bir derleme yok (bkz. HtaccessModuleEngineAdapter).
+            //
+            // Install() fırlatmaz: kurulamazsa kayıt boş kalır ve modül eski (zararsız) davranışına
+            // döner. Yani bağlantı, fail-open sözünü BOZMAZ.
+            HtaccessModuleEngineAdapter.Install();
+
             initialized = true;
         }
     }
@@ -285,7 +295,11 @@ public sealed class HtaccessHttpModule : IHttpModule
             PhysicalPath = SafeGet(() => request.PhysicalPath),
             DocumentRoot = documentRoot,
             RemoteAddress = SafeGet(() => request.UserHostAddress ?? string.Empty),
-            IsSecure = SafeGetBool(() => request.IsSecureConnection)
+            IsSecure = SafeGetBool(() => request.IsSecureConnection),
+
+            // Url.Host, Headers["Host"] DEĞİL: başlık portu da içerir ("ornek.com:8080") ve
+            // %{HTTP_HOST} karşılaştırmalarını sessizce bozardı. Url.Host portu ayırmış hâlini verir.
+            Host = SafeGet(() => request.Url?.Host ?? string.Empty)
         };
     }
 

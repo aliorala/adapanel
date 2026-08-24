@@ -29,6 +29,17 @@ public sealed class HtaccessRequestInfo
     public string DocumentRoot = string.Empty;
     public string RemoteAddress = string.Empty;
     public bool IsSecure;
+
+    /// <summary>
+    /// İsteğin <c>Host</c> başlığı (port HARİÇ).
+    /// </summary>
+    /// <remarks>
+    /// Motor bunu <c>%{HTTP_HOST}</c> ve <c>%{SERVER_NAME}</c> olarak görür. Alan sonradan
+    /// eklendi ve gerekliydi: <c>RewriteCond %{HTTP_HOST} !^www\.</c> kalıbı gerçek dünyadaki
+    /// <c>.htaccess</c> dosyalarının en yaygın kuralıdır (kanonik alan adı yönlendirmesi).
+    /// Boş bırakılsaydı o kurallar sessizce eşleşmez, kullanıcı "kural çalışmıyor" derdi.
+    /// </remarks>
+    public string Host = string.Empty;
 }
 
 /// <summary>Motorun kararı.</summary>

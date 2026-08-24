@@ -14,7 +14,11 @@
     <RootNamespace>AdaPanel.HtaccessModule</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- ACILDI. Motorun dosyalari Infrastructure'da ortulu using'lerle (System, System.Linq,
+         System.Collections.Generic, System.IO ...) yaziliyor. Kapali biraksaydik AYNI dosyalarin
+         iki hedefte FARKLI using basliklari gerektirmesi gerekirdi &#8212; yani tek kaynak kurali
+         fiilen bozulurdu. Bu projenin kendi dosyalari using'lerini zaten acikca yaziyor. -->
+    <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
 
     <!-- Bu proje w3wp icinde calisir; hicbir testi kendisi barindirmaz. Paylasilan mantik
@@ -56,6 +60,18 @@
          sabitlemek o havuzlarda modulu sessizce olduraurdu. Bu yuzden kayitta da bitness on kosulu
          YOK (bkz. HtaccessModuleRegistration.PreCondition). -->
     <PlatformTarget>AnyCPU</PlatformTarget>
+
+    <!-- CS8602 (olasi null basvuru) BU PROJEDE susturuldu &#8212; ve yalniz burada.
+         OLCULDU: motorun kaynaklari baglandiktan sonra bu derlemede 6 CS8602 cikti, ALTISI DA
+         paylasilan dosyalarda (PathContainment, HtaccessEvaluationResult, HtaccessInterpolator,
+         HtaccessRewriteModel x2, HtaccessEngine); modulun kendi bes dosyasinda SIFIR.
+         Hepsi ayni sebepten: net48 basvuru derlemelerinde null aciklamalari (`[NotNullWhen]`,
+         `[NotNullIfNotNull]`) YOKTUR, bu yuzden `string.IsNullOrWhiteSpace(x)` denetiminden sonra
+         derleyici `x`'i daraltamiyor. AYNI dosyalar AdaPanel.Infrastructure'da net8 ile ve TAM
+         null cozumlemesiyle derleniyor; gercek bir null hatasi ORADA uyari verir. Yani burada
+         susturulan sey bilgi degil, GURULTU. Kalici 6 uyari birakmak, uyarilara bakmamayi
+         ogretirdi. -->
+    <NoWarn>$(NoWarn);CS8602</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -89,6 +105,63 @@
     <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessFailSafe.cs" Link="Shared\HtaccessFailSafe.cs" />
     <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessFileCache.cs" Link="Shared\HtaccessFileCache.cs" />
     <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessModuleRegistration.cs" Link="Shared\HtaccessModuleRegistration.cs" />
+  </ItemGroup>
+
+  <!-- CEKIRDEK MOTOR &#8212; ayni kaynak, ikinci cikti.
+       ============================================================================
+       Yukaridaki blokta secilen (c) siki artik motorun TAMAMINA uygulaniyor: motorun .cs
+       dosyalari bu net48 projesinde de derleniyor. (b) "Infrastructure'i cok hedefli yap"
+       secenegi bugun de gecerli DEGIL ve sebebi olculdu: Infrastructure MailKit / Npgsql /
+       Microsoft.Data.SqlClient / EF tasiyor ve <FrameworkReference Microsoft.AspNetCore.App>
+       ile derleniyor &#8212; bunlarin hicbiri net48'de yok. Cok hedefli yapmak, ozelligin
+       ILGISIZ 200+ dosyayi net48'e tasimaya bagimli olmasi demekti.
+
+       Panel tarafi DEGISMEDI: AdaPanel.Infrastructure hala tek hedefli net8.0-windows ve
+       ayni dosyalari kendi derlemesine aliyor. Bu blok yalniz IKINCI bir cikti uretir.
+
+       Yine TEK TEK sayiliyor (joker YOK): Htaccess klasorune net8'e ozgu yeni bir dosya
+       eklendiginde joker onu sessizce buraya cekip net48 derlemesini kirardi.
+
+       BILEREK DISARIDA BIRAKILANLAR (ikisi de PANEL tarafidir, istek yolunda CALISMAZ):
+         - HtaccessPanelService.cs  -> Microsoft.Extensions.Logging/Options + Infrastructure.Options
+         - Hosting/HtaccessSwitchStore.cs -> System.Security.AccessControl ile ACL yazar (panel yazar,
+           modul yalniz OKUR; okuma HtaccessSwitchFile'da).
+       Bunlari da baglamak, modulun GAC'ta cozemeyecegi NuGet bagimliliklarini surukleyebilirdi. -->
+  <ItemGroup>
+    <!-- AdaPanel.Core: motorun sozlesmesi ve DTO'lari. Butun dosya net48 uyumlu. -->
+    <Compile Include="..\AdaPanel.Core\Common\PathContainment.cs" Link="Shared\Core\PathContainment.cs" />
+    <Compile Include="..\AdaPanel.Core\Interfaces\IHtaccessEngine.cs" Link="Shared\Core\IHtaccessEngine.cs" />
+    <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessDiagnostic.cs" Link="Shared\Core\HtaccessDiagnostic.cs" />
+    <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessDocument.cs" Link="Shared\Core\HtaccessDocument.cs" />
+    <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessEvaluationResult.cs" Link="Shared\Core\HtaccessEvaluationResult.cs" />
+    <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessInspectionResult.cs" Link="Shared\Core\HtaccessInspectionResult.cs" />
+    <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessLimits.cs" Link="Shared\Core\HtaccessLimits.cs" />
+    <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessRequestContext.cs" Link="Shared\Core\HtaccessRequestContext.cs" />
+
+    <!-- Motorun kendisi. -->
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessPortableApi.cs" Link="Shared\Engine\HtaccessPortableApi.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessAccessControl.cs" Link="Shared\Engine\HtaccessAccessControl.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessCascadeLoader.cs" Link="Shared\Engine\HtaccessCascadeLoader.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessConfiguration.cs" Link="Shared\Engine\HtaccessConfiguration.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessConfigurationBuilder.cs" Link="Shared\Engine\HtaccessConfigurationBuilder.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessDirectiveCatalog.cs" Link="Shared\Engine\HtaccessDirectiveCatalog.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessEngine.cs" Link="Shared\Engine\HtaccessEngine.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessFileSystem.cs" Link="Shared\Engine\HtaccessFileSystem.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessInterpolator.cs" Link="Shared\Engine\HtaccessInterpolator.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessParser.cs" Link="Shared\Engine\HtaccessParser.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessRegexCache.cs" Link="Shared\Engine\HtaccessRegexCache.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessRewriteModel.cs" Link="Shared\Engine\HtaccessRewriteModel.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessRewriteRunner.cs" Link="Shared\Engine\HtaccessRewriteRunner.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\HtaccessServerVariables.cs" Link="Shared\Engine\HtaccessServerVariables.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Htpasswd\ApacheMd5Crypt.cs" Link="Shared\Engine\ApacheMd5Crypt.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Htpasswd\BCryptVerifier.cs" Link="Shared\Engine\BCryptVerifier.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Htpasswd\BlowfishInitialState.cs" Link="Shared\Engine\BlowfishInitialState.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Htpasswd\HtpasswdFile.cs" Link="Shared\Engine\HtpasswdFile.cs" />
+
+    <!-- KOPRU: motorun sonucunu modulun uygulayabilecegi karara ceviren, net8 testlerinden
+         kosan mantik. Uyarlayici (HtaccessModuleEngineAdapter.cs) bu projenin KENDI dosyasidir
+         ve joker ile zaten derleniyor; burada yalniz koprunun kaynagi baglaniyor. -->
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessEngineBridge.cs" Link="Shared\Engine\HtaccessEngineBridge.cs" />
   </ItemGroup>
 
 </Project>

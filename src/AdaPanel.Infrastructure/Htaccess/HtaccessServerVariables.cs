@@ -176,7 +176,8 @@ internal static class HtaccessServerVariables
         }
 
         var ikiNokta = host.LastIndexOf(':');
-        return ikiNokta > 0 && !host.Contains(']') ? host[..ikiNokta] : host;
+        // IndexOf: bkz. HtaccessRegexCache -- string.Contains(char) net48'de yok, orada LINQ'e duser.
+        return ikiNokta > 0 && host.IndexOf(']') < 0 ? host[..ikiNokta] : host;
     }
 
     private static string Bilinmeyen(string name, List<HtaccessDiagnostic> bulgular, string file, int line)

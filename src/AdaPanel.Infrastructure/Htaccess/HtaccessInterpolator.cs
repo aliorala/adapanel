@@ -46,14 +46,14 @@ internal static class HtaccessInterpolator
                 continue;
             }
 
-            if (k == '$' && i + 1 < template.Length && char.IsAsciiDigit(template[i + 1]))
+            if (k == '$' && i + 1 < template.Length && HtaccessPortableApi.AsciiRakamMi(template[i + 1]))
             {
                 sonuc.Append(state.RuleBackrefs[template[i + 1] - '0'] ?? string.Empty);
                 i += 2;
                 continue;
             }
 
-            if (k == '%' && i + 1 < template.Length && char.IsAsciiDigit(template[i + 1]))
+            if (k == '%' && i + 1 < template.Length && HtaccessPortableApi.AsciiRakamMi(template[i + 1]))
             {
                 sonuc.Append(state.CondBackrefs[template[i + 1] - '0'] ?? string.Empty);
                 i += 2;
@@ -118,7 +118,7 @@ internal static class HtaccessInterpolator
         foreach (var b in Encoding.UTF8.GetBytes(value))
         {
             var k = (char)b;
-            if (char.IsAsciiLetterOrDigit(k) || Kacirilmayan.Contains(k))
+            if (HtaccessPortableApi.AsciiHarfVeyaRakamMi(k) || Kacirilmayan.Contains(k))
             {
                 sonuc.Append(k);
             }

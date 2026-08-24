@@ -1,4 +1,5 @@
 using System.Text;
+using AdaPanel.Infrastructure.Htaccess;
 
 namespace AdaPanel.Infrastructure.Htaccess.Htpasswd;
 
@@ -61,7 +62,7 @@ internal static class BCryptVerifier
             return Sonuc.UnsupportedVariant;
         }
 
-        if (hash.Length < 29 || hash[3] != '$' || !char.IsAsciiDigit(hash[4]) || !char.IsAsciiDigit(hash[5]) || hash[6] != '$')
+        if (hash.Length < 29 || hash[3] != '$' || !HtaccessPortableApi.AsciiRakamMi(hash[4]) || !HtaccessPortableApi.AsciiRakamMi(hash[5]) || hash[6] != '$')
         {
             return Sonuc.Malformed;
         }
@@ -117,8 +118,8 @@ internal static class BCryptVerifier
 
     private static string Hesapla(byte[] tuz, byte[] anahtar, int maliyet)
     {
-        var p = BlowfishInitialState.P.ToArray();
-        var s = BlowfishInitialState.S.ToArray();
+        var p = BlowfishInitialState.CopyP();
+        var s = BlowfishInitialState.CopyS();
 
         ExpandState(p, s, tuz, anahtar);
 
@@ -130,7 +131,10 @@ internal static class BCryptVerifier
         }
 
         // "OrpheanBeholderScryDoubt" — bcrypt'in sabit açık metni (24 bayt = 6 kelime).
-        var acikMetin = "OrpheanBeholderScryDoubt"u8.ToArray();
+        // u8 SONEKİ KULLANILMIYOR: o, ReadOnlySpan<byte> üretir ve Span tipleri net48'de yok
+        // (bkz. HtaccessPortableApi). ASCII kodlaması AYNI 24 baytı verir — dizedeki her karakter
+        // ASCII aralığındadır, yani UTF-8 ile birebir örtüşür.
+        var acikMetin = Encoding.ASCII.GetBytes("OrpheanBeholderScryDoubt");
         var cdata = new uint[Words];
         var akisKonumu = 0;
         for (var i = 0; i < Words; i++)

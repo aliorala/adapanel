@@ -77,10 +77,24 @@ public sealed class HtaccessSiteReport
     public string Support { get; init; } = "unknown";
 
     /// <summary>
-    /// <b>ÇEKİRDEK MOTOR IIS İÇİNDE YÜKLÜ MÜ?</b> Bugün her koşulda <c>false</c> — ölçülmüş bir
-    /// yapı kısıtı yüzünden (bkz. <see cref="EngineBlockers"/>). Bu alan olmasaydı panel, modül
-    /// kayıtlı ve anahtar açıkken "çalışıyor" derdi ve hiçbir şey olmazdı.
+    /// <b>ÇEKİRDEK MOTOR IIS İÇİNDE YÜKLENEBİLİR Mİ?</b>
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Uzun süre her koşulda <c>false</c>'tu: motor net8'di, IIS modülü net48 olmak zorundaydı ve
+    /// bağlantı yapılamıyordu (bkz. <see cref="EngineBlockers"/>). O engel kalktı; motor artık
+    /// modül derlemesinin İÇİNDE ve modülün yüklendiği her uygulamada kayıt yerine oturuyor.
+    /// </para>
+    /// <para>
+    /// <b>NE KADARINI SÖYLEYEBİLDİĞİMİZ:</b> panel süreci <c>w3wp</c>'nin içini göremez, yani
+    /// "şu anda yüklü" diye bir ölçüm YOKTUR. Değer, panelin dışarıdan ölçebildiği tek zorunlu ön
+    /// koşuldan gelir: uygulama havuzu yönetilen kod çalıştırıyor mu (<see cref="Support"/>).
+    /// Havuz yönetilen kod çalıştırmıyorsa ya da yanlış CLR sürümündeyse modül HİÇ yüklenmez —
+    /// bu durumlarda <c>false</c> KESİN bilgidir. Havuz uygunsa değer <c>true</c>'dur ve "modül
+    /// kurulu ve kayıtlıysa motor çalışır" anlamına gelir; kurulumun kendisi ayrı bir konudur ve
+    /// panel onu buradan iddia etmez.
+    /// </para>
+    /// </remarks>
     public bool EngineLoadedInIis { get; init; }
 
     /// <summary>
@@ -197,7 +211,13 @@ public sealed class HtaccessPanelService
             ApplicationPoolName = site.ApplicationPoolName,
             ManagedRuntimeVersion = havuzSurumu,
             Support = destek,
-            EngineLoadedInIis = false,
+            // ARTIK SABIT false DEGIL. Derleme zamani engeli kalktigi icin (bkz. MotorEngelleri)
+            // motor, modulun yuklendigi her uygulamada kayit yerine oturuyor. Panelin disaridan
+            // olcebildigi TEK on kosul havuzun yonetilen kod calistirip calistirmadigidir:
+            // "no_managed_code" ya da yanlis CLR surumunde modul HIC yuklenmez, dolayisiyla motor
+            // da yuklenmez. "unknown" da false uretir -- havuzu okuyamadiysak "calisiyor" demek
+            // yalan olurdu (bkz. DestegiCozAsync).
+            EngineLoadedInIis = destek == "supported",
             EngineBlockers = MotorEngelleri(),
             Deviations = Sapmalar()
         };
@@ -467,30 +487,28 @@ public sealed class HtaccessPanelService
     }
 
     /// <summary>
-    /// Motorun IIS içinde çalışmasını engelleyen ÖLÇÜLMÜŞ nedenler.
+    /// Motorun IIS içinde çalışmasını engelleyen ÖLÇÜLMÜŞ nedenler. Boş liste "engel yok" demektir.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Bu liste sabit ve bu BİLEREK böyle.</b> Engel çalışma zamanında ölçülebilecek bir şey
-    /// değil (panel süreci w3wp'nin içini göremez); DERLEME ZAMANI bir kısıt. Ölçüm şudur: motorun
-    /// ve <c>AdaPanel.Core</c>'daki bağımlılıklarının bütün <c>.cs</c> dosyaları net48 hedefiyle
-    /// derlendi ve dokuz dosyada, yalnız .NET (Core) API'lerine dayanan yirmi beş satır kaldı
-    /// (<c>char.IsAsciiDigit</c>, <c>SHA1.HashData</c>, <c>CryptographicOperations</c>,
-    /// <c>Path.IsPathFullyQualified</c>, <c>FileInfo.LinkTarget</c>, <c>Array.Clear(dizi)</c>,
-    /// <c>string.Join(char, ...)</c>, <c>RuntimeHelpers.GetSubArray</c>). Bunların hiçbiri
-    /// dışarıdan bir tiple telafi edilemez — hepsi BCL tiplerinin static/örnek üyeleri.
+    /// <b>Liste ARTIK BOŞ ve bu bir ölçümün sonucu.</b> Buraya kadar tek bir engel yazılıydı
+    /// (<c>htaccess.blocker.engine_not_net48</c>): motor <c>net8.0-windows</c>, IIS modülü ise
+    /// <c>net48</c> olmak zorundaydı ve bir net8 derlemesi CLR 4 içinde yüklenemez. Motorun dokuz
+    /// dosyasındaki yirmi beş satır yalnız .NET (Core) API'lerine dayandığı için bağlantı
+    /// FİZİKSEL OLARAK yapılamıyordu.
     /// </para>
     /// <para>
-    /// <b>Panelin bunu göstermesi ZORUNLU:</b> modül GAC'a kurulsa, applicationHost.config'e
-    /// yazılsa ve anahtar açılsa bile <c>HtaccessEngineRegistry.Current</c> boş kalır ve modül her
-    /// isteği DOKUNMADAN geçirir. Bu satırlar olmasaydı panel yeşil gösterir, site hiçbir şey
-    /// yapmazdı — düzeltmeye çalıştığımız şikâyetin ta kendisi.
+    /// O satırlar taşınabilir hâle getirildi (bkz. <c>HtaccessPortableApi</c>) ve motorun kaynağı
+    /// modül projesinde de derleniyor. Engelin kalktığı VARSAYILMIYOR, ölçüldü: motorun net48
+    /// çıktısı ayrı bir CLR 4 sürecinde yükleniyor ve bir <c>RewriteRule</c> sonucu değiştiriyor
+    /// (<c>HtaccessNet48EngineLoadTests</c>).
+    /// </para>
+    /// <para>
+    /// <b>Yeni engel eklenecekse ÖLÇÜLMÜŞ olmalı.</b> Bu liste panelin "hiçbir şey olmayacak"
+    /// şeridini besliyor; tahmini bir engel yazmak, çalışan bir özelliği bozuk göstermek olurdu.
     /// </para>
     /// </remarks>
-    private static IReadOnlyList<string> MotorEngelleri() =>
-    [
-        "htaccess.blocker.engine_not_net48"
-    ];
+    private static IReadOnlyList<string> MotorEngelleri() => [];
 
     /// <summary>
     /// Motorun Apache'den BİLİNÇLİ sapmaları — anahtar olarak döner, metni arayüz çevirir.

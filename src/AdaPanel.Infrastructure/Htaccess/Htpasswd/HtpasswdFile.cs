@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using AdaPanel.Core.Dtos.Htaccess;
+using AdaPanel.Infrastructure.Htaccess;
 
 namespace AdaPanel.Infrastructure.Htaccess.Htpasswd;
 
@@ -151,7 +152,7 @@ internal static class HtpasswdFile
                 $"'{ozet.Split('$').ElementAtOrDefault(1)}' biçimindeki parola özeti tanınmıyor. Parolayı 'htpasswd -B' ile yeniden üretin.");
         }
 
-        if (ozet.Length == 13 && ozet.All(k => char.IsAsciiLetterOrDigit(k) || k is '.' or '/'))
+        if (ozet.Length == 13 && ozet.All(k => HtaccessPortableApi.AsciiHarfVeyaRakamMi(k) || k is '.' or '/'))
         {
             return (false, HtaccessDiagnosticCodes.UnsupportedHashScheme,
                 "Klasik Unix DES crypt() özeti desteklenmiyor (.NET'te karşılığı yok). Parolayı 'htpasswd -B' ile bcrypt olarak yeniden üretin.");
@@ -170,8 +171,8 @@ internal static class HtpasswdFile
             return false;
         }
 
-        var uretilen = SHA1.HashData(Encoding.UTF8.GetBytes(parola));
-        return CryptographicOperations.FixedTimeEquals(uretilen, beklenen);
+        var uretilen = HtaccessPortableApi.Sha1(Encoding.UTF8.GetBytes(parola));
+        return HtaccessPortableApi.SabitSuredeEsit(uretilen, beklenen);
     }
 
     private static bool SaltedSha1(string base64, string parola)
@@ -181,15 +182,24 @@ internal static class HtpasswdFile
             return false;
         }
 
-        var beklenen = govde[..20];
-        var tuz = govde[20..];
+        // DIZI DILIMI (govde[..20]) YAZILMIYOR: dizi dilimleri derleyicinin
+        // RuntimeHelpers.GetSubArray uyesini cagirmasini gerektirir ve o uye net48'de YOKTUR --
+        // ayrica BCL tipine uye eklenemedigi icin telafi de edilemez (dize dilimleri farkli,
+        // onlar dogrudan Substring'e cevriliyor ve iki hedefte de calisiyor).
+        // Array.Copy AYNI baytlari verir.
+        var beklenen = new byte[20];
+        Array.Copy(govde, 0, beklenen, 0, 20);
 
-        var girdi = new byte[Encoding.UTF8.GetByteCount(parola) + tuz.Length];
-        var yazilan = Encoding.UTF8.GetBytes(parola, girdi);
-        tuz.CopyTo(girdi.AsSpan(yazilan));
+        var tuzUzunlugu = govde.Length - 20;
+        var parolaBaytlari = Encoding.UTF8.GetBytes(parola);
 
-        var uretilen = SHA1.HashData(girdi);
-        return CryptographicOperations.FixedTimeEquals(uretilen, beklenen);
+        // {SSHA} tanimi: SHA1(parola || tuz). Tuz, ozetin ARKASINDA saklanir.
+        var girdi = new byte[parolaBaytlari.Length + tuzUzunlugu];
+        Array.Copy(parolaBaytlari, 0, girdi, 0, parolaBaytlari.Length);
+        Array.Copy(govde, 20, girdi, parolaBaytlari.Length, tuzUzunlugu);
+
+        var uretilen = HtaccessPortableApi.Sha1(girdi);
+        return HtaccessPortableApi.SabitSuredeEsit(uretilen, beklenen);
     }
 
     private static bool TryBase64(string metin, out byte[] baytlar)

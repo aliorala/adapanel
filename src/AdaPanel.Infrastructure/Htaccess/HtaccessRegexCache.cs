@@ -152,7 +152,10 @@ internal sealed class HtaccessRegexCache
 
             // Grubun İÇİNDE de niceleyici varsa iç içe niceleyici kalıbı oluşur.
             var govde = pattern[(i + 1)..kapanis];
-            if (govde.Any(k => k is '+' or '*') || govde.Contains('|'))
+            // IndexOf, Contains('|') DEGIL: string.Contains(char) net48'de YOK. Orada cagri sessizce
+            // LINQ'in Enumerable.Contains'ine duserdi -- sonuc ayni, ama bu yol istek basina kosuyor
+            // ve numaralandirici tahsis ederdi. Tek yazim, iki hedefte de ayni ve tahsissiz.
+            if (govde.Any(k => k is '+' or '*') || govde.IndexOf('|') >= 0)
             {
                 return true;
             }

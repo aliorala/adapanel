@@ -292,8 +292,8 @@ internal static class HtaccessParser
         }
 
         var ad = parcalar[0];
-        var argumanlar = string.Join(' ', parcalar.Skip(1));
-        var olumsuz = argumanlar.StartsWith('!');
+        var argumanlar = string.Join(" ", parcalar.Skip(1));
+        var olumsuz = argumanlar.StartsWith("!", StringComparison.Ordinal);
         if (olumsuz)
         {
             argumanlar = argumanlar[1..].Trim();

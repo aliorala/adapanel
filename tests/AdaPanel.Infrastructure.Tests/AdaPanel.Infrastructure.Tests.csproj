@@ -16,5 +16,20 @@
     <ProjectReference Include="..\..\src\AdaPanel.Infrastructure\AdaPanel.Infrastructure.csproj" />
     <!-- Vekilin (DbToolsProxyController) cerez yolu mantigini dogrulamak icin. -->
     <ProjectReference Include="..\..\src\AdaPanel.Api\AdaPanel.Api.csproj" />
+
+    <!-- IIS MODULU: SIRALAMA BAGI, DERLEME BASVURUSU DEGIL.
+         HtaccessNet48EngineLoadTests, modulun net48 CIKTISINI diskten bulup ayri bir CLR 4
+         surecinde yukluyor; yani DLL'in bu test kosmadan ONCE uretilmis olmasi gerekiyor.
+         Bagimlilik olmasaydi "tests/... .csproj" tek basina derlendiginde test, ESKI (ya da hic
+         olmayan) bir DLL'i olcerdi; kanit oldugunu sanan bir yalan.
+
+         ReferenceOutputAssembly=false: net48 derlemesi net8 test surecine BASVURU olarak
+         eklenemez (ve eklenmemeli; testin bütün anlami onu AYRI bir calisma zamaninda yuklemek).
+         SkipGetTargetFrameworkProperties=true: MSBuild aksi halde hedef cerceve uyumunu
+         dogrulamaya calisir ve net8 -> net48 basvurusunu HATA sayar. -->
+    <ProjectReference Include="..\..\src\AdaPanel.HtaccessModule\AdaPanel.HtaccessModule.csproj"
+                     ReferenceOutputAssembly="false"
+                     SkipGetTargetFrameworkProperties="true"
+                     Private="false" />
   </ItemGroup>
 </Project>
