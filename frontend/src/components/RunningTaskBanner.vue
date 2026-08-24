@@ -11,6 +11,25 @@
     <span class="meta rt-elapsed">{{ t("panel.running.elapsed", { time: elapsedText }) }}</span>
     <span class="meta rt-hint">{{ hint || t("panel.running.hint") }}</span>
   </p>
+
+  <!--
+    "KESİLDİ" ŞERİDİ — panel, iş sürerken yeniden başladığında.
+
+    NEDEN AYRI VE NEDEN `alert`: bu bir ilerleme bildirimi değil, KAYIP bildirimidir. İki saatlik
+    bir yedek yarıda kaldıysa kullanıcı bunu öğrenmeli ve işi yeniden başlatmalı; sessizce boş bir
+    ekran, "yedeğim var sanıyordum" felaketinin ilk adımıdır. `role="alert"` ekran okuyucuya da
+    bunu bir uyarı olarak duyurur.
+
+    KAPATILABİLİR: uyarı okunduktan sonra ekranı kalıcı işgal etmemeli. Kapatma yalnız bu
+    sekmeye aittir — sunucudaki kayıt, aynı türden yeni bir iş başlayınca düşer.
+  -->
+  <p v-if="interruptedLabel" class="notice error running-task rt-interrupted" role="alert">
+    <strong class="rt-label">{{ interruptedLabel }}</strong>
+    <span class="meta rt-hint">{{ t("panel.running.interruptedHint") }}</span>
+    <button type="button" class="compact ghost rt-dismiss" @click="emit('dismiss')">
+      {{ t("panel.running.dismiss") }}
+    </button>
+  </p>
 </template>
 
 <script setup lang="ts">
@@ -24,7 +43,14 @@ defineProps<{
   elapsedText: string;
   /** Ekrana özel ek açıklama; boşsa genel "sayfadan ayrılmayın" ipucu yazılır. */
   hint?: string;
+  /**
+   * YARIDA KALMIŞ iş açıklaması (çevrilmiş metin); boşsa kesilme şeridi hiç çizilmez.
+   * "Sürüyor" ile aynı anda görünebilir: eski bir iş kesilmişken yenisi başlatılmış olabilir.
+   */
+  interruptedLabel?: string;
 }>();
+
+const emit = defineEmits<{ (event: "dismiss"): void }>();
 
 const { t } = useI18n();
 </script>
@@ -50,6 +76,16 @@ const { t } = useI18n();
 .rt-hint {
   flex: 1 1 100%;
   font-size: 0.78rem;
+}
+
+/* Kesilme şeridinde döner halka YOK: hiçbir şey sürmüyor, dönen bir halka yalan söylerdi. */
+.rt-interrupted {
+  align-items: flex-start;
+}
+
+.rt-dismiss {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .rt-spinner {

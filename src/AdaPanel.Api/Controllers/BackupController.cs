@@ -2,6 +2,7 @@ using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,8 +17,46 @@ public sealed class BackupController(
     IBackupService backupService,
     ICustomerScopeService customerScopes,
     ISubscriptionBackupScheduleService backupSchedules,
+    IRunningJobService runningJobs,
     IAuditService auditService) : ControllerBase
 {
+    // =====================================================================================
+    // SÜREN İŞİN SUNUCUDAN GERİ OKUNMASI
+    //
+    // ÖLÇÜLEN BOŞLUK: yedek ve geri yükleme uçları işi ARKA PLANA ALMAZ — HTTP isteği iş bitene
+    // kadar açık kalır. Kullanıcı sayfayı yenilediğinde ya da sekmeyi kapattığında iş sunucuda
+    // DEVAM eder ama panelde "sürüyor" bilgisi tamamen kaybolurdu: ekran boş görünür, kullanıcı
+    // yedeği ikinci kez tetiklerdi. Antivirüs taramasında aynı hata 0.6.6'da kapatıldı; burada
+    // AYNI desen uygulanıyor (bkz. Infrastructure/RunningJobs/RunningJobService.cs).
+    // =====================================================================================
+
+    /// <summary>
+    /// Bu sunucuda ŞU AN süren yedekleme/geri yükleme işleri + panel yeniden başladığı için
+    /// yarıda kalmış olanlar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden yüzde yok:</b> yedekleme toplam dosya sayısını sıkıştırmaya başlamadan bilmez;
+    /// yüzde göstermenin tek yolu onu uydurmak olurdu. Verilen iki şey ÖLÇÜLEBİLİR: işin konusu
+    /// ve sunucudaki başlangıç anı.
+    /// </para>
+    /// <para>
+    /// <b>Kiracı izolasyonu:</b> kapsamlı kullanıcı yalnız KENDİ aboneliğine ait işleri görür.
+    /// Sunucu geneli işler (panel yedeği, posta sunucusu yedeği) sahipsizdir ve yalnız yöneticide
+    /// görünür — aksi hâlde bir müşteri, başka bir müşterinin sitesinin adını şeritten okurdu.
+    /// </para>
+    /// </remarks>
+    [HttpGet("running")]
+    public async Task<ActionResult<ApiResponse<RunningJobsStatusDto>>> GetRunningJobsAsync(CancellationToken cancellationToken)
+    {
+        var status = await runningJobs.GetStatusAsync(
+            [RunningJobKinds.Backup, RunningJobKinds.Restore],
+            await GetAllowedSubscriptionIdsAsync(cancellationToken),
+            cancellationToken);
+
+        return Ok(ApiResponse<RunningJobsStatusDto>.Ok(status));
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<BackupRecordDto>>>> GetBackupsAsync(CancellationToken cancellationToken)
     {
@@ -271,12 +310,16 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupSiteAsync([FromBody] BackupSiteRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+
+        // Sahip İŞTEN ÖNCE çözülür: çalışan-iş kaydı da denetim kaydı da aynı sahibi taşımalı ve
+        // sahiplik yedek sırasında değişse bile ikisi tutarlı kalmalı.
+        var konu = await ResolveSiteSubjectAsync(request.SiteName, cancellationToken);
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, request.SiteName, konu, cancellationToken);
+
         var backup = await backupService.BackupSiteAsync(request, cancellationToken);
 
-        await WriteBackupCreatedAuditAsync(
-            backup,
-            await ResolveSiteSubjectAsync(request.SiteName, cancellationToken),
-            cancellationToken);
+        await WriteBackupCreatedAuditAsync(backup, konu, cancellationToken);
 
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
@@ -315,8 +358,15 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupDatabaseAsync([FromBody] BackupDatabaseRequest request, CancellationToken cancellationToken)
     {
-        var backup = await backupService.BackupDatabaseAsync(request, cancellationToken);
         // Konu YOK: sunucu geneli/yönetici işlemi (veritabanı sahipliği yedek kaydında taşınmaz).
+        // Aynı sebeple çalışan-iş kaydı da sahipsizdir → yalnız yöneticide görünür.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup,
+            $"{request.Engine}/{request.DatabaseName}",
+            subjectUserId: null,
+            cancellationToken);
+
+        var backup = await backupService.BackupDatabaseAsync(request, cancellationToken);
         await WriteBackupCreatedAuditAsync(backup, null, cancellationToken);
         return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.created"));
     }
@@ -327,6 +377,13 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupMailAsync([FromBody] BackupMailRequest request)
     {
         // Servisi durdurup başlatan akış istemci iptaline bağlanmaz.
+        //
+        // ÇALIŞAN-İŞ KAYDI BURADA ÖZELLİKLE DEĞERLİ: bu iş sırasında posta sunucusu DURUYOR.
+        // Kullanıcı sayfayı yenileyip "sürüyor" bilgisini kaybettiğinde, dışarıdan görünen posta
+        // kesintisinin sebebini panelde hiçbir yerde göremiyordu.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, "mail", subjectUserId: null, CancellationToken.None);
+
         var backup = await backupService.BackupMailAsync(request, CancellationToken.None);
 
         // MAIL SUNUCUSU KISA SÜRELİĞİNE DURUYOR: bu, dışarıdan "posta kesintisi" olarak görülen
@@ -341,6 +398,9 @@ public sealed class BackupController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupPanelAsync([FromBody] BackupPanelRequest? request, CancellationToken cancellationToken)
     {
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, "panel", subjectUserId: null, cancellationToken);
+
         var backup = await backupService.BackupPanelAsync(request ?? new BackupPanelRequest(), cancellationToken);
         // Panel yedeği ADMIN PAROLA ÖZETLERİNİ ve 2FA gizlerini içerir; kimin ne zaman aldığı
         // izlenebilir olmalı (indirilebilen bir arşiv üretiliyor).
@@ -360,6 +420,13 @@ public sealed class BackupController(
             .FirstOrDefault(item => string.Equals(item.Id, request.BackupId, StringComparison.OrdinalIgnoreCase));
         var konu = await ResolveRecordSubjectAsync(hedef, cancellationToken);
         var tanim = $"{hedef?.Type}/{hedef?.Source} ('{hedef?.Name ?? request.BackupId}')";
+
+        // GERİ YÜKLEME AYRI BİR TÜRDÜR ("restore"), yedekle aynı yuvayı paylaşmaz: ikisi farklı
+        // işlerdir ve bir geri yükleme sürerken zamanlanmış bir yedeğin elle tetiklenmesi
+        // yasaklanacak bir şey değildir. Aynı anda İKİ geri yükleme ise yasaktır — ikisi de canlı
+        // veriye yazar.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Restore, hedef?.Name ?? request.BackupId, konu, cancellationToken);
 
         BackupRecordDto backup;
         try
@@ -470,6 +537,9 @@ public sealed class BackupController(
         var ogeler = string.Join(", ", request.Items.Take(10))
             + (request.Items.Length > 10 ? $" ... (+{request.Items.Length - 10})" : string.Empty);
 
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Restore, hedef?.Name ?? request.BackupId, konu, cancellationToken);
+
         RestoreBackupItemsResultDto result;
         try
         {
@@ -579,6 +649,12 @@ public sealed class BackupController(
         // Kimlik istekten okunup doğrulanmasaydı, bir müşteri başka bir müşterinin bütün
         // verisini içeren bir arşiv ürettirip indirebilirdi.
         await EnsureSubscriptionAccessAsync(request.UserId, cancellationToken);
+
+        // Abonelik yedeği müşterinin BÜTÜN sitelerini, veritabanlarını ve postasını tek arşive
+        // koyar — paneldeki en uzun süren iş budur. Etiket abonelik adı değil kimliğidir: adı
+        // çözmek ikinci bir sorgu ister ve bu uç zaten kimlikle çalışır.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, request.UserId.ToString("N"), request.UserId, cancellationToken);
 
         var backup = await backupService.BackupSubscriptionAsync(request, cancellationToken);
 
@@ -710,6 +786,10 @@ public sealed class BackupController(
     public async Task<ActionResult<ApiResponse<SubscriptionBackupScheduleDto>>> RunScheduleNowAsync(Guid userId, CancellationToken cancellationToken)
     {
         await EnsureSubscriptionAccessAsync(userId, cancellationToken);
+
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, userId.ToString("N"), userId, cancellationToken);
+
         var schedule = await backupSchedules.RunNowAsync(userId, cancellationToken);
 
         // İZ YOKTU. Elle tetiklenen tur yalnız yedek ALMAZ, saklama politikasına göre ESKİLERİ DE

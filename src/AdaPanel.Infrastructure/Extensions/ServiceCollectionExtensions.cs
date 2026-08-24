@@ -51,6 +51,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
+        // Uzun süren işlerin (yedek/geri yükleme/göç/bileşen kurulumu) sunucu tarafı kaydı.
+        // SINGLETON: durumu diskte tutar, istekten isteğe taşınacak alanı yoktur ve panel
+        // açılışında yoklanan status uçları onu istekten bağımsız okur.
+        services.AddSingleton<IRunningJobService, RunningJobs.RunningJobService>();
         services.AddScoped<Bootstrap.ComponentDiscoveryService>();
         services.AddScoped<IComponentBootstrapper, Bootstrap.ComponentBootstrapper>();
         services.AddScoped<IIisSiteService, Iis.WebAdministrationSiteService>();

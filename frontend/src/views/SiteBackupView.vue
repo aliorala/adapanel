@@ -75,11 +75,18 @@
       </p>
 
       <!-- Yedek ALINIRKEN ekran donmuş görünmesin: uç işi arka plana almıyor, istek uçuştayken
-           yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts). -->
+           yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts).
+
+           ŞERİT İKİ KAYNAKTAN BESLENİR: bu sekmede başlatılan iş (runningBackup) ve SUNUCUDA
+           süren iş (/backup/running). İkincisi sayfa yenilendikten sonra da doludur — eskiden
+           yenileme "sürüyor" bilgisini tamamen siliyordu. -->
       <RunningTaskBanner
-        :running="runningBackup.running.value"
-        :label="runningBackup.label.value"
-        :elapsed-text="runningBackup.elapsedText.value" />
+        :running="bannerRunning"
+        :label="bannerLabel"
+        :elapsed-text="bannerElapsedText"
+        :hint="bannerHint"
+        :interrupted-label="serverBackup.interruptedText.value"
+        @dismiss="serverBackup.dismissInterrupted" />
 
       <button class="compact" :disabled="busy" @click="createBackup">
         {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
@@ -201,7 +208,14 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { useSitesStore } from "../stores/sites";
-import { backupSite, downloadBackup, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
+import {
+  backupSite,
+  downloadBackup,
+  getBackupRunningJobs,
+  getBackups,
+  restoreBackup,
+  type BackupRecord
+} from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
@@ -209,7 +223,7 @@ import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
 import { useNotice, useSectionError } from "../composables/useNotice";
-import { useRunningTask } from "../composables/useRunningTask";
+import { runningJobLabel, useRunningTask, useServerRunningTask } from "../composables/useRunningTask";
 import { copyToClipboard } from "../utils/clipboard";
 import { maskSecretsInUri } from "../utils/url";
 
@@ -254,6 +268,34 @@ const encryptionPassword = ref("");
 
 // Süren yedek GÖRÜNÜR: uç işi arka plana almadığı için istek uçuştayken yedek gerçekten sürüyor.
 const runningBackup = useRunningTask();
+
+/*
+ * SAYFA YENİLENDİĞİNDE "YEDEK SÜRÜYOR" ARTIK KAYBOLMUYOR.
+ *
+ * ÖNCESİ: durum yalnız bu sekmenin belleğindeydi. Kullanıcı büyük bir siteyi yedeklemeye başlayıp
+ * sayfayı yenilediğinde panel "iş yok" diyordu; yedek sunucuda sürerken ekran boş görünüyor,
+ * kullanıcı ikinci bir yedek başlatmaya çalışıyordu.
+ *
+ * ŞİMDİ: sunucu yedek/geri yükleme süresince kaydı `/backup/running` ucundan veriyor; ekran
+ * açılır açılmaz okunuyor ve şerit oradan besleniyor. Süre SUNUCUNUN verdiği başlangıç anından
+ * hesaplanıyor, bu sekmenin `begin()` anından değil.
+ */
+const serverBackup = useServerRunningTask({
+  fetchStatus: getBackupRunningJobs,
+  label: (job) => runningJobLabel(t, job),
+  interruptedLabel: (job) =>
+    t("panel.runningJob.interrupted", { job: runningJobLabel(t, job), date: formatDate(job.startedAtUtc) })
+});
+
+// Bu sekmede başlatılan iş varsa ONUN sayacı gösterilir; yoksa sunucudan okunan iş.
+const bannerRunning = computed(() => runningBackup.running.value || serverBackup.running.value);
+const bannerLabel = computed(() =>
+  runningBackup.running.value ? runningBackup.label.value : serverBackup.label.value);
+const bannerElapsedText = computed(() =>
+  runningBackup.running.value ? runningBackup.elapsedText.value : serverBackup.elapsedText.value);
+// Sunucudan okunan iş bu sekmede başlatılmadı: "sayfadan ayrılmayın" demek yanlış olurdu.
+const bannerHint = computed(() =>
+  runningBackup.running.value ? "" : t("panel.runningJob.resumedHint"));
 const { groupByDay } = useDayGroups();
 
 /** Yolu açık olan kayıt (tek seferde bir tane): tam yollar uzun, hepsi birden açık kalmasın. */
@@ -333,7 +375,23 @@ async function copyPath(value: string) {
 onMounted(async () => {
   await refresh();
   await loadDatabases();
+  // Sunucuda süren iş varsa şerit ekran açılır açılmaz dolar (yenilenmiş sayfa dahil).
+  await serverBackup.start();
 });
+
+/*
+ * SUNUCUDAKİ İŞ BİTTİĞİNDE LİSTE TAZELENİR.
+ *
+ * Bu sekme işi kendisi başlatmadıysa (sayfa yenilenmişti) sonucu isteyecek açık bir isteği yok;
+ * liste tazelenmezse yeni yedek ekranda HİÇ görünmez ve kullanıcı yedeğin alınmadığını sanır.
+ */
+watch(
+  () => serverBackup.job.value,
+  async (yeni, eski) => {
+    if (eski && !yeni && !busy.value) {
+      await refresh();
+    }
+  });
 
 async function refresh() {
   loading.value = true;

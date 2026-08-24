@@ -13,6 +13,19 @@
          ikinci kez basılan bir düğme demektir. Göçte ikinci basış siteyi yeniden taşımaktır. -->
     <p v-if="notice" :class="['inline-notice', 'page-notice', noticeError ? 'error' : 'ok']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
+    <!-- SAYFA YENİLENDİĞİNDE "GÖÇ SÜRÜYOR" KAYBOLMUYOR.
+         Canlı adım akışı (SSE) yalnız o sekmeye aitti: yenileme hem adımları hem "sürüyor"
+         bilgisini siliyordu, oysa göç sunucuda saatlerce devam ediyordu. Şerit sunucudaki
+         çalışan-iş kaydından beslenir; panel iş sürerken yeniden başlamışsa "yarıda kaldı"
+         uyarısı da buradan çıkar. -->
+    <RunningTaskBanner
+      :running="bannerRunning"
+      :label="bannerLabel"
+      :elapsed-text="bannerElapsedText"
+      :hint="bannerHint"
+      :interrupted-label="serverMigration.interruptedText.value"
+      @dismiss="serverMigration.dismissInterrupted" />
+
     <div class="form-surface migration-how">
       <h3 class="section-label">{{ t("panel.migration.howTitle") }}</h3>
       <p class="meta create-hint">{{ t("panel.migration.howWhat") }}</p>
@@ -296,10 +309,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import {
+  getMigrationRunningJobs,
   migrateSite,
   migrateSiteStream,
   discoverPlesk,
@@ -310,10 +324,49 @@ import {
   type MigrationCheck
 } from "../api/migration";
 import { extractApiMessage, extractApiDetails } from "../stores/auth";
+import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
+import { runningJobLabel, useRunningTask, useServerRunningTask } from "../composables/useRunningTask";
 import { useSectionError } from "../composables/useNotice";
 
 const { t } = useI18n();
+
+/*
+ * "GÖÇ SÜRÜYOR" ARTIK SAYFA YENİLEMEYE DAYANIYOR.
+ *
+ * ÖNCESİ: canlı adım akışı (SSE) yalnız bu sekmeye aitti. Kullanıcı yüzlerce megabaytlık bir göç
+ * sürerken sayfayı yenilediğinde hem adım listesi hem "sürüyor" bilgisi siliniyor, göç ise
+ * sunucuda devam ediyordu — ve kullanıcı aynı siteye ikinci bir göç başlatabiliyordu.
+ *
+ * ŞİMDİ: sunucu göç süresince kaydı `/migration/running` ucundan veriyor; ekran açılır açılmaz
+ * okunuyor. Sunucu ayrıca aynı anda ikinci bir göçü 409 ile reddediyor.
+ *
+ * YÜZDE YOK: uzak taraftaki dosya sayısı çekilmeden bilinmiyor. Adım listesi zaten GERÇEK
+ * adımları gösteriyor; onun üstüne uydurma bir yüzde koymak, ölçülmüş bilgiyi ölçülmemişle
+ * kirletmek olurdu.
+ */
+const localMigration = useRunningTask();
+const serverMigration = useServerRunningTask({
+  fetchStatus: getMigrationRunningJobs,
+  label: (job) => runningJobLabel(t, job),
+  interruptedLabel: (job) =>
+    t("panel.runningJob.interrupted", {
+      job: runningJobLabel(t, job),
+      date: new Date(job.startedAtUtc).toLocaleString()
+    })
+});
+
+const bannerRunning = computed(() => localMigration.running.value || serverMigration.running.value);
+const bannerLabel = computed(() =>
+  localMigration.running.value ? localMigration.label.value : serverMigration.label.value);
+const bannerElapsedText = computed(() =>
+  localMigration.running.value ? localMigration.elapsedText.value : serverMigration.elapsedText.value);
+// Sunucudan okunan göç bu sekmede başlatılmadı: "sayfadan ayrılmayın" demek yanlış olurdu.
+const bannerHint = computed(() =>
+  localMigration.running.value ? "" : t("panel.runningJob.resumedHint"));
+
+// Sunucuda süren göç varsa şerit ekran açılır açılmaz dolar (yenilenmiş sayfa dahil).
+onMounted(serverMigration.start);
 
 const form = reactive({
   siteName: "",
@@ -530,6 +583,9 @@ async function run() {
   busy.value = true;
   notice.value = "";
   liveSteps.value = [];
+  // Adım listesi "hangi adımda"yı söyler ama GEÇEN SÜREYİ söylemez; büyük bir göçte tek bir adım
+  // yarım saat sürebilir ve ekran donmuş görünür.
+  localMigration.begin(t("panel.runningJob.migration", { title: form.siteName.trim() }));
   try {
     await migrateSiteStream({ ...form, siteName: form.siteName.trim() }, (event) => {
       if (event.phase === "plan") {
@@ -548,6 +604,7 @@ async function run() {
     noticeError.value = true;
   } finally {
     busy.value = false;
+    localMigration.end();
   }
 }
 

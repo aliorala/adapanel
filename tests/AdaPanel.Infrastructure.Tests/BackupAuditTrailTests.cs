@@ -4,8 +4,12 @@ using AdaPanel.Core.Dtos.Audit;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.RunningJobs;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -169,7 +173,18 @@ public sealed class BackupAuditTrailTests
             nameType: ClaimTypes.Name,
             roleType: ClaimTypes.Role));
 
-        return new BackupController(yedekServisi, new SahiplikKapsami(), new SahteProgramServisi(), denetim)
+        // CALISAN-IS SERVISI TAKLIT EDILMIYOR, GERCEGI KULLANILIYOR (kendi gecici veri kokunde).
+        // Taklit edilseydi bu testler "yedek ucu calisan-is kaydini aciyor mu" sorusunu hic
+        // olcmezdi ve kayit acmayi unutan bir degisiklik burada yesil kalirdi. Gercek servis
+        // diske yaziyor; her denetleyici kendi kokunu aldigi icin testler birbirini etkilemez.
+        var isKoku = Path.Combine(Path.GetTempPath(), $"adapanel-audit-jobs-{Guid.NewGuid():N}");
+        var calisanIsler = new RunningJobService(
+            // Tam nitelikli: `AdaPanel.Infrastructure.Options` ad alani ile
+            // `Microsoft.Extensions.Options.Options` sinifi ayni adi tasiyor.
+            new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = isKoku })),
+            NullLogger<RunningJobService>.Instance);
+
+        return new BackupController(yedekServisi, new SahiplikKapsami(), new SahteProgramServisi(), calisanIsler, denetim)
         {
             ControllerContext = new ControllerContext
             {

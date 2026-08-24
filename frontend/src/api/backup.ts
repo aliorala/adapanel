@@ -1,4 +1,8 @@
 import { apiClient } from "./client";
+// Çalışan-iş sözleşmesi TEK YERDE tanımlı (composables/useRunningTask.ts): dört modül aynı
+// gövdeyi döndürüyor ve tipi her sarmalayıcıda yeniden yazmak, bir alan eklendiğinde üçünün
+// bayatlaması demekti.
+import type { ServerRunningJobs } from "../composables/useRunningTask";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -458,5 +462,21 @@ export async function restoreBackup(backupId: string, targetPath: string, encryp
     encryptionPassword
   });
 
+  return response.data.data;
+}
+
+/**
+ * Bu sunucuda ŞU AN süren yedekleme/geri yükleme işleri + yarıda kalmış olanlar.
+ *
+ * NEDEN VAR: yedek uçları işi arka plana almaz — istek iş bitene kadar açık kalır. Sayfa
+ * yenilendiğinde iş sunucuda DEVAM eder ama panelde "sürüyor" bilgisi kayboluyordu; kullanıcı
+ * ekranı donmuş sanıp yedeği ikinci kez tetikliyordu. Bu uç o bilgiyi geri okutur.
+ *
+ * YÜZDE ALANI YOK ve olmayacak: yedekleme toplam dosya sayısını sıkıştırmaya başlamadan bilmez.
+ * Yüzde göstermenin tek yolu onu UYDURMAK olurdu. Ölçülebilen iki şey veriliyor: işin konusu ve
+ * sunucudaki başlangıç anı (bir de sunucunun kendi saati, saat sapması düşsün diye).
+ */
+export async function getBackupRunningJobs() {
+  const response = await apiClient.get<ApiEnvelope<ServerRunningJobs>>("/backup/running");
   return response.data.data;
 }

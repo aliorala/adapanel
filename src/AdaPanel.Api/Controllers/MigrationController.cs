@@ -4,6 +4,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Migration;
+using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
@@ -29,14 +30,48 @@ namespace AdaPanel.Api.Controllers;
 public sealed class MigrationController(
     ISiteMigrationService migrationService,
     ICustomerScopeService customerScopes,
+    IRunningJobService runningJobs,
     IAuditService auditService) : ControllerBase
 {
+    /// <summary>
+    /// Bu sunucuda ŞU AN süren göç + panel yeniden başladığı için yarıda kalmış göç.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gerekli:</b> göç uzak sunucudan yüzlerce megabayt dosya çeker ve saatler sürebilir.
+    /// SSE akışı (<c>site/stream</c>) canlı adım gösteriyordu ama akış YALNIZ o sekmeye aitti:
+    /// sayfa yenilenince adımlar da "sürüyor" bilgisi de tamamen kayboluyordu — üstelik göç
+    /// sunucuda devam ediyor ve kullanıcı aynı siteye ikinci bir göç başlatabiliyordu.
+    /// </para>
+    /// <para>
+    /// <b>Neden yüzde yok:</b> uzak taraftaki dosya sayısı çekilmeden bilinmiyor. Verilen iki şey
+    /// ölçülebilir: hedef site adı ve sunucudaki başlangıç anı.
+    /// </para>
+    /// <para>
+    /// <b>Neden kapsam süzgeci yok:</b> bu denetleyicinin tamamı <c>Administrator</c>'a kapalıdır;
+    /// kapsamlı kullanıcı buraya hiç ulaşamaz.
+    /// </para>
+    /// </remarks>
+    [HttpGet("running")]
+    public async Task<ActionResult<ApiResponse<RunningJobsStatusDto>>> GetRunningJobsAsync(CancellationToken cancellationToken)
+    {
+        var status = await runningJobs.GetStatusAsync(
+            [RunningJobKinds.Migration],
+            allowedSubjectUserIds: null,
+            cancellationToken);
+
+        return Ok(ApiResponse<RunningJobsStatusDto>.Ok(status));
+    }
+
     [HttpPost("site")]
     [RequestSizeLimit(8192)]
     public async Task<ActionResult<ApiResponse<MigrateSiteResultDto>>> MigrateSiteAsync(
         [FromBody] MigrateSiteRequest request,
         CancellationToken cancellationToken)
     {
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Migration, request.SiteName, subjectUserId: null, cancellationToken);
+
         var result = await migrationService.MigrateSiteAsync(
             request,
             User.GetRequiredUserId(),
@@ -60,6 +95,12 @@ public sealed class MigrationController(
         [FromBody] MigrateSiteRequest request,
         CancellationToken cancellationToken)
     {
+        // KAYIT AKIŞTAN ÖNCE AÇILIR. "Zaten bir göç sürüyor" (409) hatasının düzgün bir JSON
+        // gövdesine dönüşebilmesi için yanıt henüz text/event-stream olarak AÇILMAMIŞ olmalı;
+        // başlıklar yazıldıktan sonra fırlatılan istisna istemciye yarım bir akış olarak görünürdü.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Migration, request.SiteName, subjectUserId: null, cancellationToken);
+
         Response.Headers.ContentType = "text/event-stream";
         Response.Headers.CacheControl = "no-cache";
         Response.Headers["X-Accel-Buffering"] = "no"; // ara proxy varsa tamponlamayı kapat

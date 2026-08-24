@@ -1,4 +1,5 @@
 import { apiClient, buildStreamRequestHeaders } from "./client";
+import type { ServerRunningJobs } from "../composables/useRunningTask";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -131,5 +132,17 @@ export type MigrationValidationResult = { allPassed: boolean; checks: MigrationC
 // Göç ÖNCESİ ön-kontrol: site adı + dosya/DB kaynağı erişilebilirliği (göç başlatmadan).
 export async function validateMigration(payload: MigrateSitePayload) {
   const response = await apiClient.post<ApiEnvelope<MigrationValidationResult>>("/migration/validate", payload);
+  return response.data.data;
+}
+
+/**
+ * Bu sunucuda ŞU AN süren göç + panel yeniden başladığı için yarıda kalmış göç.
+ *
+ * NEDEN VAR: SSE akışı canlı adım gösteriyordu ama akış YALNIZ o sekmeye aitti — sayfa
+ * yenilenince hem adımlar hem "sürüyor" bilgisi kayboluyordu. Göç ise uzak sunucudan yüzlerce
+ * megabayt çekerken saatlerce sürebiliyor.
+ */
+export async function getMigrationRunningJobs() {
+  const response = await apiClient.get<ApiEnvelope<ServerRunningJobs>>("/migration/running");
   return response.data.data;
 }

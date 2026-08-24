@@ -30,6 +30,19 @@
       <pre>{{ noticeDetails }}</pre>
     </details>
 
+    <!-- SAYFA YENİLENDİĞİNDE "KURULUM SÜRÜYOR" KAYBOLMUYOR.
+         Aşağıdaki adım listesi `IOperationProgressService`'ten gelir ve o servis yalnız
+         BELLEKTEDİR: panel yeniden başlarsa (ya da sayfa yenilenirse) adımlar yok olur ve ekran,
+         PostgreSQL'in 365 MB'lık indirmesinin yarıda kaldığını değil HİÇ BAŞLAMADIĞINI gösterir.
+         Bu şerit kaydı diskten okur; "kesildi" durumunu da söyleyebilir. -->
+    <RunningTaskBanner
+      :running="serverSoftware.running.value"
+      :label="serverSoftware.label.value"
+      :elapsed-text="serverSoftware.elapsedText.value"
+      :hint="t('panel.runningJob.resumedHint')"
+      :interrupted-label="serverSoftware.interruptedText.value"
+      @dismiss="serverSoftware.dismissInterrupted" />
+
     <div
       v-if="softwareStore.installingComponentId || softwareStore.installingDefaults"
       class="install-progress"
@@ -230,10 +243,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AppStoreView from "./AppStoreView.vue";
+import { getSoftwareRunningJobs } from "../api/software";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import RunningTaskBanner from "../components/RunningTaskBanner.vue";
+import { runningJobLabel, useServerRunningTask } from "../composables/useRunningTask";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSoftwareStore, type ComponentManifestItem, type InstalledComponent } from "../stores/software";
 
@@ -262,6 +278,49 @@ const manifestRows = computed<ManifestRow[]>(() => {
 });
 
 const installedRows = computed(() => softwareStore.catalog?.installed ?? []);
+
+/*
+ * KURULUM SAYFA YENİLEMEYE DAYANIYOR.
+ *
+ * ÖNCESİ: kurulum durumu yalnız `IOperationProgressService`'ten okunuyordu ve o servis BELLEKTE
+ * tutuluyor. Kullanıcı 365 MB'lık bir PostgreSQL kurulumu sürerken sayfayı yenilediğinde panel
+ * "kurulum yok" diyordu; indirme sunucuda devam ederken ekran boş görünüyor, kullanıcı kurulumu
+ * ikinci kez tetiklemeye çalışıyordu.
+ *
+ * ŞİMDİ: `/software/running` kaydı DİSKTEN okuyor ve sahibini ölçüyor — panel kurulum sürerken
+ * yeniden başlamışsa bunu "yarıda kaldı" olarak söyleyebiliyor. İki uç birbirinin yerini almaz:
+ * adım listesi "hangi adımda"yı, bu şerit "sürüyor mu ve ne zamandır"ı cevaplar.
+ *
+ * YÜZDE YOK: indirilen paketin boyutu her kaynaktan gelmiyor, adımların süresi de birbirine
+ * benzemiyor. Adım adları GERÇEK; onların üstüne uydurma bir yüzde koymak ölçülmüş bilgiyi
+ * kirletmek olurdu.
+ */
+const serverSoftware = useServerRunningTask({
+  fetchStatus: getSoftwareRunningJobs,
+  label: (job) => runningJobLabel(t, job),
+  interruptedLabel: (job) =>
+    t("panel.runningJob.interrupted", {
+      job: runningJobLabel(t, job),
+      date: new Date(job.startedAtUtc).toLocaleString()
+    })
+});
+
+// Sunucuda süren kurulum varsa şerit ekran açılır açılmaz dolar (yenilenmiş sayfa dahil).
+onMounted(serverSoftware.start);
+
+/*
+ * KURULUM BİTİNCE KATALOG TAZELENİR.
+ *
+ * Bu sekme kurulumu kendisi başlatmadıysa (sayfa yenilenmişti) sonucu isteyecek açık bir isteği
+ * yok; katalog tazelenmezse yeni kurulan bileşen listede "kurulu değil" görünmeye devam eder.
+ */
+watch(
+  () => serverSoftware.job.value,
+  async (yeni, eski) => {
+    if (eski && !yeni && !softwareStore.installingComponentId && !softwareStore.installingDefaults) {
+      await softwareStore.fetchCatalog().catch(() => undefined);
+    }
+  });
 
 const liveProgress = computed(() => softwareStore.liveProgress);
 const liveProgressLabel = computed(() => {

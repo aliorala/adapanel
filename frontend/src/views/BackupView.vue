@@ -103,11 +103,18 @@
     </div>
 
     <!-- Yedek ALINIRKEN ekran donmuş görünmesin: uç işi arka plana almıyor, istek uçuştayken
-         yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts). -->
+         yedek GERÇEKTEN sürüyor (bkz. composables/useRunningTask.ts).
+
+         ŞERİT İKİ KAYNAKTAN BESLENİR: bu sekmede başlatılan iş (runningBackup) ve SUNUCUDA süren
+         iş (/backup/running). İkincisi sayfa yenilendikten sonra da doludur; ayrıca panel iş
+         sürerken yeniden başlamışsa "yarıda kaldı" uyarısı buradan çıkar. -->
     <RunningTaskBanner
-      :running="runningBackup.running.value"
-      :label="runningBackup.label.value"
-      :elapsed-text="runningBackup.elapsedText.value" />
+      :running="bannerRunning"
+      :label="bannerLabel"
+      :elapsed-text="bannerElapsedText"
+      :hint="bannerHint"
+      :interrupted-label="serverBackup.interruptedText.value"
+      @dismiss="serverBackup.dismissInterrupted" />
 
     <div v-if="activeView === 'list'" class="data-table backup-table">
       <!-- BEŞ sütun. Önceden sekizdi ve dördü (tür, hedef türü, boyut, tarih) tek kelimelik
@@ -1041,6 +1048,7 @@ import {
   getBackupChain,
   getBackupEncryption,
   getBackupEntries,
+  getBackupRunningJobs,
   getBackups,
   getBackupSchedule,
   getBackupSchedules,
@@ -1071,7 +1079,7 @@ import { useBulkAction } from "../composables/useBulkSelection";
 import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { usePagination } from "../composables/usePagination";
-import { useRunningTask } from "../composables/useRunningTask";
+import { runningJobLabel, useRunningTask, useServerRunningTask } from "../composables/useRunningTask";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
@@ -1102,6 +1110,35 @@ const listLoad = useSectionError();
 // Süren yedek işi GÖRÜNÜR (bkz. composables/useRunningTask.ts): uç işi arka plana almadığı için
 // istek uçuştayken yedek gerçekten sürüyor.
 const runningBackup = useRunningTask();
+
+/*
+ * SAYFA YENİLENDİĞİNDE "YEDEK/GERİ YÜKLEME SÜRÜYOR" ARTIK KAYBOLMUYOR.
+ *
+ * ÖNCESİ: durum yalnız bu sekmenin belleğindeydi. Abonelik yedeği (bir müşterinin bütün siteleri,
+ * veritabanları ve postası tek arşivde) saatler sürebiliyor; kullanıcı sayfayı yenilediğinde panel
+ * "iş yok" diyor, yedek sunucuda sürerken ekran boş görünüyordu.
+ *
+ * ŞİMDİ: `/backup/running` süren işi (hedef + SUNUCUDAKİ başlangıç anı) döndürüyor. Panel iş
+ * sürerken yeniden başlamışsa aynı uç bunu "yarıda kaldı" olarak yüzeye çıkarır — sessizce boş
+ * bir ekran, "yedeğim var sanıyordum" felaketinin ilk adımıdır.
+ */
+const serverBackup = useServerRunningTask({
+  fetchStatus: getBackupRunningJobs,
+  label: (job) => runningJobLabel(t, job),
+  interruptedLabel: (job) =>
+    t("panel.runningJob.interrupted", { job: runningJobLabel(t, job), date: formatDate(job.startedAtUtc) })
+});
+
+// Bu sekmede başlatılan iş varsa ONUN sayacı gösterilir (saniyelik ve kesin); yoksa sunucudan
+// okunan iş.
+const bannerRunning = computed(() => runningBackup.running.value || serverBackup.running.value);
+const bannerLabel = computed(() =>
+  runningBackup.running.value ? runningBackup.label.value : serverBackup.label.value);
+const bannerElapsedText = computed(() =>
+  runningBackup.running.value ? runningBackup.elapsedText.value : serverBackup.elapsedText.value);
+// Sunucudan okunan iş bu sekmede başlatılmadı: "sayfadan ayrılmayın" demek yanlış olurdu.
+const bannerHint = computed(() =>
+  runningBackup.running.value ? "" : t("panel.runningJob.resumedHint"));
 const { groupByDay } = useDayGroups();
 
 /**
@@ -1629,7 +1666,24 @@ onMounted(async () => {
     await loadEncryption();
     await loadBackupRoot();
   }
+
+  // Sunucuda süren iş varsa şerit ekran açılır açılmaz dolar (yenilenmiş sayfa dahil).
+  await serverBackup.start();
 });
+
+/*
+ * SUNUCUDAKİ İŞ BİTTİĞİNDE LİSTE TAZELENİR.
+ *
+ * Bu sekme işi kendisi başlatmadıysa (sayfa yenilenmişti) sonucu isteyecek açık bir isteği yok;
+ * liste tazelenmezse yeni yedek ekranda HİÇ görünmez ve kullanıcı yedeğin alınmadığını sanır.
+ */
+watch(
+  () => serverBackup.job.value,
+  async (yeni, eski) => {
+    if (eski && !yeni && !runningBackup.running.value) {
+      await refresh();
+    }
+  });
 
 /**
  * Yedek kök klasörünü Ayarlar tercihinden OKUR (uydurmaz).

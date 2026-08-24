@@ -1,6 +1,7 @@
 using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Components;
+using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,8 +14,38 @@ namespace AdaPanel.Api.Controllers;
 public sealed class SoftwareController(
     IComponentBootstrapper componentBootstrapper,
     IOperationProgressService operationProgress,
+    IRunningJobService runningJobs,
     IPhpService phpService) : ControllerBase
 {
+    /// <summary>
+    /// Bu sunucuda ŞU AN süren bileşen kurulumu + panel yeniden başladığı için yarıda kalmış olanı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><c>operations/progress</c> ZATEN VARKEN NEDEN AYRI BİR UÇ:</b> o uç
+    /// <c>IOperationProgressService</c>'i okur ve o servis yalnız BELLEKTEDİR — panel yeniden
+    /// başladığında bütün adımlar kaybolur ve ekran, PostgreSQL'in 365 MB'lık indirmesinin
+    /// yarıda kaldığını değil, hiç başlamadığını gösterir. Ayrıca o servis TEK YUVALIDIR ve ilk
+    /// kurulum sihirbazıyla paylaşılır. Buradaki kayıt diske yazılır, sahibi ölçülür ve yalnız
+    /// kurulum işine aittir.
+    /// </para>
+    /// <para>
+    /// <b>İKİSİ BİRBİRİNİN YERİNİ ALMAZ:</b> <c>operations/progress</c> "hangi ADIMDA" sorusunu
+    /// cevaplar (gerçek, ölçülmüş adım adları — uydurma yüzde değil); bu uç "iş sürüyor mu ve ne
+    /// zamandır" sorusunu cevaplar ve sayfa yenilense de cevaplayabilir.
+    /// </para>
+    /// </remarks>
+    [HttpGet("running")]
+    public async Task<ActionResult<ApiResponse<RunningJobsStatusDto>>> GetRunningJobsAsync(CancellationToken cancellationToken)
+    {
+        var status = await runningJobs.GetStatusAsync(
+            [RunningJobKinds.Software],
+            allowedSubjectUserIds: null,
+            cancellationToken);
+
+        return Ok(ApiResponse<RunningJobsStatusDto>.Ok(status));
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<SoftwareCatalogDto>>> GetCatalogAsync(CancellationToken cancellationToken)
     {
@@ -43,6 +74,12 @@ public sealed class SoftwareController(
     {
         var actorUserId = User.GetRequiredUserId();
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+
+        // Kurulum sunucu geneli bir iştir → sahipsiz kayıt, yalnız yöneticide görünür.
+        // Etiket bileşen kimliğidir; arayüz ondan görünen adı çözebiliyor.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Software, request.ComponentId, subjectUserId: null, CancellationToken.None);
+
         var result = request.ComponentId.StartsWith("php-", StringComparison.OrdinalIgnoreCase)
             ? await phpService.InstallVersionAsync(
                 request.ComponentId,
@@ -62,6 +99,12 @@ public sealed class SoftwareController(
     [HttpPost("install-defaults")]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<ComponentInstallResultDto>>>> InstallDefaultsAsync()
     {
+        // İKİ KAYIT, İKİ AYRI SORU. `operationProgress` "hangi adımda" der ve BELLEKTEDİR
+        // (panel yeniden başlarsa yok olur); `runningJobs` "iş sürüyor mu, ne zamandır" der ve
+        // DİSKTEDİR — sayfa yenilense de, panel yeniden başlasa da cevabı vardır.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Software, "defaults", subjectUserId: null, CancellationToken.None);
+
         // Canlı ilerleme: her bileşen InstallComponentInternalAsync içinde adım olarak raporlanır.
         operationProgress.Begin("software.installing_defaults");
         try
