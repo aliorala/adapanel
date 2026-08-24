@@ -1,6 +1,7 @@
 using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Antivirus;
 using AdaPanel.Core.Dtos.Common;
+using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +16,7 @@ namespace AdaPanel.Api.Controllers;
 public sealed class AntivirusController(
     IAntivirusService antivirusService,
     IComponentBootstrapper componentBootstrapper,
+    IRunningJobService runningJobs,
     IAuditService auditService) : ControllerBase
 {
     [HttpGet("status")]
@@ -24,17 +26,44 @@ public sealed class AntivirusController(
         return Ok(ApiResponse<AntivirusStatusDto>.Ok(status));
     }
 
+    /// <summary>ClamAV'ı kurar (~250 MB indirme + servis kaydı; dakikalarca sürer).</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÇALIŞAN İŞ KAYDI AÇILIYOR ve türü <c>software</c>:</b> bu uç, <c>SoftwareController</c>
+    /// ile TAM OLARAK aynı işi yapar — aynı <c>IComponentBootstrapper</c>, aynı katalog, aynı
+    /// bileşen kimliği. İkinci bir tür uydurmak ("antivirus") tek yuvalı kaydı ikiye böler ve
+    /// yönetici Yazılım sayfasından PostgreSQL kurarken buradan ClamAV kurmaya başlayabilirdi:
+    /// aynı bootstrapper'a aynı anda giren iki kurulum. Aynı tür seçildiği için ikincisi 409 alır.
+    /// </para>
+    /// <para>
+    /// <b>DÜRÜSTLÜK — bu kaydın GÖRÜNDÜĞÜ yer:</b> kayıt <c>software</c> türünde olduğu için
+    /// Yazılım ekranının zaten var olan şeridinde ("clamav, N dakikadır sürüyor") okunur. Antivirüs
+    /// ekranının KENDİ şeridi bu turda YOK — o, arayüz tarafında ayrı bir iştir. Yani sayfa
+    /// yenilenince bilgi artık KAYBOLMUYOR (sunucuda duruyor ve bir uçtan okunabiliyor), ama
+    /// antivirüs ekranında henüz GÖSTERİLMİYOR.
+    /// </para>
+    /// <para>
+    /// <b>İSTEK İPTAL TOKEN'I BAĞLANMIYOR</b> — aşağıdaki tarama/tanım uçlarındaki kuralın aynısı
+    /// ve burada da ÖLÇÜLEBİLİR bir arıza kapatıyor: token bağlıyken kullanıcı 250 MB'lık indirmenin
+    /// ortasında sayfayı yenilerse <c>RequestAborted</c> iptal olur, kurulum yarıda kesilir ve
+    /// yarım kurulmuş bir bileşen bırakır. <c>SoftwareController.InstallAsync</c> aynı sebeple
+    /// <c>CancellationToken.None</c> kullanıyor; bu uç o kuraldan sapmıştı.
+    /// </para>
+    /// </remarks>
     [HttpPost("install")]
-    public async Task<ActionResult<ApiResponse<AntivirusStatusDto>>> InstallAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<AntivirusStatusDto>>> InstallAsync()
     {
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Software, "clamav", subjectUserId: null, CancellationToken.None);
+
         await componentBootstrapper.InstallAsync(
             "clamav",
             User.GetRequiredUserId(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             force: false,
-            cancellationToken: cancellationToken);
+            cancellationToken: CancellationToken.None);
 
-        var status = await antivirusService.GetStatusAsync(cancellationToken);
+        var status = await antivirusService.GetStatusAsync(CancellationToken.None);
         return Ok(ApiResponse<AntivirusStatusDto>.Ok(status, "antivirus.installed"));
     }
 

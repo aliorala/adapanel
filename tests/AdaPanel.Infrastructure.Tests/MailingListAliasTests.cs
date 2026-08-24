@@ -317,11 +317,10 @@ public sealed class MailingListAliasTests
     [Fact]
     public async Task BaskaKiraciyaAitAlanAdiEkAdresOlarakEklenemez()
     {
-        var (denetleyici, servis) = Duzenek();
+        var denetleyici = Duzenek();
 
         var hata = await Assert.ThrowsAsync<AppException>(() => denetleyici.AddListAliasAsync(
             new MailListAliasRequest { ListAddress = "duyuru@benim.com", Alias = "duyuru@kurban.com" },
-            servis,
             CancellationToken.None));
 
         Assert.Equal("auth.domain_forbidden", hata.MessageKey);
@@ -338,11 +337,10 @@ public sealed class MailingListAliasTests
     [InlineData("duyuru@alt.benim.com")]
     public async Task BenzeyenAlanAdiEkAdresOlarakEklenemez(string ekAdres)
     {
-        var (denetleyici, servis) = Duzenek();
+        var denetleyici = Duzenek();
 
         var hata = await Assert.ThrowsAsync<AppException>(() => denetleyici.AddListAliasAsync(
             new MailListAliasRequest { ListAddress = "duyuru@benim.com", Alias = ekAdres },
-            servis,
             CancellationToken.None));
 
         Assert.Equal("auth.domain_forbidden", hata.MessageKey);
@@ -356,11 +354,10 @@ public sealed class MailingListAliasTests
     [Fact]
     public async Task BaskasininListesineEkAdresBaglanamaz()
     {
-        var (denetleyici, servis) = Duzenek();
+        var denetleyici = Duzenek();
 
         var hata = await Assert.ThrowsAsync<AppException>(() => denetleyici.AddListAliasAsync(
             new MailListAliasRequest { ListAddress = "duyuru@kurban.com", Alias = "info@benim.com" },
-            servis,
             CancellationToken.None));
 
         Assert.Equal("auth.domain_forbidden", hata.MessageKey);
@@ -373,10 +370,10 @@ public sealed class MailingListAliasTests
     [InlineData("duyuru@benim.com", "info@kotubenim.com")]
     public async Task EkAdresKaldirmaDaAyniDenetimdenGecer(string liste, string ekAdres)
     {
-        var (denetleyici, servis) = Duzenek();
+        var denetleyici = Duzenek();
 
         var hata = await Assert.ThrowsAsync<AppException>(() =>
-            denetleyici.RemoveListAliasAsync(liste, ekAdres, servis, CancellationToken.None));
+            denetleyici.RemoveListAliasAsync(liste, ekAdres, CancellationToken.None));
 
         Assert.Equal("auth.domain_forbidden", hata.MessageKey);
     }
@@ -400,11 +397,10 @@ public sealed class MailingListAliasTests
     [InlineData("duyuru@benim.com", "  INFO  ")]
     public async Task KendiAlanAdiKapidanGecer(string liste, string ekAdres)
     {
-        var (denetleyici, servis) = Duzenek();
+        var denetleyici = Duzenek();
 
         var hata = await Record.ExceptionAsync(() => denetleyici.AddListAliasAsync(
             new MailListAliasRequest { ListAddress = liste, Alias = ekAdres },
-            servis,
             CancellationToken.None));
 
         KapsamKapisiniGectiginiDogrula(hata);
@@ -414,11 +410,10 @@ public sealed class MailingListAliasTests
     [Fact]
     public async Task YoneticiKapsamDenetimineTakilmaz()
     {
-        var (denetleyici, servis) = Duzenek(rol: "Administrator");
+        var denetleyici = Duzenek(rol: "Administrator");
 
         var hata = await Record.ExceptionAsync(() => denetleyici.AddListAliasAsync(
             new MailListAliasRequest { ListAddress = "duyuru@kurban.com", Alias = "info@kurban.com" },
-            servis,
             CancellationToken.None));
 
         KapsamKapisiniGectiginiDogrula(hata);
@@ -436,9 +431,87 @@ public sealed class MailingListAliasTests
         }
     }
 
+    /// <summary>
+    /// Ek adres (alias) uçları hiçbir ALTYAPI sınıfını parametre olarak almamalı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu uçlar bir süre <c>[FromServices] AdaPanel.Infrastructure.Mail.MailService</c> alıyordu:
+    /// API katmanı somut bir altyapı sınıfına bağlanıyor, <c>MailServiceRouter</c> devre dışı
+    /// kalıyor ve "desteklenmiyor" cevabı denetleyicinin içinde statik bir
+    /// <c>MailService.IsInstalled()</c> çağrısıyla üretiliyordu. Artık iki metot da
+    /// <see cref="IMailService"/>'te ve cevap diğer bütün liste uçlarıyla aynı yerden geliyor.
+    /// </para>
+    /// <para>
+    /// <b>DÜRÜSTLÜK — kapsam:</b> aynı denetleyicideki <c>public-base-url</c> uçları HÂLÂ somut
+    /// servisi alıyor. O bilerek kapsam dışı bırakıldı ve bu test onu kapsamıyor; bu yüzden kural
+    /// "denetleyicinin tamamı" değil, ADI VERİLEN iki eylem üzerinden yazıldı. Genel kural gibi
+    /// yazılsaydı ya yanlış yere kırmızı verirdi ya da gevşetilmek zorunda kalırdı.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(nameof(MailController.AddListAliasAsync))]
+    [InlineData(nameof(MailController.RemoveListAliasAsync))]
+    public void Alias_Uclari_Altyapi_Sinifina_Baglanmiyor(string eylemAdi)
+    {
+        var eylem = typeof(MailController).GetMethod(eylemAdi)!;
+        var altyapiDerlemesi = typeof(MailService).Assembly;
+
+        var bagliOlanlar = eylem.GetParameters()
+            .Where(parametre => parametre.ParameterType.Assembly == altyapiDerlemesi)
+            .Select(parametre => parametre.ParameterType.Name)
+            .ToArray();
+
+        Assert.Empty(bagliOlanlar);
+    }
+
+    /// <summary>
+    /// MailEnable kurulu bir sunucuda ek adres uçları <c>mail.lists_unsupported</c> der.
+    /// </summary>
+    /// <remarks>
+    /// Kullanıcının göreceği sebep DOĞRU olmalı: "posta sunucusu kurulu değil" YANLIŞ olurdu
+    /// (sunucu kurulu, sadece dağıtım listesi desteklemeyen bir sunucu). Bu cevap eskiden
+    /// denetleyicideki elle kontrolden geliyordu; artık diğer liste metotlarıyla aynı yerden,
+    /// aynı anahtarla geliyor — yani tek bir yerin değişmesi hepsini birden değiştirir.
+    /// </remarks>
+    [Fact]
+    public async Task MailEnable_Yedeginde_Alias_Uclari_Desteklenmiyor_Diyor()
+    {
+        var mailEnable = new MailEnableMailService(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<MailEnableMailService>.Instance);
+        var istek = new MailListAliasRequest
+        {
+            ListAddress = "duyuru@ornek.com",
+            Alias = "info@ornek.com"
+        };
+
+        var ekleme = await Assert.ThrowsAsync<AppException>(
+            () => mailEnable.AddMailListAliasAsync(istek));
+        var kaldirma = await Assert.ThrowsAsync<AppException>(
+            () => mailEnable.RemoveMailListAliasAsync(istek));
+
+        Assert.Equal("mail.lists_unsupported", ekleme.MessageKey);
+        Assert.Equal("mail.lists_unsupported", kaldirma.MessageKey);
+
+        // Var olan liste uçlarıyla AYNI anahtar: ikisi ayrışırsa arayüz iki farklı metin gösterir.
+        var mevcut = await Assert.ThrowsAsync<AppException>(
+            () => mailEnable.DeleteMailListAsync("duyuru@ornek.com"));
+        Assert.Equal(mevcut.MessageKey, ekleme.MessageKey);
+    }
+
     // --- düzenek ---
 
-    private static (MailController Denetleyici, MailService Servis) Duzenek(string rol = "Customer")
+    /// <remarks>
+    /// EK ADRES UÇLARI ARTIK ARAYÜZDEN GEÇİYOR. Eskiden düzenek ikinci bir değer (somut
+    /// <c>MailService</c>, bilerek <c>null</c>) döndürüyordu çünkü uçlar onu <c>[FromServices]</c>
+    /// ile alıyordu. Artık <see cref="PatlayanMailServisi"/> hem enjekte edilen hem de çağrılan
+    /// servistir; kapıyı geçen bir istek ona ulaşıp <c>NotSupportedException</c> alır — ki
+    /// <see cref="KapsamKapisiniGectiginiDogrula"/> bunu "kapıyı geçti" olarak kabul eder.
+    /// KAZANÇ, düzenek sadeliğinden ibaret değil: sonuç artık MAKİNEDEN BAĞIMSIZ. Önceki hâlde
+    /// kapının ötesi <c>MailService.IsInstalled()</c>'a, yani makinede Stalwart ikililerinin
+    /// kurulu olup olmamasına bağlıydı — bu, bu depoda bir testi zaten kırmıştı.
+    /// </remarks>
+    private static MailController Duzenek(string rol = "Customer")
     {
         var kullanici = new ClaimsPrincipal(new ClaimsIdentity(
             [
@@ -460,12 +533,7 @@ public sealed class MailingListAliasTests
             }
         };
 
-        // Somut servis BİLEREK null: bu testlerin ölçtüğü şey KAPI, kapının ötesi değil.
-        // Reddedilen senaryolarda servise hiç ulaşılmaz. Kabul edilen senaryolarda ulaşılır ve
-        // NullReferenceException alınır — ki bu da "kapıyı geçti" demektir ve
-        // KapsamKapisiniGectiginiDogrula tam olarak bunu kabul eder. Gerçek MailService'i kurmak
-        // JsonFileStore/DbContext/StalwartRuntime zinciri isterdi; bu testlerin sorusuyla ilgisiz.
-        return (denetleyici, null!);
+        return denetleyici;
     }
 
     /// <summary>Kiracının izinli alan adı KÜMESİ: yalnız "benim.com". Alt alan adı AYRI bir domaindir.</summary>
@@ -500,9 +568,15 @@ public sealed class MailingListAliasTests
         public Task<IReadOnlyCollection<Guid>> GetSubscriptionUserIdsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
-    /// <summary>Çağrılırsa TEST YANLIŞ KURULMUŞTUR: bu uçlar somut servise gider, arayüze değil.</summary>
+    /// <summary>
+    /// Hiçbir posta işi YAPMAYAN servis: bu testlerin ölçtüğü şey KAPI (kapsam denetimi), kapının
+    /// ötesindeki Stalwart çağrısı değil. Kapıya takılan istek buraya HİÇ ulaşmaz; kapıyı geçen
+    /// istek ulaşır ve <c>NotSupportedException</c> alır — o da "geçti" demektir.
+    /// </summary>
     private sealed class PatlayanMailServisi : IMailService
     {
+        public Task<MailWorkspaceDto> AddMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<MailWorkspaceDto> ConfigureAsync(ConfigureMailRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<MailWorkspaceDto> CreateDomainAsync(CreateMailDomainRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

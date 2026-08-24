@@ -74,6 +74,12 @@ public sealed class MailServiceRouter(
     public Task<MailWorkspaceDto> DeleteMailListAsync(string address, CancellationToken cancellationToken = default)
         => Active.DeleteMailListAsync(address, cancellationToken);
 
+    public Task<MailWorkspaceDto> AddMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
+        => Active.AddMailListAliasAsync(request, cancellationToken);
+
+    public Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
+        => Active.RemoveMailListAliasAsync(request, cancellationToken);
+
     public Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
         => Active.GetListenersAsync(cancellationToken);
 

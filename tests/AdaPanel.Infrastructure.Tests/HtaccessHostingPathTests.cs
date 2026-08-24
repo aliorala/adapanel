@@ -1,3 +1,4 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Infrastructure.Htaccess.Hosting;
 using Xunit;
 
@@ -47,14 +48,23 @@ public sealed class HtaccessHostingPathTests
         }
     }
 
+    /// <summary>
+    /// Windows icin "con.switch" de "con" kadar ayrilmistir; kontrol NOKTADAN ONCESINE bakmali.
+    /// </summary>
+    /// <remarks>
+    /// KURAL ARTIK BU DOSYADA DEGIL. Once <c>HtaccessHostingPaths.IsReservedDeviceName</c> ayni
+    /// listenin ikinci kopyasiydi (o dosya net48 modul projesinde de derleniyor, o yuzden
+    /// AdaPanel.Core'a baglanmamisti). WindowsReservedNames.cs artik ayni projeye kaynak olarak
+    /// bagli, kopya kaldirildi ve bu test TEK KAYNAGA bakiyor. Yine de BURADA duruyor: olculen sey
+    /// modulun ihtiyaci olan bicimdir (".switch" uzantisi), yani bu dosyanin sorusu.
+    /// </remarks>
     [Fact]
     public void AYRILMIS_AD_TESPITI_UZANTIYI_GOZ_ARDI_EDER()
     {
-        // Windows icin "con.switch" de "con" kadar ayrilmistir; kontrol NOKTADAN ONCESINE bakmali.
-        Assert.True(HtaccessHostingPaths.IsReservedDeviceName("con.switch"));
-        Assert.True(HtaccessHostingPaths.IsReservedDeviceName("NUL.txt"));
-        Assert.False(HtaccessHostingPaths.IsReservedDeviceName("console"));
-        Assert.False(HtaccessHostingPaths.IsReservedDeviceName("com10"));
+        Assert.True(WindowsReservedNames.IsReserved("con.switch"));
+        Assert.True(WindowsReservedNames.IsReserved("NUL.txt"));
+        Assert.False(WindowsReservedNames.IsReserved("console"));
+        Assert.False(WindowsReservedNames.IsReserved("com10"));
     }
 
     [Theory]

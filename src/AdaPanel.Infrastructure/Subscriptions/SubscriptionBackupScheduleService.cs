@@ -1,5 +1,7 @@
 using System.Text;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
+using AdaPanel.Core.Dtos.RunningJobs;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Automation;
 using AdaPanel.Infrastructure.Backup;
@@ -16,6 +18,7 @@ public sealed class SubscriptionBackupScheduleService(
     IServicePlanService servicePlans,
     ISecretProtector secretProtector,
     IConcurrencyLock concurrencyLock,
+    IRunningJobService runningJobs,
     ILogger<SubscriptionBackupScheduleService> logger,
     // İSTEĞE BAĞLI: yalnızca ekranda gösterilecek kullanıcı ADI için. Zorunlu olsaydı bu servisin
     // birim testleri bir EF bağlamı kurmak zorunda kalırdı; ad bulunamazsa boş kalır, iş yürür.
@@ -175,6 +178,22 @@ public sealed class SubscriptionBackupScheduleService(
 
             try
             {
+                // ÇALIŞAN İŞ KAYDI — ARKA PLAN TURU İÇİN DE. Elle tetiklenen tur bu kaydı
+                // BackupController'da açıyordu; zamanlanmış tur açmıyordu ve bu, kapatılan hatanın
+                // yarısının açık kalması demekti: gecenin üçünde başlayan iki saatlik bir yedek
+                // sürerken müşteri panele girdiğinde ekran BOŞ görünüyor, "yedeğim alınmıyor" deyip
+                // elle ikinci bir yedek tetikliyordu.
+                //
+                // SAHİP = ABONELİK (ölçüldü, tahmin edilmedi): (1) bu turun yaptığı iş
+                // BackupSubscriptionAsync(userId)'dir, yani kaynağın sahibi aboneliktir;
+                // (2) elle tetiklenen AYNI iş (BackupController.RunScheduleNowAsync) kaydı zaten
+                // `subjectUserId: userId` ile açıyor — aynı işin sahibi tetikleyene göre değişemez;
+                // (3) sahipsiz bırakılsaydı (sunucu geneli yedeklerdeki gibi) kayıt kiracı
+                // süzgecinden geçemez ve müşteri KENDİ aboneliğinin yedeğini göremezdi. Etiket de
+                // elle tetiklenen yolla aynı: arayüz aynı biçimden aynı adı çözüyor.
+                await using var job = await runningJobs.BeginAsync(
+                    RunningJobKinds.Backup, userId.ToString("N"), userId, cancellationToken);
+
                 await concurrencyLock.RunExclusiveAsync(
                     ConcurrencyKeys.SubscriptionBackup,
                     () => CalistirAsync(userId, kayit, cancellationToken),
@@ -183,6 +202,27 @@ public sealed class SubscriptionBackupScheduleService(
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            // SÜZGEÇ DAR TUTULUYOR: "409" tek başına yetmez, çünkü yedek yolunda başka 409'lar da
+            // var (örn. kota). Yalnız çalışan-iş kaydının çakışma anahtarları ("runningjob.*")
+            // erteleme sayılır; geri kalan her şey gerçek bir hatadır ve aşağıda loglanır.
+            catch (AppException exception) when (
+                exception.HttpStatusCode == 409 &&
+                exception.MessageKey.StartsWith("runningjob.", StringComparison.Ordinal))
+            {
+                // BAŞKA BİR YEDEK İŞİ SÜRÜYOR (elle tetiklenmiş bir site/abonelik yedeği ya da bu
+                // turun bir önceki aboneliği). Kayıt TÜR BAŞINA tek yuvalıdır ve bu bilinçli:
+                // ikinci bir kayıt yazmak birincinin izini siler, panel de bittiğinde hangisinin
+                // bittiğini söyleyemez.
+                //
+                // Bu abonelik SESSİZCE ATLANMIYOR ve KAYBOLMUYOR: LastRunUtc'ye dokunulmadığı için
+                // program hâlâ "zamanı gelmiş" sayılır ve işçi on dakika sonra yeniden dener.
+                // Alternatif -- kaydı hiç açmamak -- daha kötüydü: iki yedek gerçekten aynı anda
+                // koşabilir ve panel yalnızca birini gösterirdi.
+                logger.LogWarning(
+                    "Abonelik yedek turu ertelendi ({UserId}): baska bir yedek isi suruyor. "
+                    + "Program kaydi guncellenmedi, bir sonraki turda (10 dk) yeniden denenecek.",
+                    userId);
             }
             catch (Exception exception)
             {

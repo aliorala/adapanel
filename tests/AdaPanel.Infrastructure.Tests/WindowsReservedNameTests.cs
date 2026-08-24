@@ -396,33 +396,49 @@ public sealed class WindowsReservedNameTests
         Assert.Contains("NormalizeSiteName(request.Name, yeniAd: true)", kaynak, StringComparison.Ordinal);
     }
 
-    // --- 5) İKİNCİ UYGULAMANIN SAPMA NÖBETÇİSİ ---
+    // --- 5) TEK KAYNAK NÖBETÇİSİ ---
 
     /// <summary>
-    /// <c>HtaccessHostingPaths.IsReservedDeviceName</c> aynı kuralın ikinci kopyasıdır (o dosya
-    /// net48 modül projesinde de derlendiği için <c>AdaPanel.Core</c>'a bağlanamıyor). İki kopya
-    /// varsa sapma kaçınılmazdır; bu test sapmayı YAKALAR.
+    /// Ayrılmış ad listesi depoda TEK YERDE yazılı olmalı.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bu testin yerini bir "parite" testi TUTMUYOR:</b> burada eskiden
+    /// <c>HtaccessHostingPaths.IsReservedDeviceName</c> ile bu kuralın AYNI cevabı verdiğini
+    /// karşılaştıran bir test vardı. O test iki kopyayı hizada tutuyordu ama kopyanın KENDİSİNİ
+    /// meşrulaştırıyordu: sapmanın maliyeti ödenmeye devam ediyordu ve nöbetçi yalnız kendisine
+    /// verilen sınır girdileri kadar iyiydi. Kopya artık YOK — <c>WindowsReservedNames.cs</c> net48
+    /// modül projesine de kaynak olarak bağlandı (<c>AdaPanel.HtaccessModule.csproj</c>), yani
+    /// bağlantı düşerse derleme kırılır, sessizce ayrışan bir ikinci liste oluşamaz.
+    /// </para>
+    /// <para>
+    /// Bu test o yüzden farklı bir soruyu sorar: <b>ÜÇÜNCÜ bir kopya doğdu mu.</b> Bu depoda
+    /// "elle yazılmış liste kayar" hatası beş kez ısırdı; en ucuz nöbetçi, listenin imzasını
+    /// (<c>CLOCK$</c> dalı) kaynakta SAYMAKTIR.
+    /// </para>
+    /// </remarks>
     [Fact]
-    public void IkiUygulamaAyniCevabiVeriyor()
+    public void AyrilmisAdListesiDepodaTekYerdeYazili()
     {
-        string[] girdiler =
-        [
-            "CON", "con", "CoN", "NUL", "PRN", "AUX", "CLOCK$",
-            "COM1", "COM5", "COM9", "COM0", "COM10", "COMA",
-            "LPT1", "LPT9", "LPT0", "LPTA",
-            "con.txt", "CON.json", "con.a.b", "con.", "nul.log",
-            "CON ", " con", "  NUL  ",
-            "CONSOLE", "CONS", "XCON", "my.con", "con-a1b2c3d4",
-            "", "   ", "ornek.com", "clock$.txt"
-        ];
+        // Kural dosyasının kendi yolundan depo köküne çıkılıyor: ayrı bir kök bulucu yazmak,
+        // "yol tahmin etme" hatasının bir kopyasını daha üretmek olurdu.
+        var kaynakKok = Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(KaynakDosyaYolu("src/AdaPanel.Core/Common/WindowsReservedNames.cs"))!,
+            "..",
+            ".."));
 
-        foreach (var girdi in girdiler)
-        {
-            Assert.Equal(
-                HtaccessHostingPaths.IsReservedDeviceName(girdi),
-                WindowsReservedNames.IsReserved(girdi));
-        }
+        var kopyalar = Directory
+            .EnumerateFiles(kaynakKok, "*.cs", SearchOption.AllDirectories)
+            // Derleme çıktıları ELENİR: obj/ altındaki üretilmiş dosyalar kaynak değildir ve
+            // makineden makineye değişir — nöbetçinin cevabı makineye bağlı olmamalı.
+            .Where(yol => !yol.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                       && !yol.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(yol => File.ReadAllText(yol).Contains("\"CLOCK$\"", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .OrderBy(ad => ad, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(new[] { "WindowsReservedNames.cs" }, kopyalar);
     }
 
     /// <summary>Depo kökünü test derlemesinin yerinden bulur (çıktı klasörü değişse de çalışır).</summary>

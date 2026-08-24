@@ -2,6 +2,10 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
+// AYRILMIS AYGIT ADLARININ TEK KAYNAGI. Bu dosya net48 modul projesinde de derlendigi icin kural
+// bir sure BURADA IKINCI KEZ yaziliydi; artik WindowsReservedNames.cs de ayni projeye kaynak
+// olarak bagli (bkz. AdaPanel.HtaccessModule.csproj), dolayisiyla kopyaya gerek kalmadi.
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Infrastructure.Htaccess.Hosting;
 
@@ -134,7 +138,7 @@ internal static class HtaccessHostingPaths
         // Boş ya da ayrılmış ad kalırsa yalnız özet kullanılır.
         //
         // DÜRÜSTLÜK NOTU (mutasyon testiyle ölçüldü): bu satırdaki
-        // "|| IsReservedDeviceName(cleaned)" koşulu ARTIK YÜK TAŞIMIYOR. Kaldırıldığında hiçbir
+        // "|| WindowsReservedNames.IsReserved(cleaned)" koşulu ARTIK YÜK TAŞIMIYOR. Kaldırıldığında hiçbir
         // test kırılmıyor, çünkü ayrılmış adı gerçekten etkisizleştiren şey aşağıda eklenen
         // ÖZET SON EKİ: "con" -> "con-<ozet>" zaten ayrılmış bir ad değildir. Özeti kaldıran
         // mutasyon ise 5 testi birden kırıyor — yani KORUMA TEST ALTINDA, sadece bu dal değil.
@@ -142,46 +146,12 @@ internal static class HtaccessHostingPaths
         // Yine de BIRAKILIYOR: özetin biçimi ileride değişirse (kısaltma, farklı ayraç) bu dal
         // tek başına doğru cevabı vermeye devam eder. Bedeli bir karşılaştırma; kazancı,
         // sessizce oluşturulamayan bir dosyaya düşmemek.
-        if (cleaned.Length == 0 || IsReservedDeviceName(cleaned))
+        if (cleaned.Length == 0 || WindowsReservedNames.IsReserved(cleaned))
         {
             return "site-" + digest;
         }
 
         return cleaned + "-" + digest;
-    }
-
-    /// <summary>
-    /// Windows'un AYRILMIŞ aygıt adları. Uzantı eklense bile ("con.switch") ayrılmış sayılır —
-    /// bu yüzden kontrol NOKTADAN ÖNCEKİ parça üzerinde yapılır.
-    /// </summary>
-    internal static bool IsReservedDeviceName(string value)
-    {
-        var name = value ?? string.Empty;
-        var dot = name.IndexOf('.');
-        if (dot >= 0)
-        {
-            name = name.Substring(0, dot);
-        }
-
-        name = name.Trim().ToUpperInvariant();
-        switch (name)
-        {
-            case "CON":
-            case "PRN":
-            case "AUX":
-            case "NUL":
-            case "CLOCK$":
-                return true;
-        }
-
-        if (name.Length == 4 &&
-            (name.StartsWith("COM", StringComparison.Ordinal) || name.StartsWith("LPT", StringComparison.Ordinal)) &&
-            name[3] >= '1' && name[3] <= '9')
-        {
-            return true;
-        }
-
-        return false;
     }
 
     /// <summary>

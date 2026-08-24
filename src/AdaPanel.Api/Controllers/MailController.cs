@@ -432,27 +432,31 @@ public sealed class MailController(
     /// <c>MailingListContractTests</c>'te zaten var.
     /// </para>
     /// <para>
-    /// <b>Neden somut <see cref="AdaPanel.Infrastructure.Mail.MailService"/>:</b> ek adres
-    /// Stalwart'ın <c>MailingList</c> nesnesine özgüdür; MailEnable yedeğinde karşılığı yoktur.
-    /// Aynı desen bu denetleyicide <c>public-base-url</c> uçlarında da kullanılıyor. MailEnable
-    /// kurulumunda kullanıcı ham bir bağlantı hatası görmesin diye ön koşul AÇIKÇA denetlenir.
+    /// <b>Neden ARAYÜZ (<see cref="IMailService"/>), neden somut sınıf DEĞİL:</b> ek adres
+    /// Stalwart'ın <c>MailingList</c> nesnesine özgüdür ve ilk sürümde bu uçlar somut
+    /// <c>MailService</c>'i çağırıyordu. Bunun İKİ ölçülebilir bedeli vardı: (1) MailEnable kurulu
+    /// bir sunucuda <c>MailServiceRouter</c> devre dışı kalıyor, denetleyici doğrudan Stalwart
+    /// sınıfına gidiyordu; (2) "desteklenmiyor" cevabını denetleyicinin KENDİSİ, statik bir
+    /// <c>MailService.IsInstalled()</c> çağrısıyla üretmek zorundaydı — yani API katmanı posta
+    /// yazılımının kurulu olup olmadığını bilmek zorundaydı. Artık cevap, diğer bütün liste
+    /// uçlarıyla aynı yerden geliyor: <c>MailEnableMailService</c> <c>mail.lists_unsupported</c>
+    /// (409) atıyor, yönlendirici hangi uygulamanın etkin olduğunu seçiyor.
     /// </para>
     /// </remarks>
     [HttpPost("lists/aliases")]
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> AddListAliasAsync(
         [FromBody] MailListAliasRequest request,
-        [FromServices] AdaPanel.Infrastructure.Mail.MailService concreteMailService,
         CancellationToken cancellationToken)
     {
-        // SIRA ÖNEMLİ: kapsam denetimi ÖNCE. Ön koşul ("Stalwart kurulu mu") önce çalışsaydı,
-        // uç kapsamı dışındaki bir çağırana bile sunucunun hangi posta yazılımını kullandığını
-        // söylerdi — ve daha genel olarak yetki kontrolü hiçbir şeyin ARDINDA gelmemeli.
+        // SIRA ÖNEMLİ: kapsam denetimi ÖNCE, servis çağrısı SONRA. Servis önce çağrılsaydı, uç
+        // kapsamı dışındaki bir çağıran bile sunucunun hangi posta yazılımını kullandığını
+        // ("lists_unsupported" mı, başka bir hata mı) öğrenirdi — ve daha genel olarak yetki
+        // kontrolü hiçbir şeyin ARDINDA gelmemeli.
         var listDomain = ExtractDomain(request.ListAddress);
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, listDomain, cancellationToken);
         await EnsureAddressDomainAsync(request.Alias, listDomain, cancellationToken);
-        EnsureMailingListsSupported();
 
-        var workspace = await concreteMailService.AddMailListAliasAsync(request, cancellationToken);
+        var workspace = await mailService.AddMailListAliasAsync(request, cancellationToken);
 
         // EK ADRES = LİSTEYE İKİNCİ KAPI. Alias'a gelen posta bütün abonelere dağıtılır ve bunun
         // listenin kendi kaydında hiçbir izi kalmaz. Bu yüzden HANGİ adresin HANGİ listeye
@@ -482,7 +486,6 @@ public sealed class MailController(
     public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> RemoveListAliasAsync(
         [FromQuery] string listAddress,
         [FromQuery] string alias,
-        [FromServices] AdaPanel.Infrastructure.Mail.MailService concreteMailService,
         CancellationToken cancellationToken)
     {
         var request = new MailListAliasRequest { ListAddress = listAddress ?? string.Empty, Alias = alias ?? string.Empty };
@@ -490,9 +493,8 @@ public sealed class MailController(
         // Kapsam denetimi ÖNCE (bkz. AddListAliasAsync).
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, listDomain, cancellationToken);
         await EnsureAddressDomainAsync(request.Alias, listDomain, cancellationToken);
-        EnsureMailingListsSupported();
 
-        var workspace = await concreteMailService.RemoveMailListAliasAsync(request, cancellationToken);
+        var workspace = await mailService.RemoveMailListAliasAsync(request, cancellationToken);
 
         await auditService.AuditAsync(
             HttpContext,
@@ -502,23 +504,6 @@ public sealed class MailController(
             await AdresSahibiAsync(request.ListAddress, null, cancellationToken));
 
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_alias_removed"));
-    }
-
-    /// <summary>
-    /// Dağıtım listesi uçlarının ön koşulu: bu makinede Stalwart kurulu mu?
-    /// </summary>
-    /// <remarks>
-    /// MailEnable yedeğinde dağıtım listesi YOKTUR ve <c>IMailService</c> yolundaki liste uçları
-    /// bunu <c>mail.lists_unsupported</c> ile söylüyor. Ek adres uçları somut servise gittiği için
-    /// aynı cevabı kendileri vermek zorunda; olmasaydı kullanıcı "mail sunucusu kurulu değil" gibi
-    /// YANLIŞ bir sebep görürdü (sunucu kurulu, sadece başka bir sunucu).
-    /// </remarks>
-    private static void EnsureMailingListsSupported()
-    {
-        if (!AdaPanel.Infrastructure.Mail.MailService.IsInstalled())
-        {
-            throw new Core.Common.AppException("mail.lists_unsupported", 409, 409);
-        }
     }
 
     /// <summary>

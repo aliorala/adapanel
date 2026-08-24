@@ -130,6 +130,16 @@
   <ItemGroup>
     <!-- AdaPanel.Core: motorun sozlesmesi ve DTO'lari. Butun dosya net48 uyumlu. -->
     <Compile Include="..\AdaPanel.Core\Common\PathContainment.cs" Link="Shared\Core\PathContainment.cs" />
+    <!-- AYRILMIS AYGIT ADLARI (CON, NUL, COM1...) &#8212; TEK KAYNAK.
+         Burada baglanmasinin sebebi olculmus bir borctur: HtaccessHostingPaths.cs bu projede de
+         derlendigi icin kural bir sure ONUN ICINDE IKINCI KEZ yazili durdu ve iki kopyanin
+         sapmamasi bir parite testine emanet edilmisti. Bu depoda "elle yazilmis liste kayar"
+         hatasi bes kez isirdi; dosya baglaninca kopya kaldirildi ve sapma yapisal olarak
+         imkansiz oldu. Dosya BU AMACLA net48 uyumlu yazilmisti (Substring, System.Range yok,
+         System.Linq yok) &#8212; kendi basliginda da yaziyor.
+         MUTASYONLA OLCULDU: bu satir kaldirilinca net48 derlemesi KIRILIYOR, yani bag gercekten
+         yuk tasiyor ve kopyanin geri gelmesi "derleme kirildi" seviyesinde gorunur olur. -->
+    <Compile Include="..\AdaPanel.Core\Common\WindowsReservedNames.cs" Link="Shared\Core\WindowsReservedNames.cs" />
     <Compile Include="..\AdaPanel.Core\Interfaces\IHtaccessEngine.cs" Link="Shared\Core\IHtaccessEngine.cs" />
     <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessDiagnostic.cs" Link="Shared\Core\HtaccessDiagnostic.cs" />
     <Compile Include="..\AdaPanel.Core\Dtos\Htaccess\HtaccessDocument.cs" Link="Shared\Core\HtaccessDocument.cs" />

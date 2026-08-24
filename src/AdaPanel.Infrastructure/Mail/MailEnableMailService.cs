@@ -318,6 +318,15 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<MailWorkspaceDto> DeleteMailListAsync(string address, CancellationToken cancellationToken = default)
         => throw new AppException("mail.lists_unsupported", 409, 409);
 
+    // EK ADRESLER de listenin bir parçasıdır: liste yoksa alias'ı da olamaz. Cevap bilerek
+    // "posta sunucusu kurulu değil" DEĞİL, "bu sunucu dağıtım listesi desteklemiyor" — kullanıcı
+    // yanlış sebebi kovalamasın.
+    public Task<MailWorkspaceDto> AddMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
+        => throw new AppException("mail.lists_unsupported", 409, 409);
+
+    public Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
+        => throw new AppException("mail.lists_unsupported", 409, 409);
+
     // MailEnable dinleyicileri bu görünümde listelenmez (Stalwart'a özel); boş döner.
     public Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<MailListenerDto>>([]);

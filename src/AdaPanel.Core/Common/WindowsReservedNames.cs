@@ -34,9 +34,8 @@ namespace AdaPanel.Core.Common;
 /// </para>
 /// <para>
 /// <b><c>CLOCK$</c> DÜRÜSTÇE:</b> bu makinede ayrılmış ÇIKMADI — <c>CLOCK$</c> adlı dosya
-/// oluşturulabiliyor (ölçüldü). Listede yine de tutuluyor: eski Windows sürümlerinde ayrılmıştı,
-/// maliyeti bir karşılaştırma, ve var olan ikinci uygulamayla (<c>HtaccessHostingPaths</c>) BİREBİR
-/// aynı kalması sapma nöbetçisinin çalışması için şart.
+/// oluşturulabiliyor (ölçüldü). Listede yine de tutuluyor: eski Windows sürümlerinde ayrılmıştı ve
+/// maliyeti bir karşılaştırma.
 /// </para>
 /// <para>
 /// <b>Neden ORTAK dosya, neden her temizleyiciye elle yazılmadı:</b> bu depoda "elle yazılmış
@@ -46,18 +45,19 @@ namespace AdaPanel.Core.Common;
 /// </para>
 /// <para>
 /// <b>Neden <c>Substring</c>, neden aralık (<c>[..n]</c>) yok ve neden <c>System.Linq</c>
-/// kullanılmıyor:</b> bu dosyanın ileride <c>AdaPanel.HtaccessModule</c> (net48) projesine
-/// KAYNAK OLARAK bağlanabilmesi için. <c>PathContainment.cs</c> aynı klasörden zaten öyle
-/// bağlanıyor. C# aralık sözdizimi <c>System.Range</c> ister; net48 BCL'inde o tür YOKTUR.
-/// Bugün bağlı değil — bkz. aşağıdaki dürüstlük notu.
+/// kullanılmıyor:</b> bu dosya <c>AdaPanel.HtaccessModule</c> (net48) projesinde de DERLENİYOR —
+/// <c>PathContainment.cs</c> gibi KAYNAK OLARAK bağlanıyor, derleme başvurusu olarak değil (net8
+/// derlemesi net48 CLR'ında yüklenemez). C# aralık sözdizimi <c>System.Range</c> ister; net48
+/// BCL'inde o tür YOKTUR. <c>System.Text.Json</c>, <c>Path.Join</c>, <c>HashCode.Combine</c> ve
+/// <c>string.Contains(char)</c> de aynı sebeple yasaktır; ihlal net48 derlemesini kırar.
 /// </para>
 /// <para>
-/// <b>DÜRÜSTLÜK NOTU — bugün İKİ uygulama var:</b>
-/// <c>AdaPanel.Infrastructure.Htaccess.Hosting.HtaccessHostingPaths.IsReservedDeviceName</c> aynı
-/// kuralı kendi içinde taşır, çünkü o dosya net48 modül projesinde de derleniyor ve bu dosya
-/// oraya HENÜZ bağlanmadı (csproj başka bir ekibin dosyası). Kopyanın sapmaması
-/// <c>WindowsReservedNameTests.IkiUygulamaAyniCevabiVeriyor</c> ile ÇİVİLENDİ: iki uygulama
-/// tüm sınır girdilerinde ayrışırsa test kırmızıya döner.
+/// <b>TEK UYGULAMA — bir süre İKİ taneydi:</b>
+/// <c>HtaccessHostingPaths.IsReservedDeviceName</c> aynı kuralın ikinci kopyasıydı, çünkü o dosya
+/// net48'de de derleniyor ve bu dosya oraya bağlanmamıştı; sapmaması bir parite testine emanetti.
+/// Emanet KALDIRILDI: bu dosya artık modül projesine de bağlı ve kopya silindi. Bir listenin
+/// "aynı kalmasını" teste emanet etmek, listeyi iki yere yazmanın maliyetini ödemeye devam
+/// etmektir — bu depoda o hata beş kez ısırdı.
 /// </para>
 /// </remarks>
 public static class WindowsReservedNames

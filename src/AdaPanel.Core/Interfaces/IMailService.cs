@@ -71,6 +71,27 @@ public interface IMailService
     /// <summary>Dağıtım listesini siler.</summary>
     Task<MailWorkspaceDto> DeleteMailListAsync(string address, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Dağıtım listesine EK ADRES (alias) ekler: o adrese gelen posta da aynı abonelere dağıtılır.
+    /// </summary>
+    /// <remarks>
+    /// <b>NEDEN ARAYÜZDE:</b> ilk sürümde bu iki uç <c>MailController</c>'dan somut
+    /// <c>MailService</c>'e gidiyordu — özellik Stalwart'a özgü olduğu için "geçici" sayılmıştı.
+    /// Bedeli ölçülebilirdi: denetleyici bir ALTYAPI sınıfına bağlanıyor, MailEnable kurulu
+    /// sunucuda <c>MailServiceRouter</c> devre dışı kalıyor ve "desteklenmiyor" cevabını
+    /// denetleyicinin kendisi, statik bir <c>MailService.IsInstalled()</c> çağrısıyla üretmek
+    /// zorunda kalıyordu. Diğer bütün liste uçları (<c>CreateMailListAsync</c> …) zaten buradan
+    /// geçiyor; ek adresler onlardan ayrı durmak için hiçbir sebep taşımıyor.
+    /// <para>
+    /// Desteklenmeyen posta sunucusunda uygulama <c>mail.lists_unsupported</c> (409) atar —
+    /// diğer liste metotlarıyla AYNI sözleşme.
+    /// </para>
+    /// </remarks>
+    Task<MailWorkspaceDto> AddMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Dağıtım listesinden bir ek adresi (alias) kaldırır.</summary>
+    Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Mail sunucusunun ağ dinleyicileri (hangi adres:port'larda dinliyor) — salt-okunur.</summary>
     Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default);
 
