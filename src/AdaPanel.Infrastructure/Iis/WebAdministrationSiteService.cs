@@ -50,7 +50,9 @@ public sealed partial class WebAdministrationSiteService(
         var site = await ExecuteWriteAsync(serverManager =>
         {
             var sites = GetSitesCollection(serverManager);
-            var normalizedName = NormalizeSiteName(request.Name);
+            // yeniAd: true -> ayrılmış aygıt adı ("CON", "NUL", "COM1"...) burada reddedilir.
+            // Silme/okuma yollarında AYNI kontrol yapılmaz; gerekçesi NormalizeSiteName'de.
+            var normalizedName = NormalizeSiteName(request.Name, yeniAd: true);
 
             EnsureSiteNameIsNotReserved(normalizedName, request.IsManagedInfrastructure);
 
@@ -780,12 +782,42 @@ public sealed partial class WebAdministrationSiteService(
         return Path.GetFullPath(expandedPath);
     }
 
-    private static string NormalizeSiteName(string siteName)
+    /// <summary>
+    /// Site adını kırpar ve doğrular.
+    /// </summary>
+    /// <param name="yeniAd">
+    /// İstek YENİ bir ad koyuyor mu? Yalnız o durumda Windows'un AYRILMIŞ AYGIT ADLARI reddedilir.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden aygıt adı reddediliyor:</b> "CON", "NUL", "COM1" gibi adlar IIS'te site adı olarak
+    /// kabul edilir ama diskte klasör/dosya adı OLAMAZ. Panelin site adından yol türeten her
+    /// özelliği (yedek klasörü, zamanlanmış görev günlüğü, SEO raporu, Git ayar dosyası) o siteyi
+    /// sert hatayla düşürüyordu. Kullanıcıya "bu ad kullanılamaz" demek, siteyi açtırıp sonra dört
+    /// ayrı yerde açıklanamayan hata göstermekten iyidir.
+    /// </para>
+    /// <para>
+    /// <b>Neden yalnız YENİ adda, neden okuma/silmede DEĞİL:</b> bu kural konmadan önce açılmış
+    /// "CON" adlı bir site sunucularda GERÇEKTEN olabilir. Kontrol her yolda çalışsaydı o site
+    /// panelden görüntülenemez ve — asıl kötüsü — SİLİNEMEZ olurdu: kullanıcı, kurtulmak istediği
+    /// bozuk siteye kilitlenirdi. Bu yüzden kapı yalnızca yeni ad üretilen yerde (site oluşturma)
+    /// kapanır; var olan artığın temizlenme yolu açık kalır.
+    /// </para>
+    /// <para>
+    /// internal: kuralın İKİ kipi (yeni ad / var olan ad) IIS olmadan da doğrulanabilsin diye.
+    /// </para>
+    /// </remarks>
+    internal static string NormalizeSiteName(string siteName, bool yeniAd = false)
     {
         var normalized = siteName.Trim();
         if (string.IsNullOrWhiteSpace(normalized))
         {
             throw new AppException("sites.invalid_name", 400, 400);
+        }
+
+        if (yeniAd && WindowsReservedNames.IsReserved(normalized))
+        {
+            throw new AppException("sites.reserved_device_name", 400, 400);
         }
 
         return normalized;

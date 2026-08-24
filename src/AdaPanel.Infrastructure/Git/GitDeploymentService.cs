@@ -196,7 +196,14 @@ public sealed class GitDeploymentService(
         await fileStore.WriteAsync(ConfigPath(siteName), record, cancellationToken);
     }
 
-    private static string ConfigPath(string siteName) => $"config/git/{SanitizeFileName(siteName)}.json";
+    // AYRILMIŞ AYGIT ADI kontrolü UZANTI EKLENDİKTEN SONRA yapılır: ayrılmışlık ilk noktadan
+    // önceki parçaya bakar, yani "CON" için hedef "CON.json" olur ve o da aygıttır. Kontrolsüz
+    // bırakıldığında "CON" adlı bir sitenin Git ayarları KAYDEDİLEMİYORDU (JsonFileStore'un atomik
+    // yazımı FileNotFoundException veriyor) — dağıtım kurulmuş görünüp hiç çalışmazdı.
+    //
+    // internal: bkz. SeoReportStore.Path — üretilen adın diskte açılabildiği ÖLÇÜLEBİLSİN diye.
+    internal static string ConfigPath(string siteName) =>
+        $"config/git/{WindowsReservedNames.MakeSafe($"{SanitizeFileName(siteName)}.json")}";
 
     private static GitDeploymentDto ToDto(string siteName, string path, GitDeploymentRecord record)
     {

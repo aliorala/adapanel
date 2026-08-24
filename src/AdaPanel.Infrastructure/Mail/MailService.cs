@@ -232,6 +232,14 @@ public sealed class MailService(
             var lists = new List<MailListDto>();
             // Politika deposu yalnız gerçekten liste varsa okunur (dosya çoğu kurulumda hiç yok).
             Dictionary<string, ListPolicyEntry>? listPolicies = null;
+            // Liste alias'ları sunucuda ALAN ADI KİMLİĞİYLE durur (name + domainId), adla değil.
+            // Ekranda tam adres göstermek için kimlik→ad haritası gerekiyor; harita bir kez kurulur,
+            // liste başına ayrı "get domain" çağrısı yapılmaz.
+            var domainNamesById = domainItems
+                .Select(item => (Id: GetField(item, "id"), Name: GetField(item, "name")))
+                .Where(pair => !string.IsNullOrWhiteSpace(pair.Id) && !string.IsNullOrWhiteSpace(pair.Name))
+                .GroupBy(pair => pair.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.Ordinal);
             foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
             {
                 var id = GetField(brief, "id");
@@ -260,6 +268,7 @@ public sealed class MailService(
                     Address = listAddress,
                     Description = GetField(listDetail.Value, "description"),
                     Recipients = ReadListRecipients(listDetail.Value),
+                    Aliases = ReadAliasAddresses(listDetail.Value, domainNamesById),
                     PostingPolicy = MailListPostingPolicy.Normalize(policy.Policy),
                     AllowedSenders = policy.AllowedSenders
                 });
@@ -689,6 +698,223 @@ public sealed class MailService(
         return workspace;
     }
 
+    // --- Dağıtım listesi EK ADRESLERİ (Stalwart MailingList.aliases) ---
+
+    /// <summary>
+    /// Dağıtım listesine ek adres (alias) ekler: o adrese gelen posta da aynı abonelere dağıtılır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Alan ŞEMADAN okundu, tahmin edilmedi:</b> <c>MailingList</c> nesnesinin alanları
+    /// <c>name</c>, <c>domainId</c>, <c>description</c>, <c>aliases</c>, <c>recipients</c>,
+    /// <c>memberTenantId</c>, <c>emailAddress</c>. <c>aliases</c> gerçekten vardır ve gösterimi
+    /// <c>Account</c> nesnesindekiyle AYNIDIR: sayısal anahtarlı harita, değer
+    /// <c>{"name":..,"domainId":..,"enabled":true}</c>. Bu depoda posta listesi özelliği tam
+    /// olarak "nesne adı TAHMİN EDİLDİ" yüzünden aylarca ölü kaldı; o yüzden burada da tek dayanak
+    /// okunmuş şemadır.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>--file</c> (RunCliJsonAsync) yolu, neden <c>--field</c> değil:</b> hesap
+    /// alias'ları <c>--field</c> ile yazılıyor ve orada çalıştığı ölçüldü; ama
+    /// <c>MailingList</c> güncellemesinin ÖLÇÜLMÜŞ yolu <c>--file</c>'dır (abone kümesi tam olarak
+    /// burada kırılmıştı). Alias değeri iç içe tırnaklı JSON taşıdığı için komut satırı
+    /// bozulmasına en açık payload da budur. İki ölçülmüş doğrudan daha güvenli olanı seçildi.
+    /// </para>
+    /// <para>
+    /// <b>KAPSAM burada DEĞİL:</b> alias'ın alan adının çağırana ait olduğu denetimi
+    /// <c>MailController</c>'da yapılır (<c>EnsureAddressDomainAsync</c>) — servis, panelin kendi
+    /// bileşenleri tarafından da çağrılabilen bir katmandır ve çağıranın kim olduğunu yalnız API
+    /// bilir. Burada yapılan doğrulama BİÇİMSEL olandır.
+    /// </para>
+    /// </remarks>
+    public async Task<MailWorkspaceDto> AddMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
+    {
+        var listAddress = request.ListAddress.Trim().ToLowerInvariant();
+        var listDomain = ExtractDomain(listAddress);
+
+        // Yerel kısım LİSTENİN alan adıyla tamamlanır; ekranda kullanıcı "@<liste alanı>" görüyor.
+        var alias = NormalizeAddress(request.Alias, listDomain);
+        if (!IsValidEmailAddress(alias))
+        {
+            throw new AppException("mail.invalid_alias", 400, 400, alias);
+        }
+
+        // Listenin KENDİ adresi alias olarak eklenemez: Stalwart bunu ya reddeder ya da sessizce
+        // yutar; ikisi de kullanıcıya "ekledim" dedikten sonra hiçbir şeyin değişmemesi demektir.
+        if (string.Equals(alias, listAddress, StringComparison.Ordinal))
+        {
+            throw new AppException("mail.list_alias_is_list_address", 409, 409, alias);
+        }
+
+        var aliasDomain = ExtractDomain(alias);
+        var aliasLocalPart = alias[..alias.LastIndexOf('@')];
+
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var aliasDomainId = await FindIdAsync("domain", "name", aliasDomain, cancellationToken)
+            ?? throw new AppException("mail.operation_failed", 404, 404, $"domain not found: {aliasDomain}");
+        var id = await FindIdAsync(MailingListObject, "emailAddress", listAddress, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not found: {listAddress}");
+
+        var detail = await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not readable: {listAddress}");
+
+        // AYNI alias iki kez eklenirse harita İKİ ayrı sayısal anahtarda aynı adı taşır; panel
+        // ekranda adresi iki kez gösterir ve tek silme yalnız birini düşürür. Bu yüzden çakışma
+        // sunucuya gitmeden burada durdurulur.
+        if (AliasExists(detail, aliasLocalPart, aliasDomainId))
+        {
+            throw new AppException("mail.address_in_use", 409, 409, alias);
+        }
+
+        var entries = ExportAliasEntries(detail);
+        entries.Add($"\"{NextNumericKey(detail)}\":{{\"name\":{JsonValue(aliasLocalPart)},\"domainId\":{JsonValue(aliasDomainId)},\"enabled\":true}}");
+
+        var payload = "{\"aliases\":{" + string.Join(",", entries) + "}}";
+        var result = await RunCliJsonAsync(cli, $"update {MailingListObject} {Arg(id)}", payload, env, cancellationToken);
+        if (!result.Success)
+        {
+            throw MapMailError(result);
+        }
+
+        // Listenin adres KÜMESİ değişti; iki script de bu kümeden üretiliyor:
+        //  - RCPT: gönderim politikası. YENİ ADRES KURALSIZ KALIRSA kapalı liste alias üzerinden
+        //    herkese açık olur — bu yüzden burası ATLANAMAZ.
+        //  - DATA: List-Unsubscribe/List-Id başlıkları. Atlanırsa alias'a gelen duyuruda
+        //    "abonelikten çık" bağlantısı sessizce eksik kalır.
+        await SyncListPolicyScriptAsync(cancellationToken);
+        await SyncDataStageScriptAsync(cancellationToken);
+
+        return await GetWorkspaceAsync(listDomain, cancellationToken);
+    }
+
+    /// <summary>
+    /// Dağıtım listesinden bir ek adresi (alias) kaldırır.
+    /// </summary>
+    /// <remarks>
+    /// Alias BULUNAMAZSA 404 atılır, sessizce "başarılı" DÖNÜLMEZ: ekleme/kaldırma çiftinde
+    /// "yoktu, o yüzden tamam" cevabı, yanlış listeden silmeye çalışan yöneticiye adresin
+    /// kaldırıldığını düşündürürdü — oysa adres hâlâ posta alıyor olurdu.
+    /// </remarks>
+    public async Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
+    {
+        var listAddress = request.ListAddress.Trim().ToLowerInvariant();
+        var listDomain = ExtractDomain(listAddress);
+        var alias = NormalizeAddress(request.Alias, listDomain);
+        if (!IsValidEmailAddress(alias))
+        {
+            throw new AppException("mail.invalid_alias", 400, 400, alias);
+        }
+
+        var aliasDomain = ExtractDomain(alias);
+        var aliasLocalPart = alias[..alias.LastIndexOf('@')];
+
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var aliasDomainId = await FindIdAsync("domain", "name", aliasDomain, cancellationToken)
+            ?? throw new AppException("mail.operation_failed", 404, 404, $"domain not found: {aliasDomain}");
+        var id = await FindIdAsync(MailingListObject, "emailAddress", listAddress, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not found: {listAddress}");
+
+        var detail = await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken)
+            ?? throw new AppException("mail.list_not_found", 404, 404, $"list not readable: {listAddress}");
+
+        var entries = ExportAliasEntries(detail, skipName: aliasLocalPart, skipDomainId: aliasDomainId);
+        if (!entries.Removed)
+        {
+            throw new AppException("mail.list_alias_not_found", 404, 404, alias);
+        }
+
+        var payload = "{\"aliases\":{" + string.Join(",", entries.Entries) + "}}";
+        var result = await RunCliJsonAsync(cli, $"update {MailingListObject} {Arg(id)}", payload, env, cancellationToken);
+        if (!result.Success)
+        {
+            throw MapMailError(result);
+        }
+
+        // Adres kümesi küçüldü. Kaldırılan adrese ait kurallar da DÜŞMELİ: kalsaydı aynı yerel
+        // kısım ileride başka bir amaçla açıldığında (ör. normal posta kutusu) o kutuya, artık
+        // olmayan bir listenin gönderim kısıtı ve abonelikten çıkma başlığı uygulanırdı.
+        await SyncListPolicyScriptAsync(cancellationToken);
+        await SyncDataStageScriptAsync(cancellationToken);
+
+        return await GetWorkspaceAsync(listDomain, cancellationToken);
+    }
+
+    /// <summary>
+    /// Bir nesnenin <c>aliases</c> haritasında (ad + alan adı kimliği) çifti zaten var mı?
+    /// </summary>
+    /// <remarks>
+    /// Karşılaştırma ADDA harf duyarsız (posta yerel kısmı panelde her zaman küçük harfe
+    /// indiriliyor), ALAN ADI KİMLİĞİNDE harf duyarlı: kimlik sunucunun ürettiği bir belirteçtir,
+    /// harf durumu anlamlıdır ve gevşetmek iki farklı alan adını aynı sayabilirdi.
+    /// </remarks>
+    private static bool AliasExists(JsonElement element, string name, string domainId)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty("aliases", out var map)
+            || map.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var entry in map.EnumerateObject())
+        {
+            if (string.Equals(GetField(entry.Value, "name"), name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(GetField(entry.Value, "domainId"), domainId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Bir nesnenin <c>aliases</c> haritasını TAM ADRES listesine çevirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Alan adı kimliği <paramref name="domainNamesById"/>'de YOKSA girdi ATLANIR — uydurma bir ad
+    /// üretmek yerine. Sebebi: kimlik çözülemiyorsa alias başka bir alan adına aittir ve o alan adı
+    /// çağıranın kapsamı dışındadır; oraya "bilinmeyen" gibi bir yer tutucu koymak, kiracıya
+    /// komşusunun bir kaydının VARLIĞINI sızdırırdı. Yönetici alias'ı kendi alan adı seçiliyken
+    /// zaten göremediği için işlevsel kayıp da yok.
+    /// </para>
+    /// <para>
+    /// <c>enabled=false</c> girdiler DE gösterilir: alias devre dışı olsa bile nesnede durur ve
+    /// aynı adresin ikinci kez eklenmesini engeller. Gizlemek, yöneticiye "bu adres boşta"
+    /// dedirtip sonra "zaten kullanılıyor" hatası vermek olurdu.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyCollection<string> ReadAliasAddresses(
+        JsonElement element,
+        IReadOnlyDictionary<string, string> domainNamesById)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty("aliases", out var map)
+            || map.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        var addresses = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var entry in map.EnumerateObject())
+        {
+            var name = GetField(entry.Value, "name");
+            var domainId = GetField(entry.Value, "domainId");
+            if (string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(domainId)
+                || !domainNamesById.TryGetValue(domainId, out var domainName)
+                || string.IsNullOrWhiteSpace(domainName))
+            {
+                continue;
+            }
+
+            addresses.Add($"{name.Trim().ToLowerInvariant()}@{DomainNames.Normalize(domainName)}");
+        }
+
+        return [.. addresses];
+    }
+
     private async Task<Dictionary<string, ListPolicyEntry>> ReadListPoliciesAsync(CancellationToken cancellationToken)
     {
         var stored = await fileStore.ReadAsync<Dictionary<string, ListPolicyEntry>>(ListPolicyStorePath, new(), cancellationToken);
@@ -711,6 +937,13 @@ public sealed class MailService(
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var store = await ReadListPoliciesAsync(cancellationToken);
 
+        // Alan adı kimliği -> ad haritası: alias'lar kimlikle saklanır, kural TAM ADRESLE eşleşir.
+        var domainNamesById = (await QueryAsync(cli, "domain", env, cancellationToken))
+            .Select(item => (Id: GetField(item, "id"), Name: GetField(item, "name")))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Id) && !string.IsNullOrWhiteSpace(pair.Name))
+            .GroupBy(pair => pair.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.Ordinal);
+
         var rules = new List<ListPolicyRule>();
         foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
         {
@@ -727,14 +960,16 @@ public sealed class MailService(
             }
 
             var id = GetField(brief, "id");
-            var subscribers = string.IsNullOrWhiteSpace(id)
-                ? []
-                : ReadListRecipients(await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken) ?? default);
+            var detail = string.IsNullOrWhiteSpace(id)
+                ? null
+                : await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken);
+            var subscribers = ReadListRecipients(detail ?? default);
 
-            rules.Add(new ListPolicyRule(
-                listAddress.ToLowerInvariant(),
+            rules.AddRange(BuildListPolicyRules(
+                listAddress,
                 policy,
-                ResolveAllowedSenders(policy, subscribers, entry.AllowedSenders)));
+                ResolveAllowedSenders(policy, subscribers, entry.AllowedSenders),
+                detail is null ? [] : ReadAliasAddresses(detail.Value, domainNamesById)));
         }
 
         var payload = JsonSerializer.Serialize(new
@@ -962,6 +1197,52 @@ public sealed class MailService(
     /// gelir; <c>Ali@Ornek.com</c> ile giriş yapan abone aksi hâlde kendi listesine yazamazdı.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// TEK bir listenin RCPT (gönderim politikası) kurallarını üretir: ana adres + BÜTÜN EK
+    /// ADRESLERİ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı ve test edilebilir bir metot:</b> ilk sürümde bu mantık
+    /// <see cref="SyncListPolicyScriptAsync"/> içinde, CLI çağrılarının arasına gömülüydü ve
+    /// testi yoktu. MUTASYON TESTİ bunu yakaladı: "alias kuralını hiç ekleme" mutasyonu HAYATTA
+    /// KALDI, çünkü test <see cref="BuildListPolicyScript"/>'e elle alias kuralı veriyordu — yani
+    /// "alias kuralı verilirse ne olur"u ölçüyordu, "alias kuralı üretiliyor mu"yu DEĞİL. Bu depoda
+    /// aynı tuzak silme ekibinde de yaşandı (bkz. CODEX_MEMORY 218). Dikiş buraya açıldı.
+    /// </para>
+    /// <para>
+    /// <b>EK ADRESLER AYNI kuralı almak ZORUNDA — bu bir GÜVENLİK gereğidir, kolaylık değil.</b>
+    /// Kural zarftaki alıcıyla eşleşiyor (<c>envelope :is "to"</c>). Alias'a yazan bir göndericide
+    /// zarf alıcısı ALIAS'tır; yalnız ana adrese kural konsaydı "yalnız aboneler" seçilmiş KAPALI
+    /// bir liste, alias üzerinden HERKESE açık kalırdı. Yani ek adres özelliği, kendisi bir
+    /// politika ATLATMA yolu olurdu.
+    /// </para>
+    /// <para>
+    /// <b>DÜRÜSTLÜK:</b> Stalwart'ın RCPT aşamasında alias'ı ana adrese GENİŞLETİP genişletmediği
+    /// bu makinede ÖLÇÜLEMEDİ (ayakta sunucu yok). Kural her iki davranışta da doğrudur:
+    /// genişletiyorsa ana adres kuralı yakalar ve alias kuralı hiç eşleşmez (zararsız),
+    /// genişletmiyorsa açığı kapatan TEK şey alias kuralıdır.
+    /// </para>
+    /// </remarks>
+    internal static List<ListPolicyRule> BuildListPolicyRules(
+        string listAddress,
+        string policy,
+        IReadOnlyList<string> allowedSenders,
+        IEnumerable<string> aliases)
+    {
+        var rules = new List<ListPolicyRule> { new(listAddress.Trim().ToLowerInvariant(), policy, allowedSenders) };
+        foreach (var alias in aliases)
+        {
+            var normalized = (alias ?? string.Empty).Trim().ToLowerInvariant();
+            if (normalized.Length > 0)
+            {
+                rules.Add(new ListPolicyRule(normalized, policy, allowedSenders));
+            }
+        }
+
+        return rules;
+    }
+
     internal static string BuildListPolicyScript(IEnumerable<ListPolicyRule> rules)
     {
         var active = rules
@@ -1458,6 +1739,14 @@ public sealed class MailService(
             return [];
         }
 
+        // Alan adı kimliği -> ad haritası: liste alias'ları sunucuda kimlikle durur ve başlık kuralı
+        // TAM ADRESLE eşleştiği için ada çevrilmeden kullanılamaz.
+        var domainNamesById = (await QueryAsync(cli, "domain", env, cancellationToken))
+            .Select(item => (Id: GetField(item, "id"), Name: GetField(item, "name")))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Id) && !string.IsNullOrWhiteSpace(pair.Name))
+            .GroupBy(pair => pair.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.Ordinal);
+
         var rules = new List<ListUnsubscribeRule>();
         foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
         {
@@ -1467,17 +1756,76 @@ public sealed class MailService(
                 continue;
             }
 
-            rules.Add(new ListUnsubscribeRule(
-                address.ToLowerInvariant(),
-                $"{baseUrl}/api/v1/public/mail-lists/unsubscribe?list={Uri.EscapeDataString(address.ToLowerInvariant())}"));
+            var id = GetField(brief, "id");
+            var detail = string.IsNullOrWhiteSpace(id)
+                ? null
+                : await GetObjectAsync(cli, MailingListObject, id, env, cancellationToken);
+
+            rules.AddRange(BuildListUnsubscribeRules(
+                address,
+                baseUrl,
+                detail is null ? [] : ReadAliasAddresses(detail.Value, domainNamesById)));
         }
 
         rules.Sort((left, right) => string.CompareOrdinal(left.ListAddress, right.ListAddress));
         return rules;
     }
 
+    /// <summary>
+    /// TEK bir listenin <c>List-Unsubscribe</c> kurallarını üretir: ana adres + BÜTÜN EK ADRESLERİ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı ve test edilebilir bir metot:</b> bkz. <see cref="BuildListPolicyRules"/> —
+    /// aynı gerekçe. Kural üretimi CLI çağrılarının arasına gömülü kalsaydı "alias kuralı
+    /// üretiliyor mu" sorusu test edilemezdi.
+    /// </para>
+    /// <para>
+    /// <b>EK ADRESLER de kural üretmek ZORUNDA.</b> Kural <c>To:</c> BAŞLIĞIYLA eşleşiyor (bkz.
+    /// <see cref="BuildDataStageScript"/>) — gönderen alias'a yazdığında başlıkta ALIAS durur,
+    /// liste adresi DURMAZ. Alias'lar atlansaydı: alias'a gelen posta abonelere dağıtılır ama
+    /// <c>List-Unsubscribe</c> başlığı HİÇ eklenmezdi. Sonuç sessiz olurdu — alias üzerinden gelen
+    /// duyurularda "abonelikten çık" bağlantısı yok, aynı listenin ana adresinden gelenlerde var;
+    /// abone farkı asla anlayamaz, biz de şikâyeti tekrar üretemezdik.
+    /// </para>
+    /// <para>
+    /// <b>Bağlantı ve <c>List-Id</c> her zaman LİSTENİN ANA ADRESİNİ gösterir:</b> abone bir
+    /// ADRESTEN değil LİSTEDEN çıkar. Alias'a özel bağlantı, aynı listeden iki farklı "çıkış"
+    /// varmış gibi görünür ve alias silindiğinde ölürdü.
+    /// </para>
+    /// </remarks>
+    internal static List<ListUnsubscribeRule> BuildListUnsubscribeRules(
+        string listAddress,
+        string baseUrl,
+        IEnumerable<string> aliases)
+    {
+        var canonical = (listAddress ?? string.Empty).Trim().ToLowerInvariant();
+        var url = $"{baseUrl}/api/v1/public/mail-lists/unsubscribe?list={Uri.EscapeDataString(canonical)}";
+
+        var rules = new List<ListUnsubscribeRule> { new(canonical, url) };
+        foreach (var alias in aliases)
+        {
+            var normalized = (alias ?? string.Empty).Trim().ToLowerInvariant();
+            if (normalized.Length > 0 && !string.Equals(normalized, canonical, StringComparison.Ordinal))
+            {
+                rules.Add(new ListUnsubscribeRule(normalized, url, canonical));
+            }
+        }
+
+        return rules;
+    }
+
     /// <summary>Bir dağıtım listesine eklenecek <c>List-Unsubscribe</c> başlığının kaynağı.</summary>
-    internal sealed record ListUnsubscribeRule(string ListAddress, string UnsubscribeUrl);
+    /// <param name="ListAddress">Kuralın <c>To:</c> başlığında ARADIĞI adres (liste adresi ya da alias).</param>
+    /// <param name="UnsubscribeUrl">Abonelikten çıkma bağlantısı — her zaman LİSTENİN ana adresine ait.</param>
+    /// <param name="ListId">
+    /// <c>List-Id</c> başlığında kullanılacak liste kimliği. <c>null</c> ise
+    /// <paramref name="ListAddress"/>'in kendisi kullanılır (kural ana adres içindir). Alias
+    /// kurallarında listenin ANA adresi verilir: <c>List-Id</c> adresi değil LİSTEYİ tanımlar ve
+    /// posta istemcileri bu başlığa göre konu gruplar/süzer — alias başına farklı bir kimlik,
+    /// aynı listenin iletilerini iki ayrı listeymiş gibi böler.
+    /// </param>
+    internal sealed record ListUnsubscribeRule(string ListAddress, string UnsubscribeUrl, string? ListId = null);
 
     internal static int CountActiveAutoResponders(Dictionary<string, AutoResponderEntry> store) =>
         store.Count(pair => pair.Value.Enabled && !string.IsNullOrWhiteSpace(pair.Value.Message));
@@ -1544,7 +1892,9 @@ public sealed class MailService(
         {
             builder.Append($"if header :contains :comparator \"i;ascii-casemap\" \"to\" {SieveQuoted(rule.ListAddress)} {{\r\n");
             builder.Append($"    addheader \"List-Unsubscribe\" {SieveQuoted($"<{rule.UnsubscribeUrl}>")};\r\n");
-            builder.Append($"    addheader \"List-Id\" {SieveQuoted($"<{rule.ListAddress.Replace('@', '.')}>")};\r\n");
+            // List-Id ADRESTEN değil LİSTEDEN türetilir: alias kuralında rule.ListAddress alias'tır,
+            // ama başlık listenin ANA kimliğini taşımalı (bkz. ListUnsubscribeRule.ListId).
+            builder.Append($"    addheader \"List-Id\" {SieveQuoted($"<{(rule.ListId ?? rule.ListAddress).Replace('@', '.')}>")};\r\n");
             builder.Append("}\r\n");
         }
     }

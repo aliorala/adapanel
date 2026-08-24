@@ -1,4 +1,6 @@
-﻿namespace AdaPanel.Infrastructure.Backup;
+﻿using AdaPanel.Core.Common;
+
+namespace AdaPanel.Infrastructure.Backup;
 
 /// <summary>
 /// Kullanıcı verisinden (site adı, veritabanı adı, abonelik kimliği) YOL PARÇASI üretmenin TEK
@@ -14,7 +16,13 @@
 /// </para>
 /// <para>
 /// <b>Ne yapar:</b> dosya adında geçersiz olan HER karakteri atar (yol ayırıcıları dâhil), baştan
-/// ve sondan boşluk ile NOKTA kırpar, sonuç boşsa sabit bir ada düşer, aşırı uzun adı keser.
+/// ve sondan boşluk ile NOKTA kırpar, sonuç boşsa sabit bir ada düşer, aşırı uzun adı keser ve
+/// en son Windows'un AYRILMIŞ AYGIT ADLARINI etkisizleştirir.
+/// </para>
+/// <para>
+/// <b>Neden aygıt adı ayrıca gerekiyor:</b> <c>GetInvalidFileNameChars</c> aygıt adlarını bilmez
+/// — "CON" içinde geçersiz KARAKTER yoktur. "CON" adlı bir sitenin yedeği
+/// <c>CreateDirectory</c> istisnasıyla düşüyordu (bkz. <see cref="WindowsReservedNames"/>).
 /// </para>
 /// <para>
 /// <b>Neden nokta kırpılıyor:</b> ayırıcılar atıldıktan sonra <c>..\..\Windows</c> geriye
@@ -51,7 +59,19 @@ internal static class BackupPathName
             temiz = Kirp(temiz[..MaxLength]);
         }
 
-        return temiz.Length == 0 ? fallback : temiz;
+        if (temiz.Length == 0)
+        {
+            return fallback;
+        }
+
+        // AYRILMIŞ AYGIT ADI son adımda etkisizleştirilir — kesme ve kırpmadan SONRA, çünkü
+        // ikisi de ayrılmış olmayan bir adı ayrılmış hâle getirebilir: "console" 64 karaktere
+        // kesilse değişmez ama "con.x" kırpılınca "con" kalır. Önce baksaydık, kendi ürettiğimiz
+        // adı denetimsiz bırakırdık.
+        //
+        // Neden fallback'e DÜŞÜLMÜYOR: "CON" ve "NUL" adlı iki site aynı yedek klasörüne
+        // karışırdı. Ek koymak kaynağı ayırt edilebilir bırakır.
+        return WindowsReservedNames.MakeSafe(temiz);
     }
 
     /// <summary>

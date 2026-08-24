@@ -590,6 +590,24 @@
                 class="list-policy"
                 :class="{ 'policy-open': list.postingPolicy === 'anyone' }"
               >{{ policyLabel(list.postingPolicy) }}</small>
+              <!-- EK ADRESLER: listeye giden IKINCI kapilardir. Adres kimliginin yaninda
+                   gorunmeli -- ayri bir sekmede saklansaydi, listeye baska hangi adresten posta
+                   gelebildigi ekranda hic gorunmezdi. -->
+              <span v-if="list.aliases.length" class="list-aliases">
+                <span v-for="alias in list.aliases" :key="alias" class="alias-chip">
+                  {{ alias }}
+                  <button
+                    type="button"
+                    class="chip-remove"
+                    v-bind="writeGate(busy)"
+                    :title="t('panel.mail.listRemoveAlias', { address: alias })"
+                    :aria-label="t('panel.mail.listRemoveAlias', { address: alias })"
+                    @click="removeListAlias(list.address, alias)"
+                  >
+                    ×
+                  </button>
+                </span>
+              </span>
             </div>
             <div class="list-subscribers">
               <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
@@ -612,6 +630,9 @@
             <div class="row-actions">
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="subscribe(list.address)">
                 {{ t("panel.mail.listAddSubscriber") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="addListAlias(list.address)">
+                {{ t("panel.mail.listAddAlias") }}
               </button>
               <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
                 {{ t("panel.mail.listPostingPolicy") }}
@@ -859,6 +880,8 @@ import {
   setMailPublicBaseUrl,
   subscribeToMailList,
   unsubscribeFromMailList,
+  addMailListAlias,
+  removeMailListAlias,
   deleteMailAccount,
   deleteMailAlias,
   deleteMailDomain,
@@ -1760,6 +1783,42 @@ async function unsubscribe(address: string, subscriber: string) {
   });
 }
 
+// EK ADRES ekleme. Yerel kisim yeterli ("info"); sunucu LISTENIN alan adiyla tamamlar. Tam adres
+// de yazilabilir, ama alan adi kullanicinin kapsaminda olmak ZORUNDA -- sunucu bunu dogruluyor,
+// arayuz o kontrolu tekrar etmiyor (iki yerde yazilan kural, birinde gevserdi).
+async function addListAlias(listAddress: string) {
+  const value = await prompt({
+    title: t("panel.mail.listAddAliasPrompt"),
+    message: `${listAddress} — ${t("panel.mail.listAliasesHint")}`,
+    label: t("panel.mail.listAliases")
+  });
+  if (value === null) return;
+
+  const alias = value.trim();
+  if (!alias) return;
+
+  await run(async () => {
+    apply(await addMailListAlias(listAddress, alias));
+    showNotice(t("panel.mail.listAliasAdded", { address: alias }), false);
+  });
+}
+
+// EK ADRES kaldirma. Onay istenir cunku sessiz bir hizmet kesintisidir: o adrese yazanlar
+// bundan sonra teslim edilemedi hatasi alir ve listeye yazdiklarini sanmaya devam ederler.
+async function removeListAlias(listAddress: string, alias: string) {
+  await confirm({
+    title: t("panel.confirm.removeMailListAliasTitle", { name: alias }),
+    message: t("panel.mail.confirmRemoveAlias"),
+    impact: [`${t("panel.mail.listAddress")}: ${listAddress}`, `${t("panel.mail.listAliases")}: ${alias}`],
+    action: async () => {
+      await run(async () => {
+        apply(await removeMailListAlias(listAddress, alias));
+        showNotice(t("panel.mail.listAliasRemoved", { address: alias }), false);
+      });
+    }
+  });
+}
+
 async function editListRecipients(address: string, current: string[]) {
   const value = await prompt({
     title: t("panel.mail.listEditPrompt"),
@@ -2292,6 +2351,27 @@ function showError(error: unknown) {
 .chip-remove:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* EK ADRESLER liste kimliginin altinda, abone rozetlerinden GORSEL OLARAK AYRI durur: ikisi de
+   rozet olsaydi "listeye yazabilen ikinci adres" ile "postayi alan kisi" karisirdi. */
+.list-aliases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 3px 1px 7px;
+  border: 1px dashed var(--border-soft, var(--surface-2));
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .list-limitation {

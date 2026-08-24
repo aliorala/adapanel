@@ -37,6 +37,13 @@ public sealed class SchedulerService(
     /// kökünün DIŞINA yazmasına yol açardı. Ada ek olarak adın SHA-256 önekini de koyarız: yalnız
     /// temizlenmiş ad kullanılsa, "yedek/gece" ile "yedek-gece" aynı dosyaya yazardı.
     /// </para>
+    /// <para>
+    /// AYRILMIŞ AYGIT ADI ayrıca etkisizleştirilir. Özet SON EKİ çoğu durumda tuzağı zaten
+    /// kırıyordu ("CON" → "CON-a1b2c3d4.log", ayrılmış değil) ama NOKTALI adlarda kırmıyordu:
+    /// "CON.txt" → "CON.txt-a1b2c3d4.log" ve ayrılmışlık İLK noktadan önceki parçaya bakıldığı
+    /// için o dosya hâlâ aygıta gider — görev günlüğü hiç yazılamazdı. Bu yüzden kontrol
+    /// birleştirilmiş ADIN TAMAMI üzerinde, en sonda yapılır.
+    /// </para>
     /// </summary>
     internal static string ResolveLogFileName(string taskName)
     {
@@ -52,7 +59,7 @@ public sealed class SchedulerService(
         var ozet = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(taskName.Trim())))[..8];
 
-        return $"{temiz}-{ozet}.log";
+        return WindowsReservedNames.MakeSafe($"{temiz}-{ozet}.log");
     }
 
     /// <summary>

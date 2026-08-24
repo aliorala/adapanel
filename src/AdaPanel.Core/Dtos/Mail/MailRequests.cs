@@ -165,6 +165,33 @@ public sealed class SetMailListRecipientsRequest
 }
 
 /// <summary>
+/// Bir dağıtım listesine EK ADRES (alias) ekler ya da çıkarır.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden liste adresi de isteniyor, neden yalnız alias yetmiyor:</b> alias'lar listenin İÇİNDE
+/// durur; alias'tan listeye gitmek bütün listeleri taramak demektir. Daha önemlisi bu bir KAPSAM
+/// meselesi: yalnız alias gönderilseydi denetleyici sadece ALIAS'ın alan adını doğrulayabilirdi ve
+/// kendi alan adında bir alias'ı BAŞKA bir kiracının listesine yazmak/ondan silmek serbest
+/// kalırdı. İki adres birlikte gelince iki alan adı da doğrulanır.
+/// </para>
+/// <para>
+/// <b><see cref="Alias"/> yerel kısım olabilir:</b> "info" yazıldığında LİSTENİN alan adıyla
+/// tamamlanır — ekranda kullanıcı zaten "@ornek.com" son ekini görüyor.
+/// </para>
+/// </remarks>
+public sealed class MailListAliasRequest
+{
+    /// <summary>Alias'ın ekleneceği/çıkarılacağı dağıtım listesinin TAM adresi.</summary>
+    [Required]
+    public string ListAddress { get; set; } = string.Empty;
+
+    /// <summary>Ek adres: yerel kısım ("info") ya da tam adres ("info@ornek.com").</summary>
+    [Required]
+    public string Alias { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Panelin dışarıdan erişilen kök adresi (ör. <c>https://panel.ornek.com</c>).
 /// BOŞ = <c>List-Unsubscribe</c> başlığı hiç eklenmez.
 /// </summary>

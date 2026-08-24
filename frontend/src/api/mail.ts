@@ -18,6 +18,10 @@ export type MailList = {
   address: string;
   description: string;
   recipients: string[];
+  // Listenin EK ADRESLERI (Stalwart MailingList.aliases). Bu adreslerden birine gelen posta da
+  // ayni abonelere dagitilir. Her zaman TAM adrestir: alias listenin kendi alan adindan baska bir
+  // alan adinda olabilir, yalniz yerel kisim gosterilseydi ikisi ekranda ayirt edilemezdi.
+  aliases: string[];
   postingPolicy: MailListPostingPolicy;
   allowedSenders: string[];
 };
@@ -155,6 +159,25 @@ export async function unsubscribeFromMailList(address: string, subscriber: strin
   });
   return response.data.data;
 }
+// EK ADRES (alias) ekleme/cikarma. LISTE ADRESI de gonderilir: sunucu iki alan adini da
+// dogrulayabilsin diye. Yalniz alias gonderilseydi, kendi alan adindaki bir adresi BASKASININ
+// listesine baglamak (ya da ondan sokmek) denetimden kacardi.
+export async function addMailListAlias(listAddress: string, alias: string) {
+  const response = await apiClient.post<ApiEnvelope<MailWorkspace>>("/mail/lists/aliases", {
+    listAddress,
+    alias
+  });
+  return response.data.data;
+}
+
+// DELETE govdesi ara katmanlarda guvenilir tasinmaz -> iki adres de sorgu dizesinde gider.
+export async function removeMailListAlias(listAddress: string, alias: string) {
+  const response = await apiClient.delete<ApiEnvelope<MailWorkspace>>("/mail/lists/aliases", {
+    params: { listAddress, alias }
+  });
+  return response.data.data;
+}
+
 export async function deleteMailList(address: string) {
   const response = await apiClient.delete<ApiEnvelope<MailWorkspace>>(`/mail/lists/${encodeURIComponent(address)}`);
   return response.data.data;

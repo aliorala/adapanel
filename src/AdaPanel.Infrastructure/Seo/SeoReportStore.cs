@@ -1,3 +1,4 @@
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Seo;
 using AdaPanel.Infrastructure.Support;
 
@@ -54,10 +55,20 @@ public sealed class SeoReportStore(JsonFileStore fileStore)
     /// Site adını dosya adına çevirir (kalıp: <c>GitDeploymentService.SanitizeFileName</c>).
     /// <see cref="JsonFileStore.ResolvePath"/> ayrıca kök dışına çıkmayı engeller.
     /// </summary>
-    private static string Path(string siteName)
+    /// <remarks>
+    /// AYRILMIŞ AYGIT ADI kontrolü UZANTI EKLENDİKTEN SONRA yapılır: ayrılmışlık ilk noktadan
+    /// önceki parçaya bakar, yani "CON" için hedef dosya "CON.json" olur ve o da aygıttır.
+    /// Ölçülen sonuç, "CON" adlı bir sitede SEO taramasının raporu yazarken
+    /// <c>FileNotFoundException</c> ile düşmesiydi — tarama tamamlanır, sonuç kaybolurdu.
+    ///
+    /// internal: ürettiği ADIN diskte gerçekten açılabildiği test edilebilsin diye. Tuzak ancak
+    /// "dosya oluşturulabiliyor mu" diye ÖLÇÜLDÜĞÜNDE yakalanır; kuralı testte yeniden yazmak,
+    /// testin kendi kopyasını doğrulaması olurdu.
+    /// </remarks>
+    internal static string Path(string siteName)
     {
         var invalid = System.IO.Path.GetInvalidFileNameChars();
         var safe = new string(siteName.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
-        return $"config/seo/{safe}.json";
+        return $"config/seo/{WindowsReservedNames.MakeSafe($"{safe}.json")}";
     }
 }

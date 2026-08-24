@@ -413,6 +413,115 @@ public sealed class MailController(
     }
 
     /// <summary>
+    /// Dağıtım listesine EK ADRES (alias) ekler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>İKİ kapsam denetimi var ve ikisi de gerekli:</b> birincisi LİSTENİN alan adını doğrular
+    /// (başkasının listesini değiştiremezsin), ikincisi ALIAS'ın alan adını
+    /// (<c>EnsureAddressDomainAsync</c>). İkincisi olmasaydı kiracı, kendi listesine
+    /// <c>duyuru@kurban.com</c> alias'ı tanımlayıp KURBANIN alan adına gelen postayı kendi abone
+    /// kümesine — yani kendisine — dağıtabilirdi. Bu, kapatılmış olan alias/çapraz-kiracı açığının
+    /// birebir aynısıdır, sadece hesap yerine liste üzerinden.
+    /// </para>
+    /// <para>
+    /// Kontrol NAİF <c>EndsWith</c> DEĞİLDİR: <c>EnsureAddressDomainAsync</c> alan adını son "@"den
+    /// sonrasıyla çıkarır ve kullanıcının izinli alan adı KÜMESİNDE tam eşleşme arar
+    /// (<c>CustomerAccess.EnsureMailDomainAsync</c>). <c>EndsWith</c> olsaydı
+    /// <c>kutu@kotuornek.com</c> ile <c>kutu@ornek.com</c> aynı sayılırdı; bunun testi
+    /// <c>MailingListContractTests</c>'te zaten var.
+    /// </para>
+    /// <para>
+    /// <b>Neden somut <see cref="AdaPanel.Infrastructure.Mail.MailService"/>:</b> ek adres
+    /// Stalwart'ın <c>MailingList</c> nesnesine özgüdür; MailEnable yedeğinde karşılığı yoktur.
+    /// Aynı desen bu denetleyicide <c>public-base-url</c> uçlarında da kullanılıyor. MailEnable
+    /// kurulumunda kullanıcı ham bir bağlantı hatası görmesin diye ön koşul AÇIKÇA denetlenir.
+    /// </para>
+    /// </remarks>
+    [HttpPost("lists/aliases")]
+    public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> AddListAliasAsync(
+        [FromBody] MailListAliasRequest request,
+        [FromServices] AdaPanel.Infrastructure.Mail.MailService concreteMailService,
+        CancellationToken cancellationToken)
+    {
+        // SIRA ÖNEMLİ: kapsam denetimi ÖNCE. Ön koşul ("Stalwart kurulu mu") önce çalışsaydı,
+        // uç kapsamı dışındaki bir çağırana bile sunucunun hangi posta yazılımını kullandığını
+        // söylerdi — ve daha genel olarak yetki kontrolü hiçbir şeyin ARDINDA gelmemeli.
+        var listDomain = ExtractDomain(request.ListAddress);
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, listDomain, cancellationToken);
+        await EnsureAddressDomainAsync(request.Alias, listDomain, cancellationToken);
+        EnsureMailingListsSupported();
+
+        var workspace = await concreteMailService.AddMailListAliasAsync(request, cancellationToken);
+
+        // EK ADRES = LİSTEYE İKİNCİ KAPI. Alias'a gelen posta bütün abonelere dağıtılır ve bunun
+        // listenin kendi kaydında hiçbir izi kalmaz. Bu yüzden HANGİ adresin HANGİ listeye
+        // bağlandığı yazılır; yalnız "alias eklendi" demek, sızdırmanın nereden yapıldığını
+        // cevapsız bırakırdı.
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.list.alias_added",
+            NormalizeAddress(request.ListAddress, null),
+            $"Mailing list alias '{NormalizeAddress(request.Alias, listDomain)}' was added.",
+            await AdresSahibiAsync(request.ListAddress, null, cancellationToken));
+
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_alias_added"));
+    }
+
+    /// <summary>
+    /// Dağıtım listesinden bir ek adresi (alias) kaldırır.
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden gövde değil sorgu, neden yalnız alias yetmiyor:</b> DELETE'in gövdesi ara
+    /// katmanlarda güvenilir taşınmaz, bu yüzden iki adres de sorgu dizesinde gelir. Yalnız alias
+    /// alınsaydı, denetleyici alias'ın alan adını doğrulayabilir ama LİSTENİN alan adını
+    /// doğrulayamazdı: kendi alan adındaki bir alias'ı başkasının listesinden söküp o listeyi
+    /// bozmak serbest kalırdı (hizmet kesintisi).
+    /// </remarks>
+    [HttpDelete("lists/aliases")]
+    public async Task<ActionResult<ApiResponse<MailWorkspaceDto>>> RemoveListAliasAsync(
+        [FromQuery] string listAddress,
+        [FromQuery] string alias,
+        [FromServices] AdaPanel.Infrastructure.Mail.MailService concreteMailService,
+        CancellationToken cancellationToken)
+    {
+        var request = new MailListAliasRequest { ListAddress = listAddress ?? string.Empty, Alias = alias ?? string.Empty };
+        var listDomain = ExtractDomain(request.ListAddress);
+        // Kapsam denetimi ÖNCE (bkz. AddListAliasAsync).
+        await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, listDomain, cancellationToken);
+        await EnsureAddressDomainAsync(request.Alias, listDomain, cancellationToken);
+        EnsureMailingListsSupported();
+
+        var workspace = await concreteMailService.RemoveMailListAliasAsync(request, cancellationToken);
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "mail.list.alias_removed",
+            NormalizeAddress(request.ListAddress, null),
+            $"Mailing list alias '{NormalizeAddress(request.Alias, listDomain)}' was removed.",
+            await AdresSahibiAsync(request.ListAddress, null, cancellationToken));
+
+        return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_alias_removed"));
+    }
+
+    /// <summary>
+    /// Dağıtım listesi uçlarının ön koşulu: bu makinede Stalwart kurulu mu?
+    /// </summary>
+    /// <remarks>
+    /// MailEnable yedeğinde dağıtım listesi YOKTUR ve <c>IMailService</c> yolundaki liste uçları
+    /// bunu <c>mail.lists_unsupported</c> ile söylüyor. Ek adres uçları somut servise gittiği için
+    /// aynı cevabı kendileri vermek zorunda; olmasaydı kullanıcı "mail sunucusu kurulu değil" gibi
+    /// YANLIŞ bir sebep görürdü (sunucu kurulu, sadece başka bir sunucu).
+    /// </remarks>
+    private static void EnsureMailingListsSupported()
+    {
+        if (!AdaPanel.Infrastructure.Mail.MailService.IsInstalled())
+        {
+            throw new Core.Common.AppException("mail.lists_unsupported", 409, 409);
+        }
+    }
+
+    /// <summary>
     /// Panelin DIŞARIDAN erişilen kök adresi. Dağıtım listesi iletilerine konan
     /// <c>List-Unsubscribe</c> bağlantısı bundan kurulur.
     /// </summary>
