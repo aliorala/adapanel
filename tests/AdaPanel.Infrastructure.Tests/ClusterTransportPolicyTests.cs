@@ -17,6 +17,23 @@ public sealed class ClusterTransportPolicyTests
     private const string Adres = "https://dugum.ornek.test:8888";
 
     /// <summary>
+    /// İstemci zaman aşımı BİLEREK çok geniş.
+    ///
+    /// Bu dosyadaki testlerin ölçtüğü şey zamanlama DEĞİL: "iç adrese bağlanmayı reddediyor mu",
+    /// "boş çözümlemede bağlanıyor mu", "yönlendirmeyi izliyor mu". Bu kararların hepsi bağlantı
+    /// KURULMADAN veriliyor, yani gerçek bir zaman aşımına asla ihtiyaç yok.
+    ///
+    /// Eskiden 3 saniyeydi ve TAM TAKIM YÜKÜ altında rastgele kırmızı veriyordu: iş parçacığı
+    /// havuzu doluyken zaman aşımı, asıl kararı taşıyan istisnadan ÖNCE ateşleniyor ve test
+    /// beklediği hata yerine iptal görüyordu. Rastgele kırmızı veren bir test, ilerideki gerçek
+    /// bir arızanın "yine o test" diye elenmesine yol açar.
+    ///
+    /// NOT: aşağıdaki <c>ProbeTimeout</c> sınır testi (üretim değerinin makul aralıkta olduğunu
+    /// doğrular) bundan AYRIDIR ve dokunulmadı — o gerçekten zamanlamayı ölçüyor.
+    /// </summary>
+    private static readonly TimeSpan IstemciZamanAsimi = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// YONLENDIRME IZLENMEZ.
     /// <para>
     /// Izlenseydi, dogrulanmis bir adres <c>302 Location: http://169.254.169.254/…</c> ile
@@ -86,8 +103,8 @@ public sealed class ClusterTransportPolicyTests
     {
         using var fabrika = Fabrika();
 
-        var acik = fabrika.Create(Adres, verifyTlsCertificate: true, TimeSpan.FromSeconds(5));
-        var kapali = fabrika.Create(Adres, verifyTlsCertificate: false, TimeSpan.FromSeconds(5));
+        var acik = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
+        var kapali = fabrika.Create(Adres, verifyTlsCertificate: false, IstemciZamanAsimi);
 
         Assert.NotSame(acik, kapali);
         acik.Dispose();
@@ -121,7 +138,7 @@ public sealed class ClusterTransportPolicyTests
             Resolver = (_, _) => Task.FromResult(new[] { IPAddress.Parse(ip) })
         };
 
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, TimeSpan.FromSeconds(3));
+        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
 
         var hata = await Assert.ThrowsAsync<HttpRequestException>(
             () => istemci.GetAsync("api/v1/cluster/node-info"));
@@ -142,7 +159,7 @@ public sealed class ClusterTransportPolicyTests
             Resolver = (_, _) => Task.FromResult(Array.Empty<IPAddress>())
         };
 
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, TimeSpan.FromSeconds(3));
+        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
 
         var hata = await Assert.ThrowsAsync<HttpRequestException>(
             () => istemci.GetAsync("api/v1/cluster/node-info"));
@@ -166,7 +183,7 @@ public sealed class ClusterTransportPolicyTests
             })
         };
 
-        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, TimeSpan.FromSeconds(3));
+        using var istemci = fabrika.Create(Adres, verifyTlsCertificate: true, IstemciZamanAsimi);
 
         var hata = await Assert.ThrowsAsync<HttpRequestException>(
             () => istemci.GetAsync("api/v1/cluster/node-info"));

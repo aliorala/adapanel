@@ -349,17 +349,31 @@ public sealed class HtaccessHostingRegistrationTests(ITestOutputHelper output)
             output.WriteLine($"  Kapi ACIK  (onbellekten)  : {acikNs,8:F1} ns");
             output.WriteLine("  Karsilastirma: bir dosya damgasi okuma ~13.700 ns (olculdu).");
 
-            // ESIK BU TESTIN KENDI BULGUSUYLA SIKILASTIRILDI.
-            // Ilk kosumda olculen degerler: KAPALI 820,6 ns / ACIK 1.894,8 ns. Bu, beklenenin
-            // ~20 katiydi ve sebebi bulundu: kapi HER ISTEKTE anahtar dosyasinin yolunu yeniden
-            // uretiyordu (ExpandEnvironmentVariables + GetFullPath + Combine). Yollar kurucuya
-            // tasininca degerler 32,9 ns / 66,7 ns'ye dustu (~25x).
+            // NOBETCI ZAMAN DEGIL TAHSISAT OLCUYOR -- ve bu bilincli bir degisiklik.
             //
-            // Esik 400 ns: olculen degerin ~6 kati pay birakiyor (yavas CI makinesi, soguk cache),
-            // ama ayni hatanin geri gelmesini (820 ns) YAKALAR. Bu bir performans yarisi degil,
-            // "sicak yola dosya/kilit/dizgi uretimi eklendi" nobetcisidir.
-            Assert.True(kapaliNs < 400, $"kapi kapaliyken istek basina maliyet cok yuksek: {kapaliNs:F1} ns");
-            Assert.True(acikNs < 400, $"kapi acikken istek basina maliyet cok yuksek: {acikNs:F1} ns");
+            // Yakalanan regresyon suydu: kapi HER ISTEKTE anahtar dosyasinin yolunu yeniden
+            // uretiyordu (ExpandEnvironmentVariables + GetFullPath + Combine). Olculen degerler
+            // KAPALI 820,6 ns / ACIK 1.894,8 ns idi; yollar kurucuya tasininca 32,9 / 66,7 ns'ye
+            // dustu (~25x).
+            //
+            // Esik eskiden 400 ns'ydi ve TAM TAKIM YUKU altinda rastgele kirmizi veriyordu: mutlak
+            // duvar saati, CPU cekismesine dogrudan bagli. Esigi gevsetmek ise nobetciyi ISE
+            // YARAMAZ yapardi -- 2000 ns'e cikarsaydik yakalamasi gereken 820 ns'lik regresyonu
+            // KACIRIRDI.
+            //
+            // Cozum: sorunun KENDISINI olc. O regresyonun urettigi sey dizgiydi, yani TAHSISAT.
+            // Sicak yolda tahsisat sifir olmak ZORUNDA ve bu olcum makinenin yukunden bagimsizdir.
+            // Sure yine raporlaniyor (yukarida) ama artik iddia edilmiyor -- bilgi, nobetci degil.
+            var kapaliBayt = MeasureAllocation(() => kapali.Evaluate("olcum.example"));
+            var acikBayt = MeasureAllocation(() => acik.Evaluate("olcum.example"));
+
+            output.WriteLine($"  Kapi KAPALI tahsisat      : {kapaliBayt,8:F2} bayt/istek");
+            output.WriteLine($"  Kapi ACIK  tahsisat       : {acikBayt,8:F2} bayt/istek");
+
+            // 8 bayt pay: JIT/GC olcum gurultusu icin. Yol yeniden uretilirse istek basina
+            // yuzlerce bayt tahsis edilir, yani bu esik o hatayi kesin yakalar.
+            Assert.True(kapaliBayt < 8, $"kapi kapaliyken sicak yol tahsisat yapiyor: {kapaliBayt:F2} bayt/istek");
+            Assert.True(acikBayt < 8, $"kapi acikken sicak yol tahsisat yapiyor: {acikBayt:F2} bayt/istek");
         }
         finally
         {
@@ -377,5 +391,21 @@ public sealed class HtaccessHostingRegistrationTests(ITestOutputHelper output)
         stopwatch.Stop();
 
         return stopwatch.Elapsed.TotalMilliseconds * 1_000_000.0 / iterations;
+    }
+
+    /// <summary>
+    /// İstek başına TAHSİSAT (bayt). Duvar saatinin aksine makinenin yükünden etkilenmez —
+    /// nöbetçinin ölçmesi gereken şey bu: sıcak yola dizgi/dosya yolu üretimi eklendi mi.
+    /// </summary>
+    private static double MeasureAllocation(Func<HtaccessMode> action)
+    {
+        for (var i = 0; i < 10_000; i++) { action(); }   // ısınma + JIT (JIT'in kendi tahsisatı sayılmasın)
+
+        const int iterations = 100_000;
+        var oncesi = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < iterations; i++) { action(); }
+        var sonrasi = GC.GetAllocatedBytesForCurrentThread();
+
+        return (sonrasi - oncesi) / (double)iterations;
     }
 }
