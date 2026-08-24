@@ -81,12 +81,20 @@ SEO sıra takibi ve rakip analizi (SERP sağlayıcısı olmadan üretilecek sır
 olurdu), log dosyası analizi (ayrıştırıcı zaten istatistik servisinde), site kurucuda çok
 sayfalı site / iletişim formu / sürükle-bırak, posta listesi alias'ları.
 
-### 8. `.htaccess` — gerçek IIS'te hiç çalıştırılmadı
-Motorun net48'de yüklendiği ve bir `RewriteRule`'u gerçekten uyguladığı KANITLANDI (ayrı bir
-CLR 4 sürecinde ölçüldü). Kanıtlanmayan: GAC kurulumu, `applicationHost.config` kaydı, `w3wp`
-içinde yükleme ve gerçek bir HTTP isteğinin yeniden yazılması. Özellik bu yüzden **varsayılan
-KAPALI** geliyor. İlk denemede: deneme sitesinde "yalnız gözlem" kipi → panel raporu → "uygula".
+### 8. `.htaccess` — CANLIDA DOĞRULANDI (24.08.2026)
 
+`alioral.xyz` (185.7.242.225, IIS 10, Laravel) üzerinde dışarıdan ölçüldü:
+`/karsilastir` → HTTP 200, 521 KB, Laravel oturum çerezi;
+`/kategori/akilli-saat` → HTTP 200, 1.4 MB, çerez. İkisi de diskte DOSYA DEĞİL — Laravel
+rotası. Yeniden yazma olmasaydı IIS 404 verirdi. Yani modül gerçek IIS'te, gerçek bir istekte,
+"uygula" kipinde ÇALIŞIYOR.
+
+Not: `/login` ilk denemede 404 verdi ama o KOORDİNATÖRÜN TAHMİNİYDİ — uygulamada öyle bir rota
+yok. Sonuç ondan çıkarılmadı; sitenin gerçek bağlantıları HTML'den okunup onlarla ölçüldü.
+
+Hâlâ ölçülmeyen: GAC kurulumunun ve `applicationHost.config` kaydının hangi adımda yapıldığı
+(kurulum otomatik yaptı, adım adım izlenmedi); "yalnız gözlem" kipinin canlı davranışı;
+Node/Python havuzlarında modülün gerçekten atlandığı.
 Bilinen sapmalar (kodda ve arayüzde yazılı): erişim denetimi yeniden yazmadan ÖNCE çalışıyor
 (Apache'de tersi, biz daha kısıtlayıcıyız); `IsSymbolicLink` `FileAttributes.ReparsePoint`
 kullanıyor, yani OneDrive yer tutucusu gibi şeylere de "bağlantı" diyor (koruyucu yönde).
