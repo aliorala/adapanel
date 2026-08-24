@@ -433,12 +433,19 @@ async function wpDoCopy() {
       wpNotice.value = "";
       wpCopyResult.value = null;
       try {
-        wpCopyResult.value = await copyWordPressData(siteName.value, {
+        // Sunucunun KISMİ BAŞARI anahtarını göster, sabit "kopyalandı" metnini DEĞİL. Eskiden
+        // `wp.copy_config_not_merged` / `wp.copy_url_not_replaced` sunucuda üretiliyor ama ekranda
+        // hiç görünmüyordu — yani ölçülen uyarı kullanıcıya ulaşmıyordu.
+        const kopya = await copyWordPressData(siteName.value, {
           targetSiteName: wpCopy.targetSiteName,
           files: wpCopy.files,
           database: wpCopy.database,
         });
-        showWpNotice(t("panel.wpkit.copyDone"), false);
+        wpCopyResult.value = kopya.sonuc;
+        const yarimKaldi = kopya.mesajAnahtari !== "" && kopya.mesajAnahtari !== "wp.copy_done";
+        showWpNotice(
+          yarimKaldi ? t(kopya.mesajAnahtari) : t("panel.wpkit.copyDone"),
+          yarimKaldi);
       } catch (error) {
         showWpNotice(resolveApiMessage(error), true);
       } finally {
@@ -457,11 +464,15 @@ async function wpDoClone() {
   wpNotice.value = "";
   wpCloneResult.value = null;
   try {
-    wpCloneResult.value = await cloneWordPress(siteName.value, {
+    // Kopyalamadaki ile aynı gerekçe: klon yarım kaldıysa (ör. wp-config yazılamadı, adres
+    // değiştirilemedi) kullanıcı bunu GÖRMELİ — sabit "klonlandı" metni onu gizliyordu.
+    const klon = await cloneWordPress(siteName.value, {
       targetSiteName: wpClone.targetSiteName,
       targetHostName: wpClone.targetHostName,
     });
-    showWpNotice(t("panel.wpkit.cloneDone"), false);
+    wpCloneResult.value = klon.sonuc;
+    const klonYarim = klon.mesajAnahtari !== "" && klon.mesajAnahtari !== "wp.clone_done";
+    showWpNotice(klonYarim ? t(klon.mesajAnahtari) : t("panel.wpkit.cloneDone"), klonYarim);
   } catch (error) {
     showWpNotice(resolveApiMessage(error), true);
   } finally {

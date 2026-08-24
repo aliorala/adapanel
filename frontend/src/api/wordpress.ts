@@ -79,12 +79,13 @@ export type WordPressCloneResult = {
   configRewritten: boolean;
 };
 
+/** Kopyalamadaki ile aynı gerekçe: kısmi başarı anahtarı da taşınır (`wp.clone_config_not_written` vb.). */
 export async function cloneWordPress(siteName: string, payload: { targetSiteName: string; targetHostName: string }) {
   const response = await apiClient.post<ApiEnvelope<WordPressCloneResult>>(
     `/wordpress/${encodeURIComponent(siteName)}/clone`,
     payload
   );
-  return response.data.data;
+  return { sonuc: response.data.data, mesajAnahtari: response.data.message ?? "" };
 }
 
 export type WordPressCopyDataResult = {
@@ -106,12 +107,21 @@ export type WordPressCopyDataResult = {
   configRewritten: boolean;
 };
 
+/**
+ * Sunucunun KISMİ BAŞARI anahtarı da döndürülür — yalnız veri değil.
+ *
+ * NEDEN: uç, işin tam mı yarım mı bittiğini zarfın `message` alanında söylüyor
+ * (`wp.copy_config_not_merged` / `wp.copy_url_not_replaced` / `wp.copy_done`). Ekran eskiden
+ * yalnız `data`'yı alıp sabit bir "kopyalandı" metni gösteriyordu; yani sunucunun ÖLÇÜP
+ * bildirdiği uyarı hiçbir zaman kullanıcıya ulaşmıyordu. Bu, bu depoda defalarca çıkan
+ * "ölçüldü ama söylenmedi" hatasının ta kendisi.
+ */
 export async function copyWordPressData(siteName: string, payload: { targetSiteName: string; files: boolean; database: boolean }) {
   const response = await apiClient.post<ApiEnvelope<WordPressCopyDataResult>>(
     `/wordpress/${encodeURIComponent(siteName)}/copy-data`,
     payload
   );
-  return response.data.data;
+  return { sonuc: response.data.data, mesajAnahtari: response.data.message ?? "" };
 }
 
 /** Güncellenebilir öğe (çekirdek, eklenti ya da tema). */
