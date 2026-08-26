@@ -178,6 +178,226 @@
         </details>
       </template>
 
+      <!-- ================= GÜNLÜK ANALİZİ =================
+           Tarama sitenin SAYFALARINI ölçer; bu bölüm ARAMA MOTORUNUN DAVRANIŞINI ölçer.
+           İkisi ayrı durur çünkü kaynakları da ayrıdır: biri HTTP istekleri, öteki IIS
+           erişim günlükleri. Aynı karta koymak, "tarama yapılmadı" ile "günlük okunamadı"
+           durumlarını birbirine karıştırırdı. -->
+      <div class="section-head compact-head log-head">
+        <div>
+          <h5>{{ t("panel.seo.log.title") }}</h5>
+          <p class="meta">{{ t("panel.seo.log.subtitle") }}</p>
+        </div>
+        <div class="seo-controls">
+          <select v-model.number="logDays" class="compact-select" :disabled="logBusy">
+            <option :value="7">{{ t("panel.seo.log.days", { count: 7 }) }}</option>
+            <option :value="14">{{ t("panel.seo.log.days", { count: 14 }) }}</option>
+            <option :value="30">{{ t("panel.seo.log.days", { count: 30 }) }}</option>
+          </select>
+          <label class="verify-toggle" :title="t('panel.seo.log.verifyHint')">
+            <input v-model="verifyBots" type="checkbox" :disabled="logBusy" />
+            {{ t("panel.seo.log.verify") }}
+          </label>
+          <button class="compact" v-bind="writeGate(logBusy)" @click="analyzeLogs">
+            {{ logBusy ? t("panel.seo.log.running") : t("panel.seo.log.analyze") }}
+          </button>
+        </div>
+      </div>
+
+      <p v-if="logBusy" class="notice" role="status" aria-live="polite">{{ t("panel.seo.log.runningHint") }}</p>
+      <p v-else-if="!logReport" class="empty-state">{{ t("panel.seo.log.neverRun") }}</p>
+
+      <template v-if="logReport">
+        <!-- ÖLÇÜM YOKSA SIFIRLARI GÖSTERME: "bot gelmemiş" ile "okuyacak dosya bulamadım"
+             aynı ekran olamaz — birincisi SEO kararı doğurur, ikincisi yapılandırma sorunudur. -->
+        <p v-if="logReport.error" class="notice error" role="alert">
+          {{ t(`panel.seo.log.error.${logReport.error}`) }} <code>{{ logReport.logDirectory }}</code>
+        </p>
+        <template v-else>
+          <p v-if="logReport.limitReached" class="notice warn-banner" role="status">
+            {{ t("panel.seo.log.limitReached", { lines: logReport.linesScanned, skipped: logReport.filesSkipped }) }}
+          </p>
+
+          <div class="summary-strip">
+            <div class="summary-item">
+              <span>{{ t("panel.seo.log.botRequests") }}</span>
+              <strong>{{ logReport.botRequests }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>{{ t("panel.seo.log.botShare") }}</span>
+              <strong>{{ botShare }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>{{ t("panel.seo.log.wasted") }}</span>
+              <strong :class="{ 'sev warn': logReport.wastedRequests > 0 }">{{ logReport.wastedRequests }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>{{ t("panel.seo.log.filesScanned") }}</span>
+              <strong>{{ logReport.filesScanned }} <em v-if="logReport.filesCompressed">({{ t("panel.seo.log.compressed", { count: logReport.filesCompressed }) }})</em></strong>
+            </div>
+            <div class="summary-item">
+              <span>{{ t("panel.seo.log.window") }}</span>
+              <strong>{{ t("panel.seo.log.days", { count: logReport.periodDays }) }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>{{ t("panel.seo.log.generatedAt") }}</span>
+              <strong>{{ formatUtc(logReport.generatedAtUtc) }}</strong>
+            </div>
+          </div>
+
+          <p v-if="!logReport.hasData" class="empty-state">{{ t("panel.seo.log.noRequests") }}</p>
+
+          <template v-else>
+            <h6>{{ t("panel.seo.log.engines") }}</h6>
+            <div class="table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>{{ t("panel.seo.log.table.engine") }}</th>
+                    <th>{{ t("panel.seo.log.table.requests") }}</th>
+                    <th>{{ t("panel.seo.log.table.pages") }}</th>
+                    <th>{{ t("panel.seo.log.table.activeDays") }}</th>
+                    <th>2xx</th>
+                    <th>3xx</th>
+                    <th>4xx</th>
+                    <th>5xx</th>
+                    <th>{{ t("panel.seo.log.table.lastSeen") }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="engine in logReport.engines" :key="engine.key">
+                    <td>
+                      {{ t(`panel.seo.log.engine.${engine.key}`) }}
+                      <span class="status-pill">{{ t(`panel.seo.log.category.${engine.category}`) }}</span>
+                    </td>
+                    <td>{{ engine.requests }}</td>
+                    <td>{{ engine.uniquePaths }}</td>
+                    <td>{{ engine.activeDays }}</td>
+                    <td>{{ engine.status2xx }}</td>
+                    <td>{{ engine.status3xx }}</td>
+                    <td :class="{ 'sev warn': engine.status4xx > 0 }">{{ engine.status4xx }}</td>
+                    <td :class="{ 'sev error': engine.status5xx > 0 }">{{ engine.status5xx }}</td>
+                    <td>{{ formatUtc(engine.lastSeenUtc) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <template v-if="logReport.errorPaths.length">
+              <h6>{{ t("panel.seo.log.errorPaths") }}</h6>
+              <p class="meta">{{ t("panel.seo.log.errorPathsHint") }}</p>
+              <ul class="seo-findings">
+                <li v-for="item in logReport.errorPaths" :key="`err-${item.path}`" class="seo-finding">
+                  <span class="sev-dot" :class="item.lastStatus >= 500 ? 'error' : 'warn'" aria-hidden="true"></span>
+                  <div class="finding-body">
+                    <strong>{{ item.lastStatus }}</strong> <code>{{ item.path }}</code>
+                    <p class="meta">
+                      {{ t("panel.seo.log.hits", { count: item.hits }) }}
+                      <span v-if="item.topEngine"> · {{ t(`panel.seo.log.engine.${item.topEngine}`) }}</span>
+                    </p>
+                  </div>
+                </li>
+              </ul>
+            </template>
+
+            <template v-if="logReport.waste.length">
+              <h6>{{ t("panel.seo.log.wasteTitle") }}</h6>
+              <p class="meta">{{ t("panel.seo.log.wasteHint") }}</p>
+              <ul class="seo-findings">
+                <li v-for="item in logReport.waste" :key="`waste-${item.reason}-${item.path}`" class="seo-finding">
+                  <span class="sev-dot warn" aria-hidden="true"></span>
+                  <div class="finding-body">
+                    <strong>{{ t(`panel.seo.log.waste.${item.reason}`) }}</strong>
+                    <p class="meta">
+                      <code>{{ item.path }}</code>
+                      · {{ t("panel.seo.log.hits", { count: item.hits }) }}
+                      <span v-if="item.detail"> · <code>{{ item.detail }}</code></span>
+                    </p>
+                  </div>
+                </li>
+              </ul>
+            </template>
+
+            <template v-if="logReport.topBotPaths.length">
+              <details class="seo-pages">
+                <summary>{{ t("panel.seo.log.topPaths", { count: logReport.topBotPaths.length }) }}</summary>
+                <div class="table-scroll">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>{{ t("panel.seo.table.path") }}</th>
+                        <th>{{ t("panel.seo.log.table.requests") }}</th>
+                        <th>{{ t("panel.seo.table.status") }}</th>
+                        <th>{{ t("panel.seo.log.table.lastSeen") }}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="item in logReport.topBotPaths" :key="`top-${item.path}`">
+                        <td><code>{{ item.path }}</code></td>
+                        <td>{{ item.hits }}</td>
+                        <td>{{ item.lastStatus }}</td>
+                        <td>{{ formatUtc(item.lastSeenUtc) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </template>
+
+            <!-- KAYNAK OLMADAN LİSTE GÖSTERİLMEZ: boş bir "gezilmemiş sayfa" listesi,
+                 karşılaştırılacak bir sayfa listesi YOKKEN "her sayfa geziliyor" gibi okunurdu. -->
+            <template v-if="logReport.uncrawledSourceReportId">
+              <h6>{{ t("panel.seo.log.uncrawled") }}</h6>
+              <p class="meta">
+                {{ t("panel.seo.log.uncrawledHint", { known: logReport.knownPageCount, missing: logReport.uncrawledPaths.length }) }}
+              </p>
+              <p v-if="logReport.uncrawledPaths.length === 0" class="empty-state">{{ t("panel.seo.log.allCrawled") }}</p>
+              <ul v-else class="seo-findings">
+                <li v-for="path in logReport.uncrawledPaths" :key="`unc-${path}`" class="seo-finding">
+                  <span class="sev-dot info" aria-hidden="true"></span>
+                  <div class="finding-body"><code>{{ path }}</code></div>
+                </li>
+              </ul>
+            </template>
+            <p v-else class="meta">{{ t("panel.seo.log.uncrawledNeedsScan") }}</p>
+
+            <h6>{{ t("panel.seo.log.verification") }}</h6>
+            <!-- DOĞRULANMAYAN, "SAHTE" DEĞİLDİR. Ters DNS yapılmadıysa ya da cevap vermediyse
+                 panel hüküm VERMEZ; aksi hâlde kullanıcı gerçek Googlebot'u engellerdi. -->
+            <p v-if="!logReport.verification.performed" class="notice" role="status">
+              {{ t("panel.seo.log.verifyNotRun", { count: logReport.verification.candidateIps }) }}
+            </p>
+            <template v-else>
+              <p class="meta">
+                {{ t("panel.seo.log.verifySummary", {
+                  checked: logReport.verification.checkedIps,
+                  verified: logReport.verification.verifiedIps,
+                  spoofed: logReport.verification.spoofedIps,
+                  unknown: logReport.verification.undeterminedIps
+                }) }}
+              </p>
+              <ul v-if="logReport.verification.identities.length" class="seo-findings">
+                <li
+                  v-for="item in logReport.verification.identities"
+                  :key="`id-${item.ip}-${item.engineKey}`"
+                  class="seo-finding">
+                  <span class="sev-dot" :class="item.verdict === 'spoofed' ? 'error' : item.verdict === 'verified' ? 'info' : ''" aria-hidden="true"></span>
+                  <div class="finding-body">
+                    <strong>{{ t(`panel.seo.log.verdict.${item.verdict}`) }}</strong>
+                    <p class="meta">
+                      <code>{{ item.ip }}</code>
+                      · {{ t(`panel.seo.log.engine.${item.engineKey}`) }}
+                      · {{ t("panel.seo.log.hits", { count: item.requests }) }}
+                      <span v-if="item.reverseDns"> · <code>{{ item.reverseDns }}</code></span>
+                    </p>
+                  </div>
+                </li>
+              </ul>
+            </template>
+          </template>
+        </template>
+      </template>
+
       <template v-if="overview.history.length > 1">
         <h5>{{ t("panel.seo.history") }}</h5>
         <ul class="seo-history">
@@ -206,10 +426,13 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import {
+  analyzeSeoLogs,
   cancelSeoScan,
+  getSeoLogReport,
   getSeoOverview,
   getSeoReport,
   startSeoScan,
+  type SeoLogReport,
   type SeoOverview,
   type SeoScanReport,
   type SeoSeverity
@@ -231,6 +454,26 @@ const severityFilter = ref<"" | SeoSeverity>("");
 const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
+
+/**
+ * GÜNLÜK ANALİZİ durumu. Taramadan AYRI tutulur: tarama arka planda koşup yoklanır, günlük
+ * analizi ise sunucuda sınırlı (dosya/satır/süre) ve tek istekte biten bir iştir. Aynı `busy`
+ * bayrağını paylaşsalardı biri sürerken öteki sebepsiz kapanırdı.
+ */
+const logReport = ref<SeoLogReport | null>(null);
+const logDays = ref(7);
+const verifyBots = ref(false);
+const logBusy = ref(false);
+
+/** Bot oranı: payda 0 iken bölme YAPILMAZ — "NaN%" ya da "Infinity%" ekrana düşerdi. */
+const botShare = computed(() => {
+  const total = logReport.value?.totalRequests ?? 0;
+  if (!total) {
+    return "-";
+  }
+
+  return `${Math.round(((logReport.value?.botRequests ?? 0) / total) * 100)}%`;
+});
 
 /**
  * Tarama arka planda koşar; ekran durumu YOKLAYARAK izler.
@@ -277,6 +520,9 @@ onBeforeUnmount(stopPolling);
 watch(siteName, async () => {
   overview.value = null;
   shownReport.value = null;
+  // Site değişince ESKİ sitenin günlük raporu ekranda KALMAMALI: başka bir sitenin bot
+  // sayılarını yeni seçilen sitenin sayıları sanmak, panelin en sinsi yanlış bilgisi olurdu.
+  logReport.value = null;
   await load();
 });
 
@@ -290,6 +536,30 @@ async function load() {
     syncPolling();
   } catch (error) {
     show(extractApiMessage(error), true);
+  }
+
+  // Saklanan günlük raporu AYRI uçtan gelir ve hatası taramayı bozmamalı; bu yüzden ayrı
+  // try/catch. Yoksa günlük klasörüne erişilemeyen bir sitede tarama sonuçları da kaybolurdu.
+  try {
+    logReport.value = await getSeoLogReport(siteName.value);
+  } catch (error) {
+    show(extractApiMessage(error), true);
+  }
+}
+
+async function analyzeLogs() {
+  if (!siteName.value || logBusy.value) {
+    return;
+  }
+
+  logBusy.value = true;
+  try {
+    logReport.value = await analyzeSeoLogs(siteName.value, logDays.value, verifyBots.value);
+    show(t("panel.seo.log.completed"), false);
+  } catch (error) {
+    show(extractApiMessage(error), true);
+  } finally {
+    logBusy.value = false;
   }
 }
 
@@ -527,5 +797,34 @@ function formatUtc(value: string): string {
 
 h5 {
   margin: 0 0 4px;
+}
+
+h6 {
+  margin: 12px 0 4px;
+  font-size: 0.86rem;
+}
+
+.log-head {
+  align-items: flex-start;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 16px;
+}
+
+.log-head .meta {
+  margin: 2px 0 0;
+}
+
+.verify-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.summary-item em {
+  font-style: normal;
+  color: var(--text-muted);
+  font-size: 0.75rem;
 }
 </style>

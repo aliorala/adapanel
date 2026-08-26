@@ -9,6 +9,11 @@ namespace AdaPanel.Infrastructure.Statistics;
 /// üretir. Harici bir bağımlılık (AWStats/GoAccess) gerektirmez; logları doğrudan
 /// okur ve <c>#Fields</c> başlığına göre sütunları eşler.
 /// </summary>
+/// <remarks>
+/// Biçim bilgisi (yönerge satırları, sütun eşlemesi, boşluk ayracı) BU DOSYADA DEĞİL,
+/// <see cref="W3cLogReader"/> içindedir — SEO günlük analizi de aynı ayrıştırıcıyı kullanır.
+/// Buradaki iş yalnız TOPLAMA'dır (hangi alan hangi sayaca gider).
+/// </remarks>
 public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebStatisticsService
 {
     private const int MaxLinesScanned = 2_000_000;
@@ -67,31 +72,10 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
     public static WebStatisticsDto AnalyzeLines(IEnumerable<string> lines, DateTime cutoff)
     {
         var aggregator = new Aggregator();
-        Dictionary<string, int>? fieldIndex = null;
 
-        foreach (var line in lines)
+        foreach (var record in W3cLogReader.Read(lines))
         {
-            if (string.IsNullOrEmpty(line))
-            {
-                continue;
-            }
-
-            if (line[0] == '#')
-            {
-                if (line.StartsWith("#Fields:", StringComparison.OrdinalIgnoreCase))
-                {
-                    fieldIndex = BuildFieldIndex(line);
-                }
-
-                continue;
-            }
-
-            if (fieldIndex is null)
-            {
-                continue;
-            }
-
-            aggregator.Add(line.Split(' '), fieldIndex, cutoff);
+            aggregator.Add(record, cutoff);
         }
 
         var result = new WebStatisticsDto { GeneratedAtUtc = DateTime.UtcNow };
@@ -110,54 +94,16 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
 
-        Dictionary<string, int>? fieldIndex = null;
-        string? line;
-
-        while ((line = await reader.ReadLineAsync(cancellationToken)) is not null)
+        await foreach (var record in W3cLogReader.ReadAsync(reader, cancellationToken))
         {
             if (currentCount() >= MaxLinesScanned)
             {
                 break;
             }
 
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
-            if (line[0] == '#')
-            {
-                if (line.StartsWith("#Fields:", StringComparison.OrdinalIgnoreCase))
-                {
-                    fieldIndex = BuildFieldIndex(line);
-                }
-
-                continue;
-            }
-
-            if (fieldIndex is null)
-            {
-                continue;
-            }
-
             onLine();
-            var columns = line.Split(' ');
-            aggregator.Add(columns, fieldIndex, cutoff);
+            aggregator.Add(record, cutoff);
         }
-    }
-
-    private static Dictionary<string, int> BuildFieldIndex(string fieldsLine)
-    {
-        var names = fieldsLine["#Fields:".Length..]
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        for (var index = 0; index < names.Length; index++)
-        {
-            map[names[index]] = index;
-        }
-
-        return map;
     }
 
     /// <summary>
@@ -215,9 +161,9 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         private long status4xx;
         private long status5xx;
 
-        public void Add(string[] columns, Dictionary<string, int> fieldIndex, DateTime cutoff)
+        public void Add(W3cLogRecord record, DateTime cutoff)
         {
-            var date = Get(columns, fieldIndex, "date");
+            var date = record.Get("date");
             // IIS W3C 'date' alanı ISO yyyy-MM-dd; InvariantCulture ile parse (Türkçe locale'de de doğru, kültür-bağımsız).
             if (!string.IsNullOrEmpty(date) &&
                 DateTime.TryParse(date, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsedDate) &&
@@ -228,7 +174,7 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
 
             totalRequests++;
 
-            var clientIp = Get(columns, fieldIndex, "c-ip");
+            var clientIp = record.Get("c-ip");
             if (!string.IsNullOrEmpty(clientIp) && clientIp != "-")
             {
                 if (uniqueVisitors.Count < MaxUniqueVisitors)
@@ -241,14 +187,14 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
                 }
             }
 
-            var uri = Get(columns, fieldIndex, "cs-uri-stem");
+            var uri = record.Get("cs-uri-stem");
             if (!string.IsNullOrEmpty(uri) && uri != "-")
             {
                 Increment(pages, uri);
                 Budala(pages);
             }
 
-            var referer = Get(columns, fieldIndex, "cs(Referer)");
+            var referer = record.Get("cs(Referer)");
             if (!string.IsNullOrEmpty(referer) && referer != "-")
             {
                 Increment(referrers, NormalizeReferer(referer));
@@ -260,7 +206,7 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
                 Increment(daily, date);
             }
 
-            var status = Get(columns, fieldIndex, "sc-status");
+            var status = record.Get("sc-status");
             if (int.TryParse(status, out var statusCode))
             {
                 switch (statusCode)
@@ -272,7 +218,7 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
                 }
             }
 
-            var bytes = Get(columns, fieldIndex, "sc-bytes");
+            var bytes = record.Get("sc-bytes");
             if (long.TryParse(bytes, out var byteCount))
             {
                 totalBytes += byteCount;
@@ -307,9 +253,6 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
 
         private static void Increment(Dictionary<string, long> map, string key) =>
             map[key] = map.TryGetValue(key, out var existing) ? existing + 1 : 1;
-
-        private static string Get(string[] columns, Dictionary<string, int> fieldIndex, string name) =>
-            fieldIndex.TryGetValue(name, out var index) && index < columns.Length ? columns[index] : string.Empty;
 
         private static string NormalizeReferer(string referer)
         {

@@ -65,10 +65,17 @@ public sealed class SeoReportStore(JsonFileStore fileStore)
     /// "dosya oluşturulabiliyor mu" diye ÖLÇÜLDÜĞÜNDE yakalanır; kuralı testte yeniden yazmak,
     /// testin kendi kopyasını doğrulaması olurdu.
     /// </remarks>
-    internal static string Path(string siteName)
+    internal static string Path(string siteName) => Path(siteName, "json");
+
+    /// <summary>
+    /// Aynı kuralın ikinci kopyasını çıkarmamak için SEO modülünün BÜTÜN dosya adları buradan
+    /// üretilir (tarama geçmişi <c>.json</c>, günlük analizi <c>.logs.json</c>). Ayrılmış aygıt
+    /// adı tuzağı yalnız burada bir kez karşılanır.
+    /// </summary>
+    internal static string Path(string siteName, string extension)
     {
         var invalid = System.IO.Path.GetInvalidFileNameChars();
         var safe = new string(siteName.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
-        return $"config/seo/{WindowsReservedNames.MakeSafe($"{safe}.json")}";
+        return $"config/seo/{WindowsReservedNames.MakeSafe($"{safe}.{extension}")}";
     }
 }

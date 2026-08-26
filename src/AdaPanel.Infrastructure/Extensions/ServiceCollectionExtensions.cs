@@ -223,6 +223,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Seo.ISeoService, Seo.SeoScanService>();
         services.AddHostedService<Seo.SeoScanWorker>();
 
+        // SEO GÜNLÜK ANALİZİ. Kuyruk YOK: iş dosya/satır/süre olarak üç eksende sınırlı ve ölçülen
+        // süresi saniyeler mertebesinde (gerekçe: SeoLogAnalysisService). Ters DNS çözücüsü AYRI
+        // kayıt çünkü testlerde ağa çıkmayan bir ikizle değiştirilir; gerçek DNS'e bağlı bir test
+        // ağın durumuna göre rastgele kırmızı verirdi.
+        services.AddSingleton<Seo.ISeoReverseDnsResolver, Seo.SeoReverseDnsResolver>();
+        services.AddScoped<Seo.SeoLogReportStore>();
+        services.AddScoped<Seo.ISeoLogService, Seo.SeoLogAnalysisService>();
+
         // Denetim kaydı saklama temizliği. Kayıt buraya bağlanmadan temizlik YALNIZCA elle
         // (POST /api/v1/audit-logs/purge) çalışırdı; ölçüldü: AuditLogs tablosunu silen başka
         // hiçbir kod yoktu, yani kayıtlar sonsuza kadar birikiyordu.

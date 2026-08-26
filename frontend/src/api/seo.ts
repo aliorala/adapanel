@@ -140,3 +140,121 @@ export async function getSeoReport(siteName: string, reportId: string) {
   );
   return response.data.data;
 }
+
+/* ------------------------------------------------------------------------- *
+ * GÜNLÜK ANALİZİ — arama motoru botlarının siteyi GERÇEKTE nasıl gezdiği.
+ *
+ * Bu, ziyaretçi istatistiği DEĞİLDİR (o SiteStatisticsView'de). Buradaki tek soru:
+ * bot ne sıklıkla geliyor, hangi sayfaları geziyor, ne cevap alıyor, emeğin ne kadarı
+ * boşa gidiyor.
+ *
+ * BURAYA DA DOSYA YOLU ALANI EKLENMEZ: okunacak klasör site adından ve o sitenin IIS
+ * kimliğinden sunucuda türetilir. Bir yol alanı, kiracıya BAŞKA kiracının erişim
+ * günlüğünü (ziyaretçi IP'leri dahil) okutmak olurdu.
+ * ------------------------------------------------------------------------- */
+
+/** `search` klasik arama motoru, `ai` yapay zekâ tarayıcısı, `tool` üçüncü taraf SEO aracı. */
+export type SeoBotCategory = "search" | "ai" | "tool";
+
+export type SeoLogEngine = {
+  /** Dile bağımsız motor anahtarı; t(`panel.seo.log.engine.${key}`). */
+  key: string;
+  category: SeoBotCategory;
+  requests: number;
+  uniquePaths: number;
+  status2xx: number;
+  status3xx: number;
+  status4xx: number;
+  status5xx: number;
+  lastSeenUtc: string;
+  activeDays: number;
+};
+
+export type SeoLogDay = { date: string; requests: number };
+
+export type SeoLogPath = {
+  path: string;
+  hits: number;
+  lastStatus: number;
+  topEngine: string;
+  lastSeenUtc: string;
+};
+
+/** `reason` t(`panel.seo.log.waste.${reason}`) ile çevrilir; `detail` HAM veridir. */
+export type SeoLogWaste = {
+  reason: "redirect" | "not_found" | "server_error" | "blocked" | "query_duplicate";
+  path: string;
+  hits: number;
+  detail: string;
+};
+
+/**
+ * `verdict` ASLA tahmin değildir:
+ * - `verified`/`spoofed` yalnız ters DNS + ileri teyit ZİNCİRİ tamamlandığında verilir.
+ * - `unresolved`/`unsupported`/`not_checked` "bilinmiyor" demektir — "sahte" DEĞİL.
+ */
+export type SeoLogBotIdentity = {
+  ip: string;
+  engineKey: string;
+  requests: number;
+  verdict: "verified" | "spoofed" | "unresolved" | "unsupported" | "not_checked";
+  reverseDns: string;
+};
+
+export type SeoLogVerification = {
+  /** false ise HİÇ ağ isteği yapılmadı; hiçbir IP hakkında hüküm yoktur. */
+  performed: boolean;
+  checkedIps: number;
+  verifiedIps: number;
+  spoofedIps: number;
+  undeterminedIps: number;
+  candidateIps: number;
+  identities: SeoLogBotIdentity[];
+};
+
+export type SeoLogReport = {
+  siteName: string;
+  generatedAtUtc: string;
+  durationMs: number;
+  periodDays: number;
+  logDirectory: string;
+  /** Doluysa ölçüm YOKTUR (ör. `log_directory_missing`); sıfırları "bot gelmemiş" diye okuma. */
+  error: string;
+  hasData: boolean;
+  filesScanned: number;
+  filesCompressed: number;
+  filesSkipped: number;
+  linesScanned: number;
+  /** true ise rapor pencerenin TAMAMI değildir. */
+  limitReached: boolean;
+  totalRequests: number;
+  botRequests: number;
+  engines: SeoLogEngine[];
+  dailyBotRequests: SeoLogDay[];
+  topBotPaths: SeoLogPath[];
+  errorPaths: SeoLogPath[];
+  waste: SeoLogWaste[];
+  wastedRequests: number;
+  uncrawledPaths: string[];
+  /** Boşsa hiç tarama yapılmamıştır — boş `uncrawledPaths` "her sayfa geziliyor" ANLAMINA GELMEZ. */
+  uncrawledSourceReportId: string;
+  knownPageCount: number;
+  verification: SeoLogVerification;
+};
+
+/** Saklanan son analiz; hiç çalıştırılmadıysa null. */
+export async function getSeoLogReport(siteName: string) {
+  const response = await apiClient.get<ApiEnvelope<SeoLogReport | null>>(
+    `/seo/sites/${encodeURIComponent(siteName)}/logs`
+  );
+  return response.data.data;
+}
+
+/** Analizi çalıştırır. Sunucuda dosya/satır/süre olarak sınırlıdır ve sonucu diske yazar. */
+export async function analyzeSeoLogs(siteName: string, days: number, verifyBots: boolean) {
+  const response = await apiClient.post<ApiEnvelope<SeoLogReport>>(
+    `/seo/sites/${encodeURIComponent(siteName)}/logs`,
+    { days, verifyBots }
+  );
+  return response.data.data;
+}
