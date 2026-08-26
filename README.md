@@ -13,7 +13,7 @@ A modern, professional hosting control panel for **Windows Server + IIS** — ev
 ![UI](https://img.shields.io/badge/UI-English%20%C2%B7%20T%C3%BCrk%C3%A7e-2ea44f)
 ![Installer](https://img.shields.io/badge/Single-installer-orange)
 
-[**⬇ Download / İndir**](https://github.com/aliorala/adapanel/releases/latest) · [Website](https://aliorala.github.io/adapanel/)
+[**⬇ Download / İndir**](https://github.com/aliorala/adapanel/releases/latest) · [All releases / Tüm sürümler](https://github.com/aliorala/adapanel/releases)
 
 </div>
 
@@ -22,17 +22,6 @@ A modern, professional hosting control panel for **Windows Server + IIS** — ev
 ## 🇬🇧 English
 
 AdaPanel is an all‑in‑one hosting control panel for **Windows Server + IIS**. A single installer sets up everything (IIS, PHP, mail, database, panel service, firewall rules, HTTPS) and gives you one modern interface to manage websites, e‑mail, databases, DNS, SSL, FTP, backups and more — with full **Administrator / Reseller / Customer** multi‑tenancy.
-
-### 🟢 What Plesk for Windows can't do: `.htaccess`
-
-Plesk for Windows has no Apache, so it cannot run `.htaccess` — it tells you to hand‑write IIS rules instead.
-**AdaPanel runs `.htaccess` files on IIS.** WordPress permalinks, Laravel/Symfony front controllers, HTTPS
-forcing, `www` redirects and directory protection just work.
-
-The engine is ours — no paid third‑party module, nothing extra to install. It ships **disabled by default**;
-you enable it per site, and there is an **observe‑only** mode so you can see what your rules would do before
-they take effect. If a directive isn't supported, the panel tells you **which line and why** instead of
-silently ignoring it.
 
 ### ✨ Features
 
@@ -122,17 +111,6 @@ ASP.NET Core 8 (Kestrel, Windows Service) · Vue 3 SPA · MariaDB/MySQL · Stalw
 ## 🇹🇷 Türkçe
 
 AdaPanel; Windows 10/11 ve Windows Server 2016+ için **ASP.NET Core 8** ve **Vue 3** ile geliştirilen, Plesk benzeri bir barındırma kontrol panelidir. Tek kurulum dosyası her şeyi (IIS, PHP, e‑posta, veritabanı, panel servisi, güvenlik duvarı, HTTPS) hazırlar; siteleri, e‑postayı, veritabanlarını, DNS'i, SSL'i, FTP'yi ve yedekleri tek modern arayüzden yönetirsiniz — tam **Yönetici / Bayi / Müşteri** çok‑kiracılı yapısıyla.
-
-### 🟢 Plesk for Windows'un yapamadığı şey: `.htaccess`
-
-Plesk for Windows'da Apache yoktur, dolayısıyla `.htaccess` çalışmaz — Plesk size IIS kurallarını elle
-yazmanızı söyler. **AdaPanel `.htaccess` dosyalarını IIS üzerinde çalıştırır.** WordPress kalıcı bağlantıları,
-Laravel/Symfony ön denetleyicisi, HTTPS zorlama, `www` yönlendirmesi ve dizin koruma olduğu gibi çalışır.
-
-Motor bize ait — ücretli bir üçüncü taraf eklentisi yok, ayrıca kurulacak bir şey yok. **Varsayılan olarak
-kapalı** gelir; her siteyi siz açarsınız ve kurallarınızın ne yapacağını yayına almadan görebileceğiniz bir
-**yalnız gözlem** kipi vardır. Desteklenmeyen bir direktif yazarsanız panel **hangi satır ve neden**
-olduğunu söyler, sessizce atlamaz.
 
 ### ✨ Özellikler
 
