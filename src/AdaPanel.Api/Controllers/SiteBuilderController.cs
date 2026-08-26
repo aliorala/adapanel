@@ -68,7 +68,10 @@ public sealed class SiteBuilderController(
             HttpContext,
             "sitebuilder.project.saved",
             siteName,
-            $"Site builder design saved (template '{project.TemplateId}', palette '{project.PaletteId}').",
+            // SAYFA SAYISI KAYDA GİRER, sayfa ADLARI girmez: "sitem neden değişti" sorusunun
+            // cevabı için sayı yeter ve kayıt, kullanıcının içeriğinin ikinci kopyası olmaz.
+            $"Site builder design saved (template '{project.TemplateId}', palette '{project.PaletteId}', "
+            + $"{project.Pages.Count + 1} page(s)).",
             await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken));
 
         return Ok(ApiResponse<SiteBuilderProjectDto>.Ok(project, "sitebuilder.saved"));
@@ -84,11 +87,19 @@ public sealed class SiteBuilderController(
     /// giren yöneticinin yetkisini ele geçirirdi. Arayüz bu metni yalıtılmış (sandbox) bir
     /// çerçevede gösterir; oradaki script çalışamaz.
     /// </remarks>
+    /// <param name="page">
+    /// Önizlenecek EK sayfanın adresi (slug). Boşsa ana sayfa. Bilinmeyen bir değer hata DEĞİL,
+    /// ana sayfaya düşme sebebidir: kullanıcı bir sayfayı silmiş ama arayüzde hâlâ seçiliyse
+    /// önizleme çalışmaya devam etmeli.
+    /// </param>
     [HttpGet("{siteName}/preview")]
-    public async Task<ActionResult<ApiResponse<string>>> PreviewAsync(string siteName, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<string>>> PreviewAsync(
+        string siteName,
+        [FromQuery] string? page,
+        CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var html = await siteBuilderService.RenderPreviewAsync(siteName, cancellationToken);
+        var html = await siteBuilderService.RenderPreviewAsync(siteName, page, cancellationToken);
         return Ok(ApiResponse<string>.Ok(html));
     }
 
@@ -199,9 +210,15 @@ public sealed class SiteBuilderController(
             HttpContext,
             "sitebuilder.published",
             siteName,
-            $"Site builder published to '{result.TargetPath}'; wrote {result.WrittenFiles.Count} file(s); "
+            $"Site builder published to '{result.TargetPath}'; {result.PageCount} page(s); "
+            + $"wrote {result.WrittenFiles.Count} file(s); "
             + $"overwrote {result.OverwrittenFiles.Count} pre-existing file(s): "
-            + (result.OverwrittenFiles.Count == 0 ? "none" : string.Join(", ", result.OverwrittenFiles)),
+            + (result.OverwrittenFiles.Count == 0 ? "none" : string.Join(", ", result.OverwrittenFiles))
+            // ÖKSÜZLER DE ADIYLA KAYDA GİRER. Bir müşteri "kaldırdığım sayfa hâlâ görünüyor"
+            // dediğinde cevabı veren tek kayıt budur: hangi dosya, hangi yayından beri, kim
+            // yayınladı. Yayın onları SİLMEDİĞİ için kayıt, kalanın bilinçli olduğunu kanıtlar.
+            + $"; left {result.OrphanFiles.Count} orphaned file(s) in place (never deleted): "
+            + (result.OrphanFiles.Count == 0 ? "none" : string.Join(", ", result.OrphanFiles)),
             await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken));
 
         return Ok(ApiResponse<SiteBuilderPublishResultDto>.Ok(result, "sitebuilder.published"));

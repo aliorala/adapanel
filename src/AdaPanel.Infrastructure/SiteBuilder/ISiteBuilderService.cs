@@ -27,8 +27,18 @@ public interface ISiteBuilderService
         SaveSiteBuilderProjectRequest request,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Panelde gösterilecek, kendi içinde tam sayfa (stil satır içi, görseller panel API'sinden).</summary>
-    Task<string> RenderPreviewAsync(string siteName, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Panelde gösterilecek, kendi içinde tam sayfa (stil satır içi, görseller panel API'sinden).
+    /// </summary>
+    /// <param name="pageSlug">
+    /// Önizlenecek EK sayfanın adresi; boş ya da bulunamıyorsa ANA SAYFA döner. Bulunamayanı hata
+    /// saymak yerine ana sayfaya düşmek bilinçli: kullanıcı bir sayfayı silmiş ama arayüzde o sayfa
+    /// hâlâ seçiliyse, önizleme boş bir çerçeve göstermek yerine çalışmaya devam eder.
+    /// </param>
+    Task<string> RenderPreviewAsync(
+        string siteName,
+        string? pageSlug = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Yayın öncesi plan: nereye yazılacak, hangi dosyalar ezilecek. DİSKE YAZMAZ.</summary>
     Task<SiteBuilderPublishPlanDto> PlanPublishAsync(string siteName, CancellationToken cancellationToken = default);

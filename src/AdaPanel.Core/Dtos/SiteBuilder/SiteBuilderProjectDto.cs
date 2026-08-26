@@ -47,7 +47,17 @@ public sealed class SiteBuilderProjectDto
     /// </remarks>
     public string Language { get; set; } = "tr";
 
+    /// <summary>ANA SAYFANIN bölümleri (<c>index.html</c>).</summary>
     public List<SiteBuilderSectionDto> Sections { get; set; } = [];
+
+    /// <summary>
+    /// Ana sayfanın YANINDAKİ ek sayfalar. Boş liste = tek sayfalık site (eski davranış).
+    /// </summary>
+    /// <remarks>
+    /// Ana sayfa bu listede YOKTUR; gerekçesi <see cref="SiteBuilderPageDto"/> içinde yazılı
+    /// (kayıtlı tasarımları göç ettirmemek için).
+    /// </remarks>
+    public List<SiteBuilderPageDto> Pages { get; set; } = [];
 
     public DateTime? UpdatedAtUtc { get; set; }
 

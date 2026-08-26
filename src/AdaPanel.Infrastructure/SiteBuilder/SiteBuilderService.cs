@@ -71,17 +71,33 @@ public sealed class SiteBuilderService(
                 current.MetaDescription = Trim(request.MetaDescription, 300);
                 current.Language = string.Equals(request.Language?.Trim(), "en", StringComparison.OrdinalIgnoreCase) ? "en" : "tr";
                 current.Sections = NormalizeSections(request.Sections, known);
+                current.Pages = NormalizePages(request.Pages, known);
                 current.UpdatedAtUtc = DateTime.UtcNow;
                 return current;
             },
             cancellationToken);
     }
 
-    public async Task<string> RenderPreviewAsync(string siteName, CancellationToken cancellationToken = default)
+    public async Task<string> RenderPreviewAsync(
+        string siteName,
+        string? pageSlug = null,
+        CancellationToken cancellationToken = default)
     {
         var project = await GetProjectAsync(siteName, cancellationToken);
         var prefix = $"/api/v1/sitebuilder/{Uri.EscapeDataString(project.SiteName)}/images/";
-        return SiteBuilderRenderer.Render(project, SiteBuilderRenderContext.ForPreview(prefix)).Html;
+
+        // Önizlemede de GERÇEK form hedefi kullanılır. Sahte bir hedef koysaydık, "form basılıyor
+        // mu" sorusunun cevabı önizlemede ve yayında farklı olurdu — yani önizleme, yayınlanacak
+        // sayfayı temsil etmezdi ve kullanıcı formun olmadığını ancak yayından sonra görürdü.
+        var action = await BuildContactFormActionAsync(project.SiteName, cancellationToken);
+        var rendered = SiteBuilderRenderer.RenderAll(project, SiteBuilderRenderContext.ForPreview(prefix, action));
+
+        var slug = (pageSlug ?? string.Empty).Trim();
+        var page = rendered.Pages.FirstOrDefault(item => string.Equals(item.Slug, slug, StringComparison.OrdinalIgnoreCase));
+
+        // İstenen sayfa yoksa (silinmiş bir sayfa hâlâ seçili olabilir) ANA SAYFA gösterilir.
+        // Boş bir çerçeve göstermek, kullanıcıya "önizleme bozuldu" dedirtirdi.
+        return (page ?? rendered.Pages[0]).Html;
     }
 
     public async Task<SiteBuilderPublishPlanDto> PlanPublishAsync(string siteName, CancellationToken cancellationToken = default)
@@ -106,13 +122,26 @@ public sealed class SiteBuilderService(
 
         plan.TargetPath = root;
 
-        var writes = BuildWriteList(project);
+        var rendered = SiteBuilderRenderer.RenderAll(project, SiteBuilderRenderContext.Published);
+        var writes = BuildWriteList(project, rendered);
         var existing = writes.Where(relative => TargetExists(root, relative)).ToList();
         var decision = SiteBuilderPublishPlanner.Decide(writes, existing, project.ManagedFiles, overwriteConfirmed: false);
 
         plan.FilesToWrite = decision.FilesToWrite.ToList();
         plan.Conflicts = decision.Conflicts.ToList();
         plan.RequiresConfirmation = decision.RequiresConfirmation;
+        plan.PageCount = rendered.Pages.Count;
+
+        // ÖKSÜZLER PLANDA GÖSTERİLİR, SİLİNMEZ. Kullanıcı bir sayfayı kurucudan kaldırdığında
+        // eski HTML adresinde durmaya devam eder; bunu yayından ÖNCE görmesi gerekir. Diskte hâlâ
+        // duranlar süzülür — daha önce elle silinmiş bir dosyayı "hâlâ orada" diye göstermek,
+        // kullanıcıyı olmayan bir dosyayı aramaya gönderirdi.
+        plan.OrphanFiles = SiteBuilderPublishPlanner
+            .Orphans(project.ManagedFiles, writes)
+            .Where(relative => TargetExists(root, relative))
+            .ToList();
+
+        plan.ContactFormBlockedReasonKey = await ContactFormBlockedReasonAsync(project, cancellationToken);
         plan.ExistingFileCount = CountExistingFiles(root);
         return plan;
     }
@@ -130,7 +159,13 @@ public sealed class SiteBuilderService(
         try
         {
             var project = await LoadAsync(site.Name, cancellationToken) ?? CreateStarterProject(site.Name);
-            var writes = BuildWriteList(project);
+
+            // FORM HEDEFİ YAYIN ANINDA ÇÖZÜLÜR. Çözülemezse form BASILMAZ — çalışmayan bir form
+            // basmaktansa hiç basmamak. Sebep yayın planında kullanıcıya ADIYLA söylenmiş durumda.
+            var action = await BuildContactFormActionAsync(site.Name, cancellationToken);
+            var rendered = SiteBuilderRenderer.RenderAll(project, SiteBuilderRenderContext.ForPublish(action));
+
+            var writes = BuildWriteList(project, rendered);
             var existing = writes.Where(relative => TargetExists(root, relative)).ToList();
             var decision = SiteBuilderPublishPlanner.Decide(
                 writes,
@@ -145,7 +180,11 @@ public sealed class SiteBuilderService(
                 throw new AppException("sitebuilder.overwrite_confirmation_required", 409, 409);
             }
 
-            var rendered = SiteBuilderRenderer.Render(project, SiteBuilderRenderContext.Published);
+            var pagesByPath = rendered.Pages.ToDictionary(
+                page => page.RelativePath,
+                page => page.Html,
+                StringComparer.OrdinalIgnoreCase);
+
             var written = new List<string>();
 
             foreach (var relative in decision.FilesToWrite)
@@ -153,9 +192,9 @@ public sealed class SiteBuilderService(
                 var target = SiteBuilderPathGuard.ResolveWriteTarget(root, relative);
                 EnsureParentDirectory(root, target);
 
-                if (string.Equals(relative, SiteBuilderLayout.IndexFile, StringComparison.OrdinalIgnoreCase))
+                if (pagesByPath.TryGetValue(relative, out var html))
                 {
-                    await WriteTextAsync(target, rendered.Html, cancellationToken);
+                    await WriteTextAsync(target, html, cancellationToken);
                 }
                 else if (string.Equals(relative, SiteBuilderLayout.StyleFile, StringComparison.OrdinalIgnoreCase))
                 {
@@ -169,6 +208,13 @@ public sealed class SiteBuilderService(
                 written.Add(relative);
             }
 
+            // ÖKSÜZLER: bu yayında artık üretilmeyen ama diskte duran kurucu dosyaları. Silinmez,
+            // sayılır ve kullanıcıya döner (gerekçe: SiteBuilderPublishPlanner.Orphans).
+            var orphans = SiteBuilderPublishPlanner
+                .Orphans(project.ManagedFiles, writes)
+                .Where(relative => TargetExists(root, relative))
+                .ToList();
+
             var publishedAt = DateTime.UtcNow;
             await fileStore.UpdateAsync(
                 ProjectPath(site.Name),
@@ -178,10 +224,19 @@ public sealed class SiteBuilderService(
                     current.Published = true;
                     current.PublishedAtUtc = publishedAt;
                     current.PublishedPath = root;
+
                     // Bir sonraki yayında "bu dosya bizim mi" sorusunun cevabı. Eski liste
                     // KORUNUR ve birleştirilir: tasarımdan çıkarılmış bir görsel diskte kalır ve
                     // onu yeniden ekleyen kullanıcıya gereksiz "üzerine yazılacak" uyarısı çıkmasın.
+                    //
+                    // AMA DİSKTE OLMAYAN GİRDİ DÜŞÜRÜLÜR. Aksi hâlde şu sessiz veri kaybı mümkün
+                    // olurdu: kullanıcı kurucudan bir sayfayı kaldırır, dosyasını dosya
+                    // yöneticisinden siler, sonra AYNI yola kendi elleriyle bir sayfa koyar.
+                    // Liste temizlenmeseydi o yol hâlâ "bizim" sayılır ve bir sonraki yayın
+                    // kullanıcının kendi dosyasını UYARISIZ ezerdi. Ölçüm TargetExists ile
+                    // yapılıyor; o da ölçemediğinde "var" diyor, yani belirsizlikte girdi KALIR.
                     current.ManagedFiles = current.ManagedFiles
+                        .Where(item => TargetExists(root, item))
                         .Concat(written)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
@@ -191,10 +246,12 @@ public sealed class SiteBuilderService(
                 cancellationToken);
 
             logger.LogInformation(
-                "Site kurucu yayini tamamlandi: {Site} -> {Path} ({Count} dosya)",
+                "Site kurucu yayini tamamlandi: {Site} -> {Path} ({Count} dosya, {Pages} sayfa, {Orphans} oksuz)",
                 site.Name,
                 root,
-                written.Count);
+                written.Count,
+                rendered.Pages.Count,
+                orphans.Count);
 
             return new SiteBuilderPublishResultDto
             {
@@ -202,6 +259,8 @@ public sealed class SiteBuilderService(
                 TargetPath = root,
                 WrittenFiles = written,
                 OverwrittenFiles = decision.Conflicts.ToList(),
+                OrphanFiles = orphans,
+                PageCount = rendered.Pages.Count,
                 PublishedAtUtc = publishedAt,
                 PreviewUrl = BuildSiteUrl(site)
             };
@@ -348,10 +407,19 @@ public sealed class SiteBuilderService(
         return SiteBuilderPathGuard.EnsureUsableRoot(raw);
     }
 
-    /// <summary>Yayında yazılacak göreli yollar: sayfa, stil ve tasarımda GERÇEKTEN kullanılan görseller.</summary>
-    private static List<string> BuildWriteList(SiteBuilderProjectDto project)
+    /// <summary>
+    /// Yayında yazılacak göreli yollar: BÜTÜN sayfalar, stil ve tasarımda GERÇEKTEN kullanılan görseller.
+    /// </summary>
+    /// <remarks>
+    /// Sayfa listesi oluşturucudan gelir, burada yeniden hesaplanmaz. İki yerde hesaplansaydı biri
+    /// bir sayfayı düşürebilir (ör. geçersiz slug) ve o sayfa "yazılacak" sayılıp içeriği HİÇ
+    /// üretilmemiş olurdu — yani boş bir dosya yazılırdı.
+    /// </remarks>
+    private static List<string> BuildWriteList(SiteBuilderProjectDto project, RenderedPages rendered)
     {
-        var list = new List<string>(SiteBuilderLayout.CoreFiles);
+        var list = rendered.Pages.Select(page => page.RelativePath).ToList();
+        list.Add(SiteBuilderLayout.StyleFile);
+
         foreach (var image in UsedImageNames(project))
         {
             list.Add(SiteBuilderLayout.ImageFolder + "/" + image);
@@ -361,13 +429,29 @@ public sealed class SiteBuilderService(
     }
 
     /// <summary>
-    /// Tasarımda atıf yapılan görseller. Kullanılmayan yüklemeler siteye KOPYALANMAZ — müşterinin
-    /// sunucusunda gereksiz dosya bırakmamak için.
+    /// Tasarımda atıf yapılan görseller (ana sayfa + BÜTÜN ek sayfalar). Kullanılmayan yüklemeler
+    /// siteye KOPYALANMAZ — müşterinin sunucusunda gereksiz dosya bırakmamak için.
     /// </summary>
+    /// <remarks>
+    /// Ek sayfalar unutulsaydı, o sayfaların görselleri siteye hiç kopyalanmaz ve sayfa kırık
+    /// görsellerle yayınlanırdı; üstelik bir sonraki yayında o dosyalar ÖKSÜZ sanılırdı.
+    /// </remarks>
     private static IEnumerable<string> UsedImageNames(SiteBuilderProjectDto project)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var section in project.Sections ?? [])
+
+        CollectImages(project.Sections, names);
+        foreach (var page in project.Pages ?? [])
+        {
+            CollectImages(page.Sections, names);
+        }
+
+        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void CollectImages(IReadOnlyList<SiteBuilderSectionDto>? sections, HashSet<string> names)
+    {
+        foreach (var section in sections ?? [])
         {
             if (!section.Enabled)
             {
@@ -387,8 +471,122 @@ public sealed class SiteBuilderService(
                 }
             }
         }
+    }
 
-        return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// İletişim formunun gönderim hedefi; kurulamıyorsa BOŞ.
+    /// </summary>
+    /// <remarks>
+    /// Ana ad panelin KENDİ erişim ayarından (<c>config/panel-preferences.json</c>) okunur —
+    /// isteğin <c>Host</c> başlığından değil. Gerekçe <c>SiteBuilderContactEndpoint.BuildAction</c>
+    /// içinde yazılı: yönetici panele <c>localhost</c> üzerinden bağlanmış olabilir ve o adres
+    /// müşterinin sitesine gömülseydi form, ziyaretçi için asla çalışmazdı.
+    /// </remarks>
+    private async Task<string> BuildContactFormActionAsync(string siteName, CancellationToken cancellationToken)
+    {
+        var preferences = await fileStore.ReadAsync(
+            PanelPreferencesPath,
+            new AdaPanel.Core.Dtos.Settings.PanelPreferencesDto(),
+            cancellationToken);
+
+        return SiteBuilderContactEndpoint.BuildAction(preferences.PanelHostName, StorageKey(siteName));
+    }
+
+    /// <summary>
+    /// İletişim formu İSTENDİĞİ hâlde basılamıyorsa sebebin çeviri anahtarı; sorun yoksa boş.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu, özelliğin sessizce kaybolmamasının tek yolu. Kullanıcı "form açık" kutusunu işaretler,
+    /// yayınlar ve sitesinde form GÖRMEZ — sebebini söylemezsek o kullanıcının elinde kalan tek
+    /// bilgi "panel bozuk" olur. Üç sebep de ayrı ayrı adlandırılıyor, çünkü üçünün düzeltmesi
+    /// farklı ekranlarda.
+    /// </para>
+    /// <para>
+    /// Sıra bilinçli: önce KULLANICININ düzeltebileceği (adres), sonra YÖNETİCİNİN düzeltebileceği
+    /// (panel erişim adresi), en sonda düzeltilemeyen (site adı ucta kullanılamıyor).
+    /// </para>
+    /// </remarks>
+    private async Task<string> ContactFormBlockedReasonAsync(
+        SiteBuilderProjectDto project,
+        CancellationToken cancellationToken)
+    {
+        var contact = (project.Sections ?? [])
+            .FirstOrDefault(section => string.Equals(section.Type, "contact", StringComparison.OrdinalIgnoreCase));
+
+        if (contact is null || !contact.Enabled || !contact.ContactFormEnabled)
+        {
+            return string.Empty;
+        }
+
+        if (!SiteBuilderContactForm.IsUsableAddress(contact.Email))
+        {
+            return "sitebuilder.form_recipient_missing";
+        }
+
+        var key = StorageKey(project.SiteName);
+        if (!SiteBuilderContactEndpoint.IsValidSiteKey(key))
+        {
+            return "sitebuilder.form_site_unsupported";
+        }
+
+        var preferences = await fileStore.ReadAsync(
+            PanelPreferencesPath,
+            new AdaPanel.Core.Dtos.Settings.PanelPreferencesDto(),
+            cancellationToken);
+
+        return SiteBuilderContactEndpoint.BuildAction(preferences.PanelHostName, key).Length == 0
+            ? "sitebuilder.form_panel_host_missing"
+            : string.Empty;
+    }
+
+    /// <summary>
+    /// Ek sayfaları düzenler: geçersiz ya da yinelenen slug DÜŞÜRÜLÜR, üst sınır uygulanır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden düşürülüyor, düzeltilmiyor:</b> "Hakkımızda!!" gibi bir slug'ı temizleyip
+    /// <c>hakkimizda</c> yapmak, kullanıcının yazmadığı bir adrese dosya yazmak olurdu — üstelik
+    /// bir sonraki kaydetmede başka bir adrese düşerse her seferinde diskte yeni bir ÖKSÜZ sayfa
+    /// bırakırdı. Arayüz slug'ı kullanıcıya gösterir ve kalıbı orada da uygular; sunucu son sözü
+    /// söyler.
+    /// </para>
+    /// <para>
+    /// <b>Neden ilk yazan kazanıyor:</b> aynı slug'lı iki sayfa aynı dosyaya yazılır ve ikincisi
+    /// birincisini EZER; kullanıcı yazdığı içeriğin nereye gittiğini anlayamazdı.
+    /// </para>
+    /// </remarks>
+    private static List<SiteBuilderPageDto> NormalizePages(
+        IReadOnlyCollection<SiteBuilderPageDto>? pages,
+        IReadOnlySet<string> knownImages)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<SiteBuilderPageDto>();
+
+        foreach (var page in pages ?? [])
+        {
+            var slug = (page.Slug ?? string.Empty).Trim().ToLowerInvariant();
+            if (!SiteBuilderPageSlug.IsValid(slug) || !seen.Add(slug))
+            {
+                continue;
+            }
+
+            result.Add(new SiteBuilderPageDto
+            {
+                Slug = slug,
+                Title = Trim(page.Title, 120),
+                MetaDescription = Trim(page.MetaDescription, 300),
+                ShowInNav = page.ShowInNav,
+                Sections = NormalizeSections(page.Sections, knownImages)
+            });
+
+            if (result.Count >= SiteBuilderPageSlug.MaxPages)
+            {
+                break;
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -534,6 +732,7 @@ public sealed class SiteBuilderService(
 
         stored.SiteName = siteName;
         stored.Sections ??= [];
+        stored.Pages ??= [];
         stored.ManagedFiles ??= [];
         return stored;
     }
@@ -593,6 +792,13 @@ public sealed class SiteBuilderService(
                 Email = Trim(incoming?.Email, 160),
                 Phone = Trim(incoming?.Phone, 60),
                 Address = Trim(incoming?.Address, 300),
+
+                // FORM YALNIZ İLETİŞİM BÖLÜMÜNDE açılabilir. Başka bir bölümde işaretlenmiş bir
+                // bayrak, hem sayfada karşılığı olmayan bir ayar üretir hem de kimliksiz uçta
+                // "hangi bölüm alıcıyı taşıyor" sorusunu bulanıklaştırırdı; kural tek yerde ve
+                // BURADA kesiliyor.
+                ContactFormEnabled = string.Equals(type, "contact", StringComparison.Ordinal)
+                                     && (incoming?.ContactFormEnabled ?? false),
                 Items = (incoming?.Items ?? [])
                     // Üst sınır bilinçli: sınırsız kart, sınırsız büyüyen bir JSON ve sınırsız
                     // büyüyen bir sayfa demektir.
@@ -656,7 +862,29 @@ public sealed class SiteBuilderService(
             .ToList()
     };
 
-    private static string ProjectPath(string siteName) => $"config/sitebuilder/{StorageKey(siteName)}.json";
+    /// <summary>
+    /// Panelin genel erişim ayarları. İletişim formunun gönderim hedefi (ana ad) buradan okunur.
+    /// </summary>
+    /// <remarks>
+    /// Yol <c>PanelPublicAccessService</c> ile AYNI olmak zorunda. İki ayrı dosyaya bakılsaydı,
+    /// yönetici "Panel erişimi" ekranından ana adı ayarlar ama form hedefi hiç dolmazdı ve sebebi
+    /// görünmezdi. Ayrı bir servise bağlanmak yerine DTO'nun kendisi okunuyor: bu modül panelin
+    /// erişim akışını yönetmiyor, yalnız kaydedilmiş sonucu okuyor.
+    /// </remarks>
+    private const string PanelPreferencesPath = "config/panel-preferences.json";
+
+    private static string ProjectPath(string siteName) => ProjectPathForKey(StorageKey(siteName));
+
+    /// <summary>
+    /// Tasarım dosyasının yolu, DOĞRUDAN saklama anahtarından.
+    /// </summary>
+    /// <remarks>
+    /// Kimliksiz iletişim formu ucu site ADINI bilmez, yalnız anahtarı taşır (adresi
+    /// <c>SiteBuilderContactEndpoint</c> kuruyor). Bu aşırı yükleme, o ucun IIS'e hiç sormadan
+    /// tasarımı okuyabilmesi için var — kimliksiz bir uçta sunucudaki bütün siteleri gezen bir
+    /// çözüm, tek satırlık bir istekle iş yaptıran bir kaldıraç olurdu.
+    /// </remarks>
+    internal static string ProjectPathForKey(string storageKey) => $"config/sitebuilder/{storageKey}.json";
 
     private static string ImageFolder(string siteName) => $"sitebuilder/{StorageKey(siteName)}/img";
 

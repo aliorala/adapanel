@@ -1,13 +1,13 @@
-using System.Diagnostics;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.SiteBuilder;
-using AdaPanel.Core.Dtos.Sites;
-using AdaPanel.Core.Interfaces;
-using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.SiteBuilder;
-using AdaPanel.Infrastructure.Support;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+
+// Ortam ve dosya sistemi yardımcıları ORTAK: SiteBuilderTestOrtami.cs.
+// Takma ad, testlerdeki `TestOrtami.` çağrılarını olduğu gibi bırakır — kurulum tek kaynağa
+// çıkarken testlerin okunuşu değişmesin.
+using TestOrtami = AdaPanel.Infrastructure.Tests.SiteBuilderTestOrtami;
+using static AdaPanel.Infrastructure.Tests.SiteBuilderTestOrtami;
 
 namespace AdaPanel.Infrastructure.Tests;
 
@@ -405,138 +405,10 @@ public sealed class SiteBuilderPublishSafetyTests
     }
 
     // ------------------------------------------------------------------ altyapı
-
-    private static string GeciciKlasor()
-    {
-        var yol = Path.Combine(Path.GetTempPath(), $"adapanel-sb-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(yol);
-        return yol;
-    }
-
-    private static void Temizle(string yol)
-    {
-        try
-        {
-            if (Directory.Exists(yol))
-            {
-                // Kavşakları İZLEMEDEN temizle: testin kendisi de yanlışlıkla hedefi silmesin.
-                foreach (var dizin in Directory.GetDirectories(yol, "*", SearchOption.AllDirectories)
-                             .Where(d => File.GetAttributes(d).HasFlag(FileAttributes.ReparsePoint)))
-                {
-                    Directory.Delete(dizin);
-                }
-
-                Directory.Delete(yol, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-            // Temizlik testin konusu değil.
-        }
-    }
-
-    private static bool KavsakKur(string baglanti, string hedef)
-    {
-        try
-        {
-            using var süreç = Process.Start(new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c mklink /J \"{baglanti}\" \"{hedef}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            });
-
-            süreç?.WaitForExit(10000);
-            return Directory.Exists(baglanti)
-                   && File.GetAttributes(baglanti).HasFlag(FileAttributes.ReparsePoint);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Gerçek dosya sistemiyle çalışan uçtan uca ortam.</summary>
-    private sealed class TestOrtami : IAsyncDisposable
-    {
-        public const string SiteAdi = "ornek.com";
-
-        private TestOrtami(string veriKoku, string siteKoku, SiteBuilderService servis)
-        {
-            VeriKoku = veriKoku;
-            SiteKoku = siteKoku;
-            Servis = servis;
-        }
-
-        public string VeriKoku { get; }
-
-        public string SiteKoku { get; }
-
-        public SiteBuilderService Servis { get; }
-
-        public static Task<TestOrtami> KurAsync()
-        {
-            var taban = GeciciKlasor();
-            var veriKoku = Path.Combine(taban, "data");
-            var siteKoku = Path.Combine(taban, "site");
-            Directory.CreateDirectory(veriKoku);
-            Directory.CreateDirectory(siteKoku);
-
-            var depo = new JsonFileStore(
-                Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = veriKoku }));
-
-            var servis = new SiteBuilderService(
-                new SahteSiteServisi(siteKoku),
-                depo,
-                NullLogger<SiteBuilderService>.Instance);
-
-            return Task.FromResult(new TestOrtami(taban, siteKoku, servis));
-        }
-
-        /// <summary>Gerçek bir PNG yükler (imza baytları doğru).</summary>
-        public async Task<SiteBuilderImageDto> GorselYukleAsync()
-        {
-            var png = SiteBuilderImageFixtures.MinimalPng();
-            using var akis = new MemoryStream(png);
-            return await Servis.UploadImageAsync(SiteAdi, akis, png.LongLength);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Temizle(Path.GetDirectoryName(SiteKoku)!);
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class SahteSiteServisi(string uygulamaKoku) : IIisSiteService
-    {
-        public Task<SiteDto> GetSiteAsync(string siteName, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new SiteDto
-            {
-                Name = siteName,
-                PhysicalPath = uygulamaKoku,
-                ApplicationRootPath = uygulamaKoku
-            });
-
-        public Task<IReadOnlyCollection<SiteDto>> GetSitesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<SiteDto> CreateSiteAsync(CreateSiteRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<SiteDto> UpdatePhysicalPathAsync(string siteName, string physicalPath, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task DeleteSiteAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<SiteDto> StartSiteAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<SiteDto> StopSiteAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<SiteDto> AddBindingAsync(string siteName, SiteBindingRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<SiteDto> RemoveBindingAsync(string siteName, RemoveSiteBindingRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyCollection<SiteDto>> ImportExistingSitesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-    }
+    //
+    // Ortam kurulumu (geçici veri kökü + geçici site kökü + sahte IIS) ve kavşak/temizlik
+    // yardımcıları ORTAK dosyaya taşındı: SiteBuilderTestOrtami.cs. Aynı kurulum çok sayfa ve
+    // iletişim formu testlerinde de kullanılıyor; üç kopya tutulsaydı biri güncellenip diğerleri
+    // geride kalır ve geride kalan kopya, gerçekte var olmayan bir dünyayı doğrulayan YEŞİL bir
+    // test üretirdi.
 }

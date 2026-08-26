@@ -25,6 +25,9 @@
           <button role="tab" :aria-selected="tab === 'content'" :class="{ active: tab === 'content' }" @click="tab = 'content'">
             {{ t("panel.siteBuilder.tab.content") }}
           </button>
+          <button role="tab" :aria-selected="tab === 'pages'" :class="{ active: tab === 'pages' }" @click="tab = 'pages'">
+            {{ t("panel.siteBuilder.tab.pages") }}
+          </button>
           <button role="tab" :aria-selected="tab === 'publish'" :class="{ active: tab === 'publish' }" @click="openPublishTab">
             {{ t("panel.siteBuilder.tab.publish") }}
           </button>
@@ -100,7 +103,33 @@
 
           <!-- ---------------------------------------------------------- İÇERİK -->
           <div v-else-if="tab === 'content'" class="form-surface">
-            <details v-for="section in project.sections" :key="section.type" class="sb-section" open>
+            <!--
+              HANGİ SAYFAYI düzenlediğimiz her zaman görünür. Sayfa seçici olmasaydı kullanıcı
+              ana sayfayı düzenlediğini sanıp bir alt sayfaya yazardı; yazdığı metnin nereye
+              gittiğini ancak yayından sonra anlardı.
+            -->
+            <label v-if="project.pages.length" class="stacked-field">
+              <span class="field-label">{{ t("panel.siteBuilder.editingPage") }}</span>
+              <select v-model="activePageSlug">
+                <option value="">{{ t("panel.siteBuilder.homePage") }}</option>
+                <option v-for="page in project.pages" :key="page.slug" :value="page.slug">
+                  {{ page.title || page.slug }} (/{{ page.slug }}/)
+                </option>
+              </select>
+            </label>
+
+            <template v-if="activePage">
+              <label class="stacked-field">
+                <span class="field-label">{{ t("panel.siteBuilder.pageTitle") }}</span>
+                <input v-model="activePage.title" maxlength="120" />
+              </label>
+              <label class="stacked-field">
+                <span class="field-label">{{ t("panel.siteBuilder.metaDescription") }}</span>
+                <textarea v-model="activePage.metaDescription" rows="2" maxlength="300"></textarea>
+              </label>
+            </template>
+
+            <details v-for="section in activeSections" :key="section.type" class="sb-section" open>
               <summary>
                 {{ t(`panel.siteBuilder.section.${section.type}`) }}
                 <span v-if="!section.enabled" class="status-pill">{{ t("panel.status.disabled") }}</span>
@@ -142,9 +171,21 @@
                     <span class="field-label">{{ t("panel.siteBuilder.address") }}</span>
                     <textarea v-model="section.address" rows="2" maxlength="300"></textarea>
                   </label>
-                  <!-- DÜRÜSTLÜK: çalışmayan bir form koymaktansa hiç koymamak. Ziyaretçi
-                       gönderdiğini sanıp yanıt bekleseydi, bu bir özellik değil bir arıza olurdu. -->
-                  <p class="meta sb-note">{{ t("panel.siteBuilder.noContactForm") }}</p>
+                  <!--
+                    İLETİŞİM FORMU. Kutu işaretli olsa bile form ancak GERÇEKTEN çalışacaksa
+                    basılır: alıcı adresi geçerli olmalı ve panelin genel adresi tanımlı olmalı.
+                    Eksik koşul yayın sekmesinde ADIYLA yazılır — "belki çalışır" diye bir hâl
+                    bırakılmadı, çünkü gönderilemeyen bir form ziyaretçinin gönderdiğini sanması
+                    demektir ve bu hiç form koymamaktan kötüdür.
+                  -->
+                  <label class="sb-toggle">
+                    <input v-model="section.contactFormEnabled" type="checkbox" />
+                    <span>{{ t("panel.siteBuilder.contactFormEnabled") }}</span>
+                  </label>
+                  <p class="meta sb-note">{{ t("panel.siteBuilder.contactFormHint") }}</p>
+                  <p v-if="section.contactFormEnabled" class="meta sb-note">
+                    {{ t("panel.siteBuilder.contactFormSpamHint") }}
+                  </p>
                 </template>
 
                 <template v-if="section.type === 'services' || section.type === 'gallery'">
@@ -192,6 +233,56 @@
             </div>
           </div>
 
+          <!-- ---------------------------------------------------------- SAYFALAR -->
+          <div v-else-if="tab === 'pages'" class="form-surface">
+            <p class="meta">{{ t("panel.siteBuilder.pagesHint") }}</p>
+
+            <!--
+              SİLME UYARISI HER ZAMAN GÖRÜNÜR, sayfa kaldırılırken de tekrar edilir. Sebep:
+              kullanıcı "sayfayı kaldır" derken onu sitesinden de sildiğini SANIR. Yayın hiçbir
+              dosyayı silmez; eski HTML adresinde durmaya devam eder ve yayın sekmesinde "öksüz
+              dosya" olarak listelenir. Bunu söylememek, kullanıcıyı yanlış bir inançla bırakmak
+              olurdu.
+            -->
+            <p class="meta sb-note">{{ t("panel.siteBuilder.pageRemovalNote") }}</p>
+
+            <div v-for="(page, index) in project.pages" :key="index" class="sb-item">
+              <label class="stacked-field">
+                <span class="field-label">{{ t("panel.siteBuilder.pageTitle") }}</span>
+                <input v-model="page.title" maxlength="120" @blur="fillSlugFromTitle(page)" />
+              </label>
+              <label class="stacked-field">
+                <span class="field-label">{{ t("panel.siteBuilder.pageSlug") }}</span>
+                <input v-model="page.slug" maxlength="48" />
+              </label>
+              <p v-if="slugProblem(page, index)" class="notice error" role="alert">
+                {{ t(slugProblem(page, index)!) }}
+              </p>
+              <p v-else class="meta sb-note">{{ t("panel.siteBuilder.pageAddress", { slug: page.slug }) }}</p>
+
+              <label class="sb-toggle">
+                <input v-model="page.showInNav" type="checkbox" />
+                <span>{{ t("panel.siteBuilder.pageShowInNav") }}</span>
+              </label>
+
+              <div class="sb-actions">
+                <button type="button" class="secondary" @click="editPage(page.slug)">
+                  {{ t("panel.siteBuilder.editPageContent") }}
+                </button>
+                <button type="button" class="secondary" @click="removePage(index)">
+                  {{ t("panel.siteBuilder.removePage") }}
+                </button>
+              </div>
+            </div>
+
+            <button type="button" class="secondary" :disabled="project.pages.length >= maxPages" @click="addPage">
+              {{ t("panel.siteBuilder.addPage") }}
+            </button>
+            <p v-if="project.pages.length >= maxPages" class="meta sb-note">
+              {{ t("panel.siteBuilder.pageLimitReached", { count: maxPages }) }}
+            </p>
+          </div>
+
           <!-- ---------------------------------------------------------- YAYIN -->
           <div v-else class="form-surface">
             <p v-if="!plan" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
@@ -209,10 +300,36 @@
                   {{ t("panel.siteBuilder.existingFiles", { count: plan.existingFileCount }) }}
                 </p>
 
+                <p class="meta">{{ t("panel.siteBuilder.publishPages", { count: plan.pageCount }) }}</p>
+
+                <!--
+                  FORM NEDEN BASILAMIYOR. Kullanıcı kutuyu işaretler, yayınlar ve sitesinde form
+                  GÖRMEZ; sebebini söylemezsek elinde kalan tek bilgi "panel bozuk" olur. Bu
+                  YAYINI ENGELLEMEZ (sayfa formsuz yayınlanır), o yüzden ayrı bir uyarı.
+                -->
+                <p v-if="plan.contactFormBlockedReasonKey" class="notice warn-banner" role="alert">
+                  {{ t(`sitebuilder.${blockedKeySuffix(plan.contactFormBlockedReasonKey)}`) }}
+                </p>
+
                 <h4>{{ t("panel.siteBuilder.publishFiles") }}</h4>
                 <ul class="sb-filelist">
                   <li v-for="file in plan.filesToWrite" :key="file"><code>{{ file }}</code></li>
                 </ul>
+
+                <!--
+                  ÖKSÜZ DOSYALAR. Kullanıcı bir sayfayı kurucudan kaldırdığında eski HTML
+                  adresinde durmaya devam eder. Yayın onu SİLMEZ — silme bu depoda müşteri
+                  sitesini yok edebilecek hata sınıfı ve geri alınamaz. Ama sessiz kalmak da
+                  kullanıcıyı "sildim" inancıyla bırakmak olurdu; dosya ADIYLA gösterilir, silme
+                  kararı sahibinindir (Dosya Yöneticisi ekranı).
+                -->
+                <template v-if="plan.orphanFiles.length">
+                  <h4>{{ t("panel.siteBuilder.orphanTitle") }}</h4>
+                  <p class="meta">{{ t("panel.siteBuilder.orphanHint") }}</p>
+                  <ul class="sb-filelist">
+                    <li v-for="file in plan.orphanFiles" :key="file"><code>{{ file }}</code></li>
+                  </ul>
+                </template>
 
                 <!--
                   ÜZERİNE YAZMA UYARISI. Ezilecek dosyalar ADIYLA listelenir; "emin misiniz?"
@@ -253,9 +370,19 @@
         <div class="sb-preview">
           <div class="sb-preview-head">
             <h4>{{ t("panel.siteBuilder.preview") }}</h4>
-            <button type="button" class="secondary" :disabled="previewLoading" @click="loadPreview">
-              {{ t("panel.siteBuilder.refreshPreview") }}
-            </button>
+            <div class="sb-actions">
+              <!-- Önizleme hangi SAYFAYI gösteriyor: çok sayfalı bir sitede bu soru sorulmadan
+                   önizleme yanıltıcı olurdu. -->
+              <select v-if="project.pages.length" v-model="previewSlug" class="compact-select">
+                <option value="">{{ t("panel.siteBuilder.homePage") }}</option>
+                <option v-for="page in project.pages" :key="page.slug" :value="page.slug">
+                  {{ page.title || page.slug }}
+                </option>
+              </select>
+              <button type="button" class="secondary" :disabled="previewLoading" @click="loadPreview">
+                {{ t("panel.siteBuilder.refreshPreview") }}
+              </button>
+            </div>
           </div>
           <p class="meta">{{ t("panel.siteBuilder.previewHint") }}</p>
           <!--
@@ -292,9 +419,13 @@ import {
   publishSiteBuilder,
   saveSiteBuilderProject,
   siteBuilderImageUrl,
+  suggestSiteBuilderSlug,
   uploadSiteBuilderImage,
+  SITE_BUILDER_MAX_PAGES,
+  SITE_BUILDER_SLUG_PATTERN,
   type SiteBuilderCatalog,
   type SiteBuilderImage,
+  type SiteBuilderPage,
   type SiteBuilderProject,
   type SiteBuilderPublishPlan
 } from "../api/siteBuilder";
@@ -310,7 +441,15 @@ const plan = ref<SiteBuilderPublishPlan | null>(null);
 const previewHtml = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 
-const tab = ref<"design" | "content" | "publish">("design");
+const tab = ref<"design" | "content" | "pages" | "publish">("design");
+
+/** İçerik sekmesinin düzenlediği sayfa. Boş dizge = ana sayfa. */
+const activePageSlug = ref("");
+
+/** Önizlemenin gösterdiği sayfa. İçerik sekmesinden AYRI: kullanıcı bir sayfayı düzenlerken
+ *  başka bir sayfanın çıktısını kontrol etmek isteyebilir. */
+const previewSlug = ref("");
+const maxPages = SITE_BUILDER_MAX_PAGES;
 const loading = ref(false);
 const saving = ref(false);
 const publishing = ref(false);
@@ -328,6 +467,19 @@ const selectedSite = computed({
 const maxImageMb = computed(() =>
   catalog.value ? Math.round(catalog.value.maxImageBytes / (1024 * 1024)) : 5);
 
+/** Düzenlenen sayfa nesnesi; ana sayfada `null`. */
+const activePage = computed(() =>
+  project.value?.pages.find((page) => page.slug === activePageSlug.value) ?? null);
+
+/**
+ * İçerik sekmesinin üzerinde çalıştığı bölüm listesi.
+ *
+ * Ana sayfa ile ek sayfalar AYNI bölüm modelini kullanıyor; bu yüzden düzenleyici işaretlemesi
+ * tek kopya. İki ayrı düzenleyici yazılsaydı biri güncellenip diğeri geride kalırdı ve fark, en
+ * kötü yerde (kullanıcının göremediği bir alanda) ortaya çıkardı.
+ */
+const activeSections = computed(() => activePage.value?.sections ?? project.value?.sections ?? []);
+
 onMounted(async () => {
   await sitesStore.fetchSites().catch(() => undefined);
   try {
@@ -340,6 +492,12 @@ onMounted(async () => {
 
 watch(selectedSite, load);
 
+// Önizleme sayfası değişince çerçeve YENİDEN yüklenir; aksi hâlde açılır listede başka bir sayfa
+// seçili görünürken ekranda hâlâ eski sayfa dururdu.
+watch(previewSlug, () => {
+  void loadPreview();
+});
+
 async function load() {
   if (!selectedSite.value) {
     project.value = null;
@@ -347,6 +505,8 @@ async function load() {
   }
 
   loading.value = true;
+  activePageSlug.value = "";
+  previewSlug.value = "";
   try {
     project.value = await getSiteBuilderProject(selectedSite.value);
     images.value = await getSiteBuilderImages(selectedSite.value);
@@ -366,8 +526,29 @@ async function save() {
 
   saving.value = true;
   try {
+    const oncekiSayfaSayisi = project.value.pages.length;
     project.value = await saveSiteBuilderProject(selectedSite.value, project.value);
-    inform(t("panel.siteBuilder.savedNotice"));
+
+    // SUNUCU SAYFA DÜŞÜRDÜ MÜ? Geçersiz ya da yinelenen adresli sayfalar kaydedilirken düşer.
+    // Sessiz kalsaydık kullanıcı "kaydettim" görüp sayfasının kaybolduğunu ancak yayında
+    // fark ederdi.
+    if (project.value.pages.length < oncekiSayfaSayisi) {
+      showError(t("panel.siteBuilder.pagesDropped", {
+        count: oncekiSayfaSayisi - project.value.pages.length
+      }));
+    } else {
+      inform(t("panel.siteBuilder.savedNotice"));
+    }
+
+    // Düşen bir sayfa hâlâ seçili olabilir; seçimi geçerli bir sayfaya çek.
+    if (activePageSlug.value && !project.value.pages.some((page) => page.slug === activePageSlug.value)) {
+      activePageSlug.value = "";
+    }
+
+    if (previewSlug.value && !project.value.pages.some((page) => page.slug === previewSlug.value)) {
+      previewSlug.value = "";
+    }
+
     await loadPreview();
   } catch (error) {
     report(error);
@@ -383,7 +564,7 @@ async function loadPreview() {
 
   previewLoading.value = true;
   try {
-    previewHtml.value = await getSiteBuilderPreview(selectedSite.value);
+    previewHtml.value = await getSiteBuilderPreview(selectedSite.value, previewSlug.value);
   } catch (error) {
     report(error);
     previewHtml.value = "";
@@ -480,6 +661,109 @@ async function removeImage(name: string) {
 
 function imageUrl(name: string) {
   return selectedSite.value ? siteBuilderImageUrl(selectedSite.value, name) : "";
+}
+
+// ---------------------------------------------------------------- sayfalar
+
+/**
+ * Yeni sayfa. Bölümler kapalı başlar (yalnız "hakkında" açık).
+ *
+ * Hepsi açık başlasaydı yeni sayfa ana sayfanın kopyası gibi görünür; kullanıcı da farkı
+ * anlamadan aynı içeriği ikinci bir adreste yayınlardı (arama motorları için de kötü).
+ */
+function addPage() {
+  if (!project.value || project.value.pages.length >= maxPages) {
+    return;
+  }
+
+  const tipler = catalog.value?.sectionTypes ?? ["hero", "about", "services", "gallery", "contact"];
+  project.value.pages.push({
+    slug: "",
+    title: "",
+    metaDescription: "",
+    showInNav: true,
+    sections: tipler.map((type) => ({
+      type,
+      enabled: type === "about",
+      heading: "",
+      body: "",
+      imageName: "",
+      items: [],
+      email: "",
+      phone: "",
+      address: "",
+      contactFormEnabled: false
+    }))
+  });
+}
+
+/**
+ * SAYFAYI KALDIRMA. Onay diyaloğu, diskteki dosyanın SİLİNMEDİĞİNİ de söyler.
+ *
+ * Kullanıcı "kaldır" derken sayfayı sitesinden de sildiğini sanar; oysa yayın hiçbir dosyayı
+ * silmez ve eski HTML adresinde durmaya devam eder. Bunu onay anında söylemek, yayın sekmesinde
+ * "öksüz dosya" listesini görünce şaşırmasını engeller.
+ */
+async function removePage(index: number) {
+  const page = project.value?.pages[index];
+  if (!project.value || !page) {
+    return;
+  }
+
+  const approved = await confirm({
+    title: t("panel.siteBuilder.confirmRemovePageTitle"),
+    message: t("panel.siteBuilder.confirmRemovePage", { name: page.title || page.slug || "-" })
+  });
+
+  if (!approved) {
+    return;
+  }
+
+  project.value.pages.splice(index, 1);
+  if (activePageSlug.value === page.slug) {
+    activePageSlug.value = "";
+  }
+
+  if (previewSlug.value === page.slug) {
+    previewSlug.value = "";
+  }
+}
+
+function editPage(slug: string) {
+  activePageSlug.value = slug;
+  previewSlug.value = slug;
+  tab.value = "content";
+}
+
+/** Başlıktan slug ÖNERİR — yalnız alan boşken. Doldurulmuş bir adresi ezmek, kullanıcının
+ *  bilerek verdiği adresi sessizce değiştirmek olurdu. */
+function fillSlugFromTitle(page: SiteBuilderPage) {
+  if (!page.slug.trim()) {
+    page.slug = suggestSiteBuilderSlug(page.title);
+  }
+}
+
+/**
+ * Sayfa adresinin sorunu (varsa) — çeviri anahtarı olarak.
+ *
+ * Kalıp SUNUCUDAKİYLE aynı. Arayüzde göstermek zorunlu, çünkü sunucu geçersiz sayfayı sessizce
+ * DÜŞÜRÜR (düzeltmez); uyarı olmasaydı kullanıcı kaydeder, sayfası kaybolur ve sebebini hiç
+ * öğrenemezdi.
+ */
+function slugProblem(page: SiteBuilderPage, index: number): string | null {
+  const slug = page.slug.trim();
+  if (!slug) {
+    return "panel.siteBuilder.pageSlugRequired";
+  }
+
+  if (!SITE_BUILDER_SLUG_PATTERN.test(slug)) {
+    return "panel.siteBuilder.pageSlugInvalid";
+  }
+
+  const cakisma = (project.value?.pages ?? [])
+    .some((other, otherIndex) => otherIndex !== index && other.slug.trim().toLowerCase() === slug.toLowerCase());
+
+  return cakisma ? "panel.siteBuilder.pageSlugDuplicate" : null;
 }
 
 /** Sunucudan gelen engel anahtarı ("sitebuilder.target_is_link") çeviriye çevrilir. */

@@ -125,6 +125,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IGitDeploymentService, Git.GitDeploymentService>();
         services.AddScoped<IWebStatisticsService, Statistics.WebStatisticsService>();
         services.AddScoped<SiteBuilder.ISiteBuilderService, SiteBuilder.SiteBuilderService>();
+        services.AddScoped<SiteBuilder.ISiteBuilderContactService, SiteBuilder.SiteBuilderContactService>();
+
+        // HIZ SINIRLAYICI SINGLETON OLMAK ZORUNDA: sayaçlar bellekte tutuluyor ve kapsamlı
+        // (scoped) kayıt her istekte YENİ bir örnek üretirdi — yani her istek boş bir sayaçla
+        // başlar ve sınır hiçbir zaman dolmazdı. Sınırlayıcı var görünüp hiç sınırlamayan bir
+        // kayıt, hiç sınırlayıcı olmamasından daha kötüdür (yanlış güven).
+        services.AddSingleton<SiteBuilder.SiteBuilderContactRateLimiter>();
         // Mail: kurulu sunucuya göre yönlendirilen dispatcher. Stalwart sağlayıcısı hiç
         // değişmeden korunur; MailEnable kuruluysa router ona yönlendirir.
         services.AddScoped<Mail.StalwartRuntime>();

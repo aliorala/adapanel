@@ -27,7 +27,20 @@ public sealed class SaveSiteBuilderProjectRequest
     [StringLength(8)]
     public string Language { get; set; } = "tr";
 
+    /// <summary>ANA SAYFANIN bölümleri.</summary>
     public List<SiteBuilderSectionDto> Sections { get; set; } = [];
+
+    /// <summary>
+    /// Ek sayfalar. Listeden ÇIKARILAN bir sayfa tasarımdan düşer; diskteki dosyası SİLİNMEZ.
+    /// </summary>
+    /// <remarks>
+    /// Silmemek bilinçli. "Artık üretilmeyen sayfayı sil" adımı, bu depoda müşteri sitesini yok
+    /// edebilecek hata sınıfının (özyinelemeli silme + klasör bağlantısı) tam ortasındadır.
+    /// Bunun yerine yayın planı ve yayın sonucu ÖKSÜZ dosyaları ADIYLA listeler; kullanıcı
+    /// dosya yöneticisinden bilerek siler. Sessizce silmek yerine görünür kılmak, yanlış dosyayı
+    /// silme riskini sıfırlar ve kararı dosyanın sahibine bırakır.
+    /// </remarks>
+    public List<SiteBuilderPageDto> Pages { get; set; } = [];
 }
 
 /// <summary>

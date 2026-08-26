@@ -29,6 +29,13 @@ public sealed record PublishDecision(
 /// özyinelemeli silme müşteri sitesini silebiliyordu. Yayın, eskiyen bir dosyayı diskte bırakır —
 /// bu, yanlış bir dosyayı silmekten her zaman daha iyidir.
 /// </para>
+/// <para>
+/// <b>Ama SESSİZ de değil (çok sayfa desteğiyle gelen karar):</b> kullanıcı bir sayfayı kurucudan
+/// kaldırdığında ya da adını değiştirdiğinde eski HTML adresinde durmaya devam eder. Bunu hiç
+/// söylememek, kullanıcının "sildim" sandığı bir sayfanın yayında kalması demekti.
+/// <see cref="Orphans"/> o dosyaları ADIYLA döndürür; silmez, gösterir. Kararı dosyanın sahibi
+/// verir — geri alınamaz olan taraf silme tarafıdır.
+/// </para>
 /// </remarks>
 public static class SiteBuilderPublishPlanner
 {
@@ -70,6 +77,44 @@ public static class SiteBuilderPublishPlanner
             conflicts,
             requiresConfirmation,
             !requiresConfirmation || overwriteConfirmed);
+    }
+
+    /// <summary>
+    /// ÖKSÜZ dosyalar: daha önce KURUCUNUN yazdığı ama bu yayında artık üretilmeyenler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bu fonksiyon hiçbir şey SİLMEZ ve silinecekleri de döndürmez</b> — "artık üretilmiyor"
+    /// diyen bir listeyi döndürür. Ad bilinçli olarak <c>FilesToDelete</c> değil: bir gün biri
+    /// bu listeyi <c>File.Delete</c>'e beslemek istediğinde, adın kendisi bunun planlanmış bir
+    /// davranış OLMADIĞINI söylemeli.
+    /// </para>
+    /// <para>
+    /// <b>Neden yalnız YÖNETİLEN dosyalar:</b> kaynak, önceki yayında bizim yazdığımız dosyaların
+    /// listesidir. Hedef klasörü tarayıp "tasarımda karşılığı olmayan her dosya" demek, müşterinin
+    /// kendi yüklediği her şeyi öksüz ilan etmek olurdu — ve o liste bir gün bir "temizle"
+    /// düğmesine bağlanırsa siteyi silen şey tam olarak o olurdu.
+    /// </para>
+    /// <para>
+    /// <b>Neden görseller de sayılıyor:</b> tasarımdan çıkarılan bir görsel de diskte kalır. Ayrı
+    /// bir kural yazıp onu listeden çıkarmak, "hangi dosya öksüz" sorusuna iki farklı cevap
+    /// üretirdi; tek kural, tek liste.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> Orphans(
+        IReadOnlyCollection<string> managedFiles,
+        IReadOnlyCollection<string> filesToWrite)
+    {
+        var writes = new HashSet<string>(
+            filesToWrite.Select(Normalize).Where(path => path.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
+
+        return managedFiles
+            .Select(Normalize)
+            .Where(path => path.Length > 0 && !writes.Contains(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>

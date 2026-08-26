@@ -16,6 +16,19 @@ public sealed class SiteBuilderPublishResultDto
     /// <summary>Üzerine yazılan (kurucuya ait olmayan) dosyalar.</summary>
     public List<string> OverwrittenFiles { get; set; } = [];
 
+    /// <summary>
+    /// Bu yayından SONRA diskte kalan, artık üretilmeyen kurucu dosyaları. SİLİNMEDİLER.
+    /// </summary>
+    /// <remarks>
+    /// Yayın planında da gösterilir; sonuçta TEKRAR gösterilmesinin sebebi, kullanıcının planı
+    /// atlayıp doğrudan yayınlamış olabilmesi. Kaldırdığı bir sayfanın adresinde durmaya devam
+    /// ettiğini öğrenmesi gereken en geç an, yayının bittiği andır.
+    /// </remarks>
+    public List<string> OrphanFiles { get; set; } = [];
+
+    /// <summary>Bu yayında üretilen sayfa sayısı (ana sayfa dahil).</summary>
+    public int PageCount { get; set; }
+
     public DateTime PublishedAtUtc { get; set; }
 
     /// <summary>Sitenin ilk bağlamasından türetilen adres (varsa) — kullanıcı sonucu görebilsin.</summary>

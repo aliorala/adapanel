@@ -94,8 +94,35 @@ public sealed class SecureEntryPathMiddleware(RequestDelegate next)
             || path.StartsWithSegments("/api/v1/setup", out _)
             || path.StartsWithSegments("/api/v1/health", out _)
             || IsMailAutoconfigPath(path)
-            || IsMailListUnsubscribePath(path);
+            || IsMailListUnsubscribePath(path)
+            || IsSiteBuilderContactFormPath(path);
     }
+
+    /// <summary>
+    /// Site kurucunun ürettiği iletişim formunun gönderim ucu.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden muaf:</b> bu ucu çağıran kişi panelin kullanıcısı DEĞİLDİR — müşterinin sitesini
+    /// ziyaret eden biridir ve isteği, o sitedeki bir <c>&lt;form&gt;</c>'un düz POST'uyla yapar.
+    /// Gizli giriş yolu başlığını gönderemez (form gönderimine başlık eklenemez); muafiyet
+    /// olmasaydı uç eklenmiş ama HER gönderimde 404 dönüyor olurdu — yani form var görünüp hiç
+    /// çalışmazdı ve bunu yalnız ziyaretçi görürdü. Abonelikten çıkma ucuyla aynı gerekçe.
+    /// </para>
+    /// <para>
+    /// IP kısıtlamasını da atlaması KASITLIDIR ve aynı sebebe dayanır: ziyaretçi, panel
+    /// yöneticisinin izin listesindeki bir IP'den değil kendi rastgele adresinden bağlanır.
+    /// </para>
+    /// <para>
+    /// <b>Muafiyetin kapsamı DAR:</b> yalnız <c>/api/v1/public/site-forms</c> segmenti.
+    /// Arkasındaki denetleyici TEK bir şey yapar (site SAHİBİNİN kaydettiği adrese bir posta
+    /// gönderir); site listelemez, tasarım okutmaz, "bu site var mı" sorusunu cevaplamaz ve
+    /// IP/site/gönderen başına hız sınırlıdır. <c>StartsWithSegments</c> segment sınırına baktığı
+    /// için başka bir <c>/api/v1/public…</c> ucu bu muafiyete SIZAMAZ.
+    /// </para>
+    /// </remarks>
+    internal static bool IsSiteBuilderContactFormPath(PathString path) =>
+        path.StartsWithSegments(AdaPanel.Infrastructure.SiteBuilder.SiteBuilderContactEndpoint.RoutePrefix, out _);
 
     /// <summary>
     /// Dağıtım listesinden self-servis çıkma ucu.
