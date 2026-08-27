@@ -41,8 +41,16 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
             return result;
         }
 
+        // SIKISTIRILMIS GUNLER DE SAYILIR.
+        //
+        // Eskiden yalniz "*.log" toplaniyordu. Log dondurme eklendikten sonra kapanmis gunlukler
+        // ZSTD ile arsivleniyor (".log.zst"), yani o gunler istatistik ekranindan SESSIZCE
+        // dusuyordu: musteri gecmis trafigini kaybediyor ve sebebini hicbir yerde goremiyordu.
+        // Dosya biciminin nasil acilacagina UZANTIYA gore degil ICERIGE gore karar veriliyor
+        // (SeoLogFileSet.OpenText -> BackupDumpCompression.DetectFormat), boylece elle ".gz"
+        // yapilmis bir gunluk de okunur.
         var files = new DirectoryInfo(logsDirectory)
-            .GetFiles("*.log", SearchOption.TopDirectoryOnly)
+            .GetFiles("*.log*", SearchOption.TopDirectoryOnly)
             .Where(file => file.LastWriteTimeUtc.Date >= cutoff)
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .ToArray();
@@ -91,8 +99,9 @@ public sealed class WebStatisticsService(IIisSiteService iisSiteService) : IWebS
         Func<int> currentCount,
         CancellationToken cancellationToken)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
+        // Sikistirilmis gunlukleri de okur; bicim uzantidan degil ICERIKTEN cozulur. Paylasim
+        // kipi (ReadWrite | Delete) orada da korunuyor -- IIS o anda yaziyor olabilir.
+        using var reader = Seo.SeoLogFileSet.OpenText(path);
 
         await foreach (var record in W3cLogReader.ReadAsync(reader, cancellationToken))
         {
