@@ -4,8 +4,8 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **24.08.2026** · Yayındaki sürüm: **0.7.1** · main: temiz
-Testler: **3443 yeşil** · typecheck + build temiz · i18n TR/EN 4511 = 4511
+Son güncelleme: **27.08.2026** · Yayındaki sürüm: **0.7.2** · main: temiz
+Testler: **3578 yeşil** · typecheck + build temiz · i18n TR/EN 4588 = 4588
 
 ---
 
@@ -27,6 +27,7 @@ Testler: **3443 yeşil** · typecheck + build temiz · i18n TR/EN 4511 = 4511
 | 0.6.6 | Silme bütünlüğü, tarama ilerlemesi, kiracı bağı, gözlemlenebilirlik |
 | 0.7.0 | **Kendi `.htaccess` desteğimiz** — Plesk for Windows'da olmayan özellik |
 | 0.7.1 | Kalan bütün teknik borçların kapatılması + iki kırılgan testin düzeltilmesi |
+| 0.7.2 | Site kurucuda çok sayfa + çalışan iletişim formu, SEO günlük analizi, istatistikte sıkıştırılmış günler |
 
 ---
 
@@ -66,8 +67,7 @@ FTP bağlantısı, bir deneme müşterisi silme, `.htaccess` "yalnız gözlem" k
   numarası UYDURMA olur. Altyapı hazırlanabilir; sayı uydurulmaz.
 - **Site kurucuda sürükle-bırak** — üretilen işaretlemenin şeklini kullanıcıya bırakmak,
   kaçırma güvenilirliğini bırakmaktır (depolanmış XSS).
-- **Site kurucuda çok sayfa / iletişim formu**, **SEO log dosyası analizi** — yapılabilir,
-  sıraya alındı.
+- ~~Site kurucuda çok sayfa / iletişim formu, SEO log dosyası analizi~~ — **0.7.2'de yapıldı**.
 - **Kod imzalama** — paket imzasız; kural yazılı ve testli, `RequireSignature` bayrağıyla
   açılır. Sertifika ticari karar.
 
