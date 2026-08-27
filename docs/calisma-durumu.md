@@ -55,9 +55,16 @@ Bu makinede IIS siteleri, Windows DNS, veritabanı motorları, ayakta Stalwart, 
 ve WHMCS **yok**. Son sürümlerde erişim izinleri, silme kuralları, kullanıcı silme yanıtı
 değişti ve her isteğe bir modül eklendi.
 
-**İSTİSNA:** `.htaccess` modülü canlıda DOĞRULANDI (24.08.2026, `alioral.xyz` — Laravel
-rotaları temiz adresle 200 dönüyor ve oturum çerezi basıyor). Modülün gerçek IIS'te
-çalıştığı artık ölçülmüş bilgi.
+**DÜZELTME (27.08.2026):** Daha önce buraya *".htaccess canlıda doğrulandı"* yazmıştım —
+**YANLIŞTI.** `alioral.xyz` üzerinde gördüğüm temiz adresler, panelin ZATEN VAR OLAN Laravel/
+WordPress `web.config` yeniden yazma özelliğinden geliyor olabilir; iki mekanizmayı ayırt etmeden
+sonuca atladım. Doğru test: `.htaccess` dosyasını geçici olarak yeniden adlandırıp adreslerin hâlâ
+çalışıp çalışmadığına bakmak.
+
+Dahası: bu makineye 0.7.2 kurulduğunda ölçüldü — **modül DLL'i pakette HİÇ YOKTU.** Modül
+solution'da olduğu için testleri yeşildi ama publish yalnız API projesini alıyordu. Yani
+`.htaccess` özelliği 0.7.0, 0.7.1 ve 0.7.2'de ÖLÜ yayınlandı. Paketleme düzeltildi ve
+`HtaccessModulePackagingTests` ile nöbete bağlandı.
 
 Hâlâ elle denenmesi gerekenler: site açma/silme, yedek alma/geri yükleme, posta gönderme,
 FTP bağlantısı, bir deneme müşterisi silme, `.htaccess` "yalnız gözlem" kipi.

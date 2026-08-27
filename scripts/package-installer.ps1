@@ -34,6 +34,29 @@ if ($LASTEXITCODE -ne 0) { throw "Publish basarisiz." }
 
 Copy-Item (Join-Path $repo "components.json") (Join-Path $publishDir "components.json") -Force
 
+# .HTACCESS IIS MODULU -- AYRI DERLENIR, cunku net48 hedefler (IIS IHttpModule ve GAC bunu
+# gerektiriyor); panelin kendisi net8'dir ve tek publish ikisini birden uretemez.
+#
+# NEDEN BU BLOK VAR: modul solution'da olduğu icin `dotnet test` onu derliyordu ve BUTUN TESTLER
+# YESILDI -- ama publish yalnizca AdaPanel.Api.csproj'u aliyor, .iss'te de Files girdisi yoktu.
+# Sonuc: .htaccess ozelligi pakete HIC girmedi. Kurulum, var OLMAYAN bir DLL'i gosteren bir
+# betik calistiriyordu; ozellik 0.7.0-0.7.2'de olu olarak yayinlandi. Yesil test, teslim edilmis
+# demek DEGILDIR -- teslim yolunun kendisi de olculmeliydi.
+$moduleProject = Join-Path $repo "src\AdaPanel.HtaccessModule\AdaPanel.HtaccessModule.csproj"
+$moduleOut = Join-Path $repo "artifacts\htaccess-module"
+if (Test-Path $moduleOut) { Remove-Item $moduleOut -Recurse -Force }
+& $dotnet build $moduleProject -c Release -o $moduleOut "/p:Version=$Version" --nologo
+if ($LASTEXITCODE -ne 0) { throw ".htaccess modulu derlenemedi." }
+
+$moduleDll = Join-Path $moduleOut "AdaPanel.HtaccessModule.dll"
+if (-not (Test-Path $moduleDll)) { throw ".htaccess modulu uretilmedi: $moduleDll" }
+Copy-Item $moduleDll (Join-Path $publishDir "AdaPanel.HtaccessModule.dll") -Force
+
+# Paket icinde GERCEKTEN oldugunu dogrula -- bu satir olmasaydi ayni hata sessizce geri gelirdi.
+$packagedModule = Join-Path $publishDir "AdaPanel.HtaccessModule.dll"
+if (-not (Test-Path $packagedModule)) { throw ".htaccess modulu publish klasorune kopyalanamadi." }
+Write-Host (".htaccess modulu paketlendi: {0:N0} bayt" -f (Get-Item $packagedModule).Length)
+
 if ($SkipComponentAudit) {
     Write-Warning "Bilesen paketleri denetimi ATLANDI (-SkipComponentAudit). Yayinlanacak paket icin ATLAMAYIN."
 } else {

@@ -6605,3 +6605,33 @@ dusse yesil "tamamlandi".
 3. **Durum kaydi depoda tutulmali.** `docs/calisma-durumu.md` olusturuldu; elektrik/kota
    kesintisinde "kaldigimiz yerden devam" oradan okunuyor. Bu turda uc ajan isini bitirip
    COMMIT ETMEDEN durdu -- ajan durdurulunca commit kontrolu sart.
+
+## 219) DUZELTME: .htaccess 0.7.0-0.7.2'de OLU YAYINLANDI (27.08.2026)
+
+Bolum 217-218'de ".htaccess canlida dogrulandi (alioral.xyz)" yazmistim. **YANLIS.**
+
+**Iki ayri hata yaptim:**
+
+1. **Yanlis cikarim.** alioral.xyz'de temiz adreslerin calistigini gorup ".htaccess calisiyor"
+   dedim. Ama panelin ZATEN Laravel/WordPress icin web.config yeniden yazma ozelligi var
+   (README'de yillardir listeli). Iki mekanizmayi ayirt etmedim. Dogru test: .htaccess'i
+   yeniden adlandirip adreslerin hala calisip calismadigina bakmakti.
+
+2. **Teslim yolu hic olculmedi.** Bu makineye 0.7.2 kuruldugunda olctum:
+   `AdaPanel.HtaccessModule.dll` kurulum klasorunde YOK, GAC'ta kayit YOK, publish ciktisinda YOK.
+   `.iss` DLL'i CAGIRIYOR ama kopyalayan Files girdisi yoktu; `package-installer.ps1` yalnizca
+   `AdaPanel.Api.csproj`'u publish ediyordu. Modul solution'da oldugu icin `dotnet test` onu
+   derliyordu ve 100+ testi YESILDI -- ama pakete hic girmedi.
+
+**Sonuc:** ozellik uc surumde (0.7.0, 0.7.1, 0.7.2) olu yayinlandi. Kurulum, var OLMAYAN bir
+DLL'i gosteren kayit betigini calistirip sessizce geciyordu.
+
+**DERS -- bu oturumun en pahali dersi ve tam da avladigimiz sinifin kendisi:**
+**Yesil test "teslim edildi" demek DEGILDIR.** Butun oturum boyunca "kod var ama calismiyor"
+hatalarini avladik ve sonunda ayni hatayi BIZ urettik. Testler kodu olcuyordu, teslim yolunu
+degil. Bir ozellik icin sorulacak son soru "testi gecti mi" degil, "PAKETIN ICINDE MI".
+
+Duzeltme: `package-installer.ps1` modulu net48 hedefiyle derleyip publish klasorune kopyaliyor
+ve eksikse DURUYOR; `HtaccessModulePackagingTests` (4 test) bunu nobete bagliyor.
+Dogrulandi: modul pakette 177.152 bayt, paket 63 KB buyudu, basvurulari yalniz
+mscorlib/System/System.Core/System.Web (GAC on kosulu).
