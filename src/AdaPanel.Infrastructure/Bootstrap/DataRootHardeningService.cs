@@ -100,6 +100,33 @@ public static class DataRootHardeningService
                 {
                     logger.LogWarning(dirException, "Veri kökü ACL ayarı '{Directory}' için atlandı.", dir);
                 }
+
+                // K3 -- CANLIDA ÖLÇÜLDÜ, klasörü kilitlemek YETMİYOR.
+                //
+                // 0.7.3 kurulu bir makinede yetkisiz kullanıcı olarak ölçüldü: `certs` klasörünün
+                // ACL'i okunamıyordu (yani klasör sertleşmişti) ama içindeki `panel.password`
+                // (32 bayt) ve `panel.pfx` (2725 bayt) HÂLÂ OKUNABİLİYORDU. Sebep: klasörün DACL'ini
+                // sıfırdan kurmak, o klasördeki DOSYALARIN kendi üzerlerindeki açık ACE'leri
+                // KALDIRMAZ. Sertifika betiği dosyaları kurulum sırasında yazıyor; sonra servis
+                // açılışında klasör sertleşiyor ama dosyaların izni olduğu gibi kalıyor.
+                //
+                // Pratik sonucu: barındırılan herhangi bir sitenin kodu panelin HTTPS özel anahtar
+                // parolasını okuyabiliyordu.
+                //
+                // YALNIZ ÜST SEVİYE, özyineleme YOK: `backups` altında yüz binlerce dosya olabilir
+                // ve her servis açılışında hepsini gezmek açılışı kilitlerdi. Hassas dosyalar
+                // (parola, pfx, anahtar, veritabanı) klasörün doğrudan altında duruyor.
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly))
+                    {
+                        ProtectFile(file, logger);
+                    }
+                }
+                catch (Exception fileException)
+                {
+                    logger.LogWarning(fileException, "Veri kökü dosya ACL kilidi '{Directory}' için atlandı.", dir);
+                }
             }
 
             logger.LogInformation("Veri kökü hassas klasörleri sertleştirildi (DACL sıfırdan: SYSTEM/Administrators/servis hesabı).");
