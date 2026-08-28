@@ -183,6 +183,47 @@ public sealed class FilesController(
         return Ok(ApiResponse<MoveFilesResultDto>.Ok(result, "files.moved"));
     }
 
+    /// <summary>
+    /// Bir ya da birden çok ögeyi başka klasöre KOPYALAR; kaynak yerinde kalır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kapsam denetimi taşımadakiyle AYNIDIR ve aynı sebeple HER YOL İÇİN AYRI yapılır.</b>
+    /// Kopyalama silmediği için "daha zararsız" görünür, ama izolasyon açısından farkı yoktur:
+    /// yalnız hedefi doğrulamak, kiracının göremeyeceği bir dosyanın İÇERİĞİNİ kendi klasörüne
+    /// çekmesi (yani doğrudan veri sızması) demektir; yalnız kaynağı doğrulamak ise başka kiracının
+    /// sitesine dosya bırakmaktır.
+    /// </para>
+    /// </remarks>
+    [HttpPost("copy")]
+    public async Task<ActionResult<ApiResponse<CopyFilesResultDto>>> CopyAsync([FromBody] CopyFilesRequest request, CancellationToken cancellationToken)
+    {
+        foreach (var source in request.Paths ?? [])
+        {
+            await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, source, allowRoot: false, cancellationToken);
+        }
+
+        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
+
+        var result = await fileService.CopyAsync(request, cancellationToken);
+
+        // Kayıt, kısmi başarısızlığı da yazar. İZ YALNIZCA YOL VE SEBEP tutar — dosya İÇERİĞİ asla:
+        // denetim kaydı, kopyalanan dosyanın gizli verisinin ikinci bir kopyası olamaz.
+        var failures = result.Items
+            .Where(item => !item.Copied)
+            .Select(item => $"{item.SourcePath} ({item.ErrorKey})")
+            .ToArray();
+
+        await WriteAuditAsync(
+            "files.copied",
+            request.DestinationPath,
+            $"{result.CopiedCount} of {result.CopiedCount + result.FailedCount} item(s) copied."
+                + (failures.Length > 0 ? $" Not copied: {string.Join("; ", failures)}." : string.Empty),
+            cancellationToken);
+
+        return Ok(ApiResponse<CopyFilesResultDto>.Ok(result, "files.copied"));
+    }
+
     // ACL değişikliği sistem genelini etkileyebilir (örn. Everyone'a izin); yalnız yönetici.
     [HttpPost("acl")]
     [Authorize(Roles = "Administrator")]

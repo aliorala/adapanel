@@ -156,3 +156,42 @@ export async function setHtaccessMode(siteName: string, mode: HtaccessMode, note
   );
   return response.data.data;
 }
+
+/**
+ * Sunucu geneli anahtarın durumu — `.htaccess` desteğini AÇAN tek düğme.
+ *
+ * <p>
+ * Site kipi tek başına hiçbir şey yapmaz: etkin kip, sunucu ile site anahtarının EN DÜŞÜĞÜDÜR.
+ * Bu uç gelene kadar sunucu anahtarının panelde karşılığı yoktu ve arayüz kullanıcıya
+ * `%ProgramData%\AdaPanel\htaccess\module.switch` dosyasını ELLE açmasını söylüyordu — yani
+ * özellik panelden kullanılamıyordu.
+ * </p>
+ * <p>
+ * Rota SİTE AĞACININ DIŞINDA (`/htaccess/server-mode`, `/sites/...` değil): `sites` altında
+ * `server-mode` sabit bir segment olurdu ve `GET /sites/{siteName}` ucunu "server-mode" adlı
+ * bir site için gölgelerdi.
+ * </p>
+ * <p>
+ * Uç YALNIZ Administrator'a açık. Bayi de dahil hiçbir kiracı çağıramaz: bu anahtar sunucudaki
+ * HER siteyi aynı anda etkiler, dolayısıyla çağıranın kendi kapsamının dışına çıkar.
+ * </p>
+ */
+export type HtaccessServerSwitchState = {
+  mode: HtaccessMode;
+  switchFileExists: boolean;
+  /** Acil durum kurtarma için gösterilir; uç yönetici-only olduğu için sızıntı değil. */
+  switchFilePath: string;
+};
+
+export async function getServerHtaccessMode() {
+  const response = await apiClient.get<ApiEnvelope<HtaccessServerSwitchState>>("/htaccess/server-mode");
+  return response.data.data;
+}
+
+export async function setServerHtaccessMode(mode: HtaccessMode, note: string) {
+  const response = await apiClient.post<ApiEnvelope<HtaccessServerSwitchState>>(
+    "/htaccess/server-mode",
+    { mode, note }
+  );
+  return response.data.data;
+}

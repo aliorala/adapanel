@@ -211,9 +211,12 @@ internal sealed class HtaccessSwitchStore
     /// ATOMİK yazım: geçici dosyaya yaz + üzerine taşı.
     ///
     /// NEDEN: modül bu dosyayı HER TTL'de okuyor. Doğrudan üzerine yazılsaydı, okuma tam yazımın
-    /// ortasına denk geldiğinde YARIM içerik okunur, "enabled=1" satırı henüz yazılmamış olabilir
-    /// ve modül o an KAPANIRDI. Kapatma tarafında zararsız, ama AÇMA tarafında rastgele
-    /// çalışan/çalışmayan bir özellik demekti.
+    /// ortasına denk geldiğinde YARIM içerik okunur ve modül o an yanlış kipe düşerdi. ÖLÇÜLDÜ:
+    /// modülün okuma tutamağı açıkken <c>File.WriteAllText</c> BAŞARIYLA yazıyor (paylaşım
+    /// bayrakları buna izin veriyor), yani "üzerine yazma" yolunda yırtık okuma teorik değil
+    /// gerçek. Yarım dosyanın yönü de garanti altında değil: mod satırı henüz yazılmamışsa
+    /// ayrıştırıcı varsayılana düşerdi — bu yüzden <see cref="HtaccessSwitchFile.Render"/> önce
+    /// <c>mode</c>, sonra <c>enabled</c> yazıyor.
     /// </summary>
     private static void WriteAtomic(string path, string content)
     {
@@ -227,7 +230,7 @@ internal sealed class HtaccessSwitchStore
         try
         {
             File.WriteAllText(temporary, content);
-            File.Move(temporary, path, overwrite: true);
+            ReplaceWithRetry(temporary, path);
         }
         finally
         {
@@ -241,6 +244,46 @@ internal sealed class HtaccessSwitchStore
                 {
                     // En iyi çaba; artık geçici dosya zararsız.
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Geçici dosyayı hedefin üzerine taşır; GEÇİCİ paylaşım çakışmalarında sınırlı sayıda yeniden dener.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜM (bu makinede çalıştırılarak):</b> hedef dosya BAŞKA BİR SÜREÇTE açıkken
+    /// <c>File.Move(..., overwrite: true)</c> <c>UnauthorizedAccessException</c> veriyor ve bu,
+    /// okuyanın paylaşım bayraklarından BAĞIMSIZ — <c>FileShare.Delete</c> verilmiş olsa da
+    /// (modülün okuyucusu tam olarak öyle açıyor) sonuç değişmiyor. Windows'un yeniden adlandırma
+    /// semantiği açık bir hedefi değiştirmeye izin vermiyor. Yani modül anahtarı okurken panel
+    /// aynı anda yazmaya kalkarsa yazım GEÇİCİ olarak reddediliyor.
+    /// </para>
+    /// <para>
+    /// <b>Neden yeniden deneme, neden "üzerine yaz"a düşmek DEĞİL:</b> çakışma mikro saniyelik ve
+    /// GEÇİCİ (modül dosyayı okuyup hemen kapatıyor); geçici bir çakışmanın doğru cevabı kısa,
+    /// SINIRLI bir yeniden denemedir. Üzerine yazmaya düşmek atomikliği tamamen bırakmak olurdu.
+    /// Denemeler tükenirse istisna FIRLATILIR: yönetici "açtım" sanıp kapalı bir sunucuyla
+    /// kalmamalı. Başarısız denemede hedef dosya ESKİ, tam içeriğiyle yerinde kalır (ölçüldü) —
+    /// yani en kötü sonuç "değişiklik olmadı"dır, "yarım dosya" değil.
+    /// </para>
+    /// </remarks>
+    private static void ReplaceWithRetry(string temporary, string path)
+    {
+        const int denemeSayisi = 5;
+
+        for (var deneme = 1; ; deneme++)
+        {
+            try
+            {
+                File.Move(temporary, path, overwrite: true);
+                return;
+            }
+            catch (Exception istisna)
+                when (deneme < denemeSayisi && istisna is UnauthorizedAccessException or IOException)
+            {
+                Thread.Sleep(20);
             }
         }
     }

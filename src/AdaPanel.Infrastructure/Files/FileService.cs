@@ -64,7 +64,45 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         EnsureSiteTarget(target);
         EnsureNotSiteRoot(target);
         Directory.CreateDirectory(Path.GetDirectoryName(target.PhysicalPath) ?? target.SandboxRoot);
-        await File.WriteAllTextAsync(target.PhysicalPath, request.Content ?? string.Empty, Encoding.UTF8, cancellationToken);
+
+        if (request.FailIfExists)
+        {
+            // VARLIK DENETİMİ AYRI BİR ADIM DEĞİL: `File.Exists` ile bakıp sonra yazmak, iki adım
+            // arasında dosyayı oluşturan ikinci bir istek için AÇIK bir yarış bırakır ve o
+            // istemcinin dosyasını sıfırlar. `FileMode.CreateNew` bakmayı ve yaratmayı işletim
+            // sisteminde TEK işleme indirir: dosya varsa yaratma hiç olmaz.
+            //
+            // Klasör de burada yakalanır: aynı adlı bir KLASÖR varsa `CreateNew` yine hata verir
+            // ve kullanıcı "zaten var" cevabı alır — sessizce başarısız olmaz.
+            try
+            {
+                await using var akis = new FileStream(
+                    target.PhysicalPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await using var yazici = new StreamWriter(akis, Encoding.UTF8);
+                await yazici.WriteAsync((request.Content ?? string.Empty).AsMemory(), cancellationToken);
+            }
+            catch (IOException) when (File.Exists(target.PhysicalPath))
+            {
+                // IOException'ın TEK sebebi "zaten var" değildir (disk dolu, dosya kilitli...).
+                // Süzgeç bu yüzden koşullu: yalnızca gerçekten varsa "zaten var" denir, diğer
+                // hatalar olduğu gibi yukarı çıkar ve yanlış bir sebeple maskelenmez.
+                throw new AppException("files.already_exists", 409, 409);
+            }
+            catch (UnauthorizedAccessException) when (Directory.Exists(target.PhysicalPath))
+            {
+                // ÖLÇÜLDÜ: aynı adda bir KLASÖR varsa Windows `IOException` değil
+                // `UnauthorizedAccessException` atıyor ("bir dizini dosya olarak açamazsın").
+                // Süzgeç yine koşullu — klasör gerçekten yoksa bu istisna GERÇEK bir izin
+                // reddidir ve "zaten var" diye maskelenmesi kullanıcıyı yanlış yere bakmaya
+                // gönderirdi.
+                throw new AppException("files.already_exists", 409, 409);
+            }
+        }
+        else
+        {
+            await File.WriteAllTextAsync(target.PhysicalPath, request.Content ?? string.Empty, Encoding.UTF8, cancellationToken);
+        }
+
         return await GetWorkspaceAsync(normalizedPath, cancellationToken);
     }
 
@@ -110,34 +148,128 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// </remarks>
     public async Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default)
     {
-        var sources = (request.Paths ?? [])
+        // GÜVENLİK ÖN HAZIRLIĞI TEK KAYNAKTAN gelir; taşıma ile kopyalama arasında farkı olan tek
+        // şey ÖGE BAŞINA yapılan iştir (aşağıdaki MoveOne).
+        var plan = await BuildTransferPlanAsync(
+            request.Paths,
+            request.DestinationPath,
+            request.NewName,
+            new TransferErrorKeys
+            {
+                SourceRequiredMessageKey = "files.move_source_required",
+                RenameSingleOnlyMessageKey = "files.move_rename_single_only",
+                DestinationMissingMessageKey = "files.move_destination_missing"
+            },
+            cancellationToken);
+
+        var results = new List<MoveFileResultDto>(plan.Items.Count);
+        foreach (var item in plan.Items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(MoveOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite));
+        }
+
+        return new MoveFilesResultDto
+        {
+            MovedCount = results.Count(item => item.Moved),
+            FailedCount = results.Count(item => !item.Moved),
+            Items = results.ToArray(),
+            Workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken)
+        };
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// İstek biçimi/güvenlik hatası ile öge başına hata ayrımı <see cref="MoveAsync"/> ile aynıdır;
+    /// gerekçesi orada yazılıdır ve burada tekrar edilmez.
+    /// </para>
+    /// </remarks>
+    public async Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request, CancellationToken cancellationToken = default)
+    {
+        // Taşımayla AYNI ön hazırlık. Bu satırın kopya bir doğrulama bloğuna dönüşmesi, iki akıştan
+        // birinde bir denetimin unutulması demektir — ve o an tek başına deliktir.
+        var plan = await BuildTransferPlanAsync(
+            request.Paths,
+            request.DestinationPath,
+            request.NewName,
+            new TransferErrorKeys
+            {
+                SourceRequiredMessageKey = "files.copy_source_required",
+                RenameSingleOnlyMessageKey = "files.copy_rename_single_only",
+                DestinationMissingMessageKey = "files.copy_destination_missing"
+            },
+            cancellationToken);
+
+        var results = new List<CopyFileResultDto>(plan.Items.Count);
+        foreach (var item in plan.Items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(CopyOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite, cancellationToken));
+        }
+
+        return new CopyFilesResultDto
+        {
+            CopiedCount = results.Count(item => item.Copied),
+            FailedCount = results.Count(item => !item.Copied),
+            Items = results.ToArray(),
+            Workspace = await GetWorkspaceAsync(plan.DestinationPath, cancellationToken)
+        };
+    }
+
+    /// <summary>
+    /// Taşıma ve kopyalamanın ORTAK güvenlik ön hazırlığı: isteği doğrular, kaynak/hedef çiftlerini
+    /// ÇÖZER ve her birini sanal alan kapısından geçirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden tek yardımcı:</b> bu blok iki akışta da BİREBİR aynı olmak zorundadır. Kopyalanmış
+    /// bir doğrulama listesinde birini sıkılaştırıp diğerini unutmak an meselesidir ve unutulan tek
+    /// denetim (ör. hedefte <c>EnsureInsideSandbox</c>) tek başına sanal alandan çıkış demektir.
+    /// Öge başına yapılan İŞ ise ayrı kalır — orada davranış gerçekten farklıdır.
+    /// </para>
+    /// <para>
+    /// <b>Plan ÖNCE tümüyle kurulur, sonra işlenir:</b> biçim/güvenlik hatası veren bir istek, hiçbir
+    /// öge dosya sistemine dokunmadan reddedilir. Doğrulamayı işin arasına serpiştirmek, "istek
+    /// tümüyle reddedildi" denen bir çağrının üçüncü ögede patlayıp ilk ikisini çoktan taşımış
+    /// olması demekti.
+    /// </para>
+    /// </remarks>
+    private async Task<TransferPlan> BuildTransferPlanAsync(
+        string[]? paths,
+        string? destinationPath,
+        string? newName,
+        TransferErrorKeys errorKeys,
+        CancellationToken cancellationToken)
+    {
+        var sources = (paths ?? [])
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .ToArray();
         if (sources.Length == 0)
         {
-            throw new AppException("files.move_source_required", 400, 400);
+            throw new AppException(errorKeys.SourceRequiredMessageKey, 400, 400);
         }
 
         // Yeniden adlandırma TEK ögeye özgüdür: sekiz dosyaya aynı adı vermek, yedisinin sessizce
-        // kaybolması demek olurdu.
-        if (!string.IsNullOrWhiteSpace(request.NewName) && sources.Length > 1)
+        // kaybolması (kopyalamada: yedisinin sessizce ezilmesi) demek olurdu.
+        if (!string.IsNullOrWhiteSpace(newName) && sources.Length > 1)
         {
-            throw new AppException("files.move_rename_single_only", 400, 400);
+            throw new AppException(errorKeys.RenameSingleOnlyMessageKey, 400, 400);
         }
 
-        var destinationPath = NormalizeVirtualPath(request.DestinationPath);
-        var destination = await ResolveTargetAsync(destinationPath, cancellationToken);
+        var normalizedDestination = NormalizeVirtualPath(destinationPath);
+        var destination = await ResolveTargetAsync(normalizedDestination, cancellationToken);
         EnsureSiteTarget(destination);
         EnsureInsideSandbox(destination);
 
         // Hedef klasör YARATILMAZ, var olması istenir: yazım hatası yüzünden oluşan bir klasöre
-        // sekiz dosya taşımak, onları "kaybolmuş" hâle getirir.
+        // sekiz dosya taşımak/kopyalamak, onları "kaybolmuş" hâle getirir.
         if (!Directory.Exists(destination.PhysicalPath))
         {
-            throw new AppException("files.move_destination_missing", 404, 404);
+            throw new AppException(errorKeys.DestinationMissingMessageKey, 404, 404);
         }
 
-        var results = new List<MoveFileResultDto>(sources.Length);
+        var items = new List<TransferItem>(sources.Length);
         foreach (var rawSource in sources)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -145,17 +277,17 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             var sourcePath = NormalizeVirtualPath(rawSource);
 
             // Kaynağın çözümü sanal alan + bağlantı (junction/symlink) denetimini de yapar; bir
-            // bağlantıyı taşımak, hedefindeki müşteri sitesini başka bir yere bağlamak demektir.
+            // bağlantıyı taşımak/kopyalamak, hedefindeki müşteri sitesine dokunmak demektir.
             var source = await ResolveTargetAsync(sourcePath, cancellationToken);
             EnsureSiteTarget(source);
             EnsureNotSiteRoot(source);
             EnsureInsideSandbox(source);
 
-            var name = string.IsNullOrWhiteSpace(request.NewName)
+            var name = string.IsNullOrWhiteSpace(newName)
                 ? Path.GetFileName(source.PhysicalPath)
-                : EnsureSimpleName(request.NewName);
+                : EnsureSimpleName(newName);
 
-            var targetPath = CombineVirtualPath(destinationPath, name);
+            var targetPath = CombineVirtualPath(normalizedDestination, name);
 
             // Hedef de AYNI kapıdan geçer: adı ben ürettiğim için "güvenli varsayıp" atlamak,
             // korumanın tam da yeni uçta delinmesi olurdu.
@@ -164,16 +296,10 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             EnsureNotSiteRoot(target);
             EnsureInsideSandbox(target);
 
-            results.Add(MoveOne(source, target, sourcePath, targetPath, request.Overwrite));
+            items.Add(new TransferItem(source, target, sourcePath, targetPath));
         }
 
-        return new MoveFilesResultDto
-        {
-            MovedCount = results.Count(item => item.Moved),
-            FailedCount = results.Count(item => !item.Moved),
-            Items = results.ToArray(),
-            Workspace = await GetWorkspaceAsync(destinationPath, cancellationToken)
-        };
+        return new TransferPlan(normalizedDestination, items);
     }
 
     /// <summary>Tek ögeyi taşır; başarısızlığı İSTİSNA olarak değil, rapor satırı olarak döner.</summary>
@@ -261,6 +387,151 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             TargetPath = targetPath,
             Moved = true
         };
+    }
+
+    /// <summary>Tek ögeyi kopyalar; başarısızlığı İSTİSNA olarak değil, rapor satırı olarak döner.</summary>
+    /// <remarks>
+    /// Kural listesi <see cref="MoveOne"/> ile aynıdır ve gerekçeleri de aynıdır; burada yalnızca
+    /// KOPYALAMAYA ÖZGÜ olan kısımlar ayrıca açıklanır.
+    /// </remarks>
+    private static CopyFileResultDto CopyOne(
+        ResolvedTarget source,
+        ResolvedTarget target,
+        string sourcePath,
+        string targetPath,
+        bool overwrite,
+        CancellationToken cancellationToken)
+    {
+        var basarisiz = (string anahtar) => new CopyFileResultDto
+        {
+            SourcePath = sourcePath,
+            Copied = false,
+            ErrorKey = anahtar
+        };
+
+        var kaynakKlasor = Directory.Exists(source.PhysicalPath);
+        if (!kaynakKlasor && !File.Exists(source.PhysicalPath))
+        {
+            return basarisiz("files.not_found");
+        }
+
+        if (string.Equals(source.PhysicalPath, target.PhysicalPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // Kaynağın kendi üstüne kopyalanması: dosya sistemi bunu ya reddeder ya da dosyayı
+            // BOŞALTIR. "Çoğalt" isteniyorsa NewName verilir.
+            return basarisiz("files.copy_same_path");
+        }
+
+        // KLASÖRÜ KENDİ ALT AĞACINA kopyalamak: taşımadan daha kötüdür, çünkü özyineleme
+        // kopyalarken büyümeye devam eden bir ağacı okur — disk dolana kadar süren bir kopya.
+        if (kaynakKlasor && PathContainment.IsInsideRoot(source.PhysicalPath, target.PhysicalPath))
+        {
+            return basarisiz("files.copy_into_itself");
+        }
+
+        if (Directory.Exists(target.PhysicalPath))
+        {
+            // KLASÖR, Overwrite ile bile EZİLMEZ (gerekçe MoveOne'da): ezmek, hedef klasörün
+            // özyinelemeli silinmesi demektir.
+            return basarisiz("files.copy_target_exists");
+        }
+
+        if (File.Exists(target.PhysicalPath))
+        {
+            if (!overwrite)
+            {
+                return basarisiz("files.copy_target_exists");
+            }
+
+            if (kaynakKlasor)
+            {
+                // Klasörü bir dosyanın üstüne yazmak anlamsız; sessizce "başarılı" demek yerine söylenir.
+                return basarisiz("files.copy_target_exists");
+            }
+        }
+
+        var baglantiAtlandi = false;
+        try
+        {
+            if (kaynakKlasor)
+            {
+                baglantiAtlandi = KlasoruKopyala(source.PhysicalPath, target.PhysicalPath, cancellationToken);
+            }
+            else
+            {
+                // overwrite yalnız yukarıdaki kapıdan geçmiş olabilir; hedef yoksa bayrağın etkisi yok.
+                File.Copy(source.PhysicalPath, target.PhysicalPath, overwrite);
+            }
+        }
+        catch (IOException)
+        {
+            // En sık sebebi: disk dolu, dosya kullanımda ya da yol sınırının aşılması. Yalanlamak
+            // yerine bu ögenin kopyalanmadığı raporlanır.
+            return basarisiz("files.copy_failed");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return basarisiz("files.copy_denied");
+        }
+
+        return new CopyFileResultDto
+        {
+            SourcePath = sourcePath,
+            TargetPath = targetPath,
+            Copied = true,
+
+            // Kopya OLUŞTU ama EKSİK: atlanan bağlantı susulmaz. "Tamamlandı" deyip bağlantıyı
+            // yutmak, kullanıcının eksik kopyayı tam sanmasına yol açardı.
+            ErrorKey = baglantiAtlandi ? "files.copy_link_skipped" : string.Empty
+        };
+    }
+
+    /// <summary>
+    /// Klasörü ÖZYİNELEMELİ kopyalar. Yolu üzerindeki bağlantı (junction/symlink) ögeleri ATLANIR;
+    /// en az bir tanesi atlandıysa <c>true</c> döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bağlantı neden TAKİP EDİLMEZ:</b> iki ayrı felaket birden. (1) Bağlantı kendi üst ağacını
+    /// gösteriyorsa özyineleme SONSUZ döngüye girer ve diski doldurur. (2) Bağlantı sanal alanın
+    /// DIŞINI gösteriyorsa (panelin veri klasörü, başka kiracının sitesi, <c>C:\Windows</c>) o
+    /// içerik olduğu gibi kiracının okuyabildiği bir klasöre KOPYALANIR — sanal alan denetimini yol
+    /// çözümlemesinde tuttuğumuz hâlde, özyinelemenin içinden delinmiş olurdu.
+    /// </para>
+    /// <para>
+    /// Aynı karar listelemede (<see cref="GetWorkspaceAsync"/>) ve aramada
+    /// (<c>EnumerateSafeFiles</c>) de verilmiştir: bağlantılar panelin dosya görüşünde YOKTUR.
+    /// </para>
+    /// </remarks>
+    private static bool KlasoruKopyala(string kaynak, string hedef, CancellationToken cancellationToken)
+    {
+        var baglantiAtlandi = false;
+        Directory.CreateDirectory(hedef);
+
+        foreach (var oge in new DirectoryInfo(kaynak).EnumerateFileSystemInfos())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (oge.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                baglantiAtlandi = true;
+                continue;
+            }
+
+            var altHedef = Path.Combine(hedef, oge.Name);
+            if (oge is DirectoryInfo altKlasor)
+            {
+                baglantiAtlandi |= KlasoruKopyala(altKlasor.FullName, altHedef, cancellationToken);
+            }
+            else
+            {
+                // Hedef klasör bu çağrıda yaratıldı; üzerine yazılacak bir şey yok, bayrak yalnızca
+                // aynı adın iki kez gelmesi gibi imkânsız duruma karşı.
+                File.Copy(oge.FullName, altHedef, overwrite: true);
+            }
+        }
+
+        return baglantiAtlandi;
     }
 
     /// <summary>
@@ -705,4 +976,38 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     }
 
     private readonly record struct ResolvedTarget(string PhysicalPath, string SandboxRoot, bool IsVirtualRoot);
+
+    /// <summary>Aktarımın DOĞRULANMIŞ tek ögesi: çözülmüş kaynak/hedef + kullanıcıya dönecek sanal yollar.</summary>
+    private readonly record struct TransferItem(
+        ResolvedTarget Source,
+        ResolvedTarget Target,
+        string SourcePath,
+        string TargetPath);
+
+    /// <summary>Doğrulanmış aktarım planı; hiçbir ögesi dosya sistemine dokunmadan önce hazırdır.</summary>
+    private readonly record struct TransferPlan(string DestinationPath, IReadOnlyList<TransferItem> Items);
+
+    /// <summary>
+    /// İsteğin BİÇİMİ geçersiz olduğunda atılacak anahtarlar — taşımada <c>files.move_*</c>,
+    /// kopyalamada <c>files.copy_*</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Özellik adlarının <c>MessageKey</c> ile bitmesi bilinçlidir:</b> arayüz çevirisi denetimi
+    /// (MessageKeyCoverageTests) kaynakta <c>...MessageKey = "anahtar"</c> ve
+    /// <c>new AppException("anahtar"</c> kalıplarını tarar. Anahtarlar ortak yardımcıya değişken
+    /// olarak girdiği için <c>new AppException(</c> kalıbı burada artık literal görmez; adlandırma
+    /// bu yüzden seçildi — aksi hâlde bu anahtarların çevirisi unutulsa kimse fark etmez, kullanıcı
+    /// ekranda ham anahtarı görürdü.
+    /// </remarks>
+    private sealed class TransferErrorKeys
+    {
+        /// <summary>Hiç kaynak verilmediğinde.</summary>
+        public required string SourceRequiredMessageKey { get; init; }
+
+        /// <summary>Birden çok ögeye tek yeni ad verilmeye çalışıldığında.</summary>
+        public required string RenameSingleOnlyMessageKey { get; init; }
+
+        /// <summary>Hedef klasör yok olduğunda (yaratılmaz, istenir).</summary>
+        public required string DestinationMissingMessageKey { get; init; }
+    }
 }

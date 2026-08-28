@@ -352,14 +352,102 @@ public sealed class HtaccessPanelServiceTests : IDisposable
     [Fact]
     public async Task SUNUCU_GENELI_KIP_ayrica_yazilir_ve_RAPORDA_gorunur()
     {
-        // Genel anahtar PANELDEN yazilmiyor (bkz. HtaccessController sonundaki gerekce);
-        // burada dogrudan depo uzerinden yaziliyor -- olculen sey, panelin onu OKUYUP
-        // raporlayabildigi.
+        // Anahtar BILEREK depo uzerinden yaziliyor (panelin SetServerMode ucu degil): olculen sey,
+        // SITE raporunun genel anahtari okuyup gosterebildigi. Ayni yol servis ucundan yazildiginda
+        // da calisiyor -- o HtaccessServerModeTests'te uctan uca olculuyor.
         new HtaccessSwitchStore(_veriKoku).SetGlobal(HtaccessMode.Observe, "kademeli acilis");
 
         var rapor = await Servis().GetReportAsync("ornek.com", CancellationToken.None);
 
         Assert.Equal("observe", rapor.ServerMode);
+    }
+
+    // ---------------------------------------------------------------- SUNUCU GENELİ ANAHTAR
+
+    /// <summary>
+    /// Sunucu geneli anahtar PANELDEN yazılır ve MODÜLÜN OKUDUĞU biçimde diske düşer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Biçim ELLE İDDİA EDİLMİYOR: yazan taraf panel servisi, okuyan taraf modülün kendi kapısı
+    /// (<c>HtaccessRuntimeGate</c>). Biçim ya da yol uyuşmazsa panel "açtım" der, modül hiç görmez —
+    /// bu iş kolunun en pahalı sessiz arızası tam olarak budur.
+    /// </para>
+    /// <para>
+    /// Site anahtarı ayrıca açılıyor, çünkü kapı etkin modu iki anahtarın EN DÜŞÜĞÜ olarak
+    /// hesaplar; site kapalıyken genel anahtarın etkisi kapıda görünmezdi.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData("observe")]
+    [InlineData("enforce")]
+    public void SUNUCU_GENELI_ANAHTAR_PANELDEN_YAZILIR_ve_MODUL_OKUR(string kip)
+    {
+        // HtaccessMode INTERNAL: xUnit yalniz public metotlari kesfettigi icin beklenen deger
+        // parametre olarak degil burada cozuluyor.
+        var beklenen = kip == "observe" ? HtaccessMode.Observe : HtaccessMode.Enforce;
+        new HtaccessSwitchStore(_veriKoku).SetSite("ornek.com", HtaccessMode.Enforce, null);
+
+        var durum = Servis().SetServerMode(kip, "yonetici acti");
+
+        Assert.Equal(kip, durum.Mode);
+        Assert.True(durum.SwitchFileExists);
+        Assert.Equal(HtaccessHostingPaths.GlobalSwitchPath(_veriKoku), durum.SwitchFilePath);
+
+        // MODULUN GERCEK OKUYUCUSU. TTL sifir -> onbellek yok, taze okuma.
+        Assert.Equal(beklenen, new HtaccessRuntimeGate(_veriKoku, TimeSpan.Zero).Evaluate("ornek.com"));
+
+        // Yeni servis ornegi ayni cevabi vermeli: durum BELLEKTE degil DISKTE.
+        Assert.Equal(kip, Servis().GetServerMode().Mode);
+    }
+
+    /// <summary>
+    /// <c>off</c> anahtarı yazmaz, dosyayı SİLER — ve site ayarları KORUNUR.
+    /// </summary>
+    /// <remarks>
+    /// Silmek bilinçli: silinmiş dosya, ayrıştırıcı ne kadar bozulursa bozulsun KAPALI demektir.
+    /// Site anahtarlarına dokunulmaması ise kademeli açılışın karşılığı — yönetici sunucuyu
+    /// kapatıp açtığında kiracıların tek tek ayarları geri gelmeli, sıfırdan kurulmamalı.
+    /// </remarks>
+    [Fact]
+    public void SUNUCU_GENELI_KAPATMA_DOSYAYI_SILER_ve_SITE_AYARI_KORUNUR()
+    {
+        var servis = Servis();
+        new HtaccessSwitchStore(_veriKoku).SetSite("ornek.com", HtaccessMode.Enforce, null);
+        servis.SetServerMode("enforce", null);
+        Assert.Equal(HtaccessMode.Enforce, new HtaccessRuntimeGate(_veriKoku, TimeSpan.Zero).Evaluate("ornek.com"));
+
+        var durum = servis.SetServerMode("off", null);
+
+        Assert.Equal("off", durum.Mode);
+        Assert.False(durum.SwitchFileExists);
+        Assert.False(File.Exists(HtaccessHostingPaths.GlobalSwitchPath(_veriKoku)));
+        Assert.Equal(HtaccessMode.Off, new HtaccessRuntimeGate(_veriKoku, TimeSpan.Zero).Evaluate("ornek.com"));
+
+        // Site anahtari SILINMEDI: genel anahtar geri acilinca eski ayar yerinde.
+        servis.SetServerMode("enforce", null);
+        Assert.Equal(HtaccessMode.Enforce, new HtaccessRuntimeGate(_veriKoku, TimeSpan.Zero).Evaluate("ornek.com"));
+    }
+
+    /// <summary>
+    /// TANINMAYAN kip REDDEDİLİR ve mevcut anahtara DOKUNULMAZ.
+    /// </summary>
+    /// <remarks>
+    /// Sessizce "off"a düşseydi, "enfroce" yazan bir yönetici sunucuyu açtığını sanıp KAPATMIŞ
+    /// olurdu — hem de panel ona "kaydedildi" demiş olarak.
+    /// </remarks>
+    [Fact]
+    public void SUNUCU_GENELI_TANINMAYAN_KIP_REDDEDILIR_ve_ANAHTARA_DOKUNULMAZ()
+    {
+        var servis = Servis();
+        servis.SetServerMode("observe", null);
+        var oncekiIcerik = File.ReadAllText(HtaccessHostingPaths.GlobalSwitchPath(_veriKoku));
+
+        var hata = Assert.Throws<AppException>(() => servis.SetServerMode("enfroce", null));
+
+        Assert.Equal("htaccess.invalid_mode", hata.MessageKey);
+        Assert.Equal(oncekiIcerik, File.ReadAllText(HtaccessHostingPaths.GlobalSwitchPath(_veriKoku)));
+        Assert.Equal("observe", Servis().GetServerMode().Mode);
     }
 
     // ---------------------------------------------------------------- İNCELEME

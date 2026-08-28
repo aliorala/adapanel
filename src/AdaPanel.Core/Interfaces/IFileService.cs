@@ -36,6 +36,42 @@ public interface IFileService
     /// </remarks>
     Task<MoveFilesResultDto> MoveAsync(MoveFilesRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Bir ya da birden çok ögeyi başka klasöre KOPYALAR; kaynak YERİNDE KALIR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden var olmalı:</b> panelde kopyalama hiç yoktu — kullanıcı bir dosyayı yedeklemek ya da
+    /// bir klasörü "denemeden önce" çoğaltmak için indirip tekrar yüklemek zorundaydı; klasörde bu
+    /// pratikte hiç mümkün değildi. Oysa kopyalama, taşımanın aksine GERİ ALINABİLİR bir işlemdir ve
+    /// kullanıcıların riskli bir değişiklikten önce başvurduğu ilk korumadır: yokluğu, insanları
+    /// doğrudan taşımaya (yani veri kaybı riskine) itiyordu.
+    /// </para>
+    /// <para>
+    /// <b>Sözleşme (uygulamanın uyması ZORUNLU olan kısım) — güvenlik kısmı
+    /// <see cref="MoveAsync"/> ile BİREBİR AYNIDIR:</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>Kaynak ve hedef sanal alanın içinde olmalıdır; dışarı çıkan istek REDDEDİLİR (istisna).</item>
+    /// <item>Yol üzerindeki hiçbir bağlantı (junction/symlink) TAKİP EDİLMEZ. Kopyalamada bu kural
+    /// ÖZYİNELEME İÇİNDE DE geçerlidir: bir bağlantıyı özyinelemeli kopyalamak ya sonsuz döngü ya da
+    /// sanal alan DIŞINDAKİ veriyi kiracının klasörüne çekmek demektir. Atlanan bağlantı rapor
+    /// satırında bildirilir (<c>files.copy_link_skipped</c>), sessizce geçilmez.</item>
+    /// <item>Hedefte aynı adlı öge varsa VARSAYILAN davranış REDDETMEKTİR; üzerine yazma yalnız
+    /// <c>Overwrite</c> ile ve yalnız DOSYALAR için mümkündür. Var olan bir KLASÖR <c>Overwrite</c>
+    /// ile bile EZİLMEZ — ezmek, hedefin özyinelemeli silinmesi demektir.</item>
+    /// <item>Bir klasör KENDİ ALT AĞACINA kopyalanamaz: kopya, kopyalanmakta olan ağacın içinde
+    /// büyümeye devam ederdi (sonsuz büyüme, disk dolana kadar).</item>
+    /// <item>Kısmi başarısızlık istisna değil, öge başına RAPOR üretir.</item>
+    /// </list>
+    /// <para>
+    /// <b>Taşımadan tek farkı ÖGE BAŞINA yapılan iştir</b> (kopyala vs. yer değiştir); istek biçimini
+    /// doğrulayan güvenlik ön hazırlığı iki akışta da TEK bir yardımcıdan gelir, çünkü ikisinden
+    /// birinde unutulan bir denetim tek başına deliktir.
+    /// </para>
+    /// </remarks>
+    Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request, CancellationToken cancellationToken = default);
+
     Task<FileWorkspaceDto> SetPermissionsAsync(SetFilePermissionsRequest request, CancellationToken cancellationToken = default);
 
     Task<string> SaveUploadAsync(string path, Stream stream, CancellationToken cancellationToken = default);

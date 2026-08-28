@@ -53,7 +53,8 @@ public sealed class HtaccessSimulateRequest
 /// <para>
 /// <b>Roller:</b> site uçları <c>Administrator,Reseller</c> — panelin barındırma araçlarıyla aynı
 /// (bkz. <c>SiteHostingSettingsController</c>, <c>AspController</c>) ve arayüzdeki araç
-/// görünürlüğüyle birebir. Sunucu geneli anahtarın ucu YOK — gerekçesi dosyanın sonunda yazılı.
+/// görünürlüğüyle birebir. Sunucu geneli anahtarın ucu (<c>server-mode</c>) YALNIZ
+/// <c>Administrator</c>'dır — gerekçesi o ucun başında yazılı.
 /// </para>
 /// <para>
 /// <b>Kapsam denetimi:</b> her site ucunda <c>CustomerAccess.EnsureSiteAsync</c>. Bayi yalnız
@@ -215,20 +216,87 @@ public sealed class HtaccessController(
     }
 
     // ------------------------------------------------------------------------------------
-    // SUNUCU GENELİ ANAHTAR UCU BİLEREK YOK — ve bu bir eksiklik değil, ÖLÇÜLMÜŞ bir karar.
+    // SUNUCU GENELİ ANAHTAR — neden VAR, neden YALNIZ YÖNETİCİ, neden KONUSUZ denetimli.
     // ------------------------------------------------------------------------------------
-    // Genel anahtar (%ProgramData%\AdaPanel\htaccess\module.switch) tek bir aboneliğe ait
-    // DEĞİLDİR: sunucudaki her siteyi aynı anda etkiler. Dolayısıyla denetim kaydının konusu
-    // (SubscriptionUserId) yapısal olarak BOŞTUR ve bir kiracıya bağlamak, komşularını da kapsayan
-    // bir işlemi o kiracının görünümüne düşürmek (çapraz-kiracı sızıntı) olurdu.
+    // BU BLOK BİR KEZ YANLIŞ BİR OLGUYA DAYANIYORDU ve düzeltmesi burada yazılı duruyor: eski
+    // metin "ucu eklemenin bedeli sıfır, çünkü çekirdek motor w3wp içinde zaten yüklenmiyor"
+    // diyordu. O gerekçe ARTIK GEÇERSİZ — derleme zamanı engeli kalktı, motorun kaynağı net48
+    // modül projesinde de derleniyor ve HtaccessPanelService.MotorEngelleri() BOŞ liste dönüyor
+    // (ölçüm: HtaccessNet48EngineLoadTests, gerçek bir CLR 4 sürecinde). Yani genel anahtar artık
+    // özelliği GERÇEKTEN açıyor; ucun olmaması "bedelsiz bir eksiklik" değil, özelliğin panelden
+    // hiç kullanılamaması demekti: yönetici module.switch dosyasını ELLE yazmak zorundaydı.
     //
-    // Konusuz kayıtlar `AuditCoverageTests.KiraciyaAitOlmayanlar` listesinde GEREKÇESİYLE durur —
-    // o dosya bu iş kolunun kapsamı dışında ve nöbetçiyi kandıracak bir yol (kaydı servise
-    // saklamak, konu taşıyan aşırı yüklemeye null geçmek) BİLEREK seçilmedi: nöbetçinin amacı
-    // tam da bu kararın görünür olmasıdır.
+    // Eski metnin HAKLI olan yarısı aynen duruyor ve aşağıdaki iki uç onu uyguluyor:
     //
-    // BUGÜN BEDELİ SIFIR: çekirdek motor w3wp içinde zaten yüklenmiyor (bkz.
-    // HtaccessPanelService.MotorEngelleri), yani genel anahtar açılsa da hiçbir şey değişmezdi.
-    // Panel bu durumu `HtaccessSiteReport.ServerMode` ile OKUYUP gösteriyor; yönetici anahtarı
-    // dosyadan açabiliyor (biçim bilerek düz metin: acil durum kurtarma aracı).
+    //  1) Genel anahtar (%ProgramData%\AdaPanel\htaccess\module.switch) tek bir aboneliğe ait
+    //     DEĞİLDİR; sunucudaki HER siteyi aynı anda etkiler. Kaydın konusu (SubscriptionUserId)
+    //     bu yüzden yapısal olarak BOŞTUR: bir kiracıya bağlamak, komşularını da kapsayan bir
+    //     işlemi o kiracının görünümüne düşürmek (çapraz-kiracı sızıntı) olurdu. Kayıt konu
+    //     TAŞIYAMAYAN aşırı yüklemeyle (IAuditService.WriteAsync) yazılıyor — kararı gizlemek
+    //     değil, tipe yazmak: konu taşıyan aşırı yüklemeye null geçmek aynı sonucu verir ama
+    //     "unutuldu mu, karar mı" sorusunu okuyucuya bırakırdı. Gerekçe
+    //     AuditCoverageTests.KiraciyaAitOlmayanlar listesinde yazılı; nöbetçiyi susturan hiçbir
+    //     yol (kaydı atlamak, servise saklamak) seçilmedi.
+    //
+    //  2) Uç YALNIZ Administrator'dır. Bayi de kiracıdır: kendi müşterilerinin sitelerini yönetir,
+    //     ama bu düğme onun kapsamının DIŞINDAKİ bütün siteleri de açar/kapatır. Panelde sunucu
+    //     geneli her ucun kuralı bu (FirewallController, PhpController.global-settings,
+    //     SecurityController); sınıf düzeyindeki "Administrator,Reseller" kapısı bu iki uçta
+    //     eylem düzeyinde daraltılıyor — SslController.RenewAllAsync ve
+    //     DiskQuotaController.InstallFsrmAsync ile aynı kalıp.
+
+    /// <summary>Sunucu geneli anahtarın durumu: kip, dosya var mı, dosyanın yolu.</summary>
+    /// <remarks>
+    /// Site adı ALMAZ: genel anahtar hiç sitesi olmayan bir sunucuda da (kurulumdan hemen sonra)
+    /// görülebilmeli. Site raporundaki <c>ServerMode</c> alanı aynı değeri gösterir ama bir siteye
+    /// bağlıdır; bu uç, arayüzün sunucu geneli ekranının kaynağıdır.
+    /// </remarks>
+    // ROTA SİTE AĞACININ DIŞINDA (`~/` mutlak yol): denetleyicinin kendi rotası `api/v1/sites`
+    // olduğu için `server-mode` orada bir SABİT SEGMENT olurdu ve `SitesController`'ın
+    // `GET {siteName}` ucunu "server-mode" adlı bir site için GÖLGELERDİ — o site panelden
+    // görüntülenemez hâle gelirdi. Site adı için biçim doğrulaması ölçüldü: `DomainNames`
+    // yalnızca normalleştiriyor, böyle bir adı REDDETMİYOR. Olasılık düşük, bedeli ise bir
+    // sitenin sessizce erişilemez olması; sabit segmenti parametrenin yanına hiç koymamak
+    // bu sınıfı tamamen kapatır.
+    [HttpGet("~/api/v1/htaccess/server-mode")]
+    [Authorize(Roles = "Administrator")]
+    public ActionResult<ApiResponse<HtaccessServerSwitchState>> GetServerMode()
+        => Ok(ApiResponse<HtaccessServerSwitchState>.Ok(htaccess.GetServerMode()));
+
+    /// <summary>
+    /// Sunucu geneli anahtarı çevirir — <c>.htaccess</c> desteğini AÇAN tek düğme.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Etkisi sitelerin toplamından büyüktür:</b> kapı etkin modu iki anahtarın EN DÜŞÜĞÜ
+    /// olarak hesaplar (<c>HtaccessRuntimeGate.Evaluate</c>). Bu yüzden <c>off</c> mutlak bir
+    /// kapatma düğmesidir (dosya SİLİNİR), <c>observe</c> ise tek hamlede bütün sunucuyu gözleme
+    /// indirir: uygulama durur, günlük akmaya devam eder — bir sorunu tamamen kapatmadan teşhis
+    /// etmenin yolu.
+    /// </para>
+    /// <para>
+    /// <b>Denetim kaydı KONUSUZDUR</b> (yukarıdaki 1. maddenin gerekçesi). Kaydın kaynağı
+    /// <c>htaccess:server</c>: site kayıtlarının kaynağı <c>htaccess:{siteName}</c> olduğu için
+    /// ikisi denetim ekranında karışmaz ve "sunucuyu kim açtı" ile "şu siteyi kim açtı" ayrı ayrı
+    /// aranabilir.
+    /// </para>
+    /// </remarks>
+    [HttpPost("~/api/v1/htaccess/server-mode")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<HtaccessServerSwitchState>>> SetServerModeAsync(
+        [FromBody] HtaccessModeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var state = htaccess.SetServerMode(request?.Mode ?? "off", request?.Note);
+
+        await auditService.WriteAsync(
+            "htaccess.server_mode.changed",
+            "htaccess:server",
+            $"Server-wide .htaccess support was set to '{state.Mode}' (affects every site on this server).",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<HtaccessServerSwitchState>.Ok(state, "htaccess.mode_updated"));
+    }
 }

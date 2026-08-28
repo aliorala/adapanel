@@ -121,14 +121,21 @@ internal static class HtaccessSwitchFile
             builder.Append('\n');
         }
 
-        builder.Append(EnabledKey);
-        builder.Append('=');
-        builder.Append(mode == HtaccessMode.Off ? '0' : '1');
-        builder.Append('\n');
-
+        // SIRA ÖNEMLİ: önce mode, SONRA enabled. Ölçüldü — ters sırada, yarım yazılmış bir dosya
+        // (disk doldu, süreç öldü, dosya elle düzenlenirken kesildi) "enabled=1" satırında bitebilir
+        // ve <see cref="Parse"/> mod satırını görmediği için varsayılan ENFORCE'a düşerdi: gözlem
+        // moduna almak istenen sunucu, yarım bir dosya yüzünden GERÇEK UYGULAMAYA geçerdi. Bu sıra
+        // ile her yarım dosya en fazla "mode=..." satırını içerir, "enabled" olmadığı için KAPALI
+        // sayılır. Panelin yazımı zaten atomiktir (HtaccessSwitchStore.WriteAtomic); bu, o korumanın
+        // ARKASINDAKİ ikinci katman — dosya bir kurtarma aracı olduğu için elle de düzenleniyor.
         builder.Append(ModeKey);
         builder.Append('=');
         builder.Append(mode == HtaccessMode.Observe ? "observe" : "enforce");
+        builder.Append('\n');
+
+        builder.Append(EnabledKey);
+        builder.Append('=');
+        builder.Append(mode == HtaccessMode.Off ? '0' : '1');
         builder.Append('\n');
 
         return builder.ToString();

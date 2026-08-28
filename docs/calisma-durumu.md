@@ -92,3 +92,35 @@ FTP bağlantısı, bir deneme müşterisi silme, `.htaccess` "yalnız gözlem" k
 - `docs/denetim-2026-08-19.md` — yedi denetimin tam bulgu raporu
 - `docs/denetim-duzeltme-durumu.md` — on düzeltme ekibinin sonuçları
 - `CODEX_MEMORY.md` bölüm 217 — bu turun kalıcı kaydı
+
+---
+
+## Açık iş: Dosya yöneticisi Plesk seviyesine çıkarılıyor (28.08.2026)
+
+Kullanıcı siteye `.htaccess` koyamadı. Sebep panelde ölçüldü: **dosya oluşturma yok.**
+Bakınca eksik tek başına değildi.
+
+### Ölçülen durum
+- `PUT /files` (`FileService.WriteAsync`) var olmayan dosyayı **yaratıyor** — arka uç hazır,
+  arayüzde düğme yok. `.htaccess` koyamamanın tek sebebi buydu.
+- `POST /files/move` var, uzun bir gerekçe yorumu da yazılmış ("taşıma hiç yoktu, kullanıcı
+  indirip tekrar yüklemek zorundaydı") — ama `frontend/` genelinde **hiç çağrılmıyor.**
+  `.htaccess`'in 0.7.0-0.7.2'de ölü yayınlanmasıyla aynı sınıf: arka uç hazır, teslim yolu kopuk.
+- **Kopyalama hiç yok** — ne serviste, ne uçta, ne arayüzde.
+- Nokta dosyaları listeleniyor (`EnumerateFileSystemInfos()`, filtre yok) — `.htaccess` panelde
+  görünür. Bu KAPALI değil.
+
+### Yürüyen iki ajan
+1. Arka uç: `CopyAsync` + `POST /files/copy`; Move'un güvenlik ön hazırlığı tek kaynağa
+   çıkarılıyor. Ayrıca ÖLÇÜLECEK: `WriteAsync` `EnsureInsideSandbox` çağırmıyor, `MoveAsync`
+   çağırıyor — `ResolveTargetAsync` denetimi kendisi yapıyor mu? Delik olabilir.
+2. Arayüz: yeni dosya / yeniden adlandır / taşı / kopyala + i18n anahtarları.
+
+### Bitmeyen iş
+- **`.htaccess` canlı ayrım testi hâlâ YAPILMADI.** `C:\inetpub\wwwroot\test.local` ve
+  `C:\ProgramData\AdaPanel\htaccess` yükseltilmiş yetki istiyor; ölçüldü, yazılamıyor.
+  Dosya oluşturma arayüze gelince test **panelin kendisiyle** yapılacak — servis o klasörlere
+  zaten yazabiliyor.
+  Test: `RewriteRule ^adapanel-test-42$ /iisstart.htm [R=302,L]` → adres 302 dönmeli →
+  dosya `.htaccess.kapali` yapılınca **404 dönmeli**. Üçüncü adım şart: geçen sefer onu
+  atladığım için `alioral.xyz`'de yanlışlıkla "çalışıyor" demiştim.

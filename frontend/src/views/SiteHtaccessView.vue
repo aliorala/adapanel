@@ -92,6 +92,43 @@
           </button>
           <span class="meta">{{ t("panel.htaccess.mode.current", { mode: modeLabel(report.mode) }) }}</span>
         </div>
+
+        <!--
+          SUNUCU GENELİ ANAHTAR — yalnız yöneticiye görünür.
+
+          Site kipi tek başına hiçbir şey yapmaz: etkin kip, sunucu ile site anahtarının EN
+          DÜŞÜĞÜDÜR. Bu bölüm gelene kadar sunucu anahtarının panelde karşılığı yoktu ve arayüz
+          kullanıcıya anahtar dosyasını ELLE açmasını söylüyordu; yani özellik panelden
+          açılamıyordu. Düğme buraya konuldu çünkü kullanıcı sorunu tam olarak BURADA görüyor.
+        -->
+        <div v-if="isAdmin" class="server-switch">
+          <strong>{{ t("panel.htaccess.server.title") }}</strong>
+          <p class="meta">{{ t("panel.htaccess.server.hint") }}</p>
+
+          <p v-if="serverNotice" :class="['notice', { error: serverNoticeError }]" :role="serverNoticeError ? 'alert' : 'status'">
+            {{ serverNotice }}
+          </p>
+
+          <div class="action-row">
+            <button
+              v-for="secim in modeChoices"
+              :key="`server-${secim.id}`"
+              class="secondary compact"
+              v-bind="writeGate(serverBusy || serverSwitch?.mode === secim.id)"
+              @click="saveServerMode(secim.id)">
+              {{ secim.label }}
+            </button>
+            <span class="meta">
+              {{ serverSwitch
+                ? t("panel.htaccess.server.current", { mode: modeLabel(serverSwitch.mode) })
+                : t("panel.htaccess.server.unknown") }}
+            </span>
+          </div>
+
+          <!-- Acil durum kurtarma yolu BİLEREK duruyor: panel açılmıyorsa anahtar dosyadan
+               çevrilebilmeli. Artık TEK yol değil, yalnız yedek yol. -->
+          <small v-if="serverSwitch">{{ t("panel.htaccess.server.file", { path: serverSwitch.switchFilePath }) }}</small>
+        </div>
       </section>
 
       <!-- ============================ DOSYALAR ============================ -->
@@ -343,18 +380,21 @@ import { useI18n } from "vue-i18n";
 import {
   diagnosticLevelName,
   getHtaccessReport,
+  getServerHtaccessMode,
   inspectHtaccess,
   setHtaccessMode,
+  setServerHtaccessMode,
   simulateHtaccess,
   validateHtaccess,
   type HtaccessDiagnostic,
   type HtaccessInspectionResult,
   type HtaccessMode,
   type HtaccessParseResult,
+  type HtaccessServerSwitchState,
   type HtaccessSimulationResult,
   type HtaccessSiteReport
 } from "../api/htaccess";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
@@ -363,7 +403,18 @@ const { t } = useI18n();
 // Okuma dugmeleri (incele, denetle, benzet) kapiya girmez.
 const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
+const authStore = useAuthStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
+
+// Sunucu geneli anahtar YÖNETİCİ işidir: sunucudaki her siteyi aynı anda etkiler, dolayısıyla
+// bayinin de kapsamı dışındadır. Uç zaten `[Authorize(Roles = "Administrator")]` ile kapalı;
+// buradaki denetim gizleme amaçlı, KORUMA DEĞİL — koruma sunucudadır.
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+
+const serverSwitch = ref<HtaccessServerSwitchState | null>(null);
+const serverBusy = ref(false);
+const serverNotice = ref("");
+const serverNoticeError = ref(false);
 
 const report = ref<HtaccessSiteReport | null>(null);
 const inspection = ref<HtaccessInspectionResult | null>(null);
@@ -432,6 +483,50 @@ function formatDate(value: string): string {
 function fail(error: unknown, fallbackKey: string) {
   notice.value = extractApiMessage(error) || t(fallbackKey);
   noticeError.value = true;
+}
+
+/**
+ * Sunucu geneli anahtarı OKU.
+ *
+ * Uç yalnız Administrator'a açık, bu yüzden kiracıda hiç ÇAĞRILMIYOR — çağırıp 403'ü yutmak,
+ * konsolu her açılışta yanlış bir hatayla doldururdu. Yönetici değilse bölüm zaten görünmüyor.
+ */
+async function loadServerSwitch() {
+  if (!isAdmin.value) {
+    serverSwitch.value = null;
+    return;
+  }
+
+  try {
+    serverSwitch.value = await getServerHtaccessMode();
+  } catch (error) {
+    // Okunamadıysa DURUM UYDURULMAZ: `null` kalır ve arayüz "bilinmiyor" der. "off" varsaymak,
+    // açık bir sunucuyu kapalı göstermek olurdu.
+    serverSwitch.value = null;
+    serverNotice.value = extractApiMessage(error) || t("panel.htaccess.server.loadFailed");
+    serverNoticeError.value = true;
+  }
+}
+
+async function saveServerMode(mode: HtaccessMode) {
+  serverBusy.value = true;
+  serverNotice.value = "";
+  serverNoticeError.value = false;
+
+  try {
+    serverSwitch.value = await setServerHtaccessMode(mode, note.value.trim());
+    serverNotice.value = t("panel.htaccess.server.saved", { mode: modeLabel(serverSwitch.value.mode) });
+
+    // Sitenin raporu da TAZELENİR: etkin kip sunucu ile sitenin en düşüğü olduğu için, sunucu
+    // anahtarı değişince bu ekrandaki uyarılar da değişir. Tazelemezsek kullanıcı anahtarı
+    // açtığı hâlde ekranda hâlâ "sunucu geneli KAPALI" yazardı.
+    await load();
+  } catch (error) {
+    serverNotice.value = extractApiMessage(error) || t("panel.htaccess.server.saveFailed");
+    serverNoticeError.value = true;
+  } finally {
+    serverBusy.value = false;
+  }
 }
 
 async function load() {
@@ -528,6 +623,12 @@ async function runSimulate() {
 }
 
 watch(siteName, load, { immediate: true });
+
+// Sunucu anahtarı SİTEYE bağlı değildir; site değiştikçe yeniden okumak gereksiz istek olurdu.
+// Oturumun rolü belirlendiği anda bir kez okunur (rol başta `undefined` olabilir: oturum
+// bilgisi ayrı bir istekle geliyor; `immediate` ile o an okuyup boş dönmek "bilinmiyor"u
+// kalıcılaştırırdı).
+watch(isAdmin, loadServerSwitch, { immediate: true });
 </script>
 
 <style scoped>
@@ -558,6 +659,21 @@ watch(siteName, load, { immediate: true });
   border: 1px solid var(--border, #d8dee9);
   border-radius: 8px;
   cursor: pointer;
+}
+
+/* Sunucu geneli anahtar site ayarından GÖRSEL OLARAK da ayrılır: kapsamı bu sitenin değil,
+   sunucunun tamamıdır. Üstteki ayırıcı çizgi bu sınırı gösterir. */
+.server-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border, #d8dee9);
+}
+
+.server-switch small {
+  opacity: 0.75;
 }
 
 .mode-text {

@@ -109,6 +109,39 @@ public sealed class HtaccessSiteReport
     public IReadOnlyList<string> Deviations { get; init; } = [];
 }
 
+/// <summary>
+/// SUNUCU GENELİ <c>.htaccess</c> anahtarının panel görünümü.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden ayrı bir tip, <see cref="HtaccessSiteReport"/> içindeki <c>ServerMode</c> değil:</b> o
+/// alan bir SİTENİN raporunun parçasıdır ve site adı olmadan üretilemez. Genel anahtarı okumak ya
+/// da çevirmek için bir siteye ihtiyaç yoktur — üstelik yönetici anahtarı, hiç sitesi olmayan bir
+/// sunucuda da (kurulumdan hemen sonra) görebilmelidir.
+/// </para>
+/// <para>
+/// <b>Dosya yolu neden dönüyor:</b> bu anahtar bir ACİL DURUM aracıdır. Panelin kendisi
+/// erişilemez hâle geldiğinde yöneticinin tek çıkışı dosyayı silmektir; yolu ekranda göstermek,
+/// o anda arayıp bulma işini ortadan kaldırır. Uç yalnız yöneticiye açık olduğu için yol sızıntısı
+/// değildir (kiracıya gösterilseydi olurdu).
+/// </para>
+/// </remarks>
+public sealed class HtaccessServerSwitchState
+{
+    /// <summary><c>off</c> / <c>observe</c> / <c>enforce</c>.</summary>
+    public string Mode { get; init; } = "off";
+
+    /// <summary>
+    /// Anahtar dosyası diskte VAR mı. <c>off</c> iken dosya SİLİNİR, dolayısıyla bu alan
+    /// "hiç açılmamış / kapatılmış" ile "açık" arasındaki farkı değil, kapatmanın gerçekten
+    /// diske yansıdığını gösterir.
+    /// </summary>
+    public bool SwitchFileExists { get; init; }
+
+    /// <summary>Anahtar dosyasının tam yolu (kurtarma için).</summary>
+    public string SwitchFilePath { get; init; } = string.Empty;
+}
+
 /// <summary>Bir URL'in <c>.htaccess</c> altında ne olacağının panel benzetimi.</summary>
 public sealed class HtaccessSimulationResult
 {
@@ -365,6 +398,62 @@ public sealed class HtaccessPanelService
         _motor.InvalidateCache(site.PhysicalPath);
 
         return await GetReportAsync(site.Name, iptal);
+    }
+
+    /// <summary>
+    /// Sunucu geneli anahtarın durumu. Site adı GEREKMEZ.
+    /// </summary>
+    /// <remarks>
+    /// Okuma başarısızsa <see cref="HtaccessSwitchStore.ReadGlobal"/> <c>off</c> döner ve burada da
+    /// öyle raporlanır — panelin "açık" deyip modülün kapalı olması, tersinden çok daha tehlikeli
+    /// bir yalandır (aynı gerekçe deponun kendi yorumunda da yazılı).
+    /// </remarks>
+    public HtaccessServerSwitchState GetServerMode()
+    {
+        var genel = _anahtarlar.ReadGlobal();
+        return new HtaccessServerSwitchState
+        {
+            Mode = ModAdi(genel.Mode),
+            SwitchFileExists = genel.FileExists,
+            SwitchFilePath = genel.Path
+        };
+    }
+
+    /// <summary>
+    /// SUNUCU GENELİ anahtarı çevirir: kapalı / gözlem / uygula.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bu, özelliği AÇAN tek düğmedir.</b> Site kipi tek başına hiçbir şey yapmaz: kapı etkin
+    /// modu iki anahtarın EN DÜŞÜĞÜ olarak hesaplar (<c>HtaccessRuntimeGate.Evaluate</c>), yani
+    /// genel anahtar <c>off</c> iken sunucudaki hiçbir site kendini açamaz. Panelde bu ucun
+    /// olmaması, özelliğin ancak <c>%ProgramData%\AdaPanel\htaccess\module.switch</c> dosyası ELLE
+    /// oluşturularak kullanılabilmesi demekti.
+    /// </para>
+    /// <para>
+    /// <b>Yazma ATOMİKTİR</b> ve bu bir tercih değil zorunluluk: modül dosyayı her TTL'de okur.
+    /// Doğrudan üzerine yazılsaydı okuma yazımın ortasına denk geldiğinde YARIM içerik okunurdu
+    /// (bkz. <c>HtaccessSwitchStore.WriteAtomic</c> — geçici dosya + <c>File.Move(overwrite)</c>).
+    /// Yarım dosyanın "sadece kapatır" olduğu VARSAYILMIYOR, satır sırasıyla garanti altına alındı:
+    /// <c>HtaccessSwitchFile.Render</c> önce <c>mode</c>, sonra <c>enabled</c> yazar; kesilen her
+    /// önek <c>enabled</c> satırını içermez ve kapı KAPALI okur.
+    /// </para>
+    /// <para>
+    /// <b>ERİŞİM İZİNLERİNE DOKUNULMAZ.</b> <c>htaccess</c> klasörü
+    /// <c>DataRootHardeningService.SensitiveDirectories</c> listesinde DEĞİLDİR (liste okundu:
+    /// data, keys, certs, config, backups, mail-certs) — kendi sertleştirmesi ayrıdır
+    /// (<c>HtaccessSwitchStore.HardenAcl</c>: IIS_IUSRS okur, YAZAMAZ) ve kurulumda BİR KEZ
+    /// uygulanır. Her anahtar çevirmede yeniden uygulamak, bu deponun ölçtüğü iki zararı geri
+    /// getirirdi: yöneticinin bilinçli izin düzenlemesi ilk açmada silinir, ACL uygulaması
+    /// başarısız olduğunda anahtarı yazmak da imkânsızlaşırdı. Yeni dosya, geçici dosya AYNI
+    /// klasörde oluşturulup taşındığı için klasörün DACL'ini olduğu gibi devralır.
+    /// </para>
+    /// </remarks>
+    public HtaccessServerSwitchState SetServerMode(string mode, string? note)
+    {
+        var kip = ModCozumle(mode);
+        _anahtarlar.SetGlobal(kip, note);
+        return GetServerMode();
     }
 
     // ---------------------------------------------------------------- iç yardımcılar

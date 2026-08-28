@@ -54,8 +54,14 @@
           <button class="secondary compact" :disabled="!canGoUp" @click="openPath(workspace?.parentPath || siteRootPath)">
             {{ t("panel.files.up") }}
           </button>
-          <button class="secondary compact" v-bind="writeGate()" @click="createFolder">
+          <!-- Oluşturma düğmeleri yalnız KLASÖR görünümünde anlamlı: bir dosya açıkken
+               `workspace.path` o dosyanın yoludur ve altına klasör/dosya yaratmak sessizce
+               yanlış yere yazmak olurdu. -->
+          <button class="secondary compact" v-bind="writeGate(!workspace?.isDirectory)" @click="createFolder">
             {{ t("panel.files.createFolder") }}
+          </button>
+          <button class="secondary compact" v-bind="writeGate(!workspace?.isDirectory)" @click="createNewFile">
+            {{ t("panel.files.createFile") }}
           </button>
         </div>
       </div>
@@ -90,13 +96,50 @@
       <template v-else-if="workspace?.isDirectory">
         <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
-          <button class="danger compact" v-bind="writeGate(bulk.busy.value)" @click="removeSelected">
+          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="startTransfer('move')">
+            {{ t("panel.files.move") }}
+          </button>
+          <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="startTransfer('copy')">
+            {{ t("panel.files.copy") }}
+          </button>
+          <button class="danger compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="removeSelected">
             {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
           </button>
-          <button class="secondary compact" :disabled="bulk.busy.value" @click="selection.clear">
+          <button class="secondary compact" :disabled="bulk.busy.value || transferBusy" @click="selection.clear">
             {{ t("panel.bulk.clearSelection") }}
           </button>
         </div>
+
+        <!-- HEDEF KLASÖR SORULUR, TAHMİN EDİLMEZ. Yol elle yazılabilir (site kökünün altındaki
+             her klasör hedef olabilir) ama listeden seçmek yazım hatasını tümüyle ortadan
+             kaldırır: yanlış yazılmış bir hedef, arka uçta "hedef klasör yok" ile reddedilir. -->
+        <form v-if="transferMode && selection.count.value > 0" class="transfer-form" @submit.prevent="runTransfer">
+          <label>
+            <span>{{ t("panel.files.destination") }}</span>
+            <input v-model="transferTarget" :placeholder="siteRootPath" />
+            <small class="field-hint">{{ t("panel.files.destinationHint") }}</small>
+          </label>
+          <label>
+            <span>{{ t("panel.files.destinationPick") }}</span>
+            <select v-model="transferTarget">
+              <option :value="siteRootPath">{{ t("panel.files.destinationRoot") }}</option>
+              <option v-if="parentTargetPath" :value="parentTargetPath">{{ t("panel.files.destinationParent") }}</option>
+              <option v-for="folder in folderTargets" :key="folder.path" :value="folder.path">{{ folder.name }}</option>
+            </select>
+          </label>
+          <label class="overwrite-field">
+            <input type="checkbox" v-model="transferOverwrite" />
+            <span>{{ t("panel.files.overwrite") }}</span>
+          </label>
+          <div class="entry-actions">
+            <button type="submit" v-bind="writeGate(transferBusy || !transferTarget)">
+              {{ transferMode === "move" ? t("panel.files.move") : t("panel.files.copy") }}
+            </button>
+            <button type="button" class="secondary compact" :disabled="transferBusy" @click="transferMode = null">
+              {{ t("panel.common.cancel") }}
+            </button>
+          </div>
+        </form>
 
         <div class="data-table">
           <div class="data-row table-head files-row">
@@ -129,6 +172,7 @@
               <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
                 {{ t("panel.files.download") }}
               </a>
+              <button class="secondary compact" v-bind="writeGate()" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
               <button class="secondary compact" v-bind="writeGate()" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
               <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate()" @click="extract(entry.path)">
                 {{ t("panel.files.extract") }}
@@ -244,11 +288,15 @@ import { useI18n } from "vue-i18n";
 import { backupDatabase, backupSite, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
 import {
   compressPath,
+  copyEntries,
   createDirectory,
+  createFile,
   deletePath,
   extractPath,
   getDownloadUrl,
   getFileWorkspace,
+  moveEntries,
+  renameEntry,
   saveFile,
   searchFiles,
   updatePermissions,
@@ -316,6 +364,13 @@ const bulk = useBulkAction();
 const visiblePaths = computed(() => filePager.items.value.map((entry) => entry.path));
 const permissionPrincipal = ref("IIS_IUSRS");
 const permissionRights = ref("M");
+
+// TAŞI / KOPYALA hedef formu. `window.prompt` yerine ekranın kendi alanları: hedef listeden
+// seçilebilir, üzerine yazma BİLİNÇLİ bir kutudur (varsayılan kapalı) ve iptal edilebilir.
+const transferMode = ref<"move" | "copy" | null>(null);
+const transferTarget = ref("");
+const transferOverwrite = ref(false);
+const transferBusy = ref(false);
 const selectedSiteName = computed({
   get: () => sitesStore.selectedSiteName,
   set: (value: string) => sitesStore.selectSite(value)
@@ -327,6 +382,17 @@ const canGoUp = computed(() =>
   workspace.value!.path !== siteRootPath.value &&
   workspace.value!.parentPath.startsWith(siteRootPath.value)
 );
+
+/** Hedef listesindeki "üst klasör" seçeneği; site kökünün dışına çıkan bir üst yol gösterilmez. */
+const parentTargetPath = computed(() => (canGoUp.value ? workspace.value!.parentPath : ""));
+
+/**
+ * Hedef olarak seçilebilecek alt klasörler. Taşınan/kopyalanan ögelerin KENDİLERİ listede yer
+ * almaz: bir klasörü kendi içine taşımak arka uçta `files.move_into_itself` ile reddedilir,
+ * kullanıcıya en baştan sunulmaması daha dürüst.
+ */
+const folderTargets = computed(() =>
+  entries.value.filter((entry) => entry.isDirectory && !selection.isSelected(entry.path)));
 
 onMounted(async () => {
   try {
@@ -352,6 +418,7 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
   searchResults.value = [];
   searchRan.value = false;
   selection.clear();
+  transferMode.value = null;
   if (siteName) {
     await refresh(`sites/${siteName}`);
   }
@@ -388,6 +455,8 @@ async function openPath(path: string) {
   searchResults.value = [];
   searchRan.value = false;
   selection.clear();
+  // Klasör değişince açık hedef formu ANLAMSIZ kalır: seçim gitti, hedef başka klasörün yolu.
+  transferMode.value = null;
   filePager.reset();
   await refresh(path);
 }
@@ -480,6 +549,198 @@ async function createFolder() {
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }
+}
+
+/**
+ * BOŞ DOSYA OLUŞTUR — panelin en çok istenen eksiğiydi: siteye `.htaccess`, `robots.txt` ya da
+ * `web.config` koymanın tek yolu dosyayı dışarıda yazıp YÜKLEMEKTİ.
+ *
+ * ÜZERİNE YAZMA KORUMASI: arka uçtaki `PUT /files` var olan dosyayı sormadan ezer, "yalnız yoksa
+ * yaz" diye bir uç yok. Bu yüzden ad ÖNCE listede aranır. Kontrol istemcide olduğu için iki
+ * eşzamanlı oturum arasında yarış açığı kalır; kapatılması arka uçta ayrı bir uç gerektirir ve
+ * burada "kapandı" denmiyor.
+ */
+async function createNewFile() {
+  const fileName = await prompt({
+    title: t("panel.files.filePrompt"),
+    label: t("panel.files.name"),
+    placeholder: ".htaccess"
+  });
+  if (!fileName) {
+    return;
+  }
+
+  const name = fileName.trim();
+  // Ad bir YOL olamaz: "alt/klasor/dosya" ya da ".." arka uçta sanal alan denetimine takılır;
+  // kullanıcı bunu isteği göndermeden önce öğrensin.
+  if (/[\\/:*?"<>|]/.test(name)) {
+    showNotice(t("files.invalid_name"), true);
+    return;
+  }
+
+  if (entries.value.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
+    showNotice(t("panel.files.fileExists"), true);
+    return;
+  }
+
+  const basePath = workspace.value?.path ? `${workspace.value.path}/${name}` : `${siteRootPath.value}/${name}`;
+  try {
+    await createFile(basePath);
+    // Dosya oluşturulup DÜZENLEYİCİDE açılır: "oluştur" sonrası kullanıcı ayrıca aramak
+    // zorunda kalmasın.
+    await openPath(basePath);
+    showNotice(t("panel.files.fileCreated"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+/**
+ * YENİDEN ADLANDIR — hedefi ögenin kendi klasörü olan tek ögelik taşıma (bkz. api/files.ts).
+ *
+ * Sonuç öge başına gelir: istek 200 dönse bile öge taşınmamış olabilir (hedefte aynı ad var,
+ * dosya kullanımda...). Bu yüzden "yeniden adlandırıldı" yalnız `moved` doğruyken yazılır.
+ */
+async function renamePath(entry: FileEntry) {
+  const newName = await prompt({
+    title: t("panel.files.renamePrompt"),
+    label: t("panel.files.name"),
+    defaultValue: entry.name
+  });
+  if (!newName || newName.trim() === entry.name) {
+    return;
+  }
+
+  try {
+    const result = await renameEntry(entry.path, newName.trim(), false);
+    await refresh(workspace.value?.path || "");
+    const failure = result.items.find((item) => !item.moved);
+    if (failure) {
+      showNotice(t("panel.bulk.failedItem", { name: entry.name, reason: hataMetni(failure.errorKey) }), true);
+      return;
+    }
+
+    showNotice(t("panel.files.renamed"), false);
+  } catch (error) {
+    showNotice(resolveApiMessage(error), true);
+  }
+}
+
+/** Hedef formunu açar; hedef varsayılan olarak BULUNULAN klasördür, kullanıcı değiştirir. */
+function startTransfer(mode: "move" | "copy") {
+  if (selection.count.value === 0) {
+    return;
+  }
+
+  transferMode.value = mode;
+  transferTarget.value = workspace.value?.path || siteRootPath.value;
+  transferOverwrite.value = false;
+}
+
+/**
+ * TAŞI / KOPYALA — KISMİ BAŞARISIZLIK YALANLANMAZ.
+ *
+ * Uçlar tek istekte çoklu öge alır ve öge başına sonuç döner. "Tamamlandı" demek, taşınamayan iki
+ * dosyayı sessizce kaybetmek olurdu; özet kaçının olduğunu, kaçının olmadığını ve HANGİSİNİN NEDEN
+ * olmadığını (`errorKey` → kullanıcının dili) satır satır yazar.
+ */
+async function runTransfer() {
+  const mode = transferMode.value;
+  const targets = entries.value.filter((entry) => selection.isSelected(entry.path));
+  if (!mode || targets.length === 0) {
+    return;
+  }
+
+  const destination = transferTarget.value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  // Site kökünün dışı arka uçta zaten reddedilir; burada da söylenir ki kullanıcı hatayı
+  // istek gitmeden görsün. Anahtar arka ucun kullandığıyla AYNI: iki yerde iki farklı cümle olmaz.
+  if (!destination || !siteRootPath.value || !destination.startsWith(siteRootPath.value)) {
+    showNotice(t("files.path_outside_root"), true);
+    return;
+  }
+
+  const paths = targets.map((entry) => entry.path);
+  transferBusy.value = true;
+  try {
+    const failures: { name: string; reason: string }[] = [];
+    // UYARI ≠ HATA: kopyalamada bir alt öge bağlantı (junction/symlink) olduğu için atlanmışsa
+    // öge "kopyalandı" sayılır ama kopya EKSİKTİR (bkz. CopyFileResultDto.ErrorKey). Bu satırı
+    // yutmak, kullanıcının eksik kopyayı tam sanmasına yol açardı.
+    const warnings: { name: string; reason: string }[] = [];
+    let done = 0;
+
+    if (mode === "move") {
+      const result = await moveEntries(paths, destination, transferOverwrite.value);
+      done = result.movedCount;
+      for (const item of result.items.filter((satir) => !satir.moved)) {
+        failures.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
+      }
+    } else {
+      const result = await copyEntries(paths, destination, transferOverwrite.value);
+      done = result.copiedCount;
+      for (const item of result.items) {
+        if (!item.copied) {
+          failures.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
+        } else if (item.errorKey) {
+          warnings.push({ name: item.sourcePath, reason: hataMetni(item.errorKey) });
+        }
+      }
+    }
+
+    transferMode.value = null;
+    selection.clear();
+    await refresh(workspace.value?.path || "");
+    showNotice(
+      transferOzeti(mode, targets.length, done, failures, warnings),
+      failures.length > 0 || warnings.length > 0);
+  } catch (error) {
+    // İstek TÜMÜYLE reddedildi (hedef klasör yok, sanal alan dışı...): form açık kalır ki
+    // kullanıcı hedefi düzeltip yeniden deneyebilsin.
+    showNotice(resolveApiMessage(error), true);
+  } finally {
+    transferBusy.value = false;
+  }
+}
+
+/** Sunucunun döndürdüğü hata ANAHTARINI kullanıcının diline çevirir; karşılığı yoksa anahtarın
+ *  kendisi görünür — sessizce boş bırakmaktan iyidir (bkz. composables/useNotice.ts). */
+function hataMetni(errorKey: string) {
+  if (!errorKey) {
+    return t("panel.files.reasonUnknown");
+  }
+
+  const translated = t(errorKey);
+  return translated === errorKey ? errorKey : translated;
+}
+
+/**
+ * Taşıma/kopyalama özeti — ÜÇ DURUM AYRI: tamamı oldu / bir kısmı olmadı / hepsi oldu ama kopya
+ * eksik. Üçünü tek "tamamlandı" cümlesine indirmek, kullanıcıya olmayan bir sonucu bildirmektir.
+ */
+function transferOzeti(
+  mode: "move" | "copy",
+  total: number,
+  done: number,
+  failures: { name: string; reason: string }[],
+  warnings: { name: string; reason: string }[]
+) {
+  const lines = [...failures, ...warnings].map((satir) =>
+    t("panel.bulk.failedItem", { name: satir.name, reason: satir.reason }));
+
+  if (failures.length === 0 && warnings.length === 0) {
+    return mode === "move"
+      ? t("panel.files.movedAll", { total })
+      : t("panel.files.copiedAll", { total });
+  }
+
+  if (failures.length === 0) {
+    return [t("panel.files.copiedIncomplete", { total }), ...lines].join("\n");
+  }
+
+  const head = mode === "move"
+    ? t("panel.files.movedPartial", { total, done, failed: failures.length })
+    : t("panel.files.copiedPartial", { total, done, failed: failures.length });
+  return [head, ...lines].join("\n");
 }
 
 /**
@@ -648,7 +909,9 @@ async function restore(backupId: string) {
 }
 
 .files-row {
-  grid-template-columns: 30px minmax(220px, 1fr) 110px minmax(330px, auto);
+  /* Satır eylemleri "Yeniden adlandır" ile bir düğme daha aldı: dar sütun düğmeleri alt alta
+     kaydırıyordu. */
+  grid-template-columns: 30px minmax(220px, 1fr) 110px minmax(430px, auto);
 }
 
 .select-cell {
@@ -675,6 +938,41 @@ async function restore(backupId: string) {
 
 .bulk-bar button {
   width: auto;
+}
+
+.transfer-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 1fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.transfer-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.overwrite-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.overwrite-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .transfer-form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .entry-actions,
