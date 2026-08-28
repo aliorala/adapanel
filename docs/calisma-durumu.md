@@ -293,3 +293,43 @@ Kapatirken cikan UC sey, listedekilerden onemliydi:
 Denenen ve REDDEDILEN: `AdaPanelTest2026!`, `AdaPanelTest2026!yeni`.
 Olculdu: hesap KILITLI DEGIL (kilit `auth.user_locked`, IP engeli `auth.ip_banned` doner;
 alinan cevap `auth.invalid_credentials`). Esik 10 deneme, 3 kullanildi.
+
+---
+
+## 0.7.9 (28.08.2026)
+
+`SHA256 975F818323301FC385EB6259CC929124587851B6EDB640917E670D1263E18247`
+**3758 test yesil** (onceki 3739). 22 mutasyon denendi, 22'si kizardi.
+
+Kapatilan: silme siniflandirmasina "olculemedi" ucuncu durumu (arayuze de baglandi) ·
+kota gostergelerindeki birim tutarsizligi (7 gosterim + 6 i18n etiketi) · olcum sebebi
+onceliginin testi.
+
+**Onceki turdan devralinan "test edilemez" iddiasi CURUTULDU:** sebep onceligi icin
+"gercek ACL manipulasyonu gerekiyor" denmisti; o gerekce YURUYUSUN TAMAMI icin dogru,
+KURALIN KENDISI icin degil. Kural `CustomerScopeService.SebepSec` adli SAF bir
+fonksiyonda yasiyor -> internal yapilip dogrudan olculdu.
+**DERS: "test edilemez" denen seyin hangi PARCASININ test edilemez oldugunu ayirt et.**
+
+### ACIK KALAN
+
+1. **Sunucudaki alan adlari yanlis birim soyluyor** (kullaniciya gorunen etiketler
+   duzeldi, kodun ici DUZELMEDI):
+   - `SubscriptionUsageDto.TrafficLimitGb`, `ServicePlanDto.MaxTrafficGbPerMonth` -> GiB
+   - `DiskUsageMb` / `MaxDiskMb` / `AllocatedDiskMb` / `DiskUsage.UsageMb` -> MiB
+   - `MailAccountDto.MaxSizeMB` / `CurrentSizeMB`, `MailDomainDto.AllocatedMB` -> MiB
+   - `BillingUnits.BytesToMegabytes` / `GigabytesToMegabytes` -> MiB/GiB
+     (dosyanin kendi yorumu "1 MB = 1048576 bayt" diyerek yanlisi zaten kabul ediyor)
+   Yeniden adlandirmak JSON alan adlarini degistirir -> panel + WHMCS modulu birlikte
+   kirilir. AYRI TUR, tek seferde ve tam yapilmali.
+2. **Fatura modulu (PHP/WHMCS) calistirilarak denenmedi** — yalniz kaynak nobetcisi var.
+3. **200.000+ ogelik gercek agacta uctan uca silme denenmedi** — ucuncu durum kucuk
+   butceyle gercek dosyalar uzerinde uretildi, uretim olceginde olculmedi.
+4. **Kart mount testi yok:** depoda `@vue/test-utils` YOK, bileseni monte eden test
+   yazilamiyor. Birim mantigi `bytes.test.ts` ile dolayli kilitlendi.
+
+### HALA YAPILAMAYAN: `.htaccess` canli ayrim testi
+(a) 0.7.9'un kurulmasi, (b) panel `admin` PAROLASI.
+Denenen ve REDDEDILEN: `AdaPanelTest2026!`, `AdaPanelTest2026!yeni`.
+Olculdu: hesap KILITLI DEGIL (`auth.user_locked` / `auth.ip_banned` gelmedi,
+`auth.invalid_credentials` geldi). Esik 10, kullanilan 3.
