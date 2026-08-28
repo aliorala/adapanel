@@ -124,3 +124,32 @@ Bakınca eksik tek başına değildi.
   Test: `RewriteRule ^adapanel-test-42$ /iisstart.htm [R=302,L]` → adres 302 dönmeli →
   dosya `.htaccess.kapali` yapılınca **404 dönmeli**. Üçüncü adım şart: geçen sefer onu
   atladığım için `alioral.xyz`'de yanlışlıkla "çalışıyor" demiştim.
+
+### 0.7.5 yayinlandi (28.08.2026)
+
+`SHA256 E1D4E804E57D6A16DB553BC3822F0FD20F68C42141CE6294006E525227895464` — 90.540.472 bayt.
+Paket yuklendi, indirilip ozeti yerel dosyayla karsilastirildi. **3633 test yesil.**
+
+Yapilanlar: dosya olusturma/yeniden adlandirma/tasima/kopyalama arayuze baglandi; sunucu geneli
+`.htaccess` anahtari panele geldi (yonetici-only, rota site agacinin disinda); "yeni dosya"
+var olanin ustune yazamiyor (`FileMode.CreateNew`); yarim yazilan `module.switch` artik daha
+ACIK kip uretmiyor.
+
+**Yayin sirasinda ayri bir hata olculdu ve kapatildi:** `publish-github-release.ps1`
+`-InstallerPath` verilmeden calistirilinca release'i PAKETSIZ olusturup "Tamamlandi" dedi.
+Paketsiz yayin, kurulu tum panellerde kendi kendine guncellemeyi kirar. Nobetci eklendi
+(`ReleaseAssetGuardTests`), iki yonu de olculdu.
+
+### SIRADAKI IS — `.htaccess` canli ayrim testi
+
+0.7.5 bu makineye kurulunca panelin KENDISIYLE yapilacak (artik elle komut gerekmiyor):
+
+1. Barindirma -> .htaccess -> **Sunucu geneli anahtar** = Uygula
+2. Ayni ekranda site kipi = Uygula (`test.local`)
+3. Dosyalar -> **Yeni dosya** -> `.htaccess`, icerik:
+   `RewriteEngine On` / `RewriteRule ^adapanel-test-42$ /iisstart.htm [R=302,L]`
+4. `curl -I -H "Host: test.local" http://127.0.0.1/adapanel-test-42` -> **302** beklenir
+5. Dosyayi **Yeniden adlandir** -> `.htaccess.kapali`
+6. Ayni adres -> **404** DONMELI
+
+6. adim sart: gecen sefer onu atladigim icin `alioral.xyz`'de yanlislikla "calisiyor" demistim.
