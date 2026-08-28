@@ -257,6 +257,13 @@
           <button class="secondary" :disabled="validating || draft.trim().length === 0" @click="runValidate">
             {{ validating ? t("panel.htaccess.validate.running") : t("panel.htaccess.validate.run") }}
           </button>
+          <!-- KAYDETME buraya konuldu: kullanıcı metni ZATEN burada yazıp denetliyordu, ama
+               kaydetmek için Dosyalar ekranına gidip elle yapıştırmak zorundaydı. Kaydetme
+               kendi doğrulamasını çalıştırır; ölümcül bulguda bilinçli onay ister. -->
+          <button v-bind="writeGate(saving || validating || draft.trim().length === 0)" @click="saveDraft">
+            {{ saving ? t("panel.htaccess.saving") : t("panel.htaccess.save.run") }}
+          </button>
+          <span class="meta">{{ t("panel.htaccess.save.hint") }}</span>
         </div>
 
         <template v-if="validation">
@@ -394,6 +401,8 @@ import {
   type HtaccessSimulationResult,
   type HtaccessSiteReport
 } from "../api/htaccess";
+import { getFileWorkspace, saveFile } from "../api/files";
+import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -402,6 +411,7 @@ const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmesi bastan devre disi + sebebi title/aria ile soylenir.
 // Okuma dugmeleri (incele, denetle, benzet) kapiya girmez.
 const { writeGate } = useSubscriptionGate();
+const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const authStore = useAuthStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
@@ -422,6 +432,7 @@ const validation = ref<HtaccessParseResult | null>(null);
 const simulation = ref<HtaccessSimulationResult | null>(null);
 
 const busy = ref(false);
+const saving = ref(false);
 const inspecting = ref(false);
 const validating = ref(false);
 const simulating = ref(false);
@@ -601,6 +612,137 @@ async function runValidate() {
   } finally {
     validating.value = false;
   }
+}
+
+/**
+ * TASLAĞI DOSYAYA YAZ.
+ *
+ * NEDEN YENİ BİR UÇ YOK: `.htaccess` sıradan bir metin dosyasıdır ve panelin dosya yazma yolu
+ * (`PUT /files`) zaten sanal alan denetimi, kota, kiracı kapsamı ve DENETİM KAYDI taşıyor. Bu iş
+ * için ikinci bir yazma yolu açmak, o dört korumayı ikinci kez (ve eksik) yazmak olurdu.
+ *
+ * SIRA ÖNEMLİ:
+ *  1. Doğrula. Ölümcül bulgu varsa DOĞRUDAN yazılmaz — bozuk bir `.htaccess` sitenin TAMAMINI
+ *     çökertebilir. Ama kullanıcı büsbütün kilitlenmez: bulgular gösterilip bilinçli onay
+ *     ("yine de kaydet") istenir. Motor ölümcül dosyayı zaten atlıyor, yani karar kullanıcının.
+ *  2. Hedef yolu ÖLÇEREK kur (bkz. hedefYolAsync) — uydurma.
+ *  3. Yazdıktan sonra raporu ve incelemeyi TAZELE, yoksa ekran kaydedilmiş içeriği değil eski
+ *     durumu göstermeye devam eder.
+ */
+async function saveDraft() {
+  if (!siteName.value || saving.value) return;
+
+  const sanalYol = draftPath.value.trim() || "/";
+  const goreli = goreliDizin(sanalYol);
+  if (goreli === null) {
+    notice.value = t("panel.htaccess.save.badPath");
+    noticeError.value = true;
+    return;
+  }
+
+  saving.value = true;
+  notice.value = "";
+  try {
+    const sonuc = await validateHtaccess(siteName.value, draft.value, sanalYol);
+    validation.value = sonuc;
+
+    if (!sonuc.usable) {
+      const olumcul = sonuc.diagnostics.filter((bulgu) => diagnosticLevelName(bulgu.level) === "fatal");
+      const onay = await confirm({
+        title: t("panel.htaccess.save.fatalTitle"),
+        message: t("panel.htaccess.save.fatalMessage"),
+        // Bulgular ONAY KUTUSUNDA da görünür: kullanıcı neyi göze aldığını okumadan onaylamasın.
+        impact: olumcul.map((bulgu) => `${bulgu.directive || bulgu.code}: ${bulgu.message}`),
+        tone: "neutral",
+        confirmLabel: t("panel.htaccess.save.anyway")
+      });
+
+      if (!onay) {
+        notice.value = t("panel.htaccess.save.cancelled");
+        noticeError.value = true;
+        return;
+      }
+    }
+
+    const hedef = await hedefYolAsync(goreli);
+    if (hedef === null) {
+      notice.value = t("panel.htaccess.save.rootMismatch");
+      noticeError.value = true;
+      return;
+    }
+
+    await saveFile(hedef, draft.value);
+
+    await load();
+    // `load` taslak yolunu köke çeker; kullanıcının çalıştığı dizin geri konur, sonra o dizin
+    // yeniden incelenir — aksi halde ekran az önce yazılan dosyayı hiç göstermezdi.
+    draftPath.value = sanalYol;
+    await inspect(goreli);
+
+    // Başarı mesajı, TAZELEMENİN hatasının ÜSTÜNE yazılmaz: dosya yazıldı ama rapor okunamadıysa
+    // kullanıcı ekrandaki bilginin bayat olduğunu bilmeli.
+    if (!noticeError.value) {
+      notice.value = t("panel.htaccess.save.saved", { path: hedef });
+      noticeError.value = false;
+    }
+  } catch (error) {
+    fail(error, "panel.htaccess.save.failed");
+  } finally {
+    saving.value = false;
+  }
+}
+
+/**
+ * Sanal yolu (`/`, `/blog`) site köküne GÖRELİ dizine çevirir. Yukarı çıkma denemesi
+ * (<c>..</c>) burada `null` döner: arka uç da reddederdi ama kullanıcı sebebi istek gitmeden
+ * görmeli.
+ */
+function goreliDizin(virtualPath: string): string | null {
+  const parcalar = virtualPath.replace(/\\/g, "/").split("/").filter((parca) => parca.length > 0);
+  if (parcalar.some((parca) => parca === "." || parca === "..")) {
+    return null;
+  }
+
+  return parcalar.join("/");
+}
+
+/**
+ * DOSYA YÖNETİCİSİNİN sanal yolunu kurar: `sites/<site>/<...>/.htaccess`.
+ *
+ * ÖLÇÜLDÜ, VARSAYILMADI: dosya yöneticisinin kökü sitenin UYGULAMA kökü
+ * (`ApplicationRootPath`, yoksa `PhysicalPath`), `.htaccess` motorunun kökü ise BELGE köküdür
+ * (`PhysicalPath`). Laravel benzeri yerleşimlerde belge kökü uygulama kökünün ALTINDADIR
+ * (`.../public`), yani ikisi aynı olmayabilir. İki kök doğrudan sunucudan okunup farkları
+ * hesaplanır; sabit bir `public` varsayımı yazsaydık dosya yanlış klasöre yazılırdı.
+ *
+ * Belge kökü dosya yöneticisinin sanal alanının İÇİNDE değilse `null` döner: yolu tahmin edip
+ * rastgele bir yere yazmaktansa kaydetmemek doğrudur.
+ */
+async function hedefYolAsync(goreliDizinYolu: string): Promise<string | null> {
+  const siteKoku = `sites/${siteName.value}`;
+  const calismaAlani = await getFileWorkspace(siteKoku);
+  const onEk = belgeKokuOneki(calismaAlani.physicalPath, report.value?.documentRoot ?? "");
+  if (onEk === null) {
+    return null;
+  }
+
+  return [siteKoku, onEk, goreliDizinYolu, ".htaccess"].filter((parca) => parca.length > 0).join("/");
+}
+
+/** İki mutlak yol arasındaki fark; eşitse boş dize, kapsamıyorsa `null`. */
+function belgeKokuOneki(dosyaKoku: string, belgeKoku: string): string | null {
+  const normalize = (yol: string) => yol.replace(/\\/g, "/").replace(/\/+$/, "");
+  const kok = normalize(dosyaKoku);
+  const belge = normalize(belgeKoku);
+  if (kok.length === 0 || belge.length === 0) {
+    return null;
+  }
+
+  if (kok.toLowerCase() === belge.toLowerCase()) {
+    return "";
+  }
+
+  return belge.toLowerCase().startsWith(`${kok.toLowerCase()}/`) ? belge.slice(kok.length + 1) : null;
 }
 
 async function runSimulate() {

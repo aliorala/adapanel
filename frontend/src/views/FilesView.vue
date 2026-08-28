@@ -43,13 +43,39 @@
       <p class="meta">{{ t("panel.files.siteRequiredHint") }}</p>
     </section>
 
-    <section v-else-if="activeTab === 'files'" class="form-surface workspace-card">
+    <!-- SÜRÜKLE-BIRAK bütün çalışma kartını kaplar: kullanıcı dosyayı "listenin üstüne" bırakır,
+         ama fare tabloya girmeden önce de bir hedef görmeli. `dragover`da `preventDefault`
+         ZORUNLU — yoksa tarayıcı bırakmayı hiç kabul etmez ve dosyayı sekmede açar. -->
+    <section
+      v-else-if="activeTab === 'files'"
+      class="form-surface workspace-card"
+      :class="{ 'drop-active': dropActive }"
+      @dragenter="onDragEnter"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop">
+      <div v-if="dropActive" class="drop-overlay" role="status" aria-live="polite">
+        <strong>{{ t("panel.files.dropHere") }}</strong>
+        <small>{{ t("panel.files.dropHint") }}</small>
+      </div>
+
       <div class="action-row">
-        <strong>{{ workspace?.path || "/" }}</strong>
+        <!-- YOL ÇUBUĞU: her parça tıklanabilir. Site kökünün ÜSTÜ hiç çizilmez — kullanıcının
+             sanal alanı orada başlar ve gezinilemeyecek bir parçayı göstermek, olmayan bir
+             yetkiyi ima etmek olurdu. Bulunulan parça düğme değil: kendine gitmek işlevsiz. -->
+        <nav class="breadcrumb" :aria-label="t('panel.files.breadcrumb')">
+          <template v-for="(part, index) in breadcrumb" :key="part.path">
+            <span v-if="index > 0" class="breadcrumb-sep" aria-hidden="true">/</span>
+            <strong v-if="index === breadcrumb.length - 1" aria-current="page">{{ part.name }}</strong>
+            <button v-else type="button" class="link-button" @click="openPath(part.path)">{{ part.name }}</button>
+          </template>
+        </nav>
         <div class="action-row">
-          <label class="upload-button">
-            <input type="file" @change="uploadSelectedFile" />
-            <span>{{ t("panel.files.upload") }}</span>
+          <!-- ÇOKLU seçim: yirmi dosyayı tek tek seçtirmek Plesk'te de yok. Gönderim SIRAYLA
+               (bkz. uploadSelectedFiles). -->
+          <label class="upload-button" :class="{ disabled: uploadBusy || locked }" :title="lockReason || undefined">
+            <input type="file" multiple v-bind="writeGate(uploadBusy)" @change="uploadSelectedFiles" />
+            <span>{{ uploadBusy ? uploadProgressLabel : t("panel.files.upload") }}</span>
           </label>
           <button class="secondary compact" :disabled="!canGoUp" @click="openPath(workspace?.parentPath || siteRootPath)">
             {{ t("panel.files.up") }}
@@ -152,6 +178,7 @@
             </span>
             <span>{{ t("panel.files.name") }}</span>
             <span>{{ t("panel.files.kind") }}</span>
+            <span>{{ t("panel.files.sizeColumn") }}</span>
             <span>{{ t("panel.files.actions") }}</span>
           </div>
 
@@ -168,10 +195,31 @@
               <small>{{ entry.path }}</small>
             </div>
             <span>{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
+            <!-- KLASÖR BOYUTU İSTENDİĞİNDE hesaplanır. Hesaplanmamış klasör "0 B" değil "—"
+                 gösterir: sıfır, ölçülmüş bir değerdir ve dolu bir klasörü boş göstermek
+                 kullanıcının disk kararını yanlış sayıya dayandırması olurdu. -->
+            <span class="size-cell">
+              <template v-if="!entry.isDirectory">{{ boyutMetni(entry.size) }}</template>
+              <template v-else-if="folderSizes[entry.path]">
+                <span :title="folderSizes[entry.path].truncated ? kesikSebebi(folderSizes[entry.path]) : undefined">
+                  {{ folderSizes[entry.path].truncated
+                    ? t("panel.files.sizeAtLeast", { size: boyutMetni(folderSizes[entry.path].totalBytes) })
+                    : boyutMetni(folderSizes[entry.path].totalBytes) }}
+                </span>
+              </template>
+              <template v-else>—</template>
+            </span>
             <div class="entry-actions">
               <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
                 {{ t("panel.files.download") }}
               </a>
+              <button
+                v-if="entry.isDirectory"
+                class="secondary compact"
+                :disabled="sizeBusyPath === entry.path"
+                @click="calculateFolderSize(entry)">
+                {{ sizeBusyPath === entry.path ? t("panel.files.calcSizeBusy") : t("panel.files.calcSize") }}
+              </button>
               <button class="secondary compact" v-bind="writeGate()" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
               <button class="secondary compact" v-bind="writeGate()" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
               <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate()" @click="extract(entry.path)">
@@ -293,6 +341,7 @@ import {
   createFile,
   deletePath,
   extractPath,
+  getDirectorySize,
   getDownloadUrl,
   getFileWorkspace,
   moveEntries,
@@ -301,6 +350,7 @@ import {
   searchFiles,
   updatePermissions,
   uploadFile,
+  type DirectorySizeResult,
   type FileEntry,
   type FileWorkspace
 } from "../api/files";
@@ -313,11 +363,14 @@ import { useNotice, useSectionError } from "../composables/useNotice";
 import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection";
 import { usePagination } from "../composables/usePagination";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatBytes } from "../utils/bytes";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+// `locked`/`lockReason` yükleme için ayrıca gerekiyor: yükleme bir <label> içindeki dosya
+// seçicidir, `disabled` etiketin görünümünü değiştirmez — sebebi elle söylemek gerekir.
+const { writeGate, locked, lockReason } = useSubscriptionGate();
 const { prompt } = usePrompt();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
@@ -387,6 +440,57 @@ const canGoUp = computed(() =>
 const parentTargetPath = computed(() => (canGoUp.value ? workspace.value!.parentPath : ""));
 
 /**
+ * YOL ÇUBUĞU parçaları — ilk parça HER ZAMAN site kökü.
+ *
+ * NEDEN KÖKÜN ÜSTÜ ÇİZİLMİYOR: sanal yol `sites/<site>/...` biçiminde; baştaki `sites` parçası
+ * kullanıcının sanal alanının DIŞINDADIR ve `openPath` onu zaten reddeder. Tıklanamayacak bir
+ * parçayı gezinilebilir göstermek, olmayan bir yetkiyi ima etmek olurdu.
+ *
+ * Bir DOSYA açıkken son parça dosyanın adıdır: o da tıklanmaz (zaten açık), ama üstündeki
+ * klasörler tek tıkla erişilebilir kalır.
+ */
+const breadcrumb = computed(() => {
+  const root = siteRootPath.value;
+  const current = workspace.value?.path ?? "";
+  if (!root || !current.startsWith(root)) {
+    return [] as { name: string; path: string }[];
+  }
+
+  const parts = current.slice(root.length).split("/").filter(Boolean);
+  const items = [{ name: selectedSiteName.value, path: root }];
+  let birikmis = root;
+  for (const part of parts) {
+    birikmis = `${birikmis}/${part}`;
+    items.push({ name: part, path: birikmis });
+  }
+
+  return items;
+});
+
+// ÇOKLU YÜKLEME durumu. `uploadTotal` yalnızca gösterim içindir; asıl kural sıraya alma:
+// yirmi isteği paralel göndermek tarayıcının bağlantı havuzunu ve sunucuyu boşuna zorlar.
+const uploadBusy = ref(false);
+const uploadDone = ref(0);
+const uploadTotal = ref(0);
+const uploadProgressLabel = computed(() =>
+  t("panel.files.uploadProgress", { done: uploadDone.value, total: uploadTotal.value }));
+
+/**
+ * SÜRÜKLE-BIRAK göstergesi.
+ *
+ * `dragleave` İÇ İÇE ögelerde de tetiklenir: fare karttan tabloya geçerken karta "ayrıldı"
+ * denir ve gösterge kartın üstündeyken kapanır (ya da tersi, takılı kalır). Bu yüzden
+ * enter/leave SAYILIR; sıfıra düşmeden gösterge kapanmaz.
+ */
+const dropActive = ref(false);
+let dragDepth = 0;
+
+// Klasör boyutu: yol -> ölçüm. Ölçülmeyen klasör sözlükte HİÇ yer almaz; "0" ile "ölçülmedi"
+// birbirine karışmasın.
+const folderSizes = ref<Record<string, DirectorySizeResult>>({});
+const sizeBusyPath = ref("");
+
+/**
  * Hedef olarak seçilebilecek alt klasörler. Taşınan/kopyalanan ögelerin KENDİLERİ listede yer
  * almaz: bir klasörü kendi içine taşımak arka uçta `files.move_into_itself` ile reddedilir,
  * kullanıcıya en baştan sunulmaması daha dürüst.
@@ -432,6 +536,10 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
   }
 
   loading.value = true;
+  // Ölçülmüş klasör boyutları BURADA düşer. Liste yeniden okunduğunda (yükleme, silme, taşıma,
+  // başka klasöre geçiş) eski ölçüm artık bir şeyin karşılığı değildir; ekranda bırakmak
+  // kullanıcıya bayat bir sayıyı güncel diye göstermek olurdu.
+  folderSizes.value = {};
   try {
     workspace.value = await getFileWorkspace(path);
     fileContent.value = workspace.value.content || "";
@@ -461,22 +569,219 @@ async function openPath(path: string) {
   await refresh(path);
 }
 
-async function uploadSelectedFile(event: Event) {
+async function uploadSelectedFiles(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file || !workspace.value?.isDirectory) {
+  const files = Array.from(input.files ?? []);
+  try {
+    await uploadMany(files, []);
+  } finally {
+    // Aynı dosya ikinci kez seçilebilsin: `input.value` temizlenmezse `change` hiç tetiklenmez.
+    input.value = "";
+  }
+}
+
+/**
+ * ÇOKLU YÜKLEME — SIRAYLA, ve KISMİ BAŞARISIZLIK GİZLENMEZ.
+ *
+ * NEDEN SIRAYLA: yirmi `multipart` isteğini aynı anda açmak tarayıcının bağlantı havuzunu
+ * tüketir, sunucuda yirmi eşzamanlı disk yazması başlatır ve ilerlemeyi ölçülemez kılar.
+ *
+ * NEDEN İLK HATADA DURULMUYOR: on dosyanın üçüncüsü kota/ad hatasıyla reddedildiğinde geri
+ * kalan yedisini göndermemek kullanıcıyı işi baştan yapmaya zorlar. Döngü devam eder, özet
+ * HANGİ dosyanın NEDEN olmadığını tek tek yazar (taşıma/kopyalama özetiyle aynı üslup).
+ *
+ * `folders` bırakılan ama YÜKLENEMEYEN klasörlerin adıdır: tarayıcı `input`/`drop` ile klasörü
+ * dosya sanar ve içeriğini bu uçla gönderemez. Sessizce yutmak, kullanıcının sitesine
+ * kopyalandığını sandığı bir klasörün hiç var olmaması demekti.
+ */
+async function uploadMany(files: File[], folders: string[]) {
+  if (!workspace.value?.isDirectory) {
     return;
   }
 
+  // Sürükle-bırak `disabled` bilmez: askıdaki abonelikte istek zaten reddedilirdi, sebebi
+  // BURADA söylenir — yoksa kullanıcı dosyayı bırakır ve hiçbir şey olmaz.
+  if (locked.value) {
+    showNotice(lockReason.value, true);
+    return;
+  }
+
+  if (files.length === 0) {
+    if (folders.length > 0) {
+      showNotice(t("panel.files.uploadFolderSkipped", { names: folders.join(", ") }), true);
+    }
+    return;
+  }
+
+  const hedef = workspace.value.path;
+  const failures: { name: string; reason: string }[] = [];
+  uploadBusy.value = true;
+  uploadDone.value = 0;
+  uploadTotal.value = files.length;
+
   try {
-    await uploadFile(workspace.value.path, file);
-    await refresh();
-    showNotice(t("panel.files.uploaded"), false);
+    for (const file of files) {
+      try {
+        await uploadFile(hedef, file);
+        uploadDone.value += 1;
+      } catch (error) {
+        failures.push({ name: file.name, reason: resolveApiMessage(error) });
+      }
+    }
+  } finally {
+    uploadBusy.value = false;
+  }
+
+  await refresh(hedef);
+  showNotice(uploadOzeti(files.length, uploadDone.value, failures, folders), failures.length > 0 || folders.length > 0);
+}
+
+/** Yükleme özeti — "tamamlandı" yalnız GERÇEKTEN hepsi olduğunda yazılır. */
+function uploadOzeti(total: number, done: number, failures: { name: string; reason: string }[], folders: string[]) {
+  const lines = failures.map((satir) => t("panel.bulk.failedItem", { name: satir.name, reason: satir.reason }));
+  if (folders.length > 0) {
+    lines.push(t("panel.files.uploadFolderSkipped", { names: folders.join(", ") }));
+  }
+
+  if (lines.length === 0) {
+    return t("panel.files.uploadedAll", { total });
+  }
+
+  return [t("panel.files.uploadedPartial", { total, done, failed: failures.length }), ...lines].join("\n");
+}
+
+/** Sürüklenen şey DOSYA mı: metin/bağlantı sürüklerken bırakma alanı açılmamalı. */
+function hasFiles(event: DragEvent) {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+function onDragEnter(event: DragEvent) {
+  if (!hasFiles(event) || !workspace.value?.isDirectory) {
+    return;
+  }
+
+  event.preventDefault();
+  dragDepth += 1;
+  dropActive.value = true;
+}
+
+function onDragOver(event: DragEvent) {
+  if (!hasFiles(event) || !workspace.value?.isDirectory) {
+    return;
+  }
+
+  // preventDefault ŞART: yapılmazsa tarayıcı bırakmayı reddeder ve dosyayı sekmede açar.
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+}
+
+function onDragLeave(event: DragEvent) {
+  if (!hasFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+  dragDepth -= 1;
+  if (dragDepth <= 0) {
+    dragDepth = 0;
+    dropActive.value = false;
+  }
+}
+
+/**
+ * BIRAKMA. Gösterge her koşulda kapanır (sayaç sıfırlanır), yükleme başarısız olsa bile.
+ *
+ * KLASÖR AYIKLAMA `webkitGetAsEntry` ile yapılır — dosya adına/boyutuna bakan tahminler
+ * (uzantısız dosyaları klasör sanmak) yanlış cevap verir. Öge listesi EŞ ZAMANLI okunur:
+ * `DataTransfer` ilk `await`ten sonra boşaltılır, sonra okunursa hiçbir dosya bulunamaz.
+ */
+async function onDrop(event: DragEvent) {
+  if (!hasFiles(event) || !workspace.value?.isDirectory) {
+    return;
+  }
+
+  event.preventDefault();
+  dragDepth = 0;
+  dropActive.value = false;
+
+  const transfer = event.dataTransfer;
+  if (!transfer) {
+    return;
+  }
+
+  const files: File[] = [];
+  const folders: string[] = [];
+  const items = Array.from(transfer.items ?? []);
+  if (items.length > 0 && typeof items[0].webkitGetAsEntry === "function") {
+    for (const item of items) {
+      if (item.kind !== "file") {
+        continue;
+      }
+
+      const entry = item.webkitGetAsEntry();
+      if (entry?.isDirectory) {
+        folders.push(entry.name);
+        continue;
+      }
+
+      const file = item.getAsFile();
+      if (file) {
+        files.push(file);
+      }
+    }
+  } else {
+    // Eski tarayıcı: klasör ayırt edilemez. Yine de dosyalar gönderilir; klasör sunucuda
+    // reddedilir ve sebebi özette görünür — sessiz kayıp olmaz.
+    files.push(...Array.from(transfer.files ?? []));
+  }
+
+  await uploadMany(files, folders);
+}
+
+/**
+ * KLASÖR BOYUTU — sonuç EKSİKSE bunu SÖYLER.
+ *
+ * Sunucu öge/süre bütçesini aşarsa taramayı keser (`truncated`). O hâlde gösterilen değer bir
+ * ALT SINIRDIR; tam sayı gibi göstermek kullanıcının disk kararını yanlış sayıya dayandırması
+ * olurdu. Bu yüzden hem satırda "en az" denir hem de şeritte sebep (çeviri anahtarı) yazılır.
+ */
+async function calculateFolderSize(entry: FileEntry) {
+  if (!entry.isDirectory || sizeBusyPath.value) {
+    return;
+  }
+
+  sizeBusyPath.value = entry.path;
+  try {
+    const result = await getDirectorySize(entry.path);
+    // Sonuç SUNUCUNUN döndürdüğü yola yazılır, istediğimiz yola değil: cevap gecikirse ve
+    // kullanıcı başka klasöre geçtiyse ölçüm yanlış satıra düşmez (yeni listede o yol yoktur).
+    folderSizes.value = { ...folderSizes.value, [result.path || entry.path]: result };
+    const olcum = t("panel.files.sizeSummary", {
+      name: entry.name,
+      size: boyutMetni(result.totalBytes),
+      files: result.fileCount,
+      folders: result.directoryCount
+    });
+    showNotice(
+      result.truncated ? `${olcum}\n${kesikSebebi(result)}` : olcum,
+      result.truncated);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
-    input.value = "";
+    sizeBusyPath.value = "";
   }
+}
+
+/** Ölçümün NEDEN eksik kaldığı; sebep anahtarı çevrilir, yoksa anahtarın kendisi görünür. */
+function kesikSebebi(result: DirectorySizeResult) {
+  return t("panel.files.sizeTruncated", { reason: hataMetni(result.truncatedReasonKey) });
+}
+
+/** Bayt biçimi panelin geri kalanıyla AYNI (bkz. utils/bytes.ts); ekran kendi biçimini uydurmaz. */
+function boyutMetni(value: number) {
+  return formatBytes(value, t);
 }
 
 async function runSearch() {
@@ -910,8 +1215,57 @@ async function restore(backupId: string) {
 
 .files-row {
   /* Satır eylemleri "Yeniden adlandır" ile bir düğme daha aldı: dar sütun düğmeleri alt alta
-     kaydırıyordu. */
-  grid-template-columns: 30px minmax(220px, 1fr) 110px minmax(430px, auto);
+     kaydırıyordu. Boyut sütunu sabit dar: "1,2 GiB"ten uzun bir değer yok. */
+  grid-template-columns: 30px minmax(200px, 1fr) 100px 120px minmax(430px, auto);
+}
+
+.size-cell {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Yol çubuğu tek satırda kalır; derin yollarda yatay kaydırılır (satır kırılıp araç
+   düğmelerini aşağı itmesin). */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.breadcrumb-sep {
+  color: var(--text-muted);
+}
+
+/* Bırakma alanı kartın ÜSTÜNE biner: kullanıcı hedefi görmeden bırakmasın. `pointer-events`
+   kapalı, yoksa katmanın kendisi `dragleave` üretip göstergeyi titretirdi. */
+.workspace-card {
+  position: relative;
+}
+
+.workspace-card.drop-active {
+  outline: 2px dashed var(--accent-1);
+  outline-offset: -4px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  opacity: 0.94;
+  pointer-events: none;
+}
+
+.upload-button.disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .select-cell {

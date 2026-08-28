@@ -6,6 +6,7 @@ using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Migration;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Files;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Migration;
@@ -20,7 +21,13 @@ public sealed class SiteMigrationService(
     IFileMigrationService fileMigrationService,
     IDatabaseService databaseService,
     IIisSiteService iisSiteService,
-    ILogger<SiteMigrationService> logger) : ISiteMigrationService
+    ILogger<SiteMigrationService> logger,
+    // İSTEĞE BAĞLI: .user.ini taramasının ÖGE tavanı. Üretimde HİÇ verilmez; yalnızca testin bütçe
+    // korumasını GERÇEKTEN doldurabilmesi için var — üretim değeriyle (200.000) bunu kanıtlamak,
+    // testte iki yüz bin dosya yaratmak demekti. Aynı seam kota ve dosya boyutu yollarında da
+    // açıldı (bkz. FileService.CalculateSizeAsync'in internal aşırı yüklemesi) ve gerekçesi orada
+    // yazılı. Yeni bir HTTP yüzeyi AÇMAZ: yalnız DI kurulumu bu parametreyi görebilir.
+    int? userIniScanEntryBudget = null) : ISiteMigrationService
 {
     public async Task<MigrateSiteResultDto> MigrateSiteAsync(
         MigrateSiteRequest request,
@@ -122,11 +129,13 @@ public sealed class SiteMigrationService(
             // (kaynaktan gelen) site'yi çalışmaz hale getirir → düzelt/temizle. Yalnızca dosya çekme başarılıysa.
             if (filesPulled)
             {
-                await ExecuteStepAsync("userini", "migration.step.userini_sanitized", async () =>
-                {
-                    await SanitizeUserIniFilesAsync(request.SiteName, cancellationToken);
-                    return null;
-                });
+                // DETAY ARTIK ATILMIYOR: temizlik kaç dosya buldu/temizledi ve tarama YARIDA KALDI
+                // mı — hepsi adımın Detay alanına girer. Eksik kalmış bir tarama, göçün eski sunucu
+                // yollarını taşımaya devam etmesi demektir ve bunu kullanıcı görmeli.
+                await ExecuteStepAsync(
+                    "userini",
+                    "migration.step.userini_sanitized",
+                    () => SanitizeUserIniFilesAsync(request.SiteName, cancellationToken));
             }
         }
 
@@ -495,30 +504,86 @@ public sealed class SiteMigrationService(
     private static MigrationCheckDto Check(string name, bool ok, string message)
         => new() { Name = name, Ok = ok, Message = message };
 
+    /// <summary>Aranan dosya adı. Ağaçtaki her ögeyle karşılaştırılır.</summary>
+    private const string UserIniDosyaAdi = ".user.ini";
+
+    /// <summary>
+    /// <c>.user.ini</c> aramasının ÖGE üst sınırı (dosya + klasör).
+    /// </summary>
+    /// <remarks>
+    /// Göç, kullanıcının önünde ilerleyen bir istektir; tavan, dosya yöneticisininkiyle (200.000)
+    /// bilerek aynı tutuldu — ikisi de "kullanıcı ekranın başında bekliyor" yolunda çalışır.
+    /// </remarks>
+    private const int UserIniOgeButcesi = 200_000;
+
+    /// <summary>Aynı aramanın SÜRE üst sınırı.</summary>
+    private const int UserIniSureButcesiMs = 60_000;
+
+    /// <summary>
+    /// Tek turda yeniden yazılacak en fazla <c>.user.ini</c> sayısı.
+    /// </summary>
+    /// <remarks>
+    /// Eskiden bu sayı <c>.Take(200)</c> ile SONUCA uygulanıyordu ve hiçbir şeyi korumuyordu:
+    /// eşleşme 200'den azken (normal durum) bütün ağaç yine gezilirdi. Bugün YÜRÜYÜŞÜ bütçe
+    /// sınırlar; bu sabit yalnızca YAZMA işini sınırlar ve aşıldığında SÖYLENİR.
+    /// </remarks>
+    private const int UserIniYazmaUstSiniri = 200;
+
     // Göçen .user.ini dosyalarını temizler: open_basedir'i yeni site köküne sıfırlar; mutlak ama bu makinede
     // OLMAYAN yolları (eski Plesk/vhost: session.save_path, upload_tmp_dir, error_log ...) yorum satırına alır →
     // PHP varsayılanlarına döner. Değişiklik yoksa dosyaya dokunmaz. Dosya başına best-effort.
-    private async Task<int> SanitizeUserIniFilesAsync(string siteName, CancellationToken cancellationToken)
+    //
+    // AĞACI KENDİ BAŞINA GEZMEZ. Burada `EnumerateFiles(root, ".user.ini", ...AllDirectories)`
+    // vardı ve kök, IIS sitesinin fiziksel yolu — yani KİRACININ YAZABİLDİĞİ ağaç. O çağrı bağlantıları
+    // (junction/symlink) TAKİP EDER: kiracının kendi site kökünü gösteren tek bir kavşağı, göç isteğinin
+    // hiç dönmemesi için yeterliydi. Sondaki `.Take(200)` bunu ENGELLEMİYORDU — o SONUCU sınırlar,
+    // yürüyüşü değil; 200'den az eşleşme olduğunda (yani hemen her sitede) ağacın tamamı gezilirdi.
+    // Aynı hata sınıfı kota yolunda ölçülüp SafeDirectoryWalk ile TEK yürüyüşe indirildi; burada
+    // ikinci bir güvenli yürüyüş yazmak, aynı yamayı iki yerde ayrı ayrı sürdürmek olurdu.
+    //
+    // Eski `catch { TopDirectoryOnly }` yedeği de kalktı ve bilerek: o, ağacın gezilemediği durumda
+    // SESSİZCE yalnız kök klasöre bakıp "temizlendi" diyordu. Ortak yürüyüş erişim reddinde istisna
+    // atmaz — eksikliği sonuçta bildirir, biz de aşağıda kullanıcıya söyleriz.
+    //
+    // DÖNEN DEĞER artık adımın "Detay" alanıdır (eskiden int'ti ve çağıran onu ATIYORDU): tarama
+    // eksik kaldıysa göç EKSİK YAPILANDIRMA taşımış olur ve bunu ancak site çalışmayınca öğrenmek
+    // en pahalı öğrenme yoludur.
+    private async Task<string?> SanitizeUserIniFilesAsync(string siteName, CancellationToken cancellationToken)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var root = site.PhysicalPath;
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
         {
-            return 0;
+            return null;
         }
 
         var tempDir = Path.GetTempPath().TrimEnd('\\', '/');
         var sanitized = 0;
 
-        List<string> files;
-        try
-        {
-            files = Directory.EnumerateFiles(root, ".user.ini", SearchOption.AllDirectories).Take(200).ToList();
-        }
-        catch
-        {
-            files = Directory.EnumerateFiles(root, ".user.ini", SearchOption.TopDirectoryOnly).ToList();
-        }
+        var files = new List<string>();
+        var bulunan = 0;
+        var yuruyus = SafeDirectoryWalk.Yuru(
+            root,
+            new SafeDirectoryWalkBudget(userIniScanEntryBudget ?? UserIniOgeButcesi, UserIniSureButcesiMs),
+            oge =>
+            {
+                // Ad karşılaştırması BÜYÜK/KÜÇÜK HARF AYIRMAZ: NTFS de ayırmaz, dolayısıyla göçten
+                // ".USER.INI" olarak gelen bir dosya PHP tarafından yine okunur ve temizlenmemesi
+                // sessiz bir eksik olurdu.
+                if (oge is not FileInfo dosya ||
+                    !string.Equals(dosya.Name, UserIniDosyaAdi, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                bulunan++;
+                if (files.Count < UserIniYazmaUstSiniri)
+                {
+                    files.Add(dosya.FullName);
+                }
+            },
+            null,
+            cancellationToken);
 
         foreach (var file in files)
         {
@@ -542,7 +607,36 @@ public sealed class SiteMigrationService(
             }
         }
 
-        return sanitized;
+        return AciklaUserIniTaramasi(sanitized, bulunan, yuruyus);
+    }
+
+    /// <summary>
+    /// <c>.user.ini</c> temizliğinin adım detayı. <b>Kesilmiş tarama TAM tarama gibi anlatılmaz.</b>
+    /// </summary>
+    /// <remarks>
+    /// KARAR: eksik tarama göçü DÜŞÜRMEZ (istisna atmaz), çünkü dosyalar ve veritabanı zaten
+    /// taşınmıştır — o noktada göçü hataya çevirmek, kullanıcıya "bir şey olmadı" izlenimi verip
+    /// aslında taşınmış bir siteyi bırakmak olurdu. Ama eksiklik SÖYLENİR: temizlenmemiş bir
+    /// <c>.user.ini</c> içindeki eski <c>open_basedir</c>, siteyi 500 ile düşüren ve sebebi hiçbir
+    /// yerde yazmayan bir arızadır. Kullanıcı nereye bakacağını bilmeli.
+    /// </remarks>
+    private static string AciklaUserIniTaramasi(int temizlenen, int bulunan, SafeDirectoryWalkResult yuruyus)
+    {
+        var metin = $"{bulunan} adet {UserIniDosyaAdi} bulundu, {temizlenen} tanesi temizlendi.";
+
+        if (yuruyus.Truncated)
+        {
+            metin += $" UYARI: tarama TAMAMLANAMADI ({yuruyus.TruncatedReasonKey}) — site ağacının bir kısmına " +
+                     $"hiç bakılmadı, orada kalan {UserIniDosyaAdi} dosyaları ESKİ sunucu yollarını taşıyor olabilir.";
+        }
+
+        if (bulunan > temizlenen && bulunan > UserIniYazmaUstSiniri)
+        {
+            metin += $" UYARI: tek turda en fazla {UserIniYazmaUstSiniri} dosya yazılır; " +
+                     $"{bulunan - UserIniYazmaUstSiniri} dosyaya DOKUNULMADI.";
+        }
+
+        return metin;
     }
 
     private static readonly string[] StaleUserIniPathMarkers =

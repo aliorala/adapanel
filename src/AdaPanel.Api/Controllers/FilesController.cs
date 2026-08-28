@@ -289,6 +289,32 @@ public sealed class FilesController(
     }
 
     /// <summary>
+    /// Bir klasörün özyinelemeli boyutunu hesaplar (Plesk File Manager'daki "Calculate size").
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>DENETİM KAYDI YAZILMAZ ve bu bilinçli bir karardır.</b> Uç hiçbir şeyi değiştirmez;
+    /// dosyayı okumaz bile, yalnız meta veriden boyut toplar — <c>search</c> ve <c>download</c> ile
+    /// aynı sınıftadır ve bu denetleyicinin başındaki kural tam olarak bunu söyler: her okumaya
+    /// satır yazmak, kaydı gürültüye boğup asıl değişiklikleri görünmez kılar. Boyut hesabı
+    /// arayüzde klasör başına tıklanan bir düğmedir; bir kullanıcı tek oturumda onlarca kez
+    /// tetikleyebilir. (Kararın nöbetçisi <c>AuditCoverageTests.Muaflar</c> listesinde
+    /// gerekçesiyle yazılıdır — sessizce muaf kalmaz.)
+    /// </para>
+    /// <para>
+    /// <b>Kapsam denetimi yine de ZORUNLU:</b> okuma da bir sızıntı yoludur. Kapsam sorulmasaydı
+    /// bir kiracı, komşusunun sitesinin boyutunu ve dosya sayısını ölçebilirdi.
+    /// </para>
+    /// </remarks>
+    [HttpPost("size")]
+    public async Task<ActionResult<ApiResponse<DirectorySizeDto>>> CalculateSizeAsync([FromBody] DirectorySizeRequest request, CancellationToken cancellationToken)
+    {
+        await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
+        var result = await fileService.CalculateSizeAsync(request.Path, cancellationToken);
+        return Ok(ApiResponse<DirectorySizeDto>.Ok(result));
+    }
+
+    /// <summary>
     /// Bu denetleyicideki denetim kaydı yazmanın TEK yolu.
     /// </summary>
     /// <remarks>

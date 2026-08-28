@@ -96,4 +96,34 @@ public interface IFileService
     Task<FileWorkspaceDto> ExtractAsync(ArchiveFileRequest request, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyCollection<FileEntryDto>> SearchAsync(SearchFilesRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir klasörün ÖZYİNELEMELİ boyutunu ve öge sayılarını hesaplar (Plesk'teki "Calculate size").
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden var olmalı:</b> listede klasörlerin boyutu 0 görünür (bu doğrudur, boyut ancak
+    /// yürünerek bulunur) — yani panelde "diski hangi klasör yiyor" sorusunun cevabı HİÇ yoktu.
+    /// Disk dolduğunda kullanıcının tek çaresi sunucuya RDP ile girmekti; kotası dolan bir kiracının
+    /// ise hiçbir çaresi yoktu.
+    /// </para>
+    /// <para>
+    /// <b>Sözleşme (uygulamanın uyması ZORUNLU olan kısım):</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>Yol sanal alanın içinde olmalıdır; dışarı çıkan istek REDDEDİLİR (istisna). Yol
+    /// çözümlemesi diğer uçlarla AYNI kapıdan geçer — ayrı bir yol birleştirme yazılmaz.</item>
+    /// <item>Bağlantılar (junction/symlink) TAKİP EDİLMEZ: bir bağlantıyı takip etmek ya sanal alan
+    /// DIŞINI toplama katmak (kiracıya komşusunun/panelin disk kullanımını ölçtürmek) ya da kendi
+    /// üst ağacını gösteren bir bağlantıda SONSUZ döngü demektir.</item>
+    /// <item>Hesap BÜTÇELİDİR (öge sayısı + süre). Bütçe dolduğunda istisna atılmaz, o ana kadarki
+    /// toplam döner ve <see cref="DirectorySizeDto.Truncated"/> ile SÖYLENİR — kısmi bir sonucu tam
+    /// sonuç gibi döndürmek, kullanıcının disk kararını yanlış sayıya dayandırması demektir.</item>
+    /// <item>Okunamayan (erişimi reddedilen) alt klasör hesabı ÇÖKERTMEZ; atlanır ama yine
+    /// <see cref="DirectorySizeDto.Truncated"/> ile bildirilir.</item>
+    /// <item><see cref="CancellationToken"/> onurlandırılır: kullanıcı sekmeyi kapattığında yürüyüş
+    /// sürmez.</item>
+    /// </list>
+    /// </remarks>
+    Task<DirectorySizeDto> CalculateSizeAsync(string path, CancellationToken cancellationToken = default);
 }

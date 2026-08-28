@@ -153,3 +153,39 @@ Paketsiz yayin, kurulu tum panellerde kendi kendine guncellemeyi kirar. Nobetci 
 6. Ayni adres -> **404** DONMELI
 
 6. adim sart: gecen sefer onu atladigim icin `alioral.xyz`'de yanlislikla "calisiyor" demistim.
+
+---
+
+## KAVSAK DONGUSU (junction loop) — sinif capinda hizmet reddi (28.08.2026)
+
+Dosya yoneticisine klasor boyutu eklerken cikti. Kiraci KENDI sitesinin kokune, kendi ust
+agacini gosteren bir junction koyarsa, o agaci gezen her kod SONSUZA doner.
+
+**Kapatildi:**
+- `CustomerScopeService.DirectorySize` — `SearchOption.AllDirectories` kullaniyordu (baglantilari
+  TAKIP EDER, butcesiz). Bu SICAK YOLDA: her dosya yuklemesinde, kullanici listesindeki HER
+  Customer satirinda ayri ayri, abonelik/fatura ekranlarinda cagriliyor.
+- Yuruyus tek kaynaga cikarildi: `src/AdaPanel.Infrastructure/Files/SafeDirectoryWalk.cs`
+  (yigin, ReparsePoint atlama, oge+sure butcesi, kismi sonucu DAMGALAMA).
+- Eski `catch { }` iptali de yutuyordu; iptal artik yukari cikiyor.
+
+**Kota icin verilen karar:** kesilmis toplam ALT SINIR sayilir, islem BLOKE EDILMEZ. Cunku
+kesilmenin uc sebebinden ikisi kiracinin elinde degil (yavas/ag diski, ACL reddi) ve bloke etmek
+sunucunun yavasligi yuzunden mesru musterinin hicbir dosya yukleyememesi olurdu. Kaybedilen:
+butceyi bilerek dolduran kiraciya karsi kesinlik. **Gercek cozum** donus tipinin "olculdu mu"
+bilgisini tasimasidir — trafik kotasinda ZATEN oyle (`TrafikOlcAsync` -> `(Bytes, Measured)`).
+`ICustomerScopeService` sozlesmesi ve 15+ cagiran ilgilendirdigi icin ayri bir is olarak duruyor.
+
+**Ayni sinifta kalan, su an duzeltilen uc yer:**
+- `SiteMigrationService:516` — `.user.ini` taramasi; `.Take(200)` SONUCU sinirlar, YURUYUSU degil.
+- `BackupService.ScanFiles:1159` — elle `Stack` yuruyusu, grep'e TAKILMIYOR; ReparsePoint atlamasi
+  ve butce YOK. Yedegi donguye sokar ya da arsivi sisirir.
+- `SiteHostingSettingsService:719,816,822` — indirilen zip'in agaci; kavsak riski yok ama zip
+  bombasina karsi butce yok.
+
+**Guvenli oldugu OKUNARAK dogrulanan 32 kullanim** panelin kendi klasorlerinde (ProgramData
+runtimes, bilesen InstallDir, indirme calisma alani). Not: bu grubun guvenligi K1 (ProgramData
+ACL) bulgusuna bagli.
+
+**Ders:** `grep "AllDirectories"` bu sinifi TAM BULMAZ — `BackupService.ScanFiles` elle yazilmis
+bir yuruyustu ve yalnizca dosya dosya okunarak goruldu.

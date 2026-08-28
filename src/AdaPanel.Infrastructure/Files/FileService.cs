@@ -9,6 +9,46 @@ namespace AdaPanel.Infrastructure.Files;
 
 public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 {
+    /// <summary>Boyut hesabında gezilebilecek EN ÇOK öge (dosya + klasör) sayısı.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bir bütçe ZORUNLU:</b> kiracının <c>node_modules</c> / <c>vendor</c> klasöründe
+    /// milyonlarca öge olabilir ve bu uç kiracının kendi isteğiyle tetiklenir. Sınırsız özyineleme,
+    /// tek bir tıkla panel sürecinden bir iş parçacığını dakikalarca tutar; birkaç sekmeden
+    /// tekrarlanırsa panel TÜM kiracılar için yanıt veremez hâle gelir. Yani sınırsız hesap, dosya
+    /// yöneticisinin içinden çalışan bir hizmet dışı bırakma yoludur.
+    /// </para>
+    /// <para>
+    /// <b>Değer nereden geliyor (ÖLÇÜLDÜ, tahmin değil):</b> bu makinede 19.128 ögelik gerçek bir
+    /// <c>node_modules</c> ağacı, .NET'in <c>EnumerateFileSystemInfos</c> yürüyüşüyle 0,57 s'de
+    /// gezildi (~34.000 öge/s; ölçüm PowerShell üzerinden yapıldığı için gerçek maliyet bundan
+    /// DÜŞÜKtür, yani bu sayı kötümser tarafta). 200.000 öge bu hıza göre ~6 s'lik bir üst sınır
+    /// demektir. Karşılaştırma için: tipik bir WordPress kurulumu 3-5 bin öge, eklentileriyle şişmiş
+    /// bir site 50 bin civarıdır — yani sınır gerçek sitelerin neredeyse tamamını TAM hesaplar,
+    /// yalnız patolojik ağaçlarda devreye girer.
+    /// </para>
+    /// </remarks>
+    private const int BoyutOgeButcesi = 200_000;
+
+    /// <summary>Boyut hesabının EN ÇOK süresi (ms).</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden öge bütçesi TEK BAŞINA yetmez:</b> öge bütçesi işin MİKTARINI sınırlar, süresini
+    /// değil. Aynı 200.000 öge yerel SSD'de saniyeler sürerken, ağ paylaşımına ya da uyanması
+    /// gereken bir diske bakan bir site kökünde dakikalara çıkar — öge başına maliyet ölçtüğümüz
+    /// değerin on katı olabilir. İki bütçe iki ayrı riski kapatır: biri "çok fazla öge", diğeri
+    /// "öge başına çok yavaş".
+    /// </para>
+    /// <para>
+    /// <b>Neden 15 s:</b> bu bir HTTP isteğidir; kullanıcı cevabı bekler ve araya giren vekil
+    /// sunucular çoğunlukla 30-60 s'de bağlantıyı düşürür. 15 s, ölçülen hızda ~500.000 ögelik bir
+    /// ağaca yeten ama kullanıcıyı da vekil sunucuyu da beklemeye zorlamayan bir tavandır. Daha
+    /// uzun bir tavan, kesilen bağlantı yüzünden kullanıcının HİÇ sonuç görmediği (ama sunucunun
+    /// yürümeye devam ettiği) bir duruma yol açardı.
+    /// </para>
+    /// </remarks>
+    private const int BoyutSureButcesiMs = 15_000;
+
     public async Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default)
     {
         var normalizedPath = NormalizeVirtualPath(path);
@@ -777,6 +817,82 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         }
 
         return results;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>Yürüyüşün kendisi burada DEĞİL:</b> ağaç <see cref="SafeDirectoryWalk"/> ile gezilir —
+    /// yığın (özyineleme yok), bağlantı atlama ve bütçe kuralları orada, gerekçeleriyle birlikte
+    /// yazılıdır. Bu metoda kalan iş, o yürüyüşün ÖNÜNDEKİ KAPIDIR: sanal yolu çözümlemek ve sanal
+    /// alan denetimini yapmak. Yürüyüş burada ikinci kez yazılsaydı, kota yolunda tam olarak bu
+    /// olmuştu: aynı ağaç iki farklı kuralla gezilir ve biri korumasız kalırdı.
+    /// </para>
+    /// </remarks>
+    public Task<DirectorySizeDto> CalculateSizeAsync(string path, CancellationToken cancellationToken = default) =>
+        CalculateSizeAsync(path, BoyutOgeButcesi, BoyutSureButcesiMs, cancellationToken);
+
+    /// <summary>
+    /// Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden var:</b> bütçe korumasının GERÇEKTEN çalıştığı ancak bütçe doldurularak
+    /// kanıtlanabilir; üretim değerleriyle bu, testte 200.000 dosya yaratmak (dakikalar süren,
+    /// diski yoran ve hiçbir ek şey kanıtlamayan bir kurulum) demekti. Alternatif — testin kaynağa
+    /// bakıp "bütçe kodu duruyor mu" demesi — davranışı değil metni ölçerdi.
+    /// </para>
+    /// <para>
+    /// Aşırı yükleme <c>internal</c>'dır: dışarıya, bütçesi kaldırılabilir bir uç AÇMAZ. Genel
+    /// yüzeyde yalnız sabitlerle çağrılan biçim vardır.
+    /// </para>
+    /// </remarks>
+    internal async Task<DirectorySizeDto> CalculateSizeAsync(
+        string path,
+        int ogeButcesi,
+        int sureButcesiMs,
+        CancellationToken cancellationToken)
+    {
+        var normalizedPath = NormalizeVirtualPath(path);
+
+        // AYNI KAPI: yol çözümlemesi (sanal alan + yol üzerindeki bağlantı denetimi) diğer uçlarla
+        // birebir aynı yardımcıdan gelir. Kendi yol birleştirmesini yazan bir uç, korumanın tam da
+        // en yeni yerde delinmesi olurdu.
+        var target = await ResolveTargetAsync(normalizedPath, cancellationToken);
+        EnsureSiteTarget(target);
+        EnsureInsideSandbox(target);
+
+        // SİTE KÖKÜ BİLEREK YASAKLANMADI (EnsureNotSiteRoot çağrılmaz): "sitem ne kadar yer
+        // kaplıyor" bu ucun en sık sorulacak sorusudur. Kök koruması, kökü DEĞİŞTİREN/silen
+        // işlemler içindir; okuma yapan bir hesabın kökü dışlaması, ucu asıl işi için kullanılamaz
+        // hâle getirirdi.
+        if (!Directory.Exists(target.PhysicalPath))
+        {
+            // Dosya yolu da buraya düşer ve bilerek öyle bırakıldı: bir DOSYANIN boyutu zaten
+            // listede yazılıdır (FileEntryDto.Size). Dosya için "klasör boyutu" cevabı üretmek,
+            // aynı bilgiyi ikinci ve doğrulanmamış bir yoldan vermek olurdu.
+            throw new AppException("files.not_found", 404, 404);
+        }
+
+        // ORTAK YÜRÜYÜŞ. Bütçe her çağrıda YENİDEN kurulur: bu uç TEK bir klasör için TEK bir
+        // soru cevaplar, dolayısıyla bütçenin kapsamı da tek çağrıdır. (Kota yolu aynı bütçe
+        // nesnesini aboneliğin BÜTÜN sitelerinde paylaşır; gerekçesi orada yazılı.)
+        var yuruyus = SafeDirectoryWalk.Yuru(
+            target.PhysicalPath,
+            new SafeDirectoryWalkBudget(ogeButcesi, sureButcesiMs),
+            cancellationToken);
+
+        return new DirectorySizeDto
+        {
+            // Path YALNIZ burada doldurulur: ortak yürüyüş fiziksel yolu bilir, SANAL yolu bilmez —
+            // bilmemelidir de, çünkü sanal yol kavramı kota yolunda hiç yoktur.
+            Path = normalizedPath,
+            TotalBytes = yuruyus.TotalBytes,
+            FileCount = yuruyus.FileCount,
+            DirectoryCount = yuruyus.DirectoryCount,
+            Truncated = yuruyus.Truncated,
+            TruncatedReasonKey = yuruyus.TruncatedReasonKey
+        };
     }
 
     private async Task<FileWorkspaceDto> BuildVirtualRootWorkspaceAsync(string normalizedPath, CancellationToken cancellationToken)

@@ -1,6 +1,7 @@
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Security;
@@ -244,56 +245,125 @@ public sealed class CustomerScopeService(
         return domains;
     }
 
-    public async Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default)
+    /// <summary>Öge (dosya + klasör) bütçesi — bir aboneliğin BÜTÜN siteleri için TOPLAM.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden dosya yöneticisininkinden FARKLI olmak zorunda (ÇAĞRI SIKLIĞI ÖLÇÜLDÜ, koddan):</b>
+    /// <c>GetDiskUsageMbAsync</c> seyrek çağrılan bir rapor DEĞİL, sıcak yolda bir yan hesaptır.
+    /// Çağıranlar:
+    /// <list type="bullet">
+    /// <item><c>FilesController.UploadAsync</c> — <b>HER dosya yüklemesinde</b>, kota tanımlıysa;
+    /// yani kiracının kendi isteğiyle, istediği sıklıkta tetiklenir ve yükleme bu hesap bitmeden
+    /// başlamaz.</item>
+    /// <item><c>UserManagementService.GetUsersAsync</c> — kullanıcı listesindeki <b>HER Customer
+    /// satırı için ayrı ayrı</b>; tek bir sayfa açılışında N kez.</item>
+    /// <item><c>UserManagementService</c> güncelleme ve kilit açma yollarında birer kez.</item>
+    /// <item><c>SubscriptionEnforcementService.GetUsageAsync</c> — abonelik ve fatura ekranları.</item>
+    /// </list>
+    /// Dosya yöneticisinin bütçesi (200.000 öge / 15 s) TEK bir klasör için, kullanıcının AÇIKÇA
+    /// sorduğu ve cevabını beklediği tek bir soruya aittir. Buradaki hesap ise başka bir işlemin
+    /// içinde, aboneliğin bütün siteleri üzerinde ve satır satır tekrarlanarak çalışır. Bu yüzden:
+    /// </para>
+    /// <para>
+    /// (1) Bütçe SİTE BAŞINA DEĞİL, ABONELİK BAŞINA verilir — tek <see cref="SafeDirectoryWalkBudget"/>
+    /// nesnesi bütün sitelerde paylaşılır. Site başına verilseydi tavan site sayısıyla ÇARPILIR,
+    /// yani 20 siteli abonelik 20 kat daha uzun bir isteğe hak kazanır ve bütçe fiilen kalkardı.
+    /// Öge sayısı dosya yöneticisiyle aynı (200.000) ama kapsamı daha dar olduğu için sonuç KATI
+    /// bir şekilde daha sıkıdır.
+    /// </para>
+    /// <para>
+    /// (2) Süre tavanı 15 s değil 5 s. Gerekçe ölçülen çağrı sıklığından çıkar: 20 müşterili bir
+    /// kullanıcı listesi, site başına değil abonelik başına 15 s tavanla bile 300 s'lik bir isteğe
+    /// izin verirdi — tarayıcı da araya giren vekil sunucu da o bağlantıyı çoktan düşürmüş olurdu.
+    /// 5 s, tek aboneliği sınırlar. (Listedeki N kat çoğalma AYRI bir sorundur ve bu turda
+    /// kapatılmadı; raporlandı.)
+    /// </para>
+    /// </remarks>
+    private const int KotaOgeButcesi = 200_000;
+
+    /// <inheritdoc cref="KotaOgeButcesi" />
+    private const int KotaSureButcesiMs = 5_000;
+
+    /// <inheritdoc />
+    public Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default)
+        => GetDiskUsageMbAsync(userId, KotaOgeButcesi, KotaSureButcesiMs, cancellationToken);
+
+    /// <summary>Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.</summary>
+    /// <remarks>
+    /// Bütçe korumasının GERÇEKTEN çalıştığı ancak bütçe doldurularak kanıtlanabilir; üretim
+    /// değerleriyle bu, testte 200.000 dosya yaratmak demekti. Aynı gerekçe ve aynı kalıp
+    /// <c>FileService.CalculateSizeAsync</c>'te de var. Aşırı yükleme <c>internal</c>'dır: dışarıya
+    /// bütçesi kaldırılabilir bir uç AÇMAZ.
+    /// </remarks>
+    internal async Task<long> GetDiskUsageMbAsync(
+        Guid userId,
+        int ogeButcesi,
+        int sureButcesiMs,
+        CancellationToken cancellationToken)
     {
         var assigned = await GetAssignedSitesAsync(userId, cancellationToken);
         long totalBytes = 0;
 
+        // TEK BÜTÇE, BÜTÜN SİTELER: gerekçe KotaOgeButcesi'nde yazılı.
+        var butce = new SafeDirectoryWalkBudget(ogeButcesi, sureButcesiMs);
+
         foreach (var siteName in assigned)
         {
+            string root;
             try
             {
                 var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-                var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
-                totalBytes += DirectorySize(root);
+                root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
+            }
+            catch (OperationCanceledException)
+            {
+                // İPTAL YUTULMAZ. Eski kod TEK bir `catch { }` ile hem IIS hatasını hem de iptali
+                // yakalıyordu; ortak yürüyüş iptali istisnayla bildirdiği için o hâliyle bırakmak,
+                // isteği iptal edilmiş bir hesabın KALAN SİTELERİ gezmeye devam etmesi olurdu —
+                // yani iptalin hiç işlemediği bir yol. Kapsam bilerek daraltıldı.
+                throw;
             }
             catch
             {
-                // Erişilemeyen site atlanır.
+                // Erişilemeyen site atlanır. Bu davranış ortak yürüyüşle birlikte HÂLÂ DOĞRU, ama
+                // artık DAHA DAR: yürüyüşün kendisi (erişim reddi, silinmiş klasör, dolu bütçe)
+                // istisna atmaz, sonucunda bildirir. Buraya yalnız "site IIS'te yok / okunamıyor"
+                // düşer ve o gerçekten atlanmalıdır — tek bozuk site, aboneliğin geri kalanının
+                // kota hesabını düşürmemeli.
+                continue;
             }
+
+            // Kesilmeyi ayrıca sormuyoruz; sebebi aşağıdaki blokta yazılı.
+            totalBytes += SafeDirectoryWalk.Yuru(root, butce, cancellationToken).TotalBytes;
         }
 
+        // KESİLMİŞ (Truncated) HESAP KOTADA NE DEMEK — KARAR: sonuç bir ALT SINIR olarak KULLANILIR,
+        // işlem BLOKE EDİLMEZ.
+        //
+        // İki seçeneğin bedeli tartıldı:
+        //
+        // (a) BLOKE ET (kesilme = "ölçemedim" = kotayı aşmış say). Güvenlik tarafı çekici: kiracı
+        //     ağacını yeterince şişirerek bütçeyi doldurabilir ve o noktadan sonraki baytları
+        //     saydırmaz. AMA kesilmenin ÜÇ sebebi var ve ikisi kiracının elinde DEĞİL: süre bütçesi
+        //     (yavaş/ağ diski) ve erişim reddi (ACL). Yani bloke etmek, sunucunun yavaşlığı
+        //     yüzünden meşru müşterinin HİÇBİR dosya yükleyememesi demekti — üstelik yaptırım
+        //     noktası yükleme olduğu için müşterinin çalışması tümden durur. Öge bütçesi de
+        //     patolojik değil: eklentileriyle şişmiş bir site + node_modules/vendor ağaçları
+        //     200.000 ögeye gerçekten ulaşır. Bu, kesin ve sık bir kilitlenme maliyetidir.
+        //
+        // (b) ALT SINIR OLARAK KULLAN (seçilen). Kotanın ASIL işi — "bu abonelik sınırı geçti mi" —
+        //     ölçülebilen kısımda ÇALIŞMAYA DEVAM EDER: kesilmiş toplam bile sınırı aşıyorsa
+        //     yükleme reddedilir. Kaybedilen tek şey, bütçeyi BİLEREK doldurup kalan baytlarını
+        //     gizleyen kiracıya karşı kesinliktir.
+        //
+        // Kalan açığın SESSİZ olmaması için: bu tercih burada yazılıdır, kesilme sebebi ortak
+        // yürüyüşün sonucunda taşınır (dosya yöneticisi ucu onu kullanıcıya GÖSTERİR) ve asıl
+        // kapatılan şey — bağlantı döngüsüyle isteği hiç döndürmemek — koşulsuzdur. Kalan riski
+        // gerçekten kapatmanın yolu bu metodun dönüş tipini "ölçüldü mü" bilgisini taşıyacak
+        // şekilde değiştirmektir (trafik kotasında zaten öyle: SubscriptionEnforcementService
+        // .TrafikOlcAsync ölçülemeyen aboneliği ayrıca bildirir); o değişiklik ICustomerScopeService
+        // sözleşmesini ve bütün çağıranları ilgilendirdiği için bu turun kapsamına alınmadı.
         return totalBytes / (1024 * 1024);
-    }
-
-    private static long DirectorySize(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
-        {
-            return 0;
-        }
-
-        long total = 0;
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            {
-                try
-                {
-                    total += new FileInfo(file).Length;
-                }
-                catch
-                {
-                    // kilitli/erişilemeyen dosya atlanır
-                }
-            }
-        }
-        catch
-        {
-            // erişim reddi vb.
-        }
-
-        return total;
     }
 
     private async Task<Dictionary<string, ScopeEntry>> LoadAsync(CancellationToken cancellationToken)

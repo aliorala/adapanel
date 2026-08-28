@@ -8,6 +8,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Options;
@@ -654,7 +655,35 @@ public sealed class SiteHostingSettingsService(
             // Doğru kalıp (PhpService'te zaten var): BEKLENEN ÇIKTININ gerçekten üretildiğini
             // ayrıca doğrula. Burada beklenen çıktı = arşivden çıkan EN AZ BİR DOSYA.
             var source = ResolveArchiveContentRoot(extractDir);
-            var availableFiles = source is null ? 0 : CountFiles(source);
+            var olcum = source is null ? new SafeDirectoryWalkResult(0, 0, 0, false, string.Empty) : MeasureImportTree(source);
+            var availableFiles = olcum.FileCount;
+
+            // ÇOK BÜYÜK ARŞİV: SİTEYE DOKUNMADAN reddedilir.
+            //
+            // KARAR (ve neden yedekten FARKLI): buradaki iş bir OKUMA değil, sitenin kökünü
+            // DEĞİŞTİREN bir yazmadır. Yedekte kesilmiş bir tarama "eksik ama damgalı bir arşiv"
+            // üretir — elde bir şey kalır. Burada kesilmiş bir kopyalama "yarısı yeni, yarısı yok"
+            // bir site üretirdi ve o, kullanıcı için veri kaybından ayırt edilemez. Bu yüzden
+            // kısmi sonuca İZİN VERİLMEZ; işlem hiç başlamaz.
+            //
+            // Denetim, yıkıcı adımdan (ContentSideline.MoveAside) ÖNCE olmak ZORUNDA: sonra
+            // yapılsaydı sitenin eski içeriği çoktan yana alınmış olurdu.
+            if (olcum.Truncated)
+            {
+                // ANAHTAR YÜRÜYÜŞÜN KENDİ SEBEP ANAHTARIDIR ("files.size_truncated_*") ve yeni bir
+                // anahtar UYDURULMADI: çevirisi olmayan bir anahtar, kullanıcının kırmızı kutuda
+                // ham anahtarı görmesi demektir (bkz. MessageKeyCoverageTests). Bu anahtarların
+                // çevirisi hem tr hem en'de VAR ve sebebi doğru anlatır; bu yola ÖZGÜ olan —
+                // "siteye dokunulmadı, içeriği parçalara bölün" — ayrıntı alanında durur ve arayüz
+                // onu hata kutusunda gösterir.
+                throw new AppException(
+                    olcum.TruncatedReasonKey,
+                    413,
+                    413,
+                    $"Arsivden cikan agac cok buyuk (en az {olcum.FileCount} dosya / {olcum.DirectoryCount} klasor; " +
+                    $"ust sinir {IceAktarmaOgeButcesi} oge). Siteye DOKUNULMADI; icerigi parcalara bolerek aktarin.");
+            }
+
             if (!result.Success || availableFiles == 0)
             {
                 var detay = result.Success
@@ -713,11 +742,57 @@ public sealed class SiteHostingSettingsService(
         return current;
     }
 
-    /// <summary>Ağaçtaki dosya sayısı. "Beklenen çıktı gerçekten üretildi mi" ölçümüdür.</summary>
-    internal static int CountFiles(string directory)
+    /// <summary>
+    /// Arşivden çıkan ağacın ÖGE üst sınırı (dosya + klasör).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden gerek var:</b> bu ağaç, kullanıcının verdiği bir URL'den indirilip
+    /// <c>Expand-Archive</c> ile açılan zip'in içeriğidir — yani içeriğini SALDIRGAN belirler.
+    /// Milyonlarca girdi taşıyan bir arşiv ("zip bombası"), sınırsız gezilen ve sınırsız kopyalanan
+    /// bir işe dönüşürdü. Kavşak riski burada YOKTUR (<c>Expand-Archive</c> yeniden ayrıştırma
+    /// noktası üretmez) — ama korumayı yine ortak yürüyüşten almak, bu yolun kendi kopyasını
+    /// taşımaması demektir; ağaç bir gün başka bir yerden gelirse koruma da beraberinde gelir.
+    /// </para>
+    /// <para>
+    /// 500.000: dosya yöneticisinin 200.000'inden yüksek, çünkü burada kullanıcı zaten uzun süren
+    /// bir indirme + açma işlemini beklemiştir ve içe aktarılan bir CMS ağacı (eklenti/tema
+    /// klasörleriyle) yüz binlerce öge olabilir. Meşru bir içe aktarmayı reddetmek, korumanın
+    /// kendisini bir arıza hâline getirirdi.
+    /// </para>
+    /// </remarks>
+    internal const int IceAktarmaOgeButcesi = 500_000;
+
+    /// <summary>
+    /// Bu yolun ağaç bütçesi. <b>SÜRE sınırı bilerek YOKTUR</b> (<see cref="int.MaxValue"/>).
+    /// </summary>
+    /// <remarks>
+    /// Burada ölçülen iş DOSYA KOPYALAMAKTIR ve süresi diskin hızına bağlıdır. Süreye bakan bir
+    /// bütçe, yavaş bir diskte MEŞRU bir içe aktarmayı yarıda keserdi — ve bu yolda "yarıda" demek
+    /// site kökünü geri sarmak, yani kullanıcının işini boşa çıkarmak demektir. Zip bombasının
+    /// büyüklüğü ÖGE SAYISIDIR; sınırlanması gereken de odur.
+    /// </remarks>
+    /// <param name="ogeButcesi">Yalnız TEST içindir ve hiçbir üretim çağrısı vermez: korumanın
+    /// gerçekten çalıştığı ancak bütçe DOLDURULARAK kanıtlanabilir, üretim değeriyle bu testte
+    /// yarım milyon dosya yaratmak demekti. Aynı gerekçe kota/boyut yolunda da yazılı.</param>
+    private static SafeDirectoryWalkBudget IceAktarmaButcesi(int? ogeButcesi = null)
+        => new(ogeButcesi ?? IceAktarmaOgeButcesi, int.MaxValue);
+
+    /// <summary>
+    /// Arşivden çıkan ağacın ölçüsü: kaç dosya var ve ağaç bütçeyi AŞTI mı?
+    /// </summary>
+    /// <remarks>
+    /// Ölçüm YIKICI ADIMDAN ÖNCE yapılır ve iki soruyu birden cevaplar: "hiç dosya çıktı mı"
+    /// (bozuk/HTML indirme denetimi) ve "ağaç kabul edilebilir büyüklükte mi". İkisi ayrı ayrı
+    /// ölçülseydi ağaç iki kez gezilirdi.
+    /// </remarks>
+    internal static SafeDirectoryWalkResult MeasureImportTree(string directory, int? ogeButcesi = null)
         => Directory.Exists(directory)
-            ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Count()
-            : 0;
+            ? SafeDirectoryWalk.Yuru(directory, IceAktarmaButcesi(ogeButcesi), CancellationToken.None)
+            : new SafeDirectoryWalkResult(0, 0, 0, false, string.Empty);
+
+    /// <summary>Ağaçtaki dosya sayısı. "Beklenen çıktı gerçekten üretildi mi" ölçümüdür.</summary>
+    internal static int CountFiles(string directory) => MeasureImportTree(directory).FileCount;
 
     private static long SafeFileLength(string path)
     {
@@ -745,7 +820,12 @@ public sealed class SiteHostingSettingsService(
     /// klasörde" durumu kullanıcı için veri kaybından ayırt edilemez.
     /// </para>
     /// </summary>
-    internal static SiteImportResultDto ApplyImportedContent(string siteName, string source, string root, bool cleanFirst)
+    internal static SiteImportResultDto ApplyImportedContent(
+        string siteName,
+        string source,
+        string root,
+        bool cleanFirst,
+        int? ogeButcesi = null)
     {
         Directory.CreateDirectory(root);
 
@@ -759,7 +839,7 @@ public sealed class SiteHostingSettingsService(
 
         try
         {
-            var copied = CopyDirectoryRecursive(source, root);
+            var copied = CopyDirectoryRecursive(source, root, ogeButcesi);
             ContentSideline.RemoveIfEmpty(sidelineDirectory);
 
             return new SiteImportResultDto
@@ -810,19 +890,60 @@ public sealed class SiteHostingSettingsService(
         }
     }
 
-    private static int CopyDirectoryRecursive(string source, string target)
+    /// <summary>
+    /// Kaynak ağacı hedefe kopyalar. <b>Ağacı kendi başına GEZMEZ</b> — ortak, bütçeli,
+    /// bağlantı takip etmeyen yürüyüşü kullanır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Burada iki <c>...AllDirectories</c> çağrısı vardı (biri klasörler, biri dosyalar
+    /// için) ve ikisinin de bütçesi yoktu: kullanıcının verdiği URL'den indirilen bir zip'in
+    /// milyonlarca girdisi sınırsız gezilir ve sınırsız kopyalanırdı. Ayrıca ağaç iki kez
+    /// geziliyordu; tek yürüyüş hem klasörü hem dosyayı sırayla verir (klasör her zaman
+    /// içindekilerden ÖNCE bildirilir, bu <c>SafeDirectoryWalk</c> sözleşmesinin parçasıdır).
+    /// </para>
+    /// <para>
+    /// <b>Bütçe dolarsa İSTİSNA ATILIR, kısmi kopya BIRAKILMAZ.</b> Çağıran
+    /// (<see cref="ApplyImportedContent"/>) istisnayı görünce site kökünü GERİ SARAR. Sessizce
+    /// kesmek, kullanıcının "içe aktarma tamamlandı" yazısına bakıp yarısı eksik bir site
+    /// çalıştırması olurdu. Normal yolda bu istisna hiç görülmez: aynı ağaç, siteye
+    /// dokunulmadan önce <see cref="MeasureImportTree"/> ile zaten ölçülüp reddedilmiştir —
+    /// buradaki denetim, o kapıyı atlayan bir çağıran için İKİNCİ settir.
+    /// </para>
+    /// </remarks>
+    private static int CopyDirectoryRecursive(string source, string target, int? ogeButcesi = null)
     {
         Directory.CreateDirectory(target);
-        foreach (var directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
-        {
-            Directory.CreateDirectory(target + directory[source.Length..]);
-        }
 
         var count = 0;
-        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        var yuruyus = SafeDirectoryWalk.Yuru(
+            source,
+            IceAktarmaButcesi(ogeButcesi),
+            oge =>
+            {
+                // Göreli yol, KAYNAK KÖKÜNÜN uzunluğuyla kesilerek bulunur — eski kodun kalıbı
+                // aynen korundu; ortak yürüyüş her ögenin tam yolunu verir.
+                var hedef = target + oge.FullName[source.Length..];
+                if (oge is DirectoryInfo)
+                {
+                    Directory.CreateDirectory(hedef);
+                    return;
+                }
+
+                File.Copy(oge.FullName, hedef, overwrite: true);
+                count++;
+            },
+            null,
+            CancellationToken.None);
+
+        if (yuruyus.Truncated)
         {
-            File.Copy(file, target + file[source.Length..], overwrite: true);
-            count++;
+            // Anahtar seçimi ölçüm kapısıyla AYNI gerekçeye dayanır (bkz. ImportSiteArchiveAsync).
+            throw new AppException(
+                yuruyus.TruncatedReasonKey,
+                413,
+                413,
+                $"Kopyalama butcesi doldu; {count} dosya yazilmisti. Site koku geri sariliyor.");
         }
 
         return count;

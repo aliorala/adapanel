@@ -100,6 +100,31 @@ export async function uploadFile(path: string, file: File) {
   return response.data.data;
 }
 
+/**
+ * KLASÖR BOYUTU — sonucun EKSİK olabileceği açıkça bildirilir.
+ *
+ * Listede klasörler için boyut `0` gelir (dizin girdisinin kendi uzunluğu); gerçek boyut ancak
+ * ağacı gezerek bulunur ve bu PAHALI bir iştir. Sunucu öge/süre bütçesini aşarsa taramayı keser
+ * ve `truncated` ile söyler: o hâlde `totalBytes` bir ALT SINIRDIR, toplam değildir.
+ *
+ * `truncatedReasonKey` serbest metin değil çeviri anahtarıdır (`errorKey` ile aynı sözleşme):
+ * sebebi kullanıcının dilinde göstermek arayüzün işi.
+ */
+export type DirectorySizeResult = {
+  path: string;
+  totalBytes: number;
+  fileCount: number;
+  directoryCount: number;
+  /** true ise sayım TAMAMLANMADI; gösterilen değer gerçek boyutun altındadır. */
+  truncated: boolean;
+  truncatedReasonKey: string;
+};
+
+export async function getDirectorySize(path: string) {
+  const response = await apiClient.post<ApiEnvelope<DirectorySizeResult>>("/files/size", { path });
+  return response.data.data;
+}
+
 export function getDownloadUrl(path: string) {
   return `/api/v1/files/download?path=${encodeURIComponent(path)}`;
 }

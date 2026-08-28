@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
@@ -39,7 +40,14 @@ public sealed partial class BackupService(
     ISecretProtector? secretProtector = null,
     // İSTEĞE BAĞLI: yedeğin "dosyası kayıp" işaretlenmesi denetim kaydına düşsün diye. Yedeğin
     // kendiliğinden buharlaştığı hissi, izi olmayan bir değişiklikten doğar.
-    IAuditService? auditService = null) : IBackupService
+    IAuditService? auditService = null,
+    // İSTEĞE BAĞLI: dosya taramasının ÖGE tavanı. Üretimde HİÇ verilmez (DI varsayılanı kullanır);
+    // yalnızca testin bütçe korumasını GERÇEKTEN doldurabilmesi için var — üretim değeriyle bu,
+    // testte iki milyon dosya yaratmak demekti, ki o da diski yorup hiçbir ek şey kanıtlamazdı.
+    // Aynı seam kota/dosya boyutu yolunda da açıldı (CalculateSizeAsync'in internal aşırı yüklemesi)
+    // ve gerekçesi orada yazılı. Dışarıya bir UÇ AÇMAZ: yeni bir HTTP yüzeyi yok, yalnız DI kurulumu
+    // bunu görebilir.
+    int? scanEntryBudget = null) : IBackupService
 {
     /// <summary>
     /// Uzak hedef kimliklerinin TEK kaynağı (otomasyon ayarları). Elle silme ile otomatik
@@ -48,6 +56,39 @@ public sealed partial class BackupService(
     private BackupRemoteCredentialReader RemoteCredentials => new(fileStore, secretProtector);
 
     private const string IndexPath = "config/backups.json";
+
+    /// <summary>
+    /// Yedek dosya taramasının ÖGE üst sınırı (dosya + klasör).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Dosya yöneticisinin/kotanın bütçesinden (200.000) BİLEREK bir kat daha büyük: o ikisi bir
+    /// HTTP isteğinin içinde çalışır ve kullanıcı ekranın başında BEKLER; yedek ise arka planda
+    /// çalışan bir toplu iştir. 200.000 burada gerçek ve meşru bir siteyi ("node_modules"lu bir
+    /// uygulama tek başına yüz binlerce öge tutabilir) yarıda keserdi — yani koruma, korumak
+    /// istediği veriyi kaybettirirdi.
+    /// </para>
+    /// <para>
+    /// Yine de SONSUZ DEĞİL: bir kavşak zaten <see cref="SafeDirectoryWalk"/> tarafından
+    /// atlanıyor, bu tavan ise kavşaksız da olsa (milyonlarca küçük dosya üreten bir kiracı)
+    /// gecelik işin sonsuza kadar sürmesini engelleyen İKİNCİ settir.
+    /// </para>
+    /// </remarks>
+    private const int TaramaOgeButcesi = 2_000_000;
+
+    /// <summary>
+    /// Yedek dosya taramasının SÜRE üst sınırı.
+    /// </summary>
+    /// <remarks>
+    /// Yalnız TARAMAYI (dizin okuma) sınırlar; arşive yazma bu bütçenin dışındadır. Otomatik
+    /// yedekleme genel kilidin içinde çalıştığı için (bkz. <c>RemoteUploadTimeout</c> gerekçesi)
+    /// süresiz bir dizin taraması, paneli o süre boyunca kilitli tutardı.
+    /// </remarks>
+    private const int TaramaSureButcesiMs = 10 * 60 * 1000;
+
+    /// <summary>Bir yedek işinin TAMAMI için tek tarama bütçesi üretir.</summary>
+    private SafeDirectoryWalkBudget YeniTaramaButcesi()
+        => new(scanEntryBudget ?? TaramaOgeButcesi, TaramaSureButcesiMs);
 
     /// <summary>
     /// Uzak hedefe yükleme için ÜST SINIR. Sonsuz bekleme kabul edilemez: yükleme, otomatik
@@ -522,6 +563,27 @@ public sealed partial class BackupService(
             });
         }
 
+        // TARAMASI YARIDA KESİLEN AĞAÇLAR. Atlanan dosyalardan daha ağır bir kayıptır: atlanan
+        // dosyada "hangi dosya" bilinir, burada ise o ağacın gezilmemiş kısmında NE OLDUĞU hiç
+        // ölçülmedi. Kullanıcı arşivin bu köşesine güvenmemeli.
+        //
+        // ANAHTAR NEDEN YÜRÜYÜŞÜN KENDİ SEBEP ANAHTARI ("files.size_truncated_*"), yeni bir
+        // "backup.*" anahtarı değil: bu depoda çevirisi olmayan bir anahtar, kullanıcının ekranda
+        // HAM ANAHTARI görmesi demektir (MessageKeyCoverageTests tam bunu kapatıyor). Yürüyüşün
+        // sebep anahtarları hem tr hem en'de ZATEN çevrilidir ve olan biteni doğru anlatır ("öge
+        // sayısı bütçesi doldu; sayım durduruldu"). Yedeğe ÖZGÜ sonuç — "arşiv eksiktir" — Detail
+        // alanında durur ve arayüz onu çevirinin hemen altında olduğu gibi basar (BackupView.vue).
+        foreach (var kesilen in skipped.TruncatedScans)
+        {
+            record.Warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = kesilen.ReasonKey,
+                Target = kesilen.Root,
+                Detail = "Bu ağacın TAMAMI taranamadı, dolayısıyla tamamı arşive GİRMEDİ. " +
+                         "Yedek EKSİKTİR; geri yüklerken bu ağacın tamamı gelmeyecek."
+            });
+        }
+
         // Ayrıntısı taşınmayanlar SAYIYLA taşınır: "kaç dosya eksik" bilgisi hiçbir koşulda
         // kaybolmamalı (bozuk bir ACL yüz binlerce dosyayı birden atlatabilir).
         if (skipped.Truncated > 0)
@@ -801,7 +863,14 @@ public sealed partial class BackupService(
         // Dosya listesi bir kez taranır: hem indeksin hem de arşive girecek kümenin kaynağı budur.
         // ATLANANLAR tek bir defterde toplanır (tarama + arşivleme aşamaları ayrı ayrı atlayabilir).
         var atlananlar = new BackupSkipLog();
-        var taranan = request.IncludeFiles ? ScanFiles(applicationRoot, "files", atlananlar) : [];
+        var taranan = request.IncludeFiles
+            ? ScanFiles(
+                applicationRoot,
+                "files",
+                atlananlar,
+                YeniTaramaButcesi(),
+                cancellationToken)
+            : [];
         var indeks = BuildIndex(plan.Stamp, taranan);
         var fark = BackupChainPlanner.Diff(plan.PreviousIndex, indeks);
         var yazilacak = fark.Changed.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1152,11 +1221,47 @@ public sealed partial class BackupService(
     /// dosya bütün yedeği düşürmemeli, ama sessizce kaybolmamalı da.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Burada atlanan dosya arşive HİÇ ADAY OLMAZ (indekse girmez), yani
     /// <c>AddFilesToArchive</c> onu bir daha göremez. Bu yüzden atlamanın kaydı tam burada
     /// tutulmalı; bir adım sonrasında ölçülemez.
+    /// </para>
+    /// <para>
+    /// <b>YÜRÜYÜŞ ARTIK BURADA YAZILI DEĞİL.</b> Burada elle yazılmış bir <c>Stack</c> yürüyüşü
+    /// vardı; yığın kısmı doğruydu ama İKİ koruma eksikti ve ikisi de kiracının YAZABİLDİĞİ bir
+    /// ağaçta yürüdüğü için sömürülebilirdi:
+    /// </para>
+    /// <list type="number">
+    ///   <item><description>
+    ///   <b>Bağlantı (junction/symlink) TAKİP EDİLİYORDU.</b> Kiracının site köküne kendi kökünü
+    ///   gösteren bir kavşak koyması, gece çalışan yedek işini SONSUZ döngüye sokmaya yeterdi
+    ///   (ya da yol uzunluğu sınırına kadar aynı ağacı defalarca arşive yazıp diski doldurmaya).
+    ///   Komşuyu gösteren bir kavşak ise BAŞKA BİR KİRACININ dosyalarını bu arşive sokardı.
+    ///   </description></item>
+    ///   <item><description>
+    ///   <b>BÜTÇE YOKTU.</b> Tarama, ağaç ne kadar büyükse o kadar sürerdi; üst sınırı yoktu.
+    ///   </description></item>
+    /// </list>
+    /// <para>
+    /// Aynı hata sınıfı kota yolunda ölçülmüş ve orada çözüm <see cref="SafeDirectoryWalk"/> ile
+    /// TEK yürüyüşe inmek olmuştu. Burada üçüncü bir güvenli yürüyüş yazmak, "birini sıkılaştırıp
+    /// diğerini unutma" hatasını üçüncü kez kurmak demekti.
+    /// </para>
+    /// <para>
+    /// <b>Kavşak atlanması ARŞİVDE EKSİK SAYILMAZ ve uyarı üretmez.</b> Kavşak bir VERİ değil,
+    /// bir işaretçidir: hedefi ya bu ağacın içindedir (o zaman gerçek adıyla zaten arşivdedir ve
+    /// takip etmek aynı baytları ikinci kez yazmak olurdu) ya da dışındadır — ki o veri bu
+    /// kiracının yedeğine GİRMEMELİDİR. Her iki durumda da "eksik" damgası yanlış olurdu.
+    /// </para>
     /// </remarks>
-    private static List<ArchiveFile> ScanFiles(string root, string entryPrefix, BackupSkipLog skipped)
+    /// <param name="butce">Taramanın üst sınırı. Abonelik yedeğinde <b>aynı nesne bütün sitelerde
+    /// paylaşılır</b>: site başına verilseydi tavan site sayısıyla çarpılır, yani fiilen kalkardı.</param>
+    private static List<ArchiveFile> ScanFiles(
+        string root,
+        string entryPrefix,
+        BackupSkipLog skipped,
+        SafeDirectoryWalkBudget butce,
+        CancellationToken cancellationToken)
     {
         var sonuc = new List<ArchiveFile>();
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
@@ -1165,49 +1270,58 @@ public sealed partial class BackupService(
         }
 
         var tam = Path.GetFullPath(root);
-        var kuyruk = new Stack<string>();
-        kuyruk.Push(tam);
 
-        while (kuyruk.Count > 0)
-        {
-            var klasor = kuyruk.Pop();
-            string[] dosyalar;
-            try
+        var yuruyus = SafeDirectoryWalk.Yuru(
+            tam,
+            butce,
+            oge =>
             {
-                foreach (var altKlasor in Directory.GetDirectories(klasor))
+                if (oge is not FileInfo bilgi)
                 {
-                    kuyruk.Push(altKlasor);
+                    return;
                 }
 
-                dosyalar = Directory.GetFiles(klasor);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                // Erişilemeyen klasör: BÜTÜN alt ağacı yedeğin dışında kaldı. Eskiden burada
-                // (kökte) sessizce BOŞ liste dönülüyordu — yani sitenin hiçbir dosyası olmayan
-                // bir arşiv "başarılı" diye kaydediliyordu.
-                skipped.Add(GirdiAdi(tam, entryPrefix, klasor), exception);
-                continue;
-            }
-
-            foreach (var dosya in dosyalar)
-            {
-                var girdi = GirdiAdi(tam, entryPrefix, dosya);
+                var girdi = GirdiAdi(tam, entryPrefix, bilgi.FullName);
                 try
                 {
-                    var bilgi = new FileInfo(dosya);
+                    // Uzunluk ve tarih sıralamanın KENDİ meta verisinden gelir; yine de dosya bu
+                    // arada silinmiş olabilir. Silinmiş dosya atlanan değildir (arşivlenecek bir
+                    // şey yok), bu yüzden deftere yazılmaz.
                     if (!bilgi.Exists)
                     {
-                        continue;
+                        return;
                     }
 
-                    sonuc.Add(new ArchiveFile(girdi, dosya, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks));
+                    sonuc.Add(new ArchiveFile(girdi, bilgi.FullName, bilgi.Length, bilgi.LastWriteTimeUtc.Ticks));
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     skipped.Add(girdi, exception);
                 }
-            }
+            },
+            // Okunamayan klasör: BÜTÜN alt ağacı yedeğin dışında kaldı. Eskiden bu kökte olduğunda
+            // sessizce BOŞ liste dönülüyordu — yani sitenin hiçbir dosyası olmayan bir arşiv
+            // "başarılı" diye kaydediliyordu. Adı deftere yazılır ki kullanıcı NEREYE bakacağını
+            // bilsin.
+            (klasor, exception) => skipped.Add(GirdiAdi(tam, entryPrefix, klasor), exception),
+            cancellationToken);
+
+        if (yuruyus.Truncated && yuruyus.TruncatedReasonKey is not SafeDirectoryWalk.SebepErisimReddi)
+        {
+            // BÜTÇE DOLDU = ağacın GEZİLMEMİŞ bir parçası var, yani bu arşiv EKSİK.
+            //
+            // KARAR: yedek yine ALINIR ama "created_with_errors" damgası yer ve kesilen kök
+            // uyarıda ADIYLA görünür. Ölçülmüş gerekçe:
+            //  * İSTİSNA ATIP HİÇ ALMAMAK yanlış olurdu — gece çalışan iş sessizce hiç yedek
+            //    üretmez, kullanıcı bunu ancak felaket anında öğrenirdi. Bu depoda tam olarak bu
+            //    hata sınıfı ("yedek eksik ama kayıt 'created' diyor") bir kez P0 olarak kapatıldı;
+            //    çözümü sessizlik değil, DAMGA olmuştu.
+            //  * SESSİZCE KESMEK de yasak: eksik bir arşivi tam sanmak, geri yükleme gününde veri
+            //    kaybıdır. O yüzden erişim reddiyle AYNI kanaldan (BackupSkipLog → uyarı + durum)
+            //    yükseltilir; kullanıcı listede sağlam yedeklerden AYIRT EDEBİLİR.
+            // Erişim reddi burada yeniden bildirilmez: onu zaten yukarıdaki geri çağrı, kesilen
+            // klasörün ADIYLA deftere yazdı — aynı olayı ikinci kez, daha az bilgiyle söylemek olurdu.
+            skipped.AddTruncatedScan(GirdiAdi(tam, entryPrefix, tam), yuruyus.TruncatedReasonKey);
         }
 
         return sonuc;
@@ -1604,6 +1718,11 @@ public sealed partial class BackupService(
         var uyarilar = new List<BackupRestoreWarningDto>();
         var atlananlar = new BackupSkipLog();
 
+        // TEK BÜTÇE, BÜTÜN SİTELER: aynı karar kota yolunda da verildi ve gerekçesi
+        // SafeDirectoryWalkBudget'ta yazılı — bütçe site başına verilseydi tavan site sayısıyla
+        // ÇARPILIR, yani 50 siteli bir abonelikte fiilen kalkardı.
+        var taramaButcesi = YeniTaramaButcesi();
+
         foreach (var siteAdi in plan.Sites)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1615,7 +1734,7 @@ public sealed partial class BackupService(
                 if (request.IncludeFiles)
                 {
                     var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
-                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files", atlananlar));
+                    taranan.AddRange(ScanFiles(kok, $"sites/{siteAdi}/files", atlananlar, taramaButcesi, cancellationToken));
                 }
             }
             catch (Exception exception)

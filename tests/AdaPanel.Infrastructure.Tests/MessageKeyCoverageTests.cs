@@ -72,8 +72,20 @@ public sealed class MessageKeyCoverageTests
         // gorunur. Basari mesajlarinda ise arayuz sunucunun anahtarini kullanmaz, kendi metnini
         // gosterir ("panel.tasks.saved" gibi); onlari da zorunlu tutmak, hicbir yerde
         // gorunmeyen 80'den fazla anahtar icin ceviri istemek olurdu.
+        // ACILIS PARANTEZINDEN SONRA `\s*` ZORUNLU -- ve bu bir suslemedir sanilmasin, OLCULMUS
+        // bir korluktu: desen `new AppException(` ile anahtarin arasinda satir sonu KABUL
+        // ETMIYORDU, yani cok satirli cagrilar
+        //     throw new AppException(
+        //         "migration.archive_too_large", ...
+        // hic taranmiyordu. Nobetci tam da bu yuzden `migration.archive_too_large`'i kacirdi;
+        // anahtarin hicbir dilde karsiligi yoktu ve kullanici hata kutusunda ham anahtari
+        // gorecekti. Uzun anahtar + uzun details metni satiri tasirdi, yani cok satirli yazim
+        // istisna degil NORMAL olan bicimdir.
+        //
+        // Yanlis eslesme riski yok: tirnakli dize hemen bosluktan SONRA gelmek zorunda; ilk
+        // argumani degisken olan cagrilar eslesmez.
         var desen = new Regex(
-            @"(?:new AppException\(|\.Fail\(|WriteResponseAsync\([^,]+,\s*[^,]+,\s*|(?:Message|Error)Key\s*=\s*)""([a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)""",
+            @"(?:new AppException\(\s*|\.Fail\(\s*|WriteResponseAsync\([^,]+,\s*[^,]+,\s*|(?:Message|Error)Key\s*=\s*)""([a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)""",
             RegexOptions.Compiled);
 
         var anahtarlar = new HashSet<string>(StringComparer.Ordinal);
