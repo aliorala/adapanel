@@ -184,7 +184,11 @@
                 @change="accountSelection.toggle(account.address)" />
             </span>
             <strong>{{ account.address }}</strong>
-            <span>{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} MB` : "∞" }}</span>
+            <!-- BİRİM MiB, "MB" DEĞİL: `MailService` bu iki sayıyı da Stalwart'ın bayt değerini
+                 1024*1024'e bölerek üretiyor ve kotayı `MaxSizeMB * 1024 * 1024` ile geri yazıyor.
+                 Sayı ÖLÇEKLENMEZ (kutu kotası formda MiB olarak girilir, kart onun yankısıdır);
+                 düzeltilen tek şey koda gömülü etiketin yanlış tabanı. -->
+            <span>{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} ${t("panel.units.mib")}` : "∞" }}</span>
             <span :class="['status-pill', account.active ? 'ok' : 'warn']">
               {{ account.active ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
@@ -1559,7 +1563,9 @@ async function removeAccount(address: string) {
   const account = workspace.value?.accounts.find((item) => item.address === address) ?? null;
   const impact = [`${t("panel.mail.mailboxes")}: ${address}`];
   if (account) {
-    impact.push(`${t("panel.mail.quota")}: ${account.currentSizeMB} / ${account.maxSizeMB} MB`);
+    // Onay metnindeki birim listedekiyle AYNI olmalı: kullanıcı silmeden önce gördüğü sayıyı
+    // burada tekrar okur, iki ekranın farklı taban söylemesi doğrulamayı anlamsız kılardı.
+    impact.push(`${t("panel.mail.quota")}: ${account.currentSizeMB} / ${account.maxSizeMB} ${t("panel.units.mib")}`);
   }
 
   // Normal onay: tek posta kutusu (dar kapsam) → ad yazdırmaya gerek yok.

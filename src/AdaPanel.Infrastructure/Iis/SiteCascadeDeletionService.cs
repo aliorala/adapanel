@@ -774,7 +774,7 @@ public sealed class SiteCascadeDeletionService(
         }
 
         // Y7: "ne kadarı gitti" ancak ÖNCEDEN sayarsak bilinebilir.
-        var oncekiDosyaSayisi = CountFilesSafely(full);
+        var oncekiOlcum = CountFilesSafely(full);
 
         try
         {
@@ -784,33 +784,88 @@ public sealed class SiteCascadeDeletionService(
         catch (Exception exception)
         {
             var klasorDuruyor = Directory.Exists(full);
-            var kalanDosyaSayisi = klasorDuruyor ? CountFilesSafely(full) : 0;
-            var sonuc = ClassifyDeletion(oncekiDosyaSayisi, kalanDosyaSayisi, klasorDuruyor);
+
+            // Klasör gitmişse SAYMAYA GEREK YOK ve sayılamaz da: "0 dosya, TAM ölçüm" burada
+            // ölçülmüş bir olgudur (var olmayan klasörde dosya olamaz), varsayım değil.
+            var kalanOlcum = klasorDuruyor ? CountFilesSafely(full) : new FileCountMeasurement(0, true, string.Empty);
+            var sonuc = ClassifyDeletion(oncekiOlcum, kalanOlcum, klasorDuruyor);
 
             logger.LogWarning(
                 exception,
-                "Site klasoru silme sonucu {Outcome}: {Path} ({Before} -> {After} dosya)",
+                "Site klasoru silme sonucu {Outcome}: {Path} ({Before} -> {After} dosya, olculdu={BeforeMeasured}/{AfterMeasured})",
                 sonuc,
                 full,
-                oncekiDosyaSayisi,
-                kalanDosyaSayisi);
+                oncekiOlcum.FileCount,
+                kalanOlcum.FileCount,
+                oncekiOlcum.Measured,
+                kalanOlcum.Measured);
 
-            var mesaj = DescribeDeletionFailure(
-                label, full, sonuc, oncekiDosyaSayisi, kalanDosyaSayisi, exception.Message);
-            result.Warnings.Add(mesaj);
+            KlasorSonucunuYaz(result, label, full, sonuc, oncekiOlcum, kalanOlcum, exception.Message);
+        }
+    }
 
-            // "Klasör gitti ama istisna atıldı" bir kalıntı DEĞİLDİR: diskte bir şey kalmadı.
-            if (sonuc != DirectoryDeletionOutcome.Deleted)
+    /// <summary>
+    /// Yarım kalan bir klasör silmesinin SONUÇ NESNESİNE nasıl yazılacağı: uyarı cümlesi + kalıntı
+    /// kaydı + "ölçülebildi mi" bayrağı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>internal</c> ve servisten BAĞIMSIZ (yalnız DTO alır): bu üç yazının birlikte yapılması
+    /// kararın kendisidir ve on dokuz servisi taklit etmeden ölçülebilmeli. Ayrılmasının somut
+    /// sebebi <see cref="DirectoryDeletionOutcome.MeasurementIncomplete"/>: bayrağı kurup arayüze
+    /// bağlamamak bu depoda tekrar eden bir hata sınıfı ("yazılmış ama bağlanmamış") ve tam olarak
+    /// bu satırların testsiz kalması demekti.
+    /// </para>
+    /// </remarks>
+    internal static void KlasorSonucunuYaz(
+        SiteDeletionResultDto result,
+        string label,
+        string path,
+        DirectoryDeletionOutcome outcome,
+        FileCountMeasurement oncesi,
+        FileCountMeasurement kalan,
+        string reason)
+    {
+        result.Warnings.Add(DescribeDeletionFailure(label, path, outcome, oncesi, kalan, reason));
+
+        if (outcome == DirectoryDeletionOutcome.MeasurementIncomplete)
+        {
+            // BAYRAK YALNIZ FALSE'A ÇEVRİLİR, geri true yapılmaz: bu metot bir silmede İKİ KEZ
+            // çalışır (uygulama kökü + fiziksel yol). Birinde ölçüm kesildiyse sonucun tamamı
+            // artık "ölçüldü" değildir; ikinci çağrının onu temizlemesi, kullanıcıya kesin cümle
+            // kurmanın sessiz yolu olurdu.
+            result.FilesDeletionMeasured = false;
+            if (string.IsNullOrEmpty(result.FilesDeletionTruncatedReasonKey))
             {
-                Kalinti(
-                    result,
-                    SiteLeftoverKinds.Files,
-                    full,
-                    sonuc == DirectoryDeletionOutcome.PartiallyDeleted
-                        ? $"KISMEN silindi — {kalanDosyaSayisi} dosya kaldı ({exception.Message})"
-                        : $"silinemedi, dosyalar duruyor ({exception.Message})");
+                result.FilesDeletionTruncatedReasonKey = KesilmeSebebi(oncesi, kalan);
             }
         }
+
+        // "Klasör gitti ama istisna atıldı" bir kalıntı DEĞİLDİR: diskte bir şey kalmadı.
+        if (outcome == DirectoryDeletionOutcome.Deleted)
+        {
+            return;
+        }
+
+        Kalinti(
+            result,
+            SiteLeftoverKinds.Files,
+            path,
+            outcome switch
+            {
+                // Kalan sayı burada ÇIPLAK basılabilir: "kısmen silindi" kararı iki dalın ikisinde de
+                // kalan ölçümün TAM olmasını şart koşuyor (bkz. ClassifyDeletion), yani bu sayı alt
+                // sınır değil kesin değerdir.
+                DirectoryDeletionOutcome.PartiallyDeleted =>
+                    $"KISMEN silindi — {kalan.FileCount} dosya kaldı ({reason})",
+
+                // KALINTI OLARAK YAZILIR ama SEBEBİ "silinemedi" DEMEZ: klasörün durduğu
+                // gözlemlendi (bu dal yalnız orada oluşur), içindekilerin akıbeti ölçülemedi.
+                DirectoryDeletionOutcome.MeasurementIncomplete =>
+                    $"klasör duruyor; içindekilerin ne kadarının silindiği ÖLÇÜLEMEDİ — elle kontrol edin ({reason})",
+
+                _ => $"silinemedi, dosyalar duruyor ({reason})"
+            });
     }
 
     /// <summary>Yarım kalmış silmenin GERÇEK sonucu. Saf işlev: testler kararı doğrudan ölçer.</summary>
@@ -823,8 +878,33 @@ public sealed class SiteCascadeDeletionService(
         PartiallyDeleted,
 
         /// <summary>Hiçbir şey silinmedi.</summary>
-        NotDeleted
+        NotDeleted,
+
+        /// <summary>
+        /// <b>BİLMİYORUZ:</b> klasör duruyor ama içindekilerin ne kadarının silindiği ÖLÇÜLEMEDİ.
+        /// </summary>
+        /// <remarks>
+        /// Yukarıdaki iki durumdan HANGİSİNE düşüldüğü belirsizdir; ikisinden birine yuvarlamak,
+        /// bu sınıflandırmanın kapatmak için var olduğu yalanın (bkz. <see cref="ClassifyDeletion"/>)
+        /// tavanın üstüne taşınmış hâlidir.
+        /// </remarks>
+        MeasurementIncomplete
     }
+
+    /// <summary>
+    /// Bir klasördeki dosya sayısı — VE o sayının TAM ölçüm mü yoksa ALT SINIR mı olduğu.
+    /// </summary>
+    /// <remarks>
+    /// <b>Kalıp uydurulmadı, panelin disk kotasından kopyalandı:</b> aynı soru orada
+    /// <c>DiskUsage(UsageMb, Measured, TruncatedReasonKey)</c> ile cevaplanıyor. Düz bir <c>int</c>,
+    /// kaynaktaki (<see cref="SafeDirectoryWalkResult.Truncated"/>) "bu sayı bir ALT SINIR" bilgisini
+    /// yolda düşürüyordu.
+    /// </remarks>
+    /// <param name="FileCount">Sayılan dosya. <paramref name="Measured"/> <c>false</c> ise gerçek
+    /// sayı EN AZ bu kadardır.</param>
+    /// <param name="Measured">Ağacın tamamı görülebildi mi.</param>
+    /// <param name="TruncatedReasonKey">Kesilme sebebinin çeviri anahtarı; ölçüm tamsa boş.</param>
+    internal readonly record struct FileCountMeasurement(int FileCount, bool Measured, string TruncatedReasonKey);
 
     /// <summary>
     /// <b>ÖLÇÜLDÜ (denetim Y7):</b> içinde kavşak bulunan gerçek bir site ağacında
@@ -833,37 +913,129 @@ public sealed class SiteCascadeDeletionService(
     /// kaldı. Panel bunu "Site dosyaları silinemedi" diye raporluyordu — yani gerçeğin TERSİ.
     /// Kullanıcı "silinemedi" okuyup dosyalarının durduğunu sanıyordu.
     /// </summary>
-    internal static DirectoryDeletionOutcome ClassifyDeletion(int oncekiDosyaSayisi, int kalanDosyaSayisi, bool klasorDuruyor)
+    /// <remarks>
+    /// <para>
+    /// <b>ÜÇÜNCÜ DURUM (bu turda eklendi):</b> karar iki sayımın FARKINA bakar, ama sayımlar
+    /// bütçelidir. İkisi de öge tavanına dayanırsa fark SIFIR çıkar; eski kural bunu
+    /// <see cref="DirectoryDeletionOutcome.NotDeleted"/> sayıp "silinemedi, dosyalar duruyor"
+    /// diyordu — ağacın çoğu gitmiş olabilecekken KESİN bir cümle. Tavanı 20.000'den 200.000'e
+    /// çıkarmak (ölçüldü: panelin kendi <c>node_modules</c>'ü tek başına 17.459 dosya) yalnızca
+    /// olasılığı düşürdü, sınıfı kapatmadı. Artık kapatan şey şu: ölçülemeyen hâl, ölçülen iki
+    /// hâlden birine YUVARLANMIYOR.
+    /// </para>
+    /// <para>
+    /// <b>Kesik ölçümle de KANITLANABİLEN tek hâl korunuyor</b> (aksi hâlde üçüncü durum, gerçekten
+    /// bilinen şeyleri de "bilmiyorum"a çevirirdi): önceki sayım kesikse <c>önceki_gerçek ≥ önceki</c>
+    /// olur; kalan sayım TAMSA <c>kalan</c> kesindir. <c>kalan &lt; önceki</c> ise
+    /// <c>kalan &lt; önceki ≤ önceki_gerçek</c>, yani gerçek fark KESİN pozitiftir → kısmi silme
+    /// kanıtlanmıştır. Bu, tavanı aşan büyük ağaçlarda en sık karşılaşılan durumdur (silme neredeyse
+    /// her şeyi götürür, geriye kilitli birkaç dosya kalır) ve orada "bilmiyorum" demek gereksiz
+    /// bir bilgi kaybı olurdu.
+    /// </para>
+    /// <para>
+    /// <b>Ters yön (önceki TAM, kalan KESİK) kanıt DEĞİLDİR:</b> kalan yalnız bir alt sınırdır,
+    /// gerçek kalan öncekine eşit olabilir — yani "kısmen silindi" demek yine yalan olabilirdi.
+    /// O hâl bilerek üçüncü duruma düşer.
+    /// </para>
+    /// </remarks>
+    internal static DirectoryDeletionOutcome ClassifyDeletion(
+        FileCountMeasurement oncesi,
+        FileCountMeasurement kalan,
+        bool klasorDuruyor)
     {
+        // Klasörün YOKLUĞU ölçüm değil GÖZLEMDİR: bütçenin bununla ilgisi yok.
         if (!klasorDuruyor)
         {
             return DirectoryDeletionOutcome.Deleted;
         }
 
-        return kalanDosyaSayisi < oncekiDosyaSayisi
-            ? DirectoryDeletionOutcome.PartiallyDeleted
-            : DirectoryDeletionOutcome.NotDeleted;
+        if (oncesi.Measured && kalan.Measured)
+        {
+            return kalan.FileCount < oncesi.FileCount
+                ? DirectoryDeletionOutcome.PartiallyDeleted
+                : DirectoryDeletionOutcome.NotDeleted;
+        }
+
+        if (kalan.Measured && kalan.FileCount < oncesi.FileCount)
+        {
+            return DirectoryDeletionOutcome.PartiallyDeleted;
+        }
+
+        return DirectoryDeletionOutcome.MeasurementIncomplete;
     }
 
     /// <summary>Kullanıcıya ne yazılacağı — saf işlev, mesajın kendisi de test edilebilir olsun diye.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÜÇÜNCÜ DURUMDA NE SÖYLENİYOR ve NEDEN:</b> bu ekran bir silme sonucudur; kullanıcının tek
+    /// sorusu "verim gitti mi, kaldı mı". Cevap bilinmediğinde iki seçenek vardı ve ikisi de
+    /// tartıldı: (a) "silindi" ya da "silinemedi"den birini seçmek — ikisi de kullanıcıyı YANLIŞ bir
+    /// işe gönderir ("silindi" derse gitmeyen dosyalar sunucuda ve kotasında kalır; "silinemedi"
+    /// derse geri getirilemeyecek bir kaybı fark etmeden bekler). (b) Bilmediğimizi SÖYLEYİP ne
+    /// yapması gerektiğini yazmak. Bu depoda kural (b): rahatsız edici ama yanlış değil. Cümle bu
+    /// yüzden üç şeyi birden taşır — klasörün DURDUĞU (gözlem), içeriğinin akıbetinin
+    /// ÖLÇÜLEMEDİĞİ, ve kullanıcının klasörü ELLE açıp bakması gerektiği.
+    /// </para>
+    /// <para>
+    /// <b>Sayılar neden ">=" ile basılıyor:</b> kesik bir sayım alt sınırdır. Çıplak basmak,
+    /// kaldırdığımız yalanı bir satır aşağıda tekrarlamak olurdu.
+    /// </para>
+    /// <para>
+    /// <b>Teknik kuyruk neden ETİKET-DEĞER:</b> kesilme sebebi bir ÇEVİRİ ANAHTARIDIR
+    /// (<c>files.size_truncated_*</c>) ve bu liste arayüzde olduğu gibi basılır (<c>t()</c>'den
+    /// geçmez). Anahtarı Türkçe anlatının içine gömmek kullanıcıya ham anahtar gösterirdi; aynı
+    /// karar <c>BackupService</c>'te ölçülerek verildi (orada <c>Detail</c> alanı
+    /// "scan=truncated; reason=..." biçimindedir). Anlatı Türkçedir çünkü bu listenin TAMAMI
+    /// (uyarılar) sunucuda Türkçe kuruluyor; teşhis satırı ise dilden bağımsızdır.
+    /// </para>
+    /// </remarks>
     internal static string DescribeDeletionFailure(
         string label,
         string path,
         DirectoryDeletionOutcome outcome,
-        int oncekiDosyaSayisi,
-        int kalanDosyaSayisi,
+        FileCountMeasurement oncesi,
+        FileCountMeasurement kalan,
         string reason)
     {
         return outcome switch
         {
             DirectoryDeletionOutcome.Deleted => $"{label}: silindi ({path}) — {reason}",
             DirectoryDeletionOutcome.PartiallyDeleted =>
-                $"{label}: KISMEN SİLİNDİ — {oncekiDosyaSayisi} dosyadan {oncekiDosyaSayisi - kalanDosyaSayisi} tanesi " +
-                $"silindi, {kalanDosyaSayisi} tanesi kaldı ({path}). Silinenler GERİ GETİRİLEMEZ; " +
+                $"{label}: KISMEN SİLİNDİ — {Sayi(oncesi)} dosyadan {SilinenSayi(oncesi, kalan)} tanesi " +
+                $"silindi, {Sayi(kalan)} tanesi kaldı ({path}). Silinenler GERİ GETİRİLEMEZ; " +
                 $"kalanları elle temizlemeniz gerekir. Sebep: {reason}",
+            DirectoryDeletionOutcome.MeasurementIncomplete =>
+                $"{label}: SONUÇ ÖLÇÜLEMEDİ — klasör sunucuda duruyor ({path}) ama içindeki dosyaların " +
+                $"ne kadarının silindiği SAYILAMADI: dosyalar gitmiş de olabilir, duruyor da olabilir. " +
+                $"Gitmiş olanlar GERİ GETİRİLEMEZ. Klasörü elle açıp içeriğini kontrol edin. " +
+                $"Sebep: {reason} [measurement=truncated; before={Sayi(oncesi)}; after={Sayi(kalan)}; " +
+                $"reason_key={KesilmeSebebi(oncesi, kalan)}]",
             _ => $"{label}: silinemedi, dosyalar duruyor ({path}) — {reason}"
         };
     }
+
+    /// <summary>Kesik ölçüm ALT SINIR olarak basılır; çıplak sayı, olmayan bir kesinlik iddia ederdi.</summary>
+    private static string Sayi(FileCountMeasurement olcum)
+        => olcum.Measured ? olcum.FileCount.ToString() : $">={olcum.FileCount}";
+
+    /// <summary>
+    /// "Kaç tanesi silindi" — ve o da bir ALT SINIRDIR ön sayım kesikse. Farkı çıplak basmak,
+    /// bir satır yukarıda kaldırdığımız kesinlik iddiasını aynı cümlenin ortasında tekrarlamak olurdu.
+    /// </summary>
+    private static string SilinenSayi(FileCountMeasurement oncesi, FileCountMeasurement kalan)
+    {
+        var fark = oncesi.FileCount - kalan.FileCount;
+        return oncesi.Measured ? fark.ToString() : $">={fark}";
+    }
+
+    /// <summary>
+    /// Raporlanacak kesilme sebebi. ÖNCEKİ ölçümün sebebi önceliklidir: kararı belirsiz bırakan
+    /// asıl ölçüm odur (kalan ölçüm tamken de üçüncü duruma düşülebilir).
+    /// </summary>
+    private static string KesilmeSebebi(FileCountMeasurement oncesi, FileCountMeasurement kalan)
+        => !string.IsNullOrEmpty(oncesi.TruncatedReasonKey)
+            ? oncesi.TruncatedReasonKey
+            : kalan.TruncatedReasonKey;
 
     /// <summary>
     /// Bu sayımın öge bütçesi. <b>ESKİ DEĞER 20.000'Dİ VE ÖLÇÜLEREK YÜKSELTİLDİ.</b>
@@ -903,9 +1075,10 @@ public sealed class SiteCascadeDeletionService(
     /// çevirirdi. Öge tavanı belirlenimcidir: aynı ağaç → aynı sayı.
     /// </para>
     /// <para>
-    /// <b>KALAN AÇIK (kapatılmadı, biliniyor):</b> 200.000'in üstünde aynı düşme sürüyor. Gerçek
-    /// çözüm <see cref="ClassifyDeletion"/>'a "ölçüm kesildi" diye ÜÇÜNCÜ bir durum eklemektir;
-    /// o, mesaj sözleşmesini değiştirir ve bu turun (tekrarın kaldırılması) dışındadır.
+    /// <b>O AÇIK ARTIK KAPALI:</b> 200.000'in üstünde de düşme YOK — sayım kesildiğinde
+    /// <see cref="ClassifyDeletion"/> <see cref="DirectoryDeletionOutcome.MeasurementIncomplete"/>
+    /// döndürüyor ve kullanıcıya kesin bir cümle KURULMUYOR. Yani tavan artık bir DOĞRULUK sınırı
+    /// değil, yalnızca bir maliyet sınırı: aşıldığında panel yanlış konuşmuyor, "ölçemedim" diyor.
     /// </para>
     /// </remarks>
     private const int SayimOgeButcesi = 200_000;
@@ -936,10 +1109,18 @@ public sealed class SiteCascadeDeletionService(
     /// Okunamayan alt klasör sayıma girmez (ortak yürüyüş erişim reddini ve G/Ç hatasını yutup
     /// "kısmi" damgalar); karar iki ölçümün FARKINA bakar, mutlak sayıya değil.
     /// </para>
+    /// <para>
+    /// <b>DÖNÜŞ TİPİ DÜZ SAYI DEĞİL</b> ve sebebi ölçüldü: yürüyüş "bu sayı tam mı" bilgisini
+    /// (<see cref="SafeDirectoryWalkResult.Truncated"/> + sebep anahtarı) ZATEN üretiyordu, ama
+    /// <c>int</c> dönüşü onu burada düşürüyordu. Bilgi kaynakta varken yolda kaybolduğu için
+    /// <see cref="ClassifyDeletion"/> iki alt sınırı kesin ölçümmüş gibi karşılaştırıyor ve
+    /// kullanıcıya ölçülmemiş bir şeyi KESİN cümleyle söylüyordu. Aynı düşme disk kotasında da
+    /// yaşandı; oradaki çözüm (<c>DiskUsage</c>) burada birebir tekrarlandı.
+    /// </para>
     /// </remarks>
     /// <param name="ogeButcesi">Yalnız TEST içindir; üretim çağrılarının hiçbiri vermez (tavan
     /// davranışı gerçek bir ağaçla ölçülebilsin diye).</param>
-    internal static int CountFilesSafely(string root, int ogeButcesi = SayimOgeButcesi)
+    internal static FileCountMeasurement CountFilesSafely(string root, int ogeButcesi = SayimOgeButcesi)
     {
         // İPTAL JETONU YOK (CancellationToken.None): ölçüm, silme kararının kendisini kuruyor.
         // İptal edilebilseydi yarıda kesilen bir sayım "hiç dosya yoktu" gibi görünür ve panel
@@ -949,7 +1130,7 @@ public sealed class SiteCascadeDeletionService(
             new SafeDirectoryWalkBudget(ogeButcesi, int.MaxValue),
             CancellationToken.None);
 
-        return olcum.FileCount;
+        return new FileCountMeasurement(olcum.FileCount, !olcum.Truncated, olcum.TruncatedReasonKey);
     }
 
     /// <summary>Siteye ait sahiplik kayıtları — silme başlamadan önce okunur (Y1).</summary>

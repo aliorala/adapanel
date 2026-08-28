@@ -542,7 +542,10 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
                      (goc, "private async Task<string?> SanitizeUserIniFilesAsync("),
                      (barindirma, "private static int CopyDirectoryRecursive("),
                      (dosyaYoneticisi, "private static KlasorKopyasi KlasoruKopyala("),
-                     (siteSilme, "internal static int CountFilesSafely(")
+                     // Dönüş tipi artık düz sayı DEĞİL: sayımın kesilip kesilmediği de taşınıyor
+                     // (FileCountMeasurement). Nöbetçinin sorduğu soru değişmedi — bu gövde KENDİ
+                     // yürüyüşünü taşımıyor, ortak kapıyı çağırıyor.
+                     (siteSilme, "internal static FileCountMeasurement CountFilesSafely(")
                  })
         {
             var govde = GovdeAl(kaynak, imza);

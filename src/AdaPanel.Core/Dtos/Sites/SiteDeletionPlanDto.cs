@@ -83,6 +83,38 @@ public sealed class SiteDeletionResultDto
     public List<SiteLeftoverDto> Leftovers { get; set; } = [];
 
     /// <summary>
+    /// Dosya klasörünün ne kadarının silindiği ÖLÇÜLEBİLDİ mi. <c>false</c> ise panel
+    /// "silindi" de "silinemedi" de DİYEMEZ — ölçüm ağacın tamamını göremedi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir bayrak (kapatılan açık):</b> "ne kadarı gitti" kararı iki bütçeli sayımın
+    /// FARKINA bakar (<c>SiteCascadeDeletionService.ClassifyDeletion</c>). İki sayım da öge tavanına
+    /// dayanırsa fark SIFIR çıkar ve eski kural bunu "hiç silinemedi" sayardı: panel, ağacın çoğu
+    /// gitmiş olabilecekken kullanıcıya <b>kesin</b> bir cümleyle "dosyalar duruyor" diyordu.
+    /// Bilgi kaynakta VARDI (<c>SafeDirectoryWalkResult.Truncated</c>) ama sözleşme taşımadığı için
+    /// yolda düşüyordu — aynı hata sınıfı disk kotasında da yaşandı ve orada
+    /// <c>DiskUsage(UsageMb, Measured, TruncatedReasonKey)</c> ile kapandı. Buradaki üçlü onun
+    /// birebir kopyasıdır; yeni bir felsefe icat etmek, birini sıkılaştırıp diğerini unutmanın yolu
+    /// olurdu.
+    /// </para>
+    /// <para>
+    /// <b><see cref="FullyDeleted"/> bundan ETKİLENMEZ ve bu bir yuvarlama DEĞİLDİR:</b> ölçüm
+    /// kesildiğinde bile klasörün DURDUĞU doğrudan gözlemlenmiştir (<c>Directory.Exists</c>), yani
+    /// "sunucuda bir şey kaldı" iddiası ölçüme değil gözleme dayanır. Belirsiz olan tek şey
+    /// klasörün İÇİNDEN ne kadarının gittiğidir ve onu bu bayrak taşır.
+    /// </para>
+    /// </remarks>
+    public bool FilesDeletionMeasured { get; set; } = true;
+
+    /// <summary>
+    /// Ölçümün neden kesildiğinin çeviri anahtarı (<c>files.size_truncated_entries|_time|_denied</c>);
+    /// ölçüm tamsa boş. <b>Boş olması "ölçüm tam" demek DEĞİLDİR</b> — tek doğru soru
+    /// <see cref="FilesDeletionMeasured"/>'dır (aynı sözleşme: <c>DiskUsage.TruncatedReasonKey</c>).
+    /// </summary>
+    public string FilesDeletionTruncatedReasonKey { get; set; } = string.Empty;
+
+    /// <summary>
     /// Site GERÇEKTEN tamamen gitti mi. <b>Bilinçli bırakılanlar</b> (ör. "dosyaları silme" seçildi,
     /// sahipliği kanıtlanmamış veritabanı korundu) sonucu başarısız yapmaz — istenen buydu.
     /// Bilinçsiz her kalıntı (silinemeyen klasör, düşürülemeyen veritabanı) bunu <c>false</c> yapar.

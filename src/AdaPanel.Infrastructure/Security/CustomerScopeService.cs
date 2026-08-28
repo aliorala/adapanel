@@ -385,7 +385,16 @@ public sealed class CustomerScopeService(
     /// "bir klasör okunamadı" demek yanıltıcı olurdu. İkinci bir öncelik kuralı yazmak, aynı
     /// kesilmenin site sırasına göre farklı sebep göstermesi demekti.
     /// </remarks>
-    private static string SebepSec(string mevcut, string yeni)
+    /// <remarks>
+    /// <para>
+    /// <b><c>internal</c> — SEBEBİ:</b> bu kural bir SAF FONKSİYONDUR ve doğrudan ölçülebilir.
+    /// Önceki turda "davranışsal test edilemedi, gerçek ACL manipülasyonu gerekiyor" diye
+    /// bırakılmıştı; o gerekçe yürüyüşün TAMAMI için doğru, kuralın KENDİSİ için değil. İki farklı
+    /// sitede aynı anda bütçe dolması + erişim reddi kurmak makineye bağımlı ve kırılgan bir test
+    /// üretirdi — oysa öncelik kararı burada, tek satırda yaşıyor.
+    /// </para>
+    /// </remarks>
+    internal static string SebepSec(string mevcut, string yeni)
         => mevcut.Length == 0 || mevcut == SafeDirectoryWalk.SebepErisimReddi ? yeni : mevcut;
 
     private async Task<Dictionary<string, ScopeEntry>> LoadAsync(CancellationToken cancellationToken)

@@ -119,6 +119,13 @@ export type SiteDeletionResult = {
   siteName: string;
   removed: string[];
   warnings: string[];
+  // Dosya klasörünün NE KADARININ silindiği ölçülebildi mi. Sunucudaki sayım bütçelidir; iki
+  // ölçüm de tavana dayanırsa panel "silindi" de "silinemedi" de diyemez ve bunu SÖYLEMEK
+  // zorundadır (bkz. SiteDeletionResultDto.FilesDeletionMeasured).
+  filesDeletionMeasured: boolean;
+  // Ölçümün neden kesildiği (files.size_truncated_*); ölçüm tamsa boş. Boş olması "tam" demek
+  // değildir — bakılacak alan yukarıdakidir.
+  filesDeletionTruncatedReasonKey: string;
 };
 
 export async function getSites() {

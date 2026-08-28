@@ -23,12 +23,18 @@
           </div>
           <ul class="plan-limits">
             <li><span>{{ t("panel.plans.sitesLabel") }}</span><b>{{ plan.maxSites || "∞" }}</b></li>
-            <li><span>{{ t("panel.plans.diskLabel") }}</span><b>{{ plan.maxDiskMb ? plan.maxDiskMb + " MB" : "∞" }}</b></li>
+            <!-- PLAN KARTI bir ÖLÇÜM değil, alttaki formun YANKISIDIR: yönetici "1024" yazar,
+                 kart "1024" gösterir. Bu yüzden sayı ÖLÇEKLENMEZ (kota göstergelerinden farkı
+                 bu); düzeltilen tek şey ETİKET. Sunucu bu alanları 1024 tabanında yorumluyor
+                 (FileQuotaGuard: MaxDiskMb * 1024 * 1024; SubscriptionEnforcementService:
+                 MaxTrafficGbPerMonth * 1024³), yani doğru birim MiB ve GiB'dir — koda gömülü
+                 "MB"/"GB" kullanıcıya %7 yanlış bir taban söylüyordu. -->
+            <li><span>{{ t("panel.plans.diskLabel") }}</span><b>{{ plan.maxDiskMb ? plan.maxDiskMb + " " + t("panel.units.mib") : "∞" }}</b></li>
             <li><span>{{ t("panel.plans.databasesLabel") }}</span><b>{{ plan.maxDatabases || "∞" }}</b></li>
             <li><span>{{ t("panel.plans.mailboxesLabel") }}</span><b>{{ plan.maxMailboxes || "∞" }}</b></li>
             <li><span>{{ t("panel.plans.scheduledTasksLabel") }}</span><b>{{ plan.maxScheduledTasks || "∞" }}</b></li>
             <li><span>{{ t("panel.plans.ftpLabel") }}</span><b>{{ plan.maxFtpUsers || "∞" }}</b></li>
-            <li><span>{{ t("panel.plans.trafficLabel") }}</span><b>{{ plan.maxTrafficGbPerMonth ? plan.maxTrafficGbPerMonth + " GB" : "∞" }}</b></li>
+            <li><span>{{ t("panel.plans.trafficLabel") }}</span><b>{{ plan.maxTrafficGbPerMonth ? plan.maxTrafficGbPerMonth + " " + t("panel.units.gib") : "∞" }}</b></li>
             <li><span>{{ t("panel.plans.validityLabel") }}</span><b>{{ plan.validityDays ? plan.validityDays + " " + t("panel.plans.days") : "∞" }}</b></li>
             <li><span>{{ t("panel.plans.backupsLabel") }}</span><b>{{ plan.maxBackupsPerDay || "∞" }}</b></li>
           </ul>
@@ -216,7 +222,7 @@
             <!-- Ölçüm KESİLDİYSE sayı bir ALT SINIRDIR; rozetsiz göstermek onu tam değer gibi
                  sunmak olurdu. Bayrak SATIR BAŞINA gelir: bütçe abonelik başına olduğu için bir
                  müşterinin ölçümü kesilirken komşusununki tam olabilir. -->
-            · {{ user.diskUsageMb }} / {{ user.maxDiskMb > 0 ? user.maxDiskMb : "∞" }} MB<span
+            · {{ formatQuotaMib(user.diskUsageMb) }} / {{ user.maxDiskMb > 0 ? formatQuotaMib(user.maxDiskMb) : "∞" }}<span
               v-if="!user.diskMeasured"
               class="status-pill warn"
               :title="t('users.disk_usage_partial_hint')">{{ t("users.disk_usage_partial") }}</span>
@@ -357,6 +363,7 @@ import { extractApiDetails, extractApiMessage, useAuthStore, type ManagedUser } 
 import { extractDeletionLeftovers, type UserDeletionLeftover } from "../api/users";
 import SubscriptionCard from "../components/SubscriptionCard.vue";
 import { useSitesStore } from "../stores/sites";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
 // Bildirimler üst bandda (MainLayout > banner) gösterilsin diye kabuk bileşene iletilir.
 const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
@@ -384,6 +391,28 @@ const { confirm } = useConfirm();
 
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
+
+/**
+ * `...Mb` ADI YANILTICI: sunucu bu sayıyı `bayt / (1024*1024)` ile üretiyor
+ * (`CustomerScopeService.GetDiskUsageMbAsync`) ve kotayı `MaxDiskMb * 1024 * 1024` ile
+ * uyguluyor (`FileQuotaGuard`) — yani alan MiB taşır, MB değil.
+ */
+const MIB = 1024 * 1024;
+
+/**
+ * MiB taşıyan sunucu alanı → bayt → panelin ORTAK biçimleyicisi ("gauge" hassasiyetiyle).
+ *
+ * NEDEN "gauge": buradaki sayı bir liste dolgusu değil, müşterinin SATIN ALDIĞI sınıra ne kadar
+ * yaklaştığını gösteren kota okumasıdır; SubscriptionCard ve SiteHostingView'daki kota
+ * göstergeleriyle aynı gerekçe ve aynı davranış (bkz. utils/bytes.ts). Bir kota ondalıklı,
+ * diğeri ondalıksız görünemez.
+ *
+ * NEDEN ÇEVİRİYORUZ: satır önceden "512 / 5120 MB" basıyordu — sayılar 1024 tabanlı ama etiket
+ * "MB" diyordu, yani kullanıcı %7 yanlış bir tabanla okuyordu.
+ */
+function formatQuotaMib(value: number) {
+  return sharedFormatBytes(value * MIB, t, "gauge");
+}
 
 const selectedUserId = ref("");
 const selectedUserIsCustomer = computed(() =>

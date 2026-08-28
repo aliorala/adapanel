@@ -28,7 +28,7 @@
           <strong v-if="!usage.trafficMeasured" class="unmeasured">{{ t("panel.subscription.notMeasured") }}</strong>
           <strong v-else>
             {{ formatBytes(usage.trafficBytesThisMonth) }}
-            <small v-if="usage.trafficLimitGb > 0"> / {{ usage.trafficLimitGb }} GB</small>
+            <small v-if="usage.trafficLimitGb > 0"> / {{ formatGib(usage.trafficLimitGb) }}</small>
             <small v-else> / {{ t("panel.subscription.unlimited") }}</small>
           </strong>
           <div v-if="usage.trafficMeasured && usage.trafficLimitGb > 0" class="usage-bar">
@@ -44,8 +44,8 @@
         <div class="summary-item">
           <span>{{ t("panel.subscription.disk") }}</span>
           <strong>
-            {{ usage.diskUsageMb }} MB
-            <small>/ {{ usage.maxDiskMb > 0 ? usage.maxDiskMb + " MB" : t("panel.subscription.unlimited") }}</small>
+            {{ formatMib(usage.diskUsageMb) }}
+            <small>/ {{ usage.maxDiskMb > 0 ? formatMib(usage.maxDiskMb) : t("panel.subscription.unlimited") }}</small>
             <!-- Kesilen ölçüm ALT SINIRDIR. Burası kullanıcının kotasına ne kadar yaklaştığını
                  okuduğu yer; eksik bir sayıyı tam gibi göstermek, kotasının bittiğini fark
                  etmemesine yol açar. Sebep anahtarı varsa ipucunda o gösterilir (motorun kendi
@@ -144,11 +144,30 @@ const error = ref("");
 const selectedPlanId = ref("");
 const expiryInput = ref("");
 
+/**
+ * SUNUCUNUN KOTA ALANLARI 1024 TABANLIDIR — adları öyle demese de. Ölçüldü:
+ * `SubscriptionEnforcementService` trafik sınırını `MaxTrafficGbPerMonth * 1024 * 1024 * 1024`
+ * ile bayta çeviriyor, `CustomerScopeService.GetDiskUsageMbAsync` kullanımı `bayt / (1024*1024)`
+ * ile üretiyor ve `FileQuotaGuard` tavanı `MaxDiskMb * 1024 * 1024` ile karşılaştırıyor. Yani
+ * `...Gb` alanı GiB, `...Mb` alanları MiB taşır.
+ *
+ * BU YÜZDEN TEK YOL: ekrandaki her kota sayısı önce BAYTA çevrilir, sonra ortak biçimleyiciden
+ * geçer. Böylece kullanılan, sınır ve doluluk çubuğu AYNI tabandan konuşur ve etiketi ("GiB"/
+ * "MiB") gerçeği söyler. Önceden sınır ham sayı + koda gömülü "GB" ile basılıyordu: kullanıcı
+ * "15.5 GiB / 20 GB" görüyor, iki farklı tabanda etiketlenmiş iki sayıyı karşılaştırıyordu —
+ * üstelik çubuk üçüncü bir hesap (1024³) yapıyordu. 1000 ile 1024 arasındaki %7'lik fark, tam da
+ * kotasının dolduğunu geç fark etmeye yeter.
+ */
+const MIB = 1024 * 1024;
+const GIB = 1024 * MIB;
+
 const trafficPercent = computed(() => {
   if (!usage.value || usage.value.trafficLimitGb <= 0) {
     return 0;
   }
-  const limit = usage.value.trafficLimitGb * 1024 * 1024 * 1024;
+  // Çubuk ile yanındaki sayı AYNI sınırdan hesaplanır; ayrı bir çarpan yazmak ikisinin
+  // birbirinden ayrışmasına açık kapı bırakırdı.
+  const limit = usage.value.trafficLimitGb * GIB;
   return Math.min(100, Math.round((usage.value.trafficBytesThisMonth / limit) * 100));
 });
 
@@ -165,6 +184,16 @@ const trafficClass = computed(() =>
  */
 function formatBytes(value: number) {
   return sharedFormatBytes(value, t, "gauge");
+}
+
+/** GiB taşıyan sunucu alanı (`trafficLimitGb`) → bayt → ortak biçimleyici. Bkz. GIB açıklaması. */
+function formatGib(value: number) {
+  return formatBytes(value * GIB);
+}
+
+/** MiB taşıyan sunucu alanları (`diskUsageMb`, `maxDiskMb`) → bayt → ortak biçimleyici. */
+function formatMib(value: number) {
+  return formatBytes(value * MIB);
 }
 
 function formatDate(iso: string) {

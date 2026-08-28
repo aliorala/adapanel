@@ -632,7 +632,12 @@ async function handleDeleteSite(siteName: string) {
         // Sunucu varsayılanı bilerek false — panel dışı çağıranlar (MCP, API anahtarı, betikler)
         // istemeden veritabanı düşürmesin.
         const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true });
-        if (result && result.warnings.length) {
+        // ÖLÇÜLEMEYEN SONUÇ, "temizlenemedi" BAŞLIĞIYLA GÖSTERİLMEZ: o başlık da kesin bir
+        // iddiadır ve sunucu tam olarak bu iddiayı kuramadığını bildiriyor. Kullanıcıya
+        // bilmediğimizi ve klasörü elle kontrol etmesi gerektiğini söyleyen ayrı bir başlık var.
+        if (result && result.filesDeletionMeasured === false) {
+          showNotice(`${t("panel.sites.deletedFilesUnmeasured")}: ${result.warnings.join(" • ")}`, true);
+        } else if (result && result.warnings.length) {
           showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);
         } else {
           showNotice(t("panel.sites.deleted"), false);

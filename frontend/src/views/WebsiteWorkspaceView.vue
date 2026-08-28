@@ -382,7 +382,12 @@ async function handleDelete(siteName: string) {
         const result = await sitesStore.deleteSite(siteName, { deleteDatabases: true, deleteFiles: true });
         // Uyarılar YUTULMAZ: silinemeyen/atlanan kaynak varsa kullanıcı bunu görmeli, yoksa
         // "silindi" yazısına güvenip arkada kalan veritabanını/görevi hiç fark etmez.
-        if (result && result.warnings.length) {
+        //
+        // Dosya silmenin sonucu ÖLÇÜLEMEDİYSE başlık da kesin konuşamaz: "temizlenemedi" demek,
+        // sunucunun tam olarak kuramadığını söylediği iddiayı arayüzde geri kurmak olurdu.
+        if (result && result.filesDeletionMeasured === false) {
+          showNotice(`${t("panel.sites.deletedFilesUnmeasured")}: ${result.warnings.join(" • ")}`, true);
+        } else if (result && result.warnings.length) {
           showNotice(`${t("panel.sites.deletedWithWarnings")}: ${result.warnings.join(" • ")}`, true);
         } else {
           showNotice(t("panel.sites.deleted"), false);
