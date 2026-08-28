@@ -27,6 +27,10 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
+# Paketsiz yayin nobetcisinin SAF karari. Ayri dosyada, cunku govdeye gomuluyken test
+# edilemiyordu; bu dosya yalnizca fonksiyon tanimlar, hicbir sey calistirmaz.
+. (Join-Path $PSScriptRoot "lib\release-asset-guard.ps1")
+
 if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path }
 
 function Get-AdaGitHubToken {
@@ -201,34 +205,27 @@ if ($MyInvocation.InvocationName -ne '.') {
 
     $token = Get-AdaGitHubToken
 
-    # PAKETSIZ YAYIN SESSIZCE YAPILAMAZ.
+    # PAKETSIZ YAYIN SESSIZCE YAPILAMAZ. Karar scripts\lib\release-asset-guard.ps1'de, SAF bir
+    # fonksiyonda duruyor -- cunku govdeye gomuluyken test edilemiyordu ve onu olcen testler
+    # yalnizca kaynak metnini ariyordu (koruma `if ($false)` icine alinsa hepsi yesil kalirdi).
     #
-    # OLCULDU (0.7.5): bu betik -InstallerPath VERILMEDEN calistirildi. Release notlariyla
-    # birlikte olustu, "Tamamlandi" yazdi ve GERI DONDU -- ama icinde indirilecek hicbir sey
-    # yoktu. Paketsiz bir release panelin kendi kendine guncellemesini kirar: guncelleme ekrani
-    # yeni surumu GORUR, indirmeye gider ve varlik bulamaz.
-    #
-    # Once bakilan yer $InstallerPath'in VERILIP verilmedigidir, dosyanin var olup olmadigi
-    # degil: eksik olan bilgi, niyetin ta kendisi. "Yalniz notlari duzeltiyorum" mesru bir istek
-    # oldugu icin yasaklanmiyor, ACIKCA soylenmesi isteniyor (-SkipAssetUpload).
-    if (-not $InstallerPath -and -not $SkipAssetUpload) {
-        # Zaten paketi olan bir yayinin NOTUNU duzeltmek mesru ve sik yapilan bir is; onu
-        # engellemek icin bir sebep yok. Bakilan sey yayinda paket OLUP OLMADIGI.
-        $mevcut = $null
-        try {
-            $mevcut = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/tags/$($releaseInfo.tag_name)" -Token $token
-        } catch {
-            $durum = $null
-            if ($_.Exception.Response) { $durum = [int]$_.Exception.Response.StatusCode }
-            if ($durum -ne 404) { throw }
-        }
+    # Yayinda halihazirda duran varlik sayisi ONCE okunur: zaten paketi olan bir yayinin NOTUNU
+    # duzeltmek mesru ve sik yapilan bir istir, engellenmesi icin sebep yok.
+    $mevcut = $null
+    try {
+        $mevcut = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/tags/$($releaseInfo.tag_name)" -Token $token
+    } catch {
+        $durum = $null
+        if ($_.Exception.Response) { $durum = [int]$_.Exception.Response.StatusCode }
+        if ($durum -ne 404) { throw }
+    }
 
-        if (-not $mevcut -or -not $mevcut.assets -or @($mevcut.assets).Count -eq 0) {
-            throw ("Paketsiz yayin ENGELLENDI: '$($releaseInfo.tag_name)' icin yuklenecek kurulum dosyasi " +
-                   "belirtilmedi ve yayinda da yok.`n" +
-                   "  Paketi yuklemek icin : -InstallerPath artifacts\installer\AdaPanelSetup.exe`n" +
-                   "  YALNIZ notu guncelle : -SkipAssetUpload")
-        }
+    $mevcutVarlik = 0
+    if ($mevcut -and $mevcut.assets) { $mevcutVarlik = @($mevcut.assets).Count }
+
+    $plan = Get-AdaReleaseAssetPlan -InstallerPath $InstallerPath -SkipAssetUpload:$SkipAssetUpload.IsPresent -MevcutVarlikSayisi $mevcutVarlik
+    if ($plan -eq "engelle") {
+        throw (Get-AdaReleaseAssetBlockMessage -Tag $releaseInfo.tag_name)
     }
 
     $release = Publish-AdaGitHubRelease -RepoSlug $RepoSlug -Token $token -ReleaseInfo $releaseInfo

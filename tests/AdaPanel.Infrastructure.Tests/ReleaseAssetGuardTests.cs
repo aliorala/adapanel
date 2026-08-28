@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
@@ -6,66 +8,136 @@ namespace AdaPanel.Infrastructure.Tests;
 /// PAKETSİZ RELEASE YAYINLANAMAZ.
 ///
 /// <para>
-/// <b>Neden var — yaşanmış hata (0.7.5):</b> <c>publish-github-release.ps1</c>
-/// <c>-InstallerPath</c> verilmeden çalıştırıldı. Betik release'i oluşturdu, notları yazdı,
-/// gövdeyi doğruladı, "Tamamlandi" dedi ve <b>sıfır</b> hata koduyla döndü — ama yayında
-/// indirilecek hiçbir şey yoktu.
+/// <b>Yaşanmış hata (0.7.5):</b> <c>publish-github-release.ps1</c> <c>-InstallerPath</c>
+/// verilmeden çalıştırıldı. Betik release'i oluşturdu, notları yazdı, gövdeyi doğruladı,
+/// "Tamamlandi" dedi ve <b>sıfır</b> hata koduyla döndü — ama yayında indirilecek hiçbir şey
+/// yoktu. Paketsiz bir yayın, panelin kendi kendine güncellemesini KIRAR: güncelleme ekranı yeni
+/// sürümü GÖRÜR, indirmeye gider ve varlık bulamaz.
 /// </para>
 /// <para>
-/// Bunun bedeli sessiz değildir: panelin kendi güncelleme ekranı yeni sürümü GÖRÜR, indirmeye
-/// gider ve varlık bulamaz. Yani başarılı görünen bir yayın, kurulu bütün panellerde
-/// güncellemeyi kırar.
+/// <b>İlk düzeltmede kaçan ikinci hata:</b> koşul yalnız "<c>-InstallerPath</c> verildi mi"ye
+/// bakıyordu. <c>-InstallerPath X -SkipAssetUpload</c> BİRLİKTE verilince nöbetçi atlanıyordu
+/// (yol dolu) ve yükleme de atlanıyordu (bayrak) — yani engellenmek istenen sonucun ta kendisi
+/// "Tamamlandi" diyerek üretilebiliyordu. Doğru soru "parametre verildi mi" değil,
+/// <b>"bu çalışmanın sonunda yayında paket olacak mı"</b>.
 /// </para>
 /// <para>
-/// Ders <c>HtaccessModulePackagingTests</c> ile aynı: bir şeyin ÜRETİLDİĞİNİ ölçmek yetmez,
-/// TESLİM EDİLDİĞİ de ölçülmelidir. Orada eksik olan modülün pakete girmesiydi, burada paketin
-/// yayına girmesi.
+/// <b>Bu dosya neden yeniden yazıldı:</b> önceki hâli üç testin üçünde de yalnızca KAYNAK METNİNİ
+/// arıyordu (<c>Assert.Contains("Paketsiz yayin ENGELLENDI", betik)</c>). Koruma
+/// <c>if ($false) { … }</c> içine alınsa üçü de YEŞİL kalırdı — yani nöbetçiyi ölçen bir nöbetçi
+/// yoktu ve yukarıdaki ikinci hata tam da bu yüzden testlerden geçti. Artık karar ayrı bir saf
+/// fonksiyonda (<c>scripts/lib/release-asset-guard.ps1</c>) ve testler onu GERÇEKTEN ÇALIŞTIRIYOR.
+/// Fonksiyon ağ/kimlik istemez, bu yüzden çalıştırmak güvenlidir.
 /// </para>
 /// </summary>
 public class ReleaseAssetGuardTests
 {
-    [Fact]
-    public void Yayin_betigi_paketsiz_yayini_ENGELLER()
+    /// <summary>
+    /// Dört bayrak birleşimi × "yayında paket var/yok" — kararın TAMAMI.
+    /// </summary>
+    /// <remarks>
+    /// Kritik satır üçüncüsü: yol VE atlama bayrağı birlikte. Eski koşul burada "engelle"
+    /// DEMİYORDU ve hata bu delikten geçmişti.
+    /// </remarks>
+    [Theory]
+    // yol verildi, atlama yok -> her durumda yuklenir
+    [InlineData("paket.exe", false, 0, "yukle")]
+    [InlineData("paket.exe", false, 1, "yukle")]
+    // yol yok -> yayindaki pakete bakilir
+    [InlineData("", false, 0, "engelle")]
+    [InlineData("", false, 1, "mevcut-yeter")]
+    // YOL VAR AMA ATLAMA DA VAR: sonucta paket yuklenmez -> yayinda paket yoksa ENGELLENMELI
+    [InlineData("paket.exe", true, 0, "engelle")]
+    [InlineData("paket.exe", true, 1, "mevcut-yeter")]
+    // acikca atlaniyor, yol da yok
+    [InlineData("", true, 0, "engelle")]
+    [InlineData("", true, 1, "mevcut-yeter")]
+    // bos/bosluk yol "verilmemis" sayilir; aksi halde -InstallerPath "" nobetciyi atlatirdi
+    [InlineData("   ", false, 0, "engelle")]
+    public void Karar_bayrak_birlesimlerinin_TAMAMINDA_dogru(
+        string kurulumYolu, bool yuklemeyiAtla, int mevcutVarlik, string beklenen)
     {
-        var betik = Betik();
+        var sonuc = KararCalistir(kurulumYolu, yuklemeyiAtla, mevcutVarlik);
 
-        Assert.Contains("Paketsiz yayin ENGELLENDI", betik);
-        // Engel, notlar GÖNDERİLMEDEN önce olmalı: sonra olsaydı release yine oluşurdu ve
-        // hata yalnızca varlık adımında patlardı — yani tam olarak yaşanan durum.
+        Assert.Equal(beklenen, sonuc);
+    }
+
+    /// <summary>
+    /// Karar dosyası hiçbir şey ÇALIŞTIRMAMALI: testin onu dot-source edebilmesi buna bağlı.
+    /// Bir gün dosyaya yan etkili bir satır eklenirse test bunu yakalar (çıktı kirlenir).
+    /// </summary>
+    [Fact]
+    public void Karar_dosyasi_dot_source_edilince_YAN_ETKI_uretmez()
+    {
+        var cikti = PowerShellCalistir(
+            $". '{KararDosyasi()}'; Write-Output 'BOS-DEGIL-KONTROL'");
+
+        Assert.Equal("BOS-DEGIL-KONTROL", cikti);
+    }
+
+    /// <summary>
+    /// Yayın betiği kararı KENDİ yeniden yazmamalı, ortak dosyadan almalı — yoksa iki kopya
+    /// ayrışır ve biri düzeltilirken diğeri açık kalır (bu depoda tekrarın bedeli budur).
+    /// </summary>
+    [Fact]
+    public void Yayin_betigi_karari_ORTAK_dosyadan_alir()
+    {
+        var betik = File.ReadAllText(Path.Combine(KaynakKoku(), "scripts", "publish-github-release.ps1"));
+
+        Assert.Contains("lib\\release-asset-guard.ps1", betik);
+        Assert.Contains("Get-AdaReleaseAssetPlan", betik);
+        Assert.Contains("Get-AdaReleaseAssetBlockMessage", betik);
+
+        // Engel, notlar GONDERILMEDEN once olmali: sonra olsaydi release yine olusurdu ve hata
+        // yalnizca varlik adiminda patlardi -- yani tam olarak yasanan durum.
         Assert.True(
-            betik.IndexOf("Paketsiz yayin ENGELLENDI", StringComparison.Ordinal)
+            betik.IndexOf("Get-AdaReleaseAssetBlockMessage", StringComparison.Ordinal)
                 < betik.IndexOf("$release = Publish-AdaGitHubRelease", StringComparison.Ordinal),
-            "paketsiz yayin denetimi, release olusturulduktan SONRA yapiliyor -- o noktada is islenmis olur");
+            "paketsiz yayin denetimi, release olusturulduktan SONRA yapiliyor");
     }
 
-    /// <summary>
-    /// Yalnız notu düzeltmek MEŞRU bir iştir ve yasaklanmıyor; AÇIKÇA söylenmesi isteniyor.
-    /// Kapıyı tamamen kapatmak, yazım hatası düzeltmek için her seferinde 86 MiB paket
-    /// yüklemeye zorlardı — kural o kadar pahalı olunca etrafından dolaşılır.
-    /// </summary>
-    [Fact]
-    public void Yalniz_not_guncellemenin_ACIK_bir_yolu_var()
+    private static string KararCalistir(string kurulumYolu, bool yuklemeyiAtla, int mevcutVarlik)
     {
-        var betik = Betik();
+        // Yol tek tirnak icinde gecirilir; PowerShell'de tek tirnakli dize genisletilmez.
+        var kacisli = kurulumYolu.Replace("'", "''");
+        var atla = yuklemeyiAtla ? "$true" : "$false";
 
-        Assert.Contains("-SkipAssetUpload", betik);
-        Assert.Contains("-not $SkipAssetUpload", betik);
+        return PowerShellCalistir(
+            $". '{KararDosyasi()}'; " +
+            $"Get-AdaReleaseAssetPlan -InstallerPath '{kacisli}' -SkipAssetUpload:{atla} -MevcutVarlikSayisi {mevcutVarlik}");
     }
 
-    /// <summary>
-    /// Paketi ZATEN OLAN bir yayının notu, paket tekrar yüklenmeden düzeltilebilmeli.
-    /// Denetim "parametre verildi mi"ye değil, yayında paket OLUP OLMADIĞINA bakar.
-    /// </summary>
-    [Fact]
-    public void Denetim_YAYINDAKI_pakete_bakar()
+    private static string PowerShellCalistir(string komut)
     {
-        var betik = Betik();
+        var baslangic = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8
+        };
+        baslangic.ArgumentList.Add("-NoProfile");
+        baslangic.ArgumentList.Add("-NonInteractive");
+        baslangic.ArgumentList.Add("-ExecutionPolicy");
+        baslangic.ArgumentList.Add("Bypass");
+        baslangic.ArgumentList.Add("-Command");
+        baslangic.ArgumentList.Add(komut);
 
-        Assert.Contains("$mevcut.assets", betik);
+        using var surec = Process.Start(baslangic)!;
+        var cikti = surec.StandardOutput.ReadToEnd();
+        var hata = surec.StandardError.ReadToEnd();
+
+        // Asili kalan bir test kimsenin kosturmadigi bir test paketi demektir.
+        Assert.True(surec.WaitForExit(30_000), "powershell 30 sn icinde bitmedi");
+        Assert.True(string.IsNullOrWhiteSpace(hata), $"powershell hata yazdi: {hata}");
+
+        return cikti.Trim();
     }
 
-    private static string Betik()
-        => File.ReadAllText(Path.Combine(KaynakKoku(), "scripts", "publish-github-release.ps1"));
+    private static string KararDosyasi()
+        => Path.Combine(KaynakKoku(), "scripts", "lib", "release-asset-guard.ps1");
 
     private static string KaynakKoku()
     {
