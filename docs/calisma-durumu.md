@@ -189,3 +189,52 @@ ACL) bulgusuna bagli.
 
 **Ders:** `grep "AllDirectories"` bu sinifi TAM BULMAZ — `BackupService.ScanFiles` elle yazilmis
 bir yuruyustu ve yalnizca dosya dosya okunarak goruldu.
+
+---
+
+## 0.7.7 — denetim turu (28.08.2026)
+
+`SHA256 B999ED354C69094A9CE26BDFFE0970811B4E320E75717C739DD7ACD335C15890`
+**3724 test yesil** (onceki 3667). Paket yuklendi ve indirilip ozeti karsilastirildi.
+
+Bulunanlarin buyuk kismi ONCEKI IKI SURUMDE BIZIM actigimiz hatalardi. Kayda geciyor:
+- 0.7.6'da dort agac yuruyusunu tek kaynaga indirirken, 0.7.5'te acilan BESINCI yuruyusu
+  (`KlasoruKopyala`) gormedik. Nobetci testin dosya listesinde `FileService.cs` yoktu.
+  **DERS: nobetci yazarken "hangi dosyalara bakiyor" da denetlenmeli.**
+- Yayin nobetcisini eklerken bayrak birlesimini dusunmedim ve testleri yalniz kaynak metnine
+  baktigi icin bunu goremedi. **DERS: nobetcinin kendisi de davranissal olarak test edilmeli.**
+- Iki mutasyon KIZARMADI: biri kodun degil YORUMUN icindeki kelimeye tutunuyordu
+  (`FileMode.CreateNew` hem kodda hem yorumda geciyor). **DERS: kaynaga bakan test, yoruma
+  da denk gelebilecek bir dizeye tutunmamali.**
+
+### Duzeltilen (ozet)
+Kota 4 yoldan asilabiliyordu (kopyalama/yazma/arsiv acma kotasiz; MB tamsayi bolmesi;
+alt kullaniciya kota HIC uygulanmiyordu) · ozyinelemeli+butcesiz kopyalama · "zaten var" yalani
+(yarim yazma kalintisi) · sunucu geneli .htaccess'in eksik govdeyi "kapat" sayması ·
+tanimsiz CSS belirtecleri (10 ad) · klavyeyle dosya yukleme imkansizdi · .htaccess ekraninin
+6 bolumu bicimsizdi · "INFO" Turkce buyuk harf hatasi · onaysiz 2 yikici islem.
+
+### ACIK KALAN BORCLAR (siradaki turda)
+
+1. **Disk kotasi "olculdu mu" bilgisi tasimiyor.** Trafik kotasinda ZATEN dogru yapilmis:
+   `TrafikOlcAsync` -> `(Bytes, Measured)` ve olculemeyende kota uygulanmiyor. Disk kotasi
+   kesilmis olcumu alt sinir sayiyor. `ICustomerScopeService` sozlesmesi + 15 cagiran/test
+   double etkiliyor, o yuzden ayri tur.
+2. **`SiteCascadeDeletionService.CountFilesSafely`** elle yazilmis DORDUNCU yuruyus. Kavsak
+   atlamasi ve limiti VAR (yani guvenli) ama `SafeDirectoryWalk`'a tasinmali.
+3. **`MessageKeyCoverageTests` iki korluk:** `Detail` alanini hic taramiyor; degisken uzerinden
+   atilan anahtarlari goremiyor.
+4. **`BackupService`'te 2 sabit Turkce `Detail`** daha var (satir ~3290 ve ~4440); ikincisi
+   Turkce karakter tasiyor, Ingilizce panelde yari-cevrilmis gorunuyor.
+5. **`base.css`'e `--on-warn` gerekiyor** (`--on-accent`in uyari karsiligi); simdilik `#000`.
+6. **`SubscriptionCard` kota gostergesi** `15.5 GB` yerine `16 GiB` gosteriyor — 10-100 arasinda
+   bir ondalik kaybi. Tek kaynaga gecisin GORUNEN yan etkisi; kullanicinin fark edecegi tek yer.
+7. **27 gorunum** `empty-state`'i "yuklendi mi" bayragi olmadan gosteriyor: gelmemis liste
+   "burada bir sey yok" gibi okunuyor. Dogru ornek `SiteBackupView` (`listLoaded`).
+8. **`AttentionDrawer.vue:325`** `outline: none` var ve yerine bir gosterge KONULMAMIS.
+
+### HALA YAPILAMAYAN: `.htaccess` canli ayrim testi
+Iki sey gerekiyor: (a) 0.7.7'nin kurulmasi, (b) panel `admin` PAROLASI.
+Denenen ve REDDEDILEN parolalar: `AdaPanelTest2026!`, `AdaPanelTest2026!yeni`.
+Olculdu: hesap KILITLI DEGIL (kilit `auth.user_locked`, IP engeli `auth.ip_banned` doner;
+alinan cevap `auth.invalid_credentials`). Esik 10 deneme, 3 kullanildi.
