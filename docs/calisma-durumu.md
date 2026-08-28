@@ -251,3 +251,45 @@ Iki sey gerekiyor: (a) 0.7.7'nin kurulmasi, (b) panel `admin` PAROLASI.
 Denenen ve REDDEDILEN parolalar: `AdaPanelTest2026!`, `AdaPanelTest2026!yeni`.
 Olculdu: hesap KILITLI DEGIL (kilit `auth.user_locked`, IP engeli `auth.ip_banned` doner;
 alinan cevap `auth.invalid_credentials`). Esik 10 deneme, 3 kullanildi.
+
+---
+
+## 0.7.8 — sekiz borcun hepsi kapandi (28.08.2026)
+
+`SHA256 897AFD96C00B30A4302CC56EC314B3FB74766DFCA10A22BC7E6D47CAE154600B`
+**3739 test yesil** (onceki 3724). Paket yuklendi ve indirilip ozeti karsilastirildi.
+
+Kapatirken cikan UC sey, listedekilerden onemliydi:
+1. **Fatura musteriden AZ ucret alabiliyordu** — eksik olculmus disk degeri fatura
+   entegrasyonuna gidiyordu. Modul artik olculemeyen diski yazmiyor.
+2. **Bildirim zilindeki sayac rozeti okunmuyordu** — varsayilan acik temada 4.09, koyu temada
+   2.21 kontrast. Panelde kac sorun oldugunu soyleyen sayi.
+3. **"Silinemedi" diyen ekran yaniliyor olabilirdi** — iki olcum de 20.000 tavanina dayaninca
+   fark 0 cikiyordu. OLCULDU: panelin kendi node_modules agaci 17.459 dosya (%87).
+
+### Bu turun kalici dersleri
+- **Nobetci, bakmadigi dosyadaki ihlali goremez.** (`FileService.cs` liste disindaydi.)
+- **Nobetcinin kendisi de davranissal test edilmeli.** (Yayin nobetcisi bayrak birlesimiyle
+  atlanabiliyordu, testleri yalniz metne bakiyordu.)
+- **Kaynaga bakan test, YORUMDA da gecen bir dizeye tutunmamali.** (`FileMode.CreateNew` hem
+  kodda hem yorumda geciyordu; mutasyon kacti.)
+- **Kapsam genisletmek tek basina yetmez.** Cevirisiz metin nobetcisi genisletildi ama hicbir
+  test kizarmadi (anahtarlarin cevirisi zaten vardi) — yani geri alinsa kimse fark etmezdi.
+  Kapsamin KENDISINI olcen ayri test gerekti.
+- **Ajan raporunu dogrula:** bu turda benim verdigim iki sayi/tarif yanlis cikti (27 gorunum ->
+  gercekte 16 oge/12 gorunum; ayrilmis aygit adlari 500 degil 400 donuyordu).
+
+### ACIK KALAN
+1. **`ClassifyDeletion`'a "olcum kesildi" ucuncu durumu** — 200.000 ustunde ayni dusme suruyor.
+   Mesaj sozlesmesini degistiriyor, ayri tur.
+2. **`SubscriptionCard`/`SiteHostingView` birim tutarsizligi** — kullanilan deger GiB, sinir ham
+   `trafficLimitGb` + "GB" etiketi; disk satiri ham MB basiyor.
+3. **Disk olcum sebep onceligi** (butce > erisim reddi) davranissal test edilmedi (gercek ACL
+   manipulasyonu gerekiyor).
+4. **Fatura modulu (PHP/WHMCS) calistirilarak denenmedi** — yalniz kaynak nobetcisi var.
+
+### HALA YAPILAMAYAN: `.htaccess` canli ayrim testi
+(a) 0.7.8'in kurulmasi, (b) panel `admin` PAROLASI.
+Denenen ve REDDEDILEN: `AdaPanelTest2026!`, `AdaPanelTest2026!yeni`.
+Olculdu: hesap KILITLI DEGIL (kilit `auth.user_locked`, IP engeli `auth.ip_banned` doner;
+alinan cevap `auth.invalid_credentials`). Esik 10 deneme, 3 kullanildi.
