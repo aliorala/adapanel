@@ -346,3 +346,45 @@ Olculdu (29.08.2026): `adapanel.host` -> 185.7.242.225, HTTPS 200, sertifika gec
 (`ssl_verify_result=0`), `X-Powered-By: ASP.NET`.
 
 `.htaccess` ayrim testi bundan ETKILENMEZ: test `test.local` uzerinde, BU makinede yapiliyor.
+
+---
+
+## `.htaccess` CANLI AYRIM TESTI YAPILDI VE GECTI (29.08.2026, 0.7.9)
+
+Kurulu 0.7.9 uzerinde, panelin KENDI uclariyla, ucten uca:
+
+| Adim | Yontem | Olcum |
+|---|---|---|
+| Sunucu geneli anahtar `off` -> `enforce` | `POST ~/api/v1/htaccess/server-mode` (0.7.5'te eklendi) | mode=enforce, dosya olustu |
+| Site kipi -> `enforce` | `POST /sites/test.local/htaccess/mode` | mode=enforce |
+| `.htaccess` olusturma | `PUT /files` + `failIfExists` (0.7.5'te eklendi) | 75 bayt, icerik dogru |
+| A) dosya YERINDE | `curl -H "Host: test.local" http://127.0.0.1:8081/adapanel-test-42` | **302 -> http://test.local/iisstart.htm** |
+| B) `.htaccess.kapali` olarak yeniden adlandir | `POST /files/move` (0.7.5'te eklendi) | **404** |
+| C) geri ac | `POST /files/move` | **302** yine |
+
+B ADIMI KANIT: dosya kapatilinca adres BOZULUYOR. 302'yi ureten baska bir sey degil.
+0.7.0-0.7.2'de "calisiyor" derken bu adimi atlamistim.
+
+**Yan kazanc:** 0.7.5'te eklenen UC ozellik de ayni testte canli dogrulandi — sunucu geneli
+anahtar ucu, panelden dosya olusturma, panelden yeniden adlandirma.
+
+### OLCUM HATASI — kayda geciyor cunku neredeyse yanlis sonuc bildirecektim
+
+Ilk turda `http://127.0.0.1/` + `Host: test.local` ile olctum ve **404** aldim; "ozellik
+calismiyor" sonucuna varmak uzereydim. Yanlisti: `test.local` **8081** portuna bagli
+(`bindings:http/*:8081:test.local`), 80 portunda ise `Default Web Site` yakalayici
+(`http/*:80:`) duruyor. Yani isteklerim hic test.local'e gitmiyordu; 404 de 200 de
+BASKA SITEDEN geliyordu.
+
+Farki yakalatan sey: `appcmd list wp` ciktisinda `AdaPanel.test.local` icin isci sureci YOKTU
+ama istekler yanitlaniyordu. Bu celiski olculmeseydi yanlis bir "bozuk" raporu yazacaktim.
+
+**DERS: Host basligi dogru olsa bile PORT yanlissa istek baska siteye gider. Site bagininin
+portunu ONCE olc.**
+
+### ACIK KALAN GERCEK HATA (bu testte bulundu, duzeltiliyor)
+
+Panel `engineLoadedInIis: True` diyor ama BILMIYOR: bu alan yalnizca `support == "supported"`
+den turetiliyor, o da yalnizca havuzun CLR SURUMUNE bakiyor. Modulun IIS'e kayitli olup
+olmadigi HIC olculmuyor. Bu makinede kayit dogruydu (`preCondition="runtimeVersionv4.0"`,
+`managedHandler` YOK -- dogrusu bu), ama kayit bozuk olsa panel yine "yuklu" derdi.
