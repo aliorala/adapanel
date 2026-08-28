@@ -161,7 +161,7 @@ function showNotice(message: string, isError: boolean) {
 .cred-box .cred-line code {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   background: rgba(95, 227, 154, 0.12);
-  color: var(--accent-1, #5fe39a);
+  color: var(--accent-1);
   padding: 2px 8px;
   border-radius: 6px;
   user-select: all;
@@ -222,7 +222,7 @@ select {
 }
 
 .hint {
-  color: var(--text-muted, #94a3b8);
+  color: var(--text-muted);
   font-size: 13px;
   margin-top: 10px;
   white-space: pre-line;

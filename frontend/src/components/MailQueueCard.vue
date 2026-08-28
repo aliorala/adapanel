@@ -129,6 +129,8 @@ import SectionLoadError from "./SectionLoadError.vue";
 import TablePager from "./TablePager.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { usePagination } from "../composables/usePagination";
+import { formatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -210,23 +212,18 @@ function recipientSummary(message: MailQueueMessage): string {
   return addresses.length > 0 ? addresses.join(", ") : "—";
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatTime(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return formatDateTime(value, "—");
 }
 
 function formatSize(bytes: number): string {
+  // 0/gecersiz burada "uc olcmedi" demek; "0 B" yazmak OLCULMUS bir sifir gibi gorunurdu.
+  // Bu ayrim disinda bicim panelin geri kalaniyla AYNI (bkz. utils/bytes.ts).
   if (!Number.isFinite(bytes) || bytes <= 0) {
     return "—";
   }
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const kb = bytes / 1024;
-  return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(1)} MB`;
+  return formatBytes(bytes, t);
 }
 </script>
 

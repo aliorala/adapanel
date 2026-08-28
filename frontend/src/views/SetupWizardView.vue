@@ -453,6 +453,9 @@
             </label>
             <label class="stacked-field">
               <span class="field-label">{{ t("panel.branding.accent") }}</span>
+              <!-- #2563eb BİLEREK sabit: bu bir STİL değil, beyaz etiket marka renginin
+                   VARSAYILAN DEĞERİ (kullanıcının düzenlediği veri). Panel belirtecine
+                   bağlanırsa marka rengi kendi kendini takip eder ve varsayılan anlamsızlaşır. -->
               <span class="accent-row">
                 <input v-model="brandingForm.accentColor" maxlength="7" placeholder="#2563eb" />
                 <input
@@ -592,6 +595,7 @@ import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";
 import { getAttentionSummary, type AttentionSummary } from "../api/attention";
 import { lazyView } from "../utils/lazyView";
+import { formatDateTime } from "../utils/datetime";
 
 /*
  * BÖLÜMLER TALEP ÜZERİNE İNDİRİLİR (bkz. utils/lazyView.ts).
@@ -1662,8 +1666,9 @@ function resolveApiMessage(error: unknown): string {
   return details ? `${message}\n\n${details}` : message;
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null) {
-  return value ? new Date(value).toLocaleString() : t("panel.common.notAvailable");
+  return formatDateTime(value, t("panel.common.notAvailable"));
 }
 </script>
 
@@ -1699,11 +1704,11 @@ function formatUtc(value: string | null) {
 }
 
 .progress-step.done {
-  color: var(--accent-text, #2e7d32);
+  color: var(--accent-text);
 }
 
 .progress-step.failed {
-  color: var(--danger-text, #c0392b);
+  color: var(--danger-text);
 }
 
 .step-icon {
@@ -1717,8 +1722,8 @@ function formatUtc(value: string | null) {
 .step-spinner {
   width: 13px;
   height: 13px;
-  border: 2px solid color-mix(in srgb, var(--accent-1, #2e7d32) 40%, transparent);
-  border-top-color: var(--accent-1, #2e7d32);
+  border: 2px solid color-mix(in srgb, var(--accent-1) 40%, transparent);
+  border-top-color: var(--accent-1);
   border-radius: 50%;
   animation: setup-spin 0.7s linear infinite;
 }

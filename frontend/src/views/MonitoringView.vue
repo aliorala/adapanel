@@ -24,7 +24,7 @@
         </article>
 
         <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(overview.memoryUsagePercent, '#6fd2ff')">
+          <div class="meter-ring" :style="ringStyle(overview.memoryUsagePercent, 'var(--meter-mem)')">
             <div class="meter-core">
               <span>{{ t("panel.system.memory") }}</span>
               <strong>{{ overview.memoryUsagePercent.toFixed(1) }}%</strong>
@@ -257,6 +257,8 @@ import { getProcessSnapshot, type ProcessSnapshot } from "../api/processes";
 import QueryHistory from "../components/QueryHistory.vue";
 import ResourceConsumers from "../components/ResourceConsumers.vue";
 import type { ConsumerSource } from "../api/consumers";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
+import { formatDateTime, formatTimeSpan as sharedFormatTimeSpan } from "../utils/datetime";
 
 type DiskUsage = {
   name: string;
@@ -441,62 +443,23 @@ function ringStyle(value: number, color = "var(--accent-1)") {
   };
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null): string {
-  if (!value) {
-    return t("panel.common.notAvailable");
-  }
-
-  return new Date(value).toLocaleString();
+  return formatDateTime(value, t("panel.common.notAvailable"));
 }
 
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return `0 ${t("panel.units.bytes")}`;
-  }
-
-  const units = [
-    t("panel.units.bytes"),
-    t("panel.units.kib"),
-    t("panel.units.mib"),
-    t("panel.units.gib"),
-    t("panel.units.tib")
-  ];
-
-  let size = value;
-  let unitIndex = 0;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
+function formatBytes(value: number) {
+  return sharedFormatBytes(value, t);
 }
 
 function formatSpeed(value: number): string {
   return `${formatBytes(value)}/${t("panel.units.second")}`;
 }
 
+/** Sure bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatTimeSpan(value: string): string {
-  const match = value.match(/^(?:(\d+)\.)?(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/);
-  if (!match) {
-    return value;
-  }
-
-  const days = Number(match[1] ?? "0");
-  const hours = Number(match[2]);
-  const minutes = Number(match[3]);
-  const seconds = Number(match[4]);
-  const parts: string[] = [];
-
-  if (days > 0) {
-    parts.push(`${days}${t("panel.units.dayShort")}`);
-  }
-
-  parts.push(`${hours}${t("panel.units.hourShort")}`);
-  parts.push(`${minutes}${t("panel.units.minuteShort")}`);
-  parts.push(`${seconds}${t("panel.units.secondShort")}`);
-  return parts.join(" ");
+  return sharedFormatTimeSpan(value, t);
 }
 </script>
 
@@ -542,9 +505,25 @@ function formatTimeSpan(value: string): string {
   border-radius: var(--radius-lg);
 }
 
+/* BELLEK SERİSİ RENGİ — BİLEREK belirtece bağlanMADI.
+   Üç ölçer bir VERİ SERİSİ kümesidir: işlemci `--accent-1` (mavi), bellek camgöbeği, disk
+   `--warn-1` (kehribar). Üçünü tek bir vurgu rengine indirmek halkaların hangisinin hangi
+   kaynak olduğunu okunamaz yapardı — bu bir iyileştirme değil, veri kaybı olurdu.
+   Sabit kalmasının sebebi bu; ama DEĞERİ ölçülerek düzeltildi.
+   ÖLÇÜLDÜ, eski tek değer #6fd2ff: koyu temada 10.05:1, AÇIK temada beyaz kart üzerinde
+   1.70:1 — WCAG 1.4.11'in grafik ögeler için istediği 3:1'in çok altında, yani panelin
+   VARSAYILAN temasında bellek halkası pratikte görünmüyordu.
+   Bu yüzden değer temaya bağlandı: koyu tema bugünkü rengini birebir korur, açık tema
+   3:1'i geçen bir camgöbeğine iner (#0891b2 = 3.68:1). Ton hâlâ camgöbeği, yani seri
+   kimliği ve ekranın tanıdık görünümü bozulmaz. */
 .meter-card {
   display: grid;
   place-items: center;
+  --meter-mem: #6fd2ff;
+}
+
+:root[data-theme="light"] .meter-card {
+  --meter-mem: #0891b2;
 }
 
 .meter-spark {
@@ -563,7 +542,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .meter-spark.mem polyline {
-  stroke: #6fd2ff;
+  stroke: var(--meter-mem);
 }
 
 .net-trend {
@@ -919,7 +898,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .proc-bar.medium::after {
-  background: #e0a500;
+  background: var(--warn-1);
 }
 
 .proc-bar.high::after {

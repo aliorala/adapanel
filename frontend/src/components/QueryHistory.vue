@@ -159,6 +159,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getQueryHistory, type QueryLogPage } from "../api/queryLog";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 
@@ -214,9 +215,9 @@ function formatSeconds(total: number) {
     : t("panel.queryLog.minutesSeconds", { minutes: dakika, seconds: saniye });
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatTime(iso: string) {
-  const tarih = new Date(iso);
-  return Number.isNaN(tarih.getTime()) ? iso : tarih.toLocaleString();
+  return formatDateTime(iso);
 }
 
 function durationClass(seconds: number) {

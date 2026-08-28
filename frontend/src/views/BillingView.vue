@@ -154,6 +154,7 @@ import {
   type BillingUsageReport
 } from "../api/billing";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 
@@ -219,8 +220,9 @@ function outcomeLabel(outcome: string) {
   return translated === key ? outcome : translated;
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string) {
-  return new Date(value).toLocaleString();
+  return formatDateTime(value);
 }
 
 function resolveApiMessage(error: unknown) {
@@ -259,7 +261,7 @@ function showNotice(message: string, isError: boolean) {
 
 .status-grid dt {
   font-size: 0.85rem;
-  color: var(--text-2);
+  color: var(--text-muted);
 }
 
 .status-grid dd {

@@ -198,6 +198,7 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { useAuthStore } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -394,8 +395,9 @@ async function purgeNow() {
   });
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null) {
-  return value ? new Date(value).toLocaleString() : t("panel.common.notAvailable");
+  return formatDateTime(value, t("panel.common.notAvailable"));
 }
 </script>
 

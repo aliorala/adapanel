@@ -289,6 +289,7 @@ import {
   type BackupRemoteTestResult
 } from "../api/automation";
 import { extractApiMessage } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const status = ref<AutomationStatus | null>(null);
@@ -449,8 +450,9 @@ function applyStatus(next: AutomationStatus) {
   settingsLoaded.value = true;
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string | null | undefined) {
-  return value ? new Date(value).toLocaleString() : "—";
+  return formatDateTime(value, "—");
 }
 
 function formatStatus(value: string | null | undefined) {

@@ -646,13 +646,28 @@ async function handleAddBinding(payload: { siteName: string; binding: SiteBindin
   }
 }
 
+/**
+ * Bağlantı kaldırma ONAYSIZ YAPILMAZ.
+ *
+ * Denetimde bulundu: bu işlem tek tıkla siteyi bir adresten YAYINDAN KALDIRIYORDU — hemen
+ * yanındaki "siteyi sil" ise kullanıcıya site adını harfi harfine yazdırıyor. Yıkıcılık farkı
+ * onay farkını haklı çıkarmıyordu: ziyaretçi açısından sonuç aynı, site o adreste yok.
+ * Yüksek riskli onay (metin yazdırma) BURADA kullanılmadı; geri alınabilir bir işlem için
+ * o sürtünme, kullanıcıyı onayları okumadan geçmeye alıştırır.
+ */
 async function handleRemoveBinding(payload: { siteName: string; binding: SiteBindingPayload }) {
-  try {
-    await sitesStore.removeBinding(payload.siteName, payload.binding);
-    showNotice(t("panel.sites.bindingRemoved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  await confirm({
+    title: t("panel.sites.removeBinding"),
+    message: t("panel.sites.confirmRemoveBinding"),
+    action: async () => {
+      try {
+        await sitesStore.removeBinding(payload.siteName, payload.binding);
+        showNotice(t("panel.sites.bindingRemoved"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    }
+  });
 }
 
 function translateState(state: string): string {
@@ -1215,7 +1230,7 @@ button:disabled {
   display: block;
   padding: 8px 10px;
   border-radius: 6px;
-  background: var(--surface-0, #0b1418);
+  background: var(--surface-0);
   border: 1px solid var(--panel-border);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 0.82rem;

@@ -571,28 +571,40 @@ public sealed partial class BackupService(
         // "backup.*" anahtarı değil: bu depoda çevirisi olmayan bir anahtar, kullanıcının ekranda
         // HAM ANAHTARI görmesi demektir (MessageKeyCoverageTests tam bunu kapatıyor). Yürüyüşün
         // sebep anahtarları hem tr hem en'de ZATEN çevrilidir ve olan biteni doğru anlatır ("öge
-        // sayısı bütçesi doldu; sayım durduruldu"). Yedeğe ÖZGÜ sonuç — "arşiv eksiktir" — Detail
-        // alanında durur ve arayüz onu çevirinin hemen altında olduğu gibi basar (BackupView.vue).
+        // sayısı bütçesi doldu; sayım durduruldu").
+        //
+        // DETAIL NEDEN CÜMLE DEĞİL, ETİKET-DEĞER: `Detail` bu depoda ÇEVRİLMEYEN alandır — arayüz
+        // onu çevirinin hemen altında OLDUĞU GİBİ basar (BackupView.vue: `{{ warning.detail }}`,
+        // `t()`'den geçmez) ve alanın kendi belgesi de bunu söyler ("Teknik ayrıntı. Çevrilmez;
+        // teşhis içindir."). Buraya Türkçe bir anlatı cümlesi yazıldığında İNGİLİZCE panelde
+        // İngilizce anahtarın altında Türkçe cümle görünüyordu — yarı çevrilmiş bir ekran.
+        // Çözüm bir anahtar EKLEMEK değil (i18n'de karşılığı olmayan anahtar daha kötüsünü, ham
+        // anahtarı doğurur), alanı sözleşmesine geri çekmek: dilden bağımsız, makinece okunabilir
+        // teknik satır. Anlatının taşıdığı iki olgu KAYBOLMUYOR — "tarama kesildi" ve "arşiv
+        // eksik" etiket olarak duruyor; nerede kesildiği zaten Target'ta.
         foreach (var kesilen in skipped.TruncatedScans)
         {
             record.Warnings.Add(new BackupRestoreWarningDto
             {
                 MessageKey = kesilen.ReasonKey,
                 Target = kesilen.Root,
-                Detail = "Bu ağacın TAMAMI taranamadı, dolayısıyla tamamı arşive GİRMEDİ. " +
-                         "Yedek EKSİKTİR; geri yüklerken bu ağacın tamamı gelmeyecek."
+                Detail = $"scan=truncated; reason={kesilen.ReasonKey}; archive=incomplete; restore=partial"
             });
         }
 
         // Ayrıntısı taşınmayanlar SAYIYLA taşınır: "kaç dosya eksik" bilgisi hiçbir koşulda
         // kaybolmamalı (bozuk bir ACL yüz binlerce dosyayı birden atlatabilir).
+        //
+        // Detail yine ETİKET-DEĞER (gerekçesi bir üstteki blokta): bu satırın taşıdığı şey zaten
+        // saf sayıdır, Türkçe cümleye sarılması ona hiçbir şey katmıyor ama İngilizce panelde
+        // yarı çevrilmiş bir satır üretiyordu.
         if (skipped.Truncated > 0)
         {
             record.Warnings.Add(new BackupRestoreWarningDto
             {
                 MessageKey = "backup.source_files_unreadable_more",
                 Target = skipped.Count.ToString(),
-                Detail = $"{skipped.Truncated} dosya daha listelenmedi (toplam {skipped.Count})."
+                Detail = $"skipped={skipped.Count}; listed={skipped.Detailed.Count}; unlisted={skipped.Truncated}"
             });
         }
 

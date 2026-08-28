@@ -169,8 +169,15 @@ function showNotice(message: string, isError: boolean) {
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--accent-2) 28%, transparent);
   border-radius: var(--radius-md);
+  /* Terminal yüzeyi BİLEREK her iki temada da koyu: base.css `.code-viewer` ve `pre` için aynı
+     kararı veriyor (açık temada bile #161c28'e sabitliyor). Konsol çıktısı kabuk renk kodları
+     taşır ve açık zeminde okunmaz; bu yüzden zemin belirtece bağlanMADI.
+     Ama METİN belirteçliydi ve BOZUKTU: `--accent-text` açık temada #0f62c4'e (koyu mavi)
+     döner ve bu neredeyse siyah zeminde ÖLÇÜLDÜ: 3.28:1 — AA'nın 4.5 eşiğinin altında.
+     base.css'in `pre` düzeltmesi buraya ULAŞMIYOR, çünkü bu öge bir <div> (`pre` değil).
+     Metin de zemin gibi sabitlendi: 10.34:1, koyu temanın bugünkü görünümü birebir aynı. */
   background: #0a0e16;
-  color: var(--accent-text);
+  color: #8fc1ff;
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 0.8rem;
 }

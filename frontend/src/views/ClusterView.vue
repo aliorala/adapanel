@@ -538,7 +538,7 @@ function showNotice(message: string, isError: boolean) {
   display: grid;
   gap: 12px;
   padding: 14px;
-  border: 1px solid var(--border-1);
+  border: 1px solid var(--panel-border);
   border-radius: 10px;
   background: var(--surface-1);
 }

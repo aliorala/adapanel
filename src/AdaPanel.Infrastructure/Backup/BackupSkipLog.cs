@@ -87,21 +87,37 @@ internal sealed class BackupSkipLog
         => _kesilenTaramalar.Add(new TruncatedScan(root, reasonKey));
 
     /// <summary>Günlüğe tek satırda yazılabilir özet.</summary>
+    /// <remarks>
+    /// <b>Her parça KOŞULLU ve bu ölçülmüş bir hatanın düzeltmesi:</b> dosya cümlesi eskiden
+    /// koşulsuz yazılıyordu. <see cref="Any"/> kesilen taramayı da kapsamaya başlayınca hiç dosya
+    /// atlanmadan yalnız tarama kesilen durum mümkün oldu ve özet
+    /// <c>"0 dosya atlandi: ; TARAMA KESILDI: ..."</c> hâline geldi — sayı sıfır, liste boş, iki
+    /// noktalı virgül. Yalnız sunucu günlüğüne gidiyor, ama günlük OKUNMAK içindir: yangın anında
+    /// okuyanın gördüğü ilk şeyin "0 dosya atlandi" olması, asıl bilgiyi (bir ağacın hiç
+    /// taranmadığını) gürültünün arkasına saklar.
+    /// </remarks>
     public string Describe()
     {
-        var dosyalar = Truncated > 0
-            ? $"{Count} dosya atlandi (ilk {_detayli.Count}: {string.Join(", ", _detayli.Select(kayit => kayit.EntryName))} ... +{Truncated})"
-            : $"{Count} dosya atlandi: {string.Join(", ", _detayli.Select(kayit => kayit.EntryName))}";
+        var parcalar = new List<string>(2);
 
-        if (_kesilenTaramalar.Count == 0)
+        if (Count > 0)
         {
-            return dosyalar;
+            parcalar.Add(Truncated > 0
+                ? $"{Count} dosya atlandi (ilk {_detayli.Count}: {string.Join(", ", _detayli.Select(kayit => kayit.EntryName))} ... +{Truncated})"
+                : $"{Count} dosya atlandi: {string.Join(", ", _detayli.Select(kayit => kayit.EntryName))}");
         }
 
         // Kesilen tarama, atlanan dosyalardan SONRA ve AYRI yazılır: özet tek satır olduğu için
         // sunucu günlüğüne bakan kişinin göreceği tek şey budur ve "kaç dosya eksik olduğu
         // bilinmiyor" bilgisinin oradan da düşmemesi gerekir.
-        var kesilenler = string.Join(", ", _kesilenTaramalar.Select(kayit => $"{kayit.Root} ({kayit.ReasonKey})"));
-        return $"{dosyalar}; TARAMA KESILDI: {kesilenler}";
+        if (_kesilenTaramalar.Count > 0)
+        {
+            parcalar.Add($"TARAMA KESILDI: {string.Join(", ", _kesilenTaramalar.Select(kayit => $"{kayit.Root} ({kayit.ReasonKey})"))}");
+        }
+
+        // BOŞ DİZE DÖNMEZ. Çağıran bunu `Any` ile korumalı olsa da (BackupService.ApplySkippedFiles),
+        // koruma bir gün kalkarsa günlüğe konusuz bir "Yedek eksik alindi (...): " satırı düşerdi:
+        // uyarı seviyesinde, sebepsiz. Sıfır durumu ADIYLA söylenir.
+        return parcalar.Count == 0 ? "eksik yok" : string.Join("; ", parcalar);
     }
 }

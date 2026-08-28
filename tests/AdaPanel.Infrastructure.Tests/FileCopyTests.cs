@@ -27,6 +27,15 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class FileCopyTests : IDisposable
 {
+    /// <summary>
+    /// Bütçe testlerinin üst sınırı: koruma bozulup yürüyüş döngüye girse bile test ASILMAZ.
+    /// </summary>
+    /// <remarks>
+    /// Asılan bir test paketini kimse koşturmaz; yani regresyon kırmızı yerine "hâlâ çalışıyor"
+    /// diye görünürdü. Aynı gerekçe <c>TenantTreeWalkGuardTests</c>'te de yazılı.
+    /// </remarks>
+    private static readonly TimeSpan Tavan = TimeSpan.FromSeconds(30);
+
     private readonly string kok;
     private readonly string siteAKoku;
     private readonly string siteBKoku;
@@ -451,6 +460,123 @@ public sealed class FileCopyTests : IDisposable
     }
 
     // ------------------------------------------------------------------
+    // BÜTÇE — "sınırsız kopyalama" kapatıldı
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// BÜTÇE DOLARSA KOPYA GERİ SARILIR: hedefte YARIM bir ağaç kalmaz, öge BAŞARISIZ raporlanır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// KARARIN ÖLÇÜMÜ. Bütçe dolduğunda iki seçenek vardı ve ikisi de test edilebilir davranış
+    /// üretir: (a) "kopya oluştu ama eksik" deyip yarım ağacı bırakmak, (b) reddedip geri sarmak.
+    /// (b) seçildi çünkü burada atlanan şey kullanıcının GERÇEK DOSYALARIDIR ve kesilme yeri
+    /// rastgeledir — "kopyalandı" yazısına bakıp yarısı olmayan bir klasörle çalışmak, yedek almak
+    /// için kopyalayan biri için veri kaybının ta kendisidir.
+    /// </para>
+    /// <para>
+    /// Test üç şeyi birden ölçer: (a) öge başarısız, (b) sebep yürüyüşün KENDİ anahtarı,
+    /// (c) hedefte hiçbir kalıntı YOK. Yalnız (a)'ya bakan bir test, "başarısız" deyip yarım ağacı
+    /// diskte bırakan bir uygulamada da yeşil kalırdı.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Butce_dolunca_kopya_GERI_SARILIR_ve_oge_BASARISIZ_raporlanir()
+    {
+        Directory.CreateDirectory(Path.Combine(siteAKoku, "hedef"));
+        for (var sira = 0; sira < 10; sira++)
+        {
+            DosyaYaz(Path.Combine(siteAKoku, "buyuk", $"dosya-{sira:00}.txt"), "veri");
+        }
+
+        // Koruma bozulup döngüye girilirse test ASILMASIN, kızarsın.
+        using var iptal = new CancellationTokenSource(Tavan);
+        var sonuc = await servis.CopyAsync(
+            new CopyFilesRequest { Paths = ["sites/a.test/buyuk"], DestinationPath = "sites/a.test/hedef" },
+            ogeButcesi: 3,
+            iptal.Token);
+
+        var satir = Assert.Single(sonuc.Items);
+        Assert.False(satir.Copied);
+        Assert.Equal(1, sonuc.FailedCount);
+        Assert.Equal("files.size_truncated_entries", satir.ErrorKey);
+
+        // GERİ SARMA GERÇEKTEN OLDU: hedefte klasörün kendisi bile yok, yarım dosyalar da yok.
+        Assert.False(
+            Directory.Exists(Path.Combine(siteAKoku, "hedef", "buyuk")),
+            "Butce dolunca YARIM kopya diskte KALDI.");
+
+        // Kaynak elbette yerinde.
+        Assert.Equal(10, Directory.GetFiles(Path.Combine(siteAKoku, "buyuk")).Length);
+    }
+
+    /// <summary>MUTASYON KONTROLÜ: bütçe BOLKEN kopya tamamlanır ve hiçbir uyarı üretilmez.</summary>
+    /// <remarks>
+    /// Bu olmadan "her kopyalamayı reddet" gibi bir değişiklik de yukarıdaki testi geçerdi; yani
+    /// test korumanın çalıştığını değil, yalnızca bir hatanın varlığını ölçerdi.
+    /// </remarks>
+    [Fact]
+    public async Task Butce_bolken_kopya_TAMAMLANIR()
+    {
+        Directory.CreateDirectory(Path.Combine(siteAKoku, "hedef"));
+        for (var sira = 0; sira < 10; sira++)
+        {
+            DosyaYaz(Path.Combine(siteAKoku, "buyuk", $"dosya-{sira:00}.txt"), "veri");
+        }
+
+        using var iptal = new CancellationTokenSource(Tavan);
+        var sonuc = await servis.CopyAsync(
+            new CopyFilesRequest { Paths = ["sites/a.test/buyuk"], DestinationPath = "sites/a.test/hedef" },
+            iptal.Token);
+
+        var satir = Assert.Single(sonuc.Items);
+        Assert.True(satir.Copied);
+        Assert.Equal(string.Empty, satir.ErrorKey);
+        Assert.Equal(10, Directory.GetFiles(Path.Combine(siteAKoku, "hedef", "buyuk")).Length);
+    }
+
+    /// <summary>
+    /// BÜTÇE İSTEK BAŞINADIR: bütçe dolmadan ÖNCE kopyalanan ögeler diskte KALIR ve rapor onları
+    /// başarılı gösterir.
+    /// </summary>
+    /// <remarks>
+    /// Bütçe dolduğunda istisna atsaydık bu rapor hiç üretilmezdi ve kullanıcı, diskte gerçekten
+    /// duran kopyaların hangileri olduğunu öğrenemezdi — hedef klasörde sebebi bilinmeyen dosyalar
+    /// bulurdu. Ölçülen ikinci şey bütçenin PAYLAŞILDIĞI: öge başına verilseydi tavan seçilen öge
+    /// sayısıyla çarpılır ve bütçe fiilen kalkardı.
+    /// </remarks>
+    [Fact]
+    public async Task Butce_dolmadan_ONCE_kopyalananlar_YERINDE_kalir()
+    {
+        Directory.CreateDirectory(Path.Combine(siteAKoku, "hedef"));
+        DosyaYaz(Path.Combine(siteAKoku, "kucuk.txt"), "kucuk veri");
+        for (var sira = 0; sira < 10; sira++)
+        {
+            DosyaYaz(Path.Combine(siteAKoku, "buyuk", $"dosya-{sira:00}.txt"), "veri");
+        }
+
+        using var iptal = new CancellationTokenSource(Tavan);
+        var sonuc = await servis.CopyAsync(
+            new CopyFilesRequest
+            {
+                Paths = ["sites/a.test/kucuk.txt", "sites/a.test/buyuk"],
+                DestinationPath = "sites/a.test/hedef"
+            },
+            ogeButcesi: 3,
+            iptal.Token);
+
+        Assert.Equal(1, sonuc.CopiedCount);
+        Assert.Equal(1, sonuc.FailedCount);
+        Assert.True(sonuc.Items.Single(oge => oge.SourcePath.EndsWith("kucuk.txt", StringComparison.Ordinal)).Copied);
+        Assert.Equal(
+            "files.size_truncated_entries",
+            sonuc.Items.Single(oge => oge.SourcePath.EndsWith("buyuk", StringComparison.Ordinal)).ErrorKey);
+
+        Assert.Equal("kucuk veri", File.ReadAllText(Path.Combine(siteAKoku, "hedef", "kucuk.txt")));
+        Assert.False(Directory.Exists(Path.Combine(siteAKoku, "hedef", "buyuk")));
+    }
+
+    // ------------------------------------------------------------------
     // ORTAK GÜVENLİK ÖN HAZIRLIĞI — NÖBETÇİ
     // ------------------------------------------------------------------
 
@@ -482,7 +608,11 @@ public sealed class FileCopyTests : IDisposable
         var kaynak = File.ReadAllText(Path.Combine(DepoKoku(), "src", "AdaPanel.Infrastructure", "Files", "FileService.cs"));
 
         var tasima = GovdeAl(kaynak, "public async Task<MoveFilesResultDto> MoveAsync(");
-        var kopyalama = GovdeAl(kaynak, "public async Task<CopyFilesResultDto> CopyAsync(");
+        // Kopyalamanın TEK uygulaması bütçeyi dışarıdan alan `internal` aşırı yüklemedir; genel
+        // yüzeydeki biçim yalnız üretim bütçesini verip buna devreder (gerekçesi FileService'te).
+        // Nöbetçi işin GERÇEKTEN yapıldığı gövdeye bakar — devreden kabuğa bakmak, denetimlerin
+        // kaldırılmasını göremezdi.
+        var kopyalama = GovdeAl(kaynak, "internal async Task<CopyFilesResultDto> CopyAsync(");
         var hazirlik = GovdeAl(kaynak, "private async Task<TransferPlan> BuildTransferPlanAsync(");
 
         // 1) İKİSİ DE ortak hazırlığı çağırır.

@@ -1451,6 +1451,9 @@ async function openWebmail() {
   const tab = window.open("", "_blank");
   // Sekmeyi boş bırakma: hazırlık sürerken (ilk açılış birkaç saniye + olası kurulum) "hazırlanıyor" göster,
   // yoksa kullanıcı boş sayfa görüp "açılmadı" sanıyor. URL gelince oraya yönlendiririz; hata olursa sekmede yazarız.
+  // Aşağıdaki renkler BİLEREK sabit: bu HTML yepyeni ve BOŞ bir sekmeye yazılıyor, panelin
+  // stil sayfası orada YÜKLÜ DEĞİL — dolayısıyla `var(--...)` belirteçleri o belgede
+  // tanımsızdır ve hiçbir şeye çözülmez. Ölçüldü: metin 16.66:1, hata başlığı 5.55:1.
   if (tab) {
     tab.document.write(
       '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Webmail</title></head>' +
@@ -1990,8 +1993,8 @@ function showError(error: unknown) {
 .mail-spinner {
   width: 15px;
   height: 15px;
-  border: 2px solid color-mix(in srgb, var(--accent-1, #2e7d32) 35%, transparent);
-  border-top-color: var(--accent-1, #2e7d32);
+  border: 2px solid color-mix(in srgb, var(--accent-1) 35%, transparent);
+  border-top-color: var(--accent-1);
   border-radius: 50%;
   animation: mail-spin 0.7s linear infinite;
 }
@@ -2318,7 +2321,7 @@ function showError(error: unknown) {
   align-items: center;
   gap: 4px;
   padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border-soft, var(--surface-2));
+  border: 1px solid var(--panel-border);
   border-radius: 999px;
   background: var(--surface-2);
   font-size: 0.82rem;
@@ -2344,8 +2347,8 @@ function showError(error: unknown) {
 }
 
 .chip-remove:hover:not(:disabled) {
-  background: var(--danger-soft, var(--surface-3, var(--surface-2)));
-  color: var(--danger, inherit);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 .chip-remove:disabled {
@@ -2367,7 +2370,7 @@ function showError(error: unknown) {
   align-items: center;
   gap: 4px;
   padding: 1px 3px 1px 7px;
-  border: 1px dashed var(--border-soft, var(--surface-2));
+  border: 1px dashed var(--panel-border);
   border-radius: 999px;
   color: var(--text-muted);
   font-size: 0.78rem;
@@ -2385,7 +2388,7 @@ function showError(error: unknown) {
 
 /* "Herkes gonderebilir" gorsel olarak AYIRT EDILIR: en gevsek durum, gozden kacmamali. */
 .list-policy.policy-open {
-  color: var(--warning, var(--text-soft));
+  color: var(--warn-text);
 }
 
 .dns-row {

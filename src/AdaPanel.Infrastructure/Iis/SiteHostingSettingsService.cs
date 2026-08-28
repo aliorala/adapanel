@@ -674,14 +674,21 @@ public sealed class SiteHostingSettingsService(
                 // anahtar UYDURULMADI: çevirisi olmayan bir anahtar, kullanıcının kırmızı kutuda
                 // ham anahtarı görmesi demektir (bkz. MessageKeyCoverageTests). Bu anahtarların
                 // çevirisi hem tr hem en'de VAR ve sebebi doğru anlatır; bu yola ÖZGÜ olan —
-                // "siteye dokunulmadı, içeriği parçalara bölün" — ayrıntı alanında durur ve arayüz
-                // onu hata kutusunda gösterir.
+                // ölçülen büyüklük ve "siteye dokunulmadı" — ayrıntı alanında durur ve arayüz onu
+                // hata kutusunda anahtarın altında gösterir.
+                //
+                // AYRINTI CÜMLE DEĞİL ETİKET-DEĞER, çünkü bu depoda `details` ÇEVRİLMEZ: hata
+                // kutusuna `useNotice.resolveApiMessage` ile "çeviri + \n\n + ham ayrıntı" olarak
+                // basılır, `t()`'ye HİÇ uğramaz. Buraya Türkçe bir cümle yazmak, İngilizce panelde
+                // İngilizce başlığın altında Türkçe bir satır demekti. Yeni bir i18n anahtarı da
+                // çözüm değil (çevirisi olmayan anahtar EKRANDA HAM görünür, MessageKeyCoverageTests
+                // bunu kapatıyor); doğru olan alanı sözleşmesine çekmek. Cümlenin taşıdığı olgular
+                // aynen duruyor: ölçülen alt sınırlar, bütçe ve "siteye dokunulmadı".
                 throw new AppException(
                     olcum.TruncatedReasonKey,
                     413,
                     413,
-                    $"Arsivden cikan agac cok buyuk (en az {olcum.FileCount} dosya / {olcum.DirectoryCount} klasor; " +
-                    $"ust sinir {IceAktarmaOgeButcesi} oge). Siteye DOKUNULMADI; icerigi parcalara bolerek aktarin.");
+                    CokBuyukArsivAyrintisi(olcum, IceAktarmaOgeButcesi));
             }
 
             if (!result.Success || availableFiles == 0)
@@ -762,6 +769,32 @@ public sealed class SiteHostingSettingsService(
     /// </para>
     /// </remarks>
     internal const int IceAktarmaOgeButcesi = 500_000;
+
+    /// <summary>
+    /// "Arşiv çok büyük" reddinin AYRINTI satırı: etiket-değer, cümle DEĞİL.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden dilden bağımsız:</b> bu depoda <c>AppException.Details</c> ÇEVRİLMEZ — arayüz onu
+    /// çevirinin altına HAM basar (<c>useNotice.resolveApiMessage</c>: "çeviri + \n\n + ayrıntı",
+    /// <c>t()</c>'ye hiç uğramaz). Burada eskiden Türkçe bir anlatı cümlesi duruyordu ve sonucu
+    /// ölçüldü: İNGİLİZCE panelde İngilizce başlığın hemen altında Türkçe bir satır. Yeni bir
+    /// i18n anahtarı çözüm değil — çevirisi olmayan anahtar ekranda HAM görünür
+    /// (<c>MessageKeyCoverageTests</c> tam bunu kapatıyor).
+    /// </para>
+    /// <para>
+    /// <b>Neden ayrı bir metot:</b> asıl fırlatma yolu (<see cref="ImportSiteArchiveAsync"/>)
+    /// gerçek bir HTTP indirmesi ve yarım milyon ögelik bir ağaç gerektiriyor, yani üretilen satır
+    /// oradan ölçülemez. Ayrılınca ölçülebiliyor — bu deponun <see cref="MeasureImportTree"/> ve
+    /// <see cref="ApplyImportedContent"/> için verdiği kararın aynısı.
+    /// </para>
+    /// <para>
+    /// Sayılar <c>&gt;=</c> ile yazılır ve bu bilinçli: ölçüm bütçe dolduğunda KESİLDİ, yani
+    /// gerçek büyüklük en az bu kadardır — "eşittir" demek ölçülmemiş bir şeyi iddia etmek olurdu.
+    /// </para>
+    /// </remarks>
+    internal static string CokBuyukArsivAyrintisi(SafeDirectoryWalkResult olcum, int ogeButcesi)
+        => $"files>={olcum.FileCount}; dirs>={olcum.DirectoryCount}; limit={ogeButcesi}; site=untouched";
 
     /// <summary>
     /// Bu yolun ağaç bütçesi. <b>SÜRE sınırı bilerek YOKTUR</b> (<see cref="int.MaxValue"/>).
@@ -939,11 +972,14 @@ public sealed class SiteHostingSettingsService(
         if (yuruyus.Truncated)
         {
             // Anahtar seçimi ölçüm kapısıyla AYNI gerekçeye dayanır (bkz. ImportSiteArchiveAsync).
+            // AYRINTI da aynı gerekçeyle etiket-değer: `Details` çevrilmez, arayüz onu ham basar
+            // (bkz. CokBuyukArsivAyrintisi). Türkçe cümle, İngilizce panelde yarı çevrilmiş bir
+            // satır demekti.
             throw new AppException(
                 yuruyus.TruncatedReasonKey,
                 413,
                 413,
-                $"Kopyalama butcesi doldu; {count} dosya yazilmisti. Site koku geri sariliyor.");
+                $"copy=truncated; written={count}; site=rolled_back");
         }
 
         return count;

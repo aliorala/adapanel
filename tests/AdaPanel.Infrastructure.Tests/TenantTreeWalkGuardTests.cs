@@ -198,10 +198,15 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         var uyari = Assert.Single(kayit.Warnings, item => item.MessageKey == TaramaKesildiAnahtari);
         Assert.Equal("files", uyari.Target);
 
-        // Sonucun kendisi ("yedek EKSİK") ayrıntıda YAZILI olmalı: anahtarın çevirisi yalnızca
+        // Sonucun kendisi ("arşiv eksik") ayrıntıda YAZILI olmalı: anahtarın çevirisi yalnızca
         // sebebi ("bütçe doldu") anlatır, kullanıcının bilmesi gereken şey ise arşivin eksik
         // olduğudur.
-        Assert.Contains("EKSİKTİR", uyari.Detail, StringComparison.Ordinal);
+        //
+        // ARANAN ŞEY ARTIK TÜRKÇE CÜMLE DEĞİL ETİKET: `Detail` bu depoda çevrilmeyen alandır ve
+        // arayüz onu çevirinin altına HAM basar; içine Türkçe anlatı konunca İngilizce panelde
+        // yarı çevrilmiş bir satır çıkıyordu (gerekçe BackupService.ApplySkippedFiles'ta yazılı).
+        Assert.Contains("archive=incomplete", uyari.Detail, StringComparison.Ordinal);
+        DildenBagimsizOlmali(uyari.Detail, "yedek kesilen-tarama uyarisi");
 
         // (d) Ölçüm: arşiv gerçekten kesilmiş (10 dosyanın hepsi girmedi). Bu olmadan "uyarıyı
         //     yazıp yine de her şeyi arşivleyen" bir uygulama da testi geçerdi.
@@ -405,6 +410,21 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
 
         Assert.True(olcum.Truncated, "Butce dolmasina ragmen olcum KESILMEDI.");
         Assert.NotEmpty(olcum.TruncatedReasonKey);
+
+        // REDDİN AYRINTISI DİLDEN BAĞIMSIZ ve ÖLÇÜLEN SAYILARI taşıyor.
+        //
+        // Neden burada ve neden fırlatma yolundan değil: gerçek fırlatma
+        // `ImportSiteArchiveAsync` içinde, bir HTTP indirmesinin ve yarım milyon ögelik bir ağacın
+        // arkasında. Ayrıntıyı üreten satır bu yüzden ayrı bir yardımcıya alındı ve ölçülen şey
+        // tam olarak kullanıcının göreceği metin.
+        var ayrinti = SiteHostingSettingsService.CokBuyukArsivAyrintisi(olcum, 3);
+
+        Assert.Contains($"files>={olcum.FileCount}", ayrinti, StringComparison.Ordinal);
+        Assert.Contains("limit=3", ayrinti, StringComparison.Ordinal);
+
+        // Kullanıcının bilmesi gereken asıl olgu: SİTEYE DOKUNULMADI.
+        Assert.Contains("site=untouched", ayrinti, StringComparison.Ordinal);
+        DildenBagimsizOlmali(ayrinti, "cok buyuk arsiv reddi");
     }
 
     /// <summary>
@@ -430,6 +450,14 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         // Anahtar, yürüyüşün ÇEVİRİSİ OLAN sebep anahtarıdır (gerekçesi TaramaKesildiAnahtari'nde).
         Assert.Equal(TaramaKesildiAnahtari, hata.MessageKey);
         Assert.Equal(413, hata.HttpStatusCode);
+
+        // BU YOLA ÖZGÜ OLGU AYRINTIDA DURUYOR ve DİLDEN BAĞIMSIZ: hata kutusuna ayrıntı
+        // "çeviri + ham metin" olarak basılır (useNotice.resolveApiMessage), yani `t()`'ye hiç
+        // uğramaz. Buraya Türkçe cümle yazmak, İngilizce panelde İngilizce başlığın altında
+        // Türkçe bir satır demekti.
+        Assert.Contains("copy=truncated", hata.Details, StringComparison.Ordinal);
+        Assert.Contains("site=rolled_back", hata.Details, StringComparison.Ordinal);
+        DildenBagimsizOlmali(hata.Details, "ice aktarma kopyalama kesintisi");
 
         // GERİ SARMA GERÇEKTEN OLDU: eski içerik yerinde, yarım kopya yok.
         Assert.True(File.Exists(Path.Combine(hedef, "eski-site.txt")), "Eski site icerigi GERI GELMEDI.");
@@ -461,7 +489,7 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
     // ===============================================================================================
 
     /// <summary>
-    /// ÜÇ YOLDA DA ELLE YAZILMIŞ İKİNCİ BİR YÜRÜYÜŞ ARTIK YOK.
+    /// DÖRT YOLDA DA ELLE YAZILMIŞ İKİNCİ BİR YÜRÜYÜŞ ARTIK YOK.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -469,6 +497,14 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
     /// değil, aynı yürüyüşün DÖRT KOPYASI olmasıydı. Kopya geri gelirse davranış testleri bunu
     /// GÖREMEZ — kavşaksız bir ağaçta her kopya kendi testinde yeşil kalır; açık ancak kiracı
     /// kavşağı kurduğunda ortaya çıkar.
+    /// </para>
+    /// <para>
+    /// <b>DÖRDÜNCÜ YOL SONRADAN EKLENDİ ve eklenmesi bu turun ASIL kazancı:</b> liste yalnız üç
+    /// dosyaya bakıyordu ve <c>FileService.cs</c> içinde YOKTU. Sonuç ölçüldü —
+    /// <c>FileService.KlasoruKopyala</c> kendini ÖZYİNELEMELİ çağıran, hiçbir bütçesi olmayan bir
+    /// yürüyüş taşımaya devam ediyordu; yani bu nöbetçinin koruduğunu iddia ettiği kural, nöbetçinin
+    /// göremediği bir dosyada çiğneniyordu. Elle yazılmış kapsam listesi bu depoda beşinci kez
+    /// kaydı; listeye yeni bir yürüyüş müşterisi eklendiğinde buraya da eklenmesi ZORUNLUDUR.
     /// </para>
     /// <para>
     /// Aynı kalıbın örnekleri: <c>QuotaDirectoryWalkTests.Agac_yuruyusu_TEK_KAYNAKTAN_gelir</c> ve
@@ -481,20 +517,22 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         var yedek = KaynakOku("src", "AdaPanel.Infrastructure", "Backup", "BackupService.cs");
         var goc = KaynakOku("src", "AdaPanel.Infrastructure", "Migration", "SiteMigrationService.cs");
         var barindirma = KaynakOku("src", "AdaPanel.Infrastructure", "Iis", "SiteHostingSettingsService.cs");
+        var dosyaYoneticisi = KaynakOku("src", "AdaPanel.Infrastructure", "Files", "FileService.cs");
 
         // 1) Açığı ÜRETEN çağrı hiçbirinde YOK. Davranış testleri "şu an döngü yok" der; bu nöbetçi
         //    "döngüyü üreten çağrı geri kondu" der.
-        foreach (var kaynak in new[] { yedek, goc, barindirma })
+        foreach (var kaynak in new[] { yedek, goc, barindirma, dosyaYoneticisi })
         {
             Assert.DoesNotContain("SearchOption.AllDirectories", kaynak, StringComparison.Ordinal);
         }
 
-        // 2) Üç gövde de ORTAK yürüyüşü çağırır ve KENDİ yürüyüşünü taşımaz.
+        // 2) Dört gövde de ORTAK yürüyüşü çağırır ve KENDİ yürüyüşünü taşımaz.
         foreach (var (kaynak, imza) in new[]
                  {
                      (yedek, "private static List<ArchiveFile> ScanFiles("),
                      (goc, "private async Task<string?> SanitizeUserIniFilesAsync("),
-                     (barindirma, "private static int CopyDirectoryRecursive(")
+                     (barindirma, "private static int CopyDirectoryRecursive("),
+                     (dosyaYoneticisi, "private static KlasorKopyasi KlasoruKopyala(")
                  })
         {
             var govde = GovdeAl(kaynak, imza);
@@ -504,6 +542,14 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
             Assert.DoesNotContain("new Queue<", govde, StringComparison.Ordinal);
             Assert.DoesNotContain("FileAttributes.ReparsePoint", govde, StringComparison.Ordinal);
             Assert.DoesNotContain("EnumerateFileSystemInfos(", govde, StringComparison.Ordinal);
+
+            // ÖZYİNELEME YOK: gövde KENDİ adını çağırmaz. `new Stack<` denetimi elle yazılmış YIĞIN
+            // yürüyüşünü yakalar ama ÖZYİNELEMELİ olanı yakalamaz — FileService.KlasoruKopyala tam
+            // olarak o türdendi (yığın yok, kendini çağırıyordu) ve derin bir ağaçta
+            // StackOverflowException üretirdi; o istisna .NET'te YAKALANAMAZ, yani panel süreci
+            // TÜM kiracılar için ölürdü.
+            var ad = imza[(imza.LastIndexOf(' ', imza.IndexOf('(', StringComparison.Ordinal)) + 1)..];
+            Assert.DoesNotContain(ad, govde[imza.Length..], StringComparison.Ordinal);
         }
 
         // 3) Korumalar GERÇEKTEN ortak yerde yaşıyor. Biri buradan düşerse beş çağıran birden
@@ -561,6 +607,38 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         Assert.True(
             new DirectoryInfo(baglanti).Attributes.HasFlag(FileAttributes.ReparsePoint),
             "Kurulan girdi kavsak degil; test onkosulu saglanmadi.");
+    }
+
+    /// <summary>
+    /// Kullanıcıya HAM basılan bir ayrıntı alanının DİLDEN BAĞIMSIZ olduğunu ölçer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ASCII ölçütü:</b> bu depoda <c>Detail</c>/<c>Details</c> ÇEVRİLMEZ — ne sunucu
+    /// tarafında i18n anahtarı taşır ne de arayüz onu <c>t()</c>'den geçirir (BackupView.vue
+    /// <c>{{ warning.detail }}</c>, useNotice.ts "çeviri + \n\n + ham ayrıntı"). Alanın kendi
+    /// belgesi de bunu söyler: "Teknik ayrıntı. Çevrilmez; teşhis içindir."
+    /// </para>
+    /// <para>
+    /// Buna rağmen bu iki yola Türkçe anlatı cümleleri yazılmıştı ve sonuç ölçüldü: İNGİLİZCE
+    /// panelde İngilizce anahtarın hemen altında Türkçe bir cümle görünüyordu. Yeni bir i18n
+    /// anahtarı çözüm DEĞİL (çevirisi olmayan anahtar ekranda HAM görünür — <c>MessageKeyCoverageTests</c>
+    /// tam bunu kapatıyor); doğru olan alanı sözleşmesine çekmek.
+    /// </para>
+    /// <para>
+    /// Ölçüt ASCII, çünkü bu iki alanın içeriğini TAMAMEN kod üretiyor (sayı + sabit etiket);
+    /// dışarıdan gelen bir yol ya da istisna metni buraya karışmıyor. Türkçe cümle geri
+    /// yazıldığında <c>ğ ı İ ş</c> harfleri bu iddiayı anında kırar.
+    /// </para>
+    /// </remarks>
+    private static void DildenBagimsizOlmali(string? ayrinti, string neresi)
+    {
+        Assert.False(string.IsNullOrWhiteSpace(ayrinti), $"{neresi}: ayrinti bos.");
+
+        var yabanci = ayrinti!.Where(karakter => karakter > 127).ToArray();
+        Assert.True(
+            yabanci.Length == 0,
+            $"{neresi}: ayrinti dile bagli karakter tasiyor ('{new string(yabanci)}') -> '{ayrinti}'");
     }
 
     private static string KaynakOku(params string[] parcalar)

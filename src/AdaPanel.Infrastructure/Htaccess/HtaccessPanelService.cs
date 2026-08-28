@@ -385,8 +385,14 @@ public sealed class HtaccessPanelService
     /// sessizce geri gelirdi. Genel anahtar YALNIZ yöneticinin ayrı bir kararıdır.
     /// </para>
     /// </remarks>
+    /// <param name="mode">
+    /// <c>off</c> / <c>observe</c> / <c>enforce</c>. NULL KABUL EDER ama GEÇERLİ SAYMAZ: tip
+    /// bilerek <c>string?</c>, çünkü çağıran (denetleyici) eksik gövdeyi bir varsayılana çevirip
+    /// örtmek yerine olduğu gibi buraya getirmeli — kararı <see cref="ModCozumle"/> verir ve boş
+    /// değeri "enfroce" yazım hatasıyla aynı yerde REDDEDER.
+    /// </param>
     public async Task<HtaccessSiteReport> SetModeAsync(
-        string siteName, string mode, string? note, CancellationToken iptal)
+        string siteName, string? mode, string? note, CancellationToken iptal)
     {
         var site = await _siteler.GetSiteAsync(siteName, iptal);
         var kip = ModCozumle(mode);
@@ -449,7 +455,12 @@ public sealed class HtaccessPanelService
     /// klasörde oluşturulup taşındığı için klasörün DACL'ini olduğu gibi devralır.
     /// </para>
     /// </remarks>
-    public HtaccessServerSwitchState SetServerMode(string mode, string? note)
+    /// <param name="mode">
+    /// <c>off</c> / <c>observe</c> / <c>enforce</c>. NULL KABUL EDER ama GEÇERLİ SAYMAZ; gerekçesi
+    /// <see cref="SetModeAsync"/>'in aynı parametresinde yazılı. Burada bedeli daha büyüktür:
+    /// söylenmemiş bir kipin "off" sayılması sunucudaki HER siteyi birden kapatırdı.
+    /// </param>
+    public HtaccessServerSwitchState SetServerMode(string? mode, string? note)
     {
         var kip = ModCozumle(mode);
         _anahtarlar.SetGlobal(kip, note);
@@ -475,8 +486,16 @@ public sealed class HtaccessPanelService
             "enforce" => HtaccessMode.Enforce,
             // TANINMAYAN KİP REDDEDİLİR, "off"a düşmez. Kapatma sessiz bir başarı gibi görünür;
             // kullanıcı "enfroce" yazdığında uyguladığını sanıp kapalı bir siteyle kalırdı.
+            //
+            // SÖYLENMEMİŞ KİP DE (null / boş dize) BURAYA DÜŞER ve aynı gerekçeyle reddedilir.
+            // Uzun süre düşmüyordu: denetleyici `request?.Mode ?? "off"` yazıyor, yani gövdesi
+            // eksik bir POST bu kapıya HİÇ gelmeden geçerli bir "kapat" isteğine dönüşüyordu.
+            // Sunucu geneli uçta bunun bedeli, sunucudaki HER sitenin desteğinin sessizce
+            // kapanması ve denetim kaydının bunu bilinçli bir karar gibi yazmasıydı.
             _ => throw new AppException("htaccess.invalid_mode",
-                details: $"Geçersiz kip: '{mod}'. Geçerli değerler: off, observe, enforce.")
+                details: string.IsNullOrWhiteSpace(mod)
+                    ? "mode=<eksik>; gecerli degerler: off, observe, enforce"
+                    : $"mode='{mod}'; gecerli degerler: off, observe, enforce")
         };
     }
 

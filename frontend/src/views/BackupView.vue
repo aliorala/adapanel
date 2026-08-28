@@ -1085,6 +1085,8 @@ import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/au
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
 import { maskSecretsInUri } from "../utils/url";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -2656,15 +2658,14 @@ function lastStatusTone(status: string) {
   return "";
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string | null) {
-  return value ? new Date(value).toLocaleString() : "—";
+  return formatDateTime(value, "—");
 }
 
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  return sharedFormatBytes(value, t);
 }
 
 function formatStatus(status: string) {
@@ -2726,7 +2727,7 @@ function statusTone(status: string) {
 }
 
 .quota-warn {
-  color: var(--warn, #b45309);
+  color: var(--warn-text);
 }
 
 .entry-row {
@@ -2743,7 +2744,7 @@ function statusTone(status: string) {
   justify-content: space-between;
   gap: 8px;
   padding: 8px 4px 2px;
-  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-top: 1px solid var(--panel-border);
 }
 
 /* ===================== GÜN GRUPLARI ===================== */
@@ -2952,18 +2953,18 @@ function statusTone(status: string) {
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
-  border-left: 3px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-left: 3px solid var(--panel-border);
 }
 
 .chain-item.current {
-  border-left-color: var(--accent, #2563eb);
+  border-left-color: var(--accent-1);
   font-weight: 600;
 }
 
 /* Dosyası olmayan halka: üstü çizili + kırmızı. Zincirin nerede koptuğu tek bakışta görünmeli. */
 .chain-item.missing .chain-name {
   text-decoration: line-through;
-  color: var(--danger, #b91c1c);
+  color: var(--danger-text);
 }
 
 .chain-name {

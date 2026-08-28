@@ -277,6 +277,8 @@ import type { UpdateStatus } from "../api/update";
 import type { AttentionSummary } from "../api/attention";
 import { copyToClipboard } from "../utils/clipboard";
 import SectionLoadError from "../components/SectionLoadError.vue";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
+import { formatDateTime, formatTimeSpan as sharedFormatTimeSpan } from "../utils/datetime";
 
 type DiskUsage = {
   name: string;
@@ -445,62 +447,23 @@ function ringStyle(value: number, color = "var(--accent-1)") {
   };
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null): string {
-  if (!value) {
-    return t("panel.common.notAvailable");
-  }
-
-  return new Date(value).toLocaleString();
+  return formatDateTime(value, t("panel.common.notAvailable"));
 }
 
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return `0 ${t("panel.units.bytes")}`;
-  }
-
-  const units = [
-    t("panel.units.bytes"),
-    t("panel.units.kib"),
-    t("panel.units.mib"),
-    t("panel.units.gib"),
-    t("panel.units.tib")
-  ];
-
-  let size = value;
-  let unitIndex = 0;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
+function formatBytes(value: number) {
+  return sharedFormatBytes(value, t);
 }
 
 function formatSpeed(value: number): string {
   return `${formatBytes(value)}/${t("panel.units.second")}`;
 }
 
+/** Sure bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatTimeSpan(value: string): string {
-  const match = value.match(/^(?:(\d+)\.)?(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/);
-  if (!match) {
-    return value;
-  }
-
-  const days = Number(match[1] ?? "0");
-  const hours = Number(match[2]);
-  const minutes = Number(match[3]);
-  const seconds = Number(match[4]);
-  const parts: string[] = [];
-
-  if (days > 0) {
-    parts.push(`${days}${t("panel.units.dayShort")}`);
-  }
-
-  parts.push(`${hours}${t("panel.units.hourShort")}`);
-  parts.push(`${minutes}${t("panel.units.minuteShort")}`);
-  parts.push(`${seconds}${t("panel.units.secondShort")}`);
-  return parts.join(" ");
+  return sharedFormatTimeSpan(value, t);
 }
 </script>
 
@@ -634,7 +597,7 @@ function formatTimeSpan(value: string): string {
 
 .access-copy-failed {
   flex-basis: 100%;
-  color: var(--warn-text, #a07800);
+  color: var(--warn-text);
   font-size: 0.78rem;
 }
 

@@ -761,6 +761,7 @@ import { extractApiMessage } from "../stores/auth";
 import { useDatabasesStore } from "../stores/databases";
 import { useSoftwareStore } from "../stores/software";
 import { useSitesStore } from "../stores/sites";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
 type DatabaseModule = "databases" | "webdb" | "cache" | "transfer" | "settings" | "consumers";
 type WorkspaceSection = "databases" | "users" | "remote" | "connection";
@@ -932,16 +933,9 @@ async function runRepair(name: string) {
   }
 }
 
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  const birimler = ["KB", "MB", "GB", "TB"];
-  let sayi = value / 1024;
-  let sira = 0;
-  while (sayi >= 1024 && sira < birimler.length - 1) {
-    sayi /= 1024;
-    sira++;
-  }
-  return `${sayi.toFixed(sayi < 10 ? 1 : 0)} ${birimler[sira]}`;
+  return sharedFormatBytes(value, t);
 }
 
 const showImportForm = ref(false);
@@ -1483,8 +1477,8 @@ function showNotice(message: string, isError: boolean) {
 <style scoped>
 .db-detail {
   padding: 0.9rem 1.1rem 1.1rem;
-  border-left: 3px solid var(--accent-1, #4b7bec);
-  background: color-mix(in srgb, var(--accent-1, #4b7bec) 5%, transparent);
+  border-left: 3px solid var(--accent-1);
+  background: color-mix(in srgb, var(--accent-1) 5%, transparent);
   display: grid;
   gap: 0.9rem;
 }
@@ -1525,7 +1519,7 @@ function showNotice(message: string, isError: boolean) {
   overflow-x: auto;
 }
 
-.db-warn { margin: 0; color: var(--warn-border, #e0b400); font-size: 0.86rem; }
+.db-warn { margin: 0; color: var(--warn-text); font-size: 0.86rem; }
 .db-ok { margin: 0; font-size: 0.86rem; opacity: 0.85; }
 
 .db-tables { display: grid; gap: 0.3rem; max-height: 20rem; overflow: auto; }

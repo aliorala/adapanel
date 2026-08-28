@@ -27,9 +27,85 @@
   --danger-bg: rgba(224, 98, 108, 0.13);
   --input-bg: #131820;
   --ring-track: rgba(148, 163, 184, 0.12);
+
+  /* GİRDİ KENARI — panel kenarından AYRI belirteç. NEDEN ayrı:
+     ÖLÇÜLDÜ, koyu tema: `--panel-border` (#2b3440) girdi zemini (#131820) üzerinde 1.41:1.
+     WCAG 1.4.11 bir arayüz ögesinin SINIRI için 3:1 ister. Açık temada durum daha kötü:
+     orada `--input-bg` ile `--surface-0` BİREBİR aynı beyaz (ölçüldü: 1.00:1), yani alanın
+     nerede başlayıp bittiğini söyleyen TEK ipucu kenarın kendisi ve o kenar 1.35:1.
+     Seçilen değerler eşiği geçen EN AÇIK tonlar (3.02 / 3.01): form ekranı gereğinden fazla
+     ağırlaşmasın diye eşiğin üstüne çıkılmadı.
+     `--panel-border` BİLEREK DEĞİŞMEDİ: paneller ayrıca gölge ve zemin farkıyla da ayrılıyor,
+     kenarları kimlik taşıyan bir süs; hepsini 3:1'e çekmek koyu temanın karakterini bozardı. */
+  --input-border: #5e656e;
+
+  /* ODAK HALKASI. Eskiden `color-mix(accent-1 45%, transparent)` idi; ÖLÇÜLDÜ: 2.27:1 (koyu) /
+     1.88:1 (açık) — 3:1 eşiğinin ALTINDA. Klavyeyle gezen bir yönetici odağın nerede olduğunu
+     pratikte göremiyordu. Saydamlık kaldırıldı, renk aynı kaldı: 6.11:1 (koyu) / 4.51:1 (açık).
+     Değişken `--accent-1`e BAĞLI tutuldu ki tema ve beyaz etiket markası halkayı da sürüklesin. */
+  --focus-ring: var(--accent-1);
+
+  /* BİRİNCİL DÜĞME DOLGUSU — `--accent-1`den AYRI belirteç.
+     ÖLÇÜLDÜ: beyaz metin `--accent-1` (#4b9cff) üzerinde 2.80:1; gradyanın eski en üst durağı
+     (accent %92 + beyaz) bundan da düşüktü. `--accent-2` (#2376d8) 4.51:1 ile eşiği geçiyor.
+     Bu yüzden DOLGU accent-2'den türetilir. `--accent-1` halkada, kenarda ve hover tonlarında
+     PARLAK kalmaya devam eder — orada parlaklık okunurluğu bozmaz, aksine yardım eder.
+     color-mix ile TÜRETİLİYOR (sabit hex değil) ki beyaz etiket markası da aynı koyulaştırmayı
+     otomatik alsın; markanın kendi rengi için eşik garanti EDİLEMEZ, yalnız iyileştirilir. */
+  --accent-fill-top: var(--accent-2);
+  --accent-fill-bottom: color-mix(in srgb, var(--accent-2) 80%, #000);
+
+  /* TEHLİKE DÜĞMESİ dolgusu. ÖLÇÜLDÜ: #fff1f1 metin `--danger-1` (#e0626c) üzerinde 3.11:1.
+     #b54f57 = 4.53:1. `--danger-1` rozet kenarlarında parlak kalır (orada metin taşımıyor).
+     Alt durak eskiden kurala GÖMÜLÜ #97333c idi; belirtece taşındı ki açık tema kendi
+     değerini verebilsin — gömülü hâliyle açık temada da koyu temanın rengi çiziliyordu. */
+  --danger-fill-top: #b54f57;
+  --danger-fill-bottom: #97333c;
+
   --radius-lg: 13px;
   --radius-md: 9px;
   --radius-sm: 6px;
+
+  /* TEK ARALIKLI YAZI TİPİ.
+     ÖLÇÜLDÜ: `var(--font-mono, ...)` 7 yerde kullanılıyordu (CommandConsole, terminal/günlük
+     çıktıları) ama belirteç HİÇBİR YERDE TANIMLI DEĞİLDİ — yani her çağrı sessizce kendi yedek
+     listesine düşüyordu ve o listeler birbirinden farklıydı (biri "Cascadia Code" içeriyor,
+     diğeri içermiyor). Sonuç: aynı panelde konsol yüzeyleri farklı yazı tipiyle çiziliyordu.
+     Tanımlamak, yedeklerin hepsini tek bir karara bağlar. */
+  --font-mono: ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+
+  /* BOŞLUK ÖLÇEĞİ.
+     SAYILDI: bu dosyada padding/gap/margin olarak 20 AYRI değer vardı (3,5,6,7,8,9,10,11,12,13,
+     14,16,17,18,20,22,24,26,28px). Yeni bir kural yazan kişinin tutunacağı bir ölçek yoktu,
+     her seferinde göz kararı bir sayı seçiliyordu.
+     Ölçek 12px'e kadar 2px, sonrasında 4px adımlı: panel yoğun bir arayüz, küçük uçta 4px'lik
+     tek adım fazla kaba kalıyor (bir rozetin iç boşluğunu 4 ile 8 arasında seçmek zorunda
+     kalırdınız). İSİM = DEĞER: `--sp-12` on iki pikseldir, tahmin gerektirmez.
+     Taşıma kuralı: en yakın adım; hesaplanan yüksekliği değiştiren yerlerde (girdi, düğme)
+     yüksekliği SABİT tutan adım seçildi. */
+  --sp-2: 2px;
+  --sp-4: 4px;
+  --sp-6: 6px;
+  --sp-8: 8px;
+  --sp-10: 10px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-20: 20px;
+  --sp-24: 24px;
+  --sp-28: 28px;
+
+  /* YAZI ÖLÇEĞİ.
+     SAYILDI: 8 ayrı boyut vardı — 0.78 / 0.79 / 0.80 / 0.82 / 0.86 / 0.92 / 1 / 1.18rem.
+     13.5px tabanda 0.78/0.79/0.80rem = 10.53 / 10.665 / 10.80px, yani aralarındaki fark
+     0.135px: hiçbir ekranda AYIRT EDİLEMEZ, ama üç ayrı karar noktası üretiyordu. Bu üçü tek
+     adımda birleştirildi (8 -> 6). Geri kalan adımlar arasında gerçek bir fark var, DOKUNULMADI. */
+  --fs-2xs: 0.78rem;
+  --fs-xs: 0.82rem;
+  --fs-sm: 0.86rem;
+  --fs-md: 0.92rem;
+  --fs-lg: 1rem;
+  --fs-xl: 1.18rem;
+
   /* modern paneller ile aynı font: Open Sans (humanist, yumuşak, panelde dinlendirici). */
   font-family: "Open Sans Variable", "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   font-size: 13.5px;
@@ -50,13 +126,24 @@
   --surface-3: #eaf0f6;
   --text-strong: #172235;
   --text-soft: #35445a;
-  --text-muted: #6b7789;
+  /* ÖLÇÜLDÜ, eski #6b7789: surface-0 4.54 / page-bg 4.01 / surface-2 4.23 / surface-3 3.96.
+     Yani beyaz kartın DIŞINDAKİ her zeminde 4.5 eşiğinin altındaydı. Bu belirteç yardımcı
+     metnin tamamını taşıyor (.meta, .field-hint, .empty-state, .cell-muted, .module-head p,
+     .summary-item span, pasif sekme) — panelde en çok okunan ikinci renk.
+     Yeni #626d7e: 5.24 / 4.63 / 4.88 / 4.56 — hepsi geçiyor. Kayma yalnız %8 siyaha doğru,
+     renk hâlâ aynı mavi-gri; daha koyu bir değer yardımcı metni ana metinden ayırt
+     edilemez hâle getirirdi (hiyerarşi ölçünün de amacı). */
+  --text-muted: #626d7e;
   --accent-1: #1474e5;
   --accent-2: #0f62c4;
   --accent-text: #0f62c4;
   --on-accent: #ffffff;
   --ok-1: #1f9d63;
-  --ok-text: #15834d;
+  /* ÖLÇÜLDÜ, eski #15834d kendi rozet zemininde (ok-bg beyaza binince #e9f5ef): 4.28 — kaldı.
+     "Çalışıyor / Etkin" rozeti bu panelde en sık görülen durum göstergesi.
+     Yeni #147f4b: 4.51 rozet zemininde, 5.04 düz beyazda. Fark çıplak gözle görünmeyecek
+     kadar küçük (%3 siyah), ama eşiğin doğru tarafına geçiyor. */
+  --ok-text: #147f4b;
   --ok-bg: rgba(31, 157, 99, 0.1);
   --warn-1: #b06f12;
   --warn-text: #8f5a0e;
@@ -65,6 +152,17 @@
   --danger-text: #a3343e;
   --danger-bg: rgba(194, 65, 76, 0.1);
   --input-bg: #ffffff;
+  /* Açık temada girdi zemini ile kart zemini AYNI beyaz: kenar tek sınır ipucu (bkz. koyu blok).
+     ÖLÇÜLDÜ: eski #d8dee7 beyaz üzerinde 1.35:1 -> #91959b 3.01:1. */
+  --input-border: #91959b;
+  /* Açık temada `--accent-1` (#1474e5) beyaz metinle zaten 4.51 geçiyor; bu yüzden dolgu
+     koyu temadaki gibi ekstra karartılMAZ, düğmeler bugünkü görünümünde kalır.
+     (Eski üst durak `accent-1 %92 + beyaz` = #2780e7 idi ve eşiğin altına düşüyordu.) */
+  --accent-fill-top: var(--accent-1);
+  --accent-fill-bottom: var(--accent-2);
+  /* Açık temada `--danger-1` (#c2414c) #fff1f1 metinle 4.60 ölçüldü: karartmaya gerek yok. */
+  --danger-fill-top: var(--danger-1);
+  --danger-fill-bottom: #97333c;
   --ring-track: rgba(34, 51, 80, 0.1);
 }
 
@@ -132,19 +230,22 @@
   font-size: 14px;
 }
 
+/* Rahat yoğunluk da ölçeğe taşındı (14 -> 16, 17 -> 20, 11 -> 12). Adımlar YUKARI yuvarlandı:
+   bu kipin tek işi varsayılandan belirgin biçimde ferah olmak; aşağı yuvarlamak (14 -> 12)
+   panel boşluğunu varsayılanla (12px) EŞİTLEYİP kipi anlamsız kılardı. */
 :root[data-density="comfortable"] .panel {
-  gap: 14px;
-  padding: 17px;
+  gap: var(--sp-16);
+  padding: var(--sp-20);
 }
 
 :root[data-density="comfortable"] .data-row {
-  padding-block: 11px;
+  padding-block: var(--sp-12);
 }
 
 :root[data-density="comfortable"] input,
 :root[data-density="comfortable"] textarea,
 :root[data-density="comfortable"] select {
-  padding-block: 12px;
+  padding-block: var(--sp-12);
 }
 
 * {
@@ -193,8 +294,21 @@ select {
   min-width: 0;
 }
 
+/* ODAK HALKASI — TEK KURAL, EVRENSEL.
+   Kapsam zaten doğruydu (evrensel seçici: düğme, bağlantı, girdi, seçim, sekme, satır içi
+   düğmeler — hepsi eşleşiyor); sorun GÖRÜNÜRLÜKTÜ. Eski hâli accent'in %45 saydam hâliydi ve
+   ÖLÇÜLDÜ: 2.27:1 (koyu) / 1.88:1 (açık), WCAG 1.4.11'in 3:1 eşiğinin altında.
+   Saydamlık kaldırıldı: 6.11:1 (koyu) / 4.51:1 (açık) — renk aynı, yalnızca opak.
+
+   `outline-offset` KORUNDU ve kritik: halka ögenin 2px DIŞINA çizildiği için, vurgu renkli bir
+   düğmenin üzerinde odak halkası düğmenin KENDİ rengiyle değil, arkasındaki panel zeminiyle
+   karşılaştırılır. Aksi hâlde "mavi düğme üzerinde mavi halka" görünmez olurdu (o eşleşme
+   ölçüldü: 1.00:1). Panel zeminine karşı ölçüm: 6.11 (koyu) / 4.51 (açık).
+
+   YALNIZ `outline` kullanılıyor, `box-shadow` DEĞİL: düğmelerin kendi `box-shadow`u var ve
+   buradan gölge yazmak onları ezerdi. `outline` yerleşimi de etkilemez, yani hiçbir satır kaymaz. */
 :focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-1) 45%, transparent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -209,9 +323,13 @@ select {
 
 .panel {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
   min-width: 0;
-  padding: 16px 18px;
+  /* 16px 18px -> her yandan 16px. 18px ölçek dışıydı ve asimetri bir karar değil, birikmiş bir
+     sapmaydı (dikey 16 iken yatay 18). Yan fayda ölçülebilir: her panel yatayda 4px genişler,
+     bu da tabloların sütunlarına giden alan demek — yoğun veri gösteren bir panelde 4px bedava
+     sütun genişliğidir. */
+  padding: var(--sp-16);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
   background: var(--surface-0);
@@ -227,12 +345,12 @@ select {
 }
 
 .panel h2 {
-  font-size: 1.18rem;
+  font-size: var(--fs-xl);
   font-weight: 660;
 }
 
 .panel h3 {
-  font-size: 1rem;
+  font-size: var(--fs-lg);
   font-weight: 640;
 }
 
@@ -243,9 +361,14 @@ select {
 
 .notice {
   margin: 0;
-  padding: 11px 13px;
+  padding: var(--sp-12);
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--accent-1) 25%, transparent);
+  /* %25 -> %35. ÖLÇÜLDÜ: eski kenar açık temada zemine karşı 1.40:1, yani kutunun sınırı
+     pratikte yoktu ve bildirim akıştaki düz bir paragraf gibi okunuyordu.
+     NOT — bu bir WCAG düzeltmesi DEĞİL: bildirim bir arayüz DENETİMİ değil, statik bir metin
+     bloğu; 1.4.11'in 3:1 kuralı buraya uygulanmaz. Bu yüzden eşiğe zorlanmadı, yalnız kutunun
+     kenarı seçilebilir hâle getirildi. İçindeki metin zaten 8.78:1 ile geçiyordu. */
+  border: 1px solid color-mix(in srgb, var(--accent-1) 35%, transparent);
   background: color-mix(in srgb, var(--accent-1) 9%, transparent);
   color: var(--text-soft);
   white-space: pre-wrap;
@@ -260,7 +383,7 @@ select {
 
 .module-shell {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .module-head,
@@ -269,7 +392,7 @@ select {
 .row-actions {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
 }
 
@@ -286,7 +409,7 @@ select {
 }
 
 .module-toolbar {
-  padding: 8px;
+  padding: var(--sp-8);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-0);
@@ -294,8 +417,8 @@ select {
 
 .segmented-tabs {
   display: flex;
-  gap: 3px;
-  padding: 4px;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-0);
@@ -306,7 +429,10 @@ select {
 .segmented-tabs button {
   flex: 0 0 auto;
   min-height: 32px;
-  padding: 7px 14px;
+  /* 7px 14px -> --sp-6 --sp-12. Yatayda 14 yerine 12 SEÇİLDİ (16 değil): şerit `overflow-x: auto`,
+     yani sekmeler sığmayınca kaydırma çubuğuna düşüyor. Dar tutmak, kaydırmadan görünen sekme
+     sayısını artırır. Yükseklik değişmez: 6 + 6 + 19.575 = 31.6px, `min-height: 32px` kazanır. */
+  padding: var(--sp-6) var(--sp-12);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
@@ -331,8 +457,8 @@ select {
 
 .form-surface {
   display: grid;
-  gap: 11px;
-  padding: 12px;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-0);
@@ -341,7 +467,7 @@ select {
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 11px;
+  gap: var(--sp-12);
 }
 
 .form-grid.two {
@@ -358,19 +484,19 @@ select {
 .form-grid label:not(:where(.check-field, .checkbox-field, .checkbox-row)),
 .stacked-field {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .field-label {
   color: var(--text-soft);
-  font-size: 0.92rem;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
 .check-field {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   color: var(--text-soft);
 }
 
@@ -383,8 +509,8 @@ select {
 .checkbox-field {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding-bottom: 6px;
+  gap: var(--sp-6);
+  padding-bottom: var(--sp-6);
 }
 
 .checkbox-field input {
@@ -399,11 +525,19 @@ select {
   background: var(--surface-0);
 }
 
+/* SATIR YOĞUNLUĞU — ölçülerek karar verildi, göz kararıyla değil.
+   Eski: dikey 9px dolgu -> satır yüksekliği 9 + 9 + (13.5px x 1.45 = 19.575) + 1px kenar = 38.6px.
+   Referans olarak istenen Plesk'in liste satırı ~40px. Yani mevcut yoğunluk zaten hedefin
+   1.4px yakınındaydı; burada "gevşek" ya da "sıkışık" bir sorun YOKTU ve satırları belirgin
+   biçimde açmak ya da kısmak yanlış olurdu.
+   Yapılan tek şey ölçeğe oturtmak: 9 -> --sp-10 (satır 40.6px, referansla aynı hizada),
+   11 -> --sp-12 yatayda. Bedeli ölçüldü: 1080p'de ~700px'lik bir tablo alanında görünen satır
+   18 -> 17'ye iner. Bir satır karşılığında hem ölçek tutarlılığı hem referans yoğunluk alınıyor. */
 .data-row {
   display: grid;
   min-width: 720px;
-  padding: 9px 11px;
-  gap: 12px;
+  padding: var(--sp-10) var(--sp-12);
+  gap: var(--sp-12);
   align-items: center;
   border-bottom: 1px solid var(--panel-border);
 }
@@ -426,7 +560,7 @@ select {
 
 .data-row.table-head {
   color: var(--text-soft);
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0;
   background: var(--surface-2);
@@ -438,7 +572,7 @@ select {
 
 .cell-main {
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
   min-width: 0;
 }
 
@@ -452,13 +586,17 @@ select {
   display: inline-flex;
   width: fit-content;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: var(--sp-6);
+  /* Dikeyde 3px iki adımın (2 ve 4) TAM ORTASINDA kalıyordu; --sp-2 seçildi, --sp-4 değil.
+     Hesap: rozet yüksekliği --sp-2 ile 2 + 2 + (0.78rem x 13.5 x 1.45 = 15.3) = 19.3px, satırın
+     metin yüksekliğinin (19.575px) ALTINDA kalır ve satır boyuna hiç dokunmaz. --sp-4 seçilseydi
+     23.3px olup satırı ~3.7px UZATACAKTI; tablo yoğunluğu bir rozet dolgusu yüzünden bozulurdu. */
+  padding: var(--sp-2) var(--sp-10);
   border-radius: 999px;
   border: 1px solid transparent;
   background: var(--ring-track);
   color: var(--text-soft);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   letter-spacing: 0.01em;
 }
@@ -484,13 +622,13 @@ select {
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
+  gap: var(--sp-8);
 }
 
 .summary-item {
   display: grid;
-  gap: 3px;
-  padding: 11px 12px;
+  gap: var(--sp-4);
+  padding: var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-0);
@@ -498,7 +636,7 @@ select {
 
 .summary-item span {
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--fs-2xs);
 }
 
 .summary-item strong {
@@ -506,7 +644,7 @@ select {
 }
 
 .empty-state {
-  padding: 28px 16px;
+  padding: var(--sp-28) var(--sp-16);
   text-align: center;
 }
 
@@ -514,13 +652,13 @@ select {
   min-height: 260px;
   max-height: 520px;
   margin: 0;
-  padding: 13px;
+  padding: var(--sp-12);
   overflow: auto;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: #0a0e16;
   color: #ccd6e4;
-  font: 0.86rem/1.55 "Cascadia Code", "Consolas", monospace;
+  font: var(--fs-sm)/1.55 "Cascadia Code", "Consolas", monospace;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -535,29 +673,46 @@ textarea,
 select {
   width: 100%;
   min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid var(--panel-border);
+  /* 7px -> --sp-6: ölçekteki en yakın adım VE yüksekliği koruyan adım.
+     Hesap: 6 + 6 + satır yüksekliği (13.5px x 1.45 = 19.575) + 2px kenar = 33.6px, yani
+     `min-height: 34px` yine kazanıyor ve alan bugünkü boyunda kalıyor. `--sp-8` seçilseydi
+     37.6px'e çıkıp panelin BÜTÜN formlarını uzatacaktı. */
+  padding: var(--sp-6) var(--sp-10);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   background: var(--input-bg);
   color: var(--text-strong);
   transition: border-color 0.15s ease;
 }
 
+/* ÖLÇÜLDÜ, eski `accent %55 saydam`: 2.80:1 (koyu) / 2.20:1 (açık) — 3:1 altında, yani odaklanan
+   alanın kenarı odaksızdan zar zor ayrılıyordu. Opak accent: 6.36:1 (koyu) / 4.51:1 (açık). */
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: color-mix(in srgb, var(--accent-1) 55%, transparent);
+  border-color: var(--accent-1);
 }
 
 textarea {
   resize: vertical;
 }
 
+/* DÜĞME DOLGUSU — okunurluk için değişti, biçim için değil.
+   Eski gradyan üç duraklıydı: `accent-1 %92 + beyaz` -> `accent-1` -> `accent-2`. ÖLÇÜLDÜ:
+   beyaz etiket metni orta durakta 2.80:1, en üst durakta daha da düşük; yalnız en alt durak
+   (4.51:1) eşiği geçiyordu. Yani panelin EN ÇOK basılan ögesinin yazısı, yüzeyinin büyük
+   kısmında WCAG AA'nın altındaydı.
+   Yeni gradyan iki duraklı ve HER NOKTASI eşiği geçiyor (üst 4.51, alt ~6.2 ölçüldü). Yön,
+   yumuşaklık ve "üstten ışık alan düğme" karakteri korundu; yalnız aralık koyulaştırıldı.
+   Açık temada duraklar bugünkü renklere eşitlendi (orada zaten geçiyordu), o yüzden VARSAYILAN
+   temanın düğmeleri gözle görülür biçimde DEĞİŞMEZ. */
 button {
   min-height: 34px;
-  padding: 7px 13px;
+  /* 7px 13px -> --sp-6 --sp-12. Yükseklik etkilenmez: 6 + 6 + (13.5 x 1.25) = 28.9px, zaten
+     `min-height: 34px` kazanıyor. Yatayda 1px daralma, ölçeğe girmek için. */
+  padding: var(--sp-6) var(--sp-12);
   border-radius: var(--radius-sm);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-1) 92%, white) 0%, var(--accent-1) 55%, var(--accent-2) 100%);
+  background: linear-gradient(180deg, var(--accent-fill-top) 0%, var(--accent-fill-bottom) 100%);
   color: var(--on-accent);
   font-weight: 600;
   line-height: 1.25;
@@ -584,25 +739,76 @@ button.secondary {
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
 }
 
+/* Birincil düğmeyle aynı gerekçe: ÖLÇÜLDÜ, #fff1f1 metin `--danger-1` üzerinde 3.11:1 idi.
+   Yeni üst durak 4.53:1, alt durak 6.69:1. Bunlar SİLME/DURDURMA düğmeleri — yazısının
+   okunmasının en çok önemli olduğu yer tam olarak burası. */
 button.danger {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--danger-1) 92%, white) 0%, var(--danger-1) 55%, #97333c 100%);
+  background: linear-gradient(180deg, var(--danger-fill-top) 0%, var(--danger-fill-bottom) 100%);
   color: #fff1f1;
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.12), 0 2px 8px -3px color-mix(in srgb, var(--danger-1) 55%, transparent);
 }
 
 button.compact {
   min-height: 30px;
-  padding: 5px 9px;
+  /* 5px 9px -> --sp-4 --sp-8; yükseklik yine `min-height: 30px` ile belirleniyor, değişmez. */
+  padding: var(--sp-4) var(--sp-8);
 }
 
+/* DEVRE DIŞI DÜĞME.
+   ÖLÇÜLDÜ ve şaşırtıcı çıktı: opaklığı yükseltmek okunurluğu DÜŞÜRÜYOR — 0.68 -> 3.15:1,
+   0.75 -> 3.13, 0.85 -> 3.03, 0.90 -> 2.97. Sebebi, `opacity`nin metni ve dolguyu AYNI ANDA
+   zemine doğru soldurması: iki taraf birbirine yaklaşıyor. Yani "opaklığı biraz artıralım"
+   düzeltmesi işe yaramazdı; kaldıraç yanlış.
+   Bu yüzden dolgu düz bir yüzeye alındı ve metin `--text-muted`e verildi: ölçüldü 6.00:1 (koyu) /
+   5.24:1 (açık). Yan fayda görsel: solmuş mavi bir düğme hâlâ "birincil ve basılabilir" diye
+   okunuyordu; gri düz yüzey "şu an edilgen" diye okunur (Plesk ve cPanel de böyle yapar).
+
+   `cursor: wait` KORUNDU — ölçüldü: şablonlardaki `:disabled` bağlamalarının ~130'u `busy` /
+   `loading` gibi bir iş sürüyor durumuna, yalnız ~10'u form doğrulamasına bakıyor. Yani imleç
+   çoğunluk için DOĞRU; CSS bu ikisini ayırt edemediği için değiştirmek çoğunluğu bozardı. */
 button:disabled {
-  opacity: 0.68;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  box-shadow: none;
+  opacity: 1;
   cursor: wait;
+}
+
+/* Sekme şeridi DÜZ kalmalı: üstteki devre dışı dolgusu ile `.segmented-tabs button` aynı
+   özgüllükte (0,1,1) ve devre dışı kuralı dosyada SONRA geldiği için kazanıyor; bu olmasaydı
+   edilgen bir sekme birden gri bir kutuya dönüşürdü. */
+.segmented-tabs button:disabled {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ARA GENİŞLİK — ÖLÇÜLEREK eklendi, 721-900px arasındaki boşluğu kapatır.
+   Eskiden bu dosyada tek bir sütun kırılımı vardı: 720px'de 4 ve 3 sütun DOĞRUDAN 1 sütuna
+   düşüyordu. Arada kalan aralıkta hesap şöyleydi (MainLayout: kenar menü 900-1200px arasında
+   yatay şeride dönüyor, yani içerik tam genişlik):
+     768px ekran -> panel içi ~720px kullanılabilir.
+       .summary-strip 4 sütun, 8px aralık  -> (720 - 24) / 4 = 174px/kart
+       .form-grid     3 sütun, 12px aralık -> (720 - 24) / 3 = 232px/alan
+     900px ekran -> panel içi ~869px.
+       .summary-strip -> 211px/kart , .form-grid -> 282px/alan
+   174px'lik bir özet kartı "Toplam disk kullanımı" gibi bir etiketi taşıyamaz; 232px'lik bir
+   alan alan adı ya da dosya yolu için dardır. İki sütuna düşürünce aynı 900px ekranda
+   kart 430px, alan 428px olur.
+   Kırılım noktası UYDURULMADI: MainLayout'un kenar menüyü çekmeceye aldığı 900px ile aynı
+   nokta seçildi, böylece yerleşim tek bir eşikte birlikte değişir. */
+@media (max-width: 900px) {
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
   .panel {
-    padding: 12px;
+    padding: var(--sp-12);
     border-radius: var(--radius-md);
   }
 
@@ -646,7 +852,7 @@ button:disabled {
 
   button.compact {
     min-height: 38px;
-    padding: 7px 11px;
+    padding: var(--sp-8) var(--sp-12);
   }
 
   input,
@@ -673,9 +879,9 @@ button:disabled {
 .setting-row {
   display: grid;
   grid-template-columns: 190px minmax(0, 0.52fr) minmax(220px, 1fr);
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: center;
-  padding: 11px 0;
+  padding: var(--sp-12) 0;
   border-top: 1px solid var(--panel-border);
 }
 
@@ -689,7 +895,7 @@ button:disabled {
 
 .setting-row > span {
   color: var(--text-soft);
-  font-size: 0.79rem;
+  font-size: var(--fs-2xs);
   font-weight: 850;
 }
 
@@ -714,8 +920,8 @@ button:disabled {
      izgara satiri kadardir, dolayisiyla asagi kaydirildiginda tutunacak yeri kalmiyor.
      Gercek cozum ekrana sabitlemek: mesaj, kullanici sayfanin neresinde olursa olsun gorunur. */
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: var(--sp-16);
+  bottom: var(--sp-16);
   z-index: 60;
   max-width: min(420px, calc(100vw - 32px));
   margin: 0;
@@ -725,8 +931,8 @@ button:disabled {
 /* Dar ekranda kose yerine tam genislik: 420px'lik bir kutu telefonda ekranin yarisini kaplardi. */
 @media (max-width: 520px) {
   .page-notice {
-    right: 12px;
-    left: 12px;
+    right: var(--sp-12);
+    left: var(--sp-12);
     max-width: none;
   }
 }
@@ -747,4 +953,37 @@ button:disabled {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ==========================================================================
+   HAREKET AZALTMA — işletim sistemi ayarına saygı.
+
+   SAYILDI: panelde `prefers-reduced-motion` bloğu olan 5 bileşen vardı
+   (RunningTaskBanner, SiteHealthStrip, CronView, MigrationView, MonitoringView), ama bu
+   dosyada HİÇ yoktu. Oysa panelin en çok tekrarlanan hareketi tam olarak burada tanımlı:
+   her düğmenin hover'da 1px yukarı zıplaması (`transform: translateY(-1px)`) ve gölge/parlaklık
+   geçişleri. Yani ayarı açan kullanıcı beş bileşende korunuyor, geriye kalan bütün panelde
+   korunmuyordu — yarım bir uygulama.
+
+   Kural evrensel ve `!important`lı: bileşenlerin KAPSAMLI (scoped) stilleri bu dosyadan daha
+   yüksek özgüllükte ([data-v] niteliği ekliyorlar), `!important` olmadan bu blok onları ezemez
+   ve hareket 87 bileşenin çoğunda sürerdi.
+   Süre sıfır değil 0.01ms: `transitionend` / `animationend` bekleyen bir kod varsa olay YİNE
+   tetiklensin (0s bazı tarayıcılarda olayı hiç üretmez ve o kodu asılı bırakır).
+   `scroll-behavior: auto`: yumuşak kaydırma da bir harekettir ve baş dönmesi tetikleyicisidir. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Geçiş süresini sıfırlamak hedefi kaldırmaz: hover'da düğme yine ANINDA 1px zıplardı.
+     Dönüşümün kendisi de iptal ediliyor. */
+  button:not(:disabled):hover {
+    transform: none !important;
+  }
 }

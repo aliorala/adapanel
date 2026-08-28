@@ -88,7 +88,7 @@
         :interrupted-label="serverBackup.interruptedText.value"
         @dismiss="serverBackup.dismissInterrupted" />
 
-      <button class="compact" :disabled="busy" @click="createBackup">
+      <button class="compact" v-bind="writeGate(busy)" @click="createBackup">
         {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
       </button>
     </div>
@@ -186,7 +186,7 @@
                 <button class="secondary compact" :disabled="downloadingId === record.id" @click="download(record)">
                   {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
                 </button>
-                <button class="secondary compact" :disabled="restoringId === record.id" @click="restore(record)">
+                <button class="secondary compact" v-bind="writeGate(restoringId === record.id)" @click="restore(record)">
                   {{ restoringId === record.id ? t("panel.backup.restoring") : t("panel.backup.restore") }}
                 </button>
               </div>
@@ -223,13 +223,19 @@ import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
 import { useNotice, useSectionError } from "../composables/useNotice";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { runningJobLabel, useRunningTask, useServerRunningTask } from "../composables/useRunningTask";
 import { copyToClipboard } from "../utils/clipboard";
 import { maskSecretsInUri } from "../utils/url";
+import { formatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
 const { prompt } = usePrompt();
+// Askidaki abonelikte YAZMA dugmeleri basilmadan once pasiflesir ve sebebini soyler
+// (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri (yenile, indir) kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 
@@ -538,23 +544,14 @@ async function restore(record: BackupRecord) {
   });
 }
 
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatSize(bytes: number): string {
-  if (!bytes) {
-    return "0 B";
-  }
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
+  return formatBytes(bytes, t);
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+  return formatDateTime(iso);
 }
 </script>
 

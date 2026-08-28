@@ -84,7 +84,7 @@ watch(() => props.siteName, load);
 
 <style scoped>
 .repair-notice {
-  border: 1px solid var(--warn-border, #e0b400);
+  border: 1px solid var(--warn-1);
   border-radius: 8px;
   padding: 0.75rem 1rem;
   margin: 0.75rem 0;
@@ -92,8 +92,8 @@ watch(() => props.siteName, load);
 }
 
 .repair-notice.fail {
-  border-color: var(--fail-border, #d64545);
-  background: var(--fail-bg, rgba(214, 69, 69, 0.08));
+  border-color: var(--danger-1);
+  background: var(--danger-bg);
 }
 
 .repair-head {

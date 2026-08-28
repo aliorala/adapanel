@@ -339,6 +339,7 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useSectionError } from "../composables/useNotice";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -1115,8 +1116,9 @@ function taskStateClass(value: string) {
   return state.includes("ready") || state.includes("running") ? "ok" : state.includes("disabled") ? "warn" : "";
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatDateTime(value, "-");
 }
 
 function showNotice(message: string, isError: boolean) {
@@ -1179,7 +1181,7 @@ function resolveApiMessage(error: unknown) {
 /* Uyarı niteliğindeki alt satır (çalışma zamanı yok / devre dışı): rozete gerek yok, ama düz
    gri de olmamalı — kullanıcı bunun bir bilgi değil bir eksiklik olduğunu görmeli. */
 .cell-flag {
-  color: var(--warn-text, #a07800);
+  color: var(--warn-text);
   font-weight: 600;
 }
 
@@ -1199,15 +1201,15 @@ function resolveApiMessage(error: unknown) {
 /* Süren çalışma kutusu NÖTR görünür: bilgi verir, alarm çalmaz. Yalnızca kullanıcının kendi
    verdiği süre sınırı aşıldığında sarıya döner (.alarm). */
 .running-notice {
-  border: 1px solid color-mix(in srgb, var(--accent-1, #4b7bec) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-1) 40%, transparent);
   border-radius: 8px;
   padding: 0.7rem 1rem;
   margin-bottom: 0.9rem;
-  background: color-mix(in srgb, var(--accent-1, #4b7bec) 7%, transparent);
+  background: color-mix(in srgb, var(--accent-1) 7%, transparent);
 }
 
 .running-notice.alarm {
-  border-color: var(--warn-border, #e0b400);
+  border-color: var(--warn-1);
   background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 
@@ -1232,11 +1234,11 @@ function resolveApiMessage(error: unknown) {
 /* Devre dışı satır: soluk bir rozet fark edilmiyordu, satırın kendisi ayrışmalı. */
 .row-disabled {
   opacity: 0.68;
-  border-left: 3px solid var(--warn-border, #e0b400);
+  border-left: 3px solid var(--warn-1);
 }
 
 .row-running {
-  border-left: 3px solid var(--accent-1, #4b7bec);
+  border-left: 3px solid var(--accent-1);
 }
 
 /* BİR GÖREV = BİR GRUP. Ayırıcı çizgi artık satırın değil GRUBUN sonunda; böylece görevin
@@ -1275,15 +1277,15 @@ function resolveApiMessage(error: unknown) {
 }
 
 .row-explain.warn {
-  color: var(--warn-text, #a07800);
-  border-left-color: var(--warn-border, #e0b400);
+  color: var(--warn-text);
+  border-left-color: var(--warn-1);
   background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 
 .row-explain.live {
-  color: var(--accent-1, #4b7bec);
-  border-left-color: var(--accent-1, #4b7bec);
-  background: color-mix(in srgb, var(--accent-1, #4b7bec) 8%, transparent);
+  color: var(--accent-1);
+  border-left-color: var(--accent-1);
+  background: color-mix(in srgb, var(--accent-1) 8%, transparent);
 }
 
 .run-live {
@@ -1292,19 +1294,19 @@ function resolveApiMessage(error: unknown) {
   gap: 0.6rem;
   margin: 0 0.9rem 0.55rem;
   padding: 0.5rem 0.7rem;
-  border-left: 3px solid var(--accent-1, #4b7bec);
+  border-left: 3px solid var(--accent-1);
   border-radius: 0 6px 6px 0;
-  background: color-mix(in srgb, var(--accent-1, #4b7bec) 7%, transparent);
+  background: color-mix(in srgb, var(--accent-1) 7%, transparent);
   font-size: 0.86rem;
 }
 
 .run-live.ok {
-  border-left-color: var(--success-1, #2e9e5b);
-  background: color-mix(in srgb, var(--success-1, #2e9e5b) 8%, transparent);
+  border-left-color: var(--ok-1);
+  background: color-mix(in srgb, var(--ok-1) 8%, transparent);
 }
 
 .run-live.warn {
-  border-left-color: var(--warn-border, #e0b400);
+  border-left-color: var(--warn-1);
   background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 
@@ -1343,7 +1345,7 @@ function resolveApiMessage(error: unknown) {
   margin: 0;
   padding: 0.5rem 0.7rem;
   border-radius: 6px;
-  border-left: 3px solid var(--warn-border, #e0b400);
+  border-left: 3px solid var(--warn-1);
   background: var(--warn-bg, rgba(224, 180, 0, 0.07));
   line-height: 1.5;
 }
@@ -1352,7 +1354,7 @@ function resolveApiMessage(error: unknown) {
   margin: 0 0 0.8rem;
   padding: 0.45rem 0.75rem;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--accent-1, #4b7bec) 10%, transparent);
+  background: color-mix(in srgb, var(--accent-1) 10%, transparent);
   font-size: 0.86rem;
 }
 

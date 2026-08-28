@@ -29,7 +29,7 @@
       <section v-if="rotation" class="rotation-card">
         <div class="rotation-head">
           <h4>{{ t("panel.siteLogs.rotationTitle") }}</h4>
-          <button class="secondary compact" :disabled="rotationBusy" @click="runRotation">
+          <button class="secondary compact" v-bind="writeGate(rotationBusy)" @click="runRotation">
             {{ rotationBusy ? t("panel.siteLogs.loading") : t("panel.siteLogs.rotationRun") }}
           </button>
         </div>
@@ -78,10 +78,16 @@ import {
 } from "../api/logs";
 import { extractApiMessage } from "../stores/auth";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { useSitesStore } from "../stores/sites";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+// Dondurme DOSYA SILER — yazma islemidir. Askidaki abonelikte dugme basilmadan once pasiflesir
+// (bkz. composables/useSubscriptionGate.ts). Gunlugu yenileme bir OKUMA'dir, kapiya girmez.
+const { writeGate } = useSubscriptionGate();
 const sitesStore = useSitesStore();
 const siteName = computed(() => sitesStore.selectedSiteName);
 const log = ref<LogTail | null>(null);
@@ -158,17 +164,14 @@ function gosterHata(error: unknown) {
   noticeError.value = true;
 }
 
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatBytes(value: number) {
-  if (!value) {
-    return "0 MB";
-  }
-  const mb = value / (1024 * 1024);
-  return mb < 1 ? `${Math.max(1, Math.round(value / 1024))} KB` : `${mb.toFixed(1)} MB`;
+  return sharedFormatBytes(value, t);
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(iso: string) {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+  return formatDateTime(iso);
 }
 </script>
 
@@ -206,6 +209,8 @@ function formatDate(iso: string) {
   padding: 14px 16px;
   border: 1px solid var(--panel-border);
   border-radius: 10px;
+  /* Koyu konsol yüzeyi BİLEREK sabit (bkz. base.css `pre` kuralı; bu öge bir <pre>, yani
+     açık temada base.css zaten devralıyor). Kabuk çıktısı açık zeminde okunmaz. */
   background: #0b0f17;
   color: #d6e2f0;
   font-family: var(--font-mono, ui-monospace, "Cascadia Code", Consolas, monospace);

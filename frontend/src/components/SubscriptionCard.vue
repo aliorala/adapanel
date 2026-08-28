@@ -104,6 +104,7 @@ import {
 import { getServicePlans, type ServicePlan } from "../api/servicePlans";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useConfirm } from "./ConfirmDialog.vue";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
 const props = withDefaults(
   defineProps<{
@@ -140,16 +141,9 @@ const trafficClass = computed(() =>
   trafficPercent.value >= 100 ? "over" : trafficPercent.value >= 80 ? "warn" : "ok"
 );
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  const birimler = ["KB", "MB", "GB", "TB"];
-  let deger = bytes / 1024;
-  let index = 0;
-  while (deger >= 1024 && index < birimler.length - 1) {
-    deger /= 1024;
-    index++;
-  }
-  return `${deger.toFixed(deger >= 100 ? 0 : 1)} ${birimler[index]}`;
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
+function formatBytes(value: number) {
+  return sharedFormatBytes(value, t);
 }
 
 function formatDate(iso: string) {
@@ -251,9 +245,9 @@ onMounted(() => void load());
   transition: width 0.3s ease;
 }
 
-.usage-fill.ok { background: var(--ok-1, #2e9e5b); }
-.usage-fill.warn { background: var(--warn-1, #e0b400); }
-.usage-fill.over { background: var(--danger-1, #d9534f); }
+.usage-fill.ok { background: var(--ok-1); }
+.usage-fill.warn { background: var(--warn-1); }
+.usage-fill.over { background: var(--danger-1); }
 
 /* Ölçülemeyen değer, ölçülmüş bir değer gibi görünmemeli. */
 .unmeasured {

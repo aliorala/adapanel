@@ -411,9 +411,9 @@ function showNotice(message: string, isError: boolean) {
 
 .up-to-date {
   padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--ok-1, #22c55e) 40%, var(--panel-border));
+  border: 1px solid color-mix(in srgb, var(--ok-1) 40%, var(--panel-border));
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--ok-1, #22c55e) 8%, var(--surface-1));
+  background: color-mix(in srgb, var(--ok-1) 8%, var(--surface-1));
   color: var(--text-strong);
 }
 
@@ -436,14 +436,14 @@ function showNotice(message: string, isError: boolean) {
 .progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: var(--accent-1, #38bdf8);
+  background: var(--accent-1);
   /* Adımlar arası sıçrama yumuşasın; süre kısa tutuluyor ki ilerleme "akıyormuş" gibi görünüp
      olduğundan fazlasını ima etmesin. */
   transition: width 400ms ease;
 }
 
 .progress-fill.done {
-  background: var(--ok-1, #22c55e);
+  background: var(--ok-1);
 }
 
 .progress-meta {

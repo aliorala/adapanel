@@ -157,6 +157,7 @@ import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertifica
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -305,8 +306,9 @@ function expiryLabel(value: string) {
   return t("panel.ssl.daysRemaining", { days });
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatDateTime(value, "-");
 }
 
 function showNotice(message: string, isError: boolean) {
@@ -351,8 +353,8 @@ function resolveApiMessage(error: unknown) {
   margin: 0;
   padding: 0.4rem 0.9rem 0.6rem;
   font-size: 0.84rem;
-  color: var(--warn-text, #a07800);
-  border-left: 3px solid var(--warn-border, #e0b400);
+  color: var(--warn-text);
+  border-left: 3px solid var(--warn-1);
   background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 

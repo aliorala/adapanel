@@ -235,6 +235,7 @@ import {
   type ErrorReportingSettings
 } from "../api/errorReports";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 
@@ -333,8 +334,9 @@ function truncate(value: string, max: number) {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null) {
-  return value ? new Date(value).toLocaleString() : t("panel.common.notAvailable");
+  return formatDateTime(value, t("panel.common.notAvailable"));
 }
 
 function showNotice(message: string, isError: boolean) {

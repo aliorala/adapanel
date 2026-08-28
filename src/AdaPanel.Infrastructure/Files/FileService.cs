@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.IO.Compression;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Files;
@@ -48,6 +48,23 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// </para>
     /// </remarks>
     private const int BoyutSureButcesiMs = 15_000;
+
+    /// <summary>Klasör KOPYALAMANIN gezebileceği EN ÇOK öge (dosya + klasör) sayısı.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden boyut hesabıyla AYNI değer (200.000):</b> ikisi de dosya yöneticisinin AYNI
+    /// ekranında, aynı klasör üzerinde, aynı kullanıcı tarafından tetiklenir. Panelin TAM
+    /// ÖLÇEMEYECEĞİNİ söylediği bir klasörü sessizce TAM KOPYALAMASI tutarsız olurdu: kullanıcı
+    /// "boyutu hesaplanamadı" uyarısı aldığı klasörün kopyasının tam olduğunu varsayardı. Aynı
+    /// tavan, aynı ekranda aynı cevabı verir.
+    /// </para>
+    /// <para>
+    /// Değerin ölçülmüş gerekçesi <see cref="BoyutOgeButcesi"/>'nde yazılı ve burada tekrar
+    /// edilmiyor; tek fark kopyalamada öge başına maliyetin daha yüksek olmasıdır (okuma değil
+    /// yazma) — bu, tavanı DAHA da kötümser tarafa iter, yani sınır fazlasıyla güvenli kalır.
+    /// </para>
+    /// </remarks>
+    private const int KopyaOgeButcesi = 200_000;
 
     public async Task<FileWorkspaceDto> GetWorkspaceAsync(string path, CancellationToken cancellationToken = default)
     {
@@ -112,20 +129,37 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             // istemcinin dosyasını sıfırlar. `FileMode.CreateNew` bakmayı ve yaratmayı işletim
             // sisteminde TEK işleme indirir: dosya varsa yaratma hiç olmaz.
             //
-            // Klasör de burada yakalanır: aynı adlı bir KLASÖR varsa `CreateNew` yine hata verir
-            // ve kullanıcı "zaten var" cevabı alır — sessizce başarısız olmaz.
+            // ==========================================================================
+            // YARATMA VE YAZMA AYRI İKİ ADIM — ve ayrı olmaları ZORUNLU.
+            //
+            // ÖNCEKİ HÂLDE tek bir `try` hem `CreateNew` ile YARATMAYI hem de YAZMAYI kapsıyordu ve
+            // süzgeç `catch (IOException) when (File.Exists(...))` idi. Bu süzgeç kendi yorumunun
+            // TERSİNİ yapıyordu: `CreateNew` geçtiği anda dosya BİZİM tarafımızdan yaratılmıştır,
+            // yani `File.Exists` o noktadan sonra HER ZAMAN true'dur. Süzgeç "koşullu" değil,
+            // fiilen koşulsuzdu — yazma sırasındaki HER IOException (disk dolu, antivirüs kilidi,
+            // ağ payı düştü) kullanıcıya "bu dosya zaten var" diye dönüyordu. Asıl sebep hiçbir
+            // yerde görünmüyordu.
+            //
+            // İkinci ve daha kötü yarısı ÖLÇÜLDÜ (bu makinede, gerçek dosya sistemine yazarak):
+            // yazma yarıda kesildiğinde diskte 3 BAYTLIK yarım bir dosya KALIYORDU ve geri
+            // sarılmıyordu. Kullanıcı tekrar denediğinde dosya artık GERÇEKTEN vardı ve 409
+            // alıyordu — yani hiç oluşturamadığı bir dosyanın kalıntısı yüzünden kilitleniyordu.
+            //
+            // Bu yüzden: "zaten var" YALNIZ yaratma adımının başarısızlığında söylenir; yazma
+            // sırasındaki hata kendi sebebiyle yukarı çıkar ve yarattığımız dosya GERİ SARILIR.
+            // ==========================================================================
+            FileStream akis;
             try
             {
-                await using var akis = new FileStream(
+                akis = new FileStream(
                     target.PhysicalPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                await using var yazici = new StreamWriter(akis, Encoding.UTF8);
-                await yazici.WriteAsync((request.Content ?? string.Empty).AsMemory(), cancellationToken);
             }
-            catch (IOException) when (File.Exists(target.PhysicalPath))
+            catch (IOException) when (File.Exists(target.PhysicalPath) || Directory.Exists(target.PhysicalPath))
             {
-                // IOException'ın TEK sebebi "zaten var" değildir (disk dolu, dosya kilitli...).
-                // Süzgeç bu yüzden koşullu: yalnızca gerçekten varsa "zaten var" denir, diğer
-                // hatalar olduğu gibi yukarı çıkar ve yanlış bir sebeple maskelenmez.
+                // IOException'ın TEK sebebi "zaten var" değildir (yol çok uzun, aygıt hazır değil...).
+                // Süzgeç bu yüzden koşullu ve ARTIK GERÇEKTEN koşullu: bu noktada dosyayı henüz biz
+                // yaratmadık, dolayısıyla varlık sorgusu bize gerçekten bilgi verir. Yol diskte
+                // yoksa istisna GERÇEK bir G/Ç hatasıdır ve olduğu gibi yukarı çıkar.
                 throw new AppException("files.already_exists", 409, 409);
             }
             catch (UnauthorizedAccessException) when (Directory.Exists(target.PhysicalPath))
@@ -136,6 +170,38 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                 // reddidir ve "zaten var" diye maskelenmesi kullanıcıyı yanlış yere bakmaya
                 // gönderirdi.
                 throw new AppException("files.already_exists", 409, 409);
+            }
+
+            try
+            {
+                await using (akis)
+                {
+                    await using var yazici = new StreamWriter(akis, Encoding.UTF8);
+                    await yazici.WriteAsync((request.Content ?? string.Empty).AsMemory(), cancellationToken);
+                }
+            }
+            catch
+            {
+                // GERİ SARMA. Buraya ancak `CreateNew` BAŞARDIYSA gelinir, yani bu dosya çağrıdan
+                // önce YOKTU: sildiğimiz şey kesinlikle bizim yarattığımız kalıntıdır, kullanıcının
+                // verisi değil. `using` blokları yukarıda kapandığı için tanıtıcı serbesttir
+                // (FileShare.None ile açık bir tanıtıcı silmeyi engellerdi).
+                //
+                // İptal (OperationCanceledException) de buraya düşer ve bilerek öyle: sekmesini
+                // kapatan kullanıcının klasöründe yarım bir dosya kalması, işin hiç yapılmamış
+                // olmasından kötüdür — sonraki denemesi "zaten var" ile reddedilirdi.
+                try
+                {
+                    File.Delete(target.PhysicalPath);
+                }
+                catch (Exception silmeHatasi) when (silmeHatasi is IOException or UnauthorizedAccessException)
+                {
+                    // GERİ SARMA HATASI ASIL HATAYI GİZLEMEZ. Buradan yeni bir istisna atmak,
+                    // kullanıcıya gerçek sebep ("disk dolu") yerine ikincil bir sebep ("dosya
+                    // silinemedi") göstermek olurdu; kalıntı kalır ama sebep kaybolmaz.
+                }
+
+                throw;
             }
         }
         else
@@ -225,7 +291,23 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     /// gerekçesi orada yazılıdır ve burada tekrar edilmez.
     /// </para>
     /// </remarks>
-    public async Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request, CancellationToken cancellationToken = default)
+    public Task<CopyFilesResultDto> CopyAsync(CopyFilesRequest request, CancellationToken cancellationToken = default)
+        => CopyAsync(request, KopyaOgeButcesi, cancellationToken);
+
+    /// <summary>Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden var:</b> bütçe korumasının GERÇEKTEN çalıştığı ancak bütçe DOLDURULARAK
+    /// kanıtlanabilir; üretim değeriyle bu, testte 200.000 dosya kopyalamak demekti. Aynı gerekçe ve
+    /// aynı kalıp <see cref="CalculateSizeAsync(string,int,int,CancellationToken)"/> ve
+    /// <c>CustomerScopeService.GetDiskUsageMbAsync</c>'te de yazılı. Aşırı yükleme
+    /// <c>internal</c>'dır: dışarıya, bütçesi kaldırılabilir bir uç AÇMAZ.
+    /// </para>
+    /// </remarks>
+    internal async Task<CopyFilesResultDto> CopyAsync(
+        CopyFilesRequest request,
+        int ogeButcesi,
+        CancellationToken cancellationToken)
     {
         // Taşımayla AYNI ön hazırlık. Bu satırın kopya bir doğrulama bloğuna dönüşmesi, iki akıştan
         // birinde bir denetimin unutulması demektir — ve o an tek başına deliktir.
@@ -241,11 +323,17 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             },
             cancellationToken);
 
+        // TEK BÜTÇE, BÜTÜN ÖGELER — <see cref="SafeDirectoryWalkBudget"/>'in var oluş sebebi olan
+        // kural: bütçe öge başına verilseydi tavan öge sayısıyla ÇARPILIRDI (8 klasör seçen bir
+        // istek 8 kat daha uzun bir işe hak kazanır) ve bütçe fiilen kalkardı. Aynı karar kota
+        // hesabında ve MeasureAsync'te de verilidir.
+        var butce = new SafeDirectoryWalkBudget(ogeButcesi, int.MaxValue);
+
         var results = new List<CopyFileResultDto>(plan.Items.Count);
         foreach (var item in plan.Items)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            results.Add(CopyOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite, cancellationToken));
+            results.Add(CopyOne(item.Source, item.Target, item.SourcePath, item.TargetPath, request.Overwrite, butce, cancellationToken));
         }
 
         return new CopyFilesResultDto
@@ -440,6 +528,7 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         string sourcePath,
         string targetPath,
         bool overwrite,
+        SafeDirectoryWalkBudget butce,
         CancellationToken cancellationToken)
     {
         var basarisiz = (string anahtar) => new CopyFileResultDto
@@ -490,12 +579,22 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             }
         }
 
-        var baglantiAtlandi = false;
+        var eksiklikAnahtari = string.Empty;
         try
         {
             if (kaynakKlasor)
             {
-                baglantiAtlandi = KlasoruKopyala(source.PhysicalPath, target.PhysicalPath, cancellationToken);
+                var kopya = KlasoruKopyala(source.PhysicalPath, target.PhysicalPath, butce, cancellationToken);
+                if (!kopya.Tamamlandi)
+                {
+                    // Bütçe doldu: yarım kopya GERİ SARILDI (gerekçe KlasoruKopyala'da) ve bu öge
+                    // başarısız raporlanır. İSTİSNA ATILMAZ — bu uç çok ögeli bir isteği karşılar ve
+                    // istisna, bütçe dolmadan ÖNCE düzgün kopyalanan ögelerin raporunu da götürürdü;
+                    // kullanıcı diskte duran kopyaların hangileri olduğunu öğrenemezdi.
+                    return basarisiz(kopya.EksiklikAnahtari);
+                }
+
+                eksiklikAnahtari = kopya.EksiklikAnahtari;
             }
             else
             {
@@ -507,11 +606,24 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         {
             // En sık sebebi: disk dolu, dosya kullanımda ya da yol sınırının aşılması. Yalanlamak
             // yerine bu ögenin kopyalanmadığı raporlanır.
+            //
+            // YARIM KOPYA BIRAKILMAZ: "kopyalanmadı" diyip diskte yarım bir ağaç bırakmak,
+            // kullanıcının raporda görmediği bir kalıntıyla baş başa kalması demekti (üstelik o
+            // kalıntı kotasından da yer yer).
+            KopyayiGeriSar(kaynakKlasor, target.PhysicalPath);
             return basarisiz("files.copy_failed");
         }
         catch (UnauthorizedAccessException)
         {
+            KopyayiGeriSar(kaynakKlasor, target.PhysicalPath);
             return basarisiz("files.copy_denied");
+        }
+        catch (OperationCanceledException)
+        {
+            // İptal edilen istek de yarım kopya bırakmaz; sonra istisna yukarı çıkar (iptal bir
+            // rapor satırı değildir, cevabı bekleyen kimse kalmamıştır).
+            KopyayiGeriSar(kaynakKlasor, target.PhysicalPath);
+            throw;
         }
 
         return new CopyFileResultDto
@@ -522,56 +634,161 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
 
             // Kopya OLUŞTU ama EKSİK: atlanan bağlantı susulmaz. "Tamamlandı" deyip bağlantıyı
             // yutmak, kullanıcının eksik kopyayı tam sanmasına yol açardı.
-            ErrorKey = baglantiAtlandi ? "files.copy_link_skipped" : string.Empty
+            ErrorKey = eksiklikAnahtari
         };
     }
 
+    /// <summary>Yarım kalan KLASÖR kopyasını siler; dosya kopyasında yapacak bir şey yoktur.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden özyinelemeli silme burada GÜVENLİ</b> (oysa bu depoda genel kural onu yasaklar):
+    /// <see cref="CopyOne"/> bu noktaya ancak hedef diskte HİÇ YOKKEN gelir — var olan bir klasör
+    /// <c>files.copy_target_exists</c> ile, var olan bir dosya da (kaynak klasörse) yine aynı
+    /// anahtarla reddedilir. Yani silinen ağacın İÇİNDEKİ HER ŞEY bu çağrıda yazılmıştır ve
+    /// içinde bağlantı da olamaz (kopyalama bağlantı üretmez). Kullanıcının verisine dokunma
+    /// ihtimali sıfırdır.
+    /// </para>
+    /// <para>
+    /// <b>Silme hatası YUTULUR:</b> geri sarma bir en iyi çabadır ve asıl hatanın (bütçe doldu /
+    /// disk dolu / izin reddi) yerine geçemez — kullanıcıya ikincil bir sebep göstermek, gerçek
+    /// sebebi gizlemek olurdu.
+    /// </para>
+    /// </remarks>
+    private static void KopyayiGeriSar(bool kaynakKlasor, string hedef)
+    {
+        if (!kaynakKlasor)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(hedef))
+            {
+                Directory.Delete(hedef, recursive: true);
+            }
+        }
+        catch (Exception istisna) when (istisna is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
     /// <summary>
-    /// Klasörü ÖZYİNELEMELİ kopyalar. Yolu üzerindeki bağlantı (junction/symlink) ögeleri ATLANIR;
-    /// en az bir tanesi atlandıysa <c>true</c> döner.
+    /// Klasörü kopyalar. <b>Ağacı kendi başına GEZMEZ</b> — ortak, bütçeli, bağlantı takip etmeyen
+    /// yürüyüşü kullanır.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Bağlantı neden TAKİP EDİLMEZ:</b> iki ayrı felaket birden. (1) Bağlantı kendi üst ağacını
-    /// gösteriyorsa özyineleme SONSUZ döngüye girer ve diski doldurur. (2) Bağlantı sanal alanın
-    /// DIŞINI gösteriyorsa (panelin veri klasörü, başka kiracının sitesi, <c>C:\Windows</c>) o
-    /// içerik olduğu gibi kiracının okuyabildiği bir klasöre KOPYALANIR — sanal alan denetimini yol
-    /// çözümlemesinde tuttuğumuz hâlde, özyinelemenin içinden delinmiş olurdu.
+    /// <b>Neden ELLE YAZILMIŞ ÖZYİNELEME KALDIRILDI:</b> önceki hâl kendini özyinelemeli çağırıyordu
+    /// ve hiçbir bütçesi yoktu; yani <see cref="SafeDirectoryWalk"/>'un var oluş sebebi olan üç
+    /// kuraldan ikisini (yığınla yürüyüş, bütçe) çiğniyordu — üstelik o dosyanın kendi belgesi
+    /// "panelde bir ağacın fiziksel yol üzerinden gezildiği TEK yer" diyordu ve bu iddia YANLIŞ
+    /// durumdaydı. İki somut tehlike: (1) derin bir ağaçta <c>StackOverflowException</c> — .NET'te
+    /// YAKALANAMAZ, yani bir kiracının klasör ağacı panel sürecini TÜM kiracılar için öldürürdü
+    /// (bu makinede <c>LongPathsEnabled=1</c> ve apphost <c>longPathAware</c>, yani MAX_PATH
+    /// derinlik tavanı YOK — ölçüldü); (2) bütçesiz iş — kiracı milyon ögelik bir ağacı kopyalar,
+    /// birkaç sekmeden tekrarlarsa panel yanıt veremez hâle gelir.
     /// </para>
     /// <para>
-    /// Aynı karar listelemede (<see cref="GetWorkspaceAsync"/>) ve aramada
-    /// (<c>EnumerateSafeFiles</c>) de verilmiştir: bağlantılar panelin dosya görüşünde YOKTUR.
+    /// <b>Bağlantı neden TAKİP EDİLMEZ</b> (kural artık ortak yürüyüşte, gerekçesi burada kalıyor
+    /// çünkü ilk olarak burada verildi): iki ayrı felaket birden. (1) Bağlantı kendi üst ağacını
+    /// gösteriyorsa yürüyüş SONSUZ döngüye girer ve diski doldurur. (2) Bağlantı sanal alanın
+    /// DIŞINI gösteriyorsa (panelin veri klasörü, başka kiracının sitesi, <c>C:\Windows</c>) o
+    /// içerik olduğu gibi kiracının okuyabildiği bir klasöre KOPYALANIR — sanal alan denetimini yol
+    /// çözümlemesinde tuttuğumuz hâlde, kopyalamanın içinden delinmiş olurdu. Aynı karar
+    /// listelemede (<see cref="GetWorkspaceAsync"/>) ve aramada (<c>EnumerateSafeFiles</c>) de
+    /// verilmiştir: bağlantılar panelin dosya görüşünde YOKTUR.
+    /// </para>
+    /// <para>
+    /// <b>BÜTÇE DOLARSA: KISMİ KOPYA BIRAKILMAZ, öge REDDEDİLİR — kararın gerekçesi.</b>
+    /// İki seçenek tartıldı:
+    /// <list type="bullet">
+    /// <item><b>Kısmi rapor</b> (bağlantı atlamasında yaptığımız gibi "kopya oluştu ama eksik").
+    /// Bağlantıda bu doğrudur çünkü atlanan şey kullanıcının hiç GÖRMEDİĞİ bir işaretçidir ve
+    /// kopyanın geri kalanı tamdır. Bütçede ise atlanan şey kullanıcının GERÇEK DOSYALARIDIR ve
+    /// nerede kesildiği rastgeledir: kullanıcı "kopyalandı" yazısına bakıp yarısı olmayan bir
+    /// klasörle çalışmaya devam ederdi. Yedekleme amacıyla kopyalayan biri için bu, veri kaybının
+    /// ta kendisidir.</item>
+    /// <item><b>Reddet ve geri sar</b> (SEÇİLEN). 0.7.6'da içe aktarma için verilen kararla aynı
+    /// yönde ve aynı sebeple: kopyalama bir YAZMA işlemidir. Ama burada bedeli DAHA DÜŞÜK, çünkü
+    /// geri sarma tam ve ucuzdur — içe aktarmada sitenin kökü yana alınmış olduğu için geri sarma
+    /// ayrı bir makine gerektiriyordu; burada hedef klasör bu çağrıdan önce HİÇ YOKTU
+    /// (<see cref="CopyOne"/> aksini reddeder), yani silmek kalıntıyı tam olarak temizler.</item>
+    /// </list>
+    /// İçe aktarmadan tek FARK: orada istisna atılır (tek işlem), burada ÖGE BAŞINA rapor satırı
+    /// üretilir — çünkü bu uç çok ögeli bir isteği karşılar ve istisna, bütçe dolmadan önce düzgün
+    /// kopyalanan ögelerin raporunu da götürürdü.
+    /// </para>
+    /// <para>
+    /// <b>BÜTÇE İSTEK BAŞINADIR, öge başına DEĞİL</b> — nesne <see cref="CopyAsync(CopyFilesRequest,
+    /// int, CancellationToken)"/> içinde bir kez kurulup bütün ögelerde paylaşılır. Öge başına
+    /// verilseydi tavan seçilen öge sayısıyla ÇARPILIR ve bütçe fiilen kalkardı; gerekçesi
+    /// <see cref="SafeDirectoryWalkBudget"/>'te yazılı ve kota hesabında da aynısı uygulanıyor.
+    /// </para>
+    /// <para>
+    /// <b>SÜRE bütçesi bilerek YOKTUR</b> (<see cref="int.MaxValue"/>) — içe aktarma yolundaki
+    /// gerekçenin aynısı: burada ölçülen iş DOSYA KOPYALAMAKTIR ve süresi diskin hızına ve dosya
+    /// BOYUTUNA bağlıdır. Süreye bakan bir bütçe, tek bir 4 GB'lık dosyanın ortasında dolar ve
+    /// neredeyse tamamlanmış meşru bir kopyayı geri sardırırdı. Tehlikenin büyüklüğü ÖGE SAYISIDIR;
+    /// sınırlanması gereken de odur.
     /// </para>
     /// </remarks>
-    private static bool KlasoruKopyala(string kaynak, string hedef, CancellationToken cancellationToken)
+    private static KlasorKopyasi KlasoruKopyala(
+        string kaynak,
+        string hedef,
+        SafeDirectoryWalkBudget butce,
+        CancellationToken cancellationToken)
     {
-        var baglantiAtlandi = false;
         Directory.CreateDirectory(hedef);
 
-        foreach (var oge in new DirectoryInfo(kaynak).EnumerateFileSystemInfos())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+        var baglantiAtlandi = false;
+        var yuruyus = SafeDirectoryWalk.Yuru(
+            kaynak,
+            butce,
+            oge =>
+            {
+                // Göreli yol, KAYNAK KÖKÜNÜN uzunluğuyla kesilerek bulunur; ortak yürüyüş her
+                // ögenin TAM yolunu verir. Klasör, içindekilerden ÖNCE bildirilir — bu
+                // SafeDirectoryWalk sözleşmesinin parçasıdır, yani dosya yazılmadan önce hedef
+                // klasörü var olur.
+                var altHedef = hedef + oge.FullName[kaynak.Length..];
+                if (oge is DirectoryInfo)
+                {
+                    Directory.CreateDirectory(altHedef);
+                    return;
+                }
 
-            if (oge.Attributes.HasFlag(FileAttributes.ReparsePoint))
-            {
-                baglantiAtlandi = true;
-                continue;
-            }
-
-            var altHedef = Path.Combine(hedef, oge.Name);
-            if (oge is DirectoryInfo altKlasor)
-            {
-                baglantiAtlandi |= KlasoruKopyala(altKlasor.FullName, altHedef, cancellationToken);
-            }
-            else
-            {
-                // Hedef klasör bu çağrıda yaratıldı; üzerine yazılacak bir şey yok, bayrak yalnızca
+                // Hedef ağacı bu çağrıda yaratıldı; üzerine yazılacak bir şey yok, bayrak yalnızca
                 // aynı adın iki kez gelmesi gibi imkânsız duruma karşı.
                 File.Copy(oge.FullName, altHedef, overwrite: true);
-            }
+            },
+            null,
+            cancellationToken,
+            () => baglantiAtlandi = true);
+
+        if (yuruyus.Truncated)
+        {
+            KopyayiGeriSar(kaynakKlasor: true, hedef);
+
+            // ERİŞİM REDDİ ESKİ ANAHTARINI KORUR. Önceki hâlde okunamayan bir alt klasör
+            // `EnumerateFileSystemInfos` üzerinden UnauthorizedAccessException atıyor ve öge
+            // `files.copy_denied` ile başarısız raporlanıyordu; ortak yürüyüş o istisnayı yutup
+            // sonucunda bildirdiği için anahtar burada elle geri konur. Aksi hâlde aynı arıza,
+            // hiçbir davranış değişmediği hâlde kullanıcıya bambaşka bir mesajla görünürdü.
+            //
+            // DAVRANIŞ DA AYNI KALIR (öge tümden başarısız): tek fark, artık geriye YARIM bir ağaç
+            // kalmaması. "Kopyalanmadı" deyip diskte yarım bir kopya bırakmak, kullanıcının raporda
+            // görmediği ve kotasından yer yiyen bir kalıntı demekti.
+            return new KlasorKopyasi(
+                false,
+                yuruyus.TruncatedReasonKey == SafeDirectoryWalk.SebepErisimReddi
+                    ? "files.copy_denied"
+                    : yuruyus.TruncatedReasonKey);
         }
 
-        return baglantiAtlandi;
+        // Kopya TAM. Tek eksiklik ihtimali atlanan bağlantıdır ve o susulmaz: kullanıcı eksik
+        // kopyayı tam sanmasın.
+        return new KlasorKopyasi(true, baglantiAtlandi ? "files.copy_link_skipped" : string.Empty);
     }
 
     /// <summary>
@@ -591,6 +808,22 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         {
             throw new AppException("files.invalid_name", 400, 400);
         }
+
+        // AYRILMIŞ AYGIT ADI (CON, NUL, COM1...) DENETİMİ BURADA DEĞİL, <see cref="ResolveTargetAsync"/>
+        // YOLUNDA — ve bu bilinçli bir karar.
+        //
+        // Denetim raporu bu metoda bir WindowsReservedNames çağrısı eklenmesini istiyordu. Ölçüldü:
+        // GEREKSİZ ve zararlı olurdu. Burada üretilen ad hemen ardından CombineVirtualPath ile
+        // hedef yola çevrilip AYNI ResolveTargetAsync kapısından geçiriliyor (bkz.
+        // BuildTransferPlanAsync — "hedef de AYNI kapıdan geçer"), yani aygıt adı zaten orada
+        // yakalanıyor ve aynı `files.invalid_name` anahtarı dönüyor. İkinci bir kopya, davranışı
+        // hiç değiştirmeden kuralı İKİ yere yazmak olurdu — bu depoda liste/kural kopyası beş kez
+        // ısırdı ve WindowsReservedNames'in var oluş sebebi tam olarak buydu.
+        //
+        // Üstelik iki kopya AYNI olmazdı: yol kapısı diskte GERÇEKTEN duran bir adı muaf tutar
+        // (gerekçesi EnsureNoReservedSegments'te: var olan veriye erişimi kapatmamak için), burası
+        // ise tutamazdı — sonuç, var olan bir dosyanın listelenip silinebildiği ama ADININ
+        // verilemediği tutarsız bir panel olurdu.
 
         return kirpilmis;
     }
@@ -895,6 +1128,114 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         };
     }
 
+    /// <inheritdoc />
+    public async Task<DirectorySizeDto> MeasureAsync(string[] paths, CancellationToken cancellationToken = default)
+    {
+        // TEK BÜTÇE, BÜTÜN YOLLAR: kota yolundaki kuralla aynı ve aynı sebeple. Bütçe yol başına
+        // verilseydi tavan yol sayısıyla ÇARPILIRDI — 20 klasör seçen bir istek 20 kat daha uzun
+        // bir işe hak kazanır ve bütçe fiilen kalkardı.
+        var butce = new SafeDirectoryWalkBudget(BoyutOgeButcesi, BoyutSureButcesiMs);
+
+        long toplamBayt = 0;
+        var dosyaSayisi = 0;
+        var klasorSayisi = 0;
+        var kesildi = false;
+        var kesilmeSebebi = string.Empty;
+
+        foreach (var hamYol in paths ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(hamYol))
+            {
+                continue;
+            }
+
+            // AYNI KAPI: yol çözümlemesi (sanal alan + yol üzerindeki bağlantı ve aygıt adı
+            // denetimi) diğer uçlarla birebir aynı yardımcıdan gelir. Ölçüm bir OKUMADIR ama
+            // kapsam dışı bir yolun BOYUTUNU söylemek de bir sızıntıdır.
+            var target = await ResolveTargetAsync(NormalizeVirtualPath(hamYol), cancellationToken);
+            EnsureSiteTarget(target);
+            EnsureInsideSandbox(target);
+
+            // SİTE KÖKÜ YASAKLANMAZ (EnsureNotSiteRoot çağrılmaz): gerekçe CalculateSizeAsync'te
+            // yazılı — kök koruması kökü DEĞİŞTİREN işlemler içindir, okuyan bir hesap için değil.
+
+            if (Directory.Exists(target.PhysicalPath))
+            {
+                var yuruyus = SafeDirectoryWalk.Yuru(target.PhysicalPath, butce, cancellationToken);
+                toplamBayt += yuruyus.TotalBytes;
+                dosyaSayisi += yuruyus.FileCount;
+                klasorSayisi += yuruyus.DirectoryCount;
+                if (yuruyus.Truncated)
+                {
+                    kesildi = true;
+                    kesilmeSebebi = yuruyus.TruncatedReasonKey;
+                }
+            }
+            else if (File.Exists(target.PhysicalPath))
+            {
+                try
+                {
+                    toplamBayt += new FileInfo(target.PhysicalPath).Length;
+                    dosyaSayisi++;
+                }
+                catch (IOException)
+                {
+                    // Ölçüm sırasında silinmiş/okunamayan dosya 0 sayılır: artık diskte yeri yok.
+                }
+            }
+
+            // YOL YOKSA İSTİSNA ATILMAZ, 0 sayılır. İki çağıran da bunu gerektiriyor: yazma yolunda
+            // "hedef dosya henüz yok" NORMAL durumdur (yeni dosya), kopyalama yolunda ise olmayan
+            // kaynak zaten öge başına `files.not_found` ile raporlanır — ölçümün istisna atması,
+            // sekiz ögeli bir isteği tek eksik dosya yüzünden hiç başlatmamak olurdu.
+        }
+
+        return new DirectorySizeDto
+        {
+            // Path BOŞ bırakılır ve bilerek: bu sonuç TEK bir yola değil, bir yol KÜMESİNE aittir;
+            // birinin yolunu yazmak, arayüzde yanlış klasöre iliştirilebilecek bir sayı üretirdi.
+            TotalBytes = toplamBayt,
+            FileCount = dosyaSayisi,
+            DirectoryCount = klasorSayisi,
+            Truncated = kesildi,
+            TruncatedReasonKey = kesilmeSebebi
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<long> MeasureArchiveContentBytesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var archivePath = NormalizeVirtualPath(path);
+        var archive = await ResolveTargetAsync(archivePath, cancellationToken);
+        EnsureSiteTarget(archive);
+        EnsureInsideSandbox(archive);
+
+        // ExtractAsync ile AYNI kabul kuralı ve AYNI anahtar: iki yol farklı şeye "geçerli arşiv"
+        // derse, kota denetimi açılmayacak bir dosyayı ölçer ya da tersi.
+        if (!File.Exists(archive.PhysicalPath)
+            || !string.Equals(Path.GetExtension(archive.PhysicalPath), ".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("files.invalid_archive", 400, 400);
+        }
+
+        // AÇILDIĞINDA kaplayacağı yer ölçülür (sıkıştırılmış boyut DEĞİL): "zip bombası" tam olarak
+        // bu ikisinin arasındaki farktır — 1 MB'lık bir arşiv 10 GB açabilir ve kotayı sıkıştırılmış
+        // boyuta göre denetlemek o saldırıyı hiç görmezdi.
+        //
+        // Girdi listesi arşivin merkezî dizininden gelir ve ZipFile.OpenRead onu zaten belleğe
+        // almıştır; yani bu döngü ExtractAsync'in kendi döngüsünden fazladan bir risk üretmez.
+        using var zip = ZipFile.OpenRead(archive.PhysicalPath);
+        long toplam = 0;
+        foreach (var entry in zip.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            toplam += entry.Length;
+        }
+
+        return toplam;
+    }
+
     private async Task<FileWorkspaceDto> BuildVirtualRootWorkspaceAsync(string normalizedPath, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(normalizedPath))
@@ -959,8 +1300,66 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     {
         var site = await iisSiteService.GetSiteAsync(segments[1], cancellationToken);
         var basePath = Path.GetFullPath(ResolveApplicationRoot(site));
+
+        // AYGIT ADI DENETİMİ Path API'lerinden ÖNCE: gerekçesi EnsureNoReservedSegments'te.
+        EnsureNoReservedSegments(basePath, segments.Skip(2));
+
         var subPath = string.Join(Path.DirectorySeparatorChar, segments.Skip(2));
         return ResolveSandboxTarget(Path.Combine(basePath, subPath), basePath);
+    }
+
+    /// <summary>
+    /// Yolun hiçbir parçasının Windows AYGIT ADI (<c>CON</c>, <c>NUL</c>, <c>COM1</c>...) olmadığını
+    /// doğrular; öyleyse istek <c>files.invalid_name</c> ile reddedilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>DENETİM ÖNCE NE YAPIYORDU — ÖLÇÜLDÜ (bu makinede, gerçek çağrılarla):</b> aygıt adlı bir
+    /// istek 500 ÜRETMİYOR, <c>files.path_outside_root</c> (400) ile reddediliyordu. Sebep:
+    /// <c>Path.GetFullPath(&lt;klasör&gt;\NUL)</c> .NET 8'de <c>\\.\NUL</c> döndürüyor — yani yol
+    /// sanal alanın dışına ÇIKIYOR ve mevcut kapı onu zaten eliyor. Aynısı <c>CON</c>, <c>COM1</c>,
+    /// <c>LPT9</c>, <c>AUX</c>, <c>PRN</c>, <c>con.json</c>, <c>NUL.txt</c> ve hatta listede
+    /// OLMAYAN <c>CONIN$</c> için de ölçüldü.
+    /// </para>
+    /// <para>
+    /// <b>O hâlde neden bu denetim:</b> düzeltilen şey çökme değil, YALAN. Kendi klasöründe "NUL"
+    /// adlı bir klasör açmaya çalışan kullanıcı "yol kök dizinin dışında" cevabı alıyordu ve bu onu
+    /// var olmayan bir yol/izin sorununu aramaya gönderiyordu; asıl sebep — "bu bir ad değil, bir
+    /// aygıt" — hiçbir yerde yazmıyordu. Üstelik koruma KAZAYDI: bir <c>GetFullPath</c> yan
+    /// etkisine dayanıyordu, panelin bilinçli bir kuralına değil. Bugün gürültülü olanın yarın
+    /// sessiz olmayacağını garanti eden tek şey, kuralın AÇIKÇA yazılmasıdır — nitekim ham
+    /// <c>FileStream(&lt;klasör&gt;\NUL, CreateNew)</c> bu makinede HİÇ İSTİSNA ATMIYOR (ölçüldü),
+    /// yani sanal alan kapısı bir gün gevşerse arkasında sessiz veri kaybı var.
+    /// </para>
+    /// <para>
+    /// <b>Neden VAR OLAN yol MUAF:</b> <see cref="WindowsReservedNames"/> listesinde <c>CLOCK$</c>
+    /// da var ve o ad bu makinede ayrılmış DEĞİL — <c>CLOCK$</c> adlı klasör/dosya gerçekten
+    /// oluşturulabiliyor (ölçüldü; kaynağın kendi belgesi de bunu dürüstçe yazıyor). Koşulsuz bir
+    /// denetim, diskte GERÇEKTEN duran bir <c>clock$.txt</c>'yi dosya yöneticisinden görünmez,
+    /// indirilemez ve SİLİNEMEZ yapardı: kullanıcının verisine erişimini kapatmak, düzeltmeye
+    /// çalıştığımız hatadan ağır olurdu. Gerçek aygıt adları bu muafiyetten yararlanamaz, çünkü
+    /// onlar için varlık sorgusu FALSE döner (ölçüldü: <c>File.Exists(&lt;klasör&gt;\NUL)</c> =
+    /// false, <c>Directory.Exists</c> = false).
+    /// </para>
+    /// </remarks>
+    private static void EnsureNoReservedSegments(string sandboxRoot, IEnumerable<string> segments)
+    {
+        var currentPath = sandboxRoot;
+        foreach (var segment in segments)
+        {
+            currentPath = Path.Combine(currentPath, segment);
+            if (!WindowsReservedNames.IsReserved(segment))
+            {
+                continue;
+            }
+
+            if (File.Exists(currentPath) || Directory.Exists(currentPath))
+            {
+                continue;
+            }
+
+            throw new AppException("files.invalid_name", 400, 400);
+        }
     }
 
     private static string ResolveApplicationRoot(AdaPanel.Core.Dtos.Sites.SiteDto site)
@@ -1092,6 +1491,15 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
     }
 
     private readonly record struct ResolvedTarget(string PhysicalPath, string SandboxRoot, bool IsVirtualRoot);
+
+    /// <summary>Klasör kopyalamanın sonucu: iş bitti mi, ve kullanıcıya söylenecek EKSİKLİK anahtarı.</summary>
+    /// <remarks>
+    /// <b>Neden tek bir <c>bool</c> yetmiyor:</b> üç ayrı durum var ve üçü de kullanıcıya farklı şey
+    /// söyler — (a) tam kopya, (b) kopya OLUŞTU ama eksik (bağlantı atlandı / alt klasör okunamadı),
+    /// (c) kopya HİÇ OLUŞMADI (bütçe doldu, geri sarıldı). (b) ile (c)'yi tek bayrakta toplamak,
+    /// diskte duran bir klasörle hiç olmayan bir klasörü aynı satırla anlatmak olurdu.
+    /// </remarks>
+    private readonly record struct KlasorKopyasi(bool Tamamlandi, string EksiklikAnahtari);
 
     /// <summary>Aktarımın DOĞRULANMIŞ tek ögesi: çözülmüş kaynak/hedef + kullanıcıya dönecek sanal yollar.</summary>
     private readonly record struct TransferItem(

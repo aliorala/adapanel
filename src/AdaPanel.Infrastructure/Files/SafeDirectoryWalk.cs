@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 namespace AdaPanel.Infrastructure.Files;
 
@@ -8,8 +8,10 @@ namespace AdaPanel.Infrastructure.Files;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Neden ortak:</b> bu yürüyüşün beş müşterisi var — dosya yöneticisinin "bu klasör ne kadar yer
-/// kaplıyor" ucu (<see cref="FileService"/>), disk KOTASI hesabı
+/// <b>Neden ortak:</b> bu yürüyüşün YEDİ müşterisi var — dosya yöneticisinin "bu klasör ne kadar yer
+/// kaplıyor" ucu (<see cref="FileService"/>), dosya yöneticisinin KLASÖR KOPYALAMASI
+/// (<c>FileService.KlasoruKopyala</c>) ve kota ÖN ÖLÇÜMÜ (<c>FileService.MeasureAsync</c>),
+/// disk KOTASI hesabı
 /// (<c>CustomerScopeService.GetDiskUsageMbAsync</c>), YEDEK dosya taraması
 /// (<c>BackupService.ScanFiles</c>), göçte <c>.user.ini</c> arayan tarama
 /// (<c>SiteMigrationService.SanitizeUserIniFilesAsync</c>) ve arşivden içe aktarmanın ağaç
@@ -113,12 +115,27 @@ internal static class SafeDirectoryWalk
     /// çağrı NEREDE olduğunu söyler. Yedek yolunun ihtiyacı tam olarak budur: atlanan klasörün ADI
     /// kullanıcıya gösterilir, yoksa "yedeğinizde bir eksik var, nerede olduğunu bilmiyoruz" gibi
     /// işe yaramaz bir uyarı kalırdı.</param>
+    /// <param name="baglantiAtlandiginda">En az bir bağlantı (junction/symlink) elendiğinde çağrılır.
+    /// <para>
+    /// <b>Neden PARAMETRESİZ ve neden ayrı bir geri çağrı:</b> yukarıdaki kural — "çağıran,
+    /// yürüyüşün ATLADIĞI bir ögeyi asla görmez" — bir güvenlik kuralıdır: atlananı ikinci bir
+    /// kuralla yeniden değerlendirebilen bir çağıran, korumayı kendi içinden delerdi. O yüzden bu
+    /// geri çağrıya ATLANAN ÖGE VERİLMEZ; yalnızca "bir şey atlandı" haberi verilir. Kopyalama
+    /// yolunun ihtiyacı tam olarak bu kadardır: kullanıcıya "kopya oluştu ama EKSİK"
+    /// (<c>files.copy_link_skipped</c>) diyebilmek. Haberi hiç vermeseydik, dosya yöneticisi
+    /// bağlantı içeren bir klasörü sessizce eksik kopyalar ve kullanıcı eksik kopyayı tam sanırdı.
+    /// </para>
+    /// <para>
+    /// Atlanan bağlantı <see cref="SafeDirectoryWalkResult.Truncated"/> ÜRETMEZ (gerekçesi aşağıda,
+    /// eleme satırında); bu yüzden haber sonuç kaydında değil ayrı bir geri çağrıda taşınır.
+    /// </para></param>
     internal static SafeDirectoryWalkResult Yuru(
         string fizikselYol,
         SafeDirectoryWalkBudget butce,
         Action<FileSystemInfo>? ogeGorulunce,
         Action<string, Exception>? klasorOkunamadi,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? baglantiAtlandiginda = null)
     {
         // BOŞ YOL bir hata değil, "sayılacak bir şey yok" demektir: kota yolunda IIS'ten okunan site
         // kökü boş olabilir (bağlama yapılmamış site). Burada istisna atmak, tek bozuk sitenin bütün
@@ -240,6 +257,9 @@ internal static class SafeDirectoryWalk
                     // hâlde her bağlantı içeren klasör kalıcı olarak "eksik" damgası yerdi.
                     if (oge.Attributes.HasFlag(FileAttributes.ReparsePoint))
                     {
+                        // Haber verilir ama ÖGE VERİLMEZ (gerekçe parametre belgesinde): kopyalama
+                        // yolu "kopya EKSİK" diyebilsin, ama atlananı yeniden değerlendiremesin.
+                        baglantiAtlandiginda?.Invoke();
                         continue;
                     }
 

@@ -412,13 +412,25 @@ async function handleAddBinding(payload: { siteName: string; binding: SiteBindin
   }
 }
 
+/**
+ * Bağlantı kaldırma ONAYSIZ YAPILMAZ — gerekçesi `SitesView`'deki ikiziyle aynı: işlem tek tıkla
+ * siteyi bir adresten yayından kaldırıyor. İki ekran aynı mağazadan (`sitesStore`) aynı işi
+ * yapıyor; birine onay koyup öbürüne koymamak, kullanıcının hangi ekranda olduğuna göre farklı
+ * korunması olurdu.
+ */
 async function handleRemoveBinding(payload: { siteName: string; binding: SiteBindingPayload }) {
-  try {
-    await sitesStore.removeBinding(payload.siteName, payload.binding);
-    showNotice(t("panel.sites.bindingRemoved"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+  await confirm({
+    title: t("panel.sites.removeBinding"),
+    message: t("panel.sites.confirmRemoveBinding"),
+    action: async () => {
+      try {
+        await sitesStore.removeBinding(payload.siteName, payload.binding);
+        showNotice(t("panel.sites.bindingRemoved"), false);
+      } catch (error) {
+        showNotice(resolveApiMessage(error), true);
+      }
+    }
+  });
 }
 
 async function handleAddSubdomain(label: string) {

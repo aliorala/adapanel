@@ -480,7 +480,7 @@ function translateState(state: string): string {
 .preview-error {
   flex-basis: 100%;
   font-size: 0.8rem;
-  color: var(--danger-1, #d64545);
+  color: var(--danger-1);
 }
 
 .subdomain-form {

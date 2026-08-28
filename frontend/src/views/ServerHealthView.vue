@@ -198,6 +198,7 @@ import {
 import { getDnsServerHealth, repairDnsServer, type DnsServerHealth } from "../api/dns";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const services = ref<ServiceHealth[]>([]);
@@ -303,9 +304,9 @@ async function repairDns() {
   }
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string) {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return formatDateTime(value);
 }
 
 async function restart(name: string) {
@@ -435,7 +436,7 @@ function dotClass(status: string) {
 }
 
 .server-findings li.fail {
-  color: var(--danger-1, #d64545);
+  color: var(--danger-1);
 }
 
 .server-findings small {

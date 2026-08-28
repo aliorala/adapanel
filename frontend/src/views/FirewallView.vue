@@ -388,7 +388,7 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   gap: 10px;
   padding-bottom: 16px;
   margin-bottom: 4px;
-  border-bottom: 1px solid var(--border-1, rgba(255, 255, 255, 0.08));
+  border-bottom: 1px solid var(--panel-border);
 }
 
 .ports-head {
@@ -419,8 +419,8 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   line-height: 1.5;
   padding: 8px 10px;
   border-radius: 6px;
-  background: rgba(230, 167, 0, 0.08);
-  border-left: 3px solid var(--warning-1, #e6a700);
+  background: var(--warn-bg);
+  border-left: 3px solid var(--warn-1);
 }
 
 .port-row {
@@ -451,7 +451,7 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 }
 
 .chip.opt {
-  color: var(--text-muted, #98a2b3);
+  color: var(--text-muted);
 }
 
 .mono {
@@ -469,12 +469,12 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 }
 
 .cell.warn {
-  color: var(--warning-1, #e6a700);
+  color: var(--warn-text);
   font-weight: 600;
 }
 
 .cell.muted {
-  color: var(--text-muted, #98a2b3);
+  color: var(--text-muted);
 }
 
 .action-cell {
@@ -495,7 +495,7 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 }
 
 .dot.warn {
-  background: var(--warning-1, #e6a700);
+  background: var(--warn-1);
 }
 
 .dot.problem {
@@ -503,7 +503,7 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 }
 
 .dot.unused {
-  background: var(--text-muted, #98a2b3);
+  background: var(--text-muted);
   opacity: 0.55;
 }
 

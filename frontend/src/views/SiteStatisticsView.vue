@@ -75,6 +75,7 @@ import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import { getSiteStatistics, type WebStatistics } from "../api/statistics";
 import { useNotice } from "../composables/useNotice";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
 const { t } = useI18n();
 const sitesStore = useSitesStore();
@@ -107,18 +108,9 @@ async function load() {
   }
 }
 
-function formatBytes(bytes: number): string {
-  if (!bytes) {
-    return "0 B";
-  }
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
+function formatBytes(value: number) {
+  return sharedFormatBytes(value, t);
 }
 
 function dailyWidth(count: number): string {

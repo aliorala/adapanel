@@ -254,13 +254,13 @@ function showNotice(message: string, isError: boolean) {
 .sub-user-form { margin-bottom: 14px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .stacked-field { display: grid; gap: 6px; }
-.permission-set { border: 1px solid var(--border, #d7dce3); border-radius: 8px; margin-top: 12px; padding: 10px 12px; }
+.permission-set { border: 1px solid var(--panel-border); border-radius: 8px; margin-top: 12px; padding: 10px 12px; }
 .permission-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 8px; }
 .permission-item { align-items: center; display: flex; gap: 8px; }
 .sub-user-row { grid-template-columns: 1fr 1.4fr 1.6fr 0.7fr 1fr; }
 .row-actions { display: flex; gap: 8px; margin-top: 12px; }
 .row-actions button { width: auto; }
 .data-row .row-actions { margin-top: 0; }
-.status-ok { color: var(--success, #1a7f37); }
-.status-off { color: var(--danger, #b42318); }
+.status-ok { color: var(--ok-text); }
+.status-off { color: var(--danger-text); }
 </style>

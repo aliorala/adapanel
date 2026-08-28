@@ -811,8 +811,8 @@ function formatDetectionSource(source: string): string {
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 600;
-  color: #fff;
-  background: var(--accent-1, #2e7d32);
+  color: var(--on-accent);
+  background: var(--accent-1);
   white-space: nowrap;
 }
 
@@ -826,8 +826,8 @@ function formatDetectionSource(source: string): string {
 }
 
 .update-action {
-  background: var(--accent-1, #2e7d32);
-  border-color: var(--accent-1, #2e7d32);
+  background: var(--accent-1);
+  border-color: var(--accent-1);
 }
 
 .update-count {
@@ -840,8 +840,8 @@ function formatDetectionSource(source: string): string {
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 700;
-  color: #fff;
-  background: var(--accent-1, #2e7d32);
+  color: var(--on-accent);
+  background: var(--accent-1);
 }
 
 .status-pill {
@@ -971,11 +971,11 @@ function formatDetectionSource(source: string): string {
 }
 
 .live-step.done {
-  color: var(--accent-text, #2e7d32);
+  color: var(--accent-text);
 }
 
 .live-step.failed {
-  color: var(--danger-text, #c0392b);
+  color: var(--danger-text);
 }
 
 .live-step.running {

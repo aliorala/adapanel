@@ -218,6 +218,7 @@ import {
 } from "../api/apiTokens";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -347,8 +348,9 @@ function statusLabelKey(token: ApiToken) {
   return token.isUsable ? "panel.aiConnection.statusActive" : "panel.aiConnection.statusExpired";
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string) {
-  return new Date(value).toLocaleString();
+  return formatDateTime(value);
 }
 
 function resolveApiMessage(error: unknown) {

@@ -750,11 +750,11 @@ function stepStatusText(item: LiveStep): string {
   white-space: pre-wrap;
 }
 .step-detail.err {
-  color: var(--danger, #f85149);
+  color: var(--danger-text);
   background: rgba(218, 54, 51, 0.1);
 }
 .step-detail.ok {
-  color: var(--accent-1, #5fe39a);
+  color: var(--accent-1);
   background: rgba(56, 139, 253, 0.1);
 }
 .db-user-hint {
@@ -763,13 +763,13 @@ function stepStatusText(item: LiveStep): string {
 /* Canlı durum rozetleri: çalışıyor (dönen) + sırada (soluk). ok/danger global stilden gelir. */
 .migration-view .status-pill.run {
   background: rgba(56, 139, 253, 0.16);
-  color: var(--accent-1, #388bfd);
+  color: var(--accent-1);
   display: inline-block;
   animation: migrate-spin 1s linear infinite;
 }
 .migration-view .status-pill.idle {
   background: rgba(125, 133, 144, 0.14);
-  color: var(--text-muted, #8b949e);
+  color: var(--text-muted);
 }
 @keyframes migrate-spin {
   to {

@@ -78,15 +78,15 @@ const Satir = (satirProps: { parcalar: Parca[] }) =>
 .release-notes hr {
   width: 100%;
   border: 0;
-  border-top: 1px solid var(--border, rgba(148, 163, 184, 0.35));
+  border-top: 1px solid var(--panel-border);
   margin: 0.2rem 0;
 }
 
 .release-notes blockquote {
   margin: 0;
   padding: 0.5rem 0.75rem;
-  border-left: 3px solid var(--accent, #3b82f6);
-  background: var(--surface-muted, rgba(148, 163, 184, 0.12));
+  border-left: 3px solid var(--accent-1);
+  background: var(--surface-2);
   border-radius: 0 6px 6px 0;
 }
 
@@ -95,7 +95,7 @@ const Satir = (satirProps: { parcalar: Parca[] }) =>
   margin: 0;
   padding: 0.6rem 0.75rem;
   overflow-x: auto;
-  background: var(--surface-muted, rgba(148, 163, 184, 0.12));
+  background: var(--surface-2);
   border-radius: 6px;
 }
 
@@ -107,7 +107,7 @@ const Satir = (satirProps: { parcalar: Parca[] }) =>
 .release-notes :not(pre) > code {
   padding: 0.1rem 0.3rem;
   border-radius: 4px;
-  background: var(--surface-muted, rgba(148, 163, 184, 0.18));
+  background: var(--surface-3);
   font-size: 0.88rem;
 }
 </style>

@@ -538,6 +538,7 @@ import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { updateDocumentRoot, enableFrameworkRewrite, repairSitePermissions } from "../api/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -868,11 +869,9 @@ async function removeSiteQuota() {
   }
 }
 
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(value / 1024 ** 3).toFixed(2)} GiB`;
+  return sharedFormatBytes(value, t);
 }
 
 async function loadGit() {
@@ -1237,6 +1236,9 @@ input[readonly] {
   margin: 0;
   padding: 12px;
   border-radius: var(--radius-sm);
+  /* Koyu terminal yüzeyi BİLEREK sabit: base.css `pre`/`.code-viewer` için aynı kararı
+     veriyor ve açık temada bu ögeyi zaten kendi koyu değerine çeviyor (öge bir <pre>).
+     Kabuk çıktısı açık zeminde okunmaz; belirtece bağlanMAZ. */
   background: #0a0e16;
   color: var(--accent-text);
   white-space: pre-wrap;

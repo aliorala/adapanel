@@ -746,27 +746,27 @@ function formatUtc(value: string): string {
 }
 
 .sev-dot.error {
-  background: var(--danger, #e5484d);
+  background: var(--danger-1);
 }
 
 .sev-dot.warn {
-  background: var(--warning, #f5a524);
+  background: var(--warn-1);
 }
 
 .sev-dot.info {
-  background: var(--accent-1, #3b82f6);
+  background: var(--accent-1);
 }
 
 .sev.error {
-  color: var(--danger, #e5484d);
+  color: var(--danger-text);
 }
 
 .sev.warn {
-  color: var(--warning, #f5a524);
+  color: var(--warn-text);
 }
 
 .sev.info {
-  color: var(--accent-1, #3b82f6);
+  color: var(--accent-1);
 }
 
 .history-row {
@@ -784,7 +784,7 @@ function formatUtc(value: string): string {
 }
 
 .history-row.active {
-  border-color: var(--accent-1, #3b82f6);
+  border-color: var(--accent-1);
 }
 
 .table-scroll {

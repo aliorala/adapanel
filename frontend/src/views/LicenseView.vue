@@ -134,6 +134,7 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { copyToClipboard } from "../utils/clipboard";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -254,9 +255,9 @@ async function copyFingerprint() {
   showNotice(copied ? t("panel.common.copied") : t("panel.common.copyFailed"), !copied);
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value);
 }
 </script>
 
@@ -289,7 +290,7 @@ function formatDate(value: string) {
 }
 
 .license-warn {
-  border-color: var(--warn-border, var(--panel-border));
+  border-color: var(--warn-1);
 }
 
 .license-activate,

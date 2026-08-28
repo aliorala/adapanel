@@ -203,6 +203,8 @@ import {
 import { useAuthStore, extractApiMessage } from "../stores/auth";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { useSitesStore } from "../stores/sites";
+import { formatBytes as sharedFormatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -361,12 +363,9 @@ function describeError(target: LogRotationTarget) {
     : target.error;
 }
 
+/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatBytes(value: number) {
-  if (!value) {
-    return "0 MB";
-  }
-  const mb = value / (1024 * 1024);
-  return mb < 1 ? `${Math.max(1, Math.round(value / 1024))} KB` : `${mb.toFixed(1)} MB`;
+  return sharedFormatBytes(value, t);
 }
 
 function emptyLog(): LogTail {
@@ -393,8 +392,9 @@ function emptyRotation(): LogRotationStatus {
   };
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatDateTime(value, "-");
 }
 
 function showNotice(message: string, isError: boolean) {

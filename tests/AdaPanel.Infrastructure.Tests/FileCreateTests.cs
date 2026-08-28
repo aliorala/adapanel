@@ -156,6 +156,94 @@ public class FileCreateTests : IDisposable
         Assert.False(File.Exists(Path.Combine(kok, "disari.txt")));
     }
 
+    // ------------------------------------------------------------------
+    // YARIM KALAN YAZMA — "zaten var" YALANININ KÖKÜ
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// YARIDA KESİLEN YAZMA DİSKTE KALINTI BIRAKMAZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN ESKİ DAVRANIŞ</b> (bu makinede, gerçek dosya sistemine yazarak): iptal edilmiş bir
+    /// jetonla yapılan çağrı <c>TaskCanceledException</c> atıyor ve geriye <b>3 baytlık yarım bir
+    /// dosya</b> bırakıyordu. Geri sarma yoktu.
+    /// </para>
+    /// <para>
+    /// <b>Neden bu tek başına bir hata değil, İKİ hatanın birleşimi:</b> kalıntı kaldığı için
+    /// kullanıcının SONRAKİ denemesi "bu dosya zaten var" (409) ile reddedilir — hiç
+    /// oluşturamadığı bir dosyanın kalıntısı yüzünden. Kullanıcı için bu, "yeni dosya" düğmesinin
+    /// kalıcı olarak bozulmasıdır ve panelde çıkışı yoktur (dosyayı listede görüp silmesi gerekir,
+    /// ama içeriği hiç yazılmadığı için ne olduğunu bilemez).
+    /// </para>
+    /// <para>
+    /// İptal, "yazma yarıda kaldı" durumunun testte ÜRETİLEBİLEN biçimidir; gerçek hayattaki
+    /// karşılıkları disk dolması ve antivirüs kilididir. Geri sarma üçünde de aynı yolda çalışır.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Yarida_kesilen_yazma_diskte_KALINTI_birakmaz()
+    {
+        using var iptal = new CancellationTokenSource();
+        await iptal.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => servis.WriteAsync(
+            new WriteFileRequest { Path = "sites/a.test/rapor.txt", Content = "icerik", FailIfExists = true },
+            iptal.Token));
+
+        Assert.False(
+            File.Exists(Path.Combine(siteKoku, "rapor.txt")),
+            "Yarim yazma diskte KALINTI birakti: sonraki deneme 'zaten var' ile reddedilir.");
+    }
+
+    /// <summary>
+    /// YARIM YAZMADAN SONRA AYNI DOSYA YENİDEN OLUŞTURULABİLİR — "zaten var" YALANI biter.
+    /// </summary>
+    /// <remarks>
+    /// Yalnız "kalıntı yok" demek yetmez: ölçülmesi gereken, kullanıcının ASIL yaşadığı sonuçtur.
+    /// Bu test kalıntının varlığını değil, kalıntının ÜRETTİĞİ arızayı ölçer — ve içeriği de
+    /// doğrular, çünkü "dosya oluştu ama boş" da aynı ölçüde bozuk bir sonuçtur.
+    /// </remarks>
+    [Fact]
+    public async Task Yarim_yazmadan_sonra_dosya_YENIDEN_olusturulabilir()
+    {
+        using var iptal = new CancellationTokenSource();
+        await iptal.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => servis.WriteAsync(
+            new WriteFileRequest { Path = "sites/a.test/.htaccess", Content = "RewriteEngine On", FailIfExists = true },
+            iptal.Token));
+
+        await servis.WriteAsync(new WriteFileRequest
+        {
+            Path = "sites/a.test/.htaccess",
+            Content = "RewriteEngine On",
+            FailIfExists = true
+        });
+
+        Assert.Equal("RewriteEngine On", File.ReadAllText(Path.Combine(siteKoku, ".htaccess")));
+    }
+
+    /// <summary>
+    /// MUTASYON KONTROLÜ: geri sarma, BAŞARILI yazmayı silmez.
+    /// </summary>
+    /// <remarks>
+    /// Bu olmadan "her yazmadan sonra dosyayı sil" gibi bir değişiklik de yukarıdaki iki testi
+    /// geçerdi; yani testler korumanın çalıştığını değil, yalnızca dosyanın yokluğunu ölçerdi.
+    /// </remarks>
+    [Fact]
+    public async Task Geri_sarma_BASARILI_yazmaya_dokunmaz()
+    {
+        await servis.WriteAsync(new WriteFileRequest
+        {
+            Path = "sites/a.test/web.config",
+            Content = "<configuration/>",
+            FailIfExists = true
+        });
+
+        Assert.Equal("<configuration/>", File.ReadAllText(Path.Combine(siteKoku, "web.config")));
+    }
+
     /// <summary>
     /// Kaynağa bakan nöbetçi: koruma <c>File.Exists</c> ile İKİ ADIMA bölünürse davranış
     /// testleri yine yeşil kalır (tek iş parçacığında fark yoktur), ama iki eşzamanlı istek
@@ -168,6 +256,49 @@ public class FileCreateTests : IDisposable
             "src", "AdaPanel.Infrastructure", "Files", "FileService.cs"));
 
         Assert.Contains("FileMode.CreateNew", kaynak);
+    }
+
+    /// <summary>
+    /// KAYNAĞA BAKAN NÖBETÇİ: "zaten var" süzgeci YAZMA adımını KAPSAMAZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden yapısal:</b> düzeltilen hatanın davranışsal karşılığını birim testinde ÜRETMEK
+    /// mümkün değil — yazma sırasında IOException almak için diskin dolması ya da antivirüsün
+    /// dosyayı kilitlemesi gerekir; ikisi de testte deterministik olarak kurulamaz (denendi).
+    /// Oysa hatanın kendisi tümüyle yapısaldır: <c>try</c> hem <c>CreateNew</c>'i hem yazmayı
+    /// kapsadığı sürece <c>when (File.Exists(...))</c> süzgeci HER ZAMAN doğrudur — çünkü dosyayı
+    /// o noktada zaten biz yaratmışızdır — ve yazma hatası "bu dosya zaten var" diye maskelenir.
+    /// </para>
+    /// <para>
+    /// Bu yüzden ölçülen şey tam olarak o yapıdır: <c>CreateNew</c> ile başlayan ve "zaten var"
+    /// diyen <c>catch</c>'e kadar süren blokta YAZMA olmamalı. İki adım birleştirilirse test
+    /// kızarır (mutasyonla doğrulandı).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Zaten_var_YALNIZ_yaratma_adiminda_soylenir()
+    {
+        var kaynak = File.ReadAllText(Path.Combine(KaynakKoku(),
+            "src", "AdaPanel.Infrastructure", "Files", "FileService.cs"));
+
+        // ÇAPA KOD OLMALI, YORUM DEĞİL. İlk hâlde çapa "FileMode.CreateNew" idi ve o dizge
+        // metodun BELGESİNDE de geçiyordu: test, kodun yerine yorum metnini ölçüyor ve mutasyonda
+        // KIZARMIYORDU (ölçüldü). Atama ifadesi yalnız kodda geçer.
+        var yaratmaBaslangici = kaynak.IndexOf("akis = new FileStream(", StringComparison.Ordinal);
+        Assert.True(yaratmaBaslangici > 0, "Yaratma adiminin kendisi bulunamadi.");
+
+        var ilkYakalama = kaynak.IndexOf("catch (IOException)", yaratmaBaslangici, StringComparison.Ordinal);
+        Assert.True(ilkYakalama > yaratmaBaslangici, "Yaratmadan sonra IOException yakalamasi bulunamadi.");
+
+        var korunanBlok = kaynak[yaratmaBaslangici..ilkYakalama];
+
+        // Yazma bu blokta OLMAMALI: olduğu anda süzgeç koşulsuzlaşır ve gerçek sebep kaybolur.
+        Assert.DoesNotContain("yazici.WriteAsync(", korunanBlok, StringComparison.Ordinal);
+        Assert.DoesNotContain("StreamWriter", korunanBlok, StringComparison.Ordinal);
+
+        // Ve geri sarma GERÇEKTEN var: yazma patlarsa yarattığımız dosya silinir.
+        Assert.Contains("File.Delete(target.PhysicalPath);", kaynak, StringComparison.Ordinal);
     }
 
     private static string KaynakKoku()

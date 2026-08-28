@@ -104,6 +104,7 @@ import { useI18n } from "vue-i18n";
 import { hasQuickFix, runAttentionAction, type AttentionItem, type AttentionSeverity, type AttentionSummary } from "../api/attention";
 import { extractApiMessage } from "../stores/auth";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatDateTime } from "../utils/datetime";
 
 const props = defineProps<{
   open: boolean;
@@ -293,9 +294,9 @@ onBeforeUnmount(() => {
   setScrollLock(false);
 });
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value);
 }
 </script>
 

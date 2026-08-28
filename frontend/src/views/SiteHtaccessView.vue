@@ -10,8 +10,17 @@
       </button>
     </div>
 
+    <!-- Şerit base.css'te ekrana sabitlidir (sağ alt köşe), yani kullanıcı nereye kaydırırsa
+         kaydırsın görünür. Kapatma düğmesi Dosyalar ekranıyla AYNI kalıptır: iki ekran aynı
+         panelin içinde farklı davranmasın. -->
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
-      {{ notice }}
+      <span class="notice-text">{{ notice }}</span>
+      <button
+        type="button"
+        class="notice-dismiss"
+        :aria-label="t('panel.common.dismissNotice')"
+        :title="t('panel.common.dismissNotice')"
+        @click="notice = ''">×</button>
     </p>
 
     <p v-if="!siteName" class="empty-state">{{ t("panel.php.selectSite") }}</p>
@@ -26,7 +35,23 @@
       <!-- ============================ DÜRÜSTLÜK ŞERİDİ ============================
            Sirasi ONEM sirasidir: en ustte "hicbir sey olmaz" diyen engel durur. Kullanici
            once en guclu sebebi gormeli, yoksa alttaki kucuk uyariyi cozup yine hicbir sey
-           olmadigini gorurdu. -->
+           olmadigini gorurdu.
+
+           YOĞUNLUK SORUNU ÖLÇÜLDÜ: bu şeritte aynı anda ALTI blok birden çıkabiliyor
+           (engelBlockers + destek + sunucu kapalı + dosya var/destek kapalı + kökte dosya yok).
+           Metinler kısa değil: `warn.noManagedCode` 400, `warn.serverOff` 330 karaktere yakın.
+           Yani ekranın ilk yarısı, hiçbir denetime ulaşmadan bir uyarı duvarına dönüyordu — ve
+           bir duvarda hiçbir uyarı okunmaz.
+
+           NE YAPILDI, NE YAPILMADI: hiçbir uyarı SİLİNMEDİ, gizlenmedi, yumuşatılmadı. Yalnızca
+           iki gruba ayrıldı ve ayrımın ölçüsü EKRANIN KENDİ SINIFLANDIRMASIDIR — `notice error` /
+           `role="alert"` olanlar (özelliğin ÇALIŞMAMASININ sebebi) her zaman açık; `role="status"`
+           olanlar (bilgi düzeyi) katlanabilir bir blokta. Severity yeniden karar verilmedi,
+           var olanı kullanıldı.
+
+           KATLI BLOK NE ZAMAN AÇIK: ekranda hiç engel yoksa AÇIK gelir — o zaman bilgi
+           uyarılarıyla yarışan bir şey yoktur. Engel varsa KAPALI gelir ki asıl sebep gürültüde
+           kaybolmasın; başlığı kaç uyarı olduğunu SAYIYLA yazar, yani var oldukları saklanmaz. -->
       <div class="truth-strip">
         <p v-if="report.engineBlockers.length > 0" class="notice error" role="alert">
           <strong>{{ t("panel.htaccess.warn.engineNotLoaded") }}</strong>
@@ -39,31 +64,36 @@
         <p v-else-if="report.support === 'runtime_version'" class="notice error" role="alert">
           {{ t("panel.htaccess.warn.runtimeVersion", { version: report.managedRuntimeVersion }) }}
         </p>
-        <p v-else-if="report.support === 'unknown'" class="notice" role="status">
-          {{ t("panel.htaccess.warn.supportUnknown") }}
-        </p>
-
-        <p v-if="report.serverMode === 'off'" class="notice" role="status">
-          {{ t("panel.htaccess.warn.serverOff") }}
-        </p>
 
         <!-- ASIL SIKAYET: dosya duruyor, destek kapali, kimse sebebini soylemiyor. -->
         <p v-if="report.hasFiles && report.mode === 'off'" class="notice error" role="alert">
           {{ t("panel.htaccess.warn.filesButDisabled", { count: report.files.length }) }}
         </p>
 
-        <p v-if="report.hasFiles && !report.hasRootFile" class="notice" role="status">
-          {{ t("panel.htaccess.warn.noRootFile") }}
-        </p>
+        <details v-if="bilgiUyariSayisi > 0" class="truth-more" :open="engelUyariSayisi === 0">
+          <summary>{{ t("panel.htaccess.warn.more", { count: bilgiUyariSayisi }) }}</summary>
 
-        <p v-if="!report.hasFiles" class="notice" role="status">
-          {{ t("panel.htaccess.warn.noFiles") }}
-        </p>
+          <p v-if="report.support === 'unknown'" class="notice" role="status">
+            {{ t("panel.htaccess.warn.supportUnknown") }}
+          </p>
+
+          <p v-if="report.serverMode === 'off'" class="notice" role="status">
+            {{ t("panel.htaccess.warn.serverOff") }}
+          </p>
+
+          <p v-if="report.hasFiles && !report.hasRootFile" class="notice" role="status">
+            {{ t("panel.htaccess.warn.noRootFile") }}
+          </p>
+
+          <p v-if="!report.hasFiles" class="notice" role="status">
+            {{ t("panel.htaccess.warn.noFiles") }}
+          </p>
+        </details>
       </div>
 
       <!-- ============================ KİP ============================ -->
-      <section class="settings-card">
-        <div class="settings-card-head">
+      <section class="htaccess-section">
+        <div class="section-head">
           <div>
             <h4>{{ t("panel.htaccess.mode.title") }}</h4>
             <p class="meta">{{ t("panel.htaccess.mode.hint") }}</p>
@@ -109,11 +139,18 @@
             {{ serverNotice }}
           </p>
 
-          <div class="action-row">
+          <!-- ŞU ANKİ KİP YALNIZ "DEVRE DIŞI OLMAKLA" ANLATILIYORDU. Üç düğmeden biri soluk
+               görünüyordu, ama solukluk panelde "basamazsın" demektir — "seçili olan bu" demek
+               değil; askıdaki abonelikte de ÜÇÜ birden soluklaşıyor ve o hâlde hangisinin etkin
+               olduğu ekrandan HİÇ okunamıyordu. Durum artık üç ayrı kanaldan söyleniyor:
+               `aria-pressed` (ekran okuyucu), belirgin çerçeve/dolgu (renk körü kullanıcı için
+               yalnız renk değil KENARLIK farkı) ve yanındaki metin. -->
+          <div class="action-row mode-switch-row" role="group" :aria-label="t('panel.htaccess.server.title')">
             <button
               v-for="secim in modeChoices"
               :key="`server-${secim.id}`"
               class="secondary compact"
+              :aria-pressed="serverSwitch?.mode === secim.id"
               v-bind="writeGate(serverBusy || serverSwitch?.mode === secim.id)"
               @click="saveServerMode(secim.id)">
               {{ secim.label }}
@@ -132,8 +169,8 @@
       </section>
 
       <!-- ============================ DOSYALAR ============================ -->
-      <section class="settings-card">
-        <div class="settings-card-head">
+      <section class="htaccess-section">
+        <div class="section-head">
           <div>
             <h4>{{ t("panel.htaccess.files.title") }}</h4>
             <p class="meta">{{ t("panel.htaccess.files.hint") }}</p>
@@ -141,36 +178,51 @@
         </div>
 
         <p v-if="report.files.length === 0" class="empty-state">{{ t("panel.htaccess.files.none") }}</p>
-        <table v-else class="data-table">
-          <thead>
-            <tr>
-              <th>{{ t("panel.htaccess.files.path") }}</th>
-              <th>{{ t("panel.htaccess.files.size") }}</th>
-              <th>{{ t("panel.htaccess.files.modified") }}</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="file in report.files" :key="file.relativeDirectory">
-              <td><code>{{ file.virtualPath }}.htaccess</code></td>
-              <td>{{ file.sizeBytes }} B</td>
-              <td>{{ formatDate(file.lastWriteUtc) }}</td>
-              <td>
-                <button
-                  class="secondary compact"
-                  :disabled="inspecting"
-                  @click="inspect(file.relativeDirectory)">
-                  {{ t("panel.htaccess.files.inspect") }}
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <!--
+          GERÇEK `<table>` DOĞRU SEÇİM, ama tek başına biçimsizdi: base.css'te hiçbir
+          `table`/`th`/`td` kuralı yok (arandı, yok) ve `.data-table` bir BLOK için yazılmış
+          (`overflow-x: auto` bir tablo kutusunda hiçbir şey yapmaz). Yani bu liste kenarlıklı bir
+          çerçevenin içinde, hücre boşluğu olmayan çıplak bir tarayıcı tablosu olarak çiziliyordu.
+          Kaydırma kabuğu dışarıdaki `div`e, hücre biçimi de tabloya ait; ikisi karışmasın.
+
+          `scope="col"` EKLENDİ: ekran okuyucu hücreyi okurken sütun adını söyleyebilsin. Boş
+          başlık da adını `sr-only` ile alır — görsel olarak boş kalması doğru, adsız kalması değil.
+        -->
+        <div v-else class="data-table">
+          <table class="file-table">
+            <thead>
+              <tr>
+                <th scope="col">{{ t("panel.htaccess.files.path") }}</th>
+                <th scope="col" class="num-col">{{ t("panel.htaccess.files.size") }}</th>
+                <th scope="col">{{ t("panel.htaccess.files.modified") }}</th>
+                <th scope="col"><span class="sr-only">{{ t("panel.files.actions") }}</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="file in report.files" :key="file.relativeDirectory">
+                <td><code>{{ file.virtualPath }}.htaccess</code></td>
+                <!-- Bayt biçimi panelin TEK kaynağından gelir (utils/bytes.ts). Burada ham sayı ve
+                     koda gömülü bir "B" vardı: hem 12 KiB'lık bir dosya "12043 B" diye okunuyordu
+                     hem de birim İngilizce/Türkçe ayrımını hiç görmüyordu. -->
+                <td class="num-col">{{ boyutMetni(file.sizeBytes) }}</td>
+                <td class="date-col">{{ formatDate(file.lastWriteUtc) }}</td>
+                <td class="action-col">
+                  <button
+                    class="secondary compact"
+                    :disabled="inspecting"
+                    @click="inspect(file.relativeDirectory)">
+                    {{ t("panel.htaccess.files.inspect") }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ============================ İNCELEME ============================ -->
-      <section class="settings-card">
-        <div class="settings-card-head">
+      <section class="htaccess-section">
+        <div class="section-head">
           <div>
             <h4>{{ t("panel.htaccess.inspect.title", { path: inspection?.virtualPath ?? "/" }) }}</h4>
             <p class="meta">{{ t("panel.htaccess.inspect.hint") }}</p>
@@ -232,67 +284,15 @@
         <p v-else class="empty-state">{{ t("panel.htaccess.inspect.pick") }}</p>
       </section>
 
-      <!-- ============================ SÖZ DİZİMİ DENETİMİ ============================ -->
-      <section class="settings-card">
-        <div class="settings-card-head">
-          <div>
-            <h4>{{ t("panel.htaccess.validate.title") }}</h4>
-            <p class="meta">{{ t("panel.htaccess.validate.hint") }}</p>
-          </div>
-        </div>
-
-        <label class="setting-row align-start">
-          <span>{{ t("panel.htaccess.validate.content") }}</span>
-          <textarea v-model="draft" rows="10" spellcheck="false" :placeholder="validatePlaceholder"></textarea>
-          <small>{{ t("panel.htaccess.validate.contentHelp") }}</small>
-        </label>
-
-        <label class="setting-row">
-          <span>{{ t("panel.htaccess.validate.virtualPath") }}</span>
-          <input v-model="draftPath" spellcheck="false" placeholder="/" />
-          <small>{{ t("panel.htaccess.validate.virtualPathHelp") }}</small>
-        </label>
-
-        <div class="action-row">
-          <button class="secondary" :disabled="validating || draft.trim().length === 0" @click="runValidate">
-            {{ validating ? t("panel.htaccess.validate.running") : t("panel.htaccess.validate.run") }}
-          </button>
-          <!-- KAYDETME buraya konuldu: kullanıcı metni ZATEN burada yazıp denetliyordu, ama
-               kaydetmek için Dosyalar ekranına gidip elle yapıştırmak zorundaydı. Kaydetme
-               kendi doğrulamasını çalıştırır; ölümcül bulguda bilinçli onay ister. -->
-          <button v-bind="writeGate(saving || validating || draft.trim().length === 0)" @click="saveDraft">
-            {{ saving ? t("panel.htaccess.saving") : t("panel.htaccess.save.run") }}
-          </button>
-          <span class="meta">{{ t("panel.htaccess.save.hint") }}</span>
-        </div>
-
-        <template v-if="validation">
-          <p v-if="validation.usable" class="notice" role="status">
-            {{ t("panel.htaccess.validate.usable") }}
-          </p>
-          <p v-else class="notice error" role="alert">
-            {{ t("panel.htaccess.validate.notUsable") }}
-          </p>
-
-          <ul v-if="validation.diagnostics.length > 0" class="finding-list">
-            <li v-for="(finding, index) in validation.diagnostics" :key="`v-${index}`" class="finding">
-              <span :class="['finding-badge', diagnosticLevelName(finding.level)]">
-                {{ t(`panel.htaccess.level.${diagnosticLevelName(finding.level)}`) }}
-              </span>
-              <div class="finding-body">
-                <strong>{{ finding.directive || finding.code }}</strong>
-                <p>{{ finding.message }}</p>
-                <small><code>{{ finding.code }}</code><template v-if="finding.line > 0"> · {{ t("panel.htaccess.line", { line: finding.line }) }}</template></small>
-              </div>
-            </li>
-          </ul>
-          <p v-else class="empty-state">{{ t("panel.htaccess.validate.noFindings") }}</p>
-        </template>
-      </section>
-
-      <!-- ============================ URL BENZETİMİ ============================ -->
-      <section class="settings-card">
-        <div class="settings-card-head">
+      <!-- ============================ URL BENZETİMİ ============================
+           SIRA DEĞİŞTİ: bu bölüm eskiden "Söz dizimi denetimi"nin ALTINDAYDI, yani kullanıcı
+           dosyayı KAYDETTİKTEN sonra deneyebiliyordu. Ekranın izlediği yol "dosyam var mı →
+           doğru mu → çalışıyor mu → yaz"dır ve üç bölüm de aynı kaynağı okur:
+           Dosyalar/İnceleme/Benzetim SİTENİN DİSKTEKİ dosyalarına bakar, Söz dizimi denetimi ise
+           kullanıcının HENÜZ YAZMADIĞI taslağına. Okuma bölümleri artık bir arada, yazma bölümü
+           en sonda; kaydetmeden önce "şu an ne oluyor" sorusunun cevabı elde olur. -->
+      <section class="htaccess-section">
+        <div class="section-head">
           <div>
             <h4>{{ t("panel.htaccess.simulate.title") }}</h4>
             <p class="meta">{{ t("panel.htaccess.simulate.hint") }}</p>
@@ -350,9 +350,67 @@
         </p>
       </section>
 
+      <!-- ============================ SÖZ DİZİMİ DENETİMİ ============================ -->
+      <section class="htaccess-section">
+        <div class="section-head">
+          <div>
+            <h4>{{ t("panel.htaccess.validate.title") }}</h4>
+            <p class="meta">{{ t("panel.htaccess.validate.hint") }}</p>
+          </div>
+        </div>
+
+        <label class="setting-row align-start">
+          <span>{{ t("panel.htaccess.validate.content") }}</span>
+          <textarea v-model="draft" rows="10" spellcheck="false" :placeholder="validatePlaceholder"></textarea>
+          <small>{{ t("panel.htaccess.validate.contentHelp") }}</small>
+        </label>
+
+        <label class="setting-row">
+          <span>{{ t("panel.htaccess.validate.virtualPath") }}</span>
+          <input v-model="draftPath" spellcheck="false" placeholder="/" />
+          <small>{{ t("panel.htaccess.validate.virtualPathHelp") }}</small>
+        </label>
+
+        <div class="action-row">
+          <button class="secondary" :disabled="validating || draft.trim().length === 0" @click="runValidate">
+            {{ validating ? t("panel.htaccess.validate.running") : t("panel.htaccess.validate.run") }}
+          </button>
+          <!-- KAYDETME buraya konuldu: kullanıcı metni ZATEN burada yazıp denetliyordu, ama
+               kaydetmek için Dosyalar ekranına gidip elle yapıştırmak zorundaydı. Kaydetme
+               kendi doğrulamasını çalıştırır; ölümcül bulguda bilinçli onay ister. -->
+          <button v-bind="writeGate(saving || validating || draft.trim().length === 0)" @click="saveDraft">
+            {{ saving ? t("panel.htaccess.saving") : t("panel.htaccess.save.run") }}
+          </button>
+          <span class="meta">{{ t("panel.htaccess.save.hint") }}</span>
+        </div>
+
+        <template v-if="validation">
+          <p v-if="validation.usable" class="notice" role="status">
+            {{ t("panel.htaccess.validate.usable") }}
+          </p>
+          <p v-else class="notice error" role="alert">
+            {{ t("panel.htaccess.validate.notUsable") }}
+          </p>
+
+          <ul v-if="validation.diagnostics.length > 0" class="finding-list">
+            <li v-for="(finding, index) in validation.diagnostics" :key="`v-${index}`" class="finding">
+              <span :class="['finding-badge', diagnosticLevelName(finding.level)]">
+                {{ t(`panel.htaccess.level.${diagnosticLevelName(finding.level)}`) }}
+              </span>
+              <div class="finding-body">
+                <strong>{{ finding.directive || finding.code }}</strong>
+                <p>{{ finding.message }}</p>
+                <small><code>{{ finding.code }}</code><template v-if="finding.line > 0"> · {{ t("panel.htaccess.line", { line: finding.line }) }}</template></small>
+              </div>
+            </li>
+          </ul>
+          <p v-else class="empty-state">{{ t("panel.htaccess.validate.noFindings") }}</p>
+        </template>
+      </section>
+
       <!-- ============================ BİLİNÇLİ SAPMALAR ============================ -->
-      <section class="settings-card">
-        <div class="settings-card-head">
+      <section class="htaccess-section">
+        <div class="section-head">
           <div>
             <h4>{{ t("panel.htaccess.deviations.title") }}</h4>
             <p class="meta">{{ t("panel.htaccess.deviations.hint") }}</p>
@@ -406,6 +464,8 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { formatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmesi bastan devre disi + sebebi title/aria ile soylenir.
@@ -462,6 +522,35 @@ function modeLabel(mode: HtaccessMode): string {
 }
 
 /**
+ * DÜRÜSTLÜK ŞERİDİNDEKİ UYARI SAYILARI.
+ *
+ * İki sayaç da şablondaki `v-if` koşullarının BİREBİR aynısını okur; ikinci bir kural yazılsaydı
+ * (ör. "dosya yoksa iki uyarı vardır") sayı ile ekranda görünen blok sayısı zamanla ayrışır ve
+ * başlıkta yanlış bir sayı yazardı — tam da gizlemekle suçlanacağımız yer.
+ *
+ * `engelUyariSayisi` yalnız ENGEL sayar (özellik neden çalışmıyor); `bilgiUyariSayisi` bilgi
+ * düzeyindekileri. Katlanan blok yalnız ikincisini taşır.
+ */
+const engelUyariSayisi = computed(() => {
+  const rapor = report.value;
+  if (!rapor) return 0;
+
+  return (rapor.engineBlockers.length > 0 ? 1 : 0) +
+    (rapor.support === "no_managed_code" || rapor.support === "runtime_version" ? 1 : 0) +
+    (rapor.hasFiles && rapor.mode === "off" ? 1 : 0);
+});
+
+const bilgiUyariSayisi = computed(() => {
+  const rapor = report.value;
+  if (!rapor) return 0;
+
+  return (rapor.support === "unknown" ? 1 : 0) +
+    (rapor.serverMode === "off" ? 1 : 0) +
+    (rapor.hasFiles && !rapor.hasRootFile ? 1 : 0) +
+    (!rapor.hasFiles ? 1 : 0);
+});
+
+/**
  * ReDoS riski TAŞIYAN desenler. Kod METNE değil KODA bakar: motor mesajı iyileştirse ya da
  * çevirse bile bu süzgeç çalışmaya devam eder (motorun kendi kuralı da bu).
  */
@@ -486,9 +575,14 @@ function shortFile(path: string): string {
   return parts.slice(-2).join("/");
 }
 
+/** Tarih biçimi panelin TEK kaynağından (utils/datetime.ts); ekran kendi kopyasını taşımaz. */
 function formatDate(value: string): string {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "-" : parsed.toLocaleString();
+  return formatDateTime(value, "-");
+}
+
+/** Bayt biçimi panelin geri kalanıyla AYNI (bkz. utils/bytes.ts); ekran kendi birimini uydurmaz. */
+function boyutMetni(value: number): string {
+  return formatBytes(value, t);
 }
 
 function fail(error: unknown, fallbackKey: string) {
@@ -780,10 +874,194 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   gap: 1rem;
 }
 
+/*
+ * BÖLÜM KABUĞU — ÖLÇÜLMÜŞ BİR BOŞLUK DOLDURULUYOR.
+ *
+ * Bu ekranın altı bölümü `class="settings-card"` taşıyordu ve o sınıf YALNIZCA
+ * SiteHostingView'in `<style scoped>` bloğunda tanımlı. Vue'da kapsamlı stil bir alt bileşenin
+ * KÖK ögesine geçer, İÇİNDEKİLERE geçmez: bu görünümün kökü `.htaccess-panel`, altı bölüm ise
+ * onun çocukları. Yani altı bölümün hiçbiri bir kart görünümü ALMIYORDU — ne kenarlık, ne dolgu,
+ * ne zemin. Ekran, başlıkları olan tek parça bir metin duvarıydı.
+ *
+ * KART İÇİNDE KART YAPILMADI: bu görünümün kendisi ana ekranda zaten bir `.settings-card`ın
+ * içinde çiziliyor (SiteHostingView, "htaccess" bölümü). İç içe iki çerçeve derinlik değil
+ * gürültü üretir. Bunun yerine bölümler ÜST ÇİZGİ + nefes payıyla ayrılıyor: aynı kart içinde
+ * ritim kuran, Plesk'in ayar sayfalarında da kullanılan ayrım.
+ */
+.htaccess-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--panel-border);
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* `.action-row` da bu görünümde hiç tanımlı değildi (FilesView/SiteHostingView kendi kapsamlı
+   kopyalarını taşıyor): düğme ile yanındaki açıklama metni satır içinde, boşluksuz akıyordu. */
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.action-row button {
+  width: auto;
+}
+
+/* Bildirim şeridinin İÇ düzeni (konumu base.css'te): metin ile kapatma düğmesi yan yana. */
+.page-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-dismiss {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.7;
+  box-shadow: none;
+}
+
+.notice-dismiss:not(:disabled):hover {
+  background: color-mix(in srgb, currentcolor 12%, transparent);
+  opacity: 1;
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
 .truth-strip {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* KATLANAN BİLGİ UYARILARI. Başlık bir düğme gibi görünür (tıklanabilirliği belli olsun) ama
+   uyarı kutusu gibi ağır değildir; içindekiler açıldığında normal uyarı biçimini korur. */
+.truth-more > summary {
+  padding: 7px 11px;
+  border: 1px dashed var(--panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-weight: 600;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.truth-more > summary:hover {
+  border-color: color-mix(in srgb, var(--accent-1) 45%, transparent);
+  color: var(--text-strong);
+}
+
+.truth-more > summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-1) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.truth-more[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+.truth-more > :not(summary) {
+  margin-bottom: 0.5rem;
+}
+
+.truth-more > :last-child {
+  margin-bottom: 0;
+}
+
+/*
+ * DOSYA TABLOSU. base.css'te hiçbir `table`/`th`/`td` kuralı yok; `.data-table` kabuğu blok
+ * listeler için yazılmış (kenarlık + yatay kaydırma). Tablo o kabuğun İÇİNE alındı, hücre biçimi
+ * burada verildi: başlık satırı panelin öbür listeleriyle aynı ağırlıkta (`.data-row.table-head`
+ * ile eşleşen zemin ve punto), satır ayırıcıları aynı kenarlık renginde.
+ */
+.file-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+}
+
+.file-table th,
+.file-table td {
+  padding: 9px 11px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--panel-border);
+  overflow-wrap: anywhere;
+}
+
+.file-table thead th {
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.file-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.file-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent-1) 4%, transparent);
+}
+
+/* Sayı sütunu sağa hizalı ve eşit genişlikte rakamlarla: iki dosyanın boyutunu karşılaştırmak
+   için okumak değil bakmak yetsin. */
+.file-table .num-col {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-table .date-col {
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.file-table .action-col {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.file-table .action-col button {
+  width: auto;
+}
+
+/* ETKİN SUNUCU KİPİ, yalnız "soluk düğme" ile değil görünür bir işaretle söylenir. Kenarlık
+   kalınlığı + zemin birlikte çalışır: yalnız renge dayanan bir işaret renk körü kullanıcıda
+   hiçbir şey anlatmaz. */
+.mode-switch-row button[aria-pressed="true"] {
+  border-color: var(--accent-1);
+  background: color-mix(in srgb, var(--accent-1) 16%, var(--surface-3));
+  color: var(--text-strong);
+  box-shadow: inset 0 -2px var(--accent-1);
+  opacity: 1;
 }
 
 .mode-choices {
@@ -793,14 +1071,39 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   margin-bottom: 1rem;
 }
 
+/*
+ * RENK BELİRTEÇLERİ DÜZELTİLDİ. Bu dosyanın üç kuralı `var(--border, #d8dee9)` yazıyordu ama
+ * panelde `--border` diye bir belirteç YOK (base.css'te kenarlık belirteci `--panel-border`).
+ * Yani üç yerde de daima yedek değer, yani AÇIK GRİ bir çizgi kullanılıyordu — panelin
+ * varsayılan koyu temasında bu, çevresindeki bütün kenarlıklardan belirgin biçimde parlak bir
+ * çizgi demekti ve bu bölümler "seçili/vurgulu" gibi görünüyordu. Doğru belirteç kullanılınca
+ * kenarlıklar hem koyu hem açık temada panelin geri kalanıyla aynı tonda kalıyor.
+ */
 .mode-choice {
   display: flex;
   align-items: flex-start;
   gap: 0.6rem;
   padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border, #d8dee9);
-  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
   cursor: pointer;
+}
+
+.mode-choice:hover {
+  border-color: color-mix(in srgb, var(--accent-1) 45%, transparent);
+}
+
+/* SEÇİLİ KİP yalnız küçük radyo noktasıyla değil, kutunun tamamıyla söylenir: üç seçenekten
+   hangisinin açık olduğu bir bakışta görünmeliydi. */
+.mode-choice:has(input:checked) {
+  border-color: var(--accent-1);
+  background: color-mix(in srgb, var(--accent-1) 10%, var(--surface-1));
+}
+
+.mode-choice:focus-within {
+  outline: 2px solid color-mix(in srgb, var(--accent-1) 70%, transparent);
+  outline-offset: 2px;
 }
 
 /* Sunucu geneli anahtar site ayarından GÖRSEL OLARAK da ayrılır: kapsamı bu sitenin değil,
@@ -811,7 +1114,7 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   gap: 0.5rem;
   margin-top: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid var(--border, #d8dee9);
+  border-top: 1px solid var(--panel-border);
 }
 
 .server-switch small {
@@ -841,9 +1144,9 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   gap: 0.6rem;
   align-items: flex-start;
   padding: 0.5rem 0.6rem;
-  border-left: 3px solid var(--border, #d8dee9);
-  background: rgba(127, 127, 127, 0.06);
-  border-radius: 4px;
+  border-left: 3px solid var(--panel-border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
 }
 
 .finding-body p {
@@ -854,24 +1157,58 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   opacity: 0.7;
 }
 
-/* Rozet renkleri AGIRLIGA gore. "unsupported" bilerek uyari renginde: kullanicinin kurali
-   CALISMIYOR ve bunu bir bilgi satiri gibi gostermek, tam da gizlemeye calistigimiz sey olurdu. */
+/*
+ * Rozet renkleri AGIRLIGA gore. "unsupported" bilerek uyari renginde: kullanicinin kurali
+ * CALISMIYOR ve bunu bir bilgi satiri gibi gostermek, tam da gizlemeye calistigimiz sey olurdu.
+ *
+ * BÜYÜK HARFE ÇEVİRME KALDIRILDI — Türkçe yerel tuzağı. `index.html` `<html lang="tr">` yazıyor
+ * ve dil değiştirildiğinde bu öznitelik GÜNCELLENMİYOR; tarayıcı `text-transform: uppercase`i
+ * belgenin diline göre uyguladığı için İngilizce arayüzde "Info" rozeti "İNFO" diye çiziliyordu
+ * (Türkçe noktalı büyük İ). Rozet zaten kalın ve renkli; okunurluk için büyük harf gerekmiyor,
+ * ama yanlış harf gerçek bir hata. Renk TEK BAŞINA taşıyıcı değil: her rozetin METNİ de var
+ * (`panel.htaccess.level.*`), yani ayrım renk körü kullanıcıda da okunur.
+ *
+ * Renkler artık panelin durum belirteçlerinden geliyor; metin rengi de birlikte veriliyor,
+ * yoksa açık temada soluk bir zemin üstünde gövde rengiyle yazılıyordu ve ağırlık ayrımı
+ * yalnızca zemin tonuna kalıyordu.
+ */
 .finding-badge {
   flex: 0 0 auto;
   min-width: 6.5rem;
   text-align: center;
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 700;
   padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  text-transform: uppercase;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
 }
 
-.finding-badge.info { background: rgba(90, 150, 220, 0.2); }
-.finding-badge.unsupported { background: rgba(230, 160, 40, 0.25); }
-.finding-badge.warning { background: rgba(230, 160, 40, 0.25); }
-.finding-badge.error { background: rgba(220, 80, 80, 0.25); }
-.finding-badge.fatal { background: rgba(200, 40, 40, 0.35); }
+.finding-badge.info {
+  background: color-mix(in srgb, var(--accent-1) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-1) 30%, transparent);
+  color: var(--accent-text);
+}
+
+.finding-badge.unsupported,
+.finding-badge.warning {
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn-1) 30%, transparent);
+  color: var(--warn-text);
+}
+
+.finding-badge.error {
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger-1) 30%, transparent);
+  color: var(--danger-text);
+}
+
+/* "Ölümcül" ile "Hata" AYIRT EDİLEBİLMELİ: ikisi de kırmızı ailesinde ama ölümcül olan dolu
+   zeminle öne çıkar — motor o dosyayı TAMAMEN atlar, sonucu daha ağırdır. */
+.finding-badge.fatal {
+  background: var(--danger-1);
+  border-color: var(--danger-1);
+  color: #fff1f1;
+}
 
 .deviation-list {
   margin: 0;

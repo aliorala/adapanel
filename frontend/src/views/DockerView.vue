@@ -323,6 +323,9 @@ function showNotice(message: string, isError: boolean) {
   margin: 8px 0 0;
   padding: 12px;
   border-radius: var(--radius-sm);
+  /* Koyu terminal yüzeyi BİLEREK sabit: base.css `pre`/`.code-viewer` için aynı kararı
+     veriyor ve açık temada bu ögeyi zaten kendi koyu değerine çeviyor (öge bir <pre>).
+     Kabuk çıktısı açık zeminde okunmaz; belirtece bağlanMAZ. */
   background: #0a0e16;
   color: var(--accent-text);
   white-space: pre-wrap;

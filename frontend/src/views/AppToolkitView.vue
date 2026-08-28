@@ -609,11 +609,29 @@ function genPassword(): string {
   return "Wp!" + Array.from(bytes).map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Parola sıfırlama ONAYSIZ YAPILMAZ.
+ *
+ * Denetimde bulundu: tek tık, müşterinin WordPress yönetici parolasını değiştiriyordu ve geri
+ * dönüşü YOKTU — eski parola artık bilinmiyor. Yanlış tıklayan kullanıcı, kendi sitesine giriş
+ * bilgisini kaybetmiş oluyor; parolayı kullanan eklenti ya da betik varsa onlar da düşüyor.
+ * Bu ekrandaki diğer yıkıcı işlemler zaten onay istiyordu, bu atlanmıştı.
+ */
 async function wpResetPassword() {
   const user = (wpForm.adminUser || "admin").trim();
   if (!user) {
     return;
   }
+
+  await confirm({
+    title: t("panel.wpkit.resetPassword"),
+    message: t("panel.wpkit.confirmResetPassword"),
+    action: wpResetPasswordUygula
+  });
+}
+
+async function wpResetPasswordUygula() {
+  const user = (wpForm.adminUser || "admin").trim();
   wpBusy.value = "pass";
   wpNotice.value = "";
   wpNewPassword.value = "";
@@ -874,7 +892,7 @@ function showQueueNotice(message: string, isError: boolean) {
   margin: 0;
   padding: 12px;
   border-radius: 8px;
-  background: var(--surface-0, #0b1418);
+  background: var(--surface-0);
   border: 1px solid var(--panel-border);
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 0.8rem;

@@ -10,8 +10,20 @@
       </button>
     </div>
 
+    <!-- BİLDİRİM ŞERİDİ. Yeri ÖLÇÜLDÜ, tahmin edilmedi: `page-notice` base.css'te
+         `position: fixed` ile sağ alt köşeye çakılıdır (bkz. base.css `.page-notice`), yani
+         kullanıcı sayfanın neresine kaydırırsa kaydırsın mesajı görür. Bu yüzden mesajı ayrıca
+         her eylemin yanına kopyalamıyoruz — ikinci bir bildirim yeri, iki farklı doğruluk demek.
+         Eksik olan tek şey KAPATMA idi: şerit bir sonraki bildirime kadar ekranda kalıyor ve
+         çok satırlı bir yükleme özeti köşeyi kalıcı olarak kaplıyordu. -->
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">
-      {{ notice }}
+      <span class="notice-text">{{ notice }}</span>
+      <button
+        type="button"
+        class="notice-dismiss"
+        :aria-label="t('panel.common.dismissNotice')"
+        :title="t('panel.common.dismissNotice')"
+        @click="clearNotice">×</button>
     </p>
 
     <div class="module-toolbar">
@@ -59,27 +71,40 @@
         <small>{{ t("panel.files.dropHint") }}</small>
       </div>
 
+      <!-- ARAÇ ÇUBUĞU İKİ İŞE AYRILDI: solda GEZİNME, sağda OLUŞTURMA.
+           Önceden dördü ("Dosya yükle", "Üst dizin", "Klasör oluştur", "Yeni dosya") tek grupta
+           ve HEPSİ `secondary compact` idi: aynı ağırlıkta dört düğmenin arasında birincil eylem
+           yoktu ve "Üst dizin" — ki bir gezinme eylemidir, yol çubuğunun işini yapar — oluşturma
+           düğmelerinin arasında duruyordu. Şimdi "Üst dizin" ait olduğu yerde, yol çubuğunun
+           yanında; "Dosya yükle" ise tek BİRİNCİL eylem olarak vurgulu.
+           Dıştaki kapsayıcı `space-between` uyguluyordu, içteki grup da AYNI sınıfı taşıdığı için
+           dört düğme boş alana yayılıyordu; iç grup artık `toolbar-group` (yalnız akış + boşluk). -->
       <div class="action-row">
-        <!-- YOL ÇUBUĞU: her parça tıklanabilir. Site kökünün ÜSTÜ hiç çizilmez — kullanıcının
-             sanal alanı orada başlar ve gezinilemeyecek bir parçayı göstermek, olmayan bir
-             yetkiyi ima etmek olurdu. Bulunulan parça düğme değil: kendine gitmek işlevsiz. -->
-        <nav class="breadcrumb" :aria-label="t('panel.files.breadcrumb')">
-          <template v-for="(part, index) in breadcrumb" :key="part.path">
-            <span v-if="index > 0" class="breadcrumb-sep" aria-hidden="true">/</span>
-            <strong v-if="index === breadcrumb.length - 1" aria-current="page">{{ part.name }}</strong>
-            <button v-else type="button" class="link-button" @click="openPath(part.path)">{{ part.name }}</button>
-          </template>
-        </nav>
-        <div class="action-row">
+        <div class="toolbar-group">
+          <button
+            class="secondary compact"
+            :disabled="!canGoUp"
+            @click="openPath(workspace?.parentPath || siteRootPath)">
+            {{ t("panel.files.up") }}
+          </button>
+          <!-- YOL ÇUBUĞU: her parça tıklanabilir. Site kökünün ÜSTÜ hiç çizilmez — kullanıcının
+               sanal alanı orada başlar ve gezinilemeyecek bir parçayı göstermek, olmayan bir
+               yetkiyi ima etmek olurdu. Bulunulan parça düğme değil: kendine gitmek işlevsiz. -->
+          <nav class="breadcrumb" :aria-label="t('panel.files.breadcrumb')">
+            <template v-for="(part, index) in breadcrumb" :key="part.path">
+              <span v-if="index > 0" class="breadcrumb-sep" aria-hidden="true">/</span>
+              <strong v-if="index === breadcrumb.length - 1" aria-current="page">{{ part.name }}</strong>
+              <button v-else type="button" class="link-button" @click="openPath(part.path)">{{ part.name }}</button>
+            </template>
+          </nav>
+        </div>
+        <div class="toolbar-group">
           <!-- ÇOKLU seçim: yirmi dosyayı tek tek seçtirmek Plesk'te de yok. Gönderim SIRAYLA
                (bkz. uploadSelectedFiles). -->
           <label class="upload-button" :class="{ disabled: uploadBusy || locked }" :title="lockReason || undefined">
             <input type="file" multiple v-bind="writeGate(uploadBusy)" @change="uploadSelectedFiles" />
             <span>{{ uploadBusy ? uploadProgressLabel : t("panel.files.upload") }}</span>
           </label>
-          <button class="secondary compact" :disabled="!canGoUp" @click="openPath(workspace?.parentPath || siteRootPath)">
-            {{ t("panel.files.up") }}
-          </button>
           <!-- Oluşturma düğmeleri yalnız KLASÖR görünümünde anlamlı: bir dosya açıkken
                `workspace.path` o dosyanın yoludur ve altına klasör/dosya yaratmak sessizce
                yanlış yere yazmak olurdu. -->
@@ -90,6 +115,21 @@
             {{ t("panel.files.createFile") }}
           </button>
         </div>
+      </div>
+
+      <!-- YÜKLEME İLERLEMESİ. Düğme metni zaten "3/20" diyor ama bir SAYI, kalan işin ne kadar
+           olduğunu bir bakışta anlatmaz; çubuk oranı gösterir. Ölçü DOSYA BAŞINADIR (uç bayt
+           ilerlemesi bildirmiyor), bu yüzden büyük tek dosyada çubuk uzun süre yerinde durur —
+           bunu bayt ilerlemesi gibi göstermek uydurma olurdu. -->
+      <div
+        v-if="uploadBusy"
+        class="upload-progress"
+        role="progressbar"
+        :aria-label="uploadProgressLabel"
+        :aria-valuenow="uploadDone"
+        aria-valuemin="0"
+        :aria-valuemax="uploadTotal">
+        <span class="progress-fill" :style="{ width: `${uploadPercent}%` }"></span>
       </div>
 
       <form v-if="workspace?.isDirectory" class="search-row" @submit.prevent="runSearch">
@@ -120,6 +160,11 @@
       <SectionLoadError v-else-if="workspaceLoad.message.value" :message="workspaceLoad.message.value" @retry="() => refresh()" />
 
       <template v-else-if="workspace?.isDirectory">
+        <!-- TOPLU EYLEM ÇUBUĞU. "Seçilenleri sil" YIKICI eylemdir ve önceden "Kopyala" ile
+             "Seçimi temizle" arasında, tam da refleksle basılan yerde duruyordu. Artık kendi
+             grubunda, ayırıcı bir çizginin ardında ve çubuğun öbür ucunda: yanlış düğmeye
+             çarpmak için farenin gitmesi gereken yol bilinçli olarak uzatıldı. Onay diyaloğu
+             (ad/sayı yazdırma) yerinde duruyor; bu yerleşim onun yerine geçmez, önüne geçer. -->
         <div v-if="selection.count.value > 0" class="bulk-bar" role="status">
           <span class="status-pill">{{ t("panel.bulk.selectedCount", { count: selection.count.value }) }}</span>
           <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="startTransfer('move')">
@@ -128,11 +173,12 @@
           <button class="secondary compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="startTransfer('copy')">
             {{ t("panel.files.copy") }}
           </button>
-          <button class="danger compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="removeSelected">
-            {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
-          </button>
           <button class="secondary compact" :disabled="bulk.busy.value || transferBusy" @click="selection.clear">
             {{ t("panel.bulk.clearSelection") }}
+          </button>
+          <span class="bulk-spacer" aria-hidden="true"></span>
+          <button class="danger compact" v-bind="writeGate(bulk.busy.value || transferBusy)" @click="removeSelected">
+            {{ t("panel.bulk.deleteSelected", { count: selection.count.value }) }}
           </button>
         </div>
 
@@ -167,80 +213,150 @@
           </div>
         </form>
 
-        <div class="data-table">
-          <div class="data-row table-head files-row">
-            <span class="select-cell">
+        <!-- TABLO ANLAMI. Yapı `<table>` değil, ızgara `<div>`lerdir (panelin bütün listeleri
+             böyle; `.data-table`/`.data-row` base.css'te tanımlı). Bunun bedeli, ekran
+             okuyucunun burada HİÇBİR tablo görmemesiydi: başlık hücresi ile veri hücresi
+             arasında bağ yok, "Boyut sütunu" diye bir şey duyulmuyordu. Yapıyı `<table>`ya
+             çevirmek ızgara sütunlarını ve base.css'in bütün liste stilini kırardı; ARIA
+             rolleri aynı bağı yapıya dokunmadan kurar (`columnheader` = `<th scope="col">`
+             karşılığı). -->
+        <div class="data-table" role="table" :aria-label="t('panel.files.title')">
+          <div class="data-row table-head files-row" role="row">
+            <span class="select-cell" role="columnheader">
               <input
                 type="checkbox"
                 :checked="selection.allSelected(visiblePaths)"
                 :aria-label="t('panel.bulk.selectAll')"
                 @change="selection.toggleAll(visiblePaths)" />
             </span>
-            <span>{{ t("panel.files.name") }}</span>
-            <span>{{ t("panel.files.kind") }}</span>
-            <span>{{ t("panel.files.sizeColumn") }}</span>
-            <span>{{ t("panel.files.actions") }}</span>
+            <span role="columnheader">{{ t("panel.files.name") }}</span>
+            <span role="columnheader">{{ t("panel.files.kind") }}</span>
+            <span role="columnheader" class="size-cell">{{ t("panel.files.sizeColumn") }}</span>
+            <span role="columnheader" class="date-cell">{{ t("panel.files.modified") }}</span>
+            <span role="columnheader">{{ t("panel.files.actions") }}</span>
           </div>
 
-          <div v-for="entry in filePager.items.value" :key="entry.path" class="data-row files-row">
-            <span class="select-cell">
-              <input
-                type="checkbox"
-                :checked="selection.isSelected(entry.path)"
-                :aria-label="t('panel.bulk.selectRow', { name: entry.name })"
-                @change="selection.toggle(entry.path)" />
-            </span>
-            <div class="cell-main">
-              <button class="link-button" @click="openPath(entry.path)">{{ entry.name }}</button>
-              <small>{{ entry.path }}</small>
+          <template v-for="entry in filePager.items.value" :key="entry.path">
+            <div class="data-row files-row" role="row">
+              <span class="select-cell" role="cell">
+                <input
+                  type="checkbox"
+                  :checked="selection.isSelected(entry.path)"
+                  :aria-label="t('panel.bulk.selectRow', { name: entry.name })"
+                  @change="selection.toggle(entry.path)" />
+              </span>
+              <!-- TAM YOL ARTIK HER SATIRDA YAZILMIYOR. Bir klasörün bütün ögeleri aynı üst yolu
+                   paylaşır: 25 satır boyunca "sites/x/wp-content/plugins/" tekrarlanıyor, satırı
+                   iki katına çıkarıyor ve hiçbir şey ayırt etmiyordu — üstelik aynı bilgi zaten
+                   yol çubuğunda duruyor. Bilgi KAYBOLMADI: ada asılı `title` ile okunabilir, ve
+                   yolun gerçekten satırdan satıra değiştiği tek yerde (arama sonuçları) hâlâ
+                   yazılı. -->
+              <div class="cell-main" role="cell">
+                <button class="link-button entry-name" :title="entry.path" @click="openPath(entry.path)">
+                  {{ entry.name }}
+                </button>
+              </div>
+              <span role="cell">{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
+              <!-- KLASÖR BOYUTU İSTENDİĞİNDE hesaplanır. Hesaplanmamış klasör "0 B" göstermez:
+                   sıfır ÖLÇÜLMÜŞ bir değerdir ve dolu bir klasörü boş göstermek kullanıcının
+                   disk kararını yanlış sayıya dayandırması olurdu.
+                   ÖLÇÜM DÜĞMESİ HÜCRENİN İÇİNE ALINDI: eylem, sonucunun görüneceği yerde durur;
+                   "—" ise ne olduğu belirsiz bir tire yerine "Boyutu hesapla" diyerek hem
+                   ölçülmediğini söyler hem de çaresini gösterir. Bu, işlemler sütunundan bir
+                   düğme daha eksiltir. -->
+              <span class="size-cell" role="cell">
+                <template v-if="!entry.isDirectory">{{ boyutMetni(entry.size) }}</template>
+                <template v-else-if="folderSizes[entry.path]">
+                  <span :title="folderSizes[entry.path].truncated ? kesikSebebi(folderSizes[entry.path]) : undefined">
+                    {{ folderSizes[entry.path].truncated
+                      ? t("panel.files.sizeAtLeast", { size: boyutMetni(folderSizes[entry.path].totalBytes) })
+                      : boyutMetni(folderSizes[entry.path].totalBytes) }}
+                  </span>
+                </template>
+                <button
+                  v-else
+                  type="button"
+                  class="link-button size-calc"
+                  :disabled="sizeBusyPath === entry.path"
+                  @click="calculateFolderSize(entry)">
+                  {{ sizeBusyPath === entry.path ? t("panel.files.calcSizeBusy") : t("panel.files.calcSize") }}
+                </button>
+              </span>
+              <span class="date-cell" role="cell">{{ tarihMetni(entry.lastModifiedUtc) }}</span>
+              <!-- EYLEM HİYERARŞİSİ. Satırda altı düğmeye kadar çıkılıyordu (İndir · Boyutu
+                   hesapla · Yeniden adlandır · ZIP yap · Arşivi aç · Sil) ve hepsi aynı
+                   ağırlıktaydı; sütun tek başına 430px ayırıyordu (eski CSS). Daha kötüsü,
+                   `flex-wrap` yüzünden "Sil" satırdan satıra BAŞKA bir yatay konuma düşüyordu:
+                   .zip satırında bir düğme fazla olduğu için, bir üst satırda "ZIP yap"ın
+                   bulunduğu noktada "Sil" oluyordu.
+                   Şimdi görünür kalan tek eylem, dosya yöneticisinde en sık kullanılan "İndir";
+                   gerisi tek bir açma düğmesinin ardında ve KONUMU SABİT. -->
+              <div class="entry-actions" role="cell">
+                <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
+                  {{ t("panel.files.download") }}
+                </a>
+                <button
+                  type="button"
+                  class="secondary compact more-toggle"
+                  :aria-expanded="openActionsPath === entry.path"
+                  :aria-controls="`file-actions-${entry.path}`"
+                  :aria-label="t('panel.files.moreActions', { name: entry.name })"
+                  :title="t('panel.files.moreActions', { name: entry.name })"
+                  @click="toggleActions(entry.path)">…</button>
+              </div>
             </div>
-            <span>{{ entry.isDirectory ? t("panel.files.folder") : entry.extension || t("panel.files.file") }}</span>
-            <!-- KLASÖR BOYUTU İSTENDİĞİNDE hesaplanır. Hesaplanmamış klasör "0 B" değil "—"
-                 gösterir: sıfır, ölçülmüş bir değerdir ve dolu bir klasörü boş göstermek
-                 kullanıcının disk kararını yanlış sayıya dayandırması olurdu. -->
-            <span class="size-cell">
-              <template v-if="!entry.isDirectory">{{ boyutMetni(entry.size) }}</template>
-              <template v-else-if="folderSizes[entry.path]">
-                <span :title="folderSizes[entry.path].truncated ? kesikSebebi(folderSizes[entry.path]) : undefined">
-                  {{ folderSizes[entry.path].truncated
-                    ? t("panel.files.sizeAtLeast", { size: boyutMetni(folderSizes[entry.path].totalBytes) })
-                    : boyutMetni(folderSizes[entry.path].totalBytes) }}
-                </span>
-              </template>
-              <template v-else>—</template>
-            </span>
-            <div class="entry-actions">
-              <a v-if="!entry.isDirectory" class="secondary compact action-link" :href="getDownloadUrl(entry.path)">
-                {{ t("panel.files.download") }}
-              </a>
-              <button
-                v-if="entry.isDirectory"
-                class="secondary compact"
-                :disabled="sizeBusyPath === entry.path"
-                @click="calculateFolderSize(entry)">
-                {{ sizeBusyPath === entry.path ? t("panel.files.calcSizeBusy") : t("panel.files.calcSize") }}
-              </button>
-              <button class="secondary compact" v-bind="writeGate()" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
-              <button class="secondary compact" v-bind="writeGate()" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
-              <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate()" @click="extract(entry.path)">
-                {{ t("panel.files.extract") }}
-              </button>
-              <button class="danger compact" v-bind="writeGate()" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
-            </div>
-          </div>
 
-          <p v-if="entries.length === 0" class="empty-state">{{ t("panel.files.emptyFolder") }}</p>
+            <!-- İKİNCİL EYLEMLER — AÇILIR KATMAN DEĞİL, SATIR ALTI ÇEKMECE.
+                 Üste binen bir menü burada ÇALIŞMAZ: `.data-table` base.css'te `overflow-x: auto`
+                 taşır ve CSS'te bir eksen `visible` olmayınca öbürü de `auto`ya döner; yani
+                 konumlandırılmış bir menü tablonun içinde KIRPILIR ya da tabloya dikey kaydırma
+                 çubuğu ekletir. Çekmece satırı bu sorunu tümüyle ortadan kaldırır, dar ekranda ve
+                 klavyeyle de aynı biçimde çalışır. -->
+            <div
+              v-if="openActionsPath === entry.path"
+              :id="`file-actions-${entry.path}`"
+              class="data-row actions-drawer"
+              role="row"
+              @keydown.esc.stop="openActionsPath = ''">
+              <!-- `aria-colspan`: rol verilmiş bir tabloda satırların hücre sayısı tutmalı;
+                   çekmece satırı altı sütunun tamamını kaplar. -->
+              <div class="drawer-actions" role="cell" aria-colspan="6">
+                <span class="drawer-label">{{ entry.name }}</span>
+                <button class="secondary compact" v-bind="writeGate()" @click="renamePath(entry)">{{ t("panel.files.rename") }}</button>
+                <button class="secondary compact" v-bind="writeGate()" @click="compress(entry.path)">{{ t("panel.files.compress") }}</button>
+                <button v-if="entry.extension.toLowerCase() === '.zip'" class="secondary compact" v-bind="writeGate()" @click="extract(entry.path)">
+                  {{ t("panel.files.extract") }}
+                </button>
+                <!-- Yıkıcı eylem: ayırıcının ardında ve çekmecenin öbür ucunda. -->
+                <span class="drawer-divider" aria-hidden="true"></span>
+                <button class="danger compact" v-bind="writeGate()" @click="removePath(entry)">{{ t("panel.sites.delete") }}</button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Boş klasör iletisi tablonun İÇİNDE kalır (kutunun dışına atılsa başlık satırı boş
+               bir çerçeveyle asılı kalırdı), ama `role="row"`/`role="cell"` ile: rol verilmiş bir
+               tablonun içinde rolsüz bir öge ekran okuyucuda yapıyı bozar. -->
+          <div v-if="entries.length === 0" class="data-row" role="row">
+            <p class="empty-state" role="cell" aria-colspan="6">{{ t("panel.files.emptyFolder") }}</p>
+          </div>
         </div>
 
         <TablePager :state="filePager" :disabled="bulk.busy.value" />
       </template>
 
-      <label v-else-if="workspace">
-        <span>{{ t("panel.files.editor") }}</span>
-        <textarea v-model="fileContent" rows="14"></textarea>
+      <!-- DÜZENLEYİCİ tek aralıklı yazı tipi kullanır: buradan düzenlenen şeyler `.htaccess`,
+           `web.config`, `robots.txt` gibi hizalamanın anlam taşıdığı dosyalar. Orantılı yazı
+           tipinde girinti ve sütun hizası okunmuyordu. -->
+      <label v-else-if="workspace" class="stacked-field">
+        <span class="field-label">{{ t("panel.files.editor") }}</span>
+        <textarea v-model="fileContent" rows="18" spellcheck="false" class="file-editor"></textarea>
       </label>
 
-      <div v-if="workspace && !workspace.isDirectory" class="action-row">
+      <!-- Kaydet BİRİNCİL, indir ikincil. Eskiden ikisi `action-row` içindeydi ve o sınıf
+           `space-between` uyguladığı için düğmeler kartın iki ucuna savruluyordu; `toolbar-group`
+           yalnız akış + boşluk verir, ikisi yan yana durur. -->
+      <div v-if="workspace && !workspace.isDirectory" class="toolbar-group">
         <button v-bind="writeGate()" @click="saveCurrentFile">
           {{ t("panel.files.save") }}
         </button>
@@ -249,13 +365,16 @@
         </a>
       </div>
 
+      <!-- İZİNLER, günlük dosya işlerinin değil YÖNETİMİN alanıdır: her açılışta kartın altında
+           aynı ağırlıkta durması, "her dosya için doldurulacak bir form" izlenimi veriyordu.
+           İşlev aynı; yalnızca ayırıcı çizgi ve daha küçük bir başlıkla ikincil sıraya alındı. -->
       <form v-if="workspace" class="permissions-row" @submit.prevent="savePermissions">
         <label>
-          <span>{{ t("panel.security.principal") }}</span>
+          <span class="field-label">{{ t("panel.security.principal") }}</span>
           <input v-model="permissionPrincipal" placeholder="IIS_IUSRS" />
         </label>
         <label>
-          <span>{{ t("panel.security.rights") }}</span>
+          <span class="field-label">{{ t("panel.security.rights") }}</span>
           <select v-model="permissionRights">
             <option value="R">R</option>
             <option value="M">M</option>
@@ -306,26 +425,38 @@
         </button>
       </div>
 
-      <div v-if="gorunenYedekler.length" class="data-table">
-        <div class="data-row table-head backup-row">
-          <span>{{ t("panel.files.name") }}</span>
-          <span>{{ t("panel.backup.type") }}</span>
-          <span>{{ t("panel.sites.state") }}</span>
-          <span></span>
+      <div v-if="gorunenYedekler.length" class="data-table" role="table" :aria-label="t('panel.backup.title')">
+        <div class="data-row table-head backup-row" role="row">
+          <span role="columnheader">{{ t("panel.files.name") }}</span>
+          <span role="columnheader">{{ t("panel.backup.type") }}</span>
+          <span role="columnheader">{{ t("panel.sites.state") }}</span>
+          <!-- Başlık BOŞ bırakılmıyordu diye değil, ekran okuyucu "sütun 4" deyip susuyordu diye:
+               görsel olarak boş kalması doğru (düğme sütunu), adı olması da öyle. -->
+          <span role="columnheader"><span class="sr-only">{{ t("panel.files.actions") }}</span></span>
         </div>
 
-        <div v-for="item in gorunenYedekler" :key="item.id" class="data-row backup-row">
-          <div class="cell-main">
+        <div v-for="item in gorunenYedekler" :key="item.id" class="data-row backup-row" role="row">
+          <div class="cell-main" role="cell">
             <strong>{{ item.name }}</strong>
             <small>{{ item.source }}</small>
           </div>
-          <span>{{ item.type }}</span>
-          <span>{{ item.status }}</span>
-          <button class="secondary compact" v-bind="writeGate()" @click="restore(item.id)">
-            {{ t("panel.backup.restore") }}
-          </button>
+          <span role="cell">{{ item.type }}</span>
+          <span role="cell">{{ item.status }}</span>
+          <span class="entry-actions" role="cell">
+            <button class="secondary compact" v-bind="writeGate()" @click="restore(item.id)">
+              {{ t("panel.backup.restore") }}
+            </button>
+          </span>
         </div>
       </div>
+
+      <!-- "YEDEK YOK" ile "BU SİTENİN YEDEĞİ YOK" AYRI. Liste boşken ekranda hiçbir şey
+           çizilmiyordu: kullanıcı listenin gelmediğini mi, hiç yedek olmadığını mı, yoksa
+           süzgecin (bu ekran yalnız SEÇİLİ sitenin yedeklerini gösterir) her şeyi elediğini mi
+           anlayamıyordu. Üçüncüsü en yanıltıcısıydı, çünkü sunucuda yedek VAR. -->
+      <p v-else class="empty-state">
+        {{ backups.length ? t("panel.backup.emptyFiltered") : t("panel.backup.empty") }}
+      </p>
     </section>
   </section>
 </template>
@@ -364,6 +495,7 @@ import { useBulkAction, useBulkSelection } from "../composables/useBulkSelection
 import { usePagination } from "../composables/usePagination";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatBytes } from "../utils/bytes";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
@@ -403,7 +535,7 @@ const gorunenYedekler = computed(() =>
 
 const backupSiteName = ref("");
 const backupEngine = ref("mariadb");
-const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
+const { notice, noticeError, showNotice, resolveApiMessage, clearNotice } = useNotice();
 const searchQuery = ref("");
 const searchResults = ref<FileEntry[]>([]);
 const searchRan = ref(false);
@@ -476,6 +608,28 @@ const uploadProgressLabel = computed(() =>
   t("panel.files.uploadProgress", { done: uploadDone.value, total: uploadTotal.value }));
 
 /**
+ * İlerleme çubuğunun doluluğu — DOSYA BAŞINA, bayt başına değil.
+ *
+ * Yükleme ucu bayt ilerlemesi bildirmiyor; oranı bayt üzerinden hesaplıyormuş gibi göstermek
+ * kullanıcının kalan süreyi yanlış tahmin etmesine yol açardı. Toplam sıfırken 0 döner: sıfıra
+ * bölüm `NaN` üretir ve çubuk genişliği `NaN%` ile hiç çizilmezdi.
+ */
+const uploadPercent = computed(() =>
+  uploadTotal.value > 0 ? Math.round((uploadDone.value / uploadTotal.value) * 100) : 0);
+
+/**
+ * SATIR İÇİ İKİNCİL EYLEM ÇEKMECESİ — aynı anda YALNIZ BİR satır açık.
+ *
+ * Birden çok satırın açık kalması listeyi yeniden dağıtır ve kullanıcı hangi çekmecenin hangi
+ * satıra ait olduğunu takip edemez; çekmece zaten ait olduğu satırın adını yazar.
+ */
+const openActionsPath = ref("");
+
+function toggleActions(path: string) {
+  openActionsPath.value = openActionsPath.value === path ? "" : path;
+}
+
+/**
  * SÜRÜKLE-BIRAK göstergesi.
  *
  * `dragleave` İÇ İÇE ögelerde de tetiklenir: fare karttan tabloya geçerken karta "ayrıldı"
@@ -536,6 +690,10 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
   }
 
   loading.value = true;
+  // Açık eylem çekmecesi de düşer: liste yeniden okunduğunda çekmecenin bağlı olduğu satır
+  // silinmiş, taşınmış ya da başka bir sayfaya kaymış olabilir; açık kalan çekmece o an
+  // BAŞKA bir ögenin altında duruyor gibi görünürdü.
+  openActionsPath.value = "";
   // Ölçülmüş klasör boyutları BURADA düşer. Liste yeniden okunduğunda (yükleme, silme, taşıma,
   // başka klasöre geçiş) eski ölçüm artık bir şeyin karşılığı değildir; ekranda bırakmak
   // kullanıcıya bayat bir sayıyı güncel diye göstermek olurdu.
@@ -782,6 +940,24 @@ function kesikSebebi(result: DirectorySizeResult) {
 /** Bayt biçimi panelin geri kalanıyla AYNI (bkz. utils/bytes.ts); ekran kendi biçimini uydurmaz. */
 function boyutMetni(value: number) {
   return formatBytes(value, t);
+}
+
+/**
+ * Değiştirilme tarihi.
+ *
+ * VERİ ZATEN GELİYORDU: `FileEntry.lastModifiedUtc` her satır için sunucudan okunuyor ama ekranda
+ * hiç gösterilmiyordu — oysa "hangi dosya en son değişti" bir dosya yöneticisinin en sık sorulan
+ * sorusudur (bozulan bir siteyi teşhis ederken ilk bakılan sütun).
+ *
+ * BİÇİM UYDURULMUYOR: gövde `utils/datetime.ts`teki TEK kaynaktan gelir (panelin 24 ekranındaki
+ * `toLocaleString()` kopyaları oraya toplandı). Burada i18n yereline geçmek ya da kendi biçimini
+ * yazmak, panelde İKİNCİ bir tarih biçimi yaratırdı; tek biçim, tutarlı biçimdir.
+ *
+ * Boş değer için panelin ortak "yok" karşılığı geçilir: çizgi karakteri ekran okuyucuda hiçbir
+ * şey söylemez.
+ */
+function tarihMetni(value: string | null) {
+  return formatDateTime(value, t("panel.common.notAvailable"));
 }
 
 async function runSearch() {
@@ -1191,8 +1367,14 @@ async function restore(backupId: string) {
 }
 
 .empty-state {
+  /* `place-content` YALNIZCA ızgara/esnek kapsayıcıda çalışır. Kutu blok olduğu için dikey
+     ortalama hiç uygulanmıyordu ve 180px'lik kutuda metin tepede asılı kalıyordu.
+     `align-content` (yalnız dikey) kullanılıyor, `place-content` (iki eksen) DEĞİL: ikincisi
+     yatayda da ortalar, bu da sütunu `max-content` genişliğine kilitler ve uzun bir boş-durum
+     cümlesi dar ekranda kutunun dışına taşardı. */
+  display: grid;
   min-height: 180px;
-  place-content: center;
+  align-content: center;
   text-align: center;
 }
 
@@ -1201,7 +1383,7 @@ async function restore(backupId: string) {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
 }
 
@@ -1214,14 +1396,50 @@ async function restore(backupId: string) {
 }
 
 .files-row {
-  /* Satır eylemleri "Yeniden adlandır" ile bir düğme daha aldı: dar sütun düğmeleri alt alta
-     kaydırıyordu. Boyut sütunu sabit dar: "1,2 GiB"ten uzun bir değer yok. */
-  grid-template-columns: 30px minmax(200px, 1fr) 100px 120px minmax(430px, auto);
+  /* SÜTUN BÜTÇESİ YENİDEN DAĞITILDI. Eski satır: 30+200+100+120+430 + 4×12px boşluk = 928px
+     taban ve bunun 430px'i (%46) yalnızca düğmelere ayrılmıştı. İkincil eylemler çekmeceye
+     alınınca işlemler sütunu 140px'e indi; açılan yerin bir kısmıyla ARTIK VAR OLAN ama hiç
+     gösterilmeyen "Değiştirilme" verisi bir sütun oldu — altı sütunla taban yine de
+     30+200+80+100+140+140 + 5×12 = 750px, yani eskisinden 178px dar.
+     Boyut sütunu dar tutulabilir: "1,2 GiB"ten uzun bir değer yok. */
+  grid-template-columns: 30px minmax(200px, 1fr) 80px 100px 140px 140px;
 }
 
+/* SAYILAR SAĞA. Sola hizalı boyutlar farklı basamak sayılarında birbirini tutmuyor ve iki satırı
+   karşılaştırmak için okumak gerekiyordu; `tabular-nums` ile rakamlar eşit genişlikte olduğu için
+   sütun bir cetvel gibi okunur. Başlık da aynı hizaya alınır, yoksa başlık verinin üstünde
+   durmaz. */
 .size-cell {
   color: var(--text-muted);
   white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ölçüm düğmesi bir VERİ hücresinin içinde durur: düğme gibi değil, yerine geçtiği "—" gibi
+   sessiz görünmeli, ama tıklanabilir olduğu da anlaşılmalı. */
+.size-calc {
+  width: auto;
+  color: var(--accent-1);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.date-cell {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hizalama sınıfları başlık satırında da gerekli (başlık verinin üstünde durmalı), ama
+   SÖNÜKLEŞTİRME gerekli değil: başlık satırının kendi rengi var. */
+.table-head .size-cell,
+.table-head .date-cell {
+  color: inherit;
+}
+
+.entry-name {
+  font-weight: 600;
 }
 
 /* Yol çubuğu tek satırda kalır; derin yollarda yatay kaydırılır (satır kırılıp araç
@@ -1266,6 +1484,29 @@ async function restore(backupId: string) {
 .upload-button.disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* YÜKLEME İLERLEMESİ. İnce, tek renkli, kartın genişliğinde bir şerit: bir bakışta oran verir,
+   yer kaplamaz. Yalnız yükleme sürerken çizilir. */
+.upload-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ring-track);
+}
+
+.progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-1);
+  transition: width 0.2s ease;
+}
+
+/* Toplu çubukta yıkıcı düğmeyi öbür uca iten esnek boşluk. */
+.bulk-spacer {
+  flex: 1 1 auto;
+  min-width: 12px;
 }
 
 .select-cell {
@@ -1339,7 +1580,10 @@ async function restore(backupId: string) {
 
 .entry-actions {
   justify-content: flex-end;
-  flex-wrap: wrap;
+  /* `wrap` KALDIRILDI. Satır eylemleri sarmalanabildiği sürece "Sil"in yatay konumu satırdaki
+     düğme sayısına göre değişiyordu; sabit iki ögeyle sarmalamaya gerek de kalmadı. */
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .entry-actions button,
@@ -1349,22 +1593,118 @@ async function restore(backupId: string) {
   width: auto;
 }
 
-.action-link,
-.upload-button {
+/* "…" düğmesi: sabit genişlik, çünkü konumunun satırdan satıra oynamaması tasarımın asıl
+   amacı. Üç nokta yalnızca görsel; erişilebilir ad `aria-label` ile ögenin adını taşır. */
+.more-toggle {
+  flex: 0 0 auto;
+  min-width: 32px;
+  padding-inline: 8px;
+  font-size: 1rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+}
+
+/* İKİNCİL EYLEM ÇEKMECESİ — satırın altında, ona ait olduğu belli olacak biçimde girintili. */
+.actions-drawer {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 var(--accent-1);
+}
+
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-inline-start: 30px;
+}
+
+.drawer-actions button {
+  width: auto;
+}
+
+.drawer-label {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Yıkıcı eylemi ayıran çizgi: esneyerek "Sil"i çekmecenin öbür ucuna iter ve arada görünür bir
+   sınır bırakır. */
+.drawer-divider {
+  flex: 1 1 auto;
+  min-width: 16px;
+  height: 1px;
+  background: var(--panel-border);
+}
+
+/* İNDİR bağlantısı ikincil düğmeyle AYNI görünmeli: ikisi de aynı satırda, aynı işi yapıyor
+   izlenimi veriyor. Eski değer `--surface-2` idi ve `button.secondary` `--surface-3` + kenarlık
+   kullanıyor; yan yana durduklarında ikisi iki farklı bileşen gibi görünüyordu. */
+.action-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 10px;
+  min-height: 30px;
+  /* Ölçüler `button.compact` ile BİREBİR aynı belirteçlerden okunur (base.css); sabit piksel
+     yazsaydık düğme ölçüleri güncellendiğinde bağlantı yanındaki düğmeden kayardı. */
+  padding: var(--sp-4) var(--sp-8);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface-3);
   color: var(--text-strong);
-  font-weight: 700;
+  font-weight: 600;
   text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
 
+/* YÜKLEME araç çubuğunun TEK BİRİNCİL eylemidir: bu ekranda kullanıcının en çok yaptığı iş
+   dosya koymaktır. Bu yüzden panelin birincil düğme görünümünü (accent gradyanı) alır; yanındaki
+   iki oluşturma düğmesi ikincil kalır. Dört eşit düğme arasında göz nereye gideceğini bilmiyordu. */
+.upload-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: var(--sp-4) var(--sp-10);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-1) 92%, white) 0%, var(--accent-1) 55%, var(--accent-2) 100%);
+  color: var(--on-accent);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 1px rgb(0 0 0 / 12%), 0 2px 8px -3px color-mix(in srgb, var(--accent-2) 60%, transparent);
+}
+
+/*
+ * KLAVYE ERİŞİMİ — ÖLÇÜLMÜŞ BİR HATA DÜZELTİLİYOR.
+ *
+ * Dosya seçici `display: none` idi. Gizlenen bir öge odak sırasından da çıkar: yani "Dosya yükle"
+ * düğmesine KLAVYEYLE HİÇ ULAŞILAMIYORDU. Sürükle-bırakın klavye karşılığı budur; karşılık
+ * yoktu, yalnızca var sanılıyordu.
+ *
+ * Doğru kalıp, ögeyi görünmez yapıp akışta bırakmaktır (base.css `.sr-only` ile aynı teknik).
+ * Odak halkası etikette çizilir: odaklanan öge görünmez olduğu için tarayıcının kendi halkası
+ * hiçbir yerde belirmezdi.
+ */
 .upload-button input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.upload-button:focus-within {
+  outline: 2px solid color-mix(in srgb, var(--accent-1) 70%, transparent);
+  outline-offset: 2px;
 }
 
 .search-row input {
@@ -1388,18 +1728,53 @@ async function restore(backupId: string) {
   color: var(--text-muted);
 }
 
+/* İzinler kartın ALT şeridi: üstündeki ayırıcı çizgi, buranın günlük dosya işlerinden ayrı bir
+   yönetim alanı olduğunu söyler. */
+.permissions-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+  flex-wrap: wrap;
+}
+
 .permissions-row label {
   display: grid;
   gap: 5px;
   flex: 1;
+  min-width: 180px;
 }
 
+/* Hizalamanın anlam taşıdığı dosyalar (.htaccess, web.config, robots.txt) orantılı yazı tipinde
+   okunmuyordu; girinti ve sütun hizası ancak tek aralıklı yazı tipinde görünür. */
+.file-editor {
+  font: 0.86rem/1.55 "Cascadia Code", "Consolas", monospace;
+  tab-size: 4;
+}
+
+/*
+ * BAĞLANTI GİBİ DÜĞME — global `button` kuralının MİRASI KESİLİYOR.
+ *
+ * `background: transparent` yalnız gradyanı siliyordu; `button` kuralının gölgesi, en az yükseklik
+ * değeri ve `:hover` üzerindeki `translateY(-1px)` + `brightness()` etkileri duruyordu. Sonuç:
+ * yol çubuğundaki her parça ve tablodaki her dosya adı, üzerine gelindiğinde bir piksel ZIPLIYOR
+ * ve altında accent renginde bir gölge taşıyordu. Bağlantı zıplamaz; altı çizilir.
+ */
 .link-button {
-  background: transparent;
-  border: 0;
-  color: var(--accent-1);
-  text-align: left;
+  min-height: 0;
   padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-1);
+  font-weight: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.link-button:not(:disabled):hover {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+  text-decoration: underline;
 }
 
 .meta {
@@ -1407,11 +1782,60 @@ async function restore(backupId: string) {
   color: var(--text-muted);
 }
 
+/*
+ * BİLDİRİM ŞERİDİ base.css'te `position: fixed` (sağ alt köşe). Burada yalnız İÇ düzeni
+ * veriliyor: metin ile kapatma düğmesi yan yana, düğme metnin üstüne binmesin.
+ */
+.page-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-dismiss {
+  flex: 0 0 auto;
+  min-height: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.7;
+  box-shadow: none;
+}
+
+.notice-dismiss:not(:disabled):hover {
+  background: color-mix(in srgb, currentcolor 12%, transparent);
+  opacity: 1;
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+/*
+ * DAR EKRAN. `.data-row` base.css'te 720px taban genişlik taşır ve tablo yatay kaydırılır; tek
+ * sütuna düşürmek yalnızca ızgarayı bozar, satırı daraltmaz. Bu yüzden dosya listesi burada tek
+ * sütuna DÜŞÜRÜLMÜYOR — telefonda tablo yana kaydırılarak okunur, sütun hizası korunur.
+ * Yedek listesi ve form ızgarası (sabit taban genişliği olmayan, kısa içerikli satırlar) eskisi
+ * gibi tek sütuna iner.
+ */
 @media (max-width: 900px) {
-  .files-row,
   .backup-row,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .action-row {
+    align-items: flex-start;
   }
 }
 </style>

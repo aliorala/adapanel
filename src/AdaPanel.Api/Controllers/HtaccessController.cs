@@ -10,11 +10,27 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AdaPanel.Api.Controllers;
 
-/// <summary>Site başına <c>.htaccess</c> kipi.</summary>
+/// <summary>Site başına ve sunucu geneli <c>.htaccess</c> kipi.</summary>
 public sealed class HtaccessModeRequest
 {
-    /// <summary><c>off</c> / <c>observe</c> / <c>enforce</c>.</summary>
-    public string Mode { get; init; } = "off";
+    /// <summary><c>off</c> / <c>observe</c> / <c>enforce</c>. SÖYLENMEK ZORUNDA.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>VARSAYILANI YOK ve bu bir eksiklik değil, ölçülmüş bir açığın kapatılması.</b> Alan
+    /// eskiden <c>= "off"</c> ile başlıyordu; yani <c>{}</c> gövdesi (bozuk istemci, yanlış
+    /// içerik tipi, eksik alan) <b>geçerli bir "kapat" isteğine</b> dönüşüyordu. Aynı tipin
+    /// kullanıldığı iki uçtan biri sunucu genelidir: gövdesiz bir POST, sunucudaki HER sitenin
+    /// <c>.htaccess</c> desteğini kapatır, anahtar dosyasını SİLER ve denetim kaydına
+    /// "set to 'off'" yazardı — yönetici bunu bilerek yapmış görünürdü.
+    /// </para>
+    /// <para>
+    /// <c>Off</c> KİPİNİN KENDİSİ meşrudur (acil durum kapatma düğmesi); yasaklanan şey kip
+    /// SÖYLENMEDİĞİNDE off VARSAYMAKTIR. Boş/eksik değer artık
+    /// <c>HtaccessPanelService.ModCozumle</c>'nin zaten var olan reddine düşer
+    /// (<c>htaccess.invalid_mode</c>) — "enfroce" yazım hatasıyla aynı yola.
+    /// </para>
+    /// </remarks>
+    public string? Mode { get; init; }
 
     /// <summary>Anahtar dosyasına YORUM olarak yazılan not (kim, neden açtı).</summary>
     public string? Note { get; init; }
@@ -201,7 +217,14 @@ public sealed class HtaccessController(
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var report = await htaccess.SetModeAsync(siteName, request?.Mode ?? "off", request?.Note, cancellationToken);
+
+        // EKSİK KİP "off" SAYILMAZ (gerekçesi HtaccessModeRequest.Mode'da). Bu uç tek siteyi
+        // etkiliyor, yani sunucu geneli anahtardaki kadar geniş değil — ama aynı kararı taşıması
+        // ZORUNLU, çünkü ikisi AYNI istek tipini kullanıyor: alanın varsayılanı geri konsa iki uç
+        // birden açılırdı. Tek site de az değildir: kip sessizce off'a düşünce sitenin
+        // yönlendirmeleri ve erişim kuralları durur, denetim kaydı ise değişikliği çağıranın
+        // BİLİNÇLİ kararı gibi gösterir — kiracı da olan biteni o kayıttan okur.
+        var report = await htaccess.SetModeAsync(siteName, request?.Mode, request?.Note, cancellationToken);
 
         await auditService.WriteForSubscriptionAsync(
             "htaccess.mode.changed",
@@ -287,7 +310,11 @@ public sealed class HtaccessController(
         [FromBody] HtaccessModeRequest request,
         CancellationToken cancellationToken)
     {
-        var state = htaccess.SetServerMode(request?.Mode ?? "off", request?.Note);
+        // EKSİK KİP "off" SAYILMAZ. Buradaki bedel ucun geri kalanıyla aynı ölçekte: gövdesiz bir
+        // POST sunucudaki HER sitenin desteğini kapatır, anahtar dosyasını SİLER ve aşağıdaki
+        // denetim kaydı bunu yöneticinin bilinçli kararı gibi yazardı. Ret, kaydı yazan satıra
+        // GELMEDEN önce olur (ModCozumle fırlatır): "olmayan bir kararın kaydı" da bırakılmaz.
+        var state = htaccess.SetServerMode(request?.Mode, request?.Note);
 
         await auditService.WriteAsync(
             "htaccess.server_mode.changed",

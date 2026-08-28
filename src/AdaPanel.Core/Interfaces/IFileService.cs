@@ -126,4 +126,43 @@ public interface IFileService
     /// </list>
     /// </remarks>
     Task<DirectorySizeDto> CalculateSizeAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Verilen sanal yolların diskte kapladığı TOPLAM — disk KOTASI denetiminin ön ölçümü.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <see cref="CalculateSizeAsync"/> yetmiyor:</b> o uç TEK bir KLASÖR içindir ve bir
+    /// DOSYA yolu verildiğinde bilerek <c>files.not_found</c> atar. Kota denetiminin sorduğu soru
+    /// farklı: "kullanıcının seçtiği şu 8 ögenin (klasör + dosya karışık, bazısı belki hiç yok)
+    /// toplamı ne?" Bu farkı çağıranın kendi döngüsüyle kapatması, aynı ağacın panelde İKİNCİ bir
+    /// kuralla gezilmesi demek olurdu — bu depoda o hata beş kez ısırdı.
+    /// </para>
+    /// <para>
+    /// <b>Sözleşme:</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>Her yol sanal alan kapısından geçer; dışarı çıkan yol REDDEDİLİR (istisna). Ölçüm bir
+    /// okumadır, ama kapsam dışı bir klasörün BOYUTUNU söylemek de sızıntıdır.</item>
+    /// <item>DİSKTE OLMAYAN yol istisna DEĞİL, 0 sayılır: yeni bir dosya yazılırken hedef henüz
+    /// yoktur ve kopyalamada olmayan kaynak zaten öge başına raporlanır.</item>
+    /// <item>Bütün yollar TEK bir bütçeyi paylaşır; bütçe dolarsa toplam bir ALT SINIRDIR ve
+    /// <see cref="DirectorySizeDto.Truncated"/> bunu SÖYLER. Kota bir güvenlik sınırı olduğu için
+    /// çağıran bu bayrağı yok SAYAMAZ.</item>
+    /// <item>Bağlantılar (junction/symlink) sayılmaz — kopyalama da onları kopyalamaz, yani ölçüm
+    /// ile yapılacak iş aynı ağacı görür.</item>
+    /// </list>
+    /// </remarks>
+    Task<DirectorySizeDto> MeasureAsync(string[] paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bir zip arşivinin AÇILDIĞINDA kaplayacağı toplam bayt (sıkıştırılmamış).
+    /// </summary>
+    /// <remarks>
+    /// Kota denetimi sıkıştırılmış boyuta bakamaz: 1 MB'lık bir arşiv 10 GB açabilir ("zip bombası")
+    /// ve o fark tam olarak korunması gereken şeydir. Arşiv geçerli değilse
+    /// <c>files.invalid_archive</c> ile reddedilir — <c>ExtractAsync</c> ile AYNI kural, çünkü iki
+    /// yol farklı şeye "geçerli arşiv" derse kota, açılmayacak bir dosyayı ölçer.
+    /// </remarks>
+    Task<long> MeasureArchiveContentBytesAsync(string path, CancellationToken cancellationToken = default);
 }

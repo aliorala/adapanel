@@ -534,8 +534,8 @@ defineExpose({ refresh: load });
 /* BİTEN sorgu: yeşil şerit + soluk zemin. Satır hemen kaybolmuyor ki okunabilsin; 10 dakika
    sonra kendiliğinden düşer. Kalıcı kayıt Geçmiş sekmesinde. */
 .consumer-row.finished {
-  border-left: 3px solid var(--ok-1, #2e9e5b);
-  background: color-mix(in srgb, var(--ok-1, #2e9e5b) 7%, transparent);
+  border-left: 3px solid var(--ok-1);
+  background: color-mix(in srgb, var(--ok-1) 7%, transparent);
   opacity: 0.85;
 }
 
@@ -736,7 +736,13 @@ defineExpose({ refresh: load });
   height: 15px;
   border-radius: 999px;
   background: var(--warn-1);
-  color: #1b1300;
+  /* Kehribar dolgu ÜZERİNDEKİ metin. Belirtece bağlanAMADI: panelde `--on-accent`in uyarı
+     karşılığı (`--on-warn`) YOK, en yakınları (`--text-strong`, `--warn-text`) bu dolgu için
+     ölçülmüş değerler değil. ÖLÇÜLDÜ, eski #1b1300: koyu temada 8.34:1 ama AÇIK temada
+     `--warn-1` koyulaştığı için (#b06f12) yalnız 4.50:1 — 0.68rem/800 bir glif küçük metin
+     sayılır, yani eşiğin tam sınırında kalıyordu. Düz siyah her iki temada da geçiyor
+     (5.13 açık / 9.51 koyu) ve 15px'lik bir noktada #1b1300'den ayırt edilemez. */
+  color: #000;
   font-size: 0.68rem;
   font-weight: 800;
 }

@@ -409,6 +409,7 @@ import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import { useNotice } from "../composables/useNotice";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import { formatDateTime } from "../utils/datetime";
 import {
   deleteSiteBuilderImage,
   getSiteBuilderCatalog,
@@ -771,9 +772,9 @@ function blockedKeySuffix(key: string) {
   return key.startsWith("sitebuilder.") ? key.slice("sitebuilder.".length) : key;
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value);
 }
 
 function inform(message: string) {
@@ -828,6 +829,9 @@ function report(error: unknown) {
   height: min(70vh, 720px);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
+  /* MÜŞTERİNİN SİTESİNİN önizlendiği iframe tuvali. Panelin yüzeyi değil, yabancı içeriğin
+     zemini: siteler beyaz varsayar. Panel temasına bağlanırsa koyu temada müşterinin kendi
+     sayfası yanlış renkte görünür. BİLEREK sabit. */
   background: #ffffff;
 }
 

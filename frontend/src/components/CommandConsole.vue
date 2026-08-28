@@ -162,6 +162,8 @@ function clear() {
   padding: 14px 16px;
   border: 1px solid var(--panel-border);
   border-radius: 10px;
+  /* Koyu konsol yüzeyi BİLEREK sabit (bkz. base.css `pre` kuralı; bu öge bir <pre>, yani
+     açık temada base.css zaten devralıyor). Kabuk çıktısı açık zeminde okunmaz. */
   background: #0b0f17;
   color: #d6e2f0;
   font-family: var(--font-mono, ui-monospace, "Cascadia Code", Consolas, monospace);

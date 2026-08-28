@@ -56,15 +56,15 @@ const worstSeverity = computed(() =>
 
 <style scoped>
 .attention-notice {
-  border: 1px solid var(--warn-border, #e0b400);
+  border: 1px solid var(--warn-1);
   border-radius: 8px;
   padding: 0.7rem 1rem;
   background: var(--warn-bg, rgba(224, 180, 0, 0.08));
 }
 
 .attention-notice.critical {
-  border-color: var(--danger-1, #d64545);
-  background: color-mix(in srgb, var(--danger-1, #d64545) 8%, transparent);
+  border-color: var(--danger-1);
+  background: color-mix(in srgb, var(--danger-1) 8%, transparent);
 }
 
 .attention-head {

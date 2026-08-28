@@ -200,6 +200,88 @@ public sealed class BackupSkippedFileTests
     }
 
     // ===========================================================================================
+    // GUNLUK OZETI (BackupSkipLog.Describe)
+    // ===========================================================================================
+
+    /// <summary>
+    /// HIC DOSYA ATLANMADIGINDA OZET "0 dosya atlandi" DEMEZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// OLCULEN HATA: <c>Any</c> kesilen taramayi da kapsamaya baslayinca "hic dosya atlanmadi ama
+    /// bir agacin taramasi kesildi" durumu mumkun oldu ve ozet
+    /// <c>"0 dosya atlandi: ; TARAMA KESILDI: ..."</c> uretiyordu -- sayi sifir, liste bos, iki
+    /// noktali virgul.
+    /// </para>
+    /// <para>
+    /// Yalniz sunucu gunlugune gidiyor, yani kozmetik; ama gunluk OKUNMAK icindir. Yangin aninda
+    /// bakan kisinin gordugu ilk sey "0 dosya atlandi" olsaydi, asil bilgi -- BIR AGACIN HIC
+    /// TARANMADIGI -- gurultunun arkasinda kalirdi.
+    /// </para>
+    /// <para>
+    /// MUTASYON: dosya cumlesi yeniden KOSULSUZ yazilirsa (<c>Count</c> denetimi kaldirilirsa)
+    /// bu test kizarir.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void SIFIR_ATLANANDA_OZET_ANLAMSIZ_SATIR_URETMEZ()
+    {
+        var kayit = new BackupSkipLog();
+        kayit.AddTruncatedScan("sites/x/files", "files.size_truncated_entries");
+
+        var ozet = kayit.Describe();
+
+        // Bildirilecek bir eksik VAR: kesilen tarama da eksiktir.
+        Assert.True(kayit.Any);
+
+        // Ama "0 dosya atlandi" YAZILMAZ, ve bos liste ardindan gelen ": ;" artigi da kalmaz.
+        Assert.DoesNotContain("0 dosya", ozet, StringComparison.Ordinal);
+        Assert.DoesNotContain(": ;", ozet, StringComparison.Ordinal);
+
+        // ASIL BILGI YERINDE: nerede ve nicin kesildigi.
+        Assert.StartsWith("TARAMA KESILDI:", ozet, StringComparison.Ordinal);
+        Assert.Contains("sites/x/files", ozet, StringComparison.Ordinal);
+        Assert.Contains("files.size_truncated_entries", ozet, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// MUTASYON KONTROLU: dosya atlandiginda cumle HALA yaziliyor ve ikisi birlikte gorunuyor.
+    /// </summary>
+    /// <remarks>
+    /// Bu olmadan "dosya cumlesini tamamen kaldir" gibi bir degisiklik de yukaridaki testi gecerdi;
+    /// yani test, dogru ozeti degil yalnizca bir metnin YOKLUGUNU olcerdi.
+    /// </remarks>
+    [Fact]
+    public void ATLANAN_DOSYA_VARSA_OZET_IKISINI_DE_TASIR()
+    {
+        var kayit = new BackupSkipLog();
+        kayit.Add("files/kilitli.dat", new IOException("kilitli"));
+        kayit.AddTruncatedScan("sites/x/files", "files.size_truncated_time");
+
+        var ozet = kayit.Describe();
+
+        Assert.Contains("1 dosya atlandi", ozet, StringComparison.Ordinal);
+        Assert.Contains("files/kilitli.dat", ozet, StringComparison.Ordinal);
+        Assert.Contains("TARAMA KESILDI: sites/x/files", ozet, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// HIC EKSIK YOKKEN OZET BOS DIZE DONMEZ.
+    /// </summary>
+    /// <remarks>
+    /// Cagiran su an <c>Any</c> ile koruyor, ama koruma bir gun kalkarsa gunluge konusuz bir
+    /// "Yedek eksik alindi (...): " satiri duserdi: uyari seviyesinde ve sebepsiz.
+    /// </remarks>
+    [Fact]
+    public void EKSIK_YOKKEN_OZET_KONUSUZ_KALMAZ()
+    {
+        var ozet = new BackupSkipLog().Describe();
+
+        Assert.False(string.IsNullOrWhiteSpace(ozet));
+        Assert.DoesNotContain("0 dosya", ozet, StringComparison.Ordinal);
+    }
+
+    // ===========================================================================================
     // Yardimcilar
     // ===========================================================================================
 

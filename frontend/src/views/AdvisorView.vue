@@ -60,6 +60,7 @@ import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { getAdvisorReport, type AdvisorReport } from "../api/advisor";
 import { extractApiMessage } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const emit = defineEmits<{ (event: "navigate", sectionId: string): void }>();
@@ -98,8 +99,9 @@ function severityText(severity: "critical" | "warning" | "info"): string {
   return t(keys[severity]);
 }
 
+/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatDateTime(value, "-");
 }
 </script>
 
@@ -132,15 +134,15 @@ function formatUtc(value: string) {
 }
 
 .sev-pill.critical {
-  color: #b91c1c;
-  background: color-mix(in srgb, #ef4444 12%, transparent);
-  border-color: color-mix(in srgb, #ef4444 40%, transparent);
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger-1) 40%, transparent);
 }
 
 .sev-pill.warning {
-  color: #b45309;
-  background: color-mix(in srgb, #f59e0b 12%, transparent);
-  border-color: color-mix(in srgb, #f59e0b 40%, transparent);
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn-1) 40%, transparent);
 }
 
 .sev-pill.info {
@@ -157,9 +159,9 @@ function formatUtc(value: string) {
   align-items: center;
   gap: 14px;
   padding: 18px;
-  border: 1px solid color-mix(in srgb, #22c55e 40%, var(--panel-border));
+  border: 1px solid color-mix(in srgb, var(--ok-1) 40%, var(--panel-border));
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, #22c55e 8%, var(--surface-1));
+  background: color-mix(in srgb, var(--ok-1) 8%, var(--surface-1));
 }
 
 .clear-badge {
@@ -168,8 +170,8 @@ function formatUtc(value: string) {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: color-mix(in srgb, #22c55e 20%, transparent);
-  color: #15803d;
+  background: color-mix(in srgb, var(--ok-1) 20%, transparent);
+  color: var(--ok-text);
   font-size: 1.3rem;
   font-weight: 800;
   flex-shrink: 0;
@@ -198,11 +200,11 @@ function formatUtc(value: string) {
 }
 
 .advisor-item.critical {
-  border-color: color-mix(in srgb, #ef4444 45%, var(--panel-border));
+  border-color: color-mix(in srgb, var(--danger-1) 45%, var(--panel-border));
 }
 
 .advisor-item.warning {
-  border-color: color-mix(in srgb, #f59e0b 40%, var(--panel-border));
+  border-color: color-mix(in srgb, var(--warn-1) 40%, var(--panel-border));
 }
 
 .sev-dot {
@@ -213,11 +215,11 @@ function formatUtc(value: string) {
 }
 
 .sev-dot.critical {
-  background: #ef4444;
+  background: var(--danger-1);
 }
 
 .sev-dot.warning {
-  background: #f59e0b;
+  background: var(--warn-1);
 }
 
 .sev-dot.info {
