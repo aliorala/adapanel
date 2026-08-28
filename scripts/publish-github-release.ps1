@@ -200,6 +200,37 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
 
     $token = Get-AdaGitHubToken
+
+    # PAKETSIZ YAYIN SESSIZCE YAPILAMAZ.
+    #
+    # OLCULDU (0.7.5): bu betik -InstallerPath VERILMEDEN calistirildi. Release notlariyla
+    # birlikte olustu, "Tamamlandi" yazdi ve GERI DONDU -- ama icinde indirilecek hicbir sey
+    # yoktu. Paketsiz bir release panelin kendi kendine guncellemesini kirar: guncelleme ekrani
+    # yeni surumu GORUR, indirmeye gider ve varlik bulamaz.
+    #
+    # Once bakilan yer $InstallerPath'in VERILIP verilmedigidir, dosyanin var olup olmadigi
+    # degil: eksik olan bilgi, niyetin ta kendisi. "Yalniz notlari duzeltiyorum" mesru bir istek
+    # oldugu icin yasaklanmiyor, ACIKCA soylenmesi isteniyor (-SkipAssetUpload).
+    if (-not $InstallerPath -and -not $SkipAssetUpload) {
+        # Zaten paketi olan bir yayinin NOTUNU duzeltmek mesru ve sik yapilan bir is; onu
+        # engellemek icin bir sebep yok. Bakilan sey yayinda paket OLUP OLMADIGI.
+        $mevcut = $null
+        try {
+            $mevcut = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/tags/$($releaseInfo.tag_name)" -Token $token
+        } catch {
+            $durum = $null
+            if ($_.Exception.Response) { $durum = [int]$_.Exception.Response.StatusCode }
+            if ($durum -ne 404) { throw }
+        }
+
+        if (-not $mevcut -or -not $mevcut.assets -or @($mevcut.assets).Count -eq 0) {
+            throw ("Paketsiz yayin ENGELLENDI: '$($releaseInfo.tag_name)' icin yuklenecek kurulum dosyasi " +
+                   "belirtilmedi ve yayinda da yok.`n" +
+                   "  Paketi yuklemek icin : -InstallerPath artifacts\installer\AdaPanelSetup.exe`n" +
+                   "  YALNIZ notu guncelle : -SkipAssetUpload")
+        }
+    }
+
     $release = Publish-AdaGitHubRelease -RepoSlug $RepoSlug -Token $token -ReleaseInfo $releaseInfo
 
     if ($InstallerPath -and -not $SkipAssetUpload) {
