@@ -454,6 +454,9 @@
            çizilmiyordu: kullanıcı listenin gelmediğini mi, hiç yedek olmadığını mı, yoksa
            süzgecin (bu ekran yalnız SEÇİLİ sitenin yedeklerini gösterir) her şeyi elediğini mi
            anlayamıyordu. Üçüncüsü en yanıltıcısıydı, çünkü sunucuda yedek VAR. -->
+      <p v-else-if="!backupsLoaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
       <p v-else class="empty-state">
         {{ backups.length ? t("panel.backup.emptyFiltered") : t("panel.backup.empty") }}
       </p>
@@ -515,6 +518,10 @@ const loading = ref(false);
 const workspaceLoad = useSectionError();
 const fileContent = ref("");
 const backups = ref<BackupRecord[]>([]);
+// Yedek listesi BİR KEZ başarıyla okundu mu. `refreshBackups` hata alınca listeyi BİLEREK
+// boşaltır (bayat liste göstermemek için) — o boşluk "yedek yok" diye okunuyordu; aynı ekranın
+// dosya bölümü bu ayrımı zaten yapıyordu (bkz. `workspaceLoad`).
+const backupsLoaded = ref(false);
 
 /**
  * SEÇİLİ SİTENİN yedekleri.
@@ -1307,10 +1314,13 @@ async function saveCurrentFile() {
 async function refreshBackups() {
   try {
     backups.value = await getBackups();
+    backupsLoaded.value = true;
   } catch (error) {
     // Yedek listesi okunamadıysa ESKİ liste bırakılmaz: bayat bir listeyi güncel sanmak,
-    // olmayan bir yedeğe güvenmek demektir.
+    // olmayan bir yedeğe güvenmek demektir. Boşaltılan liste "yedek yok" DEĞİLDİR: bayrak da
+    // geri alınır, yoksa temizlenen liste kesin bir cümleye dönüşürdü.
     backups.value = [];
+    backupsLoaded.value = false;
     showNotice(resolveApiMessage(error), true);
   }
 }

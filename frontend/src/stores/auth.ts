@@ -73,6 +73,8 @@ export type ManagedUser = {
   parentUserId: string | null;
   parentName: string;
   diskUsageMb: number;
+  /** false ise diskUsageMb bir ALT SINIRDIR: agac tumuyle taranamadi. */
+  diskMeasured: boolean;
   databaseCount: number;
   ownerId: string | null;
   ownerName: string;

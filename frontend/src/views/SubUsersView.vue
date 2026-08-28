@@ -75,7 +75,7 @@
           <button class="danger compact" v-bind="writeGate(busy)" @click="remove(user)">{{ t("panel.subUsers.delete") }}</button>
         </span>
       </div>
-      <p v-if="loading && subUsers.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-if="!listLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="subUsers.length === 0" class="empty-state">{{ t("panel.subUsers.empty") }}</p>
     </div>
   </section>
@@ -104,6 +104,9 @@ const { writeGate } = useSubscriptionGate();
 const { confirm } = useConfirm();
 const subUsers = ref<SubUser[]>([]);
 const loading = ref(false);
+// Liste BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur ve boş dizi
+// "hiç alt kullanıcı yok" diye okunuyordu (bkz. SiteBackupView `listLoaded`).
+const listLoaded = ref(false);
 const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
@@ -129,6 +132,7 @@ async function load() {
   loading.value = true;
   try {
     subUsers.value = await fetchSubUsers();
+    listLoaded.value = true;
   } catch (error) {
     showNotice(resolveMessage(error), true);
   } finally {

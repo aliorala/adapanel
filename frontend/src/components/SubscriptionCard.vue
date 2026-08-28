@@ -43,7 +43,22 @@
 
         <div class="summary-item">
           <span>{{ t("panel.subscription.disk") }}</span>
-          <strong>{{ usage.diskUsageMb }} MB <small>/ {{ usage.maxDiskMb > 0 ? usage.maxDiskMb + " MB" : t("panel.subscription.unlimited") }}</small></strong>
+          <strong>
+            {{ usage.diskUsageMb }} MB
+            <small>/ {{ usage.maxDiskMb > 0 ? usage.maxDiskMb + " MB" : t("panel.subscription.unlimited") }}</small>
+            <!-- Kesilen ölçüm ALT SINIRDIR. Burası kullanıcının kotasına ne kadar yaklaştığını
+                 okuduğu yer; eksik bir sayıyı tam gibi göstermek, kotasının bittiğini fark
+                 etmemesine yol açar. Sebep anahtarı varsa ipucunda o gösterilir (motorun kendi
+                 anahtarı, tr/en'de çevrili); yoksa genel açıklama. -->
+            <span
+              v-if="!usage.diskMeasured"
+              class="status-pill warn"
+              :title="usage.diskUsageTruncatedReasonKey
+                ? t(usage.diskUsageTruncatedReasonKey)
+                : t('users.disk_usage_partial_hint')">
+              {{ t("users.disk_usage_partial") }}
+            </span>
+          </strong>
         </div>
 
         <div class="summary-item">
@@ -141,9 +156,15 @@ const trafficClass = computed(() =>
   trafficPercent.value >= 100 ? "over" : trafficPercent.value >= 80 ? "warn" : "ok"
 );
 
-/** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
+/**
+ * Bayt bicimi panelin TEK kaynagindan gelir (bkz. utils/bytes.ts), ama burada "gauge"
+ * hassasiyetiyle: bu sayi bir liste hucresi degil, KOTA gostergesidir. Ortak kuralin "10'un
+ * ustunde ondalik gosterme" davranisi trafigi "15.5 GiB" yerine "16 GiB" yaziyordu; kotasina
+ * 500 MiB kalmis bir musteri icin kaybolan tam da o bilgi. Yaninda ayni sayiyi anlatan bir de
+ * doluluk cubugu var, yani sayinin isi cubugu SAYIYLA dogrulamak.
+ */
 function formatBytes(value: number) {
-  return sharedFormatBytes(value, t);
+  return sharedFormatBytes(value, t, "gauge");
 }
 
 function formatDate(iso: string) {

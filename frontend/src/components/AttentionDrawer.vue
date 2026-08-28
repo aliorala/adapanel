@@ -323,8 +323,30 @@ function formatUtc(value: string): string {
   box-shadow: -18px 0 48px rgba(0, 0, 0, 0.28);
 }
 
+/*
+  ÇEKMECE KAPSAYICISININ ODAĞI — halka KLAVYEDE görünür, fare/program odağında görünmez.
+
+  Kapsayıcı `tabindex="-1"`: sekme sırasında DEĞİL, odağı yalnız kod verir (açılışta Kapat düğmesi
+  bulunamazsa buraya düşülür; Shift+Tab tuzağı da odağı burada bulabilir). Fareyle açan biri için
+  460px'lik panelin çevresine halka çizmek gürültüdür — `outline: none` bu yüzden konmuştu ve
+  gerekçesi MEŞRU.
+  MEŞRU OLMAYAN, kuralın `:focus` üzerinde durmasıydı: o seçici klavye odağını da kapsıyor ve
+  base.css'teki evrensel `:focus-visible` halkasından daha özgül olduğu için onu EZİYORDU. Sonuç:
+  klavyeyle gezen kullanıcı odağın çekmeceye geçtiğini hiçbir şekilde göremiyordu (çekmece açılınca
+  arka plan da erişilemez olduğundan, odağın nerede olduğunu tahmin etmekten başka yolu yoktu).
+  Ayrım `:focus-visible`e taşındı: tarayıcı "bu odak klavyeden mi geldi" sorusunu zaten yanıtlıyor.
+
+  Halka İÇERİ çizilir (`outline-offset: -3px`), base.css'teki gibi dışarı değil: çekmece ekranın sağ
+  kenarına yapışık ve tam boy olduğu için dışarı çizilen halkanın üç kenarı görüntü alanının
+  dışında kalır — yani halka VAR ama görünmez olurdu.
+*/
 .attention-drawer:focus {
   outline: none;
+}
+
+.attention-drawer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -3px;
 }
 
 .ad-head {

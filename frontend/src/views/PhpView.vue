@@ -83,7 +83,10 @@
           </button>
         </span>
       </div>
-      <p v-if="phpStore.loading && filteredInstalled.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <!-- `loading` istek HATA ile bitince de false olur: eski koşul yalnız istek uçuşurken
+           koruyordu, hata alındığında boş liste "kurulu PHP sürümü yok" diye okunuyordu.
+           `loaded` yalnız BAŞARIDA true olur (bkz. stores/php.ts). -->
+      <p v-if="!phpStore.loaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="filteredInstalled.length === 0" class="empty-state">{{ t("panel.php.noInstalledVersions") }}</p>
     </div>
 
@@ -111,7 +114,9 @@
           </button>
         </span>
       </div>
-      <p v-if="phpStore.loading && filteredAvailable.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <!-- Kurulabilir sürümler YAZILIM KATALOĞUNDAN gelir; bekleme/hata durumu onun bayrağıyla
+           ayrılır, PHP listesininkiyle değil. -->
+      <p v-if="!softwareStore.loaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="filteredAvailable.length === 0" class="empty-state">{{ t("panel.php.noManifestVersions") }}</p>
     </div>
 

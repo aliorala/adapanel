@@ -386,11 +386,17 @@ public sealed class FilesController(
         }
 
         var (gelenBayt, kesilmeSebebi) = await olcum(cancellationToken);
-        var usageMb = await customerScopes.GetDiskUsageMbAsync(ownerId, cancellationToken);
+
+        // ÖLÇÜM SONUCU OLDUĞU GİBİ GEÇER — "kaç MB" diye tek bir sayıya indirilmez. Kullanım
+        // bütçeli bir ağaç yürüyüşünden gelir ve bir ALT SINIR olabilir; burada yalnız megabayt
+        // sayısını almak, kuralın bilmek zorunda olduğu "bu sayı ölçüldü mü" bilgisini tam da
+        // zorlama yolunda düşürmek olurdu. Belirsizlikle ne yapıldığı ORTAK kuralda yazılıdır
+        // (FileQuotaGuard) ve nöbetçisi FileQuotaTests'tedir.
+        var kullanim = await customerScopes.GetDiskUsageMbAsync(ownerId, cancellationToken);
 
         // KURALIN KENDİSİ ortak yerde ve bağımlılıksız (bkz. FileQuotaGuard): burada yalnız "kimin
         // kotası" sorusu cevaplanır, "sığıyor mu" sorusu değil.
-        FileQuotaGuard.EnsureRoom(scope.MaxDiskMb, usageMb, gelenBayt, kesilmeSebebi);
+        FileQuotaGuard.EnsureRoom(scope.MaxDiskMb, kullanim, gelenBayt, kesilmeSebebi);
     }
 
     /// <summary>

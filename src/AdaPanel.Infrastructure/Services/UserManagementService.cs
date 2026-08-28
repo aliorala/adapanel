@@ -28,6 +28,17 @@ public sealed class UserManagementService(
     ISiteCascadeDeletionService siteCascadeDeletion,
     IApiTokenService apiTokenService) : IUserManagementService
 {
+    /// <summary>Müşteri OLMAYAN satırların diski: ÖLÇÜLMÜŞ sıfır.</summary>
+    /// <remarks>
+    /// "Ölçemedim" ile "ölçülecek bir şey yok" AYNI ŞEY DEĞİL. Yöneticinin/bayinin kendi
+    /// aboneliği (ve dolayısıyla disk kapsamı) yoktur; bu sıfırı <c>Measured = false</c> ile
+    /// işaretlemek, listedeki her yönetici satırına hak edilmemiş bir "bu sayı eksik olabilir"
+    /// uyarısı astırır ve uyarıyı GERÇEKTEN eksik olan satırlarda anlamsızlaştırırdı. Aynı ayrım
+    /// trafik kotasında da var: sitesi olmayan aboneliğin sıfırı ölçülmüş bir sıfırdır
+    /// (<c>SubscriptionEnforcementService.TrafikOlcAsync</c>).
+    /// </remarks>
+    private static readonly DiskUsage AboneliksizKullanim = new(0, true, string.Empty);
+
     public async Task<IReadOnlyCollection<UserSummaryDto>> GetUsersAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
         var users = await dbContext.Users
@@ -60,16 +71,21 @@ public sealed class UserManagementService(
             if (user.Role == UserRole.Customer)
             {
                 var scope = await customerScopeService.GetScopeAsync(user.Id, cancellationToken);
-                var usageMb = await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken);
+
+                // SATIR BAŞINA ölçüm, SATIR BAŞINA "ölçüldü mü": ağaç yürüyüşünün bütçesi abonelik
+                // başınadır, yani bu müşterinin sayısı kesilirken bir sonraki satırınki tam
+                // olabilir. Listeye tek bir "eksik olabilir" damgası vurmak, hangi satıra
+                // güvenileceğini söylemezdi.
+                var diskKullanimi = await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken);
                 var ownerId = await customerScopeService.GetOwnerAsync(user.Id, cancellationToken);
                 var dbCount = await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken);
                 var parentId = await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken);
-                summaries.Add(MapUser(user, scope, usageMb, ownerId, ResolveOwnerName(ownerId, nameById), dbCount,
+                summaries.Add(MapUser(user, scope, diskKullanimi, ownerId, ResolveOwnerName(ownerId, nameById), dbCount,
                     parentId, ResolveOwnerName(parentId, nameById)));
             }
             else
             {
-                summaries.Add(MapUser(user, new CustomerScope([], 0, 0, 0, 0, 0), 0, null, string.Empty));
+                summaries.Add(MapUser(user, new CustomerScope([], 0, 0, 0, 0, 0), AboneliksizKullanim, null, string.Empty));
             }
         }
 
@@ -166,7 +182,17 @@ public sealed class UserManagementService(
             await TrySendWelcomeEmailAsync(user, request.Password, cancellationToken);
         }
 
-        return MapUser(user, scope, 0, ownerId, await ResolveOwnerNameAsync(ownerId, cancellationToken), 0,
+        // YENİ MÜŞTERİNİN DİSKİ ÖLÇÜLEREK YAZILIR, "0" DİYE VARSAYILMAZ. Eskiden buraya sabit 0
+        // geçiliyordu ve bu, dönüş tipi düz bir sayıyken görülmesi imkânsız bir yalandı: oluşturma
+        // isteğinde site ATANABİLİR (bayi mevcut, DOLU bir siteyi yeni müşteriye verir), yani hesap
+        // daha doğarken kotasının bir kısmı harcanmış olabilir. Güncelleme ve kilit açma yolları
+        // aynı DTO'yu ölçerek dolduruyor; üçünün aynı alanı farklı dürüstlükte doldurması,
+        // "kullanıcıyı kaydet" ekranında 0 GB, listeye dönünce 40 GB görmek demekti.
+        var diskKullanimi = role == UserRole.Customer
+            ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
+            : AboneliksizKullanim;
+
+        return MapUser(user, scope, diskKullanimi, ownerId, await ResolveOwnerNameAsync(ownerId, cancellationToken), 0,
             parentUserId, await ResolveOwnerNameAsync(parentUserId, cancellationToken));
     }
 
@@ -303,9 +329,9 @@ public sealed class UserManagementService(
         var suspensionScope = existingParent is not null ? new CustomerScope([], 0, 0, 0, 0, 0) : scope;
         await ApplySuspensionStateAsync(user, suspensionScope, wasActive, actorUserId, ipAddress, cancellationToken);
 
-        var usageMb = user.Role == UserRole.Customer
+        var diskKullanimi = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
-            : 0;
+            : AboneliksizKullanim;
         var dbCount = user.Role == UserRole.Customer
             ? await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken)
             : 0;
@@ -313,7 +339,7 @@ public sealed class UserManagementService(
         var parentId = user.Role == UserRole.Customer
             ? await customerScopeService.GetParentSubscriptionAsync(user.Id, cancellationToken)
             : null;
-        return MapUser(user, scope, usageMb, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken), dbCount,
+        return MapUser(user, scope, diskKullanimi, resolvedOwner, await ResolveOwnerNameAsync(resolvedOwner, cancellationToken), dbCount,
             parentId, await ResolveOwnerNameAsync(parentId, cancellationToken));
     }
 
@@ -436,9 +462,9 @@ public sealed class UserManagementService(
         var scope = user.Role == UserRole.Customer
             ? await customerScopeService.GetScopeAsync(user.Id, cancellationToken)
             : new CustomerScope([], 0, 0, 0, 0, 0);
-        var usageMb = user.Role == UserRole.Customer
+        var diskKullanimi = user.Role == UserRole.Customer
             ? await customerScopeService.GetDiskUsageMbAsync(user.Id, cancellationToken)
-            : 0;
+            : AboneliksizKullanim;
         var dbCount = user.Role == UserRole.Customer
             ? await databaseOwnership.CountForOwnerAsync(user.Id, cancellationToken)
             : 0;
@@ -452,7 +478,7 @@ public sealed class UserManagementService(
         return MapUser(
             user,
             scope,
-            usageMb,
+            diskKullanimi,
             ownerId,
             await ResolveOwnerNameAsync(ownerId, cancellationToken),
             dbCount,
@@ -936,7 +962,12 @@ public sealed class UserManagementService(
         return owner?.UserName ?? string.Empty;
     }
 
-    private static UserSummaryDto MapUser(PanelUser user, CustomerScope scope, long diskUsageMb, Guid? ownerId = null, string ownerName = "", int databaseCount = 0, Guid? parentId = null, string parentName = "")
+    /// <param name="diskUsage">
+    /// Kullanım VE ölçülüp ölçülemediği. Düz bir <c>long</c> DEĞİL: bu metot listedeki her satırı
+    /// üreten TEK yerdir, yani "ölçüldü mü" bilgisi burada düşerse panelin bütün kullanıcı
+    /// görünümünde düşer. Tipin kendisi çağıranı bu bilgiyi taşımaya ZORLAR.
+    /// </param>
+    private static UserSummaryDto MapUser(PanelUser user, CustomerScope scope, DiskUsage diskUsage, Guid? ownerId = null, string ownerName = "", int databaseCount = 0, Guid? parentId = null, string parentName = "")
     {
         return new UserSummaryDto
         {
@@ -960,7 +991,9 @@ public sealed class UserManagementService(
             MaxDatabases = scope.MaxDatabases,
             MaxMailboxes = scope.MaxMailboxes,
             MaxScheduledTasks = scope.MaxScheduledTasks,
-            DiskUsageMb = diskUsageMb,
+            DiskUsageMb = diskUsage.UsageMb,
+            DiskMeasured = diskUsage.Measured,
+            DiskUsageTruncatedReasonKey = diskUsage.TruncatedReasonKey,
             OwnerId = ownerId,
             OwnerName = ownerName
         };

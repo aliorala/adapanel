@@ -49,6 +49,36 @@ public sealed class SubscriptionUsageDto
 
     public long DiskUsageMb { get; set; }
 
+    /// <summary>
+    /// Disk kullanımı TAM ölçülebildi mi. <c>false</c> ise <see cref="DiskUsageMb"/> gerçek
+    /// kullanımı değil bir ALT SINIRI gösterir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Arayüz bunu GÖSTERMEK ZORUNDA:</b> "1,2 GB" yazıp sayının kesildiğini gizlemek, bu
+    /// panelde yasaktır — kullanıcı kotasının dolmasına ne kadar kaldığını bu ekrandan okur ve
+    /// eksik bir sayı onu yanlış karara götürür (bkz. aynı gerekçe <c>DirectorySizeDto</c>'da).
+    /// Kardeşi <see cref="TrafficMeasured"/> ile aynı sözleşme, aynı sebep.
+    /// </para>
+    /// <para>
+    /// <b>Trafikten TEK farkı:</b> ölçülemeyen trafikte kota hiç uygulanmaz (askıya alma
+    /// yaptırımdır); disk tarafında ise ölçülen ALT SINIR tavanı aşıyorsa yazma yine reddedilir —
+    /// alt sınırın aşması KESİN bilgidir. Gerekçesi <c>FileQuotaGuard.EnsureRoom</c>'da.
+    /// </para>
+    /// </remarks>
+    public bool DiskMeasured { get; set; }
+
+    /// <summary>
+    /// Disk ölçümü eksikse sebebinin çeviri anahtarı (<c>files.size_truncated_entries|_time|_denied</c>);
+    /// ölçüm tamsa boş.
+    /// </summary>
+    /// <remarks>
+    /// Boş olması "ölçüm tam" demek DEĞİLDİR: sitesi IIS'ten hiç okunamayan aboneliğin eksikliğinin
+    /// çevrilmiş bir anahtarı yoktur. Arayüzün bakacağı bayrak <see cref="DiskMeasured"/>'dır; bu
+    /// alan yalnız "neden" ayrıntısını verir.
+    /// </remarks>
+    public string DiskUsageTruncatedReasonKey { get; set; } = string.Empty;
+
     public int MaxDiskMb { get; set; }
 }
 

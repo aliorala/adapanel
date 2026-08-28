@@ -660,7 +660,6 @@ function adapanel_UsageUpdate(array $params)
         }
 
         $degerler = array(
-            'diskusage' => (int) ($account['diskUsageMb'] ?? 0),
             'disklimit' => (int) ($account['diskLimitMb'] ?? 0),
             'bwlimit' => (int) ($account['bandwidthLimitMb'] ?? 0),
             'lastupdate' => \WHMCS\Database\Capsule::raw('now()'),
@@ -671,6 +670,15 @@ function adapanel_UsageUpdate(array $params)
         // gecen ayin gercek kullanimini da silerdi. Eski deger korunur.
         if (!empty($account['bandwidthMeasured'])) {
             $degerler['bwusage'] = (int) ($account['bandwidthUsageMb'] ?? 0);
+        }
+
+        // OLCULEMEYEN DISK DE YAZILMAZ — ayni gerekce, ayni sinif hata. Panelin disk hesabi
+        // butceli bir agac yuruyusudur: butce dolarsa ya da bir site okunamazsa donen sayi
+        // gercek kullanimin ALT SINIRIDIR. Bu ESKIDEN kosulsuz yaziliyordu, yani eksik olcum
+        // WHMCS'te tam deger gibi duruyor ve bir onceki turun dogru degerinin de ustune
+        // yaziyordu; sonuc, musteriden kullandigindan az disk ucreti almaktir.
+        if (!empty($account['diskMeasured'])) {
+            $degerler['diskusage'] = (int) ($account['diskUsageMb'] ?? 0);
         }
 
         try {

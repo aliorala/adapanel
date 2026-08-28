@@ -292,7 +292,8 @@ public sealed class BillingIntegrationTests
                 MaxDiskMb = 2048,
                 TrafficBytesThisMonth = 3L * 1024 * 1024 * 1024,   // 3 GB
                 TrafficLimitGb = 10,
-                TrafficMeasured = true
+                TrafficMeasured = true,
+                DiskMeasured = true
             });
 
         var rapor = await duzenek.Servis.BuildUsageReportAsync();
@@ -305,7 +306,42 @@ public sealed class BillingIntegrationTests
         Assert.Equal(3072, hesap.BandwidthUsageMb);
         Assert.Equal(10240, hesap.BandwidthLimitMb);
         Assert.True(hesap.BandwidthMeasured);
+        Assert.True(hesap.DiskMeasured);
         Assert.Equal(["ornek.com"], hesap.Domains);
+    }
+
+    /// <summary>
+    /// ÖLÇÜLEMEYEN DİSK RAPORDA İŞARETLENİR — modül onu WHMCS'e yazmasın diye.
+    /// </summary>
+    /// <remarks>
+    /// Panelin disk hesabı bütçeli bir ağaç yürüyüşüdür: bütçe dolarsa ya da bir site okunamazsa
+    /// dönen sayı gerçek kullanımın ALT SINIRIDIR. Eksik bir sayıyı faturaya yazmak, müşteriden
+    /// kullandığından AZ ücret almak ve bir önceki turun doğru değerinin üstüne yazmaktır — bant
+    /// genişliğinde verilen kararın aynısı, aynı sebeple.
+    /// </remarks>
+    [Fact]
+    public async Task Olculemeyen_disk_RAPORDA_isaretlenir()
+    {
+        await using var duzenek = await Duzenek.OlusturAsync();
+        await duzenek.Servis.UpdateSettingsAsync(true);
+
+        duzenek.MusteriEkle("olculemeyen-disk", ["ornek.com"], new SubscriptionUsageDto
+        {
+            UserName = "olculemeyen-disk",
+            DiskUsageMb = 512,
+            TrafficMeasured = true,
+            DiskMeasured = false
+        });
+
+        var rapor = await duzenek.Servis.BuildUsageReportAsync();
+        var hesap = Assert.Single(rapor.Accounts);
+
+        // Sayı düşürülmez (alt sınır bile bilgidir) ama "ölçüldü" DENMEZ.
+        Assert.Equal(512, hesap.DiskUsageMb);
+        Assert.False(hesap.DiskMeasured);
+
+        // Trafik ölçülmüştü: iki bayrak birbirine karışmamalı.
+        Assert.True(hesap.BandwidthMeasured);
     }
 
     [Fact]
@@ -499,6 +535,42 @@ public sealed class BillingIntegrationTests
         Assert.Contains("lastupdate", modul, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// WHMCS MODÜLÜ ÖLÇÜLEMEYEN DİSKİ YAZMAZ — eski değeri korur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// PHP tarafının çalıştırılabilir testi yok; kural en azından kaynakta sabitlenir. Kapatılan
+    /// hata: <c>diskusage</c> KOŞULSUZ yazılıyordu, yani panelin bütçesi dolduğunda hesaplanan ALT
+    /// SINIR, WHMCS'te tam değer gibi duruyor ve bir önceki turun doğru değerinin de üstüne
+    /// yazıyordu — müşteriden kullandığından az disk ücreti almak demektir.
+    /// </para>
+    /// <para>
+    /// <b>Nöbetçi neden SIRAYA bakıyor:</b> "diskusage geçiyor mu" diye sormak yeterli değil, o
+    /// koşulsuz hâlde de geçerdi. Ölçülen şey, yazmanın bayrak denetiminden SONRA gelmesi ve
+    /// koşulsuz dizi yazımının GERİ GELMEMESİ. Aranan diziler kaynakta yalnız KOD olarak geçer
+    /// (yorumlarda değil) — yoksa nöbetçi, kodu silinmiş bir kuralı yorum sayesinde yeşil görürdü.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void WHMCS_modulu_OLCULEMEYEN_diski_YAZMAZ()
+    {
+        var modul = KaynakOku("integrations", "whmcs", "adapanel", "adapanel.php");
+
+        var govde = modul[modul.IndexOf("function adapanel_UsageUpdate", StringComparison.Ordinal)..];
+        govde = govde[..govde.IndexOf("function adapanel_int", StringComparison.Ordinal)];
+
+        var kosul = govde.IndexOf("$account['diskMeasured']", StringComparison.Ordinal);
+        var yazma = govde.IndexOf("$degerler['diskusage']", StringComparison.Ordinal);
+
+        Assert.True(kosul >= 0, "Modul olcum bayragina hic bakmiyor.");
+        Assert.True(yazma > kosul, "Disk kullanimi bayrak denetiminden ONCE yaziliyor.");
+
+        // KOŞULSUZ yazım geri gelmesin: dizi hazırlanırken diskusage doldurulursa bayrak fiilen
+        // devre dışı kalır.
+        Assert.DoesNotContain("'diskusage' =>", govde, StringComparison.Ordinal);
+    }
+
     // --- duzenek ---
 
     private static BillingTerminationGuard.Candidate Musteri(string ad, params string[] siteler) =>
@@ -669,7 +741,7 @@ public sealed class BillingIntegrationTests
         public Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task RemoveSiteFromAllScopesAsync(string siteName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<string>> GetAllowedMailDomainsAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<DiskUsage> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Guid?> GetOwnerAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<Guid>> GetOwnedUserIdsAsync(Guid ownerId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

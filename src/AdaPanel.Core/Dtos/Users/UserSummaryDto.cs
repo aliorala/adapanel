@@ -49,7 +49,33 @@ public sealed class UserSummaryDto
     public string ParentName { get; init; } = string.Empty;
 
     /// <summary>Customer'ın atanan sitelerinin güncel disk kullanımı (MB).</summary>
+    /// <remarks>
+    /// <see cref="DiskMeasured"/> <c>false</c> ise bu sayı bir ALT SINIRDIR, gerçek kullanım değil.
+    /// </remarks>
     public long DiskUsageMb { get; init; }
+
+    /// <summary>
+    /// <see cref="DiskUsageMb"/> TAM ölçülebildi mi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden listede satır satır taşınıyor:</b> kullanım bütçeli bir ağaç yürüyüşüyle ölçülür ve
+    /// bütçe abonelik başınadır — yani listedeki bir müşterinin sayısı kesilirken komşusununki tam
+    /// olabilir. Tek bir "liste eksik" uyarısı, hangi satıra güvenileceğini söylemezdi.
+    /// </para>
+    /// <para>
+    /// Yönetici bu listeye bakarak kota büyütür, müşteri uyarır, hatta hesap askıya alır. Kesilmiş
+    /// bir sayıyı tam gibi göstermek, o kararların hepsini yanlış veriye dayandırırdı — bu depoda
+    /// eksik sonucu tam göstermek yasaktır (aynı kural <c>DirectorySizeDto.Truncated</c>'ta).
+    /// </para>
+    /// </remarks>
+    public bool DiskMeasured { get; init; }
+
+    /// <summary>
+    /// Ölçüm eksikse sebebinin çeviri anahtarı (<c>files.size_truncated_entries|_time|_denied</c>);
+    /// tamsa boş. Boş olması "tam" demek değildir — bakılacak bayrak <see cref="DiskMeasured"/>'dır.
+    /// </summary>
+    public string DiskUsageTruncatedReasonKey { get; init; } = string.Empty;
 
     /// <summary>
     /// Customer'a ait güncel veritabanı sayısı (MaxDatabases kotasının kullanılan kısmı). TÜM motorların

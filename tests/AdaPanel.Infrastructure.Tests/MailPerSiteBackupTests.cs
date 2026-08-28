@@ -184,6 +184,18 @@ public sealed class MailPerSiteBackupTests
         var uyari = Assert.Single(sonuc.Warnings, item => item.Detail.Contains("vandelay"));
         Assert.Equal("backup.mail_account_failed", uyari.MessageKey);
         Assert.Contains(Site, uyari.Target);
+
+        // AYRINTI DILDEN BAGIMSIZ. `Detail` bu depoda cevrilmez ve arayuz onu cevirinin altina HAM
+        // basar; buradaki eski cumle Turkce harf de tasiyordu ("Arsivde ... YUKLENMEDI"), yani
+        // Ingilizce panelde yari cevrilmis satir en gorunur haliyle cikiyordu. Denetim
+        // TenantTreeWalkGuardTests'teki ORTAK nobetciyle yapilir.
+        //
+        // UC OLGU DA KORUNDU: arsivde posta kutusu var, eksik bilesen hangisi, sonuc ne.
+        Assert.Contains("mailboxes=present", uyari.Detail, StringComparison.Ordinal);
+        Assert.Contains("archiver=vandelay", uyari.Detail, StringComparison.Ordinal);
+        Assert.Contains("archiver_state=not_configured", uyari.Detail, StringComparison.Ordinal);
+        Assert.Contains("mail=not_restored", uyari.Detail, StringComparison.Ordinal);
+        TenantTreeWalkGuardTests.DildenBagimsizOlmali(uyari.Detail, "posta arsivleyicisi yok uyarisi");
     }
 
     /// <summary>Geri yukleme hatalari YUTULMAZ; kullaniciya uyari olarak doner.</summary>

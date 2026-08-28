@@ -332,11 +332,11 @@
               </div>
               <div class="summary-item">
                 <span>{{ t("panel.hosting.quotaUsed") }}</span>
-                <strong>{{ formatBytes(quota?.usedBytes ?? 0) }}</strong>
+                <strong>{{ formatQuotaBytes(quota?.usedBytes ?? 0) }}</strong>
               </div>
               <div class="summary-item">
                 <span>{{ t("panel.hosting.quotaLimit") }}</span>
-                <strong>{{ quota?.quotaEnabled ? formatBytes(quota?.limitBytes ?? 0) : t("panel.security.unlimited") }}</strong>
+                <strong>{{ quota?.quotaEnabled ? formatQuotaBytes(quota?.limitBytes ?? 0) : t("panel.security.unlimited") }}</strong>
               </div>
             </div>
 
@@ -872,6 +872,17 @@ async function removeSiteQuota() {
 /** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */
 function formatBytes(value: number) {
   return sharedFormatBytes(value, t);
+}
+
+/**
+ * KOTA rakamlari ayri hassasiyette (bkz. utils/bytes.ts, "gauge"): burada okunan sey buyukluk
+ * degil SINIRA YAKINLIK. Disk kotasi tipik olarak 10-100 GiB araligindadir ve ortak kuralin
+ * ondalik atmasi tam o araligi kaba yapar ("16 GiB / 20 GiB"). SubscriptionCard'daki trafik
+ * kotasiyla AYNI davranmasi bilinctir: bir kota ondalikli, digeri ondaliksiz gorunemez.
+ * Istatistik/bant genisligi rakamlari bir kota DEGIL, bu yuzden ustteki `formatBytes`ta kalir.
+ */
+function formatQuotaBytes(value: number) {
+  return sharedFormatBytes(value, t, "gauge");
 }
 
 async function loadGit() {

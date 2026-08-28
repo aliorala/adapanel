@@ -489,7 +489,7 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
     // ===============================================================================================
 
     /// <summary>
-    /// DÖRT YOLDA DA ELLE YAZILMIŞ İKİNCİ BİR YÜRÜYÜŞ ARTIK YOK.
+    /// BEŞ YOLDA DA ELLE YAZILMIŞ İKİNCİ BİR YÜRÜYÜŞ ARTIK YOK.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -499,12 +499,20 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
     /// kavşağı kurduğunda ortaya çıkar.
     /// </para>
     /// <para>
-    /// <b>DÖRDÜNCÜ YOL SONRADAN EKLENDİ ve eklenmesi bu turun ASIL kazancı:</b> liste yalnız üç
-    /// dosyaya bakıyordu ve <c>FileService.cs</c> içinde YOKTU. Sonuç ölçüldü —
+    /// <b>DÖRDÜNCÜ YOL SONRADAN EKLENDİ ve eklenmesi bir önceki turun ASIL kazancıydı:</b> liste
+    /// yalnız üç dosyaya bakıyordu ve <c>FileService.cs</c> içinde YOKTU. Sonuç ölçüldü —
     /// <c>FileService.KlasoruKopyala</c> kendini ÖZYİNELEMELİ çağıran, hiçbir bütçesi olmayan bir
     /// yürüyüş taşımaya devam ediyordu; yani bu nöbetçinin koruduğunu iddia ettiği kural, nöbetçinin
     /// göremediği bir dosyada çiğneniyordu. Elle yazılmış kapsam listesi bu depoda beşinci kez
     /// kaydı; listeye yeni bir yürüyüş müşterisi eklendiğinde buraya da eklenmesi ZORUNLUDUR.
+    /// </para>
+    /// <para>
+    /// <b>BEŞİNCİ YOL (<c>SiteCascadeDeletionService.CountFilesSafely</c>) aynı dersin devamıdır:</b>
+    /// o gövdenin korumaları (kavşak atlaması + tavan) DOĞRUYDU, yani ortada açık yoktu — ama
+    /// nöbetçinin listesinde olmadığı için "yürüyüş TEK YERDE" iddiası onun üzerinde HİÇ
+    /// ölçülmüyordu. Doğru bir kopya da kopyadır: sıkılaştırma günü biri güncellenip diğeri
+    /// unutulur. O yüzden liste, "açık var mı" ile değil "elle yazılmış yürüyüş var mı" ile
+    /// büyütülür.
     /// </para>
     /// <para>
     /// Aynı kalıbın örnekleri: <c>QuotaDirectoryWalkTests.Agac_yuruyusu_TEK_KAYNAKTAN_gelir</c> ve
@@ -518,21 +526,23 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         var goc = KaynakOku("src", "AdaPanel.Infrastructure", "Migration", "SiteMigrationService.cs");
         var barindirma = KaynakOku("src", "AdaPanel.Infrastructure", "Iis", "SiteHostingSettingsService.cs");
         var dosyaYoneticisi = KaynakOku("src", "AdaPanel.Infrastructure", "Files", "FileService.cs");
+        var siteSilme = KaynakOku("src", "AdaPanel.Infrastructure", "Iis", "SiteCascadeDeletionService.cs");
 
         // 1) Açığı ÜRETEN çağrı hiçbirinde YOK. Davranış testleri "şu an döngü yok" der; bu nöbetçi
         //    "döngüyü üreten çağrı geri kondu" der.
-        foreach (var kaynak in new[] { yedek, goc, barindirma, dosyaYoneticisi })
+        foreach (var kaynak in new[] { yedek, goc, barindirma, dosyaYoneticisi, siteSilme })
         {
             Assert.DoesNotContain("SearchOption.AllDirectories", kaynak, StringComparison.Ordinal);
         }
 
-        // 2) Dört gövde de ORTAK yürüyüşü çağırır ve KENDİ yürüyüşünü taşımaz.
+        // 2) Beş gövde de ORTAK yürüyüşü çağırır ve KENDİ yürüyüşünü taşımaz.
         foreach (var (kaynak, imza) in new[]
                  {
                      (yedek, "private static List<ArchiveFile> ScanFiles("),
                      (goc, "private async Task<string?> SanitizeUserIniFilesAsync("),
                      (barindirma, "private static int CopyDirectoryRecursive("),
-                     (dosyaYoneticisi, "private static KlasorKopyasi KlasoruKopyala(")
+                     (dosyaYoneticisi, "private static KlasorKopyasi KlasoruKopyala("),
+                     (siteSilme, "internal static int CountFilesSafely(")
                  })
         {
             var govde = GovdeAl(kaynak, imza);
@@ -552,7 +562,7 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
             Assert.DoesNotContain(ad, govde[imza.Length..], StringComparison.Ordinal);
         }
 
-        // 3) Korumalar GERÇEKTEN ortak yerde yaşıyor. Biri buradan düşerse beş çağıran birden
+        // 3) Korumalar GERÇEKTEN ortak yerde yaşıyor. Biri buradan düşerse BÜTÜN çağıranlar birden
         //    korumasız kalır ve bu test kızarır.
         var ortak = KaynakOku("src", "AdaPanel.Infrastructure", "Files", "SafeDirectoryWalk.cs");
         foreach (var nobetci in new[]
@@ -630,8 +640,15 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
     /// dışarıdan gelen bir yol ya da istisna metni buraya karışmıyor. Türkçe cümle geri
     /// yazıldığında <c>ğ ı İ ş</c> harfleri bu iddiayı anında kırar.
     /// </para>
+    /// <para>
+    /// <b><c>internal</c>, çünkü aynı sınıfın son iki örneği başka dosyalarda ölçülüyor</b>
+    /// (<c>BackupReconciliationTests</c> — kimliksiz uzak hedef, <c>MailPerSiteBackupTests</c> —
+    /// yapılandırılmamış posta arşivleyicisi). İkinci bir ASCII denetimi yazmak, aynı kuralı iki
+    /// yerde tutmak olurdu: kuralı sıkılaştırma günü birini güncelleyip diğerini unutmak, bu
+    /// dosyanın bütün varlık sebebi olan hatanın ta kendisi.
+    /// </para>
     /// </remarks>
-    private static void DildenBagimsizOlmali(string? ayrinti, string neresi)
+    internal static void DildenBagimsizOlmali(string? ayrinti, string neresi)
     {
         Assert.False(string.IsNullOrWhiteSpace(ayrinti), $"{neresi}: ayrinti bos.");
 

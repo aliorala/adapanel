@@ -6,6 +6,12 @@ export const usePhpStore = defineStore("php", {
     versions: [] as PhpVersionRecord[],
     lastAssignment: null as SitePhpAssignment | null,
     loading: false,
+    /*
+     * Sürüm listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false döner ve boş
+     * `versions` "kurulu PHP sürümü yok" diye okunurdu. Bayrak yalnız BAŞARIDA true olur;
+     * mağazada durur çünkü PHP/ASP/Kurulum sihirbazı aynı listeyi okuyor.
+     */
+    loaded: false,
     installingComponentId: "",
     assigningComponentId: ""
   }),
@@ -15,6 +21,8 @@ export const usePhpStore = defineStore("php", {
 
       try {
         this.versions = await getPhpVersions();
+        // Yalnız BAŞARIDA: hata fırlarsa bayrak false kalır, ekran "yükleniyor" der.
+        this.loaded = true;
         return this.versions;
       } finally {
         this.loading = false;

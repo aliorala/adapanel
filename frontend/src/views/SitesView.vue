@@ -237,6 +237,13 @@
            göstermek, var olan siteleri kaybolmuş gibi gösterirdi. -->
       <p v-else-if="sitesStore.sites.length > 0" class="empty-state">{{ t("panel.sites.searchEmpty") }}</p>
 
+      <!-- Liste GELMEDEN kurulum daveti çiziliyordu: sunucuda siteler VARKEN kullanıcı
+           "hiç siteniz yok" okuyordu. Davet artık ancak liste BAŞARIYLA okunduktan sonra çıkar
+           (bkz. stores/sites.ts `loaded`). -->
+      <p v-else-if="!sitesStore.loaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+
       <div v-else class="empty-onboard">
         <svg viewBox="0 0 24 24" class="empty-icon" aria-hidden="true">
           <circle cx="12" cy="12" r="9" />

@@ -29,6 +29,18 @@ public sealed class FileQuotaTests : IDisposable
 {
     private const long Mb = 1024L * 1024L;
 
+    /// <summary>TAM ölçülmüş kullanım — kesilme senaryosu OLMAYAN testlerin girdisi.</summary>
+    private static DiskUsage Olculdu(long kullanilanMb) => new(kullanilanMb, true, string.Empty);
+
+    /// <summary>
+    /// KESİLMİŞ kullanım: sayı gerçek kullanım değil bir ALT SINIRDIR.
+    /// </summary>
+    /// <remarks>
+    /// Sebep anahtarı bilerek parametre: kuralın kesilme SEBEBİNE göre farklı davranmadığını
+    /// (kullanım tarafında hepsi aynı muamele görür) çağrı yerinde görebilmek için.
+    /// </remarks>
+    private static DiskUsage Kesildi(long altSinirMb, string sebep) => new(altSinirMb, false, sebep);
+
     private readonly string kok;
     private readonly string siteKoku;
     private readonly FileService servis;
@@ -82,7 +94,7 @@ public sealed class FileQuotaTests : IDisposable
     public void Bir_MB_altindaki_dosya_kotaya_SIFIR_girmez()
     {
         var hata = Assert.Throws<AppException>(() =>
-            FileQuotaGuard.EnsureRoom(maxDiskMb: 500, kullanilanMb: 500, gelenBayt: 1, gelenOlcumKesilmeSebebi: string.Empty));
+            FileQuotaGuard.EnsureRoom(maxDiskMb: 500, kullanim: Olculdu(500), gelenBayt: 1, gelenOlcumKesilmeSebebi: string.Empty));
 
         Assert.Equal("files.quota_exceeded", hata.MessageKey);
         Assert.Equal(403, hata.HttpStatusCode);
@@ -96,8 +108,8 @@ public sealed class FileQuotaTests : IDisposable
     [Fact]
     public void Tavana_SIGAN_is_reddedilmez()
     {
-        FileQuotaGuard.EnsureRoom(maxDiskMb: 500, kullanilanMb: 499, gelenBayt: Mb, gelenOlcumKesilmeSebebi: string.Empty);
-        FileQuotaGuard.EnsureRoom(maxDiskMb: 500, kullanilanMb: 0, gelenBayt: 700 * 1024, gelenOlcumKesilmeSebebi: string.Empty);
+        FileQuotaGuard.EnsureRoom(maxDiskMb: 500, kullanim: Olculdu(499), gelenBayt: Mb, gelenOlcumKesilmeSebebi: string.Empty);
+        FileQuotaGuard.EnsureRoom(maxDiskMb: 500, kullanim: Olculdu(0), gelenBayt: 700 * 1024, gelenOlcumKesilmeSebebi: string.Empty);
     }
 
     /// <summary>SINIRSIZ abonelik (<c>MaxDiskMb = 0</c>) hiçbir şeyle sınırlanmaz.</summary>
@@ -109,7 +121,7 @@ public sealed class FileQuotaTests : IDisposable
     [Fact]
     public void Sinirsiz_abonelik_DENETLENMEZ()
     {
-        FileQuotaGuard.EnsureRoom(maxDiskMb: 0, kullanilanMb: 900_000, gelenBayt: long.MaxValue / 2, gelenOlcumKesilmeSebebi: "files.size_truncated_entries");
+        FileQuotaGuard.EnsureRoom(maxDiskMb: 0, kullanim: Olculdu(900_000), gelenBayt: long.MaxValue / 2, gelenOlcumKesilmeSebebi: "files.size_truncated_entries");
     }
 
     // ==================================================================
@@ -131,7 +143,7 @@ public sealed class FileQuotaTests : IDisposable
     {
         var hata = Assert.Throws<AppException>(() => FileQuotaGuard.EnsureRoom(
             maxDiskMb: 100,
-            kullanilanMb: 90,
+            kullanim: Olculdu(90),
             gelenBayt: 50 * Mb,
             gelenOlcumKesilmeSebebi: "files.size_truncated_entries"));
 
@@ -160,7 +172,7 @@ public sealed class FileQuotaTests : IDisposable
     {
         var hata = Assert.Throws<AppException>(() => FileQuotaGuard.EnsureRoom(
             maxDiskMb: 500,
-            kullanilanMb: 1,
+            kullanim: Olculdu(1),
             gelenBayt: Mb,
             gelenOlcumKesilmeSebebi: "files.size_truncated_entries"));
 
@@ -185,9 +197,70 @@ public sealed class FileQuotaTests : IDisposable
     {
         FileQuotaGuard.EnsureRoom(
             maxDiskMb: 500,
-            kullanilanMb: 1,
+            kullanim: Olculdu(1),
             gelenBayt: Mb,
             gelenOlcumKesilmeSebebi: "files.size_truncated_denied");
+    }
+
+    // ==================================================================
+    // KURAL: KULLANIM ÖLÇÜMÜ KESİLDİĞİNDE (kotanın KENDİ hesabı)
+    // ==================================================================
+
+    /// <summary>
+    /// KULLANIM ÖLÇÜLEMEMİŞ OLSA BİLE, ALT SINIR TAVANI AŞIYORSA İSTEK REDDEDİLİR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kesilmiş ölçüm bir ALT SINIRDIR: gerçek kullanım EN AZ bu kadardır. Alt sınır bile tavanı
+    /// aşıyorsa ihlal KESİNDİR ve "ölçümüm eksikti" demek onu ortadan kaldırmaz.
+    /// </para>
+    /// <para>
+    /// <b>Bu, trafik kotasından bilerek AYRILDIĞIMIZ tek noktadır</b> (trafik
+    /// <c>olculdu &amp;&amp; bayt &gt;= sinir</c> yazar, yani ölçemediğinde hiç bakmaz) ve fark
+    /// ölçülmüştür: trafiğin yaptırımı ASKIYA ALMAKTIR — bütün siteler yayından kalkar, müşteri
+    /// kendi başına geri açamaz. Buradaki yaptırım TEK BİR YAZMAYI reddetmektir. Kesin bir ihlali
+    /// geçirmek, kotayı ölçüm bütçesini doldurabilen herkese açardı.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Olculemeyen_kullanimin_ALT_SINIRI_asiyorsa_REDDEDILIR()
+    {
+        var hata = Assert.Throws<AppException>(() => FileQuotaGuard.EnsureRoom(
+            maxDiskMb: 100,
+            kullanim: Kesildi(90, "files.size_truncated_entries"),
+            gelenBayt: 50 * Mb,
+            gelenOlcumKesilmeSebebi: string.Empty));
+
+        Assert.Equal("files.quota_exceeded", hata.MessageKey);
+        Assert.Equal(403, hata.HttpStatusCode);
+    }
+
+    /// <summary>
+    /// ÖLÇÜLEMEYEN KULLANIM SIĞIYORSA İŞ GEÇER: ölçemediğimiz kotayı UYGULAMAYIZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// KARARIN ÖLÇÜMÜ ve trafik kotasıyla AYNI felsefe (<c>TrafikOlcAsync</c>: ölçülemeyen
+    /// abonelikte kota uygulanmaz). Gerekçe kesilmenin sebeplerinde: üçünden ikisi kiracının
+    /// elinde DEĞİLDİR (süre bütçesi = yavaş/ağ diski, erişim reddi = ACL). Belirsizliği "aşmış
+    /// say" yönüne yormak, sunucu yavaşladığında meşru müşterinin HİÇ dosya yükleyememesi olurdu
+    /// — yaptırım noktası yükleme olduğu için müşteri tümden çalışamaz hâle gelirdi.
+    /// </para>
+    /// <para>
+    /// Bu testin mutasyon değeri yüksek: olmasaydı "ölçemedin mi, reddet" gibi bir uygulama da
+    /// yukarıdaki testi geçerdi ve kapatılan asıl açık — kilitlenen meşru müşteri — geri gelirdi.
+    /// Kaybedilen kesinlik ise gizlenmiyor, GÖSTERİLİYOR: aynı ölçüm kullanıcı listesine ve
+    /// abonelik ekranına <c>DiskMeasured = false</c> olarak gider.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Olculemeyen_kullanim_SIGIYORSA_is_GECER()
+    {
+        FileQuotaGuard.EnsureRoom(
+            maxDiskMb: 500,
+            kullanim: Kesildi(1, "files.size_truncated_time"),
+            gelenBayt: Mb,
+            gelenOlcumKesilmeSebebi: string.Empty);
     }
 
     // ==================================================================
@@ -316,6 +389,36 @@ public sealed class FileQuotaTests : IDisposable
 
         // TAMSAYI BÖLMESİ GERİ GELMESİN: hesap bayt üzerinden yapılır, MB'ye bölerek değil.
         Assert.DoesNotContain("file.Length / (1024 * 1024)", kaynak, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ZORLAMA YOLU ÖLÇÜM BAYRAĞINI YENİDEN ÜRETMEZ: kullanım kurala OLDUĞU GİBİ geçer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kapatılan açığın kök nedeni bilginin YOLDA kaybolmasıydı: ölçüm "kesildi mi" biliyordu, ama
+    /// kotaya düz bir sayı olarak varıyordu. Tip bunu artık zorluyor — kaybın tek yolu, denetleyicide
+    /// sayıyı alıp <c>new DiskUsage(..., true, ...)</c> ile "ölçülmüş" gibi yeniden paketlemek.
+    /// Bu tam olarak eski davranışa dönmek olur ve DAVRANIŞ testleriyle görülemez: kural doğru
+    /// çalışmaya devam eder, yalnızca yanlış girdiyle.
+    /// </para>
+    /// <para>
+    /// Bu denetleyicinin birim test projesi yok (API katmanı için kurulum bulunmuyor); nöbetçi
+    /// kaynağa bakmak zorunda. Aranan diziler kaynakta yalnız KOD olarak geçer — yorumda geçselerdi
+    /// nöbetçi, kodu silinmiş bir kuralı yorum sayesinde yeşil görürdü (bu depoda bir kez öyle oldu).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Kota_yolu_olcum_bayragini_YENIDEN_URETMEZ()
+    {
+        var kaynak = File.ReadAllText(Path.Combine(
+            DepoKoku(), "src", "AdaPanel.Api", "Controllers", "FilesController.cs"));
+
+        var govde = GovdeAl(kaynak, "private async Task EnsureDiskQuotaAsync(");
+
+        Assert.Contains("FileQuotaGuard.EnsureRoom(", govde, StringComparison.Ordinal);
+        Assert.DoesNotContain("new DiskUsage(", govde, StringComparison.Ordinal);
+        Assert.DoesNotContain(".UsageMb", govde, StringComparison.Ordinal);
     }
 
     // --- düzenek ---

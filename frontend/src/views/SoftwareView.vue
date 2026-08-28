@@ -199,6 +199,13 @@
         </article>
       </div>
 
+      <!-- Katalog gelmeden "bileşen yok" yazıyordu: `catalog` null iken türetilen liste boş
+           kalıyor, ekran KESİN bir cümle kuruyordu. Artık liste ancak BAŞARIYLA okunduktan
+           sonra "yok" der (bkz. stores/software.ts `loaded`). -->
+      <p v-else-if="!softwareStore.loaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+
       <p v-else class="empty-state">
         {{ t("panel.software.noItems") }}
       </p>
@@ -232,6 +239,11 @@
           </button>
         </article>
       </div>
+
+      <!-- Aynı yalan kurulu bileşen şeridinde de vardı. -->
+      <p v-else-if="!softwareStore.loaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
 
       <p v-else class="empty-state">
         {{ t("panel.software.noInstalled") }}

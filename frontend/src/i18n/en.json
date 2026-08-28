@@ -3410,6 +3410,8 @@
   "store.template_not_found": "Template not found.",
   "users.not_found": "User not found.",
   "users.password_set.success": "Password set. The user's open sessions and API keys were revoked.",
+  "users.disk_usage_partial": "approx.",
+  "users.disk_usage_partial_hint": "Disk usage could NOT be fully measured; the value shown is a LOWER BOUND. Actual usage may be higher.",
   "webdb.health_failed": "Web database tool health check failed.",
   "panel.health.domainsTitle": "Domain settings",
   "panel.health.domainsHint": "When the panel is updated, new defaults apply only to new domains; older ones are left behind.",

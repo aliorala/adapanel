@@ -165,7 +165,7 @@
             </button>
           </span>
         </div>
-        <p v-if="loading && firewallRules.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+        <p v-if="!firewallLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
         <p v-else-if="firewallRules.length === 0" class="empty-state">{{ t("panel.firewall.empty") }}</p>
       </div>
     </template>
@@ -353,7 +353,9 @@
             {{ t("panel.bruteforce.unban") }}
           </button>
         </div>
-        <p v-if="loading && bannedIps.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+        <!-- Yasaklı IP listesi kaba kuvvet durumuyla BİRLİKTE gelir; bekleme/hata ayrımı için
+             zaten var olan `bruteForceLoaded` kullanılır, ayrı bir sayaç uydurulmaz. -->
+        <p v-if="!bruteForceLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
         <p v-else-if="bannedIps.length === 0" class="empty-state">{{ t("panel.bruteforce.empty") }}</p>
       </div>
     </template>
@@ -395,6 +397,9 @@ const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 const securityConfig = ref<SiteSecurityConfiguration | null>(null);
 const firewallRules = ref<FirewallRule[]>([]);
+// Kural listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi
+// "kural yok" diye okunuyordu — güvenlik ekranında bu, korumasız olduğunu sanmak demek.
+const firewallLoaded = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
 const busyAction = ref("");
@@ -636,6 +641,7 @@ async function refreshAll() {
   loading.value = true;
   try {
     firewallRules.value = await getFirewallRules();
+    firewallLoaded.value = true;
     await refreshBruteForce();
     if (selectedSiteName.value) {
       securityConfig.value = await getSiteSecurity(selectedSiteName.value);
@@ -713,6 +719,7 @@ async function saveFirewall(allow: boolean) {
     if (allow) await allowPort(firewallForm.port, firewallForm.protocol, firewallForm.ruleName);
     else await blockPort(firewallForm.port, firewallForm.protocol, firewallForm.ruleName);
     firewallRules.value = await getFirewallRules();
+    firewallLoaded.value = true;
     showFirewallForm.value = false;
     showNotice(t("panel.firewall.saved"), false);
   } catch (error) {
@@ -733,6 +740,7 @@ async function removeRule(ruleName: string) {
       try {
         await removeFirewallRule(ruleName);
         firewallRules.value = await getFirewallRules();
+        firewallLoaded.value = true;
         showNotice(t("panel.firewall.removed"), false);
       } catch (error) {
         showNotice(resolveApiMessage(error), true);

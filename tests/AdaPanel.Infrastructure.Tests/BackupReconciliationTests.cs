@@ -274,6 +274,50 @@ public sealed class BackupReconciliationTests
         Assert.Contains("onedrive", sonuc.OrphanScanSkipped);
     }
 
+    /// <summary>
+    /// KIMLIK HIC YOKKEN: kayit "kayip" DAMGALANMAZ ve ayrinti DILDEN BAGIMSIZ kalir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kayitta uzak bir kopya yaziyor ama panelde kayitli hicbir uzak hedef kimligi yok (kullanici
+    /// otomasyon ayarini silmis olabilir). Olculemeyen sey "YOK" degildir; bu dosyanin en kritik
+    /// kurali burada da gecerli.
+    /// </para>
+    /// <para>
+    /// Ikinci olculen sey ayrintinin DILI: <c>Detail</c> bu depoda cevrilmeyen alandir ve arayuz
+    /// onu ham basar. Buraya Turkce bir anlati cumlesi yazilmisti ("Kayitli uzak hedef kimligi
+    /// yok.") ve Ingilizce panelde Ingilizce anahtarin altinda Turkce bir satir goruluyordu.
+    /// Denetim <c>TenantTreeWalkGuardTests</c> icindeki ORTAK nobetciyle yapilir; ikinci bir ASCII
+    /// kurali yazmak ayni kurali iki yerde tutmak olurdu.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Kimlik_YOKKEN_ulasilamayan_kaydin_ayrintisi_DILDEN_BAGIMSIZ()
+    {
+        using var alan = new BulutAlani();
+
+        // UzakHedefiYazAsync BILEREK cagrilmiyor: olculen dal tam olarak "kayitli kimlik yok".
+        await alan.KayitlariYazAsync(Kayit(alan, "k1", dosyaYaz: true, uzak: "dropbox:/yedekler/k1.zip", tur: "dropbox"));
+
+        var sonuc = await alan.ServisKur(new SahteBulut()).VerifyBackupsAsync(alan.Iptal);
+
+        Assert.Equal(0, sonuc.MissingRemote);
+        Assert.Equal(1, sonuc.Unreachable);
+
+        var sorun = Assert.Single(sonuc.Issues);
+        Assert.Equal("backup.verify.unreachable", sorun.MessageKey);
+
+        // Anlatinin tasidigi UC olgu da etiket-deger olarak duruyor: ne eksik, ne yapilmadi,
+        // sonuc ne DEGIL.
+        Assert.Contains("remote_credentials=missing", sorun.Detail, StringComparison.Ordinal);
+        Assert.Contains("probe=skipped", sorun.Detail, StringComparison.Ordinal);
+        Assert.Contains("remote_presence=unknown", sorun.Detail, StringComparison.Ordinal);
+        TenantTreeWalkGuardTests.DildenBagimsizOlmali(sorun.Detail, "dogrulama kimliksiz-uzak-hedef ayrintisi");
+
+        // Ve kayit yine ISARETLENMEDI.
+        Assert.False(Assert.Single(await alan.ServisKur(new SahteBulut()).GetBackupsAsync(alan.Iptal)).RemoteMissing);
+    }
+
     [Fact]
     public async Task Yetim_taramasi_hicbir_seyi_SILMEZ()
     {

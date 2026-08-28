@@ -128,6 +128,62 @@ public sealed class SubscriptionEnforcementTests : IDisposable
         Assert.True(kapsam.Askida);
     }
 
+    /// <summary>
+    /// ABONELİK EKRANI, DİSK SAYISININ EKSİK OLABİLECEĞİNİ SÖYLER — sayıyı tam gibi göstermez.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu ekran müşterinin "kotamın ne kadarı kaldı" sorusunu sorduğu yerdir ve aynı DTO faturalama
+    /// raporuna da gider. Disk kullanımı bütçeli bir ağaç yürüyüşüyle ölçülür; bütçe dolduğunda
+    /// dönen sayı bir ALT SINIRDIR. Eksik sayıyı "1,2 GB" diye yazmak, müşteriyi dolmak üzere olan
+    /// bir kotayla "yerim var" sanmaya bırakırdı — bu depoda eksik sonucu tam göstermek yasaktır.
+    /// </para>
+    /// <para>
+    /// Kardeşi <c>TrafficMeasured</c> ile aynı sözleşme: sayının yanında "ölçülebildi mi" de
+    /// taşınır. Sebep anahtarı da geçer, çünkü çevirisi zaten olan
+    /// <c>files.size_truncated_*</c> anahtarları kullanıcıya NEDEN eksik olduğunu söyleyebilir.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Abonelik_ekrani_OLCULEMEYEN_diski_BILDIRIR()
+    {
+        var kapsam = new SahteAbonelik(trafikGb: 10)
+        {
+            DiskKullanimi = new DiskUsage(1200, false, "files.size_truncated_entries")
+        };
+        var servis = Servis(kapsam, new SahteSiteKontrol(), baytPerSite: 0);
+
+        var kullanim = await servis.GetUsageAsync(Musteri);
+
+        // Sayı DÜŞÜRÜLMEZ (alt sınır bile kullanışlı bilgidir)...
+        Assert.Equal(1200, kullanim.DiskUsageMb);
+
+        // ...ama eksik olduğu ve NEDEN eksik olduğu söylenir.
+        Assert.False(kullanim.DiskMeasured);
+        Assert.Equal("files.size_truncated_entries", kullanim.DiskUsageTruncatedReasonKey);
+    }
+
+    /// <summary>MUTASYON KONTROLÜ: TAM ölçülen disk "eksik" damgalanmaz.</summary>
+    /// <remarks>
+    /// Bu olmadan "bayrağı hep false yaz" da yukarıdaki testi geçerdi; o hâlde her abonelik ekranı
+    /// kalıcı bir uyarı gösterir ve uyarı, gerçekten eksik olan aboneliklerde anlamını yitirirdi.
+    /// </remarks>
+    [Fact]
+    public async Task Tam_olculen_disk_EKSIK_damgalanmaz()
+    {
+        var kapsam = new SahteAbonelik(trafikGb: 10)
+        {
+            DiskKullanimi = new DiskUsage(512, true, string.Empty)
+        };
+        var servis = Servis(kapsam, new SahteSiteKontrol(), baytPerSite: 0);
+
+        var kullanim = await servis.GetUsageAsync(Musteri);
+
+        Assert.Equal(512, kullanim.DiskUsageMb);
+        Assert.True(kullanim.DiskMeasured);
+        Assert.Equal(string.Empty, kullanim.DiskUsageTruncatedReasonKey);
+    }
+
     // --- düzenek ---
 
     private SubscriptionEnforcementService Servis(
@@ -177,7 +233,11 @@ public sealed class SubscriptionEnforcementTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult(0L);
+        /// <summary>Disk ölçümünün SONUCU testten verilir: "ölçülemedi" hâli de bir senaryodur.</summary>
+        public DiskUsage DiskKullanimi { get; set; } = new(0, true, string.Empty);
+
+        public Task<DiskUsage> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default)
+            => Task.FromResult(DiskKullanimi);
 
         public Task<IReadOnlyCollection<string>> GetAssignedSitesAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default) => throw new NotSupportedException();

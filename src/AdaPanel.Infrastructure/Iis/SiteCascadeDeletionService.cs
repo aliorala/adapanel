@@ -2,6 +2,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -865,41 +866,90 @@ public sealed class SiteCascadeDeletionService(
     }
 
     /// <summary>
+    /// Bu sayımın öge bütçesi. <b>ESKİ DEĞER 20.000'Dİ VE ÖLÇÜLEREK YÜKSELTİLDİ.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kesilen sayım burada ne KIRAR:</b> bu sayı kullanıcıya silmeden ÖNCE gösterilmez —
+    /// çağrı grafiği ölçüldü, ön sayımın tek tüketicisi <see cref="ClassifyDeletion"/> ve
+    /// <see cref="DescribeDeletionFailure"/>, ikisi de <c>Directory.Delete</c> ZATEN çalıştıktan
+    /// sonraki istisna dalında. Yani "3 dosya silinecek" yazıp 300.000 dosya sildiren bir onay
+    /// ekranı bu yolda YOKTUR. Kırılan şey TERSİ: iki ölçüm de tavana dayandığında farkları 0 olur,
+    /// karar <see cref="DirectoryDeletionOutcome.NotDeleted"/>'a düşer ve panel "silinemedi,
+    /// dosyalar duruyor" der — oysa ağacın çoğu gitmiş olabilir. Bu, Y7 denetiminin kapattığı
+    /// YALANIN ta kendisi, sadece tavanın üstüne taşınmış hâli.
+    /// </para>
+    /// <para>
+    /// <b>20.000 neden yetmiyordu — BU MAKİNEDE ÖLÇÜLDÜ:</b> panelin KENDİ
+    /// <c>frontend/node_modules</c> ağacı tek başına <b>17.459 dosya</b>. Yani tek bir bağımlılık
+    /// klasörü eski tavanın %87'sini yiyordu; site içeriği eklenince tavan aşılıyordu. Yalan, uç
+    /// bir senaryo değil olağan bir Node/PHP sitesinde çıkardı. Ayrıca ortak yürüyüşün bütçesi
+    /// DOSYA değil ÖGE (dosya + klasör) sayar; 20.000'i olduğu gibi taşımak sessiz bir DARALTMA
+    /// olurdu.
+    /// </para>
+    /// <para>
+    /// <b>Yükseltmenin bedeli ölçüldü ve yok denecek kadar az:</b> sayım en çok iki kez, hemen
+    /// ardından <c>Directory.Delete(recursive: true)</c> ile ZATEN baştan sona gezilecek bir ağaçta
+    /// koşar — yürüyüş, peşinden gelen silmeden ucuzdur. Yani bu yolu hızlı tutan şey tavan değil.
+    /// 200.000 değeri uydurulmadı: panelin kullanıcıya cevap veren yollarının hepsinde aynı sayı
+    /// var (<c>FileService.BoyutOgeButcesi</c>, <c>FileService.KopyaOgeButcesi</c>,
+    /// <c>CustomerScopeService.KotaOgeButcesi</c>, <c>SiteMigrationService.UserIniOgeButcesi</c>).
+    /// </para>
+    /// <para>
+    /// <b>SÜRE BÜTÇESİ BİLEREK YOK</b> (<c>int.MaxValue</c>, aynı karar <c>FileService</c>
+    /// kopyalamasında ve içe aktarmada da verildi): buradaki karar iki ÖLÇÜMÜN KARŞILAŞTIRMASIDIR.
+    /// Süre tavanı belirlenimci değildir — aynı ağaç diskin o anki hâline göre iki farklı sayı
+    /// verebilir ve tek başına bu, <c>NotDeleted</c>'ı <c>PartiallyDeleted</c>'a (ya da tersine)
+    /// çevirirdi. Öge tavanı belirlenimcidir: aynı ağaç → aynı sayı.
+    /// </para>
+    /// <para>
+    /// <b>KALAN AÇIK (kapatılmadı, biliniyor):</b> 200.000'in üstünde aynı düşme sürüyor. Gerçek
+    /// çözüm <see cref="ClassifyDeletion"/>'a "ölçüm kesildi" diye ÜÇÜNCÜ bir durum eklemektir;
+    /// o, mesaj sözleşmesini değiştirir ve bu turun (tekrarın kaldırılması) dışındadır.
+    /// </para>
+    /// </remarks>
+    private const int SayimOgeButcesi = 200_000;
+
+    /// <summary>
     /// Klasördeki dosya sayısı. <b>Kavşak/sembolik bağlantı klasörlere GİRMEZ</b> — özyinelemeli
     /// sayımın kavşağı takip ettiği bu depoda ölçüldü (denetim Y6) ve sayım da bir okuma yoludur.
-    /// Üst sınır var: silme yolunda milyonlarca dosyayı saymak işi kilitlerdi; sınır aşılırsa
-    /// "kısmen silindi" kararı yine doğru çalışır (iki ölçüm de aynı sınırla yapılır).
     /// </summary>
-    internal static int CountFilesSafely(string root, int limit = 20000)
+    /// <remarks>
+    /// <para>
+    /// <b>Yürüyüş ARTIK KENDİ DEĞİL:</b> gövde <see cref="SafeDirectoryWalk"/>'a indirildi. Buradaki
+    /// elle yazılmış kuyruk yürüyüşü panelin BEŞİNCİ kopyasıydı ve korumaları (kavşak atlaması +
+    /// tavan) doğruydu; yine de kaldırıldı, çünkü <c>SafeDirectoryWalk</c>'un varlık sebebi
+    /// "yürüyüş TEK YERDE" iddiasıdır ve o iddia beşinci kopyayla YANLIŞ olurdu. Bu turda tam olarak
+    /// öyle bir kopya (<c>FileService.KlasoruKopyala</c>) nöbetçinin BAKMADIĞI bir dosyada durduğu
+    /// için gözden kaçtı ve gerçek bir açık üretti.
+    /// </para>
+    /// <para>
+    /// <b>KÖKÜN KENDİSİ kavşaksa</b> eski gövde 0 dönerdi, ortak yürüyüş ise bağlantının ardını
+    /// sayar. Kullanıcının GÖRDÜĞÜ hiçbir şey değişmez ve bu ölçüldü: kök bir kavşaksa iki ölçüm de
+    /// aynı sayıyı verir, fark 0 kalır, karar yine <see cref="DirectoryDeletionOutcome.NotDeleted"/>
+    /// olur (silme başarılıysa zaten klasör yok → <c>Deleted</c>). Sayılar yalnız
+    /// <c>PartiallyDeleted</c> mesajında basılır ve o dal bu durumda hiç oluşmaz. Kök denetimini
+    /// burada yeniden yazmak, nöbetçinin yasakladığı <c>ReparsePoint</c> denetimini
+    /// gövdeye geri koymak — yani korumayı ikinci bir yerde tekrar etmek — olurdu.
+    /// </para>
+    /// <para>
+    /// Okunamayan alt klasör sayıma girmez (ortak yürüyüş erişim reddini ve G/Ç hatasını yutup
+    /// "kısmi" damgalar); karar iki ölçümün FARKINA bakar, mutlak sayıya değil.
+    /// </para>
+    /// </remarks>
+    /// <param name="ogeButcesi">Yalnız TEST içindir; üretim çağrılarının hiçbiri vermez (tavan
+    /// davranışı gerçek bir ağaçla ölçülebilsin diye).</param>
+    internal static int CountFilesSafely(string root, int ogeButcesi = SayimOgeButcesi)
     {
-        var toplam = 0;
-        var kuyruk = new Queue<string>();
-        kuyruk.Enqueue(root);
+        // İPTAL JETONU YOK (CancellationToken.None): ölçüm, silme kararının kendisini kuruyor.
+        // İptal edilebilseydi yarıda kesilen bir sayım "hiç dosya yoktu" gibi görünür ve panel
+        // gitmiş dosyaları hiç saymadan "silindi" derdi.
+        var olcum = SafeDirectoryWalk.Yuru(
+            root,
+            new SafeDirectoryWalkBudget(ogeButcesi, int.MaxValue),
+            CancellationToken.None);
 
-        while (kuyruk.Count > 0 && toplam < limit)
-        {
-            var klasor = kuyruk.Dequeue();
-            try
-            {
-                var bilgi = new DirectoryInfo(klasor);
-                if (!bilgi.Exists || bilgi.Attributes.HasFlag(FileAttributes.ReparsePoint))
-                {
-                    continue;
-                }
-
-                toplam += bilgi.EnumerateFiles().Count();
-                foreach (var alt in bilgi.EnumerateDirectories())
-                {
-                    kuyruk.Enqueue(alt.FullName);
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                // Okunamayan alt klasör sayıma girmez; karar iki ölçümün FARKINA bakar, mutlak sayıya değil.
-            }
-        }
-
-        return Math.Min(toplam, limit);
+        return olcum.FileCount;
     }
 
     /// <summary>Siteye ait sahiplik kayıtları — silme başlamadan önce okunur (Y1).</summary>

@@ -162,7 +162,8 @@
           <span>{{ formatBytes(target.currentLogBytes) }} + {{ formatBytes(target.currentArchiveBytes) }}</span>
           <span>{{ formatBytes(target.freedBytes) }}</span>
         </div>
-        <p v-if="rotation.targets.length === 0" class="empty-state">{{ t("panel.logs.rotationEmpty") }}</p>
+        <p v-if="!rotationLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+        <p v-else-if="rotation.targets.length === 0" class="empty-state">{{ t("panel.logs.rotationEmpty") }}</p>
       </div>
     </template>
 
@@ -181,7 +182,7 @@
         <span>{{ item.ipAddress || "-" }}</span>
         <span>{{ formatUtc(item.createdAtUtc) }}</span>
       </div>
-      <p v-if="loading && filteredAudit.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-if="!auditLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="filteredAudit.length === 0" class="empty-state">{{ t("panel.logs.emptyAudit") }}</p>
     </div>
   </section>
@@ -220,6 +221,12 @@ const noticeError = ref(false);
 const panelLog = ref<LogTail>(emptyLog());
 const siteLog = ref<LogTail>(emptyLog());
 const rotation = ref<LogRotationStatus>(emptyRotation());
+// `rotation` BOŞ bir nesneyle başlatılır (şablon `rotation.settings`i doğrudan okuyabilsin diye),
+// bu yüzden "hedef yok" cümlesi istek dönmeden de okunamayınca da çiziliyordu. Bu bayrak
+// yalnız istek BAŞARIYLA dönünce true olur.
+const rotationLoaded = ref(false);
+// Denetim kaydı listesi BİR KEZ başarıyla okundu mu; `loading` hata durumunda da false olur.
+const auditLoaded = ref(false);
 const rotationBusy = ref(false);
 
 // Kuyruk gösteren sekmeler: satır sayısı seçici ve kod görünümü yalnız bunlarda anlamlı.
@@ -274,10 +281,13 @@ async function refresh() {
 
     if (auditResult.status === "rejected") {
       firstError ||= auditResult.reason;
+    } else {
+      auditLoaded.value = true;
     }
 
     if (rotationResult.status === "fulfilled") {
       rotation.value = rotationResult.value;
+      rotationLoaded.value = true;
     } else {
       firstError ||= rotationResult.reason;
     }

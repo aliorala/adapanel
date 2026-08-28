@@ -54,7 +54,24 @@ public sealed class BillingUsageAccountDto
     public string PlanName { get; set; } = string.Empty;
 
     /// <summary>Kullanılan disk (MB).</summary>
+    /// <remarks>
+    /// <see cref="DiskMeasured"/> <c>false</c> ise bu bir ALT SINIRDIR ve modül bu satırın diskini
+    /// WHMCS'e YAZMAZ.
+    /// </remarks>
     public long DiskUsageMb { get; set; }
+
+    /// <summary>
+    /// Disk kullanımı TAM ölçülebildi mi.
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden bant genişliğiyle aynı muamele:</b> disk ölçümü bütçeli bir ağaç yürüyüşüdür ve
+    /// bütçe dolduğunda ya da bir site okunamadığında sonuç gerçek kullanımın ALT SINIRIDIR. Eksik
+    /// bir sayıyı WHMCS'e yazmak, aşım faturalamasını SESSİZCE düşürür (müşteri kullandığından az
+    /// öder) ve bir önceki turun doğru değerinin de üstüne yazardı. Ölçemediğimizde eski değeri
+    /// korumak, yanlış bir değeri yazmaktan iyidir — bant genişliğinde verilen kararın aynısı
+    /// (bkz. <see cref="BandwidthMeasured"/>).
+    /// </remarks>
+    public bool DiskMeasured { get; set; }
 
     /// <summary>Disk kotası (MB). <c>0</c> = sınırsız.</summary>
     public long DiskLimitMb { get; set; }

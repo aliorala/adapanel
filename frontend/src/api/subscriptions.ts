@@ -28,6 +28,10 @@ export type SubscriptionUsage = {
   siteCount: number;
   maxSites: number;
   diskUsageMb: number;
+  /** false ise diskUsageMb bir ALT SINIRDIR: agac tumuyle taranamadi. */
+  diskMeasured: boolean;
+  /** Kesilme sebebinin CEVIRI ANAHTARI; bos olabilir (site hic okunamadiysa). */
+  diskUsageTruncatedReasonKey: string;
   maxDiskMb: number;
 };
 

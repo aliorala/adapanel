@@ -119,7 +119,7 @@
         </button>
       </article>
 
-      <p v-if="loading && templates.length === 0" class="empty-state">
+      <p v-if="!templatesLoaded" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
       <p v-else-if="filteredTemplates.length === 0" class="empty-state">
@@ -154,6 +154,9 @@ const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 
 const templates = ref<AppTemplate[]>([]);
+// Şablon listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi
+// "uygulama yok" gibi KESİN bir cümleye dönüşüyordu (bkz. SiteBackupView `listLoaded`).
+const templatesLoaded = ref(false);
 const loading = ref(false);
 const busyTemplate = ref("");
 const notice = ref("");
@@ -233,6 +236,7 @@ async function refresh() {
     }
 
     templates.value = await getAppTemplates();
+    templatesLoaded.value = true;
     for (const template of templates.value) {
       if (!siteMap[template.id] && sitesStore.selectedSiteName) {
         siteMap[template.id] = sitesStore.selectedSiteName;
@@ -242,7 +246,14 @@ async function refresh() {
     const key = extractApiMessage(error);
     if (key === "sites.iis_not_available" || key === "sites.iis_install_required") {
       sitesUnavailable.value = true;
-      templates.value = await getAppTemplates().catch(() => templates.value);
+      // IIS yokken şablonlar YİNE okunabilir (kurulum hedefi yok, katalog var). Liste ancak
+      // bu ikinci istek de GERÇEKTEN dönerse "okundu" sayılır; başarısızsa ekran "yükleniyor"
+      // demeye devam eder, "uygulama yok" demez.
+      const katalog = await getAppTemplates().catch(() => null);
+      if (katalog) {
+        templates.value = katalog;
+        templatesLoaded.value = true;
+      }
       showNotice("", false);
       return;
     }

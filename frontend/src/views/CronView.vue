@@ -323,7 +323,7 @@
       </div>
       </div>
       </template>
-      <p v-if="loading && filteredTasks.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-if="!tasksLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="filteredTasks.length === 0" class="empty-state">{{ t("panel.tasks.empty") }}</p>
     </div>
   </section>
@@ -354,6 +354,9 @@ const isAdmin = computed(() => authStore.session?.user?.role === "Administrator"
 const scriptScope = ref<"server" | "site">("server");
 const sites = ref<SiteRecord[]>([]);
 const tasks = ref<ScheduledTask[]>([]);
+// Görev listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi
+// "zamanlanmış görev yok" gibi KESİN bir cümleye dönüşüyordu (bkz. SiteBackupView `listLoaded`).
+const tasksLoaded = ref(false);
 const query = ref("");
 const formOpen = ref(false);
 const loading = ref(false);
@@ -502,6 +505,7 @@ async function refresh() {
   loading.value = true;
   try {
     tasks.value = await getScheduledTasks();
+    tasksLoaded.value = true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

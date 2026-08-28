@@ -32,6 +32,38 @@ public sealed record CustomerScope(
 }
 
 /// <summary>
+/// Bir aboneliğin disk kullanımı — VE o sayının TAM ölçüm mü yoksa ALT SINIR mı olduğu.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Neden düz bir sayı DEĞİL (kapatılan açık):</b> kullanım bütçeli bir ağaç yürüyüşüyle ölçülür
+/// (<c>SafeDirectoryWalk</c>). Yürüyüş öge/süre bütçesine takılırsa, bir klasör okunamazsa ya da bir
+/// site IIS'ten hiç okunamazsa dönen sayı gerçek kullanımın ALT SINIRIDIR. Bu bilgi KAYNAKTA VARDI
+/// (<c>SafeDirectoryWalkResult.Truncated</c>) ama dönüş tipi taşımadığı için YOLDA KAYBOLUYORDU:
+/// zorlama yolu alt sınırı kesin bir ölçüymüş gibi karşılaştırıyor, kullanıcı listesi ve fatura
+/// ekranı da eksik sayıyı TAM değermiş gibi yazıyordu — yani panel, bilmediği bir şeyi biliyormuş
+/// gibi gösteriyordu.
+/// </para>
+/// <para>
+/// <b>Kalıp uydurulmadı, panelin İKİNCİ kotasından kopyalandı:</b> trafik kotası aynı soruyu
+/// <c>SubscriptionEnforcementService.TrafikOlcAsync</c>'te <c>(Bytes, Measured)</c> ikilisiyle
+/// cevaplar ve ölçülemeyen abonelikte kotayı UYGULAMAZ (<c>SubscriptionUsageDto.TrafficMeasured</c>).
+/// İki kotanın iki ayrı felsefeyle çalışması, birini sıkılaştırıp diğerini unutmanın yoludur.
+/// </para>
+/// </remarks>
+/// <param name="UsageMb">Ölçülen kullanım (MB). <paramref name="Measured"/> <c>false</c> ise bu bir
+/// ALT SINIRDIR: gerçek kullanım EN AZ bu kadardır.</param>
+/// <param name="Measured">Ölçüm tam mı? <c>false</c> ise ağacın bir kısmına HİÇ bakılamadı.</param>
+/// <param name="TruncatedReasonKey">
+/// Eksikliğin sebebinin çeviri anahtarı (<c>files.size_truncated_entries|_time|_denied</c>); ölçüm
+/// tamsa boş. <b>Boş olması "ölçüm tam" demek DEĞİLDİR</b> — tek doğru soru
+/// <paramref name="Measured"/>'dır; sebebi olmayan tek eksiklik hâli, sitenin IIS'ten hiç
+/// okunamamasıdır (o durumun çevrilmiş bir anahtarı yok ve olmayan bir anahtar uydurmak,
+/// kullanıcının ekranda ham anahtar görmesi demekti).
+/// </param>
+public readonly record struct DiskUsage(long UsageMb, bool Measured, string TruncatedReasonKey);
+
+/// <summary>
 /// Müşteri panelinin bölüm anahtarları (alt-kullanıcı izin matrisinin evreni).
 /// Frontend menü kimlikleriyle birebir aynıdır; home/settings/exit her zaman açıktır, listelenmez.
 /// </summary>
@@ -66,8 +98,11 @@ public interface ICustomerScopeService
     /// <summary>Atanan sitelerin adları + bağlama (binding) host'larından türetilen mail domain kümesi.</summary>
     Task<IReadOnlyCollection<string>> GetAllowedMailDomainsAsync(Guid userId, CancellationToken cancellationToken = default);
 
-    /// <summary>Müşterinin atanan sitelerinin toplam disk kullanımı (MB).</summary>
-    Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Müşterinin atanan sitelerinin toplam disk kullanımı (MB) — ve o sayının ÖLÇÜLDÜĞÜ mü yoksa
+    /// bir ALT SINIR mı olduğu (<see cref="DiskUsage"/>).
+    /// </summary>
+    Task<DiskUsage> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // --- Bayi (Reseller) sahipliği ---
 

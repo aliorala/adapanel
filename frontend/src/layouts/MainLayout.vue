@@ -1046,7 +1046,11 @@ a.brand-card {
   padding: 0 3px;
   border-radius: 999px;
   background: var(--warn-1);
-  color: #fff;
+  /* ÖLÇÜLDÜ, eski gömülü #fff: kehribar dolgu üzerinde koyu temada 2.21:1, açık temada 4.09:1 —
+     0.6rem/700 bir sayı için AA eşiği (4.5) her iki temada da geçilmiyordu. Bu rozet panelde kaç
+     sorun bulunduğunu söyleyen TEK sayıdır; okunmazsa çekmeceyi açma sebebi de görünmez.
+     `--on-warn` ile 9.51 (koyu) / 5.13 (açık). */
+  color: var(--on-warn);
   font-size: 0.6rem;
   line-height: 15px;
   text-align: center;
@@ -1055,6 +1059,10 @@ a.brand-card {
 
 .attention-badge.critical {
   background: var(--danger-1);
+  /* Dolgu değişince mürekkep de değişmeli: kırmızının payı temaya göre TERS yönde (koyu temada
+     siyah 6.13 / beyaz 3.42, açık temada beyaz 5.05 / siyah 4.15). `--on-danger` bu dönüşü taşır;
+     üstteki `--on-warn` burada kalsaydı açık temada 4.15 ile eşiğin altında kalırdık. */
+  color: var(--on-danger);
 }
 
 .bell-wrap {

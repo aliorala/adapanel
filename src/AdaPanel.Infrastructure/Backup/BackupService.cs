@@ -3291,6 +3291,20 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             if (remote is null)
             {
                 // Kayıtlı hedef kimliği yok: ölçemedik. "Yok" DEMEK YASAK.
+                //
+                // DETAIL ETİKET-DEĞER, CÜMLE DEĞİL: bu depoda `Detail` ÇEVRİLMEYEN alandır (kendi
+                // belgesi "Teknik ayrıntı. Çevrilmez; teşhis içindir." der) ve arayüz onu çevirinin
+                // altına HAM basar. Buradaki eski Türkçe cümle ("Kayitli uzak hedef kimligi yok.")
+                // İngilizce panelde İngilizce anahtarın altında Türkçe bir satır üretiyordu. Yeni
+                // bir i18n anahtarı çözüm DEĞİL: çevirisi olmayan anahtar ekranda HAM görünür
+                // (MessageKeyCoverageTests tam bunu kapatıyor). Aynı karar bu dosyada
+                // ApplySkippedFiles'ta ve SiteHostingSettingsService'te de verildi.
+                //
+                // ÜÇ OLGUNUN HİÇBİRİ KAYBOLMADI: neyin eksik olduğu (uzak hedef kimliği),
+                // ne yapılmadığı (yoklama atlandı) ve sonucun ne OLMADIĞI ("yok" değil, BİLİNMİYOR).
+                // Hangi hedef olduğu zaten aynı kaydın TargetType alanında duruyor; oraya
+                // RemoteUri'yi kopyalamak, alanın dilden bağımsızlığını kullanıcının alan adına
+                // bağımlı hâle getirirdi.
                 sonuc.Unreachable++;
                 sonuc.Issues.Add(new BackupVerificationIssueDto
                 {
@@ -3299,7 +3313,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                     Source = record.Source,
                     TargetType = record.TargetType,
                     MessageKey = "backup.verify.unreachable",
-                    Detail = "Kayitli uzak hedef kimligi yok."
+                    Detail = "remote_credentials=missing; probe=skipped; remote_presence=unknown"
                 });
                 continue;
             }
@@ -4445,11 +4459,20 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             // {target}") — durumu birebir anlatıyor. Yeni bir anahtar uydurmak, çevirisi olmayan
             // HAM bir anahtarın ekranda görünmesi demekti; özgül açıklama Detail'de taşınır.
             // (Aynı karar MailAutodiscoverPublisher'da da verilmişti.)
+            //
+            // DETAIL ETİKET-DEĞER, CÜMLE DEĞİL — gerekçe VerifyBackupsAsync'teki aynı dönüşümde
+            // yazılı. Buradaki eski cümle Türkçe HARF de taşıyordu ("Arşivde... YÜKLENMEDİ"), yani
+            // İngilizce panelde yarı çevrilmiş satır en görünür hâliyle çıkıyordu.
+            //
+            // ÜÇ OLGU DA DURUYOR: arşivde posta kutusu VAR (mailboxes=present), eksik olan bileşen
+            // hangisi (archiver=vandelay, state=not_configured) ve sonuç ne (mail=not_restored).
+            // Hangi alan adları olduğu Target'ta. "vandelay" adı bilerek KORUNDU: yöneticinin
+            // kuracağı aracın adı teşhisin kendisidir ve dile bağlı değildir.
             warnings.Add(new BackupRestoreWarningDto
             {
                 MessageKey = "backup.mail_account_failed",
                 Target = string.Join(", ", alanlar.Keys),
-                Detail = "Arşivde posta kutuları var ama vandelay arşivleyicisi yapılandırılmamış; posta geri YÜKLENMEDİ."
+                Detail = "mailboxes=present; archiver=vandelay; archiver_state=not_configured; mail=not_restored"
             });
             return;
         }

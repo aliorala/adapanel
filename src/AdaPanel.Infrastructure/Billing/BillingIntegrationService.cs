@@ -60,6 +60,7 @@ public sealed class BillingIntegrationService(
         var abonelikler = await customerScopes.GetSubscriptionUserIdsAsync(cancellationToken);
         var hesaplar = new List<BillingUsageAccountDto>(abonelikler.Count);
         var olculemeyen = 0;
+        var olculemeyenDisk = 0;
 
         foreach (var kimlik in abonelikler)
         {
@@ -84,6 +85,14 @@ public sealed class BillingIntegrationService(
                 olculemeyen++;
             }
 
+            if (!satir.Hesap.DiskMeasured)
+            {
+                // Disk sayacı AYRI tutulur: ikisi aynı kovaya konsaydı "kaç hesabın neyi
+                // ölçülemedi" sorusu cevapsız kalırdı ve ölçüm boşluğunun kaynağı (yavaş disk mi,
+                // kapalı IIS günlüğü mü) kayda hiç geçmezdi.
+                olculemeyenDisk++;
+            }
+
             hesaplar.Add(satir.Hesap);
         }
 
@@ -97,7 +106,8 @@ public sealed class BillingIntegrationService(
         await KaydetAsync(
             "usage",
             "ok",
-            $"{hesaplar.Count} abonelik raporlandi ({olculemeyen} tanesinin trafigi olculemedi).",
+            $"{hesaplar.Count} abonelik raporlandi ({olculemeyen} tanesinin trafigi, " +
+            $"{olculemeyenDisk} tanesinin diski olculemedi).",
             hesaplar.Count,
             cancellationToken);
 
@@ -176,6 +186,7 @@ public sealed class BillingIntegrationService(
             PlanId = kullanim.PlanId,
             PlanName = kullanim.PlanName,
             DiskUsageMb = kullanim.DiskUsageMb < 0 ? 0 : kullanim.DiskUsageMb,
+            DiskMeasured = kullanim.DiskMeasured,
             DiskLimitMb = BillingUnits.NormalizeLimitMb(kullanim.MaxDiskMb),
             BandwidthUsageMb = BillingUnits.BytesToMegabytes(kullanim.TrafficBytesThisMonth),
             BandwidthLimitMb = BillingUnits.GigabytesToMegabytes(kullanim.TrafficLimitGb),

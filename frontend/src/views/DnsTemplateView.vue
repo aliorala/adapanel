@@ -14,7 +14,7 @@
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
-    <p v-if="loading && records.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+    <p v-if="!templateLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
 
     <div v-else class="tmpl-table">
       <div class="tmpl-row head">
@@ -109,6 +109,9 @@ const records = ref<DnsTemplateRecord[]>([]);
 // Sunucu geneli ikincil (slave) DNS sunucuları; her satır bir IP.
 const secondaryServersText = ref("");
 const loading = ref(false);
+// Şablon BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş kayıt listesi
+// "şablonda kayıt yok" diye okunuyor, kullanıcı var olan şablonun üstüne yazabiliyordu.
+const templateLoaded = ref(false);
 const saving = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
@@ -149,6 +152,8 @@ async function save() {
 function applyTemplate(template: { records: DnsTemplateRecord[]; secondaryDnsServers: string[] }) {
   records.value = template.records;
   secondaryServersText.value = (template.secondaryDnsServers ?? []).join("\n");
+  // Buraya YALNIZCA sunucu gerçekten cevap verdiğinde gelinir (yükleme ya da kaydetme).
+  templateLoaded.value = true;
 }
 
 /** Satır ya da virgülle ayrılmış listeyi temizler; boş satırlar atılır. */

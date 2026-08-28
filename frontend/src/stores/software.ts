@@ -66,6 +66,13 @@ export const useSoftwareStore = defineStore("software", {
   state: () => ({
     catalog: null as SoftwareCatalog | null,
     loading: false,
+    /*
+     * Katalog BİR KEZ başarıyla okundu mu. `loading` istek bitince hata alsa da false olur;
+     * `catalog` null kalır ve ondan türeyen listeler boş görünür — ekran "kurulu bileşen yok"
+     * diyordu. Bayrak yalnız BAŞARIDA true olur; mağazada durur çünkü katalog dokuz ekranda
+     * okunuyor ve hepsinin aynı cevabı vermesi gerekir.
+     */
+    loaded: false,
     installingComponentId: "",
     removingComponentId: "",
     installingDefaults: false,
@@ -83,6 +90,8 @@ export const useSoftwareStore = defineStore("software", {
       try {
         const response = await apiClient.get<ApiEnvelope<SoftwareCatalog>>("/software");
         this.catalog = response.data.data;
+        // Yalnız BAŞARIDA: hata fırlarsa bayrak false kalır, ekran "bileşen yok" demez.
+        this.loaded = true;
         return this.catalog;
       } finally {
         this.loading = false;
@@ -99,6 +108,8 @@ export const useSoftwareStore = defineStore("software", {
       try {
         const response = await apiClient.post<ApiEnvelope<SoftwareCatalog>>("/software/updates/check", {});
         this.catalog = response.data.data;
+        // Güncelleme denetimi de katalogun TAMAMINI taze döndürür.
+        this.loaded = true;
         return this.catalog;
       } finally {
         this.checkingUpdates = false;

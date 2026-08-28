@@ -40,6 +40,11 @@ public sealed class SubscriptionEnforcementService(
 
         var (bayt, olculebildi) = await TrafikOlcAsync(scope.Sites, cancellationToken);
 
+        // DİSK DE TRAFİK GİBİ: sayının yanında "ölçülebildi mi" de taşınır. Bu ekran müşterinin
+        // kotasına ne kadar kaldığını okuduğu yerdir; kesilmiş bir ölçümü tam değer gibi yazmak,
+        // müşteriyi dolmak üzere olan bir kotayla "yerim var" sanmaya bırakırdı.
+        var disk = await customerScopes.GetDiskUsageMbAsync(userId, cancellationToken);
+
         return new SubscriptionUsageDto
         {
             UserId = userId,
@@ -56,7 +61,9 @@ public sealed class SubscriptionEnforcementService(
             SuspendReason = scope.SuspendReason,
             SiteCount = scope.Sites.Count,
             MaxSites = scope.MaxSites,
-            DiskUsageMb = await customerScopes.GetDiskUsageMbAsync(userId, cancellationToken),
+            DiskUsageMb = disk.UsageMb,
+            DiskMeasured = disk.Measured,
+            DiskUsageTruncatedReasonKey = disk.TruncatedReasonKey,
             MaxDiskMb = scope.MaxDiskMb
         };
     }

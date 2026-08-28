@@ -736,13 +736,11 @@ defineExpose({ refresh: load });
   height: 15px;
   border-radius: 999px;
   background: var(--warn-1);
-  /* Kehribar dolgu ÜZERİNDEKİ metin. Belirtece bağlanAMADI: panelde `--on-accent`in uyarı
-     karşılığı (`--on-warn`) YOK, en yakınları (`--text-strong`, `--warn-text`) bu dolgu için
-     ölçülmüş değerler değil. ÖLÇÜLDÜ, eski #1b1300: koyu temada 8.34:1 ama AÇIK temada
-     `--warn-1` koyulaştığı için (#b06f12) yalnız 4.50:1 — 0.68rem/800 bir glif küçük metin
-     sayılır, yani eşiğin tam sınırında kalıyordu. Düz siyah her iki temada da geçiyor
-     (5.13 açık / 9.51 koyu) ve 15px'lik bir noktada #1b1300'den ayırt edilemez. */
-  color: #000;
+  /* Kehribar dolgu ÜZERİNDEKİ metin. Artık belirteçte: `--on-warn` (bkz. base.css) tam olarak bu
+     iş için tanımlandı — dolgu `--warn-1` temaya göre yön değiştirdiği için mürekkebi de paletin
+     yanında durmalı. Değer değişmedi (siyah: 5.13 açık / 9.51 koyu), yalnız kaynağı düzeldi:
+     gömülü #000, `--warn-1` bir gün değişirse sessizce yanlış kalırdı. */
+  color: var(--on-warn);
   font-size: 0.68rem;
   font-weight: 800;
 }

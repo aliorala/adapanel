@@ -125,7 +125,23 @@
             <tr v-for="account in usage.accounts" :key="account.userId">
               <td>{{ account.userName }}</td>
               <td>{{ account.domains.join(", ") }}</td>
-              <td>{{ account.diskUsageMb }} / {{ limitLabel(account.diskLimitMb) }}</td>
+              <!--
+                DİSK, BANT GENİŞLİĞİNDEN FARKLI GÖSTERİLİR ve bu bilinçli.
+                Bant genişliği ölçülemediğinde sayı HİÇ gösterilmez, çünkü orada ölçülemeyen site
+                toplama katılmaz — kalan sayı bir alt sınır bile değildir, yanıltıcıdır.
+                Diskte ise kesilen tarama GERÇEK bir alt sınır üretir ("en az bu kadar"), yani
+                sayıyı atmak bilgi kaybı olurdu. Bu yüzden sayı durur, yanına eksik olduğunu
+                söyleyen rozet konur.
+              -->
+              <td>
+                {{ account.diskUsageMb }} / {{ limitLabel(account.diskLimitMb) }}
+                <span
+                  v-if="!account.diskMeasured"
+                  class="status-pill warn"
+                  :title="t('users.disk_usage_partial_hint')">
+                  {{ t("users.disk_usage_partial") }}
+                </span>
+              </td>
               <td>
                 <span v-if="account.bandwidthMeasured">
                   {{ account.bandwidthUsageMb }} / {{ limitLabel(account.bandwidthLimitMb) }}

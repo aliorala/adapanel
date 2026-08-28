@@ -84,7 +84,10 @@
           </a>
         </span>
       </div>
-      <p v-if="loading && deployments.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <!-- `deployments` çalışma alanından TÜRETİLİR; alan gelmeden de okunmadan da boş görünür.
+           `loading` hata durumunda false olduğu için eski koşul "dağıtım yok" diyordu. Çalışma
+           alanının KENDİSİ geldi mi, ölçüt bu. -->
+      <p v-if="!workspace" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="deployments.length === 0" class="empty-state">{{ t("panel.webdb.empty") }}</p>
     </div>
   </section>

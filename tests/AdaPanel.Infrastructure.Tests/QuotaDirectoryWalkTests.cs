@@ -119,14 +119,20 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
         await KapsamKurAsync("a.test");
 
         using var kaynak = new CancellationTokenSource(Tavan);
-        var kullanimMb = await kapsamlar.GetDiskUsageMbAsync(Musteri, kaynak.Token);
+        var kullanim = await kapsamlar.GetDiskUsageMbAsync(Musteri, kaynak.Token);
 
         // Döngüye giren bir uygulama buraya HİÇ gelmez (jeton yukarıdaki tavanda iptal eder ve
         // GetDiskUsageMbAsync iptali artık YUTMAZ, yükseltir).
         Assert.False(kaynak.IsCancellationRequested, "Kota hesabi tavani asti: yuruyus kavsagi TAKIP EDIYOR.");
 
         // Ve sayı kesilmiş değil, gerçek: yalnız kendi 2 MB'ı.
-        Assert.Equal(2, kullanimMb);
+        Assert.Equal(2, kullanim.UsageMb);
+
+        // SAĞLIKLI ölçüm "eksik" DAMGALANMAZ. Bayrağı koşulsuz false döndüren bir uygulama da
+        // eksikliği bildiren testleri geçerdi; o hâlde panel her satıra hak edilmemiş bir uyarı
+        // asar ve uyarı, gerçekten eksik olan satırlarda anlamını yitirirdi.
+        Assert.True(kullanim.Measured);
+        Assert.Equal(string.Empty, kullanim.TruncatedReasonKey);
     }
 
     /// <summary>
@@ -151,10 +157,16 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
         await KapsamKurAsync("a.test");
 
         using var kaynak = new CancellationTokenSource(Tavan);
-        var kullanimMb = await kapsamlar.GetDiskUsageMbAsync(Musteri, kaynak.Token);
+        var kullanim = await kapsamlar.GetDiskUsageMbAsync(Musteri, kaynak.Token);
 
         // 10 değil 2: komşunun 8 MB'ı SAYILMADI.
-        Assert.Equal(2, kullanimMb);
+        Assert.Equal(2, kullanim.UsageMb);
+
+        // Atlanan BAĞLANTI bir eksiklik DEĞİLDİR (gerekçesi SafeDirectoryWalk'ın eleme satırında:
+        // bağlantılar panelin dosya görüşünde hiçbir yerde yok, dolayısıyla toplama girmemeleri
+        // eksiklik değil TUTARLILIKTIR). Bunu "ölçemedim" saymak, kavşak içeren her siteyi kalıcı
+        // olarak "eksik" damgalardı.
+        Assert.True(kullanim.Measured);
     }
 
     // ------------------------------------------------------------------
@@ -162,15 +174,24 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// ÖGE bütçesi dolunca kota hesabı İSTİSNA ATMAZ; o ana kadarki toplamı döndürür.
+    /// ÖGE bütçesi dolunca kota hesabı İSTİSNA ATMAZ; o ana kadarki toplamı KESİLDİĞİNİ SÖYLEYEREK
+    /// döndürür.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// İstisna atmak, kullanıcı listesinden dosya yüklemeye kadar bu hesabı çağıran HER ekranı
     /// çökertirdi. Kesilmiş toplamın kotada ne anlama geldiği (ALT SINIR olarak kullanılır, işlem
     /// bloke edilmez) <c>GetDiskUsageMbAsync</c> içinde gerekçesiyle yazılıdır.
+    /// </para>
+    /// <para>
+    /// <b>Kesilme bilgisinin DÖNDÜĞÜNÜ ölçmek şart:</b> bu bilgi kaynakta (ortak yürüyüşün
+    /// sonucunda) hep VARDI; kaybolduğu yer tam olarak burasıydı — metot düz bir sayı döndürüyor,
+    /// "ölçüldü mü" yolda düşüyordu. Sayıyı doğrulayıp bayrağı doğrulamayan bir test, aynı kaybı
+    /// yeniden görmezdi.
+    /// </para>
     /// </remarks>
     [Fact]
-    public async Task Oge_butcesi_dolunca_ISTISNA_ATMAZ()
+    public async Task Oge_butcesi_dolunca_ISTISNA_ATMAZ_ama_KESILDIGINI_SOYLER()
     {
         for (var i = 0; i < 4; i++)
         {
@@ -179,24 +200,69 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
 
         await KapsamKurAsync("a.test");
 
-        var kullanimMb = await kapsamlar.GetDiskUsageMbAsync(Musteri, ogeButcesi: 2, sureButcesiMs: 60_000, CancellationToken.None);
+        var kullanim = await kapsamlar.GetDiskUsageMbAsync(Musteri, ogeButcesi: 2, sureButcesiMs: 60_000, CancellationToken.None);
 
         // Kısmi ama GERÇEK: bütçe kadar öge sayılmış olmalı (2 × 2 MB), ne fazlası ne de "hiç".
-        Assert.Equal(4, kullanimMb);
+        Assert.Equal(4, kullanim.UsageMb);
+
+        // ...ve kısmi olduğunu SÖYLER. Sebep anahtarı yürüyüşün kendi anahtarıdır (çevirisi tr/en'de
+        // VAR); yeni bir anahtar uydurulsaydı kullanıcı ekranda ham anahtar görürdü.
+        Assert.False(kullanim.Measured);
+        Assert.Equal("files.size_truncated_entries", kullanim.TruncatedReasonKey);
     }
 
-    /// <summary>SÜRE bütçesi dolunca da aynı davranış: istisna yok, kısmi toplam.</summary>
+    /// <summary>SÜRE bütçesi dolunca da aynı davranış: istisna yok, kısmi toplam, "kesildi" damgası.</summary>
     [Fact]
-    public async Task Sure_butcesi_dolunca_ISTISNA_ATMAZ()
+    public async Task Sure_butcesi_dolunca_ISTISNA_ATMAZ_ama_KESILDIGINI_SOYLER()
     {
         DosyaYaz(Path.Combine(siteKoku, "a.bin"), 2 * 1024 * 1024);
         await KapsamKurAsync("a.test");
 
         // 0 ms: ilk ögeden önce bütçe zaten dolmuştur — "geçen sürenin hiç ölçülmediği" bir
         // uygulamayı da yakalayan sınır durum.
-        var kullanimMb = await kapsamlar.GetDiskUsageMbAsync(Musteri, ogeButcesi: 1_000_000, sureButcesiMs: 0, CancellationToken.None);
+        var kullanim = await kapsamlar.GetDiskUsageMbAsync(Musteri, ogeButcesi: 1_000_000, sureButcesiMs: 0, CancellationToken.None);
 
-        Assert.Equal(0, kullanimMb);
+        Assert.Equal(0, kullanim.UsageMb);
+
+        // SIFIR ile "ölçemedim" arasındaki fark tam olarak burada görülür: sayı aynı, anlamı zıt.
+        // Bayrak olmasaydı panel bu aboneliği "diski bomboş" diye gösterirdi.
+        Assert.False(kullanim.Measured);
+        Assert.Equal("files.size_truncated_time", kullanim.TruncatedReasonKey);
+    }
+
+    /// <summary>
+    /// IIS'ten OKUNAMAYAN SİTE "0 BAYT" SAYILMAZ: toplam eksiktir ve eksik olduğu söylenir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Okunamayan site ATLANIR (tek bozuk site aboneliğin geri kalanının hesabını düşürmemeli) ama
+    /// atlanan şey sessizce sıfıra dönüşmemeli: 40 GB'lık sitesi IIS'ten okunamayan bir abonelik
+    /// "2 MB kullanıyor" diye görünürse yönetici o hesabı kotasız sanır. Aynı hata trafik
+    /// kotasında bilerek yapılmıyor (<c>TrafikOlcAsync</c> okunamayan siteyi sıfır saymaz), disk
+    /// tarafında ise yapılıyordu.
+    /// </para>
+    /// <para>
+    /// SEBEP ANAHTARI BOŞ kalır ve bu bilinçli: bu durumun çevrilmiş bir anahtarı yok, uydurulan
+    /// anahtar ise kullanıcıya ham anahtar gösterirdi (<c>MessageKeyCoverageTests</c>). Arayüzün
+    /// bakacağı bayrak <c>Measured</c>'dır.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Okunamayan_site_SIFIR_sayilmaz()
+    {
+        DosyaYaz(Path.Combine(siteKoku, "kendi.bin"), 2 * 1024 * 1024);
+
+        // "yok.test" sahte IIS'te KAYITLI DEĞİL: GetSiteAsync onun için istisna atar.
+        await KapsamKurAsync("a.test", "yok.test");
+
+        var kullanim = await kapsamlar.GetDiskUsageMbAsync(Musteri, CancellationToken.None);
+
+        // Okunabilen sitenin baytları SAYILIR (hesap düşmez)...
+        Assert.Equal(2, kullanim.UsageMb);
+
+        // ...ama sayı TAM DEĞİLDİR.
+        Assert.False(kullanim.Measured);
+        Assert.Equal(string.Empty, kullanim.TruncatedReasonKey);
     }
 
     /// <summary>
@@ -221,9 +287,9 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
 
         await KapsamKurAsync("a.test", "b.test");
 
-        var kullanimMb = await kapsamlar.GetDiskUsageMbAsync(Musteri, ogeButcesi: 2, sureButcesiMs: 60_000, CancellationToken.None);
+        var kullanim = await kapsamlar.GetDiskUsageMbAsync(Musteri, ogeButcesi: 2, sureButcesiMs: 60_000, CancellationToken.None);
 
-        Assert.Equal(4, kullanimMb);
+        Assert.Equal(4, kullanim.UsageMb);
     }
 
     // ------------------------------------------------------------------
@@ -288,7 +354,7 @@ public sealed class QuotaDirectoryWalkTests : IDisposable
         var ortakYuruyus = KaynakOku("src", "AdaPanel.Infrastructure", "Files", "SafeDirectoryWalk.cs");
 
         var boyutHesabi = GovdeAl(dosyaServisi, "internal async Task<DirectorySizeDto> CalculateSizeAsync(");
-        var kotaHesabi = GovdeAl(kapsamServisi, "internal async Task<long> GetDiskUsageMbAsync(");
+        var kotaHesabi = GovdeAl(kapsamServisi, "internal async Task<DiskUsage> GetDiskUsageMbAsync(");
 
         // 1) İKİSİ DE ortak yürüyüşü çağırır.
         Assert.Contains("SafeDirectoryWalk.Yuru(", boyutHesabi, StringComparison.Ordinal);

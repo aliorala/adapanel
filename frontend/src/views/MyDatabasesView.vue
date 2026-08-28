@@ -57,7 +57,7 @@
           <button class="danger compact" v-bind="writeGate(busy)" @click="remove(db)">{{ t("panel.myDb.delete") }}</button>
         </span>
       </div>
-      <p v-if="loading && databases.length === 0" class="empty-state">{{ t("panel.common.loading") }}</p>
+      <p v-if="!listLoaded" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       <p v-else-if="databases.length === 0" class="empty-state">{{ t("panel.myDb.empty") }}</p>
     </div>
 
@@ -84,6 +84,9 @@ const { confirm } = useConfirm();
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const databases = ref<OwnedDatabase[]>([]);
 const loading = ref(false);
+// Liste BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi + false
+// "hiç veritabanınız yok" gibi KESİN bir cümleye dönüşüyordu (bkz. SiteBackupView `listLoaded`).
+const listLoaded = ref(false);
 const busy = ref(false);
 const form = reactive({ engine: "mariadb", name: "", userName: "", password: "" });
 // Yüzlerce veritabanı tek seferde DOM'a basılmaz (bkz. composables/usePagination.ts).
@@ -95,6 +98,7 @@ async function load() {
   loading.value = true;
   try {
     databases.value = await getMyDatabases();
+    listLoaded.value = true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

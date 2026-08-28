@@ -22,9 +22,30 @@
   --warn-1: #e3a23f;
   --warn-text: #ecbd76;
   --warn-bg: rgba(227, 162, 63, 0.13);
+
+  /* UYARI DOLGUSU ÜZERİNDEKİ METİN — `--on-accent`in eksik kardeşi.
+     NEDEN GEREKLİ: `--warn-1` iki temada BİRBİRİNİN TERSİ yönde durur (koyu temada açık kehribar,
+     açık temada koyu kehribar). Üzerine yazan yer bunu belirteçle soramadığı için rengi koda
+     GÖMÜYORDU ve gömülü değer bir temada mutlaka yanlış kalıyordu. ÖLÇÜLDÜ: bildirim rozeti
+     (MainLayout `.attention-badge`, gömülü #fff) koyu temada 2.21:1, açık temada 4.09:1 —
+     0.6rem/700 bir sayı küçük metindir, AA eşiği 4.5.
+     SİYAH SEÇİLDİ ve iki blokta da AYNI: kehribar her iki temada da beyazdan çok siyaha karşı
+     kontrast verir (koyu 9.51 / açık 5.13), yani temaya göre yön değiştirmez. Değer yine de iki
+     blokta da yazılır (`--on-accent` ile aynı kalıp) ki bir tema kendi kehribarını değiştirdiğinde
+     mürekkebini de değiştirebilsin. */
+  --on-warn: #000000;
+
   --danger-1: #e0626c;
   --danger-text: #f0a3a9;
   --danger-bg: rgba(224, 98, 108, 0.13);
+
+  /* TEHLİKE DOLGUSU ÜZERİNDEKİ METİN. Uyarının aksine burada yön TEMAYA GÖRE DÖNER, bu yüzden iki
+     blokta FARKLI değer var: ÖLÇÜLDÜ, koyu temanın açık kırmızısında (#e0626c) siyah 6.13 / beyaz
+     3.42; açık temanın koyu kırmızısında (#c2414c) beyaz 5.05 / siyah 4.15. Tek bir değer iki
+     temada birden geçemiyor — gömülü rengin neden bir temada hep kaybettiğinin ölçüsü budur.
+     NOT: `button.danger` bunu KULLANMAZ; o düğme `--danger-fill-*` üzerine yazar ve kendi ölçülmüş
+     mürekkebi (#fff1f1) vardır. Bu belirteç YALNIZ `--danger-1` dolgusu içindir. */
+  --on-danger: #000000;
   --input-bg: #131820;
   --ring-track: rgba(148, 163, 184, 0.12);
 
@@ -148,9 +169,15 @@
   --warn-1: #b06f12;
   --warn-text: #8f5a0e;
   --warn-bg: rgba(176, 111, 18, 0.1);
+  /* Koyu temayla AYNI değer, ama ölçüsü ayrı: bu kehribar çok daha koyu olduğu için pay da küçük
+     (siyah 5.13, beyaz yalnız 4.09). Yani mürekkep burada zorunlu, tercih değil. */
+  --on-warn: #000000;
   --danger-1: #c2414c;
   --danger-text: #a3343e;
   --danger-bg: rgba(194, 65, 76, 0.1);
+  /* Koyu temanın TERSİ: bu kırmızı koyu olduğu için siyah 4.15 ile eşiğin ALTINDA kalır, beyaz
+     5.05 ile geçer (bkz. koyu blok). */
+  --on-danger: #ffffff;
   --input-bg: #ffffff;
   /* Açık temada girdi zemini ile kart zemini AYNI beyaz: kenar tek sınır ipucu (bkz. koyu blok).
      ÖLÇÜLDÜ: eski #d8dee7 beyaz üzerinde 1.35:1 -> #91959b 3.01:1. */

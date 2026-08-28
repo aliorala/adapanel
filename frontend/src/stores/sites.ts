@@ -28,6 +28,17 @@ export const useSitesStore = defineStore("sites", {
     sites: [] as SiteRecord[],
     selectedSiteName: "",
     loading: false,
+    /*
+     * Liste BİR KEZ başarıyla okundu mu.
+     *
+     * NEDEN mağazada, ekranda değil: `sites` otuz ekranda okunuyor ve boş dizi iki AYRI şeyi
+     * anlatıyor — "hiç site yok" ve "daha gelmedi/okunamadı". Bayrağı ekrana koysaydık her
+     * ekran kendi sayacını tutar, aynı veriye bakan iki ekran farklı cümle kurardı.
+     *
+     * `loading`den AYRI: `loading` istek bitince (hata alsa da) false olur; boş dizi + false
+     * "hiç siteniz yok" gibi KESİN bir cümleye dönüşürdü. Bu bayrak yalnız BAŞARIDA true olur.
+     */
+    loaded: false,
     creating: false,
     importing: false,
     busySiteName: "",
@@ -45,6 +56,9 @@ export const useSitesStore = defineStore("sites", {
 
       try {
         this.sites = sortSites(await getSites());
+        // Yalnız istek GERÇEKTEN döndüğünde: hata fırlarsa buraya gelinmez ve ekran "site yok"
+        // yerine "yükleniyor" demeye devam eder.
+        this.loaded = true;
         if (!this.selectedSiteName && this.sites.length > 0) {
           this.selectedSiteName = this.sites[0].name;
         }
@@ -69,6 +83,8 @@ export const useSitesStore = defineStore("sites", {
 
       try {
         this.sites = sortSites(await importSites());
+        // İçe aktarma da listeyi sunucudan taze getirir; liste artık BİLİNİYOR.
+        this.loaded = true;
         if (!this.selectedSiteName && this.sites.length > 0) {
           this.selectedSiteName = this.sites[0].name;
         }

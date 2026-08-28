@@ -126,6 +126,42 @@ public sealed class SiteDeletionHonestyTests
         }
     }
 
+    /// <summary>
+    /// SAYIM TAVANDA DURUR — ve tavan bolken GERÇEK sayıyı verir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Yürüyüş ortak kapıya (<c>SafeDirectoryWalk</c>) taşındıktan sonra ölçülen şey, tavanın
+    /// TAŞINDIĞI: eski gövdenin kendi <c>limit</c> sayacı vardı, yenisininki ortak bütçe nesnesi.
+    /// Tavan sessizce düşerse silme yolu, milyonlarca dosyalı bir ağaçta iki kez baştan sona
+    /// gezmeye başlar.
+    /// </para>
+    /// <para>
+    /// İkinci iddia MUTASYON KONTROLÜDÜR: yalnız birinciye bakan bir test, "her zaman 3 dön" gibi
+    /// bir uygulamayı da yeşil gösterirdi. Sayının bir tavan değil ÖLÇÜM olduğu ancak bolken
+    /// gerçeği söylediğiyle kanıtlanır — ve "kısmen silindi" kararı tam olarak bu ölçüme dayanır.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheFileCount_StopsAtItsBudget_ButCountsForRealWhenTheBudgetIsAmple()
+    {
+        var kok = GeciciKlasor();
+        try
+        {
+            for (var sira = 0; sira < 10; sira++)
+            {
+                File.WriteAllText(Path.Combine(kok, $"dosya-{sira:00}.txt"), "x");
+            }
+
+            Assert.Equal(3, SiteCascadeDeletionService.CountFilesSafely(kok, ogeButcesi: 3));
+            Assert.Equal(10, SiteCascadeDeletionService.CountFilesSafely(kok));
+        }
+        finally
+        {
+            TemizleyeSil(kok);
+        }
+    }
+
     // ---- Y1: veritabanı sahiplik kaydı ----
 
     /// <summary>

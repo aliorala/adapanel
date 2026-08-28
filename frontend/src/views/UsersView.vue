@@ -213,7 +213,13 @@
           <small>{{ user.email }}</small>
           <small v-if="user.role === 'Customer'" class="customer-meta">
             {{ user.assignedSites.length }} {{ t("panel.users.sitesShort") }}
-            · {{ user.diskUsageMb }} / {{ user.maxDiskMb > 0 ? user.maxDiskMb : "∞" }} MB
+            <!-- Ölçüm KESİLDİYSE sayı bir ALT SINIRDIR; rozetsiz göstermek onu tam değer gibi
+                 sunmak olurdu. Bayrak SATIR BAŞINA gelir: bütçe abonelik başına olduğu için bir
+                 müşterinin ölçümü kesilirken komşusununki tam olabilir. -->
+            · {{ user.diskUsageMb }} / {{ user.maxDiskMb > 0 ? user.maxDiskMb : "∞" }} MB<span
+              v-if="!user.diskMeasured"
+              class="status-pill warn"
+              :title="t('users.disk_usage_partial_hint')">{{ t("users.disk_usage_partial") }}</span>
             · {{ user.databaseCount }} / {{ user.maxDatabases > 0 ? user.maxDatabases : "∞" }} {{ t("panel.users.databasesShort") }}
             <template v-if="user.ownerName"> · {{ t("panel.users.owner") }}: {{ user.ownerName }}</template>
             <template v-if="user.parentName"> · {{ t("panel.users.subUserOf") }}: {{ user.parentName }}</template>

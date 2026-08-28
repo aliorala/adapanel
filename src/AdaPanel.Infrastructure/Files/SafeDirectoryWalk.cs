@@ -8,14 +8,15 @@ namespace AdaPanel.Infrastructure.Files;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Neden ortak:</b> bu yürüyüşün YEDİ müşterisi var — dosya yöneticisinin "bu klasör ne kadar yer
+/// <b>Neden ortak:</b> bu yürüyüşün SEKİZ müşterisi var — dosya yöneticisinin "bu klasör ne kadar yer
 /// kaplıyor" ucu (<see cref="FileService"/>), dosya yöneticisinin KLASÖR KOPYALAMASI
 /// (<c>FileService.KlasoruKopyala</c>) ve kota ÖN ÖLÇÜMÜ (<c>FileService.MeasureAsync</c>),
 /// disk KOTASI hesabı
 /// (<c>CustomerScopeService.GetDiskUsageMbAsync</c>), YEDEK dosya taraması
 /// (<c>BackupService.ScanFiles</c>), göçte <c>.user.ini</c> arayan tarama
-/// (<c>SiteMigrationService.SanitizeUserIniFilesAsync</c>) ve arşivden içe aktarmanın ağaç
-/// ölçümü/kopyalaması (<c>SiteHostingSettingsService</c>). Hepsi de kiracının YAZABİLDİĞİ bir ağaçta
+/// (<c>SiteMigrationService.SanitizeUserIniFilesAsync</c>), arşivden içe aktarmanın ağaç
+/// ölçümü/kopyalaması (<c>SiteHostingSettingsService</c>) ve site silmenin "ne kadarı gitti"
+/// sayımı (<c>SiteCascadeDeletionService.CountFilesSafely</c>). Hepsi de kiracının YAZABİLDİĞİ bir ağaçta
 /// yürür, yani hepsi aynı üç tuzağa açıktır. Kota yolu bu korumaları yıllarca ıskaladı:
 /// <c>Directory.EnumerateFiles(kok, "*", SearchOption.AllDirectories)</c> kullanıyordu ve
 /// <b>ölçüldü</b> — o çağrı bağlantıları TAKİP EDER, bütçesi YOKTUR. Kiracının kendi sitesinin

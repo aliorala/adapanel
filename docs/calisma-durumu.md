@@ -174,7 +174,8 @@ kesilmenin uc sebebinden ikisi kiracinin elinde degil (yavas/ag diski, ACL reddi
 sunucunun yavasligi yuzunden mesru musterinin hicbir dosya yukleyememesi olurdu. Kaybedilen:
 butceyi bilerek dolduran kiraciya karsi kesinlik. **Gercek cozum** donus tipinin "olculdu mu"
 bilgisini tasimasidir — trafik kotasinda ZATEN oyle (`TrafikOlcAsync` -> `(Bytes, Measured)`).
-`ICustomerScopeService` sozlesmesi ve 15+ cagiran ilgilendirdigi icin ayri bir is olarak duruyor.
+**KAPANDI (28.08.2026):** `GetDiskUsageMbAsync` artik `DiskUsage(UsageMb, Measured,
+TruncatedReasonKey)` donuyor; ayrintisi asagidaki "ACIK KALAN BORCLAR" 1. maddesinde.
 
 **Ayni sinifta kalan, su an duzeltilen uc yer:**
 - `SiteMigrationService:516` — `.user.ini` taramasi; `.Take(200)` SONUCU sinirlar, YURUYUSU degil.
@@ -216,10 +217,22 @@ tanimsiz CSS belirtecleri (10 ad) · klavyeyle dosya yukleme imkansizdi · .htac
 
 ### ACIK KALAN BORCLAR (siradaki turda)
 
-1. **Disk kotasi "olculdu mu" bilgisi tasimiyor.** Trafik kotasinda ZATEN dogru yapilmis:
-   `TrafikOlcAsync` -> `(Bytes, Measured)` ve olculemeyende kota uygulanmiyor. Disk kotasi
-   kesilmis olcumu alt sinir sayiyor. `ICustomerScopeService` sozlesmesi + 15 cagiran/test
-   double etkiliyor, o yuzden ayri tur.
+1. ~~**Disk kotasi "olculdu mu" bilgisi tasimiyor.**~~ **KAPANDI (28.08.2026).**
+   `GetDiskUsageMbAsync` artik `DiskUsage(UsageMb, Measured, TruncatedReasonKey)` donuyor
+   (kalip trafik kotasindan kopyalandi). Verilen kararlar:
+   - ZORLAMA (yukleme/yazma/kopyalama/arsiv acma): olculemeyen kullanim SIGIYORSA kota
+     uygulanmaz (trafikle ayni felsefe); ama ALT SINIR tavani asiyorsa red KESINDIR — trafikten
+     tek ayrilma noktasi, cunku oradaki yaptirim askiya almak, buradaki tek bir yazmayi
+     reddetmek.
+   - GOSTERIM: `UserSummaryDto` + `SubscriptionUsageDto` + WHMCS hesap satiri artik
+     `DiskMeasured` + `DiskUsageTruncatedReasonKey` tasiyor; WHMCS modulu olculemeyen diski
+     YAZMIYOR (eski degeri koruyor — bant genisligiyle ayni kural, aksi halde eksik olcum
+     musteriden kullandigindan az ucret almak demekti).
+   - IIS'ten okunamayan site artik "0 bayt" SAYILMIYOR (Measured=false).
+   - **ARAYUZ BORCU:** `frontend/` bu turda kapsam disiydi. Uc DTO alani API'de VAR ama hicbir
+     ekran GOSTERMIYOR; sayinin eksik oldugu kullaniciya soylenmiyor. Gereken tek yeni anahtar:
+     "bu sayi eksik olabilir" rozeti (ornek ad `users.disk_usage_partial`); "neden" ayrintisi
+     icin yeni anahtar GEREKMEZ, `files.size_truncated_entries|_time|_denied` tr/en'de zaten var.
 2. **`SiteCascadeDeletionService.CountFilesSafely`** elle yazilmis DORDUNCU yuruyus. Kavsak
    atlamasi ve limiti VAR (yani guvenli) ama `SafeDirectoryWalk`'a tasinmali.
 3. **`MessageKeyCoverageTests` iki korluk:** `Detail` alanini hic taramiyor; degisken uzerinden

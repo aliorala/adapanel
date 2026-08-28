@@ -198,7 +198,15 @@ public sealed class ResellerSiteAssignmentTests
         public Task SetOwnerAsync(Guid userId, Guid? ownerId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<Guid?> GetOwnerAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(null);
         public Task<Guid?> GetParentSubscriptionAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(null);
-        public Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult(0L);
+        /// <summary>
+        /// Disk ölçümünün SONUCU testten verilir. Varsayılan "ölçülmüş sıfır"dır; kullanıcı
+        /// listesinin eksik ölçümü bildirdiğini ölçen test (<c>DiskUsageMeasurementTests</c>)
+        /// buraya kesilmiş bir ölçüm koyar.
+        /// </summary>
+        public DiskUsage DiskKullanimi { get; set; } = new(0, true, string.Empty);
+
+        public Task<DiskUsage> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default)
+            => Task.FromResult(DiskKullanimi);
         public Task<IReadOnlyCollection<string>> GetAssignedSitesAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<string>>([]);
 
         public Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

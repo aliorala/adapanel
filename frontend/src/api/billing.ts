@@ -35,6 +35,8 @@ export type BillingUsageAccount = {
   planId: string;
   planName: string;
   diskUsageMb: number;
+  /** false ise diskUsageMb bir ALT SINIRDIR: agac tumuyle taranamadi. */
+  diskMeasured: boolean;
   /** 0 = sınırsız. */
   diskLimitMb: number;
   bandwidthUsageMb: number;

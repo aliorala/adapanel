@@ -285,7 +285,7 @@ public sealed class CustomerScopeService(
     private const int KotaSureButcesiMs = 5_000;
 
     /// <inheritdoc />
-    public Task<long> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default)
+    public Task<DiskUsage> GetDiskUsageMbAsync(Guid userId, CancellationToken cancellationToken = default)
         => GetDiskUsageMbAsync(userId, KotaOgeButcesi, KotaSureButcesiMs, cancellationToken);
 
     /// <summary>Yukarıdakinin BÜTÇESİ DIŞARIDAN verilen hâli — tek uygulama budur.</summary>
@@ -295,7 +295,7 @@ public sealed class CustomerScopeService(
     /// <c>FileService.CalculateSizeAsync</c>'te de var. Aşırı yükleme <c>internal</c>'dır: dışarıya
     /// bütçesi kaldırılabilir bir uç AÇMAZ.
     /// </remarks>
-    internal async Task<long> GetDiskUsageMbAsync(
+    internal async Task<DiskUsage> GetDiskUsageMbAsync(
         Guid userId,
         int ogeButcesi,
         int sureButcesiMs,
@@ -306,6 +306,11 @@ public sealed class CustomerScopeService(
 
         // TEK BÜTÇE, BÜTÜN SİTELER: gerekçe KotaOgeButcesi'nde yazılı.
         var butce = new SafeDirectoryWalkBudget(ogeButcesi, sureButcesiMs);
+
+        // Sitesi olmayan aboneliğin kullanımı gerçekten sıfırdır — bu ÖLÇÜLMÜŞ bir sıfırdır.
+        // (Trafik kotasındaki "siteler.Count == 0" dalıyla aynı gerekçe.)
+        var olculdu = true;
+        var kesilmeSebebi = string.Empty;
 
         foreach (var siteName in assigned)
         {
@@ -325,20 +330,29 @@ public sealed class CustomerScopeService(
             }
             catch
             {
-                // Erişilemeyen site atlanır. Bu davranış ortak yürüyüşle birlikte HÂLÂ DOĞRU, ama
-                // artık DAHA DAR: yürüyüşün kendisi (erişim reddi, silinmiş klasör, dolu bütçe)
-                // istisna atmaz, sonucunda bildirir. Buraya yalnız "site IIS'te yok / okunamıyor"
-                // düşer ve o gerçekten atlanmalıdır — tek bozuk site, aboneliğin geri kalanının
-                // kota hesabını düşürmemeli.
+                // Erişilemeyen site ATLANIR ama "0 BAYT" SAYILMAZ. Atlamanın gerekçesi eskisiyle
+                // aynı (tek bozuk site, aboneliğin geri kalanının hesabını düşürmemeli); değişen
+                // şey, atlananın artık SESSİZ olmaması: sitesi okunamayan bir aboneliğin toplamı
+                // eksiktir ve bunu "ölçtüm" diye döndürmek, trafik kotasının ölçülemeyen siteyi
+                // sıfır saymasıyla aynı hata olurdu (bkz. TrafikOlcAsync). Sebep anahtarı YOK:
+                // bu durumun çevrilmiş bir anahtarı yok ve olmayan bir anahtar uydurmak,
+                // kullanıcının ekranda ham anahtar görmesi demekti (MessageKeyCoverageTests).
+                olculdu = false;
                 continue;
             }
 
-            // Kesilmeyi ayrıca sormuyoruz; sebebi aşağıdaki blokta yazılı.
-            totalBytes += SafeDirectoryWalk.Yuru(root, butce, cancellationToken).TotalBytes;
+            var sonuc = SafeDirectoryWalk.Yuru(root, butce, cancellationToken);
+            totalBytes += sonuc.TotalBytes;
+
+            if (sonuc.Truncated)
+            {
+                olculdu = false;
+                kesilmeSebebi = SebepSec(kesilmeSebebi, sonuc.TruncatedReasonKey);
+            }
         }
 
         // KESİLMİŞ (Truncated) HESAP KOTADA NE DEMEK — KARAR: sonuç bir ALT SINIR olarak KULLANILIR,
-        // işlem BLOKE EDİLMEZ.
+        // işlem BLOKE EDİLMEZ; ama ARTIK bu bir bilgi kaybı değil, çağıranın GÖREBİLDİĞİ bir karar.
         //
         // İki seçeneğin bedeli tartıldı:
         //
@@ -356,15 +370,23 @@ public sealed class CustomerScopeService(
         //     yükleme reddedilir. Kaybedilen tek şey, bütçeyi BİLEREK doldurup kalan baytlarını
         //     gizleyen kiracıya karşı kesinliktir.
         //
-        // Kalan açığın SESSİZ olmaması için: bu tercih burada yazılıdır, kesilme sebebi ortak
-        // yürüyüşün sonucunda taşınır (dosya yöneticisi ucu onu kullanıcıya GÖSTERİR) ve asıl
-        // kapatılan şey — bağlantı döngüsüyle isteği hiç döndürmemek — koşulsuzdur. Kalan riski
-        // gerçekten kapatmanın yolu bu metodun dönüş tipini "ölçüldü mü" bilgisini taşıyacak
-        // şekilde değiştirmektir (trafik kotasında zaten öyle: SubscriptionEnforcementService
-        // .TrafikOlcAsync ölçülemeyen aboneliği ayrıca bildirir); o değişiklik ICustomerScopeService
-        // sözleşmesini ve bütün çağıranları ilgilendirdiği için bu turun kapsamına alınmadı.
-        return totalBytes / (1024 * 1024);
+        // ESKİDEN BURADA YAZILI OLAN AÇIK KAPANDI: dönüş tipi artık "ölçüldü mü" bilgisini TAŞIYOR.
+        // Yani (b) hâlâ seçili ama sonuçları artık sessiz değil — zorlama yolu belirsizliği bilerek
+        // ve YAZILI gerekçesiyle yutuyor (FileQuotaGuard.EnsureRoom), gösterim yolları ise sayının eksik
+        // olabileceğini KULLANICIYA SÖYLÜYOR (UserSummaryDto/SubscriptionUsageDto.DiskMeasured).
+        return new DiskUsage(totalBytes / (1024 * 1024), olculdu, kesilmeSebebi);
     }
+
+    /// <summary>Birden çok sitenin kesilme sebebinden RAPOR EDİLECEK olanı seçer.</summary>
+    /// <remarks>
+    /// Öncelik, ortak yürüyüşün KENDİ kuralıyla birebir aynıdır (<c>SafeDirectoryWalk.Kirp</c>):
+    /// hesabı DURDURAN sebep (öge/süre bütçesi), yalnızca bir klasörün atlandığını söyleyen erişim
+    /// reddinin ÖNÜNE geçer — bütçe dolduğunda ağacın büyük kısmına hiç bakılmamıştır ve orada
+    /// "bir klasör okunamadı" demek yanıltıcı olurdu. İkinci bir öncelik kuralı yazmak, aynı
+    /// kesilmenin site sırasına göre farklı sebep göstermesi demekti.
+    /// </remarks>
+    private static string SebepSec(string mevcut, string yeni)
+        => mevcut.Length == 0 || mevcut == SafeDirectoryWalk.SebepErisimReddi ? yeni : mevcut;
 
     private async Task<Dictionary<string, ScopeEntry>> LoadAsync(CancellationToken cancellationToken)
     {
