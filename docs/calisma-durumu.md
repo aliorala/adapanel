@@ -333,3 +333,16 @@ fonksiyonda yasiyor -> internal yapilip dogrudan olculdu.
 Denenen ve REDDEDILEN: `AdaPanelTest2026!`, `AdaPanelTest2026!yeni`.
 Olculdu: hesap KILITLI DEGIL (`auth.user_locked` / `auth.ip_banned` gelmedi,
 `auth.invalid_credentials` geldi). Esik 10, kullanilan 3.
+
+---
+
+## NOT — canli sunucuda bakilacak alan adi degisti (29.08.2026)
+
+Bu belgede `alioral.xyz` gecen yerler GECMIS KAYDIDIR (0.7.0-0.7.2'de yanlislikla ".htaccess
+calisiyor" dedigim olayin anlatimi). **`alioral.xyz` ARTIK AKTIF DEGIL** — kullanici bildirdi.
+
+Canli sunucuda bakilacak alan adi: **`adapanel.host`**.
+Olculdu (29.08.2026): `adapanel.host` -> 185.7.242.225, HTTPS 200, sertifika gecerli
+(`ssl_verify_result=0`), `X-Powered-By: ASP.NET`.
+
+`.htaccess` ayrim testi bundan ETKILENMEZ: test `test.local` uzerinde, BU makinede yapiliyor.
