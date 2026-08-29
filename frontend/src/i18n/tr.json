@@ -5051,5 +5051,6 @@
   "panel.activity.tone.info": "Bilgi",
   "panel.ftp.homeMissing": "Ev klasörü yok",
   "panel.ftp.homeTargetMissing": "Ev klasörünün hedefi silinmiş",
-  "panel.ftp.homeUnmeasured": "Ev klasörü ölçülemedi"
+  "panel.ftp.homeUnmeasured": "Ev klasörü ölçülemedi",
+  "cron.write_unverified": "Görev kaydedildi ama Görev Zamanlayıcı'da bulunamadı; kayıt doğrulanamadı."
 }

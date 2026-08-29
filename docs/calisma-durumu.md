@@ -450,19 +450,40 @@ ORTAMA bagliydi (tam kosumda kirmizi, tek basina yesil). Sonda portu artik
 disaridan verilebiliyor, testler bos port aliyor. KANIT: 11211 kasten isgal
 edilip kosuldu, 5/5 yesil. Uretim varsayilani ayrica sabitlendi.
 
-### ACIK KALAN (olculdu, DUZELTILMEDI -- davranis degistirir)
-1. WafService.IsolateAppPoolAsync havuz adini SANITIZE ETMEDEN uretiyor
-   (WafService.cs:260). Adinda bosluk/Turkce harf olan sitede izolasyon IKINCI
-   bir havuz acar, ACL'ler bosa duser; MeasureIsolation yalniz oneke baktigi icin
-   yine "izole" raporlar.
-2. SchedulerService.cs:702-713 -- geri okuma VAR (dogru refleks) ama bulamayinca
-   uydurma DTO donuyor (State="Ready"). Register-ScheduledTask erisim reddinde
-   bile akis suruyor; kullanici "Hazir" gorur, gorev Gorev Zamanlayici'da yoktur.
-3. WinAcmeSslService.cs:376-398 -- $ErrorActionPreference yok, -ErrorAction Stop
-   yok, sonda kosulsuz 'OK'. Yarim yazilmis rewrite kurali "yonlendirme acik"
-   diye raporlanir.
-4. Firewall'da PhpMyAdmin kurali IKI KEZ duruyor (netsh ayni adla cogaltiyor);
-   harden-adapanel.ps1 B2 temizliyor, kok neden acik.
+### ACIK KALANLARIN UCU DE KAPANDI (0.8.2 sonrasi)
+
+1. [KAPANDI] WafService havuz adini SANITIZE ETMEDEN uretiyordu. Kok neden: onek
+   IKI dosyada ayri yaziliydi ve temizleme regex'i yalnizca birinde vardi -- yani
+   "ayni sozlesme" diyen yorum yanlisti. ManagedAppPoolName tek kaynak oldu;
+   WafService ve WebAdministrationSiteService ayni Build()'i cagiriyor.
+   Nobetci ManagedAppPoolNameTests (10 test). Yasak, dizgenin KENDISINE degil
+   hatanin SEKLINE kondu: ilk hali "AdaPanel." dizgesini ariyordu ve HAKLI olarak
+   kirmizi yandi -- ayni dosyada InternalSiteNamePrefix diye AYRI bir sabit var,
+   o havuz degil panelin kendi SITE adlarini uretiyor. Metni yasaklamak mesru
+   kullanimi da vururdu. Mutasyonla dogrulandi.
+
+2. [KAPANDI] SchedulerService kayittan sonra geri okuyor ama bulamayinca uydurma
+   DTO donuyordu (State="Ready"). Artik cron.write_unverified atiyor.
+   "Kaydedilemedi" DEMIYOR, cunku bilmiyoruz -- komut basarili donmustu; soylenen
+   sey olculen sey: kayit DOGRULANAMADI.
+
+3. [KAPANDI] WinAcmeSslService HTTPS yonlendirmesi: $ErrorActionPreference='Stop'
+   + yazdigini GERI OKUMA eklendi. IKINCI BIR HATA da bulundu ve kapatildi:
+   IsHttpsRedirectEnabledAsync yalnizca o ADDA kural var mi diye bakiyordu, yani
+   YARIM yazilmis bir kural (ad eklenmis, action yazilmamis) "yonlendirme acik"
+   diye raporlaniyordu. Yazma ve okuma yollari birbirinin yalanini dogruluyordu;
+   ikisi de artik action/type='Redirect' sartini olcuyor.
+
+4. [ACIK] Firewall'da PhpMyAdmin kurali IKI KEZ duruyor (netsh ayni adla
+   cogaltip 0 donduruyor); harden-adapanel.ps1 B2 temizliyor, kok neden acik.
+
+### NOBETCI OLCUMU HAKKINDA BIR DERS (0.8.2)
+WriteThenVerifyContractTests'in ilk hali BOS BIR GUVENCEYDI:
+Assert.Contains("$ErrorActionPreference = 'Stop'") yaziyordu ama o satirdan ayni
+dosyada ZATEN BES TANE vardi (baska betiklerde). Duzeltme geri alinsa test yesil
+kalirdi. MUTASYON YAKALADI: koruma kasten bozuldu ve test KIRMIZI YANMADI.
+Denetim tam diziliye (uc satirin sirasi) daraltildi, sonra mutasyon kirmizi yandi.
+DERS: "test yazdim" yetmez, testin BIR SEY OLCTUGU kanitlanmali.
 
 ---
 

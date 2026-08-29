@@ -5051,5 +5051,6 @@
   "panel.activity.tone.info": "Info",
   "panel.ftp.homeMissing": "Home folder missing",
   "panel.ftp.homeTargetMissing": "Home folder target deleted",
-  "panel.ftp.homeUnmeasured": "Home folder not measured"
+  "panel.ftp.homeUnmeasured": "Home folder not measured",
+  "cron.write_unverified": "The task was saved but could not be found in Task Scheduler; the registration is unverified."
 }

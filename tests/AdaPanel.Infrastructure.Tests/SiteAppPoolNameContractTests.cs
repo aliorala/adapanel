@@ -95,15 +95,31 @@ public sealed class SiteAppPoolNameContractTests
     /// Havuzu KURAN taraf hâlâ tek kaynaktan önek veriyor.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Sözleşmenin öbür ucu: yazma izni IIS'ten okunan adı kullanıyor olsa bile, havuzu kuran
     /// tarafın adı tek bir yerden üretmesi gerekir. İki uç da ölçülmezse "sözleşme" tek taraflı
     /// bir temenniye dönüşür.
+    /// </para>
+    /// <para>
+    /// <b>TESTİN TUTUNDUĞU ŞEY DEĞİŞTİ, ÖLÇTÜĞÜ ŞEY DEĞİL.</b> İlk hali üretimin O ANKİ
+    /// GÖVDESİNE tutunuyordu (<c>ManagedPoolPrefix + AppPoolNamePattern()…</c>). O sırada tek
+    /// kaynak diye bir şey yoktu; aynı adı <c>WafService</c> de üretiyordu ve TEMİZLEMEDEN
+    /// ürettiği için adında boşluk/Türkçe harf olan sitelerde iki taraf farklı ad söylüyordu.
+    /// Üretim <see cref="ManagedAppPoolName"/> altında birleştirilince o gövde ortadan kalktı.
+    /// </para>
+    /// <para>
+    /// Test artık uygulamanın ŞEKLİNE değil, tek kaynağın KULLANILDIĞINA bakıyor: gövde yarın
+    /// yine değişebilir, kural değişmemeli.
+    /// </para>
     /// </remarks>
     [Fact]
     public void HAVUZ_ADINI_URETEN_TEK_YER_vardir()
     {
         var kaynak = Kaynak("src", "AdaPanel.Infrastructure", "Iis", "WebAdministrationSiteService.cs");
 
-        Assert.Contains("ManagedPoolPrefix + AppPoolNamePattern().Replace(siteName, \"-\")", kaynak);
+        Assert.Contains("ManagedAppPoolName.Build(siteName)", kaynak);
+
+        // Ad, tek kaynağın DIŞINDA elle birleştirilmesin — kapatılan hatanın tam şekli buydu.
+        Assert.DoesNotContain("ManagedPoolPrefix + ", kaynak, StringComparison.Ordinal);
     }
 }

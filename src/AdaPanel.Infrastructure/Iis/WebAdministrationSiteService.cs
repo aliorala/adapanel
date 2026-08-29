@@ -19,7 +19,8 @@ public sealed partial class WebAdministrationSiteService(
 {
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
-    private const string ManagedPoolPrefix = "AdaPanel.";
+    // Onek ManagedAppPoolName.Prefix'ten gelir; burada IKINCI bir kopyasi TUTULMAZ. Iki dosyada
+    // ayri yazilmis olmasi, WafService'in adi temizlemeden uretmesini kimseye fark ettirmemisti.
 
     public Task<IReadOnlyCollection<SiteDto>> GetSitesAsync(CancellationToken cancellationToken = default)
     {
@@ -993,12 +994,14 @@ public sealed partial class WebAdministrationSiteService(
 
     private static string BuildManagedPoolName(string siteName)
     {
-        return ManagedPoolPrefix + AppPoolNamePattern().Replace(siteName, "-");
+        // Tek kaynak: WafService de AYNI fonksiyonu cagirir. Ikisi ayri ad uretince
+        // izolasyon ikinci bir havuz aciyordu (bkz. ManagedAppPoolName).
+        return ManagedAppPoolName.Build(siteName);
     }
 
     private static bool IsManagedAppPool(string applicationPoolName)
     {
-        return applicationPoolName.StartsWith(ManagedPoolPrefix, StringComparison.OrdinalIgnoreCase);
+        return ManagedAppPoolName.IsManaged(applicationPoolName);
     }
 
     private static IEnumerable<object> Enumerate(object collection)

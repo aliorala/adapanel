@@ -698,19 +698,37 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
             throw new AppException("cron.write_failed", 500, 500, result.StandardError);
         }
 
+        /*
+         * GERİ OKUMA VARDI, AMA SONUCU YUTULUYORDU.
+         *
+         * Refleks doğruydu: kayıttan sonra görev listesi yeniden okunuyor. Sorun, BULUNAMADIĞINDA
+         * ne yapıldığıydı — panel elindeki istek nesnesinden bir DTO uydurup <c>State = "Ready"</c>
+         * yazıyordu. Yani ölçüm yapılıyor, ölçümün cevabı beğenilmeyince ATILIYORDU.
+         *
+         * NEDEN GERÇEK BİR RİSK: `Register-ScheduledTask` her başarısızlıkta çıkış kodunu
+         * düşürmüyor — bu deponun kendi ölçümü (`LimitedIdentityRunner`) erişim reddinde bile
+         * akışın sürdüğünü yazıyor. O durumda yukarıdaki `result.Success` denetimi geçiyor, geri
+         * okuma görevi bulamıyor ve kullanıcı listede "Hazır" görüyor. Görev Zamanlayıcı'da ise
+         * hiçbir şey yok: yedek alınmıyor, cron çalışmıyor, kimse haberdar olmuyor.
+         *
+         * "Kaydedilemedi" DEMİYORUZ, çünkü bilmiyoruz — komut başarılı dönmüştü. Söylenen şey
+         * ölçülen şeydir: kayıt DOĞRULANAMADI. Ayrı anahtar, ayrı sebep; kullanıcı bunu Görev
+         * Zamanlayıcı'da arayabilir.
+         */
         var tasks = await GetTasksAsync(cancellationToken);
-        return tasks.FirstOrDefault(task => string.Equals(task.Name, request.Name.Trim(), StringComparison.OrdinalIgnoreCase))
-            ?? new ScheduledTaskDto
-            {
-                Name = request.Name.Trim(),
-                TaskType = (request.TaskType ?? "command").Trim().ToLowerInvariant(),
-                Url = request.Url?.Trim() ?? string.Empty,
-                ScheduleType = request.ScheduleType.Trim(),
-                Command = request.Command.Trim(),
-                Arguments = request.Arguments?.Trim() ?? string.Empty,
-                WorkingDirectory = request.WorkingDirectory?.Trim() ?? string.Empty,
-                State = "Ready"
-            };
+        var kaydedilen = tasks.FirstOrDefault(task =>
+            string.Equals(task.Name, request.Name.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        if (kaydedilen is null)
+        {
+            throw new AppException(
+                "cron.write_unverified",
+                500,
+                500,
+                $"'{request.Name.Trim()}' kaydi basarili dondu ama gorev listesinde bulunamadi.");
+        }
+
+        return kaydedilen;
     }
 
     public async Task DeleteTaskAsync(string name, CancellationToken cancellationToken = default)

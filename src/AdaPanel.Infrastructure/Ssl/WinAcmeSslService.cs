@@ -372,8 +372,28 @@ public sealed class WinAcmeSslService(
     private async Task ApplyHttpsRedirectAsync(string siteName, bool enabled, CancellationToken cancellationToken)
     {
         var site = siteName.Replace("'", "''");
+        /*
+         * $ErrorActionPreference = 'Stop' EKLENDI — ve bu, ayni surumde kapatilan hata sinifinin
+         * bir ornegi daha.
+         *
+         * ESKI HAL: `Import-Module`'da `-ErrorAction Stop` vardi ama alttaki sekiz
+         * `Set-/Add-WebConfigurationProperty` cagrisinin hicbirinde yoktu. PowerShell'de bu
+         * cmdlet'lerin hatalari SONLANDIRICI DEGILDIR: ortadaki bir cagri patlasa bile betik
+         * akmaya devam eder ve sondaki kosulsuz `'OK'` basilir. Kural YARIM kalir -- `name`li bir
+         * kural elemani vardir ama `action` hic yazilmamistir -- ve panel "yonlendirme acik" der.
+         * Gercekte hicbir istek yonlendirilmez.
+         *
+         * Iki katman birden konuldu, cunku tek basina hicbiri yetmez:
+         *   (1) Stop  -> yarida patlayan cagri betigi DUSURUR, cikis kodu 0 olmaz.
+         *   (2) geri okuma -> hata firlatmadan eksik kalan bir durum da yakalanir. Bu deponun
+         *       tekrarlanan dersi: "hata vermedi" ile "oldu" ayni sey degildir.
+         *
+         * `Clear-WebConfiguration`in kendi `-ErrorAction SilentlyContinue`i BILEREK duruyor:
+         * kural yoksa temizleme hata verir ve bu normaldir. Cmdlet duzeyindeki secim tercihi ezer.
+         */
         var script = enabled
             ? $$"""
+                $ErrorActionPreference = 'Stop'
                 Import-Module WebAdministration -ErrorAction Stop
                 if (-not (Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' })) { 'NOREWRITE'; return }
                 $site = '{{site}}'; $f = 'system.webServer/rewrite/rules'; $name = 'AdaPanel-ForceHTTPS'
@@ -386,6 +406,14 @@ public sealed class WinAcmeSslService(
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -value 'Redirect'
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'url' -value 'https://{HTTP_HOST}/{R:1}'
                 Set-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'redirectType' -value 'Permanent'
+                # YAZDIGINI GERI OKU. Bu satirlar olmadan betik, kural YARIM yazilmis olsa bile
+                # 'OK' basiyordu (gerekcesi asagida, $ErrorActionPreference notunda).
+                $adaKural = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter $r
+                $adaEylem = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -ErrorAction SilentlyContinue
+                $adaDesen = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/match" -name 'url' -ErrorAction SilentlyContinue
+                if (-not $adaKural) { throw "kural yazildi ama geri okunamadi: $name" }
+                if ("$($adaEylem.Value)" -ne 'Redirect') { throw "kural YARIM: action/type='$($adaEylem.Value)' (beklenen Redirect)" }
+                if ([string]::IsNullOrWhiteSpace("$($adaDesen.Value)")) { throw "kural YARIM: match/url bos" }
                 'OK'
                 """
             : $$"""
@@ -431,8 +459,15 @@ public sealed class WinAcmeSslService(
         var script = $$"""
             Import-Module WebAdministration -ErrorAction SilentlyContinue
             $site = '{{site}}'
-            $rule = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter "system.webServer/rewrite/rules/rule[@name='AdaPanel-ForceHTTPS']" -ErrorAction SilentlyContinue
-            if ($rule) { 'YES' } else { 'NO' }
+            $r = "system.webServer/rewrite/rules/rule[@name='AdaPanel-ForceHTTPS']"
+            $rule = Get-WebConfiguration -pspath "IIS:\Sites\$site" -filter $r -ErrorAction SilentlyContinue
+            # KURALIN VARLIGI YETMEZ, TAM OLMASI GEREKIR.
+            # Eski hal yalnizca "bu ADDA bir kural var mi" diye soruyordu. Yarim yazilmis bir kural
+            # (ad eklenmis, action hic yazilmamis) da bu soruya EVET der -- yani panel hicbir istegi
+            # yonlendirmeyen bir yapilandirmayi "yonlendirme acik" diye gosterirdi. Yazma yolundaki
+            # kosulsuz 'OK' ile birlikte, iki taraf birbirinin yalanini dogruluyordu.
+            $eylem = Get-WebConfigurationProperty -pspath "IIS:\Sites\$site" -filter "$r/action" -name 'type' -ErrorAction SilentlyContinue
+            if ($rule -and "$($eylem.Value)" -eq 'Redirect') { 'YES' } else { 'NO' }
             """;
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         return result.Success && result.StandardOutput.Contains("YES", StringComparison.Ordinal);

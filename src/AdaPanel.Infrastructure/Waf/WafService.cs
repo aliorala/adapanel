@@ -9,6 +9,8 @@ using AdaPanel.Core.Dtos.Waf;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 
+using AdaPanel.Infrastructure.Iis;
+
 namespace AdaPanel.Infrastructure.Waf;
 
 public sealed class WafService(
@@ -18,11 +20,15 @@ public sealed class WafService(
 {
     private const string StatePath = "config/waf.json";
 
-    /// <summary>
-    /// Panelin yönettiği uygulama havuzu adı öneki. <c>WebAdministrationSiteService</c> ile AYNI
-    /// sözleşme — izolasyonun ölçütü de, site oluşturulurken açılan havuzun adı da budur.
-    /// </summary>
-    private const string ManagedPoolPrefix = "AdaPanel.";
+    /*
+     * ONEK ARTIK BURADA TANIMLI DEGIL, ManagedAppPoolName'den gelir.
+     *
+     * ESKI HALI SESSIZ BIR HATA TASIYORDU: yorum "WebAdministrationSiteService ile AYNI sozlesme"
+     * diyordu ama sozlesme onekten ibaret degildi -- karsi taraf site adini ONCE TEMIZLIYOR,
+     * burasi HAM ekliyordu. Adinda bosluk/Turkce harf olan bir sitede iki taraf FARKLI ad
+     * uretiyor, izolasyon var olan havuzu bulamayip IKINCI bir havuz aciyor ve sitenin ACL'leri
+     * bosa dusuyordu. Iki yerde yazili bir sozlesme, sozlesme degildir.
+     */
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
     private const string ServerManagerTypeName = "Microsoft.Web.Administration.ServerManager";
 
@@ -109,7 +115,7 @@ public sealed class WafService(
             return null;
         }
 
-        return applicationPoolName.StartsWith(ManagedPoolPrefix, StringComparison.OrdinalIgnoreCase);
+        return ManagedAppPoolName.IsManaged(applicationPoolName);
     }
 
     /// <summary>
@@ -257,7 +263,8 @@ public sealed class WafService(
     public async Task<SiteSecurityConfigurationDto> IsolateAppPoolAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var targetPool = ManagedPoolPrefix + site.Name;
+        // Ad TEK KAYNAKTAN: havuzu gercekten kuran taraf da ayni fonksiyonu kullanir.
+        var targetPool = ManagedAppPoolName.Build(site.Name);
 
         try
         {
