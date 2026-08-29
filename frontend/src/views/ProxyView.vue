@@ -188,8 +188,10 @@
             </label>
           </div>
 
+          <!-- Örnek değerler formdan çıkınca (bkz. REWRITE_FORM_BOS) üç alan da boş başlıyor;
+               düğme artık BOŞ kural göndermiyor. Öncesinde bunu "dolu varsayılanlar" gizliyordu. -->
           <button
-            v-bind="writeGate(!selectedSiteName || proxyStore.rewritingSiteName === selectedSiteName)"
+            v-bind="writeGate(!selectedSiteName || !rewriteFormDolu || proxyStore.rewritingSiteName === selectedSiteName)"
             @click="saveRewriteRule">
             {{ proxyStore.rewritingSiteName === selectedSiteName ? t("panel.proxy.savingRule") : t("panel.proxy.saveRule") }}
           </button>
@@ -276,14 +278,37 @@ const proxyForm = reactive({
   enableHtmlLinkRewrite: true
 });
 
-const rewriteForm = reactive({
+/*
+ * ÖRNEK DEĞERLER FORMDAN ÇIKARILDI — bu bir görünüm düzeltmesi değil, VERİ RİSKİYDİ.
+ *
+ * ÖLÇÜLDÜ: `matchPattern` ve `rewriteUrl` alanları GERÇEK başlangıç değeri taşıyordu
+ * (`^legacy/(.*)$` ve `/archive/{R:1}`) ve aynı iki metin zaten `placeholder` olarak da
+ * yazılıydı. Yani örnek İKİ KEZ vardı: biri gri ipucu (doğru yer), biri kutunun içinde gerçek
+ * içerik (yanlış yer). Kullanıcı yalnız bir ad yazıp "Kuralı kaydet"e bastığında, sitesine hiç
+ * istemediği bir yeniden yazma kuralı kurulurdu — `/legacy/...` isteklerini `/archive/...`'e
+ * çeviren, çalışan bir kural. Onay diyaloğu da yok, çünkü kural EKLEMEK yıkıcı sayılmıyor.
+ *
+ * Boş başlangıç, örneği `placeholder`da bırakır: gri metin kaydedilmez.
+ *
+ * ANAHTARLAR (`stopProcessing`/`appendQueryString`/`ignoreCase`) BİLEREK `true` KALDI: onlar
+ * örnek değil, IIS'in yeniden yazma kuralları için makul varsayılanları ve boş bırakılamıyorlar.
+ */
+const REWRITE_FORM_BOS = {
   name: "",
-  matchPattern: "^legacy/(.*)$",
-  rewriteUrl: "/archive/{R:1}",
+  matchPattern: "",
+  rewriteUrl: "",
   stopProcessing: true,
   appendQueryString: true,
   ignoreCase: true
-});
+};
+
+const rewriteForm = reactive({ ...REWRITE_FORM_BOS });
+
+// Bir yeniden yazma kuralı ADSIZ, DESENSİZ ya da HEDEFSİZ anlamlı değildir; üçü de zorunlu.
+const rewriteFormDolu = computed(() =>
+  rewriteForm.name.trim().length > 0
+  && rewriteForm.matchPattern.trim().length > 0
+  && rewriteForm.rewriteUrl.trim().length > 0);
 
 onMounted(async () => {
   try {
@@ -384,7 +409,10 @@ async function saveRewriteRule() {
 
   try {
     await proxyStore.saveRewriteRule(selectedSiteName.value, { ...rewriteForm });
-    rewriteForm.name = "";
+    // TÜM alanlar sıfırlanır, yalnız `name` değil. Önceden desen ve hedef kutuda KALIYORDU:
+    // ikinci bir kural eklemek isteyen kullanıcı, bir öncekinin deseniyle dolu bir formla
+    // karşılaşıyor ve yeni ada eski kuralı kaydedebiliyordu.
+    Object.assign(rewriteForm, REWRITE_FORM_BOS);
     showNotice(t("proxy.rewrite_rule_saved"), false);
   } catch (error) {
     showNotice(resolveApiMessage(error), true);

@@ -5047,5 +5047,8 @@
   "panel.activity.action.wordpress.updates_applied": "WordPress updates applied",
   "panel.activity.tone.error": "Error",
   "panel.activity.tone.warn": "Attention",
-  "panel.activity.tone.info": "Info"
+  "panel.activity.tone.info": "Info",
+  "panel.ftp.homeMissing": "Home folder missing",
+  "panel.ftp.homeTargetMissing": "Home folder target deleted",
+  "panel.ftp.homeUnmeasured": "Home folder not measured"
 }

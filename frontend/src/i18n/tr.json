@@ -5047,5 +5047,8 @@
   "panel.activity.action.wordpress.updates_applied": "WordPress güncellemeleri uygulandı",
   "panel.activity.tone.error": "Hata",
   "panel.activity.tone.warn": "Dikkat",
-  "panel.activity.tone.info": "Bilgi"
+  "panel.activity.tone.info": "Bilgi",
+  "panel.ftp.homeMissing": "Ev klasörü yok",
+  "panel.ftp.homeTargetMissing": "Ev klasörünün hedefi silinmiş",
+  "panel.ftp.homeUnmeasured": "Ev klasörü ölçülemedi"
 }

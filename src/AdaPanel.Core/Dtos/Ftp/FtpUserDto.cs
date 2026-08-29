@@ -10,6 +10,42 @@ public sealed class FtpUserDto
 
     public bool ExistsOnSystem { get; set; }
 
+    /*
+     * EV KLASÖRÜ ARTIK ÖLÇÜLÜYOR — ve bu, canlı bir sunucuda ölçülmüş bir kör noktanın kapatılmasıdır.
+     *
+     * OLAY: müşteri FTP'ye bağlanamıyordu. Panel FTP ekranında kullanıcı SAPASAĞLAM görünüyordu;
+     * `ExistsOnSystem` true (Windows hesabı gerçekten duruyor), `HomePath` dolu (kayıttan geliyor).
+     * Sunucu ise her denemede `530 User cannot log in, home directory inaccessible.` dönüyordu.
+     * Panelin gösterdiği hiçbir alan bu durumu yakalayamıyordu, çünkü hiçbiri EV KLASÖRÜNE
+     * BAKMIYORDU: `HomePath` bir KAYITTIR, ölçüm değil.
+     *
+     * IIS FTP kullanıcı izolasyonu (`IsolateAllDirectories`) evi <ftp-kök>\LocalUser\<kullanıcı>
+     * yolunda arar; panel oraya siteye giden bir junction koyar. Bu zincirde üç ayrı şey bozulabilir
+     * ve üçü de paneli hiç ilgilendirmeden olur: bağlantı hiç oluşmamış olabilir, hedefi silinmiş
+     * olabilir (site silindiğinde junction boşa düşer), ya da yol okunamıyor olabilir.
+     *
+     * ÜÇ DEĞERLİ, ÇÜNKÜ "ÖLÇEMEDİM" İLE "YOK" AYNI ŞEY DEĞİL: `null` = ölçüm yapılamadı (erişim
+     * reddi, G/Ç hatası). `false` = ölçüldü ve yok. Bu ayrımı yutmak, panelin bir kez daha
+     * bilmediğini biliyormuş gibi göstermesi olurdu — kapatmaya çalıştığımız hatanın ta kendisi.
+     */
+
+    /// <summary>IIS FTP'nin bu kullanıcının evi olarak BAKTIĞI yol (kayıttaki hedef değil).</summary>
+    public string HomeLinkPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// <see cref="HomeLinkPath"/> diskte var mı. <c>null</c> = ölçülemedi.
+    /// </summary>
+    public bool? HomeLinkExists { get; set; }
+
+    /// <summary>
+    /// Bağlantının gösterdiği hedef diskte var mı. <c>null</c> = ölçülemedi (ya da bağlantı yok).
+    /// </summary>
+    /// <remarks>
+    /// Bağlantı düz bir klasörse hedef kendisidir. Junction ise hedefi AYRI ölçülür: site
+    /// silindiğinde junction geride kalır ve "var" görünür, ama gösterdiği yer yoktur.
+    /// </remarks>
+    public bool? HomeTargetExists { get; set; }
+
     public bool IsEnabled { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }

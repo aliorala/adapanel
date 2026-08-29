@@ -308,6 +308,8 @@ public sealed partial class FtpService(
 
         foreach (var record in records.OrderBy(item => item.UserName, StringComparer.OrdinalIgnoreCase))
         {
+            var ev = ProbeHome(record.UserName);
+
             list.Add(new FtpUserDto
             {
                 UserName = record.UserName,
@@ -316,6 +318,9 @@ public sealed partial class FtpService(
                 CreatedAtUtc = record.CreatedAtUtc,
                 IsEnabled = record.IsEnabled,
                 ExistsOnSystem = await UserExistsAsync(record.UserName, cancellationToken),
+                HomeLinkPath = ev.LinkPath,
+                HomeLinkExists = ev.LinkExists,
+                HomeTargetExists = ev.TargetExists,
                 ServerAddress = Environment.MachineName,
                 Port = FtpPort
             });
@@ -895,6 +900,60 @@ public sealed partial class FtpService(
         if (!result.Success)
         {
             throw new AppException("ftp.user_delete_failed", 500, 500, BuildCommandDetails(result));
+        }
+    }
+
+    /// <summary>Bir FTP kullanıcısının ev klasörü ZİNCİRİNİN ölçüm sonucu.</summary>
+    /// <param name="LinkPath">IIS'in ev olarak baktığı yol.</param>
+    /// <param name="LinkExists"><c>null</c> = ölçülemedi.</param>
+    /// <param name="TargetExists"><c>null</c> = ölçülemedi ya da bağlantı yok.</param>
+    internal readonly record struct FtpHomeProbe(string LinkPath, bool? LinkExists, bool? TargetExists);
+
+    /// <summary>
+    /// IIS FTP'nin bu kullanıcı için BAKTIĞI yolu ölçer — kayda değil DİSKE bakarak.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Gerekçesi <c>FtpUserDto.HomeLinkPath</c> üzerinde yazılı: panel bugüne kadar yalnız Windows
+    /// hesabının varlığını ölçüyordu ve kırık bir ev klasörünü "sağlam" diye gösteriyordu.
+    /// </para>
+    /// <para>
+    /// <b>Junction hedefi AYRI ölçülür.</b> Bir site silindiğinde junction geride kalır:
+    /// <c>Directory.Exists</c> bağlantının kendisi için <c>true</c> döner, ama gösterdiği yer
+    /// yoktur ve IIS girişte "home directory inaccessible" der. Bu yüzden bağlantının varlığı ile
+    /// hedefinin varlığı İKİ AYRI ölçümdür; birini ötekinin yerine saymak kırık bir kurulumu
+    /// sağlam göstermek olurdu.
+    /// </para>
+    /// <para>
+    /// <b>İstisna yutulmuyor, ÜÇÜNCÜ DEĞERE çevriliyor.</b> Yol okunamazsa (erişim reddi, G/Ç)
+    /// sonuç <c>null</c>'dır — "yok" değil. Ölçemediğini "yok" diye raporlamak, panelin bu
+    /// depodaki en pahalı hata sınıfıdır.
+    /// </para>
+    /// </remarks>
+    internal FtpHomeProbe ProbeHome(string userName)
+    {
+        var linkPath = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
+
+        try
+        {
+            if (!Directory.Exists(linkPath))
+            {
+                // Bağlantı yok: hedefi sorulamaz, o yüzden "yok" DEĞİL, sorulmadı (null).
+                return new FtpHomeProbe(linkPath, false, null);
+            }
+
+            // `ResolveLinkTarget` düz klasörde `null` döner; o durumda hedef bağlantının kendisidir.
+            var target = Directory.ResolveLinkTarget(linkPath, returnFinalTarget: true);
+            if (target is null)
+            {
+                return new FtpHomeProbe(linkPath, true, true);
+            }
+
+            return new FtpHomeProbe(linkPath, true, target.Exists);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new FtpHomeProbe(linkPath, null, null);
         }
     }
 

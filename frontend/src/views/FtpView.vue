@@ -163,7 +163,28 @@
             <small>{{ formatCreatedAt(user.createdAtUtc) }}</small>
           </span>
           <span>{{ user.siteName || "-" }}</span>
-          <span class="cell-muted">{{ user.homePath }}</span>
+          <span class="cell-muted">
+            {{ user.homePath }}
+            <!--
+              EV KLASÖRÜ BOZUKSA BURADA SÖYLENİR.
+
+              Kayıt duruyor diye koruma çalışıyor sanmak bu depodaki en pahalı hata sınıfıdır ve
+              FTP'de canlı olarak yaşandı: hesap listede sapasağlam görünürken sunucu her girişte
+              "530 home directory inaccessible" dönüyordu. Ölçüm arka uçtan geliyor
+              (FtpService.ProbeHome); burada yalnızca GÖRÜNÜR hâle getiriliyor.
+
+              `title` bozuk yolu yazar: kullanıcı sorunu panelden okuyup sunucuda düzeltebilsin.
+            -->
+            <span v-if="user.homeLinkExists === false" class="status-pill danger" role="alert" :title="user.homeLinkPath">
+              {{ t("panel.ftp.homeMissing") }}
+            </span>
+            <span v-else-if="user.homeTargetExists === false" class="status-pill danger" role="alert" :title="user.homeLinkPath">
+              {{ t("panel.ftp.homeTargetMissing") }}
+            </span>
+            <span v-else-if="user.homeLinkExists === null" class="status-pill warn" :title="user.homeLinkPath">
+              {{ t("panel.ftp.homeUnmeasured") }}
+            </span>
+          </span>
           <span :class="['status-pill', user.isEnabled && user.existsOnSystem ? 'ok' : 'warn']">
             {{ user.isEnabled && user.existsOnSystem ? t("panel.status.active") : t("panel.status.inactive") }}
           </span>

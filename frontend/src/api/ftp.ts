@@ -12,6 +12,19 @@ export type FtpUser = {
   homePath: string;
   siteName: string;
   existsOnSystem: boolean;
+  /*
+   * EV KLASÖRÜ ÖLÇÜMÜ. `homePath` bir KAYITTIR (oluştururken yazılan hedef); aşağıdakiler ise
+   * DİSKTEN okunur. Sunucu bu üç alanı zaten döndürüyordu ama tip bildirmediği için ekran hiç
+   * okumuyordu — canlı bir sunucuda FTP hesabı sapasağlam görünürken her giriş
+   * "530 home directory inaccessible" alıyordu ve panel bunu söyleyemiyordu.
+   *
+   * `null` = ÖLÇÜLEMEDİ; `false` = ölçüldü ve yok. İkisini birleştirmek, bilmediğimizi
+   * biliyormuş gibi göstermek olurdu. Alanlar OPSİYONEL: bu alanları göndermeyen eski bir
+   * sunucuda `undefined` gelir ve arayüz sessiz kalır — "ölçüldü, bozuk" demez.
+   */
+  homeLinkPath?: string;
+  homeLinkExists?: boolean | null;
+  homeTargetExists?: boolean | null;
   isEnabled: boolean;
   createdAtUtc: string;
 };
