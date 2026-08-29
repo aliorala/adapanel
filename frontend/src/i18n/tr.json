@@ -2977,6 +2977,7 @@
   "htaccess.blocker.module_assembly_missing": "Modül derlemesi sunucuda bulunamadı (GAC boş). Kurulum paketini yeniden çalıştırmak gerekiyor.",
   "htaccess.blocker.module_type_mismatch": "IIS'te kayıtlı modül BAŞKA bir tipi gösteriyor; bu kayıt AdaPanel modülüne ait değil. Onarım düğmesi kaydı düzeltir.",
   "htaccess.blocker.precondition_managed_handler": "Modülün kaydında \"managedHandler\" ön koşulu var: bu durumda modül yalnızca yönetilen isteklerde çalışır, PHP ve statik dosya isteklerinde ÇALIŞMAZ. .htaccess kurallarınız çoğu istekte uygulanmaz. Onarım düğmesi ön koşulu düzeltir.",
+  "htaccess.blocker.data_root_mismatch": "Panel ile IIS modülü FARKLI veri klasörlerine bakıyor: panel anahtar dosyasını kendi veri köküne yazıyor, modül ise ADAPANEL_DATA_ROOT ortam değişkenini ya da varsayılan %ProgramData%\\AdaPanel klasörünü kullanıyor. Bu yüzden modül yüklü ve çalışıyor olsa bile açtığınız kuralları HİÇ göremez. Panel:DataRoot ayarını varsayılana döndürün ya da sunucuda ADAPANEL_DATA_ROOT değişkenini panelin veri köküne eşitleyip IIS'i yeniden başlatın.",
   "panel.htaccess.title": ".htaccess desteği",
   "panel.htaccess.subtitle": "Linux'tan gelen .htaccess kurallarını web.config'e çevirmeden çalıştırın. Hangi satırın çalıştığını, hangisinin çalışmadığını ve nedenini burada görürsünüz.",
   "panel.htaccess.navHint": "Kip, dosyalar, söz dizimi denetimi",

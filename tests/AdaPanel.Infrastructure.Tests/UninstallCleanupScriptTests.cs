@@ -317,4 +317,52 @@ public sealed class UninstallCleanupScriptTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(deger), "FtpService.StatePath okunamadi.");
         return deger!;
     }
+
+    /// <summary>
+    /// Tepsi görevi kurulduğu ADLA kaldırılmalı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLDÜ.</b> <c>install-tray-task.ps1</c> görevi <c>schtasks /Create /TN 'AdaPanel Tepsi'</c>
+    /// ile KLASÖRSÜZ, yani görev ağacının kökünde oluşturuyor. <c>uninstall-cleanup.ps1</c> ise iki
+    /// yoldan temizlik yapıyor: sabit bir ad listesi ve <c>\AdaPanel\</c> klasör süpürmesi. Görev
+    /// kökte durduğu için klasör süpürmesine takılmıyordu ve sabit listede de yoktu — yani kaldırma
+    /// sonrası Windows'ta kalıyordu (kurulu makinede <c>schtasks /Query</c> ile görüldü).
+    /// </para>
+    /// <para>
+    /// Bu test ADI iki dosyadan da OKUR ve eşleştirir; iki yerde iki sabit metin bırakmak, adın
+    /// birinde değişip diğerinde kalmasıyla aynı sızıntıyı sessizce geri getirirdi.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Tepsi_gorevi_KURULDUGU_ADLA_kaldirilir()
+    {
+        var kurulum = File.ReadAllText(ScriptTestHost.ScriptPath("scripts", "install-tray-task.ps1"));
+
+        // Adı TAHMİN ETMİYORUZ: kuran betikteki varsayılandan okuyoruz.
+        var eslesme = System.Text.RegularExpressions.Regex.Match(
+            kurulum,
+            @"\$TaskName\s*=\s*'([^']+)'");
+
+        Assert.True(eslesme.Success, "install-tray-task.ps1 icinde $TaskName varsayilani bulunamadi.");
+        var gorevAdi = eslesme.Groups[1].Value;
+
+        var kaldirma = File.ReadAllText(ScriptTestHost.ScriptPath("scripts", "uninstall-cleanup.ps1"));
+
+        // YALNIZCA $taskNames DIZISININ ICINE bakiyoruz.
+        //
+        // MUTASYONLA OLCULDU: once dosyanin TAMAMINDA arama yapiyorduk ve dizi girdisi silindigi
+        // halde test YESIL kaliyordu -- cunku ad, dizinin hemen ustundeki ACIKLAMA METNINDE de
+        // gecmektedir. Yani test korumayi degil, kendi yorumunu dogruluyordu. Aranan sey artik
+        // GERCEKTEN CALISAN kod.
+        var dizi = System.Text.RegularExpressions.Regex.Match(
+            kaldirma,
+            @"\$taskNames\s*=\s*@\((?<govde>[^)]*)\)",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        Assert.True(dizi.Success, "uninstall-cleanup.ps1 icinde $taskNames dizisi bulunamadi.");
+
+        var govde = dizi.Groups["govde"].Value;
+        Assert.Contains($"\"{gorevAdi}\"", govde);
+    }
 }

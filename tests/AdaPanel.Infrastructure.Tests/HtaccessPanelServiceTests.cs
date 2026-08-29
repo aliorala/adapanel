@@ -104,10 +104,17 @@ public sealed class HtaccessPanelServiceTests : IDisposable
     /// her test dolaylı olarak kayıt eksikliğini de ölçer, asıl konuları bulanıklaşırdı. Kaydın
     /// kendi hâlleri <c>HtaccessModuleRegistryTests</c>'te tek tek ölçülüyor.
     /// </param>
+    /// <param name="modulVeriKoku">
+    /// Modülün (w3wp içindeki net48 derlemenin) ÇÖZDÜĞÜ veri kökü. VARSAYILAN panelinkiyle AYNI,
+    /// yani "sağlıklı kurulum" — bu bilinçli: bu dosyadaki testlerin konusu veri kökü mutabakatı
+    /// DEĞİL, ayrışmayı varsayılan yapsaydık her test dolaylı olarak onu da ölçerdi.
+    /// Ayrışmanın kendisi <c>VERI_KOKU_AYRISINCA_*</c> testlerinde tek tek ölçülüyor.
+    /// </param>
     private HtaccessPanelService Servis(
         string? havuzSurumu = "v4.0",
         Exception? havuzHatasi = null,
-        HtaccessModuleRegistrationState? kayit = null)
+        HtaccessModuleRegistrationState? kayit = null,
+        string? modulVeriKoku = null)
     {
         var site = new SiteDto
         {
@@ -128,7 +135,8 @@ public sealed class HtaccessPanelServiceTests : IDisposable
             // TAM NITELIKLI: "Options" adi AdaPanel.Infrastructure.Options AD ALANINA cozuluyor,
             // Microsoft.Extensions.Options.Options SINIFINA degil.
             Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = _veriKoku }),
-            NullLogger<HtaccessPanelService>.Instance);
+            NullLogger<HtaccessPanelService>.Instance,
+            () => modulVeriKoku ?? _veriKoku);
     }
 
     private string Yaz(string goreliYol, string icerik)
@@ -602,6 +610,67 @@ public sealed class HtaccessPanelServiceTests : IDisposable
 
         Assert.Equal("/ara", sonuc.RequestPath);
         Assert.Equal("rewrite", sonuc.Action);
+    }
+
+    // ------------------------------------------------- VERİ KÖKÜ MUTABAKATI (DÖRDÜNCÜ ÖLÇÜM)
+
+    /// <summary>
+    /// Panel ile modül FARKLI veri köklerine bakıyorsa özellik ÖLÜDÜR ve panel bunu SÖYLEMELİ.
+    /// </summary>
+    /// <remarks>
+    /// Ölçülen arıza sınıfı: panel bir yol üretir, dış sistem BAŞKA bir yolu arar. Kayıt kusursuz
+    /// (varsayılan <c>Kayitli()</c>), havuz uygun — yani eski üç ölçümün ÜÇÜ DE yeşil. Buna rağmen
+    /// modül panelin yazdığı anahtar dosyasını hiçbir zaman göremez. Bu test, "her şey yolunda"
+    /// diyen o rapora karşı yazıldı.
+    /// </remarks>
+    [Fact]
+    public async Task VERI_KOKU_AYRISINCA_ENGEL_BILDIRILIR_ve_MOTOR_YUKLU_SAYILMAZ()
+    {
+        var baskaKok = Path.Combine(Path.GetTempPath(), "ada-baska-kok-" + Guid.NewGuid().ToString("N"));
+
+        var rapor = await Servis(modulVeriKoku: baskaKok).GetReportAsync("ornek.com", CancellationToken.None);
+
+        Assert.Contains("htaccess.blocker.data_root_mismatch", rapor.EngineBlockers);
+
+        // ENGELIN BILDIRILMESI YETMEZ: alan hala "yuklu" deseydi arayuz yesil rozet gosterir ve
+        // yonetici engel metnini hic okumazdi -- duzeltilen yalanin yeni bir surumu olurdu.
+        Assert.False(rapor.EngineLoadedInIis);
+    }
+
+    /// <summary>
+    /// Kökler AYNI iken uydurma engel ÜRETİLMEZ.
+    /// </summary>
+    /// <remarks>
+    /// Bir önceki testin tek başına anlamı yok: her zaman engel ekleyen bir uygulama da onu
+    /// geçerdi. Sağlıklı kurulumun (varsayılan yol, iki tarafın aynı kökü çözmesi) TEMİZ kalması
+    /// ölçülmezse, koruma bir gürültü kaynağına dönüşür.
+    /// </remarks>
+    [Fact]
+    public async Task VERI_KOKU_AYNI_ISE_ENGEL_URETILMEZ()
+    {
+        var rapor = await Servis().GetReportAsync("ornek.com", CancellationToken.None);
+
+        Assert.DoesNotContain("htaccess.blocker.data_root_mismatch", rapor.EngineBlockers);
+        Assert.True(rapor.EngineLoadedInIis);
+    }
+
+    /// <summary>
+    /// Sondaki ayraç ve harf durumu farkı AYRIŞMA DEĞİLDİR.
+    /// </summary>
+    /// <remarks>
+    /// Windows yolları harf duyarsızdır ve <c>Panel:DataRoot</c> elle yazılan bir ayardır: sondaki
+    /// ters bölü ya da farklı harf durumu çok olağan. Düz dize karşılaştırması burada sağlıklı
+    /// kurulumları "bozuk" diye damgalar; yanlış alarm, alarmın tamamını değersizleştirir.
+    /// </remarks>
+    [Fact]
+    public async Task AYRAC_VE_HARF_DURUMU_FARKI_AYRISMA_SAYILMAZ()
+    {
+        var kilikDegistirmis = _veriKoku.ToUpperInvariant() + Path.DirectorySeparatorChar;
+
+        var rapor = await Servis(modulVeriKoku: kilikDegistirmis)
+            .GetReportAsync("ornek.com", CancellationToken.None);
+
+        Assert.DoesNotContain("htaccess.blocker.data_root_mismatch", rapor.EngineBlockers);
     }
 
     public void Dispose()

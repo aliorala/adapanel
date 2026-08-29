@@ -391,6 +391,81 @@ olmadigi HIC olculmuyor. Bu makinede kayit dogruydu (`preCondition="runtimeVersi
 
 ---
 
+## 0.8.2 — HIC CALISMAYAN IKI OZELLIK (30.08.2026)
+
+**3922 test yesil.** Yayin: 0.8.2.
+
+### SINIF: "yesil test, olu ozellik"
+Panel dis bir sisteme (IIS, Windows) bir AD ya da YOL uretip veriyor, o sistemin
+aynisini bekledigini VARSAYIYOR. Cagri basarili donuyor. Iki taraf farkli seyden
+bahsediyor. Bu sinifin uc ornegi artik kayitli: .htaccess modulu pakete hic
+girmemisti (0.7.0-0.7.2), FTP ev klasoru (asagida), site yazma izni (asagida).
+
+### FTP -- kok neden
+Musteri sunucusunda HICBIR hesap giris yapamiyordu: 530 home directory
+inaccessible. Panelin kontrol ettigi her sey dogruydu. Cevabi IIS GUNLUGU verdi:
+sc-win32-status = 3 (ERROR_PATH_NOT_FOUND) -- "yasak" degil "bulamadim", yani
+ugrastigimiz izinler bastan yanlis adresti.
+Microsoft <userIsolation> belgesi IKI hiyerarsi tanimlar: yerel hesaplar
+%FtpRoot%\LocalUser\%User%, ETKI ALANI hesaplari %FtpRoot%\%Domain%\%User%.
+Panel hep birincisini kuruyordu; o sunucuda IIS yerel hesabi MAKINE ADIYLA
+niteleyip ikincisini ariyordu. KANIT: makine adli yola ayni junction elle
+kurulunca giris aninda 230 oldu.
+COZUM: FtpService.HomeLinkPaths -- kurulum da silme de IKI yolu birden isler.
+Nobetci FtpHomeProbeTests (6 test), mutasyonla dogrulandi.
+AYRICA: FtpService.ProbeHome eklendi -- panel ev klasorunu artik DISKTEN olcuyor
+(HomePath bir KAYITTI, olcum degil). Bosa dusmus junction AYRI olculur: site
+silininde baglanti geride kalir ve Directory.Exists true doner.
+
+### SITE YAZMA IZNI -- ayni sinif, daha genis etki
+SiteProvisioningService havuz adini "site.Name" diye uretiyordu; IIS'teki gercek
+ad "AdaPanel." + temizlenmis ad. Panelden gelen HER create isteginde
+ApplicationPoolName bos oldugu icin icacls hep yanlis hesabi deniyor, hata 1332,
+HICBIR IZIN UYGULANMIYORDU. Laravel storage/, WP uploads yazilamiyordu.
+BELIRTIYI MASKELEYEN: "Izinleri onar" ayni metodu DOGRU adla cagiriyordu -- yani
+"onarinca duzeliyor, yeni sitede hic calismiyor" gibi gorunuyordu.
+
+### .htaccess veri koku sozlesmesi
+ADAPANEL_DATA_ROOT degiskenini "kurulum yazar" diye yorum vardi; tarandi, YAZAN
+HICBIR SEY YOK. Varsayilan kurulumda iki taraf ayni koke dustugu icin gorunmuyor.
+Panel:DataRoot degisirse panel yeni koke yazar, modul varsayilana bakar -> panel
+"acik" der, HICBIR KURAL uygulanmaz. EngineLoadedInIis artik DORT olcumun
+birlesimi; ayrisma htaccess.blocker.data_root_mismatch olarak bildiriliyor.
+
+### Kaldirma sizintisi
+install-tray-task.ps1 gorevi KOKTE kuruyor; uninstall-cleanup.ps1 listesinde
+yoktu ve \AdaPanel\ supurmesi koku taramiyor. Kaldirma sonrasi gorev kaliyor,
+silinmis exe'yi calistirmayi deniyor.
+
+### OLCULDU-SAGLAM (elenen hipotezler -- bunlari tekrar arama)
+Teslim yolu TEMIZ: .iss'teki 8 betigin hepsi [Files]'ta, kurulu makinede
+{app}\scripts sekizini de tasiyor, HtaccessModule.dll GAC'ta + applicationHost'ta
+kayitli · modul surum sapmasi yok (AssemblyVersion bilerek 1.0.0.0) ·
+harden-adapanel.ps1 cagrilmiyor ama bu KUSUR DEGIL, bilincli manuel admin araci ·
+scripts/lib pakete girmeyecek.
+
+### GUVENILMEZ NOBETCI ONARILDI
+MemcachedRuntimeTruthTests gercek 11211 portunu paylasiyordu; sonuc koda degil
+ORTAMA bagliydi (tam kosumda kirmizi, tek basina yesil). Sonda portu artik
+disaridan verilebiliyor, testler bos port aliyor. KANIT: 11211 kasten isgal
+edilip kosuldu, 5/5 yesil. Uretim varsayilani ayrica sabitlendi.
+
+### ACIK KALAN (olculdu, DUZELTILMEDI -- davranis degistirir)
+1. WafService.IsolateAppPoolAsync havuz adini SANITIZE ETMEDEN uretiyor
+   (WafService.cs:260). Adinda bosluk/Turkce harf olan sitede izolasyon IKINCI
+   bir havuz acar, ACL'ler bosa duser; MeasureIsolation yalniz oneke baktigi icin
+   yine "izole" raporlar.
+2. SchedulerService.cs:702-713 -- geri okuma VAR (dogru refleks) ama bulamayinca
+   uydurma DTO donuyor (State="Ready"). Register-ScheduledTask erisim reddinde
+   bile akis suruyor; kullanici "Hazir" gorur, gorev Gorev Zamanlayici'da yoktur.
+3. WinAcmeSslService.cs:376-398 -- $ErrorActionPreference yok, -ErrorAction Stop
+   yok, sonda kosulsuz 'OK'. Yarim yazilmis rewrite kurali "yonlendirme acik"
+   diye raporlanir.
+4. Firewall'da PhpMyAdmin kurali IKI KEZ duruyor (netsh ayni adla cogaltiyor);
+   harden-adapanel.ps1 B2 temizliyor, kok neden acik.
+
+---
+
 # DEVAM NOKTASI (29.08.2026 20:40 -- kota kesintisi icin yazildi)
 
 ## ONCE BUNU CALISTIR, IS YAPMAYA BASLAMA

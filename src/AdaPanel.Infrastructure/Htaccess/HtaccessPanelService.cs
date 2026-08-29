@@ -92,13 +92,20 @@ public sealed class HtaccessSiteReport
     /// yolunda" diyordu.
     /// </para>
     /// <para>
-    /// <b>YENİ TANIM — ÜÇ ÖLÇÜMÜN BİRLEŞİMİ:</b>
+    /// <b>YENİ TANIM — DÖRT ÖLÇÜMÜN BİRLEŞİMİ:</b>
     /// (1) uygulama havuzu yönetilen kod çalıştırıyor ve CLR sürümü uygun (<see cref="Support"/>),
     /// (2) modül <c>system.webServer/modules</c> içinde KAYITLI ve <c>type</c>'ı bizim modülümüzü
     /// gösteriyor, (3) <c>preCondition</c> modülü isteğin dışında bırakmıyor
-    /// (<see cref="HtaccessModuleRegistrationState.PreConditionExcludesUnmanagedRequests"/>).
-    /// Üçünden biri bile OKUNAMIYORSA sonuç <c>false</c>'tur — "bilmiyorum" asla "yüklü" diye
+    /// (<see cref="HtaccessModuleRegistrationState.PreConditionExcludesUnmanagedRequests"/>),
+    /// (4) modülün çözdüğü VERİ KÖKÜ panelinkiyle AYNI — yoksa modül yüklenir, koşar ve panelin
+    /// yazdığı anahtar dosyasını HİÇ göremez.
+    /// Dördünden biri bile OKUNAMIYORSA sonuç <c>false</c>'tur — "bilmiyorum" asla "yüklü" diye
     /// raporlanmaz; hangi ölçümün eksik olduğu <see cref="EngineBlockers"/>'ta yazılıdır.
+    /// </para>
+    /// <para>
+    /// <b>DÖRDÜNCÜ ÖLÇÜM SONRADAN EKLENDİ</b> ve sebebi ilk üçüyle aynı sınıftan: kayıt ölçülüyordu
+    /// ama iki sürecin AYNI KLASÖRE baktığı ölçülmüyordu. Ayrıntılı gerekçe ve ölçüm
+    /// <c>HtaccessPanelService.VeriKokuAyrisiyor</c> üzerinde.
     /// </para>
     /// <para>
     /// <b>HÂLÂ İDDİA EDİLMEYEN:</b> panel süreci <c>w3wp</c>'nin içini göremez, yani "şu an bu
@@ -233,15 +240,96 @@ public sealed class HtaccessPanelService
         IHtaccessModuleRegistry kayit,
         IOptions<PanelRuntimeOptions> secenekler,
         ILogger<HtaccessPanelService> gunluk)
+        : this(motor, siteler, aspNet, kayit, secenekler, gunluk, null)
+    {
+    }
+
+    /// <param name="modulVeriKokuCozucu">
+    /// Modülün (w3wp içindeki net48 derlemenin) veri kökünü NASIL çözdüğü. <c>null</c> = GERÇEK
+    /// çözücü (<see cref="HtaccessHostingPaths.ResolveDataRootFromEnvironment"/>); üretimde her
+    /// zaman budur ve DI bu aşırı yüklemeyi hiç görmez.
+    ///
+    /// NEDEN ENJEKTE EDİLEBİLİR: ölçülen şey İKİ SÜRECİN MUTABAKATI ve test sürecinde ikinci süreç
+    /// YOKTUR. Tek alternatif <c>ADAPANEL_DATA_ROOT</c> ortam değişkenini testten yazmaktı; ortam
+    /// değişkeni SÜREÇ GENELİDİR ve xunit test sınıflarını paralel koşturur, yani testler
+    /// birbirinin kökünü ezerdi. Ayrışmayı ölçen bir düzeltmenin, kendisi ölçülemez bir yolla
+    /// sınanması olurdu.
+    /// </param>
+    internal HtaccessPanelService(
+        IHtaccessEngine motor,
+        IIisSiteService siteler,
+        IAspNetService aspNet,
+        IHtaccessModuleRegistry kayit,
+        IOptions<PanelRuntimeOptions> secenekler,
+        ILogger<HtaccessPanelService> gunluk,
+        Func<string>? modulVeriKokuCozucu)
     {
         _motor = motor;
         _siteler = siteler;
         _aspNet = aspNet;
         _kayit = kayit;
         _gunluk = gunluk;
+        _modulVeriKokuCozucu = modulVeriKokuCozucu ?? HtaccessHostingPaths.ResolveDataRootFromEnvironment;
 
         var veriKoku = Path.GetFullPath(Environment.ExpandEnvironmentVariables(secenekler.Value.DataRoot));
         _anahtarlar = new HtaccessSwitchStore(veriKoku);
+        _veriKoku = veriKoku;
+    }
+
+    /// <summary>Panelin ANAHTAR DOSYALARINI YAZDIĞI veri kökü (<c>Panel:DataRoot</c>, genişletilmiş).</summary>
+    private readonly string _veriKoku;
+
+    /// <summary>Modülün veri kökünü çözme yolu; üretimde gerçek ortam çözücüsü.</summary>
+    private readonly Func<string> _modulVeriKokuCozucu;
+
+    /// <summary>
+    /// Panel ile modül AYNI veri kökünü mü çözüyor?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>DÖRDÜNCÜ ÖLÇÜM — ve var olma sebebi ölçülmüş bir SESSİZ ARIZA.</b> Panel anahtar
+    /// dosyalarını <c>Panel:DataRoot</c> altına yazar; w3wp içindeki modül ise aynı kökü
+    /// <see cref="HtaccessHostingPaths.ResolveDataRootFromEnvironment"/> ile, yani
+    /// <c>ADAPANEL_DATA_ROOT</c> ortam değişkeninden ya da <c>%ProgramData%\AdaPanel</c>
+    /// varsayılanından çözer. Modülün panelin appsettings.json'ını okuma yolu YOKTUR.
+    /// </para>
+    /// <para>
+    /// <b>ÖLÇÜLDÜ:</b> <c>ADAPANEL_DATA_ROOT</c>'u kuran HİÇBİR ŞEY YOK — ne installer
+    /// (<c>installer\AdaPanel.iss</c>), ne kurulum betikleri, ne panelin kendisi. Bu makinede
+    /// makine ve süreç düzeyinde değer BOŞ ölçüldü. Yani modül HER ZAMAN varsayılana düşer.
+    /// Varsayılan kurulumda iki taraf aynı köke bakar ve özellik çalışır — kusur bu yüzden
+    /// bugüne kadar görünmedi.
+    /// </para>
+    /// <para>
+    /// <b>ARIZA:</b> <c>Panel:DataRoot</c> varsayılandan BAŞKA bir değere alınırsa (desteklenen
+    /// bir ayar; ayrıca <c>Panel__DataRoot</c> ortam değişkeniyle de ezilebilir) panel anahtarı
+    /// yeni köke yazar, modül eski varsayılana bakmaya devam eder. Panel "açık" der, modül
+    /// anahtarı HİÇ görmez, hiçbir istekte hiçbir kural uygulanmaz. Tam olarak bu sınıfın
+    /// arızası: dış sistem panelin ürettiği yolu ARAMIYOR.
+    /// </para>
+    /// <para>
+    /// Panel bu durumu DÜZELTEMEZ (ortam değişkenini yazmak w3wp/WAS yeniden başlatmadan etkili
+    /// olmaz), ama SUSMAMALI. Ölçüp engel olarak bildiriyor.
+    /// </para>
+    /// </remarks>
+    private bool VeriKokuAyrisiyor()
+    {
+        try
+        {
+            var modulunGordugu = HtaccessHostingPaths.ExpandFull(_modulVeriKokuCozucu());
+
+            // Windows'ta yol karşılaştırması harf DUYARSIZ; sondaki ayraç anlamsız farktır.
+            return !string.Equals(
+                _veriKoku.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                modulunGordugu.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // Kök ÇÖZÜLEMİYORSA "ayrışıyor" DEMEYİZ: uydurma bir engel, olmayan bir arızayı
+            // rapor ederdi. Ölçemediğimiz şey hakkında iddia üretmemek bu dosyanın kuralı.
+            return false;
+        }
     }
 
     /// <summary>Sitenin tam raporu.</summary>
@@ -264,6 +352,7 @@ public sealed class HtaccessPanelService
         // neden çalışmıyor" sorusunun cevabı sunucu geneli bir eksiklik olabilir ve onu ayrı bir
         // ekrana saklamak, tam da bu turda kapatılan "kimse sebebini söylemiyor" davranışı olurdu.
         var kayit = _kayit.Read();
+        var veriKokuAyrisiyor = VeriKokuAyrisiyor();
 
         return new HtaccessSiteReport
         {
@@ -281,8 +370,11 @@ public sealed class HtaccessPanelService
             // UC OLCUMUN BIRLESIMI (gerekcesi HtaccessSiteReport.EngineLoadedInIis uzerinde):
             // havuz + kayit + on kosul. Eskiden yalniz ilki vardi ve panel, modul HIC kayitli
             // olmadan da "yuklu" diyordu -- canli olcumde tam olarak bu oldu.
-            EngineLoadedInIis = destek == "supported" && kayit.Confirmed,
-            EngineBlockers = MotorEngelleri(kayit),
+            // DORT OLCUMUN BIRLESIMI (gerekcesi HtaccessSiteReport.EngineLoadedInIis uzerinde):
+            // havuz + kayit + on kosul + VERI KOKU MUTABAKATI. Dorduncusu olmadan panel, modulun
+            // hicbir zaman bakmayacagi bir klasore anahtar yazip "yuklu" diyebiliyordu.
+            EngineLoadedInIis = destek == "supported" && kayit.Confirmed && !veriKokuAyrisiyor,
+            EngineBlockers = MotorEngelleri(kayit, veriKokuAyrisiyor),
             Deviations = Sapmalar()
         };
     }
@@ -673,9 +765,20 @@ public sealed class HtaccessPanelService
     /// iki ayrı sorun varmış gibi okuturdu.
     /// </para>
     /// </remarks>
-    private static IReadOnlyList<string> MotorEngelleri(HtaccessModuleRegistrationState kayit)
+    private static IReadOnlyList<string> MotorEngelleri(
+        HtaccessModuleRegistrationState kayit,
+        bool veriKokuAyrisiyor)
     {
         var engeller = new List<string>();
+
+        // VERİ KÖKÜ AYRIŞMASI EN ÖNE ALINDI ve kaydın okunabilirliğinden BAĞIMSIZ bildirilir:
+        // kayıt kusursuz olsa bile panel ile modül farklı klasörlere bakıyorsa özellik ÖLÜDÜR.
+        // Diğer engellerin altına gömülseydi, "kayıt tamam" gören yönetici burada durur ve asıl
+        // sebebi hiç görmezdi. Gerekçesinin tamamı VeriKokuAyrisiyor üzerinde yazılı.
+        if (veriKokuAyrisiyor)
+        {
+            engeller.Add("htaccess.blocker.data_root_mismatch");
+        }
 
         if (!kayit.Readable)
         {

@@ -38,7 +38,7 @@ public sealed class SiteProvisioningService(
             await ApplyProfileAsync(site, profile, request, actorUserId, ipAddress, cancellationToken);
             site = await iisSiteService.GetSiteAsync(site.Name, cancellationToken);
             _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
-            await GrantSiteWritableAsync(site, request.ApplicationPoolName, cancellationToken);
+            await GrantSiteWritableAsync(site, cancellationToken);
             return site;
         }
         catch
@@ -75,7 +75,33 @@ public sealed class SiteProvisioningService(
     // Laravel storage/ + bootstrap/cache/, WordPress wp-content/uploads vb. (aksi halde "Permission denied"/500).
     // YALNIZ bu sitenin app pool'una verilir → başka site bu köke yazamaz (kiracı izolasyonu). (OI)(CI) → sonradan
     // eklenen/göç edilen dosyalar da miras alır. Best-effort: izin verilemese de site kurulumu başarısız sayılmaz.
-    private async Task GrantSiteWritableAsync(SiteDto site, string applicationPoolName, CancellationToken cancellationToken)
+    //
+    // HAVUZ ADI ARTIK YALNIZ site.ApplicationPoolName'DEN OKUNUR -- PARAMETRE KALDIRILDI.
+    //
+    // OLCULMUS ARIZA: metot eskiden bir `applicationPoolName` parametresi aliyordu ve bos gelirse
+    // `site.Name`'e dusuyordu. Olusturma yolu (CreateSiteAsync) ona `request.ApplicationPoolName`
+    // veriyordu; o alan panelden gelen HER istekte BOS (SitesController musteri/bayi icin bilerek
+    // string.Empty yapiyor, arayuz de her create'te "" gonderiyor). Yani havuz adi HER ZAMAN
+    // `site.Name`'e dusuyordu -- ornegin "musteri.com".
+    //
+    // IIS'te o havuz BU ADLA YOK: havuzu WebAdministrationSiteService.BuildManagedPoolName kuruyor
+    // ve adi "AdaPanel." onekli oluyor ("AdaPanel.musteri.com"). icacls olmayan bir hesap icin
+    // "No mapping between account names and security IDs was done" (hata 1332) dondurur ve
+    // HICBIR SEY UYGULAMAZ. Sonuc: panelden acilan HICBIR sitede olusturma anindaki Modify izni
+    // gercekten verilmiyordu. Basarisizlik yalnizca LogWarning'e yaziliyordu, kullanici ise
+    // Laravel storage/ ya da WordPress uploads yazamadigi icin 500 goruyordu.
+    //
+    // BELIRTIYI MASKELEYEN SEY: "Izinleri Onar" (RepairPermissionsAsync) AYNI metodu
+    // `site.ApplicationPoolName` ile cagiriyordu -- yani DOGRU adla. Ozellik "onarinca duzeliyor,
+    // olustururken hic calismiyor" gorunuyordu; bu, kok nedeni aramayi yillarca yanlis yere
+    // yonlendirebilecek bir isaretti.
+    //
+    // Neden parametre tamamen KALDIRILDI: `site` her iki cagirma yolunda da IIS'ten TAZE okunuyor
+    // (CreateSiteAsync:39, RepairPermissionsAsync:227), dolayisiyla site.ApplicationPoolName zaten
+    // dis sistemin GERCEK degeridir -- yonetici baska bir havuzu yeniden kullandiginda da dogrudur.
+    // Parametreyi birakmak, ayni yanlis degeri gelecekte tekrar gecirebilmek demekti; tahmin edilen
+    // ad yerine OLCULEN adi kullanmak bu deponun kurali.
+    private async Task GrantSiteWritableAsync(SiteDto site, CancellationToken cancellationToken)
     {
         try
         {
@@ -86,7 +112,21 @@ public sealed class SiteProvisioningService(
                 return;
             }
 
-            var pool = string.IsNullOrWhiteSpace(applicationPoolName) ? site.Name : applicationPoolName;
+            var pool = site.ApplicationPoolName;
+
+            // BOSSA site.Name'e DUSMUYORUZ. Eski davranis tam olarak buydu ve var olmayan bir
+            // hesaba izin vermeye calisiyordu: icacls 1332 ile hicbir sey yapmiyor, biz de
+            // "izin verildi" satirini yazmasak bile GERCEK sebebi gizlemis oluyorduk. Havuz adini
+            // OKUYAMADIYSAK yapilacak dogru is, uydurmak degil, bunu SOYLEMEKTIR.
+            if (string.IsNullOrWhiteSpace(pool))
+            {
+                logger.LogWarning(
+                    "Site yazma izni ATLANDI: {Site} icin uygulama havuzu adi IIS'ten OKUNAMADI. " +
+                    "Havuz adi tahmin edilmez; izin uygulanmadi.",
+                    site.Name);
+                return;
+            }
+
             var result = await ProcessRunner.RunAsync(
                 "icacls.exe",
                 $"\"{site.PhysicalPath}\" /grant \"IIS AppPool\\{pool}:(OI)(CI)M\" /T /C /Q",
@@ -225,7 +265,7 @@ public sealed class SiteProvisioningService(
     public async Task<SiteDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        await GrantSiteWritableAsync(site, site.ApplicationPoolName, cancellationToken);
+        await GrantSiteWritableAsync(site, cancellationToken);
         return site;
     }
 

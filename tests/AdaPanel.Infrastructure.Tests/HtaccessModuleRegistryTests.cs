@@ -510,14 +510,21 @@ public sealed class HtaccessModuleRegistryTests
                 ApplicationPoolName = "ornek.com"
             };
 
+            var veriKoku = Path.Combine(taban.FullName, "data");
+
             var servis = new HtaccessPanelService(
                 new HtaccessEngine(),
                 new SahteSite(site),
                 new SahteAsp(havuzSurumu),
                 new SahteModulKaydi(kayit),
                 Microsoft.Extensions.Options.Options.Create(
-                    new PanelRuntimeOptions { DataRoot = Path.Combine(taban.FullName, "data") }),
-                NullLogger<HtaccessPanelService>.Instance);
+                    new PanelRuntimeOptions { DataRoot = veriKoku }),
+                NullLogger<HtaccessPanelService>.Instance,
+                // MODULUN GORDUGU KOK = PANELINKI. Bu dosyanin konusu KAYIT; veri kokunun
+                // ayrismasi AYRI bir olcum ve HtaccessPanelServiceTests'te tek tek sinaniyor.
+                // Burayi acikca esitlemeseydik gecici DataRoot yuzunden her rapor "ayrisiyor"
+                // der ve kayit testleri konularini degil o engeli olcerdi.
+                () => veriKoku);
 
             return await servis.GetReportAsync("ornek.com", CancellationToken.None);
         }

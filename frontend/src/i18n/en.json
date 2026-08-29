@@ -2977,6 +2977,7 @@
   "htaccess.blocker.module_assembly_missing": "The module assembly was not found on the server (GAC is empty). The installer needs to be re-run.",
   "htaccess.blocker.module_type_mismatch": "The module registered in IIS points at a DIFFERENT type; this registration does not belong to AdaPanel. The repair button fixes it.",
   "htaccess.blocker.precondition_managed_handler": "The module registration carries the \"managedHandler\" precondition: the module then runs only for managed requests and does NOT run for PHP or static file requests. Most of your .htaccess rules would not be applied. The repair button fixes the precondition.",
+  "htaccess.blocker.data_root_mismatch": "The panel and the IIS module are looking at DIFFERENT data folders: the panel writes the switch file under its own data root, while the module uses the ADAPANEL_DATA_ROOT environment variable or the default %ProgramData%\\AdaPanel folder. As a result the module can be loaded and running yet never see the rules you enabled. Either restore Panel:DataRoot to its default, or set ADAPANEL_DATA_ROOT on the server to match the panel data root and restart IIS.",
   "panel.htaccess.title": ".htaccess support",
   "panel.htaccess.subtitle": "Run .htaccess rules brought over from Linux without converting them to web.config. See which lines work, which ones do not, and why.",
   "panel.htaccess.navHint": "Mode, files, syntax check",

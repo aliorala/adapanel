@@ -490,11 +490,24 @@ foreach ($serviceName in $serviceNames) {
     } | Out-Null
 }
 
+# DIKKAT: buradaki adlar GOREV AGACININ KOKUNDE duran gorevlerdir. Asagidaki "\AdaPanel\" klasor
+# supurmesi onlari YAKALAMAZ -- iki ayri temizlik, iki ayri yer.
+#
+# "AdaPanel Tepsi" OLCUM SONUCU EKLENDI: install-tray-task.ps1 gorevi `schtasks /Create /TN
+# 'AdaPanel Tepsi'` ile KLASORSUZ, yani kokte olusturuyor. Bu listede yoktu ve "\AdaPanel\"
+# supurmesine de takilmiyordu; kurulu bir makinede olculdu, gorev kaldirmadan SONRA da Windows'ta
+# kaliyordu. Sonucu gorunur bir sey degil ama zararsiz da degil: gorev her birkac dakikada bir
+# SILINMIS {app}\AdaPanel.Api.exe'yi calistirmayi deniyor, yani kaldirilan urun makinede kalici
+# bir hata kaydi uretmeye devam ediyordu.
+#
+# Ad DEGISTIRILIRSE burasi sessizce kayar; bu yuzden install-tray-task.ps1 ile bu liste arasindaki
+# tutarlilik UninstallCleanupScriptTests icinde ayrica sinaniyor.
 $taskNames = @(
     "AdaPanel Nginx",
     "AdaStalwart",
     "AdaMemcached",
-    "AdaPanel-SelfUpdate"
+    "AdaPanel-SelfUpdate",
+    "AdaPanel Tepsi"
 )
 foreach ($taskName in $taskNames) {
     Invoke-AdaAdim "Zamanlanmis gorev kaldirildi: $taskName" {

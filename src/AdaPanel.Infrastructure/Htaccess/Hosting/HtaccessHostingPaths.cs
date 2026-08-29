@@ -64,7 +64,18 @@ internal static class HtaccessHostingPaths
     /// Veri kökünü ORTAMDAN okur — modül tarafının tek yolu, çünkü w3wp içinde panelin
     /// appsettings.json'ı ya da DI kabı YOKTUR.
     ///
-    /// Sıra: <c>ADAPANEL_DATA_ROOT</c> (kurulum yazar) → <c>%ProgramData%\AdaPanel</c> (varsayılan).
+    /// Sıra: <c>ADAPANEL_DATA_ROOT</c> → <c>%ProgramData%\AdaPanel</c> (varsayılan).
+    ///
+    /// DİKKAT — BU DEĞİŞKENİ BUGÜN KİMSE YAZMIYOR. Burada eskiden "(kurulum yazar)" yazıyordu ve
+    /// bu YANLIŞTI: ÖLÇÜLDÜ, ne <c>installer\AdaPanel.iss</c>, ne kurulum betikleri, ne panel
+    /// <c>ADAPANEL_DATA_ROOT</c>'u kuruyor (kurulu bir makinede makine ve süreç düzeyinde değer
+    /// BOŞ ölçüldü). Yani modül pratikte HER ZAMAN varsayılana düşer.
+    ///
+    /// Varsayılan kurulumda panel de aynı köke yazdığı için özellik çalışır ve kusur görünmez.
+    /// Ama <c>Panel:DataRoot</c> başka bir değere alınırsa iki taraf AYRIŞIR: panel anahtarı yeni
+    /// köke yazar, modül varsayılana bakmaya devam eder, hiçbir kural uygulanmaz. Yanlış yorumu
+    /// düzeltmek yetmezdi — ayrışma artık panelde ÖLÇÜLÜP engel olarak bildiriliyor
+    /// (<c>htaccess.blocker.data_root_mismatch</c>, bkz. <c>HtaccessPanelService.VeriKokuAyrisiyor</c>).
     /// NEDEN ProgramData'yı Environment.GetFolderPath ile alıyoruz: sabit "C:\ProgramData" yazmak
     /// sistem sürücüsü D: olan sunucularda yanlış yere bakardı.
     /// </summary>
