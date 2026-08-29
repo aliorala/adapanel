@@ -25,25 +25,36 @@
          (2) `.summary-grid` `auto-fit minmax(140px)` kullandigi icin genis ekranda 4 sutun,
          ProxyView'de ise sabit 4 sutun vardi ve dar ekran kirilimlari (900/720px) yalniz
          paylasilan surumde tanimliydi. Artik ikisi de ayni serit. -->
+    <!-- OLCUM GELMEDEN SERIT "0" DIYORDU — ve dort kutucugun DORDU birden.
+         Sayilar `overview?.… ?? 0` yaziliyordu; `overview` istek bitene kadar null oldugu icin
+         ekran acilisinda "Kayitli sunucu 0 / Ulasilabilir 0" goruluyordu. Bu, hemen asagidaki
+         listenin YAPMADIGI hatanin aynisiydi: liste `loaded` bayragi olmadan "kayit yok"
+         demiyor, cunku yonetici dugumleri silinmis sanip yeniden eklemesin (gerekcesi kodda
+         yazili). Serit ayni korumayi almiyordu, yani ayni ekranda ayni soruya iki farkli
+         durusla cevap veriliyordu. Daha kotusu: ILK istek BASARISIZ olursa `loaded` hic true
+         olmadigi icin o dort sifir EKRANDA KALICI kaliyordu.
+         `??` YETMEZ, `loaded` GEREKIR: sunucu gercekten 0 dugum donduginde de deger 0'dir;
+         "olculmedi" ile "olculdu ve sifir cikti" ancak bu bayrakla ayrilir.
+         `—` secildi (panelin "deger yok" isareti); tire bir sayi gibi okunamaz. -->
     <div class="summary-strip">
       <article class="summary-item">
         <span class="tile-label">{{ t("panel.cluster.summaryNodes") }}</span>
-        <strong>{{ overview?.nodes.length ?? 0 }}</strong>
+        <strong>{{ loaded ? overview?.nodes.length ?? 0 : "—" }}</strong>
       </article>
       <article class="summary-item">
         <span class="tile-label">{{ t("panel.cluster.summaryReachable") }}</span>
-        <strong>{{ overview?.reachableCount ?? 0 }}</strong>
+        <strong>{{ loaded ? overview?.reachableCount ?? 0 : "—" }}</strong>
       </article>
       <article class="summary-item">
         <span class="tile-label">{{ t("panel.cluster.summaryUnreachable") }}</span>
-        <strong :class="{ 'danger-text': (overview?.unreachableCount ?? 0) > 0 }">
-          {{ overview?.unreachableCount ?? 0 }}
+        <strong :class="{ 'danger-text': loaded && (overview?.unreachableCount ?? 0) > 0 }">
+          {{ loaded ? overview?.unreachableCount ?? 0 : "—" }}
         </strong>
       </article>
       <article class="summary-item">
         <span class="tile-label">{{ t("panel.cluster.summarySites") }}</span>
-        <strong>{{ overview?.totalSites ?? 0 }}</strong>
-        <small v-if="(overview?.unreachableCount ?? 0) > 0" class="warn-text">
+        <strong>{{ loaded ? overview?.totalSites ?? 0 : "—" }}</strong>
+        <small v-if="loaded && (overview?.unreachableCount ?? 0) > 0" class="warn-text">
           {{ t("panel.cluster.summarySitesPartial") }}
         </small>
       </article>
@@ -151,6 +162,12 @@
                 {{ yuzde(row.info.overview.memoryUsagePercent) }}
               </strong>
             </div>
+            <!-- DISK OLCULEMEDIYSE "%0" DEGIL "—". `enDoluDisk` disk listesi bos gelince 0
+                 donuyordu; 0 ise esigin altinda oldugu icin saglikli/notr renkte "%0"
+                 yaziliyordu. Yani "diskini okuyamadim" ile "diskin bombos" ekranda BIREBIR
+                 ayni goruntuydu -- ve ikisinden biri, dolmak uzere olan bir sunucuyu sakin
+                 gosterebilirdi. Ayni karar halkalarda zaten verilmisti (MonitoringView
+                 `ringStyle(null)` notr kalir); burada eksik olan sadece uygulanmasiydi. -->
             <div class="metric">
               <span class="tile-label">{{ t("panel.cluster.metricDisk") }}</span>
               <strong :class="['metric-number', dolulukSinifi(enDoluDisk(row))]">
@@ -266,6 +283,7 @@ import {
   type ClusterOverview
 } from "../api/cluster";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -501,7 +519,12 @@ function statusMessage(row: ClusterNodeStatus) {
  * ölçümün yerel kararıydı; iki eşiğe bölmek uyarı ile arızayı da ayırır (renk tek kanal olmasın
  * diye sayının kendisi zaten hep yazılı).
  */
-function dolulukSinifi(value: number) {
+function dolulukSinifi(value: number | null) {
+  // Ölçülemeyen değer bir SAĞLIK İDDİASI taşımaz: ne yeşil ne kırmızı, sınıfsız kalır.
+  if (value === null) {
+    return "";
+  }
+
   if (value >= 90) {
     return "danger-text";
   }
@@ -509,10 +532,11 @@ function dolulukSinifi(value: number) {
   return value >= 75 ? "warn-text" : "";
 }
 
-function enDoluDisk(row: ClusterNodeStatus) {
+/** `null` = ÖLÇÜLEMEDİ (düğüm disk listesi vermedi); 0 ile karıştırılmamalı, bkz. şablon. */
+function enDoluDisk(row: ClusterNodeStatus): number | null {
   const disks = row.info?.overview.disks ?? [];
   // Ortalama DEĞİL en kötü disk: sunucuyu durduran şey disklerin ortalaması değil, dolan ilk diski.
-  return disks.length === 0 ? 0 : Math.max(...disks.map((disk) => disk.usagePercent));
+  return disks.length === 0 ? null : Math.max(...disks.map((disk) => disk.usagePercent));
 }
 
 function uyariSayisi(row: ClusterNodeStatus) {
@@ -525,11 +549,15 @@ function sonGorulme(row: ClusterNodeStatus) {
     return t("panel.cluster.neverSeen");
   }
 
-  return t("panel.cluster.lastSeen", { time: new Date(row.node.lastSeenAtUtc).toLocaleString() });
+  // ELLE `new Date(...).toLocaleString()` — `utils/datetime.ts`in tek kaynaga topladigi 24
+  // kopyadan biri BURADA HAYATTA KALMIS. Bugun ciktisi ayni, ama korumasi degil: bozuk bir
+  // damga "Invalid Date" olarak basilirdi (tek kaynak ham degeri basar, gerekcesi orada
+  // yazili). Ayrica bicim kararlarindan biri degistiginde bu ekran geride kalirdi.
+  return t("panel.cluster.lastSeen", { time: formatDateTime(row.node.lastSeenAtUtc) });
 }
 
-function yuzde(value: number) {
-  return `${Math.round(value)}%`;
+function yuzde(value: number | null) {
+  return value === null ? "—" : `${Math.round(value)}%`;
 }
 
 function resolveApiMessage(error: unknown) {

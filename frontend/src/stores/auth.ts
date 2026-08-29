@@ -75,6 +75,14 @@ export type ManagedUser = {
   diskUsageMb: number;
   /** false ise diskUsageMb bir ALT SINIRDIR: agac tumuyle taranamadi. */
   diskMeasured: boolean;
+  /**
+   * Olcumun NEDEN kesildigi (`files.size_truncated_entries|_time|_denied`); olcum tamsa bos.
+   * Bos olmasi "tam" demek DEGILDIR — bakilacak bayrak `diskMeasured`dir.
+   *
+   * Alan `UserSummaryDto`da vardi ama tipte yoktu, yani panel sebebi hic okuyamiyordu;
+   * `SubscriptionUsageDto`nun ayni alani `api/subscriptions.ts`te ZATEN tipliydi.
+   */
+  diskUsageTruncatedReasonKey: string;
   databaseCount: number;
   ownerId: string | null;
   ownerName: string;

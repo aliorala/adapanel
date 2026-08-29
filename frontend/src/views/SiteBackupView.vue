@@ -125,14 +125,25 @@
       <div v-if="siteBackups.length > 0" class="bk-days">
         <section v-for="group in dayGroups" :key="group.key" class="bk-day">
           <header class="bk-day-head">
-            <button
-              type="button"
-              class="day-toggle"
-              :aria-expanded="isDayOpen(group.key)"
-              @click="toggleDay(group.key)">
-              <span class="day-caret" aria-hidden="true">{{ isDayOpen(group.key) ? "▾" : "▸" }}</span>
-              <strong>{{ group.label }}</strong>
-            </button>
+            <!-- GÜN, BİR BÖLÜM BAŞLIĞIDIR — RÜTBESİ DE ÖYLE OLMALI.
+                 Önceden `<strong>` idi: gövde metniyle AYNI boyda (13.5px), yalnız kalınlıkla
+                 ayrılıyordu. Oysa bu satır listeyi bölen tek yapıdır ve kapalı bir günden
+                 ekranda geriye kalan TEK şeydir; ayrıca ekran okuyucunun gezinme ağacında hiç
+                 görünmüyordu (bölüm başlığı `<h3>`, altındaki günler başlıksızdı).
+                 `<h4>` DIŞARIDA, düğme İÇERİDE: `<button>`ın içerik modeli sözcük öbeğidir,
+                 içine `<h4>` konamaz. Bu sırayla hem rütbe (ladder: --fs-h4 = 14.3px/640) hem
+                 de "başlığın tamamı tıklanır" davranışı korunur — düğme `font: inherit`
+                 taşıdığı için boyu başlıktan gelir. -->
+            <h4 class="bk-day-title">
+              <button
+                type="button"
+                class="day-toggle"
+                :aria-expanded="isDayOpen(group.key)"
+                @click="toggleDay(group.key)">
+                <span class="day-caret" aria-hidden="true">{{ isDayOpen(group.key) ? "▾" : "▸" }}</span>
+                {{ group.label }}
+              </button>
+            </h4>
             <span class="bk-day-summary">
               <span class="status-pill">{{ t("panel.backup.day.count", { count: group.items.length }) }}</span>
               <span class="status-pill">{{ formatSize(dayBytes(group.items)) }}</span>
@@ -144,6 +155,36 @@
               <div class="bk-id">
                 <strong>
                   {{ record.name }}
+                  <!--
+                    DOSYASI YOK ROZETİ — BU EKRANIN EN PAHALI YALANIYDI.
+
+                    ÖLÇÜLDÜ (kaynaktan): `BackupService.GetBackupsAsync` her listelemede
+                    `record.LocalMissing = IsLocalFileMissing(record)` yazıyor (kayıt başına bir
+                    `File.Exists`; ağ isteği yok, bu yüzden her listelemede yapılıyor) ve alan
+                    `api/backup.ts`te TİPLİ. Yedekler ekranı (`BackupView`) bu ölçümü kırmızı bir
+                    rozetle gösteriyor; SİTE yedek listesi HİÇ göstermiyordu.
+
+                    Görünen sonuç: dosyası elle silinmiş bir yedek bu ekranda sapasağlam
+                    görünüyor, kullanıcı "Geri yükle"ye basıp site adını da yazıyor ve dosyanın
+                    olmadığını ancak sunucunun hatasından öğreniyordu — yani tam da felaket
+                    anında. Ölçüm VARDI, teslim yolu kopuktu (bu depoda ölçülmüş bir hata sınıfı).
+
+                    Rozetler, anahtarlar ve gerekçeleri `BackupView` ile AYNI; yeni anahtar yok.
+                  -->
+                  <span
+                    v-if="record.localMissing"
+                    class="status-pill danger"
+                    :title="t('panel.backup.missingLocalHint')">
+                    {{ t("panel.backup.missingLocalBadge") }}
+                  </span>
+                  <!-- Uzak kopya YALNIZCA "Doğrula" çalıştıysa ölçülmüştür; ölçülmemiş bir kaydı
+                       "uzakta yok" göstermek yalan olurdu, bu yüzden `remoteVerifiedUtc` şart. -->
+                  <span
+                    v-if="record.remoteMissing && record.remoteVerifiedUtc"
+                    class="status-pill danger"
+                    :title="t('panel.backup.missingRemoteHint')">
+                    {{ t("panel.backup.missingRemoteBadge") }}
+                  </span>
                   <!-- Kilit rozeti: geri yüklerken parola isteneceği LİSTEDE görünsün. -->
                   <span v-if="record.encrypted" class="status-pill" :title="t('panel.backup.encryptedHint')">
                     {{ t("panel.backup.encryptedBadge") }}
@@ -642,6 +683,13 @@ function formatDate(iso: string): string {
   flex-wrap: wrap;
   padding-bottom: var(--sp-6);
   border-bottom: 1px solid var(--panel-border);
+}
+
+/* Başlık artık gerçek bir `<h4>`; ortak merdivenin verdiği üst/alt boşluk burada istenmiyor,
+   çünkü satırın dikey ritmini `.bk-day-head` (flex + `--sp-6` alt dolgu) belirliyor. */
+.bk-day-title {
+  margin: 0;
+  min-width: 0;
 }
 
 /* Başlığın TAMAMI tıklanır: küçük bir oka isabet ettirmek dokunmatik ekranda zordu. */

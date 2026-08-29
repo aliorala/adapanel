@@ -237,6 +237,12 @@
         <span>{{ t("panel.users.twoFactor") }}</span>
         <span>{{ t("panel.software.action") }}</span>
       </div>
+      <!-- BU TABLONUN HİÇBİR DURUMU YOKTU: liste boşken ekranda yalnız BAŞLIK SATIRI kalıyordu.
+           Yani "yükleniyor", "kullanıcı yok" ve "liste çekilemedi" ÜÇÜ DE aynı görünüyordu —
+           altı boş bir tablo başlığı. Bayi hesabında (henüz müşterisi yok) ve istek 500 dönünce
+           gördüğü şey birebir aynıydı.
+           Üç durum ayrıldı; kalıp bu dosyada ZATEN VAR (yukarıdaki servis planları bloğu:
+           `plansLoaded` + `plansError`) ve panelin doğru örneği de odur. -->
       <div v-for="user in authStore.users" :key="user.id" class="data-row user-row">
         <div class="cell-main">
           <strong>{{ user.userName }}</strong>
@@ -245,11 +251,18 @@
             {{ user.assignedSites.length }} {{ t("panel.users.sitesShort") }}
             <!-- Ölçüm KESİLDİYSE sayı bir ALT SINIRDIR; rozetsiz göstermek onu tam değer gibi
                  sunmak olurdu. Bayrak SATIR BAŞINA gelir: bütçe abonelik başına olduğu için bir
-                 müşterinin ölçümü kesilirken komşusununki tam olabilir. -->
+                 müşterinin ölçümü kesilirken komşusununki tam olabilir.
+                 SEBEP DE SÖYLENİYOR: `UserSummaryDto.DiskUsageTruncatedReasonKey` ölçümün NEDEN
+                 kesildiğini (öğe bütçesi / süre / erişim reddi) çevrilmiş bir anahtarla taşıyor
+                 ve API'de VARDI, panel okumuyordu. Aynı sayfada çizilen `SubscriptionCard` aynı
+                 rozeti sebebiyle gösteriyordu: TEK EKRANDA, AYNI ROZETİN İKİ FARKLI ipucu vardı;
+                 "erişim reddedildi" ile "ağaç çok büyük" yöneticinin atacağı adımı değiştirir. -->
             · {{ formatQuotaMib(user.diskUsageMb) }} / {{ user.maxDiskMb > 0 ? formatQuotaMib(user.maxDiskMb) : "∞" }}<span
               v-if="!user.diskMeasured"
               class="status-pill warn"
-              :title="t('users.disk_usage_partial_hint')">{{ t("users.disk_usage_partial") }}</span>
+              :title="user.diskUsageTruncatedReasonKey
+                ? t(user.diskUsageTruncatedReasonKey)
+                : t('users.disk_usage_partial_hint')">{{ t("users.disk_usage_partial") }}</span>
             · {{ user.databaseCount }} / {{ user.maxDatabases > 0 ? user.maxDatabases : "∞" }} {{ t("panel.users.databasesShort") }}
             <template v-if="user.ownerName"> · {{ t("panel.users.owner") }}: {{ user.ownerName }}</template>
             <template v-if="user.parentName"> · {{ t("panel.users.subUserOf") }}: {{ user.parentName }}</template>
@@ -305,6 +318,16 @@
           </span>
         </span>
       </div>
+
+      <p v-if="authStore.users.length === 0 && !usersLoaded" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+      <!-- ÇEKİLEMEDİ ile YOK ayrı: birleştirmek, var olan hesapları yok gibi göstermek olurdu.
+           Metin üst bantta da görünüyor (notify) ama tablo sayfanın epey aşağısında; bandın
+           göründüğü kaydırma konumunda tablo, tablonun göründüğü konumda bant ekran dışında
+           kalıyor. İki kanal da bilerek duruyor. -->
+      <p v-else-if="usersError" class="notice error" role="alert">{{ usersError }}</p>
+      <p v-else-if="authStore.users.length === 0" class="empty-state">{{ t("panel.users.empty") }}</p>
     </div>
 
     <!-- ABONELİK: plan bağı, kullanım ve askı denetimi seçili müşterinin yanında.
@@ -455,6 +478,12 @@ function formatQuotaMib(value: number) {
   return sharedFormatBytes(value * MIB, t, "gauge");
 }
 
+// Kullanıcı listesinin ÜÇ durumu (bkz. tablodaki not). Plan listesindeki `plansLoaded`/
+// `plansError` ikilisiyle aynı sözleşme: "gelmedi" ile "boş" asla aynı görünmez.
+const usersLoaded = ref(false);
+/** Kullanıcı listesi ÇEKİLEMEDİ. Boş listeyle karıştırılmamalı: biri "yok", diğeri "bilmiyoruz". */
+const usersError = ref("");
+
 const selectedUserId = ref("");
 const selectedUserIsCustomer = computed(() =>
   authStore.users.some((user) => user.id === selectedUserId.value && user.role === "Customer")
@@ -532,11 +561,7 @@ const planKaydediliyor = ref(false);
 const createPlanId = ref("");
 
 onMounted(async () => {
-  // Kabuk (SetupWizardView) admin/bayi girişinde listeyi zaten doldurur; doğrudan bu ekrana
-  // düşüldüğünde (veya liste boşsa) kendi verisini çeker.
-  if (authStore.users.length === 0) {
-    await authStore.fetchUsers().catch((error: unknown) => notify(resolveApiMessage(error), true));
-  }
+  await loadUsers();
 
   if (sitesStore.sites.length === 0) {
     await sitesStore.fetchSites().catch(() => undefined);
@@ -546,6 +571,31 @@ onMounted(async () => {
     await loadServicePlans();
   }
 });
+
+/**
+ * Kullanıcı listesi + "yüklendi mi" bayrağı.
+ *
+ * Kabuk (SetupWizardView) admin/bayi girişinde listeyi zaten doldurur; o durumda ikinci bir
+ * istek atılmaz ama liste ELİMİZDE olduğu için "yüklendi" de doğrudur. Bayrak olmadan boş liste
+ * ile gelmemiş liste ekranda ayırt edilemiyordu.
+ */
+async function loadUsers() {
+  if (authStore.users.length > 0) {
+    usersLoaded.value = true;
+    return;
+  }
+
+  try {
+    await authStore.fetchUsers();
+    usersError.value = "";
+  } catch (error) {
+    const mesaj = resolveApiMessage(error);
+    usersError.value = mesaj;
+    notify(mesaj, true);
+  } finally {
+    usersLoaded.value = true;
+  }
+}
 
 async function loadServicePlans() {
   // HATA YUTULMUYORDU: `.catch(() => [])` istek başarısız olduğunda BOŞ liste döndürüyor,

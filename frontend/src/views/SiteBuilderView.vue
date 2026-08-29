@@ -17,7 +17,18 @@
     <p v-if="notice" :class="['notice', 'page-notice', noticeError ? 'error' : '']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <p v-if="!selectedSite" class="empty-state">{{ t("panel.siteBuilder.selectSiteHint") }}</p>
-    <p v-else-if="!project" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+    <p v-else-if="!project && loading" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+    <!-- "YÜKLENİYOR" SONSUZA KADAR YAZIYORDU. `load()` hata yakaladığında `project`i `null`
+         yapıyor, `loading` de `finally`de false'a düşüyor; koşul yalnız `!project` olduğu için
+         ekranda kalıcı bir "Yükleniyor…" kalıyordu. Kullanıcının elindeki tek işaret, üst
+         banttaki bir anlık hata mesajıydı — o da kaybolunca ekran sonsuza kadar yükleniyor
+         görünüyordu, üstelik ÇIKIŞ YOLU (tekrar deneme) yoktu.
+         Panelin ortak "okunamadı" bileşeni ve `useSectionError` kalıbı devralındı. -->
+    <SectionLoadError
+      v-else-if="!project"
+      :message="projectLoad.message.value"
+      :busy="loading"
+      @retry="load" />
 
     <template v-else>
       <div class="module-toolbar">
@@ -87,7 +98,7 @@
               vurgu rengindeki kenar ve `aria-pressed` (ekran okuyucu ile klavye kullanıcısı için
               tek kanal renk olamaz).
             -->
-            <h4>{{ t("panel.siteBuilder.templateLabel") }}</h4>
+            <h3>{{ t("panel.siteBuilder.templateLabel") }}</h3>
             <div class="sb-choices">
               <button
                 v-for="item in catalog?.templates ?? []"
@@ -100,7 +111,7 @@
               </button>
             </div>
 
-            <h4>{{ t("panel.siteBuilder.paletteLabel") }}</h4>
+            <h3>{{ t("panel.siteBuilder.paletteLabel") }}</h3>
             <div class="sb-choices">
               <button
                 v-for="item in catalog?.palettes ?? []"
@@ -114,7 +125,7 @@
               </button>
             </div>
 
-            <h4>{{ t("panel.siteBuilder.fontLabel") }}</h4>
+            <h3>{{ t("panel.siteBuilder.fontLabel") }}</h3>
             <div class="sb-choices">
               <button
                 v-for="item in catalog?.fonts ?? []"
@@ -260,7 +271,7 @@
               </template>
             </details>
 
-            <h4>{{ t("panel.siteBuilder.images") }}</h4>
+            <h3>{{ t("panel.siteBuilder.images") }}</h3>
             <p class="meta">{{ t("panel.siteBuilder.imagesHint", { size: maxImageMb }) }}</p>
             <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" @change="uploadImage" />
             <!-- GÖRSEL SİLME TEHLİKE TONUNDA. Bu ekrandaki tek GERİ DÖNÜŞSÜZ düğme budur: dosya
@@ -331,14 +342,23 @@
 
           <!-- ---------------------------------------------------------- YAYIN -->
           <div v-else class="form-surface">
-            <p v-if="!plan" class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
+            <!-- Proje yüklemesindeki AYNI hata: plan çekilemediğinde `plan` null kalıyor ve
+                 sekme sonsuza kadar "Yükleniyor…" gösteriyordu. Burada bedeli daha yüksek:
+                 kullanıcı yayın sekmesini tam da yayınlamak için açıyor. -->
+            <p v-if="!plan && !planLoad.message.value" class="empty-state" role="status" aria-live="polite">
+              {{ t("panel.common.loading") }}
+            </p>
+            <SectionLoadError
+              v-else-if="!plan"
+              :message="planLoad.message.value"
+              @retry="openPublishTab" />
             <template v-else>
               <p class="meta">
                 {{ t("panel.siteBuilder.publishTarget") }}: <code>{{ plan.targetPath || "-" }}</code>
               </p>
 
               <p v-if="!plan.canPublish" class="notice error" role="alert">
-                {{ t(`sitebuilder.${blockedKeySuffix(plan.blockedReasonKey)}`) }}
+                {{ blockedReasonText(plan.blockedReasonKey) }}
               </p>
 
               <template v-else>
@@ -354,10 +374,10 @@
                   YAYINI ENGELLEMEZ (sayfa formsuz yayınlanır), o yüzden ayrı bir uyarı.
                 -->
                 <p v-if="plan.contactFormBlockedReasonKey" class="notice warn-banner" role="alert">
-                  {{ t(`sitebuilder.${blockedKeySuffix(plan.contactFormBlockedReasonKey)}`) }}
+                  {{ blockedReasonText(plan.contactFormBlockedReasonKey) }}
                 </p>
 
-                <h4>{{ t("panel.siteBuilder.publishFiles") }}</h4>
+                <h3>{{ t("panel.siteBuilder.publishFiles") }}</h3>
                 <ul class="sb-filelist">
                   <li v-for="file in plan.filesToWrite" :key="file"><code>{{ file }}</code></li>
                 </ul>
@@ -370,7 +390,7 @@
                   kararı sahibinindir (Dosya Yöneticisi ekranı).
                 -->
                 <template v-if="plan.orphanFiles.length">
-                  <h4>{{ t("panel.siteBuilder.orphanTitle") }}</h4>
+                  <h3>{{ t("panel.siteBuilder.orphanTitle") }}</h3>
                   <p class="meta">{{ t("panel.siteBuilder.orphanHint") }}</p>
                   <ul class="sb-filelist">
                     <li v-for="file in plan.orphanFiles" :key="file"><code>{{ file }}</code></li>
@@ -415,7 +435,7 @@
         <!-- ---------------------------------------------------------- ÖNİZLEME -->
         <div class="sb-preview">
           <div class="sb-preview-head">
-            <h4>{{ t("panel.siteBuilder.preview") }}</h4>
+            <h3>{{ t("panel.siteBuilder.preview") }}</h3>
             <div class="sb-actions">
               <!-- Önizleme hangi SAYFAYI gösteriyor: çok sayfalı bir sitede bu soru sorulmadan
                    önizleme yanıltıcı olurdu. -->
@@ -453,7 +473,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
-import { useNotice } from "../composables/useNotice";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useNotice, useSectionError } from "../composables/useNotice";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { formatDateTime } from "../utils/datetime";
 import {
@@ -505,6 +526,10 @@ const overwriteConfirmed = ref(false);
 // Bildirim + hata ÇEVİRİSİ tek kaynaktan (composables/useNotice.ts). Elle yazılmış `report()`
 // kopyası `t()` çağrısını atlıyordu ve kullanıcıya HAM ANAHTAR basıyordu.
 const { notice, noticeError, showNotice, showError } = useNotice();
+// "Yolda" ile "okunamadı" AYRI: ikisi de `project === null` durumundadır ve ekran ikisini de
+// "Yükleniyor…" diye gösteriyordu. Aynı ayrım yayın planı için de gerekli (`planLoad`).
+const projectLoad = useSectionError();
+const planLoad = useSectionError();
 
 const selectedSite = computed({
   get: () => sitesStore.selectedSiteName,
@@ -557,9 +582,11 @@ async function load() {
   try {
     project.value = await getSiteBuilderProject(selectedSite.value);
     images.value = await getSiteBuilderImages(selectedSite.value);
+    projectLoad.clear();
     await loadPreview();
   } catch (error) {
     report(error);
+    projectLoad.capture(error);
     project.value = null;
   } finally {
     loading.value = false;
@@ -625,6 +652,7 @@ async function openPublishTab() {
   tab.value = "publish";
   overwriteConfirmed.value = false;
   plan.value = null;
+  planLoad.clear();
   if (!selectedSite.value) {
     return;
   }
@@ -633,6 +661,7 @@ async function openPublishTab() {
     plan.value = await getSiteBuilderPublishPlan(selectedSite.value);
   } catch (error) {
     report(error);
+    planLoad.capture(error);
   }
 }
 
@@ -816,6 +845,27 @@ function slugProblem(page: SiteBuilderPage, index: number): string | null {
 /** Sunucudan gelen engel anahtarı ("sitebuilder.target_is_link") çeviriye çevrilir. */
 function blockedKeySuffix(key: string) {
   return key.startsWith("sitebuilder.") ? key.slice("sitebuilder.".length) : key;
+}
+
+/**
+ * Engel sebebinin OKUNUR metni.
+ *
+ * ÇEVİRİSİ YOKSA HAM ANAHTAR BASILMAZ. Şablon `t(\`sitebuilder.${suffix}\`)` yazıyordu; sunucu
+ * yeni bir sebep eklediği anda (bu sözlükte 19 sebep var ve liste sunucuda büyüyor) ekranda
+ * "sitebuilder.target_whatever" gibi bir kod belirirdi — üstelik tam da yayının ENGELLENDİĞİNİ
+ * anlatan satırda, yani kullanıcının en çok açıklamaya ihtiyaç duyduğu yerde. Aynı korumanın
+ * kalıbı bu depoda zaten var (`UsersView.kalintiMetni`, `AppsView.runtimeLabel`).
+ * Boş anahtar da elenir: `t("sitebuilder.")` çağrısı da ham metin basardı.
+ */
+function blockedReasonText(key: string): string {
+  const suffix = blockedKeySuffix(key ?? "");
+  if (!suffix) {
+    return t("panel.siteBuilder.publishBlockedUnknown");
+  }
+
+  const tamAnahtar = `sitebuilder.${suffix}`;
+  const cevrilen = t(tamAnahtar);
+  return cevrilen === tamAnahtar ? t("panel.siteBuilder.publishBlockedUnknown") : cevrilen;
 }
 
 /** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */

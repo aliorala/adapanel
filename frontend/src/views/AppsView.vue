@@ -37,9 +37,21 @@
     <!-- Yapılandırma gelmeden durum kartını göstermiyoruz: yüklenmemişken hostedByApp false
          olduğu için Node/Python ile barındırılan bir site "düz site" görünüyor ve kullanıcı
          barındırmanın kapalı olduğunu sanıyordu. -->
-    <p v-if="selectedSiteName && !configurationLoaded" class="empty-state" role="status" aria-live="polite">
+    <p v-if="selectedSiteName && !configurationLoaded && configurationLoading" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
+    <!-- "YÜKLENİYOR" SONSUZA KADAR YAZIYORDU. Ölçüldü: `appsStore.fetchConfiguration` hata
+         durumunda `configurations[site]`i HİÇ yazmıyor (bkz. stores/apps.ts), yani
+         `configurationLoaded` bir daha true olmuyor. İstek 500/403 dönünce ekranda kalıcı bir
+         "Yükleniyor…" kalıyor ve kullanıcı beklemeye devam ediyordu; tek işaret, kaybolan üst
+         bandın bir anlık mesajıydı.
+         Üçüncü durum artık ADIYLA var ve ÇIKIŞ YOLU sunuyor (panelin ortak "Tekrar dene"
+         bileşeni; aynı kalıp SiteBackupView ve AppToolkitView'de de kullanılıyor). -->
+    <SectionLoadError
+      v-else-if="selectedSiteName && !configurationLoaded"
+      :message="configurationLoad.message.value"
+      :busy="configurationLoading"
+      @retry="loadConfiguration(selectedSiteName)" />
 
     <template v-if="selectedSiteName && configurationLoaded">
       <!-- 1) DURUM: kullanıcının ilk gördüğü şey, sitenin şu an neyle hizmet verdiği. -->
@@ -192,7 +204,11 @@
         <div class="module-head">
           <div>
             <h3>{{ t("panel.apps.resultTitle") }}</h3>
-            <p>{{ t("panel.apps.resultHint") }}</p>
+            <!-- `.meta` EKLENDI: sayfanin ust basligindaki alt yazi (satir 10) bu sinifi tasiyor,
+                 bu tasimiyordu. Renk zaten ayni ciziliyordu (`.module-head p` de muted verir),
+                 gorunen fark satir yuksekliginde: 1.45 -> 1.5. Ayni ekranda iki alt baslik
+                 farkli ritimde akiyordu. -->
+            <p class="meta">{{ t("panel.apps.resultHint") }}</p>
           </div>
           <a v-if="siteUrl" class="site-link" :href="siteUrl" target="_blank" rel="noopener">
             {{ t("panel.apps.openSite") }}
@@ -249,7 +265,14 @@
       </section>
     </template>
 
-    <p v-else class="empty-state">
+    <!-- `v-else` İDİ ve BU YÜZDEN AYNI ANDA İKİ ÇELİŞKİLİ CÜMLE ÇİZİLİYORDU.
+         Zincir sayıldı: yukarıdaki "Yükleniyor" satırının koşulu `site && !configurationLoaded`,
+         asıl gövdeninki `site && configurationLoaded`. Bu satır o gövdenin `v-else`i olduğu için
+         YÜKLENİRKEN DE doğruydu — yani site seçilmiş, yapılandırma yolda, ekranda hem
+         "Yükleniyor…" hem de "Devam etmek için bir site seçin." yazıyordu. İkincisi kullanıcıya
+         ZATEN YAPTIĞI şeyi yapmasını söylüyor ve birincisini yalanlıyordu.
+         Koşul artık ölçtüğü şeyi söylüyor: yalnız site seçili DEĞİLKEN. -->
+    <p v-else-if="!selectedSiteName" class="empty-state">
       {{ t("panel.apps.selectSiteHint") }}
     </p>
   </section>
@@ -260,6 +283,8 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import CodeSample from "../components/CodeSample.vue";
 import FieldHint from "../components/FieldHint.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
+import { useSectionError } from "../composables/useNotice";
 import { extractApiMessage } from "../stores/auth";
 import { useAppsStore } from "../stores/apps";
 import { useSitesStore } from "../stores/sites";
@@ -325,6 +350,11 @@ const currentConfiguration = computed(() =>
 const hostedByApp = computed(() => Boolean(currentConfiguration.value?.isEnabled));
 // Yapılandırma sunucudan geldi mi? "Gelmedi" ile "barındırma kapalı" ekranda ayrışsın diye gerekli.
 const configurationLoaded = computed(() => currentConfiguration.value !== undefined && currentConfiguration.value !== null);
+// "Yolda" ile "okunamadı" AYRI: ikisi de `configurationLoaded === false` durumundadır ve ekran
+// ikisini de "Yükleniyor…" diye gösteriyordu. Bayrak mağazanın KENDİ alanından okunuyor, bu
+// ekranda ikinci bir kopya tutulmuyor.
+const configurationLoading = computed(() => appsStore.loadingSiteName === selectedSiteName.value);
+const configurationLoad = useSectionError();
 
 const hostedRuntimeLabel = computed(() => runtimeLabel(currentConfiguration.value?.runtimeType ?? "none"));
 
@@ -422,17 +452,28 @@ onMounted(async () => {
   }
 });
 
-watch(selectedSiteName, async (siteName) => {
+watch(selectedSiteName, (siteName) => {
+  void loadConfiguration(siteName);
+}, { immediate: true });
+
+// Tek giriş noktası: site değişimi, "Tekrar dene" ve "Yenile" üçü de buradan geçer, böylece
+// "okunamadı" durumu üç ayrı yerde ayrı ayrı temizlenmez. Önceden "Yenile" kendi try/catch'ini
+// yazıyordu; başarılı bir yenilemeden sonra hata satırı ekranda asılı kalırdı.
+async function loadConfiguration(siteName: string): Promise<boolean> {
   if (!siteName) {
-    return;
+    return false;
   }
 
   try {
     await appsStore.fetchConfiguration(siteName);
+    configurationLoad.clear();
+    return true;
   } catch (error) {
+    configurationLoad.capture(error);
     showNotice(resolveApiMessage(error), true);
+    return false;
   }
-}, { immediate: true });
+}
 
 watch(currentConfiguration, (configuration) => {
   if (!configuration) {
@@ -473,11 +514,8 @@ async function refreshConfiguration() {
     return;
   }
 
-  try {
-    await appsStore.fetchConfiguration(selectedSiteName.value);
+  if (await loadConfiguration(selectedSiteName.value)) {
     showNotice(t("panel.apps.refreshed"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
   }
 }
 

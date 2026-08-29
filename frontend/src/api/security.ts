@@ -7,6 +7,21 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
+/*
+ * ÖLÇÜM BAYRAKLARI TİPE GİRDİ — API ONLARI ZATEN GÖNDERİYORDU, ARAYÜZ GÖRMÜYORDU.
+ *
+ * ÖLÇÜLDÜ (kurulu panel, `GET /sites/{ad}/security` yanıtı): dönen gövdede
+ * `isIsolatedMeasured`, `folderAclMeasured`, `basicRulesMeasured`, `rateLimitMeasured`
+ * alanlarının DÖRDÜ DE var. Bu tip onları hiç bildirmediği için ekran da hiç okumuyordu:
+ * ölçüm başarısız olduğunda sunucu panelin son bildiği KAYDI döndürüyor, ekran ise onu
+ * ölçülmüş gibi yeşil/kehribar bir rozetle çiziyordu. Yani korunmayan bir site
+ * "korunuyor" görünebiliyordu (bkz. SiteSecurityConfigurationDto'nun kendi açıklaması:
+ * bayrak tam olarak bunu söylemek için eklenmiş).
+ *
+ * OPSİYONEL (`?`) BİLEREK: bu alanları göndermeyen ESKİ bir sunucuya bağlanıldığında
+ * `undefined` gelir. Onu "ölçülemedi" saymak, ölçülmüş bir değeri şüpheli göstermek olurdu —
+ * yani ters yönde bir yalan. Ekran yalnız `=== false` durumunda "Ölçülemedi" der.
+ */
 export type SiteSecurityConfiguration = {
   siteName: string;
   applicationPoolName: string;
@@ -16,6 +31,10 @@ export type SiteSecurityConfiguration = {
   basicRulesEnabled: boolean;
   requestsPerMinute: number;
   principal: string;
+  isIsolatedMeasured?: boolean;
+  folderAclMeasured?: boolean;
+  basicRulesMeasured?: boolean;
+  rateLimitMeasured?: boolean;
 };
 
 export async function getSiteSecurity(siteName: string) {

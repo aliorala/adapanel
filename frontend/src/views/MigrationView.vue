@@ -624,8 +624,25 @@ async function runBulk() {
     }
   }
   bulkBusy.value = false;
-  notice.value = t("panel.migration.bulkDone", { count: bulkLog.value.length });
-  noticeError.value = false;
+
+  /*
+   * TOPLU GÖÇ SONUCU ARTIK YALAN SÖYLEMİYOR.
+   *
+   * ÖNCESİ: sonuç şeridi KOŞULSUZ "{n} site işlendi." yazıyor ve `noticeError` KOŞULSUZ false
+   * kalıyordu. Yani beş sitenin BEŞİ DE başarısız olduğunda ekranın en görünür ögesi — üstelik
+   * `page-notice` ile sayfaya sabitlenmiş yeşil bir şerit — "5 site işlendi" diyordu. Hatalar
+   * yalnızca aşağıdaki günlükte, satır satır ✗ olarak duruyordu; şeridi okuyup sayfadan çıkan
+   * kullanıcı göçün başarılı olduğunu sanıyordu.
+   *
+   * "İşlendi" sözcüğü de tek başına doğruydu (denendi), ama tek başına yanıltıcıydı: bir kaç
+   * yüz megabaytlık göçte kullanıcının sorduğu soru "kaçı denendi" değil, "kaçı TUTTU".
+   * Sayı ikiye ayrıldı ve başarısızlık varsa şerit hata tonuna geçiyor.
+   */
+  const basarisiz = bulkLog.value.filter((entry) => !entry.overallSuccess).length;
+  notice.value = basarisiz > 0
+    ? t("panel.migration.bulkDoneFailed", { count: bulkLog.value.length, failed: basarisiz })
+    : t("panel.migration.bulkDone", { count: bulkLog.value.length });
+  noticeError.value = basarisiz > 0;
 }
 
 // Canlı göç: her aşama (plan/başla/sonuç/bitti) SSE ile gelir → checklist anlık güncellenir, kullanıcı

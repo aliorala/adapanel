@@ -591,24 +591,77 @@ async function wpAutoUpdate(enable: boolean) {
   }
 }
 
+/**
+ * "Güncelle": çekirdek + bütün eklentiler + bütün temalar.
+ *
+ * BAŞARISIZ GÜNCELLEME YEŞİL "Tamamlandı" DİYORDU. `exitCode` okunuyordu ama HİÇ BAKILMIYORDU:
+ * üç komut da hata dönse bile satır `showWpNotice(t("panel.wpkit.updated"), false)` ile
+ * BAŞARI olarak yazılıyordu. Kullanıcının güncellemenin yürümediğini anlamasının tek yolu, alt
+ * taraftaki ham çıktı bloğunu okuyup yorumlamaktı — panelin cevabı ise "Güncelleme tamamlandı."
+ * Bu, sitesini güncel sanan bir kullanıcı demektir; WordPress'te bunun bedeli güvenliktir.
+ *
+ * Doğru kalıp bu dosyada ZATEN VARDI: `wpAutoUpdate` aynı üçlü döngüyü kurup `exitCode`a bakıyor
+ * ve `ok`u aşağı taşıyor. Kopyalanan o kalıptır; komutlar, sıraları ve çıktı DEĞİŞMEDİ.
+ */
 async function wpUpdate() {
   wpBusy.value = "update";
   wpNotice.value = "";
   wpOutput.value = "";
   try {
     let combined = "";
+    let ok = true;
     for (const command of ["core update", "plugin update --all", "theme update --all"]) {
       const result = await runWpCliCommand(siteName.value, command);
       combined += `$ wp ${command}\n${result.output || ""}${result.error ? "\n" + result.error : ""}\n\n`;
+      if (result.exitCode !== 0) {
+        ok = false;
+      }
     }
     wpOutput.value = combined.trim();
-    showWpNotice(t("panel.wpkit.updated"), false);
+    showWpNotice(ok ? t("panel.wpkit.updated") : t("panel.wpkit.failed"), !ok);
+    // Liste BAŞARISIZ turdan sonra da tazelenir: bazı eklentiler geçmiş, bazıları geçmemiş
+    // olabilir ve kullanıcının göreceği sürümler gerçek durumu göstermelidir.
     await loadWp();
   } catch (error) {
     showWpNotice(resolveApiMessage(error), true);
   } finally {
     wpBusy.value = "";
   }
+}
+
+/**
+ * Sunucunun uyguladığı güvenlik önleminin KODU → panelin METNİ.
+ *
+ * HAM ANAHTAR EKRANDAYDI — hem de her seferinde. Şablon `t("panel.wpkit.sec_" + code)` çağırıyordu
+ * ama sözlükte `panel.wpkit.sec_*` diye TEK BİR ANAHTAR YOKTU (tr/en ikisinde de sıfır). Yani
+ * "Güvenlik" düğmesine basan herkes çıktı kutusunda şunu görüyordu:
+ *   ✓ panel.wpkit.sec_hide_version
+ *   ✓ panel.wpkit.sec_xmlrpc_pingback   ... (beş satır, beşi de kod)
+ * Kodlar `WordPressToolkitService`ten SAYILARAK alındı: hide_version, xmlrpc_pingback,
+ * author_enum, file_edit, salts.
+ *
+ * ANAHTARLAR NEDEN ELLE EŞLENİYOR (dize birleştirmesi değil): (1) sözlükteki anahtar kaynakta
+ * ARANABİLİR olur — kullanılmayan çeviri nöbetçisi dizeyi görebilsin diye, (2) sunucu yeni bir
+ * önlem eklediğinde ekrana yine ham `panel.wpkit.sec_...` basılmaz, aşağıdaki yedek yol devreye
+ * girer.
+ */
+const HARDEN_ETIKET_ANAHTARLARI: Record<string, string> = {
+  hide_version: "panel.wpkit.sec_hide_version",
+  xmlrpc_pingback: "panel.wpkit.sec_xmlrpc_pingback",
+  author_enum: "panel.wpkit.sec_author_enum",
+  file_edit: "panel.wpkit.sec_file_edit",
+  salts: "panel.wpkit.sec_salts"
+};
+
+/** Tanınmayan kodda SUNUCUNUN KODU yazılır; bir çeviri anahtarı asla yazılmaz. */
+function hardenEtiketi(code: string): string {
+  const anahtar = HARDEN_ETIKET_ANAHTARLARI[code];
+  if (!anahtar) {
+    return code;
+  }
+
+  const cevrilen = t(anahtar);
+  return cevrilen === anahtar ? code : cevrilen;
 }
 
 // panel "Güvenlik": önlem demetini backend'de uygular, uygulanan önlemleri etiketleyip listeler.
@@ -620,8 +673,16 @@ async function wpHarden() {
   wpNotice.value = "";
   try {
     const result = await hardenWordPress(siteName.value);
-    wpOutput.value = result.applied.map((code) => `✓ ${t("panel.wpkit.sec_" + code)}`).join("\n");
-    showWpNotice(t("panel.wpkit.hardened"), false);
+    wpOutput.value = result.applied.map((code) => `✓ ${hardenEtiketi(code)}`).join("\n");
+    // HİÇBİR ÖNLEM UYGULANMADIYSA "uygulandı" DENMEZ. Sunucu wp-config'e yazamadığında
+    // (dosya salt okunur, izin yok) boş bir liste dönebiliyor; eski hâlde ekran yine yeşil
+    // "Güvenlik uygulandı" diyor ve altındaki çıktı kutusu BOMBOŞ kalıyordu.
+    showWpNotice(
+      result.applied.length > 0 ? t("panel.wpkit.hardened") : t("panel.wpkit.hardenedNone"),
+      result.applied.length === 0);
+    // Uygulanan önlemler yukarıdaki "Güvenlik durumu" listesini değiştirir; tazelenmezse
+    // kullanıcı az önce kapattığı ayarı hâlâ "Kapalı" görürdü.
+    await loadWp();
   } catch (error) {
     showWpNotice(resolveApiMessage(error), true);
   } finally {

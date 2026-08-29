@@ -61,7 +61,7 @@
 
     <div class="monitor-columns">
       <section class="panel">
-        <h2>{{ t("panel.system.serverInfo") }}</h2>
+        <h3>{{ t("panel.system.serverInfo") }}</h3>
 
         <!-- `info-grid` + `info-card` SARMALAYICILARI KALDIRILDI. Panoda o iki ad ANLAMLI: orada
              yan yana İKİ kart var (sunucu bilgisi + diskler) ve ızgara onları diziyor. Burada
@@ -94,10 +94,16 @@
             <dd>{{ formatTimeSpan(overview.uptime) }}</dd>
           </div>
         </dl>
+
+        <!-- ÖLÇÜLDÜ: `overview` gelmeden bu üç panel BAŞLIKTAN İBARETTİ — kenarlıklı, boş bir
+             kutu. Boş kutu "burada bir şey yok" diye okunur; oysa doğrusu "henüz gelmedi".
+             Aynı sayfanın üst şeridi zaten durumu söylüyordu, alt panelleri sessiz bırakmak
+             tutarsızdı. -->
+        <p v-else class="meta" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       </section>
 
       <section class="panel">
-        <h2>{{ t("panel.system.disks") }}</h2>
+        <h3>{{ t("panel.system.disks") }}</h3>
 
         <div v-if="overview" class="mini-table">
           <div class="mini-row table-head disk-row">
@@ -125,11 +131,12 @@
             <span>{{ formatBytes(disk.freeBytes) }}</span>
           </div>
         </div>
+        <p v-else class="meta" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
       </section>
     </div>
 
     <section class="panel">
-      <h2>{{ t("panel.system.network") }}</h2>
+      <h3>{{ t("panel.system.network") }}</h3>
 
       <div v-if="overview" class="mini-table">
         <div class="mini-row table-head network-row">
@@ -139,13 +146,30 @@
           <span>{{ t("panel.system.total") }}</span>
         </div>
 
+        <!-- ÜÇÜNCÜ SÜTUN BİR HIZDI AMA BİRİKMİŞ TOPLAM GİBİ YAZILIYORDU.
+             CANLI ÖLÇÜLDÜ (Ethernet 2): satır `120 KiB/sn · 563 KiB/sn · 683 KiB` diyordu.
+             İlk iki hücre `/sn` taşıyor, üçüncüsü TAŞIMIYOR — ama üçü de aynı iki alandan,
+             yani saniyelik hızdan geliyor. Sütunun adı da ("Toplam trafik") panelin HİÇ
+             ölçmediği bir şeyi, birikmiş trafiği vaat ediyordu; `bytesReceivedPerSecond` bir
+             sayaç değil, anlık orandır. İki düzeltme birlikte: biçim `formatSpeed`e alındı
+             (aynı satırdaki komşularıyla tek dil) ve sütun adı "Toplam"a indi — birimi artık
+             hücrenin kendisi söylüyor. Sütun KALDIRILMADI: indirme+yükleme toplamı, hangi
+             arayüzün yükü taşıdığını tek bakışta veren şeydir. -->
         <div v-for="network in overview.networkInterfaces" :key="network.name" class="mini-row network-row">
           <span>{{ network.name }}</span>
           <span>{{ formatSpeed(network.bytesReceivedPerSecond) }}</span>
           <span>{{ formatSpeed(network.bytesSentPerSecond) }}</span>
-          <span>{{ formatBytes(network.bytesReceivedPerSecond + network.bytesSentPerSecond) }}</span>
+          <span>{{ formatSpeed(network.bytesReceivedPerSecond + network.bytesSentPerSecond) }}</span>
+        </div>
+
+        <!-- Ağ arayüzü listesi BOŞ dönebilir (kapalı/filtrelenmiş arayüzler). Eskiden geriye
+             yalnız başlık satırı kalıyordu: tablo "yüklenmedi" mi "hiç arayüz yok" mu
+             söylemiyordu. -->
+        <div v-if="overview.networkInterfaces.length === 0" class="mini-row">
+          <span class="meta">{{ t("panel.system.networkEmpty") }}</span>
         </div>
       </div>
+      <p v-else class="meta" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
 
       <!-- GRAFİĞİN ÖLÇEĞİ YOKTU: kutunun içinde iki eğri vardı ama ne eksen, ne ızgara, ne de
            tek bir sayı. Kullanıcı bir tepenin 2 KB/sn mi 200 MB/sn mi olduğunu okuyamıyor,
@@ -173,8 +197,16 @@
             <polyline class="up" :points="netUpSpark" />
           </svg>
         </div>
+        <!-- X EKSENİNİN SOL UCU SABİT BİR CÜMLEYDİ ("Son ~24 saat") VE ÖLÇÜMLE İLGİSİ YOKTU.
+             CANLI ÖLÇÜLDÜ: `polyline` 4 NOKTA taşırken eksen 24 saat yazıyordu. Sunucu dakikada
+             bir örneklediği için o grafik ~4 dakikalık bir pencereydi; yani panel, elinde
+             olmayan bir geçmişi varmış gibi gösteriyordu. Panel yeni kurulduğunda ya da servis
+             yeniden başladığında grafik HEP böyle başlar, yani bu istisna değil ilk hâl.
+             Veri zaten elimizdeydi: `SystemHistorySample.timestampUtc` (bkz. stores/system.ts)
+             hiç okunmuyordu. Sol uç artık ilk örneğin GERÇEK zamanı; biçim panelin geri
+             kalanıyla aynı (utils/datetime.ts). -->
         <div class="net-axis-x" aria-hidden="true">
-          <span>{{ t("panel.monitor.trend10m") }}</span>
+          <span>{{ trendStartLabel }}</span>
           <span>{{ t("panel.monitor.trendNow") }}</span>
         </div>
         <div class="net-legend">
@@ -189,7 +221,7 @@
     <section class="panel">
       <div class="section-head">
         <div>
-          <h2>{{ t("panel.processes.title") }}</h2>
+          <h3>{{ t("panel.processes.title") }}</h3>
           <p class="meta">{{ t("panel.processes.subtitle") }}</p>
         </div>
         <div class="row-actions">
@@ -271,7 +303,7 @@
     <section class="panel">
       <div class="section-head">
         <div>
-          <h2>{{ t("panel.consumers.title") }}</h2>
+          <h3>{{ t("panel.consumers.title") }}</h3>
           <p class="meta">{{ t("panel.consumers.subtitle", { name: consumerSourceLabel }) }}</p>
         </div>
         <label class="stacked-field consumer-source">
@@ -380,6 +412,10 @@ const netScale = computed(() => Math.max(1, ...netDownSeries.value, ...netUpSeri
 const netDownSpark = computed(() => spark(netDownSeries.value, netScale.value));
 const netUpSpark = computed(() => spark(netUpSeries.value, netScale.value));
 const hasNetTrend = computed(() => systemStore.history.length > 1);
+
+/** Grafiğin sol ucu: pencereyi UYDURMAK yerine ilk örneğin kendi zaman damgasını yazar. */
+const trendStartLabel = computed(() =>
+  formatDateTime(systemStore.history[0]?.timestampUtc ?? null, t("panel.common.notAvailable")));
 
 // --- "Şu an kim kullanıyor?" kaynak seçimi ---
 const consumerSource = ref<ConsumerSource>("mariadb");

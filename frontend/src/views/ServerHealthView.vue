@@ -173,6 +173,18 @@
       </dl>
     </article>
 
+    <!-- SERVIS LISTESININ BASLIGI YOKTU. Ekranda sirayla: sayfa basligi (h2), DNS karti,
+         alan adi karti, sonra HICBIR SEY DEMEDEN servis satirlari. Ustundeki karta ait bir
+         devam listesi gibi okunuyordu; ayrica sayfanin baslik merdiveni bu bolumde KOPUYORDU
+         (h2 -> hicbir sey). Ayni dosyada `module-head` icin zaten "sayfa h2, bolum h3" karari
+         yazili -- eksik olan, bu bolumun o karara hic dahil edilmemis olmasiydi. -->
+    <div class="section-head">
+      <div>
+        <h3>{{ t("panel.health.servicesTitle") }}</h3>
+        <p class="meta">{{ t("panel.health.servicesHint") }}</p>
+      </div>
+    </div>
+
     <p v-if="loading && !services.length" class="meta">{{ t("panel.common.loading") }}</p>
 
     <div v-else-if="services.length" class="health-list">

@@ -6,16 +6,16 @@
         <h2>{{ t("panel.firewall.title") }}</h2>
         <p class="meta">{{ t("panel.firewall.subtitle") }}</p>
       </div>
+      <!-- "KURAL EKLE" BURADAN INDI (asagida, kendi bolumunun basligina).
+           OLCULDU (kurulu panel, 1395x955 pencere): dugmeye basildiginda acilan form belgede
+           1420px'te basliyordu, dugme ise 275px'te -- arasinda 1145px, yani gorunur alandan
+           190px DAHA fazla. Kullanici "Kural ekle"ye basiyor, ekranda HICBIR SEY degismiyordu;
+           acilan form 15 satirlik port tablosunun altinda, katlamanin otesinde kaliyordu.
+           Bu, SecurityView'de "Yenile" dugmesi icin verilmis kararin aynisi: bir dugme,
+           uzerinde calistigi seyin yaninda durur.
+           "Kurallari yenile" ust satirda KALIYOR cunku ikisini de (portlar + kurallar)
+           tazeliyor; tek bir bolume ait degil. -->
       <div class="row-actions">
-        <!-- "Yeni kural" BIRINCIL DEGIL: SAYILDI, bu ekranda ayni anda uc mavi birincil dugme
-             gorunebiliyordu (yeni kural + eksik portlari ac + izin ver). Birincil "sayfanin
-             sana onerdigi is" demektir; bir formu ACIP KAPATAN anahtar degil. Ayni karar
-             ClusterView'de zaten verilmisti ("Dugum ekle" = secondary), iki ekran artik ayni.
-             Geriye kalan tek birincil, sayfanin gercekten olctugu sorunu duzelten
-             "eksik portlari ac" dugmesi -- ve o da yalnizca eksik varken cikiyor. -->
-        <button class="secondary compact" @click="showRuleForm = !showRuleForm">
-          {{ showRuleForm ? t("panel.common.cancel") : t("panel.firewall.newRule") }}
-        </button>
         <button class="secondary compact" :disabled="loading || loadingPorts" @click="refreshAll">{{ t("panel.firewall.refresh") }}</button>
       </div>
     </div>
@@ -34,8 +34,18 @@
           <p class="meta">{{ t("panel.firewall.ports.hint") }}</p>
         </div>
         <div class="row-actions">
-          <span class="ports-summary">{{ t("panel.firewall.ports.summary", { open: requiredOpenCount, total: requiredTotalCount }) }}</span>
-          <button v-if="missingRequired.length > 0" class="compact" :disabled="busy" @click="openAllMissing">
+          <!-- "0/0 GEREKLI PORT HAZIR" YAZMIYOR ARTIK.
+               CANLI OLCULDU (kurulu panel, sekme acilir acilmaz): ozet satiri kosulsuz
+               ciziliyordu ve liste gelene kadar "0/0 gerekli port hazir" yaziyordu; olcum
+               bitince "2/6" oluyordu. Iki ayri yalan birden: (a) yuklenirken sayi UYDURULMUS
+               oluyordu, (b) istek BASARISIZ olursa dizi bos kaldigi icin cumle sonsuza kadar
+               "0/0" -- yani "gerekli port yok, her sey yolunda" gibi okunan bir kapanis
+               raporu. Guvenlik ekraninda bu, kapali bir portu "sorun yok" saymak demektir.
+               `portsLoaded` kalibi bu depoda kanitli (SiteBackupView.listLoaded,
+               SecurityView.firewallLoaded): `loading` hata halinde de false'a doner, o yuzden
+               "bir kez BASARIYLA okundu mu" ayri tutulur. -->
+          <span v-if="portsLoaded" class="ports-summary">{{ t("panel.firewall.ports.summary", { open: requiredOpenCount, total: requiredTotalCount }) }}</span>
+          <button v-if="portsLoaded && missingRequired.length > 0" class="compact" :disabled="busy" @click="openAllMissing">
             {{ t("panel.firewall.ports.openAllMissing") }}
           </button>
         </div>
@@ -96,17 +106,38 @@
       </div>
     </div>
 
+    <!-- BOLUM BASLIGI EKLENDI. OLCULDU (kurulu panel, `document.querySelectorAll('.panel h2,.panel h3')`):
+         bu ekranda YALNIZ IKI baslik vardi -- h2 "Windows Firewall" ve h3 "Servis portlari".
+         Ikinci tablo (16 satirlik kural listesi) hicbir basligin altinda degildi: port tablosu
+         bitiyor, altinda adsiz ikinci bir tablo basliyordu. Sayfanin alt basligi bu listeyi
+         anlatiyordu ama o metin ~1400px yukarida duruyor ve baslikla gezinen bir okuyucu
+         (ekran okuyucu dahil) bolume hic ulasamiyordu. Sayfa alt basligi artik SAYFAYI,
+         bu baslik da KURAL LISTESINI anlatiyor. -->
+    <div class="section-head rules-head">
+      <div>
+        <h3>{{ t("panel.firewall.rulesTitle") }}</h3>
+        <p class="meta">{{ t("panel.firewall.rulesHint") }}</p>
+      </div>
+      <button class="secondary compact" @click="showRuleForm = !showRuleForm">
+        {{ showRuleForm ? t("panel.common.cancel") : t("panel.firewall.newRule") }}
+      </button>
+    </div>
+
     <form v-if="showRuleForm" class="form-surface rule-form" @submit.prevent="saveRule('allow')">
+      <!-- Etiketler ORTAK `.field-label` sinifina alindi: bu formun uc etiketi ciplak `<span>`
+           idi ve panelin geri kalanindaki (SecurityView, MigrationView, FilesView...) alan
+           etiketlerinden farkli boy/agirlikta ciziliyordu. Ayni ekranin iki formu -- yukaridaki
+           port satirlari ve bu -- ayni dilde konussun. -->
       <label>
-        <span>{{ t("panel.firewall.ruleName") }}</span>
+        <span class="field-label">{{ t("panel.firewall.ruleName") }}</span>
         <input v-model="form.ruleName" maxlength="128" :placeholder="t('panel.firewall.ruleNameHint')" />
       </label>
       <label>
-        <span>{{ t("panel.sites.port") }}</span>
+        <span class="field-label">{{ t("panel.sites.port") }}</span>
         <input v-model.number="form.port" type="number" min="1" max="65535" required />
       </label>
       <label>
-        <span>{{ t("panel.firewall.protocol") }}</span>
+        <span class="field-label">{{ t("panel.firewall.protocol") }}</span>
         <select v-model="form.protocol">
           <option value="TCP">TCP</option>
           <option value="UDP">UDP</option>
@@ -135,7 +166,16 @@
              ayni hizada (asagidaki `.rule-row > :nth-child(3)`), yoksa baslik sola, deger
              saga kayip sutun ikiye bolunmus gorunuyordu. -->
         <span class="port-number">{{ rule.localPort || "-" }}</span>
-        <span :class="['status', rule.action.toLowerCase()]">{{ rule.action }}</span>
+        <!-- HAM "Allow" / "Block" EKRANDAN KALKTI.
+             CANLI SAYILDI (kurulu panel): 16 kural satirinin 16'sinda Windows'un dondurdugu
+             Ingilizce deger Turkce panelde oldugu gibi basiliyordu -- ustelik hemen yukaridaki
+             formda AYNI iki eylemin dugmeleri "Izin ver" / "Engelle" yaziyordu. Ayni kavram tek
+             ekranda iki dilde goruluyordu. SecurityView bunu bir tur once cozmustu; kural artik
+             ikisinin de kullandigi tek kaynakta (utils/firewallAction.ts).
+             RENK DE DUZELDI: `.status` varsayilani YESILDI ve yalnizca `.block` kirmizi
+             yaziyordu, yani Windows tanimadigimiz bir eylem donduren bir kural verse ekran onu
+             "izin verildi" yesiliyle cizerdi. Simdi yesil YALNIZ "allow"a ait. -->
+        <span :class="['status', actionKind(rule.action)]">{{ actionLabel(rule.action) }}</span>
         <span>{{ rule.enabled ? t("panel.status.enabled") : t("panel.status.disabled") }}</span>
       </div>
       <p v-if="loading && rules.length === 0" class="empty-state" role="status" aria-live="polite">
@@ -152,6 +192,8 @@ import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, getPortStatus, type FirewallRule, type PortStatus } from "../api/firewall";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage } from "../stores/auth";
+// Eylem sözcüğü İKİ ekranda çiziliyor; kural tek kaynakta (bkz. utils/firewallAction.ts).
+import { firewallActionLabel, normalizeFirewallAction } from "../utils/firewallAction";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -159,6 +201,9 @@ const rules = ref<FirewallRule[]>([]);
 const portStatus = ref<PortStatus[]>([]);
 const loading = ref(false);
 const loadingPorts = ref(false);
+// Port kataloğu BİR KEZ başarıyla okundu mu. `loadingPorts` hata durumunda da false olur ve
+// boş dizi "0/0 gerekli port hazır" diye okunuyordu — gerekçe şablonda, özet satırında.
+const portsLoaded = ref(false);
 const busy = ref(false);
 const notice = ref("");
 const noticeError = ref(false);
@@ -221,11 +266,22 @@ async function refreshPorts() {
   loadingPorts.value = true;
   try {
     portStatus.value = await getPortStatus();
+    portsLoaded.value = true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {
     loadingPorts.value = false;
   }
+}
+
+/** Kural eyleminin sözcüğü — kural `utils/firewallAction.ts`te, burada yalnız `t` bağlanır. */
+function actionLabel(action: string) {
+  return firewallActionLabel(t, action);
+}
+
+/** Renk sınıfı: yalnız tanınan iki eylem renk alır, tanınmayan NÖTR kalır (gerekçe şablonda). */
+function actionKind(action: string) {
+  return normalizeFirewallAction(action);
 }
 
 function serviceName(key: string) {
@@ -431,14 +487,29 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
    OLCULDU: bu ekranda `--accent-1` ayni anda uc ayri sey demekti -- birincil dugme dolgusu,
    "zorunlu" etiketi ve "izin verildi" durumu. Panelin geri kalaninda olumlu durum `--ok-*`
    ile yaziliyor (`.status-pill.ok`, ServerHealth, Cluster). Tek ekranin kendi renk sozlugu
-   olmasin diye izin/engel ciftine panelin yesil/kirmizi ciftini veriyoruz. */
+   olmasin diye izin/engel ciftine panelin yesil/kirmizi ciftini veriyoruz.
+   VARSAYILAN ARTIK NOTR: once `.status`in KENDISI yesildi ve yalnizca `.block` kirmiziya
+   donuyordu -- yani Windows tanimadigimiz bir eylem donderirse ("Allow"/"Block" disinda bir
+   deger) o satir "izin verildi" yesiliyle cizilirdi. Renk, sozcugun bilmedigi bir seyi iddia
+   ediyordu. Yesil artik YALNIZ `allow`a ait. */
 .status {
-  color: var(--ok-text);
+  color: var(--text-muted);
   font-weight: 700;
+}
+
+.status.allow {
+  color: var(--ok-text);
 }
 
 .status.block {
   color: var(--danger-text);
+}
+
+/* Kural bolumunun basligi ile ust bolumun tablosu arasinda nefes: `.ports-block` kendi alt
+   cizgisini ve boslugunu tasiyor, kural basligi ise dogrudan `.module-shell` izgarasinda
+   duruyor. Ayrica dugmenin basligin ustune degil YANINA gelmesi icin hizalama tepeden. */
+.rules-head {
+  align-items: flex-start;
 }
 
 .ports-block {

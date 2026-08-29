@@ -68,40 +68,71 @@
       <!-- `security-summary` KALDIRILDI: kural birebir base.css'teki `.summary-strip` idi
            (`repeat(4, minmax(0,1fr))`) ve alttaki 900px kirilimi da base'dekinin AYNISIYDI.
            Iki kopya ayni seyi soyluyordu; tek kaynak birakildi. -->
+      <!-- ÖLÇÜLEMEYEN DEĞER ARTIK "AÇIK"/"KAPALI" DEMİYOR.
+           ÖLÇÜLDÜ (kurulu panel, `GET /sites/alioral.xyz/security` yanıtı): sunucu dört
+           `*Measured` bayrağını da gönderiyor, arayüz hiçbirini okumuyordu. Ölçüm başarısızsa
+           sunucu son bilinen KAYDI döndürür — ekran ise onu ölçülmüş gibi yeşil "Açık" rozetiyle
+           çiziyordu. Bu ekranda o hata, korunmayan bir siteye "korunuyor" demek anlamına gelir;
+           bu depodaki en pahalı hata sınıfı budur.
+           ÜÇ DURUM, ÜÇ ROZET: açık / kapalı / ölçülemedi. Ölçülemeyeni "kapalı" göstermek de
+           yanlış olurdu (geçici arızayı kalıcı yanlış duruma çevirir) — nitekim arka uçtaki
+           DTO'nun kendi açıklaması bu bayrağı tam olarak bunun için taşıyor. -->
       <div v-else-if="securityConfig" class="summary-strip">
         <div class="summary-item">
           <span>{{ t("panel.security.isolationStatus") }}</span>
-          <strong :class="['status-pill', securityConfig?.isIsolated ? 'ok' : 'warn']">
-            {{ securityConfig?.isIsolated ? t("panel.status.enabled") : t("panel.status.disabled") }}
+          <strong :class="['status-pill', stateTone(securityConfig.isIsolated, securityConfig.isIsolatedMeasured)]">
+            {{ stateLabel(securityConfig.isIsolated, securityConfig.isIsolatedMeasured) }}
           </strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.security.aclStatus") }}</span>
-          <strong :class="['status-pill', securityConfig?.folderAclApplied ? 'ok' : 'warn']">
-            {{ securityConfig?.folderAclApplied ? t("panel.status.enabled") : t("panel.status.disabled") }}
+          <strong :class="['status-pill', stateTone(securityConfig.folderAclApplied, securityConfig.folderAclMeasured)]">
+            {{ stateLabel(securityConfig.folderAclApplied, securityConfig.folderAclMeasured) }}
           </strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.security.rulesStatus") }}</span>
-          <strong :class="['status-pill', securityConfig?.basicRulesEnabled ? 'ok' : 'warn']">
-            {{ securityConfig?.basicRulesEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
+          <strong :class="['status-pill', stateTone(securityConfig.basicRulesEnabled, securityConfig.basicRulesMeasured)]">
+            {{ stateLabel(securityConfig.basicRulesEnabled, securityConfig.basicRulesMeasured) }}
           </strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.security.requestsPerMinute") }}</span>
-          <strong>{{ securityConfig?.requestsPerMinute || t("panel.security.unlimited") }}</strong>
+          <!-- "Sınırsız" YALNIZ ÖLÇÜLDÜYSE yazılır: DTO'da 0 = sınır yok demek, ama web.config
+               okunamadığında da 0 gelir. İki hâli aynı kelimeyle anlatmak, sınırı olmayan bir
+               siteyi değil, sınırı BİLİNMEYEN bir siteyi "sınırsız" ilan etmekti. -->
+          <strong v-if="securityConfig.rateLimitMeasured === false" class="status-pill warn">
+            {{ t("panel.security.unmeasured") }}
+          </strong>
+          <strong v-else>{{ securityConfig.requestsPerMinute || t("panel.security.unlimited") }}</strong>
         </div>
       </div>
+
+      <!-- Rozet tek başına "neden" demiyor; açıklama şeridin ALTINDA, yalnızca gerçekten
+           ölçülemeyen bir satır varken çıkar. Her açılışta duran bir uyarı okunmaz olur. -->
+      <p v-if="securityConfig && hasUnmeasured" class="field-hint">{{ t("panel.security.unmeasuredHint") }}</p>
 
       <div v-if="showSiteForm" class="form-surface">
         <div class="form-grid">
           <label>
             <span class="field-label">{{ t("panel.security.principal") }}</span>
-            <input v-model="aclForm.principal" />
+            <!-- Yer tutucu FilesView'daki AYNI alandan geliyor: kutunun ne beklediğini boş
+                 bir kutu söylemiyordu, "IIS_IUSRS" biçimi tek bakışta anlatıyor. -->
+            <input v-model="aclForm.principal" placeholder="IIS_IUSRS" spellcheck="false" />
           </label>
           <label>
             <span class="field-label">{{ t("panel.security.rights") }}</span>
-            <input v-model="aclForm.rights" />
+            <!-- HAM `icacls` KODU EKRANDAN KALKTI. Alan serbest metin kutusuydu ve içinde tek
+                 başına "M" yazıyordu; bu, kullanıcının icacls'in harf kodlarını EZBERE bilmesini
+                 şart koşuyor, üstelik yanlış yazılan bir harf sunucuya hata olarak gidiyordu.
+                 Panelin AYNI ayarı FilesView'da zaten çevrilmiş bir listeyle soruyordu ve
+                 `panel.security.rights.read/modify/full` anahtarları oradan beri VAR — yani
+                 burada çeviri eksik değildi, kullanılmıyordu. Gönderilen değer aynı: R / M / F. -->
+            <select v-model="aclForm.rights">
+              <option value="R">{{ t("panel.security.rights.read") }}</option>
+              <option value="M">{{ t("panel.security.rights.modify") }}</option>
+              <option value="F">{{ t("panel.security.rights.full") }}</option>
+            </select>
           </label>
           <label>
             <span class="field-label">{{ t("panel.security.requestsPerMinute") }}</span>
@@ -191,9 +222,11 @@
                ("Allow" / "Block") basılıyordu — panelin Türkçesinde İngilizce, üstelik hemen
                üstteki formda AYNI iki eylemin düğmeleri "İzin ver" / "Engelle" yazıyordu. Aynı
                kavram tek ekranda iki dilde görünüyordu.
-               TANINMAYAN DEĞER ÇEVRİLMEZ, HAM basılır (bkz. `firewallActionLabel`): Windows
-               başka bir eylem döndürürse ona "Engelle" demek, ölçülmemiş bir iddia olurdu. -->
-          <span :class="['status-pill', rule.action.toLowerCase() === 'allow' ? 'ok' : 'warn']">{{ firewallActionLabel(rule.action) }}</span>
+               TANINMAYAN DEĞER ÇEVRİLMEZ, HAM basılır (bkz. `utils/firewallAction.ts`): Windows
+               başka bir eylem döndürürse ona "Engelle" demek, ölçülmemiş bir iddia olurdu.
+               RENK DE ÜÇE ÇIKTI: eskiden "allow değilse warn" idi, yani TANINMAYAN bir eylem
+               "engelleniyor" tonunda çiziliyordu — sözcük dürüstken renk uyduruyordu. -->
+          <span :class="['status-pill', actionTone(rule.action)]">{{ actionLabel(rule.action) }}</span>
           <!-- Panelin kendi kuralları GERİ ALINABİLİR olmalı: kural yazıp silememek tek yönlü bir
                kapıydı, yanlışlıkla eklenen bir engelleme panelden kaldırılamıyordu. -->
           <span class="row-actions">
@@ -435,6 +468,8 @@ import {
   type AntivirusStatus
 } from "../api/antivirus";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+// Eylem sözcüğü İKİ ekranda çiziliyor; kural tek kaynakta (bkz. utils/firewallAction.ts).
+import { firewallActionLabel, normalizeFirewallAction } from "../utils/firewallAction";
 import { useSitesStore } from "../stores/sites";
 
 const { t } = useI18n();
@@ -796,17 +831,46 @@ async function removeRule(ruleName: string) {
   });
 }
 
-/**
- * Güvenlik duvarı kuralının eylemi — TANINIYORSA çevrilir, tanınmıyorsa HAM basılır.
+/*
+ * SİTE GÜVENLİK ROZETİ — ÜÇ DURUM, TEK KAYNAK.
  *
- * Windows'un döndürdüğü değer bu iki dizgeyle sınırlı olmayabilir; bilinmeyen bir değeri
- * "Engelle" diye etiketlemek, kullanıcıya ölçülmemiş bir iddia sunmak olurdu. Rozetin RENGİ
- * zaten aynı ikili ayrımı yapıyor (şablon), bu fonksiyon yalnız SÖZCÜĞÜ düzeltir.
+ * `measured === false` DIŞINDA hiçbir şey "ölçülemedi" saymaz: alanı hiç göndermeyen eski bir
+ * sunucuda değer `undefined` gelir ve ölçülmüş bir sonucu şüpheli göstermek, ters yönde bir
+ * yalan olurdu (gerekçe api/security.ts'te).
+ *
+ * TON `warn`: ölçülemeyen bir koruma "iyi" (yeşil) de değildir, "kesin arıza" (kırmızı) da
+ * değildir — panelin bilmediği bir şeydir. Panelin bilinmeyen için kullandığı ton bu.
  */
-function firewallActionLabel(action: string): string {
-  const normal = action.trim().toLowerCase();
-  if (normal === "allow") return t("panel.firewall.allow");
-  return normal === "block" ? t("panel.firewall.block") : action;
+function stateLabel(value: boolean, measured?: boolean): string {
+  if (measured === false) return t("panel.security.unmeasured");
+  return value ? t("panel.status.enabled") : t("panel.status.disabled");
+}
+
+function stateTone(value: boolean, measured?: boolean): string {
+  if (measured === false) return "warn";
+  return value ? "ok" : "warn";
+}
+
+// Açıklama şeridi yalnız gerçekten ölçülemeyen bir satır varken çıksın diye tek yerde toplanır.
+const hasUnmeasured = computed(() => {
+  const config = securityConfig.value;
+  if (!config) return false;
+  return config.isIsolatedMeasured === false
+    || config.folderAclMeasured === false
+    || config.basicRulesMeasured === false
+    || config.rateLimitMeasured === false;
+});
+
+/** Kural eyleminin sözcüğü — kural `utils/firewallAction.ts`te, burada yalnız `t` bağlanır. */
+function actionLabel(action: string): string {
+  return firewallActionLabel(t, action);
+}
+
+/** İzin = iyi, engel = uyarı, TANINMAYAN = nötr (rozetin varsayılanı "henüz bir şey demiyorum"). */
+function actionTone(action: string): string {
+  const kind = normalizeFirewallAction(action);
+  if (kind === "allow") return "ok";
+  return kind === "block" ? "warn" : "";
 }
 
 /** Tarama sonucunun tonu: bulaşma bir UYARI değil, kritik bir bulgudur (gerekçe şablonda). */
