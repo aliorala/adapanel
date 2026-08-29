@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide protected-view">
+  <section class="panel protected-view">
     <div class="pd-header">
       <div>
         <p class="section-kicker">{{ t("panel.sites.tools.protected") }}</p>
@@ -43,6 +43,22 @@
           <div class="pd-id">
             <strong>/{{ item.relativePath }}</strong>
             <span class="meta">{{ t("panel.protected.user") }}: {{ item.userName }}</span>
+
+            <!--
+              KAYIT VAR DEMEK KORUMA ÇALIŞIYOR DEMEK DEĞİL.
+
+              Doğrulamayı AdaPanel'in IIS modülü yapıyor; modül kayıtlı değilse kayıt durur ama
+              hiçbir isteği durdurmaz. Bunu göstermemek, korunmayan bir klasörü korunuyor diye
+              sunmak olurdu — bu depoda en pahalı hata sınıfı budur.
+            -->
+            <span v-if="!item.isActive" class="status-pill warn" role="alert">
+              {{ t("protected.engine_not_ready") }}
+            </span>
+
+            <!-- Eski sürümden kalan düz metin parola: dönüşüm otomatik ama modül kaydı gerekiyor. -->
+            <span v-else-if="item.isLegacyPlaintext" class="status-pill warn">
+              {{ t("panel.protected.legacyPlaintext") }}
+            </span>
           </div>
           <button class="danger compact" v-bind="writeGate(removing === item.relativePath)" @click="remove(item)">
             {{ t("panel.protected.remove") }}
@@ -162,7 +178,6 @@ async function remove(item: ProtectedDirectory) {
 }
 
 .pd-header,
-.section-head,
 .pd-row {
   display: flex;
   align-items: center;

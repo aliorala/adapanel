@@ -21,12 +21,35 @@ export type FtpServerStatus = {
   controlPort: number;
   passivePortStart: number;
   passivePortEnd: number;
+  /** YALNIZ `statusMessage === "ftp.server_ready"` iken true (bkz. FtpService.GetServerStatusAsync). */
   isConfigured: boolean;
+  /** Durumun SEBEBİ, i18n anahtarı olarak: `ftp.server_ready`, `ftp.control_port_conflict`, … */
   statusMessage: string;
+  /** Microsoft FTP Service (FTPSVC) durumu — ölçülemezse boş. */
+  serviceState: string;
+  /** IIS FTP sitesinin durumu (`Started`/`Stopped`/…) — ölçülemezse boş. */
+  siteState: string;
+  isSiteRunning: boolean;
+  /** Denetim portunu (21) panelin servisi DIŞINDA bir süreç de tutuyor mu. */
+  hasControlPortConflict: boolean;
+  /** Çakışmada portu tutan yabancı süreç ("FileZilla Server.exe (PID 5036, …)"); yoksa boş. */
+  controlPortOwner: string;
 };
 
 export async function ensureFtpServer() {
   const response = await apiClient.post<ApiEnvelope<FtpServerStatus>>("/ftp/ensure", {});
+  return response.data.data;
+}
+
+/**
+ * FTP'nin GERÇEK durumunu ÖLÇER — kurmaz, servisi yeniden başlatmaz.
+ *
+ * `POST /ftp/ensure` bir MUTASYON; "neden kimse bağlanamıyor" sorusunun bedeli altyapıyı yeniden
+ * yapılandırmak olmamalı. Bu yüzden yenileme düğmesi bu salt-okunur ucu kullanır.
+ * Uç yönetici-özel: yanıt sunucudaki yabancı süreçlerin adlarını ve PID'lerini taşır.
+ */
+export async function getFtpStatus() {
+  const response = await apiClient.get<ApiEnvelope<FtpServerStatus>>("/ftp/status");
   return response.data.data;
 }
 

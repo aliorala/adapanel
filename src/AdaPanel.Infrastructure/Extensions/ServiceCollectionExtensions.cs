@@ -188,6 +188,12 @@ public static class ServiceCollectionExtensions
         //
         // ARAYÜZ YOK, SOMUT TİP KAYITLI: Core/Interfaces bu iş kolunun kapsamı dışında ve
         // depoda aynı desenin örnekleri var (ClusterNodeStore, MailJmapProxyPublisher).
+        // MODÜLÜN IIS KAYDININ ÖLÇÜMÜ. SINGLETON: durumsuz ve Scoped bağımlılığı YOK (her çağrıda
+        // kendi ServerManager'ını açıp kapatıyor). Önbellek BİLEREK yok — bu nesnenin tek işi
+        // "IIS ŞU AN ne diyor" sorusuna cevap vermek; bayat bir cevap, panelin yalan söylemesinin
+        // yeni bir yolu olurdu (aynı gerekçe HtaccessSiteReport.EngineLoadedInIis'te yazılı).
+        services.AddSingleton<Htaccess.Hosting.IHtaccessModuleRegistry, Htaccess.Hosting.IisHtaccessModuleRegistry>();
+
         services.AddScoped<Htaccess.HtaccessPanelService>();
 
         // ÇOKLU SUNUCU (Plesk Multi Server karşılığı): merkez panel + kayıtlı hizmet düğümleri.

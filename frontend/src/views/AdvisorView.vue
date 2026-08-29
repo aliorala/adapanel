@@ -111,13 +111,6 @@ function formatUtc(value: string) {
   gap: 16px;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-
 .advisor-summary {
   display: flex;
   flex-wrap: wrap;

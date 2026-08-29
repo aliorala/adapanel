@@ -257,12 +257,6 @@ function resolveApiMessage(error: unknown): string {
   align-content: start;
 }
 
-.settings-section {
-  display: grid;
-  gap: 12px;
-}
-
-.section-head,
 .settings-inline-action {
   display: flex;
   align-items: flex-start;

@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide stats-view">
+  <section class="panel stats-view">
     <div class="st-header">
       <div>
         <p class="section-kicker">{{ t("panel.navigation.monitor") }}</p>

@@ -105,6 +105,11 @@
     <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessFailSafe.cs" Link="Shared\HtaccessFailSafe.cs" />
     <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessFileCache.cs" Link="Shared\HtaccessFileCache.cs" />
     <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\HtaccessModuleRegistration.cs" Link="Shared\HtaccessModuleRegistration.cs" />
+    <!-- KORUMALI DIZINLER: betimleyici bicimi + istek yolundaki kapi. Panel YAZAR, modul OKUR;
+         iki taraf da AYNI kaynagi derler. Ayri yazilsaydi panel bir klasore/bicime yazar, modul
+         baskasini arardi &#8212; bu dosyalarin var olma sebebi olan sessiz arizanin ta kendisi. -->
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\ProtectedDirectoryFile.cs" Link="Shared\ProtectedDirectoryFile.cs" />
+    <Compile Include="..\AdaPanel.Infrastructure\Htaccess\Hosting\ProtectedDirectoryGate.cs" Link="Shared\ProtectedDirectoryGate.cs" />
   </ItemGroup>
 
   <!-- CEKIRDEK MOTOR &#8212; ayni kaynak, ikinci cikti.

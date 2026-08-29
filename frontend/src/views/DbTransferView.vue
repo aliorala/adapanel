@@ -221,10 +221,10 @@ select {
   width: auto;
 }
 
+/* base.css `.hint` rengi ve boyutu verir; buradaki EKLER bu ekrana ozgu: ust bosluk ve
+   cok satirli ciktinin satir sonlari. */
 .hint {
-  color: var(--text-muted);
-  font-size: 13px;
-  margin-top: 10px;
+  margin-top: var(--sp-10);
   white-space: pre-line;
 }
 </style>

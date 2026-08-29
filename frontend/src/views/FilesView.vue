@@ -1388,7 +1388,6 @@ async function restore(backupId: string) {
   text-align: center;
 }
 
-.section-head,
 .action-row {
   display: flex;
   justify-content: space-between;

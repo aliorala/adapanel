@@ -354,24 +354,6 @@ function resolveApiMessage(error: unknown): string {
 </script>
 
 <style scoped>
-.settings-section {
-  display: grid;
-  gap: 12px;
-}
-
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.section-head h3,
-.section-head h4 {
-  margin: 0;
-}
-
 .row-actions button {
   width: auto;
 }

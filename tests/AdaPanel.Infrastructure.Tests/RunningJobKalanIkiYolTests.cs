@@ -398,8 +398,8 @@ public sealed class RunningJobKalanIkiYolTests
             };
         }
 
-        public Task<int> PruneSubscriptionAsync(Guid userId, int retentionDays, int keepCount, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default)
-            => Task.FromResult(0);
+        public Task<BackupPruneResultDto> PruneSubscriptionAsync(Guid userId, int retentionDays, int keepCount, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new BackupPruneResultDto());
 
         public Task<IReadOnlyCollection<BackupRecordDto>> GetBackupsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -409,7 +409,7 @@ public sealed class RunningJobKalanIkiYolTests
         public Task<BackupRecordDto> RestoreAsync(RestoreBackupRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupEntriesDto> GetEntriesAsync(string backupId, string? prefix, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<RestoreBackupItemsResultDto> RestoreItemsAsync(RestoreBackupItemsRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<int> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BackupPruneResultDto> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupChainDto> GetChainAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

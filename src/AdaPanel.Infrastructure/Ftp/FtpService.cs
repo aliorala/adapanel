@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Ftp;
@@ -26,17 +27,256 @@ public sealed partial class FtpService(
     public async Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default)
     {
         await EnsureFtpInfrastructureAsync(false, cancellationToken);
+
+        // KURULUMDAN SONRA DURUM ÖLÇÜLÜR, VARSAYILMAZ. Buraya eskiden `IsConfigured = true,
+        // StatusMessage = "ftp.server_ready"` sabitleri yazılıyordu; gerekçe FtpServerStatusDto'da.
+        return await GetServerStatusAsync(cancellationToken);
+    }
+
+    public async Task<FtpServerStatusDto> GetServerStatusAsync(CancellationToken cancellationToken = default)
+    {
         var preferences = await panelPreferencesService.GetAsync(cancellationToken);
-        return new FtpServerStatusDto
+        var durum = new FtpServerStatusDto
         {
             ServerAddress = preferences.ServerAddress,
             ControlPort = FtpPort,
             PassivePortStart = PassivePortStart,
-            PassivePortEnd = PassivePortEnd,
-            IsConfigured = true,
-            StatusMessage = "ftp.server_ready"
+            PassivePortEnd = PassivePortEnd
         };
+
+        var olcum = await ProbeFtpRuntimeAsync(cancellationToken);
+        if (olcum is null)
+        {
+            // ÖLÇEMEDİK SESSİZCE "SORUN YOK"A DA "ARIZA"YA DA ÇEVRİLMEZ (FirewallService.IsPortCovered
+            // deseni). Eski davranışa — altyapı kurulum bayrağına — düşülür ve durum "bilinmiyor" denir.
+            durum.IsConfigured = (await fileStore.ReadAsync(InfraStatePath, new FtpInfraState(), cancellationToken)).Configured;
+            durum.StatusMessage = "ftp.server_status_unknown";
+            return durum;
+        }
+
+        durum.ServiceState = olcum.ServiceState;
+        durum.SiteState = olcum.SiteState;
+        durum.IsSiteRunning = olcum.SiteExists && olcum.SiteState.Equals("Started", StringComparison.OrdinalIgnoreCase);
+
+        var (portDurumu, portSahibi) = ClassifyControlPort(olcum.PortOlculebildi, olcum.Listeners, olcum.ServicePids);
+        durum.HasControlPortConflict = portDurumu == FtpControlPortDurumu.YabanciSurec;
+        durum.ControlPortOwner = portSahibi;
+
+        // SIRA ÖNEMLİ: en temel eksiklik önce söylenir. "Port çakışması" demek, site hiç yokken
+        // yanıltıcı olurdu.
+        durum.StatusMessage =
+            !olcum.SiteExists ? "ftp.site_not_configured"
+            : !olcum.ServiceState.Equals("Running", StringComparison.OrdinalIgnoreCase) ? "ftp.service_not_running"
+            : !durum.IsSiteRunning ? "ftp.site_not_running"
+            : portDurumu == FtpControlPortDurumu.YabanciSurec ? "ftp.control_port_conflict"
+            : portDurumu == FtpControlPortDurumu.DinleyenYok ? "ftp.server_not_listening"
+            : "ftp.server_ready";
+
+        durum.IsConfigured = durum.StatusMessage == "ftp.server_ready";
+        return durum;
     }
+
+    /// <summary>Denetim portunun kimin elinde olduğuna dair HÜKÜM.</summary>
+    internal enum FtpControlPortDurumu
+    {
+        /// <summary>Ölçüm yapılamadı (cmdlet yok / probe düştü). "Sorun yok" demek DEĞİLDİR.</summary>
+        Olculemedi,
+
+        /// <summary>Portu kimse dinlemiyor: hiçbir istemci bağlanamaz.</summary>
+        DinleyenYok,
+
+        /// <summary>Portu yalnız Microsoft FTP Service (FTPSVC) tutuyor — beklenen durum.</summary>
+        PanelinServisi,
+
+        /// <summary>Portu panelin FTP servisi DIŞINDA bir süreç de tutuyor.</summary>
+        YabanciSurec
+    }
+
+    /// <summary>Denetim portunda dinleyen tek bir süreç (probe satırı).</summary>
+    internal sealed record FtpPortDinleyici(int Pid, string Process, IReadOnlyCollection<string> Services);
+
+    /// <summary>
+    /// Denetim portu hükmü. SAF fonksiyon: girdileri dışarıdan alır, yan etkisi yoktur, bu yüzden
+    /// gerçek bir port çakışması kurmadan tam doğruluk tablosuyla test edilebilir
+    /// (<see cref="ClassifyUserNameClaim"/> ile aynı desen).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN "site çalışıyor mu" SORUSU YETMİYOR — ölçüldü (19.08.2026).</b> Bu makinede
+    /// <c>Get-Website</c> siteyi <c>Started</c> raporluyor, FTPSVC <c>Running</c> ve 21 portunda
+    /// GERÇEKTEN dinliyor (pid 5068). Buna rağmen porta bağlanan istemciyi FileZilla Server 0.9.59
+    /// karşılıyor, çünkü FileZilla da aynı portu bağlamış (pid 5036). Yani iki dinleyici bir arada
+    /// var olabiliyor ve tek arıza belirtisi portun PAYLAŞILMASI. Sitenin durumuna bakan bir kontrol
+    /// bu hatayı GÖREMEZDİ.
+    /// </para>
+    /// <para>
+    /// <b>Neden banner'a bakılmıyor:</b> 21 portundan okunan <c>220-FileZilla Server…</c> selamı
+    /// suçluyu doğrudan söylüyor, ama IIS FTP'nin selamı yapılandırmayla değiştirilebilir
+    /// (<c>ftpServer.messages.bannerMessage</c>) — metne bakan bir kontrol, selamı özelleştirmiş
+    /// dürüst bir kurulumu suçlu ilan ederdi. Süreç kimliği karşılaştırması yapılandırmadan
+    /// bağımsızdır.
+    /// </para>
+    /// <para>
+    /// Süreç kimliği İKİ kaynaktan doğrulanır (PID listesi ve o süreçteki servis adları): FTPSVC
+    /// paylaşımlı bir <c>svchost</c> içinde çalışır ve tek bir PID sorgusu yarış hâlinde bayatlayıp
+    /// KENDİ servisimizi yabancı ilan edebilirdi — yanlış alarm, çakışmayı kaçırmak kadar kötüdür.
+    /// </para>
+    /// </remarks>
+    internal static (FtpControlPortDurumu Durum, string Sahip) ClassifyControlPort(
+        bool olculebildi,
+        IReadOnlyCollection<FtpPortDinleyici> dinleyiciler,
+        IReadOnlyCollection<int> ftpsvcPidleri)
+    {
+        if (!olculebildi)
+        {
+            return (FtpControlPortDurumu.Olculemedi, string.Empty);
+        }
+
+        if (dinleyiciler.Count == 0)
+        {
+            return (FtpControlPortDurumu.DinleyenYok, string.Empty);
+        }
+
+        var yabancilar = dinleyiciler
+            .Where(item => !ftpsvcPidleri.Contains(item.Pid))
+            .Where(item => !item.Services.Any(ad => string.Equals(ad, "FTPSVC", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (yabancilar.Count == 0)
+        {
+            return (FtpControlPortDurumu.PanelinServisi, string.Empty);
+        }
+
+        var aciklama = string.Join(", ", yabancilar.Select(item =>
+        {
+            var ad = string.IsNullOrWhiteSpace(item.Process) ? "bilinmeyen süreç" : item.Process + ".exe";
+            var servisler = item.Services.Count == 0 ? string.Empty : $", Windows servisi: {string.Join("/", item.Services)}";
+            return $"{ad} (PID {item.Pid}{servisler})";
+        }));
+
+        return (FtpControlPortDurumu.YabanciSurec, aciklama);
+    }
+
+    /// <summary>Probe'un ham ölçümü; <c>null</c> = hiç ölçülemedi.</summary>
+    private sealed record FtpRuntimeOlcum(
+        bool SiteExists,
+        string SiteState,
+        string ServiceState,
+        IReadOnlyCollection<int> ServicePids,
+        bool PortOlculebildi,
+        IReadOnlyCollection<FtpPortDinleyici> Listeners);
+
+    /// <summary>
+    /// FTP çalışma zamanını TEK bir PowerShell çağrısında ölçer (servis, site, portu dinleyen tüm
+    /// süreçler). Hiçbir şeyi değiştirmez.
+    /// </summary>
+    /// <remarks>
+    /// <c>ComponentPreflight.BuildProbeScript</c> BİLEREK kullanılmadı: o probe port başına
+    /// <c>Select-Object -First 1</c> ile TEK dinleyici alır, çünkü sorusu "kurulumdan önce port boş
+    /// mu". Buradaki soru farklı ve tam da ölçülen hataya denk geliyor — port PAYLAŞILIYOR mu.
+    /// Tek dinleyici alan bir sorgu bu makinede FTPSVC'yi döndürüp FileZilla'yı hiç göremezdi.
+    /// </remarks>
+    private async Task<FtpRuntimeOlcum?> ProbeFtpRuntimeAsync(CancellationToken cancellationToken)
+    {
+        var script = $$"""
+            $ErrorActionPreference = 'SilentlyContinue'
+            $portOlculdu = [bool](Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)
+            $siteVar = $false
+            $siteDurum = ''
+            $servisDurum = ''
+            $servisPidleri = @()
+            $svc = Get-CimInstance Win32_Service -Filter "Name='FTPSVC'" -ErrorAction SilentlyContinue
+            if ($svc) {
+              $servisDurum = [string]$svc.State
+              if ([int]$svc.ProcessId -gt 0) { $servisPidleri = @([int]$svc.ProcessId) }
+            }
+            Import-Module WebAdministration -ErrorAction SilentlyContinue
+            try {
+              $site = Get-Website -Name '{{EscapePowerShellLiteral(FtpSiteName)}}' -ErrorAction SilentlyContinue
+              if ($site) { $siteVar = $true; $siteDurum = [string]$site.State }
+            } catch { }
+            $satirlar = @()
+            if ($portOlculdu) {
+              foreach ($k in @(Get-NetTCPConnection -LocalPort {{FtpPort}} -State Listen -ErrorAction SilentlyContinue)) {
+                $sp = Get-Process -Id $k.OwningProcess -ErrorAction SilentlyContinue
+                $servisAdlari = @(Get-CimInstance Win32_Service -Filter "ProcessId=$($k.OwningProcess)" -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Name })
+                $satirlar += [pscustomobject]@{ pid = [int]$k.OwningProcess; process = [string]$sp.ProcessName; services = @($servisAdlari) }
+              }
+            }
+            [pscustomobject]@{
+              siteExists = $siteVar
+              siteState = $siteDurum
+              serviceState = $servisDurum
+              servicePids = @($servisPidleri)
+              portMeasured = $portOlculdu
+              listeners = @($satirlar | Group-Object pid | ForEach-Object { $_.Group[0] })
+            } | ConvertTo-Json -Depth 5 -Compress
+            """;
+
+        var sonuc = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        if (!sonuc.Success || string.IsNullOrWhiteSpace(sonuc.StandardOutput))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var belge = JsonDocument.Parse(sonuc.StandardOutput);
+            var kok = belge.RootElement;
+
+            var dinleyiciler = new List<FtpPortDinleyici>();
+            foreach (var satir in DiziOku(kok, "listeners"))
+            {
+                dinleyiciler.Add(new FtpPortDinleyici(
+                    satir.TryGetProperty("pid", out var pid) && pid.TryGetInt32(out var pidDeger) ? pidDeger : 0,
+                    MetinOku(satir, "process"),
+                    DiziOku(satir, "services").Select(item => item.GetString() ?? string.Empty).Where(item => item.Length > 0).ToArray()));
+            }
+
+            return new FtpRuntimeOlcum(
+                kok.TryGetProperty("siteExists", out var siteVar) && siteVar.ValueKind == JsonValueKind.True,
+                MetinOku(kok, "siteState"),
+                MetinOku(kok, "serviceState"),
+                DiziOku(kok, "servicePids").Where(item => item.TryGetInt32(out _)).Select(item => item.GetInt32()).ToArray(),
+                kok.TryGetProperty("portMeasured", out var portOlculdu) && portOlculdu.ValueKind == JsonValueKind.True,
+                dinleyiciler);
+        }
+        catch (JsonException)
+        {
+            // Bozuk/eksik JSON "sorun yok" değildir: çağıran bunu "ölçülemedi" olarak raporlar.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ConvertTo-Json TEK ÖĞELİ diziyi diziye SARMAZ: <c>@($x) | ConvertTo-Json</c> nesne döndürür.
+    /// Bu ayrım ölçülmeden yazılan her ayrıştırıcıyı tek dinleyici/tek PID durumunda sessizce
+    /// boşa düşürür — tam da çakışmanın tek yabancı süreçten ibaret olduğu olağan durumda.
+    /// </summary>
+    private static IEnumerable<JsonElement> DiziOku(JsonElement kok, string ad)
+    {
+        if (!kok.TryGetProperty(ad, out var deger))
+        {
+            yield break;
+        }
+
+        if (deger.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in deger.EnumerateArray())
+            {
+                yield return item;
+            }
+        }
+        else if (deger.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+        {
+            yield return deger;
+        }
+    }
+
+    private static string MetinOku(JsonElement kok, string ad)
+        => kok.TryGetProperty(ad, out var deger) && deger.ValueKind == JsonValueKind.String
+            ? deger.GetString() ?? string.Empty
+            : string.Empty;
 
     // M5 (profesyonel paneller gibi opsiyonel "yalnız güvenli FTP"): FTPS zorunlu mu? Varsayılan false = düz + FTPS (kilitlenme yok).
     public async Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default)
@@ -123,6 +363,8 @@ public sealed partial class FtpService(
         Directory.CreateDirectory(homePath);
         await EnsureFtpInfrastructureAsync(false, cancellationToken);
 
+        // BU ÇAĞRI hesabı gerçekten AÇTI mı? Geri alma yalnız BUNA bakar (gerekçe: RollbackCreateAsync).
+        var hesabiBuCagriActi = false;
         if (!await UserExistsAsync(userName, cancellationToken))
         {
             var createResult = await ProcessRunner.RunAsync("net.exe", $"user \"{userName}\" \"{request.Password}\" /add /y", cancellationToken: cancellationToken);
@@ -130,18 +372,51 @@ public sealed partial class FtpService(
             {
                 throw new AppException("ftp.user_create_failed", 500, 500, BuildCommandDetails(createResult));
             }
+
+            hesabiBuCagriActi = true;
         }
 
-        var aclResult = await ProcessRunner.RunAsync(
-            "icacls.exe",
-            $"\"{homePath}\" /grant \"{userName}:(OI)(CI)M\" /T /C",
-            cancellationToken: cancellationToken);
-        if (!aclResult.Success)
+        // YARIM KALAN OLUŞTURMA ÖKSÜZ HESAP BIRAKIYORDU (19.08.2026, ölçüldü).
+        //
+        // Ölçülen zincir: yetki kuralı kaldırma sessizce başarısız olduğu için (bkz.
+        // RemoveUserAuthorizationSnippet) ConfigureUserHomeAsync "yinelenen koleksiyon girişi" ile
+        // 500 attı. Ama `net user /add` ÇOKTAN çalışmıştı: `net user <ad>` hesabın VAR olduğunu
+        // gösteriyor, `GET /ftp/users` onu LİSTELEMİYORDU (kayıt aşağıda, hatadan SONRA yazılıyor).
+        // Yani geriye parolası operatörün belirlediği, panelin hiç görmediği, panelden silinemeyen
+        // bir Windows yerel hesabı kalıyordu — üstelik ana dizinde ACL'i duruyordu.
+        //
+        // Kök neden düzeltildi ama tek başına yetmez: aradaki HER adım (ACL, junction, IIS yazımı,
+        // disk dolu, IIS kilidi) başarısız olabilir ve hepsi aynı öksüzü doğurur. Bu yüzden hata
+        // yolu artık YAPILANLARI GERİ ALIYOR: oluşturma ya tamamlanır ya da sunucuda iz bırakmaz —
+        // "SALDIRI_reddedilen_istek_sunucuda_HICBIR_iz_birakmaz" testinin koruduğu ilkenin aynısı,
+        // bu kez reddedilen değil YARIM KALAN istek için.
+        try
         {
-            throw new AppException("ftp.acl_failed", 500, 500, BuildCommandDetails(aclResult));
-        }
+            var aclResult = await ProcessRunner.RunAsync(
+                "icacls.exe",
+                $"\"{homePath}\" /grant \"{userName}:(OI)(CI)M\" /T /C",
+                cancellationToken: cancellationToken);
+            if (!aclResult.Success)
+            {
+                throw new AppException("ftp.acl_failed", 500, 500, BuildCommandDetails(aclResult));
+            }
 
-        await ConfigureUserHomeAsync(userName, homePath, cancellationToken);
+            await ConfigureUserHomeAsync(userName, homePath, cancellationToken);
+        }
+        catch (AppException hata)
+        {
+            // Geri alma sonucu HATA METNİNE eklenir: temizlik de başarısız olduysa operatör bunu
+            // görmeli, yoksa "geri alındı" varsayıp sunucuda duran hesabı hiç aramaz.
+            var geriAlmaNotu = await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi);
+            throw new AppException(hata.MessageKey, hata.Code, hata.HttpStatusCode, hata.Details + geriAlmaNotu);
+        }
+        catch
+        {
+            // AppException dışındaki her şey de (IO hatası, iptal, beklenmeyen istisna) aynı öksüzü
+            // doğurur; geri alma istisnanın TÜRÜNE bağlı olamaz. Özgün istisna olduğu gibi yükselir.
+            await RollbackCreateAsync(userName, homePath, hesabiBuCagriActi);
+            throw;
+        }
 
         var record = new FtpUserState
         {
@@ -187,6 +462,90 @@ public sealed partial class FtpService(
             ServerAddress = Environment.MachineName,
             Port = FtpPort
         };
+    }
+
+    /// <summary>
+    /// Yarım kalan bir oluşturmanın SUNUCUDAKİ izlerini geri alır; sonucu hata metnine eklenmek
+    /// üzere metin olarak döner (boş dize = geri alacak bir şey yoktu).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>YALNIZ BU ÇAĞRININ YAPTIĞI GERİ ALINIR.</b> Windows hesabı ancak
+    /// <paramref name="hesabiBuCagriActi"/> ise silinir. Aksi hâlde meşru "kendi hesabımı yeniden
+    /// oluştur" akışı (<see cref="FtpUserNameClaim.KendiKaydi"/>) bir ara adımda takıldığında
+    /// müşterinin ÇALIŞAN hesabını silerdik — hatayı düzeltirken ondan beter bir yıkım. Hesap zaten
+    /// varken de öksüz doğmaz: hesap bizden önce oradaydı.
+    /// </para>
+    /// <para>
+    /// <b>ANA DİZİNE DOKUNULMAZ.</b> <c>homePath</c> müşterinin SİTE KÖKÜDÜR; burada silinecek tek
+    /// şey verilen ACL'dir (<c>icacls /remove:g</c> yalnız o hesabın izin girdilerini kaldırır),
+    /// dosyalar değil. Silinen hesabın SID'i ACL'de "hesap bilinmiyor" olarak asılı kalmasın diye
+    /// bu adım hesap silmeden ÖNCE yapılır.
+    /// </para>
+    /// <para>
+    /// <b>İPTAL BELİRTECİ KULLANILMAZ (<see cref="CancellationToken.None"/>).</b> Geri almanın en
+    /// çok gerektiği durumlardan biri isteğin iptal edilmesidir; iptal edilmiş bir belirteçle
+    /// temizlik çalıştırmak, önlemeye çalıştığımız öksüz hesabı garanti ederdi.
+    /// </para>
+    /// <para>
+    /// Adımlar EN İYİ ÇABA'dır ve biri diğerini engellemez: temizlik kendisi patlayıp asıl hata
+    /// mesajını gölgelemesin. Ama sessiz de değil — her başarısızlık döndürülen nota yazılır.
+    /// </para>
+    /// </remarks>
+    // internal: testler bu metodu DOGRUDAN kosturur. Tam CreateFtpUserAsync yolundan test etmek
+    // MUMKUN DEGIL — o yol EnsureFtpInfrastructureAsync'i cagirir, yani yukseltilmis bir makinede
+    // GERCEK "AdaPanel FTP" sitesini yeniden yapilandirip FTPSVC'yi yeniden baslatirdi. Bir testin
+    // canli FTP sunucusunu yeniden baslatmasi kabul edilemez; geri alma davranisi burada olculur.
+    internal async Task<string> RollbackCreateAsync(string userName, string homePath, bool hesabiBuCagriActi)
+    {
+        var notlar = new List<string>();
+
+        async Task DeneAsync(string ad, Func<Task> is_)
+        {
+            try
+            {
+                await is_();
+            }
+            catch (Exception istisna)
+            {
+                notlar.Add($"{ad}: {istisna.Message}");
+            }
+        }
+
+        await DeneAsync("acl-geri-alma", async () =>
+        {
+            var sonuc = await ProcessRunner.RunAsync(
+                "icacls.exe",
+                $"\"{homePath}\" /remove:g \"{userName}\" /T /C",
+                cancellationToken: CancellationToken.None);
+            if (!sonuc.Success)
+            {
+                notlar.Add($"acl-geri-alma: ExitCode={sonuc.ExitCode}");
+            }
+        });
+
+        // Yetki kuralı + junction: ikisi de bu akışta oluşturulmuş olabilir ve ikisi de idempotent
+        // kaldırılır (yoksa sorun değil). Kural kalırsa ad bir daha kullanılamaz — düzeltilen
+        // hatanın ta kendisi.
+        await DeneAsync("yetki-junction-geri-alma", () => RemoveUserAuthorizationAsync(userName, CancellationToken.None));
+
+        if (hesabiBuCagriActi)
+        {
+            await DeneAsync("hesap-silme", async () =>
+            {
+                var sonuc = await ProcessRunner.RunAsync("net.exe", $"user \"{userName}\" /delete", cancellationToken: CancellationToken.None);
+
+                // "Komut hata vermedi" yetmez: hesabın GERÇEKTEN gittiği ölçülür.
+                if (await UserExistsAsync(userName, CancellationToken.None))
+                {
+                    notlar.Add($"hesap-silme: hesap HALA DURUYOR (ExitCode={sonuc.ExitCode}) — '{userName}' elle silinmeli.");
+                }
+            });
+        }
+
+        return notlar.Count == 0
+            ? string.Empty
+            : $"{Environment.NewLine}GeriAlmaUyarilari:{Environment.NewLine}{string.Join(Environment.NewLine, notlar)}";
     }
 
     public async Task SetFtpPasswordAsync(SetFtpPasswordRequest request, CancellationToken cancellationToken = default)
@@ -435,9 +794,63 @@ public sealed partial class FtpService(
         }
         """;
 
+    /// <summary>
+    /// Kullanıcının FTP yetki kuralını (<c>&lt;add accessType="Allow" users="…"/&gt;</c>) kaldıran
+    /// PowerShell parçası. <c>$siteName</c> ve <c>$userName</c> tanımlı olmalıdır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// KÖK NEDEN (19.08.2026, bu makinede ölçüldü): burada <c>Clear-WebConfiguration … -AtElement
+    /// @{users=$userName} -ErrorAction SilentlyContinue</c> yazıyordu. <b>Bu cmdlet'in
+    /// <c>-AtElement</c> parametresi YOKTUR.</b> Ölçüm — panelin kendi terminal ucundan,
+    /// <c>-ErrorAction Stop</c> ile: <c>ParameterBindingException :: A parameter cannot be found
+    /// that matches parameter name 'AtElement'</c>. Gerçek parametre listesi:
+    /// <c>Clr, Force, Location, Filter, PSPath</c> (+ ortak parametreler). <c>-AtElement</c>'i
+    /// destekleyen cmdlet <c>Remove-WebConfigurationProperty</c>'dir
+    /// (<c>Name, Clr, AtElement, AtIndex, AtName, Force, Location, Filter, PSPath</c>).
+    /// </para>
+    /// <para>
+    /// <c>-ErrorAction SilentlyContinue</c> bağlama hatasını YUTUYOR ve betik sıfırla çıkıyordu.
+    /// İki ağır sonucu ölçüldü:
+    /// <list type="number">
+    /// <item><b>Silinen kullanıcı bir daha oluşturulamıyordu.</b> Silme <c>200 ftp.user_deleted</c>
+    /// dönüyor, Windows hesabı ve junction gerçekten gidiyor, ama <c>applicationHost.config</c>'de
+    /// <c>Allow</c> kuralı KALIYORDU. Aynı adla yeniden oluşturma, sonraki satırdaki
+    /// <c>Add-WebConfiguration</c>'da "yinelenen koleksiyon girişi" ile <c>500
+    /// ftp.site_configuration_failed</c> veriyordu.</item>
+    /// <item><b>Silme erişimi gerçekten iptal etmiyordu.</b> Aynı adlı bir yerel hesap başka bir
+    /// yolla var olursa FTP kökündeki Read+Write yetkisi panel hiçbir şey yapmadan geri gelir;
+    /// kurallar ayrıca sonsuza dek birikirdi.</item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>-ErrorAction Stop</c> güvenli:</b> ölçüldü — kural ZATEN YOKKEN
+    /// <c>Remove-WebConfigurationProperty</c> hata değil <b>uyarı</b> üretir ("… özelliği …
+    /// dizininde bulunamadı") ve sıfırla çıkar. Yani çağrı idempotenttir; <c>Stop</c> yalnız
+    /// GERÇEK arızayı yüzeye çıkarır. Eşleşme büyük/küçük harfe duyarsızdır (ölçüldü:
+    /// <c>ADA_Olcum_ZZ</c> ile eklenen kayıt <c>ada_olcum_zz</c> ile kaldırıldı) — Windows yerel
+    /// hesap adları da öyle olduğu için doğru davranış budur.
+    /// </para>
+    /// <para>
+    /// <b>GERİ OKUMA ŞART:</b> "cmdlet şikâyet etmedi" ile "kural gitti" aynı şey değildir — bu
+    /// hatanın tamamı zaten bu farktan doğdu. Kaldırma sonrası koleksiyon yeniden okunur ve kural
+    /// hâlâ duruyorsa istisna fırlatılır, böylece sessiz başarısızlık bir daha mümkün olmaz.
+    /// </para>
+    /// </remarks>
+    // internal: testler KOPYASINI degil BU dizeyi calistirir; kopya test etmek hicbir sey kanitlamaz.
+    internal const string RemoveUserAuthorizationSnippet = """
+        Remove-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Name '.' -AtElement @{users=$userName} -ErrorAction Stop
+        $adaKalanKurallar = @((Get-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization').Collection | Where-Object { $_.users -eq $userName })
+        if ($adaKalanKurallar.Count -gt 0) { throw "FTP yetki kurali kaldirilamadi (kural hala duruyor): $userName" }
+        """;
+
     private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken)
     {
         var userRoot = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
+
+        // KATI çalıştırma (RunPowerShellStrictAsync): bu betiğin ortasında patlayan bir ifade
+        // eskiden çıkış koduna yansımıyordu — PowerShell'in çıkış kodu SON ifadenin sonucudur.
+        // Yetki kuralı kaldırma yolu tam da böyle sessizce ölmüştü.
         var script = $$"""
             Import-Module WebAdministration -ErrorAction Stop
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
@@ -446,11 +859,11 @@ public sealed partial class FtpService(
             $homePath = '{{EscapePowerShellLiteral(homePath)}}'
             {{RemoveUserRootSnippet}}
             New-Item -ItemType Junction -Path $userRoot -Target $homePath | Out-Null
-            Clear-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -AtElement @{users=$userName} -ErrorAction SilentlyContinue
+            {{RemoveUserAuthorizationSnippet}}
             Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions=3}
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("ftp.site_configuration_failed", 500, 500, BuildCommandDetails(result));
@@ -460,18 +873,25 @@ public sealed partial class FtpService(
     private async Task RemoveUserAuthorizationAsync(string userName, CancellationToken cancellationToken)
     {
         var userRoot = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
+
+        // Site varlık denetimi try/catch İÇİNDE: katı kipte ($ErrorActionPreference='Stop') IIS
+        // sağlayıcısı hiç yüklenmemişse "IIS:\..." yolu DriveNotFound ile PATLAR ve IIS FTP rolü
+        // olmayan bir makinede hesap silme tümden imkânsız hâle gelirdi. Site yoksa kaldıracak
+        // kural da yoktur; junction temizliği yine de yapılır.
         var script = $$"""
             Import-Module WebAdministration -ErrorAction SilentlyContinue
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $userName = '{{EscapePowerShellLiteral(userName)}}'
             $userRoot = '{{EscapePowerShellLiteral(userRoot)}}'
-            if (Test-Path "IIS:\Sites\$siteName") {
-              Clear-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -AtElement @{users=$userName} -ErrorAction SilentlyContinue
+            $adaSiteVar = $false
+            try { $adaSiteVar = Test-Path "IIS:\Sites\$siteName" } catch { $adaSiteVar = $false }
+            if ($adaSiteVar) {
+            {{RemoveUserAuthorizationSnippet}}
             }
             {{RemoveUserRootSnippet}}
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("ftp.user_delete_failed", 500, 500, BuildCommandDetails(result));

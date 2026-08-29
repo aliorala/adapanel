@@ -53,10 +53,33 @@
            uyarılarıyla yarışan bir şey yoktur. Engel varsa KAPALI gelir ki asıl sebep gürültüde
            kaybolmasın; başlığı kaç uyarı olduğunu SAYIYLA yazar, yani var oldukları saklanmaz. -->
       <div class="truth-strip">
-        <p v-if="report.engineBlockers.length > 0" class="notice error" role="alert">
+        <div v-if="report.engineBlockers.length > 0" class="notice error" role="alert">
           <strong>{{ t("panel.htaccess.warn.engineNotLoaded") }}</strong>
           <span v-for="key in report.engineBlockers" :key="key"> {{ t(key) }}</span>
-        </p>
+
+          <!--
+            ONARIM DÜĞMESİ ENGELİN YANINDA.
+
+            Arka uçta uç açıp arayüze bağlamamak bu depoda tekrar eden bir hata sınıfı
+            ("yazılmış ama bağlanmamış"); `.htaccess` modülünün kendisi üç sürüm boyunca
+            tam olarak öyle ölü yayınlandı.
+
+            Yalnız KAYIT kaynaklı engellerde gösterilir: havuzun yönetilen kod çalıştırmaması
+            gibi sebepleri bu düğme ÇÖZMEZ ve göstermek "bastım, olmadı" deneyimi üretirdi.
+            Derleme sunucuda yoksa uç zaten 409 ile reddediyor — kaydı var olmayan bir
+            derlemeye yazmak sunucudaki tüm yönetilen uygulamaları hataya düşürürdü.
+          -->
+          <span v-if="isAdmin && onarilabilirEngelVar" class="blocker-repair">
+            <button class="secondary compact" v-bind="writeGate(moduleBusy)" @click="repairModule">
+              {{ moduleBusy ? t("panel.htaccess.saving") : t("panel.htaccess.module.repair") }}
+            </button>
+            <small>{{ t("panel.htaccess.module.repairHint") }}</small>
+          </span>
+
+          <p v-if="moduleNotice" :class="['notice', { error: moduleNoticeError }]" :role="moduleNoticeError ? 'alert' : 'status'">
+            {{ moduleNotice }}
+          </p>
+        </div>
 
         <p v-if="report.support === 'no_managed_code'" class="notice error" role="alert">
           {{ t("panel.htaccess.warn.noManagedCode") }}
@@ -449,6 +472,7 @@ import {
   inspectHtaccess,
   setHtaccessMode,
   setServerHtaccessMode,
+  registerHtaccessModule,
   simulateHtaccess,
   validateHtaccess,
   type HtaccessDiagnostic,
@@ -480,6 +504,28 @@ const siteName = computed(() => sitesStore.selectedSiteName);
 // bayinin de kapsamı dışındadır. Uç zaten `[Authorize(Roles = "Administrator")]` ile kapalı;
 // buradaki denetim gizleme amaçlı, KORUMA DEĞİL — koruma sunucudadır.
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+
+// MODÜL ONARIMI. `moduleBusy` `serverBusy`'den AYRI: ikisi farklı işler ve birini diğerinin
+// bayrağıyla kilitlemek, kullanıcıya sebebi görünmeyen bir "devre dışı" düğme gösterirdi.
+const moduleBusy = ref(false);
+const moduleNotice = ref("");
+const moduleNoticeError = ref(false);
+
+/**
+ * Bu engeller KAYITTAN kaynaklanır, yani onarım düğmesi gerçekten çözebilir.
+ *
+ * Havuz kaynaklı sebepler (yönetilen kod kapalı, yanlış CLR sürümü) bilerek DIŞARIDA: onları
+ * bu düğme çözmez ve göstermek "bastım, hiçbir şey olmadı" deneyimi üretirdi. Sunucu zaten
+ * onları ayrı bir şeritte (`support`) söylüyor.
+ */
+const ONARILABILIR_ENGELLER = [
+  "htaccess.blocker.module_not_registered",
+  "htaccess.blocker.module_type_mismatch",
+  "htaccess.blocker.precondition_managed_handler"
+];
+
+const onarilabilirEngelVar = computed(() =>
+  (report.value?.engineBlockers ?? []).some((k) => ONARILABILIR_ENGELLER.includes(k)));
 
 const serverSwitch = ref<HtaccessServerSwitchState | null>(null);
 const serverBusy = ref(false);
@@ -610,6 +656,31 @@ async function loadServerSwitch() {
     serverSwitch.value = null;
     serverNotice.value = extractApiMessage(error) || t("panel.htaccess.server.loadFailed");
     serverNoticeError.value = true;
+  }
+}
+
+/**
+ * Modül kaydını onarır ve raporu TAZELER.
+ *
+ * Tazeleme şart: kayıt düzelse bile ekrandaki engel şeridi eski raporu gösteriyor olurdu ve
+ * kullanıcı düğmenin işe yaramadığını sanardı. Kayıt hemen etkili OLMAZ (havuzlar yenilenene
+ * kadar), bu yüzden mesajda bunu söyleyen anahtar kullanılıyor — "tamam" deyip geçmek,
+ * kullanıcıyı hemen sonuç bekletmek olurdu.
+ */
+async function repairModule() {
+  moduleBusy.value = true;
+  moduleNotice.value = "";
+  moduleNoticeError.value = false;
+
+  try {
+    await registerHtaccessModule();
+    moduleNotice.value = t("htaccess.module_registered");
+    await load();
+  } catch (error) {
+    moduleNotice.value = extractApiMessage(error) || t("panel.htaccess.module.repairFailed");
+    moduleNoticeError.value = true;
+  } finally {
+    moduleBusy.value = false;
   }
 }
 
@@ -896,14 +967,6 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   border-top: 1px solid var(--panel-border);
 }
 
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 /* `.action-row` da bu görünümde hiç tanımlı değildi (FilesView/SiteHostingView kendi kapsamlı
    kopyalarını taşıyor): düğme ile yanındaki açıklama metni satır içinde, boşluksuz akıyordu. */
 .action-row {
@@ -1119,6 +1182,20 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
 
 .server-switch small {
   opacity: 0.75;
+}
+
+/* Onarim dugmesi engelin ICINDE durur: kullanici sebebi okudugu yerde cozumu de gorsun.
+   Ayri bir bolume koymak, engeli okuyup "peki ne yapacagim" diye aramaya birakirdi. */
+.blocker-repair {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
+  margin-top: var(--sp-8);
+}
+
+.blocker-repair small {
+  opacity: 0.85;
 }
 
 .mode-text {

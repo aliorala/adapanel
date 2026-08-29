@@ -315,7 +315,7 @@ public sealed class BackupRemoteLayoutTests
             remote: new BackupPruneRemoteOptions { UserName = "u", Password = "p" },
             cancellationToken: alan.Iptal);
 
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.Equal(new[] { eskiUzakYol }, sunucu.SilinenYollar);
         Assert.False(sunucu.Dosyalar.ContainsKey(eskiUzakYol));
     }
@@ -341,7 +341,7 @@ public sealed class BackupRemoteLayoutTests
             remote: new BackupPruneRemoteOptions { UserName = "u", Password = "p" },
             cancellationToken: alan.Iptal);
 
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.Equal(new[] { duzYol }, sunucu.SilinenYollar);
     }
 
@@ -361,7 +361,7 @@ public sealed class BackupRemoteLayoutTests
             remote: new BackupPruneRemoteOptions { UserName = "u", Password = "p" },
             cancellationToken: alan.Iptal);
 
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.Equal(new[] { $"DELETE {uzak}" }, kayitci.Istekler);
     }
 

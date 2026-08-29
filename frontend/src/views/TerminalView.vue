@@ -126,17 +126,11 @@ function showNotice(message: string, isError: boolean) {
   gap: 12px;
 }
 
-.section-head,
 .terminal-toolbar,
 .command-row {
   display: flex;
   gap: 10px;
   align-items: flex-end;
-}
-
-.section-head {
-  justify-content: space-between;
-  align-items: flex-start;
 }
 
 .shell-label {

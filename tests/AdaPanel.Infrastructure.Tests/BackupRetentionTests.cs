@@ -51,7 +51,7 @@ public sealed class BackupRetentionTests
 
             var removed = await service.PruneAsync(retentionDays: 7);
 
-            Assert.Equal(1, removed);
+            Assert.Equal(1, removed.Removed);
             Assert.False(File.Exists(oldPath));
             Assert.True(File.Exists(recentPath));
 
@@ -85,7 +85,7 @@ public sealed class BackupRetentionTests
 
             var removed = await service.PruneAsync(retentionDays: 0);
 
-            Assert.Equal(0, removed);
+            Assert.Equal(0, removed.Removed);
             Assert.Single(await service.GetBackupsAsync());
         }
         finally

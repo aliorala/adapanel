@@ -300,6 +300,8 @@ public sealed class SubscriptionBackupArchiveTests
 
         public Task<FtpServerStatusDto> EnsureServerAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
+        public Task<FtpServerStatusDto> GetServerStatusAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<FtpUserDto> CreateFtpUserAsync(CreateFtpUserRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task SetFtpPasswordAsync(SetFtpPasswordRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

@@ -35,18 +35,57 @@
               <span v-else-if="step.status === 'done'">✓</span>
               <span v-else>✕</span>
             </span>
-            <span class="step-name">{{ setupStepLabel(step.name) }}</span>
+            <!-- ADIMIN SEBEBİ GÖSTERİLİR. Sunucu her tamamlanan adımla birlikte bir `detail`
+                 gönderiyor ve başarısız adımlarda oraya kurulum hatasının GERÇEK metnini yazıyor
+                 (bkz. ComponentBootstrapper: FormatInstallError). Arayüz bu alanı hiç basmıyordu:
+                 kullanıcı bir ✕ görüyor, neden olduğunu hiçbir yerde göremiyordu. Alan doluysa
+                 yazılır; boşsa hiçbir şey iddia edilmez. -->
+            <span class="step-text">
+              <span class="step-name">{{ setupStepLabel(step.name) }}</span>
+              <small v-if="step.detail">{{ step.detail }}</small>
+            </span>
           </li>
-          <li v-if="(installProgress?.steps?.length ?? 0) === 0" class="progress-step running">
+          <li v-if="(installProgress?.steps?.length ?? 0) === 0" class="progress-step">
             <span class="step-icon"><span class="step-spinner"></span></span>
-            <span class="step-name">{{ t("panel.setup.progress.preparing") }}</span>
+            <span class="step-text"><span class="step-name">{{ t("panel.setup.progress.preparing") }}</span></span>
           </li>
         </ul>
-        <p v-if="installProgress?.completed" class="notice" role="status">{{ t("panel.setup.progress.redirecting") }}</p>
-        <p v-if="installProgress?.failed" class="notice error" role="alert">{{ installProgress?.error }}</p>
+
+        <!-- KISMİ BAŞARISIZLIK ÖZETİ. Bileşen kurucusu tek bir bileşende takıldığında kalanlara
+             devam eder, yani işlem "tamamlandı" olarak biter ama listede ✕'ler kalır. Önceden
+             bunun tek izi listedeki simgeydi ve sayfa 1,2 saniye sonra kendini panele
+             yönlendiriyordu; kullanıcı eksik kurulanı okuyamadan ekranı kaybediyordu. -->
+        <p v-if="installProgress?.completed && failedSteps.length" class="notice warn-banner" role="alert">
+          <strong>{{ t("panel.setup.progress.partialTitle") }}</strong>
+          <span>{{ t("panel.setup.progress.partialBody", { count: failedSteps.length }) }}</span>
+        </p>
+        <p v-else-if="installProgress?.completed" class="notice" role="status">{{ t("panel.setup.progress.redirecting") }}</p>
+
+        <template v-if="installProgress?.failed">
+          <p class="notice error" role="alert">{{ installProgress?.error }}</p>
+          <p class="meta">{{ t("panel.setup.progress.failedHint") }}</p>
+        </template>
+
+        <!-- Sonuç ne olursa olsun kullanıcının ÖNÜ AÇIK: kurulum yarım kaldığında panel yine
+             kurulmuştur (yönetici hesabı oluşturuldu), eksik bileşenler Mağaza'dan kurulabilir.
+             Yönlendirme artık otomatik değil çünkü hata mesajının okunması gerekiyor. -->
+        <div v-if="installHalted" class="row-actions">
+          <button type="button" class="form-submit" @click="continueAfterInstall">
+            {{ t("panel.setup.progress.continue") }}
+          </button>
+        </div>
       </section>
 
-      <form v-if="mode === 'setup' && !installing" class="form-grid" @submit.prevent="submitSetup">
+      <!--
+        KURULUM FORMU — İKİ ADLANDIRILMIŞ GRUP.
+        Sekiz alan tek bir yığın hâlinde diziliydi: "onay parolası"nın hemen ardından "güvenli
+        giriş yolu", onun ardından dil ve port geliyordu. Alanların hepsi aynı görünüyor ve
+        aralarında bir sınır yok; kullanıcının ürünle ilk karşılaşması bu ekran olduğu için
+        "burada ne isteniyor" sorusunun cevabı BAŞLIKLA veriliyor. Hiçbir alan kaldırılmadı,
+        sırası da değişmedi — yalnızca ait oldukları grubun adı yazıldı.
+      -->
+      <form v-if="mode === 'setup' && !installing" class="form-grid setup-form" @submit.prevent="submitSetup">
+        <p class="form-group-label">{{ t("panel.setup.groupAdmin") }}</p>
         <label>
           <span>{{ t("panel.form.adminUserName") }}</span>
           <input v-model="setupForm.userName" minlength="3" maxlength="32" required />
@@ -63,6 +102,8 @@
           <span>{{ t("panel.form.confirmPassword") }}</span>
           <PasswordField v-model="setupForm.confirmPassword" minlength="12" required />
         </label>
+
+        <p class="form-group-label">{{ t("panel.setup.groupPanel") }}</p>
         <label>
           <span>{{ t("panel.form.securePath") }}</span>
           <input v-model="setupForm.secureEntryPath" pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$" required />
@@ -83,12 +124,19 @@
           <span>{{ t("panel.setup.installRecommended") }}</span>
         </label>
 
-        <button type="submit" :disabled="setupStore.loading">
+        <button type="submit" class="form-submit" :disabled="setupStore.loading">
           {{ t("panel.setup.submit") }}
         </button>
       </form>
 
-      <form v-else-if="authView === 'login'" class="form-grid" @submit.prevent="submitLogin">
+      <!--
+        GİRİŞ / PAROLA formları TEK SÜTUN.
+        `.form-grid` panelin genel form ızgarasıdır ve base.css'te ÜÇ sütundur; giriş kartı da onu
+        kullandığı için "Kullanıcı adı", "Parola" ve "Beni hatırla" 720px'lik kartta yan yana üç
+        hücreye bölünüyor, altındaki iki düğme de kendi hücrelerine dağılıyordu. Bir giriş formu
+        okuma yönü tek olan kısa bir dizidir; üç sütun burada bilgi değil kalabalık üretiyordu.
+      -->
+      <form v-else-if="authView === 'login'" class="form-grid auth-form" @submit.prevent="submitLogin">
         <label>
           <span>{{ t("panel.auth.userNameOrEmail") }}</span>
           <input v-model="loginForm.userNameOrEmail" required />
@@ -107,27 +155,34 @@
           <span>{{ t("panel.auth.rememberMe") }}</span>
         </label>
 
-        <button type="submit" :disabled="authStore.loading">
+        <button type="submit" class="form-submit" :disabled="authStore.loading">
           {{ requiresTwoFactor ? t("panel.auth.verify") : t("panel.auth.login") }}
         </button>
-        <button type="button" class="secondary link-button" @click="authView = 'forgot'">
+        <!-- ÜÇÜNCÜL EYLEM: "Şifremi unuttum" bir kaçış yoludur, giriş yapmakla YARIŞMAZ.
+             `.link-button` sınıfı burada kullanılıyordu ama tanımı YALNIZCA FilesView'in kapsamlı
+             (scoped) stilinde var; kapsamlı CSS bileşenler arası geçmediği için bu düğme hiçbir
+             stil almıyor, `secondary` + kartın `button { width: 100% }` kuralıyla birincil düğmeyle
+             AYNI BOYDA, tam genişlikte ikinci bir düğme olarak çiziliyordu. Giriş ekranında iki
+             eşit ağırlıkta düğme, gözün nereye gideceğini söylemez. Sınıf burada tanımlandı ve
+             `secondary` düştü: metin bağlantısı olması gereken şey metin bağlantısı oldu. -->
+        <button type="button" class="link-button" @click="authView = 'forgot'">
           {{ t("panel.auth.forgotPassword") }}
         </button>
       </form>
 
-      <form v-else-if="authView === 'forgot'" class="form-grid" @submit.prevent="submitForgotPassword">
+      <form v-else-if="authView === 'forgot'" class="form-grid auth-form" @submit.prevent="submitForgotPassword">
         <p class="lead">{{ t("panel.auth.forgotHint") }}</p>
         <label>
           <span>{{ t("panel.form.email") }}</span>
           <input v-model="forgotForm.email" type="email" required />
         </label>
-        <button type="submit" :disabled="authStore.loading">{{ t("panel.auth.forgotSubmit") }}</button>
-        <button type="button" class="secondary link-button" @click="authView = 'login'">
+        <button type="submit" class="form-submit" :disabled="authStore.loading">{{ t("panel.auth.forgotSubmit") }}</button>
+        <button type="button" class="link-button" @click="authView = 'login'">
           {{ t("panel.auth.backToLogin") }}
         </button>
       </form>
 
-      <form v-else-if="authView === 'reset'" class="form-grid" @submit.prevent="submitResetPassword">
+      <form v-else-if="authView === 'reset'" class="form-grid auth-form" @submit.prevent="submitResetPassword">
         <p class="lead">{{ t("panel.auth.resetHint") }}</p>
         <label>
           <span>{{ t("panel.auth.newPassword") }}</span>
@@ -137,8 +192,8 @@
           <span>{{ t("panel.auth.newPasswordConfirm") }}</span>
           <PasswordField v-model="resetForm.confirmPassword" minlength="12" required />
         </label>
-        <button type="submit" :disabled="authStore.loading">{{ t("panel.auth.resetSubmit") }}</button>
-        <button type="button" class="secondary link-button" @click="authView = 'login'">
+        <button type="submit" class="form-submit" :disabled="authStore.loading">{{ t("panel.auth.resetSubmit") }}</button>
+        <button type="button" class="link-button" @click="authView = 'login'">
           {{ t("panel.auth.backToLogin") }}
         </button>
       </form>
@@ -595,7 +650,6 @@ import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";
 import { getAttentionSummary, type AttentionSummary } from "../api/attention";
 import { lazyView } from "../utils/lazyView";
-import { formatDateTime } from "../utils/datetime";
 
 /*
  * BÖLÜMLER TALEP ÜZERİNE İNDİRİLİR (bkz. utils/lazyView.ts).
@@ -1142,6 +1196,41 @@ async function submitSetup() {
   }
 }
 
+/** Kurulumda ✕ ile biten adımlar. Boş dizi "hepsi geçti" demektir. */
+const failedSteps = computed(() =>
+  (installProgress.value?.steps ?? []).filter((step) => step.status === "failed"));
+
+/**
+ * Kurulum sonucu OKUNMADAN geçilemez mi.
+ *
+ * ÖLÇÜLDÜ — düzeltilen hata: işlem bittiğinde ekran, sonucu ne olursa olsun 1,2 saniye sonra
+ * kendini panele yönlendiriyordu. Yani "Kurulumda bir sorun oluştu" başlığı ve altındaki gerçek
+ * hata metni 1,2 saniye görünüp gidiyordu; kullanıcının ürünle ilk karşılaşmasında okuyamadığı
+ * tek şey, tam da okuması gereken şeydi. Aynı şey kısmi başarısızlıkta daha da sinsiydi: işlem
+ * "tamamlandı" sayıldığı için başlık bile sorun olduğunu söylemiyordu.
+ *
+ * Bir şey ters gittiyse yönlendirme KULLANICININ kararına bırakılır; her şey yolundaysa
+ * davranış eskisi gibi otomatiktir.
+ */
+const installHalted = computed(() =>
+  Boolean(installProgress.value) &&
+  (installProgress.value!.failed || failedSteps.value.length > 0));
+
+/**
+ * Kurulum ekranından panele geçiş.
+ *
+ * Submit akışında güvenli giriş yolu elimizde (assign); sayfa yenilenip gelindiyse güvenli yol
+ * gizli olduğundan sayfayı yeniden yükle (durum "kurulu" + ilerleme bittiği için login ekranı
+ * açılır).
+ */
+function continueAfterInstall() {
+  if (setupSecurePath.value) {
+    window.location.assign(setupSecurePath.value);
+  } else {
+    window.location.reload();
+  }
+}
+
 async function pollInstallProgress() {
   while (true) {
     try {
@@ -1157,15 +1246,14 @@ async function pollInstallProgress() {
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
 
-  // Kısa bir "tamamlandı" anı gösterip girişe geç. Submit akışında güvenli giriş yolu
-  // elimizde (assign); sayfa yenilenip gelindiyse güvenli yol gizli olduğundan sayfayı
-  // yeniden yükle (durum "kurulu" + ilerleme bittiği için login ekranı açılır).
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-  if (setupSecurePath.value) {
-    window.location.assign(setupSecurePath.value);
-  } else {
-    window.location.reload();
+  // Sonuçta bir ✕ varsa ekran KULLANICIYI BEKLER (bkz. installHalted); yoksa kısa bir
+  // "tamamlandı" anı gösterip girişe geçer.
+  if (installHalted.value) {
+    return;
   }
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  continueAfterInstall();
 }
 
 function setupStepLabel(name: string): string {
@@ -1665,17 +1753,12 @@ function resolveApiMessage(error: unknown): string {
   const details = extractApiDetails(error);
   return details ? `${message}\n\n${details}` : message;
 }
-
-/** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
-function formatUtc(value: string | null) {
-  return formatDateTime(value, t("panel.common.notAvailable"));
-}
 </script>
 
 <style scoped>
 .setup-progress {
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 .setup-progress h3 {
@@ -1684,23 +1767,25 @@ function formatUtc(value: string | null) {
 
 .progress-steps {
   list-style: none;
-  margin: 6px 0 0;
+  margin: var(--sp-6) 0 0;
   padding: 0;
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
   max-height: 320px;
   overflow-y: auto;
 }
 
+/* Adım satırı: simge ÜSTE hizalı, çünkü satır artık iki satırlı olabiliyor (ad + sebep).
+   Ortalanmış bir simge, iki satırlık bir hatada adın hizasını kaybediyordu. */
 .progress-step {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  align-items: flex-start;
+  gap: var(--sp-10);
+  padding: var(--sp-8) var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
-  background: var(--input-bg);
-  font-size: 0.92rem;
+  background: var(--surface-2);
+  font-size: var(--fs-md);
 }
 
 .progress-step.done {
@@ -1709,6 +1794,23 @@ function formatUtc(value: string | null) {
 
 .progress-step.failed {
   color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--danger-1) 40%, transparent);
+  background: var(--danger-bg);
+}
+
+.step-text {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* Sunucudan gelen ham hata metni: uzun ve tek parça olabilir, satırı taşırıp kartı yatay
+   kaydırmasın. */
+.step-text small {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .step-icon {
@@ -1716,6 +1818,8 @@ function formatUtc(value: string | null) {
   place-items: center;
   width: 18px;
   height: 18px;
+  margin-top: 1px;
+  flex: none;
   font-weight: 700;
 }
 
@@ -1736,14 +1840,14 @@ function formatUtc(value: string | null) {
   display: grid;
   place-items: center;
   min-height: 100vh;
-  padding: 20px;
+  padding: var(--sp-20);
 }
 
 .auth-card {
   width: min(720px, 100%);
   display: grid;
-  gap: 20px;
-  padding: 28px;
+  gap: var(--sp-20);
+  padding: var(--sp-28);
   border-radius: 28px;
   border: 1px solid var(--panel-border);
   background: linear-gradient(180deg, var(--surface-1), var(--surface-0));
@@ -1752,7 +1856,7 @@ function formatUtc(value: string | null) {
 
 .auth-copy {
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 .auth-copy h1 {
@@ -1774,29 +1878,62 @@ function formatUtc(value: string | null) {
 }
 
 .form-grid,
-.stack,
-.subgrid,
-.banner-stack,
-.audit-list {
+.banner-stack {
   display: grid;
-  gap: 16px;
+  gap: var(--sp-16);
 }
 
-.warn-banner {
-  border-color: color-mix(in srgb, var(--warn-1) 20%, transparent);
-  background: color-mix(in srgb, var(--warn-1) 12%, transparent);
-  color: var(--warn-text);
+/*
+ * GİRİŞ KARTININ FORMLARI — SÜTUN SAYISI BURADA KARARLAŞTIRILIR.
+ *
+ * `.form-grid` panel genelinin form ızgarasıdır ve base.css'te ÜÇ sütundur (yalnız 900px altında
+ * ikiye, 720px altında bire iner). Bu kart ise en fazla 720px genişliğinde ve masaüstünde ekran
+ * 900px'in üstünde olduğu için üç sütun kuralı burada da geçerliydi: giriş formunun iki alanı ve
+ * onay kutusu tek satıra bölünüyor, düğmeler de kendi hücrelerine dağılıyordu. Kartın genişliği
+ * ile ekranın genişliği aynı şey değil; kırılım kartın kendi ölçüsüne göre verilir.
+ *
+ * Giriş/parola formları TEK sütun (2-4 öge), kurulum formu İKİ sütun (8 alan; tek sütunda kart
+ * ekranı taşacak kadar uzuyordu, üç sütunda alan başına ~215px kalıyor ve "Güvenli giriş yolu"
+ * gibi etiketler sarıyordu; iki sütunda alan başına ~330px).
+ */
+.auth-form {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-/* Askı şeridi: başlık + sebep iki satır. `.notice.error` renklendirmeyi zaten veriyor. */
+.setup-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Grup başlığı, onay kutusu ve gönder düğmesi ızgarayı BÖLMEZ: üçü de tam satır. */
+.form-group-label,
+.setup-form .checkbox,
+.form-submit {
+  grid-column: 1 / -1;
+}
+
+/* Alan grubunun adı. Kendi başına bir başlık değil bir AYIRAÇ: üstündeki gruptan çizgiyle
+   ayrılır, ilkinde çizgi olmaz. */
+.form-group-label {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--fs-2xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* İkinci ve sonraki gruplar bir çizgiyle ayrılır; ilkinde çizgi olmaz (kartın kendi başlığı
+   zaten hemen üstünde). Kardeş birleştiricisi kullanılıyor, `:not()` DEĞİL: bu depoda çıplak
+   `:not()` özgüllüğü yükseltip bileşenlerin kendi kurallarını eziyor (bkz. CssSpecificityGuardTests). */
+.form-group-label ~ .form-group-label {
+  padding-top: var(--sp-12);
+  border-top: 1px solid var(--panel-border);
+}
+
+/* Askı şeridi: başlık + sebep iki satır. Renklendirmeyi `.notice.error` zaten veriyor. */
 .suspended-banner {
   display: grid;
-  gap: 4px;
-}
-
-.audit-item {
-  border: 1px solid var(--panel-border);
-  background: var(--surface-1);
+  gap: var(--sp-4);
 }
 
 .settings-workspace {
@@ -1820,20 +1957,7 @@ function formatUtc(value: string | null) {
 
 .settings-account span {
   color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.settings-section {
-  display: grid;
-  gap: 12px;
-}
-
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  font-size: var(--fs-2xs);
 }
 
 .settings-check {
@@ -1845,22 +1969,6 @@ function formatUtc(value: string | null) {
   width: auto;
 }
 
-.audit-item {
-  padding: 16px;
-  border-radius: var(--radius-md);
-}
-
-.audit-item p,
-.audit-item small {
-  margin: 0;
-}
-
-.audit-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 /* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
    kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
    `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
@@ -1870,22 +1978,7 @@ function formatUtc(value: string | null) {
    ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
 label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
-  gap: 8px;
-}
-
-.checkbox {
-  grid-template-columns: auto 1fr;
-  align-items: center;
-}
-
-.checkbox input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-}
-
-.checkbox span {
-  margin-left: 8px;
+  gap: var(--sp-8);
 }
 
 input,
@@ -1895,13 +1988,46 @@ button {
   width: 100%;
 }
 
+/*
+ * ÜÇÜNCÜL EYLEM ("Şifremi unuttum", "Girişe dön").
+ *
+ * Sınıf şablonda kullanılıyordu ama tanımı YALNIZCA FilesView'in kapsamlı stilindeydi; kapsamlı
+ * CSS bileşenler arası geçmez, dolayısıyla burada hiç uygulanmıyordu. Düğme `secondary` + yukarıdaki
+ * `button { width: 100% }` kuralıyla, birincil "Giriş yap" düğmesiyle AYNI boyda tam genişlikte
+ * ikinci bir düğme olarak çiziliyordu — panelin ilk ekranında iki eşit ağırlıkta çağrı.
+ *
+ * Yukarıdaki `button` kuralı (0,1,1) özgüllükte; bu kural (0,2,0) olduğu için genişliği geri alır.
+ * Kutusu, gölgesi ve gradyanı kaldırılır: bu bir bağlantıdır, bir eylem düğmesi değil.
+ */
+.link-button {
+  width: auto;
+  justify-self: center;
+  min-height: 0;
+  padding: var(--sp-4) var(--sp-6);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-button:not(:disabled):hover {
+  background: transparent;
+  box-shadow: none;
+  filter: none;
+  transform: none;
+  color: var(--accent-1);
+}
+
 /* --- ÖZEL MARKA (white-label) --- */
 
 /* Giriş ekranının marka başlığı. Logo yoksa yalnız ad görünür; ikisi de yoksa blok hiç basılmaz. */
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-12);
   flex-wrap: wrap;
 }
 
@@ -1913,8 +2039,10 @@ button {
   object-fit: contain;
 }
 
+/* 1.05rem ölçekte YOKTU. Taşıma kuralı base.css ile aynı: en yakın adım (--fs-lg = 1rem, fark
+   0.7px — çıplak gözle görünmez); ağırlık 700 ve `--text-strong` vurguyu zaten taşıyor. */
 .auth-brand-name {
-  font-size: 1.05rem;
+  font-size: var(--fs-lg);
   font-weight: 700;
   color: var(--text-strong);
 }
@@ -1922,28 +2050,28 @@ button {
 .accent-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .accent-swatch {
   width: 44px;
   min-width: 44px;
   height: 34px;
-  padding: 2px;
+  padding: var(--sp-2);
   cursor: pointer;
 }
 
 .brand-assets {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .brand-asset {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
   align-content: start;
-  padding: 12px;
+  padding: var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-1);
@@ -1954,7 +2082,7 @@ button {
   display: grid;
   place-items: center;
   min-height: 72px;
-  padding: 8px;
+  padding: var(--sp-8);
   border: 1px dashed var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -1978,9 +2106,10 @@ button {
 }
 
 @media (max-width: 760px) {
-  .audit-top {
-    flex-direction: column;
-    align-items: flex-start;
+  /* Kurulum formu bu genişlikte tek sütuna iner: iki sütunda alan başına ~350px kalıyor ama
+     kartın kendi dolgusuyla birlikte alanlar sıkışmaya başlıyor. */
+  .setup-form {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .settings-tabs {

@@ -847,8 +847,12 @@ public sealed partial class BackupService
                 "onedrive" => await ProbeOneDriveAsync(uri, remote, cancellationToken),
                 "azure" => await ProbeHttpAsync(uri, remote, azure: true, cancellationToken),
                 "s3" or "webdav" or "http" => await ProbeHttpAsync(uri, remote, azure: false, cancellationToken),
-                // FTP: FtpWebRequest ile boyut sorgusu ayrı bir yol; bugün kapsanmıyor ve bu
-                // AÇIKÇA söyleniyor — "kontrol ettim, yok" demektense "kontrol edemedim" denir.
+                // FTP artık KAPSAMDA: üst dizin listelenip ad aranıyor (bkz. ProbeFtpPresenceAsync).
+                // Aynı ölçüm silme yolunda 550'yi ayırmak için zaten yazıldı; doğrulamada
+                // "kontrol edemedim" demeye devam etmek, elimizdeki ölçümü kullanmamak olurdu.
+                // Ölçüm YAPILAMADIĞINDA sonuç yine Unreachable'dır — "yok" DEĞİL.
+                "ftp" => await ProbeFtpPresenceAsync(
+                    uri, new NetworkCredential(remote.UserName, remote.Password), cancellationToken),
                 _ => (RemotePresence.Unreachable, $"Bu hedef turu icin uzak dogrulama yok: {record.TargetType}")
             };
         }
@@ -921,6 +925,18 @@ public sealed partial class BackupService
         bool azure,
         CancellationToken cancellationToken)
     {
+        // İMZASIZ ÖLÇÜM YAPILMAZ (Azure SAS / S3 presigned hedefleri).
+        //
+        // Kayda yazılan adres SanitizeUri'den geçer, yani SAS/imza SORGUSU DÜŞMÜŞTÜR ve yeniden
+        // üretilemez. Bu adrese kimliksiz bir HEAD atmak, özel bir kapta 404 döndürür: Azure
+        // varlığı gizlemek için "yok" der. O 404'ü "yedek silinmiş" saymak, DURAN bir off-site
+        // yedeği kayıp ilan etmek olurdu — üstelik artık bu ölçüm "artık hiç kopya yok"
+        // damgasını da besliyor. Ölçemediğimizde ölçemediğimizi söyleriz.
+        if (azure && string.IsNullOrWhiteSpace(remote.UserName))
+        {
+            return (RemotePresence.Unreachable, "credentials=sas_only; probe=skipped; remote_presence=unknown");
+        }
+
         var client = httpClientFactory.CreateClient();
         using var request = new HttpRequestMessage(HttpMethod.Head, uri);
 

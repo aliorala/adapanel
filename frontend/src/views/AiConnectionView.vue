@@ -372,14 +372,6 @@ function showNotice(message: string, isError: boolean) {
   align-content: start;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
 .token-row {
   grid-template-columns: minmax(200px, 1.4fr) 1fr 1fr minmax(150px, 1fr) minmax(130px, 0.9fr) auto;
 }
@@ -392,10 +384,6 @@ function showNotice(message: string, isError: boolean) {
 
 .created-token {
   border-color: color-mix(in srgb, var(--warn-1) 45%, transparent);
-}
-
-.row-button {
-  width: auto;
 }
 
 .row-actions button {

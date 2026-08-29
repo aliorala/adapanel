@@ -20,7 +20,10 @@
 
     <section class="module-toolbar ftp-toolbar">
       <div class="toolbar-group">
-        <button class="compact" v-bind="writeGate()" @click="toggleCreateForm">
+        <!-- Form ACIKKEN bu dugme "Vazgec" olur; birincil mavi kalirsa ekrandaki EN BASKIN dugme
+             "Vazgec" olurdu (asagidaki "Kullaniciyi olustur" ile ayni agirlikta). Tek birincil
+             eylem kurali: form acikken birincil olan sey formu KAYDETMEKTIR. -->
+        <button :class="['compact', { secondary: showCreateForm }]" v-bind="writeGate()" @click="toggleCreateForm">
           {{ showCreateForm ? t("panel.ftp.cancelCreate") : t("panel.ftp.addUser") }}
         </button>
         <span class="ftp-address">
@@ -35,11 +38,39 @@
 
       <div class="toolbar-group ftp-filters">
         <input v-model="search" :aria-label="t('panel.ftp.search')" :placeholder="t('panel.ftp.searchPlaceholder')" />
-        <button class="secondary compact" @click="refresh">
+        <button class="secondary compact" @click="refreshAll">
           {{ t("panel.ftp.refresh") }}
         </button>
       </div>
     </section>
+
+    <!-- SUNUCU DURUMU — bu ekranin en pahali sessizligi.
+         19.08.2026 bu makinede OLCULDU: 21 portunu FileZilla Server tutuyordu, panelin actigi
+         kullanicilar dogru parolayla bile 530 aliyordu; ekran ise SADECE bir rozetle "hazir degil"
+         diyordu. Yonetici "kullanici var ama giremiyorum" ile bas basa kaliyordu.
+         Artik SEBEP yazili: sunucunun dondugu i18n anahtari (ftp.control_port_conflict, …) ve
+         cakismada portu tutan surecin ADI. Kosul `isConfigured` DEGIL, `statusMessage`:
+         olcum yapilamadiginda (`ftp.server_status_unknown`) `isConfigured` eski altyapi bayragina
+         duser ve true kalabilir -- "olculemedi"yi sessizce "sorun yok" saymak bu ekranin ta
+         kendisiydi. -->
+    <div
+      v-if="serverStatus && serverStatus.statusMessage !== 'ftp.server_ready'"
+      class="notice warn-banner ftp-status"
+      role="alert">
+      <strong>{{ t(serverStatus.statusMessage) }}</strong>
+      <span v-if="serverStatus.controlPortOwner">
+        {{ t("panel.ftp.controlPortOwner", { owner: serverStatus.controlPortOwner }) }}
+      </span>
+      <!-- Olculebilen ham durumlar: "site Started ama servis Stopped" gibi ayrimi yalniz bunlar
+           gosterir. Olculemeyen alan bos gelir; bos degeri "-" ile yazmak olcumu yapilmis
+           gostermek olurdu, o yuzden satir yalniz en az biri doluysa cikar. -->
+      <span v-if="serverStatus.serviceState || serverStatus.siteState" class="hint">
+        {{ t("panel.ftp.serverStateLine", {
+          service: serverStatus.serviceState || t("panel.ftp.stateUnmeasured"),
+          site: serverStatus.siteState || t("panel.ftp.stateUnmeasured")
+        }) }}
+      </span>
+    </div>
 
     <div v-if="serverStatus" class="summary-strip ftp-summary">
       <div class="summary-item">
@@ -166,7 +197,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
-import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
+import { createFtpUser, deleteFtpUser, ensureFtpServer, getFtpStatus, getFtpTls, getFtpUsers, setFtpPassword, setFtpTls, type FtpServerStatus, type FtpUser } from "../api/ftp";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
@@ -333,6 +364,38 @@ async function refresh() {
   }
 }
 
+/** Yenileme dugmesi: kullanici listesi + sunucu durumu birlikte tazelenir (ikisi de salt okunur). */
+async function refreshAll() {
+  await Promise.allSettled([refresh(), loadStatus()]);
+}
+
+/**
+ * Durumu YENIDEN OLCER (GET /ftp/status) — kurmaz, FTPSVC'yi yeniden baslatmaz.
+ *
+ * Onceden durumu ogrenmenin tek yolu `POST /ftp/ensure` idi, yani bir MUTASYON: "neden kimse
+ * baglanamiyor" sorusunun bedeli altyapiyi yeniden yapilandirmakti. Yenileme dugmesi artik
+ * salt-okunur ucu kullanir; ilk acilista `prepareServer()` kurulumu garanti etmeye devam eder.
+ *
+ * Uc YONETICI-OZEL (yanit yabanci sureclerin adlarini/PID'lerini tasir). Site calisma alanindaki
+ * FTP sekmesinde bayi bunu goremez; orada `serverStatus` bos kalir ve serit hic cizilmez -- bir
+ * bilgi GIZLENMIYOR, hic olculmemis oluyor.
+ */
+async function loadStatus() {
+  if (!isAdmin.value) {
+    return;
+  }
+
+  try {
+    serverStatus.value = await getFtpStatus();
+  } catch {
+    // Sessizce yutulmuyor: olcum basarisizsa var olan `serverStatus` (ve serit) OLDUGU GIBI kalir;
+    // yenisiyle degistirilmez. Kullanicinin gordugu son OLCULMUS durum, olculememis bir bosluktan
+    // daha dogrudur. Hata metni zaten kullanici listesinin kendi bildiriminde gorunur.
+  } finally {
+    serverCheckCompleted.value = true;
+  }
+}
+
 async function createUser() {
   creating.value = true;
 
@@ -436,21 +499,21 @@ function formatCreatedAt(value: string) {
 </script>
 
 <style scoped>
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-}
-
 .compact-head {
   align-items: center;
 }
 
+/* Uyari seridi: `.notice.warn-banner` (base.css) zaten kehribar bir izgara. Buradaki tek ekleme
+   ilk satirin (sebep cumlesi) govdeden bir adim buyuk olmasi -- serit uc satira kadar cikabiliyor
+   ve hangisinin HUKUM, hangisinin ayrinti oldugu okunmadan anlasilmali. */
+.ftp-status strong {
+  font-size: var(--fs-h4);
+}
+
 .ftp-address {
   display: grid;
-  gap: 1px;
-  padding: 0 4px;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4);
 }
 
 .ftp-address small {
@@ -475,20 +538,21 @@ function formatCreatedAt(value: string) {
 
 .ftp-tls-bar {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: flex-start;
-  margin-top: 12px;
   cursor: pointer;
 }
 
 .ftp-tls-bar input {
   width: auto;
-  margin-top: 3px;
+  /* Kutu, yanindaki KALIN metnin govde cizgisine otursun (metin satir yuksekligi 19.6px, kutu
+     ~13px): 2px'lik tek adim yeterli, --sp-4 kutuyu metnin altina dusururdu. */
+  margin-top: var(--sp-2);
 }
 
 .ftp-tls-text {
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
 }
 
 .ftp-tls-text small {
@@ -505,7 +569,7 @@ function formatCreatedAt(value: string) {
 }
 
 .technical-details {
-  margin-top: 8px;
+  margin-top: var(--sp-8);
 }
 
 .technical-details summary {
@@ -516,13 +580,16 @@ function formatCreatedAt(value: string) {
 
 .technical-details pre {
   max-height: 260px;
-  margin: 8px 0 0;
-  padding: 10px;
+  margin: var(--sp-8) 0 0;
+  padding: var(--sp-10);
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--input-bg);
   color: inherit;
-  font: 0.78rem/1.45 "Cascadia Code", "Consolas", monospace;
+  /* Yazi tipi listesi ELDE SAYILMIYOR: `--font-mono` (base.css) panelin butun konsol
+     yuzeylerinin tek kaynagi; burada ayri bir liste yazmak, ayni panelde iki farkli tek
+     aralikli yazi tipi demekti. */
+  font: var(--fs-2xs)/1.45 var(--font-mono);
   white-space: pre-wrap;
 }
 

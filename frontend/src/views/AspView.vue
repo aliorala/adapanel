@@ -359,8 +359,7 @@ function showNotice(message: string, isError: boolean) {
   gap: 12px;
 }
 
-.asp-header,
-.section-head {
+.asp-header {
   display: flex;
   gap: 12px;
   justify-content: space-between;
@@ -380,13 +379,6 @@ function showNotice(message: string, isError: boolean) {
   border-radius: var(--radius-md);
   border: 1px solid var(--panel-border);
   background: linear-gradient(180deg, var(--surface-2), var(--surface-2));
-}
-
-.tile-label {
-  color: var(--text-muted);
-  font-size: 0.84rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .mixed-grid {

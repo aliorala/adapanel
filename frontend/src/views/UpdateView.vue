@@ -16,18 +16,25 @@
     <p v-if="!status" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
 
     <template v-else>
-      <div class="update-summary">
-        <article>
-          <span>{{ t("panel.update.current") }}</span>
+      <!-- Panelin ortak ozet seridi (`.summary-strip` / `.summary-item`, base.css). Bu ekran ayni
+           deseni KENDI adlariyla yeniden yaziyordu (`.update-summary article`) ve olculebilir
+           farklari vardi: 14px dolgu (ortak 12), `--input-bg` zemin (ortak `--surface-0`), etiket
+           govde boyunda (ortak `--fs-2xs`). Ayni bilgi kutusu iki ekranda iki turlu ciziliyordu. -->
+      <div class="summary-strip update-summary">
+        <article class="summary-item">
+          <span class="tile-label">{{ t("panel.update.current") }}</span>
           <strong>{{ status.currentVersion }}</strong>
         </article>
-        <article>
-          <span>{{ t("panel.update.latest") }}</span>
+        <article class="summary-item">
+          <span class="tile-label">{{ t("panel.update.latest") }}</span>
           <strong>{{ status.latestVersion }}</strong>
         </article>
-        <article>
-          <span>{{ t("panel.update.packageState") }}</span>
-          <strong>
+        <article class="summary-item">
+          <span class="tile-label">{{ t("panel.update.packageState") }}</span>
+          <!-- Paket durumu bir DURUMDUR, bir deger degil: iki surum numarasinin yaninda duz
+               kalin metin olarak durunca "surum gibi" okunuyordu. Rozet hem rutbeyi hem de
+               tonu (hazir/bekliyor) tasir; renk tek kanal degil, metin de ayni seyi soyler. -->
+          <span :class="['status-pill', status.isPackageReady && !status.isInstallScheduled ? 'ok' : 'warn']">
             {{
               status.isInstallScheduled
                 ? t("panel.update.scheduled")
@@ -35,13 +42,16 @@
                   ? t("panel.update.ready")
                   : t("panel.update.notReady")
             }}
-          </strong>
+          </span>
         </article>
       </div>
 
       <!-- Kontrol BAŞARISIZSA "güncelsiniz" demek yalan olur: yeni sürüm yayınlanmış olabilir
-           ve panel onu görememiştir (en sık sebep GitHub'ın saatlik istek sınırı). -->
-      <p v-if="status.isCheckFailed" class="notice warn" role="alert">{{ t("panel.update.checkFailed") }}</p>
+           ve panel onu görememiştir (en sık sebep GitHub'ın saatlik istek sınırı).
+           `warn` -> `warn-banner`: `warn` bu bilesende HIC TANIMLI DEGILDI, yani uyari seridi
+           bugune kadar MAVI bilgi seridi olarak ciziliyordu (base.css `.notice` varsayilani).
+           `warn-banner` base.css'te tanimli kehribar surumdur. -->
+      <p v-if="status.isCheckFailed" class="notice warn-banner" role="alert">{{ t("panel.update.checkFailed") }}</p>
       <p v-else-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
 
       <!-- Notlar tabloya SIĞMIYORDU: <dd> içinde düz metin olarak basılınca HTML satır
@@ -79,14 +89,21 @@
         <p class="meta">{{ t("panel.update.phaseHintReal") }}</p>
       </div>
 
+      <!-- AGIRLIKLAR DUZELTILDI, iki adimlik akisa gore:
+           "Indir" bir HAZIRLIKTIR (paketi diske alir, hicbir sey degistirmez) -> ikincil.
+           "Kur" bu ekranin ASIL eylemidir -> tek birincil dugme.
+           `danger` KALDIRILDI: kirmizi "geri alinamaz / veri gider" demektir; oysa bu akisin kendi
+           onay kutusu tonu ACIKCA `tone: "neutral"` (bkz. installUpdate) ve gerekcesi kodda yazili
+           ("Yikici degil (silme yok, yalniz servis yeniden baslar)"). Dugme, kendi onay diyalogunun
+           soyledigi seyle celisiyordu. -->
       <div class="update-actions">
         <button
+          class="secondary"
           :disabled="!status.downloadUrl || !status.packageSha256 || !status.isUpdateAvailable || Boolean(busy)"
           @click="downloadUpdate">
           {{ busy === "download" ? t("panel.webdb.deploying") : t("panel.update.download") }}
         </button>
         <button
-          class="danger"
           :disabled="!status.isPackageReady || status.isInstallScheduled || Boolean(busy)"
           @click="installUpdate"
         >
@@ -401,16 +418,24 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+/* 16px -> --sp-12: `.panel` kendi izgara araligini 12px veriyor (base.css). Bu ekran 16px
+   yazdigi icin ust baslik ile ilk kutu arasi 12, kutular arasi 16 oluyordu -- ayni sayfada iki
+   ritim. Ayrica 16 ve 12, olcegin iki komsu adimi; farki gorunur ama gerekcesi yoktu. */
 .update-panel,
 .detail-grid,
-.update-summary,
 .update-actions {
   display: grid;
-  gap: 16px;
+  gap: var(--sp-12);
+}
+
+/* Uc kutucuk: ortak serit 4 sutunlu, burada 3 deger var. Dar ekran davranisi (900/720)
+   base.css'ten MIRAS ALINIR, burada tekrarlanmaz. */
+.update-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .up-to-date {
-  padding: 10px 14px;
+  padding: var(--sp-10) var(--sp-12);
   border: 1px solid color-mix(in srgb, var(--ok-1) 40%, var(--panel-border));
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--ok-1) 8%, var(--surface-1));
@@ -419,8 +444,8 @@ function showNotice(message: string, isError: boolean) {
 
 .install-progress {
   display: grid;
-  gap: 8px;
-  padding: 14px 16px;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-1);
@@ -449,42 +474,34 @@ function showNotice(message: string, isError: boolean) {
 .progress-meta {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-12);
   flex-wrap: wrap;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
+/* SAYILAR SAGA + tabular-nums: yuzde ve gecen sure her saniye degisiyor. Orantili rakamlarda
+   "%9" ile "%85" farkli genislikte cizilip satiri titretiyordu; sabit genislikli rakamda
+   yerinden oynamaz. */
+.progress-meta .meta {
+  font-variant-numeric: tabular-nums;
 }
 
-.update-summary {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.update-summary article {
-  display: grid;
-  gap: 5px;
-  padding: 14px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
-}
-
-.update-summary span {
-  color: var(--text-muted);
-}
-
+/* 3 -> 2 sutun: izgarada YALNIZ IKI oge var (SHA256 ve paket yolu). Ucuncu sutun her zaman
+   bostu ve iki uzun deger, bos bir sutunun yaninda gereksiz yere daraliyordu. */
 .detail-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
 }
 
 .detail-grid div {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* SHA256 ve paket yolu: bosluksuz uzun diziler. `word-break` (asagida) satiri kirar ama tek
+   aralikli yazi tipi olmadan 64 karakterlik ozet gozle karsilastirilamaz. */
+.detail-grid dd {
+  font-family: var(--font-mono);
 }
 
 .meta,

@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide sb-view">
+  <section class="panel sb-view">
     <div class="module-head">
       <div>
         <h2>{{ t("panel.siteBuilder.title") }}</h2>

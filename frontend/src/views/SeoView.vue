@@ -1,11 +1,14 @@
 <template>
-  <section class="panel wide seo-view">
+  <section class="panel seo-view">
     <div class="section-head">
       <div>
         <h2>{{ t("panel.seo.title") }}</h2>
         <p class="meta">{{ t("panel.seo.subtitle") }}</p>
       </div>
-      <div class="seo-controls">
+      <!-- `seo-controls` KALDIRILDI: tanimi (`flex` + `wrap` + `align-items:center` + 8px)
+           base.css'teki `.row-actions` ile BIREBIR ayniydi. Ayni seyin iki adi olmasi, yarin
+           birinin degisip otekinin geride kalmasi demektir. -->
+      <div class="row-actions">
         <select v-model="siteName" class="compact-select" :disabled="busy">
           <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
         </select>
@@ -50,7 +53,11 @@
       <p v-if="!overview.latest && !running" class="empty-state">{{ t("panel.seo.neverScanned") }}</p>
 
       <template v-if="report">
-        <div class="summary-strip">
+        <!-- `seo-strip`: ortak `.summary-strip`in TEK olculmus farki. Bu ekranda serit HER
+             ZAMAN alti kutu tasiyor (hata/uyari/bilgi/sayfa/sure/host ve gunlukte de alti);
+             base.css'in dort sutunu 4 + 2 gibi tirtikli bir ikinci satir birakiyordu. Uc sutun
+             alti kutuyu 3 + 3 diye tam bolerek dizer. Kutu GORUNUMU artik ortak tanimdan gelir. -->
+        <div class="summary-strip seo-strip">
           <div class="summary-item">
             <span>{{ t("panel.seo.severity.error") }}</span>
             <strong class="sev error">{{ count("error") }}</strong>
@@ -98,7 +105,7 @@
 
         <div class="seo-columns">
           <div class="form-surface">
-            <h5>robots.txt</h5>
+            <h4>robots.txt</h4>
             <p class="meta">
               <span :class="['status-pill', report.robots.found ? (report.robots.disallowsAll ? 'error' : 'ok') : 'warn']">
                 {{ report.robots.found ? (report.robots.disallowsAll ? t("panel.seo.robotsBlocking") : t("panel.seo.present")) : t("panel.seo.missing") }}
@@ -109,7 +116,7 @@
             </p>
           </div>
           <div class="form-surface">
-            <h5>sitemap.xml</h5>
+            <h4>sitemap.xml</h4>
             <p class="meta">
               <span :class="['status-pill', report.sitemap.found ? 'ok' : 'warn']">
                 {{ report.sitemap.found ? t("panel.seo.present") : t("panel.seo.missing") }}
@@ -125,8 +132,18 @@
           </div>
         </div>
 
-        <div class="section-head compact-head">
-          <h5>{{ t("panel.seo.findings") }}</h5>
+        <!-- BASLIK MERDIVENI DUZELTILDI (bu ekranin en buyuk gorsel sorunuydu).
+             OLCULDU: sayfa `h2` ile basliyor, sonra DOGRUDAN `h5` ve `h6`ya atliyordu. base.css
+             yalniz `h2/h3/h4` icin boy kurali yazar; `h5` hicbir kural almadigi icin TARAYICI
+             VARSAYILANINA dusuyordu: 0.83em = 11.2px, yani "Bulgular" / "Gunluk analizi" gibi
+             bolum basliklari GOVDE METNINDEN (13.5px) KUCUK ciziliyordu. `h6` icin yerel bir
+             kural vardi (0.86rem) ama o da govdeden kucuk. Yani ekranin butun ara basliklari
+             icerdikleri cumlelerden silikti; sayfa tek bir metin yiginidir gibi okunuyordu.
+             `h5` -> `h3` (15.9px), `h6` -> `h4` (14.3px): merdiven artik h2 > h3 > h4 > govde.
+             `compact-head` -> ortak `section-head` (tanimi birebir ayniydi, tek fark
+             `align-items`; base'in `flex-start` gerekcesi orada yazili). -->
+        <div class="section-head">
+          <h3>{{ t("panel.seo.findings") }}</h3>
           <select v-model="severityFilter" class="compact-select">
             <option value="">{{ t("panel.seo.allSeverities") }}</option>
             <option value="error">{{ t("panel.seo.severity.error") }}</option>
@@ -136,9 +153,18 @@
         </div>
 
         <p v-if="visibleFindings.length === 0" class="empty-state">{{ t("panel.seo.noFindings") }}</p>
+        <!-- ONEM DERECESI ARTIK YALNIZ RENKLE ANLATILMIYOR.
+             Oncesi olculdu: bu listede bir bulgunun "hata mi, uyari mi, bilgi mi" oldugunu
+             soyleyen TEK isaret 9px'lik renkli noktaydi ve nokta `aria-hidden`di — yani renk
+             koru kullanici ve ekran okuyucu icin bu bilgi HIC YOKTU. Ustelik ayni listedeki
+             OBUR uc liste (hata veren adresler, israf, dogrulama) derecesini zaten METINLE
+             soyluyordu; tutarsizlik da buradaydi.
+             Nokta yerine rozet: rengi korur (tarama hizi icin) ve derecenin adini YAZAR.
+             Yeni ceviri anahtari YOK — serit kutularinda kullanilan
+             `panel.seo.severity.*` anahtarlari devralindi. -->
         <ul v-else class="seo-findings">
           <li v-for="(finding, index) in visibleFindings" :key="`${finding.key}-${finding.url}-${index}`" :class="['seo-finding', finding.severity]">
-            <span class="sev-dot" :class="finding.severity" aria-hidden="true"></span>
+            <span :class="['status-pill', severityPill(finding.severity)]">{{ t(`panel.seo.severity.${finding.severity}`) }}</span>
             <div class="finding-body">
               <strong>{{ t(`panel.seo.finding.${finding.key}`) }}</strong>
               <p class="meta">
@@ -151,8 +177,14 @@
 
         <details v-if="report.pages.length" class="seo-pages">
           <summary>{{ t("panel.seo.crawledPages", { count: report.pages.length }) }}</summary>
+          <!-- `data-table` KALDIRILDI, cerceve KAPSAYICIYA tasindi: `.data-table` bir DIV
+               kalibidir (kenar + `overflow-x: auto` + koseleri kirpma). Bir `<table>` uzerinde
+               `overflow` calismaz ve `border-radius` cokmus kenarlarla kirpmaz — yani bu ekranin
+               uc tablosu cerceve almiyor, hucreleri de HIC bicimlenmiyordu (base.css'te
+               `th`/`td` kurali yok): sayilar ve yollar dolgusuz, ayracsiz, birbirine yapisik
+               ciziliyordu. Cerceve artik zaten kaydirma kapsayicisi olan `.table-scroll`ta. -->
           <div class="table-scroll">
-            <table class="data-table">
+            <table class="pages-table">
               <thead>
                 <tr>
                   <th>{{ t("panel.seo.table.path") }}</th>
@@ -646,6 +678,25 @@ async function showReport(reportId: string) {
 function show(message: string, isError: boolean) {
   notice.value = message;
   noticeError.value = isError;
+}
+
+/**
+ * Bulgu ağırlığını panelin ORTAK rozet diline çevirir.
+ *
+ * NEDEN eşleme gerekiyor: SEO motoru `error` / `warn` / `info` diyor, panelin rozet sınıfları ise
+ * `danger` / `warn` / (nötr). İkisini eşitlemeden `status-pill error` yazmak, base.css'te böyle
+ * bir sınıf OLMADIĞI için rozeti sessizce renksiz bırakırdı — bu turda tam olarak bu hata sınıfı
+ * (tanımsız sınıf sessizce yanlış çizim) panelin birkaç yerinde bulundu.
+ *
+ * `info` bilerek BOŞ döner: bilgi düzeyindeki bulgu nötr rozetle gösterilir; ona da renk vermek,
+ * gerçek uyarıların yanında üçüncü bir renk daha üretip önem sırasını okunmaz yapardı.
+ */
+function severityPill(severity: string): string {
+  if (severity === "error") {
+    return "danger";
+  }
+
+  return severity === "warn" ? "warn" : "";
 }
 
 function formatUtc(value: string): string {

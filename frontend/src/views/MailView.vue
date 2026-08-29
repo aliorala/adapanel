@@ -71,56 +71,72 @@
       <div v-if="selectedDomain" class="module-toolbar mail-domain-bar">
         <button class="secondary compact" @click="backToDomains">← {{ t("panel.mail.allDomains") }}</button>
         <strong class="current-domain">{{ selectedDomain }}</strong>
-        <button class="secondary compact danger" v-bind="writeGate(busy)" @click="removeDomain">
+        <button class="danger compact" v-bind="writeGate(busy)" @click="removeDomain">
           {{ t("panel.mail.deleteDomain") }}
         </button>
       </div>
 
-      <div v-if="selectedDomain" class="form-surface quota-strip">
-        <label class="inline-field">
-          <span class="field-label">{{ t("panel.mail.domainQuota") }}</span>
-          <input v-model.number="domainQuota" type="number" min="0" />
-          <span class="hint">MB ({{ t("panel.mail.zeroUnlimited") }})</span>
-        </label>
-        <span v-if="selectedDomainInfo && selectedDomainInfo.maxSizeMB > 0" class="hint">
-          {{ t("panel.mail.domainQuotaUsage", { used: selectedDomainInfo.allocatedMB, limit: selectedDomainInfo.maxSizeMB }) }}
-        </span>
-        <button class="secondary compact" v-bind="writeGate(busy)" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
-      </div>
-
-      <!-- GİDEN POSTA LİMİTİ: sunucunun itibarını koruyan sınır. Yalnız yönetici değiştirebilir —
-           kendi limitini müşterinin yükseltebilmesi korumayı anlamsız kılardı. -->
-      <div v-if="selectedDomain && isAdmin" class="form-surface quota-strip">
-        <label class="inline-field">
-          <span class="field-label">{{ t("panel.mail.outboundLimit") }}</span>
-          <input v-model.number="outboundLimit" type="number" min="0" />
-          <span class="hint">{{ t("panel.mail.outboundLimitPerHour") }} ({{ t("panel.mail.zeroUnlimited") }})</span>
-        </label>
-        <!-- "Kurulu değil" ile "limitsiz" AYRI şeyler: ilki panelin sınır kuramadığı, yani
-             sunucunun korumasız olduğu anlamına gelir. -->
-        <span
-          v-if="outboundLimitState && !outboundLimitState.configured"
-          class="status-pill warn"
-          :title="t('panel.mail.outboundLimitNotConfiguredHint')">
-          {{ t("panel.mail.outboundLimitNotConfigured") }}
-        </span>
-        <button class="secondary compact" :disabled="busy" @click="saveOutboundLimit">
-          {{ t("panel.mail.outboundLimitSave") }}
-        </button>
-      </div>
-      <SectionLoadError
-        v-if="isAdmin && selectedDomain && outboundLimitLoad.message.value"
-        :message="outboundLimitLoad.message.value"
-        @retry="loadOutboundLimit" />
-      <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
-
       <template v-if="selectedDomain">
+      <!--
+        ALAN ADI ÇALIŞMA ALANININ SIRASI = KULLANICININ SORU SIRASI.
+
+        ÖNCEKİ SIRA ölçüldü ve soruyla uyuşmuyordu: kutular → webmail → otomatik yapılandırma →
+        teşhis → otomatik yanıtlayıcı → takma adlar → listeler. Yani "alan adım postaya hazır mı?"
+        sorusunun cevabı (teşhis kartı) YEDİNCİ bloktaydı; kullanıcının her gün kullandığı takma ad
+        ve liste bölümleri ise yılda bir açılan yayınlama kartının ALTINA düşüyordu.
+
+        YENİ SIRA: alan adı hazır mı (teşhis) → kutular (+ o kutunun otomatik yanıtlayıcısı) →
+        takma adlar → listeler → ayarlar (kotalar, webmail/istemci ayarları, otomatik yapılandırma,
+        gelişmiş). Hiçbir blok silinmedi, hiçbiri katlanmadı; yalnız sıra değişti.
+      -->
+
+        <!-- Mail teşhis: panel MX/A/SPF/DKIM/DMARC/PTR'yi kendisi kontrol eder (profesyonel paneller gibi). -->
+        <section class="form-surface diagnostics-card">
+          <div class="section-head">
+            <div>
+              <h3>{{ t("panel.mail.diag.title") }}</h3>
+              <p class="meta">{{ t("panel.mail.diag.hint") }}</p>
+            </div>
+            <!-- ÖLÇME eylemi BİRİNCİL değildir: hiçbir şey yazmaz, geri alınacak bir sonucu
+                 yoktur. Panelin aynı işi yapan düğmesi (Yedekler > "Yedekleri doğrula") da
+                 `secondary`; vurgu dolgusu, kaydeden/yayınlayan düğmelere ayrılmıştır.
+                 SAYILDI: bu ekranda 15 vurgu dolgulu düğme vardı, hiçbiri diğerinden
+                 baskın değildi -- yani hiçbiri "birincil" değildi. -->
+            <button class="secondary compact" :disabled="busy || diagLoading" @click="runDiagnostics">
+              {{ diagLoading ? t("panel.mail.diag.checking") : t("panel.mail.diag.check") }}
+            </button>
+          </div>
+
+          <div v-if="diagnostics" class="diag-grid">
+            <div v-for="item in diagnostics.checks" :key="item.key" :class="['diag-item', item.status]">
+              <span class="diag-dot"></span>
+              <div class="diag-body">
+                <div class="diag-row">
+                  <strong>{{ t(`panel.mail.diag.label.${item.key}`) }}</strong>
+                  <span :class="['status-pill', item.status === 'ok' ? 'ok' : item.status === 'fail' ? 'danger' : 'warn']">
+                    {{ t(`panel.mail.diag.state.${item.status}`) }}
+                  </span>
+                </div>
+                <small v-if="item.status !== 'ok'" class="diag-detail">
+                  <span>{{ t("panel.mail.diag.expected") }}: <code>{{ item.expected || "—" }}</code></span>
+                  <span v-if="item.found"> · {{ t("panel.mail.diag.found") }}: <code>{{ item.found }}</code></span>
+                </small>
+              </div>
+            </div>
+          </div>
+          <p v-else class="meta">{{ t("panel.mail.diag.empty") }}</p>
+        </section>
+
         <div class="section-head">
           <div>
             <h3>{{ t("panel.mail.mailboxes") }}</h3>
             <p class="meta">{{ selectedDomain }}</p>
           </div>
-          <button class="compact" @click="showAccountForm = !showAccountForm">
+          <!-- "Iptal" BIRINCIL DUGME OLARAK CIZILEMEZ: ayni dugme formu acar (Yeni ...) ve
+               kapatir (Iptal); sinif sabit `compact` oldugu icin kapatma eylemi ekranin en
+               guclu, vurgu dolgulu dugmesi gibi gorunuyordu. Etiket "Iptal"e donunce dugme de
+               sakinlesir; vurgu, formun icindeki gercek islem dugmesinde ("Olustur") kalir. -->
+          <button :class="['compact', { secondary: showAccountForm }]" @click="showAccountForm = !showAccountForm">
             {{ showAccountForm ? t("panel.common.cancel") : t("panel.mail.newMailbox") }}
           </button>
         </div>
@@ -202,7 +218,7 @@
               <button class="secondary compact row-button" :disabled="busy" @click="openAutoResponder(account.address)">
                 {{ t("panel.mail.autoResponder") }}
               </button>
-              <button class="secondary compact row-button danger" v-bind="writeGate(busy)" @click="removeAccount(account.address)">
+              <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAccount(account.address)">
                 {{ t("panel.mail.delete") }}
               </button>
             </div>
@@ -210,6 +226,303 @@
           <p v-if="workspace.accounts.length === 0" class="empty-state">{{ t("panel.mail.noMailboxes") }}</p>
         </div>
         <TablePager :state="accountPager" :disabled="busy || bulk.busy.value" />
+
+        <section v-if="autoResponderFor" class="form-surface">
+          <div class="section-head">
+            <div>
+              <h3>{{ t("panel.mail.autoResponderTitle") }}</h3>
+              <p class="meta">{{ autoResponderFor }}</p>
+            </div>
+            <label class="toggle-field">
+              <input v-model="autoResponderForm.enabled" type="checkbox" />
+              <span>{{ t("panel.mail.autoResponderEnabled") }}</span>
+            </label>
+          </div>
+          <p class="meta">{{ t("panel.mail.autoResponderHint") }}</p>
+          <div v-if="autoResponderForm.enabled" class="form-grid one">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.autoResponderSubject") }}</span>
+              <input v-model.trim="autoResponderForm.subject" :placeholder="t('panel.mail.autoResponderSubjectPlaceholder')" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.autoResponderMessage") }}</span>
+              <textarea v-model="autoResponderForm.message" rows="5"></textarea>
+            </label>
+          </div>
+          <div class="row-actions">
+            <button
+              class="compact"
+              v-bind="writeGate(busy || (autoResponderForm.enabled && !autoResponderForm.message.trim()))"
+              @click="saveAutoResponder">
+              {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
+            </button>
+            <button class="secondary compact" @click="autoResponderFor = ''">{{ t("panel.common.cancel") }}</button>
+          </div>
+        </section>
+
+        <div class="section-head">
+          <div>
+            <h3>{{ t("panel.mail.aliases") }}</h3>
+            <p class="meta">{{ t("panel.mail.aliasesHint") }}</p>
+          </div>
+          <!-- "Iptal" BIRINCIL DUGME OLARAK CIZILEMEZ: ayni dugme formu acar (Yeni ...) ve
+               kapatir (Iptal); sinif sabit `compact` oldugu icin kapatma eylemi ekranin en
+               guclu, vurgu dolgulu dugmesi gibi gorunuyordu. Etiket "Iptal"e donunce dugme de
+               sakinlesir; vurgu, formun icindeki gercek islem dugmesinde ("Olustur") kalir. -->
+          <button :class="['compact', { secondary: showAliasForm }]" @click="showAliasForm = !showAliasForm">
+            {{ showAliasForm ? t("panel.common.cancel") : t("panel.mail.newAlias") }}
+          </button>
+        </div>
+
+        <div v-if="showAliasForm" class="form-surface">
+          <div class="form-grid">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.aliasAddress") }}</span>
+              <div class="address-field">
+                <input v-model.trim="aliasForm.localPart" placeholder="sales" />
+                <span>@{{ selectedDomain }}</span>
+              </div>
+              <small class="field-hint">{{ t("panel.mail.catchAllHint") }}</small>
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.aliasTarget") }}</span>
+              <input v-model.trim="aliasForm.target" type="email" placeholder="info@example.com" />
+            </label>
+          </div>
+          <div class="row-actions">
+            <button class="compact" v-bind="writeGate(busy || !aliasForm.localPart || !aliasForm.target)" @click="addAlias">
+              {{ t("panel.mail.create") }}
+            </button>
+          </div>
+        </div>
+
+        <div class="data-table">
+          <div class="data-row table-head alias-row">
+            <span>{{ t("panel.mail.aliasAddress") }}</span>
+            <span>{{ t("panel.mail.aliasTarget") }}</span>
+            <span>{{ t("panel.software.action") }}</span>
+          </div>
+          <div v-for="alias in workspace.aliases" :key="alias.address" class="data-row alias-row">
+            <strong>{{ alias.address }}</strong>
+            <span>{{ alias.target }}</span>
+            <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
+              {{ t("panel.mail.delete") }}
+            </button>
+          </div>
+          <p v-if="workspace.aliases.length === 0" class="empty-state">{{ t("panel.mail.noAliases") }}</p>
+        </div>
+
+        <div class="section-head">
+          <div>
+            <h3>{{ t("panel.mail.lists") }}</h3>
+            <p class="meta">{{ t("panel.mail.listsHint") }}</p>
+          </div>
+          <!-- "Iptal" BIRINCIL DUGME OLARAK CIZILEMEZ: ayni dugme formu acar (Yeni ...) ve
+               kapatir (Iptal); sinif sabit `compact` oldugu icin kapatma eylemi ekranin en
+               guclu, vurgu dolgulu dugmesi gibi gorunuyordu. Etiket "Iptal"e donunce dugme de
+               sakinlesir; vurgu, formun icindeki gercek islem dugmesinde ("Olustur") kalir. -->
+          <button :class="['compact', { secondary: showListForm }]" @click="showListForm = !showListForm">
+            {{ showListForm ? t("panel.common.cancel") : t("panel.mail.newList") }}
+          </button>
+        </div>
+
+        <div v-if="showListForm" class="form-surface">
+          <div class="form-grid">
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listAddress") }}</span>
+              <div class="address-field">
+                <input v-model.trim="listForm.localPart" :placeholder="t('panel.mail.listAddressPlaceholder')" />
+                <span>@{{ selectedDomain }}</span>
+              </div>
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listDescription") }}</span>
+              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" maxlength="512" />
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listSubscribers") }}</span>
+              <textarea v-model="listForm.recipients" rows="3" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
+              <small class="field-hint">{{ t("panel.mail.listRecipientsHint") }}</small>
+            </label>
+            <label class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listPostingPolicy") }}</span>
+              <select v-model="listForm.postingPolicy">
+                <option value="anyone">{{ t("panel.mail.listPolicyAnyone") }}</option>
+                <option value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
+                <option value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
+              </select>
+              <small class="field-hint">{{ t("panel.mail.listPostingPolicyHint") }}</small>
+            </label>
+            <label v-if="listForm.postingPolicy !== 'anyone'" class="stacked-field">
+              <span class="field-label">{{ t("panel.mail.listAllowedSenders") }}</span>
+              <textarea v-model="listForm.allowedSenders" rows="2" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
+              <small class="field-hint">{{ t("panel.mail.listAllowedSendersHint") }}</small>
+            </label>
+          </div>
+          <div class="row-actions">
+            <button class="compact" v-bind="writeGate(busy || !listForm.localPart || !parseRecipients(listForm.recipients).length)" @click="addList">
+              {{ t("panel.mail.create") }}
+            </button>
+          </div>
+        </div>
+
+        <div class="data-table">
+          <div class="data-row table-head list-row">
+            <span>{{ t("panel.mail.listAddress") }}</span>
+            <span>{{ t("panel.mail.listSubscribers") }}</span>
+            <span>{{ t("panel.software.action") }}</span>
+          </div>
+          <div v-for="list in workspace.lists" :key="list.address" class="data-row list-row">
+            <div class="list-identity">
+              <strong>{{ list.address }}</strong>
+              <small v-if="list.description" class="list-description">{{ list.description }}</small>
+              <!-- Politika satirda GORUNUR olmali: "herkes gonderebilir" bir guvenlik durumudur ve
+                   ancak gorulurse fark edilir. -->
+              <small
+                class="list-policy"
+                :class="{ 'policy-open': list.postingPolicy === 'anyone' }"
+              >{{ policyLabel(list.postingPolicy) }}</small>
+              <!-- EK ADRESLER: listeye giden IKINCI kapilardir. Adres kimliginin yaninda
+                   gorunmeli -- ayri bir sekmede saklansaydi, listeye baska hangi adresten posta
+                   gelebildigi ekranda hic gorunmezdi. -->
+              <span v-if="list.aliases.length" class="list-aliases">
+                <span v-for="alias in list.aliases" :key="alias" class="alias-chip">
+                  {{ alias }}
+                  <button
+                    type="button"
+                    class="chip-remove"
+                    v-bind="writeGate(busy)"
+                    :title="t('panel.mail.listRemoveAlias', { address: alias })"
+                    :aria-label="t('panel.mail.listRemoveAlias', { address: alias })"
+                    @click="removeListAlias(list.address, alias)"
+                  >
+                    ×
+                  </button>
+                </span>
+              </span>
+            </div>
+            <div class="list-subscribers">
+              <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
+                   yanlis kopyalayip o kisiyi sessizce dusurmek demekti. -->
+              <span v-for="subscriber in list.recipients" :key="subscriber" class="subscriber-chip">
+                {{ subscriber }}
+                <button
+                  type="button"
+                  class="chip-remove"
+                  v-bind="writeGate(busy)"
+                  :title="t('panel.mail.listUnsubscribe', { address: subscriber })"
+                  :aria-label="t('panel.mail.listUnsubscribe', { address: subscriber })"
+                  @click="unsubscribe(list.address, subscriber)"
+                >
+                  ×
+                </button>
+              </span>
+              <span v-if="list.recipients.length === 0" class="meta">{{ t("panel.mail.listNoSubscribers") }}</span>
+            </div>
+            <div class="row-actions">
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="subscribe(list.address)">
+                {{ t("panel.mail.listAddSubscriber") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="addListAlias(list.address)">
+                {{ t("panel.mail.listAddAlias") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
+                {{ t("panel.mail.listPostingPolicy") }}
+              </button>
+              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
+                {{ t("panel.mail.listEdit") }}
+              </button>
+              <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeList(list.address)">
+                {{ t("panel.mail.delete") }}
+              </button>
+            </div>
+          </div>
+          <p v-if="workspace.lists.length === 0" class="empty-state">{{ t("panel.mail.noLists") }}</p>
+        </div>
+
+        <!-- Panelin genel adresi: List-Unsubscribe baglantisi bundan kurulur. TAHMIN EDILMEZ --
+             bos birakilirsa baslik hic eklenmez, cunku calismayan bir baglanti gondermek
+             baslik koymamaktan kotudur. Yalniz yonetici gorur/degistirir. -->
+        <div v-if="isAdmin" class="form-surface list-baseurl">
+          <label class="stacked-field">
+            <span class="field-label">{{ t("panel.mail.publicBaseUrl") }}</span>
+            <div class="row-actions">
+              <input v-model.trim="publicBaseUrl" placeholder="https://panel.ornek.com" />
+              <button class="compact" v-bind="writeGate(busy)" @click="savePublicBaseUrl">
+                {{ t("panel.common.save") }}
+              </button>
+            </div>
+            <small class="field-hint">{{ t("panel.mail.publicBaseUrlHint") }}</small>
+          </label>
+        </div>
+
+        <!-- DURUST SINIR: "kimler gonderebilir" ve self-servis abonelikten cikma ARTIK CALISIYOR
+             (RCPT sieve kurali + genel onay sayfasi, ikisi de canli dogrulandi). Kalan fark:
+             abone cikarma baglantisi liste basinadir ve e-posta onayi ister -- Stalwart fan-out'u
+             iletiyi kisisellestirmedigi icin aboneye ozel tek-tik baglanti URETILEMEZ. -->
+        <p class="meta list-limitation">{{ t("panel.mail.listPolicyLimitation") }}</p>
+
+        <!--
+          KOTALAR VE SINIRLAR TEK KARTTA — DÖRT BLOK YERİNE BİR.
+
+          SAYILDI: aynı soruyu ("bu alan adının sınırları ne?") yanıtlayan dört ayrı blok üst üste
+          duruyordu — alan adı kotası şeridi (kart), giden posta limiti şeridi (kart), okunamadı
+          kutusu ve çıplak bir ipucu paragrafı. Üçü kenarlıklı kart, biri kenarlıksız paragraftı:
+          aynı işi gören iki farklı desen.
+
+          ÜSTELİK İPUCU YERİNDE DEĞİLDİ: hiçbir `v-if` altında olmadığı için ALAN ADI SEÇİLİ
+          DEĞİLKEN de çiziliyordu, yani hiçbir posta kutusunun görünmediği alan adı LİSTESİNİN
+          altında "saatlik giden posta limiti" anlatan 199 karakterlik bir paragraf duruyordu.
+
+          HİÇBİR DENETİM VE HİÇBİR METİN DÜŞMEDİ, kimin gördüğü de değişmedi: ipucu yine herkese,
+          giden posta alanları yine yalnız yöneticiye görünür. Yalnız hepsi tek başlığın altında.
+        -->
+        <section class="form-surface limits-card">
+          <div class="section-head">
+            <div>
+              <h3>{{ t("panel.mail.limitsTitle") }}</h3>
+              <p class="meta">{{ selectedDomain }}</p>
+            </div>
+          </div>
+
+          <div class="quota-strip">
+            <label class="inline-field">
+              <span class="field-label">{{ t("panel.mail.domainQuota") }}</span>
+              <input v-model.number="domainQuota" type="number" min="0" />
+              <span class="hint">MB ({{ t("panel.mail.zeroUnlimited") }})</span>
+            </label>
+            <span v-if="selectedDomainInfo && selectedDomainInfo.maxSizeMB > 0" class="hint">
+              {{ t("panel.mail.domainQuotaUsage", { used: selectedDomainInfo.allocatedMB, limit: selectedDomainInfo.maxSizeMB }) }}
+            </span>
+            <button class="secondary compact" v-bind="writeGate(busy)" @click="saveDomainQuota">{{ t("panel.common.save") }}</button>
+          </div>
+
+          <!-- GİDEN POSTA LİMİTİ: sunucunun itibarını koruyan sınır. Yalnız yönetici değiştirebilir —
+               kendi limitini müşterinin yükseltebilmesi korumayı anlamsız kılardı. -->
+          <div v-if="isAdmin" class="quota-strip">
+            <label class="inline-field">
+              <span class="field-label">{{ t("panel.mail.outboundLimit") }}</span>
+              <input v-model.number="outboundLimit" type="number" min="0" />
+              <span class="hint">{{ t("panel.mail.outboundLimitPerHour") }} ({{ t("panel.mail.zeroUnlimited") }})</span>
+            </label>
+            <!-- "Kurulu değil" ile "limitsiz" AYRI şeyler: ilki panelin sınır kuramadığı, yani
+                 sunucunun korumasız olduğu anlamına gelir. -->
+            <span
+              v-if="outboundLimitState && !outboundLimitState.configured"
+              class="status-pill warn"
+              :title="t('panel.mail.outboundLimitNotConfiguredHint')">
+              {{ t("panel.mail.outboundLimitNotConfigured") }}
+            </span>
+            <button class="secondary compact" :disabled="busy" @click="saveOutboundLimit">
+              {{ t("panel.mail.outboundLimitSave") }}
+            </button>
+          </div>
+          <SectionLoadError
+            v-if="isAdmin && outboundLimitLoad.message.value"
+            :message="outboundLimitLoad.message.value"
+            @retry="loadOutboundLimit" />
+          <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
+        </section>
 
         <!-- Webmail + posta istemci ayarları (profesyonel paneller gibi). -->
         <section class="form-surface">
@@ -407,272 +720,13 @@
             </button>
             <button
               v-if="autoconfig && autoconfig.isPublished"
-              class="secondary compact danger"
+              class="danger compact"
               v-bind="writeGate(autoconfigBusy)"
               @click="unpublishAutoconfig">
               {{ t("panel.mail.autoconfig.unpublish") }}
             </button>
           </div>
         </section>
-
-        <!-- Mail teşhis: panel MX/A/SPF/DKIM/DMARC/PTR'yi kendisi kontrol eder (profesyonel paneller gibi). -->
-        <section class="form-surface diagnostics-card">
-          <div class="section-head">
-            <div>
-              <h3>{{ t("panel.mail.diag.title") }}</h3>
-              <p class="meta">{{ t("panel.mail.diag.hint") }}</p>
-            </div>
-            <button class="compact" :disabled="busy || diagLoading" @click="runDiagnostics">
-              {{ diagLoading ? t("panel.mail.diag.checking") : t("panel.mail.diag.check") }}
-            </button>
-          </div>
-
-          <div v-if="diagnostics" class="diag-grid">
-            <div v-for="item in diagnostics.checks" :key="item.key" :class="['diag-item', item.status]">
-              <span class="diag-dot"></span>
-              <div class="diag-body">
-                <div class="diag-row">
-                  <strong>{{ t(`panel.mail.diag.label.${item.key}`) }}</strong>
-                  <span :class="['status-pill', item.status === 'ok' ? 'ok' : item.status === 'fail' ? 'danger' : 'warn']">
-                    {{ t(`panel.mail.diag.state.${item.status}`) }}
-                  </span>
-                </div>
-                <small v-if="item.status !== 'ok'" class="diag-detail">
-                  <span>{{ t("panel.mail.diag.expected") }}: <code>{{ item.expected || "—" }}</code></span>
-                  <span v-if="item.found"> · {{ t("panel.mail.diag.found") }}: <code>{{ item.found }}</code></span>
-                </small>
-              </div>
-            </div>
-          </div>
-          <p v-else class="meta">{{ t("panel.mail.diag.empty") }}</p>
-        </section>
-
-        <section v-if="autoResponderFor" class="form-surface">
-          <div class="section-head">
-            <div>
-              <h3>{{ t("panel.mail.autoResponderTitle") }}</h3>
-              <p class="meta">{{ autoResponderFor }}</p>
-            </div>
-            <label class="toggle-field">
-              <input v-model="autoResponderForm.enabled" type="checkbox" />
-              <span>{{ t("panel.mail.autoResponderEnabled") }}</span>
-            </label>
-          </div>
-          <p class="meta">{{ t("panel.mail.autoResponderHint") }}</p>
-          <div v-if="autoResponderForm.enabled" class="form-grid one">
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.autoResponderSubject") }}</span>
-              <input v-model.trim="autoResponderForm.subject" :placeholder="t('panel.mail.autoResponderSubjectPlaceholder')" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.autoResponderMessage") }}</span>
-              <textarea v-model="autoResponderForm.message" rows="5"></textarea>
-            </label>
-          </div>
-          <div class="row-actions">
-            <button
-              class="compact"
-              v-bind="writeGate(busy || (autoResponderForm.enabled && !autoResponderForm.message.trim()))"
-              @click="saveAutoResponder">
-              {{ busy ? t("panel.database.saving") : t("panel.common.save") }}
-            </button>
-            <button class="secondary compact" @click="autoResponderFor = ''">{{ t("panel.common.cancel") }}</button>
-          </div>
-        </section>
-
-        <div class="section-head">
-          <div>
-            <h3>{{ t("panel.mail.aliases") }}</h3>
-            <p class="meta">{{ t("panel.mail.aliasesHint") }}</p>
-          </div>
-          <button class="compact" @click="showAliasForm = !showAliasForm">
-            {{ showAliasForm ? t("panel.common.cancel") : t("panel.mail.newAlias") }}
-          </button>
-        </div>
-
-        <div v-if="showAliasForm" class="form-surface">
-          <div class="form-grid">
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.aliasAddress") }}</span>
-              <div class="address-field">
-                <input v-model.trim="aliasForm.localPart" placeholder="sales" />
-                <span>@{{ selectedDomain }}</span>
-              </div>
-              <small class="field-hint">{{ t("panel.mail.catchAllHint") }}</small>
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.aliasTarget") }}</span>
-              <input v-model.trim="aliasForm.target" type="email" placeholder="info@example.com" />
-            </label>
-          </div>
-          <div class="row-actions">
-            <button class="compact" v-bind="writeGate(busy || !aliasForm.localPart || !aliasForm.target)" @click="addAlias">
-              {{ t("panel.mail.create") }}
-            </button>
-          </div>
-        </div>
-
-        <div class="data-table">
-          <div class="data-row table-head alias-row">
-            <span>{{ t("panel.mail.aliasAddress") }}</span>
-            <span>{{ t("panel.mail.aliasTarget") }}</span>
-            <span>{{ t("panel.software.action") }}</span>
-          </div>
-          <div v-for="alias in workspace.aliases" :key="alias.address" class="data-row alias-row">
-            <strong>{{ alias.address }}</strong>
-            <span>{{ alias.target }}</span>
-            <button class="secondary compact row-button danger" v-bind="writeGate(busy)" @click="removeAlias(alias.address)">
-              {{ t("panel.mail.delete") }}
-            </button>
-          </div>
-          <p v-if="workspace.aliases.length === 0" class="empty-state">{{ t("panel.mail.noAliases") }}</p>
-        </div>
-
-        <div class="section-head">
-          <div>
-            <h3>{{ t("panel.mail.lists") }}</h3>
-            <p class="meta">{{ t("panel.mail.listsHint") }}</p>
-          </div>
-          <button class="compact" @click="showListForm = !showListForm">
-            {{ showListForm ? t("panel.common.cancel") : t("panel.mail.newList") }}
-          </button>
-        </div>
-
-        <div v-if="showListForm" class="form-surface">
-          <div class="form-grid">
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.listAddress") }}</span>
-              <div class="address-field">
-                <input v-model.trim="listForm.localPart" :placeholder="t('panel.mail.listAddressPlaceholder')" />
-                <span>@{{ selectedDomain }}</span>
-              </div>
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.listDescription") }}</span>
-              <input v-model.trim="listForm.description" :placeholder="t('panel.mail.listDescriptionPlaceholder')" maxlength="512" />
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.listSubscribers") }}</span>
-              <textarea v-model="listForm.recipients" rows="3" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
-              <small class="field-hint">{{ t("panel.mail.listRecipientsHint") }}</small>
-            </label>
-            <label class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.listPostingPolicy") }}</span>
-              <select v-model="listForm.postingPolicy">
-                <option value="anyone">{{ t("panel.mail.listPolicyAnyone") }}</option>
-                <option value="subscribers">{{ t("panel.mail.listPolicySubscribers") }}</option>
-                <option value="allowed">{{ t("panel.mail.listPolicyAllowed") }}</option>
-              </select>
-              <small class="field-hint">{{ t("panel.mail.listPostingPolicyHint") }}</small>
-            </label>
-            <label v-if="listForm.postingPolicy !== 'anyone'" class="stacked-field">
-              <span class="field-label">{{ t("panel.mail.listAllowedSenders") }}</span>
-              <textarea v-model="listForm.allowedSenders" rows="2" :placeholder="t('panel.mail.listRecipientsPlaceholder')"></textarea>
-              <small class="field-hint">{{ t("panel.mail.listAllowedSendersHint") }}</small>
-            </label>
-          </div>
-          <div class="row-actions">
-            <button class="compact" v-bind="writeGate(busy || !listForm.localPart || !parseRecipients(listForm.recipients).length)" @click="addList">
-              {{ t("panel.mail.create") }}
-            </button>
-          </div>
-        </div>
-
-        <div class="data-table">
-          <div class="data-row table-head list-row">
-            <span>{{ t("panel.mail.listAddress") }}</span>
-            <span>{{ t("panel.mail.listSubscribers") }}</span>
-            <span>{{ t("panel.software.action") }}</span>
-          </div>
-          <div v-for="list in workspace.lists" :key="list.address" class="data-row list-row">
-            <div class="list-identity">
-              <strong>{{ list.address }}</strong>
-              <small v-if="list.description" class="list-description">{{ list.description }}</small>
-              <!-- Politika satirda GORUNUR olmali: "herkes gonderebilir" bir guvenlik durumudur ve
-                   ancak gorulurse fark edilir. -->
-              <small
-                class="list-policy"
-                :class="{ 'policy-open': list.postingPolicy === 'anyone' }"
-              >{{ policyLabel(list.postingPolicy) }}</small>
-              <!-- EK ADRESLER: listeye giden IKINCI kapilardir. Adres kimliginin yaninda
-                   gorunmeli -- ayri bir sekmede saklansaydi, listeye baska hangi adresten posta
-                   gelebildigi ekranda hic gorunmezdi. -->
-              <span v-if="list.aliases.length" class="list-aliases">
-                <span v-for="alias in list.aliases" :key="alias" class="alias-chip">
-                  {{ alias }}
-                  <button
-                    type="button"
-                    class="chip-remove"
-                    v-bind="writeGate(busy)"
-                    :title="t('panel.mail.listRemoveAlias', { address: alias })"
-                    :aria-label="t('panel.mail.listRemoveAlias', { address: alias })"
-                    @click="removeListAlias(list.address, alias)"
-                  >
-                    ×
-                  </button>
-                </span>
-              </span>
-            </div>
-            <div class="list-subscribers">
-              <!-- Her abone tek tek cikarilabilir: tum listeyi elle yeniden yazmak, bir adresi
-                   yanlis kopyalayip o kisiyi sessizce dusurmek demekti. -->
-              <span v-for="subscriber in list.recipients" :key="subscriber" class="subscriber-chip">
-                {{ subscriber }}
-                <button
-                  type="button"
-                  class="chip-remove"
-                  v-bind="writeGate(busy)"
-                  :title="t('panel.mail.listUnsubscribe', { address: subscriber })"
-                  :aria-label="t('panel.mail.listUnsubscribe', { address: subscriber })"
-                  @click="unsubscribe(list.address, subscriber)"
-                >
-                  ×
-                </button>
-              </span>
-              <span v-if="list.recipients.length === 0" class="meta">{{ t("panel.mail.listNoSubscribers") }}</span>
-            </div>
-            <div class="row-actions">
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="subscribe(list.address)">
-                {{ t("panel.mail.listAddSubscriber") }}
-              </button>
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="addListAlias(list.address)">
-                {{ t("panel.mail.listAddAlias") }}
-              </button>
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListPolicy(list)">
-                {{ t("panel.mail.listPostingPolicy") }}
-              </button>
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="editListRecipients(list.address, list.recipients)">
-                {{ t("panel.mail.listEdit") }}
-              </button>
-              <button class="secondary compact row-button danger" v-bind="writeGate(busy)" @click="removeList(list.address)">
-                {{ t("panel.mail.delete") }}
-              </button>
-            </div>
-          </div>
-          <p v-if="workspace.lists.length === 0" class="empty-state">{{ t("panel.mail.noLists") }}</p>
-        </div>
-
-        <!-- Panelin genel adresi: List-Unsubscribe baglantisi bundan kurulur. TAHMIN EDILMEZ --
-             bos birakilirsa baslik hic eklenmez, cunku calismayan bir baglanti gondermek
-             baslik koymamaktan kotudur. Yalniz yonetici gorur/degistirir. -->
-        <div v-if="isAdmin" class="form-surface list-baseurl">
-          <label class="stacked-field">
-            <span class="field-label">{{ t("panel.mail.publicBaseUrl") }}</span>
-            <div class="row-actions">
-              <input v-model.trim="publicBaseUrl" placeholder="https://panel.ornek.com" />
-              <button class="compact" v-bind="writeGate(busy)" @click="savePublicBaseUrl">
-                {{ t("panel.common.save") }}
-              </button>
-            </div>
-            <small class="field-hint">{{ t("panel.mail.publicBaseUrlHint") }}</small>
-          </label>
-        </div>
-
-        <!-- DURUST SINIR: "kimler gonderebilir" ve self-servis abonelikten cikma ARTIK CALISIYOR
-             (RCPT sieve kurali + genel onay sayfasi, ikisi de canli dogrulandi). Kalan fark:
-             abone cikarma baglantisi liste basinadir ve e-posta onayi ister -- Stalwart fan-out'u
-             iletiyi kisisellestirmedigi icin aboneye ozel tek-tik baglanti URETILEMEZ. -->
-        <p class="meta list-limitation">{{ t("panel.mail.listPolicyLimitation") }}</p>
 
         <div class="row-actions mail-advanced-toggle">
           <button type="button" class="secondary compact" @click="showMailAdvanced = !showMailAdvanced">
@@ -1977,14 +2031,14 @@ function showError(error: unknown) {
 
 <style scoped>
 .webmail-report {
-  margin: 0.6rem 0 0;
-  padding: 0.6rem 0.75rem;
+  margin: var(--sp-8) 0 0;
+  padding: var(--sp-8) var(--sp-10);
   max-height: 20rem;
   overflow: auto;
-  border-radius: 6px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.16));
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1993,7 +2047,7 @@ function showError(error: unknown) {
 .mail-loading {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 .mail-spinner {
@@ -2011,37 +2065,53 @@ function showError(error: unknown) {
 
 .mail-panel {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
   align-content: start;
 }
 
-.notice-details {
-  margin: -4px 0 0;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-
 .notice-details pre {
-  margin: 6px 0 0;
-  padding: 8px 10px;
+  margin: var(--sp-6) 0 0;
+  padding: var(--sp-8) var(--sp-10);
   border: 1px solid var(--panel-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface-1);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
+/*
+  BÖLÜM SINIRI — panelin DOĞRUDAN çocuğu olan başlıklar için.
+
+  SAYILDI: alan adı çalışma alanında aynı anda 9 üst düzey blok var ve bunların dördü (posta
+  kutuları, takma adlar, listeler, gelişmiş bölümler) kart DEĞİL, panelin akışına serpilmiş çıplak
+  başlık + tablo çiftleri. Kalanları kart. Yani aynı işi gören iki desen yan yana duruyordu ve
+  çıplak olanlarda bölümün nerede bittiği hiçbir şeyle söylenmiyordu: panel ızgarasının boşluğu
+  (12px) başlık ile ÜSTTEKİ tablonun arasında da, başlık ile KENDİ tablosunun arasında da aynıydı.
+  Göz, başlığın hangi tabloya ait olduğunu boşluktan çıkaramıyordu.
+
+  Çözüm bir çizgi: başlığın ÜSTÜNE bölüm sınırı çizilir, altındaki boşluk aynı kalır — böylece
+  başlık kendi içeriğine yapışır, öncekinden ayrılır. Kartların içindeki başlıklar ETKİLENMEZ:
+  `>` seçicisi yalnız panelin doğrudan çocuklarını tutar, `<template>` öge üretmediği için
+  koşullu bloklar da doğrudan çocuktur. İlk başlık (varsa) çizgisiz kalır.
+*/
+.mail-panel > .section-head {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-16);
+  border-top: 1px solid var(--panel-border);
 }
 
 .section-head button,
 .row-actions button {
   width: auto;
+}
+
+/*
+  KOTALAR VE SINIRLAR KARTI. İki şerit tek kartta; aralarındaki ince çizgi "iki ayrı ayar" bilgisini
+  kutu kenarlığı olmadan da taşır (bkz. şablondaki gerekçe).
+*/
+.limits-card .quota-strip + .quota-strip {
+  padding-top: var(--sp-12);
+  border-top: 1px solid var(--panel-border);
 }
 
 .domain-select {
@@ -2051,7 +2121,7 @@ function showError(error: unknown) {
 .address-field {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .address-field span {
@@ -2077,9 +2147,9 @@ function showError(error: unknown) {
 .bulk-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
-  padding: 8px 10px;
+  padding: var(--sp-8) var(--sp-10);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -2095,15 +2165,15 @@ function showError(error: unknown) {
 }
 
 .client-settings {
-  margin-top: 14px;
+  margin-top: var(--sp-16);
 }
 
 .client-settings h4 {
-  margin: 0 0 2px;
+  margin: 0 0 var(--sp-2);
 }
 
 .client-username {
-  margin-top: 8px;
+  margin-top: var(--sp-8);
 }
 
 .copyable {
@@ -2113,14 +2183,14 @@ function showError(error: unknown) {
 
 .diag-grid {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .diag-item {
   display: flex;
   align-items: flex-start;
-  gap: 11px;
-  padding: 11px 13px;
+  gap: var(--sp-12);
+  padding: var(--sp-12) var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-1);
@@ -2150,7 +2220,7 @@ function showError(error: unknown) {
 .diag-dot {
   width: 9px;
   height: 9px;
-  margin-top: 5px;
+  margin-top: var(--sp-6);
   border-radius: 50%;
   flex: none;
   background: var(--text-muted);
@@ -2177,7 +2247,7 @@ function showError(error: unknown) {
 
 .diag-body {
   display: grid;
-  gap: 3px;
+  gap: var(--sp-4);
   min-width: 0;
   flex: 1;
 }
@@ -2186,7 +2256,7 @@ function showError(error: unknown) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .diag-detail {
@@ -2195,20 +2265,20 @@ function showError(error: unknown) {
 }
 
 .diag-detail code {
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 1px var(--sp-6);
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   font-size: 0.92em;
 }
 
 .autoconfig-card {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
   align-content: start;
 }
 
 .autoconfig-card h4 {
-  margin: 0 0 2px;
+  margin: 0 0 var(--sp-2);
 }
 
 .autoconfig-card .meta {
@@ -2218,31 +2288,31 @@ function showError(error: unknown) {
 .autoconfig-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--sp-10);
   margin: 0;
 }
 
 .autoconfig-meta dt {
   color: var(--text-muted);
-  font-size: 0.66rem;
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .autoconfig-meta dd {
-  margin: 2px 0 0;
-  font-size: 0.82rem;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
   word-break: break-all;
 }
 
 .autoconfig-block {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .autoconfig-probes {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -2251,13 +2321,13 @@ function showError(error: unknown) {
 .autoconfig-probes li {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
 }
 
 /* Adres uzun ve kırpılmamalı: kullanıcı tam olarak neyi açacağını görmeli. */
 .autoconfig-probes a {
-  font-size: 0.8rem;
+  font-size: var(--fs-2xs);
   overflow-wrap: anywhere;
 }
 
@@ -2277,11 +2347,11 @@ function showError(error: unknown) {
 .mail-domain-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .mail-domain-bar .current-domain {
-  font-size: 1.02rem;
+  font-size: var(--fs-lg);
 }
 
 .mail-domain-bar .danger {
@@ -2299,14 +2369,14 @@ function showError(error: unknown) {
 
 .list-recipients {
   overflow-wrap: anywhere;
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
   color: var(--text-soft);
 }
 
 .list-identity {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-2);
   min-width: 0;
 }
 
@@ -2318,19 +2388,19 @@ function showError(error: unknown) {
 .list-subscribers {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-6);
   min-width: 0;
 }
 
 .subscriber-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 8px;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-8);
   border: 1px solid var(--panel-border);
   border-radius: 999px;
   background: var(--surface-2);
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
   overflow-wrap: anywhere;
 }
 
@@ -2347,7 +2417,7 @@ function showError(error: unknown) {
   border-radius: 50%;
   background: transparent;
   color: var(--text-muted);
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   line-height: 1;
   cursor: pointer;
 }
@@ -2367,29 +2437,29 @@ function showError(error: unknown) {
 .list-aliases {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 2px;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
 }
 
 .alias-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 3px 1px 7px;
+  gap: var(--sp-4);
+  padding: 1px var(--sp-4) 1px var(--sp-8);
   border: 1px dashed var(--panel-border);
   border-radius: 999px;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
   overflow-wrap: anywhere;
 }
 
 .list-limitation {
-  margin: 8px 0 0;
+  margin: var(--sp-8) 0 0;
 }
 
 .list-policy {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 /* "Herkes gonderebilir" gorsel olarak AYIRT EDILIR: en gevsek durum, gozden kacmamali. */
@@ -2408,30 +2478,39 @@ function showError(error: unknown) {
 
 .listener-binds {
   overflow-wrap: anywhere;
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
   color: var(--text-soft);
 }
 
 .dns-value {
   overflow-wrap: anywhere;
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
   color: var(--text-soft);
 }
 
-.danger {
-  color: var(--danger-text);
-}
+/* YIKICI DUGME `secondary` ILE BIRLESTIRILMEZ -- OLCULMUS OKUNMAZLIK.
+   `class="secondary compact danger"` yaziliyordu. base.css sirasi geregi `button.danger`
+   gradyani `button.secondary` zeminini EZIYOR (ayni ozgulluk, sonra geliyor), yani dugme
+   zaten KIRMIZI ciziliyordu; buradaki `.danger { color }` kurali ise kapsamli oldugu icin
+   (0,2,0) base'in (0,1,1) murekkebini eziyor ve metni `--danger-text` yapiyordu.
+   OLCULDU -- kirmizi metin kirmizi dolgu uzerinde:
+     koyu tema  #f0a3a9 / #b54f57 = 2.49  ... / #97333c = 3.68
+     acik tema  #a3343e / #c2414c = 1.33  ... / #97333c = 1.09
+   Acik temada 1.09, yani "Sil" yazisi pratikte GORUNMUYORDU. Kural silindi; dugmeler
+   BackupView'in kanitlanmis kalibina (`class="danger compact"`) gecti ve base'in olculmus
+   murekkebini (#fff1f1: 4.53 / 4.60) kullaniyor.
+   `.status-pill.danger` etkilenmez: rengini base.css zaten AYNI belirtecle veriyor. */
 
 .quota-strip {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: flex-end;
   flex-wrap: wrap;
 }
 
 .inline-field {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-8);
   align-items: center;
 }
 
@@ -2441,18 +2520,7 @@ function showError(error: unknown) {
 
 .inline-field .hint {
   color: var(--text-muted);
-  font-size: 0.75rem;
-}
-
-.toggle-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-soft);
-}
-
-.toggle-field input {
-  width: auto;
+  font-size: var(--fs-2xs);
 }
 
 .rdns-input {
@@ -2461,52 +2529,52 @@ function showError(error: unknown) {
 
 .rdns-result {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: var(--sp-10);
+  padding: var(--sp-12) var(--sp-16);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-1);
 }
 
 .rdns-status {
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--radius-md);
   font-weight: 650;
-  font-size: 0.84rem;
+  font-size: var(--fs-sm);
 }
 
 .rdns-status.ok {
   background: color-mix(in srgb, var(--accent-1) 14%, transparent);
-  color: var(--accent-text, var(--accent-1));
+  color: var(--accent-text);
 }
 
 .rdns-status.warn {
   background: color-mix(in srgb, var(--warn-1) 16%, transparent);
-  color: var(--warn-text, var(--warn-1));
+  color: var(--warn-text);
 }
 
 .rdns-status.danger {
   background: color-mix(in srgb, var(--danger-1) 16%, transparent);
-  color: var(--danger-text, var(--danger-1));
+  color: var(--danger-text);
 }
 
 .rdns-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--sp-10);
   margin: 0;
 }
 
 .rdns-meta dt {
   color: var(--text-muted);
-  font-size: 0.66rem;
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .rdns-meta dd {
-  margin: 2px 0 0;
-  font-size: 0.82rem;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
   word-break: break-all;
 }
 

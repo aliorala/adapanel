@@ -401,8 +401,4 @@ function showNotice(message: string, isError: boolean) {
   color: var(--text-muted);
 }
 
-.hint {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
 </style>

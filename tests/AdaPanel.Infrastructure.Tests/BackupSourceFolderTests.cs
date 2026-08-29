@@ -203,7 +203,7 @@ public sealed class BackupSourceFolderTests
             remote: new BackupPruneRemoteOptions { UserName = "u", Password = "p" },
             cancellationToken: alan.Iptal);
 
-        Assert.Equal(2, silinen);
+        Assert.Equal(2, silinen.Removed);
         Assert.Equal(
             new[] { $"DELETE {yeniDuzen}", $"DELETE {eskiDuzen}" },
             kayitci.Istekler);

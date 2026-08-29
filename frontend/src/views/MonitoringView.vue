@@ -481,17 +481,6 @@ function formatTimeSpan(value: string): string {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.section-head h2 {
-  margin: 0;
-}
-
 .meter-card,
 .info-card,
 .mini-row {
@@ -905,10 +894,6 @@ function formatTimeSpan(value: string): string {
   background: var(--danger-1);
 }
 
-.compact-select {
-  width: auto;
-}
-
 /*
   Canlı süreç tablosu telefonda: PID ve çalışma süresi gizlenir (PID telefondan zaten
   kullanılamaz, süre teşhis için ikincil), SAHİP + CPU + BELLEK kalır — "sunucuyu ne yiyor"
@@ -936,10 +921,6 @@ function formatTimeSpan(value: string): string {
 
   .proc-owner small {
     font-size: 0.68rem;
-  }
-
-  .compact-select {
-    min-width: 140px;
   }
 
   .row-actions {

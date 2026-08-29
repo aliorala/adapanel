@@ -29,8 +29,8 @@ namespace AdaPanel.Infrastructure.Tests;
 /// <b>Bu ucun ölçülmüş varlık sebebi:</b> kapı etkin modu iki anahtarın EN DÜŞÜĞÜ olarak hesaplar
 /// (<c>HtaccessRuntimeGate.Evaluate</c>), yani genel anahtar kapalıyken hiçbir site kendini
 /// açamaz. Uzun süre panelde bu anahtarın ucu YOKTU ve gerekçesi "bedeli sıfır, motor w3wp içinde
-/// zaten yüklenmiyor" idi. O gerekçe geçersizleşti (<c>HtaccessPanelService.MotorEngelleri()</c>
-/// artık boş liste dönüyor, ölçümü <c>HtaccessNet48EngineLoadTests</c>), dolayısıyla ucun
+/// zaten yüklenmiyor" idi. O gerekçe geçersizleşti (derleme zamanı engeli kalktı; ölçümü
+/// <c>HtaccessNet48EngineLoadTests</c>, gerçek bir CLR 4 sürecinde), dolayısıyla ucun
 /// olmaması özelliğin panelden HİÇ kullanılamaması demekti — yöneticinin
 /// <c>%ProgramData%\AdaPanel\htaccess\module.switch</c> dosyasını elle yazması gerekiyordu.
 /// </para>
@@ -599,6 +599,9 @@ public sealed class HtaccessServerModeTests
             new HtaccessEngine(),
             new SahteSiteServisi(site),
             new SahteAspServisi(),
+            // Kayit KUSURSUZ veriliyor: bu dosyanin konusu ANAHTAR ucudur, modul kaydi degil.
+            // Kaydin kendi halleri HtaccessModuleRegistryTests'te olculuyor.
+            new HtaccessModuleRegistryTests.SahteModulKaydi(HtaccessModuleRegistryTests.Kayitli()),
             // TAM NITELIKLI: "Options" adi AdaPanel.Infrastructure.Options AD ALANINA cozuluyor.
             Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot }),
             NullLogger<HtaccessPanelService>.Instance);

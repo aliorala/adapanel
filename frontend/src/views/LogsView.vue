@@ -473,8 +473,4 @@ function resolveApiMessage(error: unknown) {
 .rotation-actions button {
   width: auto;
 }
-
-.danger-text {
-  color: var(--danger-text, var(--danger-1));
-}
 </style>

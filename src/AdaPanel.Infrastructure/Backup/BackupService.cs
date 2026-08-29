@@ -55,7 +55,25 @@ public sealed partial class BackupService(
     /// </summary>
     private BackupRemoteCredentialReader RemoteCredentials => new(fileStore, secretProtector);
 
+    /// <summary>
+    /// FTP komutlarının TEK yüzeyi. Üretimde <see cref="FtpWebRequestCommands"/>; testte sahte.
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden kurucu parametresi DEĞİL:</b> <see cref="IBackupFtpCommands"/> <c>internal</c>'dır
+    /// (dışarıya yeni bir genel yüzey açmamak için) ve genel bir kurucunun parametresi olamaz.
+    /// Ölçüm ihtiyacı gerçek: 550'nin "dosya yok" mu "izin yok" mu olduğu kararı ancak GERÇEK bir
+    /// FTP sunucusuna bağlanmadan denenebilirse korunabilir.
+    /// </remarks>
+    internal IBackupFtpCommands FtpCommands { get; init; } = new FtpWebRequestCommands();
+
     private const string IndexPath = "config/backups.json";
+
+    /// <summary>
+    /// "Yerelden silindi, uzak kopyası hedefte kaldı" durumu. Dize TEK yerde: budama, elle silme,
+    /// budama koruması ve listeye çıkan alan aynı sabiti okur — biri değişip diğeri unutulursa
+    /// işaretli kayıt sessizce görünmez olurdu.
+    /// </summary>
+    private const string RemoteDeleteFailedStatus = "deleted_remote_failed";
 
     /// <summary>
     /// Yedek dosya taramasının ÖGE üst sınırı (dosya + klasör).
@@ -131,11 +149,64 @@ public sealed partial class BackupService(
         foreach (var record in records)
         {
             record.LocalMissing = IsLocalFileMissing(record);
+            // Durum dizesini arayüzün ELLE karşılaştırmasını beklemek, o dizeyi iki yerde
+            // yaşatmak demekti (ve bugüne kadar hiçbir ekran onu karşılaştırmadı: işaretli kayıt
+            // görünmez kaldı). Türetme TEK yerde, burada.
+            record.RemoteDeleteFailed = string.Equals(
+                record.Status, RemoteDeleteFailedStatus, StringComparison.Ordinal);
+            ApplyCopyPresence(record);
         }
 
         return records
             .OrderByDescending(record => record.CreatedAtUtc)
             .ToArray();
+    }
+
+    /// <summary>
+    /// İki kopyanın (yerel + uzak) durumunu kayda işler: neyin ölçüldüğü, neyin ölçülmediği.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>MALİYET KARARI — burada AĞ İSTEĞİ YOKTUR.</b> Yerel varlık her listelemede ölçülür
+    /// (kayıt başına bir dizin girdisi okuması, milisaniyeler); uzak varlık ise kayıt başına BİR
+    /// AĞ İSTEĞİDİR. Yüz kayıtlı bir panelde her liste çizilişinde yüz FTP/HTTP isteği atmak
+    /// listeyi kilitler, hedefin hız sınırına takılır ve bu depoda daha önce ölçülmüş bir hizmet
+    /// reddi biçimidir. Bu yüzden uzak ölçüm İSTEK ÜZERİNEDİR (<see cref="VerifyBackupsAsync"/>,
+    /// kullanıcının bilerek bastığı "Doğrula" düğmesi) ve sonucu kayıtta ÖNBELLEKLENİR
+    /// (<c>RemoteState</c> + <c>RemoteVerifiedUtc</c>). Liste, ölçümün NE ZAMAN yapıldığını da
+    /// taşır ki kullanıcı bayat bir ölçüme kesinmiş gibi bakmasın.
+    /// </para>
+    /// <para>
+    /// <b>Eski kayıtlarda geriye dönük uyum:</b> <c>RemoteState</c> boş gelirse (bu alan
+    /// eklenmeden önce yazılmış kayıtlar) daha önce ölçülmüş <c>RemoteMissing</c>/
+    /// <c>RemoteVerifiedUtc</c> ikilisinden türetilir; hiç ölçülmemişse <c>unknown</c> kalır —
+    /// "duruyor" DENMEZ.
+    /// </para>
+    /// </remarks>
+    private static void ApplyCopyPresence(BackupRecordDto record)
+    {
+        var uzakVarMi = !string.IsNullOrWhiteSpace(record.RemoteUri);
+
+        record.RemoteState = !uzakVarMi
+            ? BackupPresence.None
+            : record.RemoteState switch
+            {
+                BackupPresence.Present or BackupPresence.Missing => record.RemoteState,
+                // Alan eklenmeden önce yazılmış kayıt: ölçüm YAPILMIŞSA ondan türet.
+                _ when record.RemoteVerifiedUtc is not null =>
+                    record.RemoteMissing ? BackupPresence.Missing : BackupPresence.Present,
+                _ => BackupPresence.Unknown
+            };
+
+        // YALNIZ KESİN ölçümde uyarı: "ölçemedim" hâlinde off-site kopyayı kayıp ilan etmek,
+        // ağ arızasını felaket haberine çevirirdi.
+        record.OffsiteCopyLost =
+            record.RemoteState == BackupPresence.Missing && !record.LocalMissing;
+
+        // "Artık hiç kopya yok": yerel yok VE uzak ya hiç yoktu ya da ölçülüp yok bulundu.
+        record.AllCopiesMissing =
+            record.LocalMissing
+            && record.RemoteState is BackupPresence.None or BackupPresence.Missing;
     }
 
     /// <summary>
@@ -2704,11 +2775,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     private static string NormalizeArchivePath(string value) =>
         value.Replace('\\', '/').TrimStart('/');
 
-    public async Task<int> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default)
+    public async Task<BackupPruneResultDto> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default)
     {
         if (retentionDays <= 0)
         {
-            return 0;
+            return new BackupPruneResultDto();
         }
 
         var records = (await GetBackupsAsync(cancellationToken)).ToArray();
@@ -2716,7 +2787,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     }
 
     /// <inheritdoc />
-    public async Task<int> PruneSubscriptionAsync(
+    public async Task<BackupPruneResultDto> PruneSubscriptionAsync(
         Guid userId,
         int retentionDays,
         int keepCount,
@@ -2725,7 +2796,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     {
         if (retentionDays <= 0 && keepCount <= 0)
         {
-            return 0;
+            return new BackupPruneResultDto();
         }
 
         var kimlik = userId.ToString("N");
@@ -2758,7 +2829,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// bir geri yükleme noktası sayar ve ancak en yeni halkası da süresini doldurduğunda budar.
     /// </para>
     /// </remarks>
-    private async Task<int> PruneRecordsAsync(
+    private async Task<BackupPruneResultDto> PruneRecordsAsync(
         IReadOnlyCollection<BackupRecordDto> records,
         int retentionDays,
         int keepCount,
@@ -2771,6 +2842,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var silinecekler = BackupPrunePlanner.Select(records, cutoff, keepCount, IsUsableBackup);
         var removedIds = new HashSet<string>(StringComparer.Ordinal);
 
+        // BAŞARISIZLIK ÇAĞIRANA DA GİDER. Eskiden yalnız günlüğe yazılıyordu; gece işi bunu
+        // göremediği için durumunu "completed" bırakıyor ve özetinde yalnız başarıları sayıyordu
+        // (bkz. BackupPruneResultDto'nun gerekçesi).
+        var sonuclar = new BackupPruneResultDto();
+
         foreach (var record in silinecekler)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2781,6 +2857,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             }
             else if (sonuc.LocalFailure is not null)
             {
+                sonuclar.LocalDeleteFailed++;
+                sonuclar.Failures.Add($"{record.Name}: local_delete_failed; {sonuc.LocalFailure}");
                 logger?.LogWarning("Suresi dolmus yedek silinemedi, kayit korundu: {Sebep}", sonuc.LocalFailure);
             }
             else
@@ -2788,6 +2866,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 // UZAK kopya silinemedi: kaydı çıkarmak o dosyayı YETİM bırakırdı (bir daha ne
                 // görülür ne silinir). Kayıt işaretlenir ve bir sonraki budamada YENİDEN denenir.
                 await MarkRemoteDeleteFailedAsync(record, sonuc.RemoteFailure!, cancellationToken);
+                sonuclar.RemoteDeleteFailed++;
+                sonuclar.Failures.Add($"{record.Name}: remote_delete_failed; {sonuc.RemoteFailure}");
                 logger?.LogWarning(
                     "Yedegin uzak kopyasi silinemedi, kayit isaretlendi: {Ad}", record.Name);
             }
@@ -2804,7 +2884,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 cancellationToken);
         }
 
-        return removedIds.Count;
+        sonuclar.Removed = removedIds.Count;
+        return sonuclar;
     }
 
     /// <summary>Bir silme denemesinin İKİ AYRI sonucu: yerel dosya ve uzak kopya.</summary>
@@ -2896,7 +2977,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         // ARTIK SİLİNMİŞ SAYILAN KAYIT: kullanıcı sildi, yerel dosya gitti, yalnız uzak kopya
         // temizlenemediği için kayıt duruyor. Bunu "geri yükleme noktası" saymak, budamanın
         // kaynak korumasını yanıltır: panel taze bir yedek olduğunu sanıp GERÇEK eskileri silerdi.
-        if (string.Equals(record.Status, "deleted_remote_failed", StringComparison.Ordinal))
+        if (string.Equals(record.Status, RemoteDeleteFailedStatus, StringComparison.Ordinal))
         {
             return false;
         }
@@ -2940,7 +3021,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 }
 
                 var hedef = list[index];
-                hedef.Status = "deleted_remote_failed";
+                hedef.Status = RemoteDeleteFailedStatus;
                 // Yerel dosya GERÇEKTEN silindi; yolu bırakmak "dosya orada" yanılgısı üretirdi.
                 hedef.Path = string.Empty;
                 hedef.Warnings.RemoveAll(uyari => uyari.MessageKey == "backup.remote_delete_failed");
@@ -3171,9 +3252,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         request.Headers.TryAddWithoutValidation("x-amz-date", amzDate);
         request.Headers.TryAddWithoutValidation("x-amz-content-sha256", contentSha);
         using var response = await client.SendAsync(request, cancellationToken);
+        await EnsureRemoteDeleteSucceededAsync(response, "S3 DELETE", uri, cancellationToken);
     }
 
-    // WebDAV/HTTP DELETE (basic auth). 404/410 = zaten yok → sorun değil.
+    // WebDAV/HTTP DELETE (basic auth).
     private async Task DeleteHttpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
         var client = httpClientFactory.CreateClient();
@@ -3184,21 +3266,209 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
         }
         using var response = await client.SendAsync(request, cancellationToken);
+        await EnsureRemoteDeleteSucceededAsync(response, "WebDAV/HTTP DELETE", uri, cancellationToken);
     }
 
-#pragma warning disable SYSLIB0014
-    // FTP DELETE (DELE). Kimlik uzak seçeneklerden; RemoteUri temizlenmiş (kimliksiz) olduğundan buradan verilir.
-    private static async Task DeleteFtpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    /// <summary>
+    /// HTTP tabanlı hedeflerde silme sonucunu değerlendirir: başarı ya da <c>404/410</c> →
+    /// SİLİNMİŞ SAYILIR; geri kalan her yanıt HATADIR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA:</b> S3 ve WebDAV/HTTP silme yolları yanıtı HİÇ okumuyordu — yalnızca
+    /// <c>using var response = await client.SendAsync(...)</c> vardı ve metot orada bitiyordu.
+    /// Yani <c>403 AccessDenied</c>, <c>401</c>, <c>405 Method Not Allowed</c>, hatta <c>500</c>
+    /// SESSİZCE "sildim" sayılıyor, kayıt kapanıyor ve dosya hedefte YETİM kalıyordu: panel onu
+    /// bir daha ne görebilir ne silebilirdi. Dropbox/OneDrive/Azure yolları bunu ta baştan doğru
+    /// yapıyordu; aynı anlamın hedefe göre farklı davranması tam olarak bu hatanın kaynağıdır.
+    /// </para>
+    /// <para>
+    /// <b>Neden 404/410 BAŞARI:</b> silmenin amacı "dosya orada olmasın"dır; zaten yoksa amaç
+    /// gerçekleşmiştir. Eşik, uzak varlık ölçümüyle (<c>ProbeHttpAsync</c>) TEK ve AYNI kuraldır:
+    /// yalnız <c>NotFound</c>/<c>Gone</c> "yok" demektir, 401/403/405 "bilinmiyor"dur ve
+    /// bilinmiyorken "sildim" denmez.
+    /// </para>
+    /// </remarks>
+    private static async Task EnsureRemoteDeleteSucceededAsync(
+        HttpResponseMessage response,
+        string operation,
+        Uri uri,
+        CancellationToken cancellationToken)
     {
-        var request = (FtpWebRequest)WebRequest.Create(uri);
-        request.Method = WebRequestMethods.Ftp.DeleteFile;
-        request.Credentials = new NetworkCredential(remote.UserName, remote.Password);
-        request.UsePassive = true;
-        request.KeepAlive = false;
-        using var registration = cancellationToken.Register(() => request.Abort());
-        using var response = (FtpWebResponse)await request.GetResponseAsync();
+        if (response.IsSuccessStatusCode
+            || response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
+        {
+            return;
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        throw new AppException(
+            "backup.remote_delete_failed",
+            (int)response.StatusCode,
+            502,
+            $"{operation} {SanitizeUri(uri)} -> {(int)response.StatusCode} {response.ReasonPhrase}\r\n{Truncate(body, 500)}");
     }
-#pragma warning restore SYSLIB0014
+
+    /// <summary>
+    /// FTP'deki kopyayı siler (DELE). Kimlik uzak seçeneklerden gelir; <c>RemoteUri</c>
+    /// temizlenmiş (kimliksiz) saklandığı için adreste kullanıcı/parola yoktur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA — 550 ham hâliyle kullanıcıya basılıyordu.</b> Panel şunu diyordu:
+    /// <c>"Yerel kopya silindi, uzak kopya silinemedi (ftp): The remote server returned an error:
+    /// (550) File unavailable (e.g., file not found, no access)."</c> Bu cümlenin kendisi sorunun
+    /// parçasıdır: RFC 959'da 550 HEM "dosya yok" HEM "erişim yok" demektir, .NET'in metni de
+    /// ikisini birden sayar. Kullanıcı ne yapacağını bilemez — elle temizlemeye mi gitsin, yetki
+    /// mi düzeltsin?
+    /// </para>
+    /// <para>
+    /// <b>Ve daha kötüsü tutarsızlıktı:</b> "uzak kopya zaten yok" durumu HTTP/WebDAV'da (404/410)
+    /// ve S3'te (idempotent DELETE) BAŞARI sayılırken FTP'de HATA sayılıyordu. Aynı anlam, üç
+    /// farklı davranış: kullanıcının listesinde asla çözülemeyen bir uyarı kalıyordu, çünkü
+    /// silinecek bir şey yoktu.
+    /// </para>
+    /// <para>
+    /// <b>Çözüm TAHMİN DEĞİL ÖLÇÜM:</b> 550 alınca üst dizin listelenir (NLST) ve hedef adın orada
+    /// olup olmadığına BAKILIR. Üç sonuç vardır ve ikiye indirmek yasaktır:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>Listede YOK</b> → uzak kopya zaten gitmiş; silme BAŞARILIDIR (HTTP/S3 ile aynı
+    /// anlam) ve kayıt kapanır.</item>
+    /// <item><b>Listede VAR</b> → dosya duruyor, silinemedi: gerçek bir yetki/kilit sorunu.
+    /// Kullanıcıya AÇIKÇA "duruyor" denir.</item>
+    /// <item><b>Listeleme de başarısız</b> → "belirlenemedi". "Sildim" DENMEZ; kayıt işaretli
+    /// kalır ve bir sonraki budamada yeniden denenir.</item>
+    /// </list>
+    /// </remarks>
+    private async Task DeleteFtpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
+    {
+        var credential = new NetworkCredential(remote.UserName, remote.Password);
+        var adres = SanitizeUri(uri);
+
+        var silme = await FtpCommands.DeleteFileAsync(uri, credential, cancellationToken);
+        if (silme.Success)
+        {
+            return;
+        }
+
+        if (silme.Code != FtpCommandResult.FileUnavailable)
+        {
+            // 550 DIŞINDAKİ hatalar (530 oturum açılamadı, 425 veri kanalı yok, 0 = hiç yanıt)
+            // belirsiz DEĞİLDİR: dosyanın orada olup olmadığını söylemezler ama yoklamaya da izin
+            // vermezler. Yoklama denenmeden durum "bilinmiyor" olarak raporlanır.
+            throw new AppException(
+                "backup.remote_delete_failed",
+                silme.Code,
+                502,
+                $"ftp_delete={silme.Code}; remote_presence=unknown; probe=skipped; "
+                + $"url={adres}; server={Truncate(silme.Description, 300)}");
+        }
+
+        var (durum, kanit) = await ProbeFtpPresenceAsync(uri, credential, cancellationToken);
+        switch (durum)
+        {
+            case RemotePresence.Missing:
+                // ZATEN YOK = BAŞARI. Çağıran null hata görür, kayıt normal yoldan kapanır.
+                logger?.LogInformation(
+                    "FTP uzak kopyasi zaten yoktu, silme basarili sayildi: {Adres}", adres);
+                return;
+
+            case RemotePresence.Present:
+                throw new AppException(
+                    "backup.remote_delete_failed",
+                    FtpCommandResult.FileUnavailable,
+                    502,
+                    $"ftp_delete=550; remote_presence=present; cause=permission_or_lock; "
+                    + $"url={adres}; probe={kanit}; server={Truncate(silme.Description, 300)}");
+
+            default:
+                throw new AppException(
+                    "backup.remote_delete_failed",
+                    FtpCommandResult.FileUnavailable,
+                    502,
+                    $"ftp_delete=550; remote_presence=unknown; "
+                    + $"url={adres}; probe={kanit}; server={Truncate(silme.Description, 300)}");
+        }
+    }
+
+    /// <summary>
+    /// FTP'de dosya GERÇEKTEN orada mı? Üst dizin listelenir ve hedef ad aranır.
+    /// </summary>
+    /// <returns>
+    /// Ölçüm sonucu ve KANIT (dilden bağımsız etiket=değer; hata ayrıntısına aynen taşınır).
+    /// </returns>
+    /// <remarks>
+    /// <b>Bilinen sınır — ölçemediğimiz hâl:</b> bazı sunucular BOŞ bir dizinin NLST'sine de
+    /// <c>550</c> ("No files found") döner. O durumda listeleme başarısız sayılır ve sonuç
+    /// <see cref="RemotePresence.Unreachable"/> olur, yani "belirlenemedi". Bu BİLEREK böyledir:
+    /// boş dizin ile erişilemeyen dizin aynı yanıtı verdiğinden "dosya yok" demek ölçmediğimiz
+    /// bir şeyi iddia etmek olurdu ve kaydı kapatarak dosyayı yetim bırakabilirdi.
+    /// </remarks>
+    private async Task<(RemotePresence, string)> ProbeFtpPresenceAsync(
+        Uri uri,
+        NetworkCredential credential,
+        CancellationToken cancellationToken)
+    {
+        var (dizin, ad) = SplitFtpTarget(uri);
+        if (ad.Length == 0)
+        {
+            return (RemotePresence.Unreachable, "list=skipped:no_file_name");
+        }
+
+        var liste = await FtpCommands.ListDirectoryAsync(dizin, credential, cancellationToken);
+        if (!liste.Success)
+        {
+            return (RemotePresence.Unreachable, $"list={liste.Code}:{Truncate(liste.Description, 200)}");
+        }
+
+        return FtpListingContains(liste.Names, ad)
+            ? (RemotePresence.Present, $"list=ok:entries={liste.Names.Count}")
+            : (RemotePresence.Missing, $"list=ok:entries={liste.Names.Count}");
+    }
+
+    /// <summary>Adresi (üst dizin, dosya adı) ikilisine ayırır; ad yüzde kodlamasından çözülür.</summary>
+    private static (Uri Directory, string Name) SplitFtpTarget(Uri uri)
+    {
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var name = segments.Length == 0 ? string.Empty : Uri.UnescapeDataString(segments[^1]);
+
+        var builder = new UriBuilder(uri)
+        {
+            Path = "/" + string.Join('/', segments.Take(Math.Max(0, segments.Length - 1))),
+            Query = string.Empty,
+            Fragment = string.Empty,
+            UserName = string.Empty,
+            Password = string.Empty
+        };
+
+        return (builder.Uri, name);
+    }
+
+    /// <summary>
+    /// Listede bu ad var mı?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Eşleşme BİLEREK GENİŞ:</b> karşılaştırma büyük/küçük harf duyarsızdır ve NLST'nin tam
+    /// yol döndüren sunucularında (kimi sunucu <c>/yedek/2026-08-01/x.zip</c>, kimi düz
+    /// <c>x.zip</c> verir) son segmente bakılır.
+    /// </para>
+    /// <para>
+    /// <b>Asimetri kasıtlı:</b> yanlışlıkla "VAR" demek kaydı açık bırakır — kullanıcı uyarıyı
+    /// görür, gerekirse elle temizler. Yanlışlıkla "YOK" demek ise kaydı KAPATIR ve dosya hedefte
+    /// sonsuza kadar yetim kalır. İki hatanın bedeli eşit olmadığı için eşleşme geniş tutuldu.
+    /// </para>
+    /// </remarks>
+    private static bool FtpListingContains(IReadOnlyCollection<string> names, string target) =>
+        names.Any(entry => string.Equals(FtpEntryName(entry), target, StringComparison.OrdinalIgnoreCase));
+
+    private static string FtpEntryName(string entry)
+    {
+        var kirpilmis = entry.Trim().TrimEnd('/');
+        var index = kirpilmis.LastIndexOfAny(['/', '\\']);
+        return index < 0 ? kirpilmis : kirpilmis[(index + 1)..];
+    }
 
     // ATOMİK ekleme: arka plan otomatik yedek + kullanıcı elle yedek AYNI ANDA çalışırsa (UpdateAsync dosya-başına
     // kilit tutar) kayıt kaybolmaz. Eski Read+Write deseni "son yazan kazanır" → kayıp yedek kaydı veriyordu.
@@ -3263,7 +3533,9 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
         // Yalnız DEĞİŞEN kayıtlar yazılır: her doğrulamada bütün indeksi yeniden yazmak,
         // eşzamanlı yedek kaydıyla yarışa girmek demektir.
-        var uzakDurum = new Dictionary<string, bool>(StringComparer.Ordinal);
+        // Değer BackupPresence sabiti: "ulaşamadım" bu sözlüğe HİÇ girmez (kayda dokunulmaz),
+        // böylece geçici arıza son KESİN ölçümün üzerine yazamaz.
+        var uzakDurum = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var record in records)
         {
@@ -3322,11 +3594,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             switch (presence)
             {
                 case RemotePresence.Present:
-                    uzakDurum[record.Id] = false;
+                    uzakDurum[record.Id] = BackupPresence.Present;
                     break;
 
                 case RemotePresence.Missing:
-                    uzakDurum[record.Id] = true;
+                    uzakDurum[record.Id] = BackupPresence.Missing;
                     sonuc.MissingRemote++;
                     sonuc.Issues.Add(new BackupVerificationIssueDto
                     {
@@ -3365,9 +3637,13 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 {
                     foreach (var item in existing)
                     {
-                        if (uzakDurum.TryGetValue(item.Id, out var eksik))
+                        if (uzakDurum.TryGetValue(item.Id, out var durum))
                         {
-                            item.RemoteMissing = eksik;
+                            // RemoteMissing KORUNUYOR: iki değerli eski alan hâlâ okunuyor
+                            // olabilir. Üç değerli gerçeğin kaynağı artık RemoteState'tir ve
+                            // ikisi TEK yerde, birlikte yazılır — ayrışmasınlar.
+                            item.RemoteState = durum;
+                            item.RemoteMissing = durum == BackupPresence.Missing;
                             item.RemoteVerifiedUtc = olcumAni;
                         }
                     }

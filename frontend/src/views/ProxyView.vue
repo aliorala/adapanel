@@ -1,6 +1,6 @@
 <template>
   <section class="panel proxy-panel">
-    <div class="proxy-header">
+    <div class="module-head">
       <div>
         <h2>{{ t("panel.proxy.title") }}</h2>
         <p class="meta">{{ t("panel.proxy.subtitle") }}</p>
@@ -23,14 +23,16 @@
         <button role="tab" :aria-selected="activeSection === 'proxy'" :class="{ active: activeSection === 'proxy' }" @click="activeSection = 'proxy'">{{ t("panel.proxy.configTitle") }}</button>
         <button role="tab" :aria-selected="activeSection === 'rewrite'" :class="{ active: activeSection === 'rewrite' }" @click="activeSection = 'rewrite'">{{ t("panel.proxy.rewriteTitle") }}</button>
       </div>
-      <label class="site-select">
-        <select v-model="selectedSiteName">
-          <option value="">{{ t("panel.php.selectSite") }}</option>
-          <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">
-            {{ site.name }}
-          </option>
-        </select>
-      </label>
+      <!-- Etiketsiz bir <label> sarmalayici SEÇİCİYE AD VERMEZ: ekran okuyucu burayi "acilir
+           liste, bos" diye okuyordu. Gorunur bir etiket arac cubugunu iki satira cikaracagi icin
+           ad `aria-label` ile veriliyor. `.compact-select` (base.css) da bu yuzden var: aksi hâlde
+           global `select { width: 100% }` kutuyu arac cubugunun TAMAMINA geriyordu. -->
+      <select v-model="selectedSiteName" class="compact-select" :aria-label="t('panel.php.selectSite')">
+        <option value="">{{ t("panel.php.selectSite") }}</option>
+        <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">
+          {{ site.name }}
+        </option>
+      </select>
     </div>
 
     <!-- Yapılandırma sunucudan gelmeden özet "devre dışı", form da varsayılan değerlerle
@@ -69,7 +71,7 @@
               <h3>{{ t("panel.proxy.configTitle") }}</h3>
               <p class="meta">{{ t("panel.proxy.configSubtitle") }}</p>
             </div>
-            <span :class="['pill', currentConfiguration?.isProxyEnabled ? 'ok' : 'muted']">
+            <span :class="['status-pill', currentConfiguration?.isProxyEnabled ? 'ok' : 'warn']">
               {{ currentConfiguration?.isProxyEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
           </div>
@@ -130,7 +132,9 @@
               <h3>{{ t("panel.proxy.rewriteTitle") }}</h3>
               <p class="meta">{{ t("panel.proxy.rewriteSubtitle") }}</p>
             </div>
-            <span class="pill muted">{{ currentConfiguration?.rewriteRules.length ?? 0 }}</span>
+            <!-- Bir SAYI durum degildir: kural sayisi kehribar "muted" rozetiyle ciziliyordu ve
+                 "dikkat" gibi okunuyordu. Notr rozet (`.status-pill` tonsuz) dogru rutbe. -->
+            <span class="status-pill">{{ currentConfiguration?.rewriteRules.length ?? 0 }}</span>
           </div>
 
           <label>
@@ -175,7 +179,7 @@
             <article v-for="rule in currentConfiguration.rewriteRules" :key="rule.name" class="rule-item">
               <div class="section-head">
                 <strong>{{ rule.name }}</strong>
-                <span class="pill muted">{{ rule.stopProcessing ? t("panel.proxy.stopProcessing") : t("panel.proxy.passThrough") }}</span>
+                <span class="status-pill">{{ rule.stopProcessing ? t("panel.proxy.stopProcessing") : t("panel.proxy.passThrough") }}</span>
               </div>
               <dl class="detail-grid">
                 <div>
@@ -359,60 +363,57 @@ async function saveRewriteRule() {
 
 <style scoped>
 .proxy-panel,
-.status-grid,
 .proxy-columns,
 .proxy-card,
 .detail-grid,
 .rule-list,
 .toggle-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
-.proxy-header,
-.section-head,
 .action-row {
   display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  align-items: flex-start;
+  gap: var(--sp-12);
+  align-items: center;
+  flex-wrap: wrap;
 }
 
-.status-grid,
-.proxy-columns,
-.detail-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+/* TEK SUTUN — olculdu, iki sutun BOS YARIM ekran demekti.
+   `.proxy-columns` iki sutunlu bir izgaraydi ama icindeki iki bolum `v-if="activeSection === …"`
+   ile birbirini DISLIYOR: her an yalnizca BIRI cizilir. Sonuc, kartin ekranin solunda yarim
+   genislikte durup sag yarinin bos kalmasiydi (1440px'te ~700px bos). Sekmeli bir yerlesimde
+   dogru olan, gorunen tek karta tam genisligi vermektir. */
+.proxy-columns {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.proxy-columns,
 .detail-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
 }
 
-.status-tile,
 .proxy-card,
 .rule-item {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
   border-radius: var(--radius-md);
   border: 1px solid var(--panel-border);
-  background: linear-gradient(180deg, var(--surface-2), var(--surface-2));
+  /* Iki durakli "gradyan" iki durakta da AYNI rengi tasiyordu (`surface-2` -> `surface-2`),
+     yani duz bir dolgunun pahali yazilisiydi. */
+  background: var(--surface-2);
 }
 
-.tile-label,
 .detail-grid dt,
 .meta {
   color: var(--text-muted);
 }
 
-.detail-grid {
-  margin: 0;
-}
-
 .detail-grid div {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
+  min-width: 0;
 }
 
 .detail-grid dd,
@@ -421,41 +422,23 @@ async function saveRewriteRule() {
   word-break: break-word;
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.pill.ok {
-  background: color-mix(in srgb, var(--accent-1) 14%, transparent);
-  color: var(--accent-1);
-}
-
-.pill.muted {
-  background: color-mix(in srgb, var(--warn-1) 12%, transparent);
-  color: var(--warn-text);
-}
-
-.site-select {
-  width: min(260px, 52vw);
-}
-
-.action-row {
-  align-items: stretch;
-}
-
-.action-row button {
-  flex: 1 1 0;
+/* YIKICI EYLEM AYRI DURUR.
+   Eskiden `flex: 1 1 0` ikisini de esit genislige geriyordu: "Kaydet" ile sitenin yonlendirmesini
+   KESEN "Kaldir" ayni boyda, yan yana, ayni hizada duruyordu -- refleksle yanlisina basilacak
+   bir dizilim. Artik kaydet solda kendi boyunda, kaldir `margin-left: auto` ile satirin karsi
+   ucunda: konumu sabit ve arasinda gorunur bir bosluk var. */
+.action-row .danger {
+  margin-left: auto;
 }
 
 .toggle-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Izgara cocugu varsayilan olarak GERILIR (`justify-self: stretch`): tek basina duran
+   "Kurali kaydet" dugmesi kartin tamamini kaplardi. Panelde dugme icerigi kadar genistir. */
+.proxy-card > button {
+  justify-self: start;
 }
 
 /* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
@@ -467,61 +450,51 @@ async function saveRewriteRule() {
    ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
 label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
-  gap: 8px;
+  /* --sp-8 -> --sp-6: `.form-grid label` ve `.stacked-field` (base.css) etiket-alan araligini
+     6px veriyor. Bu ekran tek basina 8px kullandigi icin yan yana acilan iki sekmenin form
+     ritmi birbirini tutmuyordu. */
+  gap: var(--sp-6);
 }
 
-.checkbox {
-  grid-template-columns: auto 1fr;
-  align-items: center;
-}
+/*
+ * BURADA ESKIDEN PANELIN GLOBAL FORM KURALLARINI EZEN BIR BLOK VARDI; SILINDI.
+ *
+ * Yazan sey suydu:
+ *   input, textarea, select, button { width: 100%; … }
+ *   input, textarea, select { border: 1px solid var(--panel-border); padding: 12px 14px; … }
+ *
+ * Uc olculmus zarari vardi:
+ *  1) YUKSEKLIK: 12px dikey dolgu + 2px kenar + 19.575px satir = 43.6px. Panelin her yerinde
+ *     alan yuksekligi 34px (base.css `input { min-height: 34px; padding: var(--sp-6) var(--sp-10) }`).
+ *     Yani bu ekranin form alanlari komsu ekranlardan ~10px UZUNDU -- "her yer birbirine girdi"
+ *     hissinin en olculebilir kaynagi.
+ *  2) KENAR RENGI: `--panel-border` girdi zemininde 1.41:1 olculuyor; base.css tam bu yuzden ayri
+ *     bir `--input-border` (3.02:1) belirteci tanimlar ve gerekcesini yazar. Bu blok o duzeltmeyi
+ *     TEK EKRANDA geri aliyordu.
+ *  3) `button { width: 100% }`: kapsamli oldugu icin (0,1,1) base.css'i eziyordu ve her dugmeyi
+ *     kapsayicisi kadar geniyordu; ayrica base.css'teki `label.checkbox input` kuralinin yorumu
+ *     bu satiri ISIMLE anmis ("ProxyView … input{width:100%} yaziyor") -- yani onay kutusu tuzagi
+ *     da buradan besleniyordu. Kaynagi silmek, kacis kurallarina olan ihtiyaci da siliyor.
+ */
 
-.checkbox input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-}
-
-.checkbox span {
-  margin-left: 8px;
-}
-
-input,
-textarea,
-select,
-button {
-  width: 100%;
-  border-radius: var(--radius-sm);
-  font: inherit;
-}
-
-input,
-textarea,
-select {
-  border: 1px solid var(--panel-border);
-  padding: 12px 14px;
-  background: var(--input-bg);
-  color: var(--text-strong);
-}
-
-@media (max-width: 980px) {
-  .status-grid,
-  .proxy-columns,
+@media (max-width: 900px) {
   .detail-grid,
   .toggle-grid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 760px) {
-  .proxy-header,
-  .section-head,
+/* 760 -> 720: base.css'in tek sutuna dustugu esik (ve `.panel` dolgusunun daraldigi nokta).
+   Iki ayri esik, 720-760 arasinda yarim uygulanmis bir yerlesim uretiyordu. */
+@media (max-width: 720px) {
   .action-row {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
   }
 
-  .action-row button {
-    width: 100%;
+  /* Tek sutuna dusen satirda "auto" bosluk anlamsiz: dugmeler alt alta, tam genislikte. */
+  .action-row .danger {
+    margin-left: 0;
   }
 }
 </style>

@@ -55,7 +55,12 @@ internal sealed class BulutAlani : IDisposable
 
     public CancellationToken Iptal => _iptal.Token;
 
-    public BackupService ServisKur(SahteBulut bulut, ISecretProtector? koruyucu = null) =>
+    /// <param name="ftp">
+    /// FTP komutlarinin SAHTESI. Verilmezse gercek <c>FtpWebRequestCommands</c> kurulur ama
+    /// hicbir FTP hedefi kullanilmadigi surece HIC CAGRILMAZ; FTP testleri bunu daima verir,
+    /// boylece testler gercek bir FTP sunucusuna BAGLANMAZ.
+    /// </param>
+    public BackupService ServisKur(SahteBulut bulut, ISecretProtector? koruyucu = null, IBackupFtpCommands? ftp = null) =>
         new(new SahteSiteServisi(SiteKoku),
             null!,
             null!,
@@ -64,7 +69,10 @@ internal sealed class BulutAlani : IDisposable
             DosyaDeposu,
             new SahteIstemciFabrikasi(bulut),
             secretProtector: koruyucu ?? new SahteKoruyucu(),
-            auditService: Denetim);
+            auditService: Denetim)
+        {
+            FtpCommands = ftp ?? new FtpWebRequestCommands()
+        };
 
     public Task KayitlariYazAsync(params BackupRecordDto[] kayitlar) =>
         DosyaDeposu.WriteAsync("config/backups.json", kayitlar, Iptal);
@@ -215,6 +223,53 @@ internal sealed class SahteBulutIsleyici(SahteBulut bulut) : HttpMessageHandler
             RequestMessage = request,
             Content = new StringContent(cevap)
         };
+    }
+}
+
+/// <summary>
+/// FTP sunucusunu taklit eden komut yuzeyi. <b>Hicbir soket acilmaz.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>NEDEN VAR:</b> silme yolunda <c>550</c>'nin ANLAMI ("dosya yok" mu, "izin yok" mu) bir
+/// karardir ve o karar ancak gercek bir FTP sunucusu OLMADAN denenebilirse korunabilir.
+/// <c>FtpWebRequest</c> 550'yi <c>WebException</c> olarak firlatir ve testte 550 tasiyan bir
+/// <c>FtpWebResponse</c> URETILEMEZ (tipin kurucusu ic) — bu yuzden protokol yuzeyi sonuc
+/// donduren bir arayuze cekildi.
+/// </para>
+/// <para>
+/// <b>DURUSTLUK NOTU:</b> burada olculen sey PANELIN KARARIDIR, gercek bir FTP sunucusunun
+/// davranisi degil. "Gercek FTP hedefinde calisir" iddiasi bu testlerden CIKARILAMAZ.
+/// </para>
+/// </remarks>
+internal sealed class SahteFtp : IBackupFtpCommands
+{
+    public List<string> Komutlar { get; } = [];
+
+    /// <summary>DELE yaniti. Varsayilan: 250 (silindi).</summary>
+    public FtpCommandResult SilmeYaniti { get; set; } = FtpCommandResult.Ok(250, "250 Delete operation successful.");
+
+    /// <summary>NLST yaniti. Varsayilan: bos dizin, basarili.</summary>
+    public FtpListingResult ListeYaniti { get; set; } = new(true, [], 226, "226 Directory send OK.");
+
+    public Task<FtpCommandResult> DeleteFileAsync(Uri uri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)
+    {
+        Komutdur($"DELE {uri}");
+        return Task.FromResult(SilmeYaniti);
+    }
+
+    public Task<FtpListingResult> ListDirectoryAsync(Uri directoryUri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)
+    {
+        Komutdur($"NLST {directoryUri}");
+        return Task.FromResult(ListeYaniti);
+    }
+
+    private void Komutdur(string komut)
+    {
+        lock (Komutlar)
+        {
+            Komutlar.Add(komut);
+        }
     }
 }
 

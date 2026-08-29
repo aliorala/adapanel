@@ -248,14 +248,6 @@ function showNotice(message: string, isError: boolean) {
   align-content: start;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
 .head-button,
 .row-actions button {
   width: auto;

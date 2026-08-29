@@ -1,3 +1,6 @@
+using System;
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using AdaPanel.Infrastructure.Htaccess;
 
@@ -15,8 +18,9 @@ namespace AdaPanel.Infrastructure.Htaccess.Htpasswd;
 /// (OpenWall bcrypt paketi + jBCrypt kümesi, <c>BCryptVerifierTests</c>).
 /// </para>
 /// <para>
-/// <b>YALNIZCA DOĞRULAMA yapar, üretmez.</b> Motorun işi mevcut bir <c>.htpasswd</c> dosyasını
-/// okumaktır; yeni parola özeti üretmek panelin işidir ve orada ayrı bir karar konusudur.
+/// <b>DOĞRULAR ve (2026-08 itibarıyla) ÜRETİR</b> — bkz. <see cref="Generate"/>. Üretim uzun süre
+/// bilerek dışarıda bırakılmıştı ("panelin işi"); ölçülen sonuç, panelin özet hiç üretmemesi ve
+/// korumalı dizin parolasını düz metin saklaması oldu. Doğrulayan ile üreten AYNI dosyada.
 /// </para>
 /// <para>
 /// <b>Maliyet (cost) SINIRLIDIR.</b> <c>$2y$31$</c> tek doğrulamada dakikalarca CPU yer; kendi
@@ -347,6 +351,58 @@ internal static class BCryptVerifier
     {
         var index = B64.IndexOf(k);
         return index;
+    }
+
+    /// <summary>
+    /// YENİ bir bcrypt özeti üretir (<c>$2y$</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Sınıf yorumu "üretmez" diyordu ve o cümle artık DOĞRU DEĞİL — sebebi ölçüldü:</b>
+    /// korumalı dizin parolası, üretilecek bir özet olmadığı için panelde
+    /// <c>base64(kullanıcı:parola)</c> olarak müşterinin kendi site köküne yazılıyordu ve
+    /// çözülünce düz metin çıkıyordu (bu turda canlı ölçüldü). "Üretmek panelin işi" cümlesinin
+    /// bedeli, panelin hiç üretmemesi oldu. Üretim burada durur çünkü Blowfish çekirdeği
+    /// (<see cref="Hesapla"/>, <see cref="B64Encode"/>) burada; ikinci bir yere yazmak, doğrulayan
+    /// ile üretenin ayrı düşmesi demekti — bu sınıfta yapılabilecek en pahalı hata odur.
+    /// </para>
+    /// <para>
+    /// <b>Tuz KRİPTOGRAFİK kaynaktan gelir</b> (<see cref="RandomNumberGenerator"/>, net48'de de
+    /// var). <c>Random</c> kullanılsaydı aynı saniyede kurulan iki koruma aynı tuzu alabilir ve
+    /// tuzun tek işlevi (önceden hesaplanmış tabloları kırmak) ortadan kalkardı.
+    /// </para>
+    /// <para>
+    /// <b>Sürüm <c>$2y$</c>:</b> <see cref="Verify"/>'ın kabul ettiği üç sürümden biri ve Apache
+    /// <c>htpasswd -B</c>'nin ürettiği sürüm. Ürettiğimiz özet, standart <c>htpasswd</c> ile
+    /// üretilmiş bir dosyadan AYIRT EDİLEMEZ olmalı — yönetici dosyayı kendi araçlarıyla
+    /// onarabilmeli.
+    /// </para>
+    /// </remarks>
+    /// <param name="cost">
+    /// 2'nin kuvveti olarak tur sayısı. <see cref="Verify"/> ile aynı sınırlar geçerlidir
+    /// (4..31) ve çağıran taraf ayrıca <c>HtaccessLimits.MaxBcryptCost</c>'u aşmamalıdır —
+    /// aşarsa ürettiğimiz özeti KENDİ doğrulayıcımız reddederdi.
+    /// </param>
+    internal static string Generate(string password, int cost)
+    {
+        if (cost is < 4 or > 31)
+        {
+            // Sessizce kırpmak, "maliyet 12 istedim" diyen çağırana 4 vermek olurdu.
+            throw new ArgumentOutOfRangeException(nameof(cost), cost, "bcrypt maliyeti 4..31 aralığında olmalı.");
+        }
+
+        var tuz = new byte[SaltBytes];
+        using (var rastgele = RandomNumberGenerator.Create())
+        {
+            rastgele.GetBytes(tuz);
+        }
+
+        var govde = Hesapla(tuz, AnahtarBaytlari(password ?? string.Empty), cost);
+
+        // Biçim: $2y$<iki haneli maliyet>$<22 karakter tuz><31 karakter özet>.
+        // Maliyet İKİ HANE olmak ZORUNDA (Verify hash[4] ve hash[5]'i okuyor); "$2y$9$..." yazmak
+        // kendi doğrulayıcımızın Malformed demesine yol açardı.
+        return "$2y$" + cost.ToString("00", CultureInfo.InvariantCulture) + "$" + B64Encode(tuz, SaltBytes) + govde;
     }
 
     /// <summary>

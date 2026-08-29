@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide software-panel">
+  <section class="panel software-panel">
     <div class="software-header">
       <div>
         <h2>{{ t("panel.software.title") }}</h2>
@@ -140,7 +140,10 @@
               {{ t("panel.software.lastError") }}: {{ translate(item.installed.lastError) }}
             </p>
           </div>
-          <span class="version-cell">
+          <!-- data-label: DAR EKRANDA hücrenin başlığı. Tablo 1120px altında tek sütuna
+               indiğinde başlık satırı kayboluyor ve "8.3.6", "runtime", "C:\..." anonim
+               satırlara dönüşüyordu; etiket artık hücrenin İÇİNDE, aynı çeviri anahtarından. -->
+          <span class="version-cell" :data-label="t('panel.software.version')">
             {{ item.installed?.version || item.version || "-" }}
             <span
               v-if="item.installed?.updateAvailable"
@@ -156,8 +159,8 @@
               {{ t("panel.software.versionCheckUnsupported") }}
             </span>
           </span>
-          <span>{{ item.type }}</span>
-          <span class="path-cell">{{ item.installed?.installDir || item.installDir }}</span>
+          <span :data-label="t('panel.software.type')">{{ item.type }}</span>
+          <span class="path-cell" :data-label="t('panel.software.installDir')">{{ item.installed?.installDir || item.installDir }}</span>
           <span :class="['status-pill', statusClass(item.installed?.status)]">
             {{
               item.installed?.isSystemDetected
@@ -170,7 +173,7 @@
           <div class="row-actions">
             <button
               v-if="item.installed?.updateAvailable"
-              class="compact update-action"
+              class="compact"
               :disabled="softwareStore.installingComponentId === item.id || softwareStore.removingComponentId === item.id"
               @click="updateComponent(item)">
               {{ softwareStore.installingComponentId === item.id ? t("panel.software.installing") : t("panel.software.update") }}
@@ -617,20 +620,22 @@ function formatDetectionSource(source: string): string {
 
 <style scoped>
 .software-panel {
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
+/* `.section-head` BU İKİ LİSTEDEN ÇIKARILDI: ortak tanım base.css'te ve aynı üç bildirimi
+   (flex / space-between / flex-start) `--sp-12` boşlukla zaten veriyor. Kopyanın tek EKSİĞİ
+   `flex-wrap: wrap` idi; ortak tanıma geçince onu da kazanır, yani dar panelde uzun bir başlık
+   yanındaki düğmeyi artık ezmez. */
 .software-header,
 .software-actions,
-.section-head,
 .software-toolbar,
 .row-actions {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .software-header,
-.section-head,
 .software-toolbar {
   justify-content: space-between;
   align-items: flex-start;
@@ -645,8 +650,8 @@ function formatDetectionSource(source: string): string {
 .workspace-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  padding: 5px;
+  gap: var(--sp-8);
+  padding: var(--sp-4);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--input-bg);
@@ -654,10 +659,10 @@ function formatDetectionSource(source: string): string {
 
 .workspace-tab {
   display: flex;
-  gap: 11px;
+  gap: var(--sp-10);
   align-items: center;
   min-height: 48px;
-  padding: 7px 10px;
+  padding: var(--sp-6) var(--sp-10);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--text-soft);
@@ -677,17 +682,17 @@ function formatDetectionSource(source: string): string {
 
 .workspace-tab > span:last-child {
   display: grid;
-  gap: 3px;
+  gap: var(--sp-2);
 }
 
 .workspace-tab strong {
   color: var(--text-strong);
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
 }
 
 .workspace-tab small {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
 }
 
 .workspace-mark {
@@ -696,9 +701,10 @@ function formatDetectionSource(source: string): string {
   width: 34px;
   height: 34px;
   place-items: center;
-  border-radius: 9px;
-  color: var(--accent-1);
-  font-size: 0.68rem;
+  border-radius: var(--radius-md);
+  /* Dolgu üzerine yazılan metin: `--accent-1` değil onun ölçülmüş metin karşılığı. */
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
   font-weight: 900;
   background: color-mix(in srgb, var(--accent-1) 11%, transparent);
 }
@@ -706,7 +712,7 @@ function formatDetectionSource(source: string): string {
 .software-toolbar,
 .list-card,
 .installed-strip {
-  padding: 11px;
+  padding: var(--sp-12);
   border-radius: var(--radius-md);
   border: 1px solid var(--panel-border);
   background: var(--surface-0);
@@ -715,32 +721,63 @@ function formatDetectionSource(source: string): string {
 .category-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: var(--sp-4);
 }
 
+/*
+  KATEGORİ SEKMELERİ ARTIK DÜĞME GİBİ DAVRANMIYOR.
+  İki ölçülmüş sorun vardı. (1) Seçili sekme `linear-gradient(135deg, --accent-1, --accent-2)`
+  ile boyanıyor ve üzerine `--on-accent` (beyaz) yazılıyordu; base.css'in ölçümüne göre beyaz
+  metin `--accent-1` üzerinde 2.80:1 — yani gradyanın açık ucunda WCAG AA'nın (4.5) altında.
+  Panelin birincil düğmesi tam bu yüzden `--accent-fill-*` belirteçlerine taşınmıştı; burada
+  eski, ölçülmemiş gradyan hâlâ yaşıyordu. (2) Görsel HİYERARŞİ yanlıştı: bunlar bir SÜZGEÇ,
+  bir eylem değil. Dolu vurgulu bir kutu olarak çizilince ekrandaki en güçlü çağrı hâline
+  geliyor ve başlıktaki gerçek birincil düğme ("Varsayılanları kur") ile yarışıyordu.
+  Panelin kendi seçili-sekme dili kullanıldı (base.css `.segmented-tabs button.active`):
+  %14 vurgu tonu + `--accent-text` yazı + altta 2px vurgu çizgisi. ÖLÇÜLDÜ: koyu temada
+  2.80 -> 7.36:1, açık temada 4.51 -> 4.91:1. Düğme gölgesi ve hover'daki 1px zıplama da
+  kapatıldı — bir süzgeç zıplamaz.
+*/
 .category-tab {
   display: inline-flex;
   width: auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   background: var(--surface-2);
   color: var(--text-soft);
   font-weight: 550;
+  box-shadow: none;
+}
+
+.category-tab:not(:disabled):hover {
+  background: var(--surface-3);
+  transform: none;
+  filter: none;
+  box-shadow: none;
 }
 
 .category-tab.active {
-  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
-  color: var(--on-accent);
+  background: color-mix(in srgb, var(--accent-1) 14%, transparent);
+  color: var(--accent-text);
+  box-shadow: inset 0 -2px var(--accent-1);
 }
 
+/* Sayaç eskiden `opacity: 0.74` ile soldurulmuştu. Opaklık metni ZEMİNE doğru soldurur, yani
+   kontrastı düşürür (base.css'te devre dışı düğme için aynı hata ölçülmüştü). Sayı zaten bir
+   bilgi; rengiyle geri çekilir, saydamlıkla değil. */
 .category-tab span {
-  opacity: 0.74;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.category-tab.active span {
+  color: inherit;
 }
 
 .software-search {
   display: grid;
   min-width: min(100%, 340px);
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .list-card,
@@ -748,7 +785,7 @@ function formatDetectionSource(source: string): string {
 .installed-list,
 .component-name {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .software-table {
@@ -759,12 +796,14 @@ function formatDetectionSource(source: string): string {
   border-radius: var(--radius-sm);
 }
 
+/* Satır ölçüleri base.css'teki `.data-row` ile EŞİTLENDİ (`--sp-10 --sp-12`): panelde iki
+   farklı tablo yoğunluğu olmasın, bir ekrandan diğerine geçerken satırlar zıplamasın. */
 .software-row {
   display: grid;
   grid-template-columns: minmax(190px, 1.2fr) 0.55fr 0.55fr minmax(190px, 1.2fr) 0.7fr auto;
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: center;
-  padding: 9px 10px;
+  padding: var(--sp-10) var(--sp-12);
   border-bottom: 1px solid var(--panel-border);
   background: var(--surface-0);
 }
@@ -779,7 +818,7 @@ function formatDetectionSource(source: string): string {
 
 .table-head {
   color: var(--text-soft);
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   background: var(--surface-2);
 }
@@ -795,13 +834,13 @@ function formatDetectionSource(source: string): string {
 .component-name span,
 .installed-chip span {
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
 }
 
 .component-name .detected-label,
 .detection-source {
   color: var(--accent-text);
-  font-size: 0.76rem;
+  font-size: var(--fs-2xs);
 }
 
 .path-cell {
@@ -815,31 +854,37 @@ function formatDetectionSource(source: string): string {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
+/*
+  VURGU DOLGUSU ÜZERİNDEKİ BEYAZ YAZI — ölçülmüş kontrast hatası, üç yerde.
+  base.css'in ölçümü: beyaz metin `--accent-1` (#4b9cff) üzerinde 2.80:1, AA eşiği 4.5.
+  Panelin birincil düğmesi bu yüzden `--accent-fill-top` (= `--accent-2`, 4.51:1) belirtecine
+  taşınmıştı; ama bu dosyadaki üç öge — güncelleme rozeti, başlıktaki güncelleme sayacı ve
+  "Güncelle" düğmesi — hâlâ düz `--accent-1` dolgusu kullanıyordu. Üçü de tam olarak
+  "bir şey yapman gerekiyor" diyen ögeler, yani okunmasının en çok önem taşıdığı yerler.
+  `.update-action` kuralı TÜMÜYLE SİLİNDİ (sınıf da şablondan kaldırıldı): düğme zaten
+  `class="compact"` ile birincil; kural onun ölçülmüş gradyanını ölçülmemiş düz renkle
+  eziyordu. Silmek, doğru davranışa geri dönmektir.
+*/
 .update-badge {
-  padding: 2px 7px;
+  padding: var(--sp-2) var(--sp-6);
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--on-accent);
-  background: var(--accent-1);
+  background: var(--accent-fill-top);
   white-space: nowrap;
 }
 
 .unknown-badge {
-  padding: 2px 7px;
+  padding: var(--sp-2) var(--sp-6);
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   border: 1px dashed var(--panel-border);
   white-space: nowrap;
-}
-
-.update-action {
-  background: var(--accent-1);
-  border-color: var(--accent-1);
 }
 
 .update-count {
@@ -847,37 +892,27 @@ function formatDetectionSource(source: string): string {
   place-items: center;
   min-width: 17px;
   height: 17px;
-  margin-right: 5px;
-  padding: 0 4px;
+  margin-right: var(--sp-4);
+  padding: 0 var(--sp-4);
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   color: var(--on-accent);
-  background: var(--accent-1);
+  background: var(--accent-fill-top);
 }
 
-.status-pill {
-  width: fit-content;
-  padding: 4px 9px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.status-pill.ok {
-  color: var(--accent-1);
-  background: color-mix(in srgb, var(--accent-1) 12%, transparent);
-}
-
-.status-pill.muted {
-  color: var(--text-muted);
-  background: var(--surface-2);
-}
-
-.status-pill.danger {
-  color: var(--danger-text);
-  background: var(--danger-bg);
-}
+/*
+  DURUM ROZETİNİN KENDİ GÖRÜNÜMÜ SİLİNDİ — base.css'teki `.status-pill` KULLANILIYOR.
+  Buradaki eski kural aynı sınıf adını panelin geri kalanından FARKLI çiziyordu: başka dolgu
+  (`--sp-4 9px` yerine `--sp-2 --sp-10`), başka yazı boyu, kenarlık yok ve en önemlisi başka
+  RENK — "Kurulu" burada MAVİ, panelin her yerinde YEŞİL. Sonuç: bu tabloda renk hiçbir şey
+  ayırt etmiyordu; kurulu / kurulabilir / başarısız üç durumun ikisi mavi-gri tonlarındaydı ve
+  göz listeyi tarayarak "neler kurulu" sorusunu cevaplayamıyordu.
+  Kural kaldırılınca base.css devreye giriyor: `.ok` yeşil, `.danger` kırmızı, modifiye
+  edilmemiş rozet (yani `.muted`) nötr gri. `.muted` için AYRI KURAL GEREKMİYOR — base'in
+  sade `.status-pill` tanımı zaten tam olarak o nötr görünümdür; ikinci bir tanım yazmak aynı
+  şeyi iki yerde tutmak olurdu.
+*/
 
 .installed-list {
   grid-template-columns: 1fr;
@@ -890,9 +925,9 @@ function formatDetectionSource(source: string): string {
 .installed-chip {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.55fr) minmax(180px, 0.8fr) minmax(220px, 1fr) auto;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: center;
-  padding: 8px 10px;
+  padding: var(--sp-10) var(--sp-12);
   border-bottom: 1px solid var(--panel-border);
   background: var(--surface-0);
 }
@@ -904,13 +939,13 @@ function formatDetectionSource(source: string): string {
 .installed-chip label {
   display: grid;
   grid-template-columns: auto minmax(120px, 1fr);
-  gap: 8px;
+  gap: var(--sp-8);
   align-items: center;
 }
 
 .installed-chip input {
   min-height: 30px;
-  padding-block: 5px;
+  padding-block: var(--sp-4);
 }
 
 .meta,
@@ -933,27 +968,30 @@ function formatDetectionSource(source: string): string {
 }
 
 .diagnostic-panel summary {
-  padding: 9px 11px;
+  padding: var(--sp-10) var(--sp-12);
   cursor: pointer;
   font-weight: 650;
 }
 
+/* Yazı tipi listesi ELDE yazılıydı ve base.css'in `--font-mono` listesinden farklıydı
+   ("Cascadia Mono" / "Liberation Mono" eksikti): aynı panelde iki farklı konsol yazı tipi
+   çizilebiliyordu. Belirteç zaten tam bunun için tanımlanmış. */
 .diagnostic-panel pre {
   max-height: 260px;
   margin: 0;
-  padding: 0 11px 11px;
+  padding: 0 var(--sp-12) var(--sp-12);
   overflow: auto;
   color: var(--text-soft);
-  font: 0.76rem/1.5 "Cascadia Code", "Consolas", monospace;
+  font: var(--fs-2xs)/1.5 var(--font-mono);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .install-progress {
   display: flex;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: flex-start;
-  padding: 10px 12px;
+  padding: var(--sp-10) var(--sp-12);
   border: 1px solid color-mix(in srgb, var(--accent-1) 24%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-1) 7%, transparent);
@@ -961,15 +999,15 @@ function formatDetectionSource(source: string): string {
 
 .install-progress-text {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 .live-steps {
   list-style: none;
-  margin: 4px 0 0;
+  margin: var(--sp-4) 0 0;
   padding: 0;
   display: grid;
-  gap: 3px;
+  gap: var(--sp-2);
   max-height: 200px;
   overflow-y: auto;
 }
@@ -977,8 +1015,8 @@ function formatDetectionSource(source: string): string {
 .live-step {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 0.84rem;
+  gap: var(--sp-6);
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -1001,7 +1039,7 @@ function formatDetectionSource(source: string): string {
 
 .install-progress > span:last-child {
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
 }
 
 .install-progress small {
@@ -1023,25 +1061,60 @@ function formatDetectionSource(source: string): string {
   }
 }
 
+/*
+  DAR EKRANDA TABLO ARTIK BAŞLIKSIZ KALMIYOR.
+  ÖNCESİ ÖLÇÜLDÜ: 1120px altında altı sütunlu satır tek sütuna iniyor VE başlık satırı
+  `display: none` ile kaldırılıyordu. Geriye anonim satırlar kalıyordu —
+  "8.3.6" / "runtime" / "C:\AdaPanel\php\8.3" — hangisinin sürüm, hangisinin tür, hangisinin
+  klasör olduğunu söyleyen hiçbir şey yoktu. Bu, panelin başka yerinde bilinçle reddedilmiş bir
+  çözüm (bkz. DashboardOverviewView'daki disk/ağ satırı yorumu): bilgi kaldırılmaz.
+  ÇÖZÜM: başlık satırı yerine her hücre KENDİ etiketini taşır (`data-label`, şablonda başlık
+  satırıyla AYNI çeviri anahtarından besleniyor). Böylece 900px'te tablo etiketli bir kart
+  yığınına dönüşür; hiçbir sütun kaybolmaz. Durum rozetine etiket konmadı çünkü rozetin
+  metni ("Kurulu" / "Başarısız") zaten kendi etiketi.
+  `.path-cell`in kırpması da bu genişlikte kapatıldı: tek sütunda yer var, yolu üç nokta ile
+  kesmenin gerekçesi kalmıyor.
+*/
 @media (max-width: 1120px) {
   .software-row {
     grid-template-columns: 1fr;
+    gap: var(--sp-6);
   }
 
   .table-head {
     display: none;
   }
 
+  .software-row > [data-label] {
+    display: block;
+  }
+
+  .software-row > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--text-muted);
+    font-size: var(--fs-2xs);
+    font-weight: 600;
+  }
+
+  .path-cell {
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .installed-chip {
     grid-template-columns: 1fr;
+    gap: var(--sp-6);
   }
 }
 
 @media (max-width: 820px) {
+  /* `.section-head` buradan da çıkarıldı (kopyanın parçasıydı): ortak tanımın `flex-wrap`
+     davranışı dar ekranda zaten alt satıra indirir. */
   .software-header,
   .software-actions,
-  .software-toolbar,
-  .section-head {
+  .software-toolbar {
     flex-direction: column;
     align-items: flex-start;
   }

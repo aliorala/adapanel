@@ -181,7 +181,16 @@ internal static class HtaccessHostingPaths
         }
     }
 
-    private static string ExpandFull(string path)
+    /// <summary>
+    /// Yolu ortam değişkenlerinden çözüp mutlaklaştırır.
+    /// </summary>
+    /// <remarks>
+    /// <c>internal</c> yapıldı çünkü korumalı dizin betimleyicisi
+    /// (<see cref="ProtectedDirectoryFile"/>) veri kökünü AYNI kuralla çözmek zorunda: panel ile
+    /// modül farklı normalleştirme kullanırsa panel bir klasöre yazar, modül başkasına bakar —
+    /// bu dosyanın sınıf yorumunda anlatılan sessiz arızanın tam kendisi.
+    /// </remarks>
+    internal static string ExpandFull(string path)
     {
         var expanded = Environment.ExpandEnvironmentVariables((path ?? string.Empty).Trim());
         return expanded.Length == 0 ? expanded : Path.GetFullPath(expanded);

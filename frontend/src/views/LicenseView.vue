@@ -266,18 +266,6 @@ function formatDate(value: string) {
   align-content: start;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.section-head h4 {
-  margin: 0;
-}
-
 .license-message {
   margin: 0;
 }

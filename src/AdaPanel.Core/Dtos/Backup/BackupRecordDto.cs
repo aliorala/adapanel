@@ -90,6 +90,77 @@ public sealed class BackupRecordDto
     /// <summary>Uzak kopyanın en son ne zaman ölçüldüğü (hiç ölçülmediyse <c>null</c>).</summary>
     public DateTime? RemoteVerifiedUtc { get; set; }
 
+    /// <summary>
+    /// Uzak kopyanın SON KESİN ölçümü. <see cref="BackupPresence"/> değerlerinden biri:
+    /// <c>none</c> (bu yedeğin uzak kopyası hiç yok), <c>unknown</c> (ölçülmedi ya da ölçülemedi),
+    /// <c>present</c>, <c>missing</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <see cref="RemoteMissing"/> yetmiyor:</b> o alan İKİ değerlidir ve <c>false</c>
+    /// hem "ölçtük, duruyor" hem "hiç ölçmedik" anlamına gelir. Arayüz ikisini ayırmak için
+    /// <see cref="RemoteVerifiedUtc"/>'nin null olup olmadığına bakmak zorundaydı — yani üç
+    /// değerli bir gerçek, iki alana bölünmüş hâlde taşınıyordu ve okuyan taraf birleştirmeyi
+    /// unuttuğunda "ölçmedim" sessizce "duruyor" oluyordu.
+    /// </para>
+    /// <para>
+    /// <b>ULAŞILAMADI, "YOK" DEĞİLDİR:</b> hedefe erişilemeyen bir ölçümde bu alan
+    /// DEĞİŞTİRİLMEZ — son kesin ölçüm neyse o kalır. Ağ arızasını "yedek silinmiş" diye
+    /// yazmak, kullanıcıyı yedeği olmadığına inandırırdı.
+    /// </para>
+    /// </remarks>
+    public string RemoteState { get; set; } = BackupPresence.Unknown;
+
+    /// <summary>
+    /// <b>OFF-SITE KOPYA KAYBOLMUŞ:</b> uzak kopya ÖLÇÜLDÜ ve YOK, yerel dosya ise duruyor.
+    /// </summary>
+    /// <remarks>
+    /// Felaket senaryosunun tam ortası: kullanıcı "off-site yedeğim var" sanır, oysa yalnız aynı
+    /// makinedeki kopya kalmıştır. Uzak taraf kendi saklama politikasıyla ya da biri FTP
+    /// istemcisiyle sildiğinde panel bugüne kadar hiçbir şey söylemiyordu. Yalnız KESİN ölçümde
+    /// <c>true</c> olur; "ölçemedim" durumunda ASLA.
+    /// </remarks>
+    public bool OffsiteCopyLost { get; set; }
+
+    /// <summary>
+    /// <b>ARTIK HİÇBİR KOPYA YOK:</b> yerel dosya yok ve (uzak kopya ölçülüp yok bulundu ya da
+    /// bu yedeğin hiç uzak kopyası olmadı).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kayıt yine de SİLİNMEZ.</b> Kullanıcı "silinmişse görünmesin" dedi ama kaydı sessizce
+    /// silmek geçmişi yok etmektir: "yedeğim vardı, ne oldu?" sorusunun cevabı kalmaz ve panelin
+    /// yedeği kendiliğinden buharlaştırdığı hissi doğar. Doğrusu DAMGALAMAKTIR — kayıt
+    /// "artık yok" olarak görünür, silme kararı kullanıcınındır. Aynı disiplin
+    /// <c>VerifyBackupsAsync</c>'te de yazılı.
+    /// </para>
+    /// <para>
+    /// "Ölçemedim" hâli buraya GİRMEZ: uzak kopyası olan ama ölçülememiş bir kayıt, yereli
+    /// yoksa bile "artık yok" DEĞİLDİR.
+    /// </para>
+    /// </remarks>
+    public bool AllCopiesMissing { get; set; }
+
+    /// <summary>
+    /// Bu yedek SİLİNDİ sayılıyor ama UZAK kopyası hedefte kaldı (<see cref="Status"/> =
+    /// <c>deleted_remote_failed</c>). Sebep <see cref="Warnings"/> içinde
+    /// <c>backup.remote_delete_failed</c> anahtarıyla durur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN BOŞLUK:</b> <c>deleted_remote_failed</c> dizesi ne <c>frontend/</c> ne de
+    /// <c>AdaPanel.Api</c> altında geçiyordu. Yani panel kaydı işaretliyor, kayıt listede duruyor
+    /// ama HİÇBİR EKRAN bunu ayırt etmiyordu: uzak dosya yetim kalıyor ve panel bir daha ondan
+    /// söz etmiyordu. Durum dizesini arayüzde ELLE karşılaştırmak yerine ayrı bir alan
+    /// verilmesinin sebebi, o dizenin bir daha iki yerde ayrı ayrı yazılmaması.
+    /// </para>
+    /// <para>
+    /// <see cref="LocalMissing"/> ile aynı disiplin: diskte SAKLANMAZ, her listelemede
+    /// <see cref="Status"/>'ten türetilir — iki gerçeklik kaynağı olmasın.
+    /// </para>
+    /// </remarks>
+    public bool RemoteDeleteFailed { get; set; }
+
     // =================================================================================
     // ARTIMSAL (INCREMENTAL) ZİNCİR — Plesk'in kanıtlanmış modeli.
     //

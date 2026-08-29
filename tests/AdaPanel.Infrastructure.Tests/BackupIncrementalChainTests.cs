@@ -270,7 +270,7 @@ public sealed class BackupIncrementalChainTests
 
         // 40 gunluk tam yedek saklama suresinden eski AMA zincirin son halkasi dun alindi.
         // Tam yedegi silmek, dunku artimsal halkayi geri yuklenemez hale getirirdi.
-        Assert.Equal(0, silinen);
+        Assert.Equal(0, silinen.Removed);
         Assert.True(File.Exists(tam.Path));
         Assert.True(File.Exists(artimsal.Path));
     }
@@ -289,7 +289,7 @@ public sealed class BackupIncrementalChainTests
         var servis = alan.ServisKur(tam, artimsal, taze);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(2, silinen);
+        Assert.Equal(2, silinen.Removed);
         Assert.False(File.Exists(tam.Path));
         Assert.False(File.Exists(artimsal.Path));
         Assert.True(File.Exists(taze.Path));
@@ -312,7 +312,7 @@ public sealed class BackupIncrementalChainTests
         var silinen = await servis.PruneSubscriptionAsync(benim, retentionDays: 14, keepCount: 0);
 
         // KIRACI IZOLASYONU: bir musterinin saklama ayari baska bir musterinin yedegini SILEMEZ.
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.False(File.Exists(benimEski.Path));
         Assert.True(File.Exists(baskasininEski.Path));
         Assert.True(File.Exists(baskasininTaze.Path));
@@ -333,7 +333,7 @@ public sealed class BackupIncrementalChainTests
         // Sure limiti YOK (0), yalniz sayi limiti: en yeni 2 kalir.
         var silinen = await servis.PruneSubscriptionAsync(kullanici, retentionDays: 0, keepCount: 2);
 
-        Assert.Equal(3, silinen);
+        Assert.Equal(3, silinen.Removed);
         var kalan = await servis.GetBackupsAsync();
         Assert.Equal(2, kalan.Count);
         Assert.All(kalan, kayit => Assert.True(kayit.CreatedAtUtc > DateTime.UtcNow.AddDays(-3)));

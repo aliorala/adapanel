@@ -1,4 +1,4 @@
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Htaccess;
 using AdaPanel.Core.Interfaces;
@@ -77,25 +77,48 @@ public sealed class HtaccessSiteReport
     public string Support { get; init; } = "unknown";
 
     /// <summary>
-    /// <b>ÇEKİRDEK MOTOR IIS İÇİNDE YÜKLENEBİLİR Mİ?</b>
+    /// <b>ÇEKİRDEK MOTOR IIS İÇİNDE YÜKLENİYOR MU?</b>
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Uzun süre her koşulda <c>false</c>'tu: motor net8'di, IIS modülü net48 olmak zorundaydı ve
-    /// bağlantı yapılamıyordu (bkz. <see cref="EngineBlockers"/>). O engel kalktı; motor artık
-    /// modül derlemesinin İÇİNDE ve modülün yüklendiği her uygulamada kayıt yerine oturuyor.
+    /// <b>BU ALAN BİR KEZ YALAN SÖYLEDİ ve tanımı o yüzden değişti.</b> Değer
+    /// <c>Support == "supported"</c> ile, yani YALNIZ uygulama havuzunun CLR sürümüne bakılarak
+    /// dolduruluyordu. Havuz sürümü bir ÖN KOŞULDUR, kaydın kendisi DEĞİL: modül
+    /// <c>applicationHost.config</c>'e hiç kaydedilmemiş olsa bile bu alan <c>true</c> derdi.
+    /// Canlıda ölçülen tablo tam olarak buydu — panel <c>engineLoadedInIis: true</c>,
+    /// <c>support: supported</c>, havuz <c>Integrated</c>/<c>v4.0</c> diyordu; panelin kendi
+    /// benzetimi doğru cevabı üretiyordu (<c>302</c>); gerçek HTTP isteği ise <c>404</c>
+    /// dönüyordu. Motor doğruydu, TESLİM HATTI kopuktu ve panel bunu göremediği için "her şey
+    /// yolunda" diyordu.
     /// </para>
     /// <para>
-    /// <b>NE KADARINI SÖYLEYEBİLDİĞİMİZ:</b> panel süreci <c>w3wp</c>'nin içini göremez, yani
-    /// "şu anda yüklü" diye bir ölçüm YOKTUR. Değer, panelin dışarıdan ölçebildiği tek zorunlu ön
-    /// koşuldan gelir: uygulama havuzu yönetilen kod çalıştırıyor mu (<see cref="Support"/>).
-    /// Havuz yönetilen kod çalıştırmıyorsa ya da yanlış CLR sürümündeyse modül HİÇ yüklenmez —
-    /// bu durumlarda <c>false</c> KESİN bilgidir. Havuz uygunsa değer <c>true</c>'dur ve "modül
-    /// kurulu ve kayıtlıysa motor çalışır" anlamına gelir; kurulumun kendisi ayrı bir konudur ve
-    /// panel onu buradan iddia etmez.
+    /// <b>YENİ TANIM — ÜÇ ÖLÇÜMÜN BİRLEŞİMİ:</b>
+    /// (1) uygulama havuzu yönetilen kod çalıştırıyor ve CLR sürümü uygun (<see cref="Support"/>),
+    /// (2) modül <c>system.webServer/modules</c> içinde KAYITLI ve <c>type</c>'ı bizim modülümüzü
+    /// gösteriyor, (3) <c>preCondition</c> modülü isteğin dışında bırakmıyor
+    /// (<see cref="HtaccessModuleRegistrationState.PreConditionExcludesUnmanagedRequests"/>).
+    /// Üçünden biri bile OKUNAMIYORSA sonuç <c>false</c>'tur — "bilmiyorum" asla "yüklü" diye
+    /// raporlanmaz; hangi ölçümün eksik olduğu <see cref="EngineBlockers"/>'ta yazılıdır.
+    /// </para>
+    /// <para>
+    /// <b>HÂLÂ İDDİA EDİLMEYEN:</b> panel süreci <c>w3wp</c>'nin içini göremez, yani "şu an bu
+    /// havuzda yüklü nesne var" diye bir ölçüm YOKTUR. <c>true</c>, "IIS'in modülü yüklemesi için
+    /// gereken her şey ölçüldü ve yerinde" demektir — bu, eski hâlinden çok daha güçlü ama yine de
+    /// sonlu bir iddiadır.
     /// </para>
     /// </remarks>
     public bool EngineLoadedInIis { get; init; }
+
+    /// <summary>
+    /// Modülün IIS kaydının HAM ÖLÇÜMÜ — <see cref="EngineLoadedInIis"/>'in dayanağı.
+    /// </summary>
+    /// <remarks>
+    /// Tek bir <c>bool</c> yetmiyor: "kayıt yok" ile "kaydı okuyamadım" ile "kayıt var ama ön
+    /// koşulu yanlış" bambaşka arızalardır ve kullanıcının yapacağı iş her birinde farklıdır.
+    /// Ham değerler (<c>type</c>, <c>preCondition</c>) olduğu gibi veriliyor: panel onları
+    /// yorumlar ama SAKLAMAZ — yöneticinin gördüğü şey IIS'te YAZAN şeydir.
+    /// </remarks>
+    public HtaccessModuleRegistrationState ModuleRegistration { get; init; } = new();
 
     /// <summary>
     /// Motorun IIS içinde çalışmasını engelleyen ÖLÇÜLMÜŞ nedenler. Boş liste "engel yok" demektir.
@@ -199,6 +222,7 @@ public sealed class HtaccessPanelService
     private readonly IHtaccessEngine _motor;
     private readonly IIisSiteService _siteler;
     private readonly IAspNetService _aspNet;
+    private readonly IHtaccessModuleRegistry _kayit;
     private readonly HtaccessSwitchStore _anahtarlar;
     private readonly ILogger<HtaccessPanelService> _gunluk;
 
@@ -206,12 +230,14 @@ public sealed class HtaccessPanelService
         IHtaccessEngine motor,
         IIisSiteService siteler,
         IAspNetService aspNet,
+        IHtaccessModuleRegistry kayit,
         IOptions<PanelRuntimeOptions> secenekler,
         ILogger<HtaccessPanelService> gunluk)
     {
         _motor = motor;
         _siteler = siteler;
         _aspNet = aspNet;
+        _kayit = kayit;
         _gunluk = gunluk;
 
         var veriKoku = Path.GetFullPath(Environment.ExpandEnvironmentVariables(secenekler.Value.DataRoot));
@@ -232,6 +258,13 @@ public sealed class HtaccessPanelService
 
         var (havuzSurumu, destek) = await DestegiCozAsync(site.Name, iptal);
 
+        // KAYIT SUNUCU GENELİDİR, site başına değil: modül applicationHost.config'e BİR KEZ
+        // kaydedilir (gerekçesi HtaccessModuleRegistration.RegistrationScopeRationale). Yine de
+        // her site raporunda okunuyor, çünkü kullanıcı sorunu SİTE ekranında yaşıyor: "bu sitede
+        // neden çalışmıyor" sorusunun cevabı sunucu geneli bir eksiklik olabilir ve onu ayrı bir
+        // ekrana saklamak, tam da bu turda kapatılan "kimse sebebini söylemiyor" davranışı olurdu.
+        var kayit = _kayit.Read();
+
         return new HtaccessSiteReport
         {
             SiteName = site.Name,
@@ -244,14 +277,12 @@ public sealed class HtaccessPanelService
             ApplicationPoolName = site.ApplicationPoolName,
             ManagedRuntimeVersion = havuzSurumu,
             Support = destek,
-            // ARTIK SABIT false DEGIL. Derleme zamani engeli kalktigi icin (bkz. MotorEngelleri)
-            // motor, modulun yuklendigi her uygulamada kayit yerine oturuyor. Panelin disaridan
-            // olcebildigi TEK on kosul havuzun yonetilen kod calistirip calistirmadigidir:
-            // "no_managed_code" ya da yanlis CLR surumunde modul HIC yuklenmez, dolayisiyla motor
-            // da yuklenmez. "unknown" da false uretir -- havuzu okuyamadiysak "calisiyor" demek
-            // yalan olurdu (bkz. DestegiCozAsync).
-            EngineLoadedInIis = destek == "supported",
-            EngineBlockers = MotorEngelleri(),
+            ModuleRegistration = kayit,
+            // UC OLCUMUN BIRLESIMI (gerekcesi HtaccessSiteReport.EngineLoadedInIis uzerinde):
+            // havuz + kayit + on kosul. Eskiden yalniz ilki vardi ve panel, modul HIC kayitli
+            // olmadan da "yuklu" diyordu -- canli olcumde tam olarak bu oldu.
+            EngineLoadedInIis = destek == "supported" && kayit.Confirmed,
+            EngineBlockers = MotorEngelleri(kayit),
             Deviations = Sapmalar()
         };
     }
@@ -467,6 +498,31 @@ public sealed class HtaccessPanelService
         return GetServerMode();
     }
 
+    /// <summary>Modülün IIS kaydının ÖLÇÜLMÜŞ hâli. Site adı GEREKMEZ — kayıt sunucu genelidir.</summary>
+    public HtaccessModuleRegistrationState GetModuleRegistration() => _kayit.Read();
+
+    /// <summary>
+    /// Modülü <c>applicationHost.config</c>'e KAYDEDER — bozuk/eksik kaydın panelden ONARIMI.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bir onarım yolu gerekti:</b> kayıt kurulumda bir kez yazılıyor
+    /// (<c>scripts/install-htaccess-module.ps1</c>) ve o adım BEST-EFFORT çağrılıyor — başarısız
+    /// olursa kurulum devam eder, çünkü panel bu modül olmadan da tam çalışır. Bedeli, sunucuda
+    /// hiçbir belirti vermeden ölü bir özellikti: kaydın eksik olduğunu görmenin tek yolu sunucuya
+    /// girip <c>appcmd</c> çalıştırmaktı. Panel artık eksikliği ÖLÇTÜĞÜNE göre (bkz.
+    /// <see cref="MotorEngelleri"/>) düzeltmesini de sunmalı; "sorunu gösterip çaresini
+    /// söylememek" bu iş kolunun düzeltmeye çalıştığı davranışın bir başka hâli olurdu.
+    /// </para>
+    /// <para>
+    /// <b>KİP DEĞİŞTİRMEZ.</b> Kayıt, modülü sunucudaki her yönetilen havuza YÜKLETİR ama
+    /// anahtarlar kapalıyken modül her isteği dokunmadan geçirir (<c>HtaccessRuntimeGate</c>).
+    /// Onarımın kendiliğinden açması "kolaylık" gibi görünürdü ama kurulumun bilinçli varsayılanını
+    /// (kurulum hiçbir sitenin davranışını değiştirmez) sessizce çiğnerdi.
+    /// </para>
+    /// </remarks>
+    public HtaccessModuleRegistrationState RegisterModule() => _kayit.Register();
+
     // ---------------------------------------------------------------- iç yardımcılar
 
     private static string ModAdi(HtaccessMode mod) => mod switch
@@ -599,24 +655,67 @@ public sealed class HtaccessPanelService
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Liste ARTIK BOŞ ve bu bir ölçümün sonucu.</b> Buraya kadar tek bir engel yazılıydı
-    /// (<c>htaccess.blocker.engine_not_net48</c>): motor <c>net8.0-windows</c>, IIS modülü ise
-    /// <c>net48</c> olmak zorundaydı ve bir net8 derlemesi CLR 4 içinde yüklenemez. Motorun dokuz
-    /// dosyasındaki yirmi beş satır yalnız .NET (Core) API'lerine dayandığı için bağlantı
-    /// FİZİKSEL OLARAK yapılamıyordu.
+    /// <b>BU LİSTE BOŞ DÖNÜYORDU ve boş liste "engel yok" diye KESİN bir iddiadır.</b> O iddia
+    /// ölçülmemişti: derleme zamanı engeli (motor net8 / modül net48) gerçekten kalkmıştı
+    /// (<c>HtaccessNet48EngineLoadTests</c> gerçek bir CLR 4 sürecinde ölçüyor), ama bundan
+    /// "çalışma zamanında da engel yok" sonucu çıkarılmıştı. Canlıda modül IIS'in istek yoluna
+    /// hiç girmiyordu ve panel tek bir engel bile göstermiyordu.
     /// </para>
     /// <para>
-    /// O satırlar taşınabilir hâle getirildi (bkz. <c>HtaccessPortableApi</c>) ve motorun kaynağı
-    /// modül projesinde de derleniyor. Engelin kalktığı VARSAYILMIYOR, ölçüldü: motorun net48
-    /// çıktısı ayrı bir CLR 4 sürecinde yükleniyor ve bir <c>RewriteRule</c> sonucu değiştiriyor
-    /// (<c>HtaccessNet48EngineLoadTests</c>).
+    /// <b>Artık engeller ÖLÇÜMDEN geliyor</b> (<see cref="IHtaccessModuleRegistry.Read"/>).
+    /// Anahtar olarak dönüyorlar (<c>htaccess.blocker.*</c>) ve metni arayüz çeviriyor — sunucu
+    /// kullanıcı metni üretmez, aynı gerekçe <see cref="Sapmalar"/>'da da yazılı.
     /// </para>
     /// <para>
-    /// <b>Yeni engel eklenecekse ÖLÇÜLMÜŞ olmalı.</b> Bu liste panelin "hiçbir şey olmayacak"
-    /// şeridini besliyor; tahmini bir engel yazmak, çalışan bir özelliği bozuk göstermek olurdu.
+    /// <b>HAVUZ KAYNAKLI nedenler BİLEREK BURADA DEĞİL:</b> "yönetilen kod yok" ve "yanlış CLR
+    /// sürümü" zaten <see cref="HtaccessSiteReport.Support"/> alanında, kendi ayrı şeridinde
+    /// gösteriliyor. İkinci kez engel olarak yazmak, aynı arızayı iki yerde gösterip kullanıcıya
+    /// iki ayrı sorun varmış gibi okuturdu.
     /// </para>
     /// </remarks>
-    private static IReadOnlyList<string> MotorEngelleri() => [];
+    private static IReadOnlyList<string> MotorEngelleri(HtaccessModuleRegistrationState kayit)
+    {
+        var engeller = new List<string>();
+
+        if (!kayit.Readable)
+        {
+            // OKUNAMADI != KAYIT YOK. İkisini aynı anahtara toplamak, yöneticiye "modülü kur"
+            // dedirtirdi; oysa gerçek iş "panelin IIS yapılandırmasını okuyamamasını düzelt".
+            engeller.Add("htaccess.blocker.registration_unreadable");
+            return engeller;
+        }
+
+        if (!kayit.Present)
+        {
+            engeller.Add("htaccess.blocker.module_not_registered");
+
+            // GAC ÖLÇÜMÜ YALNIZ BURADA ANLAMLI: kayıt zaten varken derlemenin yokluğu sitelerin
+            // 500 vermesi demektir ve o ayrı bir yangındır; kayıt YOKKEN ise bu bilgi onarımın
+            // yapılabilir olup olmadığını söyler (uç, derleme yoksa REDDEDER).
+            if (kayit.Assembly.Presence == HtaccessModuleAssemblyPresence.Missing)
+            {
+                engeller.Add("htaccess.blocker.module_assembly_missing");
+            }
+
+            return engeller;
+        }
+
+        if (!kayit.TypeMatches)
+        {
+            engeller.Add("htaccess.blocker.module_type_mismatch");
+        }
+
+        if (kayit.PreConditionExcludesUnmanagedRequests)
+        {
+            // AYRI BİR ENGEL, "kayıt yok"un bir alt hâli DEĞİL: kayıt yerinde, modül yükleniyor,
+            // ama IIS onu yalnız yönetilen işleyicilerin isteklerinde çalıştırıyor. .htaccess'in
+            // bütün amacı PHP ve statik dosyalar olduğu için özellik "kurulu" görünüp hiçbir şey
+            // yapmaz — panelin ayırt etmesi gereken en sinsi hâl budur.
+            engeller.Add("htaccess.blocker.precondition_managed_handler");
+        }
+
+        return engeller;
+    }
 
     /// <summary>
     /// Motorun Apache'den BİLİNÇLİ sapmaları — anahtar olarak döner, metni arayüz çevirir.

@@ -803,10 +803,6 @@ function resolveApiMessage(error: unknown): string {
   gap: 8px;
 }
 
-.customer-sites .checkbox input {
-  width: auto;
-}
-
 .settings-wide-field {
   grid-column: 1 / -1;
 }

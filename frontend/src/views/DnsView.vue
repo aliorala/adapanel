@@ -35,7 +35,12 @@
             @click="showRecordForm = !showRecordForm">
             {{ showRecordForm ? t("panel.common.cancel") : t("panel.dns.addRecordAction") }}
           </button>
-          <button v-if="!isSecondary" class="secondary compact" v-bind="writeGate(busy)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
+          <!-- "Varsayılana sıfırla" panelin YÖNETTİĞİ kayıtları geri alır; ekleme düğmesiyle
+               aynı kümede durmaz. Ayraç bir CSS numarası değil GERÇEK bir küme: satır
+               kaydığında çizgi de düğmeyle birlikte gider (bkz. .reset-group). -->
+          <div v-if="!isSecondary" class="reset-group">
+            <button class="secondary compact" v-bind="writeGate(busy)" @click="restoreDefaults">{{ t("panel.dns.restoreDefaults") }}</button>
+          </div>
         </div>
       </div>
 
@@ -44,7 +49,9 @@
              sebebini YAZMAK şart: yoksa kullanıcı "kayıt ekle düğmesi nerede" diye arar. -->
         <p v-if="isSecondary" class="notice page-notice" role="status">{{ t("panel.dns.secondaryRecordsReadOnly") }}</p>
 
-        <form v-if="!isSecondary && (showRecordForm || editingId)" class="form-surface record-form" @submit.prevent="saveRecord">
+        <!-- `record-form` sınıfı KALDIRILDI: hiçbir yerde tanımlı değildi, yani yazılmış ama
+             hiçbir şey yapmıyordu. Formun görünümünü zaten `.form-surface` (base.css) veriyor. -->
+        <form v-if="!isSecondary && (showRecordForm || editingId)" class="form-surface" @submit.prevent="saveRecord">
           <div class="record-main">
             <label class="stacked-field type-field">
               <span class="field-label">{{ t("panel.dns.type") }}</span>
@@ -180,7 +187,9 @@
                 :aria-label="t('panel.bulk.selectRow', { name: displayHost(record.host) })"
                 @change="selection.toggle(record.id)" />
             </span>
-            <strong class="status-pill ok">{{ record.type }}</strong>
+            <!-- Kayıt tipi bir DURUM değil, bir SINIFLANDIRMA: yeşil "ok" rozeti değil nötr
+                 etiket (gerekçe .type-tag kuralında). -->
+            <strong class="type-tag">{{ record.type }}</strong>
             <div class="cell-main">
               <strong>{{ displayHost(record.host) }}</strong>
               <small v-if="record.isManaged">{{ t("panel.dns.managedRecord") }}</small>
@@ -320,7 +329,7 @@
               {{ t("panel.dns.dnssecDsTitle") }}
               <FieldHint :label="t('panel.dns.dnssecDsTitle')" :text="t('panel.dns.dnssecDsHint')" />
             </p>
-            <pre v-if="zone.dnssecDsRecords.length" class="ds-box">{{ zone.dnssecDsRecords.join("\n") }}</pre>
+            <pre v-if="zone.dnssecDsRecords.length" class="code-viewer ds-box">{{ zone.dnssecDsRecords.join("\n") }}</pre>
             <p v-else class="field-hint">{{ t("panel.dns.dnssecDsUnavailable") }}</p>
           </div>
         </template>
@@ -851,19 +860,55 @@ function showNotice(message: string, isError: boolean) {
   min-width: 0;
 }
 
-.section-head {
+/* `.section-head` KOPYASI SİLİNDİ: ortak tanım base.css'te. Aradaki tek fark boşluktu
+   (`--sp-10` -> `--sp-12`); hizalama (`start` = `flex-start`) ve `flex-wrap` zaten aynıydı.
+   Görünen etki: bölüm başlığı ile yanındaki düğme arası 2px açılır. */
+
+/* DNSSEC DS KAYITLARI — İKİ TANIMSIZ SINIF KAPATILDI.
+   `dnssec-ds` ve `ds-box` şablonda yazılıydı ama HİÇBİR YERDE tanımlı değildi. CSS bunu hata
+   saymaz: `<pre>` tarayıcı varsayılanıyla çiziliyordu ve İKİ TEMADA İKİ FARKLI ŞEY oluyordu —
+   açık temada base.css'in `:is(.code-viewer, pre)` kuralı ona koyu kod zemini veriyor, koyu
+   temada hiçbir şey vermiyordu. Üstelik bir DS kaydı tek parça uzun bir dizedir
+   ("2371 13 2 9F86D08...") ve `<pre>` varsayılan olarak SARMAZ; kayıt kartın dışına taşıyordu.
+   ÇÖZÜM YENİ BİR YÜZEY İCAT ETMEK DEĞİL: panelin zaten tanımlı kod yüzeyi olan `.code-viewer`
+   şablonda eklendi (base.css, iki temada da ölçülü). `.ds-box` yalnız onun tek uymayan
+   ölçüsünü düzeltir — `min-height: 260px`, iki satırlık bir DS kaydının altında 250px boşluk
+   bırakırdı. */
+.dnssec-ds {
+  display: grid;
+  gap: var(--sp-6);
+}
+
+.ds-box {
+  min-height: 0;
+}
+
+/* NOT — BİLEREK DOKUNULMADI: bu ekranın `<h4>` kart başlıkları 13.5px, yani gövde metniyle
+   aynı boyutta. Ama bu bir sapma DEĞİL, base.css'in ölçeği: `--fs-lg` de 1rem = 13.5px ve
+   `.panel h3` de aynı boyutta çiziliyor. Panelin tipografisi boyutla değil AĞIRLIKLA
+   ayrışıyor. Burada tek başına büyütmek, bu ekranın h4'ünü panelin geri kalanındaki h3'ten
+   büyük gösterirdi — yani rütbeyi ters çevirirdi. Ölçek kararı base.css'e aittir. */
+
+/*
+  YIKICI/GERİ ALICI EYLEM GÖRSEL OLARAK AYRI.
+  Araç şeridinde üç düğme yan yana duruyordu: "Windows DNS kur", "Kayıt ekle" (birincil) ve
+  "Varsayılana sıfırla". Üçüncüsü diğer ikisinden farklı bir sınıfta: panelin yönettiği bütün
+  kayıtları geri alır. Aynı kümede, aynı boşlukla dizilince "ekle" ile "sıfırla" arasındaki
+  fark yalnızca okumaya kalıyordu. İnce bir ayraç, iki kümeyi bakışla ayırır — onay diyaloğu
+  yerine geçmez, ona GİDEN yolu belirginleştirir.
+*/
+.reset-group {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: start;
-  flex-wrap: wrap;
+  align-items: center;
+  padding-inline-start: var(--sp-12);
+  border-inline-start: 1px solid var(--panel-border);
 }
 
 /* Alanlar tipe göre gelip gittiği için sabit kolonlu grid yerine esnek satır. */
 .record-main {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: end;
 }
 
@@ -890,7 +935,7 @@ function showNotice(message: string, isError: boolean) {
 
 .record-multi .multi-grid {
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 .multi-grid.srv {
@@ -909,15 +954,65 @@ function showNotice(message: string, isError: boolean) {
   grid-template-columns: 30px 82px minmax(120px, 0.7fr) minmax(220px, 1.2fr) 80px minmax(170px, auto);
 }
 
+/*
+  KAYIT TİPİ ARTIK "OK" ROZETİ DEĞİL.
+  ÖLÇÜLDÜ: her satırın tip hücresi `class="status-pill ok"` ile çiziliyordu, yani YEŞİL bir
+  durum rozeti. Tipik bir bölgede 15-40 kayıt var; sayfa açılınca alt alta 40 yeşil "iyi"
+  rozeti diziliyordu. İki zararı vardı: (1) "A" ya da "TXT" bir sağlık durumu değil, bir
+  sınıflandırmadır — rozet olmayan bir şeyi söylüyordu; (2) aynı sayfanın ÜSTÜNDE, araç
+  şeridinde, bölgenin GERÇEK sağlık rozeti duruyor ve o da yeşil; 40 sahte yeşilin içinde
+  gerçek olan görünmez oluyordu. Renk ancak seyrek kullanıldığında anlam taşır.
+  Nötr, tek aralıklı bir ETİKET seçildi: tipler sabit genişlikte olduğu için sütunda hizalı
+  durur ve göz "MX nerede" sorusunu tarayarak cevaplayabilir. Bilgi aynen yerinde.
+*/
+.type-tag {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-8);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/*
+  DEĞER SÜTUNU TEK ARALIKLI.
+  Bu sütunun içeriği IP (203.0.113.10), IPv6 (2001:db8::10), SPF/DKIM dizeleri ve TLSA
+  parmak izleri: hepsi karakter karakter okunan, karşılaştırılan veriler. Oransal yazı
+  tipinde "1" ile "l", "0" ile "O" ayırt edilmiyordu ve iki IP'nin farkı gözle bulunamıyordu.
+*/
+.record-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+}
+
+/*
+  TTL BİR SAYI: sağa hizalı ve tek genişlikli rakamlarla.
+  Sola hizalı olduğunda "60", "3600" ve "86400" farklı yerlerde bitiyor; kısa TTL'i (yani
+  yayılması hızlı olan kaydı) listeden bakışla ayırmak mümkün değildi. Başlık da hizaya
+  dahil, aksi hâlde sütunun neyi saydığı bulanıklaşır.
+*/
+.dns-row > :nth-child(5) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .zone-mode-card {
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 /* Master listesi ile düğme aynı satırda; dar ekranda alt alta iner. */
 .mode-form {
   display: flex;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: end;
   flex-wrap: wrap;
 }
@@ -938,13 +1033,16 @@ function showNotice(message: string, isError: boolean) {
   margin: 0;
 }
 
+/* Seçim şeridi: içinde bir SİLME düğmesi var ve yalnız seçim yapılınca belirir. Zemini
+   `--surface-2` iken sayfadaki diğer gri kutulardan ayırt edilemiyordu; vurgu tonlu kenar,
+   "şu an bir seçimin var" durumunu şeridin kendisine yazar. */
 .bulk-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
-  padding: 8px 10px;
-  border: 1px solid var(--panel-border);
+  padding: var(--sp-8) var(--sp-10);
+  border: 1px solid color-mix(in srgb, var(--accent-1) 35%, var(--panel-border));
   border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
@@ -953,13 +1051,19 @@ function showNotice(message: string, isError: boolean) {
   width: auto;
 }
 
-.record-value {
-  overflow-wrap: anywhere;
-  color: var(--text-soft);
-}
-
 @media (max-width: 1080px) {
+  /*
+    ÖNCESİ: `flex: 1 1 100%` ile HER alan tam genişliğe geçiyordu — 90px'lik "Tip" seçimi ve
+    95px'lik "TTL" kutusu da dahil. Dört-beş satırlık bir form, üç rakamlık bir alan için
+    ekranın tamamını harcıyordu.
+    ŞİMDİ: kısa alanlar 160px tabanla yan yana sarılır (900px'de tip + host + öncelik + TTL
+    tek satıra sığar), yalnız gerçekten uzun olan DEĞER alanı tam genişlik alır.
+  */
   .record-main > .stacked-field {
+    flex: 1 1 160px;
+  }
+
+  .record-main > .value-field {
     flex: 1 1 100%;
   }
 

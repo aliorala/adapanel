@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide backup-view">
+  <section class="panel backup-view">
     <div class="bk-header">
       <div>
         <p class="section-kicker">{{ t("panel.backup.siteKicker") }}</p>
@@ -564,7 +564,6 @@ function formatDate(iso: string): string {
 }
 
 .bk-header,
-.section-head,
 .bk-row {
   display: flex;
   align-items: center;

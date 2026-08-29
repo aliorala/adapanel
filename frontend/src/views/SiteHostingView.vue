@@ -51,19 +51,24 @@
                 <input v-model="documentRoot" :placeholder="selectedSite?.physicalPath || ''" spellcheck="false" />
                 <small>{{ t("panel.hosting.documentRootHelp") }}</small>
               </label>
+              <!-- Kaydetme eylemi ile yardımcı araçlar AYRI kümelerde: ikisi de düğme ama biri
+                   yukarıdaki alanı işler, üçü ise alanı/dosyaları hazırlar. Ayrı kutu, aradaki
+                   ayracın CSS numarası olmadan gerçek bir yapıya dayanmasını sağlar. -->
               <div class="setting-row doc-root-actions">
                 <button class="compact" v-bind="writeGate(busy || !documentRoot.trim())" @click="saveDocumentRoot">
                   {{ busy ? t("panel.hosting.saving") : t("panel.hosting.saveDocumentRoot") }}
                 </button>
-                <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="useLaravelPublic">
-                  {{ t("panel.hosting.useLaravelPublic") }}
-                </button>
-                <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="enableRewrite">
-                  {{ t("panel.hosting.enableRewrite") }}
-                </button>
-                <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="repairPermissions">
-                  {{ t("panel.hosting.repairPermissions") }}
-                </button>
+                <div class="doc-root-tools">
+                  <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="useLaravelPublic">
+                    {{ t("panel.hosting.useLaravelPublic") }}
+                  </button>
+                  <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="enableRewrite">
+                    {{ t("panel.hosting.enableRewrite") }}
+                  </button>
+                  <button type="button" class="secondary compact" v-bind="writeGate(busy)" @click="repairPermissions">
+                    {{ t("panel.hosting.repairPermissions") }}
+                  </button>
+                </div>
               </div>
 
               <label class="setting-row">
@@ -524,8 +529,6 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useSectionError } from "../composables/useNotice";
 import {
   getSiteHostingSettings,
-  runArtisanCommand,
-  runComposerCommand,
   runComposerInstall,
   updateSiteHostingSettings,
   type SiteErrorPage,
@@ -776,39 +779,15 @@ async function runComposer() {
   }
 }
 
-const composerCommand = ref("");
-
-async function runComposerCmd() {
-  if (!siteName.value || !composerCommand.value.trim()) return;
-  busy.value = true;
-  try {
-    const result = await runComposerCommand(siteName.value, composerCommand.value.trim());
-    composerOutput.value = [result.output, result.error].filter(Boolean).join("\n");
-    showNotice(result.exitCode === 0 ? t("panel.hosting.composerDone") : t("panel.hosting.composerFailed"), result.exitCode !== 0);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
-}
-
-const artisanCommand = ref("");
-const artisanOutput = ref("");
-
-async function runArtisanCmd() {
-  if (!siteName.value || !artisanCommand.value.trim()) return;
-  busy.value = true;
-  try {
-    const result = await runArtisanCommand(siteName.value, artisanCommand.value.trim());
-    artisanOutput.value = [result.output, result.error].filter(Boolean).join("\n");
-    showNotice(result.exitCode === 0 ? t("panel.hosting.artisanDone") : t("panel.hosting.artisanFailed"), result.exitCode !== 0);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  } finally {
-    busy.value = false;
-  }
-}
-
+/*
+ * ÖLÜ KOD SİLİNDİ — serbest Composer/Artisan komut kutusu.
+ * `runComposerCmd`, `runArtisanCmd` ve bunların tuttuğu `composerCommand` / `artisanCommand` /
+ * `artisanOutput` durumları ŞABLONDA HİÇ GEÇMİYORDU: o araç kutusu `AppToolkitView`e taşındı
+ * (orada `runComposerCommand` / `runArtisanCommand` gerçekten çağrılıyor). Burada kalan hâli
+ * hiçbir düğmeye bağlı değildi, yani hiç çalışmıyordu ama iki API çağrısını, iki i18n anahtarını
+ * ve okuyanın kafasını meşgul ediyordu. `runComposer` (tek tuşla "composer install") DURUYOR:
+ * o şablondaki düğmeye bağlı ve `composerOutput` onun çıktısını gösteriyor.
+ */
 const quotaError = ref("");
 const installingFsrm = ref(false);
 
@@ -970,8 +949,8 @@ function showNotice(message: string, isError: boolean) {
 
 <style scoped>
 .alias-block {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: var(--sp-12);
+  padding-top: var(--sp-12);
   border-top: 1px solid var(--panel-border);
 }
 
@@ -979,47 +958,62 @@ function showNotice(message: string, isError: boolean) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
 }
 
+/* `.settings-rows` BU LİSTEDEN ÇIKARILDI: ortak tanımı base.css'te ve BİREBİR aynı üç
+   bildirimi veriyor (grid / --sp-12 / min-width: 0). Kopya, aynı adı kullanan komşu
+   bileşenlerin (SubscriptionCard) neden biçimsiz kaldığının da sebebiydi. Görünen çıktı
+   DEĞİŞMEZ. */
 .hosting-workspace,
 .hosting-main,
-.settings-card,
-.settings-rows {
+.settings-card {
   display: grid;
-  gap: 14px;
+  gap: var(--sp-12);
   min-width: 0;
 }
 
 .hosting-shell {
   display: grid;
   grid-template-columns: minmax(210px, 0.24fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: var(--sp-12);
   align-items: start;
 }
 
+/* KARTLARIN ZEMİNİ `--surface-2` DEĞİL `--surface-0` — GEREKÇE VARSAYILAN TEMA.
+   ÖLÇÜLDÜ, açık tema (main.ts'e göre VARSAYILAN): kart `--surface-2` = #f5f7fa, sayfa zemini
+   `--page-bg` = #eef1f6, aradaki fark 1.05:1. Yani bu ekranın bütün kartları beyaz sayfanın
+   üstünde pratikte hiç yükselmiyordu; kartı ayakta tutan tek şey gölgesiydi. `--surface-0`
+   ile fark 1.13:1'e çıkar ve kart panelin her yerindeki kartla AYNI beyaz olur — burası,
+   base.css'in `.panel` kararının dışında kalan tek ekrandı.
+   DÜRÜST OLMAK GEREKİRSE koyu temada yön TERS: orada surface-2 farkı 1.24, surface-0 farkı
+   1.09'dur, yani koyu temada kart bir tık daha az yükselir. Yine de surface-0 seçildi: kartın
+   sınırını taşıyan asıl şey `--panel-border` + `--panel-shadow` ve koyu temada ikisi de güçlü;
+   buna karşılık açık temadaki kayıp, VARSAYILAN temada her kullanıcının gördüğü kayıptı.
+   Ayrıca eski değer iki durağı BİREBİR aynı olan bir `linear-gradient` idi: gradyan değil düz
+   bir dolgu, yani okuyanı yanıltan bir yazım. */
 .hosting-nav,
 .settings-card {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, var(--surface-2), var(--surface-2));
+  background: var(--surface-0);
   box-shadow: var(--panel-shadow);
 }
 
 .hosting-nav {
   position: sticky;
-  top: 12px;
+  top: var(--sp-12);
   display: grid;
-  gap: 6px;
-  padding: 12px;
+  gap: var(--sp-6);
+  padding: var(--sp-12);
 }
 
 .site-badge {
   display: grid;
-  gap: 5px;
-  padding: 12px;
-  margin-bottom: 4px;
+  gap: var(--sp-4);
+  padding: var(--sp-12);
+  margin-bottom: var(--sp-4);
   border: 1px solid color-mix(in srgb, var(--accent-1) 13%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent-1) 8%, transparent);
@@ -1034,7 +1028,7 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .site-badge span {
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   font-weight: 850;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1042,26 +1036,34 @@ function showNotice(message: string, isError: boolean) {
 
 .hosting-nav-item {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
   width: 100%;
-  padding: 11px 12px;
+  padding: var(--sp-10) var(--sp-12);
   border-left: 3px solid transparent;
   background: transparent;
   color: var(--text-soft);
   text-align: left;
 }
 
+/* Seçili bölümün yazısı `--accent-text` ile: bu belirteç tam olarak "vurgu renginin ZEMİN
+   ÜZERİNE yazılan hâli" için ölçülmüştür (base.css). ÖLÇÜLDÜ, açık tema: eski `--accent-1`
+   (#1474e5) `--surface-3` (#eaf0f6) üzerinde 3.93:1 — AA eşiği 4.5, altında kalıyordu ve bu
+   menü ögesi kalın değil normal ağırlıkta. Yeni `--accent-text` (#0f62c4) 5.13:1.
+   Aynı kararı `.segmented-tabs button.active` de veriyor; iki yerde aynı olsun. */
 .hosting-nav-item.active {
   border-left-color: var(--accent-1);
   background: var(--surface-3);
-  color: var(--accent-1);
+  color: var(--accent-text);
 }
 
-.section-head,
+/* `.section-head` bu listeden ÇIKARILDI: artık base.css'te ortak tanımı var ve buradaki kopya
+   onu eziyordu. Kopya `flex-wrap: wrap` içermiyordu, yani dar ekranda başlık ile yanındaki
+   düğme sarmıyor, taşıyordu — ortak tanıma geçmek bunu da düzeltir. Kalan iki seçici bu
+   ekrana özgü ve base'de karşılığı yok, o yüzden burada kalıyor. */
 .settings-card-head,
 .action-row {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: flex-start;
   justify-content: space-between;
 }
@@ -1073,30 +1075,77 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .settings-card {
-  padding: 16px;
+  padding: var(--sp-16);
 }
 
-.tab-strip {
+/*
+  BÖLÜM BAŞLIKLARINA HİÇBİR KURAL ULAŞMIYORDU — TARAYICIDA ÖLÇÜLDÜ.
+  base.css'in başlık kuralları `.panel h2/h3/h4` diye KAPILI. Bu ekranın kökü ise
+  `<section class="hosting-workspace">`; hiçbir atasında `.panel` YOK. Yani on iki bölümün
+  `<h4>` başlığı tarayıcı varsayılanıyla çiziliyordu: `margin-top: 17.955px` VE
+  `margin-bottom: 17.955px` (ölçüldü). Toplam 35.9px, hiçbir kararın ürünü olmayan boşluk;
+  üstelik alttaki, ızgaranın kendi 12px'ine EKLENİYORDU. Başlık kartın içinde yüzüyordu.
+  BOYUT BİLEREK DEĞİŞMEDİ: `--fs-lg` de 1rem = 13.5px, yani `.panel h3` de gövde metniyle
+  aynı boyutta. Panelin tipografisi boyutla değil AĞIRLIKLA ayrışıyor ve ölçek kararı
+  base.css'e ait. Burada yapılan, o kararı bu ekrana da UYGULAMAK: `.panel h3` ile birebir
+  aynı ağırlık, satır yüksekliği ve harf aralığı; kart başlığı panelin her yerinde aynı rütbede.
+*/
+.settings-card h4 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 640;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+}
+
+/*
+  BAŞLIK ALTI İPUÇLARININ TARAYICI VARSAYILANI TEMİZLENDİ.
+  base.css `.meta` yalnız rengi ve satır yüksekliğini verir; MARGIN'i sıfırlayan kural
+  (`.module-head p`) bu ekranın `.settings-card-head`ini KAPSAMIYORDU. Sonuç ölçülebilir:
+  her bölüm başlığının altındaki tek satırlık ipucu tarayıcının varsayılan 1em üst + 1em alt
+  boşluğunu taşıyordu (13.5px taban -> 13.5px + 13.5px), üstelik alttaki boşluk ızgaranın
+  kendi 12px'ine EKLENİYORDU. Yani her bölümün başı ile içeriği arasında 25.5px'lik,
+  hiçbir kararın ürünü olmayan bir delik vardı — on iki bölümün hepsinde.
+  Boşluk artık ızgaradan geliyor; başlık ile ipucu arasında ölçekten tek adım kalıyor.
+*/
+.hosting-main p {
+  margin: 0;
+}
+
+.section-head p,
+.settings-card-head p {
+  margin-top: var(--sp-4);
+}
+
+/* BELGE KÖKÜ EYLEM SATIRI — burada dört düğme var ve düzeni BOZUKTU.
+   `.setting-row` paylaşılan bir ÜÇ SÜTUNLU ızgaradır (190px | 0.52fr | minmax(220px,1fr)),
+   çünkü işi "etiket | denetim | ipucu" dizmektir. Bu satırda ise etiket de ipucu da yok, dört
+   düğme var: ilk üçü üç ayrı sütuna dağılıyor ve ızgara çocuğu varsayılan olarak GERİLDİĞİ
+   için 190px / değişken / 220px+ genişliğinde üç farklı düğme çıkıyordu; dördüncüsü de alt
+   satıra düşüp yine 190px'e geriliyordu. Yani aynı işlevdeki dört düğme dört farklı boyda.
+   Esnek satıra alındı: düğmeler kendi metinleri kadar yer kaplar.
+   HİYERARŞİ: satırdaki tek BİRİNCİL düğme "Web root'u kaydet" (alanı işleyen tek eylem);
+   diğer üçü yardımcı araç ve ince bir ayraçla ondan ayrılır — böylece "kaydet" ile "yolu
+   \public yap" aynı ağırlıkta okunmaz. */
+.doc-root-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0;
-  margin-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  align-items: center;
+  gap: var(--sp-8);
 }
 
-.tab-strip button {
+.doc-root-actions button {
   width: auto;
-  min-width: 128px;
-  border-radius: 10px 10px 0 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 0;
-  background: var(--surface-1);
-  color: var(--text-soft);
 }
 
-.tab-strip button.active {
-  color: var(--accent-1);
-  background: color-mix(in srgb, var(--accent-2) 42%, transparent);
+/* Ayraç: yardımcı araçlar kümesi, kaydetme eyleminden ince bir çizgiyle ayrılır. */
+.doc-root-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+  padding-inline-start: var(--sp-12);
+  border-inline-start: 1px solid var(--panel-border);
 }
 
 /* .setting-row duzeni base.css'te (paylasilan sinif, paylasilan tanim). */
@@ -1113,24 +1162,23 @@ input[readonly] {
 .quota-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
-.quota-summary .summary-item {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: var(--radius-md);
-  background: rgba(22, 29, 41, 0.5);
-}
-
-.quota-summary .summary-item span {
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
+/*
+  KOTA/İSTATİSTİK ÖZET KUTULARININ KENDİ GÖRÜNÜMÜ SİLİNDİ — base.css'teki `.summary-item`
+  KULLANILIYOR.
+  Buradaki eski kural iki KOYU TEMA sabitini koda gömüyordu: `rgba(22, 29, 41, 0.5)` bir zemin
+  ve `rgba(255, 255, 255, 0.06)` bir kenar. AÇIK TEMA varsayılan olduğu için (main.ts)
+  kullanıcıların çoğu şunu görüyordu: beyaz bir kartın içinde, beyazla birleşince #8b8e94'e
+  düşen (beyaza karşı 3.28:1 ölçüldü) üç adet koyu gri-mavi kutu — panelde başka hiçbir yerde
+  olmayan bir görünüm; kenarları da (beyaz üzerine %6 beyaz) hiç çizilmiyordu.
+  Sabit renk tema değiştirmez; belirteç değiştirir. Kural tümüyle kaldırıldığında base.css'in
+  `.summary-item` tanımı devreye giriyor (`--surface-0` zemin + `--panel-border` kenar +
+  `--sp-12` dolgu) ve bu üç kutu panelin diğer bütün özet şeritleriyle AYNI görünüyor.
+  Etiketin `uppercase`i de bilerek gitti: aynı bilgi panelin başka yerlerinde küçük harfle
+  yazılıyor; iki farklı "özet etiketi" biçimi tutmanın bir gerekçesi yok.
+*/
 
 @media (max-width: 760px) {
   .quota-summary {
@@ -1142,31 +1190,31 @@ input[readonly] {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.compact-select {
-  width: auto;
-  min-width: 130px;
-}
+/* `.compact-select` KOPYASI SİLİNDİ (ortak tanım base.css'te, `min-width: 140px`).
+   GÖRÜNEN FARK: buradaki istatistik gün seçicisi 130px -> 140px, yani 10px genişler.
+   Ortak değer bilerek büyük olan: sekiz çağrı yerinden biri "example.com" gibi bir alan adı
+   taşıyor ve 130px onu kırpıyordu. Bu ekrandaki içerik ("Son 30 gün") zaten sığıyor. */
 
 .stats-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--sp-16);
 }
 
 .stats-columns h5,
 .settings-card h5 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--sp-8);
   color: var(--text-soft);
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
 }
 
 .stat-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: var(--sp-8);
   align-items: center;
-  padding: 5px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding: var(--sp-4) 0;
+  border-top: 1px solid var(--panel-border);
 }
 
 .stat-bar:first-of-type {
@@ -1178,20 +1226,24 @@ input[readonly] {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-soft);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .stat-count {
-  color: var(--accent-1);
+  color: var(--accent-text);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  text-align: right;
 }
 
+/* `--ring-track` tam olarak bunun için var: bir ölçüm çubuğunun DOLMAYAN kısmı. Eskiden
+   `rgba(255,255,255,0.06)` yazıyordu, yani açık temada beyaz üzerine beyaz — günlük grafiğinin
+   rayı görünmüyordu ve dolan kısım havada duruyordu. */
 .stat-track {
   grid-column: 1 / 2;
   height: 7px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ring-track);
   overflow: hidden;
 }
 
@@ -1213,39 +1265,44 @@ input[readonly] {
   }
 }
 
+/* Üç `rgba(255,255,255,…)` kenar daha belirtece bağlandı: açık temada beyaz üzerine beyaz
+   çizildikleri için bu tablonun çerçevesi ve satır ayraçları HİÇ görünmüyordu. */
 .composer-table {
   display: grid;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
 }
 
 .composer-row {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr) 140px;
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: center;
-  padding: 11px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: var(--sp-10) var(--sp-12);
+  border-top: 1px solid var(--panel-border);
 }
 
 .composer-row:first-child {
   border-top: 0;
 }
 
+/* Başlık satırı panelin diğer tablo başlıklarıyla aynı zemini alır (base.css
+   `.data-row.table-head`); eskiden yalnız yazı biçimi değişiyordu, zemini yoktu ve tek
+   veri satırından ayrılmıyordu. 900 ağırlık da 600'e indi: ölçekte o basamak yok ve
+   panelin bütün tablo başlıkları 600. */
 .composer-row.head {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--text-soft);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  background: var(--surface-2);
 }
 
 .composer-output {
   max-height: 320px;
   overflow: auto;
   margin: 0;
-  padding: 12px;
+  padding: var(--sp-12);
   border-radius: var(--radius-sm);
   /* Koyu terminal yüzeyi BİLEREK sabit: base.css `pre`/`.code-viewer` için aynı kararı
      veriyor ve açık temada bu ögeyi zaten kendi koyu değerine çeviyor (öge bir <pre>).
@@ -1257,15 +1314,17 @@ input[readonly] {
 
 .help-list {
   display: grid;
-  gap: 7px;
+  gap: var(--sp-6);
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--sp-20);
 }
 
 .empty-state {
   margin: 0;
-  padding: 18px;
-  border: 1px dashed rgba(255, 255, 255, 0.12);
+  padding: var(--sp-16);
+  /* Kesikli kenar da belirtece bağlandı: `rgba(255,255,255,0.12)` açık temada görünmüyordu,
+     yani "site seçin" / "yükleniyor" kutusunun sınırı yoktu ve metin havada duruyordu. */
+  border: 1px dashed var(--panel-border);
   border-radius: var(--radius-md);
   color: var(--text-muted);
 }
@@ -1277,8 +1336,23 @@ input[readonly] {
     grid-template-columns: 1fr;
   }
 
+  /*
+    DAR EKRANDA MENÜ ARTIK SAYFAYI TIKAMIYOR.
+    ÖLÇÜLDÜ: `.hosting-shell` burada tek sütuna iniyor, yani 12 bölümlük kenar menüsü içeriğin
+    ÜSTÜNE tam genişlikte geçiyordu. Her öge iki satır (başlık + ipucu) ve ~52px; 12 x 52 + site
+    rozeti = ~700px. Kullanıcı 900px'lik bir ekranda ayarlara ulaşmak için önce yaklaşık bir tam
+    ekran boyu menü kaydırıyordu.
+    HİÇBİR ÖGE VE HİÇBİR İPUCU GİZLENMEDİ: menü yalnızca çok sütunlu bir ızgaraya alındı.
+    900px'te satır başına 4 öge sığar (auto-fit, taban 190px) -> 3 satır, ~160px. Site rozeti
+    bütün satırı kaplar ki hangi sitede olduğun menünün başında kalsın.
+  */
   .hosting-nav {
     position: static;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+
+  .site-badge {
+    grid-column: 1 / -1;
   }
 }
 

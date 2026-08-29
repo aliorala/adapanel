@@ -402,23 +402,6 @@ function formatUtc(value: string | null) {
 </script>
 
 <style scoped>
-.settings-section {
-  display: grid;
-  gap: 12px;
-}
-
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.section-head h3 {
-  margin: 0;
-}
-
 .row-actions button {
   width: auto;
 }

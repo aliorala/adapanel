@@ -406,14 +406,12 @@ function translateState(state: string): string {
 
 .detail-top,
 .detail-actions,
-.section-head,
 .binding-item {
   display: flex;
   gap: 12px;
 }
 
 .detail-top,
-.section-head,
 .binding-item {
   justify-content: space-between;
   align-items: flex-start;

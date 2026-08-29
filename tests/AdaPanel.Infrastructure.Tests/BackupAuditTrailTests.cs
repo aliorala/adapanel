@@ -257,13 +257,13 @@ public sealed class BackupAuditTrailTests
 
         public Task<BackupEntriesDto> GetEntriesAsync(string backupId, string? prefix, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-        public Task<int> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BackupPruneResultDto> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<BackupRemoteTestResultDto> TestRemoteTargetAsync(BackupRemoteTestRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-        public Task<int> PruneSubscriptionAsync(Guid userId, int retentionDays, int keepCount, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BackupPruneResultDto> PruneSubscriptionAsync(Guid userId, int retentionDays, int keepCount, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<BackupChainDto> GetChainAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 

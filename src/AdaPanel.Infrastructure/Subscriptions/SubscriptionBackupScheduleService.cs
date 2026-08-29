@@ -299,9 +299,25 @@ public sealed class SubscriptionBackupScheduleService(
                 kayit.KeepCount,
                 uzak,
                 cancellationToken);
-            if (budanan > 0)
+            if (budanan.Removed > 0)
             {
-                ozet.Append($" {budanan} eski yedek silindi.");
+                ozet.Append($" {budanan.Removed} eski yedek silindi.");
+            }
+
+            // BUDAMA BAŞARISIZLIĞI DURUMU DEĞİŞTİRİR: aynı hata sınıfı gece otomasyonunda ölçüldü
+            // (panel "Tamamlandı" derken dosyalar FTP'de duruyordu). Uzak kopyası silinemeyen
+            // kayıt hedefte YETİM kalır; bunu söylemeyen bir özet, kullanıcının panele bakıp
+            // "temiz" sanmasının tek sebebidir. Serbest metin dilden bağımsız teknik biçimdedir.
+            if (budanan.HasFailures)
+            {
+                durum = "completed_with_errors";
+                ozet.Append(
+                    $" prune: remote_delete_failed={budanan.RemoteDeleteFailed}; "
+                    + $"local_delete_failed={budanan.LocalDeleteFailed}.");
+                foreach (var basarisiz in budanan.Failures)
+                {
+                    ozet.Append($" prune: {basarisiz}.");
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

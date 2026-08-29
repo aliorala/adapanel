@@ -2,114 +2,139 @@ using System.Text;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
-using AdaPanel.Infrastructure.Support;
+using AdaPanel.Infrastructure.Htaccess.Hosting;
+using AdaPanel.Infrastructure.Options;
+using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Iis;
 
 /// <summary>
-/// panel "Password-Protected Directories" karşılığı. Korunacak klasöre, Windows hesabı
-/// gerektirmeyen, IIS URL Rewrite tabanlı Basic Auth uygulayan kendi-içeren bir web.config
-/// yazar. Kayıtlar config/protected-dirs.json içinde listeleme için tutulur.
+/// panel "Password-Protected Directories" karşılığı: bir dizini HTTP Basic Auth ile korur.
 /// </summary>
-public sealed class DirectoryProtectionService(
-    IIisSiteService iisSiteService,
-    JsonFileStore fileStore) : IDirectoryProtectionService
+/// <remarks>
+/// <para>
+/// <b>2026-08 — TASARIM DEĞİŞTİ, ÇÜNKÜ ESKİSİ PAROLAYI DÜZ METİN SAKLIYORDU.</b>
+/// Önceki sürüm korunan klasöre bir <c>web.config</c> yazıyor ve IIS URL Rewrite kuralında
+/// <c>{HTTP_AUTHORIZATION}</c> değerini <c>^Basic &lt;base64(kullanıcı:parola)&gt;$</c> kalıbıyla
+/// karşılaştırıyordu. Base64 KODLAMADIR, gizleme değil: canlıda ölçüldü —
+/// <c>YWRha3VsbGFuaWNpOkdpemxpITIwMjZBZGE=</c> çözülünce <c>adakullanici:Gizli!2026Ada</c>.
+/// Dosya MÜŞTERİNİN KENDİ SİTE KÖKÜNDE durduğu için parolayı düz metin okuyabilenler:
+/// müşterinin FTP kullanıcısı, sitede çalışan her PHP betiği (yüklenmiş bir eklenti dahil),
+/// site yedeğini indiren herkes ve dosyayı gören her panel kullanıcısı. Kullanıcılar aynı
+/// parolayı başka yerlerde de kullanır; bu yüzden zarar korunan klasörle sınırlı değildi.
+/// </para>
+/// <para>
+/// <b>NEDEN URL REWRITE TERK EDİLDİ — ölçülmüş bir imkânsızlık:</b> URL Rewrite'ın koşulları
+/// yalnız dizge/desen karşılaştırır; özet HESAPLAYAMAZ. Basic Auth'ta tarayıcı
+/// <c>base64(kullanıcı:parola)</c> gönderdiği için, kuralın karşılaştıracağı değer ZORUNLU
+/// olarak parolanın kendisidir. Yani "URL Rewrite ile ama özetli" diye bir seçenek YOKTUR.
+/// IIS'in kendi Basic Authentication modülü de elendi: canlı ölçümde site <c>web.config</c>'ine
+/// yazılan <c>anonymousAuthentication</c>/<c>basicAuthentication</c> bölümü
+/// <c>HTTP 500.19 (0x80070021 — bölüm üst düzeyde kilitli)</c> verdi; ayrıca Windows hesabı
+/// gerektirirdi.
+/// </para>
+/// <para>
+/// <b>SEÇİLEN YOL:</b> parola <c>bcrypt</c> özeti olarak PANELİN VERİ KÖKÜNDE saklanır
+/// (<see cref="ProtectedDirectoryFile"/>), doğrulamayı istek yolunda AdaPanel'in IIS modülü
+/// yapar (<see cref="ProtectedDirectoryGate"/>) ve doğrulama deponun mevcut
+/// <c>Htpasswd</c> altyapısını kullanır. <b>Site kökünde artık hiçbir sır yoktur</b> — özet bile
+/// yoktur. Bu, <c>AuthUserFile</c> konumu sorusunun da cevabıdır: motorun <c>.htaccess</c>
+/// yolundaki kural parola dosyasını site kökünün İÇİNDE olmaya zorluyor
+/// (<c>HtaccessConfigurationBuilder.ParolaDosyasi</c>), yani o yol seçilseydi özet müşterinin
+/// FTP'siyle okunabilir olurdu. Kendi betimleyicimiz o kısıtı taşımadığı için dosya DIŞARIDA.
+/// </para>
+/// <para>
+/// <b>NEDEN <c>.htaccess</c> + <c>.htpasswd</c> DEĞİL:</b> iki ölçüm birden eledi.
+/// (1) <c>HtaccessEngineBridge.Cevir</c> <c>AuthenticationRequired</c> sonucunu bilerek
+/// "karar yok"a çeviriyor — yani bugün bir <c>Require valid-user</c> satırı istek yolunda
+/// HİÇBİR ŞEY yapmıyor. (2) <c>.htaccess</c> desteği sunucu genelinde ve site başına
+/// VARSAYILAN KAPALI (<see cref="HtaccessRuntimeGate"/>); kapalıyken koruma SESSİZCE çalışmazdı.
+/// Korumayı o anahtara bağlamak, "korumalı" yazan bir ekranla herkese açık bir klasör demekti.
+/// Bu yüzden korumalı dizinlerin KENDİ kapısı var ve <c>.htaccess</c> kipinden BAĞIMSIZ çalışır.
+/// </para>
+/// <para>
+/// <b>DÜRÜSTLÜK ŞARTI:</b> doğrulamayı modül yaptığı için, modül IIS'e kayıtlı değilse koruma
+/// UYGULANMAZ. Servis bunu <see cref="IHtaccessModuleRegistry"/> ile ÖLÇER; ölçüm olumsuzsa
+/// koruma KURULMAZ (<c>protected.engine_not_ready</c>) ve mevcut kayıtlar <c>IsActive=false</c>
+/// görünür. Sessizce "kurdum" demek, düzeltmeye çalıştığımız hatanın yeni bir sürümü olurdu.
+/// </para>
+/// </remarks>
+public sealed class DirectoryProtectionService : IDirectoryProtectionService
 {
-    private const string StatePath = "config/protected-dirs.json";
-    private const string Marker = "adapanel-protected";
+    /// <summary>Eski (düz metin) korumanın klasördeki imzası.</summary>
+    internal const string LegacyMarker = "adapanel-protected";
 
-    public async Task<IReadOnlyCollection<ProtectedDirectoryDto>> GetProtectedDirectoriesAsync(string siteName, CancellationToken cancellationToken = default)
+    /// <summary>Eski kayıt dosyası. YALNIZCA geçiş için okunur; yeni kayıt buraya yazılmaz.</summary>
+    private const string LegacyStatePath = "config/protected-dirs.json";
+
+    private readonly IIisSiteService iisSiteService;
+    private readonly Support.JsonFileStore fileStore;
+    private readonly IHtaccessModuleRegistry moduleRegistry;
+    private readonly ProtectedDirectoryStore store;
+
+    /// <summary>Veri kökü; <see cref="ProtectedDirectoryStore"/> ile AYNI değer olmak zorunda.</summary>
+    private readonly string dataRoot;
+
+    public DirectoryProtectionService(
+        IIisSiteService iisSiteService,
+        Support.JsonFileStore fileStore,
+        IHtaccessModuleRegistry moduleRegistry,
+        IOptions<PanelRuntimeOptions> runtimeOptions)
     {
-        var all = await fileStore.ReadAsync(StatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken);
-        var kayitlar = all
-            .Where(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (kayitlar.Length == 0)
-        {
-            return kayitlar;
-        }
-
-        // KAYIT DEĞİL, DOSYA. Listeleme uzun süre yalnızca protected-dirs.json'a bakıyordu; oysa
-        // korumanın kendisi klasördeki web.config'de yaşıyor ve o dosya panelin dışından (FTP,
-        // dosya yöneticisi, git dağıtımı, SiteBuilder yayını, WordPress kurulumu) silinebiliyor.
-        // ProtectAsync ve UnprotectAsync bu dosyayı Marker ile okumayı ZATEN biliyor — listeleme
-        // aynı ölçüme başvurmadığı için panel "korumalı" derken klasör herkese açık kalabiliyordu.
-        string? siteRoot = null;
-        try
-        {
-            siteRoot = await GetSiteRootAsync(siteName, cancellationToken);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // Site kökü okunamadı (IIS yok/erişilemiyor): ÖLÇÜLEMEDİ. Kayıtları "koruma gitti"
-            // diye işaretlemek, IIS'in bir anlık arızasını kalıcı bir güvenlik alarmına çevirirdi.
-        }
-
-        foreach (var kayit in kayitlar)
-        {
-            kayit.IsActive = MeasureProtection(siteRoot, kayit.RelativePath);
-        }
-
-        return kayitlar;
+        this.iisSiteService = iisSiteService;
+        this.fileStore = fileStore;
+        this.moduleRegistry = moduleRegistry;
+        this.dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
+        this.store = new ProtectedDirectoryStore(this.dataRoot);
     }
 
-    /// <summary>
-    /// Korumanın klasörde gerçekten durup durmadığını ÖLÇER.
-    /// </summary>
-    /// <returns>
-    /// <c>true</c> = panelin yazdığı (Marker'lı) web.config yerinde. <c>false</c> = klasör okundu,
-    /// koruma yok (dosya silinmiş ya da başkasının web.config'i ile değiştirilmiş).
-    /// <c>null</c> = ÖLÇÜLEMEDİ (site kökü bilinmiyor, yol çözülemedi, dosya kilitli).
-    /// </returns>
-    internal static bool? MeasureProtection(string? siteRoot, string relativePath)
+    public async Task<IReadOnlyCollection<ProtectedDirectoryDto>> GetProtectedDirectoriesAsync(
+        string siteName, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(siteRoot))
-        {
-            return null;
-        }
+        var siteRoot = await SiteRootOrNullAsync(siteName, cancellationToken);
 
-        try
-        {
-            return MeasureProtectionInFolder(ResolveFolder(siteRoot, SanitizeRelativePath(relativePath)));
-        }
-        catch (AppException)
-        {
-            // Yol çözülemedi (kayıttaki göreli yol artık geçersiz): ÖLÇEMEDİK.
-            return null;
-        }
-    }
+        // GEÇİŞ BURADA TETİKLENİR. Yan etkili bir GET olduğu için gerekçesi yazılmalı:
+        // panelin site başına koşan bir açılış kancası YOK ve düz metin parolalar sunucuda
+        // durdukça açık AÇIK KALIR. "Kullanıcı bir gün listeye bakınca" en geç tetiklenme
+        // anıdır; kullanıcıdan parolaları yeniden girmesini istemek ise pratikte hiç
+        // yapılmayacak bir işti (her dizin için ayrı parola). Dönüşüm İDEMPOTENT'tir.
+        await MigrateLegacyAsync(siteName, siteRoot, cancellationToken);
 
-    /// <summary>Verilen klasörde panelin koruma dosyası duruyor mu (aynı sözleşme, klasör verilmiş hâli).</summary>
-    private static bool? MeasureProtectionInFolder(string folder)
-    {
-        try
-        {
-            var webConfig = Path.Combine(folder, "web.config");
+        var motorHazir = MotorHazirMi();
+        var kayitlar = OkuKayitlar(siteName, out var okunabildi);
 
-            if (!File.Exists(webConfig))
+        var sonuc = new List<ProtectedDirectoryDto>();
+        foreach (var kayit in kayitlar.OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase))
+        {
+            sonuc.Add(new ProtectedDirectoryDto
             {
-                // ÖLÇÜLDÜ: koruma dosyası yok (klasörün kendisi de silinmiş olabilir) → koruma YOK.
-                return false;
+                SiteName = siteName,
+                RelativePath = kayit.RelativePath,
+                UserName = kayit.UserName,
+                Realm = kayit.Realm,
+                IsActive = Olc(okunabildi, ParolaDosyasiVar(siteName, kayit), motorHazir)
+            });
+        }
+
+        // Dönüştürülemeyen (motor hazır değil) eski korumalar KAYBOLMAZ: hâlâ çalışıyorlar ve
+        // hâlâ düz metin parola taşıyorlar. Görünmez olsalardı kullanıcı ne açığı ne de
+        // korumanın kendisini bilirdi.
+        foreach (var eski in await LegacyKayitlarAsync(siteName, siteRoot, cancellationToken))
+        {
+            if (sonuc.Any(item => string.Equals(item.RelativePath, eski.RelativePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
             }
 
-            // Marker YOKSA dosya bizim değildir: kullanıcının/aracın kendi web.config'i korumanın
-            // üzerine yazılmış demektir. "Dosya var" ile "koruma var" aynı şey değildir.
-            return File.ReadAllText(webConfig).Contains(Marker, StringComparison.OrdinalIgnoreCase);
+            eski.IsLegacyPlaintext = true;
+            sonuc.Add(eski);
         }
-        catch (Exception exception) when (
-            exception is IOException
-                or UnauthorizedAccessException
-                or ArgumentException
-                or NotSupportedException)
-        {
-            // Kilitli dosya / erişilemeyen yol: ÖLÇEMEDİK. "Koruma yok" DEMİYORUZ.
-            return null;
-        }
+
+        return sonuc;
     }
 
-    public async Task<ProtectedDirectoryDto> ProtectAsync(string siteName, ProtectDirectoryRequest request, CancellationToken cancellationToken = default)
+    public async Task<ProtectedDirectoryDto> ProtectAsync(
+        string siteName, ProtectDirectoryRequest request, CancellationToken cancellationToken = default)
     {
         var relative = SanitizeRelativePath(request.RelativePath);
         if (string.IsNullOrWhiteSpace(request.UserName) || string.IsNullOrWhiteSpace(request.Password))
@@ -117,110 +142,358 @@ public sealed class DirectoryProtectionService(
             throw new AppException("protected.credentials_required", 400, 400);
         }
 
-        var folder = ResolveFolder(await GetSiteRootAsync(siteName, cancellationToken), relative);
-        Directory.CreateDirectory(folder);
+        var userName = SanitizeUserName(request.UserName);
 
-        var webConfig = Path.Combine(folder, "web.config");
-        if (File.Exists(webConfig) &&
-            !File.ReadAllText(webConfig).Contains(Marker, StringComparison.OrdinalIgnoreCase))
+        // ÖNCE MOTOR ÖLÇÜLÜR, SONRA DOSYA YAZILIR. Ters sırada, modül kayıtlı olmayan bir
+        // sunucuda panel "kurdum" der, klasör herkese açık kalırdı.
+        if (MotorHazirMi() != true)
         {
-            // Kullanıcının kendi web.config'i varsa ezme.
-            throw new AppException("protected.web_config_exists", 409, 409);
+            throw new AppException("protected.engine_not_ready", 503, 503);
+        }
+
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        var siteRoot = SiteRoot(site);
+
+        // Klasörün VAR OLDUĞU doğrulanır. Eskiden klasör oluşturuluyordu (koruma dosyası oraya
+        // yazılacaktı); artık site kökünde hiçbir şey yazmadığımız için var olmayan bir yolu
+        // "korudum" demek, kullanıcıya yazım hatasını hiç göstermemek olurdu.
+        var folder = ResolveFolder(siteRoot, relative);
+        if (!Directory.Exists(folder))
+        {
+            throw new AppException("protected.directory_not_found", 404, 404);
         }
 
         var realm = SanitizeRealm(string.IsNullOrWhiteSpace(request.Realm) ? $"{siteName} - {relative}" : request.Realm);
-        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{request.UserName}:{request.Password}"));
-        var escapedToken = EscapeRegex(token);
 
-        var content = $$"""
-            <?xml version="1.0" encoding="utf-8"?>
-            <!-- {{Marker}} -->
-            <configuration>
-              <system.webServer>
-                <rewrite>
-                  <rules>
-                    <rule name="adapanel-basic-auth" stopProcessing="true">
-                      <match url="(.*)" />
-                      <conditions>
-                        <add input="{HTTP_AUTHORIZATION}" pattern="^Basic {{escapedToken}}$" negate="true" />
-                      </conditions>
-                      <action type="CustomResponse" statusCode="401" statusReason="Unauthorized" statusDescription="Authentication required" />
-                    </rule>
-                  </rules>
-                </rewrite>
-                <httpProtocol>
-                  <customHeaders>
-                    <add name="WWW-Authenticate" value="Basic realm=&quot;{{realm}}&quot;" />
-                  </customHeaders>
-                </httpProtocol>
-              </system.webServer>
-            </configuration>
-            """;
-        await File.WriteAllTextAsync(webConfig, content, cancellationToken);
+        var kayit = store.Upsert(siteName, relative, userName, request.Password, realm, site.ApplicationPoolName);
 
-        var dto = new ProtectedDirectoryDto
+        // ESKİ DÜZ METİN DOSYASI SİLİNİR. Bırakılsaydı aynı klasörde hem yeni koruma hem de
+        // parolayı okunur hâlde tutan eski dosya dururdu — açığı kapatmış SAYILMAZDIK.
+        RemoveLegacyConfig(folder);
+        await RemoveLegacyRecordAsync(siteName, relative, cancellationToken);
+
+        return new ProtectedDirectoryDto
         {
             SiteName = siteName,
-            RelativePath = relative,
-            UserName = request.UserName,
-            Realm = realm
+            RelativePath = kayit.RelativePath,
+            UserName = kayit.UserName,
+            Realm = kayit.Realm,
+
+            // ÖLÇÜM, yazımdan SONRA ve dosyaların kendisinden. Sabit "true" yazmak, bu servisin
+            // daha önce kapattığı hatanın (yazım başarısızken "korumalı" demek) tekrarı olurdu.
+            IsActive = Olc(true, ParolaDosyasiVar(siteName, kayit), MotorHazirMi())
         };
-
-        var all = (await fileStore.ReadAsync(StatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken)).ToList();
-        all.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase) &&
-                              string.Equals(item.RelativePath, relative, StringComparison.OrdinalIgnoreCase));
-        all.Add(dto);
-        await fileStore.WriteAsync(StatePath, all, cancellationToken);
-
-        // ÖLÇÜM, kayıttan SONRA ve dosyanın kendisinden. Burada sabit "true" yazmak, bu düzeltmenin
-        // kapattığı hatanın tam kendisi olurdu: yazma başarısız olduysa (disk dolu, ACL) panel yine
-        // "korumalı" derdi. Kayıt dosyaya IsActive'siz gider; doğruyu her zaman ölçüm söyler.
-        dto.IsActive = MeasureProtectionInFolder(folder);
-
-        return dto;
     }
 
     public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
     {
-        // YALNIZCA kayıt temizlenir; klasördeki web.config dosyalarına dokunulmaz.
-        //
-        // Neden: bu metot site SİLİNİRKEN çağrılır. Site dosyaları ya kullanıcının isteğiyle
-        // zaten siliniyordur ya da BİLEREK saklanıyordur — ikinci durumda korunan klasörlerin
-        // içine girip dosya silmek, kullanıcının sakladığı içeriği değiştirmek olurdu.
-        var all = (await fileStore.ReadAsync(StatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken)).ToList();
+        // Site SİLİNİRKEN çağrılır. Korunan klasörlerin İÇİNE GİRİLMEZ: site dosyaları ya
+        // kullanıcının isteğiyle zaten siliniyordur ya da BİLEREK saklanıyordur ve ikinci durumda
+        // müşterinin içeriğine dokunmak olurdu. Silinen tek şey PANELİN kendi verisi — parola
+        // özetleri silinmiş bir sitenin ardından sunucuda kalmamalı.
+        store.RemoveSite(siteName);
+
+        var all = (await fileStore.ReadAsync(LegacyStatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken)).ToList();
         var kaldirilan = all.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
 
+        // Yalnız gerçekten bir şey kaldırıldıysa yazılır: gereksiz yazma, eş zamanlı bir
+        // güncellemeyi ezme riski taşır ve silme akışı birden çok kez çalışabilir.
         if (kaldirilan > 0)
         {
-            await fileStore.WriteAsync(StatePath, all, cancellationToken);
+            await fileStore.WriteAsync(LegacyStatePath, all, cancellationToken);
         }
     }
 
     public async Task UnprotectAsync(string siteName, string relativePath, CancellationToken cancellationToken = default)
     {
         var relative = SanitizeRelativePath(relativePath);
-        var folder = ResolveFolder(await GetSiteRootAsync(siteName, cancellationToken), relative);
-        var webConfig = Path.Combine(folder, "web.config");
 
-        // Yalnız bizim yazdığımız (marker'lı) web.config'i sil; kullanıcının dosyasına dokunma.
-        if (File.Exists(webConfig) &&
-            File.ReadAllText(webConfig).Contains(Marker, StringComparison.OrdinalIgnoreCase))
+        store.Remove(siteName, relative);
+
+        // Eski düz metin koruması da kaldırılır: kullanıcı "kaldır" dediğinde klasörün AÇILMASI
+        // beklenir. Yalnız yeni kaydı silmek, eski web.config duruyorsa klasörü kilitli bırakırdı.
+        var siteRoot = await SiteRootOrNullAsync(siteName, cancellationToken);
+        if (siteRoot is not null)
         {
-            File.Delete(webConfig);
+            try
+            {
+                RemoveLegacyConfig(ResolveFolder(siteRoot, relative));
+            }
+            catch (AppException)
+            {
+                // Yol artık çözülemiyor (klasör silinmiş): silinecek dosya da yok.
+            }
         }
 
-        var all = (await fileStore.ReadAsync(StatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken)).ToList();
-        var changed = all.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase) &&
-                                            string.Equals(item.RelativePath, relative, StringComparison.OrdinalIgnoreCase));
-        if (changed > 0)
+        await RemoveLegacyRecordAsync(siteName, relative, cancellationToken);
+    }
+
+    // ------------------------------------------------------------------ ölçüm
+
+    /// <summary>
+    /// Modül IIS'e KAYITLI mı: <c>true</c> evet, <c>false</c> hayır, <c>null</c> ÖLÇÜLEMEDİ.
+    /// </summary>
+    /// <remarks>
+    /// Üç değerli olması şart. <c>Readable=false</c> (applicationHost.config okunamadı) durumunda
+    /// "kayıt yok" demek, IIS'in anlık bir erişim sorununu "korumanız çalışmıyor" alarmına
+    /// çevirirdi; "kayıt var" demek ise tam tersi bir yalan olurdu.
+    /// </remarks>
+    internal bool? MotorHazirMi()
+    {
+        try
         {
-            await fileStore.WriteAsync(StatePath, all, cancellationToken);
+            var kayit = moduleRegistry.Read();
+            return kayit.Readable ? kayit.Confirmed : null;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 
-    private async Task<string> GetSiteRootAsync(string siteName, CancellationToken cancellationToken)
+    /// <summary>
+    /// <c>IsActive</c>'in tek karar noktası: koruma ŞU AN GERÇEKTEN uygulanıyor mu.
+    /// </summary>
+    /// <remarks>
+    /// <c>null</c> = ölçülemedi. Bir bileşen bile "bilinmiyor" ise sonuç "bilinmiyor"dur;
+    /// bilinmeyeni iyimser yorumlamak bu dosyanın kapattığı hata sınıfının kendisidir.
+    /// </remarks>
+    internal static bool? Olc(bool kayitOkunabildi, bool? parolaDosyasiVar, bool? motorHazir)
     {
-        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        if (!kayitOkunabildi || parolaDosyasiVar is null || motorHazir is null)
+        {
+            return null;
+        }
+
+        return parolaDosyasiVar.Value && motorHazir.Value;
+    }
+
+    private bool? ParolaDosyasiVar(string siteName, ProtectedDirectoryRecord record)
+    {
+        try
+        {
+            return File.Exists(Path.Combine(
+                ProtectedDirectoryFile.SiteRoot(dataRoot, siteName), record.PasswordFileName));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private IList<ProtectedDirectoryRecord> OkuKayitlar(string siteName, out bool okunabildi)
+    {
+        try
+        {
+            var kayitlar = store.Read(siteName);
+            okunabildi = true;
+            return kayitlar;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            okunabildi = false;
+            return new List<ProtectedDirectoryRecord>();
+        }
+    }
+
+    // ------------------------------------------------------------------ geçiş (eski düz metin)
+
+    /// <summary>
+    /// Eski düz metin korumalarını YENİ biçime dönüştürür.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden otomatik dönüşüm:</b> parola base64'ten geri çözülebildiği için kullanıcıdan
+    /// hiçbir şey istemeden aynı parolayla yeni koruma kurulabiliyor. Üç seçenek vardı —
+    /// (a) sessizce bırakmak: açık açık kalırdı, ELENDİ; (b) kullanıcıdan yeniden kurmasını
+    /// istemek: her dizin için ayrı parola demek, pratikte yapılmaz ve o süre boyunca açık
+    /// kalırdı; (c) dönüştürmek: kullanıcı hiçbir şey yapmadan düz metin diskten SİLİNİR.
+    /// (c) seçildi.
+    /// </para>
+    /// <para>
+    /// <b>KOŞULLU olmak ZORUNDA:</b> dönüşüm, uygulamayı URL Rewrite'tan modüle taşır. Modül
+    /// IIS'e kayıtlı değilse dönüşüm ÇALIŞAN bir korumayı kaldırıp yerine hiçbir şey koymaz —
+    /// klasör herkese açılırdı. Bu yüzden motor ölçülmeden hiçbir dosyaya dokunulmaz; dönüşmeyen
+    /// kayıtlar listede <c>IsLegacyPlaintext</c> ile GÖRÜNÜR kalır.
+    /// </para>
+    /// </remarks>
+    private async Task MigrateLegacyAsync(string siteName, string? siteRoot, CancellationToken cancellationToken)
+    {
+        if (siteRoot is null || MotorHazirMi() != true)
+        {
+            return;
+        }
+
+        var eskiler = await LegacyKayitlarAsync(siteName, siteRoot, cancellationToken);
+        if (eskiler.Count == 0)
+        {
+            return;
+        }
+
+        SiteDto? site = null;
+        foreach (var eski in eskiler)
+        {
+            string folder;
+            try
+            {
+                folder = ResolveFolder(siteRoot, eski.RelativePath);
+            }
+            catch (AppException)
+            {
+                continue;
+            }
+
+            var kimlik = LegacyKimlikCoz(Path.Combine(folder, "web.config"));
+            if (kimlik is null)
+            {
+                // Dosya okunamadı ya da kalıp tanınmadı: DOKUNMA. Silinirse koruma gider,
+                // dönüştürülemezse de zaten yapılacak bir şey yok.
+                continue;
+            }
+
+            site ??= await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+
+            store.Upsert(siteName, eski.RelativePath, kimlik.Value.User, kimlik.Value.Password,
+                SanitizeRealm(eski.Realm), site.ApplicationPoolName);
+
+            // Yeni koruma yazıldı; ANCAK ŞİMDİ düz metin silinir.
+            RemoveLegacyConfig(folder);
+            await RemoveLegacyRecordAsync(siteName, eski.RelativePath, cancellationToken);
+        }
+    }
+
+    /// <summary>Eski kayıt dosyasındaki, klasöründe HÂLÂ düz metin web.config duran kayıtlar.</summary>
+    private async Task<List<ProtectedDirectoryDto>> LegacyKayitlarAsync(
+        string siteName, string? siteRoot, CancellationToken cancellationToken)
+    {
+        var sonuc = new List<ProtectedDirectoryDto>();
+        if (siteRoot is null)
+        {
+            return sonuc;
+        }
+
+        var all = await fileStore.ReadAsync(LegacyStatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken);
+        foreach (var kayit in all.Where(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var webConfig = Path.Combine(ResolveFolder(siteRoot, kayit.RelativePath), "web.config");
+                if (File.Exists(webConfig) && File.ReadAllText(webConfig).Contains(LegacyMarker, StringComparison.OrdinalIgnoreCase))
+                {
+                    kayit.IsActive = true;
+                    sonuc.Add(kayit);
+                }
+            }
+            catch (Exception exception) when (
+                exception is AppException or IOException or UnauthorizedAccessException)
+            {
+                // Okunamadı: eski koruma hakkında bir şey iddia etmiyoruz.
+            }
+        }
+
+        return sonuc;
+    }
+
+    /// <summary>
+    /// Eski <c>web.config</c>'ten kullanıcı/parolayı geri çözer.
+    /// </summary>
+    /// <remarks>
+    /// Bu metodun VAR OLABİLMESİ bulgunun kanıtıdır: dosyada saklanan şey geri çözülebiliyorsa
+    /// gizlenmemiş demektir. Kalıp <c>^Basic &lt;kaçırılmış base64&gt;$</c>'tir; kaçırma
+    /// karakterleri (<c>\</c>) temizlenmeden çözme denenirse base64 bozuk görünür.
+    /// </remarks>
+    internal static (string User, string Password)? LegacyKimlikCoz(string webConfigPath)
+    {
+        string icerik;
+        try
+        {
+            icerik = File.ReadAllText(webConfigPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+
+        const string isaret = "^Basic ";
+        var basla = icerik.IndexOf(isaret, StringComparison.Ordinal);
+        if (basla < 0)
+        {
+            return null;
+        }
+
+        basla += isaret.Length;
+        var bit = icerik.IndexOf('$', basla);
+        if (bit <= basla)
+        {
+            return null;
+        }
+
+        var token = icerik[basla..bit].Replace("\\", string.Empty);
+        try
+        {
+            var cozulen = Encoding.UTF8.GetString(Convert.FromBase64String(token));
+            var ayrac = cozulen.IndexOf(':');
+            return ayrac <= 0 ? null : (cozulen[..ayrac], cozulen[(ayrac + 1)..]);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static void RemoveLegacyConfig(string folder)
+    {
+        var webConfig = Path.Combine(folder, "web.config");
+        try
+        {
+            // YALNIZ bizim imzamızı taşıyan dosya silinir; kullanıcının kendi web.config'ine
+            // dokunulmaz (bu kural eski sürümde de vardı ve doğruydu).
+            if (File.Exists(webConfig) &&
+                File.ReadAllText(webConfig).Contains(LegacyMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(webConfig);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Silinemedi (kilit/ACL). Yeni koruma yine de kurulu; kullanıcı listede eski kaydı
+            // görmeye devam eder ve bir sonraki denemede silinir.
+        }
+    }
+
+    private async Task RemoveLegacyRecordAsync(string siteName, string relative, CancellationToken cancellationToken)
+    {
+        var all = (await fileStore.ReadAsync(LegacyStatePath, Array.Empty<ProtectedDirectoryDto>(), cancellationToken)).ToList();
+        var kaldirilan = all.RemoveAll(item =>
+            string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.RelativePath, relative, StringComparison.OrdinalIgnoreCase));
+
+        if (kaldirilan > 0)
+        {
+            await fileStore.WriteAsync(LegacyStatePath, all, cancellationToken);
+        }
+    }
+
+    // ------------------------------------------------------------------ yol/ad temizliği
+
+    private async Task<string?> SiteRootOrNullAsync(string siteName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SiteRoot(await iisSiteService.GetSiteAsync(siteName, cancellationToken));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Site kökü okunamadı (IIS yok/erişilemiyor): ÖLÇÜLEMEDİ. Kayıtları "koruma gitti"
+            // diye işaretlemek, IIS'in anlık bir arızasını kalıcı bir alarma çevirirdi.
+            return null;
+        }
+    }
+
+    private static string SiteRoot(SiteDto site)
+    {
         var root = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
         if (string.IsNullOrWhiteSpace(root))
         {
@@ -244,7 +517,7 @@ public sealed class DirectoryProtectionService(
         return combined;
     }
 
-    private static string SanitizeRelativePath(string value)
+    internal static string SanitizeRelativePath(string value)
     {
         var raw = (value ?? string.Empty).Trim().Replace('\\', '/');
         var segments = raw.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -267,6 +540,27 @@ public sealed class DirectoryProtectionService(
         return string.Join('/', clean);
     }
 
+    /// <summary>
+    /// Kullanıcı adını doğrular.
+    /// </summary>
+    /// <remarks>
+    /// <b>İki nokta ve satır sonu YASAK.</b> Bunlar sadece "çirkin" değil, biçimin ayraçlarıdır:
+    /// <c>.htpasswd</c> satırı <c>kullanıcı:özet</c>'tir ve betimleyici satır tabanlıdır. İki
+    /// nokta içeren bir ad, dosyada BAŞKA bir kullanıcı/özet çifti gibi okunabilirdi. Sessizce
+    /// temizlemek yerine REDDEDİLİR: kullanıcının girdiği adla giriş yapacağı ad AYNI olmalı.
+    /// </remarks>
+    internal static string SanitizeUserName(string value)
+    {
+        var temiz = (value ?? string.Empty).Trim();
+        if (temiz.Length == 0 || temiz.Length > 128 ||
+            temiz.Any(ch => ch is ':' or '\r' or '\n' || char.IsControl(ch)))
+        {
+            throw new AppException("protected.invalid_user_name", 400, 400);
+        }
+
+        return temiz;
+    }
+
     private static string SanitizeRealm(string value)
     {
         var filtered = new string((value ?? string.Empty)
@@ -274,22 +568,5 @@ public sealed class DirectoryProtectionService(
             .ToArray())
             .Trim();
         return string.IsNullOrWhiteSpace(filtered) ? "Protected" : filtered;
-    }
-
-    // URL Rewrite ECMAScript regex'inde özel karakterleri kaçır (base64 '+' içerebilir).
-    private static string EscapeRegex(string value)
-    {
-        var builder = new StringBuilder(value.Length + 4);
-        foreach (var ch in value)
-        {
-            if (ch is '+' or '/' or '=' or '.' or '\\' or '*' or '?' or '^' or '$' or '(' or ')' or '[' or ']' or '{' or '}' or '|')
-            {
-                builder.Append('\\');
-            }
-
-            builder.Append(ch);
-        }
-
-        return builder.ToString();
     }
 }

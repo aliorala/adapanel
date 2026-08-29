@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide sites-panel">
+  <section class="panel">
     <div class="sites-header">
       <div>
         <p class="section-kicker">{{ t("panel.sites.management") }}</p>
@@ -14,7 +14,15 @@
         <button v-if="isAdmin" class="secondary compact" :disabled="sitesStore.importing" @click="importExistingSites">
           {{ t("panel.sites.import") }}
         </button>
-        <button v-if="canCreateSite" class="compact" v-bind="writeGate()" @click="showCreateForm = !showCreateForm">
+        <!-- TEK BIRINCIL EYLEM. Dugme ACIKKEN "Iptal" yazmasina ragmen birincil (mavi gradyan)
+             ciziliyordu; form acikken sayfada IKI mavi dugme oluyordu ("Iptal" ustte,
+             "Siteyi olustur ve yayinla" altta) ve goz once ustteki iptali secip formu kapatiyordu.
+             Acikken ikincile duser: sayfanin tek birincil eylemi her zaman gonderme dugmesidir. -->
+        <button
+          v-if="canCreateSite"
+          :class="['compact', { secondary: showCreateForm }]"
+          v-bind="writeGate()"
+          @click="showCreateForm = !showCreateForm">
           {{ showCreateForm ? t("panel.sites.cancelCreate") : t("panel.sites.create") }}
         </button>
       </div>
@@ -41,13 +49,49 @@
       </div>
     </section>
 
+    <!--
+      OTOMATIK HAZIRLIK RAPORU ARTIK GORUNUYOR.
+
+      OLCULDU: `defaultsReport` uc ayri yerde dolduruluyordu (site olusturma, ice aktarma,
+      elle hazirlama) ama SABLONDA HIC OKUNMUYORDU; ona ait `.default-chip` kurallari da
+      SiteDetailView'de olu duruyordu. Yani panel "SSL hazirlanamadi" bilgisini SUNUCUDAN
+      ALIYOR ve kullaniciya HIC soylemiyordu — tam da yeni site kurulduktan sonra, kullanicinin
+      neyin eksik kaldigini bilmesi gereken anda. Kismi basari gizlenmez, duzenlenir.
+
+      Durum YALNIZ RENKLE anlatilmaz: iki grup AYRI BASLIK altinda ("Hazir" / "Hazirlanamadi"),
+      boylece renk ayirt edemeyen kullanici da hangi ozelligin dustugunu okuyabiliyor.
+    -->
+    <section v-if="defaultsReport" class="defaults-card">
+      <div class="section-head">
+        <h3>{{ t("panel.sites.defaultsTitle") }}</h3>
+      </div>
+      <p class="meta">{{ defaultsSummary }}</p>
+
+      <div v-if="defaultsReport.readyFeatures.length > 0" class="defaults-grid">
+        <span class="tile-label">{{ t("panel.sites.defaultsReadyLabel") }}</span>
+        <span v-for="feature in defaultsReport.readyFeatures" :key="`ready-${feature}`" class="default-chip ready">
+          {{ feature }}
+        </span>
+      </div>
+
+      <div v-if="defaultsReport.failedFeatures.length > 0" class="defaults-grid">
+        <span class="tile-label">{{ t("panel.sites.defaultsFailedLabel") }}</span>
+        <span v-for="feature in defaultsReport.failedFeatures" :key="`failed-${feature}`" class="default-chip failed">
+          {{ feature }}
+        </span>
+      </div>
+    </section>
+
     <form v-if="showCreateForm && canCreateSite" class="create-card" @submit.prevent="submitCreateSite">
       <div class="create-card-head">
         <div>
           <h3>{{ t("panel.sites.createTitle") }}</h3>
           <p class="meta">{{ t("panel.sites.createHint") }}</p>
         </div>
-        <span class="ready-chip">{{ t("panel.sites.starterIncluded") }}</span>
+        <!-- Panelin ORTAK rozeti (`.status-pill`) kullanilir; bu ekranin kendine ait `.ready-chip`i
+             vardi ve vurgu MAVISI ile ciziliyordu, yani bir bilgi etiketi tabloların "calisiyor"
+             rozetinden daha baskin duruyordu. -->
+        <span class="status-pill">{{ t("panel.sites.starterIncluded") }}</span>
       </div>
 
       <div class="site-create-grid">
@@ -157,7 +201,11 @@
           <button class="secondary compact" @click="preview = null">{{ t("panel.sites.previewClose") }}</button>
         </div>
         <p v-if="preview.url" class="preview-line">
-          <a class="link-btn compact" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
+          <!-- `secondary` EKLENDI: bu bag daha once yalnizca `link-btn compact` tasiyordu ve
+               `.link-btn` tanimi `.domain-row-actions` altina hapsedilmisti — yani onizleme
+               kartindaki "Ac" HICBIR dugme bicimi almiyor, kalin bir duz baglanti olarak
+               ciziliyordu. Ayni isi yapan satir icindeki dugmeyle ayni gorunmeli. -->
+          <a class="secondary compact link-btn" :href="preview.url" target="_blank" rel="noopener">{{ t("panel.sites.previewOpenLink") }} ↗</a>
           <a class="preview-url" :href="preview.url" target="_blank" rel="noopener">{{ preview.url }}</a>
         </p>
         <p class="meta">{{ t("panel.sites.previewHostsHint") }}</p>
@@ -170,21 +218,30 @@
           :key="site.id"
           :class="['domain-row', { active: site.name === sitesStore.selectedSiteName }]">
           <div class="domain-row-main" @click="openTool(site.name, 'pano')">
-            <span class="domain-glyph">WWW</span>
+            <span class="domain-glyph" aria-hidden="true">WWW</span>
             <div class="domain-id-copy">
-              <strong>{{ site.name }}</strong>
+              <!-- Uc satir da tek satira KIRPILIYOR (ellipsis). Kirpilan metnin tamami `title`da
+                   durmazsa uzun alan adi / derin dosya yolu ekranda OKUNAMAZ hale gelir; kirpma
+                   bir bicim karari, bilgiyi silme karari degildir. -->
+              <strong :title="site.name">{{ site.name }}</strong>
               <a
                 class="domain-url"
                 :href="siteUrl(site)"
+                :title="siteUrl(site)"
                 target="_blank"
                 rel="noopener"
                 @click.stop>{{ siteUrl(site) }}</a>
-              <span class="domain-path">{{ site.physicalPath }}</span>
+              <span class="domain-path" :title="site.physicalPath">{{ site.physicalPath }}</span>
             </div>
           </div>
 
-          <span :class="['pill', { stopped: !isRunning(site) }]">
-            <span class="state-dot"></span>
+          <!-- PANELIN ORTAK DURUM ROZETI. Bu ekran kendi `.pill` sozlugunu kullaniyordu ve
+               "calisiyor" durumunu VURGU MAVISI ile ciziyordu; ayni ailedeki UsersView ve
+               SiteBackupView ise ortak `.status-pill` ile yesil/kehribar kullaniyor. Yani ayni
+               panelde "iyi durum" bir ekranda mavi, digerinde yesildi. Renk zaten tek kanal
+               degil (durum metni rozetin icinde yaziyor); degisen yalnizca hangi sozlugun
+               kullanildigi. -->
+          <span :class="['status-pill', isRunning(site) ? 'ok' : 'warn']">
             {{ translateState(site.state) }}
           </span>
 
@@ -347,6 +404,24 @@ function siteUrl(site: SiteRecord): string {
 const notice = ref("");
 const noticeError = ref(false);
 const defaultsReport = ref<SiteDefaultsResult | null>(null);
+
+/**
+ * Otomatik hazirlik raporunun tek cumlelik ozeti.
+ *
+ * MEVCUT anahtarlar kullanilir (`defaultsPrepared` / `defaultsPartial`): bunlar zaten
+ * `handlePrepareDefaults` bildiriminde basiliyordu, yani metin YENI degil — yalnizca artik
+ * kaybolan bildirimden sonra da ekranda kaliyor.
+ */
+const defaultsSummary = computed(() => {
+  const report = defaultsReport.value;
+  if (!report) {
+    return "";
+  }
+
+  return report.isComplete
+    ? t("panel.sites.defaultsPrepared")
+    : t("panel.sites.defaultsPartial", { features: report.failedFeatures.join(", ") });
+});
 const generatedCredentials = ref<Array<{ service: string; userName: string; password: string }>>([]);
 const showCreateForm = ref(false);
 const showAdvanced = ref(false);
@@ -730,36 +805,34 @@ async function copyCredential(credential: { service: string; userName: string; p
 </script>
 
 <style scoped>
-.sites-panel,
+/* `.sites-panel` KALDIRILDI: kok oge zaten `.panel` ve `.panel` ayni izgarayi `--sp-12`
+   araligiyla veriyordu. Yerel kopya yalnizca araligi 14px'e cekiyordu, yani bu ekran
+   panelin geri kalanindan 2px farkli bir ritimle nefes aliyordu — gorunmez ama her
+   bolumde birikiyordu. */
 .create-card,
 .site-create-grid,
 .credentials-card,
+.defaults-card,
 .credentials-list {
   display: grid;
-  gap: 14px;
+  gap: var(--sp-12);
 }
 
 .sites-header,
 .sites-actions,
-.section-head,
 .create-card-head,
 .create-actions {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
-.sites-header,
-.section-head {
+.sites-header {
   justify-content: space-between;
   align-items: flex-start;
 }
 
-.section-head {
-  align-items: center;
-  flex-wrap: wrap;
-}
-
 .site-search {
+  /* Icerik olcusu: "example.com" ve tipik alan adlarini kirpmadan gosteren taban/tavan. */
   flex: 1 1 200px;
   max-width: 320px;
   min-width: 0;
@@ -779,7 +852,7 @@ async function copyCredential(credential: { service: string; userName: string; p
 }
 
 .create-card {
-  padding: 16px;
+  padding: var(--sp-16);
   border: 1px solid color-mix(in srgb, var(--accent-1) 20%, transparent);
   border-radius: var(--radius-lg);
   background:
@@ -793,32 +866,17 @@ async function copyCredential(credential: { service: string; userName: string; p
   align-items: center;
 }
 
+/* `min-width: 190px` KALDIRILDI: olcek disi bir sayiydi ve zaten gereksizdi — bu dugmenin
+   metni ("Siteyi olustur ve yayinla" / "Create and publish site") kendi basina 190px'i
+   asiyor, yani kural hicbir sey yapmayip yalnizca dar dilde bosluk uretiyordu. */
 .create-actions button {
   width: auto;
-  min-width: 190px;
-}
-
-.section-kicker {
-  margin: 0 0 4px;
-  color: var(--accent-1);
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.ready-chip {
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent-1) 12%, transparent);
-  color: var(--accent-1);
-  font-size: 0.72rem;
-  font-weight: 700;
 }
 
 .automatic-plan,
-.credentials-card {
-  padding: 13px 14px;
+.credentials-card,
+.defaults-card {
+  padding: var(--sp-12) var(--sp-16);
   border: 1px solid color-mix(in srgb, var(--accent-1) 18%, var(--panel-border));
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent-1) 6%, var(--surface-1));
@@ -826,12 +884,12 @@ async function copyCredential(credential: { service: string; userName: string; p
 
 .automatic-plan {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .automatic-plan span::before {
   content: "✓";
-  margin-right: 7px;
+  margin-right: var(--sp-6);
   color: var(--accent-1);
   font-weight: 800;
 }
@@ -843,27 +901,61 @@ async function copyCredential(credential: { service: string; userName: string; p
 .credential-row {
   display: grid;
   grid-template-columns: minmax(140px, 0.8fr) minmax(120px, 1fr) minmax(160px, 1.2fr) auto;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: center;
-  padding: 9px 0;
+  padding: var(--sp-10) 0;
   border-top: 1px solid var(--panel-border);
 }
 
 .credential-row code {
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Kullanici adi/parola sutunlari alt alta dizilir; degisken genislikli rakamlar
+     sutunu tirtikli gosteriyordu. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Otomatik hazirlik raporu: etiket + cipler tek satirda akar. */
+.defaults-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-6);
+}
+
+.default-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-10);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--ring-track);
+  color: var(--text-soft);
+  font-size: var(--fs-2xs);
+}
+
+.default-chip.ready {
+  border-color: color-mix(in srgb, var(--ok-1) 30%, transparent);
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.default-chip.failed {
+  border-color: color-mix(in srgb, var(--warn-1) 30%, transparent);
+  background: var(--warn-bg);
+  color: var(--warn-text);
 }
 
 .domain-list {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .empty-onboard {
   display: grid;
   justify-items: center;
-  gap: 8px;
-  padding: 40px 20px;
+  gap: var(--sp-8);
+  padding: var(--sp-28) var(--sp-20);
   text-align: center;
   border: 1px dashed var(--panel-border);
   border-radius: var(--radius-lg);
@@ -871,7 +963,7 @@ async function copyCredential(credential: { service: string; userName: string; p
 }
 
 .empty-onboard h3 {
-  margin: 6px 0 0;
+  margin: var(--sp-6) 0 0;
 }
 
 .empty-onboard .empty-icon {
@@ -893,14 +985,14 @@ async function copyCredential(credential: { service: string; userName: string; p
 .domain-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .domain-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 16px;
+  gap: var(--sp-16);
+  padding: var(--sp-12) var(--sp-16);
   border-radius: var(--radius-lg);
   border: 1px solid var(--panel-border);
   background: var(--surface-1);
@@ -1068,17 +1160,6 @@ async function copyCredential(credential: { service: string; userName: string; p
 label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
   gap: 8px;
-}
-
-.checkbox {
-  grid-template-columns: auto 1fr;
-  align-items: center;
-}
-
-.checkbox input {
-  width: 17px;
-  height: 17px;
-  margin: 0;
 }
 
 /* bkz. base.css: onay kutusu/radyo ve dugmeler gerilmez. */

@@ -19,7 +19,11 @@
         <button role="tab" :aria-selected="activeSection === 'bruteforce'" :class="{ active: activeSection === 'bruteforce' }" @click="activeSection = 'bruteforce'">{{ t("panel.bruteforce.title") }}</button>
         <button role="tab" :aria-selected="activeSection === 'antivirus'" :class="{ active: activeSection === 'antivirus' }" @click="activeSection = 'antivirus'">{{ t("panel.antivirus.title") }}</button>
       </div>
-      <select v-model="selectedSiteName" class="site-select">
+      <!-- `site-select` yerine ORTAK `compact-select` (base.css): yerel kopya `min(280px, 52vw)`
+           ile SABIT bir genislik dayatiyordu — kisa bir site adinda kutu bos yere 280px yer
+           kapliyor, uzun bir adda 52vw'de kirpiliyordu. Ortak tanim icerige uyar (`width: auto`,
+           taban 140px) ve panelin diger yedi site secicisiyle AYNI davranir. -->
+      <select v-model="selectedSiteName" class="compact-select">
         <option value="">{{ t("panel.php.selectSite") }}</option>
         <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
       </select>
@@ -47,7 +51,10 @@
         {{ t("panel.common.loading") }}
       </p>
 
-      <div v-else-if="securityConfig" class="summary-strip security-summary">
+      <!-- `security-summary` KALDIRILDI: kural birebir base.css'teki `.summary-strip` idi
+           (`repeat(4, minmax(0,1fr))`) ve alttaki 900px kirilimi da base'dekinin AYNISIYDI.
+           Iki kopya ayni seyi soyluyordu; tek kaynak birakildi. -->
+      <div v-else-if="securityConfig" class="summary-strip">
         <div class="summary-item">
           <span>{{ t("panel.security.isolationStatus") }}</span>
           <strong :class="['status-pill', securityConfig?.isIsolated ? 'ok' : 'warn']">
@@ -87,8 +94,13 @@
             <input v-model.number="rateForm.requestsPerMinute" type="number" min="1" />
           </label>
         </div>
+        <!-- UCU DE IKINCIL. Bu uc dugme UC AYRI ayari uygular (izolasyon, klasor ACL, hiz
+             siniri) ve aralarinda bir sira ya da onem farki YOK. Once yalnizca "Izole et"
+             birincil maviydi; esit rutbedeki uc eylemden birini vurgulamak, goze var olmayan
+             bir hiyerarsiyi anlatiyordu. Bolumun tek birincil eylemi baslik satirindaki
+             "Temel kurallar" olarak kaldi. -->
         <div class="row-actions">
-          <button class="compact" :disabled="!selectedSiteName || busyAction === 'isolate'" @click="runSiteAction('isolate')">
+          <button class="secondary compact" :disabled="!selectedSiteName || busyAction === 'isolate'" @click="runSiteAction('isolate')">
             {{ busyAction === "isolate" ? t("panel.security.busy") : t("panel.security.isolate") }}
           </button>
           <button class="secondary compact" :disabled="!selectedSiteName || busyAction === 'acl'" @click="runSiteAction('acl')">
@@ -107,7 +119,11 @@
           <h3>{{ t("panel.firewall.title") }}</h3>
           <p class="meta">{{ t("panel.firewall.subtitle") }}</p>
         </div>
-        <button class="compact" @click="showFirewallForm = !showFirewallForm">
+        <!-- Form ACIKKEN bu dugme "Iptal"e donusuyor ama SINIFI degismiyordu: panelin en baskin
+             ogesi (birincil mavi) bir VAZGECME eylemiydi ve hemen altindaki gercek eylem
+             ("Izin ver") onunla ayni agirliktaydi. Acikken ikincile duser; boylece formun
+             gonder dugmesi sekmenin TEK birincili olur. -->
+        <button :class="showFirewallForm ? 'secondary compact' : 'compact'" @click="showFirewallForm = !showFirewallForm">
           {{ showFirewallForm ? t("panel.common.cancel") : t("panel.firewall.newRule") }}
         </button>
       </div>
@@ -130,11 +146,16 @@
             </select>
           </label>
         </div>
+        <!-- "ENGELLE" AYRILDI. Kod yorumunda zaten olculmus bir tehlike var (bkz. `firewallForm`
+             varsayilani): iki dugme yan yana ve AYNI kutu boyundayken yanlis olana tek tik,
+             sunucuyu disariya kapatmaya yetiyordu. Simdi hem RENK hem KONUM ayiriyor: engelleme
+             tehlike tonunda ve `margin-left: auto` ile satirin obur ucunda, sabit yerde durur.
+             Metin de tek basina yeterli degildi — iki etiket de ayni uzunlukta ve ayni gride. -->
         <div class="row-actions">
           <button class="compact" :disabled="busyAction === 'allow'" @click="saveFirewall(true)">
             {{ busyAction === "allow" ? t("panel.security.busy") : t("panel.firewall.allow") }}
           </button>
-          <button class="secondary compact" :disabled="busyAction === 'block'" @click="saveFirewall(false)">
+          <button class="danger compact destructive-slot" :disabled="busyAction === 'block'" @click="saveFirewall(false)">
             {{ busyAction === "block" ? t("panel.security.busy") : t("panel.firewall.block") }}
           </button>
         </div>
@@ -766,24 +787,26 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
+/* YIKICI EYLEMIN SABIT YERI: satirin sag ucu. Tek kural, cunku bu ekranda tek boyle eylem
+   var (bkz. sablon). `.row-actions` bir flex satiri oldugu icin `auto` kenar bosluğu butun
+   arta kalan yeri yutar ve dugme her panel genisliginde AYNI yerde durur. */
+.destructive-slot {
+  margin-left: auto;
 }
 
-.site-select {
-  width: min(280px, 52vw);
-}
-
-.security-summary {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.summary-item strong.status-pill {
-  font-size: 0.8rem;
+/* SAYI SUTUNLARI SAGA HIZALI, RAKAMLAR TEK GENISLIKTE.
+   OLCULDU: iki tabloda da bir sayi sutunu var — guvenlik duvarinda PORT (80 / 443 / 8890 /
+   49152), kaba kuvvette DENEME SAYISI (3 / 12 / 147). Sola hizaliyken "8890" ile "80" ayni
+   noktadan basliyor ve hangisinin buyuk oldugu ancak okunarak anlasiliyordu; saga hizali ve
+   `tabular-nums` ile basamaklar alt alta gelir, karsilastirma bakisla olur.
+   Basliklar da hizaya dahil (`.table-head` ayni `nth-child`e giriyor): baslik sutunundan
+   kayarsa hangi sayinin ne oldugu bulaniklasir.
+   `:nth-child` KULLANILIYOR, `:not()` degil — bu depoda ozgullugu yukselten ciplak `:not()`
+   icin nobetci var (CssSpecificityGuardTests) ve niyet zaten "sadece su sutun". */
+.firewall-row > :nth-child(3),
+.bruteforce-row > :nth-child(2) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .firewall-row {
@@ -792,27 +815,6 @@ function showNotice(message: string, isError: boolean) {
 
 .bruteforce-row {
   grid-template-columns: minmax(160px, 1.2fr) 0.6fr 1fr 1fr auto;
-}
-
-.toggle-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-soft);
-}
-
-.toggle-field input {
-  width: auto;
-}
-
-.row-button {
-  width: auto;
-}
-
-@media (max-width: 900px) {
-  .security-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 .av-finding-row {

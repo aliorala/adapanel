@@ -61,7 +61,7 @@
         </label>
       </div>
 
-      <div v-if="form.autoBackupEnabled" class="section-head remote-head">
+      <div v-if="form.autoBackupEnabled" class="section-head">
         <div>
           <h3>{{ t("panel.automation.remoteSection") }}</h3>
           <p class="meta">{{ t("panel.automation.remoteHint") }}</p>
@@ -479,25 +479,6 @@ function showNotice(message: string, isError: boolean) {
   align-content: start;
   display: grid;
   gap: 12px;
-}
-
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
-.toggle-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-soft);
-}
-
-.toggle-field input {
-  width: auto;
 }
 
 .details-line {

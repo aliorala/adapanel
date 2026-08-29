@@ -32,6 +32,24 @@ public sealed class ProtectedDirectoryDto
     /// </para>
     /// </remarks>
     public bool? IsActive { get; set; }
+
+    /// <summary>
+    /// Bu koruma HÂLÂ eski (düz metin parolalı) biçimde duruyor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eski tasarım korunan klasöre <c>base64(kullanıcı:parola)</c> içeren bir <c>web.config</c>
+    /// yazıyordu; base64 kodlamadır, gizleme değil. Panel bu kayıtları YENİ biçime (bcrypt özeti,
+    /// site kökünün dışında) otomatik dönüştürür — ama dönüşüm ancak IIS modülü kayıtlıysa
+    /// yapılabilir, çünkü dönüşüm uygulamayı URL Rewrite'tan modüle taşır. Modül yoksa çalışan
+    /// koruma kaldırılıp yerine hiçbir şey konmamış olurdu.
+    /// </para>
+    /// <para>
+    /// <c>true</c> gören arayüz kullanıcıya AÇIKÇA söylemek zorundadır: parola bu klasörde düz
+    /// metin okunabilir hâldedir. Sessiz bırakmak, açığın açık kalması demektir.
+    /// </para>
+    /// </remarks>
+    public bool IsLegacyPlaintext { get; set; }
 }
 
 public sealed class ProtectDirectoryRequest

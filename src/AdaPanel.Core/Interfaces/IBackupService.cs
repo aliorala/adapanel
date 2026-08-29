@@ -51,9 +51,14 @@ public interface IBackupService
     /// <summary>
     /// <paramref name="retentionDays"/> gününden eski yedekleri budar: yerel dosya + kayıt silinir; <paramref name="remote"/>
     /// verilmişse off-site (S3/FTP/WebDAV) UZAK kopya da silinir (uzak rotasyon). 0/negatif gün hiçbir şeyi silmez.
-    /// Silinen kayıt sayısını döner.
     /// </summary>
-    Task<int> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default);
+    /// <remarks>
+    /// <b>Dönüş SAYI DEĞİL SONUÇTUR</b> (<see cref="BackupPruneResultDto"/>): "kaç tanesi silindi"
+    /// tek başına çağıranın doğruyu söylemesine yetmez. Uzak kopyası silinemeyen kayıtlar başarı
+    /// sayısına GİRMEZ ve eskiden yalnızca günlüğe yazılırdı; gece işi bunu göremediği için
+    /// panelde "Tamamlandı, 7 eski yedek silindi" yazarken dosyalar FTP'de duruyordu.
+    /// </remarks>
+    Task<BackupPruneResultDto> PruneAsync(int retentionDays, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Off-site yedek hedefini gerçek yedek almadan doğrular: küçük bir test dosyasını gerçek yükleme yoluyla
@@ -77,7 +82,7 @@ public interface IBackupService
     /// sayı (<paramref name="keepCount"/>) limitleri birlikte uygulanır. Kapsam daraltması ŞARTTIR:
     /// bir müşterinin saklama ayarı başka bir müşterinin yedeklerine dokunamaz.
     /// </summary>
-    Task<int> PruneSubscriptionAsync(
+    Task<BackupPruneResultDto> PruneSubscriptionAsync(
         Guid userId,
         int retentionDays,
         int keepCount,

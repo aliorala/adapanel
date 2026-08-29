@@ -55,6 +55,15 @@ public sealed class HtaccessHttpModule : IHttpModule
     /// </summary>
     private static readonly object InitGate = new object();
     private static HtaccessRuntimeGate? gate;
+
+    /// <summary>
+    /// KORUMALI DİZİN kapısı. <see cref="gate"/>'ten AYRI olması bilinçli ve ölçülmüş:
+    /// parola koruması, kullanıcının açıp kapadığı <c>.htaccess</c> anahtarına bağlı OLAMAZ
+    /// (o anahtar varsayılan KAPALI'dır). Gerekçenin tamamı <see cref="ProtectedDirectoryGate"/>
+    /// sınıf yorumunda.
+    /// </summary>
+    private static ProtectedDirectoryGate? protectionGate;
+
     private static HtaccessFileCache<object>? cache;
     private static HtaccessFailSafe? failSafe;
     private static string siteName = string.Empty;
@@ -113,6 +122,11 @@ public sealed class HtaccessHttpModule : IHttpModule
             // maliyet ~7 ns'dir (sozluk aramasi 48,7 ns'nin altinda). Daha kısa TTL kazanç
             // getirmez; daha uzun TTL "kapatma düğmesi anında" sözünü zayıflatır.
             gate = new HtaccessRuntimeGate(dataRoot, TimeSpan.FromSeconds(2));
+
+            // Korumalı dizinler AYNI TTL ile: panelden "korumayı kaldır" denince klasör iki
+            // saniye içinde açılmalı. Daha uzun bir TTL, kullanıcı "kaldırdım" derken klasörün
+            // hâlâ kilitli kalması demekti; daha kısası ölçülen bir kazanç getirmez.
+            protectionGate = new ProtectedDirectoryGate(dataRoot, TimeSpan.FromSeconds(2));
             cache = new HtaccessFileCache<object>(maxEntries: 512, revalidateAfter: TimeSpan.FromSeconds(2));
             failSafe = new HtaccessFailSafe(
                 failureThreshold: 5,
@@ -142,6 +156,17 @@ public sealed class HtaccessHttpModule : IHttpModule
             var context = application?.Context;
             if (context == null)
             {
+                return;
+            }
+
+            // ---- KORUMALI DİZİNLER ----
+            // .htaccess kapısından ÖNCE ve ONDAN BAĞIMSIZ. Sebep ölçüldü: .htaccess desteği
+            // varsayılan KAPALI ve bu kapının arkasına konulan bir parola koruması, kullanıcı
+            // "korumalı" derken klasörü herkese açık bırakırdı. Koruması olmayan sitelerin ödediği
+            // bedel, .htaccess kapısıyla aynı sınıfta: bir alan okuması + bir karşılaştırma.
+            if (ApplyDirectoryProtection(context))
+            {
+                // 401 yazıldı ve istek tamamlandı; yolun geri kalanı ÇALIŞMAMALI.
                 return;
             }
 
@@ -175,6 +200,89 @@ public sealed class HtaccessHttpModule : IHttpModule
             // SON SAVUNMA HATTI. Buraya kadar sızan her şey burada durur; istek etkilenmez.
             ModuleLog.Write("htaccess: BeginRequest'te yakalanmamis istisna (istek dokunulmadan gecirildi)", exception);
         }
+    }
+
+    /// <summary>
+    /// Korumalı dizin kararını uygular. <c>true</c> = istek TAMAMLANDI (401 yazıldı).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><c>WWW-Authenticate</c> YALNIZCA BURADA, yani yalnızca 401 yanıtında yazılır.</b>
+    /// Eski tasarım başlığı <c>web.config</c>'in <c>customHeaders</c> bölümüne koyuyordu ve o
+    /// bölüm başlığı HER yanıta ekler — canlıda ölçüldü: parola doğru girildikten sonra dönen
+    /// <b>200 yanıtında da</b> başlık gidiyordu. Zararsız bir ayrıntı değil: RFC 9110'a göre
+    /// <c>WWW-Authenticate</c> bir MEYDAN OKUMADIR ve 401 dışında anlamı yoktur; gönderilmesi
+    /// bazı istemci ve ara belleklerde gereksiz yeniden kimlik sorma turlarına yol açar ve
+    /// korunmayan yolları da korumalı gibi gösterir.
+    /// </para>
+    /// <para>
+    /// <c>TrySkipIisCustomErrors</c> AÇILIYOR: açılmasaydı IIS'in özel hata sayfası devreye girip
+    /// yanıtı DEĞİŞTİREBİLİRDİ. Durum kodu ve başlık korunur ama gövdenin ne olacağı sunucu
+    /// yapılandırmasına kalırdı; kimlik doğrulama akışında bu, tarayıcının parola kutusunu
+    /// açmadan hata sayfası göstermesi demek olabilirdi.
+    /// </para>
+    /// </remarks>
+    private static bool ApplyDirectoryProtection(HttpContext context)
+    {
+        var currentGate = protectionGate;
+        if (currentGate == null)
+        {
+            return false;
+        }
+
+        var request = context.Request;
+        var response = context.Response;
+        var karar = currentGate.Decide(
+            siteName,
+            SafeDocumentRoot(),
+            SafeGet(() => request.PhysicalPath),
+            SafeGet(() => request.Path),
+            SafeGet(() => request.Headers["Authorization"] ?? string.Empty));
+
+        if (karar.Outcome == ProtectedDirectoryOutcome.Granted)
+        {
+            // ================= ÇEKİRDEK ÖNBELLEĞİ — CANLIDA ÖLÇÜLMÜŞ BİR AÇIK =================
+            // Korunan bir statik dosya doğru parolayla bir kez sunulduğunda IIS o yanıtı
+            // HTTP.SYS ÇEKİRDEK ÖNBELLEĞİNE alıyor. Sonraki istekler yönetilen ardışık düzene
+            // HİÇ GİRMİYOR — yani bu modül çalışmıyor — ve dosya PAROLASIZ dönüyor.
+            //
+            // ÖLÇÜM (bu makinede, test.local üzerinde): parolayla bir kez alınan
+            // /ada-gizli/index.html, ardından KİMLİKSİZ beş istekte de HTTP 200 döndü; aynı anda
+            // sorgu dizesi eklenmiş HALİ (önbellekte olmayan URL) HTTP 401 döndü. Yani koruma
+            // çalışıyordu, önbellek onu ATLIYORDU.
+            //
+            // Düzeltme, korumalı dizinden dönen yanıtları ÖNBELLEKLENEMEZ işaretlemektir; başka
+            // yol yok, çünkü modül önbellekten sunulan isteği hiç görmüyor. Bedeli, korumalı
+            // dizinlerde çekirdek önbelleğinin kapalı olmasıdır — parola arkasındaki içerik zaten
+            // paylaşılabilir bir yanıt değildir.
+            //
+            // İKİSİ BİRDEN gerekli: kullanıcı kipi (ASP.NET çıktı önbelleği) ve çekirdek kipi
+            // (http.sys) AYRI önbelleklerdir; yalnız birini kapatmak diğerinden sunulmayı engellemez.
+            SafeGet(() =>
+            {
+                response.DisableKernelCache();
+                response.DisableUserCache();
+                return string.Empty;
+            });
+
+            return false;
+        }
+
+        if (karar.Outcome != ProtectedDirectoryOutcome.Challenge)
+        {
+            return false;
+        }
+
+        response.StatusCode = 401;
+        response.StatusDescription = "Unauthorized";
+        response.AddHeader("WWW-Authenticate", "Basic realm=\"" + karar.Realm + "\", charset=\"UTF-8\"");
+        response.TrySkipIisCustomErrors = true;
+
+        // Response.End() KULLANILMIYOR: ThreadAbortException fırlatır ve bu modülün
+        // "istisna üretme" yasağını ihlal ederdi (aynı gerekçe Enforce'ta da yazılı).
+        context.ApplicationInstance.CompleteRequest();
+        HandledRequests++;
+        return true;
     }
 
     private static void Apply(HttpContext context, IHtaccessEngine engine, HtaccessMode mode)

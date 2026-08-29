@@ -97,10 +97,21 @@ export type HtaccessSiteReport = {
   applicationPoolName: string;
   managedRuntimeVersion: string;
   support: HtaccessSupport;
-  /** Motor IIS içinde YÜKLÜ mü. Bugün her koşulda false — sebebi `engineBlockers`'ta. */
+  /**
+   * Motor IIS içinde YÜKLÜ mü — ARTIK ÖLÇÜLÜYOR.
+   *
+   * Eskiden bu alan yalnızca havuzun CLR sürümünden türetiliyordu, yani modülün IIS'e kayıtlı
+   * olup olmadığı hiç ölçülmeden "yüklü" deniyordu. Bugün üç ölçümün birleşimi: havuz yönetilen
+   * kod çalıştırıyor + kayıt okundu + kayıt bizim modülümüzü gösteriyor + ön koşul isteği
+   * elemiyor. Biri okunamazsa `false` olur; ayrıntısı `moduleRegistration`, sebebi
+   * `engineBlockers`.
+   */
   engineLoadedInIis: boolean;
   /** i18n anahtarları (`htaccess.blocker.*`). Metin sunucuda üretilmez, burada çevrilir. */
   engineBlockers: string[];
+
+  /** Modül kaydının ÖLÇÜLMÜŞ hâli; `engineLoadedInIis`'in dayandığı kanıt. */
+  moduleRegistration: HtaccessModuleRegistration;
   /** i18n anahtarları (`htaccess.deviation.*`) — motorun Apache'den bilinçli sapmaları. */
   deviations: string[];
 };
@@ -182,6 +193,59 @@ export type HtaccessServerSwitchState = {
   /** Acil durum kurtarma için gösterilir; uç yönetici-only olduğu için sızıntı değil. */
   switchFilePath: string;
 };
+
+/**
+ * Modülün IIS'e KAYITLI olup olmadığının ÖLÇÜLMÜŞ hâli.
+ *
+ * <p>
+ * Neden ayrı bir yapı: panel eskiden `engineLoadedInIis` alanını yalnızca havuzun CLR
+ * sürümünden TÜRETİYORDU, yani modülün kayıtlı olup olmadığını hiç ölçmeden "yüklü" diyordu.
+ * Kayıt bozuk olsa da aynı şeyi söylerdi ve arıza aranırken yanlış yere baktırırdı.
+ * </p>
+ * <p>
+ * `readable` ayrı bir alan çünkü "okuyamadım" ile "kayıt yok" AYNI ŞEY DEĞİL: birincisinde
+ * cevabı bilmiyoruz, ikincisinde biliyoruz. İkisini birleştirmek, okunamayan bir yapılandırmayı
+ * "modül yok" diye raporlamak olurdu.
+ * </p>
+ */
+export type HtaccessModuleRegistration = {
+  /** IIS yapılandırması okunabildi mi. `false` ise diğer alanlar KARAR DEĞİLDİR. */
+  readable: boolean;
+  present: boolean;
+  typeName: string;
+  preCondition: string;
+  readError: string;
+  typeMatches: boolean;
+  /** `managedHandler` ön koşulu: modül PHP/statik isteklerde ÇALIŞMAZ. */
+  preConditionExcludesUnmanagedRequests: boolean;
+  /** Üç ölçümün birleşimi; biri okunamazsa `false`. */
+  confirmed: boolean;
+  assembly: {
+    presence: string;
+    path: string;
+    version: string;
+    publicKeyToken: string;
+  };
+};
+
+export async function getHtaccessModuleRegistration() {
+  const response = await apiClient.get<ApiEnvelope<HtaccessModuleRegistration>>("/htaccess/module");
+  return response.data.data;
+}
+
+/**
+ * Eksik/bozuk kaydı ONARIR — yönetici işi.
+ *
+ * Gövde YOK: onarımın parametresi yok, modülün adı/tipi/ön koşulu sunucuda TEK KAYNAKTAN gelir.
+ * İstemcinin bunları göndermesi, panel ile kurulum betiğinin ayrışmasına açık kapı bırakırdı.
+ */
+export async function registerHtaccessModule() {
+  const response = await apiClient.post<ApiEnvelope<HtaccessModuleRegistration>>(
+    "/htaccess/register-module",
+    {}
+  );
+  return response.data.data;
+}
 
 export async function getServerHtaccessMode() {
   const response = await apiClient.get<ApiEnvelope<HtaccessServerSwitchState>>("/htaccess/server-mode");

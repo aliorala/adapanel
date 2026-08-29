@@ -1,10 +1,11 @@
-using AdaPanel.Api.Extensions;
+﻿using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Htaccess;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Htaccess;
+using AdaPanel.Infrastructure.Htaccess.Hosting;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -243,11 +244,18 @@ public sealed class HtaccessController(
     // ------------------------------------------------------------------------------------
     // BU BLOK BİR KEZ YANLIŞ BİR OLGUYA DAYANIYORDU ve düzeltmesi burada yazılı duruyor: eski
     // metin "ucu eklemenin bedeli sıfır, çünkü çekirdek motor w3wp içinde zaten yüklenmiyor"
-    // diyordu. O gerekçe ARTIK GEÇERSİZ — derleme zamanı engeli kalktı, motorun kaynağı net48
-    // modül projesinde de derleniyor ve HtaccessPanelService.MotorEngelleri() BOŞ liste dönüyor
-    // (ölçüm: HtaccessNet48EngineLoadTests, gerçek bir CLR 4 sürecinde). Yani genel anahtar artık
-    // özelliği GERÇEKTEN açıyor; ucun olmaması "bedelsiz bir eksiklik" değil, özelliğin panelden
-    // hiç kullanılamaması demekti: yönetici module.switch dosyasını ELLE yazmak zorundaydı.
+    // diyordu. O gerekçe ARTIK GEÇERSİZ — derleme zamanı engeli kalktı ve motorun kaynağı net48
+    // modül projesinde de derleniyor (ölçüm: HtaccessNet48EngineLoadTests, gerçek bir CLR 4
+    // sürecinde). Yani genel anahtar artık özelliği GERÇEKTEN açıyor; ucun olmaması "bedelsiz bir
+    // eksiklik" değil, özelliğin panelden hiç kullanılamaması demekti: yönetici module.switch
+    // dosyasını ELLE yazmak zorundaydı.
+    //
+    // DÜZELTMENİN DÜZELTMESİ: bu metin bir sonraki turda "MotorEngelleri() BOŞ liste dönüyor"
+    // diye de yazıyordu ve o cümle ölçülmemişti. Derleme zamanı engelinin kalkması, ÇALIŞMA
+    // ZAMANINDA engel olmadığı anlamına gelmiyordu: canlıda modül applicationHost.config'te
+    // yerinde olmadan panel yine "motor yüklü, engel yok" diyordu. Engeller artık ölçülüyor
+    // (HtaccessPanelService.MotorEngelleri) ve eksik kaydın onarımı aşağıdaki register-module
+    // ucundadır.
     //
     // Eski metnin HAKLI olan yarısı aynen duruyor ve aşağıdaki iki uç onu uyguluyor:
     //
@@ -325,5 +333,71 @@ public sealed class HtaccessController(
             cancellationToken);
 
         return Ok(ApiResponse<HtaccessServerSwitchState>.Ok(state, "htaccess.mode_updated"));
+    }
+
+    /// <summary>Modülün IIS kaydının ÖLÇÜLMÜŞ hâli — site adı gerekmez.</summary>
+    /// <remarks>
+    /// Site raporu da aynı ölçümü taşıyor (<c>ModuleRegistration</c>) ama bir siteye bağlıdır; bu
+    /// uç, henüz hiç sitesi olmayan bir sunucuda da (kurulumdan hemen sonra) "modül kuruldu mu"
+    /// sorusunun cevabıdır — <c>server-mode</c> ucunun varlık gerekçesinin aynısı.
+    /// </remarks>
+    [HttpGet("~/api/v1/htaccess/module")]
+    [Authorize(Roles = "Administrator")]
+    public ActionResult<ApiResponse<HtaccessModuleRegistrationState>> GetModuleRegistration()
+        => Ok(ApiResponse<HtaccessModuleRegistrationState>.Ok(htaccess.GetModuleRegistration()));
+
+    /// <summary>
+    /// Modülü <c>applicationHost.config</c>'e KAYDEDER — eksik/bozuk kaydın panelden onarımı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden var:</b> panel artık kaydın eksikliğini ÖLÇÜYOR (<c>htaccess.blocker.*</c>), ama
+    /// bugüne kadar düzeltmenin tek yolu sunucuya girip <c>install-htaccess-module.ps1</c>
+    /// çalıştırmaktı. Sorunu gösterip çaresini söylememek, bu iş kolunun düzeltmeye çalıştığı
+    /// "hiçbir şey olmuyor, kimse sebebini söylemiyor" davranışının bir başka hâlidir.
+    /// </para>
+    /// <para>
+    /// <b>ROTA SİTE AĞACININ DIŞINDA</b> (<c>~/</c> mutlak yol) ve gerekçesi yukarıdaki
+    /// <c>server-mode</c> bloğunda yazılı: bu denetleyicinin rotası <c>api/v1/sites</c> olduğu için
+    /// göreli yazılan her sabit segment, <c>SitesController</c>'ın <c>GET {siteName}</c> ucunu aynı
+    /// adlı bir site için GÖLGELER. Kayıt zaten sunucu genelidir; site ağacında yeri de yoktur.
+    /// </para>
+    /// <para>
+    /// <b>YALNIZ Administrator.</b> Bu uç <c>applicationHost.config</c>'e yazar, yani sunucudaki
+    /// yönetilen kod çalıştıran HER uygulama havuzunu bir kez geri döndürür ve modülü her siteye
+    /// yükletir. Bayi de kiracıdır ve bu, kapsamının çok dışındadır — <c>server-mode</c> ile aynı
+    /// karar, aynı gerekçe.
+    /// </para>
+    /// <para>
+    /// <b>Denetim kaydı KONUSUZ</b> (<c>WriteAsync</c>): değişiklik tek bir aboneliğe ait değildir,
+    /// sunucudaki her siteyi kapsar. Bir kiracıya bağlansaydı komşularını da kapsayan bir işlem o
+    /// kiracının denetim görünümüne düşerdi. Kaynak <c>htaccess:server</c> — sunucu geneli
+    /// <c>.htaccess</c> kayıtları denetim ekranında tek yerde aranabilsin diye anahtar kipiyle aynı.
+    /// </para>
+    /// <para>
+    /// <b>GÖVDE ALMAZ.</b> Kaydın bütün içeriği (ad, tip, ön koşul) <c>HtaccessModuleRegistration</c>
+    /// sabitlerinden ve derlemenin kendisinden gelir. Çağırana bir alan bırakmak, IIS'e panelin
+    /// bilmediği bir tip adı yazdırabilmek demekti.
+    /// </para>
+    /// </remarks>
+    [HttpPost("~/api/v1/htaccess/register-module")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<HtaccessModuleRegistrationState>>> RegisterModuleAsync(
+        CancellationToken cancellationToken)
+    {
+        // KAYIT ÖNCE YAZILIR, SONRA İZ BIRAKILIR: yazma başarısız olursa (GAC'ta derleme yok,
+        // yetki yetmiyor) istisna buradan yukarı gider ve "olmayan bir değişikliğin kaydı"
+        // bırakılmaz — server-mode ucundaki kararın aynısı.
+        var state = htaccess.RegisterModule();
+
+        await auditService.WriteAsync(
+            "htaccess.module.registered",
+            "htaccess:server",
+            $"The .htaccess IIS module was registered in applicationHost.config (preCondition: '{state.PreCondition}'); affects every managed application pool on this server.",
+            User.GetRequiredUserId(),
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Ok(ApiResponse<HtaccessModuleRegistrationState>.Ok(state, "htaccess.module_registered"));
     }
 }

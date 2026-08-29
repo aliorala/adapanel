@@ -29,7 +29,7 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(eski, dahaEski);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(0, silinen);
+        Assert.Equal(0, silinen.Removed);
         Assert.True(File.Exists(eski.Path));
         Assert.True(File.Exists(dahaEski.Path));
         Assert.Equal(2, (await servis.GetBackupsAsync()).Count);
@@ -47,7 +47,7 @@ public sealed class BackupPruneProtectionTests
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
         // Koruma saklama politikasini IPTAL ETMEZ; yalnizca yeni yedek yokken devreye girer.
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.False(File.Exists(eski.Path));
         Assert.True(File.Exists(taze.Path));
     }
@@ -65,7 +65,7 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(saglikliEski, saglikliTaze, bozukEski);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.False(File.Exists(saglikliEski.Path));
         Assert.True(File.Exists(bozukEski.Path));
     }
@@ -82,7 +82,7 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(siteTaze, dbEski);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(0, silinen);
+        Assert.Equal(0, silinen.Removed);
         Assert.True(File.Exists(dbEski.Path));
     }
 
@@ -101,7 +101,7 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(eski, taze);
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
-        Assert.Equal(0, silinen);
+        Assert.Equal(0, silinen.Removed);
         Assert.True(File.Exists(eski.Path));
     }
 
@@ -119,7 +119,7 @@ public sealed class BackupPruneProtectionTests
         var silinen = await servis.PruneAsync(retentionDays: 14);
 
         // Off-site kopya da gecerli bir geri yukleme noktasidir.
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.False(File.Exists(eski.Path));
     }
 
@@ -151,7 +151,7 @@ public sealed class BackupPruneProtectionTests
 
         // ESKI DAVRANIS: en yeni (bozuk) nokta korunur, orta+eski silinir -> geri yuklenebilir
         // yedek sayisi SIFIR. Simdi: en yeni KULLANILABILIR nokta da korunur.
-        Assert.Equal(1, silinen);
+        Assert.Equal(1, silinen.Removed);
         Assert.True(File.Exists(orta.Path));
 
         var kalanlar = await servis.GetBackupsAsync();
@@ -177,7 +177,7 @@ public sealed class BackupPruneProtectionTests
         var servis = alan.ServisKur(eski, orta, enYeni);
         var silinen = await servis.PruneSubscriptionAsync(abone, retentionDays: 0, keepCount: 1);
 
-        Assert.Equal(2, silinen);
+        Assert.Equal(2, silinen.Removed);
         Assert.False(File.Exists(eski.Path));
         Assert.False(File.Exists(orta.Path));
         Assert.True(File.Exists(enYeni.Path));

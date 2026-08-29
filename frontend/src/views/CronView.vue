@@ -14,7 +14,12 @@
 
     <div class="module-toolbar">
       <div class="toolbar-group">
-        <button v-bind="writeGate()" @click="toggleForm">
+        <!-- EKRANDA TEK BİRİNCİL EYLEM. Form kapalıyken bu düğme sayfanın birincil eylemidir
+             ("Ekle"). Form AÇILINCA aynı düğme "Formu kapat"a dönüşüyor ama görsel olarak
+             birincil kalıyordu: aşağıdaki "Kaydet" de birincil olduğu için ekranda iki mavi
+             düğme yarışıyor ve gözün gideceği yer belirsizleşiyordu. Üstelik ikisinden görsel
+             olarak baskın olan, işi GERİ ALAN düğmeydi. Kapatma bir vazgeçmedir: sakinleşir. -->
+        <button :class="{ secondary: formOpen }" v-bind="writeGate()" @click="toggleForm">
           {{ formOpen ? t("panel.tasks.closeForm") : t("panel.tasks.add") }}
         </button>
         <span class="status-pill ok">{{ tasks.length }} {{ t("panel.tasks.taskCount") }}</span>
@@ -1152,34 +1157,68 @@ function resolveApiMessage(error: unknown) {
 /* Hücre içi eylem düğmeleri kendi kutularında kalsın; satırın dikey hizasını bozmasın. */
 .cron-row .row-actions {
   align-content: start;
-  gap: 6px;
+  gap: var(--sp-6);
+}
+
+/* YIKICI EYLEM AYRI DURUR. Dört düğme 232px'lik sütuna 2x2 oturuyor ve "Sil" ile "Devre dışı
+   bırak" aralarında 6px ile YAN YANA geliyordu; ikisi de aynı boyda, aynı sırada. Bir görevi
+   geçici olarak durdurmak isteyen kullanıcının 6px ötede kalıcı silme düğmesi bulması, ıskalamayı
+   pahalıya çeviren bir yerleşim.
+   `margin-left: auto` sarmalı BOZMAZ ve satırı UZATMAZ (ölçüldü: 232 - 120 - 60 ≈ 50px boşluk
+   kalıyor, iki düğme aynı satırda duruyor); yalnız "Sil"i kendi satırının sağ ucuna iter.
+   Ayırma boşlukla yapılıyor, düğmeyi gizleyerek değil: eylem aynı yerde ve tek tıkla erişilebilir. */
+.cron-row .row-actions .danger {
+  margin-left: auto;
+}
+
+/* SESSİZ DÜĞME — `.ghost` panelde 8 yerde kullanılıyor ama HİÇBİR YERDE TANIMLI DEĞİL (ölçüldü:
+   AttentionSectionNotice, RunningTaskBanner, ServerHealthView, SiteDetailView ve bu ekran).
+   Tanımsız sınıf bir hata üretmez: düğme global `button` kuralına düşer ve BİRİNCİL mavi gradyanı
+   alır. Sonuç, bu ekranda ölçülebilir bir hiyerarşi hatasıydı — gri bir açıklama şeridinin içindeki
+   "Çıktıyı göster" ve "Kapat", tablodaki gerçek eylemlerden daha baskın çiziliyordu.
+   Tanım BURADA kapsamlı (scoped) olarak veriliyor: `styles/base.css` bu turun kapsamı dışında ve
+   sınıfın asıl yeri orasıdır — diğer beş bileşen hâlâ tanımsız sınıfa atıf yapıyor. */
+.ghost {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent-1) 30%, transparent);
+  color: var(--accent-text);
+  box-shadow: none;
+}
+
+.ghost:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent-1) 10%, transparent);
+  filter: none;
+  transform: none;
+  box-shadow: none;
 }
 
 /* Komut = kod. Değişken genişlikli yazı tipinde "l1I" ve "O0" ayırt edilemiyor, oysa buradaki
-   metin kullanıcının birebir doğrulaması gereken bir yol. */
+   metin kullanıcının birebir doğrulaması gereken bir yol.
+   Yazı tipi listesi ELDE YAZILMIYOR: `--font-mono` tam da bu yüzden tanımlandı (bkz. base.css),
+   yoksa aynı panelin konsol yüzeyleri birbirinden farklı yazı tipiyle çiziliyordu. */
 .cell-command strong,
 .cell-command small {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   font-weight: 500;
   line-height: 1.4;
 }
 
 .cell-status {
   display: grid;
-  gap: 5px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
 .pill-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: var(--sp-4);
 }
 
 .cell-status small {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 /* Uyarı niteliğindeki alt satır (çalışma zamanı yok / devre dışı): rozete gerek yok, ama düz
@@ -1193,9 +1232,14 @@ function resolveApiMessage(error: unknown) {
   grid-column: span 2;
 }
 
+/* SATIR UZUNLUĞU SINIRI. En uzun görünür metin bu ekranda (ölçüldü: `panel.tasks.systemEnvHint`
+   305 karakter) ve üç sütunluk form ızgarasında iki sütuna yayılıyor: 1440px'lik bir panelde satır
+   başına ~105 karaktere çıkıyordu; okunabilir aralık 45-90'dır. `ch` ile sınırlamak metni KISALTMAZ,
+   yalnız daha erken sardırır — tek kelime bile gizlenmiyor. */
 .field-hint {
+  max-width: 78ch;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .search-control {
@@ -1203,31 +1247,34 @@ function resolveApiMessage(error: unknown) {
 }
 
 /* Süren çalışma kutusu NÖTR görünür: bilgi verir, alarm çalmaz. Yalnızca kullanıcının kendi
-   verdiği süre sınırı aşıldığında sarıya döner (.alarm). */
+   verdiği süre sınırı aşıldığında sarıya döner (.alarm).
+   `margin-bottom` KALDIRILDI: kutu `.module-shell` ızgarasının bir çocuğu ve ızgaranın kendi
+   `gap`i (12px) zaten aralığı veriyordu. İkisi toplanınca kutunun ÜSTÜNDE 12px, ALTINDA 26px
+   boşluk oluşuyordu; sayfadaki tek asimetrik aralık buydu ve kutuyu tabloya değil forma ait
+   gösteriyordu. */
 .running-notice {
   border: 1px solid color-mix(in srgb, var(--accent-1) 40%, transparent);
-  border-radius: 8px;
-  padding: 0.7rem 1rem;
-  margin-bottom: 0.9rem;
+  border-radius: var(--radius-md);
+  padding: var(--sp-10) var(--sp-12);
   background: color-mix(in srgb, var(--accent-1) 7%, transparent);
 }
 
 .running-notice.alarm {
   border-color: var(--warn-1);
-  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
+  background: var(--warn-bg);
 }
 
 .running-notice p {
-  margin: 0.35rem 0 0;
-  font-size: 0.86rem;
+  margin: var(--sp-4) 0 0;
+  font-size: var(--fs-sm);
 }
 
 .running-notice ul {
-  margin: 0.6rem 0 0;
+  margin: var(--sp-8) 0 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 0.4rem;
+  gap: var(--sp-4);
 }
 
 .running-notice li small {
@@ -1262,28 +1309,40 @@ function resolveApiMessage(error: unknown) {
   border-bottom: 0;
 }
 
-/* Tek cümlelik sebep satırı: ait olduğu satıra GÖRSEL OLARAK bağlı.
-   Önceden hiçbir bağı yoktu — iki satır arasında boşta duran gri bir yazıydı ve okuyan onu
-   alttaki göreve ait sanıyordu. Sol şerit + hafif zemin, hangi göreve ait olduğunu belirsiz
-   bırakmıyor. */
-.row-explain {
+/* SATIR ALTI ŞERİDİ — TEK DESEN, İKİ KULLANIM.
+   "Sebep" satırı (.row-explain) ve "canlı çalışma" satırı (.run-live) aynı görsel fikri anlatıyor:
+   üstteki görev satırına ait, sol şeritle ona bağlanmış bir açıklama bandı. Buna rağmen iki ayrı
+   kural olarak yazılmışlardı ve BİRBİRİNİ TUTMUYORLARDI (ölçüldü: dolgu 0.4/0.5rem, yazı
+   0.84/0.86rem, kenar yarıçapı aynı ama boşlukları ayrı). Aynı yerde alt alta çizildikleri için
+   fark ekranda tırtık olarak görünüyordu.
+   Ortak kalıp burada tek yerde tanımlanır; ayrıştıkları tek şey RENKTİR ve o zaten anlam taşır.
+   Şablon DEĞİŞMEDİ: sınıf adları ve mantıkları aynı kaldı, yalnız tanım paylaşıldı. */
+.row-explain,
+.run-live {
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
+  gap: var(--sp-8);
+  margin: 0 var(--sp-12) var(--sp-8);
+  padding: var(--sp-6) var(--sp-10);
+  border-left: 3px solid var(--accent-1);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--accent-1) 7%, transparent);
+  font-size: var(--fs-sm);
+}
+
+/* Sebep satırı tek satırlık bir cümle + düğme: dikeyde ORTALANIR.
+   Canlı satır çok satırlı çıktı taşıyabilir, orada nokta üstte kalmalı (aşağıda). */
+.row-explain {
   flex-wrap: wrap;
-  margin: 0 0.9rem 0.55rem;
-  padding: 0.4rem 0.7rem;
-  border-left: 3px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
-  border-radius: 0 6px 6px 0;
+  align-items: center;
+  border-left-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
   background: color-mix(in srgb, var(--text-muted) 7%, transparent);
-  font-size: 0.84rem;
   color: var(--text-muted);
 }
 
 .row-explain.warn {
   color: var(--warn-text);
   border-left-color: var(--warn-1);
-  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
+  background: var(--warn-bg);
 }
 
 .row-explain.live {
@@ -1293,15 +1352,7 @@ function resolveApiMessage(error: unknown) {
 }
 
 .run-live {
-  display: flex;
   align-items: flex-start;
-  gap: 0.6rem;
-  margin: 0 0.9rem 0.55rem;
-  padding: 0.5rem 0.7rem;
-  border-left: 3px solid var(--accent-1);
-  border-radius: 0 6px 6px 0;
-  background: color-mix(in srgb, var(--accent-1) 7%, transparent);
-  font-size: 0.86rem;
 }
 
 .run-live.ok {
@@ -1311,7 +1362,7 @@ function resolveApiMessage(error: unknown) {
 
 .run-live.warn {
   border-left-color: var(--warn-1);
-  background: var(--warn-bg, rgba(224, 180, 0, 0.08));
+  background: var(--warn-bg);
 }
 
 .run-text {
@@ -1321,14 +1372,14 @@ function resolveApiMessage(error: unknown) {
 .run-text small {
   display: block;
   opacity: 0.75;
-  margin-top: 0.2rem;
+  margin-top: var(--sp-2);
 }
 
 .env-ok,
 .env-fix {
   display: block;
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-6);
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
 }
 
@@ -1338,39 +1389,43 @@ function resolveApiMessage(error: unknown) {
 
 .env-fix strong {
   display: block;
-  margin-bottom: 0.2rem;
+  margin-bottom: var(--sp-2);
 }
 
 .env-fix button {
-  margin-top: 0.5rem;
+  margin-top: var(--sp-6);
 }
 
+/* SYSTEM ortamı uyarısı: sarı zeminli tek kutu. `--warn-bg` TANIMLI bir belirteçtir; buradaki
+   yedek değer (`rgba(224, 180, 0, 0.07)`) hiçbir zaman devreye girmiyordu ama okuyana "bu belirteç
+   olmayabilir" diye yanlış bilgi veriyordu — bu depoda tam da tanımsız belirteç yüzünden renkler
+   sessizce yedeğe düştü (bkz. CssTokenReferenceTests). Yedek kaldırıldı. */
 .env-hint {
   margin: 0;
-  padding: 0.5rem 0.7rem;
-  border-radius: 6px;
+  padding: var(--sp-6) var(--sp-10);
+  border-radius: var(--radius-sm);
   border-left: 3px solid var(--warn-1);
-  background: var(--warn-bg, rgba(224, 180, 0, 0.07));
+  background: var(--warn-bg);
   line-height: 1.5;
 }
 
 .editing-banner {
-  margin: 0 0 0.8rem;
-  padding: 0.45rem 0.75rem;
-  border-radius: 6px;
+  margin: 0 0 var(--sp-10);
+  padding: var(--sp-6) var(--sp-10);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-1) 10%, transparent);
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
 }
 
 .run-output {
-  margin: 0.4rem 0 0;
-  padding: 0.5rem 0.7rem;
+  margin: var(--sp-4) 0 0;
+  padding: var(--sp-6) var(--sp-10);
   max-height: 18rem;
   overflow: auto;
-  border-radius: 6px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.16));
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   line-height: 1.45;
   /* Uzun satirlar sayfayi YATAY kaydirmasin; kutunun kendi icinde kalsin. */
   white-space: pre-wrap;
@@ -1380,7 +1435,7 @@ function resolveApiMessage(error: unknown) {
 .run-dot {
   width: 0.62rem;
   height: 0.62rem;
-  margin-top: 0.32rem;
+  margin-top: var(--sp-4);
   border-radius: 50%;
   background: currentColor;
   opacity: 0.55;
@@ -1409,7 +1464,7 @@ function resolveApiMessage(error: unknown) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--sp-16);
   flex-wrap: wrap;
 }
 </style>

@@ -206,9 +206,13 @@
               class="database-search"
               :aria-label="t('panel.database.search')"
               :placeholder="t('panel.database.searchPlaceholder')" />
+            <!-- EKRANDA TEK BİRİNCİL EYLEM. Bu düğme form kapalıyken "Veritabanı oluştur"dur ve
+                 sayfanın birincil eylemi odur; form açılınca aynı düğme "İptal"e döner ama BİRİNCİL
+                 kalıyordu. Formun kendi "Oluştur" düğmesi de birincil olduğu için ekranda iki mavi
+                 düğme yan yana duruyor, üstelik baskın olanı işi geri alandı. Vazgeçme sakinleşir. -->
             <button
               v-if="activeSection === 'databases'"
-              class="compact"
+              :class="['compact', { secondary: showDatabaseForm }]"
               @click="showDatabaseForm = !showDatabaseForm">
               {{ showDatabaseForm ? t("panel.database.cancelAction") : t("panel.database.createDbTitle") }}
             </button>
@@ -218,9 +222,10 @@
               @click="showImportForm = !showImportForm">
               {{ showImportForm ? t("panel.database.cancelAction") : t("panel.database.importTitle") }}
             </button>
+            <!-- Aynı kural (bkz. yukarıdaki "Veritabanı oluştur"): form açıkken bu düğme "İptal"dir. -->
             <button
               v-if="activeSection === 'users'"
-              class="compact"
+              :class="['compact', { secondary: showUserForm }]"
               @click="showUserForm = !showUserForm">
               {{ showUserForm ? t("panel.database.cancelAction") : t("panel.database.createUserTitle") }}
             </button>
@@ -229,7 +234,7 @@
 
         <template v-if="activeSection === 'databases'">
           <section v-if="showDatabaseForm" class="form-surface">
-            <p class="meta create-hint">{{ t("panel.database.createWithUserHint") }}</p>
+            <p class="meta">{{ t("panel.database.createWithUserHint") }}</p>
             <div class="form-grid">
               <label>
                 <span class="field-label">{{ t("panel.database.databaseName") }}</span>
@@ -263,7 +268,7 @@
           </section>
 
           <section v-if="showImportForm" class="form-surface">
-            <p class="meta create-hint">{{ t("panel.database.importHint") }}</p>
+            <p class="meta">{{ t("panel.database.importHint") }}</p>
             <div class="form-grid">
               <label>
                 <span class="field-label">{{ t("panel.database.databaseName") }}</span>
@@ -441,8 +446,16 @@
                   <small class="field-hint">{{ t("panel.database.moveHint") }}</small>
                 </div>
 
-                <!-- DENETLE VE ONAR -->
-                <div class="db-block">
+                <!-- DENETLE VE ONAR.
+                     Kart TAM GENİŞLİK: içindeki tablo (tablo adı · motor · durum · not) dört
+                     sütunlu ve diğer kartların payına düşen ~300px'e sığmıyor; sığdırmaya
+                     çalışmak motor sütununu kırpardı, oysa "neden Onar düğmesi yok" sorusunun
+                     cevabı tam olarak o sütunda yazıyor.
+                     BAŞLIK EKLENDİ: diğer üç kartın `db-label` başlığı varken bu kart doğrudan bir
+                     düğmeyle başlıyordu, yani kartlar arasında tek başlıksız olan oydu ve ne
+                     olduğu ancak düğme okunarak anlaşılıyordu. -->
+                <div class="db-block db-block-wide">
+                  <span class="db-label">{{ t("panel.database.maintenance") }}</span>
                   <div class="row-actions">
                     <button class="secondary compact" :disabled="checking" @click="runCheck(item.name)">
                       {{ checking ? t("panel.database.checking") : t("panel.database.checkRepair") }}
@@ -1475,74 +1488,122 @@ function showNotice(message: string, isError: boolean) {
 </script>
 
 <style scoped>
+/* DETAY KARTI — dört grup ARTIK KART.
+   Önceden dört grup (kullanıcılar / bağlantı / taşı / bakım) yalnızca 0.9rem boşlukla ayrılmış
+   düz `div`lerdi ve ikisi BİREBİR aynı görünüyordu: "kullanıcı ekle" ile "aboneliğe taşı"nın her
+   ikisi de bir açılır liste + mavi bir düğmeden ibaret (.db-attach). Aralarındaki tek fark
+   üstlerindeki küçük büyük-harfli etiketti; yanlış listeye dokunmak tek satır kaymakla oluyordu.
+   Kenar + zemin, grup sınırını belirsiz bırakmıyor.
+   YERLEŞİM de değişti: kartlar alt alta tek sütun yerine sığdığı kadar yan yana dizilir. Detay
+   kartı tek sütunda ~4 ekran yüksekliği tutuyordu ve kullanıcı, tıkladığı veritabanının satırını
+   kaybediyordu. Bilgi AYNI, yalnız yatay alan kullanılıyor. */
 .db-detail {
-  padding: 0.9rem 1.1rem 1.1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-12);
+  padding: var(--sp-12) var(--sp-16) var(--sp-16);
   border-left: 3px solid var(--accent-1);
   background: color-mix(in srgb, var(--accent-1) 5%, transparent);
-  display: grid;
-  gap: 0.9rem;
 }
 
-.db-detail-loading { opacity: 0.7; font-size: 0.88rem; }
+/* Özet satırı, yükleme metni ve bakım kartı sütunlara BÖLÜNMEZ: ilki tek satırlık bir künye,
+   sonuncusu dört sütunlu bir tablo taşıyor. */
+.db-detail-grid,
+.db-detail-loading,
+.db-block-wide {
+  grid-column: 1 / -1;
+}
+
+.db-detail-loading {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
 
 .db-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0.8rem;
+  gap: var(--sp-10);
 }
 
+/* Grup başlığı. Eskiden rengi `opacity: 0.65` ile üretiliyordu: opaklık metni ve zemini birbirine
+   yaklaştırdığı için sonuç zemine göre DEĞİŞİYOR ve iki temada iki ayrı kontrast veriyordu.
+   `--text-muted` bu iş için ölçülmüş belirteçtir (bkz. base.css: her zeminde 4.5 üstü). */
 .db-label {
   display: block;
-  font-size: 0.74rem;
+  margin-bottom: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  opacity: 0.65;
-  margin-bottom: 0.15rem;
 }
 
-.db-block { display: grid; gap: 0.4rem; }
+.db-block {
+  display: grid;
+  align-content: start;
+  gap: var(--sp-6);
+  padding: var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-0);
+}
 
-.db-users { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0; }
+.db-users { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: 0; }
 
-.db-attach { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-.db-attach select { min-width: 220px; }
+.db-attach { display: flex; gap: var(--sp-6); flex-wrap: wrap; align-items: center; }
+.db-attach select { min-width: 200px; flex: 1; }
 
 .db-conn {
   margin: 0;
-  padding: 0.6rem 0.8rem;
-  border-radius: 6px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.16));
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 0.78rem;
+  padding: var(--sp-8) var(--sp-10);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-x: auto;
 }
 
-.db-warn { margin: 0; color: var(--warn-text); font-size: 0.86rem; }
-.db-ok { margin: 0; font-size: 0.86rem; opacity: 0.85; }
+.db-warn { margin: 0; color: var(--warn-text); font-size: var(--fs-sm); }
+.db-ok { margin: 0; color: var(--ok-text); font-size: var(--fs-sm); }
 
-.db-tables { display: grid; gap: 0.3rem; max-height: 20rem; overflow: auto; }
+.db-tables { display: grid; gap: var(--sp-2); max-height: 20rem; overflow: auto; }
 
 .db-table-row {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr 1.4fr;
-  gap: 0.5rem;
+  gap: var(--sp-6);
   align-items: center;
-  font-size: 0.82rem;
-  padding: 0.25rem 0;
+  font-size: var(--fs-xs);
+  padding: var(--sp-2) 0;
 }
 
-.db-table-row label { display: flex; align-items: center; gap: 0.4rem; }
+.db-table-row label { display: flex; align-items: center; gap: var(--sp-4); }
 
 /* Dar ekranda tablo satiri kendi icinde kaysin, sayfa yatay kaymasin. */
 @media (max-width: 720px) {
-  .db-table-row { grid-template-columns: 1fr; gap: 0.15rem; }
+  .db-table-row { grid-template-columns: 1fr; gap: var(--sp-2); }
 }
 
+/* ÜÇ SEKME ŞERİDİ, ÜÇ FARKLI DÜZEY — ama üçü de BİREBİR aynı çiziliyordu.
+   Bu ekranda aynı anda üç `.segmented-tabs` görünür: (1) bölüm seçimi (Veritabanları · Web arayüzü ·
+   Önbellek · Aktarım · Ayarlar · Tüketiciler), (2) motor seçimi (MariaDB · MySQL · …), (3) çalışma
+   alanı sekmeleri (Veritabanları · Kullanıcılar · Uzak erişim · Bağlantı). Hepsi aynı kutulu-hap
+   görünümünde olduğu için hangisinin hangisini kapsadığı okunmuyordu — kullanıcının "karışık"
+   dediği yer tam olarak burası.
+   ÇÖZÜM HİYERARŞİ, GİZLEME DEĞİL: en üstteki şerit SAYFA düzeyi olduğu için kendi kutusundan
+   çıkarılıp klasik alt-çizgili sekme çubuğuna dönüştürülür (aktif sekmenin `inset 0 -2px` alt
+   çizgisi zaten base.css'te var; artık altındaki kurala oturuyor). Diğer iki şerit kendi araç
+   çubuklarının İÇİNDE hap olarak kalır — yani "içeride" oldukları görünür. Hiçbir sekme kaldırılmadı. */
 .primary-tabs {
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: transparent;
 }
 
 .engine-toolbar {
@@ -1556,7 +1617,7 @@ function showNotice(message: string, isError: boolean) {
 .engine-tabs button {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .engine-state {
@@ -1575,21 +1636,25 @@ function showNotice(message: string, isError: boolean) {
   background: var(--warn-text);
 }
 
+/* Motor kurulu değil / MSSQL yok durumu: bir DURUM KUTUSU.
+   Zemini `--input-bg` idi; o belirteç GİRDİ ALANININ zeminidir (açık temada saf beyaz, koyu temada
+   panelden koyu) ve kutunun "içine yazılabilir bir alan" gibi okunmasına yol açıyordu. Aynı işi
+   yapan diğer bilgi yüzeyleri gibi `--surface-2` kullanır. */
 .compact-state {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
+  gap: var(--sp-12);
   align-items: center;
-  padding: 14px;
+  padding: var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
-  background: var(--input-bg);
+  background: var(--surface-2);
 }
 
 .compact-state div,
 .compact-state > span {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 .compact-state span {
@@ -1599,7 +1664,7 @@ function showNotice(message: string, isError: boolean) {
 .install-meta {
   display: flex !important;
   align-items: center;
-  gap: 10px !important;
+  gap: var(--sp-10) !important;
 }
 
 .install-meta code,
@@ -1620,15 +1685,6 @@ function showNotice(message: string, isError: boolean) {
   width: min(310px, 38vw);
 }
 
-.inline-create {
-  grid-template-columns: minmax(220px, 430px) auto;
-  align-items: end;
-}
-
-.inline-create button {
-  width: fit-content;
-}
-
 .database-row {
   grid-template-columns: minmax(190px, 1.35fr) 0.8fr 0.7fr minmax(180px, 1.1fr) auto;
 }
@@ -1637,16 +1693,14 @@ function showNotice(message: string, isError: boolean) {
   grid-template-columns: minmax(190px, 1.2fr) 0.9fr 1fr 0.7fr;
 }
 
-.grant-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.grant-surface {
-  max-width: 1180px;
-}
-
-.form-action {
-  width: fit-content;
+/* YIKICI EYLEM AYRI DURUR. Veritabanı satırında dört düğme (Detay · phpMyAdmin · Adminer · Sil)
+   8px aralıkla dizilmişti; "Adminer'de aç" ile "Veritabanını sil" arasındaki mesafe, iki okuma
+   eylemi arasındaki mesafeyle AYNIYDI. `margin-left: auto` düğmeyi kendi satırının sağ ucuna
+   iter — satır uzamaz, düğme gizlenmez, yalnızca komşusundan ölçülebilir biçimde uzaklaşır.
+   Kullanıcı satırında da aynı kural (Parola değiştir | Kullanıcıyı sil). */
+.database-row .row-actions .danger,
+.user-row .row-actions .danger {
+  margin-left: auto;
 }
 
 .manage-existing {
@@ -1656,8 +1710,9 @@ function showNotice(message: string, isError: boolean) {
 .manage-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-12);
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .connection-table {
@@ -1669,31 +1724,13 @@ function showNotice(message: string, isError: boolean) {
   min-width: 560px;
 }
 
-.compact-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.compact-head h3,
-.compact-head p {
-  margin: 0;
-}
-
-.section-head {
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
 .meta {
   margin: 0;
   color: var(--text-muted);
 }
 
 @media (max-width: 980px) {
-  .database-summary,
-  .grant-grid {
+  .database-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1713,9 +1750,7 @@ function showNotice(message: string, isError: boolean) {
     flex-direction: column;
   }
 
-  .database-summary,
-  .grant-grid,
-  .inline-create {
+  .database-summary {
     grid-template-columns: 1fr;
   }
 

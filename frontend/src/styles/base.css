@@ -125,7 +125,12 @@
   --fs-sm: 0.86rem;
   --fs-md: 0.92rem;
   --fs-lg: 1rem;
+
+  /* BAŞLIK ADIMLARI — gövdeden AYRILMAK zorundalar (gerekçesi `.panel h2/h3/h4` kuralında).
+     13.5px tabanda: h4 = 14.3px, h3 = 15.9px, h2 = 19.2px. */
+  --fs-h4: 1.06rem;
   --fs-xl: 1.18rem;
+  --fs-2xl: 1.42rem;
 
   /* modern paneller ile aynı font: Open Sans (humanist, yumuşak, panelde dinlendirici). */
   font-family: "Open Sans Variable", "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -371,13 +376,34 @@ select {
   letter-spacing: -0.015em;
 }
 
+/* BAŞLIK MERDİVENİ.
+   ============================================================================
+   ÖLÇÜLDÜ, eski hâli neredeyse DÜZDÜ: gövde 13.5px · `h4` boy kuralı YOK (13.5px, gövdeyle
+   BİREBİR aynı) · `h3` = `--fs-lg` = 1rem = **13.5px, yine gövdeyle aynı** · `h2` = 1.18rem =
+   15.9px. Yani üç başlık düzeyinin ikisi gövde metninden HİÇ ayrılmıyordu; tek fark kalınlıktı.
+   Kalınlık tek başına hiyerarşi kurmaz — sonuç, kullanıcının "karışık, göze hitap etmiyor"
+   dediği metin duvarı.
+
+   Yeni merdiven: 13.5 → 14.3 → 15.9 → 19.2px (oranlar 1.06 / 1.11 / 1.21).
+   Adımlar BİLEREK küçük: burası pazarlama sayfası değil, veri yoğun bir kontrol paneli;
+   büyük sıçramalar ekrana sığan satır sayısını düşürürdü. Amaç göz kırpmadan sıralamayı
+   ANLAYABİLMEK, başlığı bağırtmak değil.
+
+   `--fs-lg` DEĞİŞTİRİLMEDİ: `h3` dışında beş yerde daha kullanılıyor ve orada gövde boyu
+   doğru. Başlık için var olan `--fs-xl` yukarı kaydırıldı, en üste yeni bir adım eklendi. */
 .panel h2 {
-  font-size: var(--fs-xl);
+  font-size: var(--fs-2xl);
   font-weight: 660;
 }
 
 .panel h3 {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-xl);
+  font-weight: 640;
+}
+
+/* `h4` eskiden hiç boy kuralı almıyordu: bölüm başlığı ile içindeki cümle aynı boydaydı. */
+.panel h4 {
+  font-size: var(--fs-h4);
   font-weight: 640;
 }
 
@@ -766,6 +792,54 @@ button.secondary {
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
 }
 
+/* ÜÇÜNCÜ AĞIRLIK: sessiz düğme (`ghost`) ve metin bağlantısı (`link-button`).
+   ============================================================================
+   NEDEN BURADA: ikisi de ŞABLONLARDA KULLANILIYORDU ama HİÇBİR YERDE TANIMLI DEĞİLDİ.
+   ÖLÇÜLDÜ: `ghost` 8 çağrı yerinde (AttentionSectionNotice, RunningTaskBanner, CronView ×3,
+   ServerHealthView, SiteDetailView ×2), `link-button` 2 yerde. CSS tanımsız sınıfı HATA SAYMAZ:
+   düğme sessizce BİRİNCİL mavi olarak çiziliyordu. Sonuç, gri bir açıklama şeridinin içindeki
+   "Kapat" düğmesinin, tablodaki gerçek eylemlerden DAHA BASKIN görünmesiydi — kullanıcının
+   "bazı yerler karışık, göze hitap etmiyor" dediği şeyin ölçülebilir bir sebebi.
+
+   Tanımlar tek tek ekranların kapsamlı stillerinde yaşıyordu (`CronView`, `FilesView`,
+   `SetupWizardView`) ve kapsamlı stil BİLEŞENLER ARASI GEÇMEZ — yani aynı sınıf bir ekranda
+   doğru, komşusunda yanlış çiziliyordu. Kaynak tek olmalı; ortak yer burası. */
+button.ghost {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent-1) 30%, transparent);
+  color: var(--accent-text);
+  box-shadow: none;
+}
+
+button.ghost:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent-1) 10%, transparent);
+  filter: none;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Düğme gibi davranan ama BAĞLANTI gibi görünen öge: dosya adları, yol çubuğu parçaları,
+   "şifremi unuttum" gibi ikincil geçişler. Düğme olarak kalması ERİŞİLEBİLİRLİK içindir
+   (klavye ve ekran okuyucu onu eylem olarak görür); yalnız görünümü bağlantıdır. */
+button.link-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-1);
+  font-weight: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+button.link-button:not(:disabled):hover {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+  text-decoration: underline;
+}
+
 /* Birincil düğmeyle aynı gerekçe: ÖLÇÜLDÜ, #fff1f1 metin `--danger-1` üzerinde 3.11:1 idi.
    Yeni üst durak 4.53:1, alt durak 6.69:1. Bunlar SİLME/DURDURMA düğmeleri — yazısının
    okunmasının en çok önemli olduğu yer tam olarak burası. */
@@ -931,6 +1005,227 @@ button:disabled {
   .setting-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* ==========================================================================
+   PAYLASILAN GORSEL SINIFLAR — TEK KAYNAK.
+
+   NEDEN BURADA (olculdu): 87 `.vue` sablonundaki statik `class="..."` adlari tarandi
+   (`:class` icindeki KOSUL DEGERLERI ayiklandi — `tab === 'allow'` bir sinif adi degildir).
+   Asagidaki adlarin hepsi BIRDEN COK bilesende kullaniliyordu ama tanimlari tek tek
+   ekranlarin KAPSAMLI (scoped) stillerinde yasiyordu. Kapsamli stil bilesenler arasi
+   GECMEZ: ayni ad bir ekranda dogru, komsusunda BICIMSIZ ciziliyordu. CSS bunu hata
+   saymaz, derleme uyarmaz — bu yuzden yillarca durdu.
+   Her kuralin kendi yorumunda kac cagri yeri / kac kopya oldugu ve kopyalar arasindaki
+   FARKIN hangi gerekce ile cozuldugu yazili.
+   Nobetci: `CssSharedClassTests` — birden cok bilesende kullanilan bir sinif, kullanan
+   HER bilesende ya da burada tanimli olmak zorunda.
+   ========================================================================== */
+
+/* BOLUM BASLIGI: solda baslik blogu (h2/h3/h4 + `.meta`), sagda denetim (dugme/secim).
+   SAYILDI: 31 ayri kopya, ve 8 bilesende (MailQueueCard, MailRelayCard, SiteAliases,
+   SubscriptionCard, WordPressUpdates, NginxView, PhpView, SeoView) HIC tanim yoktu —
+   oralarda baslik ile yanindaki dugme alt alta, hizasiz duz bir blok olarak ciziliyordu.
+
+   KOPYALAR ARASINDAKI FARKLAR olculdu ve secim cogunluga gore yapildi:
+   - `align-items`: 25 kopya `flex-start`, 6 kopya `center`. `flex-start` SECILDI. Sebep
+     yalnizca cogunluk degil: baslik blogu iki satir (baslik + `.meta` aciklamasi),
+     yanindaki denetim tek satir. `center` bir dugmeyi iki satirlik basligin ORTASINA
+     hizalar; goz basligin ust satiriyla dugmenin ust kenarini ayni cizgide bekler.
+   - `gap`: 15 kopya 12px, 14 kopya 10px, birer tane 16px/1rem. `--sp-12` SECILDI:
+     hem coklukta once, hem de panelin kendi izgara araligiyla (`.panel { gap: --sp-12 }`)
+     ayni — baslik satiri panelin ritmine oturur.
+   - `flex-wrap`: kopyalarin yaklasik yarisinda vardi. EKLENDI: yoksa dar panelde uzun
+     bir baslik ile yanindaki secim kutusu ayni satirda birbirini eziyor. */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  flex-wrap: wrap;
+}
+
+/* Kopyalarin 4'u bunu ayrica yaziyordu. `.panel h2/h3/h4` zaten sifirliyor ama
+   `.section-head` panel DISINDA da kullaniliyor (kartlar, bilesenler). */
+.section-head :is(h2, h3, h4) {
+  margin: 0;
+}
+
+/* BOLUM USTBASLIGI (eyebrow): basligin uzerindeki kucuk, buyuk harfli, vurgu renkli satir.
+   SAYILDI: 5 bilesende kullaniliyor, tanim YALNIZ SitesView'de vardi; kalan 4 ekranda
+   (ProtectedDirs, SiteBackup, SiteStatistics, WordPressToolkit) duz bir paragraf olarak
+   ciziliyordu — yani bu ekranlarda baslik uc satirlik gri bir metin yiginiydi.
+   Tanim SitesView'den BIREBIR alindi (tek kaynak oldugu icin "hangisi dogru" sorusu yok).
+   0.68rem BILEREK yazi olcegi disinda: bu bir govde metni degil, MainLayout'un
+   `.eyebrow-row` (0.66rem) ile ayni rutbede bir ustbaslik. */
+.section-kicker {
+  margin: 0 0 var(--sp-4);
+  color: var(--accent-1);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* BASLIK SATIRINDAKI SECIM KUTUSU (site secici, tarih araligi...).
+   SAYILDI: 8 bilesende kullaniliyor, tanim yalniz 2'sinde (Monitoring 140px,
+   SiteHosting 130px). Kalan 6'sinda (QueryHistory, SubscriptionCard, DatabasesView,
+   SeoView, SiteBuilderView, SiteStatisticsView) sinif hicbir sey yapmiyordu ve global
+   `select { width: 100% }` kurali geciyordu: site secici baslik satirinin TAMAMINI
+   kaplayip basligi ezen dev bir kutuya donusuyordu. "Compact" adini tasiyan sey
+   panelin en genis ogesiydi.
+   140px SECILDI (130 degil): iki kopyadan buyuk olan, ve "example.com" gibi tipik bir
+   alan adini kirpmadan gosteren taban. Ust sinir yok — `width: auto` icerige uyar. */
+.compact-select {
+  width: auto;
+  min-width: 140px;
+}
+
+/* ONAY KUTUSU + ETIKET (form icinde tek satir).
+   SAYILDI: 6 bilesende kullaniliyor, 4 kopya BIREBIR ayni (tek fark: 8px karsi
+   `var(--sp-8)`), 2 bilesende (MailRelayCard, PhpView) tanim YOKTU — orada etiket
+   onay kutusunun ALT SATIRINA dusuyordu. */
+.toggle-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  color: var(--text-soft);
+}
+
+.toggle-field input {
+  width: auto;
+}
+
+/* TABLO SATIRINDAKI DUGME.
+   SAYILDI: 7 bilesende kullaniliyor, 4 kopya (`width: auto`), 3 bilesende tanim yok.
+   DURUST NOT — OLCULDU: tanimlayan dort gorunumun HICBIRINDE dugmeyi geren bir kural
+   yok (`.row-actions` bir flex satiri; flex cocugu yatayda gerilmez), yani kural bugun
+   hicbir yerde gorunur bir is yapmiyor. Yine de tek satir olarak burada tutuluyor:
+   `button { width: 100% }` yazan gorunumler var (ProxyView, SetupWizardView,
+   SiteDetailView, SitesView) ve bu ad tam olarak oradaki niyeti tasiyor. UYARI: o dort
+   gorunumde kapsamli `button[data-v]` (0,1,1) ile burasi (0,1,1) BERABERE kalir ve
+   kapsamli stil sonra yuklendigi icin kazanir — oralarda kacis kurali yerelde olmali. */
+.row-button {
+  width: auto;
+}
+
+/* UYARI SERIDI — `.notice`in kehribar surumu, `.notice.error`in kardesi.
+   SAYILDI: 3 bilesende kullaniliyor, tanim yalniz SetupWizardView'de vardi; SeoView (4
+   cagri) ve SiteBuilderView (2 cagri) uyari seritleri MAVI bilgi seridi olarak
+   ciziliyordu — yani "tarama yarida kesildi" ile "tarama tamamlandi" ayni renkteydi.
+   Ozgulluk `.notice.error` ile AYNI kalipta (0,2,0) yazildi ki siralamaya bagli kalmasin. */
+.notice.warn-banner {
+  display: grid;
+  gap: var(--sp-4);
+  border-color: color-mix(in srgb, var(--warn-1) 20%, transparent);
+  background: color-mix(in srgb, var(--warn-1) 12%, transparent);
+  color: var(--warn-text);
+}
+
+/* AYAR BOLUMU / AYAR SATIRLARI KAPSAYICISI.
+   `.settings-section`: 4 kopya BIREBIR ayni (`display: grid; gap: 12px`), LicenseView
+   kullaniyor ama tanimlamiyordu.
+   `.settings-rows`: tanim yalniz SiteHostingView'de; SubscriptionCard ayni adi kullanip
+   hicbir sey almiyordu. Bu, hemen asagidaki `.setting-row` ile AYNI hatanin kapsayici
+   tarafi — biri tasinip digeri birakilmisti. */
+.settings-section,
+.settings-rows {
+  display: grid;
+  gap: var(--sp-12);
+  min-width: 0;
+}
+
+/* DURUM RENKLI METIN. `.danger-text` LogsView'de tanimli, ClusterView'de tanimsizdi;
+   `.warn-text` ise HICBIR YERDE tanimli degildi (ClusterView onu bir uyari cumlesine
+   veriyor ve cumle duz metin rengiyle ciziliyordu — yani uyari, uyari gibi gorunmuyordu). */
+.danger-text {
+  color: var(--danger-text);
+}
+
+.warn-text {
+  color: var(--warn-text);
+}
+
+/* BILDIRIM ALTINDAKI AYRINTI (sunucudan gelen ham hata/cikti).
+   Tanim MailView'deydi; AutomationView ayni adi kullaniyor ama hicbir sey almiyordu:
+   ham cikti govde metniyle ayni boyda, ayni renkte akiyordu.
+   Ust bosluk ARTI degerde (eski MailView kopyasindaki `-4px` degil): eksi bosluk, blogun
+   bildirimin hemen ALTINDA durdugu varsayimiyla yazilmisti ve `.page-notice` artik
+   `position: fixed` oldugu icin o varsayim dogru degil — eksi bosluk yalnizca blogu bir
+   onceki ogeye yapistiriyordu. */
+.notice-details {
+  margin: var(--sp-4) 0 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+.notice-details pre {
+  margin: var(--sp-6) 0 0;
+  padding: var(--sp-8) var(--sp-10);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* IZGARA ICINDEKI ONAY KUTUSU ETIKETI — panelin DORDUNCU onay kutusu adi
+   (`.check-field`, `.checkbox-field`, `.checkbox-row` yukarida).
+   SAYILDI: 4 bilesende kullaniliyor, 3 kopya, MigrationView'de tanim yok. Kopyalar
+   arasindaki tek fark kutu boyu: 18px (ProxyView, SetupWizardView) karsi 17px
+   (SitesView). 18px SECILDI: cogunluk, ve bir pikselin gorsel bedeli yok.
+   `display: grid`i bu kural VERMEZ; onu `.form-grid label` kurali verir — burada yalniz
+   sutunlar tanimlanir (kutu kadar + kalani etikete).
+
+   `label.checkbox input` OZGULLUGU ZORUNLU, duz `.checkbox input` DEGIL: ProxyView ve
+   SetupWizardView kapsamli stillerinde `input, textarea, select, button { width: 100% }`
+   yaziyor. O kural [data-v] ile (0,1,1) olur; `.checkbox input` de (0,1,1) — BERABERE
+   kalir ve kapsamli stil sonra yuklendigi icin KAZANIR, onay kutusu hucreyi kaplayip
+   etiketi alt satira duserdi (base.css'te `.check-field input` ile birebir ayni tuzak
+   yasandi, bkz. yukaridaki not). `label.checkbox input` (0,1,2) bu berabereligi bozar. */
+.checkbox {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+label.checkbox input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.checkbox span {
+  margin-left: var(--sp-8);
+}
+
+/* KUCUK ACIKLAMA METNI (`.field-hint`in kisa adi).
+   SAYILDI: 8 bilesende kullaniliyor, 7 kopya, LogsView'de tanim yok.
+   KOPYALAR AYNI DEGILDI: 3 kopya 0.8rem, 2 kopya 13px (govde metni 13.5px — yani "ipucu"
+   ana metinle neredeyse ayni boyda, hiyerarsi yok), 2 kopya bunlara `margin-top`/
+   `white-space` ekliyor.
+   `--fs-xs` (0.82rem = 11.07px) SECILDI: yazi olceginin 0.8rem'e en yakin adimi (fark
+   0.27px, hicbir ekranda ayirt edilemez) ve 13px'lik iki kopyayi olcege cekiyor.
+   Yalniz EK ozellik yazan kopyalar (margin/white-space) yerinde birakildi: onlar ayni
+   tanimin tekrari degil, o ekrana ozgu ilave. */
+.hint {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* KUTUCUK ETIKETI (deger karesinin ustundeki kucuk buyuk-harfli ad).
+   SAYILDI: 4 bilesende kullaniliyor, 3 kopya ve UCU DE FARKLIYDI: AspView 0.84rem +
+   0.08em aralik + buyuk harf, DashboardOverview `--fs-xs` (sonra 0.7rem'e eziliyor) +
+   0.035em + buyuk harf, ProxyView YALNIZ gri renk (buyuk harf yok). SiteHtaccessView 8
+   cagri yapiyor ve hicbir tanim almiyordu.
+   Yani ayni ad panelde uc ayri rutbede ve iki ayri harf duzeninde ciziliyordu.
+   DashboardOverview'in olcek belirtecine bagli surumu temel alindi, boyut bir adim
+   asagi (`--fs-2xs`) cekildi: bu etiket bir DEGERIN ustunde durur, degerden kucuk
+   olmasi hiyerarsinin kendisidir. */
+.tile-label {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
 }
 
 /* SAYFA DUZEYI BILDIRIM — islem sonucu.

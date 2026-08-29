@@ -98,7 +98,16 @@ public sealed class HtaccessPanelServiceTests : IDisposable
             => throw new NotSupportedException();
     }
 
-    private HtaccessPanelService Servis(string? havuzSurumu = "v4.0", Exception? havuzHatasi = null)
+    /// <param name="kayit">
+    /// Modülün IIS kaydının ÖLÇÜMÜ. VARSAYILAN "kusursuz kayıt" ve bu bilinçli: buradaki testlerin
+    /// konusu dosya/kip/destek raporudur, kayıt DEĞİL. Varsayılan "kayıt yok" olsaydı bu dosyadaki
+    /// her test dolaylı olarak kayıt eksikliğini de ölçer, asıl konuları bulanıklaşırdı. Kaydın
+    /// kendi hâlleri <c>HtaccessModuleRegistryTests</c>'te tek tek ölçülüyor.
+    /// </param>
+    private HtaccessPanelService Servis(
+        string? havuzSurumu = "v4.0",
+        Exception? havuzHatasi = null,
+        HtaccessModuleRegistrationState? kayit = null)
     {
         var site = new SiteDto
         {
@@ -114,6 +123,8 @@ public sealed class HtaccessPanelServiceTests : IDisposable
             new HtaccessEngine(),
             new SahteSiteServisi(site),
             new SahteAspServisi(havuzSurumu, havuzHatasi),
+            new HtaccessModuleRegistryTests.SahteModulKaydi(
+                kayit ?? HtaccessModuleRegistryTests.Kayitli()),
             // TAM NITELIKLI: "Options" adi AdaPanel.Infrastructure.Options AD ALANINA cozuluyor,
             // Microsoft.Extensions.Options.Options SINIFINA degil.
             Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = _veriKoku }),
@@ -223,16 +234,20 @@ public sealed class HtaccessPanelServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Motorun IIS içinde çalışmasını engelleyen bir neden KALMADI — ve panel bunu ölçüme
-    /// dayandırarak söylüyor.
+    /// HER ÖLÇÜM YERİNDEYSE panel motoru "yüklü" gösterir ve engel bildirmez.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Bu test eskiden tersini ölçüyordu ("motor yüklü DEĞİL, gerekçesi şu"). Gerekçe gerçekti:
-    /// motor <c>net8.0-windows</c>, IIS modülü <c>net48</c> olmak zorundaydı ve bağlantı fiziksel
-    /// olarak yapılamıyordu. Engel kalktı (motorun kaynağı artık modül projesinde de derleniyor)
-    /// ve panelin "hiçbir şey olmayacak" şeridi bunu göstermeyi BIRAKMALI — yoksa çalışan bir
-    /// özelliği bozuk gösterirdi.
+    /// Bu test iki kez anlam değiştirdi ve ikisi de ders. (1) Başta tersini ölçüyordu ("motor
+    /// yüklü DEĞİL"): motor <c>net8.0-windows</c>, IIS modülü <c>net48</c> olmak zorundaydı ve
+    /// bağlantı fiziksel olarak yapılamıyordu. O engel gerçekten kalktı. (2) Sonra "engel KALMADI"
+    /// diye ölçüyordu ve BU YANLIŞTI: derleme zamanı engelinin kalkması, çalışma zamanında engel
+    /// olmadığı anlamına gelmiyordu — canlıda modül <c>applicationHost.config</c>'te yerinde
+    /// olmadan panel yine "yüklü, engel yok" diyordu.
+    /// </para>
+    /// <para>
+    /// Bugün ölçtüğü şey: havuz uygun VE kayıt doğrulanmış olduğunda panel doğru cevabı veriyor.
+    /// Kaydın eksik/bozuk hâlleri <c>HtaccessModuleRegistryTests</c>'te tek tek ölçülüyor.
     /// </para>
     /// <para>
     /// <b>Bu test motorun net48'de yüklendiğini KANITLAMAZ</b>, panelin ne rapor ettiğini ölçer.
@@ -240,13 +255,13 @@ public sealed class HtaccessPanelServiceTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task MOTOR_ENGELI_KALMADI_ve_panel_bunu_ENGEL_OLARAK_GOSTERMIYOR()
+    public async Task HAVUZ_UYGUN_ve_KAYIT_DOGRULANMISSA_panel_ENGEL_GOSTERMEZ()
     {
         var rapor = await Servis().GetReportAsync("ornek.com", CancellationToken.None);
 
         Assert.Empty(rapor.EngineBlockers);
 
-        // Havuz "v4.0" -> destekleniyor -> panel motorun yuklenebilecegini soyluyor.
+        // Havuz "v4.0" + kayit dogrulanmis -> panel motorun yuklendigini soyluyor.
         Assert.True(rapor.EngineLoadedInIis);
     }
 
@@ -258,6 +273,10 @@ public sealed class HtaccessPanelServiceTests : IDisposable
     /// Ters yön ölçülmezse <c>EngineLoadedInIis</c> sabit <c>true</c> yazılmış olabilirdi — yani
     /// eski yalanın (sabit <c>false</c>) simetriği. Yönetilen kod olmayan bir havuzda modülün
     /// yüklenmesi mümkün değildir; bu durumda <c>false</c> TAHMİN değil, kesin bilgidir.
+    /// <para>
+    /// Kayıt BİLEREK kusursuz veriliyor: <c>false</c>'un sebebinin havuz olduğu, kaydın eksikliği
+    /// OLMADIĞI böylece ölçülüyor.
+    /// </para>
     /// </remarks>
     [Theory]
     [InlineData("")]      // no_managed_code

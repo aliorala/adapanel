@@ -1,5 +1,5 @@
 <template>
-  <section class="panel wide wp-view">
+  <section class="panel wp-view">
     <div class="wp-header">
       <div>
         <p class="section-kicker">WordPress Toolkit</p>
@@ -186,11 +186,6 @@ async function toggleMaintenance() {
 .wp-tile.path strong {
   font-size: 0.78rem;
   word-break: break-all;
-}
-
-.tile-label {
-  color: var(--text-muted);
-  font-size: 0.72rem;
 }
 
 .wp-tile strong.on {

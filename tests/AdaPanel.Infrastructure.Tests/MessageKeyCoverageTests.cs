@@ -117,11 +117,20 @@ public sealed class MessageKeyCoverageTests
         // TAMAMI nobetcinin gormedigi yerdeydi. Cevirisi unutulsa kullanici uyari kartinda ham
         // anahtari gorurdu -- korumanin var olma sebebinin ta kendisi.
         //
+        // `StatusMessage` AYRICA taranir: "...Key" ile bitmedigi icin yukaridaki dala girmiyordu,
+        // ama kullaniciya AYNEN gosterilen bir anahtar tasiyor. FTP sunucu durumu bu alanla
+        // bildiriliyor (`ftp.control_port_conflict` gibi) ve arayuz onu `t()` ile basiyor --
+        // cevirisi unutulsa ekranda ham anahtar gorunurdu.
+        //
+        // OLCULDU (genisletmeden ONCE): depoda `StatusMessage = "..."` bicimindeki anahtar
+        // sayisi 4 ve dordunun de cevirisi VAR. Yani bu genisletme mevcut bir aciği kapatmiyor,
+        // ILERIDE acilacak olani kapatiyor -- bedeli sifir oldugu icin simdi yapildi.
+        //
         // Yanlis eslesme riski dusuk: yakalanan dize ZATEN anahtar bicimine uymak zorunda
         // (kucuk harfle baslar, en az bir nokta, yalniz harf/rakam/alt cizgi). Dosya adlari,
         // yollar ve SQL parcalari bu bicime uymaz.
         var desen = new Regex(
-            @"(?:new AppException\(\s*|\.Fail\(\s*|WriteResponseAsync\([^,]+,\s*[^,]+,\s*|\b[A-Za-z]*Key\s*=\s*)""([a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)""",
+            @"(?:new AppException\(\s*|\.Fail\(\s*|WriteResponseAsync\([^,]+,\s*[^,]+,\s*|\b(?:[A-Za-z]*Key|StatusMessage)\s*=\s*)""([a-z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)""",
             RegexOptions.Compiled);
 
         var anahtarlar = new HashSet<string>(StringComparer.Ordinal);

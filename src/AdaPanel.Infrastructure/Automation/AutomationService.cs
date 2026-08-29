@@ -491,10 +491,16 @@ public sealed class AutomationService(
             // saklama politikasini durdurmak olurdu.
             var pruned = await backupService.PruneAsync(state.BackupRetentionDays, pruneRemote, cancellationToken);
 
+            var budama = SummarizePrune(pruned);
+            foreach (var satir in budama.TechnicalLines)
+            {
+                summary.AppendLine(satir);
+            }
+
             state.LastBackupRunUtc = DateTime.UtcNow;
-            state.LastBackupStatus = hasError ? "completed_with_errors" : "completed";
+            state.LastBackupStatus = ResolveBackupStatus(hasError, budama);
             state.LastBackupDetails = BuildDetails(
-                $"{siteCount} site, {dbCount} veritabanı yedeklendi, {pruned} eski yedek silindi.",
+                $"{siteCount} site, {dbCount} veritabanı yedeklendi, {budama.Sentence}.",
                 summary.ToString());
         }
         catch (OperationCanceledException)
@@ -509,6 +515,68 @@ public sealed class AutomationService(
             logger.LogError(exception, "Otomatik yedekleme job'u başarısız oldu.");
         }
     }
+
+    /// <summary>Budama sonucunun gece işi özetine yansıması: cümle + teknik satırlar + "hata var mı".</summary>
+    internal sealed record PruneSummary(bool HasFailures, string Sentence, IReadOnlyList<string> TechnicalLines);
+
+    /// <summary>
+    /// Budama sonucunu ÖZETE çevirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA (canlı sunucu, 28.08.2026):</b> panel şunu gösteriyordu —
+    /// <c>"Son çalışma: 28.08.2026 03:09:33 · Tamamlandı · 2 site, 3 veritabanı yedeklendi,
+    /// 7 eski yedek silindi."</c> Kullanıcı ise dosyaları FTP'de görüyordu. Sayı YALAN DEĞİLDİ
+    /// (yalnız tam silinenler sayılır) ama uzak kopyası silinemeyen kayıtlar buraya HİÇ
+    /// ulaşmıyordu: başarısızlık sadece <c>LogWarning</c>'e gidiyor, <c>hasError</c>
+    /// güncellenmiyor ve özet cümlesi yalnız başarıları yazıyordu. Yani gece işi "Tamamlandı"
+    /// derken hedefte yetim dosya bırakıyordu — bu deponun en pahalı hata sınıfı.
+    /// </para>
+    /// <para>
+    /// <b>Neden statik ve saf:</b> karar (durum + cümle) 20 bağımlılıklı bir servisin içinde
+    /// kalırsa ölçülemez; ölçülemeyen koruma bir sonraki düzenlemede sessizce geri alınır.
+    /// </para>
+    /// <para>
+    /// Teknik satırlar <b>ÇEVRİLMEZ</b>: bu depoda sunucunun ürettiği serbest metin dilden
+    /// bağımsız etiket=değer bilgisidir (aynı kalıp <c>BackupService</c>'te
+    /// <c>scan=truncated; reason=...</c> olarak var).
+    /// </para>
+    /// </remarks>
+    internal static PruneSummary SummarizePrune(BackupPruneResultDto pruned)
+    {
+        var cumle = $"{pruned.Removed} eski yedek silindi";
+        if (pruned.RemoteDeleteFailed > 0)
+        {
+            cumle += $", {pruned.RemoteDeleteFailed} yedegin uzak kopyasi SILINEMEDI";
+        }
+
+        if (pruned.LocalDeleteFailed > 0)
+        {
+            cumle += $", {pruned.LocalDeleteFailed} yedegin yerel dosyasi silinemedi";
+        }
+
+        if (!pruned.HasFailures)
+        {
+            return new PruneSummary(false, cumle, []);
+        }
+
+        var satirlar = new List<string>
+        {
+            $"prune: removed={pruned.Removed}; remote_delete_failed={pruned.RemoteDeleteFailed}; "
+            + $"local_delete_failed={pruned.LocalDeleteFailed}"
+        };
+        satirlar.AddRange(pruned.Failures.Select(basarisiz => $"prune: {basarisiz}"));
+
+        return new PruneSummary(true, cumle, satirlar);
+    }
+
+    /// <summary>
+    /// Gece yedekleme işinin durumu. <b>Budama başarısızlığı da "hata"dır</b>: yedekler alınmış
+    /// olsa bile uzak kopyası silinemeyen kayıt hedefte yetim kalır ve kullanıcı bunu ancak
+    /// durumdan öğrenebilir.
+    /// </summary>
+    internal static string ResolveBackupStatus(bool hasError, PruneSummary prune) =>
+        hasError || prune.HasFailures ? "completed_with_errors" : "completed";
 
     private async Task RunSslRenewAsync(AutomationStateRecord state, CancellationToken cancellationToken)
     {

@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Runtime.Versioning;
 using AdaPanel.Core.Common;
 using Microsoft.Extensions.Logging;
@@ -293,8 +293,19 @@ internal static class HtaccessModuleAssemblyLocator
     private const string GacRootTemplate = "%windir%\\Microsoft.NET\\assembly\\GAC_MSIL";
 
     internal static HtaccessModuleAssemblyState Locate()
+        => Locate(Environment.ExpandEnvironmentVariables(GacRootTemplate));
+
+    /// <summary>
+    /// GAC kökü DIŞARIDAN verilebilir — yalnızca ölçülebilirlik için.
+    /// </summary>
+    /// <remarks>
+    /// Gerçek kök makinede TEK bir yerdedir ve testlerde oraya dokunmak imkânsızdır (yönetici
+    /// yetkisi, üstelik makineyi kirletirdi). Parametreli aşırı yükleme olmadan bu sınıfın üç
+    /// değerli sonucundan yalnız BİRİ ölçülebilirdi — yani "bilinmiyor" dalı hiç sınanmazdı ve
+    /// tam da o dal, panelin yalan söylememesini sağlayan dal.
+    /// </remarks>
+    internal static HtaccessModuleAssemblyState Locate(string gacKoku)
     {
-        var gacKoku = Environment.ExpandEnvironmentVariables(GacRootTemplate);
         if (!Directory.Exists(gacKoku))
         {
             // GAC KÖKÜ YOKSA "kurulu degil" DENMEZ. .NET Framework kurulu olmayan ya da alışılmadık

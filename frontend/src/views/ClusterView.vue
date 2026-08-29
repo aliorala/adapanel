@@ -505,14 +505,6 @@ function showNotice(message: string, isError: boolean) {
   align-content: start;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -575,10 +567,6 @@ function showNotice(message: string, isError: boolean) {
 
 .node-actions .cell-muted {
   margin-right: auto;
-}
-
-.row-button {
-  width: auto;
 }
 
 .row-actions button {

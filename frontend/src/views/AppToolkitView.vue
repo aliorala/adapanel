@@ -829,11 +829,6 @@ function showQueueNotice(message: string, isError: boolean) {
   background: currentColor;
 }
 
-.hint {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
 .wp-panel {
   display: grid;
   gap: 14px;

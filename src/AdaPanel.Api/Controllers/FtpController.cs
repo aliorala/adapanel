@@ -32,7 +32,34 @@ public sealed class FtpController(
     {
         var status = await ftpService.EnsureServerAsync(cancellationToken);
         await auditService.AuditAsync(HttpContext, "ftp.server.ensured", "ftp-server", "FTP server installation/configuration ensured.");
-        return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, "ftp.server_ready"));
+
+        // MESAJ ÖLÇÜLEN DURUMDAN GELİR. Burada sabit "ftp.server_ready" yazıyordu: kurulum betiği
+        // patlamadığı sürece panel, hiç kimsenin giriş yapamadığı bir sunucu için de "hazır" diyordu
+        // (bkz. FtpServerStatusDto.IsConfigured — 19.08.2026 ölçümü).
+        return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, status.StatusMessage));
+    }
+
+    /// <summary>
+    /// FTP'nin GERÇEK durumunu ÖLÇER (kurmaz, değiştirmez).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Durumu öğrenmenin tek yolu <c>POST /ftp/ensure</c>'dü: IIS sitesini kuran, FTPSVC'yi yeniden
+    /// başlatan ve yalnız yöneticiye açık bir MUTASYON. "Neden kimse bağlanamıyor" sorusunun bedeli
+    /// servisi yeniden başlatmak olmamalı.
+    /// </para>
+    /// <para>
+    /// <b>Yönetici-özel</b>, çünkü yanıt sunucudaki YABANCI süreçlerin adlarını ve PID'lerini
+    /// içerir (<c>controlPortOwner</c>) — bayiye sunucu envanteri sızdırmak bu ekranın işi değil.
+    /// <c>POST /ftp/ensure</c> de aynı sebeple zaten admin-only.
+    /// </para>
+    /// </remarks>
+    [HttpGet("status")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<FtpServerStatusDto>>> GetStatusAsync(CancellationToken cancellationToken)
+    {
+        var status = await ftpService.GetServerStatusAsync(cancellationToken);
+        return Ok(ApiResponse<FtpServerStatusDto>.Ok(status, status.StatusMessage));
     }
 
     // M5 (panel "yalnız güvenli FTP"): FTPS zorunluluğu server-level → admin-only.

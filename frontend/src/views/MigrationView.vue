@@ -1,5 +1,8 @@
 <template>
-  <section class="panel module-shell migration-view">
+  <!-- `migration-view` sinifi KALDIRILDI: tek isi `.data-row` ile `.status-pill`in ortak
+       tanimlarini ezmekti (`display: grid` -> `flex`, rgba rozet renkleri). Iki ezme de kaynagi
+       duzeltilerek gereksizlesti; kalan bos bir ad, hicbir sey yapmayan bir sinif olurdu. -->
+  <section class="panel module-shell">
     <header class="module-head">
       <div>
         <h2>{{ t("panel.migration.title") }}</h2>
@@ -11,7 +14,11 @@
          (kaynak sekmeleri + ön kontroller + toplu liste + canlı akış günlüğü) ve kullanıcı
          "Taşı"ya bastığında sonuç şeridi sayfanın en tepesinde kalıyordu — görülmeyen bir sonuç,
          ikinci kez basılan bir düğme demektir. Göçte ikinci basış siteyi yeniden taşımaktır. -->
-    <p v-if="notice" :class="['inline-notice', 'page-notice', noticeError ? 'error' : 'ok']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <!-- `notice` + `page-notice` PANELIN ORTAK BILDIRIM DILI (bkz. styles/base.css) ve bu ekran
+         onu KULLANMIYORDU: yerel `.inline-notice` kuralı yeşil/kırmızı zeminleri ELDE yazılmış
+         rgba değerleriyle çiziyordu (rgba(46,160,67,.12) / rgba(218,54,51,.12)). Ölçülen sonuç:
+         aynı panelde iki farklı bildirim görünümü, ve o iki renk temayla DEĞİŞMİYORDU. -->
+    <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <!-- SAYFA YENİLENDİĞİNDE "GÖÇ SÜRÜYOR" KAYBOLMUYOR.
          Canlı adım akışı (SSE) yalnız o sekmeye aitti: yenileme hem adımları hem "sürüyor"
@@ -28,7 +35,7 @@
 
     <div class="form-surface migration-how">
       <h3 class="section-label">{{ t("panel.migration.howTitle") }}</h3>
-      <p class="meta create-hint">{{ t("panel.migration.howWhat") }}</p>
+      <p class="meta">{{ t("panel.migration.howWhat") }}</p>
       <ol class="migration-steps">
         <li>{{ t("panel.migration.howStep1") }}</li>
         <li>{{ t("panel.migration.howStep2") }}</li>
@@ -40,7 +47,7 @@
 
     <div class="form-surface plesk-discover">
       <h3 class="section-label">{{ t("panel.migration.discoverTitle") }}</h3>
-      <p class="meta create-hint">{{ t("panel.migration.discoverHint") }}</p>
+      <p class="meta">{{ t("panel.migration.discoverHint") }}</p>
 
       <!-- Sekme etiketleri i18n'den gelir. Sabit kodlu metin, çeviri parite denetiminden kaçar ve
            dil değişince Türkçe kalır. Kaynak panelin ADI burada işlevseldir: kullanıcı taşımayı
@@ -76,7 +83,7 @@
           <PasswordField v-model="plesk.password" autocomplete="off" />
         </label>
       </div>
-      <p v-if="source === 'plesk'" class="meta create-hint">{{ t("panel.migration.pleskAuthHint") }}</p>
+      <p v-if="source === 'plesk'" class="meta">{{ t("panel.migration.pleskAuthHint") }}</p>
 
       <div v-else class="form-grid">
         <label>
@@ -139,8 +146,12 @@
             <small class="field-hint">{{ t("panel.migration.bulkPathHint") }}</small>
           </label>
           <p class="meta">{{ t("panel.migration.bulkHint") }}</p>
+          <!-- IKINCIL, cunku BIRINCIL DEGIL: ekranda ayni anda iki mavi "goc baslat" dugmesi
+               vardi (toplu + tekil) ve ikisi de ayni agirliktaydi. Sayfanin ana akisi asagidaki
+               yapilandirma kartinda biten TEKIL gocdur; toplu goc onun KISAYOLUDUR. Iki birincil
+               dugme, hangisinin sayfanin cevabi oldugunu goze soylemez. -->
           <div class="row-actions">
-            <button class="compact" :disabled="bulkBusy || selectedDomains.length === 0 || !discoverHost" @click="runBulk">
+            <button class="secondary compact" :disabled="bulkBusy || selectedDomains.length === 0 || !discoverHost" @click="runBulk">
               {{ bulkBusy ? t("panel.migration.bulkRunning") : t("panel.migration.bulkStart", { count: selectedDomains.length }) }}
             </button>
           </div>
@@ -149,7 +160,7 @@
     </div>
 
     <div class="form-surface">
-      <p class="meta create-hint">{{ t("panel.migration.intro") }}</p>
+      <p class="meta">{{ t("panel.migration.intro") }}</p>
 
       <!-- Hedef site -->
       <h3 class="section-label">{{ t("panel.migration.siteSection") }}</h3>
@@ -252,7 +263,7 @@
           <PasswordField v-model="form.targetDatabasePassword" autocomplete="off" />
         </label>
       </div>
-      <p v-if="form.transferDatabase" class="meta create-hint db-user-hint">{{ t("panel.migration.targetDbUserHint") }}</p>
+      <p v-if="form.transferDatabase" class="hint">{{ t("panel.migration.targetDbUserHint") }}</p>
 
       <div class="row-actions">
         <button class="secondary compact" :disabled="validating || !form.siteName.trim()" @click="validate">
@@ -267,7 +278,12 @@
     <section v-if="checks.length || validating" class="form-surface">
       <h3 class="section-label">{{ t("panel.migration.checksTitle") }}</h3>
       <p v-if="validating" class="empty-state" role="status" aria-live="polite">{{ t("panel.migration.validating") }}</p>
-      <div v-for="(check, index) in checks" :key="index" class="data-row">
+      <!-- `data-row` DEGIL `check-row`: bunlar bir TABLO satiri degil, bir kontrol listesi.
+           `data-row` base.css'te `min-width: 720px` tasir (sutunlarin ezilmemesi icin) ve o kural
+           yalnizca `.data-table`in `overflow-x: auto` cercevesi ICINDE zararsizdir. Burada cerceve
+           YOKTU: 720px'in altindaki her ekranda bu uc bolum SAYFAYI YATAY KAYDIRIYORDU. Ustelik
+           kural `display: grid` verip yerel stil onu `flex`e cevirmek zorunda kaliyordu. -->
+      <div v-for="(check, index) in checks" :key="index" class="check-row">
         <span :class="['status-pill', check.ok ? 'ok' : 'danger']">{{ check.ok ? "✓" : "✗" }}</span>
         <span class="cell-muted">{{ t(check.message) }}</span>
       </div>
@@ -275,12 +291,12 @@
 
     <section v-if="liveSteps.length || busy" class="form-surface">
       <h3 class="section-label">{{ t("panel.migration.liveTitle") }}</h3>
-      <p v-if="busy" class="meta create-hint">{{ t("panel.migration.liveHint") }}</p>
+      <p v-if="busy" class="meta">{{ t("panel.migration.liveHint") }}</p>
       <!-- Sunucudan ilk adım listesi gelene kadar bölüm tamamen boştu: göç başlamamış sanılıyordu. -->
       <p v-if="busy && liveSteps.length === 0" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
-      <div v-for="(step, index) in liveSteps" :key="index" class="data-row live-step" :class="step.status">
+      <div v-for="(step, index) in liveSteps" :key="index" class="check-row live-step" :class="step.status">
         <span class="status-pill" :class="stepPillClass(step.status)">{{ stepPillIcon(step.status) }}</span>
         <div class="live-step-body">
           <strong>{{ t(`panel.migration.stepName.${step.step}`) }}</strong>
@@ -297,7 +313,7 @@
           <span :class="['status-pill', entry.overallSuccess ? 'ok' : 'danger']">{{ entry.overallSuccess ? "✓" : "✗" }}</span>
           <strong>{{ entry.domain }}</strong>
         </div>
-        <div v-for="(step, sub) in entry.steps" :key="sub" class="data-row bulk-step">
+        <div v-for="(step, sub) in entry.steps" :key="sub" class="check-row bulk-step">
           <span :class="['status-pill', step.success ? 'ok' : 'danger']">{{ step.success ? "✓" : "✗" }}</span>
           <span>{{ t(`panel.migration.stepName.${step.step}`) }}</span>
           <span class="cell-muted">{{ t(step.message) }}</span>
@@ -620,8 +636,11 @@ function upsertStep(step: string, status: LiveStepStatus, message?: string, deta
   }
 }
 
+// "Sirada" icin AYRI bir sinif YOK: `.status-pill`in kendi varsayilani (ring-track zemin +
+// `--text-muted` metin) zaten tam olarak "henuz olmadi" demek. Yerel `.idle` kurali o varsayilani
+// elde yazilmis rgba(125,133,144,.14) ile TEKRARLIYORDU ve o deger temayla degismiyordu.
 function stepPillClass(status: LiveStepStatus): string {
-  return status === "ok" ? "ok" : status === "fail" ? "danger" : status === "running" ? "run" : "idle";
+  return status === "ok" ? "ok" : status === "fail" ? "danger" : status === "running" ? "run" : "";
 }
 
 function stepPillIcon(status: LiveStepStatus): string {
@@ -636,70 +655,78 @@ function stepStatusText(item: LiveStep): string {
 </script>
 
 <style scoped>
+/* BOLUM BASLIGI — YALNIZ BOSLUK VERIR, BOY VERMEZ.
+   ONCESI OLCULDU: kural `font-size: 0.92rem; opacity: 0.8` yaziyordu. base.css'te `h3` icin
+   kurulan merdiven `--fs-xl` = 1.18rem = 15.9px; bu kural onu 12.4px'e, yani GOVDE METNINDEN
+   (13.5px) DAHA KUCUGE indiriyor, ustune %20 soldurup gri yapiyordu. Sonuc: alti bolum basligi
+   ("Nasil calisir", "Kesif", "Hedef site", "Dosya kaynagi", "On kontroller", "Canli akis")
+   kendi icerdikleri cumlelerden daha silik ciziliyordu — ekranin iskeleti goze hic gorunmuyordu.
+   Boy artik merdivenden gelir; burada yalnizca ust bosluk kalir.
+   ust bosluk 18px -> --sp-4: kapsayici `.form-surface` ZATEN 12px izgara araligi veriyor,
+   yani gercek bosluk 12 + 4 = 16px olur (eskiden 12 + 18 = 30px, olcek disi bir sicrama). */
 .section-label {
-  margin: 18px 0 8px;
-  font-size: 0.92rem;
-  opacity: 0.8;
+  margin: var(--sp-4) 0 0;
 }
 .migration-how .section-label {
   margin-top: 0;
 }
+/* Ust bosluk KALDIRILDI: kapsayici izgara araligi zaten bosluk veriyor, margin ona EKLENIYORDU. */
 .migration-steps {
-  margin: 8px 0 0;
-  padding-left: 1.3rem;
+  margin: 0;
+  padding-left: var(--sp-20);
   display: grid;
-  gap: 7px;
+  gap: var(--sp-6);
 }
 .migration-steps li {
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
   line-height: 1.45;
-  padding-left: 4px;
+  padding-left: var(--sp-4);
 }
 .migration-steps li::marker {
   color: var(--accent-1);
   font-weight: 700;
 }
+/* 16px -> --sp-4. GORUNEN BOSLUK AYNI KALIR: kapsayici izgara 12px veriyor, 12 + 4 = 16. */
 .section-toggle {
-  margin-top: 16px;
+  margin-top: var(--sp-4);
 }
-.migration-view .data-row {
+/* KONTROL / ADIM SATIRI — tablo satiri DEGIL (gerekcesi sablonda).
+   Ayrac cizgisi ust kenardan gelir ki liste ilk satirinin uzerinde bosta duran bir cizgi
+   kalmasin (`.data-row`in alt kenar kalibinda son satirin ayrica sifirlanmasi gerekiyordu). */
+.check-row {
   display: flex;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: center;
-  padding: 8px 0;
+  padding: var(--sp-8) 0;
 }
-.inline-notice {
-  padding: 8px 12px;
-  border-radius: 8px;
+.check-row + .check-row {
+  border-top: 1px solid var(--panel-border);
 }
-.inline-notice.ok {
-  background: rgba(46, 160, 67, 0.12);
-}
-.inline-notice.error {
-  background: rgba(218, 54, 51, 0.12);
-}
+/* Ust/alt bosluk KALDIRILDI: `.form-surface` izgara araligi (12px) sekme seridini zaten
+   ayiriyordu; margin ona eklenince 24px'lik bir boslugu vardi. */
 .source-tabs {
-  margin: 12px 0;
+  margin: 0;
 }
 .domain-rows {
   display: grid;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--sp-6);
 }
+/* `flex-wrap` EKLENDI: uzun bir alan adi ile yanindaki dugme dar panelde birbirini eziyordu. */
 .domain-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: var(--sp-10);
+  flex-wrap: wrap;
+  padding: var(--sp-8) var(--sp-12);
   border: 1px solid var(--panel-border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--surface-1);
 }
 .domain-pick {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   min-width: 0;
   cursor: pointer;
 }
@@ -707,69 +734,68 @@ function stepStatusText(item: LiveStep): string {
   font-weight: 600;
 }
 .bulk-box {
-  margin-top: 14px;
   display: grid;
-  gap: 8px;
-  padding-top: 12px;
+  gap: var(--sp-8);
+  padding-top: var(--sp-12);
   border-top: 1px solid var(--panel-border);
 }
 .bulk-entry {
-  padding: 8px 0;
+  padding: var(--sp-8) 0;
   border-bottom: 1px solid var(--panel-border);
 }
 .bulk-entry-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
+  gap: var(--sp-10);
+  margin-bottom: var(--sp-4);
 }
-.migration-view .data-row.bulk-step {
-  padding: 4px 0 4px 14px;
-  font-size: 0.86rem;
+.check-row.bulk-step {
+  padding: var(--sp-4) 0 var(--sp-4) var(--sp-16);
+  font-size: var(--fs-sm);
   flex-wrap: wrap;
 }
-.migration-view .data-row.live-step {
+.check-row.live-step {
   align-items: flex-start;
 }
 .live-step-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-2);
   min-width: 0;
 }
 .live-step-body strong {
-  font-size: 0.92rem;
+  font-size: var(--fs-md);
 }
+/* `--font-mono` base.css'te TANIMLI; buradaki yedek liste elde yaziliydi ve o listenin
+   icerigi panelin geri kalanindakinden FARKLIYDI (Cascadia yok, SFMono var) — ayni panelde
+   iki ayri tek-aralikli yazi tipi cizilebiliyordu. */
 .step-detail {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
-  padding: 3px 8px;
-  border-radius: 6px;
-  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  padding: var(--sp-2) var(--sp-8);
+  border-radius: var(--radius-sm);
+  margin-top: var(--sp-2);
   word-break: break-word;
   white-space: pre-wrap;
 }
+/* Zeminler elde yazilmis rgba yerine belirteclerden: eski degerler koyu temaya gore secilmisti
+   ve acik temada da AYNEN ciziliyordu (temayla degismeyen renk = bir temada mutlaka yanlis). */
 .step-detail.err {
   color: var(--danger-text);
-  background: rgba(218, 54, 51, 0.1);
+  background: var(--danger-bg);
 }
 .step-detail.ok {
-  color: var(--accent-1);
-  background: rgba(56, 139, 253, 0.1);
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-1) 10%, transparent);
 }
-.db-user-hint {
-  margin-top: 6px;
-}
-/* Canlı durum rozetleri: çalışıyor (dönen) + sırada (soluk). ok/danger global stilden gelir. */
-.migration-view .status-pill.run {
-  background: rgba(56, 139, 253, 0.16);
-  color: var(--accent-1);
+/* Calisan adimin rozeti doner. Renk artik belirtecten: eski rgba(56,139,253,.16) beyaz etiket
+   markasini da, tema degisimini de gormuyordu. */
+.status-pill.run {
+  background: color-mix(in srgb, var(--accent-1) 16%, transparent);
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent-1) 30%, transparent);
   display: inline-block;
   animation: migrate-spin 1s linear infinite;
-}
-.migration-view .status-pill.idle {
-  background: rgba(125, 133, 144, 0.14);
-  color: var(--text-muted);
 }
 @keyframes migrate-spin {
   to {
@@ -777,7 +803,7 @@ function stepStatusText(item: LiveStep): string {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .migration-view .status-pill.run {
+  .status-pill.run {
     animation: none;
   }
 }

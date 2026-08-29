@@ -169,6 +169,23 @@ export type ProtectedDirectory = {
   relativePath: string;
   userName: string;
   realm: string;
+  /**
+   * Koruma İSTEKLERE UYGULANIYOR mu — ölçülmüş değer.
+   *
+   * Kayıt var olduğu hâlde `false` olabilir: doğrulamayı AdaPanel'in IIS modülü yapıyor ve
+   * modül kayıtlı değilse koruma kurulur ama hiçbir isteği durdurmaz. Bunu göstermemek,
+   * kullanıcıya korunmayan bir klasörü korunuyor diye sunmak olurdu.
+   */
+  isActive: boolean;
+  /**
+   * Parola hâlâ ESKİ biçimde, klasörün içinde DÜZ METİN duruyor.
+   *
+   * Eski sürümler parolayı sitenin kendi `web.config`'ine base64 ile yazıyordu — base64
+   * gizleme değil kodlamadır, yani müşterinin FTP'si, PHP betiği ya da site yedeği parolayı
+   * okuyabiliyordu. Dönüşüm otomatik ama modül kayıtlı olmadan yapılamaz (çalışan korumayı
+   * kaldırıp yerine hiçbir şey koymamak olurdu), o yüzden bu durum GÖRÜNÜR kalır.
+   */
+  isLegacyPlaintext: boolean;
 };
 
 export async function getProtectedDirs(siteName: string) {

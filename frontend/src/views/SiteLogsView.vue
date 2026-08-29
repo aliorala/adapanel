@@ -220,11 +220,6 @@ function formatDate(iso: string) {
   word-break: break-word;
 }
 
-.hint {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
 .rotation-card {
   display: grid;
   gap: 10px;

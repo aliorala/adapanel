@@ -31,25 +31,44 @@
 
       <nav class="nav-list" :aria-label="t('panel.layout.menu')">
         <!--
-          `aria-current="page"`: hangi bölümde olduğumuz GÖRSEL olarak yalnız `.active` sınıfının
-          rengiyle söyleniyordu. Ekran okuyucu 40 menü maddesini birbirinin AYNI okuyordu; kullanıcı
-          nerede olduğunu ancak sayfa içeriğini dinleyerek tahmin edebiliyordu.
-          `aria-current` bunun standart karşılığıdır ve ekran okuyucu "geçerli sayfa" diye duyurur.
+          GRUPLU MENÜ: `role="group"` + `aria-labelledby` başlığı maddelere BAĞLAR. Ekran okuyucu
+          "Barındırma grubu, Posta" diye okur; düz listede 21 madde bağlamsız sıralanıyordu.
+          Başlık `<h2>` çünkü üst bardaki sayfa başlığı `<h1>`: gezinme başlıkları onun altında
+          kalmalı, aksi halde belge başlık ağacı iki köklü olurdu.
         -->
-        <button
-          v-for="section in sections"
-          :key="section.id"
-          :class="['nav-item', { active: section.id === activeSection }]"
-          :aria-current="section.id === activeSection ? 'page' : undefined"
-          @click="handleNavigate(section.id)">
-          <span class="nav-glyph">
-            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="iconFor(section.id)"></svg>
-          </span>
-          <span class="nav-copy">
-            <strong>{{ section.label }}</strong>
-          </span>
-          <span v-if="section.badge" class="nav-badge" :title="section.badgeTitle">{{ section.badge }}</span>
-        </button>
+        <div
+          v-for="group in navGroups"
+          :key="group.id"
+          class="nav-group"
+          role="group"
+          :aria-labelledby="`nav-group-${group.id}`">
+          <h2 :id="`nav-group-${group.id}`" :class="['nav-group-title', { 'sr-only': group.hideTitle }]">
+            {{ group.label }}
+          </h2>
+
+          <!--
+            `aria-current="page"`: hangi bölümde olduğumuz GÖRSEL olarak yalnız `.active` sınıfının
+            rengiyle söyleniyordu. Ekran okuyucu 40 menü maddesini birbirinin AYNI okuyordu; kullanıcı
+            nerede olduğunu ancak sayfa içeriğini dinleyerek tahmin edebiliyordu.
+            `aria-current` bunun standart karşılığıdır ve ekran okuyucu "geçerli sayfa" diye duyurur.
+          -->
+          <div class="nav-group-items">
+            <button
+              v-for="section in group.sections"
+              :key="section.id"
+              :class="['nav-item', { active: section.id === activeSection }]"
+              :aria-current="section.id === activeSection ? 'page' : undefined"
+              @click="handleNavigate(section.id)">
+              <span class="nav-glyph">
+                <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="iconFor(section.id)"></svg>
+              </span>
+              <span class="nav-copy">
+                <strong>{{ section.label }}</strong>
+              </span>
+              <span v-if="section.badge" class="nav-badge" :title="section.badgeTitle">{{ section.badge }}</span>
+            </button>
+          </div>
+        </div>
       </nav>
 
       <div class="sidebar-foot">
@@ -238,12 +257,115 @@ const NAV_ICONS: Record<string, string> = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-2.6-1.5L14 .9h-4l-.5 2.7a7.6 7.6 0 0 0-2.6 1.5l-2.3-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-1a7.6 7.6 0 0 0 2.6 1.5l.5 2.7h4l.5-2.7a7.6 7.6 0 0 0 2.6-1.5l2.3 1 2-3.4z"/>',
   backup: '<path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/>',
   exit: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h12"/>',
-  migration: '<path d="M4 7h12M12 3l4 4-4 4"/><path d="M20 17H8M12 21l-4-4 4-4"/>'
+  migration: '<path d="M4 7h12M12 3l4 4-4 4"/><path d="M20 17H8M12 21l-4-4 4-4"/>',
+  /*
+   * AŞAĞIDAKİ 10 İKON SONRADAN EKLENDİ — ÖNCESİNDE HEPSİ AYNI BOŞ DAİREYDİ.
+   *
+   * ÖLÇÜLDÜ (canlı panel 0.7.9, yönetici menüsü): 21 maddenin 9'u `iconFor` yedeğine düşüyordu —
+   * Müşteriler & Bayiler, Site kurucu, SEO araçları, Danışman, Kayıtlar, Faturalama, Sunucular,
+   * Yapay Zeka, Hesap. Ekranda dokuz tane BİRBİRİNİN AYNI `<circle r="7"/>` çiziliyordu; müşteri
+   * menüsündeki "Kullanıcılar" (subusers) ile birlikte sayı 10. İkon o maddelerde bilgi taşımıyor,
+   * yalnızca yer kaplıyordu: göz taraması ölüyor, kullanıcı her seferinde ETİKETİ OKUMAK zorunda
+   * kalıyordu. Bir bölümün üç ayrı "insan" ikonu olması (accounts/subusers/account) da bilinçli
+   * bir ayrımdır: kalabalık = müşteriler, kişi+artı = abonelik altı kullanıcılar, tek kişi = kendi
+   * hesabım. Yedek (`iconFor`) DURUYOR ama artık hiçbir bölüm ona düşmüyor; bunu
+   * PanelNavigationIconTests sabitliyor.
+   */
+  accounts: '<circle cx="9" cy="8.5" r="3.2"/><path d="M2.5 19.5c0-3.4 2.9-5.2 6.5-5.2s6.5 1.8 6.5 5.2"/><path d="M16.2 5.9a3.2 3.2 0 0 1 0 5.2M18 14.6c2.1.7 3.5 2.4 3.5 4.9"/>',
+  subusers: '<circle cx="9.5" cy="8.5" r="3.2"/><path d="M3 19.5c0-3.4 2.9-5.2 6.5-5.2 1.1 0 2.1.2 3 .5"/><path d="M18 13.5v7M14.5 17h7"/>',
+  account: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20c0-3.7 3.1-5.6 7-5.6s7 1.9 7 5.6"/>',
+  sitebuilder: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9.5 9v11"/><path d="M12.5 12.5h5.5M12.5 16h3.5"/>',
+  seo: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4 20.5 20.5"/><path d="M7.6 12.2l2-2.6 2 1.8 2.3-3"/>',
+  advisor: '<path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z"/><path d="M9.5 19h5M10.5 21.5h3"/>',
+  audit: '<path d="M6 3h8l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h4.5"/>',
+  billing: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 12h.01M18 12h.01"/>',
+  cluster: '<rect x="3" y="4" width="18" height="6.5" rx="1.6"/><rect x="3" y="13.5" width="18" height="6.5" rx="1.6"/><path d="M6.5 7.2h.01M6.5 16.7h.01M10 7.2h5M10 16.7h5"/>',
+  /*
+   * ÖLÇÜLDÜ, İLK DENEME GERİ ALINDI: yapay zeka için önce bir yonga (çevresi bacaklı kare)
+   * çizildi. 17px'te — menüdeki gerçek boy — yongayı AYARLAR'ın dişli çarkından ayırmak
+   * mümkün olmadı: ikisi de "ortada gövde + çevreye dağılan kısa çizgiler". İki bölüm menüde
+   * KOMŞU (Hesap ve ayarlar grubu), yani en kötü yerde çakışıyordu. Işıltı (sparkle) evrensel
+   * yapay zeka işaretidir ve bu ikon setinde başka hiçbir şeye benzemez.
+   */
+  ai: '<path d="M11.5 3l1.7 4.3 4.3 1.7-4.3 1.7L11.5 15 9.8 10.7 5.5 9l4.3-1.7z"/><path d="M17.5 14.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/>'
 };
 
 function iconFor(id: string): string {
   return NAV_ICONS[id] ?? '<circle cx="12" cy="12" r="7"/>';
 }
+
+/*
+ * MENÜ GRUPLARI — 22 maddelik DÜZ liste yerine "işi ne zaman yaparsın" kümeleri.
+ *
+ * ÖLÇÜLEN SORUN: yönetici menüsü tek bir düz listede 21 madde çiziyordu, hepsi aynı görsel
+ * ağırlıkta ve 900px'lik bir ekranda listenin son üç maddesi (Ayarlar, Çıkış, Hesap) ancak
+ * kaydırarak görülüyordu. Göz için hiçbir durak yok: aranan madde ancak baştan sona okunarak
+ * bulunuyor.
+ *
+ * ÖLÇÜT ALFABE YA DA KOD YAPISI DEĞİL, KULLANIM ANI:
+ *  - hosting  : site yayına alınırken/işletilirken dokunulanlar (gün içinde birden çok kez).
+ *               "backup" bilerek "files"in yanında: kiracı menüsüne onu ekleyen kod da
+ *               (injectBackupSection) Dosyalar'ın hemen ardına koyuyor, cPanel de yedeği
+ *               Dosyalar altında tutar. Komşuluğu bozmak öğrenilmiş yeri bozardı.
+ *  - business : para ve hesap işleri — ayda birkaç kez, farklı bir kafayla açılır.
+ *  - insight  : "durum ne?" soruları + tekrar eden bakım (istatistik, danışman, SEO, kayıtlar,
+ *               planlı işlemler). Planlı işlemler buraya kondu çünkü kurulup SONUCU
+ *               kayıtlardan izlenen bir bakım işidir; sunucu araçlarına konsaydı müşteri
+ *               menüsünde köksüz kalırdı.
+ *  - server   : makinenin kendisine dokunan, seyrek ve riskli işler.
+ *  - personal : oturumun kendi ayarları; her rolde en altta, çıkış en sonda.
+ *
+ * HİÇBİR MADDE ÇIKARILMADI: kalabalığın çözümü özelliği gizlemek değil, sıralamak. Bir kimlik
+ * bu haritada yoksa "other" grubuna düşer (aşağıya bak) — yani yeni bir bölüm eklendiğinde
+ * menüden KAYBOLMAZ, yalnızca yanlış yerde durur ve testi kızartır.
+ */
+const NAV_GROUPS: { id: string; labelKey: string; hideTitle?: boolean; ids: string[] }[] = [
+  // Tek maddelik "Genel" grubunun başlığı EKRANDA yok ama ekran okuyucuda VAR: bir satır için
+  // 20px başlık harcamak yersiz, gruba adsız bırakmak ise `aria-labelledby`yi boşa düşürürdü.
+  { id: "overview", labelKey: "panel.navigation.group.overview", hideTitle: true, ids: ["home"] },
+  { id: "hosting", labelKey: "panel.navigation.group.hosting", ids: ["sites", "sitebuilder", "mail", "files", "backup", "database"] },
+  { id: "business", labelKey: "panel.navigation.group.business", ids: ["accounts", "subusers", "billing"] },
+  { id: "insight", labelKey: "panel.navigation.group.insight", ids: ["monitor", "advisor", "seo", "audit", "tasks"] },
+  { id: "server", labelKey: "panel.navigation.group.server", ids: ["software", "security", "tools", "migration", "cluster"] },
+  { id: "personal", labelKey: "panel.navigation.group.personal", ids: ["ai", "account", "settings", "exit"] }
+];
+
+/**
+ * Rol süzgecinden geçmiş bölümleri gruplara dağıtır.
+ *
+ * KAYIP MADDE İMKÂNSIZ: dağıtım sonunda hangi bölüm bir gruba girmediyse "Diğer" grubuna
+ * eklenir. Grup haritasını güncellemeyi unutmak maddeyi menüden SİLMEZ; en fazla yanlış yere
+ * koyar. (Eski tasarımda böyle bir risk yoktu çünkü grup da yoktu — bu yüzden bedelini
+ * ödemeden gruplamanın tek yolu bu yedek gruptur.)
+ */
+const navGroups = computed(() => {
+  const kalan = new Map(props.sections.map((section) => [section.id, section]));
+  const gruplar: { id: string; label: string; hideTitle: boolean; sections: SectionItem[] }[] = [];
+
+  for (const grup of NAV_GROUPS) {
+    const uyeler = grup.ids
+      .map((id) => kalan.get(id))
+      .filter((section): section is SectionItem => section !== undefined);
+    for (const uye of uyeler) {
+      kalan.delete(uye.id);
+    }
+
+    if (uyeler.length > 0) {
+      gruplar.push({ id: grup.id, label: t(grup.labelKey), hideTitle: grup.hideTitle === true, sections: uyeler });
+    }
+  }
+
+  if (kalan.size > 0) {
+    gruplar.push({
+      id: "other",
+      label: t("panel.navigation.group.other"),
+      hideTitle: false,
+      sections: [...kalan.values()]
+    });
+  }
+
+  return gruplar;
+});
 
 /*
  * GLOBAL ARAMA — MENÜ ETİKETİ DEĞİL, GERÇEK VARLIKLAR.
@@ -744,7 +866,7 @@ a.brand-card {
 
 .nav-list {
   display: grid;
-  gap: 3px;
+  gap: 0;
   align-content: start;
   min-height: 0;
   overflow-x: hidden;
@@ -753,6 +875,36 @@ a.brand-card {
   padding: 2px 3px 8px 1px;
   scrollbar-color: rgba(148, 163, 184, 0.34) transparent;
   scrollbar-width: thin;
+}
+
+/* Grup arası boşluk `gap` yerine BURADA: ilk grubun ("Genel") başlığı ekranda görünmediği için
+   `gap` onun da üstüne boşluk koyar, menü markanın altından kopardı. Ayırıcı yalnız gruplar
+   ARASINA gerekir.
+
+   ÇİZGİ YOK, BİLEREK: başlığın kendisi zaten ayırıcıdır. Denendi ve ÖLÇÜLDÜ — hairline + başlık
+   birlikte grup başına 9px daha yer yiyordu (5 grup = 45px, bir buçuk menü satırı) ve iki kez
+   aynı şeyi söylüyordu. Menü zaten kaydırmalı; boşluk madde göstermek için harcanır. */
+.nav-group + .nav-group {
+  margin-top: 10px;
+}
+
+/* Başlık maddelerden BELİRGİN ŞEKİLDE hafif: küçük punto + harf aralığı + soluk renk. Aynı
+   ağırlıkta olsaydı 5 yeni satır kalabalığı azaltmaz, ARTIRIRDI. Kenar menüdeki `.mini-label`
+   ile aynı görsel dil (o da büyük harf, soluk) — panelde ikinci bir başlık üslubu icat edilmedi. */
+.nav-group-title {
+  margin: 0;
+  padding: 0 9px 3px;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+}
+
+.nav-group-items {
+  display: grid;
+  gap: 3px;
 }
 
 .nav-item {
@@ -1265,9 +1417,16 @@ a.brand-card {
     overflow: visible;
   }
 
+  /* Şerit düzende ÜÇ SÜTUNA giren MADDELERDİR, gruplar değil: grupları yan yana dizmek
+     farklı boydaki beş sütun üretir ve başlık hangi maddeye ait olduğunu kaybederdi.
+     Böylece her grup kendi başlığının altında yatay bir satır olur. */
   .nav-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     overflow: visible;
+  }
+
+  .nav-group-items {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1317,8 +1476,13 @@ a.brand-card {
 
   .nav-list {
     grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
     overflow-y: auto;
+  }
+
+  /* Çekmecede grup başlıkları GİZLENMEZ: çekmece tam genişlikte açılır, asıl kaybolan şey
+     dokunmatikte listeyi tarayabilmek. Aralık dokunma hedefleriyle birlikte büyür. */
+  .nav-group-items {
+    gap: 4px;
   }
 
   .nav-item {

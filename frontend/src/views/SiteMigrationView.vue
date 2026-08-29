@@ -173,9 +173,9 @@ function showNotice(message: string, isError: boolean) {
   width: auto;
 }
 
+/* base.css `.hint` rengi ve boyutu verir; buradaki TEK ek, cok satirli sunucu ciktisinin
+   satir sonlarini korumak. */
 .hint {
-  color: var(--text-muted);
-  font-size: 0.8rem;
   white-space: pre-line;
 }
 </style>

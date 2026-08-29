@@ -86,6 +86,29 @@
         <button role="tab" :aria-selected="activeView === 'schedules'" :class="{ active: activeView === 'schedules' }" @click="openSchedules">
           {{ t("panel.backup.schedules") }}
         </button>
+        <!--
+          AYARLAR SEKMESİ — liste sekmesindeki DUVARI kaldırmak için.
+
+          ÖLÇÜLDÜ: "Liste" sekmesinde aynı anda beş büyük blok çiziliyordu (tablo + sayfalayıcı +
+          otomatik yedek kartı + şifreleme kartı + tam boy "yeni yedek" formu). İlk ikisi
+          "neyim var", son üçü ise ayar/eylem; kullanıcı listesini görmek için iki ayar kartını
+          aşağı doğru geçmek zorundaydı.
+
+          HİÇBİR ŞEY GİZLENMEDİ, TAŞINDI: iki ayar kartı bir tık ötede, zaten var olan sekme
+          şeridinde duruyor (Programlar da öyle). Veri de gizlenmiyor — `onMounted` her iki ayarı
+          sekmeden BAĞIMSIZ olarak yüklüyor, yani sekme yalnızca çizimi ayırır.
+
+          YALNIZ YÖNETİCİ: iki kart da `isAdmin` kapılı; sekmeyi herkese göstermek müşteriye
+          BOŞ bir sekme açmak olurdu.
+        -->
+        <button
+          v-if="isAdmin"
+          role="tab"
+          :aria-selected="activeView === 'settings'"
+          :class="{ active: activeView === 'settings' }"
+          @click="activeView = 'settings'">
+          {{ t("panel.backup.settingsTab") }}
+        </button>
       </div>
 
       <!-- Arama TÜM listede çalışır (gün grupları ve sayfalama ÜSTÜNDE): kapalı bir günün ya da
@@ -158,7 +181,17 @@
           </span>
         </div>
         <template v-for="backup in (isDayOpen(group.key) ? group.items : [])" :key="backup.id">
-          <div class="data-row backup-row">
+          <!--
+            AÇIK AYRINTI = SATIRIN KENDİSİ İŞARETLENİR (üçüncü katman).
+
+            Ad ve sol çubuk belirsizliği kaldırdı ama satır ile kutu hâlâ İKİ ayrı blok gibi
+            duruyordu. Burada satır, ayrıntısı açıkken kutuyla AYNI zemini alır ve aradaki alt
+            kenarlık kaldırılır: ikisi tek bir blok olarak okunur. Bağ artık yalnız metinle değil
+            YÜZEYLE de kuruluyor; kutu hangi satıra ait, göz seviyesinde görünür.
+          -->
+          <div
+            class="data-row backup-row"
+            :class="{ 'row-expanded': expandedWarnings === backup.id || expandedLocation === backup.id }">
             <div class="cell-main">
               <strong>{{ backup.name }}</strong>
               <span class="pill-row">
@@ -231,34 +264,59 @@
               </span>
               <small>{{ new Date(backup.createdAtUtc).toLocaleString() }}</small>
             </div>
+            <!--
+              YIKICI EYLEM AYRI SATIRDA.
+
+              SAYILDI: bu hücrede en çok BEŞ düğme var ve sütun 320px — dördü sığmadığı için
+              sarıyor. Sarma sırası kayıtla değişiyordu (zinciri/zip'i olmayan yedekte düğme
+              sayısı 3'e düşer), yani "Sil" bir satırda "İndir"in yanında, bir sonrakinde
+              "Geri yükle"nin altında çıkıyordu: yıkıcı düğmenin yeri her satırda BAŞKAydı.
+              Güvenli dördü bir kutuya alındı; kutu tam genişlik olduğu için "Sil" HER ZAMAN
+              kendi satırında ve sağda durur. Düğme sayısı, etiketi, kapısı DEĞİŞMEDİ.
+            -->
             <div class="row-actions">
-              <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
-                {{ t("panel.backup.restore") }}
-              </button>
-              <button
-                v-if="backup.format === 'zip'"
-                class="secondary compact row-button"
-                :disabled="busy"
-                @click="openBrowser(backup)">
-                {{ t("panel.backup.browse") }}
-              </button>
-              <button
-                v-if="backup.chainId"
-                class="secondary compact row-button"
-                :disabled="busy"
-                @click="openChain(backup)">
-                {{ t("panel.backup.chain.view") }}
-              </button>
-              <button class="secondary compact row-button" :disabled="busy" @click="download(backup)">
-                {{ t("panel.backup.download") }}
-              </button>
+              <span class="safe-actions">
+                <button class="secondary compact row-button" v-bind="writeGate(busy)" @click="restore(backup)">
+                  {{ t("panel.backup.restore") }}
+                </button>
+                <button
+                  v-if="backup.format === 'zip'"
+                  class="secondary compact row-button"
+                  :disabled="busy"
+                  @click="openBrowser(backup)">
+                  {{ t("panel.backup.browse") }}
+                </button>
+                <button
+                  v-if="backup.chainId"
+                  class="secondary compact row-button"
+                  :disabled="busy"
+                  @click="openChain(backup)">
+                  {{ t("panel.backup.chain.view") }}
+                </button>
+                <button class="secondary compact row-button" :disabled="busy" @click="download(backup)">
+                  {{ t("panel.backup.download") }}
+                </button>
+              </span>
               <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeBackup(backup)">
                 {{ t("panel.backup.delete") }}
               </button>
             </div>
           </div>
+          <!--
+            AYRINTI KUTUSU HANGİ YEDEĞE AİT — BAŞLIKTA ADIYLA YAZAR.
+
+            Kullanıcı bildirdi: "uyarıya basıyorum, alt satırdaki yedeğin uyarısı gibi görünüyor."
+            Ölçüldü ve haklıydı: kutu satırın KAPANIŞINDAN SONRA, kardeş öge olarak çiziliyor,
+            yani N. satır ile N+1. satırın ARASINA düşüyor ve alttakinin başlığı gibi okunuyor.
+            Kimlik bağı (`expandedWarnings === backup.id`) doğruydu; yanlış olan GÖRSEL bağdı.
+
+            İki katmanlı düzeltildi: (1) başlık yedeğin ADINI yazar — piksel yerleşimi ne olursa
+            olsun belirsizlik kalmaz, (2) kutu sola girintili ve sol kenarından renkli bir çubukla
+            YUKARI bağlanır. Yalnız görsele güvenmek yetmezdi: dar ekranda satırlar sarınca
+            girinti ipucu zayıflar, ad ise her zaman okunur.
+          -->
           <div v-if="expandedWarnings === backup.id" class="warning-detail">
-            <strong>{{ t("panel.backup.warningsListTitle") }}</strong>
+            <strong>{{ t("panel.backup.warningsListTitle", { name: backup.name }) }}</strong>
             <ul>
               <li v-for="(warning, index) in backup.warnings" :key="index">
                 {{ warningLine(warning) }}
@@ -271,6 +329,8 @@
                kopyalayıp Dosya Gezgini'ne/FTP'ye yapıştıracak. Uzun yol satırı bozmasın diye
                kutu KENDİ İÇİNDE yatay kayar. -->
           <div v-if="expandedLocation === backup.id" class="location-detail">
+            <!-- Uyarı kutusuyla AYNI belirsizlik burada da vardı; aynı çözüm uygulandı. -->
+            <strong class="detail-title">{{ t("panel.backup.locationTitle", { name: backup.name }) }}</strong>
             <div class="location-line">
               <span class="field-label">{{ t("panel.backup.location.local") }}</span>
               <code v-if="backup.path" class="path-box">{{ backup.path }}</code>
@@ -408,7 +468,7 @@
 
     <!-- Ayar OKUNAMADIYSA kart yok olmaz: kullanıcı "böyle bir özellik yok" sanmasın diye
          sebebi yazılır ve tekrar deneme düğmesi verilir. -->
-    <section v-if="activeView === 'list' && isAdmin && !autoForm && autoLoad.message.value" class="form-surface auto-backup-card">
+    <section v-if="activeView === 'settings' && isAdmin && !autoForm && autoLoad.message.value" class="form-surface auto-backup-card">
       <div class="section-head">
         <div>
           <h3>{{ t("panel.backup.autoTitle") }}</h3>
@@ -420,7 +480,7 @@
 
     <!-- Otomatik zamanlanmış yedek (Plesk gibi): motor Otomasyon servisidir; bu kart en çok aranan
          ayarları (sıklık + saklama) yedek ekranının içine taşır. Gelişmiş seçenekler Araçlar > Otomasyon'da. -->
-    <section v-if="activeView === 'list' && isAdmin && autoForm" class="form-surface auto-backup-card">
+    <section v-if="activeView === 'settings' && isAdmin && autoForm" class="form-surface auto-backup-card">
       <div class="section-head">
         <div>
           <h3>{{ t("panel.backup.autoTitle") }}</h3>
@@ -478,7 +538,7 @@
       Parola alanları GERÇEK form alanı: `window.prompt` bu panelde yasak (parolayı düz metin
       gösterir ve tarayıcı diyalogları kapattığında sessizce null döner).
     -->
-    <section v-if="activeView === 'list' && isAdmin && encryption" class="form-surface encryption-card">
+    <section v-if="activeView === 'settings' && isAdmin && encryption" class="form-surface encryption-card">
       <div class="section-head">
         <div>
           <h3>{{ t("panel.backup.encryptionTitle") }}</h3>
@@ -493,9 +553,22 @@
         {{ t("panel.backup.encryptionBroken") }}
       </p>
 
-      <!-- ZORUNLU UYARI: parolayı BELİRLERKEN görünür, geri yükleme anında değil. -->
-      <p class="notice encryption-loss" role="status">{{ t("panel.backup.encryptionLossWarning") }}</p>
-      <p class="notice encryption-loss" role="status">{{ t("panel.backup.encryptionChainWarning") }}</p>
+      <!--
+        ZORUNLU UYARI: parolayı BELİRLERKEN görünür, geri yükleme anında değil.
+
+        İKİ UYARI TEK KUTUDA — metin BİREBİR aynı, kutu sayısı iki yerine bir.
+        ÖLÇÜLDÜ: iki uyarı 189 + 116 karakter ve üst üste iki AYRI kenarlıklı kutu olarak
+        çiziliyordu; iki kutu "iki ayrı konu" diye okunur, oysa ikisi de TEK bir gerçeği anlatır
+        (parola kaybolursa veri geri gelmez). Ayrı kutular ayrıca kartın en üstünü 4 kenarlıkla
+        (hata + kayıp + zincir + eşleşmeme) dolduruyordu.
+        SİLİNEN METİN YOK: iki cümle de madde olarak tam hâliyle duruyor.
+      -->
+      <div class="notice encryption-loss" role="status">
+        <ul class="warning-lines">
+          <li>{{ t("panel.backup.encryptionLossWarning") }}</li>
+          <li>{{ t("panel.backup.encryptionChainWarning") }}</li>
+        </ul>
+      </div>
 
       <div class="form-grid two">
         <label class="stacked-field">
@@ -1099,7 +1172,7 @@ const authStore = useAuthStore();
 const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 const isReseller = computed(() => authStore.session?.user?.role === "Reseller");
 const backups = ref<BackupRecord[]>([]);
-const activeView = ref<"list" | "create" | "schedules">("list");
+const activeView = ref<"list" | "create" | "schedules" | "settings">("list");
 const backupKind = ref<"site" | "subscription" | "database" | "mail" | "panel">("site");
 const expandedWarnings = ref("");
 /** Yolu açık olan kayıt (tek seferde bir tane): tam yollar uzun, hepsi birden açık kalmasın. */
@@ -2689,14 +2762,6 @@ function statusTone(status: string) {
   align-content: start;
 }
 
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
 /* Eylem sütunu SABİT genişlikte: düğmeler her satırda aynı düzende otursun, satırdan satıra
    yeri kaymasın (oransal genişlikte uzun yedek adları düğme sütununu daraltıp diziliş bozuyordu). */
 .backup-row {
@@ -2706,7 +2771,22 @@ function statusTone(status: string) {
 
 .backup-row .row-actions {
   align-content: start;
-  gap: 6px;
+  gap: var(--sp-6);
+}
+
+/* Güvenli eylemler TAM GENİŞLİK bir kutuda: kendi içinde sarar, ardından gelen "Sil"i zorunlu
+   olarak bir alt satıra iter. Sonuç: yıkıcı düğmenin yeri kayıttan kayda DEĞİŞMEZ. */
+.backup-row .safe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-6);
+  flex: 1 1 100%;
+}
+
+/* "Sil" kendi satırında SAĞA yaslanır: güvenli düğmelerin dizisiyle aynı x'te başlamaz, yani
+   sarma sırasında parmağın/farenin alışkanlık kazandığı yere denk gelmez. */
+.backup-row .row-actions > .danger {
+  margin-left: auto;
 }
 
 .schedule-row {
@@ -2718,7 +2798,7 @@ function statusTone(status: string) {
 
 .schedule-row .row-actions {
   align-content: start;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .last-details {
@@ -2742,8 +2822,8 @@ function statusTone(status: string) {
 .entry-group-head {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 4px 2px;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-4) var(--sp-2);
   border-top: 1px solid var(--panel-border);
 }
 
@@ -2755,10 +2835,13 @@ function statusTone(status: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
   min-width: 720px;
-  padding: 9px 11px;
+  /* 9px 11px -> --sp-10 --sp-12: ölçeğe girmenin YANINDA ölçülebilir bir hizalama da getiriyor.
+     `.data-row` dolgusu tam olarak 10/12; gün başlığı 9/11 ile her kenarda 1px içeride
+     duruyordu, yani başlığın metni altındaki satırların metniyle AYNI x'te başlamıyordu. */
+  padding: var(--sp-10) var(--sp-12);
   border-bottom: 1px solid var(--panel-border);
   background: var(--surface-2);
 }
@@ -2767,9 +2850,9 @@ function statusTone(status: string) {
 .day-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   width: auto;
-  padding: 2px 0;
+  padding: var(--sp-2) 0;
   border: none;
   background: none;
   color: inherit;
@@ -2796,15 +2879,15 @@ function statusTone(status: string) {
 
 .location-detail {
   display: grid;
-  gap: 8px;
-  padding: 10px 12px 12px;
+  gap: var(--sp-8);
+  padding: var(--sp-10) var(--sp-12) var(--sp-12);
   border-bottom: 1px solid var(--panel-border);
 }
 
 .location-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
 }
 
@@ -2820,29 +2903,32 @@ function statusTone(status: string) {
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-size: 0.8rem;
+  /* Kendi yedek listesini yazmak yerine `--font-mono`: base.css'teki belirtecin var olma sebebi
+     tam olarak buydu (aynı panelde iki farklı konsol yazı tipi çiziliyordu). 0.8rem da ölçek
+     dışıydı; --fs-2xs (0.78rem) ile fark 0.27px, yani görünüm aynı, karar noktası bir eksik. */
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   white-space: nowrap;
 }
 
 .location-root {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
   margin: 0;
-  padding: 10px 12px;
+  padding: var(--sp-10) var(--sp-12);
   border-top: 1px solid var(--panel-border);
 }
 
 .toolbar-search {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   flex: 1 1 220px;
   min-width: 0;
 }
@@ -2854,7 +2940,7 @@ function statusTone(status: string) {
 .auto-run-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
 }
 
@@ -2869,7 +2955,7 @@ function statusTone(status: string) {
 
 .breadcrumb {
   display: flex;
-  gap: 4px;
+  gap: var(--sp-4);
   flex-wrap: wrap;
 }
 
@@ -2882,10 +2968,9 @@ function statusTone(status: string) {
 .schedules-panel {
   align-content: start;
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
-.row-button,
 .row-actions button {
   width: auto;
 }
@@ -2897,7 +2982,7 @@ function statusTone(status: string) {
 .encryption-card {
   align-content: start;
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 /* Parola kaybı geri dönüşsüz: uyarı satırı gövde metninden ayrışsın. */
@@ -2909,7 +2994,7 @@ function statusTone(status: string) {
 .pill-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 /* Rozet aynı zamanda düğme: dokunmatik ekranda `title` ipucu hiç görünmüyordu. */
@@ -2919,17 +3004,70 @@ function statusTone(status: string) {
   border: none;
 }
 
-.warning-detail {
-  padding: 8px 12px 12px;
-  display: grid;
-  gap: 4px;
+/* AYRINTI KUTULARI YUKARIDAKI SATIRA BAGLANIR.
+   Kutu, satirin kapanisindan SONRA kardes oge olarak ciziliyor; yani iki satirin ARASINDA
+   duruyor ve hicbir gorsel ipucu yokken ALTTAKININ basligi gibi okunuyordu (kullanici bildirdi).
+   Sol kenardaki renkli cubuk + girinti, kutuyu YUKARIDAKINE baglar; ust kenarlik BILEREK yok
+   (kenarlik ayirir, biz birlestirmek istiyoruz). Ad zaten baslikta yaziyor -- bu stil onun
+   yerine gecmez, YANINDA durur. */
+.warning-detail,
+.location-detail {
+  margin-left: var(--sp-16);
+  border-left: 3px solid var(--warn-1);
+  border-top: none;
+  background: var(--surface-2);
+  /* KAYAN TABLODA DA BAĞLI KALIR. Satırlar `min-width: 720px`; ayrıntı kutusunda bu yoktu, yani
+     tablo yana kaydırıldığında satır sağa doğru uzayıp kutu olduğu yerde kalıyor ve girinti
+     ipucu kopuyordu — gün başlığında AYNI hata ölçülüp `min-width: 720px` ile düzeltilmişti.
+     Girinti kadarı düşülür ki kutu satırdan daha geniş olup taşmasın. */
+  min-width: calc(720px - var(--sp-16));
 }
 
-.warning-detail ul {
-  margin: 0;
-  padding-left: 18px;
+.location-detail {
+  border-left-color: var(--accent-1);
+}
+
+/* AYRINTISI AÇIK SATIR ile KUTUSU TEK BLOK.
+   Aynı zemin + aradaki kenarlığın kaldırılması, "kutu bu satıra ait" bilgisini metinden bağımsız
+   olarak da verir. `:hover` kuralı base.css'te (0,2,0); buradaki kural kapsamlı olduğu için
+   [data-v] ile (0,3,0) — üzerine gelindiğinde işaret KAYBOLMAZ. */
+.data-row.backup-row.row-expanded,
+.data-row.backup-row.row-expanded:hover {
+  background: var(--surface-2);
+  border-bottom-color: transparent;
+}
+
+.detail-title {
+  display: block;
+  margin-bottom: var(--sp-6);
+}
+
+.warning-detail {
+  padding: var(--sp-8) var(--sp-12) var(--sp-12);
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
+  /* Kutunun ALT kenarı gerekli: satırın alt kenarlığı artık (row-expanded) saydam, yani blok
+     yukarıdan açıldı. Alt çizgi olmasaydı ayrıntı metni bir SONRAKİ yedeğin satırına akmış
+     görünürdü — düzeltilen hatanın tam olarak aynası. `.location-detail`te zaten vardı. */
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.warning-detail ul,
+.warning-lines {
+  margin: 0;
+  padding-left: var(--sp-16);
+  display: grid;
+  gap: var(--sp-4);
+}
+
+/* `.notice` gövdesi `pre-wrap`: işaretlemedeki girintiler METİN olarak çizilirdi. Liste
+   biçimlendirmesi burada devralınır, uyarı metinlerinin kendi satır sonları korunur. */
+.encryption-card .notice.encryption-loss {
+  white-space: normal;
+}
+
+.warning-lines li {
+  white-space: pre-wrap;
 }
 
 .warning-detail small {
@@ -2944,15 +3082,15 @@ function statusTone(status: string) {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .chain-item {
   display: grid;
   grid-template-columns: 130px minmax(160px, 1fr) 170px 90px 110px;
-  gap: 8px;
+  gap: var(--sp-8);
   align-items: center;
-  padding: 6px 8px;
+  padding: var(--sp-6) var(--sp-8);
   border-left: 3px solid var(--panel-border);
 }
 
@@ -2975,12 +3113,12 @@ function statusTone(status: string) {
 .scope-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .schedule-form {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .schedule-add {

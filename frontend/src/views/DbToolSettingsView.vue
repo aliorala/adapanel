@@ -229,7 +229,8 @@ function showNotice(message: string, isError: boolean) {
 label:not(:where(.check-field, .checkbox-field, .checkbox-row)) { display: grid; gap: 6px; }
 .row-actions { margin-top: 14px; }
 .row-actions button { width: auto; }
-.hint { color: var(--text-muted); font-size: 13px; margin-top: 10px; }
+/* base.css `.hint` rengi ve boyutu verir; buradaki TEK ek ust bosluk. */
+.hint { margin-top: var(--sp-10); }
 .remote-db { margin-top: 14px; }
 .remote-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 .remote-head h4 { margin: 0; }

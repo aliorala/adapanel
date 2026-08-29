@@ -302,17 +302,6 @@ function showNotice(message: string, isError: boolean) {
   align-items: center;
 }
 
-.toggle-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-soft);
-}
-
-.toggle-field input {
-  width: auto;
-}
-
 .danger {
   color: var(--danger-text);
 }
