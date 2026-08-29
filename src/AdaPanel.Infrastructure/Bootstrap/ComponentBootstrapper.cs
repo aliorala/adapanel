@@ -4004,10 +4004,7 @@ public sealed class ComponentBootstrapper(
         const string taskName = "AdaStalwart";
         // Mevcut gorevi temizle (varsa) ve yeniden olustur.
         await ProcessRunner.RunAsync("schtasks.exe", $"/Delete /TN \"{taskName}\" /F", cancellationToken: cancellationToken);
-        await RunProcessAsync(
-            "schtasks.exe",
-            $"/Create /TN \"{taskName}\" /TR \"{wrapperPath}\" /SC ONSTART /RU SYSTEM /RL HIGHEST /F",
-            cancellationToken);
+        await RegisterLongRunningTaskAsync(taskName, wrapperPath, cancellationToken);
 
         var run = await ProcessRunner.RunAsync("schtasks.exe", $"/Run /TN \"{taskName}\"", cancellationToken: cancellationToken);
         if (!run.Success)
@@ -4043,6 +4040,136 @@ public sealed class ComponentBootstrapper(
     /// Yalnız <see cref="PublicMailListenerPorts"/> çift yığına (IPv4 + IPv6) çıkar; diğerleri
     /// <c>127.0.0.1</c> + <c>[::1]</c> ile sınırlanır (Roundcube/panel aynı makinede, işlevsel kayıp yok).
     /// </summary>
+    /// <summary>
+    /// Uzun ömürlü bir yardımcı sürecin (posta sunucusu, önbellek) ONSTART zamanlanmış görev
+    /// tanımını üretir. Ayarlar AÇIKÇA yazılır; Task Scheduler varsayılanlarına bırakılmaz.
+    /// </summary>
+    /// <remarks>
+    /// ÖLÇÜLDÜ — BOZUK: eski hâl <c>schtasks /Create /TN … /SC ONSTART /RU SYSTEM /RL HIGHEST /F</c>
+    /// idi. Bu komut görevi kurar ve "SUCCESS" yazar, ama AYARLARI Task Scheduler'ın
+    /// VARSAYILANLARINA bırakır — ve <c>schtasks.exe</c>'in bu ayarları verecek bir anahtarı
+    /// YOKTUR (<c>/ET</c> "bitiş saati"dir, ExecutionTimeLimit değil).
+    ///
+    /// Bu makinede o komutun kurduğu gerçek AdaStalwart görevi okundu:
+    /// <c>ExecutionTimeLimit=PT72H</c>, <c>RestartCount=0</c>, <c>StopIfGoingOnBatteries=True</c>,
+    /// tek tetikleyici <c>BootTrigger</c>. Microsoft'un belgesi de aynısını söylüyor:
+    /// "By default, a task will be stopped 72 hours after it starts to run."
+    ///
+    /// Sonuç: panel postayı kurar, kurulum doğrulaması (port dinliyor mu) YEŞİL yanar; 72 saat
+    /// sonra Task Scheduler süreci ÖLDÜRÜR ve tek tetikleyici açılış olduğu, yeniden başlatma da
+    /// tanımlı olmadığı için makine yeniden başlatılana kadar posta bir daha AÇILMAZ. Aynı
+    /// makinede son çalışma sonucu bunu doğruluyor: <c>LastTaskResult=267014</c> =
+    /// <c>0x41306</c> = <c>SCHED_S_TASK_TERMINATED</c>, ve ölçüm anında 25/143/465/587/993
+    /// portlarının HİÇBİRİ dinlenmiyordu.
+    ///
+    /// Bu yüzden görev tam XML ile kaydedilir. <c>PT0S</c> belgede "run indefinitely" demektir.
+    /// Eleman SIRASI tahmin EDİLMEDİ: Windows'un kendi <c>Export-ScheduledTask</c> çıktısından
+    /// alındı ve bu şablonun birebir kendisi <c>schtasks /Create /XML</c> ile kaydedilip geri
+    /// okundu (ETL=PT0S, RestartCount=3, StopIfBatt=False, Principal=SYSTEM, RunLevel=Highest).
+    /// </remarks>
+    public static string BuildLongRunningTaskXml(string command)
+    {
+        // Yol içindeki &, &lt; gibi karakterler XML'i bozarsa görev HİÇ kurulmaz; kaçış şart.
+        var kacisliKomut = System.Security.SecurityElement.Escape(command) ?? string.Empty;
+
+        return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
+               "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
+               "  <Principals>\r\n" +
+               "    <Principal id=\"Author\">\r\n" +
+               // S-1-5-18 = LOCAL SYSTEM. SID kullanılır: "SYSTEM" adı yerelleştirilmiş
+               // Windows'ta farklı yazılır, SID her dilde aynıdır.
+               "      <UserId>S-1-5-18</UserId>\r\n" +
+               "      <RunLevel>HighestAvailable</RunLevel>\r\n" +
+               "    </Principal>\r\n" +
+               "  </Principals>\r\n" +
+               "  <Settings>\r\n" +
+               // Dizüstü/UPS'li sunucuda pil moduna geçmek posta sunucusunu ÖLDÜRMEMELİ.
+               "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\r\n" +
+               "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\r\n" +
+               // ASIL DÜZELTME: varsayılan PT72H yerine süresiz.
+               "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\r\n" +
+               "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\r\n" +
+               // Süreç çökerse açılışı beklemeden geri gelsin.
+               "    <RestartOnFailure>\r\n" +
+               "      <Count>3</Count>\r\n" +
+               "      <Interval>PT1M</Interval>\r\n" +
+               "    </RestartOnFailure>\r\n" +
+               "    <StartWhenAvailable>true</StartWhenAvailable>\r\n" +
+               "  </Settings>\r\n" +
+               "  <Triggers>\r\n" +
+               "    <BootTrigger />\r\n" +
+               "  </Triggers>\r\n" +
+               "  <Actions Context=\"Author\">\r\n" +
+               "    <Exec>\r\n" +
+               $"      <Command>{kacisliKomut}</Command>\r\n" +
+               "    </Exec>\r\n" +
+               "  </Actions>\r\n" +
+               "</Task>\r\n";
+    }
+
+    /// <summary>
+    /// Uzun ömürlü yardımcı süreci ONSTART görevi olarak kaydeder ve AYARIN GERÇEKTEN UYGULANDIĞINI
+    /// geri okuyup doğrular.
+    /// </summary>
+    /// <remarks>
+    /// Geri okuma isteğe bağlı değil: bu sınıfın düzelttiği hatanın tamamı "komut SUCCESS dedi,
+    /// kimse sonucu ölçmedi"di. XML reddedilirse görev hiç kurulmamış olur — bu, 72 saatlik
+    /// sessiz ölümden bile kötüdür, o yüzden sesli hata veriyoruz.
+    /// </remarks>
+    private async Task RegisterLongRunningTaskAsync(
+        string taskName,
+        string command,
+        CancellationToken cancellationToken)
+    {
+        var xmlPath = Path.Combine(Path.GetTempPath(), $"adapanel-gorev-{Guid.NewGuid():N}.xml");
+        try
+        {
+            // schtasks /XML dosyayı UTF-16 bekler; UTF-8 verilince "The task XML is malformed" der.
+            await File.WriteAllTextAsync(
+                xmlPath,
+                BuildLongRunningTaskXml(command),
+                Encoding.Unicode,
+                cancellationToken);
+
+            await RunProcessAsync(
+                "schtasks.exe",
+                $"/Create /TN \"{taskName}\" /XML \"{xmlPath}\" /F",
+                cancellationToken);
+
+            // GERİ OKU: görev gerçekten süresiz mi? Varsayılan PT72H geri gelirse düzeltme
+            // uygulanmamış demektir ve sessizce geçmemeli.
+            var dogrula = await ProcessRunner.RunAsync(
+                "schtasks.exe",
+                $"/Query /TN \"{taskName}\" /XML",
+                cancellationToken: cancellationToken);
+            if (dogrula.Success &&
+                dogrula.StandardOutput.Contains("PT72H", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AppException(
+                    "software.service_validation_failed",
+                    500,
+                    500,
+                    $"Scheduled task '{taskName}' still has the 72-hour default execution limit; " +
+                    "the long-running daemon would be terminated after three days.\r\n" +
+                    BuildCommandDetails(dogrula));
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(xmlPath))
+                {
+                    File.Delete(xmlPath);
+                }
+            }
+            catch (IOException)
+            {
+                // Geçici dosya silinemedi; görev kaydı bundan etkilenmez.
+            }
+        }
+    }
+
     internal static SortedSet<string> ResolveStalwartListenerBinds(IReadOnlyCollection<string> binds)
     {
         var ports = binds.Select(ParseBindPort).Where(port => port > 0).ToArray();
@@ -4424,10 +4551,7 @@ public sealed class ComponentBootstrapper(
             wrapperPath,
             $"@echo off\r\n\"{memcached}\" -m 64 -p 11211 -l 127.0.0.1\r\n",
             cancellationToken);
-        await RunProcessAsync(
-            "schtasks.exe",
-            $"/Create /TN \"{taskName}\" /TR \"{wrapperPath}\" /SC ONSTART /RU SYSTEM /RL HIGHEST /F",
-            cancellationToken);
+        await RegisterLongRunningTaskAsync(taskName, wrapperPath, cancellationToken);
         await ProcessRunner.RunAsync("schtasks.exe", $"/Run /TN \"{taskName}\"", cancellationToken: cancellationToken);
     }
 

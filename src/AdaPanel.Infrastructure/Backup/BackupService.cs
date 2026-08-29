@@ -4323,11 +4323,35 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// Yüklenecek tam adres ve TABAN ADRESİN ALTINA eklenen klasör seviyeleri — FTP'de MKD,
     /// WebDAV'da MKCOL bu seviyeler için gerekir (S3'te hiçbiri gerekmez).
     /// </returns>
+    /// <summary>
+    /// Uzak taban adresin son parçası, kullanıcının BİLEREK sabitlediği tek bir yedek DOSYASI mı?
+    /// </summary>
+    /// <remarks>
+    /// ÖLÇÜLDÜ-BOZUK: eski koşul <c>Path.HasExtension(sonParca)</c> idi — ve
+    /// <c>Path.HasExtension("musteri.com")</c> <b>true</b> döner. Uzak yedek klasörünü alan adıyla
+    /// adlandırmak (<c>ftp://sunucu/yedekler/musteri.com</c>, <c>https://s3…/kova/site.com</c>)
+    /// Windows barındırmada en yaygın düzendir; o kurulumlarda kısa devre YANLIŞLIKLA açılıyordu
+    /// ve <see cref="BackupPlacement.RemoteFolders"/> (gün/kategori/kaynak) İLE dosya adının ikisi
+    /// birden düşüyordu.
+    ///
+    /// Sonucu sessizdi: her gecelik yedek uzakta AYNI adrese yazılır. S3'te PUT 200 döner, panel
+    /// her kayda "uzağa senkronlandı" der, uzakta tek nesne vardır; üstelik bütün kayıtların
+    /// <c>RemoteUri</c>'si aynı olduğu için doğrulama hepsini "var" sayar ve BİR kaydı silmek
+    /// diğerlerinin tek uzak kopyasını da siler. "Gün gün klasör HER YERDE" kuralı da delinir.
+    ///
+    /// Artık yalnız panelin KENDİ ürettiği yedek uzantıları sabit dosya sayılır — nokta içeren
+    /// her ad değil. Üretilen adlar: <c>…zip</c> (BackupService'teki dört ad üretimi) ve
+    /// şifreliyse <c>…zip.enc</c> (<see cref="BackupArchiveCipher.EncryptedExtension"/>).
+    /// </remarks>
+    private static bool IsPinnedArchiveTarget(string lastSegment)
+        => lastSegment.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+            || lastSegment.EndsWith(".zip" + BackupArchiveCipher.EncryptedExtension, StringComparison.OrdinalIgnoreCase);
+
     private static (Uri Uri, string[] Folders) AppendRemotePath(Uri uri, BackupPlacement placement, string fileName)
     {
         var path = Uri.UnescapeDataString(uri.AbsolutePath);
         var lastSegment = path.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(lastSegment) && Path.HasExtension(lastSegment))
+        if (!string.IsNullOrWhiteSpace(lastSegment) && IsPinnedArchiveTarget(lastSegment))
         {
             // Kullanıcı TEK BİR DOSYA adresi vermiş (".../yedek.zip"): ne klasör ne de dosya adı
             // eklenir. Adresi bilerek sabitleyen kurulumların ölçülmüş davranışı budur, korunur.

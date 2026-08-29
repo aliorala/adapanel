@@ -431,6 +431,65 @@ public sealed class BackupRemoteLayoutTests
     }
 
     // =======================================================================================
+    // 6b) TABAN ADRESIN SON PARCASI NOKTA ICERIYORSA (alan adi!) duzen dusmemeli
+    // =======================================================================================
+
+    /// <summary>
+    /// ÖLÇÜLDÜ-BOZUK: kısa devre koşulu <c>Path.HasExtension(sonParca)</c> idi ve
+    /// <c>Path.HasExtension("musteri.com")</c> TRUE döner. Uzak klasörü alan adıyla adlandırmak
+    /// (en yaygın düzen) gün/kategori klasörünü VE dosya adını birden düşürüyordu: her gecelik
+    /// yedek uzakta aynı adrese yazılıyor, panel hepsine "uzağa senkronlandı" diyordu.
+    /// </summary>
+    [Theory]
+    [InlineData("musteri.com")]
+    [InlineData("site.com.tr")]
+    [InlineData("yedek.2026")]
+    public async Task Nokta_iceren_klasor_adi_tek_dosya_SANILMAZ(string sonParca)
+    {
+        using var alan = new GeciciAlan();
+        var kayitci = new IstekKayitcisi();
+
+        var sonuc = await alan.ServisKur(kayitci).TestRemoteTargetAsync(new BackupRemoteTestRequest
+        {
+            TargetType = "webdav",
+            RemoteUrl = $"https://bulut.ornek.com/dav/{sonParca}"
+        }, alan.Iptal);
+
+        Assert.True(sonuc.Success);
+        var gun = DateTime.Now.ToString("yyyy-MM-dd");
+        Assert.Equal(
+            new[]
+            {
+                $"MKCOL https://bulut.ornek.com/dav/{sonParca}/{gun}/",
+                $"MKCOL https://bulut.ornek.com/dav/{sonParca}/{gun}/connection-test/",
+                $"PUT https://bulut.ornek.com/dav/{sonParca}/{gun}/connection-test/adapanel-connection-test.txt"
+            },
+            kayitci.Istekler);
+    }
+
+    /// <summary>
+    /// Karşı yön: adresi GERÇEKTEN tek bir yedek dosyasına sabitleyen kurulumun ölçülmüş
+    /// davranışı korunur — panelin ürettiği uzantılar <c>.zip</c> ve <c>.zip.enc</c>'dir.
+    /// </summary>
+    [Theory]
+    [InlineData("yedek.zip")]
+    [InlineData("yedek.zip.enc")]
+    public async Task Yedek_dosyasina_sabitlenmis_adres_oldugu_gibi_kullanilir(string dosya)
+    {
+        using var alan = new GeciciAlan();
+        var kayitci = new IstekKayitcisi();
+
+        var sonuc = await alan.ServisKur(kayitci).TestRemoteTargetAsync(new BackupRemoteTestRequest
+        {
+            TargetType = "webdav",
+            RemoteUrl = $"https://bulut.ornek.com/dav/{dosya}"
+        }, alan.Iptal);
+
+        Assert.True(sonuc.Success);
+        Assert.Equal(new[] { $"PUT https://bulut.ornek.com/dav/{dosya}" }, kayitci.Istekler);
+    }
+
+    // =======================================================================================
     // 7) Hata SEBEBI kayda gecer (anahtar tek basina yeterli degil)
     // =======================================================================================
 
