@@ -310,14 +310,16 @@ function showNotice(message: string, isError: boolean) {
   border-radius: 9px;
   background: color-mix(in srgb, var(--accent-1) 14%, transparent);
   color: var(--accent-1);
-  font-size: 0.66rem;
+  /* 0.66rem = 8.91px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-weight: 800;
   flex-shrink: 0;
 }
 
 .db-engine {
   color: var(--text-muted);
-  font-size: 0.74rem;
+  /* 0.74rem = 9.99px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
 }
 

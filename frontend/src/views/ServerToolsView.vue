@@ -105,7 +105,11 @@ const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx"
   border-radius: 9px;
   background: color-mix(in srgb, var(--accent-1) 10%, transparent);
   color: var(--accent-1);
-  font-size: 0.67rem;
+  /* 0.67rem = 9.045px idi — panelin taban adiminin (`--fs-2xs`, 10.53px) altinda.
+     Damganin yanindaki `<strong>` aracin TAM ADINI zaten yaziyor, yani bu iki harf ek bilgi
+     tasimiyor; okunmayacak kadar kucuk olmasinin hicbir kazanci yoktu. 30px kutuda
+     10.53px rahat siger. */
+  font-size: var(--fs-2xs);
 }
 
 .tools-switcher button.active {

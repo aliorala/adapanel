@@ -9,6 +9,16 @@
         <span class="meta">{{ loading ? t("panel.system.loading") : formatUtc(overview?.currentServerTimeUtc ?? null) }}</span>
       </div>
 
+      <!-- HALKA RENGİ DEĞERE BAĞLI — panoyla (DashboardOverviewView) BİREBİR aynı iki eşik.
+           ÖLÇÜLDÜ, önceki hâli: renk SABİTTİ. İşlemci hep mavi, bellek hep camgöbeği, disk hep
+           `--warn-1` (kehribar) çiziliyordu; yani %3 dolu bir disk ile %99 dolu bir disk BİREBİR
+           aynı görünüyor, üstelik ikisi de "uyarı" renginde duruyordu. Aynı sunucu panoda
+           kırmızı, izleme ekranında kehribar okunuyordu — iki ekran aynı ölçüm için farklı şey
+           söylüyordu.
+           SERİ KİMLİĞİ KAYBOLMADI, doğru yere taşındı: mavi/camgöbeği ayrımı ÇİZGİ grafiklerinde
+           (sparkline) yaşar; orada iki seri üst üste okunur ve rengin işi onları ayırmaktır.
+           Halkanın işi ise tek bir değerin SAĞLIĞINI söylemek. `--meter-mem` belirteci bu yüzden
+           duruyor ve hâlâ temaya bağlı (bkz. stildeki not). -->
       <div v-if="overview" class="meter-grid">
         <article class="meter-card">
           <div class="meter-ring" :style="ringStyle(overview.cpuUsagePercent)">
@@ -24,7 +34,7 @@
         </article>
 
         <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(overview.memoryUsagePercent, 'var(--meter-mem)')">
+          <div class="meter-ring" :style="ringStyle(overview.memoryUsagePercent)">
             <div class="meter-core">
               <span>{{ t("panel.system.memory") }}</span>
               <strong>{{ overview.memoryUsagePercent.toFixed(1) }}%</strong>
@@ -37,7 +47,7 @@
         </article>
 
         <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(primaryDisk?.usagePercent ?? 0, 'var(--warn-1)')">
+          <div class="meter-ring" :style="ringStyle(primaryDisk ? primaryDisk.usagePercent : null)">
             <div class="meter-core">
               <span>{{ primaryDisk?.name || t("panel.system.disks") }}</span>
               <strong>{{ primaryDisk ? `${primaryDisk.usagePercent.toFixed(1)}%` : t("panel.common.notAvailable") }}</strong>
@@ -53,36 +63,37 @@
       <section class="panel">
         <h2>{{ t("panel.system.serverInfo") }}</h2>
 
-        <div v-if="overview" class="info-grid">
-          <article class="info-card">
-            <dl class="info-list">
-              <div>
-                <dt>{{ t("panel.system.machineName") }}</dt>
-                <dd>{{ overview.machineName }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("panel.system.operatingSystem") }}</dt>
-                <dd>{{ overview.operatingSystem }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("panel.system.architecture") }}</dt>
-                <dd>{{ overview.osArchitecture }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("panel.system.framework") }}</dt>
-                <dd>{{ overview.frameworkDescription }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("panel.system.bootTime") }}</dt>
-                <dd>{{ formatUtc(overview.bootTimeUtc) }}</dd>
-              </div>
-              <div>
-                <dt>{{ t("panel.system.uptime") }}</dt>
-                <dd>{{ formatTimeSpan(overview.uptime) }}</dd>
-              </div>
-            </dl>
-          </article>
-        </div>
+        <!-- `info-grid` + `info-card` SARMALAYICILARI KALDIRILDI. Panoda o iki ad ANLAMLI: orada
+             yan yana İKİ kart var (sunucu bilgisi + diskler) ve ızgara onları diziyor. Burada
+             ikisi zaten AYRI PANEL; geriye tek çocuklu bir ızgara ve panelin içinde ikinci bir
+             çerçeve kalıyordu — aynı bilgi iki kenarlık, iki zemin, iki dolgu (16 + 18px) ile
+             sarılıyordu. İç kutu silindi, listenin kendisi panelin çocuğu oldu. -->
+        <dl v-if="overview" class="info-list">
+          <div>
+            <dt>{{ t("panel.system.machineName") }}</dt>
+            <dd>{{ overview.machineName }}</dd>
+          </div>
+          <div>
+            <dt>{{ t("panel.system.operatingSystem") }}</dt>
+            <dd>{{ overview.operatingSystem }}</dd>
+          </div>
+          <div>
+            <dt>{{ t("panel.system.architecture") }}</dt>
+            <dd>{{ overview.osArchitecture }}</dd>
+          </div>
+          <div>
+            <dt>{{ t("panel.system.framework") }}</dt>
+            <dd>{{ overview.frameworkDescription }}</dd>
+          </div>
+          <div>
+            <dt>{{ t("panel.system.bootTime") }}</dt>
+            <dd>{{ formatUtc(overview.bootTimeUtc) }}</dd>
+          </div>
+          <div>
+            <dt>{{ t("panel.system.uptime") }}</dt>
+            <dd>{{ formatTimeSpan(overview.uptime) }}</dd>
+          </div>
+        </dl>
       </section>
 
       <section class="panel">
@@ -95,9 +106,22 @@
             <span>{{ t("panel.system.free") }}</span>
           </div>
 
-          <div v-for="disk in overview.disks" :key="disk.name" class="mini-row disk-row">
+          <!-- DİSK SATIRI ARTIK KONUŞUYOR — panonun disk tablosuyla BİREBİR aynı dil.
+               Önceden `C:\ 99.9% 533 MiB` DÜZ METİNDİ: ne sıra, ne ton, ne sözcük. Dolmuş bir
+               disk, ekranın en sakin bileşeninde duruyordu. Eşik UYDURULMADI: halkalarla aynı
+               iki sabit kullanılıyor (bkz. `ringStyle`).
+               RENK TEK KANAL DEĞİL, üç kanal: (1) yüzde zaten yazılı, (2) yanında SÖZCÜKLE
+               rozet ("Kritik"/"Uyarı"), (3) satırın çok hafif tonu. Renk körü kullanıcı ve
+               ekran okuyucu rozetin METNİNİ okur. -->
+          <div
+            v-for="disk in sortedDisks"
+            :key="disk.name"
+            :class="['mini-row', 'disk-row', { warn: diskTone(disk) === 'warn', danger: diskTone(disk) === 'danger' }]">
             <span>{{ disk.name }}</span>
-            <span>{{ disk.usagePercent.toFixed(1) }}%</span>
+            <span>
+              {{ disk.usagePercent.toFixed(1) }}%
+              <span v-if="diskTone(disk)" :class="['status-pill', diskTone(disk)]">{{ diskToneLabel(disk) }}</span>
+            </span>
             <span>{{ formatBytes(disk.freeBytes) }}</span>
           </div>
         </div>
@@ -123,15 +147,36 @@
         </div>
       </div>
 
+      <!-- GRAFİĞİN ÖLÇEĞİ YOKTU: kutunun içinde iki eğri vardı ama ne eksen, ne ızgara, ne de
+           tek bir sayı. Kullanıcı bir tepenin 2 KB/sn mi 200 MB/sn mi olduğunu okuyamıyor,
+           kutunun %95'i boş duruyordu. Eklenenlerin hepsi ÖLÇÜLEN veriden gelir, hiçbiri
+           uydurma değil: y ekseninde tepe değer (`netScale`, zaten çizimin ölçeği), yarısı ve
+           sıfır; x ekseninde örnek penceresinin iki ucu. Izgara çizgileri `--panel-border` ile
+           en geride durur — grafiği okutur, onunla yarışmaz. -->
       <div v-if="overview && hasNetTrend" class="net-trend">
         <div class="net-trend-head">
           <span>{{ t("panel.monitor.networkTrend") }}</span>
-          <span class="meta">{{ t("panel.monitor.trend10m") }}</span>
+          <span class="meta">{{ t("panel.monitor.trendPeak") }}: {{ formatSpeed(netScale) }}</span>
         </div>
-        <svg class="net-spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
-          <polyline class="down" :points="netDownSpark" />
-          <polyline class="up" :points="netUpSpark" />
-        </svg>
+        <div class="net-plot">
+          <div class="net-axis-y" aria-hidden="true">
+            <span>{{ formatSpeed(netScale) }}</span>
+            <span>{{ formatSpeed(netScale / 2) }}</span>
+            <span>0</span>
+          </div>
+          <svg class="net-spark" viewBox="0 0 100 28" preserveAspectRatio="none" role="img"
+            :aria-label="t('panel.monitor.networkTrend') + ' — ' + t('panel.monitor.trendPeak') + ': ' + formatSpeed(netScale)">
+            <line class="net-grid" x1="0" y1="1" x2="100" y2="1" vector-effect="non-scaling-stroke" />
+            <line class="net-grid" x1="0" y1="14" x2="100" y2="14" vector-effect="non-scaling-stroke" />
+            <line class="net-axis" x1="0" y1="27" x2="100" y2="27" vector-effect="non-scaling-stroke" />
+            <polyline class="down" :points="netDownSpark" />
+            <polyline class="up" :points="netUpSpark" />
+          </svg>
+        </div>
+        <div class="net-axis-x" aria-hidden="true">
+          <span>{{ t("panel.monitor.trend10m") }}</span>
+          <span>{{ t("panel.monitor.trendNow") }}</span>
+        </div>
         <div class="net-legend">
           <span><i class="legend-dot down"></i>{{ t("panel.system.download") }}</span>
           <span><i class="legend-dot up"></i>{{ t("panel.system.upload") }}</span>
@@ -166,8 +211,17 @@
         DEĞERLERİN DONDUĞUNU fark etmiyor, gördüğü eski anlık görüntüyü canlı sanıyordu.
         Yoklama düzelince şerit kendiliğinden kaybolur.
       -->
+      <!-- "YÜKLENİYOR…" 10+ SANİYE ASILI KALIYORDU ve o cümle bunu söyleyemiyordu.
+           Süreç anlık görüntüsü sunucuda WMI/performans sayaçlarından toplanıyor; ilk tur yavaş
+           sunucuda saniyeler sürebiliyor ve iki saniyede bir yeniden denendiği için ekranda
+           HİÇBİR ŞEY değişmiyordu — kullanıcı ekranın donduğunu sanıyordu.
+           Bilgi eklendi, çıkarılmadı: ilk 4 saniye panelin ortak "Yükleniyor…" cümlesi, sonrası
+           ölçümün SÜRDÜĞÜNÜ açıkça söyleyen cümle. Uydurma bir zaman aşımı YOK; yoklama devam
+           eder, hata olursa zaten kendi şeridine düşer. -->
       <p v-if="processError" class="notice error page-notice" role="alert">{{ processError }}</p>
-      <p v-else-if="!snapshot" class="meta">{{ t("panel.common.loading") }}</p>
+      <p v-else-if="!snapshot" class="meta" role="status" aria-live="polite">
+        {{ processWaitedLong ? t("panel.processes.stillLoading") : t("panel.common.loading") }}
+      </p>
       <p v-else-if="!snapshot.cpuBaselineReady" class="field-hint">{{ t("panel.processes.baselineHint") }}</p>
 
       <div v-if="snapshot" class="proc-table">
@@ -300,6 +354,16 @@ const { t } = useI18n();
 
 const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
 
+/*
+ * EN DOLU DİSK EN ÜSTTE — panodaki `sortedDisks` ile aynı gerekçe ve aynı kod.
+ * Sunucudan gelen sıra sürücü harfine göredir (C, D, E...), yani dikkat isteyen satırın nerede
+ * duracağı TESADÜFE kalıyordu: dördüncü sürücü dolduğunda uyarı listenin dibindeydi.
+ * KOPYA ÜZERİNDE sıralanır: `sort` yerinde çalışır ve prop dizisini doğrudan sıralamak üst
+ * bileşenin verisini (ve halkanın okuduğu `disks[0]`ı) değiştirirdi.
+ */
+const sortedDisks = computed(() => [...(props.overview?.disks ?? [])]
+  .sort((a, b) => b.usagePercent - a.usagePercent));
+
 // Plesk-benzeri "derin izleme": sunucu dakikada bir CPU/RAM/ağ örnekler (kalıcı geçmiş halkası); izleme ekranı
 // bu geçmişi çekip küçük SVG sparkline'larla trend gösterir → sayfa yenilense de DOLU gelir (~24 saatlik pencere).
 const systemStore = useSystemStore();
@@ -359,6 +423,10 @@ watch(snapshot, (value) => {
 const processSort = ref<"cpu" | "memory">("cpu");
 const processPaused = ref(false);
 const processError = ref("");
+// İlk anlık görüntü hâlâ gelmediyse cümlenin değişeceği an. 4 sn ölçüyle seçildi: yoklama
+// aralığı 2 sn, yani iki turu kaçırmış olmak "yavaş" demek için yeterli kanıt.
+const processWaitedLong = ref(false);
+let processSlowTimer: number | null = null;
 let processTimer: number | null = null;
 let processInFlight = false;
 
@@ -389,6 +457,9 @@ onMounted(() => {
 
   void pollProcesses();
   processTimer = window.setInterval(() => void pollProcesses(), 2000);
+  processSlowTimer = window.setTimeout(() => {
+    processWaitedLong.value = true;
+  }, 4000);
 });
 
 onUnmounted(() => {
@@ -401,6 +472,11 @@ onUnmounted(() => {
     window.clearInterval(processTimer);
     processTimer = null;
   }
+
+  if (processSlowTimer !== null) {
+    window.clearTimeout(processSlowTimer);
+    processSlowTimer = null;
+  }
 });
 
 function cpuSeverity(percent: number) {
@@ -408,14 +484,25 @@ function cpuSeverity(percent: number) {
   return percent >= 20 ? "medium" : "low";
 }
 
+/**
+ * Süreç çalışma süresi.
+ *
+ * BİRİM ETİKETLERİ KODA GÖMÜLÜYDÜ ("g" / "sa" / "dk") ve bu, panelin İngilizcesinde de Türkçe
+ * kısaltma basıyordu — üstelik aynı ekranın hemen üstündeki "Çalışma süresi" satırı
+ * `utils/datetime.ts` üzerinden `panel.units.*Short` anahtarlarını kullanıyor. Yani AYNI EKRANDA
+ * iki süre biçimi vardı ve biri dil değişimini görmüyordu. Anahtarlar zaten mevcut; kopya silindi.
+ */
 function formatUptime(seconds: number) {
   if (seconds <= 0) return "—";
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}g ${hours}sa`;
-  if (hours > 0) return `${hours}sa ${minutes}dk`;
-  return `${minutes}dk`;
+  const gun = t("panel.units.dayShort");
+  const saat = t("panel.units.hourShort");
+  const dakika = t("panel.units.minuteShort");
+  if (days > 0) return `${days}${gun} ${hours}${saat}`;
+  if (hours > 0) return `${hours}${saat} ${minutes}${dakika}`;
+  return `${minutes}${dakika}`;
 }
 
 // Değer dizisini 100×28 viewBox içinde bir polyline "points" dizgesine çevirir (üst=yüksek değer).
@@ -436,11 +523,48 @@ function spark(values: number[], maxValue: number): string {
     .join(" ");
 }
 
-function ringStyle(value: number, color = "var(--accent-1)") {
+/*
+ * HALKA/SATIR EŞİKLERİ — panodaki (DashboardOverviewView) iki sabitle BİREBİR aynı.
+ * İkinci bir eşik icat etmek, aynı diski panoda "kritik", izleme ekranında "iyi" gösterirdi.
+ * Değerler de uydurma değil: Plesk ve cPanel'in kaynak göstergeleri de %80'de sarıya, %90'da
+ * kırmızıya döner; sunucu yöneticisinin başka panellerden gelen refleksi bozulmasın.
+ */
+const METER_WARN_PERCENT = 80;
+const METER_DANGER_PERCENT = 90;
+
+/** `null` = ÖLÇÜLEMEDİ: halka sıfır yeşile boyanıp "boş disk" demez, nötr kalır. */
+function ringStyle(value: number | null) {
+  const percent = Math.max(0, Math.min(100, value ?? 0));
   return {
-    "--progress": `${Math.max(0, Math.min(100, value))}%`,
-    "--ring-color": color
+    "--progress": `${percent}%`,
+    "--ring-color": value === null
+      ? "var(--text-muted)"
+      : percent >= METER_DANGER_PERCENT
+        ? "var(--danger-1)"
+        : percent >= METER_WARN_PERCENT
+          ? "var(--warn-1)"
+          : "var(--ok-1)"
   };
+}
+
+/**
+ * Disk satırının tonu — HALKAYLA AYNI iki eşikten okunur.
+ * Boş dize "eşiğin altında" demektir; o satır ne rozet alır ne ton, çünkü sağlıklı bir disk
+ * hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
+ */
+function diskTone(disk: DiskUsage): "" | "warn" | "danger" {
+  if (disk.usagePercent >= METER_DANGER_PERCENT) {
+    return "danger";
+  }
+
+  return disk.usagePercent >= METER_WARN_PERCENT ? "warn" : "";
+}
+
+/** Rozetin SÖZCÜĞÜ: rengin yanında ikinci (ve ekran okuyucunun okuduğu tek) kanal. */
+function diskToneLabel(disk: DiskUsage): string {
+  return diskTone(disk) === "danger"
+    ? t("panel.common.severityCritical")
+    : t("panel.common.severityWarning");
 }
 
 /** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
@@ -464,47 +588,51 @@ function formatTimeSpan(value: string): string {
 </script>
 
 <style scoped>
+/* 18px ÖLÇEK DIŞIYDI (bkz. styles/base.css `--sp-*`) ve panoda aynı liste 16'ya taşınmıştı;
+   iki ekran yan yana açıldığında dikey ritimleri tutmuyordu. 16 SEÇİLDİ: `.panel`in kendi iç
+   dolgusu da 16, yani panelden panele boşluk ile panelin içindeki boşluk artık AYNI sayı. */
 .monitor-stack,
 .meter-grid,
 .monitor-columns,
-.info-grid,
 .mini-table {
   display: grid;
-  gap: 18px;
+  gap: var(--sp-16);
 }
 
 .monitor-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+
+  /* PANELLER KENDİ YÜKSEKLİĞİNDE DURUR — panoda ölçülen hatanın AYNISI buradaydı.
+     Izgaranın varsayılanı `stretch`: "Sunucu bilgisi" (6 satır) ile "Diskler" (çoğu sunucuda
+     1-2 satır) yan yana ve kısa olan uzun olana GERİLİYORDU. Panoda bu, başlıkla içerik
+     arasında ~180px boş alan olarak ölçülmüştü; burada da diskler paneli, tablosunun bittiği
+     yerden sayfanın altına kadar boş kalıyordu. */
+  align-items: start;
 }
 
 .meter-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.meter-card,
-.info-card,
-.mini-row {
+/* `.info-card` ve `.mini-row` bu listeden ÇIKARILDI: ilki şablondan tümüyle kalktı (panelin
+   içinde ikinci bir çerçeveydi), ikincisi ise artık kendi kenarlığı ve kendi zemini olan bir
+   KART değil, gerçek bir tablo satırı (gerekçesi `.mini-table` kuralında). */
+.meter-card {
+  padding: var(--sp-16);
   border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
 
-.meter-card,
-.info-card {
-  padding: 18px;
-  border-radius: var(--radius-lg);
-}
-
-/* BELLEK SERİSİ RENGİ — BİLEREK belirtece bağlanMADI.
-   Üç ölçer bir VERİ SERİSİ kümesidir: işlemci `--accent-1` (mavi), bellek camgöbeği, disk
-   `--warn-1` (kehribar). Üçünü tek bir vurgu rengine indirmek halkaların hangisinin hangi
-   kaynak olduğunu okunamaz yapardı — bu bir iyileştirme değil, veri kaybı olurdu.
-   Sabit kalmasının sebebi bu; ama DEĞERİ ölçülerek düzeltildi.
+/* BELLEK SERİSİ RENGİ — BİLEREK belirtece bağlanMADI ve KORUNDU.
+   Bu renk artık HALKAYA değil, yalnız bellek ÇİZGİSİNE (sparkline) gidiyor: iki eğri üst üste
+   okunduğunda hangisinin bellek olduğunu söyleyen tek şey odur, yani orada renk gerçekten
+   VERİ taşır. (Halkalar ise değere bağlı sağlık renklerine geçti; gerekçesi şablonda.)
    ÖLÇÜLDÜ, eski tek değer #6fd2ff: koyu temada 10.05:1, AÇIK temada beyaz kart üzerinde
    1.70:1 — WCAG 1.4.11'in grafik ögeler için istediği 3:1'in çok altında, yani panelin
-   VARSAYILAN temasında bellek halkası pratikte görünmüyordu.
-   Bu yüzden değer temaya bağlandı: koyu tema bugünkü rengini birebir korur, açık tema
-   3:1'i geçen bir camgöbeğine iner (#0891b2 = 3.68:1). Ton hâlâ camgöbeği, yani seri
-   kimliği ve ekranın tanıdık görünümü bozulmaz. */
+   VARSAYILAN temasında bellek eğrisi pratikte görünmüyordu.
+   Bu yüzden değer temaya bağlı: koyu tema bugünkü rengini birebir korur, açık tema 3:1'i
+   geçen bir camgöbeğine iner (#0891b2 = 3.68:1). Ton hâlâ camgöbeği. */
 .meter-card {
   display: grid;
   place-items: center;
@@ -518,7 +646,7 @@ function formatTimeSpan(value: string): string {
 .meter-spark {
   width: 100%;
   height: 30px;
-  margin-top: 12px;
+  margin-top: var(--sp-12);
 }
 
 .meter-spark polyline {
@@ -534,10 +662,11 @@ function formatTimeSpan(value: string): string {
   stroke: var(--meter-mem);
 }
 
+/* Üst boşluk KALDIRILDI: kapsayıcı `.panel` zaten 12px ızgara aralığı veriyor ve margin ona
+   EKLENİYORDU (12 + 16 = 28px, ölçek dışı bir sıçrama). */
 .net-trend {
-  margin-top: 16px;
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .net-trend-head {
@@ -546,12 +675,52 @@ function formatTimeSpan(value: string): string {
   justify-content: space-between;
 }
 
+/* Y ekseni etiketleri grafiğin SOLUNDA ayrı bir sütun: SVG `preserveAspectRatio="none"` ile
+   yatayda geriliyor, metni onun içine koymak harfleri de gerdirirdi. */
+.net-plot {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-8);
+  align-items: stretch;
+}
+
+.net-axis-y {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-block: 2px;
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.net-axis-x {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+}
+
 .net-spark {
   width: 100%;
   height: 60px;
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
+}
+
+/* Izgara ve taban çizgisi: veriyle YARIŞMAZ, veriyi konumlandırır. Kesikli çizgi ızgarayı
+   eğrilerden ayırır; taban (sıfır) çizgisi kesiksiz, çünkü o bir ölçüm sınırıdır. */
+.net-spark .net-grid,
+.net-spark .net-axis {
+  stroke: var(--panel-border);
+  stroke-width: 1;
+}
+
+.net-spark .net-grid {
+  stroke-dasharray: 3 3;
 }
 
 .net-spark polyline {
@@ -572,9 +741,9 @@ function formatTimeSpan(value: string): string {
 
 .net-legend {
   display: flex;
-  gap: 18px;
+  gap: var(--sp-16);
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--fs-2xs);
 }
 
 .net-legend .legend-dot {
@@ -582,7 +751,7 @@ function formatTimeSpan(value: string): string {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  margin-right: 6px;
+  margin-right: var(--sp-6);
   vertical-align: middle;
 }
 
@@ -596,10 +765,13 @@ function formatTimeSpan(value: string): string {
 
 .meter-ring {
   --progress: 0%;
-  --ring-color: var(--accent-1);
+  /* Varsayılan yalnızca YEDEK: gerçek renk `ringStyle()`ten satır içi gelir (bkz. script).
+     Panoyla aynı: yedek NÖTR, çünkü renk bir sağlık iddiasıdır ve ölçüm gelmeden iddia
+     edilmemeli (eski yedek `--accent-1` idi ve "sakin/iyi" diye okunuyordu). */
+  --ring-color: var(--text-muted);
   width: min(220px, 100%);
   aspect-ratio: 1;
-  padding: 14px;
+  padding: var(--sp-12);
   border-radius: 50%;
   background: conic-gradient(var(--ring-color) var(--progress), var(--ring-track) 0);
 }
@@ -607,7 +779,7 @@ function formatTimeSpan(value: string): string {
 .meter-core {
   display: grid;
   place-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   width: 100%;
   height: 100%;
   border-radius: 50%;
@@ -615,39 +787,46 @@ function formatTimeSpan(value: string): string {
   text-align: center;
 }
 
+/* Ölçek DIŞI üç boyut (0.8 / 0.72rem) ölçeğe taşındı ve panonun halka tipografisiyle
+   eşitlendi; harf aralığı da 0.08em -> 0.035em (pano değeri). Aynı halka iki ekranda iki
+   farklı boyda çiziliyordu. */
 .meter-core span {
   color: var(--text-muted);
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.035em;
   text-transform: uppercase;
 }
 
 .meter-core small {
   max-width: 86%;
   color: var(--text-soft);
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 650;
   line-height: 1.2;
 }
 
 .meter-core strong {
   font-size: clamp(1.4rem, 2.8vw, 2rem);
+  /* Halka değerleri iki saniyede bir güncelleniyor; oransal rakamlarda basamak genişliği
+     değişince sayı yerinde TİTRİYORDU (9.9 -> 10.0 geçişinde ~3px kayma). */
+  font-variant-numeric: tabular-nums;
 }
 
 .info-list {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
   margin: 0;
 }
 
 .info-list div {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
+/* 0.9rem ölçek dışıydı; `--fs-md` (0.92rem) panonun aynı listesindeki değerdir. */
 .info-list dt {
   color: var(--text-muted);
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
 }
 
 .info-list dd {
@@ -655,30 +834,94 @@ function formatTimeSpan(value: string): string {
   font-weight: 600;
 }
 
-.mini-row {
-  display: grid;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
+/* MİNİ TABLOLAR ARTIK GERÇEKTEN TABLO — panoda ölçülen hatanın aynısı buradaydı.
+   `.mini-table` en üstteki ortak ızgara kuralından 18px `gap` alıyordu ve HER SATIRIN kendi
+   kenarlığı + kendi zemini vardı. Üç diskin listesi böylece 18px aralıklı üç YÜZEN KARTA
+   dönüşüyordu; üstelik başlık satırının zemini (`--surface-2`) veri satırlarınınkiyle BİREBİR
+   aynı olduğu için başlık da onlardan ayrılmıyordu. Sütunlar hizalıydı ama göz bunu tek bir
+   tablo olarak okuyamıyor, üç ayrı kutu sayıyordu.
+   Panelin `.data-table`/`.data-row` kalıbına oturtuldu: dışta tek çerçeve, satırlar arasında
+   ince ayraç, başlıkta ayrı zemin. Kazanılan dikey yer ölçülebilir: üç satırlık bir disk
+   tablosu 2 x 18px gap + 4 x 1px kenar = 40px kısalır. */
+.mini-table {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
 }
 
+.mini-row {
+  display: grid;
+  gap: var(--sp-12);
+  align-items: center;
+  padding: var(--sp-10) var(--sp-12);
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--surface-0);
+}
+
+.mini-row:last-child {
+  border-bottom: 0;
+}
+
+/* Kullanım sütunu artık iki parça taşıyor (yüzde + rozet), o yüzden daha geniş: 0.8fr -> 1.1fr.
+   Kaynak ad sütunundan alınıyor (1.4 -> 1.1); disk adı "C:\" gibi 3-4 karakterlik bir dizedir,
+   bu tablodaki en dar içeriğe sahip sütun odur. Panodaki oranlarla birebir aynı. */
 .disk-row {
-  grid-template-columns: 1.4fr 0.8fr 1fr;
+  grid-template-columns: 1.1fr 1.1fr 1fr;
+}
+
+/* SATIR TONU — üçüncü kanal. Renk çok hafif tutuldu (%6/%8): satır zemini yanındaki rozetin
+   kendi dolgusunu bastırmamalı, işi yalnızca gözü doğru satıra çekmek.
+   `--*-1` ile karıştırılıyor, `--*-text` ile DEĞİL: burada metin değil YÜZEY boyanıyor;
+   satırın yazısı `--text-strong` kalır ve iki temada da okunur. */
+.mini-row.warn {
+  background: color-mix(in srgb, var(--warn-1) 6%, var(--surface-0));
+}
+
+.mini-row.danger {
+  background: color-mix(in srgb, var(--danger-1) 8%, var(--surface-0));
 }
 
 .network-row {
   grid-template-columns: 1.2fr 0.9fr 0.9fr 0.9fr;
 }
 
+/* SAYI SÜTUNLARI SAĞA HİZALI, RAKAMLAR TEK GENİŞLİKTE.
+   Her iki tabloda da ilk sütun bir AD (disk harfi, arayüz adı), kalanların hepsi SAYI:
+   "%12.4 / %7.0 / %100.0" ve "1,2 GB/sn". Sola hizalıyken ondalık ayraçlar birbirini tutmuyor
+   ve hangi satırın büyük olduğu ancak OKUNARAK anlaşılıyordu; sağa hizalı ve `tabular-nums`
+   ile aynı basamak alt alta gelir, karşılaştırma bakışla olur. Başlıklar da hizaya dahil.
+   Kullanım hücresindeki rozet `inline-flex` olduğu için `text-align` onu da sağa iter; ayrı
+   bir flex kapsayıcı sınıfına GEREK YOK (panoda `.disk-usage` bu yüzden vardı).
+   `:nth-child` KULLANILIYOR, `:not()` değil — bu depoda özgüllüğü yükselten çıplak `:not()`
+   için nöbetçi var (CssSpecificityGuardTests) ve niyet zaten "ikinciden itibaren". */
+.disk-row > span:nth-child(n + 2),
+.network-row > span:nth-child(n + 2) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Başlık satırı base.css'teki `.data-row.table-head` ile AYNI dili konuşur (aynı renk, aynı
+   boyut, aynı kalınlık): panelde iki farklı "tablo başlığı" görünümü olmasın. Eski hâli
+   700 kalınlıkta ve gövde boyundaydı, yani veri satırından yalnız kalınlıkla ayrılıyordu. */
 .table-head {
-  font-weight: 700;
+  color: var(--text-soft);
+  font-size: var(--fs-xs);
+  font-weight: 600;
   background: var(--surface-2);
 }
 
+/* ARA GENİŞLİK ÖLÇÜLDÜ VE TERS ÇALIŞIYORDU — panoda kapatılan boşluğun aynısı buradaydı.
+   Eski kural 1180px'de `.meter-grid`i DOĞRUDAN tek sütuna indiriyordu: üç adet 220px'lik halka
+   alt alta (~700px dikey). Aynı sayfa 699px'de — telefon kuralları devreye girince — halkaları
+   yan yana üç küçük halka olarak diziyordu. Yani 900px'lik bir dizüstü ekranı, 699px'lik bir
+   TELEFONDAN daha uzun ve daha kötü bir sayfa görüyordu.
+   Şimdi 1180px'de yalnızca gerçekten iki sütun isteyen yerleşim (sayfanın iki kolonu) tek
+   sütuna iner; halkalar 3'lü kalır. 900px ekranda hesap (MainLayout kenar menüyü 900-1200 arası
+   şeride alır, içerik tam genişlik): panel içi ~869px -> halka başına (869 - 32) / 3 = 279px,
+   halka 220px, sığar. */
 @media (max-width: 1180px) {
-  .monitor-columns,
-  .meter-grid {
+  .monitor-columns {
     grid-template-columns: 1fr;
   }
 }
@@ -694,9 +937,9 @@ function formatTimeSpan(value: string): string {
     kopuyor ve "hangi sayı neydi" okunamıyordu. Sütunlar korunup yazı/boşluk daraltılıyor.
   */
   .mini-row {
-    gap: 8px;
-    padding: 9px 10px;
-    font-size: 0.82rem;
+    gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-10);
+    font-size: var(--fs-xs);
   }
 
   .mini-row span {
@@ -704,8 +947,11 @@ function formatTimeSpan(value: string): string {
     overflow-wrap: anywhere;
   }
 
+  /* Kullanım sütunu dar ekranda da rozeti taşımalı. Alan disk adı sütunundan alınıyor: "C:\"
+     üç karakter, buradaki en dar içerik odur. Rozet yine sığmazsa satır iki satıra çıkar —
+     KIRPMA YOK. */
   .disk-row {
-    grid-template-columns: minmax(0, 1.2fr) 0.7fr 0.9fr;
+    grid-template-columns: minmax(0, 0.9fr) 1fr 0.9fr;
   }
 
   /* "Toplam" sütunu gizlenir: indir+yükle toplamıdır, iki sütunu da ekranda tutmak
@@ -723,24 +969,26 @@ function formatTimeSpan(value: string): string {
    CPU/RAM/disk tek bakışta okunur (olay akışının "kaynak tüketimini oku" adımı). */
 @media (max-width: 700px) {
   .meter-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: var(--sp-8);
   }
 
   .meter-card {
-    padding: 8px;
+    padding: var(--sp-8);
     border-radius: var(--radius-md);
   }
 
   .meter-ring {
     width: min(112px, 100%);
-    padding: 8px;
+    padding: var(--sp-8);
   }
 
   .meter-core {
-    gap: 2px;
+    gap: var(--sp-2);
   }
 
+  /* Bu iki boyut ÖLÇEĞİN ALTINDA ve bilerek öyle (panoda da aynı istisna): `--fs-2xs` en küçük
+     adım, ama 112px'lik halkanın içine etiket + oran sığması gerekiyor. Ölçeğe yeni bir adım
+     eklemek yerine kural burada kalıyor — yalnız telefon halkasına ait, tek yer. */
   .meter-core span {
     font-size: 0.56rem;
     letter-spacing: 0.02em;
@@ -757,23 +1005,20 @@ function formatTimeSpan(value: string): string {
 
   .meter-spark {
     height: 22px;
-    margin-top: 8px;
-  }
-
-  .info-card {
-    padding: 12px;
+    margin-top: var(--sp-8);
   }
 
   .net-legend {
-    gap: 12px;
-    font-size: 0.74rem;
+    gap: var(--sp-12);
+    font-size: var(--fs-2xs);
   }
 }
 
+/* Üst boşluk KALDIRILDI: kapsayıcı `.panel` zaten 12px ızgara aralığı veriyor ve margin ona
+   EKLENİYORDU (12 + 10 = 22px, ölçek dışı). */
 .proc-table {
   display: grid;
-  gap: 4px;
-  margin-top: 10px;
+  gap: var(--sp-4);
 }
 
 /* Sabit görüntü alanı: satır sayısı 8'e de düşse 30'a da çıksa bölümün yüksekliği DEĞİŞMEZ,
@@ -782,12 +1027,12 @@ function formatTimeSpan(value: string): string {
   height: 420px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-right: 4px;
+  padding-right: var(--sp-4);
 }
 
 .proc-body {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 /* Satırlar ışınlanmak yerine kayarak yer değiştirsin; göz takip edebilsin. */
@@ -819,23 +1064,41 @@ function formatTimeSpan(value: string): string {
   }
 }
 
+/* radius 9px ölçek dışıydı; `--radius-md` TAM OLARAK 9px, yani görünüm birebir aynı kalır ve
+   değer artık tema/ölçek kaynağından gelir. */
 .proc-row {
   display: grid;
   grid-template-columns: minmax(0, 2.4fr) 0.6fr 1fr 0.8fr 0.8fr;
-  gap: 10px;
+  gap: var(--sp-10);
   align-items: center;
-  padding: 8px 10px;
+  padding: var(--sp-8) var(--sp-10);
   border: 1px solid var(--panel-border);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   background: var(--surface-1);
 }
 
+/* Başlık satırı panelin ORTAK tablo başlığı diliyle konuşur (base.css `.data-row.table-head`):
+   aynı renk (`--text-soft`), aynı boy (`--fs-xs`), aynı kalınlık. Eskiden `--text-muted` +
+   0.74rem ile ipucu metninden bile silikti — beş sütunun ADI, sütunların İÇERİĞİNDEN daha zor
+   okunuyordu. Zemini BİLEREK saydam kalıyor: bu tablo çerçevesiz kartlardan oluşuyor, başlığa
+   zemin vermek onu altıncı bir karta çevirirdi. */
 .proc-row.head {
   border: 0;
   background: transparent;
   padding-bottom: 0;
-  font-size: 0.74rem;
-  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+/* SAYI SÜTUNLARI SAĞA HİZALI — başlıklar dahil.
+   PID (4-5 hane), CPU yüzdesi, bellek ("1,2 GB") ve süre; dördü de sayı. Sola hizalıyken
+   "1284" ile "7" aynı noktadan başlıyor ve 30 satırlık canlı listede hangisinin büyük olduğu
+   ancak okunarak anlaşılıyordu. `tabular-nums` zaten vardı (`.proc-num`), eksik olan hizaydı;
+   üstelik iki saniyede bir güncellenen bir listede sola hizalı değişken genişlikli sayı,
+   sütunun sağ kenarını sürekli oynatıyordu. */
+.proc-row > :nth-child(n + 2) {
+  text-align: right;
 }
 
 .proc-owner {
@@ -852,7 +1115,7 @@ function formatTimeSpan(value: string): string {
 
 .proc-owner small {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -861,7 +1124,7 @@ function formatTimeSpan(value: string): string {
 .proc-num {
   position: relative;
   font-variant-numeric: tabular-nums;
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
 }
 
 /* CPU çubuğu satırın arkasında ince bir dolgu: sıralama değişse de göz oranı yakalar. */
@@ -869,7 +1132,7 @@ function formatTimeSpan(value: string): string {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: -4px;
+  bottom: calc(-1 * var(--sp-4));
   height: 3px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--text-muted) 20%, transparent);
@@ -902,8 +1165,8 @@ function formatTimeSpan(value: string): string {
 @media (max-width: 720px) {
   .proc-row {
     grid-template-columns: minmax(0, 1.7fr) 0.8fr 0.9fr;
-    gap: 8px;
-    padding: 8px 10px 10px;
+    gap: var(--sp-8);
+    padding: var(--sp-8) var(--sp-10) var(--sp-10);
   }
 
   .proc-row > :nth-child(2),
@@ -912,15 +1175,15 @@ function formatTimeSpan(value: string): string {
   }
 
   .proc-num {
-    font-size: 0.8rem;
+    font-size: var(--fs-xs);
   }
 
   .proc-owner strong {
-    font-size: 0.86rem;
+    font-size: var(--fs-sm);
   }
 
   .proc-owner small {
-    font-size: 0.68rem;
+    font-size: var(--fs-2xs);
   }
 
   .row-actions {

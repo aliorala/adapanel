@@ -1,13 +1,14 @@
 <template>
   <section class="consumers" :aria-busy="loading ? 'true' : 'false'">
-    <div class="consumers-head">
-      <div class="consumers-title">
-        <strong>{{ label("title", "Şu an kim kullanıyor?") }}</strong>
-        <small class="meta">
-          {{ label("subtitle", "{name} sürecinin içinde çalışan işlemler", { name: displayName }) }}
-        </small>
-      </div>
-      <span v-if="snapshot && snapshot.available" class="meta consumers-count">
+    <!-- BAŞLIK BURADAN KALKTI — AYNI KARTTA İKİ KEZ YAZILIYORDU.
+         ÖLÇÜLDÜ: bu bileşeni kullanan İKİ ekranın (MonitoringView, DatabasesView) ikisi de
+         bileşenden hemen önce `panel.consumers.title` + `panel.consumers.subtitle` çiftini
+         kendi `section-head`inde basıyor. Bileşen bir kez daha basınca kartın tepesinde
+         "Şu an kim kullanıyor?" ve altındaki cümle ARKA ARKAYA İKİ KERE görünüyordu.
+         Başlık ekranın işidir (orada `h2`/`h3` rütbesi ve kaynak seçici ile birlikte durur);
+         bileşenin işi listedir. Sayaç kalıyor — o, başlığın değil listenin bilgisi. -->
+    <div v-if="snapshot && snapshot.available" class="consumers-head">
+      <span class="meta consumers-count">
         {{ label("count", "{n} aktif", { n: snapshot.totalCount }) }}
       </span>
     </div>
@@ -531,6 +532,15 @@ defineExpose({ refresh: load });
 </script>
 
 <style scoped>
+/*
+ * YAZI OLCEGI TABANI. Bu blokta 12 ayri ham `rem` degeri vardi: 0.68 / 0.72 / 0.75 / 0.76 /
+ * 0.78rem — yani 9.18px ile 10.53px arasinda bes farkli adim. Ikisi arasindaki en buyuk fark
+ * 1.35px; bu bir HIYERARSI degil, olcum gurultusuydu (rozet ile alt etiketi arasindaki fark
+ * gozle secilemiyordu) ve besinin dordu panelin taban adiminin ALTINDAYDI.
+ *
+ * Hepsi `--fs-2xs`e (0.78rem = 10.53px, olcegin en kucuk adimi) baglandi: hem taban altinda
+ * yazi kalmadi, hem de yarin taban degisirse bu blok kendiliginden takip eder.
+ */
 /* BİTEN sorgu: yeşil şerit + soluk zemin. Satır hemen kaybolmuyor ki okunabilsin; 10 dakika
    sonra kendiliğinden düşer. Kalıcı kayıt Geçmiş sekmesinde. */
 .consumer-row.finished {
@@ -546,7 +556,7 @@ defineExpose({ refresh: load });
   border-radius: 999px;
   background: var(--ok-bg);
   color: var(--ok-text);
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
 }
 
@@ -556,23 +566,19 @@ defineExpose({ refresh: load });
   min-width: 0;
 }
 
+/* Başlık gittiği için şerit yalnız sayacı taşıyor: sağa yaslanır. Boşsa (`v-if`) şerit hiç
+   çizilmez, çünkü `.consumers` ızgarası boş çocuğa `gap` vermez. */
 .consumers-head {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.consumers-title {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
 .consumers-count {
   white-space: nowrap;
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .consumers-empty {
@@ -581,7 +587,7 @@ defineExpose({ refresh: load });
 
 .consumers-stale {
   color: var(--warn-text);
-  font-size: 0.76rem;
+  font-size: var(--fs-2xs);
 }
 
 /* Sütunlar: kim · süre · durum · sorgu. Sorgu sütunu esner, diğerleri sabit kalır. */
@@ -595,7 +601,7 @@ defineExpose({ refresh: load });
   margin-left: 6px;
   padding: 1px 6px;
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--text-muted);
   border: 1px solid var(--panel-border);
@@ -620,7 +626,7 @@ defineExpose({ refresh: load });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .consumer-statement.expanded .statement-toggle code {
@@ -656,7 +662,7 @@ defineExpose({ refresh: load });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 /* Kesin olmayan eşleşme işareti: kullanıcı bunun tahmin olduğunu görmeli. */
@@ -686,7 +692,7 @@ defineExpose({ refresh: load });
 
 .consumer-row.head {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -715,7 +721,7 @@ defineExpose({ refresh: load });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
 }
 
 .consumer-duration {
@@ -741,7 +747,7 @@ defineExpose({ refresh: load });
      yanında durmalı. Değer değişmedi (siyah: 5.13 açık / 9.51 koyu), yalnız kaynağı düzeldi:
      gömülü #000, `--warn-1` bir gün değişirse sessizce yanlış kalırdı. */
   color: var(--on-warn);
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   font-weight: 800;
 }
 
@@ -750,7 +756,7 @@ defineExpose({ refresh: load });
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 /* Sorgu metni ASLA taşmaz: tek satır, kırpılır; tamamı title ipucunda. */
@@ -765,12 +771,12 @@ defineExpose({ refresh: load });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.75rem;
+  font-size: var(--fs-2xs);
   line-height: 1.45;
 }
 
 .consumer-statement small {
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
 }
 
 .consumers-foot {

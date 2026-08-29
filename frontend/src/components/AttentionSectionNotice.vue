@@ -1,13 +1,24 @@
 <template>
   <!-- Madde yoksa HİÇBİR ŞEY gösterilmez. Sürekli duran bir "her şey yolunda" kutusu,
        gerçek bir sorun çıktığında fark edilmeyi zorlaştırır. -->
-  <section v-if="items.length" class="attention-notice" :class="worstSeverity">
-    <div class="attention-head">
+  <!--
+    KATLANIR KUTU (gizlenmez).
+
+    ÖLÇÜLDÜ: site Pano'sunda bu kutu, dışarıdan görünüm şeridi ve onarma kutusuyla birlikte
+    içeriğin üstünde ~470px yer kaplıyordu. Madde sayısı artık başlıkta duruyor, liste
+    `<details>` içinde. Açık/kapalı kararı ÖNEME bağlı: kritik bir madde varsa liste AÇIK
+    açılır, yalnız uyarı varsa kapalı başlar — sayı ve "Tümünü gör" her hâlükârda görünür.
+  -->
+  <details v-if="items.length" class="attention-notice" :class="worstSeverity" :open="worstSeverity === 'critical'">
+    <summary class="attention-head">
       <strong>{{ t("panel.attention.noticeTitle") }}</strong>
-      <button class="ghost compact" type="button" @click="emit('open')">
+      <span class="attention-count">{{ t("panel.attention.noticeCount", { count: items.length }) }}</span>
+      <!-- Çekmeceyi açan düğme katlamayı TETİKLEMEZ: `<summary>` içindeki tıklama
+           varsayılan olarak kutuyu açıp kapatır, kullanıcı ise başka bir ekrana gidiyor. -->
+      <button class="ghost compact" type="button" @click.stop.prevent="emit('open')">
         {{ t("panel.attention.openDrawer") }}
       </button>
-    </div>
+    </summary>
 
     <ul class="attention-list">
       <li v-for="item in items" :key="item.id" :class="item.severity">
@@ -18,7 +29,7 @@
         <small v-if="item.detail" class="attention-detail">{{ item.detail }}</small>
       </li>
     </ul>
-  </section>
+  </details>
 </template>
 
 <script setup lang="ts">
@@ -40,8 +51,10 @@ const props = defineProps<{ items: AttentionItem[] }>();
 const emit = defineEmits<{ (event: "open"): void }>();
 
 const i18n = useI18n();
-const t = (key: string) => {
-  const value = i18n.t(key);
+// Yer tutuculu metinler ("{count} madde") de bu sarmalayicidan gectigi icin PARAMETRE alir;
+// parametresiz cagri davranisi degismedi.
+const t = (key: string, params?: Record<string, unknown>) => {
+  const value = params ? i18n.t(key, params) : i18n.t(key);
   return typeof value === "string" ? value : key;
 };
 
@@ -67,11 +80,35 @@ const worstSeverity = computed(() =>
   background: color-mix(in srgb, var(--danger-1) 8%, transparent);
 }
 
+/* `<summary>` varsayılan işareti `display: flex` ile kayboluyor; onun yerine ::before
+   ile elle çizilir, böylece katlanabilir olduğu görünür kalır. */
 .attention-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  gap: 0.6rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.attention-head::-webkit-details-marker {
+  display: none;
+}
+
+.attention-head::before {
+  content: "▸";
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.attention-notice[open] > .attention-head::before {
+  content: "▾";
+}
+
+/* Sayı, başlık ile "Tümünü gör" arasındaki boşluğu doldurur; düğme sağda kalır. */
+.attention-count {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 0.85em;
 }
 
 .attention-list {

@@ -15,32 +15,39 @@
     </p>
 
     <!-- Toplam sayilar. Ulasilamayan dugum varsa toplamin EKSIK oldugu ACIKCA soylenir:
-         bilinmeyeni sifir saymak, panelin yalan soylemesi olurdu. -->
-    <section class="form-surface summary-surface">
-      <div class="summary-grid">
-        <div class="summary-cell">
-          <span class="field-label">{{ t("panel.cluster.summaryNodes") }}</span>
-          <strong>{{ overview?.nodes.length ?? 0 }}</strong>
-        </div>
-        <div class="summary-cell">
-          <span class="field-label">{{ t("panel.cluster.summaryReachable") }}</span>
-          <strong>{{ overview?.reachableCount ?? 0 }}</strong>
-        </div>
-        <div class="summary-cell">
-          <span class="field-label">{{ t("panel.cluster.summaryUnreachable") }}</span>
-          <strong :class="{ 'danger-text': (overview?.unreachableCount ?? 0) > 0 }">
-            {{ overview?.unreachableCount ?? 0 }}
-          </strong>
-        </div>
-        <div class="summary-cell">
-          <span class="field-label">{{ t("panel.cluster.summarySites") }}</span>
-          <strong>{{ overview?.totalSites ?? 0 }}</strong>
-          <small v-if="(overview?.unreachableCount ?? 0) > 0" class="warn-text">
-            {{ t("panel.cluster.summarySitesPartial") }}
-          </small>
-        </div>
-      </div>
-    </section>
+         bilinmeyeni sifir saymak, panelin yalan soylemesi olurdu.
+
+         KAPSAMLI KOPYA SILINDI: bu blok `.form-surface` icine gomulu kendi `.summary-grid` /
+         `.summary-cell` izgarasiydi -- base.css'te BIREBIR ayni isi yapan `.summary-strip` /
+         `.summary-item` varken. Iki gorunur sonucu vardi: (1) kutu icinde kutu (kenarli
+         `form-surface` + kenarsiz hucreler), ProxyView'in ayni rutbedeki ozet seridi ise
+         kenarli kutucuklardan olusuyordu -- ayni bilgi iki ekranda iki ayri kutu deseniyle;
+         (2) `.summary-grid` `auto-fit minmax(140px)` kullandigi icin genis ekranda 4 sutun,
+         ProxyView'de ise sabit 4 sutun vardi ve dar ekran kirilimlari (900/720px) yalniz
+         paylasilan surumde tanimliydi. Artik ikisi de ayni serit. -->
+    <div class="summary-strip">
+      <article class="summary-item">
+        <span class="tile-label">{{ t("panel.cluster.summaryNodes") }}</span>
+        <strong>{{ overview?.nodes.length ?? 0 }}</strong>
+      </article>
+      <article class="summary-item">
+        <span class="tile-label">{{ t("panel.cluster.summaryReachable") }}</span>
+        <strong>{{ overview?.reachableCount ?? 0 }}</strong>
+      </article>
+      <article class="summary-item">
+        <span class="tile-label">{{ t("panel.cluster.summaryUnreachable") }}</span>
+        <strong :class="{ 'danger-text': (overview?.unreachableCount ?? 0) > 0 }">
+          {{ overview?.unreachableCount ?? 0 }}
+        </strong>
+      </article>
+      <article class="summary-item">
+        <span class="tile-label">{{ t("panel.cluster.summarySites") }}</span>
+        <strong>{{ overview?.totalSites ?? 0 }}</strong>
+        <small v-if="(overview?.unreachableCount ?? 0) > 0" class="warn-text">
+          {{ t("panel.cluster.summarySitesPartial") }}
+        </small>
+      </article>
+    </div>
 
     <!-- Yeni dugum / duzenleme formu -->
     <section class="form-surface">
@@ -117,30 +124,44 @@
           </header>
 
           <!-- Ulasilabilen dugum: gercek olcumler -->
+          <!-- DOLULUK RENGI HER OLCUME BAGLI, YALNIZ DISKE DEGIL.
+               OLCULDU: eskiden CPU ve BELLEK hicbir kosula bagli degildi -- %99 CPU ile %3 CPU
+               ayni duz metin rengiyle yaziliyordu; yalnizca diskin kendine ait, tek basina
+               secilmis bir esigi (85) vardi. Yani en buyuk iki sayi sifir bilgi tasiyordu.
+               Ayni esik uc olcume de uygulaniyor (`dolulukSinifi`). Renk TEK KANAL DEGIL:
+               sayinin kendisi ("%99") her zaman gorunur, renk yalnizca vurgudur. -->
           <div v-if="row.reachable && row.info" class="node-metrics">
             <div class="metric">
-              <span class="field-label">{{ t("panel.cluster.metricVersion") }}</span>
+              <span class="tile-label">{{ t("panel.cluster.metricVersion") }}</span>
               <strong>{{ row.info.panelVersion || "—" }}</strong>
             </div>
             <div class="metric">
-              <span class="field-label">{{ t("panel.cluster.metricSites") }}</span>
-              <strong>{{ row.info.siteCount }}</strong>
+              <span class="tile-label">{{ t("panel.cluster.metricSites") }}</span>
+              <strong class="metric-number">{{ row.info.siteCount }}</strong>
             </div>
             <div class="metric">
-              <span class="field-label">{{ t("panel.cluster.metricCpu") }}</span>
-              <strong>{{ yuzde(row.info.overview.cpuUsagePercent) }}</strong>
+              <span class="tile-label">{{ t("panel.cluster.metricCpu") }}</span>
+              <strong :class="['metric-number', dolulukSinifi(row.info.overview.cpuUsagePercent)]">
+                {{ yuzde(row.info.overview.cpuUsagePercent) }}
+              </strong>
             </div>
             <div class="metric">
-              <span class="field-label">{{ t("panel.cluster.metricMemory") }}</span>
-              <strong>{{ yuzde(row.info.overview.memoryUsagePercent) }}</strong>
+              <span class="tile-label">{{ t("panel.cluster.metricMemory") }}</span>
+              <strong :class="['metric-number', dolulukSinifi(row.info.overview.memoryUsagePercent)]">
+                {{ yuzde(row.info.overview.memoryUsagePercent) }}
+              </strong>
             </div>
             <div class="metric">
-              <span class="field-label">{{ t("panel.cluster.metricDisk") }}</span>
-              <strong :class="{ 'warn-text': enDoluDisk(row) >= 85 }">{{ yuzde(enDoluDisk(row)) }}</strong>
+              <span class="tile-label">{{ t("panel.cluster.metricDisk") }}</span>
+              <strong :class="['metric-number', dolulukSinifi(enDoluDisk(row))]">
+                {{ yuzde(enDoluDisk(row)) }}
+              </strong>
             </div>
             <div class="metric">
-              <span class="field-label">{{ t("panel.cluster.metricAlerts") }}</span>
-              <strong :class="{ 'danger-text': uyariSayisi(row) > 0 }">{{ uyariSayisi(row) }}</strong>
+              <span class="tile-label">{{ t("panel.cluster.metricAlerts") }}</span>
+              <strong :class="['metric-number', { 'danger-text': uyariSayisi(row) > 0 }]">
+                {{ uyariSayisi(row) }}
+              </strong>
             </div>
           </div>
 
@@ -150,23 +171,29 @@
             <small v-if="row.detail"> ({{ row.detail }})</small>
           </p>
 
+          <!-- YIKICI EYLEM AYRI VE SABIT KONUMDA (ProxyView'deki `.action-row .danger` ile ayni
+               karar). Eskiden "Sil", "Duzenle"nin 8px sagindaydi: ayni boy, ayni sira, ayni
+               hizada -- refleksle yanlisina basilacak dizilim. Uc guvenli eylem kendi obeginde
+               kaldi, silme obekten kopartildi ve HER ZAMAN satirin sonunda duruyor. -->
           <footer class="node-actions">
             <span v-if="!row.node.verifyTlsCertificate" class="status-pill danger">
               {{ t("panel.cluster.tlsOff") }}
             </span>
             <span v-if="!row.node.hasToken" class="status-pill warn">{{ t("panel.cluster.noToken") }}</span>
             <span class="cell-muted">{{ sonGorulme(row) }}</span>
-            <button class="secondary compact row-button" :disabled="busyId === row.node.id" @click="probe(row)">
-              {{ t("panel.cluster.test") }}
-            </button>
-            <button
-              class="secondary compact row-button"
-              :disabled="busyId === row.node.id || !row.reachable"
-              :title="row.reachable ? t('panel.cluster.openHint') : t('panel.cluster.openDisabled')"
-              @click="open(row)">
-              {{ t("panel.cluster.open") }}
-            </button>
-            <button class="secondary compact row-button" @click="edit(row)">{{ t("panel.common.edit") }}</button>
+            <div class="safe-actions">
+              <button class="secondary compact row-button" :disabled="busyId === row.node.id" @click="probe(row)">
+                {{ t("panel.cluster.test") }}
+              </button>
+              <button
+                class="secondary compact row-button"
+                :disabled="busyId === row.node.id || !row.reachable"
+                :title="row.reachable ? t('panel.cluster.openHint') : t('panel.cluster.openDisabled')"
+                @click="open(row)">
+                {{ t("panel.cluster.open") }}
+              </button>
+              <button class="secondary compact row-button" @click="edit(row)">{{ t("panel.common.edit") }}</button>
+            </div>
             <button class="danger compact row-button" :disabled="busyId === row.node.id" @click="remove(row)">
               {{ t("panel.cluster.remove") }}
             </button>
@@ -463,6 +490,25 @@ function statusMessage(row: ClusterNodeStatus) {
   return translated === row.statusKey ? t("cluster.node_unreachable") : translated;
 }
 
+/**
+ * Doluluk yüzdesinin durum sınıfı — CPU, bellek ve disk için AYNI eşik.
+ *
+ * Eşikler tek yerde: eskiden yalnız diskin kendi başına yazılmış bir 85'i vardı, CPU ve bellek
+ * ise hiçbir eşiğe bağlı değildi. Aynı ekranda iki ölçüm renkleniyor, ikisi renklenmiyordu.
+ *
+ * 90 / 75 SEÇİLDİ: 90 ve üstü, panelin "durdurur" saydığı bölge (dolmuş disk yazma hatası verir,
+ * doymuş CPU istek kuyruğu büyütür); 75 ise "bak ama acele etme" bölgesi. Eski 85 tek bir
+ * ölçümün yerel kararıydı; iki eşiğe bölmek uyarı ile arızayı da ayırır (renk tek kanal olmasın
+ * diye sayının kendisi zaten hep yazılı).
+ */
+function dolulukSinifi(value: number) {
+  if (value >= 90) {
+    return "danger-text";
+  }
+
+  return value >= 75 ? "warn-text" : "";
+}
+
 function enDoluDisk(row: ClusterNodeStatus) {
   const disks = row.info?.overview.disks ?? [];
   // Ortalama DEĞİL en kötü disk: sunucuyu durduran şey disklerin ortalaması değil, dolan ilk diski.
@@ -505,33 +551,33 @@ function showNotice(message: string, isError: boolean) {
   align-content: start;
 }
 
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 14px;
-}
-
-.summary-cell {
-  display: grid;
-  gap: 4px;
-}
-
-.summary-cell strong {
-  font-size: 1.6rem;
-  line-height: 1.1;
+/* Ozet serit degeri: etiketten (`--fs-2xs`, 0.78rem) belirgin sekilde buyuk ama olcegin ICINDE.
+   1.6rem SILINDI -- yazi olceginde boyle bir adim yok (en ust adim `--fs-2xl` = 1.42rem) ve
+   bu sayi bir sayfa basligi degil, bir kutucuk degeri; `--fs-xl` (1.18rem) etiketle arasinda
+   1.5 kat fark birakir, bu hiyerarsi icin yeterli.
+   `tabular-nums`: dort kutucuk ve alti olcum yan yana duruyor; degisken genislikli basamakla
+   9 -> 10 gecisinde sayi kaydigi icin goz sutunu takip edemiyordu. */
+.summary-item strong,
+.metric-number {
+  font-size: var(--fs-xl);
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
 }
 
 .node-cards {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
+/* IC KART RECETESI — alti ekranda ayni (bkz. ServerHealthView'deki olcum notu):
+   1px kenar + `--radius-md` + `--surface-1` + `--sp-12` dolgu. Burada 10px yaricap ve
+   14px dolgu vardi; ikisi de olcek disiydi. */
 .node-card {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
   border: 1px solid var(--panel-border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--surface-1);
 }
 
@@ -539,19 +585,19 @@ function showNotice(message: string, isError: boolean) {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
 }
 
 .node-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 .metric {
   display: grid;
-  gap: 3px;
+  gap: var(--sp-2);
 }
 
 .node-down {
@@ -561,7 +607,7 @@ function showNotice(message: string, isError: boolean) {
 .node-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
 }
 
@@ -569,8 +615,18 @@ function showNotice(message: string, isError: boolean) {
   margin-right: auto;
 }
 
-.row-actions button {
-  width: auto;
+/* Guvenli eylemler tek obek. Silme dugmesi obegin DISINDA kaldigi icin aradaki bosluk
+   `--node-actions` araligindan (8px) belirgin sekilde buyuk (16px): goz iki grubu ayirir,
+   parmak yanlisina kaymaz. */
+.safe-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
+}
+
+.node-actions > .danger {
+  margin-left: var(--sp-16);
 }
 
 @media (max-width: 760px) {
@@ -581,6 +637,13 @@ function showNotice(message: string, isError: boolean) {
   .node-actions .cell-muted {
     margin-right: 0;
     width: 100%;
+  }
+
+  /* Dar ekranda obekler alt alta duser; ayirici bosluk yatayda anlamsizlasir, dikeye
+     tasinir ki silme dugmesi yine kendi basina dursun. */
+  .node-actions > .danger {
+    margin-left: 0;
+    margin-top: var(--sp-4);
   }
 }
 </style>

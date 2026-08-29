@@ -166,7 +166,8 @@ function showNotice(message: string, isError: boolean) {
 
 .field-hint {
   color: var(--text-muted);
-  font-size: 0.74rem;
+  /* 0.74rem = 9.99px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
 }
 
 .row-actions button {

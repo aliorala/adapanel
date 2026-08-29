@@ -29,7 +29,7 @@
         </div>
       </component>
 
-      <nav class="nav-list" :aria-label="t('panel.layout.menu')">
+      <nav ref="navListRef" class="nav-list" :aria-label="t('panel.layout.menu')">
         <!--
           GRUPLU MENÜ: `role="group"` + `aria-labelledby` başlığı maddelere BAĞLAR. Ekran okuyucu
           "Barındırma grubu, Posta" diye okur; düz listede 21 madde bağlamsız sıralanıyordu.
@@ -163,8 +163,14 @@
             </span>
           </button>
 
-          <div v-if="role === 'Administrator'" class="bell-wrap">
-            <button class="secondary compact icon-btn bell-btn" :title="t('panel.layout.notifications')" @click="showNotifications = !showNotifications">
+          <div v-if="role === 'Administrator'" ref="bellWrapRef" class="bell-wrap">
+            <button
+              class="secondary compact icon-btn bell-btn"
+              :title="t('panel.layout.notifications')"
+              :aria-label="t('panel.layout.notifications')"
+              aria-haspopup="true"
+              :aria-expanded="showNotifications"
+              @click="zilKutusunuAcKapa">
               <svg viewBox="0 0 24 24" class="nav-icon" aria-hidden="true">
                 <path d="M6 9a6 6 0 0 1 12 0c0 5 1.5 6 1.5 6H4.5S6 14 6 9zM10 19a2 2 0 0 0 4 0" />
               </svg>
@@ -172,8 +178,18 @@
             </button>
             <div v-if="showNotifications" class="bell-menu">
               <div class="bell-head">{{ t("panel.layout.recentActivity") }}</div>
-              <div v-for="item in recentActivity" :key="item.id" class="bell-item">
-                <strong>{{ humanizeAction(item.action) }}</strong>
+              <!--
+                ÖNEM DÜZEYİ RENKTEN İBARET DEĞİL: sol şerit görsel ipucu, yanındaki rozet ise
+                düzeyin ADIDIR ("Hata" / "Dikkat" / "Bilgi"). Renk ayırt edemeyen ya da rozeti
+                küçük bulan kullanıcı da başarısız bir kurulumu başarılı bir girişten ayırabilir.
+              -->
+              <div v-for="item in recentActivity" :key="item.id" :class="['bell-item', activityTone(item.action)]">
+                <span class="bell-item-title">
+                  <!-- Panelin ORTAK durum rozeti (`.status-pill`, base.css) kullanılıyor; zil
+                       kutusuna ikinci bir rozet üslubu icat edilmedi. -->
+                  <span class="status-pill" :class="tonePillClass(item.action)">{{ toneLabel(activityTone(item.action)) }}</span>
+                  <strong>{{ activityLabel(item.action) }}</strong>
+                </span>
                 <small>{{ item.userName }} · {{ shortTime(item.createdAtUtc) }}</small>
               </div>
               <p v-if="recentActivity.length === 0" class="bell-empty">{{ t("panel.layout.noActivity") }}</p>
@@ -595,6 +611,8 @@ const NARROW_QUERY = "(max-width: 900px)";
 const isNarrow = ref(typeof window !== "undefined" && window.matchMedia(NARROW_QUERY).matches);
 const menuOpen = ref(false);
 const sidebarRef = ref<HTMLElement | null>(null);
+/** Kaydırılan menü kutusu — seçili maddenin görünürlüğü BURADAN ölçülür (bkz. aşağıdaki işlev). */
+const navListRef = ref<HTMLElement | null>(null);
 const menuButtonRef = ref<HTMLElement | null>(null);
 let narrowQuery: MediaQueryList | null = null;
 
@@ -650,15 +668,61 @@ watch(menuOpen, async (open) => {
   menuButtonRef.value?.focus?.();
 });
 
+/*
+ * SEÇİLİ MADDE GÖRÜŞE KAYDIRILIR.
+ *
+ * ÖLÇÜLEN HATA (canlı 0.8.0, 1534x955, yönetici menüsü): kenar menü kaydırmalıdır
+ * (`.nav-list` scrollHeight 1013px, görünen 789px) ve açılışta kaydırma konumu HER ZAMAN 0'dır.
+ * Sayfa "Sunucular" bölümündeyken yenilendiğinde o maddenin 40px'lik yüksekliğinin yalnız
+ * **16.2px**'i görünüyordu; altındaki dört madde (Yapay Zeka, Hesap, Ayarlar, Çıkış) hiç
+ * görünmüyordu. Kesilen kenarın hemen altında "SUNUCU / GÜVENLİ YOL" kutusu durduğu için
+ * bu, ekranda "seçili madde kutunun ALTINDA kalmış" gibi okunuyordu.
+ * ÖLÇÜLDÜ ve DOĞRULANDI — kutu maddenin ÜSTÜNE BİNMİYOR: kenar menü üç satırlık bir ızgara
+ * (`auto / 1fr / auto`), liste alt kenarı y=876.4, kutu üst kenarı y=886.4, yani aralarında
+ * 10px boşluk var. Yani "alt boşluk ekle" yanlış teşhis olurdu: sorun ÖRTÜŞME değil,
+ * listenin seçili maddeye hiç kaydırılmamasıydı.
+ *
+ * Çözüm kaydırma konumunu düzeltmek. `block: "nearest"` BİLEREK: madde zaten tamamen
+ * görünüyorsa hiçbir şey yapmaz (menü her bölüm değişiminde zıplamaz), yalnız kırpıldığında
+ * en az hareketle içeri alır. `scroll-margin-block` (stiller) maddeyi kenara YAPIŞTIRMAZ,
+ * 12px nefes bırakır.
+ */
+async function seciliMaddeyiGoruseKaydir() {
+  await nextTick();
+  const list = navListRef.value;
+  if (!list) {
+    return;
+  }
+
+  const active = list.querySelector<HTMLElement>(".nav-item.active");
+  if (!active) {
+    return;
+  }
+
+  const listBox = list.getBoundingClientRect();
+  const itemBox = active.getBoundingClientRect();
+  // Tamamen görünüyorsa DOKUNMA: gereksiz kaydırma, kullanıcının menüde bulduğu yeri bozar.
+  if (itemBox.top >= listBox.top && itemBox.bottom <= listBox.bottom) {
+    return;
+  }
+
+  active.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
 onMounted(() => {
   narrowQuery = window.matchMedia(NARROW_QUERY);
   isNarrow.value = narrowQuery.matches;
   narrowQuery.addEventListener("change", onNarrowChange);
+  void seciliMaddeyiGoruseKaydir();
 });
 
 onBeforeUnmount(() => {
   narrowQuery?.removeEventListener("change", onNarrowChange);
   document.removeEventListener("keydown", onMenuKeydown, true);
+  // Zil kutusu açıkken bileşen sökülürse belge dinleyicileri ARDA KALIRDI: sonraki her
+  // tıklama artık var olmayan bir bileşenin işlevini çağırırdı.
+  document.removeEventListener("pointerdown", zilDisiTiklama, true);
+  document.removeEventListener("keydown", zilKlavye, true);
   if (menuOpen.value) {
     lockBodyScroll(false);
   }
@@ -672,11 +736,142 @@ function goToFirstResult() {
 
 // Bildirim çanı: son yönetim aktiviteleri (audit log).
 const showNotifications = ref(false);
+const bellWrapRef = ref<HTMLElement | null>(null);
 const recentActivity = computed(() => authStore.auditLogs.slice(0, 8));
 
-function humanizeAction(action: string): string {
-  return action.replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+/**
+ * OLAY ADI ÇEVİRİDEN GELİR.
+ *
+ * ÖLÇÜLEN HATA (canlı 0.8.0, arayüz dili Türkçe): zil listesi "Software Install Failed",
+ * "Update Install Scheduled", "Terminal Command Executed", "Auth Login Succeeded" yazıyordu.
+ * Bunlar çeviri DEĞİLDİ — ham denetim kimliğinin (`software.install.failed`) noktaları boşluğa
+ * çevrilip baş harfleri büyütülmüş hâliydi. Yani Türkçe panelde İngilizce, üstelik hiç kimsenin
+ * yazmadığı, kod kimliğinden türetilmiş bir İngilizce görünüyordu.
+ *
+ * Anahtarlar SUNUCU KAYNAĞI TARANARAK çıkarıldı, elle tahmin edilmedi: `IAuditService`in iki
+ * yazma metodunun (`WriteAsync` / `WriteForSubscriptionAsync`) ilk argümanındaki 168 kimliğin
+ * HEPSİ `tr.json` + `en.json` içine yazıldı.
+ *
+ * YEDEK KALDIRILMADI: sunucuya yarın yeni bir eylem eklenirse anahtar bulunamaz ve eski
+ * davranış (ham kimliği okunur hâle getirmek) devreye girer. Sessiz boşluk bırakmaktansa
+ * çirkin ama DOĞRU bir metin göstermek yeğlenir — bilgi gizlenmez.
+ */
+function activityLabel(action: string): string {
+  const key = `panel.activity.action.${action}`;
+  return te(key) ? t(key) : action.replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/**
+ * ÖNEM DÜZEYİ.
+ *
+ * ÖLÇÜLEN HATA: "Software Install Failed" ile "Auth Login Succeeded" listede BİREBİR aynı
+ * çiziliyordu — aynı yazı boyu, aynı ağırlık, aynı renk, aynı ikon (hiç). Başarısız bir kurulum
+ * ile başarılı bir giriş arasında hiçbir görsel fark yoktu.
+ *
+ * Düzey eylem kimliğinin SON PARÇASINDAN okunur; sunucu ayrı bir "severity" alanı göndermiyor
+ * ve uydurmak yerine var olan veriden türetmek doğru. Tablolar 168 kimliğin son parçaları
+ * sayılarak çıkarıldı:
+ *  - hata  : `failed`, `rejected` — bir işin YAPILAMADIĞINI söyleyenler.
+ *  - dikkat: bir şeyi kaldıran/kapatan/askıya alan/engelleyenler. Bunlar hata değildir (çoğu
+ *            bilinçli yönetici işidir) ama listede gözden kaçmaması gerekenlerdir.
+ *  - bilgi : geri kalan her şey (oluşturma, güncelleme, açma, tamamlama).
+ * Bilinmeyen bir son parça `bilgi`ye düşer: yanlış alarm üretmez.
+ */
+const TONE_ERROR = new Set(["failed", "rejected"]);
+const TONE_WARN = new Set([
+  "blocked",
+  "deactivated",
+  "deleted",
+  "disabled",
+  "enforced",
+  "purged",
+  "removed",
+  "rejected",
+  "revoked",
+  "revoked_on_reset",
+  "site_leftover",
+  "stopped",
+  "suspended",
+  "unpublished"
+]);
+
+type ActivityTone = "error" | "warn" | "info";
+
+function activityTone(action: string): ActivityTone {
+  const last = action.slice(action.lastIndexOf(".") + 1);
+  if (TONE_ERROR.has(last)) {
+    return "error";
+  }
+
+  return TONE_WARN.has(last) ? "warn" : "info";
+}
+
+function toneLabel(tone: ActivityTone): string {
+  return t(`panel.activity.tone.${tone}`);
+}
+
+/** Ortak `.status-pill` sözlüğüne çeviri: "bilgi" düzeyi rozetin NÖTR hâlidir (ek sınıf yok). */
+function tonePillClass(action: string): string {
+  const tone = activityTone(action);
+  if (tone === "error") {
+    return "danger";
+  }
+
+  return tone === "warn" ? "warn" : "";
+}
+
+/*
+ * ZİL KUTUSU KAPANIŞI.
+ *
+ * ÖLÇÜLEN HATA (canlı 0.8.0): kutu YALNIZCA zile ikinci kez basınca kapanıyordu. Dışarı
+ * tıklamak kapatmıyordu, `Escape` kapatmıyordu ve BÖLÜM DEĞİŞTİRMEK de kapatmıyordu — Posta
+ * ekranına geçildiğinde 280px'lik kutu hâlâ üstte durup içeriğin ortasını örtüyordu. Ayrıca
+ * dikkat çekmecesi zil kutusu açıkken açılabiliyordu; iki katman üst üste biniyordu.
+ *
+ * Dört kapanış yolu da BURADA, tek yerde: dışarı tıklama, `Escape`, bölüm değişimi ve öteki
+ * katmanın açılması. Dinleyiciler yalnız kutu AÇIKKEN bağlanır (kapalıyken sayfanın her
+ * tıklamasını dinlemenin anlamı yok) ve bileşen sökülürken kesin olarak çözülür.
+ *
+ * `pointerdown` seçildi, `click` DEĞİL: `click` düğmenin kendi `@click`inden SONRA gelirdi ve
+ * kutuyu aç-kapa-aç zincirine sokardı. Kapatma basma anında, açma ise düğmenin kendi olayında
+ * olur; ikisi çakışmaz çünkü sarmalayıcının içindeki basmalar ayıklanıyor.
+ */
+function zilKutusunuAcKapa() {
+  const acilacak = !showNotifications.value;
+  showNotifications.value = acilacak;
+
+  // İKİ KATMANDAN BİRİ AÇILINCA ÖTEKİ KAPANIR: çekmecenin durumunu üst bileşen tutuyor,
+  // bu yüzden kapatma isteği olayla gönderilir.
+  if (acilacak && props.attentionOpen) {
+    emit("attention-close");
+  }
+}
+
+function zilDisiTiklama(event: PointerEvent) {
+  const wrap = bellWrapRef.value;
+  if (wrap && event.target instanceof Node && wrap.contains(event.target)) {
+    return;
+  }
+
+  showNotifications.value = false;
+}
+
+function zilKlavye(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    showNotifications.value = false;
+  }
+}
+
+watch(showNotifications, (open) => {
+  if (open) {
+    document.addEventListener("pointerdown", zilDisiTiklama, true);
+    document.addEventListener("keydown", zilKlavye, true);
+    return;
+  }
+
+  document.removeEventListener("pointerdown", zilDisiTiklama, true);
+  document.removeEventListener("keydown", zilKlavye, true);
+});
 
 function shortTime(iso: string): string {
   const date = new Date(iso);
@@ -763,7 +958,30 @@ const emit = defineEmits<{
   (event: "attention-refresh"): void;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
+
+/*
+ * BÖLÜM DEĞİŞİNCE ÜST BARDAKİ AÇILIR KATMAN KAPANIR.
+ * ÖLÇÜLDÜ: zil kutusu Posta ekranına geçildikten sonra da açık kalıyor ve içeriğin ortasını
+ * örtüyordu. Aynı `watch` seçili menü maddesini de görüşe kaydırır (bkz. yukarıdaki işlev):
+ * ikisi de "bölüm değişti" olayının doğal sonucudur, iki ayrı izleyici açmaya gerek yok.
+ */
+watch(
+  () => props.activeSection,
+  () => {
+    showNotifications.value = false;
+    void seciliMaddeyiGoruseKaydir();
+  });
+
+/* İKİ KATMAN ÜST ÜSTE BİNMESİN: dikkat çekmecesi açılırsa zil kutusu kapanır. Tersi
+   `zilKutusunuAcKapa` içinde (orada çekmeceye kapanma isteği gönderiliyor). */
+watch(
+  () => props.attentionOpen,
+  (open) => {
+    if (open) {
+      showNotifications.value = false;
+    }
+  });
 
 // Rozet: kritik + uyarı (bilgi maddeleri kırmızı nokta üretmez, gürültü olmasın).
 const attentionAlertCount = computed(() =>
@@ -823,12 +1041,22 @@ const twoFactorLabel = computed(() =>
   letter-spacing: 0.02em;
 }
 
+/*
+ * BU DOSYADAKİ BÜTÜN YAZI BOYLARI ÖLÇEĞE BAĞLANDI (`--fs-*`), ham `rem` sayıları kaldırıldı.
+ * NEDEN — sayıldı, canlı 0.8.0: üst bar + kenar menü tek başına ON SEKİZ ayrı yazı boyu
+ * yazıyordu (0.6 / 0.62 / 0.64 / 0.65 / 0.66 / 0.7 / 0.72 / 0.75 / 0.78 / 0.8 / 0.82 / 0.84 /
+ * 0.85 / 0.86 / 0.92 / 0.98rem + iki clamp). Bunların ONU ölçekte hiç yoktu ve ALTISI
+ * `--fs-2xs`in (10.53px) ALTINDAYDI: 8.1px (dikkat + zil rozetleri), 8.37px (menü grup
+ * başlıkları), 8.91px (mini etiketler, arama türü rozeti), 9.45px (mini kart değeri),
+ * 9.72px (zil kutusu başlığı), 10.13px (menü rozeti). Hepsi bir şeyin ADI ya da SAYISIYDI —
+ * "süs" olan tek bir tanesi bile yoktu. Taban artık `--fs-2xs`; altına inen kural yok.
+ */
 .brand-mark {
   width: 34px;
   height: 34px;
   background: color-mix(in srgb, var(--accent-1) 12%, transparent);
   color: var(--accent-1);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 /* Özel marka logosu: yüklenen görselin boyutu ne olursa olsun kenar menüyü BOZAMAZ. Yükseklik
@@ -895,7 +1123,11 @@ a.brand-card {
   margin: 0;
   padding: 0 9px 3px;
   color: var(--text-muted);
-  font-size: 0.62rem;
+  /* 0.62rem = 8.37px idi. Grup başlığı menünün TEK durak işaretidir; 8px'te büyük harf +
+     0.07em aralık okunmaz, gri bir çizgiye dönüşür. Tabana çekildi: 10.53px. Bedeli ölçüldü —
+     grup başına satır yüksekliği 10.0 -> 12.6px, altı grupta toplam +15.6px; liste zaten
+     kaydırmalı ve seçili madde artık görüşe kaydırılıyor (aşağıdaki `watch`). */
+  font-size: var(--fs-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -920,6 +1152,10 @@ a.brand-card {
   background: transparent;
   color: var(--text-strong);
   text-align: left;
+  /* Seçili madde görüşe kaydırılırken (bkz. `seciliMaddeyiGoruseKaydir`) kutunun kenarına
+     YAPIŞMASIN: 12px, üstündeki grup başlığının da bir kısmını görünür bırakır, yani madde
+     bağlamsız bir satır olarak değil, grubunun içinde belirir. */
+  scroll-margin-block: 12px;
 }
 
 .nav-item:hover {
@@ -965,7 +1201,7 @@ a.brand-card {
 }
 
 .nav-copy strong {
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
   font-weight: 580;
 }
 
@@ -975,7 +1211,7 @@ a.brand-card {
   border-radius: 999px;
   background: color-mix(in srgb, var(--warn-1) 15%, transparent);
   color: var(--warn-1);
-  font-size: 0.75rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   text-align: center;
 }
@@ -998,7 +1234,7 @@ a.brand-card {
 
 .mini-card strong {
   overflow: hidden;
-  font-size: 0.7rem;
+  font-size: var(--fs-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1006,15 +1242,24 @@ a.brand-card {
 .mini-label,
 .eyebrow-row {
   color: var(--text-muted);
-  font-size: 0.66rem;
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
   letter-spacing: 0.045em;
 }
 
+/* IZGARA -> ESNEK SÜTUN. Tek sebebi üst barın YAPIŞKAN olabilmesi.
+   `position: sticky` bir ızgara ÖĞESİ için o öğenin KENDİ SATIRIYLA sınırlıdır: üst bar
+   ızgaranın ilk satırındayken sayfa kaydıkça satırıyla birlikte yukarı çıkıp ekrandan
+   ÇIKAR (ölçüldü, canlı 0.8.0: 560px kaydırmada üst bar `top: -548px`, yani arama kutusu ve
+   "Çıkış yap" tamamen görünmez). Esnek kapsayıcıda yapışma alanı kapsayıcının TAMAMIDIR.
+   Aynı çeviri dar ekran için ZATEN yapılmıştı (aşağıdaki 900px bloğu); burada tekrarlanmıyor,
+   yukarı taşınıyor — dar ekranda doğru olan şey geniş ekranda da doğruydu.
+   `align-content: start` DÜŞTÜ: esnek sütunda karşılığı `justify-content: flex-start` ve o
+   zaten varsayılan. `gap` aynı kalır (esnek düzende de geçerli). */
 .main-column {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 9px;
-  align-content: start;
   min-width: 0;
 }
 
@@ -1026,6 +1271,32 @@ a.brand-card {
   gap: 12px;
   padding: 7px 12px;
   border-radius: var(--radius-md);
+  /* YAPIŞKAN. `top: 12px` = `.app-shell` üst dolgusu, yani kenar menünün (`.sidebar`,
+     `top: 12px`) TAM HİZASINDA durur; iki sütun birlikte yapışır, biri diğerinin altından
+     kaymaz. Zemini opak (`--surface-0`) ve kenarlığı olduğu için altından geçen tablo
+     satırları görünmez.
+     z-index KATMAN SIRASI: içerik panelleri (katmansız) < üst bar (30) < arama/zil açılırları
+     (40, üst barın İÇİNDE) < dar ekran karartması (50) < dikkat çekmecesi (60). 30 seçildi ki
+     üst bar içeriğin üstünde kalsın ama çekmece ve karartma onun ÜSTÜNDE açılabilsin. */
+  position: sticky;
+  top: 12px;
+  z-index: 30;
+}
+
+/* ÜST BOŞLUĞUN MASKESİ. Üst bar tepeden 12px İÇERİDE durduğu için (kenar menüyle aynı hizada),
+   o 12px'lik şeritten kaydırılan içerik GÖRÜNÜYORDU: ölçüldü, 600px kaydırmada barın üstünde
+   özet kartının "Adres bağlamaları: 2 / Yönetilebilir" satırının alt 10px'i okunuyordu — yarım
+   kesilmiş metin şeridi. Şerit sayfa zeminiyle kapatılıyor; 13px = 12px boşluk + barın 1px üst
+   kenarlığı. Bar zaten yapışkan olduğu için maske de onunla birlikte taşınır.
+   Dar ekranda (`top: 0`) maske görüş alanının ÜSTÜNE düşer, yani hiçbir şey yapmaz. */
+.topbar::before {
+  content: "";
+  position: absolute;
+  top: -13px;
+  right: 0;
+  left: 0;
+  height: 13px;
+  background: var(--page-bg);
 }
 
 .topbar-copy {
@@ -1064,7 +1335,7 @@ a.brand-card {
   border: 1px solid var(--panel-border);
   background: var(--surface-1);
   color: var(--text-strong);
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
 }
 
 .search-results {
@@ -1104,7 +1375,7 @@ a.brand-card {
 }
 
 .search-result-copy strong {
-  font-size: 0.84rem;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1112,7 +1383,7 @@ a.brand-card {
 
 .search-result-copy small {
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--fs-2xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1124,7 +1395,7 @@ a.brand-card {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-muted);
-  font-size: 0.66rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -1134,7 +1405,7 @@ a.brand-card {
   margin: 0;
   padding: 8px 10px;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .search-note.error {
@@ -1162,12 +1433,12 @@ a.brand-card {
 }
 
 .user-chip strong {
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
 }
 
 .user-chip small {
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--fs-2xs);
 }
 
 .icon-btn {
@@ -1189,13 +1460,19 @@ a.brand-card {
   stroke-linejoin: round;
 }
 
+/* ROZET BOYU — sayı okunacak kadar büyük olmalı, yoksa rozet bir NOKTA'dır.
+   ÖLÇÜLDÜ (canlı 0.8.0): yazı 0.6rem = **8.1px**, kutu 15px. Kontrast düzeltilmişti ama
+   OKUNURLUK düzeltilmemişti: 8.1px'te "3" ile "8" bir metre uzaktan ayırt edilemiyor ve
+   rozetin tek işi o sayıyı söylemek. Yazı tabana (`--fs-2xs`, 10.53px) çıkarıldı; kutu
+   15 -> 18px büyütüldü (10.53px yazı 15px kutuda kenara değiyordu) ve konum -4 -> -5px'e
+   kaydırıldı ki rozet düğmenin köşesinde AYNI oranda dursun. */
 .attention-badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
   border-radius: 999px;
   background: var(--warn-1);
   /* ÖLÇÜLDÜ, eski gömülü #fff: kehribar dolgu üzerinde koyu temada 2.21:1, açık temada 4.09:1 —
@@ -1203,8 +1480,8 @@ a.brand-card {
      sorun bulunduğunu söyleyen TEK sayıdır; okunmazsa çekmeceyi açma sebebi de görünmez.
      `--on-warn` ile 9.51 (koyu) / 5.13 (açık). */
   color: var(--on-warn);
-  font-size: 0.6rem;
-  line-height: 15px;
+  font-size: var(--fs-2xs);
+  line-height: 18px;
   text-align: center;
   font-weight: 700;
 }
@@ -1237,16 +1514,17 @@ a.brand-card {
 
 .bell-badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
   border-radius: 999px;
   background: var(--accent-1);
   color: var(--on-accent);
-  font-size: 0.6rem;
-  line-height: 15px;
+  /* Kardeşi `.attention-badge` ile AYNI karar (gerekçesi orada): 8.1px -> `--fs-2xs`. */
+  font-size: var(--fs-2xs);
+  line-height: 18px;
   text-align: center;
   font-weight: 700;
 }
@@ -1269,7 +1547,7 @@ a.brand-card {
 .bell-head {
   padding: 6px 8px;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1280,25 +1558,46 @@ a.brand-card {
   gap: 2px;
   padding: 7px 8px;
   border-radius: 7px;
+  /* ÖNEM ŞERİDİ. Rozet düzeyin ADINI söyler, şerit ise listeyi TARANABİLİR yapar: kullanıcı
+     sekiz satırı okumadan hangisinin kırmızı olduğunu görür. Şerit tek başına bilgi taşımaz
+     (renk tek kanal değil), rozetin görsel eşidir. */
+  border-left: 3px solid transparent;
+  padding-left: 7px;
+}
+
+.bell-item.error {
+  border-left-color: var(--danger-1);
+}
+
+.bell-item.warn {
+  border-left-color: var(--warn-1);
 }
 
 .bell-item:hover {
   background: var(--surface-2);
 }
 
+/* Rozet + ad aynı satırda; ad uzunsa alt satıra sarar (280px'lik kutuda kesilmez). */
+.bell-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .bell-item strong {
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
 }
 
 .bell-item small {
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--fs-2xs);
 }
 
 .bell-empty {
   padding: 10px 8px;
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
 }
 
 .status-card {
@@ -1307,13 +1606,13 @@ a.brand-card {
 }
 
 .status-card strong {
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .status-card small {
   max-width: 180px;
   overflow: hidden;
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1491,22 +1790,16 @@ a.brand-card {
   }
 
   .nav-copy strong {
-    font-size: 0.92rem;
+    font-size: var(--fs-md);
   }
 
-  /* Yapışkan üst bar için: grid öğesinin sabitlenme alanı kendi satırıyla sınırlıdır,
-     esnek (flex) öğede ise kapsayıcının tamamıdır — bu yüzden sütun flex'e çevriliyor. */
-  .main-column {
-    display: flex;
-    flex-direction: column;
-  }
+  /* (`.main-column` esnek sütuna çevirisi artık VARSAYILAN — yukarı taşındı, burada tekrar yok.) */
 
   /* Üst bar: 1. satır menü + başlık, 2. satır eylemler (dikkat düğmesi dahil).
-     Sticky → "neyin bozuk olduğunu gör" düğmesi kaydırma nerede olursa olsun elde. */
+     Yapışkanlık artık varsayılan; burada değişen yalnız KONUM: dar ekranda kabuğun üst
+     dolgusu 0 olduğu için bar tepeye (`top: 0`) yaslanır, geniş ekrandaki 12px'e değil. */
   .topbar {
-    position: sticky;
     top: 0;
-    z-index: 40;
     flex-wrap: wrap;
     row-gap: 8px;
     padding: 8px 10px;
@@ -1536,12 +1829,12 @@ a.brand-card {
 
   .attention-badge,
   .bell-badge {
-    top: -3px;
-    right: -3px;
-    min-width: 17px;
-    height: 17px;
-    font-size: 0.64rem;
-    line-height: 17px;
+    top: -4px;
+    right: -4px;
+    min-width: 20px;
+    height: 20px;
+    font-size: var(--fs-2xs);
+    line-height: 20px;
   }
 
   .bell-menu {

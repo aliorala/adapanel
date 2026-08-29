@@ -8,6 +8,14 @@
     ölçüm yapılamadı (+ tekrar dene).
   -->
   <section v-if="loading || health || loadError.message.value" class="site-health-strip" :aria-busy="loading ? 'true' : 'false'">
+    <!--
+      ÜÇ SATIR İKİYE İNDİ.
+
+      ÖLÇÜLDÜ: site Pano'sunda bu şerit, "dikkat" kutusu ve onarma kutusuyla birlikte içeriğin
+      üstünde ~470px kaplıyordu. Şeridin kendisi üç satırdı: başlık, rozetler, altta ölçüm
+      zamanı + "Yenile". Ölçüm zamanı ve yenileme başlık satırının SAĞ ucuna alındı — ikisi de
+      şeridin ÜST BİLGİSİ, rozetlerin devamı değil. Hiçbir bilgi çıkarılmadı.
+    -->
     <div class="health-head">
       <span class="health-label">
         {{ label("title", "Dışarıdan görünüm") }}
@@ -16,6 +24,17 @@
           :text="label('hint', 'Bu rozetler sunucunun kendi servis durumunu değil, alan adının dışarıdan görünen davranışını gösterir.')" />
       </span>
       <span v-if="health?.domain" class="meta health-domain">{{ health.domain }}</span>
+
+      <span class="health-actions">
+        <span v-if="health" class="meta health-checked">
+          {{ label("checkedAt", "Ölçüm: {time}", { time: checkedAtText }) }}
+          <template v-if="health.durationMs > 0">· {{ health.durationMs }} ms</template>
+        </span>
+        <!-- OTOMATİK POLLING YOK: ölçüm dış ağa çıkar, yalnız istendiğinde yenilenir. -->
+        <button type="button" class="secondary compact health-refresh" :disabled="loading" @click="load">
+          {{ loading ? label("measuring", "Dışarıdan ölçülüyor…") : label("refresh", "Yenile") }}
+        </button>
+      </span>
     </div>
 
     <!-- Ölçüm birkaç saniye sürer: ilk yüklemede iskelet. -->
@@ -64,17 +83,6 @@
       :message="loadError.message.value"
       :busy="loading"
       @retry="load" />
-
-    <div class="row-actions health-foot">
-      <span v-if="health" class="meta">
-        {{ label("checkedAt", "Ölçüm: {time}", { time: checkedAtText }) }}
-        <template v-if="health.durationMs > 0">· {{ health.durationMs }} ms</template>
-      </span>
-      <!-- OTOMATİK POLLING YOK: ölçüm dış ağa çıkar, yalnız istendiğinde yenilenir. -->
-      <button type="button" class="secondary compact" :disabled="loading" @click="load">
-        {{ loading ? label("measuring", "Dışarıdan ölçülüyor…") : label("refresh", "Yenile") }}
-      </button>
-    </div>
   </section>
 </template>
 
@@ -265,6 +273,10 @@ watch(() => props.siteName, () => {
 </script>
 
 <style scoped>
+/*
+ * YAZI OLCEGI TABANI: bes ham `rem` degeri (0.74 / 0.76 / 0.78rem = 9.99-10.53px) `--fs-2xs`e
+ * baglandi. Ucu tabanin altindaydi; aralarindaki 0.54px fark zaten gorulebilir degildi.
+ */
 .site-health-strip {
   display: grid;
   gap: 8px;
@@ -285,7 +297,7 @@ watch(() => props.siteName, () => {
   display: inline-flex;
   align-items: center;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -308,7 +320,7 @@ watch(() => props.siteName, () => {
 .health-badge {
   gap: 5px;
   max-width: 100%;
-  font-size: 0.76rem;
+  font-size: var(--fs-2xs);
 }
 
 .health-badge .badge-label {
@@ -355,7 +367,7 @@ watch(() => props.siteName, () => {
 }
 
 .mail-caption {
-  font-size: 0.76rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
 }
 
@@ -370,7 +382,7 @@ watch(() => props.siteName, () => {
 }
 
 .measuring {
-  font-size: 0.76rem;
+  font-size: var(--fs-2xs);
 }
 
 @keyframes health-shimmer {
@@ -384,27 +396,23 @@ watch(() => props.siteName, () => {
   }
 }
 
-.health-foot {
-  display: flex;
+/* Ölçüm zamanı + yenileme TEK KUTUDA ve başlık satırının sağ ucunda: tek bir
+   `margin-left: auto` ikisini birlikte sağa yaslar. Ayrı ayrı `auto` verilseydi boş alanı
+   PAYLAŞIRLAR ve aralarında geniş bir boşluk açılırdı. Ölçüm zamanı hiç yokken (ilk yükleme
+   ya da okunamadı) düğme yine sağda kalır. Dar ekranda başlık satırı zaten sarıyor. */
+.health-actions {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
 }
 
-.health-foot .meta {
-  font-size: 0.74rem;
+.health-checked {
+  font-size: var(--fs-2xs);
 }
 
-.health-foot button {
+.health-refresh {
   width: auto;
   flex: 0 0 auto;
-}
-
-@media (max-width: 560px) {
-  .health-foot {
-    align-items: stretch;
-    flex-direction: column;
-  }
 }
 </style>

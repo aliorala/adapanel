@@ -33,7 +33,11 @@
       :interrupted-label="serverMigration.interruptedText.value"
       @dismiss="serverMigration.dismissInterrupted" />
 
-    <div class="form-surface migration-how">
+    <!-- `migration-how` ve asagidaki `plesk-discover` adlari KALDIRILDI: ikisi de sablonda
+         yaziliydi ama HICBIR kural onlara bakmiyordu (ilkinin tek kuralı bu turda gereksizlesti,
+         ikincisinin hic tanimi yoktu). Hicbir sey yapmayan sinif adi, okuyani "burada ozel bir
+         duzen var" diye yaniltir. -->
+    <div class="form-surface">
       <h3 class="section-label">{{ t("panel.migration.howTitle") }}</h3>
       <p class="meta">{{ t("panel.migration.howWhat") }}</p>
       <ol class="migration-steps">
@@ -45,7 +49,7 @@
       </ol>
     </div>
 
-    <div class="form-surface plesk-discover">
+    <div class="form-surface">
       <h3 class="section-label">{{ t("panel.migration.discoverTitle") }}</h3>
       <p class="meta">{{ t("panel.migration.discoverHint") }}</p>
 
@@ -83,7 +87,20 @@
           <PasswordField v-model="plesk.password" autocomplete="off" />
         </label>
       </div>
-      <p v-if="source === 'plesk'" class="meta">{{ t("panel.migration.pleskAuthHint") }}</p>
+      <!-- KOMUT CÜMLEDEN ÇIKARILDI. `plesk bin secret_key` ipucunun ORTASINDA, tırnak içinde
+           düz metin olarak duruyordu: kod mu cümle mi belli değildi, kopyalanamıyordu ve
+           yanlış yazılması sessizce "anahtar geçersiz" hatasına dönüyordu. Komut artık kendi
+           kutusunda ve tek tıkla panoya alınıyor. Atlama seçeneği ayrı bir cümleye alındı:
+           tek paragrafta hem "şunu yap" hem "hiçbirini yapmasan da olur" demek, okuyanı
+           kararsız bırakıyordu. -->
+      <template v-if="source === 'plesk'">
+        <p class="meta">{{ t("panel.migration.pleskAuthHint") }}</p>
+        <CodeSample
+          code="plesk bin secret_key"
+          :copy-label="t('panel.dashboard.access.copy')"
+          :copied-label="t('panel.common.copied')" />
+        <p class="meta">{{ t("panel.migration.pleskAuthSkip") }}</p>
+      </template>
 
       <div v-else class="form-grid">
         <label>
@@ -159,11 +176,21 @@
       </div>
     </div>
 
+    <!--
+      SİHİRBAZ ÜÇ KUTUYA AYRILDI — bilgi SİLİNMEDİ, sınırları çizildi.
+      ÖNCESİ SAYILDI: hedef site (2 alan + 1 onay kutusu), dosya kaynağı (6 alan) ve veritabanı
+      kaynağı (9 alan) TEK bir `form-surface` içinde, toplam 17 alan tek bir kutuda alt alta
+      akıyordu. İki bölümü ayıran tek şey, ortadaki `<strong>` yazılı onay kutusuydu — yani
+      bölümün ADI, bir form alanının etiketiyle aynı ögeye biniyordu ve kutu işaretlenince
+      altına altı alan birden açılıyordu. Kullanıcı "bu alan hangi sunucununki" sorusunu ancak
+      yukarı kaydırıp onay kutusunu tekrar okuyarak cevaplayabiliyordu.
+      Her kaynak artık kendi çerçevesinde; kutunun BAŞLIĞI aynı zamanda o kaynağı açan anahtar.
+      Eylem satırı da kutulardan çıkarıldı: "Doğrula" ve "Taşı" bütün sihirbaza aittir, üç
+      kutudan birinin içinde durması onları o kutunun eylemi gibi gösteriyordu.
+    -->
     <div class="form-surface">
-      <p class="meta">{{ t("panel.migration.intro") }}</p>
-
-      <!-- Hedef site -->
       <h3 class="section-label">{{ t("panel.migration.siteSection") }}</h3>
+      <p class="meta">{{ t("panel.migration.intro") }}</p>
       <div class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.migration.siteName") }}</span>
@@ -178,8 +205,10 @@
         <input v-model="form.createSite" type="checkbox" />
         <span>{{ t("panel.migration.createSite") }}</span>
       </label>
+    </div>
 
-      <!-- Dosya kaynağı -->
+    <!-- Dosya kaynağı -->
+    <div class="form-surface">
       <label class="checkbox section-toggle">
         <input v-model="form.pullFiles" type="checkbox" />
         <span><strong>{{ t("panel.migration.pullFiles") }}</strong></span>
@@ -214,8 +243,10 @@
           <input v-model="form.remotePath" spellcheck="false" placeholder="/httpdocs" />
         </label>
       </div>
+    </div>
 
-      <!-- Veritabanı kaynağı -->
+    <!-- Veritabanı kaynağı -->
+    <div class="form-surface">
       <label class="checkbox section-toggle">
         <input v-model="form.transferDatabase" type="checkbox" />
         <span><strong>{{ t("panel.migration.transferDb") }}</strong></span>
@@ -264,15 +295,19 @@
         </label>
       </div>
       <p v-if="form.transferDatabase" class="hint">{{ t("panel.migration.targetDbUserHint") }}</p>
+    </div>
 
-      <div class="row-actions">
-        <button class="secondary compact" :disabled="validating || !form.siteName.trim()" @click="validate">
-          {{ validating ? t("panel.migration.validating") : t("panel.migration.validate") }}
-        </button>
-        <button class="compact" :disabled="busy || !form.siteName.trim()" @click="run">
-          {{ busy ? t("panel.migration.running") : t("panel.migration.start") }}
-        </button>
-      </div>
+    <!-- SİHİRBAZIN EYLEM SATIRI — sabit ve tek yerde. Kutuların DIŞINDA duruyor çünkü bu iki
+         düğme üç kutunun toplamına etki eder; içeride durduğunda "veritabanı" kutusunun eylemi
+         gibi okunuyordu. Tek birincil: "Taşı". "Doğrula" ikincil, çünkü bir ön kontroldür ve
+         hiçbir şeyi değiştirmez. -->
+    <div class="row-actions migration-run">
+      <button class="secondary compact" :disabled="validating || !form.siteName.trim()" @click="validate">
+        {{ validating ? t("panel.migration.validating") : t("panel.migration.validate") }}
+      </button>
+      <button class="compact" :disabled="busy || !form.siteName.trim()" @click="run">
+        {{ busy ? t("panel.migration.running") : t("panel.migration.start") }}
+      </button>
     </div>
 
     <section v-if="checks.length || validating" class="form-surface">
@@ -327,6 +362,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import CodeSample from "../components/CodeSample.vue";
 import PasswordField from "../components/PasswordField.vue";
 import {
   getMigrationRunningJobs,
@@ -662,13 +698,12 @@ function stepStatusText(item: LiveStep): string {
    ("Nasil calisir", "Kesif", "Hedef site", "Dosya kaynagi", "On kontroller", "Canli akis")
    kendi icerdikleri cumlelerden daha silik ciziliyordu — ekranin iskeleti goze hic gorunmuyordu.
    Boy artik merdivenden gelir; burada yalnizca ust bosluk kalir.
-   ust bosluk 18px -> --sp-4: kapsayici `.form-surface` ZATEN 12px izgara araligi veriyor,
-   yani gercek bosluk 12 + 4 = 16px olur (eskiden 12 + 18 = 30px, olcek disi bir sicrama). */
+   UST BOSLUK ARTIK SIFIR: sihirbaz uc ayri kutuya bolundugu icin (bkz. sablon) bu basligin
+   gectigi ALTI yerin ALTISI DA kendi kutusunun ILK cocugu. Ilk cocuga ust bosluk vermek,
+   basligi kutunun ic dolgusundan (16px) fazladan uzaklastirip her kutunun tepesinde
+   dengesiz bir bosluk birakiyordu. Kutular arasi ritmi `.module-shell`in izgara araligi verir. */
 .section-label {
-  margin: var(--sp-4) 0 0;
-}
-.migration-how .section-label {
-  margin-top: 0;
+  margin: 0;
 }
 /* Ust bosluk KALDIRILDI: kapsayici izgara araligi zaten bosluk veriyor, margin ona EKLENIYORDU. */
 .migration-steps {
@@ -686,9 +721,32 @@ function stepStatusText(item: LiveStep): string {
   color: var(--accent-1);
   font-weight: 700;
 }
-/* 16px -> --sp-4. GORUNEN BOSLUK AYNI KALIR: kapsayici izgara 12px veriyor, 12 + 4 = 16. */
+/* KAYNAK KUTUSUNUN BAŞLIĞI — hem bölümün adı hem o bölümü açan anahtar.
+   ÖNCEKİ KURAL HİÇBİR İŞ YAPMIYORDU, ölçüldü: tek bildirimi `margin-top` idi, ama bu etiket
+   `.form-grid`in DIŞINDA duruyor ve base.css'te `display: grid`i veren kural
+   (`.form-grid label`) burada eşleşmiyor — yani öge `display: inline` kalıyordu ve satır içi
+   ögelerde DİKEY MARGIN UYGULANMAZ. Kural yıllardır sessizce ölüydü.
+   Şimdi öge gerçekten bir başlık satırı: `--fs-h4` (bölüm başlığı basamağı, base.css) ve
+   kutunun ilk satırı olduğu için üst boşluğa da gerek yok. İçindeki `<strong>` zaten vardı;
+   eksik olan boy ve hizaydı. */
 .section-toggle {
-  margin-top: var(--sp-4);
+  display: flex;
+  align-items: center;
+  /* `gap` BİLEREK YOK: base.css'teki `.checkbox span { margin-left: --sp-8 }` boşluğu zaten
+     veriyor; ikisini birden yazmak 16px'e çıkarırdı. */
+  cursor: pointer;
+}
+
+.section-toggle strong {
+  font-size: var(--fs-h4);
+  font-weight: 640;
+  letter-spacing: -0.015em;
+}
+
+/* Eylem satırı kutuların DIŞINDA (gerekçesi şablonda) ve sağa dayalı: sihirbaz yukarıdan
+   aşağıya okunur, cevabın bittiği yer sağ alt köşedir. */
+.migration-run {
+  justify-content: flex-end;
 }
 /* KONTROL / ADIM SATIRI — tablo satiri DEGIL (gerekcesi sablonda).
    Ayrac cizgisi ust kenardan gelir ki liste ilk satirinin uzerinde bosta duran bir cizgi

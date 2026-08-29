@@ -119,7 +119,15 @@
      SAYILDI: 8 ayrı boyut vardı — 0.78 / 0.79 / 0.80 / 0.82 / 0.86 / 0.92 / 1 / 1.18rem.
      13.5px tabanda 0.78/0.79/0.80rem = 10.53 / 10.665 / 10.80px, yani aralarındaki fark
      0.135px: hiçbir ekranda AYIRT EDİLEMEZ, ama üç ayrı karar noktası üretiyordu. Bu üçü tek
-     adımda birleştirildi (8 -> 6). Geri kalan adımlar arasında gerçek bir fark var, DOKUNULMADI. */
+     adımda birleştirildi (8 -> 6). Geri kalan adımlar arasında gerçek bir fark var, DOKUNULMADI.
+
+     TABAN: `--fs-2xs` (10.53px) ölçeğin EN KÜÇÜK adımıdır ve panelde ondan küçük yazı YOKTUR.
+     Bu bir üslup tercihi değil, ölçülmüş bir okunurluk sınırı: ölçek "tanımlı" olduğu hâlde
+     kurallar onu atlayıp kendi sayılarını yazdığı için panelin yarısı 10px'in altına inmişti —
+     canlı 0.8.0'da sayıldı: 8.1px (dikkat/zil rozetleri, site araç damgaları), 8.37px (menü
+     grup başlıkları), 8.91px (kenar menü mini etiketleri, arama türü rozeti, araç kartı
+     damgası), 9.18px (bölüm üstbaşlığı), 9.72px (zil kutusu başlığı). Bunların hiçbiri
+     "küçük ayrıntı" değildi; hepsi bir şeyin ADIYDI. */
   --fs-2xs: 0.78rem;
   --fs-xs: 0.82rem;
   --fs-sm: 0.86rem;
@@ -368,9 +376,9 @@ select {
   box-shadow: var(--panel-shadow);
 }
 
-.panel h2,
-.panel h3,
-.panel h4 {
+h2,
+h3,
+h4 {
   margin: 0;
   line-height: 1.2;
   letter-spacing: -0.015em;
@@ -384,25 +392,42 @@ select {
    Kalınlık tek başına hiyerarşi kurmaz — sonuç, kullanıcının "karışık, göze hitap etmiyor"
    dediği metin duvarı.
 
-   Yeni merdiven: 13.5 → 14.3 → 15.9 → 19.2px (oranlar 1.06 / 1.11 / 1.21).
+   Merdiven: 13.5 → 14.3 → 15.9 → 19.2px (oranlar 1.06 / 1.11 / 1.21).
    Adımlar BİLEREK küçük: burası pazarlama sayfası değil, veri yoğun bir kontrol paneli;
    büyük sıçramalar ekrana sığan satır sayısını düşürürdü. Amaç göz kırpmadan sıralamayı
    ANLAYABİLMEK, başlığı bağırtmak değil.
 
    `--fs-lg` DEĞİŞTİRİLMEDİ: `h3` dışında beş yerde daha kullanılıyor ve orada gövde boyu
-   doğru. Başlık için var olan `--fs-xl` yukarı kaydırıldı, en üste yeni bir adım eklendi. */
-.panel h2 {
+   doğru. Başlık için var olan `--fs-xl` yukarı kaydırıldı, en üste yeni bir adım eklendi.
+
+   `.panel` BAĞIMLILIĞI KALDIRILDI — merdiven ekranların yarısına HİÇ ULAŞMIYORDU.
+   ÖLÇÜLDÜ (canlı panel 0.8.0, koyu tema, 1534px):
+     · `AttentionDrawer` başlığı ("Dikkat gerektirenler") `<h2>` ama çekmece `.panel` DEĞİL:
+       ekranda **13.77px** çiziliyordu — gövde metniyle (13.5px) 0.27px fark. Yani panelin
+       "neyin bozuk olduğunu gör" kapısının başlığı, içindeki cümleden ayırt EDİLEMİYORDU.
+     · 14 şablonda (`AttentionDrawer`, `ConfirmDialog`, `PromptDialog`, `CommandConsole`,
+       `MailQueueCard`, `MailRelayCard`, `QueryHistory`, `SiteAliases`, `SubscriptionCard`,
+       `WordPressUpdates`, `MainLayout`, `LicenseView`, `SiteDetailView`, `SiteHostingView`)
+       başlık etiketi var ama kendi şablonlarında `.panel` sarmalayıcı YOK — hepsi bu kuralın
+       kapsamı dışında kalıyordu. Diyalog ve çekmece gibi `.panel` içine HİÇ giremeyecek
+       yüzeylerde kural yapısal olarak ulaşılamazdı.
+   ÖZGÜLLÜK (0,1,1) → (0,0,1): görünümlerin kendi kapsamlı `h3[data-v-…]` kuralları (0,1,1)
+   ZATEN kazanıyordu (eşitlikte sonra yüklenen kazanır), yani hiçbir ekranın kendi kararı
+   değişmez; değişen tek şey, kuralın hiç ulaşamadığı yerlere ulaşması.
+   `h1` BİLEREK DIŞARIDA: panelde tek `h1` üst bardaki sayfa başlığıdır ve kendi
+   `clamp()` kuralı vardır; buraya eklemek onu ezmeden hiçbir şey kazandırmazdı. */
+h2 {
   font-size: var(--fs-2xl);
   font-weight: 660;
 }
 
-.panel h3 {
+h3 {
   font-size: var(--fs-xl);
   font-weight: 640;
 }
 
 /* `h4` eskiden hiç boy kuralı almıyordu: bölüm başlığı ile içindeki cümle aynı boydaydı. */
-.panel h4 {
+h4 {
   font-size: var(--fs-h4);
   font-weight: 640;
 }
@@ -1056,12 +1081,15 @@ button:disabled {
    (ProtectedDirs, SiteBackup, SiteStatistics, WordPressToolkit) duz bir paragraf olarak
    ciziliyordu — yani bu ekranlarda baslik uc satirlik gri bir metin yiginiydi.
    Tanim SitesView'den BIREBIR alindi (tek kaynak oldugu icin "hangisi dogru" sorusu yok).
-   0.68rem BILEREK yazi olcegi disinda: bu bir govde metni degil, MainLayout'un
-   `.eyebrow-row` (0.66rem) ile ayni rutbede bir ustbaslik. */
+
+   0.68rem -> `--fs-2xs`. ONCEKI KARAR GERI ALINDI ve gerekcesi olculdu: 0.68rem 13.5px tabanda
+   **9.18px** eder. "Olcek disinda kalsin, ustbaslik kucuk olsun" diye secilmisti ama ustbasligin
+   isi OKUNMAK; 9px'te BUYUK HARF + 0.12em harf araligi bir sozcugu okunur degil, desen yapar.
+   Panelde artik tek bir taban var: en kucuk adim `--fs-2xs` (10.53px), altina inen yok. */
 .section-kicker {
   margin: 0 0 var(--sp-4);
   color: var(--accent-1);
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;

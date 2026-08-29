@@ -144,7 +144,8 @@ function clear() {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-soft);
-  font-size: 0.76rem;
+  /* 0.76rem = 10.26px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-family: var(--font-mono, ui-monospace, monospace);
   cursor: pointer;
 }

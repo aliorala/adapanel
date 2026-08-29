@@ -373,7 +373,8 @@ onUnmounted(() => {
   border-radius: 999px;
   background: var(--warn-bg);
   color: var(--warn-text);
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-weight: 700;
 }
 

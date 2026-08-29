@@ -138,7 +138,8 @@ function showNotice(message: string, isError: boolean) {
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent-1) 12%, transparent);
   color: var(--accent-1);
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-weight: 750;
 }
 

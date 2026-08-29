@@ -149,7 +149,8 @@ function dailyWidth(count: number): string {
 
 .summary-item span {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
 }
 
 .summary-item strong {

@@ -15,13 +15,29 @@
     <!-- (a) Açma/kapama: anahtar doğrulamasının YERİNE değil ÜSTÜNE binen ikinci kapı.
          Sızmış geçerli bir anahtar varken yönetici entegrasyonu tek düğmeyle kesebilmeli. -->
     <section class="form-surface">
+      <!--
+        BAŞLIK DURUM SÖYLEMEZ, DURUMU ROZET SÖYLER.
+
+        ÖLÇÜLDÜ: başlık "Entegrasyon açık" yazıyordu ama içindeki onay kutusu işaretsiz,
+        rozet "Reddedildi" olabiliyordu; yani kart başlığı kapalı bir entegrasyona "açık"
+        diyordu. Başlık artık KONUYU adlandırır (panel.billing.integrationTitle), durumu
+        yalnızca rozet söyler.
+
+        Rozet metni de değişti: eskiden ÇAĞRI SONUCU sözlüğünden ("Reddedildi") alınıyordu
+        ve neyin reddedildiğini söylemeden havada duruyordu. O sözlük aşağıdaki "Son çağrılar"
+        tablosuna ait; bu rozet artık entegrasyonun kendi durumunu ve sonucunu yazar.
+
+        Rozet SUNUCUDAN OKUNAN değere bakar (`settings.enabled`), formdaki `enabled`
+        değişkenine değil: kullanıcı kutuyu işaretleyip henüz kaydetmediyse rozet hâlâ
+        gerçeği gösterir.
+      -->
       <div class="section-head">
         <div>
-          <h3>{{ t("panel.billing.enabled") }}</h3>
+          <h3>{{ t("panel.billing.integrationTitle") }}</h3>
           <p class="meta">{{ t("panel.billing.enabledHint") }}</p>
         </div>
-        <span :class="['status-pill', settings?.enabled ? 'ok' : 'warn']">
-          {{ settings?.enabled ? t("panel.billing.outcome.ok") : t("panel.billing.outcome.denied") }}
+        <span v-if="loaded" :class="['status-pill', settings?.enabled ? 'ok' : 'warn']">
+          {{ settings?.enabled ? t("panel.billing.stateOn") : t("panel.billing.stateOff") }}
         </span>
       </div>
       <label class="inline-field">
@@ -46,9 +62,15 @@
         </div>
       </div>
       <p class="meta">{{ t("panel.billing.tokenReadOnly") }}</p>
+      <!-- HAM BİÇİM CÜMLEDEN ÇIKTI. "entry=<gizli-yol>;token=<anahtar>" ipucu cümlesinin
+           İÇİNDE gömülü duruyordu; okuyan gözün cümleyle kodu ayırması gerekiyordu ve
+           kopyalanamıyordu. Artık kendi kutusunda ve tek tıkla panoya alınıyor. -->
       <div class="stacked-field">
         <span class="field-label">Access Hash</span>
-        <code class="sample">{{ accessHashSample }}</code>
+        <CodeSample
+          :code="accessHashSample"
+          :copy-label="t('panel.dashboard.access.copy')"
+          :copied-label="t('panel.common.copied')" />
       </div>
     </section>
 
@@ -162,6 +184,7 @@
 // son çağrıların ne yaptığı ve faturalama sistemine verilen kullanım değerleri görünür.
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import CodeSample from "../components/CodeSample.vue";
 import {
   getBillingSettings,
   getBillingUsage,
@@ -282,14 +305,8 @@ function showNotice(message: string, isError: boolean) {
   overflow-x: auto;
 }
 
-.sample {
-  display: block;
-  padding: 0.5rem 0.65rem;
-  border-radius: 6px;
-  background: var(--surface-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  word-break: break-all;
-}
+/* `.sample` KALDIRILDI: tek kullanıcısı olan `<code class="sample">` yerini ortak
+   `CodeSample` bileşenine bıraktı; kural artık hiçbir şeyi boyamıyordu. */
 
 .inline-field {
   display: flex;

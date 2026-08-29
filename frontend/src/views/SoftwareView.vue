@@ -114,6 +114,7 @@
         <div>
           <h3>{{ t("panel.software.available") }}</h3>
           <p class="meta">{{ t("panel.software.tableHint") }}</p>
+          <p class="meta">{{ t("panel.software.pathHint") }}</p>
         </div>
         <span class="meta">{{ visibleManifestRows.length }} / {{ manifestRows.length }}</span>
       </div>
@@ -135,7 +136,6 @@
             <span v-if="item.installed?.isSystemDetected" class="detected-label">
               {{ t("panel.software.systemDetected") }} · {{ formatDetectionSource(item.installed.detectionSource) }}
             </span>
-            <p v-if="item.note" class="meta">{{ item.note }}</p>
             <p v-if="item.installed?.lastError" class="error-text">
               {{ t("panel.software.lastError") }}: {{ translate(item.installed.lastError) }}
             </p>
@@ -159,8 +159,11 @@
               {{ t("panel.software.versionCheckUnsupported") }}
             </span>
           </span>
-          <span :data-label="t('panel.software.type')">{{ item.type }}</span>
-          <span class="path-cell" :data-label="t('panel.software.installDir')">{{ item.installed?.installDir || item.installDir }}</span>
+          <!-- TÜR SÜTUNU İÇ DEĞER GÖSTERİYORDU: "phpFile", "phar", "targz" — bunlar kullanıcının
+               kelimeleri değil, `components.json`'un `type` alanının kendisi. Çeviri yoksa ham
+               değere düşülür (bilgi kaybolmaz), ama tanınan altı tür artık Türkçe okunur. -->
+          <span :data-label="t('panel.software.type')">{{ componentTypeLabel(item.type) }}</span>
+          <span class="path-cell" :data-label="t('panel.software.installDir')">{{ displayInstallDir(item) }}</span>
           <span :class="['status-pill', statusClass(item.installed?.status)]">
             {{
               item.installed?.isSystemDetected
@@ -199,6 +202,16 @@
               {{ softwareStore.removingComponentId === item.id ? t("panel.software.removing") : t("panel.software.remove") }}
             </button>
           </div>
+
+          <!-- AÇIKLAMA SÜTUNDAN ÇIKTI, SATIRIN ALTINA GEÇTİ.
+               ÖLÇÜLDÜ: açıklama, ızgaranın 1.2fr'lik İLK sütununda yaşıyordu (~280px). ClamAV'ın
+               190 karakterlik notu orada 6-7 satıra sarıyor, satır yüksekliği 60px'ten 190px'e
+               çıkıyordu; yanındaki beş hücre `align-items: center` ile o yüksekliğin ortasında
+               yüzüyordu. 25 satır boyunca ne satır ritmi ne de sütun hizası kalıyordu.
+               Not artık ızgaranın TAMAMINI kaplayan kendi bandında (`grid-column: 1 / -1`):
+               metin ~3 kat geniş bir ölçüde okunur, hücreler tek satırlık ortak yükseklikte
+               kalır. HİÇBİR ŞEY GİZLENMEDİ — aynı metin, daha geniş yerde. -->
+          <p v-if="item.note" class="component-note">{{ item.note }}</p>
         </article>
       </div>
 
@@ -293,6 +306,63 @@ const manifestRows = computed<ManifestRow[]>(() => {
 });
 
 const installedRows = computed(() => softwareStore.catalog?.installed ?? []);
+
+/*
+ * "KURULUM DİZİNİ" SÜTUNU AYNI TABLODA İKİ DİL KONUŞUYORDU.
+ *
+ * ÖLÇÜLDÜ: kurulu bileşenler sunucudan ÇÖZÜLMÜŞ yolla geliyor (`C:\ProgramData\AdaPanel\...`),
+ * kurulmamışlar ise manifestteki HAM yolla (`%ProgramData%\AdaPanel\...`). Aynı sütunda alt alta
+ * iki farklı biçim duruyor ve kullanıcı bunları iki AYRI konum sanıyordu.
+ *
+ * Değişkenin karşılığı TAHMİN EDİLMİYOR, ÖLÇÜLÜYOR: aynı bileşenin hem ham hem çözülmüş yolu
+ * elimizde olduğunda ikisinin ortak kuyruğu atılır, geriye değişkenin gerçek karşılığı kalır
+ * (`%ProgramData%` -> `C:\ProgramData`). Tek bir çift bile bulunamazsa satır HAM hâliyle kalır;
+ * "C:\" yazıp uydurmaktansa değişkeni göstermek doğrudur (bkz. `panel.software.pathHint`).
+ */
+const pathVariableMap = computed(() => {
+  const map = new Map<string, string>();
+  for (const row of manifestRows.value) {
+    const gercek = row.installed?.installDir ?? "";
+    const eslesme = /^(%[^%]+%)(.+)$/.exec(row.installDir ?? "");
+    if (!eslesme || !gercek) {
+      continue;
+    }
+
+    const [, degisken, kuyruk] = eslesme;
+    if (!gercek.toLowerCase().endsWith(kuyruk.toLowerCase())) {
+      continue;
+    }
+
+    const cozulmus = gercek.slice(0, gercek.length - kuyruk.length);
+    if (cozulmus) {
+      map.set(degisken.toLowerCase(), cozulmus);
+    }
+  }
+
+  return map;
+});
+
+function displayInstallDir(item: ManifestRow): string {
+  if (item.installed?.installDir) {
+    return item.installed.installDir;
+  }
+
+  const ham = item.installDir ?? "";
+  const eslesme = /^(%[^%]+%)(.*)$/.exec(ham);
+  if (!eslesme) {
+    return ham;
+  }
+
+  const cozulmus = pathVariableMap.value.get(eslesme[1].toLowerCase());
+  return cozulmus ? `${cozulmus}${eslesme[2]}` : ham;
+}
+
+/** Bileşen türü kullanıcının dilinde; tanınmayan tür HAM hâliyle kalır (bilgi silinmez). */
+function componentTypeLabel(type: string): string {
+  const key = `panel.software.kind.${(type ?? "").toLowerCase()}`;
+  const translated = t(key);
+  return translated === key ? (type || "-") : translated;
+}
 
 /*
  * KURULUM SAYFA YENİLEMEYE DAYANIYOR.
@@ -798,14 +868,29 @@ function formatDetectionSource(source: string): string {
 
 /* Satır ölçüleri base.css'teki `.data-row` ile EŞİTLENDİ (`--sp-10 --sp-12`): panelde iki
    farklı tablo yoğunluğu olmasın, bir ekrandan diğerine geçerken satırlar zıplamasın. */
+/* `align-items: center` -> `start`: açıklama bandı satıra ikinci bir sıra eklediğinde
+   ortalama, beş hücreyi bandın da dahil olduğu yüksekliğin ORTASINA kaydırırdı — düzeltilen
+   tırtıklılığın ta kendisi. Üstte hizalanınca her satırın ilk sırası aynı taban çizgisinde
+   başlar; açıklama uzunluğu artık komşu hücrelerin yerini değiştirmez. */
 .software-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1.2fr) 0.55fr 0.55fr minmax(190px, 1.2fr) 0.7fr auto;
-  gap: var(--sp-12);
-  align-items: center;
+  grid-template-columns: minmax(190px, 1.2fr) 0.55fr 0.7fr minmax(190px, 1.2fr) 0.7fr auto;
+  gap: var(--sp-6) var(--sp-12);
+  align-items: start;
   padding: var(--sp-10) var(--sp-12);
   border-bottom: 1px solid var(--panel-border);
   background: var(--surface-0);
+}
+
+/* Açıklama bandı: ızgaranın TAMAMI. `1 / -1` sütun sayısına bağlı değildir, dar ekranda tablo
+   tek sütuna indiğinde de doğru çalışır. */
+.component-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  max-width: 96ch;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
 }
 
 .software-row:last-child {

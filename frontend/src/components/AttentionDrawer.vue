@@ -356,14 +356,13 @@ function formatUtc(value: string): string {
   gap: 12px;
 }
 
-.ad-head h2 {
-  margin: 0;
-  font-size: 1.02rem;
-}
-
+/* BOY KURALI KALDIRILDI, kasitli. ONCEKI HALI OLCULDU: `1.02rem` = **13.77px**, govde
+   metniyle (13.5px) 0.27px fark — cekmecenin basligi icindeki cumleden ayirt edilemiyordu.
+   Kapsamli oldugu icin (ozgulluk (0,1,1)) ortak baslik merdivenini de EZIYORDU. Kural
+   dusunce baslik `base.css`teki `h2` adimini alir: 19.17px/660. `margin: 0` de orada. */
 .ad-head-copy .meta {
   margin: 2px 0 0;
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
 }
 
 .ad-counters {
@@ -375,7 +374,8 @@ function formatUtc(value: string): string {
 
 .ad-checked {
   margin-left: auto;
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi; olcegin tabani `--fs-2xs` (10.53px). */
+  font-size: var(--fs-2xs);
 }
 
 .ad-empty {
@@ -456,13 +456,13 @@ function formatUtc(value: string): string {
 }
 
 .ad-body strong {
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
 }
 
 .ad-detail {
   margin: 0;
   color: var(--text-soft);
-  font-size: 0.78rem;
+  font-size: var(--fs-2xs);
   word-break: break-word;
 }
 
@@ -470,9 +470,11 @@ function formatUtc(value: string): string {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
+/* 0.76rem = 10.26px idi: olcek disi VE tabanin (10.53px) altinda. Bu satir bir islemin
+   SONUCUNU ("duzeltildi" / hata metni) tasir; panelde okunmamasi gereken son yerdir. */
 .ad-result {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: var(--fs-2xs);
   font-weight: 600;
 }
 

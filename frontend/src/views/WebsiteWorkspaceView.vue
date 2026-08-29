@@ -10,9 +10,14 @@
           ← {{ t("panel.sites.backToSites") }}
         </button>
         <strong class="context-domain">{{ selectedSiteName || t("panel.php.selectSite") }}</strong>
+        <!-- `secondary compact` KALDIRILDI: bu bir `<a>`, base.css'teki kural ise element
+             duzeyinde `button.secondary`. Yani siniflar hicbir sey yapmiyordu ve "Siteyi ac"
+             masaustunde cercevesiz duz bir metin olarak duruyordu (ikincil dugme gorunumu
+             yalniz 620px altindaki blokta yaziliydi). Gorunum artik `.open-link`te, her
+             genislikte. -->
         <a
           v-if="primaryUrl"
-          class="secondary compact open-link"
+          class="open-link"
           :href="primaryUrl"
           target="_blank"
           rel="noopener">
@@ -32,13 +37,17 @@
       <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
       <!-- panel ana sekmeleri: Pano · Barındırma ve DNS · Posta · Başlarken -->
-      <nav class="primary-nav" :aria-label="t('panel.sites.toolsBar')">
+      <!-- Panelin ORTAK sekme seridi (`.segmented-tabs`, base.css) devralindi. Bu ekran kendi
+           seridini kuruyordu: ayri yaricap, ayri zemin gradyani, ayri golge ve ayri aktif
+           rengi — yani panelde iki farkli sekme dili vardi. Yerel kurallar artik yalnizca
+           FARKI yaziyor (esit genislik + ikon + dokunma yuksekligi). -->
+      <nav class="segmented-tabs primary-nav" :aria-label="t('panel.sites.toolsBar')">
         <button
           v-for="tab in primaryTabs"
           :key="tab.id"
           :class="['primary-tab', { active: primary === tab.id && !openToolId }]"
           @click="selectPrimary(tab.id)">
-          <span class="tab-icon">{{ tab.glyph }}</span>
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="siteToolIcon(tab.icon)"></svg>
           <strong>{{ tab.label }}</strong>
         </button>
       </nav>
@@ -100,7 +109,7 @@
             type="button"
             class="tool-row"
             @click="openTool(tool.id)">
-            <span class="tab-icon">{{ tool.glyph }}</span>
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="siteToolIcon(tool.id)"></svg>
             <span class="tool-row-text">
               <strong>{{ tool.label }}</strong>
               <small>{{ tool.description }}</small>
@@ -130,6 +139,8 @@ import SiteRepairNotice from "../components/SiteRepairNotice.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { lazyView } from "../utils/lazyView";
+import { siteToolIcon } from "../utils/siteToolIcons";
+import { toReachableUrl } from "../utils/url";
 import SitesView from "./SitesView.vue";
 import SiteDetailView from "./SiteDetailView.vue";
 
@@ -166,7 +177,13 @@ const SiteHostingView = lazyView(() => import("./SiteHostingView.vue"));
 const SslView = lazyView(() => import("./SslView.vue"));
 
 type PrimaryTab = "pano" | "hostingdns" | "mail" | "start";
-type ToolDef = { id: string; group: PrimaryTab; glyph: string; label: string; description: string };
+/*
+ * `glyph` ALANI KALDIRILDI. Taşıdığı değer ölçüldü ve sıfırdı: her satırda damganın hemen
+ * yanında zaten tam ad (`label`) ve bir cümlelik açıklama (`description`) yazılı, yani "PX" ya
+ * da "GÖÇ" kısaltmasının anlatacağı hiçbir şey kalmıyordu. Alan dursaydı yeni bir araç eklerken
+ * kimse ikonu değil o kısaltmayı doldururdu; tipten çıkarmak tek yolu kapatır.
+ */
+type ToolDef = { id: string; group: PrimaryTab; label: string; description: string };
 
 /**
  * Üst bardaki aramadan gelen "bu siteyi aç" isteği. `seq` sayacıyla gelir: aynı site arka arkaya
@@ -211,14 +228,24 @@ const selectedSiteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);
 
 const primaryUrl = computed(() => {
-  const binding = selectedSite.value?.bindings?.[0];
+  // ONIZLEME BAGLAMASI (nip.io) ATLANIR. Onceden korkoru `bindings[0]` aliniyordu; onizleme
+  // bagladigi listenin basina dustugunde bu baglantinin adresi kullanicinin ALAN ADI degil,
+  // gecici onizleme host'u oluyordu. SiteDetailView ayni hesabi zaten dogru yapiyordu (bkz.
+  // oradaki `primaryUrl`); iki ekran ayni dugmeyi farkli adrese goturuyordu.
+  const bindings = selectedSite.value?.bindings ?? [];
+  const binding = bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
+    ?? bindings[0];
   if (!binding) {
     return "";
   }
   const host = binding.hostName || (binding.ipAddress === "*" ? window.location.hostname : binding.ipAddress);
   const standard = (binding.protocol === "http" && binding.port === 80) ||
     (binding.protocol === "https" && binding.port === 443);
-  return `${binding.protocol}://${host}${standard ? "" : `:${binding.port}`}`;
+  // ERISILEBILIR ADRESE CEVIR. Burada yalniz `*` bagalamasi ele aliniyordu; `127.0.0.1` ya da
+  // `localhost` ile baglanmis bir site UZAKTAN yoneten yoneticiye KENDI makinesini acardi.
+  // Bu duzeltme SiteDetailView'in "Ac" dugmesinde vardi (openReachable); o dugme kalktigi icin
+  // yetenegi devralan baglantiya tasindi — kaybolmus bir davranis birakilmiyor.
+  return toReachableUrl(`${binding.protocol}://${host}${standard ? "" : `:${binding.port}`}`);
 });
 
 watch(
@@ -246,27 +273,27 @@ onMounted(async () => {
 
 // Tüm domain araçları + ait olduğu ana sekme (panel gruplaması).
 const allTools = computed<ToolDef[]>(() => [
-  { id: "hosting", group: "hostingdns", glyph: "⚙", label: t("panel.sites.tools.hosting"), description: t("panel.sites.tools.hostingHint") },
-  { id: "php", group: "hostingdns", glyph: "P", label: t("panel.sites.tools.php"), description: t("panel.sites.tools.phpHint") },
-  { id: "asp", group: "hostingdns", glyph: ".N", label: t("panel.sites.tools.asp"), description: t("panel.sites.tools.aspHint") },
-  { id: "dns", group: "hostingdns", glyph: "DNS", label: t("panel.sites.tools.dns"), description: t("panel.sites.tools.dnsHint") },
-  { id: "ssl", group: "hostingdns", glyph: "SSL", label: t("panel.sites.tools.ssl"), description: t("panel.sites.tools.sslHint") },
-  { id: "proxy", group: "hostingdns", glyph: "PX", label: t("panel.sites.tools.proxy"), description: t("panel.sites.tools.proxyHint") },
-  { id: "files", group: "hostingdns", glyph: "FL", label: t("panel.sites.tools.files"), description: t("panel.sites.tools.filesHint") },
-  { id: "ftp", group: "hostingdns", glyph: "FT", label: t("panel.sites.tools.ftp"), description: t("panel.sites.tools.ftpHint") },
-  { id: "webdb", group: "hostingdns", glyph: "SQL", label: t("panel.sites.tools.domaindb"), description: t("panel.sites.tools.domaindbHint") },
-  { id: "protected", group: "hostingdns", glyph: "KOR", label: t("panel.sites.tools.protected"), description: t("panel.sites.tools.protectedHint") },
-  { id: "stats", group: "hostingdns", glyph: "IST", label: t("panel.sites.tools.stats"), description: t("panel.sites.tools.statsHint") },
-  { id: "backup", group: "hostingdns", glyph: "BK", label: t("panel.sites.tools.backup"), description: t("panel.sites.tools.backupHint") },
-  { id: "cron", group: "hostingdns", glyph: "CR", label: t("panel.sites.tools.cron"), description: t("panel.sites.tools.cronHint") },
-  { id: "logs", group: "hostingdns", glyph: "LOG", label: t("panel.sites.tools.logs"), description: t("panel.sites.tools.logsHint") },
-  { id: "cache", group: "hostingdns", glyph: "CA", label: t("panel.sites.tools.cache"), description: t("panel.sites.tools.cacheHint") },
-  { id: "mail", group: "mail", glyph: "@", label: t("panel.sites.tools.mail"), description: t("panel.sites.tools.mailHint") },
-  { id: "toolkit", group: "start", glyph: "</>", label: t("panel.sites.tools.toolkit"), description: t("panel.sites.tools.toolkitHint") },
-  { id: "migrate", group: "start", glyph: "GÖÇ", label: t("panel.sites.tools.migrate"), description: t("panel.sites.tools.migrateHint") },
-  { id: "store", group: "start", glyph: "AP", label: t("panel.sites.tools.store"), description: t("panel.sites.tools.storeHint") },
-  { id: "wp", group: "start", glyph: "WP", label: "WordPress", description: t("panel.wp.hint") },
-  { id: "apps", group: "start", glyph: "JS", label: t("panel.sites.tools.apps"), description: t("panel.sites.tools.appsHint") }
+  { id: "hosting", group: "hostingdns", label: t("panel.sites.tools.hosting"), description: t("panel.sites.tools.hostingHint") },
+  { id: "php", group: "hostingdns", label: t("panel.sites.tools.php"), description: t("panel.sites.tools.phpHint") },
+  { id: "asp", group: "hostingdns", label: t("panel.sites.tools.asp"), description: t("panel.sites.tools.aspHint") },
+  { id: "dns", group: "hostingdns", label: t("panel.sites.tools.dns"), description: t("panel.sites.tools.dnsHint") },
+  { id: "ssl", group: "hostingdns", label: t("panel.sites.tools.ssl"), description: t("panel.sites.tools.sslHint") },
+  { id: "proxy", group: "hostingdns", label: t("panel.sites.tools.proxy"), description: t("panel.sites.tools.proxyHint") },
+  { id: "files", group: "hostingdns", label: t("panel.sites.tools.files"), description: t("panel.sites.tools.filesHint") },
+  { id: "ftp", group: "hostingdns", label: t("panel.sites.tools.ftp"), description: t("panel.sites.tools.ftpHint") },
+  { id: "webdb", group: "hostingdns", label: t("panel.sites.tools.domaindb"), description: t("panel.sites.tools.domaindbHint") },
+  { id: "protected", group: "hostingdns", label: t("panel.sites.tools.protected"), description: t("panel.sites.tools.protectedHint") },
+  { id: "stats", group: "hostingdns", label: t("panel.sites.tools.stats"), description: t("panel.sites.tools.statsHint") },
+  { id: "backup", group: "hostingdns", label: t("panel.sites.tools.backup"), description: t("panel.sites.tools.backupHint") },
+  { id: "cron", group: "hostingdns", label: t("panel.sites.tools.cron"), description: t("panel.sites.tools.cronHint") },
+  { id: "logs", group: "hostingdns", label: t("panel.sites.tools.logs"), description: t("panel.sites.tools.logsHint") },
+  { id: "cache", group: "hostingdns", label: t("panel.sites.tools.cache"), description: t("panel.sites.tools.cacheHint") },
+  { id: "mail", group: "mail", label: t("panel.sites.tools.mail"), description: t("panel.sites.tools.mailHint") },
+  { id: "toolkit", group: "start", label: t("panel.sites.tools.toolkit"), description: t("panel.sites.tools.toolkitHint") },
+  { id: "migrate", group: "start", label: t("panel.sites.tools.migrate"), description: t("panel.sites.tools.migrateHint") },
+  { id: "store", group: "start", label: t("panel.sites.tools.store"), description: t("panel.sites.tools.storeHint") },
+  { id: "wp", group: "start", label: "WordPress", description: t("panel.wp.hint") },
+  { id: "apps", group: "start", label: t("panel.sites.tools.apps"), description: t("panel.sites.tools.appsHint") }
 ]);
 
 const visibleTools = computed(() =>
@@ -284,11 +311,13 @@ function toolsFor(group: PrimaryTab): ToolDef[] {
   return visibleTools.value.filter((tool) => tool.group === group);
 }
 
+// `icon` ayrı bir alan (id'ye eşit değil): sekme kimlikleri bu ekranın grup adları
+// ("pano", "start"), ikon sözlüğü ise ortak. İkisini karıştırmak sessizce boş daire çizdirirdi.
 const primaryTabs = computed(() => [
-  { id: "pano" as const, glyph: "▦", label: t("panel.sites.primary.dashboard") },
-  { id: "hostingdns" as const, glyph: "⚙", label: t("panel.sites.primary.hostingDns") },
-  { id: "mail" as const, glyph: "@", label: t("panel.sites.primary.mail") },
-  { id: "start" as const, glyph: "★", label: t("panel.sites.primary.getStarted") }
+  { id: "pano" as const, icon: "dashboard", label: t("panel.sites.primary.dashboard") },
+  { id: "hostingdns" as const, icon: "hosting", label: t("panel.sites.primary.hostingDns") },
+  { id: "mail" as const, icon: "mail", label: t("panel.sites.primary.mail") },
+  { id: "start" as const, icon: "getStarted", label: t("panel.sites.primary.getStarted") }
 ]);
 
 const activePrimaryLabel = computed(() =>
@@ -483,7 +512,7 @@ async function handleAddSubdomain(label: string) {
 <style scoped>
 .website-workspace {
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
   min-width: 0;
 }
 
@@ -491,11 +520,12 @@ async function handleAddSubdomain(label: string) {
 .tool-context {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--sp-12);
   flex-wrap: wrap;
-  padding: 8px 12px;
+  padding: var(--sp-8) var(--sp-12);
   border: 1px solid var(--panel-border);
-  border-radius: 11px;
+  /* 11px olcek disiydi ve komsu yuzeylerin hicbiriyle eslesmiyordu (panel 13, form 9). */
+  border-radius: var(--radius-md);
   background: var(--surface-1);
 }
 
@@ -503,73 +533,75 @@ async function handleAddSubdomain(label: string) {
   font-weight: 700;
 }
 
+/* ALAN ADI bu ekranin KIMLIGI. 0.96rem = 12.96px, yani sayfanin en onemli bilgisi govde
+   metninden (13.5px) KUCUK yaziliyordu. Baslik merdiveninin bir adimina alindi (--fs-xl,
+   15.9px): asagidaki arac basliklariyla (h2, 19.2px) yarismaz ama ust satirdaki dugmelerden
+   ayrisir. */
 .tool-context .context-domain {
-  font-size: 0.96rem;
+  font-size: var(--fs-xl);
   color: var(--text-strong);
 }
 
+/* `<a>` oldugu icin `button.secondary` kurallari BURAYA ULASMAZ (bkz. sablondaki not);
+   ikincil dugme gorunumu burada, HER genislikte veriliyor. */
 .tool-context .open-link {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  min-height: 30px;
+  padding: var(--sp-4) var(--sp-8);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text-strong);
+  font-weight: 600;
   text-decoration: none;
 }
 
-/* 4 ana sekme (panel üst sekmeleri). */
-.primary-nav {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 5px;
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--surface-2), var(--surface-0));
-  box-shadow: var(--panel-shadow);
-  scrollbar-width: thin;
-}
-
+/* 4 ana sekme — kapsayici gorunumu ortak `.segmented-tabs`ten gelir.
+   YEREL FARK: sekmeler seridi ESIT bolusur (ortak seritte icerige gore daralirlar) ve
+   ikon tasidiklari icin daha yuksekler. Aktif/hover/odak gorunumu BILEREK yazilmadi:
+   eski aktif dolgusu `rgba(22, 29, 41, 0.34)` iceriyordu — koda GOMULU koyu bir renk,
+   yani acik temada aktif sekmenin uzerine koyu bir perde cekiyordu. */
 .primary-tab {
   display: inline-flex;
   flex: 1 1 auto;
   justify-content: center;
-  gap: 8px;
   align-items: center;
+  gap: var(--sp-8);
   min-height: 42px;
-  padding: 8px 14px;
-  border: 1px solid transparent;
-  border-bottom: 2px solid transparent;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-soft);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.primary-tab:hover {
-  border-color: color-mix(in srgb, var(--accent-1) 20%, transparent);
-  background: var(--surface-1);
-}
-
-.primary-tab.active {
-  border-color: color-mix(in srgb, var(--accent-1) 16%, transparent);
-  border-bottom-color: var(--accent-1);
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent-2) 18%, transparent), rgba(22, 29, 41, 0.34));
 }
 
 .primary-tab strong {
-  font-size: 0.84rem;
+  font-size: var(--fs-sm);
 }
 
+/*
+ * IKON KARESI — artik gercek ikon, harf damgasi degil.
+ *
+ * ONCEKI HAL: bu kare uc harfe kadar cikan uydurulmus kisaltmalar tasiyordu (PX, KOR, IST, CA,
+ * CR, LOG, GOC, </>, .N, @, ▦, ★) ve ilk olcumde 8.91px cizilyordu — panelin taban adiminin
+ * (`--fs-2xs`, 10.53px) altinda. Once yalnizca boy tabana cekildi; asil sorun bu degildi.
+ * Kisaltma HIC BILGI TASIMIYORDU: her satirda hemen yaninda tam ad + bir cumlelik aciklama
+ * zaten yaziliydi, yani "PX" buyutulunce de "Ters vekil" demiyordu. Ayni seritte bes ayri
+ * kisaltma dili + dort yazi tipi simgesi vardi.
+ *
+ * SIMDI: `utils/siteToolIcons.ts` — SitesView ve SiteDetailView ile TEK kaynak. Kutu olcusu
+ * (26px), yaricap ve zemin AYNEN korundu; degisen yalnizca kutunun ICI. Kimligi olmayan bir
+ * arac icin `siteToolIcon` bos daireye duser: arac kaybolmaz, yalnizca kimliksiz gorunur.
+ */
 .tab-icon {
-  display: grid;
-  place-items: center;
+  box-sizing: border-box;
   width: 26px;
   height: 26px;
-  border-radius: 7px;
+  padding: 5px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-1) 12%, transparent);
-  color: var(--accent-1);
-  font-size: 0.58rem;
-  font-weight: 850;
+  fill: none;
+  stroke: var(--accent-1);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   flex-shrink: 0;
 }
 
@@ -580,17 +612,17 @@ async function handleAddSubdomain(label: string) {
 /* Dikey araç listesi (alt alta — panel Barındırma ve DNS düzeni). */
 .tool-stack {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .tool-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--sp-12);
   width: 100%;
-  padding: 13px 16px;
+  padding: var(--sp-12) var(--sp-16);
   border: 1px solid var(--panel-border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--surface-1);
   color: var(--text-strong);
   text-align: left;
@@ -608,28 +640,35 @@ async function handleAddSubdomain(label: string) {
 
 .tool-row-text {
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
   min-width: 0;
   flex: 1 1 auto;
 }
 
 .tool-row-text strong {
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
 }
 
 .tool-row-text small {
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: var(--fs-2xs);
 }
 
 .tool-row .chev {
   color: var(--text-muted);
-  font-size: 1.3rem;
+  font-size: var(--fs-2xl);
   line-height: 1;
   flex-shrink: 0;
 }
 
-@media (max-width: 760px) {
+/*
+  KIRILIM NOKTALARI 760/620 -> 900/720.
+  Bu ekran kendi esiklerini uyduruyordu: 760'ta sekmeler kaydirma seridine, 620'de 2x2
+  izgaraya geciyordu. Oysa MainLayout kenar menuyu 900'de cekmeceye aliyor ve base.css
+  parmak hedeflerini 720'de buyutuyor. Sonuc dort ayri esikti; ekran, panelin geri kalani
+  hic degismemisken tek basina yerlesim degistiriyordu.
+*/
+@media (max-width: 900px) {
   .primary-tab {
     flex: 0 0 auto;
   }
@@ -640,32 +679,32 @@ async function handleAddSubdomain(label: string) {
   kalıyor ve kullanıcı orada bir şey olduğunu göremiyordu. 2x2 ızgaraya alınır: dördü de
   görünür, her biri tam genişlikte bir parmak hedefi olur.
 */
-@media (max-width: 620px) {
+@media (max-width: 720px) {
   .primary-nav {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 5px;
+    gap: var(--sp-4);
     overflow: visible;
   }
 
   .primary-tab {
     flex: none;
     justify-content: flex-start;
-    gap: 8px;
+    gap: var(--sp-8);
     min-height: 46px;
-    padding: 8px 10px;
+    padding: var(--sp-8) var(--sp-10);
     white-space: normal;
     text-align: left;
   }
 
   .primary-tab strong {
-    font-size: 0.8rem;
+    font-size: var(--fs-xs);
     line-height: 1.15;
   }
 
   .tool-context {
-    gap: 8px 10px;
-    padding: 10px;
+    gap: var(--sp-8) var(--sp-10);
+    padding: var(--sp-10);
   }
 
   .tool-context .back-btn {
@@ -676,31 +715,24 @@ async function handleAddSubdomain(label: string) {
   .tool-context .context-domain {
     flex: 1 1 100%;
     order: -1;
-    font-size: 0.9rem;
+    font-size: var(--fs-lg);
     overflow-wrap: anywhere;
   }
 
+  /* Yalniz PARMAK HEDEFI buyur: gorunumun kendisi artik yukaridaki kuralda. */
   .tool-context .open-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     min-height: 40px;
-    padding: 8px 12px;
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-3);
-    color: var(--text-strong);
-    font-weight: 600;
+    padding: var(--sp-8) var(--sp-12);
   }
 
   .tool-row {
-    gap: 10px;
+    gap: var(--sp-10);
     min-height: 56px;
-    padding: 11px 12px;
+    padding: var(--sp-10) var(--sp-12);
   }
 
   .tool-row-text small {
-    font-size: 0.7rem;
+    font-size: var(--fs-2xs);
   }
 }
 </style>

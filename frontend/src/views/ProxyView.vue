@@ -177,8 +177,13 @@
 
           <div v-if="currentConfiguration?.rewriteRules.length" class="rule-list">
             <article v-for="rule in currentConfiguration.rewriteRules" :key="rule.name" class="rule-item">
+              <!-- `<strong>` -> `<h4>`: panelde bolum basligi olmayan SON yerdi. Her kural kendi
+                   `<article>`i ve altinda bir `<dl>` tasiyor, yani gercekten bir basliktir; kalin
+                   metin oldugu surece ekran okuyucunun baslik listesinde gorunmuyordu ve merdiven
+                   h2 > h3'ten sonra govde metnine dusuyordu. Duzey h4: sayfa h2, "Yeniden yazma
+                   kurallari" h3, her kural h4. -->
               <div class="section-head">
-                <strong>{{ rule.name }}</strong>
+                <h4>{{ rule.name }}</h4>
                 <span class="status-pill">{{ rule.stopProcessing ? t("panel.proxy.stopProcessing") : t("panel.proxy.passThrough") }}</span>
               </div>
               <dl class="detail-grid">
@@ -401,13 +406,19 @@ async function saveRewriteRule() {
   border-radius: var(--radius-md);
   border: 1px solid var(--panel-border);
   /* Iki durakli "gradyan" iki durakta da AYNI rengi tasiyordu (`surface-2` -> `surface-2`),
-     yani duz bir dolgunun pahali yazilisiydi. */
-  background: var(--surface-2);
+     yani duz bir dolgunun pahali yazilisiydi.
+     `--surface-2` -> `--surface-1`: alti ekranin ic kart recetesi tek zemine baglandi
+     (bkz. ServerHealthView'deki sayim; surface-1 uc ekranda zaten kullaniliyordu ve
+     `--surface-0` olan `.panel` ile arasinda iki temada da gorunur bir adim var). */
+  background: var(--surface-1);
 }
 
-.detail-grid dt,
-.meta {
+/* `.meta` KOPYASI SILINDI: rengi base.css zaten veriyor (`.meta { color: var(--text-muted) }`).
+   Burada kalan tek is paragrafin varsayilan dis boslugunu sifirlamak -- o base'de YOK ve
+   silinirse "kural yok" cumlesi kartin icinde asagi kayardi. */
+.detail-grid dt {
   color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 
 .detail-grid div {
@@ -420,6 +431,10 @@ async function saveRewriteRule() {
 .meta {
   margin: 0;
   word-break: break-word;
+}
+
+.detail-grid dd {
+  color: var(--text-soft);
 }
 
 /* YIKICI EYLEM AYRI DURUR.

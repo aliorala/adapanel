@@ -287,7 +287,8 @@ function resolveApiMessage(error: unknown) {
 .health-details {
   max-width: 100%;
   color: var(--text-muted);
-  font-size: 0.76rem;
+  /* 0.76rem = 10.26px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
 }
 
 .health-details summary {

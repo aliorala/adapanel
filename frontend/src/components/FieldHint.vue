@@ -97,7 +97,8 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocumentPoin
   border-radius: 50%;
   background: var(--surface-1);
   color: var(--text-muted);
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-weight: 700;
   line-height: 1;
   box-shadow: none;

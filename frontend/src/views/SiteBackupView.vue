@@ -1,6 +1,11 @@
 <template>
   <section class="panel backup-view">
-    <div class="bk-header">
+    <!-- Ortak `.section-head` devralindi: kapsamli `.bk-header` kopyasi ayni isi yapiyordu ama
+         `align-items: center` ile. Baslik blogu UC satir (ustbaslik + baslik + site adi),
+         yanindaki dugme tek satir; ortalama dugmeyi uc satirin ortasina koyuyor ve goz onu
+         hicbir seyle hizali bulamiyordu. Ortak kural ustten hizalar (base.css'te 25/31 kopya
+         boyle olculdu) ve `flex-wrap` ekler. -->
+    <div class="section-head">
       <div>
         <p class="section-kicker">{{ t("panel.backup.siteKicker") }}</p>
         <h2>{{ t("panel.backup.siteTitle") }}</h2>
@@ -13,10 +18,14 @@
 
     <div v-if="siteName" class="form-surface bk-create">
       <h3>{{ t("panel.backup.createTitle") }}</h3>
+      <!-- `chk` -> ortak `toggle-field`: kapsamli kopya birebir ayni uc ozelligi yaziyordu
+           (flex + center + 8px). Gorunen fark iki tane: etiket rengi ortak `--text-soft`e
+           gelir ve boyu 0.86rem yerine govde boyunda (13.5px) olur — ayni formdaki oteki
+           etiketlerle ayni. -->
       <div class="scope-grid">
-        <label class="chk"><input v-model="scope.includeFiles" type="checkbox" /> {{ t("panel.backup.scopeFiles") }}</label>
-        <label class="chk"><input v-model="scope.includeConfig" type="checkbox" /> {{ t("panel.backup.scopeConfig") }}</label>
-        <label class="chk"><input v-model="scope.includeMail" type="checkbox" /> {{ t("panel.backup.scopeMail") }}</label>
+        <label class="toggle-field"><input v-model="scope.includeFiles" type="checkbox" /> {{ t("panel.backup.scopeFiles") }}</label>
+        <label class="toggle-field"><input v-model="scope.includeConfig" type="checkbox" /> {{ t("panel.backup.scopeConfig") }}</label>
+        <label class="toggle-field"><input v-model="scope.includeMail" type="checkbox" /> {{ t("panel.backup.scopeMail") }}</label>
       </div>
 
       <SectionLoadError
@@ -27,7 +36,7 @@
       <div v-if="availableDatabases.length > 0" class="db-block">
         <span class="field-label">{{ t("panel.backup.scopeDatabases") }}</span>
         <div class="scope-grid">
-          <label v-for="db in availableDatabases" :key="`${db.engine}:${db.name}`" class="chk">
+          <label v-for="db in availableDatabases" :key="`${db.engine}:${db.name}`" class="toggle-field">
             <input v-model="selectedDbKeys" type="checkbox" :value="`${db.engine}:${db.name}`" />
             {{ db.name }} <small>({{ db.engine }})</small>
           </label>
@@ -42,7 +51,7 @@
         dolduğunda ve temel indeks okunamadığında yine TAM alınır.
       -->
       <div class="scope-grid incremental-row">
-        <label class="chk">
+        <label class="toggle-field">
           <input v-model="scope.incremental" type="checkbox" /> {{ t("panel.backup.incremental") }}
         </label>
         <label v-if="scope.incremental" class="stacked-field full-every">
@@ -59,7 +68,11 @@
         <PasswordField v-model="encryptionPassword" autocomplete="new-password" />
         <small class="field-hint">{{ t("panel.backup.perBackupPasswordHint") }}</small>
       </label>
-      <p v-if="encryptionPassword" class="notice encryption-loss" role="status">
+      <!-- UYARI, UYARI GIBI GORUNMELI: bu iki serit duz `.notice` idi, yani panelin MAVI bilgi
+           kutusuyla birebir ayni ciziliyordu — "parolayi kaybedersen yedegin tamami gider"
+           mesaji bir bilgi notundan ayirt edilemiyordu. Ortak `.warn-banner` kehribar cizer;
+           durum boylece RENKTEN BASKA bir kanalda da (kutu tipi) anlatilmis olur. -->
+      <p v-if="encryptionPassword" class="notice warn-banner encryption-loss" role="status">
         {{ t("panel.backup.encryptionLossWarning") }}
       </p>
 
@@ -70,7 +83,7 @@
         şifreli alınır ve bu ekran o kaydı okuyamaz (uç yalnız yöneticiye açık), bu yüzden uyarı
         parolaya bakılmadan gösterilir.
       -->
-      <p v-if="scope.incremental" class="notice encryption-loss" role="status">
+      <p v-if="scope.incremental" class="notice warn-banner encryption-loss" role="status">
         {{ t("panel.backup.encryptionChainWarning") }}
       </p>
 
@@ -88,9 +101,14 @@
         :interrupted-label="serverBackup.interruptedText.value"
         @dismiss="serverBackup.dismissInterrupted" />
 
-      <button class="compact" v-bind="writeGate(busy)" @click="createBackup">
-        {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
-      </button>
+      <!-- Gonder dugmesi kendi KAPANIS SATIRINDA. `.bk-create` bir izgara oldugu icin dugme
+           kartin TAM GENISLIGINE geriliyordu: sayfayi bastan sona kesen mavi bir bant, panelin
+           baska hicbir yerinde olmayan bir agirlik. -->
+      <div class="form-actions">
+        <button class="compact" v-bind="writeGate(busy)" @click="createBackup">
+          {{ busy ? t("panel.backup.creating") : t("panel.backup.createButton") }}
+        </button>
+      </div>
     </div>
 
     <div class="bk-list">
@@ -182,11 +200,18 @@
                   <p class="field-hint">{{ t("panel.backup.location.existenceUnknown") }}</p>
                 </div>
               </div>
+              <!-- "GERI YUKLE" YIKICI BIR EYLEM: canli sitenin dosyalarinin uzerine yazar.
+                   Yan yana duran "Indir" ile BIREBIR ayni goruntudeydi (ikisi de `secondary`),
+                   yani en zararsiz eylem ile en yikici eylem ayni agirliktaydi ve aralarinda
+                   yalniz 8px vardi. Artik panelin geri kalaninda oldugu gibi tehlike rengiyle
+                   ve bir ayracin arkasinda, satirin SONUNDA duruyor — yeri satirdan satira
+                   degismez. Yuksek riskli onay (site adini yazdirma) AYNEN yerinde. -->
               <div class="bk-actions">
                 <button class="secondary compact" :disabled="downloadingId === record.id" @click="download(record)">
                   {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
                 </button>
-                <button class="secondary compact" v-bind="writeGate(restoringId === record.id)" @click="restore(record)">
+                <span class="action-divider" aria-hidden="true"></span>
+                <button class="danger compact" v-bind="writeGate(restoringId === record.id)" @click="restore(record)">
                   {{ restoringId === record.id ? t("panel.backup.restoring") : t("panel.backup.restore") }}
                 </button>
               </div>
@@ -556,62 +581,66 @@ function formatDate(iso: string): string {
 </script>
 
 <style scoped>
+/*
+ * BU DOSYADAN SILINEN KOPYALAR (gorunen etkileriyle):
+ *  - `.bk-header`   -> ortak `.section-head`; uc satirlik baslik blogu artik dugmeyle USTTEN
+ *                      hizali (oncesinde `center` ile ortadan hizaliydi) ve satir sariyor.
+ *  - `.chk`         -> ortak `.toggle-field` (birebir ayni tanim).
+ *  - `.field-label` -> ORTAK SINIFIN UZERINE YAZIYORDU: 0.74rem/`--text-muted`/700 diyordu,
+ *                      ortak tanim ise 0.92rem/`--text-soft`/600. Yani panelde her yerde ayni
+ *                      gorunen alan etiketi YALNIZ bu ekranda kucuk ve soluktu. Kopya silindi.
+ *  - `.meta`        -> ortak tanimla ayni renk; tek fark ortak surumun `line-height: 1.5`i.
+ *  - `.location-line button { width: auto }` -> hicbir kural o dugmeyi germiyordu (olu).
+ */
+
 .backup-view,
 .bk-create,
 .bk-list {
   display: grid;
-  gap: 14px;
+  gap: var(--sp-12);
 }
 
-.bk-header,
 .bk-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .scope-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-}
-
-.chk {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.86rem;
+  gap: var(--sp-12);
 }
 
 .db-block {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
-.field-label {
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  font-weight: 700;
+/* Formun KAPANIS SATIRI: gonder dugmesi saga hizali, kart genisligine gerilmez. */
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .bk-days {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .bk-day {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .bk-day-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
-  padding-bottom: 6px;
+  padding-bottom: var(--sp-6);
   border-bottom: 1px solid var(--panel-border);
 }
 
@@ -635,55 +664,58 @@ function formatDate(iso: string): string {
   color: var(--text-muted);
 }
 
+/* Gun ozeti SAYI tasir (kac yedek, toplam boyut) ve gunler alt alta karsilastiriliyor:
+   basamaklar esit genislikte olmazsa "12" ile "9" ayni sutunda hizasiz gorunur. */
 .bk-day-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .bk-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .location-toggle {
   width: auto;
   justify-self: start;
-  margin-top: 4px;
+  margin-top: var(--sp-4);
 }
 
 .location-detail {
   display: grid;
-  gap: 6px;
-  margin-top: 6px;
+  gap: var(--sp-6);
+  margin-top: var(--sp-6);
 }
 
 .location-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
-}
-
-.location-line button {
-  width: auto;
 }
 
 /* Tam yol KISALTILMAZ (kopyalanıp yapıştırılacak) ama satırı da bozmaz: kutu KENDİ içinde
    yatay kayar. `nowrap` bilinçli — sarılmış bir yol yanlış okunuyor. */
+/* Tam yol KISALTILMAZ (kopyalanıp yapıştırılacak) ama satırı da bozmaz: kutu KENDİ içinde
+   yatay kayar. `nowrap` bilinçli — sarılmış bir yol yanlış okunuyor.
+   Yazi tipi ortak `--font-mono` belirtecinden: burada elle yazilan liste panelin oteki
+   konsol yuzeylerinden farkliydi (base.css bu belirteci tam bu yuzden tanimliyor). */
 .path-box {
   flex: 1 1 240px;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -693,12 +725,12 @@ function formatDate(iso: string): string {
 
 .full-every {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
   max-width: 200px;
 }
 
 .bk-row {
-  padding: 10px 14px;
+  padding: var(--sp-10) var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
   background: var(--surface-1);
@@ -706,22 +738,46 @@ function formatDate(iso: string): string {
 
 .bk-id {
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
   min-width: 0;
+}
+
+/* Tarih ve boyut ("18.08.2026 14:03 · 1.24 GB") satirlar boyunca alt alta okunuyor. */
+.bk-id .meta {
+  font-variant-numeric: tabular-nums;
 }
 
 .bk-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: var(--sp-8);
   flex-shrink: 0;
 }
 
-.meta {
-  color: var(--text-muted);
+/* YIKICI BOLGE AYRACI: "Indir" ile "Geri yukle" arasindaki gorsel sinir. */
+.action-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 0 var(--sp-2);
+  background: var(--panel-border);
 }
 
 /* Parola kaybı geri dönüşsüz: uyarı satırı gövde metninden ayrışsın. */
 .encryption-loss {
   font-weight: 600;
+}
+
+/* DAR EKRAN: yedek satiri iki blok halinde (kimlik + eylemler) yan yana duruyordu ve
+   telefonda eylem dugmeleri ada 8px kala sikisiyordu. Alt alta gecerler, eylem seridi de
+   saga yaslanir ki "Geri yukle" yine sagda ve ayracin arkasinda kalsin. */
+@media (max-width: 720px) {
+  .bk-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .bk-actions {
+    justify-content: flex-end;
+  }
 }
 </style>

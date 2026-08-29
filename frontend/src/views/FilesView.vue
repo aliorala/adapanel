@@ -373,12 +373,17 @@
           <span class="field-label">{{ t("panel.security.principal") }}</span>
           <input v-model="permissionPrincipal" placeholder="IIS_IUSRS" />
         </label>
+        <!-- SEÇENEKLER ANLAMLARIYLA YAZILIYOR. Liste yalnız "R / M / F" gösteriyordu; bunlar
+             icacls'in ham kodlarıdır ve seçili değer olarak ekranda tek başına duran "M"
+             kullanıcıya HİÇBİR ŞEY anlatmıyordu. Harf KALDIRILMADI (yöneticinin icacls
+             çıktısıyla eşleştirebilmesi için parantez içinde duruyor); yanına ne yaptığı
+             yazıldı. Gönderilen değer aynı: R / M / F. -->
         <label>
           <span class="field-label">{{ t("panel.security.rights") }}</span>
           <select v-model="permissionRights">
-            <option value="R">R</option>
-            <option value="M">M</option>
-            <option value="F">F</option>
+            <option value="R">{{ t("panel.security.rights.read") }}</option>
+            <option value="M">{{ t("panel.security.rights.modify") }}</option>
+            <option value="F">{{ t("panel.security.rights.full") }}</option>
           </select>
         </label>
         <button type="submit" class="secondary compact" v-bind="writeGate()">{{ t("panel.files.permissions") }}</button>

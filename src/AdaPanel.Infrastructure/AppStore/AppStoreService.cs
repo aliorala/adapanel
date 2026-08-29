@@ -47,82 +47,82 @@ public sealed class AppStoreService(
         {
             Id = "laravel",
             DisplayName = "Laravel",
-            Description = "Laravel 13 uygulamasini uretim ayarlari, SQLite, IIS Rewrite ve guvenli public web koku ile hazirlar.",
+            Description = "Laravel 13 uygulamasını üretim ayarları, SQLite, IIS Rewrite ve güvenli public web kökü ile hazırlar.",
             Runtime = "PHP 8.3+",
             Category = "Framework",
             DownloadUrl = "https://packagist.org/packages/laravel/laravel",
             RequiresDatabase = true,
             DefaultRootFolder = "public",
             Requirements = ["PHP 8.3+", "Composer", "IIS URL Rewrite"],
-            AutomaticSetup = ["SQLite", "APP_KEY", "Migration", "FastCGI", "Scheduler", "Klasor izinleri"],
+            AutomaticSetup = ["SQLite", "Uygulama anahtarı (APP_KEY)", "Veritabanı tabloları (migration)", "PHP bağlantısı (FastCGI)", "Zamanlanmış görev (scheduler)", "Klasör izinleri"],
             Featured = true
         },
         new()
         {
             Id = "wordpress",
             DisplayName = "WordPress",
-            Description = "WordPress son surum paketini site kokune indirip acar.",
+            Description = "WordPress son sürüm paketini site köküne indirip açar.",
             Runtime = "PHP",
             Category = "CMS",
             DownloadUrl = "https://wordpress.org/latest.zip",
             RequiresDatabase = true,
             DefaultRootFolder = "wordpress",
             Requirements = ["PHP", "MySQL veya MariaDB"],
-            AutomaticSetup = ["Paket indirme", "Dosyalari acma"]
+            AutomaticSetup = ["Paket indirme", "Dosyaları açma"]
         },
         new()
         {
             Id = "roundcube",
             DisplayName = "Roundcube Webmail",
-            Description = "Roundcube webmail'i site kokune kurar; SQLite ile calisir ve yerel Stalwart IMAP/SMTP'ye (STARTTLS) otomatik baglanir.",
+            Description = "Roundcube webmail'i site köküne kurar; SQLite ile çalışır ve yerel Stalwart IMAP/SMTP'ye (STARTTLS) otomatik bağlanır.",
             Runtime = "PHP 8.x",
             Category = "Mail",
             DownloadUrl = "https://github.com/roundcube/roundcubemail/releases/latest",
             RequiresDatabase = false,
             DefaultRootFolder = "webmail",
             Requirements = ["PHP 8.x", "Stalwart Mail Server (IMAP/SMTP)"],
-            AutomaticSetup = ["Paket indirme", "SQLite", "config.inc.php", "IMAP/SMTP=localhost STARTTLS", "FastCGI", "Klasor izinleri"],
+            AutomaticSetup = ["Paket indirme", "SQLite", "Yapılandırma dosyası (config.inc.php)", "IMAP/SMTP bağlantısı (localhost, STARTTLS)", "PHP bağlantısı (FastCGI)", "Klasör izinleri"],
             Featured = true
         },
         new()
         {
             Id = "adminer",
             DisplayName = "Adminer",
-            Description = "Tek dosyalik Adminer veritabani arayuzunu hedef klasore yerlestirir.",
+            Description = "Tek dosyalık Adminer veritabanı arayüzünü hedef klasöre yerleştirir.",
             Runtime = "PHP",
             Category = "Database",
             DownloadUrl = "https://github.com/vrana/adminer/releases/download/v5.4.2/adminer-5.4.2.php",
             RequiresDatabase = false,
             DefaultRootFolder = "adminer",
             Requirements = ["PHP"],
-            AutomaticSetup = ["Tek dosya dagitimi"]
+            AutomaticSetup = ["Tek dosya dağıtımı"]
         },
         new()
         {
             Id = "grav",
             DisplayName = "Grav CMS",
-            Description = "Grav'in (veritabani GEREKTIRMEYEN, dosya-tabanli modern CMS) son surumunu site kokune kurar; kurulum biter bitmez dogrudan kullanilabilir.",
+            Description = "Grav'in (veritabanı GEREKTİRMEYEN, dosya tabanlı modern CMS) son sürümünü site köküne kurar; kurulum biter bitmez doğrudan kullanılabilir.",
             Runtime = "PHP 8.x",
             Category = "CMS",
             DownloadUrl = "https://getgrav.org/download/core/grav/latest",
             RequiresDatabase = false,
             DefaultRootFolder = "site koku",
             Requirements = ["PHP 8.x"],
-            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"],
+            AutomaticSetup = ["Paket indirme", "Dosyaları açma", "PHP giriş noktası"],
             Featured = true
         },
         new()
         {
             Id = "drupal",
             DisplayName = "Drupal",
-            Description = "Drupal son surum paketini site kokune indirip acar. Ardindan panelden bir veritabani olusturup taryici kurulum sihirbazini tamamlayin.",
+            Description = "Drupal son sürüm paketini site köküne indirip açar. Ardından panelden bir veritabanı oluşturup tarayıcı kurulum sihirbazını tamamlayın.",
             Runtime = "PHP 8.x",
             Category = "CMS",
             DownloadUrl = "https://www.drupal.org/download-latest/zip",
             RequiresDatabase = true,
             DefaultRootFolder = "site koku",
             Requirements = ["PHP 8.x", "MySQL veya MariaDB"],
-            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"]
+            AutomaticSetup = ["Paket indirme", "Dosyaları açma", "PHP giriş noktası"]
         },
         new()
         {
@@ -131,14 +131,14 @@ public sealed class AppStoreService(
             // + installation/ sihirbazi, tek-ust-klasor YOK -> flatten no-op).
             Id = "joomla",
             DisplayName = "Joomla",
-            Description = "Joomla son kararli surumunu site kokune indirip acar. Ardindan panelden bir veritabani olusturup tarayici kurulum sihirbazini (installation/) tamamlayin.",
+            Description = "Joomla son kararlı sürümünü site köküne indirip açar. Ardından panelden bir veritabanı oluşturup tarayıcı kurulum sihirbazını (installation/) tamamlayın.",
             Runtime = "PHP 8.x",
             Category = "CMS",
             DownloadUrl = "https://github.com/joomla/joomla-cms/releases/download/6.1.1/Joomla_6.1.1-Stable-Full_Package.zip",
             RequiresDatabase = true,
             DefaultRootFolder = "site koku",
             Requirements = ["PHP 8.x", "MySQL veya MariaDB"],
-            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"]
+            AutomaticSetup = ["Paket indirme", "Dosyaları açma", "PHP giriş noktası"]
         },
         new()
         {
@@ -147,40 +147,40 @@ public sealed class AppStoreService(
             // kendini acar ve kurulum sihirbazini baslatir).
             Id = "prestashop",
             DisplayName = "PrestaShop",
-            Description = "PrestaShop e-ticaret paketini site kokune indirip acar. Siteyi tarayicida acinca paket kendini cikartir ve kurulum sihirbazi baslar; oncesinde panelden bir veritabani olusturun.",
+            Description = "PrestaShop e-ticaret paketini site köküne indirip açar. Siteyi tarayıcıda açınca paket kendini çıkartır ve kurulum sihirbazı başlar; öncesinde panelden bir veritabanı oluşturun.",
             Runtime = "PHP 8.x",
             Category = "E-Ticaret",
             DownloadUrl = "https://github.com/PrestaShop/PrestaShop/releases/download/8.2.7/prestashop_8.2.7.zip",
             RequiresDatabase = true,
             DefaultRootFolder = "site koku",
             Requirements = ["PHP 8.x", "MySQL veya MariaDB"],
-            AutomaticSetup = ["Paket indirme", "Dosyalari acma", "PHP giris noktasi"]
+            AutomaticSetup = ["Paket indirme", "Dosyaları açma", "PHP giriş noktası"]
         },
         new()
         {
             Id = "plain-php",
             DisplayName = "PHP Starter",
-            Description = "Basit bir index.php ile bos PHP calisma alani olusturur.",
+            Description = "Basit bir index.php ile boş PHP çalışma alanı oluşturur.",
             Runtime = "PHP",
             Category = "Starter",
             DownloadUrl = string.Empty,
             RequiresDatabase = false,
             DefaultRootFolder = "public",
             Requirements = ["PHP"],
-            AutomaticSetup = ["Baslangic dosyasi"]
+            AutomaticSetup = ["Başlangıç dosyası"]
         },
         new()
         {
             Id = "aspnet-static",
             DisplayName = "ASP.NET Starter",
-            Description = "Basit web.config ile statik veya ASP.NET uygulama kokunu hazirlar.",
+            Description = "Basit web.config ile statik veya ASP.NET uygulama kökünü hazırlar.",
             Runtime = "ASP.NET",
             Category = "Starter",
             DownloadUrl = string.Empty,
             RequiresDatabase = false,
             DefaultRootFolder = "site",
             Requirements = ["IIS"],
-            AutomaticSetup = ["web.config", "Baslangic sayfasi"]
+            AutomaticSetup = ["web.config", "Başlangıç sayfası"]
         }
     ];
 

@@ -1,13 +1,16 @@
 <template>
   <section class="panel module-shell">
+    <!-- ÜÇ KROM SATIRI İKİYE İNDİ. SAYILDI: içerikten önce üst üste üç şerit vardı — başlık +
+         "Yenile" düğmesi, sonra sekmeler + site seçici, sonra bölümün kendi başlığı + eylemleri.
+         "Yenile" en üstteydi ama tazelediği şey (sekmenin listesi ve seçili sitenin durumu) iki
+         satır aşağıdaydı; üstelik seçicinin YANINDA olması gereken bir eylem, sayfanın öbür
+         ucundaydı. Düğme, üzerinde çalıştığı seçicinin yanına taşındı ve başlık şeridi yalnız
+         başlığı taşıyor. -->
     <div class="module-head">
       <div>
         <h2>{{ t("panel.security.workspaceTitle") }}</h2>
         <p class="meta">{{ t("panel.security.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="!selectedSiteName" @click="refreshAll">
-        {{ t("panel.security.refresh") }}
-      </button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
@@ -23,10 +26,15 @@
            ile SABIT bir genislik dayatiyordu — kisa bir site adinda kutu bos yere 280px yer
            kapliyor, uzun bir adda 52vw'de kirpiliyordu. Ortak tanim icerige uyar (`width: auto`,
            taban 140px) ve panelin diger yedi site secicisiyle AYNI davranir. -->
-      <select v-model="selectedSiteName" class="compact-select">
-        <option value="">{{ t("panel.php.selectSite") }}</option>
-        <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
-      </select>
+      <div class="toolbar-group">
+        <select v-model="selectedSiteName" class="compact-select">
+          <option value="">{{ t("panel.php.selectSite") }}</option>
+          <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
+        </select>
+        <button class="secondary compact" :disabled="!selectedSiteName" @click="refreshAll">
+          {{ t("panel.security.refresh") }}
+        </button>
+      </div>
     </div>
 
     <template v-if="activeSection === 'site'">
@@ -45,9 +53,15 @@
         </div>
       </div>
 
+      <!-- SİTE SEÇİLMEMİŞKEN EKRAN BOMBOŞTU. Üç durumdan yalnız ikisi çiziliyordu ("yükleniyor"
+           ve "dolu"); site seçilmemişse başlık satırı ile form arasında HİÇBİR ŞEY yoktu ve
+           kullanıcı dört düğmenin neden pasif olduğunu göremiyordu. Boşluk bir cevap değildir:
+           eksik olan şey ADIYLA söyleniyor ve seçici hemen yukarıda duruyor. -->
+      <p v-if="!selectedSiteName" class="empty-state">{{ t("panel.php.selectSite") }}</p>
+
       <!-- Site güvenlik durumu okunmadan izolasyon/ACL/kural rozetleri "kapalı" görünüyordu;
            korumalı bir site korumasız sanılabiliyordu. -->
-      <p v-if="selectedSiteName && !securityConfig" class="empty-state" role="status" aria-live="polite">
+      <p v-else-if="!securityConfig" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
       </p>
 
@@ -173,7 +187,13 @@
           <strong>{{ rule.displayName }}</strong>
           <span>{{ rule.protocol }}</span>
           <span>{{ rule.localPort }}</span>
-          <span :class="['status-pill', rule.action.toLowerCase() === 'allow' ? 'ok' : 'warn']">{{ rule.action }}</span>
+          <!-- Rozetin SÖZCÜĞÜ artık çeviriden geliyor. Öncesi: Windows'un döndürdüğü ham değer
+               ("Allow" / "Block") basılıyordu — panelin Türkçesinde İngilizce, üstelik hemen
+               üstteki formda AYNI iki eylemin düğmeleri "İzin ver" / "Engelle" yazıyordu. Aynı
+               kavram tek ekranda iki dilde görünüyordu.
+               TANINMAYAN DEĞER ÇEVRİLMEZ, HAM basılır (bkz. `firewallActionLabel`): Windows
+               başka bir eylem döndürürse ona "Engelle" demek, ölçülmemiş bir iddia olurdu. -->
+          <span :class="['status-pill', rule.action.toLowerCase() === 'allow' ? 'ok' : 'warn']">{{ firewallActionLabel(rule.action) }}</span>
           <!-- Panelin kendi kuralları GERİ ALINABİLİR olmalı: kural yazıp silememek tek yönlü bir
                kapıydı, yanlışlıkla eklenen bir engelleme panelden kaldırılamıyordu. -->
           <span class="row-actions">
@@ -291,7 +311,11 @@
                 </template>
               </p>
             </div>
-            <span :class="['status-pill', avStatus.lastScan.status === 'clean' ? 'ok' : 'warn']">
+            <!-- ÜÇ SONUÇ, ÜÇ TON. Öncesi ikiliydi: "temiz" yeşil, DİĞER HER ŞEY kehribar — yani
+                 virüs BULUNMUŞ bir tarama ile yarıda kalmış bir tarama aynı renkteydi. Oysa
+                 biri "sunucunda zararlı dosya var", diğeri "ölçüm tamamlanmadı". Rozetin metni
+                 zaten üçünü ayırıyordu; eksik olan renk kanalının aynı şeyi söylemesiydi. -->
+            <span :class="['status-pill', scanTone(avStatus.lastScan.status)]">
               {{ t(`panel.antivirus.status.${avStatus.lastScan.status}`) }}
             </span>
           </div>
@@ -770,6 +794,25 @@ async function removeRule(ruleName: string) {
       }
     }
   });
+}
+
+/**
+ * Güvenlik duvarı kuralının eylemi — TANINIYORSA çevrilir, tanınmıyorsa HAM basılır.
+ *
+ * Windows'un döndürdüğü değer bu iki dizgeyle sınırlı olmayabilir; bilinmeyen bir değeri
+ * "Engelle" diye etiketlemek, kullanıcıya ölçülmemiş bir iddia sunmak olurdu. Rozetin RENGİ
+ * zaten aynı ikili ayrımı yapıyor (şablon), bu fonksiyon yalnız SÖZCÜĞÜ düzeltir.
+ */
+function firewallActionLabel(action: string): string {
+  const normal = action.trim().toLowerCase();
+  if (normal === "allow") return t("panel.firewall.allow");
+  return normal === "block" ? t("panel.firewall.block") : action;
+}
+
+/** Tarama sonucunun tonu: bulaşma bir UYARI değil, kritik bir bulgudur (gerekçe şablonda). */
+function scanTone(status: string): string {
+  if (status === "clean") return "ok";
+  return status === "infected" ? "danger" : "warn";
 }
 
 function resolveApiMessage(error: unknown) {

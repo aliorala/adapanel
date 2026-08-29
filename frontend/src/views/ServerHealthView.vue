@@ -2,7 +2,11 @@
   <section class="panel module-shell server-health">
     <div class="module-head">
       <div>
-        <h3>{{ t("panel.health.title") }}</h3>
+        <!-- h3 -> h2. SAYILDI: alti sayfa panelinin ucu (Apps, Proxy, Cluster) sayfa basligini
+             `h2` (19.2px), ucu (ServerHealth, Firewall, AppStore) `h3` (15.9px) yaziyordu.
+             Ayni rutbe iki ayri boyda ciziliyor, yani sayfadan sayfaya gecerken baslik
+             kuculup buyuyordu. Merdiven artik her yerde ayni: sayfa h2, bolum h3, alt blok h4. -->
+        <h2>{{ t("panel.health.title") }}</h2>
         <p class="meta">{{ t("panel.health.subtitle") }}</p>
       </div>
       <button class="secondary compact" :disabled="loading" @click="load">{{ t("panel.health.refresh") }}</button>
@@ -42,7 +46,11 @@
         </div>
         <div v-if="dns.missingAddresses.length">
           <dt>{{ t("panel.health.dnsMissing") }}</dt>
-          <dd class="warn">{{ dns.missingAddresses.join(", ") }}</dd>
+          <!-- Kapsamli `.warn` sinifi SILINDI: adi "uyari" iken rengi `--danger-1` (kirmizi) idi,
+               yani bu ekranda KEHRIBAR SEVIYE HIC YOKTU. Iki bulgu ayni kirmiziyla ciziliyordu:
+               "dinlenmeyen adres" (gercek ariza) ve "gecikmeli baslatma kapali" (yalnizca uyari).
+               Artik base.css'in paylasilan `.danger-text` / `.warn-text` sozlugu kullaniliyor. -->
+          <dd class="danger-text">{{ dns.missingAddresses.join(", ") }}</dd>
         </div>
         <div>
           <dt>{{ t("panel.health.dnsZones") }}</dt>
@@ -53,7 +61,7 @@
           <dd>
             {{ dns.startMode }}
             <span v-if="dns.delayedAutoStart">({{ t("panel.health.dnsDelayedOn") }})</span>
-            <span v-else class="warn">({{ t("panel.health.dnsDelayedOff") }})</span>
+            <span v-else class="warn-text">({{ t("panel.health.dnsDelayedOff") }})</span>
           </dd>
         </div>
         <div v-if="dns.lastAutoRepairUtc">
@@ -127,8 +135,16 @@
         }) }}
       </p>
 
+      <!-- OLCULDU: `severity` yalniz "warn" | "fail" olabiliyor (api/health.ts), ama kapsamli
+           stilde SADECE `li.fail` tanimliydi. Yani her iki uyari bulgusu duz govde metniyle,
+           komsu satirdan ayirt EDILEMEDEN ciziliyordu. Iki seviye de base.css'in paylasilan
+           durum renkleriyle anlatiliyor; metin zaten bulgunun kendisini yazdigi icin renk tek
+           kanal degil, vurgudur. -->
       <ul v-if="domains?.serverFindings?.length" class="server-findings">
-        <li v-for="bulgu in domains.serverFindings" :key="bulgu.key + bulgu.detail" :class="bulgu.severity">
+        <li
+          v-for="bulgu in domains.serverFindings"
+          :key="bulgu.key + bulgu.detail"
+          :class="bulgu.severity === 'fail' ? 'danger-text' : 'warn-text'">
           {{ t(bulgu.key) }}
           <small v-if="bulgu.detail">{{ bulgu.detail }}</small>
         </li>
@@ -138,7 +154,7 @@
       <dl v-if="domainReport.length" class="dns-facts">
         <div v-for="row in domainReport" :key="row.siteName">
           <dt>{{ row.siteName }}</dt>
-          <dd :class="{ warn: row.error }">
+          <dd :class="{ 'danger-text': row.error }">
             <template v-if="row.error">{{ row.error }}</template>
             <template v-else-if="row.alreadyCurrent">{{ t("panel.health.domainsRowCurrent") }}</template>
             <template v-else>
@@ -350,42 +366,58 @@ function dotClass(status: string) {
 <style scoped>
 .server-health {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .health-list {
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
+}
+
+/* PANELIN "IC KART" RECETESI — bu ekranda iki ad (servis satiri + DNS karti) ayni kutuyu
+   iki ayri dolguyla yaziyordu (11px 14px karsi 13px 14px), artik tek tanim.
+   OLCULDU (alti ekran taranarak): ayni rutbedeki ic kart DORT ayri kose yaricapiyla
+   ciziliyordu — ServerHealth 11px, Cluster 10px, Apps `--radius-md` (9px), AppStore
+   `--radius-sm` (6px) — ve UC ayri zeminle (surface-1 / surface-0 / input-bg). Ayni sey
+   dort farkli kutu gibi gorunuyordu; kullanicinin "birbirine girdi" dedigi sey tam olarak bu.
+   Tek recete: 1px kenar + `--radius-md` + `--surface-1` + `--sp-12` dolgu.
+   `--surface-0` SECILMEDI cunku `.panel` zaten `--surface-0`: kart zeminiyle sayfa zemini
+   ayni olunca kutuyu yalniz kenar tasiyor ve o kenar acik temada 1.35:1 (bkz. base.css). */
+.health-row,
+.dns-card {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  padding: var(--sp-12);
 }
 
 .health-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 11px 14px;
-  border: 1px solid var(--panel-border);
-  border-radius: 11px;
-  background: var(--surface-1);
+  gap: var(--sp-12);
 }
 
 .health-id {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-12);
   flex: 1 1 auto;
   min-width: 0;
 }
 
 .health-name {
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
   min-width: 0;
 }
 
+/* 0.74rem -> `--fs-2xs` (0.78rem). Yazi olceginde 0.74 diye bir adim yok; en yakin adim
+   secildi. Servis kimligi (`W3SVC`, `MSSQLSERVER`) tek aralikli kaldi: gozle karsilastirilan
+   bir kimlik, degisken genislikte yazildiginda satirdan satira kayiyor. */
 .svc-id {
   color: var(--text-muted);
-  font-size: 0.74rem;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
 }
 
 .health-row .status-pill {
@@ -397,6 +429,9 @@ function dotClass(status: string) {
   flex-shrink: 0;
 }
 
+/* Kurulu olmayan servisin bos eylem hucresi. Genislik SABIT tutuluyor (dugme genisligi
+   mertebesinde) ki "Yeniden baslat" dugmeleri satirdan satira ayni dikey cizgide dursun;
+   aksi halde tire isareti kolonu kaydiriyor ve liste tarak gibi gorunuyordu. */
 .na {
   width: 84px;
   text-align: center;
@@ -417,31 +452,31 @@ function dotClass(status: string) {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok-1) 22%, transparent);
 }
 
-/* Yukleniyor: notr gri + hafif nabiz. Yesil/kirmizi BILEREK kullanilmiyor -- henuz olculmemis
-   bir durumu renkle yorumlamak, kullaniciyi yaniltmanin en kolay yolu. */
+/* METIN SOLDURMAK ICIN `opacity` KULLANILMIYOR — base.css'te olculmus ders:
+   `opacity` metni VE zemini ayni anda birbirine yaklastirdigi icin kontrasti DUSURUR
+   (devre disi dugme olcumu: 0.68 -> 3.15:1, 0.90 -> 2.97:1). Bu ekranda uc yerde
+   opacity vardi (0.65 / 0.85 / 0.70); hepsi belirtece cevrildi: `--text-muted` koyu temada
+   6.00:1, acik temada 5.24:1 verir. Gorunum ayni sakinlikte, okunurluk olculebilir sekilde
+   daha iyi. Boyutlar da olcege alindi (0.8 / 0.88rem -> `--fs-xs` / `--fs-sm`). */
 .measure-line {
-  margin: 0.4rem 0 0;
-  font-size: 0.8rem;
-  opacity: 0.65;
+  margin: var(--sp-4) 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 
 .row-finding {
-  opacity: 0.85;
+  color: var(--text-muted);
 }
 
 .server-findings {
-  margin: 0.5rem 0 0;
-  padding-left: 1.1rem;
-  font-size: 0.88rem;
-}
-
-.server-findings li.fail {
-  color: var(--danger-1);
+  margin: var(--sp-6) 0 0;
+  padding-left: var(--sp-16);
+  font-size: var(--fs-sm);
 }
 
 .server-findings small {
   display: block;
-  opacity: 0.7;
+  color: var(--text-muted);
 }
 
 .state-dot.dot-idle {
@@ -465,11 +500,7 @@ function dotClass(status: string) {
 
 .dns-card {
   display: grid;
-  gap: 10px;
-  padding: 13px 14px;
-  border: 1px solid var(--panel-border);
-  border-radius: 11px;
-  background: var(--surface-1);
+  gap: var(--sp-10);
 }
 
 .dns-card.bad {
@@ -477,10 +508,21 @@ function dotClass(status: string) {
   background: color-mix(in srgb, var(--danger-1) 7%, var(--surface-1));
 }
 
+/* "SAGLIKLI" DURUMUN DA BIR GORUNUMU OLMALI.
+   `good` sinifi sablonda yaziliyordu ama HICBIR KURALI YOKTU: iyi kart ile henuz olculmemis
+   (`idle`) kart BIREBIR ayni ciziliyordu. Yani ekranin cevaplamasi gereken tek soru --
+   "sunucum saglikli mi" -- en buyuk ogede sessiz kaliyordu. Kirmizinin dengi olarak yesil
+   kenar veriliyor; dolgu DEGISMIYOR (iyi haber bagirmaz, yalniz teyit eder).
+   Ton, AppsView'in `.runtime-status.app` kartiyla AYNI recete: iki ekranda "saglikli kart"
+   artik ayni sey demek. */
+.dns-card.good {
+  border-color: color-mix(in srgb, var(--ok-1) 38%, var(--panel-border));
+}
+
 .dns-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .dns-head .health-name {
@@ -495,30 +537,28 @@ function dotClass(status: string) {
 .dns-facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 8px 16px;
+  gap: var(--sp-8) var(--sp-16);
   margin: 0;
 }
 
+/* Etiket DEGERDEN kucuk: hiyerarsinin kendisi bu (bkz. base.css `.tile-label`).
+   0.74 -> `--fs-2xs`, 0.86 -> `--fs-sm`: ikisi de olcegin var olan adimlari. */
 .dns-facts dt {
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: var(--fs-2xs);
 }
 
 .dns-facts dd {
   margin: 0;
-  font-size: 0.86rem;
+  font-size: var(--fs-sm);
   word-break: break-word;
-}
-
-.dns-facts .warn {
-  color: var(--danger-1);
 }
 
 .dns-details {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.72rem;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
   word-break: break-word;
 }
 
@@ -531,11 +571,7 @@ function dotClass(status: string) {
   .health-row,
   .dns-head {
     flex-wrap: wrap;
-    gap: 10px;
-  }
-
-  .health-row {
-    padding: 11px 12px;
+    gap: var(--sp-10);
   }
 
   .health-id {
@@ -552,12 +588,13 @@ function dotClass(status: string) {
     order: 1;
   }
 
+  /* `min-height: 42px` SILINDI: base.css dar ekranda her dugmeyi zaten 40px'e cikariyor
+     (parmak hedefi kurali). Iki ayri sayi, ayni ekranda iki ayri dugme boyu demekti. */
   .health-row button,
   .health-row .na,
   .dns-head button {
     order: 2;
     margin-left: auto;
-    min-height: 42px;
   }
 
   .health-row button,
@@ -577,7 +614,7 @@ function dotClass(status: string) {
   /* DNS ayrıntıları: tek sütun, etiket üstte — dinlenen/beklenen adresler uzun. */
   .dns-facts {
     grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
+    gap: var(--sp-8);
   }
 
   .dns-facts dd {

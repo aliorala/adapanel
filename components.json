@@ -12,7 +12,7 @@
       "dependencies": [],
       "serviceName": "",
       "silentArgs": "/install /quiet /norestart",
-      "note": "PHP ve veritabani motorlarinin temiz Windows kurulumlarinda gereken Microsoft calisma zamani.",
+      "note": "PHP ve veritabanı motorlarının temiz Windows kurulumlarında gereken Microsoft çalışma zamanı.",
       "default": false
     },
     {
@@ -68,7 +68,7 @@
       ],
       "serviceName": "AdaMySQL",
       "silentArgs": "__GENERATED__",
-      "note": "MariaDB ile ayni sunucuda 3307 portunda calisir; varsayilan yiginda kapali gelir.",
+      "note": "MariaDB ile aynı sunucuda 3307 portunda çalışır; varsayılan yığında kapalı gelir.",
       "default": false
     },
     {
@@ -101,7 +101,7 @@
       ],
       "serviceName": "",
       "silentArgs": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /ALLUSERS /DIR=\"__INSTALL_DIR__\"",
-      "note": "PostgreSQL icin resmi masaustu ve web yonetim uygulamasi.",
+      "note": "PostgreSQL için resmi masaüstü ve web yönetim uygulaması.",
       "default": false
     },
     {
@@ -241,7 +241,7 @@
       "postInstall": [],
       "serviceName": "",
       "silentArgs": "/qn /norestart",
-      "note": "Yonlendirme, ozel rewrite kurallari ve ters proxy icin IIS modulu.",
+      "note": "Yönlendirme, özel rewrite kuralları ve ters proxy için IIS modülü.",
       "default": true
     },
     {
@@ -258,7 +258,7 @@
       ],
       "serviceName": "",
       "silentArgs": "/qn /norestart",
-      "note": "IIS ters proxy ve uygulama yonlendirme altyapisi.",
+      "note": "IIS ters proxy ve uygulama yönlendirme altyapısı.",
       "default": true
     },
     {
@@ -274,7 +274,7 @@
       ],
       "serviceName": "",
       "silentArgs": "",
-      "note": "IIS onunde istege bagli reverse proxy, statik onbellek ve trafik giris katmani. Windows surumu beta oldugu icin varsayilan olarak kurulmaz.",
+      "note": "IIS önünde isteğe bağlı reverse proxy, statik önbellek ve trafik giriş katmanı. Windows sürümü beta olduğu için varsayılan olarak kurulmaz.",
       "default": false
     },
     {
@@ -288,7 +288,7 @@
       "postInstall": [],
       "serviceName": "",
       "silentArgs": "/qn /norestart",
-      "note": "Node.js ve Python uygulamalarini IIS arkasinda calistirir.",
+      "note": "Node.js ve Python uygulamalarını IIS arkasında çalıştırır.",
       "default": false
     },
     {
@@ -302,7 +302,7 @@
       "postInstall": [],
       "serviceName": "",
       "silentArgs": "",
-      "note": "Stalwart sunucusunu panelden yonetmek icin komut satiri araci. Stalwart Mail Server varsayilan oldugundan bu da varsayilan kurulur (bagimlilik).",
+      "note": "Stalwart sunucusunu panelden yönetmek için komut satırı aracı. Stalwart Mail Server varsayılan olduğundan bu da varsayılan kurulur (bağımlılık).",
       "default": true
     },
     {
@@ -319,7 +319,7 @@
       ],
       "serviceName": "",
       "silentArgs": "",
-      "note": "Stalwart'in resmi hesap ice/disa aktaricisi. SITE BASINA posta yedegi bununla alinir: hesap basina tek bir SQLite arsivi, sunucu CALISIRKEN; geri yukleme YALNIZ hedef alan adina yazar. Kurulu degilse site yedegi posta iletilerini ICERMEZ ve bunu acikca soyler.",
+      "note": "Stalwart'ın resmi hesap içe/dışa aktarıcısı. SİTE BAŞINA posta yedeği bununla alınır: hesap başına tek bir SQLite arşivi, sunucu ÇALIŞIRKEN; geri yükleme YALNIZ hedef alan adına yazar. Kurulu değilse site yedeği posta iletilerini İÇERMEZ ve bunu açıkça söyler.",
       "default": true
     },
     {
@@ -338,7 +338,7 @@
       ],
       "serviceName": "AdaStalwart",
       "silentArgs": "__GENERATED__",
-      "note": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerlesik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; onerilen yiginda otomatik kurulur. MailEnable yedektir; biri kurulurken digeri durdurulur (cakisma yok).",
+      "note": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerleşik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; önerilen yığında otomatik kurulur. MailEnable yedektir; biri kurulurken diğeri durdurulur (çakışma yok).",
       "default": true
     },
     {
@@ -353,7 +353,7 @@
       "dependencies": [],
       "serviceName": "",
       "silentArgs": "/s",
-      "note": "Olgun Windows e-posta sunucusu (SMTP/POP3/IMAP + web yonetim). YEDEK mail sunucusudur (varsayilan Stalwart); yalniz elle kurulur. Stalwart kuruluyken otomatik durdurulur (cakisma engellenir). Standard surumde DKIM imzalama/mailing list yoktur.",
+      "note": "Olgun Windows e-posta sunucusu (SMTP/POP3/IMAP + web yönetim). YEDEK mail sunucusudur (varsayılan Stalwart); yalnız elle kurulur. Stalwart kuruluyken otomatik durdurulur (çakışma engellenir). Standard sürümde DKIM imzalama/mailing list yoktur.",
       "default": false
     },
     {
@@ -368,7 +368,7 @@
       "dependencies": [],
       "serviceName": "",
       "silentArgs": "",
-      "note": "Acik kaynak dosya antivirusu (Cisco Talos imzalari). Daemon calistirmaz; taramalar Guvenlik > Antivirus ekranindan istege bagli yapilir. Kurulumdan sonra virus tanimlarini indirmeyi unutmayin (~250 MB, freshclam).",
+      "note": "Açık kaynak dosya antivirüsü (Cisco Talos imzaları). Daemon çalıştırmaz; taramalar Güvenlik > Antivirüs ekranından isteğe bağlı yapılır. Kurulumdan sonra virüs tanımlarını indirmeyi unutmayın (~250 MB, freshclam).",
       "default": false
     },
     {
@@ -384,7 +384,7 @@
       ],
       "serviceName": "docker",
       "silentArgs": "",
-      "note": "Docker Engine (resmi static binary). Windows 'Containers' ozelligini etkinlestirir, dockerd'yi servis olarak kaydeder ve baslatir (Windows container'lari). Containers ozelligi yeni acildiysa servisin baslamasi icin yeniden baslatma gerekebilir. Surum kurulum aninda download.docker.com'dan otomatik cozulur.",
+      "note": "Docker Engine (resmi static binary). Windows 'Containers' özelliğini etkinleştirir, dockerd'yi servis olarak kaydeder ve başlatır (Windows container'ları). Containers özelliği yeni açıldıysa servisin başlaması için yeniden başlatma gerekebilir. Sürüm kurulum anında download.docker.com'dan otomatik çözülür.",
       "default": false
     },
     {

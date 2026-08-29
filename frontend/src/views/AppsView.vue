@@ -3,8 +3,11 @@
     <div class="module-head">
       <div>
         <h2>{{ t("panel.apps.title") }}</h2>
-        <!-- Tek cümlelik, jargonsuz açıklama: sayfa ne yapar? -->
-        <p>{{ t("panel.apps.intro") }}</p>
+        <!-- Tek cümlelik, jargonsuz açıklama: sayfa ne yapar?
+             `.meta` EKLENDI: alti ekranin besinde sayfa alt basligi bu sinifi tasiyor, burada
+             tasimiyordu. Renk zaten ayni ciziliyordu (base.css `.module-head p` da muted verir),
+             gorunur fark satir yuksekliginde: 1.45 -> 1.5, yani alt basliklar artik ayni ritimde. -->
+        <p class="meta">{{ t("panel.apps.intro") }}</p>
       </div>
 
       <button
@@ -103,8 +106,12 @@
             <h3>{{ t("panel.apps.stepAppTitle") }}</h3>
             <p class="field-hint">{{ t("panel.apps.stepAppHint") }}</p>
 
-            <!-- EN KRİTİK BİLGİ: sabit port çalışmaz. Uzun paragraf değil, kopyalanabilir kod. -->
-            <div class="port-callout">
+            <!-- EN KRİTİK BİLGİ: sabit port çalışmaz. Uzun paragraf değil, kopyalanabilir kod.
+                 Kutu artik base.css'in paylasilan uyari seridi (`notice warn-banner`) uzerine
+                 kuruluyor: kapsamli surum kendi kenar/dolgu/yaricap uclusunu yaziyordu ve
+                 panelde uyari kutusunun ALTINCI gorunumuydu. Yerel sinifa yalniz ic bosluk
+                 kaldi. -->
+            <div class="notice warn-banner port-callout">
               <strong>{{ t("panel.apps.portTitle") }}</strong>
               <p class="field-hint">{{ t("panel.apps.portBody") }}</p>
               <CodeSample
@@ -533,24 +540,31 @@ function showNotice(message: string, isError: boolean) {
 <style scoped>
 .apps-panel {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .site-select {
   width: min(320px, 100%);
 }
 
-/* Durum şeridi: sayfanın ilk cümlesi — site şu an neyle çalışıyor? */
+/* Durum şeridi ve adım kartı: alti ekranda ortak IC KART recetesi
+   (1px kenar + `--radius-md` + `--surface-1` + `--sp-12` dolgu; olcum ServerHealthView'de).
+   Zemin `--surface-0` idi ve `.panel` de `--surface-0`: kart, uzerinde durdugu sayfayla AYNI
+   renkteydi, yani kutuyu yalniz kenar tasiyordu -- acik temada o kenar 1.35:1 (base.css). */
+.runtime-status,
+.step {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  padding: var(--sp-12);
+}
+
 .runtime-status {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 13px 14px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md);
-  background: var(--surface-0);
+  gap: var(--sp-12);
 }
 
 .runtime-status.app {
@@ -559,18 +573,27 @@ function showNotice(message: string, isError: boolean) {
 
 .runtime-status-main {
   display: grid;
-  gap: 5px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
+/* 1.02rem SILINDI: yazi olceginde yok ve govdeden (1rem) farki 0.27px -- hicbir ekranda
+   ayirt edilemez, yani hiyerarsi kurmuyordu. `--fs-lg` govde boyunda kalir, ayrimi
+   kalinlik ve konum yapar. */
 .runtime-status-main strong {
   color: var(--text-strong);
-  font-size: 1.02rem;
+  font-size: var(--fs-lg);
 }
 
+/* Dugme GIBI duran bir baglanti: olculeri gercek dugmeyle AYNI olmali, yoksa yan yana
+   durduklari satirda birbirinden 1-2px kayik gorunurler. base.css `button`:
+   `min-height: 34px`, `padding: var(--sp-6) var(--sp-12)`, `--radius-sm`, `font-weight: 600`. */
 .site-link {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
-  padding: 7px 13px;
+  min-height: 34px;
+  padding: var(--sp-6) var(--sp-12);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
   background: var(--surface-3);
@@ -588,7 +611,7 @@ function showNotice(message: string, isError: boolean) {
 /* Adım listesi: numara + gövde; tamamlanan adım yeşil onay işaretine döner. */
 .step-list {
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -597,11 +620,7 @@ function showNotice(message: string, isError: boolean) {
 .step {
   display: flex;
   align-items: flex-start;
-  gap: 11px;
-  padding: 13px 14px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md);
-  background: var(--surface-0);
+  gap: var(--sp-12);
 }
 
 .step-index {
@@ -615,7 +634,7 @@ function showNotice(message: string, isError: boolean) {
   border-radius: 50%;
   background: var(--surface-2);
   color: var(--text-soft);
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
 }
 
@@ -631,7 +650,7 @@ function showNotice(message: string, isError: boolean) {
 
 .step-body {
   display: grid;
-  gap: 9px;
+  gap: var(--sp-10);
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -645,14 +664,12 @@ function showNotice(message: string, isError: boolean) {
   max-width: 100%;
 }
 
-/* Port uyarısı: bu ekranın 1 numaralı tökezleme noktası, göz seviyesinde dursun. */
+/* Port uyarısı: bu ekranın 1 numaralı tökezleme noktası, göz seviyesinde dursun.
+   Kenar/zemin/yaricap artik `.notice.warn-banner`dan geliyor; burada yalniz ic aralik var
+   (paylasilan serit 4px veriyor, bu kutuda baslik + cumle + kod ornegi + uyari alt alta
+   duruyor ve 4px onlari birbirine yapistiriyordu). */
 .port-callout {
-  display: grid;
-  gap: 7px;
-  padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--warn-1) 34%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--warn-bg);
+  gap: var(--sp-8);
 }
 
 .port-callout strong {
@@ -666,17 +683,19 @@ function showNotice(message: string, isError: boolean) {
 .auto-env {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .auto-env code {
-  padding: 3px 8px;
+  padding: var(--sp-2) var(--sp-8);
   border: 1px solid var(--panel-border);
   border-radius: 999px;
   background: var(--surface-1);
   color: var(--text-soft);
-  font-family: "Cascadia Code", "Consolas", monospace;
-  font-size: 0.79rem;
+  /* Yedek listesi TEK KAYNAGA baglandi: `--font-mono` (base.css). Ayni panelde uc ayri
+     tek-aralikli yedek listesi vardi; belirtec tam bunun icin tanimlandi. */
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   word-break: break-all;
 }
 
@@ -690,22 +709,26 @@ function showNotice(message: string, isError: boolean) {
   font-weight: 600;
 }
 
+/* `.detail-grid` alti bilesende kullanilan PAYLASILAN bir addir ve her biri kendi
+   tanimini yazar. Bu ekranla ProxyView'inki yan yana konuldugunda uc yerde ayriliyordu
+   (aralik 10 karsi 12, etiket 0.82rem karsi tanimsiz, satir arasi bosluk 3 karsi 4).
+   Ikisi ayni degerlere getirildi: ayni ad, ayni gorunum. */
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 10px 0 0;
+  gap: var(--sp-12);
+  margin: var(--sp-10) 0 0;
 }
 
 .detail-grid div {
   display: grid;
-  gap: 3px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
 .detail-grid dt {
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-xs);
 }
 
 .detail-grid dd {
@@ -720,13 +743,9 @@ function showNotice(message: string, isError: boolean) {
     grid-template-columns: 1fr;
   }
 
-  .step {
-    padding: 12px;
-  }
-
   .site-link {
     width: 100%;
-    text-align: center;
+    justify-content: center;
   }
 }
 </style>

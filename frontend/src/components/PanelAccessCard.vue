@@ -284,7 +284,8 @@ function showNotice(message: string, isError: boolean) {
   overflow: auto;
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }

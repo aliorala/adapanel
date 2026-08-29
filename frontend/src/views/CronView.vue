@@ -22,7 +22,13 @@
         <button :class="{ secondary: formOpen }" v-bind="writeGate()" @click="toggleForm">
           {{ formOpen ? t("panel.tasks.closeForm") : t("panel.tasks.add") }}
         </button>
-        <span class="status-pill ok">{{ tasks.length }} {{ t("panel.tasks.taskCount") }}</span>
+        <!-- ROZET YÜKLENİRKEN YALAN SÖYLÜYORDU. Liste "Yükleniyor…" derken bu rozet zaten
+             YEŞİL "0 görev" yazıyordu: iki bileşen aynı anda iki farklı şey iddia ediyordu.
+             İki düzeltme: (1) sayı ancak liste BİR KEZ okunduktan sonra yazılır, öncesinde
+             rozet ölçümün sürdüğünü söyler; (2) ton `ok` (yeşil) DEĞİL nötr — bir SAYI bir
+             sağlık durumu değildir, "0 görev" başarı değil sadece bir ölçümdür. -->
+        <span v-if="tasksLoaded" class="status-pill">{{ tasks.length }} {{ t("panel.tasks.taskCount") }}</span>
+        <span v-else class="status-pill" role="status" aria-live="polite">{{ t("panel.common.loading") }}</span>
       </div>
       <input v-model.trim="query" class="search-control" :placeholder="t('panel.tasks.search')" />
     </div>
@@ -233,10 +239,21 @@
 
         <!-- Durum + son sonuç + son çalışma birlikte: "en son ne oldu" sorusunun tamamı. -->
         <span class="cell-status">
+          <!-- DURUM HÜCRESİ YALAN RENK VERİYORDU.
+               ÖLÇÜLDÜ: "Çalışma klasörü geçersiz" hatasıyla düşmüş bir görevde hücrenin İLK
+               rozeti YEŞİL "Hazır"dı; kehribar hata rozeti onun altındaydı. Bakışta görev
+               sağlıklı okunuyordu — oysa Windows'un "Ready"si "bir sonraki tur için sıraya
+               alındı" demektir, "son tur iyi gitti" demek DEĞİL.
+               İki kural kondu (bkz. `statusPills`): (1) son sonuç bir arıza ise ARIZA ÖNCE
+               gelir; (2) aynı durumda "Hazır" rozeti yeşil olmaktan çıkar, nötre döner.
+               Rozetler hâlâ SÖZCÜK taşıyor, yani renk tek kanal değil. -->
           <span class="pill-row">
-            <span :class="['status-pill', taskStateClass(item.state)]">{{ stateLabel(item.state) }}</span>
             <!-- Kodun ne demek olduğu rozette yazılı; "neden ve ne yapmalı" ipucu üzerine gelince. -->
-            <span :class="['status-pill', resultClass(item)]" :title="resultHint(item) || undefined">{{ resultLabel(item) }}</span>
+            <span
+              v-for="(rozet, sira) in statusPills(item)"
+              :key="sira"
+              :class="['status-pill', rozet.tone]"
+              :title="rozet.title || undefined">{{ rozet.text }}</span>
           </span>
           <small>{{ t("panel.tasks.lastRun") }}: {{ formatUtc(item.lastRunTimeUtc) }}</small>
         </span>
@@ -1125,6 +1142,26 @@ function taskStateClass(value: string) {
   return state.includes("ready") || state.includes("running") ? "ok" : state.includes("disabled") ? "warn" : "";
 }
 
+/**
+ * Durum hücresinin rozetleri — SIRASI ve TONU ölçüme göre.
+ *
+ * Tek başına `taskStateClass` yeterli değildi: Windows'un durumu ("Ready") ile görevin son
+ * turunun sonucu BAĞIMSIZ iki ölçüm ve panel ikisini yan yana, en iyisini önce koyarak
+ * gösteriyordu. Arıza varsa önce arıza konuşur; "Hazır" o satırda bir başarı iddiası değildir,
+ * o yüzden yeşilini bırakır (nötr rozet). Sözcükler değişmez — hiçbir bilgi gizlenmiyor.
+ */
+function statusPills(item: ScheduledTask): { text: string; tone: string; title?: string }[] {
+  const durum = { text: stateLabel(item.state), tone: taskStateClass(item.state) };
+  const sonuc = { text: resultLabel(item), tone: resultClass(item), title: resultHint(item) };
+  const arizaVar = sonuc.tone === "warn";
+
+  if (arizaVar && durum.tone === "ok") {
+    durum.tone = "";
+  }
+
+  return arizaVar ? [sonuc, durum] : [durum, sonuc];
+}
+
 /** Tarih bicimi panelin geri kalaniyla AYNI (bkz. utils/datetime.ts). */
 function formatUtc(value: string | null) {
   return formatDateTime(value, "-");
@@ -1154,21 +1191,26 @@ function resolveApiMessage(error: unknown) {
   align-items: start;
 }
 
-/* Hücre içi eylem düğmeleri kendi kutularında kalsın; satırın dikey hizasını bozmasın. */
+/* DÖRT DÜĞME ARTIK IZGARADA, ESNEK SARMADA DEĞİL.
+   ÖLÇÜLDÜ: `.row-actions` base.css'te `flex-wrap: wrap` ve düğmeler kendi metin genişliğinde.
+   "Durdur" (7 harf) ile "Şimdi çalıştır" (14 harf) farklı genişlikte olduğu için sarma noktası
+   SATIRDAN SATIRA değişiyordu: bir görevde 2+2, diğerinde 3+1 diziliyor, `margin-left: auto`
+   ile sağa itilen kırmızı "Sil" de her satırda başka bir noktada duruyordu — 25 satırlık
+   listede hiçbir düğme dikeyde hizalı değildi.
+   İki eşit sütunluk ızgara bunu tümüyle kaldırır: düğmeler her satırda AYNI iki x konumunda ve
+   AYNI genişlikte. "Sil" ise 3. sıraya, sağ sütuna sabitlendi — böylece hem hizalı hem de
+   "Devre dışı bırak"tan bir satır uzakta kalır (yanlışlıkla tıklamayı zorlaştıran ayrım
+   korunuyor; eskiden bunu `margin-left: auto` yapıyordu ve hizayı o bozuyordu). */
 .cron-row .row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
   gap: var(--sp-6);
 }
 
-/* YIKICI EYLEM AYRI DURUR. Dört düğme 232px'lik sütuna 2x2 oturuyor ve "Sil" ile "Devre dışı
-   bırak" aralarında 6px ile YAN YANA geliyordu; ikisi de aynı boyda, aynı sırada. Bir görevi
-   geçici olarak durdurmak isteyen kullanıcının 6px ötede kalıcı silme düğmesi bulması, ıskalamayı
-   pahalıya çeviren bir yerleşim.
-   `margin-left: auto` sarmalı BOZMAZ ve satırı UZATMAZ (ölçüldü: 232 - 120 - 60 ≈ 50px boşluk
-   kalıyor, iki düğme aynı satırda duruyor); yalnız "Sil"i kendi satırının sağ ucuna iter.
-   Ayırma boşlukla yapılıyor, düğmeyi gizleyerek değil: eylem aynı yerde ve tek tıkla erişilebilir. */
 .cron-row .row-actions .danger {
-  margin-left: auto;
+  grid-column: 2;
+  grid-row: 3;
 }
 
 /* SESSİZ DÜĞME — `.ghost` panelde 8 yerde kullanılıyor ama HİÇBİR YERDE TANIMLI DEĞİL (ölçüldü:

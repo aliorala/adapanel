@@ -288,9 +288,12 @@ function trapFocus(event: KeyboardEvent) {
   gap: 7px;
 }
 
+/* BOY KURALI DUSTU: `1.05rem` = 14.18px, govde metninden (13.5px) 0.68px farkliydi —
+   yani bir DIYALOGUN basligi, altindaki cumleyle neredeyse ayni agirlikta okunuyordu.
+   Kapsamli oldugu icin ortak baslik merdivenini de eziyordu. Kural dusunce
+   `base.css`teki `h3` adimi gelir: 15.93px. */
 .confirm-head h3 {
   margin: 0;
-  font-size: 1.05rem;
   font-weight: 660;
   line-height: 1.25;
   color: var(--text-strong);

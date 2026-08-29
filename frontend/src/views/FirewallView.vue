@@ -2,11 +2,18 @@
   <section class="panel module-shell firewall-panel">
     <div class="module-head">
       <div>
-        <h3>{{ t("panel.firewall.title") }}</h3>
+        <!-- h3 -> h2: sayfa basligi (bkz. ServerHealthView'deki merdiven notu). -->
+        <h2>{{ t("panel.firewall.title") }}</h2>
         <p class="meta">{{ t("panel.firewall.subtitle") }}</p>
       </div>
       <div class="row-actions">
-        <button class="compact" @click="showRuleForm = !showRuleForm">
+        <!-- "Yeni kural" BIRINCIL DEGIL: SAYILDI, bu ekranda ayni anda uc mavi birincil dugme
+             gorunebiliyordu (yeni kural + eksik portlari ac + izin ver). Birincil "sayfanin
+             sana onerdigi is" demektir; bir formu ACIP KAPATAN anahtar degil. Ayni karar
+             ClusterView'de zaten verilmisti ("Dugum ekle" = secondary), iki ekran artik ayni.
+             Geriye kalan tek birincil, sayfanin gercekten olctugu sorunu duzelten
+             "eksik portlari ac" dugmesi -- ve o da yalnizca eksik varken cikiyor. -->
+        <button class="secondary compact" @click="showRuleForm = !showRuleForm">
           {{ showRuleForm ? t("panel.common.cancel") : t("panel.firewall.newRule") }}
         </button>
         <button class="secondary compact" :disabled="loading || loadingPorts" @click="refreshAll">{{ t("panel.firewall.refresh") }}</button>
@@ -16,9 +23,14 @@
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <div class="ports-block">
-      <div class="ports-head">
+      <!-- `.ports-head` SILINDI, `.section-head` KULLANILIYOR: base.css'te tanimli ortak bolum
+           basligi bununla BIREBIR ayni dort ozelligi yaziyordu (flex + space-between +
+           flex-start + wrap), tek fark araligin 12 yerine 12 olmasiydi -- yani fark yoktu.
+           Ayni ekranda hem kopya hem asli bulunmasi, iki basligin zamanla birbirinden
+           ayrilmasinin tek sebebi. -->
+      <div class="section-head">
         <div>
-          <h4>{{ t("panel.firewall.ports.title") }}</h4>
+          <h3>{{ t("panel.firewall.ports.title") }}</h3>
           <p class="meta">{{ t("panel.firewall.ports.hint") }}</p>
         </div>
         <div class="row-actions">
@@ -29,7 +41,11 @@
         </div>
       </div>
 
-      <p class="cloud-note">{{ t("panel.firewall.ports.cloudNote") }}</p>
+      <!-- Kapsamli `.cloud-note` kutusu SILINDI: kendi 12px yazisi, 3px sol seridi ve 6px
+           yaricapiyla panelde baska hicbir yerde bulunmayan besinci uyari kutusu desenidir.
+           base.css'in paylasilan `.notice.warn-banner`i AYNI isi yapiyor; gorunur farki
+           metnin de kehribara donmesi (eskiden zemin kehribar, yazi duz govde rengiydi). -->
+      <p class="notice warn-banner">{{ t("panel.firewall.ports.cloudNote") }}</p>
 
       <div class="data-table ports-list">
         <div class="data-row table-head port-row">
@@ -49,6 +65,9 @@
               </span>
             </span>
           </div>
+          <!-- Deger "80/TCP" ya da "50000-50100": SAYI DEGIL, tasiyicisi olan bir kimlik.
+               Bu yuzden saga hizalanmiyor (birimden kopardigi icin okunmuyor), ama
+               `tabular-nums` kaliyor: basamaklar satirdan satira ayni sutunda dursun. -->
           <span class="mono">{{ portLabel(p) }}</span>
           <span :class="['cell', listenClass(p)]">{{ listenLabel(p) }}</span>
           <span :class="['cell', p.firewallAllowed ? 'ok' : 'bad']">
@@ -57,12 +76,23 @@
           <span class="cell action-cell">
             <span :class="['dot', rowStatus(p)]"></span>
             <span class="status-text">{{ t(`panel.firewall.ports.status.${rowStatus(p)}`) }}</span>
-            <button v-if="!p.firewallAllowed" class="micro" :disabled="busy" @click="openPort(p)">
+            <!-- `.micro` SILINDI. OLCULDU: sinif yalniz `padding: 2px 12px` ve `font-size: 12px`
+                 yaziyordu, ama base.css'in `button { min-height: 34px }` kurali dolguyu zaten
+                 eziyordu -- yani dugme KUCULMUYOR, sadece yazisi olcek disi bir boya
+                 dusuyordu. Panelin gercek kucuk dugmesi `.compact` (30px). Ton da `secondary`
+                 oldu: ServerHealth ("Yeniden baslat"), Cluster ("Test/Ac/Duzenle") ve bu satir
+                 ayni rutbede satir eylemi; ucu de artik ayni gorunuyor. -->
+            <button v-if="!p.firewallAllowed" class="secondary compact row-button" :disabled="busy" @click="openPort(p)">
               {{ t("panel.firewall.ports.open") }}
             </button>
           </span>
         </div>
-        <p v-if="!loadingPorts && portStatus.length === 0" class="meta">{{ t("panel.firewall.ports.empty") }}</p>
+        <!-- "Yukleniyor" ile "kayit yok" AYRI cumleler: eskiden olcum surerken tablo yalnizca
+             baslik satirindan ibaret kaliyordu ve bos bir tablo "hic port yok" gibi okunuyordu. -->
+        <p v-if="loadingPorts && portStatus.length === 0" class="empty-state" role="status" aria-live="polite">
+          {{ t("panel.common.loading") }}
+        </p>
+        <p v-else-if="!loadingPorts && portStatus.length === 0" class="empty-state">{{ t("panel.firewall.ports.empty") }}</p>
       </div>
     </div>
 
@@ -94,18 +124,24 @@
       <div class="data-row table-head rule-row">
         <span>{{ t("panel.firewall.ruleName") }}</span>
         <span>{{ t("panel.firewall.protocol") }}</span>
-        <span>{{ t("panel.sites.port") }}</span>
+        <span class="port-number">{{ t("panel.sites.port") }}</span>
         <span>{{ t("panel.firewall.action") }}</span>
         <span>{{ t("panel.sites.state") }}</span>
       </div>
       <div v-for="rule in rules" :key="`${rule.displayName}:${rule.protocol}:${rule.localPort}`" class="data-row rule-row">
         <strong>{{ rule.displayName }}</strong>
         <span>{{ rule.protocol }}</span>
-        <span>{{ rule.localPort || "-" }}</span>
+        <!-- Bu sutun SAF SAYI (kural portu): saga hizali + `tabular-nums`. Baslik hucresi de
+             ayni hizada (asagidaki `.rule-row > :nth-child(3)`), yoksa baslik sola, deger
+             saga kayip sutun ikiye bolunmus gorunuyordu. -->
+        <span class="port-number">{{ rule.localPort || "-" }}</span>
         <span :class="['status', rule.action.toLowerCase()]">{{ rule.action }}</span>
         <span>{{ rule.enabled ? t("panel.status.enabled") : t("panel.status.disabled") }}</span>
       </div>
-      <p v-if="!loading && rules.length === 0" class="meta">{{ t("panel.firewall.empty") }}</p>
+      <p v-if="loading && rules.length === 0" class="empty-state" role="status" aria-live="polite">
+        {{ t("panel.common.loading") }}
+      </p>
+      <p v-else-if="!loading && rules.length === 0" class="empty-state">{{ t("panel.firewall.empty") }}</p>
     </div>
   </section>
 </template>
@@ -338,14 +374,22 @@ function showNotice(message: string, isError: boolean) {
 .firewall-panel,
 .rule-list {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
+/* YIKICI EYLEM AYRI VE SABIT KONUMDA (ProxyView `.action-row .danger` ile ayni recete):
+   "Izin ver" solda kendi boyunda, "Engelle" satirin karsi ucunda. `space-between` zaten bunu
+   yapiyordu; `margin-left: auto` ile YAZILDI ki tek dugme kaldiginda (ileride) engelleme
+   dugmesi sola kaymasin -- konum icerige gore degismesin. */
 .form-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  gap: var(--sp-12);
   align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.form-actions .danger {
+  margin-left: auto;
 }
 
 .module-head button,
@@ -367,60 +411,47 @@ function showNotice(message: string, isError: boolean) {
    ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
 label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   display: grid;
-  gap: 6px;
+  /* 6px -> `--sp-6`: ayni deger, ama olcekten. `.stacked-field` ve `.form-grid label`
+     (base.css) de etiket-alan araligini bu adimla veriyor. */
+  gap: var(--sp-6);
 }
 
 .rule-row {
   grid-template-columns: minmax(220px, 1.5fr) 0.6fr 0.6fr 0.7fr 0.7fr;
 }
 
+/* SAF SAYI SUTUNU: saga hizali + esit genislikli basamak. Kuralda "3389" ile "80" alt alta
+   geldiginde sola hizali sutunda basamaklar kayiyor ve goz portlari karsilastiramiyordu. */
+.port-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* KURAL EYLEMI: "Allow" mavi degil YESIL.
+   OLCULDU: bu ekranda `--accent-1` ayni anda uc ayri sey demekti -- birincil dugme dolgusu,
+   "zorunlu" etiketi ve "izin verildi" durumu. Panelin geri kalaninda olumlu durum `--ok-*`
+   ile yaziliyor (`.status-pill.ok`, ServerHealth, Cluster). Tek ekranin kendi renk sozlugu
+   olmasin diye izin/engel ciftine panelin yesil/kirmizi ciftini veriyoruz. */
 .status {
-  color: var(--accent-1);
+  color: var(--ok-text);
   font-weight: 700;
 }
 
 .status.block {
-  color: var(--danger-1);
+  color: var(--danger-text);
 }
 
 .ports-block {
   display: grid;
-  gap: 10px;
-  padding-bottom: 16px;
-  margin-bottom: 4px;
+  gap: var(--sp-10);
+  padding-bottom: var(--sp-16);
+  margin-bottom: var(--sp-4);
   border-bottom: 1px solid var(--panel-border);
-}
-
-.ports-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.ports-head h4 {
-  margin: 0;
-}
-
-.ports-head .row-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .ports-summary {
   font-weight: 600;
-}
-
-.cloud-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--warn-bg);
-  border-left: 3px solid var(--warn-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .port-row {
@@ -430,20 +461,26 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 
 .svc {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 .tags {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-6);
   flex-wrap: wrap;
 }
 
+/* SABIT RENK SILINDI: zemin `rgba(255,255,255,0.06)` idi, yani BEYAZ. Koyu temada ise
+   yariyordu ama ACIK temada beyaz zemin uzerine %6 beyaz = pratikte GORUNMEZ bir kutucuk
+   (olculdu: 1.02:1 zemin farki). Etiketin kutucuk oldugu bilgisi tek temada kayboluyordu.
+   `--ring-track` iki temada da tanimli notr dolgu belirteci: koyu tema acik gri, acik tema
+   koyu gri -- yani ton temayla birlikte DONER.
+   11px -> `--fs-2xs`: 11px yazi olceginde yok; en yakin adim. */
 .chip {
-  font-size: 11px;
-  padding: 1px 8px;
+  font-size: var(--fs-2xs);
+  padding: var(--sp-2) var(--sp-8);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ring-track);
 }
 
 .chip.req {
@@ -459,12 +496,12 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 }
 
 .cell.ok {
-  color: var(--accent-1);
+  color: var(--ok-text);
   font-weight: 600;
 }
 
 .cell.bad {
-  color: var(--danger-1);
+  color: var(--danger-text);
   font-weight: 600;
 }
 
@@ -480,7 +517,7 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
 .action-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .dot {
@@ -490,8 +527,10 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   flex: none;
 }
 
+/* Nokta rengi durum METNININ yanindadir, tek basina anlam tasimaz (renk tek kanal olmasin):
+   her satirda `panel.firewall.ports.status.*` yazisi da basiliyor. */
 .dot.ok {
-  background: var(--accent-1);
+  background: var(--ok-1);
 }
 
 .dot.warn {
@@ -502,23 +541,25 @@ label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
   background: var(--danger-1);
 }
 
+/* `opacity: 0.55` SILINDI: opaklik noktayi zemine dogru soldurup ayirt edilmesini
+   zorlastiriyordu (base.css'te olculmus ders). Kullanilmayan port zaten `--text-muted`
+   ile en sonik notr renkte. */
 .dot.unused {
   background: var(--text-muted);
-  opacity: 0.55;
 }
 
-.micro {
-  width: auto;
-  padding: 2px 12px;
-  font-size: 12px;
-}
-
+/* SUTUN COKERTMESI SILINDI (eskiden 900px'te `.rule-row` ve `.port-row` tek sutuna dusuyordu).
+   OLCULDU ve kural HICBIR ISE YARAMIYORDU, hatta zarar veriyordu: her iki satir da
+   `.data-row` (base.css `min-width: 720px`) ve kapsayicilari `.data-table`
+   (`overflow-x: auto`). Yani satir 720px'in altina zaten INMIYOR; tek sutuna dusurmek
+   genisligi degistirmiyor, sadece bes hucreyi alt alta diziyor ve baslik satirindaki bes
+   etiketle olan HIZAYI yok ediyordu -- "Dinliyor mu / Guvenlik duvari / Durum" degerleri
+   hangi sutuna ait oldugu belirsiz bir yigina donusuyordu. Simdi tablo panelin geri
+   kalaniyla ayni davraniyor: baslik satiri hep gorunur, dar ekranda yatay kaydirilir.
+   Form BILEREK kaliyor: o bir izgara formu, `min-width` kisiti yok, tek sutun dogru. */
 @media (max-width: 900px) {
-  .rule-form,
-  .rule-row,
-  .port-row {
+  .rule-form {
     grid-template-columns: 1fr;
   }
-
 }
 </style>

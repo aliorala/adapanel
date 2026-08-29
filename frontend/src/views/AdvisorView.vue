@@ -12,9 +12,18 @@
 
     <p v-if="notice" class="notice page-notice error" role="alert">{{ notice }}</p>
 
+    <!-- SIFIR SAYAÇ TEHLİKE RENGİNDE OLMAZ.
+         ÖLÇÜLDÜ: "0 kritik" rozeti kırmızı dolgu + kırmızı kenarla çiziliyordu; panelin
+         tehlike dili tam da "burada bir sorun var" demek için ayrılmış. Sıfır, sorunun
+         YOKLUĞUDUR — sayaç ancak sayı > 0 iken kendi tonunu alır, sıfırda nötre düşer.
+         Renk yine tek kanal değil: sayı ve önem sözcüğü rozetin İÇİNDE yazılı. -->
     <div v-if="report" class="advisor-summary">
-      <span class="sev-pill critical">{{ report.criticalCount }} {{ t("panel.advisor.critical") }}</span>
-      <span class="sev-pill warning">{{ report.warningCount }} {{ t("panel.advisor.warning") }}</span>
+      <span :class="['sev-pill', report.criticalCount > 0 ? 'critical' : 'zero']">
+        {{ report.criticalCount }} {{ t("panel.advisor.critical") }}
+      </span>
+      <span :class="['sev-pill', report.warningCount > 0 ? 'warning' : 'zero']">
+        {{ report.warningCount }} {{ t("panel.advisor.warning") }}
+      </span>
       <span class="sev-pill info">{{ report.infoCount }} {{ t("panel.advisor.info") }}</span>
       <span class="meta checked-at">{{ t("panel.advisor.checkedAt") }}: {{ formatUtc(report.checkedAtUtc) }}</span>
     </div>
@@ -47,7 +56,15 @@
             <code v-if="item.detail">{{ item.detail }}</code>
           </p>
         </div>
-        <button v-if="item.actionSection" class="secondary compact" @click="go(item.actionSection)">
+        <!-- ALTI SATIRIN ALTISI DA AYNI DÜĞMEYDİ: kritik bir bulgunun "Düzelt"i ile bilgi
+             niteliğindeki bir satırınki birebir aynı çiziliyordu, yani ekranda hiyerarşi
+             YOKTU ve göz nereden başlayacağını rozetin rengine bakarak çıkarmak zorundaydı.
+             Yalnız KRİTİK satırların düğmesi birincil olur (panelin `compact` düğmesi);
+             uyarı ve bilgi satırları ikincil kalır. Düğme sayısı, yeri ve metni AYNI. -->
+        <button
+          v-if="item.actionSection"
+          :class="['compact', { secondary: item.severity !== 'critical' }]"
+          @click="go(item.actionSection)">
           {{ t("panel.advisor.fix") }}
         </button>
       </li>
@@ -140,6 +157,13 @@ function formatUtc(value: string) {
 
 .sev-pill.info {
   color: var(--text-soft);
+  background: var(--surface-1);
+}
+
+/* SIFIR SAYAÇ: kendi önem rengini almaz. "Bilgi" rozetiyle aynı nötr yüzey, ama yazısı bir adım
+   daha geride — sıfır, okunması gereken bir sayı değil, bakılıp geçilecek bir sayıdır. */
+.sev-pill.zero {
+  color: var(--text-muted);
   background: var(--surface-1);
 }
 

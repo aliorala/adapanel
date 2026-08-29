@@ -107,10 +107,30 @@
         <div v-for="item in items" :key="item.id" class="data-row audit-row">
           <span class="cell-muted">{{ formatUtc(item.createdAtUtc) }}</span>
           <span>{{ item.userName }}</span>
-          <span class="cell-main"><strong>{{ item.action }}</strong></span>
+          <!-- EYLEM ARTIK MAKİNE ANAHTARI DEĞİL. Ham anahtar (`software.install.failed`) yine
+               DURUYOR ama ikincil satırda: filtre kutusu, dışa aktarılan CSV ve destek yazışması
+               o değeri kullanır, yani silinmesi bilgi kaybı olurdu. -->
+          <span class="cell-main">
+            <strong>{{ actionLabel(item.action) }}</strong>
+            <small class="action-key" :title="t('panel.audit.actionRawHint')">{{ item.action }}</small>
+          </span>
           <span class="cell-muted breakable">{{ item.resource || "-" }}</span>
-          <span class="cell-muted breakable">{{ item.details || "-" }}</span>
-          <span class="cell-muted">{{ item.ipAddress || t("panel.common.notAvailable") }}</span>
+          <!-- BASE64 DÖKÜMÜ SATIRI 500px YAPIYORDU. PowerShell `-EncodedCommand` gövdesi tek
+               parça ~700 karakterlik bir harf yığınıdır ve hücreye olduğu gibi basılıyordu.
+               KIRPILMIYOR, KATLANIYOR: kapalıyken ilk satır okunur, `<details>` açılınca metnin
+               TAMAMI görünür (uzunsa kendi içinde kaydırılır). -->
+          <span class="cell-muted breakable">
+            <template v-if="!isLongDetail(item.details)">{{ item.details || "-" }}</template>
+            <details v-else class="detail-fold">
+              <summary>
+                <span class="detail-preview">{{ detailPreview(item.details) }}</span>
+                <span class="detail-more">{{ t("panel.audit.detailsShowAll") }}</span>
+                <span class="detail-less">{{ t("panel.audit.detailsCollapse") }}</span>
+              </summary>
+              <div class="detail-full">{{ item.details }}</div>
+            </details>
+          </span>
+          <span class="cell-muted breakable">{{ item.ipAddress || t("panel.common.notAvailable") }}</span>
         </div>
       </div>
 
@@ -399,6 +419,42 @@ async function purgeNow() {
 function formatUtc(value: string | null) {
   return formatDateTime(value, t("panel.common.notAvailable"));
 }
+
+/*
+ * EYLEM ADI ÇEVİRİDEN GELİR — VE ÇEVİRİ SÖZLÜĞÜ İKİNCİ KEZ YAZILMAZ.
+ *
+ * Bu ekran ham denetim kimliğini (`software.install.failed`) olduğu gibi basıyordu. Aynı hata
+ * bildirim zilinde de vardı ve orada `panel.activity.action.*` sözlüğü ile çözülmüştü. İkinci
+ * bir sözlük kurmak, aynı 259 kimliğin iki ayrı yerde ve zamanla BİRBİRİNDEN FARKLI çevrilmesi
+ * demekti; bu yüzden var olan sözlük KULLANILIYOR — yalnız eksiği tamamlandı (168 -> 263 kimlik;
+ * eksikler `WriteAuditAsync` sarmalayıcısını kullanan denetleyicilerdi, ilk tarama onları
+ * görmemişti).
+ *
+ * YEDEK KALDIRILMADI: sunucuya yarın yeni bir eylem eklenirse anahtar bulunamaz ve HAM kimlik
+ * görünür. Çirkin ama doğru; sessizce boş bırakmak ya da uydurmak yanlış olurdu.
+ */
+function actionLabel(action: string): string {
+  const key = `panel.activity.action.${action}`;
+  const translated = t(key);
+  return translated === key ? action : translated;
+}
+
+/*
+ * UZUN AYRINTI EŞİĞİ.
+ * 160 karakter ölçülerek seçildi: bu tablodaki normal ayrıntılar ("File or directory deleted.",
+ * "User 'x' signed out.") 20-90 karakter arasında; katlama onlara HİÇ dokunmaz. Base64
+ * `-EncodedCommand` gövdeleri ise 400 karakterin üzerinde başlar.
+ */
+const UZUN_AYRINTI_SINIRI = 160;
+const ONIZLEME_UZUNLUGU = 140;
+
+function isLongDetail(details: string | null): boolean {
+  return (details ?? "").length > UZUN_AYRINTI_SINIRI;
+}
+
+function detailPreview(details: string | null): string {
+  return `${(details ?? "").slice(0, ONIZLEME_UZUNLUGU)}…`;
+}
 </script>
 
 <style scoped>
@@ -406,13 +462,87 @@ function formatUtc(value: string | null) {
   width: auto;
 }
 
+/* SÜTUN GENİŞLİKLERİ İÇERİKLE TERS ORANTILIYDI.
+   ÖLÇÜLDÜ: "Ayrıntı" (bu tablodaki EN uzun metin; base64 gövdeleri 400+ karakter) 1.4fr ile
+   ~290px alıyordu; yanındaki "IP" ise "::1" gibi 3 karakterlik bir değer için SABİT 120px
+   tutuyordu. En dar içerik en geniş ikinci sabit sütundu.
+   Yeni dağıtım: IP en uzun gerçek değerine göre (IPv6 tam biçimi, 39 karakter — dar ekranda
+   sarar, kırpılmaz) 108px'e iner, "Zaman" ve "Kullanıcı" birer adım daralır, kazanılan yerin
+   tamamı "Ayrıntı"ya (1.4fr -> 2.4fr) gider. */
 .audit-row {
-  grid-template-columns: 170px 140px 200px minmax(0, 1fr) minmax(0, 1.4fr) 120px;
+  grid-template-columns: 158px 128px minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 2.4fr) 108px;
 }
 
 /* Yol/adres/komut gibi uzun değerler satırı yatay kaydırmaya zorlamamalı. */
 .breakable {
   word-break: break-word;
+}
+
+/* Ham eylem anahtarı: kod olduğu için tek aralıklı, ama okunabilir cümlenin gerisinde. */
+.action-key {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  word-break: break-word;
+}
+
+/* KATLANIR AYRINTI. `summary`nin kendi `display: list-item` davranışı, içindeki iki parçayı
+   alt alta dizmeyi engelliyordu; `display: flex` ile üçgen imleç kaybolacağı için imleç
+   `::marker` yerine `.detail-more` metniyle veriliyor — yani "daha var" bilgisi RENKLE ya da
+   küçük bir üçgenle değil, SÖZCÜKLE söyleniyor. */
+.detail-fold summary {
+  display: grid;
+  gap: var(--sp-2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.detail-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+.detail-preview {
+  overflow-wrap: anywhere;
+}
+
+.detail-more,
+.detail-less {
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+}
+
+/* Etiket duruma göre DEĞİŞİR: kapalıyken "Tümünü göster", açıkken "Daralt". Sabit tek etiket,
+   açık kutunun üstünde "Tümünü göster" yazarak yalan söylerdi. */
+.detail-less {
+  display: none;
+}
+
+.detail-fold[open] .detail-more,
+.detail-fold[open] .detail-preview {
+  display: none;
+}
+
+.detail-fold[open] .detail-less {
+  display: inline;
+}
+
+/* Açıldığında da satır 500px olmaz: metin kendi kutusunda kaydırılır. Kaydırma KIRPMA DEĞİLDİR
+   — tek bir karakter bile erişilemez hâle gelmiyor. */
+.detail-full {
+  max-height: 220px;
+  margin-top: var(--sp-6);
+  padding: var(--sp-8);
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .pager {

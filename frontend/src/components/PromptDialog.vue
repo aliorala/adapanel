@@ -260,9 +260,12 @@ function trapFocus(event: KeyboardEvent) {
   overflow: auto;
 }
 
+/* BOY KURALI DUSTU: `1.05rem` = 14.18px, govde metninden (13.5px) 0.68px farkliydi —
+   yani bir DIYALOGUN basligi, altindaki cumleyle neredeyse ayni agirlikta okunuyordu.
+   Kapsamli oldugu icin ortak baslik merdivenini de eziyordu. Kural dusunce
+   `base.css`teki `h3` adimi gelir: 15.93px. */
 .prompt-head h3 {
   margin: 0;
-  font-size: 1.05rem;
 }
 
 .prompt-message {

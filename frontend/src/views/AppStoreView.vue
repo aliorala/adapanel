@@ -1,14 +1,28 @@
 <template>
   <section class="panel store-panel">
-    <div class="store-hero">
+    <!-- GRADYANLI "HERO" SERIDI KALDIRILDI, SAYFA BASLIGI PANELIN ORTAK BASLIGI OLDU.
+         SAYILDI: alti ekranin besi `.module-head` ile aciliyor (solda baslik + tek cumle,
+         sagda denetim); yalniz bu ekranin kendi 18px dolgulu, radyal gradyanli, `h3` basligi
+         ve 0.74rem'lik kendi ustbasligi vardi. Ayni rutbe iki ayri gorunumde cizilince panel
+         iki ayri urun gibi okunuyordu.
+         HICBIR BILGI SILINMEDI: ustbaslik (`.section-kicker` -- paylasilan sinif), baslik,
+         alt cumle, iki sayac ve tazeleme dugmesi aynen duruyor; yalnizca panelin kendi
+         baslik duzenine tasindi. -->
+    <div class="module-head">
       <div>
-        <span class="eyebrow">{{ t("panel.appStore.catalog") }}</span>
-        <h3>{{ t("panel.appStore.title") }}</h3>
+        <span class="section-kicker">{{ t("panel.appStore.catalog") }}</span>
+        <h2>{{ t("panel.appStore.title") }}</h2>
         <p class="meta">{{ t("panel.appStore.subtitle") }}</p>
       </div>
       <div class="hero-stats">
-        <span><strong>{{ templates.length }}</strong>{{ t("panel.appStore.applicationCount") }}</span>
-        <span><strong>{{ featuredCount }}</strong>{{ t("panel.appStore.automaticCount") }}</span>
+        <span class="hero-stat">
+          <strong>{{ templates.length }}</strong>
+          <span class="tile-label">{{ t("panel.appStore.applicationCount") }}</span>
+        </span>
+        <span class="hero-stat">
+          <strong>{{ featuredCount }}</strong>
+          <span class="tile-label">{{ t("panel.appStore.automaticCount") }}</span>
+        </span>
         <button class="secondary compact" @click="refresh">
           {{ t("panel.appStore.refresh") }}
         </button>
@@ -32,16 +46,28 @@
       <small>{{ t("panel.appStore.wpCredHint") }}</small>
     </div>
 
-    <p v-if="sitesUnavailable" class="notice warn" role="alert">
+    <!-- `notice warn` -> `notice warn-banner`: kapsamli `.notice.warn` kopyasi yalnizca metin
+         rengini ve dolguyu degistiriyordu, KENARI degistirmiyordu -- yani base.css'in
+         `.notice` mavi kenari kaliyor ve "site listesi okunamadi" uyarisi KEHRIBAR DOLGULU
+         MAVI KENARLI melez bir kutu olarak ciziliyordu. Paylasilan uyari seridinde ucu de
+         (kenar, dolgu, yazi) kehribar. -->
+    <p v-if="sitesUnavailable" class="notice warn-banner" role="alert">
       {{ t("panel.appStore.sitesUnavailable") }}
     </p>
 
-    <p v-else-if="sitesStore.sites.length === 0" class="notice warn">
+    <p v-else-if="sitesStore.sites.length === 0" class="notice warn-banner">
       {{ t("panel.appStore.noSites") }}
     </p>
 
-    <div class="store-toolbar">
-      <div class="category-tabs" role="tablist">
+    <!-- `.store-toolbar` + `.category-tab` SILINDI, panelin ortak arac cubugu ve sekme seridi
+         kullaniliyor (`.module-toolbar` + `.segmented-tabs`, base.css).
+         OLCULDU, uc gorunur fark vardi: (1) cubugun zemini `--input-bg` idi, yani bir GIRDI
+         yuzeyi -- ayni cubuk ProxyView ve AppsView'de `--surface-0`; (2) secili sekme 135
+         derecelik mavi GRADYAN dolguyla, panelin her yerindeki alt-cizgili sekmeden bambaska
+         ciziliyordu; (3) `.category-tab` global `button` gradyanini miras aldigi icin secili
+         OLMAYAN sekmeler bile dugme golgesi tasiyordu. Sekmeler artik uc ekranda ayni. -->
+    <div class="module-toolbar">
+      <div class="segmented-tabs" role="tablist">
         <!-- Seçili sekme GÖRSEL olarak yalnız renkle belliydi; `aria-selected` olmadan ekran
              okuyucu bütün kategori düğmelerini aynı okuyordu. -->
         <button
@@ -50,19 +76,26 @@
           type="button"
           role="tab"
           :aria-selected="activeCategory === category"
-          :class="['category-tab', { active: activeCategory === category }]"
+          :class="{ active: activeCategory === category }"
           @click="activeCategory = category">
           {{ categoryLabel(category) }}
         </button>
       </div>
       <label class="store-search">
-        <span>{{ t("panel.appStore.search") }}</span>
+        <span class="tile-label">{{ t("panel.appStore.search") }}</span>
         <input v-model="search" :placeholder="t('panel.appStore.searchPlaceholder')" />
       </label>
     </div>
 
-    <div class="template-table">
-      <div class="template-row table-head">
+    <!-- KATALOG ARTIK PANELIN ORTAK TABLOSU: `.data-table` + `.data-row` (base.css).
+         Eskiden kendi kutu deseni vardi (kart gibi kenarli satirlar, `--input-bg` zemin,
+         `--radius-sm` kose) ve en onemlisi BASLIK SATIRI 1180px'in altinda `display: none`
+         ile GIZLENIYORDU. Ustelik ayni kirilimda sutun sayisi 5'ten 3'e dusuyordu, yani
+         "Ortam", "Otomasyon", "Hedef site" degerleri hangi basliga ait oldugu belirsiz
+         hucrelere donusuyordu. Bilgi gizlenmedi, DUZENLENDI: baslik her genislikte durur,
+         dar ekranda tablo -- panelin butun diger tablolari gibi -- yatay kaydirilir. -->
+    <div class="data-table">
+      <div class="data-row template-row table-head">
         <span>{{ t("panel.appStore.application") }}</span>
         <span>{{ t("panel.appStore.environment") }}</span>
         <span>{{ t("panel.appStore.automation") }}</span>
@@ -73,7 +106,7 @@
       <article
         v-for="template in filteredTemplates"
         :key="template.id"
-        :class="['template-row', { featured: template.featured }]">
+        :class="['data-row', 'template-row', { featured: template.featured }]">
         <div class="template-copy">
           <div class="app-mark" :data-runtime="template.runtime.toLowerCase()">
             {{ appInitials(template.displayName) }}
@@ -101,8 +134,11 @@
           <span v-for="step in template.automaticSetup" :key="step">{{ step }}</span>
         </div>
 
+        <!-- `.visually-hidden` -> `.sr-only`: base.css'te TEK KAYNAK olarak tanimli olan ad bu.
+             Kapsamli kopya `white-space: nowrap` icermiyordu; 1px genisligindeki kutuda uzun
+             etiket sarilip satir yuksekligini bozabiliyordu. -->
         <label class="site-select">
-          <span class="visually-hidden">{{ t("panel.php.targetSite") }}</span>
+          <span class="sr-only">{{ t("panel.php.targetSite") }}</span>
           <select v-model="siteMap[template.id]">
             <option value="">{{ t("panel.php.selectSite") }}</option>
             <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">
@@ -111,8 +147,14 @@
           </select>
         </label>
 
+        <!-- SATIR EYLEMI BIRINCIL DEGIL. SAYILDI: katalogda 20+ sablon var ve her satirda mavi
+             birincil bir "Kur" dugmesi duruyordu -- ekranda ayni anda 20 birincil eylem, yani
+             hicbiri. Panelin diger satir eylemleri (ServerHealth "Yeniden baslat", Cluster
+             "Test/Ac/Duzenle", Firewall "Ac") zaten `secondary compact`; kural, birincil
+             tonun SAYFANIN ONERDIGI TEK is icin saklanmasi. Eylemin bulunabilirligi
+             azalmiyor: kendi sutununda, kendi basligi ("Islem") altinda duruyor. -->
         <button
-          class="install-button"
+          class="secondary compact install-button"
           v-bind="writeGate(busyTemplate !== '' || sitesUnavailable || sitesStore.sites.length === 0 || !siteMap[template.id])"
           @click="install(template.id)">
           {{ busyTemplate === template.id ? t("panel.appStore.installing") : t("panel.appStore.install") }}
@@ -339,45 +381,17 @@ function appInitials(displayName: string) {
 
 <style scoped>
 .store-panel,
-.template-table,
 .template-copy,
 .automation-list {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
-.store-hero,
-.store-toolbar,
 .hero-stats,
-.category-tabs,
 .title-line,
 .requirement-list {
   display: flex;
-  gap: 10px;
-}
-
-.store-hero,
-.store-toolbar {
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.store-hero {
-  padding: 18px;
-  overflow: hidden;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-md);
-  background:
-    radial-gradient(circle at 86% -20%, color-mix(in srgb, var(--accent-1) 20%, transparent), transparent 42%),
-    linear-gradient(135deg, var(--surface-2), var(--surface-0));
-}
-
-.eyebrow {
-  color: var(--accent-1);
-  font-size: 0.74rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  gap: var(--sp-10);
 }
 
 .hero-stats {
@@ -385,81 +399,54 @@ function appInitials(displayName: string) {
   flex-wrap: wrap;
 }
 
-.hero-stats > span {
+/* SABIT RENK SILINDI: zemin `rgba(12, 16, 24, 0.5)` idi -- KOYU TEMANIN lacivertine gomulu
+   bir deger. Acik temada beyaz kartin uzerine yariseffaf lacivert bir kutu ciziliyor ve
+   uzerindeki `--text-muted` (acik temada #626d7e, koyu bir gri) o kutuda 1.5:1 civarina
+   dusuyordu: sayacin etiketi pratikte okunmuyordu. Belirtece baglandi, iki temada da dogru.
+   0.72rem -> `--fs-2xs`, 1rem -> `--fs-lg`: ikisi de olcegin var olan adimlari.
+   `tabular-nums`: iki sayac yan yana, basamak sayisi degisince kutular zipliyordu. */
+.hero-stat {
   display: grid;
   min-width: 92px;
-  gap: 2px;
-  padding: 8px 11px;
+  gap: var(--sp-2);
+  padding: var(--sp-8) var(--sp-10);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  background: rgba(12, 16, 24, 0.5);
+  background: var(--surface-1);
 }
 
-.hero-stats strong {
+.hero-stat strong {
   color: var(--text-strong);
-  font-size: 1rem;
+  font-size: var(--fs-lg);
+  font-variant-numeric: tabular-nums;
 }
 
-.store-toolbar {
-  padding: 12px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
-}
-
-.category-tabs,
 .requirement-list {
   flex-wrap: wrap;
-}
-
-.category-tab {
-  width: auto;
-  padding: 7px 12px;
-  background: var(--surface-2);
-  color: var(--text-soft);
-}
-
-.category-tab.active {
-  color: var(--on-accent);
-  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
 }
 
 .store-search {
   display: grid;
   min-width: min(100%, 310px);
-  gap: 5px;
+  gap: var(--sp-4);
 }
 
-.store-search span {
-  color: var(--text-muted);
-  font-size: 0.76rem;
-}
-
+/* SUTUN GENISLIKLERI DEGISMEDI; degisen tek sey satirin artik `.data-row` olmasi.
+   `min-width` 900px SECILDI cunku hesaplanan taban toplam bu: 270 + ~90 (calisma ortami
+   kutucugu) + 180 + 190 + ~110 (dugme) + 4 x 12px aralik + 24px dolgu = ~900. base.css'in
+   varsayilan 720'si burada YETMEZDI: satir kapsayicidan genis kalinca satirin zemini ve
+   kenari kaydirma alaninin ancak bir kismina cizilir, yani baslik satiri saga kaydirildikca
+   zeminini kaybederdi. */
 .template-row {
-  display: grid;
   grid-template-columns: minmax(270px, 1.45fr) 0.55fr minmax(180px, 0.8fr) minmax(190px, 0.75fr) auto;
-  gap: 12px;
-  align-items: center;
-  padding: 11px 12px;
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-sm);
-  background: var(--input-bg);
+  min-width: 900px;
 }
 
+/* Onerilen satir: kenar + soldan sonen ince vurgu. Zemin `--input-bg` (girdi yuzeyi) yerine
+   `--surface-0` uzerinden hesaplaniyor -- satir artik bir tablo satiri, girdi degil. */
 .template-row.featured {
-  border-color: color-mix(in srgb, var(--accent-1) 34%, transparent);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-2) 15%, transparent), var(--input-bg) 38%);
-}
-
-.table-head {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  background: var(--surface-1);
+  border-left: 2px solid color-mix(in srgb, var(--accent-1) 55%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-2) 12%, transparent), transparent 38%);
 }
 
 .template-copy {
@@ -473,9 +460,9 @@ function appInitials(displayName: string) {
   height: 42px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--accent-1) 24%, transparent);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   color: var(--accent-1);
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 900;
   background: color-mix(in srgb, var(--accent-1) 10%, transparent);
 }
@@ -485,31 +472,39 @@ function appInitials(displayName: string) {
   flex-wrap: wrap;
 }
 
+/* Uc ayri rozet, tek olcu: 0.72rem -> `--fs-2xs`, dolgular `--sp-*` adimlarina. */
 .featured-pill,
 .runtime-pill,
 .requirement-list span,
 .automation-list span {
   width: fit-content;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
 }
 
 .featured-pill {
-  padding: 3px 7px;
+  padding: var(--sp-2) var(--sp-8);
   color: var(--on-accent);
   background: var(--accent-1);
 }
 
 .runtime-cell {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
+/* Calisma ortami rozeti KEHRIBAR DEGIL notr: "Node.js 20" bir uyari degil, bir olgudur.
+   OLCULDU, iki zarari vardi: (1) kehribar bu panelde "dikkat" demek (`.status-pill.warn`,
+   `.notice.warn-banner`) ve katalogdaki HER satir bu rozeti tasidigi icin butun liste
+   uyariyormus gibi gorunuyordu; (2) metin `--warn-1` idi -- dolgu belirteci, METIN belirteci
+   (`--warn-text`) degil; acik temada kendi %14 zemininde 4.5 esiginin altinda kaliyordu.
+   Notr rozet zemini `--ring-track`, yazi `--text-soft`: iki temada da tanimli, olcum
+   gerektirmeyen govde rengi. */
 .runtime-pill {
-  padding: 4px 9px;
-  color: var(--warn-1);
-  background: color-mix(in srgb, var(--warn-1) 14%, transparent);
+  padding: var(--sp-2) var(--sp-8);
+  color: var(--text-soft);
+  background: var(--ring-track);
 }
 
 .runtime-cell small {
@@ -517,22 +512,25 @@ function appInitials(displayName: string) {
 }
 
 .requirement-list {
-  margin-top: 8px;
+  margin-top: var(--sp-8);
 }
 
+/* Zemin `--surface-1` -> `--ring-track`: satirin kendi zemini artik `--surface-0` (tablo
+   satiri) ve `--surface-1` onun sadece bir adim ustu; rozetler satirdan AYIRT EDILEMEZ
+   hale gelmisti. `--ring-track` her iki temada da zeminden bagimsiz, yariseffaf notr dolgu. */
 .requirement-list span {
-  padding: 3px 7px;
+  padding: var(--sp-2) var(--sp-8);
   color: var(--text-soft);
-  background: var(--surface-1);
+  background: var(--ring-track);
 }
 
 .automation-list {
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 .automation-list span {
   position: relative;
-  padding-left: 13px;
+  padding-left: var(--sp-12);
   color: var(--text-soft);
 }
 
@@ -564,14 +562,18 @@ function appInitials(displayName: string) {
   line-height: 1.45;
 }
 
+/* Dolgu %24 -> `--danger-bg` (%13, panelin TEK tehlike yuzeyi; `.notice.error` de onu
+   kullanir). OLCULDU: `--danger-text` (#f0a3a9) %24 kirmizi dolgunun uzerinde koyu temada
+   3.4:1 -- ham hata ciktisi icin AA'nin altinda; panelin kendi tehlike zemininde 6.3:1.
+   Yani kutu daha "kirmizi" olsun diye yazisi okunmaz hale gelmisti. */
 .error-details {
   border: 1px solid color-mix(in srgb, var(--danger-1) 34%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--danger-1) 24%, transparent);
+  background: var(--danger-bg);
 }
 
 .error-details summary {
-  padding: 10px 12px;
+  padding: var(--sp-10) var(--sp-12);
   color: var(--danger-text);
   cursor: pointer;
   font-weight: 700;
@@ -580,18 +582,19 @@ function appInitials(displayName: string) {
 .error-details pre {
   max-height: 260px;
   margin: 0;
-  padding: 0 12px 12px;
+  padding: 0 var(--sp-12) var(--sp-12);
   overflow: auto;
   color: var(--danger-text);
-  font-size: 0.74rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   white-space: pre-wrap;
 }
 
 .install-progress {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-12);
   align-items: center;
-  padding: 13px;
+  padding: var(--sp-12);
   border: 1px solid color-mix(in srgb, var(--accent-1) 28%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-1) 8%, transparent);
@@ -606,72 +609,39 @@ function appInitials(displayName: string) {
   animation: spin 0.8s linear infinite;
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-}
-
-.notice.warn {
-  color: var(--warn-text);
-  background: color-mix(in srgb, var(--warn-1) 12%, transparent);
-}
-
 .notice.wp-creds {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
   background: color-mix(in srgb, var(--accent-1) 10%, transparent);
 }
+
 .wp-cred-line code {
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-mono);
   background: color-mix(in srgb, var(--accent-1) 16%, transparent);
   color: var(--accent-1);
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: var(--sp-2) var(--sp-8);
+  border-radius: var(--radius-sm);
   user-select: all;
 }
+
+/* `opacity: 0.75` SILINDI: opaklik yaziyi ve zemini ayni anda birbirine yaklastirdigi icin
+   kontrasti DUSURUR (base.css'te olculmus ders). Ustelik bu kutu bir kez gosterilen
+   WordPress yonetici parolasinin ipucunu tasiyor -- soldurulacak en son metin. */
 .wp-creds small {
-  opacity: 0.75;
-  margin-top: 2px;
+  color: var(--text-muted);
+  margin-top: var(--sp-2);
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 1180px) {
-  .template-row {
-    grid-template-columns: 1fr 0.6fr 0.8fr;
-  }
-
-  .template-row .site-select {
-    grid-column: 1 / 3;
-  }
-
-  .table-head {
-    display: none;
-  }
-}
-
+/* Katalog tablosunun 1180px ve 760px kirilimlari SILINDI. Ikisi de sutunlari cokertiyor,
+   biri ustelik baslik satirini tamamen gizliyordu (yukaridaki sablon notu). Tablo artik
+   panelin butun tablolari gibi davraniyor: sabit sutunlar + `.data-table` yatay kaydirma.
+   Geride yalniz baslik seridinin dar ekran davranisi kaliyor ve onu base.css veriyor
+   (`.module-head { align-items: flex-start }` 720px altinda). */
 @media (max-width: 760px) {
-  .store-hero,
-  .store-toolbar {
-    flex-direction: column;
-  }
-
-  .template-row {
-    grid-template-columns: 1fr;
-  }
-
-  .template-row .site-select {
-    grid-column: auto;
-  }
-
-  .site-select,
-  .site-select select,
-  .install-button,
   .store-search {
     width: 100%;
   }

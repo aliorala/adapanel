@@ -1,8 +1,14 @@
 <template>
   <section class="panel module-shell toolkit">
+    <!-- `h3` -> `h2`. SAYILDI: bu görünüm `WebsiteWorkspaceView`in araç yuvasında çiziliyor ve o
+         sayfada BAŞKA hiçbir başlık yok (site adı `<strong>`, sekmeler `<button>`). Yani sayfanın
+         en üst başlığı buydu ama panelin başlık merdiveninde bir alt basamakta duruyordu.
+         Aynı yuvaya giren 7 kardeş araçtan 6'sı (PHP, ASP, Cron, Dosyalar, Uygulamalar, Yedek)
+         `h2` kullanıyor; kullanıcı araçlar arasında geçerken başlık boyu 19.2px ile 15.9px
+         arasında zıplıyordu. -->
     <div class="module-head">
       <div>
-        <h3>{{ t("panel.toolkit.title") }}</h3>
+        <h2>{{ t("panel.toolkit.title") }}</h2>
         <p class="meta">{{ t("panel.toolkit.subtitle") }}</p>
       </div>
     </div>
@@ -51,20 +57,37 @@
         :presets="['core version', 'plugin list', 'plugin update --all', 'theme list', 'cache flush', 'core update']"
         :runner="wpcliRunner" />
 
-      <div v-else-if="tab === 'wordpress'" class="wp-panel">
+      <div v-else-if="tab === 'wordpress'" class="form-surface wp-panel">
         <!-- Sonuç ekrana SABİTLENİR (`page-notice`, bkz. styles/base.css): WordPress sekmesi çok
              uzun (eklenti + tema listeleri onlarca satır). Kullanıcı listenin dibindeki
              "Güncelle"/"Sil" düğmesine basıp sonucu görmüyor, ikinci kez basıyordu. -->
         <p v-if="wpNotice" :class="['notice', 'page-notice', { error: wpNoticeError }]" :role="wpNoticeError ? 'alert' : 'status'">{{ wpNotice }}</p>
         <p v-if="wpLoading" class="empty-state" role="status" aria-live="polite">{{ t("panel.wpkit.loading") }}</p>
         <SectionLoadError v-else-if="wpLoad.message.value" :message="wpLoad.message.value" @retry="loadWp" />
-        <p v-else-if="wp && !wp.isWordPress" class="notice warn" role="status">{{ t("panel.wpkit.notWordpress") }}</p>
+        <!-- `notice warn` TANIMSIZDI: `.notice`in kehribar sürümünün adı `warn-banner` (base.css)
+             ve `warn` diye bir varyant hiçbir yerde yok. Yani "burası WordPress değil" uyarısı
+             MAVİ BİLGİ şeridi olarak çiziliyordu — bir bilgi kutusuyla aynı renkte. -->
+        <p v-else-if="wp && !wp.isWordPress" class="notice warn-banner" role="status">{{ t("panel.wpkit.notWordpress") }}</p>
 
         <template v-else-if="wp">
+          <!-- ROZETLER PANELİN ORTAK ROZETİNE (`status-pill`) TAŞINDI; yerel `pill`/`stopped`
+               kopyası silindi. Kopya üç şeyi birden bozuyordu:
+               (1) AYNI AD, ÜÇ FARKLI GÖRÜNÜM — `.pill` bu depoda üç bileşende (AppToolkit, Asp,
+                   Sites) ayrı ayrı tanımlıydı ve tanımlar birbirini tutmuyordu.
+               (2) DURUM DİLİ TERSTİ — "etkin/açık" olan her şey MAVİ (vurgu) çiziliyordu; oysa
+                   panelin geri kalanında (Güvenlik özet şeridi, disk tablosu, sunucu sağlığı)
+                   açık = yeşil, kapalı/bekleyen = kehribar. Kullanıcı "XML-RPC kapatıldı"
+                   rozetini bir bilgi etiketi sanıyordu.
+               (3) ÖLÇÜLDÜ, AÇIK TEMA: yerel kural `color: var(--accent-1)` idi ve zemini
+                   `accent %14` tonuydu; bu ikili beyaz kartta ~3.4:1 veriyordu (AA eşiği 4.5).
+                   Ortak rozet `--ok-text`/`--warn-text` kullanır, o belirteçler tam da bu iş
+                   için ölçülmüş hâllerdir.
+               Yeşil nokta (`state-dot`) da kalktı: rozet zaten renk + SÖZCÜK taşıyor, nokta
+               üçüncü bir kez aynı şeyi söylüyordu. -->
           <div class="wp-status">
-            <span class="pill"><span class="state-dot"></span>WordPress {{ wp.version || "?" }}</span>
-            <span v-if="wp.updateAvailable" class="pill stopped">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
-            <span v-else class="pill">{{ t("panel.wpkit.upToDate") }}</span>
+            <span class="status-pill">WordPress {{ wp.version || "?" }}</span>
+            <span v-if="wp.updateAvailable" class="status-pill warn">{{ t("panel.wpkit.updateAvailable", { v: wp.latestVersion }) }}</span>
+            <span v-else class="status-pill ok">{{ t("panel.wpkit.upToDate") }}</span>
             <a v-if="wp.adminUrl" :href="wp.adminUrl" target="_blank" rel="noopener" class="wp-admin-link">{{ t("panel.wpkit.openAdmin") }} ↗</a>
           </div>
 
@@ -75,18 +98,25 @@
             <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpToggleMaintenance">{{ wp.maintenanceMode ? t("panel.wpkit.maintenanceOff") : t("panel.wpkit.maintenanceOn") }}</button>
           </div>
 
+          <!-- BÖLÜM BAŞLIKLARI `h4` OLDU (bu blokta ve aşağıdaki yedi blokta).
+               ÖLÇÜLDÜ: sekiz bölümün başlığı `field-label` ile yazılıyordu — yani bir bölümün ADI
+               ile o bölümdeki bir ALANIN etiketi BİREBİR aynı boyda (0.92rem), aynı kalınlıkta
+               (600), aynı renkteydi. Sekiz bölüm alt alta, aralarında yalnız 1px çizgi; sayfanın
+               iskeleti gözle görünmüyordu. `h4` panelin başlık merdivenine bağlıdır
+               (base.css: `--fs-h4` = 14.3px / 640) ve `h2` ile alan etiketi arasına gerçek bir
+               basamak koyar. Metinler DEĞİŞMEDİ, yalnız rütbeleri düzeldi. -->
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.securityStatus") }}</span>
+            <h4>{{ t("panel.wpkit.securityStatus") }}</h4>
             <div class="wp-list">
-              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_file_edit") }}</span><span :class="['pill', wp.security.fileEditorDisabled ? '' : 'stopped']">{{ wp.security.fileEditorDisabled ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
-              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_version") }}</span><span :class="['pill', wp.security.versionHidden ? '' : 'stopped']">{{ wp.security.versionHidden ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
-              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_xmlrpc") }}</span><span :class="['pill', wp.security.xmlRpcPingbackDisabled ? '' : 'stopped']">{{ wp.security.xmlRpcPingbackDisabled ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
-              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_author") }}</span><span :class="['pill', wp.security.authorScanBlocked ? '' : 'stopped']">{{ wp.security.authorScanBlocked ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
+              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_file_edit") }}</span><span :class="['status-pill', wp.security.fileEditorDisabled ? 'ok' : 'warn']">{{ wp.security.fileEditorDisabled ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
+              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_version") }}</span><span :class="['status-pill', wp.security.versionHidden ? 'ok' : 'warn']">{{ wp.security.versionHidden ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
+              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_xmlrpc") }}</span><span :class="['status-pill', wp.security.xmlRpcPingbackDisabled ? 'ok' : 'warn']">{{ wp.security.xmlRpcPingbackDisabled ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
+              <div class="wp-list-row"><span class="wp-list-name">{{ t("panel.wpkit.st_author") }}</span><span :class="['status-pill', wp.security.authorScanBlocked ? 'ok' : 'warn']">{{ wp.security.authorScanBlocked ? t("panel.wpkit.secOn") : t("panel.wpkit.secOff") }}</span></div>
             </div>
           </div>
 
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.autoUpdates") }}</span>
+            <h4>{{ t("panel.wpkit.autoUpdates") }}</h4>
             <div class="wp-row">
               <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpAutoUpdate(true)">{{ wpBusy === 'autoOn' ? t("panel.wpkit.working") : t("panel.wpkit.autoUpdatesOn") }}</button>
               <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpAutoUpdate(false)">{{ wpBusy === 'autoOff' ? t("panel.wpkit.working") : t("panel.wpkit.autoUpdatesOff") }}</button>
@@ -95,7 +125,7 @@
           </div>
 
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.installPlugin") }}</span>
+            <h4>{{ t("panel.wpkit.installPlugin") }}</h4>
             <div class="wp-row">
               <input v-model.trim="wpForm.pluginSlug" placeholder="akismet" v-bind="writeGate(!!wpBusy)" />
               <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpForm.pluginSlug)" @click="wpInstallPlugin">{{ wpBusy === 'plugin' ? t("panel.wpkit.working") : t("panel.wpkit.install") }}</button>
@@ -106,43 +136,56 @@
           <!-- Eklenti/tema listesi BOŞKEN bölüm tamamen kayboluyordu: kullanıcı listenin
                yüklenmediğini mi yoksa gerçekten eklenti olmadığını mı bilemiyordu. -->
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.plugins") }} ({{ wp.plugins.length }})</span>
+            <h4>{{ t("panel.wpkit.plugins") }} ({{ wp.plugins.length }})</h4>
             <p v-if="wp.plugins.length === 0" class="empty-state">{{ t("panel.wpkit.noPlugins") }}</p>
             <div v-else class="wp-list">
               <div v-for="p in wp.plugins" :key="p.slug" class="wp-list-row">
-                <!-- "Etkin" YALNIZ yeşil noktayla anlatılıyordu: ekran okuyucu ve renk körü
-                     kullanıcı için etkin eklenti ile pasif eklenti AYNI görünüyordu — üstelik
-                     yanındaki düğme (Etkinleştir / Devre dışı bırak) da buna göre değişiyor. -->
-                <span class="wp-list-name"><span v-if="p.active" class="state-dot" aria-hidden="true"></span><span v-if="p.active" class="sr-only">{{ t("panel.wpkit.activeLabel") }}</span>{{ p.name }} <small v-if="p.version">v{{ p.version }}</small></span>
+                <!-- "Etkin" ARTIK GÖRÜNÜR BİR ROZET. Önceki hâlde durum iki kanaldan anlatılıyordu
+                     ve ikisi de yetersizdi: 6px'lik yeşil bir nokta (renk körü için yok hükmünde,
+                     ekran okuyucuya `aria-hidden`) ve YALNIZ ekran okuyucunun duyduğu `sr-only`
+                     metin. Yani GÖZLE bakan bir kullanıcı için etkin/pasif ayrımı tek kanaldı:
+                     renk. Şimdi aynı bilgi panelin ortak rozetiyle, SÖZCÜKLE yazılı; `sr-only`
+                     gereksizleştiği için kaldırıldı (aynı metin artık görünür).
+                     PASİF eklenti "uyarı" tonu ALMAZ, nötr kalır: pasif bir eklenti bir arıza
+                     değildir, her satırı boyamak gürültü olurdu. -->
+                <span class="wp-list-name">{{ p.name }} <small v-if="p.version">v{{ p.version }}</small></span>
                 <span class="wp-list-actions">
+                  <span :class="['status-pill', p.active ? 'ok' : '']">{{ p.active ? t("panel.wpkit.activeLabel") : t("panel.status.disabled") }}</span>
                   <button v-if="p.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'deactivate', p.slug)">{{ t("panel.wpkit.deactivate") }}</button>
                   <button v-else class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'activate', p.slug)">{{ t("panel.wpkit.activate") }}</button>
                   <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'update', p.slug)">{{ t("panel.wpkit.compUpdate") }}</button>
-                  <button v-if="!p.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'delete', p.slug)">{{ t("panel.wpkit.compDelete") }}</button>
+                  <!-- SİLME AYRI TONDA. Bir satırda dört düğme yan yana ve HEPSİ aynı gri kutu
+                       boyundaydı; yanlış olana tek tık, eklentiyi diskten siliyordu. Metin tek
+                       başına yetmiyordu ("Güncelle" / "Sil" aynı uzunlukta ve aynı hizada).
+                       Tehlike tonu, panelin geri kalanındaki silme düğmeleriyle (Güvenlik >
+                       güvenlik duvarı kuralı) aynı dildir. -->
+                  <button v-if="!p.active" class="danger compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('plugin', 'delete', p.slug)">{{ t("panel.wpkit.compDelete") }}</button>
                 </span>
               </div>
             </div>
           </div>
 
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.themes") }} ({{ wp.themes.length }})</span>
+            <h4>{{ t("panel.wpkit.themes") }} ({{ wp.themes.length }})</h4>
             <p v-if="wp.themes.length === 0" class="empty-state">{{ t("panel.wpkit.noThemes") }}</p>
             <div v-else class="wp-list">
               <div v-for="th in wp.themes" :key="th.slug" class="wp-list-row">
-                <!-- Aynı gerekçe: etkin tema yalnız renkle işaretliydi. -->
-                <span class="wp-list-name"><span v-if="th.active" class="state-dot" aria-hidden="true"></span><span v-if="th.active" class="sr-only">{{ t("panel.wpkit.activeLabel") }}</span>{{ th.name }} <small v-if="th.version">v{{ th.version }}</small></span>
+                <!-- Aynı gerekçe: etkin tema yalnız renkle işaretliydi. Etkin temanın rozeti
+                     zaten vardı (`pill`) ama PASİF temada hiçbir rozet yoktu, yani iki durum
+                     farklı SAYIDA ögeyle anlatılıyor ve sütun hizası kayıyordu. -->
+                <span class="wp-list-name">{{ th.name }} <small v-if="th.version">v{{ th.version }}</small></span>
                 <span class="wp-list-actions">
-                  <span v-if="th.active" class="pill">{{ t("panel.wpkit.activeLabel") }}</span>
-                  <button v-else class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'activate', th.slug)">{{ t("panel.wpkit.activate") }}</button>
+                  <span :class="['status-pill', th.active ? 'ok' : '']">{{ th.active ? t("panel.wpkit.activeLabel") : t("panel.status.disabled") }}</span>
+                  <button v-if="!th.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'activate', th.slug)">{{ t("panel.wpkit.activate") }}</button>
                   <button class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'update', th.slug)">{{ t("panel.wpkit.compUpdate") }}</button>
-                  <button v-if="!th.active" class="secondary compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'delete', th.slug)">{{ t("panel.wpkit.compDelete") }}</button>
+                  <button v-if="!th.active" class="danger compact" v-bind="writeGate(!!wpBusy)" @click="wpComponent('theme', 'delete', th.slug)">{{ t("panel.wpkit.compDelete") }}</button>
                 </span>
               </div>
             </div>
           </div>
 
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.searchReplace") }}</span>
+            <h4>{{ t("panel.wpkit.searchReplace") }}</h4>
             <div class="wp-row">
               <input v-model.trim="wpForm.srFrom" :placeholder="t('panel.wpkit.srFromPlaceholder')" v-bind="writeGate(!!wpBusy)" />
               <input v-model.trim="wpForm.srTo" :placeholder="t('panel.wpkit.srToPlaceholder')" v-bind="writeGate(!!wpBusy)" />
@@ -152,7 +195,7 @@
           </div>
 
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.resetPassword") }}</span>
+            <h4>{{ t("panel.wpkit.resetPassword") }}</h4>
             <div class="wp-row">
               <input v-model.trim="wpForm.adminUser" placeholder="admin" v-bind="writeGate(!!wpBusy)" />
               <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpForm.adminUser)" @click="wpResetPassword">{{ wpBusy === 'pass' ? t("panel.wpkit.working") : t("panel.wpkit.reset") }}</button>
@@ -161,7 +204,7 @@
           </div>
 
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.clone") }}</span>
+            <h4>{{ t("panel.wpkit.clone") }}</h4>
             <div class="wp-row">
               <input v-model.trim="wpClone.targetSiteName" :placeholder="t('panel.wpkit.cloneSiteName')" v-bind="writeGate(!!wpBusy)" />
               <input v-model.trim="wpClone.targetHostName" :placeholder="t('panel.wpkit.cloneHostPlaceholder')" v-bind="writeGate(!!wpBusy)" />
@@ -176,15 +219,29 @@
             </div>
           </div>
 
+          <!-- BU SEKMENİN TEK YIKICI EYLEMİ. Kaynak siteyi VAR OLAN başka bir sitenin üzerine
+               yazar (staging -> canlı) ve geri dönüşü yalnız otomatik yedektir.
+               ÖNCEKİ HÂLİ ÖLÇÜLDÜ: düğme yukarıdaki yedi bölümdeki "Kur"/"Değiştir"/"Sıfırla"
+               ile BİREBİR aynı gri `secondary compact` kutuydu, sırası da aynıydı (satırın
+               sonu), ve tek uyarı `<small class="hint">` içinde bir "⚠" karakteriydi — panelin
+               en küçük, en silik metin rütbesi. Yani ekranın en tehlikeli düğmesi, en sessiz
+               şekilde anlatılıyordu.
+               ŞİMDİ üç kanal birden: (1) uyarı, panelin ortak kehribar şeridine (`warn-banner`)
+               taşındı ve düğmeden ÖNCE okunuyor; (2) düğme tehlike tonunda; (3) düğme kendi
+               satırında ve `margin-left:auto` ile SABİT bir yerde (`destructive-slot`), yani
+               yanlışlıkla basılan komşu bir düğmenin yerinde durmuyor.
+               Onay diyaloğu ve hedef adı yazdırma zorunluluğu AYNEN duruyor (bkz. `wpDoCopy`). -->
           <div class="wp-form">
-            <span class="field-label">{{ t("panel.wpkit.copyData") }}</span>
+            <h4>{{ t("panel.wpkit.copyData") }}</h4>
+            <p class="notice warn-banner" role="note">{{ t("panel.wpkit.copyHint") }}</p>
             <div class="wp-row">
               <input v-model.trim="wpCopy.targetSiteName" :placeholder="t('panel.wpkit.copyTarget')" v-bind="writeGate(!!wpBusy)" />
               <label class="wp-check"><input v-model="wpCopy.files" type="checkbox" v-bind="writeGate(!!wpBusy)" /> {{ t("panel.wpkit.copyFiles") }}</label>
               <label class="wp-check"><input v-model="wpCopy.database" type="checkbox" v-bind="writeGate(!!wpBusy)" /> {{ t("panel.wpkit.copyDatabase") }}</label>
-              <button class="secondary compact" v-bind="writeGate(!!wpBusy || !wpCopy.targetSiteName || (!wpCopy.files && !wpCopy.database))" @click="wpDoCopy">{{ wpBusy === 'copy' ? t("panel.wpkit.working") : t("panel.wpkit.copyBtn") }}</button>
             </div>
-            <small class="hint">⚠ {{ t("panel.wpkit.copyHint") }}</small>
+            <div class="wp-row">
+              <button class="danger compact destructive-slot" v-bind="writeGate(!!wpBusy || !wpCopy.targetSiteName || (!wpCopy.files && !wpCopy.database))" @click="wpDoCopy">{{ wpBusy === 'copy' ? t("panel.wpkit.working") : t("panel.wpkit.copyBtn") }}</button>
+            </div>
             <div v-if="wpCopyResult" class="notice wp-cred" role="status">{{ t("panel.wpkit.copyDone") }}<br /><small>{{ t("panel.wpkit.copyBackup") }}: <code>{{ wpCopyResult.backupPath }}</code></small></div>
           </div>
 
@@ -192,48 +249,69 @@
         </template>
       </div>
 
-      <div v-else class="queue-panel">
-        <h4>{{ t("panel.toolkit.queue.title") }}</h4>
-        <p class="meta">{{ t("panel.toolkit.queue.desc") }}</p>
-
+      <!-- İKİ AYRI İŞÇİ, İKİ AYRI KUTU. Önceden ikisi TEK kutunun içindeydi ve aralarındaki tek
+           ayrım, ikinci başlığın üstündeki 1px çizgiydi (`sched-head`). İki bağımsız servisin
+           (kuyruk işçisi ve zamanlayıcı) durumu ve düğmeleri alt alta akınca, "Başlat" düğmesinin
+           hangisini başlattığı ancak sırayı sayarak anlaşılıyordu. Panelin ortak `form-surface`
+           kalıbı her servise kendi çerçevesini verir; `queue-panel` kopyası (kendi kenarlığı,
+           kendi 12px yarıçapı, kendi `surface-1` zemini) silindi. -->
+      <div v-else class="queue-stack">
         <p v-if="queueNotice" :class="['notice', 'page-notice', { error: queueNoticeError }]" :role="queueNoticeError ? 'alert' : 'status'">{{ queueNotice }}</p>
 
-        <SectionLoadError v-if="queueLoad.message.value" :message="queueLoad.message.value" @retry="loadQueue" />
+        <div class="form-surface">
+          <div class="section-head">
+            <div>
+              <h4>{{ t("panel.toolkit.queue.title") }}</h4>
+              <p class="meta">{{ t("panel.toolkit.queue.desc") }}</p>
+            </div>
+            <!-- DURUM ROZETİ BAŞLIK SATIRINDA, panelin geri kalanıyla aynı yerde (Güvenlik >
+                 Antivirüs, Siteler listesi). Eskiden düğmenin yanındaydı ve aynı yükseklikte,
+                 aynı yuvarlaklıkta olduğu için TIKLANABİLİR sanılıyordu. -->
+            <span v-if="queueLoaded" :class="['status-pill', queueRunning ? 'ok' : 'warn']">
+              {{ queueRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
+            </span>
+            <span v-else class="status-pill">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
+          </div>
 
-        <div class="queue-status">
-          <span v-if="queueLoaded" :class="['pill', { stopped: !queueRunning }]">
-            <span class="state-dot"></span>
-            {{ queueRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
-          </span>
-          <span v-else class="pill stopped">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
-          <button v-if="!queueRunning" class="compact" v-bind="writeGate(queueBusy)" @click="startQueue">
-            {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
-          </button>
-          <button v-else class="secondary compact" v-bind="writeGate(queueBusy)" @click="stopQueue">
-            {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.stop") }}
-          </button>
+          <SectionLoadError v-if="queueLoad.message.value" :message="queueLoad.message.value" @retry="loadQueue" />
+
+          <p class="hint">{{ t("panel.toolkit.queue.hint") }}</p>
+
+          <div class="row-actions">
+            <button v-if="!queueRunning" class="compact" v-bind="writeGate(queueBusy)" @click="startQueue">
+              {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
+            </button>
+            <button v-else class="secondary compact" v-bind="writeGate(queueBusy)" @click="stopQueue">
+              {{ queueBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.stop") }}
+            </button>
+          </div>
         </div>
 
-        <p class="hint">{{ t("panel.toolkit.queue.hint") }}</p>
+        <div class="form-surface">
+          <div class="section-head">
+            <div>
+              <h4>{{ t("panel.toolkit.scheduler.title") }}</h4>
+              <p class="meta">{{ t("panel.toolkit.scheduler.desc") }}</p>
+            </div>
+            <span v-if="schedulerLoaded" :class="['status-pill', schedulerRunning ? 'ok' : 'warn']">
+              {{ schedulerRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
+            </span>
+            <span v-else class="status-pill">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
+          </div>
 
-        <h4 class="sched-head">{{ t("panel.toolkit.scheduler.title") }}</h4>
-        <p class="meta">{{ t("panel.toolkit.scheduler.desc") }}</p>
-        <SectionLoadError v-if="schedulerLoad.message.value" :message="schedulerLoad.message.value" @retry="loadScheduler" />
+          <SectionLoadError v-if="schedulerLoad.message.value" :message="schedulerLoad.message.value" @retry="loadScheduler" />
 
-        <div class="queue-status">
-          <span v-if="schedulerLoaded" :class="['pill', { stopped: !schedulerRunning }]">
-            <span class="state-dot"></span>
-            {{ schedulerRunning ? t("panel.toolkit.queue.statusRunning") : t("panel.toolkit.queue.statusStopped") }}
-          </span>
-          <span v-else class="pill stopped">{{ t("panel.toolkit.queue.statusUnknown") }}</span>
-          <button v-if="!schedulerRunning" class="compact" v-bind="writeGate(schedulerBusy)" @click="startScheduler">
-            {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
-          </button>
-          <button v-else class="secondary compact" v-bind="writeGate(schedulerBusy)" @click="stopScheduler">
-            {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.stop") }}
-          </button>
+          <p class="hint">{{ t("panel.toolkit.scheduler.hint") }}</p>
+
+          <div class="row-actions">
+            <button v-if="!schedulerRunning" class="compact" v-bind="writeGate(schedulerBusy)" @click="startScheduler">
+              {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.start") }}
+            </button>
+            <button v-else class="secondary compact" v-bind="writeGate(schedulerBusy)" @click="stopScheduler">
+              {{ schedulerBusy ? t("panel.toolkit.queue.working") : t("panel.toolkit.queue.stop") }}
+            </button>
+          </div>
         </div>
-        <p class="hint">{{ t("panel.toolkit.scheduler.hint") }}</p>
       </div>
     </template>
   </section>
@@ -772,125 +850,98 @@ function showQueueNotice(message: string, isError: boolean) {
 <style scoped>
 .toolkit {
   display: grid;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
-.sched-head {
-  margin: 16px 0 0;
-  padding-top: 14px;
-  border-top: 1px solid var(--panel-border);
-}
-
-.queue-panel {
+/* İki servis kutusu arasındaki dikey ritim, panelin kendi ızgara aralığıyla AYNI. */
+.queue-stack {
   display: grid;
-  gap: 10px;
-  padding: 14px 16px;
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  background: var(--surface-1);
+  gap: var(--sp-12);
 }
 
-.queue-panel h4 {
-  margin: 0;
+/* YIKICI EYLEMİN SABİT YERİ: satırın sağ ucu (aynı ad ve aynı tek satırlık kural SecurityView'de
+   de var). `.wp-row` bir flex satırı olduğu için `auto` kenar boşluğu arta kalan yeri yutar ve
+   düğme her panel genişliğinde AYNI yerde durur.
+   TANIM NEDEN KOPYA: `<style scoped>` bileşenler arası GEÇMEZ, dolayısıyla iki ekranın da kendi
+   tanımı olmak zorunda (nöbetçi: CssSharedClassTests). Doğru ev `styles/base.css`tir; o dosya
+   bu turun kapsamı dışında olduğu için kopya BİLEREK bırakıldı. */
+.destructive-slot {
+  margin-left: auto;
 }
 
-.queue-status {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.queue-status button {
-  width: auto;
-}
-
-.pill {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  border-radius: 999px;
-  padding: 5px 12px;
-  background: color-mix(in srgb, var(--accent-1) 14%, transparent);
-  color: var(--accent-1);
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.pill.stopped {
-  background: color-mix(in srgb, var(--warn-1) 12%, transparent);
-  color: var(--warn-text);
-}
-
-.state-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: currentColor;
-}
-
+/* `queue-panel` / `.pill` / `.pill.stopped` / `.state-dot` / `.sched-head` KOPYALARI SİLİNDİ:
+   ilki `form-surface`in (base.css) elle yazılmış ikizi, ortadaki üçü panelin ortak
+   `status-pill` rozetinin üçüncü ayrı sürümü, sonuncusu ise iki servisi tek kutuda tutan
+   1px'lik ayraçtı. Görünen etkileri şablondaki yorumlarda tek tek yazılı. */
 .wp-panel {
-  display: grid;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  background: var(--surface-1);
+  /* `.form-surface` ile birlikte kullanılıyor; buradan YALNIZCA aralık geliyor. WordPress
+     sekmesindeki bölümler kendi üst çizgilerini taşıdığı için (bkz. `.wp-form`) ortak 12px
+     aralık burada 14'e çıkarılmıştı; ölçeğe (16) taşındı ki bölüm çizgisi ile üstündeki
+     içerik arasındaki nefes payı ölçekten okunsun. */
+  gap: var(--sp-16);
 }
 .wp-status {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-wrap: wrap;
 }
+/* 0.85rem ölçek dışıydı. `--fs-sm` (0.86rem) en yakın adım; fark 0.135px, hiçbir ekranda
+   ayırt edilemez. */
 .wp-admin-link {
   margin-left: auto;
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 .wp-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
-}
-.wp-actions button {
-  width: auto;
 }
 .wp-form {
   display: grid;
-  gap: 6px;
-  padding-top: 12px;
+  gap: var(--sp-6);
+  padding-top: var(--sp-12);
   border-top: 1px solid var(--panel-border);
 }
 .wp-row {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-wrap: wrap;
+  align-items: center;
 }
+/* Bu kural GEREKLİ: base.css'te `input { width: 100% }` var ve o olmadan her metin alanı
+   satırın tamamını kaplayıp yanındaki düğmeyi alt satıra düşürüyor. */
 .wp-row input {
   flex: 1 1 160px;
   width: auto;
 }
 .wp-row button {
-  width: auto;
   flex: none;
 }
+/* `--font-mono` base.css'te TANIMLI; buradaki iki yedek liste ELDE yazılıydı ve panelin geri
+   kalanındakinden FARKLIYDI ("Cascadia Mono" ve "Liberation Mono" eksikti) — aynı ekranda
+   birbirinden farklı iki tek-aralıklı yazı tipi çizilebiliyordu.
+   Renk de düzeltildi: ÖLÇÜLDÜ, açık temada `--accent-1` (#1474e5) kendi %16'lık tonuyla
+   karışan zeminde (#d3e5fb) 3.29:1 veriyordu — AA eşiği 4.5. `--accent-text` (#0f62c4) aynı
+   zeminde 4.53:1. Burada gösterilen şey bir PAROLA ya da veritabanı adı; panelde okunması
+   en kritik metin tam olarak budur. */
 .wp-cred code {
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-mono);
   background: color-mix(in srgb, var(--accent-1) 16%, transparent);
-  color: var(--accent-1);
-  padding: 2px 8px;
-  border-radius: 6px;
+  color: var(--accent-text);
+  padding: var(--sp-2) var(--sp-8);
+  border-radius: var(--radius-sm);
   user-select: all;
 }
 .wp-output {
   margin: 0;
-  padding: 12px;
-  border-radius: 8px;
+  padding: var(--sp-12);
+  border-radius: var(--radius-md);
   background: var(--surface-0);
   border: 1px solid var(--panel-border);
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 280px;
@@ -898,7 +949,7 @@ function showQueueNotice(message: string, isError: boolean) {
 }
 .wp-list {
   display: grid;
-  gap: 4px;
+  gap: var(--sp-4);
   max-height: 220px;
   overflow: auto;
 }
@@ -906,9 +957,9 @@ function showQueueNotice(message: string, isError: boolean) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: var(--sp-8);
+  padding: var(--sp-6) var(--sp-8);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--panel-border) 30%, transparent);
 }
 .wp-list-name {
@@ -917,18 +968,23 @@ function showQueueNotice(message: string, isError: boolean) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* `opacity: 0.6` KALDIRILDI: sürüm numarası zaten `--text-strong` üzerine %60 saydamlıkla
+   çiziliyordu ve bu, ölçülebilir bir kontrast kaybıdır (koyu temada 15.8:1 -> 6.4:1, açık
+   temada 14.9:1 -> 5.6:1) ama hiçbir HİYERARŞİ kurmuyordu, çünkü boyut aynı kalıyordu.
+   İkincil bilgi panelin kendi ikincil metin belirteciyle söylenir. */
 .wp-list-name small {
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .wp-list-actions {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: var(--sp-6);
   flex: none;
 }
 .wp-check {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-4);
   white-space: nowrap;
   flex: none;
 }

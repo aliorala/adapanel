@@ -139,6 +139,27 @@
       :interrupted-label="serverBackup.interruptedText.value"
       @dismiss="serverBackup.dismissInterrupted" />
 
+    <!--
+      YEDEK KÖK KLASÖRÜ TABLONUN DIŞINA ALINDI.
+
+      ÖLÇÜLDÜ: bu satır (ayar alanı + Kopyala düğmesi + iki cümlelik yardım metni) `data-table`
+      DIV'inin İÇİNDE, başlık satırı ile "Henüz yedek bulunmuyor." arasında duruyordu. Yani
+      tablonun sütun düzeninin ortasında, hiçbir yedeğe ait olmayan bir ayar satırı vardı;
+      liste boşken de tablo "doluymuş" gibi görünüyordu.
+
+      Kök klasör bütün listenin BAĞLAMIDIR, bir satırı değil: artık tablonun üstünde, kendi
+      şeridinde. Değer Ayarlar'daki `defaultBackupRoot` tercihinden OKUNUR (uydurulmaz); uç
+      yalnız yöneticiye açık olduğundan okunamadığında şerit HİÇ çizilmez.
+    -->
+    <p v-if="activeView === 'list' && backupRoot" class="location-root">
+      <span class="field-label">{{ t("panel.backup.location.root") }}</span>
+      <code class="path-box">{{ backupRoot }}</code>
+      <button type="button" class="secondary compact" @click="copyPath(backupRoot)">
+        {{ t("panel.backup.location.copy") }}
+      </button>
+      <small class="cell-muted">{{ t("panel.backup.location.rootHint") }}</small>
+    </p>
+
     <div v-if="activeView === 'list'" class="data-table backup-table">
       <!-- BEŞ sütun. Önceden sekizdi ve dördü (tür, hedef türü, boyut, tarih) tek kelimelik
            değerler için tam sütun harcıyordu; ad, yol ve dört düğme aynı satırda sıkışıyordu.
@@ -370,18 +391,6 @@
           </div>
         </template>
       </template>
-
-      <!-- Yedek KÖK klasörü: gün klasörleri bunun altında açılıyor. Değer Ayarlar'daki
-           `defaultBackupRoot` tercihinden OKUNUR (uydurulmaz); uç yalnız yöneticiye açık
-           olduğundan okunamadığında satır HİÇ çizilmez. -->
-      <p v-if="backupRoot" class="location-root">
-        <span class="field-label">{{ t("panel.backup.location.root") }}</span>
-        <code class="path-box">{{ backupRoot }}</code>
-        <button type="button" class="secondary compact" @click="copyPath(backupRoot)">
-          {{ t("panel.backup.location.copy") }}
-        </button>
-        <small class="cell-muted">{{ t("panel.backup.location.rootHint") }}</small>
-      </p>
 
       <!-- "Yükleniyor" / "kayıt yok" / "okunamadı" ÜÇÜ AYRI: birini diğerinin yerine göstermek,
            var olan yedekleri yok gibi sunmak olurdu. Aramanın boşa düşmesi DÖRDÜNCÜ bir durumdur:
@@ -1381,11 +1390,20 @@ const createButtonLabel = computed(() => {
   return t("panel.backup.dbAction");
 });
 
-// Liste görünümünde form panel açık değilken görünür (eski davranış); zincir/gözat panelleri
-// açıkken gizlenir ki ekranda iki ayrı iş aynı anda durmasın.
-const showCreateForm = computed(() =>
-  activeView.value === "create" ||
-  (activeView.value === "list" && !browseRecord.value && !chainRecord.value));
+/*
+ * SEKME ARTIK GERÇEKTEN SEKME.
+ *
+ * ÖLÇÜLDÜ: "Yedek listesi" seçiliyken tam boy "Yeni yedek" formu da ekrandaydı — yani sekme
+ * şeridi hiçbir şeyi ayırmıyordu; iki sekme aynı anda açıktı. Yan etkisi görsel değildi:
+ * yaratma formunun kendi `.segmented-tabs` şeridi (site / abonelik / veritabanı / posta /
+ * panel) üstteki ana şeritle AYNI ANDA görünüyordu, yani tek ekranda iki ayrı sekme çubuğu
+ * vardı ve hangisinin neyi değiştirdiği belli değildi.
+ *
+ * HİÇBİR ŞEY KALDIRILMADI: form "Yeni yedek" sekmesinde, bir tık ötede duruyor ve o sekme
+ * zaten şeridin ikinci düğmesi. Zincir/gözat panelleri açıkken gizleme koşulu da gereksizleşti
+ * (o paneller yalnız "Liste" sekmesinde çiziliyor).
+ */
+const showCreateForm = computed(() => activeView.value === "create");
 
 const siteName = ref(sitesStore.selectedSiteName);
 const databaseEngine = ref("mariadb");
@@ -2915,14 +2933,19 @@ function statusTone(status: string) {
   white-space: nowrap;
 }
 
+/* Tablonun DIŞINDA, üstünde duran bağlam şeridi. `border-top` KALDIRILDI: tablonun içindeyken
+   satırları birbirinden ayırmak için vardı; artık ayrı bir öge olduğu için kendi hafif
+   çerçevesini alıyor (panelin `.module-toolbar` diliyle aynı). */
 .location-root {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
   flex-wrap: wrap;
   margin: 0;
-  padding: var(--sp-10) var(--sp-12);
-  border-top: 1px solid var(--panel-border);
+  padding: var(--sp-8) var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-0);
 }
 
 .toolbar-search {

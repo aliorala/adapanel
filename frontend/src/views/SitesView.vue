@@ -230,7 +230,7 @@
                 :title="siteUrl(site)"
                 target="_blank"
                 rel="noopener"
-                @click.stop>{{ siteUrl(site) }}</a>
+                @click.stop>{{ siteUrl(site) }} ↗</a>
               <span class="domain-path" :title="site.physicalPath">{{ site.physicalPath }}</span>
             </div>
           </div>
@@ -245,21 +245,37 @@
             {{ translateState(site.state) }}
           </span>
 
+          <!--
+            KUTUCUKLAR ARTIK IKON TASIYOR, KISALTMA DEGIL. Olculdu (canli 0.8.0): damgalar
+            (FL, P, SSL, SQL, FT, DNS) **8.1px** ciziliyordu ve besi ayri bir kisaltma dilinden
+            geliyordu. Tam ad kaybolmadi, tersine ERISILEBILIR oldu: `title` fareyle, yeni eklenen
+            `aria-label` ise ekran okuyucuyla verir (eskiden dugmenin erisilebilir adi "FL" idi).
+          -->
           <nav class="domain-tools" :aria-label="site.name">
             <button
               v-for="tool in quickTools"
               :key="tool.id"
               class="tool-chip"
               :title="tool.label"
+              :aria-label="tool.label"
               @click="openTool(site.name, tool.id)">
-              <span class="chip-glyph">{{ tool.glyph }}</span>
+              <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true" v-html="siteToolIcon(tool.id)"></svg>
             </button>
           </nav>
 
           <div class="domain-row-actions">
-            <a class="secondary compact link-btn" :href="siteUrl(site)" target="_blank" rel="noopener">
-              {{ t("panel.sites.open") }}
-            </a>
+            <!--
+              "SİTEYİ AÇ" SATIRDA İKİ KEZ DURUYORDU.
+
+              ÖLÇÜLDÜ: satırın solundaki `.domain-url` bağlantısı ile buradaki düğme AYNI adrese
+              (`siteUrl(site)`), AYNI şekilde (`target="_blank"`) gidiyordu; aralarında yalnızca
+              rozet ve araç simgeleri vardı. Aynı işi yapan iki denetim, ekranda "bunlar farklı
+              şeyler" izlenimi verir.
+
+              KALDIRILAN DÜĞME DEĞİL, TEKRAR: adres bağlantısı yerinde duruyor ve artık dış
+              bağlantı olduğu ok işaretiyle görünür. Düğme biçimi seçilmedi çünkü adresin
+              KENDİSİ zaten en doğru etikettir — kullanıcı nereye gideceğini okuyarak görür.
+            -->
             <button
               class="secondary compact"
               :disabled="previewLoading === site.name || sitesStore.busySiteName === site.name"
@@ -330,6 +346,7 @@ import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
+import { siteToolIcon } from "../utils/siteToolIcons";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
@@ -368,15 +385,15 @@ const pager = usePagination(filteredSites);
 watch(siteSearch, () => pager.reset());
 
 const quickTools = computed(() => [
-  { id: "hosting", glyph: "⚙", label: t("panel.sites.tools.hosting") },
-  { id: "files", glyph: "FL", label: t("panel.sites.tools.files") },
-  { id: "php", glyph: "P", label: t("panel.sites.tools.php") },
-  { id: "mail", glyph: "@", label: t("panel.sites.tools.mail") },
-  { id: "ssl", glyph: "SSL", label: t("panel.sites.tools.ssl") },
+  { id: "hosting", label: t("panel.sites.tools.hosting") },
+  { id: "files", label: t("panel.sites.tools.files") },
+  { id: "php", label: t("panel.sites.tools.php") },
+  { id: "mail", label: t("panel.sites.tools.mail") },
+  { id: "ssl", label: t("panel.sites.tools.ssl") },
   // Veritabanları (admin-only): site iş alanında DB ekle/sil + phpMyAdmin (SiteDatabasesView).
-  ...(isAdmin.value ? [{ id: "webdb", glyph: "SQL", label: t("panel.sites.tools.domaindb") }] : []),
-  { id: "ftp", glyph: "FT", label: t("panel.sites.tools.ftp") },
-  { id: "dns", glyph: "DNS", label: t("panel.sites.tools.dns") }
+  ...(isAdmin.value ? [{ id: "webdb", label: t("panel.sites.tools.domaindb") }] : []),
+  { id: "ftp", label: t("panel.sites.tools.ftp") },
+  { id: "dns", label: t("panel.sites.tools.dns") }
 ]);
 
 function openTool(siteName: string, tool: string) {
@@ -1019,7 +1036,8 @@ async function copyCredential(credential: { service: string; userName: string; p
 
 .domain-path {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  /* 0.72rem = 9.72px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1032,7 +1050,12 @@ async function copyCredential(credential: { service: string; userName: string; p
   flex-shrink: 0;
 }
 
-.domain-row-actions .link-btn {
+/* `.domain-row-actions` ÖNEKİ KALDIRILDI. Satırdaki tekrarlı "Siteyi aç" bağlantısı
+   kalkınca bu kural HİÇBİR ögeyi boyamıyordu; aynı sınıfı taşıyan önizleme kartındaki
+   bağlantı ise zaten kuralın dışındaydı (bkz. o satırdaki yorum: sınıf `.domain-row-actions`
+   altına hapsedildiği için `secondary` eklenerek telafi edilmişti). Kural artık sınıfın
+   kendisine bağlı, yani tek bir tanım iki yeri de kapsıyor. */
+.link-btn {
   display: inline-flex;
   align-items: center;
   text-decoration: none;
@@ -1046,7 +1069,8 @@ async function copyCredential(credential: { service: string; userName: string; p
   border-radius: 10px;
   background: color-mix(in srgb, var(--accent-1) 14%, transparent);
   color: var(--accent-1);
-  font-size: 0.62rem;
+  /* 0.62rem = 8.37px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-weight: 800;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1103,10 +1127,16 @@ async function copyCredential(credential: { service: string; userName: string; p
   color: var(--accent-1);
 }
 
-.chip-glyph {
-  font-size: 0.6rem;
-  font-weight: 800;
-  color: var(--accent-1);
+/* 8.1px'lik harf damgasının yerini alan ikon. 17px = kenar menüdeki `.nav-icon` ile AYNI
+   ölçü; panelde tek bir ikon dili var. Çizgi kalınlığı da oradan (1.7) alındı. */
+.chip-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: var(--accent-1);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 @media (max-width: 900px) {
@@ -1275,15 +1305,9 @@ button:disabled {
     text-align: center;
   }
 
-  .domain-row-actions .link-btn {
-    justify-content: center;
-    padding: 10px 12px;
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-3);
-    color: var(--text-strong);
-    font-weight: 600;
-  }
+  /* Dar ekran kuralı KALDIRILDI: `.domain-row-actions` içinde artık `.link-btn` taşıyan bir
+     öge yok (tekrarlı "Siteyi aç" bağlantısı kalktı), yani kural ölü kalmıştı. Önizleme
+     kartındaki bağlantı bu kırılımda da `secondary compact` görünümünü koruyor. */
 
   .domain-glyph {
     width: 34px;

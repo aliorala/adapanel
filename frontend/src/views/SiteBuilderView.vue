@@ -11,7 +11,10 @@
       </select>
     </div>
 
-    <p v-if="notice" :class="['notice', 'page-notice', noticeError ? 'error' : '']" role="alert">{{ notice }}</p>
+    <!-- Rol DURUMA GÖRE: başarı mesajı `alert` DEĞİLDİR. `alert` ekran okuyucuyu o an ne
+         okuyorsa keser; "Kaydedildi" için bu, panelin diğer 40 ekranında `status` ile
+         yapılan şeyin tersiydi (bkz. MigrationView, SecurityView, WebsiteWorkspaceView). -->
+    <p v-if="notice" :class="['notice', 'page-notice', noticeError ? 'error' : '']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <p v-if="!selectedSite" class="empty-state">{{ t("panel.siteBuilder.selectSiteHint") }}</p>
     <p v-else-if="!project" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
@@ -32,8 +35,16 @@
             {{ t("panel.siteBuilder.tab.publish") }}
           </button>
         </div>
+        <!-- TEK BİRİNCİL EYLEM, SEKMEYE GÖRE.
+             ÖNCESİ ÖLÇÜLDÜ: "Kaydet" araç çubuğunda İKİNCİL (gri) duruyordu, oysa tasarım/içerik/
+             sayfalar sekmelerinde ekranın TEK gerçek eylemi oydu — o üç sekmede hiçbir birincil
+             düğme yoktu ve göz tutunacak yer bulamıyordu. Buna karşılık aynı ekranda 15 kadar
+             SEÇİM ÇİPİ birincil mavi çiziliyordu (bkz. `.sb-choice`), yani vurgu tam ters yerdeydi.
+             Yayın sekmesinde ise sayfanın cevabı "Yayınla"dır; iki birincil düğmeyi aynı anda
+             göstermemek için "Kaydet" orada ikincile düşer. Aynı kalıp Güvenlik ekranında da var
+             (form açıkken "Yeni kural" ikincile düşer). -->
         <div class="sb-actions">
-          <button type="button" class="secondary" :disabled="saving" @click="save">
+          <button type="button" :class="tab === 'publish' ? 'secondary' : ''" :disabled="saving" @click="save">
             {{ saving ? t("panel.common.loading") : t("panel.siteBuilder.save") }}
           </button>
         </div>
@@ -63,12 +74,26 @@
               </select>
             </label>
 
+            <!--
+              SEÇİM ÇİPLERİ — EKRANIN EN BÜYÜK GÖRSEL HATASIYDI.
+              `.sb-choice` sınıf olarak vardı ama düğmeye hiçbir AĞIRLIK vermiyordu; base.css'te
+              sınıfsız her `button` BİRİNCİL mavi gradyandır. Sonuç ölçüldü: tasarım sekmesinde
+              üç grup halinde ~15 adet birincil mavi düğme yan yana duruyordu ve panelin gerçek
+              eylemi ("Kaydet") onların yanında GRİ kalıyordu.
+              Üstelik SEÇİLİ olan çip yalnızca `outline: 2px solid var(--accent-1)` ile
+              işaretleniyordu — mavi bir düğmenin üzerine mavi halka; ölçüldü, dolgu ile halka
+              arasındaki kontrast 1.00:1'e yakın, yani hangisinin seçili olduğu GÖRÜNMÜYORDU.
+              Şimdi çip nötr bir yüzey; seçili olan üç kanaldan birden konuşuyor: dolgu tonu,
+              vurgu rengindeki kenar ve `aria-pressed` (ekran okuyucu ile klavye kullanıcısı için
+              tek kanal renk olamaz).
+            -->
             <h4>{{ t("panel.siteBuilder.templateLabel") }}</h4>
             <div class="sb-choices">
               <button
                 v-for="item in catalog?.templates ?? []"
                 :key="item.id"
                 type="button"
+                :aria-pressed="project.templateId === item.id"
                 :class="['sb-choice', { active: project.templateId === item.id }]"
                 @click="project.templateId = item.id">
                 {{ t(item.labelKey) }}
@@ -81,6 +106,7 @@
                 v-for="item in catalog?.palettes ?? []"
                 :key="item.id"
                 type="button"
+                :aria-pressed="project.paletteId === item.id"
                 :class="['sb-choice', { active: project.paletteId === item.id }]"
                 @click="project.paletteId = item.id">
                 <span class="sb-swatch" :style="{ background: item.accent, borderColor: item.text }"></span>
@@ -94,6 +120,7 @@
                 v-for="item in catalog?.fonts ?? []"
                 :key="item.id"
                 type="button"
+                :aria-pressed="project.fontId === item.id"
                 :class="['sb-choice', { active: project.fontId === item.id }]"
                 @click="project.fontId = item.id">
                 {{ t(item.labelKey) }}
@@ -129,7 +156,20 @@
               </label>
             </template>
 
-            <details v-for="section in activeSections" :key="section.type" class="sb-section" open>
+            <!--
+              KAPALI BÖLÜM KAPALI AÇILIR — bilgi GİZLENMEZ, sırası düzelir.
+              ÖLÇÜLDÜ: beş bölümün BEŞİ DE `open` ile açık başlıyordu (başlık + gövde + görsel +
+              iletişim alanları + öğe listesi). Yeni bir sayfada yalnız "hakkında" etkin gelir
+              (bkz. `addPage`), yani kullanıcı dört adet KAPALI bölümün boş alanlarını kaydırarak
+              geçmek zorundaydı; sayfanın gerçekten yayınlanacak tek bölümü bu yığının içinde
+              kayboluyordu.
+              `<details>` YERİNDE DURUYOR ve içerik SİLİNMİYOR: kapalı bölüm tek satır kalır,
+              rozeti "Kapalı" yazar, tek tıkla açılır, klavyeyle gezilir ve tarayıcının sayfa içi
+              araması kapalıyken de bulup açar. Panonun referans bloğunda alınan kararın aynısı.
+              Bağlama TEK YÖNLÜ: kullanıcı bir bölümü elle açtıysa, `enabled` değişmediği sürece
+              Vue o durumu geri almaz.
+            -->
+            <details v-for="section in activeSections" :key="section.type" class="sb-section" :open="section.enabled">
               <summary>
                 {{ t(`panel.siteBuilder.section.${section.type}`) }}
                 <span v-if="!section.enabled" class="status-pill">{{ t("panel.status.disabled") }}</span>
@@ -223,10 +263,16 @@
             <h4>{{ t("panel.siteBuilder.images") }}</h4>
             <p class="meta">{{ t("panel.siteBuilder.imagesHint", { size: maxImageMb }) }}</p>
             <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" @change="uploadImage" />
+            <!-- GÖRSEL SİLME TEHLİKE TONUNDA. Bu ekrandaki tek GERİ DÖNÜŞSÜZ düğme budur: dosya
+                 sunucudan silinir (`removeImage` yorumu). Yanındaki bütün düğmeler ("Öğe ekle",
+                 "Sayfayı kaldır", "Önizlemeyi yenile") taslak üzerinde çalışır ve kaydedilmeden
+                 geri alınabilir; hepsi AYNI gri kutuydu. Galeride silme düğmeleri yan yana
+                 dizildiği için yanlış kareye tek tık, yayındaki bir sayfanın görselini yok
+                 etmeye yetiyordu. Onay diyaloğu AYNEN duruyor; ton, onaydan ÖNCEKİ kanaldır. -->
             <div v-if="images.length" class="sb-gallery">
               <figure v-for="image in images" :key="image.name">
                 <img :src="imageUrl(image.name)" :alt="image.name" loading="lazy" />
-                <button type="button" class="secondary" @click="removeImage(image.name)">
+                <button type="button" class="danger compact" @click="removeImage(image.name)">
                   {{ t("panel.siteBuilder.deleteImage") }}
                 </button>
               </figure>
@@ -789,12 +835,17 @@ function report(error: unknown) {
 <style scoped>
 .sb-view {
   display: grid;
-  gap: 16px;
+  gap: var(--sp-16);
 }
 
+/* 18px ölçek DIŞIYDI (bkz. styles/base.css `--sp-*`); 16'ya taşındı ve böylece düzenleyici ile
+   önizleme arasındaki boşluk, panelin kendi dikey ritmiyle (16) aynı sayı oldu.
+   `align-items: start` KORUNDU ve kritik: bu iki sütun (düzenleyici / önizleme) çok farklı
+   uzunlukta; `stretch` olsaydı kısa olan uzun olana gerilir ve panoda ölçülen "başlıkla içerik
+   arasında yüzlerce piksel boşluk" hatası burada da çıkardı. */
 .sb-layout {
   display: grid;
-  gap: 18px;
+  gap: var(--sp-16);
   grid-template-columns: 1fr;
   align-items: start;
 }
@@ -812,16 +863,18 @@ function report(error: unknown) {
 .sb-preview {
   min-width: 0;
   display: grid;
-  gap: 8px;
+  gap: var(--sp-8);
   position: sticky;
-  top: 12px;
+  top: var(--sp-12);
 }
 
 .sb-preview-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--sp-10);
+  /* Uzun bir sayfa adı ile yanındaki "Yenile" düğmesi dar panelde birbirini eziyordu. */
+  flex-wrap: wrap;
 }
 
 .sb-frame {
@@ -838,93 +891,154 @@ function report(error: unknown) {
 .sb-choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-12);
 }
 
+/* SEÇİM ÇİPİ — birincil düğme DEĞİL, bir seçenek. Gerekçe ve ölçüm şablondaki yorumda.
+   `button`un gradyanı, gölgesi ve hover'da 1px zıplaması burada sıfırlanıyor: bunlar
+   "basılacak eylem" dilidir, oysa çip bir DURUM taşır. Kalıp panelin sekme şeridiyle
+   (`.segmented-tabs button`, base.css) aynı: düz yüzey + seçilide vurgu. */
 .sb-choice {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
+  padding: var(--sp-6) var(--sp-12);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text-strong);
+  font-weight: 600;
+  box-shadow: none;
 }
 
+.sb-choice:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent-1) 45%, transparent);
+  background: var(--surface-2);
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+/* SEÇİLİ ÇİP ÜÇ KANAL: dolgu tonu + vurgu kenarı + `aria-pressed` (şablonda).
+   Eski `outline: 2px solid var(--accent-1)` KALDIRILDI çünkü `outline` odak halkasının
+   kanalıdır (base.css `:focus-visible`); seçime de aynı çizgiyi vermek, klavyeyle gezen
+   kullanıcıda "seçili" ile "odakta"yı ayırt edilemez yapıyordu.
+   Metin `--accent-text` ile yazılıyor, `--accent-1` ile DEĞİL: ölçüldü, açık temada vurgunun
+   %12'lik tonu üzerinde `--accent-1` 3.7:1 (AA eşiği 4.5), `--accent-text` 4.6:1. */
 .sb-choice.active {
-  outline: 2px solid var(--accent-1);
+  border-color: var(--accent-1);
+  background: color-mix(in srgb, var(--accent-1) 12%, transparent);
+  color: var(--accent-text);
 }
 
 .sb-swatch {
   width: 14px;
   height: 14px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid;
   display: inline-block;
+  /* Çip küçüldüğü için renk karesi ezilmemeli: flex çocuğu olarak daralabiliyordu. */
+  flex: none;
 }
 
 .sb-section {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-lg);
-  padding: 10px 12px;
-  margin-bottom: 12px;
+  padding: var(--sp-10) var(--sp-12);
+  margin-bottom: var(--sp-12);
 }
 
+/* Özet satırı artık bir bölüm BAŞLIĞI gibi okunmalı: kapalıyken ekranda o bölümden geriye kalan
+   tek şey odur. Rozetle arasına gerçek bir boşluk konuyor (öncesinde `status-pill` metne
+   yapışıyordu, çünkü `summary` düz satır içi akış). */
+/* `display` BİLEREK DEĞİŞTİRİLMEDİ (panonun katlanır referans bloğunda alınan kararın aynısı):
+   `summary` varsayılan olarak `list-item`tır ve açılır üçgeni o değerden gelir. `flex`/`grid`
+   yazmak işaretçiyi SESSİZCE yok eder — "burada katlanmış bir şey var" diyen tek görsel ipucu
+   odur ve bölümler artık kapalı da başlayabildiği için o ipucu kritik.
+   Boy `--fs-h4`e çıkarıldı: kapalı bir bölümden ekranda geriye kalan TEK şey bu satır, yani
+   artık bir bölüm başlığı; eskiden gövde metniyle aynı boydaydı ve yalnız 600 kalınlıkla
+   ayrılıyordu. */
 .sb-section summary {
   cursor: pointer;
-  font-weight: 600;
+  font-size: var(--fs-h4);
+  font-weight: 640;
+}
+
+/* Rozet başlığa YAPIŞIYORDU: `summary` satır içi akış, aradaki tek boşluk kaynak kodundaki
+   satır sonuydu ve bazı sarmalarda o da kayboluyordu. */
+.sb-section summary .status-pill {
+  margin-left: var(--sp-8);
 }
 
 .sb-item {
   border: 1px dashed var(--panel-border);
   border-radius: var(--radius-lg);
-  padding: 10px;
-  margin-bottom: 10px;
+  padding: var(--sp-10);
+  margin-bottom: var(--sp-10);
 }
 
 .sb-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0;
+  gap: var(--sp-8);
+  margin: var(--sp-8) 0;
 }
 
 .sb-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 10px;
-  margin-top: 10px;
+  gap: var(--sp-10);
+  margin-top: var(--sp-10);
 }
 
 .sb-gallery figure {
   margin: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .sb-gallery img {
   width: 100%;
   height: 90px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--panel-border);
 }
 
 .sb-filelist {
-  margin: 6px 0;
-  padding-left: 18px;
+  margin: var(--sp-6) 0;
+  padding-left: var(--sp-20);
   display: grid;
-  gap: 2px;
+  gap: var(--sp-2);
+}
+
+/* Bu ekranda `<code>` yalnız DOSYA YOLU taşıyor (yayın hedefi, yazılacak dosyalar, öksüz
+   dosyalar, çakışmalar) ve hiçbiri biçimlendirilmiyordu: gövde yazısıyla aynı değişken
+   genişlikli fontta akıyorlardı. Ölçüldü, sorun somut: "iletisim/index.html" ile
+   "iletisim-2/index.html" arasındaki fark göz taramasıyla yakalanamıyor, oysa yayın sekmesinin
+   TEK işi kullanıcıya hangi dosyanın ezileceğini göstermek. `--font-mono` base.css'te tanımlı
+   tek kaynak; ekran kendi yedek listesini uydurmuyor. */
+code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
 }
 
 .sb-warn {
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
+/* 0.8rem ölçek dışıydı; `--fs-xs` (0.82rem) en yakın adım (fark 0.27px). */
 .sb-note {
-  font-size: 0.8rem;
+  font-size: var(--fs-xs);
 }
 
 .sb-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-8);
+  /* Sayfa kartındaki iki düğme dar sütunda birbirini eziyordu. */
+  flex-wrap: wrap;
 }
 </style>

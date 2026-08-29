@@ -1253,7 +1253,8 @@ watch(isAdmin, loadServerSwitch, { immediate: true });
   flex: 0 0 auto;
   min-width: 6.5rem;
   text-align: center;
-  font-size: 0.75rem;
+  /* 0.75rem = 10.12px idi — olcek tabani `--fs-2xs` (10.53px); altina inen kural yok. */
+  font-size: var(--fs-2xs);
   font-weight: 700;
   padding: 0.15rem 0.4rem;
   border: 1px solid transparent;

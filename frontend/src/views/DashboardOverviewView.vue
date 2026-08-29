@@ -237,7 +237,6 @@
       <section class="panel">
         <div class="section-head">
           <h2>{{ t("panel.system.network") }}</h2>
-          <span class="meta">{{ t("panel.audit.title") }}</span>
         </div>
 
         <div v-if="overview" class="mini-table">
@@ -252,6 +251,22 @@
             <span>{{ formatSpeed(network.bytesReceivedPerSecond) }}</span>
             <span>{{ formatSpeed(network.bytesSentPerSecond) }}</span>
           </div>
+        </div>
+
+      </section>
+
+      <!--
+        DENETİM KAYITLARI KENDİ PANELİNE ALINDI.
+
+        Eskiden ağ arayüzleri paneliyle AYNI kutunun içindeydi ve kendi başlığı, o panelin
+        başlık çubuğuna sağ tarafa `meta` olarak sıkıştırılmıştı. Canlı panelde ölçüldü: başlık
+        oraya sığmıyor ve "Audit kayıtlı…" diye KESİK görünüyordu — yani bölümün adı okunmuyordu.
+        Ayrıca iki bölüm tek kutuda olunca ağ tablosunun altındaki kayıtlar, tablonun devamı gibi
+        okunuyordu; oysa alakasız iki şey.
+      -->
+      <section class="panel">
+        <div class="section-head">
+          <h2>{{ t("panel.audit.title") }}</h2>
         </div>
 
         <div class="audit-preview">
@@ -607,6 +622,13 @@ function formatTimeSpan(value: string): string {
 
 .overview-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+
+  /* PANELLER KENDİ YÜKSEKLİĞİNDE DURUR.
+     Izgaranın varsayılanı `stretch`: iki panel satırın en uzununa göre GERİLİYORDU. Canlı
+     panelde ölçüldü — "Sunucu bilgisi" başlığı ile ilk kartı arasında **~180px boş alan**
+     oluşuyordu, çünkü panel komşusu kadar uzuyor ve içindeki ızgara fazla yeri dağıtıyordu.
+     Kullanıcı bunu "boşluk kalmış, karışık" diye görüyor; oysa sebebi içerik değil hizalama. */
+  align-items: start;
 }
 
 .meter-grid {

@@ -2,12 +2,18 @@
   <section class="panel module-shell users-workspace">
     <!-- Servis planları (panel): limit şablonu tanımla, müşteriye ata. Yalnız admin. -->
     <div v-if="isAdmin" class="form-surface plans-card">
-      <div class="plans-head">
+      <!-- Ortak `.section-head` devralindi (base.css): kapsamli `.plans-head` kopyasi ayni uc
+           ozelligi yaziyordu, tek eksigi `flex-wrap` idi — dar panelde baslik ile dugme ayni
+           satirda birbirini eziyordu. Baslik `<strong>` (13.5px) yerine `<h3>` (15.9px):
+           bu sayfada UC ayri bolum var ve hicbirinin baslik rutbesi yoktu. -->
+      <div class="section-head">
         <div>
-          <strong>{{ t("panel.plans.title") }}</strong>
+          <h3>{{ t("panel.plans.title") }}</h3>
           <p class="meta">{{ t("panel.plans.hint") }}</p>
         </div>
-        <button type="button" class="compact" @click="planFormunuAcKapa">
+        <!-- IKINCIL: sayfanin birincil eylemi "Kullanici olustur". Ikisi de birincil maviyken
+             yonetici hangisinin sayfanin isi oldugunu ayirt edemiyordu. -->
+        <button type="button" class="secondary compact" @click="planFormunuAcKapa">
           {{ showPlanForm ? t("panel.common.cancel") : t("panel.plans.add") }}
         </button>
       </div>
@@ -15,10 +21,13 @@
       <div v-if="servicePlans.length" class="plans-grid">
         <article v-for="plan in servicePlans" :key="plan.id" class="plan-card">
           <div class="plan-card-head">
-            <strong class="plan-name">{{ plan.name }}</strong>
+            <h4 class="plan-name">{{ plan.name }}</h4>
             <span class="plan-card-actions">
               <button type="button" class="secondary compact" @click="planiDuzenle(plan)">{{ t("panel.common.edit") }}</button>
-              <button type="button" class="secondary compact danger" @click="removeServicePlan(plan)">{{ t("panel.common.delete") }}</button>
+              <!-- `secondary danger` BIRLIKTE yaziliyordu: base.css'te `.danger` sonra geldigi
+                   icin dolgu zaten kirmizi ciziliyor, `.secondary`den geriye yalniz yersiz bir
+                   gri KENAR kaliyordu. Tek sinif birakildi; gorunen fark o kenarin gitmesi. -->
+              <button type="button" class="danger compact" @click="removeServicePlan(plan)">{{ t("panel.common.delete") }}</button>
             </span>
           </div>
           <ul class="plan-limits">
@@ -46,13 +55,17 @@
       </p>
       <!-- ÇEKİLEMEDİ ile YOK ayrı gösterilir; ikisini birleştirmek yöneticiye var olan planları
            yok diye sunmak olurdu. -->
-      <p v-else-if="plansError" class="notice error plans-empty" role="alert">{{ plansError }}</p>
+      <p v-else-if="plansError" class="notice error" role="alert">{{ plansError }}</p>
       <p v-else class="empty-state plans-empty">{{ t("panel.plans.empty") }}</p>
 
       <form v-if="showPlanForm" class="plan-form-grid" @submit.prevent="planiKaydet">
         <!-- Plan ABONELIKLERE BAGLI: duzenlemek bagli butun musterilerin limitlerini degistirir.
              Bunu sessizce yapmak, bir kotayi farkinda olmadan dusurmeye yol acardi. -->
-        <p v-if="duzenlenenPlanId" class="notice warn plan-form-hint">{{ t("panel.plans.editWarning") }}</p>
+        <!-- `notice warn` HICBIR YERDE TANIMLI DEGILDI (yalniz AppStoreView'in kendi kapsamli
+             stilinde var; kapsamli stil bilesenler arasi gecmez): bu uyari MAVI bilgi seridi
+             olarak ciziliyordu, yani "bagli butun musterilerin limiti degisecek" uyarisi bir
+             bilgi notundan ayirt edilemiyordu. Ortak `warn-banner` kehribar cizer. -->
+        <p v-if="duzenlenenPlanId" class="notice warn-banner form-note">{{ t("panel.plans.editWarning") }}</p>
         <label class="stacked-field plan-name-cell">
           <span class="field-label">{{ t("panel.plans.name") }}</span>
           <input v-model.trim="planForm.name" :placeholder="t('panel.plans.namePlaceholder')" />
@@ -96,8 +109,8 @@
           <input v-model.number="planForm.maxBackupsPerDay" type="number" min="0" max="24" />
           <small class="field-hint">{{ t("panel.plans.backupsHint") }}</small>
         </label>
-        <p class="plan-form-hint">{{ t("panel.plans.formHint") }}</p>
-        <div class="plan-form-actions">
+        <p class="hint form-note">{{ t("panel.plans.formHint") }}</p>
+        <div class="form-actions">
           <button type="submit" class="compact" :disabled="!planForm.name || planKaydediliyor">
             {{ duzenlenenPlanId ? t("panel.common.save") : t("panel.plans.add") }}
           </button>
@@ -107,15 +120,22 @@
 
     <div class="module-toolbar">
       <div>
-        <strong>{{ t("panel.users.title") }}</strong>
+        <h3>{{ t("panel.users.title") }}</h3>
         <p class="meta">{{ t("panel.settings.usersHint") }}</p>
       </div>
-      <button class="compact" @click="showUserCreateForm = !showUserCreateForm">
+      <!-- Ayni dugme hem "Olustur" hem "Iptal": IPTAL ASLA BIRINCIL DEGILDIR. Form aciklen
+           birincil eylem asagidaki gonder dugmesidir; ust dugme o an ikincile duser, boylece
+           ekranda her durumda TEK mavi dugme kalir. -->
+      <button :class="['compact', { secondary: showUserCreateForm }]" @click="showUserCreateForm = !showUserCreateForm">
         {{ showUserCreateForm ? t("panel.common.cancel") : t("panel.users.create") }}
       </button>
     </div>
 
-    <form v-if="showUserCreateForm" class="form-surface form-grid user-create-grid" @submit.prevent="createUser">
+    <!-- `user-create-grid` KALDIRILDI: yaptigi tek sey ortak `.form-grid`in zaten verdigi
+         3 sutunu tekrar yazmak, sonra da 980px'te DOGRUDAN tek sutuna dusmekti. Ortak merdiven
+         3 -> 2 (900px) -> 1 (720px) seklinde; yani 900-980 arasinda bu form panelin geri
+         kalanindan farkli davraniyor, tek sutuna dusup gereksiz yere uzuyordu. -->
+    <form v-if="showUserCreateForm" class="form-surface form-grid" @submit.prevent="createUser">
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.users.userName") }}</span>
         <input v-model="createUserForm.userName" minlength="3" maxlength="32" required />
@@ -188,7 +208,7 @@
         <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
         <input v-model.number="createUserForm.maxScheduledTasks" type="number" min="0" />
       </label>
-      <p v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
+      <p v-if="createUserForm.role === 'Customer' && !createUserForm.parentUserId" class="hint form-note">{{ t("panel.plans.formHint") }}</p>
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.form.language") }}</span>
         <select v-model="createUserForm.preferredLanguage">
@@ -196,11 +216,15 @@
           <option value="en">{{ t("panel.language.en") }}</option>
         </select>
       </label>
-      <label class="check-field welcome-cell">
+      <!-- `welcome-cell` HICBIR SEY YAPMIYORDU (kapsamli stilde tanimi yoktu); kaldirildi. -->
+      <label class="check-field">
         <input v-model="createUserForm.sendWelcomeEmail" type="checkbox" />
         <span>{{ t("panel.users.sendWelcomeEmail") }}</span>
       </label>
-      <div class="form-submit-cell">
+      <!-- Gonder dugmesi bir IZGARA HUCRESI degil, formun KAPANIS SATIRI: tam genislikte ve
+           saga hizali. Onceden ucuncu sutunda, komsu bir alanin hizasinda duruyordu ve alan
+           sayisi role gore degistigi icin her rolde baska bir yere kayiyordu. -->
+      <div class="form-actions">
         <button type="submit" class="compact">{{ t("panel.users.create") }}</button>
       </div>
     </form>
@@ -247,28 +271,38 @@
         <span :class="['status-pill', user.isTwoFactorEnabled ? 'ok' : 'warn']">
           {{ user.isTwoFactorEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
         </span>
+        <!-- EYLEM SERIDI IKI BOLGEYE AYRILDI. Onceden dort dugme tek bir sirada, saga yasli
+             duruyordu ve gorunen dugme sayisi satira gore 2-4 arasinda degisiyordu (kilit
+             yalnizca kilitli hesapta, "Giris yap" yalnizca musteride, "Sil" kendi hesabinda
+             hic yok). Sonuc: bir satirda "Sil"in bulundugu nokta, bir alt satirda "Duzenle"
+             oluyordu. Yikici bolge artik KOSULSUZ ciziliyor (icindeki dugme kosullu), yani
+             "Sil" her satirda AYNI sutunda. -->
         <span class="user-row-actions">
-          <!-- Hatalı giriş kilidi: beklemeden aç (doğru parolayla da kalkar, bu kısayol). -->
-          <button
-            v-if="user.lockedUntilUtc"
-            class="secondary compact row-button"
-            :disabled="unlockingUserId === user.id"
-            @click="unlockUser(user)">
-            {{ unlockingUserId === user.id ? t("panel.users.unlocking") : t("panel.users.unlock") }}
-          </button>
-          <button
-            v-if="user.role === 'Customer'"
-            class="secondary compact row-button"
-            @click="impersonateUser(user)">
-            {{ t("panel.users.loginAs") }}
-          </button>
-          <button class="secondary compact row-button" @click="selectUser(user)">{{ t("panel.users.edit") }}</button>
-          <button
-            v-if="user.id !== authStore.session?.user?.id"
-            class="danger compact row-button"
-            @click="deleteUser(user)">
-            {{ t("panel.users.delete") }}
-          </button>
+          <span class="row-tools">
+            <!-- Hatalı giriş kilidi: beklemeden aç (doğru parolayla da kalkar, bu kısayol). -->
+            <button
+              v-if="user.lockedUntilUtc"
+              class="secondary compact row-button"
+              :disabled="unlockingUserId === user.id"
+              @click="unlockUser(user)">
+              {{ unlockingUserId === user.id ? t("panel.users.unlocking") : t("panel.users.unlock") }}
+            </button>
+            <button
+              v-if="user.role === 'Customer'"
+              class="secondary compact row-button"
+              @click="impersonateUser(user)">
+              {{ t("panel.users.loginAs") }}
+            </button>
+            <button class="secondary compact row-button" @click="selectUser(user)">{{ t("panel.users.edit") }}</button>
+          </span>
+          <span class="row-danger">
+            <button
+              v-if="user.id !== authStore.session?.user?.id"
+              class="danger compact row-button"
+              @click="deleteUser(user)">
+              {{ t("panel.users.delete") }}
+            </button>
+          </span>
         </span>
       </div>
     </div>
@@ -280,7 +314,11 @@
       <SubscriptionCard :user-id="selectedUserId" manageable />
     </div>
 
-    <form v-if="selectedUserId" class="form-surface form-grid user-edit-grid" @submit.prevent="saveUserChanges">
+    <!-- `user-edit-grid` KALDIRILDI: `align-items: end` alanlari ALTTAN hizaliyordu, oysa
+         formda alti ipuclu alanlar var; alt hizalama o hucrelerin etiketlerini yukari kacirip
+         basliklari kademeli gosteriyordu (ayni hata plan formunda da vardi, orada `start` ile
+         cozulmustu). Ortak `.form-grid`in varsayilan hizasi dogru olan. -->
+    <form v-if="selectedUserId" class="form-surface form-grid" @submit.prevent="saveUserChanges">
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.form.email") }}</span>
         <input v-model="selectedUserForm.email" type="email" required />
@@ -294,7 +332,7 @@
           <option value="Customer">{{ t("panel.role.customer") }}</option>
         </select>
       </label>
-      <p v-if="selectedUserForm.parentUserId" class="quota-hint settings-wide-field">{{ t("panel.users.subUserScopeNote") }}</p>
+      <p v-if="selectedUserForm.parentUserId" class="hint form-note">{{ t("panel.users.subUserScopeNote") }}</p>
       <label v-if="isAdmin && selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId && resellers.length > 0" class="stacked-field">
         <span class="field-label">{{ t("panel.users.owner") }}</span>
         <select v-model="selectedUserForm.ownerId">
@@ -330,7 +368,7 @@
         <span class="field-label">{{ t("panel.users.maxScheduledTasks") }}</span>
         <input v-model.number="selectedUserForm.maxScheduledTasks" type="number" min="0" />
       </label>
-      <p v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="quota-hint">{{ t("panel.plans.formHint") }}</p>
+      <p v-if="selectedUserForm.role === 'Customer' && !selectedUserForm.parentUserId" class="hint form-note">{{ t("panel.plans.formHint") }}</p>
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.form.language") }}</span>
         <select v-model="selectedUserForm.preferredLanguage">
@@ -342,9 +380,12 @@
         <input v-model="selectedUserForm.isActive" type="checkbox" />
         <span>{{ t("panel.users.isActive") }}</span>
       </label>
-      <div class="row-actions">
-        <button type="submit" class="compact">{{ t("panel.users.save") }}</button>
+      <!-- SIRA DEGISTI: ikincil solda, birincil SAGDA. Panelin geri kalaninda (ve onay
+           kutusunda) gonder dugmesi hep en sagda duruyor; burada tersiydi, yani "Kaydet"in
+           yeri bu tek formda farkliydi. -->
+      <div class="row-actions form-actions">
         <button type="button" class="secondary compact" @click="selectedUserId = ''">{{ t("panel.common.cancel") }}</button>
+        <button type="submit" class="compact">{{ t("panel.users.save") }}</button>
       </div>
     </form>
   </section>
@@ -782,59 +823,90 @@ function resolveApiMessage(error: unknown): string {
 </script>
 
 <style scoped>
+/*
+ * BU DOSYADAN SILINEN KOPYALAR (hepsi base.css'te zaten var, olculmus gorunen etkileriyle):
+ *   - `label:not(:where(...)) { display: grid }`  -> base `.form-grid label...` + `.stacked-field`
+ *     ayni isi yapiyor; bu gorunumdeki HER label uc siniftan birini (stacked-field / check-field /
+ *     checkbox) tasiyor, yani kural bir sey EKLEMIYORDU.
+ *   - `input/select/textarea { width: 100% }`     -> base.css satir 724'te BIREBIR ayni kural.
+ *   - `.checkbox`, `.checkbox input/span`         -> base.css'te tek kaynak olarak duruyor.
+ *   - `.wide-button`                              -> sablonda HIC kullanilmiyordu (olu kural).
+ *   - `.form-submit-cell button { width: auto }`  -> hicbir kural o dugmeyi germiyordu (olu).
+ *   - `.plans-head`                               -> ortak `.section-head`; kazanc `flex-wrap`.
+ *   - `.settings-wide-field`                      -> ortak `.form-note`ta birlesti.
+ */
+
 .users-workspace {
   align-content: start;
 }
 
+/* Atanan siteler: uzun liste formu itmesin diye KENDI ICINDE kayar. 180px olculmus bir
+   sinir — 26px'lik satirdan ~6 tanesi gorunur, yani kaydirilacagi belli olur ama tipik bir
+   musterinin sitelerini tek bakista gosterir. */
 .customer-sites {
   grid-column: 1 / -1;
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
   max-height: 180px;
   overflow-y: auto;
-  padding: 10px;
+  padding: var(--sp-10);
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
 }
 
+/* KUTU-ETIKET ARASI TEK KAYNAKTAN. Kapsamli kopya burayi `inline-flex; gap: 8px` yapiyordu,
+   ortak `.checkbox span` kurali ise ayrica 8px kenar bosluk veriyor: OLCULDU, arada 16px
+   olusuyordu — ayni formdaki `.check-field` satirlarinin (8px) tam iki kati. Izgara araligi
+   sifirlanir, boslugu tek bir kural (ortak `.checkbox span`) belirler. */
 .customer-sites .checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  gap: 0;
 }
 
-.settings-wide-field {
-  grid-column: 1 / -1;
-}
-
+/* SATIR TABANI 720 -> 860px. OLCULDU: ad sutunu 220 + uc durum sutunu ~3x90 + eylem seridi
+   ~320px (Kilidi ac 80 · Giris yap 85 · Duzenle 75 · Sil 50 + aralikar) + 4x12 aralik = 858px.
+   Ortak 720px tabaniyla eylem dugmeleri iki-uc satira sariyor, satir yuksekligi satirdan
+   satira degisiyor ve tablo "birbirine girmis" gorunuyordu. Tablo (.data-table) yatay kayar
+   ve BASLIK SATIRI ayni kaydirmanin icinde oldugu icin dar ekranda kaybolmaz. */
 .user-row {
   grid-template-columns: minmax(220px, 1.5fr) 0.75fr 0.7fr 0.7fr auto;
+  min-width: 860px;
 }
 
 .user-status-cell {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
+/* EYLEM SERIDI IKI BOLGE: okuma/duzenleme solda, YIKICI sagda ve AYRI.
+   Ayrac + sabit taban genislik, "Sil"i her satirda ayni sutunda tutar (bkz. sablondaki not).
+   68px olculdu: en uzun etiket "Delete" (13.5px/600 ~ 44px) + 2 x --sp-8 dolgu + 8px pay. */
 .user-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-8);
+}
+
+.row-tools {
   display: inline-flex;
-  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  gap: var(--sp-6);
+}
+
+.row-danger {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 68px;
+  padding-left: var(--sp-8);
+  border-left: 1px solid var(--panel-border);
 }
 
 .plans-card {
   display: grid;
-  gap: 14px;
-}
-
-.plans-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-12);
 }
 
 .plans-grid {
@@ -842,16 +914,19 @@ function resolveApiMessage(error: unknown): string {
      kart bozuk görünüyordu. 240px, tipik plan adlarını tek satırda tutuyor. */
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 .plan-card {
   border: 1px solid var(--panel-border);
-  border-radius: 12px;
+  /* IC kart, kapsayicisinin (`.form-surface`, --radius-md = 9px) yariCapindan BUYUK olamaz;
+     12px o iliskiyi ters ceviriyordu (dista 9, icte 12). */
+  border-radius: var(--radius-md);
   background: var(--surface-1);
-  padding: 12px 14px;
+  padding: var(--sp-12);
   display: grid;
-  gap: 10px;
+  gap: var(--sp-10);
+  /* Kartlar EŞIT YUKSEKLIGE GERILMEZ: icerik ustten dizilir. */
   align-content: start;
 }
 
@@ -859,24 +934,24 @@ function resolveApiMessage(error: unknown): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
+/* Plan adi artik `<h4>`: boyu ortak baslik merdiveninden gelir (--fs-h4, 14.3px). Onceden
+   0.98rem'lik bir `<strong>` idi, yani kart basligi govde metniyle (13.5px) neredeyse ayni
+   boydaydi ve kartin ici duz bir metin yigini gibi okunuyordu. */
 .plan-card-head .plan-name {
-  font-size: 0.98rem;
   min-width: 0;
   /* `anywhere` DEĞİL: "E2E Başlangıç" adını "Baslang" / "ic" diye kelime ortasından bölüyordu ve
      plan adı bozuk görünüyordu. `break-word` yalnızca kelimenin kendisi satıra sığmadığında böler. */
   overflow-wrap: break-word;
 }
 
-/* Düğmeler ne büyür ne küçülür: adın uzunluğu değiştikçe kartlar arasında yerleri kaymasın.
-   Bu ancak düğmeler DOĞAL genişlikteyken güvenlidir; görünümdeki `button { width: 100% }`
-   kuralıyla birlikteyken düğme kartı doldurup adı harf harf alt alta düşürüyordu. */
+/* Düğmeler ne büyür ne küçülür: adın uzunluğu değiştikçe kartlar arasında yerleri kaymasın. */
 .plan-card-actions {
   display: flex;
   flex: none;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .plan-card-head button {
@@ -889,16 +964,16 @@ function resolveApiMessage(error: unknown): string {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .plan-limits li {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 0.84rem;
-  padding: 4px 0;
+  gap: var(--sp-10);
+  font-size: var(--fs-sm);
+  padding: var(--sp-4) 0;
   border-top: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
 }
 
@@ -910,22 +985,25 @@ function resolveApiMessage(error: unknown): string {
   color: var(--text-muted);
 }
 
+/* Deger SAGDA (space-between) ve TABULAR: kartlar yan yana dizildigi icin "1024" ile "128"
+   alt alta dustugunde basamaklarin ayni sutuna oturmasi karsilastirmayi mumkun kilar. */
 .plan-limits li b {
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .plans-empty {
-  padding: 14px 0;
+  padding: var(--sp-16) 0;
 }
 
 .plan-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  gap: var(--sp-12);
   /* USTTEN hizala. "end" iken, altinda ipuc yazisi olan hucreler (aylik trafik, gecerlilik)
      digerlerinden uzun oldugu icin girdileri yukari kaciyor ve etiketler kademeli duruyordu. */
   align-items: start;
-  padding-top: 14px;
+  padding-top: var(--sp-12);
   border-top: 1px solid var(--panel-border);
 }
 
@@ -933,100 +1011,26 @@ function resolveApiMessage(error: unknown): string {
   grid-column: 1 / -1;
 }
 
-.plan-form-hint {
+/* IZGARANIN TAM GENISLIGINI KAPLAYAN NOT ve EYLEM SATIRI — tek kaynak.
+   Onceden ayni isi yapan DORT ad vardi: `.plan-form-hint`, `.quota-hint` (ikisi de birebir
+   `grid-column: 1/-1; margin: 0; muted; 0.8rem`), `.plan-form-actions` ve `.form-submit-cell`.
+   Metin bicimi artik ortak `.hint`ten gelir; buradaki tek is sutun genisligi. */
+.form-note {
   grid-column: 1 / -1;
   margin: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
 }
 
-.plan-form-actions {
+.form-actions {
   grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
+  gap: var(--sp-8);
 }
 
+/* Kota okumalari ("512 MiB / 5 GiB") satirlar boyunca alt alta karsilastiriliyor: basamaklar
+   esit genislikte olmali, yoksa iki satirdaki sayilar hizasiz gorunur. */
 .customer-meta {
   color: var(--accent-text);
-}
-
-.form-submit-cell {
-  display: flex;
-  align-items: end;
-}
-
-.form-submit-cell button {
-  width: auto;
-}
-
-.user-edit-grid {
-  align-items: end;
-}
-
-/* Onay kutusu satirlari DISARIDA: bunlar iki satirlik bir izgara degil, yan yana duran
-   kutu+etikettir. Kapsamli `label` kurali element duzeyinde oldugu icin global
-   `.check-field` kuralini eziyor, onay kutusu hucreyi kaplayip etiketi alt satira dusuruyordu.
-   `:where()` KULLANILIYOR, duz `:not()` DEGIL: `:not(.x)` argumaninin ozgullugunu kurala EKLER
-   ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
-   ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
-   ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
-label:not(:where(.check-field, .checkbox-field, .checkbox-row)) {
-  display: grid;
-  gap: 8px;
-}
-
-.checkbox {
-  grid-template-columns: auto 1fr;
-  align-items: center;
-}
-
-.checkbox input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-}
-
-.checkbox span {
-  margin-left: 8px;
-}
-
-/* FORM ALANLARI gerilir, DÜĞMELER gerilmez.
-   Bu kural düğmeleri de kapsıyordu ve görünümdeki HER düğmeyi tam genişlik yapıyordu: "Plan ekle"
-   ve "Kullanıcı oluştur" sayfayı baştan sona kaplıyor, plan kartlarındaki "Sil" düğmesi ise kartı
-   doldurup plan adını harf harf alt alta düşürüyordu. İstisna listesi (.row-button, .row-actions)
-   yalnız satır içi düğmeleri kurtarıyor, geri kalanı kurtarmıyordu.
-   Tam genişlik isteyen düğme bunu KENDİ sınıfıyla söyler (aşağıdaki .wide-button). */
-input:not([type="checkbox"]):not([type="radio"]),
-select,
-textarea {
-  width: 100%;
-}
-
-.wide-button {
-  width: 100%;
-}
-
-.user-create-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.quota-hint {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-@media (max-width: 980px) {
-  .user-create-grid,
-  .user-edit-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 760px) {
-  .settings-wide-field {
-    grid-column: auto;
-  }
+  font-variant-numeric: tabular-nums;
 }
 </style>
