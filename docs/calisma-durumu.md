@@ -388,3 +388,39 @@ Panel `engineLoadedInIis: True` diyor ama BILMIYOR: bu alan yalnizca `support ==
 den turetiliyor, o da yalnizca havuzun CLR SURUMUNE bakiyor. Modulun IIS'e kayitli olup
 olmadigi HIC olculmuyor. Bu makinede kayit dogruydu (`preCondition="runtimeVersionv4.0"`,
 `managedHandler` YOK -- dogrusu bu), ama kayit bozuk olsa panel yine "yuklu" derdi.
+
+---
+
+## 0.8.0 — panel gorsel elden gecirme (29.08.2026)
+
+`SHA256 84E6FDDC1209825CD0D3B73BD579F3C83050D7408654F3690E0DDBFE22C85314`
+**3881 test yesil**, 21 arayuz nobetcisi yesil.
+
+### Kok neden (kullanici: "birbirine girdi her sey")
+Vue'da `<style scoped>` bilesenler arasi GECMEZ ama paylasilan siniflar oyle kullaniliyordu:
+`.wide` 8 dosyada kullanilip HIC tanimli degildi · `.section-head` 48 kopyaydi, 8 dosyada yoktu ·
+`.ghost`/`.link-button` tanimsizdi (sessizce BIRINCIL mavi dugme). Ortak siniflar base.css'e
+alindi, kopyalar silindi, nobetci eklendi (>=2 bilesende kullanilan sinif tanimli olmali).
+Baslik merdiveni DUZDU (govde 13.5 / h4 13.5 / h3 13.5 / h2 15.9) -> 13.5/14.3/15.9/19.2.
+
+### Canli olculen gorsel hatalar (hepsi kapandi)
+Posta silme dugmelerinin YAZISI acik temada 1.09 kontrast · pano halkalarinin rengi SABITTI
+(disk hep kehribar, %98 CPU sakin mavi) · DNS'te 40 sahte yesil "iyi" rozeti · Yazilim
+ekraninda 1120px altinda TABLO BASLIKLARI siliniyordu · yedek uyari kutusu ALTTAKI satirin
+basligi gibi okunuyordu · menude 10 bolum ikonsuzdu.
+
+### TAM TASARIM TURU GORMEYEN EKRANLAR (kota nedeniyle ajanlar yarida durduruldu)
+UsersView · WebsiteWorkspaceView · SiteDetailView · SiteBackupView · AppToolkitView ·
+SiteBuilderView · MonitoringView · SecurityView · MigrationView · AppsView · AppStoreView ·
+ServerHealthView · ClusterView · FirewallView · ProxyView
+NOT: hepsi derleniyor, 21 nobetciden geciyor, sabit renk tasimiyor ve YENI base.css'i
+(bosluk olcegi, baslik merdiveni, odak halkasi, kontrast duzeltmeleri, ortak siniflar)
+devraldi. Yani bozuk degiller; yalniz kendilerine ozgu bir duzen turu gormediler.
+
+### ACIK KALAN (onceki turlardan)
+1. Sunucudaki alan adlari yanlis birim soyluyor (TrafficLimitGb -> GiB, DiskUsageMb -> MiB).
+   Yeniden adlandirmak JSON alan adlarini degistirir; panel + WHMCS modulu birlikte kirilir.
+2. Fatura modulu (PHP/WHMCS) calistirilarak denenmedi.
+3. Panel icerigine okunabilir bir max-width karari (2560px'de form alani basina ~750px olculdu).
+   60 ekrani ilgilendirdigi icin tek tarafli yapilmadi.
+4. `.wide` gercek anlam kazanacaksa 3. maddeyle birlikte ele alinmali.
