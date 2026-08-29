@@ -55,7 +55,30 @@ public sealed class CacheService(AdaPanelDbContext dbContext, ILogger<CacheServi
     // SCM "1053 hizmet yanıt vermedi" döner. Bu servis ise durumu Get-Service ile okuyordu; görev
     // adında bir SERVİS hiç var olmadığı için panel HER ZAMAN "Durduruldu" gösteriyordu.
     // "AdaMemcached" adı burada VARSAYILMAZ; kurulu bileşen kaydından okunur (aşağıda).
-    private static readonly CacheDescriptor MemcachedDescriptor = new("memcached", "Memcached", "AdaMemcached", 11211, "memcached.exe", RunsAsScheduledTask: true);
+    internal const int MemcachedDefaultPort = 11211;
+
+    /*
+     * SONDA PORTU TEST KANCASI — ve bunun sebebi bir kolaylık değil, GÜVENİLMEZ BİR NÖBETÇİYDİ.
+     *
+     * ÖLÇÜLDÜ: <c>MemcachedRuntimeTruthTests</c> gerçek 11211 portunu kullanıyordu. Bir test oraya
+     * sahte bir dinleyici bağlıyor, kardeş test ise "kimse cevap vermiyorsa Durduruldu" diye
+     * ölçüyor. İkisi de MAKİNENİN TAMAMINDA paylaşılan tek bir kaynağa bağlıydı: makinede gerçek
+     * bir memcached varsa, ya da sahte dinleyicinin soketi henüz tam kapanmadıysa, ikinci test
+     * "Running" görüp DÜŞÜYORDU. Tam koşumda kırmızı, tek başına yeşil — yani sonuç koda değil
+     * ORTAMA bağlıydı.
+     *
+     * Bu, testin yakalamaya çalıştığı hatadan daha pahalıdır: rastgele kırmızı yanan bir nöbetçi,
+     * bir süre sonra "yine o test" diye görmezden gelinir ve gerçekten bozulduğunda kimse bakmaz.
+     * Güvenilmez bir koruma, olmayandan beterdir.
+     *
+     * Port artık dışarıdan verilebiliyor; testler her koşuda BOŞ bir port seçip kendi dinleyicisini
+     * oraya kuruyor, böylece paylaşılan kaynak tümden ortadan kalkıyor. Üretimde değer HER ZAMAN
+     * varsayılandır: DI bu özelliği hiç set etmez.
+     */
+    internal int MemcachedProbePort { get; init; } = MemcachedDefaultPort;
+
+    private CacheDescriptor MemcachedDescriptor
+        => new("memcached", "Memcached", "AdaMemcached", MemcachedProbePort, "memcached.exe", RunsAsScheduledTask: true);
 
     public Task<CacheStatusDto> GetStatusAsync(CancellationToken cancellationToken = default)
     {

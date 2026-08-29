@@ -38,19 +38,51 @@ public sealed class MemcachedRuntimeTruthTests : IDisposable
         dbContext.Database.EnsureCreated();
     }
 
+    /// <summary>
+    /// URETIM VARSAYILANI 11211 KALMALI.
+    /// </summary>
+    /// <remarks>
+    /// Testler artik bos port kullaniyor (asagidaki BosPortBul). Bu, gercek portu SERBEST birakti:
+    /// biri varsayilani degistirse hicbir test kirmizi yanmazdi ve panel memcached'i yanlis porttan
+    /// yoklamaya baslardi -- calisan bir bilesen "Durduruldu" gorunurdu. Kancanin kendisi bir
+    /// kor nokta acmasin diye varsayilan ayrica sabitlenir.
+    /// </remarks>
+    [Fact]
+    public void Uretim_sonda_portu_varsayilani_11211()
+    {
+        Assert.Equal(11211, CacheService.MemcachedDefaultPort);
+        Assert.Equal(11211, new CacheService(dbContext).MemcachedProbePort);
+    }
+
+    /// <summary>
+    /// Isletim sisteminden BOS bir port ister ve numarasini dondurur.
+    /// </summary>
+    /// <remarks>
+    /// GERCEK 11211 KULLANILMIYOR, ve bu bilincli: testler once o portu paylasiyordu ve sonuc KODA
+    /// DEGIL ORTAMA baglıydi -- makinede gercek bir memcached varsa ya da kardes testin soketi
+    /// henuz kapanmadiysa "kimse cevap vermiyor" testi Running gorup dusuyordu. Tam kosumda
+    /// kirmizi, tek basina yesil. Rastgele kirmizi yanan bir nobetci bir sure sonra "yine o test"
+    /// diye gormezden gelinir; guvenilmez koruma, olmayandan beterdir. Port 0 ile baglanmak,
+    /// isletim sisteminin o an BOS oldugunu garanti ettigi bir port verir.
+    /// </remarks>
+    private static int BosPortBul()
+    {
+        var dinleyici = new TcpListener(IPAddress.Loopback, 0);
+        dinleyici.Start();
+        var port = ((IPEndPoint)dinleyici.LocalEndpoint).Port;
+        dinleyici.Stop();
+        return port;
+    }
+
     [Fact]
     public async Task GetStatus_WhenMemcachedAnswersOnItsPort_ReportsRunning()
     {
         BilesenKaydet("memcached", "AdaMemcached");
-        using var sahte = new SahteMemcached(11211);
-        if (!sahte.Dinliyor)
-        {
-            // 11211 baska bir sey tarafindan tutuluyorsa bu testin olcecegi sey kalmaz.
-            // Sessizce gecmektense durumu ACIKCA yaz: "olcemedik" ile "sorun yok" ayni sey degildir.
-            Assert.Fail("11211 portu baska bir surec tarafindan kullaniliyor; test olcum yapamadi.");
-        }
+        var port = BosPortBul();
+        using var sahte = new SahteMemcached(port);
+        Assert.True(sahte.Dinliyor, $"sahte memcached {port} portuna baglanamadi.");
 
-        var servis = new CacheService(dbContext);
+        var servis = new CacheService(dbContext) { MemcachedProbePort = port };
         var durum = await servis.GetStatusAsync();
 
         Assert.True(durum.Memcached.IsInstalled);
@@ -65,7 +97,9 @@ public sealed class MemcachedRuntimeTruthTests : IDisposable
     {
         BilesenKaydet("memcached", "AdaMemcached");
 
-        var servis = new CacheService(dbContext);
+        // Bos port: kimsenin dinlemedigi KESIN olan bir numara. Gercek 11211'e bakmak, makinede
+        // memcached kurulu oldugunda bu testi hatali kirmiziya dusururdu.
+        var servis = new CacheService(dbContext) { MemcachedProbePort = BosPortBul() };
         var durum = await servis.GetStatusAsync();
 
         Assert.True(durum.Memcached.IsInstalled);
