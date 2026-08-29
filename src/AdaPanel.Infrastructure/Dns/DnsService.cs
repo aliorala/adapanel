@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
@@ -786,6 +786,15 @@ public sealed partial class DnsService(
         public DateTime? LastRepairUtc { get; set; }
 
         public string LastStatus { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Son onarım tuttu mu. `LastStatus` anahtarının YANINDA duruyor, onun yerine değil:
+        /// anahtar kullanıcıya NE olduğunu söyler, bu alan arayüze hangi RENGİ çizeceğini.
+        /// Arayüzün anahtar dizgesini koklayarak renk seçmesi, anahtar bir gün değiştiğinde
+        /// sessizce bozulurdu. Bu alanı tanımayan ESKİ nöbetçi kaydında `null` kalır ve
+        /// "ölçülmedi" anlamına gelir — geçmiş kayıt yanlış renge boyanmaz.
+        /// </summary>
+        public bool? LastRepairOk { get; set; }
     }
 
     private sealed class ServerHealthProbe
@@ -864,8 +873,13 @@ public sealed partial class DnsService(
             {
                 LastAutoRepairUtc = watchdog.LastRepairUtc,
                 LastAutoRepairStatus = watchdog.LastStatus,
+                LastAutoRepairSucceeded = watchdog.LastRepairOk,
+                // Anahtar: bu deger yalnizca ekranda degil, `RepairServerAsync`'in
+                // `AppException("dns.server_not_installed", ..., before.Details)` cagrisinda
+                // AYRINTI olarak da kullaniciya cikiyor. PowerShell stderr'i ise oldugu gibi
+                // gecer -- o cevrilecek bir cumle degil, olculmus bir hata ciktisidir.
                 Details = string.IsNullOrWhiteSpace(run.StandardError)
-                    ? "DNS sunucu sağlığı ölçülemedi."
+                    ? "dns.health_unmeasurable"
                     : run.StandardError.Trim()
             };
         }
@@ -909,6 +923,7 @@ public sealed partial class DnsService(
             ZoneCount = probe.ZoneCount,
             LastAutoRepairUtc = watchdog.LastRepairUtc,
             LastAutoRepairStatus = watchdog.LastStatus,
+            LastAutoRepairSucceeded = watchdog.LastRepairOk,
             Details = details.ToString()
         };
     }
@@ -944,15 +959,36 @@ public sealed partial class DnsService(
         {
             var repaired = await RepairServerAsync(true, cancellationToken);
             watchdog.LastRepairUtc = DateTime.UtcNow;
+
+            // ANAHTAR + AYRINTI, sabit Turkce cumle DEGIL.
+            //
+            // OLCULEN HATA: bu alan (`DnsServerHealthDto.LastAutoRepairStatus`) Sunucu Sagligi
+            // ekraninda HAM basiliyor (`ServerHealthView.vue`: `{{ dns.lastAutoRepairStatus }}`),
+            // yani "ok: DNS servisi yeniden baslatildi..." cumlesini Ingilizce panelde de aynen
+            // goruyordu. Basindaki "ok:"/"failed:" oneki de kimsenin okumadigi bir makine
+            // isaretiydi; durumu zaten cumlenin kendisi soyluyor.
+            //
+            // Ayirici " — ": arayuzun `splitCompositeMessage`'i TAM OLARAK bu bicimi ayirir
+            // (anahtar + serbest teshis metni). Teshis kismi (`repaired.Details`,
+            // `exception.Message`) BILEREK cevrilmez: icinde `service=...; listening=...` gibi
+            // olculmus deger tasir, cevrilecek bir cumle degildir.
+            //
+            // Dosyada DURAN eski Turkce degerler bozulmaz: arayuz anahtar bicimine uymayan
+            // dizgeyi oldugu gibi basar, yani gecmis kayit okunakli kalir.
             watchdog.LastStatus = repaired.PubliclyBound
-                ? "ok: DNS servisi yeniden başlatıldı, genel adreste dinliyor."
-                : $"failed: yeniden başlatıldı ama hâlâ dinlemiyor ({repaired.Details})";
+                ? "dns.watchdog.repaired"
+                : $"dns.watchdog.still_unbound — {repaired.Details}";
+            // Renk kararı da anahtarla BİRLİKTE yazılır: "yeniden başlattım ama hâlâ genel
+            // adreste dinlemiyor" bir BAŞARISIZLIKTIR. Ekranda nötr gri yazıldığı sürece
+            // kullanıcı bunu "onarım yapıldı" diye okuyordu.
+            watchdog.LastRepairOk = repaired.PubliclyBound;
             await fileStore.WriteAsync(WatchdogPath, watchdog, cancellationToken);
         }
         catch (Exception exception)
         {
             watchdog.LastRepairUtc = DateTime.UtcNow;
-            watchdog.LastStatus = $"failed: {exception.Message}";
+            watchdog.LastStatus = $"dns.watchdog.repair_failed — {exception.Message}";
+            watchdog.LastRepairOk = false;
             await fileStore.WriteAsync(WatchdogPath, watchdog, cancellationToken);
             throw;
         }

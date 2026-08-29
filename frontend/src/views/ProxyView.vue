@@ -35,9 +35,21 @@
       </select>
     </div>
 
+    <!-- OKUNAMADI, YUKLENIYOR'DAN AYRI.
+         OLCULDU: `fetchConfiguration` patladiginda `currentConfiguration` null KALIYOR ve
+         asagidaki kosul hep dogru oluyordu -- ekran SONSUZA KADAR "Yukleniyor…" yaziyordu.
+         Ustteki kirmizi serit sebebi soyluyor ama sayfanin govdesi hâlâ "bekle" diyordu ve
+         kullanicinin CIKIS YOLU yoktu: yenileme dugmesi sayfanin ta tepesinde, uc satir
+         yukarida. `SectionLoadError` hem durumu duzeltiyor hem yerinde bir "Tekrar dene"
+         veriyor. Mesaji TEKRARLAMIYOR: ayni cumle uc satir yukarida zaten yaziyor. -->
+    <SectionLoadError
+      v-if="selectedSiteName && !currentConfiguration && configFailed"
+      :busy="proxyStore.loadingSiteName === selectedSiteName"
+      @retry="refreshConfiguration" />
+
     <!-- Yapılandırma sunucudan gelmeden özet "devre dışı", form da varsayılan değerlerle
          görünüyordu; kullanıcı proxy'yi kapalı sanıp yanlış karar veriyordu. -->
-    <p v-if="selectedSiteName && !currentConfiguration" class="empty-state" role="status" aria-live="polite">
+    <p v-else-if="selectedSiteName && !currentConfiguration" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
 
@@ -71,7 +83,14 @@
               <h3>{{ t("panel.proxy.configTitle") }}</h3>
               <p class="meta">{{ t("panel.proxy.configSubtitle") }}</p>
             </div>
-            <span :class="['status-pill', currentConfiguration?.isProxyEnabled ? 'ok' : 'warn']">
+            <!-- KAPALI PROXY BIR UYARI DEGIL. Ters vekil OPSIYONEL bir ozellik: panelin
+                 sitelerinin buyuk cogunlugu onu hic kullanmaz. Rozet `warn` iken bu ekran
+                 kapali olan HER sitede kehribar "dikkat" cizgisi gosteriyordu -- oysa
+                 olculen sey "bu sitede ters vekil yok", yani bir OLGU. Ayni karar bu
+                 dosyanin asagisinda kural sayaci icin, AppStoreView'de calisma ortami
+                 rozeti icin zaten verilmisti; burada atlanmisti. Etkin = `ok` KALDI:
+                 o gercekten dogrulanmis, calisan bir yapilandirmadir. -->
+            <span :class="['status-pill', { ok: currentConfiguration?.isProxyEnabled }]">
               {{ currentConfiguration?.isProxyEnabled ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
           </div>
@@ -226,6 +245,7 @@ import { useI18n } from "vue-i18n";
 import { useProxyStore } from "../stores/proxy";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice } from "../composables/useNotice";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
@@ -238,6 +258,9 @@ const sitesStore = useSitesStore();
 const { confirm } = useConfirm();
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
 const activeSection = ref<"proxy" | "rewrite">("proxy");
+// Seçili sitenin yapılandırması OKUNAMADI mı. Yalnız "null" bakmak yetmiyordu: null hem
+// "henüz gelmedi" hem "gelemedi" demekti ve ekran ikisini de "Yükleniyor…" diye çiziyordu.
+const configFailed = ref(false);
 
 const selectedSiteName = computed({
   get: () => sitesStore.selectedSiteName,
@@ -278,8 +301,10 @@ watch(selectedSiteName, async (siteName) => {
   }
 
   try {
+    configFailed.value = false;
     await proxyStore.fetchConfiguration(siteName);
   } catch (error) {
+    configFailed.value = true;
     showNotice(resolveApiMessage(error), true);
   }
 }, { immediate: true });
@@ -301,9 +326,11 @@ async function refreshConfiguration() {
   }
 
   try {
+    configFailed.value = false;
     await proxyStore.fetchConfiguration(selectedSiteName.value);
     showNotice(t("panel.proxy.refreshed"), false);
   } catch (error) {
+    configFailed.value = true;
     showNotice(resolveApiMessage(error), true);
   }
 }

@@ -105,6 +105,14 @@ export type DnsServerHealth = {
   needsRepair: boolean;
   lastAutoRepairUtc: string | null;
   lastAutoRepairStatus: string;
+  /*
+   * DURUM SUNUCUDAN GELİR, DİZGEDEN ÇIKARILMAZ.
+   * `lastAutoRepairStatus` bir çeviri anahtarı taşır; onun başına bakıp ("failed ile mi
+   * başlıyor") renk seçmek, sunucu anahtarı değiştirdiği gün sessizce bozulan bir yama olurdu.
+   * Başarı/başarısızlık kararını ölçen taraf sunucudur, bu alan onun cevabıdır.
+   * `null` = nöbetçi hiç çalışmadı ya da bu alan yokken yazılmış eski kayıt: ÖLÇÜLMEDİ.
+   */
+  lastAutoRepairSucceeded: boolean | null;
   details: string;
 };
 

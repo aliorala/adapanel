@@ -415,23 +415,41 @@ Commit'lenmemis ne varsa 5b2aeff'ten SONRA gelen ucus halindeki istir.
 
 ## SIRADAKI ISLER (oncelik sirasiyla)
 
-1. MIGRATIONVIEW yarim kaldi -- iki OLCULMUS bulgu acik:
-   (a) "Dosyalari cek" ve "Veritabanini aktar" bolum basliklari `<label><strong>`;
-       baslik merdiveninde YOKLAR, ekran okuyucu o iki bolume ulasamiyor.
-   (b) Kesif listesinde `d.hostingType` HAM basiliyor ve arka ucta IKI ANLAMA
-       geliyor: Plesk'te barindirma tipi ("virtual"), cPanel'de KULLANICI ADI
-       (SiteMigrationService.cs:406). Etiketsiz gosterildigi icin kullanici hangisini
-       gordugunu bilmiyor. Dogru duzeltme DTO'yu ayirmaktir.
+1. [KAPANDI] MIGRATIONVIEW -- iki bulgu da kapatildi:
+   (a) "Dosyalari cek" ve "Veritabanini aktar" artik GERCEK `h3`. Onay kutusu basligin
+       ICINDE kaldi (kutunun basligi ayni zamanda o kaynagi acan anahtar -- bilincli
+       tasarim). Yerel `.section-toggle strong { font-size: --fs-h4 }` SILINDI: o kural
+       bu iki basligi 14.3px'te tutuyordu, kardes bolum basliklari ise 15.9px -- ayni
+       rutbe iki ayri boyda ciziliyordu. Boy artik merdivenden geliyor.
+   (b) DTO AYRILDI (onerilen dogru duzeltme yapildi, borc birakilmadi):
+       `PleskDomainDto.HostingType` (yalniz Plesk) + `.AccountUser` (yalniz cPanel).
+       `SiteMigrationService` cPanel dali artik `AccountUser` yaziyor. Arayuzde alan
+       ETIKETLI ("Barindirma turu: virtual" / "Hesap kullanicisi: ali_shop") ve uzak yol
+       sablonundaki `{user}` `accountUser`'dan doluyor -- eskiden Plesk'te "virtual"
+       degerini `{user}` yerine gecirip `/home/virtual/...` uretebiliyordu.
+       Nobetci: `DiscoveryFieldMeaningTests` (4 test, mutasyonla dogrulandi).
 
-2. SERVERHEALTHVIEW artiklari:
-   (a) `dns.details` ham teshis dizgesi ekranda (`service=...; startMode=...`) --
-       `<details>` katlamasi + ~6 anahtarlik ceviri gerekiyor.
-   (b) `dns.startMode` cevrilmemis Windows degeri ("Auto"/"Manual") basiyor.
-   (c) `dns.lastAutoRepairStatus` sunucudan SABIT TURKCE "failed: ..." / "ok: ..."
-       geliyor ve basarisizlik NOTR renkte yaziliyor. Kok neden DnsService.cs:947.
-       Dizge koklamak YAMALAMA olur; arka ucta anahtar donmeli.
-   (d) DNS kurulu degilken kart tumuyle kayboluyor (`v-if="dns && dns.installed"`)
-       -- panel bir sey olcup hicbir sey soylemiyor.
+2. [KAPANDI] SERVERHEALTHVIEW artiklari:
+   (a) `dns.details` `<details>` icine KATLANDI -- ama yalniz MAKINE CIKTISI oldugunda.
+       Alan iki ayri sey tasiyor: olcum tuttugunda "service=...; startMode=..." (katlanir),
+       tutmadiginda `dns.health_unmeasurable` ANAHTARI (cevrilir ve ACIKTA kalir, cunku o
+       kartin cevabidir). Ayrimi panelin ortak `looksLikeMessageKey` sozlugu yapiyor.
+   (b) `dns.startMode` artik cevriliyor: Win32_Service'in GERCEK deger kumesi
+       (Boot/System/Auto/Automatic/Manual/Disabled/Unknown). BILINMEYEN deger anahtar
+       SANILMIYOR, oldugu gibi geciyor -- ham anahtar basmaktansa ham deger dogrudur.
+   (c) Arka uc anahtar donusunu BASKA BIR AJAN yapmisti (`dns.watchdog.*`, ceviriler dahil)
+       -- olculdu, dogruydu, DOKUNULMADI. Kalan yari renkti: basarisizlik hala NOTR
+       yaziliyordu. Dizge/anahtar koklamak yamalama olurdu (sunucu anahtari degistirdigi gun
+       sessizce bozulur), bu yuzden sunucu artik AYRI bir alanla soyluyor:
+       `DnsServerHealthDto.LastAutoRepairSucceeded` (bool?, `null` = OLCULMEDI, eski nobetci
+       kaydi yanlis renge boyanmaz). Nobetci: `DnsWatchdogSeverityTests` (4 test, mutasyonla
+       dogrulandi) -- durum METNI yazan her dal SIDDETINI de yazmak zorunda.
+   (d) DNS kurulu degilken kart artik GORUNUYOR, ucuncu bir durumda: `idle` (ne kirmizi ne
+       yesil), notr rozet "Kurulu degil" + rolun neden kurulu olmayabilecegini soyleyen bir
+       cumle. Olcum satirlari (dinlenen/beklenen adres, bolge sayisi) gizleniyor: hepsi
+       bos/sifir olurdu ve "olculemedi" ile "olculdu, bos cikti" ayni gorunurdu.
+       ONCE/SONRA OLCULDU: bu gelistirme makinesinde DNS servisi de DnsServer modulu de YOK,
+       yani eski kosul kartı burada TAMAMEN gizliyordu.
 
 3. TAM TASARIM TURU GORMEYEN, KALAN 4 EKRAN:
    AppStoreView · ProxyView · SiteDetailView · WebsiteWorkspaceView
@@ -446,11 +464,51 @@ Commit'lenmemis ne varsa 5b2aeff'ten SONRA gelen ucus halindeki istir.
    kendi imzali sertifikanin uyari sayfasi otomasyonla gecilemedi). Icerik hatalari
    kapandi, duzen turu acik.
 
+6. SUNUCUDAN GELEN SABIT TURKCE METIN -- AYIKLANDI, UC BOLUM KAPANDI, BUYUK BOLUM ACIK.
+   AYIKLAMA (yorumlar elenerek yeniden olculdu: 783 dizge / 93 dosya). Ham sayinin cogu
+   kullaniciya HIC ULASMIYOR: 183 yalniz `ILogger` satiri, 81 konsol kurtarma araci +
+   tepsi penceresi (KAPSAM DISI, kendi metin tablolari var), ~24 MCP arac aciklamasi
+   (yapay zeka istemcisine gider, panelin i18n'ine bagli degil), ~30 SiteBuilder/
+   abonelikten-cikma sayfasi (MUSTERININ SITESI, panel arayuzu degil), 14 gelistirici
+   istisnasi. GERCEKTEN EKRANA ULASAN: ~330 dizge.
+   KAPANANLAR (53 dizge):
+   (a) Uygulama katalogu (31) -- `AppStoreService` `Description`/`AutomaticSetup`/
+       `Requirements` artik ANAHTAR tasiyor, `AppStoreView` `serverText` ile cevirir.
+       Arama da cevrilmis metinde yapiliyor (yoksa kullanici EKRANDA GORDUGU kelimeyi
+       aratamazdi). Urun/dosya adlari (SQLite, PHP 8.3+, Composer) BILEREK ham birakildi.
+       Nobetci: `AppStoreCatalogLocalizationTests` (3 test, mutasyonla dogrulandi).
+   (b) DNS nobetci durumu + saglik ayrintisi (4) -- `dns.watchdog.*`, `dns.health_unmeasurable`.
+   (c) Denetim kaydi AYRINTI satiri (18) -- `AuditLogsView` eylem ADINI cevirir ama
+       ayrintiyi HAM basar; oraya yazilan Turkce cumle Ingilizce panelde de gorunuyordu.
+       Cozum cevirmek DEGIL, tekrari atmak: eylem etiketi zaten ayni seyi soyluyordu,
+       geriye dilden bagimsiz OLCUM kaldi (`zone=...; mode=secondary`). Bu arada
+       `panel.activity.action.dns.zone_switched_to_primary` cevirisinin HIC OLMADIGI
+       bulundu (ekranda ham kimlik goruluyordu) ve eklendi.
+       Nobetci: `AuditDetailLanguageTests` (mutasyonla dogrulandi; ilk surumu yanlis
+       pozitif verdi -- denetim cagrisinin ICINDEKI yorumlar elenmeden taraniyordu).
+   TEK KAYNAK: `useNotice.useServerText` -- `SiteRepairNotice`'in elle yazilmis kopyasi
+   silinip oraya bagli. Kural yeni degil, `utils/apiError`'in kuralinin ayni.
+   ACIK KALANLAR (sayilariyla, oncelik sirasiyla):
+   - `.htaccess` teshis metinleri ~200 dizge / 9 dosya (`HtaccessDirectiveCatalog` 76,
+     `HtaccessConfigurationBuilder` 36, `HtaccessRewriteModel` 24, `HtaccessParser` 15,
+     `HtpasswdFile` 14, `HtaccessAccessControl` 13, `HtaccessRewriteRunner` 10, digerleri).
+     `HtaccessDiagnostic.message` -> `SiteHtaccessView`, HAM basiliyor. EN BUYUK KALAN
+     BLOK. Yarim birakmak yanlis olurdu: 200 Apache-ozel cumle tek turda cevrilmeli.
+   - `SiteCascadeDeletionService` ~36 (site silme raporu: adim etiketleri, uyarilar,
+     "KISMEN SILINDI" satirlari) + `UserManagementService` ~8 ayni sinif (artik/leftover
+     gerekceleri). Cogu PARAMETRELI cumle: bileşik "anahtar — ayrinti" bicimi yetmez,
+     yer tutuculu anahtar gerekir.
+   - `SiteHealthService` 16 (site sagligi satirlari, agir interpolasyonlu).
+   - `WebmailService` 17, `MailService` 6, `BackupService` 6, `PhpService` 3, kalanlar tekil.
+   - `UserManagementService` hos geldin E-POSTASI (2 dizge): panel ekrani degil, alicinin
+     dili de bilinmiyor -- ayri bir karar gerektiriyor, kapsama alinmadi.
+   - `AppTemplateDto.DefaultRootFolder` bes sablonda `"site koku"` (Turkce ifade, klasor
+     adi degil). HICBIR YERDE OKUNMUYOR (ne arayuz ne kurulum kodu) -- olu alan; silinmesi
+     mi doldurulmasi mi gerektigi ayri bir karar, dokunulmadi.
+
 ## SUREN AJANLAR (kesildiyse isleri yarim kalmis olabilir)
 - WHMCS/PHP modulunu GERCEKTEN calistirma (integrations/whmcs/ altinda yeni test
   dosyalari acti: fake-panel.php, module-contract.test.php, whmcs-stub.php).
-- Sunucudan gelen SABIT TURKCE metinlerin kullaniciya ulastigi yerler (871 ham
-  dizge, 123 dosya olculdu; ayiklama isin asil kismi).
 - MigrationView + ServerHealthView artiklari (madde 1 ve 2).
 - Kalan 4 ekranin tasarim turu (madde 3).
 
@@ -543,7 +601,38 @@ devraldi. Yani bozuk degiller; yalniz kendilerine ozgu bir duzen turu gormediler
    (1) JSON sozlesmesi degisirse panel + WHMCS modulu AYNI ANDA kirilir, modulun testi yok,
    (2) WHMCS dokumantasyonu da barindirma kotalari icin 1 GB = 1024 MB kabul eder,
    (3) Plesk/cPanel dahil butun sektor ikilik sayip etikete "GB" yazar.
-2. Fatura modulu (PHP/WHMCS) calistirilarak denenmedi.
+2. [KAPANDI] Fatura modulu (PHP/WHMCS) artik GERCEKTEN calistiriliyor.
+   PHP bulundu: panelin barindirma icin kurdugu surum (`%ProgramData%\AdaPanel\runtimes\php\8.3`,
+   8.3.33). Kaynak paketin SHA-256'si components.json'daki karma ile BIREBIR ayni, `php.exe`
+   zip icindekiyle ayni ve `CompanyName = "The PHP Group"` (makinedeki PE infector yuzunden
+   zorunlu kontrol).
+   OLCUM: `php -l` -> 3 dosya, 0 hata (bu tek satir bile bugune kadar kosmamisti).
+   YENI NOBETCI: `integrations/whmcs/tests/module-contract.test.php` -- `AdaPanelClient`
+   MOCK'LANMIYOR; `php -S` ile sahte bir panel ayaga kalkiyor, modul ona gercek curl istegi
+   atiyor ve test yol/metot/baslik/alan adlarina bakiyor. 15 bolum, 135 denetim
+   (leftover-note ile birlikte PHP tarafinda toplam 162).
+   Sozlesme C# denetleyicileriyle karsilastirildi: uc/metot/alan adlarinda uyusmazlik YOK.
+   BIRIM: PHP tarafi hicbir cevrim yapmiyor, MB degeri aynen geciyor -- yani panelin 1024
+   tabaniyla ayrisma YOK; bu artik testle kilitli.
+   BULUNAN VE DUZELTILEN IKI GERCEK HATA:
+   (a) `TestConnection` YANLIS SEYI olcuyordu. Denedigi iki uc de Administrator VE Reseller'a
+       acik; asil yonetici kapisi `BillingController` (Administrator-only) hic denenmiyordu.
+       Bayi hesabiyla kurulan sunucu tanimi "baglanti basarili" diyor, sonra her iptal 403
+       aliyor ve `UsageUpdate` SESSIZCE hic guncellemiyordu (WHMCS donusu gostermez). Ayni uc
+       faturalama anahtari kapaliyken de 403 doner. Artik `GET /api/v1/billing/settings`
+       deneniyor; 403 (rol) ile `enabled:false` (anahtar kapali) AYRI mesajlar.
+   (b) Panel API anahtari yapilandirilmisken `ChangePassword` ve `ServiceSingleSignOn` OLUYDU.
+       `AuthController` cerez semasina sabitli, anahtarli istek 401 aliyor; kisit dosya bas
+       yorumunda YAZILIYDI ama koda hic gecmemisti ve modulun mesaji yoneticiyi saglam bir
+       anahtari yenilemeye gonderiyordu. Artik `/api/v1/auth/**` cagrilarinda anahtar bir
+       kenara birakilip cerezli oturum aciliyor (kural cagri yerinde degil `authorized()`
+       icinde tek yerde).
+   Dordu de MUTASYONLA dogrulandi (her duzeltme tek tek bozuldu, ilgili denetimler kirmizi
+   yandi, geri alindi).
+   KOSUM: `powershell -ExecutionPolicy Bypass -File scripts\run-whmcs-tests.ps1` -- PHP'yi arar,
+   `php -l` + iki davranis testini kosar; PHP bulamazsa SESSIZCE YESIL GECMEZ, cikis kodu 2.
+   HALA OLCULMEYEN: gercek bir WHMCS surumunun bu islevleri bekledigimiz parametrelerle
+   cagirdigi (bu depoda WHMCS+MySQL yigini yok).
 3. ~~Panel icerigine okunabilir bir max-width karari~~ -- **KAPANDI.**
    OLCULDU (canli panel, yayinlanan derleme, `html` 2560px'e zorlanarak): `.main-column` ve
    `.content-column` hicbir ust sinir tasimiyordu (yayinlanan CSS'te de dogrulandi). 2560px'de

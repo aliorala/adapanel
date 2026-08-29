@@ -23,8 +23,12 @@
           <strong>{{ featuredCount }}</strong>
           <span class="tile-label">{{ t("panel.appStore.automaticCount") }}</span>
         </span>
-        <button class="secondary compact" @click="refresh">
-          {{ t("panel.appStore.refresh") }}
+        <!-- `loading` OLCULDU: betikte SET EDILIYOR ama sablonda HIC OKUNMUYORDU. Yani
+             "Sablonlari yenile" tiklandiginda ekranda hicbir sey degismiyor, istek surerken
+             dugme tekrar tekrar tiklanabiliyordu. Bayrak zaten vardi, tek eksik onu
+             gostermekti. -->
+        <button class="secondary compact" :disabled="loading" @click="refresh">
+          {{ loading ? t("panel.common.loading") : t("panel.appStore.refresh") }}
         </button>
       </div>
     </div>
@@ -116,10 +120,14 @@
               <strong>{{ template.displayName }}</strong>
               <span v-if="template.featured" class="featured-pill">{{ t("panel.appStore.recommended") }}</span>
             </div>
-            <p class="meta">{{ template.description }}</p>
+            <!-- `serverText`: aciklama sunucudan ANAHTAR olarak gelir (store.template.<id>.description),
+                 metni sozluk verir. Ceviri yoksa deger oldugu gibi basilir. -->
+            <p class="meta">{{ serverText(template.description) }}</p>
             <div class="requirement-list">
+              <!-- Urun adlari ("PHP 8.3+", "Composer") ham gecer; yalniz Turkce baglac iceren
+                   gereksinim anahtar tasir. Ayrimi `serverText` yapar. -->
               <span v-for="requirement in template.requirements" :key="requirement">
-                {{ requirement }}
+                {{ serverText(requirement) }}
               </span>
             </div>
           </div>
@@ -131,7 +139,7 @@
         </div>
 
         <div class="automation-list">
-          <span v-for="step in template.automaticSetup" :key="step">{{ step }}</span>
+          <span v-for="step in template.automaticSetup" :key="step">{{ serverText(step) }}</span>
         </div>
 
         <!-- `.visually-hidden` -> `.sr-only`: base.css'te TEK KAYNAK olarak tanimli olan ad bu.
@@ -161,8 +169,20 @@
         </button>
       </article>
 
-      <p v-if="!templatesLoaded" class="empty-state" role="status" aria-live="polite">
+      <!-- UC AYRI DURUM, UC AYRI CUMLE. OLCULDU: uzerinde yalnizca IKI vardi ("yukleniyor" ve
+           "aramayla eslesen yok") ve ucuncusu -- KATALOG OKUNAMADI -- birincinin icine
+           dusuyordu: `getAppTemplates()` patlayinca `templatesLoaded` false kaliyor ve tablo
+           SONSUZA KADAR "Yukleniyor…" yaziyordu. Ustelik IIS yok yolunda (asagida) bildirim
+           bilerek temizleniyor, yani ikinci istek de basarisiz olursa ekranda hicbir sey
+           soylenmiyordu: donen bir bekleme, hata izi sifir.
+           Ayrica "aramayla eslesen bulunamadi" BOS KATALOGDA da yaziliyordu -- arama kutusu
+           bosken bile kullaniciya aramasini suclayan bir cumle. -->
+      <SectionLoadError v-if="catalogFailed" :busy="loading" @retry="refresh" />
+      <p v-else-if="!templatesLoaded" class="empty-state" role="status" aria-live="polite">
         {{ t("panel.common.loading") }}
+      </p>
+      <p v-else-if="templates.length === 0" class="empty-state">
+        {{ t("panel.appStore.catalogEmpty") }}
       </p>
       <p v-else-if="filteredTemplates.length === 0" class="empty-state">
         {{ t("panel.appStore.noResults") }}
@@ -184,14 +204,18 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getAppTemplates, installAppTemplate, type AppTemplate } from "../api/store";
 import { useConfirm } from "../components/ConfirmDialog.vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
+import { useServerText } from "../composables/useNotice";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
 const { writeGate } = useSubscriptionGate();
+// Katalog metinleri sunucudan ANAHTAR olarak gelir; ceviri karari tek kaynakta.
+const { serverText } = useServerText();
 const { confirm } = useConfirm();
 const sitesStore = useSitesStore();
 
@@ -199,6 +223,11 @@ const templates = ref<AppTemplate[]>([]);
 // Şablon listesi BİR KEZ başarıyla okundu mu. `loading` hata durumunda da false olur; boş dizi
 // "uygulama yok" gibi KESİN bir cümleye dönüşüyordu (bkz. SiteBackupView `listLoaded`).
 const templatesLoaded = ref(false);
+// Katalog isteği BAŞARISIZ döndü mü. `templatesLoaded` tek başına yetmez: false değeri "henüz
+// gelmedi" ile "gelmedi ÇÜNKÜ patladı"yı aynı kefeye koyuyordu ve ikincisinde ekran sonsuza
+// kadar "Yükleniyor…" yazıyordu. Elde ÇALIŞAN bir liste varken tekrar denenen istek patlarsa
+// bayrak yakılmaz — eski liste hâlâ doğru, hatayı üstteki şerit söyler.
+const catalogFailed = ref(false);
 const loading = ref(false);
 const busyTemplate = ref("");
 const notice = ref("");
@@ -234,13 +263,16 @@ const filteredTemplates = computed(() => {
   return templates.value
     .filter((template) => {
       const categoryMatches = activeCategory.value === "all" || template.category === activeCategory.value;
+      // ARAMA CEVRILMIS METINDE YAPILIR. Aksi halde arama kutusuna kullanicinin EKRANDA
+      // GORDUGU kelimeyi yazmak sonuc vermezdi: sablon alanlari artik "store.setup.download"
+      // gibi anahtar tasiyor, kullanici "download"/"indirme" yaziyor.
       const searchMatches = !query || [
         template.displayName,
-        template.description,
+        serverText(template.description),
         template.runtime,
-        template.category,
-        ...template.requirements,
-        ...template.automaticSetup
+        categoryLabel(template.category),
+        ...template.requirements.map(serverText),
+        ...template.automaticSetup.map(serverText)
       ].some((value) => value.toLocaleLowerCase().includes(query));
       return categoryMatches && searchMatches;
     })
@@ -273,6 +305,7 @@ async function refresh() {
   loading.value = true;
   try {
     sitesUnavailable.value = false;
+    catalogFailed.value = false;
     if (sitesStore.sites.length === 0 && !sitesStore.loading) {
       await sitesStore.fetchSites();
     }
@@ -295,11 +328,16 @@ async function refresh() {
       if (katalog) {
         templates.value = katalog;
         templatesLoaded.value = true;
+      } else if (!templatesLoaded.value) {
+        // İkinci istek de patladı: bildirim BİLEREK temizlendiği için burada susmak, ekranı
+        // hiçbir açıklaması olmayan bir beklemede bırakırdı.
+        catalogFailed.value = true;
       }
       showNotice("", false);
       return;
     }
 
+    catalogFailed.value = !templatesLoaded.value;
     showNotice(resolveApiMessage(error), true, extractApiDetails(error));
   } finally {
     loading.value = false;

@@ -98,7 +98,7 @@
             </button>
           </template>
 
-          <span v-if="previewLoad.message.value" class="preview-error" role="alert">{{ previewLoad.message.value }}</span>
+          <span v-if="previewLoad.message.value" class="load-error" role="alert">{{ previewLoad.message.value }}</span>
         </div>
       </section>
 
@@ -160,9 +160,22 @@
              baglama gibi durup yer kapliyordu. -->
         <div v-if="gercekBaglamalar.length > 0" class="binding-list">
           <article v-for="binding in gercekBaglamalar" :key="binding.bindingInformation" class="binding-item">
-            <div>
+            <!-- HAM IIS DEGERI COZULDU.
+                 OLCULDU: satirin altinda `bindingInformation` OLDUGU GIBI yaziyordu --
+                 `*:80:ornek.com`. Bu IIS'in kendi ic bicimidir; iki nokta ile ayrilmis uc
+                 alanin hangisinin ne oldugunu yalnizca bicimi bilen anlar ve "*" IIS disinda
+                 hicbir sey ifade etmez. Kaydin KENDISINDE zaten ayri alanlar var
+                 (`ipAddress`, `port`, `hostName`) ve hemen altindaki form o alanlari
+                 CEVRILMIS etiketlerle soruyor -- yani panel ayni bilgiyi sorarken Turkce,
+                 gosterirken IIS dilinde konusuyordu.
+                 HICBIR SEY KAYBOLMUYOR: ham dizge `title`da duruyor. -->
+            <div :title="binding.bindingInformation">
               <strong>{{ binding.protocol.toUpperCase() }}</strong>
-              <p class="meta">{{ binding.bindingInformation }}</p>
+              <p class="meta binding-facts">
+                <span>{{ binding.hostName || t("panel.sites.allHosts") }}</span>
+                <span>{{ t("panel.sites.port") }} {{ binding.port }}</span>
+                <span>{{ binding.ipAddress === "*" ? t("panel.sites.allIps") : binding.ipAddress }}</span>
+              </p>
             </div>
 
             <!--
@@ -209,6 +222,12 @@
               <option value="*">{{ t("panel.sites.allIps") }}</option>
               <option v-for="ip in serverIps" :key="ip.address" :value="ip.address">{{ ip.address }} ({{ ip.family }})</option>
             </select>
+            <!-- SESSIZ YUTMA KAPANDI: sunucu IP listesi `.catch(() => [])` ile bos diziye
+                 dusuruluyordu, yani istek patladiginda acilir liste "Tum IP'ler" DISINDA hicbir
+                 secenek gostermiyordu ve bunun sebebi HICBIR YERDE yazmiyordu. Coklu IP'li bir
+                 sunucuda kullanici "panelde tek IP var" sanip baglamayi yanlis kuruyordu.
+                 Liste bos KALIYOR (uydurma secenek eklenmiyor) ama sebebi yaziliyor. -->
+            <small v-if="ipLoad.message.value" class="load-error" role="alert">{{ ipLoad.message.value }}</small>
           </label>
 
           <label>
@@ -321,8 +340,14 @@ async function loadPreview() {
 
 // Çoklu IP (panel dedicated IP): binding'de seçilebilecek sunucu IP'leri.
 const serverIps = ref<ServerIpAddress[]>([]);
+const ipLoad = useSectionError();
 onMounted(async () => {
-  serverIps.value = await getServerIpAddresses().catch(() => []);
+  try {
+    serverIps.value = await getServerIpAddresses();
+    ipLoad.clear();
+  } catch (error) {
+    ipLoad.capture(error);
+  }
 });
 
 function submitSubdomain() {
@@ -556,8 +581,11 @@ function translateState(state: string): string {
   text-overflow: ellipsis;
 }
 
-/* `--danger-1` DOLGU rengi; METIN icin `--danger-text` var (base.css'te olculdu). */
-.preview-error {
+/* `--danger-1` DOLGU rengi; METIN icin `--danger-text` var (base.css'te olculdu).
+   AD `.preview-error` -> `.load-error`: ayni bicim artik IKI yerde gerekiyor (onizleme
+   ve sunucu IP listesi), yani "onizleme" adi yanlisti. Sinif hâlâ TEK bilesende gectigi
+   icin base.css'e tasinmadi -- ortak sozlesme degil, bu ekranin kendi isi. */
+.load-error {
   flex-basis: 100%;
   font-size: var(--fs-xs);
   color: var(--danger-text);
@@ -651,6 +679,22 @@ function translateState(state: string): string {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
   background: var(--surface-1);
+}
+
+/* Uc olgu yan yana, aralarinda ayrac. Ayrac SABLONA YAZILMADI, `::before` ile ciziliyor:
+   sablondaki her karakter cevrilebilir bir metin gibi durur ve bir gun sozluge sizar --
+   oysa bu bir NOKTALAMA degil, bir CIZGI. Rengi `--panel-border`: kasten sonuk, cunku
+   isi bilgi tasimak degil ayirmak. Dar ekranda satir SARILIR, kirpilmaz. */
+.binding-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-10);
+}
+
+.binding-facts span + span::before {
+  margin-right: var(--sp-10);
+  color: var(--panel-border);
+  content: "·";
 }
 
 .binding-form {

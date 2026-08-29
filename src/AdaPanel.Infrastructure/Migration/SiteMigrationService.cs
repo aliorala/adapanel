@@ -1,4 +1,4 @@
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -403,8 +403,10 @@ public sealed class SiteMigrationService(
                     domains.Add(new PleskDomainDto
                     {
                         Name = name,
-                        // HostingType alanını cPanel kullanıcı adı için kullan (sihirbazda yol şablonu üretmeye yarar).
-                        HostingType = account.TryGetProperty("user", out var userElement) && userElement.ValueKind == JsonValueKind.String
+                        // Kendi alanı: `HostingType` DEĞİL. Eskiden kullanıcı adı `HostingType`e
+                        // yazılıyordu ve arayüz alanı etiketsiz basıyordu; ekranda "virtual" ile
+                        // "ali_shop" aynı yerde, aynı adla görünüyordu (bkz. PleskDomainDto).
+                        AccountUser = account.TryGetProperty("user", out var userElement) && userElement.ValueKind == JsonValueKind.String
                             ? userElement.GetString() ?? string.Empty
                             : string.Empty
                     });

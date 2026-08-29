@@ -18,14 +18,30 @@
 
     <!-- DNS erişilebilirliği: servisin "Running" olması YETMEZ, 53 portunun genel IP'de
          dinlemesi gerekir. Bu kart o farkı gösterir ve tek tıkla onarır. -->
-    <article v-if="dns && dns.installed" :class="['dns-card', dns.needsRepair ? 'bad' : 'good']">
+    <!--
+      "KURULU DEĞİL" DE BİR ÖLÇÜM SONUCUDUR.
+      ÖNCESİ ÖLÇÜLDÜ: koşul `v-if="dns && dns.installed"` idi, yani Windows DNS Server rolü
+      kurulu olmayan her sunucuda kart TÜMÜYLE KAYBOLUYORDU. Panel PowerShell çalıştırıp
+      "rol yok" sonucunu ölçüyor, sonra kullanıcıya HİÇBİR ŞEY söylemiyordu. Kullanıcının
+      gördüğü, "DNS erişilebilirliği" diye bir başlığın hiç var olmamasıydı — bu da iki ayrı
+      soruyu cevapsız bırakıyordu: "panel DNS'i ölçtü mü?" ve "ölçtüyse ne buldu?".
+      ÜÇÜNCÜ DURUM `idle` (kırmızı da yeşil de değil): kurulu olmaması bir ARIZA DEĞİL —
+      alan adlarının DNS'ini dış sağlayıcıda tutan kurulumda tamamen normaldir. Ölçülmemiş
+      bir arızaya kırmızı vermek, panelin en sık tekrarlanan yalanıdır.
+    -->
+    <article v-if="dns" :class="['dns-card', !dns.installed ? 'idle' : (dns.needsRepair ? 'bad' : 'good')]">
       <div class="dns-head">
-        <span :class="['state-dot', dns.needsRepair ? 'dot-danger' : 'dot-ok']"></span>
+        <span :class="['state-dot', !dns.installed ? 'dot-idle' : (dns.needsRepair ? 'dot-danger' : 'dot-ok')]"></span>
         <div class="health-name">
           <strong>{{ t("panel.health.dnsTitle") }}</strong>
-          <span class="svc-id">{{ dns.needsRepair ? t("panel.health.dnsBad") : t("panel.health.dnsGood") }}</span>
+          <span class="svc-id">
+            {{ !dns.installed ? t("panel.health.dnsNotInstalledHint") : (dns.needsRepair ? t("panel.health.dnsBad") : t("panel.health.dnsGood")) }}
+          </span>
         </div>
-        <span :class="['status-pill', dns.needsRepair ? 'danger' : 'ok']">
+        <!-- Rol kuruluyken rozet "dışarıya yanıt veriyor mu"yu söyler; kurulu değilken o soru
+             SORULAMAZ, dolayısıyla ne `ok` ne `danger` — rozet nötr kalır. -->
+        <span v-if="!dns.installed" class="status-pill">{{ t("panel.health.dnsNotInstalled") }}</span>
+        <span v-else :class="['status-pill', dns.needsRepair ? 'danger' : 'ok']">
           {{ dns.publiclyBound ? t("panel.health.dnsBound") : t("panel.health.dnsNotBound") }}
         </span>
         <!-- Onarım düğmesi YALNIZCA onarılacak bir şey varken görünür. Her zaman durduğunda
@@ -35,7 +51,10 @@
           {{ dnsBusy ? t("panel.health.dnsRepairing") : t("panel.health.dnsRepair") }}
         </button>
       </div>
-      <dl class="dns-facts">
+      <!-- Rol kurulu değilken bu satırların HEPSİ boş/sıfır olurdu: "dinlenen adresler: —",
+           "bölge sayısı: 0". Ölçülemeyen şeyi tire ile göstermek, ölçülüp boş çıkmış gibi
+           okunur. Kurulu değilken kart tek cümleyle konuşur. -->
+      <dl v-if="dns.installed" class="dns-facts">
         <div>
           <dt>{{ t("panel.health.dnsListening") }}</dt>
           <dd>{{ dns.listeningAddresses.length ? dns.listeningAddresses.join(", ") : "—" }}</dd>
@@ -59,17 +78,50 @@
         <div>
           <dt>{{ t("panel.health.dnsStartMode") }}</dt>
           <dd>
-            {{ dns.startMode }}
+            <!-- Ham Windows değeri basılıyordu ("Auto" / "Manual"): Türkçe panelde de İngilizce,
+                 üstelik "Auto" ile "Boot" arasındaki farkı bilmeyen için anlamsız. Bilinen
+                 değerler çevrilir, BİLİNMEYEN OLDUĞU GİBİ kalır (bkz. startModeText). -->
+            {{ startModeText(dns.startMode) }}
             <span v-if="dns.delayedAutoStart">({{ t("panel.health.dnsDelayedOn") }})</span>
             <span v-else class="warn-text">({{ t("panel.health.dnsDelayedOff") }})</span>
           </dd>
         </div>
         <div v-if="dns.lastAutoRepairUtc">
           <dt>{{ t("panel.health.dnsLastAutoRepair") }}</dt>
-          <dd>{{ formatDate(dns.lastAutoRepairUtc) }} — {{ dns.lastAutoRepairStatus }}</dd>
+          <!-- Nobetci durumu sunucudan ANAHTAR (+ istege bagli teshis) olarak gelir; eskiden
+               sabit Turkce cumleydi ve burada HAM basiliyordu. -->
+          <!-- BAŞARISIZ ONARIM ARTIK BAŞARILI GİBİ OKUNMUYOR.
+               ÖNCESİ ÖLÇÜLDÜ: bu satır NÖTR renkteydi. "Nöbetçi DNS'i yeniden başlattı ama
+               hâlâ dinlemiyor" ile "onarım tuttu" ekranda birebir aynı gri satırdı.
+               Renk kararı DİZGEDEN ÇIKARILMIYOR: metnin başına bakıp ("failed ile mi
+               başlıyor") karar vermek, sunucu metni değiştirdiği gün sessizce bozulan bir
+               yama olurdu. Sunucu artık AYRI bir alanla durumu söylüyor
+               (`DnsServerHealthDto.LastAutoRepairSucceeded`) ve ekran yalnız onu okuyor.
+               `=== false` KASITLI: alan üç değerlidir ve `null` "ölçülmedi" demektir —
+               eski nöbetçi kaydı kırmızıya boyanmaz. -->
+          <dd :class="{ 'danger-text': dns.lastAutoRepairSucceeded === false }">
+            {{ formatDate(dns.lastAutoRepairUtc) }} — {{ serverText(dns.lastAutoRepairStatus) }}
+          </dd>
         </div>
       </dl>
-      <p class="dns-details">{{ dns.details }}</p>
+      <!--
+        `details` İKİ AYRI ŞEY TAŞIYOR — ÖLÇÜLDÜ, İKİSİ AYRI GÖSTERİLİYOR.
+        · Ölçüm TUTTUĞUNDA: makineye yazılmış bir teşhis dizgesi
+          ("service=Running; startMode=Auto; listening=…; expected=…; zones=3").
+          Çevrilemez ve çevrilmemeli; ama kartın en alt satırında kalıcı olarak durduğunda
+          kullanıcının okuduğu son şey anlamadığı bir makine çıktısı oluyordu. `<details>`
+          içine KATLANDI: bilgi SİLİNMİYOR (destek kaydına yapıştırılacak tek şey odur),
+          yalnız istendiğinde açılıyor.
+        · Ölçüm TUTMADIĞINDA: alan `dns.health_unmeasurable` ANAHTARINI taşır ve o, gerçek bir
+          cümleye çevrilir. O cümle kartın CEVABIDIR; katlanmış bir kutuya saklanamaz.
+        Ayrımı yapan kural yeni değil: panelin ortak `looksLikeMessageKey` +
+        `splitCompositeMessage` sözlüğü (`utils/apiError`).
+      -->
+      <details v-if="dnsDetailsIsDiagnostic" class="dns-details-fold">
+        <summary>{{ t("panel.health.dnsDetailsToggle") }}</summary>
+        <p class="dns-details">{{ dns.details }}</p>
+      </details>
+      <p v-else-if="dns.details" class="dns-details-text">{{ serverText(dns.details) }}</p>
     </article>
 
     <!-- Alan adı tazeleme: panel güncellendiğinde YENİ varsayılanlar (DMARC, DKIM, MX…) yalnız yeni
@@ -225,7 +277,8 @@ import {
 } from "../api/health";
 import { getDnsServerHealth, repairDnsServer, type DnsServerHealth } from "../api/dns";
 import SectionLoadError from "../components/SectionLoadError.vue";
-import { useNotice, useSectionError } from "../composables/useNotice";
+import { useNotice, useSectionError, useServerText } from "../composables/useNotice";
+import { looksLikeMessageKey, splitCompositeMessage } from "../utils/apiError";
 import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
@@ -237,6 +290,54 @@ const loading = ref(false);
 const loaded = ref(false);
 const busyName = ref("");
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
+// Sunucudan gelen serbest metin (anahtar mi, olculmus teshis mi) TEK kuralla cozulur.
+const { serverText } = useServerText();
+
+/*
+ * `dns.details` KATLANSIN MI: aynı alanın iki ayrı içeriğini birbirinden ayıran ölçüm.
+ *
+ * Alan ölçüm tuttuğunda makine çıktısı taşır ("service=Running; startMode=Auto; listening=…"),
+ * tutmadığında `dns.health_unmeasurable` ANAHTARINI. Birincisi katlanır (bilgi durur, gürültü
+ * gitmez ama öne çıkmaz), ikincisi kartın cevabıdır ve açıkta kalır.
+ *
+ * Karar için YENİ bir kural yazılmadı: panelin ortak sözlüğü kullanılıyor. `serverText` de
+ * tam olarak bu ikisini ayırt eder, ama bir metin döndürür — hangisi olduğunu SÖYLEMEZ.
+ */
+const dnsDetailsIsDiagnostic = computed(() => {
+  const raw = (dns.value?.details ?? "").trim();
+  return raw.length > 0 && !looksLikeMessageKey(splitCompositeMessage(raw).key);
+});
+
+/*
+ * WINDOWS BAŞLANGIÇ TÜRÜ — BİLİNENİ ÇEVİR, BİLİNMEYENİ OLDUĞU GİBİ BIRAK.
+ *
+ * ÖNCESİ: `Win32_Service.StartMode` değeri ekrana HAM basılıyordu, yani Türkçe panelde de
+ * "Auto" / "Manual" yazıyordu.
+ *
+ * Sözlük Windows'un GERÇEKTEN döndürdüğü değer kümesidir (Win32_Service.StartMode:
+ * Boot, System, Auto, Manual, Disabled) artı ölçüm başarısızlığında servisin kendi yazdığı
+ * "Unknown" (`DnsService.ServerHealthProbe.StartMode` varsayılanı).
+ *
+ * BİLİNMEYEN DEĞER UYDURULMAZ: değeri anahtar sanıp `t()`'ye vermek, sözlükte olmadığında
+ * ekrana `panel.health.dnsStartModeValue.xyz` gibi HAM ANAHTAR bastırırdı — ham Windows
+ * değerinden çok daha kötü. Bilinmeyen değer olduğu gibi geçer (panelin `useServerText`
+ * kuralıyla aynı ilke: ham anahtar basmaktansa ham değer basmak dürüsttür).
+ */
+const START_MODE_KEYS: Record<string, string> = {
+  boot: "panel.health.dnsStartModeValue.boot",
+  system: "panel.health.dnsStartModeValue.system",
+  auto: "panel.health.dnsStartModeValue.auto",
+  // WMI bazı sürümlerde uzun biçimi döndürür; ikisi de AYNI şeydir.
+  automatic: "panel.health.dnsStartModeValue.auto",
+  manual: "panel.health.dnsStartModeValue.manual",
+  disabled: "panel.health.dnsStartModeValue.disabled",
+  unknown: "panel.health.dnsStartModeValue.unknown"
+};
+
+function startModeText(value: string): string {
+  const key = START_MODE_KEYS[(value ?? "").trim().toLowerCase()];
+  return key ? t(key) : (value ?? "");
+}
 const domains = ref<DomainRefreshSummary | null>(null);
 const domainsLoad = useSectionError();
 const domainReport = ref<DomainRefreshResult[]>([]);
@@ -566,12 +667,39 @@ function dotClass(status: string) {
   word-break: break-word;
 }
 
+/* KATLANMIŞ TEŞHİS (makine çıktısı). Tek aralıklı yazı BİLİNÇLİ: içerik `ad=değer; ad=değer`
+   çiftlerinden oluşur ve orantılı yazıda okunmaz. Taban boy `--fs-2xs` (10.53px); ölçekte
+   bunun altı YOK. */
 .dns-details {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--fs-2xs);
   font-family: var(--font-mono);
   word-break: break-word;
+}
+
+/* ÇEVRİLMİŞ CÜMLE — teşhis DEĞİL, dolayısıyla tek aralıklı da değil.
+   Aynı `<p>`ye iki ayrı içerik basıldığı sürece ikisi de makine çıktısı gibi görünüyordu;
+   oysa bu yol "ölçüm yapılamadı" cümlesini taşır ve okunmak içindir. */
+.dns-details-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  word-break: break-word;
+}
+
+/* Katlama başlığı: kartın CEVABI değil, cevabın altındaki kanıt. Bu yüzden `--fs-2xs` ve
+   soluk — ama tıklanabilir olduğu imleçten ve odak halkasından anlaşılır. */
+.dns-details-fold summary {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+  /* Yerel `list-style` DOKUNULMADI: tarayıcının kendi üçgeni "burası açılır" işaretinin ta
+     kendisi; onu silip yerine bir şey koymamak, katlamayı görünmez yapardı. */
+}
+
+.dns-details-fold[open] summary {
+  margin-bottom: var(--sp-6);
 }
 
 /*

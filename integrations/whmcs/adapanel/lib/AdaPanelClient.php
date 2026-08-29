@@ -14,10 +14,14 @@
  *        gizli giris yolu basligindan MUAFTIR (`SecureEntryPathMiddleware.CarriesApiToken`).
  *        Kullanim toplama (UsageUpdate) bu yuzden anahtarla calisir ve SALT-OKUR bir anahtar yeter.
  *
- *     b) OTURUM CEREZI (anahtar verilmediyse). Kullanici adi/parola ile giris yapilir. Parola
- *        belirleme ve tek tikla giris ZORUNLU olarak bu yolu kullanir: `AuthController` ve
- *        `ApiTokensController` sinif duzeyinde CEREZ semasina sabitlenmistir (yetki yukseltmesini
- *        onlemek icin), yani o iki uc anahtarla CALISMAZ.
+ *     b) OTURUM CEREZI. Kullanici adi/parola ile giris yapilir. Parola belirleme ve tek tikla
+ *        giris ZORUNLU olarak bu yolu kullanir: `AuthController` ve `ApiTokensController` sinif
+ *        duzeyinde CEREZ semasina sabitlenmistir (yetki yukseltmesini onlemek icin), yani o uclar
+ *        anahtarla CALISMAZ.
+ *
+ *        BU KISIT ARTIK KODDA (eskiden yalniz bu yorumda yaziyordu ve modul kisiti ihlal
+ *        ediyordu): anahtar yapilandirilmis olsa bile `/api/v1/auth/**` cagrilarinda anahtar bir
+ *        kenara birakilir ve cerezli oturum acilir -- bkz. `requiresCookieScheme()`.
  *
  *     UYARI: anahtarla YAZMA islemi (POST/PUT/DELETE) yapilacaksa anahtarin "yikici islemlere izin
  *     ver" yetkisi ACIK olmalidir (`PanelTokenCapabilities`); salt-okur anahtar 403
@@ -103,8 +107,19 @@ class AdaPanelClient
     /** @var string Guncel CSRF istek belirteci. */
     private $csrfToken = '';
 
-    /** @var bool */
-    private $loggedIn = false;
+    /** @var bool Cerezli oturum acildi mi. */
+    private $cookieSession = false;
+
+    /**
+     * Bu istekte `Authorization` basligi GONDERILMESIN mi.
+     *
+     * Cerez semasina sabitlenmis uclarda anahtarli bir baslik gondermek, panelin yonlendirici
+     * semasini anahtar yoluna sokar ve cerezli kimlik HIC degerlendirilmez -- yani oturum acmis
+     * olsak bile 401 alirdik.
+     *
+     * @var bool
+     */
+    private $tokenSuppressed = false;
 
     /**
      * @param array $params WHMCS sunucu modulu parametreleri.
@@ -217,14 +232,25 @@ class AdaPanelClient
      */
     public function login()
     {
-        if ($this->loggedIn) {
-            return;
-        }
-
         // ANAHTAR VARSA GIRIS YOK. Anahtar zaten bir kimliktir; ustune oturum acmak dakikada 5
         // istekle sinirli login politikasina gereksiz yere girmek olurdu.
         if ($this->apiToken !== '') {
-            $this->loggedIn = true;
+            return;
+        }
+
+        $this->ensureCookieSession();
+    }
+
+    /**
+     * Cerezli oturumu (varsa yeniden kullanarak) acar.
+     *
+     * TEK KAYNAK: giris el sikismasi (csrf -> login -> csrf) burada bir kez yazilir. Anahtar yolu
+     * da cerez semasina sabitlenmis uclar icin buraya duser, yani el sikismanin ikinci bir kopyasi
+     * YOK.
+     */
+    private function ensureCookieSession()
+    {
+        if ($this->cookieSession) {
             return;
         }
 
@@ -232,31 +258,65 @@ class AdaPanelClient
             throw new AdaPanelApiException('Panel kullanici adi/parolasi bos (sunucu tanimini kontrol edin).');
         }
 
-        $this->refreshCsrfToken();
+        // El sikismanin TAMAMI anahtarsiz yapilir: `csrf` ve `login` uclari [AllowAnonymous] olsa da
+        // istekte `Authorization` bulunmasi panelin yonlendirici semasini anahtar yoluna sokar ve
+        // antiforgery cerezi cerezli oturuma baglanmayabilir.
+        $this->tokenSuppressed = true;
 
-        $result = $this->send('POST', '/api/v1/auth/login', array(
-            'userNameOrEmail' => $this->userName,
-            'password' => $this->password,
-            'rememberMe' => false,
-        ));
+        try {
+            $this->refreshCsrfToken();
 
-        $data = isset($result['data']) && is_array($result['data']) ? $result['data'] : array();
+            $result = $this->send('POST', '/api/v1/auth/login', array(
+                'userNameOrEmail' => $this->userName,
+                'password' => $this->password,
+                'rememberMe' => false,
+            ));
 
-        if (!empty($data['requiresTwoFactor'])) {
-            throw new AdaPanelApiException(
-                'Panel hesabinda iki adimli dogrulama acik. WHMCS icin 2FA KAPALI, yalniz bu entegrasyona '
-                . 'ayrilmis bir yonetici hesabi kullanin.'
-            );
+            $data = isset($result['data']) && is_array($result['data']) ? $result['data'] : array();
+
+            if (!empty($data['requiresTwoFactor'])) {
+                throw new AdaPanelApiException(
+                    'Panel hesabinda iki adimli dogrulama acik. WHMCS icin 2FA KAPALI, yalniz bu entegrasyona '
+                    . 'ayrilmis bir yonetici hesabi kullanin.'
+                );
+            }
+
+            // Panel bu ucta 200 + success:true doner, kimlik dogrulanMAMIS olsa bile; karar
+            // `data.isAuthenticated` alanindadir. Yalniz zarfa bakmak, hatali parolayi BASARILI
+            // sayardi.
+            if (empty($data['isAuthenticated'])) {
+                throw new AdaPanelApiException('Panel girisi basarisiz: kullanici adi ya da parola hatali.');
+            }
+
+            $this->cookieSession = true;
+
+            // Belirtec oturum kimligine baglidir; giristen sonra MUTLAKA yenilenir.
+            $this->refreshCsrfToken();
+        } finally {
+            $this->tokenSuppressed = false;
         }
+    }
 
-        if (empty($data['isAuthenticated'])) {
-            throw new AdaPanelApiException('Panel girisi basarisiz: kullanici adi ya da parola hatali.');
-        }
-
-        $this->loggedIn = true;
-
-        // Belirtec oturum kimligine baglidir; giristen sonra MUTLAKA yenilenir.
-        $this->refreshCsrfToken();
+    /**
+     * Bu yol CEREZ semasi ISTIYOR mu.
+     *
+     * OLCUM (C# kaynagi): `AuthController` sinif duzeyinde
+     * `[Authorize(AuthenticationSchemes = CookieAuthenticationDefaults.AuthenticationScheme)]`
+     * tasir -- yetki yukseltmesini onlemek icin bilincli bir karar. Sonucu: `password/set/{id}` ve
+     * `sso-link/{id}` uclari panel API ANAHTARIYLA CALISMAZ, 401 `auth.unauthorized` doner.
+     *
+     * BU ESKIDEN SESSIZ BIR ARIZAYDI: sunucu tanimina `token=adap_...` yazan yoneticide parola
+     * belirleme ve tek tikla giris HER ZAMAN basarisiz oluyordu ve modulun mesaji ("oturum acilmamis
+     * ya da anahtar gecersiz/iptal edilmis") yoneticiyi saglam bir anahtari yenilemeye
+     * gonderiyordu -- yani hatanin gosterdigi yer, hatanin oldugu yer DEGILDI. Kisit dosyanin bas
+     * yorumunda YAZILIYDI ama koda hic gecmemisti.
+     *
+     * Cozum kisiti kaldirmak degil, ona UYMAK: bu uclarda anahtar bir kenara birakilir ve ayni
+     * sunucu tanimindaki yonetici kullanici adi/parolasiyla cerezli oturum acilir.
+     */
+    private static function requiresCookieScheme($path)
+    {
+        return strpos($path, '/api/v1/auth/') === 0;
     }
 
     public function get($path)
@@ -319,7 +379,21 @@ class AdaPanelClient
 
     private function authorized($method, $path, $body)
     {
+        // Kural CAGRI YERINDE DEGIL BURADA: "bu uc anahtarla calismaz" bilgisi her cagriya tek tek
+        // yazilsaydi, yeni eklenen bir auth cagrisinda unutulur ve ayni sessiz ariza geri gelirdi.
+        if ($this->apiToken !== '' && self::requiresCookieScheme($path)) {
+            $this->ensureCookieSession();
+
+            $this->tokenSuppressed = true;
+            try {
+                return $this->send($method, $path, $body);
+            } finally {
+                $this->tokenSuppressed = false;
+            }
+        }
+
         $this->login();
+
         return $this->send($method, $path, $body);
     }
 
@@ -352,7 +426,7 @@ class AdaPanelClient
             'X-AdaPanel-Entry-Path: ' . $this->entryPath,
         );
 
-        if ($this->apiToken !== '') {
+        if ($this->apiToken !== '' && !$this->tokenSuppressed) {
             $headers[] = 'Authorization: Bearer ' . $this->apiToken;
         }
 

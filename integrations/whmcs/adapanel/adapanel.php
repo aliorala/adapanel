@@ -22,6 +22,7 @@
  *   POST   /api/v1/auth/sso-link/{id}             -> AuthController.CreateSsoLinkAsync
  *   GET    /api/v1/billing/usage                  -> BillingController.GetUsageAsync
  *   GET    /api/v1/billing/terminate-check        -> BillingController.CheckTerminationAsync
+ *   GET    /api/v1/billing/settings               -> BillingController.GetSettingsAsync
  *
  * ChangePassword ve ServiceSingleSignOn islevleri bir sure "uc yok" hatasi donuyordu; panele
  * karsiliklari eklendi (bkz. docs/whmcs-modulu.md) ve artik gercekten calisiyorlar.
@@ -37,8 +38,15 @@
  *   logModuleCall($module,$action,$req,$res,$processed,$replaceVars)
  *                                                -> /provisioning-modules/module-logging/
  *
- * PHP tarafinin DAVRANIS testi: `php integrations/whmcs/tests/leftover-note.test.php`.
- * Bu depoda gercek bir WHMCS kurulumu YOK; modul uctan uca hic calistirilmadi.
+ * TESTLER (hepsi tek komut): `powershell -File scripts\run-whmcs-tests.ps1`
+ *   - `tests/leftover-note.test.php`    -- kalinti notu uretimi (WHMCS yuzeyi taklit edilir).
+ *   - `tests/module-contract.test.php`  -- SAHTE PANELE GERCEK HTTP: yol/metot/baslik/alan adlari.
+ *
+ * Bu depoda gercek bir WHMCS kurulumu YOK: WHMCS'in kendi cekirdegi (`localAPI`, `logModuleCall`,
+ * `Capsule`) taklit ediliyor. Panel tarafi ise taklit DEGIL olculuyor -- istekler gercekten
+ * gonderiliyor ve karsilastirma yukaridaki C# denetleyicilerin kaynagiyla yapildi. Hala
+ * dogrulanMAMIS olan tek sey, gercek bir WHMCS surumunun bu islevleri bekledigimiz
+ * parametrelerle cagirdigidir.
  */
 
 if (!defined('WHMCS')) {
@@ -560,10 +568,27 @@ function adapanel_ServiceSingleSignOn(array $params)
 }
 
 /**
- * Sunucu tanimini sinar: giris, yetki ve abonelik ucunun gercekten calistigini olcer.
+ * Sunucu tanimini sinar: giris, yetki, plan ucu VE FATURALAMA KAPISI.
  *
  * Yalniz "giris yapabildim" demek yetmez -- musteri rolundeki bir hesapla da giris yapilabilir ama
- * hicbir provisioning cagrisi calismaz. Bu yuzden yonetici-ozel bir uc da denenir.
+ * hicbir provisioning cagrisi calismaz. Bu yuzden rol isteyen uclar da denenir.
+ *
+ * DUZELTILEN ARIZA (bu denetim once YANLIS SEYI olcuyordu):
+ *   - Buradaki eski yorum "servis planlari YALNIZ yoneticiye acik, bayi burada 403 alir" diyordu.
+ *     ORNEKLE OLCULDU, DOGRU DEGIL: `ServicePlansController` da `UsersController` da
+ *     `[Authorize(Roles = "Administrator,Reseller")]`. Yani sinama, BAYI hesabini yoneticiden hic
+ *     ayirt etmiyordu.
+ *   - Asil yonetici kapisi `BillingController`: sinif duzeyinde `[Authorize(Roles = "Administrator")]`.
+ *     `UsageUpdate` ve `TerminateAccount`'un silme denetimi ORAYA gider. Bayi hesabiyla kurulan bir
+ *     sunucu tanimi "baglanti basarili" diyor, sonra HER iptal 403 ile reddediliyor ve kullanim
+ *     GUNCELLENMIYORDU -- ustelik sessizce, cunku WHMCS `UsageUpdate`'in donusunu arayuzde
+ *     gostermez.
+ *   - Ayni uclar panelde faturalama entegrasyonu KAPALIYKEN de 403 `billing.disabled` doner
+ *     (`BillingIntegrationService.EnsureEnabledAsync`). Bu da kurulumda gorulmuyordu.
+ *
+ * `billing/settings` secildi (kullanim raporu degil): salt-okurdur, panelde bir kayit uretmez ve
+ * 403 (rol yanlis) ile `enabled:false` (anahtar kapali) durumlarini AYIRT EDER -- ikisi ayni
+ * mesaja dusseydi yonetici hangisini duzeltecegini bilemezdi.
  */
 function adapanel_TestConnection(array $params)
 {
@@ -571,12 +596,36 @@ function adapanel_TestConnection(array $params)
         $client = new AdaPanelClient($params);
         $client->login();
 
-        // Yonetici yetkisini OLC: /api/v1/users [Authorize(Roles="Administrator,Reseller")].
+        // Saglama yetkisi: /api/v1/users [Authorize(Roles="Administrator,Reseller")].
         $client->get('/api/v1/users');
 
-        // Servis planlari YALNIZ yoneticiye acik; bayi hesabi burada 403 alir ve
-        // ChangePackage plan bagi yolu calismaz -- bunu simdi soylemek daha iyi.
+        // Plan bagi yolu (ChangePackage) icin gereken uc; ayni iki role acik.
         $client->get('/api/v1/service-plans');
+
+        try {
+            $ayar = $client->get('/api/v1/billing/settings');
+        } catch (AdaPanelApiException $exception) {
+            if ($exception->statusCode === 403) {
+                return array(
+                    'success' => false,
+                    'error' => 'Panel hesabi faturalama uclarina giremiyor (YONETICI olmali; bayi hesabi '
+                        . 'yetmez). Bu hesapla hizmet iptali ve kullanim guncellemesi CALISMAZ: '
+                        . 'sunucu tanimina panel yoneticisi bir hesap girin.',
+                );
+            }
+
+            throw $exception;
+        }
+
+        // Anahtar kapaliysa uclar var ama 403 doner; simdi soylemek, ilk iptal denemesinde
+        // ogrenmekten iyidir.
+        if (empty($ayar['data']['enabled'])) {
+            return array(
+                'success' => false,
+                'error' => 'Panelde faturalama entegrasyonu KAPALI. Bu haliyle hizmet iptali (silme '
+                    . 'denetimi) ve disk/trafik guncellemesi calismaz. Panel -> Faturalama ekranindan acin.',
+            );
+        }
 
         return array('success' => true, 'error' => '');
     } catch (Exception $exception) {

@@ -1,4 +1,4 @@
-using AdaPanel.Api.Security;
+﻿using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Ssl;
 using AdaPanel.Core.Interfaces;
@@ -212,9 +212,11 @@ public sealed class SslController(
             HttpContext,
             "ssl.binding_removed",
             $"ssl:{result.SiteName}",
-            $"HTTPS bağlaması kaldırıldı: {result.HostName}:{result.Port}. " +
-            $"Doğrulandı={result.BindingRemoved}, yönlendirme kapatıldı={result.HttpsRedirectDisabled}, " +
-            $"sertifika={result.CertificateAction}.",
+            // Cumle degil OLCUM (bkz. DnsController): eylem etiketi zaten "HTTPS binding
+            // removed" diyor; ayrinti HAM basildigi icin buradaki Turkce cumle Ingilizce
+            // panelde de gorunurdu.
+            $"binding={result.HostName}:{result.Port}; removed={result.BindingRemoved}; " +
+            $"httpsRedirectDisabled={result.HttpsRedirectDisabled}; certificate={result.CertificateAction}",
             await SiteSahibiAsync(result.SiteName, cancellationToken));
 
         return Ok(ApiResponse<RemoveSslCertificateResultDto>.Ok(result, "ssl.binding_removed"));

@@ -13,12 +13,27 @@ hesabı açılır, ödeme gecikince askıya alınır, iptal edilince silinir.
 > `developers.whmcs.com` üzerinden doğrulandı; kullanılan sayfalar `adapanel.php` başında adres
 > adres yazılı.
 >
-> **Bu modül gerçek bir WHMCS kurulumuyla uçtan uca ÇALIŞTIRILMADI** (bu depoda WHMCS+PHP+MySQL
-> yığını yok). Panel tarafı testlidir. PHP tarafında iki ölçüm var: sözdizimi denetimi (`php -l`)
-> ve WHMCS'e bağlı olmayan karar noktalarını gerçekten çalıştıran bir davranış betiği
-> (`php integrations/whmcs/tests/leftover-note.test.php` — `localAPI` ve `logModuleCall` orada
-> casus olarak tanımlanır). **Hiçbiri gerçek WHMCS'te denenmedi.** İlk kurulumda **Test Connection**
-> ve bir deneme siparişiyle doğrulayın.
+> **PHP tarafı artık gerçekten çalıştırılıyor** — tek komut:
+>
+> ```
+> powershell -ExecutionPolicy Bypass -File scripts\run-whmcs-tests.ps1
+> ```
+>
+> Betik PHP'yi arar (önce panelin kendi kurduğu sürüm), `php -l` ile sözdizimini ölçer ve iki
+> davranış testini koşar. **PHP bulamazsa sessizce yeşil geçmez**, hata koduyla durur.
+>
+> | Test | Neyi ölçer |
+> |---|---|
+> | `tests/leftover-note.test.php` | Silme kalıntılarının müşteri notuna yazılması (`localAPI`/`logModuleCall` casus) |
+> | `tests/module-contract.test.php` | **Sahte panele gerçek HTTP**: yol, metot, başlık, alan adları, hata yolları |
+>
+> İkincisi `AdaPanelClient`'ı mock'lamaz: `php -S` ile ayağa kalkan bir sahte panel (`fake-panel.php`)
+> modülün gerçek curl isteklerini kaydeder ve test o kayda bakar. Uçlar ve alan adları panelin C#
+> denetleyicileriyle karşılaştırıldı.
+>
+> **Hâlâ ölçülmeyen tek şey:** gerçek bir WHMCS sürümünün bu işlevleri beklediğimiz parametrelerle
+> çağırdığı (bu depoda WHMCS+MySQL yığını yok). İlk kurulumda **Test Connection** ve bir deneme
+> siparişiyle doğrulayın.
 
 ---
 
@@ -50,9 +65,17 @@ hesabı açılır, ödeme gecikince askıya alınır, iptal edilince silinir.
    | Secure | Panel HTTPS dinliyorsa işaretleyin |
    | Port | Panelin portu (varsayılan `8888`) |
 
-4. **Test Connection** düğmesine basın. Modül üç şeyi birden ölçer: giriş yapılabiliyor mu,
-   hesap yönetici yetkisine sahip mi (`GET /api/v1/users`), servis planları okunabiliyor mu
-   (`GET /api/v1/service-plans`). Üçü de geçmeden ürünü satışa açmayın.
+4. **Test Connection** düğmesine basın. Modül **dört** şeyi birden ölçer: giriş yapılabiliyor mu,
+   sağlama yetkisi var mı (`GET /api/v1/users`), servis planları okunabiliyor mu
+   (`GET /api/v1/service-plans`), **faturalama kapısı açık mı** (`GET /api/v1/billing/settings`).
+   Dördü de geçmeden ürünü satışa açmayın.
+
+   Dördüncüsü sonradan eklendi ve sebebi ölçüldü: ilk üç uç **Administrator ve Reseller** rollerine
+   açıktır, oysa `BillingController` **yalnız Administrator**'a. Bir **bayi** hesabıyla kurulan
+   sunucu tanımı eskiden "bağlantı başarılı" diyordu; sonra her hizmet iptali `403` ile
+   reddediliyor ve disk/trafik kullanımı **hiç güncellenmiyordu** — üstelik sessizce, çünkü WHMCS
+   `UsageUpdate`'in sonucunu arayüzde göstermez. Aynı uç, panelde **Panel → Faturalama** anahtarı
+   kapalıyken de `403 billing.disabled` döner; bu da artık kurulum anında söyleniyor.
 
 ### Access Hash alanı — iki ayarı birden taşır
 
@@ -140,7 +163,7 @@ yazmak sessizce etkisiz kalırdı.
 | `TerminateAccount` | Önce `GET /api/v1/billing/terminate-check` (silme **güvenli mi**), sonra `DELETE /api/v1/users/{id}?removeSites=true|false`; yanıttaki **kalıntılar** müşteri notuna yazılır (bkz. 8.1) |
 | `UsageUpdate` | `GET /api/v1/billing/usage` → `tblhosting` satırlarına disk/trafik yazar |
 | `ChangePackage` | Plan varsa `PUT /api/v1/subscriptions/{id}/plan`; yoksa plan bağını kaldırıp `PUT /api/v1/users/{id}` ile limitleri yazar |
-| `TestConnection` | Giriş + `GET /api/v1/users` + `GET /api/v1/service-plans` |
+| `TestConnection` | Giriş + `GET /api/v1/users` + `GET /api/v1/service-plans` + `GET /api/v1/billing/settings` |
 | `AdminServicesTabFields` | `GET /api/v1/subscriptions/{id}` (salt okunur kullanım özeti) |
 | `ChangePassword` | `POST /api/v1/auth/password/set/{id}` — gövde `{ "newPassword": "…" }` |
 | `ServiceSingleSignOn` | `POST /api/v1/auth/sso-link/{id}` → `data.url` adresine yönlendirir |
@@ -255,11 +278,18 @@ Panelin `Bearer adap_…` anahtarı artık `/api/v1/**` uçlarında **çalışı
 
 Salt-okur anahtarla yazma denenirse panel `403 auth.forbidden` + `apitoken.read_only` döner.
 
-**İki işlev anahtarla ÇALIŞMAZ:** `ChangePassword` ve `ServiceSingleSignOn`. `AuthController` ve
-`ApiTokensController` sınıf düzeyinde çerez şemasına sabitlenmiştir (yetki yükseltmesini önlemek
-için). Bu ikisini kullanacaksanız sunucu tanımında kullanıcı adı/parola da dolu olmalıdır — modül
-o uçlar için çerez oturumuna düşmez, bu yüzden **ikisini birden kullanmak isterseniz token
-KOYMAYIN**; tamamen çerez yolunda kalın.
+**İki uç anahtar KABUL ETMEZ** — ama artık bu sizin sorununuz değil. `AuthController` sınıf
+düzeyinde çerez şemasına sabitlenmiştir (yetki yükseltmesini önlemek için), yani
+`POST /auth/password/set/{id}` ve `POST /auth/sso-link/{id}` `Bearer` başlığıyla `401` döner.
+Modül bunu **kendisi hallediyor**: `/api/v1/auth/**` çağrılarında anahtarı bir kenara bırakır ve
+sunucu tanımındaki kullanıcı adı/parolayla çerezli oturum açar; diğer bütün uçlarda anahtarı
+kullanmaya devam eder. Bu yüzden **Username/Password alanlarını token kullanırken de doldurun** —
+boş bırakılırsa `ChangePassword` ve `ServiceSingleSignOn` eksik ayarı adıyla söyleyip durur.
+
+> Bu davranış 0.8.x'te düzeltildi. Öncesinde kısıt yalnızca kaynak yorumlarında yazılıydı, kodda
+> uygulanmıyordu: token yapılandırılmış her kurulumda o iki işlev **sessizce ölüydü** ve modülün
+> hata metni ("oturum açılmamış ya da anahtar geçersiz/iptal edilmiş") yöneticiyi sağlam bir
+> anahtarı yenilemeye gönderiyordu. Nöbetçi: `tests/module-contract.test.php` bölüm 15.
 
 ---
 

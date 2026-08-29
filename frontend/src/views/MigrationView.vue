@@ -150,7 +150,16 @@
             <label class="domain-pick">
               <input type="checkbox" :value="d.name" v-model="selectedDomains" />
               <span class="domain-name">{{ d.name }}</span>
-              <span v-if="d.hostingType" class="meta">{{ d.hostingType }}</span>
+              <!-- ALAN ETİKETLİ, ÇÜNKÜ TEK YER İKİ AYRI ÖLÇÜM GÖSTERİYOR.
+                   ÖNCESİ ÖLÇÜLDÜ: burada `d.hostingType` HAM basılıyordu ve arka uçta o tek alan
+                   iki ayrı şeyle dolduruluyordu — Plesk yolunda barındırma türü ("virtual"),
+                   cPanel yolunda HESABIN KULLANICI ADI ("ali_shop"). Yani alan adının yanında
+                   beliren gri metnin ne olduğunu ekrandan anlamak imkânsızdı; kullanıcı hangi
+                   kaynağı seçtiğini hatırlamak zorundaydı. Alan arka uçta ikiye ayrıldı
+                   (`PleskDomainDto.HostingType` / `.AccountUser`), burada da adıyla söyleniyor.
+                   `v-else-if` yeterli: her keşif yolu YALNIZ kendi alanını doldurur. -->
+              <span v-if="d.hostingType" class="meta">{{ t("panel.migration.domainHostingType") }}: {{ d.hostingType }}</span>
+              <span v-else-if="d.accountUser" class="meta">{{ t("panel.migration.domainAccountUser") }}: {{ d.accountUser }}</span>
             </label>
             <button type="button" class="secondary compact" @click="pickDomain(d.name)">{{ t("panel.migration.useSingle") }}</button>
           </div>
@@ -209,10 +218,26 @@
 
     <!-- Dosya kaynağı -->
     <div class="form-surface">
-      <label class="checkbox section-toggle">
-        <input v-model="form.pullFiles" type="checkbox" />
-        <span><strong>{{ t("panel.migration.pullFiles") }}</strong></span>
-      </label>
+      <!-- `<label><strong>` YERİNE GERÇEK `h3` — BAŞLIK MERDİVENİNDE YOKTULAR.
+           ÖLÇÜLDÜ: bu sayfadaki altı bölümün dördü (`Nasıl çalışır`, `Keşif`, `Hedef site`,
+           `Ön kontroller`…) `h3.section-label`; "Dosyaları çek" ve "Veritabanını aktar" ise
+           yalnız kalın yazılmış bir form etiketiydi. Kalınlık göze başlık gibi görünür ama
+           belge yapısına HİÇ girmez: başlıktan başlığa gezen okuyucu (ekran okuyucunun H
+           tuşu, tarayıcı içindekiler eklentileri) bu iki bölümü ATLIYORDU — sihirbazın
+           dosya ve veritabanı yarısı, gezinme listesinde yok gibiydi.
+           `<strong>` KALDIRILDI, yerine boy KOYULMADI: `h3` merdivenden zaten --fs-xl
+           (15.9px) + 640 ağırlık alır (base.css) ve bu, komşu bölüm başlıklarıyla BİREBİR
+           aynı basamaktır. Eski `--fs-h4` (14.3px) onları komşularından bir basamak aşağıda
+           çiziyordu — oysa aynı rütbedeler.
+           Etiket başlığın İÇİNDE kalıyor, çünkü bu kutunun tasarım kararı bilinçli: başlık
+           aynı zamanda o kaynağı açan anahtar (bkz. yukarıdaki sihirbaz notu). Onay kutusunu
+           başlıktan ayırmak, ekranda birbirini tekrar eden iki satır üretirdi. -->
+      <h3 class="section-label">
+        <label class="checkbox section-toggle">
+          <input v-model="form.pullFiles" type="checkbox" />
+          <span>{{ t("panel.migration.pullFiles") }}</span>
+        </label>
+      </h3>
       <div v-if="form.pullFiles" class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.migration.ftp.protocol") }}</span>
@@ -247,10 +272,14 @@
 
     <!-- Veritabanı kaynağı -->
     <div class="form-surface">
-      <label class="checkbox section-toggle">
-        <input v-model="form.transferDatabase" type="checkbox" />
-        <span><strong>{{ t("panel.migration.transferDb") }}</strong></span>
-      </label>
+      <!-- Gerekçe yukarıdaki "Dosya kaynağı" kutusundakiyle aynı: bu da bir bölüm başlığıydı
+           ama belge yapısında hiç yoktu. -->
+      <h3 class="section-label">
+        <label class="checkbox section-toggle">
+          <input v-model="form.transferDatabase" type="checkbox" />
+          <span>{{ t("panel.migration.transferDb") }}</span>
+        </label>
+      </h3>
       <div v-if="form.transferDatabase" class="form-grid">
         <label>
           <span class="field-label">{{ t("panel.migration.dbEngine") }}</span>
@@ -568,7 +597,10 @@ function apiErrorText(error: unknown): string {
 function pickDomain(name: string) {
   form.siteName = name;
   const domain = discoveredDomains.value.find((item) => item.name === name);
-  form.remotePath = expandTemplate(bulkPathTemplate.value, name, domain?.hostingType ?? "");
+  // `{user}` YALNIZ cPanel'de anlamlı; oradaki hesap kullanıcı adından gelir. Eskiden bu değer
+  // `hostingType`ten okunuyordu ve Plesk'te o alan "virtual" taşıyor — `{user}` yazan bir Plesk
+  // şablonu `/home/virtual/...` üretirdi. Alan ayrıldı (bkz. api/migration.ts).
+  form.remotePath = expandTemplate(bulkPathTemplate.value, name, domain?.accountUser ?? "");
   if (discoverHost.value) {
     form.fileHost = discoverHost.value;
     form.dbHost = discoverHost.value;
@@ -612,7 +644,7 @@ async function runBulk() {
         physicalPath: `C:\\inetpub\\wwwroot\\${name}`,
         pullFiles: true,
         fileHost: discoverHost.value,
-        remotePath: expandTemplate(bulkPathTemplate.value, name, domain?.hostingType ?? ""),
+        remotePath: expandTemplate(bulkPathTemplate.value, name, domain?.accountUser ?? ""),
         transferDatabase: false
       });
       bulkLog.value = [...bulkLog.value, { domain: name, overallSuccess: result.overallSuccess, steps: result.steps }];
@@ -743,21 +775,19 @@ function stepStatusText(item: LiveStep): string {
    `.form-grid`in DIŞINDA duruyor ve base.css'te `display: grid`i veren kural
    (`.form-grid label`) burada eşleşmiyor — yani öge `display: inline` kalıyordu ve satır içi
    ögelerde DİKEY MARGIN UYGULANMAZ. Kural yıllardır sessizce ölüydü.
-   Şimdi öge gerçekten bir başlık satırı: `--fs-h4` (bölüm başlığı basamağı, base.css) ve
-   kutunun ilk satırı olduğu için üst boşluğa da gerek yok. İçindeki `<strong>` zaten vardı;
-   eksik olan boy ve hizaydı. */
+   Şimdi öge gerçekten bir başlık satırı — ve YALNIZCA görünüşte değil: etiket artık bir
+   `h3`in İÇİNDE duruyor (bkz. şablon), yani boyu da ağırlığı da merdivenden geliyor.
+   BURADA BOY YAZILMIYOR: eski `.section-toggle strong { font-size: --fs-h4 }` kuralı
+   SİLİNDİ. O kural bu iki başlığı 14.3px'e sabitliyordu, oysa aynı sayfadaki kardeş bölüm
+   başlıkları (`h3.section-label`) 15.9px. Aynı rütbeyi iki ayrı boyda çizmek, merdiveni
+   olduğu yerde bozmaktır. `<strong>` de gereksizleşti: `h3` zaten 640 ağırlık veriyor,
+   `<strong>` üstüne ikinci bir kalınlaştırma bindiriyordu. */
 .section-toggle {
   display: flex;
   align-items: center;
   /* `gap` BİLEREK YOK: base.css'teki `.checkbox span { margin-left: --sp-8 }` boşluğu zaten
      veriyor; ikisini birden yazmak 16px'e çıkarırdı. */
   cursor: pointer;
-}
-
-.section-toggle strong {
-  font-size: var(--fs-h4);
-  font-weight: 640;
-  letter-spacing: -0.015em;
 }
 
 /* Eylem satırı kutuların DIŞINDA (gerekçesi şablonda) ve sağa dayalı: sihirbaz yukarıdan

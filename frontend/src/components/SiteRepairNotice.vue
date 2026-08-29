@@ -49,8 +49,8 @@
 import { onMounted, ref, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { inspectSiteRepair, repairSite, type RepairFinding } from "../api/siteHealth";
+import { useServerText } from "../composables/useNotice";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
-import { looksLikeMessageKey, splitCompositeMessage } from "../utils/apiError";
 
 const props = defineProps<{ siteName: string }>();
 const emit = defineEmits<{ (event: "notify", message: string, isError: boolean): void }>();
@@ -59,6 +59,8 @@ const i18n = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts).
 const { writeGate } = useSubscriptionGate();
+// Sunucudan gelen serbest metnin (anahtar mi, cumle mi) TEK kaynagi.
+const { serverText } = useServerText();
 // Yer tutuculu metinler ("{count} bulgu") de bu sarmalayicidan gectigi icin PARAMETRE alir;
 // parametresiz cagri davranisi degismedi.
 const t = (key: string, params?: Record<string, unknown>) => {
@@ -77,28 +79,13 @@ const busy = ref(false);
  * yakalanan istisnanın `Message`'ı ayrıntı olarak gönderiliyor, o mesaj da AppException'ın
  * KODU oluyor. Yani ayrıntı bazen serbest metin, bazen bir çeviri anahtarı.
  *
- * Anahtarın Türkçe karşılığı sözlükte ZATEN VARDI ("E-posta sunucusu bağlantısı henüz hazır
- * değil…"); eksik olan tek şey `t()` çağrısıydı. Ayırt etme işi panelin başka 57 ekranında
- * kullanılan aynı kurala bırakıldı (utils/apiError): küçük harfle başlayan, noktalı, boşluksuz
- * dizge anahtar sayılır — "Failed to open zone file" gibi gerçek cümleler dokunulmadan geçer.
- * Çeviri bulunamazsa dizge OLDUĞU GİBİ kalır: teşhis bilgisi hiçbir durumda kaybolmaz.
+ * KOPYA KALDIRILDI: bu karar burada ELDE yazılmıştı, ama aynı karar `AppStoreView` ve
+ * `ServerHealthView` için de gerekiyordu — üç kopya demek, birinin `t()` çağrısını unutması
+ * demektir (kataloğun ham Türkçe basması tam olarak buydu). Kural artık tek yerde:
+ * `useServerText`. Davranış aynı — anahtar biçimindeyse çevrilir, değilse dizge OLDUĞU GİBİ
+ * kalır, yani teşhis bilgisi hiçbir durumda kaybolmaz.
  */
-function describeDetail(detail: string): string {
-  const raw = (detail ?? "").trim();
-  if (!raw) {
-    return raw;
-  }
-
-  // Arka uç bazen "anahtar — serbest metin" biçiminde bileşik gönderiyor; ikisi ayrılır.
-  const { key, detail: rest } = splitCompositeMessage(raw);
-  if (!looksLikeMessageKey(key)) {
-    return raw;
-  }
-
-  const translated = t(key);
-  const head = translated === key ? key : translated;
-  return rest ? `${head} — ${rest}` : head;
-}
+const describeDetail = serverText;
 
 const worstSeverity = computed(() => (findings.value.some((item) => item.severity === "fail") ? "fail" : "warn"));
 

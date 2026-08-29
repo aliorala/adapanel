@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Security.Claims;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Sites;
@@ -141,6 +141,9 @@ public sealed class AdaPanelWriteTools(
         // adresi değildir — ama sızan bir anahtarın nereden kullanıldığını gösteren tek iz odur.
         var ipAddress = httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
 
-        return auditService.WriteAsync(action, resource, $"MCP aracı çağrıldı: {action}", userId, ipAddress, cancellationToken);
+        // Ayrinti CUMLE tasimaz: `AuditLogsView` eylem adini cevirir, ayrintiyi HAM basar --
+        // "MCP araci cagrildi: ..." Ingilizce panelde de aynen gorunurdu. Ustelik eylem etiketi
+        // ("Site started via MCP") zaten ayni seyi soyluyordu; geriye olcum kaliyor.
+        return auditService.WriteAsync(action, resource, $"source=mcp; tool={action}", userId, ipAddress, cancellationToken);
     }
 }

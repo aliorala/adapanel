@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Common;
+﻿using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
@@ -33,8 +33,11 @@ public sealed class DnsTemplateController(IDnsService dnsService, IAuditService 
             HttpContext,
             "dns.template_saved",
             "dns:template",
-            $"Sunucu-geneli DNS şablonu kaydedildi: {template.Records.Count} kayıt. " +
-            $"İkincil DNS sunucuları={(template.SecondaryDnsServers.Count == 0 ? "(yok)" : string.Join(", ", template.SecondaryDnsServers))}.");
+            // Cumle degil OLCUM: eylem etiketi ("DNS template saved") zaten cevriliyor,
+            // ayrinti ise `AuditLogsView`'da HAM basiliyor -- Turkce cumle burada Ingilizce
+            // panelde de gorunurdu.
+            $"records={template.Records.Count}; " +
+            $"secondaryServers={(template.SecondaryDnsServers.Count == 0 ? "(none)" : string.Join(", ", template.SecondaryDnsServers))}");
 
         return Ok(ApiResponse<DnsTemplateDto>.Ok(template, "dns.template_saved"));
     }
@@ -68,8 +71,8 @@ public sealed class DnsServerController(IDnsService dnsService, IAuditService au
             HttpContext,
             "dns.server_repaired",
             "dns:server",
-            $"DNS sunucusu yeniden başlatıldı (gecikmeli otomatik başlangıç={applyDelayedAutoStart}). " +
-            $"Sonuç: dinleme={string.Join(", ", health.ListeningAddresses)}, onarım gerekiyor={health.NeedsRepair}.");
+            $"delayedAutoStart={applyDelayedAutoStart}; " +
+            $"listening={string.Join(", ", health.ListeningAddresses)}; needsRepair={health.NeedsRepair}");
 
         return Ok(ApiResponse<DnsServerHealthDto>.Ok(health, "dns.server_repaired"));
     }

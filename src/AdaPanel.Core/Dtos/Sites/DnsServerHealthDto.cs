@@ -43,8 +43,28 @@ public sealed class DnsServerHealthDto
     /// <summary>Otomatik nöbetçinin son onarım zamanı (hiç onarmadıysa null).</summary>
     public DateTime? LastAutoRepairUtc { get; init; }
 
-    /// <summary>Otomatik nöbetçinin son onarım sonucu (ok / failed + kısa açıklama).</summary>
+    /// <summary>Otomatik nöbetçinin son onarım sonucu: çeviri anahtarı (+ isteğe bağlı " — teşhis").</summary>
     public string LastAutoRepairStatus { get; init; } = string.Empty;
+
+    /*
+     * BAŞARISIZLIK BİR ALAN, BİR DİZGE DEĞİL.
+     *
+     * ÖLÇÜLEN HATA: Sunucu Sağlığı ekranı bu satırı NÖTR renkte yazıyordu — yani "onarım
+     * denendi, hâlâ dinlemiyor" ile "onarım başarılı" ekranda BİREBİR aynı görünüyordu.
+     * DNS dışarıya yanıt vermezken panelin bunu sessiz bir gri satırla geçmesi, kullanıcının
+     * kartın kırmızı olmasına rağmen "son onarım tamam" diye okuması demekti.
+     *
+     * ARAYÜZ DİZGEYE BAKAMAZ: `LastAutoRepairStatus` bir çeviri anahtarı taşır ve o anahtar
+     * ileride pekâlâ değişebilir; ön yüzde "anahtar şuysa kırmızı" listesi tutmak, sunucu
+     * anahtarı yenilediği gün SESSİZCE bozulan bir yama olurdu. Durumu ölçen taraf sunucudur,
+     * dolayısıyla durumu SÖYLEYEN de sunucu olmalı.
+     *
+     * `null` KASITLI VE ÜÇÜNCÜ BİR DURUM: nöbetçi hiç çalışmadıysa (ya da bu alan yokken
+     * yazılmış eski nöbetçi kaydı okunuyorsa) "başarılı" da "başarısız" da demeyiz —
+     * ölçmediğimiz şeye renk vermeyiz.
+     */
+    /// <summary>Son otomatik onarım tuttu mu; nöbetçi hiç çalışmadıysa (ya da ölçülmediyse) null.</summary>
+    public bool? LastAutoRepairSucceeded { get; init; }
 
     /// <summary>Teşhis/ham çıktı notları (UI ayrıntı satırı).</summary>
     public string Details { get; init; } = string.Empty;

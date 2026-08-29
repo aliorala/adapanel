@@ -2,6 +2,7 @@ import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { looksLikeMessageKey, splitCompositeMessage } from "../utils/apiError";
 
 /**
  * Ekran üstü bildirim şeridi + API hata çevirisi — TEK KAYNAK.
@@ -53,6 +54,49 @@ export function useNotice() {
   }
 
   return { notice, noticeError, showNotice, showError, resolveApiMessage, clearNotice };
+}
+
+/**
+ * Sunucudan gelen SERBEST bir alanın ekran metni — hata yolu DIŞINDA.
+ *
+ * NEDEN AYRI: `resolveApiMessage` yalnız `catch` bloğundaki hata NESNESİNİ çözer. Oysa panelin
+ * bazı alanları hata değildir, sıradan veridir ve yine de sunucudan metin taşır: uygulama
+ * kataloğunun açıklaması (`AppStoreView`), DNS nöbetçisinin son onarım durumu
+ * (`ServerHealthView`), site onarım bulgusunun ayrıntısı (`SiteRepairNotice`). Bu üç yer aynı
+ * kararı üç ayrı yerde veriyordu — biri (`AppStoreView`) hiç vermiyordu ve ham Türkçe basıyordu.
+ *
+ * ÖLÇÜLEN HATA: `AppStoreService` şablon açıklamalarını sabit Türkçe gönderiyordu ve
+ * `AppStoreView.vue` onları `t()`'den geçirmeden basıyordu; dili İngilizce olan müşteri
+ * katalog ekranında Türkçe cümle görüyordu. Aynı sınıf `DnsService`'in
+ * `lastAutoRepairStatus`'ünde de vardı ("ok: DNS servisi yeniden başlatıldı…").
+ *
+ * KURAL — `utils/apiError`'ın kuralının AYNISI, yenisi değil:
+ * anahtar biçimindeyse çevrilir; değilse OLDUĞU GİBİ basılır. Bu ikinci yarısı bir teselli
+ * değil, bilinçli karar: Windows'un döndürdüğü `Auto`/`Manual`, `service=…; listening=…` gibi
+ * ölçülmüş değerler ve `SQLite`/`web.config` gibi ürün adları çevrilemez — ham anahtar
+ * basmaktansa ham değer basmak dürüsttür. Bileşik gelen ("anahtar — ayrıntı") dizgede yalnız
+ * baştaki anahtar çevrilir, teşhis kısmı korunur.
+ */
+export function useServerText() {
+  const { t } = useI18n();
+
+  function serverText(raw: string | null | undefined): string {
+    const trimmed = (raw ?? "").trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    const { key, detail } = splitCompositeMessage(trimmed);
+    if (!looksLikeMessageKey(key)) {
+      return trimmed;
+    }
+
+    const translated = t(key);
+    const head = translated === key ? key : translated;
+    return detail ? `${head} — ${detail}` : head;
+  }
+
+  return { serverText };
 }
 
 /**

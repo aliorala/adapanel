@@ -9,7 +9,16 @@
         <button class="secondary compact back-btn" @click="backToSites">
           ← {{ t("panel.sites.backToSites") }}
         </button>
-        <strong class="context-domain">{{ selectedSiteName || t("panel.php.selectSite") }}</strong>
+        <!-- `<strong>` -> `<h2>`: BASLIK MERDIVENININ EKSIK BASAMAGI BURASIYDI.
+             OLCULDU (Pano sekmesi, calisma alani acik): sayfadaki baslik dizisi ust cubugun
+             `h1`inden dogrudan `SiteDetailView`in `h3`une atliyordu -- arada `h2` YOKTU.
+             Ustelik atlanan basamak, sayfanin KIMLIGI olan alan adiydi: ekran okuyucu
+             kullanicisi baslik listesinde hangi sitede oldugunu HIC goremiyordu, cunku
+             alan adi bir baslik degil kalin bir metindi.
+             BOY DEGISMEDI, bilerek: 15.9px (`--fs-xl`) bir onceki turda olculerek secilmisti
+             -- arac govdesinin kendi `h2`si 19.2px ve bu serit onunla YARISMAMALI. Merdiven
+             gorsel degil YAPISAL olarak eksikti; duzelen o. -->
+        <h2 class="context-domain">{{ selectedSiteName || t("panel.php.selectSite") }}</h2>
         <!-- `secondary compact` KALDIRILDI: bu bir `<a>`, base.css'teki kural ise element
              duzeyinde `button.secondary`. Yani siniflar hicbir sey yapmiyordu ve "Siteyi ac"
              masaustunde cercevesiz duz bir metin olarak duruyordu (ikincil dugme gorunumu
@@ -539,6 +548,11 @@ async function handleAddSubdomain(label: string) {
    ayrisir. */
 .tool-context .context-domain {
   font-size: var(--fs-xl);
+  /* KALINLIK 700'DE TUTULUYOR. Etiket `<strong>`ten `<h2>`ye gecince taban kural onu 660'a
+     dusururdu; hemen yanindaki geri dugmesi ise ACIKCA 700 (bir ust kural). Yani baslik,
+     komsusundan DAHA SONUK olurdu. Etiket degisikligi YAPISALDI (baslik merdiveni), gorsel
+     degil: onceki tur bu seridin gorunumunu olcerek kurmustu, o karar korunuyor. */
+  font-weight: 700;
   color: var(--text-strong);
 }
 
@@ -711,11 +725,14 @@ async function handleAddSubdomain(label: string) {
     min-height: 40px;
   }
 
-  /* Uzun alan adı düğmeleri sıkıştırmasın: kendi satırını alsın. */
+  /* Uzun alan adı düğmeleri sıkıştırmasın: kendi satırını alsın.
+     `font-size: var(--fs-lg)` KALDIRILDI. OLCULDU: 1rem = 13.5px, yani GOVDE METNIYLE
+     BIREBIR AYNI -- telefonda sayfanin basligi altindaki cumlelerden ayirt edilemiyordu.
+     Kucultmenin gerekcesi de yoktu: satir zaten `flex: 1 1 100%` ile kendi satirini
+     aliyor, sikisacak bir komsusu yok. Boy artik iki genislikte de `--fs-xl` (15.9px). */
   .tool-context .context-domain {
     flex: 1 1 100%;
     order: -1;
-    font-size: var(--fs-lg);
     overflow-wrap: anywhere;
   }
 

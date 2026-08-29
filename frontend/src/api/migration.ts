@@ -109,7 +109,16 @@ export async function migrateSiteStream(
 }
 
 export type PleskDiscoverPayload = { host: string; port: number; apiKey: string; userName: string; password: string };
-export type PleskDomain = { name: string; hostingType: string };
+/*
+ * İKİ AYRI ALAN, ÇÜNKÜ İKİ AYRI ÖLÇÜM.
+ * `hostingType` YALNIZ Plesk keşfinde dolar (Plesk'in `hosting_type` alanı: "virtual", "none"),
+ * `accountUser` YALNIZ cPanel/WHM keşfinde (hesabın sistem kullanıcı adı). Eskiden ikisi de tek
+ * `hostingType` alanından geliyordu ve ekranda etiketsiz basılıyordu — yani panel "virtual" ile
+ * "ali_shop" arasındaki farkı kullanıcıya HİÇ söylemiyordu. Alanlar arka uçta ayrıldı
+ * (`PleskDomainDto`); tipin ikisini de tanıması, şablonun hangisini gösterdiğini bilmesi demek.
+ * İsteğe bağlı (`?`): her keşif yolu yalnız kendi alanını doldurur, diğeri boş gelir.
+ */
+export type PleskDomain = { name: string; hostingType?: string; accountUser?: string };
 export type PleskDiscoverResult = { domains: PleskDomain[] };
 
 // Plesk REST API'sine bağlanıp domain'leri keşfet (sihirbazı doldurmak için). Best-effort.
