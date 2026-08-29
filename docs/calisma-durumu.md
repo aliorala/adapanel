@@ -391,6 +391,71 @@ olmadigi HIC olculmuyor. Bu makinede kayit dogruydu (`preCondition="runtimeVersi
 
 ---
 
+# DEVAM NOKTASI (29.08.2026 20:40 -- kota kesintisi icin yazildi)
+
+## ONCE BUNU CALISTIR, IS YAPMAYA BASLAMA
+    powershell -File scripts\devam-durumu.ps1
+
+Betik agacin SAGLAM mi YARIM mi oldugunu OLCER ve ne yapman gerektigini soyler.
+Kendiliginden hicbir sey silmez. Mantigi: bu depoda her commit YESIL bir durumdur,
+yani commit'lenmemis her sey TANIMI GEREGI ucus halindedir. "YARIM" derse iki
+secenek vardir, ucuncusu yoktur: (a) dosyayi tamamla, (b) `git checkout -- <dosya>`
+ile son yesil commit'e don.
+
+NOT: betigin ilk surumu `2>&1` kullandigi icin SAGLAM bir agaci "YARIM" diye
+raporluyordu (PowerShell 5.1 yerel komut stderr'ini NativeCommandError'a sarar ve
+cikis kodu 0 olsa bile hata uretir). Duzeltildi; bu betikte `2>&1` YOKTUR, karar
+yalniz $LASTEXITCODE'a bakar. Ayni tuzaga tekrar dusme.
+
+## SON YESIL NOKTA
+5b2aeff  Kalan 11 ekranin tasarim turu: olculmus yalanlar kapatildi
+Bu commit'te: 3895 test yesil, i18n TR/EN 5006 = 5006, typecheck+build temiz.
+Yayinlanan son surum 0.8.1 (SHA256 6FDF19399BA6B1B915EA832CFB0083649D8A9E0B10451A0C71517B09B7F6BFF3).
+Commit'lenmemis ne varsa 5b2aeff'ten SONRA gelen ucus halindeki istir.
+
+## SIRADAKI ISLER (oncelik sirasiyla)
+
+1. MIGRATIONVIEW yarim kaldi -- iki OLCULMUS bulgu acik:
+   (a) "Dosyalari cek" ve "Veritabanini aktar" bolum basliklari `<label><strong>`;
+       baslik merdiveninde YOKLAR, ekran okuyucu o iki bolume ulasamiyor.
+   (b) Kesif listesinde `d.hostingType` HAM basiliyor ve arka ucta IKI ANLAMA
+       geliyor: Plesk'te barindirma tipi ("virtual"), cPanel'de KULLANICI ADI
+       (SiteMigrationService.cs:406). Etiketsiz gosterildigi icin kullanici hangisini
+       gordugunu bilmiyor. Dogru duzeltme DTO'yu ayirmaktir.
+
+2. SERVERHEALTHVIEW artiklari:
+   (a) `dns.details` ham teshis dizgesi ekranda (`service=...; startMode=...`) --
+       `<details>` katlamasi + ~6 anahtarlik ceviri gerekiyor.
+   (b) `dns.startMode` cevrilmemis Windows degeri ("Auto"/"Manual") basiyor.
+   (c) `dns.lastAutoRepairStatus` sunucudan SABIT TURKCE "failed: ..." / "ok: ..."
+       geliyor ve basarisizlik NOTR renkte yaziliyor. Kok neden DnsService.cs:947.
+       Dizge koklamak YAMALAMA olur; arka ucta anahtar donmeli.
+   (d) DNS kurulu degilken kart tumuyle kayboluyor (`v-if="dns && dns.installed"`)
+       -- panel bir sey olcup hicbir sey soylemiyor.
+
+3. TAM TASARIM TURU GORMEYEN, KALAN 4 EKRAN:
+   AppStoreView · ProxyView · SiteDetailView · WebsiteWorkspaceView
+   (Son ucune 0.8.1'de kismen dokunuldu: ikon dili, h4 basligi, "Siteyi ac"
+   tekrari. Tam tur gormediler.)
+
+4. FIREWALLVIEW `form.port` varsayilani 80 (korumali web portu). SecurityView ayni
+   riski olcup varsayilani 0'a cekmisti. Onay diyalogu `requireText` ile korudugu
+   icin degistirilmedi; karar acik.
+
+5. IZLEME ekranlarinin DUZEN/HIZALAMA turu yapilmadi (ajan canli olcum yapamadi:
+   kendi imzali sertifikanin uyari sayfasi otomasyonla gecilemedi). Icerik hatalari
+   kapandi, duzen turu acik.
+
+## SUREN AJANLAR (kesildiyse isleri yarim kalmis olabilir)
+- WHMCS/PHP modulunu GERCEKTEN calistirma (integrations/whmcs/ altinda yeni test
+  dosyalari acti: fake-panel.php, module-contract.test.php, whmcs-stub.php).
+- Sunucudan gelen SABIT TURKCE metinlerin kullaniciya ulastigi yerler (871 ham
+  dizge, 123 dosya olculdu; ayiklama isin asil kismi).
+- MigrationView + ServerHealthView artiklari (madde 1 ve 2).
+- Kalan 4 ekranin tasarim turu (madde 3).
+
+---
+
 ## 0.8.1 — yalan soyleyen ekranlar (29.08.2026)
 
 **3883 test yesil**, 25 arayuz nobetcisi yesil (yeni: SiteToolIconTests).
