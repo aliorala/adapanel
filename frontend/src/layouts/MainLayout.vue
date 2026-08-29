@@ -1261,6 +1261,24 @@ a.brand-card {
   flex-direction: column;
   gap: 9px;
   min-width: 0;
+  /* İÇERİK ÜST SINIRI — panelin genişlik kararı BURADA uygulanır, değeri `--content-max`
+     belirtecinden gelir (gerekçe ve ölçümler `styles/base.css` içinde, tek kaynak).
+
+     `.content-column` DEĞİL, `.main-column` sınırlanıyor: üst çubuk (`.topbar`) da bu
+     sütunun içindedir ve ikisi AYNI genişlikte durmak zorundadır. Yalnız içerik
+     sınırlansaydı 2560px'de üst çubuk 2306px, altındaki paneller 1600px olurdu; çubuğun sağ
+     ucundaki yenile/çıkış düğmeleri hiçbir içeriğin hizasında olmayan 706px'lik boşlukta
+     asılı kalırdı. Sınır sonrası ÖLÇÜLDÜ: üst çubuk 1600px, içerik sütunu 1600px, ilk panel
+     1600px — üçü tam hizada.
+
+     `max-width` HİÇBİR ŞEYİ KIRPMAZ: tablolar kendi `.data-table` kabında (`overflow-x:
+     auto`) kayar, sayfa gövdesi yatayda kaymaz. Altı ekranda (Ana Sayfa, Ayarlar, Güvenlik,
+     Sunucu Araçları, Hesap, Denetim Kayıtları) ölçüldü: kırpılan öge 0, kaydırma çubuğu
+     açan tablo 0.
+
+     Dar ekran ATKILANMAZ: sınır ancak içerik 1600px'i aşabildiğinde, yani görüntü alanı
+     1854px'i (1600 + 218 kenar menü + 12 boşluk + 24 dolgu) geçtiğinde devreye girer. */
+  max-width: var(--content-max);
 }
 
 /* profesyonel paneller gibi ince tek satır üst çubuk. */

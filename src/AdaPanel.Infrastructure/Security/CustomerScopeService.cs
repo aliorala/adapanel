@@ -374,7 +374,9 @@ public sealed class CustomerScopeService(
         // Yani (b) hâlâ seçili ama sonuçları artık sessiz değil — zorlama yolu belirsizliği bilerek
         // ve YAZILI gerekçesiyle yutuyor (FileQuotaGuard.EnsureRoom), gösterim yolları ise sayının eksik
         // olabileceğini KULLANICIYA SÖYLÜYOR (UserSummaryDto/SubscriptionUsageDto.DiskMeasured).
-        return new DiskUsage(totalBytes / (1024 * 1024), olculdu, kesilmeSebebi);
+        // Ölçek tabanı PanelUnits'ten: burada `1024 * 1024` yazmak, tabanı panelde BEŞİNCİ kez
+        // elle tekrarlamaktı ve birini 1000'e çeviren düzenleme hiçbir yerde kırmızı yakmazdı.
+        return new DiskUsage(PanelUnits.BytesToMebibytes(totalBytes), olculdu, kesilmeSebebi);
     }
 
     /// <summary>Birden çok sitenin kesilme sebebinden RAPOR EDİLECEK olanı seçer.</summary>

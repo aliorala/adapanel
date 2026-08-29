@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
@@ -158,7 +159,9 @@ public sealed class SubscriptionEnforcementService(
         if (scope.MaxTrafficGbPerMonth > 0)
         {
             var (bayt, olculdu) = await TrafikOlcAsync(scope.Sites, cancellationToken);
-            var sinir = (long)scope.MaxTrafficGbPerMonth * 1024 * 1024 * 1024;
+            // `MaxTrafficGbPerMonth` adı "Gb" der, değeri GiB'dir — bilinçli bir tel uyumu; gerekçesi
+            // PanelUnits'te yazılı. Taban oradan gelir, burada yeniden türetilmez.
+            var sinir = PanelUnits.GibibytesToBytes(scope.MaxTrafficGbPerMonth);
 
             if (olculdu && bayt >= sinir && !scope.IsSuspended)
             {

@@ -57,8 +57,10 @@ public static class FileQuotaGuard
             return;
         }
 
-        var tavanBayt = (long)maxDiskMb * 1024L * 1024L;
-        var kullanilanBayt = kullanim.UsageMb * 1024L * 1024L;
+        // Taban PanelUnits'ten. `maxDiskMb`/`UsageMb` adları "Mb" der, değerleri MiB'dir —
+        // bilinçli tel uyumu; üç maddelik gerekçe PanelUnits'te yazılı.
+        var tavanBayt = PanelUnits.MebibytesToBytes(maxDiskMb);
+        var kullanilanBayt = PanelUnits.MebibytesToBytes(kullanim.UsageMb);
 
         // ==========================================================================================
         // HESAP BAYT ÜZERİNDEN — ve bu, kapatılan İKİNCİ hatadır (aynı kök).

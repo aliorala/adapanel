@@ -1,3 +1,5 @@
+using AdaPanel.Core.Common;
+
 namespace AdaPanel.Infrastructure.Billing;
 
 /// <summary>
@@ -16,9 +18,10 @@ namespace AdaPanel.Infrastructure.Billing;
 /// </remarks>
 public static class BillingUnits
 {
-    private const long BytesPerMegabyte = 1024L * 1024L;
-
-    private const long MegabytesPerGigabyte = 1024L;
+    // TABAN BURADA TANIMLI DEĞİL, PanelUnits'ten gelir. Eskiden bu iki sabit panelin ölçek
+    // tabanının BEŞİNCİ kopyasıydı; WHMCS'e giden sayının tabanı ile kotayı UYGULAYAN kodun tabanı
+    // ayrı yerlerde yazılıydı ve birinin değişmesi ötekini sessizce yalancı yapardı — müşteriye
+    // gönderilen fatura ile panelin uyguladığı sınır ayrışırdı.
 
     /// <summary>
     /// Baytı MB'ye çevirir (aşağı yuvarlar).
@@ -28,8 +31,7 @@ public static class BillingUnits
     /// kimsenin kullanmadığı baytı faturalamak olurdu. Negatif giriş (bozuk günlük) 0 sayılır;
     /// eksi kullanım diye bir şey yoktur ve WHMCS'e eksi yazmak aşım hesabını bozardı.
     /// </remarks>
-    public static long BytesToMegabytes(long bytes) =>
-        bytes <= 0 ? 0 : bytes / BytesPerMegabyte;
+    public static long BytesToMegabytes(long bytes) => PanelUnits.BytesToMebibytes(bytes);
 
     /// <summary>
     /// GB cinsinden kotayı MB'ye çevirir. <c>0</c> (sınırsız) olduğu gibi kalır.
@@ -39,8 +41,7 @@ public static class BillingUnits
     /// çarpım öncesi korunur. Negatif kota anlamsızdır, sınırsıza (0) düşürülür — çarpsaydık
     /// WHMCS'e eksi bir limit yazılır ve her hesap "kotayı aşmış" görünürdü.
     /// </remarks>
-    public static long GigabytesToMegabytes(int gigabytes) =>
-        gigabytes <= 0 ? 0 : gigabytes * MegabytesPerGigabyte;
+    public static long GigabytesToMegabytes(int gigabytes) => PanelUnits.GibibytesToMebibytes(gigabytes);
 
     /// <summary>
     /// Disk kotasını (panelde zaten MB) normalleştirir: negatif değer sınırsız (0) sayılır.
