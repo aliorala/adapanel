@@ -38,6 +38,61 @@ public sealed class FtpHomeProbeTests : IDisposable
 
     private string EvYolu(string kullanici) => Path.Combine(kok, "ftp-root", "LocalUser", kullanici);
 
+    /// <summary>
+    /// EV KLASÖRÜ İKİ YOLA BİRDEN KURULUR — canlı sunucuda ölçülerek bulundu, sadeleştirilmesin.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Müşterinin FTP'si HİÇ çalışmıyordu: her giriş <c>530 ... home directory inaccessible</c>
+    /// alıyordu. Panelin kontrol ettiği her şey doğruydu (junction, hedef, NTFS izni, yetki
+    /// kuralı, izolasyon kipi, grup üyeliği). IIS günlüğündeki <c>sc-win32-status = 3</c>
+    /// (ERROR_PATH_NOT_FOUND) sebebi söyledi: IIS BAŞKA bir klasöre bakıyordu.
+    /// </para>
+    /// <para>
+    /// Microsoft'un <c>&lt;userIsolation&gt;</c> belgesi iki hiyerarşi tanımlar: yerel hesaplar
+    /// <c>%FtpRoot%\LocalUser\%UserName%</c>, ETKİ ALANI hesapları
+    /// <c>%FtpRoot%\%UserDomain%\%UserName%</c>. O sunucuda IIS yerel hesabı makine adıyla
+    /// nitelenmiş görüp İKİNCİ hiyerarşiyi uyguluyordu. Makine adlı yola aynı junction elle
+    /// kurulunca giriş anında <c>230 User logged in.</c> oldu — başka hiçbir şey değişmeden.
+    /// </para>
+    /// <para>
+    /// Bu yüzden İKİSİ BİRDEN kurulur: bir junction disk yeri kaplamaz ve ikisi de aynı hedefi
+    /// gösterir, yani bedeli yoktur; hangisinin doğru olduğunu tahmin etmenin bedeli ise FTP'nin
+    /// sessizce ölü kalmasıdır.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Ev_klasoru_HEM_LocalUser_HEM_makine_adi_yoluna_kurulur()
+    {
+        var yollar = Servis().HomeLinkPaths("ornek");
+
+        Assert.Equal(2, yollar.Count);
+
+        var ftpKok = Path.Combine(kok, "ftp-root");
+        Assert.Contains(Path.Combine(ftpKok, "LocalUser", "ornek"), yollar);
+        Assert.Contains(Path.Combine(ftpKok, Environment.MachineName, "ornek"), yollar);
+    }
+
+    /// <summary>
+    /// IIS makine adlı yolu kullanan bir sunucuda, kurulum SAĞLAM raporlanmalı.
+    /// </summary>
+    /// <remarks>
+    /// Tek yola (LocalUser) bakan bir ölçüm burada "ev yok" derdi: yani ÇALIŞAN bir kurulumu
+    /// bozuk gösterirdi. Panelin yalan söylemesinin sadece ters yönüdür ve aynı derecede yanlıştır.
+    /// </remarks>
+    [Fact]
+    public void Yalniz_makine_adli_yol_varsa_kurulum_SAGLAM_sayilir()
+    {
+        var hedef = Path.Combine(kok, "site-makine");
+        Directory.CreateDirectory(hedef);
+        JunctionKur(Path.Combine(kok, "ftp-root", Environment.MachineName, "makineli"), hedef);
+
+        var sonuc = Servis().ProbeHome("makineli");
+
+        Assert.True(sonuc.LinkExists);
+        Assert.True(sonuc.TargetExists);
+    }
+
     [Fact]
     public void Baglanti_hic_yoksa_yok_denir_hedefi_ise_SORULMAZ()
     {

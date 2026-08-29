@@ -849,9 +849,51 @@ public sealed partial class FtpService(
         if ($adaKalanKurallar.Count -gt 0) { throw "FTP yetki kurali kaldirilamadi (kural hala duruyor): $userName" }
         """;
 
+    /*
+     * EV KLASÖRÜ İKİ YOLA BİRDEN KURULUR — ve bu, canlı bir sunucuda ölçülerek bulundu.
+     *
+     * BELİRTİ: müşterinin FTP'si hiç çalışmıyordu. Her giriş
+     * `530 User cannot log in, home directory inaccessible.` alıyordu. Kimlik doğrulama GEÇİYORDU
+     * (yanlış parolada IIS bambaşka bir cevap verir), junction duruyordu, hedefi duruyordu, NTFS
+     * izinleri yerindeydi, yetki kuralı vardı, izolasyon kipi doğruydu, hesap Users grubundaydı.
+     * Panelin kontrol ettiği HER ŞEY doğruydu.
+     *
+     * ÖLÇÜM: IIS FTP günlüğündeki `sc-win32-status` = 3 (ERROR_PATH_NOT_FOUND). "Yasak" değil,
+     * "bulamadım". Microsoft'un `<userIsolation>` belgesi ev klasörü hiyerarşisini şöyle tanımlar:
+     *
+     *     Yerel Windows hesaplari  ->  %FtpRoot%\LocalUser\%UserName%
+     *     Windows ETKI ALANI hesaplari ->  %FtpRoot%\%UserDomain%\%UserName%
+     *
+     * Panel her zaman birincisini kuruyordu. Ama bu sunucuda IIS hesabı `VM-185-7-242-22\adapanel`
+     * diye MAKİNE ADIYLA NİTELENMİŞ görüyor ve İKİNCİ satırı uyguluyor — yani `%UserDomain%` yerine
+     * makine adını koyup `<ftp-kök>\VM-185-7-242-22\adapanel` klasörünü arıyor. Orada bir şey
+     * olmadığı için yol bulunamıyor. KANIT: makine adlı yola aynı junction elle kurulduğu anda
+     * giriş `230 User logged in.` oldu ve dizin listesi geldi; hiçbir izin, kip ya da hesap
+     * ayarı değiştirilmeden.
+     *
+     * NEDEN "DOĞRUSUNU SEÇ" DEĞİL DE İKİSİ BİRDEN: IIS'in yerel hesabı hangi sınıfa koyacağı
+     * makineye göre değişiyor ve panel bunu güvenilir biçimde ÖNCEDEN bilemez (aynı makinede
+     * `Get-ItemProperty` ile okunan izolasyon kipi bile bazı IIS sürümlerinde boş dönüyor — bu
+     * dosyanın başka bir yerinde de aynı ölçüm notu var). Bir junction disk yeri kaplamaz ve iki
+     * yol da AYNI hedefi gösterir, yani ikisini birden kurmanın bedeli yok; birini tahmin etmenin
+     * bedeli ise FTP'nin sessizce ölü kalmasıdır. Kiracı izolasyonu da bozulmaz: her iki yol da
+     * yalnızca o kullanıcının kendi sitesine bakar.
+     */
+    internal IReadOnlyList<string> HomeLinkPaths(string userName)
+    {
+        var ftpRoot = Path.Combine(dataRoot, "ftp-root");
+
+        return new[]
+        {
+            Path.Combine(ftpRoot, "LocalUser", userName),
+            Path.Combine(ftpRoot, Environment.MachineName, userName)
+        };
+    }
+
     private async Task ConfigureUserHomeAsync(string userName, string homePath, CancellationToken cancellationToken)
     {
-        var userRoot = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
+        var userRoots = HomeLinkPaths(userName);
+        var rootLiterals = string.Join(",", userRoots.Select(yol => $"'{EscapePowerShellLiteral(yol)}'"));
 
         // KATI çalıştırma (RunPowerShellStrictAsync): bu betiğin ortasında patlayan bir ifade
         // eskiden çıkış koduna yansımıyordu — PowerShell'in çıkış kodu SON ifadenin sonucudur.
@@ -860,10 +902,13 @@ public sealed partial class FtpService(
             Import-Module WebAdministration -ErrorAction Stop
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $userName = '{{EscapePowerShellLiteral(userName)}}'
-            $userRoot = '{{EscapePowerShellLiteral(userRoot)}}'
             $homePath = '{{EscapePowerShellLiteral(homePath)}}'
+            foreach ($userRoot in @({{rootLiterals}})) {
+              $adaUst = Split-Path -Parent $userRoot
+              if (-not (Test-Path -LiteralPath $adaUst)) { New-Item -ItemType Directory -Path $adaUst -Force | Out-Null }
             {{RemoveUserRootSnippet}}
-            New-Item -ItemType Junction -Path $userRoot -Target $homePath | Out-Null
+              New-Item -ItemType Junction -Path $userRoot -Target $homePath | Out-Null
+            }
             {{RemoveUserAuthorizationSnippet}}
             Add-WebConfiguration -PSPath 'MACHINE/WEBROOT/APPHOST' -Location $siteName -Filter 'system.ftpServer/security/authorization' -Value @{accessType='Allow';users=$userName;permissions=3}
             """;
@@ -877,7 +922,12 @@ public sealed partial class FtpService(
 
     private async Task RemoveUserAuthorizationAsync(string userName, CancellationToken cancellationToken)
     {
-        var userRoot = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
+        // SİLME DE HER İKİ YOLU birden temizler: kurulum ikisini birden açıyor (gerekçesi
+        // HomeLinkPaths'te). Yalnız birini silmek, geride HEDEFSİZ bir junction bırakırdı ve o
+        // artık bir sonraki okuyucuya "bu kullanıcının evi var" diye yalan söylerdi.
+        var rootLiterals = string.Join(
+            ",",
+            HomeLinkPaths(userName).Select(yol => $"'{EscapePowerShellLiteral(yol)}'"));
 
         // Site varlık denetimi try/catch İÇİNDE: katı kipte ($ErrorActionPreference='Stop') IIS
         // sağlayıcısı hiç yüklenmemişse "IIS:\..." yolu DriveNotFound ile PATLAR ve IIS FTP rolü
@@ -887,13 +937,14 @@ public sealed partial class FtpService(
             Import-Module WebAdministration -ErrorAction SilentlyContinue
             $siteName = '{{EscapePowerShellLiteral(FtpSiteName)}}'
             $userName = '{{EscapePowerShellLiteral(userName)}}'
-            $userRoot = '{{EscapePowerShellLiteral(userRoot)}}'
             $adaSiteVar = $false
             try { $adaSiteVar = Test-Path "IIS:\Sites\$siteName" } catch { $adaSiteVar = $false }
             if ($adaSiteVar) {
             {{RemoveUserAuthorizationSnippet}}
             }
+            foreach ($userRoot in @({{rootLiterals}})) {
             {{RemoveUserRootSnippet}}
+            }
             """;
 
         var result = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
@@ -932,8 +983,32 @@ public sealed partial class FtpService(
     /// </remarks>
     internal FtpHomeProbe ProbeHome(string userName)
     {
-        var linkPath = Path.Combine(dataRoot, "ftp-root", "LocalUser", userName);
+        // HER İKİ YOL da ölçülür ve EN İYİSİ raporlanır. Gerekçe: IIS bu ikisinden HANGİSİNE
+        // bakacağını makineye göre seçiyor (bkz. HomeLinkPaths). Tek yola bakan bir ölçüm, IIS'in
+        // ötekini kullandığı bir sunucuda çalışan bir kurulumu "bozuk" diye gösterirdi — panelin
+        // yalan söylemesinin sadece ters yönü. Kullanılabilir bir yol VARSA kurulum sağlamdır.
+        var sonuclar = HomeLinkPaths(userName).Select(TekYoluOlc).ToArray();
 
+        var saglam = sonuclar.FirstOrDefault(s => s.LinkExists == true && s.TargetExists == true);
+        if (saglam.LinkPath is not null)
+        {
+            return saglam;
+        }
+
+        // Sağlam yol yok. Sırayla: hedefi ölçülüp YOK bulunan (en açıklayıcı sebep), sonra
+        // ölçülemeyen, sonra ilk yol (hiçbiri yok).
+        var hedefiYok = sonuclar.FirstOrDefault(s => s.LinkExists == true && s.TargetExists == false);
+        if (hedefiYok.LinkPath is not null)
+        {
+            return hedefiYok;
+        }
+
+        var olculemeyen = sonuclar.FirstOrDefault(s => s.LinkExists is null);
+        return olculemeyen.LinkPath is not null ? olculemeyen : sonuclar[0];
+    }
+
+    private static FtpHomeProbe TekYoluOlc(string linkPath)
+    {
         try
         {
             if (!Directory.Exists(linkPath))
