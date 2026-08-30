@@ -487,6 +487,77 @@ DERS: "test yazdim" yetmez, testin BIR SEY OLCTUGU kanitlanmali.
 
 ---
 
+# OLCULDU, HENUZ KAPATILMADI (30.08.2026 aksami)
+
+Iki denetim ajani kota limitine takildi ama ALT OLCUMLERI tamamlandi. Asagidakiler
+DOSYA:SATIR ile olculmus bulgulardir; yeniden kesfetmeye gerek yok.
+
+## SSRF -- kullanicidan gelen hedef adreslerde host denetimi YOK
+(Bir ajan su an bunlari kapatiyor; bitince bu bolum guncellenecek.)
+* BackupService.ResolveTarget (BackupService.cs:4647-4747) <- request.RemoteUrl.
+  Yalniz tur/mutlak URI/sema denetleniyor. Backup/ altinda
+  IsLoopback|127\.0\.0|169\.254|GetHostAddresses aramasi SIFIR sonuc.
+  targetType=http + http://127.0.0.1:9200/... -> ic servislere PUT/DELETE/HEAD.
+  webdav ayrica PROPFIND + MKCOL. "Baglantiyi test et" (:4236,:4250) verilen
+  adrese HEMEN dosya yukluyor.
+* FileMigrationService.cs:43-46 yalniz "bos degil mi"; :178 (FTP), :269 (SFTP)
+  request.Host + request.Port -> keyfi host:port TCP baglantisi.
+* SchedulerService.cs:1206 curl.exe "<request.Url>" ve gorev SYSTEM kosuyor;
+  IsAcceptableTaskUrl (:1035-1051) yalniz SEMA denetliyor.
+* NotificationService.cs:94 (webhook POST) ve :182 (SmtpClient.ConnectAsync);
+  ayarlar govdeden yaziliyor, yalniz .Trim().
+* GitDeploymentService.ValidateRepositoryUrl (:238-289) iyi yazilmis (bastaki -,
+  bosluk, :: taşiyici, sema beyaz listesi, GIT_ALLOW_PROTOCOL) ama HOST denetimi yok.
+
+SAGLAM CIKANLAR (tekrar aranmasin): self-update UpdatePackageTrust host beyaz
+listesi + depo eslestirmesi + https zorunlu · Dropbox/OneDrive SABIT adresler ·
+CacheService/WebDbClientService sabit 127.0.0.1 · ClusterAddressGuard sertlestirilmis ·
+RdnsService/SeoBotVerifier/WinAcmeSslService:494 yalniz DNS, baglanmiyor.
+
+## KAYNAK TUKETIMI -- kiraci sunucuyu durdurabilir
+* EN UCUZ YOL: FileService sikistirma (:914), cikarma (:951), kopyalama (:294),
+  boyut hesabi (:1101). Customer'a acik (FilesController.cs:21), SIFIR eszamanlilik
+  denetimi, SIFIR hiz siniri, hepsi istek is parcaciginda ve LocalSystem olarak.
+  Boyut hesabi HttpPost ve hiz sinirsiz: N istek = N x 15 saniye tam hizda tarama.
+* AntivirusService.cs:116 (oku) ile :127 (yaz) ARASINDA await var -> kontrol-sonra-yaz
+  YARISI. N istek ayni anda "tarama yok" gorup N tane clamscan.exe baslatiyor, her biri
+  2 saat zaman asimli. DOGRU KALIP DEPODA VAR: RunningJobService.cs:101-132 kontrol ve
+  yazmayi AYNI JsonFileStore.UpdateAsync kilidi icinde yapiyor; JsonFileStore.WriteAsync
+  (:37) kilit ALMIYOR, UpdateAsync (:80) aliyor.
+* RunningJobService.cs:117 slot anahtari IS TURU, kiraci degil. Bir Customer'in uzun
+  yedegi butun otekilere VE yoneticiye 409 donduruyor -- caprazi kiraci DoS.
+* Hiz siniri YALNIZ login/password-change/setup/mcp uclarinda. Global sinirlayici
+  cerezli ve anonim istekler icin GetNoLimiter -> ~66 kimlik dogrulamali denetleyicinin
+  HICBIRINDE hiz siniri yok. Anonim posta gonderen ucta da yok
+  (MailListPublicController.cs:65 -> unsubscribeService.RequestAsync = kimlik
+  dogrulamasiz posta yukseltme).
+* Kestrel Limits HIC yapilandirilmamis: MaxConcurrentConnections SINIRSIZ,
+  RequestTimeout yok. DbToolsProxy 1 GiB govde + EnableBuffering (disk'e tasar,
+  toplam sinir yok) + 30 dakika timeout.
+* UseForwardedHeaders HIC yapilandirilmamis. Dogrudan Kestrel'de GUVENLI (sahte baslik
+  guvenilmiyor) ama panel bir ters vekil arkasina konursa butun istemciler tek bolume
+  duser: 5 giris/dk BUTUN internet icin, ve gizli yol IP beyaz listesi anlamsizlasir.
+
+## BELLEGE TAM OKUMA (sinirsiz)
+* ProcessRunner.cs:62-63 stdout/stderr ReadToEndAsync -- SINIR YOK, tek sinir 10 dk.
+  Deponun EN COK kullanilan ilkeli; kiraciya ulasilabilir (FileService.cs:876
+  icacls /T kiracinin kendi agaci uzerinde, cikti kiracinin dosya sayisiyla buyuyor).
+* BackupService.cs:2251 gorev XML'i File.ReadAllText + Unicode.GetBytes +
+  ToBase64String (~2.67x) ve bu bir DONGUDE, kaynak saldirgan arsivinden.
+* DbToolsProxyController.cs:130 16 MB siniri "contentLength is null or <= 16MB" --
+  Content-Length OLMAYAN (chunked) yanit siniri TAMAMEN atlıyor.
+* NginxInstallationSupport.cs:462 ve WebmailService.cs:346: DONMEYEN error.log'u
+  TAMAMEN belege okuyup son 4 KB / 1.5 KB'sini aliyor.
+* Kiraci yazabildigi dosyalari sinirsiz okuyan yollar: DirectoryProtectionService.cs:382
+  (her korumali dizin icin bir web.config, TEK istekte N dosya),
+  WordPressToolkitService.cs:1456 (wp-config.php + tum dize uzerinde Regex, HER WP
+  panosu yuklenisinde).
+SAGLAM CIKANLAR: LogViewerService.ReadTailLines 2 MB pencereyle SEEK ediyor (1 GB
+gunluk 2 MB'a mal oluyor) · W3cLogReader satir satir akiyor · SeoCrawler MaxResponseBytes ·
+HtaccessFileSystem.TryReadText maxBytes parametreli · Branding yukleme cift katmanli.
+
+---
+
 # DEVAM NOKTASI (29.08.2026 20:40 -- kota kesintisi icin yazildi)
 
 ## ONCE BUNU CALISTIR, IS YAPMAYA BASLAMA
