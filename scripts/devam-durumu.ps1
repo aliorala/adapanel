@@ -87,6 +87,16 @@ if ((Test-Path $trYol) -and (Test-Path $enYol)) {
     }
 }
 
+# Mahremiyet kapisinin kendi sinamasi. NEDEN BURADA: kapi yalniz YAYIN aninda kosuyordu, yani
+# bozuldugu ancak yayin denenince anlasilirdi -- ve 0.8.7'de kapinin "VM-" kalibinin dogustan olu
+# oldugu tam da o anda ortaya cikti. Standart olcume baglanmasi, kapinin bozuldugunu yayindan
+# ONCE gostermek icindir.
+Yaz "-- mahremiyet kapisi" "Cyan"
+& (Join-Path $PSScriptRoot "test-release-note-privacy.ps1")
+if ($LASTEXITCODE -ne 0) {
+    $hatalar.Add("Mahremiyet kapisi BOZUK -- duzeltmeden yayin yapilmamali.")
+}
+
 # ONEMLI -- BU BETIKTE `2>&1` YOK, ve bu bilincli bir karardir. OLCULDU: Windows PowerShell
 # 5.1'de bir YEREL komutun (npm, node, dotnet) stderr'ini `2>&1` ile boru hattina almak, her
 # satiri NativeCommandError'a sarar ve komut 0 ile bitse bile hata uretir. Betigin ilk surumu

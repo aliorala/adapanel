@@ -53,7 +53,16 @@ function Get-AdaReleaseNotePrivacyFindings {
         $b = [int]$m.Groups['b'].Value
 
         # 0.x, 127.x (loopback), 10.x, 192.168.x, 172.16-31.x (ozel), 255.x, 224+ (coklu yayin)
+        #
+        # 169.254.x (LINK-LOCAL, RFC 3927) DA SERBEST -- ve bu satiri bir YANLIS ALARM yazdirdi:
+        # 0.8.7 yayin notu SSRF korumasini anlatirken 169.254.169.254'u geciyor. O adres bulut
+        # meta veri ucudur, dunyada HER sunucuda AYNIDIR ve bu yuzden kimseyi tanimlamaz; ustelik
+        # link-local aralik kimseye ATANMAZ, arayuz kendi kendine yapilandirir. Yani burada
+        # "genel IP" olmasi teknik olarak imkansiz. Kapiyi gevsetmiyoruz, YANLIS OLAN kurali
+        # duzeltiyoruz: dogrulama araci yanlis alarm verirse insan onu susturmayi ogrenir ve
+        # gercek bulguyu da gecer -- yanlis alarm, aracin kendisinden daha tehlikelidir.
         $ozel = ($a -eq 0) -or ($a -eq 127) -or ($a -eq 10) -or ($a -ge 224) -or
+                ($a -eq 169 -and $b -eq 254) -or
                 ($a -eq 192 -and $b -eq 168) -or ($a -eq 172 -and $b -ge 16 -and $b -le 31)
 
         # Surum numarasi degil: dort parcali bir surum (0.8.5.1) IP'ye benzer ama ilk parcasi
@@ -64,7 +73,13 @@ function Get-AdaReleaseNotePrivacyFindings {
     }
 
     # --- 2) MAKINE ADI -------------------------------------------------------------------------
-    foreach ($m in [regex]::Matches($Metin, '\b(?:VM-[\d-]{5,}|DESKTOP-[A-Z0-9]{5,}|WIN-[A-Z0-9]{5,})\b', 'IgnoreCase')) {
+    # VM- KALIBI ILK YAZILDIGINDA OLUYDU: 'VM-[\d-]{5,}' yalniz RAKAM kabul ediyordu, yani
+    # "VM-ADAPANEL-01" gibi HARF iceren -- ve gercek hayatta en sik gorulen -- makine adlari
+    # suzgecten geciyordu. Kardes kaliplar (DESKTOP-, WIN-) bastan [A-Z0-9] yaziyordu; uc kalip
+    # tek satirda yan yana durdugu hâlde biri otekilerden farkliydi ve kimse fark etmemisti.
+    # Yanlis alarm kovalarken yapilan mutasyon denemesi yakaladi: kapinin YAKALAMASI gerekeni
+    # yakaladigini da sinamak, GECIRMESI gerekeni gecirdigini sinamak kadar gereklidir.
+    foreach ($m in [regex]::Matches($Metin, '\b(?:VM-[A-Z0-9][A-Z0-9-]{4,}|DESKTOP-[A-Z0-9]{5,}|WIN-[A-Z0-9]{5,})\b', 'IgnoreCase')) {
         $bulgular.Add("makine adi: $($m.Value)")
     }
 
