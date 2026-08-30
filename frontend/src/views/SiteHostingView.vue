@@ -471,6 +471,21 @@
                 <textarea :value="webhookUrl" rows="2" readonly></textarea>
                 <small>{{ t("panel.hosting.gitWebhookHelp") }}</small>
               </label>
+              <label class="setting-row align-start">
+                <span>{{ t("panel.hosting.gitWebhookHeader") }}</span>
+                <textarea :value="webhookHeaderLine" rows="2" readonly></textarea>
+                <small>{{ t("panel.hosting.gitWebhookHeaderHelp") }}</small>
+              </label>
+              <div class="setting-row align-start">
+                <span>{{ t("panel.hosting.gitWebhookLegacy") }}</span>
+                <div>
+                  <button type="button" class="secondary compact" @click="showLegacyWebhook = !showLegacyWebhook">
+                    {{ showLegacyWebhook ? t("panel.hosting.gitWebhookLegacyHide") : t("panel.hosting.gitWebhookLegacyShow") }}
+                  </button>
+                  <textarea v-if="showLegacyWebhook" :value="legacyWebhookUrl" rows="2" readonly></textarea>
+                </div>
+                <small>{{ t("panel.hosting.gitWebhookLegacyHelp") }}</small>
+              </div>
             </div>
 
             <pre v-if="gitOutput" class="composer-output">{{ gitOutput }}</pre>
@@ -575,10 +590,32 @@ const gitOutput = ref("");
 const stats = ref<WebStatistics | null>(null);
 const statsDays = ref(7);
 const maxDailyHit = computed(() => Math.max(1, ...(stats.value?.dailyHits.map((day) => day.count) ?? [1])));
+// WEBHOOK ADRESI ARTIK JETON TASIMIYOR.
+//
+// Eski hali `...?token=<gizli>` uretiyordu ve o adres saglayiciya yapistirildiginda jeton HER
+// tetiklemede IIS/W3C erisim gunlugune yaziliyordu -- panelin kendi gunluk goruntuleyicisi
+// oldugu icin dagitim anahtari gunlugu okuyabilen herkese gorunur haldeydi.
 const webhookUrl = computed(() => {
+  if (!git.value?.configured) return "";
+  return `${window.location.origin}${git.value.webhookPath}`;
+});
+
+// Jetonun konacagi baslik satiri, saglayicinin "secret/header" alanina yapistirilmak uzere.
+const webhookHeaderLine = computed(() => {
+  if (!git.value?.configured) return "";
+  return `${git.value.webhookHeaderName}: ${git.value.webhookSecret}`;
+});
+
+// ESKI BICIM GIZLENMIYOR, UYARIYLA GOSTERILIYOR.
+//
+// Kullanicilarin saglayicida DURAN adresleri bu bicimde ve sunucu onlari kabul etmeye DEVAM
+// ediyor (geriye donuk uyum). Bicimi ekrandan tamamen kaldirmak, calisan bir kancayi ariza
+// saniip yeniden kurmaya ya da -- daha kotusu -- gunluge sizdigini hic ogrenmemeye yol acardi.
+const legacyWebhookUrl = computed(() => {
   if (!git.value?.configured) return "";
   return `${window.location.origin}${git.value.webhookPath}?token=${git.value.webhookSecret}`;
 });
+const showLegacyWebhook = ref(false);
 const form = reactive({
   maximumBandwidthBytesPerSecond: 0,
   maximumConnections: 0,

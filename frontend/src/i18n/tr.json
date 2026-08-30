@@ -2890,7 +2890,13 @@
   "panel.hosting.gitRegenerate": "Webhook anahtarını yenile",
   "panel.hosting.gitLastDeploy": "Son dağıtım",
   "panel.hosting.gitWebhook": "Webhook adresi",
-  "panel.hosting.gitWebhookHelp": "Git sağlayıcınızdaki push webhook'una bu adresi ekleyin (POST).",
+  "panel.hosting.gitWebhookHelp": "Git sağlayıcınızdaki push webhook'una bu adresi ekleyin (POST). Adres artık gizli anahtarı TAŞIMIYOR; anahtar aşağıdaki başlığa konur.",
+  "panel.hosting.gitWebhookHeader": "Webhook gizli başlığı",
+  "panel.hosting.gitWebhookHeaderHelp": "Bu satırı sağlayıcının özel başlık (custom header) alanına ekleyin. Başlık tercih edilen yoldur: sorgu dizesinin aksine sunucu erişim günlüklerine YAZILMAZ.",
+  "panel.hosting.gitWebhookLegacy": "Eski biçim (sorgu dizeli)",
+  "panel.hosting.gitWebhookLegacyShow": "Eski biçimi göster",
+  "panel.hosting.gitWebhookLegacyHide": "Gizle",
+  "panel.hosting.gitWebhookLegacyHelp": "Sunucu bu biçimi kabul etmeye DEVAM ediyor; sağlayıcınızdaki mevcut adresler çalışmaya devam eder. Ama jeton sorgu dizesinde gider ve her tetiklemede IIS erişim günlüğüne YAZILIR — günlüğü okuyabilen herkes dağıtım anahtarınızı görebilir. Başlıklı biçime geçtikten sonra anahtarı yenileyin.",
   "panel.hosting.gitSaved": "Git yapılandırması kaydedildi.",
   "panel.hosting.gitDeployed": "Dağıtım başarılı.",
   "panel.hosting.gitDeployFailed": "Dağıtım başarısız oldu.",
@@ -3362,6 +3368,7 @@
   "backup.site_config_missing": "Yedekte sitenin yapılandırması yok; site yeniden kurulamadı: {target}",
   "backup.site_create_failed": "Site yeniden kurulamadı: {target}",
   "backup.restore_task_failed": "Zamanlanmış görev geri yüklenemedi; Görev Zamanlayıcı'ya kaydedilmedi. Geri yükleme YARIM kaldı.",
+  "backup.restore_task_too_large": "Görev XML dosyası fazla büyük olduğu için atlandı",
   "backup.restore_site_failed": "Site yedekten yeniden kurulamadı. Geri yükleme YARIM kaldı; bu siteyi elle kurmanız gerekir.",
   "backup.restore_ftp_failed": "FTP hesabı yedekten yeniden kurulamadı. Geri yükleme YARIM kaldı.",
   "backup.site_binding_failed": "Site bağlılığı eklenemedi: {target}",
@@ -5077,5 +5084,6 @@
   "panel.ftp.homeUnmeasured": "Ev klasörü ölçülemedi",
   "cron.write_unverified": "Görev kaydedildi ama Görev Zamanlayıcı'da bulunamadı; kayıt doğrulanamadı.",
   "backup.mail_service_start_failed": "Yedekleme için durdurulan e-posta sunucusu yeniden başlatılamadı; posta şu anda çalışmıyor olabilir.",
-  "backup.mail_service_not_running": "E-posta sunucusu görevi devre dışı görünüyor; posta çalışmıyor."
+  "backup.mail_service_not_running": "E-posta sunucusu görevi devre dışı görünüyor; posta çalışmıyor.",
+  "rate_limit.exceeded": "Çok fazla istek gönderildi. Kısa bir süre bekleyip tekrar deneyin."
 }

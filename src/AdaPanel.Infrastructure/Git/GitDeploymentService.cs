@@ -265,7 +265,11 @@ public sealed class GitDeploymentService(
             LastDeployUtc = record.LastDeployUtc,
             LastDeployStatus = record.LastDeployStatus,
             WebhookPath = $"/api/v1/git/{Uri.EscapeDataString(siteName)}/webhook",
-            WebhookSecret = record.WebhookSecret
+            WebhookSecret = record.WebhookSecret,
+            // Arayüz jetonu artık BAŞLIKLA göstermeli (sorgu dizesi erişim günlüklerine yazılır).
+            // Adı sunucudan taşımak zorunlu: arayüz sabit yazsaydı, ad değiştiğinde panel
+            // kullanıcıya sunucunun okumadığı bir başlık gösterirdi. Gerekçe GitWebhookToken'da.
+            WebhookHeaderName = AdaPanel.Core.Common.GitWebhookToken.HeaderName
         };
     }
 

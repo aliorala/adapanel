@@ -1,5 +1,6 @@
 using System.Text;
 using System.Xml;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Interfaces;
@@ -7,6 +8,7 @@ using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Mail;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -35,6 +37,13 @@ namespace AdaPanel.Api.Controllers;
 [ApiController]
 [AllowAnonymous]
 [IgnoreAntiforgeryToken]
+// HIZ SINIRI SINIF DUZEYINDE — dort ucun hepsi ayni politikaya girer, boylece besinci bir uc
+// eklendiginde unutulamaz. Sinir CÖMERT (300/dk) ve sebebi ÖLÇÜLDÜ: bu uclara istekler
+// dogrudan gelmiyor, musterinin IIS sitesindeki URL Rewrite/ARR kurali panele ILETIYOR
+// (MailAutodiscoverRewriteRules.cs:27). Yani RemoteIpAddress = 127.0.0.1 ve sunucudaki BUTUN
+// posta istemcileri TEK bolumu paylasiyor. Dar bir sinir, sunucudaki herkesin posta kurulumunu
+// kirardi. Gerekcenin tamami PanelRateLimits.PublicReadPermitPerMinute'ta.
+[EnableRateLimiting(PanelRateLimits.PublicRead)]
 public sealed class MailAutodiscoverController(IMailService mailService) : ControllerBase
 {
     /// <summary>

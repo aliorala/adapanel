@@ -26,4 +26,14 @@ public sealed class GitDeploymentDto
 
     /// <summary>Webhook doğrulaması için paylaşılan gizli anahtar.</summary>
     public string WebhookSecret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Jetonun konacağı istek başlığının adı — arayüz bunu SUNUCUDAN okur, sabit yazmaz.
+    /// </summary>
+    /// <remarks>
+    /// Arayüz adı kendi tarafında sabitleseydi, sunucu başlığın adını değiştirdiğinde panel
+    /// kullanıcıya artık okunmayan bir başlık gösterirdi; sonuç, sebebi görünmeyen bir 401 olurdu.
+    /// Değerin tek kaynağı <see cref="AdaPanel.Core.Common.GitWebhookToken.HeaderName"/>.
+    /// </remarks>
+    public string WebhookHeaderName { get; set; } = AdaPanel.Core.Common.GitWebhookToken.HeaderName;
 }

@@ -2890,7 +2890,13 @@
   "panel.hosting.gitRegenerate": "Regenerate webhook secret",
   "panel.hosting.gitLastDeploy": "Last deploy",
   "panel.hosting.gitWebhook": "Webhook URL",
-  "panel.hosting.gitWebhookHelp": "Add this URL as a push webhook (POST) in your Git provider.",
+  "panel.hosting.gitWebhookHelp": "Add this URL as a push webhook (POST) in your Git provider. The URL no longer carries the secret; put the secret in the header below.",
+  "panel.hosting.gitWebhookHeader": "Webhook secret header",
+  "panel.hosting.gitWebhookHeaderHelp": "Add this line to your provider's custom header field. The header is the preferred transport: unlike a query string it is NOT written to server access logs.",
+  "panel.hosting.gitWebhookLegacy": "Legacy form (query string)",
+  "panel.hosting.gitWebhookLegacyShow": "Show legacy form",
+  "panel.hosting.gitWebhookLegacyHide": "Hide",
+  "panel.hosting.gitWebhookLegacyHelp": "The server still accepts this form, so webhook URLs already saved in your provider keep working. But the token travels in the query string and is written to the IIS access log on every trigger - anyone who can read the logs can see your deployment secret. After switching to the header form, regenerate the secret.",
   "panel.hosting.gitSaved": "Git configuration saved.",
   "panel.hosting.gitDeployed": "Deployment succeeded.",
   "panel.hosting.gitDeployFailed": "Deployment failed.",
@@ -3362,6 +3368,7 @@
   "backup.site_config_missing": "The archive has no site configuration, so the site could not be recreated: {target}",
   "backup.site_create_failed": "The site could not be recreated: {target}",
   "backup.restore_task_failed": "A scheduled task could not be restored and was not registered in Task Scheduler. The restore is INCOMPLETE.",
+  "backup.restore_task_too_large": "Task XML skipped because the file is too large",
   "backup.restore_site_failed": "The site could not be recreated from the backup. The restore is INCOMPLETE; you need to create this site by hand.",
   "backup.restore_ftp_failed": "The FTP account could not be recreated from the backup. The restore is INCOMPLETE.",
   "backup.site_binding_failed": "The site binding could not be added: {target}",
@@ -5077,5 +5084,6 @@
   "panel.ftp.homeUnmeasured": "Home folder not measured",
   "cron.write_unverified": "The task was saved but could not be found in Task Scheduler; the registration is unverified.",
   "backup.mail_service_start_failed": "The email server was stopped for the backup and could not be started again; mail may be down right now.",
-  "backup.mail_service_not_running": "The email server task appears disabled; mail is not running."
+  "backup.mail_service_not_running": "The email server task appears disabled; mail is not running.",
+  "rate_limit.exceeded": "Too many requests. Wait a moment and try again."
 }

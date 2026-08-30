@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AdaPanel.Api.Security;
 using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Auth;
 using AdaPanel.Core.Dtos.Common;
@@ -33,6 +34,16 @@ public sealed class AuthController(
     IPanelSecurityService securityService) : ControllerBase
 {
     [AllowAnonymous]
+    // ARAYUZUN ACILIS UCLARI (csrf + session) DA TAVANLI.
+    //
+    // Ikisi de ucuz ve arayuzun her acilisinda cagriliyor, ama kimliksiz: sinirsiz birakildiginda
+    // "csrf" her istekte yeni bir antiforgery cerezi URETIR ve "session" her istekte veritabanina
+    // gider. PublicRead (IP basina 300/dk) secildi cunku bu uclar OTURUM ONCESIDIR -- oturum
+    // bolumlemesi (kuresel kova) burada henuz bir kimlik bulamaz, geriye IP kalir.
+    // 300/dk fazlasiyla genis: arayuz jetonu ONBELLEKLIYOR (frontend/src/api/client.ts:29) ve
+    // acilis basina bir kez cagiriyor; ayni NAT arkasindaki on yonetici surekli sayfa yenilese
+    // bile dakikada ~20 istek eder.
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet("csrf")]
     public ActionResult<ApiResponse<object>> GetCsrfToken()
     {
@@ -44,6 +55,7 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet("session")]
     public async Task<ActionResult<ApiResponse<CurrentSessionDto>>> GetSessionAsync(CancellationToken cancellationToken)
     {
@@ -58,7 +70,7 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(PanelRateLimits.Login)]
     [HttpPost("login")]
     public async Task<ActionResult<ApiResponse<LoginResultDto>>> LoginAsync(
         [FromBody] LoginRequest request,
@@ -76,7 +88,7 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(PanelRateLimits.Login)]
     [HttpPost("password/forgot")]
     public async Task<ActionResult<ApiResponse<object>>> ForgotPasswordAsync(
         [FromBody] ForgotPasswordRequest request,
@@ -88,7 +100,7 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(PanelRateLimits.Login)]
     [HttpPost("password/reset")]
     public async Task<ActionResult<ApiResponse<object>>> ResetPasswordAsync(
         [FromBody] ResetPasswordRequest request,
@@ -117,7 +129,7 @@ public sealed class AuthController(
     /// </para>
     /// </remarks>
     [Authorize(Roles = "Administrator,Reseller")]
-    [EnableRateLimiting("password-change")]
+    [EnableRateLimiting(PanelRateLimits.PasswordChange)]
     [HttpPost("password/set/{userId:guid}")]
     public async Task<ActionResult<ApiResponse<SetUserPasswordResultDto>>> SetUserPasswordAsync(
         Guid userId,
@@ -190,7 +202,7 @@ public sealed class AuthController(
     /// </para>
     /// </remarks>
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(PanelRateLimits.Login)]
     [HttpGet("sso")]
     public async Task<IActionResult> RedeemSsoLinkAsync(
         [FromQuery] string? token,
@@ -397,7 +409,7 @@ public sealed class AuthController(
     /// </para>
     /// </summary>
     [Authorize(AuthenticationSchemes = CookieAuthenticationDefaults.AuthenticationScheme)]
-    [EnableRateLimiting("password-change")]
+    [EnableRateLimiting(PanelRateLimits.PasswordChange)]
     [HttpPost("change-password")]
     public async Task<ActionResult<ApiResponse<ChangePasswordResultDto>>> ChangePasswordAsync(
         [FromBody] ChangePasswordRequest request,

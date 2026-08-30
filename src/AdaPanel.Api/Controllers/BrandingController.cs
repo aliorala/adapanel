@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AdaPanel.Api.Extensions;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Settings;
@@ -9,6 +10,7 @@ using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Branding;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -48,6 +50,10 @@ public sealed class BrandingController(
     /// kısıtlamasının arkasındadır (SecureEntryPathMiddleware).
     /// </remarks>
     [AllowAnonymous]
+    // Sinifin TEK kimliksiz ucu, dolayisiyla hiz siniri de yalniz burada. Giris ekrani her
+    // acilista bir kez cagirir; 300/dk bir insanin sayfayi yenilemesine fazlasiyla yeter ve
+    // kimliksiz bir uctan veritabani okutmayi ucuz olmaktan cikarir.
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet]
     public async Task<ActionResult<ApiResponse<BrandingDto>>> GetAsync(CancellationToken cancellationToken)
     {

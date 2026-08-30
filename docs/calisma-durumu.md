@@ -543,18 +543,47 @@ RdnsService/SeoBotVerifier/WinAcmeSslService:494 yalniz DNS, baglanmiyor.
   `Baska_Yedek_Surerken_...` testi SUNUCU GENELI bir isin bir KIRACIYI engellemesini
   bekliyordu -- yani kapatilan acigi olcuyordu; ayni aboneligin cakismasini olcecek
   sekilde duzeltildi.
-* [ACIK] Hiz siniri YALNIZ login/password-change/setup/mcp uclarinda. Global sinirlayici
-  cerezli ve anonim istekler icin GetNoLimiter -> ~66 kimlik dogrulamali denetleyicinin
-  HICBIRINDE hiz siniri yok. Anonim posta gonderen ucta da yok
-  (MailListPublicController.cs:65 -> unsubscribeService.RequestAsync = kimlik
-  dogrulamasiz posta yukseltme).
-* [ACIK] Kestrel Limits HIC yapilandirilmamis: MaxConcurrentConnections SINIRSIZ,
-  RequestTimeout yok. DbToolsProxy 1 GiB govde + EnableBuffering (disk'e tasar,
-  toplam sinir yok) + 30 dakika timeout. (Yalniz YANIT govdesinin sinirsiz
-  tamponlanmasi kapandi -- bkz. asagisi; ISTEK tarafi hala acik.)
-* [ACIK] UseForwardedHeaders HIC yapilandirilmamis. Dogrudan Kestrel'de GUVENLI (sahte baslik
-  guvenilmiyor) ama panel bir ters vekil arkasina konursa butun istemciler tek bolume
-  duser: 5 giris/dk BUTUN internet icin, ve gizli yol IP beyaz listesi anlamsizlasir.
+* [KAPANDI 31.08.2026] Hiz siniri. TEK KAYNAK: `Api/Security/PanelRateLimits.cs`
+  (politika adlari + degerler + bolumleme; Program.cs'te artik HICBIR sayi yok).
+  Kuresel sinirlayici uc bolume ayrildi: anahtar 300/dk, YOKLAMA 900/dk, genel oturum
+  600/dk -- oturum CEREZININ OZETINE gore (IP'ye gore degil; tek NAT'taki on yonetici
+  birbirini kilitlemesin). Degerler OLCULEREK secildi: tek sekmede en kotu hal
+  71 istek/dk (MonitoringView.vue:495 + ResourceConsumers.vue:465 + :492).
+  Kimliksiz uclar: posta GONDEREN iki uc `public-mail-send` (IP basina 10/15dk),
+  posta gondermeyenler `public-read` (300/dk), git webhook 30/dk.
+  Nobetci: `PanelRateLimitTests` (28 test; yarisi FAZLA KAPATMA nobetcisi) +
+  `PanelRequestSurfaceWiringTests` (25). 27 mutasyonun 27'si kirmizi yandi.
+  DIKKAT: eski `PanelTokenRestAccessTests.Anahtarli_isteklerin_hiz_siniri_var`
+  `GetNoLimiter("cookie")` satirini "beklenen davranis" diye CIVILEMISTI -- yani acigi
+  koruyordu; duzeltildi ve gerekcesi testin icine yazildi.
+* [KAPANDI 31.08.2026] Kestrel Limits. TEK KAYNAK: `Api/Security/PanelServerLimits.cs`,
+  Program.cs'te SERTIFIKADAN BAGIMSIZ (kosulsuz) cagriliyor -- eskiden ConfigureKestrel
+  yalnizca sertifika varken calisiyordu, yani tavanlar oraya konsaydi sertifikasiz
+  kurulum sinirsiz kalirdi.
+  BULGU DUZELTMESI: "hicbir sinir yok" YANLISTI. Kestrel'in varsayilanlari (30 MB govde,
+  30 sn baslik zaman asimi, 240 B/sn en az veri hizi) yururlukteydi; GERCEKTEN sinirsiz
+  olan tek sey `MaxConcurrentConnections` idi (artik 500) -- ve o, hiz sinirlayicinin
+  GOREMEDIGI bir tuketimdir (baglanti acilir, istek hic gelmez).
+  Uzun isler BILEREK kirilmadi: sure siniri YOK, olcut HIZ (yedek indirme, bilesen
+  kurulumu, 1 GiB SQL ice aktarimi veri aktigi surece surebilir).
+  YOLDA BULUNAN GERCEK KOPUKLUK: FilesController 200 MiB yuklemeye izin veriyordu ama
+  `FormOptions.MultipartBodyLengthLimit` varsayilani 128 MiB idi -> aradaki her yukleme
+  uc "izin veriyor" gorundugu halde InvalidDataException ile oluyordu. Ikisi artik ayni
+  sabiti okuyor.
+* [KARAR VERILDI 31.08.2026] UseForwardedHeaders KAPALI KALIYOR -- gerekce Program.cs'te ve
+  `docs/hiz-siniri.md`'de YAZILI, `PanelRequestSurfaceWiringTests` ile sabitli.
+  Sebep: bu PAYLASIMLI barindirma makinesinde kiracilarin PHP'si kosuyor. Tek "guvenli
+  gorunen" secenek olan `KnownProxies = 127.0.0.1` acilsaydi, herhangi bir kiraci sitesi
+  localhost'tan istek atip `X-Forwarded-For`a istedigi adresi yazabilirdi: (a) hiz sinirini
+  ve IP yasagini her istekte sifirlamak, (b) KURBANIN adresini yazip yoneticiyi kendi
+  panelinden kilitlemek. Yani loopback'e guvenmek, kimlik dogrulamasiz bir "IP degistirme"
+  ucuna esdeger.
+  KABUL EDILEN BEDEL (olculdu): autodiscover uclari musterinin IIS sitesindeki ARR kuraliyla
+  panele ILETILIYOR (MailAutodiscoverRewriteRules.cs:27), yani adresleri 127.0.0.1'dir ve
+  sunucudaki BUTUN posta istemcileri tek bolumu paylasir. `public-read` siniri bu yuzden
+  dar degil 300/dk secildi.
+  Panel bir DIS ters vekilin arkasina konacaksa: satir acilmali ve KnownProxies YALNIZ o
+  vekilin adresiyle doldurulmalidir.
 
 ## BELLEGE TAM OKUMA (sinirsiz)
 * [KAPANDI] ProcessRunner stdout/stderr artik TAVANLI okunuyor (varsayilan 4 MiB
@@ -927,3 +956,46 @@ acik liste uzerinde yap). Nobetci: `Mirasla_gelen_genis_ACE_TEK_calismada_duser`
 - Gercek `php-cgi.exe` ile "artik yazamiyor" dogrulamasi **canli panelde YAPILMADI** (gorev geregi
   kurulu panelin ACL'ine dokunulmadi). Olcum gecici klasorde gercek `DirectorySecurity` uzerinde.
 - `sitebuilder` klasoru hala `Everyone:(I)(CI)(F)` (onceki turda bilerek birakilmisti, ayni durumda).
+
+---
+
+## HIZ SINIRI + ISTEK KATMANI DoS YUZEYI (31.08.2026) -- commit ATILMADI
+
+Ayrintili karar belgesi: **`docs/hiz-siniri.md`** (olcum tablosu, politika tablosu,
+vekil karari, Kestrel tavanlari, webhook jetonu).
+
+**Yeni dosyalar:** `src/AdaPanel.Api/Security/PanelRateLimits.cs`,
+`src/AdaPanel.Api/Security/PanelServerLimits.cs`, `src/AdaPanel.Core/Common/GitWebhookToken.cs`,
+`tests/.../PanelRateLimitTests.cs`, `tests/.../PanelRequestSurfaceWiringTests.cs`,
+`docs/hiz-siniri.md`.
+
+**Git webhook jetonu:** artik `X-AdaPanel-Token` BASLIGIYLA da kabul ediliyor ve panel
+arayuzu jetonsuz adres + baslik satiri uretiyor. Sorgu dizesi (`?token=`) KABUL EDILMEYE
+DEVAM EDIYOR -- kullanicilarin GitHub/GitLab'a yapistirdigi adresler onu tasiyor ve
+kapatmak o kancalarin hepsini SESSIZCE oldururdu. Sorgu yolu kullanildiginda DENETIM KAYDI
+bunu acikca yaziyor ("the secret is written to IIS/W3C access logs"), arayuz de eski bicimi
+uyariyla gosteriyor. `FixedTimeEquals` ve `concurrencyLock` BOZULMADI (testle sabitlendi).
+
+**Yolda bulunan AYRI bir acik:** kapsam nobetcisinin ilk hali yalniz `[AllowAnonymous]`
+ariyordu. Panelde kuresel `FallbackPolicy` YOK, dolayisiyla `[Authorize]` HIC tasimayan bir
+denetleyici de tamamen aciktir -- `HealthController` ve `SetupController` tam olarak bu
+durumdaydi ve nobetci onlari YESIL geciriyordu. `SetupWizardView.vue:1246` kimliksiz
+`setup/progress` ucunu **1,5 saniyede bir** yokluyor (40 istek/dk, kurulum 20 dk+ surebilir);
+bu yuzden oraya dar degil `public-read` (300/dk) konuldu.
+
+**Mutasyon:** 27 mutasyon, 27'si kirmizi. IKISI ILK TURDA SAG KALDI ve duzeltildi:
+(1) 429 zarfi testi kaynak METNINE bakiyordu ve anahtar ayni dosyadaki YORUMDA da geciyordu
+-> davranis testine cevrildi (gercek `OnRejected` calistirilip govde okunuyor);
+(2) kapsam nobetcisinin kendi kapsami daraltildiginda hicbir test kizarmadi -> tarama
+kararini DOGRUDAN olcen bir Theory eklendi.
+
+**OLCULEMEYENLER:**
+- Sinirlar GERCEK bir HTTP boru hattinda degil, ara katmanin kullandigi bolumleme
+  fonksiyonu `PartitionedRateLimiter.Create` ile sarilarak olculdu. Ust duzey `Program.cs`
+  (tepsi/DB onyuklemesi) tam boru hattiyla test edilemiyor; kablolama ayri testlerle
+  kaynak uzerinden dogrulandi.
+- `MaxConcurrentConnections = 500`'un canli sunucuda gercek yuk altindaki etkisi
+  OLCULMEDI (bu makinede yuk uretecek bir kurulum yok).
+- ARR arkasindaki autodiscover'in gercekten 127.0.0.1'den geldigi KODDAN cikarildi
+  (kural uretimi), canli IIS'te GORULMEDI -- bu makinede Stalwart/ARR kurulu degil.
+- Webhook basliginin gercek GitHub/GitLab arayuzunden gonderildigi denenmedi.

@@ -113,6 +113,17 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
+// İSTEK KATMANI TAVANLARI — dinleyiciden BAĞIMSIZ, bu yüzden ayrı ve KOŞULSUZ çağrı.
+//
+// ÖLÇÜLDÜ: ConfigureKestrel yalnızca sertifika VARKEN çağrılıyordu. Tavanlar oraya konsaydı,
+// sertifikasız (HTTP yedeği) kurulumlar sınırsız kalırdı — yani düzeltme tam da en savunmasız
+// kurulumda uygulanmazdı. Değerler ve gerekçeleri PanelServerLimits'te (tek kaynak).
+builder.WebHost.ConfigureKestrel(options => PanelServerLimits.Apply(options.Limits));
+
+// Çok parçalı form tavanı Kestrel'in DEĞİL form ayrıştırıcısının ayarıdır; ikisi hiç
+// hizalanmamıştı (gerekçe: PanelServerLimits.FileUploadMaxBytes).
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(PanelServerLimits.Apply);
+
 if (panelCertificate is not null)
 {
     var httpsPort = ResolveListenerPort(builder.Configuration["ASPNETCORE_URLS"] ?? builder.Configuration["urls"], panelOptions.PreferredHttpsPort);
@@ -144,92 +155,15 @@ builder.Services.AddAdaPanelInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-
-    // ANAHTARLA GELEN İSTEKLERİN TAVANI — /api/v1/** artık kişisel API anahtarını kabul ediyor.
-    //
-    // Neden küresel sınırlayıcı: uç sayısı 50'yi aşan controller'a yayılmış durumda; politikayı tek
-    // tek eklemek unutulacağı için fiilen eklememekle aynı. Neden yalnız anahtarlı istekler:
-    // ÇEREZ yolunda sınır YOK, çünkü panelin tek bir sayfası onlarca istek atar ve arayüzü kendi
-    // sınırına takmak, düzeltmenin yaratacağı tek gerçek gerileme olurdu; çerez yolunun kendi
-    // korumaları zaten var ("login" politikası, "password-change", oturum doğrulaması).
-    //
-    // 300/dk her ANAHTAR için: bir WHMCS eşitleme turu ya da izleme aracı tek turda onlarca uç
-    // çağırır (MCP'nin 120'lik tavanı yapay zeka istemcisi içindi, dış entegrasyon daha konuşkandır).
-    // Amaç meşru kullanımı engellemek değil, SIZAN bir anahtarla veri kazımayı ölçülebilir biçimde
-    // yavaşlatmak. /mcp ucu ayrıca kendi 120'lik politikasını taşır; ikisi birlikte uygulandığı için
-    // orada etkin sınır yine 120'dir.
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
-        PanelAuthentication.CarriesToken(context.Request)
-            ? RateLimitPartition.GetFixedWindowLimiter(
-                PanelAuthentication.RateLimitPartitionKey(context),
-                _ => new FixedWindowRateLimiterOptions
-                {
-                    PermitLimit = 300,
-                    Window = TimeSpan.FromMinutes(1),
-                    QueueLimit = 0
-                })
-            : RateLimitPartition.GetNoLimiter("cookie"));
-
-    options.AddPolicy("login", context =>
-    {
-        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        return RateLimitPartition.GetFixedWindowLimiter(
-            remoteIp,
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 5,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0
-            });
-    });
-    // MCP: yapay zeka istemcisi otomatik ve hızlı çağırır; anahtar sızarsa da ilk fark edilen şey
-    // bu uçtan gelen yığın olur. Bölümleme ANAHTARA göre yapılır (IP'ye göre değil): sağlayıcı
-    // paylaşımlı çıkış adresleri kullandığı için bir müşterinin trafiği diğerini kilitlememeli.
-    // Sınır cömert — meşru bir oturum dakikada onlarca araç çağırabilir; amaç kötüye kullanımı
-    // yavaşlatmak, normal kullanımı engellemek değil.
-    options.AddPolicy("mcp", context =>
-    {
-        return RateLimitPartition.GetFixedWindowLimiter(
-            // Bölümleme anahtarı PanelAuthentication'dan: anahtarın kendisi yerine özeti kullanılır
-            // ve aynı türetme küresel sınırlayıcıda da geçerli olur (iki kopya, iki farklı bölüm).
-            PanelAuthentication.RateLimitPartitionKey(context),
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 120,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0
-            });
-    });
-    // Parola degisimi: mevcut parolayi dogruluyoruz, yani bu uc bir parola tahmin yuzeyidir.
-    // Cerez calinmis olsa bile mevcut parola deneme yanilmayla asilamasin.
-    options.AddPolicy("password-change", context =>
-    {
-        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        return RateLimitPartition.GetFixedWindowLimiter(
-            remoteIp,
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 5,
-                Window = TimeSpan.FromMinutes(15),
-                QueueLimit = 0
-            });
-    });
-    options.AddPolicy("setup", context =>
-    {
-        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        return RateLimitPartition.GetFixedWindowLimiter(
-            remoteIp,
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 3,
-                Window = TimeSpan.FromMinutes(10),
-                QueueLimit = 0
-            });
-    });
-});
+// HIZ SINIRLARI — POLİTİKALARIN VE DEĞERLERİN TEK KAYNAĞI: PanelRateLimits.
+//
+// Burada artık HİÇBİR sayı yok ve bu bilinçli: sınır değerleri buraya ve controller'lara
+// dağıldığında biri güncellenir öteki kalır (bu depoda defalarca ölçülmüş hata sınıfı).
+// Controller'lar yalnızca politikanın ADINI seçer.
+//
+// Çerez adı yapılandırmadan geliyor: küresel sınırlayıcı isteği OTURUM başına bölümlüyor ve
+// bunu yapabilmesi için çerezin gerçek adını bilmesi gerekiyor (sabit yazılamaz).
+builder.Services.AddRateLimiter(PanelRateLimits.Configure(panelOptions.AuthCookieName));
 
 // PANELİN İKİ KİMLİK YOLU TEK VARSAYILAN ŞEMADA BİRLEŞTİRİLDİ.
 //
@@ -375,6 +309,32 @@ app.Use(async (context, next) =>
 
     await next();
 });
+// ---------------------------------------------------------------------------------------------
+// İLETİLEN BAŞLIKLAR (X-Forwarded-For) — BİLEREK YAPILANDIRILMADI. Bu bir KARAR, unutma değil.
+//
+// Ne yapardı: hız sınırı bölümleri, giriş denemesi IP yasakları ve denetim kayıtları isteğin
+// GERÇEK istemci adresini kullanırdı. Şu an vekilin arkasındaki bütün istemciler vekilin
+// adresinde toplanıyor.
+//
+// NEDEN AÇMIYORUZ — ÖLÇÜLMÜŞ SEBEP: AdaPanel PAYLAŞIMLI barındırma panelidir; aynı makinede
+// kiracıların PHP/ASP kodu koşar. `KnownProxies = 127.0.0.1` (tek "güvenli" görünen seçenek)
+// açılsaydı, herhangi bir kiracının sitesi panele localhost'tan istek atıp `X-Forwarded-For`
+// alanına İSTEDİĞİ adresi yazabilirdi. Sonuç iki yönlü ve ikisi de daha kötü:
+//   • Kaçış: hız sınırını ve IP yasağını her istekte yeni bir sahte adresle sıfırlamak.
+//   • Saldırı: kurbanın adresini yazarak onu giriş kaba-kuvvet yasağına DÜŞÜRMEK (yöneticiyi
+//     kendi panelinden kilitlemek).
+// Yani localhost'a güvenmek, bu makinede kimlik doğrulamasız bir "IP değiştirme" ucuna eşdeğer.
+//
+// KABUL EDİLEN BEDEL (ölçüldü, gizlenmiyor): autodiscover uçları müşterinin IIS sitesindeki
+// URL Rewrite/ARR kuralıyla panele İLETİLİYOR (MailAutodiscoverRewriteRules.cs:27), dolayısıyla
+// o isteklerin adresi 127.0.0.1'dir ve sunucudaki bütün posta istemcileri TEK hız sınırı
+// bölümünü paylaşır. Bu yüzden PanelRateLimits.PublicRead sınırı dar değil 300/dk seçildi.
+//
+// PANEL BİR TERS VEKİLİN ARKASINA KONACAKSA: bu satır açılmalı ve KnownProxies YALNIZ o vekilin
+// adresiyle doldurulmalıdır — loopback'e güvenerek DEĞİL. Açılmadan konulursa "5 giriş/dk"
+// bütün internet için tek kova olur. Gerekçenin tamamı docs/hiz-siniri.md'de.
+// app.UseForwardedHeaders(...);  // ← bilerek kapalı, yukarıdaki gerekçeye bakmadan açma.
+// ---------------------------------------------------------------------------------------------
 app.UseRateLimiter();
 app.UseMiddleware<SecureEntryPathMiddleware>();
 
@@ -446,7 +406,7 @@ app.MapMcp("/mcp")
         AuthenticationSchemes = AdaPanel.Api.Security.PanelTokenAuthenticationHandler.SchemeName
     })
     .WithMetadata(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute())
-    .RequireRateLimiting("mcp");
+    .RequireRateLimiting(PanelRateLimits.Mcp);
 // Eşleşmeyen API/MCP yolları SPA'ya DÜŞMEMELİ. Öncesinde tek bir MapFallbackToFile vardı ve
 // "/api/v1/yanlis" ya da "/mcp/x" gibi her yol 200 + index.html döndürüyordu: istemci JSON beklerken
 // HTML alıyor ("Unexpected token '<'" hatası), MCP istemcisi ise sunucuyu ayakta ama bozuk sanıyordu.

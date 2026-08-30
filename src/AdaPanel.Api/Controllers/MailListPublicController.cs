@@ -1,8 +1,10 @@
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Mail;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -33,6 +35,16 @@ namespace AdaPanel.Api.Controllers;
 /// kullanmak" mümkün değildir.
 /// </para>
 /// <para>
+/// <b>HIZ SINIRI — bu sınıfın uçları İKİ AYRI politikaya bölündü ve bölünme kasıtlıdır.</b>
+/// <see cref="RequestAsync"/> POSTA GÖNDERTİR: kimlik doğrulamasız bir istekle sunucunun giden
+/// kuyruğunu doldurup İTİBARINI yakmanın en ucuz yolu buydu ve buranın hiçbir sınırı yoktu
+/// (küresel sınırlayıcı yalnız <c>Authorization</c> başlığı taşıyanları bölümlüyordu, bu yol
+/// "no limiter"a düşüyordu). Diğer üç uç posta göndermez; onları aynı dar kovaya koymak,
+/// isteğini yenileyerek bütçesini tüketen GERÇEK kullanıcıyı kendi onay bağlantısından dışarıda
+/// bırakırdı — yani düzeltme özelliği kırardı. Değerler ve gerekçeleri
+/// <see cref="PanelRateLimits"/>'te (tek kaynak).
+/// </para>
+/// <para>
 /// <b>Kimliksiz ama KİRACIYA AİT.</b> Kayıtların <c>UserId</c>'si yapısal olarak boştur (aktör
 /// yok) — bu yüzden kaydın kiracının görünümüne düşmesinin TEK yolu konusudur. Konu da boş
 /// bırakılsaydı, <c>AuditLogQueryEngine.ApplyVisibility</c>'nin iki koşulu da elerdi ve dağıtım
@@ -54,6 +66,7 @@ public sealed class MailListPublicController(
     private const string HtmlContentType = "text/html; charset=utf-8";
 
     /// <summary>Birinci adım (sayfa): abone kendi adresini yazar. DURUM DEĞİŞTİRMEZ.</summary>
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet("unsubscribe")]
     public ContentResult RequestForm([FromQuery] string? list) =>
         Html(MailListUnsubscribePages.RequestForm(list ?? string.Empty, PathOf("unsubscribe")));
@@ -61,6 +74,8 @@ public sealed class MailListPublicController(
     /// <summary>
     /// Birinci adım (işlem): onay postası ister. Cevap, adres abone olsun ya da olmasın AYNIDIR.
     /// </summary>
+    [EnableRateLimiting(PanelRateLimits.PublicMailSend)]
+    [RequestSizeLimit(PanelServerLimits.PublicFormMaxBytes)]
     [HttpPost("unsubscribe")]
     public async Task<ContentResult> RequestAsync(
         [FromForm] string? list,
@@ -87,8 +102,11 @@ public sealed class MailListPublicController(
         // GİRMEZ — kayıt, korumaya çalıştığımız adres listesinin ikinci kopyası olmamalı.
         //
         // DERİN SAHİPLİK ARAMASI YALNIZ `sent` DOĞRUYKEN: bu uçta `list` alanı tamamen İSTEMCİNİN
-        // yazdığı serbest metindir ve uç kimliksiz + oran sınırsızdır (ölçüldü: küresel sınırlayıcı
-        // yalnız Authorization başlığı taşıyan istekleri bölümler, bu yol "no limiter"a düşer).
+        // yazdığı serbest metindir ve uç kimliksizdir. (Uç ARTIK oran sınırlı — PublicMailSend,
+        // IP başına 10/15dk; bu satır eskiden "oran sınırsız" diyordu ve o zaman DOĞRUYDU: küresel
+        // sınırlayıcı yalnız Authorization başlığı taşıyanları bölümlüyor, bu yol "no limiter"a
+        // düşüyordu. Sınır geldi ama aşağıdaki koruma KALDI: sınır isteği yavaşlatır, pahalı işi
+        // ucuzlatmaz.)
         // Alan adı sahipliğinin ikinci adımı IIS'teki BÜTÜN siteleri gezer; onu her anonim POST'ta
         // çalıştırmak, tek satırlık bir istekle sunucuya iş yaptıran bir yükseltme kaldıracı olurdu.
         // `sent` doğruysa liste ve abone posta sunucusuna sorularak DOĞRULANMIŞTIR ve o yol ayrıca
@@ -115,6 +133,7 @@ public sealed class MailListPublicController(
     /// GET doğrudan çıkarma yapsaydı, abone bağlantıya hiç dokunmadan yalnızca iletiyi aldığı için
     /// listeden düşerdi. Çıkarma, yalnızca kullanıcının bastığı düğmenin POST'uyla olur.
     /// </remarks>
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet("unsubscribe/confirm")]
     public ContentResult ConfirmForm([FromQuery] string? token) =>
         Html(MailListUnsubscribePages.ConfirmForm(token ?? string.Empty, PathOf("unsubscribe/confirm")));
@@ -128,6 +147,8 @@ public sealed class MailListPublicController(
     /// taranamaz. Süresi geçmiş bağlantıya "tamam" demek ise kullanıcıya çıkarıldığını sandırmak
     /// olurdu; oysa listede kalmaya devam ederdi.
     /// </remarks>
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
+    [RequestSizeLimit(PanelServerLimits.PublicFormMaxBytes)]
     [HttpPost("unsubscribe/confirm")]
     public async Task<ContentResult> ConfirmAsync([FromForm] string? token, CancellationToken cancellationToken)
     {

@@ -100,7 +100,11 @@ public sealed class FilesController(
     }
 
     [HttpPost("upload")]
-    [RequestSizeLimit(1024L * 1024L * 200L)]
+    // SINIR TEK KAYNAKTAN. Buradaki sayi elle yazildigi surece FORM AYRISTIRICISININ ayri tavani
+    // (FormOptions.MultipartBodyLengthLimit, varsayilan 128 MiB) ile hizasiz kaliyordu: uc
+    // "200 MiB serbest" derken 128 MiB ustu her yukleme ayristiricida InvalidDataException ile
+    // oluyordu. Ikisi artik ayni sabiti okuyor (bkz. PanelServerLimits.FileUploadMaxBytes).
+    [RequestSizeLimit(PanelServerLimits.FileUploadMaxBytes)]
     public async Task<ActionResult<ApiResponse<object>>> UploadAsync([FromQuery] string path, IFormFile file, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, path, allowRoot: false, cancellationToken);

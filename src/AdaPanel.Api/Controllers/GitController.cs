@@ -1,9 +1,12 @@
+using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Git;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -76,23 +79,64 @@ public sealed class GitController(
     }
 
     /// <summary>Git sağlayıcısı (GitHub/GitLab) push webhook'u için anonim tetikleyici. Gizli token ile doğrulanır.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>JETON ARTIK BAŞLIKLA DA KABUL EDİLİYOR</b> (<c>X-AdaPanel-Token</c>) ve tercih edilen
+    /// yol odur. Sorgu dizesi IIS/W3C erişim günlüklerine yazılır ve panelin kendi günlük
+    /// görüntüleyicisi vardır — yani dağıtım anahtarı, günlüğü okuyabilen herkese görünüyordu.
+    /// Sorgu yolu KAPATILMADI: kullanıcıların sağlayıcıya yapıştırdığı mevcut adresler onu
+    /// taşıyor ve kapatmak, güncellemeyle birlikte o kancaların hepsini sessizce öldürürdü.
+    /// Bedeli görünür kılınıyor: sorgu yolu kullanıldığında denetim kaydı bunu AÇIKÇA yazar.
+    /// Seçim kuralı saf bir fonksiyonda (<see cref="GitWebhookToken.Select"/>).
+    /// </para>
+    /// <para>
+    /// <b>Hız sınırı</b> (<see cref="PanelRateLimits.GitWebhook"/>): sağlayıcı push başına BİR
+    /// istek gönderir. Sınırın işi, her tetiklemede <c>fetch</c> + <c>reset --hard</c> çalıştıran
+    /// ve <c>concurrencyLock</c> yüzünden SERİ olan bu yolu tıkamayı ucuz olmaktan çıkarmak.
+    /// </para>
+    /// <para>
+    /// <b>DOĞRULAMA MANTIĞINA DOKUNULMADI:</b> karşılaştırma <c>CryptographicOperations
+    /// .FixedTimeEquals</c> ile SABİT ZAMANLI (<c>GitDeploymentService.cs:117</c>) ve dağıtım
+    /// serileştirilmiş durumda. Buradaki değişiklik yalnız jetonun NEREDEN okunduğudur.
+    /// </para>
+    /// </remarks>
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
+    [EnableRateLimiting(PanelRateLimits.GitWebhook)]
     [HttpPost("{siteName}/webhook")]
     public async Task<ActionResult<ApiResponse<GitDeployResultDto>>> WebhookAsync(
         string siteName,
-        [FromQuery] string token,
+        [FromQuery(Name = GitWebhookToken.QueryName)] string? token,
         CancellationToken cancellationToken)
     {
-        var result = await gitDeploymentService.DeployViaWebhookAsync(siteName, token ?? string.Empty, cancellationToken);
+        var (jeton, tasiyici) = GitWebhookToken.Select(
+            Request.Headers[GitWebhookToken.HeaderName].ToString(),
+            token);
+
+        var result = await gitDeploymentService.DeployViaWebhookAsync(siteName, jeton, cancellationToken);
 
         // Anonim uç: kimlik yok, geriye yalnız İP kalıyor (HttpAuditExtensions onu her kayda yazar).
+        //
+        // TAŞIYICI KAYDA YAZILIR ve bu düzeltmenin görünür olan yarısıdır: sorgu dizesiyle gelen
+        // bir tetikleme, jetonun o istekle birlikte erişim günlüğüne DÜŞTÜĞÜ anlamına gelir.
+        // Yönetici bunu ancak kendi denetim ekranında görürse anahtarını yenilemeyi düşünebilir;
+        // yoksa sızıntı sessiz kalırdı. Jetonun DEĞERİ elbette yazılmaz, yalnız geldiği yol.
+        var tasiyiciNotu = tasiyici switch
+        {
+            GitWebhookToken.Transport.Header => "token transport: header (not logged)",
+            GitWebhookToken.Transport.Query =>
+                "token transport: QUERY STRING — the secret is written to IIS/W3C access logs; "
+                + $"switch the provider to the '{GitWebhookToken.HeaderName}' header and rotate the secret",
+            _ => "token transport: none"
+        };
+
         await auditService.AuditAsync(
             HttpContext,
             "git.deployed.webhook",
             $"site:{siteName}",
             $"Webhook-triggered git deployment ({(result.Success ? "success" : "failed")}) from "
-            + $"'{result.Deployment.RepositoryUrl}' branch '{result.Deployment.Branch}', commit '{result.Commit}'.",
+            + $"'{result.Deployment.RepositoryUrl}' branch '{result.Deployment.Branch}', commit '{result.Commit}'. "
+            + tasiyiciNotu + ".",
             await SiteSahibiAsync(siteName, cancellationToken));
 
         return Ok(ApiResponse<GitDeployResultDto>.Ok(result, result.Success ? "git.deployed" : "git.deploy_failed"));

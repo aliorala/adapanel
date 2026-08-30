@@ -18,6 +18,12 @@ export type GitDeployment = {
   lastDeployStatus: string;
   webhookPath: string;
   webhookSecret: string;
+  /**
+   * Jetonun konacagi istek basliginin adi -- SUNUCUDAN gelir, burada sabit YAZILMAZ.
+   * Sabit yazilsaydi sunucu adi degistirdiginde panel, artik okunmayan bir basligi talimat
+   * olarak gosterirdi ve kullanici sebebi gorunmeyen bir 401 alirdi.
+   */
+  webhookHeaderName: string;
 };
 
 export type GitDeployResult = {

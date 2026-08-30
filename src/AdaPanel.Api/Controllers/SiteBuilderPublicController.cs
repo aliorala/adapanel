@@ -1,8 +1,10 @@
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.SiteBuilder;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AdaPanel.Api.Controllers;
 
@@ -84,6 +86,15 @@ public sealed class SiteBuilderPublicController(
     /// uygulanmış durumda. Kayda giren: hangi site, sonuç ne, hangi IP.
     /// </para>
     /// </remarks>
+    // HIZ SINIRI — İKİNCİ, DIŞ KATMAN. Servis katmanında zaten IP/site/gönderen sınırları var
+    // (SiteBuilderContactRateLimiter, IP başına 5/15dk). O sınır MVC boru hattının İÇİNDE, yani
+    // reddedilen istek bile model bağlamayı, form ayrıştırmayı ve servis çözümlemeyi yaptırıyor.
+    // PublicMailSend (10/15dk) ondan GEVŞEK bir dış tavandır: iç sınırın davranışını DEĞİŞTİRMEZ
+    // (5 < 10, yani reddi hâlâ iç sınır verir ve mesajı da o üretir), ama sınırsız sayıda isteğin
+    // boru hattına GİRMESİNİ keser. İki sınırın da tek kaynaktan okunması şart değil; farklı
+    // katmanlarda farklı soruları kapatıyorlar ve ilişkileri burada YAZILI.
+    [EnableRateLimiting(PanelRateLimits.PublicMailSend)]
+    [RequestSizeLimit(PanelServerLimits.PublicFormMaxBytes)]
     [HttpPost("{siteKey}/contact")]
     public async Task<ContentResult> SubmitContactAsync(
         string siteKey,

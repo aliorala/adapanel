@@ -1,4 +1,5 @@
 using System.Net;
+using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Setup;
@@ -22,6 +23,16 @@ public sealed class SetupController(
     ISetupService setupService,
     IAuditService auditService) : ControllerBase
 {
+    // KURULUM SIHIRBAZININ YOKLADIGI UCLAR -- KIMLIKSIZ ve OLCULEREK genis tutuldu.
+    //
+    // Bu denetleyicide [Authorize] HIC yok, yani butun uclari anonim; kurulum tam da henuz
+    // hicbir hesabin olmadigi anda calisir. Sinirsiz birakilamazdi (her istek kurulum durumunu
+    // diskten okur), ama DAR da yapilamazdi:
+    // OLCUM -- frontend/src/views/SetupWizardView.vue:1246 "progress" ucunu 1,5 SANIYEDE BIR
+    // yokluyor (= 40 istek/dk) ve bunu onerilen yazilim kurulumu bitene kadar surduruyor;
+    // kurulum 20 dakikayi asabilir. PublicRead (IP basina 300/dk) bu hizin yedi katidir.
+    // Dar bir sinir, panelin ILK ACILISINI kirardi -- yani kullanicinin gordugu ilk ekrani.
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet("status")]
     public async Task<ActionResult<ApiResponse<SetupStatusDto>>> GetStatusAsync(CancellationToken cancellationToken)
     {
@@ -29,6 +40,7 @@ public sealed class SetupController(
         return Ok(ApiResponse<SetupStatusDto>.Ok(status));
     }
 
+    [EnableRateLimiting(PanelRateLimits.PublicRead)]
     [HttpGet("progress")]
     public async Task<ActionResult<ApiResponse<OperationProgressDto>>> GetProgressAsync(CancellationToken cancellationToken)
     {
@@ -37,7 +49,7 @@ public sealed class SetupController(
     }
 
     [HttpPost("initialize")]
-    [EnableRateLimiting("setup")]
+    [EnableRateLimiting(PanelRateLimits.Setup)]
     public async Task<ActionResult<ApiResponse<SetupResultDto>>> InitializeAsync(
         [FromBody] InitialSetupRequest request,
         CancellationToken cancellationToken)

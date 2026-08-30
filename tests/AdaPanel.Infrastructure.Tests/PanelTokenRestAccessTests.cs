@@ -303,16 +303,60 @@ public sealed class PanelTokenRestAccessTests
         Assert.DoesNotContain("new AutoValidateAntiforgeryTokenAttribute()", kaynak, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Anahtarli isteklerin tavani duruyor mu.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>BU TESTIN ILK HALI BIR ACIGI "BEKLENEN DAVRANIS" DIYE CIVILEMISTI.</b> Son satiri
+    /// <c>RateLimitPartition.GetNoLimiter("cookie")</c> ariyordu, yani "cerez yolunda hicbir
+    /// tavan olmasin" kuralini KORUYORDU. Sonucu: 66 denetleyicinin ~64'u ve kimliksiz uclarin
+    /// besi — ikisi POSTA GONDEREN — hicbir sinir gormuyordu ve bu durumu bozmak testi
+    /// kirmiziya dondururdu.
+    /// </para>
+    /// <para>
+    /// Gerekce o gun makuldu (panelin tek sayfasi onlarca istek atar), ama karsiligi OLCULMEMISTI.
+    /// Olculdugunde tek sekmenin en kotu hali 71 istek/dk cikti — yani "cok istek atiyor" dogruydu
+    /// ama "bu yuzden tavan konamaz" yanlisti. Sinirlar artik o olcume gore secildi ve yoklama
+    /// ayri bir kovaya alindi (bkz. <c>PanelRateLimitTests</c>).
+    /// </para>
+    /// <para>
+    /// Bu test artik anahtar yolunun BOZULMADIGINI olcuyor: cerez tavani eklenirken anahtar
+    /// bolumlemesinin kaybolmadigini. Cerez yolunun kendi kanitlari <c>PanelRateLimitTests</c>'te,
+    /// davranis olarak (kaynak metniyle degil).
+    /// </para>
+    /// </remarks>
     [Fact]
     public void Anahtarli_isteklerin_hiz_siniri_var()
     {
-        var kaynak = KaynakOku("src", "AdaPanel.Api", "Program.cs");
+        var kaynak = KaynakOku("src", "AdaPanel.Api", "Security", "PanelRateLimits.cs");
 
-        Assert.Contains("options.GlobalLimiter", kaynak, StringComparison.Ordinal);
         Assert.Contains("PanelAuthentication.CarriesToken(context.Request)", kaynak, StringComparison.Ordinal);
-        // Cerez yolunda sinir YOK: panelin tek sayfasi onlarca istek atar, arayuzu kendi sinirina
-        // takmak duzeltmenin yaratacagi tek gercek gerileme olurdu.
-        Assert.Contains("RateLimitPartition.GetNoLimiter(\"cookie\")", kaynak, StringComparison.Ordinal);
+        Assert.Contains("Dakikalik(TokenPermitPerMinute)", kaynak, StringComparison.Ordinal);
+
+        // Kuresel sinirlayici Program.cs'te GERCEKTEN bagli olmali; yalniz tanimli olmasi,
+        // "kural dogru ama baglanmamis" sinifina girerdi.
+        var program = KaynakOku("src", "AdaPanel.Api", "Program.cs");
+        Assert.Contains("AddRateLimiter(PanelRateLimits.Configure(", program, StringComparison.Ordinal);
+
+        // ESKI DAVRANIS GERI GELEMEZ: cerez yolu "sinirsiz" isaretlenemez.
+        //
+        // YASAK KODUN SEKLINE KONUYOR, DIZGEYE DEGIL -- ve bunu testin ilk kosusu yazdirdi:
+        // eski davranisin NEDEN kaldirildigini anlatan yorumun kendisi "GetNoLimiter" kelimesini
+        // geciriyor ve duz bir arama HAKLI olarak kirmizi yandi. Ayni ders
+        // PanelSecurityHeaderTests'te de yazili: gerekce serbestce yazilabilmeli, yasak yalniz
+        // CAGRIYI kapsamali. Yorum satiri "//" ile baslar; kod satiri baslamaz.
+        foreach (var (ad, metin) in new[] { ("PanelRateLimits.cs", kaynak), ("Program.cs", program) })
+        {
+            var canliCagri = metin
+                .Split('\n')
+                .Select(satir => satir.Trim())
+                .Any(satir => !satir.StartsWith("//", StringComparison.Ordinal)
+                              && !satir.StartsWith("*", StringComparison.Ordinal)
+                              && satir.Contains("GetNoLimiter(", StringComparison.Ordinal));
+
+            Assert.False(canliCagri, $"{ad}: cerez yolu yeniden 'sinirsiz' isaretlenmis.");
+        }
     }
 
     [Fact]
