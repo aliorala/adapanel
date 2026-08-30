@@ -33,3 +33,6 @@ veritabani
 
 # Ajan worktree'leri: gecici calisma kopyalari, depoya girmemeli.
 .claude/worktrees/
+
+# Olcum aracinin (scratchpad/panel.py) cikti dosyasi -- depoya girmemeli.
+cikti.txt
