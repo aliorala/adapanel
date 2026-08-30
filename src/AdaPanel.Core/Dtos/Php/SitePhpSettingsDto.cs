@@ -22,8 +22,13 @@ public sealed class SitePhpSettingsDto
 
     /// <summary>
     /// open_basedir izolasyonu açık mı. Açıkken PHP sitenin köküne (Laravel'de ApplicationRootPath,
-    /// yani public'in ÜSTÜ) + site-içi tmp + OS temp ile sınırlanır; diğer siteleri / panel verisini okuyamaz.
-    /// Opsiyonel ve VARSAYILAN KAPALI: açıkça açılmadıkça hiçbir site etkilenmez (geri-alınabilir).
+    /// yani public'in ÜSTÜ) sınırlanır; yükleme/oturum/temp de site içindeki <c>tmp</c>'ye bağlanır,
+    /// böylece ortak OS temp izin listesinden tamamen düşer. Diğer siteleri / panel verisini okuyamaz.
+    /// <para>
+    /// YENİ SİTELERDE VARSAYILAN AÇIK (paylaşımlı barındırmanın tanımı budur). Değer sitenin kökündeki
+    /// <c>.user.ini</c>'den DEĞİL, paylaşılan php.ini'deki <c>[PATH=]</c> bloğundan okunur — kiracının
+    /// silebildiği bir dosya izolasyon durumunun kaynağı olamaz.
+    /// </para>
     /// </summary>
     public bool OpenBasedirEnabled { get; set; }
 
@@ -56,6 +61,14 @@ public sealed class UpdateSitePhpSettingsRequest
 
     public bool DisplayErrors { get; init; }
 
-    /// <summary>open_basedir izolasyonunu aç/kapat (per-site, varsayılan kapalı).</summary>
-    public bool OpenBasedirEnabled { get; init; }
+    /// <summary>
+    /// open_basedir izolasyonunu aç/kapat. <c>null</c> = DOKUNMA (mevcut durum korunur).
+    /// </summary>
+    /// <remarks>
+    /// Neden <c>bool?</c>: alan eskiden <c>bool</c> idi ve JSON'da hiç gönderilmediğinde <c>false</c>
+    /// oluyordu. Yani yalnız "memory_limit" güncelleyen eski bir arayüz/istemci, farkında olmadan
+    /// sitenin KİRACI İZOLASYONUNU KAPATIRDI. Bu depoda "bir taraf yazıyor, öteki sessizce
+    /// başka şey anlıyor" hata sınıfı defalarca ölçüldü; söylenmeyen alan artık DEĞİŞTİRMEZ.
+    /// </remarks>
+    public bool? OpenBasedirEnabled { get; init; }
 }

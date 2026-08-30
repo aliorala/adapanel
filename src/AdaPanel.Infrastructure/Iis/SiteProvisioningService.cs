@@ -186,8 +186,11 @@ public sealed class SiteProvisioningService(
     /// günlüğe yazılır ve kullanıcı "İzinleri Onar" ile tekrar deneyebilir.
     /// </para>
     /// </remarks>
-    /// <summary>Panelin kendi altyapı sitelerinin ad öneki (webmail, phpMyAdmin, Adminer).</summary>
-    private const string ManagedSitePrefix = "AdaPanel.";
+    /// <summary>
+    /// Panelin kendi altyapı sitelerinin ad öneki (webmail, phpMyAdmin, Adminer).
+    /// Önek İKİ YERDE TANIMLANMAZ: sahiplik işaretinin tek kaynağı <see cref="ManagedAppPoolName.Prefix"/>.
+    /// </summary>
+    private const string ManagedSitePrefix = ManagedAppPoolName.Prefix;
 
     private async Task IsolateSiteAsync(SiteDto site, CancellationToken cancellationToken)
     {
@@ -223,6 +226,28 @@ public sealed class SiteProvisioningService(
             logger.LogWarning(
                 exception,
                 "Site kiracı izolasyonu uygulanamadı (en iyi çaba, site yine de kuruldu): {Site}",
+                site.Name);
+        }
+
+        // İKİNCİ KATMAN — PHP izolasyonu (open_basedir), NTFS'ten AYRI bir try: biri başarısız olursa
+        // öteki yine uygulanır.
+        //
+        // NEDEN BURADA, PROFİLİN İÇİNDE DEĞİL — ÖLÇÜLMÜŞ AÇIK: open_basedir yalnız
+        // PhpService.SetSitePhpVersionAsync yolunda yazılıyordu; onu ise SADECE "php" profili çağırır.
+        // Panelin VARSAYILAN profili "auto"dur (CreateSiteRequest.RuntimeProfile = "auto") ve o yol
+        // AspNetService.EnableMixedHandlersAsync üzerinden gider — yani PANELDEN AÇILAN VARSAYILAN
+        // SİTENİN PHP'Sİ İZOLASYONSUZ kalıyordu. Bu makinede php-cgi ile ölçüldü: open_basedir boş,
+        // komşu sitenin dosyası okundu. Çağrı artık profilden BAĞIMSIZ tek yerde: siteyi izole etme
+        // kararı "hangi runtime seçildi" sorusuna bağlı değildir.
+        try
+        {
+            await phpService.EnsureSiteIsolationAsync(site.Name, enabled: true, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Site PHP izolasyonu (open_basedir) uygulanamadı (en iyi çaba, site yine de kuruldu): {Site}",
                 site.Name);
         }
     }
@@ -262,6 +287,17 @@ public sealed class SiteProvisioningService(
 
     // #5 onar — mevcut siteye yazma iznini (app pool kimliği, kök Modify) YENİDEN uygula. Bu özellikten önce
     // kurulmuş siteler için (oluşturma anında otomatik verilen izin onlarda yoktu). Best-effort.
+    //
+    // MEVCUT SİTELER İÇİN VERİLEN KARAR (PHP izolasyonu / open_basedir):
+    // Güncelleme, çalışan bir siteyi KENDİLİĞİNDEN kısıtlamaz. Panel yükseltildiğinde var olan
+    // sitelerin php.ini'sine hiçbir [PATH=] bloğu yazılmaz — kökünün dışındaki bir klasörü okuyan
+    // (paylaşılan kütüphane, eski göç düzeni) bir site sessizce 500 vermeye başlamamalıdır.
+    // İzolasyon var olan bir siteye ÜÇ açık eylemden biriyle gelir:
+    //   1) bu "İzinleri Onar" düğmesi,
+    //   2) siteye PHP sürümü atamak (PhpService.SetSitePhpVersionAsync),
+    //   3) PHP ayarları ekranındaki izolasyon anahtarı.
+    // YENİ sitelerde ise varsayılan AÇIK'tır (CreateAndProvisionAsync → IsolateSiteAsync).
+    // Böylece yükseltme geri alınabilir kalır: bir sitede sorun çıkarsa yönetici anahtarı kapatır.
     public async Task<SiteDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);

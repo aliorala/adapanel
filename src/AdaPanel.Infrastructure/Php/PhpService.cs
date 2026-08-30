@@ -168,7 +168,9 @@ public sealed class PhpService(
             return false;
         }
 
-        lines.Add($"extension_dir = \"{extensionDirectory.Replace('/', '\\')}\"");
+        // GENEL bölüme (site [PATH=] bloklarından ÖNCE): sona eklenirse yalnız son sitenin
+        // eklenti dizini olurdu, öteki siteler eklentileri hiç yükleyemezdi.
+        lines.Insert(PhpIniSiteIsolation.GlobalInsertIndex(lines), $"extension_dir = \"{extensionDirectory.Replace('/', '\\')}\"");
         return true;
     }
 
@@ -206,7 +208,7 @@ public sealed class PhpService(
             }
         }
 
-        lines.Add($"extension={extension}");
+        lines.Insert(PhpIniSiteIsolation.GlobalInsertIndex(lines), $"extension={extension}");
         return true;
     }
 
@@ -274,7 +276,9 @@ public sealed class PhpService(
             }
 
             var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
-            var current = ParseUserIni(lines);
+            // YALNIZ GENEL bölüm okunur: dosya sonundaki site [PATH=] blokları per-site değerler taşır,
+            // onları "genel değer" sanmak (ör. son sitenin memory_limit'i) yanlış karar verdirirdi.
+            var current = ParseUserIni(PhpIniSiteIsolation.GlobalLines(lines));
             var changed = false;
 
             // expose_php=Off (Plesk varsayılanı): PHP sürümünü gizle.
@@ -364,9 +368,22 @@ public sealed class PhpService(
                 });
             }, cancellationToken);
 
-            // B4 (profesyonel paneller gibi): PHP atanan siteye .user.ini YOKsa izolasyonlu (open_basedir AÇIK) varsayılan
-            // yaz. Mevcut .user.ini'ye dokunulmaz → mevcut siteler etkilenmez. Best-effort.
+            // PHP atanan siteye panel varsayılanı .user.ini (limitler) — yoksa yazılır, varsa dokunulmaz.
             await EnsureDefaultUserIniAsync(siteName, cancellationToken);
+
+            // KİRACI İZOLASYONU VARSAYILAN AÇIK: siteye PHP verildiği anda paylaşılan php.ini'ye [PATH=] bloğu
+            // yazılır. Zaten açıksa idempotent yeniden yazımdır (kök değişmişse — belge kökü/Laravel yükseltmesi —
+            // güncellenmiş olur). Best-effort: izolasyon yazılamadıysa PHP ATAMASI BAŞARISIZ SAYILMAZ, ama
+            // uyarı GÜNLÜĞE düşer; sessizce "izole" denmez (panel GetSitePhpSettings ile gerçeği okur).
+            try
+            {
+                await EnsureSiteIsolationAsync(siteName, enabled: true, cancellationToken);
+            }
+            catch (Exception isolationException)
+            {
+                logger.LogWarning(isolationException, "Site PHP izolasyonu yazılamadı (en iyi çaba): {Site}", siteName);
+            }
+
             return assignment;
         }
         catch (AppException)
@@ -404,53 +421,156 @@ public sealed class PhpService(
             {
                 dto.DisplayErrors = de.Equals("On", StringComparison.OrdinalIgnoreCase) || de == "1";
             }
-
-            // open_basedir satırı varsa izolasyon açık demektir.
-            dto.OpenBasedirEnabled = values.ContainsKey("open_basedir");
         }
 
+        // İZOLASYON DURUMU .user.ini'DEN OKUNMAZ. Tek kaynak paylaşılan php.ini'deki [PATH=] bloğudur;
+        // .user.ini kiracının silebildiği bir dosyadır, oradan okumak "açık" diye yalan söyleyebilirdi.
+        dto.OpenBasedirEnabled = await IsSiteIsolatedAsync(site.Name, cancellationToken);
         return dto;
     }
 
-    // IIS app pool kimliği (IIS_IUSRS) bir dizine YAZABİLSİN (open_basedir açıkken PHP oturum dosyaları
-    // site-içi tmp'e yazılır). Best-effort; icacls yoksa/başarısızsa sessiz geçer (ayar yine yazılır).
-    private static async Task GrantAppPoolWriteAsync(string directory, CancellationToken cancellationToken)
+    /// <summary>Sitenin izolasyon bloğu KURULU PHP'lerin herhangi birinin php.ini'sinde var mı.</summary>
+    private async Task<bool> IsSiteIsolatedAsync(string siteName, CancellationToken cancellationToken)
     {
+        foreach (var iniPath in await GetPhpIniPathsAsync(cancellationToken))
+        {
+            var lines = await File.ReadAllLinesAsync(iniPath, cancellationToken);
+            if (PhpIniSiteIsolation.IsEnabled(lines, siteName))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Kurulu her PHP sürümünün php.ini yolu (site bir sürümden ötekine geçebilir → hepsine yazılır).</summary>
+    private async Task<IReadOnlyList<string>> GetPhpIniPathsAsync(CancellationToken cancellationToken)
+    {
+        var components = await dbContext.InstalledComponents
+            .Where(component => component.ComponentId.StartsWith("php-"))
+            .ToArrayAsync(cancellationToken);
+
+        return components
+            .Select(component => Path.Combine(component.InstallDir, "php.ini"))
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Sitenin KENDİ app pool kimliği bir dizine yazabilsin (oturum/yükleme/temp dosyaları site-içi tmp'e düşer).
+    //
+    // NEDEN IIS_IUSRS DEĞİL: IIS_IUSRS TÜM app pool sanal hesaplarını kapsar. Site kökünün kalıtımı
+    // SiteProvisioningService.IsolateSiteAsync ile kırılıp yalnız kendi havuzuna açılıyor; tmp'e IIS_IUSRS
+    // vermek tam da izole edilen yeri (oturum çerezleri + yüklenen dosyalar) BÜTÜN kiracılara geri açardı.
+    private static async Task GrantAppPoolWriteAsync(string directory, string applicationPoolName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(applicationPoolName))
+        {
+            // Havuz adı okunamadıysa UYDURMA: yanlış hesaba izin vermek icacls'te sessiz 1332'dir.
+            return;
+        }
+
         try
         {
             await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync(
                 "icacls.exe",
-                $"\"{directory}\" /grant \"IIS_IUSRS:(OI)(CI)M\" /T /C /Q",
+                $"\"{directory}\" /grant \"IIS AppPool\\{applicationPoolName}:(OI)(CI)M\" /T /C /Q",
                 cancellationToken: cancellationToken);
         }
         catch
         {
-            // best-effort
+            // best-effort: ayar yine yazılır, dizin kök kalıtımından da yazılabilir olabilir.
         }
     }
 
-    // open_basedir + session.save_path satırlarını .user.ini içeriğine ekler. KÖK = ApplicationRootPath
-    // (Laravel'de çerçeve kodu public'in ÜSTÜndedir; panel gerçek proje kökünü bilir), boşsa PhysicalPath.
-    // Oturumlar site-içi tmp'e; YÜKLEMELER OS temp'inde kalır (upload_tmp_dir INI_SYSTEM) → OS temp'i de
-    // izinli yola dahil ederiz, böylece açınca yükleme/oturum KIRILMAZ.
-    private async Task AppendOpenBasedirAsync(StringBuilder content, AdaPanel.Core.Dtos.Sites.SiteDto site, CancellationToken cancellationToken)
+    /// <summary>
+    /// Site başına kiracı izolasyonunu (open_basedir + site-içi temp/oturum) paylaşılan php.ini'ye yazar
+    /// ya da kaldırır. YENİ SİTELERDE VARSAYILAN AÇIK — çağrı yeri SiteProvisioningService.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Mekanizma ve ölçümü için bkz. <see cref="PhpIniSiteIsolation"/>. Burada yalnız IO var:
+    /// kök seçimi, tmp dizini, izin ve KURULU HER PHP sürümünün php.ini'si.
+    /// </para>
+    /// <para>
+    /// <b>Panelin kendi araç siteleri (AdaPanel.*) hariç:</b> phpMyAdmin/Adminer/Roundcube kiracı değil,
+    /// panelin parçasıdır; kendi kurulum ağaçları (<c>tools\</c>) site kökünün DIŞINDADIR ve bu depoda
+    /// araç sitelerini sıkılaştırmak üç ayrı sürümde canlıda kırdı. Aynı istisna
+    /// SiteProvisioningService.IsolateSiteAsync (NTFS katmanı) için de geçerlidir.
+    /// </para>
+    /// <para>
+    /// <b>Yeni php.ini ne zaman okunur:</b> php-cgi php.ini'yi SÜREÇ BAŞINDA okur ve FastCGI süreçleri
+    /// (app pool + yol) başına ayrılır. Yeni bir sitenin havuzunda henüz süreç YOKTUR → blok ilk istekte
+    /// zaten uygulanır, yeniden başlatma gerekmez. Var olan bir sitede ayar değiştirildiğinde çağıran
+    /// taraf php-cgi'yi yeniler (UpdateSitePhpSettingsAsync).
+    /// </para>
+    /// </remarks>
+    public async Task EnsureSiteIsolationAsync(string siteName, bool enabled, CancellationToken cancellationToken = default)
     {
-        var openBaseRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(site.ApplicationRootPath)
-            ? site.PhysicalPath
-            : site.ApplicationRootPath);
-        var sessionDir = Path.Combine(openBaseRoot, "tmp");
-        Directory.CreateDirectory(sessionDir);
-        await GrantAppPoolWriteAsync(sessionDir, cancellationToken);
+        if (siteName.StartsWith(AdaPanel.Infrastructure.Iis.ManagedAppPoolName.Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
 
-        var osTemp = Path.GetFullPath(Environment.ExpandEnvironmentVariables("%SystemRoot%\\Temp"));
-        var allowed = new[] { openBaseRoot, sessionDir, osTemp }
-            .Select(path => path.Replace('\\', '/').TrimEnd('/'))
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-        content.AppendLine($"open_basedir = \"{string.Join(';', allowed)}\"");
-        content.AppendLine($"session.save_path = \"{sessionDir.Replace('\\', '/')}\"");
+        var iniPaths = await GetPhpIniPathsAsync(cancellationToken);
+        if (iniPaths.Count == 0)
+        {
+            // PHP kurulu değilse yazacak php.ini de yok. Site PHP aldığında bu metot yeniden çağrılır.
+            return;
+        }
+
+        string? root = null;
+        if (enabled)
+        {
+            var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+            root = Path.GetFullPath(string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                ? site.PhysicalPath
+                : site.ApplicationRootPath);
+
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            {
+                throw new AppException("php.site_root_missing", 404, 404);
+            }
+
+            // Oturum + yükleme + sys temp bu dizine bağlanır; yoksa PHP oturum açamaz (500).
+            var tempDirectory = PhpIniSiteIsolation.TempDirectoryFor(root);
+            Directory.CreateDirectory(tempDirectory);
+            await GrantAppPoolWriteAsync(tempDirectory, site.ApplicationPoolName, cancellationToken);
+
+            // WordPress gibi düz kurulumlarda kök = belge köküdür; koruma olmadan oturum dosyaları
+            // /tmp/sess_... adresinden İNDİRİLEBİLİRDİ. Mevcut bir web.config EZİLMEZ (yönetici
+            // oraya bilerek bir şey koymuş olabilir); yalnız yoksa yazılır.
+            var tempWebConfig = Path.Combine(tempDirectory, "web.config");
+            if (!File.Exists(tempWebConfig))
+            {
+                await File.WriteAllTextAsync(
+                    tempWebConfig,
+                    PhpIniSiteIsolation.TempDirectoryWebConfig,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    cancellationToken);
+            }
+        }
+
+        foreach (var iniPath in iniPaths)
+        {
+            var lines = (await File.ReadAllLinesAsync(iniPath, cancellationToken)).ToList();
+            var updated = enabled
+                ? PhpIniSiteIsolation.Upsert(lines, siteName, root!)
+                : PhpIniSiteIsolation.Remove(lines, siteName);
+            await File.WriteAllLinesAsync(iniPath, updated, cancellationToken);
+        }
+
+        logger.LogInformation(
+            "Site PHP izolasyonu {Durum}: {Site} ({Sayi} php.ini)",
+            enabled ? "yazıldı" : "kaldırıldı",
+            siteName,
+            iniPaths.Count);
     }
 
-    // B4 (profesyonel paneller gibi): PHP atanan siteye .user.ini YOKsa, izolasyonlu (open_basedir AÇIK) varsayılan yazar.
+    // PHP atanan siteye .user.ini YOKsa panel varsayılanlarını yazar (limitler). İZOLASYON BURADA DEĞİL:
+    // open_basedir/temp/oturum yolları paylaşılan php.ini'nin [PATH=] bloğundadır (bkz. PhpIniSiteIsolation) —
+    // .user.ini kiracının silebildiği bir dosyadır, güvenlik sınırı oraya konmaz.
     // Mevcut .user.ini'ye DOKUNMAZ (kullanıcı/önceki ayar korunur). Best-effort: hata atama akışını bozmaz.
     private async Task EnsureDefaultUserIniAsync(string siteName, CancellationToken cancellationToken)
     {
@@ -475,12 +595,11 @@ public sealed class PhpService(
             content.AppendLine("upload_max_filesize = 64M");
             content.AppendLine("post_max_size = 64M");
             content.AppendLine("display_errors = Off");
-            await AppendOpenBasedirAsync(content, site, cancellationToken);
             await File.WriteAllTextAsync(iniPath, content.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Varsayılan .user.ini (open_basedir) yazılamadı: {Site}", siteName);
+            logger.LogWarning(exception, "Varsayılan .user.ini yazılamadı: {Site}", siteName);
         }
     }
 
@@ -503,13 +622,29 @@ public sealed class PhpService(
         content.AppendLine($"post_max_size = {SanitizeIniValue(request.PostMaxSize)}");
         content.AppendLine($"display_errors = {(request.DisplayErrors ? "On" : "Off")}");
 
-        if (request.OpenBasedirEnabled)
-        {
-            await AppendOpenBasedirAsync(content, site, cancellationToken);
-        }
-
         var iniPath = Path.Combine(site.PhysicalPath, ".user.ini");
         await File.WriteAllTextAsync(iniPath, content.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+
+        // İZOLASYON: istek bunu SÖYLEMİYORSA (null) mevcut durum KORUNUR.
+        //
+        // ÖLÇÜLMÜŞ TUZAK SINIFI — alan eskiden `bool` idi ve varsayılanı `false`'du: alanı hiç göndermeyen
+        // eski bir arayüz ya da API istemcisi, "limitleri kaydet" derken izolasyonu SESSİZCE KAPATIRDI.
+        // Bu depoda aynı sınıf birden çok kez ölçüldü; bu yüzden alan `bool?` ve "söylenmediyse dokunma".
+        if (request.OpenBasedirEnabled is { } isolationRequested)
+        {
+            await EnsureSiteIsolationAsync(site.Name, isolationRequested, cancellationToken);
+
+            // php.ini süreç başında okunur: var olan bir sitede değişikliğin HEMEN geçerli olması için
+            // php-cgi yenilenir (UpdateGlobalPhpSettingsAsync ile aynı, ölçülmüş yöntem). Best-effort.
+            try
+            {
+                await AdaPanel.Infrastructure.Support.ProcessRunner.RunAsync("taskkill.exe", "/f /im php-cgi.exe", cancellationToken: cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "php-cgi yenilenemedi; izolasyon değişikliği bir sonraki havuz dönüşünde uygulanır.");
+            }
+        }
 
         // KRİTİK: PHP upload limitini yükseltmek tek başına yetmez — IIS maxAllowedContentLength varsayılanı
         // ~30MB'de "413 Request Entity Too Large" verir. post_max_size'ı baz alıp IIS limitini de yükselt
@@ -540,7 +675,8 @@ public sealed class PhpService(
         if (File.Exists(iniPath))
         {
             dto.Configured = true;
-            var values = ParseUserIni(await File.ReadAllLinesAsync(iniPath, cancellationToken));
+            // Site [PATH=] blokları hariç: genel ekran genel değerleri göstermeli.
+            var values = ParseUserIni(PhpIniSiteIsolation.GlobalLines(await File.ReadAllLinesAsync(iniPath, cancellationToken)));
             if (values.TryGetValue("memory_limit", out var ml)) dto.MemoryLimit = ml;
             if (values.TryGetValue("max_execution_time", out var met) && int.TryParse(met, out var metVal)) dto.MaxExecutionTime = metVal;
             if (values.TryGetValue("upload_max_filesize", out var umf)) dto.UploadMaxFilesize = umf;
@@ -667,7 +803,8 @@ public sealed class PhpService(
         });
         if (!alreadyDeclared)
         {
-            lines.Add("extension=redis");
+            // GENEL bölüme: site [PATH=] bloklarından sonra eklenirse redis yalnız son sitede yüklenirdi.
+            lines.Insert(PhpIniSiteIsolation.GlobalInsertIndex(lines), "extension=redis");
             await File.WriteAllLinesAsync(iniPath, lines, cancellationToken);
         }
 
@@ -748,11 +885,22 @@ public sealed class PhpService(
     }
 
     // php.ini'de bir direktifi set eder: aktif varsa değiştirir, yorumluysa açar, yoksa ekler.
+    /// <summary>
+    /// php.ini'nin GENEL bölümüne bir yönerge yazar.
+    /// </summary>
+    /// <remarks>
+    /// KAPSAM SINIRI ZORUNLU: dosyanın sonunda site başına <c>[PATH=]</c> izolasyon blokları durur
+    /// (bkz. <see cref="PhpIniSiteIsolation"/>). Bir <c>[PATH=]</c> başlığından sonraki her satır o
+    /// siteye aittir; eski kod bulunamayan yönergeyi dosya SONUNA eklediği için genel ayar son
+    /// sitenin bölümüne düşer, genel olarak HİÇ uygulanmazdı. Hem arama hem ekleme ilk PATH/HOST
+    /// başlığında durur.
+    /// </remarks>
     private static void SetIniDirective(List<string> lines, string name, string value)
     {
+        var globalEnd = PhpIniSiteIsolation.GlobalInsertIndex(lines);
         var activeIndex = -1;
         var commentedIndex = -1;
-        for (var i = 0; i < lines.Count; i++)
+        for (var i = 0; i < globalEnd; i++)
         {
             var trimmed = lines[i].Trim();
             var isComment = trimmed.StartsWith(';');
@@ -776,7 +924,7 @@ public sealed class PhpService(
         var formatted = $"{name} = {value}";
         if (activeIndex >= 0) { lines[activeIndex] = formatted; }
         else if (commentedIndex >= 0) { lines[commentedIndex] = formatted; }
-        else { lines.Add(formatted); }
+        else { lines.Insert(globalEnd, formatted); }
     }
 
     // "256M" / "1G" / "512K" / "12345" → byte. IIS maxAllowedContentLength için PHP boyut değerini çevirir.

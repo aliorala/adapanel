@@ -4712,11 +4712,21 @@ public sealed class ComponentBootstrapper(
         await File.WriteAllLinesAsync(phpIniPath, lines, cancellationToken);
     }
 
+    /// <summary>
+    /// php.ini'nin GENEL bölümüne yönerge yazar.
+    /// </summary>
+    /// <remarks>
+    /// KAPSAM SINIRI: dosyanın sonunda site başına kiracı izolasyonu blokları (<c>[PATH=...]</c>,
+    /// bkz. <c>PhpIniSiteIsolation</c>) durur ve bir PATH başlığından sonraki HER satır o siteye aittir.
+    /// Yönergeyi dosya sonuna eklemek, "genel" sanılan ayarı son sitenin bölümüne gömerdi — genel
+    /// olarak hiç uygulanmazdı. Hem arama hem ekleme ilk PATH/HOST başlığında durur.
+    /// </remarks>
     private static void SetPhpIniDirective(List<string> lines, string name, string value, bool preserveExisting = false)
     {
+        var globalEnd = AdaPanel.Infrastructure.Php.PhpIniSiteIsolation.GlobalInsertIndex(lines);
         var activeIndex = -1;
         var commentedIndex = -1;
-        for (var i = 0; i < lines.Count; i++)
+        for (var i = 0; i < globalEnd; i++)
         {
             var trimmed = lines[i].Trim();
             var isComment = trimmed.StartsWith(';');
@@ -4758,7 +4768,7 @@ public sealed class ComponentBootstrapper(
         }
         else
         {
-            lines.Add(directive);
+            lines.Insert(globalEnd, directive);
         }
     }
 
@@ -4783,7 +4793,9 @@ public sealed class ComponentBootstrapper(
         }
         else
         {
-            lines.Add(directive);
+            // GENEL bölüme: site [PATH=] bloklarından SONRA eklenen bir extension yalnız o siteye
+            // yüklenirdi (öteki bütün siteler eklentisiz kalırdı).
+            lines.Insert(AdaPanel.Infrastructure.Php.PhpIniSiteIsolation.GlobalInsertIndex(lines), directive);
         }
     }
 

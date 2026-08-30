@@ -28,6 +28,18 @@ public interface IPhpService
 
     Task<SitePhpSettingsDto> GetSitePhpSettingsAsync(string siteName, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Site başına PHP kiracı izolasyonunu (open_basedir + site-içi yükleme/oturum/temp) paylaşılan
+    /// php.ini'nin <c>[PATH=...]</c> bölümüne yazar ya da kaldırır. YENİ SİTELERDE VARSAYILAN AÇIK.
+    /// </summary>
+    /// <remarks>
+    /// Neden site kökündeki <c>.user.ini</c> değil: o dosyayı kiracının kendi kimliği silebilir
+    /// (site kökü ona Modify açıktır) — yani savunmayı savunulan taraf kaldırabilirdi. php.ini
+    /// kiracının erişemediği yerdedir ve PHP, <c>[PATH=]</c> yönergelerinin kullanıcı ini'leriyle
+    /// ezilmesine izin vermez (bu depoda php-cgi 8.3 ile ölçüldü).
+    /// </remarks>
+    Task EnsureSiteIsolationAsync(string siteName, bool enabled, CancellationToken cancellationToken = default);
+
     Task<SitePhpSettingsDto> UpdateSitePhpSettingsAsync(
         string siteName,
         UpdateSitePhpSettingsRequest request,

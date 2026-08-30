@@ -246,6 +246,9 @@ async function saveSettings() {
       openBasedirEnabled: settings.openBasedirEnabled
     });
     settings.memoryLimit = data.memoryLimit;
+    // İzolasyon durumunu SUNUCUNUN döndürdüğü GERÇEK değerle tazele: kutucuk, kaydedilmiş sanılan
+    // ama uygulanmamış bir durumu göstermesin (yanıt php.ini'den taze okunur).
+    settings.openBasedirEnabled = data.openBasedirEnabled ?? settings.openBasedirEnabled;
     showNotice(t("panel.php.settingsSaved"), false);
   } catch (error) {
     // `extractApiMessage` HAM anahtar döndürür (ör. `php.settings_locked`); çevirmeden basmak

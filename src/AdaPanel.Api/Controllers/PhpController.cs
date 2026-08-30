@@ -1,5 +1,6 @@
 using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Components;
 using AdaPanel.Core.Dtos.Php;
@@ -107,6 +108,19 @@ public sealed class PhpController(
         CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
+
+        // KİRACI İZOLASYONUNU KAPATMAK SUNUCU DÜZEYİ BİR KARARDIR → yalnız Administrator.
+        //
+        // Neden: bu uç Reseller'a da açık (bayi kendi müşterisinin sitesinde PHP limitlerini
+        // ayarlayabilsin diye). open_basedir'i kapatmak ise o sitenin PHP'sine SUNUCUDAKİ BAŞKA
+        // kiracıların köklerini okuma imkânı verir — yani bayi, kendi müşterisinin sitesi üzerinden
+        // BAŞKA bayilerin müşterilerini okuyabilirdi. Açmak serbesttir (güvenliği artırır),
+        // kapatmak değil. Plesk'te de open_basedir yalnız sunucu yöneticisinin kararıdır.
+        if (request.OpenBasedirEnabled is false && !User.IsInRole("Administrator"))
+        {
+            throw new AppException("php.isolation_admin_only", 403, 403);
+        }
+
         var settings = await phpService.UpdateSitePhpSettingsAsync(siteName, request, cancellationToken);
         await auditService.WriteForSubscriptionAsync(
             "php.site.settings.updated",
