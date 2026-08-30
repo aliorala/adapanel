@@ -635,7 +635,11 @@ public sealed class AppStoreService(
             FlattenSingleTopDirectory(stagingRoot);
             ValidateRoundcubeProject(stagingRoot);
             await WriteRoundcubeConfigAsync(stagingRoot, cancellationToken);
-            await WriteRoundcubeWebConfigAsync(stagingRoot, cancellationToken);
+
+            // web.config BELGE KÖKÜNE yazılır, uygulama köküne değil: IIS yalnız belge kökündeki
+            // (ve altındaki) web.config'i okur. Roundcube'da belge kökü public_html olduğu için
+            // uygulama köküne yazılan dosya HİÇ okunmazdı.
+            await WriteRoundcubeWebConfigAsync(ResolveRoundcubeDocumentRoot(stagingRoot), cancellationToken);
 
             deployment = DeployApplication(stagingRoot, applicationRoot, prepared);
             await InitRoundcubeSqliteAsync(php.PhpExecutable, applicationRoot, cancellationToken);
@@ -644,6 +648,17 @@ public sealed class AppStoreService(
                 site.Name,
                 new SetSitePhpVersionRequest { ComponentId = php.ComponentId },
                 cancellationToken);
+
+            // SİTEYİ GERÇEK BELGE KÖKÜNE YÖNLENDİR — Laravel yolunda yapılan şeyin aynısı.
+            // Yapılmadığında kurulum "başarılı" diyor ama site AÇILMIYORDU (aşağıdaki
+            // doğrulamanın gerekçesine bakınız).
+            var documentRoot = ResolveRoundcubeDocumentRoot(applicationRoot);
+            if (!PathsEqual(documentRoot, applicationRoot))
+            {
+                await iisSiteService.UpdatePhysicalPathAsync(site.Name, documentRoot, cancellationToken);
+            }
+
+            await VerifyRoundcubeIsServedAsync(site.Name, documentRoot, cancellationToken);
         }
         catch (AppException)
         {
@@ -768,6 +783,86 @@ public sealed class AppStoreService(
             File.Delete(tempFile);
         }
     }
+
+    /// <summary>
+    /// Roundcube'un GERÇEK belge kökü: <c>public_html</c> varsa o, yoksa uygulama kökü.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu bir tercih değil, paketin şartı. Panelin bildirimde sabitlediği sürümün
+    /// (<c>roundcubemail-1.7.1-complete</c>) ÜST DÜZEY <c>index.php</c> dosyasının TAMAMI şudur:
+    /// <c>exit('Please, configure your HTTP server to point to the /public_html directory …')</c>.
+    /// Yani site kökü uygulama köküne bakıyorsa Roundcube HİÇ AÇILMAZ; ziyaretçi yalnız bu
+    /// cümleyi görür. (Panelin kendi webmail kurulumu bunu zaten biliyor ve doğru yapıyor.)
+    /// </para>
+    /// <para>
+    /// Klasör VARSAYILMAZ, ölçülür: <c>public_html/index.php</c> yoksa (başka bir sürüm/paket)
+    /// uygulama kökü döner. Var olmayan bir klasörü belge kökü yapmak siteyi büsbütün kırardı.
+    /// </para>
+    /// </remarks>
+    internal static string ResolveRoundcubeDocumentRoot(string applicationRoot)
+    {
+        var aday = Path.Combine(applicationRoot, "public_html");
+        return File.Exists(Path.Combine(aday, "index.php")) ? aday : applicationRoot;
+    }
+
+    /// <summary>İki dosya yolu aynı yeri mi gösteriyor (Windows: büyük/küçük ve sondaki ayraç önemsiz).</summary>
+    internal static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// KURULUMDAN SONRA GERİ OKUMA: site gerçekten Roundcube'u mu sunuyor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eskiden bu adım hiç yoktu: kurulum indiriyor, açıyor, kopyalıyor ve "tamam" diyordu.
+    /// Sonuç, kullanıcının gördüğü şeyle panelin söylediği şeyin ayrışmasıydı — panel "kuruldu"
+    /// diyor, site ise Roundcube'un "HTTP sunucunuzu /public_html'e yönlendirin" uyarısını
+    /// gösteriyordu.
+    /// </para>
+    /// <para>
+    /// İki bağımsız gerçek okunur: (1) IIS'in siteye YAZDIĞI fiziksel yol (yazma sessizce
+    /// uygulanmamış olabilir), (2) o yoldaki giriş dosyasının Roundcube'un yönlendirme uyarısı
+    /// OLMAMASI. İkisi de dosya/IIS düzeyinde ölçülebilir; HTTP isteğine gerek yok — site
+    /// bağlaması/host başlığı henüz hazır olmayabilir ve o zaman "ölçemedim"i "bozuk" sanırdık.
+    /// </para>
+    /// </remarks>
+    private async Task VerifyRoundcubeIsServedAsync(string siteName, string documentRoot, CancellationToken cancellationToken)
+    {
+        var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        if (!PathsEqual(site.PhysicalPath, documentRoot))
+        {
+            throw new AppException("store.install_failed", 500, 500,
+                $"Site fiziksel yolu belge köküne ayarlanamadı. Beklenen='{documentRoot}', okunan='{site.PhysicalPath}'.");
+        }
+
+        var girisDosyasi = Path.Combine(documentRoot, "index.php");
+        if (!File.Exists(girisDosyasi))
+        {
+            throw new AppException("store.install_failed", 500, 500,
+                $"Belge kökünde index.php yok: '{girisDosyasi}'.");
+        }
+
+        var icerik = await File.ReadAllTextAsync(girisDosyasi, cancellationToken);
+        if (icerik.Contains(RoundcubeYonlendirmeUyarisi, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException("store.install_failed", 500, 500,
+                "Site hâlâ Roundcube'un 'sunucunuzu /public_html'e yönlendirin' uyarı sayfasını sunuyor.");
+        }
+    }
+
+    /// <summary>
+    /// Roundcube'un üst düzey <c>index.php</c>'sindeki yönlendirme uyarısının değişmeyen parçası.
+    /// </summary>
+    /// <remarks>
+    /// Uydurulmadı: bildirimde sabitlenen sürümün kaynağından okundu
+    /// (<c>roundcubemail 1.7.1 · index.php</c>, tek satır <c>exit(...)</c>). Bu metin görünüyorsa
+    /// belge kökü YANLIŞ yerdedir — kurulum "başarılı" demeden önce bunu görmek zorundadır.
+    /// </remarks>
+    private const string RoundcubeYonlendirmeUyarisi = "point to the /public_html";
 
     private static void ValidateRoundcubeProject(string root)
     {

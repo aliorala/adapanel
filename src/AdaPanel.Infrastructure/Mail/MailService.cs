@@ -1,4 +1,4 @@
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -148,7 +148,8 @@ public sealed class MailService(
             .Select(item => new MailDomainDto
             {
                 Name = GetField(item, "name"),
-                Active = GetBoolField(item, "isEnabled", "active", "enabled"),
+                // Kayipsiz okuyucu: alan yoksa true DEGIL null. Gerekcesi MailDomainDto.Active.
+                Active = OkunanEtkinlik(item),
                 AccountCount = 0,
                 MaxSizeMB = quotas.GetValueOrDefault(GetField(item, "name").Trim().ToLowerInvariant())
             })
@@ -195,7 +196,9 @@ public sealed class MailService(
                     accounts.Add(new MailAccountDto
                     {
                         Address = address,
-                        Active = true,
+                        // SABİT true DEĞİL: hesabın kendi nesnesine SORULUR. Alan yoksa null
+                        // ("ölçülemedi") döner — bkz. MailAccountDto.Active.
+                        Active = OkunanEtkinlik(detail.Value),
                         MaxSizeMB = (int)(ReadAccountQuotaBytes(detail.Value) / (1024 * 1024)),
                         CurrentSizeMB = (int)(GetLongField(detail.Value, "usedDiskQuota") / (1024 * 1024))
                     });
@@ -216,7 +219,8 @@ public sealed class MailService(
                             {
                                 Address = $"{aliasName}@{normalized}",
                                 Target = address,
-                                Active = GetBoolField(entry.Value, "enabled")
+                                // Kayipsiz okuyucu; gerekcesi MailAliasDto.Active.
+                                Active = OkunanEtkinlik(entry.Value)
                             });
                         }
                     }
@@ -304,10 +308,14 @@ public sealed class MailService(
             throw new AppException("mail.invalid_admin_password", 401, 401, CombineError(probe));
         }
 
-        await fileStore.WriteAsync(ConfigPath, new MailConfig
-        {
-            AdminPasswordProtected = secretProtector.Protect(request.AdminPassword)
-        }, cancellationToken);
+        // AYARIN GERİ KALANI KORUNUR. Eskiden burada sıfırdan bir MailConfig yazılıyordu ve bu,
+        // yöneticinin yalnız parolayı yeniden girmesiyle DİĞER alanları siliyordu: ölçüldü,
+        // PublicBaseUrl boşalınca List-Unsubscribe başlığı sessizce eklenmez oluyor
+        // (bkz. <c>BuildListUnsubscribeRulesAsync</c>) — kimse bir şey silmediğini sanırken
+        // giden iletiler o başlığı kaybediyordu. Yazma artık TEK yerden, oku-değiştir-yaz ile.
+        await UpdateConfigAsync(
+            config => config.AdminPasswordProtected = secretProtector.Protect(request.AdminPassword),
+            cancellationToken);
 
         return await GetWorkspaceAsync(null, cancellationToken);
     }
@@ -1695,12 +1703,28 @@ public sealed class MailService(
     {
         var normalized = NormalizePublicBaseUrl(baseUrl);
 
-        var config = await fileStore.ReadAsync<MailConfig?>(ConfigPath, null, cancellationToken) ?? new MailConfig();
-        config.PublicBaseUrl = normalized;
-        await fileStore.WriteAsync(ConfigPath, config, cancellationToken);
+        await UpdateConfigAsync(config => config.PublicBaseUrl = normalized, cancellationToken);
 
         await SyncDataStageScriptAsync(cancellationToken);
         return normalized;
+    }
+
+    /// <summary>
+    /// <c>config/mail.json</c>'a yazmanın TEK yolu: oku → değiştir → yaz.
+    /// </summary>
+    /// <remarks>
+    /// Bu metot bir kolaylık değil, bir KISIT. <c>MailConfig</c> birden çok bağımsız ayar taşıyor
+    /// (yönetici parolası, panelin genel kök adresi) ve bunları ayrı ayrı yazan çağrılar vardı;
+    /// biri <c>new MailConfig { … }</c> yazınca diğerinin alanı SESSİZCE sıfırlanıyordu. Alan
+    /// eklendikçe aynı hata tekrar yazılabildiği için doğru düzeltme "o çağrıyı düzeltmek" değil,
+    /// sıfırdan nesne yazan bir yolun KALMAMASI. Bu yüzden başka hiçbir yerde
+    /// <c>WriteAsync(ConfigPath, …)</c> çağrısı bulunmuyor; koruma testle de bekçilendi.
+    /// </remarks>
+    private async Task UpdateConfigAsync(Action<MailConfig> degistir, CancellationToken cancellationToken)
+    {
+        var config = await fileStore.ReadAsync<MailConfig?>(ConfigPath, null, cancellationToken) ?? new MailConfig();
+        degistir(config);
+        await fileStore.WriteAsync(ConfigPath, config, cancellationToken);
     }
 
     /// <summary>Boş = özellik kapalı. Aksi hâlde mutlak http/https KÖK adresi olmalı.</summary>
@@ -3073,6 +3097,63 @@ public sealed class MailService(
         return string.Empty;
     }
 
+    /// <summary>
+    /// Bir nesnenin "etkin mi" alanını ÜÇ DEĞERLİ okur: true/false, ya da alan yoksa
+    /// <c>null</c> = ölçülemedi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="GetBoolField"/> alan bulunamadığında <c>true</c> döner; yani "sunucu bunu
+    /// söylemedi" ile "sunucu evet dedi" aynı cevaba iniyor. Bir posta kutusunun durumu için bu
+    /// kabul edilemez: kapalı bir kutu panelde yeşil "Etkin" görünürse kullanıcı hatayı BAŞKA
+    /// yerde arar. Bu yüzden hesap durumu için ayrı, kayıpsız bir okuyucu var.
+    /// </para>
+    /// <para>
+    /// Aranan adlar UYDURULMADI: panelin alan adı listesi aynı soruyu zaten
+    /// <c>isEnabled</c>/<c>active</c>/<c>enabled</c> ile soruyor (bkz. çalışma alanı okuması).
+    /// Bu adların Stalwart hesap nesnesinde bulunduğu CANLI olarak doğrulanamadı (bu makinede
+    /// posta görevi ölü). Doğrulanamadığı için sonuç uydurulmuyor: alan yoksa <c>null</c>.
+    /// </para>
+    /// </remarks>
+    internal static bool? OkunanEtkinlik(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        foreach (var name in new[] { "isEnabled", "active", "enabled" })
+        {
+            if (!element.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.True:
+                    return true;
+                case JsonValueKind.False:
+                    return false;
+                case JsonValueKind.String:
+                    var metin = (value.GetString() ?? string.Empty).Trim();
+                    if (bool.TryParse(metin, out var ayrisan))
+                    {
+                        return ayrisan;
+                    }
+
+                    // "1"/"0" da görülüyor; anlamadığımız bir dizgiyi "etkin" saymayız.
+                    return metin switch { "1" => true, "0" => false, _ => null };
+                case JsonValueKind.Number:
+                    return value.TryGetInt64(out var sayi) ? sayi != 0 : null;
+                default:
+                    return null;
+            }
+        }
+
+        return null;
+    }
+
     private static bool GetBoolField(JsonElement element, params string[] names)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -3972,7 +4053,7 @@ public sealed class MailService(
                 continue;
             }
 
-            foreach (var port in ListenerPorts(dinleyici.Binds))
+            foreach (var port in IstemciyeUlasilabilirPortlar(dinleyici.Binds))
             {
                 // SMTP 25 istemciye VERİLMEZ: RFC 6409 gereği ileti gönderimi (submission) 25'ten
                 // değil, kimlik doğrulamalı gönderim portundan yapılır. 25'i yayınlamak, istemciyi
@@ -4059,11 +4140,33 @@ public sealed class MailService(
             : null;
     }
 
-    /// <summary>"0.0.0.0:143" / "[::]:993" gibi bağlama dizgilerinden port numaralarını çıkarır.</summary>
-    private static IEnumerable<int> ListenerPorts(IEnumerable<string> binds)
+    /// <summary>
+    /// Bir dinleyicinin bağlamalarından İSTEMCİYE VERİLEBİLECEK portları çıkarır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eskiden yalnız port ayıklanıyor, ADRES hiç okunmuyordu — ve bu ölçülebilir bir yanlış
+    /// üretiyordu: sertleştirme, dışarıya açık olmaması gereken portları
+    /// (<c>ComponentBootstrapper.PublicMailListenerPorts</c> dışında kalan her şey; düz metin
+    /// POP3 110, ManageSieve 4190, yönetim 8080) <c>127.0.0.1</c> + <c>[::1]</c> ile sınırlıyor
+    /// ve güvenlik duvarında da açmıyor. Dinleyici hâlâ VAR olduğu için port listesine giriyordu.
+    /// </para>
+    /// <para>
+    /// Sonucu somut: autodiscover/autoconfig cevabında POP3 110 çıkıyordu ve sıralama porta göre
+    /// olduğu için 995'ten ÖNCE geliyordu — yani Outlook/Thunderbird'ün gördüğü İLK pop3 girdisi
+    /// makine dışından asla bağlanılamayan porttu. Kullanıcı için bu "ayarlar otomatik geldi ama
+    /// posta gelmiyor" demek. Loopback'e bağlı bir dinleyici, istemci için YOK hükmündedir.
+    /// </para>
+    /// </remarks>
+    internal static IEnumerable<int> IstemciyeUlasilabilirPortlar(IEnumerable<string>? binds)
     {
         foreach (var bind in binds ?? [])
         {
+            if (!DisaridanUlasilabilirBind(bind))
+            {
+                continue;
+            }
+
             var deger = (bind ?? string.Empty).Trim();
             var index = deger.LastIndexOf(':');
             if (index < 0 || index == deger.Length - 1)
@@ -4077,6 +4180,44 @@ public sealed class MailService(
                 yield return port;
             }
         }
+    }
+
+    /// <summary>
+    /// "adres:port" bağlamasının makine DIŞINDAN erişilebilir olup olmadığı.
+    /// </summary>
+    /// <remarks>
+    /// Joker adresler (<c>0.0.0.0</c>, <c>[::]</c>, <c>*</c> ve adresi hiç yazılmamış biçim) tüm
+    /// arabirimleri dinler → erişilebilir. <c>127.0.0.0/8</c>, <c>::1</c> ve <c>localhost</c>
+    /// yalnız makinenin kendisine açıktır → erişilebilir DEĞİL. Adres ayrıştırılamıyorsa
+    /// erişilebilir SAYILIR: burada yanılmanın iki yönü eşit değil — bilinmeyen bir adresi
+    /// gizlemek, gerçekten çalışan bir portu istemciden saklamak olurdu.
+    /// </remarks>
+    internal static bool DisaridanUlasilabilirBind(string? bind)
+    {
+        var deger = (bind ?? string.Empty).Trim();
+        var index = deger.LastIndexOf(':');
+        if (index < 0)
+        {
+            return false; // port yok; zaten bağlama sayılmaz
+        }
+
+        var adres = deger[..index].Trim();
+        if (adres.StartsWith('[') && adres.EndsWith(']'))
+        {
+            adres = adres[1..^1];
+        }
+
+        if (adres.Length == 0 || adres == "*" || adres == "0.0.0.0" || adres == "::")
+        {
+            return true;
+        }
+
+        if (string.Equals(adres, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !System.Net.IPAddress.TryParse(adres, out var ip) || !System.Net.IPAddress.IsLoopback(ip);
     }
 
     /// <summary>

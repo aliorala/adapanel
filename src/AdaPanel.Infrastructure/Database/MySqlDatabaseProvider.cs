@@ -853,8 +853,19 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
 
     private static AppException MapUnexpectedMySqlException(MySqlException exception)
     {
-        return exception.Number == 1045
-            ? new AppException("database.connection_failed", 503, 503)
-            : new AppException("database.configuration_failed", 500, 500);
+        // 1470 = ER_WRONG_STRING_LENGTH — "String '%s' is too long for %s (should be no longer
+        // than %d)". Kullanıcı adı MySQL'in 32 karakterlik SABİT KODLU sınırını aştığında CREATE
+        // USER bunu döner. Depoda hiç ele alınmamıştı: kullanıcı, kendi yazdığı adın uzun
+        // olduğunu söyleyen bir cümle yerine jenerik 500 görüyordu.
+        //
+        // Bu bir SON SAVUNMA hattıdır; asıl kontrol DatabaseService.NormalizeUserName'de, motora
+        // gitmeden yapılır. Yine de duruyor: panelin dışından (API, taşıma, betik) gelen bir ad
+        // ya da ileride eklenecek bir yol buraya düşerse sebep OKUNABİLİR kalsın.
+        return exception.Number switch
+        {
+            1045 => new AppException("database.connection_failed", 503, 503),
+            1470 => new AppException("database.user_name_too_long", 400, 400, exception.Message),
+            _ => new AppException("database.configuration_failed", 500, 500)
+        };
     }
 }

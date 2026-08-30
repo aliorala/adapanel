@@ -142,6 +142,27 @@ public sealed class BackupRecordDto
     public bool AllCopiesMissing { get; set; }
 
     /// <summary>
+    /// Arşivin İÇİ ölçüldü mü, ölçüldüyse sağlam mı: <see cref="BackupIntegrity"/> değerlerinden
+    /// biri. Varsayılan <c>unknown</c> "bozuk" değil "ölçülmedi" demektir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden SAKLANIYOR (LocalMissing gibi her listelemede türetilmiyor):</b> ölçüm dosyanın
+    /// merkezî dizinini okumayı gerektirir — <c>File.Exists</c>'ten pahalıdır ve her liste
+    /// çizilişinde yüzlerce arşiv açmak paneli kilitlerdi. Bu yüzden ölçüm YEDEK ALINIRKEN
+    /// (bir kez, dosya zaten elde) ve DOĞRULAMA düğmesinde yapılır; sonucu burada durur.
+    /// </para>
+    /// <para>
+    /// <b>Neden <see cref="Status"/> yetmiyor:</b> durum tek bir özet dizedir ve zaten uzak hedef
+    /// sonucunu taşıyor (<c>created_remote_failed</c>). Bütünlüğü oraya sıkıştırmak, iki gerçekten
+    /// birinin diğerini ezmesi demekti. Ayrı alan, budamanın da bu gerçeği görebilmesini sağlar:
+    /// <c>unsound</c> bir arşiv "taze yedek" sayılmaz, yoksa panel onu koruma sanıp GERÇEK
+    /// eskileri silerdi.
+    /// </para>
+    /// </remarks>
+    public string IntegrityState { get; set; } = BackupIntegrity.Unknown;
+
+    /// <summary>
     /// Bu yedek SİLİNDİ sayılıyor ama UZAK kopyası hedefte kaldı (<see cref="Status"/> =
     /// <c>deleted_remote_failed</c>). Sebep <see cref="Warnings"/> içinde
     /// <c>backup.remote_delete_failed</c> anahtarıyla durur.

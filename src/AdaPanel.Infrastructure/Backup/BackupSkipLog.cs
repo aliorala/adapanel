@@ -33,6 +33,7 @@ internal sealed class BackupSkipLog
 
     private readonly List<SkippedEntry> _detayli = [];
     private readonly List<TruncatedScan> _kesilenTaramalar = [];
+    private readonly List<string> _eksikKokler = [];
 
     /// <summary>Atlanan dosya/klasör kaydı.</summary>
     /// <param name="EntryName">Arşivde olması gereken girdi adı (ör. <c>config/automation.json</c>).</param>
@@ -63,6 +64,23 @@ internal sealed class BackupSkipLog
     /// </remarks>
     public IReadOnlyList<TruncatedScan> TruncatedScans => _kesilenTaramalar;
 
+    /// <summary>Yedeklenmesi İSTENEN ama diskte HİÇ BULUNAMAYAN kökler (arşiv girdi adıyla).</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA:</b> <c>ScanFiles</c>, kök yoksa sessizce BOŞ liste dönüyordu. Sitesinin
+    /// fiziksel yolu silinmiş/yeniden adlandırılmış bir kullanıcı, içinde tek bir dosyası olmayan
+    /// bir arşivi "başarılı" olarak alıyordu — hem de her gece, aylarca. Yokluk bir SONUÇ değil,
+    /// raporlanması gereken bir BULGUDUR.
+    /// </para>
+    /// <para>
+    /// <b>Neden atlanan dosya listesinden AYRI:</b> kesilen taramayla aynı gerekçe. "Bir dosya
+    /// kilitliydi" tek ögelik bir eksiktir; "kök hiç yok" ise o ağacın TAMAMININ yedeğe hiç
+    /// girmediği anlamına gelir. Aynı kaba atılsaydı, felaket ölçüsündeki bir eksik tek bir dosya
+    /// adı gibi görünürdü.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> MissingRoots => _eksikKokler;
+
     /// <summary>
     /// Kayıtta bildirilmesi gereken bir eksik var mı?
     /// </summary>
@@ -71,7 +89,7 @@ internal sealed class BackupSkipLog
     /// damgasıyla kapanır ve eksikliği hiçbir yere düşmezdi — bu tipin var oluş sebebinin tam
     /// tersi.
     /// </remarks>
-    public bool Any => Count > 0 || _kesilenTaramalar.Count > 0;
+    public bool Any => Count > 0 || _kesilenTaramalar.Count > 0 || _eksikKokler.Count > 0;
 
     public void Add(string entryName, Exception exception)
     {
@@ -85,6 +103,9 @@ internal sealed class BackupSkipLog
     /// <summary>Bütçesi dolduğu için tamamlanamamış bir taramayı kaydeder.</summary>
     public void AddTruncatedScan(string root, string reasonKey)
         => _kesilenTaramalar.Add(new TruncatedScan(root, reasonKey));
+
+    /// <summary>Yedeklenmesi istenen bir kökün diskte hiç olmadığını kaydeder.</summary>
+    public void AddMissingRoot(string root) => _eksikKokler.Add(root);
 
     /// <summary>Günlüğe tek satırda yazılabilir özet.</summary>
     /// <remarks>
@@ -113,6 +134,13 @@ internal sealed class BackupSkipLog
         if (_kesilenTaramalar.Count > 0)
         {
             parcalar.Add($"TARAMA KESILDI: {string.Join(", ", _kesilenTaramalar.Select(kayit => $"{kayit.Root} ({kayit.ReasonKey})"))}");
+        }
+
+        // EKSİK KÖK EN BAŞA DEĞİL EN SONA yazılır ama ASLA atlanmaz: günlüğe bakan kişi için
+        // "kök hiç yok" bu satırların en ağırıdır (o ağacın tamamı yedeğe girmedi).
+        if (_eksikKokler.Count > 0)
+        {
+            parcalar.Add($"KOK YOK: {string.Join(", ", _eksikKokler)}");
         }
 
         // BOŞ DİZE DÖNMEZ. Çağıran bunu `Any` ile korumalı olsa da (BackupService.ApplySkippedFiles),

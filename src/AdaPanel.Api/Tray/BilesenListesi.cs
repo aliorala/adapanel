@@ -1,13 +1,47 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace AdaPanel.Api.Tray;
 
-/// <summary>Tepside gösterilecek bir bileşen: panelin bildirdiği ad, başlık ve kurulum dizini.</summary>
-/// <param name="ServisAdi">Windows servis adı; bileşenin servisi yoksa boş.</param>
-public sealed record IzlenenServis(string Anahtar, string Baslik, string ServisAdi, string KurulumDizini)
+/// <summary>Bir bileşenin arka planda NASIL çalıştırıldığı.</summary>
+/// <remarks>
+/// Bu ayrımın olmaması ölçülebilir bir yanlış üretiyordu: <c>components.json</c>'daki
+/// <c>serviceName</c> alanı Stalwart ve Memcached'de bir SERVİS adı değil, ONSTART ZAMANLANMIŞ
+/// GÖREV adıdır (kurulum kodu görevi tam o adla kaydeder — bkz.
+/// <c>ComponentBootstrapper.ZamanlanmisGorevKancalari</c>). Tepsi hepsini servis sanıp SCM'de
+/// arıyor, bulamayınca kurulu ve sağlıklı bir posta sunucusunu KALICI olarak "kurulu, servisi
+/// kayıtlı değil" gösteriyordu.
+/// </remarks>
+public enum CalismaBicimi
 {
-    /// <summary>Bu bileşen bir Windows servisi olarak çalışıyor mu (yoksa yalnız dosya mı).</summary>
-    public bool ServisiVar => ServisAdi.Length > 0;
+    /// <summary>Arka planda çalışan bir parçası yok (PHP, Composer, phpMyAdmin…).</summary>
+    Yok,
+
+    /// <summary>Windows servisi (SCM'den okunur).</summary>
+    Servis,
+
+    /// <summary>ONSTART zamanlanmış görev (Task Scheduler'dan okunur).</summary>
+    ZamanlanmisGorev
+}
+
+/// <summary>Tepside gösterilecek bir bileşen: panelin bildirdiği ad, başlık ve kurulum dizini.</summary>
+/// <param name="ServisAdi">
+/// Arka plan biriminin adı: <see cref="CalismaBicimi.Servis"/> ise Windows servis adı,
+/// <see cref="CalismaBicimi.ZamanlanmisGorev"/> ise görev adı. Bileşenin arka plan birimi yoksa boş.
+/// </param>
+/// <param name="SurecAdi">
+/// Bileşen çalışırken görünen süreç adı (uzantısız). Yalnız zamanlanmış görevler için doludur;
+/// yetkisiz oturumda görev durumu okunamadığında ÖLÇÜLEBİLEN tek şey budur.
+/// </param>
+public sealed record IzlenenServis(
+    string Anahtar,
+    string Baslik,
+    string ServisAdi,
+    string KurulumDizini,
+    CalismaBicimi Bicim = CalismaBicimi.Servis,
+    string SurecAdi = "")
+{
+    /// <summary>Bu bileşenin arka planda çalışan bir birimi var mı (yoksa yalnız dosya mı).</summary>
+    public bool ServisiVar => Bicim != CalismaBicimi.Yok && ServisAdi.Length > 0;
 }
 
 /// <summary>
@@ -97,7 +131,9 @@ public static class BilesenListesi
                     kimlik.Length > 0 ? kimlik : servisAdi,
                     baslik.Length > 0 ? baslik : servisAdi,
                     servisAdi,
-                    dizin.Length > 0 ? Environment.ExpandEnvironmentVariables(dizin) : string.Empty));
+                    dizin.Length > 0 ? Environment.ExpandEnvironmentVariables(dizin) : string.Empty,
+                    BicimiCoz(servisAdi, bilesen),
+                    Metin(bilesen, "processName")));
             }
 
             BildirimOkundu = true;
@@ -114,6 +150,41 @@ public static class BilesenListesi
         => oge.TryGetProperty(ad, out var deger) && deger.ValueKind == JsonValueKind.String
             ? deger.GetString() ?? string.Empty
             : string.Empty;
+
+    /// <summary>
+    /// Bileşenin arka planda NASIL çalıştırıldığını bildirimden çıkarır.
+    /// </summary>
+    /// <remarks>
+    /// Karar TAHMİNE değil, bildirimin <c>postInstall</c> alanına dayanır — kurulum kodu da tam
+    /// aynı dizgilere bakarak dallanır (<c>ComponentBootstrapper.KnownPostInstallSteps</c>). Yani
+    /// "hangi kanca zamanlanmış görev kaydeder" bilgisi TEK yerde durur
+    /// (<see cref="AdaPanel.Infrastructure.Bootstrap.ComponentBootstrapper.ZamanlanmisGorevKancalari"/>)
+    /// ve tepside ikinci bir kopyası yoktur; kurulum yöntemi değişirse tepsi kendiliğinden uyar.
+    /// </remarks>
+    internal static CalismaBicimi BicimiCoz(string servisAdi, JsonElement bilesen)
+    {
+        if (servisAdi.Length == 0)
+        {
+            return CalismaBicimi.Yok;
+        }
+
+        if (!bilesen.TryGetProperty("postInstall", out var adimlar) || adimlar.ValueKind != JsonValueKind.Array)
+        {
+            return CalismaBicimi.Servis;
+        }
+
+        foreach (var adim in adimlar.EnumerateArray())
+        {
+            if (adim.ValueKind == JsonValueKind.String
+                && AdaPanel.Infrastructure.Bootstrap.ComponentBootstrapper.ZamanlanmisGorevKancalari
+                    .Contains(adim.GetString() ?? string.Empty))
+            {
+                return CalismaBicimi.ZamanlanmisGorev;
+            }
+        }
+
+        return CalismaBicimi.Servis;
+    }
 
     /// <summary>
     /// Bildirim dosyasının yolu: önce programın yanı, sonra servisin kurulum klasörü.

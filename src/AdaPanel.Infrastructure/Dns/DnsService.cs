@@ -46,6 +46,22 @@ public sealed partial class DnsService(
     private static readonly string[] SupportedTypes =
         ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", "TLSA", "PTR"];
 
+    /// <summary>
+    /// Kayıt panele yazıldı ama Windows DNS'e YAYINLANMADI: DNS Server rolü kurulu değil.
+    /// </summary>
+    /// <remarks>
+    /// Adı <c>...Key</c> ile bitiyor çünkü <c>MessageKeyCoverageTests</c> nöbetçisi tam olarak bu
+    /// biçimdeki atamaları tarıyor: anahtar burada bir SABİT olarak durduğu sürece, çevirisi
+    /// unutulursa test kızarır. Sabiti kaldırıp yerine dizgeyi <c>return</c> etseydik nöbetçi
+    /// göremezdi ve kullanıcı ekranda ham anahtarı görürdü.
+    /// </remarks>
+    private const string NotPublishedNoServerKey = "dns.not_published_no_server";
+
+    /// <summary>
+    /// Bölge ikincil işaretli ama master listesi boş: yayınlanacak bir kaynak yok.
+    /// </summary>
+    private const string NotPublishedSecondaryNoMasterKey = "dns.not_published_secondary_no_master";
+
     public async Task<SiteDnsZoneDto> GetZoneAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
@@ -59,7 +75,16 @@ public sealed partial class DnsService(
         {
             var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
             var state = await GetOrCreateStateAsync(site, cancellationToken);
-            await TrySyncWindowsDnsAsync(state, cancellationToken);
+            var yayinAnahtari = await TrySyncWindowsDnsAsync(state, cancellationToken);
+            if (yayinAnahtari.Length > 0)
+            {
+                // Yayınlanmadı ama İSTİSNA da atılmadı: aşağıdaki catch bunu görmezdi. Sessiz
+                // kalırsak "site kuruldu, bölge yayınlanmadı" durumu hiçbir yerde iz bırakmaz.
+                logger.LogInformation(
+                    "Bolge Windows DNS'e yayinlanmadi ({SiteName}): {Anahtar}",
+                    siteName,
+                    yayinAnahtari);
+            }
         }
         catch (Exception exception)
         {
@@ -457,6 +482,28 @@ public sealed partial class DnsService(
 
     public async Task<SiteDnsZoneDto> UpsertRecordAsync(string siteName, UpsertDnsRecordRequest request, CancellationToken cancellationToken = default)
     {
+        var (state, _) = await UpsertRecordCoreAsync(siteName, request, cancellationToken);
+
+        // Yayın anahtarı BURADA atılabilir: dönen DTO'nun `StatusMessage` alanı zaten ölçülmüş
+        // durumu taşıyor (`dns.windows_dns_unavailable` / `dns.windows_zone_missing`) ve DNS
+        // ekranı onu basıyor. Anahtara ihtiyacı olan, DTO'yu HİÇ görmeyen çağıranlardır.
+        return await ToDtoAsync(state, cancellationToken);
+    }
+
+    /// <summary>
+    /// Kaydı panel durumuna yazar ve yayınlar; yayın SONUCUNU da döndürür.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="UpsertRecordAsync"/> yalnız DTO döndürdüğü için "yayınlandı mı" bilgisi
+    /// kayboluyordu. <see cref="EnsureSubdomainRecordAsync"/> tam olarak bu bilgiye muhtaç:
+    /// site oluşturma ekranına "oluşturuldu" mu yoksa "panelde duruyor ama yayınlanmadı" mı
+    /// yazacağına ona göre karar veriliyor.
+    /// </remarks>
+    private async Task<(DnsZoneState State, string PublishKey)> UpsertRecordCoreAsync(
+        string siteName,
+        UpsertDnsRecordRequest request,
+        CancellationToken cancellationToken)
+    {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         var state = await GetOrCreateStateAsync(site, cancellationToken);
         EnsureZoneIsWritable(state);
@@ -464,8 +511,7 @@ public sealed partial class DnsService(
 
         state.Records = SortRecords(state.Records).ToList();
         await UpsertStateAsync(state, cancellationToken);
-        await TrySyncWindowsDnsAsync(state, cancellationToken);
-        return await ToDtoAsync(state, cancellationToken);
+        return (state, await TrySyncWindowsDnsAsync(state, cancellationToken));
     }
 
     public async Task<SubdomainRecordResult> EnsureSubdomainRecordAsync(
@@ -533,12 +579,20 @@ public sealed partial class DnsService(
             return new SubdomainRecordResult { Error = "server_address_unknown" };
         }
 
-        await UpsertRecordAsync(
+        var (_, yayinAnahtari) = await UpsertRecordCoreAsync(
             parentSiteName,
             new UpsertDnsRecordRequest { Type = "A", Host = etiket, Value = adres, Ttl = 3600 },
             cancellationToken);
 
-        return new SubdomainRecordResult { Created = true, Address = adres };
+        // "Panel durumuna yazıldı" ile "DNS'te var" AYRI şeylerdir ve ikisi de ayrı ayrı söylenir.
+        // Eskiden yalnız birincisi ölçülüp ikincisi VARSAYILIYORDU: Windows DNS rolü yokken bile
+        // site oluşturma ekranı "dns: blog.ornek.com A 1.2.3.4" yazıyordu.
+        return new SubdomainRecordResult
+        {
+            Created = true,
+            Address = adres,
+            PublishWarningKey = yayinAnahtari
+        };
     }
 
     public async Task<SiteDnsZoneDto> DeleteRecordAsync(string siteName, string recordId, CancellationToken cancellationToken = default)
@@ -1421,11 +1475,45 @@ public sealed partial class DnsService(
         }
     }
 
-    private async Task TrySyncWindowsDnsAsync(DnsZoneState state, CancellationToken cancellationToken)
+    /// <summary>
+    /// Bölgeyi Windows DNS'e yayınlar.
+    /// </summary>
+    /// <returns>
+    /// Yayınlandıysa BOŞ dizge; yayınlanmadıysa SEBEBİNİ söyleyen mesaj anahtarı.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA — burası hiçbir iz bırakmadan dönüyordu.</b> Windows DNS rolü kurulu
+    /// olmadığında metot log, istisna ya da dönüş değeri OLMADAN <c>return</c> ediyordu. Dokuz
+    /// çağıranın hepsi işlemi başarılı sayıp 200 + <c>dns.record_saved</c> döndürüyordu; en
+    /// görünür sonucu site oluşturma ekranının <c>"dns: blog.ornek.com A 1.2.3.4"</c> satırıydı —
+    /// DNS'te hiçbir şey yokken "oluşturuldu" diyen bir satır. Panelin en pahalı hata sınıfı tam
+    /// olarak budur: yapılmamış işi yapılmış saymak (aynı cümle <see cref="EnsureZoneIsWritable"/>
+    /// içinde de yazılı; oradaki ders bu yola hiç uygulanmamıştı).
+    /// </para>
+    /// <para>
+    /// <b>Neden istisna DEĞİL, mesaj anahtarı.</b> DNS rolünün kurulu olmaması bir ARIZA değil bir
+    /// OLGUDUR: müşteri alan adının DNS'ini Cloudflare'de tutuyor olabilir. Fırlatmak, posta kutusu
+    /// açma / alan adı tazeleme / site kurma gibi bu yolu ÇAĞIRAN akışları DNS yüzünden
+    /// durdururdu — <see cref="UpsertRecordsAsync"/> ikincil bölge için tam olarak bu gerekçeyle
+    /// fırlatmıyor. Anahtar döndürmek çağırana "söyle ama durdurma" imkânı verir; arayüz onu
+    /// <c>t()</c> ile çevirir.
+    /// </para>
+    /// <para>
+    /// Panel durumu YİNE kaydedilir: bölge birincile döndüğünde / rol kurulduğunda yeniden
+    /// yayınlanır ve <see cref="GetPublishedRecordKeysAsync"/> denetimi bu kayıtları eksik gösterir.
+    /// </para>
+    /// </remarks>
+    private async Task<string> TrySyncWindowsDnsAsync(DnsZoneState state, CancellationToken cancellationToken)
     {
         if (!await IsWindowsDnsAvailableAsync(cancellationToken))
         {
-            return;
+            // Bilgi seviyesi, uyarı DEĞİL: rolün kurulu olmaması beklenen bir kurulum biçimidir.
+            // Sessiz kalmıyoruz ama kullanıcıyı da kırmızıya boğmuyoruz.
+            logger.LogInformation(
+                "Windows DNS Server rolu yok; bolge panelde saklandi ama YAYINLANMADI ({Zone}).",
+                state.ZoneName);
+            return NotPublishedNoServerKey;
         }
 
         // IKINCIL BOLGE: yalnizca kip + master listesi uygulanir, KAYIT YAZILMAZ.
@@ -1446,7 +1534,7 @@ public sealed partial class DnsService(
                 logger.LogWarning(
                     "Bolge ikincil isaretli ama master listesi BOS ({Zone}); Windows DNS'e dokunulmadi.",
                     state.ZoneName);
-                return;
+                return NotPublishedSecondaryNoMasterKey;
             }
 
             var secondaryResult = await ProcessRunner.RunPowerShellAsync(
@@ -1458,7 +1546,7 @@ public sealed partial class DnsService(
                 throw new AppException("dns.secondary_apply_failed", 500, 500, BuildCommandDetails(secondaryResult));
             }
 
-            return;
+            return string.Empty;
         }
 
         var script = BuildSyncScript(state, MergeNotifyTargets(state.ZoneTransferIps, await ReadServerWideSecondariesAsync(cancellationToken)));
@@ -1491,6 +1579,8 @@ public sealed partial class DnsService(
             state.PublishedGroups = yayinlanan;
             await UpsertStateAsync(state, cancellationToken);
         }
+
+        return string.Empty;
     }
 
     /// <summary>Panelin bu bolgede olmasini istedigi "TUR|konak" gruplari.</summary>

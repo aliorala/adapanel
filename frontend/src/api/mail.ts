@@ -8,7 +8,9 @@ type ApiEnvelope<T> = {
 };
 
 export type MailDomain = { name: string; active: boolean; accountCount: number; maxSizeMB: number; allocatedMB: number };
-export type MailAccount = { address: string; active: boolean; maxSizeMB: number; currentSizeMB: number };
+// `active` UC DEGERLI: true/false sunucunun cevabi, null/undefined ise "olculemedi".
+// Backend (MailAccountDto.Active) artik hesabin durumunu SORUYOR; sabit true dondurmuyor.
+export type MailAccount = { address: string; active: boolean | null; maxSizeMB: number; currentSizeMB: number };
 export type MailAlias = { address: string; target: string; active: boolean };
 // Plesk'in "kimler gonderebilir" karsiligi. Stalwart'in MailingList nesnesinde boyle bir alan
 // YOK; kural RCPT asamasina baglanan sistem sieve script'iyle uygulanir (canli dogrulandi).

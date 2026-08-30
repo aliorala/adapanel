@@ -58,6 +58,36 @@ public sealed class ComponentBootstrapper(
         "prepareNginx",
         "registerFastCgi"
     };
+
+    /// <summary>
+    /// Bileşeni Windows SERVİSİ olarak değil, ONSTART ZAMANLANMIŞ GÖREV olarak kaydeden
+    /// <c>postInstall</c> kancaları.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Buradaki iki kanca <see cref="RegisterLongRunningTaskAsync"/> çağırır; kalanlar
+    /// <c>sc</c>/<c>--service-install</c> ile gerçek servis kaydeder. Ayrım GÖRÜNÜR olmalı,
+    /// çünkü <c>components.json</c>'daki <c>serviceName</c> alanı bu iki bileşende bir SERVİS
+    /// adı değil GÖREV adıdır (kurulum kodu görevi tam o adla kaydeder).
+    /// </para>
+    /// <para>
+    /// ÖLÇÜLDÜ — bu ayrımın olmaması pahalıya patlıyordu: tepsi programı <c>serviceName</c>
+    /// dolu olan her bileşeni Windows servisi sanıp SCM'de arıyor, bulamayınca Stalwart'ı
+    /// KALICI olarak "kurulu, servisi kayıtlı değil" gösteriyor ve "panelden yeniden kurun"
+    /// diyordu — oysa bileşen kurulu ve doğru kaydedilmişti. Bu makinede <c>Get-Service</c>
+    /// yalnız <c>AdaPanel</c> döndü, <c>AdaStalwart</c> ise Task Scheduler'da <c>State=3</c>
+    /// (Ready) olarak duruyordu.
+    /// </para>
+    /// <para>
+    /// Tepsi bu kümeyi okur; iki yerde iki liste tutulmaz.
+    /// </para>
+    /// </remarks>
+    public static readonly IReadOnlySet<string> ZamanlanmisGorevKancalari =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "installStalwartService",
+            "installMemcachedService"
+        };
     private readonly PanelRuntimeOptions runtimeOptions = runtimeOptions.Value;
 
     public async Task<SoftwareCatalogDto> GetCatalogAsync(CancellationToken cancellationToken = default)

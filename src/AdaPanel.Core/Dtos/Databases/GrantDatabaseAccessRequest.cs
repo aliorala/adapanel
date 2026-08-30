@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using AdaPanel.Core.Common;
 
 namespace AdaPanel.Core.Dtos.Databases;
 
@@ -13,7 +14,7 @@ public sealed class GrantDatabaseAccessRequest
     public string DatabaseName { get; init; } = string.Empty;
 
     [Required]
-    [StringLength(64, MinimumLength = 2)]
+    [StringLength(DatabaseIdentifierLimits.RequestCeiling, MinimumLength = 2)]
     public string UserName { get; init; } = string.Empty;
 
     /// <summary>

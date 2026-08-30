@@ -73,7 +73,7 @@ export type BackupVerificationIssue = {
   name: string;
   source: string;
   targetType: string;
-  /** i18n anahtarı: `backup.verify.missing_local` | `..missing_remote` | `..unreachable`. */
+  /** i18n anahtarı: `backup.verify.missing_local` | `..missing_remote` | `..unsound` | `..unreachable`. */
   messageKey: string;
   detail: string;
 };
@@ -93,6 +93,11 @@ export type BackupVerificationResult = {
    * geçici bir ağ arızasını "yedek silinmiş" saymak bütün geçmişi kayıp gösterirdi.
    */
   unreachable: number;
+  /**
+   * Dosyası DURAN ama arşivi açılamayan / boş çıkan kayıt sayısı. "Dosya yok" ile aynı şey
+   * DEĞİLDİR: burada dosya yerinde, içi yok — çözümü de farklıdır (yedeği yeniden al).
+   */
+  unsound: number;
   issues: BackupVerificationIssue[];
   orphans: BackupOrphan[];
   /** Yetim taraması YAPILAMAYAN hedefler; boş yetim listesi "yetim yok" demek değildir. */

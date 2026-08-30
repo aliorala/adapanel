@@ -66,8 +66,81 @@ public sealed class DatabaseUserHostDefaultTests
     [Fact]
     public void RequestsThatAddressAnExistingAccount_KeepTheLegacyDefault()
     {
-        Assert.Equal("%", new ImportDatabaseRequest().Host);
         Assert.Null(new SetDatabaseUserPasswordRequest().AllowedHost);
+    }
+
+    /// <summary>
+    /// ICE AKTARMA '%' VARSAYILANINDAN CIKARILDI -- ve bu, yukaridaki kuralin ISTISNASI DEGIL,
+    /// yanlis siniflandirilmis bir yol.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ice aktarma "var olan hesabi adresler" diye siniflandirilmisti, ama yaptigi sey YETKI
+    /// YAZMAK: GRANT ALL. Panelin kendi kullanicilari 'localhost'ta dogar
+    /// (<c>MySqlAccountHosts.SafeCreationHost</c>), dolayisiyla '%' varsayilani yetkiyi VAR
+    /// OLMAYAN bir hesaba yaziyordu -- ya "kullanici bulunamadi" ile dusuyor, ya da GRANT'in
+    /// hesap olusturabildigi yapilandirmalarda dunyaya acik IKINCI bir hesap doguruyordu.
+    /// Ardindan kimlik kaydina da '%' yazildigi icin silme yolu DROP USER 'u'@'%' calistiriyor,
+    /// gercek hesap oksuz kaliyordu.
+    /// </para>
+    /// <para>
+    /// Geriye donuk kirmaz: hesap gercekten '%' ise motordan okunan kume de '%' doner.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TheImportPathNoLongerAssumesTheEveryHostAccount()
+    {
+        Assert.Equal(string.Empty, new ImportDatabaseRequest().Host);
+    }
+
+    /// <summary>
+    /// Ice aktarma host'u TAHMIN ETMEZ, motordan OKUR. Yukaridaki test yalnizca '%'in
+    /// yoklugunu gosterir; bu, bosluk yerine dogru davranisin kondugunu gosterir.
+    /// </summary>
+    [Fact]
+    public void TheImportPathResolvesHostsFromTheEngine()
+    {
+        var kaynak = KaynakKodu(Path.Combine("src", "AdaPanel.Infrastructure", "Database", "DatabaseService.cs"));
+        var govde = MetotGovdesi(kaynak, "ImportDatabaseAsync");
+
+        Assert.Contains("ResolveExistingHostsAsync(provider, profile, userName", govde, StringComparison.Ordinal);
+
+        // Kimlik kaydina da '%' DEGIL, olculmus bir hesap yazilmali: silme yolu bu kaydi
+        // kullaniyor ve yanlis host yazilirsa DROP USER yanlis hesabi hedefliyor.
+        Assert.Contains("MySqlAccountHosts.IsLocal", govde, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Bir metodun govdesini kaynaktan keser. Dosya genelinde arama, aranan satir BASKA bir
+    /// metotta gectigi icin duzeltme geri alinsa bile yesil kalan "kor" testler uretiyor --
+    /// bu dosyada zaten bir kez oldu.
+    /// </summary>
+    private static string MetotGovdesi(string kaynak, string metotAdi)
+    {
+        var basla = kaynak.IndexOf($"{metotAdi}(", StringComparison.Ordinal);
+        Assert.True(basla >= 0, $"Metot bulunamadi: {metotAdi}");
+
+        var acilis = kaynak.IndexOf('{', basla);
+        Assert.True(acilis >= 0, $"Metot govdesi bulunamadi: {metotAdi}");
+
+        var derinlik = 0;
+        for (var i = acilis; i < kaynak.Length; i++)
+        {
+            if (kaynak[i] == '{')
+            {
+                derinlik++;
+            }
+            else if (kaynak[i] == '}')
+            {
+                derinlik--;
+                if (derinlik == 0)
+                {
+                    return kaynak[acilis..(i + 1)];
+                }
+            }
+        }
+
+        throw new InvalidOperationException($"Metot govdesi kapanmadi: {metotAdi}");
     }
 
     /// <summary>
@@ -119,12 +192,47 @@ public sealed class DatabaseUserHostDefaultTests
     /// Arayuz de artik '%' GONDERMIYOR. Sunucu varsayilani duzeltilse bile istemci acikca '%'
     /// gonderseydi degisiklik hicbir ise yaramazdi.
     /// </summary>
-    [Fact]
-    public void TheUserInterfaceNoLongerSendsTheWildcardHost()
+    /// <remarks>
+    /// <para>
+    /// <b>BU TEST KORDU ve olcerek goruldu.</b> Yalnizca <c>allowedHost: "%"</c> ariyordu; ice
+    /// aktarma formu ise <c>host: "%"</c> gonderiyordu. Yani ekranda duran gercek '%' sabitini
+    /// nobetci HIC gormedi -- "testin var olmasi bir sey olctugu anlamina gelmez"in birebir
+    /// ornegi. Artik ALAN ADINDAN bagimsiz olarak "bir host alanina '%' SABITI atanmasi"
+    /// araniyor; yeni bir form yarin baska bir ad kullansa da yakalanir.
+    /// </para>
+    /// <para>
+    /// Desen deger olarak yalnizca SABIT '%' arar. Kullanicinin yazdigi bir degiskeni gonderen
+    /// alanlar (<c>host: form.host</c>) eslesmez -- amac uzak erisimi yasaklamak degil, panelin
+    /// kullanicidan habersiz "her yerden" demesini yasaklamak.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData("DatabasesView.vue")]
+    public void TheUserInterfaceNoLongerSendsTheWildcardHost(string ekran)
     {
-        var kaynak = KaynakKodu(Path.Combine("frontend", "src", "views", "DatabasesView.vue"));
+        var kaynak = KaynakKodu(Path.Combine("frontend", "src", "views", ekran));
 
-        Assert.DoesNotContain("allowedHost: \"%\"", kaynak, StringComparison.Ordinal);
+        var ihlaller = Regex.Matches(kaynak, @"\b\w*[Hh]ost\s*:\s*""%""")
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.True(
+            ihlaller.Length == 0,
+            $"{ekran} bir host alanina '%' SABITI gonderiyor: " + string.Join(", ", ihlaller));
+
         Assert.DoesNotContain("host || \"%\"", kaynak, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// NOBETCININ KENDISI OLCULUR: yukaridaki desen, kapatilan iki bicimi de GERCEKTEN yakaliyor
+    /// mu. Kor kalmis desenin bedeli bir kez odendi; bir daha "arama yapiyorum" demek yetmez.
+    /// </summary>
+    [Theory]
+    [InlineData("      host: \"%\",")]
+    [InlineData("      allowedHost: \"%\",")]
+    [InlineData("    targetHost:\"%\"")]
+    public void TheWildcardScannerActuallyMatchesTheShapesItClaimsTo(string satir)
+    {
+        Assert.Matches(@"\b\w*[Hh]ost\s*:\s*""%""", satir);
     }
 }

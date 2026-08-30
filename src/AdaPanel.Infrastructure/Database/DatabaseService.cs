@@ -104,7 +104,7 @@ internal sealed partial class DatabaseService(
 
         var adminUser = string.IsNullOrWhiteSpace(request.AdminUserName)
             ? descriptor.AdminUserName
-            : NormalizeUserName(request.AdminUserName);
+            : NormalizeUserName(request.AdminUserName, engine);
         var port = request.Port > 0 ? request.Port : DefaultExternalPort(engine);
 
         var profile = new DatabaseConnectionProfile(
@@ -333,6 +333,17 @@ internal sealed partial class DatabaseService(
     {
         var dbEngine = ParseEngine(request.Engine);
         var databaseName = NormalizeDatabaseName(request.Name);
+
+        // KULLANICI ADI, VERİTABANI OLUŞTURULMADAN ÖNCE DOĞRULANIR.
+        //
+        // ÖLÇÜLEN HATA: doğrulama CREATE DATABASE'den SONRA yapılıyordu. MySQL'in 32 karakter
+        // sınırını aşan bir adda veritabanı oluşuyor, CREATE USER 1470 ile düşüyor ve geri alma
+        // olmadığı için sunucuda sahipsiz bir veritabanı kalıyordu. Doğrulamayı öne almak, o
+        // durumun DOĞMASINI engeller — telafi etmekten iyidir.
+        var newUser = string.IsNullOrWhiteSpace(request.UserName)
+            ? string.Empty
+            : NormalizeUserName(request.UserName, dbEngine);
+
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
 
@@ -340,15 +351,40 @@ internal sealed partial class DatabaseService(
 
         // profesyonel paneller gibi: kullanıcı adı verildiyse aynı anda kullanıcı oluştur ve bu veritabanına
         // otomatik TAM yetki ver. Host YEREL'dir (bkz. NewUserHost) — uzak erişim ayrı ve açık bir karardır.
-        if (!string.IsNullOrWhiteSpace(request.UserName))
+        if (newUser.Length > 0)
         {
-            var newUser = NormalizeUserName(request.UserName);
             var newUserHost = NewUserHost(dbEngine);
             var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
-            await provider.CreateUserAsync(profile, newUser, request.Password, newUserHost, cancellationToken);
-            await provider.GrantAccessAsync(profile, databaseName, newUser, newUserHost, fullPrivileges, cancellationToken);
-            // phpMyAdmin'i bu kullanıcı olarak açıp yalnız kendi DB'sini göstermek için parolayı şifreli sakla.
-            await credentialStore.UpsertAsync(profile.EngineKey, newUser, newUserHost, databaseName, request.Password, cancellationToken);
+            try
+            {
+                await provider.CreateUserAsync(profile, newUser, request.Password, newUserHost, cancellationToken);
+                await provider.GrantAccessAsync(profile, databaseName, newUser, newUserHost, fullPrivileges, cancellationToken);
+                // phpMyAdmin'i bu kullanıcı olarak açıp yalnız kendi DB'sini göstermek için parolayı şifreli sakla.
+                await credentialStore.UpsertAsync(profile.EngineKey, newUser, newUserHost, databaseName, request.Password, cancellationToken);
+            }
+            catch
+            {
+                // GERİ AL: kullanıcı kurulamadıysa BU ÇAĞRIDA oluşturduğumuz veritabanını da kaldır.
+                //
+                // Silmek güvenli çünkü veritabanı bir kaç satır önce BU çağrıda doğdu:
+                // CreateDatabaseAsync `CREATE DATABASE` (IF NOT EXISTS DEĞİL) çalıştırır ve zaten
+                // varsa 1007'yi `database.database_already_exists` ile yukarı verir — yani buraya
+                // gelinmişse veritabanı bize aittir ve içinde veri yoktur.
+                //
+                // Geri almanın kendisi patlarsa YUTULUR ve asıl hata yukarı çıkar: kullanıcıya
+                // "kullanıcı oluşturulamadı" demek, "temizlik başarısız" demekten daha yararlıdır.
+                // (Zaten parola politikası/1470 gibi asıl sebep de o mesajdadır.)
+                try
+                {
+                    await provider.DeleteDatabaseAsync(profile, databaseName, cancellationToken);
+                }
+                catch (Exception)
+                {
+                    // Yutuldu: asıl istisna aşağıda yeniden fırlatılıyor, onu gölgelemeyiz.
+                }
+
+                throw;
+            }
         }
 
         // Site bağı (Plesk gibi): site verildiyse bu DB'yi siteye bağla → site silinince cascade ile gider.
@@ -368,14 +404,33 @@ internal sealed partial class DatabaseService(
     {
         var dbEngine = ParseEngine(request.Engine);
         var databaseName = NormalizeDatabaseName(request.DatabaseName);
-        var userName = NormalizeUserName(request.UserName);
-        var allowedHost = NormalizeAllowedHost(request.Host);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
+        var userName = NormalizeUserName(request.UserName, dbEngine);
+
+        // HOST TAHMİN EDİLMEZ, MOTORDAN OKUNUR.
+        //
+        // Eskiden burada `NormalizeAllowedHost(request.Host)` vardı ve boş gelen host `%` oluyordu;
+        // arayüz de zaten `host: "%"` SABİTİNİ gönderiyordu. Panelin kendi kullanıcıları ise
+        // `localhost`'ta duruyor (MySqlAccountHosts.SafeCreationHost) → yetki var olmayan bir
+        // hesaba yazılıyor, kimlik kaydına `%` düşüyor ve silme yanlış hesabı hedefliyordu.
+        // GrantAccessAsync bu dersi zaten almıştı; içe aktarma yolu atlanmıştı.
+        var targetHosts = string.IsNullOrWhiteSpace(request.Host)
+            ? await ResolveExistingHostsAsync(provider, profile, userName, cancellationToken)
+            : [NormalizeAllowedHost(request.Host)];
 
         var fullPrivileges = NormalizePrivileges(["ALL PRIVILEGES"], dbEngine);
-        await provider.GrantAccessAsync(profile, databaseName, userName, allowedHost, fullPrivileges, cancellationToken);
-        await credentialStore.UpsertAsync(profile.EngineKey, userName, allowedHost, databaseName, request.Password, cancellationToken);
+        foreach (var host in targetHosts)
+        {
+            await provider.GrantAccessAsync(profile, databaseName, userName, host, fullPrivileges, cancellationToken);
+        }
+
+        // Kimlik kaydına YEREL hesap yazılır (varsa). Kayıt phpMyAdmin'in "bu kullanıcı olarak aç"
+        // akışı ve DB silinirken sahibi bulmak için kullanılıyor; ikisi de panelin MOTORA YEREL
+        // bağlandığı hesabı ister. Yerel hesap yoksa okunan ilk hesap yazılır — uydurulmuş bir
+        // değer değil, ÖLÇÜLMÜŞ bir hesap.
+        var credentialHost = targetHosts.FirstOrDefault(MySqlAccountHosts.IsLocal) ?? targetHosts[0];
+        await credentialStore.UpsertAsync(profile.EngineKey, userName, credentialHost, databaseName, request.Password, cancellationToken);
 
         // Site bağı: içe aktarılan DB de bir siteye bağlanabilir → site silinince cascade ile gider.
         if (!string.IsNullOrWhiteSpace(request.SiteName))
@@ -422,7 +477,7 @@ internal sealed partial class DatabaseService(
     public async Task DeleteUserAsync(string engine, string userName, string host, CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(engine);
-        var normalizedUser = NormalizeUserName(userName);
+        var normalizedUser = NormalizeUserName(userName, dbEngine);
         var allowedHost = NormalizeAllowedHost(host);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         await ResolveProvider(dbEngine).DeleteUserAsync(profile, normalizedUser, allowedHost, cancellationToken);
@@ -435,7 +490,7 @@ internal sealed partial class DatabaseService(
         CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(request.Engine);
-        var userName = NormalizeUserName(request.UserName);
+        var userName = NormalizeUserName(request.UserName, dbEngine);
         var allowedHost = NormalizeAllowedHost(request.AllowedHost);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
@@ -450,7 +505,7 @@ internal sealed partial class DatabaseService(
         CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(request.Engine);
-        var userName = NormalizeUserName(request.UserName);
+        var userName = NormalizeUserName(request.UserName, dbEngine);
         // OLUŞTURMA yolunda varsayılan YEREL'dir; NormalizeAllowedHost'un '%' varsayılanı ise var
         // olan hesabı adresleyen yollar (parola, silme, yetki) içindir ve orada değiştirilemez.
         var allowedHost = string.IsNullOrWhiteSpace(request.AllowedHost)
@@ -482,7 +537,7 @@ internal sealed partial class DatabaseService(
     {
         var dbEngine = ParseEngine(request.Engine);
         var databaseName = NormalizeDatabaseName(request.DatabaseName);
-        var userName = NormalizeUserName(request.UserName);
+        var userName = NormalizeUserName(request.UserName, dbEngine);
         var privileges = NormalizePrivileges(request.Privileges, dbEngine);
         var profile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
         var provider = ResolveProvider(dbEngine);
@@ -665,7 +720,7 @@ internal sealed partial class DatabaseService(
             {
                 var transferUser = string.IsNullOrWhiteSpace(request.TargetUserName)
                     ? DeriveTransferUser(targetDatabase)
-                    : NormalizeUserName(request.TargetUserName);
+                    : NormalizeUserName(request.TargetUserName, engine);
                 var passwordGenerated = string.IsNullOrWhiteSpace(request.TargetPassword);
                 var transferPassword = passwordGenerated ? GenerateDbPassword() : request.TargetPassword;
                 var transferHost = NewUserHost(engine);
@@ -716,8 +771,13 @@ internal sealed partial class DatabaseService(
         }
     }
 
-    // Hedef DB kullanıcı adı türetimi (kullanıcı vermediyse): DB adından harf-rakam süzülür, harfle başlatılır,
-    // 27'ye kırpılır, "_usr" eklenir → geçerli MySQL kullanıcı adı (≤32). NormalizeUserName regex'iyle uyumlu.
+    // Hedef DB kullanıcı adı türetimi (kullanıcı vermediyse): DB adından harf-rakam süzülür, harfle
+    // başlatılır, kırpılır, "_usr" eklenir. Kırpma sınırı ELLE yazılmaz, MySQL'in sınırından
+    // hesaplanır (32 - "_usr") — taşıma hedefi her zaman yerel MySQL/MariaDB'dir ve ikisinde de
+    // geçerli olan dar sınır MySQL'inkidir. Eskiden "27" sabiti duruyordu; sınır tek kaynağa
+    // taşınınca burada bayat bir kopya kalmasın diye türetildi.
+    private const int TransferUserSuffixLength = 4; // "_usr"
+
     private static string DeriveTransferUser(string databaseName)
     {
         var cleaned = new string((databaseName ?? string.Empty).Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
@@ -725,10 +785,13 @@ internal sealed partial class DatabaseService(
         {
             cleaned = "db" + cleaned;
         }
-        if (cleaned.Length > 27)
+
+        var maxBase = DatabaseIdentifierLimits.MySqlUserNameLength - TransferUserSuffixLength;
+        if (cleaned.Length > maxBase)
         {
-            cleaned = cleaned[..27];
+            cleaned = cleaned[..maxBase];
         }
+
         return cleaned + "_usr";
     }
 
@@ -1061,12 +1124,39 @@ internal sealed partial class DatabaseService(
         return normalized;
     }
 
-    private static string NormalizeUserName(string value)
+    /// <summary>
+    /// Kullanıcı adını biçim VE motorun uzunluk sınırına göre doğrular.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Uzunluk MOTORA göre ölçülür (<see cref="DatabaseIdentifierLimits"/>): MySQL 32'de durur,
+    /// MariaDB 80, PostgreSQL 63, SQL Server 128. Eskiden tek bir regex 64 dayatıyordu — hem
+    /// MySQL için ÇOK GENİŞ (33 karakterlik ad kabul edilip motorda 1470 ile düşüyordu) hem
+    /// SQL Server için gereksiz DAR.
+    /// </para>
+    /// <para>
+    /// Sınırı aşan ad, motora HİÇ GİTMEDEN 400 ile reddedilir. Bu yalnızca daha iyi bir mesaj
+    /// değil, bir BÜTÜNLÜK meselesidir: <see cref="CreateDatabaseAsync"/> veritabanını
+    /// kullanıcıdan ÖNCE oluşturuyor; adı burada yakalamak, "veritabanı oluştu ama kullanıcı
+    /// oluşmadı" durumunun hiç doğmamasını sağlar.
+    /// </para>
+    /// </remarks>
+    private static string NormalizeUserName(string value, DbEngine engine)
     {
         var normalized = value.Trim();
         if (!UserNamePattern().IsMatch(normalized))
         {
             throw new AppException("database.invalid_user_name", 400, 400);
+        }
+
+        var limit = DatabaseIdentifierLimits.ForEngine(engine);
+        if (normalized.Length > limit)
+        {
+            throw new AppException(
+                "database.user_name_too_long",
+                400,
+                400,
+                $"engine={engine}; length={normalized.Length}; max={limit}");
         }
 
         return normalized;
@@ -1184,7 +1274,11 @@ internal sealed partial class DatabaseService(
     [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]{1,63}$", RegexOptions.Compiled)]
     private static partial Regex DatabaseNamePattern();
 
-    [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]{1,63}$", RegexOptions.Compiled)]
+    // Yalnız BİÇİM: harfle başlar, harf/rakam/alt çizgi devam eder. UZUNLUK burada DEĞİL,
+    // NormalizeUserName içinde motorun sınırına göre ölçülür — tek bir sayı dört motorun hiçbirini
+    // doğru temsil etmiyordu. Üst sınır olarak DatabaseIdentifierLimits.RequestCeiling kullanılır
+    // ki desen sınırsız bir girdiyle uğraşmasın.
+    [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]{1,127}$", RegexOptions.Compiled)]
     private static partial Regex UserNamePattern();
 
     [GeneratedRegex("^[A-Za-z0-9.%:_-]{1,255}$", RegexOptions.Compiled)]

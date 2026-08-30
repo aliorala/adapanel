@@ -346,6 +346,7 @@ import { usePagination } from "../composables/usePagination";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { copyToClipboard } from "../utils/clipboard";
+import { looksLikeMessageKey, splitCompositeMessage } from "../utils/apiError";
 import { siteToolIcon } from "../utils/siteToolIcons";
 import { useSoftwareStore } from "../stores/software";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -600,7 +601,7 @@ async function submitCreateSite() {
       ? ` ${t("panel.sites.companion.created")}: ${result.created.join(", ")}`
       : "";
     if (result.warnings.length) {
-      showNotice(`${base}${extras} — ${t("panel.sites.companion.warnings")}: ${result.warnings.join(" • ")}`, true);
+      showNotice(`${base}${extras} — ${t("panel.sites.companion.warnings")}: ${result.warnings.map(warningLine).join(" • ")}`, true);
     } else {
       showNotice(`${base}${extras}`, false);
     }
@@ -778,6 +779,29 @@ function translateState(state: string): string {
   const key = `panel.sites.runtime.${state.toLowerCase()}`;
   const translated = t(key);
   return translated === key ? state : translated;
+}
+
+/**
+ * Site oluşturma/silme uyarı satırını ÇEVRİLEBİLİR hâle getirir.
+ *
+ * NEDEN: `SiteCreationResultDto.Warnings` satırları ekrana HAM basılıyordu. Arka uç artık DNS
+ * yayınlanmama durumunu `"anahtar — ayrıntı"` biçiminde gönderiyor (bkz.
+ * `SitesController.TryEnsureSubdomainRecordAsync`); çevirmezsek kullanıcı kırmızı şeritte
+ * birebir `dns.not_published_no_server` yazısını görürdü — panelin `MessageKeyCoverageTests`
+ * nöbetçisinin tam olarak önlemeye çalıştığı şey.
+ *
+ * Eski satırlar bozulmaz: `splitCompositeMessage` anahtar biçimine uymayan metni bölmeden geri
+ * verir, o da olduğu gibi basılır.
+ */
+function warningLine(raw: string): string {
+  const { key, detail } = splitCompositeMessage(raw);
+  if (!looksLikeMessageKey(key)) {
+    return raw;
+  }
+
+  const translated = t(key);
+  const text = translated === key ? key : translated;
+  return detail ? `${text} (${detail})` : text;
 }
 
 function resolveApiMessage(error: unknown): string {

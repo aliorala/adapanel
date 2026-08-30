@@ -1184,31 +1184,14 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             var etiket = DomainNames.LabelUnder(host, ust);
             var sonuc = await dnsService.EnsureSubdomainRecordAsync(ust, etiket, cancellationToken);
 
-            if (sonuc.Created)
+            // KARAR SAF BIR ISLEVDE: "hangi listeye, hangi cumle" zinciri buradayken hic
+            // sinanamiyordu (denetleyicinin butun bagimliliklari gerekiyordu) ve bir dali yillarca
+            // yanlisti -- kayit Windows DNS'e YAYINLANMAMIS olsa bile "olusturuldu" yaziyordu.
+            // Ayni gerekce DnsSubdomainDecision.ZatenDogruMu'yu da buradan cikarmisti.
+            var rapor = DnsSubdomainDecision.Anlat(sonuc, $"{etiket}.{ust}");
+            if (rapor is not null)
             {
-                result.Created.Add($"dns: {etiket}.{ust} A {sonuc.Address}");
-            }
-            else if (sonuc.AlreadyExists && sonuc.AlreadyCorrect)
-            {
-                // Kayıt zaten doğru (panelin kendi varsayılanı ya da bu sunucuyu gösteriyor):
-                // yapılacak bir şey yok, uyarı DEĞİL bilgi.
-                result.Created.Add($"dns: {etiket}.{ust} zaten mevcut ({sonuc.ExistingRecord})");
-            }
-            else if (sonuc.AlreadyExists)
-            {
-                // Kayıt BAŞKA bir yeri gösteriyor. Üstüne yazılmadı ve bu sessiz geçilmez:
-                // kullanıcı sitesinin neden açılmadığını anlayamazdı.
-                result.Warnings.Add(
-                    $"dns ({etiket}.{ust}): record already exists and points elsewhere ({sonuc.ExistingRecord}); left unchanged.");
-            }
-            else if (sonuc.ZoneMissing)
-            {
-                result.Warnings.Add(
-                    $"dns ({etiket}.{ust}): parent zone is not managed here; add the record at your DNS provider.");
-            }
-            else if (sonuc.Error.Length > 0)
-            {
-                result.Warnings.Add($"dns ({etiket}.{ust}): {sonuc.Error}");
+                (rapor.Uyari ? result.Warnings : result.Created).Add(rapor.Satir);
             }
         }
         catch (Exception exception)

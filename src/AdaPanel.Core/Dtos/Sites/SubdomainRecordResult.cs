@@ -44,4 +44,24 @@ public sealed class SubdomainRecordResult
     /// "yazamadım ama neden bilmiyorum", kullanıcının hata arayamadığı en kötü çıktıdır.
     /// </summary>
     public string Error { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Kayıt panelin bölge dosyasına yazıldı ama Windows DNS'e YAYINLANMADI ise sebebini söyleyen
+    /// mesaj anahtarı; yayınlandıysa boş.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <see cref="Created"/>'in yanında, onun yerine değil:</b> kayıt gerçekten
+    /// oluşturuldu — panel durumunda duruyor, bölge birincile döndüğünde ya da DNS rolü
+    /// kurulduğunda yayınlanacak. <c>Created = false</c> demek bu bilgiyi silmek olurdu. Ama
+    /// yalnızca <c>Created</c> bakmak da yanlıştı: ekran "oluşturuldu" yazarken DNS'te hiçbir şey
+    /// yoktu. İki olgu ayrı, ikisi de söyleniyor — <c>DnsZoneState.PublishedGroups</c> ve
+    /// <c>DnsWatchdogRecord.LastRepairOk</c> alanlarındaki kalıbın aynısı.
+    /// </para>
+    /// <para>
+    /// Adı <c>...Key</c> ile biter: <c>MessageKeyCoverageTests</c> nöbetçisi bu biçimdeki
+    /// anahtarları tarayıp iki dilde de çevirisi olmasını zorunlu kılar.
+    /// </para>
+    /// </remarks>
+    public string PublishWarningKey { get; init; } = string.Empty;
 }

@@ -195,6 +195,7 @@
         "installMemcachedService"
       ],
       "serviceName": "AdaMemcached",
+      "processName": "memcached",
       "silentArgs": "",
       "default": false
     },
@@ -337,6 +338,7 @@
         "stalwart-cli"
       ],
       "serviceName": "AdaStalwart",
+      "processName": "stalwart",
       "silentArgs": "__GENERATED__",
       "note": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerleşik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; önerilen yığında otomatik kurulur. MailEnable yedektir; biri kurulurken diğeri durdurulur (çakışma yok).",
       "default": true

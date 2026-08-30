@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 namespace AdaPanel.Api.Tray;
 
@@ -194,15 +194,15 @@ public static class TepsiUygulamasi
 
     private static void YenidenBaslatVeGoster(DurumPenceresi pencere, string anahtar)
     {
-        var servisAdi = ServisYoneticisi.ServisAdiniBul(anahtar);
-        if (servisAdi is null)
+        var birim = ServisYoneticisi.BirimiBul(anahtar);
+        if (birim is null)
         {
             return;
         }
 
         if (ServisYoneticisi.YoneticiMi())
         {
-            ServisYoneticisi.YenidenBaslat(servisAdi, TimeSpan.FromSeconds(60));
+            ServisYoneticisi.YenidenBaslat(birim, TimeSpan.FromSeconds(60));
         }
         else
         {
@@ -257,7 +257,7 @@ public static class TepsiUygulamasi
             Console.WriteLine();
         }
 
-        Bolum("SERVİSLER", hepsi.Where(x => x.ServisiVar));
+        Bolum("SERVİSLER VE GÖREVLER", hepsi.Where(x => x.ServisiVar));
         Bolum("KURULU ARAÇLAR", hepsi.Where(x => !x.ServisiVar && x.DosyalarKurulu));
 
         var kurulmayan = hepsi.Where(x => !x.ServisiVar && !x.DosyalarKurulu).Select(x => x.Baslik).ToList();
@@ -267,15 +267,9 @@ public static class TepsiUygulamasi
             Console.WriteLine();
         }
 
-        // SORUN SAYILANLAR: kayıtlı ama çalışmayan servis VE dosyaları kurulu olduğu hâlde
-        // servisi hiç kayıtlı olmayan bileşen. İkincisi de düzeltilmesi gereken bir arızadır;
-        // "kurulu değil" ile aynı kefeye konursa izleme betiği sessiz kalırdı.
-        var hataliVar = hepsi.Any(x => x.ServisiVar
-            && ((x.ServisKayitli && !x.Calisiyor) || (!x.ServisKayitli && x.DosyalarKurulu)));
-
-        // Çıkış kodu bilgi taşır: kurulu ama çalışmayan servis varsa 1. Bir izleme betiği
+        // Çıkış kodu bilgi taşır: kurulu ama çalışmayan bir bileşen varsa 1. Bir izleme betiği
         // çıktıyı ayrıştırmak zorunda kalmasın.
-        return hataliVar ? 1 : 0;
+        return ServisYoneticisi.ArizaVar(hepsi) ? 1 : 0;
     }
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "AttachConsole", SetLastError = true)]
@@ -295,8 +289,8 @@ public static class TepsiUygulamasi
     /// </summary>
     private static int YetkiliServisIslemi(string anahtarBayragi, string anahtar)
     {
-        var servisAdi = ServisYoneticisi.ServisAdiniBul(anahtar);
-        if (servisAdi is null)
+        var birim = ServisYoneticisi.BirimiBul(anahtar);
+        if (birim is null)
         {
             return 2;
         }
@@ -306,9 +300,9 @@ public static class TepsiUygulamasi
             var sure = TimeSpan.FromSeconds(90);
             var sonuc = anahtarBayragi switch
             {
-                "--start" => ServisYoneticisi.Baslat(servisAdi, sure),
-                "--stop" => ServisYoneticisi.Durdur(servisAdi, sure),
-                _ => ServisYoneticisi.YenidenBaslat(servisAdi, sure)
+                "--start" => ServisYoneticisi.Baslat(birim, sure),
+                "--stop" => ServisYoneticisi.Durdur(birim, sure),
+                _ => ServisYoneticisi.YenidenBaslat(birim, sure)
             };
 
             var basarili = sonuc.Contains("başlatıldı", StringComparison.Ordinal)

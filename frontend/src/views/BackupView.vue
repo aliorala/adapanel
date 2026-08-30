@@ -39,6 +39,11 @@
         <span :class="['status-pill', verification.missingRemote ? 'danger' : '']">
           {{ t("panel.backup.verify.missingRemote", { count: verification.missingRemote }) }}
         </span>
+        <!-- "Dosya var ama içi yok" AYRI sayılır: kayıp dosyayla aynı kefeye konsaydı,
+             doğrulamanın ölçtüğü tek yeni gerçek görünmez olurdu. -->
+        <span :class="['status-pill', verification.unsound ? 'danger' : '']">
+          {{ t("panel.backup.verify.unsound", { count: verification.unsound }) }}
+        </span>
         <span :class="['status-pill', verification.unreachable ? 'warn' : '']">
           {{ t("panel.backup.verify.unreachable", { count: verification.unreachable }) }}
         </span>

@@ -471,6 +471,19 @@ public sealed partial class BackupService(
         // İkisi de FinalizeBackupAsync'te toplanmıştır: dört yedek akışının her birinde ayrı ayrı
         // yazılsaydı, biri unutulduğunda o tür sessizce ham (ve/veya şifresiz) kalırdı.
         var warnings = new List<BackupRestoreWarningDto>();
+
+        // BÜTÜNLÜK TAM BURADA, SARMALAYICILARDAN ÖNCE ÖLÇÜLÜR.
+        //
+        // Sırası zorunlu: bir sonraki satır dosyayı sıkıştırıp ARDINDAN şifreler ve ham kopyayı
+        // siler. Ölçüm sonraya bırakılsaydı elimizde yalnız parolayla açılabilen bir sarmalayıcı
+        // kalırdı; yani "yedeğin içinde bir şey var mı" sorusu bir daha ucuz sorulamazdı.
+        //
+        // ÖLÇÜLEN HATA: bu satırların olmadığı hâlde boyut yalnızca KAYDA YAZILIYOR, hiç
+        // DENETLENMİYORDU. Sıfır baytlık ya da tek girdisi olmayan bir arşiv "created" damgasıyla
+        // listeye giriyordu. Neyin ölçüldüğü ve NEDEN bu kadarının ölçüldüğü BackupArchiveProbe'ta
+        // yazılı (kısaca: merkezî dizin okunur, tek bayt açılmaz).
+        var butunluk = BackupArchiveProbe.Measure(localPath, format);
+
         var (compressedPath, compressedName, compressed) =
             await CompressArchiveAsync(localPath, fileName, format, warnings, cancellationToken);
 
@@ -535,7 +548,8 @@ public sealed partial class BackupService(
             BackupMode = chain?.Mode ?? BackupChainPlanner.ModeFull,
             BaseBackupId = chain?.BaseBackupId ?? string.Empty,
             SubscriptionUserId = subscriptionUserId,
-            ItemCount = itemCount
+            ItemCount = itemCount,
+            IntegrityState = butunluk.State
         };
 
         // İNDEKS YAN KAYDI kayıttan ÖNCE yazılır: kayıt listede görünüp indeksi olmayan bir halka,
@@ -587,6 +601,11 @@ public sealed partial class BackupService(
         // almamak daha kötü olurdu) ama ATLANDIĞI SÖYLENMEK ZORUNDA — hangi dosyalar olduğu da
         // dahil. Kullanıcı eksik bir arşivi "başarılı" sanıp ona güvenmemeli.
         ApplySkippedFiles(record, skipped, fileName);
+
+        // BOŞ/AÇILAMAYAN ARŞİV "BAŞARILI" SAYILMAZ. Atlanan dosyalarla aynı kanal ve aynı
+        // gerekçe: panelde yedeğin yanında duran tek özet Status'tür, "created" bırakmak bu
+        // arşivi sağlamlardan AYIRT EDİLEMEZ yapardı.
+        ApplyIntegrity(record, butunluk, fileName);
 
         await AppendRecordAsync(record, cancellationToken);
         return record;
@@ -663,6 +682,23 @@ public sealed partial class BackupService(
             });
         }
 
+        // HİÇ BULUNAMAYAN KÖKLER. Kesilen taramadan da ağır: orada ağacın bir kısmı gezilmişti,
+        // burada ağacın KENDİSİ yok — o kaynağın hiçbir dosyası arşive girmedi.
+        //
+        // Anahtar YENİ ve gerekli: mevcut anahtarların hiçbiri bunu anlatmıyor
+        // ("source_file_unreadable" tek bir dosyayı, "size_truncated_*" yarıda kesilmiş bir
+        // yürüyüşü anlatır). Çevirisi tr/en'de VARDIR; olmasaydı kullanıcı ekranda ham anahtarı
+        // görürdü (MessageKeyCoverageTests bunu kapatıyor).
+        foreach (var eksikKok in skipped.MissingRoots)
+        {
+            record.Warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.source_root_missing",
+                Target = eksikKok,
+                Detail = "root=missing; scanned=0; archive=incomplete; restore=partial"
+            });
+        }
+
         // Ayrıntısı taşınmayanlar SAYIYLA taşınır: "kaç dosya eksik" bilgisi hiçbir koşulda
         // kaybolmamalı (bozuk bir ACL yüz binlerce dosyayı birden atlatabilir).
         //
@@ -678,6 +714,45 @@ public sealed partial class BackupService(
                 Detail = $"skipped={skipped.Count}; listed={skipped.Detailed.Count}; unlisted={skipped.Truncated}"
             });
         }
+
+        if (record.Status is "created" or "created_remote_synced")
+        {
+            record.Status = "created_with_errors";
+        }
+    }
+
+    /// <summary>
+    /// Arşiv ölçümünü KAYDA taşır: bozuksa bir uyarı, durum <c>created_with_errors</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden istisna atılmıyor:</b> dosya diskte duruyor ve içinde bir şey olabilir (ölçüm
+    /// "girdisi yok" der, "hiçbir şey yok" demez). İstisna atıp kaydı hiç yazmamak, aynı hata
+    /// sınıfının bu depoda bir kez P0 olarak kapatılmış hâlidir: gece işi sessizce hiçbir şey
+    /// üretmez, kullanıcı bunu felaket anında öğrenir. Doğru cevap sessizlik değil DAMGADIR.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>created_remote_failed</c> ezilmiyor:</b> off-site kopyanın olmadığını söylemek
+    /// en az bozuk arşiv kadar önemlidir. İkisi de kalır — biri durumda, diğeri uyarı listesinde
+    /// ve <see cref="BackupRecordDto.IntegrityState"/> alanında.
+    /// </para>
+    /// </remarks>
+    private void ApplyIntegrity(BackupRecordDto record, BackupArchiveProbe.Result olcum, string fileName)
+    {
+        if (!olcum.Unsound)
+        {
+            return;
+        }
+
+        logger?.LogWarning("Yedek arsivi olculdu ve saglam degil ({File}): {Ayrinti}", fileName, olcum.Detail);
+
+        record.Warnings.Add(new BackupRestoreWarningDto
+        {
+            MessageKey = "backup.archive_unsound",
+            Target = fileName,
+            // ETİKET-DEĞER, CÜMLE DEĞİL: Detail çevrilmeyen alandır (gerekçesi ApplySkippedFiles'ta).
+            Detail = olcum.Detail
+        });
 
         if (record.Status is "created" or "created_remote_synced")
         {
@@ -960,6 +1035,10 @@ public sealed partial class BackupService(
 
         // profesyonel panel benzeri tam-site yedeği: tek .zip içinde files/ + config/ + databases/ + mail/.
         var includedParts = new List<string>();
+        // İÇERİK UYARILARI (arşive giremeyen MANTIKSAL öğeler; atlanan DOSYALARdan ayrı defter).
+        // Abonelik yedeğinde zaten vardı, site yedeğinde YOKTU: dökümü alınamayan bir veritabanı
+        // burada sessizce düşüyordu (bkz. aşağıdaki TryAddDatabaseDumpAsync dalı).
+        var icerikUyarilari = new List<BackupRestoreWarningDto>();
         var mailMessages = MailMessageOutcome.NotRequested;
         await using (var zipStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
@@ -987,6 +1066,18 @@ public sealed partial class BackupService(
                 if (await TryAddDatabaseDumpAsync(archive, db.Engine, db.DatabaseName, "databases", cancellationToken))
                 {
                     includedParts.Add($"db:{db.DatabaseName}");
+                }
+                else
+                {
+                    // ESKİDEN SESSİZDİ: dökümü boş çıkan veritabanı yalnızca manifest'teki
+                    // "parts" listesinden DÜŞÜYORDU. Kullanıcı manifesti açıp okumaz; panelde
+                    // gördüğü tek şey "created" damgasıydı. Abonelik yedeği bu uyarıyı zaten
+                    // üretiyordu — site yedeğinde aynı gerçek kayboluyordu.
+                    icerikUyarilari.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.database_dump_empty",
+                        Target = $"{db.Engine}/{db.DatabaseName}"
+                    });
                 }
             }
 
@@ -1045,7 +1136,7 @@ public sealed partial class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        return await FinalizeBackupAsync(
+        var siteKaydi = await FinalizeBackupAsync(
             targetPath,
             fileName,
             "site",
@@ -1057,6 +1148,8 @@ public sealed partial class BackupService(
             cancellationToken,
             plan.Stamp,
             plan.Stamp is null ? null : indeks);
+
+        return await ApplyContentWarningsAsync(siteKaydi, icerikUyarilari, cancellationToken);
     }
 
     // =====================================================================================
@@ -1349,6 +1442,20 @@ public sealed partial class BackupService(
         var sonuc = new List<ArchiveFile>();
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
         {
+            // KÖK YOKSA SESSİZ KALINMAZ.
+            //
+            // ÖLÇÜLEN HATA: burada yalnızca boş liste dönülüyordu. Sitesinin fiziksel yolu
+            // silinmiş/yeniden adlandırılmış bir kullanıcı, içinde TEK BİR DOSYASI OLMAYAN bir
+            // arşivi "created" damgasıyla alıyordu — her gece, aylarca, hiçbir uyarı olmadan.
+            // Yedek çağrısı zaten "bu ağacı yedekle" diyor; ağacın orada olmaması bir SONUÇ
+            // değil, kullanıcının bilmesi gereken bir BULGUDUR.
+            //
+            // İstisna atılmaz: abonelik yedeğinde tek bir sitenin kökü kaybolduğunda bütün
+            // aboneliğin yedeğini iptal etmek, sağlam siteleri de yedeksiz bırakırdı. Kanal
+            // atlanan dosyalarla aynı (BackupSkipLog → uyarı + created_with_errors).
+            // Ad ARŞİV GİRDİSİ adıyla verilir (kesilen taramalarla aynı sözleşme): kullanıcıya
+            // sunucu yolunu değil, yedeğin içinde arayacağı yeri söyler.
+            skipped.AddMissingRoot(string.IsNullOrWhiteSpace(entryPrefix) ? root : entryPrefix);
             return sonuc;
         }
 
@@ -1507,7 +1614,17 @@ public sealed partial class BackupService(
                 FilePath = tempDump
             }, cancellationToken);
 
-            if (!File.Exists(tempDump))
+            // DOSYANIN VARLIĞI DEĞİL, İÇİ SORULUR.
+            //
+            // ÖLÇÜLEN HATA: burada yalnız File.Exists vardı. Dışa aktarıcı dosyayı YARATIP boş
+            // bırakabilir (yetkisiz mysqldump, kapalı servis, dolmuş disk); o durumda arşive
+            // sıfır baytlık bir ".sql" giriyor ve panel "db:shop yedeklendi" diyordu. Bunun
+            // yalan olduğu ancak geri yüklerken — boş bir veritabanıyla — anlaşılırdı.
+            //
+            // "backup.database_dump_empty" uyarısı zaten yazılmıştı ama bu ölçüm olmadığı için
+            // HİÇ TETİKLENEMİYORDU: kural vardı, uygulaması yoktu.
+            var bilgi = new FileInfo(tempDump);
+            if (!bilgi.Exists || bilgi.Length == 0)
             {
                 return false;
             }
@@ -1988,21 +2105,44 @@ public sealed partial class BackupService(
 
         // Yedek ALINIRKEN atlanan her şey kayda taşınır. "Yedeklendi" deyip içinde olmayan bir
         // veritabanını geri yüklerken keşfetmek, panelin verebileceği en pahalı sürprizdir.
-        if (uyarilar.Count > 0)
+        return await ApplyContentWarningsAsync(record, uyarilar, cancellationToken);
+    }
+
+    /// <summary>
+    /// Arşive giremeyen MANTIKSAL öğelerin (veritabanı, posta alanı, site) uyarılarını KAYDA
+    /// taşır ve durumu düşürür.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden tek yerde:</b> bu blok abonelik yedeğinde yazılıydı, site yedeğinde YOKTU — yani
+    /// aynı kural bir türde uygulanıp diğerinde unutulmuştu ve site yedeği dökümü boş çıkan
+    /// veritabanını sessizce yutuyordu. İki kopya olsaydı bir sonraki tür de aynı boşlukla
+    /// eklenirdi.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>created_remote_failed</c> ezilmiyor:</b> off-site kopyanın olmadığını söylemek,
+    /// eksik öğe uyarısından daha az önemli değildir. İkisi de kayıtta durur; biri durumda,
+    /// diğeri uyarı listesinde.
+    /// </para>
+    /// </remarks>
+    private async Task<BackupRecordDto> ApplyContentWarningsAsync(
+        BackupRecordDto record,
+        IReadOnlyCollection<BackupRestoreWarningDto> uyarilar,
+        CancellationToken cancellationToken)
+    {
+        if (uyarilar.Count == 0)
         {
-            record.Warnings.AddRange(uyarilar);
-
-            // Uzak hedef durumu ZATEN bir hata anlatıyorsa (created_remote_failed) onu EZMEYİZ:
-            // off-site kopyanın olmadığını söylemek, eksik öğe uyarısından daha az önemli değildir.
-            // İkisi de kayıtta durur; biri durumda, diğeri uyarı listesinde.
-            if (record.Status == "created" || record.Status == "created_remote_synced")
-            {
-                record.Status = "created_with_errors";
-            }
-
-            await UpsertRecordAsync(record, cancellationToken);
+            return record;
         }
 
+        record.Warnings.AddRange(uyarilar);
+
+        if (record.Status == "created" || record.Status == "created_remote_synced")
+        {
+            record.Status = "created_with_errors";
+        }
+
+        await UpsertRecordAsync(record, cancellationToken);
         return record;
     }
 
@@ -2071,8 +2211,20 @@ $list | ConvertTo-Json -Depth 3";
         }
     }
 
-    // Panel yedeğindeki görevleri Görev Zamanlayıcı'ya geri kaydeder (XML: principal/tetikleyici birebir).
-    private static async Task TryRestoreScheduledTasksAsync(string extractedRoot, CancellationToken cancellationToken)
+    /// <summary>
+    /// Panel yedeğindeki görevleri Görev Zamanlayıcı'ya geri kaydeder (XML: principal/tetikleyici
+    /// birebir). BAŞARISIZ olan her görev <paramref name="uyarilar"/>'a yazılır.
+    /// </summary>
+    /// <remarks>
+    /// <b>ÖLÇÜLEN HATA:</b> <c>Register-ScheduledTask</c> çağrısının DÖNÜŞÜ ATILIYORDU ve dış
+    /// <c>catch</c> de sessizdi. Yani panel yedeğini geri yükleyen kullanıcı, zamanlanmış
+    /// görevlerinin (gecelik yedek dahil) HİÇ KURULMADIĞINI göremiyordu: durum "restored" diyordu.
+    /// Bir sonraki felakete kadar yedeksiz kalmanın en sessiz yolu buydu.
+    /// </remarks>
+    private static async Task TryRestoreScheduledTasksAsync(
+        string extractedRoot,
+        List<BackupRestoreWarningDto> uyarilar,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -2099,22 +2251,70 @@ $list | ConvertTo-Json -Depth 3";
                 var xmlBase64 = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(xml));
                 var script = $@"$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{xmlBase64}'))
 Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
-                await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+                // KATI SÜRÜM ZORUNLU, yoksa bu kontrol HİÇBİR ŞEY ÖLÇMEZ: PowerShell'in
+                // sonlandırıcı olmayan hatası (Register-ScheduledTask "Access denied") ekrana
+                // yazılır ama powershell.exe yine 0 ile çıkar — yani `Success` daima true olurdu
+                // ve uyarı hiç üretilmezdi. RunPowerShellStrictAsync hatayı çıkış koduna yansıtır
+                // (gerekçesi ProcessRunner'da yazılı).
+                var sonuc = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
+                if (!sonuc.Success)
+                {
+                    // Best-effort DEVAM EDER (bir görev diğerlerini durdurmaz) ama SESSİZ DEĞİL.
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.restore_task_failed",
+                        Target = item.Name,
+                        Detail = KisaHataMetni(sonuc.StandardError, sonuc.StandardOutput)
+                    });
+                }
             }
         }
-        catch
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // Best-effort: bir görev geri yüklenemese de yedek çıkarma işlemi tamamlanır.
+            // Envanter okunamadı: HİÇBİR görev geri yüklenmedi. Eskiden bu da sessizdi.
+            uyarilar.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.restore_task_failed",
+                Target = "tasks/index.json",
+                Detail = exception.Message
+            });
         }
+    }
+
+    /// <summary>
+    /// Süreç çıktısının KAYDA yazılabilir kısa hâli. Boş çıktıyı boş bırakmaz: sebepsiz bir uyarı,
+    /// kullanıcıya "bir şey oldu ama ne olduğunu söylemiyorum" demektir.
+    /// </summary>
+    private static string KisaHataMetni(string? standardError, string? standardOutput)
+    {
+        var metin = string.IsNullOrWhiteSpace(standardError) ? standardOutput : standardError;
+        metin = (metin ?? string.Empty).Trim();
+        if (metin.Length == 0)
+        {
+            return "exit_code=nonzero; output=empty";
+        }
+
+        return metin.Length <= 500 ? metin : metin[..500];
     }
 
     /// <summary>
     /// Tam-sunucu DR: panel yedeğindeki IIS envanterinden (iis/sites.json) eksik siteleri yeniden kurar.
     /// Best-effort — site başına hata diğerlerini durdurmaz; sonuç, çıkarma klasörüne
-    /// iis-restore-report.txt olarak yazılır (kullanıcı ne kurulup ne atlandığını görür).
+    /// iis-restore-report.txt olarak yazılır (kullanıcı ne kurulup ne atlandığını görür) VE
+    /// başarısızlıklar <paramref name="uyarilar"/> ile KAYDA taşınır.
     /// HTTPS bağlamaları bilerek kurulmaz (sertifika makineye bağlıdır; SSL ekranından yeniden verilir).
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA:</b> hatalar YALNIZCA rapor DOSYASINA yazılıyordu. O dosya, çıkarılan
+    /// klasörün içinde duruyor; panelde hiçbir yerde görünmüyor ve kimse açmıyor. Kayıt ise
+    /// koşulsuz "restored" diyordu — yani "sitelerin yarısı kurulamadı" gerçeği, kullanıcının
+    /// bakmadığı bir metin dosyasına gömülüyordu.
+    /// </para>
     /// </summary>
-    private async Task TryRestoreIisSitesAsync(string extractedRoot, List<string> report, CancellationToken cancellationToken)
+    private async Task TryRestoreIisSitesAsync(
+        string extractedRoot,
+        List<string> report,
+        List<BackupRestoreWarningDto> uyarilar,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -2157,6 +2357,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                         catch (Exception bindingException)
                         {
                             report.Add($"  {site.Name}: ek bağlama {binding.HostName}:{binding.Port} eklenemedi — {bindingException.Message}");
+                            uyarilar.Add(new BackupRestoreWarningDto
+                            {
+                                MessageKey = "backup.restore_site_failed",
+                                Target = site.Name,
+                                Detail = $"binding={binding.HostName}:{binding.Port}; reason={bindingException.Message}"
+                            });
                         }
                     }
 
@@ -2165,12 +2371,24 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 catch (Exception siteException)
                 {
                     report.Add($"  {site.Name}: KURULAMADI — {siteException.Message}");
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.restore_site_failed",
+                        Target = site.Name,
+                        Detail = siteException.Message
+                    });
                 }
             }
         }
         catch (Exception exception)
         {
             report.Add($"IIS envanteri geri yüklenemedi: {exception.Message}");
+            uyarilar.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.restore_site_failed",
+                Target = "iis/sites.json",
+                Detail = exception.Message
+            });
         }
     }
 
@@ -2187,7 +2405,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// açılır ve rapora "parolayı FTP ekranından sıfırlayın" düşülür. Hesap zaten varsa parolasına
     /// dokunulmaz (CreateFtpUserAsync mevcut hesapta yalnız ACL/ana dizini tazeler — idempotent).
     /// </summary>
-    private async Task TryRestoreFtpUsersAsync(string extractedRoot, List<string> report, CancellationToken cancellationToken)
+    private async Task TryRestoreFtpUsersAsync(
+        string extractedRoot,
+        List<string> report,
+        List<BackupRestoreWarningDto> uyarilar,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -2223,12 +2445,24 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 catch (Exception exception)
                 {
                     report.Add($"  FTP {user.UserName}: KURULAMADI — {exception.Message}");
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.restore_ftp_failed",
+                        Target = user.UserName,
+                        Detail = exception.Message
+                    });
                 }
             }
         }
         catch (Exception exception)
         {
             report.Add($"FTP envanteri geri yüklenemedi: {exception.Message}");
+            uyarilar.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.restore_ftp_failed",
+                Target = "config/ftp-users.json",
+                Detail = exception.Message
+            });
         }
     }
 
@@ -2274,26 +2508,36 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var targetPath = Path.Combine(backupsDirectory, fileName);
 
         await StopStalwartAsync(installDirectory, cancellationToken);
+        // Yeniden baslatma uyarisi TUTULUR: `finally` icinden firlatmak, asil istisnayi maskelerdi.
+        // Yedek basarili olsa bile posta kapali kaldiysa kullanici bunu OGRENMELI.
+        BackupRestoreWarningDto? postaUyarisi;
         try
         {
             ZipFile.CreateFromDirectory(dataDirectory, targetPath, CompressionLevel.Optimal, includeBaseDirectory: true);
         }
         finally
         {
-            await StartStalwartAsync(cancellationToken);
+            postaUyarisi = await StartStalwartAsync(cancellationToken);
         }
 
         // Dosya TARAMASI yok: ZipFile.CreateFromDirectory tek dosyayı bile atlayamaz, atlarsa
         // istisna atar ve yedek hiç oluşmaz (servis durdurulmuş hâlde alındığı için kilit de yok).
-        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement, skipped: null, cancellationToken);
+        var kayit = await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement, skipped: null, cancellationToken);
+
+        // Panel posta sunucusunu KENDISI durdurdu; acamadiysa bunu yedegin uzerine yazar.
+        return postaUyarisi is null
+            ? kayit
+            : await ApplyContentWarningsAsync(kayit, new[] { postaUyarisi }, cancellationToken);
     }
 
-    private async Task RestoreMailAsync(string archivePath, CancellationToken cancellationToken)
+    /// <summary>Posta verisini geri yukler; posta sunucusu acilamadiysa uyari doner.</summary>
+    private async Task<BackupRestoreWarningDto?> RestoreMailAsync(string archivePath, CancellationToken cancellationToken)
     {
         var installDirectory = ResolveStalwartInstallDirectory();
         var dataDirectory = Path.Combine(installDirectory, "data");
 
         await StopStalwartAsync(installDirectory, cancellationToken);
+        BackupRestoreWarningDto? postaUyarisi;
         try
         {
             // Mevcut veri yana alınır; geri yükleme başarısız olursa elle dönülebilir.
@@ -2308,8 +2552,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
         finally
         {
-            await StartStalwartAsync(cancellationToken);
+            postaUyarisi = await StartStalwartAsync(cancellationToken);
         }
+
+        return postaUyarisi;
     }
 
     private static string ResolveStalwartInstallDirectory()
@@ -2429,8 +2675,74 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         return blockers.ToArray();
     }
 
-    private static Task StartStalwartAsync(CancellationToken cancellationToken) =>
-        ProcessRunner.RunAsync("schtasks.exe", $"/Run /TN \"{StalwartTaskName}\"", cancellationToken: cancellationToken);
+    /// <summary>
+    /// Posta sunucusunu yeniden başlatır ve BAŞLADIĞINI ÖLÇER. Başlayamadıysa uyarı, başladıysa
+    /// <c>null</c> döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Eski hâli dönüşü ATIYORDU</b> — iki çağrı da <c>finally</c> içinde, sonucuna bakmadan.
+    /// Yedekleme ve geri yükleme posta sunucusunu bilerek DURDURUYOR (kilitli veri dosyası
+    /// kopyalanamaz). Yeniden başlatma başarısız olursa posta KAPALI kalır, ama kayıt "created" /
+    /// "restored" der. Yani panel, kendi kapattığı bir servisi açamadığını fark etmiyordu:
+    /// müşteri gece yedeğinden sonra posta almamaya başlar ve sebebini panelde bulamaz.
+    /// </para>
+    /// <para>
+    /// <b>Çıkış kodu TEK BAŞINA yetmez</b> — bu oturumun tekrarlanan dersi. <c>schtasks /Run</c>
+    /// görevi tetikleyip 0 döner; görevin gerçekten koştuğunu söylemez. Bu yüzden tetiklemeden
+    /// sonra durum GERİ OKUNUR.
+    /// </para>
+    /// <para>
+    /// <b>Ölçülemeyen durum uyarıya çevrilmez.</b> Sorgu okunamıyorsa (yetki, dil, biçim) bu
+    /// "posta kapalı" demek değildir; uydurma bir uyarı, kullanıcıyı olmayan bir arızanın peşine
+    /// düşürürdü. O durumda uyarı verilmez — yalnızca kesin bilinen iki hâl bildirilir.
+    /// </para>
+    /// </remarks>
+    private static async Task<BackupRestoreWarningDto?> StartStalwartAsync(CancellationToken cancellationToken)
+    {
+        var tetikleme = await ProcessRunner.RunAsync(
+            "schtasks.exe",
+            $"/Run /TN \"{StalwartTaskName}\"",
+            cancellationToken: cancellationToken);
+
+        if (!tetikleme.Success)
+        {
+            return new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.mail_service_start_failed",
+                Target = StalwartTaskName,
+                Detail = string.IsNullOrWhiteSpace(tetikleme.StandardError)
+                    ? tetikleme.StandardOutput
+                    : tetikleme.StandardError
+            };
+        }
+
+        var sorgu = await ProcessRunner.RunAsync(
+            "schtasks.exe",
+            $"/Query /TN \"{StalwartTaskName}\" /FO LIST",
+            cancellationToken: cancellationToken);
+
+        if (!sorgu.Success || string.IsNullOrWhiteSpace(sorgu.StandardOutput))
+        {
+            // ÖLÇÜLEMEDİ: "kapalı" DEMEZ. Bkz. yukarıdaki gerekçe.
+            return null;
+        }
+
+        // Durum satırı yerelleştirilmiştir ("Running" / "Çalışıyor"), o yüzden ÇALIŞIYOR aranmaz;
+        // aranan şey KESİN OLARAK ÇALIŞMADIĞINI söyleyen iki durumdur. Bilinmeyen bir metin
+        // "kapalı" sayılmaz — yine ölçülememiş kabul edilir.
+        var durdurulmus = sorgu.StandardOutput.Contains("Disabled", StringComparison.OrdinalIgnoreCase)
+            || sorgu.StandardOutput.Contains("Devre D", StringComparison.OrdinalIgnoreCase);
+
+        return durdurulmus
+            ? new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.mail_service_not_running",
+                Target = StalwartTaskName,
+                Detail = sorgu.StandardOutput.Trim()
+            }
+            : null;
+    }
 
     public async Task<BackupRecordDto> RestoreAsync(RestoreBackupRequest request, CancellationToken cancellationToken = default)
     {
@@ -2472,8 +2784,15 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
         if (string.Equals(record.Type, "mail", StringComparison.OrdinalIgnoreCase))
         {
-            await RestoreMailAsync(content.FilePath, cancellationToken);
-            record.Status = "restored";
+            // POSTA GERI YUKLEMESINDE DE "YARIM ISE RESTORED DENMEZ" kurali gecerli. Panel posta
+            // sunucusunu kendisi durdurdu; acamadiysa veri donmus olsa bile posta CALISMIYORDUR.
+            var postaUyarisi = await RestoreMailAsync(content.FilePath, cancellationToken);
+            if (postaUyarisi is not null)
+            {
+                record.Warnings.Add(postaUyarisi);
+            }
+
+            record.Status = record.Warnings.Count == 0 ? "restored" : "restored_with_errors";
             await UpsertRecordAsync(record, cancellationToken);
             return record;
         }
@@ -2535,16 +2854,23 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
             // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet
             // + tam-sunucu DR: eksik IIS siteleri + FTP hesapları yeniden kurulur (rapor: iis-restore-report.txt).
+            var kurulumUyarilari = new List<BackupRestoreWarningDto>();
             if (string.Equals(record.Type, "panel", StringComparison.OrdinalIgnoreCase))
             {
-                await TryRestoreScheduledTasksAsync(destination, cancellationToken);
+                await TryRestoreScheduledTasksAsync(destination, kurulumUyarilari, cancellationToken);
                 var report = new List<string>();
-                await TryRestoreIisSitesAsync(destination, report, cancellationToken);
-                await TryRestoreFtpUsersAsync(destination, report, cancellationToken);
+                await TryRestoreIisSitesAsync(destination, report, kurulumUyarilari, cancellationToken);
+                await TryRestoreFtpUsersAsync(destination, report, kurulumUyarilari, cancellationToken);
                 await TryWriteRestoreReportAsync(destination, report, cancellationToken);
             }
 
-            record.Status = "restored";
+            // YARIM KALAN İŞE "restored" DENMEZ — kural bu dosyada zaten YAZILIYDI (birleşik site
+            // ve abonelik geri yüklemesinde), yalnız BURADA uygulanmıyordu. Panel yedeği tam-sunucu
+            // felaket kurtarmanın kendisidir: görevleri, siteleri ve FTP hesaplarının yarısı
+            // kurulamamışken "restored" damgası, kullanıcının ayağa kalktığını SANMASINA yol açar.
+            // Artık uyarılar kayda taşınır ve durum onları yansıtır.
+            record.Warnings.AddRange(kurulumUyarilari);
+            record.Status = kurulumUyarilari.Count == 0 ? "restored" : "restored_with_errors";
             record.Path = destination;
             // Kayıt artık ÇIKARILMIŞ dizini gösteriyor; orası şifreli değildir. Bayrağı "true"
             // bırakmak, bir sonraki geri yüklemede olmayan bir şifre için parola sordururdu.
@@ -2847,10 +3173,16 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         // (bkz. BackupPruneResultDto'nun gerekçesi).
         var sonuclar = new BackupPruneResultDto();
 
+        // ÇAĞIRANIN VERDİĞİ KİMLİK VARSAYILANDIR, ama abonelik yedeklerinin kimliği kendi
+        // programından gelir: sunucu geneli budama (AutomationService) kapsamına abonelik
+        // yedekleri de girer ve onların hedefi otomasyon ayarlarında TANIMLI DEĞİLDİR. Bu satır
+        // olmadan o kayıtlar her budamada "uzak kopya silinemedi" işaretlenip birikirdi.
+        var cozumleyici = await RemoteCredentials.ResolverForAsync(remote, cancellationToken);
+
         foreach (var record in silinecekler)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sonuc = await TryDeleteBackupFilesAsync(record, remote, cancellationToken);
+            var sonuc = await TryDeleteBackupFilesAsync(record, cozumleyici.For(record), cancellationToken);
             if (sonuc.Success)
             {
                 removedIds.Add(record.Id);
@@ -2982,6 +3314,20 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return false;
         }
 
+        // ÖLÇÜLÜP BOZUK BULUNMUŞ ARŞİV GERİ YÜKLEME NOKTASI DEĞİLDİR.
+        //
+        // Bu satırın asıl işi silmek değil KORUMAKTIR: budamanın "kaynak koruması" bir kaynağın
+        // GÜNCEL ve kullanılabilir yedeği varsa eskilerini silmeye izin verir. Sıfır baytlık bir
+        // arşiv "taze yedek" sayılsaydı, panel koruma varmış sanıp o sitenin GERÇEK eski
+        // yedeklerini silerdi — bu depoda bir kez yaşanmış hata sınıfının ta kendisi.
+        //
+        // "unknown" (ölçülemedi: şifreli sarmalayıcı, kilitli dosya) BURAYA GİRMEZ; ölçmediğimiz
+        // şeyi çöp saymak, sağlam yedeği yok saymak olurdu.
+        if (string.Equals(record.IntegrityState, BackupIntegrity.Unsound, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         // Uzak kopyanın SON ÖLÇÜMÜ "yok" dediyse ona da güvenilmez. Ölçüm yapılmadıysa (varsayılan)
         // eski davranış korunur — "ölçmedik" ile "yok" karıştırılmaz.
         if (!string.IsNullOrWhiteSpace(record.RemoteUri) && !record.RemoteMissing)
@@ -3083,8 +3429,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         // HİÇ dokunmuyordu: panel kaydı gidiyor, dosya hedefte kalıyordu. Budama kayıtlar
         // üzerinden çalıştığı için o dosya YETİM oluyordu — panel onu bir daha ne görebiliyor ne
         // silebiliyordu. Kimlik, otomatik temizliğin okuduğu AYNI kaynaktan gelir.
-        var remote = await RemoteCredentials.ReadAsync(cancellationToken);
-        var sonuc = await TryDeleteBackupFilesAsync(record, remote, cancellationToken);
+        //
+        // KİMLİK KAYIT BAŞINA ÇÖZÜLÜR: abonelik yedeği kendi programının hedefine yüklenir ve
+        // ancak o programın kimliğiyle silinebilir (gerekçe: BackupRemoteCredentialResolver).
+        var cozumleyici = await RemoteCredentials.ReadResolverAsync(cancellationToken);
+        var sonuc = await TryDeleteBackupFilesAsync(record, cozumleyici.For(record), cancellationToken);
 
         if (sonuc.LocalFailure is not null)
         {
@@ -3121,15 +3470,17 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var hedefler = new List<BackupRecordDto> { record };
         hedefler.AddRange(BackupChainPlanner.GetDependents(records, record));
 
-        // Zincir silme de UZAK kopyaları siler (tekil silmeyle aynı gerekçe: yetim bırakmamak).
-        var remote = await RemoteCredentials.ReadAsync(cancellationToken);
+        // Zincir silme de UZAK kopyaları siler (tekil silmeyle aynı gerekçe: yetim bırakmamak) ve
+        // kimliği HALKA BAŞINA çözer — zincirin halkaları farklı programlara ait olamaz ama
+        // kimliği tek yerde çözmek, bir sonraki tür eklendiğinde de doğru kalmasını sağlar.
+        var cozumleyici = await RemoteCredentials.ReadResolverAsync(cancellationToken);
 
         var silinen = new List<BackupRecordDto>();
         var kilitli = new List<string>();
         foreach (var hedef in hedefler)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sonuc = await TryDeleteBackupFilesAsync(hedef, remote, cancellationToken);
+            var sonuc = await TryDeleteBackupFilesAsync(hedef, cozumleyici.For(hedef), cancellationToken);
 
             if (sonuc.Success)
             {
@@ -3528,7 +3879,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     public async Task<BackupVerificationResultDto> VerifyBackupsAsync(CancellationToken cancellationToken = default)
     {
         var records = await fileStore.ReadAsync(IndexPath, Array.Empty<BackupRecordDto>(), cancellationToken);
-        var remote = await RemoteCredentials.ReadAsync(cancellationToken);
+        // Kimlik KAYIT BAŞINA: abonelik yedeği kendi programının hedefindedir ve sunucu geneli
+        // kimlikle yoklanırsa hedef reddeder — panel de sağlam duran off-site kopyayı
+        // "ulaşılamadı" diye raporlardı.
+        var cozumleyici = await RemoteCredentials.ReadResolverAsync(cancellationToken);
         var sonuc = new BackupVerificationResultDto { Checked = records.Length };
 
         // Yalnız DEĞİŞEN kayıtlar yazılır: her doğrulamada bütün indeksi yeniden yazmak,
@@ -3536,6 +3890,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         // Değer BackupPresence sabiti: "ulaşamadım" bu sözlüğe HİÇ girmez (kayda dokunulmaz),
         // böylece geçici arıza son KESİN ölçümün üzerine yazamaz.
         var uzakDurum = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // ARŞİVİN İÇİ de aynı turda ölçülür ve aynı yazmada kaydedilir (ikinci bir tur, ikinci bir
+        // yarış demekti).
+        var butunlukDurumu = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var record in records)
         {
@@ -3554,13 +3912,48 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                     Detail = record.Path
                 });
             }
+            else
+            {
+                // ARŞİV GERÇEKTEN AÇILIYOR MU?
+                //
+                // ÖLÇÜLEN HATA: bu uç adı "doğrulama" olmasına rağmen arşivi HİÇ AÇMIYORDU;
+                // yalnızca dosyanın var olup olmadığına bakıyordu. Sıfır baytlık ya da yarım
+                // yazılmış bir arşiv "doğrulamadan geçti" damgası alıyordu — kullanıcıya
+                // verilebilecek en pahalı güvence.
+                //
+                // MALİYET: ZIP'in merkezî dizini okunur, tek bayt açılmaz (gerekçe ve sınırları
+                // BackupArchiveProbe'ta yazılı). Bu yüzden liste çizilişinde değil, kullanıcının
+                // bilerek bastığı bu düğmede yapılır — uzak yoklamayla aynı maliyet disiplini.
+                var olcum = BackupArchiveProbe.Measure(record.Path, record.Format);
+                if (olcum.State != BackupIntegrity.Unknown)
+                {
+                    // "Ölçemedim" KAYDA YAZILMAZ: şifreli/kilitli dosyanın son kesin ölçümünü
+                    // silmek, bildiğimizi unutmak olurdu (uzak ölçümdeki kararla aynı).
+                    butunlukDurumu[record.Id] = olcum.State;
+                }
+
+                if (olcum.Unsound)
+                {
+                    sonuc.Unsound++;
+                    sonuc.Issues.Add(new BackupVerificationIssueDto
+                    {
+                        BackupId = record.Id,
+                        Name = record.Name,
+                        Source = record.Source,
+                        TargetType = record.TargetType,
+                        MessageKey = "backup.verify.unsound",
+                        Detail = olcum.Detail
+                    });
+                }
+            }
 
             if (string.IsNullOrWhiteSpace(record.RemoteUri))
             {
                 continue;
             }
 
-            if (remote is null)
+            var kayitKimligi = cozumleyici.For(record);
+            if (kayitKimligi is null)
             {
                 // Kayıtlı hedef kimliği yok: ölçemedik. "Yok" DEMEK YASAK.
                 //
@@ -3590,7 +3983,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 continue;
             }
 
-            var (presence, detail) = await ProbeRemoteAsync(record, remote, cancellationToken);
+            var (presence, detail) = await ProbeRemoteAsync(record, kayitKimligi, cancellationToken);
             switch (presence)
             {
                 case RemotePresence.Present:
@@ -3627,7 +4020,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             }
         }
 
-        if (uzakDurum.Count > 0)
+        if (uzakDurum.Count > 0 || butunlukDurumu.Count > 0)
         {
             var olcumAni = DateTime.UtcNow;
             await fileStore.UpdateAsync(
@@ -3637,6 +4030,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 {
                     foreach (var item in existing)
                     {
+                        if (butunlukDurumu.TryGetValue(item.Id, out var butunluk))
+                        {
+                            item.IntegrityState = butunluk;
+                        }
+
                         if (uzakDurum.TryGetValue(item.Id, out var durum))
                         {
                             // RemoteMissing KORUNUYOR: iki değerli eski alan hâlâ okunuyor
@@ -3653,14 +4051,23 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 cancellationToken);
         }
 
-        await AppendOrphansAsync(sonuc, records, remote, cancellationToken);
+        // YETİM TARAMASI SUNUCU GENELİ KİMLİKLE yapılır ve bu bilinçli: tarama, kayıtta OLMAYAN
+        // dosyaları arar, yani hangi programa ait olduğu SORULAMAZ. Otomasyon hedefinin taban
+        // adresi neyse orası taranır; abonelik hedefleri farklı bir adresteyse oradaki yetimler
+        // bu listede GÖRÜNMEZ. Yanlış bir şey söylememek için sonuç zaten "taranamayan hedef"
+        // ayrımını taşıyor (OrphanScanSkipped) ve hiçbir dosya bu yoldan SİLİNMEZ.
+        await AppendOrphansAsync(sonuc, records, cozumleyici.Default, cancellationToken);
 
-        if (sonuc.MissingLocal > 0 || sonuc.MissingRemote > 0)
+        // BOZUK ARŞİV DE DENETİM KAYDINA GİRER: "dosya duruyor ama içi açılmıyor", kayıp dosya
+        // kadar ağır bir bulgudur ve izi olmadan geçmesi, geri yükleme gününde kimsenin
+        // "ne zaman bozulmuş" sorusuna cevap bulamaması demektir.
+        if (sonuc.MissingLocal > 0 || sonuc.MissingRemote > 0 || sonuc.Unsound > 0)
         {
             await WriteAuditAsync(
                 "backup.verification",
                 "backups",
-                $"Yedek dogrulama: {sonuc.MissingLocal} yerel dosya, {sonuc.MissingRemote} uzak kopya bulunamadi "
+                $"Yedek dogrulama: {sonuc.MissingLocal} yerel dosya, {sonuc.MissingRemote} uzak kopya bulunamadi, "
+                + $"{sonuc.Unsound} arsiv acilamadi/bos "
                 + $"({sonuc.Unreachable} kayit icin hedefe ulasilamadi).",
                 // KONUSU YOK ve olamaz: doğrulama SUNUCU GENELİNDEKİ bütün kayıtları tarar, tek
                 // bir aboneliğe ait değildir. Uç zaten yalnız yöneticiye açık; kapsamlı role

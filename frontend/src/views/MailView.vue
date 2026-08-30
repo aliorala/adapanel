@@ -205,7 +205,13 @@
                  Sayı ÖLÇEKLENMEZ (kutu kotası formda MiB olarak girilir, kart onun yankısıdır);
                  düzeltilen tek şey koda gömülü etiketin yanlış tabanı. -->
             <span>{{ account.currentSizeMB }} / {{ account.maxSizeMB ? `${account.maxSizeMB} ${t("panel.units.mib")}` : "∞" }}</span>
-            <span :class="['status-pill', account.active ? 'ok' : 'warn']">
+            <!-- UC DURUM, IKIYE INDIRILMEZ: `active === null` "sunucuya soruldu ama cevap
+                 alinamadi" demek. Eskiden backend sabit `true` donduruyordu ve HER kutu yesil
+                 "Etkin" goruluyordu; kapali bir kutu panelde saglikli gorunuyordu. -->
+            <span v-if="account.active === null || account.active === undefined" class="status-pill warn">
+              {{ t("panel.mail.accountStateUnmeasured") }}
+            </span>
+            <span v-else :class="['status-pill', account.active ? 'ok' : 'warn']">
               {{ account.active ? t("panel.status.enabled") : t("panel.status.disabled") }}
             </span>
             <div class="row-actions">

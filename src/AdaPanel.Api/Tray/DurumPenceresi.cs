@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.ServiceProcess;
 
 namespace AdaPanel.Api.Tray;
@@ -74,7 +74,9 @@ public sealed class DurumPenceresi : Form
             // varmış gibi göstermek; (2) her satırın düğmeleri ilk tazelemede yeniden yaratılıyor,
             // pencere titriyordu. Ölçüldü: denetim sayısı aynı kalıyor ama pencere tanıtıcıları
             // değişiyordu, yani denetimler yok edilip yeniden kuruluyordu.
-            if (servis.ServisiVar && servis.ServisKayitli && sonCalisiyor != servis.Calisiyor)
+            if (servis.ServisiVar
+                && (servis.ServisKayitli || servis.Bicim == CalismaBicimi.ZamanlanmisGorev)
+                && sonCalisiyor != servis.Calisiyor)
             {
                 sonCalisiyor = servis.Calisiyor;
                 pencere.DugmeleriYenile(kart, servis);
@@ -265,7 +267,7 @@ public sealed class DurumPenceresi : Form
 
         if (servisliler.Count > 0)
         {
-            liste.Controls.Add(BolumBasligi("SERVİSLER"));
+            liste.Controls.Add(BolumBasligi("SERVİSLER VE GÖREVLER"));
             foreach (var servis in servisliler)
             {
                 liste.Controls.Add(SatirYap(servis));
@@ -299,11 +301,25 @@ public sealed class DurumPenceresi : Form
         liste.ResumeLayout();
     }
 
+    /// <summary>
+    /// Dosyaları kurulu olduğu hâlde arka plan birimi SİSTEMDE BULUNAMAYAN bileşen.
+    /// </summary>
+    /// <remarks>
+    /// Zamanlanmış görevlerde "bulunamadı" YALNIZ <see cref="GorevDurumu.Kayitsiz"/> demektir.
+    /// Okunamayan durum (yetkisiz oturum) buraya girmez; girseydi Stalwart her turda "eksik"
+    /// sayılırdı — düzeltilen hatanın ta kendisi.
+    /// </remarks>
+    private static bool EksikBirim(ServisDurumu s)
+        => s.ServisiVar && s.DosyalarKurulu
+            && (s.Bicim == CalismaBicimi.ZamanlanmisGorev ? s.Gorev == GorevDurumu.Kayitsiz : !s.ServisKayitli);
+
     /// <summary>Başlıktaki tek cümlelik özet: kullanıcı tek bakışta "sorun var mı" görsün.</summary>
     private void OzetiYaz(IReadOnlyList<ServisDurumu> servisler)
     {
-        var sorunlu = servisler.Count(s => s.ServisiVar && s.ServisKayitli && !s.Calisiyor);
-        var eksik = servisler.Count(s => s.ServisiVar && !s.ServisKayitli && s.DosyalarKurulu);
+        // Özet, çıkış kodunun kullandığı ARIZA tanımıyla aynı kaynaktan beslenir; iki ayrı kural
+        // olsaydı ekran "sorun yok" derken izleme betiği 1 döndürebilirdi.
+        var eksik = servisler.Count(EksikBirim);
+        var sorunlu = servisler.Count(s => ServisYoneticisi.ArizaVar([s]) && !EksikBirim(s));
 
         var metin = !BilesenListesi.BildirimOkundu
             // Bileşen listesi okunamadıysa SESSİZ GEÇİLMEZ: ekranda yalnız temel servisler görünür
@@ -415,7 +431,10 @@ public sealed class DurumPenceresi : Form
             return kart;
         }
 
-        if (servis.ServisKayitli)
+        // ZAMANLANMIŞ GÖREV: "kayıtlı mı" sorusu yetkisiz oturumda cevaplanamıyor (ölçüldü:
+        // E_ACCESSDENIED). Durumu okunamadı diye düğmeleri gizlemek, kullanıcıyı elle
+        // schtasks'a mahkûm ederdi; işlem zaten yetkili alt süreçte çalışıp sonucunu ölçüyor.
+        if (servis.ServisKayitli || (servis.Bicim == CalismaBicimi.ZamanlanmisGorev && servis.DosyalarKurulu))
         {
             DugmeleriYenile(kart, servis);
         }
@@ -423,6 +442,10 @@ public sealed class DurumPenceresi : Form
         {
             // Dosyalar var ama servis yok: burada yapılabilecek bir şey yok, panelden yeniden
             // kurulması gerekiyor. Düğme koymak yerine bunu SÖYLÜYORUZ.
+            //
+            // Bu tavsiye YALNIZ gerçekten servis olan bileşenler içindir. Eskiden zamanlanmış
+            // görevle çalışan Stalwart da buraya düşüyordu: kurulumu sağlam bir posta sunucusu
+            // için "panelden yeniden kurun" yazıyordu — yani çalışan kurulumu bozmaya davet.
             var not = new Label
             {
                 Text = "panelden yeniden kurun",
@@ -486,11 +509,28 @@ public sealed class DurumPenceresi : Form
             return servis.DosyalarKurulu ? Yesil : Gri;
         }
 
-        if (!servis.ServisKayitli)
+        // ÖLÇÜLEMEDİ ≠ ARIZA. Yetkisiz oturumda zamanlanmış görevin durumu okunamıyor; bunu
+        // kırmızı ya da amber göstermek, sağlıklı bir posta sunucusunu arıza gibi sunmak olurdu.
+        if (servis.Olculemedi)
+        {
+            return Gri;
+        }
+
+        if (!servis.ServisKayitli && servis.Bicim != CalismaBicimi.ZamanlanmisGorev)
         {
             // Kurulu değil GRİ, "kurulu ama servisi yok" AMBER (düzeltilebilir arıza),
             // durmuş KIRMIZI. Hepsini kırmızı yapmak, kurulmamış bir bileşeni arıza sanmaya yol açar.
             return servis.DosyalarKurulu ? Amber : Gri;
+        }
+
+        if (servis.Bicim == CalismaBicimi.ZamanlanmisGorev && !servis.DosyalarKurulu)
+        {
+            return Gri; // hiç kurulmamış
+        }
+
+        if (servis.Gorev == GorevDurumu.DevreDisi)
+        {
+            return Amber; // bilerek kapatılmış; arıza değil ama "çalışıyor" da değil
         }
 
         return servis.Calisiyor ? Yesil : Kirmizi;
@@ -520,12 +560,14 @@ public sealed class DurumPenceresi : Form
     /// </remarks>
     private async void Islet(string anahtar, string islem)
     {
-        var servisAdi = ServisYoneticisi.ServisAdiniBul(anahtar);
-        if (servisAdi is null)
+        var birim = ServisYoneticisi.BirimiBul(anahtar);
+        if (birim is null)
         {
-            Bildir($"{ServisYoneticisi.BasligiBul(anahtar)}: servis kayıtlı değil.");
+            Bildir($"{ServisYoneticisi.BasligiBul(anahtar)}: kayıtlı değil.");
             return;
         }
+
+        var servisAdi = birim.Ad;
 
         mesgul = true;
         Cursor = Cursors.WaitCursor;
@@ -546,9 +588,9 @@ public sealed class DurumPenceresi : Form
                 {
                     return islem switch
                     {
-                        "start" => ServisYoneticisi.Baslat(servisAdi, sure),
-                        "stop" => ServisYoneticisi.Durdur(servisAdi, sure),
-                        _ => ServisYoneticisi.YenidenBaslat(servisAdi, sure)
+                        "start" => ServisYoneticisi.Baslat(birim, sure),
+                        "stop" => ServisYoneticisi.Durdur(birim, sure),
+                        _ => ServisYoneticisi.YenidenBaslat(birim, sure)
                     };
                 }
 

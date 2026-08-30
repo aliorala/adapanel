@@ -111,7 +111,12 @@ export type ImportDatabasePayload = {
   engine: string;
   databaseName: string;
   userName: string;
-  host: string;
+  /**
+   * İSTEĞE BAĞLI ve normalde GÖNDERİLMEZ. Sabit "%" gönderiliyordu; panelin kendi kullanıcıları
+   * localhost'ta durduğu için yetki var olmayan bir hesaba yazılıyordu. Boş bırakıldığında sunucu
+   * hesabın host'larını motordan OKUR (bkz. ImportDatabaseRequest.Host).
+   */
+  host?: string;
   password: string;
   // Plesk gibi: siteye bağla → site silinince bu DB de cascade ile gider.
   siteName?: string;

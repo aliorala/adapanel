@@ -1352,7 +1352,9 @@ async function submitImport() {
       engine: selectedEngine.value,
       databaseName: importForm.databaseName,
       userName: importForm.userName,
-      host: "%",
+      // Host GÖNDERİLMEZ. Sabit "%" gönderiliyordu: panelin kendi kullanıcıları localhost'ta
+      // durduğu için yetki var olmayan 'u'@'%' hesabına yazılıyor, kimlik kaydı da yanlış
+      // hesaba düşüyordu. Sunucu hesabı motordan OKUR (bkz. ImportDatabaseRequest.Host).
       password: importForm.password,
       siteName: importForm.siteName || undefined
     });
