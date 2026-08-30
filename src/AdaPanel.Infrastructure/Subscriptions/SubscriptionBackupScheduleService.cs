@@ -210,10 +210,12 @@ public sealed class SubscriptionBackupScheduleService(
                 exception.HttpStatusCode == 409 &&
                 exception.MessageKey.StartsWith("runningjob.", StringComparison.Ordinal))
             {
-                // BAŞKA BİR YEDEK İŞİ SÜRÜYOR (elle tetiklenmiş bir site/abonelik yedeği ya da bu
-                // turun bir önceki aboneliği). Kayıt TÜR BAŞINA tek yuvalıdır ve bu bilinçli:
+                // BU ABONELİĞİN BAŞKA BİR YEDEK İŞİ SÜRÜYOR (ör. müşteri aynı anda elle
+                // tetiklemiş). Kayıt TÜR + KİRACI başına tek yuvalıdır ve bu bilinçli: aynı yuvaya
                 // ikinci bir kayıt yazmak birincinin izini siler, panel de bittiğinde hangisinin
-                // bittiğini söyleyemez.
+                // bittiğini söyleyemez. Yuva kiracıyı içerdiği için KOMŞU bir aboneliğin yedeği
+                // artık bu turu ertelemez — eskiden ertelerdi ve tek bir uzun yedek bütün
+                // programları kilitliyordu.
                 //
                 // Bu abonelik SESSİZCE ATLANMIYOR ve KAYBOLMUYOR: LastRunUtc'ye dokunulmadığı için
                 // program hâlâ "zamanı gelmiş" sayılır ve işçi on dakika sonra yeniden dener.

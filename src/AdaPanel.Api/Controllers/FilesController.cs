@@ -5,6 +5,7 @@ using AdaPanel.Core.Dtos.Files;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Files;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,8 +24,37 @@ namespace AdaPanel.Api.Controllers;
 public sealed class FilesController(
     IFileService fileService,
     ICustomerScopeService customerScopes,
-    IAuditService auditService) : ControllerBase
+    IAuditService auditService,
+    ConcurrentWorkGate agirIsKapisi) : ControllerBase
 {
+    /// <summary>
+    /// Bir kiracının AYNI ANDA koşturabileceği ağır dosya işi sayısı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>KAPATILAN AÇIK:</b> sıkıştırma, arşiv açma, kopyalama ve boyut hesabı <c>Customer</c>
+    /// rolüne açık, LocalSystem olarak ve istek iş parçacığında koşuyor. Öge/süre bütçeleri TEK
+    /// isteğin ne kadar süreceğini sınırlıyordu; kaç isteğin aynı anda koşacağını sınırlayan
+    /// hiçbir şey yoktu. Boyut hesabı en ucuz yoldu: kimlik doğrulamalı bir <c>POST</c>, hız
+    /// sınırsız ve her çağrı tam hızda 15 saniyeye kadar ağaç yürüyüşü — N istek = N tarama.
+    /// </para>
+    /// <para>
+    /// <b>DEĞER NEDEN 2:</b> panelin MEŞRU eşzamanlı kullanımı ölçüldü — kullanıcı bir klasörü
+    /// sıkıştırırken başka bir sekmede boyut hesaplatabilir ya da bir yedeği açarken dosya
+    /// kopyalayabilir. 1 bunu kırardı ("çalışmıyor" gibi görünürdü). 2, gerçek kullanımı bozmadan
+    /// çarpanı sabitler. Tavan KİRACI BAŞINADIR: komşu kiracı bundan etkilenmez.
+    /// </para>
+    /// </remarks>
+    private const int AgirIsSiniri = 2;
+
+    /// <summary>Ağır dosya işleri TEK bütçeyi paylaşır: kiracının aynı anda 2 ağır işi olabilir, türü ne olursa olsun.</summary>
+    /// <remarks>
+    /// Uç başına ayrı bütçe verilseydi tavan uç sayısıyla ÇARPILIRDI (4 uç × 2 = 8) ve sınır fiilen
+    /// kalkardı. Aynı karar <c>FileService</c>'in yürüyüş bütçelerinde de yazılı ("TEK BÜTÇE,
+    /// BÜTÜN ÖGELER").
+    /// </remarks>
+    private const string AgirIsAilesi = "files.heavy";
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<FileWorkspaceDto>>> GetWorkspaceAsync([FromQuery] string? path, CancellationToken cancellationToken)
     {
@@ -199,6 +229,10 @@ public sealed class FilesController(
 
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
 
+        // Tavan ÖLÇÜMDEN de önce alınır: kota ölçümü bir AĞAÇ YÜRÜYÜŞÜDÜR, yani kendisi de ağır
+        // bir iştir ve sınırsız bırakılırsa kopyalama hiç başlamadan sunucu tüketilebilirdi.
+        using var kapsam = await AgirIseGirisAsync(cancellationToken);
+
         // KOTA, İŞTEN ÖNCE ÖNGÖREREK. Kopyalama diski kaynağın boyutu kadar büyütür ve bu, kotanın
         // en kolay delindiği yoldu: 400 MB'lık klasörünü tekrar tekrar kopyalayan 500 MB kotalı bir
         // müşteri birimi doldurup KOMŞU KİRACILARI da yazamaz hâle getiriyordu.
@@ -260,6 +294,10 @@ public sealed class FilesController(
         {
             await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
         }
+
+        // EŞZAMANLILIK TAVANI KAPSAM DENETİMİNDEN SONRA: yer ayırmadan önce isteğin meşru olduğu
+        // bilinmeli, yoksa kapsam dışı bir istek de kiracının bütçesini tüketirdi.
+        using var kapsam = await AgirIseGirisAsync(cancellationToken);
         var workspace = await fileService.CompressAsync(request, cancellationToken);
         await WriteAuditAsync(
             "files.compressed",
@@ -277,6 +315,10 @@ public sealed class FilesController(
         {
             await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.DestinationPath, allowRoot: false, cancellationToken);
         }
+
+        // Tavan ÖLÇÜMDEN de önce alınır: kota ölçümü arşivin girdi listesini gezer, yani kendisi
+        // de ağır bir iştir.
+        using var kapsam = await AgirIseGirisAsync(cancellationToken);
 
         // KOTA: arşiv açmak, sıkıştırılmış boyutun KATLARI kadar yer açabilir — kotanın en sessiz
         // deliniş yolu buydu. Ölçüm arşivin AÇILMIŞ boyutu üzerinden yapılır (bkz.
@@ -303,6 +345,12 @@ public sealed class FilesController(
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<FileEntryDto>>>> SearchAsync([FromBody] SearchFilesRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
+
+        // ARAMA DA AĞIR İŞ AİLESİNDEDİR ve bu ölçülerek eklendi: uç 5.000 dosyaya kadar geziyor ve
+        // her uygun dosyanın 2 MB'a kadarını İÇERİK OLARAK okuyor. Ailenin dışında bırakmak, tam
+        // da bu depoda tekrarlayan hatayı yapmak olurdu — koruma bir uca gömülür, kardeş uç
+        // korumasız kalır.
+        using var kapsam = await AgirIseGirisAsync(cancellationToken);
         var results = await fileService.SearchAsync(request, cancellationToken);
         return Ok(ApiResponse<IReadOnlyCollection<FileEntryDto>>.Ok(results));
     }
@@ -329,8 +377,40 @@ public sealed class FilesController(
     public async Task<ActionResult<ApiResponse<DirectorySizeDto>>> CalculateSizeAsync([FromBody] DirectorySizeRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureFilesPathAsync(customerScopes, User, request.Path, allowRoot: false, cancellationToken);
+
+        // BU UÇ EN UCUZ SALDIRI YOLUYDU: hız sınırı yok, gövdesi bir satır, ve her çağrı tam
+        // hızda 15 saniyeye kadar ağaç yürüyüşü başlatıyor. Tek isteğin bütçesi vardı, istek
+        // SAYISININ bütçesi yoktu.
+        using var kapsam = await AgirIseGirisAsync(cancellationToken);
         var result = await fileService.CalculateSizeAsync(request.Path, cancellationToken);
         return Ok(ApiResponse<DirectorySizeDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Bu denetleyicide EŞZAMANLILIK sınırlamasının TEK yolu — ağır her uç buradan geçer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>KURALIN KENDİSİ BURADA DEĞİL</b> (bkz. <see cref="ConcurrentWorkGate"/>): burada yalnız
+    /// "kimin bütçesi" sorusu cevaplanır. Sayma/reddetme mantığı iki yere yazılsaydı biri
+    /// sıkılaştırılıp diğeri unutulurdu — bu depoda tam olarak o hata sınıfı defalarca ölçüldü.
+    /// </para>
+    /// <para>
+    /// <b>BÜTÇENİN SAHİBİ, KOTANIN SAHİBİYLE AYNI KİŞİDİR</b> (bkz.
+    /// <see cref="EnsureDiskQuotaAsync"/>): <c>Customer</c> kendi ABONELİĞİNİN bütçesine tabidir —
+    /// alt kullanıcı bağlı olduğu parent'ın. Bütçe oturum açan kullanıcıya göre verilseydi, bir
+    /// müşteri kendi açtığı alt kullanıcılarla tavanı istediği kadar çoğaltırdı. Bayi ve yönetici
+    /// kendi kimliğiyle sayılır: sitesi olmayan yollarda (panel kökü) sahip çözülemez ve onları
+    /// kotasız bırakmak gibi SINIRSIZ bırakmak, korumayı en yetkili hesapta kaldırmak olurdu.
+    /// </para>
+    /// </remarks>
+    private async Task<IDisposable> AgirIseGirisAsync(CancellationToken cancellationToken)
+    {
+        var sahip = CustomerAccess.IsCustomer(User)
+            ? await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken)
+            : User.GetRequiredUserId();
+
+        return agirIsKapisi.Enter($"{AgirIsAilesi}:{sahip:N}", AgirIsSiniri, "files.too_many_operations");
     }
 
     /// <summary>

@@ -51,6 +51,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
+        // Ağır uçlarda ANAHTAR BAŞINA eşzamanlılık tavanı. SINGLETON olmak zorunda: sayaç süreç
+        // genelinde tek olmalı, yoksa her istek kendi tavanını taşır ve tavan hiç dolmaz.
+        services.AddSingleton<ConcurrentWorkGate>();
         // Uzun süren işlerin (yedek/geri yükleme/göç/bileşen kurulumu) sunucu tarafı kaydı.
         // SINGLETON: durumu diskte tutar, istekten isteğe taşınacak alanı yoktur ve panel
         // açılışında yoklanan status uçları onu istekten bağımsız okur.

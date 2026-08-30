@@ -177,6 +177,10 @@ public sealed class WebDbDeploymentTests
         public Task<IReadOnlyCollection<PhpVersionDto>> GetInstalledVersionsAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        // Araç siteleri (AdaPanel.*) izolasyon dışıdır; sahte servis çağrıyı sessizce yutar.
+        public Task EnsureSiteIsolationAsync(string siteName, bool enabled, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
         public Task<ComponentInstallResultDto> InstallVersionAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

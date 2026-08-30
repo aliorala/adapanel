@@ -49,14 +49,21 @@ public interface IRunningJobService
     /// <summary>
     /// İşi kaydeder ve kaydı temizleyecek bir kapsam döndürür (<c>await using</c> ile kullanılır).
     /// <para>
-    /// Aynı türden CANLI bir iş varsa <c>409</c> ile <see cref="Common.AppException"/> fırlatır:
+    /// AYNI YUVADA canlı bir iş varsa <c>409</c> ile <see cref="Common.AppException"/> fırlatır:
     /// tek yuvalı kayda ikinci bir iş yazmak birincinin izini silerdi ve panel bittiğinde
     /// hangisinin bittiğini söyleyemezdi.
+    /// </para>
+    /// <para>
+    /// <b>YUVA, TÜR + KONU çiftidir.</b> Sahibi olan işler (site/abonelik yedeği, geri yükleme)
+    /// KİRACI BAŞINA bir yuva tutar; sahipsiz işler (bileşen kurulumu, panel/posta yedeği, göç)
+    /// makine geneli TEK yuvayı paylaşır. Gerekçe uygulamada, <c>RunningJobService.YuvaAnahtari</c>
+    /// üzerinde yazılıdır — kısası: yuva yalnız türden ibaretken bir müşterinin iki saatlik yedeği
+    /// BÜTÜN kiracılara ve yöneticiye 409 döndürüyordu (çapraz kiracı hizmet reddi).
     /// </para>
     /// </summary>
     /// <param name="subjectUserId">
     /// İşin ÜZERİNDE yapıldığı kaynağın sahibi (abonelik kimliği); sunucu geneli işlerde
-    /// <c>null</c> — o işler yalnız yöneticide görünür.
+    /// <c>null</c> — o işler yalnız yöneticide görünür VE makine geneli tek yuvayı paylaşır.
     /// </param>
     Task<IAsyncDisposable> BeginAsync(
         string kind,

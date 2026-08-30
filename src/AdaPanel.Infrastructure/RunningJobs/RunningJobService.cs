@@ -51,9 +51,13 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
             dosya = await fileStore.UpdateAsync(StatePath, new RunningJobsFile(), BayatlariUzlastir, cancellationToken);
         }
 
+        // SÜZGEÇ YUVA ANAHTARINA DEĞİL, KAYDIN KENDİ TÜRÜNE bakar. Anahtar artık kiracıyı da
+        // taşıyor ("backup|<abonelik>"), yani anahtarı türle karşılaştırmak bütün kiracı işlerini
+        // görünmez kılardı. Tür zaten kaydın içinde yazılı ve YAZAN taraf onu tek kaynaktan
+        // (Normalize) dolduruyor.
         var suren = dosya.Running
-            .Where(giris => istenen.Contains(Normalize(giris.Key)))
             .Select(giris => giris.Value)
+            .Where(kayit => istenen.Contains(Normalize(kayit.Kind)))
             .Where(kayit => kayit.StartedAtUtc != default && Gorunur(kayit.SubjectUserId, allowedSubjectUserIds))
             .OrderBy(kayit => kayit.StartedAtUtc)
             .Select(kayit => new RunningJobDto
@@ -65,8 +69,8 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
             .ToArray();
 
         var kesilen = dosya.Interrupted
-            .Where(giris => istenen.Contains(Normalize(giris.Key)))
             .Select(giris => giris.Value)
+            .Where(kayit => istenen.Contains(Normalize(kayit.Kind)))
             .Where(kayit => kayit.StartedAtUtc != default && Gorunur(kayit.SubjectUserId, allowedSubjectUserIds))
             .OrderBy(kayit => kayit.StartedAtUtc)
             .Select(kayit => new InterruptedJobDto
@@ -93,6 +97,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
         CancellationToken cancellationToken = default)
     {
         var tur = Normalize(kind);
+        var yuva = YuvaAnahtari(tur, subjectUserId);
         var baslangic = DateTime.UtcNow;
 
         // KONTROL + YAZMA AYNI KİLİDİN ALTINDA. UpdateAsync dosya başına kilit tutar; "yer boş mu"
@@ -103,7 +108,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
             new RunningJobsFile(),
             dosya =>
             {
-                if (dosya.Running.TryGetValue(tur, out var mevcut) &&
+                if (dosya.Running.TryGetValue(yuva, out var mevcut) &&
                     mevcut.StartedAtUtc != default &&
                     IsOwnedByCurrentProcess(mevcut))
                 {
@@ -114,7 +119,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
                         $"'{mevcut.Title}' started at {mevcut.StartedAtUtc:O} is still running.");
                 }
 
-                dosya.Running[tur] = new RunningJobState
+                dosya.Running[yuva] = new RunningJobState
                 {
                     Kind = tur,
                     Title = title,
@@ -124,15 +129,58 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
                     OwnerProcessStartedAtTicks = CurrentProcessStartTicks()
                 };
 
-                // Yeni iş, aynı türün eski "kesildi" uyarısını GEÇERSİZ KILAR: kullanıcı zaten
-                // yeniden başlattı, uyarıyı bir daha göstermek gürültü olurdu.
-                dosya.Interrupted.Remove(tur);
+                // Yeni iş, AYNI YUVANIN eski "kesildi" uyarısını GEÇERSİZ KILAR: o kiracı işi
+                // zaten yeniden başlattı, uyarıyı bir daha göstermek gürültü olurdu. Komşu
+                // kiracının kesilmiş işi ise yerinde kalır — onun haberi hâlâ verilmemiştir.
+                dosya.Interrupted.Remove(yuva);
                 return dosya;
             },
             cancellationToken);
 
-        return new JobScope(this, tur, baslangic);
+        return new JobScope(this, yuva, baslangic);
     }
+
+    /// <summary>
+    /// Bir işin KİMİNLE yarıştığını belirleyen yuva anahtarı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>KAPATILAN AÇIK (ölçüldü):</b> anahtar yalnız İŞ TÜRÜYDÜ. Bir müşterinin iki saatlik
+    /// yedeği sürerken BÜTÜN öteki kiracılar ve yönetici de 409 alıyordu — yani her kiracı, tek bir
+    /// uzun istekle paneldeki bütün yedek/geri yükleme yeteneğini kapatabiliyordu. Bu bir çapraz
+    /// kiracı hizmet reddidir ve ücretsiz bir hesapla tetiklenebilirdi.
+    /// </para>
+    /// <para>
+    /// <b>KARAR İŞ TÜRÜNE GÖRE DEĞİL, İŞİN KAYNAĞINA GÖRE VERİLDİ (ölçüldü, tercih değil):</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>
+    /// <b>Sahibi olan iş (<paramref name="subjectUserId"/> dolu) → KİRACI BAŞINA yuva.</b> Bu
+    /// işlerin dokunduğu her şey o aboneliğe aittir: yedek arşivi abonelik klasörüne yazılır,
+    /// geçici dosyalar GUID'lidir (<c>BackupService</c>, <c>Path.GetTempPath()</c> + <c>Guid</c>),
+    /// yedek kataloğu ise <c>JsonFileStore.UpdateAsync</c> kilidiyle güncellenir — yani iki
+    /// kiracının aynı anda yedek alması ortak hiçbir duruma yazmaz.
+    /// </item>
+    /// <item>
+    /// <b>Sahipsiz iş (<c>null</c>) → MAKİNE GENELİ tek yuva.</b> Bunlar gerçekten tekil olmak
+    /// zorundadır ve kiracı başına bölmek GERÇEK bir yarış açardı: bileşen kurulumu
+    /// (<c>software</c>) paylaşılan çalışma zamanı dizinine, sistem PATH'ine ve servis kaydına
+    /// yazar; göç (<c>migration</c>) IIS yapılandırmasına yazar; panel/posta yedeği posta
+    /// servisini DURDURUR. Hiçbirinin ikinci bir kopyası aynı anda koşamaz.
+    /// </item>
+    /// </list>
+    /// <para>
+    /// <b>SAHİPSİZ İŞ, KİRACI İŞİNİ ARTIK ENGELLEMEZ</b> ve bu bilinçlidir: yöneticinin panel
+    /// yedeği ile müşterinin site yedeği ayrı kaynaklara dokunur. Engellemek, kapatılan çapraz
+    /// kiracı reddini yönetici tarafından geri getirmek olurdu.
+    /// </para>
+    /// <para>
+    /// <b>KİRACI BAŞINA HÂLÂ TEK İŞ:</b> bir müşteri kendi türünde ikinci bir iş açamaz, yani
+    /// kaynak tüketimi kiracı sayısıyla sınırlı kalır — ve kiracıları yalnız yönetici oluşturur.
+    /// </para>
+    /// </remarks>
+    private static string YuvaAnahtari(string normalizedKind, Guid? subjectUserId) =>
+        subjectUserId is { } sahip ? $"{normalizedKind}|{sahip:N}" : normalizedKind;
 
     /// <summary>
     /// İş bitti: kaydı boşaltır.
@@ -142,15 +190,15 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
     /// yok etmek olurdu. Yalnız kendi yazdığımız kayıt kaldırılır.
     /// </para>
     /// </summary>
-    private Task EndAsync(string kind, DateTime startedAtUtc) =>
+    private Task EndAsync(string yuva, DateTime startedAtUtc) =>
         fileStore.UpdateAsync(
             StatePath,
             new RunningJobsFile(),
             dosya =>
             {
-                if (dosya.Running.TryGetValue(kind, out var mevcut) && mevcut.StartedAtUtc == startedAtUtc)
+                if (dosya.Running.TryGetValue(yuva, out var mevcut) && mevcut.StartedAtUtc == startedAtUtc)
                 {
-                    dosya.Running.Remove(kind);
+                    dosya.Running.Remove(yuva);
                 }
 
                 return dosya;
@@ -260,11 +308,11 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
     /// Kapsam temizliğinin başarısızlığını kaydeder. Ayrı bir metot çünkü birincil kurucunun
     /// <c>logger</c> parametresi iç içe sınıftan görünmez.
     /// </summary>
-    private void TemizlemeHatasiniKaydet(string kind, Exception exception) =>
+    private void TemizlemeHatasiniKaydet(string yuva, Exception exception) =>
         logger.LogWarning(
             exception,
-            "Çalışan-iş kaydı temizlenemedi ({Kind}); panel yeniden başladığında bayat kayıt olarak temizlenecek.",
-            kind);
+            "Çalışan-iş kaydı temizlenemedi ({Yuva}); panel yeniden başladığında bayat kayıt olarak temizlenecek.",
+            yuva);
 
     /// <summary>
     /// <c>await using</c> kapsamı: iş nasıl biterse bitsin (başarı, hata, iptal) kaydı temizler.
@@ -274,13 +322,13 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
     /// "sürüyor" şeridi gösterir.
     /// </para>
     /// </summary>
-    private sealed class JobScope(RunningJobService owner, string kind, DateTime startedAtUtc) : IAsyncDisposable
+    private sealed class JobScope(RunningJobService owner, string yuva, DateTime startedAtUtc) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             try
             {
-                await owner.EndAsync(kind, startedAtUtc);
+                await owner.EndAsync(yuva, startedAtUtc);
             }
             catch (Exception exception)
             {
@@ -288,7 +336,7 @@ public sealed class RunningJobService(JsonFileStore fileStore, ILogger<RunningJo
                 // bir yedeği kullanıcıya "başarısız" göstermek olurdu. Kayıt diskte kalırsa panel
                 // yeniden başladığında sahiplik kontrolü onu zaten "kesildi" sayıp temizleyecek —
                 // yani arıza kendini onarır; sessiz kalmaması için loglanır.
-                owner.TemizlemeHatasiniKaydet(kind, exception);
+                owner.TemizlemeHatasiniKaydet(yuva, exception);
             }
         }
     }

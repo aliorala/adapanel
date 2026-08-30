@@ -119,14 +119,23 @@ public sealed class RunningJobKalanIkiYolTests
     }
 
     /// <summary>
-    /// Başka bir yedek işi sürerken zamanlanmış tur ERTELENİR — ve sessizce KAYBOLMAZ.
+    /// AYNI ABONELİĞİN başka bir yedek işi sürerken zamanlanmış tur ERTELENİR — ve sessizce
+    /// KAYBOLMAZ.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Kayıt tür başına tek yuvalıdır, dolayısıyla açık bir yedek işi varken arka plan turu 409
-    /// alır. Ölçülen KRİTİK şey şu: 409 alındığında program kaydının <c>LastRunUtc</c> damgası
-    /// GÜNCELLENMEMELİ. Güncellenseydi tur "yapıldı" sayılır ve o abonelik o gün yedeksiz kalırdı —
-    /// yani düzeltme, kapattığından daha kötü bir sessiz veri kaybı üretirdi.
+    /// Kayıt TÜR + KİRACI başına tek yuvalıdır, dolayısıyla o aboneliğin açık bir yedek işi varken
+    /// arka plan turu 409 alır. Ölçülen KRİTİK şey şu: 409 alındığında program kaydının
+    /// <c>LastRunUtc</c> damgası GÜNCELLENMEMELİ. Güncellenseydi tur "yapıldı" sayılır ve o
+    /// abonelik o gün yedeksiz kalırdı — yani düzeltme, kapattığından daha kötü bir sessiz veri
+    /// kaybı üretirdi.
+    /// </para>
+    /// <para>
+    /// <b>ÖNCEKİ HÂLİ YANLIŞ BİR ŞEYİ ÖLÇÜYORDU:</b> elle tetiklenen işi <c>subjectUserId: null</c>
+    /// (yani SUNUCU GENELİ bir iş) ile açıyor ve onun bir KİRACININ zamanlanmış yedeğini
+    /// engellemesini bekliyordu. O davranış tam olarak kapatılan açıktı: yuva yalnız türdü, yani
+    /// tek bir uzun iş bütün kiracıların yedeğini durduruyordu. Test artık gerçek çakışmayı
+    /// ölçüyor — AYNI aboneliğin elle tetiklenmiş yedeği.
     /// </para>
     /// <para>
     /// MUTASYON: <c>RunDueAsync</c>'teki 409 dalı kaldırılıp genel <c>catch</c>'e bırakılsa test
@@ -136,15 +145,15 @@ public sealed class RunningJobKalanIkiYolTests
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task Baska_Yedek_Surerken_Zamanlanmis_Tur_Erteleniyor_Ve_Damga_Yazilmiyor()
+    public async Task Ayni_Aboneligin_Yedegi_Surerken_Zamanlanmis_Tur_Erteleniyor_Ve_Damga_Yazilmiyor()
     {
         using var alan = new IsAlani();
         var abonelik = Guid.NewGuid();
         await alan.ProgramKurAsync(abonelik);
 
-        // Elle tetiklenmiş bir yedek sürüyormuş gibi yuvayı AÇIK tut.
+        // AYNI aboneliğin elle tetiklenmiş yedeği sürüyormuş gibi yuvayı AÇIK tut.
         await using var elleTetiklenen = await alan.Isler().BeginAsync(
-            RunningJobKinds.Backup, "shop.example.com", subjectUserId: null, alan.Iptal);
+            RunningJobKinds.Backup, "shop.example.com", abonelik, alan.Iptal);
 
         // Tur DÜŞMEZ: bir aboneliğin ertelenmesi diğerlerini durdurmamalı.
         await alan.Programlar().RunDueAsync(alan.Iptal);
@@ -154,6 +163,71 @@ public sealed class RunningJobKalanIkiYolTests
         var program = await alan.Programlar().GetScheduleAsync(abonelik, alan.Iptal);
         Assert.Null(program.LastRunUtc);
         Assert.Equal(string.Empty, program.LastStatus);
+    }
+
+    /// <summary>
+    /// KAPATILAN ÇAPRAZ KİRACI REDDİ: BAŞKA bir kiracının (ve sunucu genelinin) süren yedeği,
+    /// zamanlanmış turu ERTELEMEZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ölçülen açık şuydu: yuva anahtarı yalnız iş TÜRÜYDÜ. Bir müşterinin iki saatlik yedeği
+    /// sürerken panelde başka HİÇBİR yedek alınamıyordu — ne öteki müşterilerin, ne de gece
+    /// programının. Yani ücretsiz bir hesap, tek bir istekle bütün sunucunun yedekleme yeteneğini
+    /// kapatabiliyordu; üstelik hiç kimse sebebi göremiyordu (kayıt kiracı süzgecinden geçtiği
+    /// için komşunun işi ekranda görünmez).
+    /// </para>
+    /// <para>
+    /// MUTASYON (ölçüldü): <c>YuvaAnahtari</c> kiracıyı yok sayıp yalnız türü dönerse bu test
+    /// KIRMIZI yanar — yedek hiç çalıştırılmaz ve damga yazılmaz.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Baska_Kiracinin_Yedegi_Zamanlanmis_Turu_Ertelemez()
+    {
+        using var alan = new IsAlani();
+        var abonelik = Guid.NewGuid();
+        await alan.ProgramKurAsync(abonelik);
+
+        // (1) Komşu kiracının uzun yedeği ve (2) sunucu geneli (panel) yedeği aynı anda açık.
+        await using var komsununYedegi = await alan.Isler().BeginAsync(
+            RunningJobKinds.Backup, "komsu.example.com", Guid.NewGuid(), alan.Iptal);
+        await using var panelYedegi = await alan.Isler().BeginAsync(
+            RunningJobKinds.Backup, "panel", subjectUserId: null, alan.Iptal);
+
+        await alan.Programlar().RunDueAsync(alan.Iptal);
+
+        Assert.True(
+            alan.YedekServisi.YedekCagrildi,
+            "Baska kiracinin (ya da sunucu genelinin) yedegi bu aboneligin turunu engelledi.");
+
+        var program = await alan.Programlar().GetScheduleAsync(abonelik, alan.Iptal);
+        Assert.NotNull(program.LastRunUtc);
+    }
+
+    /// <summary>
+    /// SUNUCU GENELİ işler makine geneli TEK yuvayı paylaşmaya devam eder.
+    /// </summary>
+    /// <remarks>
+    /// Kiracı başına bölmek burada GERÇEK bir yarış açardı: bileşen kurulumu paylaşılan çalışma
+    /// zamanı dizinine, sistem PATH'ine ve servis kaydına yazar. Bu yüzden sahipsiz işlerin yuvası
+    /// bilerek türden ibarettir. (Mutasyon: <c>YuvaAnahtari</c> sahipsiz işe de benzersiz bir
+    /// anahtar üretirse — ör. her çağrıda yeni Guid — bu test kırılır.)
+    /// </remarks>
+    [Fact]
+    public async Task Sunucu_Geneli_Isler_Tek_Yuvayi_Paylasmaya_Devam_Eder()
+    {
+        using var alan = new IsAlani();
+        var isler = alan.Isler();
+
+        await using var birinci = await isler.BeginAsync(
+            RunningJobKinds.Software, "postgresql", subjectUserId: null, alan.Iptal);
+
+        var hata = await Assert.ThrowsAsync<Core.Common.AppException>(() =>
+            isler.BeginAsync(RunningJobKinds.Software, "php", subjectUserId: null, alan.Iptal));
+
+        Assert.Equal(409, hata.HttpStatusCode);
+        Assert.Equal("runningjob.software_in_progress", hata.MessageKey);
     }
 
     // ===============================================================================================

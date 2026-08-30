@@ -7,13 +7,46 @@ namespace AdaPanel.Infrastructure.Support;
 
 internal static class ProcessRunner
 {
+    /// <summary>
+    /// Bir dış aracın TEK bir akışından (stdout ya da stderr) belleğe alınacak EN ÇOK karakter.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>KAPATILAN AÇIK (ölçüldü):</b> iki akış da <c>ReadToEndAsync</c> ile SINIRSIZ okunuyordu;
+    /// tek sınır zaman aşımıydı (10 dk). Bu, deponun en çok kullanılan ilkelidir ve KİRACIYA
+    /// ULAŞILABİLİR: <c>FileService.SetPermissionsAsync</c> <c>icacls … /T /C</c>'yi kiracının KENDİ
+    /// ağacında koşturur ve <c>/C</c> her dosya için bir satır yazar — çıktı kiracının dosya
+    /// sayısıyla doğru orantılı büyür. Panel LocalSystem olduğundan bu belleği hiçbir kota
+    /// sınırlamıyordu.
+    /// </para>
+    /// <para>
+    /// <b>DEĞER NEDEN 4 MiB:</b> panelin ayrıştırdığı meşru makine çıktıları (IIS site listesi
+    /// JSON'u, Stalwart NDJSON hesap listesi, DNS bölge dökümü, freshclam/clamscan özeti) kilobayt
+    /// ile düşük megabayt aralığındadır; 4 MiB bunların hepsine geniş bir pay bırakır. Buna karşılık
+    /// üst sınır olarak süreç başına ~8 MB bellek demektir (char = 2 bayt) ve eşzamanlı çağrılarda
+    /// da hesaplanabilir kalır. Sınıra takılan tek ölçülmüş yol <c>icacls /T</c> çıktısıdır
+    /// (~120 karakter/dosya → ~35.000 dosya); orada çıktı yalnız HATA METNİ olarak kullanılır,
+    /// ayrıştırılmaz — yani kesilmesi bir karar değiştirmez.
+    /// </para>
+    /// <para>
+    /// <b>KESİLME SESSİZ DEĞİLDİR:</b> kesilen akışın sonuna <see cref="TruncationNotice"/> eklenir.
+    /// Sessiz kesme, teşhis çıktısına yalan söyletmek olurdu: kullanıcı eksik bir listeyi TAM
+    /// sanardı.
+    /// </para>
+    /// </remarks>
+    internal const int DefaultOutputCharLimit = 4 * 1024 * 1024;
+
+    /// <summary>Kesilen akışın sonuna eklenen işaret; İngilizce çünkü aynı akışa yazılan diğer panel notları da öyle.</summary>
+    internal const string TruncationNotice = "[adapanel] Output truncated: the tool wrote more than the capture limit and the rest was discarded.";
+
     public static async Task<CommandResult> RunAsync(
         string fileName,
         string arguments,
         string? workingDirectory = null,
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string>? environmentVariables = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        int outputCharLimit = DefaultOutputCharLimit)
     {
         // ÇALIŞMA SAĞLIĞI: çağıran açıkça timeout vermezse de güvenli bir TAVAN uygula. Aksi halde
         // asılan bir dış araç (erişilemez git remote, yanıt vermeyen DB CLI, win-acme istemi vb.)
@@ -59,8 +92,12 @@ internal static class ProcessRunner
             timeoutCts.CancelAfter(limit);
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        // TAVANLI OKUMA. Borular yine SONUNA KADAR tüketilir (aşağıdaki okuyucu tavanı aştıktan
+        // sonra da okumaya devam eder, yalnız biriktirmez): tüketmeyi bırakmak boruyu doldurur ve
+        // aracı kendi yazma çağrısında SONSUZA KADAR bloke ederdi — yani bellek sınırı, asılma
+        // sınırına dönüşürdü.
+        var outputTask = TavanliOkuAsync(process.StandardOutput, outputCharLimit, cancellationToken);
+        var errorTask = TavanliOkuAsync(process.StandardError, outputCharLimit, cancellationToken);
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token);
@@ -98,6 +135,64 @@ internal static class ProcessRunner
             StandardOutput = await outputTask,
             StandardError = await errorTask
         };
+    }
+
+    /// <summary>
+    /// Akışı SONUNA KADAR tüketir ama en çok <paramref name="tavan"/> karakter BİRİKTİRİR; tavan
+    /// aşılırsa sonuca <see cref="TruncationNotice"/> eklenir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Tavan aşıldıktan sonra okumanın SÜRMESİ zorunludur: okumayı kesmek işletim sistemi borusunu
+    /// doldurur ve dış aracı kendi <c>write</c> çağrısında bloke eder. O anda araç ne biter ne de
+    /// hata verir — yalnız zaman aşımına kadar asılır. Yani "belleği koru" düzeltmesi, düzelttiğinden
+    /// daha kötü bir arıza (her büyük çıktıda 10 dakikalık asılma) üretirdi.
+    /// </para>
+    /// <para>
+    /// Tavan 0 ya da negatifse sınır UYGULANMAZ; bu yalnız çağıranın açıkça "sınırsız" dediği
+    /// durumdur ve depoda böyle bir çağıran YOKTUR (varsayılan <see cref="DefaultOutputCharLimit"/>).
+    /// </para>
+    /// </remarks>
+    private static async Task<string> TavanliOkuAsync(StreamReader reader, int tavan, CancellationToken cancellationToken)
+    {
+        if (tavan <= 0)
+        {
+            return await reader.ReadToEndAsync(cancellationToken);
+        }
+
+        var tampon = new char[8192];
+        var toplanan = new StringBuilder();
+        var kesildi = false;
+
+        while (true)
+        {
+            var okunan = await reader.ReadAsync(tampon.AsMemory(), cancellationToken);
+            if (okunan == 0)
+            {
+                break;
+            }
+
+            var kalan = tavan - toplanan.Length;
+            if (kalan <= 0)
+            {
+                kesildi = true;
+                continue;
+            }
+
+            var alinacak = Math.Min(okunan, kalan);
+            toplanan.Append(tampon, 0, alinacak);
+            if (alinacak < okunan)
+            {
+                kesildi = true;
+            }
+        }
+
+        if (kesildi)
+        {
+            toplanan.Append(Environment.NewLine).Append(TruncationNotice);
+        }
+
+        return toplanan.ToString();
     }
 
     /// <summary>

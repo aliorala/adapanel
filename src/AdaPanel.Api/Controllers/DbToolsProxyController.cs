@@ -127,9 +127,16 @@ public sealed class DbToolsProxyController(
         var mediaType = backendResponse.Content.Headers.ContentType?.MediaType;
         var isHtml = string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase);
         var contentLength = backendResponse.Content.Headers.ContentLength;
-        if (isHtml && !HttpMethods.IsHead(Request.Method) && contentLength is null or <= 16 * 1024 * 1024)
+        if (ShouldBufferForInjection(isHtml, HttpMethods.IsHead(Request.Method), contentLength))
         {
-            var bytes = await backendResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+            await using var upstream = await backendResponse.Content.ReadAsStreamAsync(cancellationToken);
+            var bytes = await BufferForInjectionAsync(upstream, Response.Body, InjectionBufferLimit, cancellationToken);
+            if (bytes is null)
+            {
+                // Tavan aşıldı: gövde ZATEN akıtıldı, enjeksiyon yapılmadı (ve yapılamazdı).
+                return;
+            }
+
             try
             {
                 var html = System.Text.Encoding.UTF8.GetString(bytes);
@@ -154,6 +161,80 @@ public sealed class DbToolsProxyController(
         }
 
         await backendResponse.Content.CopyToAsync(Response.Body, cancellationToken);
+    }
+
+    /// <summary>
+    /// Layout enjeksiyonu için belleğe alınacak EN ÇOK bayt (16 MiB).
+    /// </summary>
+    /// <remarks>
+    /// Değer değişmedi; değişen, sınırın GERÇEKTEN uygulanmasıdır (aşağıya bakınız).
+    /// phpMyAdmin'in en büyük tam sayfası (binlerce tablolu bir veritabanının yapı görünümü)
+    /// birkaç megabayttır; 16 MiB geniş bir paydır.
+    /// </remarks>
+    private const int InjectionBufferLimit = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Yanıt gövdesi enjeksiyon için belleğe ALINMALI mı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>UZUNLUK BİLİNMİYORSA DA ALINIR — ama artık AKARKEN SAYILARAK.</b> Eski koşul
+    /// <c>contentLength is null or &lt;= 16 MiB</c> idi ve bu, sınırı bilerek atlanabilir kılıyordu:
+    /// <c>Content-Length</c> GÖNDERMEYEN (chunked) bir yanıt <c>null</c> dalına düşüyor ve
+    /// <c>ReadAsByteArrayAsync</c> ile SINIRSIZ belleğe alınıyordu. Uç <c>ResponseHeadersRead</c>
+    /// ile okuduğu için gövde o ana kadar hiç tüketilmemiş olur; yani 16 MiB'lık sınır, onu aşan
+    /// tam da yanıtlarda hiç çalışmıyordu. Sınırı "uzunluğu bilinmeyeni hiç tamponlama" diye
+    /// kapatmak yanlış olurdu: phpMyAdmin sayfalarının ÇOĞU chunked gelir, yani layout düzeltmesi
+    /// tümüyle ölürdü. Doğru cevap uzunluğa GÜVENMEK değil, OKURKEN SAYMAKTIR.
+    /// </para>
+    /// </remarks>
+    internal static bool ShouldBufferForInjection(bool isHtml, bool isHead, long? contentLength)
+        => isHtml && !isHead && contentLength is null or <= InjectionBufferLimit;
+
+    /// <summary>
+    /// Gövdeyi en çok <paramref name="limit"/> bayt tamponlar. Sığarsa tamponu döner (çağıran
+    /// enjekte edip yazar). SIĞMAZSA <c>null</c> döner ve gövdeyi — okunmuş kısım dahil — olduğu
+    /// gibi <paramref name="output"/>'a AKITIR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aşan gövde HATA DEĞİLDİR: tarayıcı yanıtı eksiksiz almalıdır. Kaybedilen tek şey layout
+    /// <c>&lt;style&gt;</c>'ının enjekte edilmesidir ve o zaten kozmetik bir düzeltmedir — 16 MiB'lık
+    /// bir HTML sayfası panelin belleğinden daha pahalıdır.
+    /// </para>
+    /// <para>
+    /// <b>Sınır dışarıdan veriliyor</b> (depodaki <c>FileService</c> bütçe kalıbının aynısı): bir
+    /// tavanın gerçekten uygulandığı ancak DOLDURULARAK kanıtlanabilir; üretim değeriyle bu, testte
+    /// 16 MiB üretmek demekti.
+    /// </para>
+    /// </remarks>
+    internal static async Task<byte[]?> BufferForInjectionAsync(
+        Stream upstream,
+        Stream output,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var tampon = new MemoryStream();
+        var parca = new byte[81920];
+        while (tampon.Length <= limit)
+        {
+            var okunan = await upstream.ReadAsync(
+                parca.AsMemory(0, (int)Math.Min(parca.Length, limit + 1 - tampon.Length)),
+                cancellationToken);
+            if (okunan == 0)
+            {
+                return tampon.ToArray();
+            }
+
+            tampon.Write(parca, 0, okunan);
+        }
+
+        // Tavan aşıldı: tamponlamaktan VAZGEÇ ve akıt. Okunmuş kısım da yazılır, yoksa gövde
+        // başından kırpılmış olurdu.
+        tampon.Position = 0;
+        await tampon.CopyToAsync(output, cancellationToken);
+        await upstream.CopyToAsync(output, cancellationToken);
+        return null;
     }
 
     // phpMyAdmin tam sayfasının margin'ini JS'siz garanti eden inline stil. body margin-left = phpMyAdmin

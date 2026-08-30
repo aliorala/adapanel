@@ -216,6 +216,87 @@ public sealed class AntivirusRunningScanTests
         Assert.Equal(alan.HedefDizin, durum.LastScan!.Target);
     }
 
+    /// <summary>
+    /// AYNI ANDA gelen isteklerden YALNIZ BİRİ yuvayı alır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>KAPATILAN YARIŞ (ölçüldü):</b> "tarama var mı" kontrolü ile kaydın yazılması AYRI iki
+    /// çağrıydı ve aralarında <c>await</c> vardı. Eşzamanlı N istek hepsi "tarama yok" görüp hepsi
+    /// yazıyordu — N tane <c>clamscan.exe</c>, her biri 2 saat zaman aşımlı, hepsi aynı ağaçta.
+    /// Yani 409 koruması vardı ama YALNIZCA sıralı isteklerde çalışıyordu; asıl saldırgan zaten
+    /// istekleri aynı anda gönderir.
+    /// </para>
+    /// <para>
+    /// <b>NEDEN <c>ScanAsync</c> ÜZERİNDEN ÖLÇÜLMÜYOR:</b> yarışı görmek için taramanın SÜRÜYOR
+    /// olması gerekir; bu makinede ClamAV yok ve taklit araç anında dönüyor, yani iki istek hiç
+    /// çakışmazdı. Ayırtma adımı doğrudan ölçülüyor. Adımın <c>ScanAsync</c>'e BAĞLI olduğu ayrı
+    /// bir testte ölçülüyor (<see cref="Tarama_Surerken_Ikinci_Tarama_409_Ile_Reddedilir"/>).
+    /// </para>
+    /// <para>
+    /// <b>MUTASYON (ölçüldü):</b> ayırtma <c>UpdateAsync</c> yerine "önce oku, sonra
+    /// <c>WriteAsync</c>" hâline döndürülünce bu test KIRMIZI yandı (8 isteğin 8'i de yuvayı aldı).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Ayni_Anda_Gelen_Istekler_Yuvayi_Bir_Kez_Ayirtir()
+    {
+        using var alan = new AntivirusAlani();
+        var servis = alan.Servis();
+        const int istekSayisi = 8;
+
+        // Hepsi AYNI ANDA serbest bırakılır: sıralı çağrılar bu yarışı hiç göstermez.
+        using var kapi = new SemaphoreSlim(0, istekSayisi);
+        var istekler = Enumerable.Range(0, istekSayisi).Select(async sira =>
+        {
+            await kapi.WaitAsync(alan.Iptal);
+            try
+            {
+                await servis.YuvayiAyirtAsync($"hedef-{sira}", DateTime.UtcNow, alan.Iptal);
+                return true;
+            }
+            catch (AppException hata) when (hata.MessageKey == "antivirus.scan_in_progress")
+            {
+                return false;
+            }
+        }).ToArray();
+
+        kapi.Release(istekSayisi);
+        var sonuclar = await Task.WhenAll(istekler);
+
+        Assert.Equal(1, sonuclar.Count(basarili => basarili));
+
+        // Diskte de TEK kayıt olmalı ve o kayıt gerçekten yazılmış olmalı.
+        var kayit = await alan.KayitOkuAsync();
+        Assert.NotNull(kayit);
+        Assert.StartsWith("hedef-", kayit!.Target, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Tarama biterken yuvayı BAŞKASININ kaydı doldurduysa temizleme ona DOKUNMAZ.
+    /// </summary>
+    /// <remarks>
+    /// Koşulsuz bir temizleme, biten taramanın hemen ardından başlamış GERÇEK bir taramanın kaydını
+    /// silerdi: panel "tarama yok" der, ekran boşalır ve üçüncü bir clamscan başlatılabilirdi.
+    /// (Mutasyon: temizleme başlangıç anını karşılaştırmayı bırakırsa test kırılır.)
+    /// </remarks>
+    [Fact]
+    public async Task Temizleme_Baskasinin_Kaydina_Dokunmaz()
+    {
+        using var alan = new AntivirusAlani();
+        var servis = alan.Servis();
+
+        var ikinciBaslangic = DateTime.UtcNow;
+        await servis.YuvayiAyirtAsync("yeni.example.com", ikinciBaslangic, alan.Iptal);
+
+        // Daha ESKİ (çoktan bitmiş) bir taramanın temizleme çağrısı: yuvayı boşaltmamalı.
+        await servis.ClearRunningScanAsync(ikinciBaslangic.AddMinutes(-30), alan.Iptal);
+
+        var kayit = await alan.KayitOkuAsync();
+        Assert.NotNull(kayit);
+        Assert.Equal("yeni.example.com", kayit!.Target);
+    }
+
     // ===============================================================================================
     // Yardimcilar
     // ===============================================================================================
