@@ -497,8 +497,13 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             throw new AppException("mail.not_installed", 409, 409, "32-bit PowerShell (SysWOW64) bulunamadı.");
         }
 
-        var tempScript = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"adapanel-me-{Guid.NewGuid():N}.ps1");
-        await System.IO.File.WriteAllTextAsync(tempScript, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+        // SIR SIZINTISI: bu script POSTA HESABI PAROLASINI düz metin taşır ($lg.Password = '...').
+        // C:\Windows\TEMP'in varsayılan DACL'i yeni dosyalara IIS_IUSRS:ReadData miras ettiriyor
+        // (ölçüldü) ve aynı ACE dizini listelemeye de yetiyor → kiracı GUID'i tahmin etmeden
+        // dosyayı bulup okuyabiliyordu. Silme (finally) bir temizliktir, erişim denetimi değildir:
+        // süreç ortada ölürse dosya kalır. Dosya AÇILIRKEN kilitlenir.
+        var tempScript = SecureTempFile.BuildPath("adapanel-me", ".ps1");
+        await SecureTempFile.WriteAsync(tempScript, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
         try
         {
             var result = await ProcessRunner.RunAsync(

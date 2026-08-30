@@ -1,6 +1,24 @@
 // Backend bazı araç URL'lerini sunucu-yerel host'la (127.0.0.1 / localhost / ::1) döndürür.
 // Uzak tarayıcı bunu açamaz (kendi makinesine gider). Paneli gördüğümüz host ile değiştiririz.
 // TÜM "tarayıcıda aç" akışları (phpMyAdmin, Adminer, webmail, nginx vb.) bunu kullanmalı.
+//
+// ŞEMA ELEMESİ — bu fonksiyonun çıktısı `window.open`, `location.href` ve `:href`e GİDER.
+//
+// ÖLÇÜLDÜ: eleme yokken `new URL("javascript:alert(1)", origin)` HATA ATMAZ; `hostname` boş
+// dizedir, aşağıdaki localhost listesinde yer almaz ve dizge OLDUĞU GİBİ geri dönerdi. Daha
+// kötüsü `URL` normalleştirme yaptığı için "  JaVaScRiPt:alert(1)" girdisi baştaki boşluğu
+// atılmış, küçük harfe çevrilmiş "javascript:alert(1)" olarak ÇIKARDI — yani fonksiyon
+// yükü elemek şöyle dursun, çalışır hâle GETİRİYORDU.
+//
+// Bu neden önemli: çağıranların ikisi (MailView webmail, AppToolkit wp-login) sekmeyi
+// `window.open("", "_blank")` ile açar. `about:blank` sekmesi AÇANIN kökenini miras alır;
+// oraya yazılan `javascript:` PANELİN kökeninde çalışır, yani yöneticinin oturumunda.
+//
+// Bugün çağıranların hepsi arka ucun ürettiği adresi veriyor, yani ölçülebilen bir sömürü
+// zinciri YOK. Ama üstteki yorum "TÜM açma akışları bunu kullanmalı" diyor: bu fonksiyon
+// kiracı verisi taşıyan ilk adreste sessizce XSS'e döner. Kapı, açılmadan kapatılır.
+const IZINLI_SEMALAR = new Set(["http:", "https:"]);
+
 export function toReachableUrl(raw: string): string {
   if (!raw) {
     return raw;
@@ -8,12 +26,20 @@ export function toReachableUrl(raw: string): string {
 
   try {
     const url = new URL(raw, window.location.origin);
+    // Yalnız gerçekten "tarayıcıda açılabilir" iki şema geçer. Beklenen tüm girdiler
+    // (`http(s)://host`, IIS bağlaması, phpMyAdmin/webmail adresi) zaten bu ikisinden biri.
+    if (!IZINLI_SEMALAR.has(url.protocol)) {
+      return "";
+    }
     if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
       url.hostname = window.location.hostname;
     }
     return url.toString();
   } catch {
-    return raw;
+    // Ayrıştırılamayan adres artık HAM DÖNMÜYOR. Aynı dosyadaki `maskSecretsInUri`nin
+    // disiplini: tanımadığımız bir dizgeyi "açılabilir" ilan etmek, elemediğimiz şeye
+    // temiz demek olurdu. Çağıranlar boş dizgeyi zaten "adres yok" diye ele alır.
+    return "";
   }
 }
 

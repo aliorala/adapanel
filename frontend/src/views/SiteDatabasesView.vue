@@ -92,6 +92,7 @@ import { useConfirm } from "../components/ConfirmDialog.vue";
 import { extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { toReachableUrl } from "../utils/url";
 
 type LinkedDb = SiteDatabaseRef;
 
@@ -175,8 +176,18 @@ async function openPma(db: LinkedDb) {
   opening.value = true;
   try {
     const result = await openPhpMyAdmin(db.engine, db.name);
+    // `result.url` HAM atanıyordu. İki ayrı sorun vardı ve ikisi de aynı çağrıyla kapanıyor:
+    // (1) arka uç bu adresi `127.0.0.1` ile döndürebilir — UZAKTAN yöneten yönetici KENDİ
+    //     makinesini açardı (DatabasesView aynı işi `openReachable` ile yapıyor, burası
+    //     o düzeltmeyi almamıştı);
+    // (2) `about:blank` sekmesi AÇANIN kökenini miras alır, oraya yazılan `javascript:`
+    //     panelin kökeninde çalışırdı. `toReachableUrl` artık http(s) dışını elemektedir.
+    const url = toReachableUrl(result.url);
+    if (!url) {
+      throw new Error("dbtools.unsafe_url");
+    }
     if (tab) {
-      tab.location.href = result.url;
+      tab.location.href = url;
     }
   } catch (error) {
     if (tab) {

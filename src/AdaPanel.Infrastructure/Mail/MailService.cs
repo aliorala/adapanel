@@ -2996,8 +2996,12 @@ public sealed class MailService(
     // bozulabildiğinden create/update gibi tam-payload işlemlerinde bu yol kullanılır.
     private static async Task<CommandResult> RunCliJsonAsync(string cli, string command, string json, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"ada-stalwart-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(tempFile, json, cancellationToken);
+        // SIR SIZINTISI: bu payload posta kutusu parolasını, SMTP relay kimliğini ve TLS ÖZEL
+        // ANAHTARINI (PEM) taşıyabilir. C:\Windows\TEMP'in varsayılan DACL'i yeni dosyalara
+        // IIS_IUSRS:ReadData miras ettiriyor (ölçüldü) → her kiracının havuz kimliği okuyabilirdi.
+        // Dosya AÇILIRKEN kilitlenir; silme yalnız temizliktir.
+        var tempFile = SecureTempFile.BuildPath("ada-stalwart", ".json");
+        await SecureTempFile.WriteAsync(tempFile, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
         try
         {
             return await RunCliAsync(cli, $"{command} --file {Arg(tempFile)}", env, cancellationToken);

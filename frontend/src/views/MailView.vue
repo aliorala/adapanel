@@ -1532,6 +1532,13 @@ async function openWebmail() {
     try {
       const result = await openWebmailApi();
       const url = toReachableUrl(result.url);
+      // `toReachableUrl` http(s) DIŞINDAKİ her şeye boş dizge döner. Boşu atamak sessizce
+      // YANLIŞ olurdu: `location.href = ""` gezinmez, bulunduğu sayfayı YENİDEN YÜKLER —
+      // yani `window.location` dalında yönetici panelin kendisini tazeler ve "açılmadı"
+      // sanır. Boş adres bir adres değildir; aşağıdaki catch'e düşsün, sekmede neden yazılsın.
+      if (!url) {
+        throw new Error("webmail.unsafe_url");
+      }
       if (tab) {
         tab.location.href = url;
       } else {

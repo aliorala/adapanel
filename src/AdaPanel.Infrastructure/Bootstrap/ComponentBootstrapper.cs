@@ -12,6 +12,7 @@ using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Nginx;
 using AdaPanel.Infrastructure.Support;
@@ -2852,7 +2853,7 @@ public sealed class ComponentBootstrapper(
                 "software.process_timeout",
                 500,
                 500,
-                $"Process timed out after {timeout.Value.TotalMinutes:0} min and was terminated.\r\nFile={fileName}\r\nArguments={arguments}");
+                BuildTimeoutDetails(fileName, arguments, timeout.Value));
         }
         var standardOutput = await standardOutputTask;
         var errorOutput = await errorOutputTask;
@@ -2901,16 +2902,42 @@ public sealed class ComponentBootstrapper(
         return $"Url={url}\r\n{BuildDiagnosticDetails(exception)}";
     }
 
-    private static string BuildProcessDetails(string fileName, string arguments, int exitCode, string standardOutput, string errorOutput)
+    /// <summary>
+    /// Zaman aşımı arıza ayrıntısı. <see cref="BuildProcessDetails"/> ile AYNI sebeple maskelenir
+    /// ve AYNI sebeple ayrı bir metottur: satır içinde kurulan dize hiçbir testin göremediği bir
+    /// noktaydı — mutasyon denemesi tam da bu yüzden bu yolu "kapsanmamış" olarak yakaladı.
+    /// </summary>
+    internal static string BuildTimeoutDetails(string fileName, string arguments, TimeSpan timeout)
+    {
+        return $"Process timed out after {timeout.TotalMinutes:0} min and was terminated."
+            + $"\r\nFile={fileName}"
+            + $"\r\nArguments={AuditSecretRedactor.Redact(arguments)}";
+    }
+
+    /// <summary>
+    /// Kurulum sürecinin arıza ayrıntısı. <b>Maskeleme burada ZORUNLU:</b> bu metin
+    /// <see cref="AppException.Details"/> olarak fırlatılır ve
+    /// <c>ApiExceptionHandlingMiddleware</c> onu HTTP YANIT GÖVDESİNE olduğu gibi yazar (ortam
+    /// ayrımı yok). Argümanlar arasında düz metin parola GEÇİYOR — ölçüldü:
+    /// <c>--password="&lt;MariaDB root&gt;"</c> (bkz. mariadb kurulum/upgrade çağrıları). Yani panel
+    /// yöneticisi başarısız bir bileşen kurulumunu tetikleyerek veritabanı root parolasını yanıtta
+    /// geri okuyabiliyordu; aynı metin ilerleme kaydına, DB'ye ve denetim kaydına da gidiyor.
+    /// <para>
+    /// Maskeleme <see cref="AuditSecretRedactor"/> ile yapılır — kural TEK KAYNAKTA kalsın diye
+    /// yeni bir desen yazılmaz. StandardOutput/StandardError de geçirilir: dış kurulumcular
+    /// kendi komut satırlarını hata metnine basabiliyor.
+    /// </para>
+    /// </summary>
+    internal static string BuildProcessDetails(string fileName, string arguments, int exitCode, string standardOutput, string errorOutput)
     {
         var details = $"""
             File={fileName}
-            Arguments={arguments}
+            Arguments={AuditSecretRedactor.Redact(arguments)}
             ExitCode={exitCode}
             StandardOutput:
-            {standardOutput}
+            {AuditSecretRedactor.Redact(standardOutput)}
             StandardError:
-            {errorOutput}
+            {AuditSecretRedactor.Redact(errorOutput)}
             """;
 
         return TruncateDetails(details);

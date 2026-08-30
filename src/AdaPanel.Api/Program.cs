@@ -349,7 +349,14 @@ var app = builder.Build();
 
 app.UseSerilogRequestLogging();
 app.UseMiddleware<ApiExceptionHandlingMiddleware>();
-app.UseRateLimiter();
+
+// GUVENLIK BASLIKLARI HIZ SINIRLAYICIDAN ONCE.
+//
+// OLCULDU: UseRateLimiter daha ONCE kayitliydi ve bir istegi reddettiginde zinciri KISA DEVRE
+// ediyordu -- yani 429 yanitlari CSP/nosniff/X-Frame-Options/Referrer-Policy OLMADAN gidiyordu.
+// Basliklarin en dista olmasi gereken sebep tam budur: iceride kisa devre eden her yol onlari
+// atlar. (Hata yanitlari icin ikinci delik ApiExceptionHandlingMiddleware'de kapatildi;
+// Response.Clear() basliklari da siliyordu.)
 app.Use(async (context, next) =>
 {
     // DbTools reverse-proxy: gövdeli (POST/PUT/PATCH/DELETE) isteklerde istek gövdesini TEKRAR-OKUNABİLİR yap.
@@ -361,46 +368,14 @@ app.Use(async (context, next) =>
         context.Request.EnableBuffering();
     }
 
-    // DbTools reverse-proxy (phpMyAdmin/Adminer) YOLUNA panelin KATI güvenlik başlıklarını UYGULAMA:
-    // katı CSP (script-src 'self' = inline script YOK) + nosniff, phpMyAdmin'in inline script/CSS/asset'lerini
-    // bloklar → menü-genişliği/layout JS'i çalışmaz, ana içerik sol menünün ALTINA kayar (kullanıcı bildirimi).
-    // Bu araçlar zaten panelin kimlik-doğrulamalı HTTPS proxy'si arkasında; kendi (phpMyAdmin) başlıkları geçerli olur.
-    if (!context.Request.Path.StartsWithSegments("/api/v1/dbtools"))
-    {
-        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
-        context.Response.Headers["X-Frame-Options"] = "DENY";
-        context.Response.Headers["Referrer-Policy"] = "same-origin";
-        context.Response.Headers["Content-Security-Policy"] =
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
-
-        /*
-         * HSTS (Strict-Transport-Security) BILEREK GONDERILMIYOR — ve bu, eksik degil KARARDIR.
-         *
-         * Panel varsayilan olarak KENDI IMZALADIGI bir sertifikayla gelir
-         * (scripts/initialize-panel-certificate.ps1 → New-SelfSignedCertificate, "AdaPanel Self
-         * Signed"). Tarayici boyle bir sertifikada uyari sayfasi gosterir ve kullanici "yine de
-         * devam et" diyerek gecer.
-         *
-         * HSTS gonderilirse tarayici o alan adini max-age boyunca HTTPS'e KILITLER ve
-         * sertifika hatasinda **gecise izin vermez** — "devam et" dugmesi kaybolur. Yani panel,
-         * yoneticisini kendi paneline sokmaz hale gelir. Daha kotusu GERI ALINAMAZ: baslik
-         * kaldirilsa bile tarayicidaki kayit max-age dolana kadar durur ve kullanici bunu ancak
-         * tarayici ayarlarindan elle temizleyerek asabilir.
-         *
-         * Yani buraya "guvenligi artiralim" diye HSTS eklemek, butun self-signed kurulumlari
-         * KALICI olarak disarida birakir. Gercek sertifika kullanan kurulumlarda HSTS anlamlidir,
-         * ama o karar KURULUMA ozeldir; panel bunu KENDI adina veremez.
-         *
-         * NOT: kiracinin KENDI sitesi icin HSTS ayri bir ozelliktir ve orada aciktir
-         * (SiteHostingSettings.HstsEnabled) — orada da geri alinmasi zor oldugu icin ayrica
-         * uyarilir. Buradaki karar YALNIZ PANELIN KENDI arayuzu icindir.
-         *
-         * Bu blogu degistirmeden once: PanelSecurityHeaderTests.
-         */
-    }
+    // Basliklarin KENDISI ve DbTools muafiyeti artik PanelSecurityHeaders'ta (tek kaynak):
+    // ayni basliklarin hata yanitlarinda da uygulanmasi gerekiyordu ve satir ici yazim bunu
+    // imkansiz kiliyordu.
+    PanelSecurityHeaders.Apply(context);
 
     await next();
 });
+app.UseRateLimiter();
 app.UseMiddleware<SecureEntryPathMiddleware>();
 
 if (app.Environment.IsDevelopment())

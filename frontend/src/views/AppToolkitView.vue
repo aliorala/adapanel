@@ -339,6 +339,7 @@ import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
+import { toReachableUrl } from "../utils/url";
 
 type ToolkitTab = "composer" | "artisan" | "node" | "wpcli" | "wordpress" | "queue";
 
@@ -440,8 +441,16 @@ async function wpLogin() {
   wpNotice.value = "";
   try {
     const link = await createWordPressLoginLink(siteName.value);
+    // Sihirli bağlantı HAM atanıyordu. `about:blank` sekmesi AÇANIN kökenini miras aldığı
+    // için oraya yazılan `javascript:` panelin kökeninde — yöneticinin oturumunda — çalışır.
+    // `toReachableUrl` http(s) dışını eler; ayrıca adres `127.0.0.1` ile gelirse uzaktan
+    // yöneten yöneticinin kendi makinesine gitmesini de engeller.
+    const url = toReachableUrl(link.url);
+    if (!url) {
+      throw new Error("wpkit.unsafe_url");
+    }
     if (tab) {
-      tab.location.href = link.url;
+      tab.location.href = url;
     }
     showWpNotice(t("panel.wpkit.loginOpened"), false);
   } catch (error) {

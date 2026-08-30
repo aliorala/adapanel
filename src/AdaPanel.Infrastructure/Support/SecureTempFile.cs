@@ -67,9 +67,20 @@ public static class SecureTempFile
         Encoding encoding,
         CancellationToken cancellationToken = default)
     {
+        // ÖNSÖZ (BOM) ELLE YAZILIR — bu satır bir REGRESYONUN düzeltmesidir, süs değil.
+        // File.WriteAllTextAsync, verilen Encoding'in önsözünü kendi yazar; Encoding.GetBytes ise
+        // ASLA yazmaz. Doğrudan GetBytes'a geçince UTF8Encoding(emitIdentifier: true) ile açılan
+        // çağıranların BOM'u sessizce düştü ve PowerShell 5.1 dosyayı sistem kod sayfasıyla
+        // okumaya başladı: Türkçe karakterler bozuldu (ProcessRunnerEncodingTests yakaladı).
+        var preamble = encoding.GetPreamble();
         var bytes = encoding.GetBytes(content);
 
         await using var stream = Create(path);
+        if (preamble.Length > 0)
+        {
+            await stream.WriteAsync(preamble, cancellationToken);
+        }
+
         await stream.WriteAsync(bytes, cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }

@@ -589,8 +589,23 @@ public sealed class SiteProvisioningService(
         + "echo '<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:\"Segoe UI\",system-ui,Arial,sans-serif;background:radial-gradient(1200px 600px at 50% -10%,#14323a,#0a141a 60%);color:#eaf5ee;padding:24px}.card{width:min(560px,100%);padding:44px;border-radius:22px;border:1px solid #21443c;background:linear-gradient(180deg,#11242c,#0d1b22);box-shadow:0 30px 90px #0009}.badge{display:inline-block;font-size:.74rem;letter-spacing:.16em;text-transform:uppercase;color:#0c1a16;background:linear-gradient(90deg,#5fe39a,#37b87a);padding:6px 12px;border-radius:999px;font-weight:800}h1{margin:18px 0 8px}p{color:#9fbcb0}code{color:#dff6e8}</style></head><body><main class=\"card\">';\n"
         + "echo '<span class=\"badge\">PHP</span><h1>PHP çalışıyor</h1>';\n"
         + "echo '<p>Sürüm: <code>'.htmlspecialchars($v).'</code></p>';\n"
-        + "echo '<p>phpinfo() için <a style=\"color:#5fe39a\" href=\"?full=1\">tıklayın</a>.</p>';\n"
-        + "if (isset($_GET['full'])) { phpinfo(); }\n"
+        /*
+         * phpinfo() KALDIRILDI — sadeleştirme değil, BİLGİ İFŞASI düzeltmesi.
+         *
+         * Eski hâl her yeni PHP sitesine `php-info.php` yazıyordu ve o dosya `?full=1` ile
+         * KİMLİK DOĞRULAMASI OLMADAN `phpinfo()` basıyordu. Site DNS'e bağlandığı anda internete
+         * açıktır; yol TAHMİN EDİLEBİLİR ("php-info.php") ve panelin açtığı HER sitede aynıdır.
+         *
+         * phpinfo() çıktısı: mutlak dosya yolları, yüklü eklentiler ve sürümleri, php.ini
+         * ayarlarının tamamı, ORTAM DEĞİŞKENLERİ (içinde veritabanı parolası ya da API anahtarı
+         * olabilir) ve sunucu yazılımı sürümleri. Bir saldırganın bir sunucuya bakarken ilk
+         * aradığı şeydir. Panelin bunu kendiliğinden yayınlaması, müşteriye hiç sorulmadan
+         * verilmiş bir karardır.
+         *
+         * "PHP çalışıyor" sayfası KALDI: kurulumun doğruluğunu göstermek gerçek bir ihtiyaç ve
+         * sürüm bilgisi tek başına bu sınıfta değil. Ayrıntılı bilgiye ihtiyacı olan yönetici
+         * panelin PHP ekranından bakar — orası kimlik doğrulamalıdır.
+         */
         + "echo '</main></body></html>';\n";
 
     private static void WriteNodeStarter(string root, string startupFile)

@@ -378,10 +378,14 @@ internal static class ProcessRunner
     /// </summary>
     private static async Task<CommandResult> RunPowerShellFromFileAsync(string command, CancellationToken cancellationToken)
     {
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"ada-ps-{Guid.NewGuid():N}.ps1");
+        // SIR SIZINTISI: bu dosya C:\Windows\TEMP'e düşer ve oranın varsayılan DACL'i her yeni
+        // dosyaya IIS_IUSRS:ReadData MİRAS ETTİRİR (ölçüldü). Buraya yazılan script, çağıranın
+        // içine gömdüğü parolayı olduğu gibi taşır; yani her kiracının havuz kimliği okuyabilirdi.
+        // Dosya bu yüzden AÇILIRKEN kilitlenir — bkz. SecureTempFile.
+        var scriptPath = SecureTempFile.BuildPath("ada-ps", ".ps1");
         try
         {
-            await File.WriteAllTextAsync(scriptPath, command, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), cancellationToken);
+            await SecureTempFile.WriteAsync(scriptPath, command, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true), cancellationToken);
 
             return await RunAsync(
                 "powershell.exe",

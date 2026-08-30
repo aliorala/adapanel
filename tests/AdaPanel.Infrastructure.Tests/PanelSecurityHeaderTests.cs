@@ -45,7 +45,12 @@ public sealed class PanelSecurityHeaderTests
     [Fact]
     public void Panelin_kendi_yanitina_HSTS_eklenmemis()
     {
-        var kaynak = Oku("src", "AdaPanel.Api", "Program.cs");
+        // HSTS iki yerden de eklenebilir: basliklarin TEK KAYNAGI (PanelSecurityHeaders) ya da
+        // ara katman zincirinin kuruldugu Program.cs. Yasak IKISINI birden kapsar; biri
+        // taranmasa, ekleme oradan sizardi.
+        var kaynak = Oku("src", "AdaPanel.Api", "Security", "PanelSecurityHeaders.cs")
+                     + Environment.NewLine
+                     + Oku("src", "AdaPanel.Api", "Program.cs");
 
         // YASAK, DIZGEYE DEGIL KODUN SEKLINE KONUR -- ve bunu testin ilk kosusu yazdirdi.
         //
@@ -79,7 +84,11 @@ public sealed class PanelSecurityHeaderTests
     [Fact]
     public void Dort_temel_baslik_yerinde()
     {
-        var kaynak = Oku("src", "AdaPanel.Api", "Program.cs");
+        // BASLIKLAR ARTIK TEK KAYNAKTA. Bu testin ilk hali Program.cs'e bakiyordu ve basliklar
+        // PanelSecurityHeaders'a tasininca HAKLI olarak kirmizi yandi: tasima gercekten olculdu.
+        // Tek kaynak, hata yanitlarinin ayni basliklari alabilmesi icin gerekliydi --
+        // Response.Clear() onlari siliyordu ve satir ici yazim tekrar uygulamayi imkansiz kiliyordu.
+        var kaynak = Oku("src", "AdaPanel.Api", "Security", "PanelSecurityHeaders.cs");
 
         Assert.Contains("X-Content-Type-Options", kaynak, StringComparison.Ordinal);
         Assert.Contains("X-Frame-Options", kaynak, StringComparison.Ordinal);

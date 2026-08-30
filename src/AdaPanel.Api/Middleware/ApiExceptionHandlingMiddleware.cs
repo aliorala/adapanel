@@ -6,6 +6,8 @@ using AdaPanel.Infrastructure.Diagnostics;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Routing;
 
+using AdaPanel.Api.Security;
+
 namespace AdaPanel.Api.Middleware;
 
 public sealed class ApiExceptionHandlingMiddleware(
@@ -115,6 +117,19 @@ public sealed class ApiExceptionHandlingMiddleware(
     private static Task WriteResponseAsync(HttpContext context, int statusCode, string message, int? code = null, string details = "")
     {
         context.Response.Clear();
+
+        // BASLIKLAR CLEAR'DAN SONRA YENIDEN UYGULANIR.
+        //
+        // OLCULDU: `Response.Clear()` yalniz govdeyi degil BASLIKLARI da siler. Bu ara katman
+        // guvenlik basligi ara katmanindan DAHA DISTA oldugu icin, buraya dusen her yanit
+        // (yanlis parola, kota asimi, CSRF reddi, her 500) CSP / nosniff / X-Frame-Options /
+        // Referrer-Policy OLMADAN gidiyordu. Yani panelin en siki korumasi, tam da hata
+        // durumlarinda -- saldirganin en cok urettigi yanitlarda -- kapaliydi.
+        //
+        // Clear() KALDIRILMADI: yarim yazilmis bir govdeyi atmak dogru davranistir. Duzeltme,
+        // silinen seyi geri koymaktir. Kaynak tek: PanelSecurityHeaders.
+        PanelSecurityHeaders.Apply(context);
+
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
 
