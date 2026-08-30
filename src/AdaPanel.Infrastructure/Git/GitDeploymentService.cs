@@ -222,12 +222,67 @@ public sealed class GitDeploymentService(
         };
     }
 
-    private static void ValidateRepositoryUrl(string url)
+    /// <summary>
+    /// Depo adresi doğrulaması.
+    /// <para>
+    /// ESKİ HÂLİ SYSTEM OLARAK KOD ÇALIŞTIRMAYA AÇIKTI. Tek kural "http/https ya da içinde
+    /// <c>@</c> VE <c>:</c> geçen bir şey" idi. <c>ext::sh -c "..."</c> her iki koşulu da
+    /// sağlayabiliyordu ve git'in <b>uzantı taşıyıcısı</b> (transport helper) tam olarak
+    /// "bu komutu çalıştır" demektir — panel LocalSystem olduğu için doğrudan SYSTEM kabuğu.
+    /// Ayrıca <c>-</c> ile başlayan bir adres git için ADRES değil BAYRAKtır
+    /// (<c>--upload-pack=...</c>, <c>--config=...</c>); tırnaklamak bunu KAPATMAZ, çünkü tırnağı
+    /// git görmeden önce argüman ayrıştırıcısı soyar. Aynı dosyada dal adı için bu iki kontrol
+    /// zaten yapılıyordu (bkz. <see cref="NormalizeBranch"/>); URL payını almamıştı.
+    /// </para>
+    /// </summary>
+    internal static void ValidateRepositoryUrl(string url)
     {
         var trimmed = url.Trim();
-        var isHttp = Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
-        var isScpLike = trimmed.Contains('@') && trimmed.Contains(':'); // git@host:owner/repo.git
-        if (!isHttp && !isScpLike)
+        if (trimmed.Length is 0 or > 2048)
+        {
+            throw new AppException("git.invalid_repository", 400, 400);
+        }
+
+        // Bayrağa benzeyen adres.
+        if (trimmed[0] == '-')
+        {
+            throw new AppException("git.invalid_repository", 400, 400);
+        }
+
+        // İç boşluk/denetim karakteri: hem ikinci bir argüman doğurur hem de meşru bir git
+        // adresinde hiç bulunmaz.
+        foreach (var karakter in trimmed)
+        {
+            if (char.IsWhiteSpace(karakter) || char.IsControl(karakter))
+            {
+                throw new AppException("git.invalid_repository", 400, 400);
+            }
+        }
+
+        // TAŞIYICI UZANTISI (`ext::`, `transport::`). `::` yalnız ilk `/` ÖNCESİNDE aranıyor:
+        // yol/sorgu kısmındaki iki nokta üst üste zararsızdır ve IPv6 gövdeli adresleri kırmayalım.
+        //
+        // DÜRÜSTLÜK NOTU — BU KONTROL BUGÜN GEREKSİZ. Mutasyonla ölçüldü: kapatıldığında hiçbir
+        // test kırmızıya dönmüyor, çünkü aşağıdaki biçim beyaz listesi `ext::…` biçimlerinin
+        // hepsini zaten reddediyor (scp kalıbında kullanıcı kısmı `:` içeremez). Bilerek
+        // bırakılıyor: ileride scp kalıbı genişletilirse taşıyıcı reddi ayakta kalsın. Asıl ve
+        // ÖLÇÜLEBİLİR ikinci katman bu değil, RunGitAsync'teki GIT_ALLOW_PROTOCOL'dür.
+        var ilkEgikCizgi = trimmed.IndexOf('/');
+        var onEk = ilkEgikCizgi < 0 ? trimmed : trimmed[..ilkEgikCizgi];
+        if (onEk.Contains("::", StringComparison.Ordinal))
+        {
+            throw new AppException("git.invalid_repository", 400, 400);
+        }
+
+        var mutlak = Uri.TryCreate(trimmed, UriKind.Absolute, out var uri);
+        var isHttp = mutlak && uri!.Scheme is "http" or "https";
+        var isSsh = mutlak && uri!.Scheme is "ssh";
+
+        // scp benzeri: git@host:owner/repo.git. Eski "içinde @ ve : var" kontrolünün aksine
+        // gerçekten BİÇİM ölçülüyor.
+        var isScpLike = Regex.IsMatch(trimmed, @"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?::[0-9]+)?:[A-Za-z0-9._/~-]+$");
+
+        if (!isHttp && !isSsh && !isScpLike)
         {
             throw new AppException("git.invalid_repository", 400, 400);
         }
@@ -282,7 +337,14 @@ public sealed class GitDeploymentService(
             {
                 ["GIT_TERMINAL_PROMPT"] = "0",
                 ["GCM_INTERACTIVE"] = "never",
-                ["GIT_ASKPASS"] = "echo"
+                ["GIT_ASKPASS"] = "echo",
+
+                // İKİNCİ VE BAĞIMSIZ KATMAN: git'in KENDİ taşıyıcı beyaz listesi. ValidateRepositoryUrl
+                // `ext::` biçimini reddediyor, ama o doğrulama yalnız ConfigureAsync'te çalışıyor —
+                // diskteki config/git/<site>.json bir kez kötü bir değerle yazıldıysa DeployAsync onu
+                // yeniden ölçmüyor. Bu değişken kararı git'in transport katmanına taşır: listede
+                // olmayan hiçbir taşıyıcı (ext, file, ftp…) çalıştırılmaz.
+                ["GIT_ALLOW_PROTOCOL"] = "http:https:ssh"
             });
 
     private static string QuoteArg(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";

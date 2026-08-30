@@ -356,9 +356,14 @@ public sealed class WebmailService(
     {
         // Paylaşımlı webmail sitesine webmail.<domain>:80 host-header binding'i ekle (challenge + servis).
         // New-WebBinding zaten varsa hata verir, SilentlyContinue ile yutulur → idempotent. Mevcut :8899 erişimi etkilenmez.
+        //
+        // KAÇIŞ UNUTULMUŞTU. `webmailHost` = "webmail." + kullanıcının verdiği alan adı; tek
+        // dönüşümü ToLowerInvariant ve PowerShell harf duyarsız olduğu için o dönüşüm hiçbir
+        // yükü bozmuyordu. Tek tırnaklı dizede genişleme yok ama tek tırnağın KENDİSİ dizeyi
+        // kapatır. Aynı dosyada doğrusu zaten yazılıydı (KeepAppPoolWarmAsync); burada atlanmıştı.
         var script = $$"""
             Import-Module WebAdministration -ErrorAction SilentlyContinue
-            New-WebBinding -Name '{{SiteName}}' -Protocol http -Port 80 -HostHeader '{{webmailHost}}' -ErrorAction SilentlyContinue
+            New-WebBinding -Name '{{SiteName}}' -Protocol http -Port 80 -HostHeader '{{webmailHost.Replace("'", "''")}}' -ErrorAction SilentlyContinue
             """;
         await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
     }

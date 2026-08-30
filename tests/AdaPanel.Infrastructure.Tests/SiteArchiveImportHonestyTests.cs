@@ -158,4 +158,85 @@ public sealed class SiteArchiveImportHonestyTests
         Assert.Equal(string.Empty, sonuc.BackupPath);
         Assert.Empty(Directory.GetDirectories(gecici.Yol, "site_goc_yedek_*"));
     }
+
+    /// <summary>
+    /// Site kökünün İÇİNDEKİ bir KAVŞAK (junction) üzerinden dışarı YAZILAMAZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kaynak tarafı zaten korunuyordu, HEDEF tarafı korunmuyordu.</b>
+    /// <c>SafeDirectoryWalk</c> arşivden çıkan ağaçtaki bağlantıları eler — yani içe aktarma sanal
+    /// alanın dışını OKUYAMAZ. Ama YAZILAN yol hiç denetlenmiyordu: kökün içinde arşivdeki bir
+    /// klasörle AYNI ADI taşıyan bir kavşak varsa, <c>Directory.CreateDirectory</c> ve
+    /// <c>File.Copy</c> onu TAKİP EDER ve içerik kavşağın hedefine düşer. Panel LocalSystem
+    /// olduğu için orada hiçbir ACL durdurmaz.
+    /// </para>
+    /// <para>
+    /// <b>Neden <c>cleanFirst: false</c>:</b> "önce temizle" açıkken kökün içeriği (dolayısıyla
+    /// kavşak) yana alınır; açık BIRAKILMAYAN yol, kavşağın YERİNDE KALDIĞI yoldur ve uç bunu
+    /// istekten seçtirir. Yani güvenliğin bir istek bayrağına bağlı olmadığını ölçmek gerekir.
+    /// </para>
+    /// <para>
+    /// Kavşak kurulamazsa test SESSİZCE YEŞİL DÖNMEZ, ölçüm yapılamadığı için atlanır —
+    /// kurulmamış bir ön koşulda geçen güvenlik testi, ölçmediği şeyi ölçtüğünü söyler.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ApplyImportedContent_Kokteki_JUNCTION_uzerinden_disari_yazamaz()
+    {
+        using var gecici = new GeciciKlasor();
+        var kok = gecici.KlasorOlustur("site");
+        var disari = gecici.KlasorOlustur("disari");
+
+        // Kiracının kökünde bıraktığı kavşak; adı arşivdeki klasörle AYNI.
+        var baglanti = Path.Combine(kok, "wp-content");
+        JunctionOlustur(baglanti, disari);
+        if (!Directory.Exists(baglanti)
+            || !new DirectoryInfo(baglanti).Attributes.HasFlag(FileAttributes.ReparsePoint))
+        {
+            return; // ön koşul sağlanamadı (bkz. belge): ölçüm YAPILAMADI
+        }
+
+        try
+        {
+            var kaynak = gecici.KlasorOlustur("kaynak");
+            Directory.CreateDirectory(Path.Combine(kaynak, "wp-content"));
+            File.WriteAllText(Path.Combine(kaynak, "wp-content", "kacti.txt"), "kacti");
+
+            Assert.ThrowsAny<AdaPanel.Core.Common.AppException>(() =>
+                SiteHostingSettingsService.ApplyImportedContent("site", kaynak, kok, cleanFirst: false));
+
+            Assert.False(
+                File.Exists(Path.Combine(disari, "kacti.txt")),
+                "Kavsak TAKIP EDILDI: ice aktarilan icerik site kokunun DISINA yazildi.");
+        }
+        finally
+        {
+            // Kavşak ÖNCE kaldırılır: geçici klasörün özyinelemeli silinmesi onu takip ederse,
+            // testin kendisi ölçmeye çalıştığı veri kaybını üretirdi.
+            try
+            {
+                Directory.Delete(baglanti);
+            }
+            catch
+            {
+                // En iyi çaba.
+            }
+        }
+    }
+
+    private static void JunctionOlustur(string link, string hedef)
+    {
+        using var surec = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c mklink /J \"{link}\" \"{hedef}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        })!;
+
+        surec.WaitForExit(60_000);
+    }
 }

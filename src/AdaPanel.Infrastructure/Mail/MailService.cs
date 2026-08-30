@@ -2504,6 +2504,16 @@ public sealed class MailService(
             return false;
         }
 
+        // İkisi de wacs.exe'nin KOMUT SATIRINA giriyor. Kabuk yok (UseShellExecute=false), ama
+        // BOŞLUK argüman sınırıdır: değere boşluk koyabilen taraf win-acme'ye kendi bayrağını
+        // (`--validation script --dnsscript ...`) ekler ve o betik LocalSystem olarak koşar.
+        // Kural tek kaynakta: AdaPanel.Infrastructure.Ssl.AcmeArgumentRules.
+        if (!Ssl.AcmeArgumentRules.IsCommandSafeHost(hostName)
+            || !Ssl.AcmeArgumentRules.IsCommandSafeEmail(contactEmail))
+        {
+            return false;
+        }
+
         var wacs = await ResolveComponentExecutableAsync("win-acme", "wacs.exe", cancellationToken);
         if (wacs is null)
         {
@@ -2542,9 +2552,9 @@ public sealed class MailService(
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
         var args =
-            $"--target iis --siteid {site.Id} --host {hostName} --installation none " +
+            $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --installation none " +
             $"--store pemfiles --pemfilespath \"{pemDirectory}\" " +
-            $"--emailaddress {contactEmail} --accepttos --baseuri {baseUri}";
+            $"--emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
         var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken);
 
         return result.Success && Directory.EnumerateFiles(pemDirectory, "*-key.pem").Any();

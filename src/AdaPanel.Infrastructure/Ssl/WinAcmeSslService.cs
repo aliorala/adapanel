@@ -804,6 +804,13 @@ public sealed class WinAcmeSslService(
             throw new AppException("ssl.contact_email_required", 400, 400);
         }
 
+        // E-posta wacs.exe'nin KOMUT SATIRINA giriyor ve (host'un aksine) hiçbir yerde
+        // doğrulanmıyordu — bkz. AcmeArgumentRules.
+        if (!AcmeArgumentRules.IsCommandSafeEmail(request.ContactEmail))
+        {
+            throw new AppException("ssl.contact_email_invalid", 400, 400);
+        }
+
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
         if (string.IsNullOrWhiteSpace(wacs))
         {
@@ -821,10 +828,10 @@ public sealed class WinAcmeSslService(
             : "https://acme-v02.api.letsencrypt.org/";
 
         var args =
-            $"--source manual --host *.{domain},{domain} " +
+            $"--source manual --host \"*.{domain},{domain}\" " +
             $"--validation script --dnsscript \"{scriptPath}\" --dnsscriptparallelism 0 " +
             $"--installation iis --installationsiteid {site.Id} " +
-            $"--emailaddress {request.ContactEmail.Trim()} --accepttos --baseuri {baseUri}";
+            $"--emailaddress \"{request.ContactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
 
         // DNS-01 turları (kayıt yazma + yetkili sunucu doğrulaması) HTTP-01'den uzun sürebilir.
         var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken, timeout: TimeSpan.FromMinutes(10));
@@ -874,12 +881,28 @@ public sealed class WinAcmeSslService(
             return new AcmeIssueResult(null, "ssl.fallback.email_missing");
         }
 
+        // SINIK DOĞRULAMASI. İki değer de wacs.exe'nin KOMUT SATIRINA giriyor; içine boşluk
+        // koyabilen taraf win-acme'ye kendi argümanını (`--validation script --dnsscript ...`)
+        // ekler ve o betik SYSTEM olarak koşar. Bkz. AcmeArgumentRules.
+        //
+        // Burada FIRLATILMIYOR, "alınamadı" deniyor: bu yol best-effort çağıranlardan da
+        // (TrySecureHostAsync, otomatik yenileme) geliyor ve orada bir istisna, sertifikayla
+        // ilgisi olmayan bir işlemi düşürürdü. Kendinden imzalıya düşer, sebep günlüğe yazılır.
+        if (!AcmeArgumentRules.IsCommandSafeHost(hostName) || !AcmeArgumentRules.IsCommandSafeEmail(contactEmail))
+        {
+            logger.LogWarning("win-acme argümanı reddedildi ({Host}): host/e-posta komut satırına konulamaz.", hostName);
+            return new AcmeIssueResult(null, "ssl.fallback.invalid_argument");
+        }
+
         var baseUri = useStaging
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
 
         var before = FindBestCertificate(hostName);
-        var args = $"--target iis --siteid {site.Id} --host {hostName} --installation iis --emailaddress {contactEmail} --accepttos --baseuri {baseUri}";
+        // Değerler ayrıca TIRNAKLANIYOR. Doğrulamadan sonra tırnak gereksiz görünür; kasten
+        // konuyor: doğrulama bir gün gevşerse tek satırlık bir değişiklik sessizce argüman
+        // enjeksiyonunu geri getirmesin. İki katman birbirinden bağımsız.
+        var args = $"--target iis --siteid {site.Id} --host \"{hostName.Trim()}\" --installation iis --emailaddress \"{contactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
 
         // SÜRE SINIRI 10 DAKİKA. Eskiden 120 saniyeydi ve bu, MEŞRU bir yayınlamayı ortasında
         // kesiyordu: Let's Encrypt doğrulaması DNS yayılmasını, yeniden denemeleri ve hız
@@ -1001,6 +1024,15 @@ public sealed class WinAcmeSslService(
         if (string.IsNullOrWhiteSpace(hostName))
         {
             throw new AppException("ssl.host_name_required", 400, 400);
+        }
+
+        // BİRİNCİ KATMAN (erken ve anlaşılır hata). İkincisi TryIssueWithWinAcmeAsync /
+        // IssueWildcardAsync içinde, tam SINIKTA duruyor; bu ikisi BAĞIMSIZ olsun diye buradaki
+        // kontrol "yeter" sayılmadı — bu yola girmeyen çağıranlar da var (TrySecureHostAsync,
+        // EnsurePreviewCertificateAsync).
+        if (!AcmeArgumentRules.IsCommandSafeHost(hostName))
+        {
+            throw new AppException("ssl.host_name_invalid", 400, 400);
         }
 
         return hostName;

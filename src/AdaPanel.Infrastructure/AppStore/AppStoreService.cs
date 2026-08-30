@@ -951,17 +951,53 @@ public sealed class AppStoreService(
         var databasePath = Path.Combine(tempDirectory, "roundcube.db").Replace('\\', '/');
         var schemaPath = Path.Combine(applicationRoot, "SQL", "sqlite.initial.sql").Replace('\\', '/');
 
-        var script = $"$pdo = new PDO('sqlite:{databasePath}'); $pdo->exec(file_get_contents('{schemaPath}'));";
-        var result = await ProcessRunner.RunAsync(
-            phpExecutable,
-            $"-r \"{script}\"",
-            applicationRoot,
-            cancellationToken);
-        if (!result.Success)
+        // KİRACI YOLU PHP KAYNAĞINA GİRİYORDU.
+        //
+        // Eskiden bu iki yol, php.exe'ye `-r` ile verilen PHP KAYNAK METNİNİN içindeki tek tırnaklı
+        // dizelere KAÇIŞSIZ gömülüyordu. Yol kiracıdan türüyor: `applicationRoot` sitenin fiziksel yoludur
+        // ve `NormalizeSiteName`/`PhysicalPath` doğrulaması karakter kümesini SINIRLAMIYOR
+        // (WebAdministrationSiteService.NormalizeSiteName yalnız Trim + aygıt adı denetimi yapar).
+        // NTFS'te tek tırnak meşru bir yol karakteridir; yani fiziksel yolunda `'` olan bir site,
+        // PHP tek tırnaklı dizesini kapatıp kendi PHP ifadesini ekleyebiliyordu. Bu php.exe
+        // LocalSystem olarak koşuyor (LimitedIdentityRunner DEĞİL).
+        //
+        // Kök neden komut satırında kaçış yapmamak değil, YOLU KOD OLARAK GEÇİRMEKTİ. Betik artık
+        // panelin kendi geçici klasörüne yazılıp dosyadan çalıştırılıyor ve yollar PHP'nin kendi
+        // tek tırnak kuralına göre kaçırılıyor (aynı kalıp: WordPressToolkitService.TryReplaceDefine).
+        var betikYolu = Path.Combine(Path.GetTempPath(), $"ada-rc-init-{Guid.NewGuid():N}.php");
+        try
         {
-            throw new AppException("store.install_failed", result.ExitCode, 500, BuildCommandDetails("roundcube sqlite init", result));
+            await File.WriteAllTextAsync(
+                betikYolu,
+                "<?php\n" +
+                $"$pdo = new PDO('sqlite:' . {PhpTekTirnak(databasePath)});\n" +
+                $"$pdo->exec(file_get_contents({PhpTekTirnak(schemaPath)}));\n",
+                new UTF8Encoding(false),
+                cancellationToken);
+
+            var result = await ProcessRunner.RunAsync(
+                phpExecutable,
+                $"\"{betikYolu}\"",
+                applicationRoot,
+                cancellationToken);
+            if (!result.Success)
+            {
+                throw new AppException("store.install_failed", result.ExitCode, 500, BuildCommandDetails("roundcube sqlite init", result));
+            }
+        }
+        finally
+        {
+            try { File.Delete(betikYolu); } catch { /* en iyi çaba */ }
         }
     }
+
+    /// <summary>
+    /// Değeri PHP TEK TIRNAKLI dize literaline çevirir. PHP'nin tek tırnaklı dizesinde yalnız iki
+    /// kaçış vardır: <c>\\</c> ve <c>\'</c>. Değişken genişlemesi YOKTUR — çift tırnaklı dize
+    /// kullanılsaydı yoldaki <c>$</c> de ayrı bir kapı olurdu.
+    /// </summary>
+    internal static string PhpTekTirnak(string value)
+        => "'" + (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
     private static async Task ApplyRoundcubeAclAsync(string applicationRoot, string applicationPoolName, CancellationToken cancellationToken)
     {

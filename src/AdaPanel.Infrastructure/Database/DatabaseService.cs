@@ -649,6 +649,16 @@ internal sealed partial class DatabaseService(
             throw new AppException("database.transfer_source_required", 400, 400);
         }
 
+        if (!IsCommandSafeTransferHost(sourceHost))
+        {
+            throw new AppException("database.invalid_host", 400, 400);
+        }
+
+        if (!IsCommandSafeTransferUser(sourceUser))
+        {
+            throw new AppException("database.invalid_user_name", 400, 400);
+        }
+
         var sourcePort = request.SourcePort > 0 ? request.SourcePort : 3306;
         var sourceDatabase = NormalizeDatabaseName(request.SourceDatabase);
         var targetDatabase = string.IsNullOrWhiteSpace(request.TargetDatabase)
@@ -1283,4 +1293,39 @@ internal sealed partial class DatabaseService(
 
     [GeneratedRegex("^[A-Za-z0-9.%:_-]{1,255}$", RegexOptions.Compiled)]
     private static partial Regex HostPattern();
+
+    /// <summary>
+    /// Sunucu taraflı taşımada KAYNAK HOST — <c>mysqldump.exe</c>'nin KOMUT SATIRINA girer.
+    /// <para>
+    /// Aynı metotta <c>SourceDatabase</c> <c>NormalizeDatabaseName</c>'den geçiyordu; host ve
+    /// kullanıcı ATLANMIŞTI, ikisi de yalnız <c>Trim</c> görüyordu. Kabuk yok
+    /// (<c>UseShellExecute = false</c>) ama BOŞLUK argüman sınırıdır:
+    /// <c>1.2.3.4 --defaults-extra-file=C:\Users\Public\kotu.cnf</c> yazan taraf mysqldump'a kendi
+    /// ayar dosyasını okutur. Kullanıcı adı ayrıca <c>--user="…"</c> ile ÇİFT TIRNAK içindeydi ve
+    /// <c>"</c> hiç kaçırılmıyordu.
+    /// </para>
+    /// <para>
+    /// Küme meşru kullanımı kapsar: ad, IPv4, köşeli parantezli IPv6. Baştaki tire AYRICA
+    /// reddedilir — <c>-</c> karakter sınıfının içindedir, yani kalıp tek başına yetmez; tırnaklamak
+    /// da yetmez, çünkü tırnağı hedef süreç görmeden argüman ayrıştırıcısı soyar.
+    /// </para>
+    /// </summary>
+    internal static bool IsCommandSafeTransferHost(string? value)
+    {
+        var deger = (value ?? string.Empty).Trim();
+        return deger.Length > 0 && deger[0] != '-' && TransferHostPattern().IsMatch(deger);
+    }
+
+    /// <summary>Aynı gerekçe, taşımanın kaynak kullanıcı adı için.</summary>
+    internal static bool IsCommandSafeTransferUser(string? value)
+    {
+        var deger = (value ?? string.Empty).Trim();
+        return deger.Length > 0 && deger[0] != '-' && TransferUserPattern().IsMatch(deger);
+    }
+
+    [GeneratedRegex(@"^[A-Za-z0-9._:\[\]-]{1,255}$", RegexOptions.Compiled)]
+    private static partial Regex TransferHostPattern();
+
+    [GeneratedRegex("^[A-Za-z0-9._-]{1,128}$", RegexOptions.Compiled)]
+    private static partial Regex TransferUserPattern();
 }

@@ -5,6 +5,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Files;
+using AdaPanel.Infrastructure.SiteBuilder;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
@@ -3034,6 +3035,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         Directory.CreateDirectory(targetRoot);
         var restored = 0;
 
+        // Bağlantı denetiminin önbelleği — gerekçesi FileService.ExtractAsync'te yazılı (aynı
+        // önek bir arşivde binlerce girdide tekrarlanır; arşiv girdisi bağlantı OLUŞTURAMAZ, yani
+        // "temiz" damgalanmış bir önek iş sürerken bağlantıya dönüşemez).
+        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         using var content = await OpenContentAsync(record, request.EncryptionPassword, cancellationToken);
         using var archive = ZipFile.OpenRead(content.FilePath);
         foreach (var entry in archive.Entries)
@@ -3058,6 +3064,41 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             if (!PathContainment.IsInsideRoot(targetRoot, destination))
             {
                 throw new AppException("backup.invalid_entry_path", 400, 400, name);
+            }
+
+            // ============================================================================
+            // DİZGE DENETİMİ TEK BAŞINA YETMEZ — kaçış DİSKTE olur (ÖLÇÜLDÜ:
+            // BackupGranularRestoreTests, gerçek kavşakla).
+            //
+            // Bu uç kapsamlı kullanıcıya AÇIKTIR (BackupController.RestoreItemsAsync; yalnız hedef
+            // yol seçimi yöneticiye özeldir, kiracının hedefi kendi site köküdür). Kiracı kendi
+            // belge kökünde bir KAVŞAK (junction) bırakırsa — ki bunu kurmak Windows'ta ayrıcalık
+            // gerektirmez ve kendi sitesinde PHP/ASP çalıştıran her kiracı yapabilir — o kavşağın
+            // adıyla başlayan her arşiv girdisi önek denetimini SORUNSUZ geçer ve yazma kavşağı
+            // TAKİP EDER. Panel LocalSystem olduğu için hedefte hiçbir ACL durdurmaz.
+            //
+            // Girdinin ADI arşivden gelir, yani denetlenen değeri saldırgan belirler; kötü niyetli
+            // bir arşiv üretmek bile GEREKMEZ: sıradan bir site yedeğindeki "wp-content/..." öneki,
+            // yedek alındıktan SONRA "wp-content" kavşağa çevrildiğinde kaçış yoluna dönüşür.
+            //
+            // Kural TEK KAYNAKTAN gelir (SiteBuilderPathGuard): aynı yürüyüşü burada yeniden
+            // yazmak, birini sıkılaştırıp diğerini unutmanın yoluydu.
+            // ============================================================================
+            try
+            {
+                SiteBuilderPathGuard.EnsureNoReparsePointOnPath(targetRoot, destination, denetlenenOnekler);
+            }
+            catch (AppException)
+            {
+                // ANAHTAR ÇEVRİLİR, YUTULMAZ. Ortak kapı kendi bağlamının anahtarını
+                // (<c>sitebuilder.target_is_link</c>) atar; onu olduğu gibi geri yükleme ekranına
+                // taşımak, kullanıcıya hiç kullanmadığı bir modülün ("site oluşturucu") hatasını
+                // göstermek olurdu. Reddin SEBEBİ Detail'de duruyor, yani teşhis kaybolmuyor.
+                throw new AppException(
+                    "backup.invalid_entry_path",
+                    400,
+                    400,
+                    $"{name} (hedef yolda baglanti/junction var: {destination})");
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);

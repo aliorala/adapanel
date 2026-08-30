@@ -249,8 +249,8 @@ public sealed class BruteForceProtectionService(
     {
         var script = $"""
             $ErrorActionPreference = 'Stop'
-            Remove-NetFirewallRule -DisplayName "{EscapePowerShellString(ban.FirewallRuleName)}" -ErrorAction SilentlyContinue | Out-Null
-            New-NetFirewallRule -DisplayName "{EscapePowerShellString(ban.FirewallRuleName)}" -Direction Inbound -Action Block -RemoteAddress {ban.IpAddress} -Profile Any | Out-Null
+            Remove-NetFirewallRule -DisplayName '{TekTirnak(ban.FirewallRuleName)}' -ErrorAction SilentlyContinue | Out-Null
+            New-NetFirewallRule -DisplayName '{TekTirnak(ban.FirewallRuleName)}' -Direction Inbound -Action Block -RemoteAddress '{TekTirnak(ban.IpAddress)}' -Profile Any | Out-Null
             """;
 
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
@@ -265,7 +265,7 @@ public sealed class BruteForceProtectionService(
         }
 
         var script = $"""
-            Remove-NetFirewallRule -DisplayName "{EscapePowerShellString(ruleName)}" -ErrorAction SilentlyContinue | Out-Null
+            Remove-NetFirewallRule -DisplayName '{TekTirnak(ruleName)}' -ErrorAction SilentlyContinue | Out-Null
             """;
 
         await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
@@ -339,7 +339,19 @@ public sealed class BruteForceProtectionService(
         };
     }
 
-    private static string EscapePowerShellString(string value) => value.Replace("\"", "`\"");
+    /// <summary>
+    /// PowerShell TEK TIRNAKLI dizesi için kaçış — bu dosyadaki TEK kaçış.
+    /// <para>
+    /// Eskiden <c>EscapePowerShellString</c> vardı, yalnız <c>"</c> kaçırırdı ve çıktısı ÇİFT
+    /// TIRNAKLI dizelere giriyordu. Çift tırnaklı dizede <c>$(...)</c> ÇALIŞIR. Bugünkü değerler
+    /// (kural adı = sabit önek + <see cref="IPAddress"/> ile ayrıştırılmış IP) bu kapıdan
+    /// GEÇEMİYORDU — yani açık ölçülebilir DEĞİLDİ. Yine de düzeltildi: kural adı ile IP durum
+    /// dosyasından (<c>config/bruteforce.json</c>) geri OKUNUYOR ve o dosyaya yazabilen bir taraf
+    /// aksi hâlde SYSTEM olarak kod çalıştırırdı. Yapısal olarak güvenli olmak, "bugün ulaşılamıyor"
+    /// olmaktan farklıdır.
+    /// </para>
+    /// </summary>
+    private static string TekTirnak(string value) => (value ?? string.Empty).Replace("'", "''");
 
     private sealed class BruteForceState
     {

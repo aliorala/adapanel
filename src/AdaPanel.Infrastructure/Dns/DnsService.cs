@@ -1797,7 +1797,13 @@ public sealed partial class DnsService(
             var etiket = EscapePowerShellLiteral($"{record.Type} {record.Host}");
             lines.Add("try {");
             lines.Add(command);
-            lines.Add($"}} catch {{ $basarisiz += \"{etiket}: $($_.Exception.Message)\" }}");
+            // ETİKET TEK TIRNAKLI DİZEDE. Eskiden ÇİFT tırnaklıydı ve tek kaçış EscapePowerShellLiteral
+            // (yalnız `'` ikiler) idi — yani `"` ve `$(...)` hiç kaçırılmıyordu. Çift tırnaklı
+            // PowerShell dizesinde `$(...)` ÇALIŞIR. Normal kayıt yolunda Host, HostPattern ile
+            // daraltıldığı için ulaşılamıyordu; ama ŞABLON yolu (BuildDefaultRecordsAsync →
+            // ResetDefaultsAsync) NormalizeRecord'a HİÇ uğramıyor ve Host'u yalnız Trim ediyor.
+            // Yani buradaki tek savunma, başka bir yoldaki regex'ti.
+            lines.Add($"}} catch {{ $basarisiz += '{etiket}' + ': ' + $_.Exception.Message }}");
         }
 
         // BASARISIZLIK LISTESI STANDART CIKTIYA yazilir, Write-Error ILE DEGIL.
@@ -2167,8 +2173,30 @@ public sealed partial class DnsService(
         };
     }
 
-    private static void ValidateRecordValue(string type, string value, int? priority)
+    internal static void ValidateRecordValue(string type, string value, int? priority)
     {
+        // DENETİM KARAKTERİ = SATIR ENJEKSİYONU. Her kayıt tipi için, tipe bakmadan önce.
+        //
+        // TXT'nin TEK doğrulaması uzunluktu (512). 252 karakterden uzun bir TXT değeri
+        // WriteLongTxtRecordsAsync yoluna düşüyor; orada değer önce bir PowerShell TEK TIRNAKLI
+        // dizesine (ki çok satırlı OLABİLİR, satır sonu literal geçer), sonra Set-Content ile bir
+        // .cmd DOSYASINA yazılıyor ve o .cmd çalıştırılıyor — yani değerdeki bir satır sonu, cmd
+        // dosyasına İKİNCİ BİR KOMUT SATIRI olarak düşüyordu. Panel LocalSystem koşar; uç
+        // Reseller'a açıktır. Aynı değer bölge dosyası yoluna da gidiyor ve orada rastgele DNS
+        // kaydı enjekte ediyordu.
+        //
+        // Kaçış katmanı burada YANLIŞ KATMANDI: tek tırnak kaçışı dizeden çıkmayı engelliyor ama
+        // dizenin İÇERİĞİNİN sonradan bir dosyaya satır satır dökülmesini engellemiyor. Bu yüzden
+        // düzeltme kaçışta değil, DEĞERİN KENDİSİNDE: hiçbir DNS kayıt değerinde denetim
+        // karakteri meşru değildir.
+        foreach (var karakter in value)
+        {
+            if (char.IsControl(karakter))
+            {
+                throw new AppException("dns.invalid_record_value", 400, 400);
+            }
+        }
+
         switch (type)
         {
             case "A" when !IsAddressFamily(value, System.Net.Sockets.AddressFamily.InterNetwork):

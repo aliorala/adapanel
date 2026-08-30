@@ -355,16 +355,22 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
             throw new AppException("firewall.rule_not_managed", 409, 409);
         }
 
-        var script = $"""
-            Remove-NetFirewallRule -DisplayName "{EscapePowerShellString(temiz)}" -ErrorAction Stop | Out-Null
-            """;
-
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellAsync(BuildRemoveScript(temiz), cancellationToken);
         if (!result.Success)
         {
             throw new AppException("firewall.write_failed", 500, 500, result.StandardError);
         }
     }
+
+    /// <summary>
+    /// Kaldırma betiği. Ada BURADA beyaz liste UYGULANMAZ, bilerek: bu doğrulama panelde yokken
+    /// kurulmuş kurallar (Türkçe harfli ya da eski kodun kabul ettiği garip adlar) sunucuda
+    /// duruyor olabilir ve yönetici onları panelden temizleyebilmelidir. Dar kuralı buraya da
+    /// uygulamak, bir güvenlik düzeltmesini "var olan çöpü silememe" hâline getirirdi.
+    /// Koruma kaçıştan gelir: ad TEK TIRNAKLI dizeye giriyor, orada genişleme yoktur.
+    /// </summary>
+    internal static string BuildRemoveScript(string ruleName) =>
+        $"Remove-NetFirewallRule -DisplayName '{TekTirnak(ruleName)}' -ErrorAction Stop | Out-Null";
 
     private static async Task<FirewallRuleDto> UpsertRuleAsync(
         UpdateFirewallRuleRequest request,
@@ -377,12 +383,9 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
             ? $"AdaPanel {action} {request.Protocol.ToUpperInvariant()} {request.Port}"
             : request.RuleName.Trim();
 
-        var script = $"""
-            Remove-NetFirewallRule -DisplayName "{EscapePowerShellString(ruleName)}" -ErrorAction SilentlyContinue | Out-Null
-            New-NetFirewallRule -DisplayName "{EscapePowerShellString(ruleName)}" -Direction Inbound -Action {action} -Protocol {request.Protocol.ToUpperInvariant()} -LocalPort {request.Port} -Profile Any | Out-Null
-            """;
-
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var result = await ProcessRunner.RunPowerShellAsync(
+            BuildUpsertScript(ruleName, action, request.Protocol.ToUpperInvariant(), request.Port),
+            cancellationToken);
         if (!result.Success)
         {
             throw new AppException("firewall.write_failed", 500, 500);
@@ -399,6 +402,23 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
         };
     }
 
+    /// <summary>
+    /// Kurma/güncelleme betiği. Ad TEK TIRNAKLI dizeye girer.
+    /// <para>
+    /// ÖNCEDEN ÇİFT TIRNAKLIYDI ve tek kaçış <c>"</c> karakterini <c>`"</c> yapmaktı. PowerShell'de
+    /// çift tırnaklı dize <c>$(...)</c> alt-ifadesini ÇALIŞTIRIR; yani <c>RuleName</c> alanına
+    /// yazılan <c>AdaPanel $(net localgroup administrators hax /add)</c> panelin kendi yetkisiyle
+    /// (LocalSystem) koşuyordu. Aynı sınıf bu depoda cron görev adında ve
+    /// <see cref="Support.LimitedIdentityRunner"/>'da zaten bir kez ölçülüp kapatılmıştı; güvenlik
+    /// duvarı yolu o düzeltmeden PAYINI ALMAMIŞTI.
+    /// </para>
+    /// </summary>
+    internal static string BuildUpsertScript(string ruleName, string action, string protocol, int port) =>
+        $"""
+        Remove-NetFirewallRule -DisplayName '{TekTirnak(ruleName)}' -ErrorAction SilentlyContinue | Out-Null
+        New-NetFirewallRule -DisplayName '{TekTirnak(ruleName)}' -Direction Inbound -Action {action} -Protocol {protocol} -LocalPort {port} -Profile Any | Out-Null
+        """;
+
     private static void ValidateRequest(UpdateFirewallRuleRequest request)
     {
         if (request.Port < 1 || request.Port > 65535)
@@ -411,6 +431,39 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
         {
             throw new AppException("firewall.invalid_protocol", 400, 400);
         }
+
+        // İKİNCİ KATMAN. Kaçış tek başına yeterli olmalı ama tek savunma bırakılmıyor: ileride biri
+        // yine çift tırnaklı bir betik yazarsa açık kendiliğinden geri gelmesin. Küme kasten dar —
+        // panelin kendi ürettiği ad (`AdaPanel Allow TCP 8890`) ve makul yönetici adları geçer;
+        // kabuk için anlamlı hiçbir karakter geçmez. BOŞ ad serbest: o durumda panel adı kendisi
+        // üretir (bkz. UpsertRuleAsync).
+        if (!string.IsNullOrWhiteSpace(request.RuleName) && !KuralAdiGuvenli(request.RuleName.Trim()))
+        {
+            throw new AppException("firewall.invalid_rule_name", 400, 400);
+        }
+    }
+
+    /// <summary>
+    /// Yeni kural adı beyaz listesi. Unicode harf/rakam SERBEST (Türkçe adlı kurallar meşrudur);
+    /// yalnız harf/rakam dışında boşluk, nokta, alt çizgi ve tireye izin verilir. <c>$ ` ' " ( ) ;
+    /// | &amp;</c>, satır sonu ve denetim karakterleri kümede YOKTUR.
+    /// </summary>
+    internal static bool KuralAdiGuvenli(string value)
+    {
+        if (value.Length is 0 or > 120)
+        {
+            return false;
+        }
+
+        foreach (var karakter in value)
+        {
+            if (!char.IsLetterOrDigit(karakter) && karakter is not (' ' or '.' or '_' or '-'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static T[] DeserializeArray<T>(string json)
@@ -429,5 +482,11 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
         };
     }
 
-    private static string EscapePowerShellString(string value) => value.Replace("\"", "`\"");
+    /// <summary>
+    /// Bu dosyadaki TEK kaçış, ve öyle kalmalı. PowerShell TEK TIRNAKLI dizesinde genişleme ve
+    /// alt-ifade YOKTUR; tek tırnağı ikilemek dizeden çıkmayı da kapatır. Eskiden burada bir de
+    /// <c>EscapePowerShellString</c> vardı (yalnız <c>"</c> kaçırırdı) ve çıktısı ÇİFT TIRNAKLI
+    /// dizelere giriyordu — bkz. <see cref="BuildUpsertScript"/>.
+    /// </summary>
+    private static string TekTirnak(string value) => (value ?? string.Empty).Replace("'", "''");
 }

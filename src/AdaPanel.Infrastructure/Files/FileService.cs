@@ -966,6 +966,15 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         EnsureSiteTarget(destination);
         Directory.CreateDirectory(destination.PhysicalPath);
 
+        // BAĞLANTI DENETİMİNİN ÖNBELLEĞİ. Denetim girdi BAŞINA yapılır ama aynı klasör öneki bir
+        // arşivde binlerce kez geçer (bir WordPress paketinde <c>wp-content/plugins/...</c> tek
+        // başına binlerce girdinin önekidir). Önbellek olmadan her girdi için önekin HER parçasına
+        // üç dosya sistemi sorgusu (Exists + Exists + GetAttributes) düşerdi; bu, meşru bir paketin
+        // açılmasını ölçülebilir biçimde yavaşlatırdı. Önbellek DOĞRULUĞU düşürmez: bir arşiv
+        // girdisi bağlantı OLUŞTURAMAZ (zip girdisi ya dosya ya klasördür), yani bu döngü sürerken
+        // "temiz" damgalanmış bir önek bağlantıya DÖNÜŞEMEZ.
+        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         using var zip = ZipFile.OpenRead(archive.PhysicalPath);
         foreach (var entry in zip.Entries)
         {
@@ -977,6 +986,33 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
             {
                 throw new AppException("files.path_outside_root", 400, 400);
             }
+
+            // ============================================================================
+            // DİZGE DENETİMİ TEK BAŞINA YETMEZ — ÖLÇÜLDÜ (FileExtractTests, gerçek kavşakla).
+            //
+            // Yukarıdaki önek karşılaştırması yalnız yolun YAZILIŞINA bakar. Kiracının kendi belge
+            // kökünde <c>bag</c> adında bir KAVŞAK (junction) varsa, <c>bag/kacti.txt</c> adlı bir
+            // arşiv girdisinin çözülmüş yolu <c>&lt;kök&gt;\bag\kacti.txt</c> olur — yani önek
+            // denetimini SORUNSUZ geçer. Kaçış dizgede değil DİSKTE olur: yazma kavşağı takip eder
+            // ve dosya kavşağın hedefine düşer. Ölçüm bunu birebir gösterdi: dosya sanal alanın
+            // dışına yazıldı.
+            //
+            // Bu, bu depodaki tekrarlayan hata sınıfının tam örneğidir: denetim VAR, ama
+            // denetlenen değeri (arşiv girdisinin adı) SALDIRGAN belirliyor. Panelin geri kalanında
+            // yol her zaman ResolveTargetAsync'ten geçer ve orada aynı bağlantı denetimi zaten
+            // yapılır (ResolveSandboxTarget → EnsureNoReparsePoints); arşiv girdisi o kapıya HİÇ
+            // uğramayan tek yoldur, dolayısıyla denetimi burada tekrarlamak zorunludur.
+            //
+            // Neden AĞIR: panel LocalSystem olarak koşar. Kaçan yazmayı hedefte hiçbir ACL
+            // durdurmaz — kavşağın gösterdiği yer başka kiracının sitesi, panelin kendi veri
+            // klasörü ya da <c>C:\Windows</c> olabilir. Kavşak oluşturmak Windows'ta AYRICALIK
+            // GEREKTİRMEZ (sembolik bağın aksine), yani kendi sitesinde PHP/ASP çalıştıran her
+            // kiracı bunu kurabilir.
+            //
+            // DENETİM YAZMADAN ÖNCE: klasör oluşturma da bağlantıyı takip eder, yani
+            // CreateDirectory'den SONRA bakmak kaçışın yarısını çoktan gerçekleştirmiş olurdu.
+            // ============================================================================
+            EnsureNoReparsePoints(destination.PhysicalPath, outputPath, denetlenenOnekler);
 
             if (string.IsNullOrEmpty(entry.Name))
             {
@@ -1384,7 +1420,22 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
         return new ResolvedTarget(fullPath, sandboxRoot, false);
     }
 
-    private static void EnsureNoReparsePoints(string sandboxRoot, string fullPath)
+    /// <summary>
+    /// Kökten hedefe giden yolun HİÇBİR parçasının bağlantı (junction/symlink) olmadığını doğrular.
+    /// </summary>
+    /// <param name="denetlenenOnekler">
+    /// Verilirse, "temiz" çıkan her ara yol buraya yazılır ve bir daha sorulmaz.
+    /// <para>
+    /// <b>Neden var:</b> arşiv çıkarma bu denetimi GİRDİ BAŞINA çağırır ve bir arşivde aynı klasör
+    /// öneki binlerce girdide tekrarlanır. Önbelleksiz hâl, meşru bir paketin açılmasına önek
+    /// parçası başına üç dosya sistemi sorgusu eklerdi. <c>null</c> ise (tek yol çözümleyen bütün
+    /// çağrılar) davranış birebir eskisidir.
+    /// </para>
+    /// </param>
+    private static void EnsureNoReparsePoints(
+        string sandboxRoot,
+        string fullPath,
+        HashSet<string>? denetlenenOnekler = null)
     {
         var relativePath = Path.GetRelativePath(sandboxRoot, fullPath);
         var currentPath = sandboxRoot;
@@ -1393,6 +1444,11 @@ public sealed class FileService(IIisSiteService iisSiteService) : IFileService
                      StringSplitOptions.RemoveEmptyEntries))
         {
             currentPath = Path.Combine(currentPath, segment);
+            if (denetlenenOnekler is not null && !denetlenenOnekler.Add(currentPath))
+            {
+                continue;
+            }
+
             if ((File.Exists(currentPath) || Directory.Exists(currentPath)) &&
                 File.GetAttributes(currentPath).HasFlag(FileAttributes.ReparsePoint))
             {

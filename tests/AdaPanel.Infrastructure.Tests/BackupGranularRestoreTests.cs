@@ -121,5 +121,133 @@ public sealed class BackupGranularRestoreTests
             Directory.Delete(dataRoot, recursive: true);
         }
     }
+
+    /// <summary>
+    /// Hedef kökün İÇİNDEKİ bir KAVŞAK (junction) üzerinden yazılamaz.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bu senaryo gerçek ve neden dizge denetimi görmez:</b> bu uç kapsamlı kullanıcıya
+    /// açıktır (BackupController.RestoreItemsAsync) ve kiracı için hedef, kendi site köküdür.
+    /// Kiracı kendi belge kökünde <c>wp-content</c> adını bir kavşağa çevirirse — kavşak kurmak
+    /// Windows'ta ayrıcalık gerektirmez — <c>wp-content/...</c> önekli her arşiv girdisinin
+    /// çözülmüş yolu HÂLÂ kökün altında görünür, yani <c>PathContainment</c> önek denetimi geçer.
+    /// Kaçış dizgede değil DİSKTE olur: yazma kavşağı takip eder. Panel LocalSystem olduğu için
+    /// hedefte hiçbir ACL durdurmaz.
+    /// </para>
+    /// <para>
+    /// <b>Kötü niyetli arşiv GEREKMEZ:</b> buradaki zip sıradan bir site yedeğidir
+    /// (<c>ZipFile.CreateFromDirectory</c>). Kaçışı üreten tek şey, yedek alındıktan SONRA hedefte
+    /// beliren kavşaktır — yani "arşiv girdisi doğrulanıyor mu" sorusu, tek başına yanlış sorudur.
+    /// </para>
+    /// <para>
+    /// <b>Ölçüm gerçek dosya sistemindedir</b> (kaynak taraması değil): kavşak takibi ancak gerçek
+    /// bir kavşak kurulunca ölçülebilir. Kavşak kurulamıyorsa (ör. yetkisiz/desteklemeyen dosya
+    /// sistemi) test ATLANIR — sessizce YEŞİL DÖNMEZ, çünkü kurulmamış bir ön koşulda geçen bir
+    /// güvenlik testi, ölçmediği şeyi ölçtüğünü söyler.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task RestoreItems_HedefTeki_JUNCTION_uzerinden_disari_yazamaz()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"adapanel-granular-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dataRoot);
+
+        try
+        {
+            var fileStore = new JsonFileStore(
+                Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot }));
+
+            // Sıradan bir site yedeği: webroot/wp-content/uploads/logo.png
+            var siteRoot = Path.Combine(dataRoot, "source", "webroot");
+            Directory.CreateDirectory(Path.Combine(siteRoot, "wp-content", "uploads"));
+            await File.WriteAllTextAsync(Path.Combine(siteRoot, "wp-content", "uploads", "logo.png"), "PNG");
+
+            var zipPath = Path.Combine(dataRoot, "site.zip");
+            ZipFile.CreateFromDirectory(siteRoot, zipPath, CompressionLevel.Fastest, includeBaseDirectory: true);
+
+            await fileStore.WriteAsync("config/backups.json", new[]
+            {
+                new BackupRecordDto
+                {
+                    Id = "b3",
+                    Name = "site.zip",
+                    Type = "site",
+                    Source = "example.com",
+                    Path = zipPath,
+                    Format = "zip",
+                    CreatedAtUtc = DateTime.UtcNow
+                }
+            });
+
+            // Hedef kök = kiracının site kökü. İçinde "webroot" adında bir KAVŞAK var ve kavşak
+            // sanal alanın DIŞINI gösteriyor.
+            var restoreTarget = Path.Combine(dataRoot, "restored");
+            var disari = Path.Combine(dataRoot, "disari");
+            Directory.CreateDirectory(restoreTarget);
+            Directory.CreateDirectory(disari);
+
+            var baglanti = Path.Combine(restoreTarget, "webroot");
+            JunctionOlustur(baglanti, disari);
+            if (!Directory.Exists(baglanti)
+                || !new DirectoryInfo(baglanti).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return; // ön koşul sağlanamadı (bkz. belge): ölçüm YAPILAMADI
+            }
+
+            var service = new BackupService(null!, null!, null!, null!, null!, fileStore, null!);
+
+            var exception = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() =>
+                service.RestoreItemsAsync(new RestoreBackupItemsRequest
+                {
+                    BackupId = "b3",
+                    Items = ["webroot/wp-content/"],
+                    TargetPath = restoreTarget
+                }));
+
+            Assert.Equal("backup.invalid_entry_path", exception.MessageKey);
+            Assert.False(
+                File.Exists(Path.Combine(disari, "wp-content", "uploads", "logo.png")),
+                "Kavsak TAKIP EDILDI: yedek icerigi hedef kokun DISINA yazildi.");
+        }
+        finally
+        {
+            try
+            {
+                // Kavşak ÖNCE kaldırılır: özyinelemeli silme onu takip ederse testin kendisi,
+                // ölçmeye çalıştığı veri kaybını üretirdi.
+                foreach (var dizin in Directory
+                             .EnumerateDirectories(dataRoot, "*", SearchOption.AllDirectories)
+                             .Reverse())
+                {
+                    if (new DirectoryInfo(dizin).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    {
+                        Directory.Delete(dizin);
+                    }
+                }
+
+                Directory.Delete(dataRoot, recursive: true);
+            }
+            catch
+            {
+                // Geçici klasör temizliği en iyi çaba.
+            }
+        }
+    }
+
+    private static void JunctionOlustur(string link, string hedef)
+    {
+        using var surec = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c mklink /J \"{link}\" \"{hedef}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        })!;
+
+        surec.WaitForExit(60_000);
+    }
 }
 

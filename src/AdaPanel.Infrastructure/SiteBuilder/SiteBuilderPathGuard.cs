@@ -81,7 +81,26 @@ public static class SiteBuilderPathGuard
     /// <summary>
     /// Kökten hedefe kadar her ara segmenti (ve hedefin kendisini) yoklar.
     /// </summary>
-    public static void EnsureNoReparsePointOnPath(string normalizedRoot, string fullPath)
+    /// <param name="denetlenenOnekler">
+    /// Verilirse, "temiz" çıkan her ara yol buraya yazılır ve aynı çağrı kümesi içinde bir daha
+    /// sorulmaz.
+    /// <para>
+    /// <b>Neden var:</b> ARŞİV çıkarma bu denetimi GİRDİ BAŞINA çağırır ve bir arşivde aynı klasör
+    /// öneki binlerce girdide tekrarlanır (bir WordPress paketinde <c>wp-content/plugins/...</c>
+    /// tek başına binlerce girdinin önekidir). Önbelleksiz hâl, meşru bir paketin geri
+    /// yüklenmesine önek parçası başına üç dosya sistemi sorgusu eklerdi.
+    /// </para>
+    /// <para>
+    /// <b>Doğruluğu düşürmez:</b> bir arşiv girdisi bağlantı OLUŞTURAMAZ (girdi ya dosya ya
+    /// klasördür), yani çıkarma sürerken "temiz" damgalanmış bir önek bağlantıya dönüşemez.
+    /// Kümeyi ÇAĞRAN tutar; her çıkarma işi kendi taze kümesiyle başlar, yani damga işler arasına
+    /// TAŞINMAZ. <c>null</c> ise (tek yol çözümleyen bütün çağrılar) davranış birebir eskisidir.
+    /// </para>
+    /// </param>
+    public static void EnsureNoReparsePointOnPath(
+        string normalizedRoot,
+        string fullPath,
+        HashSet<string>? denetlenenOnekler = null)
     {
         var relative = Path.GetRelativePath(normalizedRoot, fullPath);
         var current = normalizedRoot;
@@ -90,6 +109,11 @@ public static class SiteBuilderPathGuard
                      StringSplitOptions.RemoveEmptyEntries))
         {
             current = Path.Combine(current, segment);
+            if (denetlenenOnekler is not null && !denetlenenOnekler.Add(current))
+            {
+                continue;
+            }
+
             if (IsReparsePoint(current))
             {
                 throw new AppException("sitebuilder.target_is_link", 400, 400);

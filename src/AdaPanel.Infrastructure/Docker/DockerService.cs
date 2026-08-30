@@ -129,7 +129,14 @@ public sealed partial class DockerService(ILogger<DockerService> logger) : IDock
                 throw new AppException("docker.invalid_environment", 400, 400);
             }
 
-            builder.Append(" -e \"").Append(variable.Replace("\"", "\\\"")).Append('"');
+            // ORTAM DEĞİŞKENİNDEN BAYRAK ENJEKSİYONU. EnvironmentRegex `=` sonrasına `.*` diyor:
+            // boşluk, `"`, `\` HEPSİ geçiyor (ölçüldü). Eskiden yalnız `"` → `\"` yapılıyordu ve bu,
+            // Windows argüman kuralında YANLIŞ: girdideki `\"` dizisi `\\"` olur, ayrıştırıcı tırnağı
+            // KAPATIR ve sonrası yeni argüman olur — yani `-e` değeri `docker run`'a `--privileged
+            // -v C:\:/host` ekleyebiliyordu (konteynerden host'a tam erişim = SYSTEM).
+            // Değer serbest bırakılıyor (ortam değeri gerçekten serbest metindir); kural
+            // TIRNAKLAMADA düzeltildi.
+            builder.Append(" -e ").Append(WindowsArgument.Quote(variable));
         }
 
         builder.Append(' ').Append(image);

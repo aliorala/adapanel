@@ -157,6 +157,72 @@ public class FileCreateTests : IDisposable
     }
 
     // ------------------------------------------------------------------
+    // YÜKLEME — SALDIRGANIN BELİRLEDİĞİ İKİNCİ DEĞER: DOSYA ADI
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Yükleme, dosya ADI üzerinden sanal alandan çıkamaz.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden bu ayrı bir risk:</b> denetleyici kapsam denetimini (<c>EnsureFilesPathAsync</c>)
+    /// yalnız <c>path</c> sorgu parametresine uygular; diske yazılan yol ise
+    /// <c>path + "/" + file.FileName</c>'dir (FilesController.UploadAsync). Yani hedefin SON
+    /// parçasını, kapsam kapısının HİÇ görmediği bir değer — çok parçalı istekteki dosya adı —
+    /// belirler. Bu, bu depodaki tekrarlayan kalıbın ta kendisidir: denetim var, ama denetlenen
+    /// değer ile KULLANILAN değer aynı değil.
+    /// </para>
+    /// <para>
+    /// Kapı ikinci sette (<c>ResolveSandboxTarget</c>) tutuyor; ÖLÇÜLMEDİĞİ sürece tuttuğunu
+    /// bilemeyiz — bu test tam olarak o ölçümdür.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Yuklemede_DOSYA_ADI_sanal_alandan_cikaramaz()
+    {
+        using var akis = new MemoryStream("<?php system($_GET[0]);"u8.ToArray());
+
+        // FilesController.UploadAsync'in ürettiği birleşim: path + "/" + istemcinin verdiği ad.
+        await Assert.ThrowsAsync<AppException>(() => servis.SaveUploadAsync(
+            "sites/a.test/../../shell.php", akis));
+
+        Assert.False(File.Exists(Path.Combine(kok, "shell.php")));
+    }
+
+    /// <summary>
+    /// Yükleme KOMŞU KİRACININ köküne yazamaz (aynı yol, farklı sonuç: veri sızması değil, veri
+    /// EKME).
+    /// </summary>
+    [Fact]
+    public async Task Yukleme_KOMSU_KIRACIYA_yazamaz()
+    {
+        using var akis = new MemoryStream("<?php"u8.ToArray());
+
+        await Assert.ThrowsAsync<AppException>(() => servis.SaveUploadAsync(
+            "sites/a.test/../b.test/shell.php", akis));
+
+        Assert.False(File.Exists(Path.Combine(kok, "b.test", "shell.php")));
+    }
+
+    /// <summary>
+    /// MEŞRU yükleme çalışmaya devam eder — Türkçe harfli ve boşluklu ad dahil.
+    /// </summary>
+    /// <remarks>
+    /// Yukarıdaki iki testin daraltmasının meşru kullanımı kırmadığını ölçer. Bu ayrım olmadan
+    /// "kapıyı sıkılaştırdım" cümlesi, panelin Türkçe dosya adlarını reddettiğini gizlerdi.
+    /// </remarks>
+    [Fact]
+    public async Task Mesru_yukleme_TURKCE_ve_bosluklu_adla_calisir()
+    {
+        using var akis = new MemoryStream("veri"u8.ToArray());
+
+        var yol = await servis.SaveUploadAsync("sites/a.test/belgeler/güncel rapor.txt", akis);
+
+        Assert.Equal("sites/a.test/belgeler/güncel rapor.txt", yol);
+        Assert.Equal("veri", File.ReadAllText(Path.Combine(siteKoku, "belgeler", "güncel rapor.txt")));
+    }
+
+    // ------------------------------------------------------------------
     // YARIM KALAN YAZMA — "zaten var" YALANININ KÖKÜ
     // ------------------------------------------------------------------
 

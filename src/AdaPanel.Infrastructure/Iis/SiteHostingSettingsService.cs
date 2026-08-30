@@ -10,6 +10,7 @@ using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Files;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.SiteBuilder;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Options;
 
@@ -948,6 +949,25 @@ public sealed class SiteHostingSettingsService(
     {
         Directory.CreateDirectory(target);
 
+        // ====================================================================================
+        // KAYNAK TARAFI ZATEN KORUNUYORDU, HEDEF TARAFI KORUNMUYORDU.
+        //
+        // <c>SafeDirectoryWalk</c> KAYNAK ağacındaki bağlantıları eler, yani arşivden gelen içerik
+        // sanal alanın dışını OKUYAMAZ. Ama yazılan yol (<c>hedef</c>) hiç denetlenmiyordu: site
+        // kökünün İÇİNDE duran bir kavşak (junction), adı arşivdeki bir klasörle eşleştiği anda
+        // yazmayı kendi hedefine yönlendirir. Panel LocalSystem olduğu için orada hiçbir ACL
+        // durdurmaz.
+        //
+        // Kavşağı kim koyar: site kökünde kod çalıştıran kiracının kendisi (kavşak kurmak
+        // Windows'ta ayrıcalık gerektirmez). Uç bayiye açıktır ve <c>cleanFirst=false</c> ile
+        // çağrıldığında kökün mevcut içeriği — dolayısıyla kavşak — YERİNDE KALIR.
+        //
+        // Kural TEK KAYNAKTAN (SiteBuilderPathGuard); önbellek, aynı önekin binlerce dosyada
+        // tekrarlanan denetimini bir kereye indirir (gerekçesi o metodun belgesinde).
+        // ====================================================================================
+        var normalizedTarget = Path.GetFullPath(target);
+        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         var count = 0;
         var yuruyus = SafeDirectoryWalk.Yuru(
             source,
@@ -957,6 +977,9 @@ public sealed class SiteHostingSettingsService(
                 // Göreli yol, KAYNAK KÖKÜNÜN uzunluğuyla kesilerek bulunur — eski kodun kalıbı
                 // aynen korundu; ortak yürüyüş her ögenin tam yolunu verir.
                 var hedef = target + oge.FullName[source.Length..];
+                SiteBuilderPathGuard.EnsureNoReparsePointOnPath(
+                    normalizedTarget, Path.GetFullPath(hedef), denetlenenOnekler);
+
                 if (oge is DirectoryInfo)
                 {
                     Directory.CreateDirectory(hedef);
