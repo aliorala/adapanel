@@ -133,6 +133,29 @@ public sealed class ApiExceptionHandlingMiddleware(
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
 
-        return context.Response.WriteAsJsonAsync(ApiResponse<object?>.Fail(message, code ?? statusCode, details: details));
+        // SIR MASKELEMESI GOVDE YAZILMADAN ONCE, BU TEK NOKTADA.
+        //
+        // Bu ara katmanin yazdigi her hata yaniti buradan gecer; `details` bugun yalniz
+        // `AppException.Details`'ten gelir ve orasi ZATEN maskelenmis durumdadir (bkz.
+        // AppException.Details). Yine de burada tekrar uygulanir, cunku bu metodun sozlesmesi
+        // "keyfi bir dize al ve istemciye yaz"dir: yarin baska bir catch bloguna eklenen bir
+        // `details` argumani (ornegin ham `exception.Message`) sessizce disaridan gecerdi.
+        // Maskeleme etkisizdir -- maskelenmis metni yeniden maskelemek ayni metni verir -- yani
+        // ikinci uygulamanin bedeli yok, atlanmasinin bedeli bir sizintidir.
+        //
+        // `message` DE MASKELENIR -- OLCULDU, tahmin degil.
+        //
+        // `message` normalde bir ceviri anahtaridir ("common.unexpected_error") ve maskeleme ona
+        // dokunmaz. AMA bir yol istisnadir: yukaridaki `InvalidOperationException` yakalayicisi
+        // `exception.Message`'i DOGRUDAN buraya verir -- yani ham .NET istisna metni istemciye
+        // `message` alaninda gider. Bir baglanti dizgesi ("...Uid=root;Pwd=<parola>...") tam olarak
+        // boyle disari cikardi ve YALNIZ `details` maskelenseydi bu yol acik kalirdi. Sizinti
+        // kanalinin `details` adli alan degil, GOVDEYE YAZMA EYLEMI oldugunu gosteren yer burasi.
+        //
+        // KURAL BURADA TANIMLI DEGIL: tek kaynak SecretRedactor.
+        return context.Response.WriteAsJsonAsync(ApiResponse<object?>.Fail(
+            SecretRedactor.Redact(message),
+            code ?? statusCode,
+            details: SecretRedactor.Redact(details)));
     }
 }

@@ -13,7 +13,36 @@ public sealed class AppException(
 
     public int HttpStatusCode { get; } = httpStatusCode;
 
-    public string Details { get; } = details;
+    /// <summary>
+    /// Serbest teşhis metni. <b>Kurulurken maskelenir</b> — sırrı olan hiçbir biçim buradan çıkamaz.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN TAM BURADA:</b> <c>Details</c> bu depodaki en geniş sızıntı kanalıdır. ÖLÇÜLDÜ —
+    /// tek bir hedefe değil, en az beş ayrı hedefe gider: (1) HTTP yanıt gövdesi
+    /// (<c>ApiExceptionHandlingMiddleware.WriteResponseAsync</c>), (2) kurulum ilerleme kaydı
+    /// (<c>OperationProgressService</c> → <c>GET /api/v1/software/progress</c>), (3) denetim kaydı
+    /// ve veritabanı, (4) sıradan 200 yanıtlarının içindeki DTO alanları (yedek uzak hedef testi,
+    /// site taşıma, PHP tanılama, dikkat kartları), (5) MCP araç çıktısı. Bu hedeflerin her birine
+    /// ayrı bir maskeleme koymak, "aynı kural kırk yerde" demekti — ve bu depoda o hata sınıfı
+    /// defalarca ölçüldü: biri düzelir, öteki sessizce açık kalır. 0.8.7'de MariaDB root parolası
+    /// tam olarak böyle sızdı; o TEK vaka çağrı yerinde maskelendi, kanalın kendisi açık kaldı.
+    /// </para>
+    /// <para>
+    /// <c>Details</c>'in üretilebileceği TEK yer bu kurucudur. Maskelemeyi buraya koymak, kuralı
+    /// çağrı yerlerinin hatırlamasına bırakmaz: yarın eklenen kırk birinci çağrı yeri de kapsanır.
+    /// </para>
+    /// <para>
+    /// <b>NEDEN ORTAMA GÖRE KESİLMİYOR:</b> "üretimde teşhisi hiç gönderme" seçeneği ölçüldü ve
+    /// REDDEDİLDİ. (a) Bu bir barındırma paneli: nginx başlatma hatası, yedek geri yükleme uyarısı,
+    /// bileşen indirme 404'ü ürünün KENDİSİDİR — kesilirse kullanıcı kör kalır ve destek yükü
+    /// panelin dışına taşar. (b) Ortama göre dallanma, üretimde ÇALIŞAN yolun geliştirmede test
+    /// edilen yoldan farklı olması demektir; bir sızıntı tam da gözlenmeyen dalda saklanır.
+    /// (c) Sızan şey teşhis değil SIRDI; koruma da sırra göre yapılır. Maskeleme her ortamda aynı
+    /// çalışır, bu yüzden testte gördüğümüz davranış üretimdeki davranıştır.
+    /// </para>
+    /// </remarks>
+    public string Details { get; } = SecretRedactor.Redact(details);
 
     /// <summary>
     /// "Silinmek istenen kaynak ZATEN YOKTU" — yıkıcı bir adımın <b>başarı sayılabildiği tek durum</b>.

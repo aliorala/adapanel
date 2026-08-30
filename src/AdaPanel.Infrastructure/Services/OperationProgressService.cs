@@ -1,9 +1,23 @@
+﻿using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
 
 namespace AdaPanel.Infrastructure.Services;
 
 /// <inheritdoc />
+/// <remarks>
+/// <b>BU SINIF İKİNCİ BİR HTTP SINIRIDIR.</b> <see cref="Snapshot"/>, <c>SoftwareController</c>
+/// üzerinden <c>GET /api/v1/software/progress</c> ile istemciye DÖNER ve bu yol hata ara katmanından
+/// GEÇMEZ — yani <c>ApiExceptionHandlingMiddleware</c>'e konan bir koruma burayı kapsamaz. Adım
+/// ayrıntısına yazılan metin ÖLÇÜLDÜ: <c>ComponentBootstrapper</c> başarısız kurulumda
+/// <c>MessageKey + AppException.Details</c> birleşimini buraya koyuyor, <c>SetupService</c> ise
+/// yakaladığı GENEL istisnanın mesajını (bağlantı dizgesi taşıyabilir) koyuyor. Bu yüzden
+/// maskeleme, ara katmandan bağımsız olarak burada da uygulanır.
+/// <para>
+/// Çift maskeleme zararsızdır: <see cref="SecretRedactor"/> etkisizdir (maskelenmiş metni yeniden
+/// maskelemek aynı metni verir), ve iki sınırın birbirine güvenmemesi tam olarak istenen şeydir.
+/// </para>
+/// </remarks>
 public sealed class OperationProgressService : IOperationProgressService
 {
     private readonly object gate = new();
@@ -49,6 +63,9 @@ public sealed class OperationProgressService : IOperationProgressService
             return;
         }
 
+        // Sır maskelemesi KİLİDİN DIŞINDA: düzenli ifade çalışması kilidi tutmamalı.
+        detail = SecretRedactor.Redact(detail);
+
         lock (gate)
         {
             var status = success ? "done" : "failed";
@@ -78,11 +95,13 @@ public sealed class OperationProgressService : IOperationProgressService
 
     public void Fail(string error)
     {
+        var maskeli = SecretRedactor.Redact(error);
+
         lock (gate)
         {
             running = false;
             failed = true;
-            this.error = error ?? string.Empty;
+            this.error = maskeli;
         }
     }
 

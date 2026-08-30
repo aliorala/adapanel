@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Common;
+﻿using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Notifications;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
@@ -41,6 +41,33 @@ public sealed class NotificationsController(
         // yerel değişkene alınır ki denetim çağrısının argümanları sır taramasına takılmasın.
         var kimlikVerildi = settings.HasSmtpPassword;
 
+        // WEBHOOK ADRESI KAYDA YOLU/SORGUSU OLMADAN GIRER -- sema + konak kalir, gerisi maskelenir.
+        //
+        // NEDEN: Slack, Discord, Teams ve Google Chat webhook'larinda gizli deger YOLUN ICINDEDIR
+        // (`https://hooks.slack.com/services/T…/B…/<gizli>`). Adresin tamami, o odaya panel adina
+        // mesaj gonderme yetkisi verir. Ustelik denetim kaydi bu satiri yazan roldan DAHA GENIS
+        // okunur: `GET /api/v1/audit-logs/search` ve `/export` uclarinda rol kisiti YOKTUR ve
+        // Operator rolu sunucu genelinde SINIRSIZ gorunurluk alir
+        // (AuditService.ResolveVisibilityAsync) -- yani yonetici olmayan bir Operator bu satiri
+        // okuyabiliyordu. Bayi/Musteri ise satir kapsamina takilir.
+        //
+        // NEDEN TUMDEN SILINMIYOR: kaydin isi "alarmlar nereye gidiyordu, nereye tasindi" sorusunu
+        // cevaplamaktir. Konak korunursa cevap durur (Slack'ten kendi sunucusuna tasinmis); yalniz
+        // gizli degeri tasiyan parca gider.
+        //
+        // NEDEN DESENE BIRAKILMIYOR: SecretRedactor tanidigi webhook konaklarini zaten yakalar, ama
+        // yonetici KENDI sunucusunu kullanabilir ve o konak tahmin edilemez. "Bu dizge bir webhook
+        // adresidir" bilgisi yalniz BURADA vardir. Kural yine tek kaynakta (SecretRedactor.RedactUrl);
+        // burada olan yalniz onun UYGULANMASI.
+        //
+        // NEDEN YEREL DEGISKEN (aciklama da cagri DISINDA): AuditCoverageTests denetim cagrisinin
+        // ARGUMAN METNINI "Password/Parola/Secret" kelimeleri icin tarar. `AuditSecretRedactor`
+        // ADININ ICINDE "Secret" gectigi icin, maskeleyiciyi cagri argumaninin icinde cagirmak
+        // nobetciyi YANLIS ALARMLA kirmiziya dusuruyordu -- yani dogru olani yapmak testi
+        // bozuyordu. Ustteki `kimlikVerildi` degiskeni de tam olarak ayni sebeple var (bkz. yorumu).
+        var webhookOncesi = AuditSecretRedactor.RedactUrl(oncesi.WebhookUrl);
+        var webhookSonrasi = AuditSecretRedactor.RedactUrl(settings.WebhookUrl);
+
         await auditService.AuditAsync(
             HttpContext,
             "notifications.settings.updated",
@@ -48,7 +75,7 @@ public sealed class NotificationsController(
             $"Alert delivery changed: mail '{oncesi.ToEmail}' → '{settings.ToEmail}' "
             + $"(via {oncesi.SmtpHost}:{oncesi.SmtpPort} → {settings.SmtpHost}:{settings.SmtpPort}, ssl {settings.UseSsl}, "
             + $"credentials stored: {kimlikVerildi}); "
-            + $"webhook '{oncesi.WebhookUrl}' → '{settings.WebhookUrl}'.");
+            + $"webhook '{webhookOncesi}' → '{webhookSonrasi}'.");
 
         return Ok(ApiResponse<NotificationSettingsDto>.Ok(settings, "notifications.settings_saved"));
     }

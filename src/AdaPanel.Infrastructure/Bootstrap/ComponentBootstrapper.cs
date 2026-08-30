@@ -2875,12 +2875,17 @@ public sealed class ComponentBootstrapper(
             return;
         }
 
+        // GUNLUK DE BIR HEDEFTIR. `Details` maskelendi ama AYNI iki dize buradan Serilog'a HAM
+        // gidiyordu: log dosyasi diske yazilir, yedeklenir ve destek icin disari tasinir -- yani
+        // silinmesi yanit govdesinden DAHA zor bir yerdir. Dis kurulumcular kendi komut satirlarini
+        // (parola dahil) hata metnine basabildigi icin maskeleme burada da uygulanir.
+        // Serilog YAPILANDIRMASI degistirilmedi; duzeltme kaynagin kendisinde.
         logger.LogError(
             "External installer process failed. File={FileName}, ExitCode={ExitCode}, StdOut={StdOut}, StdErr={StdErr}",
             fileName,
             process.ExitCode,
-            standardOutput,
-            errorOutput);
+            AuditSecretRedactor.Redact(standardOutput),
+            AuditSecretRedactor.Redact(errorOutput));
 
         throw new AppException("software.process_failed", process.ExitCode, 500, BuildProcessDetails(fileName, arguments, process.ExitCode, standardOutput, errorOutput));
     }
