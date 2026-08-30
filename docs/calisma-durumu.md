@@ -856,3 +856,74 @@ devraldi. Yani bozuk degiller; yalniz kendilerine ozgu bir duzen turu gormediler
    DIRILTILMEDI, gerekcesi olculdu: yeni duzende sinir tek bir DIS kabukta duruyor, panel panel
    daraltma yapilmiyor -- kacilacak bir daraltma olmadigi icin sinifin yapacagi is de yok.
    Karar `CssContentWidthTests.Olu_wide_sinifi_geri_gelmemis` ile sabitlendi.
+
+---
+
+## K6 — `runtimes` yazilabilirlik acigi (kapatildi, commit ATILMADI)
+
+### Olculen acik (icacls, canli kurulum)
+
+```
+C:\ProgramData\AdaPanel\runtimes          Everyone:(I)(CI)(F)  <-- ACIK
+C:\ProgramData\AdaPanel\runtimes\php\8.3  Everyone:(I)(CI)(F)  <-- ACIK
+C:\ProgramData\AdaPanel                   Everyone:(I)(CI)(F)
+C:\ProgramData                            Everyone:(CI)(F)     <-- kaynagi burasi
+```
+
+`(CI)` oldugu icin ACE dosyalara inmez (`php.ini` ve `php_errors.log` dosya izni
+`BUILTIN\Users:(I)(RX)` idi) ama **klasor uzerindeki FullControl dosyanin kendi izninden
+BAGIMSIZ olarak FILE_ADD_FILE + FILE_DELETE_CHILD verir**: `php.ini` silinip degistirilebilir,
+`php-cgi.exe`nin yanina DLL birakilabilir. Onceki tur gercek `php-cgi.exe` ile olcmustu:
+kiraci PHP'si klasore 26 bayt YAZDI. Ayrica `BUILTIN\Users:(I)(CI)(WD,AD,WEA,WA)` Everyone
+dusse bile dosya olusturmaya yeter.
+
+Kritiklik sebebi: site basina PHP izolasyonu (`PhpIniSiteIsolation`) PAYLASILAN `php.ini`
+icindeki `[PATH=]` bloklarina dayanir. O dosya kiracinin elindeyse `open_basedir` dahil butun
+izolasyon altindan oyulur; panel (SYSTEM) ayni agactaki `php.exe`yi cron/composer icin
+calistirdigi icin yol SYSTEM'e cikar.
+
+### Ne degisti (TEK KAYNAK: `DataRootHardeningService`)
+
+- `ApplyRuntimeReadOnlyRules` — `runtimes` agacinda kiraci gruplari (Users, Authenticated Users,
+  Everyone, Guests, IIS_IUSRS) DUSURULUR, geri **yalniz `Users` + `IIS_IUSRS` = ReadAndExecute**
+  verilir. Yazma SYSTEM + Administrators + panel servis hesabinda kalir.
+- `runtimes` klasoru YOKSA olusturulur ve korunur: bilesenler acilistan SONRA kuruldugu icin
+  klasor o an dogsaydi acik miras alirdi (olculmus yaris).
+- Mirasi KIRILMIS birinci seviye bilesen klasorleri ayrica yazilir (kokten yayilim onlara inmez).
+- `ApplyDataRootContainerRules` — veri kokunun KENDISINDE kiraciya yazma/silme/DACL-degistirme
+  birakilmaz, okuma/gezinme KALIR. Gerekcesi: `runtimes` salt-okunur olsa bile ust klasordeki
+  `FILE_DELETE_CHILD` onu yeniden adlandirmaya yeterdi (kiraci kendi `runtimes\php\8.3\php-cgi.exe`
+  agacini koyar; IIS FastCGI ve cron mutlak yolla cagirir). Cocuklarin izinleri BIRE BIR korunur:
+  kiraci kurallari ayni haklarla `InheritOnly` olarak geri konur, klasorun kendisine ise ayni
+  kuralin `ReadAndExecute` ile maskelenmis hali yazilir.
+
+### Yolda bulunan AYRI bir hata (olculdu, duzeltildi)
+
+`PurgeAccessRules` bellekteki DACL'de **miras bayrakli ACE'lere dokunmuyor**; miras->explicit
+donusumunu Windows ancak DACL korumali olarak diske yazilirken yapiyor. Gecici klasorde olculdu:
+tek yazmada `SetAccessRuleProtection(true, preserveInheritance:true)` + `PurgeAccessRules(Everyone)`
+sonucu `D:PAI(A;OICI;FA;;;WD)...` — Everyone HAYATTA KALDI. Yani mevcut `RemoveTenantAccess`
+(stalwart, `mariadb\*\data`, `tools\win-acme`) **ancak IKINCI panel acilisinda kapatiyordu**;
+taze kurulum ve guncelleme sonrasi ilk calisma boyunca acik kaliyordu. Canli makinede kapali
+gorunmelerinin sebebi panelin defalarca yeniden baslatilmis olmasiydi.
+Duzeltme: `ProtectAndMaterialize` (once yalniz korumayi yaz, sonra DACL'i geri oku, temizligi
+acik liste uzerinde yap). Nobetci: `Mirasla_gelen_genis_ACE_TEK_calismada_duser`.
+
+### Yazma ihtiyaci arandi, mesru olani BULUNAMADI
+
+| Aday | Olcum | Karar |
+|---|---|---|
+| `error_log` -> `runtimes\php\8.3\php_errors.log` | dosya DACL'i `BUILTIN\Users:(I)(RX)` — kiraci ZATEN yazamiyor; panel bu dosyayi okumuyor (tek `php_errors.log` okuyucusu Roundcube, kendi `tools\roundcube\logs`'una bakiyor) | acilmadi |
+| `npm -g` | npm'in Windows prefix'i node.exe klasorudur -> `runtimes\nodejs`; panel hicbir yerde `-g` kullanmiyor (kaynak tarandi) | BILEREK kirildi — paylasilan node kurulumuna paket yazmak saldirinin ta kendisi |
+| composer / wp-cli | `tools\composer` altinda; `LimitedIdentityRunner` yazmayi yalniz SITE KOKUNE verir, ciktilar `%TEMP%`'e | etkilenmiyor |
+| mariadb / mysql / redis / memcached / nginx / stalwart / clamav / docker | hepsi SYSTEM (`--install`, `--service-install`, gorev `UserId S-1-5-18`, panel sureci) | etkilenmiyor |
+| EDB PostgreSQL (NETWORK SERVICE) | yazdigi yer `postgresql\*\data`; orasi zaten mirasi KOPYALAYARAK kapatiliyor (explicit ACE korunur) | **OLCULEMEDI** — bu makinede PostgreSQL kurulu degil |
+
+### Kalan riskler / olculemeyenler
+
+- **Dosya yoneticisinin ACL ucu** (`FileService` + `AclInputValidator`) yalniz hesap adi ve hak
+  degerini dogruluyor; YOLUN kiraci kapsaminda olup olmadigi bu turda OLCULMEDI. Yetkili bir
+  bayi bu uctan `runtimes`'a yeniden izin verebiliyorsa duzeltme geri alinabilir.
+- Gercek `php-cgi.exe` ile "artik yazamiyor" dogrulamasi **canli panelde YAPILMADI** (gorev geregi
+  kurulu panelin ACL'ine dokunulmadi). Olcum gecici klasorde gercek `DirectorySecurity` uzerinde.
+- `sitebuilder` klasoru hala `Everyone:(I)(CI)(F)` (onceki turda bilerek birakilmisti, ayni durumda).

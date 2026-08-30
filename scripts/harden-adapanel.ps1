@@ -182,6 +182,20 @@ else {
     # Hassas veri kokunden FARKI: burada DACL sifirdan KURULMAZ, mevcut ACE'ler korunup yalniz
     # kiraci gruplari dusurulur. NEDEN: PostgreSQL/EDB kurulumu veri dizinine kendi servis hesabini
     # (genelde NETWORK SERVICE) explicit ACE ile yazar; sifirdan kurmak motoru baslatilamaz yapardi.
+    #
+    # ------------------------------------------------------------------------------------
+    # K6 BURADA TEKRARLANMAZ -- BILEREK. (Yukaridaki "DOKUNMA" satirlari RX icin gecerlidir,
+    # YAZMA icin DEGIL: 0.8.x'te olculdu ki runtimes agacinin tamami Everyone:(I)(CI)(F)
+    # tasiyor ve kiraci PHP'si runtimes\php\8.3'e dosya YAZABILIYORDU -- yani php.ini
+    # silinip degistirilebiliyordu.)
+    #
+    # Duzeltme kaynakta, TEK YERDE duruyor: DataRootHardeningService.ApplyRuntimeReadOnlyRules
+    # + ApplyDataRootContainerRules. Panel servisi bunu HER ACILISTA (Program.cs, db acilmadan
+    # once) idempotent olarak uygular; guncelleme sonrasi ilk baslangicta mevcut kurulumlar da
+    # duzelir. Ayni ACL mantigini bu betige KOPYALAMAK, bu depoda daha once olculmus bir hata
+    # sinifidir ("ayni kural iki yerde": 'updates' klasoru tam da o yuzden yarim kapanmisti).
+    # Yani K6 icin yapilacak sey betigi calistirmak DEGIL, PANELI YENIDEN BASLATMAKTIR.
+    # ------------------------------------------------------------------------------------
 
     Write-Host ""
     Write-Host "[K2-DATA] runtimes icindeki hassas yollar kiracıya kapatiliyor..." -ForegroundColor Yellow

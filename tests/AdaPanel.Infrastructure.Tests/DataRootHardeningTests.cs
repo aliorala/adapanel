@@ -37,6 +37,49 @@ public sealed class DataRootHardeningTests : IDisposable
 
     private static SecurityIdentifier Users => new(WellKnownSidType.BuiltinUsersSid, null);
 
+    private static SecurityIdentifier IisIusrs => new("S-1-5-32-568");
+
+    /// <summary>
+    /// "Yazma" sayilan HER bit. Bir korumanin ise yarayip yaramadigini olcerken hakki adiyla degil
+    /// BITIYLE sormak gerekiyor: <c>Modify</c> ve <c>FullControl</c> ayri adlardir ama ayni bitleri
+    /// tasir; ad karsilastirmasi (bu depoda bir kez oldugu gibi) hicbir sey olcmez.
+    /// </summary>
+    private const FileSystemRights YazmaMaskesi =
+        FileSystemRights.WriteData |                        // = CreateFiles
+        FileSystemRights.AppendData |                       // = CreateDirectories
+        FileSystemRights.WriteAttributes |
+        FileSystemRights.WriteExtendedAttributes |
+        FileSystemRights.Delete |
+        FileSystemRights.DeleteSubdirectoriesAndFiles |     // FILE_DELETE_CHILD: php.ini'yi SILDIREN bit
+        FileSystemRights.ChangePermissions |
+        FileSystemRights.TakeOwnership;
+
+    /// <summary>
+    /// Verilen SID'e NESNENIN KENDISINDE tanınan Allow haklarının birleşimi.
+    /// <c>InheritOnly</c> kurallar sayılmaz: onlar yalnız çocuklara işler.
+    /// </summary>
+    private static FileSystemRights NesneyeUygulananHaklar(string yol, SecurityIdentifier sid)
+    {
+        FileSystemRights toplam = 0;
+        var kurallar = new DirectoryInfo(yol)
+            .GetAccessControl()
+            .GetAccessRules(includeExplicit: true, includeInherited: true, targetType: typeof(SecurityIdentifier));
+
+        foreach (FileSystemAccessRule kural in kurallar)
+        {
+            if (kural.AccessControlType != AccessControlType.Allow ||
+                !sid.Equals(kural.IdentityReference) ||
+                kural.PropagationFlags.HasFlag(PropagationFlags.InheritOnly))
+            {
+                continue;
+            }
+
+            toplam |= kural.FileSystemRights;
+        }
+
+        return toplam;
+    }
+
     private static void HerkeseTamYetkiVer(string dizin)
     {
         var info = new DirectoryInfo(dizin);
@@ -47,6 +90,44 @@ public sealed class DataRootHardeningTests : IDisposable
             InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
             PropagationFlags.None,
             AccessControlType.Allow));
+        info.SetAccessControl(security);
+    }
+
+    /// <summary>
+    /// <c>C:\ProgramData</c>'nın BU MAKİNEDE ÖLÇÜLEN DACL'ini bir test klasörüne kurar; veri kökünün
+    /// canlıda ne devraldığı böylece taklit değil, kopya olur.
+    /// </summary>
+    /// <remarks>
+    /// icacls çıktısı (ölçüm):
+    /// <code>
+    /// C:\ProgramData Everyone:(CI)(F)
+    ///                NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+    ///                BUILTIN\Administrators:(OI)(CI)(F)
+    ///                CREATOR OWNER:(OI)(CI)(IO)(F)
+    ///                BUILTIN\Users:(OI)(CI)(RX)
+    ///                BUILTIN\Users:(CI)(WD,AD,WEA,WA)
+    /// </code>
+    /// İki ayrıntı ölçümün özüdür: <c>Everyone</c> ACE'i <c>(CI)</c>'dir (dosyalara İNMEZ ama
+    /// klasörlerde FullControl'dür → FILE_DELETE_CHILD) ve <c>Users</c> ayrı bir yazma ACE'i taşır
+    /// (Everyone düşse bile dosya/klasör oluşturmaya yeter).
+    /// </remarks>
+    private static void ProgramDataAclindenKopyala(string dizin)
+    {
+        var info = new DirectoryInfo(dizin);
+        var security = info.GetAccessControl();
+
+        security.AddAccessRule(new FileSystemAccessRule(
+            Everyone, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            Users, FileSystemRights.ReadAndExecute,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            Users,
+            FileSystemRights.WriteData | FileSystemRights.AppendData |
+            FileSystemRights.WriteExtendedAttributes | FileSystemRights.WriteAttributes,
+            InheritanceFlags.ContainerInherit, PropagationFlags.None, AccessControlType.Allow));
+
         info.SetAccessControl(security);
     }
 
@@ -513,9 +594,313 @@ public sealed class DataRootHardeningTests : IDisposable
 
         Assert.DoesNotContain(Everyone, DiskteAcikDuranSidler(stalwart));
         Assert.DoesNotContain(Everyone, DiskteAcikDuranSidler(stalwartEtc));  // ağacın tamamı kapandı
-        // PHP: kiracı erişimi KORUNMALI — Everyone'ın hem kökte hem sürüm klasöründe durması
-        // "dokunulmadı"nın kanıtı. Kapanırsa IIS FastCGI php-cgi.exe'yi çalıştıramaz, siteler 500 verir.
-        Assert.Contains(Everyone, DiskteAcikDuranSidler(php));
-        Assert.Contains(Everyone, DiskteAcikDuranSidler(phpSurum));
+
+        // PHP: ÇALIŞTIRMA hakkı KORUNMALI. (K6'dan önce burada "Everyone hâlâ duruyor mu" sorulurdu;
+        // o soru artık YANLIŞ — Everyone bilerek düşürüldü, kiracıya RX 'Users' üzerinden veriliyor.
+        // Ölçülmesi gereken şey grubun adı değil, php-cgi.exe'nin ÇALIŞTIRILABİLİR kalması.)
+        foreach (var yol in new[] { php, phpSurum })
+        {
+            var kullanici = NesneyeUygulananHaklar(yol, Users);
+            Assert.True(
+                kullanici.HasFlag(FileSystemRights.ReadAndExecute),
+                $"'{yol}' kiracıya okuma/çalıştırma vermiyor; IIS FastCGI php-cgi.exe'yi çalıştıramaz (500).");
+            Assert.True(
+                NesneyeUygulananHaklar(yol, IisIusrs).HasFlag(FileSystemRights.ReadAndExecute),
+                $"'{yol}' IIS_IUSRS'a okuma/çalıştırma vermiyor; IUSR (fastcgi.impersonate=1) php.ini'yi okuyamaz.");
+        }
+    }
+
+    // ===================================================================================
+    // K6 — runtimes: KİRACI OKUR VE ÇALIŞTIRIR, YAZAMAZ
+    // ===================================================================================
+
+    /// <summary>
+    /// K6 ANA ÖLÇÜM: <c>runtimes</c> ağacında kiracı kimlikleri okuyup çalıştırabilmeli ama
+    /// YAZAMAMALI — ne kökte, ne alt klasörde.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ÖLÇÜLEN AÇIK (canlı, icacls): <c>C:\ProgramData\AdaPanel\runtimes</c> ve
+    /// <c>...\runtimes\php\8.3</c> DACL'i <c>Everyone:(I)(CI)(F)</c> taşıyordu; gerçek
+    /// <c>php-cgi.exe</c> ile denendiğinde kiracı PHP'si klasöre 26 baytlık dosyayı YAZABİLDİ.
+    /// Aynı ACE <c>FILE_DELETE_CHILD</c> de verdiği için <c>php.ini</c> silinip değiştirilebiliyordu —
+    /// yani site başına PHP izolasyonunun (<c>[PATH=]</c> blokları) dayandığı dosya, izole edilen
+    /// tarafın elindeydi.
+    /// </para>
+    /// <para>
+    /// Test ACL'i DİZE OLARAK karşılaştırmaz (bu depoda bir sertleştirme testi tam da bu yüzden hiçbir
+    /// şey ölçmemişti): gerçek bir <c>Everyone = FullControl</c> ACE'i diske yazılır, sertleştirme
+    /// koşar, ACL diskten <see cref="DirectorySecurity"/> olarak geri okunur ve HAKLAR BİT BİT sınanır.
+    /// </para>
+    /// <para>
+    /// Alt klasör ayrıca ölçülüyor çünkü sertleştirme yalnız KÖKE yazıyor: burada sınanan şey,
+    /// Windows'un devralınabilir ACE'leri mirası açık çocuklara gerçekten yayıp yaymadığıdır.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Runtimes_agacinda_kiraci_OKUR_CALISTIRIR_ama_YAZAMAZ()
+    {
+        var dataRoot = Path.Combine(calisma, "runtimes-salt-okunur");
+        var runtimes = Path.Combine(dataRoot, "runtimes");
+        var phpSurum = Path.Combine(runtimes, "php", "8.3");
+        Directory.CreateDirectory(phpSurum);
+        // Canlıdaki durum: geniş ACE runtimes KÖKÜNDE durur ve alt klasörlere mirasla iner.
+        HerkeseTamYetkiVer(runtimes);
+
+        // Ön koşul: Everyone GERÇEKTEN yazılabildi ve YAZMA hakkı hem kökte hem altta duruyor.
+        Assert.NotEqual((FileSystemRights)0, NesneyeUygulananHaklar(runtimes, Everyone) & YazmaMaskesi);
+        Assert.NotEqual((FileSystemRights)0, NesneyeUygulananHaklar(phpSurum, Everyone) & YazmaMaskesi);
+
+        // Panel bunu HER AÇILIŞTA koşturur → iki kez koşup kendi çıktısını bozmadığı da ölçülür.
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        foreach (var yol in new[] { runtimes, phpSurum })
+        {
+            foreach (var kiraci in new[] { Everyone, Users, IisIusrs })
+            {
+                var haklar = NesneyeUygulananHaklar(yol, kiraci);
+                Assert.True(
+                    (haklar & YazmaMaskesi) == 0,
+                    $"'{yol}' hâlâ '{kiraci}' kimliğine yazma/silme veriyor: {haklar & YazmaMaskesi}");
+            }
+
+            // FAZLA KAPATMA KONTROLÜ — kapatmak kadar önemli:
+            // RX düşerse IIS FastCGI php-cgi.exe'yi başlatamaz ve barındırılan HER site 500 verir.
+            Assert.True(
+                NesneyeUygulananHaklar(yol, Users).HasFlag(FileSystemRights.ReadAndExecute),
+                $"'{yol}' Users'a okuma/çalıştırma vermiyor; siteler çöker.");
+            Assert.True(
+                NesneyeUygulananHaklar(yol, IisIusrs).HasFlag(FileSystemRights.ReadAndExecute),
+                $"'{yol}' IIS_IUSRS'a okuma/çalıştırma vermiyor; IUSR php.ini'yi okuyamaz.");
+
+            // Panel kendi bileşenlerini kurabilmeli (SYSTEM) ve yönetici erişimi kalmalı.
+            Assert.True(NesneyeUygulananHaklar(yol, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null))
+                .HasFlag(FileSystemRights.Modify));
+            Assert.True(NesneyeUygulananHaklar(yol, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null))
+                .HasFlag(FileSystemRights.Modify));
+        }
+
+        // Kök korumalı olmalı: değilse ProgramData'daki Everyone:(CI)(F) mirasla GERİ düşer.
+        Assert.True(
+            new DirectoryInfo(runtimes).GetAccessControl().AreAccessRulesProtected,
+            "runtimes DACL'i korumasız; kökteki Everyone mirasla geri iner.");
+    }
+
+    /// <summary>
+    /// MİRASLA GELEN geniş ACE, TEK açılışta düşmeli — İKİ açılışta değil.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ÖLÇÜLEN HATA (geçici klasörde, gerçek ACL): üst klasörde <c>Everyone:(OI)(CI)F</c> varken alt
+    /// klasöre <c>SetAccessRuleProtection(true, preserveInheritance: true)</c> +
+    /// <c>PurgeAccessRules(Everyone)</c> TEK yazmada uygulanınca sonuç
+    /// <c>D:PAI(A;OICI;FA;;;WD)...</c> oldu — <b>Everyone hayatta kaldı</b>, üstelik artık explicit
+    /// olarak. <c>PurgeAccessRules</c> miras bayraklı ACE'lere dokunmuyor; miras→explicit dönüşümünü
+    /// Windows ancak DACL korumalı olarak DİSKE yazılırken yapıyor. Yani sertleştirme ancak İKİNCİ
+    /// çalışmasında kapatıyordu.
+    /// </para>
+    /// <para>
+    /// Bu, "kapatıldı" denilen <c>runtimes\stalwart</c> / <c>mariadb\*\data</c> / <c>tools\win-acme</c>
+    /// yollarının taze kurulumdan ve güncellemeden sonraki İLK çalışma boyunca açık kalması demekti.
+    /// Canlı makinede kapalı görünmeleri, panelin defalarca yeniden başlatılmış olmasındandı.
+    /// </para>
+    /// <para>
+    /// Test tam olarak bu kurguyu yapar: geniş ACE ÜST klasörde durur, sertleştirme BİR KEZ koşar.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Mirasla_gelen_genis_ACE_TEK_calismada_duser()
+    {
+        var dataRoot = Path.Combine(calisma, "tek-calisma");
+        Directory.CreateDirectory(dataRoot);
+        // Geniş ACE veri kökünün KENDİSİNDE: runtimes ve stalwart onu MİRASLA alır.
+        HerkeseTamYetkiVer(dataRoot);
+        var stalwart = Path.Combine(dataRoot, "runtimes", "stalwart");
+        Directory.CreateDirectory(stalwart);
+
+        Assert.Contains(Everyone, DiskteAcikDuranSidler(stalwart));
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        // TEK çalışmadan sonra: tamamı panele ait ağaçta kiracıdan eser kalmamalı.
+        var kalanlar = DiskteAcikDuranSidler(stalwart);
+        Assert.DoesNotContain(Everyone, kalanlar);
+        Assert.DoesNotContain(Users, kalanlar);
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), kalanlar);
+    }
+
+    /// <summary>
+    /// K6 YARIŞ DURUMU: <c>runtimes</c> açılışta HENÜZ YOKKEN de kurulup korunmalı.
+    /// </summary>
+    /// <remarks>
+    /// Bileşenler (php, nodejs...) panel açılışından SONRA kurulur. Klasör o an oluşursa üst
+    /// klasörden <c>Everyone:FullControl</c> mirasını alır ve düzeltme BİR SONRAKİ servis
+    /// başlangıcına kadar gelmez — kurulumdan sonraki ilk saatler açık kalırdı. Korumalı klasörü
+    /// önden kurmak, sonradan kurulan her bileşenin doğuştan salt-okunur mirasla gelmesini sağlar.
+    /// </remarks>
+    [Fact]
+    public void Runtimes_klasoru_YOKKEN_de_korunarak_olusturulur()
+    {
+        var dataRoot = Path.Combine(calisma, "runtimes-yok");
+        Directory.CreateDirectory(dataRoot);
+        HerkeseTamYetkiVer(dataRoot);
+        var runtimes = Path.Combine(dataRoot, "runtimes");
+        Assert.False(Directory.Exists(runtimes));
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        Assert.True(Directory.Exists(runtimes), "runtimes oluşturulmadı; bileşen kurulunca açık DACL ile doğardı.");
+        Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(runtimes, Everyone) & YazmaMaskesi);
+
+        // Sonradan kurulan bir bileşen KORUNMUŞ mirası devralmalı (asıl ölçülen şey bu).
+        var sonradanKurulan = Path.Combine(runtimes, "nodejs");
+        Directory.CreateDirectory(sonradanKurulan);
+        Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(sonradanKurulan, Everyone) & YazmaMaskesi);
+        Assert.True(NesneyeUygulananHaklar(sonradanKurulan, Users).HasFlag(FileSystemRights.ReadAndExecute));
+    }
+
+    /// <summary>
+    /// K6: Mirası KIRILMIŞ bir bileşen klasörü kökten düzelmez — ayrıca yazılmalı.
+    /// </summary>
+    /// <remarks>
+    /// Kökteki DACL değişikliği yalnız mirası AÇIK çocuklara yayılır. Başka bir kurulumun
+    /// (ör. EDB PostgreSQL) mirası kırıp geniş bir ACE gömdüğü bir bileşen klasörü, yalnız köke
+    /// yazan bir düzeltmede SESSİZCE açık kalırdı. Mevcut kurulumlarda bu, "sertleştirildi" denilen
+    /// ağacın yarısının açık kalması demektir.
+    /// </remarks>
+    [Fact]
+    public void Runtimes_altinda_mirasi_KIRILMIS_bilesen_de_kapatilir()
+    {
+        var dataRoot = Path.Combine(calisma, "runtimes-kirik-miras");
+        var bilesen = Path.Combine(dataRoot, "runtimes", "postgresql");
+        Directory.CreateDirectory(bilesen);
+
+        var info = new DirectoryInfo(bilesen);
+        var security = info.GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);
+        security.AddAccessRule(new FileSystemAccessRule(
+            Everyone,
+            FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        info.SetAccessControl(security);
+
+        Assert.True(new DirectoryInfo(bilesen).GetAccessControl().AreAccessRulesProtected);
+        Assert.NotEqual((FileSystemRights)0, NesneyeUygulananHaklar(bilesen, Everyone) & YazmaMaskesi);
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(bilesen, Everyone) & YazmaMaskesi);
+        Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(bilesen, Users) & YazmaMaskesi);
+        Assert.True(NesneyeUygulananHaklar(bilesen, Users).HasFlag(FileSystemRights.ReadAndExecute));
+    }
+
+    /// <summary>
+    /// K6 (saf fonksiyon): Kural kümesinde kiracıya BIRAKILAN tek şey ReadAndExecute'tur.
+    /// </summary>
+    [Fact]
+    public void Runtimes_kural_kumesinde_kiraciya_yalniz_RX_kalir()
+    {
+        var security = new DirectorySecurity();
+        security.AddAccessRule(new FileSystemAccessRule(
+            Everyone,
+            FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+
+        DataRootHardeningService.ApplyRuntimeReadOnlyRules(security);
+
+        Assert.True(security.AreAccessRulesProtected);
+
+        var kurallar = security
+            .GetAccessRules(includeExplicit: true, includeInherited: true, targetType: typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>()
+            .ToArray();
+
+        foreach (var kiraci in new[] { Everyone, Users, IisIusrs })
+        {
+            var haklar = kurallar
+                .Where(kural => kural.AccessControlType == AccessControlType.Allow && kiraci.Equals(kural.IdentityReference))
+                .Aggregate((FileSystemRights)0, (toplam, kural) => toplam | kural.FileSystemRights);
+
+            Assert.True((haklar & YazmaMaskesi) == 0, $"'{kiraci}' hâlâ yazma taşıyor: {haklar & YazmaMaskesi}");
+        }
+
+        // Everyone geri KONMAZ; RX yalnız Users + IIS_IUSRS üzerinden verilir.
+        Assert.DoesNotContain(Everyone, kurallar.Select(kural => (SecurityIdentifier)kural.IdentityReference));
+        Assert.Contains(Users, kurallar.Select(kural => (SecurityIdentifier)kural.IdentityReference));
+        Assert.Contains(IisIusrs, kurallar.Select(kural => (SecurityIdentifier)kural.IdentityReference));
+    }
+
+    // ===================================================================================
+    // K6 tamamlayıcısı — veri kökünün KENDİSİ
+    // ===================================================================================
+
+    /// <summary>
+    /// K6: <c>runtimes</c> salt-okunur olsa bile, ÜST klasördeki <c>FILE_DELETE_CHILD</c> onu
+    /// yeniden adlandırmaya yeterdi — o hak da düşmeli. Ama GEZİNME düşmemeli.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ÖLÇÜLDÜ (canlı): <c>C:\ProgramData\AdaPanel</c> DACL'i <c>Everyone:(I)(CI)(F)</c> taşıyor.
+    /// NTFS'te yeniden adlandırma için nesnede <c>DELETE</c> ya da ÜST klasörde
+    /// <c>FILE_DELETE_CHILD</c> yeter; yani kiracı <c>runtimes</c>'i kenara alıp yerine kendi
+    /// ağacını koyabilirdi (IIS FastCGI ve panel cron'u php'yi MUTLAK yolla çağırır). Aynı
+    /// FullControl <c>WRITE_DAC</c> da içerdiğinden veri kökünün DACL'ini yeniden yazmak da mümkündü.
+    /// </para>
+    /// <para>
+    /// FAZLA KAPATMANIN EN KOLAY OLDUĞU YER BURASI: kiracı grubunun kuralını topluca kaldırmak
+    /// <c>Users</c>'ı veri kökünde GEZİNEMEZ yapar ve <c>runtimes\php\...\php-cgi.exe</c> yolunun
+    /// tamamı çöker. Bu yüzden test hem yazmanın düştüğünü hem RX'in ve ÇOCUKLARIN aynen kaldığını
+    /// birlikte ölçer.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Veri_kokunun_KENDISINDE_kiraci_yazamaz_ama_GEZINEBILIR_ve_cocuklar_DEGISMEZ()
+    {
+        var dataRoot = Path.Combine(calisma, "veri-koku-kabi");
+        Directory.CreateDirectory(dataRoot);
+        ProgramDataAclindenKopyala(dataRoot);
+
+        // Kasten hassas listede OLMAYAN bir çocuk: değişmediğini ölçebilmek için.
+        var dokunulmayan = Path.Combine(dataRoot, "sitebuilder");
+        Directory.CreateDirectory(dokunulmayan);
+
+        var oncekiCocukEveryone = NesneyeUygulananHaklar(dokunulmayan, Everyone);
+        var oncekiCocukUsers = NesneyeUygulananHaklar(dokunulmayan, Users);
+        Assert.NotEqual((FileSystemRights)0, oncekiCocukEveryone & YazmaMaskesi);
+        Assert.NotEqual((FileSystemRights)0, NesneyeUygulananHaklar(dataRoot, Everyone) & YazmaMaskesi);
+        Assert.True(NesneyeUygulananHaklar(dataRoot, Users).HasFlag(FileSystemRights.ReadAndExecute));
+
+        // İKİ KEZ koşuluyor. Sertleştirme HER AÇILIŞTA çalışıyor; bir kere doğru olması yetmez,
+        // ikinci koşumda kendi çıktısını okuyup bozmaması gerekir (kuralları yalnız-mirasa çevirip
+        // sonra o çevrilmiş kuralı bir kez daha çevirmek, gezinme hakkını sessizce silebilirdi).
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        // (1) KÖK: yazma/silme/DACL değiştirme düştü.
+        foreach (var kiraci in new[] { Everyone, Users, IisIusrs })
+        {
+            var haklar = NesneyeUygulananHaklar(dataRoot, kiraci);
+            Assert.True(
+                (haklar & YazmaMaskesi) == 0,
+                $"Veri kökü hâlâ '{kiraci}' kimliğine yazma/silme veriyor: {haklar & YazmaMaskesi}");
+        }
+
+        // (2) KÖK: gezinme/okuma KALDI (yoksa altındaki her şey erişilemez olurdu).
+        Assert.True(
+            NesneyeUygulananHaklar(dataRoot, Users).HasFlag(FileSystemRights.ReadAndExecute),
+            "Veri kökünde Users gezinemiyor; runtimes\\php yolunun tamamı çöker.");
+
+        // (3) ÇOCUK: BİRE BİR aynı kaldı (fazla kapatma yok). Değişiklik yalnız KABIN kendisinde.
+        Assert.Equal(oncekiCocukEveryone, NesneyeUygulananHaklar(dokunulmayan, Everyone));
+        Assert.Equal(oncekiCocukUsers, NesneyeUygulananHaklar(dokunulmayan, Users));
+
+        // (4) Panel ve yönetici kökte tam yetkili kalmalı.
+        Assert.True(NesneyeUygulananHaklar(dataRoot, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null))
+            .HasFlag(FileSystemRights.Modify));
     }
 }
