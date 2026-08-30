@@ -65,9 +65,48 @@ public static class DataRootHardeningService
     /// (<c>SelfUpdateService</c>, <c>WindowsUpdateInstallerLauncher</c>) ve onun kurduğu zamanlanmış
     /// görev. Kod tarandı, üçüncü bir okuyucu yok (tepsi programı bu klasöre hiç bakmıyor).
     /// </para>
+    /// <para>
+    /// <b>downloads — updates'in KARDEŞİ, aynı denetimde ölçüldü.</b> DACL'i
+    /// <c>Everyone:(I)(CI)(F)</c> + <c>BUILTIN\Users:(WD,AD)</c> taşıyordu (bu makinede ölçüldü,
+    /// içinde <c>requestRouter_amd64.msi</c>, <c>rewrite_amd64_en-US.msi</c>, mariadb/php zip'leri
+    /// duruyor). <c>ComponentBootstrapper</c> bu klasöre indiriyor ve dosyayı SYSTEM olarak
+    /// ÇALIŞTIRIYOR: <c>msiexec /i "downloads\...msi"</c> (bkz. ComponentBootstrapper.cs:2794) ya da
+    /// zip'i açıp içindeki ikiliyi. SHA256 doğrulaması SADECE sha256 YAYIMLAYAN kaynaklar için var
+    /// (PHP/MariaDB/Node/Composer/GitHub); <c>CopyComponent(..., sha256: string.Empty)</c> ile inen
+    /// bileşenlerde HİÇ doğrulama yok, üstelik doğrulanan dosyada bile "doğrula sonra çalıştır"
+    /// arasında yazılabilir bir dosya TOCTOU'ya açık. Tek yazan/okuyan SYSTEM (ComponentBootstrapper);
+    /// tepsi ve IIS bu klasöre bakmaz → kapatmak güvenli.
+    /// </para>
     /// </remarks>
     internal static readonly string[] SensitiveDirectories =
-        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates"];
+        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads"];
+
+    /// <summary>
+    /// <c>tools</c> ALTINDA, tamamı panele ait olup SYSTEM olarak ÇALIŞTIRILAN alt araç dizinleri.
+    /// <para>
+    /// <b>Neden ayrı liste, neden <c>tools</c> topluca kapatılmıyor:</b> <c>tools</c> klasörü KARIŞIK.
+    /// İçinde bir yanda yalnız SYSTEM'in çalıştırdığı <c>win-acme</c> var, öbür yanda IIS'in
+    /// KİRACI havuz kimliğiyle sunduğu <c>phpmyadmin</c> / <c>roundcube</c> (Firewall.cs: 8896/8897
+    /// portları, "tools" siteleri) ve kiracının SINIRLI kimliğiyle koşan <c>composer</c> / <c>wp-cli</c>
+    /// (LimitedIdentityRunner) duruyor. <c>tools</c>'u topluca kilitlemek phpMyAdmin/Roundcube'ü ve
+    /// composer'ı KIRARDI. O yüzden yalnız SYSTEM-only alt dizinler tek tek kapatılır.
+    /// </para>
+    /// <para>
+    /// <b>win-acme — updates'in KARDEŞİ, bu makinede ölçüldü.</b> <c>C:\ProgramData\AdaPanel\tools\win-acme</c>
+    /// DACL'i <c>Everyone:(I)(CI)(F)</c> taşıyordu; klasör üzerindeki FullControl, <c>wacs.exe</c>'nin
+    /// kendi izni (Users:RX) ne olursa olsun FILE_DELETE_CHILD + FILE_ADD_FILE verir → kiracı
+    /// <c>wacs.exe</c>'yi silip yerine kendininkini koyabilir VEYA .NET aracının klasöründen yüklediği
+    /// bir DLL'i düşürebilir. <c>wacs.exe</c> panel (SYSTEM) tarafından çalıştırılıyor: elle yenileme
+    /// (WinAcmeSslService.RenewAllAsync) VE gözetimsiz otomasyon (AutomationService.cs:585) — yani
+    /// yönetici hiçbir şey yapmasa bile bir sonraki otomatik yenilemede kiracı → SYSTEM.
+    /// </para>
+    /// <para>
+    /// KAPATMAK GÜVENLİ: win-acme'yi çalıştıran/okuyan tek taraf SYSTEM'dir (panel + onun MailService
+    /// ve ComponentBootstrapper çağrıları). IIS bu dizini sunmaz. Üstteki <c>tools</c> kiracıya açık
+    /// kalır; yalnız bu alt dizin düşer (fazla kapatma yok).
+    /// </para>
+    /// </summary>
+    internal static readonly string[] LockedToolDirectories = ["win-acme"];
 
     /// <summary>
     /// K2: <c>runtimes</c> altında KİRACIYA kapatılacak yolların bileşen bazlı tanımı.
@@ -181,7 +220,56 @@ public static class DataRootHardeningService
             logger.LogWarning(exception, "runtimes ACL sertleştirme atlandı.");
         }
 
+        try
+        {
+            HardenTools(dataRoot, logger);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "tools ACL sertleştirme atlandı.");
+        }
+
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// K1: <c>tools</c> altındaki SYSTEM-only araç dizinlerini (bkz. <see cref="LockedToolDirectories"/>)
+    /// kiracıya kapatır. <c>runtimes</c> ile AYNI disiplin: DACL sıfırdan KURULMAZ, mevcut ACE'ler
+    /// korunup yalnız kiracı grupları düşürülür (üstteki <c>tools</c> phpMyAdmin/Roundcube için açık
+    /// kalmalı; sıfırdan kurmak win-acme'nin ihtiyaç duyabileceği bir hesabı da düşürme riski taşırdı).
+    /// </summary>
+    private static void HardenTools(string dataRoot, ILogger logger)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dataRoot));
+        var toolsRoot = Path.Combine(root, "tools");
+        if (!Directory.Exists(toolsRoot))
+        {
+            return;
+        }
+
+        foreach (var name in LockedToolDirectories)
+        {
+            var dir = Path.Combine(toolsRoot, name);
+            if (!Directory.Exists(dir))
+            {
+                continue;
+            }
+
+            try
+            {
+                RemoveTenantAccess(dir);
+                logger.LogInformation("tools kiracıya kapatıldı: {Directory}", dir);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "tools ACL ayarı '{Directory}' için atlandı.", dir);
+            }
+        }
     }
 
     /// <summary>

@@ -30,6 +30,7 @@ $ErrorActionPreference = "Stop"
 # Paketsiz yayin nobetcisinin SAF karari. Ayri dosyada, cunku govdeye gomuluyken test
 # edilemiyordu; bu dosya yalnizca fonksiyon tanimlar, hicbir sey calistirmaz.
 . (Join-Path $PSScriptRoot "lib\release-asset-guard.ps1")
+. (Join-Path $PSScriptRoot "lib\release-note-privacy.ps1")
 
 if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path }
 
@@ -201,6 +202,24 @@ if ($MyInvocation.InvocationName -ne '.') {
     $releaseInfo = Read-AdaReleaseBody -Path (Join-Path $RepoRoot "release-body.json")
     if ($releaseInfo.tag_name -ne $version) {
         throw "release-body.json tag_name ($($releaseInfo.tag_name)) surumle ($version) uyusmuyor."
+    }
+
+    # MAHREMIYET KAPISI -- yasanmis bir olaydan sonra eklendi.
+    #
+    # Bir surumun notuna, hatayi kanitlamak icin yapilan CANLI OLCUMUN ciktisi oldugu gibi
+    # yapistirildi ve musterinin gercek FTP hesap adlari HERKESE ACIK bir sayfada yayinlandi.
+    # Kanit toplamak dogrudur; kaniti yayin notuna tasirken kimligi silmek gerekir -- ve insan
+    # dikkati bunun icin yeterli bir savunma degildir.
+    #
+    # Karar SAF bir fonksiyonda (lib altindaki release-note-privacy.ps1): govdeye gomuluyken
+    # test edilemezdi. Ayni gerekce paketsiz-yayin nobetcisinde de yazili.
+    $mahremiyetMetni = $releaseInfo.name + [Environment]::NewLine + $releaseInfo.body
+    $mahremiyet = @(Get-AdaReleaseNotePrivacyFindings -Metin $mahremiyetMetni -YasakliTerimler (Get-AdaPrivacyTerms))
+    if ($mahremiyet.Count -gt 0) {
+        $satirlar = $mahremiyet -join ([Environment]::NewLine + "  ")
+        throw ("Yayin notunda kisisel/altyapi izi var, YAYIN DURDURULDU:" + [Environment]::NewLine +
+               "  " + $satirlar + [Environment]::NewLine +
+               "Olcum ciktisini yapistirmadan once kimligi silin (ornek adla degistirin).")
     }
 
     $token = Get-AdaGitHubToken

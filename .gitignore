@@ -36,3 +36,7 @@ veritabani
 
 # Olcum aracinin (scratchpad/panel.py) cikti dosyasi -- depoya girmemeli.
 cikti.txt
+
+# Yayin notu mahremiyet kapisinin depoya OZGU terim listesi.
+# Listenin kendisi kisisel veridir; depoya girmemeli.
+scripts/lib/privacy-terms.txt

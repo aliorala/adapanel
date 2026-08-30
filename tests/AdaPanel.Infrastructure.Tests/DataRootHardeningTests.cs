@@ -248,6 +248,85 @@ public sealed class DataRootHardeningTests : IDisposable
     }
 
     /// <summary>
+    /// İNDİRME KLASÖRÜ (K1 — updates'in kardeşi, bu makinede ölçülerek bulundu).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ÖLÇÜM: <c>C:\ProgramData\AdaPanel\downloads</c> DACL'i <c>Everyone:(I)(CI)(F)</c> +
+    /// <c>BUILTIN\Users:(WD,AD)</c> taşıyordu; içinde <c>requestRouter_amd64.msi</c>,
+    /// <c>rewrite_amd64_en-US.msi</c> ve mariadb/php zip'leri duruyordu. <c>ComponentBootstrapper</c>
+    /// bu klasöre indirip dosyayı SYSTEM olarak <c>msiexec /i</c> ile çalıştırıyor. sha256 doğrulaması
+    /// yalnız hash YAYIMLAYAN kaynaklar için var; <c>sha256: string.Empty</c> ile inen bileşenlerde
+    /// hiç doğrulama yok. Yani kiracı, dosyayı kurulumdan önce değiştirerek SYSTEM'e kod geçirebilir.
+    /// </para>
+    /// <para>
+    /// Test ACL'i TAKLİT ETMEZ: gerçek bir Everyone ACE'i yazar, sertleştirmeyi koşar, ACL'i diskten
+    /// geri okur. Liste değiştirilirse (mutasyon: "downloads" silinirse) burası kırmızı yanar.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Indirilen_paket_klasoru_kiraciya_KAPATILIR()
+    {
+        var dataRoot = Path.Combine(calisma, "indirme-koku");
+        var downloads = Path.Combine(dataRoot, "downloads");
+        Directory.CreateDirectory(downloads);
+        HerkeseTamYetkiVer(downloads);
+
+        Assert.Contains(Everyone, DiskteAcikDuranSidler(downloads));
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        var kalanlar = DiskteAcikDuranSidler(downloads);
+        Assert.DoesNotContain(Everyone, kalanlar);
+        Assert.DoesNotContain(Users, kalanlar);
+        Assert.True(
+            new DirectoryInfo(downloads).GetAccessControl().AreAccessRulesProtected,
+            "downloads klasörünün DACL'i korumasız; kökteki Everyone mirasla geri düşer.");
+
+        // FAZLA KAPATMA KONTROLÜ: indiren/çalıştıran tek taraf SYSTEM (ComponentBootstrapper).
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), kalanlar);
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), kalanlar);
+    }
+
+    /// <summary>
+    /// tools\win-acme (K1 — updates'in kardeşi, bu makinede ölçüldü): <c>wacs.exe</c> panel (SYSTEM)
+    /// tarafından çalıştırılıyor ve klasör <c>Everyone:(I)(CI)(F)</c> idi → kiracı betiği/DLL'i
+    /// değiştirip SYSTEM olur. <c>tools</c> ÜSTÜ kapatılamaz (phpMyAdmin/Roundcube IIS ile kiracıya
+    /// sunulur), yalnız <c>win-acme</c> düşürülür.
+    /// </summary>
+    /// <remarks>
+    /// Bu test HEM kapanmayı HEM fazla-kapatmama garantisini birlikte ölçer: win-acme'de Everyone
+    /// düşmeli, phpmyadmin'de KALMALI. Mutasyon (LockedToolDirectories boşaltılırsa VEYA phpmyadmin
+    /// de listeye eklenirse) ikisinden biri kırmızı yanar.
+    /// </remarks>
+    [Fact]
+    public void Tools_win_acme_kapatilir_phpmyadmin_e_DOKUNMAZ()
+    {
+        var dataRoot = Path.Combine(calisma, "tools-koku");
+        var winAcme = Path.Combine(dataRoot, "tools", "win-acme");
+        var phpMyAdmin = Path.Combine(dataRoot, "tools", "phpmyadmin");
+        Directory.CreateDirectory(winAcme);
+        Directory.CreateDirectory(phpMyAdmin);
+        HerkeseTamYetkiVer(winAcme);
+        HerkeseTamYetkiVer(phpMyAdmin);
+
+        // Ön koşul: iki klasörde de Everyone GERÇEKTEN yazılabildi.
+        Assert.Contains(Everyone, DiskteAcikDuranSidler(winAcme));
+        Assert.Contains(Everyone, DiskteAcikDuranSidler(phpMyAdmin));
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        // win-acme: SYSTEM'in çalıştırdığı araç → kiracı düşürülür.
+        var winAcmeKalan = DiskteAcikDuranSidler(winAcme);
+        Assert.DoesNotContain(Everyone, winAcmeKalan);
+        Assert.DoesNotContain(Users, winAcmeKalan);
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), winAcmeKalan);
+
+        // phpMyAdmin: IIS kiracı havuz kimliğiyle sunar → kapatılırsa phpMyAdmin 500 verir. DOKUNULMAZ.
+        Assert.Contains(Everyone, DiskteAcikDuranSidler(phpMyAdmin));
+    }
+
+    /// <summary>
     /// Hassas klasör listesi İKİ YERDE yazılı: servis açılışta uygular
     /// (<see cref="DataRootHardeningService.SensitiveDirectories"/>), <c>harden-adapanel.ps1</c>
     /// elle uygular. Birine eklenip diğerine eklenmemesi, "sertleştirildi" denilen bir klasörün

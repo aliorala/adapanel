@@ -100,7 +100,7 @@ else {
     # Klasor uzerindeki FullControl, dosya izinlerinden bagimsiz olarak "sil + yerine koy" hakki
     # verir; paket tarafindaki SHA256/yayinci/depo denetimlerinin hicbiri betige bakmaz.
     # Bu listeler AYRISMAMALI: capraz kontrol DataRootHardeningTests icinde.
-    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs", "updates")
+    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads")
     $inherit   = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
     $noProp    = [System.Security.AccessControl.PropagationFlags]::None
     $allow     = [System.Security.AccessControl.AccessControlType]::Allow
@@ -235,6 +235,55 @@ else {
         }
 
         Write-Host "[K2-DATA] Tamamlandi. (Panel servisi de acilista ayni yollari kapatir.)" -ForegroundColor Green
+    }
+
+    # ===================================================================================
+    # K1-TOOLS - tools ICINDEKI SYSTEM-only ARAC DIZINLERINI KIRACIYA KAPAT
+    # ===================================================================================
+    # Problem (OLCULDU): tools\win-acme DACL'i Everyone:(I)(CI)(F) tasiyordu. Klasor uzerindeki
+    # FullControl, wacs.exe'nin kendi izni (Users:RX) ne olursa olsun "sil + yerine koy" ve DLL
+    # dusurme hakki verir. wacs.exe panel (SYSTEM) tarafindan hem elle yenilemede hem gozetimsiz
+    # otomasyonda calistirilir -> kiraci SYSTEM olur (updates klasorunun tipatip kardesi).
+    #
+    # tools TOPLUCA kapatilamaz: phpmyadmin/roundcube IIS ile KIRACI havuz kimligiyle sunulur,
+    # composer/wp-cli kiracinin SINIRLI kimligiyle kosar. Bu yuzden yalniz SYSTEM-only alt dizinler
+    # (win-acme) tek tek kapatilir. Liste DataRootHardeningService.LockedToolDirectories ile ayni.
+
+    Write-Host ""
+    Write-Host "[K1-TOOLS] tools icindeki SYSTEM-only arac dizinleri kiracıya kapatiliyor..." -ForegroundColor Yellow
+
+    $toolsRoot = Join-Path $root "tools"
+    if (-not (Test-Path -LiteralPath $toolsRoot)) {
+        Write-Host "[K1-TOOLS] '$toolsRoot' yok; atlandi."
+    }
+    else {
+        $everyoneToolsSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::WorldSid, $null)
+        $guestsToolsSid   = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinGuestsSid, $null)
+        $iisToolsSid      = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-568")  # IIS_IUSRS
+
+        foreach ($toolName in "win-acme") {
+            $target = Join-Path $toolsRoot $toolName
+            if (-not (Test-Path -LiteralPath $target)) { continue }
+            try {
+                $acl = Get-Acl -LiteralPath $target
+                # Mirasi kapat ama mevcut ACE'leri KORU (SYSTEM/servis dusmesin).
+                $acl.SetAccessRuleProtection($true, $true)
+                $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, $fullCtrl, $inherit, $noProp, $allow)))
+                $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid,  $fullCtrl, $inherit, $noProp, $allow)))
+                [void]$acl.PurgeAccessRules($usersSid)
+                [void]$acl.PurgeAccessRules($authSid)
+                [void]$acl.PurgeAccessRules($everyoneToolsSid)
+                [void]$acl.PurgeAccessRules($guestsToolsSid)
+                [void]$acl.PurgeAccessRules($iisToolsSid)
+                Set-Acl -LiteralPath $target -AclObject $acl
+                Write-Host "[K1-TOOLS]   Kilitlendi: $target" -ForegroundColor Green
+            }
+            catch {
+                Write-Warning "[K1-TOOLS]   '$target' ACL ayarlanamadi: $($_.Exception.Message)"
+            }
+        }
+
+        Write-Host "[K1-TOOLS] Tamamlandi. (Panel servisi de acilista ayni yollari kapatir.)" -ForegroundColor Green
     }
 }
 
