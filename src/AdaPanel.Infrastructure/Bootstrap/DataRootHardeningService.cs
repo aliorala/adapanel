@@ -79,7 +79,31 @@ public static class DataRootHardeningService
     /// </para>
     /// </remarks>
     internal static readonly string[] SensitiveDirectories =
-        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads"];
+        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads", "components", "logs"];
+
+    /*
+     * "components" ve "logs" SONRADAN EKLENDI -- ikisi de ayni denetim turunda OLCULDU
+     * (icacls ile, canli): ikisinde de Everyone:(I)(CI)(F) vardi.
+     *
+     * components: iis-arr / iis-url-rewrite kurulum paketlerini tutar ve ComponentBootstrapper
+     *   bunlari SYSTEM olarak `msiexec /i` ile KURAR. Yani `downloads` ile birebir ayni sinif --
+     *   kiraci paketi degistirir, panel onu SYSTEM olarak kurar. Klasore dokunan baska bir taraf
+     *   yok: kod tarandi, yalniz ComponentBootstrapper (SYSTEM) okuyor.
+     *
+     * logs: panelin KENDI gunlukleri (Serilog, Program.cs). Burada yukseltme YOK -- SYSTEM bu
+     *   klasorden bir sey CALISTIRMIYOR. Kapatilma sebebi baska: kiraci panel gunluklerini
+     *   OKUYABILIYORDU. Gunluk satirlarindan sir gecebilir (yol, kullanici adi, hata ayrintisi) ve
+     *   kiracinin baska kiracilarin islemlerini okumasi tek basina bir ifsadir. Ayrica yazma hakki
+     *   gunlugu bozmaya (delil karartma) yeter.
+     *   FAZLA KAPATMA OLCULDU: gunlugu yazan panel servisi SYSTEM'dir, okuyan yonetici
+     *   Administrators'tadir; ikisi de yeni DACL'de duruyor. Tepsi uygulamasinda bu klasoru okuyan
+     *   bir yol aranmis ve BULUNMAMISTIR.
+     *
+     * "sitebuilder" BILEREK EKLENMEDI: ayni turda olculdu ve onda da Everyone:(I)(CI)(F) var, ama
+     * icerigi kullanicinin site projeleri. Bir projenin bir siteye yayinlanip IIS tarafindan
+     * sunulup sunulmadigi OLCULEMEDI; korlemesine kapatmak site kurucuyu kirabilirdi. Fazla
+     * kapatma, bu depoda acik birakmak kadar pahali bir hatadir -- olcum yapilmadan kapatilmaz.
+     */
 
     /// <summary>
     /// <c>tools</c> ALTINDA, tamamı panele ait olup SYSTEM olarak ÇALIŞTIRILAN alt araç dizinleri.

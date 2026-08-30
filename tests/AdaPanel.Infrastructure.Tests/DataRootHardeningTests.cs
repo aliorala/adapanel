@@ -289,6 +289,59 @@ public sealed class DataRootHardeningTests : IDisposable
     }
 
     /// <summary>
+    /// HASSAS SAYILAN HER KLASOR GERCEKTEN KAPANIR — tek tek degil, LISTENIN TAMAMI.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden veri gudumlu:</b> bu listeye bir klasor eklemek ucuz, ama eklemenin ISE YARADIGINI
+    /// olcmek ayri bir istir. Tek tek yazilan testler yalnizca o gun akla gelen klasoru korur;
+    /// sonradan eklenen (bu turda <c>components</c> ve <c>logs</c>) sessizce olcusuz kalirdi.
+    /// Liste buyudukce koruma da kendiliginde buyusun diye test listeden BESLENIR.
+    /// </para>
+    /// <para>
+    /// <b>Olculen sey taklit degil:</b> gercek bir Everyone ACE'i diske yazilir, <c>HardenAsync</c>
+    /// kosar, ACL DISKTEN geri okunur. Ayrica FAZLA KAPATMA olculur: SYSTEM ve Administrators
+    /// dusmus olmamali — panel kendi verisine erisemezse acigi kapatmis olmayiz, urunu kirmis
+    /// oluruz.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Hassas_klasorlerin_HEPSI_kiraciya_kapatilir()
+    {
+        var dataRoot = Path.Combine(calisma, "toplu-hassas");
+        var klasorler = DataRootHardeningService.SensitiveDirectories;
+
+        // Kendi kendini denetleyen alt sinir: liste bosalirsa test "sorun yok" diyerek YESIL kalmasin.
+        Assert.True(klasorler.Length >= 8, $"Hassas klasor listesi daralmis: {klasorler.Length}");
+
+        foreach (var ad in klasorler)
+        {
+            var yol = Path.Combine(dataRoot, ad);
+            Directory.CreateDirectory(yol);
+            HerkeseTamYetkiVer(yol);
+            Assert.Contains(Everyone, DiskteAcikDuranSidler(yol));
+        }
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        foreach (var ad in klasorler)
+        {
+            var yol = Path.Combine(dataRoot, ad);
+            var kalanlar = DiskteAcikDuranSidler(yol);
+
+            Assert.DoesNotContain(Everyone, kalanlar);
+            Assert.DoesNotContain(Users, kalanlar);
+            Assert.True(
+                new DirectoryInfo(yol).GetAccessControl().AreAccessRulesProtected,
+                $"'{ad}' DACL'i korumasiz; koktekiler mirasla geri duser.");
+
+            // FAZLA KAPATMA: panelin kendisi (SYSTEM) ve yonetici erisimini KAYBETMEMELI.
+            Assert.Contains(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), kalanlar);
+            Assert.Contains(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), kalanlar);
+        }
+    }
+
+    /// <summary>
     /// tools\win-acme (K1 — updates'in kardeşi, bu makinede ölçüldü): <c>wacs.exe</c> panel (SYSTEM)
     /// tarafından çalıştırılıyor ve klasör <c>Everyone:(I)(CI)(F)</c> idi → kiracı betiği/DLL'i
     /// değiştirip SYSTEM olur. <c>tools</c> ÜSTÜ kapatılamaz (phpMyAdmin/Roundcube IIS ile kiracıya

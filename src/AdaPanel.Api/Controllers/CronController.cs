@@ -139,7 +139,26 @@ public sealed class CronController(
     /// <summary>
     /// Görevlerin çalışacağı ortam: sunucuda hangi Python kurulu, SYSTEM onu görebiliyor mu.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>YALNIZCA YÖNETİCİ — ölçülmüş bir sızıntı kapatıldı.</b> Yanıt sunucudaki yorumlayıcıların
+    /// TAM YOLLARINI taşır ve bu yollar makinenin iç yapısını ele verir; canlı panelde ölçülen değer
+    /// <c>C:\Users\&lt;yönetici&gt;\AppData\Local\Python\…</c> idi, yani sunucu yöneticisinin Windows
+    /// kullanıcı adı bir hosting müşterisine düz metin olarak dönüyordu.
+    /// </para>
+    /// <para>
+    /// <b>Kısıt bir yetenek kaybı DEĞİL:</b> müşteri/bayi zaten yalnız <c>url</c> tipi görev
+    /// kurabiliyor (<see cref="CreateTaskAsync"/> diğer alanları zorla temizler), dolayısıyla bu
+    /// ölçümle yapabileceği hiçbir şey yok. Panel de bu kutuyu yalnız komut/betik formunda
+    /// gösteriyor — yani kapsamlı rol veriyi hiç görmüyordu bile, sadece taşıyordu.
+    /// </para>
+    /// <para>
+    /// Kardeş uç (<see cref="AddPythonToPathAsync"/>) aynı gerekçeyle zaten yöneticiye özeldi;
+    /// okuma ucunun açık kalması, aynı bilginin ikinci kapısını açık bırakmaktı.
+    /// </para>
+    /// </remarks>
     [HttpGet("environment")]
+    [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<TaskEnvironmentDto>>> GetEnvironmentAsync(CancellationToken cancellationToken)
     {
         var ortam = await schedulerService.GetEnvironmentAsync(cancellationToken);
@@ -153,14 +172,16 @@ public sealed class CronController(
     /// bunu yapamamalı.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Kısıt gövdedeki bir <c>if</c> ile değil ÖZNİTELİKLE uygulanıyor — kardeş okuma ucuyla
+    /// (<see cref="GetEnvironmentAsync"/>) aynı mekanizma. Gerekçe: iki uç aynı kuralı iki farklı
+    /// yolla uyguladığında kuralın makineyle denetlenmesi mümkün olmaz ve biri değişince diğeri
+    /// sessizce geride kalır. Öznitelik ayrıca eylem gövdesinden ÖNCE çalışır.
+    /// </remarks>
     [HttpPost("environment/python-path")]
+    [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<object>>> AddPythonToPathAsync(CancellationToken cancellationToken)
     {
-        if (!IsAdmin)
-        {
-            return StatusCode(403, ApiResponse<object>.Fail("common.forbidden", 403));
-        }
-
         var eklenen = await schedulerService.AddPythonToMachinePathAsync(cancellationToken);
         // SUNUCU GENELİ: makine PATH'i bütün kiracıların görevlerini etkiler, tek bir aboneliğe ait değil.
         await WriteServerAuditAsync("cron.python_path", $"Python added to machine PATH ({eklenen} folder(s)).");

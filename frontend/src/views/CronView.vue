@@ -517,7 +517,12 @@ onMounted(() => {
     form.taskType = "url";
   }
   void refresh();
-  void loadEnvironment();
+  // Ortam ölçümü YALNIZ yöneticiye açık (uç de öyle): kutusu yalnız komut/betik formunda çizilir ve
+  // o form kapsamlı role hiç açılmaz. Koşulsuz çağırmak, kapsamlı kullanıcıya her açılışta sessiz
+  // bir 403 ürettirmek olurdu.
+  if (isAdmin.value) {
+    void loadEnvironment();
+  }
   clockTimer = window.setInterval(() => {
     now.value = Date.now();
   }, 60_000);

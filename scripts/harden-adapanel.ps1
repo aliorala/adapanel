@@ -100,7 +100,11 @@ else {
     # Klasor uzerindeki FullControl, dosya izinlerinden bagimsiz olarak "sil + yerine koy" hakki
     # verir; paket tarafindaki SHA256/yayinci/depo denetimlerinin hicbiri betige bakmaz.
     # Bu listeler AYRISMAMALI: capraz kontrol DataRootHardeningTests icinde.
-    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads")
+    # NOT: bu liste DataRootHardeningService.SensitiveDirectories ile AYNI olmak zorunda;
+    # ayrisirlarsa DataRootHardeningTests kirmizi yanar. "components" SYSTEM'in msiexec ile
+    # kurdugu paketleri, "logs" panelin kendi gunluklerini tutar; ikisinde de Everyone tam
+    # yetki olculdu. "sitebuilder" BILEREK disarida: olcum yapilmadan kapatilmaz.
+    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs", "updates", "downloads", "components", "logs")
     $inherit   = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
     $noProp    = [System.Security.AccessControl.PropagationFlags]::None
     $allow     = [System.Security.AccessControl.AccessControlType]::Allow
