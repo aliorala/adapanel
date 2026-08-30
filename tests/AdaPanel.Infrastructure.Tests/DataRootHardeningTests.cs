@@ -196,6 +196,96 @@ public sealed class DataRootHardeningTests : IDisposable
         Assert.DoesNotContain(Users, sidler);
     }
 
+    /// <summary>
+    /// GÜNCELLEME KLASÖRÜ (K1 — bu makinede ölçülerek bulundu, listede YOKTU).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ÖLÇÜM: 0.8.4 kurulu ve çalışır durumdayken
+    /// <c>C:\ProgramData\AdaPanel\updates</c> DACL'i <c>(A;CIID;FA;;;WD)</c> taşıyordu — Everyone =
+    /// FullControl, mirasla gelmiş, koruma bayrağı yok. Aynı anda ölçülen <c>config</c> ise
+    /// <c>D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)</c> ile kapalıydı. Tek fark: <c>updates</c>
+    /// <see cref="DataRootHardeningService.SensitiveDirectories"/> listesinde yoktu.
+    /// </para>
+    /// <para>
+    /// NEDEN EN AĞIRI: bu klasördeki <c>apply-update.ps1</c> zamanlanmış görevle SYSTEM olarak
+    /// (<c>-RunLevel Highest</c>) çalıştırılıyor. Klasör üzerindeki FullControl, dosyanın kendi
+    /// izninden BAĞIMSIZ olarak "sil + yerine koy" hakkı verir. Paket tarafındaki üç savunma
+    /// (SHA256, yayıncı/CompanyName, izinli depo) betiğe hiç bakmaz — yani kiracıdan SYSTEM'e
+    /// denetimsiz bir yol açıktı.
+    /// </para>
+    /// <para>
+    /// Test ACL'i TAKLİT ETMEZ: gerçek bir Everyone ACE'i yazar, sertleştirmeyi çalıştırır ve
+    /// ACL'i diskten geri okur. Liste değiştirilirse (mutasyon) burası kırmızı yanar.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Guncelleme_paketi_klasoru_kiraciya_KAPATILIR()
+    {
+        var dataRoot = Path.Combine(calisma, "guncelleme-koku");
+        var updates = Path.Combine(dataRoot, "updates");
+        Directory.CreateDirectory(updates);
+        HerkeseTamYetkiVer(updates);
+
+        // Ön koşul: Everyone GERÇEKTEN yazılabildi (yazılamadıysa test bir şey kanıtlamaz).
+        Assert.Contains(Everyone, DiskteAcikDuranSidler(updates));
+
+        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+
+        var kalanlar = DiskteAcikDuranSidler(updates);
+        Assert.DoesNotContain(Everyone, kalanlar);
+        Assert.DoesNotContain(Users, kalanlar);
+
+        // Kökten yeni geniş ACE düşmesin: miras KAPALI olmalı.
+        Assert.True(
+            new DirectoryInfo(updates).GetAccessControl().AreAccessRulesProtected,
+            "updates klasörünün DACL'i korumasız; kökteki Everyone mirasla geri düşer.");
+
+        // FAZLA KAPATMA KONTROLÜ: klasöre dokunan her şey SYSTEM'dir (panel servisi ve onun
+        // kurduğu zamanlanmış görev). SYSTEM düşerse güncelleme yolu tamamen ölür.
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), kalanlar);
+        Assert.Contains(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), kalanlar);
+    }
+
+    /// <summary>
+    /// Hassas klasör listesi İKİ YERDE yazılı: servis açılışta uygular
+    /// (<see cref="DataRootHardeningService.SensitiveDirectories"/>), <c>harden-adapanel.ps1</c>
+    /// elle uygular. Birine eklenip diğerine eklenmemesi, "sertleştirildi" denilen bir klasörün
+    /// yalnızca yarı yarıya kapanması demektir — <c>updates</c>'te tam olarak bu yaşandı.
+    /// Bu yüzden liste betikten OKUNUR, tekrar YAZILMAZ.
+    /// </summary>
+    [Fact]
+    public void Betikteki_hassas_klasor_listesi_servisinkiyle_AYNI()
+    {
+        var betik = Path.Combine(RepoKoku(), "scripts", "harden-adapanel.ps1");
+        Assert.True(File.Exists(betik), $"Sertleştirme betiği bulunamadı: {betik}");
+
+        var eslesme = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(betik),
+            @"\$sensitive\s*=\s*@\(([^)]*)\)");
+        Assert.True(eslesme.Success, "harden-adapanel.ps1 içinde '$sensitive = @(...)' bulunamadı.");
+
+        var betiktekiler = System.Text.RegularExpressions.Regex
+            .Matches(eslesme.Groups[1].Value, "\"([^\"]+)\"")
+            .Select(m => m.Groups[1].Value)
+            .ToArray();
+
+        Assert.Equal(DataRootHardeningService.SensitiveDirectories, betiktekiler);
+    }
+
+    /// <summary>Test derlemesinden depo köküne çık (bin\&lt;yapılandırma&gt;\&lt;tfm&gt;\ → 5 seviye).</summary>
+    private static string RepoKoku()
+    {
+        var dizin = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dizin is not null && !File.Exists(Path.Combine(dizin.FullName, "Directory.Build.props")))
+        {
+            dizin = dizin.Parent;
+        }
+
+        Assert.NotNull(dizin);
+        return dizin!.FullName;
+    }
+
     // ===================================================================================
     // K2 — runtimes ayrımı: IIS'in RX'e MUHTAÇ olduğu yollar ile olmadığı yollar
     // ===================================================================================

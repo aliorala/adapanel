@@ -327,7 +327,10 @@ const form = reactive<AutomationSettings>({
   backupMail: false,
   backupPanelConfig: false,
   backupDatabaseEngines: [],
-  autoSslRenewEnabled: false,
+  // Backend varsayilani ile AYNI (AutomationService.AutoSslRenewEnabled = true). Form zaten
+  // Object.assign(form, next.settings) ile sunucudan dolduruluyor; bu deger yalnizca ilk boyama
+  // aninda gorunur, ama yanlis olmasi kullaniciya bir an "kapali" gostermek demekti.
+  autoSslRenewEnabled: true,
   sslRenewIntervalHours: 24,
   alertsEnabled: false,
   diskUsageThresholdPercent: 90,

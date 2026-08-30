@@ -29,9 +29,45 @@ namespace AdaPanel.Infrastructure.Bootstrap;
 /// </summary>
 public static class DataRootHardeningService
 {
-    /// <summary>Tamamı panele ait, kiracının HİÇBİR parçasına erişmemesi gereken veri kökü klasörleri.</summary>
+    /// <summary>
+    /// Tamamı panele ait, kiracının HİÇBİR parçasına erişmemesi gereken veri kökü klasörleri.
+    /// <para>
+    /// AYNI LİSTE <c>scripts\harden-adapanel.ps1</c> içindeki <c>$sensitive</c> dizisinde de var
+    /// (servis açılışta uygular, betik elle uygular). İkisinin ayrışamaması
+    /// <c>DataRootHardeningTests</c> içinde ayrıca sınanır.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>updates — bu makinede ÖLÇÜLDÜ, listede YOKTU.</b> 0.8.4 kurulu ve çalışır durumdayken
+    /// <c>C:\ProgramData\AdaPanel\updates</c> DACL'i:
+    /// <c>O:BAG:SYD:(A;;FA;;;BA)(A;CIID;FA;;;WD)(A;OICIID;FA;;;SY)...</c> —
+    /// yani <c>WD</c> (Everyone) = FullControl, MİRASLA gelmiş ve DACL korumasız (<c>P</c> bayrağı
+    /// yok). Karşılaştırma için aynı anda ölçülen <c>config</c>: <c>D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)</c>
+    /// — kapalı. Fark tek sebepten: <c>updates</c> bu dizide yoktu.
+    /// </para>
+    /// <para>
+    /// <b>Neden bu klasör hassas olanların en hassası:</b> içinde iki dosya SYSTEM olarak
+    /// ÇALIŞTIRILIYOR — <c>apply-update.ps1</c> (zamanlanmış görev,
+    /// <c>-UserId 'SYSTEM' -RunLevel Highest</c>, tetik kayıttan 15 saniye sonra) ve
+    /// <c>AdaPanelSetup.exe</c>. Klasör üzerindeki FullControl, dosyaların kendi izinlerinden
+    /// BAĞIMSIZ olarak FILE_ADD_FILE + FILE_DELETE_CHILD verir: kiracı betiği silip yerine kendi
+    /// betiğini koyabilir. Paket tarafındaki üç savunma (SHA256, <c>UpdatePackageTrust</c> yayıncı
+    /// denetimi, izinli depo) bu yola KÖRDÜR; hiçbiri betiğe bakmaz.
+    /// </para>
+    /// <para>
+    /// Sonuç: barındırılan bir sitenin PHP'si ya da herhangi bir yerel hesap → SYSTEM. Bu tam olarak
+    /// <c>UpdatePackageTrust</c>'ın "panel yöneticisi bir Windows yöneticisi değildir" diyerek
+    /// kapattığı sınırın, çok daha ucuz bir yoldan aşılmasıydı.
+    /// </para>
+    /// <para>
+    /// KAPATMAK GÜVENLİ: klasöre dokunan HER ŞEY zaten SYSTEM — panel servisi
+    /// (<c>SelfUpdateService</c>, <c>WindowsUpdateInstallerLauncher</c>) ve onun kurduğu zamanlanmış
+    /// görev. Kod tarandı, üçüncü bir okuyucu yok (tepsi programı bu klasöre hiç bakmıyor).
+    /// </para>
+    /// </remarks>
     internal static readonly string[] SensitiveDirectories =
-        ["data", "keys", "certs", "config", "backups", "mail-certs"];
+        ["data", "keys", "certs", "config", "backups", "mail-certs", "updates"];
 
     /// <summary>
     /// K2: <c>runtimes</c> altında KİRACIYA kapatılacak yolların bileşen bazlı tanımı.

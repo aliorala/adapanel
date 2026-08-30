@@ -1295,7 +1295,29 @@ public sealed class AutomationService(
         public bool BackupMail { get; set; }
         public bool BackupPanelConfig { get; set; }
         public IReadOnlyCollection<string> BackupDatabaseEngines { get; set; } = [];
-        public bool AutoSslRenewEnabled { get; set; }
+        // VARSAYILAN ACIK. Bu, "ilk gun calisir, N gun sonra sessizce olur" sinifinin en uzun
+        // fitilliydi ve KAPALI birakmak bir tercih degil, bir zaman bombasiydi:
+        //
+        // 1. Let's Encrypt sertifikasi 90 GUN. Kapali toggle ile panel sertifikayi kurulum gunu
+        //    alir ve BIR DAHA HIC DOKUNMAZ.
+        // 2. Sertifika kurulurken HTTP->HTTPS 301 yonlendirmesi KOSULSUZ aciliyor
+        //    (WinAcmeSslService.ApplyHttpsRedirectAsync(..., true, ...) -- kullaniciya sorulmuyor).
+        //    Yani 90. gunde ziyaretci HTTPS'e zorlanip suresi DOLMUS sertifikayla karsilasiyor:
+        //    "sadece kilit gitti" degil, her sitede TAM SAYFA tarayici engeli = TOPLU KESINTI.
+        // 3. Uyari yolu da kapali: AlertsEnabled varsayilan false, yani sertifika bitiyor uyarisi
+        //    da gitmiyor. Advisor'daki tek isaret "info" seviyesinde.
+        // 4. Arayuz zaten BUNUN ACIK OLDUGUNU SOYLUYOR: Otomasyon ekranindaki
+        //    panel.automation.sslAutoHint metni ("Sertifikalar suresi dolmadan otomatik yenilenir;
+        //    ek ayar gerekmez") toggle KAPALIYKEN de gorunuyor. Varsayilani acmak, panelin
+        //    kullaniciya verdigi sozu tutmasidir.
+        //
+        // Acik olmanin maliyeti dusuk ve olculdu: yenilenecek sertifika yoksa "wacs --renew"
+        // hemen doner; win-acme kurulu degilse sonuc Measured=false ile "failed" yazilir, kurulum
+        // ya da panel akisi bozulmaz (bkz. RunSslRenewAsync).
+        //
+        // UpdateCheckEnabled ile ayni gerekce: sunucuyu ayakta tutan denetimler varsayilan ACIK,
+        // KESINTI URETEBILECEK olanlar (AutoApplyComponentUpdates) varsayilan kapali kalir.
+        public bool AutoSslRenewEnabled { get; set; } = true;
         public int SslRenewIntervalHours { get; set; } = 24;
         public string BackupTargetType { get; set; } = "local";
         public string BackupRemoteUrl { get; set; } = string.Empty;

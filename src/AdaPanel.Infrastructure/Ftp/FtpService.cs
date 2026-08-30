@@ -5,15 +5,19 @@ using AdaPanel.Core.Dtos.Ftp;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Ftp;
 
+// logger İSTEĞE BAĞLI: DI gerçek kaydediciyi verir, dört argümanla kurulan mevcut testler
+// (FtpHomeHealTests, FtpHomeProbeTests) derlenmeye devam eder.
 public sealed partial class FtpService(
     IIisSiteService iisSiteService,
     JsonFileStore fileStore,
     IPanelPreferencesService panelPreferencesService,
-    IOptions<PanelRuntimeOptions> runtimeOptions) : IFtpService
+    IOptions<PanelRuntimeOptions> runtimeOptions,
+    ILogger<FtpService>? logger = null) : IFtpService
 {
     private const string StatePath = "config/ftp-users.json";
     private const string TlsStatePath = "config/ftp-tls.json";
@@ -381,6 +385,10 @@ public sealed partial class FtpService(
             hesabiBuCagriActi = true;
         }
 
+        // Hesap AÇILDIĞI ANDA parola süresi kapatılır: aksi hâlde makinenin MaxPasswordAge'i
+        // (varsayılan 42 gün) hesaba işler ve FTP kırk iki gün sonra sessizce ölür.
+        await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
+
         // YARIM KALAN OLUŞTURMA ÖKSÜZ HESAP BIRAKIYORDU (19.08.2026, ölçüldü).
         //
         // Ölçülen zincir: yetki kuralı kaldırma sessizce başarısız olduğu için (bkz.
@@ -593,6 +601,10 @@ public sealed partial class FtpService(
         {
             throw new AppException("ftp.password_change_failed", 500, 500, BuildCommandDetails(result));
         }
+
+        // Parola değişimi sayacı sıfırlar; bayrak burada da teyit edilir. Bu ayrıca bu düzeltmeden
+        // ÖNCE açılmış (süresi dolan) hesapların kendiliğinden iyileşme yoludur.
+        await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
     }
 
     public async Task DeleteFtpUserAsync(string userName, CancellationToken cancellationToken = default)
@@ -1286,6 +1298,72 @@ public sealed partial class FtpService(
     }
 
     private static string EscapePowerShellLiteral(string value) => value.Replace("'", "''");
+
+    /// <summary>
+    /// FTP hesabının parolasını SÜRESİZ yapar ve sonucu GERİ OKUR.
+    /// </summary>
+    /// <remarks>
+    /// <b>ÖLÇÜLDÜ — BOZUK (bu makinede, canlı).</b> FTP kullanıcısı <c>net user … /add</c> ile
+    /// açılan gerçek bir Windows yerel hesabıdır ve hiçbir yerde parola süresi kapatılmıyordu;
+    /// hesap makinenin parola ilkesini (<c>MaxPasswordAge</c>, varsayılan <b>42 gün</b>) miras
+    /// alıyordu. <c>Get-LocalUser</c> çıktısı:
+    /// <code>
+    /// alioral_xyz_ftp  PasswordExpires=13.09.2026  PasswordLastSet=02.08.2026  (42 gün)
+    /// test_local_ftp   PasswordExpires=10.10.2026  PasswordLastSet=29.08.2026  (42 gün)
+    /// aLi              PasswordExpires=&lt;boş&gt;                                   (hiç dolmuyor)
+    /// </code>
+    /// Yani süre sonu YALNIZCA panelin açtığı hesaplarda vardı.
+    ///
+    /// Sonuç: FTP kurulum günü çalışır, 42 gün sonra AYNI GÜN açılmış bütün hesaplar birden
+    /// <c>530 Login incorrect</c> vermeye başlar. Panel hesabı hâlâ "etkin" gösterir, çünkü
+    /// <c>IsEnabled</c> parola süresini ölçmez — müşteri "FTP çalışmıyor" der, panel "çalışıyor" der.
+    ///
+    /// <b>PAROLA DEĞİŞİMİNDE DE ÇAĞRILIR</b> ve bu bilinçli: hem bayrağı teyit eder, hem de bu
+    /// düzeltmeden ÖNCE açılmış hesapları ilk parola değişiminde kendiliğinden iyileştirir.
+    ///
+    /// Betik bu makinede uçtan uca ölçüldü: <c>test_local_ftp</c> için süre sonu
+    /// <c>10.10.2026</c> iken çağrıdan sonra <c>PasswordExpires</c> null döndü.
+    ///
+    /// <b>Neden hata FIRLATMIYOR:</b> hesap ve yetkilendirme bu noktada çalışır durumdadır;
+    /// burada patlamak, çalışan bir FTP hesabını geri almak olurdu. Ama SESSİZ de değil —
+    /// başarısızlık ölçülen değerle birlikte kaydedilir.
+    /// </remarks>
+    private async Task EnsurePasswordNeverExpiresAsync(string userName, CancellationToken cancellationToken)
+    {
+        // Ad UserNamePattern ile ^[A-Za-z][A-Za-z0-9._-]{1,31}$ olarak doğrulanmıştır; tırnak giremez.
+        var ad = EscapePowerShellLiteral(userName);
+
+        // GERİ OKUMA ŞART: "hata vermedi" ile "oldu" aynı şey değil. Set-LocalUser sessizce
+        // etkisiz kalırsa bayrağı ölçen tek şey burasıdır.
+        var script = $@"$ErrorActionPreference = 'Stop'
+Set-LocalUser -Name '{ad}' -PasswordNeverExpires $true
+$hesap = Get-LocalUser -Name '{ad}'
+if ($null -eq $hesap.PasswordExpires) {{ [Console]::Out.WriteLine('ADAPANEL-SURESIZ') }}
+else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToString('o')) }}";
+
+        try
+        {
+            var sonuc = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+            if (sonuc.Success &&
+                (sonuc.StandardOutput ?? string.Empty).Contains("ADAPANEL-SURESIZ", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            logger?.LogWarning(
+                "FTP hesabinin parola suresi kapatilamadi: {UserName}. Hesap {Gun} gun sonra baglanamaz hale gelebilir. {Detay}",
+                userName,
+                "MaxPasswordAge",
+                BuildCommandDetails(sonuc));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger?.LogWarning(
+                exception,
+                "FTP hesabinin parola suresi kapatilamadi: {UserName}.",
+                userName);
+        }
+    }
 
     private static string BuildCommandDetails(CommandResult result)
     {

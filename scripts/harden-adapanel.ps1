@@ -78,7 +78,7 @@ $root = "C:\ProgramData\AdaPanel"
 # keys\key-*.xml (ASP.NET DataProtection anahtarlari — hatta yazilabilir) dosyalarini
 # herhangi bir barindirilmis sitenin PHP koduna acar -> tam sunucu ele gecirme.
 # Cozum (panel servisiyle AYNI .NET yontemi): yalniz HASSAS alt klasorleri (data/keys/certs/config/
-# backups/mail-certs) kilitle. icacls DEGIL .NET ACL kullanilir: izin "bu klasor + alt ogeler"e KESIN
+# backups/mail-certs/updates) kilitle. icacls DEGIL .NET ACL kullanilir: izin "bu klasor + alt ogeler"e KESIN
 # uygulanir (icacls (OI)(CI)F bazi Server'larda inherit-only uygulayip SYSTEM erisimini -> SQLite ve
 # DataProtection'i kiriyordu). KOK (root) klasore DOKUNULMAZ.
 # runtimes TOPLU olarak kapatilmaz (IIS icin RX kalmali) ama icindeki HASSAS yollar K2'de tek tek
@@ -92,7 +92,15 @@ if (-not (Test-Path -LiteralPath $root)) {
 }
 else {
     # Panel servisinin (DataRootHardeningService) acilista uyguladiginin AYNISI — burada elle de uygulanir.
-    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs")
+    #
+    # 'updates' SONRADAN EKLENDI ve sebebi olculdu: 0.8.4 kurulu makinede
+    # C:\ProgramData\AdaPanel\updates DACL'i (A;CIID;FA;;;WD) tasiyordu -- Everyone = FullControl,
+    # mirasla gelmis, koruma bayragi yok. O klasorde SYSTEM olarak CALISTIRILAN iki dosya duruyor:
+    # apply-update.ps1 (zamanlanmis gorev, -UserId SYSTEM -RunLevel Highest) ve AdaPanelSetup.exe.
+    # Klasor uzerindeki FullControl, dosya izinlerinden bagimsiz olarak "sil + yerine koy" hakki
+    # verir; paket tarafindaki SHA256/yayinci/depo denetimlerinin hicbiri betige bakmaz.
+    # Bu listeler AYRISMAMALI: capraz kontrol DataRootHardeningTests icinde.
+    $sensitive = @("data", "keys", "certs", "config", "backups", "mail-certs", "updates")
     $inherit   = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
     $noProp    = [System.Security.AccessControl.PropagationFlags]::None
     $allow     = [System.Security.AccessControl.AccessControlType]::Allow
