@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -14,9 +14,79 @@ namespace AdaPanel.Infrastructure.Notifications;
 public sealed class NotificationService(
     JsonFileStore fileStore,
     IHttpClientFactory httpClientFactory,
-    ISecretProtector secretProtector) : INotificationService
+    ISecretProtector secretProtector,
+    // İSTEĞE BAĞLI: "iç ağ hedeflerine izin ver" açık kapısı. Verilmemişse KAPALI sayılır.
+    Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
+    // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : INotificationService
 {
     private const string SettingsPath = "config/notifications.json";
+
+    /// <summary>
+    /// Bildirim ayarlarının işaret ettiği iki dış hedefi (webhook adresi ve SMTP konağı) denetler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Yüzey neden var:</b> her iki alan da HTTP istek gövdesinden gelir ve tek yaptıkları
+    /// <c>.Trim()</c>'di. <c>SendWebhookAsync</c> adrese POST atar, <c>SendViaSmtpAsync</c>
+    /// <c>SmtpHost:SmtpPort</c>'a TCP açar — yani ikisi de sunucunun ağından çıkar.
+    /// </para>
+    /// <para>
+    /// <b>DENETİM KAYDETME ANINDA, GÖNDERME ANINDA DEĞİL.</b> Gönderme yolu bildirim üreten her
+    /// olaydan (yedek bitti, sertifika yenilendi, disk doldu) çağrılır; oraya DNS çözümlemesi
+    /// koymak her bildirime bir ağ gidiş-dönüşü eklerdi ve DNS'in yavaş olduğu bir anda bildirim
+    /// zincirini kilitlerdi. Girdi buraya TEK yerden giriyor (<see cref="UpdateSettingsAsync"/>),
+    /// yani kapı da tek yerde duruyor.
+    /// </para>
+    /// <para>
+    /// <b>AÇIK KAPI BURADA ÖZELLİKLE ÖNEMLİ.</b> İç ağdaki bir SMTP aktarıcısı (ya da bu panelin
+    /// KENDİ makinesindeki hMailServer/Stalwart) tamamen meşru ve YAYGIN bir yapılandırmadır;
+    /// bayrak olmasaydı bu değişiklik çalışan posta kurulumlarını kırardı. Bayrak açıkken denetim
+    /// hiç uygulanmaz.
+    /// </para>
+    /// <para>
+    /// <b>DÜRÜST SINIR:</b> webhook gönderimi <c>httpClientFactory.CreateClient()</c> ile
+    /// VARSAYILAN istemciyi kullanır ve o istemcide <c>AllowAutoRedirect</c> .NET varsayılanı olan
+    /// <c>true</c>'dur (ölçüldü: <c>ServiceCollectionExtensions</c> yalnız adlı istemcilerde
+    /// <c>false</c> yapıyor). Yani 302 ile iç ağa atlama bu kapının arkasından geçer.
+    /// </para>
+    /// </remarks>
+    private async Task EnsureNotificationTargetsAllowedAsync(
+        string webhookUrl,
+        string smtpHost,
+        CancellationToken cancellationToken)
+    {
+        var policy = OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false);
+        var resolver = outboundResolver ?? OutboundAddressGuard.SystemResolver;
+
+        if (!string.IsNullOrWhiteSpace(webhookUrl))
+        {
+            if (!Uri.TryCreate(webhookUrl, UriKind.Absolute, out var adres) ||
+                (adres.Scheme != Uri.UriSchemeHttp && adres.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new AppException("notifications.webhook_invalid", 400, 400);
+            }
+
+            var engellenenWebhook = await OutboundAddressGuard.FindBlockedHostAsync(
+                adres.DnsSafeHost, resolver, policy, cancellationToken);
+            if (engellenenWebhook is not null)
+            {
+                throw new AppException("notifications.webhook_forbidden", 403, 403, engellenenWebhook);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(smtpHost))
+        {
+            // SMTP konağı ÇIPLAK bir dizedir (URL değil); sayısal IPv4 yazımlarını
+            // `IPAddress.TryParse` yakalıyor (ölçüldü, gerekçe OutboundAddressGuard'da).
+            var engellenenSmtp = await OutboundAddressGuard.FindBlockedHostAsync(
+                smtpHost, resolver, policy, cancellationToken);
+            if (engellenenSmtp is not null)
+            {
+                throw new AppException("notifications.smtp_host_forbidden", 403, 403, engellenenSmtp);
+            }
+        }
+    }
 
     public async Task<NotificationSettingsDto> GetSettingsAsync(CancellationToken cancellationToken = default)
     {
@@ -26,6 +96,11 @@ public sealed class NotificationService(
 
     public async Task<NotificationSettingsDto> UpdateSettingsAsync(UpdateNotificationSettingsRequest request, CancellationToken cancellationToken = default)
     {
+        await EnsureNotificationTargetsAllowedAsync(
+            request.WebhookUrl.Trim(),
+            request.SmtpHost.Trim(),
+            cancellationToken);
+
         var current = await ReadStoredSettingsAsync(cancellationToken);
         var protectedPassword = string.IsNullOrWhiteSpace(request.SmtpPassword)
             ? current.SmtpPassword

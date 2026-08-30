@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using AdaPanel.Api.Extensions;
 using AdaPanel.Api.Security;
@@ -8,6 +7,7 @@ using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Scheduler;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -295,10 +295,18 @@ public sealed class CronController(
     private Task WriteServerAuditAsync(string action, string details) =>
         auditService.AuditAsync(HttpContext, action, "cron:server", details);
 
-    // Müşteri URL görevi yalnızca dış (genel) adresleri hedefleyebilir. SSRF koruması: sunucunun kendisi
-    // (loopback), iç ağ (10/8, 172.16/12, 192.168/16), link-local ve IPv6 özel adresleri engellenir.
-    // Literal IP kesin engellenir; alan adı ise en iyi çabayla DNS ile çözülür — çözülen IP'lerden biri
-    // özel/loopback ise reddedilir (DNS çözülemezse literal-IP koruması yeterlidir, meşru site engellenmez).
+    // Müşteri URL görevi yalnızca dış (genel) adresleri hedefleyebilir: görevi curl.exe çalıştırır ve
+    // SUNUCUNUN ağından çıkar, yani denetimsiz bırakılırsa müşteri panelin ağ konumunu ödünç alır.
+    //
+    // ARALIK LİSTESİ ARTIK BURADA DEĞİL (OutboundAddressGuard). Burada kendi kopyası vardı ve ÖLÇÜLDÜ:
+    // `http://[::ffff:169.254.169.254]/` (bulut meta verisi), `http://[::ffff:10.0.0.5]/` (iç ağ),
+    // `http://[::]/` ve `http://100.100.100.200/` (Alibaba meta verisi) kopyanın ÜÇ kontrolünden de
+    // "temiz" dönüyordu. Aynı adreslerin hepsi kümenin (Cluster) listesinde zaten engelliydi — yani
+    // açık, korumanın yokluğundan değil İKİ KEZ YAZILMASINDAN doğmuştu.
+    //
+    // DNS çözülemezse GEÇİLİR ve bu, kümedeki kuraldan bilerek farklıdır: cron isteği anonimdir
+    // (belirteç taşımaz) ve geçici bir DNS hatasının meşru bir siteyi kalıcı olarak engellemesi,
+    // buradaki riskten daha pahalıdır. Literal-IP yolu her hâlükârda kapalıdır.
     private static async Task EnsureCustomerUrlAllowedAsync(string? url)
     {
         if (!Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri) ||
@@ -307,64 +315,21 @@ public sealed class CronController(
             throw new AppException("cron.invalid_url", 400, 400);
         }
 
-        var host = uri.Host;
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        // GÖVDE ARTIK BURADA DEĞİL (OutboundAddressGuard.FindBlockedHostAsync). Bu yolun tek FARKI
+        // "çözülemedi" kararıydı ve o artık bir POLİTİKA parametresi: burada BlockUnresolvedHost
+        // false, çünkü cron isteği anonimdir ve geçici bir DNS hatasının meşru bir siteyi kalıcı
+        // olarak engellemesi buradaki riskten pahalıdır. Literal-IP yolu her hâlükârda kapalıdır.
+        //
+        // DnsSafeHost: IPv6 literalinde köşeli parantezleri atar ve punycode'a çevrilmiş adı verir.
+        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+            uri.DnsSafeHost,
+            OutboundAddressGuard.SystemResolver,
+            new OutboundTargetPolicy(AllowInternalTargets: false, BlockUnresolvedHost: false),
+            CancellationToken.None);
+
+        if (engellenen is not null)
         {
             throw new AppException("cron.url_forbidden", 403, 403);
         }
-
-        if (IPAddress.TryParse(host, out var literal))
-        {
-            if (IsBlockedAddress(literal))
-            {
-                throw new AppException("cron.url_forbidden", 403, 403);
-            }
-
-            return;
-        }
-
-        try
-        {
-            var addresses = await Dns.GetHostAddressesAsync(host);
-            if (addresses.Any(IsBlockedAddress))
-            {
-                throw new AppException("cron.url_forbidden", 403, 403);
-            }
-        }
-        catch (AppException)
-        {
-            throw;
-        }
-        catch
-        {
-            // DNS çözülemedi → engelleme (geçici DNS hatası meşru siteyi engellemesin; literal-IP SSRF zaten kapalı).
-        }
-    }
-
-    private static bool IsBlockedAddress(IPAddress ip)
-    {
-        if (IPAddress.IsLoopback(ip))
-        {
-            return true;
-        }
-
-        if (ip.AddressFamily == AddressFamily.InterNetwork)
-        {
-            var b = ip.GetAddressBytes();
-            return b[0] == 10                                  // 10.0.0.0/8
-                || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)   // 172.16.0.0/12
-                || (b[0] == 192 && b[1] == 168)                // 192.168.0.0/16
-                || (b[0] == 169 && b[1] == 254)                // 169.254.0.0/16 (link-local)
-                || b[0] == 0;                                  // 0.0.0.0/8
-        }
-
-        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            return ip.IsIPv6LinkLocal
-                || ip.IsIPv6SiteLocal
-                || (ip.GetAddressBytes()[0] & 0xFE) == 0xFC;   // fc00::/7 (unique-local)
-        }
-
-        return false;
     }
 }

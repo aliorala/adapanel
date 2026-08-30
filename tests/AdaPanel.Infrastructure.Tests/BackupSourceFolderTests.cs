@@ -400,7 +400,11 @@ public sealed class BackupSourceFolderTests
                 encryptionStore: null,
                 logger: null,
                 customerScopes: null,
-                databaseOwnership: sahiplik);
+                databaseOwnership: sahiplik,
+                // Bu dosyadaki konaklar UYDURMADIR ve gercek DNS'te yoktur; adres kapisi
+                // "cozulemedi = reddet" dediginden sahte cozumleyici olmadan hepsi duserdi.
+                // Gerekcenin tamami SahteAgCozumleyici uzerinde yazili.
+                outboundResolver: SahteAgCozumleyici.Genel);
 
         public BackupSiteRequest SiteIstegi(bool artimsal = false) => new()
         {

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
@@ -14,7 +14,10 @@ namespace AdaPanel.Infrastructure.Scheduler;
 public sealed class SchedulerService(
     IIisSiteService siteService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
-    ILogger<SchedulerService> logger) : ISchedulerService
+    ILogger<SchedulerService> logger,
+    // İSTEĞE BAĞLI: adres çözümleyici. Üretimde gerçek DNS; testte sahte, çünkü bir birim testi
+    // GERÇEKTEN 169.254.169.254'e çözümleme yapmamalı.
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : ISchedulerService
 {
     private const string TaskPath = "\\AdaPanel\\";
 
@@ -678,6 +681,7 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
     public async Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        await EnsureTaskUrlTargetAllowedAsync(request, cancellationToken);
 
         // Betik görevi IIS'e (site kökü + havuz adı) bakmak zorunda olduğundan çözüm ASENKRON;
         // saf yol/komut mantığı ScriptTaskPlanner'da, IIS'e bağımlı kısmı burada duruyor.
@@ -910,6 +914,59 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
 
     /// <summary>Testlerin temizleme kurallarini dogrudan olcebilmesi icin.</summary>
     internal static void SanitizeForTests(CreateScheduledTaskRequest request) => SanitizeRequest(request);
+
+    /// <summary>
+    /// URL görevinin adresi panelin ULAŞMAMASI gereken bir yere mi bakıyor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Yüzey neden var:</b> <see cref="ResolveAction"/> bu adresten
+    /// <c>curl.exe -fsSL "&lt;adres&gt;"</c> kurar ve görev SYSTEM olarak koşar.
+    /// <see cref="IsAcceptableTaskUrl"/> yalnız ŞEMAYA bakar — <c>http://169.254.169.254/…</c>
+    /// onun için kusursuz bir adrestir.
+    /// </para>
+    /// <para>
+    /// <b>Neden burada, <c>CronController</c>'da değil:</b> orada da bir denetim var
+    /// (<c>EnsureCustomerUrlAllowedAsync</c>) ama YALNIZCA müşteri/bayi dalında çalışır; yönetici
+    /// dalı ve servisi çağıran her yol (otomasyon, WHMCS tümleşimi, ileride eklenecek uçlar)
+    /// denetimsizdi. Panelin "Administrator" rolü bir WINDOWS yöneticisi DEĞİLDİR — aynı gerekçe
+    /// <c>UpdatePackageTrust</c>'ta yazılı — yani "admin zaten güvenilir" demek burada geçerli bir
+    /// savunma değil. Denetim, komutu GERÇEKTEN kuran katmana kondu.
+    /// </para>
+    /// <para>
+    /// <b>DÜRÜST SINIR — İKİ tanesi:</b> (1) <c>curl</c>'e <c>-L</c> veriliyor, yani YÖNLENDİRME
+    /// İZLENİYOR; dış bir adres <c>302</c> ile iç ağa atlarsa bu kapı görmez. <c>-L</c>
+    /// kaldırılmadı çünkü meşru cron adreslerinin çoğu (http→https, www yönlendirmesi) ona
+    /// dayanır ve kaldırmak çalışan görevleri sessizce kırardı. (2) Denetim görev KURULURKEN
+    /// yapılır, curl ise HER ÇALIŞMADA adı yeniden çözer; arada değişen bir DNS kaydı (rebinding)
+    /// bu kapının arkasından geçer. İkisi de <c>--resolve</c> ya da .NET'e taşıma gerektirir;
+    /// ayrı iş olarak raporlandı.
+    /// </para>
+    /// </remarks>
+    private async Task EnsureTaskUrlTargetAllowedAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken)
+    {
+        if (!string.Equals((request.TaskType ?? "command").Trim(), "url", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!Uri.TryCreate((request.Url ?? string.Empty).Trim(), UriKind.Absolute, out var adres))
+        {
+            // Biçim kararı ValidateRequest'in; burada sessiz kalmak onun hatasını ezmemek içindir.
+            return;
+        }
+
+        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+            adres.DnsSafeHost,
+            outboundResolver ?? OutboundAddressGuard.SystemResolver,
+            OutboundTargetPolicy.Connecting(runtimeOptions.Value.AllowInternalOutboundTargets),
+            cancellationToken);
+
+        if (engellenen is not null)
+        {
+            throw new AppException("cron.url_forbidden", 403, 403, engellenen);
+        }
+    }
 
     private static void ValidateRequest(CreateScheduledTaskRequest request)
     {

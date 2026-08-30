@@ -1,5 +1,5 @@
 using System.Net;
-using System.Net.Sockets;
+using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.Cluster;
 
@@ -39,29 +39,6 @@ public delegate Task<IPAddress[]> ClusterHostResolver(string host, CancellationT
 /// </remarks>
 public static class ClusterAddressGuard
 {
-    /// <summary>
-    /// Adı ÇÖZÜLMEDEN reddedilen ana makine adları/son ekleri.
-    /// </summary>
-    /// <remarks>
-    /// Bunlar tanım gereği "buranın içi" demektir. <c>metadata.google.internal</c> ayrıca yazılmasa
-    /// da <c>.internal</c> son ekiyle yakalanır; yine de açıkça duruyor çünkü bu adı okuyan biri
-    /// korumanın bulut meta verisini kapsadığını görmeli.
-    /// </remarks>
-    private static readonly string[] BlockedHostSuffixes =
-    [
-        ".localhost",
-        ".local",
-        ".internal",
-        ".home.arpa"
-    ];
-
-    private static readonly string[] BlockedHostNames =
-    [
-        "localhost",
-        "metadata.google.internal",
-        "metadata.goog"
-    ];
-
     /// <summary>
     /// Adresi normalize eder ve BİÇİM düzeyinde denetler.
     /// </summary>
@@ -143,17 +120,11 @@ public static class ClusterAddressGuard
     }
 
     /// <summary>Ad, çözülmeden reddedilenlerden mi?</summary>
-    public static bool IsBlockedHostName(string host)
-    {
-        var normalized = (host ?? string.Empty).Trim().Trim('.').ToLowerInvariant();
-        if (normalized.Length == 0)
-        {
-            return true;
-        }
-
-        return BlockedHostNames.Contains(normalized, StringComparer.Ordinal)
-            || BlockedHostSuffixes.Any(suffix => normalized.EndsWith(suffix, StringComparison.Ordinal));
-    }
+    /// <remarks>
+    /// Liste ve karar <see cref="OutboundAddressGuard"/>'dadır; burada yalnızca kümenin sözleşmesi
+    /// korunuyor. İki kopya tutmanın bedeli ölçüldü (bkz. o sınıfın açıklaması).
+    /// </remarks>
+    public static bool IsBlockedHostName(string host) => OutboundAddressGuard.IsBlockedHostName(host);
 
     /// <summary>
     /// Adı çözer ve ENGELLİ bir adrese çözülüyorsa o adresi döner; temizse null.
@@ -170,127 +141,29 @@ public static class ClusterAddressGuard
     {
         ArgumentNullException.ThrowIfNull(resolver);
 
-        if (IsBlockedHostName(host))
-        {
-            return host;
-        }
-
-        if (IPAddress.TryParse(host, out var literal))
-        {
-            return IsBlockedAddress(literal) ? literal.ToString() : null;
-        }
-
-        IPAddress[] addresses;
-        try
-        {
-            addresses = await resolver(host, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            // ÖLÇEMEDİK = GEÇEMEZ. Gerekçe sınıf açıklamasında.
-            return host;
-        }
-
-        if (addresses.Length == 0)
-        {
-            return host;
-        }
-
-        return addresses.FirstOrDefault(IsBlockedAddress)?.ToString();
+        // GÖVDE ARTIK BURADA DEĞİL (OutboundAddressGuard.FindBlockedHostAsync). Aynı yirmi satır
+        // bu depoda DÖRT kez yazılmıştı (burası, CronController, SiteHostingSettingsService ve
+        // yeni bağlanan beş hedef). Kopyaların bedeli bu dosyanın kendi açıklamasında ölçülmüş
+        // olarak duruyor; kalan tek fark POLİTİKAYDI, o da artık parametreye taşındı.
+        //
+        // Kümenin politikası: ÖLÇEMEDİK = GEÇEMEZ (BlockUnresolvedHost). Gerekçe sınıf
+        // açıklamasında — buradaki istek bir YÖNETİCİ BELİRTECİ taşır.
+        return await OutboundAddressGuard.FindBlockedHostAsync(
+            host,
+            (ad, iptal) => resolver(ad, iptal),
+            OutboundTargetPolicy.Strict,
+            cancellationToken);
     }
 
     /// <summary>
     /// Adres, dışarıya kapalı/özel/tuzak bir aralıkta mı?
     /// </summary>
     /// <remarks>
-    /// Liste RFC aralıklarına göre yazıldı; her satırın yanında hangi aralık olduğu duruyor çünkü
-    /// bir aralığı yanlışlıkla silmek, silinen aralığın tamamını panele açmak demektir.
+    /// Aralık listesi <see cref="OutboundAddressGuard"/>'dadır. Kümeye özgü bir liste DEĞİLDİR:
+    /// "buranın içi" tanımı panelin her dış isteği için aynıdır ve ikinci bir kopya, ölçülmüş
+    /// biçimde, gerçek bir açık üretti (cron kopyası <c>[::ffff:169.254.169.254]</c>'ü geçiriyordu).
     /// </remarks>
-    public static bool IsBlockedAddress(IPAddress? ip)
-    {
-        if (ip is null)
-        {
-            return true;
-        }
-
-        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            // ::1 ve :: önce elenir; aşağıdaki gömülü-IPv4 çıkarımı bunları da "IPv4 gibi" görür
-            // (sonuçta yine engellenirlerdi ama sebep yanlış okunurdu).
-            if (IPAddress.IsLoopback(ip) || ip.Equals(IPAddress.IPv6Any))
-            {
-                return true;
-            }
-
-            // IPv4-EŞLEMELİ BİÇİMLER ÇÖZÜLÜR. "[::ffff:127.0.0.1]", "[::127.0.0.1]" ve 6to4
-            // "[2002:7f00:1::]" birer IPv6 adresidir ama gittikleri yer 127.0.0.1'dir; eşlemeyi
-            // açmadan bakan bir kontrol bunları "bilinmeyen IPv6" sayıp GEÇİRİRDİ.
-            var embedded = ExtractEmbeddedIPv4(ip);
-            if (embedded is not null)
-            {
-                return IsBlockedAddress(embedded);
-            }
-
-            var v6 = ip.GetAddressBytes();
-            return ip.IsIPv6LinkLocal                 // fe80::/10
-                || ip.IsIPv6SiteLocal                 // fec0::/10 (kullanımdan kalktı ama hâlâ yönlendirilmez)
-                || ip.IsIPv6Multicast                 // ff00::/8
-                || (v6[0] & 0xFE) == 0xFC;            // fc00::/7 benzersiz yerel (AWS IPv6 meta verisi burada)
-        }
-
-        if (ip.AddressFamily != AddressFamily.InterNetwork)
-        {
-            // IPv4/IPv6 dışında bir aile (AppleTalk, IPX…): tanımadığımız şeye bağlanmayız.
-            return true;
-        }
-
-        var b = ip.GetAddressBytes();
-        return b[0] == 0                                        // 0.0.0.0/8   "bu ağ"
-            || b[0] == 10                                       // 10.0.0.0/8  özel
-            || b[0] == 127                                      // 127.0.0.0/8 geri döngü
-            || (b[0] == 100 && b[1] >= 64 && b[1] <= 127)       // 100.64.0.0/10 CGNAT (Alibaba meta verisi burada)
-            || (b[0] == 169 && b[1] == 254)                     // 169.254.0.0/16 link-local -> 169.254.169.254 BULUT META VERİSİ
-            || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)        // 172.16.0.0/12 özel
-            || (b[0] == 192 && b[1] == 0 && b[2] == 0)          // 192.0.0.0/24 IETF protokol atamaları
-            || (b[0] == 192 && b[1] == 168)                     // 192.168.0.0/16 özel
-            || (b[0] == 198 && (b[1] & 0xFE) == 18)             // 198.18.0.0/15 kıyaslama
-            || b[0] >= 224;                                     // 224.0.0.0/4 çoklu gönderim + 240.0.0.0/4 ayrılmış (255.255.255.255 dahil)
-    }
-
-    /// <summary>
-    /// IPv6 adresinin İÇİNE gömülü IPv4 adresini çıkarır (yoksa null).
-    /// </summary>
-    /// <remarks>
-    /// Üç biçim: IPv4-eşlemeli (<c>::ffff:a.b.c.d</c>), IPv4-uyumlu (<c>::a.b.c.d</c>) ve 6to4
-    /// (<c>2002:aabb:ccdd::</c>). Hepsi de "IPv6 yazıp IPv4'e gitmenin" yollarıdır.
-    /// </remarks>
-    private static IPAddress? ExtractEmbeddedIPv4(IPAddress ip)
-    {
-        var bytes = ip.GetAddressBytes();
-
-        if (ip.IsIPv4MappedToIPv6)
-        {
-            return ip.MapToIPv4();
-        }
-
-        // 6to4: 2002::/16, sonraki 4 bayt IPv4 adresidir.
-        if (bytes[0] == 0x20 && bytes[1] == 0x02)
-        {
-            return new IPAddress(bytes[2..6]);
-        }
-
-        // IPv4-uyumlu: ilk 12 bayt sıfır ve kalan sıfırdan farklı (::/128 ve ::1 buraya girmez).
-        if (bytes.Take(12).All(value => value == 0) && bytes[12..].Any(value => value != 0))
-        {
-            return new IPAddress(bytes[12..]);
-        }
-
-        return null;
-    }
+    public static bool IsBlockedAddress(IPAddress? ip) => OutboundAddressGuard.IsBlockedAddress(ip);
 
     /// <summary>
     /// Gerçek DNS ile çözen varsayılan çözümleyici.

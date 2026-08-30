@@ -48,8 +48,71 @@ public sealed partial class BackupService(
     // Aynı seam kota/dosya boyutu yolunda da açıldı (CalculateSizeAsync'in internal aşırı yüklemesi)
     // ve gerekçesi orada yazılı. Dışarıya bir UÇ AÇMAZ: yeni bir HTTP yüzeyi yok, yalnız DI kurulumu
     // bunu görebilir.
-    int? scanEntryBudget = null) : IBackupService
+    int? scanEntryBudget = null,
+    // İSTEĞE BAĞLI: "iç ağ hedeflerine izin ver" açık kapısını taşıyan seçenekler. Verilmemişse
+    // (dar kapsamlı testler) açık kapı KAPALI sayılır — güvenli taraf varsayılan olsun diye.
+    Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
+    // İSTEĞE BAĞLI: adres çözümleyici. Üretimde gerçek DNS; testte sahte, çünkü bir birim testi
+    // GERÇEKTEN 169.254.169.254'e çözümleme yapmamalı (ve yapamaz da).
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : IBackupService
 {
+    /// <summary>
+    /// Uzak yedek hedefinin adresi panelin ULAŞMAMASI gereken bir yere mi bakıyor; bakıyorsa
+    /// <c>backup.remote_target_forbidden</c> ile reddeder.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Yüzey neden var:</b> <c>RemoteUrl</c> HTTP istek gövdesinden gelir ve panel o adrese
+    /// SUNUCUNUN ağından, üstelik kullanıcının verdiği kimlikle bağlanır. Denetimsiz bırakılırsa
+    /// <c>targetType=http</c> + <c>RemoteUrl=http://127.0.0.1:9200/…</c> panelin iç servislerine
+    /// PUT/DELETE/HEAD atan bir vekile döner; <c>webdav</c> ayrıca PROPFIND ve MKCOL verir.
+    /// </para>
+    /// <para>
+    /// <b>EN KESKİN UÇ "bağlantıyı test et"tir</b> (<see cref="TestRemoteTargetAsync"/>): verilen
+    /// adrese HEMEN bir dosya yükler, yani tek istekle kör olmayan bir sonda sağlar. Bu yüzden
+    /// denetim iki çağrı yerine de bağlandı — yalnız yedek alma yoluna bağlansaydı test ucu
+    /// açık kalırdı ve o uç daha ucuz sömürülür.
+    /// </para>
+    /// <para>
+    /// <b>OAUTH HEDEFLERİ (dropbox/onedrive) BİLEREK DIŞARIDA.</b> Onlarda <c>Uri.Host</c> bir ağ
+    /// konağı DEĞİL, kullanıcının klasör yoludur (<c>dropbox:///yedekler</c>); gerçek uç noktalar
+    /// koda gömülü sabit adreslerdir. Bunları çözümlemeye kalkmak hiçbir şey ölçmez, yalnız
+    /// çalışan bir hedefi "çözülemedi" diye reddederdi. Aynı gerekçeyle <c>local</c> de dışarıda.
+    /// </para>
+    /// <para>
+    /// <b>DÜRÜST SINIR — YÖNLENDİRME İZLENİYOR.</b> Ölçüldü: <c>http</c>/<c>webdav</c>/<c>s3</c>/
+    /// <c>azure</c> yüklemeleri <c>httpClientFactory.CreateClient()</c> ile VARSAYILAN istemciyi
+    /// alır ve <c>ServiceCollectionExtensions</c> içinde varsayılan istemciye handler
+    /// yapılandırılmamıştır — yani <c>AllowAutoRedirect</c> .NET varsayılanı olan <c>true</c>'dur
+    /// (adlı <c>AdaPanel.LocalHealth</c> ve <c>DbToolsProxy</c> istemcileri açıkça <c>false</c>
+    /// yapar, varsayılan yapmaz). Dolayısıyla dış bir adres <c>302 Location:
+    /// http://169.254.169.254/</c> ile iç ağa atlarsa bu kapı GÖRMEZ. Varsayılan istemciyi
+    /// yönlendirmesiz yapmak paneldeki her <c>CreateClient()</c> çağrısını etkilerdi (bileşen
+    /// indirme, GitHub sürüm çözümleme — hepsi yönlendirmeye GÜVENİYOR), o yüzden burada
+    /// yapılmadı ve AÇIKÇA rapor edildi.
+    /// </para>
+    /// </remarks>
+    private async Task EnsureRemoteTargetAllowedAsync(BackupTarget target, CancellationToken cancellationToken)
+    {
+        if (target.Uri is null || target.Type == "local" || IsOAuthTarget(target.Type))
+        {
+            return;
+        }
+
+        // DnsSafeHost: IPv6 literalinde köşeli parantezleri atar, IDN adı punycode'a çevirir ve
+        // ondalık/sekizlik/onaltılık IPv4 yazımlarını noktalı dörtlüye normalleştirir (ölçüldü).
+        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+            target.Uri.DnsSafeHost,
+            outboundResolver ?? OutboundAddressGuard.SystemResolver,
+            OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+            cancellationToken);
+
+        if (engellenen is not null)
+        {
+            throw new AppException("backup.remote_target_forbidden", 403, 403, engellenen);
+        }
+    }
+
     /// <summary>
     /// Uzak hedef kimliklerinin TEK kaynağı (otomasyon ayarları). Elle silme ile otomatik
     /// budamanın aynı kimlikleri kullanmasını sağlar; ikinci bir yapılandırma yolu açılmadı.
@@ -492,6 +555,7 @@ public sealed partial class BackupService(
         var (finalPath, finalName, encrypted) = await ProtectArchiveAsync(compressedPath, compressedName, password, cancellationToken);
 
         var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
+        await EnsureRemoteTargetAllowedAsync(target, cancellationToken);
 
         // YEDEK HER ZAMAN ÖNCE YEREL DİSKE ALINIR; uzak hedef bunun YERİNE değil ÜSTÜNE gelir.
         //
@@ -4234,6 +4298,10 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 cancellationToken);
 
             var target = ResolveTarget(targetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
+
+            // DENETİM YÜKLEMEDEN ÖNCE. Bu uç verilen adrese HEMEN bir dosya yazar; sıra ters
+            // olsaydı yasak hedefe zaten yazılmış olurdu ve "reddedildi" yanıtı yalan olurdu.
+            await EnsureRemoteTargetAllowedAsync(target, cancellationToken);
 
             // TEST DE GERÇEK YEDEĞİN YOLUNU KULLANIR: <taban>/<gün>/connection-test/<sabit ad>.
             //

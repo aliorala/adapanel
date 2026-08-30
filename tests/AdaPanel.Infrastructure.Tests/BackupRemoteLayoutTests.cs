@@ -595,7 +595,20 @@ public sealed class BackupRemoteLayoutTests
                 new SahteTercihServisi(Path.Combine(Kok, "backups")),
                 null!,
                 DosyaDeposu,
-                new SahteIstemciFabrikasi(kayitci ?? new IstekKayitcisi()));
+                new SahteIstemciFabrikasi(kayitci ?? new IstekKayitcisi()),
+                // "IC AGA IZIN VER" ACIK KAPISI BU DOSYADA ACIK.
+                //
+                // Sebep somut: buradaki FTP testleri SahteFtpSunucusu ile 127.0.0.1 uzerinde
+                // GERCEK bir dinleyici acar ve yedegi ona gonderir. Yani bu dosya, panelin
+                // "kullanici bilerek IC AGDAKI bir hedefe yedek atiyor" senaryosunun ta kendisini
+                // olcer -- kapi kapali olsaydi dordu de daha baglanmadan reddedilirdi.
+                //
+                // Bu, korumayi "testi gecsin diye" kapatmak DEGILDIR: acik kapinin var olma
+                // gerekcesi tam olarak bu senaryodur (ic agdaki NAS'a yedek atmak mesrudur).
+                // Adres politikasinin kendi olcumleri OutboundTargetGuardTests'tedir; orada
+                // mutasyonla dogrulandi.
+                runtimeOptions: Microsoft.Extensions.Options.Options.Create(
+                    new AdaPanel.Infrastructure.Options.PanelRuntimeOptions { AllowInternalOutboundTargets = true }));
 
         public Task KayitlariYazAsync(params BackupRecordDto[] kayitlar) =>
             DosyaDeposu.WriteAsync("config/backups.json", kayitlar, Iptal);

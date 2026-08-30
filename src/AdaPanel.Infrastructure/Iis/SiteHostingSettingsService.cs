@@ -608,6 +608,74 @@ public sealed class SiteHostingSettingsService(
         return wpCli;
     }
 
+    /// <summary>
+    /// Arşiv adresi panelin ULAŞMAMASI gereken bir yere mi bakıyor; bakıyorsa NEREYE (günlük/ayrıntı
+    /// için). Temizse <c>null</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aralık listesi <see cref="OutboundAddressGuard"/>'dan gelir; burada yalnızca bu yola ÖZGÜ üç
+    /// karar var:
+    /// </para>
+    /// <list type="number">
+    /// <item><b>Kullanıcı bilgisi reddedilir.</b> <c>http://gercek-sunucu.example@169.254.169.254/x.zip</c>
+    /// adresinde insan gözü ilk parçayı, ayrıştırıcı ikincisini okur; ayrıca bu alanda kimliğe hiç
+    /// gerek yok (kimlik gereken kaynak için panelin ayrı FTP/SFTP göç yolu var).</item>
+    /// <item><b>DNS ÇÖZÜLEMEZSE REDDEDİLİR</b> — ve bu, müşteri cron adresindeki kuraldan bilerek
+    /// farklıdır. Orada "çözülemedi = geç" demek meşru bir siteyi geçici bir DNS hatası yüzünden
+    /// kalıcı olarak engellememek içindi. Burada aynı gerekçe YOK: çözülemeyen bir addan indirme
+    /// zaten yapılamaz (indirmeyi çalıştıran <c>Invoke-WebRequest</c> de aynı çözümleyiciyi
+    /// kullanır), yani reddetmek hiçbir çalışan senaryoyu kapatmıyor.</item>
+    /// <item><b>Tüm çözülen adresler denetlenir</b>, ilki değil: bir ad hem genel hem iç adrese
+    /// çözülüyorsa hangisine bağlanılacağı bize bağlı değildir.</item>
+    /// </list>
+    /// <para>
+    /// <b>DÜRÜST SINIR — bu kapı YÖNLENDİRMEYİ görmez.</b> İndirmeyi <c>Invoke-WebRequest</c>
+    /// yapar ve o, 3xx yanıtlarını kendi izler; dış bir adresin <c>Location: http://169.254.169.254/</c>
+    /// ile iç ağa atlaması bu denetimden SONRA gerçekleşir. Aynı şey DNS rebinding için de geçerli.
+    /// Bunları kapatmanın tek dürüst yolu indirmeyi .NET'e taşıyıp her bağlantıyı bağlanma anında
+    /// denetlemektir (kümede <c>ClusterHttpClientFactory.ConnectCallback</c> bunu yapar); o değişiklik
+    /// bu yolun ftp:// desteğini de etkilediği için ayrı bir iş olarak raporlandı.
+    /// </para>
+    /// </remarks>
+    internal static async Task<string?> FindBlockedImportTargetAsync(
+        string url,
+        Func<string, CancellationToken, Task<IPAddress[]>> resolver,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        if (!Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out var uri))
+        {
+            return "invalid_uri";
+        }
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            return "userinfo";
+        }
+
+        // GÖVDE ARTIK BURADA DEĞİL (OutboundAddressGuard.FindBlockedHostAsync); yalnız bu yola ÖZGÜ
+        // kararlar (kullanıcı bilgisi reddi, yukarıda) burada kaldı. "Çözülemedi = reddet"
+        // politikası korunuyor — gerekçesi yukarıdaki listenin 2. maddesinde yazılı.
+        //
+        // DnsSafeHost: IPv6 literalinde köşeli parantezleri atar, IDN adı punycode'a çevirir ve
+        // ondalık/sekizlik/onaltılık IPv4 yazımlarını noktalı dörtlüye normalleştirir.
+        return await OutboundAddressGuard.FindBlockedHostAsync(
+            uri.DnsSafeHost,
+            (ad, iptal) => resolver(ad, iptal),
+            OutboundTargetPolicy.Strict,
+            cancellationToken);
+    }
+
+    /// <remarks>
+    /// Tam nitelikli: bu derlemede <c>AdaPanel.Infrastructure.Dns</c> adında bir ad alanı var ve
+    /// kısa <c>Dns</c> yazımı ona bağlanıp derlemeyi kırıyor (aynı tuzak ClusterAddressGuard'da da
+    /// yaşandı).
+    /// </remarks>
+    private static Task<IPAddress[]> ResolveHostAddressesAsync(string host, CancellationToken cancellationToken)
+        => System.Net.Dns.GetHostAddressesAsync(host, cancellationToken);
+
     public async Task<SiteImportResultDto> ImportSiteArchiveAsync(string siteName, string archiveUrl, bool cleanFirst, CancellationToken cancellationToken = default)
     {
         var url = (archiveUrl ?? string.Empty).Trim();
@@ -622,6 +690,17 @@ public sealed class SiteHostingSettingsService(
             !url.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase))
         {
             throw new AppException("migration.invalid_url", 400, 400);
+        }
+
+        // SSRF KAPISI. Bu uç Bayi (Reseller) rolüne açıktır ve indirmeyi PANEL yapar: istek
+        // sunucunun kendi ağından, LocalSystem hesabıyla çıkar. Denetimsiz bırakıldığında bayi,
+        // "arşiv adresi" alanına yazarak panelin ağ konumunu ödünç alıyordu —
+        // `http://169.254.169.254/...` (bulut kimlik bilgileri), `http://127.0.0.1:<port>/`
+        // (yalnız loopback'te dinleyen yönetim uçları), `http://10.0.0.5/` (iç ağ).
+        var engellenen = await FindBlockedImportTargetAsync(url, ResolveHostAddressesAsync, cancellationToken);
+        if (engellenen is not null)
+        {
+            throw new AppException("migration.url_forbidden", 403, 403, engellenen);
         }
 
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);

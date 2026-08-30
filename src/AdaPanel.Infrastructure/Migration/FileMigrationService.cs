@@ -1,6 +1,7 @@
-using AdaPanel.Core.Common;
+﻿using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Support;
 using FluentFTP;
 using Microsoft.Extensions.Logging;
 using Renci.SshNet;
@@ -36,13 +37,41 @@ namespace AdaPanel.Infrastructure.Migration;
 /// </remarks>
 internal sealed class FileMigrationService(
     IIisSiteService iisSiteService,
-    ILogger<FileMigrationService>? logger = null) : IFileMigrationService
+    ILogger<FileMigrationService>? logger = null,
+    // İSTEĞE BAĞLI: "iç ağ hedeflerine izin ver" açık kapısı. Verilmemişse KAPALI sayılır.
+    Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
+    // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : IFileMigrationService
 {
     public async Task<RemoteFileMigrationResult> PullAsync(RemoteFileMigrationRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.Host))
         {
             throw new AppException("migration.host_required", 400, 400);
+        }
+
+        // KONAK DENETİMİ BAĞLANMADAN ÖNCE.
+        //
+        // Yüzey: `request.Host` + `request.Port` HTTP istek gövdesinden gelir ve aşağıdaki iki yol
+        // (FluentFTP `AsyncFtpClient`, SSH.NET `SftpClient`) bunlara DOĞRUDAN bağlanır. Denetimsiz
+        // bırakıldığında bu uç, panelin ağından KEYFİ host:port'a TCP bağlantısı açan bir araçtır:
+        // iç ağ port taraması (bağlanabildi mi / bağlanamadı mı ayırt edilebiliyor, çünkü hata
+        // mesajı kullanıcıya dönüyor) ve loopback'teki servislere erişim.
+        //
+        // ADRES BURADA ÇIPLAK BİR DİZEDİR, URL DEĞİL. Ölçüldü: `IPAddress.TryParse` çıplak
+        // "2130706433", "0x7f000001", "017700000001" ve "127.1" girdilerinin dördünü de kabul edip
+        // 127.0.0.1'e normalleştiriyor — yani Uri'den geçmeyen bu yolda da sayısal yazımlar
+        // yakalanıyor. Ayrıca çözülemeyen ad REDDEDİLİR: çözülemeyen bir konağa FluentFTP/SSH.NET
+        // de bağlanamaz, yani reddetmek hiçbir çalışan göçü kapatmaz.
+        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+            request.Host,
+            outboundResolver ?? OutboundAddressGuard.SystemResolver,
+            OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+            cancellationToken);
+
+        if (engellenen is not null)
+        {
+            throw new AppException("migration.host_forbidden", 403, 403, engellenen);
         }
 
         var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);

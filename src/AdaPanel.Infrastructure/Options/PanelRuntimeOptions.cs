@@ -21,4 +21,33 @@ public sealed class PanelRuntimeOptions
     public string TotpIssuer { get; set; } = "AdaPanel";
 
     public int LoginLockoutMinutes { get; set; } = 15;
+
+    /// <summary>
+    /// KULLANICIDAN GELEN dış hedeflerin iç/özel ağ adreslerine bakmasına izin ver. VARSAYILAN KAPALI.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kapalıyken yedek uzak hedefi, zamanlanmış görev adresi, dosya göçü konağı, bildirim
+    /// webhook'u/SMTP konağı ve git deposu adresi <see cref="Support.OutboundAddressGuard"/>'dan
+    /// geçer; loopback, link-local (bulut meta verisi), özel ağ ve çoklu yayın adreslerine
+    /// çözülenler reddedilir.
+    /// </para>
+    /// <para>
+    /// <b>Bayrak NEDEN var — fazla kapatmak da bir hatadır.</b> Bu adreslerin bir kısmı MEŞRU
+    /// biçimde içeride olur: iç ağdaki bir NAS'a yedek atmak, LAN'daki bir SMTP aktarıcısı, aynı
+    /// makinedeki bir siteye vuran zamanlanmış görev. Körlemesine yasaklamak çalışan kurulumları
+    /// kırardı; bu yüzden yasak kapatılabilir ama KAPALI OLDUĞU BİLİNEREK kapatılır.
+    /// </para>
+    /// <para>
+    /// <b>Panelin KENDİ sabit yerel adresleri bu bayraktan ETKİLENMEZ</b> (phpMyAdmin vekili,
+    /// Stalwart yönetimi, sağlık kontrolü, küme, <c>CacheService</c>/<c>WebDbClientService</c>):
+    /// onlar kullanıcı girdisi değildir ve doğrulayıcıya hiç uğramaz.
+    /// </para>
+    /// <para>
+    /// <b>Neden yalnız appsettings.json'da, panel arayüzünde DEĞİL:</b> gerekçe
+    /// <see cref="Support.OutboundTargetPolicy.AllowInternalTargets"/> üzerinde yazılı — bayrağı
+    /// HTTP yüzeyine koymak, korumayı korunan yüzeyin kendisinden kapatmaya izin vermek olurdu.
+    /// </para>
+    /// </remarks>
+    public bool AllowInternalOutboundTargets { get; set; }
 }

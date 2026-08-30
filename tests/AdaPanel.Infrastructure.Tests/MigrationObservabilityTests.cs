@@ -75,7 +75,7 @@ public sealed class MigrationObservabilityTests
         try
         {
             var gunlukcu = new KayitTutanGunlukcu<FileMigrationService>();
-            var servis = new FileMigrationService(new SahteGocSiteServisi(hedefKok), gunlukcu);
+            var servis = new FileMigrationService(new SahteGocSiteServisi(hedefKok), gunlukcu, IcAgaIzinli);
 
             // 127.0.0.1:1 — loopback'te KESİN reddedilen port; ağ beklemesi olmaz.
             var istek = new RemoteFileMigrationRequest
@@ -119,7 +119,7 @@ public sealed class MigrationObservabilityTests
 
         try
         {
-            var servis = new FileMigrationService(new SahteGocSiteServisi(hedefKok));
+            var servis = new FileMigrationService(new SahteGocSiteServisi(hedefKok), runtimeOptions: IcAgaIzinli);
 
             var hata = await Assert.ThrowsAsync<AppException>(() => servis.PullAsync(new RemoteFileMigrationRequest
             {
@@ -130,13 +130,40 @@ public sealed class MigrationObservabilityTests
                 RemotePath = "/"
             }));
 
+            // ADRES YASAGI DEGIL, BAGLANTI HATASI bekleniyor. Yalnizca "migration." onekine bakmak
+            // YETMEZ: yeni eklenen `migration.host_forbidden` de o oneke uyar, yani acik kapi
+            // calismasa bile bu test yesil kalirdi ve olctugu sey (gunlukcusuz yolun cokmemesi)
+            // sessizce olcumsuz kalirdi.
             Assert.StartsWith("migration.", hata.MessageKey, StringComparison.Ordinal);
+            Assert.NotEqual("migration.host_forbidden", hata.MessageKey);
         }
         finally
         {
             Directory.Delete(hedefKok, recursive: true);
         }
     }
+
+    /// <summary>
+    /// "Ic ag hedeflerine izin ver" ACIK KAPISI, bu dosyadaki testler icin ACIK.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu testler 127.0.0.1:1'e -- loopback'te kesin reddedilen bir porta -- BILEREK baglanir;
+    /// olctukleri sey BAGLANTI HATASINDA ne gunluge yazildigi ve kimlik bilgisinin SIZMADIGIdir.
+    /// Goc konagi artik <c>OutboundAddressGuard</c>'dan gectigi icin, kapi acilmasaydi istek daha
+    /// baglanmadan reddedilir ve bu testler olcmek istedikleri yola HIC ULASAMAZDI.
+    /// </para>
+    /// <para>
+    /// Yani buradaki bayrak testi "kolaylastirmak" icin degil, testin ONCEDEN olctugu davranisi
+    /// olcmeye devam etmesi icin var. Adres yasaginin kendi testleri
+    /// <c>OutboundTargetGuardTests</c>'tedir.
+    /// </para>
+    /// </remarks>
+    private static readonly Microsoft.Extensions.Options.IOptions<AdaPanel.Infrastructure.Options.PanelRuntimeOptions> IcAgaIzinli =
+        Microsoft.Extensions.Options.Options.Create(new AdaPanel.Infrastructure.Options.PanelRuntimeOptions
+        {
+            AllowInternalOutboundTargets = true
+        });
 
     private sealed class SahteGocSiteServisi(string fizikselYol) : IIisSiteService
     {

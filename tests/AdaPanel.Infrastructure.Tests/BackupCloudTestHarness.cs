@@ -69,7 +69,8 @@ internal sealed class BulutAlani : IDisposable
             DosyaDeposu,
             new SahteIstemciFabrikasi(bulut),
             secretProtector: koruyucu ?? new SahteKoruyucu(),
-            auditService: Denetim)
+            auditService: Denetim,
+            outboundResolver: SahteAgCozumleyici.Genel)
         {
             FtpCommands = ftp ?? new FtpWebRequestCommands()
         };
@@ -358,4 +359,35 @@ internal sealed class SahteDenetim : IAuditService
     public Task<AuditRetentionSettingsDto> SetRetentionAsync(int retentionDays, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
     public Task<int> PurgeAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+}
+
+/// <summary>
+/// Yedek testlerindeki UYDURMA konak adlarini (bulut.ornek.com, sunucu.ornek.com,
+/// hesap.blob.core.windows.net) GENEL bir adrese cozen sahte DNS.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>NEDEN GEREKLI:</b> uzak yedek hedefi artik <c>OutboundAddressGuard</c>'dan geciyor ve o kapi
+/// "ad cozulemedi = REDDET" diyor (baglanilamayan bir hedefe zaten yedek gonderilemez). Bu
+/// testlerdeki konaklar GERCEKTE YOKTUR; gercek DNS'e sorulsaydi hepsi "cozulemedi" sayilir ve
+/// yirmi uc test birden "hedef yasak" ile duserdi -- olctukleri sey ADRES POLITIKASI degil,
+/// PROTOKOL KARARLARI (hangi ucca, hangi yola, hangi basliklarla, kayda ne yaziliyor) oldugu halde.
+/// </para>
+/// <para>
+/// <b>NEDEN BAYRAKLA KAPATMAK YERINE SAHTE DNS:</b> "ic aga izin ver" bayragi acilsaydi guard bu
+/// testlerde HIC calismazdi ve ileride buraya eklenecek ic-adresli bir hedef sessizce gecerdi.
+/// Sahte cozumleyici ile guard'in kod yolu calismaya DEVAM eder; sahte olan yalnizca DNS'tir.
+/// Adres politikasinin kendi testleri <c>OutboundTargetGuardTests</c>'tedir.
+/// </para>
+/// <para>
+/// TEK YERDE: uc ayri yedek harness'i ayni seyi istiyor. Ayri ayri yazilsaydi biri duzeltilip
+/// digerleri unutuldugunda "bir testte yakalanan, obur testte kacan" bosluk dogardi -- bu depoda
+/// tam olarak o hatanin bedeli olculdu (bkz. OutboundAddressGuard aciklamasi).
+/// </para>
+/// </remarks>
+internal static class SahteAgCozumleyici
+{
+    /// <summary>Her adi ayni GENEL adrese cozer; hicbir engelli aralikta degildir.</summary>
+    internal static readonly AdaPanel.Infrastructure.Support.OutboundAddressGuard.OutboundHostResolver Genel =
+        (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("93.184.216.34") });
 }

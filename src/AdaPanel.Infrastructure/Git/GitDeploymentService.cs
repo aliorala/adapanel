@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Git;
@@ -17,8 +17,54 @@ public sealed class GitDeploymentService(
     IIisSiteService iisSiteService,
     JsonFileStore fileStore,
     IConcurrencyLock concurrencyLock,
-    ILogger<GitDeploymentService> logger) : IGitDeploymentService
+    ILogger<GitDeploymentService> logger,
+    // İSTEĞE BAĞLI: "iç ağ hedeflerine izin ver" açık kapısı. Verilmemişse KAPALI sayılır.
+    Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
+    // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : IGitDeploymentService
 {
+    /// <summary>
+    /// Depo adresinin KONAĞI panelin ulaşmaması gereken bir yere mi çözülüyor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <see cref="ValidateRepositoryUrl"/>'den AYRI:</b> o metot saf, senkron ve BİÇİM
+    /// denetler (baştaki <c>-</c>, boşluk, <c>::</c> taşıyıcısı, şema beyaz listesi) — testleri de
+    /// onu öyle ölçüyor. Konak denetimi DNS gerektirir, yani asenkron ve dış dünyaya bağımlıdır;
+    /// aynı metoda katmak o metodun sınanabilirliğini bozardı.
+    /// </para>
+    /// <para>
+    /// <b>Yüzey:</b> adres <c>git clone/fetch</c>'e verilir ve panel LocalSystem olarak koşar.
+    /// <c>ValidateRepositoryUrl</c> hangi ŞEMA olduğuna bakıyordu ama NEREYE gittiğine bakmıyordu;
+    /// <c>http://169.254.169.254/x.git</c> onun için kusursuz bir adrestir.
+    /// </para>
+    /// <para>
+    /// <b>KAPSAM DÜRÜSTLÜĞÜ:</b> yalnız mutlak <c>http/https/ssh</c> adreslerinin konağı ölçülür.
+    /// scp kalıbı (<c>git@host:owner/repo.git</c>) <c>Uri</c> ile ayrıştırılamaz; kendi elimizle
+    /// konak çıkarmak, bu dosyanın zaten uyardığı "İKİNCİ ayrıştırıcı" hatasını doğururdu. O yol
+    /// bugün denetimsiz kalıyor ve raporlandı.
+    /// </para>
+    /// </remarks>
+    private async Task EnsureRepositoryHostAllowedAsync(string url, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out var adres) ||
+            adres.Scheme is not ("http" or "https" or "ssh"))
+        {
+            return;
+        }
+
+        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
+            adres.DnsSafeHost,
+            outboundResolver ?? OutboundAddressGuard.SystemResolver,
+            OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+            cancellationToken);
+
+        if (engellenen is not null)
+        {
+            throw new AppException("git.repository_forbidden", 403, 403, engellenen);
+        }
+    }
+
     public async Task<GitDeploymentDto> GetAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var path = await ResolveSitePathAsync(siteName, cancellationToken);
@@ -30,6 +76,7 @@ public sealed class GitDeploymentService(
     {
         var path = await ResolveSitePathAsync(siteName, cancellationToken);
         ValidateRepositoryUrl(request.RepositoryUrl);
+        await EnsureRepositoryHostAllowedAsync(request.RepositoryUrl, cancellationToken);
 
         return await concurrencyLock.RunExclusiveAsync(async () =>
         {
