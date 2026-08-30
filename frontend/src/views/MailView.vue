@@ -1446,7 +1446,17 @@ async function loadListeners() {
 async function applyDns() {
   await run(async () => {
     const result = await applyMailDns(selectedDomain.value);
-    showNotice(t("panel.mail.dnsAppliedNotice", { count: result.data.appliedCount, zone: result.data.zoneName }), false);
+    // DURUM OLCULUR: "cagri patlamadi" ile "kayitlar bolgeye yazildi" ayni sey degildir.
+    // Ikincil bolgede ve DNS rolu kurulu degilken yazma basariyla doner ama hicbir sey
+    // yayinlanmaz; eski ekran bu durumda da "N kayit uygulandi" yaziyordu.
+    if (result.data.published) {
+      showNotice(t("panel.mail.dnsAppliedNotice", { count: result.data.appliedCount, zone: result.data.zoneName }), false);
+    } else {
+      showNotice(
+        t("panel.mail.dnsNotPublishedNotice", { zone: result.data.zoneName, reason: t(result.data.statusMessage) }),
+        true,
+      );
+    }
   });
 }
 

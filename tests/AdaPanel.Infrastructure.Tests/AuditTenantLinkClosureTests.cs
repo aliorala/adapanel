@@ -385,6 +385,7 @@ public sealed class AuditTenantLinkClosureTests
                 new MailListUnsubscribeService(Depo, new SessizPostaServisi(), new SessizBildirim(), NullLogger<MailListUnsubscribeService>.Instance),
                 Kapsam,
                 Siteler,
+                new SabitTercihler(),
                 Kayitlar,
                 NullLogger<MailListPublicController>.Instance)
             {

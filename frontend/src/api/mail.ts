@@ -245,7 +245,12 @@ export type MailDns = {
 
 export type ApplyMailDnsResult = {
   zoneName: string;
+  /** Bolgeye GERCEKTEN yazilan kayit sayisi; yayinlanmadiysa 0. */
   appliedCount: number;
+  /** Kayitlar Windows DNS bolgesine yazildi mi. */
+  published: boolean;
+  /** Sonucun ceviri anahtari: mail.dns_applied ya da mail.dns_not_published_*. */
+  statusMessage: string;
 };
 
 export async function getMailDns(domain: string) {

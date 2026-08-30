@@ -7,10 +7,20 @@ namespace AdaPanel.Infrastructure.Tests;
 /// AĞ YÜZEYİ — Stalwart dinleyicilerinin hangisi dışarıya açılır?
 /// </summary>
 /// <remarks>
+/// <para>
 /// Denetim bulgusu: kurulum sonrası yapılandırma, 8080 DIŞINDAKİ HER dinleyiciye
-/// <c>0.0.0.0:port</c> bind'i ekliyordu. Stalwart'ın varsayılanları arasında ManageSieve (4190) ve
-/// düz metin POP3 (110) da vardır; yani temiz bir kurulum bu iki servisi de tüm dünyaya açıyordu.
-/// Panel bunların hiçbirini dışarıdan kullanmaz (Roundcube ve panel aynı makinededir).
+/// <c>0.0.0.0:port</c> bind'i ekliyordu. Panel bu portların hiçbirini dışarıdan kullanmaz
+/// (Roundcube ve panel aynı makinededir).
+/// </para>
+/// <para>
+/// <b>ÖLÇÜLDÜ</b> (Stalwart 0.16.8, panelin yazdığı minimal <c>config.json</c> ile yalıtılmış bir
+/// kopya ayağa kaldırılıp <c>query NetworkListener --json</c> ile okundu): varsayılan dinleyici
+/// kümesi <c>http 8080</c>, <c>https 443</c>, <c>sieve 4190</c>, <c>pop3s 995</c>,
+/// <c>imaps 993</c>, <c>submissions 465</c>, <c>smtp 25</c>'tir. Yani ManageSieve (4190)
+/// GERÇEKTEN varsayılandadır ve düzeltme olmadan dünyaya açılırdı; <b>düz metin POP3 (110)
+/// varsayılanda YOKTUR</b> — aşağıdaki 110 satırı ölçülmüş bir varsayılan değil, ileride elle
+/// eklenirse yakalansın diye konmuş savunma amaçlı bir vakadır.
+/// </para>
 /// </remarks>
 public sealed class StalwartListenerExposureTests
 {

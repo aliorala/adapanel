@@ -4421,9 +4421,27 @@ public sealed class ComponentBootstrapper(
             }
         }
 
-        // Gelen/giden mail icin gerekli dinleyiciler. smtp(25) MX/gelen postanin girdigi porttur;
-        // Stalwart varsayilaninda genelde vardir ama emin olmak icin garanti ediyoruz (port zaten
-        // bagliysa atlanir). 143/587 Roundcube ve klasik istemciler icin STARTTLS.
+        // Gelen/giden mail icin gerekli dinleyiciler.
+        //
+        // OLCULDU (Stalwart 0.16.8, panelin yazdigi minimal config.json ile yalitilmis bir kopya
+        // ayaga kaldirilip `query NetworkListener --json` ile okundu). Varsayilan dinleyici kumesi
+        // TAM OLARAK sudur:
+        //   http [::]:8080 | https [::]:443 (tlsImplicit) | sieve [::]:4190 |
+        //   pop3s [::]:995 | imaps [::]:993 | submissions [::]:465 | smtp [::]:25
+        // Yani: 25 VARDIR (asagidaki create atlanir), 143 (IMAP STARTTLS) ve 587 (Submission
+        // STARTTLS) HIC YOKTUR -- panel onlari kurmasa Roundcube ve klasik istemciler baglanamaz.
+        // Duz metin POP3 (110) da varsayilanda YOKTUR.
+        //
+        // AYNI OLCUMDE OKUNAN ROLE POLITIKASI (panel bu alanlara DOKUNMAZ, varsayilan gecerlidir):
+        //   MtaStageRcpt.allowRelaying = "!is_empty(authenticated_as)"  -> ACIK ROLE YOK
+        //   MtaStageAuth.require       = "local_port != 25"             -> 25'te AUTH yok (MX dogru)
+        //   MtaStageAuth.saslMechanisms= 25'te "false"; TLS'siz diger portlarda yalniz
+        //                                oauthbearer/xoauth2 (duz metin parola TLS'siz gecmez)
+        //   MtaStageAuth.mustMatchSender = "true" -> kimligi dogrulanmis kullanici BASKASININ
+        //                                zarf gondericisiyle (MAIL FROM) gonderemez
+        // Bu yuzden asagidaki `create` cagrilari YALNIZ dinleyici tanimlar; oturum/role politikasi
+        // hicbir yerde ezilmez. Politika alanlarina yazan bir kod eklenirse acik role riski
+        // dogar -- karar burada yazilidir ki bir sonraki tur yeniden olcmesin.
         var missingListeners = new (string Name, string Protocol, int Port)[]
         {
             ("smtp", "smtp", 25),

@@ -366,24 +366,36 @@ public sealed class MailService(
 
             // TEK senkron: kayitlari tek tek yazmak her seferinde bolgeyi bastan yaziyor ve
             // uzun DKIM TXT'sinin bolge kilidi bir sonraki yazmayi dusuruyordu.
-            var yazilacak = dns.Records
-                .Where(item => !string.IsNullOrWhiteSpace(item.Value))
-                .Select(record => new UpsertDnsRecordRequest
-                {
-                    Type = record.Type,
-                    Host = record.Host,
-                    Value = record.Value,
-                    Priority = record.Priority,
-                    Ttl = 3600
-                })
-                .ToList();
+            var yazilacak = MailDnsPublication.BuildRequests(dns);
 
+            SiteDnsZoneDto? bolge = null;
             if (yazilacak.Count > 0)
             {
-                await dnsService.UpsertRecordsAsync(dns.Domain, yazilacak, cancellationToken);
+                bolge = await dnsService.UpsertRecordsAsync(dns.Domain, yazilacak, cancellationToken);
             }
 
-            logger.LogInformation("Mail DNS records published for {Domain}: {Count} record(s).", domain, yazilacak.Count);
+            // "Yayinlandi" HUKMU OLCULUR, VARSAYILMAZ. Eski hal cagri patlamadigi surece
+            // kosulsuz "published" yaziyordu; oysa ikincil bolgede ve DNS rolu kurulu degilken
+            // UpsertRecordsAsync kayitlari yalniz panel durumuna yazar ve BASARIYLA doner.
+            // Sonuc: DKIM ile imzalanan posta, TXT kaydi hic yayinlanmadigi icin dogrulanamiyor
+            // ve spam'e dusuyordu -- panel ise "yayinlandi" dedigi icin kimse sebebi aramiyordu.
+            var sonuc = MailDnsPublication.Evaluate(bolge, yazilacak.Count);
+            if (sonuc.Published)
+            {
+                logger.LogInformation(
+                    "Mail DNS records published for {Domain}: {Count} record(s).",
+                    domain,
+                    sonuc.AppliedCount);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Mail DNS records were NOT published for {Domain} ({Reason}); {Count} record(s) are stored in the panel only. "
+                    + "Outgoing mail is DKIM-signed, so an unpublished key means the signature cannot be verified.",
+                    domain,
+                    sonuc.StatusKey,
+                    yazilacak.Count);
+            }
         }
         catch (Exception exception)
         {

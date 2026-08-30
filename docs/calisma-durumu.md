@@ -1070,3 +1070,88 @@ tarandi, govdeden gelen aktor/rol YOK).
 - Cerez akisi GERCEK bir HTTP boru hattinda degil, `CookieSessionValidator`/`AuthController`
   dogrudan calistirilarak olculdu (ust duzey `Program.cs` tam boru hattiyla test edilemiyor).
 - Canli panelde (127.0.0.1:8890) HICBIR SEY denenmedi -- talimat geregi.
+
+---
+
+## POSTA GUVENLIGI + TESLIM EDILEBILIRLIK (31.08.2026) -- commit ATILMADI
+
+**ACIK ROLE: TEMIZ -- ve bu artik tahmin degil OLCUM.** Stalwart 0.16.8 yalitilmis bir kopyada
+(gecici klasor, panelin yazdigi minimal `config.json`) ayaga kaldirilip `stalwart-cli` ile
+sorgulandi. Kurulu panele ve kurulu Stalwart'a DOKUNULMADI, hicbir posta gonderilmedi.
+Olculen varsayilanlar:
+
+| Alan | Deger | Anlami |
+|---|---|---|
+| `MtaStageRcpt.allowRelaying` | `!is_empty(authenticated_as)` | acik role YOK |
+| `MtaStageAuth.require` | `local_port != 25` | 25'te AUTH yok (MX icin dogru) |
+| `MtaStageAuth.saslMechanisms` | 25'te `false`; TLS'siz portlarda yalniz `oauthbearer/xoauth2` | duz metin parola TLS'siz gecmez |
+| `MtaStageAuth.mustMatchSender` | `true` | kiraci BASKASININ MAIL FROM'uyla gonderemez |
+| `MtaStageData.enableSpamFilter` | `is_empty(authenticated_as)` | giden postada spam suzgeci kapali (normal) |
+| Varsayilan dinleyiciler | 8080, 443, 4190, 995, 993, 465, 25 | **143 ve 587 YOK** -> panel kurmasa istemci baglanamaz; **110 da YOK** |
+
+Panel yalniz `MtaStageRcpt.script` ve `MtaStageData.script` yuvalarina yazar (posta listesi
+politikasi + otomatik yanit); role/kimlik alanlarina HIC dokunmaz. Bu karar artik
+`ComponentBootstrapper.ConfigureStalwartListenersAsync` icinde olcum tablosuyla yazili.
+
+**KAPATILAN 1 -- Host basligi enjeksiyonu (kimliksiz uctan giden postaya).**
+`MailListPublicController.AbsoluteUrl` onay baglantisini `Request.Host`'tan kuruyordu;
+`appsettings.json`'da `AllowedHosts: "*"` ve `UseHostFiltering` YOK. Uc kimliksiz ve POSTA
+GONDERTIYOR -> saldirgan `Host: kotu.example` ile gercek bir abonenin kutusuna panelin kendi
+alan adindan kimlik avi baglantisi koydurabiliyordu (tiklanirsa tek kullanimlik belirtec de
+saldirgana giderdi). Artik adres `PanelAddress.BuildBaseUrl` ile panelin YAPILANDIRILMIS
+adresinden kurulur; `Host` yalniz `ServerAddress` bosken yedektir (kaldirilsaydi adres
+ayarlamamis kurulumlarda baglanti OLU giderdi).
+
+**KAPATILAN 2 -- "DNS kayitlari yayinlandi" YALANI + bilinen kirik desen.**
+`DnsService.UpsertRecordsAsync` bolge IKINCIL ise / DNS rolu yoksa kayitlari yalniz panel
+durumuna yazar ve BASARIYLA doner. Buna ragmen `MailService` kosulsuz "published" logu yaziyor,
+`MailController` ise `AppliedCount`'u YAZILAN degil GONDERILMESI DUSUNULEN kayittan uretiyordu.
+Stalwart giden her postayi DKIM ile imzaladigi icin yayinlanmamis TXT = dogrulanamayan imza =
+spam. Karar tek kaynaga cikti: `MailDnsPublication.Evaluate`. Ayrica "Uygula" ucu kayitlari
+TEK TEK yaziyordu -- depoda iki ayri dosyada "bu desen bolgeyi kilitliyor" diye olculmus olan
+kirik desen; ustelik alan adi olusturulurken duzeltilmis toplu yazmanin ardindan AYNI istekte
+ikinci kez kosuyordu. Artik tek toplu cagri.
+
+**Yeni dosyalar:** `src/AdaPanel.Infrastructure/Mail/MailDnsPublication.cs`,
+`tests/.../PostaBaglantiAdresiTests.cs`, `tests/.../PostaDnsYayinDurustlugTests.cs`.
+**Testler:** 4514 -> 4538 (bu turda +17). Mutasyon: 8 mutasyon, 8'i kirmizi
+(fazla-kapatma nobetcileri dahil: yedek kaldirilinca ve "hicbir zaman yayinlandi deme"
+yapilinca da kirmizi yandi).
+
+### ACIK KALANLAR (olculdu, KAPATILMADI -- sebebiyle)
+
+1. **`From` basligi hizalanmasi.** `mustMatchSender` yalniz ZARF gondericisini (MAIL FROM)
+   baglar. Kimligi dogrulanmis A kiracisi `From: fatura@musteriB.com` yazabilir. DMARC hizalamasi
+   bunu alici tarafta yakalar (B'nin DMARC'i varsa); Postfix/Plesk dunyasinda da durum aynidir.
+   Kapatmak Stalwart'ta ozel bir MtaStageData script'i ister ve yanlis yazilirsa MESRU posta
+   (posta listesi, otomatik yanit, uygulama bildirimi) durur.
+2. **MailEnable yolu ile Stalwart yolu FARKLI politika uretiyor:** `MailEnableMailService`
+   `p=none` ve SPF `v=spf1 a mx ~all` yaziyor, DKIM HIC uretmiyor; Stalwart yolu `p=quarantine`.
+   Uc ayri SPF ureticisi var (`MailService`, `MailEnableMailService`, `DnsService` sablonu).
+   Tek kaynaga cekilmedi: MailEnable kullanan bir kurulumda `p=none -> p=quarantine` degisikligi
+   DKIM'siz bir sunucuda teslimati BOZABILIR ve bu makinede olculemez.
+3. **`NotificationService.GetPlaintextPassword`** `Unprotect` hatasinda sessizce duz metin
+   parolaya duser (`catch { return storedPassword; }`) -- koruma zorunlu degil tercihli.
+4. **`UseSsl=false`** iken SMTP kimlik bilgileri duz metin gidiyor; sunucu tarafi bu birlesimi
+   engellemiyor. SMTP PORTU icin sunucu tarafi kisit yok (`OutboundAddressGuard` yalniz konagi
+   denetliyor ve yalniz KAYDETME aninda).
+5. **Sertifika dogrulamasi tamamen kapali 4 yer** (posta yolunda DEGIL):
+   `Cluster/ClusterHttpClientFactory.cs:125`, `Migration/SiteMigrationService.cs:264,357`,
+   `Seo/SeoHttpTransport.cs:49`.
+6. **Teshis ile karsilama-adi mantigi celisiyor:** `MailDiagnosticsRunner` PTR'nin
+   `mail.<domain>`e esit olmasini sart kosup `fail` verirken `RdnsService` ayni durumu dogru
+   sekilde uyari sayiyor. Ayrica teshis coklu DKIM'de yalniz ILK seciciye bakiyor
+   (`FirstOrDefault`) ve SPF/DMARC'ta degeri degil VARLIGI olcuyor.
+7. **`DnsService.cs:1253` olu referans:** yorum var olmayan `EnsureMailRecordsAsync`e yonlendiriyor.
+
+### OLCULEMEYENLER
+- Gercek bir SMTP oturumu HIC acilmadi (gorev geregi): "25'ten role denendi, reddedildi" gibi
+  bir kanit YOK. Kanit, sunucunun kendi yapilandirma nesnelerinin okunmasidir.
+- Kurulu paneldeki (127.0.0.1:8890) Stalwart yapilandirmasi OKUNAMADI: `runtimes\stalwart`
+  agacina erisim reddedildi -- ki bu sertlestirmenin calistiginin da kanitidir.
+- PHP `mail()` yolu: panel php.ini'ye `SMTP`/`sendmail_path` YAZMIYOR (tarandi, tek eslesme
+  `SiteMigrationService`'teki goc anahtar listesi). Yani yerel sitelerin PHP'si varsayilan
+  `localhost:25` ile Stalwart'a girer; olculen varsayilanlara gore DISARIYA role REDDEDILIR
+  (kimlik yok) ama YEREL kutulara teslim EDILIR ve `MtaStageMail.isSenderAllowed` kimliksiz
+  gondericiye herhangi bir gonderen alan adi birakir. Yani "kiracidan kiraciya ic sahtecilik"
+  mumkun gorunuyor; CANLI DENENMEDI.

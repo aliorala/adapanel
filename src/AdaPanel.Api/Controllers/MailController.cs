@@ -4,6 +4,7 @@ using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Mail;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -100,11 +101,13 @@ public sealed class MailController(
         // profesyonel paneller gibi: domain panelde site olarak yönetiliyorsa MX/SPF/DKIM/DMARC kayıtları
         // panel DNS bölgesine OTOMATİK eklenir. Site yoksa (dış DNS) sessizce geçilir;
         // kullanıcı kayıtları ekrandaki DNS panelinden kopyalar.
+        // ÖLÇÜLEN hüküm: "çağrı patlamadı" ile "kayıtlar bölgeye YAZILDI" aynı şey değildir.
+        // İkincil bölgede ve Windows DNS rolü yokken yazma çağrısı BAŞARIYLA döner ama hiçbir
+        // kayıt yayınlanmaz; eski hâl bu durumda da "mail.domain_created_dns" diyordu.
         var dnsApplied = false;
         try
         {
-            await ApplyDnsRecordsAsync(request.DomainName, dnsService, cancellationToken);
-            dnsApplied = true;
+            dnsApplied = (await ApplyDnsRecordsAsync(request.DomainName, dnsService, cancellationToken)).Published;
         }
         catch (Exception exception)
         {
@@ -673,9 +676,14 @@ public sealed class MailController(
                 HttpContext,
                 "mail.dns.applied",
                 domain,
-                $"{result.AppliedCount} mail DNS record(s) written to zone '{result.ZoneName}'.",
+                result.Published
+                    ? $"{result.AppliedCount} mail DNS record(s) written to zone '{result.ZoneName}'."
+                    : $"Mail DNS records were NOT published to zone '{result.ZoneName}' ({result.StatusMessage}); they are stored in the panel only.",
                 await AlanAdiSahibiAsync(domain, cancellationToken));
-            return Ok(ApiResponse<ApplyMailDnsResultDto>.Ok(result, "mail.dns_applied"));
+
+            // Zarf mesajı da ÖLÇÜLEN sonuçtur: yayınlanmadıysa kullanıcı sebebini görür ve
+            // kayıtları kendi DNS sağlayıcısına elle eklemesi gerektiğini bilir.
+            return Ok(ApiResponse<ApplyMailDnsResultDto>.Ok(result, result.StatusMessage));
         }
         catch (Core.Common.AppException exception) when (exception.HttpStatusCode == 404)
         {
@@ -684,27 +692,43 @@ public sealed class MailController(
     }
 
     /// <summary>Mail DNS kayıtlarını aynı adlı sitenin panel DNS bölgesine yazar.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>İKİ ÖLÇÜLEN HATA burada kapandı.</b>
+    /// </para>
+    /// <para>
+    /// (1) <b>Bilinen kırık desen hâlâ canlıydı.</b> Kayıtlar TEK TEK yazılıyordu; oysa
+    /// <c>DnsService.UpsertRecordsAsync</c> ve <c>MailService.TryPublishDnsRecordsAsync</c>
+    /// yorumlarında ölçülmüş olarak yazılı: her tek yazma bölgenin tamamını yeniden yazan bir
+    /// senkron başlatır, uzun DKIM TXT'sinin bölge kilidi bir sonraki yazmayı düşürür
+    /// ("Failed to create resource record"). Üstelik alan adı oluştururken bu döngü,
+    /// <c>MailService</c>'in DÜZELTİLMİŞ toplu yazmasının hemen ardından AYNI istekte ikinci kez
+    /// koşuyordu. Artık tek çağrı, tek senkron.
+    /// </para>
+    /// <para>
+    /// (2) <b><c>AppliedCount</c> ölçüm değil sayımdı.</b> Yazılan kayıt değil, GÖNDERİLMESİ
+    /// DÜŞÜNÜLEN kayıt sayılıyordu; bölge ikincilken ya da Windows DNS rolü yokken bile
+    /// "5 kayıt uygulandı" yazıyordu. Karar artık <see cref="MailDnsPublication"/>'da (tek kaynak).
+    /// </para>
+    /// </remarks>
     private async Task<ApplyMailDnsResultDto> ApplyDnsRecordsAsync(string domain, IDnsService dnsService, CancellationToken cancellationToken)
     {
         var dns = await mailService.GetDnsRecordsAsync(domain, cancellationToken);
+        var requests = MailDnsPublication.BuildRequests(dns);
 
         Core.Dtos.Sites.SiteDnsZoneDto? zone = null;
-        foreach (var record in dns.Records.Where(record => !string.IsNullOrWhiteSpace(record.Value)))
+        if (requests.Count > 0)
         {
-            zone = await dnsService.UpsertRecordAsync(dns.Domain, new Core.Dtos.Sites.UpsertDnsRecordRequest
-            {
-                Type = record.Type,
-                Host = record.Host,
-                Value = record.Value,
-                Priority = record.Priority,
-                Ttl = 3600
-            }, cancellationToken);
+            zone = await dnsService.UpsertRecordsAsync(dns.Domain, requests, cancellationToken);
         }
 
+        var result = MailDnsPublication.Evaluate(zone, requests.Count);
         return new ApplyMailDnsResultDto
         {
             ZoneName = zone?.ZoneName ?? dns.Domain,
-            AppliedCount = dns.Records.Count(record => !string.IsNullOrWhiteSpace(record.Value))
+            AppliedCount = result.AppliedCount,
+            Published = result.Published,
+            StatusMessage = result.StatusKey
         };
     }
 

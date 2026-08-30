@@ -2,6 +2,7 @@ using AdaPanel.Api.Security;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using AdaPanel.Infrastructure.Mail;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -60,6 +61,7 @@ public sealed class MailListPublicController(
     MailListUnsubscribeService unsubscribeService,
     ICustomerScopeService customerScopes,
     IIisSiteService iisSiteService,
+    IPanelPreferencesService preferencesService,
     IAuditService auditService,
     ILogger<MailListPublicController> logger) : ControllerBase
 {
@@ -88,7 +90,7 @@ public sealed class MailListPublicController(
             sent = await unsubscribeService.RequestAsync(
                 list ?? string.Empty,
                 email ?? string.Empty,
-                AbsoluteUrl("unsubscribe/confirm") + "?token={token}",
+                await ConfirmUrlTemplateAsync(cancellationToken),
                 cancellationToken);
         }
         catch (Exception exception)
@@ -206,13 +208,41 @@ public sealed class MailListPublicController(
     private static string PathOf(string action) => $"/api/v1/public/mail-lists/{action}";
 
     /// <summary>
-    /// E-postaya konacak MUTLAK adres: isteğin geldiği ana ad üzerinden kurulur.
+    /// Onay e-postasına konacak MUTLAK adresin şablonu. Ana ad, panelin KENDİ yapılandırılmış
+    /// adresinden gelir; <c>Host</c> başlığı yalnız adres hiç ayarlanmamışsa yedektir.
     /// </summary>
     /// <remarks>
-    /// Sabit bir ana ad yazılamaz — panel her kurulumda başka bir adla yayınlanır. İstekteki
-    /// <c>Host</c> kullanılır; bağlantı zaten yalnız o adrese gönderilen e-postaya konur.
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK — kapatıldı.</b> Adres eskiden doğrudan <c>Request.Host</c>'tan kuruluyordu.
+    /// <c>appsettings.json</c>'da <c>"AllowedHosts": "*"</c> ve boru hattında
+    /// <c>UseHostFiltering</c> YOK; yani <c>Host</c> başlığı tamamen İSTEMCİNİN yazdığı serbest
+    /// metindi. Bu uç kimliksizdir ve GERÇEK bir aboneye PANELİN KENDİ alan adından e-posta
+    /// GÖNDERTİR: saldırgan <c>Host: kotu.example</c> yazarak, kurbanın kutusuna panelin kendi
+    /// itibarıyla ulaşan ve kendi sitesine götüren bir bağlantı koydurabiliyordu (kimlik avı +
+    /// belirteç hırsızlığı: bağlantıya tıklayan abonenin tek kullanımlık belirteci saldırgana gider).
+    /// </para>
+    /// <para>
+    /// <b>TEK KAYNAK:</b> panelin dışarıya verdiği adres zaten <see cref="PanelAddress"/>'te
+    /// üretiliyor (parola sıfırlama, hoş geldin postası, tek kullanımlık giriş bağlantısı). Burada
+    /// ikinci bir kural yazmak, birinin düzeltilip ötekinin açık kalması demekti.
+    /// </para>
+    /// <para>
+    /// <b>Yedek neden KALDI (fazla kapatma sınırı):</b> <c>ServerAddress</c> kurulumda boş
+    /// bırakılabiliyor. Yedeği kaldırmak, adresi ayarlamamış her kurulumda onay bağlantısını
+    /// <c>&lt;sunucu-adresi&gt;</c> yer tutucusuyla ÖLÜ göndermek olurdu — yani özelliği kırardı.
+    /// Adres ayarlıyken <c>Host</c> başlığı artık HİÇ kullanılmaz.
+    /// </para>
     /// </remarks>
-    private string AbsoluteUrl(string action) => $"{Request.Scheme}://{Request.Host}{PathOf(action)}";
+    private async Task<string> ConfirmUrlTemplateAsync(CancellationToken cancellationToken)
+    {
+        var preferences = await preferencesService.GetAsync(cancellationToken);
+        var baseUrl = PanelAddress.BuildBaseUrl(
+            preferences.ServerAddress,
+            preferences.PreferredHttpsPort,
+            fallbackHost: Request.Host.Value);
+
+        return $"{baseUrl}{PathOf("unsubscribe/confirm")}?token={{token}}";
+    }
 
     /// <summary>
     /// Denetim kaydına yazılacak kaynak adı. Gövde kimliksiz bir uçtan geldiği için SINIRLANIR:

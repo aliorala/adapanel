@@ -32,5 +32,22 @@ public sealed class ApplyMailDnsResultDto
 {
     public string ZoneName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Bölgeye GERÇEKTEN yazılan kayıt sayısı. Yayınlanmadıysa 0.
+    /// </summary>
+    /// <remarks>
+    /// Eskiden bu alan "gönderilmesi düşünülen" kayıt sayısıydı: bölge ikincilken ya da Windows
+    /// DNS rolü kurulu değilken de dolu geliyordu ve ekran "N kayıt uygulandı" yazıyordu. Doğru
+    /// yazılmış bir sayı, yanlış bir gerçeği anlatıyordu.
+    /// </remarks>
     public int AppliedCount { get; set; }
+
+    /// <summary>Kayıtlar Windows DNS bölgesine yazıldı mı.</summary>
+    public bool Published { get; set; }
+
+    /// <summary>
+    /// Sonucun çeviri anahtarı: <c>mail.dns_applied</c> ya da yayınlanmama sebebi
+    /// (<c>mail.dns_not_published_*</c>). Ekran bunu doğrudan basar.
+    /// </summary>
+    public string StatusMessage { get; set; } = string.Empty;
 }
