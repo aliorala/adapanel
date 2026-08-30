@@ -2305,9 +2305,39 @@ $list | ConvertTo-Json -Depth 3";
 
             foreach (var item in index)
             {
-                var xmlPath = Path.Combine(extractedRoot, item.Entry.Replace('/', Path.DirectorySeparatorChar));
-                if (string.IsNullOrWhiteSpace(item.Name) || !File.Exists(xmlPath))
+                // KAPSAM DENETİMİ — `item.Entry` ARŞİVİN İÇİNDEN gelir, yani geri yüklenen paketi
+                // hazırlayan kim ise ONUN yazdığı bir dizedir. Denetimsiz `Path.Combine` ile
+                // "..\..\Windows\..." yazmak çıkarma klasörünün DIŞINA çıkardı: panel o dosyayı
+                // okur ve içeriğini görev XML'i sanıp Register-ScheduledTask'a verirdi. Kural
+                // ICAT EDİLMEDİ, deponun tek kaynağı kullanıldı (PathContainment.IsInsideRoot;
+                // SiteBuilderPathGuard.ResolveWriteTarget de aynısını çağırır).
+                var xmlPath = Path.GetFullPath(Path.Combine(extractedRoot, item.Entry.Replace('/', Path.DirectorySeparatorChar)));
+                if (string.IsNullOrWhiteSpace(item.Name)
+                    || !PathContainment.IsInsideRoot(extractedRoot, xmlPath)
+                    || !File.Exists(xmlPath))
                 {
+                    continue;
+                }
+
+                // BOYUT TAVANI. Aşağıdaki üç satır girdiyi ~2,67 KAT büyütür: Unicode.GetBytes
+                // UTF-16 üretir (karakter başına 2 bayt), base64 onu 4/3 ile çarpar, sonuç bir de
+                // betik dizesine gömülür. Kaynak dosya SALDIRGANIN ARŞİVİNDEN gelir ve bu bir
+                // DÖNGÜ — girdi sayısını da o belirler. Yani 200 MB'lık bir XML tek başına
+                // yarım gigabaytın üzerinde bellek demekti.
+                //
+                // Sınır cömert seçildi: gerçek bir zamanlanmış görev XML'i birkaç KB'dır, 1 MiB
+                // meşru hiçbir görevi engellemez. Atlanan görev SESSİZ DEĞİL, uyarı listesine
+                // düşer -- geri yükleme "başarılı" deyip görevi eksik bırakmamalı.
+                const long EnBuyukGorevXmlBaytI = 1024L * 1024L;
+                var xmlBilgi = new FileInfo(xmlPath);
+                if (xmlBilgi.Length > EnBuyukGorevXmlBaytI)
+                {
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.restore_task_too_large",
+                        Target = item.Name,
+                        Detail = $"{xmlBilgi.Length} > {EnBuyukGorevXmlBaytI}"
+                    });
                     continue;
                 }
 
