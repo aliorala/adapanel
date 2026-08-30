@@ -459,8 +459,13 @@ internal static partial class NginxInstallationSupport
             return string.Empty;
         }
 
-        var content = File.ReadAllText(errorLog);
-        return content.Length <= 4000 ? content : content[^4000..];
+        // ESKİ HÂLİ: File.ReadAllText ile TAMAMI belleğe, sonra son 4000 karakter. error.log
+        // DÖNMEZ; aylarca çalışan bir sunucuda gigabaytlara çıkar. Üstelik bu çağrı
+        // `throw new AppException("nginx.start_failed", …, ReadErrorLog(…))` ifadesinin İÇİNDE ve
+        // etrafında try/catch yok: nginx dosyayı yazmak için açık tuttuğunda okuma IOException
+        // atar ve DOSYA HATASI, "nginx başlatılamadı" hatasının YERİNE geçerdi. FileTail hem
+        // seek eder hem FileShare.ReadWrite ile açar hem de kendi arızasını yutar.
+        return FileTail.ReadLastBytes(errorLog, 4000);
     }
 
     /// <summary>

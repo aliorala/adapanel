@@ -343,8 +343,11 @@ public sealed class WebmailService(
                 return string.Empty;
             }
 
-            var text = File.ReadAllText(newest.FullName);
-            return text.Length <= 1500 ? text : text[^1500..];
+            // ESKİ HÂLİ: dosyanın TAMAMI belleğe, sonra son 1500 karakter. Roundcube günlüğü
+            // dönmez; 1,5 KB göstermek için gigabaytlar okunabiliyordu. Ayrıca PHP dosyayı
+            // yazmak için açık tuttuğunda File.ReadAllText düşer ve dıştaki catch günlüğü
+            // SESSİZCE boş dizeye çevirirdi -- yani teşhis, en çok gerektiği anda kaybolurdu.
+            return FileTail.ReadLastBytes(newest.FullName, 1500);
         }
         catch
         {
