@@ -999,3 +999,74 @@ kararini DOGRUDAN olcen bir Theory eklendi.
 - ARR arkasindaki autodiscover'in gercekten 127.0.0.1'den geldigi KODDAN cikarildi
   (kural uretimi), canli IIS'te GORULMEDI -- bu makinede Stalwart/ARR kurulu degil.
 - Webhook basliginin gercek GitHub/GitLab arayuzunden gonderildigi denenmedi.
+
+---
+
+## KIMLIK DOGRULAMA VE OTURUM GUVENLIGI (31.08.2026) -- commit ATILMADI
+
+Panelin ON KAPISI denetlendi: giris akisi, oturum yonetimi, TOTP, parola sifirlama, hesap
+kilidi, gizli giris yolu, REST jetonu, CSRF ve yetkilendirme karar noktalari.
+
+**Kapatilan alti acik:**
+
+1. **CIKIS OTURUMU SONLANDIRMIYORDU.** Cerez kendi kendine yeterli (kimlik + bitis ani
+   icinde sifreli), sunucuda kayit yok; `SignOutAsync` yalniz TARAYICIDAKI kopyayi siliyordu.
+   Calinmis bir cerez cikistan sonra 12 saat (kalici secilmisse 14 gun) calismaya devam
+   ediyordu. Yeni: her giriste 128 bitlik oturum kimligi (`adapanel_sid`) uretiliyor, cikista
+   `SessionRevocationStore` kara listesine yaziliyor ve `CookieSessionValidator` bunu HER
+   ISTEKTE -- 60 saniyelik tazelik kisayoluna TAKILMADAN -- soruyor. Liste bellekte + dosyada
+   (`config/revoked-sessions.json`, 15 gun); dosya sart, cunku cerez biletleri yeniden
+   baslatmadan sag cikiyor.
+2. **OTURUM SABITLEME artik OLCULUYOR.** Kimlik her `SignInAsync`'te YENIDEN uretiliyor ve
+   varsa eski kimlik ATILIYOR; girisden onceki cerez, girisden sonraki oturum olamaz.
+3. **TOTP TEKRAR OYNATMA.** Kod 30 sn'lik adimdan uretiliyor, +-1 adim tolerans yuzunden AYNI
+   KOD 90 saniye gecerliydi ve yalniz "gecerli mi" soruluyordu. `ITotpService.VerifyCode` artik
+   eslesen ADIMI donuyor, adim `TwoFactorRecoveryCodes.TryConsumeTotpStepAsync` ile TUKETILIYOR
+   (`step <= son` reddedilir, yani daha eski adimin kodu da duser). Tolerans BOZULMADI.
+4. **KULLANICI NUMARALANDIRMA -- uc kanal.** (a) "auth.user_inactive" PAROLADAN ONCE
+   donuyordu: parola bilmeyen biri tek istekte hesabin varligini ogreniyordu -> denetim
+   paroladan SONRAYA alindi (sahibi mesaji HALA goruyor). (b) "auth.user_locked" yalniz var
+   olan hesap icin uretilebiliyordu -> kaldirildi; ustelik mesaj YANLISTI, bu panelde dogru
+   parola kilidi kaldirip iceri aliyor. (c) ZAMAN: kullanici yokken hic karma
+   hesaplanmiyordu, varken PBKDF2 calisiyordu -> olmayan kullanici yolunda da sahte bir
+   karma dogrulaniyor.
+5. **PAROLA SIFIRLAMA BELIRTECI kisa parolada YANIYORDU.** Kural belirtec TUKETILDIKTEN sonra
+   uygulaniyordu; kullanici yeni parolayi kisa yazinca link oluyordu. `PasswordPolicy.Ensure`
+   artik tuketmeden ONCE. Ayrica arayuz `?resetToken=` degerini adres cubugundan HEMEN siliyor
+   (eskiden yalniz BASARILI sifirlamada siliniyordu; basarisizlikta gecmiste ve Referer'da
+   kaliyordu).
+6. **`2fa/disable` DAR hiz sinirina baglandi** (mevcut parolayi dogruluyor, yani parola deneme
+   yuzeyi) ve **`AllowHttpFallback` iki DTO'da varsayilan KAPALI** yapildi -- alan gonderilmeyen
+   bir kayit istegi HTTP dinleyicisini ve `Secure`siz cerezi SESSIZCE aciyordu.
+
+**Yeni dosyalar:** `src/AdaPanel.Infrastructure/Security/SessionRevocationStore.cs`,
+`tests/.../OturumSonlandirmaTests.cs`, `tests/.../TotpTekrarOynatmaTests.cs`,
+`tests/.../GirisNumaralandirmaTests.cs`, `tests/.../ParolaSifirlamaBelirteciTests.cs`,
+`tests/.../OturumCereziBayraklariTests.cs`, `tests/.../KimlikUclariHizSiniriTests.cs`,
+`tests/.../GirisDuzenegi.cs`, `tests/.../OturumTestOrtami.cs`.
+
+**Mutasyon:** 17 mutasyon, 17'si kirmizi (fazla-kapatma nobetcileri dahil: TOTP penceresi
+kapatilinca ve "her oturum kaldirilmis" yapilinca da kirmizi yandi). Ilk turda M13 yanlis
+kurgulanmisti (denetimi SILIYORDU, TASIMIYORDU) -- dogrusuyla tekrarlandi.
+
+**TEMIZ CIKANLAR (bir sonraki tur tekrar aramasin):** cerez bayraklari (HttpOnly + SameSite=Strict
++ Secure/Always), CSRF (`PanelAntiforgeryFilter`, kimlik yoluna gore), REST jetonu (256 bit,
+SHA-256 ozetli, iptal edilebilir, sahibi pasifse gecersiz), tek kullanimlik belirtec deposu
+(`SingleUseTokenStore`), kurtarma kodlari (SHA-256, tek kullanimlik, kilit altinda),
+`ParolaBelirlemeKomutu` (HTTP ucu yok, yonetici sart, 2FA korunur), `recover-access.flag`
+(parola/2FA'ya dokunmaz), arayuzde localStorage'da kimlik bilgisi YOK, CSRF jetonu giris/cikis/
+kimlige burunmede yenileniyor, yetkilendirme kararlarinin TAMAMI claims'ten (66 denetleyici
+tarandi, govdeden gelen aktor/rol YOK).
+
+**OLCULEMEYENLER / ACIK KALANLAR:**
+- **`password/forgot` ZAMAN farki:** adres varsa SMTP gonderimi BEKLENIYOR, yoksa aninda
+  donuluyor. Yanit metni ayni ama SURE ayni degil -> numaralandirma kanali. Kapatilmadi:
+  gonderimi arka plana almak kendi kapsamini (IServiceScopeFactory) gerektiriyor ve yarim
+  yapilirsa sifirlama e-postalari SESSIZCE olur. Uc `login` politikasiyla sinirli (5/dk/IP).
+- **`2fa/recovery-codes` PAROLA ISTEMIYOR.** Calinmis bir oturum yeni kurtarma kodlari uretip
+  kalici arka kapi birakabilir (denetim kaydi var). Kapatmak arayuzde parola sormayi gerektirir.
+- Hesap kilidi bir ENGEL degil SINYALDIR: dogru parola kilidi kaldirir (bilincli, DoS'u onlemek
+  icin). Gercek kaba kuvvet savunmasi IP katmani + hiz siniri.
+- Cerez akisi GERCEK bir HTTP boru hattinda degil, `CookieSessionValidator`/`AuthController`
+  dogrudan calistirilarak olculdu (ust duzey `Program.cs` tam boru hattiyla test edilemiyor).
+- Canli panelde (127.0.0.1:8890) HICBIR SEY denenmedi -- talimat geregi.

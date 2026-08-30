@@ -24,27 +24,40 @@ public sealed class TotpService : ITotpService
         return $"otpauth://totp/{escapedIssuer}:{escapedAccountName}?secret={secret}&issuer={escapedIssuer}&algorithm=SHA1&digits=6&period=30";
     }
 
-    public bool VerifyCode(string secret, string code)
+    /// <summary>
+    /// Kodu doğrular; eşleşen zaman adımını döner. Adım, çağıranın kodu TÜKETEBİLMESİ için gerekli
+    /// (tekrar oynatma koruması) — gerekçesi <see cref="ITotpService.VerifyCode"/>'da.
+    /// </summary>
+    public long? VerifyCode(string secret, string code)
     {
-        var normalizedCode = new string(code.Where(char.IsDigit).ToArray());
+        var normalizedCode = new string((code ?? string.Empty).Where(char.IsDigit).ToArray());
         if (normalizedCode.Length != 6)
         {
-            return false;
+            return null;
         }
 
         var secretBytes = Base32Decode(secret);
         var currentStep = GetCurrentTimeStepNumber();
 
+        // BÜTÜN ADIMLAR HER ZAMAN DENENİR, ilk eşleşmede DÖNÜLMEZ: erken çıkış, "kaçıncı adımda
+        // eşleşti" bilgisini çalışma SÜRESİNE yazardı. Kazanç küçük ama bedeli de yok — üç HMAC.
+        long? eslesen = null;
         for (var offset = -1; offset <= 1; offset++)
         {
-            var expected = ComputeTotp(secretBytes, currentStep + offset);
-            if (string.Equals(expected, normalizedCode, StringComparison.Ordinal))
+            var step = currentStep + offset;
+            var expected = ComputeTotp(secretBytes, step);
+
+            // Sabit zamanlı karşılaştırma: beklenen kod bir SIRDIR (gizli anahtardan türer) ve
+            // string.Equals ilk farklı karakterde durur.
+            if (CryptographicOperations.FixedTimeEquals(
+                    Encoding.UTF8.GetBytes(expected),
+                    Encoding.UTF8.GetBytes(normalizedCode)))
             {
-                return true;
+                eslesen = step;
             }
         }
 
-        return false;
+        return eslesen;
     }
 
     private static long GetCurrentTimeStepNumber()

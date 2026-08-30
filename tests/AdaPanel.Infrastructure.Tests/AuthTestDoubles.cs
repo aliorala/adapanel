@@ -116,7 +116,7 @@ internal sealed class ThrowingTotpService : ITotpService
 
     public string BuildProvisioningUri(string issuer, string accountName, string secret) => throw new NotSupportedException();
 
-    public bool VerifyCode(string secret, string code) => throw new NotSupportedException();
+    public long? VerifyCode(string secret, string code) => throw new NotSupportedException();
 }
 
 internal sealed class ThrowingNotificationService : INotificationService

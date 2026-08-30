@@ -4,6 +4,7 @@ using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Auth;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -31,7 +32,8 @@ public sealed class AuthController(
     IAntiforgery antiforgery,
     IAuthService authService,
     IAuditService auditService,
-    IPanelSecurityService securityService) : ControllerBase
+    IPanelSecurityService securityService,
+    SessionRevocationStore sessionRevocations) : ControllerBase
 {
     [AllowAnonymous]
     // ARAYUZUN ACILIS UCLARI (csrf + session) DA TAVANLI.
@@ -313,6 +315,17 @@ public sealed class AuthController(
         return Ok(ApiResponse<CurrentUserDto>.Ok(admin, "auth.impersonate.stopped"));
     }
 
+    /// <summary>
+    /// Çıkış. Çerez YALNIZCA tarayıcıdan silinmez, SUNUCUDA da geçersiz kılınır.
+    /// </summary>
+    /// <remarks>
+    /// Panelin oturum çerezi kendi kendine yeterlidir (kimlik ve bitiş anı çerezin içinde şifreli
+    /// olarak taşınır, sunucuda kayıt tutulmaz); bu yüzden <c>SignOutAsync</c> tek başına yalnız
+    /// tarayıcıdaki kopyayı siler ve çerezin KENDİSİ 12 saat (kalıcı seçilmişse 14 gün) boyunca
+    /// çalışmaya devam ederdi. Yani çerezi daha önce ele geçirmiş biri için "Çıkış" düğmesinin
+    /// hiçbir anlamı yoktu. Oturum kimliği kara listeye yazılarak çerez sunucu tarafında da ölür;
+    /// gerekçenin tamamı <see cref="SessionRevocationStore"/>'da.
+    /// </remarks>
     [Authorize]
     [HttpPost("logout")]
     public async Task<ActionResult<ApiResponse<object>>> LogoutAsync(CancellationToken cancellationToken)
@@ -320,6 +333,18 @@ public sealed class AuthController(
         var userId = User.GetRequiredUserId();
         var userName = User.Identity?.Name ?? "unknown";
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+
+        // ÖNCE kara listeye yaz, SONRA çerezi sil. Ters sırada yapılsaydı ve kara liste yazımı
+        // (disk dolu, ACL) patlasaydı, kullanıcı "çıkış yaptım" görürken çerez sunucuda geçerli
+        // kalırdı — sessiz bir yarım koruma. Bu sırada yazma patlarsa çıkış da BAŞARISIZ olur ve
+        // kullanıcı bunu görür.
+        // ÖNCE kara listeye yaz, SONRA çerezi sil. Ters sırada yapılsaydı ve kara liste yazımı
+        // (disk dolu, ACL) patlasaydı, kullanıcı "çıkış yaptım" görürken çerez sunucuda geçerli
+        // kalırdı — sessiz bir yarım koruma. Bu sırada yazma patlarsa çıkış da BAŞARISIZ olur ve
+        // kullanıcı bunu görür.
+        await sessionRevocations.RevokeAsync(
+            User.FindFirstValue(SessionRevocationStore.SessionIdClaim),
+            cancellationToken);
 
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         await auditService.WriteAsync("auth.logout.succeeded", "auth", $"User '{userName}' signed out.", userId, ipAddress, cancellationToken);
@@ -378,7 +403,17 @@ public sealed class AuthController(
         return Ok(ApiResponse<RecoveryCodesDto>.Ok(result, "auth.2fa.recovery_regenerated"));
     }
 
+    /// <summary>
+    /// İki adımlı doğrulamayı kapatır. MEVCUT PAROLA şart — yani bu uç bir parola deneme yüzeyidir.
+    /// </summary>
+    /// <remarks>
+    /// Hız sınırı parola değiştirmeyle AYNI politikadan geçiyor (5 deneme / 15 dk / IP) ve bu
+    /// eksikti: uç yalnız küresel oturum tavanının (600/dk) altındaydı, yani çerezi ele geçiren
+    /// biri dakikada yüzlerce parola deneyerek ikinci faktörü kaldırmayı zorlayabilirdi. Kapatma,
+    /// hesabı kalıcı devralmanın son adımıdır; parola değiştirmekle aynı korumayı hak eder.
+    /// </remarks>
     [Authorize]
+    [EnableRateLimiting(PanelRateLimits.PasswordChange)]
     [HttpPost("2fa/disable")]
     public async Task<ActionResult<ApiResponse<CurrentUserDto>>> DisableTwoFactorAsync(
         [FromBody] DisableTwoFactorRequest request,

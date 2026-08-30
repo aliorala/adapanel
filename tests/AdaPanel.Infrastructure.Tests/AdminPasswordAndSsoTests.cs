@@ -541,12 +541,14 @@ public sealed class AdminPasswordAndSsoTests
                     new Claim(ClaimTypes.NameIdentifier, kullanici.Id.ToString()),
                     new Claim(ClaimTypes.Name, kullanici.UserName),
                     new Claim(ClaimTypes.Role, kullanici.Role.ToString()),
-                    new Claim(CookieSessionValidator.CredentialStampClaim, damga)
+                    new Claim(CookieSessionValidator.CredentialStampClaim, damga),
+                    OturumTestOrtami.OturumKimligiTalebi()
                 ],
                 CookieAuthenticationDefaults.AuthenticationScheme);
 
             var servisler = new ServiceCollection();
             servisler.AddSingleton(DbContext);
+            servisler.AddSingleton(OturumTestOrtami.BosKaraListe());
             servisler.AddSingleton<IAuthenticationService>(new SessizKimlikServisi());
             var http = new DefaultHttpContext { RequestServices = servisler.BuildServiceProvider() };
 

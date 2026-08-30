@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,13 @@ namespace AdaPanel.Api.Security;
 /// eski çerez kendiliğinden geçersizleşir. EF göçü, yeni sütun ve yazma yollarına dokunma gerekmez —
 /// yani düzeltme, parolayı değiştiren BÜTÜN yolları (kendi değiştirme, yönetici sıfırlama, kurulum)
 /// tek noktadan kapsar ve ileride eklenecek yeni bir yol da otomatik kapsanır.
+/// </para>
+/// <para>
+/// <b>ÇIKIŞ da burada uygulanır.</b> Çerez kendi kendine yeterli olduğu için
+/// <c>SignOutAsync</c> yalnız TARAYICIDAKİ kopyayı siler; çerezin kendisi geçerli kalırdı. Girişte
+/// üretilen oturum kimliği (<see cref="SessionRevocationStore.SessionIdClaim"/>) çıkışta kara
+/// listeye yazılır ve burada HER İSTEKTE — 60 saniyelik tazelik kısayoluna takılmadan — sorulur.
+/// Gerekçenin tamamı <see cref="SessionRevocationStore"/>'da.
 /// </para>
 /// <para>
 /// <b>Damgası olmayan çerez REDDEDİLİR.</b> Bu sürüme geçildiğinde açık oturumlar bir kez düşer ve
@@ -78,6 +86,20 @@ public static class CookieSessionValidator
             return;
         }
 
+        // OTURUM KİMLİĞİ HER GİRİŞTE YENİDEN ÜRETİLİR.
+        //
+        // İki işi birden yapar: (1) çıkışın sunucu tarafında da bir karşılığı olmasını sağlar —
+        // kara listeye yazılacak bir tutamak olmadan "çıkış" yalnız tarayıcıdaki çerezi silmekti,
+        // (2) oturum sabitlemeyi ÖLÇÜLEBİLİR biçimde imkânsız kılar: girişten sonraki oturum,
+        // girişten öncekiyle aynı kimliği taşıyamaz. Varsa eski kimlik ÖNCE atılır; ikinci bir
+        // talep eklemek, hangisinin geçerli olduğunu belirsiz bırakırdı.
+        foreach (var eski in identity.FindAll(SessionRevocationStore.SessionIdClaim).ToList())
+        {
+            identity.RemoveClaim(eski);
+        }
+
+        identity.AddClaim(new Claim(SessionRevocationStore.SessionIdClaim, SessionRevocationStore.NewSessionId()));
+
         var dbContext = context.HttpContext.RequestServices.GetRequiredService<AdaPanelDbContext>();
         var passwordHash = await dbContext.Users
             .AsNoTracking()
@@ -101,6 +123,26 @@ public static class CookieSessionValidator
         var principal = context.Principal;
         if (principal?.Identity?.IsAuthenticated != true)
         {
+            return;
+        }
+
+        // ÇIKIŞ DENETİMİ HER İSTEKTE, ARALIK BEKLEMEDEN.
+        //
+        // Aşağıdaki 60 saniyelik tazelik kısayolunun ÜSTÜNDE durması zorunlu: çıkışın etkisi
+        // gecikmeli olamaz. "Çıkış yaptım" diyen kullanıcının çerezi bir dakika daha çalışıyorsa
+        // çıkış, tam da anlamlı olduğu durumda (paylaşılan bilgisayardan kalkmak, çalınmış bir
+        // çerezi düşürmek) işe yaramaz. Denetim BELLEKTEN yapılır — veritabanı/disk okuması yok —
+        // dolayısıyla her isteğe uygulanmasının ölçülebilir bir bedeli yoktur.
+        //
+        // KİMLİĞİ OLMAYAN ÇEREZ REDDEDİLİR: kimlik damgasındaki kuralın aynısı. "Kimlik yoksa
+        // geçerli say" demek, çıkışı sunucu tarafında hiç uygulayamamak demekti. Bedeli, bu sürüme
+        // geçildiğinde açık oturumların bir kez düşmesidir.
+        var oturumKimligi = principal.FindFirst(SessionRevocationStore.SessionIdClaim)?.Value;
+        var kaldirilanlar = context.HttpContext.RequestServices.GetRequiredService<SessionRevocationStore>();
+        if (string.IsNullOrEmpty(oturumKimligi) ||
+            await kaldirilanlar.IsRevokedAsync(oturumKimligi, context.HttpContext.RequestAborted))
+        {
+            await ReddetAsync(context);
             return;
         }
 

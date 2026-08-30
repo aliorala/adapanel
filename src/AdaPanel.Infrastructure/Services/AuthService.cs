@@ -35,6 +35,28 @@ public sealed class AuthService(
 {
     private readonly PanelRuntimeOptions runtimeOptions = runtimeOptions.Value;
 
+    /// <summary>
+    /// "Kullanıcı yok" yolunda doğrulanan SAHTE karmanın sahibi. Veritabanına HİÇ yazılmaz; yalnız
+    /// karma algoritmasının istediği bir nesne olduğu için var (ASP.NET Identity karmayı kullanıcı
+    /// nesnesine bağlamaz, ama imza onu ister).
+    /// </summary>
+    private static readonly PanelUser SahteKullanici = new()
+    {
+        Id = Guid.Empty,
+        UserName = "-",
+        Email = "-"
+    };
+
+    /// <summary>
+    /// Süreç ömrü boyunca tek kez üretilen sahte karma. Her istekte yeniden ÜRETİLSEYDİ maliyet
+    /// doğrulamanın iki katı olur ve zaman farkı bu sefer ters yönde ölçülebilir hâle gelirdi.
+    /// Yarışta iki kez üretilmesi zararsızdır: değer yalnız atılacak bir doğrulamada kullanılıyor.
+    /// </summary>
+    private static string? sahteKarma;
+
+    private static string SahteKarmaAl(IPasswordHasher<PanelUser> passwordHasher) =>
+        sahteKarma ??= passwordHasher.HashPassword(SahteKullanici, "AdaPanel-zaman-esitleme-degeri");
+
     public async Task<LoginResultDto> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default)
     {
         // Engelli IP kimlik bilgisi DOĞRULANMADAN reddedilir. Bu denetim olmadan brute-force koruması
@@ -59,15 +81,22 @@ public sealed class AuthService(
 
         if (user is null)
         {
+            // KULLANICI YOKKEN DE PAROLA KARMASI HESAPLANIR ("sahte" karmaya karşı).
+            //
+            // ÖLÇÜLEN AÇIK: bu yol eskiden anında dönüyordu, kullanıcı varken ise PBKDF2 doğrulaması
+            // yapılıyordu (ASP.NET Identity v3, on binlerce yineleme = onlarca milisaniye). Aradaki
+            // fark ağ üzerinden bile rahatça ölçülebilir; yani panel, hiçbir parola bilmeyen birine
+            // "bu kullanıcı adı var mı" sorusunu YANIT SÜRESİYLE cevaplıyordu. Kullanıcı adlarını
+            // toplamak, hedefli parola denemesinin ve oltalamanın ilk adımıdır.
+            //
+            // Çözüm, iki yolun AYNI işi yapması: burada da bir karma doğrulanır (sonucu atılır).
+            // Sahte karma bir kez üretilip süreç boyunca saklanır — her istekte yeniden üretmek
+            // doğrulamanın İKİ katı iş demekti ve bu sefer fark ters yönde ölçülebilir olurdu.
+            passwordHasher.VerifyHashedPassword(SahteKullanici, SahteKarmaAl(passwordHasher), request.Password);
+
             await auditService.WriteAsync("auth.login.failed", "auth", $"Login failed for unknown user '{lookup}'.", null, ipAddress, cancellationToken);
             await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
             throw new InvalidOperationException("auth.invalid_credentials");
-        }
-
-        if (!user.IsActive)
-        {
-            await auditService.WriteAsync("auth.login.blocked", "auth", $"Inactive user '{user.UserName}' attempted to sign in.", user.Id, ipAddress, cancellationToken);
-            throw new InvalidOperationException("auth.user_inactive");
         }
 
         // HESAP KİLİDİ: kilitliyken parola YİNE DE doğrulanır. DOĞRU parola (ve varsa 2FA) kilidi
@@ -100,8 +129,35 @@ public sealed class AuthService(
             await auditService.WriteAsync("auth.login.failed", "auth", $"Invalid password provided for '{user.UserName}'.", user.Id, ipAddress, cancellationToken);
             await bruteForceProtection.RegisterFailedAttemptAsync(ipAddress, cancellationToken);
 
-            // Kilitliyken yanlış parola: kullanıcı neden giremediğini bilsin (kilit süresi UZAMAZ).
-            throw new InvalidOperationException(wasLocked ? "auth.user_locked" : "auth.invalid_credentials");
+            // YANLIŞ PAROLADA HER ZAMAN AYNI YANIT — "auth.user_locked" ARTIK DÖNMÜYOR.
+            //
+            // İki sebep, ikisi de ölçülmüş:
+            // (1) NUMARALANDIRMA: "kilitli" yanıtı yalnız VAR OLAN bir hesap için üretilebilirdi.
+            //     Saldırgan bir adı beş kez yanlış deneyip altıncıda mesajın değişip değişmediğine
+            //     bakarak, hiçbir parola bilmeden hesabın varlığını doğrulayabiliyordu.
+            // (2) MESAJ YANLIŞTI: bu panelde kilit girişi ENGELLEMEZ — doğru parola kilidi kaldırıp
+            //     içeri alır (yukarıdaki gerekçeye bakın). Yani "hesabınız 15 dakika kilitli" diyen
+            //     ekran, kullanıcıya beklemesi gerektiğini söylüyordu; oysa doğru parolayla o an
+            //     girebilirdi. Doğru olmayan bir uyarı, olmayan bir uyarıdan kötüdür.
+            // Kilidin izi kaybolmuyor: denetim kaydında auth.login.failed ve kilit kalkarken
+            // auth.login.lock_cleared yazılıyor.
+            throw new InvalidOperationException("auth.invalid_credentials");
+        }
+
+        // HESAP PASİF Mİ — PAROLA DOĞRULANDIKTAN SONRA.
+        //
+        // Bu denetim eskiden paroladan ÖNCEYDİ ve doğrudan bir numaralandırma kapısıydı: herhangi
+        // biri, parolayı hiç bilmeden yalnız bir kullanıcı adı göndererek "auth.user_inactive"
+        // yanıtını alıyor ve hesabın VAR OLDUĞUNU öğreniyordu. Şimdi yanıt yalnız parolayı (ve
+        // aşağıda ikinci adımı değil — pasif hesapta oraya hiç gelinmez) DOĞRU bilen kişiye
+        // gösteriliyor: yani hesabın sahibine. Bilmeyen için yanıt "auth.invalid_credentials"tır.
+        //
+        // Mesajın korunması bilinçli: hesabı kapatılan müşteri "parolam mı yanlış" diye sıfırlama
+        // e-postasıyla uğraşmasın, durumu görsün.
+        if (!user.IsActive)
+        {
+            await auditService.WriteAsync("auth.login.blocked", "auth", $"Inactive user '{user.UserName}' attempted to sign in.", user.Id, ipAddress, cancellationToken);
+            throw new InvalidOperationException("auth.user_inactive");
         }
 
         if (user.IsTwoFactorEnabled)
@@ -122,7 +178,18 @@ public sealed class AuthService(
             }
 
             var secret = secretProtector.Unprotect(protectedSecret);
-            var totpValid = totpService.VerifyCode(secret, request.TwoFactorCode);
+
+            // KOD DOĞRU OLMAK YETMEZ, DAHA ÖNCE KULLANILMAMIŞ DA OLMALI.
+            //
+            // TOTP kodu 30 saniyelik bir adımdan üretilir ve ±1 adım tolerans yüzünden AYNI KOD 90
+            // saniye geçerlidir. Eskiden yalnız "geçerli mi" soruluyordu; yani bir kimlik avı
+            // sayfasına girilen ya da omuz üstünden okunan kodla saldırgan İKİNCİ bir oturum
+            // açabilirdi. Adım tüketilemiyorsa (aynı ya da daha eski bir adım) kod GEÇERSİZ sayılır
+            // ve aşağıdaki başarısızlık yolu — kilit sayacı, IP sayacı, denetim kaydı — aynen işler.
+            var totpStep = totpService.VerifyCode(secret, request.TwoFactorCode);
+            var totpValid = totpStep is { } adim &&
+                await TwoFactorRecoveryCodes.TryConsumeTotpStepAsync(fileStore, user.Id, adim, cancellationToken);
+
             // TOTP geçersizse, girilen değeri bir kurtarma kodu olarak dene (tek kullanımlık).
             var recoveryUsed = !totpValid && await TryConsumeRecoveryCodeAsync(user.Id, request.TwoFactorCode, cancellationToken);
             if (!totpValid && !recoveryUsed)
@@ -281,7 +348,13 @@ public sealed class AuthService(
         }
 
         var secret = secretProtector.Unprotect(user.PendingTwoFactorSecretProtected);
-        if (!totpService.VerifyCode(secret, code))
+
+        // KURULUM ADIMI DA TÜKETİR. Aynı kodun hem 2FA'yı açmaya hem de hemen ardından giriş
+        // yapmaya yaraması, tekrar oynatma korumasını daha doğduğu anda delerdi: iki yol tek
+        // sayacı paylaşmalı.
+        var step = totpService.VerifyCode(secret, code);
+        if (step is not { } adim ||
+            !await TwoFactorRecoveryCodes.TryConsumeTotpStepAsync(fileStore, user.Id, adim, cancellationToken))
         {
             throw new InvalidOperationException("auth.invalid_two_factor_code");
         }
@@ -556,9 +629,18 @@ public sealed class AuthService(
             hashes.Add(HashRecoveryCode(code));
         }
 
-        await fileStore.WriteAsync(
+        // WriteAsync DEĞİL UpdateAsync: dosya kurtarma kodlarının yanında SON TÜKETİLEN TOTP
+        // ADIMINI da taşıyor. Üzerine düz yazsaydık, kurtarma kodlarını yenilemek (2FA kurulumunun
+        // son adımı da dahil) tekrar oynatma sayacını sıfırlar ve az önce kullanılmış bir kod
+        // yeniden geçerli hâle gelirdi — koruma tam da kurulduğu anda delinirdi.
+        await fileStore.UpdateAsync(
             TwoFactorRecoveryCodes.PathFor(userId),
-            new TwoFactorRecoveryCodes.Store { Codes = hashes },
+            new TwoFactorRecoveryCodes.Store(),
+            mevcut => new TwoFactorRecoveryCodes.Store
+            {
+                Codes = hashes,
+                LastUsedTotpStep = mevcut.LastUsedTotpStep
+            },
             cancellationToken);
         return codes;
     }
@@ -595,7 +677,10 @@ public sealed class AuthService(
                 {
                     Codes = mevcut.Codes
                         .Where(stored => !string.Equals(stored, hash, StringComparison.OrdinalIgnoreCase))
-                        .ToList()
+                        .ToList(),
+                    // Aynı dosyada duran TOTP tekrar oynatma sayacı KORUNUR; düşürülseydi kurtarma
+                    // kodu kullanmak, az önce harcanmış bir TOTP kodunu yeniden geçerli kılardı.
+                    LastUsedTotpStep = mevcut.LastUsedTotpStep
                 };
             },
             cancellationToken);
@@ -643,6 +728,16 @@ public sealed class AuthService(
 
     public async Task ResetPasswordAsync(string token, string newPassword, CancellationToken cancellationToken = default)
     {
+        // PAROLA KURALI BELİRTEÇ TÜKETİLMEDEN ÖNCE ÖLÇÜLÜR.
+        //
+        // Sıra tersken şu oluyordu: belirteç atomik olarak tüketiliyor, sonra PasswordAssignment
+        // içindeki uzunluk kuralı patlıyordu. Yani kullanıcı YENİ PAROLAYI KISA YAZDIĞI İÇİN
+        // sıfırlama bağlantısı YANIYOR, "tekrar deneyin" diyen ekranın arkasında link ölmüş oluyor
+        // ve yeni bir e-posta istemek gerekiyordu. Kuralı önce uygulamak belirteci korur; kural tek
+        // kaynaktan (PasswordPolicy) geldiği için ikinci bir doğrulama yazılmıyor, aynı kapı iki
+        // kez çağrılıyor (ikinci çağrı PasswordAssignment içinde, yazmanın hemen yanında kalır).
+        PasswordPolicy.Ensure(newPassword);
+
         // Token'ı BULMAK ve TÜKETMEK tek parça olmalı; ayrı yapılırsa aynı link iki kez
         // kullanılabilir. Kullanıcı bulunamazsa aşağıda hata atılır — token yine de tüketilmiştir,
         // bu bilinçli: geçersiz bir token'ı ayakta tutmanın bir yararı yok. Uygulaması ortak depoda.

@@ -35,7 +35,21 @@ public sealed class PanelPreferencesDto
 
     public int PreferredHttpsPort { get; set; } = 8888;
 
-    public bool AllowHttpFallback { get; set; } = true;
+    /// <summary>
+    /// Panel HTTP üzerinden de dinlesin mi.
+    /// </summary>
+    /// <remarks>
+    /// <b>VARSAYILAN KAPALI ve bu bir güvenlik kararıdır.</b> Bu bayrak yalnız dinleyiciyi
+    /// etkilemiyor; açıkken oturum çerezinin <c>Secure</c> bayrağı <c>Always</c> yerine
+    /// <c>SameAsRequest</c> olur (Program.cs) — yani çerez düz HTTP üzerinden de gider ve ağı
+    /// dinleyen biri tarafından okunabilir. Kapalıyken HTTP dinleyicisi 127.0.0.1'e bağlanır,
+    /// dışarıya yalnız HTTPS açılır ve <c>Secure</c> çerez hiçbir şeyi kırmaz (kendinden imzalı
+    /// sertifika da <c>https</c> şemasıdır). Varsayılan <c>true</c> olsaydı, alanı GÖNDERMEYEN bir
+    /// istemci (elle yazılmış betik, entegrasyon) ayarları kaydettiğinde HTTP'yi ve korumasız
+    /// çerezi SESSİZCE açardı; <c>appsettings.json</c> zaten <c>false</c> gönderiyor, buradaki
+    /// başlangıç değeri onunla aynı yöne bakmalı.
+    /// </remarks>
+    public bool AllowHttpFallback { get; set; }
 
     public int LoginLockoutMinutes { get; set; } = 15;
 

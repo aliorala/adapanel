@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AdaPanel.Api.Security;
+using AdaPanel.Infrastructure.Security;
 using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
 using AdaPanel.Data.Persistence;
@@ -211,7 +212,13 @@ public sealed class CookieSessionValidationTests
             return new Duzenek(baglanti, dbContext, kullanici);
         }
 
-        public ClaimsIdentity Kimlik(bool damgaEkle = false)
+        /// <summary>Bu düzeneğin ürettiği çerezlerin oturum kimliği (çıkış testleri değiştirir).</summary>
+        public string OturumKimligi { get; set; } = SessionRevocationStore.NewSessionId();
+
+        /// <summary>Doğrulamada kullanılacak kara liste; varsayılan boş.</summary>
+        public SessionRevocationStore KaraListe { get; set; } = OturumTestOrtami.BosKaraListe();
+
+        public ClaimsIdentity Kimlik(bool damgaEkle = false, bool oturumKimligiEkle = true)
         {
             var kimlik = new ClaimsIdentity(
                 [
@@ -220,6 +227,11 @@ public sealed class CookieSessionValidationTests
                     new Claim(ClaimTypes.Role, girisAnindakiRol.ToString())
                 ],
                 CookieAuthenticationDefaults.AuthenticationScheme);
+
+            if (oturumKimligiEkle)
+            {
+                kimlik.AddClaim(OturumTestOrtami.OturumKimligiTalebi(OturumKimligi));
+            }
 
             if (damgaEkle)
             {
@@ -241,12 +253,13 @@ public sealed class CookieSessionValidationTests
 
         public async Task<CookieValidatePrincipalContext> DogrulaAsync(
             bool damgaEkle = true,
-            AuthenticationProperties? ozellikler = null)
+            AuthenticationProperties? ozellikler = null,
+            bool oturumKimligiEkle = true)
         {
             // Cerez, o ANDAKI parola karmasiyla damgalanmis gibi kurulur; testler karmayi SONRA
             // degistirerek "cerez verildikten sonra degisti" durumunu uretir.
             var bilet = new AuthenticationTicket(
-                new ClaimsPrincipal(Kimlik(damgaEkle)),
+                new ClaimsPrincipal(Kimlik(damgaEkle, oturumKimligiEkle)),
                 ozellikler ?? new AuthenticationProperties(),
                 CookieAuthenticationDefaults.AuthenticationScheme);
 
@@ -269,6 +282,7 @@ public sealed class CookieSessionValidationTests
         {
             var servisler = new ServiceCollection();
             servisler.AddSingleton(DbContext);
+            servisler.AddSingleton(KaraListe);
             servisler.AddSingleton<IAuthenticationService>(new SahteKimlikServisi(() => CikisYapildi = true));
 
             return new DefaultHttpContext { RequestServices = servisler.BuildServiceProvider() };

@@ -34,7 +34,17 @@ public sealed class UpdatePanelPreferencesRequest
     [Range(1, 65535)]
     public int PreferredHttpsPort { get; init; } = 8888;
 
-    public bool AllowHttpFallback { get; init; } = true;
+    /// <summary>
+    /// Panel HTTP üzerinden de dinlesin mi. <b>Alan gönderilmezse KAPALI kabul edilir.</b>
+    /// </summary>
+    /// <remarks>
+    /// Başlangıç değeri <c>true</c> idi ve bu, atlanan bir alanın güvenliği DÜŞÜRMESİ demekti:
+    /// bayrak açıkken oturum çerezinin <c>Secure</c> bayrağı <c>SameAsRequest</c>'e düşer (bkz.
+    /// Program.cs) ve çerez düz HTTP üzerinden de gider. Ayarları kaydeden ama bu alanı taşımayan
+    /// bir istemci (elle yazılmış betik, entegrasyon) paneli sessizce HTTP'ye açardı. Panelin
+    /// arayüzü alanı her zaman gönderiyor, dolayısıyla panelden yapılan hiçbir kayıt değişmez.
+    /// </remarks>
+    public bool AllowHttpFallback { get; init; }
 
     [Range(1, 1440)]
     public int LoginLockoutMinutes { get; init; } = 15;

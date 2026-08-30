@@ -51,6 +51,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
+        // ÇIKIŞ YAPILMIŞ OTURUMLARIN KARA LİSTESİ. SINGLETON OLMAK ZORUNDA: liste süreç genelinde
+        // bellekte tutuluyor ve her istekte okunuyor; kapsamlı (scoped) kayıt her istekte YENİ ve
+        // BOŞ bir liste üretirdi, yani kara liste var görünüp hiçbir oturumu düşürmezdi. Aynı
+        // gerekçe hız sınırlayıcı için de yazılı.
+        services.AddSingleton<Security.SessionRevocationStore>();
         // Ağır uçlarda ANAHTAR BAŞINA eşzamanlılık tavanı. SINGLETON olmak zorunda: sayaç süreç
         // genelinde tek olmalı, yoksa her istek kendi tavanını taşır ve tavan hiç dolmaz.
         services.AddSingleton<ConcurrentWorkGate>();

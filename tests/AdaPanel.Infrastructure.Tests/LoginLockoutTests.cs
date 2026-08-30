@@ -56,8 +56,13 @@ public sealed class LoginLockoutTests
                 new LoginRequest { UserNameOrEmail = "admin", Password = "wrong-password" },
                 "203.0.113.10"));
 
-        // Kilitliyken yanlış parola: kullanıcı NEDEN giremediğini görür.
-        Assert.Equal("auth.user_locked", exception.Message);
+        // KİLİTLİ OLMAK YANITI DEĞİŞTİRMEZ. Eskiden burada "auth.user_locked" dönüyordu ve bu iki
+        // yönden yanlıştı: (1) o yanıt yalnız VAR OLAN bir hesap için üretilebildiğinden, beş kez
+        // yanlış deneyip altıncıda mesajın değişmesine bakan biri hiçbir parola bilmeden hesabın
+        // varlığını doğrulayabiliyordu (kullanıcı numaralandırması); (2) mesajın kendisi yanlıştı —
+        // bu panelde kilit girişi engellemez, doğru parola kilidi kaldırıp içeri alır (aşağıdaki
+        // testler bunu ölçüyor), yani kullanıcıya boş yere "bekleyin" deniyordu.
+        Assert.Equal("auth.invalid_credentials", exception.Message);
 
         var user = await harness.ReloadUserAsync();
         Assert.Equal(lockedUntilBefore, user.LockedUntilUtc);

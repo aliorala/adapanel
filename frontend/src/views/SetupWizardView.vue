@@ -786,7 +786,11 @@ const panelPreferences = reactive<PanelPreferences>({
   defaultBackupRoot: "%ProgramData%\\AdaPanel\\backups",
   serverAddress: "",
   preferredHttpsPort: 8888,
-  allowHttpFallback: true,
+  // Sunucudan gelmeden önceki YER TUTUCU değer KAPALI olmalı: tercihler yüklenemeden form
+  // kaydedilirse (istek hata verdi, kullanıcı hızlı davrandı) açık bir yer tutucu, oturum
+  // çerezinin Secure bayrağını düşürüp paneli HTTP'ye açardı. Sunucu tarafındaki iki DTO'nun
+  // başlangıç değeri de aynı sebeple kapalı.
+  allowHttpFallback: false,
   loginLockoutMinutes: 15,
   defaultRuntimeProfile: "auto",
   installRuntimeIfMissing: true,
@@ -1119,6 +1123,13 @@ async function initializeView() {
     const resetToken = new URLSearchParams(window.location.search).get("resetToken");
     if (resetToken) {
       resetForm.token = resetToken;
+      // BELİRTEÇ ADRES ÇUBUĞUNDAN HEMEN SİLİNİR (eskiden yalnız BAŞARILI sıfırlamada siliniyordu).
+      // Sıfırlama başarısız olduğunda -- ki en sık sebebi yeni parolanın kurala uymamasıdır --
+      // "?resetToken=..." adres çubuğunda, tarayıcı geçmişinde ve o sayfadan yapılan her dış
+      // isteğin Referer başlığında kalmaya devam ediyordu. Belirtecin kendisi bellekte
+      // (resetForm.token) durduğu için tekrar deneme ÇALIŞMAYA DEVAM EDER; kaybedilen tek şey
+      // adresin görünürlüğüdür.
+      window.history.replaceState({}, "", window.location.pathname);
       authView.value = "reset";
       return;
     }
@@ -1153,8 +1164,8 @@ async function submitResetPassword() {
     resetForm.newPassword = "";
     resetForm.confirmPassword = "";
     authView.value = "login";
-    // URL'deki token'ı temizle.
-    window.history.replaceState({}, "", window.location.pathname);
+    // Adres zaten sayfa açılırken temizlendi (bkz. resetToken okuması); burada tekrar
+    // temizlemek gereksiz ikinci bir kaynak olurdu.
     showBanner(t("panel.auth.resetSuccess"), false);
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
