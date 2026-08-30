@@ -629,6 +629,88 @@ public sealed partial class FtpService(
             cancellationToken);
     }
 
+    /// <summary>
+    /// Kayıtlı FTP kullanıcılarının EKSİK ev bağlantısını tamamlar. Kaç tanesinin onarıldığını döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// IIS'in hangi klasör düzenini aradığı makineye göre değişiyor, o yüzden panel ikisini birden
+    /// kurar (gerekçe <see cref="HomeLinkPaths"/>'te). Ama bu, düzeltme YAZILDIKTAN SONRA açılan
+    /// kullanıcılar için geçerliydi; makinede zaten duran hesaplar tek yollu kaldığı için
+    /// güncellemeden sonra da giriş yapamıyorlardı.
+    /// </para>
+    /// <para>
+    /// <b>Yalnızca EKLER, hiçbir şey silmez ya da değiştirmez.</b> Var olan bir bağlantıya
+    /// dokunulmaz; eksik olan, VAR OLAN bağlantının hedefine kurulur. Hedef okunamıyorsa ya da
+    /// yoksa o kullanıcı atlanır — kırık bir hedefe ikinci bir bağlantı kurmak, bozukluğu
+    /// çoğaltmak olurdu. Panel zaten "ev klasörü yok / hedefi silinmiş" diye ölçüp gösteriyor.
+    /// </para>
+    /// <para>
+    /// Junction oluşturma <c>mklink /J</c> ile yapılır: yönetici hakkı ister ama sembolik bağ gibi
+    /// ayrı bir ilke ayarı GEREKTİRMEZ; panel zaten LocalSystem olarak koşar.
+    /// </para>
+    /// </remarks>
+    internal async Task<int> HealHomeLinksAsync(CancellationToken cancellationToken)
+    {
+        var records = await fileStore.ReadAsync(StatePath, Array.Empty<FtpUserState>(), cancellationToken);
+        var onarilan = 0;
+
+        foreach (var record in records)
+        {
+            var yollar = HomeLinkPaths(record.UserName);
+
+            string? hedef = null;
+            foreach (var yol in yollar)
+            {
+                try
+                {
+                    if (!Directory.Exists(yol))
+                    {
+                        continue;
+                    }
+
+                    // Düz klasörse hedefi kendisidir; junction ise gösterdiği yer.
+                    hedef = Directory.ResolveLinkTarget(yol, returnFinalTarget: true)?.FullName ?? yol;
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Okunamayan yol "yok" DEĞİLDİR; onarmaya da çalışmayız.
+                    hedef = null;
+                }
+            }
+
+            if (hedef is null || !Directory.Exists(hedef))
+            {
+                continue;
+            }
+
+            foreach (var eksik in yollar.Where(yol => !Directory.Exists(yol)))
+            {
+                var ust = Path.GetDirectoryName(eksik);
+                if (string.IsNullOrEmpty(ust))
+                {
+                    continue;
+                }
+
+                Directory.CreateDirectory(ust);
+
+                var sonuc = await ProcessRunner.RunAsync(
+                    "cmd.exe",
+                    $"/c mklink /J \"{eksik}\" \"{hedef}\"",
+                    cancellationToken: cancellationToken);
+
+                // Sonuç ÖLÇÜLÜR, çıkış koduna güvenilmez: bu deponun tekrarlanan dersi.
+                if (sonuc.Success && Directory.Exists(eksik))
+                {
+                    onarilan++;
+                }
+            }
+        }
+
+        return onarilan;
+    }
+
     private async Task EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken)
     {
         // IIS FTP rolü kurulu değilse New-WebFtpSite ve ftpServer config bölümleri bulunmaz → script
@@ -637,6 +719,18 @@ public sealed partial class FtpService(
 
         var ftpRoot = Path.Combine(dataRoot, "ftp-root");
         Directory.CreateDirectory(Path.Combine(ftpRoot, "LocalUser"));
+
+        // ESKI KULLANICILAR DA IYILESTIRILIR -- yoksa duzeltme YARIM kalirdi.
+        //
+        // OLCULDU (kurulum sonrasi dogrulama betigi, 0.8.4): ev klasorunu iki yola birden kurma
+        // duzeltmesi yalnizca YENI olusturulan kullanicilara uygulaniyordu. Guncellemeden sonra
+        // makinede duran hesaplar hala tek yolluydu, yani FTP'leri hala kirikti. Bir hatayi
+        // duzeltip mevcut kurulumlari iyilestirmemek, hatanin yarisini birakmaktir: musteri
+        // "guncelledim ama duzelmedi" der ve hakli olur.
+        //
+        // Bu cagri BILEREK hizli yolun USTUNDE: altyapi zaten hazir oldugunda da calisir, cunku
+        // iyilestirilecek sey altyapi degil KULLANICI kayitlaridir.
+        await HealHomeLinksAsync(cancellationToken);
 
         // HIZLI YOL: altyapı bir kez tam kurulduysa (bayrak) ve FTPSVC çalışıyorsa ağır yeniden-kurulumu + FTPSVC
         // yeniden başlatmayı ATLA → 2. ve sonraki FTP kullanıcısı eklemesi saniyelerce beklemeden, anında olur.

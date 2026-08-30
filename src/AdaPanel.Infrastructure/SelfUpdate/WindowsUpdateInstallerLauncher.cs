@@ -55,7 +55,28 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
             $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
             $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(15)
             $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-            $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable
+            # PIL BAYRAKLARI ACIKCA VERILIYOR. New-ScheduledTaskSettingsSet'in varsayilanlari DIZUSTU
+            # BILGISAYAR icin secilmistir ve bu gorev icin uctan uca yanlistir. Bu makinede kayitli
+            # AdaPanel-SelfUpdate gorevi okundu, varsayilanlar aynen duruyordu:
+            # DisallowStartIfOnBatteries=True, StopIfGoingOnBatteries=True.
+            #
+            # NEDEN OLDURUCU: sanallastirilmis sunucular (Hyper-V ve bircok VPS) sik sik bir
+            # batarya/UPS aygiti bildirir. Oyle bir makinede Gorev Zamanlayici bu gorevi
+            # BASLATMAYI REDDEDER (0x800710E0). Zincirin tamami sessizdir: Register-ScheduledTask
+            # basarili doner, ScheduleAsync hata atmaz, arayuz "panel yeniden baslatiliyor" der --
+            # ve HICBIR SEY OLMAZ. Musteri panelini bir daha ASLA guncelleyemez, yani bu depoda
+            # duzeltilen hicbir hatayi da alamaz. Guncelleme yolu oldugu icin kendi kendini
+            # onaramaz da: tek cikis yolu elle kurulumdur.
+            #
+            # StopIfGoingOnBatteries ayrica UPS'li bir makinede sebeke dalgalanmasinin kurulumu
+            # TAM ORTASINDA oldurmesine izin verir -> yarim yazilmis panel ikilileri.
+            #
+            # Ayni olcum cron yolunda daha once yapilmisti (SchedulerService, "AYARLARI ACIKCA VER"
+            # blogu); self-update gorevi o duzeltmeden PAYINI ALMAMISTI.
+            #
+            # SURE SINIRI BILEREK 2 SAAT: bu gorev uzun omurlu bir servis degil, biten bir kurulum
+            # kosusudur; takilirsa slotu sonsuza kadar tutmasin.
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
             """;
 
