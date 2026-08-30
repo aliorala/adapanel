@@ -1452,10 +1452,16 @@ add_action('template_redirect', function () {
         {
             try
             {
-                fileEditorDisabled = Regex.IsMatch(
-                    File.ReadAllText(configPath),
-                    @"define\(\s*['""]DISALLOW_FILE_EDIT['""]\s*,\s*true\b",
-                    RegexOptions.IgnoreCase);
+                // SINIRLI OKUMA: wp-config.php KİRACININ yazabildiği bir dosyadır, yani boyutunu
+                // panel değil o belirler -- ve burası HER PANO YÜKLENİŞİNDE koşuyor, üstelik
+                // okunan metnin TAMAMI üzerinde düzenli ifade çalıştırılıyor. Sınırı aşan dosya
+                // "okunamadı" kovasına düşer, yani aşağıdaki catch ile AYNI sonucu verir.
+                fileEditorDisabled =
+                    UntrustedFileText.TryRead(configPath, out var configMetni)
+                    && Regex.IsMatch(
+                        configMetni,
+                        @"define\(\s*['""]DISALLOW_FILE_EDIT['""]\s*,\s*true\b",
+                        RegexOptions.IgnoreCase);
             }
             catch (Exception exception)
             {

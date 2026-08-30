@@ -4,6 +4,7 @@ using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Htaccess.Hosting;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Iis;
@@ -378,8 +379,14 @@ public sealed class DirectoryProtectionService : IDirectoryProtectionService
         {
             try
             {
+                // SINIRLI OKUMA. Bu bir DÖNGÜ ve okunan dosya KİRACININ KENDİ klasöründe: hem
+                // dosya boyutunu hem de kaç dosya okunacağını (korumalı klasör sayısı) kiracı
+                // belirliyordu, yani tek istekte sınırsız bellek. Sınırı aşan dosya OKUNAMAMIŞ
+                // sayılır -- aşağıdaki catch'in zaten yaptığı şey: "eski koruma hakkında bir şey
+                // iddia etmiyoruz". Yanlış bir şey söylemektense hiçbir şey söylememek doğrudur.
                 var webConfig = Path.Combine(ResolveFolder(siteRoot, kayit.RelativePath), "web.config");
-                if (File.Exists(webConfig) && File.ReadAllText(webConfig).Contains(LegacyMarker, StringComparison.OrdinalIgnoreCase))
+                if (UntrustedFileText.TryRead(webConfig, out var webConfigMetni)
+                    && webConfigMetni.Contains(LegacyMarker, StringComparison.OrdinalIgnoreCase))
                 {
                     kayit.IsActive = true;
                     sonuc.Add(kayit);
