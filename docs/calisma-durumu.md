@@ -1422,3 +1422,156 @@ motorda gorunup hicbir sey yapmadan "sertlestirildi" diyordu.)
 * MSSQL yolu (`MsSqlDatabaseProvider`) hic surulmedi; kurulu ornek yok.
 * Uctan uca HTTP ile yedek sizdirma senaryosu (gercek oturum + indirme) surulmedi; acik kod
   yolundan ve birim testinden dogrulandi.
+
+---
+
+## SSRF: BAGLANTI-ANI ADRES DENETIMI (31.08.2026) -- commit ATILMADI
+
+0.8.7'de eklenen `OutboundAddressGuard` istegi atmadan ONCE adin nereye cozuldugune bakiyordu ve
+kendi belgesinde "yonlendirmeyi ve DNS rebinding'i GORMEZ" diye yazili bir sinir tasiyordu. O sinir
+kapatildi: kural ayni tek kaynakta kaldi, uzerine SOKET ACILMADAN HEMEN ONCE calisan bir denetim
+eklendi (`src/AdaPanel.Infrastructure/Support/OutboundConnectGuard.cs`). Kalip icat edilmedi;
+`ClusterHttpClientFactory.ConnectCallback` zaten boyle calisiyordu, o gövde tek kaynaga cikarildi ve
+kume de artik onu cagiriyor.
+
+### OLCULEN ACIK (tahmin degil)
+* Varsayilan istemci (`services.AddHttpClient()`) `AllowAutoRedirect = true`. Gercek sokette
+  olculdu: yerel sahte sunucu `302 Location: http://127.0.0.1:<port>/ic` dondu, denetimsiz
+  `HttpClient` yonlendirmeyi izledi ve ic servisin govdesini GETIRDI
+  (`OutboundRedirectGuardTests.DENETIMSIZ_istemci_yonlendirmeyi_izler_ve_ic_servise_ULASIR`).
+* `curl.exe` 8.19.0 (zamanlanmis gorev, SYSTEM): `-fsSL` ile ayni 302'yi izleyip ic govdeyi aldi.
+  `-L` KALDIRILIRSA curl 302'de cikis kodu 0 ve BOS cikti veriyor -- yani mesru cron adresi
+  "basarili" gorunup hic calismiyor. Bu yuzden `-L` atilmadi.
+* Ayni curl varsayilan olarak `ftp://` YONLENDIRMESINI de izliyordu: 302 ile bu makinedeki FTP
+  servisine gercekten baglandi (`curl: (67) Access denied: 530`). `--proto-redir "=http,https"`
+  bunu kapatti (`Protocol "ftp" disabled (in redirect)`). file/gopher/smb/dict bu surumde zaten
+  kapaliydi (dordu de ayri ayri olculdu).
+* `.NET`, `ConnectCallback`'ten atilan istisnayi KENDI `HttpRequestException`'inin icine sariyor;
+  `catch (OutboundBlockedException)` yazan cagri yeri HIC tetiklenmiyor (olculdu, test kirmizi
+  yandi). Cagri yerleri artik zinciri `OutboundBlockedException.Cikar` ile tariyor.
+
+### DENETIME ALINANLAR (kullanicidan ADRES aliyor)
+* Yedek uzak hedefi + bulut hedefleri: `BackupService` / `BackupService.CloudTargets` icindeki 20
+  `CreateClient()` cagrisi tek bir `CreateRemoteHttpClient()`e baglandi (denetlenen adli istemci).
+* Webhook gonderimi (`NotificationService.SendWebhookAsync`).
+* Plesk/cPanel GOC KESFI (`SiteMigrationService`): BU YOL HIC DENETLENMIYORDU -- kendi
+  `HttpClientHandler`'ini kuruyordu, hicbir adres kapisindan gecmiyordu ve istek kullanicinin API
+  anahtarini tasiyor.
+* Goc ON KONTROLU (`ValidateMigrationAsync`): `FileHost`/`DbHost` + port ile TCP acip sonucu
+  "ulasildi/ulasilamadi" diye donuyordu -- panelin agindan calisan bir PORT TARAYICISI. Artik adres
+  kapisindan geciyor (`migration.validate.host_forbidden`).
+* Kume (`ClusterHttpClientFactory`) ayni gövdeyi cagiriyor; kendi mesaji ve STRICT politikasi
+  korundu.
+
+### BILEREK DENETIME ALINMAYANLAR (fazla kapatma pahaliya gelirdi)
+Panelin KENDI sabit adresleri: bilesen indirme (components.json), GitHub surum cozumleme, lisans
+dogrulama, hata raporu, Stalwart yonetim API'si (varsayilan istemci); saglik kontrolu/webmail
+(`AdaPanel.LocalHealth`); phpMyAdmin/Adminer vekili (`DbToolsProxy`); SEO taramasi (zaten
+loopback'e sabitli). Ucu icin de NOBETCI TEST var: denetlenen istemci loopback'e ULASAMAZ ama bu
+uc istemci ULASIR (`Panelin_KENDI_istemcileri_loopback_e_ULASABILIR`).
+
+### ACIK KAPI
+`Panel:AllowInternalOutboundTargets` bagli-anda da GECERLI: politika HER BAGLANTIDA yeniden okunur.
+DI uzerinden olculdu (`Acik_kapi_yapilandirmasi_DENETLENEN_istemcide_de_gecerli`).
+
+### KALAN ACIKLAR (kapanmadi, "kapandi" DENMIYOR)
+* **curl cron gorevi:** adres denetimi gorev KURULURKEN yapilir. curl'de adres engel listesi YOK;
+  calisma aninda http/https yonlendirmesiyle 127.0.0.1'e sapmayi hicbir bayrak engellemez. Tek
+  dogru cozum gorevi panelin denetlenen istemcisiyle calistiran bir CLI fiili -- Gorev
+  Zamanlayici'da SYSTEM olarak sinanabilecegi yerde AYRI is olarak yapilmali.
+* **SMTP (MailKit)** ve **FTP/SFTP goc cekme (FluentFTP/SSH.NET)**: kutuphanelerde baglanti-ani
+  geri cagrisi yok; yonlendirme kavrami da yok, acik olan tek sey kayit ile kullanim arasinda DNS
+  degisimi.
+* **Git dagitimi (`git.exe`)**: yonlendirmeyi kendi izler; denetim yalniz adres kaydinda.
+* **`PanelPublicAccessService.ProbeExternalAsync`**: panelin KENDI genel adresine, disaridan
+  erisimi olcmek icin gider; denetime sokmak ozelligin kendisini anlamsiz kilardi.
+* **Vekil:** denetlenen istemcide `UseProxy = false` (vekil arkasinda soket vekile gider, denetim
+  hicbir sey olcmez). Sistem vekiliyle disari cikan bir kurulumda YEDEK YUKLEME kirilir; panelin
+  kendi guncellemesi (varsayilan istemci) vekili kullanmaya devam eder.
+
+---
+
+## YEDEK GERI YUKLEME -- ARSIVIN ISLENMESI DENETIMI (31.08.2026) -- commit ATILMADI
+
+Olcum, kurulu panele (8890) ve mevcut sitelere/yedeklere DOKUNMADAN, birim testiyle ve %TEMP%
+altinda uretilen SAHTE KOTU NIYETLI ARSIVLERLE yapildi (gercek `mklink /J` kavsaklariyla).
+Uretilen gecici alanlar SILINMEDI (`%TEMP%\adapanel-restoreguard-*`).
+
+### OLCULEN VE KAPATILAN
+
+| # | Bulgu | Kanit |
+|---|---|---|
+| 1 | **`deleted.json` KAVSAGI TAKIP EDIP KOKUN DISINDAKI DOSYAYI SILDI.** Kavsak nobetcisi yalniz `RestoreItemsAsync`'te vardi; `ResolveInsideRoot` (birlesik site + abonelik zinciri, hem yazma hem SILME) yalniz dizge denetimi yapiyordu. En sinsi hali: arsivde `files/` girdisi yoksa "once yana al" adimi calismaz, yani kavsak YERINDE kalir. | `SiteChainRestore_DeletingThroughJunction_IsRefusedAndReported` (once KIRMIZI: dosya gercekten silinmisti) |
+| 2 | **Duz zip cikarmasi (`ZipFile.ExtractToDirectory`, panel yedegi) kavsagi takip edip hedefin DISINA yazdi.** BCL yalniz dizge kacisini gorur. | `PlainZipRestore_WritingThroughJunctionInTarget_IsRefused` |
+| 3 | **Cikarma KOKUNUN KENDISI kavsak olabiliyordu:** arsiv girdisi kavsagin HEDEFINE yazildi, ustelik "once yana al" adimi kavsagin hedefindeki icerigi tasidi. Segment yuruyusu kokun kendisini goremez. | `SiteChainRestore_WhenLiveRootItselfIsJunction_RefusesBeforeTouchingAnything` |
+| 4 | **Arsivden okunan ENVANTER dosyalarinda tavan YOKTU** (`deleted.json`, `index.json`, `iis/sites.json`, `config/ftp-users.json`, `ftp/accounts.json`, `mail/*.json`, `sites/<ad>/config/site.json`). Hepsi tamamen bellege okunuyordu; 0.8.13'te yalniz gorev XML'ine tavan konmustu. | `SiteChainRestore_OversizedDeletedList_IsRefusedInsteadOfBeingRead` |
+| 5 | **Cikarma yarida patlayinca panel SUSUYORDU.** Tek bir bozuk girdi (ayni adin hem dosya hem klasor olmasi, CRC uyusmazligi, kilitli hedef) ham `IOException` olarak yukari cikiyor, `UpsertRecordAsync`'e HIC ulasmiyordu. O anda canli icerik ZATEN kardes klasore tasinmisti: kullanicinin sitesi bos, kayit "completed", `PreservedPath` bos -- eski icerigin nerede oldugu panelde HICBIR YERDE yazmiyordu. | `SiteChainRestore_WhenExtractionThrows_...` + `SiteChainRestore_WhenPreserveFails_RecordStillSaysItWasNotRestored` |
+| 6 | **Secerek geri yukleme (kiraciya ACIK uc) sitelerin ORTAK kabina yaziyordu.** Hedef "uygulama kokunun UST dizini" idi; varsayilan duzende (`SitesController.ResolveScopedPhysicalPath`) siteler duz olarak `C:\inetpub\wwwroot\<site>` altinda acilir, yani ust dizin butun kiracilarin ortak kabi VE IIS "Default Web Site" belge koku. | `RestoreItems_WithoutTargetPath_DoesNotWriteIntoTheSharedSiteContainer` |
+
+**Cozumler:** kural ICAT EDILMEDI. Kapsama `PathContainment`, kavsak `SiteBuilderPathGuard`
+(`EnsureNoReparsePointOnPath` + `IsReparsePoint`) -- yani `RestoreItemsAsync`'in ZATEN kullandigi
+kapinin aynisi. Tavanlar tek yerde: yeni `Backup/BackupArchiveLimits.cs` (16 MiB, YALNIZ envanter;
+dosya icerigine UYGULANMAZ -- 40 GB'lik bir site geri yuklenebilmeli). Yarim kalan is icin
+`RestoreProgress` (donus degeri degil, cagirana ait durum nesnesi) + `KaydiYarimIsaretleAsync`.
+Secerek geri yukleme artik SITE arsivinde de ayrilmis `<yedek kok>\...\restored\<tur-kaynak-zaman>`
+klasorunu kullanir (abonelik/panel arsivinde zaten oyleydi; iki dal ayri yazildigi icin biri
+duzelmis oteki acik kalmisti).
+
+### BILEREK KIRILAN DAVRANISLAR
+1. Kok bir KAVSAK/symlink ise geri yukleme HIC BASLAMAZ (`backup.restore_target_is_link`).
+   Site kokunu junction ile baska diske baglayan kurulum etkilenir; mesaj ne yapilacagini soyler
+   (gercek klasoru hedef ver). Abonelikte yalniz O SITE atlanir, digerleri geri yuklenir.
+2. Yol uzerinde kavsak olan GIRDI atlanir + uyari (butun is durmaz).
+3. Yazilamayan dosya artik istisna degil UYARI: kalan dosyalar geri yuklenir, durum
+   `restored_with_errors` olur. (Once: tek dosya butun geri yuklemeyi dusuruyordu.)
+4. `panel.backup.browseHint` metni duzeltildi -- "sitenin orijinal konumuna geri yuklenir"
+   ZATEN yanlisti (ust dizine cikariyordu), simdi dogruyu soyluyor.
+
+### TEMIZ CIKANLAR (bir sonraki tur burayi aramasin)
+
+| Soru | Olcum | Sonuc |
+|---|---|---|
+| `..`, ters bolu, MUTLAK yol (`C:\...`), SURUCUYE goreli (`C:x`), UNC (`\\sunucu\pay`), nokta karisimi | 6 sahte arsivle surulup HEPSI reddedildi + uyari | TEMIZ |
+| Kavsak uzerinden YAZMA (birlesik site zinciri) | "Once yana al" adimi kavsagi kardes klasore TASIDIGI icin kacis zaten olmuyordu; artik nobetci de acikca duruyor | TEMIZ (kazaydi, artik kasitli) |
+| Alternatif veri akisi (`dosya.txt:gizli`) | `Path.GetFullPath` + `PathContainment` sonrasi hedef KOK ALTINDA kalir; kokun disina cikaran bir bicim bulunamadi | TEMIZ |
+| Posta arsivi girdi adlari (`mail-messages/<alan>/*.sqlite`) | Yol birlestirmeden once `Path.GetFileName` -- ayirici tasiyan ad kokun disina yazamaz | TEMIZ |
+| Veritabani dokum adi (`databases/<motor>-<db>.sql`) | Yola girmez; `ImportDumpAsync`'e AD olarak gider, dokum `%TEMP%`'te Guid adiyla acilir | TEMIZ |
+| UZAKTAN indirilen yedegin dogrulanmasi | **Geri yukleme UZAKTAN HIC INDIRMEZ**: `RestoreAsync` yalniz `record.Path`'i kullanir, dosya yoksa `backup.file_missing` (410). Yani "indirilen dosya dogrulanmiyor" diye bir yuzey YOK | KONU DISI |
+| Sifreli arsivin kurcalanmasi | `BackupArchiveCipher` AES-**GCM** (parca basina etiket + baslik etiketi) -> kurcalama COZMEDE yakalanir | TEMIZ |
+| Kiraci sinirinda kapsam denetimi | `restore` (tam geri yukleme) yalniz Administrator; `restore-items`'ta kapsamli kullanicinin `TargetPath`'i zorla bosaltiliyor + `EnsureBackupOwnershipAsync` | TEMIZ |
+| Zip CRC (bit curumesi) | `entry.ExtractToFile` CRC'yi dogrular; artik dosya basina UYARI olur (once butun isi dusuruyordu) | TEMIZ |
+
+### ACIK KALAN (olculdu, KAPATILMADI -- gerekceli)
+* **Arsivden gelen ENVANTER hala GUVENILIYOR** (tam-sunucu DR'nin dogasi): `iis/sites.json` ve
+  `sites/<ad>/config/site.json` icindeki `PhysicalPath` ile ISTENEN klasor acilir + IIS sitesi
+  kurulur; `config/ftp-users.json` / `ftp/accounts.json` icindeki `HomePath` ile FTP hesabi acilir
+  ve o agaca `icacls /T` ile DEGISTIRME izni verilir. **`FtpService.ResolveHomePathAsync:1141`
+  kapsam DENETLEMEZ** -- kural yalniz `FtpController.cs:130`'da ve orada da `Administrator` MUAF.
+  Geri yukleme zaten admin-ozel oldugu icin bu, deponun MEVCUT guven karariyla TUTARLIDIR; asil
+  risk "admin YABANCI bir arsivi geri yukluyor" senaryosudur ve cozumu bir site-koku politikasi
+  kararidir (kural tek kaynaga cikarilmali: controller + servis + geri yukleme).
+* **Arsiv butunlugu icin SAGLAMA (checksum) YOK**: sifresiz arsivde kurcalama tespit edilemez
+  (yalniz girdi basina CRC32). Kapatmak icin olusturmada SHA-256 kaydi + geri yuklemede dogrulama
+  gerekir; eski kayitlarda saglama olmayacagi icin "olculemedi" diye raporlanmali.
+* **Zip bombasi (DOSYA icerigi)**: acilmis toplam boyut/girdi sayisi icin tavan YOK ve BILEREK
+  konmadi -- mesru bir site yedegi 40 GB olabilir. Envanter tavani konuldu; icerik tavani icin
+  dogru olcu disk BOS ALANIDIR, ayri bir is.
+* **Arayuz metni ESKIMIS**: `panel.backup.browseSubscriptionScoped` / `browseSubscriptionTarget`
+  "sunucu abonelik arsivinde orijinal konumu cozemez" diyor; oysa kod ZATEN ayrilmis klasore
+  cikariyor. Yaniltici ama zararsiz; Vue kosullariyla birlikte gozden gecirilmeli.
+
+### MUTASYON KANITI (10 mutasyon, 10'u KIRMIZI)
+Korumalari kaldiran 6 mutasyon (nobetci kaldirma, kok denetimi kapatma, duz zip nobetcisi
+kapatma, tavan kapatma, dosya-basi uyariyi kapatma, kayit yazmayi kapatma) ilgili testleri kirmizi
+yakti. **FAZLA KAPATMA nobetcileri (4):** tavan 0 yapilinca (`BackupIncrementalChainTests` DAHIL
+kirmizi), kavsak nobetcisi hep-reddet yapilinca (8 test kirmizi), kok denetimi hep-firlat
+yapilinca (21 test kirmizi), secerek geri yukleme eski hedefe donunce (kirmizi).
+
+### DURUM
+`scripts/devam-durumu.ps1` -> **SAGLAM**. dotnet: **4652 basarili / 0 basarisiz**
+(paralel ajanin testleri dahil). i18n TR 5102 = EN 5102. npm typecheck/build/test temiz.
+
+**Yeni dosyalar:** `src/AdaPanel.Infrastructure/Backup/BackupArchiveLimits.cs`,
+`tests/AdaPanel.Infrastructure.Tests/BackupRestoreArchiveGuardTests.cs` (17 test).
+**Yeni i18n anahtarlari:** `backup.restore_target_is_link`, `backup.restore_file_failed`,
+`backup.entry_too_large`, `backup.restore_aborted` (tr + en).

@@ -114,6 +114,29 @@ public sealed partial class BackupService(
     }
 
     /// <summary>
+    /// Uzak hedefe giden HER isteğin istemcisi: bağlantı ANINDA adres denetimi yapan
+    /// <see cref="OutboundConnectGuard.GuardedClientName"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>YUKARIDAKİ KAPININ DÜRÜST SINIRI BURADA KAPANDI.</b> Ölçülmüştü: bu yollar
+    /// <c>CreateClient()</c> ile VARSAYILAN istemciyi alıyordu ve orada <c>AllowAutoRedirect</c>
+    /// .NET varsayılanı olan <c>true</c>'dur — yani doğrulamayı geçmiş dış bir adres
+    /// <c>302 Location: http://169.254.169.254/</c> ile iç ağa atlayabiliyordu. Denetlenen istemci
+    /// yönlendirmeyi İZLEMEYE DEVAM EDER (S3 bölge yönlendirmesi, <c>http→https</c> gibi meşru
+    /// zincirler kırılmasın diye) ama zincirin HER ADIMI soket açılmadan önce denetlenir.
+    /// </para>
+    /// <para>
+    /// <b>Neden bulut (dropbox/onedrive) çağrıları da bu istemciyi kullanıyor:</b> onların uç
+    /// noktaları koda gömülü GENEL adreslerdir, yani denetimden etkilenmezler. Ayrı bir istemci
+    /// kullansalardı "hangi çağrı hangi istemcide" sorusu ikinci bir karar noktası doğururdu;
+    /// tek istemci, ölçülmesi gereken tek davranış demektir.
+    /// </para>
+    /// </remarks>
+    private HttpClient CreateRemoteHttpClient()
+        => httpClientFactory.CreateClient(OutboundConnectGuard.GuardedClientName);
+
+    /// <summary>
     /// Uzak hedef kimliklerinin TEK kaynağı (otomasyon ayarları). Elle silme ile otomatik
     /// budamanın aynı kimlikleri kullanmasını sağlar; ikinci bir yapılandırma yolu açılmadı.
     /// </summary>
@@ -1443,6 +1466,18 @@ public sealed partial class BackupService(
                 return null;
             }
 
+            // TAVAN: indeks de ARŞİVDEN gelir ve tamamen belleğe okunur (gerekçe BackupArchiveLimits).
+            // Burada uyarı üretilmez — bu yol yedek ALIRKEN çalışır ve indeksi okuyamamak zaten
+            // "artımsal yapamıyorum, TAM yedek al" demektir (aşağıdaki catch ile aynı sonuç).
+            if (BackupArchiveLimits.ExceedsMetadataLimit(entry))
+            {
+                logger?.LogWarning(
+                    "Yedek arsivindeki indeks tavani asiyor, artimsal zincir kurulmayacak: {Backup} ({Detail})",
+                    record.Name,
+                    BackupArchiveLimits.DescribeTooLarge(entry));
+                return null;
+            }
+
             await using var stream = entry.Open();
             return await System.Text.Json.JsonSerializer.DeserializeAsync<BackupFileIndex>(
                 stream,
@@ -2299,6 +2334,11 @@ $list | ConvertTo-Json -Depth 3";
                 return;
             }
 
+            if (!CikarilmisEnvanterOlculebilir(indexPath, "tasks/index.json", uyarilar))
+            {
+                return;
+            }
+
             var index = System.Text.Json.JsonSerializer.Deserialize<List<ScheduledTaskIndexEntry>>(
                 await File.ReadAllTextAsync(indexPath, cancellationToken),
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
@@ -2419,6 +2459,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 return;
             }
 
+            if (!CikarilmisEnvanterOlculebilir(snapshotPath, "iis/sites.json", uyarilar))
+            {
+                return;
+            }
+
             var snapshot = System.Text.Json.JsonSerializer.Deserialize<List<AdaPanel.Core.Dtos.Sites.SiteDto>>(
                 await File.ReadAllTextAsync(snapshotPath, cancellationToken),
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
@@ -2510,6 +2555,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         {
             var snapshotPath = Path.Combine(extractedRoot, "config", "ftp-users.json");
             if (!File.Exists(snapshotPath))
+            {
+                return;
+            }
+
+            if (!CikarilmisEnvanterOlculebilir(snapshotPath, "config/ftp-users.json", uyarilar))
             {
                 return;
             }
@@ -2897,17 +2947,27 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         if (string.Equals(record.Type, "subscription", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase))
         {
-            var sonuc = await RestoreSubscriptionChainAsync(
-                record,
-                content.FilePath,
-                chain,
-                backups,
-                request.EncryptionPassword,
-                cancellationToken);
+            var durum = new RestoreProgress();
+            try
+            {
+                await RestoreSubscriptionChainAsync(
+                    record,
+                    content.FilePath,
+                    chain,
+                    backups,
+                    request.EncryptionPassword,
+                    durum,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await KaydiYarimIsaretleAsync(record, durum, exception);
+                throw;
+            }
 
-            record.Warnings = sonuc.Warnings;
-            record.PreservedPath = sonuc.PreservedPath;
-            record.Status = sonuc.Warnings.Count == 0 ? "restored" : "restored_with_errors";
+            record.Warnings = durum.Warnings;
+            record.PreservedPath = durum.PreservedPath;
+            record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
             await UpsertRecordAsync(record, cancellationToken);
             return record;
         }
@@ -2918,22 +2978,32 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             string.Equals(record.Format, "zip", StringComparison.OrdinalIgnoreCase) &&
             IsCombinedSiteArchive(content.FilePath))
         {
-            var sonuc = await RestoreSiteChainAsync(
-                record,
-                content.FilePath,
-                chain,
-                backups,
-                request.TargetPath,
-                request.EncryptionPassword,
-                cancellationToken);
+            var durum = new RestoreProgress();
+            try
+            {
+                await RestoreSiteChainAsync(
+                    record,
+                    content.FilePath,
+                    chain,
+                    backups,
+                    request.TargetPath,
+                    request.EncryptionPassword,
+                    durum,
+                    cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await KaydiYarimIsaretleAsync(record, durum, exception);
+                throw;
+            }
 
-            record.Warnings = sonuc.Warnings;
-            record.PreservedPath = sonuc.PreservedPath;
+            record.Warnings = durum.Warnings;
+            record.PreservedPath = durum.PreservedPath;
 
             // YARIM KALAN İŞE "restored" DENMEZ. Dosyalar canlı kökün üzerine zaten yazıldığı için
             // bu durumda kullanıcının elinde ne eski hâl ne de dönmüş bir veritabanı vardır;
             // farkında olmadan devam etmesi en pahalı sonuçtur.
-            record.Status = sonuc.Warnings.Count == 0 ? "restored" : "restored_with_errors";
+            record.Status = durum.Warnings.Count == 0 ? "restored" : "restored_with_errors";
             await UpsertRecordAsync(record, cancellationToken);
             return record;
         }
@@ -2944,12 +3014,15 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 ? fileStore.EnsureDirectory($"restore/{record.Source}-{DateTime.UtcNow:yyyyMMddHHmmss}")
                 : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetPath.Trim()));
 
+            // Hedefin KENDİSİ bağlantı olamaz — gerekçe EnsureRestoreRootIsNotLink'te.
+            EnsureRestoreRootIsNotLink(destination);
             Directory.CreateDirectory(destination);
-            ZipFile.ExtractToDirectory(content.FilePath, destination, overwriteFiles: true);
+
+            // ZipFile.ExtractToDirectory DEĞİL: BCL kavşağı görmez ve yazma onu takip eder (ölçüldü).
+            var kurulumUyarilari = ExtractArchiveGuarded(content.FilePath, destination, cancellationToken);
 
             // Panel yedeği: içindeki planlı görevleri (tasks/*.xml) Görev Zamanlayıcı'ya otomatik geri kaydet
             // + tam-sunucu DR: eksik IIS siteleri + FTP hesapları yeniden kurulur (rapor: iis-restore-report.txt).
-            var kurulumUyarilari = new List<BackupRestoreWarningDto>();
             if (string.Equals(record.Type, "panel", StringComparison.OrdinalIgnoreCase))
             {
                 await TryRestoreScheduledTasksAsync(destination, kurulumUyarilari, cancellationToken);
@@ -2985,6 +3058,49 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
         await UpsertRecordAsync(record, cancellationToken);
         return record;
+    }
+
+    /// <summary>
+    /// Geri yükleme yarıda KESİLDİĞİNDE kaydı dürüst bırakır: durum + yana alınan içeriğin yeri +
+    /// sebep. Sonra istisna olduğu gibi yukarı gider (çağıran denetim kaydını da yazar).
+    /// </summary>
+    /// <remarks>
+    /// <b>ÖLÇÜLEN HATA:</b> çıkarma sırasındaki tek bir istisna (aynı adın hem dosya hem klasör
+    /// olması, CRC uyuşmazlığı, kilitli hedef, disk dolu) <c>UpsertRecordAsync</c>'e HİÇ
+    /// ulaşmıyordu. O anda canlı içerik ZATEN kardeş klasöre taşınmış oluyor; kayıt "completed"
+    /// kalıyor, <c>PreservedPath</c> boş görünüyor ve kullanıcı sitesinin neden boşaldığını ve
+    /// eski içeriğin nerede olduğunu panelde HİÇBİR YERDE göremiyordu.
+    /// <para>
+    /// İptal (<see cref="OperationCanceledException"/>) buraya GELMEZ: orada kullanıcı işi kendisi
+    /// durdurmuştur ve <c>CancellationToken.None</c> ile yazmak, iptali yok saymak olurdu — kaydın
+    /// yazımı da bilerek <c>None</c> ile yapılır, çünkü token ZATEN iptal edilmiş olabilir ve o
+    /// durumda dürüstlük notunu yazamamak en kötü sonuçtur.
+    /// </para>
+    /// </remarks>
+    private async Task KaydiYarimIsaretleAsync(BackupRecordDto record, RestoreProgress durum, Exception exception)
+    {
+        durum.Warnings.Add(new BackupRestoreWarningDto
+        {
+            MessageKey = "backup.restore_aborted",
+            Target = record.Name,
+            Detail = exception is AppException app && !string.IsNullOrWhiteSpace(app.Details)
+                ? $"{app.MessageKey}: {app.Details}"
+                : exception.Message
+        });
+
+        record.Warnings = durum.Warnings;
+        record.PreservedPath = durum.PreservedPath;
+        record.Status = "restored_with_errors";
+
+        try
+        {
+            await UpsertRecordAsync(record, CancellationToken.None);
+        }
+        catch (Exception yazmaHatasi)
+        {
+            // Kayıt yazılamadıysa ASIL hata gizlenmez; sebep günlüğe düşer.
+            logger?.LogError(yazmaHatasi, "Yarim kalan geri yukleme kaydi yazilamadi: {Backup}", record.Id);
+        }
     }
 
     private const int MaxEntriesPerListing = 500;
@@ -3085,9 +3201,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         }
         else
         {
-            if (!string.Equals(record.Type, "site", StringComparison.OrdinalIgnoreCase))
             {
-                // SITE DIŞI ARŞİVLER (abonelik/panel/mail) İÇİN AYRILMIŞ BİR ÇIKARMA KLASÖRÜ.
+                // AYRILMIŞ BİR ÇIKARMA KLASÖRÜ — HER ARŞİV TÜRÜ İÇİN.
                 //
                 // Eskiden burada koşulsuz `backup.target_path_required` fırlatılıyordu. Sonuç:
                 // kapsamlı kullanıcı (müşteri/bayi) hedef yol VEREMEDİĞİ için — güvenlik gereği
@@ -3096,36 +3211,41 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 //
                 // Tek bir "doğru" canlı hedef YOKTUR: abonelik arşivi birden çok sitenin
                 // dosyalarını, veritabanı dökümlerini ve posta envanterini bir arada taşır.
-                // Bu yüzden canlı içeriğin üzerine yazmaya ÇALIŞMIYORUZ (site arşivinde de
-                // yazılmıyor; oraya da sitenin YANINA çıkarılıyor). İçerik, panelin yedek kökü
+                // Bu yüzden canlı içeriğin üzerine yazmaya ÇALIŞMIYORUZ. İçerik, panelin yedek kökü
                 // altında tarih damgalı ayrı bir klasöre arşivdeki yapısıyla çıkarılır;
                 // kullanıcı ne aldığını görür ve istediğini oradan taşır.
+                //
+                // ===========================================================================
+                // SİTE ARŞİVİ DE ARTIK BURAYA GELİYOR — ÖLÇÜLEN ÇAPRAZ-KİRACI YÜZEYİ:
+                //
+                // Site arşivinde hedef, sitenin UYGULAMA KÖKÜNÜN ÜST DİZİNİ idi. Panelin
+                // varsayılan düzeninde (SitesController.ResolveScopedPhysicalPath) kiracı
+                // siteleri DÜZ olarak `C:\inetpub\wwwroot\<site>` altına açılır — yani üst
+                // dizin `C:\inetpub\wwwroot`: BÜTÜN kiracıların ortak kabı VE IIS'in
+                // "Default Web Site" belge kökü.
+                //
+                // Sonuç: kapsamlı bir müşteri (bu uç kiracıya AÇIKTIR) kendi yedeğinden
+                // seçtiği dosyaları o ortak kaba yazdırabiliyordu — panel LocalSystem
+                // olduğu için hiçbir ACL durdurmadan. Yazılan içerik varsayılan sitenin
+                // belge kökünde HTTP ile servis edilebilir hâle geliyor, ve arşivdeki üst
+                // düzey klasör adıyla aynı ada sahip bir komşu site (ör. "files") doğrudan
+                // üzerine yazılabiliyordu. Kapsam denetimi doğruydu; DENETLENMEYEN ŞEY
+                // HEDEFİN KENDİSİYDİ.
+                //
+                // Kiracının o üst dizini zaten GÖREMEDİĞİ ölçüldü (FileService sanal alanı
+                // site kökleridir), yani oraya çıkarmanın kiracıya bir faydası da yoktu.
+                // Ayrılmış klasör tek adres olunca kural tek yerde yazılır ve site/abonelik
+                // yolları ayrışamaz.
+                // ===========================================================================
                 var preferences = await preferencesService.GetAsync(cancellationToken);
                 var restoreRoot = BackupLayout.Ensure(preferences.DefaultBackupRoot, "restored").LocalDirectory;
                 targetRoot = Path.Combine(restoreRoot, BuildRestoreFolderName(record));
-                Directory.CreateDirectory(targetRoot);
-            }
-            else
-            {
-                AdaPanel.Core.Dtos.Sites.SiteDto site;
-                try
-                {
-                    site = await iisSiteService.GetSiteAsync(record.Source, cancellationToken);
-                }
-                catch (AppException)
-                {
-                    // Site artık yoksa kullanıcı açık bir hedef yol vermelidir.
-                    throw new AppException("backup.target_path_required", 404, 404);
-                }
-
-                var applicationRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
-                    ? site.PhysicalPath
-                    : site.ApplicationRootPath;
-                targetRoot = Path.GetDirectoryName(Path.GetFullPath(applicationRoot))
-                    ?? throw new AppException("backup.target_path_required", 400, 400);
             }
         }
 
+        // Hedefin KENDİSİ bağlantı olamaz (gerekçe EnsureRestoreRootIsNotLink); segment yürüyüşü
+        // kökten BAŞLADIĞI için kökü kendisi göremez.
+        EnsureRestoreRootIsNotLink(targetRoot);
         Directory.CreateDirectory(targetRoot);
         var restored = 0;
 
@@ -3732,7 +3852,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var (authorization, amzDate, contentSha) = S3RequestSigner.Sign(
             "DELETE", uri, remote.UserName, remote.Password, region, DateTimeOffset.UtcNow, S3RequestSigner.EmptyPayloadSha256);
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
         request.Headers.TryAddWithoutValidation("Authorization", authorization);
         request.Headers.TryAddWithoutValidation("x-amz-date", amzDate);
@@ -3744,7 +3864,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     // WebDAV/HTTP DELETE (basic auth).
     private async Task DeleteHttpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Delete, uri);
         if (!string.IsNullOrWhiteSpace(remote.UserName))
         {
@@ -4509,7 +4629,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             DateTimeOffset.UtcNow,
             S3RequestSigner.UnsignedPayload);
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         // SINIRLI zaman aşımı ŞART: bu yükleme otomatik yedeklemede GLOBAL KİLİDİN İÇİNDE çalışıyor
         // ve aynı kilidi giriş akışı (brute-force denetimi) da alıyor. Yarı açık kalmış bir TCP
         // bağlantısında (NAT zaman aşımı, uzak uç donması) sonsuz bekleme, kilidi kalıcı olarak
@@ -4560,7 +4680,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             throw new AppException("backup.remote_target_invalid", 400, 400);
         }
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         // SINIRLI zaman aşımı ŞART: bu yükleme otomatik yedeklemede GLOBAL KİLİDİN İÇİNDE çalışıyor
         // ve aynı kilidi giriş akışı (brute-force denetimi) da alıyor. Yarı açık kalmış bir TCP
         // bağlantısında (NAT zaman aşımı, uzak uç donması) sonsuz bekleme, kilidi kalıcı olarak
@@ -4960,7 +5080,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return null;
         }
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         client.Timeout = RemoteUploadTimeout;
 
         var credential = ResolveCredential(target, baseUri);
@@ -5154,8 +5274,25 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// <summary>Geri yükleme öncesi canlı içeriğin taşındığı kardeş klasörün etiketi.</summary>
     private const string RestoreSidelineLabel = "geri_yukleme_yedegi";
 
-    /// <summary>Zincir geri yüklemesinin sonucu: yarım kalan adımlar + yana alınan içeriğin yeri.</summary>
-    private sealed record RestoreOutcome(List<BackupRestoreWarningDto> Warnings, string PreservedPath);
+    /// <summary>
+    /// Zincir geri yüklemesinin SÜREN durumu: yarım kalan adımlar + yana alınan içeriğin yeri.
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden dönüş değeri DEĞİL:</b> geri yükleme yarıda bir istisnayla kesilirse dönüş değeri
+    /// HİÇ oluşmaz. ÖLÇÜLDÜ: canlı içerik o noktada ZATEN kardeş klasöre taşınmıştı, kayıt ise
+    /// güncellenmediği için panelde hâlâ "completed" görünüyordu — kullanıcının sitesi boş,
+    /// eski içeriğin nerede olduğu hiçbir yerde YAZMIYOR. Bu nesne çağırana ait olduğu için
+    /// istisna hâlinde de okunabilir ve kayda geçirilebilir.
+    /// </remarks>
+    private sealed class RestoreProgress
+    {
+        public List<BackupRestoreWarningDto> Warnings { get; } = [];
+
+        public List<string> Preserved { get; } = [];
+
+        public string PreservedPath =>
+            string.Join(" | ", Preserved.Where(yol => !string.IsNullOrWhiteSpace(yol)));
+    }
 
     // =====================================================================================
     // ZİNCİR GERİ YÜKLEME
@@ -5172,13 +5309,14 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     //     restored_with_errors işaretler.
     // =====================================================================================
 
-    private async Task<RestoreOutcome> RestoreSiteChainAsync(
+    private async Task RestoreSiteChainAsync(
         BackupRecordDto record,
         string targetArchivePath,
         BackupChainDto chain,
         IReadOnlyCollection<BackupRecordDto> allRecords,
         string? targetPath,
         string? password,
+        RestoreProgress durum,
         CancellationToken cancellationToken)
     {
         // Hedef: belirtilmişse o yol, değilse sitenin gerçek fiziksel kökü (canlı siteyi geri yükle).
@@ -5193,10 +5331,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             siteRoot = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
         }
 
+        // HİÇBİR ŞEYE DOKUNMADAN ÖNCE: kök bir bağlantı olamaz (gerekçe EnsureRestoreRootIsNotLink).
+        EnsureRestoreRootIsNotLink(siteRoot);
         Directory.CreateDirectory(siteRoot);
 
-        var warnings = new List<BackupRestoreWarningDto>();
-        var preservedPath = string.Empty;
+        var warnings = durum.Warnings;
         var ilkHalka = true;
 
         for (var i = 0; i < chain.Links.Length; i++)
@@ -5220,7 +5359,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 if (ilkHalka)
                 {
                     ilkHalka = false;
-                    preservedPath = SidelineIfArchiveReplacesFiles(archive, "files/", siteRoot);
+
+                    // YANA ALINAN İÇERİĞİN YERİ, YAZMAYA BAŞLAMADAN ÖNCE KAYDA GEÇER.
+                    // Sonradan atanan bir yerel değişken, çıkarma yarıda patladığında kayboluyordu
+                    // ve kullanıcının sitesi BOŞ kalıp eski içeriğin nerede olduğu hiçbir yerde
+                    // yazmıyordu (ölçüldü). Artık çağıran, istisna hâlinde de bunu okuyabilir.
+                    durum.Preserved.Add(SidelineIfArchiveReplacesFiles(archive, "files/", siteRoot));
                 }
 
                 ExtractPrefixedEntries(archive, "files/", siteRoot, warnings, cancellationToken);
@@ -5242,8 +5386,6 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 acilan?.Dispose();
             }
         }
-
-        return new RestoreOutcome(warnings, preservedPath);
     }
 
     /// <summary>
@@ -5379,16 +5521,17 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// kullanıcı hesabın çalıştığını sanıp neden giriş yapamadığını aramamalıdır.
     /// </para>
     /// </remarks>
-    private async Task<RestoreOutcome> RestoreSubscriptionChainAsync(
+    private async Task RestoreSubscriptionChainAsync(
         BackupRecordDto record,
         string targetArchivePath,
         BackupChainDto chain,
         IReadOnlyCollection<BackupRecordDto> allRecords,
         string? password,
+        RestoreProgress durum,
         CancellationToken cancellationToken)
     {
-        var warnings = new List<BackupRestoreWarningDto>();
-        var korunanlar = new List<string>();
+        var warnings = durum.Warnings;
+        var korunanlar = durum.Preserved;
         var siteKokleri = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var ilkHalka = true;
 
@@ -5442,8 +5585,6 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 acilan?.Dispose();
             }
         }
-
-        return new RestoreOutcome(warnings, string.Join(" | ", korunanlar));
     }
 
     /// <summary>
@@ -5480,10 +5621,26 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             try
             {
                 var site = await iisSiteService.GetSiteAsync(siteAdi, cancellationToken);
-                siteKokleri[siteAdi] = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath)
                     ? site.PhysicalPath
                     : site.ApplicationRootPath;
-                Directory.CreateDirectory(siteKokleri[siteAdi]);
+
+                // Kök bir bağlantıysa O SİTE atlanır — abonelikteki DİĞER siteler geri yüklenmeye
+                // devam eder. Bütün aboneliği tek bir kavşak yüzünden reddetmek, felaket
+                // kurtarmayı açığın kendisinden pahalı hâle getirirdi.
+                if (SiteBuilderPathGuard.IsReparsePoint(kok))
+                {
+                    warnings.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.restore_target_is_link",
+                        Target = siteAdi,
+                        Detail = kok
+                    });
+                    continue;
+                }
+
+                siteKokleri[siteAdi] = kok;
+                Directory.CreateDirectory(kok);
                 continue;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -5514,6 +5671,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 MessageKey = "backup.site_config_missing",
                 Target = siteAdi
             });
+            return null;
+        }
+
+        if (!EnvanterGirdisiOlculebilir(entry, $"sites/{siteAdi}/config/site.json", warnings))
+        {
             return null;
         }
 
@@ -5587,6 +5749,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         {
             cancellationToken.ThrowIfCancellationRequested();
             var domain = Path.GetFileNameWithoutExtension(entry.Name);
+
+            if (!EnvanterGirdisiOlculebilir(entry, entry.FullName, warnings))
+            {
+                continue;
+            }
 
             AdaPanel.Core.Dtos.Mail.MailWorkspaceDto? workspace;
             try
@@ -5686,6 +5853,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return;
         }
 
+        if (!EnvanterGirdisiOlculebilir(entry, "ftp/accounts.json", warnings))
+        {
+            return;
+        }
+
         SubscriptionFtpEntry[] hesaplar;
         try
         {
@@ -5778,6 +5950,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         List<BackupRestoreWarningDto> warnings,
         CancellationToken cancellationToken)
     {
+        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in archive.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -5786,14 +5959,36 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 continue; // dizin girdisi
             }
 
-            var hedef = ResolveInsideRoot(NormalizeArchivePath(entry.FullName), prefix, root, warnings);
+            var hedef = ResolveInsideRoot(NormalizeArchivePath(entry.FullName), prefix, root, warnings, denetlenenOnekler);
             if (hedef is null)
             {
                 continue;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(hedef)!);
-            entry.ExtractToFile(hedef, overwrite: true);
+            // TEK BİR DOSYA BÜTÜN GERİ YÜKLEMEYİ DÜŞÜREMEZ.
+            //
+            // ÖLÇÜLDÜ: arşivdeki tek bir bozuk girdi (aynı adın hem dosya hem klasör olması, CRC
+            // uyuşmazlığı, kilitli hedef) ham bir IOException olarak yukarı çıkıyor ve geri
+            // yükleme orada kesiliyordu. O noktada canlı içerik ZATEN yana alınmıştı: kullanıcının
+            // sitesi boş, kaydı güncellenmemiş ("completed"), eski içeriğin nerede olduğu
+            // panelde hiçbir yerde YAZMIYOR. Felaket anında verilebilecek en pahalı cevap budur.
+            //
+            // Artık her girdi kendi başına değerlendirilir: yazılamayan dosya UYARI olur (sessiz
+            // değil), kalan dosyalar geri yüklenir ve durum "restored_with_errors" olur.
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(hedef)!);
+                entry.ExtractToFile(hedef, overwrite: true);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.restore_file_failed",
+                    Target = entry.FullName,
+                    Detail = exception.Message
+                });
+            }
         }
     }
 
@@ -5819,6 +6014,11 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return;
         }
 
+        if (!EnvanterGirdisiOlculebilir(entry, ArchiveDeletedEntry, warnings))
+        {
+            return;
+        }
+
         string[] silinecekler;
         try
         {
@@ -5834,10 +6034,15 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return;
         }
 
+        // SİLME, YAZMADAN DAHA TEHLİKELİDİR ve kavşak denetimi burada YOKTU (ölçüldü: kökteki bir
+        // kavşak üzerinden kökün DIŞINDAKİ bir dosya GERÇEKTEN silindi). Ayrıca bu yol, "önce yana
+        // al" adımının çalışmadığı halkalarda (arşivde files/ girdisi yoksa kök boşaltılmaz)
+        // kavşağı yerinde bulur — yani en sinsi hâlidir.
+        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var yol in silinecekler)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var hedef = ResolveInsideRoot(NormalizeArchivePath(yol), prefix, root, warnings);
+            var hedef = ResolveInsideRoot(NormalizeArchivePath(yol), prefix, root, warnings, denetlenenOnekler);
             if (hedef is null)
             {
                 continue;
@@ -5864,9 +6069,18 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
 
     /// <summary>
     /// Arşiv yolunu köke göre çözer. Önek uymuyorsa <c>null</c> (ilgisiz girdi); kökün DIŞINA
-    /// düşüyorsa <c>null</c> + uyarı (zip-slip).
+    /// düşüyorsa <c>null</c> + uyarı (zip-slip VEYA yol üzerinde bağlantı).
     /// </summary>
-    private static string? ResolveInsideRoot(string archivePath, string prefix, string root, List<BackupRestoreWarningDto> warnings)
+    /// <param name="denetlenenOnekler">
+    /// Bağlantı denetiminin çağrı başına önbelleği; gerekçesi
+    /// <see cref="SiteBuilderPathGuard.EnsureNoReparsePointOnPath"/> belgesinde yazılı.
+    /// </param>
+    private static string? ResolveInsideRoot(
+        string archivePath,
+        string prefix,
+        string root,
+        List<BackupRestoreWarningDto> warnings,
+        HashSet<string> denetlenenOnekler)
     {
         if (!archivePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
@@ -5895,7 +6109,229 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             return null;
         }
 
-        return hedef;
+        return HedefBaglantisizMi(root, hedef, archivePath, warnings, denetlenenOnekler) ? hedef : null;
+    }
+
+    // =====================================================================================
+    // KAVŞAK (junction/symlink) NÖBETÇİSİ — DİZGE DENETİMİNİN GÖREMEDİĞİ KAÇIŞ
+    //
+    // ÖLÇÜLDÜ (BackupRestoreArchiveGuardTests, GERÇEK kavşakla): bu koruma yalnızca
+    // RestoreItemsAsync'te vardı. Kardeş yollar — birleşik site zinciri, abonelik zinciri,
+    // SİLME listesi ve düz zip çıkarması — aynı kapıyı kullanmıyordu ve ikisi kanıtlandı:
+    //   * deleted.json, kökteki bir kavşağı takip edip kökün DIŞINDAKİ dosyayı SİLDİ,
+    //   * düz zip çıkarması, hedefteki bir kavşağı takip edip hedefin DIŞINA YAZDI.
+    //
+    // Kural İCAT EDİLMEDİ: deponun tek kavşak nöbetçisi (SiteBuilderPathGuard) çağrılıyor.
+    // İkinci bir yürüyüş yazmak, birini sıkılaştırıp diğerini unutmanın yoluydu — nitekim
+    // tam olarak bu olmuştu.
+    // =====================================================================================
+
+    /// <summary>
+    /// Kökten hedefe kadar yol üzerinde bağlantı var mı? Varsa girdi YAZILMAZ ve uyarıya çevrilir
+    /// (bütün geri yükleme durmaz: bir kavşak yüzünden felaket kurtarmayı iptal etmek, açığın
+    /// kendisinden pahalıya gelirdi).
+    /// </summary>
+    private static bool HedefBaglantisizMi(
+        string root,
+        string hedef,
+        string girdiAdi,
+        List<BackupRestoreWarningDto> warnings,
+        HashSet<string> denetlenenOnekler)
+    {
+        try
+        {
+            SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, hedef, denetlenenOnekler);
+            return true;
+        }
+        catch (AppException)
+        {
+            // ANAHTAR ÇEVRİLİR, YUTULMAZ — aynı karar RestoreItemsAsync'te de verilmişti:
+            // ortak kapının kendi bağlamına ait anahtarını ("sitebuilder.target_is_link")
+            // geri yükleme ekranına taşımak, kullanıcıya hiç kullanmadığı bir modülün hatasını
+            // göstermek olurdu. Reddin SEBEBİ Detail'de durur.
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.invalid_entry_path",
+                Target = girdiAdi,
+                Detail = $"reason=link_on_path; path={hedef}"
+            });
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Çıkarma KÖKÜNÜN KENDİSİ bağlantı olamaz.
+    /// </summary>
+    /// <remarks>
+    /// Segment segment yoklamak bunu GÖREMEZ (yürüyüş kökten BAŞLAR). Kök bir kavşaksa iki şey
+    /// birden olur ve ikisi de yıkıcıdır: "önce yana al" adımı kavşağın HEDEFİNDEKİ içeriği
+    /// taşır (yani ilgisiz bir klasörün içini boşaltır) ve sonraki her yazma kökün dışına gider.
+    /// ÖLÇÜLDÜ: gerçek kavşakla, arşiv girdisi kavşağın hedefine yazıldı.
+    /// <para>
+    /// Kural burada da <see cref="SiteBuilderPathGuard"/>'dan gelir (<c>EnsureUsableRoot</c> aynı
+    /// soruyu yayın hedefi için soruyor). Sessiz atlama YOK: hedef bağlantıysa iş HİÇ başlamaz ve
+    /// sebep açıkça söylenir — yöneticinin yapması gereken, gerçek klasörü hedef vermektir.
+    /// </para>
+    /// </remarks>
+    private static void EnsureRestoreRootIsNotLink(string root)
+    {
+        if (SiteBuilderPathGuard.IsReparsePoint(root))
+        {
+            throw new AppException("backup.restore_target_is_link", 400, 400, root);
+        }
+    }
+
+    /// <summary>
+    /// Arşivden okunacak bir ENVANTER girdisi tavanın altında mı? Değilse UYARI üretir ve
+    /// <c>false</c> döner — girdi HİÇ AÇILMAZ.
+    /// </summary>
+    /// <remarks>
+    /// Gerekçe ve değer <see cref="BackupArchiveLimits"/>'te yazılı. Sessiz atlama YOK: envanteri
+    /// okumamak, o adımın (silmeler, siteler, FTP hesapları) hiç uygulanmaması demektir ve
+    /// kullanıcı bunu bilmelidir.
+    /// </remarks>
+    private static bool EnvanterGirdisiOlculebilir(
+        ZipArchiveEntry entry,
+        string etiket,
+        List<BackupRestoreWarningDto> warnings)
+    {
+        if (!BackupArchiveLimits.ExceedsMetadataLimit(entry))
+        {
+            return true;
+        }
+
+        warnings.Add(new BackupRestoreWarningDto
+        {
+            MessageKey = "backup.entry_too_large",
+            Target = etiket,
+            Detail = BackupArchiveLimits.DescribeTooLarge(entry)
+        });
+        return false;
+    }
+
+    /// <summary>
+    /// ÇIKARILMIŞ klasörden okunacak bir envanter dosyası tavanın altında mı? Aynı kural, dosya
+    /// hâli: panel yedeği önce diske çıkarılır, envanterler oradan okunur.
+    /// </summary>
+    private static bool CikarilmisEnvanterOlculebilir(
+        string path,
+        string etiket,
+        List<BackupRestoreWarningDto> warnings)
+    {
+        long uzunluk;
+        try
+        {
+            uzunluk = new FileInfo(path).Length;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // ÖLÇEMEDİK. Okumaya devam etmek, tavanı sessizce kapatmak olurdu.
+            warnings.Add(new BackupRestoreWarningDto
+            {
+                MessageKey = "backup.entry_too_large",
+                Target = etiket,
+                Detail = $"stat=failed; reason={exception.GetType().Name}"
+            });
+            return false;
+        }
+
+        if (uzunluk <= BackupArchiveLimits.MaxMetadataBytes)
+        {
+            return true;
+        }
+
+        warnings.Add(new BackupRestoreWarningDto
+        {
+            MessageKey = "backup.entry_too_large",
+            Target = etiket,
+            Detail = $"entry={etiket}; bytes={uzunluk}; limit={BackupArchiveLimits.MaxMetadataBytes}"
+        });
+        return false;
+    }
+
+    /// <summary>
+    /// Bir arşivi hedefe çıkarır — zip-slip VE kavşak denetimiyle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden <c>ZipFile.ExtractToDirectory</c> DEĞİL:</b> BCL yalnız DİZGE kaçışını görür
+    /// (girdi adındaki <c>..</c>). Hedefin içinde duran bir KAVŞAĞI göremez ve yazma onu TAKİP
+    /// EDER — ölçüldü, gerçek kavşakla: hedefin dışına dosya yazıldı. Panel LocalSystem olduğu
+    /// için hedefte hiçbir ACL durdurmaz.
+    /// </para>
+    /// <para>
+    /// <b>Neden istisna DEĞİL uyarı:</b> bu yol panel yedeğinin (tam-sunucu felaket kurtarma)
+    /// çıkarma adımıdır. Tek bir kötü girdi yüzünden bütün kurtarmayı iptal etmek, açığın
+    /// kendisinden pahalıya gelirdi. Atlanan her girdi uyarıya döner ve kayıt
+    /// "restored_with_errors" olur.
+    /// </para>
+    /// </remarks>
+    private static List<BackupRestoreWarningDto> ExtractArchiveGuarded(
+        string archivePath,
+        string destination,
+        CancellationToken cancellationToken)
+    {
+        var warnings = new List<BackupRestoreWarningDto>();
+        var denetlenenOnekler = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var kok = Path.GetFullPath(destination);
+
+        using var archive = ZipFile.OpenRead(archivePath);
+        foreach (var entry in archive.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var ad = NormalizeArchivePath(entry.FullName);
+            if (ad.Length == 0)
+            {
+                continue;
+            }
+
+            var goreli = ad.TrimEnd('/').Replace('/', Path.DirectorySeparatorChar);
+            if (goreli.Length == 0)
+            {
+                continue;
+            }
+
+            var hedef = Path.GetFullPath(Path.Combine(kok, goreli));
+            if (!PathContainment.IsInsideRoot(kok, hedef))
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.invalid_entry_path",
+                    Target = entry.FullName,
+                    Detail = hedef
+                });
+                continue;
+            }
+
+            if (!HedefBaglantisizMi(kok, hedef, entry.FullName, warnings, denetlenenOnekler))
+            {
+                continue;
+            }
+
+            try
+            {
+                // Dizin girdisi (adı "/" ile biter ya da Name boştur): yalnız klasör açılır.
+                if (string.IsNullOrEmpty(entry.Name))
+                {
+                    Directory.CreateDirectory(hedef);
+                    continue;
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(hedef)!);
+                entry.ExtractToFile(hedef, overwrite: true);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                warnings.Add(new BackupRestoreWarningDto
+                {
+                    MessageKey = "backup.restore_file_failed",
+                    Target = entry.FullName,
+                    Detail = exception.Message
+                });
+            }
+        }
+
+        return warnings;
     }
 
     /// <summary>Arşivdeki <c>*.sql</c> dökümlerini ilgili motorlara içe aktarır.</summary>
