@@ -2161,14 +2161,8 @@ public sealed class MailService(
         };
     }
 
-    private static string BuildSpfValue(string serverAddress)
-    {
-        // Sunucu adresi IPv4 ise SPF'e açıkça eklenir; aksi halde mx+a mekanizmaları yeterli.
-        return System.Net.IPAddress.TryParse(serverAddress, out var ip)
-            && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-            ? $"v=spf1 mx a ip4:{serverAddress} ~all"
-            : "v=spf1 mx a ~all";
-    }
+    // SPF politikasi TEK KAYNAKTAN gelir (SpfPolicy.Build): ayni kural DnsService'te de kullanilir.
+    private static string BuildSpfValue(string serverAddress) => SpfPolicy.Build(serverAddress);
 
     public async Task<MailDiagnosticsDto> GetDiagnosticsAsync(string domain, CancellationToken cancellationToken = default)
         => await MailDiagnosticsRunner.RunAsync(await GetDnsRecordsAsync(domain, cancellationToken), cancellationToken);

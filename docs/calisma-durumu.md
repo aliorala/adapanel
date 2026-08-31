@@ -1155,3 +1155,78 @@ yapilinca da kirmizi yandi).
   (kimlik yok) ama YEREL kutulara teslim EDILIR ve `MtaStageMail.isSenderAllowed` kimliksiz
   gondericiye herhangi bir gonderen alan adi birakir. Yani "kiracidan kiraciya ic sahtecilik"
   mumkun gorunuyor; CANLI DENENMEDI.
+
+---
+
+## POSTA GONDERICI KIMLIGI -- GERCEK SMTP OTURUMUYLA KESINLESTIRME (31.08.2026) -- commit ATILMADI
+
+Bir onceki tur "ic sahtecilik MUMKUN GORUNUYOR ama canli denenmedi" diye birakmisti. Bu tur
+Stalwart 0.16.8 (components.json'daki sha256 ile birebir) YALITILMIS bir kopyada -- panelin
+yazdigi minimal `config.json`, dinleyiciler loopback + host-only VMnet1 (192.168.45.1, disari
+yol YOK), DNS cozumleyici de loopback'te sahte bir DNS sunucusuna (`127.0.0.1:15353`) sabitlendi;
+DNSBL sorgulari bile o sahte DNS'e dustu, github/spam-kural cekimi icin ad cozulemedi. Kurulu
+panele (8890) ve kurulu Stalwart'a DOKUNULMADI, DISARIYA TEK PAKET CIKMADI. Dort senaryo GERCEK
+SMTP oturumuyla surudu:
+
+**ASIL SORU KAPANDI -- BULGU VAR: kimliksiz KIRACIDAN KIRACIYA ic sahtecilik, kurbanin GELEN
+KUTUSUNA (INBOX) dusuyor.**
+
+| # | Senaryo | Oturum sonucu | Karar |
+|---|---|---|---|
+| 1 | Kimliksiz `:25`, `MAIL FROM/RCPT` = B alan adi | `250 ... queued` -> teslim; loopback (127/8) kaynagi SPF'te softfail sayildigindan JUNK | ACIK (kabul) |
+| 1e | Kimliksiz `:25`, kaynak IP B'nin SPF'inde YETKILI (paylasilan sunucu IP'si modeli: host-only 192.168.45.1) | `spf=pass`, `dmarc=pass`, `X-Spam-Status: No`, skor -0.50 -> **INBOX** | **ACIK -- BULGU** |
+| 2 | A olarak kimlik dogrula, `MAIL FROM` = B | `501 5.5.4 You are not allowed to send from this address.` | KAPALI (`mustMatchSender`) |
+| 3 | A kimlikli, ZARF=A dogru, **From BASLIGI**=B | `250 queued` -> **INBOX**, DKIM `d=a...`, alici From'da B'yi gorur, uyari YOK | ACIK (baslik hizalanmasi) |
+| 4 | PHP `mail()` yolu | Panel php.ini'ye SMTP/sendmail_path YAZMAZ (dogrulandi); PHP varsayilani `SMTP=localhost:25` (olculdu). `:25`'te `rejectNonFqdn=true` tek-etiketli HELO'yu `550` reddeder; FQDN HELO (gercek sunucu hostname'i / PHPMailer / ham soket) gecer ve Senaryo 1'e baglanir | ACIK (FQDN HELO ile) |
+
+**KOK NEDEN -- olculdu:** `MtaStageMail.isSenderAllowed = "!is_empty(authenticated_as) ||
+!key_exists('spam-block', sender_domain)"` kimliksiz baglantiya HERHANGI bir gonderen alan adi
+birakir. Panel her alan adi icin `v=spf1 mx a ip4:{serverIP} ~all` yazdigindan PAYLASILAN sunucu
+IP'si HER kiracinin SPF'inde yetkilidir; ayni sunucudaki bir site/PHP o IP'den baglaninca B'nin
+alan adiyla gonderdigi posta `spf=pass`+`dmarc=pass` alip B'nin INBOX'ina dusuyor. `:25`
+gercek panelde `0.0.0.0`'a baglidir (`PublicMailListenerPorts` + `ResolveStalwartListenerBinds`),
+yani yerel bir surec dogrudan baglanabilir. Senaryo 3 ayrica From-baslik sahteciliginin ayni
+sunucudaki teslimatta yakalanmadigini gosterir (kimlikli gonderimde spam suzgeci kapali +
+yerel teslimatta yeniden DMARC yok; "alici tarafta DMARC yakalar" varsayimi AYNI SUNUCU ICINDE
+GECERSIZ).
+
+**KAPATILMADI (bilerek, kok neden Stalwart politika alani; panel bu alana dokunmuyor ve yanlis
+bir MtaStageMail/MtaStageData script'i MESRU postayi -- posta listesi, otomatik yanit, uygulama
+bildirimi -- durdurabilir). Rapor edildi; duzeltme sunucu-tarafi bir kabul politikasi
+(orn. kimliksiz gonderende gonderen alan adini yalniz yerel + spam olarak isaretle, ya da
+`:25`'i loopback'e indirip site PHP'sini submission+kimlikle zorla) gerektirir ve ayri bir
+tasarim kararidir.**
+
+### IKINCI IS -- UC SPF URETICISI TEK KAYNAGA INDIRILDI (davranis korunarak)
+
+Uc uretici bulundu ve GERCEK cikti KARSILASTIRILDI (`dotnet` repro):
+
+| Uretici | IPv4 girdi | IPv4 cozulemeyince (bos) |
+|---|---|---|
+| `MailService.BuildSpfValue` | `v=spf1 mx a ip4:{ip} ~all` | `v=spf1 mx a ~all` (dogru) |
+| `DnsService.CreateDefaultRecords` (managed) | `v=spf1 mx a ip4:{ip} ~all` | `v=spf1 mx a ~all` (dogru) |
+| `DnsService` bolge sablonu (`ExpandPlaceholders`) | `v=spf1 mx a ip4:{ip} ~all` | **`v=spf1 mx a ip4: ~all` (BICIMSIZ -> permerror)** |
+
+IPv4'te ucu de AYNIYDI; ama sablon yolu IPv4 cozulemeyen sunucuda `ip4:`'u BOS birakip gecersiz
+bir SPF uretiyordu (permerror = mesru giden posta reddedilir/isaretlenir). Ayrisma KAZAYDI
+(ayni kuralin kopyasi), gerekceli degil. Tek kaynaga indirildi: yeni `Mail/SpfPolicy.cs`;
+`MailService` ve `DnsService` (managed + sablon) ayni kurali kullanir. `ExpandPlaceholders`'a
+bicimsiz-SPF nobetcisi eklendi: `ip` bosken yalniz ` ip4:{ip}` belirteci dusurulur, kullanicinin
+kendi `ip4:`/`include:` mekanizmalari (`{ip}` icermez) KORUNUR.
+
+**MailEnable yolu BILEREK HARIC:** `MailEnableMailService` DKIM URETMEDIGINDEN `v=spf1 a mx ~all`
++ `p=none` yazar; DKIM'siz bir sunucuda `p=quarantine`'e cekmek teslimati bozabilir -> bu ayrisma
+GEREKCELIDIR ve tek kaynaga katilmadi. (`DnsView.vue`'daki `v=spf1 a mx ~all` yalniz arayuz ipucu
+metnidir, uretici degil.)
+
+**Yeni dosyalar:** `src/AdaPanel.Infrastructure/Mail/SpfPolicy.cs`,
+`tests/AdaPanel.Infrastructure.Tests/SpfTekKaynakTests.cs` (+12 test).
+**Mutasyon:** 3 mutasyon, 3'u kirmizi -- (1) SpfPolicy guard'i kaldirinca, (2) bicimsiz-SPF
+nobetcisi kaldirilinca, (3) FAZLA-KAPATMA nobetcisi: nobetci asiri agresif yapilip kullanicinin
+kendi `ip4:`'unu de silince kirmizi yandi.
+
+### BU TURDA OLCULEMEYENLER
+- Farkli SUNUCULAR arasi (B baska makinede) From-baslik/zarf sahteciligi: alicinin GERCEK
+  MX'i denenmedi (yalitilmis tek dugum). Ayni-sunucu ic sahtecilik olculdu; capraz-sunucuda
+  DMARC alici tarafta yakalar (klasik), bu tur kapsam disi.
+- Kurulu paneldeki (8890) Stalwart yapilandirmasi yine OKUNAMADI (sertlestirme erisimi reddediyor).

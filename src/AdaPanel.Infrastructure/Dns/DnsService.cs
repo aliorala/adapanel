@@ -1352,12 +1352,27 @@ public sealed partial class DnsService(
     }
 
     private static string ExpandPlaceholders(string input, string zone, string ip, string ns1, string ns2)
-        => (input ?? string.Empty)
+    {
+        var text = input ?? string.Empty;
+
+        // BICIMSIZ SPF NOBETCISI: IPv4 cozulemediginde (ip == "") "ip4:{ip}" -> "ip4:" olur ve
+        // "v=spf1 mx a ip4: ~all" gibi GECERSIZ (permerror) bir SPF yazilirdi. Bu, ayni SPF'i
+        // dogru sekilde "v=spf1 mx a ~all"e indiren MailService/CreateDefaultRecords'tan sessizce
+        // ayrisiyordu. ip bosken " ip4:{ip}" belirtecini tumden dusur; boylece sablon yolu da
+        // ayni tek kaynakla ayni ciktiyi verir. Kullanicinin kendi ip4:/include: mekanizmalari
+        // ("{ip}" icermezler) ETKILENMEZ.
+        if (ip.Length == 0)
+        {
+            text = text.Replace(" ip4:{ip}", string.Empty, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return text
             .Replace("{domain}", zone, StringComparison.OrdinalIgnoreCase)
             .Replace("{ip}", ip, StringComparison.OrdinalIgnoreCase)
             .Replace("{ns1}", ns1, StringComparison.OrdinalIgnoreCase)
             .Replace("{ns2}", ns2, StringComparison.OrdinalIgnoreCase)
             .Trim();
+    }
 
     private static IEnumerable<DnsRecordState> CreateDefaultRecords(SiteDto site, string zoneName, string preferredServerAddress)
     {
@@ -1378,12 +1393,11 @@ public sealed partial class DnsService(
             yield return CreateManagedRecord("A", "ns2", serverIp);
             yield return CreateManagedRecord("A", "mail", serverIp);
             yield return CreateManagedRecord("A", "webmail", serverIp);
-            yield return CreateManagedRecord("TXT", "@", $"v=spf1 mx a ip4:{serverIp} ~all");
         }
-        else
-        {
-            yield return CreateManagedRecord("TXT", "@", "v=spf1 mx a ~all");
-        }
+
+        // SPF TEK KAYNAKTAN: MailService ile ayni kural (Mail.SpfPolicy.Build). serverIp bos ise
+        // ip4 mekanizmasi yazilmaz -> "v=spf1 mx a ~all" (bicimsiz "ip4:" uretilmez).
+        yield return CreateManagedRecord("TXT", "@", Mail.SpfPolicy.Build(serverIp));
     }
 
     private static DnsRecordState CreateManagedRecord(string type, string host, string value, int? priority = null)
