@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Runtime.Versioning;
 
 namespace AdaPanel.Infrastructure.Extensions;
@@ -38,6 +39,30 @@ public static class ServiceCollectionExtensions
                 AllowAutoRedirect = false,
                 UseCookies = false
             });
+        // KULLANICIDAN ADRES ALAN İSTEKLERİN İSTEMCİSİ — bağlantı ANINDA adres denetimi.
+        //
+        // NEDEN AYRI BİR İSTEMCİ, NEDEN VARSAYILANI DEĞİŞTİRMİYORUZ: varsayılan istemciyi
+        // denetime sokmak paneldeki HER CreateClient() çağrısını etkilerdi — bileşen indirme
+        // (components.json), GitHub sürüm çözümleme, phpMyAdmin vekili, Stalwart yönetimi, sağlık
+        // kontrolü. Bunların adresi kullanıcıdan GELMEZ; denetime sokmak hiçbir açığı kapatmaz ama
+        // yönlendirme/vekil kısıtı yüzünden panelin kendini güncellemesini kırabilirdi. Ayrımın
+        // nöbetçi testleri var (OutboundRedirectGuardTests).
+        //
+        // Politika HER BAĞLANTIDA okunur: Panel:AllowInternalOutboundTargets açık kapısı burada da
+        // GEÇERLİDİR, yoksa iç ağdaki NAS'a yedek atan meşru kurulum kapıyı açtığı hâlde soket
+        // düzeyinde reddedilirdi.
+        services.AddHttpClient(Support.OutboundConnectGuard.GuardedClientName)
+            .ConfigurePrimaryHttpMessageHandler(sp => Support.OutboundConnectGuard.CreateHandler(
+                () => Support.OutboundTargetPolicy.Connecting(
+                    sp.GetService<Microsoft.Extensions.Options.IOptions<PanelRuntimeOptions>>()?.Value.AllowInternalOutboundTargets ?? false),
+                onBlocked: (host, blocked) => sp
+                    .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                    ?.CreateLogger(Support.OutboundConnectGuard.GuardedClientName)
+                    .LogWarning(
+                        "Giden baglanti REDDEDILDI: {Host} adi {Address} adresine cozuluyor (ic ag/geri dongu/bulut meta verisi).",
+                        host,
+                        blocked)));
+
         services.AddScoped<IPasswordHasher<PanelUser>, PasswordHasher<PanelUser>>();
         services.AddScoped<IAuditService, AuditService>();
         services.AddScoped<ISetupService, SetupService>();

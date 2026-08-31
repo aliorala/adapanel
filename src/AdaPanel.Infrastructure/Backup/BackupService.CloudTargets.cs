@@ -220,7 +220,7 @@ public sealed partial class BackupService
                     ["scope"] = "https://graph.microsoft.com/Files.ReadWrite.All offline_access"
                 });
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         client.Timeout = RemoteUploadStallTimeout;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
@@ -406,7 +406,7 @@ public sealed partial class BackupService
         HttpContent content,
         CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         client.Timeout = RemoteUploadTimeout;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint) { Content = content };
@@ -475,7 +475,7 @@ public sealed partial class BackupService
     private async Task DeleteDropboxAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
         var token = await ResolveCloudBearerTokenAsync("dropbox", remote, cancellationToken);
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{DropboxApiHost}/2/files/delete_v2")
         {
@@ -541,7 +541,7 @@ public sealed partial class BackupService
         string token,
         CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         client.Timeout = RemoteUploadTimeout;
 
         await using var source = File.OpenRead(localPath);
@@ -575,7 +575,7 @@ public sealed partial class BackupService
         long length,
         CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         client.Timeout = RemoteUploadTimeout;
 
         using var createRequest = new HttpRequestMessage(
@@ -674,7 +674,7 @@ public sealed partial class BackupService
     private async Task DeleteOneDriveAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
         var token = await ResolveCloudBearerTokenAsync("onedrive", remote, cancellationToken);
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Delete, GraphItemUrl(CloudPathOf(uri), string.Empty));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -716,7 +716,7 @@ public sealed partial class BackupService
         BackupTarget target,
         CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         client.Timeout = RemoteUploadTimeout;
 
         var length = new FileInfo(localPath).Length;
@@ -789,7 +789,7 @@ public sealed partial class BackupService
                 "Azure hedefinde silme icin depolama hesabi adi ve anahtari gerekir (SAS ile silinemez).");
         }
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         var hedef = AzureRequestUri(uri, remote.UserName);
 
         var (authorization, msDate) = AzureBlobRequestSigner.Sign(
@@ -873,7 +873,7 @@ public sealed partial class BackupService
         CancellationToken cancellationToken)
     {
         var token = await ResolveCloudBearerTokenAsync("dropbox", remote, cancellationToken);
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{DropboxApiHost}/2/files/get_metadata")
         {
@@ -903,7 +903,7 @@ public sealed partial class BackupService
         CancellationToken cancellationToken)
     {
         var token = await ResolveCloudBearerTokenAsync("onedrive", remote, cancellationToken);
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Get, GraphItemUrl(CloudPathOf(uri), string.Empty));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -937,7 +937,7 @@ public sealed partial class BackupService
             return (RemotePresence.Unreachable, "credentials=sas_only; probe=skipped; remote_presence=unknown");
         }
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Head, uri);
 
         if (azure && !string.IsNullOrWhiteSpace(remote.UserName))
@@ -1006,7 +1006,7 @@ public sealed partial class BackupService
         CancellationToken cancellationToken)
     {
         var token = await ResolveCloudBearerTokenAsync("dropbox", remote, cancellationToken);
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         var sonuc = new List<string>();
 
         var endpoint = $"{DropboxApiHost}/2/files/list_folder";
@@ -1091,7 +1091,7 @@ public sealed partial class BackupService
         var (authorization, msDate) = AzureBlobRequestSigner.Sign(
             "GET", listUri, remote.UserName, remote.Password, DateTimeOffset.UtcNow, 0);
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Get, listUri);
         request.Headers.TryAddWithoutValidation("x-ms-version", AzureBlobRequestSigner.ApiVersion);
         request.Headers.TryAddWithoutValidation("x-ms-date", msDate);
@@ -1143,7 +1143,7 @@ public sealed partial class BackupService
             "GET", listUri, remote.UserName, remote.Password, region,
             DateTimeOffset.UtcNow, S3RequestSigner.EmptyPayloadSha256);
 
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Get, listUri);
         request.Headers.TryAddWithoutValidation("Authorization", authorization);
         request.Headers.TryAddWithoutValidation("x-amz-date", amzDate);
@@ -1170,7 +1170,7 @@ public sealed partial class BackupService
         BackupPruneRemoteOptions remote,
         CancellationToken cancellationToken)
     {
-        var client = httpClientFactory.CreateClient();
+        var client = CreateRemoteHttpClient();
         using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), baseUri);
         // Depth: infinity BAZI sunucularda kapalıdır (RFC 4918 izin verir). Kapalıysa istek
         // hata döner ve çağıran "taranamadı" der — sessizce boş liste DÖNMEZ.

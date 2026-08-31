@@ -207,12 +207,14 @@ public static class OutboundAddressGuard
     /// ayrışabilen İKİNCİ bir ayrıştırıcı olurdu — bu dosyanın var olma sebebi tam olarak o.
     /// </para>
     /// <para>
-    /// <b>DÜRÜST SINIR — bu kapı YÖNLENDİRMEYİ ve DNS rebinding'i görmez.</b> Burada ölçülen şey
+    /// <b>BU KAPI TEK BAŞINA YÖNLENDİRMEYİ ve DNS rebinding'i GÖRMEZ.</b> Burada ölçülen şey
     /// "istek atılmadan ÖNCE adın nereye çözüldüğü"dür. Dış bir adres <c>302 Location:
     /// http://169.254.169.254/</c> ile iç ağa atlarsa, ya da DNS kaydı iki çağrı arasında
-    /// değişirse, bu denetim atlanmış olur. Kapatmanın tek dürüst yolu bağlantı ANINDA denetlemek
-    /// olurdu (kümede <c>ClusterHttpClientFactory.ConnectCallback</c> bunu yapar). Çağrı
-    /// yerlerinde ölçülen durum ve alınan önlem oradaki yorumlarda yazılı.
+    /// değişirse, bu denetim atlanmış olur. Kapatmanın tek dürüst yolu bağlantı ANINDA
+    /// denetlemektir; o denetim <see cref="OutboundConnectGuard"/>'dadır ve AYNI GÖVDEYİ
+    /// (<see cref="InspectAsync"/>) çağırır — yani kural burada tek nüshadır, ikinci bir liste
+    /// yoktur. Bu metot hâlâ gerekli: kullanıcıya "adres yasak" hatasını kayıt/doğrulama anında,
+    /// soket açılmadan ve anlaşılır bir hata koduyla verir.
     /// </para>
     /// </remarks>
     public static async Task<string?> FindBlockedHostAsync(
@@ -228,26 +230,61 @@ public static class OutboundAddressGuard
         // geçmez. Ama bazı kurulumlarda kullanıcıdan gelen adres de MEŞRU biçimde içeridedir:
         // iç ağdaki bir NAS'a yedek atmak, LAN'daki bir SMTP aktarıcısı, aynı makinedeki bir
         // siteye vuran zamanlanmış görev. Körlemesine yasaklamak bu kurulumları kırardı.
+        //
+        // BURADA KISA DEVRE: açık kapı açıkken adı çözmenin bir anlamı yok (karar zaten "geç"),
+        // ve kayıt anında gereksiz bir DNS gidiş-dönüşü eklemek istemiyoruz. Bağlantı anındaki
+        // denetim aynı kararı verir ama adresleri ZATEN çözmek zorundadır (soketi açacak).
         if (policy.AllowInternalTargets)
         {
             return null;
         }
 
+        var inceleme = await InspectAsync(host, resolver, policy, cancellationToken);
+        return inceleme.BlockedTarget;
+    }
+
+    /// <summary>
+    /// Adı çözer, ÇIKAN ADRESLERİ ve engel kararını BİRLİKTE döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir metot:</b> bağlantı ANINDA denetleyen taraf
+    /// (<see cref="OutboundConnectGuard"/>) yalnız "yasak mı" cevabını değil, soketi açacağı
+    /// ADRESLERİ de ister. Yalnız <see cref="FindBlockedHostAsync"/> olsaydı bağlantı yolu adı
+    /// İKİNCİ kez çözmek zorunda kalırdı: iki çözümleme arasında kayıt değişebilir (tam olarak
+    /// kapatmaya çalıştığımız DNS rebinding), yani denetlenen adres ile bağlanılan adres FARKLI
+    /// olabilirdi. Tek çözümleme = denetlenen adres ile bağlanılan adres AYNI şeydir.
+    /// </para>
+    /// <para>
+    /// Karar gövdesi (ad eleme → literal → çözümleme → aralık denetimi) TEK NÜSHA burada durur;
+    /// bu dosyanın var olma sebebi ikinci nüshanın bedelinin ÖLÇÜLMÜŞ olmasıdır.
+    /// </para>
+    /// </remarks>
+    public static async Task<OutboundInspection> InspectAsync(
+        string? host,
+        OutboundHostResolver resolver,
+        OutboundTargetPolicy policy,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+
         var normalized = (host ?? string.Empty).Trim();
         if (normalized.Length == 0)
         {
-            return string.Empty;
+            // Boş ada bağlanılamaz; açık kapı bile olsa bağlanacak bir yer yok.
+            return new OutboundInspection([], policy.AllowInternalTargets ? null : string.Empty);
         }
 
-        if (IsBlockedHostName(normalized))
+        if (!policy.AllowInternalTargets && IsBlockedHostName(normalized))
         {
-            return normalized;
+            return new OutboundInspection([], normalized);
         }
 
         // Düz IP yazıldıysa DNS beklenmez. (Sayısal yazımlar da bu dala düşer; gerekçe yukarıda.)
         if (IPAddress.TryParse(normalized, out var literal))
         {
-            return IsBlockedAddress(literal) ? literal.ToString() : null;
+            var literalYasak = !policy.AllowInternalTargets && IsBlockedAddress(literal);
+            return new OutboundInspection([literal], literalYasak ? literal.ToString() : null);
         }
 
         IPAddress[] addresses;
@@ -261,17 +298,43 @@ public static class OutboundAddressGuard
         }
         catch
         {
-            return policy.BlockUnresolvedHost ? normalized : null;
+            // AÇIK KAPI AÇIKKEN "çözülemedi" bir YASAK değildir: bağlanacak adres yok, hata
+            // çözümleme hatasıdır. Karışsaydı, iç ağ hedefine izin vermiş bir işletici geçici bir
+            // DNS arızasında "adres yasak" hatası görüp bayrağı boşuna sorgulardı.
+            return new OutboundInspection(
+                [],
+                policy.BlockUnresolvedHost && !policy.AllowInternalTargets ? normalized : null);
         }
 
         if (addresses.Length == 0)
         {
-            return policy.BlockUnresolvedHost ? normalized : null;
+            // AÇIK KAPI AÇIKKEN "çözülemedi" bir YASAK değildir: bağlanacak adres yok, hata
+            // çözümleme hatasıdır. Karışsaydı, iç ağ hedefine izin vermiş bir işletici geçici bir
+            // DNS arızasında "adres yasak" hatası görüp bayrağı boşuna sorgulardı.
+            return new OutboundInspection(
+                [],
+                policy.BlockUnresolvedHost && !policy.AllowInternalTargets ? normalized : null);
         }
 
-        return addresses.FirstOrDefault(IsBlockedAddress)?.ToString();
+        var blocked = policy.AllowInternalTargets
+            ? null
+            : addresses.FirstOrDefault(IsBlockedAddress)?.ToString();
+
+        return new OutboundInspection(addresses, blocked);
     }
 }
+
+/// <summary>
+/// Bir ana makine adının ÇÖZÜLMÜŞ hâli ve engel kararı.
+/// </summary>
+/// <param name="Addresses">
+/// Adın çözüldüğü adresler. Bağlantı kuran taraf SOKETİ BUNLARA açar — yeniden çözmez.
+/// </param>
+/// <param name="BlockedTarget">
+/// Engelli adres/ad (yoksa <c>null</c>). Boş ana makine adında boş dize döner: "adres verilmedi"
+/// ile "adres temiz" birbirine karışmasın.
+/// </param>
+public readonly record struct OutboundInspection(IPAddress[] Addresses, string? BlockedTarget);
 
 /// <summary>
 /// Bir dış hedefin denetlenme koşulları: iç ağ açık kapısı ve "ad çözülemedi" kararı.

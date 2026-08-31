@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Security;
-using System.Net.Sockets;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Cluster;
@@ -77,38 +77,23 @@ public sealed class ClusterHttpClientFactory(ILogger<ClusterHttpClientFactory> l
             // DNS değişiklikleri makul sürede yakalansın; sonsuz ömürlü bağlantı, taşınmış bir
             // düğüme saatlerce eski adresten bağlanmak demek olurdu.
             PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-            ConnectCallback = async (context, cancellationToken) =>
-            {
-                var host = context.DnsEndPoint.Host;
-                var port = context.DnsEndPoint.Port;
-
-                var addresses = await Resolver(host, cancellationToken);
-                // BAĞLANMADAN ÖNCE hepsi denetlenir. Bir tanesi bile engelliyse hiçbirine
-                // bağlanılmaz: "temiz olana bağlan" deseydik, saldırganın listeye bir genel adres
-                // eklemesi korumayı tamamen aşmaya yeterdi.
-                var blocked = addresses.FirstOrDefault(ClusterAddressGuard.IsBlockedAddress);
-                if (blocked is not null || addresses.Length == 0)
-                {
-                    logger.LogWarning(
-                        "Düğüm bağlantısı REDDEDİLDİ: {Host} adı {Address} adresine çözülüyor (iç ağ/geri döngü/meta veri).",
-                        host,
-                        blocked?.ToString() ?? "(çözülemedi)");
-
-                    throw new HttpRequestException(ClusterMessages.AddressForbidden);
-                }
-
-                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-                try
-                {
-                    await socket.ConnectAsync(addresses, port, cancellationToken);
-                    return new NetworkStream(socket, ownsSocket: true);
-                }
-                catch
-                {
-                    socket.Dispose();
-                    throw;
-                }
-            }
+            // GÖVDE ARTIK BURADA DEĞİL. Aynı "çöz → denetle → yalnız denetlenen adrese bağlan"
+            // kalıbı panelin kullanıcıdan adres alan bütün istemcilerinde gerekiyordu; ikinci bir
+            // nüsha yazmak yerine küme de TEK KAYNAĞI (OutboundConnectGuard) çağırıyor.
+            //
+            // Kümeye ÖZGÜ kalan iki şey: (1) politika STRICT — çözülemeyen ad reddedilir, çünkü bu
+            // istek bir YÖNETİCİ BELİRTECİ taşır; (2) istisna metni ClusterMessages.AddressForbidden
+            // — merkez pano "bağlanamadım" ile "adres yasak"ı bu metinle ayırıyor.
+            ConnectCallback = (context, cancellationToken) => OutboundConnectGuard.ConnectAsync(
+                context.DnsEndPoint,
+                OutboundTargetPolicy.Strict,
+                (host, iptal) => Resolver(host, iptal),
+                onBlocked: (host, blocked) => logger.LogWarning(
+                    "Düğüm bağlantısı REDDEDİLDİ: {Host} adı {Address} adresine çözülüyor (iç ağ/geri döngü/meta veri).",
+                    host,
+                    blocked),
+                cancellationToken,
+                ClusterMessages.AddressForbidden)
         };
 
         if (!verifyTlsCertificate)

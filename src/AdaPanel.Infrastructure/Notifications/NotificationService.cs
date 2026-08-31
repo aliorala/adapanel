@@ -45,10 +45,18 @@ public sealed class NotificationService(
     /// hiç uygulanmaz.
     /// </para>
     /// <para>
-    /// <b>DÜRÜST SINIR:</b> webhook gönderimi <c>httpClientFactory.CreateClient()</c> ile
-    /// VARSAYILAN istemciyi kullanır ve o istemcide <c>AllowAutoRedirect</c> .NET varsayılanı olan
+    /// <b>ESKİ DÜRÜST SINIR — KAPATILDI.</b> Webhook gönderimi <c>CreateClient()</c> ile VARSAYILAN
+    /// istemciyi kullanıyordu ve orada <c>AllowAutoRedirect</c> .NET varsayılanı olan
     /// <c>true</c>'dur (ölçüldü: <c>ServiceCollectionExtensions</c> yalnız adlı istemcilerde
-    /// <c>false</c> yapıyor). Yani 302 ile iç ağa atlama bu kapının arkasından geçer.
+    /// <c>false</c> yapıyordu), yani 302 ile iç ağa atlama bu kapının arkasından geçiyordu. Gönderim
+    /// artık <see cref="OutboundConnectGuard.GuardedClientName"/> istemcisini kullanıyor: zincirin
+    /// her adımı soket açılmadan denetleniyor.
+    /// </para>
+    /// <para>
+    /// <b>KALAN SINIR — SMTP.</b> Posta gönderimi MailKit'in kendi soketini açar; MailKit'te
+    /// bağlantı-anı geri çağrısı YOKTUR. SMTP'de yönlendirme diye bir şey de yoktur, yani kapanan
+    /// asıl delik (302) burada zaten mevcut değil; açık kalan tek şey kaydetme ile gönderme arasında
+    /// DNS kaydının değişmesidir (rebinding). Bu AÇIKÇA raporlandı, "kapandı" denmedi.
     /// </para>
     /// </remarks>
     private async Task EnsureNotificationTargetsAllowedAsync(
@@ -166,16 +174,33 @@ public sealed class NotificationService(
             throw new AppException("notifications.webhook_not_configured", 400, 400);
         }
 
-        var client = httpClientFactory.CreateClient();
-        using var response = await client.PostAsync(
-            settings.WebhookUrl,
-            new StringContent(JsonSerializer.Serialize(new
-            {
-                eventName,
-                body,
-                sentAtUtc = DateTime.UtcNow
-            }), Encoding.UTF8, "application/json"),
-            cancellationToken);
+        // DENETLENEN İSTEMCİ: adres kaydetme anında denetlendi ama gönderme anında yönlendirme ya da
+        // değişmiş bir DNS kaydı hedefi başka yere taşıyabilir. Bu istemcide her bağlantı ayrı denetlenir.
+        var client = httpClientFactory.CreateClient(OutboundConnectGuard.GuardedClientName);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.PostAsync(
+                settings.WebhookUrl,
+                new StringContent(JsonSerializer.Serialize(new
+                {
+                    eventName,
+                    body,
+                    sentAtUtc = DateTime.UtcNow
+                }), Encoding.UTF8, "application/json"),
+                cancellationToken);
+        }
+        // ZİNCİR TARANIR, tür yakalanmaz: .NET geri çağrıdan atılan istisnayı kendi
+        // HttpRequestException'ının içine sarar (ölçüldü — bkz. OutboundBlockedException.Cikar).
+        catch (Exception exception) when (OutboundBlockedException.Cikar(exception) is { } blocked)
+        {
+            // "Ağ hatası" demek yanıltıcı olurdu: kullanıcı adresini düzeltemez, çünkü adres
+            // kaydedilirken TEMİZDİ. Kapının kendi hata kodu, açık kapı ipucunu da taşıyor.
+            throw new AppException("notifications.webhook_forbidden", 403, 403, blocked.BlockedTarget);
+        }
+
+        using var atilacakYanit = response;
 
         if (!response.IsSuccessStatusCode)
         {

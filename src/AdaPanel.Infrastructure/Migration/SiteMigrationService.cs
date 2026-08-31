@@ -27,8 +27,68 @@ public sealed class SiteMigrationService(
     // testte iki yüz bin dosya yaratmak demekti. Aynı seam kota ve dosya boyutu yollarında da
     // açıldı (bkz. FileService.CalculateSizeAsync'in internal aşırı yüklemesi) ve gerekçesi orada
     // yazılı. Yeni bir HTTP yüzeyi AÇMAZ: yalnız DI kurulumu bu parametreyi görebilir.
-    int? userIniScanEntryBudget = null) : ISiteMigrationService
+    int? userIniScanEntryBudget = null,
+    // İSTEĞE BAĞLI: "iç ağ hedeflerine izin ver" açık kapısı. Verilmemişse KAPALI sayılır.
+    Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
+    // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
+    Support.OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : ISiteMigrationService
 {
+    /// <summary>
+    /// Plesk/cPanel KEŞİF isteklerinin tek istemcisi: bağlantı ANINDA adres denetimi yapar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bu iki uç DENETİMSİZDİ (ölçüldü).</b> <c>request.Host</c> + <c>request.Port</c> HTTP istek
+    /// gövdesinden gelir; kod kendi <c>HttpClientHandler</c>'ını kuruyordu, yani ne
+    /// <c>OutboundAddressGuard</c>'dan geçiyordu ne de bir yönlendirme sınırı vardı
+    /// (<c>AllowAutoRedirect</c> .NET varsayılanı <c>true</c>). Yedek hedefi, cron adresi ve göç
+    /// FTP/SFTP konağı 0.8.7'de kapatılırken bu yol atlanmıştı — üstelik burada istek KULLANICININ
+    /// verdiği kimlik bilgisini (<c>X-API-Key</c> / Basic / WHM jetonu) taşır, yani hedefe giden bir
+    /// kimlik sızıntısı yüzeyi de vardı.
+    /// </para>
+    /// <para>
+    /// <b>Sertifika doğrulaması BURADA DA KAPALI</b> (Plesk/WHM neredeyse her zaman kendi imzalı
+    /// sertifika kullanır; gerekçe aşağıdaki çağrı yerlerinde de yazılı). Adres denetimi TLS
+    /// kararından bağımsızdır: doğrulamayı kapatmak, nereye bağlanılacağını değiştirmez.
+    /// </para>
+    /// </remarks>
+    private HttpClient CreateDiscoveryHttpClient()
+    {
+        var handler = Support.OutboundConnectGuard.CreateHandler(
+            () => Support.OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+            outboundResolver,
+            onBlocked: (host, blocked) => logger.LogWarning(
+                "Goc kesif baglantisi REDDEDILDI: {Host} adi {Adres} adresine cozuluyor (ic ag/geri dongu/bulut meta verisi).",
+                host,
+                blocked),
+            verifyTlsCertificate: false);
+
+        return new HttpClient(handler, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(25) };
+    }
+
+    /// <summary>
+    /// Keşif konağını BAĞLANMADAN önce denetler.
+    /// </summary>
+    /// <remarks>
+    /// Bağlantı-anı denetimi zaten var; bu ön kapı hata kalitesi içindir: kullanıcı "502 bağlantı
+    /// kurulamadı" değil, adresin neden reddedildiğini ve açık kapının nerede olduğunu söyleyen
+    /// <c>migration.host_forbidden</c> hatasını görür (aynı metin dosya göçünde de kullanılıyor).
+    /// Çözülemeyen ad REDDEDİLİR: çözülemeyen bir konağa zaten bağlanılamaz.
+    /// </remarks>
+    private async Task EnsureDiscoveryHostAllowedAsync(string host, CancellationToken cancellationToken)
+    {
+        var engellenen = await Support.OutboundAddressGuard.FindBlockedHostAsync(
+            host,
+            outboundResolver ?? Support.OutboundAddressGuard.SystemResolver,
+            Support.OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+            cancellationToken);
+
+        if (engellenen is not null)
+        {
+            throw new AppException("migration.host_forbidden", 403, 403, engellenen);
+        }
+    }
+
     public async Task<MigrateSiteResultDto> MigrateSiteAsync(
         MigrateSiteRequest request,
         Guid? actorUserId,
@@ -259,11 +319,9 @@ public sealed class SiteMigrationService(
         var host = request.Host.Trim().TrimEnd('/');
         var port = request.Port > 0 ? request.Port : 8443;
 
-        using var handler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-        };
-        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+        await EnsureDiscoveryHostAllowedAsync(host, cancellationToken);
+
+        using var http = CreateDiscoveryHttpClient();
         // Kimlik: gizli API anahtarı (X-API-Key) ya da yönetici kullanıcı adı+parola (Basic auth). İkisi de yoksa net hata.
         if (!string.IsNullOrWhiteSpace(request.ApiKey))
         {
@@ -285,6 +343,14 @@ public sealed class SiteMigrationService(
         try
         {
             response = await http.GetAsync($"https://{host}:{port}/api/v2/domains", cancellationToken);
+        }
+        catch (Exception exception) when (Support.OutboundBlockedException.Cikar(exception) is { } blocked)
+        {
+            // YÖNLENDİRME/REBINDING DALI: konak ön kapıda temizdi ama zincir iç ağa saptı.
+            // Tür DEĞİL zincir yakalanır: .NET geri çağrının istisnasını sarar (ölçüldü).
+            // "Bağlanılamadı" demek yanıltıcı olurdu; kullanıcı adresini düzeltemez, çünkü adres
+            // doğruydu — reddedilen şey gidilen yerdi.
+            throw new AppException("migration.host_forbidden", 403, 403, blocked.BlockedTarget);
         }
         catch (Exception exception)
         {
@@ -352,11 +418,9 @@ public sealed class SiteMigrationService(
         var port = request.Port > 0 ? request.Port : 2087;
         var user = string.IsNullOrWhiteSpace(request.UserName) ? "root" : request.UserName.Trim();
 
-        using var handler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-        };
-        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+        await EnsureDiscoveryHostAllowedAsync(host, cancellationToken);
+
+        using var http = CreateDiscoveryHttpClient();
         http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"whm {user}:{request.ApiToken}");
         http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
 
@@ -364,6 +428,11 @@ public sealed class SiteMigrationService(
         try
         {
             response = await http.GetAsync($"https://{host}:{port}/json-api/listaccts?api.version=1", cancellationToken);
+        }
+        catch (Exception exception) when (Support.OutboundBlockedException.Cikar(exception) is { } blocked)
+        {
+            // Gerekçe Plesk dalındaki ikiziyle aynı.
+            throw new AppException("migration.host_forbidden", 403, 403, blocked.BlockedTarget);
         }
         catch (Exception exception)
         {
@@ -443,15 +512,25 @@ public sealed class SiteMigrationService(
         if (request.PullFiles)
         {
             var filePort = request.FilePort > 0 ? request.FilePort : DefaultFilePort(request.FileProtocol);
-            var reachable = await CanConnectAsync(request.FileHost, filePort, cancellationToken);
-            checks.Add(Check("file_source", reachable, reachable ? "migration.validate.file_reachable" : "migration.validate.file_unreachable"));
+            checks.Add(await UlasimKontroluAsync(
+                "file_source",
+                request.FileHost,
+                filePort,
+                "migration.validate.file_reachable",
+                "migration.validate.file_unreachable",
+                cancellationToken));
         }
 
         if (request.TransferDatabase)
         {
             var dbPort = request.DbPort > 0 ? request.DbPort : 3306;
-            var reachable = await CanConnectAsync(request.DbHost, dbPort, cancellationToken);
-            checks.Add(Check("db_source", reachable, reachable ? "migration.validate.db_reachable" : "migration.validate.db_unreachable"));
+            checks.Add(await UlasimKontroluAsync(
+                "db_source",
+                request.DbHost,
+                dbPort,
+                "migration.validate.db_reachable",
+                "migration.validate.db_unreachable",
+                cancellationToken));
         }
 
         if (checks.Count == 0)
@@ -481,6 +560,46 @@ public sealed class SiteMigrationService(
 
     private static int DefaultFilePort(string protocol)
         => string.Equals(protocol?.Trim(), "sftp", StringComparison.OrdinalIgnoreCase) ? 22 : 21;
+
+    /// <summary>
+    /// Göç ÖN KONTROLÜNDEKİ "ulaşılabiliyor mu" sorusu — ama önce ADRES kapısından geçer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Yüzey neden var (ölçüldü):</b> <see cref="CanConnectAsync"/> gövdeden gelen
+    /// <c>FileHost</c>/<c>DbHost</c> + PORT ikilisine TCP açıyor ve sonucu kullanıcıya
+    /// "ulaşılabildi / ulaşılamadı" diye DÖNÜYORDU. Bu, panelin ağından çalışan bir PORT
+    /// TARAYICISIDIR: <c>127.0.0.1:3306</c>, <c>10.0.0.5:445</c> gibi hedefler tek tek denenip
+    /// ayırt edilebiliyordu. Göçün asıl yolları (<c>FileMigrationService</c>) bu kapıdan zaten
+    /// geçiyordu; ön kontrol atlanmıştı — yani kapı kapalı, yanındaki pencere açıktı.
+    /// </para>
+    /// <para>
+    /// Yasak durumu "ulaşılamadı" ile AYNI mesajı vermez: kullanıcı adresini boşuna düzeltmesin,
+    /// açık kapının nerede olduğunu görsün diye ayrı bir metin döner.
+    /// </para>
+    /// </remarks>
+    private async Task<MigrationCheckDto> UlasimKontroluAsync(
+        string ad,
+        string host,
+        int port,
+        string basariliMetin,
+        string basarisizMetin,
+        CancellationToken cancellationToken)
+    {
+        var engellenen = await Support.OutboundAddressGuard.FindBlockedHostAsync(
+            host,
+            outboundResolver ?? Support.OutboundAddressGuard.SystemResolver,
+            Support.OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
+            cancellationToken);
+
+        if (engellenen is not null)
+        {
+            return Check(ad, false, "migration.validate.host_forbidden");
+        }
+
+        var ulasildi = await CanConnectAsync(host, port, cancellationToken);
+        return Check(ad, ulasildi, ulasildi ? basariliMetin : basarisizMetin);
+    }
 
     private static async Task<bool> CanConnectAsync(string host, int port, CancellationToken cancellationToken)
     {

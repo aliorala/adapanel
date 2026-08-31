@@ -916,6 +916,17 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     internal static void SanitizeForTests(CreateScheduledTaskRequest request) => SanitizeRequest(request);
 
     /// <summary>
+    /// Testlerin GERÇEKTEN kurulan komutu ölçebilmesi için (<see cref="ResolveAction"/>).
+    /// </summary>
+    /// <remarks>
+    /// Gerekli: "curl'e hangi bayraklar veriliyor" bir GÜVENLİK kararıdır ve kaynakta metin
+    /// aramakla doğrulanamaz — kararın yazıldığını değil, komutun o hâlde KURULDUĞUNU ölçmek
+    /// gerekir. Yeni bir HTTP yüzeyi açmaz; <c>internal</c>'dır.
+    /// </remarks>
+    internal static (string Execute, string Arguments, string WorkingDirectory) ResolveActionForTests(
+        CreateScheduledTaskRequest request) => ResolveAction(request);
+
+    /// <summary>
     /// URL görevinin adresi panelin ULAŞMAMASI gereken bir yere mi bakıyor.
     /// </summary>
     /// <remarks>
@@ -1260,7 +1271,40 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
             case "url":
                 // -f: HTTP hata kodunda başarısız say (Task Scheduler "son sonuç"a yansır), -sS: sessiz ama hatayı yaz,
                 // -L: yönlendirmeyi izle, 5 dk üst sınır + 2 tekrar: geçici ağ sorunlarında görev boşa düşmesin.
-                return ("curl.exe", $"-fsSL --max-time 300 --retry 2 \"{request.Url.Trim()}\"", workingDirectory);
+                //
+                // --proto / --proto-redir / --max-redirs: ÖLÇÜLEREK eklendi, bezeme değil.
+                // Bu makinede curl 8.19.0 ile ölçüldü (sahte yerel sunucu, 302 döndürüldü):
+                //   * VARSAYILAN hâlde curl yönlendirmeyi http/https'in YANINDA ftp/ftps'e de izler:
+                //     "Location: ftp://127.0.0.1/x" verildiğinde curl bu makinedeki FTP servisine
+                //     GERÇEKTEN bağlandı (curl: (67) Access denied: 530 — yani bağlantı kuruldu,
+                //     yalnız kimlik reddedildi). Görev SYSTEM olarak koştuğu için bu, müşterinin
+                //     verdiği bir adresin panelin iç servislerine soket açtırması demekti.
+                //     "=http,https" ile aynı yönlendirme "Protocol \"ftp\" disabled (in redirect)"
+                //     ile REDDEDİLDİ.
+                //   * file/gopher/smb/dict yönlendirmeleri bu curl sürümünde ZATEN kapalı çıktı
+                //     (üçü de ayrıca ölçüldü); bayrak onları da açıkça kapatır, yani ileride
+                //     varsayılanı değişen bir curl sürümü sessizce yeni bir kapı açamaz.
+                //   * --max-redirs 5: .NET tarafındaki denetlenen istemciyle AYNI tavan
+                //     (OutboundConnectGuard.CreateHandler). curl varsayılanı 50'dir ve bir
+                //     yönlendirme halkası görevi 5 dakikalık üst sınıra kadar döndürürdü.
+                //
+                // -L NEDEN ATILMADI (ölçüldü): -L olmadan curl 302'yi BAŞARI sayıp gövdeyi hiç
+                // istemiyor — çıkış kodu 0, çıktı BOŞ. Yani "http→https" ya da "www" yönlendirmesi
+                // olan her meşru cron adresi görev listesinde "başarılı" görünürken hiçbir şey
+                // çalıştırmayacaktı. Sessizce çalışmayan bir cron, hata veren bir cron'dan pahalıdır.
+                //
+                // KALAN AÇIK — DÜRÜSTÇE: adres denetimi (OutboundAddressGuard) görev KURULURKEN
+                // yapılır; curl'ün çalışma anında http/https yönlendirmesiyle 127.0.0.1'e ya da
+                // 169.254.169.254'e sapmasını hiçbir curl bayrağı engelleyemez (curl'de adres
+                // engel listesi YOKTUR — ölçüldü/arandı). Bunu kapatmanın tek yolu görevi curl
+                // yerine panelin DENETLENEN istemcisiyle çalıştırmaktır (yeni bir CLI fiili);
+                // o iş, Görev Zamanlayıcı üzerinde SYSTEM olarak sınanabildiği yerde AYRI olarak
+                // yapılmalı — burada sınanamayan bir değişikliği her müşterinin cron yoluna
+                // sokmak, kapattığından fazlasını kırardı.
+                return (
+                    "curl.exe",
+                    $"-fsSL --proto \"=http,https\" --proto-redir \"=http,https\" --max-redirs 5 --max-time 300 --retry 2 \"{request.Url.Trim()}\"",
+                    workingDirectory);
             case "php":
             {
                 var scriptPath = request.Command.Trim();
