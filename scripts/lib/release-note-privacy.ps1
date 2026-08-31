@@ -84,8 +84,26 @@ function Get-AdaReleaseNotePrivacyFindings {
     }
 
     # --- 3) E-POSTA ----------------------------------------------------------------------------
-    foreach ($m in [regex]::Matches($Metin, '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')) {
-        $bulgular.Add("e-posta: $($m.Value)")
+    # RFC 2606/6761 ILE AYRILMIS BELGELEME ALAN ADLARI SERBEST -- ve bu satiri bir YANLIS ALARM
+    # yazdirdi: 0.8.12 notu, posta sahteciligini ORNEK BIR SMTP DOKUMUYLE anlatiyor ve icinde
+    # "fatura@baska-musteri.example" geciyor. Bu adresler standartlarca TAM DA bu is icin
+    # ayrilmistir; ".example", ".test", ".invalid", ".localhost" ve "example.com/net/org"
+    # kimseye tahsis EDILEMEZ, dolayisiyla orada gercek bir kisinin adresi OLAMAZ.
+    #
+    # Kapi gevsetilmiyor, YANLIS OLAN kural duzeltiliyor -- link-local adreste alinan kararin
+    # aynisi. Yanlis alarm veren bir dogrulama aracini insan susturmayi ogrenir ve alistiktan
+    # sonra GERCEK bulguyu da gecer; aracin kendisinden tehlikeli hâle gelir.
+    #
+    # SON EKE bakilir, ICERMEYE degil: "example.com.kotu.tld" ayrilmis DEGILDIR ve yakalanmalidir.
+    $belgelemeAlanlari = @('.example', '.test', '.invalid', '.localhost',
+                           'example.com', 'example.net', 'example.org')
+
+    foreach ($m in [regex]::Matches($Metin, '\b[A-Za-z0-9._%+-]+@(?<alan>[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b')) {
+        $alan = $m.Groups['alan'].Value.TrimEnd('.').ToLowerInvariant()
+        $belgeleme = $belgelemeAlanlari | Where-Object { $alan -eq $_.TrimStart('.') -or $alan.EndsWith($_) }
+        if (-not $belgeleme) {
+            $bulgular.Add("e-posta: $($m.Value)")
+        }
     }
 
     # --- 4) CAGIRANA OZGU YASAKLI TERIMLER -----------------------------------------------------

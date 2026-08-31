@@ -41,6 +41,9 @@ $sinamalar = @(
     @{ Ad = "DESKTOP-";      Ek = "DESKTOP-A1B2C3 makinesinde.";      Bekleniyor = "YAKALAMALI" }
     @{ Ad = "WIN-";          Ek = "WIN-8HJ2K9LM sunucusunda.";        Bekleniyor = "YAKALAMALI" }
     @{ Ad = "link-local";    Ek = "169.254.169.254 tekrar geciyor";   Bekleniyor = "GECMELI" }
+    @{ Ad = "ornek adres";   Ek = "MAIL FROM:<fatura@baska.example>"; Bekleniyor = "GECMELI" }
+    @{ Ad = "ornek.com";     Ek = "Iletisim: kisi@example.com";       Bekleniyor = "GECMELI" }
+    @{ Ad = "sahte son ek";  Ek = "Adres: kisi@example.com.kotu.tld"; Bekleniyor = "YAKALAMALI" }
     @{ Ad = "panel surumu";  Ek = "Etiket 0.8.7.1 olarak atildi.";    Bekleniyor = "GECMELI" }
     @{ Ad = "belirsiz 4'lu"; Ek = "Bilesen surumu 1.2.3.4 idi.";      Bekleniyor = "YAKALAMALI" }
 )
