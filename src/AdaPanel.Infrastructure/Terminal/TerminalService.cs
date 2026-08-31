@@ -4,6 +4,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Terminal;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Options;
 
 namespace AdaPanel.Infrastructure.Terminal;
@@ -47,8 +48,19 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
             throw new AppException("terminal.start_failed", 500, 500);
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        // TAVANLI OKUMA. Eski hâli ReadToEndAsync idi: cikti TAMAMEN bellege aliniyor, sonra
+        // gosterim icin kirpiliyordu -- yani kirpma bellegi hic korumuyordu. Tek bir
+        // "Get-ChildItem C:\ -Recurse" paneli dusurmeye yeter.
+        //
+        // 0.8.9'da bu acik ProcessRunner'da kapatilmisti, ama terminal kendi surecini kuruyor
+        // (kodlanmis komut + calisma dizini) ve o kapidan GECMIYORDU. Bu depoda tekrar eden
+        // sinif: koruma yazilir, tek bir yola baglanir, kardes yol sessizce disarida kalir.
+        // Kural ikinci kez yazilmadi; ProcessRunner'in metodu paylasildi -- tavan asildiktan
+        // SONRA boruyu tuketmeye devam etme davranisi da (yoksa arac write'ta asilir) oradan geliyor.
+        var outputTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
+        var errorTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardError, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(request.TimeoutSeconds));
 

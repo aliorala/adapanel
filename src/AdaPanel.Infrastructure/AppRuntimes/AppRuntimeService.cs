@@ -11,6 +11,7 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using AdaPanel.Infrastructure.Support;
 
 namespace AdaPanel.Infrastructure.AppRuntimes;
 
@@ -353,7 +354,10 @@ public sealed partial class AppRuntimeService(
             return string.Empty;
         }
 
-        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+        // TAVANLI OKUMA: cikti tamamen bellege alinmamali. Kural ProcessRunner'da tek kaynakta;
+        // bu yol kendi surecini kurdugu icin oradan GECMIYORDU.
+        var output = await ProcessRunner.TavanliOkuAsync(
+            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
         return output
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(path => path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))

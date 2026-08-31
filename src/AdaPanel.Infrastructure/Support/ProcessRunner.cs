@@ -153,7 +153,14 @@ internal static class ProcessRunner
     /// durumdur ve depoda böyle bir çağıran YOKTUR (varsayılan <see cref="DefaultOutputCharLimit"/>).
     /// </para>
     /// </remarks>
-    private static async Task<string> TavanliOkuAsync(StreamReader reader, int tavan, CancellationToken cancellationToken)
+    /// <remarks>
+    /// <b>internal, cunku TERMINAL de bunu kullanir.</b> Terminal kendi surecini kuruyor (kodlanmis
+    /// komut + calisma dizini) ve <see cref="RunAsync"/>'ten gecmiyordu; sonuc olarak 0.8.9'da
+    /// burada kapatilan "sinirsiz cikti okuma" acigi terminal yolunda ACIK KALMISTI. Metodu
+    /// paylasmak, kurali ikinci kez yazmaktan iyidir -- bu depoda ikinci nushanin bedeli defalarca
+    /// olculdu.
+    /// </remarks>
+    internal static async Task<string> TavanliOkuAsync(StreamReader reader, int tavan, CancellationToken cancellationToken)
     {
         if (tavan <= 0)
         {

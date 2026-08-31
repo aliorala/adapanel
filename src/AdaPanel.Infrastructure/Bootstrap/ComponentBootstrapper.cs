@@ -2714,8 +2714,12 @@ public sealed class ComponentBootstrapper(
 
         using var process = System.Diagnostics.Process.Start(startInfo)
             ?? throw new AppException("software.signature_invalid", 400, 400);
-        var standardOutputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var standardErrorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        // TAVANLI OKUMA: kural ProcessRunner'da tek kaynakta; bu yol kendi surecini kurdugu
+        // icin oradan GECMIYORDU. Imza dogrulama araci beklenmedik bicimde cok yazabilir.
+        var standardOutputTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
+        var standardErrorTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardError, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
         await process.WaitForExitAsync(cancellationToken);
         var standardOutput = await standardOutputTask;
         var standardError = await standardErrorTask;
@@ -2840,8 +2844,12 @@ public sealed class ComponentBootstrapper(
             timeoutCts.CancelAfter(limit);
         }
 
-        var standardOutputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var errorOutputTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        // TAVANLI OKUMA: bilesen kurulumu dis bir yukleyici calistirir ve onun ne kadar
+        // yazacagini panel belirlemez. Kural ProcessRunner'da tek kaynakta.
+        var standardOutputTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
+        var errorOutputTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardError, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token);
