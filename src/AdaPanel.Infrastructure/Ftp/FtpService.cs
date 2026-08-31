@@ -1350,11 +1350,16 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
                 return;
             }
 
+            // MASKELENEREK yazilir. Bu yol FTP hesabi uzerinde `net user` calistirir ve o komutta
+            // parola KONUMSAL argumandir; basarisiz bir komutun ciktisi komut satirini geri
+            // yankilayabilir. Komut ayrintisi normalde `AppException` kurucusundan gecip orada
+            // maskeleniyor (0.8.9), ama burasi gunluge DOGRUDAN yaziyor -- yani tek kaynagin
+            // disindaydi. Nobetci bunu ILK KOSUSUNDA yakaladi.
             logger?.LogWarning(
                 "FTP hesabinin parola suresi kapatilamadi: {UserName}. Hesap {Gun} gun sonra baglanamaz hale gelebilir. {Detay}",
                 userName,
                 "MaxPasswordAge",
-                BuildCommandDetails(sonuc));
+                SecretRedactor.SanitizeDetails(BuildCommandDetails(sonuc)));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

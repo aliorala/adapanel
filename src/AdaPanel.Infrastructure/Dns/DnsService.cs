@@ -1632,11 +1632,16 @@ public sealed partial class DnsService(
             var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
             if (!result.Success)
             {
+                // MASKELENEREK yazılır. Komut ayrıntısı normalde `AppException` kurucusundan
+                // geçer ve orada maskelenir (0.8.9); BURASI günlüğe DOĞRUDAN yazan tek yerdi,
+                // yani tek kaynağın dışında kalmıştı. TXT kaydının değeri kiracının yazdığı
+                // serbest metindir ve başarısız komutun stderr'i o değeri geri yankılar —
+                // doğrulama jetonu, API anahtarı, ne konduysa. Aynı kapıdan geçirmenin bedeli yok.
                 logger.LogWarning(
                     "Uzun TXT kaydi yazilamadi ({Zone} / {Host}): {Error}",
                     state.ZoneName,
                     record.Host,
-                    BuildCommandDetails(result));
+                    SecretRedactor.SanitizeDetails(BuildCommandDetails(result)));
             }
         }
     }
