@@ -3,6 +3,7 @@ import { AxiosError } from "axios";
 import { apiClient, clearCsrfToken } from "../api/client";
 import { deleteUser as deleteUserRequest } from "../api/users";
 import { resolveFailureDetail, resolveFailureKey, type TransportFailure } from "../utils/apiError";
+import { resetAllStores } from "./resetAll";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -201,6 +202,16 @@ export const useAuthStore = defineStore("auth", {
       this.auditLogs = [];
       this.securitySettings = null;
       this.twoFactorSetup = null;
+
+      // BÜTÜN store'lar burada sıfırlanır, çağıran tarafta değil. Ölçüldü: çıkış yalnız bu
+      // store'u ve subscription'ı temizliyordu; geriye siteler/veritabanları/uygulamalar/sistem
+      // gibi 9 store veriyle kalıyordu. Paylaşılan bir bilgisayarda sonraki kullanıcı, kendi
+      // verisi gelene kadar ÖNCEKİNİN listesini görebiliyordu.
+      //
+      // Çağıran tarafta değil BURADA olmasının sebebi: çıkış yolu birden fazla yerden
+      // tetiklenebilir (düğme, oturum düşmesi) ve temizliği çağırana bırakmak, yeni bir çıkış
+      // yolunun onu sessizce atlaması demekti.
+      resetAllStores();
     },
     async beginTwoFactorSetup() {
       const response = await apiClient.post<ApiEnvelope<TwoFactorSetup>>("/auth/2fa/begin", {});
