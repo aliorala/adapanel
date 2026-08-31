@@ -88,4 +88,36 @@ public sealed class GrantWildcardTests
         // Kacirilmis halde "_" artik joker degil, harfi harfine kendisi.
         Assert.Contains(@"\_", Escape(verilen), System.StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// ONARIM RAPORU, CAPRAZ ERISIMIN KALDIRILMADIGINI SOYLEMELI.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Yalitilmis MariaDB 11.8.3'te SURULDU: kacirilmamis bir yetki
+    /// (<c>adapanel_test_kiraciA_db</c>) komsu <c>adapanel_test_kiraciAXdb</c>'yi de kapsiyordu ve
+    /// o kiraci komsunun verisini OKUDU. <c>RepairAsync</c> calistiktan sonra desen daraltildi
+    /// (yeni acilan eslesen adli veritabani artik KAPSAM DISI, olculdu) -- ama zaten kapsanan IKI
+    /// veritabanina da dar yetki verildigi icin capraz erisim OLDUGU GIBI KALDI.
+    /// </para>
+    /// <para>
+    /// Bu bilincli: erisimi kormelesine kesmek calisan bir siteyi durdururdu. Ama rapor bunu
+    /// SOYLEMEZSE, "sertlestir" dugmesine basan yonetici acigin kapandigini sanir. Nobetci tam
+    /// olarak o yanilgiyi olcer.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void RepairReport_FlagsGrantsThatStillCoverMoreThanOneDatabase()
+    {
+        var uyarili = AdaPanel.Infrastructure.Database.GrantWildcardRepair.Rapor("musteri1", "localhost", ["musteri1_db", "musteri1Xdb"]);
+        Assert.Contains("DIKKAT", uyarili, System.StringComparison.Ordinal);
+        Assert.Contains("musteri1Xdb", uyarili, System.StringComparison.Ordinal);
+
+        // FAZLA-UYARI NOBETCISI: tek veritabanini kapsayan temiz daraltma UYARI URETMEZ.
+        // Her satiri "DIKKAT" ile isaretlemek, uyariyi hicbir sey soylemeyen bir gurultuye
+        // cevirir ve gercek olani gizlerdi.
+        var temiz = AdaPanel.Infrastructure.Database.GrantWildcardRepair.Rapor("musteri2", "localhost", ["musteri2_db"]);
+        Assert.DoesNotContain("DIKKAT", temiz, System.StringComparison.Ordinal);
+        Assert.Contains("musteri2_db", temiz, System.StringComparison.Ordinal);
+    }
 }

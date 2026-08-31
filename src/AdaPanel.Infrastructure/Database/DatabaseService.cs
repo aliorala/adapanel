@@ -47,7 +47,8 @@ internal sealed partial class DatabaseService(
                 {
                     Engine = descriptor.EngineKey,
                     DisplayName = descriptor.DisplayName,
-                    Installed = false
+                    Installed = false,
+                    SupportsHardening = SupportsHardening(descriptor.EngineKey)
                 });
                 continue;
             }
@@ -825,6 +826,25 @@ internal sealed partial class DatabaseService(
 
     private static int DefaultExternalPort(DbEngine engine) => DatabaseProfiles.DefaultExternalPort(engine);
 
+    /// <summary>
+    /// Motorun sertlestirme yetenegi -- MOTORUN KENDI saglayicisindan okunur, elle listelenmez.
+    /// </summary>
+    /// <remarks>
+    /// Saglayici bulunamiyorsa (kurulu olmayan/desteklenmeyen motor) <c>false</c> doner;
+    /// yetenegi "var" diye varsaymak, arayuzde calismayan bir dugme demek olurdu.
+    /// </remarks>
+    private bool SupportsHardening(string engineKey)
+    {
+        try
+        {
+            return ResolveProvider(ParseEngine(engineKey)).SupportsHardening;
+        }
+        catch (AppException)
+        {
+            return false;
+        }
+    }
+
     private DatabaseEngineStatusDto BuildEngineStatus(
         EngineDescriptor descriptor,
         InstalledComponent component,
@@ -849,7 +869,8 @@ internal sealed partial class DatabaseService(
             SystemDetected = systemDetected,
             Host = "127.0.0.1",
             Port = port,
-            AdminUserName = adminUser
+            AdminUserName = adminUser,
+            SupportsHardening = SupportsHardening(descriptor.EngineKey)
         };
     }
 

@@ -1312,3 +1312,113 @@ okunan degerin bayt bayt ayni oldugu dogrulandi.
 - Farkli SUNUCULAR arasi sahtecilik (tek dugum).
 - Roundcube/webmail'in From kimlikleriyle Senaryo 3 blogunun etkilesimi gercek webmail'de
   denenmedi (SMTP seviyesinde denendi).
+
+---
+
+## VERITABANI KIRACI IZOLASYONU DENETIMI (31.08.2026) -- commit ATILMADI
+
+Olcum icin YALITILMIS ornekler kuruldu; kurulu panele (8890) ve makinedeki hicbir mevcut
+veritabanina DOKUNULMADI. MariaDB 11.8.3 -> `127.0.0.1:13306`, PostgreSQL 16.14 (components.json'un
+sevk ettigi surum) -> `127.0.0.1:15432`. Ikisi de yalniz loopback'i dinliyor. Test nesneleri
+BIRAKILDI (silinmedi), adlari `adapanel_test_*`.
+
+### TEMIZ CIKANLAR (bir sonraki tur burayi aramasin)
+
+| Soru | Olcum | Sonuc |
+|---|---|---|
+| MySQL hibe kapsami joker mi | Kacirilmamis `GRANT ... ON` + ters tirnakli `a_db` ile komsu `aXdb` GERCEKTEN okundu; `EscapeGrantDatabaseName` ciktisi (`a\_db`) ile `ERROR 1142` | KAPALI (onceki tur) |
+| `SHOW DATABASES` sizinti | Kacirilmis hibeli kullanici yalniz kendi DB'sini + `information_schema` gordu | TEMIZ |
+| `information_schema` uzerinden komsunun sema/tablo/sutun adlari | 0 satir; `mysql.user` `ERROR 1142` | TEMIZ (motor yetkiye gore suzuyor) |
+| FILE / SUPER / PROCESS / RELOAD sizmis mi | `SHOW GRANTS` = yalniz `USAGE ON *.*` + tek DB; `LOAD_FILE`=NULL, `INTO OUTFILE` 1045, `SET GLOBAL` 1227, `SHOW PROCESSLIST` yalniz kendi is parcacigi | TEMIZ |
+| Yeni kiraci hesabinin host'u | `MySqlAccountHosts.SafeCreationHost` -> `@'localhost'` (`DatabaseService.NewUserHost`) | TEMIZ |
+| Root parolasinin HTTP'ye donmesi | `DatabaseWorkspaceDto.AdminPassword` YALNIZ `DatabasesController` (admin-only) tarafindan seri hale getiriliyor; `SitesController` ayni servisi cagirir ama DTO'yu donmez | TEMIZ |
+| `db-credentials.json` dosya yoneticisinden okunabilir mi | `FileService.ResolveTargetAsync` yalniz `sites` kokunu kabul eder | TEMIZ |
+| MCP arac yuzeyi | `AdaPanelReadTools`/`WriteTools` icinde veritabani araci YOK (bilerek) | TEMIZ |
+| Self-servis silme kapsami | `ResellerDatabasesController.DeleteAsync` sahiplik kaydiyla dogruluyor; kayit yoksa `null != Guid` -> 403 | TEMIZ |
+| `restore-items` ile capraz DB geri yukleme | O yol dokum ICE AKTARMAZ, yalnizca dosya cikarir; `ImportDatabasesFromArchiveAsync` cagiranlarinin hepsi admin-only | TEMIZ |
+
+### BULGU 1 -- KAPATILDI: site yedegi ile CAPRAZ KIRACI VERI SIZDIRMA (kritik)
+
+`BackupController.BackupSiteAsync` yalniz `request.SiteName`'i denetliyordu. `request.Databases`
+GOVDEDEN geliyor (`BackupSiteRequest.Databases`), `BackupService.cs:1124-1134` onu dogrudan
+`ExportDumpAsync`'e veriyor ve dokum panelin KOK kimligiyle aliniyor. Yani kiraci KENDI sitesinin
+adini + BASKASININ veritabanini yazip arsivi `GET /backup/{id}/download` ile indirebiliyordu;
+indirme denetimi arsivi kendi sitesinin yedegi gordugu icin geciyordu. Deponun bilinen hata
+sinifi: **kapsam denetimi dogru, denetlenen degeri kiraci seciyor.**
+
+Kural `SitesController`'in ozel metodundan cikarilip **tek adrese** tasindi:
+`CustomerAccess.ResolveDatabaseScopeAsync` / `EnsureDatabaseAsync` (+ `TenantDatabaseScope`).
+`SitesController` artik ayni kaynagi kullanan ince bir sarmalayici. Iki kopya olsaydi biri
+duzelir, oteki sessizce acik kalirdi -- nitekim tam olarak bu olmustu.
+
+### BULGU 2 -- KAPATILDI: PostgreSQL'de her kiraci her veritabanina BAGLANABILIYOR
+
+Yalitilmis PG 16.14'te surulup olculdu: A kiracisinin rolu B'nin veritabanina baglandi ve
+`pg_class`/`pg_attribute` uzerinden B'nin TUM tablo + SUTUN adlarini okudu. Sebep: PostgreSQL
+`CONNECT` yetkisini her veritabaninda `PUBLIC`'e VERILMIS olarak dogurur; panelin `pg_hba.conf`'u
+`host all all 127.0.0.1/32` yazar, yani "hangi veritabani" sorusuna karismaz. (Satir verisi
+GELMEDI: tablo yetkisi PUBLIC'te yok. `information_schema` ve `CREATE` de suzuldu. Yani veri
+degil, kurbanin SEMASI siziyordu.) Kod bu gercegi zaten BILIYORDU -- `ReadAllGrantedDatabasesAsync`
+yorumu "PUBLIC'e verilmis CONNECT yuzunden her rol her veritabani icin dogru doner" diyor, ama
+yalniz raporlamada dolaniliyor, yetki kaldirilmiyordu.
+
+### BULGU 3 -- KAPATILDI: PostgreSQL saglama yolu SEVK EDILEN SURUMDE KIRIKTI
+
+Ayni olcumde: `GRANT ALL PRIVILEGES ON DATABASE x TO u` almis bir kiraci KENDI veritabaninda
+`CREATE TABLE` YAPAMIYORDU ("public semasina erisim engellendi"). PostgreSQL 15, `PUBLIC`'in
+`public` semasi uzerindeki `CREATE` hakkini kaldirdi; veritabani duzeyi yetki sema duzeyine
+inmiyor. components.json PostgreSQL 16.14 sevk ediyor -> panelin PG destegi kutudan cikti hali
+kullanilamazdi.
+
+Iki bulgunun duzeltmesi TEK yerde, `PostgreSqlDatabaseProvider.IsolateDatabaseAsync` (kiracinin
+veritabanina baglandigi tek nokta): `REVOKE ALL ON DATABASE x FROM PUBLIC` + hedef veritabanina
+baglanip `GRANT ALL ON SCHEMA public TO u`. Ikincisi ayni zamanda birincisinin FAZLA-KAPATMA
+nobetcisi. Canli dogrulandi: A -> B baglantisi `FATAL: ... erisim engellendi`, kiraci kendi
+veritabaninda tablo olusturup okudu, `postgres` super-kullanicisi etkilenmedi.
+
+### BULGU 4 -- KAPATILDI: yazilan PostgreSQL sertlestirmesi CAGRILAMIYORDU
+
+`DatabasesView.vue`'de `hardeningSupported = engine === "mysql" || engine === "mariadb"` SABITI
+vardi. Yetenek artik motorun kendi saglayicisindan geliyor
+(`IDatabaseEngineProvider.SupportsHardening` -> `DatabaseEngineStatusDto.SupportsHardening`),
+arayuz yalniz bayragi okuyor. (Ayni sabit daha once ters yonde de hata yapmisti: dugme her
+motorda gorunup hicbir sey yapmadan "sertlestirildi" diyordu.)
+
+### MEVCUT KURULUMLAR
+
+* **MySQL:** `GrantWildcardRepair` (sertlestir dugmesi) CANLI dogrulandi -- desen daraliyor, YENI
+  acilan eslesen adli veritabani artik kapsam disi. **Ama zaten kapsanan veritabanlarina erisim
+  KORUNUYOR** (bilerek: calisan bir siteyi sessizce koparmamak icin). Yani onarim capraz erisimi
+  DONDURUR, kaldirmaz. Rapor bunu soylemiyordu; artik birden cok veritabanini kapsayan her satir
+  `DIKKAT ... gozden gecirin` ile isaretleniyor. Kaldirma karari (hangi DB kimin) insana ait.
+* **PostgreSQL:** `PostgreSqlDatabaseProvider.HardenAdminAccountsAsync` eklendi. Yalniz ACIK
+  yetkilisi (ACL girdisi ya da super olmayan sahibi) OLAN veritabanlarinda PUBLIC kaldirilir;
+  acik yetkilisi olmayan veritabani ATLANIR ve raporda "acik birakildi" diye gorunur -- orada
+  REVOKE yazmak calisan bir baglantiyi koparirdi. Kesif sorgusu + atlama davranisi + idempotentlik
+  canli olculdu.
+
+### BILEREK KAPATILMADI / ACIK KALAN
+
+* **MariaDB `bind-address=0.0.0.0`** (`ComponentBootstrapper.EnsureMariaDbBindAddressAsync`).
+  Bilincli karar (uzak erisim toggle'i icin), kapi Windows Guvenlik Duvari. NOT: ayni dosyada
+  3657. satirdaki yorum "127.0.0.1 baglamasini ekle" diyor, kod 3734'te `0.0.0.0` yaziyor --
+  yorum kodla CELISIYOR, karar dogru olsa bile yaniltici.
+* **PostgreSQL `pg_database` katalogu** her role acik: kiraci diger veritabanlarinin ADLARINI
+  gorebilir (veriye erisemez). PG'de bu katalog yetkisi kapatilamaz.
+* **Ad-oracle:** `POST /my-databases` ve `POST /sites`, var olan bir veritabani/kullanici adinda
+  409 doner -> baska kiracilarin DB/kullanici adlari numaralandirilabilir.
+* **Kota kimligi:** `SitesController.cs:944` ve `ResellerDatabasesController.cs:53`
+  `GetScopeAsync(userId)` ile okuyor ama sayimi `subscriptionId` ile yapiyor; kendi kaydinda
+  `MaxDatabases=0` olan bir ALT KULLANICIDA DB kotasi dayatilmiyor. Sizinti degil, kota kacagi.
+* **Site adi araziciligi:** sahiplik kaydi OLMAYAN bir veritabani, adiyla ayni ada sahip bir site
+  acilarak sahiplenilebilir (`EnsureSiteNameIsClaimableAsync` yalniz var olan IIS sitelerini
+  reddediyor). Ad-eslesme kurali bilincli bir odunlesim; kaldirmak panel disinda acilmis
+  veritabanlarinin mesru yedegini/baglamasini kirardi.
+
+### OLCEMEDIKLER
+* Kurulu paneldeki (8890) MariaDB/PostgreSQL: makinede kurulu motor YOK
+  (`C:\ProgramData\AdaPanel\runtimes\mariadb\11` yalniz bos bir `data` klasoru). Butun olcumler
+  yalitilmis kopyalarda.
+* MSSQL yolu (`MsSqlDatabaseProvider`) hic surulmedi; kurulu ornek yok.
+* Uctan uca HTTP ile yedek sizdirma senaryosu (gercek oturum + indirme) surulmedi; acik kod
+  yolundan ve birim testinden dogrulandi.

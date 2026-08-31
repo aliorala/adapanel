@@ -114,6 +114,33 @@ internal static class GrantWildcardRepair
     }
 
     /// <summary>
+    /// Daraltılan bir yetkinin yöneticiye dönen açıklaması.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// TEK KAPSANAN = temiz daraltma: yetki zaten tek bir veritabanını hedefliyordu, joker
+    /// yalnızca gelecekteki adları kapsıyordu.
+    /// </para>
+    /// <para>
+    /// BİRDEN ÇOK KAPSANAN = bu hesap, joker yüzünden BAŞKA veritabanlarına da erişebiliyordu ve
+    /// daraltma o erişimi <b>KORUR</b> (gerekçe <see cref="RepairAsync"/> içinde: çalışan bir
+    /// siteyi sessizce koparmamak). Yani onarımdan sonra çapraz erişim DONDURULMUŞ olur,
+    /// kaldırılmış değil.
+    /// </para>
+    /// <para>
+    /// İkisini ayırt etmeden yazmak, "sertleştir"i çalıştıran yöneticiye erişimin kalktığını
+    /// DÜŞÜNDÜRÜRDÜ — oysa kaydın cevaplaması gereken soru tam olarak budur. Kaldırma kararı
+    /// (hangi veritabanı kimin) panelin sahiplik kaydına bakan bir insanın kararıdır; burada
+    /// körlemesine <c>REVOKE</c> yazmak açığın kendisinden pahalı olurdu.
+    /// </para>
+    /// </remarks>
+    internal static string Rapor(string kullanici, string konak, IReadOnlyList<string> kapsanan) =>
+        kapsanan.Count > 1
+            ? $"{kullanici}@{konak} → {string.Join(", ", kapsanan)} "
+              + $"(DIKKAT: bu hesap {kapsanan.Count} veritabanina birden erisiyordu; erisim KORUNDU, gozden gecirin)"
+            : $"{kullanici}@{konak} → {kapsanan[0]}";
+
+    /// <summary>
     /// Geniş yetkileri daraltır; daraltılan her yetkinin açıklamasını döndürür.
     /// <para>
     /// Yalnızca desenin GERÇEKTEN var olan bir veritabanına karşılık geldiği durumlarda işlem
@@ -194,7 +221,7 @@ internal static class GrantWildcardRepair
                     await revoke.ExecuteNonQueryAsync(cancellationToken);
                 }
 
-                daraltilan.Add($"{kullanici}@{konak} → {string.Join(", ", kapsanan)}");
+                daraltilan.Add(Rapor(kullanici, konak, kapsanan));
             }
             catch (MySqlException)
             {

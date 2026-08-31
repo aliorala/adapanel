@@ -323,14 +323,43 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         //
         // Sitenin kökünün KENDİSİ geçerlidir: "public"ten proje köküne geri dönmek meşru bir
         // işlemdir ve en olağan durumdur.
+        //
+        // SINIR SİTE DEĞİL KİRACIDIR — ve bu, kullanıcı bildirimiyle düzeltildi. Önceki hâl
+        // yalnız DÜZENLENEN sitenin kökünü kabul ediyordu; oysa alt alan adı AYRI BİR SİTEDİR ve
+        // en olağan kullanım tam da şudur: "webtv.ornek.com" alt alan adını ana sitedeki
+        // "httpdocs/iptv/public" klasörüne bakacak şekilde ayarlamak (Plesk'in olağan davranışı).
+        // Site sınırı bunu 403 ile reddediyordu — yani koruma, kiracıyı BAŞKASININ klasöründen
+        // korurken KENDİ klasöründen de koruyordu.
+        //
+        // Yeni kural: yol, kiracının SAHİP OLDUĞU sitelerden HERHANGİ BİRİNİN kökünde olabilir.
+        // Çapraz kiracı koruması aynen duruyor — küme kapsam servisinden geliyor, istekten değil
+        // (bu depoda kapanmış hata sınıfı: "kapsam denetimi doğru ama denetlenen değeri kiracı
+        // seçiyor"). Kapsamsız rol (operator) için davranış DEĞİŞMEDİ: küme null döner ve eski
+        // tek-site kuralı uygulanır; bu düzeltmenin amacı kiracıya alan açmak, kapsamsız role
+        // yeni yetki vermek değil.
         if (!User.IsInRole("Administrator"))
         {
             var mevcut = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-            var kok = string.IsNullOrWhiteSpace(mevcut.ApplicationRootPath)
+            var duzenlenenKok = string.IsNullOrWhiteSpace(mevcut.ApplicationRootPath)
                 ? mevcut.PhysicalPath
                 : mevcut.ApplicationRootPath;
 
-            if (!PathContainment.IsRootOrInside(kok, request.PhysicalPath))
+            List<string>? kiracininKokleri = null;
+            var kiracininSiteleri = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, cancellationToken);
+            if (kiracininSiteleri is not null)
+            {
+                // TEK çağrı: kiracının site sayısı kadar IIS okuması yapmak, olağan bir ayar
+                // değişikliğini site sayısıyla birlikte yavaşlatırdı.
+                var hepsi = await iisSiteService.GetSitesAsync(cancellationToken);
+                kiracininKokleri = hepsi
+                    .Where(site => kiracininSiteleri.Contains(site.Name, StringComparer.OrdinalIgnoreCase))
+                    .Select(site => string.IsNullOrWhiteSpace(site.ApplicationRootPath)
+                        ? site.PhysicalPath
+                        : site.ApplicationRootPath)
+                    .ToList();
+            }
+
+            if (!SiteDocumentRootScope.IsAllowed(request.PhysicalPath, duzenlenenKok, kiracininKokleri))
             {
                 return StatusCode(403, ApiResponse<SiteDto>.Fail("sites.document_root_outside_site", 403));
             }
@@ -924,81 +953,22 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     }
 
     /// <summary>
-    /// Bu kullanıcının BAĞLAYABİLECEĞİ/GÖREBİLECEĞİ veritabanlarını belirler. <c>null</c> =
-    /// kısıtsız (yönetici).
+    /// Bu kullanıcının BAĞLAYABİLECEĞİ/GÖREBİLECEĞİ veritabanları. <c>null</c> = kısıtsız (yönetici).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// İki açığı birden kapatır ve ikisi de aynı soruyu sorduğu için kural TEK yerde:
+    /// Kural artık <see cref="CustomerAccess.ResolveDatabaseScopeAsync"/> içinde, kapsam
+    /// denetimlerinin TEK adresinde. Burada duruyordu ve doğruydu; ama yalnız burada bilindiği
+    /// için veritabanı adını kiracıdan alan İKİNCİ uç (site yedeği) hiç denetlenmeden kalmıştı.
+    /// Bu metot yalnızca çağrı yerlerini kısaltan bir sarmalayıcıdır.
     /// </para>
-    /// <list type="bullet">
-    /// <item>
-    /// <b>Aday listesi sızıntısı:</b> uç, kurulu her motordaki TÜM veritabanlarını "aday" diye
-    /// döndürüyordu; bir müşteri sunucudaki bütün veritabanı adlarını (dolayısıyla diğer
-    /// kiracıların müşteri/proje adlarını) görüyordu.
-    /// </item>
-    /// <item>
-    /// <b>Bağlama:</b> site kapsamı doğrulanıyordu ama veritabanı adı serbestti. Başkasının
-    /// veritabanını kendi sitesine bağlayan kiracı, sonra sitesini silince cascade o
-    /// veritabanını <b>DROP</b> ediyordu.
-    /// </item>
-    /// </list>
     /// <para>
-    /// Sahiplik iki kaynaktan okunur: (1) sahiplik kaydı (<see cref="IDatabaseOwnershipService"/>),
-    /// (2) ad eşleşmesi — sitenin adı ya da <c>DatabaseNameFromSite</c>. İkincisi şart: panel
-    /// dışında ya da sahiplik kaydı tutulmadan önce açılmış veritabanlarının kaydı yoktur ve
-    /// yalnız kayda bakmak, bugün çalışan meşru bağlamayı kırardı.
+    /// Kapattığı iki açık (gerekçe orada yazılı): aday listesi sızıntısı ve başkasının
+    /// veritabanını kendi sitesine bağlayıp cascade ile DROP ettirme.
     /// </para>
     /// </remarks>
-    private async Task<LinkableDatabases?> ResolveLinkableDatabasesAsync(CancellationToken cancellationToken)
-    {
-        var kapsamdakiSiteler = await CustomerAccess.GetEffectiveSitesAsync(customerScopes, User, cancellationToken);
-        if (kapsamdakiSiteler is null)
-        {
-            return null; // yönetici
-        }
-
-        // (1) sahiplik kaydı — MOTOR + AD birlikte eşleşmeli. Yalnız ada bakmak, MySQL'de "test"
-        // veritabanı olan birine PostgreSQL'deki BAŞKASININ "test"ini açardı.
-        var sahipli = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var sahipler = new List<Guid> { await CustomerAccess.GetSubscriptionUserIdAsync(customerScopes, User, cancellationToken) };
-        if (CustomerAccess.IsReseller(User))
-        {
-            sahipler.AddRange(await customerScopes.GetOwnedUserIdsAsync(User.GetRequiredUserId(), cancellationToken));
-        }
-
-        foreach (var sahip in sahipler.Distinct())
-        {
-            foreach (var (engine, databaseName) in await dbOwnership.GetOwnedAsync(sahip, cancellationToken))
-            {
-                sahipli.Add(LinkableDatabases.Anahtar(engine, databaseName));
-            }
-        }
-
-        // (2) ad eşleşmesi — kapsamdaki her site için. Burada motor ayrımı YOK: bu kural, sahiplik
-        // kaydı hiç tutulmamış (panel dışında ya da kayıt öncesi açılmış) veritabanları içindir ve
-        // hangi motorda olduğu bilinmez. Ada göre siteye ait sayılan bir veritabanı zaten o
-        // kiracınındır.
-        var adEslesen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var site in kapsamdakiSiteler)
-        {
-            adEslesen.Add(site.Trim());
-            adEslesen.Add(AdaPanel.Core.Common.ResourceNaming.DatabaseNameFromSite(site));
-        }
-
-        return new LinkableDatabases(sahipli, adEslesen);
-    }
-
-    /// <summary>Kiracının bağlayabileceği veritabanları: motor+ad ile sahipli olanlar + ada göre siteye ait olanlar.</summary>
-    private sealed record LinkableDatabases(HashSet<string> Sahipli, HashSet<string> AdEslesen)
-    {
-        public static string Anahtar(string? engine, string? name) =>
-            $"{(engine ?? string.Empty).Trim()}|{(name ?? string.Empty).Trim()}";
-
-        public bool Icerir(string? engine, string? name) =>
-            Sahipli.Contains(Anahtar(engine, name)) ||
-            AdEslesen.Contains((name ?? string.Empty).Trim());
-    }
+    private Task<TenantDatabaseScope?> ResolveLinkableDatabasesAsync(CancellationToken cancellationToken) =>
+        CustomerAccess.ResolveDatabaseScopeAsync(customerScopes, dbOwnership, User, cancellationToken);
 
     // M1: admin olmayan oluşturucunun yeni sitesini kendi kapsamına ekler (yoksa). OwnerId korunur (SetScopeAsync).
     private async Task AssignSiteToActorAsync(string siteName, CancellationToken cancellationToken)

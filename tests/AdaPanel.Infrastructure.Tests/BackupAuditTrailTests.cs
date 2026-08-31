@@ -184,7 +184,15 @@ public sealed class BackupAuditTrailTests
             new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = isKoku })),
             NullLogger<RunningJobService>.Instance);
 
-        return new BackupController(yedekServisi, new SahiplikKapsami(), new SahteProgramServisi(), calisanIsler, denetim)
+        return new BackupController(
+            yedekServisi,
+            new SahiplikKapsami(),
+            // Bu testler YONETICI olarak kosuyor; kapsam denetimi yoneticiyi muaf tutar, yani
+            // sahiplik kaydina hic sorulmaz. Sorulursa test yanlis kurulmustur.
+            new ResellerSiteAssignmentTests.KullanilmayanDbSahiplik(),
+            new SahteProgramServisi(),
+            calisanIsler,
+            denetim)
         {
             ControllerContext = new ControllerContext
             {

@@ -32,6 +32,16 @@ internal interface IDatabaseEngineProvider
     Task<IReadOnlyList<string>> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
 
+    /// <summary>
+    /// <see cref="HardenAdminAccountsAsync"/> bu motorda anlamli bir is yapiyor mu.
+    /// </summary>
+    /// <remarks>
+    /// Varsayilan <c>false</c>: uygulamayan motor "sertlestirdim" demez. Arayuzun dugmeyi hangi
+    /// motorlarda gosterecegi buradan okunur -- orada sabit bir motor listesi tutmak, yazilan
+    /// bir sertlestirmenin cagrilamadan olu kalmasina yol acmisti (bkz. DatabaseEngineStatusDto).
+    /// </remarks>
+    bool SupportsHardening => false;
+
     // K2 (parolasız-root açığı): yerel root hesaplarına (localhost/127.0.0.1/::1) güçlü parola koyar, tam
     // yetki verir ve yeni parolayı DOĞRULAR. Atomik akışın "uygula" adımı (saklama/rollback servis katmanında).
     // Yalnız MySQL/MariaDB anlamlı uygular; diğer motorlar no-op (parolasız-root onlara özgü değil).

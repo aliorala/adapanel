@@ -16,6 +16,7 @@ namespace AdaPanel.Api.Controllers;
 public sealed class BackupController(
     IBackupService backupService,
     ICustomerScopeService customerScopes,
+    IDatabaseOwnershipService dbOwnership,
     ISubscriptionBackupScheduleService backupSchedules,
     IRunningJobService runningJobs,
     IAuditService auditService) : ControllerBase
@@ -306,10 +307,36 @@ public sealed class BackupController(
             subjectUserId,
             cancellationToken);
 
+    /// <summary>
+    /// Tek bir sitenin yedeği. Kapsam denetimi HEM siteye HEM gövdedeki veritabanı listesine uygulanır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK (çapraz-kiracı veri sızdırma):</b> burada yalnız <c>request.SiteName</c>
+    /// denetleniyordu. <c>request.Databases</c> ise gövdeden geliyor ve
+    /// <c>BackupService</c> onu doğrudan <c>ExportDumpAsync</c>'e veriyor — döküm panelin
+    /// KÖK/yönetici kimliğiyle alınır, yani her veritabanı erişilebilir. Kiracı KENDİ sitesinin
+    /// adını, gövdede ise BAŞKASININ veritabanını verip arşivi
+    /// <c>GET /api/v1/backup/{'{'}id{'}'}/download</c> ile indirebiliyordu; indirme denetimi arşivi
+    /// kendi sitesinin yedeği gördüğü için geçiyordu. Dosya izolasyonundaki (0.8.8) sınıfın
+    /// veritabanı hâli: <b>kapsam denetimi doğru, denetlenen değeri kiracı seçiyor.</b>
+    /// </para>
+    /// <para>
+    /// Denetim <see cref="CustomerAccess.EnsureDatabaseAsync"/> ile yapılır; site↔veritabanı
+    /// bağlama ucuyla AYNI kuralı kullanır. Kiracı kendi veritabanını yedeklemeye devam eder
+    /// (sahiplik kaydı ya da site adı eşleşmesi), yönetici muaftır.
+    /// </para>
+    /// </remarks>
     [HttpPost("site")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupSiteAsync([FromBody] BackupSiteRequest request, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
+
+        foreach (var veritabani in request.Databases ?? [])
+        {
+            await CustomerAccess.EnsureDatabaseAsync(
+                customerScopes, dbOwnership, User, veritabani.Engine, veritabani.DatabaseName, cancellationToken);
+        }
 
         // Sahip İŞTEN ÖNCE çözülür: çalışan-iş kaydı da denetim kaydı da aynı sahibi taşımalı ve
         // sahiplik yedek sırasında değişse bile ikisi tutarlı kalmalı.

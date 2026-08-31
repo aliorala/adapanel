@@ -410,6 +410,8 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
         return removed;
     }
 
+    public bool SupportsHardening => true;
+
     public string RemoteAccessMechanism => "mysqlHost";
 
     public async Task<IReadOnlyDictionary<string, RemoteAccessFacts>> ReadRemoteAccessAsync(

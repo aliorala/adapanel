@@ -425,4 +425,109 @@ public static class CustomerAccess
     {
         return await GetEffectiveSitesAsync(scopes, user, cancellationToken);
     }
+
+    /// <summary>
+    /// Kiracının erişebileceği VERİTABANLARI; kapsamsız rol (yönetici/operatör) için <c>null</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden burada:</b> bu kural daha önce <c>SitesController</c>'ın içinde ÖZEL bir metotta
+    /// duruyordu ve orada doğruydu. Ama kural yalnız orada bilindiği için, veritabanı adını
+    /// kiracıdan alan İKİNCİ uç (site yedeği, <c>BackupSiteRequest.Databases</c>) hiç
+    /// denetlenmeden kaldı: kiracı kendi sitesinin adını verip GÖVDEDE başkasının veritabanını
+    /// listeliyor, panel o veritabanının dökümünü kiracının indirebildiği arşive koyuyordu.
+    /// Site kapsamı doğrulanıyordu — ama denetlenen değer kiracının seçtiği değerdi.
+    /// </para>
+    /// <para>
+    /// Bu yüzden kural kapsam denetimlerinin TEK adresine taşındı. Aynı sorunun iki kopyası
+    /// olsaydı biri düzelir, öteki sessizce açık kalırdı.
+    /// </para>
+    /// <para>
+    /// Sahiplik İKİ kaynaktan okunur ve ikisi de gereklidir:
+    /// </para>
+    /// <list type="number">
+    /// <item>
+    /// <b>Sahiplik kaydı</b> (<see cref="IDatabaseOwnershipService"/>) — MOTOR + AD birlikte
+    /// eşleşir. Yalnız ada bakmak, MySQL'de <c>test</c> veritabanı olan birine PostgreSQL'deki
+    /// BAŞKASININ <c>test</c>'ini açardı.
+    /// </item>
+    /// <item>
+    /// <b>Ad eşleşmesi</b> — kapsamdaki sitenin adı ya da <c>DatabaseNameFromSite</c>. Panel
+    /// dışında (ya da sahiplik kaydı tutulmadan önce) açılmış veritabanlarının kaydı yoktur;
+    /// yalnız kayda bakmak bugün çalışan meşru bağlamayı/yedeği kırardı.
+    /// </item>
+    /// </list>
+    /// </remarks>
+    public static async Task<TenantDatabaseScope?> ResolveDatabaseScopeAsync(
+        ICustomerScopeService scopes,
+        IDatabaseOwnershipService ownership,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        var kapsamdakiSiteler = await GetEffectiveSitesAsync(scopes, user, cancellationToken);
+        if (kapsamdakiSiteler is null)
+        {
+            return null; // yönetici/operatör
+        }
+
+        var sahipli = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sahipler = new List<Guid> { await GetSubscriptionUserIdAsync(scopes, user, cancellationToken) };
+        if (IsReseller(user))
+        {
+            sahipler.AddRange(await scopes.GetOwnedUserIdsAsync(user.GetRequiredUserId(), cancellationToken));
+        }
+
+        foreach (var sahip in sahipler.Distinct())
+        {
+            foreach (var (engine, databaseName) in await ownership.GetOwnedAsync(sahip, cancellationToken))
+            {
+                sahipli.Add(TenantDatabaseScope.Anahtar(engine, databaseName));
+            }
+        }
+
+        var adEslesen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var site in kapsamdakiSiteler)
+        {
+            adEslesen.Add(site.Trim());
+            adEslesen.Add(ResourceNaming.DatabaseNameFromSite(site));
+        }
+
+        return new TenantDatabaseScope(sahipli, adEslesen);
+    }
+
+    /// <summary>
+    /// Bu kiracı verilen veritabanına dokunabilir mi; dokunamazsa 403 fırlatır.
+    /// </summary>
+    /// <remarks>
+    /// Yönetici/operatör muaftır (<see cref="ResolveDatabaseScopeAsync"/> onlar için
+    /// <c>null</c> döner).
+    /// </remarks>
+    public static async Task EnsureDatabaseAsync(
+        ICustomerScopeService scopes,
+        IDatabaseOwnershipService ownership,
+        ClaimsPrincipal user,
+        string? engine,
+        string? databaseName,
+        CancellationToken cancellationToken)
+    {
+        var kapsam = await ResolveDatabaseScopeAsync(scopes, ownership, user, cancellationToken);
+        if (kapsam is not null && !kapsam.Icerir(engine, databaseName))
+        {
+            throw new AppException("database.not_owned", 403, 403);
+        }
+    }
+}
+
+/// <summary>
+/// Kiracının dokunabileceği veritabanları: motor+ad ile sahipli olanlar + ada göre sitesine
+/// ait olanlar.
+/// </summary>
+public sealed record TenantDatabaseScope(HashSet<string> Sahipli, HashSet<string> AdEslesen)
+{
+    public static string Anahtar(string? engine, string? name) =>
+        $"{(engine ?? string.Empty).Trim()}|{(name ?? string.Empty).Trim()}";
+
+    public bool Icerir(string? engine, string? name) =>
+        Sahipli.Contains(Anahtar(engine, name)) ||
+        AdEslesen.Contains((name ?? string.Empty).Trim());
 }

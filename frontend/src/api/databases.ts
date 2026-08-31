@@ -46,6 +46,8 @@ export type DatabaseEngineStatus = {
   host: string;
   port: number;
   adminUserName: string;
+  /** Sunucu bildirir: bu motorda "guvenligi sikilastir" anlamli bir is yapiyor mu. */
+  supportsHardening: boolean;
 };
 
 export type RegisterCredentialsPayload = {

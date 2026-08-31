@@ -96,14 +96,16 @@
             @click="refreshWorkspace">
             {{ t("panel.database.refresh") }}
           </button>
-          <!-- Sertleştirme adımlarının hepsi MySQL/MariaDB'ye özgü (anonim kullanıcılar, uzak
-               root@'%', parolasız root, boş 'test' veritabanı). Diğer motorlarda düğme GÖSTERİLMEZ:
-               önceden görünüyor ve basılınca hiçbir şey yapmadan "sertleştirildi" diyordu. -->
+          <!-- Düğmenin GÖRÜNÜP görünmeyeceğini MOTOR SÖYLER (supportsHardening), arayüz değil.
+               Burada sabit bir motor listesi vardı; PostgreSQL için yazılan sertleştirme o yüzden
+               hiçbir yerden çağrılamıyordu. Daha da öncesinde düğme her motorda görünüyor ve
+               basılınca hiçbir şey yapmadan "sertleştirildi" diyordu — iki hata da aynı sebepten:
+               yeteneği bilen taraf sunucu, karar veren taraf arayüzdü. -->
           <button
             v-if="hardeningSupported"
             class="secondary compact"
             :disabled="!selectedEngineInstalled || hardening"
-            :title="t('panel.database.hardenHint')"
+            :title="hardenHint"
             @click="hardenSecurity">
             {{ hardening ? t("panel.database.hardening") : t("panel.database.harden") }}
           </button>
@@ -1454,8 +1456,19 @@ async function changeUserPassword(userName: string, host: string) {
 }
 
 const hardening = ref(false);
-// Sertleştirme yalnız MySQL/MariaDB'de anlamlı; backend de diğerlerinde artık 400 dönüyor.
-const hardeningSupported = computed(() => selectedEngine.value === "mysql" || selectedEngine.value === "mariadb");
+// MOTOR LİSTESİ BURADA YAZILMAZ. Burada `engine === "mysql" || engine === "mariadb"` sabiti
+// vardı; PostgreSQL için yazılan sertleştirme (ortak PUBLIC erişiminin kaldırılması) bu yüzden
+// hiçbir yerden çağrılamıyordu — uç vardı, kapısı yoktu. Yeteneği motorun kendi sağlayıcısı
+// bildiriyor; burası yalnız sunucudan gelen bayrağı okur.
+const hardeningSupported = computed(() => currentEngineStatus.value?.supportsHardening === true);
+
+// YARDIM METNİ motora göre değişir: MySQL'de anonim/uzak-root/parolasız-root temizliği ve joker
+// yetki daraltması, PostgreSQL'de ortak (PUBLIC) bağlanma yetkisinin kaldırılması. Buradaki motor
+// adı bir YETENEK kararı değil, yalnız hangi açıklamanın gösterileceğidir; yeteneğin kendisi
+// sunucudan gelir. Karşılığı olmayan bir motor genel metni görür (eksik açıklama, ölü düğme değil).
+const hardenHint = computed(() => (selectedEngine.value === "postgresql"
+  ? t("panel.database.hardenHintPg")
+  : t("panel.database.hardenHint")));
 
 async function hardenSecurity() {
   if (!selectedEngineInstalled.value) {

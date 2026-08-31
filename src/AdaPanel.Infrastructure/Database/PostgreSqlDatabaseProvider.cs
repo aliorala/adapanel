@@ -166,9 +166,13 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
 
         try
         {
-            await using var command = connection.CreateCommand();
-            command.CommandText = $"GRANT {BuildPrivilegeClause(privileges)} ON DATABASE {QuoteIdentifier(databaseName)} TO {QuoteIdentifier(userName)};";
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await using (var command = connection.CreateCommand())
+            {
+                command.CommandText = $"GRANT {BuildPrivilegeClause(privileges)} ON DATABASE {QuoteIdentifier(databaseName)} TO {QuoteIdentifier(userName)};";
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await IsolateDatabaseAsync(profile, connection, databaseName, userName, cancellationToken);
         }
         catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.InvalidCatalogName)
         {
@@ -183,6 +187,190 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
             throw MapUnexpectedPostgresException(exception);
         }
     }
+
+    /// <summary>
+    /// Bir veritabanını KİRACISINA kapatır: ortak (PUBLIC) erişimi kaldırır, o kiracının kendi
+    /// veritabanını gerçekten KULLANABİLMESİNİ sağlar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>1) ÖLÇÜLEN AÇIK — <c>REVOKE ALL ... FROM PUBLIC</c>.</b> PostgreSQL her veritabanına
+    /// <c>CONNECT</c> yetkisini <c>PUBLIC</c> rolüne VERİLMİŞ olarak doğar. <c>pg_hba.conf</c>
+    /// kurulumda <c>host all all 127.0.0.1/32 scram-sha-256</c> yazar — yani "hangi veritabanı"
+    /// sorusuna hiç karışmaz. Sonuç yalıtılmış PostgreSQL 16.14'te SÜRÜLDÜ: A kiracısının rolü
+    /// B kiracısının veritabanına bağlandı ve <c>pg_class</c>/<c>pg_attribute</c> üzerinden
+    /// B'nin TÜM tablo ve SÜTUN adlarını okudu (satır verisi tablo yetkisi olmadığı için
+    /// gelmiyordu; <c>information_schema</c> de yetkiye göre süzülüyordu). Yani veri değil ama
+    /// kurbanın şeması sızıyordu — ve bu, sonraki adımların haritasıdır.
+    /// </para>
+    /// <para>
+    /// <b>2) ÖLÇÜLEN KIRIK ÖZELLİK — <c>GRANT ALL ON SCHEMA public</c>.</b> Aynı sürümde şu da
+    /// ölçüldü: <c>GRANT ALL PRIVILEGES ON DATABASE x TO u</c> almış bir kiracı KENDİ
+    /// veritabanında tablo OLUŞTURAMIYOR ("public şemasına erişim engellendi"). PostgreSQL 15
+    /// <c>PUBLIC</c>'in <c>public</c> şeması üzerindeki <c>CREATE</c> yetkisini kaldırdı; panelin
+    /// verdiği veritabanı düzeyi yetki şema düzeyine inmiyor. Yani panelin PostgreSQL sağlama
+    /// yolu, sevk edilen sürümde (components.json: postgresql-16.14) kullanılamaz durumdaydı.
+    /// Bu satır onu onarır ve aynı zamanda 1. maddenin FAZLA KAPATMA nöbetçisidir: yalıtım
+    /// kiracıyı kendi verisinden koparmaz.
+    /// </para>
+    /// <para>
+    /// Panelin kendi bağlantısı <c>postgres</c> süper-kullanıcısıdır ve iki kural da onu
+    /// etkilemez (ölçüldü) — panel kilitlenmez.
+    /// </para>
+    /// </remarks>
+    private static async Task IsolateDatabaseAsync(
+        DatabaseConnectionProfile profile,
+        NpgsqlConnection connection,
+        string databaseName,
+        string userName,
+        CancellationToken cancellationToken)
+    {
+        await using (var revoke = connection.CreateCommand())
+        {
+            revoke.CommandText = RevokePublicAccessSql(databaseName);
+            await revoke.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // Şema yetkisi VERİTABANININ İÇİNDE verilir; yönetim bağlantısı 'postgres' veritabanına
+        // bağlıdır ve oradan başka bir veritabanının şemasına GRANT yazılamaz.
+        await using var owned = await OpenConnectionAsync(profile, cancellationToken, databaseName);
+        await using var grant = owned.CreateCommand();
+        grant.CommandText = GrantPublicSchemaSql(userName);
+        await grant.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Ortak (<c>PUBLIC</c>) veritabanı erişimini kaldıran ifade — çapraz kiracı bağlantısını kapatır.
+    /// </summary>
+    /// <remarks>
+    /// Yalıtılmış PostgreSQL 16.14 üzerinde SÜRÜLDÜ: bu ifadeden ÖNCE A kiracısının rolü B'nin
+    /// veritabanına bağlanıp <c>pg_class</c>/<c>pg_attribute</c> üzerinden B'nin tablo ve sütun
+    /// adlarını okudu; SONRA bağlantı <c>FATAL: ... veritabanına erişim engellendi</c> ile düştü.
+    /// </remarks>
+    internal static string RevokePublicAccessSql(string databaseName) =>
+        $"REVOKE ALL ON DATABASE {QuoteIdentifier(databaseName)} FROM PUBLIC;";
+
+    /// <summary>
+    /// Kiracının KENDİ veritabanını kullanabilmesi için şema yetkisi — yalıtımın FAZLA KAPATMA nöbetçisi.
+    /// </summary>
+    /// <remarks>
+    /// PostgreSQL 15, <c>PUBLIC</c>'in <c>public</c> şeması üzerindeki <c>CREATE</c> hakkını
+    /// kaldırdı. Aynı yalıtılmış sunucuda ölçüldü: <c>GRANT ALL PRIVILEGES ON DATABASE</c> almış
+    /// bir kiracı KENDİ veritabanında <c>CREATE TABLE</c> yapamıyordu ("public şemasına erişim
+    /// engellendi"). Yani panelin PostgreSQL sağlama yolu, sevk edilen sürümde zaten kırıktı; bu
+    /// ifade hem onu onarır hem de <see cref="RevokePublicAccessSql"/>'in kiracıyı kendi
+    /// verisinden koparmamasını garanti eder.
+    /// </remarks>
+    internal static string GrantPublicSchemaSql(string userName) =>
+        $"GRANT ALL ON SCHEMA public TO {QuoteIdentifier(userName)};";
+
+    /// <summary>
+    /// MEVCUT kurulumlarda ortak (PUBLIC) veritabanı erişimini kaldırır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kod düzeltmesi yalnız BUNDAN SONRA verilecek yetkileri kapsar; sunucuda hâlihazırda duran
+    /// veritabanları <c>PUBLIC</c>'e açık kalır. MySQL tarafındaki joker yetki temizliğiyle
+    /// (<see cref="GrantWildcardRepair"/>) aynı desen: onarım, yöneticinin bilerek çalıştırdığı
+    /// "sertleştir" eyleminin içinde durur ve ne yaptığını satır satır döner.
+    /// </para>
+    /// <para>
+    /// <b>KİMSEYİ KAPI DIŞINDA BIRAKMAZ.</b> Yalnızca AÇIK bir yetkilisi olan (ACL girdisi ya da
+    /// süper-kullanıcı olmayan sahibi bulunan) veritabanlarına dokunulur. Erişimi yalnız
+    /// <c>PUBLIC</c> üzerinden olan bir veritabanında <c>REVOKE</c> yazmak, o veritabanını
+    /// kullanan uygulamayı SESSİZCE koparırdı — açığın kendisinden pahalı bir sonuç. Böyle
+    /// veritabanları atlanır ve raporda "atlandı" olarak görünür.
+    /// </para>
+    /// <para>
+    /// Yetkililere ayrıca <c>public</c> şema hakkı verilir: aksi hâlde PostgreSQL 15+ üzerinde
+    /// erişim "var ama kullanılamaz" durumda kalırdı (bkz. <see cref="IsolateDatabaseAsync"/>).
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(
+        DatabaseConnectionProfile profile,
+        CancellationToken cancellationToken)
+    {
+        var sonuc = new List<string>();
+        await using var connection = await OpenConnectionAsync(profile, cancellationToken);
+
+        // (veritabanı → açık yetkili roller). aclexplode + sahiplik; sistem rolleri hariç.
+        var hedefler = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var acikErisimliler = new HashSet<string>(StringComparer.Ordinal);
+
+        await using (var query = connection.CreateCommand())
+        {
+            query.CommandText = """
+                SELECT d.datname, r.rolname
+                FROM pg_database d
+                LEFT JOIN pg_roles r
+                  ON (r.oid = d.datdba AND NOT r.rolsuper)
+                  OR (r.oid IN (SELECT a.grantee FROM aclexplode(d.datacl) a) AND NOT r.rolsuper)
+                WHERE d.datistemplate = FALSE
+                  AND d.datallowconn = TRUE
+                  AND d.datname <> 'postgres'
+                  AND has_database_privilege('public', d.datname, 'CONNECT');
+                """;
+            await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var veritabani = reader.GetString(0);
+                acikErisimliler.Add(veritabani);
+                if (reader.IsDBNull(1))
+                {
+                    continue;
+                }
+
+                if (!hedefler.TryGetValue(veritabani, out var roller))
+                {
+                    roller = [];
+                    hedefler[veritabani] = roller;
+                }
+
+                var rol = reader.GetString(1);
+                if (!roller.Contains(rol, StringComparer.Ordinal))
+                {
+                    roller.Add(rol);
+                }
+            }
+        }
+
+        foreach (var veritabani in acikErisimliler)
+        {
+            if (!hedefler.TryGetValue(veritabani, out var roller) || roller.Count == 0)
+            {
+                sonuc.Add($"{veritabani}: ortak erisim ACIK birakildi (acik yetkilisi yok — kapatmak baglantiyi koparirdi)");
+                continue;
+            }
+
+            try
+            {
+                await using (var revoke = connection.CreateCommand())
+                {
+                    revoke.CommandText = RevokePublicAccessSql(veritabani);
+                    await revoke.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                await using var owned = await OpenConnectionAsync(profile, cancellationToken, veritabani);
+                foreach (var rol in roller)
+                {
+                    await using var grant = owned.CreateCommand();
+                    grant.CommandText = GrantPublicSchemaSql(rol);
+                    await grant.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                sonuc.Add($"ortak (PUBLIC) erisim kaldirildi: {veritabani} → {string.Join(", ", roller)}");
+            }
+            catch (PostgresException)
+            {
+                // Tek veritabanının onarılamaması diğerlerini engellemez; başarısız olan AÇIK
+                // hâlinde kalır (erişim kaybolmaz) ve bir sonraki çalıştırmada yeniden denenir.
+            }
+        }
+
+        return sonuc;
+    }
+
+    public bool SupportsHardening => true;
 
     public string RemoteAccessMechanism => "pgHba";
 
@@ -385,7 +573,14 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
         return result;
     }
 
-    private static async Task<NpgsqlConnection> OpenConnectionAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+    /// <param name="database">
+    /// Bağlanılacak veritabanı; boşsa yönetim veritabanı (<c>postgres</c>). Şema düzeyi yetkiler
+    /// yalnız hedef veritabanının İÇİNDEN yazılabildiği için gerekir.
+    /// </param>
+    private static async Task<NpgsqlConnection> OpenConnectionAsync(
+        DatabaseConnectionProfile profile,
+        CancellationToken cancellationToken,
+        string? database = null)
     {
         try
         {
@@ -395,7 +590,7 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
                 Port = profile.Port,
                 Username = profile.AdminUserName,
                 Password = profile.AdminPassword,
-                Database = "postgres",
+                Database = string.IsNullOrWhiteSpace(database) ? "postgres" : database,
                 SslMode = SslMode.Disable,
                 Timeout = 5,
                 CommandTimeout = 5
@@ -485,9 +680,15 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
         return results;
     }
 
+    /// <summary>
+    /// PostgreSQL tanımlayıcısını tırnaklar. Çift tırnak İKİLENİR — üst katman adları katı bir
+    /// desenle doğruluyor (<c>DatabaseService.NormalizeDatabaseName</c>/<c>NormalizeUserName</c>),
+    /// ama kaçırma o doğrulamadan BAĞIMSIZ olarak burada durmalı: panel dışından (taşıma, betik,
+    /// ileride eklenecek bir yol) gelen bir ad bu metoda düşerse tırnak kapatıp SQL yazamasın.
+    /// </summary>
     private static string QuoteIdentifier(string value)
     {
-        return $"\"{value}\"";
+        return $"\"{(value ?? string.Empty).Replace("\"", "\"\"")}\"";
     }
 
     private static string BuildPrivilegeClause(IReadOnlyCollection<string> privileges)
