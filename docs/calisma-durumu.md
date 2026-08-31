@@ -1230,3 +1230,85 @@ kendi `ip4:`'unu de silince kirmizi yandi.
   MX'i denenmedi (yalitilmis tek dugum). Ayni-sunucu ic sahtecilik olculdu; capraz-sunucuda
   DMARC alici tarafta yakalar (klasik), bu tur kapsam disi.
 - Kurulu paneldeki (8890) Stalwart yapilandirmasi yine OKUNAMADI (sertlestirme erisimi reddediyor).
+
+---
+
+## KAPATILDI: kiracidan kiraciya posta sahteciligi (31.08.2026)
+
+Bir onceki tur bu acigi KANITLAYIP kapatmamisti ("duzeltme Stalwart'in kabul politikasi
+alaninda; yanlis yazilan bir kural mesru postayi durdurur"). Bu turda kapatildi -- ama once
+STANDART pratik arastirildi, sonra her mesru akis yalitilmis ornekte GERCEK SMTP oturumuyla
+sinandi.
+
+### Arastirilan standart pratik
+Postfix `smtpd_sender_restrictions = permit_sasl_authenticated, check_sender_access <yerel
+alan adlari> -> REJECT`; Exim/cPanel `deny senders = +local_domains / !authenticated = *`.
+Ozet: **kimliksiz bir baglanti, sunucunun KENDI yerel alan adlarindan biri adina gonderemez.**
+Postfix recetesinin yaygin hali listeye `permit_mynetworks`'u de koyar (loopback'e guvenir);
+paylasimli barindirmada acigin TAM OLARAK geldigi yer orasi oldugu icin burada loopback
+ayricaligi YOK -- kiracinin PHP'si de loopback'ten baglanir.
+
+### Uygulanan yer -- Stalwart'in DOGRU yuvasi
+`MtaStageMail.isSenderAllowed` (semadaki tanimi: "gonderenin gonderme izni oldugunda true
+donen ifade"). Panel bugune kadar yalniz `MtaStageRcpt.script` ve `MtaStageData.script`
+yuvalarina yaziyordu.
+
+| | ifade |
+|---|---|
+| Stalwart fabrika | `!is_empty(authenticated_as) \|\| !key_exists('spam-block', sender_domain)` |
+| AdaPanel siki | `!is_empty(authenticated_as) \|\| (!key_exists('spam-block', sender_domain) && !is_local_domain(sender_domain))` |
+
+`is_local_domain` uydurma degil: Stalwart'in KENDI varsayilanlarinda geciyor
+(`SenderAuth.dkimSignDomain`, `MtaOutboundStrategy.route`) ve MAIL asamasinda calistigi
+gercek oturumla olculdu.
+
+### Senaryo 3 (From BASLIGI) da kapatildi
+DATA asamasi sieve script'ine (panelin zaten sahip oldugu TEK yuva) dar bir blok eklendi:
+oturum kimlikliyse + From basliginda alan adi varsa + zarf gonderenin alan adindan FARKLIYSA
++ o alan adi BU SUNUCUDA barindiriliyorsa -> `reject`. Olculdu: sieve icinde `authenticated_as`
+derlenmiyor, `env.authenticated_as` derleniyor.
+
+### BILEREK KIRILAN AKISLAR (ikisi de SESSIZ DEGIL)
+1. **PHP `mail()` ile kimliksiz gonderim** (kendi alan adindan bile). Alternatif panelde
+   yazili: `panel.mail.senderPolicyTitle/Hint` -> PHPMailer/SMTP + kutu parolasi, 587/465.
+2. **Panelin KENDI SMTP'si** `localhost:25 + kimlik yok + gonderen kendi alan adimiz` diye
+   ayarliysa. Parola sifirlama hatayi BILEREK yutar (kullanici numaralandirmasi), yani
+   sessiz olurdu -> `NotificationService` artik gonderen reddini taniyip
+   `notifications.smtp_sender_rejected` firlatiyor (ne yapilacagi metinde yazili).
+3. **Iki alan adi barindiran kiracinin, birinin kutusuyla digerinin adina From yazmasi**
+   (Senaryo 3 bloğu). Gonderim aninda 5xx + ne yapilacagini soyleyen metin.
+
+### ACIK KAPI
+`Panel:AllowUnauthenticatedLocalSenders` (appsettings.json, VARSAYILAN `false`). Arayuze
+KONMADI -- ayni gerekce `AllowInternalOutboundTargets`te yazili. Acildiginda panel FABRIKA
+varsayilanini GERI yazar (kapi gercekten kapi; olculdu).
+
+### MEVCUT KURULUMLAR
+Yapilandirma bastan yazilmaz. Yuvada fabrika varsayilani ya da bizim bildigimiz bir ifade
+varsa yazilir; isletmecinin KENDI ifadesi varsa DOKUNULMAZ + uyari. Kural her panel
+acilisinda uygulanir (`MailSenderPolicyWorker`) -- kurulum adimina konsaydi yalniz Stalwart'i
+bu surumle KURAN makineler korunurdu.
+
+### Yeni dosyalar
+`src/AdaPanel.Infrastructure/Mail/MailSenderPolicy.cs`,
+`src/AdaPanel.Infrastructure/Mail/MailSenderPolicyWorker.cs`,
+`tests/AdaPanel.Infrastructure.Tests/MailSenderPolicyTests.cs` (+37 test; 4550 -> 4587).
+**Mutasyon: 9 mutasyon, 9'u kirmizi; 5'i FAZLA KAPATMA nobetcisi.**
+
+### OLCUM SIRASINDA YAKALANAN IKINCI HATA (kod yazilirken degil, SUNUCUDA GORULDU)
+`JsonSerializer`'in VARSAYILAN kodlayicisi `'` ve `&` karakterlerini JSON'da ters-bolulu kacis dizisine
+cevirir (`'` / `&`); ifadede ikisi de var. Deger komut satirina `CliJsonArg` ile geciyor ve o, MSVC
+kurali geregi her ters bolüyü IKILIYOR -> sunucuya `\u0027` gidiyor ve guncelleme
+`validationFailed` ile dusuyordu. Yani duzeltme HER KURULUMDA olu olacakti. Gevsetilmis
+kodlayiciya gecildi (ifadede `"` ya da `\` yok) ve `CliField_NeverContainsABackslash`
+nobetcisi kondu. Panelin URETTIGI komut satiri, yalitilmis sunucuda birebir calistirilip
+okunan degerin bayt bayt ayni oldugu dogrulandi.
+
+### BU TURDA OLCULEMEYENLER
+- Kurulu paneldeki (8890) Stalwart yapilandirmasi yine OKUNAMADI; kural GERCEK bir kurulumda
+  degil, yalitilmis kopyada dogrulandi.
+- `MailSenderPolicyWorker`'in gercekten acilista kostugu CANLI panelde gorulmedi (kayit ve
+  kod yolu okundu, davranis yalitilmis Stalwart'a elle ayni CLI cagrilariyla uygulandi).
+- Farkli SUNUCULAR arasi sahtecilik (tek dugum).
+- Roundcube/webmail'in From kimlikleriyle Senaryo 3 blogunun etkilesimi gercek webmail'de
+  denenmedi (SMTP seviyesinde denendi).

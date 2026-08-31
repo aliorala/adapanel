@@ -36,8 +36,17 @@ public sealed class MailService(
     // vandelay için de gerekiyor ve iki kopya, parolanın yeri değiştiğinde birinin sessizce eski
     // yere bakmaya devam etmesi demekti.
     StalwartRuntime runtime,
-    ILogger<MailService> logger) : IMailService
+    ILogger<MailService> logger,
+    // İSTEĞE BAĞLI: sunucu işletmecisinin açık kapısı (Panel:AllowUnauthenticatedLocalSenders).
+    // Verilmemişse SIKI sayılır — varsayılan güvenli taraftır ve testlerde ayrıca kurulum gerekmez.
+    Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null) : IMailService
 {
+    /// <summary>
+    /// Kimliksiz oturumlara kendi alan adlarımızı bırakma açık kapısı KAPALI mı (yani sıkı mıyız).
+    /// </summary>
+    private bool AllowUnauthenticatedLocalSenders =>
+        runtimeOptions?.Value.AllowUnauthenticatedLocalSenders ?? false;
+
     /// <summary>
     /// Hesap disk kotasının Stalwart şemasındaki YERİ: <c>quotas</c> haritasının <c>maxDiskQuota</c>
     /// anahtarı (byte). Tek tamsayılık bir <c>quota</c> alanı YOKTUR — o ad kullanıldığında sunucu
@@ -347,7 +356,38 @@ public sealed class MailService(
         // imzaliydi, iki TXT kaydinin ikisi de bolgede yoktu. Plesk de posta acilirken kaydi
         // kendisi yayinlar.
         await TryPublishDnsRecordsAsync(domain, cancellationToken);
+
+        // Gönderen sahteciliği kuralı: ilk alan adı oluşturulduğunda Stalwart yeni kurulmuş
+        // olabilir ve açılış işçisi (MailSenderPolicyWorker) çoktan geçmiştir. EN İYİ ÇABA —
+        // kural yazılamadıysa alan adı oluşturma DÜŞMEZ, ama sessiz de kalmaz.
+        await TryApplySenderPolicyAsync(cancellationToken);
         return workspace;
+    }
+
+    /// <summary>
+    /// Gönderen politikasını en iyi çabayla uygular (alan adı oluşturmanın ardından).
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden fırlatmıyor:</b> alan adı ZATEN oluşturuldu. Buradan fırlatmak, çalışmış bir işi
+    /// başarısız göstermek ve kullanıcıyı ikinci kez denemeye itmek olurdu — ikinci deneme
+    /// "zaten var" yoluna girip aynı yerde patlardı.
+    /// </remarks>
+    private async Task TryApplySenderPolicyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await SyncSenderPolicyAsync(cancellationToken);
+            if (result == SenderPolicySyncResult.Applied)
+            {
+                logger.LogInformation("Mail sender policy applied after domain creation.");
+            }
+
+            await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Mail sender policy could not be applied after domain creation.");
+        }
     }
 
     /// <summary>
@@ -1047,6 +1087,116 @@ public sealed class MailService(
         _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
     }
 
+    /// <summary>
+    /// Gönderen sahteciliği kuralını Stalwart'a UYGULAR (idempotent).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki yuvayı birden hizalar: <c>MtaStageMail.isSenderAllowed</c> (zarf gönderen kısıtı,
+    /// bkz. <see cref="MailSenderPolicy"/>) ve <c>MtaStageData.script</c> (From başlığı hizalama
+    /// bloğu, aynı sınıfta üretilir).
+    /// </para>
+    /// <para>
+    /// <b>MEVCUT KURULUMLAR:</b> yapılandırma baştan yazılmaz; yalnız ilgili yuva okunur ve
+    /// gerekiyorsa güncellenir. Yuvada işletmecinin KENDİ ifadesi varsa DOKUNULMAZ, uyarı
+    /// yazılır — çalışan bir posta sunucusunun kabul politikasını sessizce değiştirmek, açığın
+    /// kendisinden pahalı olurdu.
+    /// </para>
+    /// <para>
+    /// <b>Neden fırlatmıyor:</b> bu iş açılışta (bkz. <c>MailSenderPolicyWorker</c>) ve alan adı
+    /// oluşturmanın ardından en iyi gayretle çalışır. Stalwart kurulu değilse ya da yönetim ucu
+    /// o an cevap vermiyorsa panelin açılışını ya da alan adı oluşturmayı düşürmesi doğru olmaz;
+    /// sonuç <see cref="SenderPolicySyncResult"/> ile GERİ DÖNER ve loglanır (sessiz yutma yok).
+    /// </para>
+    /// </remarks>
+    internal async Task<SenderPolicySyncResult> SyncSenderPolicyAsync(CancellationToken cancellationToken = default)
+    {
+        var (cli, env) = await RequireCliAsync(cancellationToken);
+        var desired = MailSenderPolicy.Build(AllowUnauthenticatedLocalSenders);
+
+        var stage = await GetObjectAsync(cli, "MtaStageMail", "singleton", env, cancellationToken);
+        if (stage is null)
+        {
+            return SenderPolicySyncResult.Unavailable;
+        }
+
+        var current = stage.Value.TryGetProperty("isSenderAllowed", out var expression)
+            && expression.TryGetProperty("else", out var elseValue)
+                ? elseValue.GetString() ?? string.Empty
+                : string.Empty;
+
+        var decision = MailSenderPolicy.Decide(current, desired);
+        if (decision == MailSenderPolicy.SlotAction.None)
+        {
+            return SenderPolicySyncResult.AlreadyApplied;
+        }
+
+        if (decision == MailSenderPolicy.SlotAction.Foreign)
+        {
+            logger.LogWarning(
+                "MtaStageMail.isSenderAllowed holds a custom expression ({Current}); AdaPanel is not overwriting it. "
+                + "Unauthenticated senders may still be able to forge local sender domains.",
+                current);
+            return SenderPolicySyncResult.ForeignExpression;
+        }
+
+        var update = await RunCliAsync(
+            cli,
+            $"update MtaStageMail singleton --field {CliJsonArg(MailSenderPolicy.BuildIsSenderAllowedField(desired))}",
+            env,
+            cancellationToken);
+        if (!update.Success)
+        {
+            throw new AppException("mail.sender_policy_failed", 502, 502, CombineError(update));
+        }
+
+        // Yeniden başlatma OLMADAN etkinleşir (aynı yol otomatik yanıtta ve liste politikasında
+        // ölçüldü: ReloadSettings yeterli).
+        _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+        return SenderPolicySyncResult.Applied;
+    }
+
+    /// <summary>
+    /// DATA aşaması script'ini (From başlığı hizalama bloğu dahil) açılışta hizalar.
+    /// </summary>
+    /// <remarks>
+    /// Ayrı bir sarmalayıcı olmasının sebebi: <see cref="SyncDataStageScriptAsync"/> kullanıcı
+    /// işlemlerinden çağrılan ve HATA FIRLATAN bir yoldur (409 çakışma, 502 yazma hatası).
+    /// Açılışta fırlatması panelin açılışını değil ama işçinin turunu düşürür ve gerçek sebebi
+    /// gizleyebilir; burada AppException gerekçesiyle loglanır ve akış sürer.
+    /// </remarks>
+    internal async Task SyncDataStageScriptForSenderPolicyAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await SyncDataStageScriptAsync(cancellationToken);
+        }
+        catch (AppException exception)
+        {
+            logger.LogWarning(
+                "From-header anti-spoofing block could not be installed ({Reason}: {Details}). "
+                + "Envelope-level protection is unaffected.",
+                exception.MessageKey,
+                exception.Details);
+        }
+    }
+
+    /// <summary>Gönderen politikası eşitlemesinin sonucu (loglanır; sessiz yutma yok).</summary>
+    internal enum SenderPolicySyncResult
+    {
+        /// <summary>Kural yazıldı.</summary>
+        Applied,
+
+        /// <summary>Zaten yazılıydı — dokunulmadı.</summary>
+        AlreadyApplied,
+
+        /// <summary>Yuvada işletmecinin kendi ifadesi var — EZİLMEDİ.</summary>
+        ForeignExpression,
+
+        /// <summary>Sunucu yuvayı okutmadı (kurulum yarım ya da yönetim ucu cevapsız).</summary>
+        Unavailable
+    }
+
     internal enum ListPolicySlotAction
     {
         /// <summary>Hiçbir şey yapma — yuvaya dokunma, script bile yazma.</summary>
@@ -1638,10 +1788,13 @@ public sealed class MailService(
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var responders = await ReadAutoRespondersAsync(cancellationToken);
         var listRules = await BuildListUnsubscribeRulesAsync(cli, env, cancellationToken);
-        var contents = BuildDataStageScript(responders, listRules);
+        var blockCrossTenantFromHeader = !AllowUnauthenticatedLocalSenders;
+        var contents = BuildDataStageScript(responders, listRules, blockCrossTenantFromHeader);
 
-        // "Kural sayısı": iki özellikten herhangi biri gerçekten bir şey üretiyor mu?
-        var ruleCount = CountActiveAutoResponders(responders) + listRules.Count;
+        // "Kural sayısı": iki KULLANICI özelliğinden herhangi biri gerçekten bir şey üretiyor mu?
+        // From başlığı hizalaması BİLEREK bu sayıya girmez — gerekçesi hemen aşağıda.
+        var userRuleCount = CountActiveAutoResponders(responders) + listRules.Count;
+        var ruleCount = userRuleCount + (blockCrossTenantFromHeader ? 1 : 0);
 
         var stage = await GetObjectAsync(cli, "MtaStageData", "singleton", env, cancellationToken);
         var currentScript = stage is { } stageValue
@@ -1659,6 +1812,25 @@ public sealed class MailService(
 
         if (decision == ListPolicySlotAction.Conflict)
         {
+            // FAZLA KAPATMA NÖBETİ: yuvada işletmecinin KENDİ script'i var.
+            //
+            // Kullanıcının açıkça istediği bir özellik (otomatik yanıt / liste başlığı) varsa
+            // durum eskisi gibi 409'dur: kullanıcı bir şey istedi, uygulanamadı, söylenmeli.
+            //
+            // Ama yuvayı isteme sebebimiz YALNIZ From başlığı hizalamasıysa fırlatmıyoruz.
+            // Fırlatsaydık, kendi DATA script'i olan bir sunucuda (Stalwart dokümanının
+            // greylisting örneği tam da budur) panelin İLGİSİZ işleri — genel adresi kaydetmek
+            // gibi — bu düzeltmeden SONRA 409 vermeye başlardı. Yani sahteciliği kapatmak için
+            // eklediğimiz kural, kullanmayan kullanıcının çalışan işini bozardı.
+            if (userRuleCount == 0)
+            {
+                logger.LogWarning(
+                    "MtaStageData.script is owned by another script ({Current}); the From-header anti-spoofing "
+                    + "block was not installed. Envelope-level protection (MtaStageMail.isSenderAllowed) is unaffected.",
+                    currentScript);
+                return;
+            }
+
             throw new AppException("mail.autoresponder_conflict", 409, 409, $"MtaStageData.script={currentScript}");
         }
 
@@ -1883,16 +2055,24 @@ public sealed class MailService(
     /// hiçbir zaman eşleşmiyordu; <c>header :contains "to"</c> ise eşleşiyor.
     /// </para>
     /// </remarks>
+    /// <param name="blockCrossTenantFromHeader">
+    /// <c>From</c> BAŞLIĞI hizalama bloğu (Senaryo 3) eklensin mi. Üretimde
+    /// <c>Panel:AllowUnauthenticatedLocalSenders</c> kapalıyken <c>true</c>'dur; gerekçe
+    /// <see cref="MailSenderPolicy.BuildFromHeaderAlignmentBlock"/> üzerinde yazılıdır.
+    /// Varsayılanı <c>false</c>: bu parametre eklenmeden ÖNCEKİ davranış aynen korunur, yani
+    /// yalnız otomatik yanıt/liste özelliklerini ölçen sözleşme testleri geçerliliğini sürdürür.
+    /// </param>
     internal static string BuildDataStageScript(
         Dictionary<string, AutoResponderEntry> responders,
-        IReadOnlyList<ListUnsubscribeRule> listRules)
+        IReadOnlyList<ListUnsubscribeRule> listRules,
+        bool blockCrossTenantFromHeader = false)
     {
         var activeResponders = responders
             .Where(pair => pair.Value.Enabled && !string.IsNullOrWhiteSpace(pair.Value.Message))
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .ToList();
 
-        if (activeResponders.Count == 0 && listRules.Count == 0)
+        if (activeResponders.Count == 0 && listRules.Count == 0 && !blockCrossTenantFromHeader)
         {
             return "# AdaPanel: DATA asamasinda kural yok / no DATA stage rules\r\n";
         }
@@ -1911,10 +2091,23 @@ public sealed class MailService(
             extensions.Add("enotify");
         }
 
+        if (blockCrossTenantFromHeader)
+        {
+            extensions.AddRange(MailSenderPolicy.FromHeaderExtensions);
+        }
+
         builder.Append("require [")
             .Append(string.Join(", ", extensions.Select(SieveQuoted)))
             .Append("];\r\n");
         builder.Append("# AdaPanel tarafindan uretilir; elle duzenlemeyin. / Generated by AdaPanel; do not edit.\r\n");
+
+        // SAHTECİLİK BLOĞU EN ÜSTTE: reddedilecek ileti için liste başlığı eklemenin ya da
+        // otomatik yanıt üretmenin anlamı yok — ve otomatik yanıt üretilseydi sahte From'a
+        // yanıt gitmiş olurdu.
+        if (blockCrossTenantFromHeader)
+        {
+            builder.Append(MailSenderPolicy.BuildFromHeaderAlignmentBlock());
+        }
 
         AppendListUnsubscribeBlock(builder, listRules);
         AppendAutoResponderBlock(builder, activeResponders);

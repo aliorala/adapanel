@@ -269,6 +269,26 @@ public sealed class NotificationService(
 
             await client.SendAsync(message, cancellationToken);
         }
+        catch (SmtpCommandException exception) when (IsSenderRejected(exception))
+        {
+            // GÖNDEREN REDDEDİLDİ — ve bu, panelin KENDİ postasını sessizce öldürebilecek tek hata.
+            //
+            // Sebep ölçüldü: posta sunucusu artık kimlik doğrulaması OLMAYAN bir oturumun,
+            // sunucunun KENDİ barındırdığı bir alan adı adına göndermesine izin vermiyor
+            // (gerekçe: Mail/MailSenderPolicy — kiracıdan kiracıya sahteciliği kapatan kural).
+            // Panel SMTP'si "localhost:25, kullanıcı adı boş, gönderen kendi alan adımız" diye
+            // ayarlanmışsa parola sıfırlama e-postası tam da buradan düşer.
+            //
+            // Parola sıfırlama akışı hatayı BİLEREK yutar (kullanıcı numaralandırmasını önlemek
+            // için), yani çıplak bırakılırsa arıza HİÇBİR YERDE görünmez. Bu yüzden hata burada
+            // NE YAPILACAĞINI söyleyen bir anahtara çevriliyor: anahtar bildirim ayarlarındaki
+            // "test" düğmesinde kullanıcıya, parola sıfırlamada ise günlüğe çıkar.
+            throw new AppException(
+                "notifications.smtp_sender_rejected",
+                400,
+                400,
+                $"{settings.FromEmail} via {settings.SmtpHost}:{settings.SmtpPort} - {exception.Message}");
+        }
         catch (System.Security.Authentication.AuthenticationException exception)
         {
             // El sıkışma hatasının EN SIK sebebi port/kip uyuşmazlığıdır. Çıplak "TLS el sıkışması
@@ -288,6 +308,26 @@ public sealed class NotificationService(
             }
         }
     }
+
+    /// <summary>
+    /// SMTP hatası "gönderen adresi kabul edilmedi" mi?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki ölçüte birden bakılıyor çünkü tek başına ikisi de yetmiyor. MailKit
+    /// <see cref="SmtpErrorCode.SenderNotAccepted"/>'ı yalnız MAIL FROM'a gelen yanıt için üretir
+    /// — doğru sinyal budur. Ama gerçek sunucular aynı reddi başka bir aşamada da verebiliyor,
+    /// bu yüzden gelişmiş durum kodu <c>5.7.1</c> (yetki reddi) de kabul ediliyor.
+    /// </para>
+    /// <para>
+    /// <b>Neden metin eşleşmesi YOK:</b> ret metni sunucuya ve diline göre değişir; "not allowed"
+    /// aramak bir sunucuda tutar, diğerinde sessizce ıskalardı — bu depoda ölçülmüş hata sınıfı.
+    /// </para>
+    /// </remarks>
+    internal static bool IsSenderRejected(SmtpCommandException exception) =>
+        exception.ErrorCode == SmtpErrorCode.SenderNotAccepted
+        || exception.StatusCode is SmtpStatusCode.MailboxNameNotAllowed or SmtpStatusCode.MailboxUnavailable
+            && exception.Message.Contains("5.7.1", StringComparison.Ordinal);
 
     /// <summary>
     /// Port + "şifreleme açık mı" bilgisinden kip seçer. 465 örtük TLS içindir (bağlantı daha ilk

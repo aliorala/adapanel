@@ -266,6 +266,12 @@ public static class ServiceCollectionExtensions
         // çalışırdı — yani "politika" değil temenni olurdu (AuditRetentionWorker'daki aynı gerekçe).
         services.AddHostedService<Logs.LogRotationWorker>();
 
+        // Gönderen sahteciliği kuralı (MtaStageMail.isSenderAllowed + DATA aşaması From hizalaması).
+        // AÇILIŞTA çalışmak ZORUNDA: kurulum adımına konsaydı yalnız Stalwart'ı bu sürümle KURAN
+        // makineler korunurdu, açığı taşıyan MEVCUT kurulumlar hiç kapanmazdı (gerekçe:
+        // MailSenderPolicyWorker).
+        services.AddHostedService<Mail.MailSenderPolicyWorker>();
+
         return services;
     }
 }

@@ -528,6 +528,15 @@
             :message="outboundLimitLoad.message.value"
             @retry="loadOutboundLimit" />
           <p class="field-hint">{{ t("panel.mail.outboundLimitHint") }}</p>
+
+          <!-- SAHTECİLİK KURALI: sunucu, kimliksiz bir bağlantının buradaki alan adları adına
+               göndermesini reddeder. Bu KIRDIĞIMIZ bir akış (PHP'nin ayarsız mail() çağrısı) ve
+               sessiz ölmemesi gerekiyor: kullanıcı reddi gördüğünde alternatifi (kimlik
+               doğrulamalı gönderim) burada yazılı bulur. Gerekçe: Mail/MailSenderPolicy. -->
+          <p class="field-hint">
+            <strong>{{ t("panel.mail.senderPolicyTitle") }}</strong>
+            {{ t("panel.mail.senderPolicyHint") }}
+          </p>
         </section>
 
         <!-- Webmail + posta istemci ayarları (profesyonel paneller gibi). -->

@@ -50,4 +50,36 @@ public sealed class PanelRuntimeOptions
     /// </para>
     /// </remarks>
     public bool AllowInternalOutboundTargets { get; set; }
+
+    /// <summary>
+    /// Kimlik doğrulaması OLMAYAN bir SMTP oturumunun, sunucunun KENDİ barındırdığı bir alan adı
+    /// adına posta göndermesine izin ver. VARSAYILAN KAPALI (yani sıkı).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kapalıyken panel Stalwart'ın <c>MtaStageMail.isSenderAllowed</c> yuvasına
+    /// <see cref="Mail.MailSenderPolicy.Strict"/> ifadesini yazar ve DATA aşaması script'ine
+    /// <c>From</c> başlığı hizalama bloğunu ekler. Gerekçenin tamamı
+    /// <see cref="Mail.MailSenderPolicy"/> üzerinde yazılıdır: kimliksiz bağlantıya kendi alan
+    /// adlarımızı bırakmak, aynı sunucudaki bir kiracının BAŞKA bir kiracının GELEN KUTUSUNA
+    /// onun adına posta atmasına izin veriyordu (yalıtılmış kopyada gerçek SMTP oturumuyla
+    /// kanıtlandı).
+    /// </para>
+    /// <para>
+    /// <b>Bayrak NEDEN var — fazla kapatmak da bir hatadır.</b> Sıkı kural, sitelerin PHP
+    /// <c>mail()</c> ile kimliksiz olarak <c>localhost:25</c>'ten kendi alan adları adına
+    /// göndermesini de durdurur. Bu MEŞRU bir kullanımdır; doğru çözümü kimlik doğrulamalı
+    /// gönderimdir (587/465 + kutu parolası) ve panel kullanıcıya bunu söyler
+    /// (<c>mail.senderPolicy.*</c> metinleri). Ama bu geçişi yapamayan bir işletmecinin
+    /// posta akışını tamamen kaybetmemesi için kapı bırakılmıştır: açıkken panel yuvaya
+    /// Stalwart'ın FABRİKA varsayılanını geri yazar, yani anahtar gerçekten geri alınabilir.
+    /// </para>
+    /// <para>
+    /// <b>Neden yalnız appsettings.json'da, panel arayüzünde DEĞİL:</b> gerekçe
+    /// <see cref="AllowInternalOutboundTargets"/> ve paket güveni bayrağında da yazılı —
+    /// korumayı korunan HTTP yüzeyinin kendisinden kapatılabilir yapmak, korumayı kaldırmakla
+    /// aynı kapıya çıkar.
+    /// </para>
+    /// </remarks>
+    public bool AllowUnauthenticatedLocalSenders { get; set; }
 }
