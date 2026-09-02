@@ -91,6 +91,35 @@ public sealed class CustomerScopeService(
         return entry;
     }
 
+    /// <summary>
+    /// Sitelerin ve iki temel kotanın yazıldığı yol.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK — bu metot ABONELİĞİ SİLİYORDU.</b> Eski hâli, korunacak alanları TEK TEK
+    /// sayıp <c>new ScopeEntry { … }</c> ile SIFIRDAN bir kayıt kuruyordu. Listede olmayan her alan
+    /// sessizce varsayılana düşüyordu: <see cref="ScopeEntry.PlanId"/>,
+    /// <see cref="ScopeEntry.ExpiresAtUtc"/>, <see cref="ScopeEntry.SuspendedAtUtc"/>,
+    /// <see cref="ScopeEntry.SuspendReason"/>, <see cref="ScopeEntry.MaxFtpUsers"/>,
+    /// <see cref="ScopeEntry.MaxTrafficGbPerMonth"/>.
+    /// </para>
+    /// <para>
+    /// Bu, panelin "yapamadığı şeye başardım demesi" sınıfının en pahalı hâliydi çünkü YÖN TERSİYDİ:
+    /// panel askıyı UYGULADIĞINI söylemiş ve kaydı da yazmıştı, sonra ALAKASIZ bir çağrı
+    /// (müşteri/bayi bir site oluşturuyor → <c>SitesController.AssignSiteToActorAsync</c>; yönetici
+    /// müşterinin posta kutusu sayısını düzenliyor → <c>UserManagementService.ApplyScopeAsync</c>)
+    /// askıyı SESSİZCE KALDIRIYORDU. Ekranda "askıda" yazan bir abonelik, bir sonraki site
+    /// oluşturmadan sonra etkin oluyordu ve bunu söyleyen hiçbir kayıt yoktu — silinen kota
+    /// (<c>MaxTrafficGbPerMonth = 0</c>) arayüzde "sınırsız" ile AYNI görünüyor.
+    /// </para>
+    /// <para>
+    /// <b>Düzeltme, alan listesini uzatmak DEĞİLDİR</b> — o liste bir sonraki alan eklendiğinde
+    /// yine eksik kalırdı; bu hatanın kök nedeni "koru" listesinin varlığıdır. Kayıt artık YERİNDE
+    /// güncelleniyor (<see cref="SetExtraLimitsAsync"/>, <see cref="SetOwnerAsync"/> ve
+    /// <see cref="SetParentSubscriptionAsync"/> zaten öyle yapıyordu); bu metodun yazdığı alanların
+    /// DIŞINDAKİ her şey tanım gereği korunur.
+    /// </para>
+    /// </remarks>
     public async Task SetScopeAsync(Guid userId, IEnumerable<string> siteNames, int maxSites, int maxDiskMb, CancellationToken cancellationToken = default)
     {
         var normalized = siteNames
@@ -104,37 +133,60 @@ public sealed class CustomerScopeService(
         {
             var state = Wrap(existing);
             var key = userId.ToString("N");
-            state.TryGetValue(key, out var current);
-            var ownerId = current?.OwnerId; // bayi sahipliğini koru
-            var maxDatabases = current?.MaxDatabases ?? 0; // DB kotasını koru (ayrı setter'la set edilir)
-            var maxMailboxes = current?.MaxMailboxes ?? 0; // posta kutusu kotasını koru
-            var maxScheduledTasks = current?.MaxScheduledTasks ?? 0; // planlı görev kotasını koru
-            var parentUserId = current?.ParentUserId; // alt-kullanıcı bağını koru
-            var subUserSections = current?.SubUserSections; // alt-kullanıcı bölüm izinlerini koru
+            if (!state.TryGetValue(key, out var entry))
+            {
+                entry = new ScopeEntry();
+            }
 
-            if (normalized.Count == 0 && maxSites <= 0 && maxDiskMb <= 0 && maxDatabases <= 0 && maxMailboxes <= 0 && maxScheduledTasks <= 0 && string.IsNullOrEmpty(ownerId) && string.IsNullOrEmpty(parentUserId))
+            // YALNIZ bu metodun sahip olduğu alanlar yazılır; gerisi nesnede olduğu gibi kalır.
+            entry.Sites = normalized;
+            entry.MaxSites = Math.Max(0, maxSites);
+            entry.MaxDiskMb = Math.Max(0, maxDiskMb);
+
+            if (IsEmpty(entry))
             {
                 state.Remove(key);
             }
             else
             {
-                state[key] = new ScopeEntry
-                {
-                    Sites = normalized,
-                    MaxSites = Math.Max(0, maxSites),
-                    MaxDiskMb = Math.Max(0, maxDiskMb),
-                    MaxDatabases = maxDatabases,
-                    MaxMailboxes = maxMailboxes,
-                    MaxScheduledTasks = maxScheduledTasks,
-                    OwnerId = ownerId,
-                    ParentUserId = parentUserId,
-                    SubUserSections = subUserSections
-                };
+                state[key] = entry;
             }
 
             return state;
         }, cancellationToken);
     }
+
+    /// <summary>
+    /// Kayıt tamamen boş mu — yani silinmesi HİÇBİR bilgi kaybettirmez mi?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// TEK KAYNAK. Bu soru dört ayrı yerde elle yazılmıştı ve hiçbiri abonelik alanlarına
+    /// bakmıyordu: askıya alınmış ama sitesi olmayan bir müşterinin kaydı, sırf "sites boş ve
+    /// kotalar sıfır" diye SİLİNEBİLİYORDU — silinen kayıt <c>IsSuspended</c> için de
+    /// yok demektir, yani askı yine sessizce kalkardı.
+    /// </para>
+    /// <para>
+    /// Koşul bilerek GENİŞTİR (daha az silme): fazladan kalan boş bir kayıt zararsızdır,
+    /// yanlışlıkla silinen bir askı/plan bağı değildir.
+    /// </para>
+    /// </remarks>
+    private static bool IsEmpty(ScopeEntry entry) =>
+        entry.Sites.Count == 0
+        && entry.MaxSites <= 0
+        && entry.MaxDiskMb <= 0
+        && entry.MaxDatabases <= 0
+        && entry.MaxMailboxes <= 0
+        && entry.MaxScheduledTasks <= 0
+        && entry.MaxFtpUsers <= 0
+        && entry.MaxTrafficGbPerMonth <= 0
+        && string.IsNullOrEmpty(entry.OwnerId)
+        && string.IsNullOrEmpty(entry.ParentUserId)
+        && string.IsNullOrEmpty(entry.PlanId)
+        && entry.ExpiresAtUtc is null
+        && entry.SuspendedAtUtc is null
+        && string.IsNullOrEmpty(entry.SuspendReason)
+        && entry.SubUserSections is null;
 
     public async Task SetExtraLimitsAsync(Guid userId, int maxDatabases, int maxMailboxes, int maxScheduledTasks, CancellationToken cancellationToken = default)
     {
@@ -152,7 +204,7 @@ public sealed class CustomerScopeService(
             entry.MaxMailboxes = Math.Max(0, maxMailboxes);
             entry.MaxScheduledTasks = Math.Max(0, maxScheduledTasks);
 
-            if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
+            if (IsEmpty(entry))
             {
                 state.Remove(key);
             }
@@ -473,7 +525,7 @@ public sealed class CustomerScopeService(
             entry.OwnerId = ownerId?.ToString("N");
 
             // Sahiplik kaldırıldı ve başka veri yoksa kaydı temizle (yetim kalmasın).
-            if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
+            if (IsEmpty(entry))
             {
                 state.Remove(key);
             }
@@ -519,7 +571,7 @@ public sealed class CustomerScopeService(
                 entry.SubUserSections = null;
             }
 
-            if (entry.OwnerId is null && entry.ParentUserId is null && entry.Sites.Count == 0 && entry.MaxSites <= 0 && entry.MaxDiskMb <= 0 && entry.MaxDatabases <= 0 && entry.MaxMailboxes <= 0 && entry.MaxScheduledTasks <= 0)
+            if (IsEmpty(entry))
             {
                 state.Remove(key);
             }
