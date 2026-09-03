@@ -3,6 +3,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Users;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
+using AdaPanel.Infrastructure.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -216,7 +217,6 @@ public sealed class SubscriptionEnforcementService(
         // Bedeli dogrudan: askiya alinmis bir musterinin siteleri YAYINDA kalir, denetim kaydi
         // aksini soyler, ve yonetici arizayi ancak musteri sikayet edince ogrenir. Bu depoda
         // tekrar eden sinif -- panel yapamadigi seye "yaptim" der.
-        var durdurulan = 0;
         var durdurulamayan = new List<string>();
 
         foreach (var site in scope.Sites)
@@ -224,7 +224,6 @@ public sealed class SubscriptionEnforcementService(
             try
             {
                 await iisSiteService.StopSiteAsync(site, cancellationToken);
-                durdurulan++;
             }
             catch (Exception exception)
             {
@@ -239,9 +238,11 @@ public sealed class SubscriptionEnforcementService(
 
         // Basarisiz siteler ADIYLA yazilir: "3 tanesi durdurulamadi" demek yoneticiye hangi
         // sitenin hâlâ yayinda oldugunu SOYLEMEZ, yani kayit okunabilir ama ise yaramaz olurdu.
-        var durum = durdurulamayan.Count == 0
-            ? $"{durdurulan} site(s) stopped."
-            : $"{durdurulan} of {scope.Sites.Count} site(s) stopped; STILL RUNNING: {string.Join(", ", durdurulamayan)}.";
+        //
+        // CUMLE TEK KAYNAKTAN gelir (SiteSuspensionReport): ayni karar yoneticinin musteriyi ELLE
+        // askiya aldigi yolda (UserManagementService) da verilir ve orasi kopyalanmadigi icin
+        // ISTENEN sayiyi yazmaya devam ediyordu.
+        var durum = SiteSuspensionReport.Stopped(scope.Sites.Count, durdurulamayan);
 
         await auditService.WriteForSubscriptionAsync(
             "subscription.suspended",
@@ -267,7 +268,6 @@ public sealed class SubscriptionEnforcementService(
         // Buradaki bedel TERS ama esit agir: parasini odemis musterinin sitesi KAPALI kalir ve
         // denetim kaydi acildigini soyler. Musteri "sitem calismiyor" der, yonetici kayda bakar,
         // kayit "basladi" dedigi icin baska yerde arar.
-        var baslatilan = 0;
         var baslatilamayan = new List<string>();
 
         foreach (var site in scope.Sites)
@@ -275,7 +275,6 @@ public sealed class SubscriptionEnforcementService(
             try
             {
                 await iisSiteService.StartSiteAsync(site, cancellationToken);
-                baslatilan++;
             }
             catch (Exception exception)
             {
@@ -286,9 +285,7 @@ public sealed class SubscriptionEnforcementService(
 
         var (aktor, ip, tetikleyici) = Aktor();
 
-        var durum = baslatilamayan.Count == 0
-            ? $"{baslatilan} site(s) started."
-            : $"{baslatilan} of {scope.Sites.Count} site(s) started; STILL STOPPED: {string.Join(", ", baslatilamayan)}.";
+        var durum = SiteSuspensionReport.Started(scope.Sites.Count, baslatilamayan);
 
         await auditService.WriteForSubscriptionAsync(
             "subscription.resumed",

@@ -82,7 +82,21 @@ public sealed class DatabasesController(
 
         if (repairTables is { Length: > 0 })
         {
-            await WriteDatabaseAuditAsync("database.repaired", engine, name, $"Tables repaired: {string.Join(", ", repairTables)}.", cancellationToken);
+            // KAYIT, ISTENENDEN degil OLCULEN sonuctan uretilir.
+            //
+            // Eskiden buraya kosulsuz `string.Join(", ", repairTables)` yaziliyordu -- yani
+            // KULLANICININ SECTIGI adlar. Oysa `sonuc`, onarimdan SONRA yeniden yapilan denetimi
+            // tablo tablo tasiyor ve gercek cevap orada duruyordu. Ayrisma dort sekilde SESSIZ
+            // olur: tablo veritabaninda hic yoktur; motor onarimi desteklemez (InnoDB'de REPAIR
+            // hicbir sey yapmaz ve "OK" doner); OPTIMIZE calisir ama o bir onarim DEGILDIR; ya da
+            // onarim calisir ve tablo HÂLÂ bozuk kalir. Sonuncusunun bedeli en agiri: yonetici
+            // "onarildi" kaydina guvenip elindeki yedegi siler.
+            await WriteDatabaseAuditAsync(
+                "database.repaired",
+                engine,
+                name,
+                DatabaseRepairAudit.Describe(sonuc, repairTables),
+                cancellationToken);
         }
 
         return Ok(ApiResponse<DatabaseCheckResultDto>.Ok(sonuc));

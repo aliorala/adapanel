@@ -19,6 +19,15 @@ public interface ISiteProvisioningService
     /// <summary>Laravel/WordPress/Symfony pretty-URL yönlendirmesi (index.php front controller). URL Rewrite modülü gerekir.</summary>
     Task<SiteDto> EnableFrameworkRewriteAsync(string siteName, CancellationToken cancellationToken = default);
 
-    /// <summary>Sitenin yazma iznini (app pool kimliği, kök Modify) yeniden uygular — bu özellikten önce kurulmuş siteler için.</summary>
-    Task<SiteDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Sitenin yazma iznini (app pool kimliği, kök Modify) yeniden uygular — bu özellikten önce
+    /// kurulmuş siteler için — ve SONUCU DİSKTEN OKUYARAK doğrular.
+    /// </summary>
+    /// <remarks>
+    /// Dönüş tipi <see cref="SiteDto"/> DEĞİL: izin uygulaması sessizce başarısız olabilir
+    /// (<c>icacls</c> hata 1332'de hiçbir şey yapmaz ve <c>/C</c> ile 0 döner) ve site kaydının
+    /// içinde bu cevabı taşıyacak bir alan yok. Alan olmadığı için uç "onarıldı" demeyi
+    /// alışkanlık hâline getirmişti; cevabın taşınabilir olması, doğru cevabın ön koşuludur.
+    /// </remarks>
+    Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default);
 }

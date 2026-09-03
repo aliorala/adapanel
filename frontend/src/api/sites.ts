@@ -41,9 +41,27 @@ export async function enableFrameworkRewrite(siteName: string) {
   return response.data.data;
 }
 
+/**
+ * "İzinleri Onar" sonucunun ÜÇ DEĞERLİ cevabı.
+ *
+ * Uç eskiden sade bir site kaydı dönüyordu ve ekran koşulsuz "onarıldı" yazıyordu; izin veren
+ * komut hiçbir şey yapmamış olsa bile. Artık sonuç DİSKTEN OKUNUP taşınıyor.
+ */
+export type SitePermissionRepairResult = {
+  site: SiteRecord;
+  /** "granted" | "not_granted" | "unmeasured" */
+  state: string;
+  principal: string;
+  detail: string;
+  isGranted: boolean;
+};
+
 // #5 onar: mevcut siteye yazma iznini (app pool kök Modify) yeniden uygula.
 export async function repairSitePermissions(siteName: string) {
-  const response = await apiClient.post<ApiEnvelope<SiteRecord>>(`/sites/${encodeURIComponent(siteName)}/repair-permissions`, {});
+  const response = await apiClient.post<ApiEnvelope<SitePermissionRepairResult>>(
+    `/sites/${encodeURIComponent(siteName)}/repair-permissions`,
+    {},
+  );
   return response.data.data;
 }
 

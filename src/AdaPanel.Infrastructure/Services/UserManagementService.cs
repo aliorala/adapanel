@@ -406,6 +406,23 @@ public sealed class UserManagementService(
         }
 
         var suspended = !user.IsActive;
+
+        // YAPILAN sayilir, ISTENEN degil.
+        //
+        // OLCULEN ARIZA: kayit kosulsuz `scope.Sites.Count` yaziyordu. Asagidaki catch tek tek
+        // hatalari yutup devam ediyor -- DOGRUSU DA BUDUR, bir site yuzunden aski yarim
+        // kalmamali -- ama bes siteden ucu durdurulamasa bile kayit "5 site(s) stopped" diyordu.
+        //
+        // BU YOL, ZATEN DUZELTILMIS OLANIN KARDESIDIR. Otomatik uygulama
+        // (SubscriptionEnforcementService.Suspend/ResumeAsync) bir tur once duzeltildi; YONETICININ
+        // MUSTERIYI ELLE ASKIYA ALDIGI bu yol atlanmisti. Yani panelin en cok kullanilan askiya
+        // alma yolu hâlâ yaniltiyordu: odeme yapmayan musterinin siteleri YAYINDA kalir ve kayit
+        // aksini soyler; parasini odemis musterininki KAPALI kalir ve kayit acildigini soyler.
+        //
+        // Cumle TEK KAYNAKTAN gelir (SiteSuspensionReport): ucuncu kez kopyalamak, dorduncu yolun
+        // da geride kalmasini garanti ederdi.
+        var uygulanamayan = new List<string>();
+
         foreach (var site in scope.Sites)
         {
             try
@@ -421,6 +438,7 @@ public sealed class UserManagementService(
             }
             catch (Exception exception)
             {
+                uygulanamayan.Add(site);
                 logger.LogWarning(
                     exception,
                     "Abonelik {State} site '{Site}' üzerinde uygulanamadı (kullanıcı: {User}).",
@@ -430,10 +448,14 @@ public sealed class UserManagementService(
             }
         }
 
+        var durum = suspended
+            ? SiteSuspensionReport.Stopped(scope.Sites.Count, uygulanamayan)
+            : SiteSuspensionReport.Started(scope.Sites.Count, uygulanamayan);
+
         await auditService.WriteAsync(
             suspended ? "users.suspended" : "users.resumed",
             "users",
-            $"Customer '{user.UserName}' {(suspended ? "suspended" : "resumed")}; {scope.Sites.Count} site(s) {(suspended ? "stopped" : "started")}.",
+            $"Customer '{user.UserName}' {(suspended ? "suspended" : "resumed")}; {durum}",
             actorUserId,
             ipAddress,
             cancellationToken);

@@ -127,9 +127,11 @@ public sealed class SiteProvisioningService(
                 return;
             }
 
+            // Hesap adi TEK KAYNAKTAN gelir: onarim yolu ayni adin hakkini GERI OKUYOR ve iki
+            // yerde iki farkli ad kurmak, verilen hakki baska bir hesapta aramak olurdu.
             var result = await ProcessRunner.RunAsync(
                 "icacls.exe",
-                $"\"{site.PhysicalPath}\" /grant \"IIS AppPool\\{pool}:(OI)(CI)M\" /T /C /Q",
+                $"\"{site.PhysicalPath}\" /grant \"{PoolPrincipal(site)}:(OI)(CI)M\" /T /C /Q",
                 cancellationToken: cancellationToken,
                 timeout: TimeSpan.FromSeconds(60));
 
@@ -298,12 +300,89 @@ public sealed class SiteProvisioningService(
     //   3) PHP ayarları ekranındaki izolasyon anahtarı.
     // YENİ sitelerde ise varsayılan AÇIK'tır (CreateAndProvisionAsync → IsolateSiteAsync).
     // Böylece yükseltme geri alınabilir kalır: bir sitede sorun çıkarsa yönetici anahtarı kapatır.
-    public async Task<SiteDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default)
+    //
+    // SONUC UYDURULMAZ, DISKTEN OKUNUR.
+    //
+    // OLCULEN ARIZA: bu metot `await GrantSiteWritableAsync(...)` deyip kosulsuz `site` donuyordu.
+    // GrantSiteWritableAsync ise TANIMI GEREGI en iyi cabadir -- havuz adi okunamazsa sessizce
+    // doner, icacls basarisiz olursa yalniz LogWarning yazar, her istisnayi yutar. Yani bu ucun
+    // BASARISIZ DONMESI IMKANSIZDI. Arayuz de (SiteHostingView.repairPermissions) donen degere
+    // hic bakmadan sabit bir "Yazma izinleri onarildi" bildirimi gosteriyordu.
+    //
+    // Sonuc: hesap adi cozulemedigi icin icacls'in hata 1332 ile HICBIR SEY yapmadigi durumda bile
+    // kullanici yesil bir onay goruyor, denetim kaydina "sites.permissions.repaired" yaziliyor ve
+    // sitesi hâlâ yazamadigi icin 500 hatasinin sebebini BASKA YERDE ariyordu. Dosyanin kendi
+    // yorumu (GrantSiteWritableAsync icinde) bu belirtiyi zaten tarif ediyordu; o turda yalniz
+    // GUNLUK duzeltilmis, KULLANICIYA SOYLENEN sey duzeltilmemisti.
+    //
+    // NEDEN CIKIS KODU YETMEZ (bu depoda olculdu): `icacls ... /T /C` bir alt ogeye erisemese bile
+    // 0 ile cikar. Ustelik izin verildikten SONRA calisan kiraci yalitimi (IsolateSiteAsync ->
+    // WafService.ApplyFolderAclAsync) DACL'i `/inheritance:r /grant:r` ile BASTAN YAZAR. Yani
+    // komutun basarisi klasorun SON DURUMU demek degildir; olcum bu yuzden yalitimdan SONRA ve
+    // DACL'den yapilir.
+    public async Task<SitePermissionRepairResultDto> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         await GrantSiteWritableAsync(site, cancellationToken);
-        return site;
+
+        // Havuz adi IIS'ten TAZE okunur; izin de bu ada verildi.
+        var principal = PoolPrincipal(site);
+
+        var olcum = string.IsNullOrWhiteSpace(principal)
+            ? new FolderWriteAccessProbe.Result(
+                FolderWriteAccessProbe.Access.NotGranted,
+                $"Uygulama havuzu adi IIS'ten OKUNAMADI: {site.Name}. Havuz adi tahmin edilmez, izin uygulanmadi.")
+            : FolderWriteAccessProbe.Probe(site.PhysicalPath, principal);
+
+        var sonuc = BuildRepairResult(site, principal, olcum);
+
+        if (!sonuc.IsGranted)
+        {
+            logger.LogWarning(
+                "Site izin onarimi DOGRULANAMADI: {Site} -> {Path} (durum: {State}) {Detail}",
+                site.Name,
+                site.PhysicalPath,
+                sonuc.State,
+                sonuc.Detail);
+        }
+
+        return sonuc;
     }
+
+    /// <summary>
+    /// Site kökünde yazma hakkı ARANAN hesap. İzni VEREN taraf da (<c>GrantSiteWritableAsync</c>)
+    /// bunu kullanır — iki yerde iki farklı ad kurmak, "verildi" denen hakkı BAŞKA bir hesapta
+    /// aramak demek olurdu ve ölçüm sessizce anlamsızlaşırdı.
+    /// </summary>
+    internal static string PoolPrincipal(SiteDto site) =>
+        string.IsNullOrWhiteSpace(site.ApplicationPoolName)
+            ? string.Empty
+            : $"IIS AppPool\\{site.ApplicationPoolName}";
+
+    /// <summary>
+    /// Ölçümü kullanıcıya gidecek ÜÇ DEĞERLİ cevaba çevirir.
+    /// </summary>
+    /// <remarks>
+    /// Ayrı ve saf bir metot: bu eşleme, düzeltilen yalanın tam durduğu yerdir. Sabit bir
+    /// <c>granted</c> yazmak (eski davranış) ya da her şeye <c>unmeasured</c> demek (aşırı
+    /// kapatma) burada olur; ikisi de canlı bir IIS olmadan ölçülebilmelidir.
+    /// </remarks>
+    internal static SitePermissionRepairResultDto BuildRepairResult(
+        SiteDto site,
+        string principal,
+        FolderWriteAccessProbe.Result olcum) =>
+        new()
+        {
+            Site = site,
+            Principal = principal,
+            Detail = olcum.Detail,
+            State = olcum.State switch
+            {
+                FolderWriteAccessProbe.Access.Granted => SitePermissionRepairResultDto.StateGranted,
+                FolderWriteAccessProbe.Access.NotGranted => SitePermissionRepairResultDto.StateNotGranted,
+                _ => SitePermissionRepairResultDto.StateUnmeasured
+            }
+        };
 
     private static string ResolveProfile(string requestedProfile)
     {

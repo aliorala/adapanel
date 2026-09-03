@@ -5100,5 +5100,9 @@
   "cron.write_unverified": "Görev kaydedildi ama Görev Zamanlayıcı'da bulunamadı; kayıt doğrulanamadı.",
   "backup.mail_service_start_failed": "Yedekleme için durdurulan e-posta sunucusu yeniden başlatılamadı; posta şu anda çalışmıyor olabilir.",
   "backup.mail_service_not_running": "E-posta sunucusu görevi devre dışı görünüyor; posta çalışmıyor.",
-  "rate_limit.exceeded": "Çok fazla istek gönderildi. Kısa bir süre bekleyip tekrar deneyin."
+  "rate_limit.exceeded": "Çok fazla istek gönderildi. Kısa bir süre bekleyip tekrar deneyin.",
+  "panel.hosting.permissionsNotRepaired": "Yazma izni UYGULANAMADI. Klasörün izinleri değişmedi:",
+  "panel.hosting.permissionsUnverified": "Yazma izni uygulandı ama DOĞRULANAMADI. Klasörün izinleri okunamadı:",
+  "panel.activity.action.sites.permissions.repair_failed": "Site klasör izinleri ONARILAMADI",
+  "panel.activity.action.sites.permissions.repair_unverified": "Site klasör izinleri onarıldı ama doğrulanamadı"
 }

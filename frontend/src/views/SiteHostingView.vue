@@ -789,12 +789,27 @@ async function enableRewrite() {
 }
 
 // #5 — mevcut siteye yazma iznini yeniden uygula.
+//
+// SONUC SORULUR, VARSAYILMAZ. Eskiden burada kosulsuz "Yazma izinleri onarildi" yaziliyordu:
+// ucun basarisiz DONMESI imkansizdi (servis tarafi en iyi cabaydi), yani kullanici izin hic
+// degismese bile HER ZAMAN yesil bir bildirim goruyordu. Panelin sitesine yazamayan musteri,
+// 500 hatasinin sebebini bu yuzden baska yerde ariyordu.
+//
+// Uc deger AYRI gosterilir. "Dogrulanamadi"yi "basarisiz" ile birlestirmek, okunamayan bir
+// DACL yuzunden calisan bir sunucuyu bozuk gostermek olurdu; ikisini "tamam" ile birlestirmek
+// ise duzeltilen yalanin ta kendisi.
 async function repairPermissions() {
   if (!siteName.value) return;
   busy.value = true;
   try {
-    await repairSitePermissions(siteName.value);
-    showNotice(t("panel.hosting.permissionsRepaired"), false);
+    const result = await repairSitePermissions(siteName.value);
+    if (result.state === "granted") {
+      showNotice(t("panel.hosting.permissionsRepaired"), false);
+    } else if (result.state === "not_granted") {
+      showNotice(`${t("panel.hosting.permissionsNotRepaired")} ${result.detail}`.trim(), true);
+    } else {
+      showNotice(`${t("panel.hosting.permissionsUnverified")} ${result.detail}`.trim(), true);
+    }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

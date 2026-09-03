@@ -427,13 +427,38 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         return Ok(ApiResponse<SiteAliasWorkspaceDto>.Ok(workspace, "alias.removed"));
     }
 
+    /// <summary>
+    /// Site kökündeki yazma iznini yeniden uygular ve SONUCU DİSKTEN OKUYARAK bildirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Uç eskiden koşulsuz <c>"sites.permissions.repaired"</c> döndürüyor ve denetim kaydına da
+    /// bunu yazıyordu. Servis tarafı en iyi çaba olduğu için BAŞARISIZ DÖNMESİ imkânsızdı: hesap
+    /// adı çözülemediğinde <c>icacls</c> hata 1332 ile hiçbir şey yapmıyor, kullanıcı yine de
+    /// yeşil onay görüyordu.
+    /// </para>
+    /// <para>
+    /// <b>KAYIT HER DURUMDA YAZILIR.</b> Başarısızlıkta istisna fırlatıp kaydı hiç yazmamak,
+    /// yöneticinin denemenin YAPILDIĞINI bile göremediği ikinci bir körlük olurdu — "izinleri kim
+    /// bozdu/kim onarmaya çalıştı" sorusunun başlangıç noktası kaybolurdu. Kayıt, yapılan iddiayı
+    /// değil ÖLÇÜLEN DURUMU taşır.
+    /// </para>
+    /// </remarks>
     [HttpPost("{siteName}/repair-permissions")]
-    public async Task<ActionResult<ApiResponse<SiteDto>>> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<SitePermissionRepairResultDto>>> RepairPermissionsAsync(string siteName, CancellationToken cancellationToken)
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
-        var site = await siteProvisioningService.RepairPermissionsAsync(siteName, cancellationToken);
-        await WriteAuditAsync("sites.permissions.repaired", siteName, cancellationToken);
-        return Ok(ApiResponse<SiteDto>.Ok(site, "sites.permissions.repaired"));
+        var result = await siteProvisioningService.RepairPermissionsAsync(siteName, cancellationToken);
+
+        var action = result.State switch
+        {
+            SitePermissionRepairResultDto.StateGranted => "sites.permissions.repaired",
+            SitePermissionRepairResultDto.StateNotGranted => "sites.permissions.repair_failed",
+            _ => "sites.permissions.repair_unverified"
+        };
+
+        await WriteAuditAsync(action, siteName, cancellationToken, ayrinti: result.Detail);
+        return Ok(ApiResponse<SitePermissionRepairResultDto>.Ok(result, action));
     }
 
     // --- Korumalı dizinler (panel "Password-Protected Directories") ---
@@ -847,9 +872,30 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<SiteDto>>>> ImportExistingSitesAsync(CancellationToken cancellationToken)
     {
         var sites = await iisSiteService.ImportExistingSitesAsync(cancellationToken);
+
+        // SONUC ATILMIYOR ARTIK.
+        //
+        // OLCULEN ARIZA: bu dongu `_ =` ile sonucu ISKARTAYA CIKARIYORDU ve kayit kosulsuz
+        // "... imported and defaults applied" yaziyordu. Oysa SiteDefaultsService BASARISIZ
+        // ADIMLARI ZATEN ADIYLA donduruyor (FailedFeatures) -- servis dogruyu soyluyor, cagiran
+        // taraf duymuyordu.
+        //
+        // Atilan sey onemsiz degil: "dns" (bolge hic yayinlanmadi), "security" (kiraci yalitimi
+        // ve klasor ACL'i uygulanmadi -- yani devralinan site komsusunun wp-config.php'sini
+        // okuyabilir), "ssl", "ftp", "aspnet", "runtime", "proxy". Bu uc IIS'te ELDE kurulmus
+        // siteleri panelin yonetimine alir; yonetici "devraldim, varsayilanlar uygulandi" kaydina
+        // bakip yalitimin yerinde oldugunu SANIR.
+        //
+        // KARDES YOL ZATEN DOGRUYU SOYLUYOR: tek siteye varsayilan uygulayan uc (asagida)
+        // `sites.defaults.partial` donuyor. Ayni bilgi burada da kaybolmamali.
+        // Kayit cumlesi TEK KAYNAKTAN gelir (SiteImportAudit): basarisiz adimlar site adi VE adim
+        // adiyla yazilir -- "3 sitede eksik" demek yoneticiye HANGI sitede NEYIN uygulanmadigini
+        // soylemez, kayit okunabilir ama ise yaramaz olurdu.
+        var sonuclar = new List<SiteImportAudit.Outcome>(sites.Count);
         foreach (var site in sites)
         {
-            _ = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
+            var varsayilanlar = await siteDefaultsService.EnsureDefaultsAsync(site, cancellationToken);
+            sonuclar.Add(new SiteImportAudit.Outcome(site.Name, varsayilanlar.FailedFeatures));
         }
 
         // İZ YOKTU. Bu uç IIS'te ELDE kurulmuş siteleri panelin yönetimine alır ve her birine
@@ -864,10 +910,7 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
         await auditService.WriteAsync(
             "sites.import.completed",
             "sites",
-            sites.Count == 0
-                ? "No unmanaged IIS site was found to import."
-                : $"{sites.Count} existing IIS site(s) imported and defaults applied: "
-                  + string.Join(", ", sites.Select(site => site.Name)) + ".",
+            SiteImportAudit.Describe(sonuclar),
             User.GetRequiredUserId(),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);

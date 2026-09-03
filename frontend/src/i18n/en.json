@@ -5100,5 +5100,9 @@
   "cron.write_unverified": "The task was saved but could not be found in Task Scheduler; the registration is unverified.",
   "backup.mail_service_start_failed": "The email server was stopped for the backup and could not be started again; mail may be down right now.",
   "backup.mail_service_not_running": "The email server task appears disabled; mail is not running.",
-  "rate_limit.exceeded": "Too many requests. Wait a moment and try again."
+  "rate_limit.exceeded": "Too many requests. Wait a moment and try again.",
+  "panel.hosting.permissionsNotRepaired": "Write permission was NOT applied. The folder's permissions are unchanged:",
+  "panel.hosting.permissionsUnverified": "Write permission was applied but could NOT be verified. The folder's permissions could not be read:",
+  "panel.activity.action.sites.permissions.repair_failed": "Site folder permissions could NOT be repaired",
+  "panel.activity.action.sites.permissions.repair_unverified": "Site folder permissions repaired but not verified"
 }

@@ -1575,3 +1575,84 @@ yapilinca (21 test kirmizi), secerek geri yukleme eski hedefe donunce (kirmizi).
 `tests/AdaPanel.Infrastructure.Tests/BackupRestoreArchiveGuardTests.cs` (17 test).
 **Yeni i18n anahtarlari:** `backup.restore_target_is_link`, `backup.restore_file_failed`,
 `backup.entry_too_large`, `backup.restore_aborted` (tr + en).
+
+---
+
+## Denetim turu: "panel yapamadigi seye BASARDIM diyor" (04.09.2026, devam)
+
+Onceki ajan kota yuzunden durdurulmustu; iki bulgusu (`c746edf`, `4f9a1fc`) ve askidaki ucuncusu
+(`35d3671`) kapaliydi. Bu tur, brief'in "HIC gelinemedi" dedigi yuzeylerde devam etti:
+ACL/izin uygulama, IIS yazma yollari, bilesen kurulumu, kota uygulama, posta, FTP, SSL, kismi
+basari raporlamasi.
+
+### KAPATILAN DORT BULGU
+
+| # | Yer | Dis sistem ne yapmiyor | Panel ne diyordu |
+|---|---|---|---|
+| 1 | `SiteProvisioningService.RepairPermissionsAsync` + `SitesController:430` + `SiteHostingView.vue:797` | `icacls` hesap adi cozulemeyince 1332 ile **hicbir sey uygulamaz**; `/T /C` kismi basarida da **0 doner** | "Yazma izinleri onarildi" (KOSULSUZ; ucun basarisiz DONMESI imkansizdi) |
+| 2 | `UserManagementService.ApplySuspensionStateAsync` | Site tek tek durdurulur, hata yutulur | Kayit kosulsuz `scope.Sites.Count` yaziyordu -- `35d3671`'in KARDESI, atlanmisti |
+| 3 | `DatabasesController.CheckAndRepairAsync:85` | Tablo yok / motor REPAIR desteklemiyor / onarim sonrasi HALA bozuk | "Tables repaired: \<istenen adlar\>" |
+| 4 | `SitesController.ImportExistingSitesAsync` | `EnsureDefaultsAsync` sonucu `_ =` ile atiliyordu (dns, **security**=kiraci yalitimi, ssl, ftp...) | "N site imported **and defaults applied**" |
+
+**KAPATMA BICIMI.** (1) GERI OKUMA: yeni `FolderWriteAccessProbe` DACL'i **diskten** okur, uc
+degerli cevap verir (`granted` / `not_granted` / `unmeasured`); uc `SitePermissionRepairResultDto`
+donuyor, arayuz uc durumu AYRI gosteriyor. (2)(3)(4) ADIYLA RAPORLAMA + TEK KAYNAK: cumleler
+`SiteSuspensionReport`, `DatabaseRepairAudit`, `SiteImportAudit` icine cikarildi
+(`SubscriptionEnforcementService`'in iki yolu da artik oradan besleniyor).
+
+**Yeni dosyalar:** `src/AdaPanel.Infrastructure/Iis/FolderWriteAccessProbe.cs`,
+`src/AdaPanel.Infrastructure/Support/SiteSuspensionReport.cs`,
+`src/AdaPanel.Core/Dtos/Sites/SitePermissionRepairResultDto.cs`,
+`src/AdaPanel.Core/Dtos/Sites/SiteImportAudit.cs`,
+`src/AdaPanel.Core/Dtos/Databases/DatabaseRepairAudit.cs` + 4 test dosyasi (24 test).
+**Yeni i18n (tr+en):** `panel.hosting.permissionsNotRepaired`, `panel.hosting.permissionsUnverified`,
+`panel.activity.action.sites.permissions.repair_failed`, `...repair_unverified`.
+
+**MUTASYON KANITI (6 mutasyon, 6'si KIRMIZI).** Olcumu bozan 4 mutasyon (probe hep "granted",
+esleme sabit "granted", aski kaydi ISTENEN sayiya donus, devralma kaydi kosulsuz "applied")
+ilgili testleri kirmizi yakti. **FAZLA KAPATMA nobetcileri (2):** probe hep "not_granted"
+yapilinca 2 test kirmizi; aski cumlesi HEP uyari yazinca 3 test kirmizi (elle + otomatik yollarin
+ikisi birden). Basarili durumda cumlelerin SADE kaldigini olcen nobetciler her dosyada var.
+
+### SONRAKI TUR ICIN: OLCULDU, KAPATILMADI (tekrar aranmasin, DOGRULANMASI gerekir)
+
+Uc kesif ajani 40+ aday isaretledi. Asagidakiler dosya:satir ile isaret edildi ama **bu turda
+ne dogrulandi ne kapatildi** -- once OLCULMELI:
+
+* **Posta (Stalwart) -- en yuklu yuzey.** `MailService` icindeki `ReloadSettings` cagrilari
+  `_ =` ile atiliyor (`:1087`, `:1155`, `:1868`, `:2590`, `:2612`, `:2918`): ayar YAZILIYOR ama
+  Stalwart bellekte tuttugu icin ETKINLESMEMIS olabilir. `QueryAsync:3080` CLI hatasini bos liste
+  yapiyor -> "bu alanda hic kutu yok" gorunumu. `SetAccountQuotaAsync:1692` kardeslerindeki
+  `*_unverified` korumasindan yoksun. `MailEnableMailService` COM cagrilarinda `[void]` ve
+  `catch {}` (silme/parola/alias). `MailController:211` istenen MB'yi yaziyor.
+* **FTP.** `SetRequireSslAsync:289` ISTENEN bayragi donuyor; betikteki geri okuma yalniz
+  `Write-Warning`. `EnsurePasswordNeverExpiresAsync` basarisizliginda hesap yine "olusturuldu".
+* **SSL.** `EnsureHttpsBindingAsync:1180` sertifika deposunu TAHMIN edip (`My`) geri okumuyor;
+  `MeasureHttpsBinding:998` baglamaya bakiyor, `certificateHash`'e bakmiyor.
+* **Bilesen kurulumu.** `ComponentBootstrapper:811` **istenen** surumu kaydediyor; `--version`
+  cikisi (`:3152`) okunup ATILIYOR. roundcube/clamav/vandelay icin dogrulama YOK (`:2979`).
+* **Guvenlik duvari.** `FirewallService:386` `Enabled=true` UYDURUYOR, non-strict runner kullaniyor;
+  `ClearManagedBlockRulesAsync:330` BULUNAN kural sayisini KALDIRILAN diye yaziyor (erisim
+  kurtarma kolu).
+* **Zamanlayici.** `DeleteTaskAsync` / `SetTaskEnabledAsync` geri okumuyor (`CreateTaskAsync`
+  okuyor). `StopTaskAsync:656` `taskkill` cikis kodunu atip DENEME sayisini "oldurulen" yaziyor.
+* **IIS.** `SiteAliasService:110` baglama kaldirilamasa da kaydi siliyor (alias arayuzden kayboluyor,
+  IIS'te kaliyor). `AspNetService:377` `AddAt` basarisizliginda handler'i SONA ekliyor -> `.php`
+  404.3. `SiteHostingSettingsService` web.config'i geri okumuyor (500.19 riski).
+* **Veritabani.** MySQL `--execute="source ..."` istemci tarafi; PostgreSQL kardesindeki
+  `ON_ERROR_STOP` karsiligi YOK. `HardenAdminAccountsAsync` DROP'lari yutunca kayit "temiz" diyor.
+
+### TEMIZ CIKANLAR (bu turda okundu, sinif YOK)
+`WafService.ApplyFolderAclAsync` ($LASTEXITCODE + geri okuma), `DirectoryProtectionService`
+(uc degerli), `SchedulerService.CreateTaskAsync` (`cron.write_unverified`),
+`DiskQuotaService` (strict runner + geri okuma), `FileQuotaGuard`, `MySqlMaintenanceRunner`
+(onarimdan SONRA yeniden CHECK), `StalwartAccountArchiver` (basarisiz hesaplari ADIYLA yaziyor),
+`FtpService` silme/rollback/`ProbeHome`, `NginxInstallationSupport.RemoveAsync`,
+`RemoteDbAccessService` firewall kismi, `MailController` posta listesi abone sayisi (`4f9a1fc`).
+
+### OLCULEMEYENLER
+Bu makinede IIS uygulama havuzu, ayakta Stalwart, MariaDB ve Windows DNS **yok**. Bu yuzden:
+`FolderWriteAccessProbe`'un `granted` dali GERCEK bir havuz kimligiyle degil, gercek NTFS DACL'i
+uzerinde `BUILTIN\Users` SID'iyle olculdu (NTFS davranisi ayni; SID cozumlemesi degil).
+`icacls`'in kismi basarida 0 dondurmesi bu turda YENIDEN olculmedi -- deponun onceki olcumune
+dayanildi (`WebDbClientService.cs:591`).

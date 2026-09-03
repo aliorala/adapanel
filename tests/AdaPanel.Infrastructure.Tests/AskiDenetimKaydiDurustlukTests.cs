@@ -143,7 +143,10 @@ public sealed class AskiDenetimKaydiDurustlukTests : IDisposable
 
     // --- duzenek ---
 
-    private sealed class YakalayanDenetim : IAuditService
+    /// <remarks>PAYLASILIR: ayni kayit durustlugu yoneticinin ELLE askiya aldigi yolda da olculur
+    /// (bkz. <see cref="ElleAskiKaydiDurustlukTests"/>); ikinci bir kopya, birini duzeltip otekini
+    /// unutmanin yolu olurdu.</remarks>
+    internal sealed class YakalayanDenetim : IAuditService
     {
         private readonly List<(string Eylem, string Ayrinti)> kayitlar = [];
 
@@ -173,7 +176,7 @@ public sealed class AskiDenetimKaydiDurustlukTests : IDisposable
     }
 
     /// <summary>Adi listede olan siteyi durdururken/baslatirken FIRLATIR.</summary>
-    private sealed class SecilenSiteyiKiranServis : IIisSiteService
+    internal sealed class SecilenSiteyiKiranServis : IIisSiteService
     {
         public HashSet<string> Kiranlar { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -202,7 +205,7 @@ public sealed class AskiDenetimKaydiDurustlukTests : IDisposable
             => Task.FromResult(new WebStatisticsDto());
     }
 
-    private sealed class PlansizServis : IServicePlanService
+    internal sealed class PlansizServis : IServicePlanService
     {
         public Task<Core.Dtos.Users.ServicePlanDto?> GetPlanAsync(string id, CancellationToken cancellationToken = default)
             => Task.FromResult<Core.Dtos.Users.ServicePlanDto?>(null);
@@ -213,7 +216,7 @@ public sealed class AskiDenetimKaydiDurustlukTests : IDisposable
         public Task DeletePlanAsync(string id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
-    private sealed class TavansizServis : IResellerQuotaService
+    internal sealed class TavansizServis : IResellerQuotaService
     {
         public Task<Core.Dtos.Users.ResellerQuotaDto?> GetQuotaAsync(Guid resellerId, CancellationToken cancellationToken = default)
             => Task.FromResult<Core.Dtos.Users.ResellerQuotaDto?>(null);
