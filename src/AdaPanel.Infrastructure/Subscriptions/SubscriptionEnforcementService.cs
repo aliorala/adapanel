@@ -208,26 +208,45 @@ public sealed class SubscriptionEnforcementService(
         await customerScopes.SuspendAsync(userId, reason, cancellationToken);
 
         var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
+
+        // DURDURULAN sayilir, ISTENEN degil. Onceki hâl denetim kaydina kosulsuz
+        // `scope.Sites.Count` yaziyordu; asagidaki catch tek tek hatalari yutup devam ettigi icin
+        // bes siteden ucu durdurulamasa bile kayit "5 site(s) stopped" diyordu.
+        //
+        // Bedeli dogrudan: askiya alinmis bir musterinin siteleri YAYINDA kalir, denetim kaydi
+        // aksini soyler, ve yonetici arizayi ancak musteri sikayet edince ogrenir. Bu depoda
+        // tekrar eden sinif -- panel yapamadigi seye "yaptim" der.
+        var durdurulan = 0;
+        var durdurulamayan = new List<string>();
+
         foreach (var site in scope.Sites)
         {
             try
             {
                 await iisSiteService.StopSiteAsync(site, cancellationToken);
+                durdurulan++;
             }
             catch (Exception exception)
             {
                 // Bir sitenin durdurulamaması askıyı geri almaz: kayıt zaten askıda ve yönetici
                 // durumu görebilmeli. Sessiz de geçmiyoruz.
+                durdurulamayan.Add(site);
                 logger.LogWarning(exception, "Askıya alma sırasında site durdurulamadı: {Site}", site);
             }
         }
 
         var (aktor, ip, tetikleyici) = Aktor();
 
+        // Basarisiz siteler ADIYLA yazilir: "3 tanesi durdurulamadi" demek yoneticiye hangi
+        // sitenin hâlâ yayinda oldugunu SOYLEMEZ, yani kayit okunabilir ama ise yaramaz olurdu.
+        var durum = durdurulamayan.Count == 0
+            ? $"{durdurulan} site(s) stopped."
+            : $"{durdurulan} of {scope.Sites.Count} site(s) stopped; STILL RUNNING: {string.Join(", ", durdurulamayan)}.";
+
         await auditService.WriteForSubscriptionAsync(
             "subscription.suspended",
             $"subscription:{userId:N}",
-            $"Subscription suspended (rule: {reason}, trigger: {tetikleyici}); {scope.Sites.Count} site(s) stopped.",
+            $"Subscription suspended (rule: {reason}, trigger: {tetikleyici}); {durum}",
             aktor,
             userId,
             ip,
@@ -240,24 +259,41 @@ public sealed class SubscriptionEnforcementService(
         await customerScopes.ResumeAsync(userId, cancellationToken);
 
         var scope = await customerScopes.GetScopeAsync(userId, cancellationToken);
+
+        // KARDES YOL, AYNI HATA. Askiya alma tarafi duzeltilip burasi birakilsaydi, bu depoda
+        // defalarca olculen kalip tekrarlanirdi: koruma bir yola konur, kardesi sessizce eski
+        // hâlde kalir.
+        //
+        // Buradaki bedel TERS ama esit agir: parasini odemis musterinin sitesi KAPALI kalir ve
+        // denetim kaydi acildigini soyler. Musteri "sitem calismiyor" der, yonetici kayda bakar,
+        // kayit "basladi" dedigi icin baska yerde arar.
+        var baslatilan = 0;
+        var baslatilamayan = new List<string>();
+
         foreach (var site in scope.Sites)
         {
             try
             {
                 await iisSiteService.StartSiteAsync(site, cancellationToken);
+                baslatilan++;
             }
             catch (Exception exception)
             {
+                baslatilamayan.Add(site);
                 logger.LogWarning(exception, "Askı kaldırılırken site başlatılamadı: {Site}", site);
             }
         }
 
         var (aktor, ip, tetikleyici) = Aktor();
 
+        var durum = baslatilamayan.Count == 0
+            ? $"{baslatilan} site(s) started."
+            : $"{baslatilan} of {scope.Sites.Count} site(s) started; STILL STOPPED: {string.Join(", ", baslatilamayan)}.";
+
         await auditService.WriteForSubscriptionAsync(
             "subscription.resumed",
             $"subscription:{userId:N}",
-            $"Subscription resumed (trigger: {tetikleyici}); {scope.Sites.Count} site(s) started.",
+            $"Subscription resumed (trigger: {tetikleyici}); {durum}",
             aktor,
             userId,
             ip,
