@@ -316,11 +316,25 @@ public sealed class MailController(
         await CustomerAccess.EnsureMailDomainAsync(customerScopes, User, request.Domain, cancellationToken);
         await EnsureAddressDomainAsync(request.Address, request.Domain, cancellationToken);
         var workspace = await mailService.CreateMailListAsync(request, cancellationToken);
+
+        // ABONE SAYISI SONUCTAN OKUNUR, ISTEKTEN DEGIL. `NormalizeRecipients` TEKRARLARI ayikliyor
+        // ve bos girdileri atliyor; istekteki sayiyi yazmak, 100 adres yapistiran bir yoneticiye
+        // 12'si tekrar oldugu hâlde "100 abone" demek olurdu. Ayni sinif bu oturumda dort kez
+        // olculdu: panel YAPILANI degil ISTENENI raporluyor.
+        var olusan = NormalizeAddress(request.Address, request.Domain);
+        var gercekAbone = workspace.Lists
+            .FirstOrDefault(list => string.Equals(list.Address, olusan, StringComparison.OrdinalIgnoreCase))
+            ?.Recipients.Count;
+
+        // Liste sonucta bulunamazsa SAYI UYDURULMAZ: "olculemedi" denir. Bu deponun uc degerli
+        // durustluk kurali -- yapildi / yapilamadi / olculemedi.
+        var aboneMetni = gercekAbone is { } sayi ? $"{sayi} subscriber(s)" : "subscriber count not measured";
+
         await auditService.AuditAsync(
             HttpContext,
             "mail.list.created",
-            NormalizeAddress(request.Address, request.Domain),
-            $"Mailing list created with {request.Recipients.Count} subscriber(s), posting policy '{request.PostingPolicy}'.",
+            olusan,
+            $"Mailing list created with {aboneMetni}, posting policy '{request.PostingPolicy}'.",
             await AdresSahibiAsync(request.Address, request.Domain, cancellationToken));
         return Ok(ApiResponse<MailWorkspaceDto>.Ok(workspace, "mail.list_created"));
     }
