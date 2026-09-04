@@ -3019,10 +3019,42 @@ public sealed class ComponentBootstrapper(
                 "System32",
                 "inetsrv",
                 "httpPlatformHandler.dll"),
+            // AŞAĞIDAKİ ÜÇÜ HİÇBİR DOĞRULAMA KAPISINDAN GEÇMİYORDU.
+            //
+            // roundcube / clamav / vandelay üçü de `_ => string.Empty` dalına düşüyor, çalışma
+            // zamanı denetiminde `_ => null` dalına düşüyor ve `serviceName` boş olduğu için
+            // servis/port denetiminden de ERKEN DÖNÜYORDU. Yani kurulumun tek kanıtı arşivin
+            // SHA-256'sı ve "açma işlemi patlamadı" idi: yanlış kök klasörle açılmış, yarım
+            // açılmış ya da boş bir arşiv "kuruldu" olarak kaydediliyordu. Bedeli sessizdir —
+            // vandelay yoksa site yedekleri posta İLETİLERİNİ içermez, clamav yoksa tarama hiç
+            // koşmaz, roundcube yoksa webmail açılmaz — ve panel üçünde de "kurulu" der.
+            //
+            // Aranan dosya adları UYDURULMADI: üçü de deponun KENDİ tüketicilerinden alındı —
+            // StalwartAccountArchiver.ToolExecutable ("vandelay.exe"), AntivirusService'in
+            // aradığı "clamscan.exe", ve roundcube'un kendi giriş noktası "index.php".
+            // Tüketicinin aradığı dosya ile kurulumun doğruladığı dosya AYNI olmalı, yoksa
+            // "kurulu" diyen kapı ile "bulamadım" diyen kapı sessizce ayrışır.
+            "roundcube" => FindInstalledFile(installDirectory, "index.php"),
+            "clamav" => FindInstalledFile(installDirectory, "clamscan.exe"),
+            "vandelay" => FindInstalledFile(installDirectory, "vandelay.exe"),
             _ when componentId.StartsWith("php-", StringComparison.Ordinal) =>
                 FindInstalledFile(installDirectory, "php-cgi.exe"),
             _ => string.Empty
         };
+
+        // FindInstalledFile ARAMA yapar ve bulamazsa BOŞ döner; boş dize aşağıdaki kapıyı
+        // ATLATIR. Yani "dosya bulunamadı" ile "bu bileşen için doğrulama tanımlı değil" aynı
+        // görüntüye düşüyordu — bu deponun tekrarlanan hata sınıfı. Doğrulama TANIMLI olan
+        // bileşenlerde boş sonuç artık ayrı bir hatadır.
+        if (string.IsNullOrWhiteSpace(expectedFile)
+            && componentId is "roundcube" or "clamav" or "vandelay")
+        {
+            throw new AppException(
+                "software.install_validation_failed",
+                500,
+                500,
+                $"'{componentId}' kurulumu tamamlandi gorundu ama kurulum klasorunde beklenen dosya BULUNAMADI: {installDirectory}");
+        }
 
         if (!string.IsNullOrWhiteSpace(expectedFile) && !File.Exists(expectedFile))
         {

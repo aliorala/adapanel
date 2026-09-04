@@ -75,19 +75,47 @@ public sealed class FtpController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<FtpTlsStatusDto>>> SetTlsAsync([FromBody] FtpTlsRequest request, CancellationToken cancellationToken)
     {
-        var requireSsl = await ftpService.SetRequireSslAsync(request.RequireSsl, cancellationToken);
+        // ÖLÇÜLEN sonuç. Eskiden burası servisin döndürdüğü ISTENEN bayraktan besleniyordu ve
+        // kullanıcıya "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek" deniyordu —
+        // IIS'e hiç bakmadan. Gerekçe: FtpTlsMeasurement.
+        var olcum = await ftpService.SetRequireSslAsync(request.RequireSsl, cancellationToken);
+        var requireSsl = request.RequireSsl;
 
         // FTPS zorunluluğunun KAPATILMASI, bütün müşterilerin parolasını düz metne indirir —
         // sunucu genelinde güvenlik seviyesini düşüren bir karardır ve kim aldığı bilinmelidir.
+        //
+        // Kayıt artık İSTENENİ değil ÖLÇÜLENİ yazar. "set to True" satırı, politika hiç
+        // uygulanmamışken de yazılıyordu; denetim kaydını okuyan kişi sunucunun düz FTP'yi
+        // reddettiğini sanırdı.
+        var durum = olcum.Verified switch
+        {
+            true => "enforced (verified)",
+            false => "NOT APPLIED (measured)",
+            _ => "unverified (could not be measured)"
+        };
+
         await auditService.AuditAsync(
             HttpContext,
             "ftp.tls.updated",
             "ftp-server",
-            $"FTPS requirement set to {requireSsl}.");
+            $"FTPS requirement set to {requireSsl}: {durum}. {olcum.Detail}".TrimEnd());
 
-        return Ok(ApiResponse<FtpTlsStatusDto>.Ok(
-            new FtpTlsStatusDto { RequireSsl = requireSsl },
-            requireSsl ? "ftp.tls_required" : "ftp.tls_optional"));
+        var status = new FtpTlsStatusDto
+        {
+            RequireSsl = requireSsl,
+            Verified = olcum.Verified,
+            Detail = olcum.Detail
+        };
+
+        // Üç ayrı cümle, üç ayrı gerçek. Sabit yeşil "artık zorunlu" yalnız ÖLÇÜLDÜĞÜNDE çıkar.
+        var mesaj = olcum.Verified switch
+        {
+            true => requireSsl ? "ftp.tls_required" : "ftp.tls_optional",
+            false => "ftp.tls_not_applied",
+            _ => "ftp.tls_unverified"
+        };
+
+        return Ok(ApiResponse<FtpTlsStatusDto>.Ok(status, mesaj));
     }
 
     [HttpGet("users")]
@@ -138,14 +166,37 @@ public sealed class FtpController(
         // PAROLA YAZILMAZ: request.Password kayda hiç girmez. Yazılan şey hesabın kimliği,
         // hangi siteye bağlandığı ve hangi ana dizine yazma hakkı aldığıdır — bir olaydan sonra
         // "bu hesap neye erişebiliyordu" sorusunu cevaplayan alanlar bunlar.
+        // KISMİ BAŞARI ADIYLA YAZILIR. Hesap gerçekten açıldı; eksik olan hesap süre dolumunun
+        // kapatılmasıdır ve bu eksiklik SESSİZDİR: makinenin yaş sınırı işlerse FTP kırk iki gün
+        // sonra kendiliğinden ölür, müşteri "dün çalışıyordu" der.
+        //
+        // NOT (nöbetçi): bu ifade denetim çağrısının İÇİNDE değil, ÖNCESİNDE hesaplanır.
+        // "Denetim_cagrilarina_PAROLA_gecirilmez" nöbetçisi çağrı argümanlarındaki metin DIŞI kodu
+        // tarar ve alan adında geçen sözcüğü sır sanır. Nöbetçiyi gevşetmek yerine ifade dışarı
+        // alındı: koruma aynı sıkılıkta kalsın.
+        var sureNotu = user.PasswordNeverExpires switch
+        {
+            true => string.Empty,
+            false => " WARNING: account expiry could NOT be disabled (measured); the account may stop working after the machine's credential age limit.",
+            _ => " NOTE: account expiry state could not be measured."
+        };
+
         await auditService.AuditAsync(
             HttpContext,
             "ftp.user.created",
             user.UserName,
-            $"FTP account created for site '{user.SiteName}' with home '{user.HomePath}'.",
+            $"FTP account created for site '{user.SiteName}' with home '{user.HomePath}'." + sureNotu,
             await SiteSahibiAsync(user.SiteName, cancellationToken));
 
-        return Ok(ApiResponse<FtpUserDto>.Ok(user, "ftp.user_created"));
+        // Her şey yolundaysa cümle SADE kalır — kullanıcı gereksiz uyarıya boğulmaz.
+        var mesaj = user.PasswordNeverExpires switch
+        {
+            true => "ftp.user_created",
+            false => "ftp.user_created_password_expires",
+            _ => "ftp.user_created_expiry_unverified"
+        };
+
+        return Ok(ApiResponse<FtpUserDto>.Ok(user, mesaj));
     }
 
     [HttpPost("users/password")]
@@ -242,4 +293,17 @@ public sealed class FtpTlsRequest
 public sealed class FtpTlsStatusDto
 {
     public bool RequireSsl { get; set; }
+
+    /// <summary>
+    /// Politika IIS'te GERÇEKTEN yürürlükte mi. <c>true</c> ölçüldü ve yürürlükte, <c>false</c>
+    /// ölçüldü ve UYGULANMADI, <c>null</c> ÖLÇÜLEMEDİ.
+    /// <para>
+    /// Okuma ucunda (<c>GET /ftp/tls</c>) her zaman <c>null</c>'dır: orası yalnız panelin kendi
+    /// kaydını okur, IIS'e hiç bakmaz. "Ne istendi" ile "ne yürürlükte" ayrı sorulardır.
+    /// </para>
+    /// </summary>
+    public bool? Verified { get; set; }
+
+    /// <summary>Ölçümün ham ayrıntısı (hangi ayar hangi değerde okundu).</summary>
+    public string Detail { get; set; } = string.Empty;
 }

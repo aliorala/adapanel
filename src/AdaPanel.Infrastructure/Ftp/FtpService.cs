@@ -286,11 +286,22 @@ public sealed partial class FtpService(
     public async Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default)
         => (await fileStore.ReadAsync(TlsStatePath, new FtpTlsState(), cancellationToken)).RequireSsl;
 
-    public async Task<bool> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// FTPS zorunluluğunu yazar, IIS'e uygular ve UYGULANDIĞINI GERİ OKUR.
+    /// </summary>
+    /// <remarks>
+    /// Eskiden ISTENEN bayrağı döndürüyordu ve uç de o bayraktan beslenip kullanıcıya "FTPS artık
+    /// zorunlu; düz FTP bağlantıları reddedilecek" diyordu. Gerekçenin tamamı
+    /// <see cref="FtpTlsMeasurement"/> içindedir: altyapı betiği gevşek koşucuyla çalışır, geri
+    /// okuma betiğin İÇİNDE zaten vardı ama yalnız <c>Write-Warning</c> yazıyor ve C# tarafı
+    /// çıktıya hiç bakmıyordu — ölçüm yapılıp atılıyordu.
+    /// </remarks>
+    public async Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default)
     {
         await fileStore.WriteAsync(TlsStatePath, new FtpTlsState { RequireSsl = requireSsl }, cancellationToken);
-        await EnsureFtpInfrastructureAsync(true, cancellationToken); // SSL politikası değişti → tam yeniden kur (controlChannelPolicy 0/1 + FTPSVC restart)
-        return requireSsl;
+
+        // SSL politikası değişti → tam yeniden kur (controlChannelPolicy 0/1 + FTPSVC restart).
+        return await EnsureFtpInfrastructureAsync(true, cancellationToken);
     }
 
     private sealed class FtpTlsState
@@ -387,7 +398,11 @@ public sealed partial class FtpService(
 
         // Hesap AÇILDIĞI ANDA parola süresi kapatılır: aksi hâlde makinenin MaxPasswordAge'i
         // (varsayılan 42 gün) hesaba işler ve FTP kırk iki gün sonra sessizce ölür.
-        await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
+        //
+        // SONUÇ ARTIK ATILMIYOR: aşağıdaki DTO'ya konur ve uç denetim kaydına yazar. Eskiden
+        // yalnız günlüğe yazılıyordu, yani hesap eksik açıldığında bile panel sade "oluşturuldu"
+        // diyordu ve kırk iki gün sonra kimse buraya bakmıyordu.
+        var parolaSuresiz = await EnsurePasswordNeverExpiresAsync(userName, cancellationToken);
 
         // YARIM KALAN OLUŞTURMA ÖKSÜZ HESAP BIRAKIYORDU (19.08.2026, ölçüldü).
         //
@@ -472,6 +487,7 @@ public sealed partial class FtpService(
             CreatedAtUtc = record.CreatedAtUtc,
             IsEnabled = true,
             ExistsOnSystem = true,
+            PasswordNeverExpires = parolaSuresiz,
             ServerAddress = Environment.MachineName,
             Port = FtpPort
         };
@@ -723,7 +739,7 @@ public sealed partial class FtpService(
         return onarilan;
     }
 
-    private async Task EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken)
+    private async Task<FtpTlsMeasurement> EnsureFtpInfrastructureAsync(bool forceReconfigure, CancellationToken cancellationToken)
     {
         // IIS FTP rolü kurulu değilse New-WebFtpSite ve ftpServer config bölümleri bulunmaz → script
         // "ftp.site_configuration_failed" ile patlar (canlı VPS bulgusu). Classic ASP/PHP gibi OTOMATİK KUR (atlama yok).
@@ -749,7 +765,9 @@ public sealed partial class FtpService(
         // (SSL politikası değişimi gibi gerçekten gereken durumlar force=true ile tam yeniden kurar.)
         if (!forceReconfigure && await IsFtpInfrastructureReadyAsync(cancellationToken))
         {
-            return;
+            // Hızlı yolda TLS politikası YENİDEN YAZILMADI, dolayısıyla ÖLÇÜLMEDİ de. Burada
+            // "uygulandı" demek, hiç bakmadan iddia etmek olurdu.
+            return FtpTlsMeasurement.Olculemedi("FTP altyapisi hazir kabul edildi; TLS politikasi bu cagride yazilmadi.");
         }
 
         // Pasif (PASV) mod: sunucu, veri kanalı için istemciye bir IP bildirir. Bu IP yanlış/iç IP olursa
@@ -803,11 +821,39 @@ public sealed partial class FtpService(
             Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.ftpServer/firewallSupport' -Name highDataChannelPort -Value {{PassivePortEnd}}
             {{externalIpLine}}
             # SESSIZ BASARISIZLIK BIR DAHA OLMASIN: ayarin gercekten uygulandigini geri-okuyup dogrula.
-            # NOT: bu geri-okuma yalnız UYARI verir, ASLA throw etmez. Bazı IIS sürümlerinde Get-ItemProperty
+            # NOT: bu geri-okuma yalnız OLCER, ASLA throw etmez. Bazı IIS sürümlerinde Get-ItemProperty
             # değeri farklı tipte döndürdüğü için (.Value boş/enum-adı) eski throw, Set basarili olsa bile
-            # FTP'yi tümden bloke ediyordu (yanlis-pozitif). Set yukarida calisti; dogrulama bilgilendirme amacli.
-            $applied = "$((Get-ItemProperty "IIS:\Sites\$siteName" -Name ftpServer.security.ssl.controlChannelPolicy -ErrorAction SilentlyContinue).Value)"
-            if ($applied -ne '{{policy}}' -and $applied -ne '{{policyName}}') { Write-Warning "FTP SSL ayari dogrulanamadi (controlChannelPolicy=$applied, beklenen={{policy}})." }
+            # FTP'yi tümden bloke ediyordu (yanlis-pozitif). Set yukarida calisti; dogrulama OLCUM amacli.
+            #
+            # SONUC ARTIK ATILMIYOR: asagidaki ADAPANEL-FTP-TLS damgasi C# tarafinda okunur
+            # (FtpTlsMeasurement) ve kullaniciya soylenen cumleyi O belirler. Eskiden burada yalniz
+            # Write-Warning vardi, C# tarafi ciktiya HIC bakmiyordu -- yani olcum yapilip atiliyordu
+            # ve panel ISTENEN bayragi "FTPS artik zorunlu" diye gosteriyordu.
+            #
+            # Deger okunamazsa BOS birakilir: bos = "olculemedi", "uygulanmadi" DEGIL.
+            function Oku-FtpAyari($ad) {
+              try {
+                $p = Get-ItemProperty "IIS:\Sites\$siteName" -Name $ad -ErrorAction Stop
+                if ($null -eq $p) { return '' }
+                if ($p -is [int] -or $p -is [string]) { return "$p" }
+                if ($null -ne $p.Value -and "$($p.Value)" -ne '') { return "$($p.Value)" }
+                return ''
+              } catch { return '' }
+            }
+            $okunanControl = Oku-FtpAyari 'ftpServer.security.ssl.controlChannelPolicy'
+            $okunanData = Oku-FtpAyari 'ftpServer.security.ssl.dataChannelPolicy'
+            # Sertifika AYRI olculur: controlChannelPolicy=1 iken serverCertHash bossa IIS "AUTH TLS"i
+            # reddeder -> duz baglanti da yasak, TLS de imkansiz = FTP TUMDEN kapanir. Yukaridaki
+            # sertifika baglama `catch { }` icinde oldugu icin bu durum SESSIZCE olusabilir.
+            #
+            # BOS SERTIFIKA ile OKUNAMAYAN SERTIFIKA ayni goruntuye DUSMEMELI (bu deponun tekrarlanan
+            # dersi). Ayrimi kanit yapan sey komsu okuma: controlChannelPolicy okunabildiyse saglayici
+            # ve site okunabiliyor demektir, dolayisiyla BOS serverCertHash gercekten "bagli degil"dir.
+            # Komsu da okunamadiysa hicbir sey iddia etmeyiz ve alan BOS (= olculemedi) kalir.
+            $okunanCert = Oku-FtpAyari 'ftpServer.security.ssl.serverCertHash'
+            if ($okunanCert -eq '' -and $okunanControl -ne '') { $okunanCert = 'yok' }
+            if ($okunanControl -ne '{{policy}}' -and $okunanControl -ne '{{policyName}}') { Write-Warning "FTP SSL ayari dogrulanamadi (controlChannelPolicy=$okunanControl, beklenen={{policy}})." }
+            [Console]::Out.WriteLine('ADAPANEL-FTP-TLS=' + $okunanControl + '|' + $okunanData + '|' + $okunanCert)
             Start-WebSite -Name $siteName -ErrorAction SilentlyContinue
             # Pasif port aralığı (firewallSupport) ve SSL sertifikası değişikliklerinin uygulanması için
             # Microsoft FTP Service yeniden başlatılır (IIS bu ayarları canlı okumaz).
@@ -828,6 +874,21 @@ public sealed partial class FtpService(
 
         // Tam kurulum başarılı → bayrağı işaretle ki sonraki kullanıcı eklemeleri hızlı yolu kullansın (servis restart yok).
         await fileStore.WriteAsync(InfraStatePath, new FtpInfraState { Configured = true }, cancellationToken);
+
+        // ÖLÇÜM ARTIK ATILMIYOR. `result.Success` burada yalnız "betik sonuna kadar aktı" demektir:
+        // koşucu GEVŞEK (RunPowerShellAsync) ve `Set-ItemProperty` sonlandırıcı olmayan bir hata
+        // verdiğinde powershell.exe 0 ile çıkar. Politikanın yürürlükte olup olmadığını yalnız
+        // yukarıdaki damga söyler.
+        var olcum = FtpTlsMeasurement.Olc(requireSsl, result.StandardOutput);
+        if (olcum.Failed)
+        {
+            logger?.LogWarning(
+                "FTP TLS politikasi IIS'e uygulanmadi (istenen zorunluluk: {RequireSsl}). {Detay}",
+                requireSsl,
+                olcum.Detail);
+        }
+
+        return olcum;
     }
 
     // Altyapı hazır mı (hızlı kontrol): daha önce tam kuruldu (bayrak) VE FTPSVC çalışıyor mu. FTPSVC kontrolü
@@ -1328,7 +1389,12 @@ public sealed partial class FtpService(
     /// burada patlamak, çalışan bir FTP hesabını geri almak olurdu. Ama SESSİZ de değil —
     /// başarısızlık ölçülen değerle birlikte kaydedilir.
     /// </remarks>
-    private async Task EnsurePasswordNeverExpiresAsync(string userName, CancellationToken cancellationToken)
+    /// <returns>
+    /// <c>true</c> ölçüldü ve süresiz, <c>false</c> ölçüldü ve HÂLÂ süre dolumu var,
+    /// <c>null</c> ölçülemedi. Sonuç artık ATILMIYOR: çağıran onu <see cref="FtpUserDto"/>'ya
+    /// koyar, uç de denetim kaydına yazar. Eskiden yalnız <c>LogWarning</c>'e gidiyordu.
+    /// </returns>
+    private async Task<bool?> EnsurePasswordNeverExpiresAsync(string userName, CancellationToken cancellationToken)
     {
         // Ad UserNamePattern ile ^[A-Za-z][A-Za-z0-9._-]{1,31}$ olarak doğrulanmıştır; tırnak giremez.
         var ad = EscapePowerShellLiteral(userName);
@@ -1344,11 +1410,17 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
         try
         {
             var sonuc = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-            if (sonuc.Success &&
-                (sonuc.StandardOutput ?? string.Empty).Contains("ADAPANEL-SURESIZ", StringComparison.Ordinal))
+            var cikti = sonuc.StandardOutput ?? string.Empty;
+            if (sonuc.Success && cikti.Contains("ADAPANEL-SURESIZ", StringComparison.Ordinal))
             {
-                return;
+                return true;
             }
+
+            // ÖLÇÜLDÜ ve HÂLÂ SÜRE DOLUMU VAR ile HİÇ ÖLÇÜLEMEDİ aynı görüntüye düşmemeli.
+            // ADAPANEL-SON damgası, Get-LocalUser'ın ÇALIŞTIĞININ kanıtıdır: bayrak okundu ve
+            // bir son tarih döndü, yani "kapatılamadı" KESİN bilgidir. Damga hiç yoksa betik
+            // daha o noktaya varamamıştır ve hiçbir şey iddia etmeyiz.
+            var olculdu = cikti.Contains("ADAPANEL-SON=", StringComparison.Ordinal);
 
             // MASKELENEREK yazilir. Bu yol FTP hesabi uzerinde `net user` calistirir ve o komutta
             // parola KONUMSAL argumandir; basarisiz bir komutun ciktisi komut satirini geri
@@ -1360,6 +1432,8 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
                 userName,
                 "MaxPasswordAge",
                 SecretRedactor.SanitizeDetails(BuildCommandDetails(sonuc)));
+
+            return olculdu ? false : null;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -1367,6 +1441,8 @@ else {{ [Console]::Out.WriteLine('ADAPANEL-SON=' + $hesap.PasswordExpires.ToStri
                 exception,
                 "FTP hesabinin parola suresi kapatilamadi: {UserName}.",
                 userName);
+
+            return null;
         }
     }
 

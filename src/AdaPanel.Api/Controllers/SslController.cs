@@ -80,7 +80,8 @@ public sealed class SslController(
             $"joker={request.Wildcard}, staging={request.UseStaging}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}" +
             (string.IsNullOrWhiteSpace(certificate.FallbackReason)
                 ? ")"
-                : $", kendinden-imzaliya dusuldu: {certificate.FallbackReason})"),
+                : $", kendinden-imzaliya dusuldu: {certificate.FallbackReason})")
+            + BaglamaNotu(certificate),
             await SiteSahibiAsync(certificate.SiteName, cancellationToken));
 
         await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
@@ -116,12 +117,29 @@ public sealed class SslController(
             $"ssl:{certificate.SiteName}",
             $"Sertifika ice aktarildi: {certificate.HostName}:{certificate.Port} " +
             $"(parmak izi={certificate.Thumbprint}, konu={certificate.Subject}, " +
-            $"kaynak={certificate.Source}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}).",
+            $"kaynak={certificate.Source}, bitis={certificate.NotAfterUtc:yyyy-MM-dd})."
+            + BaglamaNotu(certificate),
             await SiteSahibiAsync(certificate.SiteName, cancellationToken));
 
         await TrySecureWebmailAsync(certificate.HostName, string.Empty, cancellationToken);
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.imported"));
     }
+
+    /// <summary>
+    /// Denetim kaydına eklenen ölçüm notu. Her şey yolundaysa BOŞTUR — kayıt sade kalır.
+    /// </summary>
+    /// <remarks>
+    /// "Sertifika alindi" satırı, sertifika HTTPS bağlamasına hiç işlenmemişken de yazılıyordu.
+    /// Kaydı sonradan okuyan kişi sitenin 443'te çalıştığını sanır; oysa bağlama sertifikasız
+    /// kalmış olabilir ve site orada ölüdür (bkz. SslBindingVerification).
+    /// </remarks>
+    private static string BaglamaNotu(SslCertificateDto certificate)
+        => certificate.IsCertificateBound switch
+        {
+            true => string.Empty,
+            false => $" UYARI: sertifika HTTPS baglamasina ISLENMEDI (olculdu). {certificate.BindingDetail}",
+            _ => " NOT: sertifikanin baglamaya islendigi DOGRULANAMADI."
+        };
 
     // Best-effort: site SSL aldıktan sonra webmail.<domain>'i de otomatik HTTPS yap (profesyonel paneller gibi).
     // İsteği ASLA bozmaz — webmail kurulu değilse / DNS yoksa / sertifika alınamazsa sessiz geçer.

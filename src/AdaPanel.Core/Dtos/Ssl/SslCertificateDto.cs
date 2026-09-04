@@ -36,6 +36,25 @@ public sealed class SslCertificateDto
     /// </summary>
     public bool? IsHttpsBindingPresent { get; set; }
 
+    /// <summary>
+    /// HTTPS bağlaması BİZİM sertifikamızı taşıyor mu. <c>null</c> = ÖLÇÜLEMEDİ.
+    /// <para>
+    /// <see cref="IsHttpsBindingPresent"/> tek başına YETMEZ ve bu ayrım teoriktik değildir:
+    /// bağlama kurulumu ile sertifika iliştirme AYRI iki adımdır (<c>New-WebBinding</c>, sonra
+    /// <c>AddSslCertificate</c>). İkincisi düşerse geriye sertifikasız bir HTTPS bağlaması kalır;
+    /// tarayıcı bağlantıyı kapatır, site 443'te ölüdür — ve eski ölçüm buna "HTTPS bağlaması var"
+    /// diyordu, çünkü <c>SiteBindingDto</c>'da sertifika alanı hiç yoktu.
+    /// </para>
+    /// <para>
+    /// <c>false</c> = ölçüldü, sertifika bağlamada YOK ya da beklenen sertifika değil.
+    /// <c>null</c> = bağlama listesi/sertifika alanı okunamadı.
+    /// </para>
+    /// </summary>
+    public bool? IsCertificateBound { get; set; }
+
+    /// <summary>Bağlama ölçümünün ham ayrıntısı (hangi site, hangi parmak izi okundu).</summary>
+    public string BindingDetail { get; set; } = string.Empty;
+
     public int Port { get; set; }
 
     /// <summary>

@@ -1799,3 +1799,280 @@ FTP (`SetRequireSslAsync:289`, `EnsurePasswordNeverExpiresAsync`), SSL
 `HardenAdminAccountsAsync`), `MailEnableMailService` COM `[void]` / bos `catch`,
 `SetAccountQuotaAsync:1692` kardeslerindeki dogrulama korumasi,
 `ComponentBootstrapper:2979` (roundcube/clamav/vandelay dogrulamasi YOK).
+
+---
+
+## "BAKILMADI" LISTESINDEKI ALTI ADAY DOGRULANDI (05.09.2026, ucuncu tur) -- commit ATILMADI
+
+Onceki turun ACIKCA "ne dogrulandi ne kapatildi" diye biraktigi adaylarin HEPSI dosya:satir ile
+dogrulandi. **Altisi da ACIKTI.** Onu kapatildi; ucu olculdu ama kapatilMADI (asagida ayri
+baslikta, adiyla).
+
+Canli panele (8890) DOKUNULMADI; gercek IIS sitesi / FTP hesabi / sertifika / zamanlanmis gorev
+OLUSTURULMADI ya da SILINMEDI; hicbir sey silinmedi.
+
+### 1) FTP -- `SetRequireSslAsync` ISTENEN bayragi donduruyordu -- **ACIK**, kapatildi
+
+`FtpService.cs:289` istenen `bool`'u geri veriyordu; `FtpController.cs:78` de ondan beslenip
+kullaniciya `panel.ftp.tlsRequired` = **"FTPS artik zorunlu; duz FTP baglantilari reddedilecek"**
+diyordu. Bu bir GUVENLIK IDDIASIDIR ve IIS'e hic bakilmadan yaziliyordu.
+
+Altyapi betigi GEVSEK kosucuyla calisiyor (`RunPowerShellAsync`): `Set-ItemProperty` sonlandirici
+olmayan hata verdiginde betik akar ve `powershell.exe` 0 ile cikar. Betigin ICINDE geri okuma
+ZATEN VARDI (`:809`) ama yalniz `Write-Warning` yaziyordu ve C# tarafi ciktiya HIC bakmiyordu --
+**olcum yapilip ATILIYORDU**, bu deponun tekrarlanan hata sinifi.
+
+Bedeli iki yonludur: acma duserse butun musteri parolalari duz metin akmaya devam eder ve panel
+"reddedilecek" der; kapatma duserse site SslRequire'da kalir, istemciler "534 Policy requires
+SSL" ile kilitlenir ve panel "istege bagli" der.
+
+**KAPATMA BICIMI.** Yeni `Core/Dtos/Ftp/FtpTlsMeasurement.cs` (uc degerli). Betik artik
+`ADAPANEL-FTP-TLS=<control>|<data>|<cert>` damgasi basiyor; **dataChannelPolicy ve serverCertHash
+de AYRI olculuyor** (controlChannelPolicy=1 iken sertifika yoksa IIS AUTH TLS'i reddeder -- duz
+baglanti da yasak, TLS de imkansiz: FTP TUMDEN kapanir; ve sertifika baglama betikte `catch { }`
+icinde). Taninmayan/bos deger "uygulanmadi" DEGIL "olculemedi" sayilir: betigin kendi 2026-06-21
+notu, eski bir throw'un calisan FTP'yi yanlis alarmla bloke ettigini yaziyor.
+
+### 2) FTP -- `EnsurePasswordNeverExpiresAsync` sonucu ATILIYORDU -- **ACIK**, kapatildi
+
+Metot bayragi ZATEN geri okuyordu ama sonuc yalniz `LogWarning`'e gidiyordu; olusturma yolu her
+halukarda sade "hesap olusturuldu" donuyordu. Hesap gercekten olusuyor -- yalan orada degil,
+**soylenmeyende**: makinenin yas siniri islerse FTP kirk iki gun sonra SESSIZCE olur. Artik
+`FtpUserDto.PasswordNeverExpires` (uc degerli) tasiniyor; denetim kaydi ve uc mesaji kismi
+basariyi ADIYLA yaziyor. Basarili durumda cumle SADE kaliyor.
+
+### 3) SSL -- baglama olculuyordu, SERTIFIKA olculmuyordu -- **ACIK**, kapatildi
+
+`MeasureHttpsBinding:998` yalniz `Protocol == "https"` ve host adina bakiyordu; **`SiteBindingDto`'da
+sertifika alani ZATEN YOKTU**, yani olcum yapisal olarak sertifikayi goremiyordu.
+`EnsureHttpsBindingAsync:1180` ise baglamayi ONCE kurar (`New-WebBinding`), sertifikayi SONRA
+ilistirir (`AddSslCertificate`). Bu siralama tek basina sunu dogurur: ikinci adim duserse geriye
+**sertifikasiz bir HTTPS baglamasi** kalir -- tarayici baglantiyi kapatir, site 443'te oludur --
+ve panel "HTTPS baglamasi var" deyip ssl.json'a oyle yazar. Ayrica betik sertifika deposunu `My`
+diye VARSAYAR ve bunu geri okumaz.
+
+**KAPATMA BICIMI -- TEK KAYNAK.** Depo ZATEN sertifika-farkindalikli bir okuyucuya sahipti:
+`ReadHttpsBindingsAsync` (certificateHash + certificateStoreName). KALDIRMA yolu onu dogru
+kullaniyor, KURMA yolu kullanmiyordu. Yeni `Ssl/SslBindingVerification.cs` (IIS'e dokunmayan saf
+karar mantigi, `SslRemovalPlan` ile ayni gerekce) o okuyucudan beslenir. Okuyucu betigine
+`certificateReadable` eklendi: "sertifika YOK" ile "sertifikaya BAKAMADIM" ayni bos parmak izine
+dusuyordu. `SslCertificateDto.IsCertificateBound` (uc degerli) + `BindingDetail` eklendi; arayuz
+ve denetim kaydi uc durumu ayri gosteriyor.
+
+### 4) ZAMANLAYICI -- taskkill cikis kodu atiliyor, DENEME sayisi "oldurulen" yaziliyordu -- **ACIK**, kapatildi
+
+`BuildStopScript:668-669`: `taskkill.exe ... | Out-Null` sonrasinda `$oldurulen++` **KOSULSUZ**
+calisiyordu. `taskkill /F` erisim reddinde 1 ile doner ve surec YASAMAYA DEVAM EDER; panel yine
+de arayuzde `panel.tasks.stopDone` = "N surec agaci sonlandirildi" diyordu. Kullanicinin canli
+sunucusunda yasanan Chrome/Selenium zinciri tam olarak bu satirla "durduruldu" gorunuyordu.
+
+Artik IKI KANIT birlikte araniyor: cikis kodu 0 **VE** surecin yeniden soruldugunda BULUNAMAMASI
+(cikis kodu 0 olsa bile taskkill "termination signal sent" deyip cikabilir). Yeni damgalar
+`ADAPANEL-DENENEN` ve `ADAPANEL-HAYATTA`; `StopScheduledTaskResultDto` artik `AttemptedProcesses`
++ `SurvivingProcesses` (ADIYLA, ad(pid)) + `AllKilled` tasiyor.
+
+### 5) ZAMANLAYICI -- DeleteTaskAsync / SetTaskEnabledAsync geri okumuyordu -- **ACIK**, kapatildi
+
+Kardesi `CreateTaskAsync` bu geri okumayi ZATEN yapiyordu (`cron.write_unverified`). Ayni dosyada
+bir tarafin kapali obur tarafin acik olmasi, korumanin kural degil TESADUF oldugunu gosterir.
+Silme yolu uc yerden cagriliyor ve ucu de "gitti" varsayiyordu (uc kaydi,
+`RemoveTasksUnderRootAsync` sayaci, `SiteHostingSettingsService`'in `Running = false` iddiasi).
+`SetTaskEnabledAsync`'te olcum zaten elde edilip `| Out-Null` ile atiliyordu:
+`Enable-/Disable-ScheduledTask` SONUCTAKI gorev nesnesini dondurur ve `State` tam da sorulan
+seydir. Yeni anahtarlar: `cron.delete_failed`, `cron.delete_unverified`, `cron.state_not_applied`,
+`cron.state_unverified`.
+
+### 6) IIS -- takma ad kaydi, baglama kaldirilamasa da siliniyordu -- **ACIK**, kapatildi
+
+`SiteAliasService.cs:122-144`: baglama kaldirma hatasi yutuluyor (yalniz `LogWarning`) ve kayit
+**her halukarda** siliniyordu. Metodun KENDI yorumu (`:107-109`) tam da bu felaketi anlatiyor:
+"yalniz kaydi silmek alan adini IIS'te bagli birakirdi" -- ve kod sessizce onu yapiyordu.
+Gorunmezligi yapisal: `GetAliasesAsync:43` kaydi IIS baglamalarina gore SUZER, tersini yapmaz;
+kayit gidince oksuz baglamayi gosterecek hicbir ekran kalmaz. Kiraci izolasyonu acisindan ayrica
+agir: ad hala eski sitede bagli oldugu icin asil sahibi onu alamaz ("bu ad kullanimda").
+
+**KAPATMA BICIMI.** `taze` zaten okunuyordu ama kayit ONDAN ONCE siliniyor, olcum de yalniz
+yonlendirme kuralini yazmak icin kullaniliyordu -- cevap elimizdeydi, sorulmuyordu. Sira
+degistirildi: geri okuma ONCE, kayit silme SONRA. Baglama hala duruyorsa
+`alias.remove_binding_failed` firlatilir ve **kayit KALIR** (islem yeniden denenebilir); site
+okunamazsa `alias.remove_unverified` -- kendi olcum hatamizi geri alinamaz bir "kayboldu"ya
+cevirmeyiz. Kardes yol `WinAcmeSslService.RemoveCertificateAsync:1272` ayni kurali zaten
+uyguluyordu.
+
+### 7) VERITABANI -- MySQL geri yukleme istemci tarafi `source` kullaniyordu -- **ACIK**, kapatildi
+
+`DatabaseService.cs:907` ve `:712`: `--execute="source <dosya>"`. `source` mysql istemcisinin
+KENDI komutudur, SQL degildir: dosyayi istemci satir satir okur ve icindeki bir ifade patladiginda
+akisa devam eder. `ImportDumpAsync` yalniz `result.Success`'a baktigi icin YARIM geri yuklenmis
+bir veritabani "geri yukleme tamam" olarak raporlanabiliyordu -- ve yonetici o cumleye guvenip
+elindeki yedegi siler. PostgreSQL kardesi bu tuzagi `ON_ERROR_STOP=1` ile kapatmis, gerekcesini
+yazmis ve TESTLE sabitlemisti (`PostgreSqlDumpArgumentTests.cs:34`); MySQL tarafinda ne bayrak,
+ne gerekce, ne test vardi.
+
+**KAPATMA BICIMI.** `ProcessRunner.RunAsync`'e istege bagli `standardInputFilePath` eklendi
+(girdi, cikti okuyuculari BASLADIKTAN SONRA beslenir -- ters sira klasik kilitlenmedir) ve iki
+MySQL yukleme yolu da TOPLU (batch) moda alindi. Argumanlar `BuildMySqlImportArguments` ile tek
+kaynaga cikarildi ve testle sabitlendi (`source` geri sizarsa ya da `--force` eklenirse kirmizi).
+
+### 8) VERITABANI -- HardenAdminAccountsAsync DROP'lari yutunca kayit "temiz" diyordu -- **ACIK**, kapatildi
+
+`MySqlDatabaseProvider.cs:327-340`: `DROP USER` hatalari `catch (MySqlException) { }` ile
+yutuluyor ve YALNIZ basarililar sayiliyordu. `DatabasesController.cs:153` de
+`removed.Count == 0 ? "Hardening: no insecure admin accounts found." : ...` yaziyordu. Yani
+**uc guvensiz hesap BULUNUP ucunun de silinmesi basarisiz oldugunda kayit "guvensiz yonetici
+hesabi bulunamadi" diyordu** -- kodun BIR IFADE ONCE SELECT ile saydigi hesaplar hakkinda.
+Panelin bilmedigini degil, BILDIGININ TERSINI soylemesi. root@'%' parolasiz kalmasi bu depoda
+bilinen kritik acik; onu kapatmak icin dugmeye basan yonetici "temiz" yazisini gorup baska yere
+bakar. (Ek bulgu: `FLUSH PRIVILEGES` yalniz `removed.Count > 0` iken kosuyor, yani tam da hepsi
+basarisiz olan durumda ATLANIYOR.)
+
+**KAPATMA BICIMI.** Yeni `Core/Dtos/Databases/DatabaseHardeningReport.cs` (Applied / Failed /
+Unverified / Measured; `Clean` uc degerli, `Measured` varsayilani **false** = fail-safe).
+Sertlestirmeden SONRA guvensiz hesap listesi AYNI sorguyla (tek kaynak:
+`GuvensizHesaplariOkuAsync`) yeniden okunur: hala duran her hesap, DROP hata vermemis olsa bile
+basarisizdir. PostgreSQL kardesi de ayni rapora gecirildi (ortak erisimi acik kalan veritabani
+artik ADIYLA raporlaniyor).
+
+### 9) POSTA -- SetAccountQuotaAsync kardeslerindeki dogrulamadan yoksundu -- **ACIK**, kapatildi
+
+`MailService.cs:1752`: `MutateAsync` yalniz CLI cikis durumuna bakip TAZE workspace donduruyor --
+ve o workspace'teki `MaxSizeMB` sunucudan OKUNMUS degerdir (`:222`). Yani cevap donen nesnenin
+ICINDEYDI ve hic sorulmuyordu; `MailController.cs:632` de ISTENEN degeri "Mailbox quota set to
+{N} MB" diye kaydediyordu. Kardes yol `SetOutboundLimitAsync:3799` bu dogrulamayi zaten yapiyor
+(`mail.outbound_limit_unverified`). Yeni anahtarlar: `mail.mailbox_quota_not_applied`,
+`mail.mailbox_quota_unverified`. `AccountsMeasured` false ise "uygulanmadi" DENMEZ.
+
+### 10) BILESEN KURULUMU -- roundcube/clamav/vandelay HICBIR kapidan gecmiyordu -- **ACIK**, kapatildi
+
+`ComponentBootstrapper.cs:3024` (`_ => string.Empty`), `:3193` (`_ => null`) ve `serviceName: ""`
+yuzunden servis/port denetiminden erken donus: bu uc bilesende kurulumun tek kaniti arsivin
+SHA-256'si ve "acma patlamadi" idi. Yanlis kok klasorle acilmis, yarim acilmis ya da bos bir arsiv
+"kuruldu" olarak kaydediliyordu. Bedeli sessiz: vandelay yoksa **site yedekleri posta ILETILERINI
+icermez**, clamav yoksa tarama hic kosmaz, roundcube yoksa webmail acilmaz.
+
+Aranan dosya adlari UYDURULMADI, deponun KENDI tuketicilerinden alindi:
+`StalwartAccountArchiver.cs:42` (vandelay.exe), `AntivirusService.cs:101` (clamscan.exe),
+roundcube'un kendi giris noktasi index.php. Ayrica `FindInstalledFile` bulamayinca BOS doner ve
+bos dize `File.Exists` kapisini ATLATIYORDU -- "dosya yok" ile "dogrulama tanimli degil" ayni
+goruntuye dusuyordu; bu uc bilesen icin ayri bir kapi eklendi.
+
+### MUTASYON KANITI (22 mutasyon, 22'si KIRMIZI -- ikisi ancak TESTI DUZELTTIKTEN SONRA)
+
+Eski davranisi geri getiren 14 mutasyon (FTP TLS hep "yururlukte"; FTP TLS sertifikasi hic
+olculmez; SSL sertifikasi hep bagli; okunamayan sertifika "yok" sayilir; taskkill sonucu
+denetlenmez; hayatta kalan surec olsa da "hepsi olduruldu"; sertlestirme olculmeden "temiz";
+MySQL yine `source`; kosucu standart girdiyi beslemez; takma ad kaydi geri okumadan once silinir;
+posta kotasi geri okunmaz; uc bilesen hic dogrulanmaz; bos isaret kapiyi atlatir) ilgili testleri
+kirmizi yakti.
+
+**FAZLA KAPATMA NOBETCILERI (8):** FTP TLS hep "uygulanmadi"; SSL sertifikasi hep bagli DEGIL;
+hicbir surec olduruldu sayilmaz; sertlestirme hep "eksik"; posta kotasi hep "uygulanmadi"; takma
+ad silme hep "baglama duruyor"; takma ad silme hep "okunamadi" -- sekizi de kirmizi. Yani her sey
+yolundayken panel HALA sade "yapildi" diyor.
+
+**KENDI TESTIMIN IKI KACAGI OLCULDU VE KAPATILDI (durustluk kaydi).** Ilk turda "taskkill sonucu
+denetlenmez" mutasyonu YESIL KALDI: kaynak taramasi `$LASTEXITCODE`'un VARLIGINA bakiyordu ve
+kosulun YANINA kosulsuz bir artirma eklenince gecip gidiyordu. Sinama, artirma NOKTASININ
+TEKLIGINI olcecek sekilde degistirildi ve karar kurali GERCEK powershell'de dort kombinasyonla
+ayrica olculdu. Ikinci kacak: takma ad silmenin fazla-kapatma nobetcisi de kaynak taramasi oldugu
+icin "hep basarisiz" mutasyonundan gecti; yerine sahte bir `IIisSiteService` ile GERCEK
+`RemoveAliasAsync` kosturan davranis testi yazildi.
+
+### OLCULEMEYENLER (durustce)
+
+* Bu makinede kurulu **IIS FTP sitesi, IIS uygulama havuzu, ayakta MariaDB/MySQL ve Gorev
+  Zamanlayici'da panel gorevi YOK**; surec de YUKSELTILMEMIS. Bu yuzden OLCULMEDI: IIS'in
+  `controlChannelPolicy` yazimini gercekte kabul edip etmedigi; `AddSslCertificate`'in gercek
+  davranisi; `taskkill`'in gercek bir gorev agacindaki cikis kodu; ve **mysql.exe'nin bozuk bir
+  dokum karsisinda gercekte hangi cikis kodunu verdigi**.
+* Buna karsilik BU MAKINEDE OLCULDU: (a) FTP geri okuma blogu gercek powershell.exe'de
+  ayristirildi ve IIS yokken `ADAPANEL-FTP-TLS=||` basiyor -- yani "olculemedi"ye dusuyor,
+  "uygulanmadi"ya degil (fail-safe dogrulandi); (b) durdurma betiginin TAMAMI gercek powershell'de
+  kosturuldu ve damgalarini basiyor (hicbir surec oldurulmedi, hicbir gorev degistirilmedi);
+  (c) `ProcessRunner`'in standart girdiyi GERCEKTEN besledigi ve besleyen bir surecin sifir
+  olmayan cikis kodunun `CommandResult`'a dogru yansidigi -- MySQL duzeltmesinin dayandigi
+  mekanizma tam olarak budur.
+
+### KIRILAN DAVRANISLAR (bilerek)
+
+1. `IFtpService.SetRequireSslAsync` donus tipi `bool` -> `FtpTlsMeasurement`.
+2. `IDatabaseService.HardenAdminAccountsAsync` donus tipi `IReadOnlyList<string>` ->
+   `DatabaseHardeningReport`; `POST /db/harden` govdesi degisti.
+3. `SchedulerService.DeleteTaskAsync` gorev hala duruyorsa artik HATA firlatiyor (once sessizce
+   basarili donuyordu); `SetTaskEnabledAsync` de geri okunan durum istenenle uyusmazsa firlatiyor.
+4. `SiteAliasService.RemoveAliasAsync` baglama kalkmadiysa artik HATA firlatiyor ve kaydi
+   SILMIYOR (once sessizce siliyordu).
+5. `MailService.SetAccountQuotaAsync` kota geri okumada tutmazsa HATA firlatiyor.
+6. roundcube/clamav/vandelay kurulumu, beklenen dosya bulunamazsa artik BASARISIZ sayiliyor.
+7. MySQL geri yukleme/tasima artik dokumu standart girdiden veriyor (`source` yok).
+
+### YENI DOSYALAR
+
+`src/AdaPanel.Core/Dtos/Ftp/FtpTlsMeasurement.cs`,
+`src/AdaPanel.Core/Dtos/Databases/DatabaseHardeningReport.cs`,
+`src/AdaPanel.Infrastructure/Ssl/SslBindingVerification.cs`,
+`tests/AdaPanel.Infrastructure.Tests/BakilmayanAdaylarDogrulamaTests.cs` (44 test).
+
+**Yeni i18n (tr+en):** `panel.ftp.tlsNotApplied`, `panel.ftp.tlsUnverified`, `ftp.tls_not_applied`,
+`ftp.tls_unverified`, `ftp.user_created_password_expires`, `ftp.user_created_expiry_unverified`,
+`panel.ssl.certificateNotBound`, `panel.ssl.certificateUnverified`,
+`panel.ssl.certificateNotBoundNotice`, `panel.ssl.certificateUnverifiedNotice`,
+`panel.tasks.stopProcessesSurvived`, `cron.stop_processes_survived`, `cron.delete_failed`,
+`cron.delete_unverified`, `cron.state_not_applied`, `cron.state_unverified`,
+`panel.database.hardenedIncomplete`, `panel.database.hardenedUnverified`,
+`database.harden_incomplete`, `database.harden_unverified`, `alias.remove_binding_failed`,
+`alias.remove_unverified`, `mail.mailbox_quota_not_applied`, `mail.mailbox_quota_unverified`.
+
+**4771 test yesil** (baseline 4727 + 44). `scripts/devam-durumu.ps1`: SAGLAM.
+
+### BU TURDA OLCULDU AMA KAPATILMADI (dogrulanmis ACIK; sonraki tur BURADAN baslasin)
+
+Asagidakiler bu turda dosya:satir ile DOGRULANDI ve ACIK oldugu goruldu -- ama zaman yetmedigi
+icin KAPATILMADI. Bunlar "aday" degil, **olculmus acik**tir:
+
+* **`AspNetService.cs:379-380` -- AddAt duserse handler SONA ekleniyor.**
+  `try { InvokeMethod(handlers, "AddAt", 0, handler); } catch { InvokeMethod(handlers, "Add", handler); }`
+  Bir ustundeki YORUM (`:377-378`) tam da bunun `.php` dosyalarini 404.3 yaptigini yaziyor; kod bir
+  satir sonra o sonucu FALLBACK olarak uyguluyor. `catch` ciplak. Ayni desen iki yerde daha:
+  `AspNetService.cs:406-407` (`*.asp`) ve `PhpService.cs:1170-1179` (yorumu "calismasini garantiye
+  al" diyor, oysa SONA eklemek 404.3'u URETEN siralamadir). Panel `AspView.vue:334` uzerinden
+  `aspnet.mixed_handlers_updated` = "Mixed ASP.NET and PHP handlers were enabled" diyor. DTO
+  handler SIRASINI hic tasimiyor (`:236` yalniz varlik) ve ustelik `CommitChanges`'ten (`:191`)
+  ONCE uretiliyor -- yani bellekteki nesne grafigini anlatiyor, diske ineni degil.
+  **Kapatma yonu:** commit'ten SONRA taze bir okumayla handler'in `path="*"` handler'indan once
+  gelip gelmedigini olcup DTO'ya uc degerli yazmak.
+* **`SiteHostingSettingsService.cs:1522` -- `document.Save(webConfigPath)` metodun SON ifadesi.**
+  Geri okuma, XML yeniden ayristirma, IIS tarafi dogrulama ya da HTTP yoklamasi YOK. `Validate`
+  (`:1101`) ISTEGI denetliyor, uretilen belgeyi degil. Bozuk bir web.config sitenin TAMAMINA
+  500.19 verir ve dosyanin kendi yorumlari (`:1331`, `:1397`, `:1444`) tam da bu sinifi anlatiyor
+  -- ama korumalarin hepsi ONLEYICI, hicbiri DENETLEYICI. Uc `sites.hosting_settings.updated`
+  yazip arayuz `panel.hosting.saved` gosteriyor; denetim kaydindaki sayilar servisin BELLEKTE
+  kurdugu DTO'dan geliyor.
+* **`MailEnableMailService.cs` -- COM cagrilarinda `[void]` ve bos `catch`.** Ve **CANLI**:
+  `ServiceCollectionExtensions.cs:172-173` + `MailServiceRouter.cs:17-21`, Stalwart yoksa ve
+  MailEnable varsa BU sinif calisiyor (bu dev makinesinde ikisi de yok, bu yuzden calisma zamani
+  davranisi olculemedi). MailEnable COM metotlari istisna degil TAMSAYI DURUM KODU doner;
+  `$ErrorActionPreference='Stop'` bunu YAKALAMAZ, her donus `[void]` ile atiliyor ve betik kosulsuz
+  `'OK'` basiyor. En agiri `DeleteAccountAsync:236-249`:
+  `try { [void]$mb.RemoveMailbox() } catch {}` + `try { [void]$lg.RemoveLogin() } catch {}`
+  -> kutu durabilir, giris hala calisabilir, panel HTTP 200 doner. Ayni desen `:180`, `:195`,
+  `:218`, `:225`, `:241`, `:245`, `:261`, `:264`, `:288`, `:304`, `:373`, `:375`. Ayrica UYDURULAN
+  degerler: `:472` `GetCertificateStatusAsync` sabit `Active = true`; `:475` `IssueCertificateAsync`
+  HIC issuance yapmadan `Active = true`; `:487` `UpdateSpamSettingsAsync` istegi yankiliyor;
+  `:383` `SetDomainQuotaAsync` hicbir kota uygulamiyor ama uc "Domain mail quota set to N MB"
+  yaziyor. `GetAutoResponderAsync:416-417` okuma hatasini "kapali/bos mesaj"a ceviriyor (hata ile
+  bos sonuc ayni goruntu).
+
+### BU TURDA KESFEDILEN, KAYITTA OLMAYAN AYNI SINIFTAN ADAYLAR (dogrulandi, kapatilmadi)
+
+* **`SchedulerService.AddPythonToMachinePathAsync:549-570` + `RuntimeLocator.cs:279-281`.**
+  `Set-ItemProperty -Path $adaAnahtar -Name Path` cagrisinda `-ErrorAction Stop` YOK, kosucu gevsek,
+  geri okuma YOK; basilan `ADAPANEL-DEGISIKLIK=` sayisi EKLENMESI ISTENEN klasor sayisidir. Uc
+  (`CronController.cs:187`) "Python added to machine PATH (N folder(s))" yaziyor. Bu MAKINE GENELI
+  bir yazmadir (HKLM ortam degiskeni).
+* **`SiteAliasService.YonlendirmeKuraliniYaz:225-232`** -- web.config rewrite kurali yazimi tumuyle
+  log-only bir `catch` icinde; "birincile yonlendir" kaydedildi gorunur, kural hic yazilmamis
+  olabilir. (Bu turda takma ad SILME yolu kapatildi, bu kural yazimi KAPATILMADI.)
+* **`SiteHostingSettingsService.cs:431` ve `:531`** -- kuyruk iscisi icin `Running = false`
+  iddiasi OLCULMEDEN yaziliyor. (`RemoveTasksUnderRootAsync:313` sayaci ise `DeleteTaskAsync`
+  artik firlattigi icin dolayli olarak duzeldi.)

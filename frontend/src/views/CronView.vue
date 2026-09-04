@@ -1111,6 +1111,13 @@ async function stopRun(item: ScheduledTask) {
         const sonuc = await stopScheduledTask(item.name);
         if (sonuc.stillRunning) {
           showNotice(t("panel.tasks.stopStillRunning"), true);
+        } else if (!sonuc.allKilled) {
+          // ÖLDÜRÜLEMEYEN SÜREÇ ADIYLA SÖYLENİR. taskkill erişim reddinde 1 döner ve süreç
+          // yaşamaya devam eder; eskiden bu durum da yeşil "durduruldu" satırına düşüyordu.
+          showNotice(
+            t("panel.tasks.stopProcessesSurvived", { items: sonuc.survivingProcesses.join(", ") }),
+            true,
+          );
         } else if (sonuc.killedProcesses > 0) {
           showNotice(t("panel.tasks.stopDone", { count: sonuc.killedProcesses }), false);
         } else {

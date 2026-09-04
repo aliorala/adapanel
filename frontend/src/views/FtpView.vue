@@ -357,8 +357,19 @@ async function loadTls() {
 async function toggleTls(value: boolean) {
   tlsSaving.value = true;
   try {
-    requireSsl.value = (await setFtpTls(value)).requireSsl;
-    showNotice(t(value ? "panel.ftp.tlsRequired" : "panel.ftp.tlsOptional"), false);
+    const sonuc = await setFtpTls(value);
+    requireSsl.value = sonuc.requireSsl;
+
+    // "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek" bir GÜVENLİK İDDİASIDIR ve eskiden
+    // ISTENEN bayraktan yazılıyordu — IIS'e hiç bakmadan. Artık üç durum ayrı gösterilir; uyarı
+    // dalları kırmızı (isError=true) çünkü yönetici sunucuyu güvenli sanmamalı.
+    if (sonuc.verified === false) {
+      showNotice(t("panel.ftp.tlsNotApplied"), true);
+    } else if (sonuc.verified === true) {
+      showNotice(t(value ? "panel.ftp.tlsRequired" : "panel.ftp.tlsOptional"), false);
+    } else {
+      showNotice(t("panel.ftp.tlsUnverified"), true);
+    }
   } catch (error) {
     showApiError(error);
   } finally {

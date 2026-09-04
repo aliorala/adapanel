@@ -27,6 +27,14 @@ public interface IFtpService
     /// <summary>FTPS zorunlu mu (panel "yalnız güvenli FTP"). Varsayılan false.</summary>
     Task<bool> GetRequireSslAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>FTPS zorunluluğunu aç/kapat ve IIS FTP politikasını (SslAllow/SslRequire) hemen uygula.</summary>
-    Task<bool> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// FTPS zorunluluğunu aç/kapat, IIS FTP politikasını (SslAllow/SslRequire) hemen uygula ve
+    /// UYGULANDIĞINI ÖLÇ.
+    /// </summary>
+    /// <remarks>
+    /// Dönüş tipi <c>bool</c> DEĞİLDİR ve bu bilinçlidir: eski imza ISTENEN bayrağı döndürüyordu,
+    /// uç de ondan beslenip kullanıcıya "FTPS artık zorunlu; düz FTP bağlantıları reddedilecek"
+    /// diyordu. Bir güvenlik denetiminin yürürlükte olduğunu söylemek için ölçmek gerekir.
+    /// </remarks>
+    Task<FtpTlsMeasurement> SetRequireSslAsync(bool requireSsl, CancellationToken cancellationToken = default);
 }

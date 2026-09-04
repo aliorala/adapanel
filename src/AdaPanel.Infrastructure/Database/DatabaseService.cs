@@ -231,7 +231,7 @@ internal sealed partial class DatabaseService(
         }
     }
 
-    public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default)
+    public async Task<DatabaseHardeningReport> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default)
     {
         var dbEngine = ParseEngine(engine);
 
@@ -263,13 +263,21 @@ internal sealed partial class DatabaseService(
                 profile = await SetRootPasswordAtomicAsync(dbEngine, profile, results, cancellationToken);
             }
 
-            results.AddRange(await provider.HardenAdminAccountsAsync(profile, cancellationToken));
-            return results;
+            var rapor = await provider.HardenAdminAccountsAsync(profile, cancellationToken);
+
+            // Kök parolası atama adımının çıktısı (results) da rapora katılır: o adım gerçekten
+            // yapılan bir iştir ve kaydından düşmemeli.
+            return new DatabaseHardeningReport
+            {
+                Applied = [.. results, .. rapor.Applied],
+                Failed = rapor.Failed,
+                Unverified = rapor.Unverified,
+                Measured = rapor.Measured
+            };
         }
 
         var otherProfile = await ResolveConnectionProfileAsync(dbEngine, cancellationToken);
-        results.AddRange(await provider.HardenAdminAccountsAsync(otherProfile, cancellationToken));
-        return results;
+        return await provider.HardenAdminAccountsAsync(otherProfile, cancellationToken);
     }
 
     // ATOMİK root parolası (Plesk gibi): MariaDB root'u parolasızsa güçlü parola atar + saklar. "MariaDB yeni /
@@ -706,16 +714,21 @@ internal sealed partial class DatabaseService(
             }
 
             // 2) Yerel hedef veritabanına import.
-            var normalizedSource = tempFile.Replace('\\', '/').Replace("\"", "\\\"");
+            //
+            // KARDEŞ YOLLA AYNI DÜZELTME: `--execute="source <dosya>"` istemci tarafı bir komuttur
+            // ve dosyanın içindeki ifade hataları çıkış koduna YANSIMAZ (gerekçe: ImportMySqlAsync).
+            // Taşımada bedeli daha da ağırdır: yarım taşınmış bir veritabanı "aktarıldı" görünür,
+            // kaynak sunucu kapatılır ve eksik veri ancak müşteri fark edince ortaya çıkar.
             var importArguments =
                 $"--host={targetProfile.Host} --port={targetProfile.Port} --user=\"{targetProfile.AdminUserName}\" " +
-                $"--default-character-set=utf8mb4 \"{targetDatabase}\" --execute=\"source {normalizedSource}\"";
+                $"--default-character-set=utf8mb4 \"{targetDatabase}\"";
             var import = await ProcessRunner.RunAsync(
                 mysql,
                 importArguments,
                 cancellationToken: cancellationToken,
                 environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = targetProfile.AdminPassword },
-                timeout: transferTimeout);
+                timeout: transferTimeout,
+                standardInputFilePath: tempFile);
 
             if (import.ExitCode != 0)
             {
@@ -895,6 +908,32 @@ internal sealed partial class DatabaseService(
             environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = profile.AdminPassword });
     }
 
+    /// <summary>
+    /// Dökümü HEDEF veritabanına geri yükler. Dosya TOPLU (batch) modda STANDART GİRDİDEN verilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ESKİDEN <c>--execute="source &lt;dosya&gt;"</c> KULLANILIYORDU.</b> <c>source</c> mysql
+    /// istemcisinin KENDİ komutudur, SQL değildir: dosyayı istemci satır satır okur ve içindeki bir
+    /// ifade patladığında akışa devam eder. Bu yüzden yarım geri yüklenmiş bir veritabanı sıfır
+    /// çıkış koduyla dönebiliyordu; <c>ImportDumpAsync</c> yalnız <c>result.Success</c>'a baktığı
+    /// için panel "geri yükleme tamam" diyordu. Yönetici de o cümleye güvenip elindeki yedeği
+    /// silerdi. Toplu modda (dosya standart girdiden) istemci ilk hatada durur ve çıkış kodunu
+    /// hataya çevirir — <c>--force</c> verilmediği sürece.
+    /// </para>
+    /// <para>
+    /// <b>KARDEŞİYLE AYNI HİZAYA GELDİ.</b> PostgreSQL tarafı bu tuzağı <c>ON_ERROR_STOP=1</c> ile
+    /// kapatmış, gerekçesini yazmış ve testle sabitlemişti (<see cref="ImportPostgreSqlAsync"/>);
+    /// MySQL tarafında ne bayrak, ne gerekçe, ne test vardı. Aynı hata sınıfının iki motorda iki
+    /// farklı sonuç vermesi, korumanın tesadüfen orada olduğunu gösterir.
+    /// </para>
+    /// <para>
+    /// <b>ÖLÇÜLEMEYEN:</b> bu makinede kurulu MariaDB/MySQL YOK; <c>mysql.exe</c>'nin bozuk bir
+    /// döküm karşısında gerçekte hangi çıkış kodunu verdiği ÖLÇÜLMEDİ. Ölçülen şey, koşucunun
+    /// standart girdiyi gerçekten beslediği ve besleyen bir sürecin sıfır olmayan çıkış kodunun
+    /// <c>CommandResult</c>'a doğru yansıdığıdır (gerçek süreçlerle).
+    /// </para>
+    /// </remarks>
     private static Task<CommandResult> ImportMySqlAsync(
         DatabaseConnectionProfile profile,
         string databaseName,
@@ -903,14 +942,21 @@ internal sealed partial class DatabaseService(
     {
         var executable = FindExecutable(profile.InstallDir, "mysql.exe");
         var databaseArgument = string.IsNullOrWhiteSpace(databaseName) ? string.Empty : $" \"{databaseName}\"";
-        var normalizedSource = sourcePath.Replace('\\', '/').Replace("\"", "\\\"");
-        var arguments = $"--host={profile.Host} --port={profile.Port} --user=\"{profile.AdminUserName}\"{databaseArgument} --execute=\"source {normalizedSource}\"";
+        var arguments = BuildMySqlImportArguments(profile, databaseArgument);
         return ProcessRunner.RunAsync(
             executable,
             arguments,
             cancellationToken: cancellationToken,
-            environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = profile.AdminPassword });
+            environmentVariables: new Dictionary<string, string> { ["MYSQL_PWD"] = profile.AdminPassword },
+            standardInputFilePath: sourcePath);
     }
+
+    /// <summary>
+    /// <c>mysql.exe</c> geri yükleme argümanları. Testler bu dizeyi doğrudan sınar:
+    /// <c>source</c> geri sızarsa ya da <c>--force</c> eklenirse koruma sessizce kalkar.
+    /// </summary>
+    internal static string BuildMySqlImportArguments(DatabaseConnectionProfile profile, string databaseArgument)
+        => $"--host={profile.Host} --port={profile.Port} --user=\"{profile.AdminUserName}\"{databaseArgument}";
 
     /// <summary>
     /// TEK veritabanının dökümünü alır.

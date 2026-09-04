@@ -46,6 +46,26 @@ public sealed class FtpUserDto
     /// </remarks>
     public bool? HomeTargetExists { get; set; }
 
+    /// <summary>
+    /// Hesabın parola süresi GERÇEKTEN kapatıldı mı. <c>true</c> ölçüldü ve süresiz,
+    /// <c>false</c> ölçüldü ve HÂLÂ süre dolumu var, <c>null</c> ölçülemedi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN DTO'DA.</b> <c>EnsurePasswordNeverExpiresAsync</c> bayrağı zaten geri okuyordu ama
+    /// sonuç yalnız <c>LogWarning</c>'e gidiyordu; oluşturma yolu her hâlükârda "hesap oluşturuldu"
+    /// dönüyordu. Hesap gerçekten oluşturuldu — yalan orada değil. Yalan, <b>söylenmeyende</b>:
+    /// makinenin <c>MaxPasswordAge</c>'i (varsayılan 42 gün) hesaba işlerse FTP kırk iki gün sonra
+    /// SESSİZCE ölür, müşteri "dün çalışıyordu" der ve kimse paneldeki kaydı şüpheli bulmaz.
+    /// Kısmi başarı ADIYLA yazılır: hangi hesap, hangi eksikle açıldı.
+    /// </para>
+    /// <para>
+    /// Listeleme ucunda (<c>GET /ftp/users</c>) <c>null</c>'dır: orası kaydı okur, Windows'a bu
+    /// soruyu sormaz. "Sormadık" ile "ölçtük, kapalı" aynı şey değildir.
+    /// </para>
+    /// </remarks>
+    public bool? PasswordNeverExpires { get; set; }
+
     public bool IsEnabled { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }

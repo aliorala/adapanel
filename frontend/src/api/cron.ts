@@ -122,10 +122,18 @@ export async function getScheduledTaskOutput(name: string) {
 }
 
 export type StopScheduledTaskResult = {
-  // Ağacıyla birlikte sonlandırılan süreç sayısı (0 = durdurulacak canlı süreç bulunamadı).
+  // Ağacıyla birlikte GERÇEKTEN sonlandırıldığı ÖLÇÜLEN süreç sayısı. Bu alan eskiden DENEME
+  // sayısıydı: taskkill'in çıkış kodu atılıyordu, erişim reddinde süreç yaşamaya devam ediyor
+  // ama panel "N süreç ağacı sonlandırıldı" diyordu.
   killedProcesses: number;
+  // Öldürme denenen süreç sayısı. killedProcesses'ten büyükse fark hayatta kalanlardır.
+  attemptedProcesses: number;
+  // Öldürülemeyenler ADIYLA (ad(pid)) — yöneticinin sunucuda arayacağı şey tam olarak budur.
+  survivingProcesses: string[];
   // Durdurmadan sonra görev HÂLÂ çalışıyor görünüyorsa panel bunu söylemeli.
   stillRunning: boolean;
+  // Denenen her süreç gerçekten öldü mü. false ise "durduruldu" DENMEMELİ.
+  allKilled: boolean;
 };
 
 // Süren çalışmayı süreç ağacıyla birlikte sonlandırır. Görev silinmez; bir sonraki zamanında

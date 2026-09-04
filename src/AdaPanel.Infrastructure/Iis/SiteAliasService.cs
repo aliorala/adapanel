@@ -107,6 +107,16 @@ public sealed class SiteAliasService(
         // BAĞLAMALARI DA KALDIR. Yalnız kaydı silmek, alan adını IIS'te bağlı bırakırdı: site o
         // adresten yayınlanmaya devam eder ama panelde görünmez — sonradan başka bir siteye
         // bağlanmak istendiğinde de "bu ad kullanımda" hatası verirdi.
+        //
+        // NİYET DOĞRUYDU, SONUÇ ÖLÇÜLMÜYORDU. Aşağıdaki döngü her başarısızlığı yutuyor (yalnız
+        // LogWarning) ve kayıt HER HÂLÜKÂRDA siliniyordu — yani yukarıdaki yorumun anlattığı
+        // felaketin TAM OLARAK KENDİSİ, bu sefer sessizce gerçekleşiyordu: takma ad arayüzden
+        // kayboluyor, IIS'te YAYINDA kalıyor. Üstelik görünmez olmasının sebebi de yapısal:
+        // GetAliasesAsync kaydı IIS bağlamalarına göre süzer, tersini yapmaz — kayıt gidince
+        // öksüz bağlamayı gösterecek hiçbir ekran kalmaz. Kiracı izolasyonu açısından ayrıca
+        // ağırdır: ad hâlâ eski sitede bağlı olduğu için asıl sahibi onu alamaz.
+        var basarisizlar = new List<string>();
+
         foreach (var protokol in new[] { "http", "https" })
         {
             foreach (var aday in new[] { host, "www." + host })
@@ -134,16 +144,59 @@ public sealed class SiteAliasService(
                 }
                 catch (Exception exception)
                 {
-                    // Bir bağlamanın kaldırılamaması kaydın silinmesini engellemez; kullanıcı
-                    // sonucu görsün diye günlüğe yazılır.
+                    // Bir bağlamanın kaldırılamaması diğerlerini engellemez, ama SESSİZ kalmaz:
+                    // aşağıdaki geri okuma kararı verirken bu ad da adıyla raporlanır.
                     logger.LogWarning(exception, "Takma ad bağlaması kaldırılamadı: {Site} → {Host}", siteName, aday);
+                    basarisizlar.Add($"{protokol}://{aday}");
                 }
             }
         }
 
+        // GERİ OKUMA, KAYIT SİLİNMEDEN ÖNCE.
+        //
+        // Sıra değişti ve bu bilinçli: `taze` zaten okunuyordu ama kayıt ONDAN ÖNCE siliniyor,
+        // ölçüm de yalnız yönlendirme kuralını yazmak için kullanılıyordu — yani cevap elimizdeydi
+        // ve sorulmuyordu. Kardeş yol (WinAcmeSslService.RemoveCertificateAsync) bu geri okumayı
+        // zaten doğru yapıyor ve kalkmayan bağlamada `ssl.remove_binding_failed` fırlatıyor;
+        // burada aynı kural uygulanır.
+        AdaPanel.Core.Dtos.Sites.SiteDto taze;
+        try
+        {
+            taze = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // OKUYAMADIK. Kaydı silmeyiz: kendi ölçüm hatamızı, geri alınamaz bir "kayboldu"
+            // durumuna çevirmeyiz. Kayıt durduğu için işlem yeniden denenebilir.
+            throw new AppException(
+                "alias.remove_unverified",
+                503,
+                503,
+                $"'{host}' baglamalari kaldirildi ama site okunamadigi icin DOGRULANAMADI: {exception.Message}");
+        }
+
+        var kalanlar = new[] { host, "www." + host }
+            .SelectMany(aday => taze.Bindings
+                .Where(binding => Esit(Normalle(binding.HostName), aday))
+                .Select(binding => $"{binding.Protocol}://{aday}:{binding.Port}"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (kalanlar.Length > 0)
+        {
+            // KAYIT SİLİNMEZ. Silinseydi takma ad panelden kaybolur, IIS'te yayında kalırdı —
+            // kapatmaya çalıştığımız hatanın ta kendisi. ADIYLA yazılır: yöneticinin IIS'te
+            // arayacağı şey tam olarak bu bağlama satırlarıdır.
+            throw new AppException(
+                "alias.remove_binding_failed",
+                500,
+                500,
+                $"IIS'te HALA duran baglama(lar): {string.Join(", ", kalanlar)}."
+                + (basarisizlar.Count > 0 ? $" Kaldirma hatasi alinanlar: {string.Join(", ", basarisizlar)}." : string.Empty));
+        }
+
         await KayitYazAsync(siteName, host, redirect: false, sil: true, cancellationToken);
 
-        var taze = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         YonlendirmeKuraliniYaz(taze, await KayitlariOkuAsync(cancellationToken), AnaHost(taze));
 
         return await GetAliasesAsync(siteName, cancellationToken);

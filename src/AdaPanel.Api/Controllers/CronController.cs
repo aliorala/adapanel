@@ -214,8 +214,21 @@ public sealed class CronController(
         await WriteAuditAsync(
             "cron.stopped",
             kapsamliAd,
-            $"Scheduled task '{name}' run stopped (killed={sonuc.KilledProcesses}, stillRunning={sonuc.StillRunning}).");
-        return Ok(ApiResponse<StopScheduledTaskResultDto>.Ok(sonuc, sonuc.StillRunning ? "cron.stop_incomplete" : "cron.stopped"));
+            // killed= artık DENEME değil ÖLÇÜLEN sayı; hayatta kalanlar ADIYLA yazılır. Eskiden
+            // taskkill'in çıkış kodu atılıyor ve deneme sayısı "öldürülen" diye kaydediliyordu.
+            $"Scheduled task '{name}' run stopped (killed={sonuc.KilledProcesses}/{sonuc.AttemptedProcesses}, "
+            + $"stillRunning={sonuc.StillRunning}"
+            + (sonuc.SurvivingProcesses.Count == 0
+                ? ")."
+                : $", COULD NOT KILL: {string.Join(", ", sonuc.SurvivingProcesses)})."));
+
+        // Görev "Running" görünmese bile öldürülemeyen bir süreç varsa iş SÜRÜYOR olabilir —
+        // panelin durdurma sözü tam da bu yüzden ölçüme bağlı.
+        var mesaj = sonuc.StillRunning
+            ? "cron.stop_incomplete"
+            : sonuc.AllKilled ? "cron.stopped" : "cron.stop_processes_survived";
+
+        return Ok(ApiResponse<StopScheduledTaskResultDto>.Ok(sonuc, mesaj));
     }
 
     [HttpPost("{name}/enable")]

@@ -286,11 +286,16 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
     /// erişim "var ama kullanılamaz" durumda kalırdı (bkz. <see cref="IsolateDatabaseAsync"/>).
     /// </para>
     /// </remarks>
-    public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(
+    public async Task<DatabaseHardeningReport> HardenAdminAccountsAsync(
         DatabaseConnectionProfile profile,
         CancellationToken cancellationToken)
     {
         var sonuc = new List<string>();
+
+        // BAŞARISIZLAR ADIYLA TAŞINIR. Aşağıdaki catch tek veritabanının onarılamamasının
+        // diğerlerini engellememesi için var (bu doğru), ama sonuç hiçbir yere yazılmıyordu:
+        // ortak (PUBLIC) erişimi açık kalan veritabanı panelde görünmüyordu.
+        var basarisizlar = new List<string>();
         await using var connection = await OpenConnectionAsync(profile, cancellationToken);
 
         // (veritabanı → açık yetkili roller). aclexplode + sahiplik; sistem rolleri hariç.
@@ -360,14 +365,24 @@ internal sealed class PostgreSqlDatabaseProvider : IDatabaseEngineProvider
 
                 sonuc.Add($"ortak (PUBLIC) erisim kaldirildi: {veritabani} → {string.Join(", ", roller)}");
             }
-            catch (PostgresException)
+            catch (PostgresException exception)
             {
                 // Tek veritabanının onarılamaması diğerlerini engellemez; başarısız olan AÇIK
                 // hâlinde kalır (erişim kaybolmaz) ve bir sonraki çalıştırmada yeniden denenir.
+                // Ama SESSİZ kalmaz: ortak erişimi açık kalan veritabanı ADIYLA raporlanır.
+                basarisizlar.Add($"{veritabani}: ortak (PUBLIC) erisim KALDIRILAMADI ({exception.MessageText})");
             }
         }
 
-        return sonuc;
+        return new DatabaseHardeningReport
+        {
+            Applied = sonuc,
+            Failed = basarisizlar,
+
+            // Hedefler bu çağrının kendi sorgusuyla ölçüldü ve her hedefin sonucu (uygulandı /
+            // uygulanamadı / bilerek açık bırakıldı) rapora yazıldı.
+            Measured = true
+        };
     }
 
     public bool SupportsHardening => true;

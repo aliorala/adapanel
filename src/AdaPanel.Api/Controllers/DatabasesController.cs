@@ -141,19 +141,47 @@ public sealed class DatabasesController(
     }
 
     [HttpPost("harden")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<string>>>> HardenAsync(
+    public async Task<ActionResult<ApiResponse<DatabaseHardeningReport>>> HardenAsync(
         [FromQuery] string engine,
         CancellationToken cancellationToken)
     {
-        var removed = await databaseService.HardenAdminAccountsAsync(engine, cancellationToken);
-        await WriteAuditAsync(
-            "database.hardened",
-            engine,
-            engine,
-            removed.Count == 0
-                ? "Hardening: no insecure admin accounts found."
-                : $"Hardening: removed {string.Join(", ", removed)}.");
-        return Ok(ApiResponse<IReadOnlyList<string>>.Ok(removed, "database.hardened"));
+        var rapor = await databaseService.HardenAdminAccountsAsync(engine, cancellationToken);
+
+        // "GUVENSIZ HESAP BULUNAMADI" ARTIK OLCUMDEN GELIYOR.
+        //
+        // Eskiden bu cumle `removed.Count == 0` kosuluna bagliydi ve `removed` YALNIZCA
+        // KALDIRILABILENLERI iceriyordu -- `DROP USER` hatalari bos bir catch'e dusuyordu. Yani
+        // uc guvensiz hesap BULUNUP ucunun de silinmesi basarisiz oldugunda kayit "guvensiz
+        // yonetici hesabi bulunamadi" diyordu. Panelin bilmedigini degil, BILDIGININ TERSINI
+        // soylemesiydi; root@'%' acigini kapatmak icin dugmeye basan yonetici baska yere bakardi.
+        var ayrinti = rapor.Clean switch
+        {
+            true when rapor.Applied.Count == 0 =>
+                "Hardening: no insecure admin accounts found (verified).",
+            true =>
+                $"Hardening: removed {string.Join(", ", rapor.Applied)} (verified).",
+            false =>
+                // BASARISIZLAR ADIYLA. "Ucu basarisiz" demek yoneticiye HANGISI oldugunu soylemez.
+                $"Hardening INCOMPLETE. Removed: {(rapor.Applied.Count == 0 ? "(none)" : string.Join(", ", rapor.Applied))}. "
+                + $"STILL INSECURE: {string.Join(", ", rapor.Failed)}."
+                + (rapor.Unverified.Count > 0 ? $" Unverified: {string.Join(", ", rapor.Unverified)}." : string.Empty),
+            _ =>
+                $"Hardening ran but could NOT be verified. Removed (unconfirmed): "
+                + $"{(rapor.Applied.Count == 0 ? "(none)" : string.Join(", ", rapor.Applied))}."
+                + (rapor.Unverified.Count > 0 ? $" {string.Join(", ", rapor.Unverified)}" : string.Empty)
+        };
+
+        await WriteAuditAsync("database.hardened", engine, engine, ayrinti);
+
+        // Her sey yolundayken cumle SADE kalir; yalnizca gercekten eksik kaldiginda uyarilir.
+        var mesaj = rapor.Clean switch
+        {
+            true => "database.hardened",
+            false => "database.harden_incomplete",
+            _ => "database.harden_unverified"
+        };
+
+        return Ok(ApiResponse<DatabaseHardeningReport>.Ok(rapor, mesaj));
     }
 
     [HttpPost]

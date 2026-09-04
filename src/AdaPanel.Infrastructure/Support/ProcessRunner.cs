@@ -46,7 +46,8 @@ internal static class ProcessRunner
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string>? environmentVariables = null,
         TimeSpan? timeout = null,
-        int outputCharLimit = DefaultOutputCharLimit)
+        int outputCharLimit = DefaultOutputCharLimit,
+        string? standardInputFilePath = null)
     {
         // ÇALIŞMA SAĞLIĞI: çağıran açıkça timeout vermezse de güvenli bir TAVAN uygula. Aksi halde
         // asılan bir dış araç (erişilemez git remote, yanıt vermeyen DB CLI, win-acme istemi vb.)
@@ -62,6 +63,10 @@ internal static class ProcessRunner
             WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? Environment.CurrentDirectory : workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // TOPLU (BATCH) GİRDİ. Bazı CLI'lar bir SQL/komut dosyasını YALNIZCA standart girdiden
+            // aldıklarında hataları çıkış koduna yansıtır; dosyayı kendi istemci komutlarıyla
+            // (ör. mysql'in `source`'u) okuduklarında yansıtmazlar. Bu bayrak o ayrımı mümkün kılar.
+            RedirectStandardInput = standardInputFilePath is not null,
             UseShellExecute = false,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
@@ -98,6 +103,14 @@ internal static class ProcessRunner
         // sınırına dönüşürdü.
         var outputTask = TavanliOkuAsync(process.StandardOutput, outputCharLimit, cancellationToken);
         var errorTask = TavanliOkuAsync(process.StandardError, outputCharLimit, cancellationToken);
+
+        // GİRDİ, ÇIKTI OKUYUCULARI BAŞLADIKTAN SONRA yazılır. Ters sırada büyük bir dosyayı
+        // beslemek klasik kilitlenmedir: araç çıktı borusunu doldurur, biz onu tüketmediğimiz için
+        // araç bloke olur, biz de yazmayı bitiremediğimiz için beklemeye devam ederiz.
+        var inputTask = standardInputFilePath is null
+            ? Task.CompletedTask
+            : BesleAsync(process, standardInputFilePath, cancellationToken);
+
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token);
@@ -129,12 +142,53 @@ internal static class ProcessRunner
             };
         }
 
+        // Besleme görevi SAHİPSİZ BIRAKILMAZ (aynı gerekçe okuma görevlerinde yazılı): gözlenmeyen
+        // bir istisna sessiz kalırdı. Hata olsa bile süreç zaten bitti; sonuç çıkış kodundan gelir.
+        try
+        {
+            await inputTask;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Yutulmuyor, sonuca YAZILIYOR: girdiyi tam besleyemediysek "komut çalıştı" demek
+            // yarım bir işi tam göstermek olur.
+            return new CommandResult
+            {
+                ExitCode = process.ExitCode == 0 ? -1 : process.ExitCode,
+                StandardOutput = await outputTask,
+                StandardError = $"Standard input could not be written: {exception.Message}{Environment.NewLine}{await errorTask}"
+            };
+        }
+
         return new CommandResult
         {
             ExitCode = process.ExitCode,
             StandardOutput = await outputTask,
             StandardError = await errorTask
         };
+    }
+
+    /// <summary>
+    /// Bir dosyanın içeriğini sürecin standart girdisine akıtır ve borunun ucunu KAPATIR.
+    /// </summary>
+    /// <remarks>
+    /// Borunun kapatılması şart: toplu modda çalışan araçlar (mysql, psql, sqlcmd) girdi akışı
+    /// bitene kadar beklerler. Kapatılmazsa araç asılır ve yalnız zaman aşımıyla ölür.
+    /// </remarks>
+    private static async Task BesleAsync(Process process, string filePath, CancellationToken cancellationToken)
+    {
+        await using var kaynak = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            useAsync: true);
+
+        var hedef = process.StandardInput.BaseStream;
+        await kaynak.CopyToAsync(hedef, cancellationToken);
+        await hedef.FlushAsync(cancellationToken);
+        process.StandardInput.Close();
     }
 
     /// <summary>

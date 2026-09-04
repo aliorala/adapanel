@@ -1,4 +1,4 @@
-﻿using System.Runtime.Versioning;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AdaPanel.Core.Common;
@@ -1760,8 +1760,46 @@ public sealed class MailService(
         // bir `quota` alanı YOKTUR. Şemadan doğrulandı ve canlı olarak ölçüldü: `--field quota=<byte>`
         // sunucudan "unknown field: quota" alıyor, `--field quotas/maxDiskQuota=<byte>` uygulanıyor.
         // Harita alanına JSON pointer yolu ile yazılır. 0 = sınırsız.
-        var bytes = (long)Math.Max(0, request.MaxSizeMB) * 1024 * 1024;
-        return await MutateAsync(domain, $"update account {Arg(id)} --field {AccountQuotaField}={bytes}", cancellationToken);
+        var istenen = Math.Max(0, request.MaxSizeMB);
+        var bytes = (long)istenen * 1024 * 1024;
+        var workspace = await MutateAsync(domain, $"update account {Arg(id)} --field {AccountQuotaField}={bytes}", cancellationToken);
+
+        // DOĞRULA — VE ÖLÇÜM ZATEN ELİMİZDEYDİ.
+        //
+        // `MutateAsync` yalnız CLI'nin çıkış durumuna bakıp TAZE workspace döndürüyor; o
+        // workspace'teki `MaxSizeMB` sunucudan OKUNMUŞ değerdir (GetWorkspaceAsync onu
+        // `quotas/maxDiskQuota` alanından hesaplıyor). Yani kotanın tutup tutmadığının cevabı
+        // dönen nesnenin içindeydi ve hiç sorulmuyordu: uç de `MailController` üzerinden
+        // "Mailbox quota set to {istenen} MB" kaydını İSTENEN değerden yazıyordu.
+        //
+        // Kardeş yol `SetOutboundLimitAsync` bu doğrulamayı zaten yapıyor
+        // (`mail.outbound_limit_unverified`); kota yolu o korumadan yoksundu. Aynı dosyada bir
+        // tarafın kapalı öbür tarafın açık olması, korumanın kural değil tesadüf olduğunu gösterir.
+        if (!workspace.AccountsMeasured)
+        {
+            // Hesap listesi ÖLÇÜLEMEDİ. "Uygulanmadı" DEMEYİZ — komut başarılı dönmüştü.
+            throw new AppException(
+                "mail.mailbox_quota_unverified",
+                500,
+                500,
+                $"'{normalized}' kotasi yazildi ama hesap listesi olculemedigi icin dogrulanamadi.");
+        }
+
+        var hesap = workspace.Accounts.FirstOrDefault(item =>
+            string.Equals(item.Address, normalized, StringComparison.OrdinalIgnoreCase));
+
+        if (hesap is null || hesap.MaxSizeMB != istenen)
+        {
+            throw new AppException(
+                "mail.mailbox_quota_not_applied",
+                500,
+                500,
+                hesap is null
+                    ? $"'{normalized}' kotasi yazildi ama hesap geri okumada bulunamadi."
+                    : $"'{normalized}' icin istenen kota {istenen} MB idi; sunucudan okunan {hesap.MaxSizeMB} MB.");
+        }
+
+        return workspace;
     }
 
     // --- Otomatik yanıt (Plesk autoresponder paritesi) ---

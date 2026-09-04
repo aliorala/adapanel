@@ -45,5 +45,10 @@ public interface IDatabaseService
     /// </summary>
     Task<DatabaseCheckResultDto> CheckAndRepairAsync(string engine, string databaseName, IReadOnlyCollection<string> repairTables, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<string>> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default);
+    /// <remarks>
+    /// Dönüş tipi liste DEĞİL rapor: yalnız başarılanların listesi, kaldırılamayan güvensiz
+    /// hesapları görünmez kılıyor ve uç "güvensiz yönetici hesabı bulunamadı" yazıyordu.
+    /// Gerekçe: <see cref="DatabaseHardeningReport"/>.
+    /// </remarks>
+    Task<DatabaseHardeningReport> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default);
 }

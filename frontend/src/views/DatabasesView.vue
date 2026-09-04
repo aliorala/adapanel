@@ -1476,13 +1476,25 @@ async function hardenSecurity() {
   }
   hardening.value = true;
   try {
-    const removed = await hardenDatabase(selectedEngine.value);
-    showNotice(
-      removed.length === 0
-        ? t("panel.database.hardenedClean")
-        : t("panel.database.hardenedRemoved", { items: removed.join(", ") }),
-      false,
-    );
+    const rapor = await hardenDatabase(selectedEngine.value);
+
+    // ÜÇ DURUM AYRI. "Zaten güvenli" cümlesi eskiden BOŞ LİSTEDEN çıkıyordu ve boş liste
+    // "hiç güvensiz hesap yok" ile "hepsini silemedim"i aynı görüntüye düşürüyordu.
+    if (rapor.clean === false) {
+      showNotice(
+        t("panel.database.hardenedIncomplete", { items: rapor.failed.join(", ") }),
+        true,
+      );
+    } else if (rapor.clean === null) {
+      showNotice(t("panel.database.hardenedUnverified"), true);
+    } else {
+      showNotice(
+        rapor.applied.length === 0
+          ? t("panel.database.hardenedClean")
+          : t("panel.database.hardenedRemoved", { items: rapor.applied.join(", ") }),
+        false,
+      );
+    }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

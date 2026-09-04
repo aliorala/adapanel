@@ -10,8 +10,27 @@ public sealed class IisHttpsBinding
 
     public string BindingInformation { get; init; } = string.Empty;
 
-    /// <summary>Bağlamaya iliştirilmiş sertifikanın parmak izi (küçük harf, ayraçsız). Boş = okunamadı.</summary>
+    /// <summary>
+    /// Bağlamaya iliştirilmiş sertifikanın parmak izi (küçük harf, ayraçsız).
+    /// Boş = sertifika YOK <b>ya da</b> okunamadı; ayrımı <see cref="CertificateReadable"/> yapar.
+    /// </summary>
     public string Thumbprint { get; init; } = string.Empty;
+
+    /// <summary>
+    /// <see cref="Thumbprint"/> alanı GERÇEKTEN okunabildi mi.
+    /// </summary>
+    /// <remarks>
+    /// Okuma betiği parmak izini <c>try { ... } catch { }</c> içinde alıyordu ve hem "sertifika
+    /// iliştirilmemiş" hem de "okuyamadım" durumu aynı BOŞ dizeye düşüyordu — bu deponun
+    /// tekrarlanan hata sınıfının (hata ile boş sonucun aynı görüntüye düşmesi) sertifika
+    /// tarafındaki örneği. Ayrım burada taşınır: <c>true</c> + boş parmak izi = bağlamada
+    /// sertifika YOK (kesin), <c>false</c> = hiçbir şey iddia edilemez.
+    /// <para>
+    /// Varsayılan <c>false</c>'tur (fail-safe): alanı doldurmayan bir okuyucu, yanlışlıkla
+    /// "ölçtüm" demiş olmaz.
+    /// </para>
+    /// </remarks>
+    public bool CertificateReadable { get; init; }
 
     /// <summary>Sertifikanın bulunduğu depo ("My" / "WebHosting").</summary>
     public string StoreName { get; init; } = string.Empty;

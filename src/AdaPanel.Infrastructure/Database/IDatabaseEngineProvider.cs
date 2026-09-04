@@ -29,8 +29,12 @@ internal interface IDatabaseEngineProvider
 
     // K2: güvensiz yönetici hesaplarını (anonim kullanıcılar + uzak root@'%') kaldırır; root@localhost'a
     // DOKUNMAZ (panel onunla bağlanır). Yalnız MySQL/MariaDB anlamlı uygular; diğer motorlar no-op.
-    Task<IReadOnlyList<string>> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
-        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    // Dönüş tipi liste DEĞİL rapor: yalnız BAŞARILANLARIN listesi, başarısızları görünmez kılıyordu
+    // ve uç "güvensiz hesap bulunamadı" yazıyordu (gerekçe: DatabaseHardeningReport).
+    // Varsayılan gerçekleştirim hiçbir şey yapmaz VE hiçbir şey ölçmez: Measured=false, yani
+    // "temiz" DEĞİL "bilinmiyor" der.
+    Task<DatabaseHardeningReport> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+        => Task.FromResult(DatabaseHardeningReport.Bos());
 
     /// <summary>
     /// <see cref="HardenAdminAccountsAsync"/> bu motorda anlamli bir is yapiyor mu.

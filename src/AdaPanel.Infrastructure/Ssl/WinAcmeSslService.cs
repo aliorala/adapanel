@@ -124,12 +124,16 @@ public sealed class WinAcmeSslService(
         // Bağlama ÖLÇÜMÜ İSE TAZE SİTEDEN: elimizdeki `site` nesnesi bu metodun BAŞINDA alındı,
         // yani HTTPS bağlaması daha kurulmamışken. Onu okumak, az önce kurduğumuz bağlamayı
         // "yok" saymak olurdu — üstelik sonuç ssl.json'a yazıldığı için yanlış cevap kalıcı olurdu.
-        var dto = ToDto(
+        //
+        // ÖLÇÜM SERTİFİKAYI DA KAPSAR. Yalnız "https bağlaması var mı" sorusu, bağlamanın
+        // sertifikasız kalabildiği bu akışta yetersizdir (bkz. SslBindingVerification).
+        var dto = await OlcVeIsleAsync(
+            ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null),
             site.Name,
             hostName,
-            certificate,
-            ResolveCertificateSource(certificate),
-            await MeasureHttpsBindingAsync(site.Name, hostName, cancellationToken));
+            443,
+            certificate.Thumbprint ?? string.Empty,
+            cancellationToken);
         dto.FallbackReason = acmeSonucu.Certificate is null ? acmeSonucu.FailureReason : string.Empty;
 
         await UpsertAsync(dto, cancellationToken);
@@ -167,12 +171,13 @@ public sealed class WinAcmeSslService(
         // Elle içe aktarılan sertifikada da kaynak ÖLÇÜLÜR: kullanıcı kendinden imzalı bir dosya
         // yüklediyse panel ona "manual" deyip güvenilir sanmamalı.
         // Bağlama az önce kuruldu → ölçüm TAZE siteden (eldeki anlık görüntü onu göremez).
-        var dto = ToDto(
+        var dto = await OlcVeIsleAsync(
+            ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null),
             site.Name,
             hostName,
-            certificate,
-            ResolveCertificateSource(certificate),
-            await MeasureHttpsBindingAsync(site.Name, hostName, cancellationToken));
+            request.Port <= 0 ? 443 : request.Port,
+            certificate.Thumbprint ?? string.Empty,
+            cancellationToken);
         await UpsertAsync(dto, cancellationToken);
         return dto;
     }
@@ -981,6 +986,59 @@ public sealed class WinAcmeSslService(
     }
 
     /// <summary>
+    /// Bağlamayı VE üzerindeki sertifikayı birlikte ölçer; sonucu doğrudan DTO'ya işler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Gerekçenin tamamı <see cref="SslBindingVerification"/> içindedir. Özeti: bağlama önce
+    /// kurulur, sertifika sonra iliştirilir; iliştirme düşerse geriye SERTİFİKASIZ bir HTTPS
+    /// bağlaması kalır ve site 443'te ölü olur. Eski ölçüm yalnız protokole baktığı için bu
+    /// duruma "HTTPS bağlaması var" diyordu.
+    /// </para>
+    /// <para>
+    /// <b>ATMAZ.</b> <c>ReadHttpsBindingsAsync</c> okuyamadığında <c>ssl.bindings_unreadable</c>
+    /// fırlatır; burada yakalanır ve ölçüm "bilinmiyor"a düşer. Sertifika ZATEN alınmış ve
+    /// bağlama ZATEN kurulmuş oluyor — bu noktada patlamak, olmuş bir işi geri alınamaz biçimde
+    /// hata gibi göstermek olurdu.
+    /// </para>
+    /// </remarks>
+    private async Task<SslCertificateDto> OlcVeIsleAsync(
+        SslCertificateDto dto,
+        string siteName,
+        string hostName,
+        int port,
+        string thumbprint,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyCollection<IisHttpsBinding>? baglamalar = null;
+        try
+        {
+            baglamalar = await ReadHttpsBindingsAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "HTTPS baglama/sertifika olcumu yapilamadi ({SiteName}).", siteName);
+        }
+
+        var (baglamaVar, sertifikaBagli, ayrinti) =
+            SslBindingVerification.Olc(baglamalar, siteName, hostName, port, thumbprint);
+
+        dto.IsHttpsBindingPresent = baglamaVar;
+        dto.IsCertificateBound = sertifikaBagli;
+        dto.BindingDetail = ayrinti;
+
+        if (sertifikaBagli == false)
+        {
+            logger.LogWarning(
+                "SSL kuruldu ama sertifika baglamaya islenmedi ({SiteName}). {Ayrinti}",
+                siteName,
+                ayrinti);
+        }
+
+        return dto;
+    }
+
+    /// <summary>
     /// Verilen site anlık görüntüsünde HTTPS bağlaması var mı. Site okunamadıysa null döner.
     /// </summary>
     private static bool? MeasureHttpsBinding(AdaPanel.Core.Dtos.Sites.SiteDto? site, string hostName)
@@ -1322,14 +1380,19 @@ public sealed class WinAcmeSslService(
             foreach ($s in Get-Website) {
               foreach ($b in $s.Bindings.Collection) {
                 if ($b.protocol -ne 'https') { continue }
+                # SERTIFIKA YOK ile SERTIFIKAYI OKUYAMADIM ayni goruntuye DUSMEMELI. Ikisi de
+                # bos parmak izine dusuyordu; "baglama var ama sertifikasi yok" (site 443'te olu)
+                # ile "bakamadim" arasindaki fark tam da kullaniciya soylenecek cumleyi belirler.
                 $thumb = ''
-                try { if ($b.certificateHash) { $thumb = ($b.certificateHash | ForEach-Object { $_.ToString('x2') }) -join '' } } catch { }
+                $certOkundu = $true
+                try { if ($b.certificateHash) { $thumb = ($b.certificateHash | ForEach-Object { $_.ToString('x2') }) -join '' } } catch { $certOkundu = $false }
                 $store = ''
                 try { $store = [string]$b.certificateStoreName } catch { }
                 $liste += [pscustomobject]@{
                   siteName = [string]$s.Name
                   bindingInformation = [string]$b.bindingInformation
                   thumbprint = $thumb
+                  certificateReadable = $certOkundu
                   storeName = $store
                 }
               }

@@ -82,6 +82,10 @@ export async function setFtpPassword(userName: string, password: string) {
 
 export type FtpTlsStatus = {
   requireSsl: boolean;
+  // IIS'ten ÖLÇÜLEN sonuç: true = yürürlükte, false = uygulanmadı, null = ölçülemedi.
+  // Okuma ucunda (GET /ftp/tls) her zaman null'dır: orası yalnız panelin kendi kaydını okur.
+  verified?: boolean | null;
+  detail?: string;
 };
 
 // M5 (panel "yalnız güvenli FTP"): admin-only server-level FTPS zorunluluğu.

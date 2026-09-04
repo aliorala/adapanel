@@ -76,8 +76,14 @@
         <span v-if="item.isHttpsBindingPresent === null" class="status-pill" :title="t('panel.ssl.bindingUnknownHint')">
           {{ t("panel.ssl.bindingUnknown") }}
         </span>
-        <span v-else :class="['status-pill', item.isHttpsBindingPresent ? 'ok' : 'warn']">
-          {{ item.isHttpsBindingPresent ? `${item.port}` : t("panel.ssl.notBound") }}
+        <!-- SERTİFİKA AYRI SORULUR. "Bağlama var" ile "sertifika bağlamada" aynı şey değildir:
+             bağlama önce kurulur, sertifika sonra iliştirilir; ikincisi düşerse bağlama
+             sertifikasız kalır ve site 443'te ÖLÜ olur. Eski hücre buna yeşil "443" diyordu. -->
+        <span v-else-if="item.isHttpsBindingPresent && item.isCertificateBound === false" class="status-pill warn" :title="item.bindingDetail">
+          {{ t("panel.ssl.certificateNotBound") }}
+        </span>
+        <span v-else :class="['status-pill', item.isHttpsBindingPresent ? (item.isCertificateBound === null ? '' : 'ok') : 'warn']" :title="item.bindingDetail">
+          {{ item.isHttpsBindingPresent ? (item.isCertificateBound === null ? t("panel.ssl.certificateUnverified") : `${item.port}`) : t("panel.ssl.notBound") }}
         </span>
       </div>
 
@@ -153,7 +159,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
-import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, setHttpsRedirect, type SslWorkspace } from "../api/ssl";
+import { getSslWorkspace, importCertificate, issueLetsEncrypt, renewAllCertificates, setHttpsRedirect, type SslCertificate, type SslWorkspace } from "../api/ssl";
 import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
@@ -232,13 +238,35 @@ async function toggleHttpsRedirect(enabled: boolean) {
   }
 }
 
+// TEK KAYNAK: "SSL kuruldu" cümlesi iki yerden (alma ve içe aktarma) çıkıyor ve ikisi de aynı
+// üç durumu ayırmalı. Ayrı ayrı yazılsalardı sessizce ayrışırlardı.
+//
+// Sertifika bağlamaya işlenmediyse cümle YEŞİL OLAMAZ: bağlama duruyor olsa bile site 443'te
+// ölüdür (tarayıcı bağlantıyı kapatır) ve yönetici sorunu başka yerde arar.
+function kurulumBildirimi(
+  sertifika: SslCertificate,
+  basariAnahtari = "panel.ssl.issued"
+): [string, boolean] {
+  if (sertifika.isCertificateBound === false) {
+    const ayrinti = sertifika.bindingDetail ? ` — ${sertifika.bindingDetail}` : "";
+    return [`${t("panel.ssl.certificateNotBoundNotice")}${ayrinti}`, true];
+  }
+
+  if (sertifika.isCertificateBound === null) {
+    return [t("panel.ssl.certificateUnverifiedNotice"), true];
+  }
+
+  return [t(basariAnahtari), false];
+}
+
 async function issue() {
   busyAction.value = "issue";
   try {
-    await issueLetsEncrypt({ siteName: selectedSiteName.value, ...issueForm });
+    const sertifika = await issueLetsEncrypt({ siteName: selectedSiteName.value, ...issueForm });
     await refresh();
     activeTab.value = "current";
-    showNotice(t("panel.ssl.issued"), false);
+    // Sabit yeşil "SSL kuruldu" yalnız sertifikanın bağlamada ÖLÇÜLDÜĞÜ durumda çıkar.
+    showNotice(...kurulumBildirimi(sertifika));
   } catch (error) {
     // Wildcard/DNS-01 hatasında gerçek neden (win-acme çıktısı) Details'te gelir — kör mesaj bırakma.
     const details = extractApiDetails(error);
@@ -264,11 +292,11 @@ async function renew() {
 async function submitImport() {
   busyAction.value = "import";
   try {
-    await importCertificate({ siteName: selectedSiteName.value, ...importForm, port: 443 });
+    const sertifika = await importCertificate({ siteName: selectedSiteName.value, ...importForm, port: 443 });
     Object.assign(importForm, { password: "", fileName: "", base64Content: "" });
     await refresh();
     activeTab.value = "current";
-    showNotice(t("panel.ssl.imported"), false);
+    showNotice(...kurulumBildirimi(sertifika, "panel.ssl.imported"));
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

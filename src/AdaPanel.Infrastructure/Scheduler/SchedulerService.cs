@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AdaPanel.Core.Common;
@@ -604,16 +604,40 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
             throw new AppException("cron.stop_failed", 500, 500, result.StandardError);
         }
 
+        // DENEME SAYISI ile OLDURULEN SAYISI ARTIK AYRI. Betikteki sayaç kosulsuz artıyordu:
+        // `taskkill` erişim reddinde 1 ile döner ve süreç yaşamaya devam eder, ama panel yine
+        // "N süreç ağacı sonlandırıldı" yazıyordu (gerekçe betikte).
+        var denenenEslesme = Regex.Match(cikti, @"ADAPANEL-DENENEN=(\d+)");
+        var hayattaEslesme = Regex.Match(cikti, @"ADAPANEL-HAYATTA=(.*)");
+
+        var oldurulen = int.Parse(oldurulenEslesme.Groups[1].Value, CultureInfo.InvariantCulture);
+        var denenen = denenenEslesme.Success
+            ? int.Parse(denenenEslesme.Groups[1].Value, CultureInfo.InvariantCulture)
+            : oldurulen;
+
+        var hayatta = hayattaEslesme.Success
+            ? hayattaEslesme.Groups[1].Value.Trim()
+            : string.Empty;
+
         var durum = new StopScheduledTaskResultDto
         {
-            KilledProcesses = int.Parse(oldurulenEslesme.Groups[1].Value, CultureInfo.InvariantCulture),
+            KilledProcesses = oldurulen,
+            AttemptedProcesses = denenen,
+
+            // ADIYLA: "üçü öldürülemedi" demek yöneticiye HANGİSİ olduğunu söylemez.
+            SurvivingProcesses = string.IsNullOrWhiteSpace(hayatta)
+                ? []
+                : hayatta.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StillRunning = calisiyorEslesme.Groups[1].Value == "1"
         };
 
         logger.LogInformation(
-            "Gorev calismasi durduruldu ({TaskName}): {Killed} surec agaci sonlandirildi, hala calisiyor = {StillRunning}.",
+            "Gorev calismasi durduruldu ({TaskName}): {Killed}/{Attempted} surec agaci sonlandirildi, "
+            + "hayatta kalan = {Surviving}, hala calisiyor = {StillRunning}.",
             temizAd,
             durum.KilledProcesses,
+            durum.AttemptedProcesses,
+            durum.SurvivingProcesses.Count == 0 ? "(yok)" : string.Join(", ", durum.SurvivingProcesses),
             durum.StillRunning);
 
         return durum;
@@ -654,6 +678,8 @@ try {{
 # artik onlari o goreve baglayan hicbir iz kalmamistir. Kullanicinin canli sunucusunda yasanan
 # durum buydu. Once oldurmek, agaci HENUZ BUTUNKEN yakalar.
 $oldurulen = 0
+$denenen = 0
+$hayattaKalanlar = New-Object System.Collections.ArrayList
 foreach ($surecId in ($pidler | Select-Object -Unique)) {{
   # Sistem sureclerine ASLA dokunma: yanlis bir PID ile /T /F sunucuyu dusurur.
   if ($surecId -le 4) {{ continue }}
@@ -665,8 +691,23 @@ foreach ($surecId in ($pidler | Select-Object -Unique)) {{
   # Panelin kendi gorevleri her zaman dogrudan calistirilabilir bir eylemdir, taskhostw'da
   # barinmazlar; yani bu atlama hicbir mesru durdurmayi engellemez.
   if ('svchost','services','lsass','wininit','csrss','smss','System','taskhostw','taskeng' -contains $surec.ProcessName) {{ continue }}
+  $denenen++
+  # OLDURULDU ILE OLDURMEYI DENEDIM AYNI SEY DEGIL.
+  #
+  # Eskiden burada $oldurulen++ KOSULSUZ calisiyordu: taskkill'in cikis kodu Out-Null'a gidiyor,
+  # sonra da DENEME sayisi 'oldurulen' diye raporlaniyordu. taskkill /F erisim reddinde 1 ile
+  # doner (ERROR: The process ... could not be terminated. Access is denied.) ve surec YASAMAYA
+  # DEVAM EDER; panel yine de N surec agaci sonlandirildi yaziyordu. Yoneticinin, sunucuda hala
+  # kosan Chrome zincirini durdurdugunu sanmasi tam da bu satirdan geliyordu.
+  #
+  # Iki kanit birlikte aranir: cikis kodu VE surecin gercekten gitmis olmasi. Cikis kodu 0 olsa
+  # bile taskkill termination signal sent deyip cikabilir; tek gercek kanit surecin yoklugudur.
   & taskkill.exe /PID $surecId /T /F 2>&1 | Out-Null
-  $oldurulen++
+  $kod = $LASTEXITCODE
+  Start-Sleep -Milliseconds 150
+  $kalan = Get-Process -Id $surecId -ErrorAction SilentlyContinue
+  if ($kod -eq 0 -and -not $kalan) {{ $oldurulen++ }}
+  else {{ [void]$hayattaKalanlar.Add(""$($surec.ProcessName)($surecId)"") }}
 }}
 
 # Agac oldukten SONRA Zamanlayici durumu temizlenir: gorev hala calisiyor isaretli kalabilir.
@@ -676,6 +717,8 @@ Start-Sleep -Milliseconds 500
 $gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(taskName)}' -ErrorAction SilentlyContinue
 $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }}
 [Console]::Out.WriteLine('ADAPANEL-OLDURULEN=' + $oldurulen)
+[Console]::Out.WriteLine('ADAPANEL-DENENEN=' + $denenen)
+[Console]::Out.WriteLine('ADAPANEL-HAYATTA=' + ($hayattaKalanlar -join ', '))
 [Console]::Out.WriteLine('ADAPANEL-CALISIYOR=' + $halaCalisiyor)";
 
     public async Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default)
@@ -735,24 +778,110 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
         return kaydedilen;
     }
 
+    /// <summary>
+    /// Görevi siler ve GİTTİĞİNİ geri okur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kardeşi <see cref="CreateTaskAsync"/> bu geri okumayı zaten yapıyordu
+    /// (<c>cron.write_unverified</c>); silme yolu yapmıyordu. Aynı dosyada aynı sorunun bir
+    /// tarafının kapalı, öbür tarafının açık olması korumanın kural değil tesadüf olduğunu
+    /// gösterir.
+    /// </para>
+    /// <para>
+    /// Neden gerekli: <c>Unregister-ScheduledTask</c> hata vermeden dönse bile görev diskte
+    /// kalabilir (ör. görev bir başka süreç tarafından yeniden kaydedilmişse ya da yazma yetkisi
+    /// kısmen reddedilmişse). Silme yolu ÜÇ ayrı yerden çağrılıyor ve hepsi "gitti" varsayıyor:
+    /// uç <c>"Scheduled task deleted."</c> kaydı yazıyor, <c>RemoveTasksUnderRootAsync</c> sayacı
+    /// artırıyor, <c>SiteHostingSettingsService</c> kuyruk işçisi için <c>Running = false</c>
+    /// döndürüyor. Silinmemiş bir görev çalışmaya devam eder: askıya alınmış müşterinin cron'u
+    /// koşar, silinen sitenin işçisi log yazmayı sürdürür.
+    /// </para>
+    /// </remarks>
     public async Task DeleteTaskAsync(string name, CancellationToken cancellationToken = default)
     {
-        var script = $@"Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(EnsureUsableName(name))}' -Confirm:$false -ErrorAction Stop";
+        var temizAd = EnsureUsableName(name);
+        var script = $@"Unregister-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(temizAd)}' -Confirm:$false -ErrorAction Stop";
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("cron.write_failed", 500, 500, result.StandardError);
         }
+
+        // GERİ OKUMA. Liste okunamazsa "silindi" DEMEYİZ ama "silinemedi" de demeyiz: kendi
+        // ölçüm hatamızı kullanıcının işlemini geri alacak bir hükme çeviremeyiz — yalnız
+        // görev HÂLÂ ORADA görünüyorsa hata veririz.
+        IReadOnlyCollection<ScheduledTaskDto> tasks;
+        try
+        {
+            tasks = await GetTasksAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new AppException(
+                "cron.delete_unverified",
+                500,
+                500,
+                $"'{temizAd}' silme komutu basarili dondu ama gorev listesi okunamadigi icin DOGRULANAMADI: {exception.Message}");
+        }
+
+        if (tasks.Any(task => string.Equals(task.Name, temizAd, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new AppException(
+                "cron.delete_failed",
+                500,
+                500,
+                $"'{temizAd}' silme komutu basarili dondu ama gorev HALA Gorev Zamanlayici'da duruyor.");
+        }
     }
 
     public async Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default)
     {
+        var temizAd = EnsureUsableName(name);
         var verb = enabled ? "Enable-ScheduledTask" : "Disable-ScheduledTask";
-        var script = $@"{verb} -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(EnsureUsableName(name))}' -ErrorAction Stop | Out-Null";
+
+        // ÖLÇÜM CMDLET'İN KENDİ ÇIKTISINDA ZATEN VARDI VE `| Out-Null` İLE ATILIYORDU.
+        // Enable-/Disable-ScheduledTask, SONUÇTAKİ görev nesnesini döndürür; `State` alanı tam da
+        // sorduğumuz şeydir. Onu boşa akıtıp yalnız çıkış koduna bakmak, elimizdeki ölçümü çöpe
+        // atıp yerine varsayım koymaktı. Ayrıca bağımsız bir Get ile de teyit edilir: cmdlet'in
+        // döndürdüğü nesne bellekte kurulmuş olabilir, Get ise diskteki kaydı okur.
+        var script = $@"$ErrorActionPreference = 'Stop'
+{verb} -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(temizAd)}' | Out-Null
+$gorev = Get-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(temizAd)}' -ErrorAction SilentlyContinue
+if ($null -eq $gorev) {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=YOK') }}
+else {{ [Console]::Out.WriteLine('ADAPANEL-DURUM=' + $gorev.State) }}";
+
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success)
         {
             throw new AppException("cron.write_failed", 500, 500, result.StandardError);
+        }
+
+        var eslesme = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-DURUM=(\S*)");
+        if (!eslesme.Success || eslesme.Groups[1].Value.Length == 0)
+        {
+            // Damga yok: geri okuma hiç çalışmadı. "Uygulanmadı" DEMEYİZ, doğrulanamadı deriz.
+            throw new AppException(
+                "cron.state_unverified",
+                500,
+                500,
+                $"'{temizAd}' icin {(enabled ? "etkinlestirme" : "askiya alma")} komutu basarili dondu ama gorev durumu geri okunamadi.");
+        }
+
+        var okunanDurum = eslesme.Groups[1].Value;
+
+        // Görev Zamanlayıcı'da "Disabled" ayrı bir durumdur; etkin bir görev "Ready" ya da
+        // (o an koşuyorsa) "Running" görünür. Askıya alındığını söylemek için "Disabled"ı GÖRMEK
+        // gerekir — komutun hatasız dönmesi yetmez.
+        var gercektenAskida = string.Equals(okunanDurum, "Disabled", StringComparison.OrdinalIgnoreCase);
+        if (enabled == gercektenAskida || string.Equals(okunanDurum, "YOK", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new AppException(
+                "cron.state_not_applied",
+                500,
+                500,
+                $"'{temizAd}' icin istenen durum {(enabled ? "etkin" : "askida")} idi; "
+                + $"gorevden geri okunan durum: {okunanDurum}.");
         }
     }
 

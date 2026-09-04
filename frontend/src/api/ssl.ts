@@ -18,6 +18,11 @@ export type SslCertificate = {
   source: string;
   // null = ÖLÇÜLEMEDİ. "Bağlama yok" ile "bakamadık" aynı şey değildir.
   isHttpsBindingPresent: boolean | null;
+  // Bağlama BİZİM sertifikamızı taşıyor mu. false = ölçüldü, taşımıyor (bağlama sertifikasız ya da
+  // başka sertifika) → site 443'te ölü olabilir. null = ölçülemedi.
+  // "https bağlaması var" tek başına yetmez: bağlama önce kurulur, sertifika sonra iliştirilir.
+  isCertificateBound: boolean | null;
+  bindingDetail: string;
   port: number;
   // Let's Encrypt alınamadığı için kendinden imzalıya düşüldüyse sebebin çeviri anahtarı.
   // Boş değilse ekran "SSL kuruldu" gibi davranmamalı.

@@ -307,35 +307,33 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
 
     // K2 (mysql_secure_installation eşdeğeri, GÜVENLİ): anonim kullanıcıları ve uzak root@'%' hesabını
     // kaldır. root@localhost ve loopback'e DOKUNMA — panel onlarla bağlanıyor, kilitlenme olmaz. İdempotent.
-    public async Task<IReadOnlyList<string>> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
+    public async Task<DatabaseHardeningReport> HardenAdminAccountsAsync(DatabaseConnectionProfile profile, CancellationToken cancellationToken)
     {
         var removed = new List<string>();
+
+        // BAŞARISIZLAR ARTIK YUTULMUYOR. Eskiden `DROP USER` hataları boş bir catch'e düşüyor ve
+        // yalnız BAŞARILI olanlar sayılıyordu; üç güvensiz hesabın üçü de silinemediğinde uç
+        // "güvensiz yönetici hesabı bulunamadı" yazıyordu — bir ifade önce SELECT ile SAYDIĞI
+        // hesaplar hakkında. Gerekçenin tamamı DatabaseHardeningReport'ta.
+        var basarisizlar = new List<string>();
         await using var connection = await OpenConnectionAsync(profile, cancellationToken);
 
-        var targets = new List<(string User, string Host)>();
-        await using (var query = connection.CreateCommand())
-        {
-            // Güvensiz hesaplar: anonim (User='') veya uzak root (root@'%'). localhost/loopback root KORUNUR.
-            query.CommandText = "SELECT User, Host FROM mysql.user WHERE User = '' OR (User = 'root' AND Host = '%');";
-            await using var reader = await query.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                targets.Add((reader.GetString(0), reader.GetString(1)));
-            }
-        }
+        var targets = await GuvensizHesaplariOkuAsync(connection, cancellationToken);
 
         foreach (var (user, host) in targets)
         {
+            var ad = Ad(user, host);
             try
             {
                 await using var drop = connection.CreateCommand();
                 drop.CommandText = $"DROP USER IF EXISTS '{user.Replace("'", "''")}'@'{host.Replace("'", "''")}';";
                 await drop.ExecuteNonQueryAsync(cancellationToken);
-                removed.Add(string.IsNullOrEmpty(user) ? $"(anonim)@{host}" : $"{user}@{host}");
+                removed.Add(ad);
             }
-            catch (MySqlException)
+            catch (MySqlException exception)
             {
-                // en iyi çaba — tek hesabın hatası diğerlerini engellemesin
+                // en iyi çaba — tek hesabın hatası diğerlerini engellemesin, AMA sessiz kalmaz.
+                basarisizlar.Add($"{ad} ({exception.Message})");
             }
         }
 
@@ -407,8 +405,74 @@ internal sealed class MySqlDatabaseProvider : IDatabaseEngineProvider
             // best-effort — test db düşürülemese de hesap sertleştirmesi geçerli.
         }
 
-        return removed;
+        // YAZDIĞINI GERİ OKU. "DROP çalıştı, hata gelmedi" ile "hesap gitti" aynı şey değildir:
+        // yetkisiz bir bağlantıda `DROP USER IF EXISTS` sessizce etkisiz kalabilir, bir replikada
+        // yazma yok sayılabilir. Güvensiz hesap listesi baştan sorulan sorgunun AYNISIYLA yeniden
+        // okunur — kararı veren ve denetleyen taraf aynı kaynaktan beslensin diye.
+        List<(string User, string Host)>? kalanlar;
+        try
+        {
+            kalanlar = await GuvensizHesaplariOkuAsync(connection, cancellationToken);
+        }
+        catch (MySqlException exception)
+        {
+            // Okuyamadık: "temiz" DEMEYİZ. Bilmediğimizi söyleriz.
+            return new DatabaseHardeningReport
+            {
+                Applied = removed,
+                Failed = basarisizlar,
+                Unverified = [$"guvensiz hesap listesi geri okunamadi ({exception.Message})"],
+                Measured = false
+            };
+        }
+
+        // Geri okumada HÂLÂ duran her hesap başarısızdır — DROP hata vermemiş olsa bile.
+        // Bu, yutulan istisnadan bağımsız İKİNCİ bir kanıt yoludur.
+        var halaDuranlar = kalanlar
+            .Select(hedef => Ad(hedef.User, hedef.Host))
+            .ToArray();
+
+        var toplamBasarisiz = basarisizlar
+            .Concat(halaDuranlar.Where(ad => !basarisizlar.Any(satir => satir.StartsWith(ad, StringComparison.Ordinal)))
+                .Select(ad => $"{ad} (geri okumada HALA duruyor)"))
+            .ToList();
+
+        return new DatabaseHardeningReport
+        {
+            // Geri okumada hâlâ duran bir hesap "kaldırıldı" sayılamaz.
+            Applied = removed.Where(ad => !halaDuranlar.Contains(ad, StringComparer.Ordinal)).ToList(),
+            Failed = toplamBasarisiz,
+            Measured = true
+        };
     }
+
+    /// <summary>
+    /// Güvensiz yönetici hesapları: anonim (<c>User=''</c>) veya uzak root (<c>root@'%'</c>).
+    /// <c>root@localhost</c> ve loopback KORUNUR — panel onlarla bağlanıyor, kilitlenme olmaz.
+    /// </summary>
+    /// <remarks>
+    /// TEK KAYNAK: hem sertleştirme hedeflerini seçen hem de sonucu doğrulayan sorgu budur.
+    /// İki ayrı sorgu yazılsaydı, biri değiştiğinde doğrulama sessizce başka bir soruya cevap
+    /// vermeye başlardı.
+    /// </remarks>
+    private static async Task<List<(string User, string Host)>> GuvensizHesaplariOkuAsync(
+        MySqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var targets = new List<(string User, string Host)>();
+        await using var query = connection.CreateCommand();
+        query.CommandText = "SELECT User, Host FROM mysql.user WHERE User = '' OR (User = 'root' AND Host = '%');";
+        await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            targets.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        return targets;
+    }
+
+    private static string Ad(string user, string host)
+        => string.IsNullOrEmpty(user) ? $"(anonim)@{host}" : $"{user}@{host}";
 
     public bool SupportsHardening => true;
 

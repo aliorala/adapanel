@@ -331,9 +331,26 @@ export async function transferDatabase(payload: DatabaseTransferPayload) {
 }
 
 // K2 (panel mysql_secure_installation gibi): güvensiz DB yönetici hesaplarını (anonim + uzak root) kaldırır.
-// root@localhost'a dokunmaz. Kaldırılanların listesini döner (boş = zaten güvenli).
+// root@localhost'a dokunmaz.
+//
+// ARTIK LİSTE DEĞİL RAPOR DÖNER. Eski hâlinde yalnız KALDIRILABİLENLER dönüyordu: DROP USER
+// hataları yutulduğu için üç güvensiz hesabın üçü de silinemediğinde boş liste dönüyor ve panel
+// "zaten güvenli" diyordu — bir sorgu önce o hesapları saymışken.
+export type DatabaseHardeningReport = {
+  // Kaldırıldığı DOĞRULANAN hesaplar.
+  applied: string[];
+  // Güvensiz olduğu ölçülen ama kaldırılamayanlar — ADIYLA. Boş değilse sunucu HÂLÂ güvensiz.
+  failed: string[];
+  // Yapıldı ama sonucu okunamadı. "Başarısız" değil, "bilinmiyor".
+  unverified: string[];
+  // Sertleştirmeden sonra geri okuma yapılabildi mi.
+  measured: boolean;
+  // true = temiz (ölçüldü), false = eksik kaldı, null = ölçülemedi.
+  clean: boolean | null;
+};
+
 export async function hardenDatabase(engine: string) {
-  const response = await apiClient.post<ApiEnvelope<string[]>>("/db/harden", null, { params: { engine } });
+  const response = await apiClient.post<ApiEnvelope<DatabaseHardeningReport>>("/db/harden", null, { params: { engine } });
   return response.data.data;
 }
 
