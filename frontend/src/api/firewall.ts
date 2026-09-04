@@ -14,6 +14,11 @@ export type FirewallRule = {
   protocol: string;
   localPort: string;
   enabled: boolean;
+  /**
+   * Bu satır güvenlik duvarından GERİ OKUNDU mu. `false` ise `enabled` bir ölçüm değildir —
+   * kural yazıldı ama durumu doğrulanamadı. Listeleme yolundan gelen satırlarda her zaman true.
+   */
+  verified: boolean;
 };
 
 export type PortStatus = {

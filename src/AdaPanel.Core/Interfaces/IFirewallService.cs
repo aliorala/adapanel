@@ -42,7 +42,10 @@ public interface IFirewallService
     /// ulaşılamaz; Windows'ta engelleme izni ezdiği için panelden geri almak da mümkün olmaz.
     /// Sunucu konsolundan atılan <c>recover-access.flag</c> bu yüzden o kuralları da temizler.
     /// </para>
-    /// <para>Kaldırılan kural sayısını döner.</para>
+    /// <para>
+    /// GERÇEKTEN kaldırılanları geri okuyup rapor eder: <see cref="FirewallBlockCleanupReport"/>.
+    /// Eskiden kaldırmadan ÖNCE bulunan sayıyı "kaldırıldı" diye dönerdi.
+    /// </para>
     /// </summary>
-    Task<int> ClearManagedBlockRulesAsync(CancellationToken cancellationToken = default);
+    Task<FirewallBlockCleanupReport> ClearManagedBlockRulesAsync(CancellationToken cancellationToken = default);
 }

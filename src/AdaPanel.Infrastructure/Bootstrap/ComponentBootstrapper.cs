@@ -792,7 +792,12 @@ public sealed class ComponentBootstrapper(
             RestorePreservedDirectories(installDirectory, preserved);
 
             await ApplyPostInstallStepsAsync(component, installDirectory, generatedPassword, cancellationToken);
-            await ValidateInstallationAsync(component, installDirectory, cancellationToken, generatedPassword);
+
+            // KURULAN SURUM GERI OKUNUR. Asagida kaydedilecek surum artik manifest'in ISTEDIGI
+            // degil, dogrulama sirasinda diskten OLCULEN surumdur (bkz. ComponentVersionProbe).
+            var versionRecord = ComponentVersionProbe.Decide(
+                component.Version,
+                await ValidateInstallationAsync(component, installDirectory, cancellationToken, generatedPassword));
 
             var protectedConfiguration = string.IsNullOrWhiteSpace(generatedPassword)
                 ? string.Empty
@@ -809,7 +814,7 @@ public sealed class ComponentBootstrapper(
                 };
 
             installedComponent.DisplayName = component.DisplayName;
-            installedComponent.Version = component.Version;
+            installedComponent.Version = versionRecord.Version;
             installedComponent.Type = ParseComponentType(component.Type);
             installedComponent.InstallDir = installDirectory;
             installedComponent.ServiceName = component.ServiceName;
@@ -832,10 +837,12 @@ public sealed class ComponentBootstrapper(
             // hesaplanır (sürüm hâlâ eskiyse — ör. kurulum eski paketi tekrar kurduysa — açık kalır).
             RefreshUpdateCacheEntry(installedComponent.ComponentId, installedComponent.Version);
 
+            // KAYIT OLCUMDEN BESLENIR. Her sey yolundayken cumle SADE kalir ("version 1.2.3");
+            // olculemediyse ya da sapma varsa ADIYLA yazilir (ComponentVersionRecord.Describe).
             await auditService.WriteAsync(
                 "software.install.completed",
                 "software",
-                $"Component '{component.DisplayName}' installed into '{installDirectory}'.",
+                $"Component '{component.DisplayName}' installed into '{installDirectory}' ({versionRecord.Describe()}).",
                 actorUserId,
                 ipAddress,
                 cancellationToken);
@@ -845,7 +852,8 @@ public sealed class ComponentBootstrapper(
             {
                 ComponentId = component.Id,
                 DisplayName = component.DisplayName,
-                Version = component.Version,
+                Version = versionRecord.Version,
+                VersionMeasured = versionRecord.Measured,
                 Status = ComponentInstallStatus.Installed.ToString(),
                 InstallDir = installDirectory,
                 ServiceName = component.ServiceName,
@@ -2969,7 +2977,10 @@ public sealed class ComponentBootstrapper(
             : details[..maxLength] + "\r\n... (diagnostic output truncated)";
     }
 
-    private async Task ValidateInstallationAsync(
+    /// <summary>
+    /// Kurulumu dogrular ve <b>OLCULEN surumu</b> dondurur (olculemediyse <c>null</c>).
+    /// </summary>
+    private async Task<string?> ValidateInstallationAsync(
         ComponentManifestItemDto component,
         string installDirectory,
         CancellationToken cancellationToken,
@@ -3065,7 +3076,9 @@ public sealed class ComponentBootstrapper(
                 "Microsoft Visual C++ x64 runtime registry marker was not found.");
         }
 
-        await ValidateComponentRuntimeAsync(
+        // OLCULEN SURUM. Bu deger asagida kaydedilir; okunamazsa null kalir ve panel istenen
+        // surumu "olculmedi" damgasiyla gosterir.
+        var measuredVersion = await ValidateComponentRuntimeAsync(
             component,
             componentId,
             installDirectory,
@@ -3073,7 +3086,7 @@ public sealed class ComponentBootstrapper(
 
         if (string.IsNullOrWhiteSpace(component.ServiceName))
         {
-            return;
+            return measuredVersion;
         }
 
         if (componentId == "stalwart-mail")
@@ -3093,7 +3106,7 @@ public sealed class ComponentBootstrapper(
                     exception.Details);
             }
 
-            return;
+            return measuredVersion;
         }
 
         if (componentId == "memcached")
@@ -3102,7 +3115,7 @@ public sealed class ComponentBootstrapper(
             // gorevin kayitli + 11211'i dinliyor oldugunu, ardindan protokolu dogrula.
             await ValidateScheduledTaskRuntimeAsync(component.ServiceName, 11211, cancellationToken);
             await ValidateMemcachedRuntimeAsync(cancellationToken);
-            return;
+            return measuredVersion;
         }
 
         var serviceResult = await WaitForWindowsServiceRunningAsync(component.ServiceName, cancellationToken);
@@ -3138,9 +3151,19 @@ public sealed class ComponentBootstrapper(
                 await ValidateDockerRuntimeAsync(installDirectory, cancellationToken);
                 break;
         }
+
+        return measuredVersion;
     }
 
-    private async Task ValidateComponentRuntimeAsync(
+    /// <summary>
+    /// Kurulan bileseni CALISTIRARAK dogrular ve <b>okudugu surumu geri dondurur</b>.
+    /// </summary>
+    /// <remarks>
+    /// <c>--version</c> zaten kosuyordu; ciktisi ATILIYOR, yalniz cikis koduna bakiliyordu. Yani
+    /// "hangi surum kuruldu" sorusunun cevabi elimizdeydi ve kullanilmiyordu. Bkz.
+    /// <see cref="ComponentVersionProbe"/>.
+    /// </remarks>
+    private async Task<string?> ValidateComponentRuntimeAsync(
         ComponentManifestItemDto component,
         string componentId,
         string installDirectory,
@@ -3193,6 +3216,13 @@ public sealed class ComponentBootstrapper(
                     $"Component={component.Id}\r\n{BuildCommandDetails(nginxResult)}");
             }
         }
+
+        // PHP dogrulamasi surum DEGIL eklenti listesi basar ('AdaPanel-PHP-OK'); oradan surum
+        // ayiklamak sahte bir olcum olurdu. O yuzden yalniz gercekten `--version` kosan yollar
+        // olcum sayilir; digerleri "olculemedi" olarak raporlanir.
+        return componentId.StartsWith("php-", StringComparison.Ordinal)
+            ? null
+            : ComponentVersionProbe.FromCommandOutput(result?.StandardOutput);
     }
 
     private static async Task<CommandResult> ValidatePhpRuntimeAsync(

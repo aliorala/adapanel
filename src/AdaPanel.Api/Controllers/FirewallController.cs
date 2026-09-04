@@ -47,7 +47,7 @@ public sealed class FirewallController(
             HttpContext,
             "firewall.rule.allowed",
             $"firewall:{rule.DisplayName}",
-            $"Port {request.Port}/{request.Protocol} allowed (rule '{rule.DisplayName}', direction {rule.Direction}, enabled {rule.Enabled}).");
+            $"Port {request.Port}/{request.Protocol} allowed (rule '{rule.DisplayName}', direction {rule.Direction}, {DescribeRuleState(rule)}).");
 
         return Ok(ApiResponse<FirewallRuleDto>.Ok(rule, "firewall.rule_saved"));
     }
@@ -64,10 +64,22 @@ public sealed class FirewallController(
             HttpContext,
             "firewall.rule.blocked",
             $"firewall:{rule.DisplayName}",
-            $"Port {request.Port}/{request.Protocol} blocked (rule '{rule.DisplayName}', direction {rule.Direction}, enabled {rule.Enabled}).");
+            $"Port {request.Port}/{request.Protocol} blocked (rule '{rule.DisplayName}', direction {rule.Direction}, {DescribeRuleState(rule)}).");
 
         return Ok(ApiResponse<FirewallRuleDto>.Ok(rule, "firewall.rule_saved"));
     }
+
+    /// <summary>
+    /// Denetim kaydına yazılacak kural durumu — <b>ÖLÇÜMDEN</b>, istekten değil.
+    /// </summary>
+    /// <remarks>
+    /// İki kayıt cümlesi de <c>enabled {rule.Enabled}</c> yazıyordu ve o alan servis tarafında
+    /// KOŞULSUZ <c>true</c> atanıyordu; yani kural hiç oluşmamış olsa bile kayıt "enabled True"
+    /// diyordu. Kural artık güvenlik duvarından geri okunuyor; okunamadığında kayıt bunu
+    /// SÖYLER — uydurmaz. TEK KAYNAK: iki uç da bu cümleyi buradan alır.
+    /// </remarks>
+    private static string DescribeRuleState(FirewallRuleDto rule) =>
+        rule.Verified ? $"enabled {rule.Enabled}" : "state UNVERIFIED (rule could not be read back)";
 
     /// <summary>
     /// Panelin oluşturduğu bir kuralı kaldırır — yanlışlıkla eklenen bir engellemeyi geri almanın yolu.

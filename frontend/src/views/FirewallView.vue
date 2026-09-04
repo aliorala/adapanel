@@ -402,9 +402,21 @@ async function saveRule(action: "allow" | "block") {
   busy.value = true;
   try {
     const operation = action === "allow" ? allowPort : blockPort;
-    await operation(form.port, form.protocol, form.ruleName);
+    const kural = await operation(form.port, form.protocol, form.ruleName);
     form.ruleName = "";
     showRuleForm.value = false;
+
+    // SABIT YESIL "kaydedildi" KALKTI. Sunucu kurali yazdiktan sonra guvenlik duvarindan GERI
+    // OKUYOR; okuyamadiysa `verified` false doner ve o durumda "kaydedildi" demek, olcmedigimiz
+    // bir seyi soylemek olurdu. Kural yazilip da ORTADA YOKSA sunucu zaten hata firlatiyor
+    // (firewall.rule_not_applied) ve asagidaki catch onu gosteriyor.
+    if (!kural.verified) {
+      // Bilerek refreshAll'dan ONCE: liste okumasi da ayni sebeple duser ve daha genel
+      // "kurallar okunamadi" mesaji, buradaki daha bilgilendirici cumleyi ezerdi.
+      showNotice(t("panel.firewall.savedUnverified"), true);
+      return;
+    }
+
     await refreshAll();
     showNotice(t("panel.firewall.saved"), false);
   } catch (error) {

@@ -31,30 +31,80 @@ namespace AdaPanel.Infrastructure.Firewall;
 /// </remarks>
 public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewallService
 {
-    public async Task<IReadOnlyCollection<FirewallRuleDto>> GetRulesAsync(CancellationToken cancellationToken = default)
-    {
-        var script = """
-            $rules = Get-NetFirewallRule -DisplayName 'AdaPanel *' -ErrorAction SilentlyContinue | ForEach-Object {
-              $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $_ -ErrorAction SilentlyContinue | Select-Object -First 1;
-              [pscustomobject]@{
-                DisplayName = $_.DisplayName
-                Direction = $_.Direction.ToString()
-                Action = $_.Action.ToString()
-                Protocol = if ($port) { $port.Protocol } else { '' }
-                LocalPort = if ($port) { [string]$port.LocalPort } else { '' }
-                Enabled = [bool]$_.Enabled
-              }
-            }
-            $rules | ConvertTo-Json -Depth 4
-            """;
+    /// <summary>Okunabilirlik damgasi: bu satir cikmadiysa liste bir OLCUM DEGILDIR.</summary>
+    private const string OkunduDamgasi = "ADAPANEL-DUVAR=OKUNDU";
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        if (!result.Success)
+    /// <summary>
+    /// Panelin kendi kurallarini guvenlik duvarindan OKUR. "Kural yok" ile "okuyamadim" AYRIDIR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>OLCULDU (bu makinede, 04.09.2026):</b> yukseltilmemis bir surecte
+    /// <c>Get-NetFirewallRule</c> "Erisim engellendi" ile duser; ama varsayilan
+    /// <c>-ErrorAction SilentlyContinue</c> ile hicbir sey yazmaz, <c>powershell.exe</c> <b>0</b>
+    /// ile cikar ve sonuc BOS LISTE olur. Yani "kural okunamadi" ile "hic kural yok" birbirinden
+    /// ayirt edilemiyordu. Bu, bu turda avladigimiz sinifin ta kendisi.
+    /// </para>
+    /// <para>
+    /// Bu yuzden betik once OKUNABILIRLIK KAPISINDAN gecer (bir kural okumayi <c>-ErrorAction
+    /// Stop</c> ile dener) ve ancak gectikten sonra damgayi basar. Damga yoksa cagiran, listeyi
+    /// bir olcum saymaz.
+    /// </para>
+    /// </remarks>
+    private async Task<(bool Measured, FirewallRuleDto[] Rules)> ReadManagedRulesAsync(CancellationToken cancellationToken)
+    {
+        var result = await ProcessRunner.RunPowerShellAsync(BuildReadRulesScript(), cancellationToken);
+        if (!result.Success || !result.StandardOutput.Contains(OkunduDamgasi, StringComparison.Ordinal))
         {
-            throw new AppException("firewall.read_failed", 500, 500);
+            logger.LogWarning(
+                "Guvenlik duvari kurallari OKUNAMADI (cikis kodu {ExitCode}). Hata: {Error}",
+                result.ExitCode,
+                result.StandardError);
+            return (false, []);
         }
 
-        return DeserializeArray<FirewallRuleDto>(result.StandardOutput);
+        return (true, DeserializeArray<FirewallRuleDto>(StripOkunduDamgasi(result.StandardOutput)));
+    }
+
+    /// <summary>
+    /// Kural okuma betigi. Damga ile C# sabiti AYNI yerden gelir; ikisi ayrisirsa her okuma
+    /// sessizce "olculemedi" olurdu.
+    /// </summary>
+    internal static string BuildReadRulesScript() =>
+        """
+        $okunabilir = $true
+        try { $null = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -First 1) } catch { $okunabilir = $false }
+        if ($okunabilir) {
+          $rules = Get-NetFirewallRule -DisplayName 'AdaPanel *' -ErrorAction SilentlyContinue | ForEach-Object {
+            $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $_ -ErrorAction SilentlyContinue | Select-Object -First 1;
+            [pscustomobject]@{
+              DisplayName = $_.DisplayName
+              Direction = $_.Direction.ToString()
+              Action = $_.Action.ToString()
+              Protocol = if ($port) { $port.Protocol } else { '' }
+              LocalPort = if ($port) { [string]$port.LocalPort } else { '' }
+              Enabled = [bool]$_.Enabled
+            }
+          }
+          [Console]::Out.WriteLine('__DAMGA__')
+          $rules | ConvertTo-Json -Depth 4
+        }
+        """.Replace("__DAMGA__", OkunduDamgasi, StringComparison.Ordinal);
+
+    /// <summary>Damga satirini JSON'dan ayirir (JSON ayristiricisi onu yutmaz).</summary>
+    internal static string StripOkunduDamgasi(string output) =>
+        string.Join(
+            "\n",
+            (output ?? string.Empty)
+                .Split('\n')
+                .Where(line => !line.Contains(OkunduDamgasi, StringComparison.Ordinal)));
+
+    public async Task<IReadOnlyCollection<FirewallRuleDto>> GetRulesAsync(CancellationToken cancellationToken = default)
+    {
+        // OKUNAMADI ILE "HIC KURAL YOK" AYRI: ikincisi panelde bos bir liste demektir ve yonetici
+        // kurdugu kurallarin silindigini sanir. Okunamiyorsa liste UYDURULMAZ, hata soylenir.
+        var (measured, rules) = await ReadManagedRulesAsync(cancellationToken);
+        return measured ? rules : throw new AppException("firewall.read_failed", 500, 500);
     }
 
     public async Task<IReadOnlyCollection<PortStatusDto>> GetPortStatusAsync(int panelPort, CancellationToken cancellationToken = default)
@@ -327,17 +377,83 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
         }
     }
 
-    public async Task<int> ClearManagedBlockRulesAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Panelin kendi ENGELLEME kurallarini kaldirir ve GERCEKTEN kaldirilanlari geri okur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ONCEDEN BULUNAN kural sayisi KALDIRILAN diye yaziliyordu.</b> Betik
+    /// <c>Remove-NetFirewallRule -ErrorAction SilentlyContinue</c> ile siliyor, sonra
+    /// <c>$kurallar.Count</c> — yani SILMEDEN ONCE bulunan sayiyi — basiyordu. Kaldirma
+    /// basarisiz olsa (GPO ile dayatilmis kural, yetki hatasi) sayi yine ayni cikardi. Okuma
+    /// bastan basarisiz olduysa sayi 0 cikar ve bu da "temizlenecek kural yoktu" diye okunurdu.
+    /// </para>
+    /// <para>
+    /// <b>Bu, panelin ERISIM KURTARMA kolu.</b> Yonetici panele ulasamadigi icin sunucu
+    /// konsolundan bayrak dosyasi birakir; bu yol calisir ve gunluge "N kural kaldirildi"
+    /// yazar. O cumle yanlissa yonetici guvenlik duvarini eleyip baska yerde arar -- oysa
+    /// erisimi kapatan kural hala yerindedir. Bir kurtarma kolunun yalan soylemesi, en pahali
+    /// yalandir.
+    /// </para>
+    /// </remarks>
+    public async Task<FirewallBlockCleanupReport> ClearManagedBlockRulesAsync(CancellationToken cancellationToken = default)
     {
+        var oncesi = await ReadManagedBlockRuleNamesAsync(cancellationToken);
+        if (!oncesi.Measured)
+        {
+            return FirewallBlockCleanupReport.Olculemedi;
+        }
+
+        if (oncesi.Names.Count == 0)
+        {
+            return FirewallBlockCleanupReport.Bos;
+        }
+
         var script = """
             $kurallar = @(Get-NetFirewallRule -DisplayName "AdaPanel Block*" -ErrorAction SilentlyContinue)
             if ($kurallar.Count -gt 0) { $kurallar | Remove-NetFirewallRule -ErrorAction SilentlyContinue }
-            [Console]::Out.WriteLine('ADAPANEL-KALDIRILAN=' + $kurallar.Count)
+            [Console]::Out.WriteLine('ADAPANEL-KALDIRMA-DENENDI=' + $kurallar.Count)
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        var eslesme = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-KALDIRILAN=(\d+)");
-        return eslesme.Success ? int.Parse(eslesme.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+        await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+
+        // GERI OKU. Kaldirma cagrisinin cikis kodu degil, kuralin SUNUCUDAKI HALI olculur.
+        var sonrasi = await ReadManagedBlockRuleNamesAsync(cancellationToken);
+        if (!sonrasi.Measured)
+        {
+            return FirewallBlockCleanupReport.Olculemedi;
+        }
+
+        var kalan = oncesi.Names
+            .Where(name => sonrasi.Names.Contains(name, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var kaldirilan = oncesi.Names
+            .Where(name => !sonrasi.Names.Contains(name, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return new FirewallBlockCleanupReport(true, kaldirilan, kalan);
+    }
+
+    /// <summary>Panelin ENGELLEME kurallarinin adlari; okunamadiysa isaretli doner.</summary>
+    private async Task<(bool Measured, IReadOnlyCollection<string> Names)> ReadManagedBlockRuleNamesAsync(
+        CancellationToken cancellationToken)
+    {
+        var (measured, rules) = await ReadManagedRulesAsync(cancellationToken);
+        if (!measured)
+        {
+            return (false, []);
+        }
+
+        // Ad kalibi kaldirma betigininkiyle AYNI olmali ("AdaPanel Block*"), yoksa geri okuma
+        // baska bir kumeyi olcer ve rapor sessizce yanlis cikar.
+        return (
+            true,
+            rules
+                .Select(rule => rule.DisplayName ?? string.Empty)
+                .Where(name => name.StartsWith("AdaPanel Block", StringComparison.OrdinalIgnoreCase))
+                .ToArray());
     }
 
     public async Task RemoveRuleAsync(string ruleName, CancellationToken cancellationToken = default)
@@ -372,7 +488,8 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
     internal static string BuildRemoveScript(string ruleName) =>
         $"Remove-NetFirewallRule -DisplayName '{TekTirnak(ruleName)}' -ErrorAction Stop | Out-Null";
 
-    private static async Task<FirewallRuleDto> UpsertRuleAsync(
+    // ARTIK STATIK DEGIL: yazdiktan sonra kurali GERI OKUR (ReadManagedRulesAsync).
+    private async Task<FirewallRuleDto> UpsertRuleAsync(
         UpdateFirewallRuleRequest request,
         string action,
         CancellationToken cancellationToken)
@@ -383,22 +500,49 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
             ? $"AdaPanel {action} {request.Protocol.ToUpperInvariant()} {request.Port}"
             : request.RuleName.Trim();
 
-        var result = await ProcessRunner.RunPowerShellAsync(
+        // KATI KOSUCU. OLCULDU (bu makinede, 04.09.2026): cok ifadeli bir script'te
+        // `New-NetFirewallRule` sonlandirici OLMAYAN hata verdiginde script akmaya devam eder ve
+        // powershell.exe 0 ile cikar -- olcum: gecersiz -Action ile calistirildiginda cmdlet
+        // hata yazdi, sonraki satir kostu, cikis kodu 0 oldu. Yani `result.Success` "kural
+        // kuruldu" DEMIYORDU; panel kural HIC OLUSMADIGI halde "eklendi" diyordu.
+        var result = await ProcessRunner.RunPowerShellStrictAsync(
             BuildUpsertScript(ruleName, action, request.Protocol.ToUpperInvariant(), request.Port),
             cancellationToken);
         if (!result.Success)
         {
-            throw new AppException("firewall.write_failed", 500, 500);
+            throw new AppException("firewall.write_failed", 500, 500, result.StandardError);
         }
 
-        return new FirewallRuleDto
+        // GERI OKU -- CIKIS KODUNU DEGIL, KURALIN KENDISINI.
+        //
+        // Kati kosucu "arac sikayet etmedi" der, "kural yururlukte" demez. Onceden bu metot
+        // ISTENEN degerleri geri veriyor ve `Enabled = true` UYDURUYORDU; denetim kaydi da
+        // ("enabled {rule.Enabled}") o uydurmadan besleniyordu. Bir yonetici RDP'yi engellemek
+        // icin dugmeye basip "engellendi" yazisini gorup sunucuyu acik birakabilirdi.
+        var (measured, rules) = await ReadManagedRulesAsync(cancellationToken);
+        var applied = rules.FirstOrDefault(rule =>
+            string.Equals(rule.DisplayName, ruleName, StringComparison.OrdinalIgnoreCase));
+
+        if (measured && applied is null)
+        {
+            // Yazma "basarili" dondu ama kural ORTADA YOK. Sessizce basari saymak, tam olarak
+            // kapatmaya calistigimiz yalandir.
+            throw new AppException("firewall.rule_not_applied", 500, 500, ruleName);
+        }
+
+        return applied ?? new FirewallRuleDto
         {
             DisplayName = ruleName,
             Direction = "Inbound",
             Action = action,
             Protocol = request.Protocol.ToUpperInvariant(),
             LocalPort = request.Port.ToString(),
-            Enabled = true
+
+            // OLCULEMEDI. `Enabled` uydurulmaz: kural okunamadigi icin etkin oldugunu
+            // BILMIYORUZ ve "true" demek bilmedigimizi soylemek olurdu. Uc degerli durustlugun
+            // ucuncu degeri Verified alanindadir.
+            Enabled = false,
+            Verified = false
         };
     }
 

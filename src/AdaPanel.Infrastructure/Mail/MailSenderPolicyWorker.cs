@@ -61,6 +61,12 @@ public sealed class MailSenderPolicyWorker(
                     logger.LogInformation(
                         "Mail sender policy applied: unauthenticated sessions can no longer use a locally hosted sender domain.");
                     break;
+                case MailService.SenderPolicySyncResult.WrittenNotActivated:
+                    // "Uygulandı" DENMEZ: ayar diskte, sunucu hâlâ eski kuralla çalışıyor.
+                    logger.LogWarning(
+                        "Mail sender policy was WRITTEN but the mail server did not reload it (MtaStageMail.isSenderAllowed). "
+                        + "Unauthenticated senders can still forge locally hosted sender domains until the mail service is restarted.");
+                    break;
                 case MailService.SenderPolicySyncResult.AlreadyApplied:
                     logger.LogDebug("Mail sender policy already in place; nothing written.");
                     break;

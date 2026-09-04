@@ -557,7 +557,7 @@ static async Task ApplyAccessRecoveryFlagAsync(
         // (ya da uzak masaüstünü) engellemiş olabilir; Windows'ta engelleme izni ezdiği için
         // panele bir daha ulaşılamaz ve panelden geri almak imkânsız hâle gelirdi. Bu bayrak,
         // sunucu konsolundan atılabilen tek kurtarma kolu olduğu için o kuralları da kaldırır.
-        var blockRulesCleared = 0;
+        var blockRulesCleared = AdaPanel.Core.Dtos.Firewall.FirewallBlockCleanupReport.Olculemedi;
         try
         {
             blockRulesCleared = await firewallService.ClearManagedBlockRulesAsync();
@@ -570,11 +570,14 @@ static async Task ApplyAccessRecoveryFlagAsync(
         await dbContext.SaveChangesAsync();
         File.Delete(flagPath);
 
+        // Kurtarma kolunun kendi cumlesi ARTIK OLCUMDEN geliyor: kaldirilamayan kural varsa
+        // ADIYLA yazilir, guvenlik duvari okunamadiysa "olculemedi" denir. Eskiden burada
+        // kaldirmadan ONCE bulunan sayi yaziliyordu ve kural yerinde kalsa da ayni cumle cikardi.
         logger.LogWarning(
-            "ERİŞİM KURTARMA uygulandı (recover-access.flag): {Count} kullanıcının giriş kilidi temizlendi, IP engelleri temizlendi={Bans}, {BlockRules} panel engelleme kuralı kaldırıldı. Bayrak dosyası silindi.",
+            "ERİŞİM KURTARMA uygulandı (recover-access.flag): {Count} kullanıcının giriş kilidi temizlendi, IP engelleri temizlendi={Bans}, {BlockRules}. Bayrak dosyası silindi.",
             locked.Count,
             bansCleared,
-            blockRulesCleared);
+            blockRulesCleared.Describe());
     }
     catch (Exception exception)
     {

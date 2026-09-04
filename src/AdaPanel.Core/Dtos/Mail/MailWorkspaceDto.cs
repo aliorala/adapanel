@@ -18,6 +18,25 @@ public sealed class MailWorkspaceDto
 
     public IReadOnlyCollection<MailAccountDto> Accounts { get; set; } = [];
 
+    /// <summary>
+    /// <see cref="Accounts"/> GERÇEKTEN ÖLÇÜLDÜ MÜ. Boş liste tek başına "kutu yok" demek
+    /// değildir: sorgu hiç koşmamış da olabilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kota dayatan iki yer bu ayrımı yapmak ZORUNDADIR, çünkü ölçülemeyen bir listeyi "0 kutu"
+    /// saymak kotayı sessizce KALDIRIR: <c>MailController.EnsureMailboxQuotaAsync</c> (kutu
+    /// sayısı) ve <c>MailService.EnsureDomainAllocationAsync</c> (tahsis edilen disk toplamı).
+    /// Karar tek yerde: <see cref="MailQuotaMeasurement"/>.
+    /// </para>
+    /// <para>
+    /// <b>Varsayılan <c>false</c>'tur ve öyle kalmalıdır:</b> alan adı seçilmemiş ya da posta
+    /// yapılandırılmamış her yolda hesap listesi doldurulmaz; bayrağın kendiliğinden "ölçüldü"
+    /// demesi, ölçmediğimiz bir şeye güvenmek olurdu.
+    /// </para>
+    /// </remarks>
+    public bool AccountsMeasured { get; set; }
+
     public IReadOnlyCollection<MailAliasDto> Aliases { get; set; } = [];
 
     /// <summary>Seçili alan adına ait dağıtım listeleri (Stalwart mailing-list).</summary>

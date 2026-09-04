@@ -173,6 +173,11 @@ public sealed class MailService(
             Domains = domains
         };
 
+        // VARSAYILAN "OLCULMEDI"DIR. Hesap listesi yalnizca bir alan adi secildiginde ve
+        // sorgu GERCEKTEN kostugunda olculur; asagidaki dallardan hangisi atlanirsa atlansin
+        // bayrak false kalir, yani kota "0 kutu var" varsayimina DUSMEZ.
+        var accountsMeasured = false;
+
         if (!string.IsNullOrWhiteSpace(domain))
         {
             var normalized = domain.Trim().ToLowerInvariant();
@@ -185,7 +190,13 @@ public sealed class MailService(
             // alias'lar için hesap detayını çekmek gerekir.
             var accounts = new List<MailAccountDto>();
             var aliases = new List<MailAliasDto>();
-            foreach (var brief in await QueryAsync(cli, "account", env, cancellationToken))
+
+            // OLCULDU MU, isaretiyle birlikte tasinir: bos hesap listesi "bu alanda kutu yok"
+            // demek olabilecegi gibi "soramadim" da demek olabilir ve KOTA bu ikisini ayirt
+            // etmek ZORUNDADIR (bkz. MailQueryResult).
+            var accountQuery = await QueryAsync(cli, "account", env, cancellationToken);
+            accountsMeasured = accountQuery.Measured;
+            foreach (var brief in accountQuery.Items)
             {
                 var id = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(id))
@@ -253,7 +264,7 @@ public sealed class MailService(
                 .Where(pair => !string.IsNullOrWhiteSpace(pair.Id) && !string.IsNullOrWhiteSpace(pair.Name))
                 .GroupBy(pair => pair.Id, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.Ordinal);
-            foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
+            foreach (var brief in (await QueryAsync(cli, MailingListObject, env, cancellationToken)).Items)
             {
                 var id = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(id))
@@ -292,6 +303,7 @@ public sealed class MailService(
             workspace.Accounts = accounts;
             workspace.Aliases = aliases;
             workspace.Lists = lists;
+            workspace.AccountsMeasured = accountsMeasured;
 
             // Seçili domainin tahsis toplamını (kutu kotaları) doldur → UI "kullanılan / limit" gösterir.
             var selected = domains.FirstOrDefault(item => string.Equals(item.Name, normalized, StringComparison.OrdinalIgnoreCase));
@@ -381,6 +393,14 @@ public sealed class MailService(
             {
                 logger.LogInformation("Mail sender policy applied after domain creation.");
             }
+            else if (result == SenderPolicySyncResult.WrittenNotActivated)
+            {
+                // KARDEŞ YOL: işçideki uyarının aynısı burada da yazılır, yoksa alan adı
+                // oluşturmadan gelen yol sessizce "uygulandı" sanılırdı.
+                logger.LogWarning(
+                    "Mail sender policy was WRITTEN but the mail server did not reload it (MtaStageMail.isSenderAllowed) "
+                    + "after domain creation; sender forgery protection is not in effect yet.");
+            }
 
             await SyncDataStageScriptForSenderPolicyAsync(cancellationToken);
         }
@@ -464,7 +484,17 @@ public sealed class MailService(
         // girdileri de temizlenir.
         foreach (var principalType in DomainCascadeTypes)
         {
-            foreach (var brief in await QueryAsync(cli, principalType, env, cancellationToken))
+            // "UYE YOK" ile "UYELERI SORAMADIM" ayrilir: soramadigimizda uyeler SILINMEZ ve
+            // "delete domain" da denenmez. Aksi halde silme, uyeleri olan bir alan adini
+            // temizlemis SAYILIR; ustelik BASKA alan adlarindaki alias temizligi de sessizce
+            // atlanir ve o alias'lar silinmis alan adini gostermeye devam ederdi.
+            var members = await QueryAsync(cli, principalType, env, cancellationToken);
+            if (!members.Measured)
+            {
+                throw new AppException("mail.domain_members_unmeasured", 502, 502, $"{domain}/{principalType}");
+            }
+
+            foreach (var brief in members.Items)
             {
                 var memberId = GetField(brief, "id");
                 if (string.IsNullOrWhiteSpace(memberId))
@@ -636,7 +666,15 @@ public sealed class MailService(
         var (cli, env) = await RequireCliAsync(cancellationToken);
 
         // Alias'lar hesapların içinde tutulur; alias'ı barındıran hesabı bul ve map'ten çıkar.
-        foreach (var brief in await QueryAsync(cli, "account", env, cancellationToken))
+        // Hesaplar SORULAMAZSA "alias bulunamadi" DENMEZ: alias yerinde durur ve yonetici onu
+        // silinmis sanip posta akisini yanlis modelleyerek teshis eder.
+        var hesaplar = await QueryAsync(cli, "account", env, cancellationToken);
+        if (!hesaplar.Measured)
+        {
+            throw new AppException("mail.accounts_unmeasured", 502, 502, domain);
+        }
+
+        foreach (var brief in hesaplar.Items)
         {
             var accountId = GetField(brief, "id");
             if (string.IsNullOrWhiteSpace(accountId))
@@ -997,15 +1035,29 @@ public sealed class MailService(
         var (cli, env) = await RequireCliAsync(cancellationToken);
         var store = await ReadListPoliciesAsync(cancellationToken);
 
+        // OLCULMEMIS LISTEDEN POLITIKA URETILMEZ.
+        //
+        // Bu metot kural kumesini SIFIRDAN kurar ve script'i EZER. Sorgu duserse kume BOS cikar;
+        // yuva zaten bizimse (ListPolicySlotAction.Update) sifir kurallik script yazilir, yani
+        // "yalniz aboneler gonderebilir" korumasi BUTUN listelerden birden kalkar -- ustelik
+        // panelin kendi politika deposu (store) dopdoluyken ve panel "kaydedildi" derken.
+        // Bos liste ile olculemeyen liste ayni sey degildir; ikincisinde HICBIR SEY YAZILMAZ.
+        var domainQuery = await QueryAsync(cli, "domain", env, cancellationToken);
+        var listQuery = await QueryAsync(cli, MailingListObject, env, cancellationToken);
+        if (!domainQuery.Measured || !listQuery.Measured)
+        {
+            throw new AppException("mail.list_policy_unmeasured", 502, 502, ListPolicyScriptName);
+        }
+
         // Alan adı kimliği -> ad haritası: alias'lar kimlikle saklanır, kural TAM ADRESLE eşleşir.
-        var domainNamesById = (await QueryAsync(cli, "domain", env, cancellationToken))
+        var domainNamesById = domainQuery.Items
             .Select(item => (Id: GetField(item, "id"), Name: GetField(item, "name")))
             .Where(pair => !string.IsNullOrWhiteSpace(pair.Id) && !string.IsNullOrWhiteSpace(pair.Name))
             .GroupBy(pair => pair.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.Ordinal);
 
         var rules = new List<ListPolicyRule>();
-        foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
+        foreach (var brief in listQuery.Items)
         {
             var listAddress = GetField(brief, "emailAddress");
             if (string.IsNullOrWhiteSpace(listAddress) || !store.TryGetValue(listAddress, out var entry))
@@ -1084,7 +1136,9 @@ public sealed class MailService(
         }
 
         // Yeniden başlatma OLMADAN etkinleşir (otomatik yanıtta kanıtlandı: ReloadSettings yeterli).
-        _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+        // SONUÇ ATILMAZ: yüklenemezse liste politikası YAZILMIŞ ama YÜRÜRLÜKTE DEĞİLDİR ve panel
+        // "kaydedildi" diyemez (bkz. RequireMailSettingsReloadAsync).
+        await RequireMailSettingsReloadAsync(cli, env, ListPolicyScriptName, cancellationToken);
     }
 
     /// <summary>
@@ -1152,8 +1206,14 @@ public sealed class MailService(
 
         // Yeniden başlatma OLMADAN etkinleşir (aynı yol otomatik yanıtta ve liste politikasında
         // ölçüldü: ReloadSettings yeterli).
-        _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
-        return SenderPolicySyncResult.Applied;
+        //
+        // BURADA FIRLATILMAZ, ÇÜNKÜ bu yol açılıştaki işçiden (MailSenderPolicyWorker) da
+        // çağrılır; ama sonuç da ATILMAZ: yüklenemediyse "Applied" DEĞİL, NotActivated döner.
+        // "Applied" demek, kimliği doğrulanmamış gönderenlerin yerel alan adlarını taklit
+        // etmesinin ENGELLENDİĞİNİ iddia etmektir; ayar bellekte değilken bu iddia yanlıştır.
+        return await ReloadMailSettingsAsync(cli, env, cancellationToken) == MailReloadOutcome.Reloaded
+            ? SenderPolicySyncResult.Applied
+            : SenderPolicySyncResult.WrittenNotActivated;
     }
 
     /// <summary>
@@ -1184,8 +1244,14 @@ public sealed class MailService(
     /// <summary>Gönderen politikası eşitlemesinin sonucu (loglanır; sessiz yutma yok).</summary>
     internal enum SenderPolicySyncResult
     {
-        /// <summary>Kural yazıldı.</summary>
+        /// <summary>Kural yazıldı VE sunucuya yüklendi (yürürlükte).</summary>
         Applied,
+
+        /// <summary>
+        /// Kural yazıldı ama <c>ReloadSettings</c> dönmedi: sunucu HÂLÂ eski kuralla çalışıyor.
+        /// "Applied" ile aynı sayılamaz — sahtecilik koruması yürürlükte DEĞİLDİR.
+        /// </summary>
+        WrittenNotActivated,
 
         /// <summary>Zaten yazılıydı — dokunulmadı.</summary>
         AlreadyApplied,
@@ -1865,7 +1931,10 @@ public sealed class MailService(
         }
 
         // Değişiklik yeniden başlatma OLMADAN etkinleşir (canlı doğrulandı: ReloadSettings yeterli).
-        _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+        // SONUÇ ATILMAZ: bu script otomatik yanıtı, List-Unsubscribe başlığını ve From hizalamasını
+        // birlikte taşır. Yüklenemezse "otomatik yanıt açıldı" demek YALANDIR — script diskte
+        // durur, gelen postaya kimse cevap vermez.
+        await RequireMailSettingsReloadAsync(cli, env, AutoResponderScriptName, cancellationToken);
     }
 
     /// <summary>Panelin ayarlı genel kök adresi (boş = ayarlanmamış).</summary>
@@ -1947,16 +2016,27 @@ public sealed class MailService(
             return [];
         }
 
+        // OLCULMEMIS LISTEDEN BASLIK KURALI URETILMEZ. DATA asamasi script'i butunuyle yeniden
+        // yazilir; sorgu duserse kume BOS cikar ve List-Unsubscribe basligi BUTUN listelerden
+        // sessizce kalkar (0.8.14'te tam da bu baslik icin duzeltme yapilmisti). Yanlis yon
+        // burada da tek taraflidir: yazmamak geri alinabilir, sessizce silmek alinamaz.
+        var alanSorgusu = await QueryAsync(cli, "domain", env, cancellationToken);
+        var listeSorgusu = await QueryAsync(cli, MailingListObject, env, cancellationToken);
+        if (!alanSorgusu.Measured || !listeSorgusu.Measured)
+        {
+            throw new AppException("mail.list_policy_unmeasured", 502, 502, "List-Unsubscribe");
+        }
+
         // Alan adı kimliği -> ad haritası: liste alias'ları sunucuda kimlikle durur ve başlık kuralı
         // TAM ADRESLE eşleştiği için ada çevrilmeden kullanılamaz.
-        var domainNamesById = (await QueryAsync(cli, "domain", env, cancellationToken))
+        var domainNamesById = alanSorgusu.Items
             .Select(item => (Id: GetField(item, "id"), Name: GetField(item, "name")))
             .Where(pair => !string.IsNullOrWhiteSpace(pair.Id) && !string.IsNullOrWhiteSpace(pair.Name))
             .GroupBy(pair => pair.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Name, StringComparer.Ordinal);
 
         var rules = new List<ListUnsubscribeRule>();
-        foreach (var brief in await QueryAsync(cli, MailingListObject, env, cancellationToken))
+        foreach (var brief in listeSorgusu.Items)
         {
             var address = GetField(brief, "emailAddress");
             if (string.IsNullOrWhiteSpace(address))
@@ -2193,9 +2273,18 @@ public sealed class MailService(
         if (limit > 0)
         {
             var allocated = await GetDomainAllocatedMbAsync(domain, cancellationToken);
-            if (allocated > limit)
+
+            // OLCULEMEYEN TAHSIS "0 MB" SAYILMAZ: sayilsaydi, 50 GB tahsisli bir alan adina
+            // 100 MB'lik limit konabilir ve panel bunu "kaydedildi" diye bildirirdi.
+            MailQuotaMeasurement.EnsureMeasured(
+                limit,
+                allocated.Measured,
+                MailQuotaMeasurement.DomainAllocationKey,
+                domain);
+
+            if (allocated.AllocatedMb > limit)
             {
-                throw new AppException("mail.domain_quota_below_allocated", 409, 409, $"allocated={allocated}MB");
+                throw new AppException("mail.domain_quota_below_allocated", 409, 409, $"allocated={allocated.AllocatedMb}MB");
             }
         }
 
@@ -2223,10 +2312,14 @@ public sealed class MailService(
     }
 
     // Bir domaindeki posta kutularına tahsis edilen toplam kota (MB). Sınırsız (0) kutular 0 sayılır.
-    private async Task<int> GetDomainAllocatedMbAsync(string domain, CancellationToken cancellationToken)
+    // OLCULDU MU bilgisiyle BIRLIKTE doner: "0 MB tahsis edilmis" ile "tahsisi okuyamadim" ayni
+    // sey degildir ve ikincisinde kota dayatilamaz (bkz. MailQuotaMeasurement).
+    private async Task<(bool Measured, int AllocatedMb)> GetDomainAllocatedMbAsync(string domain, CancellationToken cancellationToken)
     {
         var workspace = await GetWorkspaceAsync(domain, cancellationToken);
-        return workspace.Accounts?.Sum(account => Math.Max(0, account.MaxSizeMB)) ?? 0;
+        return (
+            workspace.AccountsMeasured,
+            workspace.Accounts?.Sum(account => Math.Max(0, account.MaxSizeMB)) ?? 0);
     }
 
     // Yeni kutu/kota işlemi domain kotasını aşıyor mu? Aşıyorsa AppException fırlatır. excludeAddress: güncellenen kutu
@@ -2246,6 +2339,16 @@ public sealed class MailService(
         }
 
         var workspace = await GetWorkspaceAsync(domain, cancellationToken);
+
+        // OLCULEMEYEN TAHSIS "hic kutu yok" SAYILMAZ. Sayilsaydi, posta sunucusu cevap vermedigi
+        // her anda alan adi disk kotasi kendiliginden kalkar, kiraci kotasinin tamamini asan
+        // kutular acabilir ve kayitta bunun izi olmazdi.
+        MailQuotaMeasurement.EnsureMeasured(
+            limit,
+            workspace.AccountsMeasured,
+            MailQuotaMeasurement.DomainAllocationKey,
+            domain);
+
         var others = (workspace.Accounts ?? [])
             .Where(account => !string.Equals(account.Address, excludeAddress, StringComparison.OrdinalIgnoreCase))
             .Sum(account => Math.Max(0, account.MaxSizeMB));
@@ -2298,7 +2401,15 @@ public sealed class MailService(
         };
 
         // Stalwart domain oluşturulurken RSA + Ed25519 DKIM anahtarlarını otomatik üretir.
-        foreach (var brief in await QueryAsync(cli, "DkimSignature", env, cancellationToken))
+        // SORULAMADIYSA "bu alanda DKIM yok" DENMEZ: yonetici DNS'e DKIM kaydi eklemeden alan
+        // adini yayina alir, giden postanin tamami imzasiz gider ve spam'e duser.
+        var dkimSorgusu = await QueryAsync(cli, "DkimSignature", env, cancellationToken);
+        if (!dkimSorgusu.Measured)
+        {
+            throw new AppException("mail.dkim_unmeasured", 502, 502, normalized);
+        }
+
+        foreach (var brief in dkimSorgusu.Items)
         {
             if (!string.Equals(GetField(brief, "domainId"), domainId, StringComparison.Ordinal)
                 || !string.Equals(GetField(brief, "stage"), "active", StringComparison.OrdinalIgnoreCase))
@@ -2511,7 +2622,19 @@ public sealed class MailService(
         // silindiginde oluyor). Guncelleme TUM nesneyi yeniden dogruladigi icin bu sarkan referans
         // SystemSettings uzerindeki HER degisikligi engeller ve hata mesaji ("defaultDomainId:
         // required") sebebi hic anlatmaz. Bu yuzden once gecerli bir alana onariliyor.
-        var domainIds = (await QueryAsync(cli, "domain", env, cancellationToken))
+        var alanSorgusu = await QueryAsync(cli, "domain", env, cancellationToken);
+        if (!alanSorgusu.Measured)
+        {
+            // "ALAN YOK" DEGIL, "SORAMADIM". Ikisi de false donuyordu ve DENETIM MODUNDA
+            // (applyChanges: false) bu, "onarilacak bir sey yok" demek oluyordu: onarma dugmesi
+            // hic cikmiyor, yanlis karsilama adi kalici hale geliyordu.
+            logger.LogWarning(
+                "Posta karsilama adi DENETLENEMEDI: alan adi listesi okunamadi. "
+                + "Karsilama adinin dogru olup olmadigi bu turda OLCULMEDI.");
+            return false;
+        }
+
+        var domainIds = alanSorgusu.Items
             .Select(item => GetField(item, "id"))
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToList();
@@ -2587,7 +2710,17 @@ public sealed class MailService(
         if (string.Equals(currentHost, hostName, StringComparison.OrdinalIgnoreCase)
             && string.Equals(domainId, currentDomainId, StringComparison.Ordinal))
         {
-            await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+            // SONUC ATILMAZ. Bu dalda yapilan TEK is yeniden okutmaktir; basarisiz olursa
+            // "okutuldu" demek, hicbir sey yapmadigimiz halde is yaptigimizi soylemek olurdu.
+            if (await ReloadMailSettingsAsync(cli, env, cancellationToken) == MailReloadOutcome.NotReloaded)
+            {
+                logger.LogWarning(
+                    "Posta sunucusu ayarlari YENIDEN OKUTULAMADI; karsilama adi '{HostName}' yazili ama yururlukte degil. "
+                    + "Posta hizmeti yeniden baslatilmali.",
+                    hostName);
+                return false;
+            }
+
             logger.LogInformation("Posta sunucusu ayarlari yeniden okutuldu; karsilama adi '{HostName}'.", hostName);
             return true;
         }
@@ -2608,8 +2741,16 @@ public sealed class MailService(
         // sebebi buydu -- eksik olan tek sey bu cagriydi.
         //
         // Yerelde olculdu: defaultHostname degistirilip ReloadSettings gonderildiginde karsilama
-        // aninda yeni adi gosteriyor.
-        await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+        // aninda yeni adi gosteriyor. SONUC ATILMAZ -- atildiginda, bu metnin ANLATTIGI canli
+        // arizanin ta kendisi geri gelirdi: ad yazili, karsilama eski, panel "ayarlandi" diyor.
+        if (await ReloadMailSettingsAsync(cli, env, cancellationToken) == MailReloadOutcome.NotReloaded)
+        {
+            logger.LogWarning(
+                "Posta sunucusunun karsilama adi '{HostName}' YAZILDI ama sunucuya yuklenemedi; "
+                + "SMTP karsilamasi eski adi gostermeye devam eder. Posta hizmeti yeniden baslatilmali.",
+                hostName);
+            return false;
+        }
 
         logger.LogInformation("Posta sunucusunun karsilama adi '{HostName}' olarak ayarlandi.", hostName);
         return true;
@@ -2892,8 +3033,18 @@ public sealed class MailService(
             $"\"privateKey\":{{\"@type\":\"Text\",\"secret\":{JsonValue(privateKeyPem)}}}}}";
 
         // Aynı hostname için mevcut sertifika varsa güncelle, yoksa oluştur.
+        //
+        // SORULAMADIYSA "yok" SAYILMAZ: "yok" saymak, var olanin UZERINE YAZMAK yerine ayni ad
+        // icin IKINCI bir sertifika nesnesi olusturmak demektir. Stalwart hangisini sunacagini
+        // sectiginde eski/suresi dolmus olani secebilir ve panel "sertifika yuklendi" der.
+        var sertifikaSorgusu = await QueryAsync(cli, "Certificate", env, cancellationToken);
+        if (!sertifikaSorgusu.Measured)
+        {
+            throw new AppException("mail.certificate_push_failed", 500, 500, $"certificate list unreadable: {hostName}");
+        }
+
         string? existingId = null;
-        foreach (var item in await QueryAsync(cli, "Certificate", env, cancellationToken))
+        foreach (var item in sertifikaSorgusu.Items)
         {
             if (item.TryGetProperty("subjectAlternativeNames", out var sans)
                 && sans.ValueKind == JsonValueKind.Object
@@ -2915,7 +3066,15 @@ public sealed class MailService(
         }
 
         // Sertifikaları yeniden başlatma olmadan canlı yükle (tagged-union → @type JSON ile).
-        await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadTlsCertificates\"}", env, cancellationToken);
+        //
+        // SONUÇ ATILMAZ. Yüklenemezse sertifika nesnesi Stalwart'ta DURUR ama dinleyiciler ESKİ
+        // (çoğu kurulumda kendinden imzalı) sertifikayı sunmaya devam eder: panel "posta
+        // sertifikası kuruldu" der, istemciler güven uyarısı almaya devam eder ve yönetici
+        // sertifikanın kendisinde arar. Ayarın yazılmış olması onun sunulduğu anlamına gelmez.
+        if (await ReloadMailCertificatesAsync(cli, env, cancellationToken) == MailReloadOutcome.NotReloaded)
+        {
+            throw new AppException("mail.certificate_not_activated", 502, 502, hostName);
+        }
     }
 
     private async Task<string?> ResolveComponentExecutableAsync(string componentId, string executableName, CancellationToken cancellationToken)
@@ -3075,10 +3234,51 @@ public sealed class MailService(
         return await GetWorkspaceAsync(domain, cancellationToken);
     }
 
-    private async Task<IReadOnlyList<JsonElement>> QueryAsync(string cli, string type, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
+    /// <summary>
+    /// Stalwart'ta bir nesne turunu listeler. <b>"HIC YOK" ile "SORULAMADI" AYRI DONER.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ONCEDEN:</b> <c>result.Success ? ParseItems(...) : []</c> — yani CLI hatasi BOS LISTEYE
+    /// cevriliyordu. Cagiran ikisini ayirt edemiyordu ve bu, olculmus iki yerde KOTAYI SESSIZCE
+    /// DEVRE DISI BIRAKIYORDU:
+    /// </para>
+    /// <list type="number">
+    /// <item><c>MailController.EnsureMailboxQuotaAsync</c> kutulari sayar; sorgu duserse sayi 0
+    /// olur ve <c>MaxMailboxes</c> kotasi dolu olan kiraci sinirsiz kutu acabilir.</item>
+    /// <item><see cref="GetDomainAllocatedMbAsync"/> tahsis edilen disk toplamini cikarir; sorgu
+    /// duserse toplam 0 olur ve alan adi disk kotasi hic dayatilmaz.</item>
+    /// </list>
+    /// <para>
+    /// Ucuncusu <see cref="PushCertificateToStalwartAsync"/>: sorgu duserse "bu ad icin sertifika
+    /// yok" sanilir ve mevcut olanin UZERINE YAZMAK yerine IKINCI bir sertifika olusturulur.
+    /// </para>
+    /// <para>
+    /// Kotanin yanilma yonleri esit degildir: "olcemedim" deyip islemi reddetmek geri alinabilir,
+    /// kotayi sessizce kaldirmak degildir.
+    /// </para>
+    /// </remarks>
+    private async Task<MailQueryResult> QueryAsync(string cli, string type, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
     {
         var result = await RunCliAsync(cli, $"query {type} --json", env, cancellationToken);
-        return result.Success ? ParseItems(result.StandardOutput) : [];
+        return MailQueryResult.Olc(result);
+    }
+
+    /// <summary>Bir Stalwart listeleme sonucu: olculdu mu, olculduyse ne cikti.</summary>
+    internal readonly record struct MailQueryResult(bool Measured, IReadOnlyList<JsonElement> Items)
+    {
+        /// <summary>
+        /// CLI sonucunu okur. <b>Ayrimin yapildigi TEK yer budur</b> — cikis kodu sifirsa liste
+        /// bir OLCUMDUR (bos olsa bile), degilse liste hicbir sey soylemez.
+        /// </summary>
+        internal static MailQueryResult Olc(CommandResult result) =>
+            result.Success ? Olculdu(ParseItems(result.StandardOutput)) : Olculemedi;
+
+        /// <summary>Sorgu KOSTU; liste bos da olabilir, dolu da. Bos olmasi bir OLCUMDUR.</summary>
+        internal static MailQueryResult Olculdu(IReadOnlyList<JsonElement> items) => new(true, items);
+
+        /// <summary>Sorgu KOSMADI. Bos liste dondurulur ama bunun bir olcum OLMADIGI isaretlidir.</summary>
+        internal static MailQueryResult Olculemedi { get; } = new(false, []);
     }
 
     private async Task<JsonElement?> GetObjectAsync(string cli, string type, string id, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
@@ -3167,7 +3367,19 @@ public sealed class MailService(
         }
 
         var items = await QueryAsync(cli, type, BuildEnvironment(password), cancellationToken);
-        foreach (var item in items)
+
+        // NULL = "YOK" DEMEKTIR, "SORAMADIM" DEGIL.
+        //
+        // Butun cagiranlar null'i "boyle bir nesne yok" diye okuyor ve buna gore davraniyor:
+        // alan adi silme IDEMPOTENT BASARI donuyor (silmedigi halde), yeni kutunun kotasi
+        // sessizce hic uygulanmiyor, otomatik yanit "hesap yok" diyor. Sorgu hic kosmadiginda
+        // bu okumalarin HEPSI yanlistir; o yuzden burada ayrilir.
+        if (!items.Measured)
+        {
+            throw new AppException("mail.lookup_unmeasured", 502, 502, $"{type}.{field}");
+        }
+
+        foreach (var item in items.Items)
         {
             if (string.Equals(GetField(item, field), value, StringComparison.OrdinalIgnoreCase))
             {
@@ -3986,13 +4198,23 @@ public sealed class MailService(
                 }
             }
 
-            await ReloadMailSettingsAsync(cli, env, cancellationToken);
+            // SONUC OKUNUR ama FIRLATMA KAYITTAN SONRAYA BIRAKILIR: rota Stalwart'tan silindi,
+            // panelin kendi kaydi da onunla ayni hikayeyi anlatmali. Once firlatsaydik panel
+            // "role acik" der, sunucuda role olmazdi.
+            var kapatmaYukleme = await ReloadMailSettingsAsync(cli, env, cancellationToken);
             await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
 
             var kapali = await GetRelayAsync(cancellationToken);
             if (kapali.Enabled)
             {
                 throw new AppException("mail.relay_unverified", 502, 502);
+            }
+
+            if (kapatmaYukleme == MailReloadOutcome.NotReloaded)
+            {
+                // GetRelayAsync ayarin YAZILI halini okur, sunucunun BELLEKTEKI halini degil;
+                // yeniden yukleme yapilmadiysa giden posta bir sure daha eski rotaya gidebilir.
+                throw new AppException("mail.settings_not_activated", 502, 502, RelayRouteName);
             }
 
             return kapali;
@@ -4020,7 +4242,7 @@ public sealed class MailService(
             : (string.IsNullOrWhiteSpace(mevcutIfade) ? DefaultRouteExpression : mevcutIfade);
 
         await UpdateRouteExpressionAsync(cli, env, mevcutEslesmeler, RelayRouteExpression, cancellationToken);
-        await ReloadMailSettingsAsync(cli, env, cancellationToken);
+        var acmaYukleme = await ReloadMailSettingsAsync(cli, env, cancellationToken);
         await fileStore.WriteAsync(RelayStorePath, yeniKayit, cancellationToken);
 
         // "KAYDEDİLDİ" DEMEK YETMEZ. Ayarı geri okuyup sunucunun gerçekten röleye yönlendirdiğini
@@ -4032,6 +4254,13 @@ public sealed class MailService(
             || dogrulama.Port != yeniKayit.Port)
         {
             throw new AppException("mail.relay_unverified", 502, 502);
+        }
+
+        if (acmaYukleme == MailReloadOutcome.NotReloaded)
+        {
+            // Geri okuma YAZILI ayari dogrular, YURURLUKTEKI ayari degil: yeniden yukleme
+            // yapilmadiysa sunucu hala eski yonlendirmeyi kullaniyor olabilir.
+            throw new AppException("mail.settings_not_activated", 502, 502, RelayRouteName);
         }
 
         return dogrulama;
@@ -4195,9 +4424,89 @@ public sealed class MailService(
             ? eslesme.GetRawText()
             : "[]";
 
-    /// <summary>Ayar değişikliğini yeniden başlatmadan devreye alır.</summary>
-    private static async Task ReloadMailSettingsAsync(string cli, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
-        => _ = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+    /// <summary>
+    /// Ayar değişikliğini yeniden başlatmadan devreye alır ve SONUCU DÖNDÜRÜR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN SONUÇ DÖNÜYOR.</b> Stalwart ayarları BELLEKTE tutar: bir ayarı yazmak onu ETKİN
+    /// yapmaz, <c>ReloadSettings</c> eylemi yapar. Bu çağrının sonucu depoda SEKİZ ayrı yerde
+    /// <c>_ = await ...</c> ile atılıyordu. Yani reload başarısız olduğunda ayar diske yazılmış,
+    /// sunucu HÂLÂ eski ayarla çalışıyor, panel ise "kaydedildi" diyordu — otomatik yanıt
+    /// yanıtlamıyor, röle devreye girmiyor, liste politikası uygulanmıyor, ama arayüz yeşil.
+    /// Aynı semptom bu dosyada karşılama adı için CANLI olarak yaşandı
+    /// (bkz. <see cref="EnsureServerHostnameAsync"/> yorumu): ayar yerindeydi, panel susuyordu,
+    /// sorun sürüyordu.
+    /// </para>
+    /// <para>
+    /// <b>TEK KAYNAK.</b> Sekiz çağrı yerine bu iki metot vardır: sonucu okuyup kendi kararını
+    /// veren çağıranlar için <see cref="ReloadMailSettingsAsync"/>, kullanıcıya "yapıldı" diyecek
+    /// olanlar için <see cref="RequireMailSettingsReloadAsync"/>.
+    /// </para>
+    /// </remarks>
+    private static async Task<MailReloadOutcome> ReloadMailSettingsAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadSettings\"}", env, cancellationToken);
+        return OkumaSonucu(result);
+    }
+
+    /// <summary>
+    /// Yeniden yukleme eyleminin sonucunu okur. <b>Ayrimin yapildigi TEK yer.</b>
+    /// </summary>
+    /// <remarks>
+    /// Bu tek satir, depoda SEKIZ yerde <c>_ = await ...</c> olarak ATILIYORDU. Sonuc atildiginda
+    /// panel ayari yazip "kaydedildi" diyor, Stalwart ise ayari BELLEGINE hic almamis oluyordu.
+    /// </remarks>
+    internal static MailReloadOutcome OkumaSonucu(CommandResult result) =>
+        result.Success ? MailReloadOutcome.Reloaded : MailReloadOutcome.NotReloaded;
+
+    /// <summary>
+    /// TLS sertifikalarını yeniden başlatma olmadan canlı yükler; sonucu döndürür.
+    /// </summary>
+    private static async Task<MailReloadOutcome> ReloadMailCertificatesAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunCliJsonAsync(cli, "create Action", "{\"@type\":\"ReloadTlsCertificates\"}", env, cancellationToken);
+        return OkumaSonucu(result);
+    }
+
+    /// <summary>
+    /// Ayarı devreye alır; alınamazsa "kaydedildi" DEMEZ, hangi ayarın yazıldığı ama
+    /// ETKİNLEŞMEDİĞİNİ adıyla söyleyen bir hata fırlatır.
+    /// </summary>
+    /// <remarks>
+    /// Kullanıcının bir düğmeye basıp sonucunu beklediği yollarda kullanılır. Fırlatılan hata
+    /// bir "işlem başarısız" değildir — ayar DİSKE YAZILMIŞTIR; mesaj (bkz.
+    /// <c>mail.settings_not_activated</c>) bunu söyler ve posta hizmetinin yeniden başlatılması
+    /// gerektiğini bildirir. Sessizce başarı saymak, yöneticiye ölçmediğimiz bir şeyi
+    /// söylemek olurdu.
+    /// </remarks>
+    private static async Task RequireMailSettingsReloadAsync(
+        string cli,
+        IReadOnlyDictionary<string, string> env,
+        string settingName,
+        CancellationToken cancellationToken)
+    {
+        if (await ReloadMailSettingsAsync(cli, env, cancellationToken) == MailReloadOutcome.NotReloaded)
+        {
+            throw new AppException("mail.settings_not_activated", 502, 502, settingName);
+        }
+    }
+
+    /// <summary>Ayarın sunucuda ETKİNLEŞİP etkinleşmediği. İki değerlidir: çağrı ya döndü ya dönmedi.</summary>
+    internal enum MailReloadOutcome
+    {
+        /// <summary>Stalwart ayarları yeniden okudu.</summary>
+        Reloaded,
+
+        /// <summary>Ayar YAZILDI ama sunucuya yüklenemedi; eski ayar yürürlükte.</summary>
+        NotReloaded
+    }
 
     /// <summary>
     /// Bool alanı okur; alan YOKSA verilen varsayılan döner.

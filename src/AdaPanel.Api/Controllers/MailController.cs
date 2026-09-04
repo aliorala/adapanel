@@ -919,6 +919,17 @@ public sealed class MailController(
         foreach (var domain in allowed)
         {
             var workspace = await mailService.GetWorkspaceAsync(domain, cancellationToken);
+
+            // "SIFIR KUTU" ILE "SAYAMADIM" AYNI SEY DEGIL. Bos hesap listesi, Stalwart sorgusu
+            // hic kosmadiginda da geliyordu; o durumda bu sayac hic artmaz ve kotasi ZATEN DOLU
+            // olan kiraci sinirsiz kutu acardi -- panelde tek bir uyari cikmadan. Karar tek
+            // kaynakta: MailQuotaMeasurement.
+            Core.Dtos.Mail.MailQuotaMeasurement.EnsureMeasured(
+                scope.MaxMailboxes,
+                workspace.AccountsMeasured,
+                Core.Dtos.Mail.MailQuotaMeasurement.MailboxCountKey,
+                domain);
+
             count += workspace.Accounts?.Count ?? 0;
             if (count >= scope.MaxMailboxes)
             {

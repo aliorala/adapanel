@@ -1656,3 +1656,146 @@ Bu makinede IIS uygulama havuzu, ayakta Stalwart, MariaDB ve Windows DNS **yok**
 uzerinde `BUILTIN\Users` SID'iyle olculdu (NTFS davranisi ayni; SID cozumlemesi degil).
 `icacls`'in kismi basarida 0 dondurmesi bu turda YENIDEN olculmedi -- deponun onceki olcumune
 dayanildi (`WebDbClientService.cs:591`).
+
+---
+
+## EN AGIR DORT ADAY DOGRULANDI VE KAPATILDI (04.09.2026, ikinci tur) -- commit ATILMADI
+
+Onceki turun "OLCULDU, KAPATILMADI" listesindeki dort en agir aday dogrulandi. Canli panele
+(8890) DOKUNULMADI; hicbir sey silinmedi; guvenlik duvarinda GERCEK kural olusturulmadi.
+
+### 1) STALWART `ReloadSettings` SONUCU ATILIYORDU -- **ACIK**, kapatildi
+
+Stalwart ayarlari BELLEKTE tutar: ayari yazmak onu ETKIN yapmaz, `ReloadSettings` yapar. Bu
+cagrinin sonucu **sekiz** yerde `_ = await ...` ile atiliyordu: liste politikasi (`:1087`),
+gonderen politikasi (`:1155`), DATA asamasi script'i / otomatik yanit (`:1868`), karsilama adi
+(`:2590`, `:2612`), TLS sertifikasi (`ReloadTlsCertificates`, `:2918`), role (`:3989`, `:4023`).
+Reload dustugunde ayar diskte kalir, sunucu eski ayarla calisir, panel "kaydedildi" der.
+**Ayni semptom karsilama adinda CANLI yasanmisti** ve kodun kendi yorumu onu anlatiyordu.
+
+**KAPATMA BICIMI -- TEK KAYNAK.** Sekiz cagri iki metoda indirildi:
+`ReloadMailSettingsAsync` (sonucu `MailReloadOutcome` olarak DONDURUR) ve
+`RequireMailSettingsReloadAsync` (kullaniciya "yapildi" diyecek yollar icin; yuklenemezse
+`mail.settings_not_activated` + HANGI AYAR oldugu `Details`'te). Arka plan yollari
+(`MailSenderPolicyWorker`, `EnsureServerHostnameAsync`) firlatmaz ama SUSMAZ: gonderen
+politikasi artik `Applied` degil `WrittenNotActivated` doner ve isci "sahtecilik korumasi
+yururlukte DEGIL" diye uyarir. Kardes yol (`TryApplySenderPolicyAsync`) ayni anda duzeltildi.
+Sertifika yolu `mail.certificate_not_activated` firlatir.
+
+### 2) `QueryAsync` HATAYI "HIC YOK"A CEVIRIYORDU -- **ACIK**, kapatildi (en agir sonuc)
+
+`result.Success ? ParseItems(...) : []`. Cagiranlar bos liste ile hatayi ayirt edemiyordu.
+**Iki yerde KOTAYI SESSIZCE DEVRE DISI BIRAKIYORDU:**
+
+| Yer | Ne oluyordu |
+|---|---|
+| `MailController.EnsureMailboxQuotaAsync:918` | `workspace.Accounts?.Count ?? 0` -- sorgu duserse sayi 0; `MaxMailboxes` kotasi DOLU olan kiraci sinirsiz kutu acar |
+| `MailService.GetDomainAllocatedMbAsync` / `EnsureDomainAllocationAsync` | tahsis toplami 0 cikar; alan adi disk kotasi hic dayatilmaz. Ayrica `SetDomainQuotaAsync` 50 GB tahsisli alana 100 MB limit koymaya izin verirdi |
+
+Ucuncusu: `PushCertificateToStalwartAsync` sertifika listesini soramadiginda "yok" sayip ayni ad
+icin IKINCI bir sertifika olusturuyordu. Dorduncusu ve en sinsisi:
+`SyncListPolicyScriptAsync` kural kumesini SIFIRDAN kurup script'i EZIYOR; sorgu duserse kume
+bos cikar, yuva zaten bizimse SIFIR KURALLIK script yazilir -- yani **"yalniz aboneler
+gonderebilir" korumasi butun listelerden birden kalkar**, ustelik panelin kendi politika deposu
+dopdoluyken. Aynisi `BuildListUnsubscribeRulesAsync` icin gecerli (List-Unsubscribe basligi
+sessizce silinir; o baslik icin 0.8.14'te ayrica duzeltme yapilmisti).
+
+**KAPATMA BICIMI.** `QueryAsync` artik `MailQueryResult(Measured, Items)` doner; ayrim tek yerde
+(`MailQueryResult.Olc`). 12 cagri yerinin HEPSI guncellendi. `FindIdAsync` de artik `null`'i
+yalniz "YOK" icin kullanir; sorulamadiysa `mail.lookup_unmeasured` firlatir (once `null`, butun
+cagiranlarca "yok" diye okunuyordu: alan adi silme IDEMPOTENT BASARI donuyordu, yeni kutunun
+kotasi sessizce hic uygulanmiyordu). Kota karari TEK KAYNAKTA: yeni
+`Core/Dtos/Mail/MailQuotaMeasurement.cs` -- iki dayatma noktasi da oradan gecer.
+`MailWorkspaceDto.AccountsMeasured` varsayilani **false**'tur (fail-safe).
+
+### 3) BILESEN KURULUMU ISTENEN SURUMU KAYDEDIYORDU -- **ACIK**, kapatildi
+
+`installedComponent.Version = component.Version` (manifest). Kurulan surum HIC geri okunmuyordu;
+ustelik `ValidateComponentRuntimeAsync` ZATEN `--version` kosturuyor ve ciktisini ATIYORDU.
+Zincirleme bedeli: `RefreshUpdateCacheEntry` o yanlis degerden beslenir, yamasi cikmis surum
+"guncel" gorunur. Bu depoda birkac bilesenin indirme adresi surum numarasi URL'e dizilerek
+TAHMIN ediliyor (MySQL/PostgreSQL/pgAdmin), yani sapma varsayimsal degil.
+
+**KAPATMA BICIMI.** Yeni `Bootstrap/ComponentVersionProbe.cs`: `--version` ciktisindan surum
+ayiklanir, `Decide(istenen, olculen)` uc degerli karar verir. Kaydedilen artik OLCULEN surumdur;
+olculemediyse istenen gosterilir ama denetim kaydi "REQUESTED ... could not be measured" der.
+Olculen istenenle ayniysa cumle SADE kalir. PHP dogrulamasi surum degil eklenti listesi bastigi
+icin bilerek "olculemedi" sayilir (sahte olcum uretmemek icin).
+
+### 4) GUVENLIK DUVARINDA `Enabled=true` UYDURMASI -- **ACIK**, kapatildi
+
+**BU MAKINEDE OLCULDU:** cok ifadeli bir script'te `New-NetFirewallRule` sonlandirici olmayan
+hata verdiginde script akmaya devam eder ve `powershell.exe` **0** ile cikar (gecersiz `-Action`
+ile denendi: cmdlet hata yazdi, sonraki satir kostu, cikis kodu 0). Yani `result.Success` "kural
+kuruldu" DEMIYORDU; `UpsertRuleAsync` sonra ISTENEN degerleri ve `Enabled = true` degerini
+UYDURUYORDU. Denetim kaydi da ("enabled {rule.Enabled}") o uydurmadan besleniyordu -- RDP'yi
+engellemek icin dugmeye basan yonetici "engellendi" yazisini gorup sunucuyu acik birakabilirdi.
+
+Ikinci bulgu ayni dosyada: **`ClearManagedBlockRulesAsync` BULUNAN kural sayisini KALDIRILAN
+diye yaziyordu** (`$kurallar.Count` silmeden ONCE okunuyor, silme `-ErrorAction SilentlyContinue`).
+Bu, panele ulasamayan yoneticinin sunucu konsolundan cektigi TEK KURTARMA KOLU
+(`recover-access.flag`); yalan soyledigi anda yonetici guvenlik duvarini eleyip baska yerde arar.
+Ucuncu bulgu: **`GetRulesAsync` okunamadiginda BOS LISTE gosteriyordu** -- "kural yok" ile
+"okuyamadim" ayni ekrandi.
+
+**KAPATMA BICIMI.** Yazma KATI kosucuya alindi (`RunPowerShellStrictAsync` -- deponun zaten
+yazili dogru kalibi). Sonra kural GERI OKUNUR: yeni `ReadManagedRulesAsync` once OKUNABILIRLIK
+KAPISINDAN gecer (`Get-NetFirewallRule -ErrorAction Stop`) ve ancak gecerse `ADAPANEL-DUVAR=OKUNDU`
+damgasini basar. Uc durum ayri: kural okundu / kural YOK (`firewall.rule_not_applied`) /
+okunamadi (`FirewallRuleDto.Verified = false`, `Enabled` uydurulmaz). Temizleme kolu artik
+`FirewallBlockCleanupReport` doner: KALDIRILAMAYAN kurallari ADIYLA yazar, okunamadiysa
+"OLCULEMEDI" der. Arayuz sabit yesil "kaydedildi" yerine `panel.firewall.savedUnverified`
+gosterir.
+
+### MUTASYON KANITI (15 mutasyon, 15'i KIRMIZI)
+Korumalari kaldiran 9 mutasyon (reload hep etkin, sorgu hatasi=bos liste [ESKI DAVRANIS], kota
+kapisi hep gecirir, workspace varsayilani "olculdu", surum hep istenen [ESKI DAVRANIS], surum
+ayiklayici hep null, kati kosucu=gevsek kosucu, duvar okunamadiginda "kural yoktu", damga
+kosulsuz basilir) ilgili testleri kirmizi yakti.
+**FAZLA KAPATMA NOBETCILERI (6):** reload hep "etkinlesmedi", her sorgu "olculemedi", kota kapisi
+hep reddeder, surum cumlesi hep uyarir, rapor hep "kaldirilamayan" yazar, her kural
+"dogrulanmamis" sayilir -- altisi da kirmizi. Yani her sey yolundayken panel HALA sade "yapildi"
+diyor.
+
+### OLCULEMEYENLER (durustce)
+* Bu makinede **ayakta Stalwart YOK**. Stalwart CLI'nin gercekte ne dondugu, `ReloadSettings`
+  cagrisinin ayari gercekten etkinlestirdigi ve sunucunun sonrasindaki davranisi OLCULEMEDI.
+  Olculen sey panelin surec sonucunu NASIL OKUDUGUDUR ve bu, gercek `powershell.exe` surecleriyle
+  uretilen GERCEK `CommandResult` nesneleri uzerinden olculdu (elle yazilmis sahte sonuclarla
+  degil).
+* Guvenlik duvari: surec YUKSELTILMEMIS oldugu icin `Get-NetFirewallRule` gercekten
+  "Erisim engellendi" veriyor -- bu, **okunabilirlik kapisinin GERCEKTEN olculdugu** anlamina
+  gelir. Kuralin OKUNDU dali (var/etkin/port) bu makinede gercek bir kuralla olculemedi;
+  guvenlik duvarinda kural olusturulmadi (silinemeyecegi icin bilerek).
+* Bilesen surumu: kurulu Stalwart/Node/Python olmadigi icin olcum, depodaki GERCEK
+  `.tools\dotnet\dotnet.exe --version` ciktisi uzerinden yapildi (ayni ayiklayici, gercek surec).
+
+### KIRILAN DAVRANISLAR (bilerek)
+1. Posta CLI sorgusu duserse artik SESSIZ gecilmiyor: alan adi silme, alias silme, DKIM kaydi
+   uretme, liste politikasi yazma ve kimlik arama HATA firlatiyor. Once bu yollar "yok" sayip
+   devam ediyordu. Islem GERI ALINABILIR bicimde reddediliyor (yeniden denenebilir).
+2. `EnsureServerHostnameAsync` reload dustugunde artik `false` doner (once `true`).
+3. `GetRulesAsync` guvenlik duvari okunamadiginda BOS LISTE degil `firewall.read_failed` doner.
+4. `IFirewallService.ClearManagedBlockRulesAsync` donus tipi `int` -> `FirewallBlockCleanupReport`.
+5. Kurulan bilesenin kaydedilen surumu artik OLCULEN surum; olcum istenenden farkliysa panelde
+   farkli bir numara gorunur (dogrusu budur).
+
+### YENI DOSYALAR
+`src/AdaPanel.Core/Dtos/Mail/MailQuotaMeasurement.cs`,
+`src/AdaPanel.Core/Dtos/Firewall/FirewallBlockCleanupReport.cs`,
+`src/AdaPanel.Infrastructure/Bootstrap/ComponentVersionProbe.cs`,
+`tests/AdaPanel.Infrastructure.Tests/OlculemedigiSoylenmeyenIddialarTests.cs`,
+`tests/AdaPanel.Infrastructure.Tests/PostaAyariEtKINLESTI_MI_Tests.cs` (toplam 34 test).
+**Yeni i18n (tr+en):** `firewall.rule_not_applied`, `panel.firewall.savedUnverified`,
+`mail.settings_not_activated`, `mail.certificate_not_activated`, `mail.lookup_unmeasured`,
+`mail.accounts_unmeasured`, `mail.domain_members_unmeasured`, `mail.list_policy_unmeasured`,
+`mail.dkim_unmeasured`, `mail.mailbox_quota_unmeasured`, `mail.domain_quota_unmeasured`.
+
+### BU TURDA BAKILMAYANLAR (onceki listede duruyor, DOGRULANMADI)
+FTP (`SetRequireSslAsync:289`, `EnsurePasswordNeverExpiresAsync`), SSL
+(`EnsureHttpsBindingAsync:1180`, `MeasureHttpsBinding:998`), Zamanlayici (`DeleteTaskAsync`,
+`SetTaskEnabledAsync`, `StopTaskAsync:656`), IIS (`SiteAliasService:110`, `AspNetService:377`,
+`SiteHostingSettingsService`), Veritabani (MySQL `--execute` ile `source`,
+`HardenAdminAccountsAsync`), `MailEnableMailService` COM `[void]` / bos `catch`,
+`SetAccountQuotaAsync:1692` kardeslerindeki dogrulama korumasi,
+`ComponentBootstrapper:2979` (roundcube/clamav/vandelay dogrulamasi YOK).
