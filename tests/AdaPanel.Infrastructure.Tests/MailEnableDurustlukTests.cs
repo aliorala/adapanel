@@ -103,6 +103,79 @@ public sealed class MailEnableDurustlukTests
     }
 
     // =====================================================================================
+    // 1b) LISTE / KUYRUK / ROLE / DINLEYICI -- "OLCULMEDI" ile "YOK" ayrimi
+    //
+    // Bu alt kume onceki turda HIC INCELENMEMISTI. Ikisi acik cikti (dinleyiciler, tek kuyruk
+    // iletisi); gerisi (dagitim listeleri, kuyruk, role, giden limiti, istemci ayarlari) zaten
+    // "yapilandirilmadi"/409 diyordu ve nobetcileri asagida.
+    // =====================================================================================
+
+    /// <summary>
+    /// <c>GetListenersAsync</c> BOS KOLEKSIYON donuyordu; arayuz bos listeyi
+    /// <c>panel.mail.noListeners</c> ("dinleyici yok") diye yaziyordu. Hicbir sey olculmeden
+    /// verilen bu cevap, 25/587/143'u GERCEKTEN dinleyen bir sunucuda yoneticiye "posta hic
+    /// dinlenmiyor" gosteriyordu.
+    /// </summary>
+    [Fact]
+    public async Task Dinleyiciler_OKUNMUYORSA_dinleyici_YOK_denmez()
+    {
+        var goruntu = await Servis().GetListenersAsync();
+
+        Assert.False(goruntu.Measured);
+        Assert.Empty(goruntu.Listeners);
+    }
+
+    /// <summary>
+    /// <c>GetQueueMessageAsync</c> <c>null</c> donuyordu ve uc bunu 404 "ileti bulunamadi"
+    /// yapiyordu: hic bakilmamis bir kuyruk icin "boyle bir ileti yok" demek. Kardes metot
+    /// <c>DeleteQueueMessageAsync</c> ayni durumda zaten "desteklenmiyor" diyordu.
+    /// </summary>
+    [Fact]
+    public async Task Kuyruk_okunmuyorsa_tek_ileti_icin_BULUNAMADI_denmez()
+    {
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis().GetQueueMessageAsync("1"));
+        Assert.Equal("mail.queue_not_supported", hata.MessageKey);
+
+        var silme = await Assert.ThrowsAsync<AppException>(() => Servis().DeleteQueueMessageAsync("1"));
+        Assert.Equal(hata.MessageKey, silme.MessageKey);
+    }
+
+    /// <summary>
+    /// NOBETCI: kuyruk/role/giden limiti "bos" ya da "kapali" DEGIL "yapilandirilmadi" der --
+    /// bu uc metot bu turda incelendi ve TEMIZ cikti; kural geri kaymasin diye olculuyor.
+    /// </summary>
+    [Fact]
+    public async Task Kuyruk_role_ve_giden_limiti_YAPILANDIRILMADI_der()
+    {
+        var servis = Servis();
+
+        var kuyruk = await servis.GetQueueAsync(50);
+        Assert.True(kuyruk.Installed);
+        Assert.False(kuyruk.Configured);
+
+        var role = await servis.GetRelayAsync();
+        Assert.True(role.Installed);
+        Assert.False(role.Configured);
+
+        var limit = await servis.GetOutboundLimitAsync("ornek.com");
+        Assert.False(limit.Configured);
+
+        // Istemci ayarlari OLCULEMEDIGINDE uydurulmaz: null -> autodiscover 404.
+        Assert.Null(await servis.GetClientSettingsAsync("ornek.com"));
+    }
+
+    /// <summary>NOBETCI: dagitim listeleri "yok" degil "desteklenmiyor" der (409).</summary>
+    [Fact]
+    public async Task Dagitim_listeleri_DESTEKLENMIYOR_der()
+    {
+        var olustur = await Assert.ThrowsAsync<AppException>(() =>
+            Servis().CreateMailListAsync(new CreateMailListRequest { Address = "liste@ornek.com" }));
+
+        Assert.Equal("mail.lists_unsupported", olustur.MessageKey);
+        Assert.Equal(409, olustur.HttpStatusCode);
+    }
+
+    // =====================================================================================
     // 2) GERI OKUMA KAPISININ UC DEGERLI KARAR KURALI
     // =====================================================================================
 

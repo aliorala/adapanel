@@ -288,28 +288,14 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     {
         var (local, domain) = SplitAddress(address);
         var full = $"{local}@{domain}";
-        var script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $mb = New-Object -ComObject 'MEAOPO.Mailbox'
-            $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
-            $mb.Mailbox = '{{PsLiteralRaw(local)}}'
-            try { [void]$mb.RemoveMailbox() } catch {}
-            $lg = New-Object -ComObject 'MEAOAU.Login'
-            $lg.Account = '{{PsLiteralRaw(domain)}}'
-            $lg.UserName = '{{PsLiteralRaw(full)}}'
-            try { [void]$lg.RemoveLogin() } catch {}
-            'OK'
-            """;
-        await RunComAsync(script, cancellationToken);
+        var json = await RunComAsync(SilmeBetigi(domain, local, full), cancellationToken);
+        var sonda = SondayiOku(json);
 
         // BU SINIFIN EN AGIR NOKTASIYDI: iki BOS catch, sonra kosulsuz 'OK'. Kutu silinmeyip
-        // giris de duruyor olabilirdi ve panel HTTP 200 donerdi. Artik kutunun GERCEKTEN
-        // gittigi olculuyor.
-        //
-        // OLCULEMEYEN, ACIKCA: MEAOAU.Login kaydinin hayatta kalip kalmadigi bu okumada
-        // GORUNMEZ (workspace kutulari listeler, giris kayitlarini degil) ve bu makinede
-        // MailEnable YOK, dolayisiyla RemoveLogin'in davranisi olculemedi. Bu yuzden ayrintiya
-        // ACIKCA yaziliyor.
+        // giris de duruyor olabilirdi ve panel HTTP 200 donerdi. Kutunun gittigi bir onceki
+        // turda olculdu; GIRIS KAYDI o turda OLCULMUYORDU ve tam da o, silinen musterinin
+        // POSTAYA ERISIMININ SURMESI demekti (kutu yok, giris var -> IMAP/SMTP oturumu hala
+        // acilabilir).
         var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
         KapiAcVarlik(
             olculdu,
@@ -317,7 +303,13 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             olmali: false,
             "mail.account_delete_unverified",
             "mail.account_delete_not_applied",
-            $"{full} (posta kutusu olculdu; MEAOAU.Login kaydi bu okumada GORUNMEZ)");
+            $"{full} (posta kutusu){SilmeHatalari(sonda)}");
+
+        GirisKapisiniAc(
+            GirisSondasiniYorumla(sonda.Ayristirildi, sonda.OnceDoldu, sonda.KontrolDoldu, sonda.SonraDoldu),
+            full,
+            SilmeHatalari(sonda));
+
         return workspace;
     }
 
@@ -325,26 +317,14 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     {
         var (local, domain) = SplitAddress(request.Address);
         var full = $"{local}@{domain}";
-        var script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $lg = New-Object -ComObject 'MEAOAU.Login'
-            $lg.Account = '{{PsLiteralRaw(domain)}}'
-            $lg.UserName = '{{PsLiteralRaw(full)}}'
-            [void]$lg.GetLogin()
-            $lg.Password = '{{PsLiteralRaw(request.Password)}}'
-            $lg.Status = 1
-            [void]$lg.EditLogin()
-            'OK'
-            """;
-        await RunComAsync(script, cancellationToken);
+        var json = await RunComAsync(ParolaBetigi(domain, full, request.Password), cancellationToken);
+        var sonda = SondayiOku(json);
+        var kayit = GirisSondasiniYorumla(sonda.Ayristirildi, sonda.OnceDoldu, sonda.KontrolDoldu, sonda.SonraDoldu);
+        var parola = ParolaSonucunuYorumla(kayit, sonda.Eslesme);
+        ParolaKapisiniAc(parola, full);
 
-        // DOGRULANAMAZ, VE BU SOYLENIYOR. Parola geri okunamaz (MailEnable COM parolayi geri
-        // vermez), dolayisiyla "degistirildi" bir OLCUM DEGIL bir IDDIADIR. Sessizce yesil
-        // gostermek yerine kullaniciya bunu yazan bir durum mesaji tasiyoruz.
         var (workspace, _) = await WorkspaceOkuAsync(domain, cancellationToken);
-        workspace.StatusMessage = string.IsNullOrWhiteSpace(workspace.StatusMessage)
-            ? "Parola yazildi ama MailEnable tarafinda GERI OKUNAMAZ: sonuc DOGRULANMADI. Yeni parolayla bir kez oturum acarak sinayin."
-            : workspace.StatusMessage;
+        ParolaNotunuYaz(workspace, parola);
         return workspace;
     }
 
@@ -431,9 +411,17 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
         => throw new AppException("mail.lists_unsupported", 409, 409);
 
-    // MailEnable dinleyicileri bu görünümde listelenmez (Stalwart'a özel); boş döner.
-    public Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult<IReadOnlyCollection<MailListenerDto>>([]);
+    /// <summary>
+    /// MailEnable dinleyicileri panelden OKUNMUYOR: sonuc "dinleyici YOK" DEGIL, "OLCULMEDI".
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI bos koleksiyon donuyordu ve arayuz (MailView.vue) bos listeyi
+    /// <c>panel.mail.noListeners</c> -- yani "dinleyici yok" -- diye yaziyordu. Hicbir sey
+    /// olculmeden verilen bu cevap, 25/587/143 portlarini GERCEKTEN dinleyen bir sunucuda
+    /// yoneticiye "posta hic dinlenmiyor" gosteriyordu: yanlis sebebi kovalatan bir tanidir.
+    /// </remarks>
+    public Task<MailListenerSnapshotDto> GetListenersAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(new MailListenerSnapshotDto { Installed = true, Measured = false });
 
     /// <summary>
     /// MailEnable kuyruğu bu panelden okunmuyor: durum "kuyruk boş" DEĞİL, "yapılandırılmadı"
@@ -443,8 +431,18 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<MailQueueDto> GetQueueAsync(int limit, CancellationToken cancellationToken = default)
         => Task.FromResult(new MailQueueDto { Installed = true, Configured = false });
 
+    /// <summary>
+    /// Kuyruk OKUNMUYOR, dolayisiyla tek ileti de okunamaz -- ve bu "ileti BULUNAMADI" DEGILDIR.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI <c>null</c> donuyordu; ucta bu <c>mail.queue_message_not_found</c> (404)
+    /// oluyordu. Yani hic bakilmamis bir kuyruk icin panel "boyle bir ileti yok" diyordu.
+    /// Kardes metot <c>DeleteQueueMessageAsync</c> ayni durumda ZATEN
+    /// <c>mail.queue_not_supported</c> firlatiyordu; iki uc ayni gercek icin iki ayri sey
+    /// soyluyordu.
+    /// </remarks>
     public Task<MailQueueMessageDto?> GetQueueMessageAsync(string id, CancellationToken cancellationToken = default)
-        => Task.FromResult<MailQueueMessageDto?>(null);
+        => throw new AppException("mail.queue_not_supported", 400, 400);
 
     /// <summary>Desteklenmiyor — ve BAŞARILI DÖNMÜYOR (silinmemiş iletiyi silindi sanmak en kötüsü).</summary>
     public Task<bool> DeleteQueueMessageAsync(string id, CancellationToken cancellationToken = default)
@@ -685,6 +683,339 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
 
     // =====================================================================================
+    // GIRIS KAYDI SONDASI -- KENDINI KALIBRE EDEN OLCUM (TEK KAYNAK)
+    //
+    // PROBLEM: MEAOAU.Login'in `GetLogin`/`RemoveLogin`/`EditLogin` DURUM KODU KONVANSIYONU bu
+    // makinede OLCULEMEZ (MailEnable kurulu degil) ve YANLIS TAHMIN CANLIDA SAHTE HATA URETIR.
+    // Ayrica giris kayitlari calisma alani okumasinda GORUNMEZ: MEAOAU.Login'in DOGRULANMIS
+    // uye listesinde (CODEX_MEMORY, gercek sunucudan Get-Member ciktisi) FindFirst/FindNext
+    // YOKTUR -- yani giris kayitlari LISTELENEMEZ. Kardes nesnelerin (PostOffice/Mailbox/
+    // AddressMap) hepsinde FindFirst/FindNext var, Login'de yok; bu bir varsayim degil,
+    // depodaki olcum kaydinin soyledigi sey.
+    //
+    // COZUM: konvansiyonu TAHMIN ETMEK yerine CALISMA ANINDA OLCMEK. Ayni sonda UC KEZ kosar:
+    //   1) ONCE    -- islemden onceki kayit (POZITIF KONTROL: sonda VAR olani gorebiliyor mu?)
+    //   2) SONRA   -- islemden sonraki kayit (asil soru)
+    //   3) KONTROL -- var olmasi IMKANSIZ bir kullanici adi (NEGATIF KONTROL: sonda YOK olani
+    //                 yok diye gorebiliyor mu?)
+    // Sonda, YAZMADIGIMIZ bir alani (Rights) once bir NOBETCI DEGERLE doldurup `GetLogin`
+    // cagirir ve nobetci degerin degisip degismedigine bakar. "Degisti" = kayit okundu.
+    //
+    // KARAR:
+    //   * ONCE bos VEYA KONTROL dolu  -> sonda AYIRT EDEMIYOR -> OLCULEMEDI (ne basarili ne
+    //     basarisiz). Sunucunun konvansiyonu ne olursa olsun bu dal SAHTE HATA uretmez, cunku
+    //     iddia degil "olcemedim" der.
+    //   * ONCE dolu ve KONTROL bos    -> sonda KALIBRE. Artik SONRA'nin dolu/bos olmasi
+    //     dogrudan kaydin var/yok olmasidir.
+    // =====================================================================================
+
+    /// <summary>
+    /// COM nesnelerini URETEN yer. <b>OLCULEBILIRLIK KANCASI:</b> uretimde bu degiskenler
+    /// tanimsizdir (script <c>-File</c> ile TAZE bir kapsamda kosar) ve gercek COM nesnesi
+    /// olusur; sinama, betigi nokta-kaynak ederek KENDI nesnesini verebilir ve boylece
+    /// betigin GERCEK metni GERCEK <c>powershell.exe</c>'de kosturulur. Kaynak taramasi degil.
+    /// </summary>
+    internal const string FabrikaBasligi = """
+        if (-not $MeGirisFabrikasi) { $MeGirisFabrikasi = { New-Object -ComObject 'MEAOAU.Login' } }
+        if (-not $MeKutuFabrikasi) { $MeKutuFabrikasi = { New-Object -ComObject 'MEAOPO.Mailbox' } }
+        """;
+
+    /// <summary>Sondanin YAZDIGI, MailEnable'in asla uretmeyecegi nobetci deger.</summary>
+    internal const string SondaNobetcisi = "__adapanel_sonda_dokunulmadi__";
+
+    /// <summary>Uc sondanin ve mutasyon hatalarinin TEK cikti bicimi.</summary>
+    internal const string SondaCiktisi = """
+        [pscustomobject]@{
+          kutuHata = "$kutuHata"
+          girisHata = "$girisHata"
+          onceHata = "$onceHata"
+          onceHaklar = "$onceHaklar"
+          sonraHata = "$sonraHata"
+          sonraHaklar = "$sonraHaklar"
+          sonraEslesme = $sonraEslesme
+          kontrolHata = "$kontrolHata"
+          kontrolHaklar = "$kontrolHaklar"
+        } | ConvertTo-Json -Compress
+        """;
+
+    /// <summary>
+    /// Hesap silme betiginin TAM metni. Sinama bu metnin KENDISINI kosturur (kopyasini degil):
+    /// betik degisirse sinama da onunla degisir, boylece "olcum kodu ile uretim kodu ayristi"
+    /// hatasi olanaksizlasir.
+    /// </summary>
+    internal static string SilmeBetigi(string domain, string local, string full)
+        => $$"""
+            $ErrorActionPreference = 'Stop'
+            {{FabrikaBasligi}}
+            {{GirisSondasiBetigi("once", domain, full, null)}}
+            $kutuHata = ''
+            $mb = & $MeKutuFabrikasi
+            $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
+            $mb.Mailbox = '{{PsLiteralRaw(local)}}'
+            try { [void]$mb.RemoveMailbox() } catch { $kutuHata = "$($_.Exception.Message)" }
+            $girisHata = ''
+            $lg = & $MeGirisFabrikasi
+            $lg.Account = '{{PsLiteralRaw(domain)}}'
+            $lg.UserName = '{{PsLiteralRaw(full)}}'
+            try { [void]$lg.RemoveLogin() } catch { $girisHata = "$($_.Exception.Message)" }
+            {{GirisSondasiBetigi("sonra", domain, full, null)}}
+            {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
+            {{SondaCiktisi}}
+            """;
+
+    /// <summary>
+    /// Parola degistirme betiginin TAM metni. <b>PAROLA CIKTIYA YAZILMAZ:</b> esitlik
+    /// PowerShell tarafinda olculur, disari yalnizca mantiksal deger cikar.
+    /// </summary>
+    internal static string ParolaBetigi(string domain, string full, string parola)
+        => $$"""
+            $ErrorActionPreference = 'Stop'
+            {{FabrikaBasligi}}
+            $kutuHata = ''
+            $girisHata = ''
+            {{GirisSondasiBetigi("once", domain, full, null)}}
+            $lg = & $MeGirisFabrikasi
+            $lg.Account = '{{PsLiteralRaw(domain)}}'
+            $lg.UserName = '{{PsLiteralRaw(full)}}'
+            [void]$lg.GetLogin()
+            $lg.Password = '{{PsLiteralRaw(parola)}}'
+            $lg.Status = 1
+            [void]$lg.EditLogin()
+            {{GirisSondasiBetigi("sonra", domain, full, parola)}}
+            {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
+            {{SondaCiktisi}}
+            """;
+
+    /// <summary>Var olmasi IMKANSIZ kullanici adi (negatif kontrol). Yalnizca OKUNUR.</summary>
+    internal static string KontrolKullanicisi(string domain)
+        => $"adapanel-olmayan-{Guid.NewGuid():N}@{domain}";
+
+    /// <summary>
+    /// Tek bir giris kaydi sondasi. <paramref name="beklenenParola"/> verilirse ayrica
+    /// parolanin GERI OKUNAN degerle esitligi olculur -- ama parolanin KENDISI ciktiya
+    /// YAZILMAZ, yalnizca bir mantiksal deger doner (sir gunluge/StatusMessage'a dusmesin).
+    /// </summary>
+    internal static string GirisSondasiBetigi(string onek, string domain, string kullanici, string? beklenenParola)
+    {
+        var parolaOlcumu = beklenenParola is null
+            ? string.Empty
+            : $$"""
+
+                if (-not ${{onek}}Hata) {
+                  try { ${{onek}}Eslesme = ("$(${{onek}}Nesne.Password)" -ceq '{{PsLiteralRaw(beklenenParola)}}') } catch { ${{onek}}Hata = "parola:$($_.Exception.Message)" }
+                }
+                """;
+
+        return $$"""
+            ${{onek}}Hata = ''
+            ${{onek}}Haklar = '{{SondaNobetcisi}}'
+            ${{onek}}Eslesme = $false
+            ${{onek}}Nesne = & $MeGirisFabrikasi
+            try {
+              ${{onek}}Nesne.Account = '{{PsLiteralRaw(domain)}}'
+              ${{onek}}Nesne.UserName = '{{PsLiteralRaw(kullanici)}}'
+              ${{onek}}Nesne.Rights = '{{SondaNobetcisi}}'
+            } catch { ${{onek}}Hata = "atama:$($_.Exception.Message)" }
+            if (-not ${{onek}}Hata) {
+              try { [void]${{onek}}Nesne.GetLogin() } catch { ${{onek}}Hata = "getlogin:$($_.Exception.Message)" }
+            }
+            if (-not ${{onek}}Hata) {
+              try { ${{onek}}Haklar = "$(${{onek}}Nesne.Rights)" } catch { ${{onek}}Hata = "oku:$($_.Exception.Message)" }
+            }{{parolaOlcumu}}
+            """;
+    }
+
+    /// <summary>Tek bir sonda kaydi OKUDU mu? (nobetci degistiyse okudu.)</summary>
+    internal static bool SondaDoldu(string hata, string haklar)
+        => string.IsNullOrEmpty(hata) && !string.Equals(haklar, SondaNobetcisi, StringComparison.Ordinal);
+
+    internal enum GirisKaydiOlcumu
+    {
+        /// <summary>Sonda var/yok ayrimini yapamadi: ne "silindi" ne "duruyor" denebilir.</summary>
+        Olculemedi,
+
+        /// <summary>Kalibre sonda kaydi BULAMADI.</summary>
+        Yok,
+
+        /// <summary>Kalibre sonda kaydi BULDU.</summary>
+        Var
+    }
+
+    internal enum ParolaOlcumu
+    {
+        Olculemedi,
+
+        /// <summary>Kayit geri okundu ve parola ISTENEN degerle birebir esit.</summary>
+        Dogrulandi,
+
+        /// <summary>Kayit geri okundu ama saklanan deger istenenle esit degil (ozet/maskeli olabilir).</summary>
+        GeriOkunamadi,
+
+        /// <summary>Kalibre sonda, islemden SONRA kaydi bulamadi: parola yazilmadi.</summary>
+        Uygulanmadi
+    }
+
+    /// <summary>UC DEGERLI karar: once/kontrol sondasi KALIBRASYONDUR, sonra sondasi CEVAPTIR.</summary>
+    internal static GirisKaydiOlcumu GirisSondasiniYorumla(bool ayristirildi, bool onceDoldu, bool kontrolDoldu, bool sonraDoldu)
+    {
+        if (!ayristirildi || !onceDoldu || kontrolDoldu)
+        {
+            return GirisKaydiOlcumu.Olculemedi;
+        }
+
+        return sonraDoldu ? GirisKaydiOlcumu.Var : GirisKaydiOlcumu.Yok;
+    }
+
+    /// <summary>
+    /// Parola sonucu. <b>ESLESMEME HATA DEGILDIR:</b> MailEnable parolayi ozetleyerek saklarsa
+    /// geri okunan deger istenene esit olmaz; buna "uygulanmadi" demek SAHTE HATA olurdu.
+    /// O yuzden yalnizca birebir esitlik DOGRULAMA sayilir, gerisi "dogrulanamadi".
+    /// </summary>
+    internal static ParolaOlcumu ParolaSonucunuYorumla(GirisKaydiOlcumu kayit, bool eslesme)
+        => kayit switch
+        {
+            GirisKaydiOlcumu.Olculemedi => ParolaOlcumu.Olculemedi,
+            GirisKaydiOlcumu.Yok => ParolaOlcumu.Uygulanmadi,
+            _ => eslesme ? ParolaOlcumu.Dogrulandi : ParolaOlcumu.GeriOkunamadi
+        };
+
+    /// <summary>
+    /// Kullaniciya gosterilecek cumle. DOGRULANDI ise BOS doner: <c>StatusMessage</c> panelde
+    /// HATA seridi olarak cizilir (MailView.vue), dolayisiyla olculmus bir basariya mesaj
+    /// yazmak sahte alarm olurdu.
+    /// </summary>
+    internal static string ParolaDurumCumlesi(ParolaOlcumu olcum)
+        => olcum switch
+        {
+            ParolaOlcumu.Dogrulandi => string.Empty,
+            ParolaOlcumu.GeriOkunamadi =>
+                "Parola yazildi ve giris kaydi geri okundu, ama saklanan deger yazilanla ESLESMIYOR "
+                + "(MailEnable parolayi duz metin dondurmuyor olabilir): sonuc DOGRULANMADI. Yeni parolayla bir kez oturum acarak sinayin.",
+            _ =>
+                "Parola yazildi ama sonuc DOGRULANAMADI: giris kaydi sondasi bu sunucuda var/yok ayrimini yapamadi. "
+                + "Yeni parolayla bir kez oturum acarak sinayin."
+        };
+
+    /// <summary>
+    /// GIRIS KAYDI KAPISI (TEK KAYNAK). Ucu de ayri cumledir: gitti / duruyor / olculemedi.
+    /// </summary>
+    /// <remarks>
+    /// <b>ANAHTARLAR ELDE KURULMAZ</b> -- depodaki i18n kullanim kapisi yalnizca kaynakta
+    /// HARFI HARFINE gecen anahtarlari gorur (bkz. <see cref="KapiAcVarlik"/> aciklamasi).
+    /// </remarks>
+    internal static void GirisKapisiniAc(GirisKaydiOlcumu olcum, string adres, string silmeHatalari)
+    {
+        if (olcum == GirisKaydiOlcumu.Var)
+        {
+            throw new AppException(
+                "mail.account_delete_login_survived",
+                500,
+                500,
+                $"{adres}: posta kutusu silindi AMA MEAOAU.Login kaydi SILINMEDI (sonda kalibre edildi ve kaydi HALA BULUYOR). "
+                + $"Giris kaydi durdugu surece silinen hesap POSTAYA ERISEBILIR; MailEnable yonetiminden giris kaydini silin.{silmeHatalari}");
+        }
+
+        if (olcum == GirisKaydiOlcumu.Olculemedi)
+        {
+            throw new AppException(
+                "mail.account_delete_login_unverified",
+                500,
+                500,
+                $"{adres}: posta kutusunun gittigi olculdu, MEAOAU.Login kaydinin gittigi OLCULEMEDI "
+                + $"(sonda bu sunucuda var/yok ayrimini yapamadi). Giris kaydini MailEnable yonetiminden dogrulayin.{silmeHatalari}");
+        }
+    }
+
+    /// <summary>
+    /// PAROLA KAPISI. YALNIZ "uygulanmadi" firlatir: "dogrulanamadi" bir HATA DEGILDIR
+    /// (parola yazilmis olabilir), o yuzden kullaniciya cumle olarak soylenir.
+    /// </summary>
+    internal static void ParolaKapisiniAc(ParolaOlcumu olcum, string adres)
+    {
+        if (olcum == ParolaOlcumu.Uygulanmadi)
+        {
+            // KALIBRE SONDA "KAYIT YOK" DIYOR: `EditLogin` bir sey yazmadi (ya da kaydi sildi).
+            // Bu bir tahmin degil OLCUMDUR: ayni sonda islemden ONCE ayni kaydi BULMUSTU.
+            throw new AppException(
+                "mail.account_password_not_applied",
+                500,
+                500,
+                $"{adres}: parola yazildi ama giris kaydi islemden SONRA BULUNAMADI (sonda islemden once ayni kaydi buluyordu). Parola UYGULANMADI.");
+        }
+    }
+
+    /// <summary>
+    /// Parola sonucunu calisma alani mesajina yazar.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI mesaji YALNIZ <c>StatusMessage</c> bos oldugunda yaziyordu: calisma alani
+    /// okumasi kendi hata mesajini birakmissa "dogrulanmadi" uyarisi SESSIZCE DUSUYORDU --
+    /// yani en kotu durumda (COM'a erisilemiyor) kullanici parola uyarisini HIC gormuyordu.
+    /// </remarks>
+    internal static void ParolaNotunuYaz(MailWorkspaceDto workspace, ParolaOlcumu olcum)
+    {
+        var not = ParolaDurumCumlesi(olcum);
+        if (string.IsNullOrWhiteSpace(not))
+        {
+            return;
+        }
+
+        workspace.StatusMessage = string.IsNullOrWhiteSpace(workspace.StatusMessage)
+            ? not
+            : workspace.StatusMessage + " " + not;
+    }
+
+    /// <summary>Yutulan silme hatalari; bos degilse ayrintiya EKLENIR (once tamamen kayboluyordu).</summary>
+    internal static string SilmeHatalari(GirisSondaOkumasi sonda)
+    {
+        var parcalar = new List<string>();
+        if (!string.IsNullOrWhiteSpace(sonda.KutuHata))
+        {
+            parcalar.Add("RemoveMailbox: " + sonda.KutuHata.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(sonda.GirisHata))
+        {
+            parcalar.Add("RemoveLogin: " + sonda.GirisHata.Trim());
+        }
+
+        return parcalar.Count == 0 ? string.Empty : " [" + string.Join("; ", parcalar) + "]";
+    }
+
+    /// <summary>Sonda ciktisinin ayristirilmis hali.</summary>
+    internal readonly record struct GirisSondaOkumasi(
+        bool Ayristirildi,
+        bool OnceDoldu,
+        bool KontrolDoldu,
+        bool SonraDoldu,
+        bool Eslesme,
+        string KutuHata,
+        string GirisHata);
+
+    /// <summary>
+    /// Sonda ciktisini okur. AYRISTIRILAMAYAN cikti "her sey yolunda" DEGILDIR:
+    /// <see cref="GirisSondaOkumasi.Ayristirildi"/> <c>false</c> doner ve karar OLCULEMEDI olur.
+    /// </summary>
+    internal static GirisSondaOkumasi SondayiOku(string json)
+    {
+        var data = ParseJson(json);
+        if (data is null)
+        {
+            return new GirisSondaOkumasi(false, false, false, false, false, string.Empty, string.Empty);
+        }
+
+        var root = data.Value;
+        return new GirisSondaOkumasi(
+            true,
+            SondaDoldu(GetStr(root, "onceHata"), GetStr(root, "onceHaklar")),
+            SondaDoldu(GetStr(root, "kontrolHata"), GetStr(root, "kontrolHaklar")),
+            SondaDoldu(GetStr(root, "sonraHata"), GetStr(root, "sonraHaklar")),
+            GetBool(root, "sonraEslesme"),
+            GetStr(root, "kutuHata"),
+            GetStr(root, "girisHata"));
+    }
+
+    // =====================================================================================
     // SONUCU DOGRULAYAN KAPILAR -- TEK KAYNAK
     //
     // OLCULEN HATA: bu sinifin butun mutasyon metotlari `await RunComAsync(...)` deyip
@@ -826,6 +1157,9 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)
             ? n
             : 0;
+
+    private static bool GetBool(JsonElement item, string name)
+        => item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
 
     private static int NormalizeLimitToMb(int limitKb)
         => limitKb <= 0 ? 0 : limitKb / 1024;

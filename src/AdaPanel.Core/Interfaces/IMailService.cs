@@ -92,8 +92,12 @@ public interface IMailService
     /// <summary>Dağıtım listesinden bir ek adresi (alias) kaldırır.</summary>
     Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default);
 
-    /// <summary>Mail sunucusunun ağ dinleyicileri (hangi adres:port'larda dinliyor) — salt-okunur.</summary>
-    Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Mail sunucusunun ağ dinleyicileri (hangi adres:port'larda dinliyor) — salt-okunur.
+    /// Dönüş, listeyi VE listenin ölçülüp ölçülmediğini taşır: boş liste tek başına
+    /// "dinleyici yok" demek DEĞİLDİR (bkz. <see cref="MailListenerSnapshotDto"/>).
+    /// </summary>
+    Task<MailListenerSnapshotDto> GetListenersAsync(CancellationToken cancellationToken = default);
 
     Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default);
 

@@ -80,7 +80,7 @@ public sealed class MailServiceRouter(
     public Task<MailWorkspaceDto> RemoveMailListAliasAsync(MailListAliasRequest request, CancellationToken cancellationToken = default)
         => Active.RemoveMailListAliasAsync(request, cancellationToken);
 
-    public Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
+    public Task<MailListenerSnapshotDto> GetListenersAsync(CancellationToken cancellationToken = default)
         => Active.GetListenersAsync(cancellationToken);
 
     public Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)

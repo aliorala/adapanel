@@ -564,10 +564,10 @@ public sealed class MailController(
 
     [HttpGet("listeners")]
     [Authorize(Roles = "Administrator")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyCollection<MailListenerDto>>>> GetListenersAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<MailListenerSnapshotDto>>> GetListenersAsync(CancellationToken cancellationToken)
     {
         var listeners = await mailService.GetListenersAsync(cancellationToken);
-        return Ok(ApiResponse<IReadOnlyCollection<MailListenerDto>>.Ok(listeners));
+        return Ok(ApiResponse<MailListenerSnapshotDto>.Ok(listeners));
     }
 
     /// <summary>Alan adının GİDEN posta limiti (saatlik).</summary>

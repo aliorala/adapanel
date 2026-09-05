@@ -758,18 +758,25 @@
           </div>
           <button class="secondary compact" :disabled="busy" @click="loadListeners">{{ t("panel.mail.listenersShow") }}</button>
         </div>
-        <div v-if="listeners" class="data-table">
+        <!--
+          OLCULMEYEN "YOK" DEGILDIR: liste okunamadiginda eskiden bos dizi geliyordu ve burasi
+          "dinleyici yok" yaziyordu. Artik once OLCULDU MU sorusu cevaplaniyor.
+        -->
+        <p v-if="listeners && !listeners.measured" class="notice error" role="alert">
+          {{ t("panel.mail.listenersUnmeasured") }}
+        </p>
+        <div v-else-if="listeners" class="data-table">
           <div class="data-row table-head listener-row">
             <span>{{ t("panel.mail.listenerName") }}</span>
             <span>{{ t("panel.mail.listenerProtocol") }}</span>
             <span>{{ t("panel.mail.listenerBinds") }}</span>
           </div>
-          <div v-for="listener in listeners" :key="listener.name" class="data-row listener-row">
+          <div v-for="listener in listeners.listeners" :key="listener.name" class="data-row listener-row">
             <strong>{{ listener.name }}</strong>
             <span>{{ listener.protocol || "—" }}</span>
             <code class="listener-binds">{{ listener.binds.join(", ") || "—" }}</code>
           </div>
-          <p v-if="listeners.length === 0" class="empty-state">{{ t("panel.mail.noListeners") }}</p>
+          <p v-if="listeners.listeners.length === 0" class="empty-state">{{ t("panel.mail.noListeners") }}</p>
         </div>
         </template>
 
@@ -983,7 +990,7 @@ import {
   type MailDns,
   type MailList,
   type MailListPostingPolicy,
-  type MailListener,
+  type MailListenerSnapshot,
   type MailSpamSettings,
   type MailWorkspace,
   type RdnsCheck
@@ -1225,7 +1232,7 @@ const listForm = reactive({
   allowedSenders: ""
 });
 const showMailAdvanced = ref(false);
-const listeners = ref<MailListener[] | null>(null);
+const listeners = ref<MailListenerSnapshot | null>(null);
 const loading = ref(false);
 const busy = ref(false);
 const domainQuota = ref(0);

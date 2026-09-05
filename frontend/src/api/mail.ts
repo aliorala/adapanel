@@ -29,6 +29,15 @@ export type MailList = {
 };
 export type MailListener = { name: string; protocol: string; binds: string[] };
 
+/**
+ * Dinleyici listesi VE listenin OLCULUP OLCULMEDIGI.
+ *
+ * `measured === false` iken `listeners` bos olabilir ama bu "dinleyici yok" DEMEK DEGILDIR:
+ * yonetim arayuzune baglanilamamistir. Ikisini ayni bos listeye indirmek, postayi gercekten
+ * dinleyen bir sunucu icin panelde "hic dinleyici yok" yaziyordu.
+ */
+export type MailListenerSnapshot = { installed: boolean; measured: boolean; listeners: MailListener[] };
+
 export type MailSpamSettings = {
   installed: boolean;
   configured: boolean;
@@ -197,7 +206,7 @@ export async function setMailPublicBaseUrl(baseUrl: string) {
 }
 
 export async function getMailListeners() {
-  const response = await apiClient.get<ApiEnvelope<MailListener[]>>("/mail/listeners");
+  const response = await apiClient.get<ApiEnvelope<MailListenerSnapshot>>("/mail/listeners");
   return response.data.data;
 }
 

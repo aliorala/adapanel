@@ -1,0 +1,447 @@
+using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Mail;
+using AdaPanel.Infrastructure.Mail;
+using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace AdaPanel.Infrastructure.Tests;
+
+/// <summary>
+/// ADAY 1 + 2 -- <c>SetAccountPasswordAsync</c> ve <c>DeleteAccountAsync</c>: MEAOAU.Login
+/// kaydinin GERCEKTEN yazildigi/silindigi OLCULUYOR mu?
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>KAPATILAN ACIK.</b> Silme yolunda <c>try { [void]$lg.RemoveLogin() } catch {}</c> vardi:
+/// posta kutusu gidiyor, GIRIS KAYDI kaliyor ve panel HTTP 200 donuyordu. Giris kaydi duran bir
+/// hesap POSTAYA ERISMEYE DEVAM EDER -- yani "silinen musteri" hala posta okuyabilir. Parola
+/// yolunda ise hicbir sey olculmuyordu.
+/// </para>
+/// <para>
+/// <b>NEDEN KONVANSIYON TAHMIN EDILMEDI.</b> Bu makinede MailEnable YOK; COM metotlarinin
+/// tamsayi durum kodu konvansiyonu OLCULEMEZ ve yanlis tahmin CANLIDA SAHTE HATA uretir.
+/// Onun yerine sonda KENDINI KALIBRE EDER: ayni olcum (a) islemden ONCE var olan kayit uzerinde
+/// (pozitif kontrol), (b) var olmasi IMKANSIZ bir kullanici adi uzerinde (negatif kontrol),
+/// (c) islemden SONRA kosar. Ilk ikisi sondanin AYIRT EDIP EDEMEDIGINI olcer; ayiramiyorsa
+/// karar "silindi" degil <b>OLCULEMEDI</b> olur.
+/// </para>
+/// <para>
+/// <b>BURADA NE GERCEKTEN KOSUYOR.</b> Asagidaki sinamalar URETIM BETIGININ KENDISINI
+/// (<see cref="MailEnableMailService.SilmeBetigi"/> / <see cref="MailEnableMailService.ParolaBetigi"/>)
+/// GERCEK <c>powershell.exe</c>'de kosturur; yalnizca COM nesnesinin yerine, betikteki
+/// OLCULEBILIRLIK KANCASI (<c>$MeGirisFabrikasi</c>/<c>$MeKutuFabrikasi</c>) uzerinden bir
+/// stand-in nesne verilir. Kaynak taramasi YOK: bu oturumda kaynak tarayan sinamalar YEDI kez
+/// yanildi.
+/// </para>
+/// </remarks>
+public sealed class MailEnableGirisKaydiSondasiTests
+{
+    private const string Alan = "ornek.com";
+    private const string Yerel = "info";
+    private const string Adres = "info@ornek.com";
+    private const string YeniParola = "Y3ni-Parola!42";
+
+    private static MailEnableMailService Servis()
+        => new(NullLogger<MailEnableMailService>.Instance);
+
+    /// <summary>
+    /// COM yerine gecen stand-in. Davranislar, GERCEK sunucuda hangisinin gecerli oldugunu
+    /// BILMEDIGIMIZ dallardir: kaydi bulunca dolduran, bulamayinca sessizce basarisiz olan,
+    /// bulamayinca FIRLATAN, ve HER DURUMDA dolduran (sondayi kor eden) sunucu.
+    /// </summary>
+    private static string SahteCom(
+        string girisDavranisi = "normal",
+        string silmeDavranisi = "normal",
+        string duzenlemeDavranisi = "normal",
+        string kutuDavranisi = "normal",
+        string kayitliParola = "eski-parola")
+        => $$"""
+            $ErrorActionPreference = 'Stop'
+            $script:Kayitlar = @{}
+            $script:Kayitlar['{{Adres}}'] = @{ Rights = 'USER'; Password = '{{kayitliParola}}' }
+            $script:GirisDavranisi = '{{girisDavranisi}}'
+            $script:SilmeDavranisi = '{{silmeDavranisi}}'
+            $script:DuzenlemeDavranisi = '{{duzenlemeDavranisi}}'
+            $script:KutuDavranisi = '{{kutuDavranisi}}'
+            $MeGirisFabrikasi = {
+              $n = New-Object psobject -Property @{ Account = ''; UserName = ''; Rights = ''; Password = ''; Status = 0 }
+              $n | Add-Member -MemberType ScriptMethod -Name GetLogin -Value {
+                if ($script:GirisDavranisi -eq 'hep-doldurur') { $this.Rights = 'USER'; return 0 }
+                if ($script:Kayitlar.ContainsKey($this.UserName)) {
+                  $this.Rights = $script:Kayitlar[$this.UserName].Rights
+                  $this.Password = $script:Kayitlar[$this.UserName].Password
+                  return 0
+                }
+                if ($script:GirisDavranisi -eq 'eksikte-firlatir') { throw "giris kaydi yok: $($this.UserName)" }
+                return 1
+              }
+              $n | Add-Member -MemberType ScriptMethod -Name RemoveLogin -Value {
+                if ($script:SilmeDavranisi -eq 'firlatir') { throw 'RemoveLogin: erisim reddedildi' }
+                if ($script:SilmeDavranisi -eq 'inatci') { return 1 }
+                $script:Kayitlar.Remove($this.UserName)
+                return 0
+              }
+              $n | Add-Member -MemberType ScriptMethod -Name EditLogin -Value {
+                if ($script:DuzenlemeDavranisi -eq 'yazmaz') { $script:Kayitlar.Remove($this.UserName); return 1 }
+                if (-not $script:Kayitlar.ContainsKey($this.UserName)) { return 1 }
+                $deger = $this.Password
+                if ($script:DuzenlemeDavranisi -eq 'ozetler') { $deger = 'OZET:' + $this.Password }
+                $script:Kayitlar[$this.UserName].Password = $deger
+                return 0
+              }
+              $n
+            }
+            $MeKutuFabrikasi = {
+              $k = New-Object psobject -Property @{ Postoffice = ''; Mailbox = ''; Limit = 0; Status = 0 }
+              $k | Add-Member -MemberType ScriptMethod -Name RemoveMailbox -Value {
+                if ($script:KutuDavranisi -eq 'firlatir') { throw 'RemoveMailbox: kutu kilitli' }
+                return 0
+              }
+              $k
+            }
+            """;
+
+    private static async Task<MailEnableMailService.GirisSondaOkumasi> KosturAsync(string sahte, string uretimBetigi)
+    {
+        var sonuc = await ProcessRunner.RunPowerShellAsync(sahte + "\n" + uretimBetigi);
+        Assert.True(
+            sonuc.ExitCode == 0,
+            $"Uretim betigi GERCEK powershell.exe'de dusmemeli. Cikis={sonuc.ExitCode} Hata={sonuc.StandardError} Cikti={sonuc.StandardOutput}");
+        return MailEnableMailService.SondayiOku(sonuc.StandardOutput);
+    }
+
+    private static MailEnableMailService.GirisKaydiOlcumu Karar(MailEnableMailService.GirisSondaOkumasi sonda)
+        => MailEnableMailService.GirisSondasiniYorumla(sonda.Ayristirildi, sonda.OnceDoldu, sonda.KontrolDoldu, sonda.SonraDoldu);
+
+    // =====================================================================================
+    // 1) SILME -- GERCEK powershell.exe, GERCEK uretim betigi
+    // =====================================================================================
+
+    /// <summary>
+    /// FAZLA KAPATMA NOBETCISI: her sey yolundayken sonda "gitti" der ve panel sade
+    /// "silindi" diyebilir. Aksi halde her dogru silme de hata gorunurdu.
+    /// </summary>
+    [Fact]
+    public async Task Giris_kaydi_GERCEKTEN_gidince_YOK_olculur()
+    {
+        var sonda = await KosturAsync(SahteCom(), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+
+        Assert.True(sonda.Ayristirildi);
+        Assert.True(sonda.OnceDoldu, "POZITIF KONTROL: sonda islemden ONCE kaydi gormeliydi.");
+        Assert.False(sonda.KontrolDoldu, "NEGATIF KONTROL: olmayan kullanici DOLU gorunmemeliydi.");
+        Assert.False(sonda.SonraDoldu);
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Yok, Karar(sonda));
+        Assert.Equal(string.Empty, MailEnableMailService.SilmeHatalari(sonda));
+    }
+
+    /// <summary>
+    /// ASIL ACIK: <c>RemoveLogin</c> hicbir sey yapmiyor. Posta kutusu gitse bile GIRIS KAYDI
+    /// duruyor -- silinen musteri postaya erisebilir. Panel bunu artik GORUYOR.
+    /// </summary>
+    [Fact]
+    public async Task RemoveLogin_HICBIR_SEY_yapmazsa_giris_kaydi_VAR_olculur()
+    {
+        var sonda = await KosturAsync(SahteCom(silmeDavranisi: "inatci"), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+
+        Assert.True(sonda.OnceDoldu);
+        Assert.False(sonda.KontrolDoldu);
+        Assert.True(sonda.SonraDoldu);
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Var, Karar(sonda));
+    }
+
+    /// <summary>
+    /// YUTULAN HATA: eski kod <c>catch {}</c> ile RemoveLogin hatasini yok ediyordu. Artik hem
+    /// hata metni yuzeye cikiyor hem de kaydin durdugu olculuyor.
+    /// </summary>
+    [Fact]
+    public async Task RemoveLogin_FIRLATIRSA_hata_YUTULMAZ_ve_kayit_VAR_olculur()
+    {
+        var sonda = await KosturAsync(SahteCom(silmeDavranisi: "firlatir"), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+
+        Assert.Contains("erisim reddedildi", sonda.GirisHata, StringComparison.Ordinal);
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Var, Karar(sonda));
+        Assert.Contains("RemoveLogin:", MailEnableMailService.SilmeHatalari(sonda), StringComparison.Ordinal);
+    }
+
+    /// <summary>Posta kutusu silme hatasi da yutuluyordu; o da yuzeye cikiyor.</summary>
+    [Fact]
+    public async Task RemoveMailbox_FIRLATIRSA_hata_YUTULMAZ()
+    {
+        var sonda = await KosturAsync(SahteCom(kutuDavranisi: "firlatir"), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+
+        Assert.Contains("kutu kilitli", sonda.KutuHata, StringComparison.Ordinal);
+        Assert.Contains("RemoveMailbox:", MailEnableMailService.SilmeHatalari(sonda), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// SONDANIN KOR OLDUGU SUNUCU: <c>GetLogin</c> kayit olmasa da alanlari dolduruyor.
+    /// Boyle bir sunucuda "duruyor" demek SAHTE HATA olurdu; karar OLCULEMEDI olmali.
+    /// </summary>
+    [Fact]
+    public async Task Sonda_AYIRT_EDEMEYEN_sunucuda_OLCULEMEDI_der()
+    {
+        var sonda = await KosturAsync(SahteCom(girisDavranisi: "hep-doldurur"), MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+
+        Assert.True(sonda.KontrolDoldu, "Negatif kontrol DOLU gelmeliydi: sonda ayirt edemiyor.");
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Olculemedi, Karar(sonda));
+    }
+
+    /// <summary>
+    /// BASKA BIR KONVANSIYON: <c>GetLogin</c> eksik kayitta FIRLATIYOR. Sonda bu sunucuda da
+    /// dogru olcer -- cunku konvansiyon tahmin edilmiyor, kalibrasyonla OLCULUYOR.
+    /// </summary>
+    [Fact]
+    public async Task GetLogin_eksik_kayitta_FIRLATAN_sunucuda_da_dogru_olcer()
+    {
+        var gitti = await KosturAsync(
+            SahteCom(girisDavranisi: "eksikte-firlatir"),
+            MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Yok, Karar(gitti));
+
+        var duruyor = await KosturAsync(
+            SahteCom(girisDavranisi: "eksikte-firlatir", silmeDavranisi: "inatci"),
+            MailEnableMailService.SilmeBetigi(Alan, Yerel, Adres));
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Var, Karar(duruyor));
+    }
+
+    // =====================================================================================
+    // 2) PAROLA -- GERCEK powershell.exe, GERCEK uretim betigi
+    // =====================================================================================
+
+    /// <summary>
+    /// FAZLA KAPATMA NOBETCISI: parola GERI OKUNABILEN bir sunucuda sonuc DOGRULANIR ve
+    /// kullaniciya HICBIR uyari gosterilmez (StatusMessage panelde HATA seridi cizer).
+    /// </summary>
+    [Fact]
+    public async Task Parola_geri_okunabiliyorsa_DOGRULANIR_ve_uyari_gosterilmez()
+    {
+        var sonda = await KosturAsync(SahteCom(), MailEnableMailService.ParolaBetigi(Alan, Adres, YeniParola));
+
+        Assert.True(sonda.Eslesme);
+        var olcum = MailEnableMailService.ParolaSonucunuYorumla(Karar(sonda), sonda.Eslesme);
+        Assert.Equal(MailEnableMailService.ParolaOlcumu.Dogrulandi, olcum);
+        Assert.Equal(string.Empty, MailEnableMailService.ParolaDurumCumlesi(olcum));
+    }
+
+    /// <summary>
+    /// SUNUCU PAROLAYI OZETLIYORSA: geri okunan deger yazilanla esit degildir. Buna
+    /// "uygulanmadi" demek SAHTE HATA olurdu; dogru cevap "DOGRULANMADI" -- ve firlatmaz.
+    /// </summary>
+    [Fact]
+    public async Task Parola_OZETLENEREK_saklaniyorsa_DOGRULANMADI_denir_ama_HATA_verilmez()
+    {
+        var sonda = await KosturAsync(
+            SahteCom(duzenlemeDavranisi: "ozetler"),
+            MailEnableMailService.ParolaBetigi(Alan, Adres, YeniParola));
+
+        Assert.False(sonda.Eslesme);
+        var olcum = MailEnableMailService.ParolaSonucunuYorumla(Karar(sonda), sonda.Eslesme);
+        Assert.Equal(MailEnableMailService.ParolaOlcumu.GeriOkunamadi, olcum);
+        Assert.Contains("DOGRULANMADI", MailEnableMailService.ParolaDurumCumlesi(olcum), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Kalibre sonda islemden SONRA kaydi bulamiyorsa parola UYGULANMAMISTIR -- ve bu bir
+    /// tahmin degil olcumdur: ayni sonda islemden ONCE ayni kaydi bulmustu.
+    /// </summary>
+    [Fact]
+    public async Task Parola_kaydi_islemden_sonra_YOKSA_UYGULANMADI_denir()
+    {
+        var sonda = await KosturAsync(
+            SahteCom(duzenlemeDavranisi: "yazmaz"),
+            MailEnableMailService.ParolaBetigi(Alan, Adres, YeniParola));
+
+        Assert.True(sonda.OnceDoldu);
+        Assert.False(sonda.SonraDoldu);
+        Assert.Equal(
+            MailEnableMailService.ParolaOlcumu.Uygulanmadi,
+            MailEnableMailService.ParolaSonucunuYorumla(Karar(sonda), sonda.Eslesme));
+    }
+
+    /// <summary>
+    /// SIR NOBETCISI: parola dogrulamasi ESITLIK olarak PowerShell tarafinda olculur; parolanin
+    /// KENDISI cikti akisina (dolayisiyla gunluge, hata ayrintisina, StatusMessage'a) YAZILMAZ.
+    /// </summary>
+    [Fact]
+    public async Task Parola_sonda_ciktisinda_GORUNMEZ()
+    {
+        var sonuc = await ProcessRunner.RunPowerShellAsync(
+            SahteCom() + "\n" + MailEnableMailService.ParolaBetigi(Alan, Adres, YeniParola));
+
+        Assert.Equal(0, sonuc.ExitCode);
+        Assert.DoesNotContain(YeniParola, sonuc.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("\"sonraEslesme\":true", sonuc.StandardOutput.Replace(" ", string.Empty), StringComparison.Ordinal);
+    }
+
+    // =====================================================================================
+    // 3) KARAR KURALI -- saf, mutasyona acik
+    // =====================================================================================
+
+    [Fact]
+    public void Kalibre_edilemeyen_sonda_HER_ZAMAN_OLCULEMEDI_verir()
+    {
+        // Pozitif kontrol bos: sonda VAR olani goremiyor -> yokluk kaniti sayilmaz.
+        Assert.Equal(
+            MailEnableMailService.GirisKaydiOlcumu.Olculemedi,
+            MailEnableMailService.GirisSondasiniYorumla(true, onceDoldu: false, kontrolDoldu: false, sonraDoldu: false));
+
+        // Negatif kontrol dolu: sonda YOK olani da dolu goruyor -> varlik kaniti sayilmaz.
+        Assert.Equal(
+            MailEnableMailService.GirisKaydiOlcumu.Olculemedi,
+            MailEnableMailService.GirisSondasiniYorumla(true, onceDoldu: true, kontrolDoldu: true, sonraDoldu: true));
+
+        // Cikti ayristirilamadi: "her sey yolunda" DEGILDIR.
+        Assert.Equal(
+            MailEnableMailService.GirisKaydiOlcumu.Olculemedi,
+            MailEnableMailService.GirisSondasiniYorumla(false, onceDoldu: true, kontrolDoldu: false, sonraDoldu: false));
+    }
+
+    [Fact]
+    public void Kalibre_sondada_sonraki_okuma_dogrudan_CEVAPTIR()
+    {
+        Assert.Equal(
+            MailEnableMailService.GirisKaydiOlcumu.Var,
+            MailEnableMailService.GirisSondasiniYorumla(true, true, false, sonraDoldu: true));
+        Assert.Equal(
+            MailEnableMailService.GirisKaydiOlcumu.Yok,
+            MailEnableMailService.GirisSondasiniYorumla(true, true, false, sonraDoldu: false));
+    }
+
+    /// <summary>Nobetci DEGISMEDIYSE kayit okunmamistir; hata varsa okuma zaten gecersizdir.</summary>
+    [Fact]
+    public void Nobetci_degismediyse_sonda_BOS_sayilir()
+    {
+        Assert.False(MailEnableMailService.SondaDoldu(string.Empty, MailEnableMailService.SondaNobetcisi));
+        Assert.True(MailEnableMailService.SondaDoldu(string.Empty, "USER"));
+        Assert.False(MailEnableMailService.SondaDoldu("getlogin: patladi", "USER"));
+    }
+
+    [Fact]
+    public void Ayristirilamayan_cikti_OLCUM_SAYILMAZ()
+    {
+        var sonda = MailEnableMailService.SondayiOku("bu bir JSON degil");
+
+        Assert.False(sonda.Ayristirildi);
+        Assert.Equal(MailEnableMailService.GirisKaydiOlcumu.Olculemedi, Karar(sonda));
+    }
+
+    [Fact]
+    public void Parola_karari_kayit_olcumunden_TURETILIR()
+    {
+        Assert.Equal(
+            MailEnableMailService.ParolaOlcumu.Olculemedi,
+            MailEnableMailService.ParolaSonucunuYorumla(MailEnableMailService.GirisKaydiOlcumu.Olculemedi, true));
+        Assert.Equal(
+            MailEnableMailService.ParolaOlcumu.Uygulanmadi,
+            MailEnableMailService.ParolaSonucunuYorumla(MailEnableMailService.GirisKaydiOlcumu.Yok, false));
+        Assert.Equal(
+            MailEnableMailService.ParolaOlcumu.GeriOkunamadi,
+            MailEnableMailService.ParolaSonucunuYorumla(MailEnableMailService.GirisKaydiOlcumu.Var, false));
+        Assert.Equal(
+            MailEnableMailService.ParolaOlcumu.Dogrulandi,
+            MailEnableMailService.ParolaSonucunuYorumla(MailEnableMailService.GirisKaydiOlcumu.Var, true));
+
+        // OLCULEMEDI ile GERI OKUNAMADI ayri cumlelerdir; ikisi de kullaniciya bir sey SOYLER.
+        Assert.NotEqual(
+            MailEnableMailService.ParolaDurumCumlesi(MailEnableMailService.ParolaOlcumu.Olculemedi),
+            MailEnableMailService.ParolaDurumCumlesi(MailEnableMailService.ParolaOlcumu.GeriOkunamadi));
+        Assert.NotEmpty(MailEnableMailService.ParolaDurumCumlesi(MailEnableMailService.ParolaOlcumu.Uygulanmadi));
+    }
+
+    [Fact]
+    public void Yutulmus_silme_hatalari_AYRINTIYA_tasinir()
+    {
+        var temiz = new MailEnableMailService.GirisSondaOkumasi(true, true, false, false, false, string.Empty, string.Empty);
+        Assert.Equal(string.Empty, MailEnableMailService.SilmeHatalari(temiz));
+
+        var hatali = new MailEnableMailService.GirisSondaOkumasi(true, true, false, true, false, "kutu patladi", "giris patladi");
+        var metin = MailEnableMailService.SilmeHatalari(hatali);
+        Assert.Contains("kutu patladi", metin, StringComparison.Ordinal);
+        Assert.Contains("giris patladi", metin, StringComparison.Ordinal);
+    }
+
+    // =====================================================================================
+    // 4) KAPILAR -- olcumun SONUCUNA BAKILIYOR mu?
+    // =====================================================================================
+
+    [Fact]
+    public void Giris_kaydi_DURUYORSA_silindi_denmez()
+    {
+        var hata = Assert.Throws<AppException>(() =>
+            MailEnableMailService.GirisKapisiniAc(MailEnableMailService.GirisKaydiOlcumu.Var, Adres, " [RemoveLogin: reddedildi]"));
+
+        Assert.Equal("mail.account_delete_login_survived", hata.MessageKey);
+        Assert.Contains(Adres, hata.Details, StringComparison.Ordinal);
+        Assert.Contains("RemoveLogin: reddedildi", hata.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Giris_kaydi_OLCULEMEDIYSE_ayri_bir_sey_soylenir()
+    {
+        var hata = Assert.Throws<AppException>(() =>
+            MailEnableMailService.GirisKapisiniAc(MailEnableMailService.GirisKaydiOlcumu.Olculemedi, Adres, string.Empty));
+
+        Assert.Equal("mail.account_delete_login_unverified", hata.MessageKey);
+    }
+
+    /// <summary>FAZLA KAPATMA NOBETCISI: kayit GITTIYSE kapi ACILIR, panel sade "silindi" der.</summary>
+    [Fact]
+    public void Giris_kaydi_GITTIYSE_kapi_ACILIR()
+        => MailEnableMailService.GirisKapisiniAc(MailEnableMailService.GirisKaydiOlcumu.Yok, Adres, string.Empty);
+
+    [Fact]
+    public void Parola_UYGULANMADIYSA_firlatir_gerisinde_FIRLATMAZ()
+    {
+        var hata = Assert.Throws<AppException>(() =>
+            MailEnableMailService.ParolaKapisiniAc(MailEnableMailService.ParolaOlcumu.Uygulanmadi, Adres));
+        Assert.Equal("mail.account_password_not_applied", hata.MessageKey);
+
+        // FAZLA KAPATMA NOBETCISI: "dogrulanamadi" bir HATA DEGILDIR -- parola yazilmis olabilir.
+        MailEnableMailService.ParolaKapisiniAc(MailEnableMailService.ParolaOlcumu.Dogrulandi, Adres);
+        MailEnableMailService.ParolaKapisiniAc(MailEnableMailService.ParolaOlcumu.Olculemedi, Adres);
+        MailEnableMailService.ParolaKapisiniAc(MailEnableMailService.ParolaOlcumu.GeriOkunamadi, Adres);
+    }
+
+    /// <summary>
+    /// ONCEKI HALI: uyari YALNIZ StatusMessage bos oldugunda yaziliyordu; COM'a erisilemedigi
+    /// (yani en kotu) durumda parola uyarisi SESSIZCE DUSUYORDU.
+    /// </summary>
+    [Fact]
+    public void Parola_uyarisi_baska_bir_mesaj_varken_de_KAYBOLMAZ()
+    {
+        var dolu = new MailWorkspaceDto { StatusMessage = "COM'a erisilemedi." };
+        MailEnableMailService.ParolaNotunuYaz(dolu, MailEnableMailService.ParolaOlcumu.Olculemedi);
+        Assert.Contains("COM'a erisilemedi.", dolu.StatusMessage, StringComparison.Ordinal);
+        Assert.Contains("DOGRULANAMADI", dolu.StatusMessage, StringComparison.Ordinal);
+
+        var bos = new MailWorkspaceDto();
+        MailEnableMailService.ParolaNotunuYaz(bos, MailEnableMailService.ParolaOlcumu.GeriOkunamadi);
+        Assert.NotEmpty(bos.StatusMessage);
+
+        // FAZLA KAPATMA NOBETCISI: DOGRULANMIS parola SAHTE UYARI uretmez (StatusMessage
+        // panelde HATA seridi cizer).
+        var dogru = new MailWorkspaceDto();
+        MailEnableMailService.ParolaNotunuYaz(dogru, MailEnableMailService.ParolaOlcumu.Dogrulandi);
+        Assert.True(string.IsNullOrEmpty(dogru.StatusMessage));
+    }
+
+    // =====================================================================================
+    // 5) SERVISIN KENDISI -- bu makinede COM YOK; "basarili" DONMEMELI
+    // =====================================================================================
+
+    /// <summary>
+    /// MailEnable COM'u olmayan bir makinede silme/parola cagrilari SESSIZCE BASARILI
+    /// DONMEZ. (Bu makinede gercekten kosuyor: MailEnable kurulu degil.)
+    /// </summary>
+    [Fact]
+    public async Task COM_yokken_silme_ve_parola_BASARILI_DONMEZ()
+    {
+        var silme = await Assert.ThrowsAsync<AppException>(() => Servis().DeleteAccountAsync(Adres));
+        Assert.Contains(silme.MessageKey, new[] { "mail.command_failed", "mail.not_installed" });
+
+        var parola = await Assert.ThrowsAsync<AppException>(() =>
+            Servis().SetAccountPasswordAsync(new SetMailAccountPasswordRequest { Address = Adres, Password = YeniParola }));
+        Assert.Contains(parola.MessageKey, new[] { "mail.command_failed", "mail.not_installed" });
+    }
+}

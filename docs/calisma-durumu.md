@@ -2280,3 +2280,154 @@ diyor.
 * `MailEnableMailService`'in liste/kuyruk/relay/dinleyici metotlari (`GetListenersAsync`,
   `GetQueueAsync`, `GetRelayAsync`, `SetRelayAsync`, `GetOutboundLimitAsync`,
   `SetOutboundLimitAsync`) bu turda INCELENMEDI.
+
+---
+
+## TUR: "BAKILMADI" LISTESINDEKI UC ADAY KAPATILDI (05.09.2026, dorduncu tur) -- commit ATILMADI
+
+Onceki turun durum kaydina "BAKILMADI" diye yazdigi uc maddenin **UCU DE ACIK CIKTI**.
+
+### ADAY 1 -- `SetAccountPasswordAsync`: ACIK, KAPANDI
+
+Onceki tur "parola geri okunamaz, dogrulanamaz" demis ve yalniz `StatusMessage`'a bir cumle
+koymustu. Iki sey bulundu:
+
+1. **Cumle SESSIZCE DUSEBILIYORDU.** `StatusMessage` YALNIZ bos oldugunda yaziliyordu; calisma
+   alani okumasi kendi hata mesajini birakmissa (COM'a erisilemedigi durum -- yani en kotu
+   durum) kullanici parola uyarisini HIC gormuyordu.
+2. **"Dogrulanamaz" DOGRU DEGILDI.** MEAOAU.Login'in DOGRULANMIS uye listesinde (CODEX_MEMORY,
+   gercek sunucudan `Get-Member` ciktisi) `Password` OKUNABILIR bir ozelliktir. Geri okuma
+   MUMKUN; olculemeyen sey, `GetLogin`'in eksik kayitta ne yaptigiydi.
+
+**KAPATMA -- KENDINI KALIBRE EDEN SONDA.** Durum kodu konvansiyonu TAHMIN EDILMEDI; sondanin
+AYIRT EDIP EDEMEDIGI CALISMA ANINDA OLCULUYOR. Ayni sonda uc kez kosar: (a) islemden ONCE var
+olan kayit uzerinde -- POZITIF KONTROL, (b) var olmasi IMKANSIZ bir kullanici adi uzerinde --
+NEGATIF KONTROL, (c) islemden SONRA. Sonda, MailEnable'in asla uretmeyecegi bir NOBETCI degeri
+`Rights`'a yazip `GetLogin` cagirir ve nobetcinin degisip degismedigine bakar.
+
+* ONCE bos **VEYA** KONTROL dolu -> sonda ayirt edemiyor -> **OLCULEMEDI** (ne basarili ne
+  basarisiz). Konvansiyon ne olursa olsun bu dal SAHTE HATA uretmez.
+* ONCE dolu **ve** KONTROL bos -> sonda KALIBRE; SONRA'nin dolu/bos olmasi dogrudan cevaptir.
+
+Parola karari: kayit YOK -> **UYGULANMADI** (firlatir, `mail.account_password_not_applied`) ·
+kayit VAR + parola birebir esit -> **DOGRULANDI** (uyari YOK: `StatusMessage` panelde HATA seridi
+cizer, olculmus basariya mesaj yazmak sahte alarm olurdu) · kayit VAR + esit degil ->
+**GERI OKUNAMADI** (sunucu parolayi ozetliyor olabilir; FIRLATMAZ, cumle yazar) · kalibre
+edilemedi -> **OLCULEMEDI** (cumle yazar). **PAROLA CIKTIYA YAZILMAZ:** esitlik PowerShell
+tarafinda olculur, disari yalniz mantiksal deger cikar (sinamayla olculuyor).
+
+### ADAY 2 -- `DeleteAccountAsync`, `MEAOAU.Login` kaydi: ACIK, KAPANDI
+
+Kutunun gittigi olculuyordu, GIRIS KAYDI olculmuyordu. **Bu, silinen musterinin POSTAYA
+ERISIMININ SURMESI demekti** (kutu yok, giris var -> IMAP/SMTP oturumu hala acilabilir).
+
+Onceki tur "giris kayitlari calisma alani okumasinda gorunmez" demisti; **NEDENI de olculdu:**
+MEAOAU.Login'in dogrulanmis uye listesinde `FindFirst/FindNext` **YOKTUR** (kardes nesnelerin
+-- PostOffice/Mailbox/AddressMap -- hepsinde var). Yani giris kayitlari LISTELENEMEZ; tek yol
+tekil sondadir.
+
+**KAPATMA:** ayni kalibre sonda. `Var` -> `mail.account_delete_login_survived` (ayrinti:
+"giris kaydi durdugu surece silinen hesap POSTAYA ERISEBILIR") · `Olculemedi` ->
+`mail.account_delete_login_unverified` · `Yok` -> kapi acilir, panel sade "silindi" der.
+Ayrica **iki BOS `catch` KALDIRILDI**: `RemoveMailbox`/`RemoveLogin` hatalari artik yutulmuyor,
+hata metni ayrintiya tasiniyor (once tamamen kayboluyordu).
+
+### ADAY 3 -- liste/kuyruk/role/dinleyici: IKISI ACIK, GERISI TEMIZ
+
+* **ACIK: `GetListenersAsync` BOS KOLEKSIYON donuyordu** ve arayuz bos listeyi
+  `panel.mail.noListeners` -- "dinleyici yok" -- diye yaziyordu. Hicbir sey olculmeden verilen
+  bu cevap, 25/587/143'u GERCEKTEN dinleyen bir sunucuda yoneticiye "posta hic dinlenmiyor"
+  gosteriyordu. **AYNI SINIF DAHA GENIS CIKTI: BIRINCIL yol olan Stalwart `MailService`
+  de ayni seyi yapiyordu** -- CLI bulunamazsa, yonetici parolasi okunamazsa ya da sorgu
+  duserse `return []`. Kapatma: `MailListenerSnapshotDto` (`Installed`/`Measured`/`Listeners`)
+  -- kuyruk ve rolede ZATEN VAR OLAN desen (`Configured`) dinleyicilerde eksikti.
+  `MailService.GetClientSettingsAsync` artik dinleyiciler OLCULEMEDIYSE `null` doner (uydurma
+  port yayinlamaz).
+* **ACIK: `GetQueueMessageAsync` `null` donuyordu** -> uc bunu 404 "ileti bulunamadi" yapiyordu:
+  hic bakilmamis bir kuyruk icin "boyle bir ileti yok". Kardes `DeleteQueueMessageAsync` ayni
+  durumda ZATEN `mail.queue_not_supported` firlatiyordu -- iki uc ayni gercek icin iki ayri sey
+  soyluyordu. Artik ikisi de ayni seyi der.
+* **TEMIZ (nobetci kondu):** dagitim listeleri (409 `mail.lists_unsupported`), `GetQueueAsync`
+  (`Configured=false`), `GetRelayAsync` (`Configured=false`), `SetRelayAsync` (400),
+  `GetOutboundLimitAsync` (`Configured=false` -- arayuz de bunu onurlandiriyor: MailView
+  "limit kurulu degil" uyarisi cizer), `SetOutboundLimitAsync` (400),
+  `GetClientSettingsAsync` (null -> autodiscover 404).
+
+### MUTASYON KANITI (19 mutasyon, 19'u da KIRMIZI)
+
+Kalibrasyonun her bacagi ayri ayri: negatif kontrol kaldirildi (2 kirmizi) · pozitif kontrol
+kaldirildi (1) · ayristirma denetimi kaldirildi (1) · var/yok ters cevrildi (8) ·
+`SondaDoldu`'nun hata denetimi kaldirildi (1) · `RemoveLogin` hatasi yeniden yutuldu (1) ·
+negatif kontrol GERCEK kullaniciyla yapildi (5) · parola karari bozuldu (M8/M9/M10/M16/M19,
+2'ser) · **parola ciktiya sizdirildi (1)** · uc kapinin ucu de kaldirildi (1'er) · parola
+uyarisi mevcut mesaj varken dusuruldu -- yani ESKI HATA geri kondu (1) · dinleyiciler
+"olculdu" sayildi (1) · kuyruk iletisi yine `null` dondu (1).
+
+NOT -- OLCUM ARACININ KENDISI YANILDI: ilk kosumda M7 "YESIL KALDI" gorundu; sebep mutasyonun
+HIC UYGULANMAMIS olmasiydi (cok satirli desen, dosya CRLF; ayrica `grep -qF` cok satirli
+kalibi VEYA gibi degerlendiriyor). Uygulanma denetimi `cmp` ile degistirilince M7 kirmizi
+oldu (5 sinama). Bir mutasyonun yesil kalmasi once ARACIN dogrulanmasini gerektirir.
+
+**FAZLA KAPATMA NOBETCILERI (7):** her sey yolundayken silme kapisi ACILIR · parola
+DOGRULANDI'da SAHTE UYARI yazilmaz · "dogrulanamadi" FIRLATMAZ (parola yazilmis olabilir) ·
+ozetleyen sunucuda "uygulanmadi" DENMEZ · kuyruk/role/giden limiti hala "yapilandirilmadi"
+der · dagitim listeleri hala 409 · olculmus bos dinleyici listesi hala "yok" diyebilir.
+
+### BU MAKINEDE GERCEKTEN OLCULENLER
+
+* **URETIM BETIGININ KENDISI GERCEK `powershell.exe`'de KOSTURULDU.** `SilmeBetigi` ve
+  `ParolaBetigi` internal yapildi; sinama bu metinlerin KOPYASINI degil KENDISINI kosturur.
+  COM nesnesinin yerine, betikteki OLCULEBILIRLIK KANCASI (`$MeGirisFabrikasi`/
+  `$MeKutuFabrikasi` -- uretimde tanimsizdir, `-File` taze kapsamda kosar ve gercek COM olusur)
+  uzerinden bir stand-in nesne verilir. **Kaynak taramasi YOK.**
+* Uc ayri sunucu davranisi gercekten kosturuldu: `GetLogin` eksik kayitta (a) sessizce
+  basarisiz, (b) FIRLATIR, (c) HER DURUMDA doldurur. Sonda (a) ve (b)'de DOGRU olcuyor,
+  (c)'de OLCULEMEDI diyor -- konvansiyon tahmin edilmeden.
+* `RemoveLogin` hicbir sey yapmayinca / firlatinca kaydin DURDUGU olculdu.
+* Parolanin sonda ciktisinda GORUNMEDIGI olculdu.
+* MailEnable COM'u olmayan bu makinede `DeleteAccountAsync`/`SetAccountPasswordAsync`
+  GERCEKTEN cagrildi: ikisi de FIRLATIYOR (`mail.command_failed`), sessizce basarili DONMUYOR.
+
+### OLCULEMEYENLER (durustce)
+
+* **MailEnable BU MAKINEDE HALA YOK.** COM durum kodu konvansiyonu, `GetLogin`'in eksik
+  kayitta gercek davranisi ve `Password`'un gercekten duz metin donup donmedigi OLCULMEDI.
+  Kapatma tam da bu yuzden konvansiyona degil KALIBRASYONA dayandirildi.
+* **Stalwart `MailService.GetListenersAsync`'in olculemeyen dali KOSTURULMADI** (Stalwart CLI
+  bu makinede yok). Yapisal olarak `Measured` yalniz basari dalinda `true` yapiliyor.
+* **`DeleteAccountAsync`/`SetAccountPasswordAsync` govdesinin kapilari CAGIRDIGI** COM olmadan
+  kosturulamadi; kapilarin KENDISI (ve karar kurali) dogrudan sinaniyor -- bu, depodaki
+  `KapiAcVarlik` deseniyle ayni kapsama.
+* **Arayuzun dinleyici uyarisini cizdigi** gercek tarayicida olculmedi (typecheck + build temiz).
+
+### KIRILAN DAVRANISLAR (bilerek)
+
+1. `IMailService.GetListenersAsync` donus tipi `Task<IReadOnlyCollection<MailListenerDto>>` ->
+   `Task<MailListenerSnapshotDto>`; **`GET /mail/listeners` GOVDESI DEGISTI** (dizi yerine
+   `{installed, measured, listeners}`). Frontend (`api/mail.ts`, `MailView.vue`) guncellendi.
+2. `MailEnableMailService.GetQueueMessageAsync` artik 400 FIRLATIYOR (once `null` -> 404).
+3. `DeleteAccountAsync` giris kaydi dogrulanamaz/duruyorsa FIRLATIYOR (once HTTP 200).
+4. `SetAccountPasswordAsync` parola UYGULANMADIYSA FIRLATIYOR; dogrulandiginda artik uyari
+   GOSTERMIYOR (once her durumda uyari yaziyordu).
+5. `MailService.GetClientSettingsAsync` dinleyiciler olculemediyse `null` doner.
+6. `panel.mail.noListeners` metni duzeltildi: "Dinleyici bilgisi alinamadi" (yanlis) ->
+   "Olculdu: bu sunucuda tanimli dinleyici yok".
+
+### YENI DOSYALAR / ANAHTARLAR
+
+`tests/AdaPanel.Infrastructure.Tests/MailEnableGirisKaydiSondasiTests.cs` (21 sinama);
+`MailListenerSnapshotDto` (`Dtos/Mail/MailListenerDto.cs` icinde).
+**Yeni i18n (tr+en, 4 anahtar):** `mail.account_delete_login_survived`,
+`mail.account_delete_login_unverified`, `mail.account_password_not_applied`,
+`panel.mail.listenersUnmeasured`.
+
+**4853 test yesil** (baseline 4827 + 26). `scripts/devam-durumu.ps1`: SAGLAM.
+
+### BU TURDA BAKILMAYAN (sonraki tur icin)
+
+* `MailEnableMailService.CreateAccountAsync` giris kaydini OLUSTURUYOR ama olusturmayi
+  OLCMUYOR: kutu listede goruluyor, `AddLogin`'in tuttugu ayni kalibre sonda ile
+  dogrulanabilir (bu turda dokunulmadi -- kapsam uc adaydi).
+* `GetDnsRecordsAsync` MailEnable tarafinda SABIT kayit uretiyor (MX/SPF/DMARC); sunucunun
+  gercek yapilandirmasindan okunmuyor.
+* `EnsureServerHostnameAsync` her zaman `false`; MailEnable karsilama adi hic olculmuyor.

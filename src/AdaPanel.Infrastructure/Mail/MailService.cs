@@ -1349,20 +1349,27 @@ public sealed class MailService(
         await fileStore.WriteAsync(ListPolicyStorePath, store, cancellationToken);
     }
 
-    public async Task<IReadOnlyCollection<MailListenerDto>> GetListenersAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Ağ dinleyicileri. <b>ÖLÇÜLEMEYEN, "YOK" DEĞİLDİR:</b> CLI bulunamadığında, yönetici
+    /// parolası okunamadığında ya da sorgu düştüğünde eskiden BOŞ LİSTE dönüyordu ve arayüz
+    /// bunu "dinleyici yok" diye yazıyordu — yani yönetim arayüzüne bağlanılamayan bir
+    /// sunucuda panel, postayı gerçekten dinleyen portlar için "hiç dinleyici yok" diyordu.
+    /// </summary>
+    public async Task<MailListenerSnapshotDto> GetListenersAsync(CancellationToken cancellationToken = default)
     {
+        var kurulu = IsInstalled();
         var cli = await ResolveCliAsync(cancellationToken);
         var password = await GetAdminPasswordAsync(cancellationToken);
         if (cli is null || password is null)
         {
-            return [];
+            return new MailListenerSnapshotDto { Installed = kurulu, Measured = false };
         }
 
         var env = BuildEnvironment(password);
         var result = await RunCliAsync(cli, "query NetworkListener --json", env, cancellationToken);
         if (!result.Success)
         {
-            return [];
+            return new MailListenerSnapshotDto { Installed = kurulu, Measured = false };
         }
 
         var listeners = new List<MailListenerDto>();
@@ -1382,9 +1389,14 @@ public sealed class MailService(
             });
         }
 
-        return listeners
-            .OrderBy(listener => listener.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return new MailListenerSnapshotDto
+        {
+            Installed = kurulu,
+            Measured = true,
+            Listeners = listeners
+                .OrderBy(listener => listener.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        };
     }
 
     // --- Dağıtım listesi gönderim politikası (Plesk "kimler gönderebilir" paritesi) ---
@@ -4604,8 +4616,17 @@ public sealed class MailService(
             return null;
         }
 
+        // ÖLÇEMEDİYSEK YAYINLAMAYIZ: dinleyiciler okunamadığında boş liste "dinleyici yok"
+        // sayılırsa, istemci ayarları sessizce EKSİK üretilir (ya da hiç üretilmez) ve sebebi
+        // görünmez. Ölçüm bayrağına bakılıyor.
+        var dinleyiciler = await GetListenersAsync(cancellationToken);
+        if (!dinleyiciler.Measured)
+        {
+            return null;
+        }
+
         var sunucular = new List<MailClientServerDto>();
-        foreach (var dinleyici in await GetListenersAsync(cancellationToken))
+        foreach (var dinleyici in dinleyiciler.Listeners)
         {
             var protokol = NormalizeClientProtocol(dinleyici.Protocol);
             if (protokol is null)
