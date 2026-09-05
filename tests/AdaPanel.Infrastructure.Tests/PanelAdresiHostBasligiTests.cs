@@ -115,7 +115,11 @@ public sealed class PanelAdresiHostBasligiTests
     {
         var kok = PanelAddress.BuildBaseUrl(adres, 8890);
 
-        Assert.Equal($"https://{adres}:8890", kok);
+        // KÜÇÜK HARF BEKLENİYOR — biçimsel normalleştirmenin (bkz. PanelAddress.TryParseAddress)
+        // bilinçli çıktısı. Host adları DNS'te de URL'de de büyük/küçük harf DUYARSIZDIR, yani
+        // "WIN-SUNUCU01" ile "win-sunucu01" aynı makineye çözülür; bu testin ölçtüğü şey harf
+        // büyüklüğünün korunması değil, adresin AÇILABİLİR kalmasıdır.
+        Assert.Equal($"https://{adres.ToLowerInvariant()}:8890", kok);
         Assert.DoesNotContain(PanelAddress.UnknownHostPlaceholder, kok, StringComparison.Ordinal);
         Assert.True(Uri.TryCreate(kok, UriKind.Absolute, out _), $"Üretilen adres ayrıştırılamadı: {kok}");
     }

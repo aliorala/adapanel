@@ -2782,3 +2782,110 @@ Değişen dosyalar: `src/AdaPanel.Infrastructure/Support/PanelAddress.cs`,
   `https://panel.ornek.com:8890:8888`; IPv6 köşeli paranteze alınmaz). Önceki turdan devreden
   madde; yönetici girdisidir, bu turda da kapsama alınmadı.
 * Kurulum sihirbazı panel adresini hâlâ sormuyor (yukarıda gerekçesi yazılı).
+
+---
+
+## Panel adresi BİÇİMSEL doğrulama + normalleştirme (2026-09-06)
+
+Önceki turdan iki kez devreden madde kapatıldı: `PanelAddress.BuildBaseUrl` ayar değerini
+`https://` ile portun arasına ÇİĞ yapıştırıyordu.
+
+### ÖLÇÜM (düzeltmeden ÖNCE alınan gerçek çıktılar, `httpsPort = 8888`)
+
+| girdi | üretilen URL | durum |
+|---|---|---|
+| `panel.ornek.com:8890` | `https://panel.ornek.com:8890:8888` | BOZUK (iki port) |
+| `https://panel.ornek.com` | `https://https://panel.ornek.com:8888` | BOZUK (iki şema) |
+| `http://panel.ornek.com:8890` | `https://http://panel.ornek.com:8890:8888` | BOZUK |
+| `fd00::1` | `https://fd00::1:8888` | BOZUK (IPv6 parantezsiz) |
+| `2001:db8::1` | `https://2001:db8::1:8888` | BOZUK |
+| `panel.ornek.com/` | `https://panel.ornek.com/:8888` | BOZUK (port yolun ardında) |
+| `panel.ornek.com/yol` | `https://panel.ornek.com/yol:8888` | BOZUK |
+| `PANEL.ORNEK.COM` | `https://PANEL.ORNEK.COM:8888` | çalışır ama kanonik değil |
+
+Devir notundaki üç iddianın ÜÇÜ DE doğrulandı; ek olarak yol/sorgu ve `http://` şeması da aynı
+sınıfta çıktı. Kaydetme yolunda hiçbir doğrulama yoktu (`UpdatePanelPreferencesRequest.ServerAddress`
+üzerinde yalnız `[StringLength(255)]`), frontend'de de yok (düz `<input>`).
+
+### Düzeltme İKİ KATMANDA (ikisi de gerekli)
+
+* **Kaydetme** — `PanelPreferencesService.UpdateAsync` → `NormalizeServerAddress`. Yeni girdiyi
+  kanonikleştirir ve yöneticiye ANINDA hata döndürür.
+* **Üretme** — `PanelAddress.BuildBaseUrl` → `TryParseAddress`. Diskte ZATEN duran bozuk değeri de
+  kurtarır (kaydetme doğrulaması eski kayıtlara dokunmaz; yönetici formu bir daha hiç açmayabilir).
+
+### Normalleştirme kuralları ve gerekçeleri
+
+1. Şema (`http://`/`https://`) SÖKÜLÜR ve yok sayılır. Şemadan port ÇIKARIMI yapılmaz (`https://`
+   yazmak masum bir alışkanlık; ondan 443 çıkarmak 8888'de dinleyen çalışan kurulumu öldürürdü).
+2. Yol/sorgu/parça sökülür — burada üretilen KÖK adres, yolu `BuildEntryUrl` ekler.
+3. Küçültme `ToLowerInvariant` ile (Türkçe kültürde `ToLower` `IZMIR.COM` → `ızmır.com` yapardı).
+4. Unicode alan adı REDDEDİLMEZ, punycode'a çevrilir (`örnek.com.tr` → `xn--rnek-4qa.com.tr`;
+   punycode değeri ÖLÇÜLDÜ, tahmin edilmedi). Gerekçe: posta gövdesindeki `href` içinde çiğ
+   Unicode host'u her istemci doğru kodlamaz.
+5. IPv6 parantezli/parantezsiz kabul edilir; URL'ye yazılırken köşeli paranteze alınır.
+6. **PORT KARARI:** `ServerAddress` kayda SAF HOST olarak yazılır (port yok). Gerekçe: bu alanı
+   yalnız URL üretimi okumuyor — varsayılan DNS A kaydı (`DnsService`), FTP istemcisine gösterilen
+   sunucu adresi, posta DNS yayını ve uzak veritabanı host'u da aynı alandan okuyor; içine `:8890`
+   yazmak onları bozar. Adresteki port ayardaki `PreferredHttpsPort` ile AYNIYSA bilgi kaybı
+   olmadan elenir (en sık gerçek durum). FARKLIYSA taraf sessizce seçilmez, hata döner
+   (`settings.server_address_port_conflict`) — panel iki porttan hangisinin dışarıdan açıldığını
+   bilemez ve yanlış seçim hiçbir yerde raporlanmayan ölü bağlantı üretir.
+   ÜRETME yolunda (eski kayıt) ise adresteki port KAZANIR: yönetici o değeri panele girebildiği
+   tarayıcı çubuğundan kopyalar, dışarıdan çalıştığı kanıtlı tek değer odur.
+7. Ayrıştırılamayan değer için host UYDURULMAZ: `UnknownHostPlaceholder` (mevcut "ölü ama görünür
+   bağlantı" doktrini).
+
+`IsExternallyReachable` de aynı ayrıştırıcıyı kullanır — iki kopya kural bir gün ayrışsaydı
+"uyarı yok ama bağlantı ölü" (ya da tersi) olurdu.
+
+`AcmeArgumentRules.IsCommandSafeHost` BİLEREK yeniden kullanılmadı: o kural `*.ornek.com` joker
+önekini kabul eder (sertifika adı olarak meşru, panel adresi olarak anlamsız) ve port/şema/yol/
+IPv6 parantezi hakkında hiçbir şey bilmez.
+
+### MUTASYON (üçü de yapıldı, kırmızı GÖRÜLDÜ, geri konuldu)
+
+| mutasyon | kırmızı test |
+|---|---|
+| Üretme katmanı: normalleştirmeyi atla, eski çiğ davranış | **19** |
+| Kaydetme katmanı: doğrulama/normalleştirmeyi kaldır | **8** |
+| FAZLA KAPATMA: DNS kuralını daralt (nokta zorunlu, `-`/`_` yasak) | **12** |
+
+Üçüncüsü kritik: fazla kapatma nöbetçileri gerçekten ateş ediyor — tek etiketli makine adı
+(`WIN-SUNUCU01`, otomatik çözülen değer), alt çizgili makine adı, tireli alan adları reddedilirse
+12 test kırmızı olur.
+
+### Testler
+
+Yeni: `tests/AdaPanel.Infrastructure.Tests/PanelAdresiBicimNormallestirmeTests.cs` (58 test).
+Fazla kapatma nöbetçileri: düz alan adı, derin alt alan adı, `.com.tr`/`.travel`, tireli ad,
+punycode `xn--`, Türkçe harfli ad, IPv4 (iç + genel), IPv6 (yerel + genel), tek etiketli makine
+adı, alt çizgili makine adı, `localhost`, sondaki kök noktası — hepsi `Uri.TryCreate` ile geçerli
+mutlak https URL üretmeli. Ayrıca BOŞ adres reddedilmemeli (aksi hâlde adresi ayarlamamış yönetici
+Ayarlar formunu hiç kaydedemezdi).
+Güncellenen: `PanelAdresiHostBasligiTests.Mesru_panel_adresleri_ACILABILIR_adres_uretir` artık
+küçük harfli host bekliyor (host adları DNS'te de URL'de de büyük/küçük harf duyarsız).
+
+**5004 test yeşil / 0 kırmızı** (Core 2 + Infrastructure 5002; baseline 4946 + 58 yeni).
+Frontend: typecheck/build/`npm test` (42) temiz, i18n TR/EN 5184 = 5184.
+
+Değişen dosyalar: `src/AdaPanel.Infrastructure/Support/PanelAddress.cs`,
+`src/AdaPanel.Infrastructure/Services/PanelPreferencesService.cs`,
+`frontend/src/i18n/tr.json`, `frontend/src/i18n/en.json`, iki test dosyası.
+
+### AÇIK KALAN (kapsam dışı, bilerek)
+
+* **Dış port ≠ dinleme portu modellenmiyor.** Ters vekil dışarıda 8890, panel içeride 8888
+  dinliyorsa panelin bunu ifade edecek alanı yok; bu durumda kaydetme yolu hata döndürür ve
+  yönetici adresi portsuz yazmak zorunda kalır (üretilen bağlantı iç portu taşır). Doğru çözüm
+  ayrı bir "dış port" alanı (DTO + form + i18n + göç); bu tur kapsamına alınmadı.
+* **Frontend'de anlık doğrulama yok.** Hata sunucudan döner ve banner'da görünür
+  (`settings.server_address_invalid` / `settings.server_address_port_conflict` TR+EN eklendi);
+  alanın kendisi yazarken kırmızıya dönmüyor.
+* **`GetAsync` normalleştirmiyor** (yalnız `Trim`). Bilerek: normalleştirseydi eski kayıttaki
+  portu düşürür ve `BuildBaseUrl`'ün kurtarma dalı ölürdü. Sonuç: diskte `host:8890` yazan eski
+  bir kurulumda DNS/FTP/posta tüketicileri o değeri hâlâ ham görüyor (ÖNCEKİ durumla aynı,
+  regresyon yok) — yönetici Ayarlar'ı bir kez kaydedince temizlenir.
+* **`UpdatePanelPreferencesRequest.ServerAddress` üzerinde hâlâ DataAnnotations yok**; doğrulama
+  servis katmanında. Kasıtlı: kural port bağımlı (`PreferredHttpsPort` ile karşılaştırma) ve
+  attribute tek alanı görebilir.

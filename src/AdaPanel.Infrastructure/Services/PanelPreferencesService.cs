@@ -44,7 +44,7 @@ public sealed class PanelPreferencesService(
             UiDensity = request.UiDensity.Trim().ToLowerInvariant(),
             DefaultSiteRoot = NormalizePath(request.DefaultSiteRoot),
             DefaultBackupRoot = NormalizePath(request.DefaultBackupRoot),
-            ServerAddress = string.IsNullOrWhiteSpace(request.ServerAddress) ? ResolveServerAddress() : request.ServerAddress.Trim(),
+            ServerAddress = NormalizeServerAddress(request.ServerAddress, request.PreferredHttpsPort),
             // Panel alan adını Ayarlar > Genel formu YÖNETMEZ (istekte hiç gelmez). Sahibi panel
             // erişimi ekranıdır; buradan geçerken sessizce sıfırlanmasın diye önceki değer taşınır.
             PanelHostName = previous.PanelHostName,
@@ -101,6 +101,52 @@ public sealed class PanelPreferencesService(
             InstallRuntimeIfMissing = true,
             ServerAddress = ResolveServerAddress()
         };
+    }
+
+    /// <summary>
+    /// Yöneticinin Ayarlar &gt; Genel formuna yazdığı sunucu adresini kanonik HOST'a çevirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden kaydetme yolunda:</b> bozuk bir adres yalnız e-posta bağlantılarını değil,
+    /// bu alanı okuyan her tüketiciyi (varsayılan DNS A kaydı, FTP istemcisine gösterilen sunucu
+    /// adresi, posta DNS yayını, uzak veritabanı bağlantı host'u) etkiler. Yalnız URL üretiminde
+    /// düzeltmek, ötekileri bozuk bırakırdı. Ayrıca yönetici hatayı KAYDEDERKEN görür — bir sonraki
+    /// müşteri postası ölü gidene kadar beklemek zorunda kalmaz.
+    /// </para>
+    /// <para>
+    /// <b>Port neden BURADA kabul edilmiyor:</b> <c>ServerAddress</c> bu kod tabanında saf bir
+    /// host/IP olarak tüketiliyor (yukarıdaki liste); içine <c>:8890</c> yazmak o tüketicileri
+    /// bozar. Adresteki port ayardaki portla AYNIYSA bilgi kaybı yoktur, sessizce elenir — bu, en
+    /// sık gerçek durumdur (yönetici panele girdiği tarayıcı çubuğunu yapıştırır ve panel zaten o
+    /// portta dinler). FARKLIYSA taraf sessizce SEÇİLMEZ: iki portun hangisinin dışarıdan
+    /// açılabildiğini panel bilemez ve yanlış seçim, hiçbir yerde raporlanmayan ölü bir bağlantı
+    /// üretir. Bu yüzden hata döner ve iki değeri de yöneticiye söyler; kararı o verir.
+    /// </para>
+    /// </remarks>
+    private static string NormalizeServerAddress(string? requested, int preferredHttpsPort)
+    {
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            // PANELİN KENDİ ÜRETTİĞİ DEĞER ASLA REDDEDİLMEZ. Makine adı biçim kuralına
+            // takılırsa bile ham hâliyle kabul edilir; aksi hâlde adres alanını boş bırakan
+            // yönetici Ayarlar formunu HİÇ kaydedemezdi (kapatılan sorundan kötü).
+            var otomatik = ResolveServerAddress();
+            var kanonikOtomatik = PanelAddress.NormalizeHost(otomatik);
+            return kanonikOtomatik.Length == 0 ? otomatik : kanonikOtomatik;
+        }
+
+        if (!PanelAddress.TryParseAddress(requested, out var parcalar))
+        {
+            throw new InvalidOperationException("settings.server_address_invalid");
+        }
+
+        if (parcalar.Port is int yazilanPort && yazilanPort != preferredHttpsPort)
+        {
+            throw new InvalidOperationException("settings.server_address_port_conflict");
+        }
+
+        return parcalar.Host;
     }
 
     private static string NormalizePath(string value)

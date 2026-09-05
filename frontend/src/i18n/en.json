@@ -3541,6 +3541,8 @@
   "security.acl_failed": "Could not set security permissions.",
   "security.bruteforce.invalid_ip": "Invalid IP address.",
   "security.invalid_totp_secret": "Invalid TOTP secret.",
+  "settings.server_address_invalid": "The server address is not valid. Enter the domain name or IP address the panel is reached at from outside (for example panel.example.com). Spaces, slashes and punctuation are not accepted.",
+  "settings.server_address_port_conflict": "The port you typed in the server address differs from the Port field. The panel cannot know which of the two is reachable from outside, and the wrong choice silently turns the links sent to your customers into dead links. Write the address without a port, or make the two values match.",
   "setup.already_initialized": "The panel is already initialized.",
   "setup.invalid_secure_path": "Invalid secure entry path.",
   "setup.password_mismatch": "Passwords do not match.",

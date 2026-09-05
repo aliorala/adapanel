@@ -3541,6 +3541,8 @@
   "security.acl_failed": "Güvenlik izinleri ayarlanamadı.",
   "security.bruteforce.invalid_ip": "IP adresi geçersiz.",
   "security.invalid_totp_secret": "TOTP gizli anahtarı geçersiz.",
+  "settings.server_address_invalid": "Sunucu adresi geçersiz. Panelin dışarıdan açıldığı alan adını ya da IP adresini yazın (örnek: panel.ornek.com). Boşluk, eğik çizgi ve noktalama işaretleri kabul edilmez.",
+  "settings.server_address_port_conflict": "Sunucu adresine yazdığınız port, Port alanındaki değerden farklı. Panel bu ikisinden hangisinin dışarıdan açılabildiğini bilemez ve yanlış seçim, müşteriye giden bağlantıları sessizce ölü hâle getirir. Adresi portsuz yazın ya da iki değeri eşitleyin.",
   "setup.already_initialized": "Panel zaten kurulmuş.",
   "setup.invalid_secure_path": "Güvenli giriş yolu geçersiz.",
   "setup.password_mismatch": "Parolalar eşleşmiyor.",
