@@ -2431,3 +2431,46 @@ der · dagitim listeleri hala 409 · olculmus bos dinleyici listesi hala "yok" d
 * `GetDnsRecordsAsync` MailEnable tarafinda SABIT kayit uretiyor (MX/SPF/DMARC); sunucunun
   gercek yapilandirmasindan okunmuyor.
 * `EnsureServerHostnameAsync` her zaman `false`; MailEnable karsilama adi hic olculmuyor.
+
+## CANLI DENEMEDE BULUNANLAR (0.8.20 kurulumu, 05.09.2026)
+
+Panel bu makineye kuruldu (0.8.9 -> 0.8.20) ve arayuzden denendi. Asagidakiler GERCEK
+SISTEMDE olculdu; ikisi yeni bulgu.
+
+### DOGRULANANLAR (canlida ilk kez)
+* Izinleri Onar: denetim kaydi "Modify yerinde (DACL'den okundu)" yaziyor ve YUKSELTILMIS
+  icacls ile bagimsiz teyit edildi -> `IIS APPPOOL\AdaPanel.bayi-denetim.test:(OI)(CI)(M)`.
+  Kod -> canli sistem -> panelin iddiasi -> bagimsiz olcum, dordu tutuyor.
+* runtimes klasorune yazma ENGELLENDI (0.8.8); Everyone gitmis, Users/IIS_IUSRS yalniz RX.
+* logs ve stalwart/stalwart-cli klasorleri ACL ile kilitli (erisim reddi).
+* Guvenlik basliklari gonderiliyor, HSTS YOK (0.8.7 -- kasitli).
+* Gizli giris yolu: baslıksiz API istegi 404, ucun varligini ele vermiyor.
+* DNS yayini durustlugu (0.8.11): site panelinde "Windows DNS'e yayinlanamadi" diyor.
+* Oturum dusurme (0.8.10): yukseltmede oturum dustu, yeniden giris istedi.
+* Guvenlik duvari listesi GERCEKLE BIREBIR uyusuyor (16 kural, Enabled degerleri dogru).
+* Posta ekrani: bos liste gostermiyor, "baglanilamadi" diyor ve ne yapilacagini yaziyor.
+* Veritabani ekrani: "Kurulu degil" diyor, "0 veritabani" DEMIYOR.
+
+### YENI BULGU 1 -- guvenlik duvari kurali CIFT
+`AdaPanel Site AdaPanel.WebDb.PhpMyAdmin TCP 8896` Windows'ta IKI KEZ kayitli (yukseltilmis
+Get-NetFirewallRule ile dogrulandi). Bellekteki B2 notu "kurallar idempotent degil, 9 kopya
+olusuyordu, DUZELTILDI" diyor. Ya duzeltmeden onceki artik, ya da o yol hâlâ tam idempotent
+degil. ONCE HANGISI oldugu olculmeli: kural yazma yolu "once sil sonra ekle" yapiyor mu?
+
+### YENI BULGU 2 -- silinen sitenin kurali GERIDE KALDI
+`AdaPanel Site alioral.xyz TCP 80` duruyor ama o site artik YOK. Site silinirken guvenlik
+duvari kuralinin kaldirilmadigi anlamina gelebilir -- yani "site silindi" denip kuralin
+kalmasi, bu turun kapattigi sinifin bir baska ornegi olur. Silme yolunda kural kaldirma
+CAGRILIYOR MU, olculmeli.
+
+### KUCUK -- posta ekrani var olmayan gorevi tarif ediyor
+Baglanti kurulamayinca "AdaStalwart zamanlanmis gorevini yeniden baslatin" diyor, ama o
+gorev bu makinede YOK (Stalwart kurulu ama servis/gorev yok). Tavsiye, var olmayan bir seye
+isaret ediyor.
+
+### KENDI OLCUM ARACIMDA UC KEZ AYNI HATA
+`-ErrorAction SilentlyContinue` ve sessiz `Get-ChildItem -Recurse`, ERISIM REDDINI yutup
+sonucu "hic yok"a cevirdi: guvenlik duvari kurallari (0 sanildi), stalwart ikilileri
+(yok sanildi), stalwart klasorleri (bos sanildi). Ucunde de gercek sebep erisim reddiydi.
+Bu, tam da bu turda panelde kapatilan sinifin (sorgu hatasi = bos sonuc) arac tarafindaki
+karsiligidir. Ders: dogrulama araci da uc degerli olmali -- var / yok / OKUYAMADIM.
