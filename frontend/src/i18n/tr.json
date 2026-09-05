@@ -5158,6 +5158,7 @@
   "mail.domain_delete_unverified": "Silme yazıldı ama sonuç ÖLÇÜLEMEDİ. \"Silindi\" demiyoruz.",
   "mail.account_create_not_applied": "Posta kutusu OLUŞTURULAMADI: yazma sonrası listede bulunamadı.",
   "mail.account_create_unverified": "Posta kutusu yazıldı ama sonuç ÖLÇÜLEMEDİ. \"Oluşturuldu\" demiyoruz.",
+  "mail.account_create_login_unverified": "Posta kutusu oluşturuldu, ama GİRİŞ KAYDININ yazıldığı ÖLÇÜLEMEDİ. Giriş kaydı yoksa hesap listede görünür ama IMAP/SMTP'ye GİRİŞ YAPILAMAZ; parolayla bir kez oturum açarak sınayın.",
   "mail.account_delete_not_applied": "Posta kutusu SİLİNEMEDİ: yazma sonrası hâlâ listede. Giriş kaydı da duruyor olabilir.",
   "mail.account_delete_login_survived": "Posta kutusu silindi ama GİRİŞ KAYDI SİLİNMEDİ: hesap hâlâ posta okuyabilir/gönderebilir. Giriş kaydını mail sunucusu yönetiminden silin.",
   "mail.account_delete_login_unverified": "Posta kutusunun silindiği ölçüldü, GİRİŞ KAYDININ silindiği ÖLÇÜLEMEDİ. Silinen hesabın posta erişimi sürüyor olabilir; elle doğrulayın.",

@@ -2423,11 +2423,46 @@ der · dagitim listeleri hala 409 · olculmus bos dinleyici listesi hala "yok" d
 
 **4853 test yesil** (baseline 4827 + 26). `scripts/devam-durumu.ps1`: SAGLAM.
 
-### BU TURDA BAKILMAYAN (sonraki tur icin)
+### KARDES ACIK -- `CreateAccountAsync`, `MEAOAU.Login` kaydi: ACIK, KAPANDI (sonraki tur)
 
-* `MailEnableMailService.CreateAccountAsync` giris kaydini OLUSTURUYOR ama olusturmayi
-  OLCMUYOR: kutu listede goruluyor, `AddLogin`'in tuttugu ayni kalibre sonda ile
-  dogrulanabilir (bu turda dokunulmadi -- kapsam uc adaydi).
+Olusturma HEM kutuyu HEM giris kaydini yaziyordu, ama yalniz KUTU dogrulaniyordu
+(`HesapVarMi`). `AddLogin()` sessizce basarisiz olursa panel "hesap acildi" der, kutu listede
+GORUNUR, **musteri IMAP/SMTP'ye GIRIS YAPAMAZ**. Silmenin kardesi.
+
+**KALIBRASYON SILMENIN AYNISI DEGIL -- kopyalanamaz.** Silmede `once` POZITIF KONTROLDUR
+(kayit islemden once VARDIR). Olusturmada kayit islemden once ZATEN YOKTUR: **pozitif kontrol
+KURULAMAZ.** Karar bu yuzden asimetrik:
+
+* KONTROL (imkansiz ad) DOLU -> sonda kor -> **OLCULEMEDI**.
+* ONCE DOLU -> kayit islemden once de vardi (yarim silinmis hesabin OKSUZ giris kaydi);
+  "sonra dolu" BIZIM yazdigimizi gostermez, kayit ESKI PAROLAYLA duruyor olabilir ->
+  **OLCULEMEDI**.
+* KONTROL BOS **ve** SONRA DOLU -> sonda ayni kosuda hem ayirt ediyor hem kaydi goruyor ->
+  **VAR** (tek olumlu dal; kapi acilir, panel sade "olusturuldu" der).
+* KONTROL BOS **ve** SONRA BOS -> **"OLUSTURULMADI" DENMEZ.** Kontrolun bos olmasi sondanin
+  FAZLADAN doldurmadigini gosterir, VAR OLANI gorebildigini KANITLAMAZ -> **OLCULEMEDI**.
+  Aksi halde `GetLogin`'i geri yazmayan CALISAN bir kurulumda her hesap acilisinda SAHTE HATA
+  uretirdik. `OlusturmaSondasiniYorumla` bu nedenle **`Yok` DONDURMEZ** (16 birlesimin tamami
+  sinanıyor).
+
+**KAPATMA:** `OlusturmaBetigi` -- sonda parcalari (`FabrikaBasligi`, `GirisSondasiBetigi`,
+`SondaCiktisi`) SILMEDEKININ AYNISI, ikinci nusha YOK. `[void]$mb.AddMailbox()` /
+`[void]$lg.AddLogin()` try/catch ile olculuyor; yutulan hatalar `AddMailbox:`/`AddLogin:`
+etiketiyle ayrintiya tasiniyor (`SilmeHatalari` govdesi `SondaHatalari`'ya cikarildi, etiketler
+cagri yerinden geliyor). `Olculemedi` -> `mail.account_create_login_unverified` (yeni i18n,
+tr+en). Sinamalar URETIM BETIGININ KENDISINI gercek `powershell.exe`'de kosturuyor
+(`$MeGirisFabrikasi`/`$MeKutuFabrikasi` kancasi); kaynak taramasi YOK.
+
+**MUTASYON (6/6 KIRMIZI):** bos dal `Yok` yapildi (6 sinama kirmizi) · `onceDoldu` ayagi
+dusuruldu (3) · "her durumda OLCULEMEDI de" cozumu (3 -- fazla kapatma nobetcisi tutuyor) ·
+kapi `Olculemedi`de sessizce acildi (2) · `AddLogin` try/catch'i kaldirildi (1) · negatif
+kontrol GERCEK kullaniciyla yapildi (2).
+
+**OLCULEMEYEN:** `CreateAccountAsync` GOVDESININ kapiyi cagirdigi COM olmadan kosturulamadi
+(MailEnable bu makinede yok; silme/parola yolunda da ayni bosluk var). Kapinin ve karar
+kuralinin KENDISI dogrudan sinaniyor.
+
+### BU TURDA BAKILMAYAN (sonraki tur icin)
 * `GetDnsRecordsAsync` MailEnable tarafinda SABIT kayit uretiyor (MX/SPF/DMARC); sunucunun
   gercek yapilandirmasindan okunmuyor.
 * `EnsureServerHostnameAsync` her zaman `false`; MailEnable karsilama adi hic olculmuyor.

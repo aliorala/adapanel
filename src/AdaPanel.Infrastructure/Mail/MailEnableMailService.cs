@@ -250,28 +250,15 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         var domain = request.Domain.Trim().ToLowerInvariant();
         var local = GetMailboxLocal(request.Address).ToLowerInvariant();
         var full = $"{local}@{domain}";
-        var password = request.Password;
 
-        var script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $mb = New-Object -ComObject 'MEAOPO.Mailbox'
-            $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
-            $mb.Mailbox = '{{PsLiteralRaw(local)}}'
-            $mb.Status = 1
-            $mb.Limit = -1
-            $mb.RedirectAddress = ''
-            $mb.RedirectStatus = 0
-            [void]$mb.AddMailbox()
-            $lg = New-Object -ComObject 'MEAOAU.Login'
-            $lg.Account = '{{PsLiteralRaw(domain)}}'
-            $lg.UserName = '{{PsLiteralRaw(full)}}'
-            $lg.Password = '{{PsLiteralRaw(password)}}'
-            $lg.Rights = 'USER'
-            $lg.Status = 1
-            [void]$lg.AddLogin()
-            'OK'
-            """;
-        await RunComAsync(script, cancellationToken);
+        // SILMENIN KARDESI: burada da IKI nesne yazilir (MEAOPO.Mailbox + MEAOAU.Login) ama
+        // eskiden yalniz KUTU dogrulaniyordu. `AddLogin()` sessizce basarisiz olursa (COM
+        // metotlari istisna degil TAMSAYI durum kodu doner; donus `[void]` ile atiliyordu)
+        // panel "hesap acildi" der, kutu listede GORUNUR -- ama musteri IMAP/SMTP'ye GIRIS
+        // YAPAMAZ. Kutunun varligi giris kaydinin varligini KANITLAMAZ; ayri olculur.
+        var json = await RunComAsync(OlusturmaBetigi(domain, local, full, request.Password), cancellationToken);
+        var sonda = SondayiOku(json);
+        var hatalar = OlusturmaHatalari(sonda);
 
         var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
         KapiAcVarlik(
@@ -280,7 +267,13 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             olmali: true,
             "mail.account_create_unverified",
             "mail.account_create_not_applied",
-            full);
+            $"{full} (posta kutusu){hatalar}");
+
+        OlusturmaGirisKapisiniAc(
+            OlusturmaSondasiniYorumla(sonda.Ayristirildi, sonda.OnceDoldu, sonda.KontrolDoldu, sonda.SonraDoldu),
+            full,
+            hatalar);
+
         return workspace;
     }
 
@@ -707,6 +700,10 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     //     iddia degil "olcemedim" der.
     //   * ONCE dolu ve KONTROL bos    -> sonda KALIBRE. Artik SONRA'nin dolu/bos olmasi
     //     dogrudan kaydin var/yok olmasidir.
+    //
+    // DIKKAT -- OLUSTURMADA KALIBRASYON BASKADIR: orada kayit islemden once ZATEN YOKTUR, yani
+    // POZITIF KONTROL KURULAMAZ ve yukaridaki kural OLDUGU GIBI KOPYALANAMAZ. Olusturmanin
+    // kurali ve neden "olusturulmadi" diyemedigimiz ayrica yazildi: OlusturmaSondasiniYorumla.
     // =====================================================================================
 
     /// <summary>
@@ -758,6 +755,43 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             $lg.Account = '{{PsLiteralRaw(domain)}}'
             $lg.UserName = '{{PsLiteralRaw(full)}}'
             try { [void]$lg.RemoveLogin() } catch { $girisHata = "$($_.Exception.Message)" }
+            {{GirisSondasiBetigi("sonra", domain, full, null)}}
+            {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
+            {{SondaCiktisi}}
+            """;
+
+    /// <summary>
+    /// Hesap olusturma betiginin TAM metni; sonda parcalari SILMEDEKININ AYNISIDIR (tek kaynak).
+    /// <b>PAROLA CIKTIYA YAZILMAZ:</b> sonda yalnizca <c>Rights</c> nobetcisini geri okur.
+    /// </summary>
+    /// <remarks>
+    /// Eskiden hem <c>AddMailbox()</c> hem <c>AddLogin()</c> <c>[void]</c> ile cagriliyor, donus
+    /// degeri atiliyordu. Artik ikisi de yakalanir ve sonuc GERI OKUNUR. <c>once</c> sondasi
+    /// islemden ONCE kosar: burada POZITIF KONTROL degil, IKINCI BIR NEGATIF KONTROLDUR
+    /// (bkz. <see cref="OlusturmaSondasiniYorumla"/>).
+    /// </remarks>
+    internal static string OlusturmaBetigi(string domain, string local, string full, string parola)
+        => $$"""
+            $ErrorActionPreference = 'Stop'
+            {{FabrikaBasligi}}
+            {{GirisSondasiBetigi("once", domain, full, null)}}
+            $kutuHata = ''
+            $mb = & $MeKutuFabrikasi
+            $mb.Postoffice = '{{PsLiteralRaw(domain)}}'
+            $mb.Mailbox = '{{PsLiteralRaw(local)}}'
+            $mb.Status = 1
+            $mb.Limit = -1
+            $mb.RedirectAddress = ''
+            $mb.RedirectStatus = 0
+            try { [void]$mb.AddMailbox() } catch { $kutuHata = "$($_.Exception.Message)" }
+            $girisHata = ''
+            $lg = & $MeGirisFabrikasi
+            $lg.Account = '{{PsLiteralRaw(domain)}}'
+            $lg.UserName = '{{PsLiteralRaw(full)}}'
+            $lg.Password = '{{PsLiteralRaw(parola)}}'
+            $lg.Rights = 'USER'
+            $lg.Status = 1
+            try { [void]$lg.AddLogin() } catch { $girisHata = "$($_.Exception.Message)" }
             {{GirisSondasiBetigi("sonra", domain, full, null)}}
             {{GirisSondasiBetigi("kontrol", domain, KontrolKullanicisi(domain), null)}}
             {{SondaCiktisi}}
@@ -867,6 +901,46 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     }
 
     /// <summary>
+    /// OLUSTURMANIN KARARI. <b>SILMEDEKI KURAL BURAYA KOPYALANAMAZ</b> -- kalibrasyon farklidir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Silmede sonda UC ayakli kalibre edilir: <c>once</c> POZITIF KONTROLDUR (kayit islemden
+    /// once VARDIR; sonda onu goruyorsa "var olani gorebiliyor" KANITLANMIS olur), <c>kontrol</c>
+    /// negatif kontroldur. Olusturmada <b>POZITIF KONTROL YOKTUR</b>: kayit islemden once zaten
+    /// yoktur, yani sondanin VAR OLAN bir kaydi gorebildigini gosterecek hicbir ayak yoktur.
+    /// Dolayisiyla asimetrik bir karar cikar:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>KONTROL DOLU</b> -> sonda var olmayan kaydi da dolduruyor (kor sonda);
+    /// <c>sonra</c>'nin dolulugu hicbir sey kanitlamaz -> OLCULEMEDI.</item>
+    /// <item><b>ONCE DOLU</b> -> kayit islemden ONCE de vardi (orn. yarim silinmis bir hesabin
+    /// artik giris kaydi). <c>sonra</c>'nin dolu olmasi bizim <c>AddLogin</c>'imizin yazdigini
+    /// GOSTERMEZ: kayit ESKI PAROLAYLA duruyor olabilir -> OLCULEMEDI.</item>
+    /// <item><b>KONTROL BOS + SONRA DOLU</b> -> sonda ayni kosuda hem ayirt ediyor (imkansiz ad
+    /// BOS) hem de kaydi goruyor (yeni ad DOLU) -> VAR. Tek olumlu dal budur.</item>
+    /// <item><b>KONTROL BOS + SONRA BOS</b> -> <b>"OLUSTURULMADI" DENMEZ.</b> Kontrolun bos
+    /// cikmasi sondanin FAZLADAN doldurmadigini gosterir; VAR OLANI gorebildigini KANITLAMAZ.
+    /// Sonda bu sunucuda hep bos donuyor olabilir (orn. MailEnable <c>Rights</c>'i geri
+    /// yazmiyordur). Bu dala "basarisiz" demek CALISAN bir kurulumda SAHTE HATA uretirdi
+    /// -> OLCULEMEDI.</item>
+    /// </list>
+    /// <para>
+    /// Sonuc: bu fonksiyon <see cref="GirisKaydiOlcumu.Yok"/> DONDURMEZ. Olusturmada "giris
+    /// kaydi YOK" iddiasini destekleyecek bir olcum yoktur; en kotu durum "olcemedim"dir.
+    /// </para>
+    /// </remarks>
+    internal static GirisKaydiOlcumu OlusturmaSondasiniYorumla(bool ayristirildi, bool onceDoldu, bool kontrolDoldu, bool sonraDoldu)
+    {
+        if (!ayristirildi || kontrolDoldu || onceDoldu)
+        {
+            return GirisKaydiOlcumu.Olculemedi;
+        }
+
+        return sonraDoldu ? GirisKaydiOlcumu.Var : GirisKaydiOlcumu.Olculemedi;
+    }
+
+    /// <summary>
     /// Parola sonucu. <b>ESLESMEME HATA DEGILDIR:</b> MailEnable parolayi ozetleyerek saklarsa
     /// geri okunan deger istenene esit olmaz; buna "uygulanmadi" demek SAHTE HATA olurdu.
     /// O yuzden yalnizca birebir esitlik DOGRULAMA sayilir, gerisi "dogrulanamadi".
@@ -927,6 +1001,32 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     }
 
     /// <summary>
+    /// OLUSTURMA GIRIS KAYDI KAPISI. IKI cumle vardir, uc degil: olculdu-var / OLCULEMEDI.
+    /// "Giris kaydi olusmadi" cumlesi YOKTUR, cunku onu destekleyen bir olcum yoktur
+    /// (bkz. <see cref="OlusturmaSondasiniYorumla"/>).
+    /// </summary>
+    /// <remarks>
+    /// <b>ANAHTARLAR ELDE KURULMAZ</b> -- i18n kullanim kapisi yalnizca kaynakta HARFI HARFINE
+    /// gecen anahtarlari gorur.
+    /// </remarks>
+    internal static void OlusturmaGirisKapisiniAc(GirisKaydiOlcumu olcum, string adres, string olusturmaHatalari)
+    {
+        if (olcum == GirisKaydiOlcumu.Var)
+        {
+            // OLCULDU: kayit yazildi. Panel sade "olusturuldu" der; sahte uyari uretmez.
+            return;
+        }
+
+        throw new AppException(
+            "mail.account_create_login_unverified",
+            500,
+            500,
+            $"{adres}: posta kutusu olusturuldu, ama MEAOAU.Login kaydinin yazildigi OLCULEMEDI "
+            + $"(sonda bu sunucuda kaydi ayirt edemedi). Giris kaydi yoksa hesap listede GORUNUR ama IMAP/SMTP'ye GIRIS YAPILAMAZ; "
+            + $"parolayla bir kez oturum acarak sinayin.{olusturmaHatalari}");
+    }
+
+    /// <summary>
     /// PAROLA KAPISI. YALNIZ "uygulanmadi" firlatir: "dogrulanamadi" bir HATA DEGILDIR
     /// (parola yazilmis olabilir), o yuzden kullaniciya cumle olarak soylenir.
     /// </summary>
@@ -965,22 +1065,33 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             : workspace.StatusMessage + " " + not;
     }
 
-    /// <summary>Yutulan silme hatalari; bos degilse ayrintiya EKLENIR (once tamamen kayboluyordu).</summary>
-    internal static string SilmeHatalari(GirisSondaOkumasi sonda)
+    /// <summary>
+    /// Yutulan COM hatalari; bos degilse ayrintiya EKLENIR (once tamamen kayboluyordu).
+    /// Etiketler cagri yerinden gelir: silmede Remove*, olusturmada Add*.
+    /// </summary>
+    internal static string SondaHatalari(GirisSondaOkumasi sonda, string kutuEtiketi, string girisEtiketi)
     {
         var parcalar = new List<string>();
         if (!string.IsNullOrWhiteSpace(sonda.KutuHata))
         {
-            parcalar.Add("RemoveMailbox: " + sonda.KutuHata.Trim());
+            parcalar.Add(kutuEtiketi + ": " + sonda.KutuHata.Trim());
         }
 
         if (!string.IsNullOrWhiteSpace(sonda.GirisHata))
         {
-            parcalar.Add("RemoveLogin: " + sonda.GirisHata.Trim());
+            parcalar.Add(girisEtiketi + ": " + sonda.GirisHata.Trim());
         }
 
         return parcalar.Count == 0 ? string.Empty : " [" + string.Join("; ", parcalar) + "]";
     }
+
+    /// <summary>Yutulan SILME hatalari.</summary>
+    internal static string SilmeHatalari(GirisSondaOkumasi sonda)
+        => SondaHatalari(sonda, "RemoveMailbox", "RemoveLogin");
+
+    /// <summary>Yutulan OLUSTURMA hatalari.</summary>
+    internal static string OlusturmaHatalari(GirisSondaOkumasi sonda)
+        => SondaHatalari(sonda, "AddMailbox", "AddLogin");
 
     /// <summary>Sonda ciktisinin ayristirilmis hali.</summary>
     internal readonly record struct GirisSondaOkumasi(

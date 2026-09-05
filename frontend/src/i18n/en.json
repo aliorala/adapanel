@@ -5158,6 +5158,7 @@
   "mail.domain_delete_unverified": "The deletion was written but the result COULD NOT BE MEASURED. We are not claiming it was deleted.",
   "mail.account_create_not_applied": "The mailbox was NOT CREATED: it was not found in the list after the write.",
   "mail.account_create_unverified": "The mailbox was written but the result COULD NOT BE MEASURED. We are not claiming it was created.",
+  "mail.account_create_login_unverified": "The mailbox was created, but whether the LOGIN RECORD was written COULD NOT BE MEASURED. Without a login record the account shows up in the list but CANNOT SIGN IN to IMAP/SMTP; verify by signing in once with the password.",
   "mail.account_delete_not_applied": "The mailbox was NOT DELETED: it is still listed after the write. The login record may also survive.",
   "mail.account_delete_login_survived": "The mailbox was deleted but the LOGIN RECORD was NOT: the account can still read/send mail. Delete the login record from the mail server's management console.",
   "mail.account_delete_login_unverified": "The mailbox was measured as deleted, but the removal of the LOGIN RECORD COULD NOT BE MEASURED. The deleted account may still have mail access; verify it manually.",
