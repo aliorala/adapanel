@@ -60,13 +60,15 @@ public interface IAuthService
     /// Hedef kullanıcı için TEK KULLANIMLIK, kısa ömürlü bir giriş bağlantısı üretir (faturalama
     /// sisteminin "Panele git" düğmesi). Yetki denetimi parola belirlemeyle AYNI kuraldan geçer.
     /// </summary>
-    /// <param name="requestHost">
-    /// Panel adresi ayarlarda boşsa kullanılacak yedek adres (isteğin <c>Host</c> başlığı).
-    /// </param>
+    /// <remarks>
+    /// Bağlantının ana adı YALNIZCA panelin yapılandırılmış adresinden kurulur. Burada eskiden
+    /// isteğin <c>Host</c> başlığını taşıyan bir <c>requestHost</c> yedeği vardı; başlık istemcinin
+    /// serbest metni olduğu için giriş belirtecini yabancı bir ana ada götürebiliyordu ve ölçüldüğünde
+    /// yedeğin hiç devreye giremediği görüldü (bkz. <c>PanelAddress</c>).
+    /// </remarks>
     Task<SsoLinkDto> CreateSsoLinkAsync(
         Guid targetUserId,
         Guid actorUserId,
-        string? requestHost,
         string? ipAddress,
         CancellationToken cancellationToken = default);
 

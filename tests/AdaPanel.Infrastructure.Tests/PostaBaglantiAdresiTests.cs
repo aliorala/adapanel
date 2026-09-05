@@ -64,20 +64,31 @@ public sealed class PostaBaglantiAdresiTests
     }
 
     /// <summary>
-    /// FAZLA KAPATMA NÖBETÇİSİ: <c>ServerAddress</c> boş bırakılabilen bir alandır. Yedeği
-    /// kaldırmak, adresi ayarlamamış her kurulumda onay bağlantısını ÖLÜ göndermek olurdu.
+    /// Panel adresi boş bırakılsa BİLE <c>Host</c> başlığı gerçek bir abonenin kutusuna giremez.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu test eskiden TERSİNİ söylüyordu ("adres boşsa bağlantı istek adresinden üretilir") ve
+    /// düzeltmenin yarım kalan yerini sabitliyordu. Yedeğin gerekçesi — "adresi ayarlamamış
+    /// kurulumda bağlantı ölü gider" — ÖLÇÜLDÜ ve çöktü: panel adresini üreten tek kaynak
+    /// (<c>PanelPreferencesService</c>) o alanı asla boş bırakmıyor, dolayısıyla yedek üretimde hiç
+    /// devreye giremiyordu. Geriye yalnız istismar yüzeyi kalmıştı: bu uç KİMLİKSİZDİR ve panelin
+    /// KENDİ alan adından GERÇEK bir aboneye posta gönderttirir.
+    /// </para>
+    /// <para>
+    /// <b>MUTASYON NÖBETÇİSİ:</b> <c>ConfirmUrlTemplateAsync</c>'e <c>Host</c> yedeği geri konursa
+    /// bu test kırmızıya düşer.
+    /// </para>
+    /// </remarks>
     [Fact]
-    public async Task Panel_adresi_ayarli_degilse_baglanti_YINE_uretilir_istek_adresinden()
+    public async Task Panel_adresi_ayarli_degilse_bile_Host_basligi_baglantiya_GIREMEZ()
     {
-        using var duzenek = new Duzenek(sunucuAdresi: "", httpsPort: 8888, hostBasligi: "panel.ornek.com:8888");
+        using var duzenek = new Duzenek(sunucuAdresi: "", httpsPort: 8888, hostBasligi: "kotu.example");
 
         await duzenek.Denetleyici.RequestAsync(Liste, Abone, CancellationToken.None);
 
-        Assert.Contains(
-            "https://panel.ornek.com:8888/api/v1/public/mail-lists/unsubscribe/confirm?token=",
-            duzenek.Postaci.SonGovde,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("kotu.example", duzenek.Postaci.SonGovde, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(PanelAddress.UnknownHostPlaceholder, duzenek.Postaci.SonGovde, StringComparison.Ordinal);
     }
 
     /// <summary>

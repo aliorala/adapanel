@@ -208,8 +208,8 @@ public sealed class MailListPublicController(
     private static string PathOf(string action) => $"/api/v1/public/mail-lists/{action}";
 
     /// <summary>
-    /// Onay e-postasına konacak MUTLAK adresin şablonu. Ana ad, panelin KENDİ yapılandırılmış
-    /// adresinden gelir; <c>Host</c> başlığı yalnız adres hiç ayarlanmamışsa yedektir.
+    /// Onay e-postasına konacak MUTLAK adresin şablonu. Ana ad YALNIZCA panelin kendi
+    /// yapılandırılmış adresinden gelir; isteğin <c>Host</c> başlığı buraya HİÇ girmez.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -227,10 +227,14 @@ public sealed class MailListPublicController(
     /// ikinci bir kural yazmak, birinin düzeltilip ötekinin açık kalması demekti.
     /// </para>
     /// <para>
-    /// <b>Yedek neden KALDI (fazla kapatma sınırı):</b> <c>ServerAddress</c> kurulumda boş
-    /// bırakılabiliyor. Yedeği kaldırmak, adresi ayarlamamış her kurulumda onay bağlantısını
-    /// <c>&lt;sunucu-adresi&gt;</c> yer tutucusuyla ÖLÜ göndermek olurdu — yani özelliği kırardı.
-    /// Adres ayarlıyken <c>Host</c> başlığı artık HİÇ kullanılmaz.
+    /// <b>Yedek de KALDIRILDI (ilk düzeltme yarım kalmıştı).</b> İlk turda <c>Host</c>, "adres hiç
+    /// ayarlanmamışsa" diye yedek olarak bırakılmıştı; gerekçe, adresi ayarlamamış kurulumlarda
+    /// bağlantının <c>&lt;sunucu-adresi&gt;</c> yer tutucusuyla ölü gitmesiydi. O gerekçe ÖLÇÜLDÜ ve
+    /// YANLIŞ çıktı: <c>PanelPreferencesService.GetAsync</c> <c>ServerAddress</c>'i asla boş
+    /// bırakmaz (boşsa makinenin IPv4 adresini, o da yoksa makine adını yazar). Yani yedek yolu
+    /// üretimde hiç çalışmıyordu; yalnızca saldırganın seçtiği ana adı GERÇEK bir abonenin
+    /// kutusuna sokabilen bir kapı olarak duruyordu. Kaldırmak hiçbir çalışan senaryoyu bozmaz —
+    /// nöbetçi testler <c>PanelAdresiHostBasligiTests</c>'te.
     /// </para>
     /// </remarks>
     private async Task<string> ConfirmUrlTemplateAsync(CancellationToken cancellationToken)
@@ -238,8 +242,7 @@ public sealed class MailListPublicController(
         var preferences = await preferencesService.GetAsync(cancellationToken);
         var baseUrl = PanelAddress.BuildBaseUrl(
             preferences.ServerAddress,
-            preferences.PreferredHttpsPort,
-            fallbackHost: Request.Host.Value);
+            preferences.PreferredHttpsPort);
 
         return $"{baseUrl}{PathOf("unsubscribe/confirm")}?token={{token}}";
     }

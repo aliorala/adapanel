@@ -397,7 +397,7 @@ public sealed class OturumSonlandirmaTests
 
         public Task<Core.Dtos.Auth.SetUserPasswordResultDto> SetPasswordForUserAsync(Guid targetUserId, Core.Dtos.Auth.SetUserPasswordRequest request, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-        public Task<Core.Dtos.Auth.SsoLinkDto> CreateSsoLinkAsync(Guid targetUserId, Guid actorUserId, string? requestHost, string? ipAddress, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Core.Dtos.Auth.SsoLinkDto> CreateSsoLinkAsync(Guid targetUserId, Guid actorUserId, string? ipAddress, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<Core.Dtos.Auth.CurrentUserDto?> TryRedeemSsoTokenAsync(string token, string? ipAddress, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }

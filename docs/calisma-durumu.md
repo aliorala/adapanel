@@ -1101,6 +1101,12 @@ alan adindan kimlik avi baglantisi koydurabiliyordu (tiklanirsa tek kullanimlik 
 saldirgana giderdi). Artik adres `PanelAddress.BuildBaseUrl` ile panelin YAPILANDIRILMIS
 adresinden kurulur; `Host` yalniz `ServerAddress` bosken yedektir (kaldirilsaydi adres
 ayarlamamis kurulumlarda baglanti OLU giderdi).
+> **SONRADAN DUZELTILDI — bu paragrafin son cumlesi YANLISTI.** Yedegin dayandigi
+> "`ServerAddress` bos kalabilir" varsayimi olculdu ve cokdu: `PanelPreferencesService.GetAsync`
+> o alani asla bos birakmiyor. Yani yedek hic calismiyordu, yalnizca istismar yuzeyi olarak
+> duruyordu ve KALDIRILDI (ayni tur `AuthService.CreateSsoLinkAsync`'teki ikizini de kapatti).
+> Tam olcum ve mutasyon sonuclari icin dosyanin sonundaki
+> "`AllowedHosts: \"*\"` — OLCULDU, DOGRU YERDEN KAPATILDI" bolumune bak.
 
 **KAPATILAN 2 -- "DNS kayitlari yayinlandi" YALANI + bilinen kirik desen.**
 `DnsService.UpsertRecordsAsync` bolge IKINCIL ise / DNS rolu yoksa kayitlari yalniz panel
@@ -2591,3 +2597,79 @@ ayri bir is ve ayri bir risk (kilitlenme sayaci, brute-force korumasi tetiklenme
 **4891 test yesil / 0 kirmizi** (Core 2 + Infrastructure 4889; baseline 4879 + 10 yeni).
 Degisen dosyalar: `src/AdaPanel.Infrastructure/Mail/MailEnableMailService.cs`,
 `tests/AdaPanel.Infrastructure.Tests/MailEnableGirisKaydiSondasiTests.cs`.
+
+---
+
+## `AllowedHosts: "*"` — ÖLÇÜLDÜ, DOĞRU YERDEN KAPATILDI (ayar KASITEN gevşek bırakıldı)
+
+**Bulgunun kendisi bir açık DEĞİL.** Panel gelen her `Host` başlığını kabul ediyor
+(`appsettings.json` → `AllowedHosts: "*"`, boru hattında `UseHostFiltering` yok). Bu tek başına
+zararsızdır; zarar, o başlığın güvenlik-etkili bir KARARA girmesiyle oluşur. Bu yüzden önce
+başlığın nereye ulaştığı ölçüldü.
+
+### Host başlığı gerçekte nereye ulaşıyor (kaynaktan okundu)
+
+| Kullanım noktası | Ulaştığı yer | Etki |
+|---|---|---|
+| `AuthService.ResetPasswordAsync` (parola sıfırlama postası) | `PanelAddress.BuildEntryUrl` — Host HİÇ verilmiyor | **etki yok** |
+| `UserManagementService` (hoş geldin postası) | aynı, Host verilmiyor | **etki yok** |
+| `MailListPublicController` onay bağlantısı | `ServerAddress` boşsa Host yedeği | **GERÇEK: kimliksiz uç + panelin kendi alan adından gerçek aboneye giden posta** |
+| `AuthController` → `AuthService.CreateSsoLinkAsync` | `ServerAddress` boşsa Host yedeği | **GERÇEK: bağlantı TEK KULLANIMLIK GİRİŞ belirteci taşıyor** |
+| `MailController` webmail aç/tanıla | yalnız ÇAĞIRANA dönen URL; kalıcı durum (`WebmailState`) Host içermez | etki yok (kendi Host'unu bozan kendine zarar verir) |
+| `MailAutodiscoverController` | Host → alan adı; yanıt yalnız panelde TANIMLI alanlar için, sırsız | etki yok (aynı bilgi `emailaddress` alanıyla da alınır) |
+| `DbToolsProxyController` `X-Forwarded-Host` | phpMyAdmin mutlak URL'i; uç kimlik doğrulamalı, tarayıcı Host'u CSRF ile değiştirilemez | etki yok |
+| Çerez `Domain` / CORS / `UseForwardedHeaders` | hiçbiri yok / bilerek kapalı | etki yok |
+
+### Kök neden (yamanın altındaki asıl hata)
+
+`PanelAddress.BuildBaseUrl` bir `fallbackHost` parametresi taşıyordu: "panel adresi ayarlı
+değilse isteğin `Host` başlığını kullan". Gerekçesi "adres ayarlanmamış kurulumda bağlantı
+`<sunucu-adresi>` yer tutucusuyla ölü gider"di. **Gerekçe ölçüldü ve ÇÖKTÜ:**
+`PanelPreferencesService.GetAsync` bu alanı asla boş bırakmıyor — boşsa `ResolveServerAddress()`
+makinenin ilk loopback-olmayan IPv4 adresini, o da yoksa `Environment.MachineName`'i yazıyor.
+Yani yedek yolu üretimde HİÇ çalışmıyordu; duran tek şey istismar yüzeyiydi.
+
+### Seçilen strateji: (a) Host'u karara sokma — `AllowedHosts` DEĞİŞTİRİLMEDİ
+
+`fallbackHost` parametresi tipten kaldırıldı; `MailListPublicController` ve
+`AuthService.CreateSsoLinkAsync` artık adresi yalnız ayardan kuruyor (`CreateSsoLinkAsync`
+imzasından `requestHost` da düştü — açığın geri gelmesi artık DERLEME hatası).
+
+**`AllowedHosts` neden kısılmadı:** panele meşru olarak `localhost`, `127.0.0.1`, makinenin IP'si,
+makine adı, kurulumda verilen panel alan adı ve müşterinin SONRADAN eklediği alan adı üzerinden
+erişiliyor. Bu küme çalışma zamanında değişir; statik beyaz listeye çevrilseydi listede olmayan
+her adres 400 alırdı — müşteri kendi panelinden kilitlenirdi. Bu, kapatılan açıktan daha kötü bir
+arıza olurdu. Kapatılan şey isteğin KABULÜ değil, başlığın KARARA girmesidir.
+
+### Mutasyon (koruma kaldırıldı, kırmızı görüldü, geri kondu)
+
+| Mutasyon | Kırmızıya düşen test |
+|---|---|
+| A — onay bağlantısı yine `Request.Host`'tan kurulsun | **3** |
+| B — `ResolveServerAddress()` boş dönsün (yedeğin dayandığı varsayım) | **2** |
+| C — panel adresine port yazılmasın (fazla kapatma nöbetçisi) | **9** |
+
+### Testler
+
+Yeni: `tests/AdaPanel.Infrastructure.Tests/PanelAdresiHostBasligiTests.cs` (11 test) — kaldırılan
+yedeğin yerine geçen güvence (adres kaynağı asla boş dönmez) + fazla kapatma nöbetçileri
+(`localhost`, `127.0.0.1`, sunucu IP'si, makine adı, panel alan adı, 8890 portu, 443'te portsuz,
+gizli giriş yolu). Güncellenen: `PostaBaglantiAdresiTests` ve `AdminPasswordAndSsoTests` — ikisinde
+de "adres boşsa Host kullanılır" iddiası, "Host HİÇ giremez" iddiasıyla değiştirildi.
+
+**4902 test yeşil / 0 kırmızı** (Core 2 + Infrastructure 4900; baseline 4891 + 11 yeni).
+Değişen dosyalar: `src/AdaPanel.Infrastructure/Support/PanelAddress.cs`,
+`src/AdaPanel.Api/Controllers/MailListPublicController.cs`,
+`src/AdaPanel.Api/Controllers/AuthController.cs`,
+`src/AdaPanel.Infrastructure/Services/AuthService.cs`,
+`src/AdaPanel.Core/Interfaces/IAuthService.cs`, üç test dosyası.
+
+### AÇIK KALAN (bu turda kapatılmadı, ölçüldü)
+
+* `ServerAddress` otomatik çözüldüğünde makinenin İÇ IP'si olabilir (ör. `10.0.0.5`); NAT
+  arkasındaki bir sunucuda e-posta bağlantıları dışarıdan açılmaz. Bu Host'la ilgili DEĞİL —
+  kurulum sihirbazının panel adresini sorması/doğrulaması gereken ayrı bir eksik.
+* `PanelAddress.BuildBaseUrl` adresi biçimsel doğrulamıyor: yönetici `ServerAddress` alanına
+  `panel.ornek.com:8890` yazarsa `https://panel.ornek.com:8890:8888` çıkar; IPv6 (`::1`) köşeli
+  paranteze alınmaz. İkisi de YÖNETİCİ girdisidir (saldırgan girdisi değil), o yüzden bu turun
+  kapsamına alınmadı.

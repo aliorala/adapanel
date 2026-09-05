@@ -512,7 +512,6 @@ public sealed class AuthService(
     public async Task<SsoLinkDto> CreateSsoLinkAsync(
         Guid targetUserId,
         Guid actorUserId,
-        string? requestHost,
         string? ipAddress,
         CancellationToken cancellationToken = default)
     {
@@ -544,7 +543,12 @@ public sealed class AuthService(
         // muaftır çünkü onu TARAYICI gezer (aynı gerekçe /api/v1/dbtools için de yazılı). Belirtecin
         // kendisi 256 bitlik, tek kullanımlık ve dakikalık ömürlü; IP kısıtlaması da bu uçtan önce
         // uygulanmaya devam eder.
-        var url = PanelAddress.BuildBaseUrl(preferences.ServerAddress, preferences.PreferredHttpsPort, requestHost)
+        // ADRES İSTEKTEN DEĞİL AYARDAN: bu bağlantı tek kullanımlık bir GİRİŞ belirteci taşır ve
+        // müşterinin tarayıcısına yönlendirilir. Eskiden ayar boşsa isteğin `Host` başlığına
+        // düşülüyordu; `Host` istemcinin serbest metnidir, yani belirteci yabancı bir ana ada
+        // götüren bir bağlantı ürettirilebilirdi. Yedek kaldırıldı ve hiçbir şey kaybolmadı:
+        // `PanelPreferencesService` `ServerAddress`'i asla boş bırakmaz (bkz. PanelAddress belgesi).
+        var url = PanelAddress.BuildBaseUrl(preferences.ServerAddress, preferences.PreferredHttpsPort)
             + $"/api/v1/auth/sso?token={Uri.EscapeDataString(token)}";
 
         // BELİRTEÇ KAYDA YAZILMAZ; yalnız kimin kimin adına, ne zamana kadar geçerli bir bağlantı

@@ -168,13 +168,15 @@ public sealed class AuthController(
         Guid userId,
         CancellationToken cancellationToken)
     {
+        // ADRES İSTEKTEN ALINMAZ. Buradan eskiden `Request.Host.Value` geçiliyordu ("panel adresi
+        // ayarlarda boşsa isteğin geldiği adres kullanılsın" diye). `Host` istemcinin serbest
+        // metnidir — panel `AllowedHosts: "*"` ile gelen her ana adı kabul eder — ve bu bağlantı
+        // TEK KULLANIMLIK BİR GİRİŞ BELİRTECİ taşır. Ölçüldü: yedek yalnız `ServerAddress` boşken
+        // devreye girebiliyordu, ama `PanelPreferencesService` onu asla boş bırakmıyor; yani yedek
+        // hiçbir zaman çalışmıyordu, sadece istismar yüzeyi olarak duruyordu.
         var link = await authService.CreateSsoLinkAsync(
             userId,
             User.GetRequiredUserId(),
-            // Panel adresi ayarlarda boşsa isteğin geldiği adres kullanılır: faturalama sistemi
-            // panele hangi adresten bağlandıysa müşteri de o adrese yönlendirilir. Aksi hâlde
-            // bağlantı "<sunucu-adresi>" yer tutucusuyla üretilir ve tarayıcı onu açamaz.
-            Request.Host.Value,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 

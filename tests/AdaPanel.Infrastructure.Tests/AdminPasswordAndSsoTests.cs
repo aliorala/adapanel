@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text.Json.Nodes;
 using AdaPanel.Api.Security;
 using AdaPanel.Core.Common;
@@ -253,7 +253,7 @@ public sealed class AdminPasswordAndSsoTests
     {
         await using var duzenek = await Duzenek.OlusturAsync();
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null);
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null);
         var belirtec = Belirtec(bag.Url);
 
         var ilk = await duzenek.Servis.TryRedeemSsoTokenAsync(belirtec, "203.0.113.10");
@@ -268,7 +268,7 @@ public sealed class AdminPasswordAndSsoTests
         // olmasaydi, gunlugu okuyan biri kullanicinin hesabina girebilirdi.
         await using var duzenek = await Duzenek.OlusturAsync();
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null);
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null);
         var belirtec = Belirtec(bag.Url);
 
         Assert.NotNull(await duzenek.Servis.TryRedeemSsoTokenAsync(belirtec, null));
@@ -280,7 +280,7 @@ public sealed class AdminPasswordAndSsoTests
     {
         await using var duzenek = await Duzenek.OlusturAsync();
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null);
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null);
         var belirtec = Belirtec(bag.Url);
 
         // Omur dakikalarla olculuyor; testin beklemesi yerine deponun ZAMANI geriye alinir.
@@ -297,8 +297,8 @@ public sealed class AdminPasswordAndSsoTests
     {
         await using var duzenek = await Duzenek.OlusturAsync();
 
-        var eski = Belirtec((await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null)).Url);
-        var yeni = Belirtec((await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null)).Url);
+        var eski = Belirtec((await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null)).Url);
+        var yeni = Belirtec((await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null)).Url);
 
         Assert.Null(await duzenek.Servis.TryRedeemSsoTokenAsync(eski, null));
         Assert.NotNull(await duzenek.Servis.TryRedeemSsoTokenAsync(yeni, null));
@@ -319,7 +319,7 @@ public sealed class AdminPasswordAndSsoTests
         await using var duzenek = await Duzenek.OlusturAsync();
 
         var hata = await Assert.ThrowsAsync<AppException>(() => duzenek.Servis.CreateSsoLinkAsync(
-            duzenek.YabanciMusteri.Id, duzenek.Bayi.Id, null, null));
+            duzenek.YabanciMusteri.Id, duzenek.Bayi.Id, null));
 
         Assert.Equal("users.forbidden", hata.MessageKey);
     }
@@ -334,7 +334,7 @@ public sealed class AdminPasswordAndSsoTests
         await duzenek.DbContext.SaveChangesAsync();
 
         var hata = await Assert.ThrowsAsync<AppException>(() => duzenek.Servis.CreateSsoLinkAsync(
-            duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null));
+            duzenek.Musteri.Id, duzenek.Yonetici.Id, null));
 
         Assert.Equal("auth.user_inactive", hata.MessageKey);
     }
@@ -343,7 +343,7 @@ public sealed class AdminPasswordAndSsoTests
     public async Task Baglanti_uretildikten_SONRA_hesap_kapatilirsa_belirtec_REDDEDILIR()
     {
         await using var duzenek = await Duzenek.OlusturAsync();
-        var belirtec = Belirtec((await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null)).Url);
+        var belirtec = Belirtec((await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null)).Url);
 
         duzenek.Musteri.IsActive = false;
         await duzenek.DbContext.SaveChangesAsync();
@@ -361,7 +361,7 @@ public sealed class AdminPasswordAndSsoTests
         await using var duzenek = await Duzenek.OlusturAsync();
         duzenek.Kapsam.Askiyaal(duzenek.Musteri.Id);
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null);
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null);
 
         Assert.NotEmpty(Belirtec(bag.Url));
     }
@@ -371,22 +371,29 @@ public sealed class AdminPasswordAndSsoTests
     {
         await using var duzenek = await Duzenek.OlusturAsync();
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, null);
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null);
 
         Assert.StartsWith("https://panel.ornek.test:8890/api/v1/auth/sso?token=", bag.Url, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Panel_adresi_BOSSA_istegin_geldigi_adres_kullanilir()
+    public async Task Panel_adresi_BOSSA_bile_baglantiya_ISTEMCI_adresi_GIRMEZ()
     {
-        // Yer tutuculu ("<sunucu-adresi>") bir adres uretmek, tarayicinin acamayacagi olu bir
-        // baglanti dondurmek demekti.
+        // ESKI DAVRANIS (kaldirildi): panel adresi bosken baglanti isteğin `Host` basligindan
+        // kuruluyordu ve bu test "panel.local:9443" gorunmesini SART kosuyordu. Gerekce "yer
+        // tutuculu olu baglanti gondermeyelim"di; olculdu ve gerekce cokdu -- panel adresi
+        // uretimde asla bos olmuyor (PanelPreferencesService, bkz. asagidaki nobetci test), yani
+        // o yedek hic calismiyordu. Duran tek sey, TEK KULLANIMLIK GIRIS BELIRTECINI saldirganin
+        // sectigi bir ana ada goturebilen bir kapiydi.
+        //
+        // Yeni sozlesme: adres YALNIZ ayardan gelir. Ayar (yalniz testte kurulabilen) bos bir deger
+        // tasiyorsa baglanti yer tutucuyla OLU gider -- acilmayan baglanti, saldirgana giden
+        // calisan baglantidan iyidir.
         await using var duzenek = await Duzenek.OlusturAsync(panelAdresi: string.Empty);
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, "panel.local:9443", null);
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null);
 
-        Assert.StartsWith("https://panel.local:9443/api/v1/auth/sso?token=", bag.Url, StringComparison.Ordinal);
-        Assert.DoesNotContain(PanelAddress.UnknownHostPlaceholder, bag.Url, StringComparison.Ordinal);
+        Assert.StartsWith($"https://{PanelAddress.UnknownHostPlaceholder}/api/v1/auth/sso?token=", bag.Url, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -394,7 +401,7 @@ public sealed class AdminPasswordAndSsoTests
     {
         await using var duzenek = await Duzenek.OlusturAsync();
 
-        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, null, "203.0.113.10");
+        var bag = await duzenek.Servis.CreateSsoLinkAsync(duzenek.Musteri.Id, duzenek.Yonetici.Id, "203.0.113.10");
         var belirtec = Belirtec(bag.Url);
         await duzenek.Servis.TryRedeemSsoTokenAsync(belirtec, "198.51.100.7");
 
