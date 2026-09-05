@@ -160,6 +160,11 @@ public sealed partial class WebAdministrationSiteService(
 
     public async Task DeleteSiteAsync(string siteName, CancellationToken cancellationToken = default)
     {
+        // Portlar site KALDIRILMADAN ÖNCE okunur: sonrasında bağlama bilgisi kaybolur ve hangi
+        // kuralın silineceği bilinemez. Kuralın kendisi yazma işleminden SONRA kaldırılır --
+        // netsh bir dış süreçtir, IIS yazma bloğunun içine sokmak kilidi gereksiz uzatırdı.
+        var kuralPortlari = new List<int>();
+
         await ExecuteWriteAsync<object?>(serverManager =>
         {
             var sites = GetSitesCollection(serverManager);
@@ -175,6 +180,8 @@ public sealed partial class WebAdministrationSiteService(
             var rootApplication = GetRootApplication(site);
             var appPoolName = GetStringProperty(rootApplication, "ApplicationPoolName");
 
+            kuralPortlari.AddRange(MapSite(site).Bindings.Select(binding => binding.Port));
+
             InvokeMethod(sites, "Remove", site);
 
             if (IsManagedAppPool(appPoolName) && CountSitesUsingApplicationPool(sites, appPoolName) == 0)
@@ -189,6 +196,8 @@ public sealed partial class WebAdministrationSiteService(
 
             return null;
         }, "sites.write_failed", cancellationToken);
+
+        await RemoveFirewallRulesAsync(siteName, kuralPortlari, cancellationToken);
     }
 
     public Task<SiteDto> StartSiteAsync(string siteName, CancellationToken cancellationToken = default)
@@ -431,12 +440,41 @@ public sealed partial class WebAdministrationSiteService(
         File.WriteAllText(indexPath, html, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
+    /// <summary>
+    /// Sitenin gelen bağlantı kuralını var eder. ADI GEREĞİ İDEMPOTENTTİR — ve eskiden değildi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLDÜ (canlı kurulumda):</b> eski hâli doğrudan <c>netsh ... add rule</c> çağırıyordu.
+    /// <c>netsh add</c>, aynı adlı bir kural zaten varsa onu güncellemez — <b>yenisini ekler</b>.
+    /// Yani her çağrıda bir kopya birikiyordu; kurulu panelde
+    /// <c>AdaPanel Site AdaPanel.WebDb.PhpMyAdmin TCP 8896</c> Windows'ta İKİ KEZ kayıtlıydı.
+    /// Metodun adı "ensure" diyordu, davranışı "append"ti.
+    /// </para>
+    /// <para>
+    /// Doğru kalıp deponun kendi <c>FirewallService</c>'inde ZATEN vardı (önce
+    /// <c>Remove-NetFirewallRule</c>, sonra <c>New-NetFirewallRule</c>) — bu kardeş yola
+    /// uygulanmamıştı. Bu depoda tekrar eden sınıf: düzeltme bir yola konur, kardeşi sessizce
+    /// eski hâlde kalır.
+    /// </para>
+    /// <para>
+    /// Silme başarısızlığı YOK SAYILIR: eşleşen kural yoksa <c>netsh delete</c> sıfırdan farklı
+    /// döner ve bu BEKLENEN durumdur (ilk kurulum). Sonucu hata saymak, ilk kurulumu gürültüye
+    /// boğardı.
+    /// </para>
+    /// </remarks>
     private async Task EnsureFirewallRuleAsync(string siteName, int port, CancellationToken cancellationToken)
     {
-        var safeName = AppPoolNamePattern().Replace(siteName, "-");
+        var ruleName = SiteFirewallRuleName.For(siteName, port);
+
+        await ProcessRunner.RunAsync(
+            "netsh.exe",
+            $"advfirewall firewall delete rule name=\"{ruleName}\"",
+            cancellationToken: cancellationToken);
+
         var result = await ProcessRunner.RunAsync(
             "netsh.exe",
-            $"advfirewall firewall add rule name=\"AdaPanel Site {safeName} TCP {port}\" dir=in action=allow protocol=TCP localport={port}",
+            $"advfirewall firewall add rule name=\"{ruleName}\" dir=in action=allow protocol=TCP localport={port}",
             cancellationToken: cancellationToken);
 
         if (!result.Success)
@@ -445,6 +483,38 @@ public sealed partial class WebAdministrationSiteService(
                 "Site {SiteName} was created, but its firewall rule could not be added. Error: {Error}",
                 siteName,
                 result.StandardError);
+        }
+    }
+
+    /// <summary>
+    /// Sitenin güvenlik duvarı kurallarını kaldırır (site silinirken).
+    /// </summary>
+    /// <remarks>
+    /// <b>ÖLÇÜLDÜ:</b> silme yolu güvenlik duvarına HİÇ dokunmuyordu. Kurulu panelde, aylar önce
+    /// silinmiş <c>alioral.xyz</c> sitesinin <c>TCP 80</c> kuralı hâlâ duruyordu — yani panel
+    /// "site silindi" derken sunucuda o portu açık bırakan bir kural kalıyordu.
+    /// <para>
+    /// EN İYİ ÇABA: kural kaldırılamazsa silme geri alınmaz (site zaten gitti), ama SESSİZ de
+    /// geçilmez — hangi kuralın kaldığı günlüğe yazılır.
+    /// </para>
+    /// </remarks>
+    private async Task RemoveFirewallRulesAsync(string siteName, IEnumerable<int> ports, CancellationToken cancellationToken)
+    {
+        foreach (var port in ports.Distinct())
+        {
+            var ruleName = SiteFirewallRuleName.For(siteName, port);
+            var result = await ProcessRunner.RunAsync(
+                "netsh.exe",
+                $"advfirewall firewall delete rule name=\"{ruleName}\"",
+                cancellationToken: cancellationToken);
+
+            if (!result.Success)
+            {
+                logger.LogWarning(
+                    "Site {SiteName} was deleted, but its firewall rule '{RuleName}' could not be removed; the port may stay open.",
+                    siteName,
+                    ruleName);
+            }
         }
     }
 
