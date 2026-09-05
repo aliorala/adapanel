@@ -11,6 +11,17 @@ export type PanelPreferences = {
   defaultBackupRoot: string;
   serverAddress: string;
   /**
+   * `serverAddress` internetten açılabilecek bir ad/adres mi. SUNUCUNUN TÜRETTİĞİ salt okunur
+   * bilgi; PUT gövdesinde gönderilse de sunucu kendi hesabıyla ezer.
+   *
+   * Neden var: adres ayarlanmadığında sunucu makinenin iç IP'sini (192.168.x.x gibi) yazıyor ve
+   * müşteriye e-posta ile giden bağlantılar o adresi taşıyor — açılmıyorlar. Bayrak yalnız uyarı
+   * gösterir, hiçbir gönderimi engellemez (iç ağ kurulumunda o adres doğrudur).
+   *
+   * OPSİYONEL: alanı taşımayan mevcut varsayılan tercih nesnelerini bozmamak için.
+   */
+  serverAddressExternallyReachable?: boolean;
+  /**
    * Panelin dışarıya açıldığı alan adı (boş = pasif). SALT OKUNUR bir alandır: sahibi
    * "Panel erişimi" bölümüdür (api/panelAccess.ts). Genel ayarlar PUT'u bu alanı GÖNDERMEZ,
    * sunucu da önceki değeri korur — buradan yanlışlıkla sıfırlanamaz.

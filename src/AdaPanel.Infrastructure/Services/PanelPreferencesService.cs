@@ -26,6 +26,9 @@ public sealed class PanelPreferencesService(
             : settings.ServerAddress.Trim();
         // Alan adı karşılaştırmaları (IIS binding, SNI, DNS) küçük harf ve noktasızdır.
         settings.PanelHostName = (settings.PanelHostName ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
+        // TÜRETİLMİŞ: kayıtta ne yazarsa yazsın her okumada yeniden hesaplanır. Adres elle de
+        // değişebilir, otomatik de çözülebilir; ikisinde de uyarının doğru olması gerekiyor.
+        settings.ServerAddressExternallyReachable = PanelAddress.IsExternallyReachable(settings.ServerAddress);
         settings.RestartRequired = false;
         return settings;
     }
@@ -55,6 +58,12 @@ public sealed class PanelPreferencesService(
                 previous.AllowHttpFallback != request.AllowHttpFallback ||
                 previous.LoginLockoutMinutes != request.LoginLockoutMinutes
         };
+
+        // Kaydeden yönetici, yazdığı adresin dışarıdan açılıp açılmayacağını YANITTA görsün:
+        // form kaydedildikten sonra uyarı yeni değere göre güncellenir (okuma yolu da aynı
+        // hesabı yapar; burada yapılmasa kaydeden kişi bir sonraki yüklemeye kadar eski
+        // uyarıyı görürdü).
+        settings.ServerAddressExternallyReachable = PanelAddress.IsExternallyReachable(settings.ServerAddress);
 
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultSiteRoot));
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultBackupRoot));

@@ -434,6 +434,15 @@
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.settings.serverAddress") }}</span>
             <input v-model="panelPreferences.serverAddress" />
+            <!-- Adres ayarlanmadığında sunucu makinenin İÇ IP'sini yazıyor (192.168.x.x gibi) ve
+                 müşteriye e-posta ile giden bağlantılar o adresi taşıyor: müşteri açamıyor, panel
+                 "gönderildi" diyordu. Uyarı ENGELLEMEZ — iç ağa kurulmuş panelde adres doğrudur.
+                 `=== false` bilerek: alan sunucudan gelmemişse (eski istemci/eksik yanıt) uyarı
+                 gösterilmez, çünkü o durumda uyarının doğru olduğunu bilmiyoruz. -->
+            <small
+              v-if="panelPreferences.serverAddressExternallyReachable === false"
+              class="field-hint warn-text"
+            >{{ t("panel.settings.serverAddressNotPublic") }}</small>
           </label>
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.settings.defaultSiteRoot") }}</span>

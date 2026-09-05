@@ -17,6 +17,28 @@ public sealed class PanelPreferencesDto
     public string ServerAddress { get; set; } = string.Empty;
 
     /// <summary>
+    /// <see cref="ServerAddress"/> internetten açılabilecek bir ad/adres mi (TÜRETİLMİŞ alan).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kayda yazılan bir tercih DEĞİLDİR; okuma yolunda <c>PanelAddress.IsExternallyReachable</c>
+    /// ile her seferinde yeniden hesaplanır (dosyada eski bir değer dursa bile ezilir).
+    /// </para>
+    /// <para>
+    /// <b>Neden var:</b> panel adresi ayarlanmadığında otomatik çözülen değer NAT arkasında
+    /// <c>192.168.1.5</c> gibi bir İÇ adrestir; müşteriye giden parola sıfırlama / hoş geldin /
+    /// abonelikten çıkma bağlantıları o adresi taşır ve AÇILMAZ. Bu bayrak yalnız yöneticiye
+    /// uyarı göstermek içindir — hiçbir gönderimi engellemez, çünkü iç ağa kurulmuş meşru bir
+    /// panelde aynı adres DOĞRUDUR.
+    /// </para>
+    /// <para>
+    /// Başlangıç değeri <c>false</c>: bilgi henüz yüklenmemişken "sorun yok" demek, tam da
+    /// kapatmaya çalıştığımız sessiz başarı bildirimi olurdu.
+    /// </para>
+    /// </remarks>
+    public bool ServerAddressExternallyReachable { get; set; }
+
+    /// <summary>
     /// Panelin DIŞARIYA açıldığı alan adı (ör. panel.ornek.com). BOŞ = özellik pasif.
     /// <para>
     /// Ne işe yarar: panel varsayılan olarak KENDİNDEN İMZALI bir sertifikayla çalışır. Tarayıcı bu

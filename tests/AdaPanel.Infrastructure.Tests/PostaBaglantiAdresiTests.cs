@@ -121,6 +121,34 @@ public sealed class PostaBaglantiAdresiTests
         Assert.Equal(0, duzenek.Postaci.GonderimSayisi);
     }
 
+    /// <summary>
+    /// <b>FAZLA KAPATMA NÖBETÇİSİ:</b> panel adresi İÇ AĞ adresiyken posta YİNE gönderilir ve
+    /// bağlantı o adresi taşır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Panel artık iç adresi tanıyor ve yöneticiye uyarı gösteriyor
+    /// (<c>PanelPreferencesDto.ServerAddressExternallyReachable</c> → Ayarlar formu + Danışman).
+    /// Uyarının BEDELİ olmamalı: şirket içi hosting ya da geliştirme kurulumunda
+    /// <c>192.168.1.5</c> DOĞRU adrestir ve abonelikten çıkma bağlantısı orada çalışır. "Adres
+    /// dışarıdan açılmıyorsa posta gönderme" gibi bir kısıt eklenirse bu test kırmızıya düşer —
+    /// çalışan bir kurulumu kırmak, kapatılan sorundan kötüdür.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Panel_adresi_IC_AG_adresi_olsa_bile_posta_GONDERILIR()
+    {
+        using var duzenek = new Duzenek(sunucuAdresi: "192.168.1.5", httpsPort: 8890, hostBasligi: "192.168.1.5:8890");
+
+        await duzenek.Denetleyici.RequestAsync(Liste, Abone, CancellationToken.None);
+
+        Assert.Equal(1, duzenek.Postaci.GonderimSayisi);
+        Assert.Contains(
+            "https://192.168.1.5:8890/api/v1/public/mail-lists/unsubscribe/confirm?token=",
+            duzenek.Postaci.SonGovde,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Gönderilen postanın ALICISI istekten değil, doğrulanmış abone kaydından gelir.</summary>
     [Fact]
     public async Task Alici_dogrulanmis_abone_adresidir()

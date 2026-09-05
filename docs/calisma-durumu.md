@@ -2673,3 +2673,112 @@ Değişen dosyalar: `src/AdaPanel.Infrastructure/Support/PanelAddress.cs`,
   `panel.ornek.com:8890` yazarsa `https://panel.ornek.com:8890:8888` çıkar; IPv6 (`::1`) köşeli
   paranteze alınmaz. İkisi de YÖNETİCİ girdisidir (saldırgan girdisi değil), o yüzden bu turun
   kapsamına alınmadı.
+
+---
+
+## Panel adresi İÇ AĞ adresi olduğunda e-posta bağlantıları ölüydü — ÖLÇÜLDÜ, UYARIYLA KAPATILDI
+
+Bir önceki turun "açık kalan" maddesi. Sorunun sınıfı bu oturumun ana temasıyla aynı:
+**panel okumadan başarı bildiriyordu.**
+
+### Ölçülen davranış (kaynaktan + makineden)
+
+`PanelPreferencesService.GetAsync` panel adresini asla boş bırakmıyor: boşsa
+`ResolveServerAddress()` makinenin ilk loopback-olmayan IPv4 adresini, o da yoksa
+`Environment.MachineName`'i yazıyor. Bu geliştirme makinesinde aday IPv4 adreslerinin **tamamı
+özel aralıkta** ve sıralamada ilk sırada bir **sanal ağ adaptörünün** adresi var — yani otomatik
+çözülen değer yalnızca "iç adres" değil, çoğu zaman makinenin gerçek LAN adresi bile değil.
+
+Bu değeri **müşteriye giden** bağlantılar taşıyor:
+
+| Kullanım | Nereye gidiyor |
+|---|---|
+| `AuthService.ResetPasswordAsync` | parola sıfırlama postası → müşterinin kutusu |
+| `UserManagementService` (hoş geldin postası) | yeni müşteriye giriş bağlantısı |
+| `MailListPublicController` onay bağlantısı | aboneye giden abonelikten çıkma postası |
+| `AuthService.CreateSsoLinkAsync` | yöneticinin müşteriye ilettiği tek kullanımlık giriş |
+
+NAT arkasındaki bir sunucuda müşteri bu bağlantıyı **açamaz**; panel "gönderildi" der ve hiçbir
+şey fark etmez.
+
+Aynı alanın **yalnız yerelde/idari olarak** kullanıldığı yerler bundan ayrıdır ve
+dokunulmadı: `DnsService` (varsayılan A kaydı IP'si), `FtpService`/`RemoteDbAccessService`
+(bağlantı bilgisi gösterimi), `MailService`/`MailDnsPublication` (posta DNS'i),
+`SiteHealthService`, `PanelPublicAccessService`.
+
+**Kurulum sihirbazı panel adresini SORMUYOR** (ölçüldü: `SetupWizardView.vue` `setupForm`
+alanları = kullanıcı adı, e-posta, parola, gizli giriş yolu, dil, HTTPS portu, önerilen
+bileşenler). Alan yalnız **Ayarlar > Genel > Sunucu adresi**'nde var ve boş bırakılırsa sunucu
+otomatik dolduruyor.
+
+### Seçilen strateji: ENGELLEME YOK, GÖRÜNÜR UYARI
+
+`PanelAddress.IsExternallyReachable(...)` adresi **biçimsel** olarak sınıflandırır (DNS sorgusu
+yok, bağlantı denemesi yok — ayar okuma yolu her istekte çağrılıyor, ağa bağlanamaz): özel
+aralıklar (10/8, 172.16/12, 192.168/16), loopback, bağlantı-yerel (169.254/16), taşıyıcı NAT
+(100.64/10), IPv6 loopback/link-local/unique-local, **tek etiketli makine adı** ve genel DNS'e
+delege edilmeyen son ekler (`localhost`, `.local`, `.home.arpa`, `.internal`, `.test`,
+`.invalid`, `.example`) → "dışarıdan açılmaz".
+
+Sonuç `PanelPreferencesDto.ServerAddressExternallyReachable` alanına yazılır (TÜRETİLMİŞ: her
+okumada yeniden hesaplanır, dosyadaki eski değere güvenilmez) ve **iki yerde yöneticiye
+gösterilir**:
+
+1. **Ayarlar > Genel > Sunucu adresi** alanının hemen altında satır içi uyarı
+   (`panel.settings.serverAddressNotPublic`).
+2. **Danışman** ekranında `panel-address-not-public` maddesi (severity `warning`, "Düzelt"
+   düğmesi Ayarlar'a götürür, detay olarak sorunlu adresin kendisi yazılır).
+
+**Neden engelleme değil:** iç ağa kurulmuş meşru bir panelde (şirket içi hosting, geliştirme
+kurulumu) `192.168.x.x` DOĞRU adrestir ve bağlantı orada çalışır. Gönderimi kesmek çalışan bir
+kurulumu kırardı — kapatılan sorundan kötü. Plesk de aynı yerde durur: hostname'i doğrular, NAT
+arkası için ayrı bir "public IP" alanı sunar, ama posta göndermeyi engellemez.
+
+**Neden kurulum sihirbazına alan eklenmedi:** kurulum anında DNS çoğu zaman henüz hazır
+değildir; alan ya boş bırakılır (aynı yere döneriz) ya da yanlış doldurulur, üstelik sonradan da
+yanlışlaşabilir. Uyarı, adres ne zaman ve nasıl ayarlanırsa ayarlansın çalışır. Ayarlar
+formundaki alan zaten mevcuttu; eksik olan, panelin değeri **okuması** idi.
+
+### Mutasyon (koruma kaldırıldı, kırmızı görüldü, geri kondu)
+
+| Mutasyon | Kırmızıya düşen test |
+|---|---|
+| A — `GetAsync` bayrağı hiç hesaplamasın | **3** |
+| B — `IsExternallyReachable` daima `true` (uyarı hiç çıkmaz) | **26** |
+| C — Danışman maddesi üretilmesin | **1** |
+| D — `IsExternallyReachable` daima `false` (FAZLA KAPATMA) | **16** |
+
+D özellikle önemli: fazla kapatma nöbetçisi gerçekten ateş ediyor — `panel.ornek.com`,
+`185.7.242.225`, `172.32.0.1`, `192.169.0.1` gibi GERÇEK adresler uyarı üretirse 16 test kırmızı.
+
+### Testler
+
+Yeni: `tests/AdaPanel.Infrastructure.Tests/PanelAdresiDisaridanErisimTests.cs` (43 test) —
+sınıflandırma tablosu (iç/dış, sınır komşuları dahil: `172.15`/`172.32`, `192.169`, `100.63`,
+`100.128`, `169.253`), tercih katmanının bayrağı üretmesi, kaydetme yanıtının uyarıyı
+güncellemesi, ve **gerçek `AdvisorService`** üzerinden uyarının rapora girmesi/girmemesi. Ek:
+`PostaBaglantiAdresiTests` içine fazla kapatma nöbetçisi — iç adresli kurulumda abonelikten
+çıkma postası **yine gönderilir** ve bağlantı o adresi taşır (1 test).
+
+**4946 test yeşil / 0 kırmızı** (Core 2 + Infrastructure 4944; baseline 4902 + 44 yeni).
+Frontend: typecheck/build/`npm test` (42) temiz, i18n TR/EN 5182 = 5182.
+
+Değişen dosyalar: `src/AdaPanel.Infrastructure/Support/PanelAddress.cs`,
+`src/AdaPanel.Core/Dtos/Settings/PanelPreferencesDto.cs`,
+`src/AdaPanel.Infrastructure/Services/PanelPreferencesService.cs`,
+`src/AdaPanel.Infrastructure/Advisor/AdvisorService.cs`,
+`frontend/src/api/panelSettings.ts`, `frontend/src/views/SetupWizardView.vue`,
+`frontend/src/i18n/tr.json`, `frontend/src/i18n/en.json`, iki test dosyası.
+
+### AÇIK KALAN (ölçüldü, kapsam dışı bırakıldı)
+
+* Sınıflandırma **biçimseldir**: `panel.ornek.com` için DNS kaydı olmasa da "dışarıdan
+  açılabilir" sayılır. Gerçek doğrulama (adı çözüp panelin IP'siyle karşılaştırmak, dışarıdan
+  bağlanmayı denemek) ağ gerektirir; ayar okuma yolu her istekte çağrıldığı için oraya
+  konamaz. Doğru yeri, zaten ağa çıkan `PanelPublicAccessService` (panel erişimi ekranı) olurdu.
+* Uyarı **kapatılamıyor**: iç ağda bilerek çalışan bir kurulumda Danışman'da kalıcı bir uyarı
+  maddesi durur. Danışman'da madde gizleme mekanizması hiç yok; eklemek ayrı bir iştir.
+* `PanelAddress.BuildBaseUrl` hâlâ biçim doğrulamıyor (`panel.ornek.com:8890` yazılırsa
+  `https://panel.ornek.com:8890:8888`; IPv6 köşeli paranteze alınmaz). Önceki turdan devreden
+  madde; yönetici girdisidir, bu turda da kapsama alınmadı.
+* Kurulum sihirbazı panel adresini hâlâ sormuyor (yukarıda gerekçesi yazılı).

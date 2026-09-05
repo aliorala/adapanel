@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Sockets;
+
 namespace AdaPanel.Infrastructure.Support;
 
 /// <summary>
@@ -77,5 +80,119 @@ public static class PanelAddress
         var yol = (securePath ?? string.Empty).Trim('/');
         var kok = BuildBaseUrl(serverAddress, httpsPort);
         return yol.Length == 0 ? kok : $"{kok}/{yol}";
+    }
+
+    /// <summary>
+    /// Panel adresi İNTERNETTEN açılabilecek bir ad/adres mi? (Yalnızca BİÇİMSEL sınıflandırma.)
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden var — ölçülmüş arıza:</b> panel adresi ayarlanmadığında
+    /// <c>PanelPreferencesService.ResolveServerAddress()</c> makinenin ilk loopback-olmayan IPv4
+    /// adresini yazar. NAT arkasındaki bir sunucuda bu <c>192.168.1.5</c> gibi bir İÇ adrestir
+    /// (ölçüldü: aday adreslerin tamamı özel aralıkta olabiliyor, üstelik ilk sıraya bir SANAL
+    /// ağ adaptörünün adresi düşebiliyor — yani seçilen değer gerçek LAN adresi bile
+    /// olmayabilir). Panelin müşteriye GÖNDERDİĞİ bağlantılar
+    /// (parola sıfırlama, hoş geldin postası, abonelikten çıkma onayı, tek kullanımlık giriş)
+    /// bu adresi taşır; müşteri bağlantıyı AÇAMAZ, panel ise "gönderildi" der. Panel kendi
+    /// adresinin ölü olduğunu hiç fark etmiyordu.
+    /// </para>
+    /// <para>
+    /// <b>Bu metot ENGELLEMEZ, SÖYLER.</b> Dönüş değeri hiçbir gönderimi durdurmaz; yalnız
+    /// yöneticiye gösterilen bir uyarıyı besler (Ayarlar &gt; Genel formu + Danışman ekranı).
+    /// Gerekçe: <c>192.168.x.x</c> bir kurulumda ARIZA, ötekinde DOĞRU adrestir (şirket içi
+    /// hosting, geliştirme kurulumu). Gönderimi kesmek, çalışan kurulumu kırardı — kapatılan
+    /// sorundan kötü. Plesk de aynı yerde durur: hostname/IP'yi doğrular ve NAT arkası için ayrı
+    /// bir "public IP" alanı sunar, ama posta göndermeyi engellemez.
+    /// </para>
+    /// <para>
+    /// <b>Sınıflandırma yalnız BİÇİMSELDİR</b> — DNS sorulmaz, bağlantı denenmez. "Genel" dönen
+    /// bir ad için DNS kaydı olmayabilir; ölçülen tek şey, adresin genel internette
+    /// ÇÖZÜLEBİLME İHTİMALİ olup olmadığıdır. Ağa çıkan bir kontrol, ayar okuma yolunu (her
+    /// istekte çağrılıyor) ağ gecikmesine bağlardı.
+    /// </para>
+    /// </remarks>
+    public static bool IsExternallyReachable(string? serverAddress)
+    {
+        var adres = (serverAddress ?? string.Empty).Trim().TrimEnd('.');
+        if (adres.Length == 0)
+        {
+            return false;
+        }
+
+        // IPv6 köşeli parantezli de yazılabilir ("[2001:db8::1]").
+        var cikarilan = adres.Length > 2 && adres[0] == '[' && adres[^1] == ']'
+            ? adres[1..^1]
+            : adres;
+
+        if (IPAddress.TryParse(cikarilan, out var ip))
+        {
+            return IsExternallyReachableAddress(ip);
+        }
+
+        // TEK ETİKETLİ ad (nokta yok): makine adı / NetBIOS adı. Genel DNS'te çözülmez —
+        // `ResolveServerAddress()` hiç IPv4 bulamadığında tam olarak bunu yazıyor.
+        if (!adres.Contains('.', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Genel DNS'e DELEGE EDİLMEYEN adlar (RFC 6761 `.test`/`.invalid`/`.example`/`localhost`,
+        // RFC 6762 `.local` mDNS, RFC 8375 `.home.arpa`, ICANN'in özel kullanıma ayırdığı
+        // `.internal`). Bunlar biçim olarak alan adına benzer ama internetten çözülmez.
+        foreach (var sonEk in CozulmeyenSonEkler)
+        {
+            if (adres.EndsWith(sonEk, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static readonly string[] CozulmeyenSonEkler =
+    [
+        ".localhost", ".local", ".home.arpa", ".internal", ".invalid", ".test", ".example"
+    ];
+
+    private static bool IsExternallyReachableAddress(IPAddress ip)
+    {
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            // IPv4-eşlenmiş IPv6 ("::ffff:192.168.1.5") gerçekte bir IPv4 adresidir.
+            if (ip.IsIPv4MappedToIPv6)
+            {
+                return IsExternallyReachableAddress(ip.MapToIPv4());
+            }
+
+            if (IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6Multicast)
+            {
+                return false;
+            }
+
+            // fc00::/7 — benzersiz yerel adresler (IPv6'nın 10.x karşılığı).
+            var v6 = ip.GetAddressBytes();
+            return (v6[0] & 0xFE) != 0xFC;
+        }
+
+        if (ip.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        var b = ip.GetAddressBytes();
+        return b[0] switch
+        {
+            0 => false,                                  // 0.0.0.0/8 — "bu ağ"
+            10 => false,                                 // 10/8 özel
+            127 => false,                                // 127/8 loopback
+            100 => b[1] < 64 || b[1] > 127,               // 100.64/10 taşıyıcı NAT (RFC 6598)
+            169 => b[1] != 254,                          // 169.254/16 bağlantı-yerel
+            172 => b[1] < 16 || b[1] > 31,                // 172.16/12 özel
+            192 => b[1] != 168,                          // 192.168/16 özel
+            >= 224 => false,                             // çoklu gönderim + ayrılmış + 255.255.255.255
+            _ => true
+        };
     }
 }

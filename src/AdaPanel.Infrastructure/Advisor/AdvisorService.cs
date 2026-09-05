@@ -19,6 +19,7 @@ public sealed class AdvisorService(
     IPanelSecurityService panelSecurityService,
     INotificationService notificationService,
     IAntivirusService antivirusService,
+    IPanelPreferencesService panelPreferencesService,
     JsonFileStore fileStore,
     ILogger<AdvisorService> logger) : IAdvisorService
 {
@@ -187,6 +188,41 @@ public sealed class AdvisorService(
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
             logger.LogWarning(exception, "Danışman kontrolü çalıştırılamadı: {Check}", "antivirus");
             failed.Add("antivirus");
+        }
+
+        // Panel adresi dışarıdan açılabilir mi.
+        //
+        // NEDEN BURADA: panel adresi ayarlanmadığında otomatik çözülen değer NAT arkasında
+        // makinenin İÇ IP'si olur (192.168.x.x / 10.x / 172.16-31.x), hiç IPv4 yoksa makine adı.
+        // Müşteriye giden parola sıfırlama, hoş geldin ve abonelikten çıkma bağlantıları bu
+        // adresi taşır; müşteri açamaz, panel "gönderildi" der. Panelin bunu KENDİSİNİN fark
+        // edip söylediği tek yer burasıdır.
+        //
+        // "warning" (kritik değil): iç ağa kurulmuş meşru bir panelde bu adres DOĞRUDUR; uyarı
+        // bir arıza iddiası değil, "internetten kullanılacaksa şunu ayarla" bilgisidir. Hiçbir
+        // e-posta gönderimi bu yüzden engellenmez.
+        try
+        {
+            var preferences = await panelPreferencesService.GetAsync(cancellationToken);
+            if (!preferences.ServerAddressExternallyReachable)
+            {
+                items.Add(new AdvisorItemDto
+                {
+                    Id = "panel-address-not-public",
+                    Severity = "warning",
+                    TitleKey = "advisor.panelAddress.title",
+                    DetailKey = "advisor.panelAddress.detail",
+                    Detail = preferences.ServerAddress,
+                    ActionSection = "settings"
+                });
+            }
+        }
+        catch (Exception exception)
+        {
+            // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
+            // ekranda yeşil tik ve "Her şey yolunda" görünür.
+            logger.LogWarning(exception, "Danışman kontrolü çalıştırılamadı: {Check}", "panelAddress");
+            failed.Add("panelAddress");
         }
 
         // Güvenlik ayarları: varsayılan gizli yol + IP kısıtı yok.
