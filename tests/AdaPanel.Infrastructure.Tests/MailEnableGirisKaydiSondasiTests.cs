@@ -737,4 +737,227 @@ public sealed class MailEnableGirisKaydiSondasiTests
             olusturma.MessageKey,
             new[] { "mail.command_failed", "mail.not_installed", "mail.account_create_unverified", "mail.account_create_login_unverified" });
     }
+
+    // =====================================================================================
+    // 6) GOVDE OLCUM DIKISI -- karar fonksiyonlarini GOVDE GERCEKTEN CAGIRIYOR MU?
+    //
+    // OLCULEN BOSLUK: yukaridaki bolumler sondayi (gercek powershell.exe'de) ve karar
+    // kurallarini (saf fonksiyon olarak) kapliyordu. Ama DeleteAccountAsync /
+    // SetAccountPasswordAsync GOVDESININ o kurallari CAGIRDIGI hicbir yerde olculmuyordu:
+    // govdedeki `GirisKapisiniAc(...)` ya da `KapiAcVarlik(...)` satiri silinse bu dosyanin
+    // TAMAMI YESIL kalirdi. Bu, depoda defalarca yakalanan "koruma yazildi ama kardes yol
+    // cagirmiyor" sinifinin ta kendisidir.
+    //
+    // DIKIS: MailEnableMailService.KomutKosucusu -- PowerShell'e cikan TEK nokta
+    // (RunComAsync) uretimde degismez, sinamada degistirilebilir. Betik SAHTELESTIRILMEZ:
+    // govdenin URETTIGI silme/parola betigi GERCEK powershell.exe'de, yalnizca COM'un yerine
+    // SahteCom stand-in'i konarak kosturulur. Ikinci cagri (calisma alani okumasi) kontrollu
+    // bir JSON ile karsilanir. Kaynak taramasi YOK.
+    // =====================================================================================
+
+    /// <summary>Govdenin PowerShell cagrilarini SIRAYLA karsilayan kanca; cagri sayisini da sayar.</summary>
+    private sealed class KomutKancasi(Func<int, string, Task<string>> yanit)
+    {
+        public List<string> Betikler { get; } = [];
+
+        public Task<string> CalistirAsync(string betik, CancellationToken cancellationToken)
+        {
+            Betikler.Add(betik);
+            return yanit(Betikler.Count - 1, betik);
+        }
+    }
+
+    private static MailEnableMailService Servis(KomutKancasi kanca)
+        => new(NullLogger<MailEnableMailService>.Instance) { KomutKosucusu = kanca.CalistirAsync };
+
+    /// <summary>Calisma alani okumasinin (WorkspaceOkuAsync) uretecegi bicimde JSON.</summary>
+    private static string CalismaAlaniJson(bool hesapDuruyor)
+        => hesapDuruyor
+            ? $$"""{"domains":[{"name":"{{Alan}}","status":1}],"accounts":[{"mailbox":"{{Yerel}}","status":1,"limit":-1}],"aliases":[]}"""
+            : $$"""{"domains":[{"name":"{{Alan}}","status":1}],"accounts":[],"aliases":[]}""";
+
+    /// <summary>Govdenin urettigi betigi GERCEK powershell.exe'de, SahteCom onekiyle kosturur.</summary>
+    private static async Task<string> SahteComUzerindeKosturAsync(string sahte, string govdeninBetigi)
+    {
+        var sonuc = await ProcessRunner.RunPowerShellAsync(sahte + "\n" + govdeninBetigi);
+        Assert.True(
+            sonuc.ExitCode == 0,
+            $"Govdenin urettigi betik GERCEK powershell.exe'de dusmemeli. Cikis={sonuc.ExitCode} Hata={sonuc.StandardError}");
+        return sonuc.StandardOutput;
+    }
+
+    /// <summary>
+    /// Ilk cagri = govdenin mutasyon betigi (gercek powershell + SahteCom); sonraki cagrilar =
+    /// calisma alani okumasi.
+    /// </summary>
+    private static KomutKancasi Kanca(string sahte, bool hesapDuruyor, bool calismaAlaniOkunabilir = true)
+        => new(async (sira, betik) => sira == 0
+            ? await SahteComUzerindeKosturAsync(sahte, betik)
+            : calismaAlaniOkunabilir
+                ? CalismaAlaniJson(hesapDuruyor)
+                : "MEAOPO calismadi: bu cikti JSON DEGIL");
+
+    // --- 6a) DeleteAccountAsync GOVDESI ---
+
+    /// <summary>
+    /// FAZLA KAPATMA NOBETCISI: mesru silme (kutu gitti + giris kaydi gitti) HATA VERMEZ ve
+    /// govde calisma alanini doner. Bu sinama olmadan "her seye firlat" cozumu yesil gorunurdu.
+    /// </summary>
+    [Fact]
+    public async Task Silme_GOVDESI_dogrulama_gecince_calisma_alanini_DONER()
+    {
+        var kanca = Kanca(SahteCom(), hesapDuruyor: false);
+
+        var alan = await Servis(kanca).DeleteAccountAsync(Adres);
+
+        Assert.Equal(2, kanca.Betikler.Count); // mutasyon betigi + calisma alani okumasi
+        Assert.Equal(Alan, alan.SelectedDomain);
+        Assert.Empty(alan.Accounts);
+    }
+
+    /// <summary>
+    /// GOVDE, GIRIS KAYDI KAPISINI CAGIRIYOR MU? Kutu gitti (calisma alani bos) ama
+    /// <c>RemoveLogin</c> hicbir sey yapmadi. Karar fonksiyonu bunu "Var" olcuyordu; artik
+    /// GOVDENIN o karari kullandigi da olculuyor.
+    /// </summary>
+    [Fact]
+    public async Task Silme_GOVDESI_giris_kaydi_DURUYORSA_basarili_DONMEZ()
+    {
+        var kanca = Kanca(SahteCom(silmeDavranisi: "inatci"), hesapDuruyor: false);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis(kanca).DeleteAccountAsync(Adres));
+
+        Assert.Equal("mail.account_delete_login_survived", hata.MessageKey);
+        Assert.Contains(Adres, hata.Details, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// GOVDE, "OLCULEMEDI" dalini da tasiyor mu? Sonda ayirt edemeyen sunucuda panel
+    /// "silindi" DEMEZ -- ama "duruyor" da demez.
+    /// </summary>
+    [Fact]
+    public async Task Silme_GOVDESI_sonda_AYIRT_EDEMEYINCE_silindi_DEMEZ()
+    {
+        var kanca = Kanca(SahteCom(girisDavranisi: "hep-doldurur"), hesapDuruyor: false);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis(kanca).DeleteAccountAsync(Adres));
+
+        Assert.Equal("mail.account_delete_login_unverified", hata.MessageKey);
+    }
+
+    /// <summary>
+    /// GOVDE, POSTA KUTUSU KAPISINI (<c>KapiAcVarlik</c>) CAGIRIYOR MU? Kutu calisma alaninda
+    /// HALA duruyor: silme uygulanmamistir.
+    /// </summary>
+    [Fact]
+    public async Task Silme_GOVDESI_posta_kutusu_DURUYORSA_basarili_DONMEZ()
+    {
+        var kanca = Kanca(SahteCom(), hesapDuruyor: true);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis(kanca).DeleteAccountAsync(Adres));
+
+        Assert.Equal("mail.account_delete_not_applied", hata.MessageKey);
+        Assert.Contains("posta kutusu", hata.Details, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// GOVDE, calisma alani OKUNAMADIGINDA da "silindi" demez: okunamayan liste "hesap yok"
+    /// DEGILDIR.
+    /// </summary>
+    [Fact]
+    public async Task Silme_GOVDESI_calisma_alani_OKUNAMAYINCA_silindi_DEMEZ()
+    {
+        var kanca = Kanca(SahteCom(), hesapDuruyor: false, calismaAlaniOkunabilir: false);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis(kanca).DeleteAccountAsync(Adres));
+
+        Assert.Equal("mail.account_delete_unverified", hata.MessageKey);
+    }
+
+    /// <summary>
+    /// GOVDE, YUTULAN COM hatasini (<c>SilmeHatalari</c>) ayrintiya tasiyor mu? Eski kod
+    /// <c>catch {}</c> ile bunu yok ediyordu.
+    /// </summary>
+    [Fact]
+    public async Task Silme_GOVDESI_yutulan_RemoveLogin_hatasini_AYRINTIYA_tasir()
+    {
+        var kanca = Kanca(SahteCom(silmeDavranisi: "firlatir"), hesapDuruyor: false);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis(kanca).DeleteAccountAsync(Adres));
+
+        Assert.Equal("mail.account_delete_login_survived", hata.MessageKey);
+        Assert.Contains("RemoveLogin:", hata.Details, StringComparison.Ordinal);
+        Assert.Contains("erisim reddedildi", hata.Details, StringComparison.Ordinal);
+    }
+
+    // --- 6b) SetAccountPasswordAsync GOVDESI ---
+    //
+    // DIKKAT -- BURADA YENI BIR DOGRULAMA ICAT EDILMEDI. Parola OKUNAMAZ; sondanin
+    // gorebildigi tek sey "giris kaydi islemden SONRA hala duruyor mu"dur (artı sunucu duz
+    // metin donduruyorsa esitlik). Asagidaki sinamalar govdenin MEVCUT kapiyi
+    // (ParolaKapisiniAc + ParolaNotunuYaz) cagirdigini olcer; yeni bir iddia getirmez.
+
+    /// <summary>
+    /// FAZLA KAPATMA NOBETCISI: parola geri okunabilen sunucuda govde FIRLATMAZ ve panelde
+    /// HICBIR uyari cizmez (StatusMessage hata seridi olarak cizilir).
+    /// </summary>
+    [Fact]
+    public async Task Parola_GOVDESI_dogrulaninca_uyari_YAZMAZ()
+    {
+        var kanca = Kanca(SahteCom(), hesapDuruyor: true);
+
+        var alan = await Servis(kanca).SetAccountPasswordAsync(
+            new SetMailAccountPasswordRequest { Address = Adres, Password = YeniParola });
+
+        Assert.Equal(2, kanca.Betikler.Count);
+        Assert.True(string.IsNullOrEmpty(alan.StatusMessage));
+    }
+
+    /// <summary>
+    /// GOVDE, PAROLA KAPISINI CAGIRIYOR MU? Kalibre sonda islemden SONRA kaydi bulamiyor:
+    /// parola UYGULANMAMISTIR ve govde basarili DONMEZ.
+    /// </summary>
+    [Fact]
+    public async Task Parola_GOVDESI_kayit_islemden_sonra_YOKSA_basarili_DONMEZ()
+    {
+        var kanca = Kanca(SahteCom(duzenlemeDavranisi: "yazmaz"), hesapDuruyor: true);
+
+        var hata = await Assert.ThrowsAsync<AppException>(() => Servis(kanca).SetAccountPasswordAsync(
+            new SetMailAccountPasswordRequest { Address = Adres, Password = YeniParola }));
+
+        Assert.Equal("mail.account_password_not_applied", hata.MessageKey);
+
+        // Kapi calisma alani okumasindan ONCE aciliyor: bosuna ikinci tur atilmiyor.
+        Assert.Single(kanca.Betikler);
+    }
+
+    /// <summary>
+    /// GOVDE, "dogrulanmadi" cumlesini (<c>ParolaNotunuYaz</c>) calisma alanina yaziyor mu?
+    /// Sunucu parolayi ozetliyorsa bu bir HATA DEGILDIR -- ama SESSIZ de kalmamalidir.
+    /// </summary>
+    [Fact]
+    public async Task Parola_GOVDESI_ozetleyen_sunucuda_FIRLATMAZ_ama_UYARIYI_yazar()
+    {
+        var kanca = Kanca(SahteCom(duzenlemeDavranisi: "ozetler"), hesapDuruyor: true);
+
+        var alan = await Servis(kanca).SetAccountPasswordAsync(
+            new SetMailAccountPasswordRequest { Address = Adres, Password = YeniParola });
+
+        Assert.Contains("DOGRULANMADI", alan.StatusMessage, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Sonda ayirt edemeyen sunucuda govde yine FIRLATMAZ (parola yazilmis olabilir) ama
+    /// "DOGRULANAMADI" der -- sessizce "tamam" DEMEZ.
+    /// </summary>
+    [Fact]
+    public async Task Parola_GOVDESI_sonda_AYIRT_EDEMEYINCE_sessiz_TAMAM_demez()
+    {
+        var kanca = Kanca(SahteCom(girisDavranisi: "hep-doldurur"), hesapDuruyor: true);
+
+        var alan = await Servis(kanca).SetAccountPasswordAsync(
+            new SetMailAccountPasswordRequest { Address = Adres, Password = YeniParola });
+
+        Assert.Contains("DOGRULANAMADI", alan.StatusMessage, StringComparison.Ordinal);
+    }
 }

@@ -20,6 +20,27 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// <b>GOVDE OLCUM DIKISI.</b> Bu sinifta PowerShell'e cikan TEK nokta
+    /// <see cref="RunComAsync"/>'dir; burasi degistirilebilir olunca mutasyon metotlarinin
+    /// GOVDESI (yalniz karar fonksiyonlari degil) MailEnable/COM olmadan olculebilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN GEREKTI.</b> Sonda ve karar fonksiyonlari (<see cref="GirisSondasiniYorumla"/>,
+    /// <see cref="GirisKapisiniAc"/> ...) sinamalarla kaplidiy di, ama GOVDENIN onlari GERCEKTEN
+    /// CAGIRDIGI hicbir yerde olculmuyordu: biri <see cref="DeleteAccountAsync"/> icinden
+    /// dogrulama cagrisini silse TEK BIR SINAMA BILE KIRMIZI OLMAZDI. Bu, depoda defalarca
+    /// yakalanan "koruma yazildi ama kardes yol cagirmiyor" hata sinifinin ta kendisidir.
+    /// </para>
+    /// <para>
+    /// Uretimde <c>null</c>'dir ve hicbir davranis degismez. Sinama, gercek
+    /// <c>powershell.exe</c>'de GOVDENIN URETTIGI betigi kosturup ciktisini geri verebilir --
+    /// yani dikis, olcumu SAHTELESTIRMEZ, yalnizca COM'un yerine stand-in koyar.
+    /// </para>
+    /// </remarks>
+    internal Func<string, CancellationToken, Task<string>>? KomutKosucusu { get; init; }
+
     private static string Ps32Path => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.Windows),
         "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -1176,6 +1197,12 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     private async Task<string> RunComAsync(string script, CancellationToken cancellationToken)
     {
+        // GOVDE OLCUM DIKISI (uretimde null; bkz. KomutKosucusu).
+        if (KomutKosucusu is not null)
+        {
+            return await KomutKosucusu(script, cancellationToken);
+        }
+
         var ps32 = Ps32Path;
         if (!System.IO.File.Exists(ps32))
         {

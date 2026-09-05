@@ -2395,9 +2395,10 @@ der · dagitim listeleri hala 409 · olculmus bos dinleyici listesi hala "yok" d
   Kapatma tam da bu yuzden konvansiyona degil KALIBRASYONA dayandirildi.
 * **Stalwart `MailService.GetListenersAsync`'in olculemeyen dali KOSTURULMADI** (Stalwart CLI
   bu makinede yok). Yapisal olarak `Measured` yalniz basari dalinda `true` yapiliyor.
-* **`DeleteAccountAsync`/`SetAccountPasswordAsync` govdesinin kapilari CAGIRDIGI** COM olmadan
-  kosturulamadi; kapilarin KENDISI (ve karar kurali) dogrudan sinaniyor -- bu, depodaki
-  `KapiAcVarlik` deseniyle ayni kapsama.
+* ~~**`DeleteAccountAsync`/`SetAccountPasswordAsync` govdesinin kapilari CAGIRDIGI** COM olmadan
+  kosturulamadi~~ -> **KAPANDI (06.09.2026, govde olcum dikisi):** bkz. asagidaki
+  "GOVDE OLCUM DIKISI" bolumu. Govdeler artik PowerShell/MailEnable olmadan kosturuluyor ve
+  kapilari cagirdiklari olculuyor.
 * **Arayuzun dinleyici uyarisini cizdigi** gercek tarayicida olculmedi (typecheck + build temiz).
 
 ### KIRILAN DAVRANISLAR (bilerek)
@@ -2461,6 +2462,8 @@ kontrol GERCEK kullaniciyla yapildi (2).
 **OLCULEMEYEN:** `CreateAccountAsync` GOVDESININ kapiyi cagirdigi COM olmadan kosturulamadi
 (MailEnable bu makinede yok; silme/parola yolunda da ayni bosluk var). Kapinin ve karar
 kuralinin KENDISI dogrudan sinaniyor.
+-> **Silme/parola icin KAPANDI (06.09.2026)**, bkz. "GOVDE OLCUM DIKISI". `CreateAccountAsync`
+govdesi ayni dikisle kosturulabilir durumda ama HENUZ SINANMADI (acik madde).
 
 ### BU TURDA BAKILMAYAN (sonraki tur icin)
 * `GetDnsRecordsAsync` MailEnable tarafinda SABIT kayit uretiyor (MX/SPF/DMARC); sunucunun
@@ -2509,3 +2512,82 @@ sonucu "hic yok"a cevirdi: guvenlik duvari kurallari (0 sanildi), stalwart ikili
 (yok sanildi), stalwart klasorleri (bos sanildi). Ucunde de gercek sebep erisim reddiydi.
 Bu, tam da bu turda panelde kapatilan sinifin (sorgu hatasi = bos sonuc) arac tarafindaki
 karsiligidir. Ders: dogrulama araci da uc degerli olmali -- var / yok / OKUYAMADIM.
+
+## GOVDE OLCUM DIKISI -- "koruma yazildi ama GOVDE cagiriyor mu?" (06.09.2026) -- commit ATILMADI
+
+**OLCULEN BOSLUK.** `MailEnableGirisKaydiSondasiTests` sondayi (gercek `powershell.exe`'de) ve
+karar kurallarini (saf fonksiyon olarak) kapliyordu; **GOVDENIN o kurallari cagirdigi
+HICBIR YERDE olculmuyordu**. `DeleteAccountAsync` icinden `GirisKapisiniAc(...)` satiri
+silinseydi 36 sinamanin TAMAMI YESIL kalirdi -- yani koruma "yazilmis ama cagrilmiyor"
+olabilirdi. Bu, bu depoda defalarca yakalanan sinifin ta kendisi.
+
+### DIKIS (en az degisiklik)
+
+PowerShell'e cikan TEK nokta olculdu: `MailEnableMailService.RunComAsync`. Butun mutasyon
+metotlari (silme/olusturma/parola/kota/alias/domain + calisma alani okumasi) oradan gecer.
+Eklenen tek sey:
+
+* `internal Func<string, CancellationToken, Task<string>>? KomutKosucusu { get; init; }`
+* `RunComAsync`'in ilk satirinda: `null` degilse cagrilir, degilse eskisi gibi 32-bit
+  `powershell.exe` kosar. **Uretimde `null`; hicbir davranis degismedi.** Yeni mimari YOK.
+
+**BETIK SAHTELESTIRILMEDI.** Sinama, GOVDENIN URETTIGI betigi (kopyasini degil) gercek
+`powershell.exe`'de, mevcut `SahteCom` COM stand-in'i onekiyle kosturur ve ciktisini govdeye
+geri verir; ikinci cagriyi (calisma alani okumasi) kontrollu bir JSON ile karsilar. Cagrilar
+SIRAYLA ayirt edilir -- betik metnine BAKILMAZ. Kaynak taramasi YOK.
+
+### YENI SINAMALAR (10, hepsi ayni dosyada -- bolum 6)
+
+Silme govdesi (6): dogrulama gecince calisma alani DONER (fazla kapatma nobetcisi) · giris
+kaydi DURUYORSA `mail.account_delete_login_survived` · sonda ayirt edemeyince
+`mail.account_delete_login_unverified` · posta kutusu DURUYORSA `mail.account_delete_not_applied`
+· calisma alani OKUNAMAYINCA `mail.account_delete_unverified` · yutulan `RemoveLogin` hatasi
+AYRINTIYA tasiniyor.
+
+Parola govdesi (4): dogrulaninca uyari YAZMAZ (fazla kapatma nobetcisi) · kayit islemden sonra
+YOKSA `mail.account_password_not_applied` **ve calisma alani okumasi HIC yapilmiyor** (tek
+PowerShell cagrisi) · ozetleyen sunucuda FIRLATMAZ ama "DOGRULANMADI" yazar · sonda ayirt
+edemeyince sessiz "tamam" DEMEZ, "DOGRULANAMADI" yazar.
+
+### MUTASYON KANITI (3 mutasyon, 8 sinama KIRMIZI)
+
+| Mutasyon | Kirmizi |
+|---|---|
+| M1: `DeleteAccountAsync` govdesinden `GirisKapisiniAc(...)` KALDIRILDI | **3** |
+| M2: `DeleteAccountAsync` govdesinden `KapiAcVarlik(...)` KALDIRILDI | **2** |
+| M3+M4: `SetAccountPasswordAsync` govdesinden `ParolaKapisiniAc` + `ParolaNotunuYaz` KALDIRILDI | **3** |
+
+Ucu de ESKI HALINE GETIRILDI (`git diff` yalniz EKLEME gosteriyor, 0 silme).
+
+### `SetAccountPasswordAsync` HAKKINDA DURUST BULGU
+
+**Yeni bir dogrulama ICAT EDILMEDI ve edilmemeli.** Parola sondasinin gorebildigi tek sey
+"giris kaydi islemden SONRA hala duruyor mu"dur; "parola DEGISTI mi" GORULEMEZ. Sunucu
+parolayi ozetleyerek sakliyorsa `Password` geri okundugunda yazilanla ESLESMEZ -- buna
+"uygulanmadi" demek CALISAN kurulumlarda SAHTE HATA uretirdi. Mevcut kural bunu zaten dogru
+yapiyor:
+
+* kayit SONRA YOK (sonda ONCE ayni kaydi BULMUSTU) -> **UYGULANMADI**, firlatir. Tek saglam
+  olumsuz iddia budur ve "parola yanlis yazildi" degil "kayit YOK" demektir.
+* kayit VAR + birebir esit -> **DOGRULANDI** (tek olumlu iddia).
+* kayit VAR + esit degil -> **GERI OKUNAMADI**, FIRLATMAZ.
+* kalibre edilemedi -> **OLCULEMEDI**, FIRLATMAZ.
+
+Yani parola yolunda kapatilabilir tek bosluk "govde bu kurali cagiriyor mu"ydu; o kapandi.
+**Kalan gercek bosluk (kapatilamaz):** yeni parolayla GERCEKTEN oturum acilabildigi
+olculmuyor. Bunun tek durust yolu panelin IMAP/SMTP'ye kendi giris denemesi yapmasidir --
+ayri bir is ve ayri bir risk (kilitlenme sayaci, brute-force korumasi tetiklenmesi).
+
+### ACIK KALAN
+
+* `CreateAccountAsync` govdesi ayni dikisle kosturulabilir ama HENUZ SINANMADI (silmenin
+  kardesi; ayni desen dogrudan uygulanir).
+* Kota / alias / domain govdeleri de ayni dikisi kullanabilir; onlarin `KapiAcVarlik`
+  cagrilari da govde duzeyinde olculmus DEGIL.
+* MailEnable bu makinede HALA YOK: COM durum kodu konvansiyonu, `GetLogin`'in eksik kayitta
+  gercek davranisi ve `Password`'un duz metin donup donmedigi olculmedi (kapatma bu yuzden
+  konvansiyona degil KALIBRASYONA dayaniyor).
+
+**4891 test yesil / 0 kirmizi** (Core 2 + Infrastructure 4889; baseline 4879 + 10 yeni).
+Degisen dosyalar: `src/AdaPanel.Infrastructure/Mail/MailEnableMailService.cs`,
+`tests/AdaPanel.Infrastructure.Tests/MailEnableGirisKaydiSondasiTests.cs`.
