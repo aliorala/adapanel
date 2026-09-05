@@ -745,7 +745,14 @@ async function save() {
     // tazelenir ki kullanıcı SUNUCUDA DURANI görsün, yazdığını değil.
     errorPagesText.value = saved.customErrorPages.map((page) => `${page.statusCode} ${page.path}`).join("\n");
     mimeTypesText.value = saved.mimeTypes.map((mime) => `${mime.extension} ${mime.mimeType}`).join("\n");
-    showNotice(t("panel.hosting.saved"), false);
+    // SADE YESIL "kaydedildi" ARTIK KOSULLU. Yazma bozuksa ya da IIS reddettiyse istek zaten
+    // hata dondurur (onceki icerik geri konur). Buraya duseni de OLCUME gore anlatiriz:
+    // IIS'e sorulamadiysa "kaydedildi" demeyiz.
+    if (saved.webConfigWrite && !saved.webConfigWrite.iisVerified) {
+      showNotice(t("panel.hosting.savedIisUnverified"), true);
+    } else {
+      showNotice(t("panel.hosting.saved"), false);
+    }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

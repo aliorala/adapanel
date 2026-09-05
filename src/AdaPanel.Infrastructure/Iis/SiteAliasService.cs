@@ -93,9 +93,14 @@ public sealed class SiteAliasService(
         }
 
         await KayitYazAsync(siteName, host, request.RedirectToPrimary, sil: false, cancellationToken);
-        YonlendirmeKuraliniYaz(site, await KayitlariOkuAsync(cancellationToken), ana);
 
-        return await GetAliasesAsync(siteName, cancellationToken);
+        // OLCUM SONUCA TASINIYOR. Eskiden bu cagrinin donusu YOKTU ve butun govdesi log-only
+        // bir catch icindeydi: kural hic yazilmasa da panel "yonlendirme acik" gosteriyordu.
+        var kuralOlcumu = YonlendirmeKuraliniYaz(site, await KayitlariOkuAsync(cancellationToken), ana);
+
+        var sonuc = await GetAliasesAsync(siteName, cancellationToken);
+        sonuc.RedirectRule = kuralOlcumu;
+        return sonuc;
     }
 
     /// <inheritdoc />
@@ -197,9 +202,11 @@ public sealed class SiteAliasService(
 
         await KayitYazAsync(siteName, host, redirect: false, sil: true, cancellationToken);
 
-        YonlendirmeKuraliniYaz(taze, await KayitlariOkuAsync(cancellationToken), AnaHost(taze));
+        var kuralOlcumu = YonlendirmeKuraliniYaz(taze, await KayitlariOkuAsync(cancellationToken), AnaHost(taze));
 
-        return await GetAliasesAsync(siteName, cancellationToken);
+        var sonuc = await GetAliasesAsync(siteName, cancellationToken);
+        sonuc.RedirectRule = kuralOlcumu;
+        return sonuc;
     }
 
     /// <summary>
@@ -217,12 +224,13 @@ public sealed class SiteAliasService(
     /// hedef kullanılır) — ziyaretçi güvenli bağlantıdan geldiyse güvenli kalır.
     /// </para>
     /// </remarks>
-    private void YonlendirmeKuraliniYaz(SiteDto site, IReadOnlyCollection<AliasKaydi> kayitlar, string anaHost)
+    private AliasRedirectRuleMeasurement YonlendirmeKuraliniYaz(SiteDto site, IReadOnlyCollection<AliasKaydi> kayitlar, string anaHost)
     {
         var kok = string.IsNullOrWhiteSpace(site.ApplicationRootPath) ? site.PhysicalPath : site.ApplicationRootPath;
         if (string.IsNullOrWhiteSpace(kok) || !Directory.Exists(kok))
         {
-            return;
+            // Belge kökü yoksa yazacak yer de yok: bu "kural yazıldı" DEĞİL, "ölçülemedi"dir.
+            return AliasRedirectRuleMeasurement.Olculemedi("Sitenin belge koku bulunamadi: " + kok);
         }
 
         var yonlendirilecek = kayitlar
@@ -276,12 +284,59 @@ public sealed class SiteAliasService(
             }
 
             belge.Save(webConfig);
+
+            // YAZDIĞINI GERİ OKU. Eskiden `belge.Save` bu bloğun SON ifadesiydi ve bütün blok
+            // yalnız-günlüğe-yazan bir catch içindeydi: "birincile yönlendir" kaydedilmiş
+            // görünüyor, kural hiç yazılmamış olabiliyordu.
+            var beklenenKural = yonlendirilecek.Length > 0 && anaHost.Length > 0;
+            var diskteKural = KuralDiskteVarMi(webConfig);
+            if (diskteKural is null)
+            {
+                return AliasRedirectRuleMeasurement.Olculemedi(
+                    "Yazilan web.config GERI OKUNAMADI: " + webConfig);
+            }
+
+            return new AliasRedirectRuleMeasurement
+            {
+                Measured = true,
+                RuleExpected = beklenenKural,
+                RulePresent = diskteKural.Value,
+                RedirectedHostCount = yonlendirilecek.Length,
+                Detail = $"{webConfig}: beklenen {(beklenenKural ? "var" : "yok")}, olculen {(diskteKural.Value ? "var" : "yok")}"
+            };
         }
         catch (Exception exception)
         {
             // Yönlendirme kuralı yazılamazsa takma ad YİNE ÇALIŞIR (bağlama duruyor); yalnız
-            // kanonik yönlendirme olmaz. Sessiz geçmiyoruz.
+            // kanonik yönlendirme olmaz — bu yüzden FIRLATMIYORUZ. Ama artık sessiz de
+            // geçmiyoruz: sonuç ÖLÇÜM olarak çağırana çıkıyor ve panel "yönlendirme açık"
+            // demeden önce ona bakıyor.
             logger.LogWarning(exception, "Takma ad yönlendirme kuralı yazılamadı: {Site}", site.Name);
+            return AliasRedirectRuleMeasurement.Olculemedi(exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Panelin KENDİ kuralı diskteki web.config'de duruyor mu? Dosya okunamazsa <c>null</c>
+    /// (ÖLÇÜLEMEDİ) — "yok" DEĞİL.
+    /// </summary>
+    internal static bool? KuralDiskteVarMi(string webConfig)
+    {
+        try
+        {
+            if (!File.Exists(webConfig))
+            {
+                // Dosya yoksa kural da yok; bu ÖLÇÜLMÜŞ bir "yok"tur.
+                return false;
+            }
+
+            return XDocument.Load(webConfig, LoadOptions.None)
+                .Descendants("rule")
+                .Any(item => (string?)item.Attribute("name") == RuleName);
+        }
+        catch (Exception exception) when (exception is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 

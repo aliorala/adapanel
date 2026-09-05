@@ -59,8 +59,43 @@ public sealed class AspController(
     {
         await CustomerAccess.EnsureSiteAsync(customerScopes, User, siteName, cancellationToken);
         var configuration = await aspNetService.EnableMixedHandlersAsync(siteName, request, cancellationToken);
-        await WriteAuditAsync("aspnet.mixed.updated", siteName, cancellationToken);
-        return Ok(ApiResponse<AspSiteConfigurationDto>.Ok(configuration, "aspnet.mixed_handlers_updated"));
+        await WriteAuditAsync("aspnet.mixed.updated", siteName, cancellationToken, HandlerOrderDetail(configuration));
+
+        // SADE "etkinleştirildi" ARTIK KOŞULLU. Handler listenin BAŞINA konamadıysa (devralınan
+        // StaticFile önde kalır) her .php/.asp isteği 404.3 döner; panel bunu "başarılı" diye
+        // yazıyordu. Ölçülemediyse de "başarılı" DEMEYİZ.
+        var notice = configuration.HandlerOrderNoticeKey;
+        return Ok(ApiResponse<AspSiteConfigurationDto>.Ok(
+            configuration,
+            notice.Length > 0 ? notice : "aspnet.mixed_handlers_updated"));
+    }
+
+    /// <summary>
+    /// Denetim kaydına ÖLÇÜLEN sırayı yazar — KISMI BAŞARIYI ADIYLA (hangi handler önümüzde).
+    /// </summary>
+    private static string HandlerOrderDetail(AspSiteConfigurationDto configuration)
+    {
+        static string Anlat(string etiket, HandlerOrderMeasurement olcum)
+            => olcum.Unverified
+                ? $"{etiket}: order UNVERIFIED"
+                : olcum.Missing
+                    ? $"{etiket}: handler MISSING after commit"
+                    : olcum.PrecedesCatchAll
+                        ? $"{etiket}: precedes catch-all (index {olcum.HandlerIndex})"
+                        : $"{etiket}: SHADOWED by '{olcum.BlockingHandlerName}' (index {olcum.CatchAllIndex} < {olcum.HandlerIndex}) -> 404.3";
+
+        var parcalar = new List<string>();
+        if (configuration.HasPhpHandler)
+        {
+            parcalar.Add(Anlat("php handler", configuration.PhpHandlerOrder));
+        }
+
+        if (configuration.ClassicAspEnabled)
+        {
+            parcalar.Add(Anlat("classic asp handler", configuration.ClassicAspHandlerOrder));
+        }
+
+        return parcalar.Count == 0 ? string.Empty : string.Join("; ", parcalar);
     }
 
     /// <remarks>
@@ -69,12 +104,12 @@ public sealed class AspController(
     /// kendileri olduğu için kiracının denetim görünümünde HİÇ çıkmıyordu. Konu artık sitenin
     /// abonelik sahibidir; site sahipsizse (yöneticinin kendi sitesi) boş kalır.
     /// </remarks>
-    private async Task WriteAuditAsync(string action, string siteName, CancellationToken cancellationToken)
+    private async Task WriteAuditAsync(string action, string siteName, CancellationToken cancellationToken, string detail = "")
     {
         await auditService.WriteForSubscriptionAsync(
             action,
             $"aspnet:{siteName}",
-            $"ASP/ASP.NET settings for '{siteName}' were updated.",
+            $"ASP/ASP.NET settings for '{siteName}' were updated.{(detail.Length > 0 ? " " + detail + "." : string.Empty)}",
             User.GetRequiredUserId(),
             await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),

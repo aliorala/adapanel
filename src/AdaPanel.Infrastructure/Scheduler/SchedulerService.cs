@@ -546,7 +546,23 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
         }
     }
 
-    public async Task<int> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Python klasörlerini MAKİNE PATH'ine ekler ve SONUCU GERİ OKUR.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA.</b> Eskiden dönen sayı <c>ADAPANEL-DEGISIKLIK</c>, yani EKLENMESİ
+    /// İSTENEN klasör sayısıydı; uç de tam onu "Python added to machine PATH (N folder(s))"
+    /// diye yazıyordu. <c>Set-ItemProperty</c>'de <c>-ErrorAction Stop</c> yoktu, koşucu
+    /// gevşekti ve GERİ OKUMA hiç yoktu. Yani HKLM'e hiçbir şey yazılmamış olabilirken panel
+    /// makine geneli bir değişikliği "yapıldı" diye raporluyordu.
+    /// </para>
+    /// <para>
+    /// <b>KAPATMA.</b> Betik yazmadan sonra PATH'i TAZE okur ve klasörlerin kaçının gerçekten
+    /// içeride olduğunu basar; dönen ölçüm ÜÇ DEĞERLİDİR.
+    /// </para>
+    /// </remarks>
+    public async Task<MachinePathMeasurement> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default)
     {
         var ortam = await GetEnvironmentAsync(cancellationToken);
         if (ortam.PythonInterpreters.Count == 0)
@@ -563,10 +579,23 @@ $info = Get-ScheduledTaskInfo -TaskName $gorev.TaskName -TaskPath $gorev.TaskPat
             throw new AppException("cron.path_update_failed", 500, 500, result.StandardError);
         }
 
-        var eslesme = Regex.Match(result.StandardOutput ?? string.Empty, @"ADAPANEL-DEGISIKLIK=(\d+)");
-        var eklenen = eslesme.Success ? int.Parse(eslesme.Groups[1].Value) : 0;
-        logger.LogInformation("Python makine PATH'ine eklendi: {Path} ({Count} klasor).", ortam.PythonInterpreters[0], eklenen);
-        return eklenen;
+        var olcum = MachinePathMeasurement.Olc(result.StandardOutput);
+        if (olcum.Applied)
+        {
+            logger.LogInformation(
+                "Python makine PATH'ine eklendi ve DOGRULANDI: {Path} ({Count} klasor).",
+                ortam.PythonInterpreters[0],
+                olcum.Verified);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Python makine PATH yazimi DOGRULANAMADI: {Path} ({Detail}).",
+                ortam.PythonInterpreters[0],
+                olcum.Detail);
+        }
+
+        return olcum;
     }
 
     /// <summary>

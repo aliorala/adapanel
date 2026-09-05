@@ -42,9 +42,18 @@ public sealed class SiteHostingSettingsController(
             siteName,
             $"Hosting settings for '{siteName}' were updated "
             + $"(custom error pages: {settings.CustomErrorPages.Length}, MIME maps: {settings.MimeTypes.Length}, "
-            + $"HSTS: {(settings.HstsEnabled ? $"on/max-age={settings.HstsMaxAgeSeconds}" : "off")}).",
+            + $"HSTS: {(settings.HstsEnabled ? $"on/max-age={settings.HstsMaxAgeSeconds}" : "off")}, "
+            // ÖLÇÜLEN GERÇEK: web.config diske indi mi, IIS onu okuyabiliyor mu. Bu satırdaki
+            // sayılar servisin BELLEKTE kurduğu DTO'dan geliyordu; artık yanında ölçüm de var.
+            + $"web.config: {(settings.WebConfigWrite.Verified ? "written+reread" : "UNVERIFIED")}"
+            + $"/{(settings.WebConfigWrite.IisProbed ? settings.WebConfigWrite.IisAccepted ? "iis-accepted" : "IIS-REJECTED" : "iis-unverified")}).",
             cancellationToken);
-        return Ok(ApiResponse<SiteHostingSettingsDto>.Ok(settings, "sites.hosting_settings_saved"));
+
+        // IIS'e sorulamadıysa panel sade "kaydedildi" DEMEZ.
+        var notice = settings.WebConfigWrite.NoticeKey;
+        return Ok(ApiResponse<SiteHostingSettingsDto>.Ok(
+            settings,
+            notice.Length > 0 ? notice : "sites.hosting_settings_saved"));
     }
 
     [HttpPost("composer-install")]

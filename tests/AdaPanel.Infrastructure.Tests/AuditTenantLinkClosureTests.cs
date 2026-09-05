@@ -539,7 +539,8 @@ public sealed class AuditTenantLinkClosureTests
 
         public Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task<int> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default) => Task.FromResult(2);
+        public Task<MachinePathMeasurement> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new MachinePathMeasurement { Measured = true, Expected = 2, Requested = 2, Verified = 2 });
 
         public Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

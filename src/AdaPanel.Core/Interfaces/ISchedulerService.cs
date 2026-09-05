@@ -34,7 +34,11 @@ public interface ISchedulerService
     /// Bulunan Python'u makine PATH'ine ekler; kaç klasörün eklendiğini döndürür (0 = zaten vardı).
     /// Yalnızca yönetici çağırmalıdır: sunucu geneli bir değişikliktir.
     /// </summary>
-    Task<int> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Python klasorlerini MAKINE PATH'ine ekler. Donen deger EKLENMESI ISTENEN sayi DEGIL,
+    /// yazmadan sonra GERI OKUNAN uc degerli olcumdur.
+    /// </summary>
+    Task<MachinePathMeasurement> AddPythonToMachinePathAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Görevi silmeden geçici olarak açar/kapatır.</summary>
     Task SetTaskEnabledAsync(string name, bool enabled, CancellationToken cancellationToken = default);

@@ -182,10 +182,30 @@ public sealed class CronController(
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<object>>> AddPythonToPathAsync(CancellationToken cancellationToken)
     {
-        var eklenen = await schedulerService.AddPythonToMachinePathAsync(cancellationToken);
-        // SUNUCU GENELİ: makine PATH'i bütün kiracıların görevlerini etkiler, tek bir aboneliğe ait değil.
-        await WriteServerAuditAsync("cron.python_path", $"Python added to machine PATH ({eklenen} folder(s)).");
-        return Ok(ApiResponse<object>.Ok(new { added = eklenen }, "cron.python_path_added"));
+        var olcum = await schedulerService.AddPythonToMachinePathAsync(cancellationToken);
+
+        // SUNUCU GENELİ: makine PATH'i bütün kiracıların görevlerini etkiler, tek bir aboneliğe
+        // ait değil — ve ÖLÇÜLMEDEN "eklendi" yazılamaz. Eski satır EKLENMESİ İSTENEN sayıyı
+        // "added" diye yazıyordu.
+        var durum = olcum.Applied
+            ? $"verified ({olcum.Verified}/{olcum.Expected} folder(s) present in machine PATH)"
+            : olcum.Unverified
+                ? $"UNVERIFIED ({olcum.Detail})"
+                : $"INCOMPLETE ({olcum.Verified}/{olcum.Expected} folder(s) present)";
+        await WriteServerAuditAsync("cron.python_path", $"Python machine PATH update: {durum}.");
+
+        var mesaj = olcum.NoticeKey.Length > 0 ? olcum.NoticeKey : "cron.python_path_added";
+        return Ok(ApiResponse<object>.Ok(
+            new
+            {
+                added = olcum.Requested,
+                verified = olcum.Verified,
+                expected = olcum.Expected,
+                measured = olcum.Measured,
+                applied = olcum.Applied,
+                detail = olcum.Detail
+            },
+            mesaj));
     }
 
     /// <summary>

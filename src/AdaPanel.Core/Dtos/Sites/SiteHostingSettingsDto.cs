@@ -46,4 +46,11 @@ public sealed class SiteHostingSettingsDto
     public bool HstsIncludeSubDomains { get; set; }
 
     public bool HstsPreload { get; set; }
+
+    /// <summary>
+    /// web.config'in DISKE indigi ve IIS'in onu okuyabildigi OLCUMU. Kayit yolunda doldurulur;
+    /// okuma yolunda (durum dosyasindan gelen kayitta) OLCULMEDI kalir -- cunku o an bir yazma
+    /// yapilmamistir ve gecmis bir olcumu bugunun gercegi gibi gostermek yalan olurdu.
+    /// </summary>
+    public WebConfigWriteMeasurement WebConfigWrite { get; set; } = WebConfigWriteMeasurement.Olculemedi();
 }

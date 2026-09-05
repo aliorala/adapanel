@@ -46,6 +46,16 @@ public sealed class SiteAliasWorkspaceDto
     public string PrimaryHostName { get; set; } = string.Empty;
 
     public IReadOnlyCollection<SiteAliasDto> Aliases { get; set; } = [];
+
+    /// <summary>
+    /// Kanonik yonlendirme kuralinin web.config'e GERCEKTEN yazildiginin olcumu. Yalniz YAZMA
+    /// yollarinda (ekle/sil) doldurulur; salt okuma yolunda OLCULMEDI kalir -- gecmis bir
+    /// olcumu bugunun gercegi gibi gostermeyiz.
+    /// </summary>
+    public AliasRedirectRuleMeasurement RedirectRule { get; set; } = AliasRedirectRuleMeasurement.Olculemedi();
+
+    /// <summary>Bos ise her sey olculdu ve yolunda; dolu ise gosterilecek uyari anahtari.</summary>
+    public string RedirectRuleNoticeKey => RedirectRule.NoticeKey;
 }
 
 /// <summary>Takma ad ekleme isteği.</summary>

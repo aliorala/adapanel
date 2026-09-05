@@ -15,6 +15,23 @@ export type SiteAliasWorkspace = {
   /** Yönlendirmenin hedefi olan ana alan adı; boşsa sitenin hiç host adı yok. */
   primaryHostName: string;
   aliases: SiteAlias[];
+  /**
+   * Kanonik yonlendirme kuralinin web.config'e GERCEKTEN yazildiginin UC DEGERLI olcumu.
+   * Yalniz ekle/sil yollarinda dolar; salt okumada OLCULMEDI kalir.
+   */
+  redirectRule?: {
+    measured: boolean;
+    ruleExpected: boolean;
+    rulePresent: boolean;
+    redirectedHostCount: number;
+    detail: string;
+    applied: boolean;
+    notApplied: boolean;
+    unverified: boolean;
+    noticeKey: string;
+  };
+  /** Bos ise olculdu ve yolunda; dolu ise gosterilecek uyari anahtari. */
+  redirectRuleNoticeKey?: string;
 };
 
 export async function getSiteAliases(siteName: string) {

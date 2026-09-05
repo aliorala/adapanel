@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Asp;
 using AdaPanel.Core.Dtos.Components;
 using AdaPanel.Core.Dtos.Php;
 using AdaPanel.Core.Entities;
@@ -11,6 +12,11 @@ using AdaPanel.Core.Interfaces;
 using AdaPanel.Data.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+
+// HANDLER SIRASI TEK KAYNAKTA. Bu dosyanın kendi yansıma yardımcıları var (Enumerate/InvokeMethod…),
+// bu yüzden `using static` ad çakıştırırdı; handler'a özgü üç yardımcı NİTELENEREK çağrılıyor.
+// Kopyalanan şey ARTIK yok: AddAt/Add ikilisi ve geri okuma tek yerde yaşıyor.
+using IisAccess = AdaPanel.Infrastructure.AspNet.IisConfigurationAccess;
 
 namespace AdaPanel.Infrastructure.Php;
 
@@ -350,11 +356,31 @@ public sealed class PhpService(
         {
             var assignment = await concurrencyLock.RunExclusiveAsync(() =>
             {
-                using var serverManager = CreateServerManager();
-                EnsureSiteExists(serverManager, siteName);
-                EnsureFastCgiApplication(serverManager, executablePath);
-                SetSitePhpHandler(serverManager, siteName, executablePath, handlerName);
-                InvokeMethod(serverManager, "CommitChanges");
+                bool basaKondu;
+                using (var serverManager = CreateServerManager())
+                {
+                    EnsureSiteExists(serverManager, siteName);
+                    EnsureFastCgiApplication(serverManager, executablePath);
+                    basaKondu = SetSitePhpHandler(serverManager, siteName, executablePath, handlerName);
+                    InvokeMethod(serverManager, "CommitChanges");
+                }
+
+                // COMMIT'TEN SONRA TAZE OKUMA. Yukarıdaki nesne grafiği BELLEKTEKİ hâli anlatır;
+                // ".php gerçekten çalışacak mı" sorusunun cevabı ancak diskten okunan sırada.
+                // Ölçüm düşerse yazma başarısız SAYILMAZ — ölçüm "OLÇÜLEMEDİ"ye düşer.
+                var siralama = HandlerOrderMeasurement.Olculemedi(basaKondu);
+                try
+                {
+                    using var freshServerManager = CreateServerManager();
+                    siralama = HandlerOrderMeasurement.Olc(
+                        IisAccess.SnapshotHandlers(IisAccess.GetHandlersCollection(freshServerManager, siteName)),
+                        handlerName,
+                        basaKondu);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    logger.LogWarning(exception, "PHP handler sırası commit sonrası ÖLÇÜLEMEDİ: {Site}", siteName);
+                }
 
                 return Task.FromResult(new SitePhpAssignmentDto
                 {
@@ -364,7 +390,8 @@ public sealed class PhpService(
                     Version = component.Version,
                     ExecutablePath = executablePath,
                     HandlerName = handlerName,
-                    IsFastCgiRegistered = true
+                    IsFastCgiRegistered = true,
+                    HandlerOrder = siralama
                 });
             }, cancellationToken);
 
@@ -1140,11 +1167,10 @@ public sealed class PhpService(
     private static int FastCgiSecondsFor(int maxExecutionTime)
         => maxExecutionTime <= 0 ? 86400 : Math.Clamp(maxExecutionTime, 30, 86400) + 60;
 
-    private static void SetSitePhpHandler(IDisposable serverManager, string siteName, string executablePath, string handlerName)
+    /// <summary>Handler BAŞA konabildiyse true; sona eklendiyse false (kısmi başarı).</summary>
+    private static bool SetSitePhpHandler(IDisposable serverManager, string siteName, string executablePath, string handlerName)
     {
-        var configuration = InvokeMethod(serverManager, "GetWebConfiguration", siteName);
-        var handlersSection = InvokeMethod(configuration, "GetSection", "system.webServer/handlers");
-        var handlers = GetConfigurationCollection(handlersSection);
+        var handlers = IisAccess.GetHandlersCollection(serverManager, siteName);
 
         foreach (var existing in Enumerate(handlers).Where(item =>
                      GetAttributeString(item, "name").StartsWith(PhpHandlerPrefix, StringComparison.OrdinalIgnoreCase))
@@ -1167,16 +1193,13 @@ public sealed class PhpService(
         // istekleri yakaladığı için *.php handler sona eklenirse StaticFile önce eşleşir ve
         // .php dosyaları "404.3 - extension not configured" döner (phpMyAdmin/Adminer açılmaz).
         // AddAt(0, ...) ile *.php FastCGI handler StaticFile'dan ÖNCE değerlendirilir.
-        try
-        {
-            InvokeMethod(handlers, "AddAt", 0, handler);
-        }
-        catch (Exception)
-        {
-            // Bazı IIS yapılandırmalarında 0. indeks kilitli olabilir; en azından ekleyip
-            // çalışmasını garantiye al (eklenememe sessizce 404.3'e dönmesin diye fallback).
-            InvokeMethod(handlers, "Add", handler);
-        }
+        //
+        // FALLBACK ARTIK SESSİZ DEĞİL. Eskiden burada çıplak bir catch vardı ve handler'ı SONA
+        // ekliyordu — yani yorumun az yukarıda "404.3 verir" diye tarif ettiği sıralamayı
+        // "çalışmasını garantiye al" diyerek uyguluyordu. Sona eklemek 404.3'ü ÜRETEN
+        // sıralamadır. Fallback korunuyor (hiç yazmamaktan iyidir) ama artık İŞARETLENİYOR:
+        // dönen değer çağırana gider, çağıran commit'ten sonra gerçek sırayı ÖLÇER.
+        return IisAccess.InsertHandlerFirst(handlers, handler);
     }
 
     private static object GetFastCgiCollection(IDisposable serverManager)

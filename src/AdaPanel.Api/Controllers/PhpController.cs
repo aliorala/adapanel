@@ -79,16 +79,29 @@ public sealed class PhpController(
         // KONU = SİTENİN SAHİBİ. PHP sürümünü değiştirmek sitenin çalışıp çalışmadığını belirler;
         // yönetici bunu kiracının sitesinde yaptığında kiracı, "sitem neden 500 veriyor" sorusunun
         // cevabını kendi denetim ekranında görebilmeli.
+        // ÖLÇÜLEN SIRA denetim kaydına girer: "atandı" ile "atandı ama .php 404.3 dönecek"
+        // aynı satıra düşmemeli.
+        var siraDetay = assignment.HandlerOrder.Unverified
+            ? "handler order UNVERIFIED"
+            : assignment.HandlerOrder.Missing
+                ? "handler MISSING after commit"
+                : assignment.HandlerOrder.PrecedesCatchAll
+                    ? $"handler precedes catch-all (index {assignment.HandlerOrder.HandlerIndex})"
+                    : $"handler SHADOWED by '{assignment.HandlerOrder.BlockingHandlerName}' -> 404.3";
+
         await auditService.WriteForSubscriptionAsync(
             "php.site.assignment.completed",
             $"php:{siteName}",
-            $"PHP runtime '{request.ComponentId}' assigned to site '{siteName}'.",
+            $"PHP runtime '{request.ComponentId}' assigned to site '{siteName}'. {siraDetay}.",
             User.GetRequiredUserId(),
             await AuditSubject.SiteOwnerAsync(customerScopes, siteName, cancellationToken),
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
 
-        return Ok(ApiResponse<SitePhpAssignmentDto>.Ok(assignment, "php.assignment.success"));
+        var notice = assignment.HandlerOrderNoticeKey;
+        return Ok(ApiResponse<SitePhpAssignmentDto>.Ok(
+            assignment,
+            notice.Length > 0 ? notice : "php.assignment.success"));
     }
 
     [HttpGet("/api/v1/sites/{siteName}/php/settings")]

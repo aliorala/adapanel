@@ -125,6 +125,16 @@
           </span>
         </div>
 
+        <!--
+          HANDLER SIRASI ROZETI. "Handler var" ile "handler CALISACAK" ayri sorulardir: kayit
+          devralinan StaticFile (path="*") handler'indan SONRA geliyorsa her .php/.asp istegi
+          404.3 doner. Panel bunu hic gostermiyordu; artik sunucudan gelen UC DEGERLI olcum
+          burada durur ve "olculemedi" ile "sirasi bozuk" AYRI cumlelerdir.
+        -->
+        <p v-if="handlerOrderBadge" :class="['pill', 'warn', 'handler-order']">
+          {{ t(handlerOrderBadge) }}
+        </p>
+
         <div class="mixed-grid">
           <label>
             <span>{{ t("panel.asp.phpVersion") }}</span>
@@ -211,6 +221,27 @@ const selectedSiteName = computed({
 
 const currentConfiguration = computed(() =>
   selectedSiteName.value ? aspStore.getConfiguration(selectedSiteName.value) : null);
+
+/**
+ * Handler SIRASI rozeti. Sunucudan gelen uc degerli olcum burada UC AYRI cumleye cevrilir;
+ * her sey olculdu ve yolundaysa bos doner (rozet hic cikmaz).
+ */
+const handlerOrderBadge = computed(() => {
+  const configuration = currentConfiguration.value;
+  if (!configuration) return "";
+
+  const olcum = configuration.hasPhpHandler
+    ? configuration.phpHandlerOrder
+    : configuration.classicAspEnabled
+      ? configuration.classicAspHandlerOrder
+      : null;
+  if (!olcum) return "";
+
+  if (olcum.unverified) return "panel.aspnet.handlerOrderUnverified";
+  if (olcum.missing) return "panel.aspnet.handlerMissing";
+  if (olcum.shadowedByCatchAll) return "panel.aspnet.handlerShadowed";
+  return "";
+});
 
 const installedPhpVersions = computed(() =>
   phpStore.versions.filter((version) => version.status.toLowerCase() === "installed"));
@@ -302,8 +333,13 @@ async function saveClassicAsp() {
   }
 
   try {
-    await aspStore.setClassicAsp(selectedSiteName.value, { enabled: classicAspForm.enabled });
-    showNotice(t("aspnet.classic_asp_updated"), false);
+    const configuration = await aspStore.setClassicAsp(selectedSiteName.value, { enabled: classicAspForm.enabled });
+    const notice = configuration?.handlerOrderNoticeKey ?? "";
+    if (notice) {
+      showNotice(t(notice), true);
+    } else {
+      showNotice(t("aspnet.classic_asp_updated"), false);
+    }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }
@@ -330,8 +366,15 @@ async function enableMixedMode() {
   }
 
   try {
-    await aspStore.enableMixedMode(selectedSiteName.value, { ...mixedForm });
-    showNotice(t("aspnet.mixed_handlers_updated"), false);
+    const configuration = await aspStore.enableMixedMode(selectedSiteName.value, { ...mixedForm });
+    // SADE YESIL "etkinlestirildi" ARTIK KOSULLU: handler listenin basina konamadiysa
+    // (ya da sira olculemediyse) .php/.asp 404.3 dondurebilir; bunu sessizce basari sayamayiz.
+    const notice = configuration?.handlerOrderNoticeKey ?? "";
+    if (notice) {
+      showNotice(t(notice), true);
+    } else {
+      showNotice(t("aspnet.mixed_handlers_updated"), false);
+    }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   }

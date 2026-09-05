@@ -7,6 +7,22 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
+// UC DEGERLI HANDLER SIRASI OLCUMU. `measured` false ise sonuc "sirasiz" DEGIL, BILINMIYOR.
+export type HandlerOrderMeasurement = {
+  measured: boolean;
+  handlerFound: boolean;
+  precedesCatchAll: boolean;
+  handlerIndex: number;
+  catchAllIndex: number;
+  blockingHandlerName: string;
+  insertedAtFront: boolean;
+  ordered: boolean;
+  shadowedByCatchAll: boolean;
+  missing: boolean;
+  unverified: boolean;
+  noticeKey: string;
+};
+
 export type AspSiteConfiguration = {
   siteName: string;
   applicationPoolName: string;
@@ -19,6 +35,10 @@ export type AspSiteConfiguration = {
   phpComponentId: string;
   phpHandlerName: string;
   isMixedHandlersEnabled: boolean;
+  phpHandlerOrder: HandlerOrderMeasurement;
+  classicAspHandlerOrder: HandlerOrderMeasurement;
+  // Bos ise her sey OLCULDU ve yolunda; dolu ise gosterilecek uyari anahtari.
+  handlerOrderNoticeKey: string;
 };
 
 export type UpdateClassicAspPayload = {

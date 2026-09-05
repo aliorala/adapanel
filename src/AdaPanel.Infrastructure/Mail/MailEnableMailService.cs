@@ -33,6 +33,27 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
     public async Task<MailWorkspaceDto> GetWorkspaceAsync(string? domain, CancellationToken cancellationToken = default)
     {
+        var (workspace, _) = await WorkspaceOkuAsync(domain, cancellationToken);
+        return workspace;
+    }
+
+    /// <summary>
+    /// Calisma alanini okur ve OKUNABILDIGINI de soyler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>NEDEN IKI DEGER.</b> <see cref="GetWorkspaceAsync"/> COM'a erisemedigi ya da ciktiyi
+    /// ayristiramadigi durumda BOS listelerle donuyordu -- yani "soramadim" ile "hic yok" ayni
+    /// goruntuye dusuyordu. Mutasyon metotlari (olustur/sil) artik sonucu bu okumayla
+    /// DOGRULADIGI icin fark hayati: olculemeyen bir sonuc "basarili" da "basarisiz" da
+    /// SAYILMAZ.
+    /// </para>
+    /// </remarks>
+    private async Task<(MailWorkspaceDto Workspace, bool Olculdu)> WorkspaceOkuAsync(
+        string? domain,
+        CancellationToken cancellationToken)
+    {
+        var olculdu = true;
         var selected = (domain ?? string.Empty).Trim().ToLowerInvariant();
         var script = $$"""
             $ErrorActionPreference = 'Stop'
@@ -95,14 +116,14 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         catch (AppException exception)
         {
             logger.LogWarning(exception, "MailEnable workspace okunamadı; zarif degradasyon.");
-            return new MailWorkspaceDto
+            return (new MailWorkspaceDto
             {
                 Installed = true,
                 Configured = true,
                 SelectedDomain = selected,
                 StatusMessage = "Mail yönetim bileşenine (MailEnable COM) erişilemedi. MailEnable kurulu ve COM kayıtlı olmalı. Ayrıntı: "
                     + (string.IsNullOrWhiteSpace(exception.Details) ? exception.Message : exception.Details)
-            };
+            }, false);
         }
 
         var data = ParseJson(json);
@@ -116,7 +137,12 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
 
         if (data is null)
         {
-            return workspace;
+            // SORGU HATASI ile BOS SONUC AYNI GORUNTUYE DUSUYORDU. Ayristirilamayan bir cikti
+            // "hic posta kutusu yok" DEGILDIR; bunu soylemek, kotayi dolduran bir kiraciya
+            // sinirsiz kutu actiran hata sinifidir (bkz. ef2fda8).
+            workspace.StatusMessage = "Mail yonetim bileseninin ciktisi AYRISTIRILAMADI: liste OLCULEMEDI (bos degil).";
+            olculdu = false;
+            return (workspace, olculdu);
         }
 
         var root = data.Value;
@@ -161,7 +187,7 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
                 .ToArray();
         }
 
-        return workspace;
+        return (workspace, olculdu);
     }
 
     // MailEnable yönetici parolası gerektirmez; "yapılandırıldı" olarak döner.
@@ -181,7 +207,18 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        // GERI OKUMA: alan adi GERCEKTEN listede mi? `AddPostoffice`'in tamsayi durum kodu
+        // `[void]` ile atiliyordu; tek kanit budur.
+        var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        KapiAcVarlik(
+            olculdu,
+            workspace.Domains.Any(item => string.Equals(item.Name, domain, StringComparison.OrdinalIgnoreCase)),
+            olmali: true,
+            "mail.domain_create_unverified",
+            "mail.domain_create_not_applied",
+            domain);
+        return workspace;
     }
 
     public async Task<MailWorkspaceDto> DeleteDomainAsync(string domainName, CancellationToken cancellationToken = default)
@@ -196,7 +233,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(null, cancellationToken);
+
+        var (workspace, olculdu) = await WorkspaceOkuAsync(null, cancellationToken);
+        KapiAcVarlik(
+            olculdu,
+            workspace.Domains.Any(item => string.Equals(item.Name, domain, StringComparison.OrdinalIgnoreCase)),
+            olmali: false,
+            "mail.domain_delete_unverified",
+            "mail.domain_delete_not_applied",
+            domain);
+        return workspace;
     }
 
     public async Task<MailWorkspaceDto> CreateAccountAsync(CreateMailAccountRequest request, CancellationToken cancellationToken = default)
@@ -226,7 +272,16 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        KapiAcVarlik(
+            olculdu,
+            HesapVarMi(workspace, full),
+            olmali: true,
+            "mail.account_create_unverified",
+            "mail.account_create_not_applied",
+            full);
+        return workspace;
     }
 
     public async Task<MailWorkspaceDto> DeleteAccountAsync(string address, CancellationToken cancellationToken = default)
@@ -246,7 +301,24 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        // BU SINIFIN EN AGIR NOKTASIYDI: iki BOS catch, sonra kosulsuz 'OK'. Kutu silinmeyip
+        // giris de duruyor olabilirdi ve panel HTTP 200 donerdi. Artik kutunun GERCEKTEN
+        // gittigi olculuyor.
+        //
+        // OLCULEMEYEN, ACIKCA: MEAOAU.Login kaydinin hayatta kalip kalmadigi bu okumada
+        // GORUNMEZ (workspace kutulari listeler, giris kayitlarini degil) ve bu makinede
+        // MailEnable YOK, dolayisiyla RemoveLogin'in davranisi olculemedi. Bu yuzden ayrintiya
+        // ACIKCA yaziliyor.
+        var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        KapiAcVarlik(
+            olculdu,
+            HesapVarMi(workspace, full),
+            olmali: false,
+            "mail.account_delete_unverified",
+            "mail.account_delete_not_applied",
+            $"{full} (posta kutusu olculdu; MEAOAU.Login kaydi bu okumada GORUNMEZ)");
+        return workspace;
     }
 
     public async Task<MailWorkspaceDto> SetAccountPasswordAsync(SetMailAccountPasswordRequest request, CancellationToken cancellationToken = default)
@@ -265,7 +337,15 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        // DOGRULANAMAZ, VE BU SOYLENIYOR. Parola geri okunamaz (MailEnable COM parolayi geri
+        // vermez), dolayisiyla "degistirildi" bir OLCUM DEGIL bir IDDIADIR. Sessizce yesil
+        // gostermek yerine kullaniciya bunu yazan bir durum mesaji tasiyoruz.
+        var (workspace, _) = await WorkspaceOkuAsync(domain, cancellationToken);
+        workspace.StatusMessage = string.IsNullOrWhiteSpace(workspace.StatusMessage)
+            ? "Parola yazildi ama MailEnable tarafinda GERI OKUNAMAZ: sonuc DOGRULANMADI. Yeni parolayla bir kez oturum acarak sinayin."
+            : workspace.StatusMessage;
+        return workspace;
     }
 
     public async Task<MailWorkspaceDto> CreateAliasAsync(CreateMailAliasRequest request, CancellationToken cancellationToken = default)
@@ -289,7 +369,17 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        var beklenenAdres = isCatchAll ? $"*@{domain}" : aliasAddress;
+        KapiAcVarlik(
+            olculdu,
+            workspace.Aliases.Any(item => string.Equals(item.Address, beklenenAdres, StringComparison.OrdinalIgnoreCase)),
+            olmali: true,
+            "mail.alias_create_unverified",
+            "mail.alias_create_not_applied",
+            beklenenAdres);
+        return workspace;
     }
 
     public async Task<MailWorkspaceDto> DeleteAliasAsync(string address, CancellationToken cancellationToken = default)
@@ -305,7 +395,21 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        // Bos catch duruyor (kayit zaten yoksa firlatmasin) AMA sonuc artik OLCULUYOR:
+        // silinmemis bir takma ad "silindi" diye gosterilemez.
+        var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        var silinenAdres = string.Equals(clean, domain, StringComparison.OrdinalIgnoreCase)
+            ? $"*@{domain}"
+            : clean;
+        KapiAcVarlik(
+            olculdu,
+            workspace.Aliases.Any(item => string.Equals(item.Address, silinenAdres, StringComparison.OrdinalIgnoreCase)),
+            olmali: false,
+            "mail.alias_delete_unverified",
+            "mail.alias_delete_not_applied",
+            silinenAdres);
+        return workspace;
     }
 
     // Dağıtım listeleri yalnızca Stalwart'ta desteklenir; MailEnable yedeğinde net hata döner.
@@ -376,12 +480,39 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetWorkspaceAsync(domain, cancellationToken);
+
+        // KOTA GERI OKUNUR. Kardes sinifta (MailService) bu kapi 0.4.x'te kapatilmisti;
+        // MailEnable yedeginde acik kalmisti.
+        var adres = $"{local}@{domain}";
+        var (workspace, olculdu) = await WorkspaceOkuAsync(domain, cancellationToken);
+        var beklenenMb = request.MaxSizeMB > 0 ? request.MaxSizeMB : 0;
+        var hesap = workspace.Accounts.FirstOrDefault(item =>
+            string.Equals(item.Address, adres, StringComparison.OrdinalIgnoreCase));
+        KapiAcVarlik(
+            olculdu,
+            hesap is not null && hesap.MaxSizeMB == beklenenMb,
+            olmali: true,
+            "mail.mailbox_quota_unverified",
+            "mail.mailbox_quota_not_applied",
+            $"{adres}: istenen {beklenenMb} MB, olculen {(hesap is null ? "hesap yok" : hesap.MaxSizeMB + " MB")}");
+        return workspace;
     }
 
-    // Domain seviyesinde kota MailEnable'da postoffice nesnesinde yoktur; mevcut durumu döner.
+    /// <summary>
+    /// MailEnable'da alan adi seviyesinde disk kotasi YOKTUR -- ve panel bunu artik SOYLUYOR.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI: metot hicbir kota uygulamadan mevcut calisma alanini donuyordu. Cagiran uc
+    /// ise denetim kaydina "Domain mail quota set to N MB" yaziyordu. Yani kotasiz bir alan adi
+    /// panelde KOTALI gorunuyordu. Sessiz basari yerine acik ret: yoneticinin sinirin var
+    /// oldugunu SANMASI, hic sinir koymamaktan daha tehlikelidir.
+    /// </remarks>
     public Task<MailWorkspaceDto> SetDomainQuotaAsync(SetMailDomainQuotaRequest request, CancellationToken cancellationToken = default)
-        => GetWorkspaceAsync(request.Domain.Trim().ToLowerInvariant(), cancellationToken);
+        => throw new AppException(
+            "mail.domain_quota_not_supported",
+            409,
+            409,
+            $"MailEnable alan adi seviyesinde disk kotasi desteklemiyor ({request.Domain.Trim().ToLowerInvariant()}). Kutu bazli kota kullanin.");
 
     /// <summary>
     /// MailEnable'da giden posta limiti panel üzerinden kurulamıyor: durum "limitsiz" DEĞİL,
@@ -419,11 +550,23 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             """;
         var json = await RunComAsync(script, cancellationToken);
         var data = ParseJson(json);
+        if (data is null)
+        {
+            // SORGU HATASI ile BOS SONUC AYNI GORUNTUYE DUSUYORDU: ayristirilamayan cikti
+            // "otomatik yanit kapali, mesaj bos" olarak gosteriliyordu. Kullanici tatilde
+            // oldugunu sanan bir kutuyu "kapali" gorup dogru sanirdi.
+            throw new AppException(
+                "mail.autoresponder_unverified",
+                500,
+                500,
+                $"{local}@{domain}: otomatik yanit durumu OKUNAMADI (cikti ayristirilamadi).");
+        }
+
         return new MailAutoResponderDto
         {
             Address = $"{local}@{domain}",
-            Enabled = data is not null && GetInt(data.Value, "enabled") == 1,
-            Message = data is not null ? GetStr(data.Value, "message") : string.Empty
+            Enabled = GetInt(data.Value, "enabled") == 1,
+            Message = GetStr(data.Value, "message")
         };
     }
 
@@ -442,7 +585,19 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
             'OK'
             """;
         await RunComAsync(script, cancellationToken);
-        return await GetAutoResponderAsync(request.Address, cancellationToken);
+
+        // GERI OKUMA ZATEN VARDI, SONUCUNA BAKILMIYORDU. Artik bakiliyor.
+        var olculen = await GetAutoResponderAsync(request.Address, cancellationToken);
+        if (olculen.Enabled != request.Enabled)
+        {
+            throw new AppException(
+                "mail.autoresponder_not_applied",
+                500,
+                500,
+                $"{request.Address}: istenen {(request.Enabled ? "acik" : "kapali")}, olculen {(olculen.Enabled ? "acik" : "kapali")}.");
+        }
+
+        return olculen;
     }
 
     // --- DNS / sertifika / spam: MailEnable kendi yönetir; panelde temel/uyumlu yanıt döner ---
@@ -469,11 +624,34 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
         return Task.FromResult(dto);
     }
 
+    /// <summary>
+    /// Sertifika durumu MailEnable tarafinda panelden OKUNAMIYOR: <c>Active=false</c>.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI sabit <c>Active = true</c> idi -- yani hicbir sey olculmeden "sertifika
+    /// etkin" deniyordu. Sertifikasiz bir posta sunucusu panelde YESIL gorunuyordu; TLS'siz
+    /// gonderim yapan bir sunucunun sahibi sorunu ancak istemci hata verince ogrenirdi.
+    /// </remarks>
     public Task<MailCertificateDto> GetCertificateStatusAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailCertificateDto { Active = true, Source = "mailenable" });
+        => Task.FromResult(new MailCertificateDto
+        {
+            Active = false,
+            Source = "mailenable-unmeasured"
+        });
 
+    /// <summary>
+    /// MailEnable yedeginde sertifika ALIMI YOK -- ve panel artik bunu SOYLUYOR.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI: metot HIC issuance yapmadan <c>Active = true</c> donuyordu. Kullanici
+    /// "Sertifika al" dugmesine basiyor, panel basarili diyor, sunucuda hicbir sey degismiyordu.
+    /// </remarks>
     public Task<MailCertificateDto> IssueCertificateAsync(IssueMailCertificateRequest request, CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailCertificateDto { Active = true, Source = "mailenable" });
+        => throw new AppException(
+            "mail.certificate_issue_not_supported",
+            409,
+            409,
+            $"MailEnable yedeginde sertifika alimi panelden yapilamiyor ({request.Domain}). Sertifikayi MailEnable yonetiminden yukleyin.");
 
     /// <summary>MailEnable tarafinda karsilama adi panelden yonetilmiyor.</summary>
     public Task<bool> EnsureServerHostnameAsync(bool applyChanges = true, CancellationToken cancellationToken = default) => Task.FromResult(false);
@@ -481,11 +659,76 @@ public sealed class MailEnableMailService(ILogger<MailEnableMailService> logger)
     public Task<MailCertificateDto?> SyncCertificateAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<MailCertificateDto?>(null);
 
+    /// <summary>
+    /// Spam ayarlari MailEnable tarafinda panelden OKUNMUYOR: <c>Configured=false</c>.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI ucu de sabit <c>true</c> idi. "Yapilandirildi + acik" cumlesi hicbir olcume
+    /// dayanmiyordu; spam filtresi hic kurulmamis bir sunucu panelde korumali gorunuyordu.
+    /// </remarks>
     public Task<MailSpamSettingsDto> GetSpamSettingsAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailSpamSettingsDto { Installed = true, Configured = true, Enabled = true });
+        => Task.FromResult(new MailSpamSettingsDto { Installed = true, Configured = false, Enabled = false });
 
+    /// <summary>
+    /// MailEnable yedeginde spam ayari panelden YAZILMIYOR -- ve panel artik bunu SOYLUYOR.
+    /// </summary>
+    /// <remarks>
+    /// ONCEKI HALI istegi YANKILIYORDU: kullanici "spam filtresi acik" diye kaydediyor, panel
+    /// istenen degeri geri gosteriyor, sunucuda hicbir sey degismiyordu.
+    /// </remarks>
     public Task<MailSpamSettingsDto> UpdateSpamSettingsAsync(UpdateMailSpamSettingsRequest request, CancellationToken cancellationToken = default)
-        => Task.FromResult(new MailSpamSettingsDto { Installed = true, Configured = true, Enabled = request.Enabled });
+        => throw new AppException(
+            "mail.spam_settings_not_supported",
+            409,
+            409,
+            "MailEnable yedeginde spam ayarlari panelden yazilamiyor; MailEnable yonetim konsolunu kullanin.");
+
+
+    // =====================================================================================
+    // SONUCU DOGRULAYAN KAPILAR -- TEK KAYNAK
+    //
+    // OLCULEN HATA: bu sinifin butun mutasyon metotlari `await RunComAsync(...)` deyip
+    // ardindan `return await GetWorkspaceAsync(...)` yapiyordu. Yani OLCUM ZATEN YAPILIYOR,
+    // sonucuna BAKILMIYORDU. MailEnable COM metotlari istisna DEGIL TAMSAYI DURUM KODU doner;
+    // `$ErrorActionPreference='Stop'` bunu YAKALAMAZ ve her donus `[void]` ile atiliyordu.
+    // En agiri DeleteAccountAsync'ti: `try { [void]$mb.RemoveMailbox() } catch {}` +
+    // `try { [void]$lg.RemoveLogin() } catch {}` -> kutu durabilir, giris hala calisabilir,
+    // panel HTTP 200 donerdi.
+    //
+    // KAPATMA: durum kodu konvansiyonunu TAHMIN ETMEK yerine (bu makinede MailEnable YOK,
+    // konvansiyon OLCULEMEZ) SONUCUN KENDISI geri okunur. Uc deger: olculdu+bekleneni tutuyor /
+    // olculdu+tutmuyor / OLCULEMEDI. Ucu de ayri cumledir.
+    // =====================================================================================
+
+    /// <summary>Calisma alaninda bu adres BULUNUYOR mu? (adres karsilastirmasi tek yerde.)</summary>
+    internal static bool HesapVarMi(MailWorkspaceDto workspace, string adres)
+        => workspace.Accounts.Any(item => string.Equals(item.Address, adres, StringComparison.OrdinalIgnoreCase));
+
+    /// <remarks>
+    /// <b>ANAHTARLAR ELDE KURULMAZ.</b> Ilk yazimda anahtarlar <c>$"mail.{tip}_unverified"</c>
+    /// gibi uretiliyordu ve depodaki i18n kullanim kapisi (<c>Kullanilmayan_Ceviri_Anahtari_Kalmadi</c>)
+    /// bunlari YETIM sayarak kirmizi yandi -- hakli olarak: kaynakta ARANAMAYAN bir anahtar,
+    /// sonradan sessizce olu kalabilir. Anahtarlar artik cagri yerlerinde HARFI HARFINE yazili.
+    /// </remarks>
+    internal static void KapiAcVarlik(
+        bool olculdu,
+        bool bulundu,
+        bool olmali,
+        string olculemediAnahtari,
+        string uygulanmadiAnahtari,
+        string ayrinti)
+    {
+        if (!olculdu)
+        {
+            // OLCULEMEDI: "basarili" DA "basarisiz" DA degil. Panel "yapildi" DEMEZ.
+            throw new AppException(olculemediAnahtari, 500, 500, ayrinti);
+        }
+
+        if (bulundu != olmali)
+        {
+            throw new AppException(uygulanmadiAnahtari, 500, 500, ayrinti);
+        }
+    }
 
     // --- yardımcılar ---
 

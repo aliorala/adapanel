@@ -28,7 +28,8 @@ public sealed class AspNetService(
         return ExecuteReadAsync(serverManager =>
         {
             var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
-            return MapSiteConfiguration(serverManager, site);
+            // OKUMA yolunda ölçüm doğrudan diskten gelir (ortada bekleyen bir yazma yok).
+            return MeasureHandlerOrder(serverManager, MapSiteConfiguration(serverManager, site));
         }, "aspnet.configuration_failed", cancellationToken);
     }
 
@@ -43,12 +44,40 @@ public sealed class AspNetService(
             await EnsureClassicAspEngineAsync(cancellationToken);
         }
 
-        return await ExecuteWriteAsync(serverManager =>
-        {
-            var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
-            SetClassicAspEnabled(serverManager, GetStringProperty(site, "Name"), request.Enabled);
-            return MapSiteConfiguration(serverManager, site);
-        }, "aspnet.configuration_failed", cancellationToken);
+        var aspBasaKondu = false;
+
+        return await ExecuteWriteAsync(
+            serverManager =>
+            {
+                var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
+                aspBasaKondu = SetClassicAspEnabled(serverManager, GetStringProperty(site, "Name"), request.Enabled);
+                return MapSiteConfiguration(serverManager, site);
+            },
+            "aspnet.configuration_failed",
+            cancellationToken,
+            (fresh, dto) => MeasureHandlerOrder(fresh, dto, aspBasaKondu: aspBasaKondu));
+    }
+
+    /// <summary>
+    /// Commit'ten SONRA taze okunan handler listesinden gerçek sırayı ölçer ve DTO'ya yazar.
+    /// </summary>
+    /// <remarks>
+    /// Panelin bugüne kadar hiç sormadığı soru budur: <c>*.php</c> handler'ı devralınan
+    /// <c>StaticFile</c> (path="*") kaydından ÖNCE mi? Değilse site "kuruldu" görünür ama her
+    /// <c>.php</c> isteği <c>404.3</c> döner. Ölçüm listeyi BİR KEZ okur; iki handler da aynı
+    /// listeden değerlendirilir.
+    /// </remarks>
+    private static AspSiteConfigurationDto MeasureHandlerOrder(
+        IDisposable serverManager,
+        AspSiteConfigurationDto dto,
+        bool phpBasaKondu = false,
+        bool aspBasaKondu = false)
+    {
+        var handlers = SnapshotHandlers(GetHandlersCollection(serverManager, dto.SiteName));
+
+        return dto.WithHandlerOrder(
+            HandlerOrderMeasurement.Olc(handlers, dto.PhpHandlerName, phpBasaKondu),
+            HandlerOrderMeasurement.Olc(handlers, ClassicAspHandlerName, aspBasaKondu));
     }
 
     public Task<AspSiteConfigurationDto> SetDotNetVersionAsync(
@@ -83,19 +112,26 @@ public sealed class AspNetService(
             await EnsureClassicAspEngineAsync(cancellationToken);
         }
 
-        return await ExecuteWriteAsync(serverManager =>
-        {
-            var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
-            var normalizedSiteName = GetStringProperty(site, "Name");
-            var appPool = GetApplicationPoolForSite(serverManager, site);
+        var phpBasaKondu = false;
+        var aspBasaKondu = false;
 
-            SetClassicAspEnabled(serverManager, normalizedSiteName, request.EnableClassicAsp);
-            ConfigureManagedRuntime(appPool, request.ManagedRuntimeVersion, request.ManagedPipelineMode, request.Enable32BitAppOnWin64);
-            EnsureFastCgiApplication(serverManager, executablePath);
-            SetSitePhpHandler(serverManager, normalizedSiteName, executablePath, BuildPhpHandlerName(request.PhpComponentId));
+        return await ExecuteWriteAsync(
+            serverManager =>
+            {
+                var site = FindSite(GetPropertyObject(serverManager, "Sites"), siteName);
+                var normalizedSiteName = GetStringProperty(site, "Name");
+                var appPool = GetApplicationPoolForSite(serverManager, site);
 
-            return MapSiteConfiguration(serverManager, site);
-        }, "aspnet.configuration_failed", cancellationToken);
+                aspBasaKondu = SetClassicAspEnabled(serverManager, normalizedSiteName, request.EnableClassicAsp);
+                ConfigureManagedRuntime(appPool, request.ManagedRuntimeVersion, request.ManagedPipelineMode, request.Enable32BitAppOnWin64);
+                EnsureFastCgiApplication(serverManager, executablePath);
+                phpBasaKondu = SetSitePhpHandler(serverManager, normalizedSiteName, executablePath, BuildPhpHandlerName(request.PhpComponentId));
+
+                return MapSiteConfiguration(serverManager, site);
+            },
+            "aspnet.configuration_failed",
+            cancellationToken,
+            (fresh, dto) => MeasureHandlerOrder(fresh, dto, phpBasaKondu, aspBasaKondu));
     }
 
     // asp.dll yoksa IIS Classic ASP özelliğini OTOMATİK KURAR (panel SYSTEM/admin çalışır). Windows Server: Web-Asp,
@@ -178,7 +214,26 @@ public sealed class AspNetService(
         }
     }
 
-    private Task<T> ExecuteWriteAsync<T>(Func<IDisposable, T> operation, string fallbackMessageKey, CancellationToken cancellationToken)
+    /// <summary>
+    /// Yazma + commit; istenirse commit'ten SONRA TAZE bir <c>ServerManager</c> ile GERİ OKUMA.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir ServerManager.</b> Yazma sırasında elimizdeki nesne grafiği BELLEKTEKİ
+    /// hâli anlatır. DTO'lar bugüne kadar tam da oradan üretiliyordu — yani panel diske ineni
+    /// değil, kendi niyetini raporluyordu. Ölçüm ancak commit'ten sonra, YENİDEN AÇILAN bir
+    /// okumayla gerçeğe dokunur.
+    /// </para>
+    /// <para>
+    /// <b><c>afterCommit</c> HATA FIRLATAMAZ.</b> Yazma o noktada zaten başarılıdır; ölçümün
+    /// düşmesi yazmayı "başarısız" yapmaz — ölçüm "OLÇÜLEMEDİ"ye düşer. Bu ayrım bilinçlidir.
+    /// </para>
+    /// </remarks>
+    private Task<T> ExecuteWriteAsync<T>(
+        Func<IDisposable, T> operation,
+        string fallbackMessageKey,
+        CancellationToken cancellationToken,
+        Func<IDisposable, T, T>? afterCommit = null)
     {
         return concurrencyLock.RunExclusiveAsync(() =>
         {
@@ -186,9 +241,28 @@ public sealed class AspNetService(
 
             try
             {
-                using var serverManager = CreateServerManager();
-                var result = operation(serverManager);
-                InvokeMethod(serverManager, "CommitChanges");
+                T result;
+                using (var serverManager = CreateServerManager())
+                {
+                    result = operation(serverManager);
+                    InvokeMethod(serverManager, "CommitChanges");
+                }
+
+                if (afterCommit is not null)
+                {
+                    try
+                    {
+                        using var freshServerManager = CreateServerManager();
+                        result = afterCommit(freshServerManager, result);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        // Yazma BAŞARILI, ölçüm düştü. Sessizce "yapıldı" demeyiz; DTO ölçümü
+                        // "olçülemedi" olarak taşır (varsayılan değer zaten odur) ve günlüğe düşer.
+                        logger.LogWarning(exception, "Commit sonrası geri okuma yapılamadı; sonuç ÖLÇÜLEMEDİ sayılıyor.");
+                    }
+                }
+
                 return Task.FromResult(result);
             }
             catch (AppException)
@@ -265,16 +339,17 @@ public sealed class AspNetService(
         return pool;
     }
 
-    private static void SetClassicAspEnabled(IDisposable serverManager, string siteName, bool enabled)
+    /// <summary>Handler BAŞA konabildiyse true (kapatma yolunda anlamsızdır, true döner).</summary>
+    private static bool SetClassicAspEnabled(IDisposable serverManager, string siteName, bool enabled)
     {
         if (!enabled)
         {
             RemoveAdaPanelClassicAspHandler(serverManager, siteName);
-            return;
+            return true;
         }
 
         EnsureClassicAspSectionAvailable(serverManager, siteName);
-        EnsureClassicAspHandler(serverManager, siteName);
+        return EnsureClassicAspHandler(serverManager, siteName);
     }
 
     private static void EnsureClassicAspSectionAvailable(IDisposable serverManager, string siteName)
@@ -355,7 +430,8 @@ public sealed class AspNetService(
         InvokeMethod(fastCgiCollection, "Add", application);
     }
 
-    private static void SetSitePhpHandler(IDisposable serverManager, string siteName, string executablePath, string handlerName)
+    /// <summary>Handler BAŞA konabildiyse true; sona eklendiyse false (kısmi başarı).</summary>
+    private static bool SetSitePhpHandler(IDisposable serverManager, string siteName, string executablePath, string handlerName)
     {
         var handlers = GetHandlersCollection(serverManager, siteName);
 
@@ -376,11 +452,13 @@ public sealed class AspNetService(
         SetAttributeValue(handler, "requireAccess", "Script");
         // KRİTİK: handler'ı listenin BAŞINA ekle. Devralınan StaticFile (path="*") *.php'yi
         // ondan önce yakalarsa .php dosyaları "404.3" verir (php-info.php açılmaz).
-        try { InvokeMethod(handlers, "AddAt", 0, handler); }
-        catch { InvokeMethod(handlers, "Add", handler); }
+        // Başa konamazsa SONA eklenir ve bu KAYBEDİLMEZ: dönen değer çağırana taşınır, commit'ten
+        // sonra gerçek sıra ÖLÇÜLÜR (bkz. HandlerOrderMeasurement).
+        return InsertHandlerFirst(handlers, handler);
     }
 
-    private static void EnsureClassicAspHandler(IDisposable serverManager, string siteName)
+    /// <summary>Handler BAŞA konabildiyse true; sona eklendiyse false (kısmi başarı).</summary>
+    private static bool EnsureClassicAspHandler(IDisposable serverManager, string siteName)
     {
         var aspDllPath = Environment.ExpandEnvironmentVariables(ClassicAspDllPath);
         if (!File.Exists(aspDllPath))
@@ -391,7 +469,8 @@ public sealed class AspNetService(
         var handlers = GetHandlersCollection(serverManager, siteName);
         if (Enumerate(handlers).Any(IsClassicAspHandler))
         {
-            return;
+            // Zaten kayıtlı; sırasını BURADA varsaymayız — commit sonrası ölçüm söyler.
+            return true;
         }
 
         var handler = InvokeMethod(handlers, "CreateElement", "add");
@@ -403,8 +482,7 @@ public sealed class AspNetService(
         SetAttributeValue(handler, "resourceType", "File");
         SetAttributeValue(handler, "requireAccess", "Script");
         // *.asp da StaticFile'dan ÖNCE değerlendirilmeli (aynı 404.3 sınıfı).
-        try { InvokeMethod(handlers, "AddAt", 0, handler); }
-        catch { InvokeMethod(handlers, "Add", handler); }
+        return InsertHandlerFirst(handlers, handler);
     }
 
     private static void RemoveAdaPanelClassicAspHandler(IDisposable serverManager, string siteName)
@@ -418,12 +496,8 @@ public sealed class AspNetService(
         }
     }
 
-    private static object GetHandlersCollection(IDisposable serverManager, string siteName)
-    {
-        var configuration = InvokeMethod(serverManager, "GetWebConfiguration", siteName);
-        var handlersSection = InvokeMethod(configuration, "GetSection", "system.webServer/handlers");
-        return GetConfigurationCollection(handlersSection);
-    }
+    // GetHandlersCollection ARTIK TEK KAYNAKTA (IisConfigurationAccess): aynı üç satır burada,
+    // PhpService içinde ve ölçüm yolunda ayrı ayrı yaşıyordu.
 
     private static bool IsClassicAspHandler(object handler)
     {

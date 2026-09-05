@@ -261,8 +261,9 @@ foreach ($satir in ($adaBulunan | Sort-Object -Unique)) { [Console]::Out.WriteLi
         var scripts = Path.Combine(klasor, "Scripts");
 
         return $$"""
+$ErrorActionPreference = 'Stop'
 $adaAnahtar = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
-$adaMevcut = (Get-ItemProperty -Path $adaAnahtar -Name Path).Path
+$adaMevcut = (Get-ItemProperty -Path $adaAnahtar -Name Path -ErrorAction Stop).Path
 $adaEklenecek = @('{{klasor.Replace("'", "''")}}', '{{scripts.Replace("'", "''")}}')
 $adaParcalar = $adaMevcut.Split(';') | Where-Object { $_ }
 $adaYeni = @()
@@ -277,9 +278,56 @@ if ($adaYeni.Count -eq 0) {
   [Console]::Out.WriteLine('ADAPANEL-DEGISIKLIK=0')
 } else {
   $adaSonuc = ($adaParcalar + $adaYeni) -join ';'
-  Set-ItemProperty -Path $adaAnahtar -Name Path -Value $adaSonuc -Type ExpandString
+  # -ErrorAction Stop YOKTU. Bu depoda ÖLÇÜLMÜŞ bir sınıf: sonlandırıcı OLMAYAN bir hatada
+  # betik devam eder ve powershell.exe SIFIR ile çıkar — yani panel "eklendi" der, HKLM'de
+  # hiçbir şey değişmemiştir. Burası MAKİNE GENELİ bir yazmadır.
+  Set-ItemProperty -Path $adaAnahtar -Name Path -Value $adaSonuc -Type ExpandString -ErrorAction Stop
   [Console]::Out.WriteLine('ADAPANEL-DEGISIKLIK=' + $adaYeni.Count)
 }
+{{MakinePathDogrulamaParcasi}}
 """;
+    }
+
+    /// <summary>
+    /// Makine PATH'ini TAZE okuyup <c>$adaEklenecek</c>'in kaçının gerçekten içeride olduğunu
+    /// basan betik parçası.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>TEK KAYNAK.</b> Aynı kod hem ekleme betiğinin sonunda hem de yalnız-okuyan sondada
+    /// koşar; yani karar kuralı GERÇEK <c>powershell.exe</c>'de, hiçbir şey yazmadan ölçülebilir.
+    /// </para>
+    /// <para>
+    /// <c>ADAPANEL-PATH-HEDEF</c> = DİSKTE VAR OLAN aday sayısı (var olmayan klasörü PATH'e
+    /// koymayız, hedefe de saymayız). <c>ADAPANEL-PATH-DOGRULANDI</c> = TAZE okunan PATH'te
+    /// bulunanların sayısı. Panelin bugüne kadar raporladığı sayı ise EKLENMESİ İSTENEN
+    /// sayıydı — hiçbir ölçüme dayanmıyordu.
+    /// </para>
+    /// </remarks>
+    internal const string MakinePathDogrulamaParcasi = """
+$adaTazeAnahtar = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+$adaTaze = (Get-ItemProperty -Path $adaTazeAnahtar -Name Path -ErrorAction Stop).Path
+$adaTazeParcalar = $adaTaze.Split(';') | Where-Object { $_ }
+$adaHedef = 0
+$adaDogru = 0
+foreach ($aday in $adaEklenecek) {
+  if (-not (Test-Path -LiteralPath $aday)) { continue }
+  $adaHedef++
+  foreach ($parca in $adaTazeParcalar) {
+    if ($parca.TrimEnd('\') -ieq $aday.TrimEnd('\')) { $adaDogru++; break }
+  }
+}
+[Console]::Out.WriteLine('ADAPANEL-PATH-HEDEF=' + $adaHedef)
+[Console]::Out.WriteLine('ADAPANEL-PATH-DOGRULANDI=' + $adaDogru)
+""";
+
+    /// <summary>
+    /// Yalnız OKUYAN sonda: verilen klasörlerin makine PATH'inde olup olmadığını ölçer.
+    /// HİÇBİR ŞEY YAZMAZ — yükseltilmemiş bir süreçte de koşar.
+    /// </summary>
+    internal static string BuildMachinePathProbeScript(IEnumerable<string> klasorler)
+    {
+        var liste = string.Join(", ", klasorler.Select(item => "'" + item.Replace("'", "''") + "'"));
+        return "$ErrorActionPreference = 'Stop'\n$adaEklenecek = @(" + liste + ")\n" + MakinePathDogrulamaParcasi;
     }
 }

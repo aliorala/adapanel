@@ -2076,3 +2076,207 @@ icin KAPATILMADI. Bunlar "aday" degil, **olculmus acik**tir:
 * **`SiteHostingSettingsService.cs:431` ve `:531`** -- kuyruk iscisi icin `Running = false`
   iddiasi OLCULMEDEN yaziliyor. (`RemoveTasksUnderRootAsync:313` sayaci ise `DeleteTaskAsync`
   artik firlattigi icin dolayli olarak duzeldi.)
+
+---
+
+## TUR: "OLCULDU AMA KAPATILMADI" LISTESI KAPATILDI (6/6 aday)
+
+Onceki turun bu dosyanin sonuna dosya:satir ile yazdigi ALTI acigin HEPSI kapatildi. Aranan
+sinifin bu turdaki iki alt bicimi de bulundu: (a) sonuc HIC okunmuyor, (b) **olcum yapiliyor ama
+sonucuna BAKILMIYOR**. (b) bu turun BASKIN bicimiydi: `MailEnableMailService`'in butun mutasyon
+metotlari `await RunComAsync(...)` deyip ardindan `return await GetWorkspaceAsync(...)` yapiyordu
+-- yani cevap ELDEYDI ve sorulmuyordu.
+
+### 1. `AspNetService.cs:379/:406` + `PhpService.cs:1170` -- AddAt duserse handler SONA ekleniyor
+
+**ACIKTI.** Uc yerde ayni dort satir: `try { AddAt(0, handler) } catch { Add(handler) }`. Bir
+ustlerindeki YORUM sona eklemenin `.php` dosyalarini 404.3 yaptigini yaziyordu; kod bir satir
+sonra onu FALLBACK olarak uyguluyordu. DTO handler SIRASINI hic tasimiyordu.
+
+**KAPATMA.** `HandlerOrderMeasurement` (Core/Dtos/Asp) + `IisConfigurationAccess.InsertHandlerFirst`
+(TEK KAYNAK; uc kopya kaldirildi) + `AspNetService.ExecuteWriteAsync` icin `afterCommit` kancasi:
+commit'ten SONRA **TAZE bir ServerManager** ile handler listesi okunur ve handler'in `path="*"`
+kaydindan ONCE olup olmadigi OLCULUR. Fallback duruyor (hic yazmamaktan iyidir) ama artik
+ISARETLENIYOR. `PhpService.SetSitePhpVersionAsync` de ayni olcumu tasiyor. Uc/arayuz sade
+"etkinlestirildi" demiyor; AspView kalici bir sira rozeti gosteriyor.
+
+### 2. `SiteHostingSettingsService.cs:1522` -- `document.Save` son ifade
+
+**ACIKTI.** Geri okuma, yeniden ayristirma, IIS tarafi dogrulama YOK.
+
+**KAPATMA.** `WebConfigWriteMeasurement` + `KaydetVeGeriOku`: yazma sonrasi dosya diskten TEKRAR
+okunup `XNode.DeepEquals` ile karsilastirilir; tutmuyorsa **ONCEKI ICERIK BAYT BAYT GERI KONUR**
+(silme yok; dosya daha once yoksa yerine gecerli bos `<configuration/>` birakilir). Ikinci kapi:
+`IisWebConfigOkuyabiliyorMu` -- IIS belgeyi cozumleyebiliyor mu (500.19 sinifi). Dogrulanmayan
+yazma artik "kaydedildi" DEMIYOR, firlatiyor.
+
+**BU TURDA BULUNAN EK ACIK (ayni metotta):** metodun ILK ifadesi olan `XDocument.Load` da
+korumasizdi -- kilitli/bozuk bir web.config'te ham IOException/XmlException disari cikiyordu, ve
+`document.Element("configuration")!` kok eleman farkliysa NRE atardi. Ikisi de kapatildi: mevcut
+belge okunamiyorsa **HIC YAZILMAZ** (kullanicinin dosyasini "duzeltmek" icin ustune yazmak panelin
+yapabilecegi en pahali sey).
+
+### 3. `MailEnableMailService.cs` -- COM `[void]` + bos `catch` + UYDURULAN degerler
+
+**ACIKTI, ve DI'da CANLI.**
+
+**KAPATMA -- iki koldan.**
+
+* **Uydurulan degerler** (COM'a hic dokunmayan, tamamen olculebilir metotlar):
+  `GetCertificateStatusAsync` sabit `Active=true` -> `false` + `mailenable-unmeasured`;
+  `IssueCertificateAsync` hic issuance yapmadan `Active=true` -> 409 firlatiyor;
+  `SetDomainQuotaAsync` hicbir kota uygulamadan calisma alani donuyordu -> 409;
+  `UpdateSpamSettingsAsync` istegi yankiliyordu -> 409; `GetSpamSettingsAsync` ucu de sabit `true`
+  -> `Configured=false, Enabled=false`.
+* **Sonucu okumayan mutasyonlar:** durum kodu konvansiyonu TAHMIN EDILMEDI (bu makinede MailEnable
+  YOK, konvansiyon OLCULEMEZ ve yanlis tahmin CANLI sunucuda sahte hata uretirdi). Bunun yerine
+  ZATEN YAPILAN geri okumanin sonucuna BAKILIYOR: `WorkspaceOkuAsync` artik `(Workspace, Olculdu)`
+  donuyor ve `KapiAcVarlik` uc degerli karar veriyor (olculdu+tutuyor / olculdu+tutmuyor /
+  OLCULEMEDI). Kapsanan: domain olustur/sil, hesap olustur/sil, takma ad olustur/sil, kutu kotasi,
+  otomatik yanit. `GetWorkspaceAsync`'in "ayristirilamayan cikti = bos liste" dali da kapandi.
+  `SetAccountPasswordAsync` DOGRULANAMAZ (parola geri okunamaz) ve bu artik StatusMessage'da
+  ACIKCA yaziyor.
+
+### 4. `AddPythonToMachinePathAsync` -- MAKINE GENELI yazma, olcumsuz
+
+**ACIKTI.** `Set-ItemProperty` cagrisinda `-ErrorAction Stop` YOK, geri okuma YOK, raporlanan sayi
+EKLENMESI ISTENEN sayiydi.
+
+**KAPATMA.** `MachinePathMeasurement` + `RuntimeLocator.MakinePathDogrulamaParcasi` (TEK KAYNAK:
+ayni parca hem ekleme betiginin sonunda hem de yalniz-okuyan `BuildMachinePathProbeScript`'te
+kosar). Betik yazmadan sonra PATH'i TAZE okuyup `ADAPANEL-PATH-HEDEF` ve
+`ADAPANEL-PATH-DOGRULANDI` basiyor; damga YOKSA sonuc "sifir" degil OLCULEMEDI.
+
+### 5. `SiteAliasService.YonlendirmeKuraliniYaz` -- log-only catch
+
+**ACIKTI.** `belge.Save` son ifade, butun govde yalniz-gunluge-yazan bir catch icinde; donus
+degeri yoktu.
+
+**KAPATMA.** `AliasRedirectRuleMeasurement` + `KuralDiskteVarMi` geri okumasi. FIRLATMIYOR (kural
+yazilamasa da takma ad CALISIR, baglama duruyor) ama sonuc `SiteAliasWorkspaceDto`'ya tasiniyor;
+panel "yonlendirme acik" demeden once ona bakiyor.
+
+### 6. `SiteHostingSettingsService.cs:431` ve `:531` -- `Running` olculmeden yaziliyor
+
+**ACIKTI, ve dusunuldugunden genis.** `Running = false` iddiasi olcumsuzdu VE silme hatasi "gorev
+zaten yok" varsayilarak yutuluyordu -- silme GERCEKTEN basarisiz oldugunda da panel "durduruldu"
+diyordu. **Kardes BASLATMA yollari (`:397`, `:600`) ayni sekilde `Running = true` diyordu**;
+onlar da kapatildi (TEK KAYNAK: `DurumuOlcAsync` iki yonde de kullaniliyor).
+
+---
+
+### MUTASYON KANITI (37 mutasyon)
+
+**Ilk kosumda 35 kirmizi, 2 YESIL kaldi; ikisi de duzeltildi ve bu kayda gecirilmeyi hak ediyor.**
+
+* **M7 "geri okuma YOK" YESIL KALDI.** web.config karsilastirmasini HICBIR test kosturmuyordu:
+  yarim bir yazimi gercek bir dosya sisteminde kasten uretmek mumkun degil. `UpdateWebConfig`
+  metoduna `geriOkuyucu` OLCULEBILIRLIK kancasi eklendi (yazma ve GERI ALMA hala gercek dosya
+  sisteminde); artik kirmizi.
+* **M28 "-ErrorAction Stop kaldirildi" YESIL KALDI** -- cunku sinama KAYNAK TARAMASIYDI
+  (`Assert.Contains("-ErrorAction Stop", betik)`) ve dosyanin BASKA bir satirindaki ayni metin
+  korumayi gizliyordu. **Bu oturumda kaynak tarayan testin YEDINCI yanilmasi.** Yerine iki sey
+  kondu: (a) GERCEK powershell.exe'de olculen hata yayilimi, (b) SATIR BAZLI kapi -- her
+  `Set-ItemProperty` ve `Get-ItemProperty` satiri KENDI `-ErrorAction Stop` korumasini tasimali.
+
+**FAZLA KAPATMA NOBETCILERI (9):** handler sirasi hep "uyari"; hicbir handler sirali sayilmaz;
+hicbir web.config dogrulanmis sayilmaz; web.config uyarisi hep dolu; posta kapisi HER ZAMAN
+reddeder; PATH hicbir zaman uygulanmadi; PATH her zaman uygulandi; kural olcumu hic uygulanmadi;
+isci durumu hic olculmedi -- dokuzu da kirmizi. Yani her sey yolundayken panel HALA sade "yapildi"
+diyor.
+
+### BU MAKINEDE GERCEKTEN OLCULENLER
+
+* **IIS KURULU** (`%windir%\System32\inetsrv\Microsoft.Web.Administration.dll` VAR) ama surec
+  YUKSELTILMEMIS. `IisWebConfigOkuyabiliyorMu` gercekten kosturuldu: hem bilinmeyen bir site adi
+  hem "Default Web Site" icin **NULL (olculemedi)** donuyor -- yani fail-safe DOGRULANDI, erisim
+  reddi "web.config bozuk" sayilmiyor. Hicbir site olusturulmadi/degistirilmedi.
+* **`-ErrorAction Stop` landmine'i GERCEK powershell.exe'de olculdu:** var olmayan bir kayit
+  yoluna `Set-ItemProperty` + ardindan baska bir ifade -> betik AKMAYA DEVAM ETTI ve surec
+  **SIFIR** ile cikti; `-ErrorAction Stop` ile cikis kodu SIFIR DEGIL ve betik akmadi. (Tek
+  ifadelik bir olcum YANILTIR: onda gevsek cagri da 1 doner -- bu da olculdu.)
+* **Makine PATH sondasi gercek HKLM PATH'i uzerinde kosturuldu** (YALNIZ OKUYARAK): Windows
+  dizini bulundu (1/1), var olmayan klasor hedefe SAYILMADI (0/0), diskte var ama PATH'te olmayan
+  klasor EKSIK olculdu (0/1), karisik durum 1/2.
+* **web.config yazma/geri okuma/GERI ALMA gercek dosyalarla olculdu:** IIS reddinde onceki icerik
+  BAYT BAYT geri kondu; dosya yokken geri alma SILMEDI, gecerli bos belge birakti; kilitli dosyada
+  yazma dustu ve onceki icerik bozulmadi; bozuk ya da yabanci kokli belgenin USTUNE YAZILMADI.
+* **Ekleme betigi gercek PowerShell AYRISTIRICISINDAN gecirildi** (kosturulmadan): 0 hata.
+
+### OLCULEMEYENLER (durustce)
+
+* **MailEnable BU MAKINEDE YOK** (32-bit COM: MEAOPO/MEAOAU/MEAOAM). COM metotlarinin gercek
+  davranisi -- ozellikle **durum kodu konvansiyonu** ve `RemoveLogin`'in eksik bir giriste ne
+  yaptigi -- OLCULMEDI. Kapatma tam da bu yuzden konvansiyona degil GERI OKUMAYA dayandirildi.
+  Ayrica: `MEAOAU.Login` kaydinin hayatta kalip kalmadigi calisma alani okumasinda **GORUNMEZ**
+  (kutular listeleniyor, giris kayitlari degil) -- bu, account_delete ayrintisina ACIKCA yazildi.
+* **HKLM PATH'e GERCEK yazma OLCULMEDI** (surec yukseltilmemis; makine geneli PATH'i degistirmek
+  bu turun kapsami disinda). Olculen sey, panelin sonucu NASIL OKUDUGUDUR.
+* **Gercek bir IIS handler koleksiyonunun `AddAt(0, ...)` cagrisini hangi kosulda reddettigi
+  OLCULMEDI.** Yansima yardimcilarinin GERCEK kodu, IIS'in yerine gecen bir koleksiyon uzerinde
+  kosturuldu.
+* **IIS sondasinin `true` (kabul) ve `false` (ret) dallari OLCULMEDI:** kabul dali yukseltilmis
+  surec, ret dali GERCEKTEN bozuk bir web.config'e sahip GERCEK bir IIS sitesi gerektirir.
+* **Gorev Zamanlayici'da panel gorevi YOK:** gercek bir schtasks silme/olusturma turu OLCULMEDI.
+
+### KIRILAN DAVRANISLAR (bilerek)
+
+1. `ISchedulerService.AddPythonToMachinePathAsync` donus tipi `Task<int>` ->
+   `Task<MachinePathMeasurement>`; `POST /cron/environment/python-path` GOVDESI DEGISTI (`added`
+   duruyor, yaninda `verified`, `expected`, `measured`, `applied`, `detail` geldi).
+2. `SiteHostingSettingsService.UpdateWebConfig` donus tipi `void` -> `WebConfigWriteMeasurement`;
+   `PUT /sites/{ad}/hosting-settings` dogrulanamayan yazimda artik **FIRLATIYOR** (once sessizce
+   "kaydedildi" diyordu).
+3. `MailEnableMailService`: `SetDomainQuotaAsync`, `IssueCertificateAsync`,
+   `UpdateSpamSettingsAsync` artik 409 FIRLATIYOR (once sessizce basarili donuyorlardi).
+   `GetCertificateStatusAsync` ve `GetSpamSettingsAsync` artik `false` donuyor. Mutasyon metotlari
+   dogrulanamazsa FIRLATIYOR.
+4. `GetAutoResponderAsync` cikti ayristirilamazsa FIRLATIYOR (once "kapali/bos mesaj" donuyordu);
+   `SetAutoResponderAsync` geri okunan durum istenenle uyusmazsa FIRLATIYOR.
+5. `AspSiteConfigurationDto`, `SitePhpAssignmentDto`, `SiteHostingSettingsDto`,
+   `SiteAliasWorkspaceDto`, `QueueWorkerStatusDto` yeni olcum alanlari tasiyor (EKLEME; mevcut
+   alanlar degismedi).
+
+### YENI DOSYALAR
+
+`src/AdaPanel.Core/Dtos/Asp/HandlerOrderMeasurement.cs`,
+`src/AdaPanel.Core/Dtos/Sites/WebConfigWriteMeasurement.cs`,
+`src/AdaPanel.Core/Dtos/Sites/AliasRedirectRuleMeasurement.cs`,
+`src/AdaPanel.Core/Dtos/Scheduler/MachinePathMeasurement.cs`,
+`tests/AdaPanel.Infrastructure.Tests/HandlerSirasiOlcumTests.cs` (11),
+`tests/AdaPanel.Infrastructure.Tests/WebConfigYaziGeriOkuTests.cs` (16),
+`tests/AdaPanel.Infrastructure.Tests/GeciciProbeOlcumu.cs` -> icinde `IisSondasiFailSafeTests` (2),
+`tests/AdaPanel.Infrastructure.Tests/MailEnableDurustlukTests.cs` (10),
+`tests/AdaPanel.Infrastructure.Tests/MakinePathOlcumTests.cs` (9),
+`tests/AdaPanel.Infrastructure.Tests/TakmaAdKuraliVeIsciDurumuTests.cs` (10).
+
+**Yeni i18n (tr+en, 29 anahtar):** `aspnet.handler_shadowed`, `aspnet.handler_order_unverified`,
+`aspnet.handler_missing`, `panel.aspnet.handlerShadowed`, `panel.aspnet.handlerOrderUnverified`,
+`panel.aspnet.handlerMissing`, `sites.hosting_settings_write_failed`,
+`sites.hosting_settings_unverified`, `sites.hosting_settings_rejected_by_iis`,
+`sites.hosting_settings_iis_unverified`, `panel.hosting.savedIisUnverified`,
+`mail.domain_create_not_applied`, `mail.domain_create_unverified`,
+`mail.domain_delete_not_applied`, `mail.domain_delete_unverified`,
+`mail.account_create_not_applied`, `mail.account_create_unverified`,
+`mail.account_delete_not_applied`, `mail.account_delete_unverified`,
+`mail.alias_create_not_applied`, `mail.alias_create_unverified`,
+`mail.alias_delete_not_applied`, `mail.alias_delete_unverified`,
+`mail.autoresponder_unverified`, `mail.autoresponder_not_applied`,
+`mail.domain_quota_not_supported`, `mail.certificate_issue_not_supported`,
+`mail.spam_settings_not_supported`, `cron.python_path_unverified`,
+`cron.python_path_incomplete`, `alias.redirect_rule_not_applied`,
+`alias.redirect_rule_unverified`, `sites.queue_worker_state_unverified`.
+
+**4827 test yesil** (baseline 4771 + 56). `scripts/devam-durumu.ps1`: SAGLAM.
+
+### BU TURDA BAKILMAYAN (sonraki tur icin)
+
+* `MailEnableMailService.SetAccountPasswordAsync` -- parola geri okunamadigi icin sonuc HALA
+  dogrulanmiyor; simdilik yalnizca StatusMessage ile ACIKCA soyleniyor. Gercek kapatma, MailEnable
+  kurulu bir makinede `GetLogin` davranisinin OLCULMESINI gerektirir.
+* `MailEnableMailService.DeleteAccountAsync` -- posta kutusunun gittigi olculuyor ama
+  **`MEAOAU.Login` kaydi olculMUYOR** (calisma alani okumasinda gorunmuyor). Kutu silinip giris
+  hayatta kalirsa panel bunu goremez.
+* `MailEnableMailService`'in liste/kuyruk/relay/dinleyici metotlari (`GetListenersAsync`,
+  `GetQueueAsync`, `GetRelayAsync`, `SetRelayAsync`, `GetOutboundLimitAsync`,
+  `SetOutboundLimitAsync`) bu turda INCELENMEDI.

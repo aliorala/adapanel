@@ -35,6 +35,19 @@ export type SiteHostingSettings = {
   hstsMaxAgeSeconds: number;
   hstsIncludeSubDomains: boolean;
   hstsPreload: boolean;
+  // web.config DISKE indi mi ve IIS onu okuyabildi mi? UC DEGERLI olcum.
+  webConfigWrite?: {
+    reparsed: boolean;
+    matches: boolean;
+    rolledBack: boolean;
+    iisProbed: boolean;
+    iisAccepted: boolean;
+    detail: string;
+    verified: boolean;
+    failed: boolean;
+    iisVerified: boolean;
+    noticeKey: string;
+  };
 };
 
 export async function getSiteHostingSettings(siteName: string) {
@@ -126,7 +139,15 @@ export async function migrateSiteFiles(siteName: string, payload: RemoteFileMigr
   return response.data.data;
 }
 
-export type QueueWorkerStatus = { running: boolean; taskName: string };
+export type QueueWorkerStatus = {
+  running: boolean;
+  taskName: string;
+  /** `running` OLCULDU mu, yoksa VARSAYILDI mi? */
+  measured: boolean;
+  detail: string;
+  /** Bos ise olculdu ve yolunda; dolu ise gosterilecek uyari anahtari. */
+  noticeKey: string;
+};
 
 export async function getQueueWorker(siteName: string) {
   const response = await apiClient.get<ApiEnvelope<QueueWorkerStatus>>(

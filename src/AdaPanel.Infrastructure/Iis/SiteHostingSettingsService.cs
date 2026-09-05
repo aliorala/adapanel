@@ -45,6 +45,9 @@ public sealed class SiteHostingSettingsService(
         var existing = states.FirstOrDefault(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
+            // OKUMA yolunda yazma ÖLÇÜMÜ YOKTUR. Geçmiş bir "doğrulandı"yı bugüne taşımak,
+            // aradan geçen sürede elle bozulmuş bir web.config'i yeşil göstermek olurdu.
+            existing.WebConfigWrite = WebConfigWriteMeasurement.Olculemedi();
             return existing;
         }
 
@@ -85,7 +88,19 @@ public sealed class SiteHostingSettingsService(
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
         Validate(site.PhysicalPath, request);
-        UpdateWebConfig(site.PhysicalPath, request);
+
+        // YAZ, SONRA GERİ OKU — ve IIS'e de SOR. Eskiden burada dönüş değeri olmayan bir çağrı
+        // vardı; panel koşulsuz "kaydedildi" diyordu. XML olarak geçerli bir belge IIS için hâlâ
+        // geçersiz olabilir (tanımsız bölüm → sitenin TAMAMINA 500.19), o yüzden ikinci bir
+        // kapı var. IIS yoksa cevap "reddetti" DEĞİL, "ölçülemedi"dir.
+        var yazma = UpdateWebConfig(site.PhysicalPath, request, () => IisWebConfigOkuyabiliyorMu(site.Name));
+        if (!yazma.Verified || (yazma.IisProbed && !yazma.IisAccepted))
+        {
+            // Diske inmeyen / IIS'in reddettiği bir yazma "kaydedildi" DEĞİLDİR; önceki içerik
+            // geri konuldu (bkz. KaydetVeGeriOku) ve kullanıcıya ADIYLA söylenir.
+            throw new AppException(yazma.NoticeKey, 500, 500, yazma.Detail);
+        }
+
         try
         {
             // IIS KUYRUĞUNA GİRİYOR: applicationHost.config'e yazıyor ve tek dosyadır — eşzamanlı
@@ -135,6 +150,11 @@ public sealed class SiteHostingSettingsService(
         states.RemoveAll(item => string.Equals(item.SiteName, siteName, StringComparison.OrdinalIgnoreCase));
         states.Add(state);
         await fileStore.WriteAsync(StatePath, states, cancellationToken);
+
+        // ÖLÇÜM KAYDEDİLDİKTEN SONRA İLİŞTİRİLİR. Durum dosyasına yazılsaydı, bir sonraki OKUMA
+        // eski bir ölçümü BUGÜNÜN gerçeği gibi gösterirdi — düzeltmeye çalıştığımız hata sınıfının
+        // ta kendisi.
+        state.WebConfigWrite = yazma;
         return state;
     }
 
@@ -374,7 +394,9 @@ public sealed class SiteHostingSettingsService(
             Interval = 1
         }, cancellationToken);
 
-        return new QueueWorkerStatusDto { Running = true, TaskName = QueueTaskName(siteName) };
+        // BASLATMA IDDIASI DA OLCULUR. `Running = true` de tipki `Running = false` gibi hicbir
+        // olcume dayanmiyordu; ayni geri okuma iki yonde de kullanilir (TEK KAYNAK).
+        return await DurumuOlcAsync(QueueTaskName(siteName), null, cancellationToken);
     }
 
     public async Task RemoveSiteAsync(string siteName, CancellationToken cancellationToken = default)
@@ -403,14 +425,7 @@ public sealed class SiteHostingSettingsService(
     public async Task<QueueWorkerStatusDto> StopQueueWorkerAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var taskName = QueueTaskName(siteName);
-        try
-        {
-            await schedulerService.DeleteTaskAsync(taskName, cancellationToken);
-        }
-        catch (AppException)
-        {
-            // Görev zaten yoksa sorun değil.
-        }
+        var silmeHatasi = await GoreviSilAsync(taskName, cancellationToken);
 
         // İşçilere işi bitirince nazikçe çık sinyali (best-effort); zaten --max-time ile de durur.
         try
@@ -428,7 +443,78 @@ public sealed class SiteHostingSettingsService(
             // Sinyal gönderilemese de worker yine duracak.
         }
 
-        return new QueueWorkerStatusDto { Running = false, TaskName = taskName };
+        return await DurumuOlcAsync(taskName, silmeHatasi, cancellationToken);
+    }
+
+    /// <summary>
+    /// Görevi siler; sonucu FIRLATMADAN döndürür (silinemediyse hatanın kendisi döner).
+    /// </summary>
+    /// <remarks>
+    /// Eskiden buradaki <c>catch (AppException)</c> "görev zaten yoksa sorun değil" diyerek
+    /// HER silme hatasını yutuyordu — silme GERÇEKTEN başarısız olduğunda da. Ayrım artık
+    /// aşağıdaki GERİ OKUMA ile yapılıyor: görev hâlâ listede mi?
+    /// </remarks>
+    private async Task<AppException?> GoreviSilAsync(string taskName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await schedulerService.DeleteTaskAsync(taskName, cancellationToken);
+            return null;
+        }
+        catch (AppException exception)
+        {
+            return exception;
+        }
+    }
+
+    /// <summary>
+    /// "Durduruldu" iddiasını ÖLÇER: görev listesini geri okur.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA.</b> Bu iki durdurma yolu <c>new QueueWorkerStatusDto { Running = false }</c>
+    /// dönüyordu — hiçbir ölçüme dayanmayan bir iddia. Silme başarısız olsa bile aynı satır
+    /// çalışıyordu; işçi koşmaya devam ederken panel "durduruldu" diyordu.
+    /// </para>
+    /// <para>
+    /// <b>ÜÇ DEĞER.</b> Görev listesi okunamazsa cevap "duruyor" DEĞİL, ÖLÇÜLEMEDİ'dir
+    /// (<see cref="QueueWorkerStatusDto.Measured"/> false). Okunabiliyorsa
+    /// <see cref="QueueWorkerStatusDto.Running"/> görevin listede olup olmamasıdır — iddia değil,
+    /// gözlem.
+    /// </para>
+    /// </remarks>
+    private async Task<QueueWorkerStatusDto> DurumuOlcAsync(
+        string taskName,
+        AppException? silmeHatasi,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var gorevler = await schedulerService.GetTasksAsync(cancellationToken);
+            var duruyor = gorevler.Any(item => string.Equals(item.Name, taskName, StringComparison.OrdinalIgnoreCase));
+
+            return new QueueWorkerStatusDto
+            {
+                TaskName = taskName,
+                Running = duruyor,
+                Measured = true,
+                Detail = duruyor
+                    ? $"Gorev HALA kayitli: {taskName}."
+                      + (silmeHatasi is null ? string.Empty : $" Silme hatasi: {silmeHatasi.MessageKey}.")
+                    : $"Gorev kayitli degil: {taskName}."
+            };
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Gorev listesi okunamadi. "Durduruldu" DEMEYIZ.
+            return new QueueWorkerStatusDto
+            {
+                TaskName = taskName,
+                Running = false,
+                Measured = false,
+                Detail = "Gorev listesi OKUNAMADI: durum olculemedi. " + exception.Message
+            };
+        }
     }
 
     private async Task<string> ResolvePhpExecutableAsync(CancellationToken cancellationToken)
@@ -513,22 +599,15 @@ public sealed class SiteHostingSettingsService(
             Interval = 1
         }, cancellationToken);
 
-        return new QueueWorkerStatusDto { Running = true, TaskName = SchedulerTaskName(siteName) };
+        return await DurumuOlcAsync(SchedulerTaskName(siteName), null, cancellationToken);
     }
 
     public async Task<QueueWorkerStatusDto> StopLaravelSchedulerAsync(string siteName, CancellationToken cancellationToken = default)
     {
         var taskName = SchedulerTaskName(siteName);
-        try
-        {
-            await schedulerService.DeleteTaskAsync(taskName, cancellationToken);
-        }
-        catch (AppException)
-        {
-            // Görev zaten yoksa sorun değil.
-        }
+        var silmeHatasi = await GoreviSilAsync(taskName, cancellationToken);
 
-        return new QueueWorkerStatusDto { Running = false, TaskName = taskName };
+        return await DurumuOlcAsync(taskName, silmeHatasi, cancellationToken);
     }
 
     // AppStoreService Laravel kurulumuyla AYNI ad → panel-kurulu Laravel'de oluşan görevi de yönetir, mükerrer olmaz.
@@ -1318,13 +1397,59 @@ public sealed class SiteHostingSettingsService(
 
     // internal: web.config üretimi bu servisin ASIL davranışı ve gerçek IIS olmadan da ölçülebilir
     // olmalı (testler geçici bir klasöre yazıp XML'i doğruluyor).
-    internal static void UpdateWebConfig(string root, UpdateSiteHostingSettingsRequest request)
+    /// <param name="iisProbe">
+    /// IIS'in yazılan web.config'i okuyup okuyamadığını söyler: <c>true</c> kabul, <c>false</c>
+    /// ret, <c>null</c> ÖLÇÜLEMEDİ (IIS yok). <c>null</c> geçilirse IIS hiç sorulmaz.
+    /// </param>
+    /// <param name="geriOkuyucu">
+    /// Diskten geri okuma kaynağı. Varsayılanı gerçek <c>XDocument.Load</c>'dır. Bu bir TEST
+    /// KANCASI değil, ÖLÇÜLEBİLİRLİK kancasıdır: "diske inen belge, yazmak istediğimiz belge
+    /// DEĞİL" durumu (yarım/bozuk yazım, başka bir sürecin araya girmesi) gerçek bir dosya
+    /// sisteminde kasten üretilemez; kararın kendisi ancak buradan ölçülebilir.
+    /// </param>
+    internal static WebConfigWriteMeasurement UpdateWebConfig(
+        string root,
+        UpdateSiteHostingSettingsRequest request,
+        Func<bool?>? iisProbe = null,
+        Func<string, XDocument>? geriOkuyucu = null)
     {
         var webConfigPath = Path.Combine(root, "web.config");
-        var document = File.Exists(webConfigPath)
-            ? XDocument.Load(webConfigPath, LoadOptions.PreserveWhitespace)
-            : new XDocument(new XElement("configuration"));
-        var configuration = document.Element("configuration")!;
+
+        // MEVCUT BELGE OKUNAMIYORSA HİÇ YAZMAYIZ.
+        //
+        // Bu satır eskiden korumasızdı: dosya kilitliyse/erişilemezse ham bir IOException
+        // metottan dışarı çıkıyordu — panel için ANLAMSIZ bir 500. Daha kötüsü, "üstüne yazıp
+        // kurtarayım" davranışı kullanıcının web.config'ini yok ederdi. Doğru cevap: dokunma ve
+        // BUNU SÖYLE.
+        XDocument document;
+        try
+        {
+            document = File.Exists(webConfigPath)
+                ? XDocument.Load(webConfigPath, LoadOptions.PreserveWhitespace)
+                : new XDocument(new XElement("configuration"));
+        }
+        catch (Exception exception) when (exception is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+        {
+            return new WebConfigWriteMeasurement
+            {
+                WriteFailed = true,
+                Detail = $"Mevcut web.config okunamadi, HIC YAZILMADI: {exception.Message}"
+            };
+        }
+
+        // KÖK ELEMAN <configuration> DEĞİLSE de dokunmayız: eskiden `!` ile geçiliyordu ve
+        // NullReferenceException'a düşüyordu. Kullanıcının dosyasını "düzeltmek" için üstüne
+        // yazmak, panelin yapabileceği en pahalı şeydir.
+        var configuration = document.Element("configuration");
+        if (configuration is null)
+        {
+            return new WebConfigWriteMeasurement
+            {
+                WriteFailed = true,
+                Detail = "Mevcut web.config'in kok elemani <configuration> degil; HIC YAZILMADI."
+            };
+        }
+
         var systemWebServer = Ensure(configuration, "system.webServer");
         var security = Ensure(systemWebServer, "security");
 
@@ -1519,7 +1644,208 @@ public sealed class SiteHostingSettingsService(
             }
         }
 
-        document.Save(webConfigPath);
+        return KaydetVeGeriOku(webConfigPath, document, iisProbe, geriOkuyucu);
+    }
+
+    /// <summary>
+    /// web.config'i yazar ve YAZDIGINI GERİ OKUR. Geri okunan belge yazılmak isteneni
+    /// tutmuyorsa ÖNCEKİ içerik geri konur ve bu ADIYLA raporlanır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN HATA.</b> Buranın son ifadesi <c>document.Save(webConfigPath)</c> idi. Bozuk
+    /// ya da yarım yazılmış bir web.config sitenin TAMAMINA <c>500.19</c> verir — panel yine
+    /// "kaydedildi" derdi. <c>Validate</c> İSTEĞİ denetliyordu, ÜRETİLEN BELGEYİ değil.
+    /// </para>
+    /// <para>
+    /// <b>GERİ ALMA, SİLME DEĞİL.</b> Bozuk yazımda dosya SİLİNMEZ: önceki içerik varsa aynen
+    /// geri yazılır; dosya daha önce yoksa yerine geçerli bir boş <c>&lt;configuration/&gt;</c>
+    /// konur. Site, panelin yarım yazımı yüzünden düşmüş halde bırakılmaz.
+    /// </para>
+    /// <para>
+    /// <b>KARŞILAŞTIRMA NEDEN <c>DeepEquals</c>.</b> Bayt karşılaştırması biçimlendirme/BOM
+    /// farkında yanlış alarm verirdi. Ölçülen soru "diskteki dosya, kurduğumuz belgenin AYNISI
+    /// mı" — yani XML olarak ayrıştırılabiliyor mu ve aynı ağacı veriyor mu.
+    /// </para>
+    /// </remarks>
+    private static WebConfigWriteMeasurement KaydetVeGeriOku(
+        string webConfigPath,
+        XDocument document,
+        Func<bool?>? iisProbe,
+        Func<string, XDocument>? geriOkuyucu)
+    {
+        // ÖNCEKİ İÇERİK: geri alma bunun üzerinden yapılır (yoksa null).
+        byte[]? oncekiIcerik = null;
+        try
+        {
+            if (File.Exists(webConfigPath))
+            {
+                oncekiIcerik = File.ReadAllBytes(webConfigPath);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Okunamayan bir dosyayı geri de koyamayız; bunu ölçüme yazıp devam ederiz.
+            return WebConfigWriteMeasurement.Olculemedi($"Onceki web.config okunamadi: {exception.Message}");
+        }
+
+        try
+        {
+            document.Save(webConfigPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Yazma DUSTU: dosya degismedi. "Olculemedi" degil, BASARISIZ.
+            return new WebConfigWriteMeasurement
+            {
+                WriteFailed = true,
+                Detail = $"web.config yazilamadi: {exception.Message}"
+            };
+        }
+
+        // GERİ OKUMA. Whitespace korunmadan okunur; karşılaştırılan taraf da aynı biçimde
+        // yeniden ayrıştırılır ki fark ANLAM farkı olsun, boşluk farkı değil.
+        XDocument diskten;
+        try
+        {
+            diskten = geriOkuyucu is null
+                ? XDocument.Load(webConfigPath, LoadOptions.None)
+                : geriOkuyucu(webConfigPath);
+        }
+        catch (Exception exception) when (exception is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+        {
+            var geriKondu = OncekineDon(webConfigPath, oncekiIcerik);
+            return new WebConfigWriteMeasurement
+            {
+                Reparsed = false,
+                RolledBack = geriKondu,
+                Detail = $"Yazilan web.config GERI OKUNAMADI ({exception.Message}). "
+                         + (geriKondu ? "Onceki icerik geri konuldu." : "GERI ALINAMADI.")
+            };
+        }
+
+        var beklenen = XDocument.Parse(document.ToString(SaveOptions.None), LoadOptions.None);
+        var esit = XNode.DeepEquals(beklenen.Root, diskten.Root);
+        if (esit)
+        {
+            // İKİNCİ KAPI: IIS belgeyi okuyabiliyor mu? Reddediyorsa site 500.19 verecek demektir;
+            // o hâlde ÖNCEKİ içerik geri konur — panelin yazımı siteyi düşürmüş hâlde bırakmaz.
+            var iisKabul = iisProbe?.Invoke();
+            if (iisKabul is false)
+            {
+                var iisGeriAlindi = OncekineDon(webConfigPath, oncekiIcerik);
+                return new WebConfigWriteMeasurement
+                {
+                    Reparsed = true,
+                    Matches = true,
+                    IisProbed = true,
+                    IisAccepted = false,
+                    RolledBack = iisGeriAlindi,
+                    Detail = "IIS yazilan web.config'i OKUYAMADI (500.19 sinifi). "
+                             + (iisGeriAlindi ? "Onceki icerik geri konuldu." : "GERI ALINAMADI.")
+                };
+            }
+
+            return new WebConfigWriteMeasurement
+            {
+                Reparsed = true,
+                Matches = true,
+                IisProbed = iisKabul is not null,
+                IisAccepted = iisKabul is true
+            };
+        }
+
+        var alindi = OncekineDon(webConfigPath, oncekiIcerik);
+        return new WebConfigWriteMeasurement
+        {
+            Reparsed = true,
+            Matches = false,
+            RolledBack = alindi,
+            Detail = "Diskten okunan web.config yazilmak istenen belge DEGIL. "
+                     + (alindi ? "Onceki icerik geri konuldu." : "GERI ALINAMADI.")
+        };
+    }
+
+    /// <summary>
+    /// IIS yazılan web.config'i OKUYABİLİYOR mu? <c>true</c> kabul · <c>false</c> ret ·
+    /// <c>null</c> ÖLÇÜLEMEDİ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bir web.config XML olarak kusursuz ama IIS için ÖLÜMCÜL olabilir: tanımlanmamış bir
+    /// bölüm (<c>ipSecurity</c>, <c>httpRedirect</c>… rol hizmeti kurulu değilse) sitenin
+    /// TAMAMINA <c>500.19</c> verir. Bunu ancak yapılandırma sistemini okuyan taraf söyler.
+    /// </para>
+    /// <para>
+    /// <b>ÜÇ DEĞER ŞART.</b> IIS yoksa (<c>sites.iis_not_available</c>) ya da site bulunamıyorsa
+    /// cevap "reddetti" DEĞİL, <c>null</c>'dır. İkisini aynı görüntüye düşürmek, IIS'siz bir
+    /// makinede her kaydı sahte bir hatayla reddetmek olurdu.
+    /// </para>
+    /// </remarks>
+    internal static bool? IisWebConfigOkuyabiliyorMu(string siteName)
+    {
+        try
+        {
+            using var serverManager = AspNet.IisConfigurationAccess.CreateServerManager();
+            // Bölümü GERÇEKTEN okuruz: yalnız yapılandırmayı almak tembel olabilir, bölüm
+            // çözümlemesi ise bozuk/tanımsız bölümde patlar — ölçmek istediğimiz tam olarak bu.
+            // Koleksiyonu saymak, tembel çözümlemenin gerçekten koştuğunu garantiler.
+            _ = AspNet.IisConfigurationAccess
+                .SnapshotHandlers(AspNet.IisConfigurationAccess.GetHandlersCollection(serverManager, siteName))
+                .Count;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            // VARSAYILAN "ÖLÇÜLEMEDİ"DİR, "REDDEDİLDİ" DEĞİL.
+            //
+            // Bu ayrım hayatidir: yükseltilmemiş bir süreçte applicationHost.config okunamaz ve
+            // erişim reddini "web.config bozuk" saymak, panelin HER kaydı sahte bir hatayla
+            // reddetmesi demek olurdu. Bu yüzden yalnız TANIDIĞIMIZ bir yapılandırma hatası
+            // "reddedildi"ye sayılır; geri kalan her şey ölçülemedi'ye düşer.
+            return YapilandirmaHatasiMi(exception) ? false : null;
+        }
+    }
+
+    /// <summary>
+    /// İstisna, IIS yapılandırma sisteminin belgeyi ÇÖZÜMLEYEMEDİĞİNİ mi söylüyor?
+    /// (<c>Microsoft.Web.Administration.ServerManagerException</c> ve türevleri.)
+    /// </summary>
+    private static bool YapilandirmaHatasiMi(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            var tur = current.GetType().FullName ?? string.Empty;
+            if (tur.Contains("ServerManagerException", StringComparison.Ordinal) ||
+                tur.Contains("FileLoadException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Önceki içeriği geri yazar; dosya daha önce yoksa geçerli boş bir belge bırakır.</summary>
+    private static bool OncekineDon(string webConfigPath, byte[]? oncekiIcerik)
+    {
+        try
+        {
+            if (oncekiIcerik is not null)
+            {
+                File.WriteAllBytes(webConfigPath, oncekiIcerik);
+                return true;
+            }
+
+            // Dosya YOKTU. Silmek yerine ZARARSIZ ve GEÇERLİ bir belge bırakılır: bozuk bir
+            // web.config siteyi 500.19 ile düşürür, boş bir tanesi hiçbir şey değiştirmez.
+            new XDocument(new XElement("configuration")).Save(webConfigPath);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string[] NormalizeDefaultDocuments(IEnumerable<string> values)

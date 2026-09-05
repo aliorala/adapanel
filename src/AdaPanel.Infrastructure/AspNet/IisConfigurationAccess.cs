@@ -2,6 +2,7 @@ using System.Collections;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using AdaPanel.Core.Common;
+using AdaPanel.Core.Dtos.Asp;
 
 namespace AdaPanel.Infrastructure.AspNet;
 
@@ -54,6 +55,55 @@ internal static class IisConfigurationAccess
         return collection is IEnumerable enumerable
             ? enumerable.Cast<object>()
             : [];
+    }
+
+    /// <summary>
+    /// Sitenin <c>system.webServer/handlers</c> koleksiyonu.
+    /// </summary>
+    internal static object GetHandlersCollection(IDisposable serverManager, string siteName)
+    {
+        var configuration = InvokeMethod(serverManager, "GetWebConfiguration", siteName);
+        var handlersSection = InvokeMethod(configuration, "GetSection", "system.webServer/handlers");
+        return GetConfigurationCollection(handlersSection);
+    }
+
+    /// <summary>
+    /// Handler koleksiyonunu SIRASIYLA okur. Olcumun ham girdisi budur.
+    /// </summary>
+    internal static IReadOnlyList<HandlerSnapshot> SnapshotHandlers(object handlers)
+        => Enumerate(handlers)
+            .Select(item => new HandlerSnapshot(TryGetAttributeString(item, "name"), TryGetAttributeString(item, "path")))
+            .ToArray();
+
+    /// <summary>
+    /// Handler'i koleksiyonun BASINA koyar; koyamazsa SONA ekler ve BUNU SOYLER.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>TEK KAYNAK.</b> Ayni dort satir <c>AspNetService</c> (PHP handler'i, Classic ASP handler'i)
+    /// ve <c>PhpService</c> (PHP handler'i) icinde UC KEZ kopyalanmisti; ucunde de fallback CIPLAK
+    /// bir <c>catch</c> ile sonu getiriyordu.
+    /// </para>
+    /// <para>
+    /// <b>Fallback NEDEN duruyor.</b> Bazi IIS yapilandirmalarinda koleksiyonun 0. indeksi kilitli
+    /// olabilir; orada firlatmak, handler'i HIC yazmamak demek olurdu. Ama sona eklemek
+    /// <c>404.3</c> URETEN siralamadir; bu yuzden donus degeri KISMI BASARIYI tasir ve cagiran
+    /// commit'ten sonra <see cref="HandlerOrderMeasurement"/> ile GERCEK sirayi olcer.
+    /// Yani fallback artik "sessiz basari" degil, ISARETLENMIS bir tavizdir.
+    /// </para>
+    /// </remarks>
+    internal static bool InsertHandlerFirst(object handlers, object handler)
+    {
+        try
+        {
+            InvokeMethod(handlers, "AddAt", 0, handler);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            InvokeMethod(handlers, "Add", handler);
+            return false;
+        }
     }
 
     internal static object GetPropertyObject(object target, string propertyName)
