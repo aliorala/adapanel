@@ -259,10 +259,19 @@ internal sealed class SahteFtp : IBackupFtpCommands
         return Task.FromResult(SilmeYaniti);
     }
 
+    /// <summary>RMD yaniti. Varsayilan: 250 (klasor kaldirildi).</summary>
+    public FtpCommandResult KlasorSilmeYaniti { get; set; } = FtpCommandResult.Ok(250, "250 Remove directory operation successful.");
+
     public Task<FtpListingResult> ListDirectoryAsync(Uri directoryUri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)
     {
         Komutdur($"NLST {directoryUri}");
         return Task.FromResult(ListeYaniti);
+    }
+
+    public Task<FtpCommandResult> RemoveDirectoryAsync(Uri directoryUri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)
+    {
+        Komutdur($"RMD {directoryUri}");
+        return Task.FromResult(KlasorSilmeYaniti);
     }
 
     private void Komutdur(string komut)

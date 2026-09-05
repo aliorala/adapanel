@@ -3947,6 +3947,72 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
     /// kalır ve bir sonraki budamada yeniden denenir.</item>
     /// </list>
     /// </remarks>
+    /// <summary>
+    /// Yedek silindikten sonra BOŞ kalan GÜN KLASÖRÜNÜ kaldırır (FTP).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kullanıcı bildirimi:</b> budama dosyaları siliyordu ama gün klasörleri uzak sunucuda
+    /// boş olarak birikiyordu — "içleri boşmuş yani siliyor evet ama klasörleri de silsin".
+    /// </para>
+    /// <para>
+    /// <b>SINIR: yalnız adı GÜN BİÇİMİNDE olan klasör kaldırılır</b>
+    /// (<see cref="BackupLayout.DayFormat"/>). Bu, "üst klasöre çık ve boşsa sil" kuralından
+    /// bilerek daha dardır: kullanıcı hedefi <c>ftp://sunucu/yedekler</c> olarak verdiyse ve son
+    /// yedek de silindiyse, genel bir kural <c>yedekler</c> klasörünü kaldırırdı — panelin
+    /// oluşturmadığı, kullanıcının yapılandırdığı bir klasörü silmek yetki aşımıdır. Gün klasörünü
+    /// panel kendisi oluşturur; kaldırması da meşrudur.
+    /// </para>
+    /// <para>
+    /// <b>ÖNCE LİSTELENİR, sonra silinir.</b> FTP'de <c>RMD</c> zaten yalnız boş dizinde başarılı
+    /// olur, yani sunucu bu güvenceyi veriyor; listeleme yine de yapılıyor çünkü "boştu ama
+    /// silinemedi" (izin) ile "dolu olduğu için silinmedi" AYNI ŞEY DEĞİLDİR ve ikisini ayırmadan
+    /// yazılan bir günlük satırı, ileride yanlış yere bakılmasına yol açar.
+    /// </para>
+    /// <para>
+    /// <b>EN İYİ ÇABA:</b> klasör kaldırılamazsa budama BAŞARISIZ SAYILMAZ — asıl iş olan yedek
+    /// dosyası zaten silindi. Ama sessiz de geçilmez.
+    /// </para>
+    /// </remarks>
+    private async Task BosGunKlasorunuKaldirAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var klasor = new Uri(uri, ".");
+            var ad = klasor.Segments.LastOrDefault()?.Trim('/') ?? string.Empty;
+
+            if (!DateTime.TryParseExact(
+                    ad,
+                    BackupLayout.DayFormat,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out _))
+            {
+                return;
+            }
+
+            var listeleme = await FtpCommands.ListDirectoryAsync(klasor, credential, cancellationToken);
+            if (!listeleme.Success || listeleme.Names.Count > 0)
+            {
+                return;
+            }
+
+            var kaldirma = await FtpCommands.RemoveDirectoryAsync(klasor, credential, cancellationToken);
+            if (!kaldirma.Success)
+            {
+                logger?.LogInformation(
+                    "Bos gun klasoru kaldirilamadi (yedek dosyasi silindi, budama basarili): {Adres} kod={Kod}",
+                    SanitizeUri(klasor),
+                    kaldirma.Code);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Klasor temizligi budamayi DUSURMEZ: dosya gitti, kota geri kazanildi.
+            logger?.LogInformation(exception, "Bos gun klasoru temizligi atlandi: {Adres}", SanitizeUri(uri));
+        }
+    }
+
     private async Task DeleteFtpAsync(Uri uri, BackupPruneRemoteOptions remote, CancellationToken cancellationToken)
     {
         var credential = new NetworkCredential(remote.UserName, remote.Password);
@@ -3955,6 +4021,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         var silme = await FtpCommands.DeleteFileAsync(uri, credential, cancellationToken);
         if (silme.Success)
         {
+            await BosGunKlasorunuKaldirAsync(uri, credential, cancellationToken);
             return;
         }
 
@@ -3978,6 +4045,8 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 // ZATEN YOK = BAŞARI. Çağıran null hata görür, kayıt normal yoldan kapanır.
                 logger?.LogInformation(
                     "FTP uzak kopyasi zaten yoktu, silme basarili sayildi: {Adres}", adres);
+                // Dosya başka bir turda silinmiş ama klasör kalmış olabilir; burada da denenir.
+                await BosGunKlasorunuKaldirAsync(uri, credential, cancellationToken);
                 return;
 
             case RemotePresence.Present:

@@ -54,6 +54,17 @@ internal interface IBackupFtpCommands
 
     /// <summary>NLST. Dönen adlar sunucudan geldiği gibidir (kimi sunucu tam yol, kimi düz ad verir).</summary>
     Task<FtpListingResult> ListDirectoryAsync(Uri directoryUri, NetworkCredential credential, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// BOŞ bir dizini kaldırır (FTP <c>RMD</c>).
+    /// </summary>
+    /// <remarks>
+    /// Kullanıcı bildirimi: budama dosyaları siliyordu ama GÜN KLASÖRLERİ uzak sunucuda boş olarak
+    /// birikiyordu. FTP'de <c>RMD</c> yalnız boş dizinde başarılı olur; yani sunucunun kendisi
+    /// "içi doluysa silme" güvencesini zaten veriyor — panel yine de ÖNCE listeliyor, çünkü
+    /// "boştu ama silinemedi" ile "dolu olduğu için silinmedi" ayrı şeylerdir.
+    /// </remarks>
+    Task<FtpCommandResult> RemoveDirectoryAsync(Uri directoryUri, NetworkCredential credential, CancellationToken cancellationToken);
 }
 
 #pragma warning disable SYSLIB0014
@@ -89,6 +100,27 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         {
             // İPTAL, SUNUCU HATASI DEĞİLDİR: Abort() de WebException üretir. Bunu "silinemedi"
             // diye raporlamak, kullanıcının kendi durdurduğu işi hedefin arızası gibi gösterirdi.
+            cancellationToken.ThrowIfCancellationRequested();
+            var (code, description) = Read(exception);
+            return FtpCommandResult.Fail(code, description);
+        }
+    }
+
+    public async Task<FtpCommandResult> RemoveDirectoryAsync(
+        Uri directoryUri,
+        NetworkCredential credential,
+        CancellationToken cancellationToken)
+    {
+        var request = Create(directoryUri, WebRequestMethods.Ftp.RemoveDirectory, credential);
+        using var registration = cancellationToken.Register(request.Abort);
+
+        try
+        {
+            using var response = (FtpWebResponse)await request.GetResponseAsync();
+            return FtpCommandResult.Ok((int)response.StatusCode, Describe(response.StatusDescription));
+        }
+        catch (WebException exception)
+        {
             cancellationToken.ThrowIfCancellationRequested();
             var (code, description) = Read(exception);
             return FtpCommandResult.Fail(code, description);
