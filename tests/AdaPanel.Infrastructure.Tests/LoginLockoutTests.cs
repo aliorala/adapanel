@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Auth;
+﻿using AdaPanel.Core.Dtos.Auth;
 using AdaPanel.Core.Dtos.Audit;
 using AdaPanel.Core.Dtos.Notifications;
 using AdaPanel.Core.Dtos.Security;
@@ -172,9 +172,8 @@ public sealed class LoginLockoutTests
                 new ThrowingTotpService(),
                 audit,
                 bruteForce,
-                new ThrowingNotificationService(),
                 new ThrowingPreferencesService(),
-                new ThrowingSecurityService(),
+                new SayanIsKuyrugu(),
                 new ThrowingCustomerScopeService(),
                 new ThrowingApiTokenService(),
                 new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot })),

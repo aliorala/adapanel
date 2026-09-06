@@ -76,6 +76,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConcurrencyLock, ConcurrencyLock>();
         services.AddSingleton<IOperationProgressService, Services.OperationProgressService>();
         services.AddSingleton<JsonFileStore>();
+        // YANITI BEKLETMEMESİ gereken işlerin kuyruğu. SINGLETON olmak ZORUNDA: kuyruk süreç
+        // genelinde tek olmalı, kapsamlı (scoped) kayıt her istekte YENİ ve BOŞ bir kuyruk üretir,
+        // yani hiçbir iş çalıştıran işçiye ULAŞMAZDI (aynı gerekçe SessionRevocationStore'da).
+        services.AddSingleton<ArkaPlanIsKuyrugu>();
+        services.AddSingleton<IArkaPlanIsKuyrugu>(saglayici => saglayici.GetRequiredService<ArkaPlanIsKuyrugu>());
         // ÇIKIŞ YAPILMIŞ OTURUMLARIN KARA LİSTESİ. SINGLETON OLMAK ZORUNDA: liste süreç genelinde
         // bellekte tutuluyor ve her istekte okunuyor; kapsamlı (scoped) kayıt her istekte YENİ ve
         // BOŞ bir liste üretirdi, yani kara liste var görünüp hiçbir oturumu düşürmezdi. Aynı
@@ -296,6 +301,11 @@ public static class ServiceCollectionExtensions
         // makineler korunurdu, açığı taşıyan MEVCUT kurulumlar hiç kapanmazdı (gerekçe:
         // MailSenderPolicyWorker).
         services.AddHostedService<Mail.MailSenderPolicyWorker>();
+
+        // Arka plan iş kuyruğunun TÜKETİCİSİ. Kayıt yapılmazsa kuyruk dolar ve kuyruğa alınan hiçbir
+        // iş çalışmaz — yani parola sıfırlama postası hiç gitmez. Bu yüzden kayıt burada, diğer
+        // BackgroundService'lerin yanında.
+        services.AddHostedService<Support.ArkaPlanIsKuyruguWorker>();
 
         return services;
     }

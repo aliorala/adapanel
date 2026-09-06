@@ -4897,6 +4897,7 @@
   "panel.activity.action.auth.logout.succeeded": "Çıkış yapıldı",
   "panel.activity.action.auth.password_changed": "Parola değiştirildi",
   "panel.activity.action.auth.password_reset.completed": "Parola sıfırlama tamamlandı",
+  "panel.activity.action.auth.password_reset.mail_failed": "Parola sıfırlama postası GÖNDERİLEMEDİ",
   "panel.activity.action.auth.password_reset.requested": "Parola sıfırlama istendi",
   "panel.activity.action.auth.password_set_by_admin": "Parola yönetici tarafından belirlendi",
   "panel.activity.action.auth.password_set_from_console": "Parola konsoldan belirlendi",

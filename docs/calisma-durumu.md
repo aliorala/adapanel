@@ -5,11 +5,66 @@
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
 Son güncelleme: **06.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5020 yeşil** · typecheck + build temiz · i18n TR/EN 5208 = 5208
+Testler: **5070 yeşil** (Core 2 + Infra 5068) · typecheck + build + npm test temiz
 
 ---
 
-## SON İŞ — Göç yolunda uzak sunucu kimliği artık DOĞRULANIYOR (kapandı, commit ATILMADI)
+## SON İŞ — `password/forgot` ZAMANLAMA SIZINTISI kapandı (commit ATILMADI)
+
+**ÖLÇÜLDÜ (bu makinede, gerçek kod + gerçek ağ yığını):**
+
+| Yanıt yolunda yapılan iş | Süre |
+|---|---|
+| Belirteç üretimi (`SingleUseTokenStore.IssueAsync`, dosya kilidi + yazma) | ortanca **0,72 ms** |
+| Ayar dosyası okuması (`JsonFileStore.ReadAsync`, tanesi) | ortanca **0,17 ms** |
+| **SMTP** — MailKit `ConnectAsync`, KAPALI porta (127.0.0.1:2525) | **2066 ms** |
+| **SMTP** — karadelik IP'ye (198.51.100.7:587) | **10 sn**'de hâlâ bekliyordu (tavan) |
+| **SMTP** — çözülemeyen ad | 86 ms |
+| MailKit varsayılan `Timeout` | **120000 ms** |
+
+**Farkın KAYNAĞI SMTP'dir.** `RequestPasswordResetAsync` adres KAYITLIYSA SMTP ayarını okuyor,
+belirteç üretiyor, gerçek bir SMTP bağlantısı açıyor ve denetim kaydı yazıyordu; kayıtlı DEĞİLSE
+hiçbirini yapmadan dönüyordu. Gövde ikisinde de aynıydı, süre değildi — yani panel, hiçbir parola
+bilmeyen birine "bu e-posta kayıtlı mı" sorusunu YANIT SÜRESİYLE cevaplıyordu.
+
+**Neden sabit gecikme SEÇİLMEDİ:** yukarıdaki sayılar doğru gecikmeyi seçmeyi imkânsız kılıyor
+(2 sn seçilse karadelik senaryosunda fark yine sızar, 120 sn seçilse panel kullanılamaz olur).
+İşin TAMAMI — adres araması dahil — yanıt yolundan çıkarıldı; yanıt yolunda DAL KALMADI.
+
+**Dokunulan yerler:**
+- YENİ `src/AdaPanel.Infrastructure/Support/ArkaPlanIsKuyrugu.cs` — `IArkaPlanIsKuyrugu` +
+  sınırlı (512) kanal + `ArkaPlanIsKuyruguWorker` (`BackgroundService`, tek tüketici, iş başına
+  3 dk tavan). Kanal kipi `Wait`; `DropWrite` denendi ve nöbetçi test yakaladı (o kipte `TryWrite`
+  işi SESSİZCE atıp `true` döner).
+- YENİ `src/AdaPanel.Infrastructure/Services/ParolaSifirlamaPostasi.cs` — işin tamamı; üç sonuç da
+  denetim kaydına düşer (`auth.password_reset.requested` / `.mail_failed`).
+- `Services/AuthService.cs` — `RequestPasswordResetAsync` artık yalnız normalize edip kuyruğa yazar;
+  `INotificationService` ve `IPanelSecurityService` bağımlılıkları düştü.
+- `Api/Controllers/MailListPublicController.cs` — AYNI SINIF: abonelikten çıkma isteğinde abone
+  olan/olmayan adres SMTP + IIS derin araması yüzünden ayırt edilebiliyordu; iş kuyruğa alındı.
+- i18n TR/EN: `panel.activity.action.auth.password_reset.mail_failed` (+1/+1).
+
+**Doğrulama:** `dotnet test AdaPanel.sln -c Release` → **5070 yeşil / 0 kırmızı** (17 yeni test).
+typecheck temiz, `npm run build` temiz, `npm test` 42 yeşil.
+
+**Mutasyon (koruma kaldırıldı → kırmızı görüldü → geri kondu):**
+yanıt yoluna "kullanıcı var mı" dalı geri kondu → **3 kırmızı** ·
+gönderim hatası sessizce yutuldu → **1 kırmızı** ·
+SMTP ayarsız kaydı kaldırıldı → **1 kırmızı** ·
+kanal kipi `DropWrite` → **1 kırmızı**. Hepsi geri alındı, 5070/5070 yeşil.
+
+**KAPATILAMAYANLAR (açık, gerekçeli):**
+1. `login` — kullanıcı VARSA ek bir `SaveChangesAsync` (başarısız sayaç/kilit) çalışıyor, YOKSA
+   çalışmıyor. Kalan fark sub-ms mertebesinde ve iki dalda da çalışan PBKDF2 doğrulamasının
+   (on ms'ler) gürültüsünün altında; kapatmanın tek yolu veritabanına sahte yazmak olurdu.
+2. `UserManagementService.CreateUserAsync` — `users.duplicate_username` / `users.duplicate_email`
+   YANIT GÖVDESİNDE dönüyor ve kontrol KÜRESEL. Bayi, başka bayinin müşterisinin adresini
+   sınayabilir. Yapısal: kullanıcı adı/e-posta panel genelinde tekil olmak zorunda (giriş bu ikisiyle
+   yapılıyor). Plesk'te de aynıdır. Kimliksiz DEĞİL (yönetici/bayi yetkisi gerekir).
+
+---
+
+## ÖNCEKİ İŞ — Göç yolunda uzak sunucu kimliği artık DOĞRULANIYOR (kapandı, commit ATILMADI)
 
 **Ölçülen açık (üç nokta, üçü de kullanıcının kimlik bilgisini taşıyordu):**
 

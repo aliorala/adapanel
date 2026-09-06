@@ -1,4 +1,4 @@
-using AdaPanel.Core.Dtos.Ai;
+﻿using AdaPanel.Core.Dtos.Ai;
 using AdaPanel.Core.Dtos.Auth;
 using AdaPanel.Core.Entities;
 using AdaPanel.Core.Enums;
@@ -182,9 +182,8 @@ public sealed class ChangePasswordTests
                 new ThrowingTotpService(),
                 new RecordingAuditService(),
                 new CountingBruteForceProtection(),
-                new ThrowingNotificationService(),
                 new ThrowingPreferencesService(),
-                new ThrowingSecurityService(),
+                new SayanIsKuyrugu(),
                 new ThrowingCustomerScopeService(),
                 tokens,
                 new JsonFileStore(runtimeOptions),

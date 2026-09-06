@@ -180,12 +180,29 @@ public sealed class PostaBaglantiAdresiTests
             httpContext.Request.Scheme = "https";
             httpContext.Request.Host = new HostString(hostBasligi);
 
+            // İş ARKA PLANA alındı (zamanlama sızıntısı); testte gönderilen postayı ölçebilmek için
+            // kuyruk işi hemen, aynı iplikte çalıştırır.
+            var abonelikServisi = new MailListUnsubscribeService(
+                depo,
+                new SahtePostaServisi { Listeler = [new MailListDto { Address = Liste, Recipients = [Abone] }] },
+                Postaci,
+                NullLogger<MailListUnsubscribeService>.Instance);
+            var kapsam = new AuditTenantLinkClosureTests.SahteKapsam();
+            var siteler = new AuditTenantLinkClosureTests.SayanSiteler([]);
+            var kayitlar = new AuditTenantLinkClosureTests.KayitDefteri();
+            var kuyruk = new HemenCalistiranIsKuyrugu(new SozlukSaglayici()
+                .Ekle(abonelikServisi)
+                .Ekle<ICustomerScopeService>(kapsam)
+                .Ekle<IIisSiteService>(siteler)
+                .Ekle<IAuditService>(kayitlar));
+
             Denetleyici = new MailListPublicController(
-                new MailListUnsubscribeService(depo, new SahtePostaServisi { Listeler = [new MailListDto { Address = Liste, Recipients = [Abone] }] }, Postaci, NullLogger<MailListUnsubscribeService>.Instance),
-                new AuditTenantLinkClosureTests.SahteKapsam(),
-                new AuditTenantLinkClosureTests.SayanSiteler([]),
+                abonelikServisi,
+                kapsam,
+                siteler,
                 new SabitTercihler { Adres = sunucuAdresi, Port = httpsPort },
-                new AuditTenantLinkClosureTests.KayitDefteri(),
+                kayitlar,
+                kuyruk,
                 NullLogger<MailListPublicController>.Instance)
             {
                 ControllerContext = new ControllerContext { HttpContext = httpContext }

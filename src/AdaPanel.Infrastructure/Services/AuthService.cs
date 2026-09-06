@@ -24,9 +24,8 @@ public sealed class AuthService(
     ITotpService totpService,
     IAuditService auditService,
     IBruteForceProtectionService bruteForceProtection,
-    INotificationService notificationService,
     IPanelPreferencesService preferencesService,
-    IPanelSecurityService securityService,
+    IArkaPlanIsKuyrugu arkaPlanIsKuyrugu,
     ICustomerScopeService customerScopeService,
     IApiTokenService apiTokenService,
     JsonFileStore fileStore,
@@ -694,40 +693,54 @@ public sealed class AuthService(
 
     // ---- Parola sıfırlama ----
 
-    private const string PasswordResetStorePath = "config/password-resets.json";
-    private static readonly TimeSpan PasswordResetLifetime = TimeSpan.FromHours(1);
+    // Belirteç deposu ve ömrü TEK kaynaktan (ParolaSifirlamaPostasi): üreten arka plan işi, tüketen
+    // aşağıdaki ResetPasswordAsync. İki yerde ayrı sabit tutmak, birinin değişip ötekinin
+    // kalmasıyla "bağlantı hiç çalışmıyor" arızasını üretirdi.
+    private const string PasswordResetStorePath = ParolaSifirlamaPostasi.BelirtecDepoYolu;
 
-    public async Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Sıfırlama bağlantısı ister. YANIT YOLU, ADRESİN PANELDE OLUP OLMADIĞINI HİÇ SORMAZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK.</b> Bu metot eskiden yanıt yolunda karar veriyordu: adres kayıtlıysa SMTP
+    /// ayarı okunuyor, belirteç üretiliyor, GERÇEK BİR SMTP BAĞLANTISI açılıyor ve denetim kaydı
+    /// yazılıyordu; kayıtlı değilse hiçbiri olmuyordu. Yanıt gövdesi ikisinde de aynıydı ama SÜRE
+    /// değildi. Bu makinede ölçülen maliyetler: SMTP bağlantısı kapalı bir porta bile
+    /// <b>2066 ms</b>, yanıt vermeyen bir adrese <b>10 sn</b>'de hâlâ bekliyor (MailKit varsayılan
+    /// zaman aşımı 120000 ms); aynı yoldaki dosya işleri ortanca <b>0,72 ms</b> ve <b>0,17 ms</b>.
+    /// Yani fark SMTP'nin kendisiydi, saniyeler mertebesindeydi ve ağ üzerinden rahatça ölçülürdü:
+    /// panel, hiçbir parola bilmeyen birine "bu e-posta panelde kayıtlı mı" sorusunu YANIT
+    /// SÜRESİYLE cevaplıyordu. Hesap listesi çıkaran saldırgan sonra o hesaplara odaklanır.
+    /// </para>
+    /// <para>
+    /// <b>Neden sabit gecikme değil:</b> yukarıdaki sayılar doğru gecikmeyi seçmenin imkânsız
+    /// olduğunu gösteriyor (2 sn seçilse karadelik senaryosunda fark yine sızar, 120 sn seçilse
+    /// panel kullanılamaz). İşin TAMAMI — adres araması dahil — arka plana alındı; yanıt yolunda
+    /// dal KALMADI, ölçülecek fark da kalmadı.
+    /// </para>
+    /// <para>
+    /// Meşru kullanıcının postayı gerçekten alması ve gönderim hatasının GÖRÜNÜR olması
+    /// <see cref="ParolaSifirlamaPostasi"/>'nın sorumluluğunda (üç sonuç da denetim kaydına düşer).
+    /// </para>
+    /// </remarks>
+    public Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken = default)
     {
         var normalized = (email ?? string.Empty).Trim().ToLowerInvariant();
         if (normalized.Length == 0)
         {
-            return;
+            // Adres HİÇ verilmemiş: sızacak bir bilgi de yok, iş üretmeye gerek yok.
+            return Task.CompletedTask;
         }
 
-        var user = await dbContext.Users.FirstOrDefaultAsync(candidate => candidate.Email.ToLower() == normalized, cancellationToken);
-        // Kullanıcı numaralandırmasını engelle: bulunmasa da sessizce dön.
-        if (user is null || !user.IsActive)
-        {
-            return;
-        }
+        // Kuyruğa yazmak dizeden bağımsız, sabit maliyetli tek bir işlemdir: adres kayıtlı da olsa
+        // değil de olsa BURADA yapılan iş birebir aynıdır. İptal belirteci bilerek TAŞINMAZ — iş
+        // isteğin ömrüne bağlı değil (istemci bağlantıyı kapatsa da posta gitmeli).
+        arkaPlanIsKuyrugu.Kuyrukla(
+            "auth.password_reset",
+            (saglayici, iptal) => ParolaSifirlamaPostasi.GonderAsync(saglayici, normalized, iptal));
 
-        // SMTP yoksa link gönderilemez; token üretmenin anlamı yok.
-        if (!await notificationService.IsEmailConfiguredAsync(cancellationToken))
-        {
-            logger.LogWarning("Password reset requested for {Email} but SMTP is not configured.", user.Email);
-            return;
-        }
-
-        // TEK DOSYA, TÜM KULLANICILAR ORTAK ve kilitsiz oku-değiştir-yaz iki yönde de bozulurdu
-        // (A'nın yeni token'ı kaybolur ya da B'nin TÜKETİLMİŞ token'ı geri dirilir). Kilit,
-        // özetleme ve eski kaydın temizlenmesi ortak depoda (SingleUseTokenStore) — giriş
-        // bağlantısıyla aynı yerde, tek uygulama.
-        var (token, _) = await SingleUseTokenStore.IssueAsync(
-            fileStore, PasswordResetStorePath, user.Id, PasswordResetLifetime, cancellationToken);
-
-        await TrySendResetEmailAsync(user, token, cancellationToken);
-        await auditService.WriteAsync("auth.password_reset.requested", "auth", $"Password reset requested for '{user.UserName}'.", user.Id, null, cancellationToken);
+        return Task.CompletedTask;
     }
 
     public async Task ResetPasswordAsync(string token, string newPassword, CancellationToken cancellationToken = default)
@@ -775,44 +788,8 @@ public sealed class AuthService(
         }
     }
 
-    private async Task TrySendResetEmailAsync(PanelUser user, string token, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var preferences = await preferencesService.GetAsync(cancellationToken);
-            var securePath = await securityService.GetSecureEntryPathAsync(cancellationToken);
-            var panelName = string.IsNullOrWhiteSpace(preferences.PanelName) ? "AdaPanel" : preferences.PanelName;
-            // Adres kurgusu TEK yerde (PanelAddress): aynı üç satır hoş geldin e-postasında da vardı.
-            var resetUrl = PanelAddress.BuildEntryUrl(preferences.ServerAddress, preferences.PreferredHttpsPort, securePath)
-                + $"?resetToken={Uri.EscapeDataString(token)}";
-            var isTurkish = user.PreferredLanguage.StartsWith("tr", StringComparison.OrdinalIgnoreCase);
-
-            var subject = isTurkish ? $"{panelName} parola sıfırlama" : $"{panelName} password reset";
-            var body = isTurkish
-                ? $"""
-                  Merhaba {user.UserName},
-
-                  Parolanızı sıfırlamak için aşağıdaki bağlantıyı açın (1 saat geçerlidir):
-                  {resetUrl}
-
-                  Bu talebi siz yapmadıysanız bu e-postayı yok sayabilirsiniz; parolanız değişmez.
-                  """
-                : $"""
-                  Hello {user.UserName},
-
-                  Open the link below to reset your password (valid for 1 hour):
-                  {resetUrl}
-
-                  If you did not request this, you can ignore this email; your password stays unchanged.
-                  """;
-
-            await notificationService.SendEmailToAsync(user.Email, subject, body, cancellationToken);
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "Password reset email could not be sent to {Email}.", user.Email);
-        }
-    }
+    // Sıfırlama postasının gövdesi ARKA PLAN İŞİNE taşındı (ParolaSifirlamaPostasi): yanıt yolunda
+    // e-posta göndermek, adresin panelde olup olmadığını yanıt süresiyle söylüyordu.
 
     // Belirteç üretimi, özetleme ve depo biçimi SingleUseTokenStore'a taşındı: parola sıfırlama ile
     // tek tıkla giriş bağlantısı aynı disiplini paylaşıyor, iki kopya bırakılmadı.

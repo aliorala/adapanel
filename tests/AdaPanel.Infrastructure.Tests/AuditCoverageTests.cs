@@ -93,6 +93,20 @@ public sealed class AuditCoverageTests
         ["MailAutodiscoverController.cs#OutlookPostAsync"] = "Outlook autodiscover: istemciye ayar XML'i döner (protokol gereği POST), sunucuda hiçbir şey değişmez.",
         ["NginxController.cs#TestAsync"] = "nginx -t: yapılandırmayı doğrular, uygulamaz.",
         ["AuthController.cs#BeginTwoFactorSetupAsync"] = "2FA kurulumunu BAŞLATIR (QR/gizli üretir); etkinleştirme ayrı uçtadır ve o kayıt yazar.",
+
+        // --- Kaydı ARKA PLAN İŞİ yazan uçlar ---
+        //
+        // Bu iki uçta kayıt ATLANMIYOR; yanıt yolundan ÇIKARILDI. Sebep ölçüldü: her ikisi de
+        // kimliksizdir ve yaptıkları iş, verilen adresin panelde/listede KAYITLI olup olmamasına
+        // göre değişiyordu (SMTP bağlantısı + denetim kaydının kiracı çözümlemesi). Gövde aynıydı
+        // ama SÜRE değildi — bu makinede SMTP kapalı bir porta bile 2066 ms, yanıt vermeyen adrese
+        // 10 sn'de hâlâ bekliyordu. Kaydı yanıt yolunda yazmak, kapatılan sızıntının bir parçasını
+        // geri getirirdi. Kayıt ARTIK kuyruğa verilen işin içinde yazılıyor ve bu, kaynak taramasıyla
+        // değil DAVRANIŞ testleriyle korunuyor:
+        //   - ParolaSifirlamaPostasiTests (auth.password_reset.requested / .mail_failed)
+        //   - AuditTenantLinkClosureTests (mail.list.unsubscribe_requested + konu çözümlemesi)
+        ["AuthController.cs#ForgotPasswordAsync"] = "Kaydı arka plan işi yazar (ParolaSifirlamaPostasi): yanıt yolunda yazmak, kapatılan zamanlama sızıntısını geri getirirdi. Davranış testi: ParolaSifirlamaPostasiTests.",
+        ["MailListPublicController.cs#RequestAsync"] = "Kaydı, ucun kuyruğa verdiği arka plan işi yazar: yanıt yolunda yazmak (kiracı çözümlemesi dahil) abone olup olmadığını süreyle sızdırıyordu. Davranış testi: AuditTenantLinkClosureTests.",
     };
 
     /// <summary>

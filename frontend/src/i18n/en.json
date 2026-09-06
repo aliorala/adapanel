@@ -4897,6 +4897,7 @@
   "panel.activity.action.auth.logout.succeeded": "Signed out",
   "panel.activity.action.auth.password_changed": "Password changed",
   "panel.activity.action.auth.password_reset.completed": "Password reset completed",
+  "panel.activity.action.auth.password_reset.mail_failed": "Password reset email could NOT be sent",
   "panel.activity.action.auth.password_reset.requested": "Password reset requested",
   "panel.activity.action.auth.password_set_by_admin": "Password set by administrator",
   "panel.activity.action.auth.password_set_from_console": "Password set from console",

@@ -381,12 +381,23 @@ public sealed class AuditTenantLinkClosureTests
                 }
             ]);
 
+            // Abonelikten çıkma isteğinin işi ARKA PLANA alındı (zamanlama sızıntısı); testte
+            // sonucu ölçebilmek için kuyruk işi hemen, aynı iplikte çalıştırır.
+            var abonelikServisi = new MailListUnsubscribeService(
+                Depo, new SessizPostaServisi(), new SessizBildirim(), NullLogger<MailListUnsubscribeService>.Instance);
+            var kuyruk = new HemenCalistiranIsKuyrugu(new SozlukSaglayici()
+                .Ekle(abonelikServisi)
+                .Ekle<ICustomerScopeService>(Kapsam)
+                .Ekle<IIisSiteService>(Siteler)
+                .Ekle<IAuditService>(Kayitlar));
+
             Denetleyici = new MailListPublicController(
-                new MailListUnsubscribeService(Depo, new SessizPostaServisi(), new SessizBildirim(), NullLogger<MailListUnsubscribeService>.Instance),
+                abonelikServisi,
                 Kapsam,
                 Siteler,
                 new SabitTercihler(),
                 Kayitlar,
+                kuyruk,
                 NullLogger<MailListPublicController>.Instance)
             {
                 ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

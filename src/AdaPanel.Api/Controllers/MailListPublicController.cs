@@ -63,6 +63,7 @@ public sealed class MailListPublicController(
     IIisSiteService iisSiteService,
     IPanelPreferencesService preferencesService,
     IAuditService auditService,
+    IArkaPlanIsKuyrugu arkaPlanIsKuyrugu,
     ILogger<MailListPublicController> logger) : ControllerBase
 {
     private const string HtmlContentType = "text/html; charset=utf-8";
@@ -76,6 +77,26 @@ public sealed class MailListPublicController(
     /// <summary>
     /// Birinci adım (işlem): onay postası ister. Cevap, adres abone olsun ya da olmasın AYNIDIR.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>AYNI CEVAP YETMİYORDU — AYNI SÜRE DE GEREKİYOR (ölçüldü).</b> Gövde iki dalda da aynıydı
+    /// ama YAPILAN İŞ değildi: adres GERÇEKTEN aboneyse burada bir SMTP bağlantısı açılıyor
+    /// (bu makinede kapalı bir porta bile <b>2066 ms</b>, yanıt vermeyen adrese 10 sn'de hâlâ
+    /// bekliyor, MailKit varsayılan zaman aşımı 120 sn) ve ayrıca <c>derinArama: sent</c> ile IIS'in
+    /// BÜTÜN siteleri geziliyordu; abone değilse ikisi de hiç çalışmıyordu. Yani sınıfın
+    /// açıklamasındaki "bu adres abone mi sorusunu CEVAPLAMAZ" sözünü yanıt SÜRESİ bozuyordu.
+    /// </para>
+    /// <para>
+    /// <b>Çözüm:</b> abonelik kararı ve ona bağlı işin TAMAMI (posta + denetim kaydının sahip
+    /// çözümlemesi) arka plan kuyruğuna alındı. Yanıt yolunda kalan tek iş, adresten bağımsız ve
+    /// sabit: onay bağlantısı şablonunu üretmek ve sayfayı döndürmek.
+    /// </para>
+    /// <para>
+    /// <b>Kapsam (scope) tuzağı:</b> arka plandaki iş, isteğin DI kapsamını KULLANAMAZ (yanıt
+    /// döndükten sonra kapsam kapanır, <c>DbContext</c> atılır). Bu yüzden servisler işin içinde,
+    /// TAZE kapsamdan çözülür. Denetleyicinin <c>ILogger</c>'ı süreç ömürlüdür, taşınması güvenli.
+    /// </para>
+    /// </remarks>
     [EnableRateLimiting(PanelRateLimits.PublicMailSend)]
     [RequestSizeLimit(PanelServerLimits.PublicFormMaxBytes)]
     [HttpPost("unsubscribe")]
@@ -84,45 +105,52 @@ public sealed class MailListPublicController(
         [FromForm] string? email,
         CancellationToken cancellationToken)
     {
-        var sent = false;
-        try
-        {
-            sent = await unsubscribeService.RequestAsync(
-                list ?? string.Empty,
-                email ?? string.Empty,
-                await ConfirmUrlTemplateAsync(cancellationToken),
-                cancellationToken);
-        }
-        catch (Exception exception)
-        {
-            // HATA DA SIZDIRILMAZ: posta gönderilemedi ya da liste yok — ikisi de aynı sayfayı
-            // verir, yoksa saldırgan hata farkından adresin/listenin varlığını çıkarabilirdi.
-            logger.LogWarning(exception, "Abonelikten çıkma isteği işlenemedi.");
-        }
+        // Şablon her iki dalda da AYNI biçimde üretiliyordu; yanıt yolunda kalması fark yaratmaz.
+        var onaySablonu = await ConfirmUrlTemplateAsync(cancellationToken);
+        var listeAdresi = list ?? string.Empty;
+        var aboneAdresi = email ?? string.Empty;
+        var kaynak = SafeResource(list);
+        var istekIp = HttpContext.Connection.RemoteIpAddress?.ToString();
 
-        // Kimliksiz uçtan gelen HER istek kayda geçer (userId yok, IP var). İstenen ADRES kayda
-        // GİRMEZ — kayıt, korumaya çalıştığımız adres listesinin ikinci kopyası olmamalı.
-        //
-        // DERİN SAHİPLİK ARAMASI YALNIZ `sent` DOĞRUYKEN: bu uçta `list` alanı tamamen İSTEMCİNİN
-        // yazdığı serbest metindir ve uç kimliksizdir. (Uç ARTIK oran sınırlı — PublicMailSend,
-        // IP başına 10/15dk; bu satır eskiden "oran sınırsız" diyordu ve o zaman DOĞRUYDU: küresel
-        // sınırlayıcı yalnız Authorization başlığı taşıyanları bölümlüyor, bu yol "no limiter"a
-        // düşüyordu. Sınır geldi ama aşağıdaki koruma KALDI: sınır isteği yavaşlatır, pahalı işi
-        // ucuzlatmaz.)
-        // Alan adı sahipliğinin ikinci adımı IIS'teki BÜTÜN siteleri gezer; onu her anonim POST'ta
-        // çalıştırmak, tek satırlık bir istekle sunucuya iş yaptıran bir yükseltme kaldıracı olurdu.
-        // `sent` doğruysa liste ve abone posta sunucusuna sorularak DOĞRULANMIŞTIR ve o yol ayrıca
-        // 15 dakikalık bekleme süresiyle sınırlıdır — yani derin arama ancak gerçek bir liste için
-        // ve seyrek çalışır. `sent` yanlışken ucuz adım (alan adı = site adı) yine denenir; sahibi
-        // çözülemezse konu BOŞ kalır, tahmin edilmez.
-        await auditService.WriteForSubscriptionAsync(
-            "mail.list.unsubscribe_requested",
-            SafeResource(list),
-            $"Anonymous unsubscribe requested (confirmation sent: {sent}).",
-            userId: null,
-            await ListOwnerAsync(list, derinArama: sent, cancellationToken),
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            cancellationToken);
+        arkaPlanIsKuyrugu.Kuyrukla("mail.list.unsubscribe_requested", async (saglayici, iptal) =>
+        {
+            var gonderildi = false;
+            try
+            {
+                gonderildi = await saglayici.GetRequiredService<MailListUnsubscribeService>()
+                    .RequestAsync(listeAdresi, aboneAdresi, onaySablonu, iptal);
+            }
+            catch (Exception exception)
+            {
+                // HATA DA SIZDIRILMAZ: posta gönderilemedi ya da liste yok — ikisi de aynı sayfayı
+                // verir, yoksa saldırgan hata farkından adresin/listenin varlığını çıkarabilirdi.
+                logger.LogWarning(exception, "Abonelikten çıkma isteği işlenemedi.");
+            }
+
+            // Kimliksiz uçtan gelen HER istek kayda geçer (userId yok, IP var). İstenen ADRES kayda
+            // GİRMEZ — kayıt, korumaya çalıştığımız adres listesinin ikinci kopyası olmamalı.
+            //
+            // DERİN SAHİPLİK ARAMASI YALNIZ `gonderildi` DOĞRUYKEN: alan adı sahipliğinin ikinci
+            // adımı IIS'teki BÜTÜN siteleri gezer; onu her anonim POST'ta çalıştırmak, tek satırlık
+            // bir istekle sunucuya iş yaptıran bir yükseltme kaldıracı olurdu. `gonderildi` doğruysa
+            // liste ve abone posta sunucusuna sorularak DOĞRULANMIŞTIR ve o yol ayrıca 15 dakikalık
+            // bekleme süresiyle sınırlıdır. Bu dal ARTIK yanıt süresine yansımıyor: arka planda.
+            var sahip = await AuditSubject.MailAddressOwnerAsync(
+                saglayici.GetRequiredService<ICustomerScopeService>(),
+                gonderildi ? saglayici.GetRequiredService<IIisSiteService>() : null,
+                listeAdresi,
+                fallbackDomain: null,
+                iptal);
+
+            await saglayici.GetRequiredService<IAuditService>().WriteForSubscriptionAsync(
+                "mail.list.unsubscribe_requested",
+                kaynak,
+                $"Anonymous unsubscribe requested (confirmation sent: {gonderildi}).",
+                userId: null,
+                sahip,
+                istekIp,
+                iptal);
+        });
 
         return Html(MailListUnsubscribePages.RequestAccepted());
     }

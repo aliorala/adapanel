@@ -43,10 +43,12 @@ internal sealed class GirisDuzenegi : IAsyncDisposable
         SayanParolaKarmalayici karmalayici,
         JsonFileStore dosyaDeposu,
         SessizAnahtarServisi anahtarServisi,
+        SayanIsKuyrugu kuyruk,
         PanelUser kullanici,
         string? totpSirri,
         string veriKoku)
     {
+        Kuyruk = kuyruk;
         AnahtarServisi = anahtarServisi;
         IlkKarma = kullanici.PasswordHash;
         this.baglanti = baglanti;
@@ -78,6 +80,12 @@ internal sealed class GirisDuzenegi : IAsyncDisposable
 
     /// <summary>Anahtar iptalinin çağrılıp çağrılmadığını sayan sahte.</summary>
     public SessizAnahtarServisi AnahtarServisi { get; }
+
+    /// <summary>
+    /// Arka plan iş kuyruğunun sahtesi. İşi ÇALIŞTIRMAZ, yalnız kaydeder — "yanıt yolu işi kendisi
+    /// yapıyor mu" sorusunun deterministik cevabı budur.
+    /// </summary>
+    public SayanIsKuyrugu Kuyruk { get; }
 
     /// <summary>
     /// Düzenek kurulurkenki parola karması. <see cref="Kullanici"/> İZLENEN bir varlıktır ve
@@ -135,6 +143,7 @@ internal sealed class GirisDuzenegi : IAsyncDisposable
         var denetim = new RecordingAuditService();
         var kabaKuvvet = new CountingBruteForceProtection();
         var anahtarServisi = new SessizAnahtarServisi();
+        var kuyruk = new SayanIsKuyrugu();
         var servis = new AuthService(
             dbContext,
             karmalayici,
@@ -142,9 +151,8 @@ internal sealed class GirisDuzenegi : IAsyncDisposable
             ikiAdimli ? totpServisi : new ThrowingTotpService(),
             denetim,
             kabaKuvvet,
-            new ThrowingNotificationService(),
             new ThrowingPreferencesService(),
-            new ThrowingSecurityService(),
+            kuyruk,
             new ThrowingCustomerScopeService(),
             anahtarServisi,
             dosyaDeposu,
@@ -153,7 +161,7 @@ internal sealed class GirisDuzenegi : IAsyncDisposable
 
         return new GirisDuzenegi(
             baglanti, dbContext, servis, denetim, kabaKuvvet, karmalayici, dosyaDeposu,
-            anahtarServisi, kullanici, sir, veriKoku);
+            anahtarServisi, kuyruk, kullanici, sir, veriKoku);
     }
 
     public async Task<PanelUser> TazeleAsync()

@@ -31,12 +31,16 @@ internal sealed class RecordingAuditService : IAuditService
 {
     public List<string> Actions { get; } = [];
 
+    /// <summary>Eylem + ayrıntı: "kayıt DÜŞTÜ mü" yetmediğinde (ör. gönderim hatasının sebebi).</summary>
+    public List<(string Action, string Details)> Kayitlar { get; } = [];
+
     public Task WriteAsync(string action, string resource, string details, Guid? userId = null, string? ipAddress = null, CancellationToken cancellationToken = default)
         => WriteForSubscriptionAsync(action, resource, details, userId, null, ipAddress, cancellationToken);
 
     public Task WriteForSubscriptionAsync(string action, string resource, string details, Guid? userId, Guid? subscriptionUserId, string? ipAddress, CancellationToken cancellationToken = default)
     {
         Actions.Add(action);
+        Kayitlar.Add((action, details));
         return Task.CompletedTask;
     }
 
@@ -100,6 +104,72 @@ internal sealed class CountingBruteForceProtection : IBruteForceProtectionServic
 
     public Task CleanupExpiredBansAsync(CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
+}
+
+/// <summary>
+/// Arka plan iş kuyruğunun sahtesi: işi KAYDEDER ama ÇALIŞTIRMAZ.
+/// </summary>
+/// <remarks>
+/// Zamanlama sızıntısının testi kronometreyle yazılamaz (CI'da kararsız olur). Ölçülen şey
+/// DAVRANIŞTIR: "yanıt yolu, adres kayıtlı olsun ya da olmasın AYNI işi mi yapıyor". Kuyruk işi
+/// çalıştırmadığı için, yanıt yolunun kendi başına bir şey yapıp yapmadığı da görülebilir
+/// (denetim kaydı boş kalmalı).
+/// </remarks>
+internal sealed class SayanIsKuyrugu : IArkaPlanIsKuyrugu
+{
+    public List<string> Isler { get; } = [];
+
+    /// <summary>Kuyruğun dolu olduğu durumu taklit eder.</summary>
+    public bool Dolu { get; set; }
+
+    public List<Func<IServiceProvider, CancellationToken, Task>> Govdeler { get; } = [];
+
+    public bool Kuyrukla(string ad, Func<IServiceProvider, CancellationToken, Task> @is)
+    {
+        if (Dolu)
+        {
+            return false;
+        }
+
+        Isler.Add(ad);
+        Govdeler.Add(@is);
+        return true;
+    }
+}
+
+/// <summary>
+/// Arka plan işini HEMEN, çağıran iplikte çalıştıran kuyruk sahtesi.
+/// </summary>
+/// <remarks>
+/// Kuyruğun ASIL amacı işi yanıt yolundan çıkarmaktır; ama işin İÇERİĞİNİ ölçen testler
+/// (posta gerçekten gidiyor mu, denetim kaydı düşüyor mu) onu çalışmış görmek zorunda. Bu sahte
+/// zamanlamayı değil, İŞİN SONUCUNU ölçmek için var.
+/// </remarks>
+internal sealed class HemenCalistiranIsKuyrugu(IServiceProvider saglayici) : IArkaPlanIsKuyrugu
+{
+    public List<string> Isler { get; } = [];
+
+    public bool Kuyrukla(string ad, Func<IServiceProvider, CancellationToken, Task> @is)
+    {
+        Isler.Add(ad);
+        @is(saglayici, CancellationToken.None).GetAwaiter().GetResult();
+        return true;
+    }
+}
+
+/// <summary>Sözlükten servis çözen minik sağlayıcı: arka plan işi için DI kabı kurmaya gerek yok.</summary>
+internal sealed class SozlukSaglayici : IServiceProvider
+{
+    private readonly Dictionary<Type, object> kayitlar = [];
+
+    public SozlukSaglayici Ekle<T>(T ornek) where T : notnull
+    {
+        kayitlar[typeof(T)] = ornek;
+        return this;
+    }
+
+    public object? GetService(Type serviceType) =>
+        kayitlar.TryGetValue(serviceType, out var deger) ? deger : null;
 }
 
 // Aşağıdakiler giriş akışında ÇAĞRILMAZ; çağrılırsa test kırmızıya döner (istenen davranış).
