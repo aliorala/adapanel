@@ -327,7 +327,7 @@ public sealed class AuditTenantLinkClosureTests
         ICustomerScopeService kapsam,
         Guid aktor,
         string rol)
-        => new(zamanlayici, kapsam, kayitlar)
+        => new(zamanlayici, kapsam, new SahteSunucuSahibi(Yonetici), kayitlar)
         {
             ControllerContext = new ControllerContext { HttpContext = Baglam(aktor, rol) }
         };
@@ -538,6 +538,16 @@ public sealed class AuditTenantLinkClosureTests
         public Task<IReadOnlyCollection<SiteDto>> ImportExistingSitesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
+    /// <summary>Sahiplik burada ÖLÇÜLMÜYOR (kaydın kiracı bağı ölçülüyor); sabit cevap yeter.</summary>
+    private sealed class SahteSunucuSahibi(Guid sahip) : IServerOwnerService
+    {
+        public Task<Guid?> GetServerOwnerIdAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<Guid?>(sahip);
+
+        public Task<bool> IsServerOwnerAsync(Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(userId == sahip);
+    }
+
     private sealed class SahteZamanlayici : ISchedulerService
     {
         public List<string> Silinenler { get; } = [];
@@ -554,7 +564,7 @@ public sealed class AuditTenantLinkClosureTests
             => Task.FromResult(new MachinePathMeasurement { Measured = true, Expected = 2, Requested = 2, Verified = 2 });
 
         public Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, ScheduledTaskPrivilege privilege, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task RunTaskAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ScheduledTaskOutputDto> GetTaskOutputAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();

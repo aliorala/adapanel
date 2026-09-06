@@ -290,7 +290,11 @@ public sealed class PanelAdresiBicimNormallestirmeTests
             ThemeMode = "light",
             UiDensity = "compact",
             DefaultSiteRoot = Path.Combine(Kok, "siteler"),
-            DefaultBackupRoot = Path.Combine(Kok, "yedekler"),
+            // Panelin KENDİ yedek klasörü. Bu testin konusu ADRES normalleştirmesi; yedek kökü
+            // artık doğrulanıyor (PanelBackupRootGuardTests) ve veri kökü altında yalnız panelin
+            // kendi "backups" ağacı kabul ediliyor — burada rastgele bir ad kullanmak, testi
+            // ölçmek istediği şeyden koparırdı.
+            DefaultBackupRoot = Path.Combine(Kok, "backups"),
             ServerAddress = adres,
             PreferredHttpsPort = 8888,
             LoginLockoutMinutes = 15,

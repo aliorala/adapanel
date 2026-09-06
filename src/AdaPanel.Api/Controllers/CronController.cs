@@ -20,9 +20,54 @@ namespace AdaPanel.Api.Controllers;
 public sealed class CronController(
     ISchedulerService schedulerService,
     ICustomerScopeService customerScopeService,
+    IServerOwnerService serverOwnerService,
     IAuditService auditService) : ControllerBase
 {
     private bool IsAdmin => User.IsInRole("Administrator");
+
+    /// <summary>
+    /// Bu isteğin kurabileceği görev kimliği: SYSTEM mi, sınırlı mı.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK — DÖRDÜNCÜ YOL.</b> Yönetici dalı görev tipini hiç zorlamıyordu:
+    /// <c>taskType="command"</c> ile gelen <c>Command</c>/<c>Arguments</c> doğrudan
+    /// <c>New-ScheduledTaskAction</c>'a gidiyor ve görev
+    /// <c>-UserId 'SYSTEM' -RunLevel Highest</c> ile kaydediliyordu. Terminal sunucu sahibine
+    /// kısıtlandıktan, geri yükleme / mağaza kurulumu / site fiziksel yolu kapatıldıktan sonra
+    /// bile sahip OLMAYAN bir panel yöneticisi tek bir cron isteğiyle SYSTEM'de kod
+    /// çalıştırabiliyordu — yani diğer üç kapı kâğıt üstünde kalıyordu.
+    /// </para>
+    /// <para>
+    /// <b>Neden yetkiyi daraltmak DEĞİL de kimliği düşürmek:</b> "bu tipleri yalnız sahip
+    /// kursun" demek, sahip olmayan yöneticiden yedek/bakım/PHP görevlerini tamamen alırdı.
+    /// Panelde SINIRLI KİMLİKLE görev çalıştırma altyapısı ZATEN var ve bu makinede canlı
+    /// doğrulanmış (<c>ScriptTaskPlanner.LimitedUserId</c>, <c>LimitedIdentityRunner</c>) —
+    /// ikinci bir mekanizma icat edilmedi. Özellik yaşar, yükselme ölür.
+    /// </para>
+    /// <para>
+    /// <b>Taklit (impersonate) oturumu ASLA tam yetki almaz</b> — terminal ucundaki kuralın
+    /// aynısı: taklitte kimlik hedefin kimliğidir, sahip taklit edilebilse denetim taklit edenin
+    /// değil hedefin kimliğini görürdü.
+    /// </para>
+    /// <para>
+    /// <b>Müşteri/bayi dalı etkilenmez:</b> orada tip zaten <c>url</c>'e zorlanıyor ve <c>url</c>
+    /// düşürme kapsamının dışında (sabit <c>curl.exe</c>, keyfi kod değil). Kiracının hiçbir
+    /// görevi bu değişiklikle kırılmaz.
+    /// </para>
+    /// </remarks>
+    private async Task<ScheduledTaskPrivilege> ResolvePrivilegeAsync(CancellationToken cancellationToken)
+    {
+        var taklitEdiliyor = User.FindFirst("impersonator_id") is not null;
+        if (taklitEdiliyor)
+        {
+            return ScheduledTaskPrivilege.Limited;
+        }
+
+        return await serverOwnerService.IsServerOwnerAsync(User.GetRequiredUserId(), cancellationToken)
+            ? ScheduledTaskPrivilege.Full
+            : ScheduledTaskPrivilege.Limited;
+    }
 
     // Müşteri/bayi görevleri abonelik ad alanında yaşar (Plesk aboneliğe bağlar): "u<id>--<ad>".
     // Alt-kullanıcıda kimlik PARENT müşteriye çözülür → parent ve tüm alt-kullanıcılar aynı görev
@@ -87,7 +132,8 @@ public sealed class CronController(
             request.Name = prefix + (request.Name ?? string.Empty).Trim();
         }
 
-        var task = await schedulerService.CreateTaskAsync(request, cancellationToken);
+        var task = await schedulerService.CreateTaskAsync(
+            request, await ResolvePrivilegeAsync(cancellationToken), cancellationToken);
 
         // Zamanlayıcıya YAZILAN ad (abonelik önekiyle) korunur: aşağıda kullanıcıya dönerken önek
         // kırpılıyor, oysa kaydın konusu tam da o önekten ölçülüyor. Kırpılmış adı kullansaydık
@@ -99,22 +145,28 @@ public sealed class CronController(
         }
 
         var target = string.IsNullOrWhiteSpace(request.Url) ? request.Command : request.Url;
-        // Betik görevlerinde denetim kaydı tek başına "script" demekle yetinemez: hangi dosya, hangi mod
-        // (site/sunucu) ve hangi kimlik çalıştı sorusu olay sonrası incelemenin tamamıdır.
+
+        // KİMLİK ARTIK HER TİPTE VE ÖLÇÜLEREK YAZILIR.
+        //
+        // Eskiden yalnız "script" tipinde ve İSTEKTEN (request.RunAs) türetiliyordu. İkisi de
+        // yanlıştı: (1) SYSTEM'de kod çalıştıran asıl tip "command"dı ve kaydında kimlik hiç
+        // geçmiyordu; (2) istekteki değer artık görevin gerçek kimliği DEĞİL — sahip olmayan
+        // yöneticinin "system" isteği sınırlı kimliğe indiriliyor. İstekten yazsaydık denetim
+        // kaydı, panelin yaptığının tersini söylerdi.
+        //
+        // task, Windows'tan GERİ OKUNAN kayıttır (CreateTaskAsync doğrulayarak döner) — yani
+        // buradaki kimlik, zamanlayıcıda gerçekten yazılı olan principal'dir.
+        var identity = string.Equals(task.RunAs, "limited", StringComparison.OrdinalIgnoreCase)
+            ? "LOCAL SERVICE"
+            : "SYSTEM";
         var scriptContext = string.Equals(request.TaskType, "script", StringComparison.OrdinalIgnoreCase)
             ? string.IsNullOrWhiteSpace(request.SiteName)
-                ? " [mode=server, identity=SYSTEM]"
-                : $" [mode=site:{request.SiteName}, identity={(IsLimitedRunAs(request.RunAs) ? "LOCAL SERVICE" : "SYSTEM")}]"
-            : string.Empty;
+                ? $" [mode=server, identity={identity}]"
+                : $" [mode=site:{request.SiteName}, identity={identity}]"
+            : $" [identity={identity}]";
         await WriteAuditAsync("cron.created", kayitliAd, $"Scheduled task '{task.Name}' ({request.TaskType}) -> {target}{scriptContext}");
         return Ok(ApiResponse<ScheduledTaskDto>.Ok(task, "cron.saved"));
     }
-
-    // "apppool" eski istemcilerin gonderdigi degerdir ve artik sinirli kimlik anlamina gelir;
-    // denetim kaydi da o gorevin GERCEKTE hangi hesapla kostugunu yazmali.
-    private static bool IsLimitedRunAs(string? runAs) =>
-        string.Equals(runAs, "limited", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(runAs, "apppool", StringComparison.OrdinalIgnoreCase);
 
     [HttpPost("{name}/run")]
     public async Task<ActionResult<ApiResponse<object>>> RunTaskAsync(string name, CancellationToken cancellationToken)

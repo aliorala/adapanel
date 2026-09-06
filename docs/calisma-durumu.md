@@ -4,12 +4,128 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **06.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5131 yeşil** (Core 2 + Infra 5129) · typecheck + build + npm test temiz
+Son güncelleme: **07.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
+Testler: **5165 yeşil** (Core 2 + Infra 5163) · typecheck + build + npm test temiz
 
 ---
 
-## SON İŞ — SAHİPLİK SINIRINI DELEN ÜÇ YAZMA YOLU KAPATILDI (commit ATILMADI)
+## SON İŞ — DÖRDÜNCÜ YOL: CRON GÖREVİ ARTIK HERKESE SYSTEM VERMİYOR (commit ATILMADI)
+
+552b028 terminali, 7b71f0e ise geri yükleme / mağaza kurulumu / site fiziksel yolunu kapattı.
+**Dördüncü yol açıktı ve o açıkken diğer üçü kâğıt üstündeydi.**
+
+| Yol | ÖLÇÜLEN durum | Durum |
+|---|---|---|
+| `POST /cron` (yönetici dalı) | tip zorlanmıyordu: `taskType="command"` → komut doğrudan `New-ScheduledTaskAction`'a, principal `-UserId 'SYSTEM' -RunLevel Highest` (`SchedulerService.BuildCreateScript`). Sahip OLMAYAN yönetici tek istekle SYSTEM'de kod çalıştırıyordu | **KAPANDI** |
+| `POST /sites/{ad}/hosting/queue/start` · `scheduler/start` | uç `[Authorize(Roles = "Administrator,Reseller")]` — yani **KİRACI (bayi)** tetikliyor; panel `php.exe artisan …` görevini **SYSTEM** olarak kuruyordu. Çalışan kod sitenin KENDİ kodu ve kiracı onu FTP/Git ile zaten yazabiliyor | **KAPANDI** (bu turda ölçüldü, aranan şey değildi) |
+| Mağaza kurulumunun Laravel zamanlayıcısı (`AppStoreService`) | aynı desen | **KAPANDI** |
+| `PUT /panel-settings` → `DefaultBackupRoot` | hiç doğrulanmıyordu; her yedeğin yazılacağı kök HTTP gövdesinden seçilebiliyordu (arşiv tamperlemenin kalan yolu) | **KAPANDI** |
+
+### SEÇİLEN YOL: (A) KİMLİĞİ DÜŞÜR — yetkiyi daraltmak DEĞİL
+
+Depoda sınırlı kimlikle görev çalıştırma altyapısı **zaten vardı ve bu makinede canlı
+doğrulanmıştı** (`ScriptTaskPlanner.LimitedUserId` = `NT AUTHORITY\LOCAL SERVICE`,
+`LimitedIdentityRunner`, `SchedulerService.GrantLimitedIdentityAccessAsync`). İkinci bir mekanizma
+İCAT EDİLMEDİ. Sonuç: sahip olmayan yönetici aynı görevleri kurmaya devam eder, yalnız görev
+SYSTEM yerine sınırlı kimlikle koşar. (B) yolu (tipleri yalnız sahibe açmak) seçilseydi yönetici
+yedek/bakım/PHP görevlerini tamamen kaybederdi.
+
+* Yeni tip: `Core/Dtos/Scheduler/ScheduledTaskPrivilege.cs` (`Full` / `Limited`).
+* `ISchedulerService.CreateTaskAsync` parametresi **ZORUNLU, varsayılansız** — yeni bir çağıran
+  eklenirse ceza "derleme hatası" olsun, "sessiz açık" değil. (Beş çağrı yeri de gözden geçirildi.)
+* Karar TEK YERDE: `SchedulerService.RequiresLimitedIdentity(tip, runAs, yetki)`. İki sebep orada
+  birleşti: kullanıcının SEÇTİĞİ sınırlı kimlik (script) + çağıranın yetkisinin ZORLADIĞI kimlik
+  (command/php/script).
+* `url` KAPSAM DIŞI ve bu fazla kapatmama kararı: program sabit (`curl.exe`), argümanları panel
+  kurar, adres `OutboundAddressGuard`'dan geçer — keyfi kod değil. Müşteri/bayi görevleri yalnız bu
+  tipte, yani **kiracının hiçbir görevi kırılmadı**.
+* Sınırlı görev bir SİTEYE aitse site kökü açılır (`GrantLimitedIdentityAccessAsync` — aynı izni
+  `LimitedIdentityRunner` composer/npm/artisan için zaten veriyor). İzin verilecek klasör **IIS'ten
+  çözülür**, istekteki serbest bir yoldan alınmaz.
+* Denetim kaydı artık kimliği **GERİ OKUNAN** görevden yazar (`task.RunAs`), istekteki "system"
+  dizesinden değil — ve artık her tipte yazar.
+
+### `IsBareInteractiveShell` → `IsNonTerminatingShell` (karar)
+
+**Bu bir güvenlik sınırı DEĞİL ve öyle kullanılmamalı.** `cmd.exe /c <herhangi bir şey>` bu
+denetimden geçer, geçmesi de DOĞRUDUR: sorduğu soru "bu komut tehlikeli mi" değil, "bu görev
+bitecek mi". Eski adı ve yeri yanlış bir güvenlik hissi veriyordu; yetki sınırı komut süzgecinde
+değil görevin KİMLİĞİNDE (yukarıdaki karar). Denetim kendi işini de tam yapmıyordu: bitmeyen
+kabuğun asıl biçimleri argümanlıdır — `cmd.exe /k …` ve `powershell.exe -NoExit …` komuttan sonra
+kabuğu AÇIK bırakır. İkisi eklendi; bayrak yalnız KABUĞUN kendi bölümünde aranır
+(`cmd /c xcopy … /K` meşrudur ve kabul edilir).
+
+### `DefaultBackupRoot` — yeni kural yazılmadı
+
+Karar `PanelWriteTargetGuard`'a (site yolu / geri yükleme hedefi / mağaza yolu ile AYNI kapı)
+soruluyor. Tek fark, panelin KENDİ varsayılanı olan `<veri kökü>\backups` ağacının açıkça kabul
+edilmesi: genel kural panelin veri kökünü (haklı olarak) reddeder ve bu carve-out olmasaydı
+hiçbir şeyi değiştirmeden Ayarlar formunu kaydeden her yönetici kilitlenirdi. Ayrı disk hedefleri
+(`D:\yedekler`) zaten kabul.
+
+### MUTASYON (dokuzu da yapıldı, kırmızı GÖRÜLDÜ, geri konuldu)
+
+| mutasyon | kırmızı test |
+|---|---|
+| Sahiplik denetimi kaldırıldı (herkes `Full`) | **3** |
+| Taklit oturumu denetimi kaldırıldı | 1 |
+| `RequiresLimitedIdentity`'de yetki dalı kaldırıldı | 2 |
+| Bitmeyen kabuk denetimi eski hâline (yalnız argümansız) | 5 |
+| `EnsureBackupRootIsWritable` çağrısı kaldırıldı | 3 |
+| Kiracının Laravel görevi yine `Full` | 2 |
+| **FAZLA KAPATMA:** herkes `Limited` (sahip dahil) | 3 |
+| **FAZLA KAPATMA:** `url` de düşürülüyor (kiracı görevi) | 1 |
+| **FAZLA KAPATMA:** yedek kökü carve-out'u kaldırıldı (her şey ret) | 2 |
+
+### Testler
+
+Yeni: `CronTaskIdentityTests.cs` (24) — gerçek `CronController` çalıştırılır, zamanlayıcıya
+GERÇEKTEN ne gittiği ölçülür; kimlik kararı Windows'a yazılacak PowerShell betiğinden okunur.
+Yeni: `LaravelToolkitTaskIdentityTests.cs` (4) — gerçek `SiteHostingSettingsService`.
+Yeni: `PanelBackupRootGuardTests.cs` (6) — gerçek `PanelPreferencesService` + gerçek dosya deposu.
+
+Fazla kapatma nöbetçileri: sunucu sahibi HÂLÂ SYSTEM görevi kurabiliyor (3 tip) · sahip olmayan
+yöneticinin görevi REDDEDİLMİYOR, alanları temizlenmiyor · kiracının `url` görevi aynen çalışıyor ·
+kullanıcının kendi seçtiği sınırlı kimlik kuralı değişmedi · `cmd /c xcopy /K` hâlâ kabul ·
+panelin kendi yedek klasörü ve ayrı disk hedefleri hâlâ kabul.
+
+**5165 test yeşil / 0 kırmızı** (Core 2 + Infra 5163; baseline 5131 + 34 yeni).
+Frontend: typecheck/build/`npm test` (42) temiz, i18n TR/EN 5228 = 5228.
+
+Değişen dosyalar: `src/AdaPanel.Core/Dtos/Scheduler/ScheduledTaskPrivilege.cs` (yeni),
+`src/AdaPanel.Core/Interfaces/ISchedulerService.cs`,
+`src/AdaPanel.Api/Controllers/CronController.cs`,
+`src/AdaPanel.Infrastructure/Scheduler/SchedulerService.cs`,
+`src/AdaPanel.Infrastructure/Iis/SiteHostingSettingsService.cs`,
+`src/AdaPanel.Infrastructure/AppStore/AppStoreService.cs`,
+`src/AdaPanel.Infrastructure/Services/PanelPreferencesService.cs`,
+`frontend/src/i18n/tr.json`/`en.json` (+1 anahtar, `cron.bare_shell` metni güncellendi),
+üç yeni test dosyası + altı test dosyasında imza/uyum düzeltmesi.
+
+### AÇIK KALAN (dürüstçe)
+
+* **LOCAL SERVICE sıfır yetki DEĞİLDİR.** `SeImpersonatePrivilege` taşıyan hesaplarda bilinen bir
+  jeton taklidi ailesi (Potato/PrintSpoofer) vardır; görev jetonunun bu ayrıcalığı taşıyıp
+  taşımadığı **bu turda ÖLÇÜLEMEDİ** (gerçek zamanlanmış görev oluşturmak yasaktı). Bu, panelin
+  kiracıya composer/npm için ZATEN verdiği sınırlı kimliğin ta kendisidir — yani yeni bir zayıflık
+  değil; ama "SYSTEM'den indi" demek "artık yükselemez" demek DEĞİL. Sınırı gerçekten kaldırmak
+  ayrı bir iş: panelin sınırlı kimliğini (her yerde) ayrıcalıksız yerel bir hesaba taşımak.
+* **Site kökü izni (`GrantLimitedIdentityAccessAsync`) canlıda ölçülmedi** — `icacls` çağrısı
+  PowerShell gerektiriyor; birim testi bu yolu çalıştırmıyor. Kullanılan kod yolu, betik
+  görevlerinde zaten kullanılan ve canlı doğrulanmış olan yolun aynısı.
+* **Sunucu betiği modunda (site seçilmemiş) sınırlı görev izin ALMAZ** ve bu bilinçli: izin
+  verilecek klasör yöneticinin yazdığı keyfi bir yoldur. Betik varsayılan ACL'li bir klasördeyse
+  çalışır, kilitli bir klasördeyse görev hata koduyla düşer — sessizce değil, panel son sonucu ve
+  çıktıyı gösteriyor.
+* **Var olan görevler dönüştürülmedi.** Bu koruma YENİ kayıtlarda çalışır; sahip olmayan bir
+  yöneticinin daha önce kurduğu SYSTEM görevi yerinde durur. Toplu dönüştürme
+  (`RepairTaskSettings` benzeri bir "kimlikleri düşür" turu) ayrı iş olarak raporlandı.
+* **`<veri kökü>\yedekler` gibi özel adlar reddedilir** (yalnız `backups` ağacı kabul). Bilinçli:
+  ikinci bir "hassas alt klasör" listesi yazmamak için. Hata mesajı ne yapılacağını söylüyor.
+
+---
+
+## ÖNCEKİ İŞ — SAHİPLİK SINIRINI DELEN ÜÇ YAZMA YOLU KAPATILDI (commit ATILMADI)
 
 552b028 terminali sunucu sahibine kısıtladı. O korumanın **tek dayanağı**
 `config/server-owner.json` dosyasının panelin HTTP yüzeyinden **yazılamaması**. Üç uç bu dayanağı

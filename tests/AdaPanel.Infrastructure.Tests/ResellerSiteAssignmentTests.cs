@@ -265,7 +265,7 @@ public sealed class ResellerSiteAssignmentTests
     internal sealed class KullanilmayanZamanlayici : ISchedulerService
     {
         public Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, ScheduledTaskPrivilege privilege, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteTaskAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task RunTaskAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();

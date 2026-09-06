@@ -184,7 +184,7 @@ public sealed class BareShellTaskTests
     [InlineData("\"cmd.exe\"")]
     public void BareShell_IsRecognisedWhateverItLooksLike(string komut)
     {
-        Assert.True(SchedulerService.IsBareInteractiveShell(komut, string.Empty));
+        Assert.True(SchedulerService.IsNonTerminatingShell(komut, string.Empty));
     }
 
     // Argumanli kabuk MESRUDUR: "cmd.exe /c ..." tam olarak betik gorevlerinin calisma bicimidir.
@@ -193,7 +193,7 @@ public sealed class BareShellTaskTests
     [InlineData("powershell.exe", @"-File ""C:\betik\temizlik.ps1""")]
     public void ShellWithArguments_StaysAllowed(string komut, string argumanlar)
     {
-        Assert.False(SchedulerService.IsBareInteractiveShell(komut, argumanlar));
+        Assert.False(SchedulerService.IsNonTerminatingShell(komut, argumanlar));
     }
 
     [Theory]
@@ -202,6 +202,6 @@ public sealed class BareShellTaskTests
     [InlineData("ipconfig")]
     public void OrdinaryCommands_AreNotMistakenForAShell(string komut)
     {
-        Assert.False(SchedulerService.IsBareInteractiveShell(komut, string.Empty));
+        Assert.False(SchedulerService.IsNonTerminatingShell(komut, string.Empty));
     }
 }

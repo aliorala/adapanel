@@ -319,7 +319,7 @@ public sealed class OutboundTargetGuardTests
             Url = adres,
             ScheduleType = "daily",
             TimeOfDay = "03:00"
-        }));
+        }, ScheduledTaskPrivilege.Full));
 
         Assert.Equal("cron.url_forbidden", hata.MessageKey);
     }
@@ -341,7 +341,7 @@ public sealed class OutboundTargetGuardTests
             Url = "http://kotu.example/tetikle",
             ScheduleType = "daily",
             TimeOfDay = "03:00"
-        }));
+        }, ScheduledTaskPrivilege.Full));
 
         Assert.Equal("cron.url_forbidden", hata.MessageKey);
     }

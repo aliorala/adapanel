@@ -384,15 +384,24 @@ public sealed class SiteHostingSettingsService(
         // panel Kuyruk gibi: minutely zamanlanmış görev + --max-time = kendini yenileyen kalıcı worker.
         // Windows Görev Zamanlayıcı varsayılanı "çalışıyorsa yeni örnek başlatma" olduğundan tek worker döner;
         // --max-time ile saatte bir taze süreç (Laravel'in bellek sızıntısına karşı önerisi).
+        // SINIRLI KİMLİK — ÖLÇÜLEN AÇIK: bu uç [Authorize(Roles = "Administrator,Reseller")]
+        // altında, yani BİR KİRACI (bayi) tetikleyebiliyor ve görev sitenin KENDİ Laravel kodunu
+        // çalıştırıyor. SYSTEM olarak kaydedildiğinde "kuyruk işçisini başlat" düğmesi, kiracı
+        // için SYSTEM'de keyfi kod çalıştırma düğmesiydi — panelin kendi kuralına da aykırı:
+        // CronController "müşteri/bayi komut/PHP/betik görevi kuramaz" diyor.
+        //
+        // SiteName VERİLİYOR: sınırlı kimlik site kökünü okuyup yazabilsin (LimitedIdentityRunner
+        // aynı komutlar için aynı izni zaten veriyor); verilmezse görev her turda düşerdi.
         await schedulerService.CreateTaskAsync(new CreateScheduledTaskRequest
         {
             Name = QueueTaskName(siteName),
             Command = phpPath,
             Arguments = "artisan queue:work --tries=3 --sleep=3 --max-time=3600",
             WorkingDirectory = workDir,
+            SiteName = siteName,
             ScheduleType = "minutely",
             Interval = 1
-        }, cancellationToken);
+        }, ScheduledTaskPrivilege.Limited, cancellationToken);
 
         // BASLATMA IDDIASI DA OLCULUR. `Running = true` de tipki `Running = false` gibi hicbir
         // olcume dayanmiyordu; ayni geri okuma iki yonde de kullanilir (TEK KAYNAK).
@@ -589,15 +598,18 @@ public sealed class SiteHostingSettingsService(
         var phpPath = await ResolvePhpExecutableAsync(cancellationToken);
 
         // panel Laravel Toolkit "Scheduler": dakikada bir `php artisan schedule:run` (Laravel'in tek cron girdisi).
+        // SINIRLI KİMLİK — kuyruk işçisiyle AYNI gerekçe (yukarıda ölçüldü): uç bayiye açık ve
+        // görev sitenin kendi kodunu çalıştırıyor.
         await schedulerService.CreateTaskAsync(new CreateScheduledTaskRequest
         {
             Name = SchedulerTaskName(siteName),
             Command = phpPath,
             Arguments = "artisan schedule:run",
             WorkingDirectory = workDir,
+            SiteName = siteName,
             ScheduleType = "minutely",
             Interval = 1
-        }, cancellationToken);
+        }, ScheduledTaskPrivilege.Limited, cancellationToken);
 
         return await DurumuOlcAsync(SchedulerTaskName(siteName), null, cancellationToken);
     }

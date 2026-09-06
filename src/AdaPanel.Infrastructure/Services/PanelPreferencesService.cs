@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Settings;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Security;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Options;
 
@@ -65,6 +67,10 @@ public sealed class PanelPreferencesService(
         // uyarıyı görürdü).
         settings.ServerAddressExternallyReachable = PanelAddress.IsExternallyReachable(settings.ServerAddress);
 
+        // KLASÖR AÇILMADAN ÖNCE denetlenir: reddedilen bir hedefte klasör yaratmak, reddi
+        // yarım uygulamak olurdu.
+        EnsureBackupRootIsWritable(settings.DefaultBackupRoot);
+
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultSiteRoot));
         Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(settings.DefaultBackupRoot));
         await fileStore.WriteAsync(PreferencesPath, settings, cancellationToken);
@@ -82,6 +88,56 @@ public sealed class PanelPreferencesService(
             },
             cancellationToken);
         return settings;
+    }
+
+    /// <summary>
+    /// Yöneticinin yazdığı VARSAYILAN YEDEK KÖKÜ panelin yazabileceği bir yer mi?
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK:</b> bu alan hiç doğrulanmıyordu. Panel servisi <c>LocalSystem</c> olarak
+    /// koşar ve bu kök, o andan sonra alınan HER yedeğin (site, veritabanı, panel, abonelik,
+    /// posta) yazılacağı yerdir — arşivler, kiracının erişebildiği bir klasöre de, panelin kendi
+    /// <c>config</c> klasörüne de yönlendirilebiliyordu. Arşiv tamperlemenin kalan yolu buydu:
+    /// yedeğin nereye yazıldığını seçebilen, geri yüklenecek içeriği de seçebilir.
+    /// </para>
+    /// <para>
+    /// <b>KURAL İKİNCİ KEZ YAZILMADI:</b> karar tek adrestedir —
+    /// <see cref="PanelWriteTargetGuard"/> (site fiziksel yolu, geri yükleme hedefi ve mağaza
+    /// kurulum yolu aynı kapıdan geçiyor). İkinci bir kopya, birini sıkılaştırıp diğerini
+    /// unutmanın yoludur.
+    /// </para>
+    /// <para>
+    /// <b>FAZLA KAPATMA NÖBETÇİSİ — panelin KENDİ varsayılanı.</b> Varsayılan yedek kökü
+    /// <c>&lt;veri kökü&gt;\backups</c>'tır ve genel kural panelin veri kökünü (haklı olarak)
+    /// reddeder. Sadece <c>Evaluate</c> çağırmak, hiçbir şeyi değiştirmeden formu kaydeden her
+    /// yöneticiyi kilitlerdi. Bu yüzden panelin KENDİ yedek klasörü ve ALTI açıkça kabul edilir:
+    /// orası panelin yedek yazmak için kurduğu yerdir ve <c>config\server-owner.json</c> gibi
+    /// hassas kardeşlerinin YANINDA değil, ayrı bir alt ağaçtadır. Ayrı disk hedefleri
+    /// (<c>D:\yedekler</c>, <c>E:\backup</c>) zaten kabul edilir — yedeği başka bir diskte tutmak
+    /// meşru ve yaygındır.
+    /// </para>
+    /// </remarks>
+    private void EnsureBackupRootIsWritable(string backupRoot)
+    {
+        var veriKoku = Path.GetFullPath(Environment.ExpandEnvironmentVariables(defaults.DataRoot));
+        var hedef = Path.GetFullPath(Environment.ExpandEnvironmentVariables((backupRoot ?? string.Empty).Trim()));
+
+        // Panelin kendi yedek klasörü (ve altı): varsayılanın ta kendisi.
+        if (PathContainment.IsRootOrInside(Path.Combine(veriKoku, "backups"), hedef))
+        {
+            return;
+        }
+
+        var karar = PanelWriteTargetGuard.Evaluate(hedef, veriKoku);
+        if (karar != PanelWriteTargetVerdict.Allowed)
+        {
+            throw new AppException(
+                "settings.backup_root_forbidden",
+                400,
+                400,
+                $"{hedef}: {PanelWriteTargetGuard.Describe(karar)}");
+        }
     }
 
     private PanelPreferencesDto CreateDefaults()

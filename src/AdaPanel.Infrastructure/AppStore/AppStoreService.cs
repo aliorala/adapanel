@@ -1462,15 +1462,26 @@ public sealed class AppStoreService(
             var safeSiteName = new string(site.Name
                 .Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-')
                 .ToArray());
+            // SINIRLI KİMLİK — bu görev SİTENİN KENDİ KODUNU çalıştırır.
+            //
+            // `artisan schedule:run` sitenin PHP dosyalarını yürütür ve o dosyaları kiracı FTP
+            // ile, dosya yöneticisiyle ya da Git dağıtımıyla zaten yazabiliyor. SYSTEM olarak
+            // kaydedilirse kurulum, kiracıya SYSTEM'de keyfi kod çalıştırma imkânı verir.
+            // Aynı gerekçe LimitedIdentityRunner üzerinde yazılı: kötü niyetli şey argümanda
+            // değil, aracın çalıştırdığı DOSYANIN İÇİNDE.
+            //
+            // SiteName VERİLİYOR: sınırlı kimliğe site kökü açılsın (aksi hâlde görev kaydolur
+            // ama her turda erişim hatasıyla düşerdi).
             await schedulerService.CreateTaskAsync(new CreateScheduledTaskRequest
             {
                 Name = $"Laravel-{safeSiteName}-Scheduler",
                 Command = phpExecutable,
                 Arguments = "artisan schedule:run",
                 WorkingDirectory = applicationRoot,
+                SiteName = site.Name,
                 ScheduleType = "minutely",
                 Interval = 1
-            }, cancellationToken);
+            }, ScheduledTaskPrivilege.Limited, cancellationToken);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {

@@ -700,7 +700,7 @@ public sealed class UserDeletionHonestyTests
         public Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyCollection<ScheduledTaskDto>>([]);
 
-        public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, ScheduledTaskPrivilege privilege, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteTaskAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task RunTaskAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ScheduledTaskStatusDto> GetTaskStatusAsync(string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();

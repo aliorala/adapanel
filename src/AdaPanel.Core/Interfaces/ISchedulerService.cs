@@ -6,7 +6,19 @@ public interface ISchedulerService
 {
     Task<IReadOnlyCollection<ScheduledTaskDto>> GetTasksAsync(CancellationToken cancellationToken = default);
 
-    Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Görevi kaydeder.
+    /// </summary>
+    /// <param name="privilege">
+    /// Çağıranın yetki sınıfı — ZORUNLUDUR ve varsayılanı YOKTUR (bkz.
+    /// <see cref="ScheduledTaskPrivilege"/>). Sunucu sahibi olmayan bir panel yöneticisinin
+    /// kurduğu kod çalıştıran görevler bu parametreyle SYSTEM yerine sınırlı kimliğe iner.
+    /// Varsayılan verilseydi ileride eklenecek her yeni çağıran sessizce tam yetki alırdı.
+    /// </param>
+    Task<ScheduledTaskDto> CreateTaskAsync(
+        CreateScheduledTaskRequest request,
+        ScheduledTaskPrivilege privilege,
+        CancellationToken cancellationToken = default);
 
     Task DeleteTaskAsync(string name, CancellationToken cancellationToken = default);
 

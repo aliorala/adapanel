@@ -750,14 +750,45 @@ $halaCalisiyor = if ($gorev -and $gorev.State -eq 'Running') {{ 1 }} else {{ 0 }
 [Console]::Out.WriteLine('ADAPANEL-HAYATTA=' + ($hayattaKalanlar -join ', '))
 [Console]::Out.WriteLine('ADAPANEL-CALISIYOR=' + $halaCalisiyor)";
 
-    public async Task<ScheduledTaskDto> CreateTaskAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken = default)
+    public async Task<ScheduledTaskDto> CreateTaskAsync(
+        CreateScheduledTaskRequest request,
+        ScheduledTaskPrivilege privilege,
+        CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
         await EnsureTaskUrlTargetAllowedAsync(request, cancellationToken);
 
         // Betik görevi IIS'e (site kökü + havuz adı) bakmak zorunda olduğundan çözüm ASENKRON;
         // saf yol/komut mantığı ScriptTaskPlanner'da, IIS'e bağımlı kısmı burada duruyor.
-        var plan = await ResolveScriptPlanAsync(request, cancellationToken);
+        // "script" DIŞINDAKİ tipler için plan yalnız kimlik düşürüldüğünde üretilir (aşağıda).
+        var plan = await ResolveScriptPlanAsync(request, privilege, cancellationToken)
+                   ?? PlanForLimitedIdentity(request, privilege);
+
+        // BETİK OLMAYAN sınırlı görev bir SİTEYE aitse o sitenin kökü açılır.
+        //
+        // Neden gerekli: kimliği düşürülen görev (ör. bir sitenin `php artisan queue:work`
+        // işçisi) kendi klasörünü okuyup yazamazsa görev kaydolur ama HER çalışmada düşer —
+        // yani koruma, özelliği sessizce bozmuş olurdu. Verilen izin, panelin AYNI komutlar için
+        // zaten verdiği izindir (LimitedIdentityRunner composer/npm/artisan çalıştırırken aynı
+        // kökü aynı hesaba açar); yeni bir yüzey değil.
+        //
+        // Neden yalnız SİTE kökü: izin verilecek klasör IIS'ten ÇÖZÜLÜR, istekteki serbest bir
+        // yoldan alınmaz. Keyfi bir yola LOCAL SERVICE'e Modify vermek (bir sistem klasörü
+        // düşünün) kapatmaya çalıştığımızdan büyük bir kapı açardı.
+        // (Betik tipinde aynı izni ResolveScriptPlanAsync zaten veriyor.)
+        if (plan?.PrincipalUserId is not null &&
+            !string.Equals((request.TaskType ?? string.Empty).Trim(), "script", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(request.SiteName))
+        {
+            var siteKaydi = await siteService.GetSiteAsync(request.SiteName.Trim(), cancellationToken);
+            var siteKoku = string.IsNullOrWhiteSpace(siteKaydi.ApplicationRootPath)
+                ? siteKaydi.PhysicalPath
+                : siteKaydi.ApplicationRootPath;
+            if (!string.IsNullOrWhiteSpace(siteKoku))
+            {
+                await GrantLimitedIdentityAccessAsync(siteKoku, cancellationToken);
+            }
+        }
 
         var logPath = await PrepareLogPathAsync(request.Name, plan?.PrincipalUserId, cancellationToken);
         var result = await ProcessRunner.RunPowerShellAsync(BuildCreateScript(request, plan, logPath), cancellationToken);
@@ -1183,7 +1214,10 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
                     throw new AppException("cron.invalid_name", 400, 400);
                 }
 
-                if (IsBareInteractiveShell(request.Command, request.Arguments))
+                // BİTMEYEN KABUK denetimi. Bu bir güvenlik sınırı DEĞİL, kullanıcıyı kendi
+                // hatasından koruyan bir denetimdir (gerekçe IsNonTerminatingShell üzerinde).
+                // Yetki sınırı burada değil, görevin KİMLİĞİNDE (RequiresLimitedIdentity).
+                if (IsNonTerminatingShell(request.Command, request.Arguments))
                 {
                     throw new AppException("cron.bare_shell", 400, 400);
                 }
@@ -1289,41 +1323,109 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
         Regex.IsMatch(value, @"^[a-zA-Z]:[\\/]") || value.StartsWith(@"\\", StringComparison.Ordinal);
 
     /// <summary>
-    /// Komut, argümansız bir kabuk mu (cmd.exe / powershell.exe)?
-    /// <para>
-    /// Böyle bir görev HİÇBİR ZAMAN BİTMEZ: argümansız cmd.exe etkileşimli bir kabuk açar ve girdi
-    /// bekler; görevin altında konsol olmadığı için sonsuza kadar bekler. Çalışma süresi sınırı
-    /// dolana dek gelen her tetikleme "önceki tur sürüyor" diye reddedilir (0x800710E0) ve görev
-    /// fiilen ölür.
-    /// </para>
-    /// <para>
-    /// Neden GERÇEKTEN oluyor, teorik değil: betik görevleri Windows'a <c>cmd.exe /c "...bat"</c>
-    /// olarak kaydedilir ve panel bir süre bunu geri çözmüyordu (0.2.70'te düzeltildi) — düzenleme
-    /// ekranı komut alanına <c>cmd.exe</c> yazıyordu. Kullanıcı hiçbir şeyi bilerek değiştirmeden
-    /// kaydettiğinde görev, betiği yerine argümansız bir kabuk çalıştıran bir göreve dönüşüyordu.
-    /// Sebebi ortadan kaldırdık; bu denetim aynı sonucu başka bir yoldan üretmeyi de engeller.
-    /// </para>
+    /// Görev, HİÇ BİTMEYECEK bir kabuk mu başlatıyor?
     /// </summary>
-    internal static bool IsBareInteractiveShell(string? command, string? arguments)
+    /// <remarks>
+    /// <para>
+    /// <b>BU BİR GÜVENLİK SINIRI DEĞİLDİR — ve öyleymiş gibi kullanılmamalıdır.</b> Eski adı
+    /// (<c>IsBareInteractiveShell</c>) ve yeri (<c>ValidateRequest</c>'te, "kabuk" reddi gibi
+    /// görünen bir dal) yanlış bir güvenlik hissi veriyordu: <c>cmd.exe /c &lt;herhangi bir şey&gt;</c>
+    /// bu denetimden GEÇER, geçmesi de DOĞRUDUR — çünkü burada sorulan soru "bu komut tehlikeli mi"
+    /// değil, "bu görev bitecek mi". Keyfi kod çalıştırmayı sınırlayan şey KOMUT SÜZGECİ değil,
+    /// görevin KİMLİĞİDİR (bkz. <see cref="RequiresLimitedIdentity"/> ve
+    /// <see cref="ScheduledTaskPrivilege"/>); komut dizgesini süzerek kod çalıştırmayı engellemeye
+    /// çalışmak bu depoda zaten bir kez reddedildi (bkz. <c>LimitedIdentityRunner</c>: "kötü niyetli
+    /// şey argümanda değil, aracın çalıştırmak üzere tasarlandığı dosyanın içinde").
+    /// </para>
+    /// <para>
+    /// <b>Asıl amacı — kullanıcıyı kendi hatasından korumak.</b> Bitmeyen bir görev, çalışma süresi
+    /// sınırı dolana dek gelen her tetiklemeyi "önceki tur sürüyor" diye reddettirir (0x800710E0)
+    /// ve görev fiilen ölür. Neden teorik değil: betik görevleri Windows'a
+    /// <c>cmd.exe /c "...bat"</c> olarak kaydedilir ve panel bir süre bunu geri çözmüyordu
+    /// (0.2.70'te düzeltildi) — düzenleme ekranı komut alanına <c>cmd.exe</c> yazıyordu. Kullanıcı
+    /// hiçbir şeyi bilerek değiştirmeden kaydettiğinde görev, betiği yerine boş bir kabuk
+    /// çalıştıran bir göreve dönüşüyordu.
+    /// </para>
+    /// <para>
+    /// <b>Denetim GENİŞLETİLDİ — çünkü söylediği işi tam yapmıyordu.</b> Yalnız ARGÜMANSIZ kabuğa
+    /// bakıyordu; oysa bitmeyen kabuğun asıl üretici biçimleri argümanlıdır ve belgelidir:
+    /// <c>cmd.exe /k …</c> komuttan sonra kabuğu AÇIK BIRAKIR, <c>powershell.exe -NoExit …</c>
+    /// aynısını yapar. İkisi de görevin altında konsol olmadığı için sonsuza kadar bekler — yani
+    /// denetimin engellemek için var olduğu sonucun ta kendisi. <c>/c</c> ve <c>-File</c> biçimleri
+    /// KABUL EDİLİR: onlar biter.
+    /// </para>
+    /// </remarks>
+    internal static bool IsNonTerminatingShell(string? command, string? arguments)
     {
-        if (!string.IsNullOrWhiteSpace(arguments))
+        var dosyaAdi = Path.GetFileName((command ?? string.Empty).Trim().Trim('"'));
+        var cmdKabugu = string.Equals(dosyaAdi, "cmd.exe", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(dosyaAdi, "cmd", StringComparison.OrdinalIgnoreCase);
+        var psKabugu = string.Equals(dosyaAdi, "powershell.exe", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(dosyaAdi, "powershell", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(dosyaAdi, "pwsh.exe", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(dosyaAdi, "pwsh", StringComparison.OrdinalIgnoreCase);
+
+        if (!cmdKabugu && !psKabugu)
         {
             return false;
         }
 
-        var dosyaAdi = Path.GetFileName((command ?? string.Empty).Trim().Trim('"'));
-        return string.Equals(dosyaAdi, "cmd.exe", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(dosyaAdi, "cmd", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(dosyaAdi, "powershell.exe", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(dosyaAdi, "powershell", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(dosyaAdi, "pwsh.exe", StringComparison.OrdinalIgnoreCase);
+        var argumanlar = (arguments ?? string.Empty).Trim();
+
+        // Argümansız kabuk: girdi bekler, hiç bitmez (ilk ölçülen durum).
+        if (argumanlar.Length == 0)
+        {
+            return true;
+        }
+
+        // BAYRAK YALNIZ KABUĞUN KENDİ BÖLÜMÜNDE ARANIR — satırın tamamında değil.
+        //
+        // Fazla kapatma nöbetçisi (gerçek örnek): `cmd.exe /c xcopy A B /K` satırında geçen "/K"
+        // xcopy'nin bayrağıdır, cmd'nin değil; düz bir "içinde /k var mı" araması bu MEŞRU görevi
+        // reddederdi. cmd'de "/c" ya da "/k"dan, PowerShell'de "-Command" ya da "-File"dan SONRASI
+        // çalıştırılan komuta aittir ve bizi ilgilendirmez.
+        foreach (var parca in argumanlar.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (cmdKabugu)
+            {
+                if (parca is "/k" or "/K" or "-k" or "-K")
+                {
+                    return true;
+                }
+
+                // "/c" komutu başlatır: buradan sonrası cmd'nin değil.
+                if (string.Equals(parca, "/c", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (string.Equals(parca, "-NoExit", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(parca, "/NoExit", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(parca, "-Command", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(parca, "-File", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
     /// "script" görevini çalıştırılabilir bir plana çevirir; başka tiplerde null döner.
     /// Sıra bilinçli: önce ucuz ve kesin denetimler (uzantı, varlık), sonra IIS'e gidenler.
     /// </summary>
-    private async Task<ScriptPlan?> ResolveScriptPlanAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken)
+    private async Task<ScriptPlan?> ResolveScriptPlanAsync(
+        CreateScheduledTaskRequest request,
+        ScheduledTaskPrivilege privilege,
+        CancellationToken cancellationToken)
     {
         if (!string.Equals((request.TaskType ?? string.Empty).Trim(), "script", StringComparison.OrdinalIgnoreCase))
         {
@@ -1348,11 +1450,11 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
                                ?? string.Empty;
 
         var siteName = (request.SiteName ?? string.Empty).Trim();
-        // "apppool" eski istemcilerden gelebilir; artık sınırlı yetki anlamına gelir (bkz.
-        // ScriptTaskPlanner.LimitedUserId — havuz kimliği Task Scheduler'da hiç çalışmıyordu).
-        var runAs = (request.RunAs ?? string.Empty).Trim();
-        var wantsLimited = string.Equals(runAs, "limited", StringComparison.OrdinalIgnoreCase) ||
-                           string.Equals(runAs, "apppool", StringComparison.OrdinalIgnoreCase);
+        // KULLANICININ SEÇTİĞİ kimlik ile ÇAĞIRANA ZORUNLU KILINAN kimlik ayrı ölçülür: ilki
+        // "site seçilmeden istenemez" kuralına tabidir, ikincisi bir güvenlik sınırıdır ve o kural
+        // yüzünden düşürülemez (aşağıya bkz.).
+        var kullaniciSinirliIstedi = IsExplicitLimitedRunAs(request.RunAs);
+        var wantsLimited = RequiresLimitedIdentity(request.TaskType, request.RunAs, privilege);
         string? principalUserId = null;
 
         if (siteName.Length > 0)
@@ -1384,15 +1486,110 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
                 principalUserId = ScriptTaskPlanner.LimitedUserId;
             }
         }
-        else if (wantsLimited)
+        else if (kullaniciSinirliIstedi)
         {
             // Sınırlı kimlik bir SİTE kökü içindir; site seçilmeden istenirse sessizce SYSTEM'e düşmek
             // kullanıcının seçmediği bir yetki verirdi — hata dön.
             throw new AppException("cron.limited_requires_site", 400, 400);
         }
+        else if (wantsLimited)
+        {
+            // ZORUNLU DÜŞÜRME, SUNUCU BETİĞİ MODU (site seçilmemiş).
+            //
+            // Burada "site seç" diye hata VERİLMEZ: kullanıcı sınırlı kimliği İSTEMEDİ, kural
+            // dayattı. Hata dönmek, sahip olmayan yöneticiye sunucu betiği görevini tamamen
+            // kapatmak olurdu — yani (B) yolunu (yetkiyi daraltmayı) arka kapıdan uygulamak.
+            //
+            // Site kökü olmadığı için ERİŞİM İZNİ DE VERİLMEZ ve bu bilinçlidir: izin verilecek
+            // klasör yöneticinin yazdığı KEYFİ bir yoldur; oraya LOCAL SERVICE'e Modify vermek
+            // (ör. bir sistem klasörüne) kapatmaya çalıştığımızdan daha büyük bir kapı açardı.
+            // Betik varsayılan ACL'li bir klasördeyse (LOCAL SERVICE, BUILTIN\Users üzerinden RX
+            // alır — DataRootHardeningService'te ölçüldü) çalışır; kilitli bir klasördeyse görev
+            // hata koduyla düşer ve bu SESSİZ DEĞİLDİR: panel son sonucu ve görev çıktısını
+            // gösterir.
+            principalUserId = ScriptTaskPlanner.LimitedUserId;
+        }
 
         var (execute, arguments) = ScriptTaskPlanner.BuildAction(scriptPath, request.Arguments);
         return new ScriptPlan(execute, arguments, workingDirectory, principalUserId);
+    }
+
+    /// <summary>
+    /// Görev SINIRLI kimlikle mi kaydedilmeli — kararın TEK adresi.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// İki bağımsız sebep var ve ikisi tek yerde toplandı; ayrı ayrı yazılsalardı biri
+    /// sıkılaştırılıp diğeri unutulurdu (bu depoda tam olarak o yaşandı — bkz.
+    /// <c>PanelWriteTargetGuard</c> yorumu):
+    /// </para>
+    /// <list type="number">
+    /// <item>
+    /// <b>Kullanıcı SEÇTİ</b> — <c>runAs=limited</c>. Yalnız <c>script</c> tipinde anlamlıdır:
+    /// arayüzde bu kutu yalnız "site betiği" modunda görünür ve kimlik bir SİTE köküne bağlıdır.
+    /// Diğer tiplerde seçim gelirse (eski istemci, formdan kalan değer) bugünkü davranış korunur.
+    /// </item>
+    /// <item>
+    /// <b>Çağıranın yetkisi ZORLUYOR</b> — <see cref="ScheduledTaskPrivilege.Limited"/>. Bu bir
+    /// güvenlik sınırıdır ve KOD ÇALIŞTIRAN her tipi kapsar: <c>command</c>, <c>php</c>,
+    /// <c>script</c>. <c>url</c> KAPSAM DIŞIDIR ve bu fazla kapatmama kararıdır: o tipte çalışan
+    /// program sabittir (<c>curl.exe</c>), argümanları panel kurar ve adres ayrıca
+    /// <see cref="OutboundAddressGuard"/>'dan geçer — keyfi kod değildir. Müşteri/bayi görevleri
+    /// de yalnız bu tiptedir, yani kiracının hiçbir görevi bu değişiklikten etkilenmez.
+    /// </item>
+    /// </list>
+    /// </remarks>
+    internal static bool RequiresLimitedIdentity(string? taskType, string? runAs, ScheduledTaskPrivilege privilege)
+    {
+        var tip = (taskType ?? "command").Trim().ToLowerInvariant();
+
+        if (IsExplicitLimitedRunAs(runAs) && tip == "script")
+        {
+            return true;
+        }
+
+        return privilege == ScheduledTaskPrivilege.Limited && tip is "command" or "php" or "script";
+    }
+
+    /// <summary>
+    /// Kullanıcı sınırlı kimliği AÇIKÇA istedi mi. "apppool" eski istemcilerden gelir ve artık
+    /// sınırlı yetki anlamına gelir (bkz. <see cref="ScriptTaskPlanner.LimitedUserId"/> — havuz
+    /// kimliği Task Scheduler'da hiç çalışmıyordu).
+    /// </summary>
+    internal static bool IsExplicitLimitedRunAs(string? runAs)
+    {
+        var deger = (runAs ?? string.Empty).Trim();
+        return string.Equals(deger, "limited", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(deger, "apppool", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// <c>script</c> DIŞINDAKİ tipler için (yalnızca) kimliği düşüren plan; düşürme gerekmiyorsa null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eylemin kendisi <see cref="ResolveAction"/>'dan gelir — yani komut/argüman/klasör AYNEN
+    /// bugünkü gibi kurulur. Değişen TEK şey principal'dir. Eylem burada ikinci kez yazılsaydı
+    /// (ör. "sınırlı görevler için ayrı bir komut kurma yolu") iki kopya ilk düzeltmede ayrışırdı.
+    /// </para>
+    /// <para>
+    /// null dönmesi "SYSTEM" demektir ve <see cref="BuildCreateScript"/> o durumda planı hiç
+    /// kullanmaz, <see cref="ResolveAction"/>'ı kendisi çağırır — davranış birebir korunur.
+    /// </para>
+    /// </remarks>
+    internal static ScriptPlan? PlanForLimitedIdentity(CreateScheduledTaskRequest request, ScheduledTaskPrivilege privilege)
+    {
+        // "script" BURAYA UĞRAMAZ: onun planını (site kökü denetimi + izin verme dahil)
+        // ResolveScriptPlanAsync kurar ve o hiçbir zaman null dönmez. Tipi burada da elemek,
+        // ileride çağrı sırası değişirse betik yolunun ham komut gibi işlenmesini önler.
+        var tip = (request.TaskType ?? "command").Trim().ToLowerInvariant();
+        if (tip == "script" || !RequiresLimitedIdentity(tip, request.RunAs, privilege))
+        {
+            return null;
+        }
+
+        var (execute, arguments, workingDirectory) = ResolveAction(request);
+        return new ScriptPlan(execute, arguments, workingDirectory, ScriptTaskPlanner.LimitedUserId);
     }
 
     /// <summary>
