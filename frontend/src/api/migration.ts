@@ -29,6 +29,16 @@ export type MigrateSitePayload = {
   targetDatabase: string;
   targetDatabaseUser: string;
   targetDatabasePassword: string;
+  /*
+   * YÖNETİCİNİN BİLEREK KABUL ETTİĞİ UZAK KİMLİK (FTPS sertifikası ya da SFTP host key parmak izi).
+   *
+   * Boş bırakılırsa kaynak sunucunun kimliği DOĞRULANIR. Doğrulanamazsa göç adımı
+   * `migration.tls.untrusted` / `migration.hostkey.untrusted` ile başarısız olur ve sunucu ret
+   * sebebini + parmak izini `detail` alanında döner; yönetici parmak izini kaynak sunucudan teyit
+   * edip bu alanı doldurarak tekrar dener. "Her sertifikayı kabul et" diye bir değer YOKTUR —
+   * kabul yalnız bu tek parmak izine açılır.
+   */
+  acceptFileHostFingerprint: string;
 };
 
 export type MigrationStep = { step: string; success: boolean; message: string; detail?: string | null };
@@ -108,7 +118,15 @@ export async function migrateSiteStream(
   }
 }
 
-export type PleskDiscoverPayload = { host: string; port: number; apiKey: string; userName: string; password: string };
+export type PleskDiscoverPayload = {
+  host: string;
+  port: number;
+  apiKey: string;
+  userName: string;
+  password: string;
+  // Gerekçe MigrateSitePayload.acceptFileHostFingerprint'te; keşif isteği API ANAHTARINI taşır.
+  acceptCertificateFingerprint: string;
+};
 /*
  * İKİ AYRI ALAN, ÇÜNKÜ İKİ AYRI ÖLÇÜM.
  * `hostingType` YALNIZ Plesk keşfinde dolar (Plesk'in `hosting_type` alanı: "virtual", "none"),
@@ -127,7 +145,13 @@ export async function discoverPlesk(payload: PleskDiscoverPayload) {
   return response.data.data;
 }
 
-export type CpanelDiscoverPayload = { host: string; port: number; userName: string; apiToken: string };
+export type CpanelDiscoverPayload = {
+  host: string;
+  port: number;
+  userName: string;
+  apiToken: string;
+  acceptCertificateFingerprint: string;
+};
 
 // cPanel/WHM API'sine bağlanıp hesap/domain'leri keşfet (WHM listaccts). Plesk ile aynı sonuç şekli.
 export async function discoverCpanel(payload: CpanelDiscoverPayload) {

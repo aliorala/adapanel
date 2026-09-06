@@ -42,6 +42,14 @@ public sealed class MigrateSiteRequest
     [StringLength(1024)]
     public string RemotePath { get; init; } = "/";
 
+    /// <summary>
+    /// Yöneticinin BİLEREK kabul ettiği dosya kaynağı parmak izi (FTPS sertifikası ya da SFTP host key).
+    /// Boşsa doğrulama uygulanır; gerekçe
+    /// <see cref="Sites.RemoteFileMigrationRequest.AcceptHostFingerprint"/>'te.
+    /// </summary>
+    [StringLength(128)]
+    public string AcceptFileHostFingerprint { get; init; } = string.Empty;
+
     // ---- Veritabanı kaynağı (opsiyonel) ----
     public bool TransferDatabase { get; init; }
 

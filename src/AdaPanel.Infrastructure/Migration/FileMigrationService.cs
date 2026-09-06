@@ -11,10 +11,19 @@ namespace AdaPanel.Infrastructure.Migration;
 /// <summary>
 /// Uzak sunucudan site dosyalarını çeker: FTP/FTPS için FluentFTP, SFTP için SSH.NET (her ikisi de
 /// listeleme/özyinelemeyi güvenli yapar — elle FTP listesi ayrıştırmaya gerek yok). Hedef = sitenin
-/// IIS fiziksel kök dizini. Sertifika/host-key doğrulaması göç senaryosu için gevşektir (kullanıcı kendi
-/// dosyalarını çekiyor).
+/// IIS fiziksel kök dizini.
 /// </summary>
 /// <remarks>
+/// <para>
+/// <b>UZAK TARAFIN KİMLİĞİ ARTIK DOĞRULANIYOR — eskiden HİÇ doğrulanmıyordu.</b> Bu servisin isteği
+/// FTP/SSH kullanıcı adı ve PAROLASINI taşır ve iki uç da kimliği kayıtsız şartsız kabul ediyordu:
+/// FTPS'te <c>FtpConfig.ValidateAnyCertificate = true</c>, SFTP'de ise
+/// <c>SftpClient.HostKeyReceived</c>'e hiç abone olunmuyordu (ÖLÇÜLDÜ: SSH.NET'te abone yoksa
+/// <c>HostKeyEventArgs.CanTrust</c> varsayılanı <c>true</c>'dur). Araya giren biri sahte bir
+/// kimlikle bağlantıyı karşılayıp parolayı okuyabilirdi. Karar
+/// <see cref="RemoteCertificateTrustGate"/> / <see cref="RemoteHostKeyTrustGate"/>'e taşındı;
+/// gerekçenin tamamı <c>RemoteHostTrust.cs</c>'te.
+/// </para>
 /// <para>
 /// <b>Neden günlükçü (ILogger) var:</b> göç TEK SEFERLİK ve GERİ ALINAMAZ bir iştir — kullanıcı
 /// bittiğini sanıp DNS'i çevirdikten sonra eksik gelen dosyalar geri getirilemez. Buradaki en
@@ -91,13 +100,21 @@ internal sealed class FileMigrationService(
             hedefEtiket,
             target);
 
+        // Güven kapıları BURADA kurulur, protokol dalından ÖNCE: reddi hataya çeviren catch de
+        // burada. Kapıyı dalın içinde kursaydık, ret kaydı catch'e ulaşmaz ve el sıkışma reddi
+        // aşağıda "bağlanılamadı" diye sınıflandırılırdı — yani yönetici gerçek sebebi hiç görmezdi.
+        var certificateTrust = new RemoteCertificateTrustGate(request.AcceptHostFingerprint);
+        var hostKeyTrust = new RemoteHostKeyTrustGate(request.AcceptHostFingerprint);
+
         try
         {
             var sonuc = protocol switch
             {
-                "sftp" => await PullSftpAsync(request, target, remotePath, cancellationToken),
-                _ => await PullFtpAsync(request, target, remotePath, protocol == "ftps", cancellationToken)
+                "sftp" => await PullSftpAsync(request, target, remotePath, hostKeyTrust, cancellationToken),
+                _ => await PullFtpAsync(request, target, remotePath, protocol == "ftps", certificateTrust, cancellationToken)
             };
+
+            KabulEdilenIstisnayiKaydet(request, hedefEtiket, certificateTrust.AcceptedByPin ?? hostKeyTrust.AcceptedByPin);
 
             logger?.LogInformation(
                 "Goc dosya cekme bitti: {Site} <- {UzakHedef}, {Dosya} dosya / {Bayt} bayt -> {YerelYol}.",
@@ -119,6 +136,23 @@ internal sealed class FileMigrationService(
                 exception.MessageKey,
                 exception.Details);
             throw;
+        }
+        catch (Exception exception) when ((certificateTrust.Failure ?? hostKeyTrust.Failure) is { } reddedilen)
+        {
+            // GÜVEN DALI, ClassifyFileError'dan ÖNCE. Aksi hâlde SSH.NET'in "Key exchange
+            // negotiation failed" ve FluentFTP'nin sertifika reddi metinleri
+            // `migration.files.connect_failed`e düşerdi ("bağlantı" sözcüğünü içeriyorlar) ve
+            // yönetici host/port ile uğraşıp asıl sebebi — sunucu kimliğinin doğrulanamadığını —
+            // hiç öğrenemezdi.
+            logger?.LogWarning(
+                exception,
+                "Goc dosya cekme REDDEDILDI: {Site} <- {UzakHedef}. Uzak kimlik dogrulanamadi ({Sebep}, {ParmakIzi}).",
+                request.SiteName,
+                hedefEtiket,
+                string.Join(",", reddedilen.Reasons),
+                reddedilen.Fingerprint);
+
+            throw new AppException(reddedilen.MessageKey, 502, 502, reddedilen.ToDetails());
         }
         catch (Exception exception)
         {
@@ -191,25 +225,72 @@ internal sealed class FileMigrationService(
         return new AppException("migration.failed", 502, 500, detail);
     }
 
-    private async Task<RemoteFileMigrationResult> PullFtpAsync(
+    /// <summary>
+    /// Yöneticinin açık onayını GÜNLÜĞE geçirir: doğrulanmamış bir kimliğe parola gönderildi.
+    /// </summary>
+    /// <remarks>
+    /// Denetim kaydını denetleyici yazar (istek nesnesini ve HTTP bağlamını orası görür); buradaki
+    /// satır sunucu tarafındaki teşhis izidir — "bu göç ne zaman, hangi parmak izine güvendi".
+    /// </remarks>
+    private void KabulEdilenIstisnayiKaydet(RemoteFileMigrationRequest request, string hedefEtiket, string? kabulEdilen)
+    {
+        if (kabulEdilen is null)
+        {
+            return;
+        }
+
+        logger?.LogWarning(
+            "Goc dosya cekme: {Site} icin {UzakHedef} sunucusunun DOGRULANAMAYAN kimligi yoneticinin sabitledigi parmak iziyle KABUL EDILDI ({ParmakIzi}).",
+            request.SiteName,
+            hedefEtiket,
+            kabulEdilen);
+    }
+
+    /// <summary>
+    /// FTP/FTPS istemcisini ÜRETİM AYARLARIYLA kurar.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>internal</c> olması bilinçli:</b> "her sertifikayı kabul etme kapalı" ve "karar verici
+    /// bağlı" birer GÜVENLİK KARARIDIR ve ölçülmeleri gerekir. Kurulum <c>Connect</c> çağrısının
+    /// içine gömülü kalsaydı, test ancak kaynakta metin arayabilirdi — yani kararın YAZILDIĞINI
+    /// doğrular, BAĞLANDIĞINI değil. (Aynı gerekçe <c>ClusterHttpClientFactory.BuildHandler</c>'da
+    /// da yazılı.)
+    /// </remarks>
+    internal static AsyncFtpClient FtpIstemcisiOlustur(
         RemoteFileMigrationRequest request,
-        string target,
-        string remotePath,
         bool secure,
-        CancellationToken cancellationToken)
+        RemoteCertificateTrustGate certificateTrust)
     {
         var config = new FtpConfig
         {
             EncryptionMode = secure ? FtpEncryptionMode.Auto : FtpEncryptionMode.None,
-            ValidateAnyCertificate = true
+            // ARTIK FALSE. `true` iken FluentFTP sunulan HER sertifikayı kabul ediyordu; aşağıdaki
+            // olay hiç sorulmuyordu bile. Bu satır olmadan kapının bağlı olması hiçbir şey ifade etmez.
+            ValidateAnyCertificate = false
         };
 
-        await using var client = new AsyncFtpClient(
+        var client = new AsyncFtpClient(
             request.Host,
             request.UserName,
             request.Password,
             request.Port > 0 ? request.Port : 21,
             config);
+
+        client.ValidateCertificate += (_, olay) =>
+            olay.Accept = certificateTrust.Evaluate(olay.Certificate, olay.Chain, olay.PolicyErrors);
+
+        return client;
+    }
+
+    private async Task<RemoteFileMigrationResult> PullFtpAsync(
+        RemoteFileMigrationRequest request,
+        string target,
+        string remotePath,
+        bool secure,
+        RemoteCertificateTrustGate certificateTrust,
+        CancellationToken cancellationToken)
+    {
+        await using var client = FtpIstemcisiOlustur(request, secure, certificateTrust);
 
         await client.Connect(cancellationToken);
         var results = await client.DownloadDirectory(
@@ -287,19 +368,45 @@ internal sealed class FileMigrationService(
         throw new AppException("migration.files.path_not_found", 502, 502, detay);
     }
 
+    /// <summary>
+    /// SFTP istemcisini ÜRETİM AYARLARIYLA kurar — host key kararı BAĞLI olarak.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLDÜ:</b> <c>HostKeyReceived</c>'e abone olunmazsa SSH.NET hiçbir şey sormaz ve
+    /// <c>HostKeyEventArgs.CanTrust</c> <c>true</c> kalır — yani panel her host key'i kabul ederdi.
+    /// Aboneliğin varlığı bu yüzden korumanın KENDİSİDİR ve testle sabitlenmiştir.
+    /// </para>
+    /// <para>
+    /// <c>internal</c> olma gerekçesi <see cref="FtpIstemcisiOlustur"/>'daki ikiziyle aynı.
+    /// </para>
+    /// </remarks>
+    internal static SftpClient SftpIstemcisiOlustur(
+        RemoteFileMigrationRequest request,
+        RemoteHostKeyTrustGate hostKeyTrust)
+    {
+        var client = new SftpClient(
+            request.Host,
+            request.Port > 0 ? request.Port : 22,
+            request.UserName,
+            request.Password);
+
+        client.HostKeyReceived += (_, olay) =>
+            olay.CanTrust = hostKeyTrust.Evaluate(olay.HostKeyName, olay.FingerPrintSHA256, olay.KeyLength);
+
+        return client;
+    }
+
     private async Task<RemoteFileMigrationResult> PullSftpAsync(
         RemoteFileMigrationRequest request,
         string target,
         string remotePath,
+        RemoteHostKeyTrustGate hostKeyTrust,
         CancellationToken cancellationToken)
     {
         return await Task.Run(() =>
         {
-            using var client = new SftpClient(
-                request.Host,
-                request.Port > 0 ? request.Port : 22,
-                request.UserName,
-                request.Password);
+            using var client = SftpIstemcisiOlustur(request, hostKeyTrust);
 
             client.Connect();
             var counter = new MigrationCounter();

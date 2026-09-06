@@ -23,4 +23,11 @@ public sealed class CpanelDiscoverRequest
     [Required]
     [StringLength(512, MinimumLength = 1)]
     public string ApiToken { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Yöneticinin BİLEREK kabul ettiği WHM sertifikası parmak izi (<c>SHA256:1A:2B:…</c>).
+    /// Boşsa sertifika tam doğrulanır; gerekçe <see cref="PleskDiscoverRequest.AcceptCertificateFingerprint"/>'te.
+    /// </summary>
+    [StringLength(128)]
+    public string AcceptCertificateFingerprint { get; init; } = string.Empty;
 }

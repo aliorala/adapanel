@@ -289,8 +289,10 @@ public sealed class OutboundRedirectGuardTests
     /// </para>
     /// <para>
     /// Sertifika testin kendi ürettiği kendinden imzalı sertifikadır ve bağlantı loopback'tedir;
-    /// hiçbir dış sunucuya gidilmez. Doğrulama kapatılır (<c>verifyTlsCertificate: false</c>) çünkü
-    /// ölçülen şey sertifikanın geçerliliği değil, EL SIKIŞMANIN kurulabilmesidir.
+    /// hiçbir dış sunucuya gidilmez. Testin verdiği doğrulayıcı bu sertifikayı kabul eder çünkü
+    /// ölçülen şey sertifikanın geçerliliği değil, EL SIKIŞMANIN kurulabilmesidir. (Doğrulamayı
+    /// kapatan eski <c>verifyTlsCertificate: false</c> boolesi KALDIRILDI; artık bir karar verici
+    /// verilmezse .NET'in tam doğrulaması çalışır — gerekçe <c>OutboundConnectGuard</c>'da.)
     /// </para>
     /// </remarks>
     [Fact]
@@ -300,7 +302,7 @@ public sealed class OutboundRedirectGuardTests
         using var sunucu = SahteHttpSunucu.Baslat(_ => (200, null, "TLS-TAMAM"), sertifika);
         using var istemci = new HttpClient(OutboundConnectGuard.CreateHandler(
             () => OutboundTargetPolicy.Connecting(allowInternalTargets: true),
-            verifyTlsCertificate: false));
+            certificateValidator: (_, _, _, _) => true));
 
         var govde = await istemci.GetStringAsync($"https://127.0.0.1:{sunucu.Port}/");
 

@@ -71,15 +71,25 @@ public static class OutboundConnectGuard
     /// </param>
     /// <param name="resolver">Testte sahte çözümleyici; üretimde gerçek DNS.</param>
     /// <param name="onBlocked">Reddedilen bağlantıyı günlüğe yazan taraf (ad, engellenen hedef).</param>
-    /// <param name="verifyTlsCertificate">
-    /// <c>false</c> yalnız çağıranın BİLEREK sertifika doğrulamasını kapattığı yollarda
-    /// (Plesk/cPanel keşfi kendi imzalı sertifika kullanır). Adres denetimi bundan etkilenmez.
+    /// <param name="certificateValidator">
+    /// <b>Verilmezse .NET'in TAM sertifika doğrulaması çalışır — varsayılan budur.</b>
+    /// <para>
+    /// <b>Burada eskiden <c>bool verifyTlsCertificate = true</c> vardı ve KALDIRILDI.</b> Ölçüldü:
+    /// tek çağrı yeri (<c>SiteMigrationService</c>'in Plesk/cPanel keşfi) onu <c>false</c> veriyor
+    /// ve doğrulamayı tümden kapatıyordu — üstelik o istek kullanıcının kaynak sunucu API
+    /// anahtarını taşır. Bir boole "doğrulamayı kapat" düğmesinin sorunu, kapatmanın SEBEBİNİ ve
+    /// KAPSAMINI hiç taşımamasıdır: kapatan taraf neyi kabul ettiğini söyleyemez, kabul edilen şey
+    /// de "her sertifika" olur. Yerine geçen bu parametre çağıranı bir KARAR VERİCİ yazmaya
+    /// zorlar; göç yolunda o karar verici
+    /// <see cref="Migration.RemoteCertificateTrustGate"/>'tir ve yalnız yöneticinin sabitlediği
+    /// parmak izine istisna açar.
+    /// </para>
     /// </param>
     public static SocketsHttpHandler CreateHandler(
         Func<OutboundTargetPolicy> policySelector,
         OutboundAddressGuard.OutboundHostResolver? resolver = null,
         Action<string, string>? onBlocked = null,
-        bool verifyTlsCertificate = true)
+        RemoteCertificateValidationCallback? certificateValidator = null)
     {
         ArgumentNullException.ThrowIfNull(policySelector);
 
@@ -104,11 +114,11 @@ public static class OutboundConnectGuard
                 cancellationToken)
         };
 
-        if (!verifyTlsCertificate)
+        if (certificateValidator is not null)
         {
             handler.SslOptions = new SslClientAuthenticationOptions
             {
-                RemoteCertificateValidationCallback = (_, _, _, _) => true
+                RemoteCertificateValidationCallback = certificateValidator
             };
         }
 

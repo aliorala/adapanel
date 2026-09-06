@@ -212,6 +212,7 @@ public sealed class AuditCoverageTests
         ["MailController.cs#\"mail.spam.updated\"#\"mail-server\""] = "Spam filtresi sunucu genelidir (itibar/kara liste riski ortaktır).",
         ["MailController.cs#\"mail.queue.message_deleted\"#id"] = "Kuyruk kimliğinden alan adına gidilemez: silinen ileti kuyruktan da kalkar, sahibi ÖLÇÜLEMEZ — tahmin edilmez.",
         ["MailController.cs#\"mail.relay.updated\"#request.Enabled ? $\"{request.Host}:{request.Port}\" : \"mail-server\""] = "Röle, sunucunun TÜM giden postasının teslim yolunu belirler.",
+        ["MigrationController.cs#\"migration.discover.trust_exception\"#$\"host:{host}\""] = "Konu, kimliği DOĞRULANAMAYAN bir KAYNAK SUNUCUDUR (Plesk/WHM) ve o sunucu bu panelin değildir: hiçbir aboneliğe ait olamaz, üstelik keşif anında bu sunucuda henüz hiçbir site/abonelik oluşmamıştır. Uç zaten admin-only. Kayıt, yöneticinin doğrulanmamış bir uca API anahtarı göndermeyi bilerek onayladığını yazar; göçün KENDİSİ (migration.site) konusunu AYRICA yazar ve hedef sitenin sahibine bağlanır.",
         ["NotificationsController.cs#\"notifications.settings.updated\"#\"notifications\""] = "Panelin bildirim kanalı (SMTP/webhook) sunucu genelidir.",
         ["NotificationsController.cs#\"notifications.test_sent\"#\"notifications\""] = "Panel bildirim kanalının sınanması.",
         ["PanelAccessController.cs#\"panel.access.setup\"#$\"panel-host:{request.HostName}\""] = "PANELİN KENDİ erişim adresi/sertifikası; bir aboneliğin kaynağı değil.",

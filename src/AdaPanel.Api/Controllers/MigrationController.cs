@@ -24,6 +24,11 @@ namespace AdaPanel.Api.Controllers;
 //
 // Keşif (plesk/cpanel discover) ve doğrulama (validate) uçları POST'tur ama hiçbir şey DEĞİŞTİRMEZ —
 // uzak sunucudan okuma yaparlar. Bunlar denetim kaydı taramasında MUAF listesindedir.
+//
+// TEK İSTİSNA: keşif isteği, kimliği DOĞRULANAMAYAN bir sunucuyu bilerek kabul eden bir parmak izi
+// taşıyorsa artık kayda geçer. O istek kaynak sunucunun API anahtarını (X-API-Key / WHM token) taşır
+// ve doğrulanmamış bir uca gönderilmiştir; "okudu, bir şey değiştirmedi" doğru olsa da sorulacak soru
+// değişir: anahtar ne zaman ve neye güvenilerek riske girdi.
 [ApiController]
 [Authorize(Roles = "Administrator")]
 [Route("api/v1/migration")]
@@ -164,6 +169,7 @@ public sealed class MigrationController(
         CancellationToken cancellationToken)
     {
         var result = await migrationService.DiscoverPleskAsync(request, cancellationToken);
+        await GuvenIstisnasiniKaydetAsync(request.Host, request.AcceptCertificateFingerprint, "plesk");
         return Ok(ApiResponse<PleskDiscoverResultDto>.Ok(result));
     }
 
@@ -175,7 +181,38 @@ public sealed class MigrationController(
         CancellationToken cancellationToken)
     {
         var result = await migrationService.DiscoverCpanelAsync(request, cancellationToken);
+        await GuvenIstisnasiniKaydetAsync(request.Host, request.AcceptCertificateFingerprint, "cpanel");
         return Ok(ApiResponse<PleskDiscoverResultDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Keşifte kabul edilen güven istisnasını denetim kaydına yazar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden keşif de kaydediliyor:</b> keşif hiçbir şeyi değiştirmez, ama isteğin kendisi kaynak
+    /// sunucunun API anahtarını taşır ve bu çağrıda o anahtar, kimliği DOĞRULANMAMIŞ bir uca
+    /// gönderilmiştir. Değişiklik yapmayan bir eylemin bile riski varsa kaydı olmalıdır.
+    /// </para>
+    /// <para>
+    /// <b>Neden yalnız BAŞARIDAN sonra:</b> istek reddedildiyse zaten hiçbir kimlik bilgisi karşı
+    /// tarafa gitmemiştir — kaydedilecek bir risk yoktur; her reddi kaydetmek kaydı gürültüyle
+    /// doldurup asıl satırı görünmez yapardı.
+    /// </para>
+    /// </remarks>
+    private async Task GuvenIstisnasiniKaydetAsync(string host, string? fingerprint, string kaynak)
+    {
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            return;
+        }
+
+        await auditService.AuditAsync(
+            HttpContext,
+            "migration.discover.trust_exception",
+            $"host:{host}",
+            $"Operator accepted unverified {kaynak} server identity {fingerprint.Trim()} for discovery on {host}.",
+            null);
     }
 
     // Göç ÖNCESİ ön-kontrol: site adı + dosya/DB kaynağı erişilebilirliği. Göç başlatmadan "bağlanır mı" der.
@@ -242,6 +279,18 @@ public sealed class MigrationController(
             kaynaklar.Add(
                 $"database '{request.SourceDatabase}' from {request.DatabaseEngine} {request.DbUserName}@{request.DbHost}:{request.DbPort} "
                 + $"→ '{(string.IsNullOrWhiteSpace(request.TargetDatabase) ? request.SourceDatabase : request.TargetDatabase)}'");
+        }
+
+        // KABUL EDİLEN GÜVEN İSTİSNASI KAYDA GEÇER.
+        //
+        // Bu alan doluysa yönetici, kimliği DOĞRULANAMAYAN bir kaynak sunucuya bilerek bağlanmayı
+        // onaylamıştır ve o bağlantı kaynak sunucunun FTP/SSH parolasını taşımıştır. "Ne zaman,
+        // hangi sunucuya, hangi parmak izine güvenildi" sorusunun cevabı yalnız burada olabilir:
+        // kaynak sunucu bizim değildir, oraya sonradan bakılamaz. Parmak izi SIR DEĞİLDİR (herkese
+        // açık sertifika/host key özeti), yani kayda yazılması yeni bir sızıntı yüzeyi açmaz.
+        if (!string.IsNullOrWhiteSpace(request.AcceptFileHostFingerprint))
+        {
+            kaynaklar.Add($"operator-accepted unverified host identity {request.AcceptFileHostFingerprint.Trim()}");
         }
 
         var sonuc = notu ?? (basarili ? "success" : "partial");

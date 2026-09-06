@@ -137,6 +137,15 @@
         {{ t("panel.migration.discovering") }}
       </p>
 
+      <!-- Kaynak sunucunun kimliği doğrulanamadı: "okunamadı" değil, ONAY BEKLİYOR. Ayrı bir
+           kutu, çünkü kullanıcının yapacağı iş de ayrı — host/port düzeltmek değil, parmak izini
+           teyit edip kabul etmek. -->
+      <RemoteTrustPrompt
+        v-else-if="discoverTrust"
+        :prompt="discoverTrust"
+        :busy="discovering"
+        @accept="acceptDiscoverTrust" />
+
       <SectionLoadError v-else-if="discoverError.message.value" :message="discoverError.message.value" @retry="discover" />
 
       <p v-else-if="discoverRan && discoveredDomains.length === 0" class="empty-state">
@@ -368,6 +377,10 @@
           <small v-if="step.detail" class="step-detail" :class="step.status === 'fail' ? 'err' : 'ok'">{{ step.detail }}</small>
         </div>
       </div>
+
+      <!-- Dosya adımı, kaynak sunucunun kimliği doğrulanamadığı için düştüyse çıkış yolu burada:
+           parmak izi gösterilir, yönetici teyit edip kabul eder, sonra göçü yeniden başlatır. -->
+      <RemoteTrustPrompt v-if="migrateTrust" :prompt="migrateTrust" :busy="busy" @accept="acceptMigrateTrust" />
     </section>
 
     <section v-if="bulkLog.length" class="form-surface">
@@ -407,6 +420,8 @@ import {
 import { extractApiMessage, extractApiDetails } from "../stores/auth";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
+import RemoteTrustPrompt from "../components/RemoteTrustPrompt.vue";
+import { parseRemoteTrustPrompt, type RemoteTrustPrompt as TrustPrompt } from "../utils/remoteTrust";
 import { runningJobLabel, useRunningTask, useServerRunningTask } from "../composables/useRunningTask";
 import { useSectionError } from "../composables/useNotice";
 
@@ -469,7 +484,16 @@ const form = reactive({
   sourceDatabase: "",
   targetDatabase: "",
   targetDatabaseUser: "",
-  targetDatabasePassword: ""
+  targetDatabasePassword: "",
+  /*
+   * KAYNAK SUNUCU KİMLİĞİ İÇİN AÇIK ONAY.
+   *
+   * Boş = doğrula. Dolu = yöneticinin teyit ettiği TEK parmak izine istisna. Değer forma elle
+   * yazılmaz; aşağıdaki onay kutusundaki düğme doldurur ve düğme neyi kabul ettiğini (sebep,
+   * parmak izi, konu/veren) ekranda GÖSTERİR. Küresel bir "doğrulamayı kapat" ayarı yoktur:
+   * öyle bir ayar bir kez açılır, kalır ve açık olduğunu kimse görmez.
+   */
+  acceptFileHostFingerprint: ""
 });
 
 const busy = ref(false);
@@ -489,6 +513,9 @@ const discoveredDomains = ref<PleskDomain[]>([]);
 // "Hiç taranmadı" ile "tarandı, sonuç boş" ve "okunamadı" birbirinden ayrı tutulur.
 const discoverRan = ref(false);
 const discoverError = useSectionError();
+// Keşifte reddedilen kaynak sunucu kimliği (yoksa null) + yöneticinin kabul ettiği parmak izi.
+const discoverTrust = ref<TrustPrompt | null>(null);
+const discoverAcceptFingerprint = ref("");
 const discoverHost = computed(() => (source.value === "cpanel" ? cpanel.host : plesk.host).trim());
 
 // Keşfedebilmek için host + kimlik gerekir. Plesk: API anahtarı YA DA (kullanıcı + parola). cPanel: API token.
@@ -554,33 +581,91 @@ async function discover() {
   selectedDomains.value = [];
   discoverRan.value = false;
   discoverError.clear();
+  discoverTrust.value = null;
   try {
     const result = source.value === "cpanel"
       ? await discoverCpanel({
           host: cpanel.host.trim(),
           port: cpanel.port || 2087,
           userName: cpanel.userName.trim() || "root",
-          apiToken: cpanel.apiToken.trim()
+          apiToken: cpanel.apiToken.trim(),
+          acceptCertificateFingerprint: discoverAcceptFingerprint.value
         })
       : await discoverPlesk({
           host: plesk.host.trim(),
           port: plesk.port || 8443,
           apiKey: plesk.apiKey.trim(),
           userName: plesk.userName.trim(),
-          password: plesk.password
+          password: plesk.password,
+          acceptCertificateFingerprint: discoverAcceptFingerprint.value
         });
     discoveredDomains.value = result.domains;
     // "Tarandı ve hiçbir şey çıkmadı" ile "hiç taranmadı" ayrı: boş liste artık kendi
     // metniyle görünür, şeritteki geçici uyarıya bağlı değil.
     discoverRan.value = true;
   } catch (error) {
-    // Hata hem şeritte hem listenin yerinde: boş alan "kaynakta alan adı yok" sanılmasın.
-    discoverError.capture(error);
-    notice.value = apiErrorText(error);
-    noticeError.value = true;
+    /*
+     * GÜVEN REDDİ, SIRADAN HATADAN AYRILIR.
+     *
+     * Kaynak sunucunun kimliği doğrulanamadıysa kullanıcının yapması gereken şey host/port
+     * düzeltmek DEĞİLDİR — parmak izini teyit edip kabul etmektir. İkisini aynı kırmızı şeride
+     * koymak, yöneticiyi yanlış şeyi düzeltmeye iterdi.
+     */
+    discoverTrust.value = parseRemoteTrustPrompt(extractApiMessage(error), extractApiDetails(error) ?? "");
+    if (!discoverTrust.value) {
+      // Hata hem şeritte hem listenin yerinde: boş alan "kaynakta alan adı yok" sanılmasın.
+      discoverError.capture(error);
+      notice.value = apiErrorText(error);
+      noticeError.value = true;
+    }
   } finally {
     discovering.value = false;
   }
+}
+
+// Yönetici parmak izini teyit etti → SABİTLE ve keşfi tekrarla. Kabul yalnız bu parmak izine
+// yazılır; başka bir sertifika (aynı sunucunun yenisi dahil) yine reddedilir.
+function acceptDiscoverTrust() {
+  if (!discoverTrust.value) {
+    return;
+  }
+
+  discoverAcceptFingerprint.value = discoverTrust.value.fingerprint;
+  discoverTrust.value = null;
+  void discover();
+}
+
+/*
+ * GÖÇ ADIMINDAKİ güven reddi. Keşiften farkı: göç adımları istisna FIRLATMAZ (her adım bağımsız,
+ * kısmi başarı olabilir), sonuç adımın kendi alanlarında döner. Bu yüzden ret burada adım
+ * listesinden okunur.
+ */
+const migrateTrust = computed<TrustPrompt | null>(() => {
+  for (const step of liveSteps.value) {
+    if (step.status !== "fail" || !step.message) {
+      continue;
+    }
+
+    const prompt = parseRemoteTrustPrompt(step.message, step.detail ?? "");
+    if (prompt) {
+      return prompt;
+    }
+  }
+
+  return null;
+});
+
+// Göç tarafında keşiften farklı davranılır: göç YARIM KALMIŞ olabilir (site ve veritabanı çoktan
+// oluşmuş olabilir). Kendiliğinden yeniden başlatmak, kullanıcının görmediği ikinci bir yazma
+// işlemi demekti; parmak izi sabitlenir ve tekrar başlatma kararı kullanıcıya bırakılır.
+function acceptMigrateTrust() {
+  if (!migrateTrust.value) {
+    return;
+  }
+
+  form.acceptFileHostFingerprint = migrateTrust.value.fingerprint;
+  notice.value = t("panel.migration.trust.acceptedRerun");
+  noticeError.value = false;
 }
 
 // Hata bildirimi: anahtarı çevir (eskiden ham "migration.plesk.api_error" görünüyordu) + gerçek tekn. nedeni ekle

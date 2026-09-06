@@ -47,12 +47,18 @@ public sealed class SiteMigrationService(
     /// kimlik sızıntısı yüzeyi de vardı.
     /// </para>
     /// <para>
-    /// <b>Sertifika doğrulaması BURADA DA KAPALI</b> (Plesk/WHM neredeyse her zaman kendi imzalı
-    /// sertifika kullanır; gerekçe aşağıdaki çağrı yerlerinde de yazılı). Adres denetimi TLS
-    /// kararından bağımsızdır: doğrulamayı kapatmak, nereye bağlanılacağını değiştirmez.
+    /// <b>SERTİFİKA DOĞRULAMASI ARTIK AÇIK.</b> Burada eskiden <c>verifyTlsCertificate: false</c>
+    /// vardı: doğrulama tümden kapalıydı ve araya giren biri sahte sertifikayla bağlantıyı
+    /// karşılayıp yukarıda sayılan kimlik bilgilerini OKUYABİLİRDİ. Gevşetme kasıtlıydı (Plesk/WHM
+    /// neredeyse her zaman kendi imzalı sertifika taşır) ama bedeli ölçülmemişti. Yerine
+    /// <see cref="RemoteCertificateTrustGate"/> geçti: varsayılan doğrular, reddederken sebebi ve
+    /// parmak izini söyler, istisnayı yalnız yöneticinin sabitlediği parmak izine açar.
+    /// </para>
+    /// <para>
+    /// Adres denetimi TLS kararından bağımsızdır: sertifika kararı nereye bağlanılacağını değiştirmez.
     /// </para>
     /// </remarks>
-    private HttpClient CreateDiscoveryHttpClient()
+    private HttpClient CreateDiscoveryHttpClient(RemoteCertificateTrustGate certificateTrust)
     {
         var handler = Support.OutboundConnectGuard.CreateHandler(
             () => Support.OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
@@ -61,9 +67,36 @@ public sealed class SiteMigrationService(
                 "Goc kesif baglantisi REDDEDILDI: {Host} adi {Adres} adresine cozuluyor (ic ag/geri dongu/bulut meta verisi).",
                 host,
                 blocked),
-            verifyTlsCertificate: false);
+            certificateValidator: certificateTrust.AsCallback());
 
         return new HttpClient(handler, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(25) };
+    }
+
+    /// <summary>
+    /// Reddedilen uzak kimliği KULLANICININ GÖREBİLECEĞİ bir hataya çevirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden ayrı bir dal:</b> el sıkışma reddedildiğinde .NET sıradan bir
+    /// <see cref="HttpRequestException"/> atar ve mesajı "bağlantı kapatıldı" gibi görünür. O metin
+    /// yöneticiye "sunucu erişilemiyor" der — yani yanlış şeyi düzeltmeye çalışır. Kapının
+    /// tuttuğu kayıt, gerçekte NE olduğunu (sebep + parmak izi) söyleyen tek şeydir.
+    /// </para>
+    /// <para>
+    /// Sabitleme İŞE YARADIĞINDA da iz bırakılır: bir API anahtarı doğrulanmamış bir kimliğe
+    /// gönderildiyse bunun sunucuda bir kaydı olmalıdır (denetim kaydını denetleyici yazar).
+    /// </para>
+    /// </remarks>
+    private void GuvenSonucunuIsle(RemoteCertificateTrustGate certificateTrust, string host, int port)
+    {
+        if (certificateTrust.AcceptedByPin is { } kabulEdilen)
+        {
+            logger.LogWarning(
+                "Goc kesfi: {Host}:{Port} sunucusunun DOGRULANAMAYAN sertifikasi yoneticinin sabitledigi parmak iziyle KABUL EDILDI ({ParmakIzi}).",
+                host,
+                port,
+                kabulEdilen);
+        }
     }
 
     /// <summary>
@@ -174,7 +207,11 @@ public sealed class SiteMigrationService(
                         Port = request.FilePort,
                         UserName = request.FileUserName,
                         Password = request.FilePassword,
-                        RemotePath = request.RemotePath
+                        RemotePath = request.RemotePath,
+                        // Yöneticinin bu göç için verdiği açık onay AŞAĞIYA da geçer. Geçmeseydi
+                        // keşif doğrulanmış olur ama dosyalar hâlâ doğrulanmamış bir uçtan
+                        // çekilirdi — yani parolayı taşıyan asıl bağlantı korumasız kalırdı.
+                        AcceptHostFingerprint = request.AcceptFileHostFingerprint
                     },
                     cancellationToken);
 
@@ -311,9 +348,11 @@ public sealed class SiteMigrationService(
         return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#} {1}", deger, birimler[index]);
     }
 
-    // Plesk REST keşfi: GET https://host:8443/api/v2/domains (X-API-Key) → domain listesi. Plesk genelde
-    // self-signed sertifika kullanır → bu TEK seferlik göç bağlantısı için sertifika doğrulaması atlanır (admin
-    // kendi sunucusuna bağlanıyor). Best-effort: bağlantı/şekil hatası → net AppException; manuel form çalışmaya devam eder.
+    // Plesk REST keşfi: GET https://host:8443/api/v2/domains (X-API-Key) → domain listesi.
+    // SERTİFİKA DOĞRULANIR (bkz. CreateDiscoveryHttpClient). Plesk genelde kendi imzalı sertifika taşır;
+    // o durumda istek migration.tls.untrusted ile REDDEDİLİR ve yöneticiye parmak izi gösterilir —
+    // yönetici parmak izini teyit edip AcceptCertificateFingerprint ile tekrar dener.
+    // Best-effort: bağlantı/şekil hatası → net AppException; manuel form çalışmaya devam eder.
     public async Task<PleskDiscoverResultDto> DiscoverPleskAsync(PleskDiscoverRequest request, CancellationToken cancellationToken = default)
     {
         var host = request.Host.Trim().TrimEnd('/');
@@ -321,7 +360,8 @@ public sealed class SiteMigrationService(
 
         await EnsureDiscoveryHostAllowedAsync(host, cancellationToken);
 
-        using var http = CreateDiscoveryHttpClient();
+        var certificateTrust = new RemoteCertificateTrustGate(request.AcceptCertificateFingerprint);
+        using var http = CreateDiscoveryHttpClient(certificateTrust);
         // Kimlik: gizli API anahtarı (X-API-Key) ya da yönetici kullanıcı adı+parola (Basic auth). İkisi de yoksa net hata.
         if (!string.IsNullOrWhiteSpace(request.ApiKey))
         {
@@ -352,11 +392,27 @@ public sealed class SiteMigrationService(
             // doğruydu — reddedilen şey gidilen yerdi.
             throw new AppException("migration.host_forbidden", 403, 403, blocked.BlockedTarget);
         }
+        catch (Exception exception) when (certificateTrust.Failure is { } reddedilen)
+        {
+            // GÜVEN DALI, "bağlanamadım" dalından ÖNCE gelir: el sıkışma reddi de bir bağlantı
+            // hatası olarak görünür ve aşağıdaki genel dal onu "Plesk'e ulaşılamadı" diye
+            // etiketlerdi — yönetici host/port ile uğraşır, gerçek sebebi hiç öğrenmezdi.
+            logger.LogWarning(
+                exception,
+                "Plesk kesfi REDDEDILDI {Host}:{Port} — sunucu kimligi dogrulanamadi ({Sebep}, {ParmakIzi}).",
+                host,
+                port,
+                string.Join(",", reddedilen.Reasons),
+                reddedilen.Fingerprint);
+            throw new AppException(reddedilen.MessageKey, 502, 502, reddedilen.ToDetails());
+        }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Plesk keşif bağlantısı başarısız {Host}:{Port}", host, port);
             throw new AppException("migration.plesk.connect_failed", 502, 502, exception.Message);
         }
+
+        GuvenSonucunuIsle(certificateTrust, host, port);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -410,8 +466,9 @@ public sealed class SiteMigrationService(
     }
 
     // cPanel/WHM keşfi: GET https://host:2087/json-api/listaccts?api.version=1 (Authorization: whm user:TOKEN) →
-    // { data: { acct: [ { domain, user } ] } }. WHM genelde self-signed → bu tek-seferlik göç bağlantısında
-    // sertifika doğrulaması atlanır (admin kendi sunucusuna bağlanıyor). Plesk keşfiyle aynı sonuç şekli döner.
+    // { data: { acct: [ { domain, user } ] } }. SERTİFİKA DOĞRULANIR; WHM genelde kendi imzalı sertifika
+    // taşıdığı için yönetici parmak izini teyit edip AcceptCertificateFingerprint ile kabul eder
+    // (gerekçe Plesk dalındaki ikiziyle aynı). Plesk keşfiyle aynı sonuç şekli döner.
     public async Task<PleskDiscoverResultDto> DiscoverCpanelAsync(CpanelDiscoverRequest request, CancellationToken cancellationToken = default)
     {
         var host = request.Host.Trim().TrimEnd('/');
@@ -420,7 +477,8 @@ public sealed class SiteMigrationService(
 
         await EnsureDiscoveryHostAllowedAsync(host, cancellationToken);
 
-        using var http = CreateDiscoveryHttpClient();
+        var certificateTrust = new RemoteCertificateTrustGate(request.AcceptCertificateFingerprint);
+        using var http = CreateDiscoveryHttpClient(certificateTrust);
         http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"whm {user}:{request.ApiToken}");
         http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
 
@@ -434,11 +492,25 @@ public sealed class SiteMigrationService(
             // Gerekçe Plesk dalındaki ikiziyle aynı.
             throw new AppException("migration.host_forbidden", 403, 403, blocked.BlockedTarget);
         }
+        catch (Exception exception) when (certificateTrust.Failure is { } reddedilen)
+        {
+            // Gerekçe Plesk dalındaki ikiziyle aynı: güven reddi "ulaşılamadı" diye etiketlenemez.
+            logger.LogWarning(
+                exception,
+                "cPanel/WHM kesfi REDDEDILDI {Host}:{Port} — sunucu kimligi dogrulanamadi ({Sebep}, {ParmakIzi}).",
+                host,
+                port,
+                string.Join(",", reddedilen.Reasons),
+                reddedilen.Fingerprint);
+            throw new AppException(reddedilen.MessageKey, 502, 502, reddedilen.ToDetails());
+        }
         catch (Exception exception)
         {
             logger.LogWarning(exception, "cPanel/WHM keşif bağlantısı başarısız {Host}:{Port}", host, port);
             throw new AppException("migration.cpanel.connect_failed", 502, 502, exception.Message);
         }
+
+        GuvenSonucunuIsle(certificateTrust, host, port);
 
         if (!response.IsSuccessStatusCode)
         {

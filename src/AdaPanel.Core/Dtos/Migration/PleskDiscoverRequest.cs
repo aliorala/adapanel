@@ -27,4 +27,23 @@ public sealed class PleskDiscoverRequest
     /// <summary>Plesk yönetici parolası (Basic auth için).</summary>
     [StringLength(256)]
     public string Password { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Yöneticinin BİLEREK kabul ettiği sunucu sertifikası parmak izi (<c>SHA256:1A:2B:…</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Boş bırakılırsa sertifika TAM doğrulanır.</b> Kaynak Plesk kendi imzalı sertifika
+    /// taşıyorsa istek <c>migration.tls.untrusted</c> ile reddedilir ve yanıt hem ret sebebini hem
+    /// bu parmak izini söyler; yönetici parmak izini kaynak sunucudan teyit edip aynı isteği bu
+    /// alan dolu olarak tekrarlar. Kabul YALNIZ o parmak izine açılır — "her sertifikayı kabul et"
+    /// diye bir değer yoktur.
+    /// </para>
+    /// <para>
+    /// Kalıp <c>ssh</c>'ın host key onayından alınmıştır; Plesk Migrator da Linux göçünde parmak
+    /// izinin önceden teyit edilmesini ister.
+    /// </para>
+    /// </remarks>
+    [StringLength(128)]
+    public string AcceptCertificateFingerprint { get; init; } = string.Empty;
 }

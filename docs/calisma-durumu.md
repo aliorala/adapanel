@@ -4,14 +4,61 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **27.08.2026** · Yayındaki sürüm: **0.7.2** · main: temiz
-Testler: **3578 yeşil** · typecheck + build temiz · i18n TR/EN 4588 = 4588
+Son güncelleme: **06.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
+Testler: **5020 yeşil** · typecheck + build temiz · i18n TR/EN 5208 = 5208
 
 ---
 
-## ŞU AN AÇIK İŞ YOK
+## SON İŞ — Göç yolunda uzak sunucu kimliği artık DOĞRULANIYOR (kapandı, commit ATILMADI)
 
-Çalışan ajan yok. Denetimden çıkan bütün maddeler kapatıldı ve yayınlandı.
+**Ölçülen açık (üç nokta, üçü de kullanıcının kimlik bilgisini taşıyordu):**
+
+| Nokta | Eski hâl | Taşıdığı sır |
+|---|---|---|
+| Plesk/cPanel keşfi | `OutboundConnectGuard.CreateHandler(verifyTlsCertificate: false)` | `X-API-Key` / Basic / `whm root:TOKEN` |
+| FTPS dosya çekme | `FtpConfig.ValidateAnyCertificate = true` | FTP kullanıcı adı + parolası |
+| SFTP dosya çekme | `HostKeyReceived`'e HİÇ abone yok → SSH.NET'te `CanTrust` varsayılanı `true` (ölçüldü) | SSH parolası |
+
+Gevşetme KASITLIYDI ve gerekçesi geçerliydi (kaynak sunucular neredeyse hep kendinden imzalı
+sertifika taşır). Bu yüzden "sadece açmak" çözüm değildi — göç kullanılamaz hâle gelirdi.
+
+**Kopyalanan kalıp: `ssh`ın host key onayı** (Plesk Migrator da Linux göçünde parmak izinin
+önceden teyidini ister). Varsayılan DOĞRULA → reddederken sebebi + parmak izini GÖSTER → yönetici
+başka kanaldan teyit edip AÇIKÇA kabul et → kabul o TEK parmak izine sabitlensin → kayda geçsin.
+**Küresel "hep kapat" anahtarı YOK**; `CreateHandler`'daki `bool verifyTlsCertificate` KALDIRILDI,
+yerine karar verici (`RemoteCertificateValidationCallback?`) geldi — verilmezse .NET'in tam
+doğrulaması çalışır.
+
+**Dokunulan yerler:**
+- YENİ `src/AdaPanel.Infrastructure/Migration/RemoteHostTrust.cs` — `TrustFingerprint`,
+  `RemoteTrustFailure`, `RemoteCertificateTrustGate`, `RemoteHostKeyTrustGate` (tek kaynak).
+- `Support/OutboundConnectGuard.cs` — boole kapatma anahtarı kaldırıldı.
+- `Migration/SiteMigrationService.cs`, `Migration/FileMigrationService.cs` — üç uç da kapıya bağlandı.
+- DTO'lara açık onay alanı: `PleskDiscoverRequest`/`CpanelDiscoverRequest.AcceptCertificateFingerprint`,
+  `MigrateSiteRequest.AcceptFileHostFingerprint`, `RemoteFileMigrationRequest.AcceptHostFingerprint`.
+- `Api/Controllers/MigrationController.cs` — kabul edilen istisna DENETİM KAYDINA yazılıyor
+  (`migration.discover.trust_exception` + göç kaydına ek satır).
+- Frontend: YENİ `components/RemoteTrustPrompt.vue` + `utils/remoteTrust.ts`, `views/MigrationView.vue`,
+  `api/migration.ts`. i18n TR/EN +24/+24 → **5208 = 5208**.
+
+**Doğrulama:** `dotnet test AdaPanel.sln -c Release` → **5020 yeşil / 0 kırmızı** (Core 2 + Infra 5018;
+16 yeni test). typecheck temiz, `npm run build` temiz, `npm test` 42 yeşil.
+
+**Mutasyon (koruma kaldırıldı → kırmızı görüldü → geri kondu), 16 testin kaçı düştü:**
+`Evaluate` başına `return true` → **9** · FTPS `ValidateAnyCertificate = true` → **1** ·
+SFTP `HostKeyReceived` aboneliği silindi → **3** · taşıma katmanı karar vericiyi yok saydı → **3** ·
+keşif kapıyı bağlamadı → **3**. Beşi de kırmızı; geri alındıktan sonra 16/16 yeşil.
+
+**KAPATILMADI (bilerek, raporda yazılı):**
+- Toplu göçte (`runBulk`) parmak izi adım detayında GÖRÜNÜYOR ama "kabul et" düğmesi YOK; tek site
+  sihirbazından kabul edilip toplu göç tekrar çalıştırılır.
+- Kabul edilen parmak izi KALICI DEĞİL (`known_hosts` deposu yok) — her göç işinde yeniden onaylanır.
+- `FtpEncryptionMode.Auto` (fırsatçı FTPS) duruyor: araya giren `AUTH TLS` sunmayarak düz FTP'ye
+  düşürebilir. Ayrı iş; `ftps` seçildiğinde `Explicit` zorunlu kılınmalı.
+- DB aktarımı `mysqldump`/`mysql` CLI ile yapılıyor ve `--ssl-mode` verilmiyor — bu sınıfın
+  DÖRDÜNCÜ noktası, bu turda kapsam dışı bırakıldı.
+
+Commit ATILMADI, installer üretilmedi, canlı panele dokunulmadı.
 
 ---
 
