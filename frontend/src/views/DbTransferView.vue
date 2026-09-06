@@ -34,6 +34,17 @@
           <span class="field-label">{{ t("panel.database.transfer.sourcePassword") }}</span>
           <PasswordField v-model="form.sourcePassword" autocomplete="off" :disabled="busy" />
         </label>
+        <!-- BAĞLANTI ŞİFRELEMESİ kaynak parolasının hemen ardında: koruduğu şey odur.
+             "Otomatik" uzak kaynakta zorunlu kılar, loopback'te gereksiz yere kırmaz. -->
+        <label>
+          <span class="field-label">{{ t("panel.database.transfer.tlsMode") }}</span>
+          <select v-model="form.sourceTlsMode" :disabled="busy">
+            <option value="auto">{{ t("panel.database.transfer.tls.auto") }}</option>
+            <option value="required">{{ t("panel.database.transfer.tls.required") }}</option>
+            <option value="disabled">{{ t("panel.database.transfer.tls.disabled") }}</option>
+          </select>
+          <small class="field-hint">{{ t("panel.database.transfer.tlsHint") }}</small>
+        </label>
         <label>
           <span class="field-label">{{ t("panel.database.transfer.sourceDb") }}</span>
           <input v-model.trim="form.sourceDatabase" :placeholder="t('panel.database.transfer.sourceDbPlaceholder')" :disabled="busy" />
@@ -98,6 +109,12 @@ const form = reactive({
   sourcePort: 3306,
   sourceUserName: "root",
   sourcePassword: "",
+  /*
+   * "auto" = uzak kaynakta şifreleme ZORUNLU, loopback'te gerekmez. Varsayılanın güvenli olması
+   * şart: eskiden hiçbir şifreleme bayrağı yoktu ve mysqldump şifresiz bağlanabildiği için uzak
+   * taşımada DB parolası ve tüm tablolar açık metin akabiliyordu.
+   */
+  sourceTlsMode: "auto",
   sourceDatabase: "",
   targetDatabase: "",
   targetUserName: "",
@@ -124,6 +141,9 @@ async function run() {
       sourcePort: form.sourcePort || 3306,
       sourceUserName: form.sourceUserName.trim(),
       sourcePassword: form.sourcePassword,
+      // Şifreleme tercihi AÇIKÇA gönderilir; gönderilmezse sunucu "auto" sayar (güvenli taraf),
+      // ama o zaman kullanıcının "Şifrelemesiz" seçimi yolda sessizce düşerdi.
+      sourceTlsMode: form.sourceTlsMode,
       sourceDatabase: form.sourceDatabase.trim(),
       targetDatabase: form.targetDatabase.trim(),
       targetUserName: form.targetUserName.trim(),

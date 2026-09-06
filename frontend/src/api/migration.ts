@@ -25,6 +25,14 @@ export type MigrateSitePayload = {
   dbPort: number;
   dbUserName: string;
   dbPassword: string;
+  /*
+   * KAYNAK VERİTABANINA BAĞLANTI ŞİFRELEMESİ: "auto" | "required" | "disabled".
+   *
+   * "auto" (varsayılan) uzak kaynakta şifrelemeyi ZORUNLU kılar, loopback'te gereksiz yere
+   * kırmaz. "disabled" TLS desteklemeyen eski bir sunucudan göç edenin BİLİNÇLİ çıkışıdır.
+   * Boş/tanınmayan değer sunucuda "auto" sayılır — sessizce şifresize düşülmez.
+   */
+  dbTlsMode: string;
   sourceDatabase: string;
   targetDatabase: string;
   targetDatabaseUser: string;

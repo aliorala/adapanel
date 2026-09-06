@@ -19,6 +19,22 @@ public sealed class DatabaseTransferRequest
 
     public string SourceDatabase { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Kaynağa bağlanırken şifreleme: <c>auto</c> (varsayılan) | <c>required</c> | <c>disabled</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>auto</c>: kaynak UZAKSA şifreleme zorunlu, loopback'te gereksiz (araya girecek ağ yok).
+    /// <c>disabled</c> kullanıcının BİLİNÇLİ tercihidir — TLS desteklemeyen eski bir sunucudan
+    /// göç ediyor olabilir ve bu engellenmez.
+    /// </para>
+    /// <para>
+    /// Boş bırakılırsa <c>auto</c> sayılır: eski istemciler bu alanı hiç göndermez ve onların da
+    /// varsayılanı GÜVENLİ olmalıdır. Karar <c>MySqlTransferTls</c>te.
+    /// </para>
+    /// </remarks>
+    public string SourceTlsMode { get; set; } = string.Empty;
+
     /// <summary>Boş bırakılırsa kaynak veritabanı adı kullanılır.</summary>
     public string TargetDatabase { get; set; } = string.Empty;
 

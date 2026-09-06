@@ -2936,3 +2936,126 @@ Değişen dosyalar: `src/AdaPanel.Infrastructure/Support/PanelAddress.cs`,
 * **`UpdatePanelPreferencesRequest.ServerAddress` üzerinde hâlâ DataAnnotations yok**; doğrulama
   servis katmanında. Kasıtlı: kural port bağımlı (`PreferredHttpsPort` ile karşılaştırma) ve
   attribute tek alanı görebilir.
+
+
+---
+
+## 2026-09-06 — Göçte ŞİFRELEME: FTPS düşürme saldırısı + DB aktarımında TLS
+
+Bir önceki tur uzak sunucunun KİMLİĞİNİ doğrulanır hâle getirmişti (`68eb395`). Aynı sınıftan iki
+nokta ölçülmüş ama kapsam dışı bırakılmıştı; bu tur ikisini de kapattı.
+
+### 1) FTPS DÜŞÜRME — iddia DOĞRULANDI, telden kanıtlandı
+
+`FtpConfig.EncryptionMode = FtpEncryptionMode.Auto` idi. Depoya eklenen sahte FTP sunucusuyla
+ÖLÇÜLDÜ: sunucu `AUTH TLS`e "500" dediğinde FluentFTP bağlantıyı KESMİYOR, aynı bağlantıda düz
+FTP'ye düşüp kimlik bilgisini şifresiz gönderiyordu. Mutasyon turunda sunucunun düz-metin kaydı
+aynen şuydu:
+
+```
+["AUTH TLS", "USER gocKullanicisi", "PASS CokGizliFtpParolasi123!", "FEAT", "SYST", ...]
+```
+
+Yani araya giren aktif biri tek bir yanıtı bastırarak FTP parolasını açık metin okuyabilirdi ve
+bir önceki turda eklenen sertifika doğrulaması HİÇ devreye girmiyordu (TLS el sıkışması hiç
+başlamadığı için sorulacak sertifika yoktu).
+
+**Çözüm:** `ftps` seçildiğinde `Explicit` ZORUNLU. `DataConnectionEncryption = secure` açıkça
+yazıldı (komut kanalı TLS olup veri kanalı düz kalırsa dosya İÇERİĞİ açık gider; FluentFTP
+varsayılanı bugün `true` ama bu bir güvenlik kararı, kütüphane varsayılanına bırakılamaz).
+
+**KULLANICININ TERCİHİNE DOKUNULMADI.** Arayüzde üç seçenek var (SFTP / FTPS / FTP) ve `ftp`
+BİLİNÇLİ bir tercihtir — kullanıcı TLS desteklemeyen kendi eski sunucusundan çekiyor olabilir.
+O yol `None` ile açık; kapatılan şey `ftps` SEÇİLİYKEN sessizce düz FTP'ye düşmekti.
+
+**Fazla kapatma önlemi (990):** port 990 ise `Implicit`. Örtük FTPS'te sunucu `AUTH TLS` beklemez;
+`Explicit` dayatmak o göçleri kırardı. Örtük kipte düşürme MÜMKÜN DEĞİL (el sıkışma ilk iştir).
+
+### 2) DB AKTARIMINDA ŞİFRELEME — iddia DOĞRULANDI
+
+`mysqldump`/`mysql` komut satırında hiç `--ssl-mode` yoktu (`DatabaseService.TransferDatabaseAsync`).
+İstemci varsayılanı `PREFERRED`: sunucu TLS sunmuyorsa şifresiz devam eder. Kaynak host kullanıcı
+girdisidir ve UZAK olabilir → DB parolası + tüm tablolar açık metin akabilirdi.
+
+**Ölçülen ayrım (görevin istediği):** hedef tarafın konağı `DatabaseProfiles`te sabit `127.0.0.1`
+— yani import HER ZAMAN loopback. Loopback'te araya girecek ağ yok, zorlamak yalnız kırar.
+
+**Çözüm — `MySqlTransferTls` (tek kaynak):**
+* yerel/loopback kaynak (`localhost`, `127.x`, `::1`, `[::1]`, `::ffff:127.0.0.1`, `.`) → zorlama YOK
+* uzak kaynak + tercih belirtilmemiş → `--ssl-mode=REQUIRED`
+* kullanıcı "Şifrelemesiz" dediyse → zorlama YOK (bilinçli tercih)
+* tanınmayan/boş değer → `auto` gibi ele alınır, sessizce şifresize DÜŞMEZ
+* `DISABLED` açıkça YAZILMAZ: `--ssl-mode` tanımayan eski istemcilerde (MariaDB 11.4 öncesi)
+  şifreleme İSTEMEYEN kullanıcının yolunu, ona hiçbir şey kazandırmayan bir bayrak kırardı
+
+**Başarısızlığın SEBEBİ söyleniyor:** TLS kaynaklı hatalar (`SSL connection error`,
+`unknown variable 'ssl-mode'`, `insecure transport`) ayrı anahtara çevrildi —
+`database.transfer_source_tls_failed` — ve mesaj kullanıcıya "Şifrelemesiz seçip tekrar deneyin,
+o durumda veriler açık gider" diyor. Sessizce şifresize düşme YOK.
+
+**DÜRÜST SINIR (kodda da yazılı):** `REQUIRED` şifrelemeyi zorunlu kılar ama sunucu KİMLİĞİNİ
+doğrulamaz (onun için `VERIFY_CA` + CA dosyası gerekir; göç edilen eski sunucularda CA yok).
+Pasif dinleme kapanır, aktif MITM ayrı bir iştir.
+
+### Arayüz (Vue 3)
+
+* **Göç sihirbazı** (sol menü → Göç → "Veritabanını aktar" kutusu, kaynak parolasının hemen
+  altında): "Bağlantı şifrelemesi" seçicisi — Otomatik / Zorunlu / Şifrelemesiz.
+* **Veritabanları → Taşıma** (`DbTransferView`, kaynak parolasının hemen altında): aynı seçici +
+  ne anlama geldiğini yazan ipucu.
+* FTPS için arayüz değişikliği GEREKMEDİ: protokol seçimi (SFTP/FTPS/FTP) zaten vardı.
+
+### MUTASYON (altısı da yapıldı, kırmızı GÖRÜLDÜ, geri konuldu)
+
+| mutasyon | kırmızı test |
+|---|---|
+| **`Explicit` → tekrar `Auto`** (asıl açık) | **2** (düz metinde `PASS <parola>` görüldü) |
+| `DataConnectionEncryption` → `false` | 1 |
+| 990 dalı kapalı (her FTPS `Explicit`) — FAZLA KAPATMA | 1 |
+| Her FTPS portu `Implicit` sayılıyor — FAZLA KAPATMA | 3 |
+| `Coz`: uzak konakta da şifreleme kapalı | 7 |
+| `YerelKonak` hep `false` (loopback'te de zorla) — FAZLA KAPATMA | 9 |
+| Bayrak veritabanı adından SONRA | 1 |
+| Göç yolunda `SourceTlsMode` aktarılmıyor (zincir kopması) | 1 |
+
+### Testler
+
+Yeni: `tests/AdaPanel.Infrastructure.Tests/MigrationFtpsDowngradeTests.cs` (6) —
+KAYNAK TARAMAZ: ölçüm noktası gerçek bir TCP soketinin sunucu ucudur, komutlar TLS ÖNCESİ ve
+TLS SONRASI ayrı kaydedilir ("parola geldi" değil, "parola ŞİFRESİZ mi geldi").
+Yeni: `tests/AdaPanel.Infrastructure.Tests/DatabaseTransferTlsTests.cs` (27) — kurulan KOMUT
+SATIRINDAN ve gerçek `SiteMigrationService.MigrateSiteAsync` çağrısından ölçer.
+
+Fazla kapatma nöbetçileri: kullanıcı `ftp` seçince göç ÇALIŞIR · geçerli FTPS sunucusuna bağlantı
+kurulur ve parola TLS'in içinden gider · örtük FTPS (990) çalışır · loopback DB göçü kırılmaz
+(8 yazım) · kullanıcı "Şifrelemesiz" deyince uzakta da zorlanmaz · ilgisiz hata TLS hatası
+sayılmaz (adında `ssl` geçen DB dahil).
+
+**5053 test yeşil / 0 kırmızı** (Core 2 + Infrastructure 5051; baseline 5020 + 33 yeni).
+Frontend: typecheck/build/`npm test` (42) temiz, i18n TR/EN 5218 = 5218.
+
+Değişen dosyalar: `src/AdaPanel.Infrastructure/Migration/FileMigrationService.cs`,
+`src/AdaPanel.Infrastructure/Migration/SiteMigrationService.cs`,
+`src/AdaPanel.Infrastructure/Database/DatabaseService.cs`,
+`src/AdaPanel.Infrastructure/Database/MySqlTransferTls.cs` (yeni),
+`src/AdaPanel.Core/Dtos/Databases/DatabaseTransferRequest.cs`,
+`src/AdaPanel.Core/Dtos/Migration/MigrateSiteRequest.cs`,
+`frontend/src/views/MigrationView.vue`, `frontend/src/views/DbTransferView.vue`,
+`frontend/src/api/migration.ts`, `frontend/src/api/databases.ts`,
+`frontend/src/i18n/tr.json`, `frontend/src/i18n/en.json`, iki yeni test dosyası.
+
+### AÇIK KALAN (kapsam dışı, bilerek)
+
+* **Sunucu kimliği DB tarafında doğrulanmıyor.** `--ssl-mode=REQUIRED` pasif dinlemeyi kapatır;
+  `VERIFY_CA`/`VERIFY_IDENTITY` için CA dosyası alanı (DTO + form + i18n) gerekir.
+* **`--ssl-mode` tanımayan eski istemci ölçülemedi.** Bu makinede MariaDB binary'leri yok
+  (`%ProgramData%\AdaPanel\runtimes\mariadb\11` altinda yalniz `data` var). Panelin kurduğu
+  sürüm 11.8 LTS ve destekliyor; sistemde tespit edilmiş ESKİ bir istemcide taşıma
+  "unknown variable" ile düşer — ama sessizce değil: `database.transfer_source_tls_failed`
+  kullanıcıya ne yapacağını söyler.
+* **Frontend payload zincirinin otomatik testi yok** (depoda bileşen testi altyapısı yok, yalnız
+  4 saf util/store test dosyası var). `DbTransferView`de `sourceTlsMode` satırı silinirse sunucu
+  "auto" sayar — yani başarısızlık modu GÜVENLİ tarafta (kullanıcının "Şifrelemesiz" tercihi
+  düşer, korunma düşmez).
+* **FTPS veri kanalı el sıkışması ölçülmedi** (sahte sunucu PASV/veri kanalı konuşmuyor);
+  `DataConnectionEncryption` istemci nesnesinin gerçek durumundan ölçülüyor.

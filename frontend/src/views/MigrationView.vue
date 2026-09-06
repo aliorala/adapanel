@@ -313,6 +313,18 @@
           <span class="field-label">{{ t("panel.migration.ftp.password") }}</span>
           <PasswordField v-model="form.dbPassword" />
         </label>
+        <!-- BAĞLANTI ŞİFRELEMESİ: parolanın ve tüm tabloların tel üzerinde açık gitmesini
+             engeller. Kaynak parolasının HEMEN ALTINDA duruyor çünkü koruduğu şey odur.
+             "Otomatik" uzak kaynakta şifrelemeyi zorunlu kılar, loopback'te gereksiz yere
+             kırmaz; "Şifrelemesiz" TLS desteklemeyen eski sunucudan göç edenin bilinçli çıkışı. -->
+        <label>
+          <span class="field-label">{{ t("panel.migration.dbTlsMode") }}</span>
+          <select v-model="form.dbTlsMode">
+            <option value="auto">{{ t("panel.migration.dbTls.auto") }}</option>
+            <option value="required">{{ t("panel.migration.dbTls.required") }}</option>
+            <option value="disabled">{{ t("panel.migration.dbTls.disabled") }}</option>
+          </select>
+        </label>
         <label>
           <span class="field-label">{{ t("panel.migration.sourceDb") }}</span>
           <input v-model="form.sourceDatabase" spellcheck="false" />
@@ -481,6 +493,15 @@ const form = reactive({
   dbPort: 3306,
   dbUserName: "root",
   dbPassword: "",
+  /*
+   * KAYNAK VERİTABANINA BAĞLANTI ŞİFRELEMESİ.
+   *
+   * "auto" = uzak kaynakta ZORUNLU, loopback'te gerekmez. Varsayılanın güvenli olması şart:
+   * eskiden hiç şifreleme bayrağı yoktu ve mysqldump şifresiz bağlanabildiği için uzak göçte
+   * DB parolası ve tüm tablolar açık metin akabiliyordu. "disabled" kullanıcının bilinçli
+   * çıkışıdır (TLS desteklemeyen eski sunucu) ve engellenmez.
+   */
+  dbTlsMode: "auto",
   sourceDatabase: "",
   targetDatabase: "",
   targetDatabaseUser: "",

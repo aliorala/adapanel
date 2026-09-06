@@ -224,6 +224,12 @@ export type DatabaseTransferPayload = {
   sourcePort: number;
   sourceUserName: string;
   sourcePassword: string;
+  /*
+   * KAYNAĞA BAĞLANTI ŞİFRELEMESİ: "auto" | "required" | "disabled".
+   * "auto" uzak kaynakta zorunlu kılar, loopback'te gerekmez. Boş/tanınmayan değer sunucuda
+   * "auto" sayılır — sessizce şifresize düşülmez.
+   */
+  sourceTlsMode?: string;
   sourceDatabase: string;
   targetDatabase?: string;
   targetUserName?: string;

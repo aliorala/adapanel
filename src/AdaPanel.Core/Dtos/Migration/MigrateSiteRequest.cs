@@ -70,6 +70,13 @@ public sealed class MigrateSiteRequest
     [StringLength(64)]
     public string SourceDatabase { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Kaynak veritabanına bağlanırken şifreleme: <c>auto</c> | <c>required</c> | <c>disabled</c>.
+    /// Gerekçe ve varsayılanlar <c>DatabaseTransferRequest.SourceTlsMode</c>'da.
+    /// </summary>
+    [StringLength(16)]
+    public string DbTlsMode { get; init; } = string.Empty;
+
     /// <summary>Hedef DB adı (boşsa kaynak adı).</summary>
     [StringLength(64)]
     public string TargetDatabase { get; init; } = string.Empty;

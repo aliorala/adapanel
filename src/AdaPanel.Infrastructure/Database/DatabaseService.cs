@@ -687,6 +687,10 @@ internal sealed partial class DatabaseService(
             // Hedef zaten var; üstüne aktarılır.
         }
 
+        // BAĞLANTI ŞİFRELEMESİ: kaynak uzaksa varsayılan ZORUNLU, loopback'te kapalı, kullanıcı
+        // açıkça "şifrelemesiz" dediyse kapalı. Gerekçenin tamamı `MySqlTransferTls`te.
+        var sourceTlsMode = MySqlTransferTls.Coz(sourceHost, request.SourceTlsMode);
+
         var mysqldump = FindExecutable(targetProfile.InstallDir, "mysqldump.exe");
         var mysql = FindExecutable(targetProfile.InstallDir, "mysql.exe");
         var tempFile = Path.Combine(Path.GetTempPath(), $"adapanel-transfer-{Guid.NewGuid():N}.sql");
@@ -697,10 +701,13 @@ internal sealed partial class DatabaseService(
         {
             // 1) Kaynaktan (uzak olabilir) tek DB dump → temp .sql.
             //    --databases KULLANMA: CREATE DATABASE/USE eklemesin ki hedef ad farklı olsa bile içine aktarılsın.
-            var dumpArguments =
-                $"--host={sourceHost} --port={sourcePort} --user=\"{sourceUser}\" " +
-                "--single-transaction --routines --events --triggers --skip-lock-tables --default-character-set=utf8mb4 " +
-                $"\"{sourceDatabase}\" --result-file=\"{tempFile}\"";
+            var dumpArguments = BuildTransferDumpArguments(
+                sourceHost,
+                sourcePort,
+                sourceUser,
+                sourceDatabase,
+                tempFile,
+                sourceTlsMode);
             var dump = await ProcessRunner.RunAsync(
                 mysqldump,
                 dumpArguments,
@@ -710,7 +717,14 @@ internal sealed partial class DatabaseService(
 
             if (dump.ExitCode != 0 || !File.Exists(tempFile))
             {
-                throw new AppException("database.transfer_source_failed", 502, 502, TrimTransferError(dump.StandardError));
+                // ŞİFRELEME KAYNAKLI BAŞARISIZLIK AYRI ANLATILIR. Aksi hâlde "kaynaktan dump
+                // alınamadı" diyen tek bir mesaj kalırdı ve kullanıcı, TLS'i biz zorladığımız için
+                // düştüğünü ASLA öğrenemezdi — yapabileceği tek şey vazgeçmek olurdu. Anahtar
+                // ayrıldığı için arayüz ona ne yapacağını (şifrelemeyi "Kapalı" seçmek) söyler.
+                var anahtar = MySqlTransferTls.TlsKaynakliHata(dump.StandardError)
+                    ? "database.transfer_source_tls_failed"
+                    : "database.transfer_source_failed";
+                throw new AppException(anahtar, 502, 502, TrimTransferError(dump.StandardError));
             }
 
             // 2) Yerel hedef veritabanına import.
@@ -719,9 +733,17 @@ internal sealed partial class DatabaseService(
             // ve dosyanın içindeki ifade hataları çıkış koduna YANSIMAZ (gerekçe: ImportMySqlAsync).
             // Taşımada bedeli daha da ağırdır: yarım taşınmış bir veritabanı "aktarıldı" görünür,
             // kaynak sunucu kapatılır ve eksik veri ancak müşteri fark edince ortaya çıkar.
-            var importArguments =
-                $"--host={targetProfile.Host} --port={targetProfile.Port} --user=\"{targetProfile.AdminUserName}\" " +
-                $"--default-character-set=utf8mb4 \"{targetDatabase}\"";
+            //
+            // ŞİFRELEME BURADA "auto": hedef panelin KENDİ motorudur ve konağı `DatabaseProfiles`te
+            // sabit `127.0.0.1`dir (ölçüldü) — yani karar bugün her zaman "gerekmez"e çıkar,
+            // loopback'te araya girecek ağ yoktur. Yine de sabit yazılmıyor: hedef konak bir gün
+            // uzağa taşınırsa bu satır kendiliğinden şifrelemeye geçer.
+            var importArguments = BuildTransferImportArguments(
+                targetProfile.Host,
+                targetProfile.Port,
+                targetProfile.AdminUserName,
+                targetDatabase,
+                MySqlTransferTls.Coz(targetProfile.Host, MySqlTransferTls.Auto));
             var import = await ProcessRunner.RunAsync(
                 mysql,
                 importArguments,
@@ -793,6 +815,78 @@ internal sealed partial class DatabaseService(
                 // En iyi çaba: geçici dosya silinemezse işlemi başarısız sayma.
             }
         }
+    }
+
+    /// <summary>
+    /// Taşımanın KAYNAK <c>mysqldump</c> komut satırını kurar.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>internal</c> olması bilinçli:</b> "uzak kaynağa şifresiz bağlanılmaz" bir GÜVENLİK
+    /// KARARIDIR ve ölçülmesi gerekir. Dize <c>RunAsync</c> çağrısının içine gömülü kalsaydı test
+    /// ancak kaynakta metin arayabilirdi; burada KURULAN KOMUT SATIRININ KENDİSİ okunur.
+    /// <para>
+    /// Bayrak sırası önemsiz değildir: <c>--ssl-mode</c> veritabanı adından (pozisyonel argüman)
+    /// ÖNCE gelir, aksi hâlde istemci onu tablo adı sanardı.
+    /// </para>
+    /// </remarks>
+    internal static string BuildTransferDumpArguments(
+        string host,
+        int port,
+        string user,
+        string database,
+        string resultFile,
+        string resolvedTlsMode)
+    {
+        var parcalar = new List<string>
+        {
+            $"--host={host}",
+            $"--port={port}",
+            $"--user=\"{user}\""
+        };
+
+        var tls = MySqlTransferTls.KomutArgumani(resolvedTlsMode);
+        if (tls.Length > 0)
+        {
+            parcalar.Add(tls);
+        }
+
+        parcalar.Add("--single-transaction");
+        parcalar.Add("--routines");
+        parcalar.Add("--events");
+        parcalar.Add("--triggers");
+        parcalar.Add("--skip-lock-tables");
+        parcalar.Add("--default-character-set=utf8mb4");
+        parcalar.Add($"\"{database}\"");
+        parcalar.Add($"--result-file=\"{resultFile}\"");
+
+        return string.Join(" ", parcalar);
+    }
+
+    /// <summary>Taşımanın HEDEF <c>mysql</c> komut satırını kurar (gerekçe: kardeş metot).</summary>
+    internal static string BuildTransferImportArguments(
+        string host,
+        int port,
+        string user,
+        string database,
+        string resolvedTlsMode)
+    {
+        var parcalar = new List<string>
+        {
+            $"--host={host}",
+            $"--port={port}",
+            $"--user=\"{user}\""
+        };
+
+        var tls = MySqlTransferTls.KomutArgumani(resolvedTlsMode);
+        if (tls.Length > 0)
+        {
+            parcalar.Add(tls);
+        }
+
+        parcalar.Add("--default-character-set=utf8mb4");
+        parcalar.Add($"\"{database}\"");
+
+        return string.Join(" ", parcalar);
     }
 
     // Hedef DB kullanıcı adı türetimi (kullanıcı vermediyse): DB adından harf-rakam süzülür, harfle

@@ -291,6 +291,10 @@ public sealed class SiteMigrationService(
                         SourceUserName = request.DbUserName,
                         SourcePassword = request.DbPassword,
                         SourceDatabase = request.SourceDatabase,
+                        // Şifreleme tercihi göç formundan GEÇİRİLİR. Aktarılmazsa kullanıcının
+                        // "şifrelemesiz" seçimi burada sessizce düşer ve göç, sebebi görünmeyen bir
+                        // TLS hatasıyla ölürdü (ya da tersi: seçim yokmuş gibi davranılırdı).
+                        SourceTlsMode = request.DbTlsMode,
                         TargetDatabase = target
                     },
                     cancellationToken);

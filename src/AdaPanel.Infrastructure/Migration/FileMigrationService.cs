@@ -250,11 +250,19 @@ internal sealed class FileMigrationService(
     /// FTP/FTPS istemcisini ÜRETİM AYARLARIYLA kurar.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <b><c>internal</c> olması bilinçli:</b> "her sertifikayı kabul etme kapalı" ve "karar verici
     /// bağlı" birer GÜVENLİK KARARIDIR ve ölçülmeleri gerekir. Kurulum <c>Connect</c> çağrısının
     /// içine gömülü kalsaydı, test ancak kaynakta metin arayabilirdi — yani kararın YAZILDIĞINI
     /// doğrular, BAĞLANDIĞINI değil. (Aynı gerekçe <c>ClusterHttpClientFactory.BuildHandler</c>'da
     /// da yazılı.)
+    /// </para>
+    /// <para>
+    /// <b>ŞİFRELEME KİPİ KULLANICININ SEÇİMİDİR — ama seçtiğinden AZI verilmez.</b> Arayüzde üç
+    /// seçenek var (SFTP / FTPS / FTP) ve <c>ftp</c> BİLİNÇLİ bir tercihtir: kullanıcı TLS
+    /// desteklemeyen kendi eski sunucusundan çekiyor olabilir, o yol <c>None</c> ile açık kalır ve
+    /// engellenmez. Kapatılan şey başkasıdır: <c>ftps</c> SEÇİLİYKEN sessizce düz FTP'ye düşmek.
+    /// </para>
     /// </remarks>
     internal static AsyncFtpClient FtpIstemcisiOlustur(
         RemoteFileMigrationRequest request,
@@ -263,7 +271,34 @@ internal sealed class FileMigrationService(
     {
         var config = new FtpConfig
         {
-            EncryptionMode = secure ? FtpEncryptionMode.Auto : FtpEncryptionMode.None,
+            // ARTIK `Auto` DEĞİL, `Explicit`.
+            //
+            // ÖLÇÜLDÜ (bu depodaki sahte FTP sunucusuyla, `MigrationFtpsDowngradeTests`): `Auto`
+            // iken FluentFTP sunucu `AUTH TLS`e "500" dediğinde bağlantıyı KESMİYOR, düz FTP'ye
+            // düşüp `USER`/`PASS`i ŞİFRESİZ gönderiyordu. Araya giren aktif bir saldırgan tek bir
+            // yanıtı bastırarak (ya da TLS sunmayan sahte bir sunucu olarak) FTP parolasını açık
+            // metin okuyabilirdi — üstelik sertifika doğrulaması hiç devreye girmediği için
+            // `ValidateCertificate` kapısı da HİÇ sorulmuyordu. Yani "FTPS seçtim" diyen kullanıcı
+            // korunduğunu sanırken korunmuyordu.
+            //
+            // `Explicit`te `AUTH TLS` başarısız olursa FluentFTP bağlantıyı bırakır ve kimlik
+            // bilgisi hiç gönderilmez.
+            //
+            // 990 AYRI TUTULUYOR — ve bu bir gevşetme DEĞİLDİR. 990 örtük (implicit) FTPS'in
+            // ayrılmış portudur; oraya `Explicit` ile gitmek çalışan göçleri kırardı, çünkü örtük
+            // sunucu `AUTH TLS` beklemez, bağlantı açılır açılmaz TLS el sıkışması bekler. Örtük
+            // kipte düşürme MÜMKÜN DEĞİLDİR: el sıkışma ilk iştir, başarısız olursa hiçbir komut
+            // (dolayısıyla hiçbir kimlik bilgisi) gönderilmez. Port yorumu WinSCP/FileZilla'nın
+            // yaptığıyla aynı, yani kullanıcının 990 yazarken kastettiği şey.
+            EncryptionMode = secure
+                ? (ImplicitFtpsPort(request.Port) ? FtpEncryptionMode.Implicit : FtpEncryptionMode.Explicit)
+                : FtpEncryptionMode.None,
+
+            // Komut kanalı TLS olup veri kanalı düz kalırsa dosya İÇERİĞİ açık metin gider.
+            // FluentFTP varsayılanı zaten `true`; ELDE TUTULUYOR çünkü bu bir güvenlik kararıdır
+            // ve kütüphane varsayılanına bırakılırsa sürüm yükseltmesiyle sessizce değişebilir.
+            DataConnectionEncryption = secure,
+
             // ARTIK FALSE. `true` iken FluentFTP sunulan HER sertifikayı kabul ediyordu; aşağıdaki
             // olay hiç sorulmuyordu bile. Bu satır olmadan kapının bağlı olması hiçbir şey ifade etmez.
             ValidateAnyCertificate = false
@@ -281,6 +316,9 @@ internal sealed class FileMigrationService(
 
         return client;
     }
+
+    /// <summary>Örtük (implicit) FTPS'in ayrılmış portu — IANA <c>ftps</c>.</summary>
+    internal static bool ImplicitFtpsPort(int port) => port == 990;
 
     private async Task<RemoteFileMigrationResult> PullFtpAsync(
         RemoteFileMigrationRequest request,
