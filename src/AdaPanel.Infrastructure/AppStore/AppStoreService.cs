@@ -15,6 +15,7 @@ using AdaPanel.Core.Dtos.Store;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Bootstrap;
 using AdaPanel.Infrastructure.Options;
+using AdaPanel.Infrastructure.Security;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -1514,11 +1515,43 @@ public sealed class AppStoreService(
         }
     }
 
+    /// <summary>
+    /// Şablonun kurulacağı klasörü çözer.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK:</b> <c>TargetPath</c> MUTLAK bir yol olabiliyor ve hiçbir kapsam denetimi
+    /// yoktu. Panel <c>LocalSystem</c> koştuğu ve <c>cleanInstall=true</c> hedef klasörü BOŞALTTIĞI
+    /// için bu uç, "uygulama kur" düğmesini sunucudaki istenen klasörü boşaltıp yerine dosya yazan
+    /// bir araca çeviriyordu. Somut sonucu: <c>%ProgramData%\AdaPanel\config</c> hedef verilerek
+    /// <c>server-owner.json</c> ezilebiliyor, yani sahip olmayan bir yönetici sahipliği ele
+    /// geçirip terminale (SYSTEM kabuğu) girebiliyordu.
+    /// </para>
+    /// <para>
+    /// <b>Sınır neden "site kökü" DEĞİL:</b> yöneticinin panelin bilmediği bir klasöre
+    /// (<c>D:\uygulamalar\crm</c>) kurulum yapması meşrudur ve en olağan kullanımlardan biridir;
+    /// site köküne hapsetmek özelliği öldürürdü. Reddedilen şey SİSTEM ALANIDIR ve kararın tek
+    /// adresi <see cref="PanelWriteTargetGuard"/>'dır — ikinci bir kural kopyası yazılmadı.
+    /// </para>
+    /// </remarks>
     private async Task<string> ResolveDestinationAsync(InstallAppTemplateRequest request, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(request.TargetPath))
         {
-            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetPath.Trim()));
+            var istenen = Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetPath.Trim()));
+            // Panelin veri kökü SINIFIN KENDİ alanından okunur; ikinci bir varsayılan yazılsaydı
+            // panel taşındığında koruma ESKİ yolu korumaya devam ederdi.
+            var karar = PanelWriteTargetGuard.Evaluate(istenen, dataRoot);
+            if (karar != PanelWriteTargetVerdict.Allowed)
+            {
+                throw new AppException(
+                    "store.target_path_forbidden",
+                    400,
+                    400,
+                    $"{istenen}: {PanelWriteTargetGuard.Describe(karar)}");
+            }
+
+            return istenen;
         }
 
         if (string.IsNullOrWhiteSpace(request.SiteName))

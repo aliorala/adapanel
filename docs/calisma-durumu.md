@@ -5,11 +5,77 @@
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
 Son güncelleme: **06.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5090 yeşil** (Core 2 + Infra 5088) · typecheck + build + npm test temiz
+Testler: **5131 yeşil** (Core 2 + Infra 5129) · typecheck + build + npm test temiz
 
 ---
 
-## SON İŞ — TERMİNAL = SYSTEM KABUĞU; artık YALNIZ SUNUCU SAHİBİNE açık + DOKTRİN DÜZELTİLDİ (commit ATILMADI)
+## SON İŞ — SAHİPLİK SINIRINI DELEN ÜÇ YAZMA YOLU KAPATILDI (commit ATILMADI)
+
+552b028 terminali sunucu sahibine kısıtladı. O korumanın **tek dayanağı**
+`config/server-owner.json` dosyasının panelin HTTP yüzeyinden **yazılamaması**. Üç uç bu dayanağı
+çürütüyordu — üçü de `Administrator` rolüne açık, panel `LocalSystem`:
+
+| Yol | Ölçülen durum | Durum |
+|---|---|---|
+| `POST /backup/restore` · `restore-items` | `TargetPath` MUTLAK ve DENETİMSİZ (`BackupService.cs:3013`, `3200`) → arşiv panelin veri köküne açılıp sahiplik kaydı ezilebiliyordu | **KAPANDI** |
+| Panel yedeğindeki `tasks/*.xml` | XML'in İÇERİĞİ hiç denetlenmeden `Register-ScheduledTask -Xml`'e veriliyordu → arşive konan tek XML SYSTEM'de komut kurar | **KAPANDI** |
+| `POST /store/install` | `targetPath` mutlak olabiliyordu, site kökü denetimi yoktu; `cleanInstall` hedefi boşaltıyor | **KAPANDI** |
+| `POST /sites` **ve** `PUT /sites/{ad}/document-root` | yönetici dalında fiziksel yol kısıtı YOKTU; `PhysicalPath = C:\` → dosya yöneticisinin sanal alanı TÜM DİSK | **KAPANDI (ikisi de)** |
+
+**KARAR — sınır neden "sistem alanı", "site kökü" değil.** Yöneticinin ayrı diske site kurması
+(`D:\siteler\musteri.com`), yedeği kendi klasörüne açması (`E:\geri-yukleme`) MEŞRUDUR; site köküne
+hapsetmek özelliği öldürürdü. Reddedilen şey Windows / Program Files / ProgramData / **panelin veri
+kökü** / sürücü kökü / UNC ve ortak kapsayıcının (`C:\inetpub\wwwroot`, `C:\Users`) KENDİSİ.
+
+**TEK KAYNAK.** Yeni `Infrastructure/Security/PanelWriteTargetGuard.cs`, sistem yolu listesini
+`SiteDeletionPathGuard.SystemForbiddenSubtrees/Containers`'tan OKUR — ikinci bir liste kopyası
+yazılmadı (o listeler zaten ölçülmüştü: eski kara liste `C:\inetpub`, `C:\Users`, `C:\ProgramData`
+ve UNC'yi GEÇİRİYORDU). `SiteDocumentRootScope` KULLANILMADI ve sebebi yazılı: o sınır KİRACI
+kapsamıdır, yöneticinin kapsamı yoktur.
+
+**GÖREV XML'İ — sahip/sahip olmayan ayrımı.** Kayıt artık YALNIZ sunucu sahibinin geri
+yüklemesinde yapılır. "SYSTEM principal'lı XML'i reddet" REDDEDİLDİ: panelin KENDİ görevleri
+bilerek `UserId 'SYSTEM' … RunLevel Highest` ile kurulur, o kural meşru bir yedeğin BÜTÜN
+görevlerini (gecelik yedek dahil) düşürürdü. Sahip olmayanda iş sessiz değil: görev başına
+`backup.restore_task_owner_required` uyarısı + durum `restored_with_errors` + XML çıkarma
+klasöründe DURUYOR. Sahiplik `IServerOwnerService`'ten okunur; bağımlılık yoksa sonuç **"sahip
+değil"** (fail-closed).
+
+**Dokunulan yerler:** YENİ `src/AdaPanel.Infrastructure/Security/PanelWriteTargetGuard.cs` ·
+`Backup/BackupService.cs` (`IstenenHedefiDenetle`, `CaginSahibiMiAsync`, `GorevKaydetAsync`,
+`TryRestoreScheduledTasksAsync` artık `internal` + kaydedici temsilcisi alıyor) ·
+`AppStore/AppStoreService.cs` (`ResolveDestinationAsync`) · `Api/Controllers/SitesController.cs`
+(`EnsureAdminPathIsWritable`, iki uçta) · `Iis/SiteDeletionPathGuard.cs` (dört yardımcı `internal`).
+i18n: 4 yeni anahtar, tr/en **5227/5227**.
+
+**Testler:** YENİ `PanelWriteTargetGuardTests` (21) + `SunucuSahipligiYazmaSiniriTests` (20) — hepsi
+DAVRANIŞ testi, kaynak taramıyor. Mevcut 5 test kırmızıya düşmüştü: geri yükleme hedefini
+KOLAYLIK olsun diye panelin veri kökü altında seçiyorlardı (üretim UI'si hedefi hep boş gönderir);
+hedefleri veri kökünün dışına alındı, ölçtükleri şey değişmedi.
+
+**MUTASYON (8 koruma, tek tek kaldırıldı → KIRMIZI → geri kondu):**
+sistem alt-ağacı denetimi **9** · `RestoreAsync` hedefi **4** · `RestoreItemsAsync` hedefi **1** ·
+görev XML sahiplik kapısı **2** · mağaza hedefi **2** · belge kökü (yönetici) **2** · site
+oluşturma (yönetici) **1** · sahiplik varsayılanı fail-open yapıldı **1**.
+
+### KAPATILMAYAN — DÖRDÜNCÜ YOL: `POST /cron` (aynı sınıf, AÇIK)
+
+`CronController.CreateTaskAsync` yönetici dalında `TaskType`'ı zorlamıyor. `taskType="command"` ile
+`Command`/`Arguments` **doğrudan** `New-ScheduledTaskAction`'a geçiyor ve
+`SchedulerService.BuildCreateScript` principal'i `UserId 'SYSTEM' -RunLevel Highest` yapıyor. Tek
+süzgeç `IsBareInteractiveShell` ve o yalnızca **argümansız** `cmd.exe`/`powershell.exe`'yi
+reddediyor — `cmd.exe` + `/c ...` GEÇİYOR.
+
+**Sonuç:** sahip olmayan bir panel yöneticisi hâlâ tek bir cron isteğiyle SYSTEM olarak komut
+çalıştırabiliyor; yani terminal sınırı ve yukarıdaki üç kapı bu yol açıkken de kâğıt üstünde
+kalıyor. **Kapatılmadı** çünkü karar ürün seviyesinde: "yönetici cron'u sahibe mi kısıtlanacak,
+yoksa `command`/`php`/`script` tipleri mi sahibe özel olacak" sorusu, meşru yönetici kullanımını
+doğrudan etkiliyor (Plesk'te ek yöneticiler Restricted Mode'dadır — aynı yönde bir emsal var).
+**Bir sonraki iş bu olmalı.**
+
+---
+
+## ÖNCEKİ İŞ — TERMİNAL = SYSTEM KABUĞU; artık YALNIZ SUNUCU SAHİBİNE açık + DOKTRİN DÜZELTİLDİ (commit ATILMADI)
 
 **ÖLÇÜLEN ÇELİŞKİ.** Depoda altı ayrı yerde koruma gerekçesi olarak şu cümle yazılıydı:
 "Panelin 'Administrator' rolü bir WINDOWS yöneticisi DEĞİLDİR (kabuk komutu uçları bilerek

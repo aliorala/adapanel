@@ -5,6 +5,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Files;
+using AdaPanel.Infrastructure.Security;
 using AdaPanel.Infrastructure.SiteBuilder;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -54,8 +55,40 @@ public sealed partial class BackupService(
     Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
     // İSTEĞE BAĞLI: adres çözümleyici. Üretimde gerçek DNS; testte sahte, çünkü bir birim testi
     // GERÇEKTEN 169.254.169.254'e çözümleme yapmamalı (ve yapamaz da).
-    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : IBackupService
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null,
+    // ===================================================================================
+    // İSTEĞE BAĞLI AMA VARSAYILANI GÜVENLİ TARAF: "bu isteği yapan sunucu SAHİBİ mi?"
+    //
+    // Yalnızca panel yedeğinden ZAMANLANMIŞ GÖREV kaydetmek için okunur (arşivden gelen ham XML
+    // = SYSTEM'de kod çalıştırma yetkisi; gerekçe TryRestoreScheduledTasksAsync'te).
+    //
+    // İkisi de verilmezse (dar kapsamlı testler, arka plan çağrıları) sonuç "SAHİP DEĞİL"dir.
+    // Bu bilinçli: eksik bir bağımlılığın yetkiyi AÇMASI, korumayı DI kurulumunun bir yan
+    // etkisine bağlamak olurdu. Kapalı taraf en kötü ihtimalle görevleri uyarıyla atlar; açık
+    // taraf sessizce SYSTEM verirdi.
+    // ===================================================================================
+    IServerOwnerService? serverOwnerService = null,
+    Microsoft.AspNetCore.Http.IHttpContextAccessor? httpContextAccessor = null) : IBackupService
 {
+    /// <summary>İsteği yapan kullanıcı bu sunucunun SAHİBİ mi?</summary>
+    /// <remarks>
+    /// Kimlik istekten okunur, gövdeden DEĞİL: bu deponun kapanmış hata sınıfı tam olarak
+    /// "kapsam denetimi doğru ama denetlenen değeri isteğin kendisi seçiyor" idi. Sahiplik kararı
+    /// da <see cref="IServerOwnerService"/>'e bırakılır — panelin HTTP yüzeyinden yazılamayan
+    /// <c>config/server-owner.json</c> kaydını okuyan TEK yer orasıdır.
+    /// </remarks>
+    private async Task<bool> CaginSahibiMiAsync(CancellationToken cancellationToken)
+    {
+        if (serverOwnerService is null || httpContextAccessor?.HttpContext is not { } context)
+        {
+            return false;
+        }
+
+        var ham = context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return Guid.TryParse(ham, out var kullanici)
+               && await serverOwnerService.IsServerOwnerAsync(kullanici, cancellationToken);
+    }
+
     /// <summary>
     /// Uzak yedek hedefinin adresi panelin ULAŞMAMASI gereken bir yere mi bakıyor; bakıyorsa
     /// <c>backup.remote_target_forbidden</c> ile reddeder.
@@ -2273,6 +2306,43 @@ public sealed partial class BackupService(
         }
     }
 
+    /// <summary>
+    /// İSTEKTEN gelen geri yükleme hedefini kabul edilebilir bir yazma hedefine çevirir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK:</b> <c>TargetPath</c> mutlak bir yol olabiliyor ve HİÇ denetlenmiyordu.
+    /// Panel <c>LocalSystem</c> koştuğu için bu, "yedekten geri yükle" düğmesini sunucudaki
+    /// İSTENEN HER YERE yazan bir araca çeviriyordu. Somut sonucu şuydu: hedef
+    /// <c>%ProgramData%\AdaPanel</c> verilip arşivdeki <c>config\server-owner.json</c> canlı kaydın
+    /// ÜZERİNE yazılabiliyordu — yani sahip olmayan bir yönetici kendini SUNUCU SAHİBİ ilan edip
+    /// terminale (SYSTEM kabuğu) giriyordu. Sahiplik korumasının tek dayanağı o dosyanın HTTP
+    /// yüzeyinden yazılamamasıydı (bkz. ServerOwnerRegistry).
+    /// </para>
+    /// <para>
+    /// <b>FAZLA KAPATMA NÖBETÇİSİ:</b> denetim YALNIZCA kullanıcının verdiği yola uygulanır.
+    /// Panelin KENDİ varsayılan hedefi (veri kökü altındaki <c>restore/…</c> ve yedek kökü
+    /// altındaki <c>restored/…</c>) bu kapıdan GEÇMEZ — geçseydi kural kendi kendini reddeder ve
+    /// hedef verilmeyen her geri yükleme ölürdü. Sahibin felaket kurtarması da aynen çalışır:
+    /// <c>E:\geri-yukleme</c>, <c>D:\siteler\musteri.com</c> gibi hedefler kabul edilir.
+    /// </para>
+    /// </remarks>
+    private string IstenenHedefiDenetle(string rawTargetPath)
+    {
+        var hedef = Path.GetFullPath(Environment.ExpandEnvironmentVariables(rawTargetPath.Trim()));
+        var karar = PanelWriteTargetGuard.Evaluate(hedef, fileStore.ResolvePath(string.Empty));
+        if (karar != PanelWriteTargetVerdict.Allowed)
+        {
+            throw new AppException(
+                "backup.target_path_forbidden",
+                400,
+                400,
+                $"{hedef}: {PanelWriteTargetGuard.Describe(karar)}");
+        }
+
+        return hedef;
+    }
+
     private sealed record ScheduledTaskExport(string Name, string Xml);
 
     private sealed record ScheduledTaskIndexEntry(string Name, string Entry);
@@ -2320,10 +2390,38 @@ $list | ConvertTo-Json -Depth 3";
     /// <c>catch</c> de sessizdi. Yani panel yedeğini geri yükleyen kullanıcı, zamanlanmış
     /// görevlerinin (gecelik yedek dahil) HİÇ KURULMADIĞINI göremiyordu: durum "restored" diyordu.
     /// Bir sonraki felakete kadar yedeksiz kalmanın en sessiz yolu buydu.
+    /// <para>
+    /// <b>İKİNCİ ÖLÇÜLEN AÇIK — XML'İN İÇERİĞİ HİÇ DENETLENMİYORDU.</b> Yol denetimi ("XML çıkarma
+    /// klasörünün altında mı") ve boyut tavanı vardı; ama dosyanın İÇİ olduğu gibi
+    /// <c>Register-ScheduledTask -Xml</c>'e veriliyordu. Görev XML'i kendi <c>Principal</c>'ını ve
+    /// <c>Exec/Command</c>'ını taşır: arşive konan tek bir XML, sunucuda SYSTEM olarak istenen
+    /// komutu çalıştıran bir görev kurar. Arşiv GÜVENİLMEZ GİRDİDİR (yedek kökü yönetici tarafından
+    /// seçilebilir ve dosya yöneticisinden ulaşılabilir bir klasör olabilir), yani bu "cron adından
+    /// SYSTEM RCE" ile aynı sınıftır.
+    /// </para>
+    /// <para>
+    /// <b>SEÇİLEN SINIR: kaydı YALNIZ SUNUCU SAHİBİ yapar.</b> Doktrin 552b028'de daraltıldı —
+    /// "panel yöneticisi bir Windows yöneticisi değildir, TEK istisna sunucu sahibidir". Arşivden
+    /// gelen ham görev XML'ini kaydetmek, tam olarak SYSTEM'de kod çalıştırma yetkisidir.
+    /// </para>
+    /// <para>
+    /// <b>Neden "SYSTEM principal'ı olan XML'i reddet" DEĞİL:</b> ölçüldü — panelin KENDİ görevleri
+    /// (<c>SchedulerService.BuildCreateScript</c>) bilerek <c>UserId 'SYSTEM' … RunLevel Highest</c>
+    /// ile kurulur. Böyle bir kural, meşru bir panel yedeğinin BÜTÜN görevlerini (gecelik yedek
+    /// dahil) reddederdi: fazla kapatma, üstelik sessiz veri kaybı yönünde.
+    /// </para>
+    /// <para>
+    /// <b>FAZLA KAPATMA NÖBETÇİSİ:</b> sahibin geri yüklemesi eskisi gibi HER görevi kurar. Sahip
+    /// olmayan yöneticide iş SESSİZCE yarım kalmaz — görev başına bir uyarı üretilir
+    /// (<c>backup.restore_task_owner_required</c>), XML'ler çıkarma klasöründe DURUR ve durum
+    /// "restored_with_errors" olur.
+    /// </para>
     /// </remarks>
-    private static async Task TryRestoreScheduledTasksAsync(
+    internal static async Task TryRestoreScheduledTasksAsync(
         string extractedRoot,
+        bool caginSahibiMi,
         List<BackupRestoreWarningDto> uyarilar,
+        Func<string, string, CancellationToken, Task<CommandResult>> kaydedici,
         CancellationToken cancellationToken)
     {
         try
@@ -2381,17 +2479,32 @@ $list | ConvertTo-Json -Depth 3";
                     continue;
                 }
 
+                // ============================================================================
+                // XML'İN İÇERİĞİ SUNUCUDA SYSTEM OLARAK KOŞACAK KOMUTU TAŞIR.
+                //
+                // Görev XML'i kendi <Principal> ve <Actions><Exec><Command> bölümlerini içerir;
+                // panel onu OLDUĞU GİBİ Register-ScheduledTask'a veriyordu. Yani arşive tek bir
+                // XML koyabilen kişi, sunucuda SYSTEM olarak istediği komutu kuran bir görev
+                // yaratıyordu. Bu, doktrinin "panel yöneticisi Windows yöneticisi DEĞİLDİR --
+                // tek istisna sunucu SAHİBİdir" cümlesinin doğrudan ihlaliydi.
+                //
+                // Kapı SAHİBE AÇIK: felaket kurtarma sahibin işidir ve yarım kurulan bir görev
+                // seti (gecelik yedeğin olmaması) en pahalı sonuçtur.
+                // ============================================================================
+                if (!caginSahibiMi)
+                {
+                    uyarilar.Add(new BackupRestoreWarningDto
+                    {
+                        MessageKey = "backup.restore_task_owner_required",
+                        Target = item.Name,
+                        Detail = xmlPath
+                    });
+                    continue;
+                }
+
                 // XML'i base64 taşı: tırnak/özel karakter kaçış derdi tamamen ortadan kalkar.
                 var xml = await File.ReadAllTextAsync(xmlPath, cancellationToken);
-                var xmlBase64 = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(xml));
-                var script = $@"$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{xmlBase64}'))
-Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
-                // KATI SÜRÜM ZORUNLU, yoksa bu kontrol HİÇBİR ŞEY ÖLÇMEZ: PowerShell'in
-                // sonlandırıcı olmayan hatası (Register-ScheduledTask "Access denied") ekrana
-                // yazılır ama powershell.exe yine 0 ile çıkar — yani `Success` daima true olurdu
-                // ve uyarı hiç üretilmezdi. RunPowerShellStrictAsync hatayı çıkış koduna yansıtır
-                // (gerekçesi ProcessRunner'da yazılı).
-                var sonuc = await ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
+                var sonuc = await kaydedici(item.Name, xml, cancellationToken);
                 if (!sonuc.Success)
                 {
                     // Best-effort DEVAM EDER (bir görev diğerlerini durdurmaz) ama SESSİZ DEĞİL.
@@ -2414,6 +2527,33 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
                 Detail = exception.Message
             });
         }
+    }
+
+    /// <summary>
+    /// Görevi GERÇEKTEN Görev Zamanlayıcı'ya kaydeden üretim yolu.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ayrı bir temsilciye alınmasının sebebi ÖLÇÜLEBİLİRLİKTİR: eski hâlde kaydın kendisi
+    /// <c>TryRestoreScheduledTasksAsync</c>'in içindeydi ve o metodu bir testten çağırmak bu
+    /// makinede GERÇEK bir zamanlanmış görev kurmayı denemek demekti. Sonuç, korumanın davranışının
+    /// hiç ölçülememesi ve yerine KAYNAK TARAYAN bir testin yazılmış olmasıydı
+    /// (<c>BackupTaskImportGuardTests</c>) — o test, kural kaldırılsa bile metin kaynakta durduğu
+    /// sürece yeşil kalırdı.
+    /// </para>
+    /// <para>
+    /// KATI SÜRÜM ZORUNLU, yoksa sonuç HİÇBİR ŞEY ÖLÇMEZ: PowerShell'in sonlandırıcı olmayan
+    /// hatası (<c>Register-ScheduledTask</c> "Access denied") ekrana yazılır ama powershell.exe
+    /// yine 0 ile çıkar — yani <c>Success</c> daima true olurdu ve uyarı hiç üretilmezdi.
+    /// <c>RunPowerShellStrictAsync</c> hatayı çıkış koduna yansıtır (gerekçesi ProcessRunner'da).
+    /// </para>
+    /// </remarks>
+    private static Task<CommandResult> GorevKaydetAsync(string ad, string xml, CancellationToken cancellationToken)
+    {
+        var xmlBase64 = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(xml));
+        var script = $@"$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{xmlBase64}'))
+Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\' -Xml $xml -Force | Out-Null";
+        return ProcessRunner.RunPowerShellStrictAsync(script, cancellationToken);
     }
 
     /// <summary>
@@ -3012,7 +3152,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         {
             var destination = string.IsNullOrWhiteSpace(request.TargetPath)
                 ? fileStore.EnsureDirectory($"restore/{record.Source}-{DateTime.UtcNow:yyyyMMddHHmmss}")
-                : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetPath.Trim()));
+                : IstenenHedefiDenetle(request.TargetPath);
 
             // Hedefin KENDİSİ bağlantı olamaz — gerekçe EnsureRestoreRootIsNotLink'te.
             EnsureRestoreRootIsNotLink(destination);
@@ -3025,7 +3165,12 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
             // + tam-sunucu DR: eksik IIS siteleri + FTP hesapları yeniden kurulur (rapor: iis-restore-report.txt).
             if (string.Equals(record.Type, "panel", StringComparison.OrdinalIgnoreCase))
             {
-                await TryRestoreScheduledTasksAsync(destination, kurulumUyarilari, cancellationToken);
+                await TryRestoreScheduledTasksAsync(
+                    destination,
+                    await CaginSahibiMiAsync(cancellationToken),
+                    kurulumUyarilari,
+                    GorevKaydetAsync,
+                    cancellationToken);
                 var report = new List<string>();
                 await TryRestoreIisSitesAsync(destination, report, kurulumUyarilari, cancellationToken);
                 await TryRestoreFtpUsersAsync(destination, report, kurulumUyarilari, cancellationToken);
@@ -3197,7 +3342,7 @@ Register-ScheduledTask -TaskName '{item.Name.Replace("'", "''")}' -TaskPath '\Ad
         string targetRoot;
         if (!string.IsNullOrWhiteSpace(request.TargetPath))
         {
-            targetRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetPath.Trim()));
+            targetRoot = IstenenHedefiDenetle(request.TargetPath);
         }
         else
         {

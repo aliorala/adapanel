@@ -63,7 +63,11 @@ public sealed class BackupGranularRestoreTests
             Assert.Contains(level1.Entries, entry => !entry.IsDirectory && entry.Name == "wp-config.php");
 
             // Tek dosya + bir dizini hedefe geri yÃ¼kle.
-            var restoreTarget = Path.Combine(dataRoot, "restored");
+            // HEDEF PANELIN VERI KOKUNUN DISINDA: kullanicinin VERDIGI geri yukleme hedefi
+            // artik PanelWriteTargetGuard'dan gecer ve panelin kendi veri kokune yazmayi
+            // reddeder (sahiplik kaydi orada duruyor). Test bu klasoru yalnizca RAHAT oldugu
+            // icin veri kokunun altinda seciyordu; olculen davranisla ilgisi yok.
+            var restoreTarget = Path.Combine(dataRoot + "-hedef", "restored");
             var result = await service.RestoreItemsAsync(new RestoreBackupItemsRequest
             {
                 BackupId = "b1",
@@ -111,7 +115,7 @@ public sealed class BackupGranularRestoreTests
                 {
                     BackupId = "b2",
                     Items = ["yok/boyle-bir-dosya.txt"],
-                    TargetPath = Path.Combine(dataRoot, "out")
+                    TargetPath = Path.Combine(dataRoot + "-hedef", "out")
                 }));
 
             Assert.Equal("backup.items_not_found", exception.MessageKey);
@@ -182,7 +186,11 @@ public sealed class BackupGranularRestoreTests
 
             // Hedef kök = kiracının site kökü. İçinde "webroot" adında bir KAVŞAK var ve kavşak
             // sanal alanın DIŞINI gösteriyor.
-            var restoreTarget = Path.Combine(dataRoot, "restored");
+            // HEDEF PANELIN VERI KOKUNUN DISINDA: kullanicinin VERDIGI geri yukleme hedefi
+            // artik PanelWriteTargetGuard'dan gecer ve panelin kendi veri kokune yazmayi
+            // reddeder (sahiplik kaydi orada duruyor). Test bu klasoru yalnizca RAHAT oldugu
+            // icin veri kokunun altinda seciyordu; olculen davranisla ilgisi yok.
+            var restoreTarget = Path.Combine(dataRoot + "-hedef", "restored");
             var disari = Path.Combine(dataRoot, "disari");
             Directory.CreateDirectory(restoreTarget);
             Directory.CreateDirectory(disari);

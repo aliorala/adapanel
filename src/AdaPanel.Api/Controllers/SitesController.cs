@@ -6,6 +6,7 @@ using AdaPanel.Core.Dtos.Mail;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
+using AdaPanel.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Cryptography;
@@ -31,8 +32,56 @@ public sealed class SitesController(
     ISslService sslService,
     IAuditService auditService,
     IConcurrencyLock concurrencyLock,
+    Microsoft.Extensions.Options.IOptions<AdaPanel.Infrastructure.Options.PanelRuntimeOptions> panelRuntimeOptions,
     ILogger<SitesController> logger) : ControllerBase
 {
+    /// <summary>
+    /// YÖNETİCİNİN verdiği fiziksel yolu denetler; sistem alanıysa istek reddedilir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLEN AÇIK:</b> yol kısıtlaması yalnız <c>!User.IsInRole("Administrator")</c> dalında
+    /// vardı; yönetici dalında HİÇ denetim yoktu. <c>PhysicalPath = C:\</c> olan bir site
+    /// açıldığında dosya yöneticisinin sanal alanı (<c>FileService.ResolveSiteTargetAsync</c>
+    /// sitenin kökünü kök kabul eder) ve <c>/files/acl</c> ucu SYSTEM olarak TÜM DİSKİ açıyordu —
+    /// <c>%ProgramData%\AdaPanel\config\server-owner.json</c> dahil. Yani sahip olmayan bir
+    /// yönetici sahipliği ele geçirip terminale (SYSTEM kabuğu) girebiliyordu.
+    /// </para>
+    /// <para>
+    /// <b>FAZLA KAPATMA NÖBETÇİSİ:</b> yöneticinin site kökü dışına kurması YASAKLANMADI —
+    /// <c>D:\siteler\musteri.com</c> gibi ayrı disk yolları meşrudur ve kabul edilir. Reddedilen
+    /// şey yalnız sistem alanı ve ortak kapsayıcının KENDİSİDİR; kararın tek adresi
+    /// <see cref="PanelWriteTargetGuard"/>'dır (silme yolundaki listeyle AYNI kaynak).
+    /// </para>
+    /// <para>
+    /// <b>İki uçta birden uygulanır</b> (<c>POST /sites</c> ve <c>PUT /sites/{name}/document-root</c>):
+    /// yalnız oluşturmayı kapatmak, aynı sonucu SONRADAN belge kökü değiştirerek veren bir yan kapı
+    /// bırakırdı — bu asimetri kiracı dalında zaten bir kez ısırmıştı.
+    /// </para>
+    /// </remarks>
+    private void EnsureAdminPathIsWritable(string? physicalPath)
+    {
+        // BOŞ YOL DENETLENMEZ: panel o durumda yolu KENDİ üretir (site varsayılanları), yani
+        // kullanıcıdan gelen bir hedef yoktur. Boş yolu reddetmek, en olağan yönetici isteğini
+        // (yolu panele bıraktığı isteği) kırardı.
+        if (string.IsNullOrWhiteSpace(physicalPath))
+        {
+            return;
+        }
+
+        var veriKoku = Path.GetFullPath(
+            Environment.ExpandEnvironmentVariables(panelRuntimeOptions.Value.DataRoot));
+        var karar = PanelWriteTargetGuard.Evaluate(physicalPath, veriKoku);
+        if (karar != PanelWriteTargetVerdict.Allowed)
+        {
+            throw new AppException(
+                "sites.physical_path_forbidden",
+                400,
+                400,
+                $"{physicalPath}: {PanelWriteTargetGuard.Describe(karar)}");
+        }
+    }
+
     [HttpGet]
     public async Task<ActionResult<ApiResponse<IReadOnlyCollection<SiteDto>>>> GetSitesAsync(CancellationToken cancellationToken)
     {
@@ -364,6 +413,13 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 return StatusCode(403, ApiResponse<SiteDto>.Fail("sites.document_root_outside_site", 403));
             }
         }
+        else
+        {
+            // YÖNETİCİ DALI DA DENETLENİR. Kiracı sınırı KİRACI kapsamıdır (SiteDocumentRootScope);
+            // yöneticinin kapsamı yoktur, o yüzden ondan istenen şey kapsam değil SİSTEM ALANINA
+            // dokunmamaktır. Aksi hâlde "belge kökü = C:\" ile dosya yöneticisi tüm diski açıyordu.
+            EnsureAdminPathIsWritable(request.PhysicalPath);
+        }
 
         var site = await siteProvisioningService.SetDocumentRootAsync(siteName, request.PhysicalPath, cancellationToken);
         await WriteAuditAsync("sites.document_root.updated", siteName, cancellationToken, ayrinti: site.PhysicalPath);
@@ -561,6 +617,13 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
             // iştir; kiracıya ancak KENDİ sitesi için verilebilir.
             await CustomerAccess.EnsureSiteNameIsClaimableAsync(
                 customerScopes, iisSiteService, User, request.Name, cancellationToken);
+        }
+        else
+        {
+            // YÖNETİCİ DALI ARTIK SERBEST DEĞİL. Yol hâlâ site kökü dışında olabilir
+            // (D:\siteler\...) — reddedilen yalnız sistem alanıdır; gerekçe
+            // EnsureAdminPathIsWritable'da.
+            EnsureAdminPathIsWritable(request.PhysicalPath);
         }
 
         // KOTA KONTROLÜ İLE KAYIT ARASINDA BAŞKA İSTEK GİREMEZ.

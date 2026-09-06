@@ -277,19 +277,23 @@ public static class SiteDeletionPathGuard
             string.Equals(ad.Trim(), klasorAdi, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsInsideAny(IEnumerable<string> roots, string path, bool includeRootItself = true) =>
+    // GÖRÜNÜRLÜK: bu dört yardımcı `internal`dır çünkü AYNI derlemedeki ikinci bir karar noktası
+    // (PanelWriteTargetGuard — yöneticinin SEÇTİĞİ yazma hedefi) tam olarak aynı ilkelleri sorar.
+    // Kopyalansalardı iki liste/iki sınır kuralı zamanla ayrışırdı; bu depoda o hata beş kez
+    // yaşandı ve PathContainment'ın var oluş sebebi de odur. Yeni bir HTTP yüzeyi açmazlar.
+    internal static bool IsInsideAny(IEnumerable<string> roots, string path, bool includeRootItself = true) =>
         roots.Any(root => includeRootItself
             ? PathContainment.IsRootOrInside(root, path)
             : PathContainment.IsInsideRoot(root, path));
 
-    private static bool EqualsAny(IEnumerable<string> roots, string path) =>
+    internal static bool EqualsAny(IEnumerable<string> roots, string path) =>
         roots.Any(root => string.Equals(
             PathContainment.Normalize(root)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Yerel bir sürücü yolu mu (<c>X:\...</c>)? UNC ve cihaz yolları buradan geçmez.</summary>
-    private static bool IsLocalDrivePath(string normalizedPath)
+    internal static bool IsLocalDrivePath(string normalizedPath)
     {
         if (normalizedPath.StartsWith(@"\\", StringComparison.Ordinal))
         {
@@ -301,7 +305,7 @@ public static class SiteDeletionPathGuard
     }
 
     /// <summary>Sürücü kökünün ALTINDAKİ segment sayısı: <c>C:\</c> → 0, <c>C:\a</c> → 1, <c>C:\a\b</c> → 2.</summary>
-    private static int SegmentsBelowRoot(string normalizedPath)
+    internal static int SegmentsBelowRoot(string normalizedPath)
     {
         var kok = Path.GetPathRoot(normalizedPath) ?? string.Empty;
         return normalizedPath[kok.Length..]

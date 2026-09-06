@@ -243,7 +243,7 @@ public sealed class BackupRestoreArchiveGuardTests
     {
         using var alan = new Alan();
 
-        var hedef = alan.Klasor("hedef");
+        var hedef = alan.DisKlasor("hedef");
         var disari = alan.Klasor("gizli");
         await File.WriteAllTextAsync(Path.Combine(disari, "kurban.txt"), "dokunulmadi");
 
@@ -274,7 +274,7 @@ public sealed class BackupRestoreArchiveGuardTests
     {
         using var alan = new Alan();
 
-        var hedef = alan.Klasor("hedef");
+        var hedef = alan.DisKlasor("hedef");
         var zip = alan.Zip(new Dictionary<string, string>
         {
             ["config/panel.json"] = "{}",
@@ -503,6 +503,22 @@ public sealed class BackupRestoreArchiveGuardTests
         public string Klasor(params string[] parcalar)
         {
             var yol = Path.Combine([Kok, .. parcalar]);
+            Directory.CreateDirectory(yol);
+            return yol;
+        }
+
+        /// <summary>
+        /// Panelin VERI KOKUNUN DISINDA bir klasor.
+        /// </summary>
+        /// <remarks>
+        /// Kullanicinin VERDIGI geri yukleme hedefi artik PanelWriteTargetGuard'dan gecer: panelin
+        /// kendi veri kokune (sahiplik kaydinin durdugu yer) yazmak reddedilir. Bu testler hedefi
+        /// yalnizca RAHAT oldugu icin veri kokunun altinda seciyordu; olctukleri sey (kavsak
+        /// takibi / tam cikarma) hedefin nerede oldugundan bagimsizdir.
+        /// </remarks>
+        public string DisKlasor(params string[] parcalar)
+        {
+            var yol = Path.Combine([Kok + "-hedef", .. parcalar]);
             Directory.CreateDirectory(yol);
             return yol;
         }
