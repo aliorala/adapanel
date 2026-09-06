@@ -8,7 +8,7 @@
     <!-- Tek surum kaynagi. Release icin scriptler /p:Version ile ezer (ornek: package-installer.ps1 -Version 0.2.5)
          ve GitHub release tag'i AYNI olmali; yoksa self-update surumu esitleyemez, "guncelleme var" uyarisi kalir.
          AssemblyVersion/FileVersion/InformationalVersion bundan TUREM eder -> ayrica sabitlemiyoruz ki stale kalmasin. -->
-    <Version>0.8.26</Version>
+    <Version>0.8.27</Version>
     <!-- .NET InformationalVersion'a "+<gitHash>" eklemesin; yoksa "0.2.4+abc123" != release tag "0.2.4". -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
