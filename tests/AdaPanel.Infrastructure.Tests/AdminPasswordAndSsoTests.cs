@@ -505,6 +505,7 @@ public sealed class AdminPasswordAndSsoTests
                 anahtarlar,
                 new JsonFileStore(runtimeOptions),
                 runtimeOptions,
+                new SahipsizSunucuSahibiServisi(),
                 NullLogger<AuthService>.Instance);
 
             return new Duzenek(baglanti, dbContext, servis, veriKoku)

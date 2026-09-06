@@ -5,11 +5,124 @@
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
 Son güncelleme: **06.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5070 yeşil** (Core 2 + Infra 5068) · typecheck + build + npm test temiz
+Testler: **5090 yeşil** (Core 2 + Infra 5088) · typecheck + build + npm test temiz
 
 ---
 
-## SON İŞ — `password/forgot` ZAMANLAMA SIZINTISI kapandı (commit ATILMADI)
+## SON İŞ — TERMİNAL = SYSTEM KABUĞU; artık YALNIZ SUNUCU SAHİBİNE açık + DOKTRİN DÜZELTİLDİ (commit ATILMADI)
+
+**ÖLÇÜLEN ÇELİŞKİ.** Depoda altı ayrı yerde koruma gerekçesi olarak şu cümle yazılıydı:
+"Panelin 'Administrator' rolü bir WINDOWS yöneticisi DEĞİLDİR (kabuk komutu uçları bilerek
+LOCAL SERVICE olarak koşuyor)". **İkinci yarısı yanlıştı:**
+
+| Ölçüm | Sonuç |
+|---|---|
+| `scripts\install-service.ps1` -> `New-Service` (`-Credential` YOK) | panel servisi **LocalSystem** |
+| `TerminalService.ExecuteAsync` | `powershell.exe` doğrudan alt süreç; `LimitedIdentityRunner` yolundan GEÇMİYOR |
+| `TerminalController` yetkisi (eski) | `[Authorize(Roles = "Administrator")]` — rolü Administrator olan **herkes** |
+| Kaç yönetici olabilir? | Sınırsız; bir yönetici `UsersController`'dan ikinci bir yönetici yaratabiliyor (BAYİ yaratamaz: rol Customer'a zorlanıyor, `UserManagementService.cs:120`) |
+| `AuthController.ImpersonateAsync` hedefi (eski) | rol denetimi **HİÇ YOKTU** -> yönetici, yöneticiyi taklit edebiliyordu |
+| MCP tarafı | `ITerminalService` bilerek enjekte edilmiyor -> tek kapı REST; API anahtarı ayrıca `AllowTerminal` istiyor |
+
+**Doktrinin gerekçe olarak kullanıldığı YERLERİN TAM LİSTESİ (6 koruma, 3'ü değil):**
+`UpdatePackageTrust.cs` (güncelleme kaynağı beyaz listesi — ana metin) · `SelfUpdateService.cs`
+(`SetGithubRepoAsync`) · `UpdateController.cs` (gövdeden gelen url/sha yok sayıldı) ·
+`DataRootHardeningService.cs` (ProgramData ACL) · `OutboundAddressGuard.cs` (SSRF bayrağı
+arayüzde değil) · `SchedulerService.cs` (cron URL hedefi denetimi). Ayrıca üç test dosyası
+(`UpdatePackageTrustTests`, `SelfUpdateServiceTests`, `ArgumentInjectionTests`) ve
+`docs/denetim-2026-08-19.md`.
+
+**KIYAS (kaynaklı).** Plesk: SSH Terminal eklentisi yöneticiye `root` verir; **ek** yönetici
+hesapları "Restricted Mode"dadır ve Plesk'in kendi belgesi, yetki yükseltmesini önlemek için
+"SSH Terminal" kutusunun bu hesaplarda **işaretlenmemesi** gerektiğini yazar. Abonelik sahipleri
+terminale girebilir ama **kendi sistem kullanıcısı** olarak, root değil. cPanel: WHM terminali
+root'undur; hesap terminali varsayılan **kapalıdır** ("disabled shell") ve açılsa bile kullanıcının
+kendi kimliğiyle koşar. Yani olgun panellerin kararı: **tam yetkili terminal = sunucu sahibi; alt
+hesaplar ya hiç ya da düşük yetkiyle.**
+Kaynaklar: docs.plesk.com "Using Additional Administrator Accounts" ve "Accessing the Command Line
+from the Plesk Interface"; WHM "Manage Shell Access" + cPanel Feature Manager belgeleri.
+
+**SEÇİLEN YOL: (A) — terminal kısıtlandı, doktrin PRECISE hâle getirildi.** Terminal KALDIRILMADI.
+(B) reddedildi: doktrin, terminale erişemeyen bütün yöneticiler/bayiler/müşteriler için GERÇEK;
+onu tümden bırakmak altı korumanın gerekçesini boşa çıkarırdı. Doğru düzeltme cümleyi DARALTMAKTI:
+
+> Panel yöneticisi bir Windows yöneticisi **değildir** — **TEK istisna sunucu SAHİBİDİR.**
+
+**Dokunulan yerler (kod):**
+- YENİ `src/AdaPanel.Core/Interfaces/IServerOwnerService.cs` — doktrinin TEK kaynağı.
+- YENİ `src/AdaPanel.Infrastructure/Security/ServerOwnerRegistry.cs` — saf karar (dosya/DB'siz
+  sınanabilir) + disk biçimi.
+- YENİ `src/AdaPanel.Infrastructure/Security/ServerOwnerService.cs` — kararı SABİTLER.
+- `Api/Controllers/TerminalController.cs` — sahiplik denetimi + taklit oturumu reddi + reddin
+  denetim kaydı (`terminal.command.denied`, denenen komutla birlikte).
+- `Api/Controllers/AuthController.cs` — **yönetici taklit edilemez** (`auth.cannot_impersonate_administrator`).
+- `Infrastructure/Services/UserManagementService.cs` — sunucu sahibi **silinemez / pasife alınamaz /
+  rolü düşürülemez** (`users.server_owner_protected`).
+- `Infrastructure/Services/AuthService.cs` + `Core/Dtos/Auth/CurrentSessionDto.cs` — oturumda
+  `isServerOwner` (YALNIZ UX; dayatma uçta).
+- `frontend/src/views/ServerToolsView.vue` + `stores/auth.ts` — Terminal sekmesi yalnız sahibe.
+- i18n TR/EN +4/+4 (`terminal.owner_only`, `users.server_owner_protected`,
+  `auth.cannot_impersonate_administrator`, `panel.activity.action.terminal.command.denied`);
+  API `Resources` TR/EN +1/+1. Parite: frontend **5223/5223**, Api Resources **264/264**.
+
+**SAHİPLİK NASIL BELİRLENİYOR (rol yükseltmesiyle ele geçirilemez):**
+1. `%ProgramData%\AdaPanel\config\server-owner.json` — panelin HTTP yüzeyinden **yazılamaz**
+   (aynı kalıp `AllowInternalOutboundTargets` ve `AllowUnauthenticatedLocalSenders`'ta zaten var:
+   korumayı korunan yüzeyin kendisinden kapatılabilir yapmak, korumayı kaldırmakla aynı şey).
+2. Kayıt YOKSA (hiç yazılmamış / bozuk / okunamıyor) -> **en eski etkin yönetici** = kurulum
+   sihirbazının yarattığı kişi; karar diske **sabitlenir**. Sonradan yaratılan her yöneticinin
+   `CreatedAtUtc`'si daha büyüktür, yani yeni hesap açmak sahipliği vermez.
+3. Kayıt VARSA son söz onundur: gösterdiği kişi artık etkin yönetici değilse sonuç **"sahip yok"**,
+   "sıradaki" DEĞİL. Bu ayrımı bir test yakaladı — geri düşüş burada da geçerli olsaydı sahibi
+   pasife almak sahipliği devralmanın yoluydu.
+
+**GİZLİLİK KARARI — komut metni neden kayda yazılıyor:** uca yalnız sunucu sahibi girebiliyor,
+denetim kaydını okuyan uçlar da yönetici uçları; kaydedilen kişi ile okuyan kişi AYNI, korunacak
+üçüncü taraf mahremiyeti YOK. Kayıt olmadan sahibi bile "makinemde ne çalıştı" sorusunu
+yanıtlayamaz. Metin `SecretRedactor`'dan geçiyor (anahtar=değer sırlar maskeli, 2000 karakter).
+Reddedilen deneme de yazılıyor: reddedilen komut niyetin kendisidir.
+
+**Doğrulama:** `dotnet test AdaPanel.sln -c Release` -> **5090 yeşil / 0 kırmızı** (20 yeni test).
+typecheck temiz, `npm run build` temiz, `npm test` 42 yeşil.
+
+**Mutasyon (koruma kaldırıldı -> KIRMIZI görüldü -> geri kondu; hepsi geri alındı, 20/20 yeşil):**
+terminal sahiplik denetimi kaldırıldı -> **3 kırmızı** ·
+taklit oturumu reddi kaldırıldı -> **1 kırmızı** ·
+"yöneticiyi taklit etme" yasağı kaldırıldı -> **1 kırmızı** ·
+sahip SİLİNEMEZ koruması kaldırıldı -> **1 kırmızı** ·
+sahip PASİFE ALINAMAZ koruması kaldırıldı -> **1 kırmızı** ·
+sabit kayıt geçersizse sıradakine düşsün (eski hatalı kural) -> **2 kırmızı** ·
+geri düşüş EN YENİ yöneticiye -> **8 kırmızı**.
+
+**Fazla-kapatma nöbetçileri (özelliği öldürmediğinin kanıtı):** sunucu sahibi terminale GİREBİLİR ·
+bozuk sahiplik kaydı sahibi dışarıda BIRAKMAZ · kayıt hiç yokken sahip yine girebilir ·
+sahip OLMAYAN bir yönetici hâlâ pasife alınabilir · müşteri hesabı HÂLÂ taklit edilebilir.
+
+**KAPATILAMAYANLAR — panel yöneticisinin SYSTEM'e çıkabildiği DİĞER yollar (ölçüldü, AÇIK):**
+1. `POST /api/v1/store/install` — `targetPath` KEYFİ mutlak yol; site kökü denetimi YOK
+   (`AppStoreService.cs:1519-1522`). `cleanInstall=true` ayrıca hedef klasörü boşaltıyor
+   (`:1551-1568`). **En ağır kalan.**
+2. `POST /api/v1/sites` / `PUT .../document-root` — admin dalında fiziksel yol kısıtı YOK
+   (`SitesController.cs:521`; `:362` yalnız `!IsAdmin` dalında). `PhysicalPath = C:\` olan bir site,
+   dosya yöneticisini ve `/files/acl`'i (icacls) SYSTEM olarak tüm diske açar.
+3. `POST /api/v1/backup/restore` — görev XML'i `Register-ScheduledTask -Xml` ile kaydediliyor;
+   zip-slip ve 1 MiB tavanı VAR ama **XML içeriği** (Principal `S-1-5-18`, Action) denetlenmiyor
+   (`BackupService.cs:2387`). Ayrıca panel yedeği `adapanel.db` + `config/*` geri yüklüyor ->
+   **`server-owner.json` bu yoldan değiştirilebilir**; sahiplik korumasının bilinen sınırı budur.
+4. `RestoreMailAsync` -> `ZipFile.ExtractToDirectory` (`BackupService.cs:2696`) — deponun kendi
+   kavşak-farkında çıkarıcısını ATLIYOR (aynı dosya `:6322` bunun neden yanlış olduğunu yazıyor).
+5. `CacheService.cs:139,259,550,745` — ÇİFT tırnaklı PowerShell dizesine değer gömme. Bugün değer
+   HTTP'den gelmiyor (manifest / `InstalledComponent.ServiceName`), yani sömürülemez; ama koruma
+   kural değil TESADÜF (aynı hata `SchedulerService`'te ölçülüp kapatılmıştı).
+6. Tasarım gereği SYSTEM kalanlar (sertleştirilmiş, meşru): cron `command`/`php` görevleri
+   (SYSTEM/Highest), `update/install`, `software/install`, `docker run`, `/dbtools/**` SQL yüzeyi.
+7. Terminalin KENDİSİ komut doğrulaması yapmıyor — bilerek: sahibi için amacın ta kendisi.
+8. Testlerin `%TEMP%` altında bıraktığı `adapanel-sahiplik-*` klasörleri SİLİNMEDİ (ajan silme
+   yasağı). İşletim sistemi temizliğine bırakıldı.
+
+---
+
+## ÖNCEKİ İŞ — `password/forgot` ZAMANLAMA SIZINTISI kapandı (commit ATILMADI)
 
 **ÖLÇÜLDÜ (bu makinede, gerçek kod + gerçek ağ yığını):**
 

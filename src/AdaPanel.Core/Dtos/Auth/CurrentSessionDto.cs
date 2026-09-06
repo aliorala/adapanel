@@ -19,5 +19,15 @@ public sealed class CurrentSessionDto
 
     /// <summary>Alt-kullanıcının erişebildiği panel bölümleri; null = kısıtsız (veya alt-kullanıcı değil).</summary>
     public string[]? AllowedSections { get; init; }
+
+    /// <summary>
+    /// Oturum sahibi SUNUCU SAHİBİ mi (terminal = SYSTEM kabuğu yalnız ona açık).
+    /// </summary>
+    /// <remarks>
+    /// YALNIZ ARAYÜZ İÇİN: menüde Terminal sekmesinin görünüp görünmeyeceğini belirler. Asıl
+    /// dayatma <c>TerminalController</c>'dadır; bu alan yanlış bile olsa uç reddeder. Aynı kalıp
+    /// <see cref="IsSubUser"/> / <see cref="AllowedSections"/> için de geçerlidir.
+    /// </remarks>
+    public bool IsServerOwner { get; init; }
 }
 

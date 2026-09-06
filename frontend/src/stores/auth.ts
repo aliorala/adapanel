@@ -32,6 +32,11 @@ type CurrentSession = {
   impersonatorName?: string | null;
   isSubUser?: boolean;
   allowedSections?: string[] | null;
+  /**
+   * Sunucu sahibi mi? Terminal (SYSTEM kabuğu) sekmesi YALNIZ ona gösterilir.
+   * Bu bir görünürlük kararıdır; asıl dayatma API'dedir (`TerminalController`).
+   */
+  isServerOwner?: boolean;
 };
 
 type LoginResult = {

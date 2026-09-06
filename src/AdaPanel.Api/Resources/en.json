@@ -236,6 +236,7 @@
   "update.install_schedule_failed": "The update installation could not be registered with Windows Task Scheduler.",
   "update.install_scheduled": "The update installation was scheduled. The panel will briefly stop and restart automatically.",
   "terminal.start_failed": "The PowerShell process could not be started.",
+  "terminal.owner_only": "The terminal is available to the server owner only. Being a panel administrator does not grant SYSTEM command execution on the server.",
   "terminal.working_directory_denied": "The terminal working directory must stay under the panel, application, or IIS site roots.",
   "terminal.working_directory_missing": "The terminal working directory was not found.",
   "terminal.executed": "The terminal command completed.",

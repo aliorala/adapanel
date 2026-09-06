@@ -1098,9 +1098,11 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// <b>Neden burada, <c>CronController</c>'da değil:</b> orada da bir denetim var
     /// (<c>EnsureCustomerUrlAllowedAsync</c>) ama YALNIZCA müşteri/bayi dalında çalışır; yönetici
     /// dalı ve servisi çağıran her yol (otomasyon, WHMCS tümleşimi, ileride eklenecek uçlar)
-    /// denetimsizdi. Panelin "Administrator" rolü bir WINDOWS yöneticisi DEĞİLDİR — aynı gerekçe
-    /// <c>UpdatePackageTrust</c>'ta yazılı — yani "admin zaten güvenilir" demek burada geçerli bir
-    /// savunma değil. Denetim, komutu GERÇEKTEN kuran katmana kondu.
+    /// denetimsizdi. Panelin "Administrator" rolü bir WINDOWS yöneticisi DEĞİLDİR — sunucu sahibi
+    /// hariç; aynı gerekçe <c>UpdatePackageTrust</c>'ta yazılı — yani "admin zaten güvenilir" demek
+    /// burada geçerli bir savunma değil. Sunucu sahibinin terminale girebiliyor olması bu denetimi
+    /// gereksiz KILMAZ: uç, yönetici dalının yanı sıra otomasyon, WHMCS tümleşimi ve (url tipinde)
+    /// müşteri/bayi dallarından da çağrılıyor. Denetim, komutu GERÇEKTEN kuran katmana kondu.
     /// </para>
     /// <para>
     /// <b>DÜRÜST SINIR — İKİ tanesi:</b> (1) <c>curl</c>'e <c>-L</c> veriliyor, yani YÖNLENDİRME

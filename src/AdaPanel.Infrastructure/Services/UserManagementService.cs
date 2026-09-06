@@ -26,7 +26,8 @@ public sealed class UserManagementService(
     IDatabaseOwnershipService databaseOwnership,
     ISchedulerService schedulerService,
     ISiteCascadeDeletionService siteCascadeDeletion,
-    IApiTokenService apiTokenService) : IUserManagementService
+    IApiTokenService apiTokenService,
+    IServerOwnerService serverOwnerService) : IUserManagementService
 {
     /// <summary>Müşteri OLMAYAN satırların diski: ÖLÇÜLMÜŞ sıfır.</summary>
     /// <remarks>
@@ -286,6 +287,22 @@ public sealed class UserManagementService(
             {
                 throw new InvalidOperationException("users.last_admin_protected");
             }
+
+            // SUNUCU SAHİBİ PASİFE ALINAMAZ / ROLÜ DÜŞÜRÜLEMEZ.
+            //
+            // Bu, "son yönetici" korumasının kapatmadığı AYRI bir delik: ikinci bir yönetici,
+            // sahibi pasife alarak sahiplik sırasının (en eski etkin yönetici) başına geçebilir ve
+            // böylece terminalin SYSTEM kabuğunu ele geçirebilirdi. Sahiplik kaydının diske
+            // sabitlenmesi (ServerOwnerService) aynı deliğin diğer ucudur; ikisi birbirinin yerine
+            // geçmez, biri kalkarsa diğeri hâlâ tutar.
+            //
+            // KAPI AÇIK KALIYOR: sahipliği devretmenin yolu sunucudaki config/server-owner.json
+            // dosyasıdır — yani panelin HTTP yüzeyinden DEĞİL, makineye erişimi olan kişinin
+            // bilinçli bir eylemiyle.
+            if (await serverOwnerService.IsServerOwnerAsync(userId, cancellationToken))
+            {
+                throw new InvalidOperationException("users.server_owner_protected");
+            }
         }
 
         // profesyonel paneller gibi abonelik askıya alma: aktiflik değişimini yakala (sonra sitelerini durdur/başlat).
@@ -537,6 +554,13 @@ public sealed class UserManagementService(
             if (otherActiveAdmins == 0)
             {
                 throw new InvalidOperationException("users.last_admin_protected");
+            }
+
+            // SUNUCU SAHİBİ SİLİNEMEZ — gerekçe UpdateUserAsync'te yazılı: sahibi silmek,
+            // sahiplik sırasını değiştirerek terminalin SYSTEM kabuğunu devralmanın en kısa yoluydu.
+            if (await serverOwnerService.IsServerOwnerAsync(userId, cancellationToken))
+            {
+                throw new InvalidOperationException("users.server_owner_protected");
             }
         }
 

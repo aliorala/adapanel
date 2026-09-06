@@ -4334,7 +4334,7 @@ Basarili:
   diagnostics-card + getMailDiagnostics/getMailDns/applyMailDns/checkRdns) · catch-all (MailView + i18n) · domain alias = IIS binding
   ekle/çıkar (IIisSiteService.AddBindingAsync/RemoveBindingAsync, SiteDetailView add/remove binding UI) · Let's Encrypt (WinAcmeSslService +
   IssueLetsEncryptRequest). MAIL KUYRUĞU yok (tek net eksik; ama Stalwart queue CLI riskli → yapılmadı).
-- KALDIRMA: kullanıcıya non-Plesk adaylar soruldu (Terminal [Plesk'te yok], Nginx [IIS panelinde artık], Önbellek/Redis-Memcached
+- KALDIRMA: kullanıcıya non-Plesk adaylar soruldu (Terminal [DÜZELTME 06.09.2026: Plesk'te VAR — 18.0.37+ "SSH Terminal" eklentisi, yöneticiye root kabuğu; iddia yanlıştı], Nginx [IIS panelinde artık], Önbellek/Redis-Memcached
   [Plesk çekirdeğinde yok]) → kullanıcı "HİÇBİRİNİ KALDIRMA" seçti. Docker zaten Plesk'te eklenti olarak VAR → kaldırma adayı bile değil.
   SONUÇ: hiçbir özellik kaldırılmadı (silme geri-dönüşü zor olduğu için ÖNCE onay alındı = doğru karar).
 - DURUM: AdaPanel büyük Plesk özelliklerinde PARİTEDE. Yeni "ekle" turlarında ÖNCE var-mı diye kaynağı kontrol et (mail-auth gibi 3 kez
@@ -6635,3 +6635,60 @@ Duzeltme: `package-installer.ps1` modulu net48 hedefiyle derleyip publish klasor
 ve eksikse DURUYOR; `HtaccessModulePackagingTests` (4 test) bunu nobete bagliyor.
 Dogrulandi: modul pakette 177.152 bayt, paket 63 KB buyudu, basvurulari yalniz
 mscorlib/System/System.Core/System.Web (GAC on kosulu).
+
+---
+
+## 2026-09-06 — DOKTRIN DUZELTMESI: "panel yoneticisi = Windows yoneticisi" celiskisi
+
+**ONCE OKU. Bu bir kod notu degil, TEHDIT MODELI notudur.** Depoda su cumle bes ayri yerde
+korumalarin gerekcesi olarak yaziliydi:
+
+> "Panelin 'Administrator' rolu bir WINDOWS yoneticisi DEGILDIR (kabuk komutu uclari bilerek
+> LOCAL SERVICE olarak kosuyor)."
+
+**Cumlenin ikinci yarisi YANLISTI ve olculdu.** `scripts\install-service.ps1` servisi
+`New-Service` ile `-Credential` VERMEDEN kurar -> panel **LocalSystem**. `TerminalService`
+`powershell.exe`'yi dogrudan alt surec olarak baslatir; `LimitedIdentityRunner` yolundan GECMEZ.
+Yani `POST /api/v1/terminal/execute` bir **SYSTEM kabugudur** ve o gune kadar rolu Administrator
+olan HERKESE aciktir. Ustelik bir yonetici `UsersController` uzerinden ikinci bir yonetici
+yaratabiliyor -> "rol yukseltmesi = SYSTEM".
+
+**Secilen yol: (A) terminal kisitlandi, doktrin PRECISE hale getirildi.** Terminal KALDIRILMADI.
+
+### Yeni doktrin (tek kaynak: `AdaPanel.Core.Interfaces.IServerOwnerService`)
+
+> Panel yoneticisi bir Windows yoneticisi **degildir** — **TEK istisna sunucu SAHIBIDIR.**
+> Terminal ucu bilerek SYSTEM kabugu verir ama yalniz sunucu sahibine acilir; o kisi zaten
+> makinenin sahibidir. Panelden yaratilan EK yonetici hesaplari, bayiler ve musteriler icin
+> sinir aynen gecerlidir ve butun diger korumalarin gerekcesi odur.
+
+Olgun panellerin karari da budur: Plesk'te SSH Terminal yoneticiye `root` verir, ama EK yonetici
+hesaplari "Restricted Mode"dadir ve Plesk'in kendi belgesi yetki yukseltmesini onlemek icin
+"SSH Terminal" kutusunun bu hesaplarda **isaretlenmemesi** gerektigini yazar. cPanel'de WHM
+terminali root'undur; hesap terminali varsayilan KAPALIDIR ("disabled shell") ve acildiginda bile
+kullanicinin kendi kimligiyle kosar.
+
+### Kod tarafi
+
+- `IServerOwnerService` + `ServerOwnerRegistry` (saf karar) + `ServerOwnerService`.
+- Sahip kaydi: **`%ProgramData%\AdaPanel\config\server-owner.json`** — panelin HTTP yuzeyinden
+  YAZILAMAZ. Ayni kalip `AllowInternalOutboundTargets` / `AllowUnauthenticatedLocalSenders`
+  bayraklarinda zaten var: korumayi, korunan yuzeyin kendisinden kapatilabilir yapmak korumayi
+  kaldirmakla ayni kapiya cikar.
+- Kural: kayit YOKSA (hic yazilmamis/bozuk/okunamiyor) -> **en eski etkin yonetici** (kurulum
+  sihirbazinin yarattigi kisi) ve karar diske SABITLENIR. Kayit VARSA son soz onundur; gosterdigi
+  kisi artik etkin yonetici degilse sonuc "sahip YOK"tur, "siradaki" DEGIL.
+- `TerminalController`: rol denetimi durdu (ucuz eleme) + sahiplik denetimi eklendi; **taklit
+  edilen oturum** (impersonation) hedef sahip OLSA BILE giremez. Red de denetim kaydina dusuyor
+  (`terminal.command.denied`, denenen komutla birlikte).
+- `AuthController.ImpersonateAsync`: hedef **Administrator olamaz** (ozelligin adi zaten "log in
+  as customer"). Onceden rol denetimi HIC yoktu -> bir yonetici baska bir yoneticiyi taklit
+  edebiliyordu.
+- `UserManagementService`: sunucu sahibi hesabi **silinemez / pasife alinamaz / rolu
+  dusurulemez** (`users.server_owner_protected`). Devir yolu: sunucudaki dosya.
+
+### Gizlilik karari — komut metni neden kayda yaziliyor
+
+Uca yalniz sunucu sahibi girebiliyor; denetim kaydini okuyan uclar da yonetici uclari. Kaydedilen
+kisi ile kaydi okuyan kisi AYNI; korunacak ucuncu taraf mahremiyeti yok. Kayit olmadan sunucunun
+sahibi bile "makinemde ne calisti" sorusunu yanitlayamaz. Metin `SecretRedactor`'dan geciyor.

@@ -10,9 +10,9 @@ namespace AdaPanel.Infrastructure.Tests;
 /// <para>
 /// TEHDİT: indirilen exe <b>SYSTEM</b> olarak çalıştırılıyor (<c>WindowsUpdateInstallerLauncher</c>,
 /// zamanlanmış görev, <c>-UserId 'SYSTEM' -RunLevel Highest</c>). Panelin "Administrator" rolü bir
-/// Windows yöneticisi DEĞİLDİR — kabuk komutu uçları bilerek LOCAL SERVICE olarak koşuyor.
-/// Dolayısıyla güncelleme kaynağını serbest bırakmak, panel yöneticisini doğrudan SYSTEM'e
-/// yükseltmekti.
+/// Windows yöneticisi DEĞİLDİR — TEK istisna sunucu sahibidir (SYSTEM kabuğu veren terminal ucu
+/// yalnız ona açık; bkz. <c>IServerOwnerService</c>). Dolayısıyla güncelleme kaynağını serbest
+/// bırakmak, panelden yaratılan bir EK yönetici hesabını doğrudan SYSTEM'e yükseltmekti.
 /// </para>
 /// <para>
 /// Bu kararların hepsi SAF fonksiyonlarda toplandı, çünkü bulaşık bir paket bu makinede

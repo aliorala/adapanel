@@ -25,7 +25,17 @@
         <span>LG</span>
         <strong>{{ t("panel.logs.title") }}</strong>
       </button>
-      <button :class="{ active: activeTool === 'terminal' }" @click="activeTool = 'terminal'">
+      <!--
+        TERMİNAL = SYSTEM KABUĞU. Sekme yalnız SUNUCU SAHİBİNE gösterilir; panelden yaratılmış
+        ikinci bir yönetici hesabı bunu görmez. Bu yalnız GÖRÜNÜRLÜK kararıdır — uç zaten
+        reddediyor (terminal.owner_only). Gizlemenin sebebi güvenlik değil dürüstlük: her
+        tıklamada 403 veren bir sekme, kullanıcıya olmayan bir yetki vaat eder.
+      -->
+      <button
+        v-if="sunucuSahibi"
+        :class="{ active: activeTool === 'terminal' }"
+        @click="activeTool = 'terminal'"
+      >
         <span>TM</span>
         <strong>{{ t("panel.terminal.title") }}</strong>
       </button>
@@ -45,16 +55,17 @@
     <AutomationView v-else-if="activeTool === 'automation'" />
     <NginxView v-else-if="activeTool === 'nginx'" />
     <LogsView v-else-if="activeTool === 'logs'" />
-    <TerminalView v-else-if="activeTool === 'terminal'" />
+    <TerminalView v-else-if="activeTool === 'terminal' && sunucuSahibi" />
     <DnsTemplateView v-else-if="activeTool === 'dnstemplate'" />
     <DockerView v-else />
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { lazyView } from "../utils/lazyView";
+import { useAuthStore } from "../stores/auth";
 
 // Sekmeler talep üzerine iner (bkz. utils/lazyView.ts): dokuz aracın kodu, hiçbirine
 // tıklanmasa bile indiriliyordu.
@@ -69,6 +80,12 @@ const ServerHealthView = lazyView(() => import("./ServerHealthView.vue"));
 const DnsTemplateView = lazyView(() => import("./DnsTemplateView.vue"));
 
 const { t } = useI18n();
+
+// Sunucu sahibi bilgisi YALNIZ oturum ucundan gelir (rol değil ayrı bir nitelik). Bilinmiyorsa
+// false: sekmeyi göstermemek, olmayan bir yetkiyi vaat etmekten iyidir.
+const authStore = useAuthStore();
+const sunucuSahibi = computed(() => authStore.session?.isServerOwner === true);
+
 const activeTool = ref<"health" | "firewall" | "backup" | "automation" | "nginx" | "logs" | "terminal" | "docker" | "dnstemplate">("health");
 </script>
 

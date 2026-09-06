@@ -164,7 +164,8 @@ public sealed class ResellerSiteAssignmentTests
                 new KullanilmayanDbSahiplik(),
                 new KullanilmayanZamanlayici(),
                 new KullanilmayanCascade(),
-                new ThrowingApiTokenService());
+                new ThrowingApiTokenService(),
+                new SahipsizSunucuSahibiServisi());
 
             return new Duzenek(baglanti, dbContext, servis, kapsam, bayi.Id, yonetici.Id);
         }

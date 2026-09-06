@@ -236,6 +236,7 @@
   "update.install_schedule_failed": "Güncelleme kurulumu Windows görev zamanlayıcısına eklenemedi.",
   "update.install_scheduled": "Güncelleme kurulumu planlandı. Panel kısa süre kesilip otomatik yeniden başlatılacak.",
   "terminal.start_failed": "PowerShell süreci başlatılamadı.",
+  "terminal.owner_only": "Terminal yalnızca sunucu sahibine açıktır. Panel yöneticisi olmak sunucuda SYSTEM komutu çalıştırma yetkisi vermez.",
   "terminal.working_directory_denied": "Terminal çalışma dizini panel, uygulama veya IIS site kökleri içinde olmalı.",
   "terminal.working_directory_missing": "Terminal çalışma dizini bulunamadı.",
   "terminal.executed": "Terminal komutu tamamlandı.",

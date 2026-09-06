@@ -178,6 +178,7 @@ public sealed class LoginLockoutTests
                 new ThrowingApiTokenService(),
                 new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot })),
                 Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions { DataRoot = dataRoot, LoginLockoutMinutes = 15 }),
+                new SahipsizSunucuSahibiServisi(),
                 NullLogger<AuthService>.Instance);
 
             return new LoginHarness(connection, dbContext, service, audit, bruteForce, dataRoot);

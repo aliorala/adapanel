@@ -30,6 +30,7 @@ public sealed class AuthService(
     IApiTokenService apiTokenService,
     JsonFileStore fileStore,
     IOptions<PanelRuntimeOptions> runtimeOptions,
+    IServerOwnerService serverOwnerService,
     ILogger<AuthService> logger) : IAuthService
 {
     private readonly PanelRuntimeOptions runtimeOptions = runtimeOptions.Value;
@@ -310,7 +311,12 @@ public sealed class AuthService(
             IsImpersonating = !string.IsNullOrWhiteSpace(impersonatorName),
             ImpersonatorName = impersonatorName,
             IsSubUser = isSubUser,
-            AllowedSections = allowedSections
+            AllowedSections = allowedSections,
+            // SUNUCU SAHIBI — arayuz Terminal sekmesini buna gore gosterir. Bu YALNIZ UX icindir;
+            // asil dayatma TerminalController'dadir (isSubUser/allowedSections ile ayni kalip).
+            // Taklit oturumunda sahiplik GORUNMEZ: terminal zaten taklit oturumunu reddediyor.
+            IsServerOwner = string.IsNullOrWhiteSpace(impersonatorName)
+                && await serverOwnerService.IsServerOwnerAsync(user.Id, cancellationToken)
         };
     }
 

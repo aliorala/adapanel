@@ -242,6 +242,7 @@ public sealed class AuditCoverageTests
         ["SitesController.cs#\"sites.import.completed\"#\"sites\""] = "İçe aktarılan siteler tanım gereği HENÜZ hiçbir aboneliğe atanmamıştır; atama ayrı bir işlemdir.",
         ["SslController.cs#\"ssl.renew_all\"#\"ssl:*\""] = "Tek çağrıda sunucudaki HER sitenin sertifikası yenilenir; tek konusu yok.",
         ["SubscriptionsController.cs#\"subscription.enforced\"#\"subscriptions\""] = "Bütün abonelikleri gezen tur; tek tek değişiklikler SubscriptionEnforcementService'te kendi sahibine yazılır.",
+        ["TerminalController.cs#\"terminal.command.denied\"#\"terminal\""] = "Sunucu sahibi OLMAYAN bir yöneticinin SYSTEM kabuğu denemesi; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["TerminalController.cs#\"terminal.command.executed\"#\"terminal\""] = "Sunucuda SYSTEM yetkisiyle komut; panel/sunucu düzeyinde, aboneliğe ait değil.",
         ["UpdateController.cs#\"update.package.downloaded\"#\"panel\""] = "PANELİN KENDİ ikilisi; hiçbir aboneliğe ait değil.",
         ["UpdateController.cs#\"update.install.scheduled\"#\"panel\""] = "Panelin kendi kurulumu.",

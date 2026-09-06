@@ -238,6 +238,24 @@ internal sealed class ThrowingApiTokenService : IApiTokenService
     public Task<PanelApiToken?> ValidateAsync(string presentedToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 }
 
+/// <summary>
+/// Sunucu sahipligi sorulmadigi varsayilan testler icin: sorulursa "hayir" der.
+/// </summary>
+/// <remarks>
+/// FIRLATMIYOR cunku <c>UserManagementService</c> bu servisi YALNIZ yonetici silme/degistirme
+/// dallarinda soruyor; firlatan bir sahte, ilgisiz testleri sahiplik denetiminin varligina
+/// bagimli hale getirirdi. Sahiplik davranisi kendi testlerinde
+/// (<c>ServerOwnerTerminalTests</c>) GERCEK servisle olculuyor.
+/// </remarks>
+internal sealed class SahipsizSunucuSahibiServisi : IServerOwnerService
+{
+    public Task<Guid?> GetServerOwnerIdAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<Guid?>(null);
+
+    public Task<bool> IsServerOwnerAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+}
+
 internal sealed class ThrowingCustomerScopeService : ICustomerScopeService
 {
     public Task<IReadOnlyCollection<string>> GetAssignedSitesAsync(Guid userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

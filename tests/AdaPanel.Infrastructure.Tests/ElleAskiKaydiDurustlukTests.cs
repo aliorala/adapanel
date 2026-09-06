@@ -110,7 +110,8 @@ public sealed class ElleAskiKaydiDurustlukTests : IDisposable
             new ResellerSiteAssignmentTests.KullanilmayanDbSahiplik(),
             new ResellerSiteAssignmentTests.KullanilmayanZamanlayici(),
             new ResellerSiteAssignmentTests.KullanilmayanCascade(),
-            new ThrowingApiTokenService());
+            new ThrowingApiTokenService(),
+            new SahipsizSunucuSahibiServisi());
     }
 
     public void Dispose()

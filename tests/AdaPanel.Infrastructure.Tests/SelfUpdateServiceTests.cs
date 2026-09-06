@@ -536,7 +536,8 @@ public sealed class SelfUpdateServiceTests
     /// <summary>
     /// K12 — depo adresi KEYFİ olamaz. Bu uçtan geçen değer, panelin indirip SYSTEM olarak
     /// çalıştıracağı exe'nin kaynağıdır; denetimsiz bırakıldığında panel yöneticisini doğrudan
-    /// SYSTEM'e yükseltiyordu (panel yöneticisi bir Windows yöneticisi DEĞİLDİR).
+    /// SYSTEM'e yükseltiyordu (panel yöneticisi bir Windows yöneticisi DEĞİLDİR — sunucu sahibi
+    /// hariç; bkz. <c>IServerOwnerService</c>).
     /// </summary>
     [Fact]
     public async Task SetGithubRepoAsync_RejectsRepositoriesOutsideTheAllowList()

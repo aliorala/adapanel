@@ -534,8 +534,9 @@ public sealed class SelfUpdateService : ISelfUpdateService
         // KEYFI DEPO KABUL EDILMEZ. Buradan gecen deger, panelin bir sonraki adimda indirip
         // SYSTEM kimligiyle CALISTIRACAGI exe'nin kaynagidir; yani bu uc, dogrulanmadigi surece
         // "panel yoneticisi -> SYSTEM" yukselmesidir. Panel yoneticisi bir WINDOWS yoneticisi
-        // degildir (kabuk komutu uclari bilerek LOCAL SERVICE olarak kosuyor), dolayisiyla bu
-        // yukselme gercek bir sinir asimidir.
+        // degildir -- TEK istisna sunucu sahibidir (SYSTEM kabugu veren terminal ucu yalniz ona
+        // acik; gerekce UpdatePackageTrust ve IServerOwnerService uzerinde yazili). Panelden
+        // yaratilan bir EK yonetici hesabi icin bu yukselme gercek bir sinir asimidir.
         //
         // Not: bu ucu arayuz hic cagirmiyor (frontend'de setUpdateGithubRepo tanimli ama kullanan
         // ekran yok), yani daraltmanin kullaniciya gorunen bir maliyeti yok.

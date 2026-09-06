@@ -157,6 +157,7 @@ internal sealed class GirisDuzenegi : IAsyncDisposable
             anahtarServisi,
             dosyaDeposu,
             calismaSecenekleri,
+            new SahipsizSunucuSahibiServisi(),
             NullLogger<AuthService>.Instance);
 
         return new GirisDuzenegi(

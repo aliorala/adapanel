@@ -15,7 +15,10 @@ namespace AdaPanel.Infrastructure.Tests;
 
 /// <summary>
 /// ARGÜMAN / KOMUT ENJEKSİYONU DENETİMİ — panel LocalSystem olarak koşar, panel yöneticisi
-/// Windows yöneticisi DEĞİLDİR. Bu dosyadaki her testin arkasında ÖLÇÜLMÜŞ bir yol vardır.
+/// Windows yöneticisi DEĞİLDİR (sunucu sahibi hariç: SYSTEM kabuğu veren terminal ucu yalnız ona
+/// açık — bkz. <c>IServerOwnerService</c>). Buradaki yolların çoğu ayrıca Reseller/Customer
+/// rollerine de açıktır, yani koruma yalnız yöneticiye değil KİRACIYA karşı da duruyor.
+/// Bu dosyadaki her testin arkasında ÖLÇÜLMÜŞ bir yol vardır.
 /// <para>
 /// İki farklı sınıf karışmasın diye ayrımı burada bir kez yazıyorum:
 /// </para>

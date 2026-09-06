@@ -353,9 +353,11 @@ public readonly record struct OutboundInspection(IPAddress[] Addresses, string? 
 /// <c>Panel:AllowInternalOutboundTargets</c> (appsettings.json) ile açılır, VARSAYILAN KAPALI.
 /// <para>
 /// <b>Neden panel arayüzünde DEĞİL:</b> bu bayrak SSRF korumasını kapatır. Panelin "Administrator"
-/// rolü bir WINDOWS yöneticisi değildir (aynı gerekçe <c>UpdatePackageTrust</c>'ta da yazılı);
-/// bayrağı HTTP yüzeyine koymak, korunmaya çalışılan yüzeyin kendisinden korumayı kapatmaya izin
-/// vermek olurdu. Dosya sistemine erişim gerektirmesi, açık kapıyı sunucu işleticisinin BİLİNÇLİ
+/// rolü bir WINDOWS yöneticisi değildir — sunucu sahibi hariç (aynı gerekçe
+/// <c>UpdatePackageTrust</c>'ta da yazılı). Üstelik bu bayrağın koruduğu uçlar <c>Reseller</c> ve
+/// <c>Customer</c> rollerine de açıktır (yedek hedefi, cron adresi, git deposu), yani koruma
+/// yalnız yöneticiye değil KİRACIYA karşı da duruyor. Bayrağı HTTP yüzeyine koymak, korunmaya
+/// çalışılan yüzeyin kendisinden korumayı kapatmaya izin vermek olurdu. Dosya sistemine erişim gerektirmesi, açık kapıyı sunucu işleticisinin BİLİNÇLİ
 /// bir eylemi hâline getirir.
 /// </para>
 /// </param>

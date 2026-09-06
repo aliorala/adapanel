@@ -188,6 +188,7 @@ public sealed class ChangePasswordTests
                 tokens,
                 new JsonFileStore(runtimeOptions),
                 runtimeOptions,
+                new SahipsizSunucuSahibiServisi(),
                 NullLogger<AuthService>.Instance);
 
             return new Harness(connection, dbContext, service, user, tokens, dataRoot);

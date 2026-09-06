@@ -44,8 +44,10 @@ public sealed class UpdateController(
     /// <para>
     /// Neden: indirilen paket <b>SYSTEM</b> olarak çalıştırılıyor. Adresi ve özeti aynı isteğin
     /// göndermesi, özet doğrulamasını anlamsız kılıyordu — saldırgan ikisini de kendisi veriyor.
-    /// Panel yöneticisi bir Windows yöneticisi değildir (kabuk uçları bilerek LOCAL SERVICE olarak
-    /// koşuyor), dolayısıyla bu gerçek bir sınır aşımıydı.
+    /// Panel yöneticisi bir Windows yöneticisi değildir — TEK istisna sunucu sahibidir (SYSTEM
+    /// kabuğu veren terminal ucu yalnız ona açık; gerekçe <c>UpdatePackageTrust</c> ve
+    /// <c>IServerOwnerService</c> üzerinde yazılı). Panelden yaratılan bir EK yönetici hesabı için
+    /// bu gerçek bir sınır aşımıydı.
     /// </para>
     /// <para>
     /// Alanlar sözleşmede BIRAKILDI: arayüz zaten manifestten okuduğu iki değeri aynen geri

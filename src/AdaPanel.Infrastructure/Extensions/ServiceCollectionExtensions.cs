@@ -142,6 +142,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISelfUpdateService, SelfUpdate.SelfUpdateService>();
         services.AddSingleton<IUpdateInstallerLauncher, SelfUpdate.WindowsUpdateInstallerLauncher>();
         services.AddScoped<ITerminalService, Terminal.TerminalService>();
+        // SUNUCU SAHİBİ: terminal (SYSTEM kabuğu) yetkisi ROLE değil bu niteliğe bağlıdır.
+        // Gerekçe IServerOwnerService ve ServerOwnerRegistry üzerinde yazılı.
+        services.AddScoped<IServerOwnerService, Security.ServerOwnerService>();
         services.AddScoped<ISecretProtector, SecretProtector>();
 
         // LİSANS / AKTİVASYON.

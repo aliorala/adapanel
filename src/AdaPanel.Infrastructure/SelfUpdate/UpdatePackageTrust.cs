@@ -12,9 +12,19 @@ namespace AdaPanel.Infrastructure.SelfUpdate;
 /// </para>
 /// <para>
 /// TEHDIT: indirilen exe <c>WindowsUpdateInstallerLauncher</c> tarafindan SYSTEM kimligiyle
-/// calistirilir. Panelin "Administrator" rolu bir WINDOWS yoneticisi DEGILDIR (kabuk komutu uclari
-/// bilerek LOCAL SERVICE olarak kosuyor). Dolayisiyla "paneli yoneten kisi guncelleme kaynagini
-/// serbestce degistirebilsin" demek, panel yoneticisine dogrudan SYSTEM vermek demektir.
+/// calistirilir. Panelin "Administrator" rolu bir WINDOWS yoneticisi DEGILDIR -- <b>TEK istisna
+/// sunucu SAHIBIDIR</b> (bkz. <c>AdaPanel.Core.Interfaces.IServerOwnerService</c>): terminal ucu
+/// bilerek SYSTEM kabugu verir ama YALNIZ ona acilir, cunku o kisi zaten makinenin sahibidir.
+/// Panelden yaratilan EK yonetici hesaplari bu siniri asamaz. Dolayisiyla "paneli yoneten HERKES
+/// guncelleme kaynagini serbestce degistirebilsin" demek, bir ek yonetici hesabina dogrudan SYSTEM
+/// vermek demektir.
+/// </para>
+/// <para>
+/// DOKTRININ ESKI HALI YANLISTI, burada duzeltildi: "kabuk komutu uclari bilerek LOCAL SERVICE
+/// olarak kosuyor" yaziyordu. Bu, <c>LimitedIdentityRunner</c>'dan gecen uclar (composer/artisan/
+/// npm/wp-cli) ve sinirli kimlikli zamanlanmis gorevler icin dogru; <c>/api/v1/terminal</c> icin
+/// DEGIL -- orada <c>powershell.exe</c> panelin kendi LocalSystem jetonuyla kosar. Yanlis yazilmis
+/// bir doktrin, kendisine dayanan her korumanin gerekcesini curutur.
 /// </para>
 /// <para>
 /// AYRICA: bu depoda "gelistirme makinesinde aktif PE bulastiricisi" olayi yasandi. Bulastirici

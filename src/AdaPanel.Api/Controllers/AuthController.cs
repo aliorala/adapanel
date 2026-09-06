@@ -281,6 +281,19 @@ public sealed class AuthController(
     }
 
     /// <summary>panel "log in as customer": yönetici, hedef kullanıcı olarak oturum açar.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>HEDEF YÖNETİCİ OLAMAZ.</b> Uç, hedefin rolüne hiç bakmıyordu: bir yönetici BAŞKA bir
+    /// yönetici olarak oturum açabiliyordu. Bu, panelin yöneticiler arasına koyduğu her sınırı
+    /// anlamsız kılıyordu — en somut örneği terminal ucu: SYSTEM kabuğu sunucu SAHİBİNE ayrılmışken
+    /// ikinci bir yönetici sahibi taklit edip aynı kabuğu alabilirdi. Özelliğin adı zaten "log in as
+    /// customer"; kısıt onu daraltmıyor, adının söylediği şeye eşitliyor.
+    /// </para>
+    /// <para>
+    /// İkinci uç <c>TerminalController</c>'da: taklit edilen bir oturum, hedef sunucu sahibi OLSA
+    /// BİLE terminale giremez. İki koruma aynı deliğin iki ucudur; biri kalkarsa diğeri tutar.
+    /// </para>
+    /// </remarks>
     [Authorize(Roles = "Administrator")]
     [HttpPost("impersonate/{userId:guid}")]
     public async Task<ActionResult<ApiResponse<CurrentUserDto>>> ImpersonateAsync(Guid userId, CancellationToken cancellationToken)
@@ -293,6 +306,13 @@ public sealed class AuthController(
         }
 
         var target = await authService.GetUserByIdAsync(userId, cancellationToken);
+        if (string.Equals(target.Role, nameof(Core.Enums.UserRole.Administrator), StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(
+                StatusCodes.Status403Forbidden,
+                ApiResponse<object>.Fail("auth.cannot_impersonate_administrator", StatusCodes.Status403Forbidden));
+        }
+
         await SignInAsync(target, isPersistent: false, impersonatorId: adminId, impersonatorName: adminName);
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         await auditService.WriteAsync("auth.impersonate.started", "auth", $"'{adminName}' impersonating '{target.UserName}'.", adminId, ip, cancellationToken);

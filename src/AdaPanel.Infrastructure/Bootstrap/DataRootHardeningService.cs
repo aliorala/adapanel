@@ -57,8 +57,10 @@ public static class DataRootHardeningService
     /// </para>
     /// <para>
     /// Sonuç: barındırılan bir sitenin PHP'si ya da herhangi bir yerel hesap → SYSTEM. Bu tam olarak
-    /// <c>UpdatePackageTrust</c>'ın "panel yöneticisi bir Windows yöneticisi değildir" diyerek
-    /// kapattığı sınırın, çok daha ucuz bir yoldan aşılmasıydı.
+    /// <c>UpdatePackageTrust</c>'ın "panel yöneticisi (sunucu sahibi HARİÇ) bir Windows yöneticisi
+    /// değildir" diyerek kapattığı sınırın, çok daha ucuz bir yoldan aşılmasıydı. Burada sınırı aşan
+    /// KİRACIDIR: sunucu sahibinin terminale girebiliyor olması bu korumayı anlamsız KILMAZ, çünkü
+    /// bu klasörün ACL'i panel yöneticisine değil barındırılan siteye karşı duruyor.
     /// </para>
     /// <para>
     /// KAPATMAK GÜVENLİ: klasöre dokunan HER ŞEY zaten SYSTEM — panel servisi
