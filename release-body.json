@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.38",
-  "name": "0.8.38 — Terminal süre sınırı ve komut taslağı",
-  "body": "- Terminalin süre sınırı, alt süreçlerin açık tuttuğu çıktı bağlantılarını da kapsar. Süre dolduğunda alınabilen çıktı korunarak zaman aşımı bildirilir.\n- Çalışan komutun sonucu geldiğinde o sırada yazılmış yeni komut ve çalışma dizini korunur.\n- Komut hata çıktısı üretse de zaman aşımı bilgisi ayrıca gösterilir."
+  "tag_name": "0.8.39",
+  "name": "0.8.39 — FTP boş yedek klasörlerinin temizliği",
+  "body": "- Süresi dolan veya elle silinen FTP yedeklerinden sonra boş kalan kaynak, kategori ve gün klasörleri sırayla temizlenir.\n- İçinde başka dosya bulunan klasörler ve yedek hedefinin kök klasörü korunur.\n- Boş klasör listelemesinde 550 yanıtı veren FTP sunucularıyla uyumluluk iyileştirildi."
 }

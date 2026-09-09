@@ -51,6 +51,12 @@ if (AdaPanel.Api.Tray.TepsiUygulamasi.BuBizim(args))
 // UZAKTAN ERISILEBILIR DEGIL ve olmayacak: sunucuda oturum acmis olmayi sart kosar (yonetici
 // yetkisi ayrica denetlenir). Ag uzerinden cagrilabilen bir esdegeri, kimlik dogrulamayi tamamen
 // atlayan bir arka kapi olurdu.
+if (args.FirstOrDefault() == AdaPanel.Api.Recovery.FtpFolderCleanupCommand.Switch)
+{
+    Environment.Exit(await AdaPanel.Api.Recovery.FtpFolderCleanupCommand.RunAsync(args));
+    return;
+}
+
 if (AdaPanel.Api.Recovery.ParolaBelirlemeKomutu.BuBizim(args))
 {
     Environment.Exit(await AdaPanel.Api.Recovery.ParolaBelirlemeKomutu.CalistirAsync(args));

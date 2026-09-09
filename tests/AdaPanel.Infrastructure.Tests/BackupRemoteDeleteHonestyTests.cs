@@ -160,7 +160,7 @@ public sealed class BackupRemoteDeleteHonestyTests
     }
 
     [Fact]
-    public async Task Ftp_silme_GECERSE_hicbir_yoklama_yapilmaz()
+    public async Task Ftp_silme_GECERSE_yalniz_bos_klasor_temizligi_yapilir()
     {
         using var alan = new BulutAlani();
         var ftp = new SahteFtp();
@@ -170,7 +170,9 @@ public sealed class BackupRemoteDeleteHonestyTests
 
         await servis.DeleteBackupAsync(kayit.Id, alan.Iptal);
 
-        Assert.Single(ftp.Komutlar);
+        Assert.StartsWith("DELE ", ftp.Komutlar[0]);
+        Assert.Equal(3, ftp.Komutlar.Count(command => command.StartsWith("RMD ")));
+        Assert.Equal(3, ftp.Komutlar.Count(command => command.StartsWith("NLST ")));
         Assert.Empty(await servis.GetBackupsAsync(alan.Iptal));
     }
 

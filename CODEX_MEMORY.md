@@ -9,7 +9,15 @@ Ilk okunacak dosyalar:
 2. `CODEX_MEMORY.md`
 3. `docs/calisma-durumu.md`
 
-## 2026-09-10 — 0.8.38 canlı, terminal düzeltmeleri tamamlandı
+## 2026-09-10 — 0.8.39 FTP boş klasör düzeltmesi hazırlanıyor
+
+Kullanıcı, süresi dolan FTP yedeklerinin dosyaları silinirken boş klasörlerin kaldığını bildirdi. Önceki "doğrulanmış hata kalmadı" ifadesi bu yeni bulguyla güncellendi. Eski temizlik yalnız dosyanın doğrudan üstü tarih klasörü ise çalışıyordu; gün/kategori/kaynak düzenini atlıyordu. 8 regresyon düzeltmeden önce başarısız oldu (`ftp-folders-before-039.trx`).
+
+- Bilinen yedek düzenindeki klasörler alttan gün klasörüne kadar temizleniyor; dolu klasörde duruyor. NLST 550 yanıtı boş sayılmıyor, yalnız boş dizin kaldırabilen RMD sonucu belirleyici. Dosya silme hatalarının dürüst raporlanması korunuyor.
+- Eski boş klasörler için Windows yöneticisine özel yerel komut: `AdaPanel.Api.exe --cleanup-empty-ftp-backup-folders C:/ProgramData/AdaPanel`. Web sunucusunu açmadan, mevcut otomasyon hedefi/korunan kimlikleri ve pozitif saklama süresiyle çalışır. Yalnız eski tarih klasörleri ve bilinen alt düzen; dosya silen DELE yok. En fazla 2.000 dizin/5 dakika. Güncel günler, dolu dizinler, tanınmayan alt düzen ve hedef kökü korunur. Gizli bilgi çıktıya yazılmaz.
+- İlk son hedefli koşu 104/104; bakım senaryolarıyla 106/106. Gerçek TCP/FTP sunucusunda NLST/RMD, boş NLST 550, başka dosyanın korunması ve kök sınırı ölçüldü. Siteye ait veritabanının ara klasörü de son tam koşuya dahil edildi. Ön yüz yalnız sürüm için yeniden derlendi; işlev değişmedi.
+- Canlı saklama süresi 5 gün, hedef türü FTP. Tam koşu Infrastructure 5.284 + Core 2 = 5.286 başarılı (7 dakika 10 saniye, atlanan/başarısız yok). Sonrasında panel/mail/connection-test alt düzen sınırı daraltıldı ve korunan gerçek ayar parolasıyla bakım testi eklendi; son 107 ilgili test yeniden geçti. Paket/yayın ve geçmiş boş klasör temizliği henüz bekleniyor. Kanıtlar: `infrastructure-final-039.trx`, `core-039.trx`, `ftp-folders-release-039.trx`, `frontend-build-039.log`. Yedek modülü ve kapalı şifreleme tercihi korunuyor. Kaynak/history/tag public GitHub'a push edilmeyecek.
+## 2026-09-10 — Önceki sonuç: 0.8.38 canlı, terminal düzeltmeleri tamamlandı
 
 Kullanıcının yeni “devam et” isteği üzerine terminal akışı denetlendi. Kaynak commit'i **`90f6e1f`**; **0.8.38 yayınlandı ve canlıya kuruldu**. Panel mevcut/son sürümü 0.8.38 gösteriyor. Hizmet Running/Automatic; son kurulum succeeded, installerExitCode=0, isFinished=true, isFailed=false. Inno başarı 00:24:09.520, hizmet Restore 00:24:30.396, Log closed 00:24:30.412 (10.09.2026 sunucu yerel zamanı).
 

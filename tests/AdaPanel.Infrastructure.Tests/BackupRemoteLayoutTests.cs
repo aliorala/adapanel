@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.AspNetCore.DataProtection;
 using System.Net.Sockets;
 using System.Text;
 using AdaPanel.Core.Dtos.Backup;
@@ -607,6 +608,81 @@ public sealed class BackupRemoteLayoutTests
         Assert.Equal(new[] { duzYol }, sunucu.SilinenYollar);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Budama_gercek_FTP_komutlariyla_bos_alt_klasorleri_temizler(bool emptyListing550, bool keepOtherFile)
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.EmptyListing550 = emptyListing550;
+        const string path = "/yedekler/2026-08-01/sites/shop.example.com/eski.zip";
+        server.DosyaKoy(path);
+        if (keepOtherFile) server.DosyaKoy("/yedekler/2026-08-01/sites/other/keep.zip");
+        await alan.KayitlariYazAsync(EskiKayit(alan, "eski", server.TabanAdres(path.TrimStart('/')), 40), TazeKayit(alan, "taze"));
+
+        var result = await alan.ServisKur().PruneAsync(7,
+            new BackupPruneRemoteOptions { UserName = "u", Password = "p" }, alan.Iptal);
+
+        Assert.Equal(1, result.Removed);
+        Assert.False(server.HasDirectory("/yedekler/2026-08-01/sites/shop.example.com"));
+        Assert.True(server.HasDirectory("/yedekler"));
+        Assert.Equal(keepOtherFile, server.HasDirectory("/yedekler/2026-08-01"));
+        if (keepOtherFile) Assert.True(server.Dosyalar.ContainsKey("/yedekler/2026-08-01/sites/other/keep.zip"));
+    }
+
+    [Fact]
+    public async Task Bakim_kayitli_hedefi_ve_korunan_parolayi_kullanir()
+    {
+        using var area = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        var oldDay = DateTime.Today.AddDays(-10).ToString("yyyy-MM-dd");
+        var file = $"/yedekler/{oldDay}/sites/shop/old.zip";
+        server.DosyaKoy(file);
+        server.Dosyalar.Remove(file);
+        var provider = DataProtectionProvider.Create(new DirectoryInfo(Path.Combine(area.Kok, "keys")), builder => builder.SetApplicationName("AdaPanel"));
+        await area.DosyaDeposu.WriteAsync("config/automation.json", new
+        {
+            backupTargetType = "ftp", backupRemoteUrl = server.TabanAdres("yedekler"), backupRetentionDays = 5,
+            backupRemoteUserName = "maintenance-user",
+            backupRemotePasswordProtected = new AdaPanel.Infrastructure.Services.SecretProtector(provider).Protect("maintenance-secret")
+        }, area.Iptal);
+        var result = await BackupFtpFolderMaintenance.RunAsync(area.Kok, area.Iptal);
+        Assert.Equal(3, result.Removed);
+        Assert.Equal(0, result.Unavailable);
+        Assert.All(server.UserNames, user => Assert.Equal("maintenance-user", user));
+        Assert.NotEmpty(server.Passwords);
+        Assert.All(server.Passwords, password => Assert.Equal("maintenance-secret", password));
+        Assert.Empty(server.SilinenYollar);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Bakim_eski_bos_klasorleri_siler_dosyayi_yeni_gunu_ve_koku_korur(bool emptyListing550)
+    {
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.EmptyListing550 = emptyListing550;
+        string[] empty = ["/yedekler/2026-08-01/sites/shop/old.zip", "/yedekler/2026-08-02/sites/shop/databases/db/old.zip",
+            "/yedekler/2026-09-10/sites/fresh/new.zip", "/yedekler/2026-08-03/unknown/custom/old.zip"];
+        foreach (var path in empty) { server.DosyaKoy(path); server.Dosyalar.Remove(path); }
+        server.DosyaKoy("/yedekler/2026-08-04/sites/keep/keep.zip");
+        server.DosyaKoy("/yedekler/2026-08-04/panel/keep.zip");
+        var result = await BackupFtpFolderMaintenance.SweepAsync(new FtpWebRequestCommands(),
+            new Uri(server.TabanAdres("yedekler/")), new NetworkCredential("u", "p"), new DateTime(2026, 9, 5), CancellationToken.None);
+        Assert.Equal(8, result.Removed);
+        Assert.Equal(0, result.Unavailable);
+        Assert.Empty(server.SilinenYollar); // Maintenance never sends DELE.
+        Assert.True(server.HasDirectory("/yedekler"));
+        Assert.True(server.HasDirectory("/yedekler/2026-09-10/sites/fresh"));
+        Assert.True(server.HasDirectory("/yedekler/2026-08-03/unknown/custom"));
+        Assert.True(server.Dosyalar.ContainsKey("/yedekler/2026-08-04/sites/keep/keep.zip"));
+        Assert.True(server.Dosyalar.ContainsKey("/yedekler/2026-08-04/panel/keep.zip"));
+        Assert.False(server.HasDirectory("/yedekler/2026-08-01"));
+        Assert.False(server.HasDirectory("/yedekler/2026-08-02"));
+    }
+
     [Fact]
     public async Task Budama_WebDav_kopyasini_kayittaki_ADRESTEN_siler()
     {
@@ -1099,6 +1175,8 @@ public sealed class BackupRemoteLayoutTests
         public int FailStoresRemaining { get; set; }
         public int StoreFailureCode { get; set; } = 421;
         public int StoreAttempts { get; private set; }
+        public bool EmptyListing550 { get; set; }
+        public bool HasDirectory(string path) => Var(path);
         public List<string> UserNames { get; } = [];
         public List<string> Passwords { get; } = [];
         public bool HangMkd { get; set; }
@@ -1263,6 +1341,48 @@ public sealed class BackupRemoteLayoutTests
                         }
 
                         await yazici.WriteLineAsync(vardi ? "250 Silindi" : $"550 {hedef}: No such file");
+                        break;
+                    }
+                    case "RMD":
+                    {
+                        var target = Coz(calisma, arg).TrimEnd('/');
+                        bool removed;
+                        lock (_kilit)
+                        {
+                            removed = !Dosyalar.Keys.Any(path => path.StartsWith(target + "/", StringComparison.Ordinal))
+                                && !_dizinler.Any(path => path.StartsWith(target + "/", StringComparison.Ordinal))
+                                && _dizinler.Remove(target);
+                        }
+                        await yazici.WriteLineAsync(removed ? "250 Removed" : "550 Not empty or unavailable");
+                        break;
+                    }
+                    case "NLST":
+                    {
+                        var target = Coz(calisma, arg).TrimEnd('/');
+                        string[] entries;
+                        lock (_kilit)
+                        {
+                            entries = Dosyalar.Keys.Concat(_dizinler)
+                                .Where(path => path.StartsWith(target + "/", StringComparison.Ordinal))
+                                .Select(path => path[(target.Length + 1)..])
+                                .Where(path => path.Length > 0 && !path.Contains('/')).ToArray();
+                        }
+                        if (EmptyListing550 && entries.Length == 0)
+                        {
+                            await yazici.WriteLineAsync("550 No files found");
+                            veriDinleyici?.Stop();
+                            veriDinleyici = null;
+                            break;
+                        }
+                        await yazici.WriteLineAsync("150 Opening data connection");
+                        using (var data = await veriDinleyici!.AcceptTcpClientAsync(token))
+                        await using (var dataWriter = new StreamWriter(data.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" })
+                        {
+                            foreach (var entry in entries) await dataWriter.WriteLineAsync(entry);
+                        }
+                        veriDinleyici.Stop();
+                        veriDinleyici = null;
+                        await yazici.WriteLineAsync("226 Complete");
                         break;
                     }
                     case "PASV":

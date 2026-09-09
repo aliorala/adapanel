@@ -1,9 +1,17 @@
-# 0.8.31–0.8.38 — Kalan sorunların düzeltilmesi
+# 0.8.31–0.8.39 — Kalan sorunların düzeltilmesi
 
 Kullanıcının devir notlarında kalan sorunları da düzeltme isteği üzerine çalışıldı. Yedekleme modülü korunuyor; mevcut canlı yayın izni geçerli.
 
 **Son durum (10.09.2026): 0.8.38 yayınlandı, canlıya kuruldu ve doğrulandı.** Önceki canlı doğrulamadaki iki yeni iptvhub yedeği ve 62 kayıt hakkındaki sonuçlar aşağıda korunuyor; eksik 18 uzak kopya geri oluşturulmuş sayılmaz.
 
+## 2026-09-10 — 0.8.39 FTP boş klasör düzeltmesi hazırlanıyor
+
+Kullanıcı, süresi dolan FTP yedeklerinin dosyaları silinirken boş klasörlerin kaldığını bildirdi. Önceki "doğrulanmış hata kalmadı" ifadesi bu yeni bulguyla güncellendi. Eski temizlik yalnız dosyanın doğrudan üstü tarih klasörü ise çalışıyordu; gün/kategori/kaynak düzenini atlıyordu. 8 regresyon düzeltmeden önce başarısız oldu (`ftp-folders-before-039.trx`).
+
+- Bilinen yedek düzenindeki klasörler alttan gün klasörüne kadar temizleniyor; dolu klasörde duruyor. NLST 550 yanıtı boş sayılmıyor, yalnız boş dizin kaldırabilen RMD sonucu belirleyici. Dosya silme hatalarının dürüst raporlanması korunuyor.
+- Eski boş klasörler için Windows yöneticisine özel yerel komut: `AdaPanel.Api.exe --cleanup-empty-ftp-backup-folders C:/ProgramData/AdaPanel`. Web sunucusunu açmadan, mevcut otomasyon hedefi/korunan kimlikleri ve pozitif saklama süresiyle çalışır. Yalnız eski tarih klasörleri ve bilinen alt düzen; dosya silen DELE yok. En fazla 2.000 dizin/5 dakika. Güncel günler, dolu dizinler, tanınmayan alt düzen ve hedef kökü korunur. Gizli bilgi çıktıya yazılmaz.
+- İlk son hedefli koşu 104/104; bakım senaryolarıyla 106/106. Gerçek TCP/FTP sunucusunda NLST/RMD, boş NLST 550, başka dosyanın korunması ve kök sınırı ölçüldü. Siteye ait veritabanının ara klasörü de son tam koşuya dahil edildi. Ön yüz yalnız sürüm için yeniden derlendi; işlev değişmedi.
+- Canlı saklama süresi 5 gün, hedef türü FTP. Tam koşu Infrastructure 5.284 + Core 2 = 5.286 başarılı (7 dakika 10 saniye, atlanan/başarısız yok). Sonrasında panel/mail/connection-test alt düzen sınırı daraltıldı ve korunan gerçek ayar parolasıyla bakım testi eklendi; son 107 ilgili test yeniden geçti. Paket/yayın ve geçmiş boş klasör temizliği henüz bekleniyor. Kanıtlar: `infrastructure-final-039.trx`, `core-039.trx`, `ftp-folders-release-039.trx`, `frontend-build-039.log`. Yedek modülü ve kapalı şifreleme tercihi korunuyor. Kaynak/history/tag public GitHub'a push edilmeyecek.
 ## 0.8.38 — Terminalin gerçek süre sınırı ve taslak koruması
 
 `TerminalService` ana süreç çıkışını süreyle sınırlıyor fakat stdout/stderr okumalarını yalnız istek iptaline bağlıyordu. Alt sürecin boruları devraldığı gerçek Windows süreci testinde 2 saniyelik terminal sınırına rağmen 10 saniyede yanıt dönmedi (`terminal-before-038.trx`). Süre token'ı şimdi okuyuculara da bağlı; ana süreç ve iki çıktı birlikte gözleniyor. Terminalin seçtiği okuyucu kipi iptalden önce toplanmış çıktıyı koruyor. Diğer ProcessRunner çağrılarının varsayılan davranışı değişmedi. Süre dolunca çalışan ana süreç ağacına Kill gönderiliyor; sınırsız WaitForExit kaldırıldı. Ana süreç zaten çıkmışsa bağımsız arka plan işlerinin tamamlandığı/sonlandırıldığı varsayılmıyor.

@@ -4,6 +4,12 @@ Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel so
 
 Son güncelleme: **10.09.2026 — 0.8.38 canlı; terminal düzeltmeleri ve canlı doğrulama tamamlandı.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
 
+## 0.8.39 FTP boş klasör düzeltmesi — yayın hazırlanıyor
+
+- Kullanıcının yeni bildirimi doğrulandı: eski temizlik yalnız doğrudan tarih klasöründeki dosyaları kapsıyordu; gün/kategori/kaynak düzenindeki boş klasörler kalıyordu. Düzeltme alttan gün klasörüne kadar ilerliyor, dolu klasörde duruyor. Boş NLST 550 yanıtı yalnız RMD başarılı olursa temizlenmiş sayılıyor.
+- Önce 8 yeni regresyon başarısız oldu. Tam koşu **5.284 Infrastructure + 2 Core = 5.286 başarılı** (7 dakika 10 saniye). Ardından bakım alt düzeni daraltıldı ve gerçek korunan FTP ayarları testi eklendi; son **107/107 ilgili test** geçti. Ön yüz yalnız sürüm için derlendi.
+- Eski boş klasörleri dosya silmeden temizlemek için yerel Windows yöneticisi komutu eklendi: `AdaPanel.Api.exe --cleanup-empty-ftp-backup-folders C:/ProgramData/AdaPanel`. Mevcut FTP hedefi/kimlikleri ve saklama süresini okur; yalnız süresi geçmiş günlerdeki bilinen boş klasörlere RMD uygular. HTTP kapısı yok; en fazla 2.000 dizin/5 dakika. Canlıda saklama 5 gün.
+- Paket/yayın/canlı kurulum ve geçmiş boş klasör temizliği henüz tamamlanmadı. Yedekleme modülü ve kapalı şifreleme tercihi korunuyor.
 ## 0.8.38 terminal düzeltmeleri
 
 - Süre sınırı alt sürecin açık bıraktığı çıktı bağlantılarını da kapsıyor; alınabilen çıktı korunuyor. Temizlikte sınırsız süreç bekleme kaldırıldı. Ana süreci bitmiş bağımsız arka plan işlerinin durduğu varsayılmıyor.
