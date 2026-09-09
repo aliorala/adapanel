@@ -22,7 +22,14 @@ public sealed class SiteHostingSettingsService(
     ISchedulerService schedulerService,
     IOptions<PanelRuntimeOptions> runtimeOptions,
     IConcurrencyLock concurrencyLock,
-    JsonFileStore fileStore) : ISiteHostingSettingsService
+    JsonFileStore fileStore,
+    // İSTEĞE BAĞLI: DENETLENEN giden istemci. Arşiv indirmesi buradan geçer (bkz.
+    // ImportSiteArchiveAsync); verilmezse http/https indirme YAPILMAZ, sessizce eski
+    // denetimsiz yola düşmez.
+    IHttpClientFactory? httpClientFactory = null,
+    // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı
+    // (aynı kalıp GitDeploymentService ve SiteMigrationService'te de var).
+    Func<string, CancellationToken, Task<IPAddress[]>>? outboundResolver = null) : ISiteHostingSettingsService
 {
     private readonly string dataRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(runtimeOptions.Value.DataRoot));
     private const string StatePath = "config/site-hosting-settings.json";
@@ -721,12 +728,13 @@ public sealed class SiteHostingSettingsService(
     /// çözülüyorsa hangisine bağlanılacağı bize bağlı değildir.</item>
     /// </list>
     /// <para>
-    /// <b>DÜRÜST SINIR — bu kapı YÖNLENDİRMEYİ görmez.</b> İndirmeyi <c>Invoke-WebRequest</c>
-    /// yapar ve o, 3xx yanıtlarını kendi izler; dış bir adresin <c>Location: http://169.254.169.254/</c>
-    /// ile iç ağa atlaması bu denetimden SONRA gerçekleşir. Aynı şey DNS rebinding için de geçerli.
-    /// Bunları kapatmanın tek dürüst yolu indirmeyi .NET'e taşıyıp her bağlantıyı bağlanma anında
-    /// denetlemektir (kümede <c>ClusterHttpClientFactory.ConnectCallback</c> bunu yapar); o değişiklik
-    /// bu yolun ftp:// desteğini de etkilediği için ayrı bir iş olarak raporlandı.
+    /// <b>KAPSAM — bu kapı YÖNLENDİRMEYİ görmez, ama artık tek katman değil.</b> Burası yalnız
+    /// "istek atılmadan önce ad nereye çözülüyor" sorusunu ölçer ve kullanıcıya soket açılmadan,
+    /// anlaşılır bir hata verir. <c>http/https</c> indirmesi artık panelin DENETLENEN
+    /// <c>HttpClient</c>'ından geçiyor (<see cref="ImportSiteArchiveAsync"/>), yani yönlendirmenin
+    /// HER ADIMI ve DNS rebinding <see cref="OutboundConnectGuard"/> tarafından bağlanma anında
+    /// denetleniyor. <c>ftp://</c> hâlâ <c>Invoke-WebRequest</c> ile iner (gerekçe ve kalan sınır
+    /// <see cref="ImportSiteArchiveAsync"/>'te yazılı).
     /// </para>
     /// </remarks>
     internal static async Task<string?> FindBlockedImportTargetAsync(
@@ -767,6 +775,82 @@ public sealed class SiteHostingSettingsService(
     private static Task<IPAddress[]> ResolveHostAddressesAsync(string host, CancellationToken cancellationToken)
         => System.Net.Dns.GetHostAddressesAsync(host, cancellationToken);
 
+    /// <summary>
+    /// Arşivi panelin DENETLENEN <c>HttpClient</c>'ıyla indirir; yönlendirmenin her adımı bağlanma
+    /// anında denetlenir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden akışa (stream) yazılıyor:</b> arşivin boyutunu saldırgan belirler; yanıtı önce
+    /// belleğe almak (<c>ReadAsByteArrayAsync</c>) tek bir istekle süreci şişirirdi. Diskteki ağaç
+    /// için üst sınır zaten var (<see cref="IceAktarmaOgeButcesi"/>); burada eklenen şey belleğin
+    /// hiç devreye girmemesidir.
+    /// </para>
+    /// <para>
+    /// <b>İstemci fabrikası yoksa indirme YAPILMAZ.</b> Eski denetimsiz yola "geri düşmek" en
+    /// tehlikeli tasarım olurdu: koruma, bir bağımlılığın kaydedilmemiş olmasıyla sessizce
+    /// kalkardı. Üretimde fabrika her zaman kayıtlıdır (<c>AddHttpClient</c>).
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// İçe aktarmanın PowerShell adımını kurar: <c>ftp</c> için indirme + açma, <c>http/https</c>
+    /// için YALNIZ açma.
+    /// </summary>
+    /// <remarks>
+    /// <b>Neden ayrı ve internal:</b> "http/https artık PowerShell'den İNMİYOR" iddiası ancak
+    /// kurulan komut satırı okunarak ölçülebilir; kaynak taraması değil, üretimde çalıştırılan
+    /// dizenin ta kendisi sınanıyor. Bu ayrım kalkarsa (yani http yine <c>Invoke-WebRequest</c>'e
+    /// düşerse) yönlendirme denetimi de sessizce kalkmış olurdu.
+    /// </remarks>
+    internal static string BuildImportScript(bool ftp, string url, string archive, string extractDir)
+        => (ftp
+                ? "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
+                  $"Invoke-WebRequest -Uri '{url}' -OutFile '{archive.Replace("'", "''")}' -UseBasicParsing; "
+                : string.Empty) +
+           $"Expand-Archive -Path '{archive.Replace("'", "''")}' -DestinationPath '{extractDir.Replace("'", "''")}' -Force";
+
+    private async Task DenetlenenIndirmeAsync(string url, string hedefDosya, CancellationToken cancellationToken)
+    {
+        if (httpClientFactory is null)
+        {
+            throw new AppException("migration.download_failed", 502, 502, "guarded http client unavailable");
+        }
+
+        var istemci = httpClientFactory.CreateClient(OutboundConnectGuard.GuardedClientName);
+
+        // Büyük site arşivleri uzun sürer; HttpClient'ın 100 sn'lik varsayılanı meşru bir göçü
+        // yarıda keserdi. Üst sınır PowerShell yolundaki süreç tavanıyla (10 dk) aynı düzende.
+        istemci.Timeout = TimeSpan.FromMinutes(30);
+
+        try
+        {
+            using var yanit = await istemci.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (!yanit.IsSuccessStatusCode)
+            {
+                throw new AppException(
+                    "migration.download_failed",
+                    502,
+                    502,
+                    $"HTTP {(int)yanit.StatusCode} {yanit.ReasonPhrase}".Trim());
+            }
+
+            await using var dosya = new FileStream(hedefDosya, FileMode.Create, FileAccess.Write, FileShare.None);
+            await yanit.Content.CopyToAsync(dosya, cancellationToken);
+        }
+        catch (Exception exception) when (OutboundBlockedException.Cikar(exception) is { } engellenen)
+        {
+            // .NET, ConnectCallback'ten atılan istisnayı KENDİ HttpRequestException'ının içine
+            // sarar; zinciri taramadan yakalayan bir catch HİÇ tetiklenmez (gerekçe
+            // OutboundBlockedException.Cikar'da yazılı). Kullanıcı "ağ hatası" değil ADRES YASAĞI
+            // görür — ki bu yasağın tek görünür yüzü odur.
+            throw new AppException("migration.url_forbidden", 403, 403, engellenen.BlockedTarget);
+        }
+        catch (Exception exception) when (exception is not AppException && exception is not OperationCanceledException)
+        {
+            throw new AppException("migration.download_failed", 502, 502, TruncateMigrationError(exception.Message));
+        }
+    }
+
     public async Task<SiteImportResultDto> ImportSiteArchiveAsync(string siteName, string archiveUrl, bool cleanFirst, CancellationToken cancellationToken = default)
     {
         var url = (archiveUrl ?? string.Empty).Trim();
@@ -788,7 +872,10 @@ public sealed class SiteHostingSettingsService(
         // "arşiv adresi" alanına yazarak panelin ağ konumunu ödünç alıyordu —
         // `http://169.254.169.254/...` (bulut kimlik bilgileri), `http://127.0.0.1:<port>/`
         // (yalnız loopback'te dinleyen yönetim uçları), `http://10.0.0.5/` (iç ağ).
-        var engellenen = await FindBlockedImportTargetAsync(url, ResolveHostAddressesAsync, cancellationToken);
+        var engellenen = await FindBlockedImportTargetAsync(
+            url,
+            outboundResolver ?? ResolveHostAddressesAsync,
+            cancellationToken);
         if (engellenen is not null)
         {
             throw new AppException("migration.url_forbidden", 403, 403, engellenen);
@@ -805,10 +892,36 @@ public sealed class SiteHostingSettingsService(
 
         try
         {
-            var script =
-                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
-                $"Invoke-WebRequest -Uri '{url}' -OutFile '{archive.Replace("'", "''")}' -UseBasicParsing; " +
-                $"Expand-Archive -Path '{archive.Replace("'", "''")}' -DestinationPath '{extractDir.Replace("'", "''")}' -Force";
+            // İNDİRME ARTIK PANELİN DENETLENEN İSTEMCİSİNDEN GEÇİYOR (http/https).
+            //
+            // ESKİ HÂLİ ÖLÇÜLEBİLİR BİÇİMDE AÇIKTI: indirmeyi `Invoke-WebRequest` yapıyordu ve o,
+            // 3xx yanıtlarını KENDİ izler. Yukarıdaki kapı yalnız İLK adresi görüyordu; dış bir
+            // sunucunun `Location: http://169.254.169.254/` demesi denetimden SONRA gerçekleşiyordu.
+            // Aynı boşluk DNS rebinding'i de kapsıyordu (denetlenen ad ile bağlanılan adres iki ayrı
+            // çözümlemeydi). `OutboundConnectGuard.ConnectCallback` HER BAĞLANTIDA çalışır — yani her
+            // yönlendirme adımında — ve adı BİR KEZ çözüp soketi tam o adreslere açar. Kalıp
+            // efade94'te cron adresi için kurulan kalıbın aynısıdır; yeni bir kural YAZILMADI.
+            //
+            // YÖNLENDİRME KAPATILMADI: meşru arşiv indirmeleri (CDN, S3 bölge yönlendirmesi,
+            // http→https) zinciri sonuna kadar izler ve çalışmaya devam eder.
+            //
+            // `ftp://` HÂLÂ PowerShell ile iner ve bu BİLİNÇLİ. Ölçüldü: Windows PowerShell 5.1'de
+            // `Invoke-WebRequest ftp://…` gerçekten çalışır (`FtpWebRequest` üretir ve bağlanır —
+            // bu makinede 530 yanıtı alındı), yani ftp desteği `Invoke-WebRequest`'in yan etkisi
+            // değil; adres doğrulaması `ftp://` şemasını AÇIKÇA beyaz listeye alıyor ve arayüz onu
+            // kullanıcıya VAAT EDİYOR (`panel.migration.urlHint`: "http/https/ftp ile erişilebilen
+            // bir .zip"). İndirmeyi tümden `HttpClient`'a taşımak bu vaadi sessizce kırardı.
+            // KALAN SINIR AÇIKÇA YAZILIYOR: ftp yolunda yalnız ön kapı (yukarıdaki çözümleme +
+            // kullanıcı bilgisi reddi) vardır. FTP'de yönlendirme diye bir mekanizma YOKTUR, yani
+            // asıl kapatılan açık orada zaten yoktur; kalan artık risk DNS rebinding ve kötü bir
+            // FTP sunucusunun PASV yanıtıyla veri kanalını başka bir adrese göstermesidir.
+            var ftp = url.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase);
+            if (!ftp)
+            {
+                await DenetlenenIndirmeAsync(url, archive, cancellationToken);
+            }
+
+            var script = BuildImportScript(ftp, url, archive, extractDir);
 
             // KATI çalıştırma: bu script ÇOK İFADELİDİR ve normal PowerShell çıkış kodu yalnızca SON
             // ifadeyi yansıtır. Bozuk zip üzerinde Expand-Archive sonlandırıcı OLMAYAN hata verir →

@@ -4,8 +4,102 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **07.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5178 yeşil** (Core 2 + Infra 5176) · typecheck + build + npm test temiz
+Son güncelleme: **09.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
+Testler: **5205 yeşil** (Core 2 + Infra 5203) · 0 kırmızı
+
+---
+
+## SON İŞ — AYNI SINIFTAKİ SON İKİ NOKTA KAPANDI: GİT DAĞITIMI + ARŞİV İÇE AKTARMA (commit ATILMADI)
+
+efade94 cron `url` görevindeki yönlendirme SSRF'ini kapatmış, aynı sınıftan **iki noktayı ölçüp
+açık bırakmıştı**. Bu tur ikisini de kapattı. Kalıp aynıydı: *adres kapıdan geçiyor ama isteği DIŞ
+BİR ARAÇ atıyor ve yönlendirmeyi kendi izliyor.*
+
+### İKİ İDDİA DA ÖLÇÜLDÜ — biri doğrulandı, biri ÇÖKTÜ
+
+| Önceki oturumun iddiası | Ölçüm | Sonuç |
+|---|---|---|
+| "scp kalıbı `Uri` ile ayrıştırılamadığı için HİÇ denetlenmiyor" | .NET 8: `Uri.TryCreate("git@169.254.169.254:latest/meta-data", Absolute)` = **false**; kod o dalda `return` ediyordu | **DOĞRU** — koruma zayıf değil **SIFIR**dı |
+| "`git.exe` yönlendirmeyi kendi izler" | git 2.54.0.windows.1 + gerçek loopback: `clone` → dış sunucu `302` → **iç sunucuya GERÇEK keşif isteği ULAŞTI** (`GET /ic.git/info/refs?service=git-upload-pack`) | **DOĞRU** |
+| "`Invoke-WebRequest`'ten vazgeçmek `ftp://` desteğini düşürür" | PowerShell **5.1**'de `Invoke-WebRequest ftp://…` GERÇEKTEN çalışıyor (`FtpWebRequest` üretip bağlanıyor; bu makinede `530` yanıtı alındı). Ayrıca `ftp://` **kodda açıkça beyaz listede** ve arayüz onu VAAT EDİYOR (`panel.migration.urlHint`: "http/https/ftp ile erişilebilen bir .zip") | **AYAKTA** — ama gerekçe indirmenin TAMAMINI değil yalnız `ftp` dalını tutuyor |
+| "`-MaximumRedirection 0` GitHub indirmelerini kırar" | Doğru ama KONU DIŞI: yönlendirmeyi kapatmak gerekmiyor, **denetlemek** gerekiyor | Çare bu değildi |
+
+`git.exe`'nin `http.followRedirects` varsayılanı yapılandırılmamış (git'in gömülü varsayılanı
+`initial`) — yani ilk keşif isteği yönlendirmeyi İZLİYOR. `-c http.followRedirects=false` ile aynı
+düzenekte iç sunucunun istek sayısı **0** oldu.
+
+**İkinci katman ÇALIŞIYOR (davranışla ölçüldü, artık kaynak taramasıyla değil):**
+`GIT_ALLOW_PROTOCOL=http:https:ssh` sayesinde `ext::cmd /c …` → `fatal: transport 'ext' not allowed`
+(işaret dosyası OLUŞMADI), `file://…` ve şemasız `C:\…` yolu → `fatal: transport 'file' not allowed`.
+
+### NOKTA 2 — `GitDeploymentService` (öncelik: koruma sıfırdı)
+
+* Yeni `src/AdaPanel.Infrastructure/Git/GitRepositoryAddress.cs`: **TEK** ayrıştırıcı. scp deseni
+  `ValidateRepositoryUrl`'den buraya TAŞINDI (kopyalanmadı) — "kabul edilen biçim" ile "denetlenen
+  konak" artık tanım gereği aynı eşleşmeden geliyor.
+* Ayrıştırılamayan adres artık **"temiz" değil REDDEDİLİYOR** (`unparsable_host`). Açık kapı
+  açıkken bu red uygulanmaz (meşru iç kurulumu kırmamak için).
+* Kapı artık **dağıtım anında da** çalışıyor, yalnız kaydetmede değil: diskteki eski/bozuk
+  yapılandırma ve DNS rebinding penceresi kapandı. Webhook ucu ANONİM olduğundan tetikleme zaten
+  saldırganın elindeydi.
+* Yönlendirme: `git`'e **`-c http.followRedirects=false`** veriliyor (komut satırı en yüksek
+  öncelik; kiracının düzenleyebildiği bir dosya bunu YENEMEZ). **Meşru yönlendirme KIRILMADI**,
+  çünkü zinciri artık PANEL çözüyor — `ResolveHttpRepositoryUrlAsync` keşif adresini
+  `OutboundConnectGuard.GuardedClientName` istemcisiyle çeker, **her adım** `ConnectCallback`'ten
+  geçer, git'e zaten çözülmüş NİHAİ adres verilir. Ağ arızasında adres DEĞİŞTİRİLMEZ (özgün adres
+  kullanılır); ön çözümleme bir kolaylıktır, koruma değil.
+
+### NOKTA 1 — `SiteHostingSettingsService.ImportSiteArchiveAsync` (uç **Bayi**'ye açık)
+
+* `http/https` indirmesi PowerShell'den ALINDI → `OutboundConnectGuard.GuardedClientName`
+  istemcisiyle akışa (stream) iniyor. Yönlendirme KAPATILMADI, **her adımı denetleniyor**; DNS
+  rebinding de kapandı (denetlenen adres = bağlanılan adres).
+* `ftp://` **bilinçli olarak** PowerShell'de kaldı: ölçüm gerekçeyi ayakta tuttu ve arayüz bu
+  desteği kullanıcıya vaat ediyor. **KALAN SINIR AÇIKÇA YAZILI:** ftp yolunda yalnız ön kapı var.
+  FTP'de yönlendirme mekanizması YOKTUR (yani kapatılan açık orada zaten yok); kalan artık risk
+  DNS rebinding ve kötü bir FTP sunucusunun PASV yanıtıyla veri kanalını başka adrese göstermesidir.
+* PowerShell script'i artık `BuildImportScript(ftp, …)` ile kuruluyor — "http artık PowerShell'den
+  inmiyor" iddiası **kurulan komut satırından** ölçülebiliyor.
+
+### Mutasyon (her koruma için: kaldır → KIRMIZI → geri koy; hepsi geri alındı, `diff` ile doğrulandı)
+
+| Kaldırılan koruma | Kırmızı test |
+|---|---|
+| scp konak çıkarımı → eski `Uri`-only gövde | **10** |
+| `RunDeployAsync` başındaki dağıtım-anı kapısı | **1** (`Dagitim_ANINDA_ic_adrese_cozulen_depo_REDDEDILIR`) |
+| `BuildGitArguments` → `http.followRedirects=false` atıldı | **1** (`Git_yonlendirmeyle_ic_aga_SAPAMAZ`) |
+| `ResolveHttpRepositoryUrlAsync` → özgün adresi dönüyor | **2** |
+| Arşiv indirmesi yeniden `Invoke-WebRequest`'e alındı | **3** |
+
+**Fazla-kapatma nöbetçileri mutasyon altında YEŞİL kaldı** — yani korumanın kopyası değiller:
+`Mesru_depo_adresleri_KAPIDAN_GECER` (GitHub/GitLab, scp dâhil 6 biçim),
+`Yonlendirmesiz_mesru_depo_git_ile_OKUNABILIYOR` (gerçek `git ls-remote`, çıkış 0),
+`Mesru_yonlendirmeyi_PANEL_cozer_ve_nihai_adresi_git_e_verir`,
+`Mesru_arsiv_indirmesi_yonlendirmeyi_IZLER_ve_dosyalar_KOPYALANIR` (302 → gerçek zip → siteye
+kopyalandı), `Arsiv_scripti_http_icin_indirme_ADIMI_ICERMEZ_ftp_icin_ICERIR`.
+
+### Dokunulan dosyalar
+
+* `src/AdaPanel.Infrastructure/Git/GitRepositoryAddress.cs` (yeni)
+* `src/AdaPanel.Infrastructure/Git/GitDeploymentService.cs`
+* `src/AdaPanel.Infrastructure/Iis/SiteHostingSettingsService.cs`
+* `tests/AdaPanel.Infrastructure.Tests/GitVeArsivYonlendirmeTests.cs` (yeni, 27 test)
+* `tests/AdaPanel.Infrastructure.Tests/SahteHttpSunucu.cs` (yeni — loopback sunucusu
+  `OutboundRedirectGuardTests`'ten TEK KAYNAĞA çıkarıldı, ikinci nüsha üretilmedi)
+
+### KAPATILMAYANLAR (dürüstçe)
+
+* **`GitController` sahip denetimi yapmıyor.** `[Authorize(Roles = "Administrator")]` — yani Bayi'ye
+  KAPALI (önceki oturumun "Bayi'ye açık" notu bu uç için YANLIŞ; ölçüldü). Ama diğer site uçlarının
+  aksine `CustomerAccess.EnsureSiteAsync` çağrılmıyor: sahip olmayan bir yönetici BAŞKASININ
+  sitesine dağıtım yapılandırabilir. Bu turun konusu değildi, ayrı iş.
+* **Arşiv `ftp://` yolunda DNS rebinding + PASV veri kanalı** açık (yukarıda gerekçesiyle yazılı).
+* **`ImportSiteArchiveAsync` ön kapısı `Panel:AllowInternalOutboundTargets` açık kapısını
+  YOKSAYIYOR** (`OutboundTargetPolicy.Strict` sabit). Bu daha SIKI bir davranış, güvenlik açığı
+  değil — ama panelin geri kalanıyla tutarsız: iç ağdaki bir NAS'tan arşiv indirmek, işletici kapıyı
+  açsa bile mümkün değil. Bilerek dokunulmadı.
+* Ölçüm için kullanılan tek kullanımlık .NET projesi scratchpad'de duruyor
+  (`…/scratchpad/gitolcum/`). Silinmedi; temizlenmesi gerekiyorsa elle yapılmalı.
 
 ---
 
@@ -69,19 +163,17 @@ görüyordu; yönlendirme arkasından geçiyordu. Görev SYSTEM olarak koşuyor.
 | `ResolveAction` url dalı curl'e geri alındı | **2 test** |
 | `IsUrlAction` içindeki curl tanıma (geriye uyumluluk) | **2 test** |
 
-### AYNI SINIF — HÂLÂ AÇIK OLANLAR (bu turda KAPATILMADI, dürüstçe)
+### AYNI SINIF — İKİSİ DE ARTIK KAPANDI (09.09.2026; ayrıntı en üstteki bölümde)
 
 Kalıp: *adres kurulurken `OutboundAddressGuard`'dan geçiyor ama isteği DIŞ BİR ARAÇ atıyor ve o araç
 yönlendirmeyi kendi izliyor.*
 
-1. **`SiteHostingSettingsService.ImportSiteArchiveAsync`** (`migration.url_forbidden` kapısı var) —
-   indirmeyi PowerShell `Invoke-WebRequest` yapıyor, o da 3xx'i kendi izler. Uç **Bayi (Reseller)**
-   rolüne açık. Kaynakta zaten "DÜRÜST SINIR" olarak yazılı. Ucuz çare YOK: `-MaximumRedirection 0`
-   meşru indirmeleri (GitHub sürüm adresleri yönlendirir) kırar; denetlenen HttpClient'a taşımak bu
-   yolun `ftp://` desteğini düşürür.
-2. **`GitDeploymentService`** (`git.repository_forbidden` kapısı var) — klonu `git.exe` yapıyor ve
-   HTTP yönlendirmesini kendi izler. Ayrıca kaynakta yazılı ikinci bir kapsam boşluğu: scp kalıbı
-   (`git@host:owner/repo.git`) `Uri` ile ayrıştırılamadığı için HİÇ denetlenmiyor.
+1. ~~**`SiteHostingSettingsService.ImportSiteArchiveAsync`**~~ → **KAPANDI.** `http/https` indirmesi
+   denetlenen `HttpClient`'a taşındı. Aşağıdaki "`ftp://` desteğini düşürür" gerekçesi ÖLÇÜLDÜ ve
+   yalnız `ftp` dalı için ayakta kaldı; o dal bilerek PowerShell'de bırakıldı, kalan sınır yazıldı.
+2. ~~**`GitDeploymentService`**~~ → **KAPANDI.** scp kalıbı artık kapıdan geçiyor (`Uri` ile
+   ayrıştırılamadığı ÖLÇÜLDÜ, iddia doğruydu), kapı dağıtım anında da çalışıyor ve yönlendirmeyi
+   git değil PANEL çözüyor.
 
 Guard'ın çağrıldığı ve isteği de PANELİN attığı (yani sağlam) yollar: webhook + SMTP
 (`NotificationService`), yedek hedefi (`BackupService`), göç (`SiteMigrationService`,

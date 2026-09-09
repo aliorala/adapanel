@@ -21,7 +21,10 @@ public sealed class GitDeploymentService(
     // İSTEĞE BAĞLI: "iç ağ hedeflerine izin ver" açık kapısı. Verilmemişse KAPALI sayılır.
     Microsoft.Extensions.Options.IOptions<Options.PanelRuntimeOptions>? runtimeOptions = null,
     // İSTEĞE BAĞLI: adres çözümleyici. Testte sahte — birim testi gerçek DNS'e çıkmamalı.
-    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null) : IGitDeploymentService
+    OutboundAddressGuard.OutboundHostResolver? outboundResolver = null,
+    // İSTEĞE BAĞLI: DENETLENEN giden istemci (yönlendirme zincirini panel çözsün diye). Verilmezse
+    // ön çözümleme yapılmaz; git yine yönlendirmesiz koşar (bkz. RunGitAsync).
+    IHttpClientFactory? httpClientFactory = null) : IGitDeploymentService
 {
     /// <summary>
     /// Depo adresinin KONAĞI panelin ulaşmaması gereken bir yere mi çözülüyor.
@@ -39,22 +42,19 @@ public sealed class GitDeploymentService(
     /// <c>http://169.254.169.254/x.git</c> onun için kusursuz bir adrestir.
     /// </para>
     /// <para>
-    /// <b>KAPSAM DÜRÜSTLÜĞÜ:</b> yalnız mutlak <c>http/https/ssh</c> adreslerinin konağı ölçülür.
-    /// scp kalıbı (<c>git@host:owner/repo.git</c>) <c>Uri</c> ile ayrıştırılamaz; kendi elimizle
-    /// konak çıkarmak, bu dosyanın zaten uyardığı "İKİNCİ ayrıştırıcı" hatasını doğururdu. O yol
-    /// bugün denetimsiz kalıyor ve raporlandı.
+    /// <b>KAPATILAN AÇIK — scp kalıbı KAPIYA HİÇ UĞRAMIYORDU.</b> Burada eskiden doğrudan
+    /// <c>Uri.TryCreate</c> vardı ve ayrıştıramadığı adreste <c>return</c> ediyordu. Ölçüldü:
+    /// <c>git@169.254.169.254:latest/meta-data</c> <c>Uri</c> ile ayrıştırılamaz, yani kapı o
+    /// adresi HİÇ GÖRMÜYORDU — koruma zayıf değil SIFIRDI. Konak çıkarımı artık
+    /// <see cref="GitRepositoryAddress.TryGetHost"/>'ta ve o, biçim beyaz listesiyle AYNI deseni
+    /// kullanıyor. Ayrıştırılamayan adres artık "temiz" değil <b>REDDEDİLİR</b>: "anlamadım"
+    /// bir izin gerekçesi değildir.
     /// </para>
     /// </remarks>
     private async Task EnsureRepositoryHostAllowedAsync(string url, CancellationToken cancellationToken)
     {
-        if (!Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out var adres) ||
-            adres.Scheme is not ("http" or "https" or "ssh"))
-        {
-            return;
-        }
-
-        var engellenen = await OutboundAddressGuard.FindBlockedHostAsync(
-            adres.DnsSafeHost,
+        var engellenen = await FindBlockedRepositoryHostAsync(
+            url,
             outboundResolver ?? OutboundAddressGuard.SystemResolver,
             OutboundTargetPolicy.Connecting(runtimeOptions?.Value.AllowInternalOutboundTargets ?? false),
             cancellationToken);
@@ -63,6 +63,31 @@ public sealed class GitDeploymentService(
         {
             throw new AppException("git.repository_forbidden", 403, 403, engellenen);
         }
+    }
+
+    /// <summary>
+    /// Kapı gövdesi; engelli hedefi (ya da <c>unparsable_host</c>) döner, temizse <c>null</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>internal ve static:</b> gövde böylece sahte bir çözümleyiciyle, IIS'e/diske hiç
+    /// dokunmadan ölçülebiliyor. Ölçülen şey üretimdeki gövdenin ta kendisidir — çağrı yerleri
+    /// (kaydetme VE dağıtım) bunu çağırır.
+    /// </remarks>
+    internal static async Task<string?> FindBlockedRepositoryHostAsync(
+        string url,
+        OutboundAddressGuard.OutboundHostResolver resolver,
+        OutboundTargetPolicy policy,
+        CancellationToken cancellationToken)
+    {
+        if (!GitRepositoryAddress.TryGetHost(url, out var konak))
+        {
+            // AÇIK KAPI BURADA DA GEÇERLİ: işletici iç ağ hedeflerine bilerek izin verdiyse,
+            // ayrıştıramadığımız bir adres yüzünden meşru bir kurulumu kırmayız — ama kapı
+            // kapalıyken "anlamadım" mutlaka REDDETTİR (eski kod burada GEÇİYORDU).
+            return policy.AllowInternalTargets ? null : "unparsable_host";
+        }
+
+        return await OutboundAddressGuard.FindBlockedHostAsync(konak, resolver, policy, cancellationToken);
     }
 
     public async Task<GitDeploymentDto> GetAsync(string siteName, CancellationToken cancellationToken = default)
@@ -124,6 +149,19 @@ public sealed class GitDeploymentService(
 
     private async Task<GitDeployResultDto> RunDeployAsync(string siteName, string path, GitDeploymentRecord record, CancellationToken cancellationToken)
     {
+        // DENETİM ARTIK DAĞITIM ANINDA DA YAPILIYOR.
+        //
+        // Eskiden kapı YALNIZ ConfigureAsync'te çalışıyordu. İki sonucu ölçülebilir biçimde
+        // yanlıştı: (1) diskteki config/git/<site>.json bir kez kötü bir değerle yazıldıysa
+        // (eski sürüm, elle düzenleme, yedekten geri dönüş) dağıtım onu bir daha ölçmüyordu;
+        // (2) kaydetme ile dağıtım arasında A kaydı değişebilir — saldırgan depoyu meşru bir
+        // adresle kurup kaydı sonradan 169.254.169.254'e çevirebilirdi (DNS rebinding). Webhook
+        // ucu ANONİM olduğu için ikinci senaryonun tetiklenmesi de saldırganın elindedir.
+        await EnsureRepositoryHostAllowedAsync(record.RepositoryUrl, cancellationToken);
+
+        // YÖNLENDİRME ZİNCİRİNİ PANEL ÇÖZER, git değil (gerekçe: ResolveHttpRepositoryUrlAsync).
+        var adres = await ResolveHttpRepositoryUrlAsync(record.RepositoryUrl, cancellationToken);
+
         await EnsureGitAvailableAsync(cancellationToken);
         Directory.CreateDirectory(path);
 
@@ -135,12 +173,12 @@ public sealed class GitDeploymentService(
             if (Directory.EnumerateFileSystemEntries(path).Any())
             {
                 // Boş olmayan dizine clone başarısız olur; mevcut içeriği koruyup init+fetch yap.
-                result = await InitAndFetchAsync(path, record, cancellationToken);
+                result = await InitAndFetchAsync(path, adres, record.Branch, cancellationToken);
             }
             else
             {
                 result = await RunGitAsync(
-                    $"clone --branch {QuoteArg(record.Branch)} --single-branch {QuoteArg(record.RepositoryUrl)} .",
+                    $"clone --branch {QuoteArg(record.Branch)} --single-branch {QuoteArg(adres)} .",
                     path,
                     cancellationToken);
             }
@@ -152,7 +190,7 @@ public sealed class GitDeploymentService(
             // `origin/<dal>` varsa fetch TAMAMEN başarısız olsa bile reset 0 ile çıkar. Yalnızca
             // reset'e bakmak, süresi dolmuş bir deploy token'ında her dağıtımın "başarılı" görünmesine
             // ve sitenin günlerce eski kodda kalmasına yol açıyordu.
-            var setUrl = await RunGitAsync($"remote set-url origin {QuoteArg(record.RepositoryUrl)}", path, cancellationToken);
+            var setUrl = await RunGitAsync($"remote set-url origin {QuoteArg(adres)}", path, cancellationToken);
             if (!setUrl.Success)
             {
                 // Depo adresi güncellenemediyse sonraki adımlar ESKİ depodan çeker; "dağıtıldı" demek yanıltıcı olur.
@@ -190,13 +228,13 @@ public sealed class GitDeploymentService(
         };
     }
 
-    private static async Task<CommandResult> InitAndFetchAsync(string path, GitDeploymentRecord record, CancellationToken cancellationToken)
+    private static async Task<CommandResult> InitAndFetchAsync(string path, string adres, string branch, CancellationToken cancellationToken)
     {
         await RunGitAsync("init", path, cancellationToken);
-        await RunGitAsync($"remote add origin {QuoteArg(record.RepositoryUrl)}", path, cancellationToken);
-        await RunGitAsync($"fetch origin {QuoteArg(record.Branch)} --prune", path, cancellationToken);
-        await RunGitAsync($"checkout -f -B {QuoteArg(record.Branch)} {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
-        return await RunGitAsync($"reset --hard {QuoteArg($"origin/{record.Branch}")}", path, cancellationToken);
+        await RunGitAsync($"remote add origin {QuoteArg(adres)}", path, cancellationToken);
+        await RunGitAsync($"fetch origin {QuoteArg(branch)} --prune", path, cancellationToken);
+        await RunGitAsync($"checkout -f -B {QuoteArg(branch)} {QuoteArg($"origin/{branch}")}", path, cancellationToken);
+        return await RunGitAsync($"reset --hard {QuoteArg($"origin/{branch}")}", path, cancellationToken);
     }
 
     private static async Task<string> GetCurrentCommitAsync(string path, CancellationToken cancellationToken)
@@ -331,7 +369,11 @@ public sealed class GitDeploymentService(
 
         // scp benzeri: git@host:owner/repo.git. Eski "içinde @ ve : var" kontrolünün aksine
         // gerçekten BİÇİM ölçülüyor.
-        var isScpLike = Regex.IsMatch(trimmed, @"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?::[0-9]+)?:[A-Za-z0-9._/~-]+$");
+        //
+        // DESEN ARTIK BURADA DEĞİL (GitRepositoryAddress.ScpLikePattern): adres kapısı da konağı
+        // AYNI eşleşmeden çıkarıyor. İki nüsha olsaydı "kabul edilen biçim" ile "denetlenen konak"
+        // ayrışabilirdi — kapatılan açık tam olarak o ayrışmanın sonucuydu.
+        var isScpLike = GitRepositoryAddress.IsScpLike(trimmed);
 
         if (!isHttp && !isSsh && !isScpLike)
         {
@@ -381,7 +423,7 @@ public sealed class GitDeploymentService(
     private static Task<CommandResult> RunGitAsync(string arguments, string? workingDirectory, CancellationToken cancellationToken)
         => ProcessRunner.RunAsync(
             "git",
-            arguments,
+            BuildGitArguments(arguments),
             workingDirectory,
             cancellationToken,
             new Dictionary<string, string>
@@ -397,6 +439,133 @@ public sealed class GitDeploymentService(
                 // olmayan hiçbir taşıyıcı (ext, file, ftp…) çalıştırılmaz.
                 ["GIT_ALLOW_PROTOCOL"] = "http:https:ssh"
             });
+
+    /// <summary>
+    /// Her <c>git</c> çağrısının ÖNÜNE konan yapılandırma: <b>yönlendirme İZLENMEZ</b>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ÖLÇÜLDÜ (git 2.54.0.windows.1, gerçek loopback sunucuları):</b> panelin kurduğu birebir
+    /// ortamda <c>git clone http://dis/dis.git</c> çağrıldı; dış sunucu
+    /// <c>302 Location: http://ic/ic.git/info/refs?service=git-upload-pack</c> döndü. Sonuç: <b>iç
+    /// sunucuya GERÇEK git keşif isteği ULAŞTI</b> (<c>GET /ic.git/info/refs?service=git-upload-pack</c>),
+    /// git <c>warning: redirecting to …</c> yazdı. Yani adres kapısı yalnız İLK adresi görüyordu —
+    /// <c>curl</c> yolunda kapatılan açığın (efade94) git'teki birebir eşi. Aynı düzenekte
+    /// <c>-c http.followRedirects=false</c> ile iç sunucunun istek sayısı <b>0</b> oldu.
+    /// </para>
+    /// <para>
+    /// <b>MEŞRU YÖNLENDİRME KIRILMADI</b> — çünkü yönlendirmeyi artık PANEL çözüyor
+    /// (<see cref="ResolveHttpRepositoryUrlAsync"/>) ve zincirin HER ADIMI
+    /// <see cref="OutboundConnectGuard"/>'dan geçiyor. git'e zaten çözülmüş SON adres veriliyor,
+    /// yani izleyecek bir yönlendirme kalmıyor. Bayrağı tek başına atmak (panel çözümlemesi
+    /// olmadan) yeniden adlandırılmış GitHub depolarını ve <c>http→https</c> yükseltmesi yapan
+    /// kurulumları sessizce kırardı.
+    /// </para>
+    /// <para>
+    /// <c>-c</c> git'in KENDİ yapılandırmasını geçersiz kılar; sunucudaki <c>--global</c> ya da
+    /// depo içi <c>.git/config</c> bunu YENEMEZ (komut satırı en yüksek önceliktir). Kararı
+    /// ortam/dosya yapılandırmasına bırakmak, korumayı kiracının düzenleyebildiği bir dosyaya
+    /// bağlamak olurdu.
+    /// </para>
+    /// </remarks>
+    internal static string BuildGitArguments(string arguments) =>
+        "-c http.followRedirects=false " + arguments;
+
+    /// <summary>
+    /// Testlerin ÜRETİMDEKİ git çağrısını (aynı ortam değişkenleri + aynı ön yapılandırma ile)
+    /// gerçekten koşturabilmesi için. Kaynak taraması yerine DAVRANIŞ ölçülsün diye var.
+    /// </summary>
+    internal static Task<CommandResult> RunGitForTests(string arguments, string? workingDirectory, CancellationToken cancellationToken)
+        => RunGitAsync(arguments, workingDirectory, cancellationToken);
+
+    /// <summary>
+    /// <c>http/https</c> depolarında YÖNLENDİRME ZİNCİRİNİ panelin DENETLENEN istemcisiyle çözer ve
+    /// git'e verilecek NİHAİ adresi döner. Başka şemalarda (ssh, scp) adres olduğu gibi döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Kalıp icat edilmedi:</b> efade94'te cron adresi için yapılanın aynısı — isteği panelin
+    /// korumalı <c>HttpClient</c>'ından geçir, çünkü <see cref="OutboundConnectGuard"/>'ın
+    /// <c>ConnectCallback</c>'i HER BAĞLANTIDA, yani her yönlendirme adımında çalışır. Kural
+    /// burada TEKRAR YAZILMAZ.
+    /// </para>
+    /// <para>
+    /// Sorulan adres git'in kendi keşif adresidir (<c>&lt;depo&gt;/info/refs?service=git-upload-pack</c>);
+    /// böylece yeniden adlandırılmış depoların ve <c>http→https</c> yükseltmelerinin ürettiği
+    /// yönlendirme, git'in göreceğiyle AYNI istekte ölçülür.
+    /// </para>
+    /// <para>
+    /// <b>Ağ arızasında adres DEĞİŞTİRİLMEZ</b> (özgün adres döner): ön çözümleme bir KOLAYLIKtır,
+    /// koruma değil. Korumayı <c>http.followRedirects=false</c> + kapı sağlıyor; ön çözümleme
+    /// yalnız meşru yönlendirmelerin çalışmaya devam etmesini sağlıyor. Vekil arkasındaki bir
+    /// sunucuda panelin denetlenen istemcisi (<c>UseProxy=false</c>) sorguyu yapamayabilir; o
+    /// durumda git özgün adresle koşar ve kendi hatasını verir — sessizce yanlış bir adrese
+    /// gitmez.
+    /// </para>
+    /// </remarks>
+    internal async Task<string> ResolveHttpRepositoryUrlAsync(string url, CancellationToken cancellationToken)
+    {
+        var trimmed = (url ?? string.Empty).Trim();
+        if (httpClientFactory is null ||
+            !Uri.TryCreate(trimmed, UriKind.Absolute, out var adres) ||
+            adres.Scheme is not ("http" or "https"))
+        {
+            return trimmed;
+        }
+
+        var kesif = new Uri(trimmed.TrimEnd('/') + "/info/refs?service=git-upload-pack");
+
+        try
+        {
+            var istemci = httpClientFactory.CreateClient(OutboundConnectGuard.GuardedClientName);
+            using var yanit = await istemci.GetAsync(kesif, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+            var son = yanit.RequestMessage?.RequestUri;
+            if (son is null)
+            {
+                return trimmed;
+            }
+
+            // Nihai adresten keşif son ekini SOY. Sunucu beklenmedik bir yola indiyse (son ek yok)
+            // özgün adres korunur: tahmin ederek adres uydurmak, git'i bizim ölçmediğimiz bir yere
+            // göndermek olurdu.
+            const string sonEk = "/info/refs";
+            if (!son.AbsolutePath.EndsWith(sonEk, StringComparison.Ordinal))
+            {
+                return trimmed;
+            }
+
+            var govde = new UriBuilder(son)
+            {
+                Path = son.AbsolutePath[..^sonEk.Length],
+                Query = string.Empty,
+                Fragment = string.Empty
+            }.Uri.ToString();
+
+            // Yönlendirme YOKSA özgün metni koru (UriBuilder normalleştirmesi adresi gereksiz yere
+            // değiştirmesin; kullanıcının kaydettiği adres ekranlarda aynen görünüyor).
+            if (string.Equals(govde.TrimEnd('/'), trimmed.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed;
+            }
+
+            // YÖNLENDİRME SONUNDAKİ KONAK DA KAPIDAN GEÇER. Bağlantı anında zaten denetlendi; bu
+            // ikinci ölçüm git'in AZ SONRA kendi soketini açacak olmasındandır (kayıt o aralıkta
+            // değişebilir) ve kullanıcıya "ağ hatası" değil adres yasağı hatası verir.
+            await EnsureRepositoryHostAllowedAsync(govde, cancellationToken);
+            return govde;
+        }
+        catch (Exception exception) when (OutboundBlockedException.Cikar(exception) is { } engellenen)
+        {
+            throw new AppException("git.repository_forbidden", 403, 403, engellenen.BlockedTarget);
+        }
+        catch (Exception exception) when (exception is not AppException && exception is not OperationCanceledException)
+        {
+            // Ağ/protokol arızası: adres değiştirilmez, git kendi hatasını versin.
+            logger.LogDebug(exception, "Git depo adresi ön çözümlemesi yapılamadı: {Url}", trimmed);
+            return trimmed;
+        }
+    }
 
     private static string QuoteArg(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
 
