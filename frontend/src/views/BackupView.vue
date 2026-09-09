@@ -2265,6 +2265,8 @@ async function retryRemote(backup: BackupRecord) {
   await confirm({
     title: t('panel.backup.retryRemote'),
     message: t('panel.backup.retryRemoteConfirm'),
+    tone: 'neutral',
+    confirmLabel: t('panel.backup.retryRemote'),
     impact: [backup.name, target],
     action: async () => {
       busy.value = true;
