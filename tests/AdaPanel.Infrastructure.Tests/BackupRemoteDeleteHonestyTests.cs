@@ -35,6 +35,34 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupRemoteDeleteHonestyTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Missing_ancestor_is_proved_by_parent_listing_but_present_ancestor_is_not(bool ancestorPresent)
+    {
+        using var alan = new BulutAlani();
+        var ftp = new SahteFtp
+        {
+            SilmeYaniti = FtpCommandResult.Fail(550, "File unavailable"),
+            ListDirectoryHandler = uri => uri.AbsolutePath.TrimEnd('/') == "/yedekler"
+                ? new FtpListingResult(true, ancestorPresent ? ["2026-08-01"] : ["2026-09-09"], 226, "OK")
+                : new FtpListingResult(false, [], 550, "Unavailable")
+        };
+        var service = await FtpServisiKurAsync(alan, ftp);
+        var record = Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+        if (ancestorPresent)
+        {
+            var error = await Assert.ThrowsAsync<AppException>(() => service.DeleteBackupAsync(record.Id, alan.Iptal));
+            Assert.Contains("remote_presence=unknown", error.Details);
+            Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+        }
+        else
+        {
+            await service.DeleteBackupAsync(record.Id, alan.Iptal);
+            Assert.Empty(await service.GetBackupsAsync(alan.Iptal));
+        }
+    }
+
     private const string FtpAdres = "ftp://yedek.ornek.com/yedekler/2026-08-01/sites/shop/x.zip";
 
     // =======================================================================================

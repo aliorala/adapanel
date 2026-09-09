@@ -171,7 +171,7 @@ public sealed class BackupIntegrityMeasurementTests
     }
 
     [Fact]
-    public void Sifreli_arsiv_BOZUK_DEGIL_olculemedi_sayilir()
+    public async Task Sifreli_arsiv_BOZUK_DEGIL_olculemedi_sayilir()
     {
         // UC DEGERLI GERCEK: "olcemedim" ile "bozuk" ayni sey degil. Sifreli bir arsivin ici
         // parola olmadan okunamaz; ona "bozuk" demek SAGLAM yedegi cop ilan etmek olurdu.
@@ -180,7 +180,7 @@ public sealed class BackupIntegrityMeasurementTests
         alan.ZipYaz(duz, "a.txt", "icerik");
 
         var sifreli = Path.Combine(alan.Kok, "duz.zip.enc");
-        BackupArchiveCipher.EncryptFileAsync(duz, sifreli, "parola-123", alan.Iptal).GetAwaiter().GetResult();
+        await BackupArchiveCipher.EncryptFileAsync(duz, sifreli, "parola-123", alan.Iptal);
 
         var olcum = BackupArchiveProbe.Measure(sifreli, "zip");
 

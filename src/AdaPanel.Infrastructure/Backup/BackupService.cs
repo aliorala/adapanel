@@ -4270,6 +4270,24 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         var liste = await FtpCommands.ListDirectoryAsync(dizin, credential, cancellationToken);
         if (!liste.Success)
         {
+            // A deleted day directory makes NLST of every child fail with 550. Walk upwards
+            // until a successful listing proves an ancestor absent. An existing ancestor,
+            // denied listing, empty-directory 550 or network failure is never proof of absence.
+            var ancestor = dizin;
+            for (var depth = 0; depth < 32 && liste.Code == FtpCommandResult.FileUnavailable; depth++)
+            {
+                var (parent, name) = SplitFtpTarget(ancestor);
+                if (name.Length == 0) { break; }
+                var parentListing = await FtpCommands.ListDirectoryAsync(parent, credential, cancellationToken);
+                if (parentListing.Success)
+                {
+                    return FtpListingContains(parentListing.Names, name)
+                        ? (RemotePresence.Unreachable, $"list=550; ancestor=present:{name}")
+                        : (RemotePresence.Missing, $"list=ok; ancestor=missing:{name}");
+                }
+                ancestor = parent;
+                liste = parentListing;
+            }
             return (RemotePresence.Unreachable, $"list={liste.Code}:{Truncate(liste.Description, 200)}");
         }
 
@@ -4713,6 +4731,10 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             await UploadToRemoteAsync(tempFile, "adapanel-connection-test.txt", target, testPlacement, cancellationToken);
             return new BackupRemoteTestResultDto { Success = true, Message = "backup.remote_test.ok" };
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (AppException exception)
         {
             return new BackupRemoteTestResultDto { Success = false, Message = exception.MessageKey, Details = exception.Details };
@@ -4976,14 +4998,16 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         var credential = ResolveCredential(target, uri)
             ?? throw new AppException("backup.remote_target_invalid", 400, 400);
 
-        var dizinSorunu = await EnsureFtpDirectoriesAsync(uri, credential);
-
-        try
+        await BackupFtpRetry.RunAsync(async token =>
         {
-            await StoreFtpFileAsync(localPath, uri, credential, cancellationToken);
-        }
-        catch (AppException exception) when (dizinSorunu is not null)
-        {
+          var dizinSorunu = await EnsureFtpDirectoriesAsync(uri, credential, token);
+          try
+          {
+            await StoreFtpFileAsync(localPath, uri, credential, token);
+          }
+          catch (WebException exception) when (BackupFtpRetry.IsTransient(exception)) { throw; }
+          catch (AppException exception) when (dizinSorunu is not null)
+          {
             // Yükleme BAŞARISIZ ve klasör hazırlığında da bir yanıt almışız: kök sebep büyük
             // olasılıkla o yanıttır ("550 Permission denied"). Yutulmaz, mesaja eklenir.
             throw new AppException(
@@ -4991,15 +5015,16 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 exception.Code,
                 exception.HttpStatusCode,
                 $"{exception.Details}\r\nKlasor hazirligi: {dizinSorunu}".Trim());
-        }
-        catch (Exception exception) when (dizinSorunu is not null && !cancellationToken.IsCancellationRequested)
-        {
+          }
+          catch (Exception exception) when (dizinSorunu is not null && !token.IsCancellationRequested)
+          {
             throw new AppException(
                 "backup.remote_upload_failed",
                 502,
                 502,
                 $"{exception.Message}\r\nKlasor hazirligi: {dizinSorunu}");
-        }
+          }
+        }, cancellationToken);
     }
 
     private static async Task StoreFtpFileAsync(
@@ -5011,6 +5036,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         var request = (FtpWebRequest)WebRequest.Create(uri);
         request.Method = WebRequestMethods.Ftp.UploadFile;
         request.UseBinary = true;
+        request.UsePassive = true;
+        request.KeepAlive = false;
         request.Credentials = credential;
         request.ContentLength = new FileInfo(localPath).Length;
         // FtpWebRequest'in VARSAYILANI sonsuzdur. Bu yükleme global kilidin içinde çalıştığı ve aynı
@@ -5020,22 +5047,40 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         request.Timeout = (int)RemoteUploadTimeout.TotalMilliseconds;
         request.ReadWriteTimeout = (int)RemoteUploadStallTimeout.TotalMilliseconds;
         // İptal edildiğinde soketi gerçekten kapat: CopyToAsync'in token'ı FtpWebRequest'i durdurmaz.
-        await using var cancellationRegistration = cancellationToken.Register(request.Abort);
-
-        await using (var source = File.OpenRead(localPath))
-        await using (var destination = await request.GetRequestStreamAsync())
+        using var total = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        total.CancelAfter(RemoteUploadTimeout);
+        using var deadline = new FtpRequestDeadline(request, RemoteUploadStallTimeout, total.Token);
+        try
         {
-            await source.CopyToAsync(destination, cancellationToken);
+            await using (var source = File.OpenRead(localPath))
+            await using (var destination = await request.GetRequestStreamAsync())
+            {
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await source.ReadAsync(buffer, deadline.Token)) > 0)
+                {
+                    await destination.WriteAsync(buffer.AsMemory(0, read), deadline.Token);
+                    deadline.Reset(RemoteUploadStallTimeout);
+                }
+            }
+
+            using var response = (FtpWebResponse)await request.GetResponseAsync();
+            if (response.StatusCode is not (FtpStatusCode.ClosingData or FtpStatusCode.CommandOK))
+            {
+                throw new AppException(
+                    "backup.remote_upload_failed",
+                    (int)response.StatusCode,
+                    502,
+                    $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
+            }
         }
-
-        using var response = (FtpWebResponse)await request.GetResponseAsync();
-        if (response.StatusCode is not (FtpStatusCode.ClosingData or FtpStatusCode.CommandOK))
+        catch
         {
-            throw new AppException(
-                "backup.remote_upload_failed",
-                (int)response.StatusCode,
-                502,
-                $"Url={SanitizeUri(uri)}\r\nStatusCode={(int)response.StatusCode} {response.StatusDescription?.Trim()}");
+            cancellationToken.ThrowIfCancellationRequested();
+            if (total.IsCancellationRequested)
+                throw new WebException("FTP transfer timed out.", WebExceptionStatus.Timeout);
+            deadline.ThrowIfExpired();
+            throw;
         }
     }
 
@@ -5048,7 +5093,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// Dönen metin bir HATA DEĞİLDİR — yükleme başarısız olursa ayrıntıya eklenecek kanıttır
     /// (gerekçe: yukarıdaki "UZAK HEDEFTE KLASÖR AÇMA" bölümü).
     /// </returns>
-    private static async Task<string?> EnsureFtpDirectoriesAsync(Uri uri, NetworkCredential credential)
+    private static async Task<string?> EnsureFtpDirectoriesAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
     {
         var segments = uri.AbsolutePath
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
@@ -5085,6 +5130,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             // Klasör açma da sonsuz beklememeli: bu akış otomatik yedeklemede GLOBAL KİLİDİN
             // içindedir (bkz. yükleme zaman aşımı gerekçesi).
             request.Timeout = (int)RemoteUploadStallTimeout.TotalMilliseconds;
+            using var deadline = new FtpRequestDeadline(request, RemoteUploadStallTimeout, cancellationToken);
 
             try
             {
@@ -5092,7 +5138,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             }
             catch (WebException exception)
             {
-                var response = exception.Response as FtpWebResponse;
+                deadline.ThrowIfExpired();
+                if (BackupFtpRetry.IsTransient(exception)) { throw; }
+                using var response = exception.Response as FtpWebResponse;
                 var kod = response is null ? "-" : ((int)response.StatusCode).ToString();
                 var aciklama = (response?.StatusDescription ?? exception.Message).Trim();
 

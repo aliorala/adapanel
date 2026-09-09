@@ -350,7 +350,7 @@ public sealed class HtaccessServerModeTests
                 store.SetGlobal(HtaccessMode.Enforce, null);
             }
 
-            var dosyalar = Directory.GetFiles(kok).Select(Path.GetFileName).ToArray();
+            var dosyalar = Directory.GetFiles(kok).Select(path => Path.GetFileName(path)).ToArray();
             Assert.Equal([HtaccessHostingPaths.GlobalSwitchFileName], dosyalar);
         });
     }
@@ -400,7 +400,7 @@ public sealed class HtaccessServerModeTests
             // Gecici dosya artigi da birakilmamis olmali (WriteAtomic'in finally blogu).
             Assert.Equal(
                 [HtaccessHostingPaths.GlobalSwitchFileName],
-                Directory.GetFiles(HtaccessHostingPaths.Root(dataRoot)).Select(Path.GetFileName).ToArray());
+                Directory.GetFiles(HtaccessHostingPaths.Root(dataRoot)).Select(path => Path.GetFileName(path)).ToArray());
 
             // Tutamak kapandiktan sonra ayni cagri CALISIR: ariza gecici, kalici degil.
             store.SetGlobal(HtaccessMode.Enforce, null);

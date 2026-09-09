@@ -29,7 +29,7 @@ public sealed class UpdateInstallerLauncherTests
     public void LauncherStopsTheServiceBeforeRunningTheInstaller()
     {
         var script = Script();
-        var stopIndex = script.IndexOf("Stop-Service", StringComparison.Ordinal);
+        var stopIndex = script.IndexOf("$svc.Stop()", StringComparison.Ordinal);
         var installIndex = script.IndexOf("Start-Process", StringComparison.Ordinal);
 
         Assert.True(stopIndex >= 0, "Betik servisi durdurmuyor.");

@@ -146,7 +146,7 @@ public sealed class FileMoveTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Junction_TAKIP_EDILMEZ_ve_baglantinin_HEDEFI_korunur()
+    public async Task Junction_TAKIP_EDILMEZ_ve_baglantinin_HEDEFI_korunur()
     {
         var gercekSite = Path.Combine(kok, "gercek-site");
         Directory.CreateDirectory(gercekSite);
@@ -157,11 +157,11 @@ public sealed class FileMoveTests : IDisposable
         Assert.True(Directory.Exists(baglanti), "Junction kurulamadi; test onkosulu saglanmadi.");
         Directory.CreateDirectory(Path.Combine(siteAKoku, "gelen"));
 
-        var hata = Assert.ThrowsAsync<AppException>(() => servis.MoveAsync(new MoveFilesRequest
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.MoveAsync(new MoveFilesRequest
         {
             Paths = ["sites/a.test/baglanti"],
             DestinationPath = "sites/a.test/gelen"
-        })).GetAwaiter().GetResult();
+        }));
 
         // Bir bağlantıyı taşımak, hedefindeki MÜŞTERİ SİTESİNİ başka bir yere bağlamak demektir;
         // bu panelde daha önce yaşanmış bir hata sınıfıdır (özyinelemeli silmenin bağlantıyı takip

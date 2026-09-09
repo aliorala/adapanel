@@ -244,7 +244,7 @@ public sealed class FileCopyTests : IDisposable
     // ------------------------------------------------------------------
 
     [Fact]
-    public void Kaynagin_KENDISI_baglantiysa_istek_REDDEDILIR()
+    public async Task Kaynagin_KENDISI_baglantiysa_istek_REDDEDILIR()
     {
         var gercekSite = Path.Combine(kok, "gercek-site");
         Directory.CreateDirectory(gercekSite);
@@ -255,18 +255,18 @@ public sealed class FileCopyTests : IDisposable
         Assert.True(Directory.Exists(baglanti), "Junction kurulamadi; test onkosulu saglanmadi.");
         Directory.CreateDirectory(Path.Combine(siteAKoku, "gelen"));
 
-        var hata = Assert.ThrowsAsync<AppException>(() => servis.CopyAsync(new CopyFilesRequest
+        var hata = await Assert.ThrowsAsync<AppException>(() => servis.CopyAsync(new CopyFilesRequest
         {
             Paths = ["sites/a.test/baglanti"],
             DestinationPath = "sites/a.test/gelen"
-        })).GetAwaiter().GetResult();
+        }));
 
         Assert.Equal("files.path_outside_root", hata.MessageKey);
         Assert.False(Directory.Exists(Path.Combine(siteAKoku, "gelen", "baglanti")));
     }
 
     [Fact]
-    public void Klasorun_ICINDEKI_baglanti_TAKIP_EDILMEZ_ve_RAPORLANIR()
+    public async Task Klasorun_ICINDEKI_baglanti_TAKIP_EDILMEZ_ve_RAPORLANIR()
     {
         var gercekSite = Path.Combine(kok, "gercek-site");
         Directory.CreateDirectory(gercekSite);
@@ -278,11 +278,11 @@ public sealed class FileCopyTests : IDisposable
         Assert.True(Directory.Exists(baglanti), "Junction kurulamadi; test onkosulu saglanmadi.");
         Directory.CreateDirectory(Path.Combine(siteAKoku, "hedef"));
 
-        var sonuc = servis.CopyAsync(new CopyFilesRequest
+        var sonuc = await servis.CopyAsync(new CopyFilesRequest
         {
             Paths = ["sites/a.test/veri"],
             DestinationPath = "sites/a.test/hedef"
-        }).GetAwaiter().GetResult();
+        });
 
         var satir = Assert.Single(sonuc.Items);
 

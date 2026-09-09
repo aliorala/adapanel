@@ -34,6 +34,51 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupRemoteLayoutTests
 {
+    [Fact]
+    public async Task Ftp_421_retries_same_archive_and_confirms_actual_bytes()
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.FailStoresRemaining = 2;
+        var record = await alan.ServisKur().BackupSiteAsync(SiteIstegi(server.TabanAdres("yedekler")), alan.Iptal);
+        Assert.Equal(3, server.StoreAttempts);
+        Assert.Equal("created_remote_synced", record.Status);
+        Assert.Equal(await File.ReadAllBytesAsync(record.Path, alan.Iptal), Assert.Single(server.Dosyalar).Value);
+    }
+
+    [Theory]
+    [InlineData(421, 3)]
+    [InlineData(530, 1)]
+    [InlineData(550, 1)]
+    public async Task Ftp_retry_is_bounded_and_permanent_failure_keeps_local_backup(int code, int attempts)
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.FailStoresRemaining = 20;
+        server.StoreFailureCode = code;
+        var record = await alan.ServisKur().BackupSiteAsync(SiteIstegi(server.TabanAdres("yedekler")), alan.Iptal);
+        Assert.Equal(attempts, server.StoreAttempts);
+        Assert.NotEqual("created_remote_synced", record.Status);
+        Assert.True(File.Exists(record.Path));
+        Assert.Contains(record.Warnings, warning => warning.MessageKey == "backup.remote_upload_failed");
+        Assert.Empty(server.Dosyalar);
+    }
+
+    [Fact]
+    public async Task Ftp_hanging_directory_creation_honors_cancellation()
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.HangMkd = true;
+        using var cancellation = new CancellationTokenSource();
+        var operation = alan.ServisKur().TestRemoteTargetAsync(new BackupRemoteTestRequest
+        {
+            TargetType = "ftp", RemoteUrl = server.TabanAdres("yedekler"), RemoteUserName = "u", RemotePassword = "p"
+        }, cancellation.Token);
+        await server.MkdStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
     /// <summary>Testlerdeki sitenin adi; 0.6.1'den beri UZAK yolda da KAYNAK klasoru olarak gecer.</summary>
     private const string Site = "shop.example.com";
 
@@ -775,6 +820,11 @@ public sealed class BackupRemoteLayoutTests
 
         /// <summary>MKD izni. <c>false</c> = chroot'lu hesap: yazma var, klasor acma yok.</summary>
         public bool MkdIzinli { get; set; } = true;
+        public int FailStoresRemaining { get; set; }
+        public int StoreFailureCode { get; set; } = 421;
+        public int StoreAttempts { get; private set; }
+        public bool HangMkd { get; set; }
+        public TaskCompletionSource MkdStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public List<string> MkdYollari { get; } = [];
 
@@ -894,6 +944,8 @@ public sealed class BackupRemoteLayoutTests
                     }
                     case "MKD":
                     {
+                        MkdStarted.TrySetResult();
+                        if (HangMkd) { await Task.Delay(Timeout.InfiniteTimeSpan, token); return; }
                         var hedef = Coz(calisma, arg);
                         string yanit;
                         lock (_kilit)
@@ -945,6 +997,13 @@ public sealed class BackupRemoteLayoutTests
                     }
                     case "STOR":
                     {
+                        StoreAttempts++;
+                        if (FailStoresRemaining-- > 0)
+                        {
+                            await yazici.WriteLineAsync($"{StoreFailureCode} Service unavailable");
+                            veriDinleyici?.Stop();
+                            return;
+                        }
                         var hedef = Coz(calisma, arg);
                         var dizin = hedef[..hedef.LastIndexOf('/')];
                         if (!Var(dizin.Length == 0 ? "/" : dizin))

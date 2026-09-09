@@ -344,7 +344,7 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Ice_aktarma_KENDINI_GOSTEREN_kavsakta_SONSUZA_DONMEZ()
+    public async Task Ice_aktarma_KENDINI_GOSTEREN_kavsakta_SONSUZA_DONMEZ()
     {
         var kaynak = Path.Combine(kok, "arsiv-icerigi");
         Directory.CreateDirectory(Path.Combine(kaynak, "wp-content"));
@@ -357,16 +357,16 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         Directory.CreateDirectory(hedef);
 
         var is1 = Task.Run(() => SiteHostingSettingsService.ApplyImportedContent("site", kaynak, hedef, cleanFirst: false));
-        Assert.True(is1.Wait(Tavan), "Ice aktarma tavani asti: kopyalama kavsagi TAKIP EDIYOR.");
+        var result = await is1.WaitAsync(Tavan);
 
-        Assert.Equal(2, is1.Result.FilesCopied);
+        Assert.Equal(2, result.FilesCopied);
         Assert.True(File.Exists(Path.Combine(hedef, "wp-content", "tema.css")));
         Assert.False(Directory.Exists(Path.Combine(hedef, "kendine")), "Kavsak siteye KOPYALANMAMALI.");
     }
 
     /// <summary>İÇE AKTARMA, KAVŞAĞIN HEDEFİNİ SİTEYE KOPYALAMAZ.</summary>
     [Fact]
-    public void Ice_aktarma_kavsagin_HEDEFINI_siteye_KOPYALAMAZ()
+    public async Task Ice_aktarma_kavsagin_HEDEFINI_siteye_KOPYALAMAZ()
     {
         var disari = Path.Combine(kok, "disaridaki-veri");
         Directory.CreateDirectory(disari);
@@ -381,9 +381,9 @@ public sealed class TenantTreeWalkGuardTests : IDisposable
         Directory.CreateDirectory(hedef);
 
         var is1 = Task.Run(() => SiteHostingSettingsService.ApplyImportedContent("site", kaynak, hedef, cleanFirst: false));
-        Assert.True(is1.Wait(Tavan), "Ice aktarma tavani asti.");
+        var result = await is1.WaitAsync(Tavan);
 
-        Assert.Equal(1, is1.Result.FilesCopied);
+        Assert.Equal(1, result.FilesCopied);
         Assert.False(File.Exists(Path.Combine(hedef, "disariya", "baskasinin-dosyasi.txt")));
     }
 

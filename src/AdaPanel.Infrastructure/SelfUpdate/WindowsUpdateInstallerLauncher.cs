@@ -224,7 +224,9 @@ public sealed class WindowsUpdateInstallerLauncher(JsonFileStore fileStore) : IU
                 if ($svc -and $svc.Status -ne 'Stopped') {
                   Write-UpdateState 'stopping-service' '' $null
                   Write-UpdateLog "Stopping service '$serviceName' before install."
-                  Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+                  # Stop-Service waits internally; a hung service would prevent even the
+                  # bounded loop below from running. Send the stop request without waiting.
+                  if ($svc.Status -ne 'StopPending') { $svc.Stop() }
                   for ($i = 0; $i -lt 60; $i++) {
                     Start-Sleep -Milliseconds 500
                     $svc.Refresh()

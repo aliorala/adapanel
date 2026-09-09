@@ -143,7 +143,7 @@ public sealed class MailAutodiscoverPublishingTests
         MailAutodiscoverRewriteRules.Apply(belge, Alan, ArkaUc);
 
         var kuralYollari = KendiKurallari(belge)
-            .Select(kural => new Uri((string?)kural.Element("action")!.Attribute("url")!).AbsolutePath)
+            .Select(kural => new Uri(Assert.IsType<string>((string?)kural.Element("action")!.Attribute("url"))).AbsolutePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var probYollari = MailAutodiscoverRewriteRules.ProbeUrls(Alan)
@@ -185,7 +185,7 @@ public sealed class MailAutodiscoverPublishingTests
         MailAutodiscoverRewriteRules.Apply(belge, Alan, ArkaUc);
 
         Assert.Equal(MailAutodiscoverRewriteRules.ExpectedRuleCount, MailAutodiscoverRewriteRules.Count(belge));
-        Assert.Single(Kurallar(belge).Where(kural => (string?)kural.Attribute("name") == "WordPress"));
+        Assert.Single(Kurallar(belge), kural => (string?)kural.Attribute("name") == "WordPress");
     }
 
     /// <summary>Geri alma YALNIZ panelin kurallarını kaldırır.</summary>

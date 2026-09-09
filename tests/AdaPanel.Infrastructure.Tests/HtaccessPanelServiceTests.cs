@@ -490,7 +490,7 @@ public sealed class HtaccessPanelServiceTests : IDisposable
         var inceleme = await Servis().InspectAsync("ornek.com", null, CancellationToken.None);
 
         var bulgu = Assert.Single(
-            inceleme.Unsupported.Where(t => t.Directive.Equals("php_value", StringComparison.OrdinalIgnoreCase)));
+            inceleme.Unsupported, t => t.Directive.Equals("php_value", StringComparison.OrdinalIgnoreCase));
 
         Assert.Equal(HtaccessDiagnosticCodes.UnsupportedDirective, bulgu.Code);
         // Metin motorun katalogundan geliyor: "sebep" bos olamaz, yoksa panel "desteklenmiyor"

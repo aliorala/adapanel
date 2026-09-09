@@ -252,6 +252,7 @@ internal sealed class SahteFtp : IBackupFtpCommands
 
     /// <summary>NLST yaniti. Varsayilan: bos dizin, basarili.</summary>
     public FtpListingResult ListeYaniti { get; set; } = new(true, [], 226, "226 Directory send OK.");
+    public Func<Uri, FtpListingResult>? ListDirectoryHandler { get; set; }
 
     public Task<FtpCommandResult> DeleteFileAsync(Uri uri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)
     {
@@ -265,7 +266,7 @@ internal sealed class SahteFtp : IBackupFtpCommands
     public Task<FtpListingResult> ListDirectoryAsync(Uri directoryUri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)
     {
         Komutdur($"NLST {directoryUri}");
-        return Task.FromResult(ListeYaniti);
+        return Task.FromResult(ListDirectoryHandler?.Invoke(directoryUri) ?? ListeYaniti);
     }
 
     public Task<FtpCommandResult> RemoveDirectoryAsync(Uri directoryUri, System.Net.NetworkCredential credential, CancellationToken cancellationToken)

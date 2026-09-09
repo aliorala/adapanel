@@ -1,6 +1,6 @@
 #define MyAppName "AdaPanel"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.8.30"
+  #define MyAppVersion "0.8.31"
 #endif
 #define MyAppPublisher "AdaPanel"
 #define MyAppExeName "AdaPanel.Api.exe"
@@ -48,6 +48,8 @@ tr.SetupWindowTitle=AdaPanel Kurulumu
 tr.FinishedHeadingLabel=AdaPanel kurulumu tamamlandi
 
 [Files]
+; Extracted before installation; keep before the solid-compressed application payload.
+Source: "..\scripts\update-service-guard.ps1"; Flags: dontcopy
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "adapanel.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\components.json"; DestDir: "{app}"; Flags: ignoreversion
@@ -289,17 +291,27 @@ begin
     FileExists(ExpandConstant('{autopf}\AdaPanel\{#MyAppExeName}'));
 end;
 
-procedure StopPanelService;
+function RunServiceGuard(const Action: string): Boolean;
 var
   ResultCode: Integer;
 begin
-  Exec(
-    'powershell.exe',
-    '-NoProfile -ExecutionPolicy Bypass -Command "if (Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue) { Stop-Service -Name ''{#MyAppServiceName}'' -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Milliseconds 500; $svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if (-not $svc -or $svc.Status -eq ''Stopped'') { break } } }; if (Get-Process -Name ''AdaPanel.Api'' -ErrorAction SilentlyContinue) { taskkill /F /IM AdaPanel.Api.exe | Out-Null; Start-Sleep -Seconds 2 }"',
-    '',
-    SW_HIDE,
-    ewWaitUntilTerminated,
-    ResultCode);
+  if not FileExists(ExpandConstant('{tmp}\update-service-guard.ps1')) then
+    ExtractTemporaryFile('update-service-guard.ps1');
+  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ExpandConstant('{tmp}\update-service-guard.ps1') + '" -Action ' + Action +
+    ' -ServiceName "{#MyAppServiceName}" -StatePath "' +
+    ExpandConstant('{tmp}\adapanel-service-state.json') + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if Result then Result := ResultCode = 0;
+  if Result then Log('AdaPanel service guard completed: ' + Action)
+  else Log('AdaPanel service guard failed: ' + Action);
+end;
+
+procedure StopPanelService;
+begin
+  if not RunServiceGuard('Stop') then
+    RaiseException('AdaPanel servisi guvenle durdurulamadi. Kurulum dosyalari degistirilmedi.');
 end;
 
 { Servisi GERI BASLATIR. Boyle bir prosedur HIC YOKTU: kurulum yarida kesildiginde servisi
@@ -308,6 +320,11 @@ procedure StartPanelService;
 var
   ResultCode: Integer;
 begin
+  if not RunServiceGuard('Restore') then
+  begin
+    Log('AdaPanel: servis baslangic ayari geri yuklenemedi.');
+    Exit;
+  end;
   Exec(
     'powershell.exe',
     '-NoProfile -ExecutionPolicy Bypass -Command "$svc = Get-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue; if ($svc -and $svc.Status -ne ''Running'') { Start-Service -Name ''{#MyAppServiceName}'' -ErrorAction SilentlyContinue }"',
@@ -386,8 +403,13 @@ begin
 
   if ExistingInstallDetected then
   begin
-    StopPanelService;
     ServiceWasStoppedByUs := True;
+    try
+      StopPanelService;
+    except
+      StartPanelService;
+      RaiseException(GetExceptionMessage);
+    end;
   end;
 
   Result := True;
@@ -402,6 +424,7 @@ procedure DeinitializeSetup;
 begin
   if InstallCompleted then
   begin
+    RunServiceGuard('Restore');
     DiscardWwwRootBackup;
     Exit;
   end;
@@ -497,8 +520,13 @@ begin
   // beklerken servis elle baslatilmis olabilir).
   if ExistingInstallDetected then
   begin
-    StopPanelService;
     ServiceWasStoppedByUs := True;
+    try
+      StopPanelService;
+    except
+      Result := GetExceptionMessage;
+      Exit;
+    end;
   end;
 
   // Eski arayuz dosyalarini kopyalama BASLAMADAN once kenara al. Yerinde silmek (eski

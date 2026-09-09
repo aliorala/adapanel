@@ -81,9 +81,9 @@ public sealed class GrantWildcardTests
         const string verilen = "musteri1_db";  // yetki verilen veritabani
 
         // Kacirilmamis hali LIKE deseni olarak kurbani da kapsar.
-        Assert.True(System.Text.RegularExpressions.Regex.IsMatch(
-            kurban,
-            "^" + System.Text.RegularExpressions.Regex.Escape(verilen).Replace("_", ".") + "$"));
+        Assert.Matches(
+            "^" + System.Text.RegularExpressions.Regex.Escape(verilen).Replace("_", ".") + "$",
+            kurban);
 
         // Kacirilmis halde "_" artik joker degil, harfi harfine kendisi.
         Assert.Contains(@"\_", Escape(verilen), System.StringComparison.Ordinal);

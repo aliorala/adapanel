@@ -396,7 +396,7 @@ public sealed class PanelRateLimitTests
             foreach (var oznitelik in eylem.GetCustomAttributes<EnableRateLimitingAttribute>()
                          .Concat(tip.GetCustomAttributes<EnableRateLimitingAttribute>()))
             {
-                if (!PanelRateLimits.Policies.ContainsKey(oznitelik.PolicyName))
+                if (oznitelik.PolicyName is null || !PanelRateLimits.Policies.ContainsKey(oznitelik.PolicyName))
                 {
                     eksik.Add($"{tip.Name}.{eylem.Name} -> '{oznitelik.PolicyName}'");
                 }

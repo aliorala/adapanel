@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.30",
-  "name": "0.8.30 — Daha kompakt görünüm ve kaynak göstergeleri",
-  "body": "Ana sayfadaki CPU, bellek ve disk göstergelerinde yazıların halka kenarlarına taşması giderildi.\n\n- Kompakt masaüstü görünümünün yazı tabanı 14 px'den 13 px'e indirildi; kart boşlukları ve menü satırları sıkılaştırıldı.\n- Kaynak göstergelerindeki başlık, yüzde ve açıklamalar ortada toplandı; uzun değerlerin satıra sığması düzeltildi.\n- Telefonda başlıklar halkaların üstüne taşındı ve yüzde için daha fazla alan ayrıldı. Mobil yazı tabanı ve rahat görünüm 14 px olarak korundu.\n\nTürkçe/İngilizce, açık/koyu tema ve 320–1486 px ekran genişliklerinde yerleşim kontrol edildi. Yedekleme özellikleri korunmuştur."
+  "tag_name": "0.8.31",
+  "name": "0.8.31 — Güvenilir güncelleme ve FTP yedekleme",
+  "body": "Güncelleme sırasında panel servisinin yeniden başlayıp kurulum dosyalarını kilitlemesi giderildi. Kurulum tamamlandığında veya iptal edildiğinde servis başlangıç ayarı geri yüklenir.\n\n- Geçici FTP hatalarında aktarım en fazla üç kez denenir. Kimlik ve izin hatalarında gereksiz tekrar yapılmaz; başarısız aktarımda yerel yedek korunur.\n- FTP klasör hazırlama, listeleme ve yüklemede iptal ve zaman aşımı yönetimi tamamlandı.\n- Üst klasörü silinmiş uzak yedeklerin yokluğu üst dizin listesiyle doğrulanır. Erişim hataları dosya yok sayılmaz.\n- Testlerdeki boş değer ve eşzamansız bekleme uyarıları düzeltildi.\n\nYedekleme modülü ve kompakt görünüm korunmuştur."
 }

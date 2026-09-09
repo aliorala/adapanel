@@ -150,7 +150,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// diskten geri okunan ACL'de o ACE OLMAMALIDIR.
     /// </summary>
     [Fact]
-    public void Hassas_klasorde_Everyone_ACE_i_muhurlenmez_TEMIZLENIR()
+    public async Task Hassas_klasorde_Everyone_ACE_i_muhurlenmez_TEMIZLENIR()
     {
         var dataRoot = Path.Combine(calisma, "veri-koku");
         var data = Path.Combine(dataRoot, "data");
@@ -160,7 +160,7 @@ public sealed class DataRootHardeningTests : IDisposable
         // Ön koşul: Everyone GERÇEKTEN yazılabildi (yazılamadıysa test bir şey kanıtlamaz).
         Assert.Contains(Everyone, DiskteAcikDuranSidler(data));
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         var kalanlar = DiskteAcikDuranSidler(data);
         Assert.DoesNotContain(Everyone, kalanlar);
@@ -173,12 +173,12 @@ public sealed class DataRootHardeningTests : IDisposable
     /// K4: Kurulan DACL "korumalı" (miras kapalı) olmalı, aksi halde kökten yeni geniş ACE'ler düşer.
     /// </summary>
     [Fact]
-    public void Hassas_klasorun_DACL_i_miras_almaz()
+    public async Task Hassas_klasorun_DACL_i_miras_almaz()
     {
         var dataRoot = Path.Combine(calisma, "miras");
         Directory.CreateDirectory(dataRoot);
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         var security = new DirectoryInfo(Path.Combine(dataRoot, "keys")).GetAccessControl();
         Assert.True(security.AreAccessRulesProtected);
@@ -214,7 +214,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// Bu test gerçek akışı koşturur: reset'in ardından AYNI çağrıda klasör tekrar kapanmış olmalı.
     /// </summary>
     [Fact]
-    public void Kurtarma_agi_sifirladigi_izinleri_AYNI_cagrida_yeniden_kapatir()
+    public async Task Kurtarma_agi_sifirladigi_izinleri_AYNI_cagrida_yeniden_kapatir()
     {
         // Gerçek arıza kurgusu: geniş ACE veri kökünün ÜSTÜNDE durur (canlıda ProgramData'daki
         // Everyone=FullControl) ve alt klasörlere MİRASLA iner. `icacls /reset` tam da bu mirası
@@ -226,7 +226,7 @@ public sealed class DataRootHardeningTests : IDisposable
         Directory.CreateDirectory(data);
         Assert.Contains(Everyone, DiskteAcikDuranSidler(data));
 
-        DataRootHardeningService.EnsureWritableAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.EnsureWritableAsync(dataRoot, NullLogger.Instance);
 
         var security = new DirectoryInfo(data).GetAccessControl();
         // /reset mirası GERİ AÇAR; aynı çağrıda yeniden sertleştirme yapılmazsa burası "false" kalır.
@@ -301,7 +301,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Guncelleme_paketi_klasoru_kiraciya_KAPATILIR()
+    public async Task Guncelleme_paketi_klasoru_kiraciya_KAPATILIR()
     {
         var dataRoot = Path.Combine(calisma, "guncelleme-koku");
         var updates = Path.Combine(dataRoot, "updates");
@@ -311,7 +311,7 @@ public sealed class DataRootHardeningTests : IDisposable
         // Ön koşul: Everyone GERÇEKTEN yazılabildi (yazılamadıysa test bir şey kanıtlamaz).
         Assert.Contains(Everyone, DiskteAcikDuranSidler(updates));
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         var kalanlar = DiskteAcikDuranSidler(updates);
         Assert.DoesNotContain(Everyone, kalanlar);
@@ -346,7 +346,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Indirilen_paket_klasoru_kiraciya_KAPATILIR()
+    public async Task Indirilen_paket_klasoru_kiraciya_KAPATILIR()
     {
         var dataRoot = Path.Combine(calisma, "indirme-koku");
         var downloads = Path.Combine(dataRoot, "downloads");
@@ -355,7 +355,7 @@ public sealed class DataRootHardeningTests : IDisposable
 
         Assert.Contains(Everyone, DiskteAcikDuranSidler(downloads));
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         var kalanlar = DiskteAcikDuranSidler(downloads);
         Assert.DoesNotContain(Everyone, kalanlar);
@@ -387,7 +387,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Hassas_klasorlerin_HEPSI_kiraciya_kapatilir()
+    public async Task Hassas_klasorlerin_HEPSI_kiraciya_kapatilir()
     {
         var dataRoot = Path.Combine(calisma, "toplu-hassas");
         var klasorler = DataRootHardeningService.SensitiveDirectories;
@@ -403,7 +403,7 @@ public sealed class DataRootHardeningTests : IDisposable
             Assert.Contains(Everyone, DiskteAcikDuranSidler(yol));
         }
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         foreach (var ad in klasorler)
         {
@@ -434,7 +434,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// de listeye eklenirse) ikisinden biri kırmızı yanar.
     /// </remarks>
     [Fact]
-    public void Tools_win_acme_kapatilir_phpmyadmin_e_DOKUNMAZ()
+    public async Task Tools_win_acme_kapatilir_phpmyadmin_e_DOKUNMAZ()
     {
         var dataRoot = Path.Combine(calisma, "tools-koku");
         var winAcme = Path.Combine(dataRoot, "tools", "win-acme");
@@ -448,7 +448,7 @@ public sealed class DataRootHardeningTests : IDisposable
         Assert.Contains(Everyone, DiskteAcikDuranSidler(winAcme));
         Assert.Contains(Everyone, DiskteAcikDuranSidler(phpMyAdmin));
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         // win-acme: SYSTEM'in çalıştırdığı araç → kiracı düşürülür.
         var winAcmeKalan = DiskteAcikDuranSidler(winAcme);
@@ -577,7 +577,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// <c>runtimes\php</c> ise DOKUNULMADAN kalır (fazla kapatma IIS'i kırardı).
     /// </summary>
     [Fact]
-    public void Runtimes_sertlestirmesi_stalwart_i_kapatir_php_ye_DOKUNMAZ()
+    public async Task Runtimes_sertlestirmesi_stalwart_i_kapatir_php_ye_DOKUNMAZ()
     {
         var dataRoot = Path.Combine(calisma, "runtimes-koku");
         var stalwart = Path.Combine(dataRoot, "runtimes", "stalwart");
@@ -590,7 +590,7 @@ public sealed class DataRootHardeningTests : IDisposable
         HerkeseTamYetkiVer(stalwart);
         HerkeseTamYetkiVer(php);
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         Assert.DoesNotContain(Everyone, DiskteAcikDuranSidler(stalwart));
         Assert.DoesNotContain(Everyone, DiskteAcikDuranSidler(stalwartEtc));  // ağacın tamamı kapandı
@@ -638,7 +638,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Runtimes_agacinda_kiraci_OKUR_CALISTIRIR_ama_YAZAMAZ()
+    public async Task Runtimes_agacinda_kiraci_OKUR_CALISTIRIR_ama_YAZAMAZ()
     {
         var dataRoot = Path.Combine(calisma, "runtimes-salt-okunur");
         var runtimes = Path.Combine(dataRoot, "runtimes");
@@ -652,8 +652,8 @@ public sealed class DataRootHardeningTests : IDisposable
         Assert.NotEqual((FileSystemRights)0, NesneyeUygulananHaklar(phpSurum, Everyone) & YazmaMaskesi);
 
         // Panel bunu HER AÇILIŞTA koşturur → iki kez koşup kendi çıktısını bozmadığı da ölçülür.
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         foreach (var yol in new[] { runtimes, phpSurum })
         {
@@ -710,7 +710,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Mirasla_gelen_genis_ACE_TEK_calismada_duser()
+    public async Task Mirasla_gelen_genis_ACE_TEK_calismada_duser()
     {
         var dataRoot = Path.Combine(calisma, "tek-calisma");
         Directory.CreateDirectory(dataRoot);
@@ -721,7 +721,7 @@ public sealed class DataRootHardeningTests : IDisposable
 
         Assert.Contains(Everyone, DiskteAcikDuranSidler(stalwart));
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         // TEK çalışmadan sonra: tamamı panele ait ağaçta kiracıdan eser kalmamalı.
         var kalanlar = DiskteAcikDuranSidler(stalwart);
@@ -740,7 +740,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// önden kurmak, sonradan kurulan her bileşenin doğuştan salt-okunur mirasla gelmesini sağlar.
     /// </remarks>
     [Fact]
-    public void Runtimes_klasoru_YOKKEN_de_korunarak_olusturulur()
+    public async Task Runtimes_klasoru_YOKKEN_de_korunarak_olusturulur()
     {
         var dataRoot = Path.Combine(calisma, "runtimes-yok");
         Directory.CreateDirectory(dataRoot);
@@ -748,7 +748,7 @@ public sealed class DataRootHardeningTests : IDisposable
         var runtimes = Path.Combine(dataRoot, "runtimes");
         Assert.False(Directory.Exists(runtimes));
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         Assert.True(Directory.Exists(runtimes), "runtimes oluşturulmadı; bileşen kurulunca açık DACL ile doğardı.");
         Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(runtimes, Everyone) & YazmaMaskesi);
@@ -770,7 +770,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// ağacın yarısının açık kalması demektir.
     /// </remarks>
     [Fact]
-    public void Runtimes_altinda_mirasi_KIRILMIS_bilesen_de_kapatilir()
+    public async Task Runtimes_altinda_mirasi_KIRILMIS_bilesen_de_kapatilir()
     {
         var dataRoot = Path.Combine(calisma, "runtimes-kirik-miras");
         var bilesen = Path.Combine(dataRoot, "runtimes", "postgresql");
@@ -790,7 +790,7 @@ public sealed class DataRootHardeningTests : IDisposable
         Assert.True(new DirectoryInfo(bilesen).GetAccessControl().AreAccessRulesProtected);
         Assert.NotEqual((FileSystemRights)0, NesneyeUygulananHaklar(bilesen, Everyone) & YazmaMaskesi);
 
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(bilesen, Everyone) & YazmaMaskesi);
         Assert.Equal((FileSystemRights)0, NesneyeUygulananHaklar(bilesen, Users) & YazmaMaskesi);
@@ -859,7 +859,7 @@ public sealed class DataRootHardeningTests : IDisposable
     /// </para>
     /// </remarks>
     [Fact]
-    public void Veri_kokunun_KENDISINDE_kiraci_yazamaz_ama_GEZINEBILIR_ve_cocuklar_DEGISMEZ()
+    public async Task Veri_kokunun_KENDISINDE_kiraci_yazamaz_ama_GEZINEBILIR_ve_cocuklar_DEGISMEZ()
     {
         var dataRoot = Path.Combine(calisma, "veri-koku-kabi");
         Directory.CreateDirectory(dataRoot);
@@ -878,8 +878,8 @@ public sealed class DataRootHardeningTests : IDisposable
         // İKİ KEZ koşuluyor. Sertleştirme HER AÇILIŞTA çalışıyor; bir kere doğru olması yetmez,
         // ikinci koşumda kendi çıktısını okuyup bozmaması gerekir (kuralları yalnız-mirasa çevirip
         // sonra o çevrilmiş kuralı bir kez daha çevirmek, gezinme hakkını sessizce silebilirdi).
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
-        DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance).GetAwaiter().GetResult();
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
+        await DataRootHardeningService.HardenAsync(dataRoot, NullLogger.Instance);
 
         // (1) KÖK: yazma/silme/DACL değiştirme düştü.
         foreach (var kiraci in new[] { Everyone, Users, IisIusrs })

@@ -202,7 +202,7 @@ public sealed class FileSizeTests : IDisposable
     /// yürüyüş sonsuza kadar aynı ağacı sayardı (bütçe onu durdurur ama sonuç anlamsız olurdu).
     /// </remarks>
     [Fact]
-    public void Klasorun_ICINDEKI_baglanti_TAKIP_EDILMEZ()
+    public async Task Klasorun_ICINDEKI_baglanti_TAKIP_EDILMEZ()
     {
         var disari = Path.Combine(kok, "gercek-site");
         DosyaYaz(Path.Combine(disari, "buyuk.bin"), 1_000_000);
@@ -212,7 +212,7 @@ public sealed class FileSizeTests : IDisposable
         JunctionOlustur(baglanti, disari);
         Assert.True(Directory.Exists(baglanti), "Junction kurulamadi; test onkosulu saglanmadi.");
 
-        var sonuc = servis.CalculateSizeAsync("sites/a.test/olcum").GetAwaiter().GetResult();
+        var sonuc = await servis.CalculateSizeAsync("sites/a.test/olcum");
 
         // ASIL KORUMA: bağlantının ardındaki 1.000.000 bayt SAYILMADI.
         Assert.Equal(500, sonuc.TotalBytes);

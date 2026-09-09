@@ -89,7 +89,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         CancellationToken cancellationToken)
     {
         var request = Create(uri, WebRequestMethods.Ftp.DeleteFile, credential);
-        using var registration = cancellationToken.Register(request.Abort);
+        using var deadline = new FtpRequestDeadline(request, CommandTimeout, cancellationToken);
 
         try
         {
@@ -100,7 +100,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         {
             // İPTAL, SUNUCU HATASI DEĞİLDİR: Abort() de WebException üretir. Bunu "silinemedi"
             // diye raporlamak, kullanıcının kendi durdurduğu işi hedefin arızası gibi gösterirdi.
-            cancellationToken.ThrowIfCancellationRequested();
+            deadline.ThrowIfExpired();
             var (code, description) = Read(exception);
             return FtpCommandResult.Fail(code, description);
         }
@@ -112,7 +112,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         CancellationToken cancellationToken)
     {
         var request = Create(directoryUri, WebRequestMethods.Ftp.RemoveDirectory, credential);
-        using var registration = cancellationToken.Register(request.Abort);
+        using var deadline = new FtpRequestDeadline(request, CommandTimeout, cancellationToken);
 
         try
         {
@@ -121,7 +121,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         }
         catch (WebException exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            deadline.ThrowIfExpired();
             var (code, description) = Read(exception);
             return FtpCommandResult.Fail(code, description);
         }
@@ -137,7 +137,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         // içeren dosya adlarında yanlış ad üretirdi — yanlış ad "dosya yok" demeye götürür, o da
         // kaydı KAPATIR. Ad çıkarımının yanılabileceği bir yolda "yok" demeyiz.
         var request = Create(directoryUri, WebRequestMethods.Ftp.ListDirectory, credential);
-        using var registration = cancellationToken.Register(request.Abort);
+        using var deadline = new FtpRequestDeadline(request, CommandTimeout, cancellationToken);
 
         try
         {
@@ -146,7 +146,7 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
             using var reader = new StreamReader(stream);
 
             var names = new List<string>();
-            while (await reader.ReadLineAsync(cancellationToken) is { } line)
+            while (await reader.ReadLineAsync(deadline.Token) is { } line)
             {
                 var trimmed = line.Trim();
                 if (trimmed.Length > 0)
@@ -157,10 +157,11 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
 
             return new FtpListingResult(true, names, (int)response.StatusCode, Describe(response.StatusDescription));
         }
-        catch (WebException exception)
+        catch (Exception exception) when (exception is WebException or OperationCanceledException)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var (code, description) = Read(exception);
+            deadline.ThrowIfExpired();
+            if (exception is not WebException webException) { throw; }
+            var (code, description) = Read(webException);
             return new FtpListingResult(false, [], code, description);
         }
     }
@@ -184,7 +185,8 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
     {
         if (exception.Response is FtpWebResponse response)
         {
-            return ((int)response.StatusCode, Describe(response.StatusDescription, exception.Message));
+            using (response)
+                return ((int)response.StatusCode, Describe(response.StatusDescription, exception.Message));
         }
 
         return (FtpCommandResult.NoReplyCode, exception.Message.Trim());

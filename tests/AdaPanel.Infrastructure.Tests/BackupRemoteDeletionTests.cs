@@ -134,7 +134,7 @@ public sealed class BackupRemoteDeletionTests
     }
 
     [Fact]
-    public async Task Isaretli_kayit_TAZE_YEDEK_sayilmaz()
+    public void Isaretli_kayit_TAZE_YEDEK_sayilmaz()
     {
         // Budamanin "kaynak korumasi": bir kaynagin guncel yedegi yoksa eskisine dokunulmaz.
         // Yerelden silinmis (yalniz uzak kopyasi takilmis) bir kaydi taze yedek saymak, panelin
