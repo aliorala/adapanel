@@ -57,29 +57,32 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
         // sinif: koruma yazilir, tek bir yola baglanir, kardes yol sessizce disarida kalir.
         // Kural ikinci kez yazilmadi; ProcessRunner'in metodu paylasildi -- tavan asildiktan
         // SONRA boruyu tuketmeye devam etme davranisi da (yoksa arac write'ta asilir) oradan geliyor.
-        var outputTask = ProcessRunner.TavanliOkuAsync(
-            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
-        var errorTask = ProcessRunner.TavanliOkuAsync(
-            process.StandardError, ProcessRunner.DefaultOutputCharLimit, cancellationToken);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(request.TimeoutSeconds));
+        var outputTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardOutput, ProcessRunner.DefaultOutputCharLimit, timeoutSource.Token, preservePartialOnCancellation: true);
+        var errorTask = ProcessRunner.TavanliOkuAsync(
+            process.StandardError, ProcessRunner.DefaultOutputCharLimit, timeoutSource.Token, preservePartialOnCancellation: true);
 
-        var timedOut = false;
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token);
+            // A child can retain stdout/stderr after PowerShell exits. The deadline applies
+            // to the entire request, including those pipes, rather than only the parent PID.
+            await Task.WhenAll(process.WaitForExitAsync(timeoutSource.Token), outputTask, errorTask);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
         {
-            timedOut = true;
-            TryKill(process);
+            await TryKillAsync(process);
         }
-        catch (OperationCanceledException)
+        catch
         {
-            TryKill(process);
+            await TryKillAsync(process);
             throw;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        var timedOut = timeoutSource.IsCancellationRequested;
+        if (timedOut) await TryKillAsync(process);
         var standardOutput = await outputTask;
         var standardError = await errorTask;
         stopwatch.Stop();
@@ -138,14 +141,16 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
             : value[..MaximumOutputLength] + Environment.NewLine + "[output truncated]";
     }
 
-    private static void TryKill(Process process)
+    private static async Task TryKillAsync(Process process)
     {
         try
         {
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
-                process.WaitForExit();
+                // Allow handles and the working-directory lease to close, with a bounded cleanup.
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await process.WaitForExitAsync(cleanup.Token);
             }
         }
         catch

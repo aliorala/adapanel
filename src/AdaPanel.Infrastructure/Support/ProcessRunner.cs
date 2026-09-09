@@ -214,7 +214,8 @@ internal static class ProcessRunner
     /// paylasmak, kurali ikinci kez yazmaktan iyidir -- bu depoda ikinci nushanin bedeli defalarca
     /// olculdu.
     /// </remarks>
-    internal static async Task<string> TavanliOkuAsync(StreamReader reader, int tavan, CancellationToken cancellationToken)
+    internal static async Task<string> TavanliOkuAsync(StreamReader reader, int tavan, CancellationToken cancellationToken,
+        bool preservePartialOnCancellation = false)
     {
         if (tavan <= 0)
         {
@@ -227,7 +228,16 @@ internal static class ProcessRunner
 
         while (true)
         {
-            var okunan = await reader.ReadAsync(tampon.AsMemory(), cancellationToken);
+            int okunan;
+            try
+            {
+                okunan = await reader.ReadAsync(tampon.AsMemory(), cancellationToken);
+            }
+            catch (OperationCanceledException) when (preservePartialOnCancellation && cancellationToken.IsCancellationRequested)
+            {
+                // Terminal deadlines include output draining; retain the diagnostic prefix.
+                break;
+            }
             if (okunan == 0)
             {
                 break;

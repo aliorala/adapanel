@@ -2,7 +2,13 @@
 
 Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel sonucu gösterir. Aşağıdaki eski sürüm bölümleri tarihsel kayıttır.
 
-Son güncelleme: **09.09.2026 — 0.8.37 canlı, ek düzeltmeler tamamlandı.** Kaynak commit'i `2c96972`. [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+Son güncelleme: **10.09.2026 — 0.8.38 terminal düzeltmeleri hazırlanıyor; canlı henüz 0.8.37.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+
+## 0.8.38 terminal düzeltmeleri
+
+- Süre sınırı alt sürecin açık bıraktığı çıktı bağlantılarını da kapsıyor; alınabilen çıktı korunuyor. Temizlikte sınırsız süreç bekleme kaldırıldı. Ana süreci bitmiş bağımsız arka plan işlerinin durduğu varsayılmıyor.
+- Yanıt geldiğinde yeni komut/dizin taslağının silinmesi ve hata çıktısının zaman aşımı açıklamasını gizlemesi düzeltildi. Türkçe/İngilizce zaman aşımı metni kesin sonlandırma iddiası taşımıyor.
+- 4 terminal bütünleşme + 5 Vue akış regresyonu eklendi; ön yüzde **65 test/typecheck/build**, son tam .NET koşusunda **5.264 Infrastructure + 2 Core = 5.266 test** geçti; başarısız/atlanan yok. Canlı doğrulama bekleniyor. Süre testleri mevcut `Script host timing` koleksiyonunda, yardımcı açılışına geniş pay veriyor; üretimde kapanış beklemesi en fazla 2 saniye.
 
 ## 0.8.37 ek düzeltmeler
 

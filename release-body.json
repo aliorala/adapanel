@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.37",
-  "name": "0.8.37 — Yedek iptali ve kaynak izleme düzeltmeleri",
-  "body": "- Uzak aktarım iptal edildiğinde tamamlanmış yerel yedek, bütünlük damgası ve içerik uyarıları panel kaydında korunur. Uygun FTP kayıtlarının aktarımı daha sonra aynı kayıt üzerinden yeniden denenebilir.\n- Site, abonelik ve posta yedeklerinin içerik uyarıları ilk kayıtla birlikte yazılır.\n- Kaynak izleme ekranında veri kaynağı değiştirildiğinde geciken eski yanıtların üst üste sorgu başlatması engellenir."
+  "tag_name": "0.8.38",
+  "name": "0.8.38 — Terminal süre sınırı ve komut taslağı",
+  "body": "- Terminalin süre sınırı, alt süreçlerin açık tuttuğu çıktı bağlantılarını da kapsar. Süre dolduğunda alınabilen çıktı korunarak zaman aşımı bildirilir.\n- Çalışan komutun sonucu geldiğinde o sırada yazılmış yeni komut ve çalışma dizini korunur.\n- Komut hata çıktısı üretse de zaman aşımı bilgisi ayrıca gösterilir."
 }

@@ -77,7 +77,9 @@ const noticeError = ref(false);
 const history = ref<HistoryEntry[]>([]);
 
 async function execute() {
-  const pendingCommand = command.value.trim();
+  const submittedDraft = command.value;
+  const pendingCommand = submittedDraft.trim();
+  const submittedDirectory = workingDirectory.value;
   if (!pendingCommand || running.value) {
     return;
   }
@@ -85,18 +87,22 @@ async function execute() {
   running.value = true;
   notice.value = "";
   try {
-    const result = await executeTerminalCommand(pendingCommand, workingDirectory.value, timeoutSeconds.value);
-    workingDirectory.value = result.workingDirectory;
+    const result = await executeTerminalCommand(pendingCommand, submittedDirectory, timeoutSeconds.value);
+    if (workingDirectory.value === submittedDirectory) {
+      workingDirectory.value = result.workingDirectory;
+    }
     history.value.push({
       id: Date.now(),
       command: pendingCommand,
       workingDirectory: result.workingDirectory,
       output: result.standardOutput,
-      error: result.standardError || (result.timedOut ? t("panel.terminal.timedOut") : ""),
+      error: [result.standardError, result.timedOut ? t("panel.terminal.timedOut") : ""].filter(Boolean).join("\n"),
       exitCode: result.exitCode,
       duration: result.durationMilliseconds
     });
-    command.value = "";
+    if (command.value === submittedDraft) {
+      command.value = "";
+    }
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
   } finally {

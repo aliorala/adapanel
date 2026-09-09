@@ -1090,7 +1090,7 @@
   "panel.terminal.running": "Çalışıyor...",
   "panel.terminal.ready": "Terminal hazır. Komut çıktısı burada görünecek.",
   "panel.terminal.exitCode": "Çıkış kodu:",
-  "panel.terminal.timedOut": "Komut zaman aşımına uğradı ve sonlandırıldı.",
+  "panel.terminal.timedOut": "Komut zaman aşımına uğradı; alınan çıktı tamamlanmamış olabilir.",
   "panel.tasks.title": "Zamanlanmış görevler",
   "panel.tasks.subtitle": "Windows Task Scheduler görevlerini ve periyodik otomasyonları yönetin.",
   "panel.settings.title": "Ayarlar",

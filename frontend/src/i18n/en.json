@@ -1090,7 +1090,7 @@
   "panel.terminal.running": "Running...",
   "panel.terminal.ready": "Terminal ready. Command output will appear here.",
   "panel.terminal.exitCode": "Exit code:",
-  "panel.terminal.timedOut": "The command timed out and was terminated.",
+  "panel.terminal.timedOut": "The command timed out; the captured output may be incomplete.",
   "panel.tasks.title": "Scheduled tasks",
   "panel.tasks.subtitle": "Manage Windows Task Scheduler jobs and recurring automation.",
   "panel.settings.title": "Settings",

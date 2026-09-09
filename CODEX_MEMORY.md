@@ -1,6 +1,6 @@
 # AdaPanel Codex Memory
 
-Son guncelleme: 2026-09-09
+Son guncelleme: 2026-09-10
 
 Bu dosya, baska bir kullanici veya yeni bir Codex oturumu ayni klasorde devam ederken hizli devir notu olarak okunmalidir.
 Ilk okunacak dosyalar:
@@ -9,7 +9,16 @@ Ilk okunacak dosyalar:
 2. `CODEX_MEMORY.md`
 3. `docs/calisma-durumu.md`
 
-## 2026-09-09 — Son durum: 0.8.37 canlı, ek düzeltmeler tamamlandı
+## 2026-09-10 — 0.8.38 terminal düzeltmeleri hazırlanıyor
+
+Kullanıcının yeni “devam et” isteği üzerine terminal akışı denetlendi. Şu an canlı 0.8.37; 0.8.38 henüz kurulmadı.
+
+- Terminalin süre sınırı yalnız ana PowerShell sürecini bekliyordu; alt süreç stdout/stderr borusunu açık tutarsa cevap süresiz bekleyebiliyordu. Önce testte yeniden üretildi (2 saniyelik sınırla 10 saniyede dönmedi). İstek süresi artık çıktı okumayı da kapsıyor. Tavanlı okuyucu, yalnız terminalin seçtiği kipte iptalden önce topladığı çıktıyı koruyor; diğer ProcessRunner çağrılarının varsayılan iptal davranışı değişmedi. Süre dolunca hâlâ çalışan ana süreç ağacına Kill uygulanıyor; ana süreç önceden bitmişse bağımsız arka plan işlerinin sonlandığı iddia edilmiyor. Sınırsız WaitForExit temizliği kaldırıldı.
+- Önceki komut beklenirken yeni yazılan komut ve çalışma dizini yanıt gelince ezilmiyor. Hata çıktısı varsa bile zaman aşımı açıklaması ayrıca gösteriliyor. Türkçe/İngilizce mesaj, bütün alt süreçlerin sonlandığını kesin olarak söylemiyor.
+- 4 yeni terminal bütünleşme testi (normal sonuç, çalışan komut zaman aşımı, istek iptali, ana süreç çıktıktan sonra açık boru) ve 5 Vue akış testi eklendi. Ön yüzde 65 test/typecheck/build geçti. İlk tam koşularda yardımcı süreç açılışı ve kapanışta dizin kilidi sorunları yakalandı; testler mevcut `Script host timing` koleksiyonunda ve daha geniş başlangıç payıyla çalışıyor. Üretimde kapanış beklemesi en fazla 2 saniye; kullanıcı komut sınırı değişmedi. **Son tam koşu Infrastructure 5.264 + Core 2 = 5.266 başarılı**, başarısız/atlanan yok; Infrastructure 3 dakika 28 saniye. Yayın/canlı doğrulaması bekleniyor.
+- Kanıtlar `.tmp/remaining-fixes/*-038.log` ve `*-038.trx`. Yedekleme modülü, kapalı şifreleme tercihi ve önceki IIS düzeltmesi korunuyor.
+
+## 2026-09-09 — Önceki sonuç: 0.8.37 canlı, ek düzeltmeler tamamlandı
 
 Kullanıcının “var mı başka yapılacak, onları yap” isteğiyle iki ek hata testte yeniden üretildi ve düzeltildi. Kaynak commit'i **`2c96972`**; **0.8.37 yayınlandı ve canlıya kuruldu**. Panel mevcut/son sürümü 0.8.37 gösteriyor; hizmet Running/Automatic. Son deneme succeeded, installerExitCode=0, isFinished=true, isFailed=false. Inno başarı 21:14:11.301, hizmet Restore ve Log closed 21:14:18.707 (sunucu yerel zamanı).
 

@@ -1,8 +1,18 @@
-# 0.8.31–0.8.37 — Kalan sorunların düzeltilmesi
+# 0.8.31–0.8.38 — Kalan sorunların düzeltilmesi
 
 Kullanıcının devir notlarında kalan sorunları da düzeltme isteği üzerine çalışıldı. Yedekleme modülü korunuyor; mevcut canlı yayın izni geçerli.
 
-**Son durum (09.09.2026): 0.8.37 canlı; ek düzeltmeler tamamlandı.** Son tam koşu 5.262 .NET, ön yüz 60 test. Önceki canlı doğrulamada iki yeni iptvhub yedeği yerel ve FTP olarak doğrulandı. 62 kayıttaki eksik 18 uzak kopya geçmişte yereli de silinmiş kayıtlardır; geri oluşturulmuş sayılmaz.
+**Son durum (10.09.2026): 0.8.38 terminal düzeltmeleri hazırlanıyor; canlı henüz 0.8.37.** Önceki canlı doğrulamadaki iki yeni iptvhub yedeği ve 62 kayıt hakkındaki sonuçlar aşağıda korunuyor; eksik 18 uzak kopya geri oluşturulmuş sayılmaz.
+
+## 0.8.38 — Terminalin gerçek süre sınırı ve taslak koruması
+
+`TerminalService` ana süreç çıkışını süreyle sınırlıyor fakat stdout/stderr okumalarını yalnız istek iptaline bağlıyordu. Alt sürecin boruları devraldığı gerçek Windows süreci testinde 2 saniyelik terminal sınırına rağmen 10 saniyede yanıt dönmedi (`terminal-before-038.trx`). Süre token'ı şimdi okuyuculara da bağlı; ana süreç ve iki çıktı birlikte gözleniyor. Terminalin seçtiği okuyucu kipi iptalden önce toplanmış çıktıyı koruyor. Diğer ProcessRunner çağrılarının varsayılan davranışı değişmedi. Süre dolunca çalışan ana süreç ağacına Kill gönderiliyor; sınırsız WaitForExit kaldırıldı. Ana süreç zaten çıkmışsa bağımsız arka plan işlerinin tamamlandığı/sonlandırıldığı varsayılmıyor.
+
+Ön yüzde geciktirilmiş gerçek SFC setup akışlarıyla iki hata yeniden üretildi: yeni taslak boşaltılıyordu ve stderr varken zaman aşımı metni yoktu (`terminal-ui-before-038.log`, 2 başarısız/3 başarılı). Artık komut ve dizin yalnız gönderim anındaki değerle hâlâ aynıysa güncelleniyor; geçmiş kaydı gönderilen komuta ve sonuç dizinine ait kalıyor. Zaman aşımı metni stderr'e ekleniyor. Türkçe/İngilizce metin, bütün alt süreçlerin sonlandığını kesin olarak söylemiyor.
+
+4 terminal testi normal çıkış kodu/iki çıktı, çalışan komutta süre sınırı, çağıranın iptali ve ana süreçten devralınmış boruları kapsıyor. İlk tam koşuda yeni yardımcı süreç yoğun yük altında 5 saniyede başlayamadı; boru senaryosu oluşmadığı için test anlamlı biçimde başarısız oldu. Süre testleri mevcut `Script host timing` koleksiyonuna alındı. Sonraki koşuda yine yardımcı açılışı gecikti ve kapanmakta olan süreç çalışma dizinini kilitli tuttu. Üretimde Kill sonrasına en fazla 2 saniyelik kapanış beklemesi eklendi. Testte 60 saniye çalışan yardımcı için 15 saniyelik komut sınırı ve 25 saniyelik dış test sınırı kullanılıyor; PID dosyasının oluştuğu ve kısmi çıktının korunduğu ayrıca şart. Bu, üretimdeki kullanıcının seçtiği sınırı değiştirmez. Yardımcı süreçlerin yalnız testin yazdığı PID'leri kapatılıp kapanışları bekleniyor. İlk koşuların kayıtları `infrastructure-initial-038.*` ve `infrastructure-second-038.*` olarak korunuyor. Ön yüzde **10 dosya/65 test**, typecheck ve build geçti. Son tam koşu/yayın/canlı sonucu henüz bekleniyor.
+
+Son doğrulama: **Infrastructure 5.264/5.264 + Core 2/2 = 5.266 başarılı**, atlanan/başarısız yok; Infrastructure 3 dakika 28 saniye. Kanıtlar `infrastructure-final-038.trx`, `core-038.trx`, `terminal-final-038.trx` (4/4), `frontend-test-038.log` (65/65), `typecheck-038.log`, `frontend-build-038.log`. İlk başarısız koşular silinmedi; yukarıdaki test ve kapanış düzeltmeleri sonrası tam koşu tekrar geçti.
 
 ## 0.8.37 — İptal edilen yedeğin kaydı ve kaynak izleme yarışı
 
