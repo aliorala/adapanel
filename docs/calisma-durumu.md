@@ -1,13 +1,32 @@
 # Çalışma durumu — canlı kayıt
 
-**Bu dosyanın amacı:** elektrik kesilse, oturum kapansa ya da kota dolsa bile
-"kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
-Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
+Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel sonucu gösterir. Aşağıdaki eski sürüm bölümleri tarihsel kayıttır.
 
-Son güncelleme: **09.09.2026** · Son doğrulanan canlı sürüm: **0.8.32** · Kaynak commit'leri: `01ce3c9`, `c555ac4`.
+Son güncelleme: **09.09.2026 — 0.8.36 canlı, devam çalışması tamamlandı.** Kaynak: `6a6fa9a`; kayıtlı FTP hedefiyle yeni DB yedeği: `63b3555`. [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+
+## Son sonuç
+
+- Yedekleme modülü korunuyor; şifreleme kullanıcının açık tercihiyle kapalı. Kompakt görünüm korunuyor; bekleyen onay yok.
+- Uygun başarısız FTP kaydını aynı arşivle yeniden gönderme eklendi. Eski iptvhub kaydında oluşturma anının hash'i yok; bu kayıt güvenli biçimde reddedildi ve yerel arşivi/geçmişi korundu. Eski dosyayı yeniden gönderilmiş saymayın.
+- Yönetici artık yeni veritabanı yedeğini kayıtlı FTP hedefine, parolayı yeniden girmeden ve hedefi onaylayarak alabiliyor. Canlıda yalnız iptvhub için iki yeni kopya başarıyla yerel + FTP olarak alındı. Son kayıt `c3de560c02774c9aac73cbcdc0a74cfc`, önceki yeni kayıt `d6eb5f54008e4c6fb00cbf5367c422c7`; ikisi de remoteState=present. Son dosyanın kayıtlı/ölçülen SHA256'sı eşleşti.
+- Onaydaki yanlış Sil etiketi, uyarıyı eksik içerik gibi gösteren bildirim, boş dosya adı ve yeni yedeği gizleyen eski filtre düzeltildi. Eski filtre + kapalı gün ile canlı akış kontrolü geçti; yeni kayıt görünür ve mesaj doğru.
+- **62 kayıt doğrulandı: 0 yerel dosya yok, 18 kaydın yereli geçmiş silme işleminde kaldırılmış, 18 uzak kopya yok, 0 arşiv açılamadı, 0 kayıt ölçülemedi.** Eski 18 kaydın kayıp kopyaları geri oluşturulmadı ve geçmiş silinmedi. FTP yetim taraması desteklenmiyor. Gerçek geri yükleme yapılmadı.
+- Son tam **5.260 .NET testi**, 67 ilgili kontrol ve ön yüz **58 test** başarılı. Son tam arka uç koşusu 0.8.35'tedir; ön yüz ağırlıklı 0.8.36'da typecheck/58 test/build tekrar geçti. Atlanan test/derleme uyarısı yok.
+- **0.8.36 paket:** 90.763.324 bayt, SHA256 `6CED764AD5662C470FFD6C2D7016FA6B197B31D2D23CC7E193597575ED6F57AB`. Yayın ve canlı indirme doğrulandı; 149 ön yüz dosyası eşleşti, 22 bileşen geçti/3 büyük paket istisnası, içerik denetimleri geçti. Son manifestler bu sürümündür.
+- Hizmet Running/Automatic; son kurulum succeeded, installerExitCode=0, isFinished=true/isFailed=false; Inno Restore ve Log closed 19:15:45.711. Kaynak geçmişi açık GitHub deposuna gönderilmedi.
+
+## Önceki kayıt — 0.8.33 başarısız FTP aktarımını yeniden gönderme
+
+- Yöneticiye mevcut yerel arşivi kayıtlı FTP hedefine yeniden gönderme işlemi eklendi. Hedef onaylanır; yer/başlangıç günü/boyut/hash kontrol edilir; yerel dosya ve diğer uyarılar korunur. Aynı kayda yazılır, çoğaltılmaz. API rolü ve aktör/kaynak sahibi denetim izi test edildi.
+- Eski 18 kayıt, önceki silme işleminde yereli kaldırılmış `deleted_remote_failed` kayıtlarıdır. “0 yerel dosya yok” sonucu bunların yerel kopyası bulunduğu anlamına gelmez; bu durum artık ayrı sayaçla gösterilir. Geçmiş kayıtlar silinmedi.
+- Paket 90.763.158 bayt, SHA256 `CC925CDA64D3F543D22A1CA81B0AFD68CBA241F3FA0E044272E5382995D394B7`. Son manifestler 0.8.33'e aittir. Yayın/canlı ve gerçek yeniden gönderme sonucu henüz bu satırda doğrulanmış sayılmaz.
+
+## Önceki kayıt — 0.8.32
+
+Kaynak commit'leri: `01ce3c9`, `c555ac4`.
 Son tam .NET koşusu (0.8.32): **5.242 başarılı**, atlanan yok; derlemede **0 uyarı / 0 hata**. 73 ilgili kontrol geçti. 0.8.31'deki **58 ön yüz testi** başarılı; 0.8.32'de yalnız sürüm bilgisi değişen ön yüz yeniden derlendi. Typecheck/build başarılı.
 
-## SON İŞ — Kalan servis ve FTP sorunları düzeltildi, 0.8.32 canlıda
+### Kalan servis ve FTP sorunları düzeltildi, 0.8.32 canlıda
 
 - Kullanıcı kalan sorunların düzeltilmesini istedi. Yedekleme modülü ve kompakt görünüm korunuyor.
 - Kurulumda servis başlangıç ayarı saklanıyor, dosya değiştirme sırasında yeniden başlama engelleniyor, iptal/hata/başarıda ayar geri geliyor. Yalnız tam yolu eşleşen uygulama süreci kapatılır. Durdurma ve dosya kilidi doğrulanmadan dosyalar değiştirilmez.

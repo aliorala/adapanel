@@ -9,7 +9,21 @@ Ilk okunacak dosyalar:
 2. `CODEX_MEMORY.md`
 3. `docs/calisma-durumu.md`
 
-## 2026-09-09 — Güncel devir: 0.8.32 canlı
+## 2026-09-09 — Son durum: 0.8.36 canlı, devam çalışması tamamlandı
+
+Kullanıcının “devam et” isteği üzerine çalışıldı. Kaynak commit'leri `35e3b37` (0.8.33), `cf28ae9` (0.8.34), `63b3555` (0.8.35), `6a6fa9a` (0.8.36). Ayrıntı ve kanıtlar: [devam kaydı](docs/kalan-sorunlar-2026-09-09.md).
+
+- **Yedekleme modülü kalacak. Şifreleme kullanıcının “Şimdilik kapalı kalsın” tercihiyle kapalı.** Bekleyen onay/parola talebi yok. Kompakt görünüm korunuyor.
+- İlk FTP aktarımı başarısız, yerel arşivi ve oluşturma anının SHA256 kaydı bulunan sunucu yedeklerine yönetici için **Uzağa yeniden gönder** eklendi. Hedef onaylanır; güncel hedef/kimlik tek okumada çözülür, dosya yeri/boyutu/hash'i doğrulanır, aktarım boyunca yerel dosya yazma/silmeye karşı tutulur. Aynı kayıt/ilk gün yolu kullanılır; yerel dosya ve diğer uyarılar korunur. Abonelik/silinmiş/tamamlanmış/damgasız kayıtlar ve sabit dosya hedefleri reddedilir. Aktör/kaynak sahibi denetim izi test edildi.
+- Eski `cb1c201e630d4a709b16ff309007f325` kaydının ContentHash alanı boş; yeniden gönderme canlıda aktarım başlamadan reddedildi. **Eski arşiv yeniden gönderilmiş sayılmamalı.** Mevcut hash geriye dönük doğrulanmış gibi kayda eklenmedi. Yerel dosya ve başarısız geçmiş korunuyor; ön yüz yeniden gönderilememe nedenini açıkça gösteriyor.
+- Yönetici veritabanı yedeğine **Kayıtlı FTP hedefine yedek al** eklendi. Parola tarayıcıya verilmeden mevcut kimlik sunucuda kullanılır; onaylanan URL değişmişse döküm başlamaz. Canlıda yalnız `mariadb:iptvhub` için **iki yeni yerel + FTP yedeği başarıyla alındı**, kaynak/veri silinmedi. İlk yeni kayıt `d6eb5f54008e4c6fb00cbf5367c422c7`, son kayıt `c3de560c02774c9aac73cbcdc0a74cfc`; ikisi de son doğrulamada remoteState=present/remoteMissing=false. Son dosya `mariadb-iptvhub-20260909161552.sql.zst`, 16.083.344 bayt; kayıtlı ve ölçülen SHA256 `6CF8FA78C8CAFDA2A8CE1F1C7068F1646B56972099980058680BB8A6C46BC8E5` eşleşti.
+- Nötr onayda yanlış “Sil” düğmesi düzeltildi. Şifreleme kapalı uyarısı artık içerik eksikliği varmış gibi sunulmuyor, bildirim gerçek dosya adını taşıyor. Yeni yedekten sonra arama/sayfa sıfırlanıp ilgili gün açılıyor. Eski filtre + kapalı gün üzerinden bu akış canlıda başarıyla ölçüldü; masaüstünde satır/onay/uyarı metinlerinde taşma görülmedi.
+- **Son canlı doğrulama: 62 kayıt; 0 yerel dosya yok; 18 kaydın yereli önceki silme işleminde kaldırılmış; 18 uzak kopya yok; 0 arşiv açılamadı; 0 kayıt ölçülemedi.** Eski 18 kayıt `deleted_remote_failed`, Path boş; geçmişte silinmiş yerel dosyaları varmış gibi yorumlamayın. 14 kayıt 17 Ağustos, 4 kayıt 28 Ağustos'tan. Geçmiş silinmedi, kayıp arşivler yeniden oluşturulmadı. FTP yetim taraması desteklenmediği için yapılmadı; gerçek site/veritabanı geri yüklemesi yapılmadı.
+- **Son tam koşu 5.260 .NET testi (Infra 5.258 + Core 2), atlanan/başarısız yok; derlemelerde 0 uyarı/0 hata.** 67 ilgili test geçti. Tam koşu 0.8.35 işlevlerini kapsar; yalnız ön yüz değişen 0.8.36'da typecheck/58 test/build tekrar geçti, tam .NET koşusu yeniden çalıştırılmadı. PowerShell 7 → Windows PowerShell 5.1 modül yolu sorunu yalnız test/paket sürecinin PSModulePath ortamıyla çözüldü; kalıcı ortam değiştirilmedi.
+- **0.8.36 yayımlandı ve canlıda tamamlandı.** Paket 90.763.324 bayt; SHA256 `6CED764AD5662C470FFD6C2D7016FA6B197B31D2D23CC7E193597575ED6F57AB`. Yayından yeniden indirilen dosya ve canlı paket aynı özetle doğrulandı. 149 ön yüz dosyası eşleşti; 22 bileşen geçti, 3 büyük paket betiğin istisnasıyla atlandı; içerik denetimleri geçti. Son manifestler 0.8.36'ya aittir. Hizmet Running/Automatic; last-attempt succeeded/installerExitCode=0/isFinished=true/isFailed=false. Inno Restore/Log closed 19:15:45.711.
+- Üç devir belgesi güncellendi. Kaynak kod yerelde commit'lendi; **kaynak geçmişini açık GitHub deposuna push etmeyin**. Yalnız mevcut release betiğiyle yayın yapıldı. Önceki Chrome bağlantısı sorusu çözüldü; kullanıcıdan beklenen bir bağlantı yenileme adımı yok.
+
+## 2026-09-09 — Önceki devir: 0.8.32 canlı
 
 Kullanıcı “Kalan sorunları da düzelt” dedi. Kaynak commit'leri `01ce3c9` (0.8.31) ve `c555ac4` (0.8.32); ayrıntılar ve kanıtlar [kalan sorunlar kaydında](docs/kalan-sorunlar-2026-09-09.md).
 
