@@ -9,7 +9,17 @@ Ilk okunacak dosyalar:
 2. `CODEX_MEMORY.md`
 3. `docs/calisma-durumu.md`
 
-## 2026-09-09 — Son durum: 0.8.36 canlı, devam çalışması tamamlandı
+## 2026-09-09 — Ek tarama: 0.8.37 hazırlanıyor
+
+Kullanıcının “var mı başka yapılacak, onları yap” isteğiyle iki ek hata testte yeniden üretildi ve düzeltildi. Canlı kurulum henüz uygulanmadı; son doğrulanmış canlı sürüm 0.8.36.
+
+- FTP aktarımı iptal edilince tamamlanmış yerel arşiv panel kaydına hiç girmiyordu. Bütünlük damgası uzak aktarımdan önce hesaplanıyor; iptal durumunda yerel kayıt, yan indeks ve içerik uyarıları istek iptalinden bağımsız yazılıyor, ardından iptal çağırana iletiliyor. İçerik uyarıları site/abonelik/posta için ilk kayıtla birlikte yazılıyor. Bu düzeltme işlem çökmesi veya arşiv üretimi sırasında iptal için kalıcı iş kuyruğu sağlamaz.
+- Kaynak izleme bileşeninde eski isteğin `finally` bloğu yeni isteğin kilidini açıyordu. Kilidi yalnız güncel istek bırakıyor; kaynak değişimi ve bileşen kapanışında eski yanıtlar geçersizleştiriliyor.
+- Regresyonlar önce kırmızıydı: 2 FTP iptal senaryosunda liste boş; 2 ön yüz gecikme senaryosunda beklenen 3 yerine 5 istek. Son tam koşu **Infrastructure 5.260 + Core 2 = 5.262 / ön yüz 60 test başarılı**, atlanan yok. Typecheck/build geçti. FTP testleri iptal sonrası aynı id/hash ile yeniden aktarım ve gerçek TCP sunucusunun aldığı baytları da doğruluyor; eksik içerik uyarıları korunuyor.
+- Kanıtlar `.tmp/remaining-fixes/*-037.log` ve `infrastructure-final-037.trx`, `core-037.trx`. CPU/bellek/disk kartları canlı masaüstünde görsel kontrol edildi; taşma görülmedi.
+- **Yedek modülü kalıyor, şifreleme kullanıcının tercihiyle kapalı.** Önceki 18 kayıp uzak kopya ve damgasız eski arşiv hakkındaki sınırlar aşağıda geçerli. Kaynak kod/tarihçe/tag public GitHub'a push edilmeyecek; yalnız mevcut yayın betiğiyle kurulum paketi yayınlanacak.
+
+## 2026-09-09 — Önceki sonuç: 0.8.36 canlı
 
 Kullanıcının “devam et” isteği üzerine çalışıldı. Kaynak commit'leri `35e3b37` (0.8.33), `cf28ae9` (0.8.34), `63b3555` (0.8.35), `6a6fa9a` (0.8.36). Ayrıntı ve kanıtlar: [devam kaydı](docs/kalan-sorunlar-2026-09-09.md).
 

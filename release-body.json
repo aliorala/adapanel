@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.36",
-  "name": "0.8.36 — Yedek sonuç bildirimi",
-  "body": "Yedek sonucu, uyarının gerçek anlamını koruyarak gösterilir.\n\n- Şifreleme kapalı gibi uyarılar, eksik arşiv içeriği varmış gibi sunulmaz.\n- Sonuç bildiriminde ilgili yedeğin dosya adı gösterilir.\n- Yeni yedek alındığında önceki arama ve sayfa seçimi sıfırlanır; yeni kaydın günü açılır."
+  "tag_name": "0.8.37",
+  "name": "0.8.37 — Yedek iptali ve kaynak izleme düzeltmeleri",
+  "body": "- Uzak aktarım iptal edildiğinde tamamlanmış yerel yedek, bütünlük damgası ve içerik uyarıları panel kaydında korunur. Uygun FTP kayıtlarının aktarımı daha sonra aynı kayıt üzerinden yeniden denenebilir.\n- Site, abonelik ve posta yedeklerinin içerik uyarıları ilk kayıtla birlikte yazılır.\n- Kaynak izleme ekranında veri kaynağı değiştirildiğinde geciken eski yanıtların üst üste sorgu başlatması engellenir."
 }

@@ -1,8 +1,20 @@
-# 0.8.31–0.8.36 — Kalan sorunların düzeltilmesi
+# 0.8.31–0.8.37 — Kalan sorunların düzeltilmesi
 
 Kullanıcının devir notlarında kalan sorunları da düzeltme isteği üzerine çalışıldı. Yedekleme modülü korunuyor; mevcut canlı yayın izni geçerli.
 
-**Son durum (09.09.2026): 0.8.36 canlı.** Son tam test koşusu 5.260 .NET, son ön yüz 58 test; canlıda iki yeni iptvhub yedeği yerel ve FTP olarak doğrulandı. Son 62 kayıt doğrulamasında erişilemeyen/açılamayan arşiv yok. Eksik 18 uzak kopya geçmişte yereli de silinmiş kayıtlardır; geri oluşturulmuş sayılmaz. Ayrıntılı kronolojik çalışma ve doğrulama kayıtları aşağıdadır.
+**Son durum (09.09.2026): 0.8.37 testleri geçti, paket hazırlanıyor; canlı henüz 0.8.36.** Son tam koşu 5.262 .NET, ön yüz 60 test. Önceki canlı doğrulamada iki yeni iptvhub yedeği yerel ve FTP olarak doğrulandı. 62 kayıttaki eksik 18 uzak kopya geçmişte yereli de silinmiş kayıtlardır; geri oluşturulmuş sayılmaz.
+
+## 0.8.37 — İptal edilen yedeğin kaydı ve kaynak izleme yarışı
+
+Tamamlanmış yerel arşiv FTP'ye aktarılırken istek iptal edilirse `FinalizeBackupAsync` kayıt oluşturmadan çıkıyordu. Gerçek yerel TCP/FTP sunucusunda MKD aşamasında iptal edilerek iki kez yeniden üretildi: sağlam içerik ve boş veritabanı nedeniyle uyarılı içerik. İkisinde de ilk test listeyi boş buldu (`cancel-before-037.trx`).
+
+Hash uzak aktarımdan önce hesaplanıyor. Aktarım iptal edilince `created_remote_failed` kaydı, hash, yan indeks ve varsa eksik içerik uyarıları iptal edilmiş istek token'ından bağımsız yazılıyor; ardından asıl iptal yeniden iletiliyor. Site/abonelik/posta içerik uyarıları artık ikinci kayıt güncellemesine bırakılmıyor. Test, kayıtlı FTP hedefine yeniden gönderimde aynı id/hash'i, doğru son durumu ve sunucunun aldığı baytları da kontrol ediyor. Servis çökmesi/elektrik kesintisi için kalıcı iş kuyruğu eklenmedi; arşiv oluşturma veya hash aşamasındaki iptal bu düzeltmenin kapsamı dışında.
+
+`ResourceConsumers.vue` eski isteğin `finally` bloğunda yeni isteğin `inFlight` kilidini kaldırıyordu. Gerçek Vue watcher/yaşam döngüsü, bellek içi render host'u ve geciktirilmiş API yanıtlarıyla hem eski başarı hem eski hata sınandı: düzeltmeden önce 3 yerine 5 istek oluştu (`consumers-before-037.log`). Güncel olmayan istek artık kilidi/denetleyiciyi değiştirmiyor; kaynak değişimi yükleniyor durumunu temizliyor, kapanış eski istekleri geçersiz kılıyor.
+
+- Son tam test: **Infrastructure 5.260/5.260 + Core 2/2 = 5.262**, başarısız/atlanan yok; Infrastructure süresi 3 dakika 8 saniye. `infrastructure-final-037.trx`, `core-037.trx`.
+- Ön yüz: **9 dosya / 60 test**, typecheck ve build başarılı. `.tmp/remaining-fixes/typecheck-037.log`, `frontend-test-037.log`, `frontend-build-037.log`.
+- Ana sayfa CPU/bellek/disk kartları canlı masaüstünde kontrol edildi; yazı taşması görülmedi. Tasarım ölçeği ve şifreleme tercihi değiştirilmedi. Canlıya yapay FTP kesintisi uygulanmadı.
 
 ## Güncelleme sırasında servis dosyası kilidi
 

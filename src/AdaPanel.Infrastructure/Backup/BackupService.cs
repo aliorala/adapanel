@@ -581,7 +581,8 @@ public sealed partial class BackupService(
         ChainStamp? chain = null,
         BackupFileIndex? fileIndex = null,
         string subscriptionUserId = "",
-        int itemCount = 0)
+        int itemCount = 0,
+        IReadOnlyCollection<BackupRestoreWarningDto>? contentWarnings = null)
     {
         // SIRA KİLİTLİ: ÖNCE SIKIŞTIR, SONRA ŞİFRELE.
         //
@@ -614,6 +615,10 @@ public sealed partial class BackupService(
         var target = ResolveTarget(request.TargetType, request.RemoteUrl, request.RemoteUserName, request.RemotePassword, request.RemoteRegion);
         await EnsureRemoteTargetAllowedAsync(target, cancellationToken);
 
+        // Hash the finished archive before starting the remote operation. Once transfer begins,
+        // request cancellation must not prevent journaling this completed local copy.
+        var contentHash = await BackupContentHash.ComputeAsync(finalPath, cancellationToken);
+
         // YEDEK HER ZAMAN ÖNCE YEREL DİSKE ALINIR; uzak hedef bunun YERİNE değil ÜSTÜNE gelir.
         //
         // Uzak yükleme hatası ESKİDEN İSTİSNA OLARAK YUKARI ÇIKIYORDU ve kayıt bu satırdan sonra
@@ -626,15 +631,17 @@ public sealed partial class BackupService(
         // ve uyarısında AÇIKÇA söylenir. Bir hedefin başarısızlığı diğerini götürmez.
         var remoteUri = string.Empty;
         string? remoteFailure = null;
+        OperationCanceledException? remoteCancellation = null;
         if (target.Type != "local")
         {
             try
             {
                 remoteUri = await UploadToRemoteAsync(finalPath, finalName, target, placement, cancellationToken);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
             {
-                throw;
+                remoteCancellation = exception;
+                remoteFailure = DescribeRemoteFailure(exception);
             }
             catch (Exception exception)
             {
@@ -681,7 +688,7 @@ public sealed partial class BackupService(
             // sonra alınır. Ham dosyayı damgalamak, tam da kurcalanmaya açık olan katmanı ölçüm
             // dışında bırakırdı. Hesaplanamazsa boş kalır ve yedek yine geçerlidir (gerekçe
             // BackupContentHash.ComputeAsync'te yazılı).
-            ContentHash = await BackupContentHash.ComputeAsync(finalPath, cancellationToken)
+            ContentHash = contentHash
         };
 
         // İNDEKS YAN KAYDI kayıttan ÖNCE yazılır: kayıt listede görünüp indeksi olmayan bir halka,
@@ -691,7 +698,7 @@ public sealed partial class BackupService(
         {
             try
             {
-                await fileStore.WriteAsync(IndexSidecarPath(record.Id), fileIndex, cancellationToken);
+                await fileStore.WriteAsync(IndexSidecarPath(record.Id), fileIndex, CancellationToken.None);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -739,7 +746,11 @@ public sealed partial class BackupService(
         // arşivi sağlamlardan AYIRT EDİLEMEZ yapardı.
         ApplyIntegrity(record, butunluk, fileName);
 
-        await AppendRecordAsync(record, cancellationToken);
+        ApplyContentWarnings(record, contentWarnings ?? []);
+        await AppendRecordAsync(record, CancellationToken.None);
+        // Preserve cancellation for the caller, after persisting both the archive and warnings.
+        if (remoteCancellation is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(remoteCancellation).Throw();
         return record;
     }
 
@@ -1289,7 +1300,7 @@ public sealed partial class BackupService(
             AddTextEntry(archive, "manifest.json", manifest);
         }
 
-        var siteKaydi = await FinalizeBackupAsync(
+        return await FinalizeBackupAsync(
             targetPath,
             fileName,
             "site",
@@ -1300,9 +1311,8 @@ public sealed partial class BackupService(
             atlananlar,
             cancellationToken,
             plan.Stamp,
-            plan.Stamp is null ? null : indeks);
-
-        return await ApplyContentWarningsAsync(siteKaydi, icerikUyarilari, cancellationToken);
+            plan.Stamp is null ? null : indeks,
+            contentWarnings: icerikUyarilari);
     }
 
     // =====================================================================================
@@ -2273,7 +2283,7 @@ public sealed partial class BackupService(
             }, BackupJsonOptions));
         }
 
-        var record = await FinalizeBackupAsync(
+        return await FinalizeBackupAsync(
             targetPath,
             fileName,
             "subscription",
@@ -2286,11 +2296,8 @@ public sealed partial class BackupService(
             chainPlan.Stamp,
             chainPlan.Stamp is null ? null : indeks,
             kaynak,
-            plan.ItemCount);
-
-        // Yedek ALINIRKEN atlanan her şey kayda taşınır. "Yedeklendi" deyip içinde olmayan bir
-        // veritabanını geri yüklerken keşfetmek, panelin verebileceği en pahalı sürprizdir.
-        return await ApplyContentWarningsAsync(record, uyarilar, cancellationToken);
+            plan.ItemCount,
+            contentWarnings: uyarilar);
     }
 
     /// <summary>
@@ -2310,14 +2317,13 @@ public sealed partial class BackupService(
     /// diğeri uyarı listesinde.
     /// </para>
     /// </remarks>
-    private async Task<BackupRecordDto> ApplyContentWarningsAsync(
+    private static void ApplyContentWarnings(
         BackupRecordDto record,
-        IReadOnlyCollection<BackupRestoreWarningDto> uyarilar,
-        CancellationToken cancellationToken)
+        IReadOnlyCollection<BackupRestoreWarningDto> uyarilar)
     {
         if (uyarilar.Count == 0)
         {
-            return record;
+            return;
         }
 
         record.Warnings.AddRange(uyarilar);
@@ -2326,9 +2332,6 @@ public sealed partial class BackupService(
         {
             record.Status = "created_with_errors";
         }
-
-        await UpsertRecordAsync(record, cancellationToken);
-        return record;
     }
 
     /// <summary>
@@ -2859,12 +2862,8 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
 
         // Dosya TARAMASI yok: ZipFile.CreateFromDirectory tek dosyayı bile atlayamaz, atlarsa
         // istisna atar ve yedek hiç oluşmaz (servis durdurulmuş hâlde alındığı için kilit de yok).
-        var kayit = await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement, skipped: null, cancellationToken);
-
-        // Panel posta sunucusunu KENDISI durdurdu; acamadiysa bunu yedegin uzerine yazar.
-        return postaUyarisi is null
-            ? kayit
-            : await ApplyContentWarningsAsync(kayit, new[] { postaUyarisi }, cancellationToken);
+        return await FinalizeBackupAsync(targetPath, fileName, "mail", "stalwart", "zip", request, placement,
+            skipped: null, cancellationToken, contentWarnings: postaUyarisi is null ? [] : [postaUyarisi]);
     }
 
     /// <summary>Posta verisini geri yukler; posta sunucusu acilamadiysa uyari doner.</summary>

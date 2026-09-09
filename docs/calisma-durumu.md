@@ -2,9 +2,16 @@
 
 Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel sonucu gösterir. Aşağıdaki eski sürüm bölümleri tarihsel kayıttır.
 
-Son güncelleme: **09.09.2026 — 0.8.36 canlı, devam çalışması tamamlandı.** Kaynak: `6a6fa9a`; kayıtlı FTP hedefiyle yeni DB yedeği: `63b3555`. [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+Son güncelleme: **09.09.2026 — 0.8.37 yerel testleri tamamlandı, paket hazırlanıyor; canlı henüz 0.8.36.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
 
-## Son sonuç
+## 0.8.37 ek düzeltmeler
+
+- Uzak aktarım iptalinde tamamlanmış yerel yedeğin kaybolan panel kaydı düzeltildi. Hash aktarımdan önce ölçülüyor; kayıt/yan indeks/içerik uyarıları yazıldıktan sonra iptal çağırana iletiliyor. Site, abonelik ve posta uyarıları ilk kayda dahil.
+- Kaynak izleme ekranında eski yanıtın yeni isteğin kilidini kaldırıp üst üste sorgu başlatması düzeltildi. Gerçek Vue yaşam döngüsünde eski isteğin hem geç başarısı hem geç hatası test edildi.
+- **5.262 .NET + 60 ön yüz testi**, typecheck ve build başarılı. FTP iptalinden sonra aynı arşivin aynı kayıtla yeniden gönderilmesi yerel TCP/FTP düzeneğinde doğrulandı. Canlıda yapay kesinti veya geri yükleme yapılmadı.
+- Kompakt ana sayfa canlı masaüstünde gözden geçirildi; CPU/bellek/disk yazılarında taşma görülmedi. Yedekleme korunuyor; şifreleme kapalı kalıyor.
+
+## Önceki 0.8.36 sonucu
 
 - Yedekleme modülü korunuyor; şifreleme kullanıcının açık tercihiyle kapalı. Kompakt görünüm korunuyor; bekleyen onay yok.
 - Uygun başarısız FTP kaydını aynı arşivle yeniden gönderme eklendi. Eski iptvhub kaydında oluşturma anının hash'i yok; bu kayıt güvenli biçimde reddedildi ve yerel arşivi/geçmişi korundu. Eski dosyayı yeniden gönderilmiş saymayın.

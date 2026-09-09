@@ -251,6 +251,51 @@ public sealed class BackupRemoteLayoutTests
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TimeSpan.FromSeconds(5)));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancelled_ftp_backup_keeps_completed_local_archive_hash_and_content_warnings(bool incomplete)
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.HangMkd = true;
+        using var cancellation = new CancellationTokenSource();
+        var request = SiteIstegi(server.TabanAdres("yedekler"));
+        if (incomplete) request.Databases.Add(new BackupDatabaseRef { Engine = "mariadb", DatabaseName = "empty" });
+        var service = alan.ServisKur(database: new SahteDokumcu(true));
+        var operation = service.BackupSiteAsync(request, cancellation.Token);
+        await server.MkdStarted.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        var record = Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+        Assert.Equal("created_remote_failed", record.Status);
+        Assert.Empty(record.RemoteUri);
+        Assert.True(File.Exists(record.Path));
+        Assert.True(record.Size > 0);
+        Assert.NotEmpty(record.ContentHash);
+        Assert.Equal(record.ContentHash, await BackupContentHash.ComputeAsync(record.Path, alan.Iptal));
+        Assert.Contains(record.Warnings, warning => warning.MessageKey == "backup.remote_upload_failed");
+        Assert.Equal(incomplete, record.Warnings.Any(warning => warning.MessageKey is not
+            ("backup.remote_upload_failed" or "backup.remote_unencrypted")));
+        Assert.Empty(server.Dosyalar);
+
+        // The preserved record must remain usable, including the original integrity stamp.
+        server.HangMkd = false;
+        await alan.DosyaDeposu.WriteAsync("config/automation.json", new
+        {
+            BackupTargetType = "ftp", BackupRemoteUrl = request.RemoteUrl,
+            BackupRemoteUserName = "yedekci", BackupRemotePasswordProtected = "protected:parola"
+        }, alan.Iptal);
+        var retried = await alan.ServisKur(protector: new TestProtector())
+            .RetryRemoteUploadAsync(record.Id, request.RemoteUrl, alan.Iptal);
+        Assert.Equal(record.Id, retried.Id);
+        Assert.Equal(record.ContentHash, retried.ContentHash);
+        Assert.Equal(incomplete ? "created_with_errors" : "created_remote_synced", retried.Status);
+        Assert.Equal(await File.ReadAllBytesAsync(record.Path, alan.Iptal), Assert.Single(server.Dosyalar).Value);
+        Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+    }
     /// <summary>Testlerdeki sitenin adi; 0.6.1'den beri UZAK yolda da KAYNAK klasoru olarak gecer.</summary>
     private const string Site = "shop.example.com";
 

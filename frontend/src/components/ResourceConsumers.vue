@@ -453,8 +453,9 @@ async function load() {
   } finally {
     if (current === requestId) {
       loading.value = false;
+      inFlight = false;
+      controller = null;
     }
-    inFlight = false;
   }
 }
 
@@ -502,6 +503,7 @@ watch(
     controller?.abort();
     requestId += 1;
     inFlight = false;
+    loading.value = false;
     snapshot.value = null;
     webSnapshot.value = null;
     // Biten-sorgu defteri KAYNAĞA aittir; motor değişince taşınmamalı.
@@ -522,6 +524,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  requestId += 1;
   stopTimer();
   document.removeEventListener("visibilitychange", onVisibilityChange);
   controller?.abort();
