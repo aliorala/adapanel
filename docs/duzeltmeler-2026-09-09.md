@@ -42,3 +42,18 @@ Arka uç testlerinde Windows PowerShell modül yolu yalnız test süreci için a
 Son tam altyapı koşusunda **5.220 / 5.220 test geçti**, başarısız veya atlanan test yok; süre 7,15 dakika. Çekirdek projesinin **2 / 2 testi** de geçti. Böylece 5.222 .NET testi ve 58 ön yüz testi doğrulandı.
 
 Kanıtlar: `.tmp/audit-fixes/final/infrastructure-final.trx`, `.tmp/audit-fixes/infrastructure-final.log`, `.tmp/audit-fixes/final/final.trx` (çekirdek) ve `.tmp/audit-fixes/frontend-build.log`. Önceki kesilen denemeler başarılı tam koşu olarak sayılmadı. Test projelerindeki mevcut analiz uyarıları ayrı teknik borç olarak kalır; son koşuda test hatası yoktur.
+
+## 0.8.29 yayını ve canlı doğrulama
+
+Kullanıcının canlıya yayınlama izniyle 9 Eylül 2026 tarihinde 0.8.29 yayımlandı: https://github.com/aliorala/adapanel/releases/tag/0.8.29 . Yerel kaynak commit'i `68180e6`; uzaktaki depo mevcut yönteme uygun olarak yalnız kurulum paketi ve sürüm notlarını taşır, kaynak geçmişi gönderilmedi.
+
+- Kurulum dosyası: 90.744.360 bayt. SHA256: `F0AB907400FA6F2B01040CF96DF9C2813EF3B94CB333CD85AF22F518EF36CA54`.
+- Sürüm kapısı, yayın notu mahremiyet denetimi, publish ve installer içerik denetimleri geçti. Ön yüzün 149 dosyası publish çıktısıyla SHA256 üzerinden eşleştirildi. Bileşen denetiminde 22 paket geçti; betiğin büyük paket istisnasındaki 3 paket atlandı.
+- Yayındaki paket yeniden indirildi ve yerel dosyayla SHA256 eşleşmesi doğrulandı. GitHub `latest` sürümü 0.8.29 olarak doğrulandı.
+- Canlı panelde paket indirildi, aynı SHA256 ile hazırlandı ve kurulum onaylandı. İlk deneme, servis süreç dosyasını yeniden kilitlediği için kod 5 ile geri alındı. Windows olayları zorla sonlanan hizmet için 5 saniyelik otomatik yeniden başlatma kaydını gösterdi. Bu turda servis kurtarma ayarı değiştirilmedi; yarışın kalıcı olarak giderildiği iddia edilmez.
+- Sonraki kurulum denemesi sunucu kayıtlarında görüldü ve başarıyla sonuçlandı. Bu ikinci planlama denetim kaydında yerel sunucu oturumundan (`::1`) gelir; bu görevin tarayıcı eylemi olarak sayılmadı. `last-attempt.json` sonucu `succeeded`, `isFinished=true`, `isFailed=false`; çalışan panelin ve diskteki uygulamanın sürümü 0.8.29. Kurulum günlüğü 14:58:47'de kapandı ve Windows yeniden başlatması gerektirmedi.
+- AdaPanel servisi `Running / Automatic`; kurulu .htaccess modülü 184.832 bayt. Yeni arayüzde `#/?section=sites` gezinmesi, üç sitenin `Çalışıyor` durumu ve yedek ekranındaki 60 kayıt doğrulandı. Gerçek yedek geri yükleme veya site verisi değiştirme işlemi yapılmadı.
+
+Yayın öncesine ait ayrı işletim bulgusu: gece oluşturulan bir veritabanı yedeği yerelde mevcut, uzak FTP aktarımı `421 Service not available` nedeniyle başarısız. Bazı eski kayıtlar ayrıca yedek şifrelemesi yapılandırılmadığını bildiriyor. Bu kayıtlar yeni sürümün hatası olarak sınıflandırılmadı; uzak aktarım sorunu bu yayınla çözülmüş sayılmaz.
+
+Yerel yayın kanıtları: `.tmp/audit-fixes/release-package.log`, `.tmp/audit-fixes/release-publish.log`, `artifacts/publish-manifest.json`, `artifacts/installer-manifest.json` ve `test-results/component-package-audit.json`.
