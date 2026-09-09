@@ -228,8 +228,12 @@ $tasks | ConvertTo-Json -Depth 5";
                 task.CapturesOutput = true;
             }
 
-            // Görev tipini kayıtlı eylemden türet (URL curl ile, PHP php.exe ile çalışır).
-            if (task.Command.EndsWith("curl.exe", StringComparison.OrdinalIgnoreCase))
+            // Görev tipini kayıtlı eylemden türet (URL panel yürütülebiliri --cron-url ile ya da
+            // ESKİ görevlerde curl.exe ile; PHP php.exe ile çalışır). İki biçimin de tanınması
+            // ZORUNLU: yalnız yenisi tanınsaydı güncelleme öncesi kurulmuş görevler listede
+            // "command" tipine düşer, URL sütunu boşalır ve kullanıcı düzenleyip kaydettiğinde
+            // görev ADRESİNİ KAYBEDERDİ. Karar UrlTaskRunner.IsUrlAction'da tek nüsha.
+            if (UrlTaskRunner.IsUrlAction(task.Command, task.Arguments))
             {
                 task.TaskType = "url";
                 var quoted = Regex.Matches(task.Arguments ?? string.Empty, "\"([^\"]+)\"");
@@ -1108,12 +1112,13 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// Testlerin GERÇEKTEN kurulan komutu ölçebilmesi için (<see cref="ResolveAction"/>).
     /// </summary>
     /// <remarks>
-    /// Gerekli: "curl'e hangi bayraklar veriliyor" bir GÜVENLİK kararıdır ve kaynakta metin
+    /// Gerekli: "görevi HANGİ program çalıştırıyor" bir GÜVENLİK kararıdır ve kaynakta metin
     /// aramakla doğrulanamaz — kararın yazıldığını değil, komutun o hâlde KURULDUĞUNU ölçmek
     /// gerekir. Yeni bir HTTP yüzeyi açmaz; <c>internal</c>'dır.
     /// </remarks>
     internal static (string Execute, string Arguments, string WorkingDirectory) ResolveActionForTests(
-        CreateScheduledTaskRequest request) => ResolveAction(request);
+        CreateScheduledTaskRequest request,
+        string? panelExecutable = null) => ResolveAction(request, panelExecutable);
 
     /// <summary>
     /// URL görevinin adresi panelin ULAŞMAMASI gereken bir yere mi bakıyor.
@@ -1121,7 +1126,7 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// <remarks>
     /// <para>
     /// <b>Yüzey neden var:</b> <see cref="ResolveAction"/> bu adresten
-    /// <c>curl.exe -fsSL "&lt;adres&gt;"</c> kurar ve görev SYSTEM olarak koşar.
+    /// <c>AdaPanel.Api.exe --cron-url "&lt;adres&gt;"</c> kurar ve görev SYSTEM olarak koşar.
     /// <see cref="IsAcceptableTaskUrl"/> yalnız ŞEMAYA bakar — <c>http://169.254.169.254/…</c>
     /// onun için kusursuz bir adrestir.
     /// </para>
@@ -1136,13 +1141,21 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// müşteri/bayi dallarından da çağrılıyor. Denetim, komutu GERÇEKTEN kuran katmana kondu.
     /// </para>
     /// <para>
-    /// <b>DÜRÜST SINIR — İKİ tanesi:</b> (1) <c>curl</c>'e <c>-L</c> veriliyor, yani YÖNLENDİRME
-    /// İZLENİYOR; dış bir adres <c>302</c> ile iç ağa atlarsa bu kapı görmez. <c>-L</c>
-    /// kaldırılmadı çünkü meşru cron adreslerinin çoğu (http→https, www yönlendirmesi) ona
-    /// dayanır ve kaldırmak çalışan görevleri sessizce kırardı. (2) Denetim görev KURULURKEN
-    /// yapılır, curl ise HER ÇALIŞMADA adı yeniden çözer; arada değişen bir DNS kaydı (rebinding)
-    /// bu kapının arkasından geçer. İkisi de <c>--resolve</c> ya da .NET'e taşıma gerektirir;
-    /// ayrı iş olarak raporlandı.
+    /// <b>BU KAPI TEK BAŞINA YETMEZ — ve artık yalnız değil.</b> Burada ölçülen şey görev
+    /// KURULURKEN adın nereye çözüldüğüdür. Çalışma anında iki şey bu kapının arkasından geçebilir:
+    /// dış bir adresin <c>302</c> ile iç ağa atlaması (YÖNLENDİRME) ve A kaydının kurulumdan sonra
+    /// değişmesi (DNS REBINDING). Eskiden görevi <c>curl.exe -L</c> çalıştırdığı ve curl'de adres
+    /// engel listesi bulunmadığı için ikisi de AÇIKTI (ölçüldü). Görev artık
+    /// <see cref="UrlTaskRunner"/> ile koşuyor: yönlendirmenin HER adımı
+    /// <see cref="OutboundConnectGuard"/>'dan geçer ve ad ÇALIŞMA ANINDA bir kez çözülüp soket tam
+    /// o adreslere açılır.
+    /// </para>
+    /// <para>
+    /// <b>Öyleyse bu denetim neden DURUYOR:</b> kullanıcıya "adres yasak" hatasını KAYDET anında,
+    /// anlaşılır bir mesajla (<c>cron.url_forbidden</c>) vermek için. Kaldırılsaydı yasak adres
+    /// sessizce kaydedilir ve kullanıcı bunu ancak görev listesinde bir çıkış koduyla öğrenirdi.
+    /// İki denetim de AYNI gövdeyi (<see cref="OutboundAddressGuard.InspectAsync"/>) çağırır; ikinci
+    /// bir liste yoktur.
     /// </para>
     /// </remarks>
     private async Task EnsureTaskUrlTargetAllowedAsync(CreateScheduledTaskRequest request, CancellationToken cancellationToken)
@@ -1533,7 +1546,8 @@ Register-ScheduledTask -TaskPath '{TaskPath}' -TaskName '{EscapeSingleQuoted(req
     /// <b>Çağıranın yetkisi ZORLUYOR</b> — <see cref="ScheduledTaskPrivilege.Limited"/>. Bu bir
     /// güvenlik sınırıdır ve KOD ÇALIŞTIRAN her tipi kapsar: <c>command</c>, <c>php</c>,
     /// <c>script</c>. <c>url</c> KAPSAM DIŞIDIR ve bu fazla kapatmama kararıdır: o tipte çalışan
-    /// program sabittir (<c>curl.exe</c>), argümanları panel kurar ve adres ayrıca
+    /// program sabittir (panelin kendi denetlenen yürütücüsü, <see cref="UrlTaskRunner"/>),
+    /// argümanları panel kurar ve adres hem kurulurken hem HER BAĞLANTIDA
     /// <see cref="OutboundAddressGuard"/>'dan geçer — keyfi kod değildir. Müşteri/bayi görevleri
     /// de yalnız bu tiptedir, yani kiracının hiçbir görevi bu değişiklikten etkilenmez.
     /// </item>
@@ -1614,11 +1628,17 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
     }
 
     // Görev tipini yürütülebilir eyleme çevirir (Plesk görev tipleri):
-    //  url     -> curl.exe -fsS ... "<adres>" (Windows Server 2019+/Win10 ile birlikte gelir)
+    //  url     -> <AdaPanel.Api.exe> --cron-url "<adres>" (panelin DENETLENEN taşıyıcısı)
     //  php     -> <runtimes\php\...\php.exe> "<betik>" <argümanlar>
     //  command -> kullanıcı komutu aynen
     // ("script" tipi buraya UĞRAMAZ; onu ResolveScriptPlanAsync çözer — IIS'e bakması gerekir.)
-    private static (string Execute, string Arguments, string WorkingDirectory) ResolveAction(CreateScheduledTaskRequest request)
+    //
+    // panelExecutable yalnız TESTLER için ayrık: üretimde null geçilir ve panel kendi yolunu
+    // bulur (UrlTaskRunner.ResolvePanelExecutable). Testte sabit bir yol verilebilmesi gerekir,
+    // yoksa kurulan komut satırı test koşucusunun yoluna (testhost.exe) bağlı olurdu.
+    private static (string Execute, string Arguments, string WorkingDirectory) ResolveAction(
+        CreateScheduledTaskRequest request,
+        string? panelExecutable = null)
     {
         var taskType = (request.TaskType ?? "command").Trim().ToLowerInvariant();
         var workingDirectory = request.WorkingDirectory?.Trim() ?? string.Empty;
@@ -1626,42 +1646,30 @@ if ($LASTEXITCODE -ne 0) {{ throw ""icacls cikis kodu: $LASTEXITCODE"" }}";
         switch (taskType)
         {
             case "url":
-                // -f: HTTP hata kodunda başarısız say (Task Scheduler "son sonuç"a yansır), -sS: sessiz ama hatayı yaz,
-                // -L: yönlendirmeyi izle, 5 dk üst sınır + 2 tekrar: geçici ağ sorunlarında görev boşa düşmesin.
+            {
+                // ARTIK curl.exe DEĞİL — panelin KENDİ denetlenen taşıyıcısı (UrlTaskRunner).
                 //
-                // --proto / --proto-redir / --max-redirs: ÖLÇÜLEREK eklendi, bezeme değil.
-                // Bu makinede curl 8.19.0 ile ölçüldü (sahte yerel sunucu, 302 döndürüldü):
-                //   * VARSAYILAN hâlde curl yönlendirmeyi http/https'in YANINDA ftp/ftps'e de izler:
-                //     "Location: ftp://127.0.0.1/x" verildiğinde curl bu makinedeki FTP servisine
-                //     GERÇEKTEN bağlandı (curl: (67) Access denied: 530 — yani bağlantı kuruldu,
-                //     yalnız kimlik reddedildi). Görev SYSTEM olarak koştuğu için bu, müşterinin
-                //     verdiği bir adresin panelin iç servislerine soket açtırması demekti.
-                //     "=http,https" ile aynı yönlendirme "Protocol \"ftp\" disabled (in redirect)"
-                //     ile REDDEDİLDİ.
-                //   * file/gopher/smb/dict yönlendirmeleri bu curl sürümünde ZATEN kapalı çıktı
-                //     (üçü de ayrıca ölçüldü); bayrak onları da açıkça kapatır, yani ileride
-                //     varsayılanı değişen bir curl sürümü sessizce yeni bir kapı açamaz.
-                //   * --max-redirs 5: .NET tarafındaki denetlenen istemciyle AYNI tavan
-                //     (OutboundConnectGuard.CreateHandler). curl varsayılanı 50'dir ve bir
-                //     yönlendirme halkası görevi 5 dakikalık üst sınıra kadar döndürürdü.
+                // NEDEN DEĞİŞTİ (bu makinede curl 8.19.0 + gerçek loopback sunucusuyla ÖLÇÜLDÜ):
+                // eski komut "-L" içeriyordu, yani yönlendirmeyi curl'ün KENDİSİ izliyordu ve
+                // curl'de adres engel listesi YOKTUR. Ölçüm: eski birebir argümanlarla çağrılan
+                // curl, "302 Location:" ile gösterilen İÇ adrese gitti ve iç gövdeyi yazdı (çıkış
+                // kodu 0). Aşağıdaki EnsureTaskUrlTargetAllowedAsync yalnız İLK adresi görüyordu;
+                // yönlendirme onun arkasından geçiyordu. Görev SYSTEM olarak koşar, yani hedef
+                // panelin kendi API'si ya da bulut meta veri servisi olabilirdi.
                 //
-                // -L NEDEN ATILMADI (ölçüldü): -L olmadan curl 302'yi BAŞARI sayıp gövdeyi hiç
-                // istemiyor — çıkış kodu 0, çıktı BOŞ. Yani "http→https" ya da "www" yönlendirmesi
-                // olan her meşru cron adresi görev listesinde "başarılı" görünürken hiçbir şey
-                // çalıştırmayacaktı. Sessizce çalışmayan bir cron, hata veren bir cron'dan pahalıdır.
+                // Bayrakla kapatılamadığı ÖLÇÜLDÜ: "-L" atmak 302'yi çıkış kodu 0 + BOŞ çıktı
+                // yapıyor (meşru http→https/www cron'ları sessizce çalışmaz hâle gelirdi);
+                // --proto-redir yalnız ŞEMA yükseltmesini keser; --resolve yalnız YAZILAN adı
+                // sabitler, yönlendirmenin gittiği başka adı değil. Gerekçelerin tamamı ve
+                // curl bayraklarının birebir karşılıkları UrlTaskRunner'da.
                 //
-                // KALAN AÇIK — DÜRÜSTÇE: adres denetimi (OutboundAddressGuard) görev KURULURKEN
-                // yapılır; curl'ün çalışma anında http/https yönlendirmesiyle 127.0.0.1'e ya da
-                // 169.254.169.254'e sapmasını hiçbir curl bayrağı engelleyemez (curl'de adres
-                // engel listesi YOKTUR — ölçüldü/arandı). Bunu kapatmanın tek yolu görevi curl
-                // yerine panelin DENETLENEN istemcisiyle çalıştırmaktır (yeni bir CLI fiili);
-                // o iş, Görev Zamanlayıcı üzerinde SYSTEM olarak sınanabildiği yerde AYRI olarak
-                // yapılmalı — burada sınanamayan bir değişikliği her müşterinin cron yoluna
-                // sokmak, kapattığından fazlasını kırardı.
-                return (
-                    "curl.exe",
-                    $"-fsSL --proto \"=http,https\" --proto-redir \"=http,https\" --max-redirs 5 --max-time 300 --retry 2 \"{request.Url.Trim()}\"",
-                    workingDirectory);
+                // Kazanç İKİ AÇIK birden: (1) yönlendirmenin HER adımı OutboundConnectGuard'dan
+                // geçer (yönlendirmeyi kapatmak zorunda kalmadan), (2) denetim artık ÇALIŞMA
+                // ANINDA yapıldığı ve ad BİR KEZ çözülüp soket TAM O ADRESLERE açıldığı için DNS
+                // rebinding penceresi de kapanır.
+                var (urlProgram, urlArgumanlar) = UrlTaskRunner.BuildAction(request.Url, panelExecutable);
+                return (urlProgram, urlArgumanlar, workingDirectory);
+            }
             case "php":
             {
                 var scriptPath = request.Command.Trim();

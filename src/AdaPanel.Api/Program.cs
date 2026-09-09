@@ -57,6 +57,21 @@ if (AdaPanel.Api.Recovery.ParolaBelirlemeKomutu.BuBizim(args))
     return;
 }
 
+// ZAMANLANMIS "url" GOREVI — eskiden bu isi curl.exe yapiyordu.
+//
+// Buraya, web sunucusu kurulmadan ONCE alinmasi ZORUNLU: gorev dakikada bir tetiklenebilir ve
+// her tetiklemede ikinci bir panel ornegi (SYSTEM olarak, ayni portu dinlemeye calisan) ayaga
+// kalksaydi hem panel hem gorev bozulurdu.
+//
+// NEDEN curl BIRAKILDI: curl'de adres engel listesi YOKTUR ve "-L" ile yonlendirmeyi kendisi
+// izliyordu; olculdu -- 302 ile gosterilen IC adrese gidip ic govdeyi yaziyordu. Panelin kendi
+// tasiyicisinda denetim HER baglantida (yani her yonlendirme adiminda) calisir.
+if (AdaPanel.Api.Scheduler.CronUrlKomutu.BuBizim(args))
+{
+    Environment.Exit(await AdaPanel.Api.Scheduler.CronUrlKomutu.CalistirAsync(args));
+    return;
+}
+
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {

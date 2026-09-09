@@ -5,7 +5,90 @@
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
 Son güncelleme: **07.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5165 yeşil** (Core 2 + Infra 5163) · typecheck + build + npm test temiz
+Testler: **5178 yeşil** (Core 2 + Infra 5176) · typecheck + build + npm test temiz
+
+---
+
+## SON İŞ — CRON `url` GÖREVİ ARTIK curl İLE KOŞMUYOR: YÖNLENDİRME SSRF'İ KAPANDI (commit ATILMADI)
+
+**ÖLÇÜLDÜ, tahmin değil.** Kurulan komut satırı okundu ve curl 8.19.0 ile gerçek bir loopback
+sunucusuna karşı çalıştırıldı. Eski komut birebir şuydu:
+
+```
+curl.exe -fsSL --proto "=http,https" --proto-redir "=http,https" --max-redirs 5 --max-time 300 --retry 2 "<adres>"
+```
+
+`-L` VARDI → yönlendirmeyi curl'ün kendisi izliyordu ve **curl'de adres engel listesi YOKTUR**.
+Ölçüm: bu birebir argümanlarla çağrılan curl, `302 Location:` ile gösterilen İÇ adrese gitti ve iç
+gövdeyi yazdı — **çıkış kodu 0**. `OutboundAddressGuard` yalnız görev KURULURKEN ilk adresi
+görüyordu; yönlendirme arkasından geçiyordu. Görev SYSTEM olarak koşuyor.
+
+### Neden curl bayrağıyla kapatılamadı (üçü de ölçüldü)
+
+| Aday | Ölçüm | Karar |
+|---|---|---|
+| `-L`'yi at | 302 alan curl **çıkış kodu 0 + BOŞ çıktı** veriyor → `http→https`/`www` yönlendirmeli her meşru cron "başarılı" görünüp hiç çalışmaz | **RED** (fazla kapatma) |
+| `--proto-redir "=http,https"` | `file://` yönlendirmesini GERÇEKTEN kesiyor | Yararlı ama yetersiz — `http→http` ile iç ağa sapmayı görmez |
+| `--resolve` | yalnız YAZILAN adı sabitler; yönlendirme BAŞKA bir ada gider, o sabitlenmemiştir | **RED** (yönlendirmeye çare değil) |
+
+### SEÇİLEN ÇÖZÜM: görevi panelin DENETLENEN taşıyıcısına taşımak
+
+`curl.exe` → **`AdaPanel.Api.exe --cron-url "<adres>"`**
+
+* Yeni: `src/AdaPanel.Infrastructure/Scheduler/UrlTaskRunner.cs` (fiil sabiti + komut kurma +
+  çekme), `src/AdaPanel.Api/Scheduler/CronUrlKomutu.cs` (CLI karşılayıcı, `Program.cs`'te tepsi ve
+  parola kurtarma komutlarıyla aynı yerde — web sunucusu kurulmadan ÖNCE `Environment.Exit`).
+* Kural TEKRAR YAZILMADI: `OutboundConnectGuard.CreateHandler` + `OutboundAddressGuard.InspectAsync`
+  çağrılıyor. `ConnectCallback` **HER BAĞLANTIDA** çalışır → yönlendirmenin her adımı denetlenir.
+* **İKİ açık birden kapandı:** (1) yönlendirme — üstelik yönlendirmeyi KAPATMADAN, yani meşru
+  `http→https`/`www` cron'ları çalışmaya devam ediyor; (2) **DNS rebinding** — denetim artık ÇALIŞMA
+  ANINDA yapılıyor ve ad BİR KEZ çözülüp soket TAM O ADRESLERE açılıyor.
+* curl davranış paritesi korundu: çıkış kodları curl'ünkilerle aynı (0/2/6/7/22/28/47) çünkü
+  kullanıcıların izleme betikleri bunlara bakıyor; `-f` (400+ → hata, gövde yazılmaz), `--max-time
+  300`, `--retry 2`, `--max-redirs 5` karşılıkları var. Adres yasağı için curl'ün ÜRETEMEYECEĞİ
+  ayrık bir kod: **93**.
+* **GERİYE UYUMLULUK:** eski `curl.exe` görevleri hâlâ `url` tipinde tanınıyor
+  (`UrlTaskRunner.IsUrlAction`). Tanınmasaydı listede "command"a düşer, URL sütunu boşalır ve
+  kullanıcı kaydettiğinde görev ADRESİNİ KAYBEDERDİ. Eski görev düzenlenip kaydedilince yeni
+  biçime taşınır.
+
+### GERÇEK BİNARY ile ölçüm (birim testi değil)
+
+| Senaryo | Çıkış kodu | Sonuç |
+|---|---|---|
+| Varsayılan politika, hedef `127.0.0.1` | **93** | soket HİÇ açılmadı |
+| Açık kapı AÇIK, düz adres | **0** | `DIS-SERVIS-CEVABI` — meşru görev çalışıyor |
+| Açık kapı AÇIK, 302 yönlendirme | **0** | zincir sonuna kadar izlendi |
+| `file:///C:/Windows/win.ini` | **2** | şema reddedildi |
+
+### Mutasyon (her koruma için: kaldır → KIRMIZI → geri koy)
+
+| Kaldırılan | Kırmızı |
+|---|---|
+| `OutboundConnectGuard.ConnectAsync` → `BlockedTarget` dalı | **16 test** (ikisi yeni: `Url_gorevi_yonlendirmeyle_ic_aga_SAPAMAZ`, `Url_gorevi_CALISMA_ANINDA_denetlenir_soket_hic_acilmaz`) |
+| `ResolveAction` url dalı curl'e geri alındı | **2 test** |
+| `IsUrlAction` içindeki curl tanıma (geriye uyumluluk) | **2 test** |
+
+### AYNI SINIF — HÂLÂ AÇIK OLANLAR (bu turda KAPATILMADI, dürüstçe)
+
+Kalıp: *adres kurulurken `OutboundAddressGuard`'dan geçiyor ama isteği DIŞ BİR ARAÇ atıyor ve o araç
+yönlendirmeyi kendi izliyor.*
+
+1. **`SiteHostingSettingsService.ImportSiteArchiveAsync`** (`migration.url_forbidden` kapısı var) —
+   indirmeyi PowerShell `Invoke-WebRequest` yapıyor, o da 3xx'i kendi izler. Uç **Bayi (Reseller)**
+   rolüne açık. Kaynakta zaten "DÜRÜST SINIR" olarak yazılı. Ucuz çare YOK: `-MaximumRedirection 0`
+   meşru indirmeleri (GitHub sürüm adresleri yönlendirir) kırar; denetlenen HttpClient'a taşımak bu
+   yolun `ftp://` desteğini düşürür.
+2. **`GitDeploymentService`** (`git.repository_forbidden` kapısı var) — klonu `git.exe` yapıyor ve
+   HTTP yönlendirmesini kendi izler. Ayrıca kaynakta yazılı ikinci bir kapsam boşluğu: scp kalıbı
+   (`git@host:owner/repo.git`) `Uri` ile ayrıştırılamadığı için HİÇ denetlenmiyor.
+
+Guard'ın çağrıldığı ve isteği de PANELİN attığı (yani sağlam) yollar: webhook + SMTP
+(`NotificationService`), yedek hedefi (`BackupService`), göç (`SiteMigrationService`,
+`FileMigrationService`), küme (`ClusterHttpClientFactory`), ve artık cron `url`.
+Guard'ın çağrılmadığı ama adresin KULLANICIDAN GELMEDİĞİ (yani yüzey olmayan) yollar: bileşen
+indirme, kendini güncelleme, mağaza, PHP redis/wp-cli indirmesi, lisans, Stalwart, webmail, sağlık
+kontrolü, phpMyAdmin vekili.
 
 ---
 

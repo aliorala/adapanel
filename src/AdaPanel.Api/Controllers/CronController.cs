@@ -52,8 +52,9 @@ public sealed class CronController(
     /// </para>
     /// <para>
     /// <b>Müşteri/bayi dalı etkilenmez:</b> orada tip zaten <c>url</c>'e zorlanıyor ve <c>url</c>
-    /// düşürme kapsamının dışında (sabit <c>curl.exe</c>, keyfi kod değil). Kiracının hiçbir
-    /// görevi bu değişiklikle kırılmaz.
+    /// düşürme kapsamının dışında (sabit program + sabit argümanlar — panelin denetlenen
+    /// yürütücüsü, bkz. <c>UrlTaskRunner</c>; keyfi kod değil). Kiracının hiçbir görevi bu
+    /// değişiklikle kırılmaz.
     /// </para>
     /// </remarks>
     private async Task<ScheduledTaskPrivilege> ResolvePrivilegeAsync(CancellationToken cancellationToken)
@@ -380,8 +381,15 @@ public sealed class CronController(
     private Task WriteServerAuditAsync(string action, string details) =>
         auditService.AuditAsync(HttpContext, action, "cron:server", details);
 
-    // Müşteri URL görevi yalnızca dış (genel) adresleri hedefleyebilir: görevi curl.exe çalıştırır ve
-    // SUNUCUNUN ağından çıkar, yani denetimsiz bırakılırsa müşteri panelin ağ konumunu ödünç alır.
+    // Müşteri URL görevi yalnızca dış (genel) adresleri hedefleyebilir: görev SUNUCUNUN ağından
+    // çıkar, yani denetimsiz bırakılırsa müşteri panelin ağ konumunu ödünç alır.
+    //
+    // BU DENETİM TEK BAŞINA YETMEZ ve artık yalnız değil: burada ölçülen şey görev KURULURKEN adın
+    // nereye çözüldüğüdür. Görevi eskiden `curl.exe -L` çalıştırıyordu ve curl'de adres engel
+    // listesi YOKTUR — ölçüldü: 302 ile gösterilen iç adrese gidip iç gövdeyi yazıyordu. Görev artık
+    // UrlTaskRunner ile koşuyor; orada denetim HER bağlantıda (yani her yönlendirme adımında)
+    // ÇALIŞMA ANINDA tekrarlanır. Buradaki denetim, kullanıcıya hatayı KAYDET anında anlaşılır bir
+    // mesajla vermek için duruyor.
     //
     // ARALIK LİSTESİ ARTIK BURADA DEĞİL (OutboundAddressGuard). Burada kendi kopyası vardı ve ÖLÇÜLDÜ:
     // `http://[::ffff:169.254.169.254]/` (bulut meta verisi), `http://[::ffff:10.0.0.5]/` (iç ağ),

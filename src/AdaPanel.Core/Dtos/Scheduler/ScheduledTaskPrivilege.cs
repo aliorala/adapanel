@@ -45,7 +45,9 @@ public enum ScheduledTaskPrivilege
     /// </para>
     /// <para>
     /// <b>Özellik ölmez:</b> yönetici aynı görevleri kurmaya devam eder; yalnız görevin kimliği
-    /// düşer. <c>url</c> tipi etkilenmez (sabit <c>curl.exe</c> + adres denetimi; keyfi kod değil).
+    /// düşer. <c>url</c> tipi etkilenmez: programı ve argümanları PANEL kurar (panelin denetlenen
+    /// yürütücüsü, <c>UrlTaskRunner</c>), kullanıcıdan gelen tek şey adrestir ve o adres hem
+    /// kurulurken hem HER BAĞLANTIDA denetlenir — keyfi kod değildir.
     /// </para>
     /// </summary>
     Limited

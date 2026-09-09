@@ -170,8 +170,9 @@ public sealed class CronTaskIdentityTests
 
     /// <summary>
     /// NÖBETÇİ: KİRACININ görevi kırılmaz. Müşteri/bayi zaten yalnız <c>url</c> kurabiliyor ve
-    /// <c>url</c> düşürme kapsamının DIŞINDA (sabit curl.exe, keyfi kod değil) — yani kiracının
-    /// bugünkü görevlerinin hiçbiri kimlik değiştirmez.
+    /// <c>url</c> düşürme kapsamının DIŞINDA (programı ve argümanları panel kurar — panelin
+    /// denetlenen yürütücüsü; keyfi kod değil) — yani kiracının bugünkü görevlerinin hiçbiri kimlik
+    /// değiştirmez.
     /// </summary>
     [Fact]
     public async Task Kiracinin_url_gorevi_AYNEN_calisir()

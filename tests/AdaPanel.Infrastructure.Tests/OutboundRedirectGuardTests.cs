@@ -432,68 +432,265 @@ public sealed class OutboundRedirectGuardTests
     }
 
     // =====================================================================================
-    // 4 — ZAMANLANMIŞ GÖREV (curl)
+    // 4 — ZAMANLANMIŞ GÖREV (url tipi)
+    //
+    // ÖLÇÜLEN AÇIK VE KAPANIŞI. Görev eskiden şu komutla kuruluyordu:
+    //
+    //   curl.exe -fsSL --proto "=http,https" --proto-redir "=http,https" --max-redirs 5
+    //            --max-time 300 --retry 2 "<adres>"
+    //
+    // Bu makinede curl 8.19.0 ve gerçek bir loopback sunucusuyla ÖLÇÜLDÜ: yukarıdaki BİREBİR
+    // argümanlarla çağrılan curl, "302 Location:" ile gösterilen İÇ adrese gitti ve iç gövdeyi
+    // çıktı olarak yazdı — çıkış kodu 0. Yani adres denetimi (görev KURULURKEN yapılıyordu)
+    // yalnız ilk adresi görüyor, yönlendirme onun arkasından geçiyordu. Aynı ölçümde:
+    //   * "-L" atmak ÇARE DEĞİL: 302 alan curl çıkış kodu 0 + BOŞ çıktı veriyor, yani meşru
+    //     http→https / www yönlendirmeli her cron sessizce çalışmaz hâle gelirdi.
+    //   * "--proto-redir =http,https" file:// yönlendirmesini GERÇEKTEN kesiyor (ölçüldü) ama
+    //     http→http ile iç ağa sapmaya hiçbir etkisi yok.
+    // curl'de adres engel listesi YOKTUR; bu yüzden görev artık UrlTaskRunner ile koşuyor.
     // =====================================================================================
 
+    /// <summary>Testlerin sabit bir panel yürütülebiliri kullanması için (üretimde kendi yolunu bulur).</summary>
+    private const string SahtePanelYolu = @"C:\Program Files\AdaPanel\AdaPanel.Api.exe";
+
     /// <summary>
-    /// URL görevinin komutu: yönlendirme İZLENİR (<c>-L</c>) ama yalnız http/https'e, ve sınırlı
-    /// sayıda.
+    /// KURULAN KOMUT: artık <c>curl.exe</c> değil, panelin DENETLENEN yürütücüsü.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Ölçüldü (curl 8.19.0, yerel sahte sunucu): <c>-L</c> olmadan 302 alan curl çıkış kodu 0 ve
-    /// BOŞ çıktı veriyor — yani meşru bir cron adresi "başarılı" görünüp hiç çalışmıyor. Bu yüzden
-    /// <c>-L</c> ATILMADI. Buna karşılık varsayılan curl yönlendirmeyi <c>ftp://</c>'ye de izliyordu
-    /// (ölçüldü: 302 ile bu makinedeki FTP servisine gerçekten bağlandı) —
-    /// <c>--proto-redir "=http,https"</c> onu kapatır.
-    /// </para>
-    /// <para>
-    /// KALAN AÇIK dürüstçe yazılı (bkz. <c>ResolveAction</c> yorumu): curl'de adres engel listesi
-    /// yoktur; çalışma anında http yönlendirmesiyle iç ağa sapma ancak görevi panelin denetlenen
-    /// istemcisiyle çalıştırarak kapanır.
-    /// </para>
+    /// Kaynak taraması değil davranış ölçümü: komut <c>ResolveAction</c> tarafından GERÇEKTEN
+    /// kurulur ve burada okunur. Adresin TIRNAK İÇİNDE ve EN SONDA olması sözleşmedir — görev
+    /// listesi URL'yi son tırnaklı parçadan çıkarır (bir alttaki nöbetçi bunu ölçer).
     /// </remarks>
     [Fact]
-    public void Url_gorevi_curl_e_KISITLI_yonlendirme_bayraklariyla_kurulur()
+    public void Url_gorevi_artik_curl_DEGIL_panelin_denetlenen_yurutucusuyle_kurulur()
     {
-        var (calistir, argumanlar, _) = SchedulerService.ResolveActionForTests(new CreateScheduledTaskRequest
-        {
-            Name = "test",
-            TaskType = "url",
-            Url = "https://ornek.test/cron"
-        });
+        var (calistir, argumanlar, _) = SchedulerService.ResolveActionForTests(
+            new CreateScheduledTaskRequest
+            {
+                Name = "test",
+                TaskType = "url",
+                Url = "https://ornek.test/cron"
+            },
+            SahtePanelYolu);
 
-        Assert.Equal("curl.exe", calistir);
-        Assert.Contains("-fsSL", argumanlar, StringComparison.Ordinal);
-        Assert.Contains("--proto \"=http,https\"", argumanlar, StringComparison.Ordinal);
-        Assert.Contains("--proto-redir \"=http,https\"", argumanlar, StringComparison.Ordinal);
-        Assert.Contains("--max-redirs 5", argumanlar, StringComparison.Ordinal);
+        Assert.Equal(SahtePanelYolu, calistir);
+        Assert.Equal("--cron-url \"https://ornek.test/cron\"", argumanlar);
+        Assert.DoesNotContain("curl", calistir, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
-    /// FAZLA-KAPATMA NÖBETÇİSİ: yeni bayraklar liste ekranını bozmamalı. Panel görev tipini ve
-    /// URL'yi KAYITLI EYLEMDEN türetiyor (<c>GetTasksAsync</c>: argümanlardaki SON tırnaklı parça
-    /// URL sayılır); bayrakların tırnakları bu çıkarımı bozsaydı URL sütunu boşalır, düzenleme
-    /// ekranı yanlış dolar ve kullanıcı kaydettiğinde görev adresini KAYBEDERDİ.
+    /// FAZLA-KAPATMA NÖBETÇİSİ: yeni komut liste/düzenleme ekranını bozmamalı. Panel görev tipini
+    /// ve URL'yi KAYITLI EYLEMDEN türetir (<c>GetTasksAsync</c>: argümanlardaki SON tırnaklı parça
+    /// URL sayılır); komut biçimi bu çıkarımı bozsaydı URL sütunu boşalır, düzenleme ekranı yanlış
+    /// dolar ve kullanıcı kaydettiğinde görev ADRESİNİ KAYBEDERDİ.
     /// </summary>
     [Fact]
-    public void Yeni_bayraklar_gorev_listesindeki_URL_cikarimini_BOZMAZ()
+    public void Yeni_komut_gorev_listesindeki_URL_cikarimini_BOZMAZ()
     {
         const string adres = "https://ornek.test/cron?a=1";
-        var (calistir, argumanlar, _) = SchedulerService.ResolveActionForTests(new CreateScheduledTaskRequest
-        {
-            Name = "test",
-            TaskType = "url",
-            Url = adres
-        });
+        var (calistir, argumanlar, _) = SchedulerService.ResolveActionForTests(
+            new CreateScheduledTaskRequest { Name = "test", TaskType = "url", Url = adres },
+            SahtePanelYolu);
 
         // Çıktı yakalama sarmalı + geri çözme (kayıtta görev böyle durabiliyor).
         var sarmalanmis = SchedulerService.BuildLoggedArguments(calistir, argumanlar, @"C:\gunluk\test.log");
         Assert.True(SchedulerService.TryUnwrapLoggedAction("cmd.exe", sarmalanmis, out var gercekKomut, out var gercekArgumanlar));
-        Assert.Equal("curl.exe", gercekKomut);
+        Assert.Equal(SahtePanelYolu, gercekKomut);
+
+        // Tip türetmesi hâlâ "url" demeli, yoksa görev "command" tipine düşerdi.
+        Assert.True(UrlTaskRunner.IsUrlAction(gercekKomut, gercekArgumanlar));
 
         var tirnakli = System.Text.RegularExpressions.Regex.Matches(gercekArgumanlar, "\"([^\"]+)\"");
         Assert.Equal(adres, tirnakli[^1].Groups[1].Value);
+    }
+
+    /// <summary>
+    /// GERİYE UYUMLULUK NÖBETÇİSİ: güncellemeden ÖNCE kurulmuş <c>curl.exe</c> görevleri hâlâ
+    /// <c>url</c> tipinde tanınır.
+    /// </summary>
+    /// <remarks>
+    /// Tanınmasaydı o görevler listede "command" tipine düşer, URL sütunu boşalır ve kullanıcı
+    /// düzenleyip kaydettiğinde görev ADRESİNİ KAYBEDERDİ — yani bir güvenlik düzeltmesi,
+    /// kullanıcının verisini yok eden bir hataya dönüşürdü.
+    /// </remarks>
+    [Theory]
+    [InlineData(@"C:\Windows\System32\curl.exe", "-fsSL \"https://ornek.test/cron\"", true)]
+    [InlineData("curl.exe", "-fsSL \"https://ornek.test/cron\"", true)]
+    [InlineData(SahtePanelYolu, "--cron-url \"https://ornek.test/cron\"", true)]
+    // Panel yürütülebiliri AMA cron fiili YOK: bu bir url görevi değildir (örn. servis kaydı).
+    [InlineData(SahtePanelYolu, "--urls https://127.0.0.1:8890", false)]
+    [InlineData(@"C:\site\bot.bat", "", false)]
+    public void Eski_ve_yeni_url_gorevleri_TANINIR_digerleri_TANINMAZ(string komut, string argumanlar, bool beklenen)
+        => Assert.Equal(beklenen, UrlTaskRunner.IsUrlAction(komut, argumanlar));
+
+    /// <summary>
+    /// ASIL İDDİA: <c>url</c> görevi, <c>302</c> ile iç ağa atlayamaz. Yönlendirme adımının soketi
+    /// AÇILMAZ ve iç servise TEK BİR İSTEK BİLE ULAŞMAZ.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Kapatılan açık tam olarak budur: curl aynı düzenekte iç gövdeyi getiriyordu (çıkış kodu 0).
+    /// Birinci bağlantının "temiz dış konak" sayılması dosya başındaki gerekçeyle aynı — bu
+    /// makinede bağlanılabilir HİÇBİR adres engel listesinin dışında değildir. Denetlenen gövde
+    /// üretimdeki gövdenin ta kendisidir.
+    /// </para>
+    /// <para>
+    /// MUTASYON: <c>OutboundConnectGuard.ConnectAsync</c> içindeki <c>BlockedTarget</c> dalı ya da
+    /// <c>CreateHandler</c>'ın <c>ConnectCallback</c> ataması silinirse bu test kırmızı yanar
+    /// (iç sunucu istek sayacı 1 olur ve çıkış kodu 0'a döner).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Url_gorevi_yonlendirmeyle_ic_aga_SAPAMAZ()
+    {
+        using var icSunucu = SahteHttpSunucu.Baslat(_ => (200, null, "IC-AGA-ULASILDI"));
+        using var disSunucu = SahteHttpSunucu.Baslat(_ => (302, $"http://127.0.0.1:{icSunucu.Port}/ic", string.Empty));
+
+        var baglantiSayisi = 0;
+        var cikti = new StringWriter();
+        var hata = new StringWriter();
+
+        var kod = await UrlTaskRunner.RunAsync(
+            $"http://127.0.0.1:{disSunucu.Port}/disari",
+            () => Interlocked.Increment(ref baglantiSayisi) == 1
+                ? OutboundTargetPolicy.Connecting(allowInternalTargets: true)
+                : OutboundTargetPolicy.Strict,
+            cikti,
+            hata);
+
+        Assert.Equal(UrlTaskRunner.AdresYasakKod, kod);
+
+        // ASIL ÖLÇÜM: iç servise HİÇBİR istek ulaşmadı ve gövdesi çıktıya YAZILMADI.
+        Assert.Equal(0, icSunucu.IstekSayisi);
+        Assert.Equal(1, disSunucu.IstekSayisi);
+        Assert.DoesNotContain("IC-AGA-ULASILDI", cikti.ToString(), StringComparison.Ordinal);
+
+        // YENİDEN DENENMEDİ: yasak kalıcı bir karardır, üç kez aynı reddi yazmak teşhisi bozardı.
+        Assert.Equal(2, baglantiSayisi);
+    }
+
+    /// <summary>
+    /// FAZLA-KAPATMA NÖBETÇİSİ: MEŞRU bir webhook/ping görevi ÇALIŞMAYA DEVAM EDER — yönlendirme
+    /// zinciri sonuna kadar izlenir ve gövde çıktıya yazılır.
+    /// </summary>
+    /// <remarks>
+    /// İki şeyi birden kanıtlar: (1) düzenek gerçekten yönlendirme izliyor, yani üstteki testin
+    /// "0 istek" sonucu düzeneğin çalışmamasından değil KORUMADAN geliyor; (2) yönlendirmeyi
+    /// kapatmadık — <c>http→https</c> ve <c>www</c> yönlendirmesi yapan yaygın servisler (ki
+    /// cron adreslerinin çoğu öyledir) kırılmadı. curl'de bunu <c>-L</c> sağlıyordu; onu atmak
+    /// bu testi kırardı.
+    /// </remarks>
+    [Fact]
+    public async Task Mesru_url_gorevi_yonlendirmeyi_SONUNA_KADAR_izler_ve_govdeyi_YAZAR()
+    {
+        using var icSunucu = SahteHttpSunucu.Baslat(_ => (200, null, "GOREV-CALISTI"));
+        using var disSunucu = SahteHttpSunucu.Baslat(_ => (302, $"http://127.0.0.1:{icSunucu.Port}/ic", string.Empty));
+
+        var cikti = new StringWriter();
+        var hata = new StringWriter();
+
+        var kod = await UrlTaskRunner.RunAsync(
+            $"http://127.0.0.1:{disSunucu.Port}/disari",
+            () => OutboundTargetPolicy.Connecting(allowInternalTargets: true),
+            cikti,
+            hata);
+
+        Assert.Equal(UrlTaskRunner.BasariliKod, kod);
+        Assert.Equal("GOREV-CALISTI", cikti.ToString());
+        Assert.Equal(1, icSunucu.IstekSayisi);
+    }
+
+    /// <summary>
+    /// DNS REBINDING KAPANIŞI: denetim artık ÇALIŞMA ANINDA yapılıyor, yalnız görev kurulurken değil.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Eski yolda adres bir kez (kurulumda) denetleniyor, curl ise HER ÇALIŞMADA adı yeniden
+    /// çözüyordu; saldırgan görevi meşru bir adresle kurup A kaydını sonradan <c>127.0.0.1</c>
+    /// yapabilirdi. Bu test o pencereyi ölçer: kurulumdan geçmiş sayılan bir görev bile, çalışma
+    /// anında iç bir adrese bakıyorsa SOKET AÇILMADAN reddedilir.
+    /// </para>
+    /// <para>
+    /// MUTASYON: <c>UrlTaskRunner.RunAsync</c> denetlenen işleyici yerine düz bir
+    /// <c>HttpClientHandler</c> kullanırsa bu test kırmızı yanar (sunucu 1 istek alır, kod 0 olur).
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Url_gorevi_CALISMA_ANINDA_denetlenir_soket_hic_acilmaz()
+    {
+        using var sunucu = SahteHttpSunucu.Baslat(_ => (200, null, "IC-SERVIS"));
+
+        var cikti = new StringWriter();
+        var hata = new StringWriter();
+
+        var kod = await UrlTaskRunner.RunAsync(
+            $"http://127.0.0.1:{sunucu.Port}/ping",
+            () => OutboundTargetPolicy.Strict,
+            cikti,
+            hata);
+
+        Assert.Equal(UrlTaskRunner.AdresYasakKod, kod);
+        Assert.Equal(0, sunucu.IstekSayisi);
+        Assert.Equal(string.Empty, cikti.ToString());
+        Assert.Contains("YASAK", hata.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>curl -f</c> KARŞILIĞI: HTTP 400+ başarısızlıktır (Task Scheduler "son sonuç"a yansır) ve
+    /// hata gövdesi çıktıya YAZILMAZ.
+    /// </summary>
+    /// <remarks>
+    /// Nöbetçi olarak da duruyor: kod curl'ün 22'sini korur. Kullanıcıların görev izleme betikleri
+    /// bugün curl kodlarına bakıyor; açığı kapatırken izlemeyi sessizce bozmak istemedik.
+    /// </remarks>
+    [Fact]
+    public async Task Url_gorevi_HTTP_hatasinda_curl_ile_AYNI_kodu_verir()
+    {
+        using var sunucu = SahteHttpSunucu.Baslat(_ => (404, null, "BULUNAMADI-GOVDE"));
+
+        var cikti = new StringWriter();
+        var hata = new StringWriter();
+
+        var kod = await UrlTaskRunner.RunAsync(
+            $"http://127.0.0.1:{sunucu.Port}/yok",
+            () => OutboundTargetPolicy.Connecting(allowInternalTargets: true),
+            cikti,
+            hata);
+
+        Assert.Equal(UrlTaskRunner.HttpHataKod, kod);
+        Assert.Equal(string.Empty, cikti.ToString());
+        Assert.Contains("404", hata.ToString(), StringComparison.Ordinal);
+
+        // 404 GEÇİCİ DEĞİLDİR: yeniden denenmedi (denenseydi sunucu 3 istek görürdü).
+        Assert.Equal(1, sunucu.IstekSayisi);
+    }
+
+    /// <summary>
+    /// <c>curl --proto "=http,https"</c> KARŞILIĞI: http/https dışı şema hiç denenmez.
+    /// </summary>
+    /// <remarks>
+    /// Klasik SSRF yükseltmeleri (<c>file://</c>, <c>gopher://</c>, <c>dict://</c>) burada
+    /// yapı gereği imkânsızdır — <c>HttpClient</c> bu şemaları konuşmaz — ama karar AÇIKÇA
+    /// yazılıyor ki bir sonraki okuyucu "acaba açık mı" diye sormasın.
+    /// </remarks>
+    [Theory]
+    [InlineData("file:///C:/Windows/win.ini")]
+    [InlineData("gopher://127.0.0.1:70/x")]
+    [InlineData("dict://127.0.0.1:2628/d")]
+    [InlineData("bu bir adres degil")]
+    public async Task Url_gorevi_http_https_DISINDAKI_semayi_reddeder(string adres)
+    {
+        var cikti = new StringWriter();
+        var hata = new StringWriter();
+
+        var kod = await UrlTaskRunner.RunAsync(
+            adres,
+            () => OutboundTargetPolicy.Connecting(allowInternalTargets: true),
+            cikti,
+            hata);
+
+        Assert.Equal(UrlTaskRunner.GecersizAdresKod, kod);
+        Assert.Equal(string.Empty, cikti.ToString());
     }
 
     // =====================================================================================
