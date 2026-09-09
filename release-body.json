@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.31",
-  "name": "0.8.31 — Güvenilir güncelleme ve FTP yedekleme",
-  "body": "Güncelleme sırasında panel servisinin yeniden başlayıp kurulum dosyalarını kilitlemesi giderildi. Kurulum tamamlandığında veya iptal edildiğinde servis başlangıç ayarı geri yüklenir.\n\n- Geçici FTP hatalarında aktarım en fazla üç kez denenir. Kimlik ve izin hatalarında gereksiz tekrar yapılmaz; başarısız aktarımda yerel yedek korunur.\n- FTP klasör hazırlama, listeleme ve yüklemede iptal ve zaman aşımı yönetimi tamamlandı.\n- Üst klasörü silinmiş uzak yedeklerin yokluğu üst dizin listesiyle doğrulanır. Erişim hataları dosya yok sayılmaz.\n- Testlerdeki boş değer ve eşzamansız bekleme uyarıları düzeltildi.\n\nYedekleme modülü ve kompakt görünüm korunmuştur."
+  "tag_name": "0.8.32",
+  "name": "0.8.32 — FTP doğrulamasında geçici bağlantı hataları",
+  "body": "Toplu yedek doğrulaması sırasında FTP sunucusunun geçici 421 yanıtları artık sınırlı yeniden denemeyle karşılanır.\n\n- Yeniden deneme desteği yüklemeye ek olarak dizin listeleme, dosya silme ve boş dizin kaldırmaya uygulandı.\n- 530/550 kimlik ve izin hataları yeniden denenmez; ulaşılamayan yedekler kayıp sayılmaz.\n- Önceki sürümdeki güvenli servis durdurma, iptal/zaman aşımı ve yerel yedek koruması devam eder.\n\nYedekleme modülü ve kompakt görünüm korunmuştur."
 }

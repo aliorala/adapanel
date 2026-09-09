@@ -83,7 +83,11 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
     /// </summary>
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(5);
 
-    public async Task<FtpCommandResult> DeleteFileAsync(
+    public Task<FtpCommandResult> DeleteFileAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
+        => BackupFtpRetry.RunAsync(token => DeleteFileOnceAsync(uri, credential, token), cancellationToken,
+            result => !result.Success && BackupFtpRetry.IsTransientCode(result.Code));
+
+    private static async Task<FtpCommandResult> DeleteFileOnceAsync(
         Uri uri,
         NetworkCredential credential,
         CancellationToken cancellationToken)
@@ -106,7 +110,11 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         }
     }
 
-    public async Task<FtpCommandResult> RemoveDirectoryAsync(
+    public Task<FtpCommandResult> RemoveDirectoryAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
+        => BackupFtpRetry.RunAsync(token => RemoveDirectoryOnceAsync(uri, credential, token), cancellationToken,
+            result => !result.Success && BackupFtpRetry.IsTransientCode(result.Code));
+
+    private static async Task<FtpCommandResult> RemoveDirectoryOnceAsync(
         Uri directoryUri,
         NetworkCredential credential,
         CancellationToken cancellationToken)
@@ -127,7 +135,11 @@ internal sealed class FtpWebRequestCommands : IBackupFtpCommands
         }
     }
 
-    public async Task<FtpListingResult> ListDirectoryAsync(
+    public Task<FtpListingResult> ListDirectoryAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
+        => BackupFtpRetry.RunAsync(token => ListDirectoryOnceAsync(uri, credential, token), cancellationToken,
+            result => !result.Success && BackupFtpRetry.IsTransientCode(result.Code));
+
+    private static async Task<FtpListingResult> ListDirectoryOnceAsync(
         Uri directoryUri,
         NetworkCredential credential,
         CancellationToken cancellationToken)
