@@ -2091,6 +2091,11 @@ async function runBackup(operation: () => Promise<BackupRecord>) {
   try {
     const created = await operation();
     await refresh();
+    search.value = "";
+    pager.reset();
+    const closed = new Set(collapsedDays.value);
+    closed.delete(localDayKey(created.createdAtUtc));
+    collapsedDays.value = closed;
     activeView.value = "list";
     // Bu yedeğe özel parola tek seferliktir; formda asılı kalıp bir sonraki yedeğe sessizce
     // taşınmaz (kullanıcı hangi parolayla şifrelediğini karıştırmasın).
@@ -2119,8 +2124,8 @@ function reportCreateResult(record: BackupRecord) {
 
   expandedWarnings.value = record.id;
   showNotice([
-    t("panel.backup.createdWithErrors"),
-    `${t("panel.backup.warningsListTitle")}:`,
+    t(record.status === "created_with_errors" ? "panel.backup.createdWithErrors" : "panel.backup.createdWithWarnings"),
+    `${t("panel.backup.warningsListTitle", { name: record.name })}:`,
     warningText(record)
   ].join("\n"), true);
 }

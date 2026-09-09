@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.35",
-  "name": "0.8.35 — Kayıtlı FTP hedefine veritabanı yedeği",
-  "body": "Veritabanı yedeği, parola yeniden girilmeden kayıtlı FTP hedefine gönderilebilir.\n\n- Yeni seçenek hedefi onayda gösterir; sunucu hedefin değişmediğini kontrol eder ve kayıtlı kimliği kullanır.\n- Eski yedekte oluşturma anındaki bütünlük özeti yoksa yeniden gönderilememe nedeni işlemden önce gösterilir.\n- Mevcut arşivler ve geçmiş kayıtları korunur; eski dosyalara geriye dönük doğrulanmış özeti eklenmez."
+  "tag_name": "0.8.36",
+  "name": "0.8.36 — Yedek sonuç bildirimi",
+  "body": "Yedek sonucu, uyarının gerçek anlamını koruyarak gösterilir.\n\n- Şifreleme kapalı gibi uyarılar, eksik arşiv içeriği varmış gibi sunulmaz.\n- Sonuç bildiriminde ilgili yedeğin dosya adı gösterilir.\n- Yeni yedek alındığında önceki arama ve sayfa seçimi sıfırlanır; yeni kaydın günü açılır."
 }

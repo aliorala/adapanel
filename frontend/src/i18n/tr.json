@@ -2607,6 +2607,7 @@
   "panel.backup.kind.mail": "E-posta",
   "panel.backup.kind.panel": "Panel",
   "panel.backup.itemCount": "{count} öğe",
+  "panel.backup.createdWithWarnings": "Yedek oluşturuldu. Aşağıdaki uyarıları inceleyin.",
   "panel.backup.createdWithErrors": "Yedek alındı AMA bazı öğeler arşive giremedi. Eksikler aşağıda listelendi; bu yedeği eksiksiz saymayın.",
   "panel.backup.warningsListTitle": "{name} — uyarılar ve eksik öğeler",
   "panel.backup.incremental": "Artımsal yedek (mümkünse)",

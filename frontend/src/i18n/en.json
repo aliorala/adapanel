@@ -2607,6 +2607,7 @@
   "panel.backup.kind.mail": "Email",
   "panel.backup.kind.panel": "Panel",
   "panel.backup.itemCount": "{count} items",
+  "panel.backup.createdWithWarnings": "Backup created. Review the warnings below.",
   "panel.backup.createdWithErrors": "The backup was created BUT some items could not be added to the archive. The gaps are listed below; do not treat this backup as complete.",
   "panel.backup.warningsListTitle": "{name} — warnings and missing items",
   "panel.backup.incremental": "Incremental backup (when possible)",
