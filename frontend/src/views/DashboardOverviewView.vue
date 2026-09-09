@@ -659,6 +659,7 @@ function formatTimeSpan(value: string): string {
 .meter-card {
   display: grid;
   place-items: center;
+  padding: var(--sp-12);
 }
 
 .meter-ring {
@@ -667,15 +668,17 @@ function formatTimeSpan(value: string): string {
   --ring-color: var(--text-muted);
   width: min(160px, 100%);
   aspect-ratio: 1;
-  padding: var(--sp-12);
+  padding: var(--sp-10);
   border-radius: 50%;
   background: conic-gradient(var(--ring-color) var(--progress), var(--ring-track) 0);
 }
 
 .meter-core {
-  display: grid;
-  place-items: center;
-  gap: var(--sp-8);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: var(--sp-4);
   width: 100%;
   height: 100%;
   border-radius: 50%;
@@ -688,10 +691,11 @@ function formatTimeSpan(value: string): string {
    `--fs-xs` çiziyordu. Kopya silindi, ortak tanım devraldı. GÖRÜNEN FARK: kutucuk etiketleri
    0.82rem -> 0.78rem (bir ölçek adımı küçülür ve panelin geri kalanıyla eşitlenir). */
 .meter-core span {
+  max-width: 80%;
   color: var(--text-muted);
   font-size: var(--fs-xs);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .access-panel {
@@ -828,7 +832,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .meter-core small {
-  max-width: 86%;
+  max-width: 70%;
   color: var(--text-soft);
   font-size: var(--fs-2xs);
   font-weight: 650;
@@ -841,9 +845,17 @@ function formatTimeSpan(value: string): string {
   font-variant-numeric: tabular-nums;
 }
 
+/* Dairenin kenarlarına değil, ortadaki güvenli alana yerleşen tek metin grubu. */
+.meter-core strong {
+  font-size: 1.85rem;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
 .summary-card {
   display: grid;
-  gap: var(--sp-8);
+  gap: var(--sp-6);
+  padding: var(--sp-12);
 }
 
 .summary-card small {
@@ -1277,25 +1289,26 @@ function formatTimeSpan(value: string): string {
   }
 
   .meter-card {
-    padding: var(--sp-8);
+    position: relative;
+    padding: 38px var(--sp-8) var(--sp-8);
     border-radius: var(--radius-md);
   }
 
   .meter-ring {
     width: min(112px, 100%);
-    padding: var(--sp-8);
+    padding: var(--sp-4);
   }
 
   .meter-core {
     gap: var(--sp-2);
   }
 
-  /* Bu iki boyut ÖLÇEĞİN ALTINDA ve bilerek öyle: `--fs-2xs` (0.78rem) en küçük adım, ama
-     112px'lik halkanın içine "Bellek kullanımı" + oran + çekirdek sayısı sığması gerekiyor.
-     Ölçek adımı eklemek yerine kural burada kalıyor — yalnız telefon halkasına ait, tek yer. */
+  /* Telefonda başlık dairenin dışına çıkar; yüzde için ayrılan alanı daraltmaz. */
   .meter-core span {
-    font-size: 0.56rem;
-    letter-spacing: 0.02em;
+    position: absolute;
+    inset: var(--sp-4) var(--sp-4) auto;
+    max-width: none;
+    font-size: var(--fs-2xs);
   }
 
   /* Halka metriği özet kartından AYRILIYOR: 112px'lik halkanın içi ile 2 sütunluk bir kartın

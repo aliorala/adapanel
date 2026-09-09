@@ -187,7 +187,7 @@
 
   /* modern paneller ile aynı font: Open Sans (humanist, yumuşak, panelde dinlendirici). */
   font-family: "Open Sans Variable", "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  font-size: 14px;
+  font-size: 13px;
   font-synthesis: none;
   letter-spacing: normal;
 }
@@ -313,6 +313,28 @@
 
 :root[data-density="comfortable"] {
   font-size: 14px;
+}
+
+/* Kompakt görünüm: masaüstünde daha fazla içerik, rahat görünümde mevcut ölçüler. */
+:root:not([data-density="comfortable"]) .panel {
+  padding: var(--sp-12);
+  gap: var(--sp-10);
+}
+
+:root:not([data-density="comfortable"]) .nav-item {
+  min-height: 32px;
+  padding-block: var(--sp-4);
+}
+
+:root:not([data-density="comfortable"]) .nav-glyph {
+  width: 24px;
+  height: 24px;
+}
+
+@media (max-width: 700px) {
+  :root {
+    font-size: 14px;
+  }
 }
 
 /* Rahat yoğunluk da ölçeğe taşındı (14 -> 16, 17 -> 20, 11 -> 12). Adımlar YUKARI yuvarlandı:
