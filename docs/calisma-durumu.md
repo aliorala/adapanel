@@ -2,13 +2,15 @@
 
 Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel sonucu gösterir. Aşağıdaki eski sürüm bölümleri tarihsel kayıttır.
 
-Son güncelleme: **10.09.2026 — 0.8.38 terminal düzeltmeleri hazırlanıyor; canlı henüz 0.8.37.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+Son güncelleme: **10.09.2026 — 0.8.38 canlı; terminal düzeltmeleri ve canlı doğrulama tamamlandı.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
 
 ## 0.8.38 terminal düzeltmeleri
 
 - Süre sınırı alt sürecin açık bıraktığı çıktı bağlantılarını da kapsıyor; alınabilen çıktı korunuyor. Temizlikte sınırsız süreç bekleme kaldırıldı. Ana süreci bitmiş bağımsız arka plan işlerinin durduğu varsayılmıyor.
 - Yanıt geldiğinde yeni komut/dizin taslağının silinmesi ve hata çıktısının zaman aşımı açıklamasını gizlemesi düzeltildi. Türkçe/İngilizce zaman aşımı metni kesin sonlandırma iddiası taşımıyor.
-- 4 terminal bütünleşme + 5 Vue akış regresyonu eklendi; ön yüzde **65 test/typecheck/build**, son tam .NET koşusunda **5.264 Infrastructure + 2 Core = 5.266 test** geçti; başarısız/atlanan yok. Canlı doğrulama bekleniyor. Süre testleri mevcut `Script host timing` koleksiyonunda, yardımcı açılışına geniş pay veriyor; üretimde kapanış beklemesi en fazla 2 saniye.
+- 4 terminal bütünleşme + 5 Vue akış regresyonu eklendi; ön yüzde **65 test/typecheck/build**, son tam .NET koşusunda **5.264 Infrastructure + 2 Core = 5.266 test** geçti; başarısız/atlanan yok. Süre testleri mevcut `Script host timing` koleksiyonunda, yardımcı açılışına geniş pay veriyor; üretimde her kapanış bekleme denemesi en fazla 2 saniye.
+- **Canlı doğrulama:** mevcut/son sürüm 0.8.38, AdaPanel Running/Automatic; kurulum succeeded/exitCode=0/isFinished=true/isFailed=false. Inno başarı 00:24:09.520, Restore 00:24:30.396, Log closed 00:24:30.412 (10.09.2026 sunucu yerel zamanı). 5 saniye sınırındaki bekleme denemesi 6.297 ms toplam sürede exitCode=-1 döndü; stdout/stderr ve zaman aşımı açıklaması birlikte göründü. Beklerken yazılan yeni komut ve dizin korundu. Ardından süre 30 saniyeye döndürüldü, salt okunur hizmet/kurulum kontrolü exitCode=0 tamamlandı.
+- Kaynak commit'i **`90f6e1f`**; paket 90.762.989 bayt, SHA256 `C0F13FDA18C9AE9695FB01E6405CB1A73DD8786756E613BDA4B65E16AD946752`. Yayın yeniden indirilip doğrulandı, canlı panel de aynı özeti doğruladı. 149 ön yüz dosyası eşleşti; 22 bileşen geçti, mevcut büyük paket istisnasıyla 3 atlandı. Yalnız mevcut betikle release yayımlandı; kaynak/history/tag push edilmedi. Yedekleme modülü, kapalı şifreleme tercihi ve kompakt görünüm korunuyor.
 
 ## 0.8.37 ek düzeltmeler
 
