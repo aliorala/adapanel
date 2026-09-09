@@ -4,10 +4,21 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **09.09.2026** · Son doğrulanan canlı sürüm: **0.8.30** · Kod ve yayın kayıtları commit'lendi.
-Son tam test koşusu (0.8.29): **5.222 .NET + 58 ön yüz testi başarılı**. 0.8.30: **13 CSS kontrolü + typecheck/build başarılı**; tam işlev paketi yeniden çalıştırılmadı.
+Son güncelleme: **09.09.2026** · Son doğrulanan canlı sürüm: **0.8.32** · Kaynak commit'leri: `01ce3c9`, `c555ac4`.
+Son tam .NET koşusu (0.8.32): **5.242 başarılı**, atlanan yok; derlemede **0 uyarı / 0 hata**. 73 ilgili kontrol geçti. 0.8.31'deki **58 ön yüz testi** başarılı; 0.8.32'de yalnız sürüm bilgisi değişen ön yüz yeniden derlendi. Typecheck/build başarılı.
 
-## SON İŞ — 0.8.29 hata düzeltmeleri ve 0.8.30 kompakt görünüm canlıda
+## SON İŞ — Kalan servis ve FTP sorunları düzeltildi, 0.8.32 canlıda
+
+- Kullanıcı kalan sorunların düzeltilmesini istedi. Yedekleme modülü ve kompakt görünüm korunuyor.
+- Kurulumda servis başlangıç ayarı saklanıyor, dosya değiştirme sırasında yeniden başlama engelleniyor, iptal/hata/başarıda ayar geri geliyor. Yalnız tam yolu eşleşen uygulama süreci kapatılır. Durdurma ve dosya kilidi doğrulanmadan dosyalar değiştirilmez.
+- FTP geçici hatalarına sınırlı tekrar, asenkron zaman aşımı/iptal ve eski yedeklerde üst klasör yokluğunun kanıtlanması eklendi. Kalıcı yetki hataları “dosya yok” sayılmaz. Test uyarıları da düzeltildi.
+- Canlı kurulum tek denemede `succeeded`, çıkış kodu 0; panel 0.8.31 ve servis Running/Automatic. Inno günlüğünde Stop/Restore başarılı. Yeni sürümde kayıtlı FTP hedefine gerçek test dosyası aktarımı geçti.
+- Toplu doğrulama sırasında görülen geçici 421 soket hataları için 0.8.32'de listeleme/silme/boş dizin kaldırmaya da sınırlı tekrar eklendi. 0.8.32 canlı kurulumu da başarılı; panel güncel ve servis Running/Automatic. Son kayıtta installerExitCode=null (0 diye yorumlanmaz), succeeded/isFinished=true/isFailed=false. Inno günlüğü başarılı Stop/Restore ve kurulum tamamlanması sonrası 17:58:36'da kapandı.
+- **Son canlı doğrulama: 60 kayıt; 0 yerel dosya yok, 18 uzak kopya yok, 0 arşiv açılamadı, 0 kayıt ölçülemedi.** Önceki 4 geçici erişim hatası bu koşuda yok. Eski uzak kopyaların yokluğu kanıtlandı; kayıtlar silinmedi, eksik uzak kopyalar yeniden oluşturulmadı. FTP yetim taraması desteklenmediğinden yapılmadı.
+- Eski başarısız veritabanı aktarımının yerel arşivi korunuyor; bağlantı testi o arşivin yeniden aktarılması değildir. Önceki gece işinin hata özeti tarihsel kayıttır. Kullanıcı yedek şifrelemesi için **“Şimdilik kapalı kalsın”** dedi; ayar bu açık tercihle kapalı bırakıldı, bekleyen onay yok. Gerçek geri yükleme yapılmadı.
+- [Ayrıntılı düzeltme, test ve canlı yayın kaydı](kalan-sorunlar-2026-09-09.md). Kanıtlar `.tmp/remaining-fixes/`; mevcut manifestler 0.8.32 paketini gösterir. Kaynak geçmişi açık GitHub deposuna gönderilmedi.
+
+## Önceki kayıt — 0.8.29 hata düzeltmeleri ve 0.8.30 kompakt görünüm
 
 - **Yedekleme kalacak.** Kullanıcı kaldırma isteğini başka projeyle karıştırdığını söyleyerek geri çekti. Modülün veya bağlantılarının kaldırılmasına devam etmeyin.
 - 0.8.29 kaynak commit'i `68180e6`, yayın/doğrulama kaydı `56a86d4`. Oturum izolasyonu, yedek geri yükleme onayları ve hata raporu, dosya düzenleyicide kaydedilmemiş değişiklik koruması, site seçimi, rol kontrolleri, URL/geri-ileri gezinmesi, kurulum takibi ve dil paketlerinin yüklenmesi düzeltildi. Süreç testi zaman aşımı ve boş SSL çıktısı da ele alındı. Ayrıntı ve test kanıtları: [düzeltme kaydı](duzeltmeler-2026-09-09.md).

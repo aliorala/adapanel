@@ -1,4 +1,4 @@
-# 0.8.31 — Kalan sorunların düzeltilmesi
+# 0.8.31–0.8.32 — Kalan sorunların düzeltilmesi
 
 Kullanıcının devir notlarında kalan sorunları da düzeltme isteği üzerine çalışıldı. Yedekleme modülü korunuyor; mevcut canlı yayın izni geçerli.
 
@@ -31,10 +31,35 @@ Testlerdeki bloklayan `.GetAwaiter().GetResult()` / `.Wait()` işlemleri `await`
 - Tam .NET koşusu: **Infrastructure 5.235/5.235 + Core 2/2 = 5.237 başarılı**, başarısız/atlanan yok. Altyapı koşusu 3 dakika 37 saniye; derlemede **0 uyarı / 0 hata**. Kanıtlar: `.tmp/remaining-fixes/infrastructure-final.trx`, `core-final.trx` ve ilgili günlükler.
 - Ön yüz testleri: **8 dosyada 58/58 başarılı** (`.tmp/remaining-fixes/frontend-tests.log`).
 - Kurulum yardımcısı solid-compressed paketin başına alındı ve yalnız bir kez çıkarılıyor. Son Inno değişikliği ardından mevcut 6 kurulum kontrolü ayrıca tekrar geçti (`installer-final.log`).
-- Ön yüzün 149 dosyası publish çıktısıyla SHA256 üzerinden eşleştirildi; fark yok. 0.8.31 paketlemesi sürüyor; canlı yayın sonucu aşağıya eklenecek.
+- Ön yüzün 149 dosyası publish çıktısıyla SHA256 üzerinden eşleştirildi; fark yok. 22 bileşen denetimi geçti, betiğin büyük paket istisnasındaki 3 bileşen atlandı. Publish ve son kurulum dosyası içerik denetimleri geçti (`package.log`).
+- Kaynak commit'i `01ce3c9`. [0.8.31 yayımlandı](https://github.com/aliorala/adapanel/releases/tag/0.8.31); kaynak geçmişi açık depoya gönderilmedi. Paket 90.757.936 bayt, SHA256 `6D19478CA8863E05B20AFC41619D566EE5C9DEC3DA38129DC75854D630FFD4B8`. Yayınlanan dosya yeniden indirilerek yerel dosyayla eşleştirildi (`publish.log`); canlı panel de aynı özeti doğruladı.
+- Canlı güncelleme ekranından 0.8.30 → 0.8.31 kuruldu; sayfa otomatik geri geldi ve mevcut/son sürüm 0.8.31, “Panel güncel” durumunu gösterdi. `last-attempt.json`: `succeeded`, çıkış kodu 0, `isFinished=true`, `isFailed=false`, `isDecidedByPanel=true`. Hizmet `Running / Automatic`.
+- Canlı Inno günlüğünde servis korumasının iki `Stop` adımı 17:39:06'da, `Installation process succeeded` 17:39:47'de ve `Restore` adımı 17:40:27'de başarılı. Çalıştırıcının başlangıçta servis başlatma tekrarları oldu; sonrasında hizmetin çalıştığı doğrulandı. Tek kurulum denemesi başarılı; 0.8.29'daki gibi kod 5 / geri alma görülmedi. Günlüğün kapanması da doğrulandı.
 
 ## Kullanıcıya bağlı nokta
 
-Canlıda yedek şifrelemesi kapalı. Kullanıcıdan parolayı **sohbete yazmadan**, panelde belirleyip panel dışında saklayarak kendisinin etkinleştirmesi istendi. Kullanıcı yanıtı/işlemi olmadan parola oluşturulmadı, ayar değiştirilmedi. Şifrelenmemiş eski arşivler bu kod değişikliğiyle geriye dönük şifrelenmiş sayılmaz.
+Canlıda yedek şifrelemesi kapalı. Kullanıcıdan parolayı **sohbete yazmadan**, panelde belirleyip panel dışında saklayarak kendisinin etkinleştirmesi istendi. Kullanıcı **“Şimdilik kapalı kalsın”** yanıtını verdi; ayar açık tercihi doğrultusunda kapalı bırakıldı. Bekleyen onay yok; yeni talep olmadan etkinleştirmeyin. Parola oluşturulmadı. Şifrelenmemiş eski arşivler bu kod değişikliğiyle geriye dönük şifrelenmiş sayılmaz.
 
-Canlıdaki önceki FTP 421 kaydı bir veritabanı arşivine ait; yerel kopyası mevcut. Sunucunun FTP karşılama yanıtı yeniden okunabildi (220). Bu yalnız bağlantı kanıtıdır; eski arşivin yeniden yüklenmesi veya yeni sürümde gerçek aktarım başarısı olarak sayılmaz.
+Canlıdaki önceki FTP 421 kaydı bir veritabanı arşivine ait; yerel kopyası mevcut. 0.8.31'de otomasyon ekranından kayıtlı FTP hedefine gerçek test dosyası yazıldı; “Bağlantı başarılı — hedefe yazılabiliyor” sonucu alındı. Bu, eski arşivin yeniden yüklendiği anlamına gelmez. Geçmiş iş sonuçları başarılıymış gibi değiştirilmedi.
+
+## Canlı doğrulamanın ortaya çıkardığı ek durum — 0.8.32
+
+0.8.31 üzerinde 60 kayıt doğrulandı: 15 uzak kopyanın yokluğu kanıtlandı; 4 kayıt FTP sunucusunun **421 Could not create socket** yanıtı nedeniyle ölçülemedi ve kayıp sayılmadı. Arşiv açılamadı sayısı 0. Sunucunun geçici soket hatası yalnız yüklemeyi değil NLST doğrulamasını da etkiliyordu.
+
+Bu nedenle sınırlı yeniden deneme listeleme, dosya silme ve boş dizin kaldırmaya da uygulandı. Ortak yeniden deneme kodu sonuç olarak dönen geçici FTP kodlarını da işler; 530/550 yeniden denenmez. Gerçek TCP sunucusunun iki 421 yanıtından sonra üçüncü bağlantıda listeleme/silme/boş dizin kaldırmayı kabul ettiği ve liste içeriğinin okunduğu ölçüldü. 530/550'nin tek denemede hatayı koruduğu da test edildi.
+
+Ek düzeltme ardından **73 ilgili test geçti**, atlanan yok (`ftp-command-final.trx`). 0.8.32 tam koşusunda **Infrastructure 5.240/5.240 + Core 2/2 = 5.242 test geçti**, atlanan/başarısız yok, derlemede 0 uyarı/0 hata. Altyapı koşusu 2 dakika 52 saniye (`infrastructure-032.trx`, `core-032.trx`). Ön yüz yalnız sürüm bilgisiyle yeniden derlendi (`frontend-032.log`); işlevleri değişmedi, önceki 58 testlik başarılı ön yüz koşusu geçerli.
+
+0.8.32 kaynak commit'i `c555ac4`. [Sürüm yayımlandı](https://github.com/aliorala/adapanel/releases/tag/0.8.32). Paket 90.758.804 bayt; SHA256 `087492DAC6C0BC69FEEF4749AD915DBA601CD5AF9F94AFB5748435E1648C0A2A`. Yayından yeniden indirilen dosya aynı özetle doğrulandı (`publish-032.log`). 149 ön yüz dosyası publish ile eşleşti; 22 bileşen denetimi geçti, 3 büyük paket betiğin istisnasıyla atlandı. Publish ve installer denetimleri başarılı (`package-032.log`). Son manifestler artık bu sürüme aittir.
+
+## 0.8.32 son canlı doğrulama — 09.09.2026
+
+- Yayın paketi yüklenirken yapılan ilk panel kontrolü geçici “.exe bulunamadı” sonucunu gösterdi. Herkese açık son sürüm API'sinde 0.8.32 ve tek AdaPanelSetup.exe varlığı doğrulandı; panelden yeniden denetleme sonra doğru sürümü aldı. Paket doğrulamasını atlayan bir yöntem kullanılmadı.
+- Canlı panel paketi yukarıdaki SHA256 ile doğruladı. Mevcut yayın izni kapsamında arayüzden 0.8.31 → 0.8.32 kuruldu. Panel otomatik geri döndü; mevcut/son sürüm 0.8.32 ve “Panel güncel” görüldü.
+- Hizmet `Running / Automatic`. `last-attempt.json`: `phase=succeeded`, `isFinished=true`, `isFailed=false`, `isDecidedByPanel=true`, `updatedAtUtc=2026-09-09T14:58:00.9743071Z`. `installerExitCode=null`; bu değer 0 olarak raporlanmadı. Terminalin kendi çıkış kodu 0, kurulumun çıkış kodu değildir.
+- Inno günlüğünde iki `Stop` 17:57:36.102 ve 17:57:36.649'da başarılı; `Installation process succeeded` 17:58:12.030; `Restore` başarılı ve `Log closed` 17:58:36.780. Böylece yalnız panelin erken geri dönmesi değil, kurulumun tamamlanması da doğrulandı.
+- Yeni sürümde **Yedekleri doğrula** çalıştırıldı: **60 kayıt denetlendi; 0 yerel dosya yok, 18 uzak kopya yok, 0 arşiv açılamadı, 0 kayıt ölçülemedi.** Önceki koşudaki 4 erişim hatası bu koşuda görülmedi. Eksik uzak kopyalar 17 Ağustos'tan 14 ve 28 Ağustos'tan 4 eski kayda ait. 0.8.31'de erişilemeyen 3 eski kayıt artık eksik olarak kanıtlandı; erişilemeyen diğer güncel kayıt da ölçülebildi.
+- Bu işlem veri silmedi. Eksik uzak kopyalar yeniden oluşturulmadı ve eski başarısız veritabanı aktarımı yeniden gönderilmiş sayılmadı. FTP yetim taraması desteklenmediği için yapılmadı; arayüz bunu açıkça bildirdi. Gerçek site/veritabanı geri yüklemesi yapılmadı.
+- Kullanıcı yedek şifrelemesini şimdilik kapalı bırakmayı seçti; ayar korunuyor, bekleyen onay yok. Sohbette parola istenmedi veya otomatik parola üretilmedi.
+
+Devir dosyaları `CODEX_MEMORY.md`, `docs/calisma-durumu.md` ve bu belge güncellendi; önceki sürüm notları tarihsel bağlam olarak korundu. Kaynak geçmişi herkese açık GitHub deposuna gönderilmedi.

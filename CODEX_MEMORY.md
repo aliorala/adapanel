@@ -9,9 +9,25 @@ Ilk okunacak dosyalar:
 2. `CODEX_MEMORY.md`
 3. `docs/calisma-durumu.md`
 
-## 2026-09-09 — Güncel devir: 0.8.30 canlı
+## 2026-09-09 — Güncel devir: 0.8.32 canlı
 
-Bu bölüm son oturumun durumudur; aşağıdaki eski tarihli kayıtlar geçmiş bağlamı korur. Ayrıntılar: [0.8.29 düzeltmeleri](docs/duzeltmeler-2026-09-09.md) ve [0.8.30 kompakt görünüm](docs/kompakt-gorunum-2026-09-09.md).
+Kullanıcı “Kalan sorunları da düzelt” dedi. Kaynak commit'leri `01ce3c9` (0.8.31) ve `c555ac4` (0.8.32); ayrıntılar ve kanıtlar [kalan sorunlar kaydında](docs/kalan-sorunlar-2026-09-09.md).
+
+- **Yedekleme modülü kalacak.** Önceki kaldırma talebi geri çekildi; kompakt görünüm de korunuyor.
+- Kurulumdaki SCM yeniden başlatma yarışı düzeltildi. `scripts/update-service-guard.ps1` başlangıç ayarını saklayıp dosyalar değiştirilirken hizmeti geçici `Disabled` yapar; iptal/hata/başarıda geri yükler. Yalnız tam exe yolu eşleşen süreç durdurulur; dosya kilidi kalkmadan kurulum ilerlemez. Çalıştırıcının durdurma beklemesi sınırlandırıldı.
+- FTP'de geçici hatalara en fazla üç deneme, gerçek asenkron zaman aşımı/iptal ve bağlantıyı kapatma eklendi. 530/550 gibi kalıcı hatalar tekrar edilmez; yerel yedek korunur. Üst gün klasörü silinmiş yedeklerde üst dizin listesiyle yokluk kanıtlanır; erişim reddi hâlâ “bilinmiyor” sayılır.
+- 0.8.32'de aynı sınırlı tekrar FTP listeleme/silme/boş dizin kaldırmaya da uygulandı; canlı toplu doğrulamanın yakaladığı geçici 421 soket hataları için gerçek TCP testleri eklendi.
+- Test uyarıları bastırılmadan düzeltildi. **Son 0.8.32 tam koşusu: 5.242 .NET testi (Infra 5.240 + Core 2), atlanan yok, derlemede 0 uyarı/0 hata.** 73 ilgili kontrol geçti. 0.8.31'deki 58 ön yüz testi başarılı; 0.8.32'de yalnız sürüm bilgisi değişen ön yüz yeniden derlendi. Typecheck/build başarılı. Her iki pakette 149 ön yüz dosyası publish ile eşleşti; 22 bileşen denetimi geçti, 3 büyük paket betiğin istisnasıyla atlandı.
+- **0.8.31 yayımlandı ve canlıya kuruldu.** Paket 90.757.936 bayt; SHA256 `6D19478CA8863E05B20AFC41619D566EE5C9DEC3DA38129DC75854D630FFD4B8`. Yayından yeniden indirilen dosya ve canlı sunucudaki paket aynı özetle doğrulandı. `last-attempt.json`: succeeded, exit 0, isFinished=true, isFailed=false. Hizmet Running/Automatic. Canlı Inno günlüğünde iki Stop ve Restore adımı başarılı, kurulum günlüğü kapandı. Kaynak kod açık GitHub deposuna gönderilmedi.
+- Yeni sürümde kayıtlı FTP hedefine gerçek bağlantı testi dosyası yazıldı; arayüz **“Bağlantı başarılı — hedefe yazılabiliyor”** gösterdi. Bu, eski başarısız veritabanı arşivinin yeniden yüklendiği anlamına gelmez; o kaydın yerel kopyası korunuyor. Eski gece işi özeti tarihsel sonuçtur, geçmişi başarılı göstermeyin.
+- **Kullanıcı kararı:** yedek şifrelemesi “Şimdilik kapalı kalsın” yanıtıyla kapalı bırakıldı. Bunu bekleyen onay veya unutulmuş hata saymayın; kullanıcı yeni talep vermedikçe etkinleştirmeyin. Parola oluşturulmadı. Eski şifresiz arşivler geriye dönük şifrelenmedi. Gerçek site/veritabanı geri yüklemesi yapılmadı.
+- **0.8.32 de yayımlandı ve canlıya kuruldu.** Paket 90.758.804 bayt; SHA256 `087492DAC6C0BC69FEEF4749AD915DBA601CD5AF9F94AFB5748435E1648C0A2A`. Yayın dosyası yeniden indirilip doğrulandı; canlı panel aynı özeti doğruladı ve 0.8.32 / “Panel güncel” gösterdi. Hizmet Running/Automatic; son durum succeeded/isFinished=true/isFailed=false. Bu kayıtta installerExitCode=null; bunu 0 diye aktarmayın. Inno günlüğünde kurulum başarılı, Stop/Restore başarılı ve günlük 17:58:36'da kapanmış.
+- **Son canlı yedek doğrulaması (0.8.32): 60 kayıt, 0 yerel dosya yok, 18 uzak kopya yok, 0 arşiv açılamadı, 0 kayıt ölçülemedi.** Önceki koşudaki 4 erişim hatası kalmadı; 18 eski uzak kopyanın yokluğu artık kanıtlandı. Bu kontrol veri silmedi veya eksik uzak kopyaları yeniden oluşturmadı. FTP yetim taraması desteklenmediği için yapılmadı; boş yetim listesi temizlik kanıtı değildir.
+- Kanıtlar `.tmp/remaining-fixes/` altında; son manifestler ve bileşen denetimi artık **0.8.32** paketine ait. Ayrıntılı belgede canlı doğrulama sonuçları takip edilir. Aşağıdaki 0.8.29/0.8.30 kayıtları tarihsel bağlamdır.
+
+## 2026-09-09 — Önceki devir: 0.8.29 ve 0.8.30
+
+Bu bölüm önceki oturumun durumudur; güncel düzeltmeler ve canlı sürüm yukarıdadır. Ayrıntılar: [0.8.29 düzeltmeleri](docs/duzeltmeler-2026-09-09.md) ve [0.8.30 kompakt görünüm](docs/kompakt-gorunum-2026-09-09.md).
 
 - **Kullanıcı kararı: yedekleme modülü kalacak.** Kaldırma / sunucuyla eşitlemeye dönüştürme isteği, kullanıcının başka projeyle karıştırdığını belirtmesi üzerine geri çekildi. Bu eski isteğe dayanarak modülü veya bağlantılarını kaldırmayın.
 - Kullanıcı canlı yayına izin verdi. 0.8.29 ve ardından **0.8.30 yayımlandı ve canlıda doğrulandı**. Son doğrulamada arayüz ve sunucu sürümü 0.8.30; IIS, WAS ve FTP servisleri çalışıyordu.
