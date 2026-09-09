@@ -3584,3 +3584,65 @@ Değişen dosyalar: `src/AdaPanel.Infrastructure/Migration/FileMigrationService.
   düşer, korunma düşmez).
 * **FTPS veri kanalı el sıkışması ölçülmedi** (sahte sunucu PASV/veri kanalı konuşmuyor);
   `DataConnectionEncryption` istemci nesnesinin gerçek durumundan ölçülüyor.
+
+## 2026-09-09 — SSRF kardeşlerinin ARTIĞI: üçü de ÖLÇÜLDÜ, ikisi bulgu DEĞİL
+
+`efade94` (cron `url`) ve `942dfe9` (git + arşiv) kapandıktan sonra geriye üç madde
+kalmıştı. Ajansız, elle ölçüldü. **İkisi gerçek bir açık değil; üçüncüsü karar.**
+
+### 1. `GitController` kapsam denetimi — BULGU DEĞİL, ölçüldü
+
+İddia: "`CustomerAccess.EnsureSiteAsync` çağrılmıyor; sahip olmayan yönetici
+başkasının sitesine dağıtım yapılandırabiliyor."
+
+`CustomerAccess.EnsureSiteAsync` (`src/AdaPanel.Api/Security/CustomerAccess.cs:125`)
+okundu: `GetEffectiveSitesAsync` yalnız `Reseller` ve `Customer` için liste döndürüyor,
+diğer roller için `null`. `null` gelince fonksiyon **hemen dönüyor** (`:132-135`).
+
+`GitController` `[Authorize(Roles = "Administrator")]`. Yani çağrıyı eklemek
+**hiçbir şey ölçmez, hiçbir şey engellemez** — koşulsuz `return` eden bir satır olur.
+Administrator panelin her yerinde küresel kapsamlıdır (sites, dns, backup, files);
+Git'i tek başına sahibe kısıtlamak, aynı yöneticinin dosya yöneticisiyle aynı şeyi
+yapabildiği yerde tiyatro olurdu.
+
+**KARAR: değişiklik yok.** Sahte bir koruma eklenmedi.
+
+### 2. Arşiv `ftp://` yolunda DNS rebinding — bilinen sınır, kodda YAZILI
+
+`SiteHostingSettingsService.cs:908-917` kalan sınırı zaten açıkça yazıyor: `ftp`
+yolunda yalnız ön kapı çalışıyor (çözümleme + adres denetimi), bağlanma anı
+denetlenmiyor. `Invoke-WebRequest ftp://` desteği ölçülmüş bir gerçek (PS 5.1'de
+`FtpWebRequest` üretiyor) ve arayüz `panel.migration.urlHint` ile kullanıcıya vaat
+ediyor. **Yeni bir şey eklenmedi**; sınır zaten dürüstçe belgeli.
+
+### 3. İçe aktarmanın sabit `Strict`'i — TUTARSIZ ama AÇIK DEĞİL, KARAR BEKLİYOR
+
+İddia: "`ImportSiteArchiveAsync` ön kapısı `Panel:AllowInternalOutboundTargets`
+açık kapısını yoksayıyor (sabit `Strict`) — panelin geri kalanıyla tutarsız."
+
+**Hipotezim ölçülüp ÇÜRÜDÜ.** "Kiracıya açık olduğu için Strict" diye düşünmüştüm.
+Ama `OutboundTargetPolicy`'nin kendi belgesi (`OutboundAddressGuard.cs:355-362`)
+bayrağın **kiracıya açık uçlarda da geçerli olduğunu** yazıyor ve örnek olarak
+"yedek hedefi, cron adresi, git deposu" diyor — üçü de `Connecting(flag)` kullanıyor:
+
+| Yol | Politika | Kiracıya açık mı |
+|---|---|---|
+| `BackupService.cs:140` | `Connecting(flag)` | evet |
+| `SchedulerService.cs:1177` | `Connecting(flag)` | evet |
+| `GitDeploymentService.cs:59` | `Connecting(flag)` | hayır (admin) |
+| `SiteMigrationService`, `FileMigrationService`, `NotificationService` | `Connecting(flag)` | — |
+| `ClusterAddressGuard`, `ClusterHttpClientFactory` | `Strict` | hayır |
+| **`SiteHostingSettingsService.cs:766` (arşiv içe aktarma)** | **`Strict`** | **evet (`Administrator,Reseller`)** |
+
+Yani depo kuralı "kiracıya açıksa Strict" DEĞİL. İçe aktarmanın sabit `Strict`'i
+gerçekten tutarsız — ama **daha sıkı** yönde, yani bir açık değil.
+
+**KARAR SAHİBİNE:** iki yol var ve ikisi de savunulabilir.
+- **(a) Tutarlılık:** `Connecting(flag)` yap. Varsayılan yapılandırmada HİÇBİR fark
+  yok (bayrak varsayılan kapalı); yalnız kapıyı BİLEREK açmış işletici etkilenir ve
+  o zaten yedek/cron/git için aynı kararı vermiş.
+- **(b) Sıkı kal:** `Strict` kalsın, ama gerekçesi koda yazılsın ki bir sonraki okuyan
+  "tutarsızlık" diye GEVŞETMESİN.
+
+Uydurma bir gerekçe yazılmadı: (b) için ölçülmüş bir sebep BULUNAMADI. Bu yüzden
+kod DEĞİŞTİRİLMEDİ — gevşetmek de, sahte gerekçeyle sabitlemek de sahibinin kararı.
