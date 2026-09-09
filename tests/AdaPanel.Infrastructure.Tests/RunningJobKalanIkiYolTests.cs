@@ -475,6 +475,8 @@ public sealed class RunningJobKalanIkiYolTests
         public Task<BackupPruneResultDto> PruneSubscriptionAsync(Guid userId, int retentionDays, int keepCount, BackupPruneRemoteOptions? remote = null, CancellationToken cancellationToken = default)
             => Task.FromResult(new BackupPruneResultDto());
 
+        public Task<BackupRecordDto> RetryRemoteUploadAsync(string id, string url, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<IReadOnlyCollection<BackupRecordDto>> GetBackupsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

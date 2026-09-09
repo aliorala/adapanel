@@ -321,11 +321,12 @@ public sealed partial class BackupService(
         // YALNIZ KESİN ölçümde uyarı: "ölçemedim" hâlinde off-site kopyayı kayıp ilan etmek,
         // ağ arızasını felaket haberine çevirirdi.
         record.OffsiteCopyLost =
-            record.RemoteState == BackupPresence.Missing && !record.LocalMissing;
+            record.RemoteState == BackupPresence.Missing && !record.LocalMissing
+            && !string.IsNullOrWhiteSpace(record.Path);
 
         // "Artık hiç kopya yok": yerel yok VE uzak ya hiç yoktu ya da ölçülüp yok bulundu.
         record.AllCopiesMissing =
-            record.LocalMissing
+            (record.LocalMissing || string.IsNullOrWhiteSpace(record.Path))
             && record.RemoteState is BackupPresence.None or BackupPresence.Missing;
     }
 
@@ -4416,6 +4417,9 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         foreach (var record in records)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (record.Status == RemoteDeleteFailedStatus && string.IsNullOrWhiteSpace(record.Path))
+                sonuc.PreviouslyDeletedLocal++;
 
             if (IsLocalFileMissing(record))
             {

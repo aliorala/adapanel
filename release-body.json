@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.32",
-  "name": "0.8.32 — FTP doğrulamasında geçici bağlantı hataları",
-  "body": "Toplu yedek doğrulaması sırasında FTP sunucusunun geçici 421 yanıtları artık sınırlı yeniden denemeyle karşılanır.\n\n- Yeniden deneme desteği yüklemeye ek olarak dizin listeleme, dosya silme ve boş dizin kaldırmaya uygulandı.\n- 530/550 kimlik ve izin hataları yeniden denenmez; ulaşılamayan yedekler kayıp sayılmaz.\n- Önceki sürümdeki güvenli servis durdurma, iptal/zaman aşımı ve yerel yedek koruması devam eder.\n\nYedekleme modülü ve kompakt görünüm korunmuştur."
+  "tag_name": "0.8.33",
+  "name": "0.8.33 — Başarısız FTP yedeğini yeniden gönderme",
+  "body": "Yerelde duran, ilk FTP aktarımı başarısız yedekler mevcut arşivden yeniden gönderilebilir.\n\n- Yönetici, kayıtlı hedefi görüp onaylar; dosyanın boyutu ve SHA256 özeti aktarım öncesinde denetlenir.\n- Başarılı aktarım aynı yedek kaydına işlenir; yerel kopya ve diğer uyarılar korunur.\n- Önceki silme işlemlerinde kaldırılmış yerel kopyalar doğrulama özetinde ayrıca gösterilir. Yerel kopyası olmayan kayıtta varmış gibi bilgi gösterilmez.\n\nYedekleme modülü ve kompakt görünüm korunmuştur."
 }

@@ -143,6 +143,17 @@ internal sealed class BackupRemoteCredentialReader(JsonFileStore fileStore, ISec
         return (state.BackupTargetType ?? "local", state.BackupRemoteUrl ?? string.Empty);
     }
 
+    internal async Task<(string TargetType, string RemoteUrl, BackupPruneRemoteOptions Credentials)> ReadUploadTargetAsync(CancellationToken cancellationToken)
+    {
+        var state = await fileStore.ReadAsync(AutomationStatePath, new RemoteTargetProjection(), cancellationToken);
+        return (state.BackupTargetType ?? "local", state.BackupRemoteUrl ?? string.Empty, new BackupPruneRemoteOptions
+        {
+            UserName = state.BackupRemoteUserName ?? string.Empty,
+            Password = Unprotect(state.BackupRemotePasswordProtected),
+            Region = state.BackupRemoteRegion ?? string.Empty
+        });
+    }
+
     private string Unprotect(string? protectedValue)
     {
         if (string.IsNullOrWhiteSpace(protectedValue) || secretProtector is null)

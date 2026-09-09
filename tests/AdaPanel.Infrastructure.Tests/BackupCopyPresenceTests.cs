@@ -23,6 +23,28 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupCopyPresenceTests
 {
+    [Fact]
+    public async Task Previously_deleted_local_copy_is_not_reported_as_available_offsite_fallback()
+    {
+        using var alan = new BulutAlani();
+        var record = Kayit(alan, "removed", "ftp", "ftp://yedek.ornek.com/removed.zip");
+        File.Delete(record.Path);
+        record.Path = "";
+        record.Status = "deleted_remote_failed";
+        record.RemoteState = BackupPresence.Missing;
+        record.RemoteMissing = true;
+        record.RemoteVerifiedUtc = DateTime.UtcNow;
+        await alan.KayitlariYazAsync(record);
+        var service = alan.ServisKur(new SahteBulut());
+        var actual = Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+        Assert.False(actual.OffsiteCopyLost);
+        Assert.True(actual.AllCopiesMissing);
+        var verification = await service.VerifyBackupsAsync(alan.Iptal);
+        Assert.Equal(1, verification.PreviouslyDeletedLocal);
+        Assert.Equal(0, verification.MissingLocal);
+        Assert.Single(await service.GetBackupsAsync(alan.Iptal)); // History is retained.
+    }
+
     // =======================================================================================
     // 1) MALIYET KARARININ KORUMASI
     // =======================================================================================

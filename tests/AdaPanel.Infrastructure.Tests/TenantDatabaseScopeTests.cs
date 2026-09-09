@@ -226,6 +226,8 @@ public sealed class TenantDatabaseScopeTests
             });
         }
 
+        public Task<BackupRecordDto> RetryRemoteUploadAsync(string id, string url, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
         public Task<IReadOnlyCollection<BackupRecordDto>> GetBackupsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyCollection<BackupRecordDto>>([]);
 

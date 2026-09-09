@@ -23,6 +23,9 @@ public sealed class BackupVerificationResultDto
     /// <summary>Yerel dosyası bulunamayan kayıt sayısı.</summary>
     public int MissingLocal { get; set; }
 
+    /// <summary>Yerel yolu artık olmayan, önceki silme işleminden kalmış kayıtlar.</summary>
+    public int PreviouslyDeletedLocal { get; set; }
+
     /// <summary>Uzak kopyası bulunamayan kayıt sayısı.</summary>
     public int MissingRemote { get; set; }
 

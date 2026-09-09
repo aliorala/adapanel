@@ -5236,5 +5236,11 @@
   "panel.setup.progress.reconnecting": "Kurulum durumuna ulaşılamıyor. Yeniden bağlanılıyor…",
   "panel.setup.progress.connectionLost": "Bağlantı kurulamadı. Sunucudaki kurulum devam ediyor olabilir; son bilinen durum aşağıda korunuyor.",
   "panel.setup.progress.lastChecked": "Son başarılı kontrol: {time}",
-  "panel.setup.progress.retryConnection": "Yeniden bağlan"
+  "panel.setup.progress.retryConnection": "Yeniden bağlan",
+  "panel.backup.retryRemote": "Uzağa yeniden gönder",
+  "panel.backup.retryRemoteConfirm": "Mevcut yerel arşiv, aşağıdaki kayıtlı FTP hedefine gönderilecek. Yeni yedek oluşturulmaz; yerel dosya korunur.",
+  "panel.backup.verify.previouslyDeletedLocal": "{count} kaydın yerel kopyası önceki silme işleminde kaldırılmış",
+  "backup.retry_not_available": "Bu kayıt yeniden gönderilemez. İşlem yalnız yerel arşivi bulunan, ilk FTP aktarımı başarısız sunucu yedekleri için kullanılabilir.",
+  "backup.retry_target_changed": "Kayıtlı FTP hedefi değişti veya kullanılamıyor. Yedek ayarlarını kontrol edip yeniden deneyin.",
+  "backup.remote_retried": "Mevcut yedek uzak hedefe gönderildi. Yerel kopya korundu."
 }

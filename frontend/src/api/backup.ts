@@ -87,6 +87,7 @@ export type BackupOrphan = {
 export type BackupVerificationResult = {
   checked: number;
   missingLocal: number;
+  previouslyDeletedLocal: number;
   missingRemote: number;
   /**
    * Hedefe ULAŞILAMADIĞI için karar verilemeyen kayıt sayısı. Bunlar KAYIP DEĞİLDİR —
@@ -176,6 +177,12 @@ export async function setBackupEncryption(password: string) {
 
 export async function getBackups() {
   const response = await apiClient.get<ApiEnvelope<BackupRecord[]>>("/backup");
+  return response.data.data;
+}
+
+export async function retryRemoteUpload(backupId: string, remoteUrl: string) {
+  const response = await apiClient.post<ApiEnvelope<BackupRecord>>(
+    `/backup/${encodeURIComponent(backupId)}/retry-remote`, { remoteUrl }, { timeout: 2 * 60 * 60 * 1000 });
   return response.data.data;
 }
 

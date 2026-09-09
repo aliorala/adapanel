@@ -6,6 +6,8 @@ public interface IBackupService
 {
     Task<IReadOnlyCollection<BackupRecordDto>> GetBackupsAsync(CancellationToken cancellationToken = default);
 
+    Task<BackupRecordDto> RetryRemoteUploadAsync(string backupId, string expectedRemoteUrl, CancellationToken cancellationToken = default);
+
     Task<BackupRecordDto> BackupSiteAsync(BackupSiteRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>

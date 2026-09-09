@@ -38,6 +38,20 @@ public sealed class BackupAuditTrailTests
     private static readonly Guid SiteSahibi = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
     [Fact]
+    public async Task Remote_retry_records_actor_and_backup_owner()
+    {
+        var audit = new KonuluDenetim();
+        var record = SiteKaydi();
+        record.RemoteUri = "ftp://backup.example.com/archive.zip";
+        var controller = Denetleyici(new SahteYedekServisi(record), audit);
+        await controller.RetryRemoteAsync(record.Id, new RetryBackupRemoteRequest { RemoteUrl = "ftp://backup.example.com" }, CancellationToken.None);
+        var entry = Assert.Single(audit.Kayitlar, x => x.Action == "backup.remote_retried");
+        Assert.Equal(Yonetici, entry.UserId);
+        Assert.Equal(SiteSahibi, entry.SubscriptionUserId);
+        Assert.Contains(record.RemoteUri, entry.Details);
+    }
+
+    [Fact]
     public async Task Geri_yukleme_IZ_BIRAKIR_ve_izin_KONUSU_sitenin_sahibidir()
     {
         var denetim = new KonuluDenetim();
@@ -236,6 +250,8 @@ public sealed class BackupAuditTrailTests
     private sealed class SahteYedekServisi(BackupRecordDto kayit) : IBackupService
     {
         public Exception? GeriYuklemeHatasi { get; set; }
+
+        public Task<BackupRecordDto> RetryRemoteUploadAsync(string id, string url, CancellationToken cancellationToken = default) => Task.FromResult(kayit);
 
         public Task<IReadOnlyCollection<BackupRecordDto>> GetBackupsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyCollection<BackupRecordDto>>([kayit]);

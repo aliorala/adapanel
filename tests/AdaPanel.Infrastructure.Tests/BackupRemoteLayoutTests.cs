@@ -34,6 +34,110 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupRemoteLayoutTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Retry_upload_keeps_archive_id_hash_and_original_day_and_clears_only_transfer_warning(bool incomplete)
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.FailStoresRemaining = 1;
+        server.StoreFailureCode = 530;
+        var url = server.TabanAdres("yedekler");
+        var service = alan.ServisKur();
+        var original = await service.BackupSiteAsync(SiteIstegi(url), alan.Iptal);
+        Assert.Equal("created_remote_failed", original.Status);
+        if (incomplete)
+        {
+            original.Warnings.Add(new() { MessageKey = "backup.source_file_unreadable", Target = "locked.php" });
+            await alan.DosyaDeposu.WriteAsync("config/backups.json", new[] { original }, alan.Iptal);
+        }
+        var bytes = await File.ReadAllBytesAsync(original.Path, alan.Iptal);
+        await alan.DosyaDeposu.WriteAsync("config/automation.json", new { BackupTargetType = "ftp", BackupRemoteUrl = url, BackupRemoteUserName = "yedekci" }, alan.Iptal);
+        var retried = await service.RetryRemoteUploadAsync(original.Id, url, alan.Iptal);
+        Assert.Equal(incomplete ? "created_with_errors" : "created_remote_synced", retried.Status);
+        Assert.Equal(original.Id, retried.Id);
+        Assert.Equal(original.CreatedAtUtc, retried.CreatedAtUtc);
+        Assert.Equal(original.ContentHash, retried.ContentHash);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(retried.Path, alan.Iptal));
+        Assert.Equal(bytes, Assert.Single(server.Dosyalar).Value);
+        Assert.Contains(Path.GetRelativePath(Path.Combine(alan.Kok, "backups"), original.Path).Replace('\\', '/'), Uri.UnescapeDataString(retried.RemoteUri));
+        Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+        Assert.DoesNotContain(retried.Warnings, w => w.MessageKey == "backup.remote_upload_failed");
+        Assert.Contains(retried.Warnings, w => w.MessageKey == "backup.remote_unencrypted");
+        await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => service.RetryRemoteUploadAsync(original.Id, url, alan.Iptal));
+        Assert.Equal(2, server.StoreAttempts);
+    }
+
+    [Theory]
+    [InlineData("changed-file")]
+    [InlineData("missing-file")]
+    [InlineData("changed-target")]
+    [InlineData("deleted-record")]
+    [InlineData("missing-hash")]
+    [InlineData("subscription")]
+    public async Task Retry_refuses_unsafe_or_stale_requests_before_transmission(string scenario)
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.FailStoresRemaining = 1;
+        server.StoreFailureCode = 530;
+        var url = server.TabanAdres("yedekler");
+        var service = alan.ServisKur();
+        var record = await service.BackupSiteAsync(SiteIstegi(url), alan.Iptal);
+        await alan.DosyaDeposu.WriteAsync("config/automation.json", new { BackupTargetType = "ftp", BackupRemoteUrl = url, BackupRemoteUserName = "yedekci" }, alan.Iptal);
+        if (scenario == "changed-file")
+        {
+            var bytes = await File.ReadAllBytesAsync(record.Path, alan.Iptal);
+            bytes[^1] ^= 1; // Same size, different content: size alone must not pass.
+            await File.WriteAllBytesAsync(record.Path, bytes, alan.Iptal);
+        }
+        if (scenario == "missing-file") File.Delete(record.Path);
+        if (scenario == "deleted-record") record.Status = "deleted_remote_failed";
+        if (scenario == "missing-hash") record.ContentHash = "";
+        if (scenario == "subscription") record.SubscriptionUserId = Guid.NewGuid().ToString();
+        await alan.DosyaDeposu.WriteAsync("config/backups.json", new[] { record }, alan.Iptal);
+        var error = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => service.RetryRemoteUploadAsync(record.Id,
+            scenario == "changed-target" ? url + "/changed" : url, alan.Iptal));
+        Assert.Equal(scenario switch
+        {
+            "changed-file" => "backup.integrity_mismatch",
+            "missing-file" => "backup.file_missing",
+            "changed-target" => "backup.retry_target_changed",
+            _ => "backup.retry_not_available"
+        }, error.MessageKey);
+        Assert.Equal(1, server.StoreAttempts);
+        Assert.Empty(server.Dosyalar);
+        Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+    }
+
+    [Fact]
+    public async Task Retry_failed_transfer_preserves_original_record_and_local_bytes()
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        server.FailStoresRemaining = 10;
+        server.StoreFailureCode = 530;
+        var url = server.TabanAdres("yedekler");
+        var service = alan.ServisKur();
+        var record = await service.BackupSiteAsync(SiteIstegi(url), alan.Iptal);
+        await alan.DosyaDeposu.WriteAsync("config/automation.json", new { BackupTargetType = "ftp", BackupRemoteUrl = url, BackupRemoteUserName = "yedekci" }, alan.Iptal);
+        await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => service.RetryRemoteUploadAsync(record.Id, url, alan.Iptal));
+        var actual = Assert.Single(await service.GetBackupsAsync(alan.Iptal));
+        Assert.Equal(record.Status, actual.Status);
+        Assert.Empty(actual.RemoteUri);
+        Assert.Equal(record.ContentHash, await BackupContentHash.ComputeAsync(actual.Path, alan.Iptal));
+        Assert.Contains(actual.Warnings, w => w.MessageKey == "backup.remote_upload_failed");
+    }
+
+    [Fact]
+    public void Retry_endpoint_requires_administrator()
+    {
+        var method = typeof(AdaPanel.Api.Controllers.BackupController).GetMethod("RetryRemoteAsync")!;
+        var authorization = Assert.Single(method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), false));
+        Assert.Equal("Administrator", ((Microsoft.AspNetCore.Authorization.AuthorizeAttribute)authorization).Roles);
+    }
+
     [Fact]
     public async Task Ftp_421_retries_same_archive_and_confirms_actual_bytes()
     {

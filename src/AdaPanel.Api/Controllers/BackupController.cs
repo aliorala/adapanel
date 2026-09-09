@@ -381,6 +381,20 @@ public sealed class BackupController(
         return PhysicalFile(record.Path, contentType, record.Name);
     }
 
+    [HttpPost("{backupId}/retry-remote")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<ApiResponse<BackupRecordDto>>> RetryRemoteAsync(string backupId,
+        [FromBody] RetryBackupRemoteRequest request, CancellationToken cancellationToken)
+    {
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, backupId, subjectUserId: null, cancellationToken);
+        var backup = await backupService.RetryRemoteUploadAsync(backupId, request.RemoteUrl, cancellationToken);
+        await WriteBackupAuditAsync("backup.remote_retried", backup.Name,
+            $"Remote upload completed: {backup.RemoteUri}",
+            await ResolveRecordSubjectAsync(backup, CancellationToken.None), CancellationToken.None);
+        return Ok(ApiResponse<BackupRecordDto>.Ok(backup, "backup.remote_retried"));
+    }
+
     [HttpPost("db")]
     [Authorize(Roles = "Administrator")]
     public async Task<ActionResult<ApiResponse<BackupRecordDto>>> BackupDatabaseAsync([FromBody] BackupDatabaseRequest request, CancellationToken cancellationToken)

@@ -36,6 +36,9 @@
         <span :class="['status-pill', verification.missingLocal ? 'danger' : '']">
           {{ t("panel.backup.verify.missingLocal", { count: verification.missingLocal }) }}
         </span>
+        <span v-if="verification.previouslyDeletedLocal" class="status-pill">
+          {{ t("panel.backup.verify.previouslyDeletedLocal", { count: verification.previouslyDeletedLocal }) }}
+        </span>
         <span :class="['status-pill', verification.missingRemote ? 'danger' : '']">
           {{ t("panel.backup.verify.missingRemote", { count: verification.missingRemote }) }}
         </span>
@@ -323,6 +326,10 @@
                   {{ t("panel.backup.download") }}
                 </button>
               </span>
+              <button v-if="isAdmin && backup.status === 'created_remote_failed' && backup.targetType === 'ftp' && !backup.subscriptionUserId && backup.path && !backup.localMissing"
+                class="secondary compact row-button" v-bind="writeGate(busy)" @click="retryRemote(backup)">
+                {{ t("panel.backup.retryRemote") }}
+              </button>
               <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeBackup(backup)">
                 {{ t("panel.backup.delete") }}
               </button>
@@ -1129,6 +1136,7 @@ import {
   backupPanel,
   backupSubscription,
   deleteBackup,
+  retryRemoteUpload,
   deleteBackupChain,
   deleteBackupSchedule,
   downloadBackup,
@@ -2245,6 +2253,29 @@ function chainDeleteTargets(backup: BackupRecord) {
       (item.chainIndex === backup.chainIndex && item.createdAtUtc > backup.createdAtUtc)));
 
   return [backup, ...dependents];
+}
+
+async function retryRemote(backup: BackupRecord) {
+  await loadAutoBackup();
+  if (!autoForm.value || autoForm.value.backupTargetType !== 'ftp') {
+    showNotice(t('backup.retry_target_changed'), true);
+    return;
+  }
+  const target = autoForm.value.backupRemoteUrl;
+  await confirm({
+    title: t('panel.backup.retryRemote'),
+    message: t('panel.backup.retryRemoteConfirm'),
+    impact: [backup.name, target],
+    action: async () => {
+      busy.value = true;
+      try {
+        await retryRemoteUpload(backup.id, target);
+        await refresh();
+        showNotice(t('backup.remote_retried'), false);
+      } catch (error) { showError(error); }
+      finally { busy.value = false; }
+    }
+  });
 }
 
 async function removeBackup(backup: BackupRecord) {
