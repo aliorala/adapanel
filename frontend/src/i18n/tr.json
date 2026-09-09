@@ -5240,7 +5240,10 @@
   "panel.backup.retryRemote": "Uzağa yeniden gönder",
   "panel.backup.retryRemoteConfirm": "Mevcut yerel arşiv, aşağıdaki kayıtlı FTP hedefine gönderilecek. Yeni yedek oluşturulmaz; yerel dosya korunur.",
   "panel.backup.verify.previouslyDeletedLocal": "{count} kaydın yerel kopyası önceki silme işleminde kaldırılmış",
-  "backup.retry_not_available": "Bu kayıt yeniden gönderilemez. İşlem yalnız yerel arşivi bulunan, ilk FTP aktarımı başarısız sunucu yedekleri için kullanılabilir.",
+  "panel.backup.createToConfiguredFtp": "Kayıtlı FTP hedefine yedek al",
+  "panel.backup.createToConfiguredFtpConfirm": "Seçilen veritabanının yeni yedeği, kayıtlı FTP ayarlarıyla aşağıdaki hedefe gönderilir. Yerel kopyası da saklanır. Yedek şifreleme ayarınız ve varsa bu yedeğe özel parolanız uygulanır.",
+  "panel.backup.retryMissingHash": "Oluşturma anındaki bütünlük özeti yok; yeniden gönderilemez. Güncel kopya için yeni yedek alın.",
+  "backup.retry_not_available": "Bu kayıt yeniden gönderilemez. Yerel arşivi ve kayıtlı bütünlük özeti bulunan, ilk FTP aktarımı başarısız sunucu yedekleri gereklidir.",
   "backup.retry_target_changed": "Kayıtlı FTP hedefi değişti veya kullanılamıyor. Yedek ayarlarını kontrol edip yeniden deneyin.",
   "backup.remote_retried": "Mevcut yedek uzak hedefe gönderildi. Yerel kopya korundu."
 }

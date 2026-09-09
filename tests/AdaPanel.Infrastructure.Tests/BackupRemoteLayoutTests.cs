@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using AdaPanel.Core.Dtos.Backup;
+using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Settings;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Interfaces;
@@ -34,6 +35,73 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupRemoteLayoutTests
 {
+    [Fact]
+    public async Task Database_backup_uses_confirmed_saved_ftp_credentials_and_stamps_the_new_archive()
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        var url = server.TabanAdres("db-backups");
+        await alan.DosyaDeposu.WriteAsync("config/automation.json", new
+        {
+            BackupTargetType = "ftp", BackupRemoteUrl = url, BackupRemoteUserName = "saved-user",
+            BackupRemotePasswordProtected = "protected:saved-test-password"
+        }, alan.Iptal);
+        var request = new BackupDatabaseRequest
+        {
+            Engine = "mariadb", DatabaseName = "shop", UseConfiguredFtpTarget = true,
+            RemoteUrl = url, RemoteUserName = "browser-user", RemotePassword = "browser-password"
+        };
+        var record = await alan.ServisKur(database: new SahteDokumcu(false), protector: new TestProtector())
+            .BackupDatabaseAsync(request, alan.Iptal);
+        Assert.Equal("created_remote_synced", record.Status);
+        Assert.Equal("mariadb:shop", record.Source);
+        Assert.Equal("ftp", record.TargetType);
+        Assert.NotEmpty(record.ContentHash);
+        Assert.Equal(record.ContentHash, await BackupContentHash.ComputeAsync(record.Path, alan.Iptal));
+        Assert.Equal(await File.ReadAllBytesAsync(record.Path, alan.Iptal), Assert.Single(server.Dosyalar).Value);
+        Assert.All(server.UserNames, user => Assert.Equal("saved-user", user));
+        Assert.NotEmpty(server.Passwords);
+        Assert.All(server.Passwords, password => Assert.Equal("saved-test-password", password));
+        Assert.Equal("browser-password", request.RemotePassword);
+        Assert.DoesNotContain("saved-test-password", System.Text.Json.JsonSerializer.Serialize(record));
+        Assert.Single(await alan.ServisKur().GetBackupsAsync(alan.Iptal));
+    }
+
+    [Theory]
+    [InlineData("changed-url")]
+    [InlineData("not-ftp")]
+    [InlineData("empty-url")]
+    [InlineData("pinned-file")]
+    public async Task Database_saved_target_rejects_changed_or_unsafe_destination_before_export(string scenario)
+    {
+        using var alan = new GeciciAlan();
+        await using var server = SahteFtpSunucusu.Baslat();
+        var url = server.TabanAdres(scenario == "pinned-file" ? "fixed.zip" : "db-backups");
+        await alan.DosyaDeposu.WriteAsync("config/automation.json", new
+        {
+            BackupTargetType = scenario == "not-ftp" ? "local" : "ftp",
+            BackupRemoteUrl = scenario == "empty-url" ? "" : url, BackupRemoteUserName = "saved-user"
+        }, alan.Iptal);
+        // No database service: exporting before validating would fail this test.
+        var error = await Assert.ThrowsAsync<AdaPanel.Core.Common.AppException>(() => alan.ServisKur()
+            .BackupDatabaseAsync(new BackupDatabaseRequest
+            {
+                Engine = "mariadb", DatabaseName = "shop", UseConfiguredFtpTarget = true,
+                RemoteUrl = scenario == "changed-url" ? url + "/other" : url
+            }, alan.Iptal));
+        Assert.Equal(scenario == "pinned-file" ? "backup.remote_target_invalid" : "backup.retry_target_changed", error.MessageKey);
+        Assert.Empty(server.Dosyalar);
+        Assert.Empty(await alan.ServisKur().GetBackupsAsync(alan.Iptal));
+    }
+
+    [Fact]
+    public void Database_saved_target_endpoint_requires_administrator()
+    {
+        var method = typeof(AdaPanel.Api.Controllers.BackupController).GetMethod("BackupDatabaseAsync")!;
+        var authorization = Assert.Single(method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), false));
+        Assert.Equal("Administrator", ((Microsoft.AspNetCore.Authorization.AuthorizeAttribute)authorization).Roles);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -713,6 +781,64 @@ public sealed class BackupRemoteLayoutTests
         };
     }
 
+    private sealed class SahteDokumcu(bool bosDokum) : IDatabaseService
+    {
+        public Task<DatabaseDumpResultDto> ExportDumpAsync(DatabaseDumpRequest request, CancellationToken cancellationToken = default)
+        {
+            if (bosDokum)
+            {
+                File.WriteAllBytes(request.FilePath, []);
+            }
+            else
+            {
+                File.WriteAllText(request.FilePath, $"-- dump of {request.Engine}/{request.DatabaseName}");
+            }
+
+            return Task.FromResult(new DatabaseDumpResultDto
+            {
+                Engine = request.Engine,
+                DatabaseName = request.DatabaseName,
+                FilePath = request.FilePath
+            });
+        }
+
+        public Task<DatabaseDumpResultDto> ImportDumpAsync(DatabaseDumpRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyCollection<DatabaseEngineStatusDto>> GetEnginesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseEngineStatusDto> RegisterCredentialsAsync(RegisterDatabaseCredentialsRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseWorkspaceDto> GetWorkspaceAsync(string engine, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseWorkspaceDto> CreateDatabaseAsync(CreateDatabaseRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseWorkspaceDto> ImportDatabaseAsync(ImportDatabaseRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task DeleteDatabaseAsync(string engine, string name, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseWorkspaceDto> CreateUserAsync(CreateDatabaseUserRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task DeleteUserAsync(string engine, string userName, string host, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseWorkspaceDto> SetUserPasswordAsync(SetDatabaseUserPasswordRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseWorkspaceDto> GrantAccessAsync(GrantDatabaseAccessRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseTransferResultDto> TransferDatabaseAsync(DatabaseTransferRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseDetailDto> GetDetailAsync(string engine, string databaseName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DatabaseCheckResultDto> CheckAndRepairAsync(string engine, string databaseName, IReadOnlyCollection<string> repairTables, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<AdaPanel.Core.Dtos.Databases.DatabaseHardeningReport> HardenAdminAccountsAsync(string engine, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class TestProtector : ISecretProtector
+    {
+        public string Protect(string value) => "protected:" + value;
+        public string Unprotect(string value) => value["protected:".Length..];
+    }
+
     private sealed class GeciciAlan : IDisposable
     {
         private readonly CancellationTokenSource _iptal = new(TimeSpan.FromSeconds(60));
@@ -737,9 +863,9 @@ public sealed class BackupRemoteLayoutTests
         /// <summary>Testler ASILI KALMAMALI: sunucu taklidi bozulursa 60 saniyede hata verir.</summary>
         public CancellationToken Iptal => _iptal.Token;
 
-        public BackupService ServisKur(IstekKayitcisi? kayitci = null) =>
+        public BackupService ServisKur(IstekKayitcisi? kayitci = null, IDatabaseService? database = null, ISecretProtector? protector = null) =>
             new(new SahteSiteServisi(SiteKoku),
-                null!,
+                database!,
                 null!,
                 new SahteTercihServisi(Path.Combine(Kok, "backups")),
                 null!,
@@ -756,6 +882,7 @@ public sealed class BackupRemoteLayoutTests
                 // gerekcesi tam olarak bu senaryodur (ic agdaki NAS'a yedek atmak mesrudur).
                 // Adres politikasinin kendi olcumleri OutboundTargetGuardTests'tedir; orada
                 // mutasyonla dogrulandi.
+                secretProtector: protector,
                 runtimeOptions: Microsoft.Extensions.Options.Options.Create(
                     new AdaPanel.Infrastructure.Options.PanelRuntimeOptions { AllowInternalOutboundTargets = true }));
 
@@ -927,6 +1054,8 @@ public sealed class BackupRemoteLayoutTests
         public int FailStoresRemaining { get; set; }
         public int StoreFailureCode { get; set; } = 421;
         public int StoreAttempts { get; private set; }
+        public List<string> UserNames { get; } = [];
+        public List<string> Passwords { get; } = [];
         public bool HangMkd { get; set; }
         public TaskCompletionSource MkdStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1018,9 +1147,11 @@ public sealed class BackupRemoteLayoutTests
                 switch (komut)
                 {
                     case "USER":
+                        UserNames.Add(arg);
                         await yazici.WriteLineAsync("331 Parola gerekli");
                         break;
                     case "PASS":
+                        Passwords.Add(arg);
                         await yazici.WriteLineAsync("230 Giris tamam");
                         break;
                     case "OPTS":

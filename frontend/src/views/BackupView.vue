@@ -326,10 +326,13 @@
                   {{ t("panel.backup.download") }}
                 </button>
               </span>
-              <button v-if="isAdmin && backup.status === 'created_remote_failed' && backup.targetType === 'ftp' && !backup.subscriptionUserId && backup.path && !backup.localMissing"
-                class="secondary compact row-button" v-bind="writeGate(busy)" @click="retryRemote(backup)">
-                {{ t("panel.backup.retryRemote") }}
-              </button>
+              <template v-if="isAdmin && backup.status === 'created_remote_failed' && backup.targetType === 'ftp' && !backup.remoteUri && !backup.subscriptionUserId && backup.path && !backup.localMissing">
+                <button v-if="backup.contentHash?.trim()"
+                  class="secondary compact row-button" v-bind="writeGate(busy)" @click="retryRemote(backup)">
+                  {{ t("panel.backup.retryRemote") }}
+                </button>
+                <small v-else class="cell-muted retry-unavailable">{{ t("panel.backup.retryMissingHash") }}</small>
+              </template>
               <button class="danger compact row-button" v-bind="writeGate(busy)" @click="removeBackup(backup)">
                 {{ t("panel.backup.delete") }}
               </button>
@@ -897,6 +900,9 @@
              kullanıcı ekranın donduğunu sanıp sayfayı yeniliyordu (ikinci bir yedek tetikler). -->
         <button class="compact" v-bind="writeGate(busy)" @click="createSelectedBackup">
           {{ busy ? t("panel.backup.creating") : createButtonLabel }}
+        </button>
+        <button v-if="isAdmin && backupKind === 'database'" class="secondary compact" v-bind="writeGate(busy)" @click="createDatabaseToConfiguredFtp">
+          {{ t("panel.backup.createToConfiguredFtp") }}
         </button>
         <button class="secondary compact" @click="activeView = 'list'">{{ t("panel.common.cancel") }}</button>
       </div>
@@ -2030,6 +2036,35 @@ async function createDatabaseBackup() {
   await runBackup(() => backupDatabase(databaseEngine.value, databaseName.value, buildTargetPayload()));
 }
 
+async function createDatabaseToConfiguredFtp() {
+  busy.value = true;
+  try {
+    const { settings } = await getAutomation();
+    if (settings.backupTargetType !== 'ftp' || !settings.backupRemoteUrl) {
+      showNotice(t('backup.retry_target_changed'), true);
+      return;
+    }
+    const engine = databaseEngine.value;
+    const name = databaseName.value;
+    const target = settings.backupRemoteUrl;
+    const encryptionPassword = targetForm.encryptionPassword;
+    await confirm({
+      title: t('panel.backup.createToConfiguredFtp'),
+      message: t('panel.backup.createToConfiguredFtpConfirm'),
+      impact: [`${engine}: ${name || t('panel.backup.allDatabases')}`, target],
+      tone: 'neutral',
+      confirmLabel: t('panel.backup.createToConfiguredFtp'),
+      action: () => runBackup(() => backupDatabase(engine, name, {
+        useConfiguredFtpTarget: true, remoteUrl: target, encryptionPassword
+      }))
+    });
+  } catch (error) {
+    showError(error);
+  } finally {
+    busy.value = false;
+  }
+}
+
 /** Süren yedeğin şeritte yazacağı metin: NE alınıyor (tür + kaynak). */
 function runningLabel() {
   if (backupKind.value === "site") {
@@ -2784,6 +2819,10 @@ function statusTone(status: string) {
 .backup-row .row-actions {
   align-content: start;
   gap: var(--sp-6);
+}
+
+.backup-row .retry-unavailable {
+  flex: 1 1 100%;
 }
 
 /* Güvenli eylemler TAM GENİŞLİK bir kutuda: kendi içinde sarar, ardından gelen "Sil"i zorunlu

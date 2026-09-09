@@ -1808,6 +1808,26 @@ public sealed partial class BackupService(
 
     public async Task<BackupRecordDto> BackupDatabaseAsync(BackupDatabaseRequest request, CancellationToken cancellationToken = default)
     {
+        if (request.UseConfiguredFtpTarget)
+        {
+            // Resolve once, before exporting. A changed destination must require a fresh confirmation.
+            var (type, url, credentials) = await RemoteCredentials.ReadUploadTargetAsync(cancellationToken);
+            if (type != "ftp" || string.IsNullOrWhiteSpace(url)
+                || !string.Equals(request.RemoteUrl, url, StringComparison.Ordinal))
+                throw new AppException("backup.retry_target_changed", 409, 409);
+            var configuredTarget = ResolveTarget(type, url, credentials.UserName, credentials.Password, credentials.Region);
+            if (configuredTarget.Uri is null || IsPinnedArchiveTarget(Uri.UnescapeDataString(configuredTarget.Uri.AbsolutePath).TrimEnd('/').Split('/').Last()))
+                throw new AppException("backup.remote_target_invalid", 400, 400);
+            await EnsureRemoteTargetAllowedAsync(configuredTarget, cancellationToken);
+            // Do not copy secrets into the incoming request or take credentials from the browser.
+            request = new BackupDatabaseRequest
+            {
+                Engine = request.Engine, DatabaseName = request.DatabaseName,
+                EncryptionPassword = request.EncryptionPassword,
+                TargetType = type, RemoteUrl = url, RemoteUserName = credentials.UserName,
+                RemotePassword = credentials.Password, RemoteRegion = credentials.Region
+            };
+        }
         var preferences = await preferencesService.GetAsync(cancellationToken);
         var safeDatabaseName = string.IsNullOrWhiteSpace(request.DatabaseName) ? "all" : request.DatabaseName.Trim();
 

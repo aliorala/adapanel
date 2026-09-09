@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.34",
-  "name": "0.8.34 — Yeniden gönderme onay metni",
-  "body": "FTP yedeğini yeniden gönderme onayı, işlemle uyumlu düğme ve açıklamalarla gösterilir.\n\n- Onay düğmesi artık Uzağa yeniden gönder olarak adlandırılır.\n- Bu işlemde silme ve geri alınamazlık uyarıları gösterilmez.\n- 0.8.33 sürümündeki arşiv özeti, hedef doğrulaması, yerel kopya koruması ve denetim kaydı kontrolleri devam eder."
+  "tag_name": "0.8.35",
+  "name": "0.8.35 — Kayıtlı FTP hedefine veritabanı yedeği",
+  "body": "Veritabanı yedeği, parola yeniden girilmeden kayıtlı FTP hedefine gönderilebilir.\n\n- Yeni seçenek hedefi onayda gösterir; sunucu hedefin değişmediğini kontrol eder ve kayıtlı kimliği kullanır.\n- Eski yedekte oluşturma anındaki bütünlük özeti yoksa yeniden gönderilememe nedeni işlemden önce gösterilir.\n- Mevcut arşivler ve geçmiş kayıtları korunur; eski dosyalara geriye dönük doğrulanmış özeti eklenmez."
 }

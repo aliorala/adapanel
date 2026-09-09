@@ -5240,7 +5240,10 @@
   "panel.backup.retryRemote": "Retry remote upload",
   "panel.backup.retryRemoteConfirm": "The existing local archive will be sent to the configured FTP destination below. No new backup is created; the local file is kept.",
   "panel.backup.verify.previouslyDeletedLocal": "{count} local copies were removed by an earlier deletion",
-  "backup.retry_not_available": "This backup cannot be retried. Only server backups with a local archive and a failed initial FTP upload are supported.",
+  "panel.backup.createToConfiguredFtp": "Back up to saved FTP destination",
+  "panel.backup.createToConfiguredFtpConfirm": "A new backup of the selected database will be sent to the destination below using the saved FTP settings. A local copy is kept. Your backup encryption setting and any password specified for this backup apply.",
+  "panel.backup.retryMissingHash": "No integrity hash was recorded at creation; upload cannot be retried. Create a new backup for a current copy.",
+  "backup.retry_not_available": "This backup cannot be retried. A server backup with a local archive, a recorded integrity hash, and a failed initial FTP upload is required.",
   "backup.retry_target_changed": "The configured FTP destination changed or is unavailable. Check backup settings and try again.",
   "backup.remote_retried": "The existing backup was uploaded. Its local copy was preserved."
 }

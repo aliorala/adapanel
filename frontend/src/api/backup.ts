@@ -30,6 +30,8 @@ export type BackupRecord = {
   status: string;
   targetType: string;
   remoteUri: string;
+  /** Oluşturulurken kaydedilen bütünlük özeti; eski kayıtlarda boş olabilir. */
+  contentHash?: string;
   /** AES-256-GCM ile şifreli mi (dosya adı `.zip.enc`). Geri yükleme parola ister. */
   encrypted: boolean;
   warnings: BackupRestoreWarning[];
@@ -310,7 +312,7 @@ export async function backupPanel(target?: Partial<BackupTargetPayload>) {
   return response.data.data;
 }
 
-export async function backupDatabase(engine: string, databaseName = "", target?: Partial<BackupTargetPayload>) {
+export async function backupDatabase(engine: string, databaseName = "", target?: Partial<BackupTargetPayload> & { useConfiguredFtpTarget?: boolean }) {
   const response = await apiClient.post<ApiEnvelope<BackupRecord>>("/backup/db", {
     engine,
     databaseName,
