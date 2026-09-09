@@ -4,12 +4,25 @@
 "kaldığımız yerden devam" dendiğinde nerede olduğumuzun görülmesi.
 Belirli aralıklarla ve her önemli adımdan sonra güncellenir.
 
-Son güncelleme: **09.09.2026** · Yayındaki sürüm: **0.7.2** · main: temiz (çalışma commit'lenmedi)
-Testler: **5205 yeşil** (Core 2 + Infra 5203) · 0 kırmızı
+Son güncelleme: **09.09.2026** · Son doğrulanan canlı sürüm: **0.8.30** · Kod ve yayın kayıtları commit'lendi.
+Son tam test koşusu (0.8.29): **5.222 .NET + 58 ön yüz testi başarılı**. 0.8.30: **13 CSS kontrolü + typecheck/build başarılı**; tam işlev paketi yeniden çalıştırılmadı.
+
+## SON İŞ — 0.8.29 hata düzeltmeleri ve 0.8.30 kompakt görünüm canlıda
+
+- **Yedekleme kalacak.** Kullanıcı kaldırma isteğini başka projeyle karıştırdığını söyleyerek geri çekti. Modülün veya bağlantılarının kaldırılmasına devam etmeyin.
+- 0.8.29 kaynak commit'i `68180e6`, yayın/doğrulama kaydı `56a86d4`. Oturum izolasyonu, yedek geri yükleme onayları ve hata raporu, dosya düzenleyicide kaydedilmemiş değişiklik koruması, site seçimi, rol kontrolleri, URL/geri-ileri gezinmesi, kurulum takibi ve dil paketlerinin yüklenmesi düzeltildi. Süreç testi zaman aşımı ve boş SSL çıktısı da ele alındı. Ayrıntı ve test kanıtları: [düzeltme kaydı](duzeltmeler-2026-09-09.md).
+- 0.8.30 kaynak commit'i `03cbea2`, canlı görünüm kaydı `9577018`. Kompakt masaüstü yazı tabanı 14 → 13 px; kart, menü ve özet boşlukları küçültüldü. CPU/bellek/disk halka metinleri ortalandı, uzun açıklamalar satır kırıyor. Mobil başlıklar halka üstünde, yüzde içeride. Rahat görünüm ve mobil yazı tabanı 14 px kaldı. Ana dosyalar: `frontend/src/styles/base.css`, `frontend/src/views/DashboardOverviewView.vue`.
+- 320/390/1024/1486 px genişlikler, iki dil/tema/yoğunluk seçeneği ve uzun kaynak değerleriyle görsel ölçüm yapıldı. Son durumda yatay sayfa taşması ve halka içindeki metinlerde taşma yok. Canlı sayfa yenilendi; arayüz/sunucu 0.8.30, kök yazı 13 px ve gerçek halka metinleri doğrulandı. IIS/WAS/FTP sağlık durumu çalışıyor. Ayrıntılar: [kompakt görünüm ve yayın kaydı](kompakt-gorunum-2026-09-09.md).
+- Kullanıcının mevcut canlı yayın izniyle [0.8.30](https://github.com/aliorala/adapanel/releases/tag/0.8.30) yayımlandı ve kuruldu. Kurulum dosyası 90.746.342 bayt; SHA256 `10C78CA89291F580C24CEA891E0425BC5B60F48E83F603DA8EC123636190B0AA`. Yeniden indirilen yayın paketi ve canlı sunucunun paketi doğrulandı. 149 ön yüz dosyası publish ile eşleşti; 22 bileşen denetimi geçti, 3 büyük paket betiğin istisnasıyla atlandı.
+- Ön yüz derleme/eşitlemesini **bitirdikten sonra** paketleyin; birlikte başlatmak eski statik dosya listesiyle paketlemeyi bozdu. Başarısız paketleme/indirme denemeleri yayımlanmadı; son zorunlu denetimler geçti. Kaynak geçmişi yerelde; açık GitHub deposuna yalnız mevcut yayın yöntemiyle paket/sürüm notları gönderildi. Kaynak dalını açık depoya push etmeyin.
+- **Açık sınırlar:** 0.8.29 ilk kurulumunda hizmet kurtarmasının dosyayı yeniden kilitlemesi kod 5 ile geri almaya yol açtı; sonra sunucu kaynaklı deneme başarılı oldu. Bu yarışa kalıcı düzeltme yapılmadı. Önceden oluşmuş bir veritabanı yedeğinin uzak FTP aktarımı `421 Service not available` ile başarısız; yerel kopya var. Eski şifreleme uyarıları ve test analiz uyarıları çözülmüş sayılmamalı. Gerçek yedek geri yükleme testi yapılmadı.
+- Genel devir: [CODEX_MEMORY.md](../CODEX_MEMORY.md). Geçici önizleme dosyaları ve geliştirme sunucusu kaldırıldı. Güncel manifestler 0.8.30 paketine aittir.
 
 ---
 
-## SON İŞ — AYNI SINIFTAKİ SON İKİ NOKTA KAPANDI: GİT DAĞITIMI + ARŞİV İÇE AKTARMA (commit ATILMADI)
+## Önceki kayıt — Git dağıtımı + arşiv içe aktarma
+
+Bu bölüm önceki oturumun tarihsel kaydıdır. O oturumdaki “commit atılmadı” durumu güncel değildir; ilgili düzeltmeler `942dfe9` ile commit'lendi. Aşağıdaki karar/bulgu ayrıntıları bağlam olarak korunmuştur; en güncel yayın ve test durumu yukarıdadır.
 
 efade94 cron `url` görevindeki yönlendirme SSRF'ini kapatmış, aynı sınıftan **iki noktayı ölçüp
 açık bırakmıştı**. Bu tur ikisini de kapattı. Kalıp aynıydı: *adres kapıdan geçiyor ama isteği DIŞ

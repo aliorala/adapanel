@@ -1,12 +1,27 @@
 # AdaPanel Codex Memory
 
-Son guncelleme: 2026-06-22
+Son guncelleme: 2026-09-09
 
 Bu dosya, baska bir kullanici veya yeni bir Codex oturumu ayni klasorde devam ederken hizli devir notu olarak okunmalidir.
 Ilk okunacak dosyalar:
 
 1. `promp.md`
 2. `CODEX_MEMORY.md`
+3. `docs/calisma-durumu.md`
+
+## 2026-09-09 — Güncel devir: 0.8.30 canlı
+
+Bu bölüm son oturumun durumudur; aşağıdaki eski tarihli kayıtlar geçmiş bağlamı korur. Ayrıntılar: [0.8.29 düzeltmeleri](docs/duzeltmeler-2026-09-09.md) ve [0.8.30 kompakt görünüm](docs/kompakt-gorunum-2026-09-09.md).
+
+- **Kullanıcı kararı: yedekleme modülü kalacak.** Kaldırma / sunucuyla eşitlemeye dönüştürme isteği, kullanıcının başka projeyle karıştırdığını belirtmesi üzerine geri çekildi. Bu eski isteğe dayanarak modülü veya bağlantılarını kaldırmayın.
+- Kullanıcı canlı yayına izin verdi. 0.8.29 ve ardından **0.8.30 yayımlandı ve canlıda doğrulandı**. Son doğrulamada arayüz ve sunucu sürümü 0.8.30; IIS, WAS ve FTP servisleri çalışıyordu.
+- **0.8.29** (`68180e6`, yayın kaydı `56a86d4`): eski oturum yanıtlarının yeni oturumu etkilemesi engellendi; kullanıcı bağlamı ve yetkiler temizleniyor. Yedek geri yüklemede ortak rol/zincir/parola/hedef onayı, işlem kilidi ve kısmi hata raporu eklendi. Dosya düzenleyicide kaydet/at/vazgeç akışı, başarısız kayıtta içeriğin korunması ve site seçimi düzeltildi. Rol bazlı araç erişimi, URL üzerinden bölüm/site aracı gezinmesi ve geri/ileri davranışı düzeltildi. Kurulum takibine ağ hatası/iptal/zaman aşımı yönetimi eklendi; TR/EN dil paketleri ayrı yükleniyor. ScriptTestHost süreç/çıktı zaman aşımı ve WinAcme boş çıktı işlemesi düzeltildi.
+- **0.8.30** (`03cbea2`, canlı görünüm kaydı `9577018`): kullanıcının büyük görünüm ve CPU/bellek/disk halkalarında taşma şikâyeti giderildi. `frontend/src/styles/base.css` içinde kompakt masaüstü yazı tabanı 14 → 13 px, kart dolguları ve menü aralıkları küçültüldü. `frontend/src/views/DashboardOverviewView.vue` içinde 160 px halkaların yazıları ortalandı ve uzun açıklamalar satır kırıyor. Mobil başlıklar halka üstüne alındı; yüzde içeride. Rahat görünüm ve mobil yazı tabanı 14 px; tarayıcı zoom ayarı değiştirilmedi.
+- **Doğrulama sınırı:** 0.8.29 son tam koşusunda .NET 5.222/5.222 (Infrastructure 5.220 + Core 2), ön yüz 58/58 geçti; typecheck/build başarılı. CSS ağırlıklı 0.8.30 için typecheck/build ve mevcut 13 CSS testi geçti; tüm işlev testleri yeniden koşulmadı. Gerçek Vue bileşenleriyle 320/390/1024/1486 px, TR/koyu/kompakt ve EN/açık/rahat, %100 ve uzun kaynak değerleri kontrol edildi. Son durumda halka içi ve yatay sayfa taşması yok; canlıda da 13 px taban ve gerçek halka metinleri doğrulandı. Gerçek yedek geri yükleme yapılmadı.
+- **Paket:** [0.8.30 sürümü](https://github.com/aliorala/adapanel/releases/tag/0.8.30), 90.746.342 bayt; SHA256 `10C78CA89291F580C24CEA891E0425BC5B60F48E83F603DA8EC123636190B0AA`. Yayınlanan dosya yeniden indirilerek ve canlı sunucunun indirdiği paketle doğrulandı. 149 ön yüz dosyası publish çıktısıyla eşleşti; 22 bileşen denetimi geçti, betiğin büyük paket istisnasındaki 3 bileşen atlandı.
+- **Yayın sırası:** ön yüz derleme/eşitleme tamamen bitmeden paketlemeyi başlatmayın; paralel başlatma eski statik dosya listesiyle MSB3030 üretti. Sonraki geçici bileşen indirme hatası da yeniden denetimle geçti; başarısız denemeler yayımlanmadı. Kaynak kod yerelde commit'lendi; herkese açık `aliorala/adapanel` deposuna kaynak geçmişi gönderilmedi. Mevcut yayın betiğini kullanın, yerel kaynak dalını bu depoya push etmeyin.
+- **Açık kalan işletim konuları:** 0.8.29 ilk kurulumunda hizmetin 5 saniyelik otomatik kurtarması dosyayı yeniden kilitleyip kod 5 / geri alma üretti; sonraki sunucu kaynaklı deneme başarılıydı. Hizmet kurtarma yarışı kalıcı olarak düzeltilmedi. Yayın öncesinden kalan bir veritabanı yedeğinin uzak FTP aktarımı `421 Service not available` ile başarısız; yerel yedek mevcut. Eski kayıtlarda şifreleme yapılandırılmamış uyarıları var. Bunlar çözülmüş sayılmamalı. Test projelerinin mevcut analiz uyarıları da ayrı teknik borçtur.
+- Kanıtlar: `.tmp/audit-fixes/` altındaki son test/yayın günlükleri ve ayrıntılı iki belge. `artifacts/*manifest.json` ile `test-results/component-package-audit.json` son paketleme (0.8.30) sonuçlarını taşır; eski sürüm kanıtı olarak yorumlamayın. Geçici önizleme dosyaları ve geliştirme sunucusu kaldırıldı.
 
 ## Mevcut durum
 
@@ -17,7 +32,7 @@ Ilk okunacak dosyalar:
 - Backend: ASP.NET Core 8
 - Yerel .NET SDK: `C:\Users\aLi\Desktop\AdaPanel\.tools\dotnet\dotnet.exe`
 
-## 2026-06-08 15:00 son devir (en guncel ve oncelikli)
+## 2026-06-08 15:00 devir (tarihsel kayıt)
 
 - Plesk paritesi analizi yapildi; eksik gorulen 6 modul gercek implementasyonla eklendi. Her biri backend + frontend + i18n (TR/EN parite) + derleme/test ile dogrulandi.
 - **P0 Otomasyon zamanlayicisi (panel ici arka plan job motoru):**
