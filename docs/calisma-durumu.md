@@ -2,14 +2,20 @@
 
 Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel sonucu gösterir. Aşağıdaki eski sürüm bölümleri tarihsel kayıttır.
 
-Son güncelleme: **10.09.2026 — 0.8.38 canlı; terminal düzeltmeleri ve canlı doğrulama tamamlandı.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+Son güncelleme: **10.09.2026 — 0.8.39 canlı; FTP boş klasör düzeltmesi ve 50 eski klasörün temizliği tamamlandı.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
 
-## 0.8.39 FTP boş klasör düzeltmesi — yayın hazırlanıyor
+## 0.8.39 canlı — FTP boş klasör temizliği tamamlandı
 
 - Kullanıcının yeni bildirimi doğrulandı: eski temizlik yalnız doğrudan tarih klasöründeki dosyaları kapsıyordu; gün/kategori/kaynak düzenindeki boş klasörler kalıyordu. Düzeltme alttan gün klasörüne kadar ilerliyor, dolu klasörde duruyor. Boş NLST 550 yanıtı yalnız RMD başarılı olursa temizlenmiş sayılıyor.
 - Önce 8 yeni regresyon başarısız oldu. Tam koşu **5.284 Infrastructure + 2 Core = 5.286 başarılı** (7 dakika 10 saniye). Ardından bakım alt düzeni daraltıldı ve gerçek korunan FTP ayarları testi eklendi; son **107/107 ilgili test** geçti. Ön yüz yalnız sürüm için derlendi.
 - Eski boş klasörleri dosya silmeden temizlemek için yerel Windows yöneticisi komutu eklendi: `AdaPanel.Api.exe --cleanup-empty-ftp-backup-folders C:/ProgramData/AdaPanel`. Mevcut FTP hedefi/kimlikleri ve saklama süresini okur; yalnız süresi geçmiş günlerdeki bilinen boş klasörlere RMD uygular. HTTP kapısı yok; en fazla 2.000 dizin/5 dakika. Canlıda saklama 5 gün.
-- Paket/yayın/canlı kurulum ve geçmiş boş klasör temizliği henüz tamamlanmadı. Yedekleme modülü ve kapalı şifreleme tercihi korunuyor.
+- 0.8.39 yayınlandı ve canlıya kuruldu. İlk bakımda 50 boş klasör temizlendi; ikinci tarama 0 klasör/0 hata, çıkış kodu 0. Hizmet Running/Automatic. Yedekleme modülü ve kapalı şifreleme tercihi korunuyor.
+
+**0.8.39 canlı sonuç:** panel mevcut/son sürümü 0.8.39 gösteriyor. AdaPanel Running/Automatic; last-attempt succeeded, installerExitCode=0, isFinished=true, isFailed=false, updatedAtUtc=2026-09-09T22:04:04.2671161Z. Inno Stop 01:03:41.732 / 01:03:42.326; Installation process succeeded 01:04:20.317; Restore ve Log closed 01:04:23.708 (10.09.2026 sunucu yerel zamanı).
+
+Eski boş FTP klasörleri kayıtlı 5 günlük saklama süresine göre yerel bakım komutuyla temizlendi: **Removed=50, Unavailable=0, Visited=50**. İkinci tarama **Removed=0, Unavailable=0, Visited=0**, MaintenanceExitCode=0; hizmet Running/Automatic. **62 yedek kaydı korunuyor**. İlk PowerShell kontrolündeki `@(ConvertFrom-Json).Count=1`, tek dizi nesnesinin sayısıydı; değişkene alınan gerçek dizinin `.Count` değeri 62 olarak doğrulandı.
+
+Canlı kanıtlar: `C:/ProgramData/AdaPanel/updates/ftp-folders-039.out.json`, `.err.log`, `.pid`, `ftp-folders-039-verify.out.json` ve `ftp-folders-039-verify.err.log`. İlk başlatıcı terminal isteği 32.010 ms'de zaman aşımına uğradı fakat bağımsız bakım süreci (PID 11432, başlangıç 01:05:30) çalışmaya devam etti ve sonuç dosyasını yazdı; bitişi ayrıca doğrulandı. Bu, temizliğin başarısız olduğu anlamına gelmez. Bakım komutu yalnız RMD uygular; dosya silmez, yedek geçmişini değiştirmez. Geçmişte kaybolmuş 18 uzak arşiv geri oluşturulmadı. Boş klasör taraması, FTP'de kayıtsız dosya/arşiv arama desteği değildir. Şifreleme kullanıcının tercihiyle kapalı kalır.
 ## 0.8.38 terminal düzeltmeleri
 
 - Süre sınırı alt sürecin açık bıraktığı çıktı bağlantılarını da kapsıyor; alınabilen çıktı korunuyor. Temizlikte sınırsız süreç bekleme kaldırıldı. Ana süreci bitmiş bağımsız arka plan işlerinin durduğu varsayılmıyor.
