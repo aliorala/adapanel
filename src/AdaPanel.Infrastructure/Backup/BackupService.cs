@@ -670,7 +670,17 @@ public sealed partial class BackupService(
             BaseBackupId = chain?.BaseBackupId ?? string.Empty,
             SubscriptionUserId = subscriptionUserId,
             ItemCount = itemCount,
-            IntegrityState = butunluk.State
+            IntegrityState = butunluk.State,
+
+            // İÇERİK DAMGASI, `butunluk`tan FARKLI bir soruyu cevaplar: o "arşiv boş/bozuk mu",
+            // bu "arşiv hâlâ BİZİM yazdığımız dosya mı". Kurcalanmış bir zip yapısal olarak
+            // kusursuzdur, yani yukarıdaki ölçümden `sound` alır.
+            //
+            // SIRA ZORUNLU: damga `finalPath` üzerinden, yani sıkıştırma ve şifreleme UYGULANDIKTAN
+            // sonra alınır. Ham dosyayı damgalamak, tam da kurcalanmaya açık olan katmanı ölçüm
+            // dışında bırakırdı. Hesaplanamazsa boş kalır ve yedek yine geçerlidir (gerekçe
+            // BackupContentHash.ComputeAsync'te yazılı).
+            ContentHash = await BackupContentHash.ComputeAsync(finalPath, cancellationToken)
         };
 
         // İNDEKS YAN KAYDI kayıttan ÖNCE yazılır: kayıt listede görünüp indeksi olmayan bir halka,
@@ -985,6 +995,27 @@ public sealed partial class BackupService(
                 410,
                 410,
                 $"{record.Name} -> {record.Path}");
+        }
+
+        // İÇERİK DAMGASI BURADA DOĞRULANIR ÇÜNKÜ BURASI TEK BOĞAZDIR: geri yükleme, seçmeli geri
+        // yükleme, posta geri yükleme ve zincir halkalarının hepsi bu fonksiyondan geçer. Doğrulamayı
+        // çağrı yerlerine dağıtmak, bu depoda defalarca ölçülen hatayı üretirdi — biri düzeltilir,
+        // kardeşi sessizce açık kalır.
+        //
+        // YALNIZ "EŞLEŞMEDİ" REDDEDİLİR. Damgası olmayan eski yedek ve okunamayan dosya
+        // reddedilmez; gerekçeleri BackupContentHash.VerifyAsync'te dal dal yazılı. Felaket anında
+        // "ölçemedim" yüzünden geri yüklemeyi engellemek, kapatılan riskten kötüdür.
+        var damga = await BackupContentHash.VerifyAsync(record.ContentHash, currentPath, cancellationToken);
+        if (damga == BackupIntegrityCheck.Mismatch)
+        {
+            // 409: istek de dosya da geçerli, ÇELİŞKİ var. Ayrıntıya iki damga da yazılır —
+            // yönetici "kurcalanmış" iddiasını kendi doğrulayabilmeli, bize inanmak zorunda
+            // kalmamalı.
+            throw new AppException(
+                "backup.integrity_mismatch",
+                409,
+                409,
+                $"{record.Name}; expected={record.ContentHash}");
         }
 
         try

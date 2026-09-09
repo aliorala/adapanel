@@ -515,6 +515,63 @@ public sealed class OutboundTargetGuardTests
         var engellenen = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
             adres,
             (host, _) => throw new InvalidOperationException($"DNS beklenmiyordu: {host}"),
+            OutboundTargetPolicy.Strict,
+            CancellationToken.None);
+
+        Assert.Equal(beklenen, engellenen);
+    }
+
+    /// <summary>
+    /// ÖN KAPI, ASIL SINIRDAN DAHA SIKI OLAMAZ: işleticinin açtığı kapı burada da geçerlidir.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bu yol bir süre politikadan bağımsız <c>Strict</c> kullandı. Ölçülünce yanlış çıktı: asıl
+    /// sınır olan bağlanma-anı kapısı <c>Connecting(AllowInternalOutboundTargets)</c> kullanıyor.
+    /// Ön kapı daha sıkı olduğunda, işleticinin <c>Panel:AllowInternalOutboundTargets</c> ile
+    /// BİLEREK açtığı kapı sessizce hükümsüz kalıyordu — ve gerçek sınır zaten yerinde olduğu için
+    /// karşılığında hiçbir güvenlik kazanılmıyordu.
+    /// </para>
+    /// <para>
+    /// <b>Bu bir FAZLA KAPATMA nöbetçisidir.</b> İç ağdaki bir dosya sunucusundan arşiv indiren
+    /// meşru kurulum, kapıyı açtığı hâlde 403 alıyordu.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Acik_kapi_ON_KAPIDA_da_gecerli()
+    {
+        var kapaliKapi = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
+            "http://10.0.0.5/site.zip",
+            (host, _) => throw new InvalidOperationException($"DNS beklenmiyordu: {host}"),
+            OutboundTargetPolicy.Connecting(false),
+            CancellationToken.None);
+        Assert.Equal("10.0.0.5", kapaliKapi);
+
+        var acikKapi = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
+            "http://10.0.0.5/site.zip",
+            (host, _) => throw new InvalidOperationException($"DNS beklenmiyordu: {host}"),
+            OutboundTargetPolicy.Connecting(true),
+            CancellationToken.None);
+        Assert.Null(acikKapi);
+    }
+
+    /// <summary>
+    /// Açık kapı, bu yola ÖZGÜ iki reddi KALDIRMAZ: kullanıcı bilgisi ve ayrıştırılamayan adres.
+    /// </summary>
+    /// <remarks>
+    /// Kapı "iç adrese bağlanabilirsin" der; "adresi hiç doğrulamayayım" demez. İkisi ayrılmazsa
+    /// kapıyı açan işletici, <c>http://gercek.example@10.0.0.5/</c> gibi insan gözünü yanıltan
+    /// adresleri de birlikte açmış olurdu — oysa o red, iç ağla değil YANILTMAYLA ilgilidir.
+    /// </remarks>
+    [Theory]
+    [InlineData("http://gercek.example@10.0.0.5/site.zip", "userinfo")]
+    [InlineData("bu bir adres degil", "invalid_uri")]
+    public async Task Acik_kapi_yola_OZGU_redleri_kaldirmaz(string adres, string beklenen)
+    {
+        var engellenen = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
+            adres,
+            (host, _) => throw new InvalidOperationException($"DNS beklenmiyordu: {host}"),
+            OutboundTargetPolicy.Connecting(true),
             CancellationToken.None);
 
         Assert.Equal(beklenen, engellenen);
@@ -527,12 +584,14 @@ public sealed class OutboundTargetGuardTests
         var kotu = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
             "https://kotu.example/site.zip",
             (host, ct) => Cozumleyici(("kotu.example", "127.0.0.1"))(host, ct),
+            OutboundTargetPolicy.Strict,
             CancellationToken.None);
         Assert.Equal("127.0.0.1", kotu);
 
         var iyi = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
             "https://arsiv.ornek.com/site.zip",
             (host, ct) => Cozumleyici(("arsiv.ornek.com", "93.184.216.34"))(host, ct),
+            OutboundTargetPolicy.Strict,
             CancellationToken.None);
         Assert.Null(iyi);
 
@@ -541,6 +600,7 @@ public sealed class OutboundTargetGuardTests
         var cozulemez = await AdaPanel.Infrastructure.Iis.SiteHostingSettingsService.FindBlockedImportTargetAsync(
             "https://yok.example/site.zip",
             (_, _) => throw new System.Net.Sockets.SocketException(11001),
+            OutboundTargetPolicy.Strict,
             CancellationToken.None);
         Assert.Equal("yok.example", cozulemez);
     }

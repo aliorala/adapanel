@@ -450,9 +450,17 @@ public sealed class BackupDumpCompressionTests
         var hata = await Assert.ThrowsAsync<AppException>(
             () => servis.RestoreAsync(new RestoreBackupRequest { BackupId = kayit.Id }));
 
-        // SIKISTIRMA acmasi basarisiz: anahtar da bunu soylemeli. "decrypt" diyen anahtar,
-        // sifresiz bir yedekte kullaniciyi yanlis ize (parola/sifreleme) surukluyordu.
-        Assert.Equal("backup.archive_corrupt", hata.MessageKey);
+        // ANAHTAR DEGISTI (icerik damgasi eklendikten sonra) VE BU BILINCLI.
+        //
+        // Test dosyayi OLUSTURULDUKTAN SONRA bozuyor; icerik damgasi tam olarak bunu olcer ve
+        // sikistirma acilmadan once, daha ucuza yakalar. Anahtarin isi kullaniciyi DOGRU ize
+        // surumek: "arsiv bozuk" dosyanin hep boyle oldugunu dusundururdu, oysa gercek "dosya
+        // yazildiktan SONRA degisti" -- kullaniciyi diski ve uzak hedefteki kopyayi denetlemeye
+        // yonlendiren tek dogru cumle budur.
+        //
+        // backup.archive_corrupt OLU DEGIL: damgasiz eski yedeklerde ve bastan bozuk yazilmis
+        // arsivlerde hala o anahtar doner.
+        Assert.Equal("backup.integrity_mismatch", hata.MessageKey);
 
         // HICBIR SEY ICE AKTARILMADI: yarim bir dokumu veritabanina yazmak, hic yazmamaktan
         // cok daha pahaliya mal olurdu.

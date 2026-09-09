@@ -3373,6 +3373,7 @@
   "backup.remote_delete_failed": "Yedeğin uzak kopyası silinemedi. Yerel dosya silindi ama hedefteki kopya duruyor; kayıt bilerek korundu, yoksa panel o dosyayı bir daha ne görebilir ne silebilirdi. Erişimi düzeltip tekrar silmeyi deneyin.",
   "backup.remote_list_failed": "Uzak hedef listelenemedi; hedefte kaydı olmayan (yetim) dosyalar taranamadı.",
   "backup.file_missing": "Yedeğin dosyası bulunamadı. Kayıt panelde duruyor ama dosya diskte yok — büyük olasılıkla elle silinmiş ya da taşınmış. Bu yedek geri yüklenemez.",
+  "backup.integrity_mismatch": "Yedek dosyası, panelin oluşturduğu dosya ile aynı değil. İçerik damgası tutmuyor: dosya oluşturulduktan sonra değişmiş. Sebebi disk/aktarım hatası da olabilir, dosyanın değiştirilmiş olması da — panel bu ikisini ayırt edemez. Geri yükleme durduruldu, çünkü bu arşivi açmak siteye beklenmedik dosyalar yazabilirdi. Yedek uzak bir hedefte (FTP/S3) duruyorsa oradaki kopyayı da denetleyin.",
   "backup.verified": "Yedek doğrulaması tamamlandı.",
   "backup.verify.missing_local": "Yerel dosya bulunamadı.",
   "backup.verify.missing_remote": "Uzak kopya hedefte bulunamadı.",

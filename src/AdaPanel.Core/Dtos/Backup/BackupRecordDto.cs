@@ -163,6 +163,29 @@ public sealed class BackupRecordDto
     public string IntegrityState { get; set; } = BackupIntegrity.Unknown;
 
     /// <summary>
+    /// Arşivin oluşturma anındaki içerik damgası (<c>sha256:…</c>). Okuma anında doğrulanır.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><see cref="IntegrityState"/> ile aynı şey DEĞİLDİR ve onun yerine geçmez.</b> O, arşivin
+    /// YAPISINI ölçer ("boş mu, açılıyor mu"); bu, arşivin AYNI DOSYA olup olmadığını ölçer.
+    /// Kurcalanmış bir zip yapısal olarak kusursuzdur — yani <c>sound</c> damgasını alır ve geri
+    /// yüklemede saldırganın dosyaları siteye açılırdı.
+    /// </para>
+    /// <para>
+    /// <b>Neden burada, arşivin yanında değil:</b> arşivin yanına yazılan bir <c>.sha256</c>
+    /// dosyasını, arşivi değiştirebilen aynı kişi değiştirirdi. Yedek FTP/S3 gibi ÜÇÜNCÜ TARAF bir
+    /// hedefte de durduğu için tehdit gerçektir; panelin kendi kaydı ise o hedefin dışındadır.
+    /// </para>
+    /// <para>
+    /// <b>BOŞ OLABİLİR ve bu bir arıza değildir:</b> bu alandan önce alınmış yedeklerde damga yok.
+    /// Boşluk "kurcalanmış" ANLAMINA GELMEZ (bkz. <c>BackupIntegrityCheck.NotStamped</c>) —
+    /// öyle sayılsaydı eski yedeklerin tamamı felaket anında reddedilirdi.
+    /// </para>
+    /// </remarks>
+    public string ContentHash { get; set; } = string.Empty;
+
+    /// <summary>
     /// Bu yedek SİLİNDİ sayılıyor ama UZAK kopyası hedefte kaldı (<see cref="Status"/> =
     /// <c>deleted_remote_failed</c>). Sebep <see cref="Warnings"/> içinde
     /// <c>backup.remote_delete_failed</c> anahtarıyla durur.

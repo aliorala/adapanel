@@ -354,11 +354,41 @@ public sealed class MailPerSiteBackupTests
             [.. manifest.GetProperty("parts").EnumerateArray().Select(parca => parca.GetString() ?? string.Empty)];
 
         /// <summary>Var olan bir yedege elle bir girdi ekler (baska musterinin postasini taklit eder).</summary>
+        /// <summary>
+        /// Arsive girdi ekler: "yedek BASTAN bu girdiyi de iceriyordu" senaryosunu kurar.
+        /// </summary>
+        /// <remarks>
+        /// ICERIK DAMGASI YENIDEN HESAPLANIR ve bu duzenegin dogru olmasi icin ZORUNLUDUR.
+        /// Damga, arsivin olusturuldugu andaki halini kaydeder; duzenek dosyayi SONRADAN
+        /// degistirdigi icin damga (dogru sekilde) tutmaz ve geri yukleme
+        /// backup.integrity_mismatch ile reddedilir. Yani buradaki hesaplama korumayi
+        /// ZAYIFLATMAZ -- kurgulanan senaryonun gercekte uretecegi kaydi uretir. Damgayi BOS
+        /// birakmak da ise yarardi ama o, testi "damgasiz eski yedek" yoluna kaydirir ve bu
+        /// testin olcmek istedigi seyi olcmez hale gelirdi.
+        /// </remarks>
         public void ArsiveEkle(BackupRecordDto kayit, string girdiAdi)
         {
-            using var arsiv = ZipFile.Open(kayit.Path, ZipArchiveMode.Update);
-            using var yazici = new StreamWriter(arsiv.CreateEntry(girdiAdi).Open());
-            yazici.Write("SAHTE SQLITE ARSIVI");
+            using (var arsiv = ZipFile.Open(kayit.Path, ZipArchiveMode.Update))
+            {
+                using var yazici = new StreamWriter(arsiv.CreateEntry(girdiAdi).Open());
+                yazici.Write("SAHTE SQLITE ARSIVI");
+            }
+
+            DamgayiTazeleAsync(kayit).GetAwaiter().GetResult();
+        }
+
+        private async Task DamgayiTazeleAsync(BackupRecordDto kayit)
+        {
+            var damga = await BackupContentHash.ComputeAsync(kayit.Path, CancellationToken.None);
+            kayit.ContentHash = damga;
+
+            var kayitlar = await DosyaDeposu.ReadAsync("config/backups.json", new List<BackupRecordDto>());
+            foreach (var saklanan in kayitlar.Where(k => k.Id == kayit.Id))
+            {
+                saklanan.ContentHash = damga;
+            }
+
+            await DosyaDeposu.WriteAsync("config/backups.json", kayitlar);
         }
 
         public void Dispose()

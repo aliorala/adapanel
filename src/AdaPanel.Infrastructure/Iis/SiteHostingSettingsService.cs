@@ -737,9 +737,25 @@ public sealed class SiteHostingSettingsService(
     /// <see cref="ImportSiteArchiveAsync"/>'te yazılı).
     /// </para>
     /// </remarks>
+    /// <param name="policy">
+    /// <b>ZORUNLU ve VARSAYILANSIZ — sabit <c>Strict</c> BİR HATAYDI.</b> Bu ön kapı bir süre
+    /// politikadan bağımsız <c>Strict</c> kullandı ve bu, ölçülünce yanlış çıktı: asıl sınır olan
+    /// bağlanma-anı kapısı (<c>OutboundConnectGuard</c>, <c>ServiceCollectionExtensions</c>'ta
+    /// kurulur) <c>Connecting(AllowInternalOutboundTargets)</c> kullanıyor ve oradaki yorum, açık
+    /// kapının orada GEÇERLİ OLMASI gerektiğini açıkça yazıyor ("yoksa iç ağdaki NAS'a yedek atan
+    /// meşru kurulum kapıyı açtığı hâlde soket düzeyinde reddedilirdi").
+    /// <para>
+    /// <b>Kural: ön kapı asıl sınırdan DAHA SIKI olamaz.</b> Sıkı olursa işleticinin bilerek açtığı
+    /// kapıyı sessizce hükümsüz kılar — üstelik gerçek sınır hâlâ oradadır, yani kazanılan güvenlik
+    /// YOKTUR; kazanılan tek şey kullanıcının anlayamayacağı bir 403'tür. Parametre varsayılansız,
+    /// çünkü bu kararı çağrı yeri VERMELİ; "unutulunca en sıkısı" davranışı tam olarak buradaki
+    /// hatayı üretmişti.
+    /// </para>
+    /// </param>
     internal static async Task<string?> FindBlockedImportTargetAsync(
         string url,
         Func<string, CancellationToken, Task<IPAddress[]>> resolver,
+        OutboundTargetPolicy policy,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(resolver);
@@ -763,7 +779,7 @@ public sealed class SiteHostingSettingsService(
         return await OutboundAddressGuard.FindBlockedHostAsync(
             uri.DnsSafeHost,
             (ad, iptal) => resolver(ad, iptal),
-            OutboundTargetPolicy.Strict,
+            policy,
             cancellationToken);
     }
 
@@ -872,9 +888,14 @@ public sealed class SiteHostingSettingsService(
         // "arşiv adresi" alanına yazarak panelin ağ konumunu ödünç alıyordu —
         // `http://169.254.169.254/...` (bulut kimlik bilgileri), `http://127.0.0.1:<port>/`
         // (yalnız loopback'te dinleyen yönetim uçları), `http://10.0.0.5/` (iç ağ).
+        // POLİTİKA, asıl sınırın kullandığının AYNISI olmak zorunda (bkz. parametrenin belgesi):
+        // bağlanma-anı kapısı `Connecting(AllowInternalOutboundTargets)` kullanıyor. Burada sabit
+        // `Strict` yazmak, işleticinin bilerek açtığı kapıyı sessizce hükümsüz kılardı — ve gerçek
+        // sınır zaten yerinde olduğu için karşılığında hiçbir güvenlik kazandırmazdı.
         var engellenen = await FindBlockedImportTargetAsync(
             url,
             outboundResolver ?? ResolveHostAddressesAsync,
+            OutboundTargetPolicy.Connecting(runtimeOptions.Value.AllowInternalOutboundTargets),
             cancellationToken);
         if (engellenen is not null)
         {

@@ -3373,6 +3373,7 @@
   "backup.remote_delete_failed": "The remote copy of the backup could not be deleted. The local file was removed but the copy on the target is still there; the record was deliberately kept, otherwise the panel could never see or delete that file again. Fix access and try deleting again.",
   "backup.remote_list_failed": "The remote target could not be listed; files on the target with no panel record (orphans) could not be scanned.",
   "backup.file_missing": "The backup file was not found. The record is still in the panel but the file is gone from disk - most likely deleted or moved by hand. This backup cannot be restored.",
+  "backup.integrity_mismatch": "The backup file is not the same file the panel created. Its content stamp does not match: the file changed after it was created. The cause may be a disk or transfer error, or the file may have been altered - the panel cannot tell these apart. The restore was stopped, because opening this archive could write unexpected files into the site. If the backup is stored on a remote target (FTP/S3), check the copy there as well.",
   "backup.verified": "Backup verification finished.",
   "backup.verify.missing_local": "Local file not found.",
   "backup.verify.missing_remote": "Remote copy not found on the target.",
