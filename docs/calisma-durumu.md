@@ -2,7 +2,7 @@
 
 Bu dosya, oturum kapandığında veya başka bir bot devraldığında güncel sonucu gösterir. Aşağıdaki eski sürüm bölümleri tarihsel kayıttır.
 
-Son güncelleme: **09.09.2026 — 0.8.37 yerel testleri tamamlandı, paket hazırlanıyor; canlı henüz 0.8.36.** [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
+Son güncelleme: **09.09.2026 — 0.8.37 canlı, ek düzeltmeler tamamlandı.** Kaynak commit'i `2c96972`. [Ayrıntılı devam ve kanıtlar](kalan-sorunlar-2026-09-09.md).
 
 ## 0.8.37 ek düzeltmeler
 
@@ -10,6 +10,8 @@ Son güncelleme: **09.09.2026 — 0.8.37 yerel testleri tamamlandı, paket hazı
 - Kaynak izleme ekranında eski yanıtın yeni isteğin kilidini kaldırıp üst üste sorgu başlatması düzeltildi. Gerçek Vue yaşam döngüsünde eski isteğin hem geç başarısı hem geç hatası test edildi.
 - **5.262 .NET + 60 ön yüz testi**, typecheck ve build başarılı. FTP iptalinden sonra aynı arşivin aynı kayıtla yeniden gönderilmesi yerel TCP/FTP düzeneğinde doğrulandı. Canlıda yapay kesinti veya geri yükleme yapılmadı.
 - Kompakt ana sayfa canlı masaüstünde gözden geçirildi; CPU/bellek/disk yazılarında taşma görülmedi. Yedekleme korunuyor; şifreleme kapalı kalıyor.
+- **Canlı doğrulama:** mevcut/son sürüm 0.8.37; AdaPanel hizmeti Running/Automatic. Son kurulum succeeded/exitCode=0; Inno başarı 21:14:11.301, servis ayarı Restore ve Log closed 21:14:18.707 (sunucu yerel zamanı). Paket 90.762.779 bayt, SHA256 `521A8A418520C4A4C7433A08A76896BB004FFEC84C61F29C7A5385F7853E3A03`; yayınlanan dosya tekrar indirilip doğrulandı. 149 ön yüz dosyası eşleşti; 22 bileşen geçti, 3 büyük paket mevcut istisna ile atlandı. Kaynak/history/tag push edilmedi.
+- **Canlı IIS eksikliği de düzeltildi:** `Web-Request-Monitor` kuruldu; Installed=false ve appcmd 80004001 durumu giderildi. Kurulum Success=true, Installed=true; IIS canlı görünümü artık “0 aktif / Şu an işlenen istek yok” gösteriyor. Sunucu yeniden başlatılmadı, AdaPanel/W3SVC/WAS çalışıyor. Bu sunucuda rol bileşeni etkinleştirildi; kurulum paketinin isteğe bağlı özellik listesine değişiklik yapılmadı.
 
 ## Önceki 0.8.36 sonucu
 

@@ -2,7 +2,7 @@
 
 Kullanıcının devir notlarında kalan sorunları da düzeltme isteği üzerine çalışıldı. Yedekleme modülü korunuyor; mevcut canlı yayın izni geçerli.
 
-**Son durum (09.09.2026): 0.8.37 testleri geçti, paket hazırlanıyor; canlı henüz 0.8.36.** Son tam koşu 5.262 .NET, ön yüz 60 test. Önceki canlı doğrulamada iki yeni iptvhub yedeği yerel ve FTP olarak doğrulandı. 62 kayıttaki eksik 18 uzak kopya geçmişte yereli de silinmiş kayıtlardır; geri oluşturulmuş sayılmaz.
+**Son durum (09.09.2026): 0.8.37 canlı; ek düzeltmeler tamamlandı.** Son tam koşu 5.262 .NET, ön yüz 60 test. Önceki canlı doğrulamada iki yeni iptvhub yedeği yerel ve FTP olarak doğrulandı. 62 kayıttaki eksik 18 uzak kopya geçmişte yereli de silinmiş kayıtlardır; geri oluşturulmuş sayılmaz.
 
 ## 0.8.37 — İptal edilen yedeğin kaydı ve kaynak izleme yarışı
 
@@ -15,6 +15,17 @@ Hash uzak aktarımdan önce hesaplanıyor. Aktarım iptal edilince `created_remo
 - Son tam test: **Infrastructure 5.260/5.260 + Core 2/2 = 5.262**, başarısız/atlanan yok; Infrastructure süresi 3 dakika 8 saniye. `infrastructure-final-037.trx`, `core-037.trx`.
 - Ön yüz: **9 dosya / 60 test**, typecheck ve build başarılı. `.tmp/remaining-fixes/typecheck-037.log`, `frontend-test-037.log`, `frontend-build-037.log`.
 - Ana sayfa CPU/bellek/disk kartları canlı masaüstünde kontrol edildi; yazı taşması görülmedi. Tasarım ölçeği ve şifreleme tercihi değiştirilmedi. Canlıya yapay FTP kesintisi uygulanmadı.
+- Kaynak commit'i **`2c96972`**. Kurulum paketi **90.762.779 bayt**, SHA256 **`521A8A418520C4A4C7433A08A76896BB004FFEC84C61F29C7A5385F7853E3A03`**. Publish/installer içerik denetimleri geçti; ön yüzün 149 dosyası paketle birebir eşleşti. 22 bileşen denetimi geçti, mevcut betiğin büyük paket istisnasıyla 3 paket atlandı. Inno derlemesi 28,250 saniye. Kanıt: `.tmp/remaining-fixes/package-037.log`, `artifacts/installer-manifest.json`, `test-results/component-package-audit.json`.
+- [0.8.37](https://github.com/aliorala/adapanel/releases/tag/0.8.37) yalnız mevcut yayın betiğiyle yayımlandı; public dosya yeniden indirildi, SHA256 yerel dosyayla eşleşti (`publish-037.log`). Canlı panel aynı sürüm/hash'i gösterdi, paketi doğruladı ve 0.8.36 → 0.8.37 güncellemesini tamamladı. Kaynak kod, tarihçe veya tag push edilmedi.
+- Canlı terminalde salt okunur kontrol: hizmet **Running / Automatic**, son deneme **succeeded**, installerExitCode **0**, isFinished **true**, isFailed **false**, isDecidedByPanel **true**, updatedAtUtc **2026-09-09T18:14:01.5866171Z**. Inno günlüğü: Stop **21:13:36.171 / 21:13:36.734**, Installation process succeeded **21:14:11.301**, Restore + Log closed **21:14:18.707**. Kontrol komutu exitCode **0**. Panelde mevcut ve son sürüm **0.8.37** doğrulandı.
+
+### Canlı IIS İstek İzleyici eksikliği
+
+Yayın sonrası Kaynak → IIS (web) görünümü `request_monitor_missing` bildirdi. Salt okunur kontrolde `Get-WindowsFeature Web-Request-Monitor` Installed=false/Available ve `appcmd list requests /xml` içinde ERROR hresult=80004001 görüldü. Bu kez yalnız uyarı kontrolüyle bırakılmadı; mevcut sunucunun eksik Windows rol bileşeni kuruldu.
+
+Microsoft'un [IIS modülleri açıklaması](https://learn.microsoft.com/en-us/iis/get-started/introduction-to-iis/iis-modules-overview) ve [Install-WindowsFeature belgesi](https://learn.microsoft.com/en-us/powershell/module/servermanager/install-windowsfeature) kontrol edildi. Yalnız `Web-Request-Monitor`, `-Restart:$false` ile kuruldu. Terminalin 60 saniye sınırından bağımsız tamamlanabilmesi için sunucuda tek kullanımlık betik, gizli PowerShell süreci ve ayrı çıktı/hata günlükleri kullanıldı. Betik: `C:/ProgramData/AdaPanel/updates/enable-request-monitor-20260909.ps1`; aynı kökte `.out.log` ve `.err.log` tutuluyor.
+
+Kurulum çıktısı Success=true, ExitCode=0; son feature durumu Installed=true/Installed. Son appcmd yanıtı geçerli boş `<appcmd>` XML'i; 80004001 hatası yok. Boş listede appcmd çıkış kodu 1 görülebildiği için tek başına hata sayılmadı; XML ve panelin gerçek sonucu birlikte doğrulandı. Canlı panelde MariaDB → IIS geçişinden sonra **“0 aktif / Şu an işlenen istek yok”** görüldü. AdaPanel, W3SVC ve WAS Running; sunucu yeniden başlatılmadı. Canlıya yapay yavaş istek veya site dosyası eklenmedi. Bu mevcut sunucunun yapılandırma düzeltmesidir; 0.8.37 paketinin isteğe bağlı IIS özellik listesi değişmedi.
 
 ## Güncelleme sırasında servis dosyası kilidi
 

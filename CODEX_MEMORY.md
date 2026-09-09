@@ -9,14 +9,16 @@ Ilk okunacak dosyalar:
 2. `CODEX_MEMORY.md`
 3. `docs/calisma-durumu.md`
 
-## 2026-09-09 — Ek tarama: 0.8.37 hazırlanıyor
+## 2026-09-09 — Son durum: 0.8.37 canlı, ek düzeltmeler tamamlandı
 
-Kullanıcının “var mı başka yapılacak, onları yap” isteğiyle iki ek hata testte yeniden üretildi ve düzeltildi. Canlı kurulum henüz uygulanmadı; son doğrulanmış canlı sürüm 0.8.36.
+Kullanıcının “var mı başka yapılacak, onları yap” isteğiyle iki ek hata testte yeniden üretildi ve düzeltildi. Kaynak commit'i **`2c96972`**; **0.8.37 yayınlandı ve canlıya kuruldu**. Panel mevcut/son sürümü 0.8.37 gösteriyor; hizmet Running/Automatic. Son deneme succeeded, installerExitCode=0, isFinished=true, isFailed=false. Inno başarı 21:14:11.301, hizmet Restore ve Log closed 21:14:18.707 (sunucu yerel zamanı).
 
 - FTP aktarımı iptal edilince tamamlanmış yerel arşiv panel kaydına hiç girmiyordu. Bütünlük damgası uzak aktarımdan önce hesaplanıyor; iptal durumunda yerel kayıt, yan indeks ve içerik uyarıları istek iptalinden bağımsız yazılıyor, ardından iptal çağırana iletiliyor. İçerik uyarıları site/abonelik/posta için ilk kayıtla birlikte yazılıyor. Bu düzeltme işlem çökmesi veya arşiv üretimi sırasında iptal için kalıcı iş kuyruğu sağlamaz.
 - Kaynak izleme bileşeninde eski isteğin `finally` bloğu yeni isteğin kilidini açıyordu. Kilidi yalnız güncel istek bırakıyor; kaynak değişimi ve bileşen kapanışında eski yanıtlar geçersizleştiriliyor.
 - Regresyonlar önce kırmızıydı: 2 FTP iptal senaryosunda liste boş; 2 ön yüz gecikme senaryosunda beklenen 3 yerine 5 istek. Son tam koşu **Infrastructure 5.260 + Core 2 = 5.262 / ön yüz 60 test başarılı**, atlanan yok. Typecheck/build geçti. FTP testleri iptal sonrası aynı id/hash ile yeniden aktarım ve gerçek TCP sunucusunun aldığı baytları da doğruluyor; eksik içerik uyarıları korunuyor.
 - Kanıtlar `.tmp/remaining-fixes/*-037.log` ve `infrastructure-final-037.trx`, `core-037.trx`. CPU/bellek/disk kartları canlı masaüstünde görsel kontrol edildi; taşma görülmedi.
+- Paket **90.762.779 bayt**, SHA256 **`521A8A418520C4A4C7433A08A76896BB004FFEC84C61F29C7A5385F7853E3A03`**. GitHub'dan tekrar indirilerek birebir doğrulandı; canlı panel de aynı paketi doğruladı. 149 ön yüz dosyası eşleşti, içerik denetimleri ve 22 bileşen geçti; mevcut büyük paket istisnasıyla 3 bileşen atlandı. [0.8.37 yayını](https://github.com/aliorala/adapanel/releases/tag/0.8.37).
+- Son canlı kontrolde **IIS Web-Request-Monitor eksikliği de giderildi**: önce Installed=false ve appcmd XML'inde 80004001; ardından Microsoft Windows rol bileşeni `Install-WindowsFeature -Name Web-Request-Monitor -Restart:$false` ile kuruldu. Installed=true/Installed, kurulum Success=true, geçerli hatasız appcmd XML'i, panel IIS görünümünde **0 aktif / Şu an işlenen istek yok** doğrulandı. AdaPanel/W3SVC/WAS Running; sunucu yeniden başlatılmadı. Canlı `C:/ProgramData/AdaPanel/updates/enable-request-monitor-20260909.*` betik ve out/err günlükleri tutuluyor. Bu sunucuda yapılandırma düzeltmesidir; 0.8.37 kurulum paketindeki isteğe bağlı IIS özellik listesi değiştirilmedi.
 - **Yedek modülü kalıyor, şifreleme kullanıcının tercihiyle kapalı.** Önceki 18 kayıp uzak kopya ve damgasız eski arşiv hakkındaki sınırlar aşağıda geçerli. Kaynak kod/tarihçe/tag public GitHub'a push edilmeyecek; yalnız mevcut yayın betiğiyle kurulum paketi yayınlanacak.
 
 ## 2026-09-09 — Önceki sonuç: 0.8.36 canlı
