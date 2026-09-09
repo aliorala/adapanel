@@ -72,7 +72,7 @@
         <DnsView v-else-if="openToolId === 'dns'" />
         <SslView v-else-if="openToolId === 'ssl'" />
         <ProxyView v-else-if="openToolId === 'proxy'" />
-        <FilesView v-else-if="openToolId === 'files'" />
+        <FilesView v-else-if="openToolId === 'files'" embedded />
         <FtpView v-else-if="openToolId === 'ftp'" :site-name="selectedSiteName" />
         <SiteDatabasesView v-else-if="openToolId === 'webdb' || openToolId === 'domaindb'" />
         <ProtectedDirsView v-else-if="openToolId === 'protected'" />
@@ -139,6 +139,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import router from "../router";
+import { allowNavigation } from "../composables/navigationGuard";
 import { useI18n } from "vue-i18n";
 import { getPanelPreferences } from "../api/panelSettings";
 import type { SiteBindingPayload, SiteDefaultsResult } from "../api/sites";
@@ -268,6 +270,7 @@ watch(
     primary.value = "pano";
     openToolId.value = "";
     inWorkspace.value = true;
+    publishContext();
   },
   { immediate: true }
 );
@@ -333,11 +336,13 @@ const activePrimaryLabel = computed(() =>
   primaryTabs.value.find((tab) => tab.id === primary.value)?.label ?? "");
 
 // Domain satırından / pano kısayolundan gelen hızlı eylem: siteyi seç + doğru sekme/araca git.
-function onOpenTool(payload: { siteName: string; tool: string }) {
+async function onOpenTool(payload: { siteName: string; tool: string }) {
+  if (!await allowNavigation()) return;
   sitesStore.selectSite(payload.siteName);
   notice.value = "";
   focusTool(payload.tool);
   inWorkspace.value = true;
+  publishContext();
 }
 
 // Bir aracı doğru ana sekme altında aç. "pano" / bilinmeyen → Pano sekmesi; Posta tek araç → doğrudan.
@@ -347,30 +352,60 @@ function focusTool(tool: string) {
     openToolId.value = "";
     return;
   }
-  const def = allTools.value.find((item) => item.id === tool);
+  const def = visibleTools.value.find((item) => item.id === tool);
   const group = def?.group ?? "hostingdns";
   primary.value = group;
   openToolId.value = group === "mail" || !def ? "" : tool;
 }
 
-function selectPrimary(tab: PrimaryTab) {
+async function selectPrimary(tab: PrimaryTab) {
+  if (!await allowNavigation()) return;
   primary.value = tab;
   openToolId.value = "";
+  publishContext();
 }
 
-function openTool(id: string) {
+async function openTool(id: string) {
+  if (!await allowNavigation()) return;
   openToolId.value = id;
+  publishContext();
 }
 
-function backToList() {
+async function backToList() {
+  if (!await allowNavigation()) return;
   openToolId.value = "";
+  publishContext();
 }
 
-function backToSites() {
+async function backToSites() {
+  if (!await allowNavigation()) return;
   inWorkspace.value = false;
   openToolId.value = "";
   primary.value = "pano";
+  publishContext();
 }
+
+function publishContext() {
+  void router.push({ query: { section: "sites", ...(inWorkspace.value ? { site: selectedSiteName.value, tool: openToolId.value || undefined, tab: primary.value } : {}) } });
+}
+watch([() => router.currentRoute.value, () => sitesStore.sites], () => {
+  const query = router.currentRoute.value.query;
+  if (query.section !== "sites") return;
+  const site = typeof query.site === "string" ? query.site : "";
+  if (!site || !sitesStore.sites.some((item) => item.name === site)) {
+    inWorkspace.value = false;
+    openToolId.value = "";
+    return;
+  }
+  sitesStore.selectSite(site);
+  inWorkspace.value = true;
+  const tool = typeof query.tool === "string" ? query.tool : "";
+  if (visibleTools.value.some((item) => item.id === tool)) focusTool(tool);
+  else {
+    openToolId.value = "";
+    primary.value = (primaryTabs.value.some((tab) => tab.id === query.tab) ? query.tab : "pano") as PrimaryTab;
+  }
+}, { immediate: true });
 
 // --- Pano (SiteDetailView) eylemleri: sitesStore üzerinden. ---
 function showNotice(message: string, isError: boolean) {

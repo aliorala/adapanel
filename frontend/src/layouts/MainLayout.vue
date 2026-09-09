@@ -1139,6 +1139,12 @@ a.brand-card {
   gap: 3px;
 }
 
+.nav-item, .nav-item:hover, .nav-item:active {
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
 .nav-item {
   display: grid;
   grid-template-columns: auto 1fr auto;

@@ -80,8 +80,8 @@ export const useSetupStore = defineStore("setup", {
         this.loading = false;
       }
     },
-    async fetchProgress() {
-      const response = await apiClient.get<ApiEnvelope<OperationProgress>>("/setup/progress");
+    async fetchProgress(signal?: AbortSignal) {
+      const response = await apiClient.get<ApiEnvelope<OperationProgress>>("/setup/progress", { signal, timeout: 10_000 });
       return response.data.data;
     }
   }

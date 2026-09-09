@@ -1139,7 +1139,6 @@ import {
   getBackups,
   getBackupSchedule,
   getBackupSchedules,
-  restoreBackup,
   restoreBackupItems,
   runBackupScheduleNow,
   setBackupEncryption,
@@ -1157,6 +1156,7 @@ import {
 import { getAutomation, updateAutomation, type AutomationSettings, type AutomationStatus } from "../api/automation";
 import { getPanelPreferences } from "../api/panelSettings";
 import { getMySubscription } from "../api/subscriptions";
+import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
@@ -1177,6 +1177,7 @@ import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
+const fullRestore = useBackupRestore();
 const { prompt } = usePrompt();
 const { writeGate } = useSubscriptionGate();
 const { runBulk } = useBulkAction();
@@ -2118,40 +2119,7 @@ async function restore(backup: BackupRecord, chainChecked = false) {
     }
   }
 
-  // Şifreli yedekte parola ÖNCE sorulur: onay diyaloğunu geçtikten sonra "parola lazım" demek,
-  // kullanıcıyı yüksek riskli onayı ikinci kez yapmaya zorlardı.
-  let password = "";
-  if (backup.encrypted) {
-    const entered = await askBackupPassword();
-    if (entered === null) {
-      return;
-    }
-
-    password = entered;
-  }
-
-  // Yüksek riskli onay: geri yükleme canlı veriyi ÜZERİNE yazar → yedek adı yazılmadan devam edilemez.
-  await confirm({
-    title: t("panel.confirm.restoreBackupTitle", { name: backup.name }),
-    message: t("panel.backup.restoreConfirm"),
-    impact: backupImpact(backup),
-    requireText: backup.name,
-    confirmLabel: t("panel.backup.restore"),
-    busyLabel: t("panel.backup.restoring"),
-    action: async () => {
-      busy.value = true;
-      try {
-        const restored = await restoreBackup(backup.id, "", password);
-        await refresh();
-        reportRestoreResult(restored);
-      } catch (error) {
-        showError(error);
-      } finally {
-        busy.value = false;
-        password = "";
-      }
-    },
-  });
+  await fullRestore.restore(backup, reportRestoreResult, showError, refresh);
 }
 
 /**
@@ -2179,21 +2147,9 @@ async function askBackupPassword() {
  * klasör (`preservedPath`) de söylenir: "yanlış yedeği geri yükledim" denince dönülecek tek yer orası.
  */
 function reportRestoreResult(record: BackupRecord) {
-  const lines: string[] = [];
-  const failed = (record.warnings ?? []).length > 0;
-
-  lines.push(failed ? t("panel.backup.restoredWithErrors") : t("panel.backup.restored"));
-
-  if (failed) {
-    expandedWarnings.value = record.id;
-    lines.push(`${t("panel.backup.restoreWarningsTitle")}:`, warningText(record));
-  }
-
-  if (record.preservedPath) {
-    lines.push(t("panel.backup.preservedPath", { path: record.preservedPath }));
-  }
-
-  showNotice(lines.join("\n"), failed);
+  const report = restoreResult(record, t);
+  if (report.failed) expandedWarnings.value = record.id;
+  showNotice(report.message, report.failed);
 }
 
 /** Tek bir uyarının çevrilmiş satırı ("hedef: sebep"). */

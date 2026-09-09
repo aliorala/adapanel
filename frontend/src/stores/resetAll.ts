@@ -1,3 +1,4 @@
+import { invalidateSessionRequests } from "../api/client";
 import { getActivePinia, type Pinia, type Store } from "pinia";
 
 /**
@@ -18,6 +19,7 @@ import { getActivePinia, type Pinia, type Store } from "pinia";
  * sınıfıdır. Burada kayıtlı olan HER store'u dolaşmak, yeni store'u otomatik kapsar.
  */
 export function resetAllStores(pinia: Pinia | null = getActivePinia() ?? null): void {
+  invalidateSessionRequests();
   if (!pinia) {
     return;
   }

@@ -665,7 +665,7 @@ function formatTimeSpan(value: string): string {
   --progress: 0%;
   /* Varsayılan yalnızca YEDEK: gerçek renk `ringStyle()`ten satır içi gelir (bkz. script). */
   --ring-color: var(--text-muted);
-  width: min(220px, 100%);
+  width: min(160px, 100%);
   aspect-ratio: 1;
   padding: var(--sp-12);
   border-radius: 50%;

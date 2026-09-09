@@ -166,18 +166,9 @@ export const useAuthStore = defineStore("auth", {
         const result = response.data.data;
 
         if (result.isAuthenticated) {
-          clearCsrfToken();
-          this.session = {
-            isAuthenticated: true,
-            requiresSetupWizard: false,
-            user: result.user
-          };
-          // Oturumu tazele: alt-kullanıcı/izin bilgisi (isSubUser, allowedSections) yalnız session ucunda döner.
-          try {
-            await this.fetchSession();
-          } catch {
-            // Session tazeleme başarısızsa login yine geçerli; menü kısıtları bir sonraki yüklemede oturur.
-          }
+          resetAllStores();
+          // Session carries the complete permissions; do not mount a partly authorized shell.
+          await this.fetchSession();
         }
 
         return result;
@@ -187,12 +178,12 @@ export const useAuthStore = defineStore("auth", {
     },
     async impersonate(userId: string) {
       await apiClient.post<ApiEnvelope<CurrentUser>>(`/auth/impersonate/${encodeURIComponent(userId)}`, {});
-      clearCsrfToken();
+      resetAllStores();
       await this.fetchSession();
     },
     async stopImpersonate() {
       await apiClient.post<ApiEnvelope<CurrentUser>>("/auth/impersonate/stop", {});
-      clearCsrfToken();
+      resetAllStores();
       await this.fetchSession();
     },
     async logout() {

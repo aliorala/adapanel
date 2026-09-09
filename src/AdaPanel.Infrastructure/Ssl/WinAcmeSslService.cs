@@ -234,7 +234,7 @@ public sealed class WinAcmeSslService(
             RenewedCount = yenilenen,
             Measured = result.Success,
             FailureReason = result.Success ? string.Empty : "win-acme yenileme komutu basarisiz oldu.",
-            Output = cikti,
+            Output = cikti ?? string.Empty,
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
             UnverifiedCount = dogrulama.Unmeasured

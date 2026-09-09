@@ -2,7 +2,7 @@
   <section class="panel module-shell files-panel">
     <div class="module-head">
       <div>
-        <h2>{{ t("panel.files.title") }}</h2>
+        <h2 v-if="props.embedded">{{ t("panel.files.title") }}</h2>
         <p class="meta">{{ t("panel.files.subtitle") }}</p>
       </div>
       <button class="secondary compact" @click="() => refresh()">
@@ -36,10 +36,10 @@
         </button>
       </div>
       <div class="site-picker">
-        <!-- Domain hub'dan gelince site zaten seçili (breadcrumb); tekrar seçici gösterme. -->
-        <template v-if="!selectedSiteName">
-          <span>{{ t("panel.files.siteLabel") }}</span>
-          <select v-model="selectedSiteName">
+        <!-- Genel dosya sayfasında seçici kalır; site çalışma alanı kendi geri yolunu sunar. -->
+        <template v-if="!props.embedded">
+          <label for="files-site-picker">{{ t("panel.files.siteLabel") }}</label>
+          <select id="files-site-picker" :value="selectedSiteName" @change="changeSite">
             <option value="">{{ t("panel.files.selectSite") }}</option>
             <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">
               {{ site.name }}
@@ -98,11 +98,11 @@
             </template>
           </nav>
         </div>
-        <div class="toolbar-group">
+        <div v-if="workspace?.isDirectory" class="toolbar-group">
           <!-- ÇOKLU seçim: yirmi dosyayı tek tek seçtirmek Plesk'te de yok. Gönderim SIRAYLA
                (bkz. uploadSelectedFiles). -->
-          <label class="upload-button" :class="{ disabled: uploadBusy || locked }" :title="lockReason || undefined">
-            <input type="file" multiple v-bind="writeGate(uploadBusy)" @change="uploadSelectedFiles" />
+          <label class="upload-button" :class="{ disabled: uploadBusy || locked || !workspace?.isDirectory }" :title="lockReason || undefined">
+            <input type="file" multiple v-bind="writeGate(uploadBusy || !workspace?.isDirectory)" @change="uploadSelectedFiles" />
             <span>{{ uploadBusy ? uploadProgressLabel : t("panel.files.upload") }}</span>
           </label>
           <!-- Oluşturma düğmeleri yalnız KLASÖR görünümünde anlamlı: bir dosya açıkken
@@ -350,16 +350,17 @@
            tipinde girinti ve sütun hizası okunmuyordu. -->
       <label v-else-if="workspace" class="stacked-field">
         <span class="field-label">{{ t("panel.files.editor") }}</span>
-        <textarea v-model="fileContent" rows="18" spellcheck="false" class="file-editor"></textarea>
+        <textarea v-model="fileContent" :disabled="saving || loading" rows="18" spellcheck="false" class="file-editor"></textarea>
       </label>
 
       <!-- Kaydet BİRİNCİL, indir ikincil. Eskiden ikisi `action-row` içindeydi ve o sınıf
            `space-between` uyguladığı için düğmeler kartın iki ucuna savruluyordu; `toolbar-group`
            yalnız akış + boşluk verir, ikisi yan yana durur. -->
-      <div v-if="workspace && !workspace.isDirectory" class="toolbar-group">
-        <button v-bind="writeGate()" @click="saveCurrentFile">
-          {{ t("panel.files.save") }}
+      <div v-if="workspace && !workspace.isDirectory" class="toolbar-group editor-actions">
+        <button v-bind="writeGate(saving || loading || !isDirty)" @click="saveCurrentFile">
+          {{ saving ? t("panel.confirm.working") : t("panel.files.save") }}
         </button>
+        <span v-if="isDirty" class="status-pill" role="status">{{ t("panel.files.unsaved") }}</span>
         <a class="secondary compact action-link" :href="getDownloadUrl(workspace.path)">
           {{ t("panel.files.download") }}
         </a>
@@ -368,7 +369,7 @@
       <!-- İZİNLER, günlük dosya işlerinin değil YÖNETİMİN alanıdır: her açılışta kartın altında
            aynı ağırlıkta durması, "her dosya için doldurulacak bir form" izlenimi veriyordu.
            İşlev aynı; yalnızca ayırıcı çizgi ve daha küçük bir başlıkla ikincil sıraya alındı. -->
-      <form v-if="workspace" class="permissions-row" @submit.prevent="savePermissions">
+      <form v-if="workspace && isAdmin" class="permissions-row" @submit.prevent="savePermissions">
         <label>
           <span class="field-label">{{ t("panel.security.principal") }}</span>
           <input v-model="permissionPrincipal" placeholder="IIS_IUSRS" />
@@ -391,6 +392,7 @@
     </section>
 
     <section v-else class="form-surface workspace-card">
+      <button v-if="!isAdmin" class="secondary compact" @click="router.push({ query: { section: 'backup' } })">{{ t("panel.backup.manageScoped") }}</button>
       <div class="section-head">
         <div>
           <h3>{{ t("panel.backup.title") }}</h3>
@@ -411,7 +413,7 @@
             </option>
           </select>
         </label>
-        <label>
+        <label v-if="isAdmin">
           <span>{{ t("panel.database.engineLabel") }}</span>
           <select v-model="backupEngine">
             <option value="mariadb">MariaDB</option>
@@ -425,7 +427,7 @@
         <button v-bind="writeGate(!backupSiteName)" @click="createSiteBackup">
           {{ t("panel.backup.siteAction") }}
         </button>
-        <button class="secondary compact" v-bind="writeGate()" @click="createDatabaseBackup">
+        <button v-if="isAdmin" class="secondary compact" v-bind="writeGate()" @click="createDatabaseBackup">
           {{ t("panel.backup.dbAction") }}
         </button>
       </div>
@@ -445,10 +447,10 @@
             <strong>{{ item.name }}</strong>
             <small>{{ item.source }}</small>
           </div>
-          <span role="cell">{{ item.type }}</span>
-          <span role="cell">{{ item.status }}</span>
+          <span role="cell">{{ t(`panel.backup.kind.${item.type}`) }}</span>
+          <span role="cell">{{ t(`panel.backup.status.${item.status}`) }}</span>
           <span class="entry-actions" role="cell">
-            <button class="secondary compact" v-bind="writeGate()" @click="restore(item.id)">
+            <button v-if="isAdmin" class="secondary compact" v-bind="writeGate(Boolean(fullRestore.restoringId.value))" @click="restore(item)">
               {{ t("panel.backup.restore") }}
             </button>
           </span>
@@ -470,9 +472,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { backupDatabase, backupSite, getBackups, restoreBackup, type BackupRecord } from "../api/backup";
+import { backupDatabase, backupSite, getBackups, type BackupRecord } from "../api/backup";
 import {
   compressPath,
   copyEntries,
@@ -493,6 +495,10 @@ import {
   type FileEntry,
   type FileWorkspace
 } from "../api/files";
+import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
+import { useNavigationGuard, allowNavigation } from "../composables/navigationGuard";
+import { useAuthStore } from "../stores/auth";
+import router from "../router";
 import { useSitesStore } from "../stores/sites";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { usePrompt } from "../components/PromptDialog.vue";
@@ -505,7 +511,11 @@ import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 import { formatBytes } from "../utils/bytes";
 import { formatDateTime } from "../utils/datetime";
 
+const props = defineProps<{ embedded?: boolean }>();
 const { t } = useI18n();
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
+const fullRestore = useBackupRestore();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
 // `locked`/`lockReason` yükleme için ayrıca gerekiyor: yükleme bir <label> içindeki dosya
@@ -522,6 +532,41 @@ const workspace = ref<FileWorkspace | null>(null);
 const loading = ref(false);
 const workspaceLoad = useSectionError();
 const fileContent = ref("");
+const savedContent = ref("");
+const saving = ref(false);
+const isDirty = computed(() => Boolean(workspace.value && !workspace.value.isDirectory) && fileContent.value !== savedContent.value);
+let workspaceRequest = 0;
+let disposed = false;
+useNavigationGuard(() => {
+  if (saving.value) return false;
+  if (!isDirty.value) return true;
+  return (async () => {
+  let proceed = false;
+  await confirm({
+    title: t("panel.files.unsaved"), message: t("panel.files.unsavedHint"), tone: "neutral",
+    impact: [workspace.value!.path],
+    cancelLabel: t("panel.files.stay"), confirmLabel: t("panel.files.save"),
+    alternativeLabel: t("panel.files.discard"),
+    alternativeAction: () => { fileContent.value = savedContent.value; proceed = true; },
+    action: async () => { proceed = await saveCurrentFile(); }
+  });
+  return proceed;
+  })();
+});
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (isDirty.value || saving.value) { event.preventDefault(); event.returnValue = ""; }
+}
+onMounted(() => window.addEventListener("beforeunload", beforeUnload));
+onBeforeUnmount(() => { disposed = true; workspaceRequest++; window.removeEventListener("beforeunload", beforeUnload); });
+async function changeSite(event: Event) {
+  const select = event.target as HTMLSelectElement;
+  const next = select.value;
+  select.value = selectedSiteName.value;
+  if (await allowNavigation()) {
+    sitesStore.selectSite(next);
+    await router.push({ query: { section: "files", site: next } });
+  }
+}
 const backups = ref<BackupRecord[]>([]);
 // Yedek listesi BİR KEZ başarıyla okundu mu. `refreshBackups` hata alınca listeyi BİLEREK
 // boşaltır (bayat liste göstermemek için) — o boşluk "yedek yok" diye okunuyordu; aynı ekranın
@@ -673,10 +718,16 @@ onMounted(async () => {
     showNotice(resolveApiMessage(error), true);
   }
 
+  const requestedSite = router.currentRoute.value.query.site;
+  if (!props.embedded && typeof requestedSite === "string" && sitesStore.sites.some((site) => site.name === requestedSite)) sitesStore.selectSite(requestedSite);
   await Promise.all([
     selectedSiteName.value ? refresh(siteRootPath.value) : Promise.resolve(),
     refreshBackups()
   ]);
+});
+
+watch(() => router.currentRoute.value.query.site, (site) => {
+  if (!props.embedded && router.currentRoute.value.query.section === "files" && typeof site === "string" && sitesStore.sites.some((item) => item.name === site)) sitesStore.selectSite(site);
 });
 
 watch(selectedSiteName, async (siteName, previousSiteName) => {
@@ -695,7 +746,10 @@ watch(selectedSiteName, async (siteName, previousSiteName) => {
 });
 
 async function refresh(path = workspace.value?.path || siteRootPath.value) {
-  if (!selectedSiteName.value || !path.startsWith(siteRootPath.value)) {
+  if (disposed || !await allowNavigation()) return;
+  const request = ++workspaceRequest;
+  const site = selectedSiteName.value;
+  if (!selectedSiteName.value || !(path === siteRootPath.value || path.startsWith(`${siteRootPath.value}/`))) {
     workspace.value = null;
     workspaceLoad.clear();
     return;
@@ -711,22 +765,27 @@ async function refresh(path = workspace.value?.path || siteRootPath.value) {
   // kullanıcıya bayat bir sayıyı güncel diye göstermek olurdu.
   folderSizes.value = {};
   try {
-    workspace.value = await getFileWorkspace(path);
-    fileContent.value = workspace.value.content || "";
+    const result = await getFileWorkspace(path);
+    if (disposed || request !== workspaceRequest || site !== selectedSiteName.value) return;
+    workspace.value = result;
+    fileContent.value = result.content || "";
+    savedContent.value = fileContent.value;
     workspaceLoad.clear();
     // Artık listede olmayan yollar seçili kalmasın (silme/klasör değişimi sonrası).
     selection.keepOnly(workspace.value.entries.map((entry) => entry.path));
   } catch (error) {
+    if (disposed || request !== workspaceRequest || site !== selectedSiteName.value) return;
     // Hata hem şeritte hem listenin yerinde görünür: boş bir tablo "klasör boş" sanılmasın.
     workspaceLoad.capture(error);
     showNotice(resolveApiMessage(error), true);
   } finally {
-    loading.value = false;
+    if (request === workspaceRequest) loading.value = false;
   }
 }
 
 async function openPath(path: string) {
-  if (!siteRootPath.value || !path.startsWith(siteRootPath.value)) {
+  if (!await allowNavigation()) return;
+  if (!siteRootPath.value || !(path === siteRootPath.value || path.startsWith(`${siteRootPath.value}/`))) {
     return;
   }
 
@@ -1302,18 +1361,20 @@ async function removeSelected() {
   showNotice(bulk.deleteSummary(outcome), outcome.failures.length > 0);
 }
 
-async function saveCurrentFile() {
-  if (!workspace.value) {
-    return;
-  }
-
+async function saveCurrentFile(): Promise<boolean> {
+  if (!workspace.value || workspace.value.isDirectory || saving.value || locked.value) return false;
+  const path = workspace.value.path;
+  const content = fileContent.value;
+  saving.value = true;
   try {
-    await saveFile(workspace.value.path, fileContent.value);
-    // "Kaydedildi" ancak istek GERÇEKTEN başarılı dönünce yazılır.
+    await saveFile(path, content);
+    if (workspace.value?.path === path) savedContent.value = content;
     showNotice(t("panel.files.saved"), false);
+    return true;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
-  }
+    return false;
+  } finally { saving.value = false; }
 }
 
 async function refreshBackups() {
@@ -1350,14 +1411,11 @@ async function createDatabaseBackup() {
   }
 }
 
-async function restore(backupId: string) {
-  try {
-    await restoreBackup(backupId, "");
-    await refreshBackups();
-    showNotice(t("panel.backup.restored"), false);
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
-  }
+async function restore(record: BackupRecord) {
+  await fullRestore.restore(record, (result) => {
+    const report = restoreResult(result, t);
+    showNotice(report.message, report.failed);
+  }, (error) => showNotice(error instanceof Error && !('isAxiosError' in error) ? error.message : resolveApiMessage(error), true), refreshBackups);
 }
 
 </script>
@@ -1684,7 +1742,7 @@ async function restore(backupId: string) {
   min-height: 30px;
   padding: var(--sp-4) var(--sp-10);
   border-radius: var(--radius-sm);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-1) 92%, white) 0%, var(--accent-1) 55%, var(--accent-2) 100%);
+  background: linear-gradient(180deg, var(--accent-fill-top), var(--accent-fill-bottom));
   color: var(--on-accent);
   font-weight: 600;
   text-decoration: none;
@@ -1717,7 +1775,7 @@ async function restore(backupId: string) {
 }
 
 .upload-button:focus-within {
-  outline: 2px solid color-mix(in srgb, var(--accent-1) 70%, transparent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1852,4 +1910,5 @@ async function restore(backupId: string) {
     align-items: flex-start;
   }
 }
+.editor-actions { position: sticky; bottom: 0; z-index: 2; padding: 12px 0; background: var(--surface-1); border-top: 1px solid var(--panel-border); flex-wrap: wrap; }
 </style>

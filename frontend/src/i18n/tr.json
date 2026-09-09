@@ -1576,7 +1576,7 @@
   "panel.dns.tlsaSelector": "Seçici",
   "panel.dns.tlsaMatching": "Eşleşme",
   "panel.dns.tlsaCertificate": "Sertifika (hex)",
-  "panel.confirm.impactTitle": "Silinecekler",
+  "panel.confirm.impactTitle": "Etkilenecek öğeler",
   "panel.confirm.irreversible": "Bu işlem geri alınamaz.",
   "panel.confirm.typeToConfirm": "Devam etmek için '{name}' yazın.",
   "panel.confirm.badgeDanger": "Yüksek riskli",
@@ -5227,5 +5227,14 @@
   "panel.migration.trust.reasons.revoked": "sertifika iptal edilmiş",
   "panel.migration.trust.reasons.revocation_unknown": "iptal durumu sorgulanamadı",
   "panel.migration.trust.reasons.no_certificate": "sunucu sertifika sunmadı",
-  "panel.migration.trust.reasons.unknown_host_key": "host key daha önce onaylanmamış"
+  "panel.migration.trust.reasons.unknown_host_key": "host key daha önce onaylanmamış",
+  "panel.files.unsaved": "Kaydedilmemiş değişiklikler",
+  "panel.files.unsavedHint": "Bu dosyada yaptığınız değişiklikleri kaydedebilir, bırakabilir veya düzenlemeye devam edebilirsiniz.",
+  "panel.files.stay": "Sayfada kal",
+  "panel.files.discard": "Değişiklikleri bırak",
+  "panel.backup.manageScoped": "Yedekleri yönet ve dosya seçerek geri yükle",
+  "panel.setup.progress.reconnecting": "Kurulum durumuna ulaşılamıyor. Yeniden bağlanılıyor…",
+  "panel.setup.progress.connectionLost": "Bağlantı kurulamadı. Sunucudaki kurulum devam ediyor olabilir; son bilinen durum aşağıda korunuyor.",
+  "panel.setup.progress.lastChecked": "Son başarılı kontrol: {time}",
+  "panel.setup.progress.retryConnection": "Yeniden bağlan"
 }

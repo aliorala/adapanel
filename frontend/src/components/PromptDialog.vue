@@ -120,6 +120,13 @@ function ask(options: PromptOptions): Promise<string | null> {
  *   const parola = await prompt({ title: "Yeni parola", password: true, minLength: 12 });
  *   if (!parola) return; // iptal
  */
+export function closePromptDialog() {
+  promptState.open = false;
+  promptState.options = null;
+  pending?.(null);
+  pending = null;
+}
+
 export function usePrompt() {
   return { prompt: ask };
 }
@@ -162,6 +169,7 @@ watch(
       return;
     }
 
+    value.value = "";
     document.body.style.overflow = "";
     lastFocused?.focus();
     lastFocused = null;

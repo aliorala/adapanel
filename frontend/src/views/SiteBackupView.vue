@@ -1,5 +1,7 @@
 <template>
   <section class="panel backup-view">
+  <button v-if="!isAdmin" class="secondary compact" @click="router.push({ query: { section: 'backup' } })">{{ t("panel.backup.manageScoped") }}</button>
+
     <!-- Ortak `.section-head` devralindi: kapsamli `.bk-header` kopyasi ayni isi yapiyordu ama
          `align-items: center` ile. Baslik blogu UC satir (ustbaslik + baslik + site adi),
          yanindaki dugme tek satir; ortalama dugmeyi uc satirin ortasina koyuyor ve goz onu
@@ -252,7 +254,7 @@
                   {{ downloadingId === record.id ? t("panel.backup.downloading") : t("panel.backup.download") }}
                 </button>
                 <span class="action-divider" aria-hidden="true"></span>
-                <button class="danger compact" v-bind="writeGate(restoringId === record.id)" @click="restore(record)">
+                <button class="danger compact" v-bind="writeGate(restoringId === record.id)" v-if="isAdmin" @click="restore(record)">
                   {{ restoringId === record.id ? t("panel.backup.restoring") : t("panel.backup.restore") }}
                 </button>
               </div>
@@ -273,18 +275,19 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
+import { useBackupRestore, restoreResult } from "../composables/useBackupRestore";
+import { useAuthStore } from "../stores/auth";
+import router from "../router";
 import { useSitesStore } from "../stores/sites";
 import {
   backupSite,
   downloadBackup,
   getBackupRunningJobs,
   getBackups,
-  restoreBackup,
   type BackupRecord
 } from "../api/backup";
 import { getDatabaseEngines, getDatabaseWorkspace } from "../api/databases";
 import { useConfirm } from "../components/ConfirmDialog.vue";
-import { usePrompt } from "../components/PromptDialog.vue";
 import RunningTaskBanner from "../components/RunningTaskBanner.vue";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { compareNewestFirst, localDayKey, useDayGroups } from "../composables/useDayGroups";
@@ -298,7 +301,6 @@ import { formatDateTime } from "../utils/datetime";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
-const { prompt } = usePrompt();
 // Askidaki abonelikte YAZMA dugmeleri basilmadan once pasiflesir ve sebebini soyler
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri (yenile, indir) kapiya girmez.
 const { writeGate } = useSubscriptionGate();
@@ -310,7 +312,10 @@ const loading = ref(false);
 const listLoaded = ref(false);
 const busy = ref(false);
 const downloadingId = ref("");
-const restoringId = ref("");
+const fullRestore = useBackupRestore();
+const restoringId = fullRestore.restoringId;
+const authStore = useAuthStore();
+const isAdmin = computed(() => authStore.session?.user?.role === "Administrator");
 // TEK KAYNAK: bu ekran ham `extractApiMessage` basıyordu (4 nokta) — kullanıcı çevrilmemiş
 // anahtar görüyordu.
 const { notice, noticeError, showNotice, resolveApiMessage } = useNotice();
@@ -544,70 +549,10 @@ async function download(record: BackupRecord) {
 }
 
 async function restore(record: BackupRecord) {
-  // Şifreli yedekte parola ÖNCE sorulur: yüksek riskli onayı geçtikten sonra "parola lazım"
-  // demek, kullanıcıya site adını ikinci kez yazdırmak olurdu.
-  let password = "";
-  if (record.encrypted) {
-    const entered = await prompt({
-      title: t("panel.backup.restorePasswordTitle"),
-      message: t("panel.backup.encryptionLossWarning"),
-      label: t("panel.backup.encryptionPassword"),
-      hint: t("panel.backup.restorePasswordHint"),
-      password: true,
-      allowEmpty: true,
-      confirmLabel: t("panel.backup.restore")
-    });
-    if (entered === null) {
-      return;
-    }
-
-    password = entered;
-  }
-
-  // Canlı siteyi geri yükleme yıkıcıdır — YÜKSEK RİSKLİ onay: üzerine yazılacak site adı yazılmadan devam edilemez.
-  const target = record.source || siteName.value;
-  const impact = [
-    `${t("panel.files.siteLabel")}: ${target}`,
-    `${t("panel.backup.name")}: ${record.name}`,
-    `${t("panel.backup.size")}: ${formatSize(record.size)}`,
-    `${t("panel.backup.createdAt")}: ${formatDate(record.createdAtUtc)}`
-  ];
-
-  await confirm({
-    title: t("panel.confirm.restoreBackupTitle", { name: record.name }),
-    message: t("panel.backup.restoreConfirm"),
-    impact,
-    requireText: target,
-    confirmLabel: t("panel.backup.restore"),
-    busyLabel: t("panel.backup.restoring"),
-    action: async () => {
-      restoringId.value = record.id;
-      try {
-        const restored = await restoreBackup(record.id, "", password);
-        // Yarım kalan adımlar SÖYLENİR: koşulsuz "geri yüklendi" demek, veritabanı dönmemişken
-        // kullanıcıya "tamam" dedirtirdi. Üzerine yazılan içeriğin taşındığı klasör de yazılır.
-        const warnings = restored.warnings ?? [];
-        const lines = [warnings.length > 0 ? t("panel.backup.restoredWithErrors") : t("panel.backup.restored")];
-        if (warnings.length > 0) {
-          lines.push(`${t("panel.backup.restoreWarningsTitle")}:`);
-          for (const warning of warnings) {
-            const translated = t(warning.messageKey);
-            const message = translated === warning.messageKey ? warning.messageKey : translated;
-            lines.push(warning.target ? `${warning.target}: ${message}` : message);
-          }
-        }
-        if (restored.preservedPath) {
-          lines.push(t("panel.backup.preservedPath", { path: restored.preservedPath }));
-        }
-        showNotice(lines.join("\n"), warnings.length > 0);
-      } catch (error) {
-        showNotice(resolveApiMessage(error), true);
-      } finally {
-        restoringId.value = "";
-        password = "";
-      }
-    },
-  });
+  await fullRestore.restore(record, (result) => {
+    const report = restoreResult(result, t);
+    showNotice(report.message, report.failed);
+  }, (error) => showNotice(error instanceof Error && !("isAxiosError" in error) ? error.message : resolveApiMessage(error), true), refresh);
 }
 
 /** Bayt bicimi panelin geri kalaniyla AYNI (bkz. utils/bytes.ts); ekran kendi bicimini uydurmaz. */

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 
-import { setReadOnlyMode } from "../api/client";
+import { getSessionEpoch, setReadOnlyMode } from "../api/client";
 import { getMySubscription, type SubscriptionUsage } from "../api/subscriptions";
 
 /**
@@ -31,14 +31,18 @@ export const useSubscriptionStore = defineStore("subscription", {
      * yöneticide anlamlı bir kayıt döndürmez.
      */
     async fetchMine() {
+      const epoch = getSessionEpoch();
       try {
         this.usage = await getMySubscription();
       } catch {
+        if (epoch !== getSessionEpoch()) return;
         // Abonelik kaydı yoksa/okunamadıysa kısıt UYDURMAYIZ: sunucu son sözü zaten söylüyor.
         this.usage = null;
       } finally {
-        this.loaded = true;
-        this.applyReadOnly();
+        if (epoch === getSessionEpoch()) {
+          this.loaded = true;
+          this.applyReadOnly();
+        }
       }
     },
     /** Oturum kapanınca: bayrak bir sonraki kullanıcıya sızmamalı. */

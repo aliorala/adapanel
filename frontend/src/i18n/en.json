@@ -1576,7 +1576,7 @@
   "panel.dns.tlsaSelector": "Selector",
   "panel.dns.tlsaMatching": "Matching",
   "panel.dns.tlsaCertificate": "Certificate (hex)",
-  "panel.confirm.impactTitle": "What will be deleted",
+  "panel.confirm.impactTitle": "Affected items",
   "panel.confirm.irreversible": "This action cannot be undone.",
   "panel.confirm.typeToConfirm": "Type '{name}' to continue.",
   "panel.confirm.badgeDanger": "High risk",
@@ -5227,5 +5227,14 @@
   "panel.migration.trust.reasons.revoked": "certificate has been revoked",
   "panel.migration.trust.reasons.revocation_unknown": "revocation status could not be checked",
   "panel.migration.trust.reasons.no_certificate": "the server presented no certificate",
-  "panel.migration.trust.reasons.unknown_host_key": "host key has not been approved before"
+  "panel.migration.trust.reasons.unknown_host_key": "host key has not been approved before",
+  "panel.files.unsaved": "Unsaved changes",
+  "panel.files.unsavedHint": "Save your changes, discard them, or keep editing this file.",
+  "panel.files.stay": "Stay on page",
+  "panel.files.discard": "Discard changes",
+  "panel.backup.manageScoped": "Manage backups and restore selected files",
+  "panel.setup.progress.reconnecting": "Unable to read installation status. Reconnecting…",
+  "panel.setup.progress.connectionLost": "Connection lost. Installation may still be running on the server; the last known status is preserved below.",
+  "panel.setup.progress.lastChecked": "Last successful check: {time}",
+  "panel.setup.progress.retryConnection": "Reconnect"
 }

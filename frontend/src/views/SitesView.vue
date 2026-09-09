@@ -395,7 +395,7 @@ const quickTools = computed(() => [
   ...(isAdmin.value ? [{ id: "webdb", label: t("panel.sites.tools.domaindb") }] : []),
   { id: "ftp", label: t("panel.sites.tools.ftp") },
   { id: "dns", label: t("panel.sites.tools.dns") }
-]);
+].filter((tool) => isAdmin.value || authStore.session?.user?.role === "Reseller" || ["files", "mail"].includes(tool.id)));
 
 function openTool(siteName: string, tool: string) {
   sitesStore.selectSite(siteName);

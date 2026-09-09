@@ -1,15 +1,10 @@
-import { createRouter, createWebHistory } from "vue-router";
-import SetupWizardView from "../views/SetupWizardView.vue";
+import { createRouter, createWebHashHistory } from "vue-router";
+import { allowNavigation } from "../composables/navigationGuard";
 
+// Hash history preserves the server's secret entry pathname on refresh and deep links.
 const router = createRouter({
-  history: createWebHistory(),
-  routes: [
-    {
-      path: "/:pathMatch(.*)*",
-      name: "panel",
-      component: SetupWizardView
-    }
-  ]
+  history: createWebHashHistory(),
+  routes: [{ path: "/:pathMatch(.*)*", name: "panel", component: { render: () => null } }]
 });
-
+router.beforeEach(() => allowNavigation());
 export default router;

@@ -47,6 +47,9 @@ internal static class ScriptTestHost
 
     /// <summary>PowerShell 5.1'i gercekten calistirir; cikis kodunu ve ciktiyi dondurur.</summary>
     internal static ScriptResult Run(string betik, int zamanAsimiMs = 120_000)
+        => RunAsync(betik, zamanAsimiMs).GetAwaiter().GetResult();
+
+    private static async Task<ScriptResult> RunAsync(string betik, int zamanAsimiMs)
     {
         var yol = Path.Combine(Path.GetTempPath(), $"ada-betik-{Guid.NewGuid():N}.ps1");
         File.WriteAllText(yol, "$ErrorActionPreference = 'Stop'\n" + betik, new UTF8Encoding(true));
@@ -62,15 +65,19 @@ internal static class ScriptTestHost
                 CreateNoWindow = true
             })!;
 
-            var cikti = surec.StandardOutput.ReadToEnd();
-            var hata = surec.StandardError.ReadToEnd();
-            if (!surec.WaitForExit(zamanAsimiMs))
+            var cikti = surec.StandardOutput.ReadToEndAsync();
+            var hata = surec.StandardError.ReadToEndAsync();
+            try
+            {
+                await Task.WhenAll(cikti, hata, surec.WaitForExitAsync()).WaitAsync(TimeSpan.FromMilliseconds(zamanAsimiMs)).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
             {
                 try { surec.Kill(entireProcessTree: true); } catch { /* en iyi caba */ }
                 throw new TimeoutException("PowerShell betigi zaman asimina ugradi.");
             }
 
-            return new ScriptResult(surec.ExitCode, cikti, hata);
+            return new ScriptResult(surec.ExitCode, await cikti.ConfigureAwait(false), await hata.ConfigureAwait(false));
         }
         finally
         {

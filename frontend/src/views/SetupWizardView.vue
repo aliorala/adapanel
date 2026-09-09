@@ -69,6 +69,11 @@
         <!-- Sonuç ne olursa olsun kullanıcının ÖNÜ AÇIK: kurulum yarım kaldığında panel yine
              kurulmuştur (yönetici hesabı oluşturuldu), eksik bileşenler Mağaza'dan kurulabilir.
              Yönlendirme artık otomatik değil çünkü hata mesajının okunması gerekiyor. -->
+        <div v-if="installConnectionFailures" class="notice error" role="alert">
+          <p>{{ t(installPolling ? "panel.setup.progress.reconnecting" : "panel.setup.progress.connectionLost") }}</p>
+          <p v-if="installLastChecked" class="meta">{{ t("panel.setup.progress.lastChecked", { time: installLastChecked }) }}</p>
+          <button v-if="!installPolling" type="button" class="secondary" @click="pollInstallProgress">{{ t("panel.setup.progress.retryConnection") }}</button>
+        </div>
         <div v-if="installHalted" class="row-actions">
           <button type="button" class="form-submit" @click="continueAfterInstall">
             {{ t("panel.setup.progress.continue") }}
@@ -623,7 +628,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { abortableDelay, pollProgress } from "../utils/progressPolling";
+import { closeConfirmDialog } from "../components/ConfirmDialog.vue";
+import { closePromptDialog } from "../components/PromptDialog.vue";
+import router from "../router";
+import { allowNavigation } from "../composables/navigationGuard";
+import { setPanelLocale } from "../i18n";
+import { resetAllStores } from "../stores/resetAll";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
@@ -750,6 +762,28 @@ const bannerError = ref(false);
 const requiresTwoFactor = ref(false);
 const settingsTab = ref<SettingsTab>("general");
 const activeSection = ref("home");
+let navigationReady = false;
+function restorePanelLocation() {
+  const query = router.currentRoute.value.query;
+  const section = typeof query.section === "string" ? query.section : activeSection.value;
+  activeSection.value = dashboardSections.value.some((item) => item.id === section) ? section : "home";
+  if (activeSection.value === "settings") {
+    const tabs = isAdmin.value ? ["general", "branding", "security", "errorReports", "notifications", "updates", "license"] : ["branding"];
+    settingsTab.value = (tabs.includes(String(query.tab)) ? query.tab : tabs[0]) as SettingsTab;
+    if (settingsTab.value === "branding" && !brandingLoaded.value) void loadBrandingSettings();
+  }
+  navigationReady = true;
+  if (query.section !== activeSection.value) void router.replace({ query: { section: activeSection.value } });
+}
+watch(() => router.currentRoute.value, () => {
+  if (navigationReady && mode.value === "dashboard") restorePanelLocation();
+});
+watch([activeSection, settingsTab], ([section, tab]) => {
+  if (!navigationReady || mode.value !== "dashboard") return;
+  const query = router.currentRoute.value.query;
+  if (query.section !== section) void router.push({ query: { section, ...(section === "settings" ? { tab } : {}) } });
+  else if (section === "settings" && query.tab !== tab) void router.push({ query: { ...query, tab } });
+});
 // Ana sayfa "yeni sürüm" bandı için panel güncelleme durumu (yalnızca admin doldurur).
 const panelUpdate = ref<UpdateStatus | null>(null);
 // Denetim yapılamadıysa bunu SÖYLERİZ; sessizlik "güncel" gibi okunuyordu.
@@ -808,6 +842,7 @@ const panelPreferences = reactive<PanelPreferences>({
 // Tercihler sunucudan gelmeden yukarıdaki varsayılanlar gerçek ayar sanılıyordu (anahtarlar
 // yanlış konumda görünüp yanlışlıkla üzerine kaydedilebiliyordu).
 const panelPreferencesLoaded = ref(false);
+const initialPanelPreferences = { ...panelPreferences };
 
 /*
  * ÖZEL MARKA (white-label).
@@ -1068,6 +1103,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  installPollController?.abort();
   stopRefreshLoop();
   setSessionExpiredHandler(null);
 });
@@ -1086,6 +1122,7 @@ function handleSessionExpired() {
   }
 
   stopRefreshLoop();
+  navigationReady = false;
   mode.value = "auth";
   activeSection.value = "home";
   attentionOpen.value = false;
@@ -1093,7 +1130,19 @@ function handleSessionExpired() {
   requiresTwoFactor.value = false;
   // Askı bayrağı ve marka bir sonraki kullanıcıya sızmamalı (çıkış akışıyla aynı temizlik).
   subscriptionStore.reset();
-  authStore.session = null;
+  closeConfirmDialog();
+  closePromptDialog();
+  resetAllStores();
+  void router.replace({ query: {} });
+  panelPreferencesLoaded.value = false;
+  brandingLoaded.value = false;
+  Object.assign(panelPreferences, initialPanelPreferences);
+  brandingForm.value = emptyBranding();
+  applyBranding(emptyBranding());
+  securityForm.allowedIpAddressesText = "";
+  siteOpenRequest.value = null;
+  mailDomainFromSearch.value = "";
+  void loadBranding();
   showBanner(t("auth.unauthorized"), true);
 }
 
@@ -1102,7 +1151,7 @@ async function initializeView() {
     const status = await setupStore.fetchStatus();
     setupForm.secureEntryPath = status.secureEntryPath ? status.secureEntryPath.replace("/", "") : "panel";
     setupForm.preferredLanguage = status.defaultLanguage.startsWith("en") ? "en" : "tr";
-    i18n.locale.value = setupForm.preferredLanguage;
+    await setPanelLocale(setupForm.preferredLanguage);
     setupForm.preferredHttpsPort = status.preferredHttpsPort;
 
     if (!status.isInitialized) {
@@ -1190,9 +1239,10 @@ async function restoreSession() {
     return;
   }
 
+  restorePanelLocation();
   mode.value = "dashboard";
-  activeSection.value = "home";
   await loadDashboardData();
+  restorePanelLocation();
   startRefreshLoop();
 }
 
@@ -1251,29 +1301,33 @@ function continueAfterInstall() {
   }
 }
 
+const installConnectionFailures = ref(0);
+const installLastChecked = ref("");
+const installPolling = ref(false);
+let installPollController: AbortController | null = null;
 async function pollInstallProgress() {
-  while (true) {
-    try {
-      installProgress.value = await setupStore.fetchProgress();
-    } catch {
-      // Geçici hata (yeniden başlatma vb.); kısa bekleyip yeniden dene.
-    }
-
-    if (installProgress.value && (installProgress.value.completed || installProgress.value.failed)) {
-      break;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (installPolling.value) return;
+  const controller = new AbortController();
+  installPollController = controller;
+  installPolling.value = true;
+  installConnectionFailures.value = 0;
+  try {
+    const result = await pollProgress({
+      signal: controller.signal,
+      fetch: () => setupStore.fetchProgress(controller.signal),
+      receive: (progress) => { installProgress.value = progress; installLastChecked.value = new Date().toLocaleTimeString(); },
+      complete: (progress) => progress.completed || progress.failed,
+      connection: (failures) => { installConnectionFailures.value = failures; }
+    });
+    if (result !== "complete" || installHalted.value) return;
+    await abortableDelay(1200, controller.signal);
+    if (!controller.signal.aborted) continueAfterInstall();
+  } catch (error) {
+    if (!controller.signal.aborted) showBanner(resolveApiMessage(error), true);
+  } finally {
+    installPolling.value = false;
+    if (installPollController === controller) installPollController = null;
   }
-
-  // Sonuçta bir ✕ varsa ekran KULLANICIYI BEKLER (bkz. installHalted); yoksa kısa bir
-  // "tamamlandı" anı gösterip girişe geçer.
-  if (installHalted.value) {
-    return;
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-  continueAfterInstall();
 }
 
 function setupStepLabel(name: string): string {
@@ -1293,14 +1347,15 @@ async function submitLogin() {
     requiresTwoFactor.value = false;
     loginForm.password = "";
     loginForm.twoFactorCode = "";
+    restorePanelLocation();
     mode.value = "dashboard";
-    activeSection.value = "home";
     // Giriş yapan kişi bir bayinin müşterisiyse artık O BAYİNİN markasını görmeli; giriş
     // ekranındaki sunucu markası panelin içine taşınmamalı.
     void loadBranding();
     // "Giriş başarılı" yalnız ana sayfada bir kez görünüp ~4 sn sonra kaybolur.
     showBanner(t("panel.auth.loginSuccess"), false, 4000);
     await loadDashboardData();
+    restorePanelLocation();
     startRefreshLoop();
     // Girişten hemen sonra da "yeni sürüm" bandı görünsün (mount'taki kontrol login öncesiydi).
     void loadPanelUpdate();
@@ -1310,11 +1365,14 @@ async function submitLogin() {
 }
 
 async function logout() {
+  if (!await allowNavigation()) return;
   try {
     await authStore.logout();
     stopRefreshLoop();
+    navigationReady = false;
     mode.value = "auth";
     activeSection.value = "home";
+    await router.replace({ query: {} });
     attentionOpen.value = false;
     attentionSummary.value = null;
     requiresTwoFactor.value = false;
@@ -1323,6 +1381,13 @@ async function logout() {
     // MARKA DA SIZMAMALI: çıkan kullanıcı bir bayinin müşterisiyse, o bayinin logosu/adı bir
     // sonraki kişinin giriş ekranında asılı kalırdı. Yeniden çözülünce sunucu markasına döner.
     brandingLoaded.value = false;
+    panelPreferencesLoaded.value = false;
+    Object.assign(panelPreferences, initialPanelPreferences);
+    brandingForm.value = emptyBranding();
+    applyBranding(emptyBranding());
+    securityForm.allowedIpAddressesText = "";
+    siteOpenRequest.value = null;
+    mailDomainFromSearch.value = "";
     void loadBranding();
     showBanner(t("panel.auth.logoutSuccess"), false);
   } catch (error) {
@@ -1350,7 +1415,7 @@ async function loadDashboardData() {
       subUserAllowedSections.value.some((section) => section.toLowerCase() === "sites");
     if (sitesAllowed) {
       await Promise.allSettled([sitesStore.fetchSites()]);
-      if (activeSection.value === "home" && sitesStore.sites.length > 0) {
+      if (activeSection.value === "home" && !router.currentRoute.value.query.section && sitesStore.sites.length > 0) {
         activeSection.value = "sites";
       }
     }
@@ -1373,10 +1438,10 @@ async function loadDashboardData() {
     authStore.fetchUsers(),
     authStore.fetchAuditLogs(),
     softwareStore.fetchCatalog(),
-    getPanelPreferences().then((preferences) => {
+    getPanelPreferences().then(async (preferences) => {
       Object.assign(panelPreferences, preferences);
       panelPreferencesLoaded.value = true;
-      i18n.locale.value = preferences.defaultLanguage;
+      await setPanelLocale(preferences.defaultLanguage);
       applyAppearance(preferences);
     })
   ]);
@@ -1418,7 +1483,7 @@ async function savePanelPreferences() {
   try {
     const updated = await updatePanelPreferences({ ...panelPreferences });
     Object.assign(panelPreferences, updated);
-    i18n.locale.value = updated.defaultLanguage;
+    await setPanelLocale(updated.defaultLanguage);
     applyAppearance(updated);
     setupForm.preferredHttpsPort = updated.preferredHttpsPort;
     showBanner(t("panel.settings.saved"), false);
@@ -1585,15 +1650,15 @@ const siteOpenRequest = ref<{ siteName: string; seq: number } | null>(null);
 const mailDomainFromSearch = ref("");
 let siteOpenSeq = 0;
 
-function openSiteFromSearch(siteName: string) {
-  sitesStore.selectSite(siteName);
-  siteOpenSeq += 1;
-  siteOpenRequest.value = { siteName, seq: siteOpenSeq };
-  activeSection.value = "sites";
+async function openSiteFromSearch(siteName: string) {
+  if (!await allowNavigation()) return;
+  siteOpenRequest.value = null;
+  await router.push({ query: { section: "sites", site: siteName, tab: "pano" } });
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
-function openMailDomainFromSearch(domain: string) {
+async function openMailDomainFromSearch(domain: string) {
+  if (!await allowNavigation()) return;
   // MailView seçili alan adını YALNIZ kurulum anında okur (`selectedDomain` ref'i props.domain
   // ile başlatılır). Bu yüzden `:key` ile yeniden kurulur: zaten Posta bölümündeyken başka bir
   // alan adı aramak aksi halde hiçbir şey yapmazdı.
@@ -1602,7 +1667,8 @@ function openMailDomainFromSearch(domain: string) {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
-function handleNavigation(sectionId: string) {
+async function handleNavigation(sectionId: string) {
+  if (sectionId !== "attention" && !await allowNavigation()) return;
   if (sectionId === "exit") {
     void logout();
     return;
@@ -1622,6 +1688,7 @@ function handleNavigation(sectionId: string) {
     return;
   }
 
+  siteOpenRequest.value = null;
   // Dikkat maddelerinin mantıksal bölümleri ("dns" → Web Siteleri, "health" → Sunucu Araçları).
   activeSection.value = ATTENTION_SECTION_ALIASES[sectionId] ?? sectionId;
   // Bayide "Ayarlar"ın tek sekmesi MARKA'dır; varsayılan sekme ("general") yönetici içindir ve

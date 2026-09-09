@@ -7,6 +7,8 @@ type ApiEnvelope<T> = {
   code: number;
 };
 
+let sessionEpoch = 0;
+const requestEpochs = new WeakMap<object, number>();
 let csrfToken = "";
 let csrfPromise: Promise<string> | null = null;
 
@@ -33,6 +35,7 @@ async function fetchCsrfToken(force = false): Promise<string> {
     return csrfPromise;
   }
 
+  const epoch = sessionEpoch;
   csrfPromise = (async () => {
     try {
       const headers: Record<string, string> = {};
@@ -48,14 +51,15 @@ async function fetchCsrfToken(force = false): Promise<string> {
       });
 
       const payload = (await response.json()) as ApiEnvelope<{ requestToken: string }>;
+      if (epoch !== sessionEpoch) return "";
       csrfToken = payload?.data?.requestToken ?? "";
       return csrfToken;
     } catch {
       // Ağ hatası ("Failed to fetch") / boş yanıt → ÇÖKME yerine boş token (çağıran tarafta temiz hata).
-      csrfToken = "";
-      return csrfToken;
+      if (epoch === sessionEpoch) csrfToken = "";
+      return "";
     } finally {
-      csrfPromise = null;
+      if (epoch === sessionEpoch) csrfPromise = null;
     }
   })();
 
@@ -63,7 +67,21 @@ async function fetchCsrfToken(force = false): Promise<string> {
 }
 
 export function clearCsrfToken(): void {
+  csrfPromise = null;
   csrfToken = "";
+}
+
+export function getSessionEpoch(): number { return sessionEpoch; }
+
+export function invalidateSessionRequests(): void {
+  sessionEpoch++;
+  clearCsrfToken();
+  setReadOnlyMode("");
+}
+
+function isStale(config?: object): boolean {
+  const epoch = config && requestEpochs.get(config);
+  return epoch !== undefined && epoch !== sessionEpoch;
 }
 
 // Manuel fetch (ör. SSE göç akışı) için mutasyon başlıklarını üretir — axios interceptor'ı ile AYNI kuralları
@@ -141,6 +159,7 @@ export const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  requestEpochs.set(config, sessionEpoch);
   const headers = config.headers as Record<string, string>;
   const secureEntryPath = resolveSecureEntryPath();
 
@@ -158,6 +177,7 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
     headers["X-CSRF-TOKEN"] = token;
   }
 
+  if (isStale(config)) throw new axios.CanceledError("Session changed");
   return config;
 });
 
@@ -182,8 +202,12 @@ export function setSessionExpiredHandler(handler: SessionExpiredHandler | null):
 }
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (isStale(response.config)) throw new axios.CanceledError("Session changed");
+    return response;
+  },
   (error: AxiosError) => {
+    if (isStale(error.config)) return Promise.reject(new axios.CanceledError("Session changed"));
     /*
      * `/auth/*` DIŞARIDA: bu yolların 401'i "oturum düştü" DEĞİLDİR.
      * - `/auth/login` → parola yanlış (kullanıcı zaten giriş ekranında),

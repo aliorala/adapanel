@@ -47,6 +47,9 @@
           <button ref="cancelEl" type="button" class="secondary" :disabled="state.busy" @click="dismiss">
             {{ state.options.cancelLabel || t("panel.common.cancel") }}
           </button>
+          <button v-if="state.options.alternativeLabel" ref="alternativeEl" type="button" class="secondary" :disabled="state.busy" @click="alternative">
+            {{ state.options.alternativeLabel }}
+          </button>
           <button
             ref="confirmEl"
             type="button"
@@ -76,6 +79,8 @@ export interface ConfirmOptions {
   /** Varsayılan: panel.common.delete (danger) / panel.confirm.continue (neutral). */
   confirmLabel?: string;
   cancelLabel?: string;
+  alternativeLabel?: string;
+  alternativeAction?: () => void;
   /** İşlem sürerken düğmede görünen metin. Varsayılan: panel.confirm.deleting (danger) / working (neutral). */
   busyLabel?: string;
   /** "danger" (varsayılan) kırmızı onay düğmesi + "geri alınamaz" uyarısı gösterir. */
@@ -110,6 +115,8 @@ function ask(options: ConfirmOptions): Promise<boolean> {
   });
 }
 
+export function closeConfirmDialog() { settle(false); }
+
 function settle(value: boolean) {
   dialogState.open = false;
   dialogState.busy = false;
@@ -141,6 +148,7 @@ const state = dialogState;
 const dialogEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
 const cancelEl = ref<HTMLButtonElement | null>(null);
+const alternativeEl = ref<HTMLButtonElement | null>(null);
 const confirmEl = ref<HTMLButtonElement | null>(null);
 const typed = ref("");
 let lastFocused: HTMLElement | null = null;
@@ -205,6 +213,12 @@ function dismiss() {
   settle(false);
 }
 
+function alternative() {
+  if (state.busy) return;
+  state.options?.alternativeAction?.();
+  settle(false);
+}
+
 async function accept() {
   const options = state.options;
   if (!options || !canConfirm.value) {
@@ -221,12 +235,12 @@ async function accept() {
     // Çağıran ekran kendi notice'ını gösterir; burada yutulur ki promise reddi kaçmasın.
     console.error(error);
   } finally {
-    settle(true);
+    if (state.options === options) settle(true);
   }
 }
 
 function focusables(): HTMLElement[] {
-  const candidates: (HTMLInputElement | HTMLButtonElement | null)[] = [inputEl.value, cancelEl.value, confirmEl.value];
+  const candidates: (HTMLInputElement | HTMLButtonElement | null)[] = [inputEl.value, cancelEl.value, alternativeEl.value, confirmEl.value];
   const result: HTMLElement[] = [];
   for (const element of candidates) {
     if (element && !element.disabled) {
