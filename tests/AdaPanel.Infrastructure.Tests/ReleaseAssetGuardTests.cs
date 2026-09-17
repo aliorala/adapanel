@@ -96,6 +96,28 @@ public class ReleaseAssetGuardTests
             "paketsiz yayin denetimi, release olusturulduktan SONRA yapiliyor");
     }
 
+    [Fact]
+    public void Yeni_yayin_dosya_yuklenmeden_once_yalniz_taslak_olur()
+    {
+        var publisher = Path.Combine(KaynakKoku(), "scripts", "publish-github-release.ps1").Replace("'", "''");
+        var output = PowerShellCalistir($$"""
+            . '{{publisher}}'
+            function Invoke-AdaGitHubApi {
+                param($Uri, $Method = 'GET', $Token, $BodyObject)
+                if ($Uri -match '/tags/') { return $null }
+                if ($Method -eq 'POST') {
+                    $script:created = [pscustomobject]@{ id=42; body=$BodyObject.body; draft=$BodyObject.draft }
+                }
+                return $script:created
+            }
+            $info = [pscustomobject]@{tag_name='1.2.3';name='Test';body='Notes'}
+            $release = Publish-AdaGitHubRelease -RepoSlug 'example/test' -Token 'unused' -ReleaseInfo $info 6>$null
+            if ($release.draft -ne $true) { throw 'Empty release became public before upload' }
+            Write-Output 'DRAFT-OK'
+            """);
+        Assert.Equal("DRAFT-OK", output);
+    }
+
     private static string KararCalistir(string kurulumYolu, bool yuklemeyiAtla, int mevcutVarlik)
     {
         // Yol tek tirnak icinde gecirilir; PowerShell'de tek tirnakli dize genisletilmez.

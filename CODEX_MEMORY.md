@@ -1,5 +1,19 @@
 # AdaPanel Codex Memory
 
+## 2026-09-17 — Kapsamlı denetim, 0.8.41 yayını hazırlanıyor
+
+
+Kullanıcı düzeltmesi (17.09.2026): alioral.xyz alan adı kapandı. DNS/SSL uyarıları panel hatası sayılmayacak; alan adı yeniden etkinleştirilmeyecek ve DNS/SSL değiştirilmeyecek. Joker sertifika için webmail özelliği engellenmedi; kök alan adı üretimi düzeltildi.
+
+Kaynak commit: `3ede41a`. 49 altyapı modülü, 66 controller / 427 eylem, 60 Vue ekranı ve 840 kaynak dosyası envantere alındı. Ayrıntı, sınırlar ve modül listesi: [17 Eylül denetimi](docs/denetim-2026-09-17.md).
+
+- Dış komut iptal/timeout/stdin yönetimi, FTP hedef kökü sınırı, Node/Python/ters vekil junction yolları, site veritabanı ve SEO cevap sıralaması, 19 çeviri, UTC saatleri, görev olarak çalışan Stalwart sağlık durumu, terminal UTF-8/CLIXML, paket indirme süresi ve bağımlılıklar düzeltildi.
+- SDK 8.0.425 / paket .NET 8.0.31. Son tam koşu 5.310 arka uç testi; 74 ön yüz testi, tür kontrolü, üretim derlemesi, WHMCS ve paket kontrolleri geçti. npm/NuGet açık sayısı 0. 22 bileşen Passed / 3 büyük paket mevcut politikayla Skipped.
+- Sonradan canlıda webmailin durduğu bulundu: joker sertifikaya doğrudan `webmail.` ekleniyordu. Kök neden düzeltildi; `*.example.com` artık `webmail.example.com` üretir, joker desteği korunur. 34 ilgili test ayrıca geçti. IIS yedeği `AdaPanel-Webmail-20260917` alınıp tek geçersiz bağ kaldırıldı; webmail Started / AdaPanel-Webmail-OK, SSL yenilemesi 21:16:01 sunucu saatinde tamamlandı.
+- 0.8.40 GitHub dosya yüklemesi `Error saving asset` ile başarısız; boş yayın taslak yapıldı, canlıya kurulmadı. Son paket 0.8.41, 90.795.576 bayt, SHA256 `30B445EBDD6E66EC417924D8CCBC4DA8E40262F240E9383277780FC148F86F31`. Yayın/kurulum sonucu aşağıya ayrıca yazılacak.
+- Mevcut 3 site çalışıyor; 51 yedek kaydı, 17 Eylül 9 yeni uzak kopya. Günlük 03:00 / 5 gün saklama korunuyor. Yedekleme kalacak, şifreleme kullanıcı kararıyla kapalı; kompakt görünüm korunacak.
+- Harici epey botlarında hata/uzun çalışma, site robots/sitemap eksikleri ve 6 üçüncü taraf bileşen güncellemesi ayrı operasyonel bulgular. Canlı veri silme/geri yükleme/göç ve her düğmenin bütün olası yolları sınanmış sayılmaz. Kaynak/history/tag public GitHub'a ASLA push edilmeyecek; yalnız mevcut yayın betiğiyle kurulum dosyası.
+
 Son guncelleme: 2026-09-10
 
 Bu dosya, baska bir kullanici veya yeni bir Codex oturumu ayni klasorde devam ederken hizli devir notu olarak okunmalidir.

@@ -124,6 +124,8 @@ function Publish-AdaGitHubRelease {
         $result = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/$($existing.id)" -Method PATCH -Token $Token -BodyObject $payload
     } else {
         Write-Host "Yeni release olusturuluyor: $($ReleaseInfo.tag_name)"
+        # A failed/incomplete upload must not replace releases/latest with an empty release.
+        $payload.draft = $true
         $result = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases" -Method POST -Token $Token -BodyObject $payload
     }
 
@@ -251,6 +253,9 @@ if ($MyInvocation.InvocationName -ne '.') {
 
     if ($InstallerPath -and -not $SkipAssetUpload) {
         Add-AdaReleaseAsset -RepoSlug $RepoSlug -Release $release -Token $token -FilePath $InstallerPath | Out-Null
+        if ($release.draft) {
+            Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/$($release.id)" -Method PATCH -Token $token -BodyObject @{ draft = $false } | Out-Null
+        }
         if (-not $SkipVerify) {
             Test-AdaPublishedRelease -RepoSlug $RepoSlug -ExpectedTag $releaseInfo.tag_name -LocalInstallerPath $InstallerPath
         }
