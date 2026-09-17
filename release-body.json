@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.42",
-  "name": "0.8.42 — Boş yerel yedek klasörlerinin temizlenmesi",
-  "body": "- Yedek silme ve otomatik saklama süresi temizliğinde boş kalan yerel kaynak, kategori ve gün klasörleri kaldırılır.\n- Yedek kökü, dolu klasörler ve bilinmeyen klasör düzenleri korunur; klasör bağlantıları takip edilmez.\n- Yerel ve FTP temizliği aynı yedek klasörü düzenini kullanır. Saklama süresi hesabı değiştirilmedi."
+  "tag_name": "0.8.43",
+  "name": "0.8.43 — Otomatik yedekleme durum takibi",
+  "body": "- Elle veya zamanlamayla başlatılan otomatik yedekleme, işlem boyunca çalışan iş olarak izlenir.\n- Sayfaya dönüldüğünde otomasyon ve yedekleme ekranlarında devam eden iş görünür.\n- Aynı anda ikinci otomatik yedekleme isteği yeni bir turu kuyruğa almaz; sunucu yedeklemesiyle çakışan zamanlanmış iş sonraki turda tekrar denenir.\n- Tamamlanan, başarısız veya iptal edilen işlerin göstergesi temizlenir."
 }

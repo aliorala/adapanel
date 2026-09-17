@@ -151,6 +151,9 @@ type Translate = (key: string, named?: Record<string, unknown>) => string;
  * KENDİ başlığı gösterilir: uydurma bir etiket ya da boş bir şerit yerine, elde olan gerçek bilgi.
  */
 export function runningJobLabel(translate: Translate, job: { kind: string; title: string }) {
+  if (job.kind === "backup" && job.title === "automation") {
+    return translate("panel.automation.backupSection");
+  }
   const key = JOB_LABEL_KEYS[job.kind];
   return key ? translate(key, { title: job.title }) : job.title;
 }

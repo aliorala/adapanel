@@ -1,5 +1,13 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — Otomatik yedekleme takibi ve gerçek temizlik doğrulaması (0.8.43 hazırlanıyor)
+
+Canlı 0.8.42 üzerinde mevcut ayarlarla elle bir otomasyon turu çalıştırıldı: 18 Eylül 00:44:29–00:53:33 sunucu saati; 3 site + 4 veritabanı + posta + panel = 9 yeni yedek, 6 süresi dolan yedek silindi. Liste 51 → 54. 12 Eylül yerel gün klasörü Test-Path=False. Normal budamanın ardından mevcut boş FTP klasörü bakım komutu raporu Removed=0, Unavailable=0, Visited=0; stderr=0 bayt, AdaPanel Running. Kanıt canlı updates/ftp-folders-043-check.out.json. Bu rapor bütün kayıtsız FTP dosyalarının envanteri değildir. Günlük 03:00, 5 gün/120 saat ve şifreleme kapalı ayarları değiştirilmedi. Kapalı alioral.xyz alan adı yeniden etkinleştirilmedi; mevcut site verisi mevcut yedek otomasyonuna dahil kaldı.
+
+Yeni doğrulanan eksik: AutomationService yedekleri çalışan iş kaydına almıyordu. Tur sürerken Yedekleme ekranı boşta görünüyordu. Manuel tur kilit beklemeden önce, zamanlanmış tur başlamadan önce backup/automation kaydı açar. İkinci manuel tur 409 alır; başka sunucu yedeğiyle çakışan zamanlanmış tur son çalışma zamanını tüketmeden ertelenir. Kayıt arşiv oluşturma ve budama boyunca tutulur, başarı/hata/iptalde kapanır. Yöneticiye görünür, kiracıların kapsamına sızmaz. Otomasyon ekranına süreli çalışan iş şeridi ve yeniden girişte sunucu durumunu okuma eklendi. Yedekleme ekranı da mevcut ortak endpoint üzerinden işi görür.
+
+Doğrulama: 63 ilgili backend testi (6 yeni davranış testi dahil), 77 frontend testi (3 yeni), vue-tsc ve üretim derlemesi başarılı. Backend TRX: .tmp/automation-jobs-043/automation-jobs-043.trx. Sürüm 0.8.43; paket/yayın logları .tmp/automation-jobs-043/. Bu not yazılırken paket hazırlanıyor; kurulduğu henüz iddia edilmiyor. Public GitHub'a kaynak/history/tag push yapılmaz; yalnız mevcut release betiğiyle installer.
+
 ## 2026-09-18 — 0.8.42 yayımlandı ve canlıya başarıyla kuruldu
 
 **Güncel durum: canlı ve GitHub latest 0.8.42.** Önceki yayın engeli aşıldı. Aynı paket PowerShell 7.6.5 altında mevcut yayın betiğinin `-UploadTransport Curl` seçeneğiyle yüklendi; GitHub'dan yeniden indirilip SHA256 birebir doğrulandı (`.tmp/backup-cleanup-042/publish-curl-core-0918.log`, `published-0918.json`). Taslak id=391035335 artık draft=false; asset uploaded, 90.796.795 bayt; SHA256 **C1B437ED0FD16AAEC381D6FCA702DD29B01022F452176FFBC9C4189EFBC31174**. Kaynak/history/tag push yapılmadı.

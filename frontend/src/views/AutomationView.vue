@@ -11,6 +11,13 @@
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
+    <RunningTaskBanner
+      :running="backupRunning"
+      :label="localBackup.running.value ? localBackup.label.value : serverBackup.label.value"
+      :elapsed-text="localBackup.running.value ? localBackup.elapsedText.value : serverBackup.elapsedText.value"
+      :hint="localBackup.running.value ? '' : t('panel.runningJob.resumedHint')"
+      :interrupted-label="serverBackup.interruptedText.value"
+      @dismiss="serverBackup.dismissInterrupted" />
 
     <!-- Ayarlar sunucudan gelmeden bütün otomasyon anahtarları varsayılan (kapalı) görünüyordu;
          yönetici "hiçbir otomasyon açık değil" sanıp yanlış karar veriyordu. -->
@@ -261,7 +268,7 @@
 
     <div class="row-actions">
       <button class="compact" :disabled="busy" @click="save">{{ t("panel.common.save") }}</button>
-      <button class="secondary compact" :disabled="busy" @click="runBackupNow">
+      <button class="secondary compact" :disabled="busy || backupRunning" @click="runBackupNow">
         {{ t("panel.automation.runBackupNow") }}
       </button>
       <button class="secondary compact" :disabled="busy" @click="runSslNow">
@@ -277,6 +284,9 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import BackupScheduleFields from "../components/BackupScheduleFields.vue";
+import RunningTaskBanner from "../components/RunningTaskBanner.vue";
+import { getBackupRunningJobs } from "../api/backup";
+import { runningJobLabel, useRunningTask, useServerRunningTask } from "../composables/useRunningTask";
 import { bosProgram, type BackupSchedulePlan } from "../api/schedule";
 import {
   getAutomation,
@@ -297,6 +307,17 @@ const loading = ref(false);
 // "Henüz bilmiyorum" ile "kapalı" ekranda ayırt edilemiyordu; ayarlar gelene kadar kartları gizle.
 const settingsLoaded = ref(false);
 const busy = ref(false);
+const localBackup = useRunningTask();
+const serverBackup = useServerRunningTask({
+  fetchStatus: async () => {
+    const result = await getBackupRunningJobs();
+    const isAutomation = (job: { kind: string; title: string }) => job.kind === "backup" && job.title === "automation";
+    return { ...result, running: result.running.filter(isAutomation), interrupted: result.interrupted.filter(isAutomation) };
+  },
+  label: (job) => runningJobLabel(t, job),
+  interruptedLabel: (job) => t("panel.runningJob.interrupted", { job: runningJobLabel(t, job), date: formatDate(job.startedAtUtc) })
+});
+const backupRunning = computed(() => localBackup.running.value || serverBackup.running.value);
 const notice = ref("");
 const noticeError = ref(false);
 const remotePassword = ref("");
@@ -366,6 +387,7 @@ onMounted(refresh);
 async function refresh() {
   loading.value = true;
   try {
+    await serverBackup.start();
     applyStatus(await getAutomation());
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
@@ -413,10 +435,17 @@ async function testRemote() {
 }
 
 async function runBackupNow() {
-  await run(async () => {
-    applyStatus(await runAutomationBackup());
-    showNotice(t("panel.automation.backupStarted"), false);
-  });
+  if (busy.value || backupRunning.value) return;
+  localBackup.begin(t("panel.automation.backupSection"));
+  try {
+    await run(async () => {
+      applyStatus(await runAutomationBackup());
+      showNotice(t("panel.automation.backupStarted"), false);
+    });
+  } finally {
+    localBackup.end();
+    await serverBackup.start();
+  }
 }
 
 async function runSslNow() {

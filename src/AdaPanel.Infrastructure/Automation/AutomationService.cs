@@ -4,6 +4,8 @@ using AdaPanel.Core.Dtos.Automation;
 using AdaPanel.Core.Dtos.Backup;
 using AdaPanel.Core.Dtos.Databases;
 using AdaPanel.Core.Dtos.Ssl;
+using AdaPanel.Core.Dtos.RunningJobs;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -40,6 +42,7 @@ public sealed class AutomationService(
     // Hangi veritabanının hangi siteye ait olduğunun OTORİTE kaynağı. Otomatik yedek, site
     // arşivine hangi dökümleri koyacağını buradan öğrenir — ad benzerliğinden DEĞİL.
     IDatabaseOwnershipService databaseOwnership,
+    IRunningJobService runningJobs,
     ILogger<AutomationService> logger) : IAutomationService
 {
     private const string StatePath = "config/automation.json";
@@ -121,6 +124,9 @@ public sealed class AutomationService(
 
     public async Task<AutomationStatusDto> RunBackupNowAsync(CancellationToken cancellationToken = default)
     {
+        // Kilidi bekleyen ikinci bir istek, ilk tur bitince tekrar yedek başlatmamalı.
+        await using var job = await runningJobs.BeginAsync(
+            RunningJobKinds.Backup, "automation", null, cancellationToken);
         await concurrencyLock.RunExclusiveAsync(ConcurrencyKeys.Automation, async () =>
         {
             var state = await LoadAsync(cancellationToken);
@@ -267,8 +273,24 @@ public sealed class AutomationService(
             if (state.AutoBackupEnabled &&
                 BackupSchedule.ZamaniGeldi(BuildSchedulePlan(state), state.LastBackupRunUtc, now, ServerTimeZone()))
             {
-                await RunBackupAsync(state, cancellationToken);
-                changed = true;
+                IAsyncDisposable? job = null;
+                try
+                {
+                    job = await runningJobs.BeginAsync(RunningJobKinds.Backup, "automation", null, cancellationToken);
+                }
+                catch (AppException exception) when (exception.HttpStatusCode == 409)
+                {
+                    // Başka sunucu yedeği sürüyor: zamanı tüketmeden sonraki turda tekrar dene.
+                    logger.LogDebug("Otomatik yedekleme, süren yedek işinin bitmesini bekliyor.");
+                }
+                if (job is not null)
+                {
+                    await using (job)
+                    {
+                        await RunBackupAsync(state, cancellationToken);
+                        changed = true;
+                    }
+                }
             }
 
             if (state.AutoSslRenewEnabled && IsDue(state.LastSslRunUtc, state.SslRenewIntervalHours, now))
