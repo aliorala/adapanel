@@ -1,5 +1,9 @@
 # 0.8.31–0.8.41 — Kalan sorunların düzeltilmesi
 
+## Son sırada incelenecek — 12 Eylül yedek kalıntısı
+
+Kullanıcı 17.09.2026'da yedek silme sonrasında “12 Eylül 2026 Cumartesi” öğesinin kaldığını bildirdi ve buna en son bakılmasını istedi. Henüz neden doğrulanmadı; boş klasör mü, içindeki yedek dosyaları mı, yoksa paneldeki tarih grubu mu kaldığı canlıda ayrıştırılacak. Saklama süresi 5 gün, otomatik çalışma 03:00. `BackupService.PruneRecordsAsync` sınırı `DateTime.UtcNow.AddDays(-retentionDays)` ile saat hassasiyetinde hesaplıyor; bu yalnız incelenecek bir ihtimaldir, bulgu olarak kesinleştirilmedi. Önce 12 Eylül kayıtlarının oluşturulma saatleri ve son budama zamanı karşılaştırılacak, sonra FTP/local içerik ve silme sonuçları kontrol edilecek. Bu bildirim için dosya silinmedi, saklama ayarı değiştirilmedi. Önceki 51 yedek doğrulamasının başarılı olması saklama/temizlik davranışını kanıtlamaz.
+
 ## 2026-09-17 — Kapsamlı denetim, 0.8.41 canlı
 
 
