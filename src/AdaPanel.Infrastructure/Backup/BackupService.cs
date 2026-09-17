@@ -3711,11 +3711,28 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             }
 
             TryDeleteFile(fileStore.ResolvePath(IndexSidecarPath(record.Id)));
+            await TryRemoveEmptyLocalBackupFoldersAsync(record.Path, cancellationToken);
             return new BackupDeletionOutcome(null, uzakHata);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return new BackupDeletionOutcome($"{record.Name}: {exception.Message}", uzakHata);
+        }
+    }
+
+    private async Task TryRemoveEmptyLocalBackupFoldersAsync(string? path, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            var preferences = await preferencesService.GetAsync(cancellationToken);
+            BackupLocalCleanup.RemoveEmptyParents(path, preferences.DefaultBackupRoot);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The archive is already deleted. A nonempty/inaccessible parent must not
+            // turn successful file deletion into a failed backup deletion.
+            logger?.LogInformation(exception, "Yedek silindi ancak boş yerel klasör temizliği tamamlanamadı.");
         }
     }
 

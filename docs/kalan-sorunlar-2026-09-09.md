@@ -1,5 +1,11 @@
 # 0.8.31–0.8.41 — Kalan sorunların düzeltilmesi
 
+## 2026-09-17 — 0.8.42 yerel boş yedek klasörü düzeltmesi (yayın hazırlanıyor)
+
+Yeni taramada yerel silmenin yalnız arşivi kaldırdığı, kaynak/kategori/gün klasörlerini bırakması doğrulandı. `LocalBackupFolderCleanupTests`: düzeltme öncesi 8 başarısız / 1 başarılı; düzeltme sonrası ilgili yedek/FTP testlerinin tamamı **501 başarılı** (`.tmp/backup-cleanup-042/backup-fixed.trx`). Manuel silme ve otomatik süre temizliği aynı yeni helper'ı kullanıyor. Yerel ve FTP için bilinen klasör düzeni `BackupCleanupLayout` içinde ortaklaştırıldı. Yalnız boş dizinler nonrecursive silinir; kök, dolu/bilinmeyen düzenler ve kök dışı yollar korunur. Kök/ata junction kontrolleri ve tarih adlı kök, Türkçe/%, # adlı klasör testleri eklendi. Saklama süresi ve şifreleme değişmedi.
+
+Canlı salt okunur sayımda 17 Ağustos–11 Eylül arası **26 boş gün** bulundu. Yalnız doğrulanmış `C:\ProgramData\AdaPanel\backups` içindeki bilinen tarih düzenleri, reparse kontrolü ve nonrecursive Directory.Delete ile temizlendi: **270 boş klasör / 26 gün** kaldırıldı. Önce/sonra dosya sayısı **55/55**, yol+boyut envanter farkı **0**, kök mevcut. Tarihli 51 arşiv ve tarihsiz 4 dosya korunuyor; 12 Eylül 6, 13–17 Eylül 9'ar arşiv. Bu işlem FTP taraması değildir. Canlı o anda 0.8.41; 0.8.42 paketleniyor, henüz kurulmuş sayılmayacak.
+
 ## 2026-09-17 — 12 Eylül yedek grubunun kalma nedeni doğrulandı
 
 Kullanıcının son sıraya bıraktığı bildirim canlı listeden incelendi. 12 Eylül grubu boş değil: **6 yedek / yaklaşık 90 MiB** var. Bunlar iptvhub (03:06:53), karsilastir (03:07:31), rsmc_alarmm (03:07:33), travian_bot (03:07:34), posta (03:07:36) ve panel (03:07:40). Hepsi 12.09.2026 sunucu yerel saati. Önceki aktif doğrulama bu kayıtlar dahil 51 kayıtta eksik yerel/uzak veya açılamayan arşiv bulmadı.
