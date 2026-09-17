@@ -1,4 +1,14 @@
-# 0.8.31–0.8.41 — Kalan sorunların düzeltilmesi
+# 0.8.31–0.8.42 — Kalan sorunların düzeltilmesi
+
+## 2026-09-18 — 0.8.42 yayımlandı ve canlıya başarıyla kuruldu
+
+**Güncel durum: canlı ve GitHub latest 0.8.42.** Önceki yayın engeli aşıldı. Aynı paket PowerShell 7.6.5 altında mevcut yayın betiğinin `-UploadTransport Curl` seçeneğiyle yüklendi; GitHub'dan yeniden indirilip SHA256 birebir doğrulandı (`.tmp/backup-cleanup-042/publish-curl-core-0918.log`, `published-0918.json`). Taslak id=391035335 artık draft=false; asset uploaded, 90.796.795 bayt; SHA256 **C1B437ED0FD16AAEC381D6FCA702DD29B01022F452176FFBC9C4189EFBC31174**. Kaynak/history/tag push yapılmadı.
+
+Canlı panel paketini ayrıca indirip aynı SHA256 ile doğruladı, ardından kurulum UI üzerinden tamamlandı. Son terminal kanıtı (18 Eylül 00:37:26 sunucu saati): AdaPanel **Running / Auto**; **installerExitCode=0, isFinished=true, isFailed=false**, updatedAtUtc=2026-09-17T21:36:46.4287969Z. Inno service guard Restore 00:37:02.489 / log closed 00:37:02.536. Arayüz sürümü **0.8.42**. Son sağlık ekranında IIS/WAS, FTP, DNS, MariaDB, Stalwart ve Redis çalışıyor. Güncelleme öncesi/sonrası tarihli yedekler **51/51**: 12 Eylül 6, 13–17 Eylül 9'ar dosya. Bu tur yedek dosyası silinmedi. Günlük 03:00 işi henüz gelmedi; 12 Eylül'ün sonraki otomatik temizliği gözlenmiş sayılmaz.
+
+Yayın betiğine alternatif Curl aktarımı eklendi; kimlik stdin üzerinden gider, komut satırına/dosyaya yazılmaz. Otomatik upload retry/redirect yapılmaz; belirsiz sonuçta önce asset listesi kontrol edilir. Bu makinede Windows PowerShell 5.1 native pipeline'ı BOM eklediğinden Curl modu **PowerShell 7 gerektirir** ve eski sürümde kimlik/ağ işleminden önce açık hata verir. Başarılı kullanım: PowerShell 7 oturumunda `& ./scripts/publish-github-release.ps1 -InstallerPath artifacts/installer/AdaPanelSetup.exe -UploadTransport Curl`. Varsayılan PowerShell aktarımı korundu. Son **17 yayın testi başarılı** (`release-final0918.trx`); önceki 501 yedek/FTP testiyle toplam 518 ilgili test. Bu değişiklikler yayın aracındadır; doğrulanmış installer tekrar üretilmedi/değişmedi. Yerel commitler: df4b6ea, e178c39, d640336.
+
+Önceki 270 boş klasör / 26 gün temizliği ve kalıcı yerel klasör düzeltmesi artık canlıda. Yedekleme modülü, kullanıcı kararıyla kapalı şifreleme, 5 günlük saklama hesabı, kompakt görünüm ve kapalı alioral.xyz tercihi korundu. Aşağıdaki “0.8.42 bekliyor” bölümü geçmiş kayıt; bu üst not günceldir.
 
 ## 2026-09-17 — Yerel boş yedek klasörleri düzeltildi; 0.8.42 yayını GitHub hatasında bekliyor
 
