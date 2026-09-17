@@ -131,8 +131,8 @@ public class ReleaseAssetGuardTests
                 param($Uri, $Method = 'GET', $Token, $BodyObject)
                 if ($Method -eq 'POST') { throw 'Created duplicate draft' }
                 if ($Uri -match '/tags/') { return $null }
-                if ($Uri -match 'page={{page}}$') { return $script:draft }
-                if ($Uri -match 'per_page=100') { return @(1..100 | ForEach-Object { [pscustomobject]@{tag_name="other-$_"} }) }
+                if ($Uri -match 'page={{page}}$') { return ,@([pscustomobject]@{id=99;tag_name='other';draft=$true}, $script:draft) }
+                if ($Uri -match 'per_page=100') { return ,@(1..100 | ForEach-Object { [pscustomobject]@{tag_name="other-$_"} }) }
                 if ($Uri -match '/73$') { return $script:draft }
                 throw "Unexpected request: $Uri"
             }

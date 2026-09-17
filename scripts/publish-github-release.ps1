@@ -113,7 +113,8 @@ function Find-AdaGitHubRelease {
     }
     # A draft without a published tag can return 404 above. Reuse it on retry.
     for ($page = 1; $page -le 100; $page++) {
-        $releases = @(Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases?per_page=100&page=$page" -Token $Token)
+        $releases = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases?per_page=100&page=$page" -Token $Token
+        $releases = @($releases)
         $matchesForTag = @($releases | Where-Object { $_.tag_name -ceq $Tag })
         if ($matchesForTag.Count -gt 1) { throw "Ayni etiket icin birden fazla yayin var: $Tag" }
         if ($matchesForTag.Count -eq 1) { return $matchesForTag[0] }

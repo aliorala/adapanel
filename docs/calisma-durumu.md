@@ -9,6 +9,9 @@ Canlı salt okunur sayımda 17 Ağustos–11 Eylül arası **26 boş gün** bulu
 
 Yayın sırasında iki yükleme GitHub API tarafında `Error creating asset temp dir` ve `Error saving asset` ile başarısız oldu; her denemeden sonra dosya listesi okundu, ikisinde de boştu. 0.8.42 taslak id=391035335; boş taslak canlıya sunulmadı. Etiket uç noktası taslak için 404 dönerken release listesi taslağı gösterdi. Yayın betiğine sayfalı liste araması eklendi; tekrar deneme aynı taslağı kullanır. 14 yayın testi geçti (`release-retry.trx`). Paket 90.796.795 bayt; SHA256 `C1B437ED0FD16AAEC381D6FCA702DD29B01022F452176FFBC9C4189EFBC31174`; içerik 167 dosya ve installer kontrolleri geçti. Üçüncü yükleme sürüyor; başarı/live kurulum henüz doğrulanmadı.
 
+
+Taslak aramasındaki gerçek PowerShell HTTP cevabı tek nesne içinde dizi olarak döndüğünden ilk entegrasyon denemesi durduruldu. Liste sonucu filtrelemeden önce düzleştirildi; test HTTP cevabının aynı dizi biçimini kullanacak şekilde güçlendirildi. Son 14 test `release-retry-fixed.trx` ile geçti. Canlı salt okunur kontrol tek doğru id=391035335 / tag=0.8.42 / draft=true ve latest=0.8.41 gösterdi. Yeni yayın denemesi `publish-final.log` içinde tek doğru id'yi kullanıyor.
+
 ## 2026-09-17 — 12 Eylül yedek grubunun kalma nedeni doğrulandı
 
 Kullanıcının son sıraya bıraktığı bildirim canlı listeden incelendi. 12 Eylül grubu boş değil: **6 yedek / yaklaşık 90 MiB** var. Bunlar iptvhub (03:06:53), karsilastir (03:07:31), rsmc_alarmm (03:07:33), travian_bot (03:07:34), posta (03:07:36) ve panel (03:07:40). Hepsi 12.09.2026 sunucu yerel saati. Önceki aktif doğrulama bu kayıtlar dahil 51 kayıtta eksik yerel/uzak veya açılamayan arşiv bulmadı.
