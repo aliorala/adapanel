@@ -15,6 +15,8 @@
 # KULLANIM:
 #   powershell -File scripts\publish-github-release.ps1 `
 #       -InstallerPath artifacts\installer\AdaPanelSetup.exe
+# Alternatif aktarim (PowerShell 7): pwsh -File scripts\publish-github-release.ps1
+#       -InstallerPath artifacts\installer\AdaPanelSetup.exe -UploadTransport Curl
 #
 # Yalnizca release notlarini olusturmak/duzeltmek icin (varlik yuklemeden):
 #   powershell -File scripts\publish-github-release.ps1
@@ -235,6 +237,9 @@ function Test-AdaPublishedRelease {
 
 # --- Betik govdesi ---------------------------------------------------------
 if ($MyInvocation.InvocationName -ne '.') {
+    if ($UploadTransport -eq 'Curl' -and $PSVersionTable.PSVersion.Major -lt 7) {
+        throw 'Curl aktarimi PowerShell 7 gerektirir; betigi pwsh ile calistirin.'
+    }
     . (Join-Path $PSScriptRoot "version-guard.ps1")
     $version = Resolve-AdaReleaseVersion -RepoRoot $RepoRoot
     Write-Host "Surum: $version"

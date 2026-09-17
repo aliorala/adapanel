@@ -175,6 +175,17 @@ public class ReleaseAssetGuardTests
         Assert.Equal("TRANSFER-OK", output);
     }
 
+    [Fact]
+    public void Legacy_powershell_rejects_curl_before_network_or_credentials()
+    {
+        var publisher = Path.Combine(KaynakKoku(), "scripts", "publish-github-release.ps1").Replace("'", "''");
+        var output = PowerShellCalistir($$"""
+            try { & '{{publisher}}' -UploadTransport Curl -InstallerPath 'does-not-exist.exe'; throw 'Expected version guard' }
+            catch { if ($_.Exception.Message -notmatch 'PowerShell 7') { throw }; Write-Output 'CORE-REQUIRED' }
+            """);
+        Assert.Equal("CORE-REQUIRED", output);
+    }
+
     private static string KararCalistir(string kurulumYolu, bool yuklemeyiAtla, int mevcutVarlik)
     {
         // Yol tek tirnak icinde gecirilir; PowerShell'de tek tirnakli dize genisletilmez.
