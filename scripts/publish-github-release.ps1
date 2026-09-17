@@ -22,6 +22,7 @@ param(
     [string]$RepoRoot,
     [string]$RepoSlug = "aliorala/adapanel",
     [string]$InstallerPath,
+    [ValidateSet('PowerShell', 'Curl')][string]$UploadTransport = 'PowerShell',
     [switch]$SkipAssetUpload,
     [switch]$SkipVerify
 )
@@ -155,12 +156,29 @@ function Publish-AdaGitHubRelease {
     return $roundtrip
 }
 
+function Send-AdaCurlReleaseFile {
+    param([string]$Uri, [string]$Token, [string]$FilePath)
+    # Keep credentials off the process command line and disk. No redirect or retry:
+    # after an uncertain upload the caller must first inspect existing assets.
+    if ($Token -match '[\r\n]') { throw 'Gecersiz kimlik bicimi.' }
+    $escapedToken = $Token.Replace('\', '\\').Replace('"', '\"')
+    $config = 'header = "Authorization: token ' + $escapedToken + '"'
+    $response = $config | & curl.exe --disable --config - --silent --show-error --fail-with-body `
+        --http1.1 --proto '=https' --connect-timeout 30 --max-time 600 `
+        --request POST --header 'Content-Type: application/octet-stream' `
+        --header 'User-Agent: AdaPanel-Release-Script' --header 'Expect:' `
+        --data-binary "@$FilePath" --url $Uri
+    if ($LASTEXITCODE -ne 0) { throw "Kurulum dosyasi aktarilamadi (curl exit=$LASTEXITCODE). Tekrar denemeden once varlik listesini kontrol edin." }
+    return ($response | Out-String | ConvertFrom-Json)
+}
+
 function Add-AdaReleaseAsset {
     param(
         [Parameter(Mandatory = $true)][string] $RepoSlug,
         [Parameter(Mandatory = $true)][pscustomobject] $Release,
         [Parameter(Mandatory = $true)][string] $Token,
-        [Parameter(Mandatory = $true)][string] $FilePath
+        [Parameter(Mandatory = $true)][string] $FilePath,
+        [ValidateSet('PowerShell', 'Curl')][string] $UploadTransport = 'PowerShell'
     )
 
     if (-not (Test-Path -LiteralPath $FilePath)) { throw "Yuklenecek dosya bulunamadi: $FilePath" }
@@ -175,7 +193,11 @@ function Add-AdaReleaseAsset {
     $uploadUri = ($Release.upload_url -replace '\{\?name,label\}', '') + "?name=$name"
     $headers = @{ Authorization = "token $Token"; "User-Agent" = "AdaPanel-Release-Script" }
     Write-Host "Yukleniyor: $name"
-    $asset = Invoke-RestMethod -Uri $uploadUri -Method Post -Headers $headers -InFile $FilePath -ContentType 'application/octet-stream'
+    if ($UploadTransport -eq 'Curl') {
+        $asset = Send-AdaCurlReleaseFile -Uri $uploadUri -Token $Token -FilePath (Resolve-Path -LiteralPath $FilePath).Path
+    } else {
+        $asset = Invoke-RestMethod -Uri $uploadUri -Method Post -Headers $headers -InFile $FilePath -ContentType 'application/octet-stream'
+    }
     Write-Host "Yuklendi: $($asset.name) ($('{0:N0}' -f $asset.size) byte, durum=$($asset.state))"
     return $asset
 }
@@ -260,7 +282,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     $release = Publish-AdaGitHubRelease -RepoSlug $RepoSlug -Token $token -ReleaseInfo $releaseInfo
 
     if ($InstallerPath -and -not $SkipAssetUpload) {
-        Add-AdaReleaseAsset -RepoSlug $RepoSlug -Release $release -Token $token -FilePath $InstallerPath | Out-Null
+        Add-AdaReleaseAsset -RepoSlug $RepoSlug -Release $release -Token $token -FilePath $InstallerPath -UploadTransport $UploadTransport | Out-Null
         if ($release.draft) {
             Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/$($release.id)" -Method PATCH -Token $token -BodyObject @{ draft = $false } | Out-Null
         }
