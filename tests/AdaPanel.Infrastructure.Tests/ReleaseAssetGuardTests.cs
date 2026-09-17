@@ -155,10 +155,12 @@ public class ReleaseAssetGuardTests
             function curl.exe {
                 $script:curlArgs = $args
                 $script:curlInput = $input | Out-String
+                if ($OutputEncoding.GetPreamble().Length -ne 0) { throw 'BOM would corrupt curl stdin config' }
                 $global:LASTEXITCODE = {{exitCode}}
                 '{"name":"setup.exe","state":"uploaded"}'
             }
             $failed = $false
+            $OutputEncoding = [System.Text.UTF8Encoding]::new($true)
             try { $asset = Send-AdaCurlReleaseFile -Uri 'https://uploads.github.com/example' -Token 'dummy_private_value' -FilePath 'C:\folder with spaces\setup.exe' }
             catch { $failed = $true }
             if ($failed -ne ({{exitCode}} -ne 0)) { throw 'Wrong transfer result' }
@@ -167,6 +169,7 @@ public class ReleaseAssetGuardTests
             if ($script:curlArgs -notcontains '@C:\folder with spaces\setup.exe') { throw 'File argument was split' }
             if ($script:curlArgs -contains '--retry' -or $script:curlArgs -contains '--location') { throw 'Unsafe automatic retry or redirect' }
             if (-not $failed -and $asset.state -ne 'uploaded') { throw 'Response was not parsed' }
+            if ($OutputEncoding.GetPreamble().Length -ne 3) { throw 'Caller encoding was changed' }
             Write-Output 'TRANSFER-OK'
             """);
         Assert.Equal("TRANSFER-OK", output);

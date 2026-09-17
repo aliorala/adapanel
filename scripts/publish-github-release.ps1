@@ -163,6 +163,7 @@ function Send-AdaCurlReleaseFile {
     if ($Token -match '[\r\n]') { throw 'Gecersiz kimlik bicimi.' }
     $escapedToken = $Token.Replace('\', '\\').Replace('"', '\"')
     $config = 'header = "Authorization: token ' + $escapedToken + '"'
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $response = $config | & curl.exe --disable --config - --silent --show-error --fail-with-body `
         --http1.1 --proto '=https' --connect-timeout 30 --max-time 600 `
         --request POST --header 'Content-Type: application/octet-stream' `
