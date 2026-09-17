@@ -1,5 +1,15 @@
 # AdaPanel Codex Memory
 
+## 2026-09-18 — 0.8.43 canlıya kuruldu; 12 Eylül temizliği doğrulandı
+
+**Güncel durum: canlı ve GitHub latest 0.8.43.** Kaynak commit c8f6fe6. Kurulum dosyası 90.796.592 bayt, SHA256 **B9EFAE6FFEC79705943644995F6E68156089B7EDEAFA4C747DD691091D5A59C0**. İki Curl yüklemesi HTTP 500 verdi; her başarısızlığın ardından taslak id=391090935 ve boş asset listesi kontrol edildi. Mevcut yayın betiğinin varsayılan PowerShell aktarımı üçüncü denemede başarılı oldu; GitHub'dan yeniden indirilen dosya aynı hash ile doğrulandı. Log: .tmp/automation-jobs-043/publish-powershell.log. Kaynak/history/tag push yapılmadı. Paket denetimi: 168 dosya, bileşenlerde 22 Passed / 3 büyük paket mevcut politika ile Skipped.
+
+Canlı panel aynı hash'i doğrulayıp kurdu. UI sürümü 0.8.43; AdaPanel Running / Auto; phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false. updatedAtUtc=2026-09-17T22:15:47.8680592Z. Inno service guard Restore 18 Eylül 01:16:06.324, Log closed 01:16:06.340. Windows yeniden başlatma gerekmiyor. Son sağlık kontrolünde IIS/WAS, FTP, DNS, MariaDB, Stalwart ve Redis çalışıyor.
+
+Yedek temizliği için önceki canlı turda 9 yeni arşiv üretildi, 12 Eylül'den kalan 6 süresi dolmuş arşiv silindi; 12 Eylül yerel klasörü yok. Sonraki boş FTP klasörü denetimi 0/0/0 (Removed/Unavailable/Visited). Ardından **54 kayıt doğrulandı: 0 eksik yerel, 0 eksik uzak, 0 açılamayan arşiv, 0 ölçülemeyen kayıt**. FTP kayıtsız dosya envanteri bu doğrulamanın kapsamı dışında; ekranda açık uyarısı var. Şifreleme kullanıcının kararıyla kapalı, günlük03:00/5gün değişmedi.
+
+Otomasyon yedeklerinin çalışan iş takibi canlı kodda mevcut. 63 ilgili backend ve 77 frontend testi, tip kontrolü, üretim derlemesi başarılı. Kurulum sonrası tüm kaynakları içeren ikinci bir yedek turu yalnız göstergeyi denemek için çalıştırılmadı; yeni göstergenin aktif iş davranışı regresyon testleriyle doğrulandı. Önceki "hazırlanıyor" bölümü geçmiş kayıttır; yayın/kurulum engeli kalmadı.
+
 ## 2026-09-18 — Otomatik yedekleme takibi ve gerçek temizlik doğrulaması (0.8.43 hazırlanıyor)
 
 Canlı 0.8.42 üzerinde mevcut ayarlarla elle bir otomasyon turu çalıştırıldı: 18 Eylül 00:44:29–00:53:33 sunucu saati; 3 site + 4 veritabanı + posta + panel = 9 yeni yedek, 6 süresi dolan yedek silindi. Liste 51 → 54. 12 Eylül yerel gün klasörü Test-Path=False. Normal budamanın ardından mevcut boş FTP klasörü bakım komutu raporu Removed=0, Unavailable=0, Visited=0; stderr=0 bayt, AdaPanel Running. Kanıt canlı updates/ftp-folders-043-check.out.json. Bu rapor bütün kayıtsız FTP dosyalarının envanteri değildir. Günlük 03:00, 5 gün/120 saat ve şifreleme kapalı ayarları değiştirilmedi. Kapalı alioral.xyz alan adı yeniden etkinleştirilmedi; mevcut site verisi mevcut yedek otomasyonuna dahil kaldı.
