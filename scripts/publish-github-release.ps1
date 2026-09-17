@@ -101,6 +101,27 @@ function Invoke-AdaGitHubApi {
     return Invoke-RestMethod @params
 }
 
+function Find-AdaGitHubRelease {
+    param([string] $RepoSlug, [string] $Token, [string] $Tag)
+    try {
+        $release = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/tags/$([Uri]::EscapeDataString($Tag))" -Token $Token
+        if ($release) { return $release }
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw }
+    }
+    # A draft without a published tag can return 404 above. Reuse it on retry.
+    for ($page = 1; $page -le 100; $page++) {
+        $releases = @(Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases?per_page=100&page=$page" -Token $Token)
+        $matchesForTag = @($releases | Where-Object { $_.tag_name -ceq $Tag })
+        if ($matchesForTag.Count -gt 1) { throw "Ayni etiket icin birden fazla yayin var: $Tag" }
+        if ($matchesForTag.Count -eq 1) { return $matchesForTag[0] }
+        if ($releases.Count -lt 100) { return $null }
+    }
+    throw "Yayin arama siniri asildi; yeni yayin olusturulmadi."
+}
+
 function Publish-AdaGitHubRelease {
     param(
         [Parameter(Mandatory = $true)][string] $RepoSlug,
@@ -108,14 +129,7 @@ function Publish-AdaGitHubRelease {
         [Parameter(Mandatory = $true)][pscustomobject] $ReleaseInfo
     )
 
-    $existing = $null
-    try {
-        $existing = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/tags/$($ReleaseInfo.tag_name)" -Token $Token
-    } catch {
-        $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -ne 404) { throw }
-    }
+    $existing = Find-AdaGitHubRelease -RepoSlug $RepoSlug -Token $Token -Tag $ReleaseInfo.tag_name
 
     $payload = @{ tag_name = $ReleaseInfo.tag_name; name = $ReleaseInfo.name; body = $ReleaseInfo.body }
 
@@ -232,14 +246,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     #
     # Yayinda halihazirda duran varlik sayisi ONCE okunur: zaten paketi olan bir yayinin NOTUNU
     # duzeltmek mesru ve sik yapilan bir istir, engellenmesi icin sebep yok.
-    $mevcut = $null
-    try {
-        $mevcut = Invoke-AdaGitHubApi -Uri "https://api.github.com/repos/$RepoSlug/releases/tags/$($releaseInfo.tag_name)" -Token $token
-    } catch {
-        $durum = $null
-        if ($_.Exception.Response) { $durum = [int]$_.Exception.Response.StatusCode }
-        if ($durum -ne 404) { throw }
-    }
+    $mevcut = Find-AdaGitHubRelease -RepoSlug $RepoSlug -Token $token -Tag $releaseInfo.tag_name
 
     $mevcutVarlik = 0
     if ($mevcut -and $mevcut.assets) { $mevcutVarlik = @($mevcut.assets).Count }

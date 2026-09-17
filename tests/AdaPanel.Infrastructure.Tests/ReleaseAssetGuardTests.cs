@@ -118,6 +118,32 @@ public class ReleaseAssetGuardTests
         Assert.Equal("DRAFT-OK", output);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Retry_reuses_existing_draft_even_when_tag_lookup_returns_nothing(int page)
+    {
+        var publisher = Path.Combine(KaynakKoku(), "scripts", "publish-github-release.ps1").Replace("'", "''");
+        var output = PowerShellCalistir($$"""
+            . '{{publisher}}'
+            $script:draft = [pscustomobject]@{ id=73; tag_name='1.2.3'; body='Notes'; draft=$true }
+            function Invoke-AdaGitHubApi {
+                param($Uri, $Method = 'GET', $Token, $BodyObject)
+                if ($Method -eq 'POST') { throw 'Created duplicate draft' }
+                if ($Uri -match '/tags/') { return $null }
+                if ($Uri -match 'page={{page}}$') { return $script:draft }
+                if ($Uri -match 'per_page=100') { return @(1..100 | ForEach-Object { [pscustomobject]@{tag_name="other-$_"} }) }
+                if ($Uri -match '/73$') { return $script:draft }
+                throw "Unexpected request: $Uri"
+            }
+            $info = [pscustomobject]@{tag_name='1.2.3';name='Test';body='Notes'}
+            $release = Publish-AdaGitHubRelease -RepoSlug 'example/test' -Token 'unused' -ReleaseInfo $info 6>$null
+            if ($release.id -ne 73 -or $release.draft -ne $true) { throw 'Draft was not reused' }
+            Write-Output 'REUSED-OK'
+            """);
+        Assert.Equal("REUSED-OK", output);
+    }
+
     private static string KararCalistir(string kurulumYolu, bool yuklemeyiAtla, int mevcutVarlik)
     {
         // Yol tek tirnak icinde gecirilir; PowerShell'de tek tirnakli dize genisletilmez.

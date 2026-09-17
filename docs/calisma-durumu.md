@@ -6,6 +6,9 @@ Yeni taramada yerel silmenin yalnız arşivi kaldırdığı, kaynak/kategori/gü
 
 Canlı salt okunur sayımda 17 Ağustos–11 Eylül arası **26 boş gün** bulundu. Yalnız doğrulanmış `C:\ProgramData\AdaPanel\backups` içindeki bilinen tarih düzenleri, reparse kontrolü ve nonrecursive Directory.Delete ile temizlendi: **270 boş klasör / 26 gün** kaldırıldı. Önce/sonra dosya sayısı **55/55**, yol+boyut envanter farkı **0**, kök mevcut. Tarihli 51 arşiv ve tarihsiz 4 dosya korunuyor; 12 Eylül 6, 13–17 Eylül 9'ar arşiv. Bu işlem FTP taraması değildir. Canlı o anda 0.8.41; 0.8.42 paketleniyor, henüz kurulmuş sayılmayacak.
 
+
+Yayın sırasında iki yükleme GitHub API tarafında `Error creating asset temp dir` ve `Error saving asset` ile başarısız oldu; her denemeden sonra dosya listesi okundu, ikisinde de boştu. 0.8.42 taslak id=391035335; boş taslak canlıya sunulmadı. Etiket uç noktası taslak için 404 dönerken release listesi taslağı gösterdi. Yayın betiğine sayfalı liste araması eklendi; tekrar deneme aynı taslağı kullanır. 14 yayın testi geçti (`release-retry.trx`). Paket 90.796.795 bayt; SHA256 `C1B437ED0FD16AAEC381D6FCA702DD29B01022F452176FFBC9C4189EFBC31174`; içerik 167 dosya ve installer kontrolleri geçti. Üçüncü yükleme sürüyor; başarı/live kurulum henüz doğrulanmadı.
+
 ## 2026-09-17 — 12 Eylül yedek grubunun kalma nedeni doğrulandı
 
 Kullanıcının son sıraya bıraktığı bildirim canlı listeden incelendi. 12 Eylül grubu boş değil: **6 yedek / yaklaşık 90 MiB** var. Bunlar iptvhub (03:06:53), karsilastir (03:07:31), rsmc_alarmm (03:07:33), travian_bot (03:07:34), posta (03:07:36) ve panel (03:07:40). Hepsi 12.09.2026 sunucu yerel saati. Önceki aktif doğrulama bu kayıtlar dahil 51 kayıtta eksik yerel/uzak veya açılamayan arşiv bulmadı.
