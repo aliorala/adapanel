@@ -1,9 +1,12 @@
 # 0.8.31–0.8.41 — Kalan sorunların düzeltilmesi
 
-## Son sırada incelenecek — 12 Eylül yedek kalıntısı
+## 2026-09-17 — 12 Eylül yedek grubunun kalma nedeni doğrulandı
 
-Kullanıcı 17.09.2026'da yedek silme sonrasında “12 Eylül 2026 Cumartesi” öğesinin kaldığını bildirdi ve buna en son bakılmasını istedi. Henüz neden doğrulanmadı; boş klasör mü, içindeki yedek dosyaları mı, yoksa paneldeki tarih grubu mu kaldığı canlıda ayrıştırılacak. Saklama süresi 5 gün, otomatik çalışma 03:00. `BackupService.PruneRecordsAsync` sınırı `DateTime.UtcNow.AddDays(-retentionDays)` ile saat hassasiyetinde hesaplıyor; bu yalnız incelenecek bir ihtimaldir, bulgu olarak kesinleştirilmedi. Önce 12 Eylül kayıtlarının oluşturulma saatleri ve son budama zamanı karşılaştırılacak, sonra FTP/local içerik ve silme sonuçları kontrol edilecek. Bu bildirim için dosya silinmedi, saklama ayarı değiştirilmedi. Önceki 51 yedek doğrulamasının başarılı olması saklama/temizlik davranışını kanıtlamaz.
+Kullanıcının son sıraya bıraktığı bildirim canlı listeden incelendi. 12 Eylül grubu boş değil: **6 yedek / yaklaşık 90 MiB** var. Bunlar iptvhub (03:06:53), karsilastir (03:07:31), rsmc_alarmm (03:07:33), travian_bot (03:07:34), posta (03:07:36) ve panel (03:07:40). Hepsi 12.09.2026 sunucu yerel saati. Önceki aktif doğrulama bu kayıtlar dahil 51 kayıtta eksik yerel/uzak veya açılamayan arşiv bulmadı.
 
+Canlı ayar 5 gün, günlük 03:00. Son iş 17.09.2026 03:06:56'da tamamlandı; özeti 3 eski yedeğin silindiğini gösteriyor. `BackupService.PruneRecordsAsync` seçim anında `DateTime.UtcNow.AddDays(-retentionDays)` kullanıyor; takvim günü değil **120 saat** hesabı. 12 Eylül turu 17 Eylül turundan biraz daha geç tamamlandığından, erken 3 site yedeği seçilirken sonraki 6 yedek o anda yaş sınırını geçmemişti. Bu öğeler başarısız silme kalıntısı değil, seçim dışında kalan gerçek arşivler. Gün klasörü içerik durduğu için kalıyor. Sonraki iş 18.09.2026 03:00; mevcut kurala göre o turda bu 6 kayıt süre bakımından silinmeye aday olacak. Son kullanılabilir yedek ve zincir korumaları ayrıca uygulanır; sonraki tur henüz gözlenmediğinden silinmiş sayılmıyor.
+
+Bu incelemede dosya silinmedi, saklama politikası veya kod değiştirilmedi. Takvim günü hesabına sessizce geçmek bazı arşivleri 120 saat dolmadan sileceği için yapılmadı. Bu açıklama FTP'deki bütün kayıtsız/eski boş klasörlerin tarandığı anlamına gelmez.
 ## 2026-09-17 — Kapsamlı denetim, 0.8.41 canlı
 
 
