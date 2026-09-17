@@ -81,12 +81,15 @@ public sealed class TerminalExecutionTests
             var result = await service.ExecuteAsync(new ExecuteTerminalCommandRequest
             {
                 WorkingDirectory = root, TimeoutSeconds = 15,
-                Command = "[Console]::WriteLine('OUT'); [Console]::Error.WriteLine('ERR'); exit 7"
+                Command = "[Console]::WriteLine('OUT Türkçe ĞÜŞİÖÇ'); Write-Error 'ERR Türkçe ĞÜŞİÖÇ'; exit 7"
             });
             Assert.False(result.TimedOut);
             Assert.Equal(7, result.ExitCode);
             Assert.Contains("OUT", result.StandardOutput);
             Assert.Contains("ERR", result.StandardError);
+            Assert.Contains("Türkçe ĞÜŞİÖÇ", result.StandardOutput);
+            Assert.Contains("Türkçe ĞÜŞİÖÇ", result.StandardError);
+            Assert.DoesNotContain("CLIXML", result.StandardError);
         }
         finally { Directory.Delete(root, recursive: true); }
     }

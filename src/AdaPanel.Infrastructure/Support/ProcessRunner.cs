@@ -55,6 +55,7 @@ internal static class ProcessRunner
         // timeout'unu geçer (ör. mail 30sn); bu yalnız üst sınırdır. 10 dk; en uzun meşru tek komut
         // (büyük git clone, win-acme issuance) bile sığar ama sonsuz asılma engellenir.
         timeout ??= TimeSpan.FromMinutes(10);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var startInfo = new ProcessStartInfo
         {
@@ -101,23 +102,26 @@ internal static class ProcessRunner
         // sonra da okumaya devam eder, yalnız biriktirmez): tüketmeyi bırakmak boruyu doldurur ve
         // aracı kendi yazma çağrısında SONSUZA KADAR bloke ederdi — yani bellek sınırı, asılma
         // sınırına dönüşürdü.
-        var outputTask = TavanliOkuAsync(process.StandardOutput, outputCharLimit, cancellationToken);
-        var errorTask = TavanliOkuAsync(process.StandardError, outputCharLimit, cancellationToken);
+        var outputTask = TavanliOkuAsync(process.StandardOutput, outputCharLimit, timeoutCts.Token, preservePartialOnCancellation: true);
+        var errorTask = TavanliOkuAsync(process.StandardError, outputCharLimit, timeoutCts.Token, preservePartialOnCancellation: true);
 
         // GİRDİ, ÇIKTI OKUYUCULARI BAŞLADIKTAN SONRA yazılır. Ters sırada büyük bir dosyayı
         // beslemek klasik kilitlenmedir: araç çıktı borusunu doldurur, biz onu tüketmediğimiz için
         // araç bloke olur, biz de yazmayı bitiremediğimiz için beklemeye devam ederiz.
         var inputTask = standardInputFilePath is null
             ? Task.CompletedTask
-            : BesleAsync(process, standardInputFilePath, cancellationToken);
+            : BesleAsync(process, standardInputFilePath, timeoutCts.Token);
 
         try
         {
-            await process.WaitForExitAsync(timeoutCts.Token);
+            // The deadline includes inherited pipes, even after the parent has exited.
+            await Task.WhenAll(process.WaitForExitAsync(timeoutCts.Token), outputTask, errorTask)
+                .WaitAsync(timeoutCts.Token);
         }
-        catch (OperationCanceledException) when (timeout is not null && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
-            try { process.Kill(entireProcessTree: true); } catch { /* en iyi çaba */ }
+            await StopProcessAsync(process);
+            await ObserveInputAsync(inputTask);
 
             // OKUMA GÖREVLERİ SAHİPSİZ BIRAKILMAZ.
             //
@@ -132,8 +136,9 @@ internal static class ProcessRunner
             // ATILMIYOR: araç zaman aşımından önce bir şey yazdıysa (çoğu zaman asıl sebep orada
             // yazılıdır) kullanıcıya gösteriliyor.
             var (kismiCikti, kismiHata) = await TopluyorAsync(outputTask, errorTask);
+            cancellationToken.ThrowIfCancellationRequested();
 
-            var mesaj = $"Process timed out after {timeout.Value.TotalSeconds:0} s and was terminated.";
+            var mesaj = $"Process timed out after {timeout.Value.TotalSeconds:0} s; termination was requested.";
             return new CommandResult
             {
                 ExitCode = -1,
@@ -141,6 +146,17 @@ internal static class ProcessRunner
                 StandardError = string.IsNullOrWhiteSpace(kismiHata) ? mesaj : $"{mesaj}{Environment.NewLine}{kismiHata}"
             };
         }
+        catch
+        {
+            timeoutCts.Cancel();
+            await StopProcessAsync(process);
+            await ObserveInputAsync(inputTask);
+            await TopluyorAsync(outputTask, errorTask);
+            throw;
+        }
+
+        // Cancellation can race with normal process completion.
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Besleme görevi SAHİPSİZ BIRAKILMAZ (aynı gerekçe okuma görevlerinde yazılı): gözlenmeyen
         // bir istisna sessiz kalırdı. Hata olsa bile süreç zaten bitti; sonuç çıkış kodundan gelir.
@@ -177,6 +193,8 @@ internal static class ProcessRunner
     /// </remarks>
     private static async Task BesleAsync(Process process, string filePath, CancellationToken cancellationToken)
     {
+        try
+        {
         await using var kaynak = new FileStream(
             filePath,
             FileMode.Open,
@@ -188,7 +206,32 @@ internal static class ProcessRunner
         var hedef = process.StandardInput.BaseStream;
         await kaynak.CopyToAsync(hedef, cancellationToken);
         await hedef.FlushAsync(cancellationToken);
-        process.StandardInput.Close();
+        }
+        finally
+        {
+            // EOF must be sent even when opening or reading the input file fails.
+            process.StandardInput.Close();
+        }
+    }
+
+    private static async Task StopProcessAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch { /* The process can exit concurrently; cleanup must remain bounded. */ }
+    }
+
+    private static async Task ObserveInputAsync(Task inputTask)
+    {
+        try { await inputTask.WaitAsync(TimeSpan.FromSeconds(2)); }
+        catch
+        {
+            _ = inputTask.ContinueWith(static task => _ = task.Exception,
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        }
     }
 
     /// <summary>
@@ -564,7 +607,7 @@ internal static class ProcessRunner
         }
     }
 
-    private static string NormalizePowerShellStream(string value)
+    internal static string NormalizePowerShellStream(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -587,7 +630,16 @@ internal static class ProcessRunner
                     .Where(line => !string.IsNullOrWhiteSpace(line))
                     .ToArray();
 
-                if (errorLines.Length > 0)
+                var messages = document.Root?.Elements()
+                    .Where(element => !string.Equals((string?)element.Attribute("S"), "progress", StringComparison.OrdinalIgnoreCase))
+                    .ToArray() ?? [];
+                if (messages.All(element => element.Name.LocalName == "S"))
+                {
+                    normalized = normalized[..xmlStart].Replace("#< CLIXML", string.Empty).Trim();
+                    var text = string.Join(Environment.NewLine, messages.Select(element => DecodeCliXmlText(element.Value)));
+                    normalized = string.IsNullOrWhiteSpace(normalized) ? text : normalized + Environment.NewLine + text;
+                }
+                else if (errorLines.Length > 0)
                 {
                     normalized = string.Join(Environment.NewLine, errorLines);
                 }

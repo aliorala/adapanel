@@ -288,6 +288,7 @@ public sealed class SubscriptionBackupScheduleService(
                 ? null
                 : new BackupPruneRemoteOptions
                 {
+                    RemoteUrl = kayit.RemoteUrl,
                     UserName = kayit.RemoteUserName,
                     Password = UzakParolaCoz(kayit),
                     Region = kayit.RemoteRegion

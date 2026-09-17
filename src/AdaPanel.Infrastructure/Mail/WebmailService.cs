@@ -117,13 +117,12 @@ public sealed class WebmailService(
     // profesyonel paneller gibi: bir mail domaini SSL alınca webmail.<domain> de otomatik HTTPS olur. Best-effort.
     public async Task SecureWebmailForDomainAsync(string domain, string contactEmail, CancellationToken cancellationToken = default)
     {
-        var normalized = (domain ?? string.Empty).Trim().TrimStart('.').ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(normalized) || normalized.StartsWith("webmail.", StringComparison.OrdinalIgnoreCase))
+        var webmailHost = ResolveWebmailHost(domain);
+        if (webmailHost is null)
         {
             return;
         }
 
-        var webmailHost = $"webmail.{normalized}";
         try
         {
             var state = await fileStore.ReadAsync<WebmailState?>(StatePath, null, cancellationToken);
@@ -156,6 +155,23 @@ public sealed class WebmailService(
         {
             logger.LogWarning(exception, "Webmail HTTPS yapılamadı: {Host} (best-effort).", webmailHost);
         }
+    }
+
+    internal static string? ResolveWebmailHost(string? domain)
+    {
+        var normalized = (domain ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
+        // A wildcard certificate covers webmail.example.com, never webmail.*.example.com.
+        // IIS can persist that invalid binding but refuses to start the entire webmail site.
+        if (normalized.StartsWith("*.", StringComparison.Ordinal)) normalized = normalized[2..];
+        if (normalized.StartsWith("webmail.", StringComparison.Ordinal)) return null;
+        try { normalized = new System.Globalization.IdnMapping().GetAscii(normalized); }
+        catch (ArgumentException) { return null; }
+        var host = "webmail." + normalized;
+        if (!normalized.Contains('.') || host.Length > 253 ||
+            normalized.Split('.').Any(label => label.Length is 0 or > 63 || label[0] == '-' || label[^1] == '-' ||
+                label.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-')))
+            return null;
+        return host;
     }
 
     public async Task<WebmailDiagnosticsDto> DiagnoseAsync(string publicHost, CancellationToken cancellationToken = default)

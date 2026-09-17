@@ -18,12 +18,18 @@
  * anahtarı gerektirir; o karar verilene kadar her çağıran KENDİ metnini geçirir; yani bu
  * birleştirme GÖRÜNEN çıktıyı değiştirmez.
  */
+/** API timestamps are UTC; SQLite-backed DateTime values can arrive without a zone suffix. */
+export function parseUtcTimestamp(value: string): Date {
+  const normalized = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value) ? `${value}Z` : value;
+  return new Date(normalized);
+}
+
 export function formatDateTime(value: string | null | undefined, fallback = ""): string {
   if (!value) {
     return fallback;
   }
 
-  const parsed = new Date(value);
+  const parsed = parseUtcTimestamp(value);
   // Ayrıştırılamayan değer YUTULMAZ: ham dizge, "Invalid Date"ten daha çok bilgi taşır.
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }

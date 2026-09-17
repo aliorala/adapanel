@@ -48,9 +48,8 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
         var target = targets.FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase))
             ?? throw new AppException("health.unknown_service", 404, 404);
 
-        var safe = target.Name.Replace("'", "''");
-        var result = await ProcessRunner.RunPowerShellAsync(
-            $"Restart-Service -Name '{safe}' -Force -ErrorAction Stop",
+        var result = await ProcessRunner.RunPowerShellStrictAsync(
+            BuildRestartScript(target.Name),
             cancellationToken);
         if (!result.Success)
         {
@@ -94,8 +93,7 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
             return map;
         }
 
-        var list = string.Join(",", names.Select(name => "'" + name.Replace("'", "''") + "'"));
-        var script = $"@({list}) | ForEach-Object {{ $s = Get-Service -Name $_ -ErrorAction SilentlyContinue; [pscustomobject]@{{ name = $_; status = if ($s) {{ $s.Status.ToString() }} else {{ 'NotInstalled' }} }} }} | ConvertTo-Json -Compress";
+        var script = BuildStatusScript(names);
         var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
         if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
         {
@@ -133,6 +131,47 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
                 target[name] = statusProp.GetString() ?? "Unknown";
             }
         }
+    }
+
+    internal static string BuildStatusScript(IReadOnlyCollection<string> names)
+    {
+        var list = string.Join(",", names.Select(name => "'" + name.Replace("'", "''") + "'"));
+        return $$"""
+            @({{list}}) | ForEach-Object {
+                $name = $_
+                $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+                $status = 'NotInstalled'
+                if ($service) { $status = $service.Status.ToString() }
+                else {
+                    $task = Get-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction SilentlyContinue
+                    if ($task) {
+                        $status = switch ($task.State.ToString()) {
+                            'Running' { 'Running' }
+                            'Queued' { 'StartPending' }
+                            'Ready' { 'Stopped' }
+                            'Disabled' { 'Stopped' }
+                            default { 'Unknown' }
+                        }
+                    }
+                }
+                [pscustomobject]@{ name = $name; status = $status }
+            } | ConvertTo-Json -Compress
+            """;
+    }
+
+    internal static string BuildRestartScript(string name)
+    {
+        var safe = name.Replace("'", "''");
+        return $$"""
+            $name = '{{safe}}'
+            $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if ($service) { Restart-Service -Name $name -Force -ErrorAction Stop }
+            else {
+                $task = Get-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop
+                Stop-ScheduledTask -InputObject $task -ErrorAction Stop
+                Start-ScheduledTask -InputObject $task -ErrorAction Stop
+            }
+            """;
     }
 
     private sealed record Target(string Name, string Label);

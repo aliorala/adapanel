@@ -547,9 +547,17 @@ onMounted(async () => {
   }
 });
 
-onBeforeUnmount(stopPolling);
+let contextVersion = 0;
+let active = true;
+let overviewVersion = 0;
+let logVersion = 0;
+let reportVersion = 0;
+onBeforeUnmount(() => { active = false; contextVersion++; stopPolling(); });
 
 watch(siteName, async () => {
+  contextVersion++;
+  stopPolling();
+  notice.value = "";
   overview.value = null;
   shownReport.value = null;
   // Site değişince ESKİ sitenin günlük raporu ekranda KALMAMALI: başka bir sitenin bot
@@ -559,22 +567,32 @@ watch(siteName, async () => {
 });
 
 async function load() {
+  if (!active) return;
+  const context = contextVersion;
+  const site = siteName.value;
+  const request = ++overviewVersion;
+  const logRequest = ++logVersion;
   if (!siteName.value) {
     return;
   }
 
   try {
-    overview.value = await getSeoOverview(siteName.value);
+    const result = await getSeoOverview(site);
+    if (context !== contextVersion || request !== overviewVersion) return;
+    overview.value = result;
     syncPolling();
   } catch (error) {
+    if (context !== contextVersion || request !== overviewVersion) return;
     show(extractApiMessage(error), true);
   }
 
   // Saklanan günlük raporu AYRI uçtan gelir ve hatası taramayı bozmamalı; bu yüzden ayrı
   // try/catch. Yoksa günlük klasörüne erişilemeyen bir sitede tarama sonuçları da kaybolurdu.
   try {
-    logReport.value = await getSeoLogReport(siteName.value);
+    const result = await getSeoLogReport(site);
+    if (context === contextVersion && logRequest === logVersion) logReport.value = result;
   } catch (error) {
+    if (context !== contextVersion || logRequest !== logVersion) return;
     show(extractApiMessage(error), true);
   }
 }
@@ -585,10 +603,15 @@ async function analyzeLogs() {
   }
 
   logBusy.value = true;
+  const context = contextVersion;
+  const request = ++logVersion;
   try {
-    logReport.value = await analyzeSeoLogs(siteName.value, logDays.value, verifyBots.value);
+    const result = await analyzeSeoLogs(siteName.value, logDays.value, verifyBots.value);
+    if (context !== contextVersion || request !== logVersion) return;
+    logReport.value = result;
     show(t("panel.seo.log.completed"), false);
   } catch (error) {
+    if (context !== contextVersion || request !== logVersion) return;
     show(extractApiMessage(error), true);
   } finally {
     logBusy.value = false;
@@ -600,6 +623,7 @@ function syncPolling() {
     startPolling();
   } else {
     stopPolling();
+    if (!noticeError.value && notice.value === t("panel.seo.scanQueued")) notice.value = "";
   }
 }
 
@@ -608,21 +632,28 @@ function startPolling() {
     return;
   }
 
+  let polling = false;
   poller = setInterval(async () => {
-    if (!siteName.value) {
+    if (!siteName.value || polling) {
       return;
     }
 
+    polling = true;
+    const context = contextVersion;
+    const request = ++overviewVersion;
     try {
-      overview.value = await getSeoOverview(siteName.value);
+      const result = await getSeoOverview(siteName.value);
+      if (context !== contextVersion || request !== overviewVersion) return;
+      overview.value = result;
       if (!running.value) {
         stopPolling();
         // Tarama bitti: geçmişten açılmış rapor varsa bırakılır, yoksa yeni rapor görünür.
         shownReport.value = null;
+        syncPolling();
       }
     } catch {
       // Tek yoklamanın hatası ekranı bozmaz; bir sonraki turda yeniden denenir.
-    }
+    } finally { polling = false; }
   }, 3000);
 }
 
@@ -639,12 +670,16 @@ async function scan() {
   }
 
   busy.value = true;
+  const context = contextVersion;
   try {
     shownReport.value = null;
     await startSeoScan(siteName.value, maxPages.value);
+    if (context !== contextVersion) return;
     await load();
-    show(t("panel.seo.scanQueued"), false);
+    if (context !== contextVersion) return;
+    if (running.value) show(t("panel.seo.scanQueued"), false);
   } catch (error) {
+    if (context !== contextVersion) return;
     show(extractApiMessage(error), true);
   } finally {
     busy.value = false;
@@ -652,11 +687,15 @@ async function scan() {
 }
 
 async function cancel() {
+  if (busy.value) return;
   busy.value = true;
+  const context = contextVersion;
   try {
     await cancelSeoScan(siteName.value);
+    if (context !== contextVersion) return;
     await load();
   } catch (error) {
+    if (context !== contextVersion) return;
     show(extractApiMessage(error), true);
   } finally {
     busy.value = false;
@@ -668,9 +707,13 @@ async function showReport(reportId: string) {
     return;
   }
 
+  const context = contextVersion;
+  const request = ++reportVersion;
   try {
-    shownReport.value = await getSeoReport(siteName.value, reportId);
+    const result = await getSeoReport(siteName.value, reportId);
+    if (context === contextVersion && request === reportVersion) shownReport.value = result;
   } catch (error) {
+    if (context !== contextVersion || request !== reportVersion) return;
     show(extractApiMessage(error), true);
   }
 }

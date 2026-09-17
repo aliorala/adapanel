@@ -83,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import { getSiteDatabases, linkSiteDatabase, unlinkSiteDatabase, type SiteDatabaseRef } from "../api/sites";
@@ -124,18 +124,35 @@ function dbNameFromSite(value: string): string {
   return (value || "").trim().toLowerCase().split("").map((c) => /[a-z0-9]/.test(c) ? c : "_").join("");
 }
 
-watch(siteName, (value) => { form.name = dbNameFromSite(value); }, { immediate: true });
-
-onMounted(load);
+let loadVersion = 0;
+let active = true;
+onUnmounted(() => { active = false; loadVersion++; });
+const stillOnSite = (name: string) => active && name === siteName.value;
+watch(siteName, (value) => {
+  form.name = dbNameFromSite(value);
+  form.userName = "";
+  form.password = "";
+  databases.value = [];
+  candidates.value = [];
+  selectedCandidate.value = "";
+  showForm.value = false;
+  loaded.value = false;
+  void load();
+}, { immediate: true });
 
 async function load() {
-  if (!siteName.value) {
+  const version = ++loadVersion;
+  const requestedSite = siteName.value;
+  notice.value = "";
+  if (!requestedSite) {
+    loading.value = false;
     return;
   }
   loading.value = true;
   notice.value = "";
   try {
-    const data = await getSiteDatabases(siteName.value);
+    const data = await getSiteDatabases(requestedSite);
+    if (version !== loadVersion || requestedSite !== siteName.value) return;
     databases.value = data.linked;
     candidates.value = data.candidates;
     // Seçili aday artık listede yoksa seçimi temizle.
@@ -144,14 +161,17 @@ async function load() {
     }
     loaded.value = true;
   } catch (error) {
+    if (version !== loadVersion || requestedSite !== siteName.value) return;
     showNotice(resolveApiMessage(error), true);
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 
 // Seçilen mevcut veritabanını bu siteye bağla (Plesk gibi: isim eşleşmesi gerekmez).
 async function linkDb() {
+  if (linking.value) return;
+  const requestedSite = siteName.value;
   const choice = candidates.value.find((db) => db.engine + ":" + db.name === selectedCandidate.value);
   if (!choice || !siteName.value) {
     return;
@@ -159,11 +179,13 @@ async function linkDb() {
   linking.value = true;
   notice.value = "";
   try {
-    await linkSiteDatabase(siteName.value, choice.engine, choice.name);
+    await linkSiteDatabase(requestedSite, choice.engine, choice.name);
+    if (!stillOnSite(requestedSite)) return;
     showNotice(t("panel.siteDb.linked"), false);
     selectedCandidate.value = "";
     await load();
   } catch (error) {
+    if (!stillOnSite(requestedSite)) return;
     showNotice(resolveApiMessage(error), true);
   } finally {
     linking.value = false;
@@ -202,13 +224,17 @@ async function openPma(db: LinkedDb) {
 const unlinkingKey = ref("");
 
 async function unlinkDb(db: LinkedDb) {
+  if (unlinkingKey.value) return;
+  const requestedSite = siteName.value;
   unlinkingKey.value = db.engine + ":" + db.name;
   notice.value = "";
   try {
-    await unlinkSiteDatabase(siteName.value, db.engine, db.name);
+    await unlinkSiteDatabase(requestedSite, db.engine, db.name);
+    if (!stillOnSite(requestedSite)) return;
     showNotice(t("panel.siteDb.unlinked"), false);
     await load();
   } catch (error) {
+    if (!stillOnSite(requestedSite)) return;
     showNotice(resolveApiMessage(error), true);
   } finally {
     unlinkingKey.value = "";
@@ -216,6 +242,7 @@ async function unlinkDb(db: LinkedDb) {
 }
 
 async function deleteDb(db: LinkedDb) {
+  const requestedSite = siteName.value;
   // Yüksek riskli onay: veritabanı adı yazılmadan silinemez.
   await confirm({
     title: t("panel.confirm.deleteDatabaseTitle", { name: db.name }),
@@ -223,14 +250,17 @@ async function deleteDb(db: LinkedDb) {
     impact: [`${t("panel.siteDb.dbName")}: ${db.name} (${db.engine})`, t("panel.confirm.impactDbUser")],
     requireText: db.name,
     action: async () => {
+      if (!stillOnSite(requestedSite) || deletingKey.value) return;
       deletingKey.value = db.engine + ":" + db.name;
       notice.value = "";
       try {
         // DeleteDatabaseAsync DB'yi + (başka yerde kullanılmıyorsa) kullanıcısını da düşürür + site bağını temizler.
         await deleteDatabase(db.engine, db.name);
+        if (!stillOnSite(requestedSite)) return;
         showNotice(t("panel.siteDb.deleted"), false);
         await load();
       } catch (error) {
+        if (!stillOnSite(requestedSite)) return;
         showNotice(resolveApiMessage(error), true);
       } finally {
         deletingKey.value = "";
@@ -240,10 +270,11 @@ async function deleteDb(db: LinkedDb) {
 }
 
 async function createDb() {
-  if (!form.name.trim()) {
+  if (creating.value || !siteName.value || !form.name.trim()) {
     return;
   }
   creating.value = true;
+  const requestedSite = siteName.value;
   notice.value = "";
   try {
     await createDatabase({
@@ -252,14 +283,16 @@ async function createDb() {
       userName: form.userName.trim() || undefined,
       password: form.password || undefined,
       // Bu site iş alanından oluşturulan DB doğrudan siteye BAĞLANIR → site silinince cascade gider.
-      siteName: siteName.value || undefined
+      siteName: requestedSite
     });
+    if (!stillOnSite(requestedSite)) return;
     showNotice(t("panel.siteDb.created"), false);
     form.userName = "";
     form.password = "";
     showForm.value = false;
     await load();
   } catch (error) {
+    if (!stillOnSite(requestedSite)) return;
     showNotice(resolveApiMessage(error), true);
   } finally {
     creating.value = false;

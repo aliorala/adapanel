@@ -27,6 +27,21 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class BosGunKlasoruTemizligiTests
 {
     [Theory]
+    [InlineData("2026-09-05", "k1.zip")]
+    [InlineData("2026-09-05", "sites/site/k1.zip")]
+    [InlineData("2026-09-05/sites", "site/k1.zip")]
+    public async Task Configured_root_named_like_a_backup_day_is_never_removed(string rootPath, string filePath)
+    {
+        using var area = new BulutAlani();
+        var ftp = new SahteFtp();
+        var root = "ftp://yedek.ornek.com/" + rootPath + "/";
+        await area.UzakHedefiYazAsync("ftp", root, "kullanici", SahteKoruyucu.Onek + "parola");
+        await area.KayitlariYazAsync(Kayit(area, "k1", root + filePath));
+        await area.ServisKur(new SahteBulut(), ftp: ftp).DeleteBackupAsync("k1", area.Iptal);
+        Assert.DoesNotContain(ftp.Komutlar, command => command.StartsWith("RMD "));
+    }
+
+    [Theory]
     [InlineData("sites/site.ornek", 3)]
     [InlineData("databases/mariadb-iptvhub", 3)]
     [InlineData("sites/site.ornek/databases/db", 5)]

@@ -272,7 +272,7 @@
         <div class="audit-preview">
           <article v-for="item in auditItems.slice(0, 4)" :key="item.id" class="audit-item">
             <div class="audit-top">
-              <strong>{{ item.action }}</strong>
+              <strong>{{ t(`panel.activity.action.${item.action}`, item.action) }}</strong>
               <span>{{ formatUtc(item.createdAtUtc) }}</span>
             </div>
             <p>{{ item.details }}</p>

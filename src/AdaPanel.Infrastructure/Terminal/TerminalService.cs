@@ -19,8 +19,10 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
         ExecuteTerminalCommandRequest request,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var workingDirectory = ResolveWorkingDirectory(request.WorkingDirectory);
-        var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(request.Command.Trim()));
+        var script = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n$ProgressPreference = 'SilentlyContinue'\n" + request.Command.Trim();
+        var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
         var stopwatch = Stopwatch.StartNew();
 
         using var process = new Process
@@ -91,7 +93,7 @@ public sealed class TerminalService(IOptions<PanelRuntimeOptions> runtimeOptions
         {
             ExitCode = timedOut ? -1 : process.ExitCode,
             StandardOutput = Truncate(standardOutput),
-            StandardError = Truncate(standardError),
+            StandardError = Truncate(ProcessRunner.NormalizePowerShellStream(standardError)),
             WorkingDirectory = workingDirectory,
             DurationMilliseconds = stopwatch.ElapsedMilliseconds,
             TimedOut = timedOut

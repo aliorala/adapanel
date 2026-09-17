@@ -4144,11 +4144,11 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
     /// </list>
     /// </remarks>
     /// <summary>Bilinen yedek düzeninde boş klasörleri alttan güne kadar kaldırır; köke çıkmaz.</summary>
-    private async Task BosGunKlasorunuKaldirAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken)
+    private async Task BosGunKlasorunuKaldirAsync(Uri uri, NetworkCredential credential, CancellationToken cancellationToken, string configuredRoot)
     {
         try
         {
-            foreach (var klasor in BackupFtpCleanup.DirectoriesFor(uri))
+            foreach (var klasor in BackupFtpCleanup.DirectoriesFor(uri, configuredRoot))
             {
                 var listeleme = await FtpCommands.ListDirectoryAsync(klasor, credential, cancellationToken);
                 if (listeleme.Success && listeleme.Names.Any(name => name is not "." and not ".."))
@@ -4188,7 +4188,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
         var silme = await FtpCommands.DeleteFileAsync(uri, credential, cancellationToken);
         if (silme.Success)
         {
-            await BosGunKlasorunuKaldirAsync(uri, credential, cancellationToken);
+            await BosGunKlasorunuKaldirAsync(uri, credential, cancellationToken, remote.RemoteUrl);
             return;
         }
 
@@ -4213,7 +4213,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
                 logger?.LogInformation(
                     "FTP uzak kopyasi zaten yoktu, silme basarili sayildi: {Adres}", adres);
                 // Dosya başka bir turda silinmiş ama klasör kalmış olabilir; burada da denenir.
-                await BosGunKlasorunuKaldirAsync(uri, credential, cancellationToken);
+                await BosGunKlasorunuKaldirAsync(uri, credential, cancellationToken, remote.RemoteUrl);
                 return;
 
             case RemotePresence.Present:

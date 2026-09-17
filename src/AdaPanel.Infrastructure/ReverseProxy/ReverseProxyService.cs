@@ -7,6 +7,7 @@ using AdaPanel.Core.Common;
 using AdaPanel.Core.Dtos.Proxy;
 using AdaPanel.Core.Interfaces;
 using Microsoft.Extensions.Logging;
+using AdaPanel.Infrastructure.SiteBuilder;
 
 namespace AdaPanel.Infrastructure.ReverseProxy;
 
@@ -525,7 +526,10 @@ public sealed partial class ReverseProxyService(
         }
 
         Directory.CreateDirectory(siteRoot);
-        return Path.Combine(Path.GetFullPath(siteRoot), "web.config");
+        var root = Path.GetFullPath(siteRoot);
+        var target = Path.Combine(root, "web.config");
+        SiteBuilderPathGuard.EnsureNoReparsePointOnPath(root, target);
+        return target;
     }
 
     private static XDocument LoadWebConfig(string webConfigPath)

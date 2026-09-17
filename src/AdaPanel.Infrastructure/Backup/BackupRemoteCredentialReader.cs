@@ -75,6 +75,7 @@ internal sealed class BackupRemoteCredentialReader(JsonFileStore fileStore, ISec
 
         return new BackupPruneRemoteOptions
         {
+            RemoteUrl = state.BackupRemoteUrl ?? string.Empty,
             UserName = state.BackupRemoteUserName ?? string.Empty,
             Password = Unprotect(state.BackupRemotePasswordProtected),
             Region = state.BackupRemoteRegion ?? string.Empty
@@ -124,6 +125,7 @@ internal sealed class BackupRemoteCredentialReader(JsonFileStore fileStore, ISec
 
             abonelikler[kayit.UserId] = new BackupPruneRemoteOptions
             {
+                RemoteUrl = kayit.RemoteUrl ?? string.Empty,
                 UserName = kayit.RemoteUserName ?? string.Empty,
                 Password = Unprotect(kayit.RemotePasswordProtected),
                 Region = kayit.RemoteRegion ?? string.Empty
@@ -148,6 +150,7 @@ internal sealed class BackupRemoteCredentialReader(JsonFileStore fileStore, ISec
         var state = await fileStore.ReadAsync(AutomationStatePath, new RemoteTargetProjection(), cancellationToken);
         return (state.BackupTargetType ?? "local", state.BackupRemoteUrl ?? string.Empty, new BackupPruneRemoteOptions
         {
+            RemoteUrl = state.BackupRemoteUrl ?? string.Empty,
             UserName = state.BackupRemoteUserName ?? string.Empty,
             Password = Unprotect(state.BackupRemotePasswordProtected),
             Region = state.BackupRemoteRegion ?? string.Empty
@@ -182,6 +185,8 @@ internal sealed class BackupRemoteCredentialReader(JsonFileStore fileStore, ISec
     private sealed class SubscriptionTargetProjection
     {
         public string UserId { get; set; } = string.Empty;
+
+        public string RemoteUrl { get; set; } = string.Empty;
 
         public string TargetType { get; set; } = "local";
 

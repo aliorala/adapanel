@@ -12,6 +12,7 @@ using AdaPanel.Data.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using AdaPanel.Infrastructure.Support;
+using AdaPanel.Infrastructure.SiteBuilder;
 
 namespace AdaPanel.Infrastructure.AppRuntimes;
 
@@ -92,14 +93,13 @@ public sealed partial class AppRuntimeService(
         Directory.CreateDirectory(siteRoot);
 
         var normalizedWorkingDirectory = ResolveSiteManagedPath(siteRoot, workingDirectory, allowCurrentDirectory: true);
-        Directory.CreateDirectory(normalizedWorkingDirectory);
 
         var normalizedStartupFile = ResolveSiteManagedPath(siteRoot, startupFile, allowCurrentDirectory: false);
         var relativeStartupFile = ToSiteRelativePath(siteRoot, normalizedStartupFile);
         var startupArguments = BuildArguments(relativeStartupFile, additionalArguments);
         var mergedEnvironmentVariables = BuildEnvironmentVariables(runtimeType, environmentVariables);
-        var webConfigPath = Path.Combine(siteRoot, "web.config");
-        var logsDirectory = Path.Combine(siteRoot, LogsDirectoryName);
+        var webConfigPath = ResolveSiteManagedPath(siteRoot, "web.config", allowCurrentDirectory: false);
+        var logsDirectory = ResolveSiteManagedPath(siteRoot, LogsDirectoryName, allowCurrentDirectory: true);
 
         return await concurrencyLock.RunExclusiveAsync(() =>
         {
@@ -107,6 +107,7 @@ public sealed partial class AppRuntimeService(
 
             try
             {
+                Directory.CreateDirectory(normalizedWorkingDirectory);
                 Directory.CreateDirectory(logsDirectory);
                 UpdateWebConfig(
                     webConfigPath,
@@ -151,7 +152,7 @@ public sealed partial class AppRuntimeService(
     private AppRuntimeSiteConfigurationDto ReadConfiguration(AdaPanel.Core.Dtos.Sites.SiteDto site)
     {
         var siteRoot = ResolveSiteRoot(site.PhysicalPath);
-        var webConfigPath = Path.Combine(siteRoot, "web.config");
+        var webConfigPath = ResolveSiteManagedPath(siteRoot, "web.config", allowCurrentDirectory: false);
         var logsDirectory = Path.Combine(siteRoot, LogsDirectoryName);
         var managedRuntimeDisabled = ReadManagedRuntimeDisabled(site.ApplicationPoolName);
 
@@ -537,6 +538,8 @@ public sealed partial class AppRuntimeService(
             throw new AppException("appruntime.path_outside_site_root", 400, 400);
         }
 
+        // A lexical prefix does not contain junction/symlink targets within the site.
+        SiteBuilderPathGuard.EnsureNoReparsePointOnPath(siteRoot, resolved);
         return resolved;
     }
 

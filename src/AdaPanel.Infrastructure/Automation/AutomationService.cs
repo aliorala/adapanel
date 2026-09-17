@@ -480,6 +480,7 @@ public sealed class AutomationService(
                 ? null
                 : new BackupPruneRemoteOptions
                 {
+                    RemoteUrl = state.BackupRemoteUrl,
                     UserName = state.BackupRemoteUserName,
                     Password = ResolveRemotePassword(state),
                     Region = state.BackupRemoteRegion

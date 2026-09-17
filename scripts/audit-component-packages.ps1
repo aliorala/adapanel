@@ -75,7 +75,8 @@ function Get-DownloadFileName {
 function Download-File {
     param(
         [string]$Url,
-        [string]$Destination
+        [string]$Destination,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 600
     )
 
     # ATOMIK INDIRME. Eskiden dogrudan $Destination'a yaziliyordu ve "dosya varsa gec" deniyordu;
@@ -93,11 +94,14 @@ function Download-File {
         Remove-Item -LiteralPath $partial -Force
     }
 
+    $deadline = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSeconds))
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
     try {
         $expectedLength = $null
         $response = $client.GetAsync(
             $Url,
-            [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+            [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead,
+            $deadline.Token
         ).GetAwaiter().GetResult()
         try {
             $response.EnsureSuccessStatusCode() | Out-Null
@@ -106,7 +110,14 @@ function Download-File {
             try {
                 $target = [IO.File]::Create($partial)
                 try {
-                    $source.CopyTo($target)
+                    # ResponseHeadersRead does not bound the response body. A stalled CDN
+                    # must not block the release indefinitely (including PowerShell 5.1).
+                    $copyTask = $source.CopyToAsync($target, 81920, $deadline.Token)
+                    $remaining = [Math]::Max(1, ($TimeoutSeconds * 1000) - [int]$elapsed.ElapsedMilliseconds)
+                    if (-not $copyTask.Wait($remaining)) {
+                        throw "Indirme zaman asimina ugradi ($TimeoutSeconds saniye): $Url"
+                    }
+                    $copyTask.GetAwaiter().GetResult() | Out-Null
                 }
                 finally {
                     $target.Dispose()
@@ -134,6 +145,7 @@ function Download-File {
         Move-Item -LiteralPath $partial -Destination $Destination -Force
     }
     finally {
+        $deadline.Dispose()
         # Basarisiz kosumun kalintisi ASLA birakilmaz: birakilirsa bir sonraki kosum onu
         # "tamamlanmis indirme" sanmaya devam eder.
         if (Test-Path -LiteralPath $partial) {

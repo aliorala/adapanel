@@ -317,7 +317,19 @@ public sealed class ComponentPackageAuditScriptTests : IDisposable
     /// <paramref name="gonderilenBayt"/> gonderip baglantiyi kapatir -- CDN'in yarida kopmasinin
     /// birebir karsiligi.
     /// </remarks>
-    private ScriptTestHost.ScriptResult IndirmeyiCalistir(string hedef, int bildirilenUzunluk, int gonderilenBayt)
+    [Fact]
+    public void Stalled_response_body_times_out_and_removes_partial_download()
+    {
+        var target = Path.Combine(calisma, "stalled.bin");
+        var result = IndirmeyiCalistir(target, 256, 1, stall: true);
+        Assert.Contains("SONUC=hata", result.Tumu);
+        var elapsedLine = result.StdOut.Split('\n').Single(line => line.StartsWith("ELAPSED="));
+        Assert.True(long.Parse(elapsedLine[8..]) < 8000, result.Tumu);
+        Assert.False(File.Exists(target));
+        Assert.False(File.Exists(target + ".partial"));
+    }
+
+    private ScriptTestHost.ScriptResult IndirmeyiCalistir(string hedef, int bildirilenUzunluk, int gonderilenBayt, bool stall = false)
     {
         return FonksiyonlariCalistir($$"""
             $dinleyici = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -336,6 +348,7 @@ public sealed class ComponentPackageAuditScriptTests : IDisposable
                 $akis.Write($baslikBayt, 0, $baslikBayt.Length)
                 if ($govde.Length -gt 0) { $akis.Write($govde, 0, $govde.Length) }
                 $akis.Flush()
+                {{(stall ? "Start-Sleep -Seconds 15" : "")}}
                 $istemci.Close()
             }
 
@@ -344,8 +357,9 @@ public sealed class ComponentPackageAuditScriptTests : IDisposable
             $null = $sunucu.BeginInvoke()
 
             $hedef = {{ScriptTestHost.PowerShellLiteral(hedef)}}
+            $watch = [Diagnostics.Stopwatch]::StartNew()
             try {
-                Download-File "http://127.0.0.1:$port/paket.bin" $hedef
+                Download-File "http://127.0.0.1:$port/paket.bin" $hedef {{(stall ? "-TimeoutSeconds 1" : "")}}
                 Write-Output "SONUC=basarili"
             }
             catch {
@@ -353,6 +367,7 @@ public sealed class ComponentPackageAuditScriptTests : IDisposable
                 Write-Output "MESAJ=$($_.Exception.Message)"
             }
             finally {
+                Write-Output "ELAPSED=$($watch.ElapsedMilliseconds)"
                 try { $sunucu.Stop(); $sunucu.Dispose() } catch { }
                 try { $dinleyici.Stop() } catch { }
             }
