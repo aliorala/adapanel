@@ -1,5 +1,22 @@
 # 0.8.31–0.8.43 — Kalan sorunların düzeltilmesi
 
+## 2026-09-18 — SON DURUM: 0.8.54 canlı, görünüm ve açılış doğrulandı
+
+Canlı panel ve GitHub latest 0.8.54. Kaynak/üretim frontend girişi: 2ec75e9. Paket: 90.802.829 bayt; SHA256 917A7D95BF77BF82C34B135B9138448FA526B4936D88E272CA9BD1C2E52147F1. Yayından yeniden indirilen dosya ve canlı paneldeki hazır paket aynı özetle doğrulandı. Kaynak, history veya tag push yapılmadı.
+
+Son canlı kurulum kaydı: phase=succeeded, installerExitCode=0, error boş, updatedAtUtc=2026-09-18T13:16:19.5379900Z. Bu son dosyada finished/failed alanları yoktu; varsayılmadı. AdaPanel, AdaMariaDB, AdaRedis, DNS, FTPSVC, W3SVC ve WAS Running. Stalwart PID9048. travianpanel.com, adapanel.host ve webmail.travianpanel.com HTTPS200; sağlık komutu exit0.
+
+Teslim edilen düzeltmeler: aynı oturumdaki dikkat isteklerini birleştirme ve eski yanıtı iptal etme; eksik Advisor/alan adı/servis denetimini sağlıklı gibi göstermeme; backend iptallerini yutmama; scoped DNS kullanılabilirlik önbelleği; genel panelde mobil taşma; ana sayfada uzun denetim kayıtlarının sarılması; site kurucuda önceki sitenin hatasının temizlenmesi; sunucu durumu bilinmeden ilk kurulum formunun görünmemesi.
+
+Canlı görsel kanıt: .53 ana sayfa 380/380px (denetim kartları 336/336), .51 veritabanı 380/380px. .53 site kurucuda adapanel.host hata durumundan travianpanel.com'a geçilince form/önizleme geldi ve alerts=[] oldu. .54 elle reload sırasında önce Yükleniyor, sonra mevcut oturum ve .54 güncelleme ekranı geldi; yanlış kurulum formu görünmedi.
+
+Canlı fiyat botu ayarı da düzeltildi: çıktı akilli_pc_bot.py için unrecognized arguments:1 diyordu. Geçersiz ek argüman kaldırıldı; yeniden açılan formda arguments='' doğrulandı. Günlük03:00 ve sınırsız süre korundu. Yeni çalışma başlatılmadı, eski bağımsız döngüler durdurulmadı; 19Eylül03:00 çalışmasının sonucu henüz bilinmiyor. Ürün botu uzun çalışıyor, durdurulmadı. alioral.xyz DNS/SSL/site durumu değiştirilmedi.
+
+Testler: son frontend99/99 (19 dosya), typecheck/build ve .54 sürüm6/6 başarılı. .51 hedefli320/320; tam backend5395 başarılı/1 eski release-body sürüm hatası, düzeltildikten sonra ilgili6 test geçti; sıfır atlanan. Son yalnız frontend/sürüm değişikliklerinde tam backend gereksiz tekrarlanmadı. .54 ilk paketleme Docker dış adresinin SSL bağlantı hatasıyla durdu; standart denetimler açık tekrar koşu geçti. 168 publish dosyası,22 bileşen Passed/3 büyük paket mevcut politikayla Skipped; installer denetimi başarılı. Kanıtlar .tmp/audit-051/052/053/054/. Ayrıntılı kapsam: docs/denetim-2026-09-18-051.md.
+
+AÇIK: ağır/soğuk dikkat taraması gecikmesi tamamen çözülmedi. .51 ölçümleri normal9.6–13sn, ağır44.9–45.6sn; aynı anda iki panel sekmesi açıktı. Tek oturumda istek birleştirme testli; sekmeler arası önbellek eklenmedi. Dört ayar önerisi (giriş yolu, antivirüs, bildirim kanalı, IP kısıtı) kullanıcı kararı olarak kaldı. Bu tur gerçek yedek silme/geri yükleme, göç, posta teslimi veya müşteri adına uygulama kurulumu yapılmadı. Tüm iş akışları uçtan uca sınandı/sıfır sorun iddiası yok. Yedek modülü ve şifreleme kapalı tercihi korunur.
+
+Temizlik: yerel Vite29604 durduruldu; fixture sekmeleri ve son geçici denetim sekmesi1015940764 kapatıldı. Eski1015940648 debugger bağlantısız; browser viewport reset bu sekmeye takılmıştı. Kullanıcıdan eski Veritabanları sekmesini kapatması istendi, cevap gelmedi; yeni mobil test sekmesi artık açık değil. Eski kullanıcı sekmesi araçla kapatılamadı. Kullanıcı eski sayfayı yenileyince canlı0.8.54 görünür. Diğer kullanıcı sekmelerine dokunulmadı.
 ## 2026-09-18 — 0.8.53 canlı doğrulaması ve 0.8.54 açılış düzeltmesi
 
 0.8.53 canlıya ulaştı (kaynak abc1abd, paket90.803.298bayt SHA25614C26B3254F85237B7C1B29961DFF65A39E4EACC9E48635AAD9301EDBA8FE2DD). Güncelleme ekranı mevcut/son0.8.53 gösterdi. Canlı mobil ana sayfa document.scrollWidth=clientWidth=380; dört denetim kartı336/336px. Uzun kayıt taşması çözüldü. Site kurucuda adapanel.host hatasından travianpanel.com'a geçildi: form/önizleme geldi ve alert listesi boş; eski uyarı temizliği doğrulandı. Herhangi bir site kurucu kaydet/yayınla yapılmadı.
