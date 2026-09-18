@@ -1,5 +1,19 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — Canlı 0.8.51 doğrulandı; son görsel düzeltmeler 0.8.53 hazırlanıyor
+
+0.8.51 kaynak/üretim girişi 2558942. Canlı last-attempt succeeded, exit0, isFinished=true, isFailed=false, isDecidedByPanel=true, updatedAtUtc=2026-09-18T12:43:15.4617716Z. AdaPanel/MariaDB/Redis/DNS/FTP/IIS/WAS Running, Stalwart PID9048; travianpanel.com/adapanel.host/webmail.travianpanel.com HTTP200. Canlı mobil veritabanı 390x844: clientWidth=scrollWidth=380; taşma düzeltmesi doğrulandı.
+
+Ek canlı görsel kontrol ana sayfa denetim kartlarındaki uzun yollar/hashlerin 639px taşma yaptığını gösterdi. 0.8.52 yerel commit7d77efd .audit-item min-width:0 + overflow-wrap:anywhere; gerçek DashboardOverviewView yerel uzun yol+64karakter hash fixture'ı 380px alanda 380px, görsel doğrulandı. .52 paket90.803.530 bayt SHA256 0B5A16ADD79182584AC21BCDD5DC4B3DDC4E1274D5AA1A4A4F1E8974F24EB15C yayımlandı/yeniden indirilip doğrulandı; canlıya ayrıca kurulmadı. Site kurucuda adapanel.host koruma hatası travianpanel.com seçilince eski bildirim olarak kalıyordu. Site değişiminde clearNotice eklendi; bu son küçük düzeltme ve .52 içeriği 0.8.53'te birleşir. .53 henüz bu not anında paketleniyor, canlı değil.
+
+Geniş görünüm/işleyiş kapsamı docs/denetim-2026-09-18-051.md. Ana menülerin tamamı açıldı; ayarların yedi sekmesi, sunucu araçları, yazılım uygulama/bileşen katalogları incelendi. Gerçek veri silme, geri yükleme, göç, posta gönderimi veya yeni uygulama kurulumu yapılmadı. Her iş akışı uçtan uca test edildi iddiası yok.
+
+Canlı ek ayar düzeltmesi: epey fiyat botu çıktısı akilli_pc_bot.py 'unrecognized arguments: 1' gösteriyordu. Görev ek argümanı 1 idi. İlk tarayıcı fill('') boş değeri uygulamadı (panel hatası değil); klavyeyle Ctrl+A/Backspace yapılıp DOM boşluğu ölçüldükten sonra kaydedildi. Düzenle formu yeniden açılarak arguments='' doğrulandı. Sonraki zamanlama19Eylül03:00, aynı dosya/dizin/günlük/sınırsız ayarı korundu; görev yeniden kaydedilince Windows son çalışma kaydı boşaldı. Bot yeniden çalıştırılmadı; mevcut bağımsız döngülerin bittiği iddia edilmez. Diğer epey ürün çekme görevi çalışıyor, durdurulmadı. alioral.xyz DNS/site durumu değiştirilmedi.
+
+.52 yalnız2CSSsatırı: build ve6sürüm testi; .53 küçük bildirim değişikliği: typecheck/build ve6sürüm testi geçti. .51'in96frontend+5395tambackend/1düzeltilmişsürümhatası+6tekrar sonuçları geçerli. Gereksiz tam test tekrarı yok. Kaynak/history/tag push yok.
+
+Tarayıcı durumu: yeni denetim sekmesi1015940764 giriş yaptı ve çalışıyor. Eski1015940648 debugger bağlantısız; browser viewport.reset/set bu eski sekmeye takılıyor. Kullanıcıdan yalnız eski Veritabanları sekmesini kapatması istendi. Yeni sekme geçici mobil boyutta kaldı; kapanınca reset yeniden denenmeli. Yerel fixture sekmeleri1015940758/1015940767 kapatıldı. Yerel Vite process29604 henüz çalışıyor, bitişte durdurulmalı. Yedek şifreleme kapalı tercihi korunur.
+
 ## 2026-09-18 — 0.8.51 denetim düzeltmeleri hazır; canlı doğrulama bekliyor
 
 Canlı son doğrulanan sürüm 0.8.50. 0.8.51: dikkat listesinde arka plan/düğme istekleri tek devam eden isteği paylaşır; çıkış/oturum sona ermesi istekleri iptal eder, eski yanıt yeni oturuma yazılamaz. Advisor kaynak hataları ve kısmi alan adı/servis sonuçları dikkat listesine taşınır; eksik tarama sağlıklı durum diye gösterilmez. İstek iptali backend taramalarında yutulmaz. Windows DNS kullanılabilirliği scoped servis boyunca bir kez ölçülür; DNS kurulumundan sonra yenilenir, hata/iptal önbelleğe alınmaz. Bu değişiklikler soğuk ilk taramanın bütünüyle hızlandığını henüz kanıtlamaz.

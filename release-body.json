@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.52",
-  "name": "0.8.52 — Mobil ana sayfa kayıt görünümü",
-  "body": "- Uzun dosya yolları ve doğrulama özetleri içeren denetim kayıtlarının mobil ana sayfayı yatay taşırması düzeltildi."
+  "tag_name": "0.8.53",
+  "name": "0.8.53 — Site kurucuda güncel bildirimler",
+  "body": "- Site kurucuda farklı bir site seçildiğinde önceki sitenin hata bildirimi temizlenir.\n- Mobil ana sayfada uzun denetim kayıtlarının taşma düzeltmesini içerir."
 }

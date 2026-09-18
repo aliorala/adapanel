@@ -525,7 +525,7 @@ const previewLoading = ref(false);
 const overwriteConfirmed = ref(false);
 // Bildirim + hata ÇEVİRİSİ tek kaynaktan (composables/useNotice.ts). Elle yazılmış `report()`
 // kopyası `t()` çağrısını atlıyordu ve kullanıcıya HAM ANAHTAR basıyordu.
-const { notice, noticeError, showNotice, showError } = useNotice();
+const { notice, noticeError, showNotice, showError, clearNotice } = useNotice();
 // "Yolda" ile "okunamadı" AYRI: ikisi de `project === null` durumundadır ve ekran ikisini de
 // "Yükleniyor…" diye gösteriyordu. Aynı ayrım yayın planı için de gerekli (`planLoad`).
 const projectLoad = useSectionError();
@@ -562,7 +562,10 @@ onMounted(async () => {
   await load();
 });
 
-watch(selectedSite, load);
+watch(selectedSite, () => {
+  clearNotice();
+  void load();
+});
 
 // Önizleme sayfası değişince çerçeve YENİDEN yüklenir; aksi hâlde açılır listede başka bir sayfa
 // seçili görünürken ekranda hâlâ eski sayfa dururdu.
