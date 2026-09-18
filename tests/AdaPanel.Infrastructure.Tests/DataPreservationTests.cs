@@ -45,7 +45,6 @@ public sealed class DataPreservationTests
     // Durum tutmayan bileşenlerde koruma YAPILMAMALI: gereksiz taşıma, kurulumun bıraktığı eski
     // dosyaların yeni sürümle karışmasına yol açar.
     [Theory]
-    [InlineData("phpmyadmin")]
     [InlineData("win-acme")]
     [InlineData("nodejs-lts")]
     [InlineData("php-8.3")]

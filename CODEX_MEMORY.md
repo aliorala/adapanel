@@ -1,5 +1,15 @@
 # AdaPanel Codex Memory
 
+## 2026-09-18 — Yayın dosyaları ve servis güncelleme akışı (0.8.46 hazırlanıyor)
+
+0.8.45 canlı: phase=succeeded / installerExitCode=0 / isFailed=false, updatedAtUtc=2026-09-18T06:18:16.0176315Z. Kaynak commit 6ca572f. Installer 90.799.409 bayt, SHA256 39B968EE4D7765724A90A834285C8AC7E547B8D630B75D589F9566E01D4DE65B. 73 ilgili backend testi geçti. PHP gerçek CLI 8.3.33; redis=6.1.0 yükleniyor. php.ini SHA256 9B4A101F2109451298AC00FA04D9DFE4AB15CF0067F734743CF5C97E6117E46C, Redis DLL 632DDBA607DCCB3B1D060A5BBDDFDBF0EDBF4364B5238306B31539E301DD675B — ikisi de güncelleme öncesiyle birebir. travianpanel.com, adapanel.host ve loopback webmail sağlık ucu HTTP200. Stalwart CLI arayüzde 1.0.12'ye güncellendi.
+
+Yeni bulgu: web aracı güncellemesi Adminer webroot giriş/auth/health dosyalarını ve Roundcube health/.user.ini/junction'larını siliyor. Webmail otomatik redeploy yolu IIS sitesini silip yeniden kurduğundan HTTPS bağlarını da kaybedebilir. 0.8.46 dosya düzeyinde yayın durumunu korur; Adminer index.php yeni adminer.php'den yenilenir, eski kod saklanmaz. Roundcube skins/program/plugins junction'ları yeniden kurulur; mevcut IIS sitesi/SSL bağlarına dokunulmaz. Oturum/tmp/token dizinleri ve signin/web.config/.user.ini/health dosyaları korunur. Güncelleme öncesi Roundcube bağlantıları hedefleri takip etmeden kaldırılır (Windows recursive delete bağlantı testi bunu gerektirdi).
+
+Servis güncellemesinde Windows servisi önce Stop + en çok30s WaitForStatus ile düzgün kapatılır; başarısızlıkta süreç öldürme/dosya değiştirme devam etmez. Stalwart'ın görev tabanlı çalışma yolu değişmedi. Yazılım Mağazası yükseltme onayı artık Sil yerine Güncelle der; CLI artık posta sunucusu restart uyarısını almaz.
+
+Doğrulama: 36 yayın/Webmail testi; geniş bileşen/PHP/posta/DB grubunda 285 başarılı, yalnız eski phpMyAdmin-durumsuz varsayımı başarısızdı, artık oturum/token durumu olduğu için eski boşluk beklentisi kaldırıldı ve ilgili10test tekrar başarılı. Frontend77test + typecheck + build başarılı. Kanıtlar .tmp/web-publication-046/. Bu kayıt anında 0.8.46 henüz canlı değil. PHP/CLI dışındaki4güncelleme bekliyor. Kurtarma kopyaları sunucuda updates/component-safety-20260918-044 altında; Roundcube3166dosya, config hash D178800191EFE21C079276EC73F443EDEB9440E35BAF64270DE9940AEB3305B0, SQLite552960bayt. MariaDB tutarlı fiziksel kopyası ayrı gizli script ile başlatıldı, sonucu doğrulanmalı. Kullanıcı şifreleme kapalı tercihi/alioral.xyz kapalı/kompaktUI korunur. Public kaynağa push yok.
+
 ## 2026-09-18 — PHP güncelleme talebi düzeltmesi (0.8.45 hazırlanıyor)
 
 0.8.44 canlıya kuruldu: last-attempt phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false; updatedAtUtc=2026-09-18T06:04:16.0990929Z. Kurulum dosyası 90.798.973 bayt, SHA256 289F89FF6CCAEE8DCECD9BD9BF55A4D90D426A7B4BB658D34DDFDD7A59E1505E; public release yeniden indirme hash'i eşleşti. Kaynak commit b9d0493, kaynak/history/tag push yapılmadı.

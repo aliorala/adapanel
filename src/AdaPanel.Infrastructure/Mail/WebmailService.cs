@@ -69,7 +69,7 @@ public sealed class WebmailService(
         var documentRoot = Path.Combine(installRoot, "public_html");
 
         EnsureRoundcubeConfig(installRoot);
-        EnsureAssetJunctions(installRoot, documentRoot);
+        await Bootstrap.ComponentWebPublication.EnsureRoundcubeAssetsAsync(installRoot, documentRoot, cancellationToken);
         WebAppPublisher.EnsurePhpEntry(documentRoot);
         EnsureHealthEndpoint(documentRoot);
         EnsureDiagnosticsIni(documentRoot, Path.Combine(installRoot, "logs"));
@@ -635,41 +635,6 @@ public sealed class WebmailService(
         }
 
         return (false, details);
-    }
-
-    // Roundcube'un statik varlık ağaçları (skins/program/plugins) webroot'un (public_html) ÜSTÜNDE
-    // durur. assets_path='./' ile bunlara './skins/...' gibi URL verilir; IIS bunları düz statik dosya
-    // olarak servis edebilsin diye public_html içine ilgili klasörlere directory junction açıyoruz.
-    // Junction (/J) ayrıcalık gerektirmez; hassas dizinler (config/temp/logs/vendor) LİNKLENMEZ.
-    private void EnsureAssetJunctions(string installRoot, string documentRoot)
-    {
-        foreach (var name in new[] { "skins", "program", "plugins" })
-        {
-            var target = Path.Combine(installRoot, name);
-            var link = Path.Combine(documentRoot, name);
-            if (!Directory.Exists(target) || Directory.Exists(link) || File.Exists(link))
-            {
-                // Hedef yoksa atla; link zaten varsa (junction ya da klasör) dokunma.
-                continue;
-            }
-
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                using var process = System.Diagnostics.Process.Start(psi);
-                process?.WaitForExit(15000);
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(exception, "Could not create webmail asset junction {Link} -> {Target}.", link, target);
-            }
-        }
     }
 
     // App pool'u sürekli ayakta tutar (soğuk başlangıç → yavaşlık/timeout olmasın). Best-effort.

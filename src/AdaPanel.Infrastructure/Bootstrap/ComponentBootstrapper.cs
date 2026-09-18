@@ -636,7 +636,7 @@ public sealed class ComponentBootstrapper(
             }
             else
             {
-                DeleteManagedPath(installDirectory);
+                DeleteManagedPath(installDirectory, componentId);
             }
         }
         catch (Exception exception)
@@ -792,7 +792,7 @@ public sealed class ComponentBootstrapper(
             // kilitli/yarim dosyalar cakisir. Temiz kurulum icin dizini sifirla (servis durduruldu).
             try
             {
-                DeleteManagedPath(installDirectory);
+                DeleteManagedPath(installDirectory, component.Id);
                 await ExecuteInstallAsync(component, downloadPath, installDirectory, executionArgs, cancellationToken);
             }
             finally
@@ -804,6 +804,7 @@ public sealed class ComponentBootstrapper(
             }
 
             await ApplyPostInstallStepsAsync(component, installDirectory, generatedPassword, cancellationToken);
+            await ComponentWebPublication.RestoreAsync(component.Id, installDirectory, cancellationToken);
 
             // KURULAN SURUM GERI OKUNUR. Asagida kaydedilecek surum artik manifest'in ISTEDIGI
             // degil, dogrulama sirasinda diskten OLCULEN surumdur (bkz. ComponentVersionProbe).
@@ -1215,7 +1216,7 @@ public sealed class ComponentBootstrapper(
                     component.Id,
                     cleanupPath,
                     cancellationToken);
-                DeleteManagedPath(cleanupPath);
+                DeleteManagedPath(cleanupPath, component.Id);
             }
             catch (Exception exception)
             {
@@ -1240,7 +1241,7 @@ public sealed class ComponentBootstrapper(
             // başarısız bir YÜKSELTME, çalışan bir veritabanının tüm verisini yok ederdi.
             // Binary'ler silinir, veri geri konur; yönetici en kötü ihtimalle bileşeni yeniden kurar.
             var preserved = PreserveDataDirectories(component, cleanupPath);
-            try { DeleteManagedPath(cleanupPath); }
+            try { DeleteManagedPath(cleanupPath, component.Id); }
             finally { preserved.Restore(); }
         }
         catch (Exception exception)
@@ -4936,7 +4937,9 @@ public sealed class ComponentBootstrapper(
             "mariadb-11" or "mysql-8" or "postgresql-16" => ["data"],
             // Stalwart posta kutularını data/, üretilmiş yapılandırmayı (admin parolası dahil) etc/ altında tutar.
             "stalwart-mail" => ["data", "etc"],
-            "roundcube" => ["adapanel-data"],
+            "roundcube" => ["adapanel-data", "temp", "logs", "public_html/tmp"],
+            "adminer" => ["webroot/tmp", "webroot/adapanel-tokens"],
+            "phpmyadmin" => ["tmp", "adapanel-tokens"],
             _ => []
         };
     }
@@ -4952,9 +4955,9 @@ public sealed class ComponentBootstrapper(
             // must come from the new package, rather than preserving the entire ext folder.
             "php-8.3" => ["php.ini", "ext/php_redis.dll"],
             "mariadb-11" or "mysql-8" => ["my.ini"],
-            "roundcube" => ["config/config.inc.php", "web.config", "public_html/web.config"],
-            "phpmyadmin" => ["config.inc.php", "web.config"],
-            "adminer" => ["web.config"],
+            "roundcube" => ["config/config.inc.php", "web.config", "public_html/web.config", "public_html/.user.ini", "public_html/adapanel-health.php"],
+            "phpmyadmin" => ["config.inc.php", "web.config", ".user.ini", "adapanel-health.php", "adapanel-signon.php"],
+            "adminer" => ["web.config", "webroot/web.config", "webroot/.user.ini", "webroot/adapanel-health.php", "webroot/adapanel-signon.php"],
             _ => []
         };
 
@@ -5049,6 +5052,19 @@ public sealed class ComponentBootstrapper(
     {
         if (!string.IsNullOrWhiteSpace(serviceName))
         {
+            // Let database services flush their data before files are moved. A stop
+            // failure must abort the update, not fall through to killing the process.
+            var stopped = await ProcessRunner.RunPowerShellAsync($$"""
+                $ErrorActionPreference = 'Stop'
+                $service = Get-Service -Name '{{serviceName.Replace("'", "''")}}' -ErrorAction SilentlyContinue
+                if ($null -ne $service -and $service.Status -ne 'Stopped') {
+                    $service.Stop()
+                    $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
+                }
+                """, cancellationToken);
+            if (stopped.ExitCode != 0)
+                throw new AppException("software.process_failed", 500, 500, "Could not stop component service before replacing its files: " + serviceName);
+
             // Zamanlanmis gorev (Stalwart gibi) varsa durdur ve sil; yoksa sessizce gecer.
             await ProcessRunner.RunAsync("schtasks.exe", $"/End /TN \"{serviceName}\"", cancellationToken: cancellationToken);
             await ProcessRunner.RunAsync("schtasks.exe", $"/Delete /TN \"{serviceName}\" /F", cancellationToken: cancellationToken);
@@ -5243,7 +5259,7 @@ public sealed class ComponentBootstrapper(
                 .FirstOrDefault();
     }
 
-    private void DeleteManagedPath(string path)
+    private void DeleteManagedPath(string path, string? componentId = null)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -5259,6 +5275,8 @@ public sealed class ComponentBootstrapper(
 
         if (Directory.Exists(expandedPath))
         {
+            if (string.Equals(componentId, "roundcube", StringComparison.OrdinalIgnoreCase))
+                ComponentWebPublication.DetachRoundcubeAssets(expandedPath);
             Directory.Delete(expandedPath, recursive: true);
         }
         else if (File.Exists(expandedPath))

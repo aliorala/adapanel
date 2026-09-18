@@ -1,5 +1,5 @@
 {
-  "body": "- Yazılım mağazasındaki PHP güncelleme isteği kurulum servisine eksiksiz aktarılır; mevcut sürüm nedeniyle güncellemenin atlanması düzeltildi.\n- PHP kurulum sonucu gerçek sürüm ölçüm bilgisini korur.\n- Aynı PHP 8.3 dalındaki güncellemelerde sonradan kurulan Redis eklentisi korunur.",
-  "tag_name": "0.8.45",
-  "name": "0.8.45 — PHP güncelleme akışı düzeltmesi"
+  "name": "0.8.46 — Web araçlarının güncelleme sonrası yayınını koruma",
+  "body": "- Adminer, phpMyAdmin ve Roundcube güncellemelerinde panel giriş ve sağlık dosyaları, oturum dizinleri ve IIS ayarları korunur.\n- Adminer yeni paket kodunu mevcut web köküne aktarır; Roundcube varlık bağlantıları mevcut IIS sitesi ve SSL bağları değiştirilmeden yenilenir.\n- Bileşen yükseltme onayındaki yanlış Sil etiketi Güncelle olarak düzeltildi; komut satırı aracı için gereksiz servis uyarısı kaldırıldı.",
+  "tag_name": "0.8.46"
 }

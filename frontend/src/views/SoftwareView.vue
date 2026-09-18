@@ -505,14 +505,17 @@ async function installComponent(componentId: string) {
 
 // Servisi olan bileşenler (veritabanı motorları, mail, önbellek) yükseltme sırasında KISA SÜRE DURUR.
 // Bunu sessizce yapmak yanlış olur; onay isteriz. Servissiz araçlar (phpMyAdmin, win-acme...) doğrudan.
-const RESTARTS_ON_UPDATE = ["mysql", "mariadb", "postgres", "stalwart", "redis", "memcached", "docker"];
+const RESTARTS_ON_UPDATE = ["mysql-8", "mariadb-11", "postgresql-16", "stalwart-mail", "redis", "memcached", "docker"];
 
 async function updateComponent(item: { id: string; installed?: { version?: string; availableVersion?: string } | null; displayName?: string }) {
-  const risky = RESTARTS_ON_UPDATE.some((prefix) => item.id.toLowerCase().startsWith(prefix));
+  const risky = RESTARTS_ON_UPDATE.includes(item.id.toLowerCase());
   if (risky) {
     await confirm({
       title: t("panel.software.updateConfirmTitle"),
       message: t("panel.software.updateConfirmMessage"),
+      confirmLabel: t("panel.software.update"),
+      busyLabel: t("panel.software.installing"),
+      tone: "neutral",
       impact: [
         `${item.displayName ?? item.id}: ${item.installed?.version ?? "?"} → ${item.installed?.availableVersion ?? "?"}`,
         t("panel.software.updateConfirmService")
