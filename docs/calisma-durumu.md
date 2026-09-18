@@ -1,5 +1,29 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — 0.8.48 canlı; bekleyen altı bileşen güncellemesi tamamlandı
+
+**Güncel canlı panel ve GitHub latest: 0.8.48.** Kaynak commit 49aa3b9. Installer 90.802.172 bayt; SHA256 **DC8C984B71E0B1B79627127A739096481A83A9CD08705A460556D22D107C422F**. GitHub'dan yeniden indirilen dosya ve canlı panelin indirdiği dosya aynı hash ile doğrulandı. Canlı last-attempt: phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false, updatedAtUtc=2026-09-18T07:09:20.334728Z. Yayın/paket logları .tmp/task-preflight-048/. Public GitHub'a kaynak/history/tag push yapılmadı.
+
+Tamamlanan bileşenler:
+- PHP 8.3.31 → **8.3.33**: gerçek CLI sürümü ölçüldü; Redis eklentisi 6.1.0 yükleniyor. php.ini ve Redis DLL hashleri yükseltme öncesiyle birebir.
+- Adminer 5.5.1 → **6.1.0**: mevcut IIS yayını hazır; panelden travian_bot kullanıcısıyla tek tık oturum ve tablo listesi açıldı.
+- Roundcube 1.7.1 → **1.7.4**: RCMAIL_VERSION dosyadan ölçüldü; SQLite verisi ve yapılandırma korundu. Beş IIS bağı (HTTPS dahil) değişmedi; skins/program/plugins junction'ları yeniden oluştu. Yerel health/giriş ve HTTPS giriş HTTP200.
+- MariaDB 11.8.3 → **11.8.9**: Adminer üzerinden salt okunur SELECT VERSION(), DATABASE() sonucu **11.8.9-MariaDB / travian_bot**. Aynı dört veritabanı ve beş kullanıcı listeleniyor.
+- Stalwart CLI 1.0.9 → **1.0.12**: gerçek binary --version ile doğrulandı.
+- Stalwart Mail 0.16.11 → **0.16.22**: ilk deneme kendi portunu yabancı sayan ön kontrolde reddedilmişti. 0.8.48 sonrası Yeniden dene akışında tamamlandı; eski hata temizlendi. Gerçek binary sürümü 0.16.22, çalışan PID9048 aynı yönetilen exe yolunda; 25/143/587/993/4190/8080 portları bu süreçte dinleniyor. 4190 ve 8080 yalnız loopback. Posta yönetimi bağlı; önceki üç domain/0 posta kutusu ve boş kuyruk korunmuş.
+
+Son yeniden güncelleme denetimi: **bekleyen güncelleme yok**, başarısız bileşen yok. Son canlı kontrol: AdaPanel, AdaMariaDB, Redis, DNS, FTPSVC, W3SVC, WAS Running; posta süreci çalışıyor. https://travianpanel.com/, https://adapanel.host/ ve https://webmail.travianpanel.com/ HTTP200. PHP ini hash'i 9B4A101F2109451298AC00FA04D9DFE4AB15CF0067F734743CF5C97E6117E46C; Roundcube config hash'i D178800191EFE21C079276EC73F443EDEB9440E35BAF64270DE9940AEB3305B0 değişmedi. Gerçek bir posta gönderimi yapılmadı; teslim edilebilirlik testi iddia edilmez.
+
+Bu turun kalıcı düzeltmeleri: güncellemede veri/ayar ve mevcut parolayı koruma; çıkarma başarısızlığında dosyaları geri koyma; PHP force bayrağını uçtan uca taşıma ve Redis DLL koruması; web araçlarının auth/health/oturum dosyalarını ve IIS yayınını koruma; Roundcube bağlantılarını güvenli kaldırıp kurma; Windows servislerini önce düzgün durdurma; görev tabanlı servisin yokluğunu yanlış hata saymama; port sahibini tam exe yoluyla tanıma ve bütün dinleyicileri inceleme; yükseltme onayındaki Sil yazısını Güncelle yapma. Ana sayfa CPU/bellek/disk kartları mevcut tarayıcı boyutunda görsel olarak kontrol edildi, taşma görülmedi.
+
+Testler: .44 için 262 ilgili test; .45 için 73; .46 geniş grubunda 285 başarılı ve eski phpMyAdmin-durumsuz beklentisi düzeltilerek ilgili 10 test tekrar başarılı; .47 için 36; son .48 için 67 farklı ilgili senaryo (gerçek Windows loopback/PID/exe yolu ölçümü dahil). Frontend 77 test + tip kontrolü başarılı; sonraki yalnız backend/sürüm değişikliklerinde üretim build tekrarlandı. Bunlar bu bakım kapsamının kanıtıdır; bütün uygulama yollarının yeniden uçtan uca tarandığı anlamına gelmez.
+
+Kurtarma kopyaları sunucuda **C:\ProgramData\AdaPanel\updates\component-safety-20260918-044** altında, SYSTEM/Administrators korumalı dizinde tutuldu: PHP83, Adminer564, CLI3, Roundcube3166, MariaDB1011, Stalwart7 dosya. MariaDB kopyası servis düzgün kapandıktan sonra alındı; Roundcube havuzu ve posta görevi de kopyadan sonra yeniden çalıştırıldı. Bunlar otomatik yedek modülünün FTP arşivleri değildir; bu tur silinmedi.
+
+Kullanıcı tercihleri: yedekleme modülü duruyor, şifreleme kapalı, günlük03:00/5 gün korundu; kapalı alioral.xyz yeniden etkinleştirilmedi, mevcut IIS/veri kayıtlarına dokunulmadı; kompakt görünüm korundu. Son gece otomasyonu 18 Eylül03:08:40 tamamlanmıştı. Önceki12Eylül/boşFTPklasörü temizlik doğrulaması .43 notlarında; bu tur yedek silme işi tekrarlanmadı.
+
+İzlenecek arayüz ayrıntısı: başarısız kurulum kaydı hedef sürümü tuttuğundan, retry öncesinde güncelleme denetimi “Tüm bileşenler güncel” diyebilirken satır Başarısız görünüyordu. Bu tur gerçek binary/SQL ve sağlık ölçümüyle durum ayrıştırıldı; son durumda bütün ilgili bileşenler Kurulu ve gerçek sürümleri doğrulandı. İleride başarısız denemelerin sürüm/özet sunumu ayrıca iyileştirilebilir. Aşağıdaki hazırlık notları tarihçedir; bu üst kayıt son durumu anlatır.
+
 ## 2026-09-18 — Beş bileşen güncel; son posta ön kontrol düzeltmesi (0.8.48 hazırlanıyor)
 
 Canlı panel 0.8.47. Installer 90.801.270 bayt, SHA256 CBC550D70BDFC319267B2F1B0E5EE848199A6506D56207EA489DD8694B37FB54; GitHub yeniden indirme ve canlı indirme eşleşti. phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false; updatedAtUtc=2026-09-18T06:43:57.8129021Z. Kaynak commit 612228d. 0.8.46 canlıya kurulmadan atlandı.
