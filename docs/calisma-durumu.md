@@ -1,6 +1,22 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — 0.8.50 canlı; güncelleme uyarıları ve çekmece doğrulandı
+
+Canlı panel/GitHub latest 0.8.50. Kaynak 34e8073, eşleşen CSS sınıfı sadeleştirmesi e47df58, üretim frontend girişi 596c114. Paket 90.802.833 bayt, SHA256 D011D52F3432304427BD9039036995DA3353AEB296B3775CE5CBCF2E78177AFB; yayın dosyası yeniden indirilerek ve canlı panelde aynı özetle doğrulandı. Kaynak/history/tag push yok.
+
+Canlı last-attempt: phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false, isDecidedByPanel=true, updatedAtUtc=2026-09-18T11:46:27.8095222Z. AdaPanel/AdaMariaDB/AdaRedis/DNS/FTPSVC/W3SVC/WAS Running; Stalwart PID9048. travianpanel.com, adapanel.host ve webmail.travianpanel.com HTTPS HTTP200. Sunucu sağlığı: 3 alan adı güncel, 0 eksik/0 sunucu geneli bulgu. Kullanıcının kapalı alioral.xyz tercihini değiştiren işlem yapılmadı.
+
+Canlı arayüz: eskiden display:none olan çekmece başlığı, Kapat ve Git düğmeleri, dört uyarı/bilgi satırı yeni sınıflarla görünür. Aynı origin/tarayıcıda ekran görüntüsüyle taşmasız doğrulandı. Kesin reklam filtresi/eklenti kaynağı tanımlanmadı. Ana sayfa 0 güncelleme bekliyor, 0 sertifika bitişi, 1 uyarı gösteriyor; panel ana sayfada bırakıldı. Kalan dört öneri: varsayılan giriş yolu /panel, antivirüs kurulu olmaması, bildirim kanalının eksikliği, IP kısıtı tanımlı olmaması. Bunlar bu tur otomatik değiştirilmedi.
+
+AÇIK performans konusu: yeniden başlatma sonrasında dikkat listesinin ilk yüklenişi uzadı; canlı log 14:48:17'de /attention HTTP200 için 113705ms ve 34183ms gösterdi. .49'daki önceki ölçümler de 64170/30069 ve sıcak durumda 11-13 saniyeydi. İlk yenilenmiş oturumda liste Yükleniyor durumunda kaldı; sayfa reload sonrası yaklaşık 20 saniye içinde rozetler/liste geldi (14:51:34), görüntüyle doğrulandı. Kök neden bu tur kesinleştirilmedi; çözüldü denmemeli. DomainRefreshService ağır denetimi 10 dakika önbellekliyor ve tek geçit kullanıyor; Attention/Advisor ardışık ölçüm yapıyor. Sonraki turda istek birikmesi/istemci yükleme durumu ve ilk denetim gecikmesi incelenebilir. Canlı servisler sağlıklı.
+
+Doğrulama: Infrastructure 5389/5389, frontend 88/88, typecheck/build başarılı; ilgili 93 test ayrıca geçti. Yalnız son eşleşen CSS sınıf adı düzenlemesinden sonra build tekrarlandı; tam backend gereksiz tekrarlanmadı. Paket 168 dosya içerik denetimi, 22 Passed/3 büyük paket mevcut politika ile Skipped, installer denetimi geçti. Kanıtlar .tmp/audit-050/ altında. Yerel Vite test sunucusu durduruldu; test sekmesi zaten kapanmıştı.
+
+Kullanıcı ayrıca Codex uygulamasındaki "The access_programs parameter is not enabled for this organization" mesajını sordu; AdaPanel kaynağında access_programs bulunmadı. Mesajın kuruluş için etkin olmayan istek parametresini ifade ettiği açıklandı; resmi dokümanda bu tam parametreye özel açıklama bulunamadı, neden gönderildiği kesinleştirilmedi. Hesap/kuruluş izinleri değiştirilmedi. Yedekleme/şifreleme kapalı tercihi ve önceki yedek temizlik sonuçları korundu; bu tur yedek silme/posta teslim testi yapılmadı. Bütün sistemde sıfır sorun iddiası yok.
+
 ## 2026-09-18 — 0.8.50 hazır; güncel uyarılar, dikkat çekmecesi ve PowerShell modülleri
+
+0.8.50 yayın kanıtı: kaynak 34e8073, sınıf adı düzeltmesi e47df58, frontend giriş dosyası 596c114. Son yalnız CSS sınıf adı normalizasyonundan sonra üretim build tekrar başarılı; davranış testlerini gereksiz tekrar etmedik. Paket 90.802.833 bayt, SHA256 D011D52F3432304427BD9039036995DA3353AEB296B3775CE5CBCF2E78177AFB. Publish içerik denetimi 168 dosya; bileşenler 22 Passed/3 büyük paket politika ile Skipped; installer denetimi geçti. Yayın betiği ilk denemede yükledi ve GitHub'dan yeniden indirilen dosya aynı SHA256 verdi. Kaynak/history/tag push yok. Canlı kurulum sonucu henüz bu kayıtta tamamlanmış sayılmaz. Kanıt .tmp/audit-050/package.log ve publish.log. Paket öncesi ilk derleme, eşleşen ama gereksiz tekrarlı CSS sınıf adını düzeltmek için durdurulmuştu; yayımlanan paket son başarılı koşudan.
 
 Canlı bu not anında 0.8.49; 0.8.50 paket/yayın/kurulum henüz yapılmadı. Advisor günlük otomasyonun eski PendingComponentUpdates değerini kullanıyordu; tüm bileşenler güncelken ana sayfada 1 güncelleme kalıyordu. Advisor ve Attention güncel bileşen önbelleğini kullanır. AffectedCount alanıyla tek maddede gruplanan altı güncelleme ana sayfada altı sayılır; kaynak hatası FailedSources olarak korunur.
 
