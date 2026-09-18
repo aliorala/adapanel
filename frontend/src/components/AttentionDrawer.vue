@@ -53,7 +53,9 @@
         {{ t("panel.attention.failedSources") }}: {{ summary.failedSources.join(", ") }}
       </p>
 
-      <div v-if="summary && summary.items.length === 0 && !loading" class="attention-empty">
+      <p v-if="loading && !summary" class="meta" role="status">{{ t("panel.common.loading") }}</p>
+
+      <div v-if="summary && summary.items.length === 0 && !loading && !loadError && !summary.failedSources.length" class="attention-empty">
         <span class="attention-empty-badge" aria-hidden="true">✓</span>
         <div>
           <strong>{{ t("panel.attention.emptyTitle") }}</strong>

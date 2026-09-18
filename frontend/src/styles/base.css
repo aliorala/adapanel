@@ -430,6 +430,7 @@ select {
 
 .panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-12);
   min-width: 0;
   /* 16px 18px -> her yandan 16px. 18px ölçek dışıydı ve asimetri bir karar değil, birikmiş bir

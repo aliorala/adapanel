@@ -91,8 +91,8 @@ function normalizeSummary(raw: Partial<AttentionSummary> | null | undefined): At
   };
 }
 
-export async function getAttentionSummary(): Promise<AttentionSummary> {
-  const response = await apiClient.get<ApiEnvelope<AttentionSummary>>("/attention");
+export async function getAttentionSummary(signal?: AbortSignal): Promise<AttentionSummary> {
+  const response = await apiClient.get<ApiEnvelope<AttentionSummary>>("/attention", { signal });
   return normalizeSummary(response.data?.data);
 }
 

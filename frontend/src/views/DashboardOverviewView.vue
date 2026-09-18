@@ -51,7 +51,8 @@
         </button>
       </div>
 
-      <p v-if="attention.totalCount === 0" class="ac-clear">{{ t("panel.attention.emptyTitle") }}</p>
+      <p v-if="attention.failedSources.length" class="notice warn" role="status">{{ t("panel.attention.failedSources") }}</p>
+      <p v-else-if="attention.totalCount === 0" class="ac-clear">{{ t("panel.attention.emptyTitle") }}</p>
     </section>
 
     <!--

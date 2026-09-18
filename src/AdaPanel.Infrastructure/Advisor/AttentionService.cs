@@ -24,6 +24,7 @@ public sealed class AttentionService(
 {
     public async Task<AttentionSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var items = new List<AttentionItemDto>();
         var failed = new List<string>();
 
@@ -32,6 +33,7 @@ public sealed class AttentionService(
         try
         {
             var report = await advisorService.GetReportAsync(cancellationToken);
+            failed.AddRange(report.FailedChecks);
             foreach (var item in report.Items)
             {
                 items.Add(new AttentionItemDto
@@ -48,7 +50,7 @@ public sealed class AttentionService(
                 });
             }
         }
-        catch { failed.Add("advisor"); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("advisor"); }
 
         // 2) Kurulu bileşen güncellemeleri (önbellekten okunur, ağa çıkılmaz).
         // NOT: Danışman da aynı id'yi ("component-updates") üretebilir → Deduplicate tekilleştirir.
@@ -71,7 +73,7 @@ public sealed class AttentionService(
                 });
             }
         }
-        catch { failed.Add("components"); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("components"); }
 
         // 3) Panel güncellemesi (GitHub Releases; ağ hatası tüm raporu bozmasın).
         try
@@ -90,7 +92,7 @@ public sealed class AttentionService(
                 });
             }
         }
-        catch { failed.Add("panelUpdate"); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("panelUpdate"); }
 
         // 4) DNS'in DIŞARIYA yanıt verebilirliği. Bu, 2026-07-23 kesintisinin ta kendisidir:
         // servis "Running" iken yalnız loopback'e bind kalmıştı → KRİTİK + tek-tık onarım.
@@ -112,7 +114,7 @@ public sealed class AttentionService(
                 });
             }
         }
-        catch { failed.Add("dns"); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("dns"); }
 
         // 4b) Panel güncellendiğinde YENİ varsayılanlar yalnız yeni alan adlarına uygulanır; eskiden
         // eklenmiş alan adları DMARC/DKIM/MX gibi kayıtlardan habersiz kalır. Bu eksiklik kendini
@@ -121,6 +123,8 @@ public sealed class AttentionService(
         try
         {
             var stale = await domainRefreshService.InspectAllAsync(cancellationToken);
+            if (stale.FailedSites > 0 || stale.Results.Any(result => !string.IsNullOrWhiteSpace(result.Error)))
+                failed.Add("domains");
             if (stale.UpdatedSites > 0)
             {
                 var names = stale.Results
@@ -166,13 +170,15 @@ public sealed class AttentionService(
                 });
             }
         }
-        catch { failed.Add("domains"); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("domains"); }
 
         // 5) Durmuş Windows servisleri → tek-tık yeniden başlat.
         try
         {
             foreach (var service in await healthService.GetHealthAsync(cancellationToken))
             {
+                if (string.Equals(service.Status, "Unknown", StringComparison.OrdinalIgnoreCase))
+                    failed.Add("services");
                 if (!string.Equals(service.Status, "Stopped", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
@@ -192,7 +198,7 @@ public sealed class AttentionService(
                 });
             }
         }
-        catch { failed.Add("services"); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("services"); }
 
         var ordered = Prioritize(items);
         return new AttentionSummaryDto
@@ -203,7 +209,7 @@ public sealed class AttentionService(
             TotalCount = ordered.Count,
             CheckedAtUtc = DateTime.UtcNow,
             SectionCounts = CountBySection(ordered),
-            FailedSources = failed,
+            FailedSources = failed.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             Items = ordered
         };
     }

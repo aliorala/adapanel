@@ -17,6 +17,7 @@ public sealed partial class DnsService(
     JsonFileStore fileStore,
     ILogger<DnsService> logger) : IDnsService
 {
+    private readonly DnsAvailabilityProbe dnsAvailability = new();
     private const string StatePath = "config/dns-zones.json";
     private const string TemplatePath = "config/dns-template.json";
     private const string WatchdogPath = "config/dns-watchdog.json";
@@ -125,6 +126,7 @@ public sealed partial class DnsService(
             {
                 throw new AppException("dns.windows_install_failed", 500, 500, BuildCommandDetails(install));
             }
+            dnsAvailability.Invalidate();
         }
 
         await TrySyncWindowsDnsAsync(state, cancellationToken);
@@ -2428,14 +2430,8 @@ public sealed partial class DnsService(
             .ThenBy(record => record.Value, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static async Task<bool> IsWindowsDnsAvailableAsync(CancellationToken cancellationToken)
-    {
-        var result = await ProcessRunner.RunPowerShellAsync(
-            "if (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue) { 'true' } else { 'false' }",
-            cancellationToken);
-
-        return result.Success && result.StandardOutput.Contains("true", StringComparison.OrdinalIgnoreCase);
-    }
+    private Task<bool> IsWindowsDnsAvailableAsync(CancellationToken cancellationToken)
+        => dnsAvailability.GetAsync(cancellationToken);
 
     /// <summary>
     /// Windows DNS'in bölge için bildirdiği TÜRÜ okur (Primary/Secondary/Stub…). Bölge yoksa ya da

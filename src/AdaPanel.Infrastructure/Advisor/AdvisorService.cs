@@ -50,7 +50,7 @@ public sealed class AdvisorService(
                 });
             }
         }
-        catch { /* ağ/oran sınırı: öneri atlanır */ }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("panelUpdate"); }
 
         // Kurulu bileşen güncellemeleri (PHP, veritabanı, phpMyAdmin, webmail, win-acme...).
         // Güncel bileşen önbelleğini oku. Günlük otomasyonun son sonucu, elle kurulan
@@ -72,7 +72,7 @@ public sealed class AdvisorService(
                 });
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
@@ -98,7 +98,7 @@ public sealed class AdvisorService(
                 }
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
@@ -127,7 +127,7 @@ public sealed class AdvisorService(
                 items.Add(new AdvisorItemDto { Id = "memory-high", Severity = "warning", TitleKey = "advisor.memory.high", Detail = $"%{overview.MemoryUsagePercent:F0}", ActionSection = "monitor" });
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
@@ -164,7 +164,7 @@ public sealed class AdvisorService(
                 items.Add(new AdvisorItemDto { Id = "alerts-off", Severity = "info", TitleKey = "advisor.alerts.off", ActionSection = "tools" });
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
@@ -185,7 +185,7 @@ public sealed class AdvisorService(
                 items.Add(new AdvisorItemDto { Id = "antivirus-no-definitions", Severity = "warning", TitleKey = "advisor.antivirus.noDefinitions", ActionSection = "security" });
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
@@ -220,7 +220,7 @@ public sealed class AdvisorService(
                 });
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.
@@ -242,7 +242,7 @@ public sealed class AdvisorService(
                 items.Add(new AdvisorItemDto { Id = "ip-allowlist-empty", Severity = "info", TitleKey = "advisor.ipAllowlist.empty", ActionSection = "settings" });
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Yutulan hata "sorun yok" DEĞİLDİR: rapor bunu ayrıca bildirir, aksi hâlde
             // ekranda yeşil tik ve "Her şey yolunda" görünür.

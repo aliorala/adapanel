@@ -1,5 +1,15 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — 0.8.51 denetim düzeltmeleri hazır; canlı doğrulama bekliyor
+
+Canlı son doğrulanan sürüm 0.8.50. 0.8.51: dikkat listesinde arka plan/düğme istekleri tek devam eden isteği paylaşır; çıkış/oturum sona ermesi istekleri iptal eder, eski yanıt yeni oturuma yazılamaz. Advisor kaynak hataları ve kısmi alan adı/servis sonuçları dikkat listesine taşınır; eksik tarama sağlıklı durum diye gösterilmez. İstek iptali backend taramalarında yutulmaz. Windows DNS kullanılabilirliği scoped servis boyunca bir kez ölçülür; DNS kurulumundan sonra yenilenir, hata/iptal önbelleğe alınmaz. Bu değişiklikler soğuk ilk taramanın bütünüyle hızlandığını henüz kanıtlamaz.
+
+Canlı 0.8.50 ana sayfa, site listesi, travianpanel.com hosting/sağlık, posta ve veritabanı görünümü salt okunur incelendi. Mobil veritabanı ekranında yatay taşma gerçek kaynak bileşeniyle yerelde yeniden üretildi. .panel grid sütunu minmax(0,1fr) yapıldı: 390x844 pencerede kullanılabilir genişlik 380; belge genişliği 455'ten 380'e indi. Açıklama/düğmeler sığıyor, geniş tablo kendi içinde kayıyor. Diğer yönetim ekranlarının güncel canlı taraması ve 0.8.51 kurulum doğrulaması henüz tamamlanmadı. Tarayıcı eski sekmeye debugger bağlantısını kaybetti; yeni denetim sekmesi giriş bekliyor. Kullanıcıdan bu sekmede giriş istendi, parola istenmedi.
+
+Test: hedefli 320/320; frontend 96/96 (18 dosya, son koşuda 0 unhandled error); typecheck/build geçti. Tam Infrastructure koşusu 5395 başarılı / 1 sürüm tutarlılığı hatası / 0 atlanan: release-body eski 0.8.50 kalmıştı, 0.8.51'e düzeltildi ve ilgili 6 sürüm testi tekrar geçti. İlk frontend SSR test koşusundaki document eksikliği test ortamında giderildi; son 96 test temiz. Mevcut xUnit2031 uyarısı değişmedi. Kanıtlar .tmp/audit-051/. Bütün canlı iş akışlarının uçtan uca denendiği iddia edilmez.
+
+Yedekleme korunur, şifreleme kullanıcı tercihiyle kapalıdır; alioral.xyz yeniden etkinleştirilmez. Public GitHub'a kaynak/history/tag push yasaktır; yalnız mevcut yayın betiğiyle installer release. Bu tur yedek silme veya gerçek posta teslim testi yapılmadı.
+
 ## 2026-09-18 — 0.8.50 canlı; güncelleme uyarıları ve çekmece doğrulandı
 
 Canlı panel/GitHub latest 0.8.50. Kaynak 34e8073, eşleşen CSS sınıfı sadeleştirmesi e47df58, üretim frontend girişi 596c114. Paket 90.802.833 bayt, SHA256 D011D52F3432304427BD9039036995DA3353AEB296B3775CE5CBCF2E78177AFB; yayın dosyası yeniden indirilerek ve canlı panelde aynı özetle doğrulandı. Kaynak/history/tag push yok.

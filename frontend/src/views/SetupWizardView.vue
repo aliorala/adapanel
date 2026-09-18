@@ -669,7 +669,7 @@ import PanelAccessCard from "../components/PanelAccessCard.vue";
 import DashboardOverviewView from "./DashboardOverviewView.vue";
 import { checkForUpdate, type UpdateStatus } from "../api/update";
 import { useSectionError } from "../composables/useNotice";
-import { getAttentionSummary, type AttentionSummary } from "../api/attention";
+import { useAttentionSummary } from "../composables/useAttentionSummary";
 import { lazyView } from "../utils/lazyView";
 
 /*
@@ -790,9 +790,8 @@ const panelUpdate = ref<UpdateStatus | null>(null);
 const panelUpdateLoad = useSectionError();
 const ftpUserCount = ref(0);
 // "Dikkat" toplayıcısı (menü rozetleri + üst bar çekmecesi). Yalnız admin doldurur (uç admin-only).
-const attentionSummary = ref<AttentionSummary | null>(null);
-const attentionLoading = ref(false);
-const attentionError = ref("");
+const attention = useAttentionSummary(resolveApiMessage);
+const { summary: attentionSummary, loading: attentionLoading, error: attentionError } = attention;
 const attentionOpen = ref(false);
 let refreshHandle: number | null = null;
 let attentionHandle: number | null = null;
@@ -1126,7 +1125,7 @@ function handleSessionExpired() {
   mode.value = "auth";
   activeSection.value = "home";
   attentionOpen.value = false;
-  attentionSummary.value = null;
+  attention.reset();
   requiresTwoFactor.value = false;
   // Askı bayrağı ve marka bir sonraki kullanıcıya sızmamalı (çıkış akışıyla aynı temizlik).
   subscriptionStore.reset();
@@ -1374,7 +1373,7 @@ async function logout() {
     activeSection.value = "home";
     await router.replace({ query: {} });
     attentionOpen.value = false;
-    attentionSummary.value = null;
+    attention.reset();
     requiresTwoFactor.value = false;
     // Salt okunur bayrağı bir sonraki kullanıcıya sızmamalı.
     subscriptionStore.reset();
@@ -1728,21 +1727,7 @@ async function loadAttention(silent = true) {
     return;
   }
 
-  if (!silent) {
-    attentionLoading.value = true;
-    attentionError.value = "";
-  }
-
-  try {
-    attentionSummary.value = await getAttentionSummary();
-    attentionError.value = "";
-  } catch (error) {
-    if (!silent) {
-      attentionError.value = resolveApiMessage(error);
-    }
-  } finally {
-    attentionLoading.value = false;
-  }
+  await attention.refresh(silent);
 }
 
 // Ana sayfa banner'ı için panel güncelleme durumunu bir kez çek (admin; GitHub Releases'e bakar, hata olursa sessiz).

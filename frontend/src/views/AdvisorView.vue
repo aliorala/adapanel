@@ -34,7 +34,7 @@
       {{ t("panel.advisor.checksFailed", { checks: report.failedChecks.join(", ") }) }}
     </div>
 
-    <div v-if="report && report.items.length === 0 && !report.failedChecks?.length" class="advisor-clear">
+    <div v-if="report && report.items.length === 0 && !report.failedChecks?.length && !loading && !notice" class="advisor-clear">
       <span class="clear-badge">✓</span>
       <div>
         <strong>{{ t("panel.advisor.allClearTitle") }}</strong>
