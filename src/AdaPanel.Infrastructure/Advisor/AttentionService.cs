@@ -1,12 +1,14 @@
 using AdaPanel.Core.Dtos.Advisor;
 using AdaPanel.Core.Interfaces;
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Advisor;
 
 /// <summary>
 /// "Dikkat" toplayıcı: menü rozetleri ve bildirim çekmecesi için TEK kaynak.
 /// <para>
-/// YENİ ÖLÇÜM YAPMAZ — panelin zaten ürettiği sinyalleri (Danışman, bekleyen bileşen güncellemeleri,
+/// Mevcut servislerin sağlık denetimlerini çağırır ve sinyalleri (Danışman, bekleyen bileşen güncellemeleri,
 /// panel güncellemesi, DNS bind sağlığı, durmuş servisler) tek listede birleştirir. Sebebi:
 /// 2026-07-23'te sorun panelde ÖLÇÜLÜYORDU ama kimsenin baktığı ekranda görünmüyordu; rozet bunun
 /// tekrarlanmasını engeller.
@@ -20,13 +22,21 @@ public sealed class AttentionService(
     ISelfUpdateService selfUpdateService,
     IDnsService dnsService,
     IDomainRefreshService domainRefreshService,
-    IHealthService healthService) : IAttentionService
+    IHealthService healthService,
+    ILogger<AttentionService>? logger = null) : IAttentionService
 {
     public async Task<AttentionSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var items = new List<AttentionItemDto>();
         var failed = new List<string>();
+        var stage = Stopwatch.StartNew();
+        var durations = new List<string>();
+        void RecordDuration(string source)
+        {
+            durations.Add($"{source}={stage.ElapsedMilliseconds}");
+            stage.Restart();
+        }
 
         // 1) Danışman raporu: SSL bitişi, disk/bellek, güvenlik ayarları... Zaten önceliklendirilmiş
         // maddeler olduğu gibi aktarılır (tekrar yorumlamıyoruz).
@@ -51,6 +61,7 @@ public sealed class AttentionService(
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("advisor"); }
+        RecordDuration("advisor");
 
         // 2) Kurulu bileşen güncellemeleri (önbellekten okunur, ağa çıkılmaz).
         // NOT: Danışman da aynı id'yi ("component-updates") üretebilir → Deduplicate tekilleştirir.
@@ -74,6 +85,7 @@ public sealed class AttentionService(
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("components"); }
+        RecordDuration("components");
 
         // 3) Panel güncellemesi (GitHub Releases; ağ hatası tüm raporu bozmasın).
         try
@@ -93,6 +105,7 @@ public sealed class AttentionService(
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("panelUpdate"); }
+        RecordDuration("panelUpdate");
 
         // 4) DNS'in DIŞARIYA yanıt verebilirliği. Bu, 2026-07-23 kesintisinin ta kendisidir:
         // servis "Running" iken yalnız loopback'e bind kalmıştı → KRİTİK + tek-tık onarım.
@@ -115,6 +128,7 @@ public sealed class AttentionService(
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("dns"); }
+        RecordDuration("dns");
 
         // 4b) Panel güncellendiğinde YENİ varsayılanlar yalnız yeni alan adlarına uygulanır; eskiden
         // eklenmiş alan adları DMARC/DKIM/MX gibi kayıtlardan habersiz kalır. Bu eksiklik kendini
@@ -171,6 +185,7 @@ public sealed class AttentionService(
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("domains"); }
+        RecordDuration("domains");
 
         // 5) Durmuş Windows servisleri → tek-tık yeniden başlat.
         try
@@ -199,6 +214,8 @@ public sealed class AttentionService(
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { failed.Add("services"); }
+        RecordDuration("services");
+        logger?.LogInformation("Attention probe durations (ms): {Durations}", string.Join(", ", durations));
 
         var ordered = Prioritize(items);
         return new AttentionSummaryDto

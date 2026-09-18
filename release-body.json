@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.54",
-  "name": "0.8.54 — Açılış durumunun doğru gösterimi",
-  "body": "- Sunucu durumu okunmadan ilk kurulum formunun görünmesi düzeltildi.\n- Bağlantı hatasında kurulum yerine hata bilgisi ve yeniden deneme sunulur.\n- Mobil taşma ve site kurucu bildirim düzeltmelerini içerir."
+  "tag_name": "0.8.55",
+  "name": "0.8.55 — Alan adı denetimi iyileştirmeleri",
+  "body": "- Alan adı denetimindeki tekrarlanan DNS ve posta okumaları azaltıldı.\n- Site değişikliklerinden ve eşzamanlı onarımdan sonra eski uyarıların gösterilmesi düzeltildi.\n- Başarısız alan adı denetimleri sonraki taramada yeniden denenir."
 }

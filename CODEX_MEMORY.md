@@ -1,5 +1,11 @@
 # AdaPanel Codex Memory
 
+## 2026-09-18 — 0.8.55 denetim düzeltmeleri (hazırlık)
+
+Alan adı denetiminde aynı posta DNS ve yayınlanmış DNS kaydı iki kez okunuyordu. Salt okunur tek site denetimi artık Lazy görevleriyle her kaynağı bir kez okur; sonraki denetim ve yazma yapan onarım yeniden ölçer. Site kimliği/adı/çalışma durumu önbellek parmak izine eklendi. Onarım sırasında devam eden eski taramanın önbelleği yeniden geçerli yapması nesil sayacıyla engellendi; FailedSites içeren sonuçlar on dakika tutulmaz. AttentionService altı kontrolün sürelerini tek satırda kaydeder.
+
+İlk hedefli testler31/31, frontend build başarılı. Tam backend testi sürüyor; ilk yeni test derlemesindeki Options ad alanı çakışması tam ad kullanılarak giderildi. Canlı henüz0.8.54; güncelleme öncesi16:25–16:27 attention9.6–10.3sn ölçüldü. Önceki45sn gecikme çözülmüş kabul edilmedi. Kanıt dizini .tmp/audit-055. Yedek şifrelemesi kapalı, alioral.xyz olduğu gibi korunur. Kaynak GitHub'a itilmez; yalnız doğrulanmış installer yayımlanır.
+
 ## 2026-09-18 — SON DURUM: 0.8.54 canlı, görünüm ve açılış doğrulandı
 
 Canlı panel ve GitHub latest 0.8.54. Kaynak/üretim frontend girişi: 2ec75e9. Paket: 90.802.829 bayt; SHA256 917A7D95BF77BF82C34B135B9138448FA526B4936D88E272CA9BD1C2E52147F1. Yayından yeniden indirilen dosya ve canlı paneldeki hazır paket aynı özetle doğrulandı. Kaynak, history veya tag push yapılmadı.

@@ -1,5 +1,7 @@
 using AdaPanel.Core.Dtos.Health;
 using AdaPanel.Core.Dtos.Sites;
+using AdaPanel.Core.Dtos.Mail;
+using System.Text.Json;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -65,9 +67,8 @@ internal sealed class DomainRefreshService(
     /// <summary>Denetim sonucu artik bayat: durum degisti.</summary>
     private static void InvalidateInspectionCache()
     {
-        _cachedInspection = null;
-        _cachedInspectionAtUtc = DateTime.MinValue;
-        _cachedInspectionFingerprint = string.Empty;
+        Interlocked.Increment(ref _inspectionGeneration);
+        Volatile.Write(ref _cachedInspection, null);
     }
 
     public Task<DomainRefreshResultDto> InspectAsync(string siteName, CancellationToken cancellationToken = default)
@@ -76,6 +77,8 @@ internal sealed class DomainRefreshService(
     private async Task<DomainRefreshResultDto> RunAsync(string siteName, bool applyChanges, CancellationToken cancellationToken)
     {
         var result = new DomainRefreshResultDto { SiteName = siteName, ZoneName = siteName };
+        // Only this read-only inspection shares measurements. Repairs must read again after writes.
+        var reads = applyChanges ? null : new InspectionReads(siteName, dnsService, mailService, cancellationToken);
 
         try
         {
@@ -110,7 +113,7 @@ internal sealed class DomainRefreshService(
                 // alan adi "guncel" sayilir, dugme GIZLENIR ve kullanici duzeltmeye hic ulasamazdi.
                 // Canli sunucuda tam olarak bu oldu: DKIM eksikti, onarma bunu duzeltebiliyordu,
                 // ama dugme gorunmedigi icin kullanici "onar butonu nerede" diye sordu.
-                result.AppliedMailRecords = await CountMissingMailRecordsAsync(siteName, cancellationToken);
+                result.AppliedMailRecords = await CountMissingMailRecordsAsync(siteName, reads!, cancellationToken);
             }
 
             if (applyChanges)
@@ -159,7 +162,7 @@ internal sealed class DomainRefreshService(
 
             // 4) Ucuz saglik kontrolleri. Hicbiri kendiliginden YIKICI is yapmaz; duzeltilebilenler
             //    duzeltilir, geri kalanlar onay/bilgi olarak raporlanir.
-            result.Findings = await CollectFindingsAsync(siteName, cancellationToken);
+            result.Findings = await CollectFindingsAsync(siteName, cancellationToken, reads);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -188,13 +191,13 @@ internal sealed class DomainRefreshService(
     /// </summary>
     private static readonly TimeSpan InspectionFreshness = TimeSpan.FromMinutes(10);
 
-    private static DomainRefreshSummaryDto? _cachedInspection;
-    private static DateTime _cachedInspectionAtUtc = DateTime.MinValue;
-    private static string _cachedInspectionFingerprint = string.Empty;
+    private sealed record InspectionCache(DomainRefreshSummaryDto Summary, DateTime AtUtc, string Fingerprint, long Generation);
+    private static InspectionCache? _cachedInspection;
+    private static long _inspectionGeneration;
     private static readonly SemaphoreSlim InspectionGate = new(1, 1);
 
     /// <summary>
-    /// Zone durumunun "parmak izi": DNS kayıt dosyasının son yazılma anı + site sayısı.
+    /// Zone durumunun parmak izi: kayıt dosyası, site kimlikleri ve çalışma durumları.
     /// <para>
     /// Süreye ek olarak bu gerekli: yalnız zamana bakan bir önbellek, kullanıcı bir kayıt sildikten
     /// sonra 10 dakika boyunca "eksik yok" demeye devam ederdi. Yani uyarı, tam da uyarması gereken
@@ -202,13 +205,19 @@ internal sealed class DomainRefreshService(
     /// ama tazeleme çalıştırılınca 1 alan adının güncellendiği ortaya çıktı.
     /// </para>
     /// </summary>
-    private string ComputeFingerprint(int siteCount)
+    private string ComputeFingerprint(IReadOnlyCollection<SiteDto> sites)
     {
         try
         {
             var path = fileStore.ResolvePath("config/dns-zones.json");
             var stamp = File.Exists(path) ? File.GetLastWriteTimeUtc(path).Ticks : 0L;
-            return $"{stamp}:{siteCount}";
+            return JsonSerializer.Serialize(new
+            {
+                Path = path,
+                Stamp = stamp,
+                Sites = sites.OrderBy(site => site.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(site => new { site.Id, site.Name, site.State })
+            });
         }
         catch (Exception)
         {
@@ -231,20 +240,23 @@ internal sealed class DomainRefreshService(
         return summary;
     }
 
-    private static bool IsCacheUsable(string fingerprint) =>
-        _cachedInspection is not null &&
-        string.Equals(_cachedInspectionFingerprint, fingerprint, StringComparison.Ordinal) &&
-        DateTime.UtcNow - _cachedInspectionAtUtc < InspectionFreshness;
+    private static DomainRefreshSummaryDto? ReadCache(string fingerprint)
+    {
+        var cache = Volatile.Read(ref _cachedInspection);
+        return cache is not null && cache.Generation == Interlocked.Read(ref _inspectionGeneration) &&
+            string.Equals(cache.Fingerprint, fingerprint, StringComparison.Ordinal) &&
+            DateTime.UtcNow - cache.AtUtc < InspectionFreshness ? cache.Summary : null;
+    }
 
     public async Task<DomainRefreshSummaryDto> InspectAllAsync(CancellationToken cancellationToken = default)
     {
         // Önbellek HEM süreye HEM zone durumuna bağlı: kullanıcı bir kayıt sildiği anda parmak izi
         // değişir ve uyarı hemen görünür. Yalnız süreye bakmak, uyarıyı tam gerektiği anda susturuyordu.
-        var siteCount = (await siteService.GetSitesAsync(cancellationToken)).Count;
-        var fingerprint = ComputeFingerprint(siteCount);
-        if (IsCacheUsable(fingerprint))
+        var sites = await siteService.GetSitesAsync(cancellationToken);
+        var fingerprint = ComputeFingerprint(sites);
+        if (ReadCache(fingerprint) is { } cached)
         {
-            return _cachedInspection!;
+            return cached;
         }
 
         // Tek geçit: birden çok panel sekmesi aynı anda rozetini yenilediğinde aynı ağır taramanın
@@ -252,15 +264,20 @@ internal sealed class DomainRefreshService(
         await InspectionGate.WaitAsync(cancellationToken);
         try
         {
-            if (IsCacheUsable(fingerprint))
+            // The sites/config may have changed while another inspection held the gate.
+            var generation = Interlocked.Read(ref _inspectionGeneration);
+            sites = await siteService.GetSitesAsync(cancellationToken);
+            fingerprint = ComputeFingerprint(sites);
+            if (ReadCache(fingerprint) is { } current)
             {
-                return _cachedInspection!;
+                return current;
             }
 
-            var summary = await RunAllAsync(applyChanges: false, cancellationToken);
-            _cachedInspection = summary;
-            _cachedInspectionAtUtc = DateTime.UtcNow;
-            _cachedInspectionFingerprint = fingerprint;
+            var summary = await RunAllAsync(applyChanges: false, cancellationToken, sites);
+            if (summary.FailedSites == 0)
+            {
+                Volatile.Write(ref _cachedInspection, new InspectionCache(summary, DateTime.UtcNow, fingerprint, generation));
+            }
             return summary;
         }
         finally
@@ -269,9 +286,10 @@ internal sealed class DomainRefreshService(
         }
     }
 
-    private async Task<DomainRefreshSummaryDto> RunAllAsync(bool applyChanges, CancellationToken cancellationToken)
+    private async Task<DomainRefreshSummaryDto> RunAllAsync(bool applyChanges, CancellationToken cancellationToken,
+        IReadOnlyCollection<SiteDto>? sites = null)
     {
-        var sites = await siteService.GetSitesAsync(cancellationToken);
+        sites ??= await siteService.GetSitesAsync(cancellationToken);
         var results = new List<DomainRefreshResultDto>(sites.Count);
 
         foreach (var site in sites)
@@ -314,11 +332,11 @@ internal sealed class DomainRefreshService(
     /// Posta sunucusunun urettigi kayitlardan KACININ bolgede eksik oldugunu sayar. Hicbir sey
     /// yazmaz -- denetim modunun yazma yapmama sozu korunur.
     /// </summary>
-    private async Task<int> CountMissingMailRecordsAsync(string siteName, CancellationToken cancellationToken)
+    private async Task<int> CountMissingMailRecordsAsync(string siteName, InspectionReads reads, CancellationToken cancellationToken)
     {
         try
         {
-            var dns = await mailService.GetDnsRecordsAsync(siteName, cancellationToken);
+            var dns = await reads.Mail.Value;
             var applicable = dns.Records.Where(record => !string.IsNullOrWhiteSpace(record.Value)).ToList();
             if (applicable.Count == 0)
             {
@@ -334,12 +352,15 @@ internal sealed class DomainRefreshService(
             //
             // Deger DEGIL, "TUR|konak" karsilastirilir: Windows DNS uzun TXT'i parcalara bolerek
             // saklar, dolayisiyla degerin birebir esitligini beklemek her turda yanlis alarm uretir.
-            var yayinlanan = await dnsService.GetPublishedRecordKeysAsync(siteName, cancellationToken);
+            var yayinlanan = await reads.Published.Value;
             if (yayinlanan is null)
             {
                 // Olcemedik. "Eksik yok" demek yerine panelin kendi dosyasina duseriz -- ama bu
                 // yalnizca Windows DNS hic yokken olur (o durumda zaten ayri bir bulgu uretiliyor).
-                var dosya = await ReadZoneKeysAsync(dns.Domain, cancellationToken);
+                var dosya = string.Equals(dns.Domain, siteName, StringComparison.OrdinalIgnoreCase)
+                    ? (await reads.Zone.Value).Records.Select(record => $"{record.Type}|{record.Host}|{record.Value}")
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : await ReadZoneKeysAsync(dns.Domain, cancellationToken);
                 return applicable.Count(record => !dosya.Contains($"{record.Type}|{record.Host}|{record.Value}"));
             }
 
@@ -568,7 +589,8 @@ internal sealed class DomainRefreshService(
         }
     }
 
-    private async Task<IReadOnlyList<RepairFindingDto>> CollectFindingsAsync(string siteName, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<RepairFindingDto>> CollectFindingsAsync(string siteName, CancellationToken cancellationToken,
+        InspectionReads? reads = null)
     {
         var findings = new List<RepairFindingDto>();
 
@@ -600,7 +622,7 @@ internal sealed class DomainRefreshService(
         var windowsDnsHazir = false;
         try
         {
-            var zone = await dnsService.GetZoneAsync(siteName, cancellationToken);
+            var zone = await (reads?.Zone.Value ?? dnsService.GetZoneAsync(siteName, cancellationToken));
             zoneKayitlari = zone.Records.ToList();
             windowsDnsHazir = zone.IsWindowsDnsAvailable && zone.IsWindowsZonePresent;
             if (!zone.IsWindowsZonePresent)
@@ -635,7 +657,7 @@ internal sealed class DomainRefreshService(
         // bolerek sakladigi icin deger esitligi beklemek her turda yanlis alarm uretirdi.
         try
         {
-            var yayinlanan = await dnsService.GetPublishedRecordKeysAsync(siteName, cancellationToken);
+            var yayinlanan = await (reads?.Published.Value ?? dnsService.GetPublishedRecordKeysAsync(siteName, cancellationToken));
 
             // "OLCEMEDIK" ILE "SORUN YOK" AYNI SEY DEGIL.
             //
@@ -677,7 +699,7 @@ internal sealed class DomainRefreshService(
             logger.LogDebug(exception, "Yayinlanmis kayitlar okunamadi ({SiteName}).", siteName);
         }
 
-        await AddMailFindingsAsync(siteName, zoneKayitlari, findings, cancellationToken);
+        await AddMailFindingsAsync(siteName, zoneKayitlari, findings, cancellationToken, reads);
         return findings;
     }
 
@@ -694,7 +716,8 @@ internal sealed class DomainRefreshService(
         string siteName,
         IReadOnlyList<SiteDnsRecordDto> zoneKayitlari,
         List<RepairFindingDto> findings,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        InspectionReads? reads = null)
     {
         // Bolge zaten okundu; tekrar okumak gereksiz PowerShell sureci demek.
         var mailExpected = zoneKayitlari.Any(record => string.Equals(record.Type, "MX", StringComparison.OrdinalIgnoreCase));
@@ -703,7 +726,7 @@ internal sealed class DomainRefreshService(
         {
             try
             {
-                await mailService.GetDnsRecordsAsync(siteName, cancellationToken);
+                await (reads?.Mail.Value ?? mailService.GetDnsRecordsAsync(siteName, cancellationToken));
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -720,6 +743,13 @@ internal sealed class DomainRefreshService(
         // NOT: posta sertifikasi bulgulari BURADA DEGIL, CollectServerFindingsAsync icinde.
         // Sertifika sunucu genelinde TEKTIR; site basina raporlanirsa 40 siteli bir sunucuda ayni
         // uyari 40 kez cikar ve "40/40 alan adi guncel degil" gibi anlamsiz bir tablo olusur.
+    }
+
+    private sealed class InspectionReads(string siteName, IDnsService dns, IMailService mail, CancellationToken token)
+    {
+        public Lazy<Task<MailDnsDto>> Mail { get; } = new(() => mail.GetDnsRecordsAsync(siteName, token));
+        public Lazy<Task<SiteDnsZoneDto>> Zone { get; } = new(() => dns.GetZoneAsync(siteName, token));
+        public Lazy<Task<IReadOnlyCollection<string>?>> Published { get; } = new(() => dns.GetPublishedRecordKeysAsync(siteName, token));
     }
 
     /// <summary>Son posta kaydi uygulamasinda olusan hatalar; cagiran bunu rapora tasir.</summary>
