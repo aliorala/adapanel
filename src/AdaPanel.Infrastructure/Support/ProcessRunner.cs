@@ -82,6 +82,8 @@ internal static class ProcessRunner
             }
         }
 
+        ConfigureWindowsPowerShellEnvironment(startInfo);
+
         using var process = new Process
         {
             StartInfo = startInfo
@@ -385,6 +387,22 @@ internal static class ProcessRunner
     /// </para>
     /// </summary>
     private const string OutputEncodingPrefix = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n";
+
+    internal static void ConfigureWindowsPowerShellEnvironment(ProcessStartInfo startInfo)
+    {
+        if (!OperatingSystem.IsWindows() ||
+            !Path.GetFileName(startInfo.FileName).Equals("powershell.exe", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // A .NET process launched from PowerShell 7 inherits Core's module paths. Windows
+        // PowerShell then loads incompatible Utility/Security/Archive modules and loses
+        // Get-FileHash/Get-Acl or archive errors. Prefer its own built-ins; keep custom paths.
+        var builtInModules = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "Modules");
+        startInfo.Environment.TryGetValue("PSModulePath", out var inherited);
+        startInfo.Environment["PSModulePath"] = string.Join(Path.PathSeparator,
+            new[] { builtInModules }.Concat((inherited ?? string.Empty).Split(Path.PathSeparator,
+                StringSplitOptions.RemoveEmptyEntries)).Distinct(StringComparer.OrdinalIgnoreCase));
+    }
 
     public static async Task<CommandResult> RunPowerShellAsync(string command, CancellationToken cancellationToken = default)
     {

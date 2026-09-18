@@ -413,7 +413,7 @@ const { t } = useI18n();
 // Bekleyen güncellemeler: bileşen güncellemeleri ("software") + panel güncellemesi ("updates").
 const pendingUpdateItems = computed(() => (props.attention?.items ?? [])
   .filter((item) => item.section === "software" || item.section === "updates"));
-const pendingUpdateCount = computed(() => pendingUpdateItems.value.length);
+const pendingUpdateCount = computed(() => pendingUpdateItems.value.reduce((total, item) => total + (item.affectedCount ?? 1), 0));
 
 // Tıklayınca DOĞRU ekrana git. Sayaç iki farklı güncelleme türünü topluyor; hepsini panel
 // güncelleme sayfasına yollamak "1 güncelleme var" deyip "zaten son sürümdesiniz" gösterir.

@@ -29,6 +29,9 @@ public sealed class AttentionItemDto
     /// <summary>Dile bağımsız teknik ayrıntı (servis adı, sürüm, IP). Boş olabilir.</summary>
     public string Detail { get; set; } = string.Empty;
 
+    /// <summary>Number of affected resources; a grouped component update can represent several.</summary>
+    public int AffectedCount { get; set; } = 1;
+
     /// <summary>Tıklanınca gidilecek panel bölümü (sites, software, updates, health, dns, settings...).</summary>
     public string Section { get; set; } = string.Empty;
 

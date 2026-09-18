@@ -1,5 +1,5 @@
 {
-  "name": "0.8.49 — Başarısız bileşen güncellemelerinde doğru durum",
-  "tag_name": "0.8.49",
-  "body": "- Başarısız bir güncelleme artık hedef sürümü kurulu sürüm olarak kaydetmez. Dosyalar değişmediyse önceki sürüm korunur; değiştiyse kurulu sürüm bilinmiyor olarak gösterilir.\n- Başarısız kurulumlar güncelleme özetinde açıkça belirtilir ve yeniden deneme işlemi sunulur.\n- Kurulum hatasının ardından bileşen listesi otomatik yenilenir."
+  "name": "0.8.50 — Güncel uyarı sayacı ve görünür dikkat çekmecesi",
+  "tag_name": "0.8.50",
+  "body": "- Güncellemeler kurulduğunda ana sayfa ve Danışman uyarıları güncel bileşen durumuna göre temizlenir; toplu güncelleme sayısı doğru gösterilir.\n- Dikkat çekmecesinin başlık ve maddelerinde reklam filtresiyle çakışabilen sınıf adları değiştirildi; açıklamalar da görünür hâle getirildi.\n- PowerShell 7 ortamından başlatılan panelde Windows PowerShell yerleşik modüllerinin doğru yüklenmesi sağlandı."
 }

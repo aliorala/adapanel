@@ -16,6 +16,7 @@ public sealed class AdvisorService(
     ISelfUpdateService selfUpdateService,
     ISystemMonitoringService systemMonitoringService,
     IAutomationService automationService,
+    IComponentBootstrapper componentBootstrapper,
     IPanelSecurityService panelSecurityService,
     INotificationService notificationService,
     IAntivirusService antivirusService,
@@ -52,11 +53,12 @@ public sealed class AdvisorService(
         catch { /* ağ/oran sınırı: öneri atlanır */ }
 
         // Kurulu bileşen güncellemeleri (PHP, veritabanı, phpMyAdmin, webmail, win-acme...).
-        // Günlük otomasyon kontrolünün ÖNBELLEĞİ okunur; burada ağa çıkılmaz, rapor hızlı kalır.
+        // Güncel bileşen önbelleğini oku. Günlük otomasyonun son sonucu, elle kurulan
+        // güncellemelerden sonra eski kalır ve sönmeyen bir uyarı üretir.
         try
         {
-            var automation = await automationService.GetStatusAsync(cancellationToken);
-            if (automation.PendingComponentUpdates > 0)
+            var pending = await componentBootstrapper.GetPendingUpdateCountAsync(cancellationToken);
+            if (pending > 0)
             {
                 items.Add(new AdvisorItemDto
                 {
@@ -64,7 +66,8 @@ public sealed class AdvisorService(
                     Severity = "warning",
                     TitleKey = "advisor.components.title",
                     DetailKey = "advisor.components.detail",
-                    Detail = automation.LastUpdateCheckDetails,
+                    Detail = pending.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    AffectedCount = pending,
                     ActionSection = "software"
                 });
             }

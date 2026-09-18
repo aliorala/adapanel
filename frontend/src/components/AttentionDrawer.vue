@@ -13,8 +13,8 @@
       tabindex="-1"
       @keydown.esc.stop.prevent="requestClose"
       @keydown.tab="trapFocus">
-      <header class="ad-head">
-        <div class="ad-head-copy">
+      <header class="attention-head">
+        <div class="attention-heattention-copy">
           <h2>{{ t("panel.attention.title") }}</h2>
           <p class="meta">{{ t("panel.attention.subtitle") }}</p>
         </div>
@@ -32,7 +32,7 @@
         </div>
       </header>
 
-      <div v-if="summary" class="ad-counters">
+      <div v-if="summary" class="attention-counters">
         <span v-if="summary.criticalCount" class="status-pill danger">
           {{ summary.criticalCount }} {{ t("panel.advisor.critical") }}
         </span>
@@ -42,7 +42,7 @@
         <span v-if="summary.infoCount" class="status-pill">
           {{ summary.infoCount }} {{ t("panel.advisor.info") }}
         </span>
-        <span v-if="summary.checkedAtUtc" class="meta ad-checked">
+        <span v-if="summary.checkedAtUtc" class="meta attention-checked">
           {{ t("panel.advisor.checkedAt") }}: {{ formatUtc(summary.checkedAtUtc) }}
         </span>
       </div>
@@ -53,31 +53,32 @@
         {{ t("panel.attention.failedSources") }}: {{ summary.failedSources.join(", ") }}
       </p>
 
-      <div v-if="summary && summary.items.length === 0 && !loading" class="ad-empty">
-        <span class="ad-empty-badge" aria-hidden="true">✓</span>
+      <div v-if="summary && summary.items.length === 0 && !loading" class="attention-empty">
+        <span class="attention-empty-badge" aria-hidden="true">✓</span>
         <div>
           <strong>{{ t("panel.attention.emptyTitle") }}</strong>
           <p class="meta">{{ t("panel.attention.emptyHint") }}</p>
         </div>
       </div>
 
-      <ul v-else class="ad-list">
-        <li v-for="item in items" :key="item.id" :class="['ad-item', item.severity]">
+      <ul v-else class="attention-list">
+        <li v-for="item in items" :key="item.id" :class="['attention-item', item.severity]">
           <!-- Önem YALNIZ RENKLE anlatılıyordu. Bu çekmece "neyin bozuk olduğunu gör" kapısı;
                kritik ile bilgi maddesini ayırt edememek burada en pahalıya patlar. Nokta görsel
                kalıyor, önem ayrıca METİN olarak veriliyor. -->
-          <span class="ad-dot" :class="item.severity" aria-hidden="true"></span>
+          <span class="attention-dot" :class="item.severity" aria-hidden="true"></span>
           <span class="sr-only">{{ severityText(item.severity) }}</span>
 
-          <div class="ad-body">
+          <div class="attention-body">
             <strong>{{ t(item.titleKey) }}</strong>
-            <p v-if="item.detail" class="ad-detail"><code>{{ item.detail }}</code></p>
-            <p v-if="actionState[item.id]" :class="['ad-result', actionState[item.id].kind]">
+            <p v-if="item.descriptionKey" class="attention-detail">{{ t(item.descriptionKey) }}</p>
+            <p v-if="item.detail" class="attention-detail"><code>{{ item.detail }}</code></p>
+            <p v-if="actionState[item.id]" :class="['attention-result', actionState[item.id].kind]">
               {{ actionState[item.id].message }}
             </p>
           </div>
 
-          <div class="row-actions ad-actions">
+          <div class="row-actions attention-actions">
             <button
               v-if="hasQuickFix(item)"
               class="compact"
@@ -349,7 +350,7 @@ function formatUtc(value: string): string {
   outline-offset: -3px;
 }
 
-.ad-head {
+.attention-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -360,25 +361,25 @@ function formatUtc(value: string): string {
    metniyle (13.5px) 0.27px fark — cekmecenin basligi icindeki cumleden ayirt edilemiyordu.
    Kapsamli oldugu icin (ozgulluk (0,1,1)) ortak baslik merdivenini de EZIYORDU. Kural
    dusunce baslik `base.css`teki `h2` adimini alir: 19.17px/660. `margin: 0` de orada. */
-.ad-head-copy .meta {
+.attention-heattention-copy .meta {
   margin: 2px 0 0;
   font-size: var(--fs-2xs);
 }
 
-.ad-counters {
+.attention-counters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.ad-checked {
+.attention-checked {
   margin-left: auto;
   /* 0.72rem = 9.72px idi; olcegin tabani `--fs-2xs` (10.53px). */
   font-size: var(--fs-2xs);
 }
 
-.ad-empty {
+.attention-empty {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -388,11 +389,11 @@ function formatUtc(value: string): string {
   background: color-mix(in srgb, var(--ok-1) 8%, var(--surface-1));
 }
 
-.ad-empty p {
+.attention-empty p {
   margin: 2px 0 0;
 }
 
-.ad-empty-badge {
+.attention-empty-badge {
   display: grid;
   place-items: center;
   width: 34px;
@@ -405,7 +406,7 @@ function formatUtc(value: string): string {
   font-weight: 800;
 }
 
-.ad-list {
+.attention-list {
   display: grid;
   gap: 8px;
   margin: 0;
@@ -413,7 +414,7 @@ function formatUtc(value: string): string {
   list-style: none;
 }
 
-.ad-item {
+.attention-item {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -423,15 +424,15 @@ function formatUtc(value: string): string {
   background: var(--surface-1);
 }
 
-.ad-item.critical {
+.attention-item.critical {
   border-color: color-mix(in srgb, var(--danger-1) 45%, var(--panel-border));
 }
 
-.ad-item.warning {
+.attention-item.warning {
   border-color: color-mix(in srgb, var(--warn-1) 40%, var(--panel-border));
 }
 
-.ad-dot {
+.attention-dot {
   width: 9px;
   height: 9px;
   margin-top: 6px;
@@ -440,53 +441,53 @@ function formatUtc(value: string): string {
   background: var(--text-muted);
 }
 
-.ad-dot.critical {
+.attention-dot.critical {
   background: var(--danger-1);
 }
 
-.ad-dot.warning {
+.attention-dot.warning {
   background: var(--warn-1);
 }
 
-.ad-body {
+.attention-body {
   display: grid;
   gap: 3px;
   flex: 1;
   min-width: 0;
 }
 
-.ad-body strong {
+.attention-body strong {
   font-size: var(--fs-sm);
 }
 
-.ad-detail {
+.attention-detail {
   margin: 0;
   color: var(--text-soft);
   font-size: var(--fs-2xs);
   word-break: break-word;
 }
 
-.ad-detail code {
+.attention-detail code {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
 /* 0.76rem = 10.26px idi: olcek disi VE tabanin (10.53px) altinda. Bu satir bir islemin
    SONUCUNU ("duzeltildi" / hata metni) tasir; panelde okunmamasi gereken son yerdir. */
-.ad-result {
+.attention-result {
   margin: 0;
   font-size: var(--fs-2xs);
   font-weight: 600;
 }
 
-.ad-result.ok {
+.attention-result.ok {
   color: var(--ok-1);
 }
 
-.ad-result.error {
+.attention-result.error {
   color: var(--danger-1);
 }
 
-.ad-actions {
+.attention-actions {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -524,7 +525,7 @@ function formatUtc(value: string): string {
   }
 
   /* Başlık (ve Kapat düğmesi) liste kaydırılırken de elde kalsın. */
-  .ad-head {
+  .attention-head {
     position: sticky;
     top: 0;
     z-index: 1;
@@ -533,29 +534,29 @@ function formatUtc(value: string): string {
     background: var(--surface-0);
   }
 
-  .ad-checked {
+  .attention-checked {
     margin-left: 0;
     flex: 1 1 100%;
   }
 
-  .ad-item {
+  .attention-item {
     flex-wrap: wrap;
     padding: 12px 12px 10px;
   }
 
   /* Eylemler tam genişlikte ve parmakla basılabilir: en kritik iki düğme bunlar. */
-  .ad-actions {
+  .attention-actions {
     flex-direction: row;
     width: 100%;
     margin-top: 4px;
   }
 
-  .ad-actions button {
+  .attention-actions button {
     flex: 1 1 0;
     min-height: 42px;
   }
 
-  .ad-head .row-actions button {
+  .attention-head .row-actions button {
     min-height: 40px;
   }
 }

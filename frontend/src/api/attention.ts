@@ -20,6 +20,7 @@ export type AttentionItem = {
   /** Açıklamanın çeviri anahtarı: "ne yapılabilir"i insan diliyle söyler. Boş olabilir. */
   descriptionKey: string;
   detail: string;
+  affectedCount?: number;
   section: string;
   actionEndpoint: string;
   actionMethod: string;
@@ -51,6 +52,7 @@ function normalizeItem(raw: Partial<AttentionItem> | null | undefined): Attentio
     titleKey: raw?.titleKey ?? "",
     descriptionKey: raw?.descriptionKey ?? "",
     detail: raw?.detail ?? "",
+    affectedCount: Number.isInteger(raw?.affectedCount) && raw!.affectedCount! > 0 ? raw!.affectedCount : 1,
     section: raw?.section ?? "",
     actionEndpoint: raw?.actionEndpoint ?? "",
     actionMethod: raw?.actionMethod ?? "",

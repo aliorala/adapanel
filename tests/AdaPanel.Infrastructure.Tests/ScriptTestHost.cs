@@ -55,7 +55,7 @@ internal static class ScriptTestHost
         File.WriteAllText(yol, "$ErrorActionPreference = 'Stop'\n" + betik, new UTF8Encoding(true));
         try
         {
-            using var surec = Process.Start(new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
                 Arguments = $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{yol}\"",
@@ -63,7 +63,9 @@ internal static class ScriptTestHost
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
-            })!;
+            };
+            AdaPanel.Infrastructure.Support.ProcessRunner.ConfigureWindowsPowerShellEnvironment(startInfo);
+            using var surec = Process.Start(startInfo)!;
 
             var cikti = surec.StandardOutput.ReadToEndAsync();
             var hata = surec.StandardError.ReadToEndAsync();

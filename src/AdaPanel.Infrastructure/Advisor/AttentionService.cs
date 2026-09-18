@@ -16,7 +16,6 @@ namespace AdaPanel.Infrastructure.Advisor;
 /// </summary>
 public sealed class AttentionService(
     IAdvisorService advisorService,
-    IAutomationService automationService,
     IComponentBootstrapper componentBootstrapper,
     ISelfUpdateService selfUpdateService,
     IDnsService dnsService,
@@ -44,6 +43,7 @@ public sealed class AttentionService(
                     // kullanici yalnizca sorunun adini goruyordu.
                     DescriptionKey = item.DetailKey,
                     Detail = item.Detail,
+                    AffectedCount = item.AffectedCount,
                     Section = string.IsNullOrWhiteSpace(item.ActionSection) ? "advisor" : item.ActionSection
                 });
             }
@@ -57,7 +57,6 @@ public sealed class AttentionService(
             // Sayacı CANLI önbellekten al: otomasyon durumu günde bir yazılır, dolayısıyla kullanıcı
             // güncellemeyi kurduktan sonra da "1 güncelleme bekliyor" demeye devam ederdi.
             var pendingUpdates = await componentBootstrapper.GetPendingUpdateCountAsync(cancellationToken);
-            var automation = await automationService.GetStatusAsync(cancellationToken);
             if (pendingUpdates > 0)
             {
                 items.Add(new AttentionItemDto
@@ -66,9 +65,8 @@ public sealed class AttentionService(
                     Severity = "warning",
                     TitleKey = "attention.software.updates",
                     DescriptionKey = "attention.software.updates.desc",
-                    Detail = string.IsNullOrWhiteSpace(automation.LastUpdateCheckDetails)
-                        ? $"{pendingUpdates}"
-                        : automation.LastUpdateCheckDetails,
+                    Detail = pendingUpdates.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    AffectedCount = pendingUpdates,
                     Section = "software"
                 });
             }

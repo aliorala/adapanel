@@ -17,6 +17,9 @@ public sealed class AdvisorItemDto
     /// <summary>Dile bağımsız teknik ayrıntı (host, sürüm, "%96", tarih) — başlığın yanında ham gösterilir.</summary>
     public string Detail { get; set; } = string.Empty;
 
+    /// <summary>Number of affected resources represented by this grouped finding.</summary>
+    public int AffectedCount { get; set; } = 1;
+
     /// <summary>"Düzelt" butonunun gideceği panel bölümü (boşsa buton gösterilmez).</summary>
     public string ActionSection { get; set; } = string.Empty;
 }

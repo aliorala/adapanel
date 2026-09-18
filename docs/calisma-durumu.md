@@ -1,5 +1,18 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — 0.8.50 hazır; güncel uyarılar, dikkat çekmecesi ve PowerShell modülleri
+
+Canlı bu not anında 0.8.49; 0.8.50 paket/yayın/kurulum henüz yapılmadı. Advisor günlük otomasyonun eski PendingComponentUpdates değerini kullanıyordu; tüm bileşenler güncelken ana sayfada 1 güncelleme kalıyordu. Advisor ve Attention güncel bileşen önbelleğini kullanır. AffectedCount alanıyla tek maddede gruplanan altı güncelleme ana sayfada altı sayılır; kaynak hatası FailedSources olarak korunur.
+
+Canlı Chrome'da dikkat çekmecesinin eski ad-head/ad-item düğümleri DOM'da varken computed display=none idi; sayfa stil kurallarında bunu açıklayan kural bulunamadı. Reklam filtresi çakışması olasılığına karşı tüm ad- sınıfları attention- yapıldı, açıklamalar görünür eklendi. Aynı tarayıcıda yerel yeni görünüm masaüstü ve 390x844 boyutta okunur. Eski görünüm localhost'ta da görünür olduğundan kesin filtre/eklenti kaynağı ispatlanmış değildir; canlı yeni sürüm doğrulaması gerekir.
+
+Tam backend ilk koşuda 5374 başarılı/10 başarısızdı. .NET Process.Start ile Windows PowerShell'e miras kalan PowerShell 7 modül yolu Get-FileHash/Get-Acl/Expand-Archive komutlarını bozuyordu. Parent değişkenini silmek yeterli olmadı. ProcessRunner yalnız powershell.exe için Windows yerleşik Modules yolunu öne alır; özel yollar korunur, pwsh değişmez. ScriptTestHost aynı başlangıç yolunu kullanır. Uyumsuz sahte modülle gerçek alt süreç testi eklendi.
+
+Son doğrulama: 93 hedefli test; tam Infrastructure 5389/5389 (0 başarısız/atlanan, 4m23s), frontend 88/88, typecheck ve üretim build başarılı. Mevcut ComponentPreflightTests xUnit2031 analiz uyarısı kaldı. Kanıt .tmp/audit-050/ full-fixed.trx, targeted-fixed.trx, backend-full-fixed.log, frontend-tests.log, typecheck.log, frontend-build.log. Bu doğrulama bütün canlı iş akışlarının uçtan uca denendiği anlamına gelmez.
+
+Yedek modülü/şifreleme kapalı tercihi, kapalı alioral.xyz ve kompakt görünüm korundu. Yedek silme bu tur tekrarlanmadı; .43 tarihçesi geçerli. Public GitHub'a kaynak/history/tag push yok; yalnız mevcut betikle installer release yayımlanır.
+
+
 ## 2026-09-18 — 0.8.49 canlı; başarısız güncelleme gösterimi tamamlandı
 
 Canlı panel ve GitHub latest **0.8.49**. Kod commit 6d7640a, üretilen frontend giriş dosyası 968b6c1. Installer **90.801.263 bayt**, SHA256 **B20947293B91243CFECE5B0FEFE3DEC3327458B50C97D2EAE3B3697051618C99**. Yayın betiği ilk denemede yükledi, GitHub'dan yeniden indirme aynı hash'i verdi; canlı panel aynı hash ile doğruladı ve kurdu. Kaynak/history/tag push yapılmadı.
