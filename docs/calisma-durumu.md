@@ -1,5 +1,11 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — Son Windows servis kontrolü (0.8.47 hazırlanıyor)
+
+0.8.46 yayımlandı ve canlıya indirildi fakat KURULMADI. Installer90.801.242bayt/SHA25648785001669F92A7AB47266EB4C06CBFA1A3A9E69721FBC0FEF71E838597E23D; kaynak79b20c9. Son Windows smoke testinde Get-Service bulunamayan servis için SilentlyContinue olsa bile powershell.exe exit1 üretiyor. Stalwart görev olarak çalıştığından bu durum yanlış engel olurdu. 0.8.47 yalnız başarı yolunun sonunda exit0 ekler; Stop/WaitForStatus gerçek hatası ErrorActionPreference Stop ile bu satıra ulaşmadan çıkar. Gerçek PowerShell ve schtasks yolunu kullanan, benzersiz bulunmayan servis/görevli regresyon eklendi. Son36ilgili test geçti (.tmp/service-stop-047/service-stop-final.trx), frontend tekrar derlendi. Canlı hâlâ0.8.45; PHP8.3.33 ve CLI1.0.12 tamam, diğer4bileşen bekliyor. 0.8.47 diğer0.8.46korumalarını da içerir; yeni paketi indirip doğrudan ona geçilecek.
+
+MariaDB kopyası tamam: updates/component-safety-20260918-044/mariadb,1011dosya,2026-09-18T09:29:50+03:00; servis stop sonrası alındı, finally ile Running4 döndü. Hata çıktısı boş. Boş disk45.6GB. Stalwart kopyası7dosya,09:32:14+03:00; görev durdurulup kendi dizinindeki süreçler kapandıktan sonra kopyalandı; görev yenidenRunning4. CLI gerçekbinary --version1.0.12. Kopyalar panel dışına çıkarılmadı, önceki korumalı kurtarma kökünün altında.
+
 ## 2026-09-18 — Yayın dosyaları ve servis güncelleme akışı (0.8.46 hazırlanıyor)
 
 0.8.45 canlı: phase=succeeded / installerExitCode=0 / isFailed=false, updatedAtUtc=2026-09-18T06:18:16.0176315Z. Kaynak commit 6ca572f. Installer 90.799.409 bayt, SHA256 39B968EE4D7765724A90A834285C8AC7E547B8D630B75D589F9566E01D4DE65B. 73 ilgili backend testi geçti. PHP gerçek CLI 8.3.33; redis=6.1.0 yükleniyor. php.ini SHA256 9B4A101F2109451298AC00FA04D9DFE4AB15CF0067F734743CF5C97E6117E46C, Redis DLL 632DDBA607DCCB3B1D060A5BBDDFDBF0EDBF4364B5238306B31539E301DD675B — ikisi de güncelleme öncesiyle birebir. travianpanel.com, adapanel.host ve loopback webmail sağlık ucu HTTP200. Stalwart CLI arayüzde 1.0.12'ye güncellendi.

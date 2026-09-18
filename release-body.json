@@ -1,5 +1,5 @@
 {
-  "name": "0.8.46 — Web araçlarının güncelleme sonrası yayınını koruma",
-  "body": "- Adminer, phpMyAdmin ve Roundcube güncellemelerinde panel giriş ve sağlık dosyaları, oturum dizinleri ve IIS ayarları korunur.\n- Adminer yeni paket kodunu mevcut web köküne aktarır; Roundcube varlık bağlantıları mevcut IIS sitesi ve SSL bağları değiştirilmeden yenilenir.\n- Bileşen yükseltme onayındaki yanlış Sil etiketi Güncelle olarak düzeltildi; komut satırı aracı için gereksiz servis uyarısı kaldırıldı.",
-  "tag_name": "0.8.46"
+  "name": "0.8.47 — Bileşen güncelleme ve yayın korumaları",
+  "body": "- Adminer, phpMyAdmin ve Roundcube güncellemelerinde panel giriş ve sağlık dosyaları, oturum dizinleri ve IIS ayarları korunur.\n- Adminer yeni paket kodunu mevcut web köküne aktarır; Roundcube varlık bağlantıları mevcut IIS sitesi ve SSL bağları değiştirilmeden yenilenir.\n- Bileşen yükseltme onayındaki yanlış Sil etiketi Güncelle olarak düzeltildi; komut satırı aracı için gereksiz servis uyarısı kaldırıldı.\n- Veritabanı servisi dosyalar değiştirilmeden düzgün kapatılır; görev tabanlı posta sunucularında bulunmayan Windows servis kaydı güncellemeyi engellemez.",
+  "tag_name": "0.8.47"
 }

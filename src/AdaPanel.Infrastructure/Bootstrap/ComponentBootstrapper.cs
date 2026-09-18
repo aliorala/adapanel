@@ -5048,7 +5048,7 @@ public sealed class ComponentBootstrapper(
         }
     }
 
-    private async Task StopManagedRuntimeAsync(string serviceName, string installDirectory, CancellationToken cancellationToken)
+    internal async Task StopManagedRuntimeAsync(string serviceName, string installDirectory, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(serviceName))
         {
@@ -5061,6 +5061,9 @@ public sealed class ComponentBootstrapper(
                     $service.Stop()
                     $service.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
                 }
+                # A task-based component has no Windows service. Get-Service's suppressed
+                # not-found result must not become powershell.exe's final exit status.
+                exit 0
                 """, cancellationToken);
             if (stopped.ExitCode != 0)
                 throw new AppException("software.process_failed", 500, 500, "Could not stop component service before replacing its files: " + serviceName);
