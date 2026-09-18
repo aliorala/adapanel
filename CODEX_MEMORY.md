@@ -1,5 +1,17 @@
 # AdaPanel Codex Memory
 
+## 2026-09-18 — Bileşen güncellemeleri öncesi koruma açıkları (0.8.44 hazırlanıyor)
+
+Canlı 0.8.43: gece otomasyonu 18 Eylül 03:08:40'ta tamamlandı; 3 site + 4 veritabanı + posta + panel yedeklendi, 6 eski yedek silindi. Sonraki tur 19 Eylül03:00. Bu, yeni çalışan iş takibi sürümünün zamanlanmış iş akışını tamamladığının canlı kanıtıdır; aktif şeridi gece izlenmiş sayılmaz.
+
+Altı bekleyen bileşen güncellemesini incelerken gerçek kök nedenler bulundu: tüm kurulum dizini temizlenirken PHP php.ini (site PATH/open_basedir kuralları dahil), Roundcube config/config.inc.php ve adapanel-data/roundcube.db korunmuyordu. Ayrıca __GENERATED__ kullanan güncellemeler mevcut yönetici parolası yerine yeni parola üretip mevcut veritabanına bununla bağlanıyordu. Korunmuş klasörü geri koyma hatası yalnız loglanıyor, postInstall boş veriyle devam edebiliyordu. ZIP çıkarma hatasında korunmuş yollar geri konmadan kalıyordu.
+
+0.8.44 düzeltmesi: ComponentStatePreservation ile bilinen veri + yapılandırma dosyaları yan dizine taşınır; paket çıkarma başarılı/başarısız/iptal olsa da finally içinde geri konur. Paket varsayılanı aynı hedefi doldurmuşsa .package son ekli geçici kardeşe alınır, eski kullanıcı verisi yerine döner. Geri koyma hatası açık kurtarma yoluyla fırlatılır; postInstall/yıkıcı rollback devam etmez. Yol kaçışı ve kök/ata reparse kontrolü var. PHP, Roundcube, phpMyAdmin, Adminer ve MySQL/MariaDB config dosyaları kapsanır. Güncelleme mevcut korunan yönetici parolasını kullanır; veri var ama parola okunamıyorsa servis durmadan hata verir. Bu değişiklik otomatik tam binary/service rollback eklemez; mevcut veriyi korur ve başarısızlığı gizlemez.
+
+262 ilgili test başarılı (14 yeni davranış senaryosu), üretim ön yüz derlemesi başarılı; yalnız backend davranışı değişti. Kanıt .tmp/component-preservation-044/preservation-final.trx. Aynı dizinde package.log ve yayın logları tutulacak. Bu not anında 0.8.44 henüz canlı değil. Public GitHub'a kaynak/history/tag push yapılmaz. Şifreleme kapalı / alioral.xyz kapalı / kompakt UI tercihleri korunur.
+
+Resmi sürüm notları kontrol edildi: PHP8.3.33 https://www.php.net/releases/8_3_33.php; Adminer6.1.0 https://github.com/vrana/adminer/releases/tag/v6.1.0; Roundcube1.7.4 https://github.com/roundcube/roundcubemail/releases/tag/1.7.4; Stalwart0.16.22 https://github.com/stalwartlabs/stalwart/releases/tag/v0.16.22. Canlı altı güncelleme bu not anında henüz uygulanmadı.
+
 ## 2026-09-18 — 0.8.43 canlıya kuruldu; 12 Eylül temizliği doğrulandı
 
 **Güncel durum: canlı ve GitHub latest 0.8.43.** Kaynak commit c8f6fe6. Kurulum dosyası 90.796.592 bayt, SHA256 **B9EFAE6FFEC79705943644995F6E68156089B7EDEAFA4C747DD691091D5A59C0**. İki Curl yüklemesi HTTP 500 verdi; her başarısızlığın ardından taslak id=391090935 ve boş asset listesi kontrol edildi. Mevcut yayın betiğinin varsayılan PowerShell aktarımı üçüncü denemede başarılı oldu; GitHub'dan yeniden indirilen dosya aynı hash ile doğrulandı. Log: .tmp/automation-jobs-043/publish-powershell.log. Kaynak/history/tag push yapılmadı. Paket denetimi: 168 dosya, bileşenlerde 22 Passed / 3 büyük paket mevcut politika ile Skipped.

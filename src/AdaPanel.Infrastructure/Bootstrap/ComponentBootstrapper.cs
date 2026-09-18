@@ -727,11 +727,18 @@ public sealed class ComponentBootstrapper(
         var downloadPath = Path.Combine(downloadsRoot, fileName);
         var installDirectory = ResolveInstallDirectory(component.InstallDir);
         var silentArgs = component.SilentArgs ?? string.Empty;
-        var generatedPassword = silentArgs.Contains("__GENERATED__", StringComparison.Ordinal)
-            ? GeneratePassword()
-            : string.Empty;
+        var previous = await dbContext.InstalledComponents.AsNoTracking()
+            .FirstOrDefaultAsync(item => item.ComponentId == component.Id, cancellationToken);
+        var generatedPassword = ResolveInstallPassword(
+            silentArgs.Contains("__GENERATED__", StringComparison.Ordinal),
+            previous is null ? string.Empty : ReadGeneratedPassword(previous.ProtectedConfigurationJson),
+            DataDirectoriesToPreserve(component.Id).Any(relative =>
+                Directory.Exists(Path.Combine(installDirectory, relative)) &&
+                Directory.EnumerateFileSystemEntries(Path.Combine(installDirectory, relative)).Any()),
+            GeneratePassword);
 
         string cleanupPath = string.Empty;
+        var stateRestored = true;
 
         // Canlı ilerleme: "şu an X kuruluyor". Begin/Complete'i çağıran yönetir (ilk kurulum
         // sihirbazı veya Yazılım Mağazası); burada sadece bu bileşenin adımı raporlanır.
@@ -762,7 +769,6 @@ public sealed class ComponentBootstrapper(
             await DownloadAsync(client, component.DownloadUrl, downloadPath, cancellationToken);
             await VerifyPackageIntegrityAsync(component, downloadPath, cancellationToken);
 
-            cleanupPath = installDirectory;
             var executionArgs = silentArgs
                 .Replace("__GENERATED__", generatedPassword, StringComparison.Ordinal)
                 .Replace("__INSTALL_DIR__", installDirectory, StringComparison.Ordinal);
@@ -778,18 +784,24 @@ public sealed class ComponentBootstrapper(
             // calistigi icin ise yaramaz — veri o noktada zaten silinmis olur.
             // Cozum: veri klasorlerini silmeden ONCE kenara al, kurulumdan SONRA geri koy.
             var preserved = PreserveDataDirectories(component, installDirectory);
+            cleanupPath = installDirectory;
+            stateRestored = false;
 
             // Onceki BASARISIZ kurulumdan kalan kismi durum yeni kurulumu bozar:
             // PostgreSQL'de data dizini doluysa initdb "cluster init failed" verir; MSI/zip'te
             // kilitli/yarim dosyalar cakisir. Temiz kurulum icin dizini sifirla (servis durduruldu).
-            DeleteManagedPath(installDirectory);
-
-            await ExecuteInstallAsync(component, downloadPath, installDirectory, executionArgs, cancellationToken);
-
-            // Geri koyma, postInstall'dan ONCE olmali: postInstall adimlari (ornegin
-            // InitializeMariaDbZipAsync) "veri var mi" diye bakip initialize etmeme kararini
-            // buna gore verir.
-            RestorePreservedDirectories(installDirectory, preserved);
+            try
+            {
+                DeleteManagedPath(installDirectory);
+                await ExecuteInstallAsync(component, downloadPath, installDirectory, executionArgs, cancellationToken);
+            }
+            finally
+            {
+                // Çıkarma/iptal hatasında da veriyi geri koy. Geri koyma başarısızsa
+                // postInstall ve yıkıcı rollback çalışamaz; kurtarma yolu hata içinde kalır.
+                preserved.Restore();
+                stateRestored = true;
+            }
 
             await ApplyPostInstallStepsAsync(component, installDirectory, generatedPassword, cancellationToken);
 
@@ -874,7 +886,7 @@ public sealed class ComponentBootstrapper(
                 ipAddress,
                 cancellationToken);
 
-            await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken);
+            if (stateRestored) await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken);
             throw;
         }
         catch (Exception exception)
@@ -890,7 +902,7 @@ public sealed class ComponentBootstrapper(
                 ipAddress,
                 cancellationToken);
 
-            await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken);
+            if (stateRestored) await RollbackFailedInstallAsync(component, cleanupPath, cancellationToken);
             throw new AppException("software.install_failed", 500, 500, BuildDiagnosticDetails(exception));
         }
     }
@@ -1228,8 +1240,8 @@ public sealed class ComponentBootstrapper(
             // başarısız bir YÜKSELTME, çalışan bir veritabanının tüm verisini yok ederdi.
             // Binary'ler silinir, veri geri konur; yönetici en kötü ihtimalle bileşeni yeniden kurar.
             var preserved = PreserveDataDirectories(component, cleanupPath);
-            DeleteManagedPath(cleanupPath);
-            RestorePreservedDirectories(cleanupPath, preserved);
+            try { DeleteManagedPath(cleanupPath); }
+            finally { preserved.Restore(); }
         }
         catch (Exception exception)
         {
@@ -4924,88 +4936,40 @@ public sealed class ComponentBootstrapper(
             "mariadb-11" or "mysql-8" or "postgresql-16" => ["data"],
             // Stalwart posta kutularını data/, üretilmiş yapılandırmayı (admin parolası dahil) etc/ altında tutar.
             "stalwart-mail" => ["data", "etc"],
+            "roundcube" => ["adapanel-data"],
             _ => []
         };
     }
 
     /// <summary>
-    /// Korunacak klasörleri kurulum dizininin YANINA taşır (aynı disk → rename, kopyalama yok) ve
-    /// geri koymak için (geçiciYol, göreliAd) çiftlerini döner. Taşıma başarısız olursa kurulumu
-    /// DURDURUR: veriyi koruyamıyorsak silmeye devam etmek kabul edilemez.
+    /// Paket varsayılanlarıyla değiştirilmemesi gereken kullanıcı yapılandırmaları.
     /// </summary>
-    private List<(string TempPath, string RelativeName)> PreserveDataDirectories(
-        ComponentManifestItemDto component,
-        string installDirectory)
-    {
-        var preserved = new List<(string, string)>();
-        foreach (var relativeName in DataDirectoriesToPreserve(component.Id))
+    internal static IReadOnlyList<string> ConfigurationFilesToPreserve(string componentId)
+        => componentId.Trim().ToLowerInvariant() switch
         {
-            var source = Path.Combine(installDirectory, relativeName);
-            if (!Directory.Exists(source) || !Directory.EnumerateFileSystemEntries(source).Any())
-            {
-                continue;
-            }
+            "php-8.3" => ["php.ini"],
+            "mariadb-11" or "mysql-8" => ["my.ini"],
+            "roundcube" => ["config/config.inc.php", "web.config", "public_html/web.config"],
+            "phpmyadmin" => ["config.inc.php", "web.config"],
+            "adminer" => ["web.config"],
+            _ => []
+        };
 
-            var tempPath = Path.Combine(
-                Path.GetDirectoryName(installDirectory.TrimEnd(Path.DirectorySeparatorChar))!,
-                $".{Path.GetFileName(installDirectory.TrimEnd(Path.DirectorySeparatorChar))}-{relativeName}-{Guid.NewGuid():N}");
+    private static ComponentStatePreservation PreserveDataDirectories(
+        ComponentManifestItemDto component, string installDirectory)
+        => ComponentStatePreservation.Capture(installDirectory,
+            DataDirectoriesToPreserve(component.Id).Concat(ConfigurationFilesToPreserve(component.Id)));
 
-            try
-            {
-                Directory.Move(source, tempPath);
-                preserved.Add((tempPath, relativeName));
-                logger.LogInformation(
-                    "{ComponentId}: '{Relative}' klasörü kurulum süresince korumaya alındı ({Temp}).",
-                    component.Id,
-                    relativeName,
-                    tempPath);
-            }
-            catch (Exception exception)
-            {
-                // Geri al: daha önce taşınanları yerine koy, sonra kurulumu iptal et.
-                RestorePreservedDirectories(installDirectory, preserved);
-                throw new AppException(
-                    "software.data_preserve_failed",
-                    500,
-                    500,
-                    $"Component={component.Id}\r\nPath={source}\r\n{exception.Message}");
-            }
-        }
-
-        return preserved;
-    }
-
-    private void RestorePreservedDirectories(
-        string installDirectory,
-        List<(string TempPath, string RelativeName)> preserved)
+    internal static string ResolveInstallPassword(bool required, string existingPassword, bool hasExistingData, Func<string> generate)
     {
-        foreach (var (tempPath, relativeName) in preserved)
-        {
-            var target = Path.Combine(installDirectory, relativeName);
-            try
-            {
-                Directory.CreateDirectory(installDirectory);
-                // Yeni paket aynı adla boş bir klasör açmış olabilir; taşımayı engellemesin.
-                if (Directory.Exists(target) && !Directory.EnumerateFileSystemEntries(target).Any())
-                {
-                    Directory.Delete(target);
-                }
-
-                Directory.Move(tempPath, target);
-                logger.LogInformation("'{Relative}' klasörü kurulum sonrası yerine kondu.", relativeName);
-            }
-            catch (Exception exception)
-            {
-                // Veri hâlâ tempPath'te DURUYOR; silme. Yöneticiye nerede olduğunu söyle.
-                logger.LogError(
-                    exception,
-                    "'{Relative}' klasörü yerine konamadı. VERİ KAYBOLMADI, şurada duruyor: {Temp}",
-                    relativeName,
-                    tempPath);
-            }
-        }
+        if (!required) return string.Empty;
+        if (!string.IsNullOrWhiteSpace(existingPassword)) return existingPassword;
+        // Yeni parola var olan veritabanında geçerli değildir. Servisi durdurmadan önce dur.
+        if (hasExistingData)
+            throw new AppException("software.data_preserve_failed", 500, 500,
+                "Existing component data was found but its stored administrator credential is unavailable.");
+        return generate();
     }
-
     private static void FlattenSingleTopDirectory(string destination)
     {
         var root = new DirectoryInfo(destination);

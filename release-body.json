@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.43",
-  "name": "0.8.43 — Otomatik yedekleme durum takibi",
-  "body": "- Elle veya zamanlamayla başlatılan otomatik yedekleme, işlem boyunca çalışan iş olarak izlenir.\n- Sayfaya dönüldüğünde otomasyon ve yedekleme ekranlarında devam eden iş görünür.\n- Aynı anda ikinci otomatik yedekleme isteği yeni bir turu kuyruğa almaz; sunucu yedeklemesiyle çakışan zamanlanmış iş sonraki turda tekrar denenir.\n- Tamamlanan, başarısız veya iptal edilen işlerin göstergesi temizlenir."
+  "tag_name": "0.8.44",
+  "name": "0.8.44 — Bileşen güncellemelerinde ayar ve veri koruması",
+  "body": "- PHP ve web aracı yapılandırmaları ile Roundcube kullanıcı verisi bileşen güncellemelerinde korunur.\n- Veritabanı ve posta güncellemeleri mevcut yönetici parolasını kullanır; kayıtlı kimlik çözülemiyorsa veri değişmeden açık hata verilir.\n- Paket çıkarma hatası veya iptalinde korunmuş ayarlar geri konur. Geri koyma başarısızsa kurulum devam etmez ve kurtarma konumu bildirilir."
 }
