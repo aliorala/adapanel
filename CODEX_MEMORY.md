@@ -1,5 +1,18 @@
 # AdaPanel Codex Memory
 
+## 2026-09-18 — 0.8.49 canlı; başarısız güncelleme gösterimi tamamlandı
+
+Canlı panel ve GitHub latest **0.8.49**. Kod commit 6d7640a, üretilen frontend giriş dosyası 968b6c1. Installer **90.801.263 bayt**, SHA256 **B20947293B91243CFECE5B0FEFE3DEC3327458B50C97D2EAE3B3697051618C99**. Yayın betiği ilk denemede yükledi, GitHub'dan yeniden indirme aynı hash'i verdi; canlı panel aynı hash ile doğruladı ve kurdu. Kaynak/history/tag push yapılmadı.
+
+Canlı kurulum kanıtı: last-attempt phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false, isDecidedByPanel=true; updatedAtUtc=2026-09-18T07:38:50.3244626Z. AdaPanel, AdaMariaDB, Redis, DNS, FTP, IIS/WAS Running. Stalwart PID9048 aynı yönetilen exe yolunda çalışıyor. travianpanel.com, adapanel.host ve webmail.travianpanel.com HTTPS yanıtları HTTP200. Son bileşen güncelleme denetimi: bekleyen güncelleme ve başarısız bileşen yok. Panel ana sayfada bırakıldı.
+
+Önceki açık arayüz konusu düzeltildi ve canlıya ulaştı: başarısız güncelleme hedef sürümü kurulu diye kaydetmez; dosyalar değişmediyse önceki sürüm, değişmişse bilinmiyor gösterilir. Hatalı ilk kurulum da sürüm uydurmaz. Başarısız satır varsa özet bunu ve diğer güncellemeleri belirtir; Yeniden dene eylemi sunulur. Kurulum hatası sonrası katalog kendiliğinden yenilenir ve asıl hata korunur. Gerçek hata senaryoları yerel izole testlerde oluşturuldu; canlı servisler hata gösterimini sınamak için bozulmadı.
+
+Doğrulama: 75 ilgili backend testi (4 yeni gerçek kurulum/veritabanı/katalog hata senaryosu dahil), 85 frontend testi (8 yeni setup/SSR/store senaryosu dahil), typecheck ve üretim build geçti. Paket: 168 dosya denetimi; bileşen paketi denetiminde 22 Passed / 3 büyük paket mevcut politika ile Skipped. Kanıtlar .tmp/failed-version-049/ altında regression.trx, frontend-tests.log, typecheck.log, frontend-build.log, package.log, publish.log. Bu kayıt, aşağıdaki hazırlanıyor bölümünün yerine geçen son durumdur.
+
+Yedekleme ve kapalı şifreleme tercihi, kapalı alioral.xyz ve kompakt görünüm değişmedi. Bu tur yedek silme/posta teslim testi yapılmadı; önceki doğrulamalar aşağıdaki tarihçede. Bu bakım kapsamındaki sürüm/güncelleme gösterimi sorunu tamamlandı; tüm sistem yollarının yeniden uçtan uca tarandığı iddia edilmez.
+
+
 ## 2026-09-18 — Başarısız güncelleme sürümü ve özeti düzeltildi (0.8.49 hazırlanıyor)
 
 Önceki üst notta açık kalan konu kapatıldı: UpsertFailedInstallAsync hedef sürümü artık kurulu sürüm olarak yazmaz. Kurulum dosyaları değiştirilmeden hata çıkarsa başlangıçtaki sürüm korunur; değiştirme başladıktan sonra hata çıkarsa sürüm boş/bilinmiyor olur. Yeni başarısız ilk kurulum da sürüm uydurmaz. Önceki parola ve kurulum tarihi korunur. Failed satırlar, eski güncelleme cache'i true olsa bile sıradan Güncelle düğmesi yerine Yeniden dene yolunu kullanır.
