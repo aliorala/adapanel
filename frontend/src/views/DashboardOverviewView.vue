@@ -1208,6 +1208,8 @@ function formatTimeSpan(value: string): string {
 }
 
 .audit-item {
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: var(--sp-16);
   border-radius: var(--radius-md);
 }
