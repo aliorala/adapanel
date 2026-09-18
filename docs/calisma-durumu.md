@@ -1,5 +1,17 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — SON DURUM: 0.8.55 canlı, denetim doğruluğu düzeltildi
+
+Kaynak commit bf4c253. Salt okunur alan adı denetimindeki tekrarlı posta/DNS okumaları tekilleştirildi; her yeni tarama taze ölçer, onarım yazma sonrasında yeniden okur. Site kimliği/adı/durumu değişince önbellek düşer; eşzamanlı onarımdan önceki tarama nesil sayacı sayesinde eski önbelleği geçerli yapamaz. Başarısız alan adı denetimleri10dakika tutulmaz. Altı attention kaynağının süreleri artık loglanıyor.
+
+Doğrulama: tam backend5402/5402, son hedefli39/39 (sonradan eklenen iki senaryo dahil), frontend build başarılı. İlk test derlemesinde Options adı düzeltildi; son onarım testindeki eksik sahte UpsertRecordsAsync tamamlandı ve tekrar yeşil geçti. Mevcut xUnit2031 uyarısı değişmedi. Standart paket denetimi168dosya ve installer başarılı. Paket90.805.564bayt, SHA256 B64CAB9B3A3C5588ABD2E963F4B15815658D1CEA1E664BB8F5D78479975FE800. Yayımdan yeniden indirme ve canlı indirme aynı özeti verdi. Kaynak/history/tag push yapılmadı.
+
+Canlı kurulum succeeded/exit0/error boş, isFinished=true/isFailed=false; updatedAtUtc=2026-09-18T13:40:48.2622322Z. AdaPanel/AdaMariaDB/adaredis/DNS/FTPSVC/W3SVC/WAS Running, Stalwart PID9048. travianpanel.com/adapanel.host/webmail.travianpanel.com HTTPS200. Sağlık ekranı3alanadı güncel,0eksik,0sunucugeneli bulgu; DNS genelIP'de dinliyor. Bu yapısal denetim alioral.xyz alan adının süresinin yenilendiği anlamına gelmez; bu alan adı değiştirilmedi.
+
+AÇIK PERFORMANS: İlk/soğuk tarama çözülmedi. 16:43:11'de eşzamanlı istekler135324ms,103432ms,27394ms tamamlandı. En uzun istekte advisor210ms/DNS33297ms/domains97388ms/services4382ms; domains süresi InspectionGate beklemesini de kapsar,97sn tek başına fiili işlem süresi diye yorumlanmamalı. Sonraki ölçümler16:43:33=9647ms,16:44:05=9576ms,16:44:32=8566ms. Bunlarda DNS7249–8415ms,domains19–27ms,services1167–1235ms. Sıcak tarama süresinin çoğu DNS sağlık PowerShell ölçümünde. Tekilleştirme testli ancak ilk açılış gecikmesinde iyileşme kanıtlanmadı; sonraki iş DNS sağlık scriptini ve ilk alan adı denetiminin alt adımlarını ölçerek süreç başlangıç maliyetlerini azaltmak. Aynı anda eski panel sekmeleri bulunabildiğinden çoklu istek sayısı tek sekme hatası sayılmaz.
+
+Ayrıntı docs/denetim-2026-09-18-055.md, kanıtlar .tmp/audit-055. Yedekleme korunur; şifreleme kullanıcı tercihiyle kapalıdır. Önceki fiyat botu argüman düzeltmesinin19Eylül03:00 sonucu henüz yok. Tüm iş akışlarında sıfır sorun iddiası yapılmaz.
+
 ## 2026-09-18 — 0.8.55 denetim düzeltmeleri (hazırlık)
 
 Alan adı denetiminde aynı posta DNS ve yayınlanmış DNS kaydı iki kez okunuyordu. Salt okunur tek site denetimi artık Lazy görevleriyle her kaynağı bir kez okur; sonraki denetim ve yazma yapan onarım yeniden ölçer. Site kimliği/adı/çalışma durumu önbellek parmak izine eklendi. Onarım sırasında devam eden eski taramanın önbelleği yeniden geçerli yapması nesil sayacıyla engellendi; FailedSites içeren sonuçlar on dakika tutulmaz. AttentionService altı kontrolün sürelerini tek satırda kaydeder.
