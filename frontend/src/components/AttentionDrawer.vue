@@ -14,7 +14,7 @@
       @keydown.esc.stop.prevent="requestClose"
       @keydown.tab="trapFocus">
       <header class="attention-head">
-        <div class="attention-heattention-copy">
+        <div class="attention-heading-copy">
           <h2>{{ t("panel.attention.title") }}</h2>
           <p class="meta">{{ t("panel.attention.subtitle") }}</p>
         </div>
@@ -361,7 +361,7 @@ function formatUtc(value: string): string {
    metniyle (13.5px) 0.27px fark — cekmecenin basligi icindeki cumleden ayirt edilemiyordu.
    Kapsamli oldugu icin (ozgulluk (0,1,1)) ortak baslik merdivenini de EZIYORDU. Kural
    dusunce baslik `base.css`teki `h2` adimini alir: 19.17px/660. `margin: 0` de orada. */
-.attention-heattention-copy .meta {
+.attention-heading-copy .meta {
   margin: 2px 0 0;
   font-size: var(--fs-2xs);
 }
