@@ -4947,7 +4947,10 @@ public sealed class ComponentBootstrapper(
     internal static IReadOnlyList<string> ConfigurationFilesToPreserve(string componentId)
         => componentId.Trim().ToLowerInvariant() switch
         {
-            "php-8.3" => ["php.ini"],
+            // phpredis is installed separately and is absent from the official PHP ZIP.
+            // This component stays on the same 8.3 / NTS / x64 ABI; bundled extensions
+            // must come from the new package, rather than preserving the entire ext folder.
+            "php-8.3" => ["php.ini", "ext/php_redis.dll"],
             "mariadb-11" or "mysql-8" => ["my.ini"],
             "roundcube" => ["config/config.inc.php", "web.config", "public_html/web.config"],
             "phpmyadmin" => ["config.inc.php", "web.config"],

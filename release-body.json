@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.44",
-  "name": "0.8.44 — Bileşen güncellemelerinde ayar ve veri koruması",
-  "body": "- PHP ve web aracı yapılandırmaları ile Roundcube kullanıcı verisi bileşen güncellemelerinde korunur.\n- Veritabanı ve posta güncellemeleri mevcut yönetici parolasını kullanır; kayıtlı kimlik çözülemiyorsa veri değişmeden açık hata verilir.\n- Paket çıkarma hatası veya iptalinde korunmuş ayarlar geri konur. Geri koyma başarısızsa kurulum devam etmez ve kurtarma konumu bildirilir."
+  "body": "- Yazılım mağazasındaki PHP güncelleme isteği kurulum servisine eksiksiz aktarılır; mevcut sürüm nedeniyle güncellemenin atlanması düzeltildi.\n- PHP kurulum sonucu gerçek sürüm ölçüm bilgisini korur.\n- Aynı PHP 8.3 dalındaki güncellemelerde sonradan kurulan Redis eklentisi korunur.",
+  "tag_name": "0.8.45",
+  "name": "0.8.45 — PHP güncelleme akışı düzeltmesi"
 }

@@ -77,11 +77,12 @@ public sealed class PhpService(
         string componentId,
         Guid? actorUserId,
         string? ipAddress,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool force = false)
     {
         EnsurePhpComponentId(componentId);
 
-        var result = await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, force: false, cancellationToken: cancellationToken);
+        var result = await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, force: force, cancellationToken: cancellationToken);
         try
         {
             await RegisterFastCgiAsync(componentId, cancellationToken);
@@ -97,6 +98,7 @@ public sealed class PhpService(
             ComponentId = result.ComponentId,
             DisplayName = result.DisplayName,
             Version = result.Version,
+            VersionMeasured = result.VersionMeasured,
             Status = result.Status,
             InstallDir = result.InstallDir,
             ServiceName = result.ServiceName,

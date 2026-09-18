@@ -181,7 +181,7 @@ public sealed class WebDbDeploymentTests
         public Task EnsureSiteIsolationAsync(string siteName, bool enabled, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public Task<ComponentInstallResultDto> InstallVersionAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default)
+        public Task<ComponentInstallResultDto> InstallVersionAsync(string componentId, Guid? actorUserId, string? ipAddress, CancellationToken cancellationToken = default, bool force = false)
             => throw new NotSupportedException();
 
         public Task RegisterFastCgiAsync(string componentId, CancellationToken cancellationToken = default)

@@ -1,5 +1,13 @@
 # 0.8.31–0.8.43 — Kalan sorunların düzeltilmesi
 
+## 2026-09-18 — PHP güncelleme talebi düzeltmesi (0.8.45 hazırlanıyor)
+
+0.8.44 canlıya kuruldu: last-attempt phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false; updatedAtUtc=2026-09-18T06:04:16.0990929Z. Kurulum dosyası 90.798.973 bayt, SHA256 289F89FF6CCAEE8DCECD9BD9BF55A4D90D426A7B4BB658D34DDFDD7A59E1505E; public release yeniden indirme hash'i eşleşti. Kaynak commit b9d0493, kaynak/history/tag push yapılmadı.
+
+Canlı PHP Güncelle düğmesi başarı gösterdi ama PHP gerçek CLI sürümü 8.3.31 kaldı. Kök neden SoftwareController'ın request.Force bilgisini PHP servisine aktarmaması ve PhpService'in force:false sabitlemesiydi. 0.8.45 bu bayrağı uçtan uca taşır; sıradan kurulumlar varsayılan false kalır. Kurulum sonucundaki VersionMeasured da korunur. Controller→gerçek PhpService→sahte bootstrapper zincirinde true/false ve olağan kurulum regresyonları eklendi.
+
+Canlıda redis PHP eklentisi yüklü: resmi PHP ZIP'inde bulunmayan ext/php_redis.dll aynı PHP 8.3 NTS x64 bileşeninin yama güncellemelerinde korunur; standart ext DLL'leri yeni paketten gelir. PHP/Adminer/CLI kurtarma kopyaları C:\ProgramData\AdaPanel\updates\component-safety-20260918-044 altında, yalnız SYSTEM/Administrators erişimiyle var (83/564/3 dosya). Henüz hiçbir üçüncü taraf bileşen güncellenmedi. 0.8.45 test/paket/yayın kanıtı .tmp/php-update-045 altında tutulur. Şifreleme kapalı, alioral.xyz kapalı, kompakt UI korunur.
+
 ## 2026-09-18 — Bileşen güncellemeleri öncesi koruma açıkları (0.8.44 hazırlanıyor)
 
 Canlı 0.8.43: gece otomasyonu 18 Eylül 03:08:40'ta tamamlandı; 3 site + 4 veritabanı + posta + panel yedeklendi, 6 eski yedek silindi. Sonraki tur 19 Eylül03:00. Bu, yeni çalışan iş takibi sürümünün zamanlanmış iş akışını tamamladığının canlı kanıtıdır; aktif şeridi gece izlenmiş sayılmaz.

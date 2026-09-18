@@ -11,7 +11,8 @@ public interface IPhpService
         string componentId,
         Guid? actorUserId,
         string? ipAddress,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool force = false);
 
     Task RegisterFastCgiAsync(string componentId, CancellationToken cancellationToken = default);
 

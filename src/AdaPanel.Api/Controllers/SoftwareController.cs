@@ -85,7 +85,8 @@ public sealed class SoftwareController(
                 request.ComponentId,
                 actorUserId,
                 ipAddress,
-                CancellationToken.None)
+                CancellationToken.None,
+                force: request.Force)
             : await componentBootstrapper.InstallAsync(
                 request.ComponentId,
                 actorUserId,

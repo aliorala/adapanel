@@ -17,6 +17,7 @@ public sealed class ComponentStatePreservationTests : IDisposable
 
     [Theory]
     [InlineData("php-8.3", "php.ini")]
+    [InlineData("php-8.3", "ext/php_redis.dll")]
     [InlineData("roundcube", "config/config.inc.php")]
     [InlineData("roundcube", "public_html/web.config")]
     [InlineData("mariadb-11", "my.ini")]
