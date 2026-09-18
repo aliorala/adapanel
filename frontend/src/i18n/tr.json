@@ -1622,6 +1622,8 @@
   "panel.software.versionCheckUnsupportedHint": "Bu bileşenin sürümü panel paketine sabit yazılıdır; üretici yeni sürüm çıkardığında panel bunu otomatik göremez. Güncelliğini üreticinin sitesinden takip edin veya panel güncellemelerini kurun.",
   "panel.software.updateTo": "{version} sürümüne güncelle",
   "panel.software.updatesFound": "{count} bileşen için yeni sürüm mevcut.",
+  "panel.software.updatesWithFailures": "{failed} bileşenin kurulumu başarısız; ilgili satırdan yeniden deneyin. Diğer bileşenler için {count} güncelleme mevcut.",
+  "panel.software.installedVersionUnknown": "Kurulu sürüm bilinmiyor",
   "panel.software.updatesNone": "Tüm bileşenler güncel.",
   "software.updates_checked": "Güncellemeler denetlendi.",
   "panel.software.installing": "Kuruluyor...",

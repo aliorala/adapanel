@@ -81,7 +81,9 @@ export const useSoftwareStore = defineStore("software", {
   }),
   getters: {
     updatableCount: (state) =>
-      (state.catalog?.installed ?? []).filter((item) => item.updateAvailable).length
+      (state.catalog?.installed ?? []).filter((item) => item.updateAvailable).length,
+    failedCount: (state) =>
+      (state.catalog?.installed ?? []).filter((item) => item.status.toLowerCase() === "failed").length
   },
   actions: {
     async fetchCatalog() {
@@ -124,6 +126,11 @@ export const useSoftwareStore = defineStore("software", {
         const response = await apiClient.post<ApiEnvelope<ComponentInstallResult>>("/software/install", { componentId, force });
         await this.fetchCatalog();
         return response.data.data;
+      } catch (error) {
+        // Failed attempts also change the server record. Keep the original install error
+        // if refreshing fails, but otherwise show the new Failed/retry state immediately.
+        await this.fetchCatalog().catch(() => undefined);
+        throw error;
       } finally {
         this.installingComponentId = "";
       }
@@ -135,6 +142,9 @@ export const useSoftwareStore = defineStore("software", {
         const response = await apiClient.post<ApiEnvelope<ComponentInstallResult[]>>("/software/install-defaults", {});
         await this.fetchCatalog();
         return response.data.data;
+      } catch (error) {
+        await this.fetchCatalog().catch(() => undefined);
+        throw error;
       } finally {
         this.installingDefaults = false;
       }

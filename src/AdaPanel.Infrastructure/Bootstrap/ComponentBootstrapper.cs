@@ -699,7 +699,7 @@ public sealed class ComponentBootstrapper(
         }
     }
 
-    private async Task<ComponentInstallResultDto> InstallComponentInternalAsync(
+    internal async Task<ComponentInstallResultDto> InstallComponentInternalAsync(
         ComponentManifestItemDto component,
         Guid? actorUserId,
         string? ipAddress,
@@ -739,6 +739,7 @@ public sealed class ComponentBootstrapper(
 
         string cleanupPath = string.Empty;
         var stateRestored = true;
+        var installationFilesChanged = false;
 
         // Canlı ilerleme: "şu an X kuruluyor". Begin/Complete'i çağıran yönetir (ilk kurulum
         // sihirbazı veya Yazılım Mağazası); burada sadece bu bileşenin adımı raporlanır.
@@ -792,6 +793,7 @@ public sealed class ComponentBootstrapper(
             // kilitli/yarim dosyalar cakisir. Temiz kurulum icin dizini sifirla (servis durduruldu).
             try
             {
+                installationFilesChanged = true;
                 DeleteManagedPath(installDirectory, component.Id);
                 await ExecuteInstallAsync(component, downloadPath, installDirectory, executionArgs, cancellationToken);
             }
@@ -878,7 +880,7 @@ public sealed class ComponentBootstrapper(
         {
             operationProgress.CompleteStep(component.DisplayName, success: false, FormatInstallError(exception));
             logger.LogWarning(exception, "Component installation blocked for {ComponentId}", component.Id);
-            await UpsertFailedInstallAsync(component, installDirectory, FormatInstallError(exception), cancellationToken);
+            await UpsertFailedInstallAsync(component, installDirectory, previous, installationFilesChanged, FormatInstallError(exception), cancellationToken);
             await auditService.WriteAsync(
                 "software.install.failed",
                 "software",
@@ -894,7 +896,7 @@ public sealed class ComponentBootstrapper(
         {
             operationProgress.CompleteStep(component.DisplayName, success: false, exception.Message);
             logger.LogError(exception, "Component installation failed for {ComponentId}", component.Id);
-            await UpsertFailedInstallAsync(component, installDirectory, exception.Message, cancellationToken);
+            await UpsertFailedInstallAsync(component, installDirectory, previous, installationFilesChanged, exception.Message, cancellationToken);
             await auditService.WriteAsync(
                 "software.install.failed",
                 "software",
@@ -929,7 +931,7 @@ public sealed class ComponentBootstrapper(
             IsSystemDetected = ReadBoolean(configuration, SystemDetectedKey),
             DetectionSource = ReadConfigurationValue(configuration, DetectionSourceKey),
             AvailableVersion = updateInfo?.AvailableVersion ?? string.Empty,
-            UpdateAvailable = updateInfo?.UpdateAvailable ?? false,
+            UpdateAvailable = component.Status == ComponentInstallStatus.Installed && (updateInfo?.UpdateAvailable ?? false),
             VersionCheckSupported = updateInfo?.VersionCheckSupported ?? SupportsVersionCheck(component.ComponentId),
             InstalledAtUtc = component.InstalledAtUtc
         };
@@ -1253,6 +1255,8 @@ public sealed class ComponentBootstrapper(
     private async Task UpsertFailedInstallAsync(
         ComponentManifestItemDto component,
         string installDirectory,
+        InstalledComponent? previous,
+        bool installationFilesChanged,
         string error,
         CancellationToken cancellationToken)
     {
@@ -1264,7 +1268,9 @@ public sealed class ComponentBootstrapper(
             };
 
         installedComponent.DisplayName = component.DisplayName;
-        installedComponent.Version = component.Version;
+        // A requested version is not evidence of an installed version. Before replacement the
+        // previous record still describes the files; after replacement/rollback it is unknown.
+        installedComponent.Version = installationFilesChanged ? string.Empty : previous?.Version ?? string.Empty;
         installedComponent.Type = ParseComponentType(component.Type);
         installedComponent.InstallDir = installDirectory;
         installedComponent.ServiceName = component.ServiceName;

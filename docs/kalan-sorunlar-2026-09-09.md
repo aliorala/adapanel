@@ -1,5 +1,16 @@
 # 0.8.31–0.8.43 — Kalan sorunların düzeltilmesi
 
+## 2026-09-18 — Başarısız güncelleme sürümü ve özeti düzeltildi (0.8.49 hazırlanıyor)
+
+Önceki üst notta açık kalan konu kapatıldı: UpsertFailedInstallAsync hedef sürümü artık kurulu sürüm olarak yazmaz. Kurulum dosyaları değiştirilmeden hata çıkarsa başlangıçtaki sürüm korunur; değiştirme başladıktan sonra hata çıkarsa sürüm boş/bilinmiyor olur. Yeni başarısız ilk kurulum da sürüm uydurmaz. Önceki parola ve kurulum tarihi korunur. Failed satırlar, eski güncelleme cache'i true olsa bile sıradan Güncelle düğmesi yerine Yeniden dene yolunu kullanır.
+
+Ön yüz kayıt varsa manifest sürümüne düşmez; boş sürüm Kurulu sürüm bilinmiyor der. Güncelleme denetimi başarısız kurulum sayısını ve diğer bileşenlerin güncelleme sayısını birlikte verir; başarısız satır varken Tüm bileşenler güncel demez. Tekli/varsayılan kurulum hatasından sonra katalog yenilenir; yenileme de hata verirse asıl kurulum hatası korunur.
+
+75 ilgili backend testi, 85 frontend testi, typecheck ve üretim build başarılı. Yeni 4 backend senaryosu gerçek download/integrity/extract/catch/SQLite/katalog yolunda sahte HTTP yanıtı kullanır: ilk kurulum/yükseltme × checksum öncesi/bozuk ZIP sonrası. Gerçek dosya değişimi, parola/tarih koruması ve stale-cache/retry durumu ölçülür; canlı servisler test için bozulmadı. 8 yeni frontend senaryosu gerçek SFC setup ve SSR şablonunu doğrular. Kanıt .tmp/failed-version-049/.
+
+Bu not anında canlı hâlâ 0.8.48; 0.8.49 paket/yayın/kurulum bekliyor. Kullanıcının yedekleme açık/şifreleme kapalı, kapalı alioral.xyz ve kompakt görünüm tercihleri değişmedi. Public GitHub'a kaynak/history/tag push yok; yalnız mevcut release betiğiyle installer yayımlanır.
+
+
 ## 2026-09-18 — 0.8.48 canlı; bekleyen altı bileşen güncellemesi tamamlandı
 
 **Güncel canlı panel ve GitHub latest: 0.8.48.** Kaynak commit 49aa3b9. Installer 90.802.172 bayt; SHA256 **DC8C984B71E0B1B79627127A739096481A83A9CD08705A460556D22D107C422F**. GitHub'dan yeniden indirilen dosya ve canlı panelin indirdiği dosya aynı hash ile doğrulandı. Canlı last-attempt: phase=succeeded, installerExitCode=0, isFinished=true, isFailed=false, updatedAtUtc=2026-09-18T07:09:20.334728Z. Yayın/paket logları .tmp/task-preflight-048/. Public GitHub'a kaynak/history/tag push yapılmadı.

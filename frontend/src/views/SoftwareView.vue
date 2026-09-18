@@ -144,7 +144,7 @@
                indiğinde başlık satırı kayboluyor ve "8.3.6", "runtime", "C:\..." anonim
                satırlara dönüşüyordu; etiket artık hücrenin İÇİNDE, aynı çeviri anahtarından. -->
           <span class="version-cell" :data-label="t('panel.software.version')">
-            {{ item.installed?.version || item.version || "-" }}
+            {{ item.installed ? (item.installed.version || t("panel.software.installedVersionUnknown")) : (item.version || "-") }}
             <span
               v-if="item.installed?.updateAvailable"
               class="update-badge"
@@ -237,7 +237,7 @@
         <article v-for="item in installedRows" :key="item.id" class="installed-chip">
           <strong>{{ item.displayName }}</strong>
           <span>
-            {{ item.version || "-" }} ·
+            {{ item.version || t("panel.software.installedVersionUnknown") }} ·
             {{ item.isSystemDetected ? t("panel.software.systemDetected") : formatStatus(item.status) }}
           </span>
           <span v-if="item.isSystemDetected" class="detection-source">
@@ -459,11 +459,14 @@ async function checkForUpdates() {
   try {
     await softwareStore.checkForUpdates();
     const count = softwareStore.updatableCount;
+    const failed = softwareStore.failedCount;
     showNotice(
-      count > 0
+      failed > 0
+        ? t("panel.software.updatesWithFailures", { failed, count })
+        : count > 0
         ? t("panel.software.updatesFound", { count })
         : t("panel.software.updatesNone"),
-      false);
+      failed > 0);
   } catch (error) {
     showApiError(error);
   }

@@ -1622,6 +1622,8 @@
   "panel.software.versionCheckUnsupportedHint": "This component's version is pinned in the panel package, so the panel cannot see new upstream releases automatically. Track it on the vendor's site or install panel updates.",
   "panel.software.updateTo": "Update to {version}",
   "panel.software.updatesFound": "Updates available for {count} component(s).",
+  "panel.software.updatesWithFailures": "Installation failed for {failed} component(s); retry from the relevant row. {count} update(s) available for other components.",
+  "panel.software.installedVersionUnknown": "Installed version unknown",
   "panel.software.updatesNone": "All components are up to date.",
   "software.updates_checked": "Updates checked.",
   "panel.software.installing": "Installing...",

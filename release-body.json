@@ -1,5 +1,5 @@
 {
-  "name": "0.8.48 — Görev tabanlı servislerde güncelleme ön kontrolü",
-  "tag_name": "0.8.48",
-  "body": "- Stalwart ve Memcached güncellemelerinde çalışan yönetilen süreç, gerçek çalıştırılabilir dosya yoluyla tanınır; kendi portları yanlışlıkla yabancı yazılım çakışması sayılmaz.\n- Aynı isimli yabancı süreçler ve aynı porttaki diğer dinleyiciler çakışma denetiminde kalır."
+  "name": "0.8.49 — Başarısız bileşen güncellemelerinde doğru durum",
+  "tag_name": "0.8.49",
+  "body": "- Başarısız bir güncelleme artık hedef sürümü kurulu sürüm olarak kaydetmez. Dosyalar değişmediyse önceki sürüm korunur; değiştiyse kurulu sürüm bilinmiyor olarak gösterilir.\n- Başarısız kurulumlar güncelleme özetinde açıkça belirtilir ve yeniden deneme işlemi sunulur.\n- Kurulum hatasının ardından bileşen listesi otomatik yenilenir."
 }
