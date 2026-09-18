@@ -87,6 +87,7 @@ public static class ComponentPreflight
         public int Pid { get; set; }
         public string Process { get; set; } = string.Empty;
         public string Service { get; set; } = string.Empty;
+        public string ExecutablePath { get; set; } = string.Empty;
     }
 
     public sealed class ServiceInfo
@@ -99,10 +100,20 @@ public static class ComponentPreflight
     /// <summary>Dolu portlardan panele ait OLMAYANLARI seçer (yeniden kurulumda kendi servisimiz elenmeli).</summary>
     public static IReadOnlyList<PortOccupancy> SelectForeignPortConflicts(
         IEnumerable<PortOccupancy> occupancies,
-        string? componentServiceName) =>
+        string? componentServiceName,
+        string? ownExecutablePath = null) =>
         occupancies
             .Where(item => item.Port > 0 && !IsOwnService(item.Service, componentServiceName))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Service) || !SameExecutable(item.ExecutablePath, ownExecutablePath))
             .ToList();
+
+    private static bool SameExecutable(string? actual, string? expected)
+    {
+        if (string.IsNullOrWhiteSpace(actual) || string.IsNullOrWhiteSpace(expected) ||
+            !Path.IsPathFullyQualified(actual) || !Path.IsPathFullyQualified(expected)) return false;
+        try { return Path.GetFullPath(actual).Equals(Path.GetFullPath(expected), StringComparison.OrdinalIgnoreCase); }
+        catch (ArgumentException) { return false; }
+    }
 
     /// <summary>
     /// Portu tutan süreç çekirdeğin HTTP dinleyicisi (HTTP.sys) mi?
@@ -221,11 +232,10 @@ public static class ComponentPreflight
             $portRows = @()
             foreach ($p in @({{portList}})) {
                 if ($p -le 0) { continue }
-                $conn = Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($conn) {
+                foreach ($conn in @(Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue)) {
                     $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
                     $svc = Get-CimInstance Win32_Service -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue | Select-Object -First 1
-                    $portRows += [pscustomobject]@{ Port = [int]$p; Pid = [int]$conn.OwningProcess; Process = [string]$proc.ProcessName; Service = [string]$svc.Name }
+                    $portRows += [pscustomobject]@{ Port = [int]$p; Pid = [int]$conn.OwningProcess; Process = [string]$proc.ProcessName; Service = [string]$svc.Name; ExecutablePath = [string]$proc.Path }
                 }
             }
             $svcRows = @(Get-CimInstance Win32_Service |

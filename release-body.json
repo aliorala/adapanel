@@ -1,5 +1,5 @@
 {
-  "name": "0.8.47 — Bileşen güncelleme ve yayın korumaları",
-  "body": "- Adminer, phpMyAdmin ve Roundcube güncellemelerinde panel giriş ve sağlık dosyaları, oturum dizinleri ve IIS ayarları korunur.\n- Adminer yeni paket kodunu mevcut web köküne aktarır; Roundcube varlık bağlantıları mevcut IIS sitesi ve SSL bağları değiştirilmeden yenilenir.\n- Bileşen yükseltme onayındaki yanlış Sil etiketi Güncelle olarak düzeltildi; komut satırı aracı için gereksiz servis uyarısı kaldırıldı.\n- Veritabanı servisi dosyalar değiştirilmeden düzgün kapatılır; görev tabanlı posta sunucularında bulunmayan Windows servis kaydı güncellemeyi engellemez.",
-  "tag_name": "0.8.47"
+  "name": "0.8.48 — Görev tabanlı servislerde güncelleme ön kontrolü",
+  "tag_name": "0.8.48",
+  "body": "- Stalwart ve Memcached güncellemelerinde çalışan yönetilen süreç, gerçek çalıştırılabilir dosya yoluyla tanınır; kendi portları yanlışlıkla yabancı yazılım çakışması sayılmaz.\n- Aynı isimli yabancı süreçler ve aynı porttaki diğer dinleyiciler çakışma denetiminde kalır."
 }

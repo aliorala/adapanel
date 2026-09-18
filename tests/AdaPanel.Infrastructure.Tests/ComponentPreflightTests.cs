@@ -1,10 +1,32 @@
 using AdaPanel.Infrastructure.Bootstrap;
+using AdaPanel.Infrastructure.Support;
+using System.Net;
+using System.Net.Sockets;
+using System.Text.Json;
 using Xunit;
 
 namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class ComponentPreflightTests
 {
+    [Fact]
+    public async Task Windows_probe_measures_the_listener_executable_path()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var result = await ProcessRunner.RunPowerShellAsync(ComponentPreflight.BuildProbeScript([port], []));
+            Assert.Equal(0, result.ExitCode);
+            using var json = JsonDocument.Parse(result.StandardOutput);
+            var own = Assert.Single(json.RootElement.GetProperty("Ports").EnumerateArray()
+                .Where(row => row.GetProperty("Pid").GetInt32() == Environment.ProcessId));
+            Assert.Equal(Environment.ProcessPath, own.GetProperty("ExecutablePath").GetString(), ignoreCase: true);
+        }
+        finally { listener.Stop(); }
+    }
+
     [Theory]
     [InlineData("mariadb-11", 3306)]
     [InlineData("mysql-8", 3307)]
@@ -46,6 +68,37 @@ public sealed class ComponentPreflightTests
 
         Assert.Equal(2, conflicts.Count); // kendi servisimiz (yeniden kurulum) elenir; yabancı + servissiz süreç kalır
         Assert.DoesNotContain(conflicts, item => item.Service == "AdaMariaDB");
+    }
+
+    [Theory]
+    [InlineData("C:/ProgramData/AdaPanel/runtimes/stalwart/stalwart.exe", "", false)]
+    [InlineData("c:/programdata/adapanel/runtimes/stalwart/STALWART.EXE", "", false)]
+    [InlineData("C:/other/stalwart.exe", "", true)]
+    [InlineData("C:/ProgramData/AdaPanel/runtimes/stalwart-copy/stalwart.exe", "", true)]
+    [InlineData("stalwart.exe", "", true)]
+    [InlineData("", "", true)]
+    [InlineData("C:/ProgramData/AdaPanel/runtimes/stalwart/stalwart.exe", "ForeignMailService", true)]
+    public void Task_runtime_is_exempt_only_for_its_exact_executable(string path, string service, bool conflict)
+    {
+        var occupancies = new[]
+        {
+            new ComponentPreflight.PortOccupancy { Port = 25, Pid = 42, Process = "stalwart", Service = service, ExecutablePath = path }
+        };
+        var conflicts = ComponentPreflight.SelectForeignPortConflicts(occupancies, "AdaStalwart",
+            "C:/ProgramData/AdaPanel/runtimes/stalwart/stalwart.exe");
+        Assert.Equal(conflict ? 1 : 0, conflicts.Count);
+    }
+
+    [Fact]
+    public void Own_listener_does_not_hide_a_foreign_listener_on_the_same_port()
+    {
+        const string own = "C:/ProgramData/AdaPanel/runtimes/stalwart/stalwart.exe";
+        var occupancies = new[]
+        {
+            new ComponentPreflight.PortOccupancy { Port = 25, Pid = 42, ExecutablePath = own },
+            new ComponentPreflight.PortOccupancy { Port = 25, Pid = 43, ExecutablePath = "C:/other/stalwart.exe" }
+        };
+        Assert.Equal(43, Assert.Single(ComponentPreflight.SelectForeignPortConflicts(occupancies, "AdaStalwart", own)).Pid);
     }
 
     [Fact]

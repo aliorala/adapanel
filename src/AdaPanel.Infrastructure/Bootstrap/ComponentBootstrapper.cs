@@ -3964,7 +3964,15 @@ public sealed class ComponentBootstrapper(
             return;
         }
 
-        var portConflicts = ComponentPreflight.SelectForeignPortConflicts(occupied, component.ServiceName);
+        // Scheduled-task runtimes have no Win32_Service owner. Match only the exact
+        // managed executable; a process with the same name elsewhere remains a conflict.
+        var ownExecutablePath = component.Id.Trim().ToLowerInvariant() switch
+        {
+            "stalwart-mail" => Path.Combine(ResolveInstallDirectory(component.InstallDir), "stalwart.exe"),
+            "memcached" => Path.Combine(ResolveInstallDirectory(component.InstallDir), "memcached.exe"),
+            _ => null
+        };
+        var portConflicts = ComponentPreflight.SelectForeignPortConflicts(occupied, component.ServiceName, ownExecutablePath);
         if (portConflicts.Count > 0)
         {
             // HTTP.sys'in tuttuğu portlarda süreç adı ("System", PID 4) yöneticiye hiçbir şey söylemez;
