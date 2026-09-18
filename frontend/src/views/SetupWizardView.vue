@@ -1,5 +1,11 @@
 <template>
-  <main v-if="mode !== 'dashboard'" class="setup-shell">
+  <main v-if="bootstrapState !== 'ready'" class="setup-shell">
+    <section class="auth-card">
+      <p v-if="bootstrapState === 'loading'" role="status">{{ t("panel.common.loading") }}</p>
+      <SectionLoadError v-else :message="banner" @retry="initializeView" />
+    </section>
+  </main>
+  <main v-else-if="mode !== 'dashboard'" class="setup-shell">
     <section class="auth-card">
       <!--
         GİRİŞ EKRANI MARKASI: burada gösterilen HER ZAMAN sunucu geneli (yöneticinin) markasıdır.
@@ -636,6 +642,7 @@ import { allowNavigation } from "../composables/navigationGuard";
 import { setPanelLocale } from "../i18n";
 import { resetAllStores } from "../stores/resetAll";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import SectionLoadError from "../components/SectionLoadError.vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
 import MainLayout from "../layouts/MainLayout.vue";
@@ -751,6 +758,7 @@ const databasesStore = useDatabasesStore();
 const subscriptionStore = useSubscriptionStore();
 
 const mode = ref<ViewMode>("setup");
+const bootstrapState = ref<"loading" | "failed" | "ready">("loading");
 const installing = ref(false);
 const installProgress = ref<OperationProgress | null>(null);
 const setupSecurePath = ref("");
@@ -1146,6 +1154,8 @@ function handleSessionExpired() {
 }
 
 async function initializeView() {
+  bootstrapState.value = "loading";
+  banner.value = "";
   try {
     const status = await setupStore.fetchStatus();
     setupForm.secureEntryPath = status.secureEntryPath ? status.secureEntryPath.replace("/", "") : "panel";
@@ -1194,6 +1204,9 @@ async function initializeView() {
     await restoreSession();
   } catch (error) {
     showBanner(resolveApiMessage(error), true);
+    bootstrapState.value = "failed";
+  } finally {
+    if (bootstrapState.value === "loading") bootstrapState.value = "ready";
   }
 }
 

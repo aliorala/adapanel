@@ -1,5 +1,15 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-18 — 0.8.53 canlı doğrulaması ve 0.8.54 açılış düzeltmesi
+
+0.8.53 canlıya ulaştı (kaynak abc1abd, paket90.803.298bayt SHA25614C26B3254F85237B7C1B29961DFF65A39E4EACC9E48635AAD9301EDBA8FE2DD). Güncelleme ekranı mevcut/son0.8.53 gösterdi. Canlı mobil ana sayfa document.scrollWidth=clientWidth=380; dört denetim kartı336/336px. Uzun kayıt taşması çözüldü. Site kurucuda adapanel.host hatasından travianpanel.com'a geçildi: form/önizleme geldi ve alert listesi boş; eski uyarı temizliği doğrulandı. Herhangi bir site kurucu kaydet/yayınla yapılmadı.
+
+Yeniden başlatmada kısa süre ilk kurulum formu görünmesi yeni bulgu: SetupWizardView mode varsayılan setup, durum API'sini beklerken formu çiziyordu. Veri kaybı değil; mevcut oturum ve .53 sürümü birkaç saniye sonra geri geldi. 0.8.54 açık bootstrapState ekler: başlangıç loading, başarısızlıkta retry/hata, başarılı durum okumasından sonra mevcut setup/auth/dashboard akışı. Başarısız ilk durum okuması artık kurulum formuna düşmez. Gerçek SSR şablonuyla3test eklendi: bilinmeyen/yüklenen durumda formyok, ağhatasında retry/formyok, doğrulanmış yeni kurulumda formvar. İlk test ortamında router location ve import edilen alt bileşen bağımlılıkları eksikti; test düzeltildi. Son frontend99/99 (19dosya), typecheck/build,6sürüm testi geçti. Backend .51 sonuçları geçerli; .54'te backend davranışı değişmedi. .54 bu not anında paketleniyor; henüz canlı değildir.
+
+Son dikkat ölçümleri .51/.53 öncesi normal9.6–13sn, ağır45sn. Açıkiki sekme ayrı tarama yapıyor; tek sekmede çiftistek hatasıyla karıştırılmasın. Soğuk/ağır gecikme AÇIK iyileştirme konusudur; çözüldü denmesin. Dört kullanıcıtercihi önerisi değişmedi. 0x800710D8 FTP-only IIS State fallback geçmişte bilinen konu; webkesintisi diye yorumlanmadı. Tarayıcıdaki güncelleme kesintisine denk Axios NetworkError beklenen kesinti; son konsol listener uyarıları chrome-extension kaynağıydı.
+
+Yerel Vite29604 durduruldu; .tmp fixture sekmeleri kapalı. Eski tarayıcı1015940648 hâlâ debugger bağlantısız, viewport reset bu sekmeye takılıyor; kullanıcıdan eski sekmeyikapatması istendi. Aktifdenetim1015940764 mobilboyutta çalışıyor. Son doğrulama bitince denetimsekmesi kapatılarak geçici görünüm bırakılmamalı. Diğer kullanıcısekmelerine dokunulmaz.
+
 ## 2026-09-18 — Canlı 0.8.51 doğrulandı; son görsel düzeltmeler 0.8.53 hazırlanıyor
 
 0.8.51 kaynak/üretim girişi 2558942. Canlı last-attempt succeeded, exit0, isFinished=true, isFailed=false, isDecidedByPanel=true, updatedAtUtc=2026-09-18T12:43:15.4617716Z. AdaPanel/MariaDB/Redis/DNS/FTP/IIS/WAS Running, Stalwart PID9048; travianpanel.com/adapanel.host/webmail.travianpanel.com HTTP200. Canlı mobil veritabanı 390x844: clientWidth=scrollWidth=380; taşma düzeltmesi doğrulandı.
