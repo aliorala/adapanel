@@ -5,6 +5,36 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class FirewallPortCoverageTests
 {
+    [Theory]
+    [InlineData("ADAPANEL-KURAL=1\n{\"Protocol\":\"TCP\",\"LocalPort\":\"443\"}")]
+    [InlineData("\r\nADAPANEL-KURAL=2\r\n[{\"Protocol\":\"TCP\",\"LocalPort\":\"443\"},{\"Protocol\":\"UDP\",\"LocalPort\":\"53\"}]")]
+    public void Marked_PowerShell_output_is_read_as_measured_coverage(string output)
+    {
+        var (all, ranges) = FirewallService.ParseAllowCoverageOutput(output);
+        Assert.NotNull(ranges);
+        Assert.False(all);
+        Assert.True(FirewallService.IsPortCovered(443, all, ranges));
+        Assert.False(FirewallService.IsPortCovered(80, all, ranges));
+        Assert.False(FirewallService.IsPortCovered(53, all, ranges));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("ADAPANEL-KURAL=0\n")]
+    [InlineData("ADAPANEL-KURAL=4\n[]")]
+    [InlineData("ADAPANEL-KURAL=invalid\n[]")]
+    [InlineData("[{\"Protocol\":\"TCP\",\"LocalPort\":\"Any\"}]")]
+    public void Missing_or_empty_measurement_stays_unknown(string output)
+    {
+        Assert.Null(FirewallService.ParseAllowCoverageOutput(output).Ranges);
+    }
+
+    [Fact]
+    public void Corrupt_measurement_is_not_assumed_to_be_allowed()
+    {
+        Assert.ThrowsAny<System.Text.Json.JsonException>(() => FirewallService.ParseAllowCoverageOutput("ADAPANEL-KURAL=1\ninvalid"));
+    }
+
     [Fact]
     public void ParseAllowCoverage_HandlesSinglePortsRangesAndProtocols()
     {

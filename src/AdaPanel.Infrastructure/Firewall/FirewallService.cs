@@ -245,12 +245,11 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
                 return (false, null);
             }
 
-            var rows = DeserializeArray<FirewallPortFilterRow>(result.StandardOutput);
-            var (coversAll, ranges) = ParseAllowCoverage(rows.Select(row => (row.Protocol, row.LocalPort)));
+            var (coversAll, ranges) = ParseAllowCoverageOutput(result.StandardOutput);
 
             // Hic kural okunamadiysa da olcum SAYILMAZ: bir Windows sunucusunda etkin gelen
             // izin kuralinin sifir olmasi gercekci degildir, okuma basarisiz olmustur.
-            if (rows.Length == 0)
+            if (ranges is null)
             {
                 logger.LogWarning(
                     "Guvenlik duvarinda hic etkin gelen izin kurali cozulemedi; bu gercekci olmadigi icin olcum yapilmamis sayiliyor.");
@@ -266,6 +265,22 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
                 "Guvenlik duvari kapsami cozulemedi; port durumlari 'olcemedik' olarak dondurulecek.");
             return (false, null);
         }
+    }
+
+    // Okuma damgası JSON değildir. Damga ayrı doğrulanır; yalnız takip eden veri ayrıştırılır.
+    internal static (bool CoversAllTcp, List<(int Lo, int Hi)>? Ranges) ParseAllowCoverageOutput(string output)
+    {
+        const string prefix = "ADAPANEL-KURAL=";
+        var text = output.TrimStart();
+        var newline = text.IndexOf('\n');
+        if (newline < 0 || !text.StartsWith(prefix, StringComparison.Ordinal) ||
+            !int.TryParse(text[prefix.Length..newline].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count <= 0)
+        {
+            return (false, null);
+        }
+
+        var rows = DeserializeArray<FirewallPortFilterRow>(text[(newline + 1)..]);
+        return rows.Length == 0 ? (false, null) : ParseAllowCoverage(rows.Select(row => (row.Protocol, row.LocalPort)));
     }
 
     // Saf parse (test edilebilir): PS'ten gelen (protokol, localPort) satırlarından TCP port kapsamını çıkarır.
