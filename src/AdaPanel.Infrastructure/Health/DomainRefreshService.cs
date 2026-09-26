@@ -18,7 +18,8 @@ internal sealed class DomainRefreshService(
     IFirewallService firewallService,
     ISslService sslService,
     JsonFileStore fileStore,
-    ILogger<DomainRefreshService> logger) : IDomainRefreshService
+    ILogger<DomainRefreshService> logger,
+    IDnsInspectionService? dnsInspectionService = null) : IDomainRefreshService
 {
     public async Task<DomainRefreshResultDto> RefreshAsync(string siteName, CancellationToken cancellationToken = default)
     {
@@ -71,14 +72,25 @@ internal sealed class DomainRefreshService(
         Volatile.Write(ref _cachedInspection, null);
     }
 
-    public Task<DomainRefreshResultDto> InspectAsync(string siteName, CancellationToken cancellationToken = default)
-        => RunAsync(siteName, applyChanges: false, cancellationToken);
+    public async Task<DomainRefreshResultDto> InspectAsync(string siteName, CancellationToken cancellationToken = default)
+    {
+        if (dnsInspectionService is null) return await RunAsync(siteName, false, cancellationToken);
+        var site = await siteService.GetSiteAsync(siteName, cancellationToken);
+        var snapshots = await ReadDnsInspectionsAsync([site], cancellationToken);
+        return await RunAsync(siteName, false, cancellationToken, snapshots[site.Name]);
+    }
 
-    private async Task<DomainRefreshResultDto> RunAsync(string siteName, bool applyChanges, CancellationToken cancellationToken)
+    private async Task<DomainRefreshResultDto> RunAsync(string siteName, bool applyChanges, CancellationToken cancellationToken,
+        DnsInspectionDto? snapshot = null)
     {
         var result = new DomainRefreshResultDto { SiteName = siteName, ZoneName = siteName };
         // Only this read-only inspection shares measurements. Repairs must read again after writes.
-        var reads = applyChanges ? null : new InspectionReads(siteName, dnsService, mailService, cancellationToken);
+        var reads = applyChanges ? null : new InspectionReads(siteName, dnsService, mailService, cancellationToken, snapshot);
+        if (!string.IsNullOrWhiteSpace(snapshot?.Error))
+        {
+            result.Error = snapshot.Error;
+            return result;
+        }
 
         try
         {
@@ -92,7 +104,8 @@ internal sealed class DomainRefreshService(
             // olarak bu oldu -- kullanici "onar" diyor, hicbiri calismiyor ve sebep gorunmuyor.
             try
             {
-                result.AddedDnsRecords = await dnsService.RepairDefaultsAsync(siteName, applyChanges, cancellationToken);
+                result.AddedDnsRecords = snapshot?.MissingDefaults
+                    ?? await dnsService.RepairDefaultsAsync(siteName, applyChanges, cancellationToken);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -291,10 +304,12 @@ internal sealed class DomainRefreshService(
     {
         sites ??= await siteService.GetSitesAsync(cancellationToken);
         var results = new List<DomainRefreshResultDto>(sites.Count);
+        var snapshots = !applyChanges && dnsInspectionService is not null
+            ? await ReadDnsInspectionsAsync(sites, cancellationToken) : null;
 
         foreach (var site in sites)
         {
-            results.Add(await RunAsync(site.Name, applyChanges, cancellationToken));
+            results.Add(await RunAsync(site.Name, applyChanges, cancellationToken, snapshots?[site.Name]));
         }
 
         return new DomainRefreshSummaryDto
@@ -305,6 +320,23 @@ internal sealed class DomainRefreshService(
             FailedSites = results.Count(item => item.Error.Length > 0),
             ServerFindings = await CollectServerFindingsAsync(applyChanges, cancellationToken)
         };
+    }
+
+    private async Task<IReadOnlyDictionary<string, DnsInspectionDto>> ReadDnsInspectionsAsync(
+        IReadOnlyCollection<SiteDto> sites, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var snapshots = await dnsInspectionService!.InspectZonesAsync(sites, cancellationToken);
+            return sites.ToDictionary(site => site.Name, site => snapshots.TryGetValue(site.Name, out var snapshot)
+                ? snapshot : new DnsInspectionDto { Error = "DNS inspection result missing." }, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Bulk DNS inspection failed.");
+            return sites.ToDictionary(site => site.Name, _ => new DnsInspectionDto { Error = DescribeError(exception) },
+                StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
@@ -745,11 +777,14 @@ internal sealed class DomainRefreshService(
         // uyari 40 kez cikar ve "40/40 alan adi guncel degil" gibi anlamsiz bir tablo olusur.
     }
 
-    private sealed class InspectionReads(string siteName, IDnsService dns, IMailService mail, CancellationToken token)
+    private sealed class InspectionReads(string siteName, IDnsService dns, IMailService mail, CancellationToken token,
+        DnsInspectionDto? snapshot = null)
     {
         public Lazy<Task<MailDnsDto>> Mail { get; } = new(() => mail.GetDnsRecordsAsync(siteName, token));
-        public Lazy<Task<SiteDnsZoneDto>> Zone { get; } = new(() => dns.GetZoneAsync(siteName, token));
-        public Lazy<Task<IReadOnlyCollection<string>?>> Published { get; } = new(() => dns.GetPublishedRecordKeysAsync(siteName, token));
+        public Lazy<Task<SiteDnsZoneDto>> Zone { get; } = new(() => snapshot is null
+            ? dns.GetZoneAsync(siteName, token) : Task.FromResult(snapshot.Zone));
+        public Lazy<Task<IReadOnlyCollection<string>?>> Published { get; } = new(() => snapshot is null
+            ? dns.GetPublishedRecordKeysAsync(siteName, token) : Task.FromResult(snapshot.PublishedRecordKeys));
     }
 
     /// <summary>Son posta kaydi uygulamasinda olusan hatalar; cagiran bunu rapora tasir.</summary>

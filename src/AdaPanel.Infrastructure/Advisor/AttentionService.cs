@@ -112,6 +112,8 @@ public sealed class AttentionService(
         try
         {
             var dns = await dnsService.GetServerHealthAsync(cancellationToken);
+            if (string.Equals(dns.ServiceStatus, "Unknown", StringComparison.OrdinalIgnoreCase))
+                failed.Add("dns");
             if (dns.NeedsRepair)
             {
                 items.Add(new AttentionItemDto

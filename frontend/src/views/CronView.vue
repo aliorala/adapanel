@@ -887,7 +887,7 @@ async function toggleTask(item: ScheduledTask) {
 
 // Kullanıcının GERÇEKTEN gördüğü kodlar. Ham onaltılık bir sayı göstermek, sorunu kullanıcının
 // arama motoruna havale etmektir: "Hata (0x800710E0)" satırı hiçbir şey anlatmıyordu.
-const SKIPPED = 2148007648; // 0x800710E0 — önceki tur hâlâ sürerken yeni tur reddedildi
+const SKIPPED = 0x800710E0; // Windows yeni tetiklemeyi reddetti (örn. önceki tur sürüyor).
 const TERMINATED = 267014; // 0x41306 — süre sınırı ya da elle durdurma
 // 0x8007010B — Windows görevi HİÇ başlatamadı: çalışma klasörü yok. Süreç hiç oluşmadığı için
 // çıktı da yoktur; kod çevrilmezse kullanıcı olmayan bir çıktıyı arar.

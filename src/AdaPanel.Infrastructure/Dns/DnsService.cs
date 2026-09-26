@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
@@ -269,7 +269,7 @@ public sealed partial class DnsService(
         CancellationToken cancellationToken = default)
     {
         var site = await iisSiteService.GetSiteAsync(siteName, cancellationToken);
-        var state = await GetOrCreateStateAsync(site, cancellationToken);
+        var state = await GetOrCreateStateAsync(site, cancellationToken, persist: applyChanges);
 
         // İKİNCİL BÖLGEDE ONARILACAK BİR ŞEY YOK — ve hata da FIRLATILMAZ.
         //
@@ -643,7 +643,7 @@ public sealed partial class DnsService(
         }
     }
 
-    private async Task<DnsZoneState> GetOrCreateStateAsync(SiteDto site, CancellationToken cancellationToken)
+    private async Task<DnsZoneState> GetOrCreateStateAsync(SiteDto site, CancellationToken cancellationToken, bool persist = true)
     {
         var serverAddress = await ResolvePreferredServerAddressAsync(cancellationToken);
         var states = await fileStore.ReadAsync(StatePath, Array.Empty<DnsZoneState>(), cancellationToken);
@@ -655,7 +655,7 @@ public sealed partial class DnsService(
             state.ZoneTransferIps = NormalizeZoneTransferIps(state.ZoneTransferIps?.ToArray());
             state.MasterServers = NormalizeIpList(state.MasterServers?.ToArray(), "dns.invalid_master_ip");
             state.Records = SortRecords(state.Records.Select(record => NormalizeRecord(record, state.ZoneName))).ToList();
-            if (state.DefaultsVersion < CurrentDefaultsVersion)
+            if (persist && state.DefaultsVersion < CurrentDefaultsVersion)
             {
                 MergeMissingDefaults(state.Records, await BuildDefaultRecordsAsync(site, state.ZoneName, serverAddress, cancellationToken));
                 state.DefaultsVersion = CurrentDefaultsVersion;
@@ -677,8 +677,11 @@ public sealed partial class DnsService(
             Records = defaultRecords,
             DefaultsVersion = CurrentDefaultsVersion
         };
-        await UpsertStateAsync(state, cancellationToken);
-        await TrySyncWindowsDnsAsync(state, cancellationToken);
+        if (persist)
+        {
+            await UpsertStateAsync(state, cancellationToken);
+            await TrySyncWindowsDnsAsync(state, cancellationToken);
+        }
         return state;
     }
 
@@ -776,65 +779,44 @@ public sealed partial class DnsService(
     // genel IP dinleme listesinde, AMA ağ arayüzü hazır olmadan başladığı için fiilen yalnız
     // 127.0.0.1/::1/link-local'e bind olmuş. Dışarıdan tek bir sorgu bile yanıtlanmadı → siteler
     // açılmadı, Let's Encrypt DNS-01 zaman aşımına uğradı. Bu yüzden SERVİS DURUMU DEĞİL,
-    // 53 portunun FİİLİ DİNLEYİCİLERİ ölçülür (Get-NetUDPEndpoint / Get-NetTCPConnection, DNS PID'i ile).
-    private const string ServerHealthScript =
-        """
-        $ErrorActionPreference = 'Continue'
-        $out = [ordered]@{
-            installed = $false
-            serviceStatus = 'NotInstalled'
-            startMode = 'Unknown'
-            delayedAutoStart = $false
-            listening = @()
-            expected = @()
-            zoneCount = 0
-            notes = @()
+    // 53 portunun TCP ve UDP dinleyicileri Windows IP Helper API ile DNS PID'ine göre ölçülür.
+    private const string ServerHealthScript = """
+        $ErrorActionPreference = 'Stop'
+        $installed = [bool](Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)
+        $zones = 0
+        if ($installed) {
+            $zones = @(Get-DnsServerZone -ErrorAction Stop | Where-Object { -not $_.IsAutoCreated -and $_.ZoneType -eq 'Primary' }).Count
         }
-
-        $out.installed = [bool](Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)
-
-        $service = Get-Service -Name 'DNS' -ErrorAction SilentlyContinue
-        if ($service) { $out.serviceStatus = $service.Status.ToString() }
-
-        $processId = 0
-        try {
-            $wmi = Get-CimInstance -ClassName Win32_Service -Filter "Name='DNS'" -ErrorAction Stop
-            if ($wmi) {
-                $out.startMode = [string]$wmi.StartMode
-                $processId = [int]$wmi.ProcessId
-            }
-        }
-        catch { $out.notes += "service-query: $($_.Exception.Message)" }
-
-        try {
-            $delayed = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DNS' -Name 'DelayedAutostart' -ErrorAction Stop).DelayedAutostart
-            $out.delayedAutoStart = ($delayed -eq 1)
-        }
-        catch { }
-
-        if ($processId -gt 0) {
-            $udp = @(Get-NetUDPEndpoint -LocalPort 53 -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $processId } | Select-Object -ExpandProperty LocalAddress)
-            $tcp = @(Get-NetTCPConnection -LocalPort 53 -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $processId } | Select-Object -ExpandProperty LocalAddress)
-            $out.listening = @(($udp + $tcp) | Sort-Object -Unique)
-        }
-        else {
-            $out.notes += 'service-not-running'
-        }
-
-        $out.expected = @(
-            Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
-                Select-Object -ExpandProperty IPAddress -Unique
-        )
-
-        if ($out.installed) {
-            try { $out.zoneCount = @(Get-DnsServerZone -ErrorAction Stop | Where-Object { -not $_.IsAutoCreated -and $_.ZoneType -eq 'Primary' }).Count }
-            catch { $out.notes += "zone-query: $($_.Exception.Message)" }
-        }
-
-        $out | ConvertTo-Json -Depth 4 -Compress
+        @{ installed = $installed; zoneCount = $zones } | ConvertTo-Json -Compress
         """;
 
+    private static async Task<ServerHealthProbe> ReadServerProbeAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var service = WindowsNetworkHealth.ReadService("DNS");
+        if (service.Status == "NotInstalled")
+            return new ServerHealthProbe { ServiceStatus = "NotInstalled" };
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        var run = await ProcessRunner.RunPowerShellStrictAsync(ServerHealthScript, deadline.Token);
+        var metadata = run.Success ? ParseProbe(run.StandardOutput) : null;
+        if (metadata is null) throw new IOException("DNS zone inventory could not be measured.");
+        // Read after the inventory, so a concurrent service restart cannot leave us using an old PID.
+        service = WindowsNetworkHealth.ReadService("DNS");
+        var listeners = WindowsNetworkHealth.ReadListeners(service.ProcessId, 53);
+        return new ServerHealthProbe
+        {
+            Installed = metadata.Installed,
+            ServiceStatus = service.Status,
+            StartMode = service.StartMode,
+            DelayedAutoStart = service.Delayed,
+            Listening = listeners.Tcp.Concat(listeners.Udp).Distinct().ToArray(),
+            TcpListening = listeners.Tcp,
+            UdpListening = listeners.Udp,
+            Expected = WindowsNetworkHealth.ReadLocalIPv4(),
+            ZoneCount = metadata.ZoneCount
+        };
+    }
     private sealed class DnsWatchdogRecord
     {
         public DateTime? LastCheckUtc { get; set; }
@@ -864,6 +846,8 @@ public sealed partial class DnsService(
         public bool DelayedAutoStart { get; init; }
 
         public string[] Listening { get; init; } = [];
+        public string[] TcpListening { get; init; } = [];
+        public string[] UdpListening { get; init; } = [];
 
         public string[] Expected { get; init; } = [];
 
@@ -918,25 +902,34 @@ public sealed partial class DnsService(
                address.StartsWith("fe80", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static (bool PubliclyBound, string[] Missing) EvaluateTransports(
+        string[] tcpListeners, string[] udpListeners, string[] expected)
+    {
+        var tcp = EvaluateBinding(tcpListeners, expected);
+        var udp = EvaluateBinding(udpListeners, expected);
+        var candidates = expected.Length > 0 ? expected : tcpListeners.Concat(udpListeners)
+            .Where(address => !IsLoopbackOrLinkLocal(address)).Distinct().ToArray();
+        var common = candidates.Any(address => EvaluateBinding(tcpListeners, [address]).Missing.Length == 0 &&
+            EvaluateBinding(udpListeners, [address]).Missing.Length == 0);
+        return (tcp.PubliclyBound && udp.PubliclyBound && common,
+            tcp.Missing.Concat(udp.Missing).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
     public async Task<DnsServerHealthDto> GetServerHealthAsync(CancellationToken cancellationToken = default)
     {
-        var run = await ProcessRunner.RunPowerShellAsync(ServerHealthScript, cancellationToken);
         var watchdog = await fileStore.ReadAsync(WatchdogPath, new DnsWatchdogRecord(), cancellationToken);
-        var probe = ParseProbe(run.StandardOutput);
-        if (probe is null)
+        ServerHealthProbe probe;
+        try { probe = await ReadServerProbeAsync(cancellationToken); }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            logger.LogWarning(exception, "DNS server health could not be measured.");
             return new DnsServerHealthDto
             {
                 LastAutoRepairUtc = watchdog.LastRepairUtc,
                 LastAutoRepairStatus = watchdog.LastStatus,
                 LastAutoRepairSucceeded = watchdog.LastRepairOk,
-                // Anahtar: bu deger yalnizca ekranda degil, `RepairServerAsync`'in
-                // `AppException("dns.server_not_installed", ..., before.Details)` cagrisinda
-                // AYRINTI olarak da kullaniciya cikiyor. PowerShell stderr'i ise oldugu gibi
-                // gecer -- o cevrilecek bir cumle degil, olculmus bir hata ciktisidir.
-                Details = string.IsNullOrWhiteSpace(run.StandardError)
-                    ? "dns.health_unmeasurable"
-                    : run.StandardError.Trim()
+                // Ayrıntılı istisna sunucu günlüğündedir; ölçüm hatası kurulu değil anlamına gelmez.
+                Details = "dns.health_unmeasurable"
             };
         }
 
@@ -951,13 +944,15 @@ public sealed partial class DnsService(
             expected.Add(serverAddress);
         }
 
-        var (publiclyBound, missing) = EvaluateBinding(probe.Listening, expected);
+        var (publiclyBound, missing) = EvaluateTransports(probe.TcpListening, probe.UdpListening, expected.ToArray());
 
         var details = new StringBuilder()
             .Append("service=").Append(probe.ServiceStatus)
             .Append("; startMode=").Append(probe.StartMode)
             .Append(probe.DelayedAutoStart ? " (delayed-auto)" : string.Empty)
             .Append("; listening=").Append(probe.Listening.Length == 0 ? "(none)" : string.Join(",", probe.Listening))
+            .Append("; tcp=").Append(string.Join(",", probe.TcpListening))
+            .Append("; udp=").Append(string.Join(",", probe.UdpListening))
             .Append("; expected=").Append(expected.Count == 0 ? "(none)" : string.Join(",", expected))
             .Append("; zones=").Append(probe.ZoneCount);
 
@@ -1057,6 +1052,8 @@ public sealed partial class DnsService(
     public async Task<DnsServerHealthDto> RepairServerAsync(bool applyDelayedAutoStart, CancellationToken cancellationToken = default)
     {
         var before = await GetServerHealthAsync(cancellationToken);
+        if (before.ServiceStatus == "Unknown")
+            throw new AppException("dns.health_unmeasurable", 503, 503);
         if (!before.Installed)
         {
             throw new AppException("dns.server_not_installed", 409, 409, before.Details);

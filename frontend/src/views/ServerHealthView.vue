@@ -15,6 +15,7 @@
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
     <SectionLoadError v-if="dnsLoad.message.value" :message="dnsLoad.message.value" @retry="load" />
+    <SectionLoadError v-else-if="dns?.serviceStatus === 'Unknown'" :message="t('dns.health_unmeasurable')" @retry="load" />
 
     <!-- DNS erişilebilirliği: servisin "Running" olması YETMEZ, 53 portunun genel IP'de
          dinlemesi gerekir. Bu kart o farkı gösterir ve tek tıkla onarır. -->
@@ -29,19 +30,19 @@
       alan adlarının DNS'ini dış sağlayıcıda tutan kurulumda tamamen normaldir. Ölçülmemiş
       bir arızaya kırmızı vermek, panelin en sık tekrarlanan yalanıdır.
     -->
-    <article v-if="dns" :class="['dns-card', !dns.installed ? 'idle' : (dns.needsRepair ? 'bad' : 'good')]">
+    <article v-if="dns && dns.serviceStatus !== 'Unknown'" :class="['dns-card', !dns.installed ? 'idle' : (dns.needsRepair ? 'bad' : dns.publiclyBound ? 'good' : 'idle')]">
       <div class="dns-head">
-        <span :class="['state-dot', !dns.installed ? 'dot-idle' : (dns.needsRepair ? 'dot-danger' : 'dot-ok')]"></span>
+        <span :class="['state-dot', !dns.installed ? 'dot-idle' : (dns.needsRepair ? 'dot-danger' : dns.publiclyBound ? 'dot-ok' : 'dot-idle')]"></span>
         <div class="health-name">
           <strong>{{ t("panel.health.dnsTitle") }}</strong>
           <span class="svc-id">
-            {{ !dns.installed ? t("panel.health.dnsNotInstalledHint") : (dns.needsRepair ? t("panel.health.dnsBad") : t("panel.health.dnsGood")) }}
+            {{ !dns.installed ? t("panel.health.dnsNotInstalledHint") : (dns.publiclyBound ? t("panel.health.dnsGood") : t("panel.health.dnsBad")) }}
           </span>
         </div>
         <!-- Rol kuruluyken rozet "dışarıya yanıt veriyor mu"yu söyler; kurulu değilken o soru
              SORULAMAZ, dolayısıyla ne `ok` ne `danger` — rozet nötr kalır. -->
         <span v-if="!dns.installed" class="status-pill">{{ t("panel.health.dnsNotInstalled") }}</span>
-        <span v-else :class="['status-pill', dns.needsRepair ? 'danger' : 'ok']">
+        <span v-else :class="['status-pill', dns.needsRepair ? 'danger' : dns.publiclyBound ? 'ok' : '']">
           {{ dns.publiclyBound ? t("panel.health.dnsBound") : t("panel.health.dnsNotBound") }}
         </span>
         <!-- Onarım düğmesi YALNIZCA onarılacak bir şey varken görünür. Her zaman durduğunda
@@ -131,14 +132,15 @@
     <!-- Yuklenirken kart NE IYI NE KOTU gorunur. Onceden veri gelmeden 'good' + yesil nokta
          basiliyordu: kullanici "her sey yolunda" diye bakip gecerken kart birden kirmiziya
          donuyordu. Olculmemis bir seyi "saglikli" gostermek, panelin en cok tekrarlanan hatasi. -->
-    <article :class="['dns-card', domainsLoading ? 'idle' : (onarilacakVar ? 'bad' : 'good')]">
+    <article :class="['dns-card', domainsLoading || !domains ? 'idle' : (domainCheckFailed || onarilacakVar ? 'bad' : 'good')]">
       <div class="dns-head">
-        <span :class="['state-dot', domainsLoading ? 'dot-idle' : (onarilacakVar ? 'dot-danger' : 'dot-ok')]"></span>
+        <span :class="['state-dot', domainsLoading || !domains ? 'dot-idle' : (domainCheckFailed || onarilacakVar ? 'dot-danger' : 'dot-ok')]"></span>
         <div class="health-name">
           <strong>{{ t("panel.health.domainsTitle") }}</strong>
           <span class="svc-id">{{ t("panel.health.domainsHint") }}</span>
         </div>
         <span v-if="domainsLoading" class="status-pill">{{ t("panel.health.domainsLoading") }}</span>
+        <span v-else-if="domainCheckFailed" class="status-pill danger">{{ t("panel.health.statusUnknown") }}</span>
         <span v-else-if="domains" :class="['status-pill', domains.updatedSites > 0 ? 'danger' : 'ok']">
           {{
             domains.updatedSites > 0
@@ -339,6 +341,8 @@ function startModeText(value: string): string {
   return key ? t(key) : (value ?? "");
 }
 const domains = ref<DomainRefreshSummary | null>(null);
+const domainCheckFailed = computed(() => Boolean(domains.value &&
+  (domains.value.failedSites > 0 || domains.value.results.some(row => Boolean(row.error)))));
 const domainsLoad = useSectionError();
 const domainReport = ref<DomainRefreshResult[]>([]);
 const domainsBusy = ref(false);

@@ -11,6 +11,15 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DnsServerBindingTests
 {
     [Fact]
+    public void Both_transports_must_cover_the_same_public_address()
+    {
+        Assert.False(DnsService.EvaluateTransports(["185.7.242.225"], [], ["185.7.242.225"]).PubliclyBound);
+        Assert.False(DnsService.EvaluateTransports([], ["185.7.242.225"], ["185.7.242.225"]).PubliclyBound);
+        Assert.False(DnsService.EvaluateTransports(["10.0.0.5"], ["185.7.242.225"], ["10.0.0.5", "185.7.242.225"]).PubliclyBound);
+        Assert.True(DnsService.EvaluateTransports(["0.0.0.0"], ["185.7.242.225"], ["185.7.242.225"]).PubliclyBound);
+        Assert.True(DnsService.EvaluateTransports(["185.7.242.225"], ["185.7.242.225"], []).PubliclyBound);
+    }
+    [Fact]
     public void EvaluateBinding_DetectsTheLoopbackOnlyOutage()
     {
         var (bound, missing) = DnsService.EvaluateBinding(

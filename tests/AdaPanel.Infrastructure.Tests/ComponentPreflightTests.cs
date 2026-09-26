@@ -20,8 +20,8 @@ public sealed class ComponentPreflightTests
             var result = await ProcessRunner.RunPowerShellAsync(ComponentPreflight.BuildProbeScript([port], []));
             Assert.Equal(0, result.ExitCode);
             using var json = JsonDocument.Parse(result.StandardOutput);
-            var own = Assert.Single(json.RootElement.GetProperty("Ports").EnumerateArray()
-                .Where(row => row.GetProperty("Pid").GetInt32() == Environment.ProcessId));
+            var own = Assert.Single(json.RootElement.GetProperty("Ports").EnumerateArray(),
+                row => row.GetProperty("Pid").GetInt32() == Environment.ProcessId);
             Assert.Equal(Environment.ProcessPath, own.GetProperty("ExecutablePath").GetString(), ignoreCase: true);
         }
         finally { listener.Stop(); }

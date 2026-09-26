@@ -13,6 +13,37 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class DomainInspectionTests
 {
+    [Fact]
+    public async Task Bulk_inspection_uses_one_snapshot_and_never_calls_mutating_dns_reads()
+    {
+        var fixture = new Fixture(bulk: true);
+        var result = await fixture.Service.InspectAllAsync();
+        Assert.Equal(0, result.FailedSites);
+        Assert.Equal(1, fixture.BulkReads);
+        Assert.Equal(0, fixture.Inspections);
+        Assert.Equal(0, fixture.PublishedReads);
+        Assert.Equal(0, fixture.ZoneReads);
+        Assert.Equal(1, fixture.MailReads);
+        fixture.MissingMailRecord = true;
+        var next = await fixture.Service.InspectAsync("example.test");
+        Assert.Equal(1, next.AppliedMailRecords);
+        Assert.Equal(2, fixture.BulkReads);
+    }
+
+    [Fact]
+    public async Task Bulk_failure_is_visible_and_retried_but_repair_still_reads_after_writes()
+    {
+        var fixture = new Fixture(bulk: true) { FailDefaults = true };
+        Assert.Equal(1, (await fixture.Service.InspectAllAsync()).FailedSites);
+        fixture.FailDefaults = false;
+        Assert.Equal(0, (await fixture.Service.InspectAllAsync()).FailedSites);
+        Assert.Equal(2, fixture.BulkReads);
+        fixture.MissingMailRecord = true;
+        Assert.Empty((await fixture.Service.RefreshAsync("example.test")).Error);
+        Assert.Equal(2, fixture.BulkReads);
+        Assert.Equal(3, fixture.ZoneReads);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -115,13 +146,13 @@ public sealed class DomainInspectionTests
 
     private sealed class Fixture
     {
-        public int MailReads, PublishedReads, ZoneReads, Inspections;
+        public int MailReads, PublishedReads, ZoneReads, Inspections, BulkReads;
         public bool Published = true, MissingMailRecord, MailUnavailable, FailDefaults;
         public string SiteName = "example.test", SiteState = "Started";
         public Func<Task>? BeforeInspection;
         public DomainRefreshService Service { get; }
         private SiteDto Site => new() { Id = 1, Name = SiteName, State = SiteState };
-        public Fixture()
+        public Fixture(bool bulk = false)
         {
             var sites = Stub<IIisSiteService>((method, _) => method.Name switch
             {
@@ -151,8 +182,21 @@ public sealed class DomainInspectionTests
             {
                 DataRoot = Path.Combine(Path.GetTempPath(), "adapanel-inspection-" + Guid.NewGuid().ToString("N"))
             }));
+            var inspection = bulk ? Stub<IDnsInspectionService>((_, _) =>
+            {
+                BulkReads++;
+                if (FailDefaults) throw new IOException("bulk unavailable");
+                return Task.FromResult<IReadOnlyDictionary<string, DnsInspectionDto>>(
+                    new Dictionary<string, DnsInspectionDto> { [SiteName] = new()
+                    {
+                        Zone = new SiteDnsZoneDto { ZoneName = SiteName, IsWindowsDnsAvailable = true,
+                            IsWindowsZonePresent = true, Records = MissingMailRecord ? [] :
+                                [new() { Type = "MX", Host = "@", Value = "mail.example.test" }] },
+                        PublishedRecordKeys = MissingMailRecord ? [] : ["MX|@"]
+                    } });
+            }) : null;
             Service = new DomainRefreshService(sites, dns, mail, firewall, null!, store,
-                NullLogger<DomainRefreshService>.Instance);
+                NullLogger<DomainRefreshService>.Instance, inspection);
         }
         private async Task<IReadOnlyList<string>> Defaults(bool apply)
         {

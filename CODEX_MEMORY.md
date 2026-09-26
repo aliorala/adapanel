@@ -1,5 +1,14 @@
 # AdaPanel Codex Memory
 
+## 2026-09-26 — 0.8.56 hazır; canlı doğrulama bekliyor
+
+DNS servis/ağ ölçümleri native Windows API'lerine alındı, TCP+UDP birlikte denetlenir. Alan adı DNS okumaları toplu ve salt okunur; dry-run artık kayıt yayımlamaz/dosya yazmaz. Unknown/başarısız denetim yeşil gösterilmez; cron 0x800710E0 sabiti düzeltildi. Tam backend 5417, son hedefli 349, Core 2, frontend 102 başarılı; typecheck/build ve standart installer denetimi geçti. Paket 90.814.341 bayt SHA256 425C1586690EBD407C2B1EC6A378CE1ADF35847A14FBE85DBC0F1A78BA48DAA6. İlk Docker SSL hatası sonrası denetimsiz geçiş yapılmadan tekrar başarılı. PHP sabit yedek indirme adresi 404, canlı çözümleyici var; raporda açık.
+
+50 yedek doğrulandı, eksik/bozuk/ölçülemeyen 0. FTP kayıtsız nesne envanteri desteklenmiyor; boş eski klasör bakım sonucu 0/0/0, exit0. 21 Eylül'den kalan beş yedek 03:08:10–19'da oluşturulmuş; 26 Eylül temizliği 03:08:07'de bittiğinden beş günlük süre birkaç saniye dolmamıştı. Sonraki gece silinmeye uygun; boş kalıntı değil.
+
+Fiyat botunun eski 1 argümanlı 8 Ağustos BAT süreç ağacı kimliği kontrol edilip durduruldu, güncel görev başlatıldı. Argüman hatası kalktı; kapanmış alioral.xyz API DNS hatası sürüyor. Kullanıcı API henüz taşınmadı dedi: adres değiştirilmez. Ürün botuna dokunulmadı. Şifreleme kapalı tercihi korunur. Performans için .56 canlı ölçümü henüz yok; canlı hâlâ .55. Ayrıntı docs/denetim-2026-09-26-056.md, kanıtlar .tmp/audit-056. Kaynak/history/tag GitHub'a itilmez.
+
+
 ## 2026-09-18 — SON DURUM: 0.8.55 canlı, denetim doğruluğu düzeltildi
 
 Kaynak commit bf4c253. Salt okunur alan adı denetimindeki tekrarlı posta/DNS okumaları tekilleştirildi; her yeni tarama taze ölçer, onarım yazma sonrasında yeniden okur. Site kimliği/adı/durumu değişince önbellek düşer; eşzamanlı onarımdan önceki tarama nesil sayacı sayesinde eski önbelleği geçerli yapamaz. Başarısız alan adı denetimleri10dakika tutulmaz. Altı attention kaynağının süreleri artık loglanıyor.

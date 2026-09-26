@@ -103,6 +103,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISiteHostingSettingsService, Iis.SiteHostingSettingsService>();
         services.AddScoped<IDirectoryProtectionService, Iis.DirectoryProtectionService>();
         services.AddScoped<IDnsService, Dns.DnsService>();
+        services.AddScoped<IDnsInspectionService>(provider => (Dns.DnsService)provider.GetRequiredService<IDnsService>());
         services.AddScoped<IRdnsService, Dns.RdnsService>();
         services.AddScoped<IPhpService, Php.PhpService>();
         services.AddScoped<IAspNetService, AspNet.AspNetService>();
