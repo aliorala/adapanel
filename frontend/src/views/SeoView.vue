@@ -9,10 +9,10 @@
            base.css'teki `.row-actions` ile BIREBIR ayniydi. Ayni seyin iki adi olmasi, yarin
            birinin degisip otekinin geride kalmasi demektir. -->
       <div class="row-actions">
-        <select v-model="siteName" class="compact-select" :disabled="busy">
+        <select v-model="siteName" :aria-label="t('panel.php.selectSite')" class="compact-select" :disabled="busy">
           <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
         </select>
-        <select v-model.number="maxPages" class="compact-select" :disabled="busy">
+        <select v-model.number="maxPages" :aria-label="t('panel.seo.pageLimit')" class="compact-select" :disabled="busy">
           <option :value="25">25 {{ t("panel.seo.pagesUnit") }}</option>
           <option :value="50">50 {{ t("panel.seo.pagesUnit") }}</option>
           <option :value="100">100 {{ t("panel.seo.pagesUnit") }}</option>
@@ -144,7 +144,7 @@
              `align-items`; base'in `flex-start` gerekcesi orada yazili). -->
         <div class="section-head">
           <h3>{{ t("panel.seo.findings") }}</h3>
-          <select v-model="severityFilter" class="compact-select">
+          <select v-model="severityFilter" :aria-label="t('panel.seo.severityFilter')" class="compact-select">
             <option value="">{{ t("panel.seo.allSeverities") }}</option>
             <option value="error">{{ t("panel.seo.severity.error") }}</option>
             <option value="warn">{{ t("panel.seo.severity.warn") }}</option>
@@ -221,7 +221,7 @@
           <p class="meta">{{ t("panel.seo.log.subtitle") }}</p>
         </div>
         <div class="seo-controls">
-          <select v-model.number="logDays" class="compact-select" :disabled="logBusy">
+          <select v-model.number="logDays" :aria-label="t('panel.seo.logPeriod')" class="compact-select" :disabled="logBusy">
             <option :value="7">{{ t("panel.seo.log.days", { count: 7 }) }}</option>
             <option :value="14">{{ t("panel.seo.log.days", { count: 14 }) }}</option>
             <option :value="30">{{ t("panel.seo.log.days", { count: 30 }) }}</option>

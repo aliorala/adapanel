@@ -5,6 +5,9 @@ import en from "./i18n/en.json";
 import tr from "./i18n/tr.json";
 import "@fontsource-variable/open-sans";
 import "./styles/base.css";
+import MainLayout from "./layouts/MainLayout.vue";
+import { apiClient } from "./api/client";
+apiClient.defaults.adapter = async config => ({data:{success:true,data:[],message:"",code:0},status:200,statusText:"OK",headers:{},config});
 import DashboardOverviewView from "./views/DashboardOverviewView.vue";
 
 document.documentElement.dataset.theme =
@@ -16,10 +19,10 @@ const overview = {
   machineName: "ADA-SRV-01",
   operatingSystem: "Microsoft Windows Server 2022 Standard",
   osArchitecture: "X64",
-  frameworkDescription: ".NET 8.0.11",
-  panelVersion: "0.7.10",
-  currentServerTimeUtc: "2026-08-29T13:02:00Z",
-  bootTimeUtc: "2026-08-01T04:11:00Z",
+  frameworkDescription: ".NET 8.0.20",
+  panelVersion: "0.8.63",
+  currentServerTimeUtc: "2026-09-26T13:02:00Z",
+  bootTimeUtc: "2026-08-29T04:11:00Z",
   uptime: "28.08:51:00",
   cpuUsagePercent: 12.4,
   logicalProcessorCount: 8,
@@ -39,7 +42,7 @@ const overview = {
 
 createApp({
   render: () =>
-    h(DashboardOverviewView as never, {
+    h(MainLayout as never, {sections: ["home","sites","sitebuilder","mail","database","accounts","billing","monitor","advisor","seo","audit","tasks","software","security","tools","migration","cluster","ai","account","settings"].map(id=>({id,label:(tr as Record<string,string>)[({sitebuilder:"panel.navigation.siteBuilder",software:"panel.navigation.store",tools:"panel.navigation.serverTools",ai:"panel.navigation.aiConnection",account:"panel.account.title"} as Record<string,string>)[id] || `panel.navigation.${id}`] || id,description:"",glyph:""})), activeSection:"home", title:"Ana Sayfa", description:"", subtitle:"", panelName:"AdaPanel", machineName:overview.machineName,secureEntryPath:"panel",userName:"admin",userEmail:"demo@example.com",role:"Administrator",panelVersion:"0.8.63",isTwoFactorEnabled:false,resolvedTheme:document.documentElement.dataset.theme}, () => h(DashboardOverviewView as never, {
       overview,
       loading: false,
       sitesCount: 12,
@@ -49,13 +52,13 @@ createApp({
       securityStatusLabel: "Etkin",
       securePath: "panel",
       auditItems: [
-        { id: 1, action: "site.create", details: "example.com olusturuldu", userName: "admin", ipAddress: "10.0.0.4", createdAtUtc: "2026-08-29T12:40:00Z" },
-        { id: 2, action: "ssl.renew", details: "sertifika yenilendi", userName: "admin", ipAddress: "10.0.0.4", createdAtUtc: "2026-08-29T11:02:00Z" }
+        { id: 1, action: "sites.create.completed", details: "example.com oluşturuldu", userName: "admin", ipAddress: "10.0.0.4", createdAtUtc: "2026-09-26T12:40:00Z" },
+        { id: 2, action: "terminal.command.executed", details: "Sunucu servislerinin durumu okundu. ".repeat(100), userName: "admin", ipAddress: "10.0.0.4", createdAtUtc: "2026-09-26T11:02:00Z" }
       ],
-      allowedSections: ["sites", "mail", "database", "files", "tools", "security"],
+      allowedSections: ["sites", "mail", "database", "files", "tools", "security", "audit"],
       panelUpdate: null,
-      attention: { criticalCount: 1, warningCount: 2, totalCount: 3, items: [] }
-    })
+      attention: { criticalCount: 1, warningCount: 2, totalCount: 3, items: [], failedSources: [] }
+    }))
 })
   .use(createPinia())
   .use(i18n)

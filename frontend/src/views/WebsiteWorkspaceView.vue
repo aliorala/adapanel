@@ -138,6 +138,7 @@
 </template>
 
 <script setup lang="ts">
+import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, ref, watch } from "vue";
 import router from "../router";
 import { allowNavigation } from "../composables/navigationGuard";
@@ -238,26 +239,7 @@ const defaultSiteRoot = ref("C:\\inetpub\\wwwroot");
 const selectedSiteName = computed(() => sitesStore.selectedSiteName);
 const selectedSite = computed(() => sitesStore.selectedSite);
 
-const primaryUrl = computed(() => {
-  // ONIZLEME BAGLAMASI (nip.io) ATLANIR. Onceden korkoru `bindings[0]` aliniyordu; onizleme
-  // bagladigi listenin basina dustugunde bu baglantinin adresi kullanicinin ALAN ADI degil,
-  // gecici onizleme host'u oluyordu. SiteDetailView ayni hesabi zaten dogru yapiyordu (bkz.
-  // oradaki `primaryUrl`); iki ekran ayni dugmeyi farkli adrese goturuyordu.
-  const bindings = selectedSite.value?.bindings ?? [];
-  const binding = bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
-    ?? bindings[0];
-  if (!binding) {
-    return "";
-  }
-  const host = binding.hostName || (binding.ipAddress === "*" ? window.location.hostname : binding.ipAddress);
-  const standard = (binding.protocol === "http" && binding.port === 80) ||
-    (binding.protocol === "https" && binding.port === 443);
-  // ERISILEBILIR ADRESE CEVIR. Burada yalniz `*` bagalamasi ele aliniyordu; `127.0.0.1` ya da
-  // `localhost` ile baglanmis bir site UZAKTAN yoneten yoneticiye KENDI makinesini acardi.
-  // Bu duzeltme SiteDetailView'in "Ac" dugmesinde vardi (openReachable); o dugme kalktigi icin
-  // yetenegi devralan baglantiya tasindi — kaybolmus bir davranis birakilmiyor.
-  return toReachableUrl(`${binding.protocol}://${host}${standard ? "" : `:${binding.port}`}`);
-});
+const primaryUrl = computed(() => primarySiteUrl(selectedSite.value?.bindings ?? []));
 
 watch(
   () => props.openRequest,

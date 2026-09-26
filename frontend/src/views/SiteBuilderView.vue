@@ -5,7 +5,7 @@
         <h2>{{ t("panel.siteBuilder.title") }}</h2>
         <p class="meta">{{ t("panel.siteBuilder.subtitle") }}</p>
       </div>
-      <select v-model="selectedSite" class="compact-select" :disabled="loading">
+      <select :value="selectedSite" @change="selectSiteFromEvent" class="compact-select" :aria-label="t('panel.php.selectSite')" :disabled="loading || saving || publishing || imageBusy">
         <option v-if="sitesStore.sites.length === 0" value="">{{ t("panel.php.selectSite") }}</option>
         <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
       </select>
@@ -16,7 +16,8 @@
          yapılan şeyin tersiydi (bkz. MigrationView, SecurityView, WebsiteWorkspaceView). -->
     <p v-if="notice" :class="['notice', 'page-notice', noticeError ? 'error' : '']" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
-    <p v-if="!selectedSite" class="empty-state">{{ t("panel.siteBuilder.selectSiteHint") }}</p>
+    <SectionLoadError v-if="!selectedSite && projectLoad.message.value" :message="projectLoad.message.value" :busy="loading" @retry="initialize" />
+    <p v-else-if="!selectedSite" class="empty-state">{{ t("panel.siteBuilder.selectSiteHint") }}</p>
     <p v-else-if="!project && loading" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
     <!-- "YÜKLENİYOR" SONSUZA KADAR YAZIYORDU. `load()` hata yakaladığında `project`i `null`
          yapıyor, `loading` de `finally`de false'a düşüyor; koşul yalnız `!project` olduğu için
@@ -55,14 +56,14 @@
              göstermemek için "Kaydet" orada ikincile düşer. Aynı kalıp Güvenlik ekranında da var
              (form açıkken "Yeni kural" ikincile düşer). -->
         <div class="sb-actions">
-          <button type="button" :class="tab === 'publish' ? 'secondary' : ''" :disabled="saving" @click="save">
+          <button type="button" :class="tab === 'publish' ? 'secondary' : ''" :disabled="saving || publishing || imageBusy" @click="save">
             {{ saving ? t("panel.common.loading") : t("panel.siteBuilder.save") }}
           </button>
         </div>
       </div>
 
       <div class="sb-layout">
-        <div class="sb-editor">
+        <div class="sb-editor" :inert="saving || publishing || imageBusy">
           <!-- ---------------------------------------------------------- TASARIM -->
           <div v-if="tab === 'design'" class="form-surface">
             <label class="stacked-field">
@@ -439,7 +440,7 @@
             <div class="sb-actions">
               <!-- Önizleme hangi SAYFAYI gösteriyor: çok sayfalı bir sitede bu soru sorulmadan
                    önizleme yanıltıcı olurdu. -->
-              <select v-if="project.pages.length" v-model="previewSlug" class="compact-select">
+              <select v-if="project.pages.length" v-model="previewSlug" class="compact-select" :aria-label="t('panel.siteBuilder.previewPage')">
                 <option value="">{{ t("panel.siteBuilder.homePage") }}</option>
                 <option v-for="page in project.pages" :key="page.slug" :value="page.slug">
                   {{ page.title || page.slug }}
@@ -462,7 +463,8 @@
             sandbox="allow-same-origin"
             :srcdoc="previewHtml"
             :title="t('panel.siteBuilder.preview')"></iframe>
-          <p v-else class="empty-state">{{ t("panel.common.loading") }}</p>
+          <SectionLoadError v-else-if="previewLoad.message.value" :message="previewLoad.message.value" :busy="previewLoading" @retry="loadPreview" />
+          <p v-else class="empty-state" role="status">{{ t("panel.common.loading") }}</p>
         </div>
       </div>
     </template>
@@ -470,11 +472,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";
 import SectionLoadError from "../components/SectionLoadError.vue";
 import { useNotice, useSectionError } from "../composables/useNotice";
+import { useNavigationGuard } from "../composables/navigationGuard";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import { formatDateTime } from "../utils/datetime";
 import {
@@ -521,6 +524,7 @@ const maxPages = SITE_BUILDER_MAX_PAGES;
 const loading = ref(false);
 const saving = ref(false);
 const publishing = ref(false);
+const imageBusy = ref(false);
 const previewLoading = ref(false);
 const overwriteConfirmed = ref(false);
 // Bildirim + hata ÇEVİRİSİ tek kaynaktan (composables/useNotice.ts). Elle yazılmış `report()`
@@ -530,11 +534,35 @@ const { notice, noticeError, showNotice, showError, clearNotice } = useNotice();
 // "Yükleniyor…" diye gösteriyordu. Aynı ayrım yayın planı için de gerekli (`planLoad`).
 const projectLoad = useSectionError();
 const planLoad = useSectionError();
+const previewLoad = useSectionError();
+const savedProject = ref('');
+const dirty = computed(() => !!project.value && JSON.stringify(project.value) !== savedProject.value);
+let ready = false;
+let loadSequence = 0;
+let previewSequence = 0;
+let planSequence = 0;
+let disposed = false;
+async function canLeaveBuilder(): Promise<boolean> {
+  if (saving.value || publishing.value || imageBusy.value) return false;
+  return !dirty.value || await confirm({ title: t('panel.siteBuilder.unsavedTitle'), message: t('panel.siteBuilder.unsavedHint'), confirmLabel: t('panel.files.discard'), tone: 'neutral' });
+}
+useNavigationGuard(() => dirty.value || saving.value || publishing.value || imageBusy.value ? canLeaveBuilder() : true);
+function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value || saving.value || publishing.value || imageBusy.value) { event.preventDefault(); event.returnValue = ''; } }
+onMounted(() => window.addEventListener('beforeunload', beforeUnload));
+onBeforeUnmount(() => { disposed = true; loadSequence++; previewSequence++; window.removeEventListener('beforeunload', beforeUnload); });
+async function changeSite(value: string) {
+  if (value === selectedSite.value || !await canLeaveBuilder()) return;
+  sitesStore.selectSite(value);
+}
 
-const selectedSite = computed({
-  get: () => sitesStore.selectedSiteName,
-  set: (value: string) => sitesStore.selectSite(value)
-});
+const selectedSite = computed(() => sitesStore.selectedSiteName);
+async function selectSiteFromEvent(event: Event) {
+  const select = event.target as HTMLSelectElement;
+  const nextSite = select.value;
+  // Keep the native selector aligned with the loaded project while confirmation is open.
+  select.value = selectedSite.value;
+  await changeSite(nextSite);
+}
 
 const maxImageMb = computed(() =>
   catalog.value ? Math.round(catalog.value.maxImageBytes / (1024 * 1024)) : 5);
@@ -552,47 +580,39 @@ const activePage = computed(() =>
  */
 const activeSections = computed(() => activePage.value?.sections ?? project.value?.sections ?? []);
 
-onMounted(async () => {
-  await sitesStore.fetchSites().catch(() => undefined);
-  try {
-    catalog.value = await getSiteBuilderCatalog();
-  } catch (error) {
-    report(error);
-  }
+async function initialize() {
+  try { await sitesStore.fetchSites(); }
+  catch (error) { projectLoad.capture(error); return; }
+  ready = true;
   await load();
-});
+}
+onMounted(initialize);
 
-watch(selectedSite, () => {
-  clearNotice();
-  void load();
-});
-
-// Önizleme sayfası değişince çerçeve YENİDEN yüklenir; aksi hâlde açılır listede başka bir sayfa
-// seçili görünürken ekranda hâlâ eski sayfa dururdu.
-watch(previewSlug, () => {
-  void loadPreview();
-});
+watch(selectedSite, () => { clearNotice(); if (ready) void load(); });
+watch(previewSlug, () => { if (project.value && !loading.value) void loadPreview(); });
 
 async function load() {
-  if (!selectedSite.value) {
-    project.value = null;
-    return;
-  }
-
+  const site = selectedSite.value;
+  const request = ++loadSequence;
+  previewSequence++;
+  planSequence++;
+  tab.value = 'design';
+  project.value = null; images.value = []; plan.value = null; previewHtml.value = '';
+  savedProject.value = ''; projectLoad.clear(); previewLoad.clear();
+  activePageSlug.value = ''; previewSlug.value = '';
+  if (!site) { loading.value = false; previewLoading.value = false; return; }
   loading.value = true;
-  activePageSlug.value = "";
-  previewSlug.value = "";
   try {
-    project.value = await getSiteBuilderProject(selectedSite.value);
-    images.value = await getSiteBuilderImages(selectedSite.value);
-    projectLoad.clear();
+    if (!catalog.value) catalog.value = await getSiteBuilderCatalog();
+    const [nextProject, nextImages] = await Promise.all([getSiteBuilderProject(site), getSiteBuilderImages(site)]);
+    if (disposed || request !== loadSequence || site !== selectedSite.value) return;
+    project.value = nextProject; images.value = nextImages;
+    savedProject.value = JSON.stringify(nextProject);
     await loadPreview();
   } catch (error) {
-    report(error);
-    projectLoad.capture(error);
-    project.value = null;
+    if (!disposed && request === loadSequence) projectLoad.capture(error);
   } finally {
-    loading.value = false;
+    if (request === loadSequence) loading.value = false;
   }
 }
 
@@ -605,6 +625,7 @@ async function save() {
   try {
     const oncekiSayfaSayisi = project.value.pages.length;
     project.value = await saveSiteBuilderProject(selectedSite.value, project.value);
+    savedProject.value = JSON.stringify(project.value);
 
     // SUNUCU SAYFA DÜŞÜRDÜ MÜ? Geçersiz ya da yinelenen adresli sayfalar kaydedilirken düşer.
     // Sessiz kalsaydık kullanıcı "kaydettim" görüp sayfasının kaybolduğunu ancak yayında
@@ -635,36 +656,42 @@ async function save() {
 }
 
 async function loadPreview() {
-  if (!selectedSite.value) {
-    return;
-  }
-
-  previewLoading.value = true;
+  const site = selectedSite.value, slug = previewSlug.value;
+  const request = ++previewSequence;
+  if (!site) return;
+  previewLoading.value = true; previewHtml.value = ''; previewLoad.clear();
   try {
-    previewHtml.value = await getSiteBuilderPreview(selectedSite.value, previewSlug.value);
+    const html = await getSiteBuilderPreview(site, slug);
+    if (!disposed && request === previewSequence && site === selectedSite.value && slug === previewSlug.value) previewHtml.value = html;
   } catch (error) {
-    report(error);
-    previewHtml.value = "";
+    if (!disposed && request === previewSequence) previewLoad.capture(error);
   } finally {
-    previewLoading.value = false;
+    if (request === previewSequence) previewLoading.value = false;
   }
 }
 
 /** Yayın sekmesi açılırken plan HER SEFERINDE yeniden alınır: disk bu arada değişmiş olabilir. */
 async function openPublishTab() {
+  if (loading.value || saving.value || publishing.value || imageBusy.value) return;
+  if (dirty.value) {
+    showNotice(t('panel.siteBuilder.saveBeforePublish'), true);
+    return;
+  }
   tab.value = "publish";
   overwriteConfirmed.value = false;
   plan.value = null;
   planLoad.clear();
-  if (!selectedSite.value) {
+  const site = selectedSite.value;
+  const request = ++planSequence;
+  if (!site) {
     return;
   }
 
   try {
-    plan.value = await getSiteBuilderPublishPlan(selectedSite.value);
+    const nextPlan = await getSiteBuilderPublishPlan(site);
+    if (!disposed && request === planSequence && site === selectedSite.value) plan.value = nextPlan;
   } catch (error) {
-    report(error);
-    planLoad.capture(error);
+    if (!disposed && request === planSequence) planLoad.capture(error);
   }
 }
 
@@ -678,6 +705,7 @@ async function publish() {
     const result = await publishSiteBuilder(selectedSite.value, overwriteConfirmed.value);
     inform(t("panel.siteBuilder.publishedNotice", { count: result.writtenFiles.length }));
     project.value = await getSiteBuilderProject(selectedSite.value);
+    savedProject.value = JSON.stringify(project.value);
     plan.value = await getSiteBuilderPublishPlan(selectedSite.value);
     overwriteConfirmed.value = false;
   } catch (error) {
@@ -690,17 +718,20 @@ async function publish() {
 async function uploadImage(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
-  if (!file || !selectedSite.value) {
+  if (!file || !selectedSite.value || imageBusy.value) {
     return;
   }
 
+  const site = selectedSite.value;
+  imageBusy.value = true;
   try {
-    await uploadSiteBuilderImage(selectedSite.value, file);
-    images.value = await getSiteBuilderImages(selectedSite.value);
+    await uploadSiteBuilderImage(site, file);
+    images.value = await getSiteBuilderImages(site);
     inform(t("panel.siteBuilder.imageUploadedNotice"));
   } catch (error) {
     report(error);
   } finally {
+    imageBusy.value = false;
     // Aynı dosyayı tekrar seçebilmek için alanı temizle.
     if (fileInput.value) {
       fileInput.value.value = "";
@@ -715,26 +746,43 @@ async function uploadImage(event: Event) {
  * neyin kaybedileceğini de yazar.
  */
 async function removeImage(name: string) {
-  if (!selectedSite.value) {
+  if (!selectedSite.value || imageBusy.value) {
     return;
   }
 
-  const approved = await confirm({
-    title: t("panel.siteBuilder.confirmDeleteImageTitle"),
-    message: t("panel.siteBuilder.confirmDeleteImage", { name })
-  });
-
-  if (!approved) {
-    return;
-  }
-
+  const site = selectedSite.value;
+  imageBusy.value = true;
   try {
-    await deleteSiteBuilderImage(selectedSite.value, name);
-    images.value = await getSiteBuilderImages(selectedSite.value);
-    project.value = await getSiteBuilderProject(selectedSite.value);
+    const approved = await confirm({
+      title: t("panel.siteBuilder.confirmDeleteImageTitle"),
+      message: t("panel.siteBuilder.confirmDeleteImage", { name })
+    });
+    if (!approved) return;
+
+    await deleteSiteBuilderImage(site, name);
+    // The server removes image references, not unrelated edits in the open draft.
+    if (project.value) clearImageReferences(project.value, name);
+    if (savedProject.value) {
+      const saved = JSON.parse(savedProject.value) as SiteBuilderProject;
+      clearImageReferences(saved, name);
+      savedProject.value = JSON.stringify(saved);
+    }
+    images.value = images.value.filter(image => image.name.toLowerCase() !== name.toLowerCase());
+    plan.value = null;
     await loadPreview();
   } catch (error) {
     report(error);
+  } finally {
+    imageBusy.value = false;
+  }
+}
+
+function clearImageReferences(target: SiteBuilderProject, name: string) {
+  for (const section of [...target.sections, ...target.pages.flatMap(page => page.sections)]) {
+    if (section.imageName?.toLowerCase() === name.toLowerCase()) section.imageName = '';
+    for (const item of section.items) {
+      if (item.imageName?.toLowerCase() === name.toLowerCase()) item.imageName = '';
+    }
   }
 }
 

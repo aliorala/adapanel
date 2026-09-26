@@ -334,6 +334,19 @@ public sealed class SiteBuilderPublishSafetyTests
         }
     }
 
+    [Theory]
+    [InlineData("adapanel.host")]
+    [InlineData("AdaPanel.example")]
+    public async Task Public_domain_with_panel_prefix_can_build_and_publish(string domain)
+    {
+        await using var ortam = await TestOrtami.KurAsync();
+        var project = await ortam.Servis.GetProjectAsync(domain);
+        Assert.NotNull(project);
+        var result = await ortam.Servis.PublishAsync(domain, new PublishSiteBuilderRequest());
+        Assert.Contains("index.html", result.WrittenFiles);
+        Assert.True(File.Exists(Path.Combine(ortam.SiteKoku, "index.html")));
+    }
+
     [Fact]
     public async Task Yayin_yalniz_TASARIMDA_KULLANILAN_gorselleri_kopyalar()
     {

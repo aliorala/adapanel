@@ -8,54 +8,15 @@
         </div>
         <span class="meta">{{ loading ? t("panel.system.loading") : formatUtc(overview?.currentServerTimeUtc ?? null) }}</span>
       </div>
-
-      <!-- HALKA RENGİ DEĞERE BAĞLI — panoyla (DashboardOverviewView) BİREBİR aynı iki eşik.
-           ÖLÇÜLDÜ, önceki hâli: renk SABİTTİ. İşlemci hep mavi, bellek hep camgöbeği, disk hep
-           `--warn-1` (kehribar) çiziliyordu; yani %3 dolu bir disk ile %99 dolu bir disk BİREBİR
-           aynı görünüyor, üstelik ikisi de "uyarı" renginde duruyordu. Aynı sunucu panoda
-           kırmızı, izleme ekranında kehribar okunuyordu — iki ekran aynı ölçüm için farklı şey
-           söylüyordu.
-           SERİ KİMLİĞİ KAYBOLMADI, doğru yere taşındı: mavi/camgöbeği ayrımı ÇİZGİ grafiklerinde
-           (sparkline) yaşar; orada iki seri üst üste okunur ve rengin işi onları ayırmaktır.
-           Halkanın işi ise tek bir değerin SAĞLIĞINI söylemek. `--meter-mem` belirteci bu yüzden
-           duruyor ve hâlâ temaya bağlı (bkz. stildeki not). -->
-      <div v-if="overview" class="meter-grid">
-        <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(overview.cpuUsagePercent)">
-            <div class="meter-core">
-              <span>{{ t("panel.system.cpu") }}</span>
-              <strong>{{ overview.cpuUsagePercent.toFixed(1) }}%</strong>
-              <small>{{ overview.logicalProcessorCount }} {{ t("panel.system.cores") }}</small>
-            </div>
-          </div>
-          <svg v-if="cpuSpark" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
-            <polyline :points="cpuSpark" />
-          </svg>
-        </article>
-
-        <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(overview.memoryUsagePercent)">
-            <div class="meter-core">
-              <span>{{ t("panel.system.memory") }}</span>
-              <strong>{{ overview.memoryUsagePercent.toFixed(1) }}%</strong>
-              <small>{{ formatBytes(overview.usedMemoryBytes) }} / {{ formatBytes(overview.totalMemoryBytes) }}</small>
-            </div>
-          </div>
-          <svg v-if="memSpark" class="meter-spark mem" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
-            <polyline :points="memSpark" />
-          </svg>
-        </article>
-
-        <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(primaryDisk ? primaryDisk.usagePercent : null)">
-            <div class="meter-core">
-              <span>{{ primaryDisk?.name || t("panel.system.disks") }}</span>
-              <strong>{{ primaryDisk ? `${primaryDisk.usagePercent.toFixed(1)}%` : t("panel.common.notAvailable") }}</strong>
-              <small v-if="primaryDisk">{{ formatBytes(primaryDisk.usedBytes) }} / {{ formatBytes(primaryDisk.totalBytes) }}</small>
-              <small v-if="primaryDisk">{{ t("panel.system.free") }}: {{ formatBytes(primaryDisk.freeBytes) }}</small>
-            </div>
-          </div>
-        </article>
+      <!-- Ortak kaynak göstergeleri ana sayfayla aynı durum eşiklerini kullanır. -->
+      <div v-if="overview" class="resource-grid">
+        <ResourceMetric :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
+          <svg v-if="cpuSpark" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline :points="cpuSpark" /></svg>
+        </ResourceMetric>
+        <ResourceMetric :label="t('panel.system.memory')" :value="overview.memoryUsagePercent" :detail="formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)">
+          <svg v-if="memSpark" class="meter-spark mem" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline :points="memSpark" /></svg>
+        </ResourceMetric>
+        <ResourceMetric :label="primaryDisk?.name || t('panel.system.disks')" :value="primaryDisk?.usagePercent ?? null" :detail="primaryDisk ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : t('panel.common.notAvailable')" :hint="primaryDisk ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
       </div>
     </section>
 
@@ -337,6 +298,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import ResourceMetric from "../components/ResourceMetric.vue";
 import { useI18n } from "vue-i18n";
 import { useSystemStore } from "../stores/system";
 import { getProcessSnapshot, type ProcessSnapshot } from "../api/processes";
@@ -391,7 +353,7 @@ const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
  * Sunucudan gelen sıra sürücü harfine göredir (C, D, E...), yani dikkat isteyen satırın nerede
  * duracağı TESADÜFE kalıyordu: dördüncü sürücü dolduğunda uyarı listenin dibindeydi.
  * KOPYA ÜZERİNDE sıralanır: `sort` yerinde çalışır ve prop dizisini doğrudan sıralamak üst
- * bileşenin verisini (ve halkanın okuduğu `disks[0]`ı) değiştirirdi.
+ * bileşenin verisini (ve kaynak göstergesinin okuduğu `disks[0]`ı) değiştirirdi.
  */
 const sortedDisks = computed(() => [...(props.overview?.disks ?? [])]
   .sort((a, b) => b.usagePercent - a.usagePercent));
@@ -568,23 +530,8 @@ function spark(values: number[], maxValue: number): string {
 const METER_WARN_PERCENT = 80;
 const METER_DANGER_PERCENT = 90;
 
-/** `null` = ÖLÇÜLEMEDİ: halka sıfır yeşile boyanıp "boş disk" demez, nötr kalır. */
-function ringStyle(value: number | null) {
-  const percent = Math.max(0, Math.min(100, value ?? 0));
-  return {
-    "--progress": `${percent}%`,
-    "--ring-color": value === null
-      ? "var(--text-muted)"
-      : percent >= METER_DANGER_PERCENT
-        ? "var(--danger-1)"
-        : percent >= METER_WARN_PERCENT
-          ? "var(--warn-1)"
-          : "var(--ok-1)"
-  };
-}
-
 /**
- * Disk satırının tonu — HALKAYLA AYNI iki eşikten okunur.
+ * Disk satırının tonu — kaynak göstergesiyle aynı iki eşikten okunur.
  * Boş dize "eşiğin altında" demektir; o satır ne rozet alır ne ton, çünkü sağlıklı bir disk
  * hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
  */
@@ -628,7 +575,6 @@ function formatTimeSpan(value: string): string {
    iki ekran yan yana açıldığında dikey ritimleri tutmuyordu. 16 SEÇİLDİ: `.panel`in kendi iç
    dolgusu da 16, yani panelden panele boşluk ile panelin içindeki boşluk artık AYNI sayı. */
 .monitor-stack,
-.meter-grid,
 .monitor-columns,
 .mini-table {
   display: grid;
@@ -646,38 +592,9 @@ function formatTimeSpan(value: string): string {
   align-items: start;
 }
 
-.meter-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 /* `.info-card` ve `.mini-row` bu listeden ÇIKARILDI: ilki şablondan tümüyle kalktı (panelin
    içinde ikinci bir çerçeveydi), ikincisi ise artık kendi kenarlığı ve kendi zemini olan bir
    KART değil, gerçek bir tablo satırı (gerekçesi `.mini-table` kuralında). */
-.meter-card {
-  padding: var(--sp-16);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-}
-
-/* BELLEK SERİSİ RENGİ — BİLEREK belirtece bağlanMADI ve KORUNDU.
-   Bu renk artık HALKAYA değil, yalnız bellek ÇİZGİSİNE (sparkline) gidiyor: iki eğri üst üste
-   okunduğunda hangisinin bellek olduğunu söyleyen tek şey odur, yani orada renk gerçekten
-   VERİ taşır. (Halkalar ise değere bağlı sağlık renklerine geçti; gerekçesi şablonda.)
-   ÖLÇÜLDÜ, eski tek değer #6fd2ff: koyu temada 10.05:1, AÇIK temada beyaz kart üzerinde
-   1.70:1 — WCAG 1.4.11'in grafik ögeler için istediği 3:1'in çok altında, yani panelin
-   VARSAYILAN temasında bellek eğrisi pratikte görünmüyordu.
-   Bu yüzden değer temaya bağlı: koyu tema bugünkü rengini birebir korur, açık tema 3:1'i
-   geçen bir camgöbeğine iner (#0891b2 = 3.68:1). Ton hâlâ camgöbeği. */
-.meter-card {
-  display: grid;
-  place-items: center;
-  --meter-mem: #6fd2ff;
-}
-
-:root[data-theme="light"] .meter-card {
-  --meter-mem: #0891b2;
-}
 
 .meter-spark {
   width: 100%;
@@ -695,7 +612,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .meter-spark.mem polyline {
-  stroke: var(--meter-mem);
+  stroke: var(--ok-1);
 }
 
 /* Üst boşluk KALDIRILDI: kapsayıcı `.panel` zaten 12px ızgara aralığı veriyor ve margin ona
@@ -799,55 +716,6 @@ function formatTimeSpan(value: string): string {
   background: var(--warn-1);
 }
 
-.meter-ring {
-  --progress: 0%;
-  /* Varsayılan yalnızca YEDEK: gerçek renk `ringStyle()`ten satır içi gelir (bkz. script).
-     Panoyla aynı: yedek NÖTR, çünkü renk bir sağlık iddiasıdır ve ölçüm gelmeden iddia
-     edilmemeli (eski yedek `--accent-1` idi ve "sakin/iyi" diye okunuyordu). */
-  --ring-color: var(--text-muted);
-  width: min(220px, 100%);
-  aspect-ratio: 1;
-  padding: var(--sp-12);
-  border-radius: 50%;
-  background: conic-gradient(var(--ring-color) var(--progress), var(--ring-track) 0);
-}
-
-.meter-core {
-  display: grid;
-  place-items: center;
-  gap: var(--sp-8);
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: linear-gradient(180deg, var(--surface-2), var(--surface-0));
-  text-align: center;
-}
-
-/* Ölçek DIŞI üç boyut (0.8 / 0.72rem) ölçeğe taşındı ve panonun halka tipografisiyle
-   eşitlendi; harf aralığı da 0.08em -> 0.035em (pano değeri). Aynı halka iki ekranda iki
-   farklı boyda çiziliyordu. */
-.meter-core span {
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
-}
-
-.meter-core small {
-  max-width: 86%;
-  color: var(--text-soft);
-  font-size: var(--fs-2xs);
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.meter-core strong {
-  font-size: clamp(1.4rem, 2.8vw, 2rem);
-  /* Halka değerleri iki saniyede bir güncelleniyor; oransal rakamlarda basamak genişliği
-     değişince sayı yerinde TİTRİYORDU (9.9 -> 10.0 geçişinde ~3px kayma). */
-  font-variant-numeric: tabular-nums;
-}
-
 .info-list {
   display: grid;
   gap: var(--sp-12);
@@ -946,16 +814,6 @@ function formatTimeSpan(value: string): string {
   font-weight: 600;
   background: var(--surface-2);
 }
-
-/* ARA GENİŞLİK ÖLÇÜLDÜ VE TERS ÇALIŞIYORDU — panoda kapatılan boşluğun aynısı buradaydı.
-   Eski kural 1180px'de `.meter-grid`i DOĞRUDAN tek sütuna indiriyordu: üç adet 220px'lik halka
-   alt alta (~700px dikey). Aynı sayfa 699px'de — telefon kuralları devreye girince — halkaları
-   yan yana üç küçük halka olarak diziyordu. Yani 900px'lik bir dizüstü ekranı, 699px'lik bir
-   TELEFONDAN daha uzun ve daha kötü bir sayfa görüyordu.
-   Şimdi 1180px'de yalnızca gerçekten iki sütun isteyen yerleşim (sayfanın iki kolonu) tek
-   sütuna iner; halkalar 3'lü kalır. 900px ekranda hesap (MainLayout kenar menüyü 900-1200 arası
-   şeride alır, içerik tam genişlik): panel içi ~869px -> halka başına (869 - 32) / 3 = 279px,
-   halka 220px, sığar. */
 @media (max-width: 1180px) {
   .monitor-columns {
     grid-template-columns: 1fr;
@@ -1000,44 +858,9 @@ function formatTimeSpan(value: string): string {
     display: none;
   }
 }
-
-/* Ölçer halkaları: alt alta üç 220px halka yerine yan yana üç küçük halka →
-   CPU/RAM/disk tek bakışta okunur (olay akışının "kaynak tüketimini oku" adımı). */
 @media (max-width: 700px) {
-  .meter-grid {
-    gap: var(--sp-8);
-  }
-
-  .meter-card {
-    padding: var(--sp-8);
-    border-radius: var(--radius-md);
-  }
-
-  .meter-ring {
-    width: min(112px, 100%);
-    padding: var(--sp-8);
-  }
-
-  .meter-core {
-    gap: var(--sp-2);
-  }
-
-  /* Bu iki boyut ÖLÇEĞİN ALTINDA ve bilerek öyle (panoda da aynı istisna): `--fs-2xs` en küçük
-     adım, ama 112px'lik halkanın içine etiket + oran sığması gerekiyor. Ölçeğe yeni bir adım
-     eklemek yerine kural burada kalıyor — yalnız telefon halkasına ait, tek yer. */
-  .meter-core span {
-    font-size: 0.56rem;
-    letter-spacing: 0.02em;
-  }
-
-  .meter-core strong {
-    font-size: clamp(0.9rem, 4.4vw, 1.15rem);
-  }
 
   /* Aynı bilgi hemen aşağıdaki Diskler tablosunda var. */
-  .meter-core small {
-    display: none;
-  }
 
   .meter-spark {
     height: 22px;

@@ -27,7 +27,7 @@
            kapliyor, uzun bir adda 52vw'de kirpiliyordu. Ortak tanim icerige uyar (`width: auto`,
            taban 140px) ve panelin diger yedi site secicisiyle AYNI davranir. -->
       <div class="toolbar-group">
-        <select v-model="selectedSiteName" class="compact-select">
+        <select v-model="selectedSiteName" :aria-label="t('panel.php.selectSite')" class="compact-select">
           <option value="">{{ t("panel.php.selectSite") }}</option>
           <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
         </select>

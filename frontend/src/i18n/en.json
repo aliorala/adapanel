@@ -5274,5 +5274,16 @@
   "panel.siteBuilder.pagesDropped": "{count} pages with invalid or duplicate addresses could not be saved. Check the page list.",
   "panel.sites.defaultsTitle": "Site preparation result",
   "panel.sites.defaultsReadyLabel": "Ready",
-  "panel.sites.defaultsFailedLabel": "Could not prepare"
+  "panel.sites.defaultsFailedLabel": "Could not prepare",
+  "panel.dashboard.accessProtection": "Additional sign-in protection",
+  "panel.dashboard.accessProtectionHint": "Two-factor authentication and IP restrictions",
+  "panel.layout.skipToContent": "Skip to content",
+  "panel.siteBuilder.previewPage": "Preview page",
+  "panel.siteBuilder.unsavedTitle": "Unsaved changes",
+  "panel.siteBuilder.unsavedHint": "This design has unsaved changes. Leaving will discard them.",
+  "panel.seo.pageLimit": "Maximum pages to scan",
+  "panel.seo.severityFilter": "Filter by severity",
+  "panel.seo.logPeriod": "Log analysis period",
+  "panel.logs.lineCount": "Number of lines to show",
+  "panel.siteBuilder.saveBeforePublish": "Save your design changes before publishing."
 }

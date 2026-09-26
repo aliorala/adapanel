@@ -30,6 +30,39 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class SiteBuilderMultiPageTests
 {
+    [Fact]
+    public async Task Gorsel_silme_ana_ve_ek_sayfalardaki_referanslari_temizler()
+    {
+        await using var ortam = await TestOrtami.KurAsync();
+        var image = await ortam.GorselYukleAsync();
+        var project = await ortam.Servis.GetProjectAsync(TestOrtami.SiteAdi);
+        project.Sections[0].ImageName = image.Name;
+        project.Pages = [new SiteBuilderPageDto
+        {
+            Slug = "galeri", Title = "Galeri",
+            Sections = [new SiteBuilderSectionDto
+            {
+                Type = "gallery", Enabled = true, ImageName = image.Name,
+                Items = [new SiteBuilderItemDto { Title = "Görsel", ImageName = image.Name }]
+            }]
+        }];
+        await ortam.Servis.SaveProjectAsync(TestOrtami.SiteAdi, new SaveSiteBuilderProjectRequest
+        {
+            SiteTitle = project.SiteTitle, Sections = project.Sections, Pages = project.Pages
+        });
+
+        await ortam.Servis.DeleteImageAsync(TestOrtami.SiteAdi, image.Name);
+
+        var saved = await ortam.Servis.GetProjectAsync(TestOrtami.SiteAdi);
+        Assert.Empty(await ortam.Servis.GetImagesAsync(TestOrtami.SiteAdi));
+        Assert.All(saved.Sections.Concat(saved.Pages.SelectMany(page => page.Sections)), section =>
+        {
+            Assert.Empty(section.ImageName);
+            Assert.All(section.Items, item => Assert.Empty(item.ImageName));
+        });
+        Assert.Equal("Galeri", saved.Pages.Single().Title);
+    }
+
     // ------------------------------------------------------------------ sayfa adresi (slug)
 
     [Theory]

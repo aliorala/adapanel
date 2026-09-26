@@ -891,14 +891,14 @@ button {
   font-weight: 600;
   line-height: 1.25;
   cursor: pointer;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.12), 0 2px 8px -3px color-mix(in srgb, var(--accent-2) 60%, transparent);
+  box-shadow: none;
   transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
 button:not(:disabled):hover {
   filter: brightness(1.05);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.14), 0 6px 16px -5px color-mix(in srgb, var(--accent-2) 65%, transparent);
+  transform: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
 }
 
 button:not(:disabled):active {
@@ -1433,3 +1433,6 @@ label.checkbox input {
     transform: none !important;
   }
 }
+
+.resource-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 700px) { .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .resource-grid > :last-child { grid-column: 1 / -1; } }

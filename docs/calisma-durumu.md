@@ -1,5 +1,11 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-26 — 0.8.63 arayüz ve site kurucu düzeltmeleri hazır
+
+Canlı ekran turunda saptanan site kurucu adapanel.host iç servis yanlış sınıflandırması düzeltildi. Ortak kompakt kaynak kartları, tablet çekmece menüsü/klavye odağı, faaliyet ayrıntılarını katlama, ek giriş koruması açıklaması, form etiketleri, Türkçe posta metinleri ve HTTPS/IPv6 bağlantı seçimi yenilendi. Site kurucu taslak koruması ve eski proje/önizleme/yayın-planı yanıtlarını reddetme eklendi; görsel silme taslağı kaybettirmez ve ek sayfa referanslarını da temizler.
+
+121 frontend + 5.508 Infrastructure + 2 Core başarılı. Typecheck/build geçti. Manifest/indirici değişmedi; .61 bileşen raporu 22 Passed / 3 mevcut Skipped yeniden kullanılıyor. Açık/koyu tema ve 1534/1024/390/360 px arayüz incelendi. Son paket ve canlı doğrulama sürüyor; henüz canlı .63 denmez. Ayrıntı docs/denetim-2026-09-26-063.md; kanıt .tmp/audit-063. Yedekleme tercihleri ve şifreleme kapalı durumu korundu. Dış fiyat botu API henüz taşınmadı. Kaynak/history/tag push yapılmaz.
+
 ## 2026-09-26 — Eski sürüm kalıntıları canlıda temizlendi
 
 Kullanıcının açık isteğiyle 5.230 kullanılmayan dosya / 2.312.989.443 bayt (2,31 GB) silindi. Eski PHP8.3.31/MariaDB11.8.3/Adminer5.5.1/Roundcube1.7.1 indirmeleri, 18 Eylül component-safety-20260918-044 geçici yükseltme kopyası, iki Roundcube paket varsayılanı klasörü ve eski panel dağıtımının387 dosyası kaldırıldı. Eski notlardaki component-safety kopyalarının tutulduğu bilgisi artık geçersizdir. Güncel otomatik yedekler ve ayarlar korundu.

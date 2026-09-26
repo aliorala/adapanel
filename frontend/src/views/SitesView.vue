@@ -334,6 +334,7 @@
 </template>
 
 <script setup lang="ts">
+import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
@@ -407,16 +408,7 @@ function isRunning(site: SiteRecord): boolean {
 }
 
 function siteUrl(site: SiteRecord): string {
-  // nip.io önizleme bağlamalarını ATLA → asıl domain gösterilsin (önizleme host'u "Siteyi aç"ı ele geçirmesin).
-  const binding = site.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io")) ?? site.bindings[0];
-  if (!binding) {
-    return "#";
-  }
-  const proto = (binding.protocol || "http").toLowerCase();
-  const host = binding.hostName || window.location.hostname;
-  const standard = (proto === "http" && binding.port === 80) || (proto === "https" && binding.port === 443);
-  const portPart = standard ? "" : `:${binding.port}`;
-  return `${proto}://${host}${portPart}`;
+  return primarySiteUrl(site.bindings);
 }
 
 const notice = ref("");

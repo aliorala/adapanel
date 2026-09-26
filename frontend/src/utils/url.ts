@@ -31,7 +31,7 @@ export function toReachableUrl(raw: string): string {
     if (!IZINLI_SEMALAR.has(url.protocol)) {
       return "";
     }
-    if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+    if (["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname)) {
       url.hostname = window.location.hostname;
     }
     return url.toString();

@@ -251,6 +251,7 @@
 </template>
 
 <script setup lang="ts">
+import { primarySiteUrl } from "../utils/siteUrl";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { SiteBinding, SiteBindingPayload, SiteDefaultsResult, SiteRecord, SitePreview } from "../api/sites";
@@ -388,19 +389,7 @@ const gercekBaglamalar = computed(() =>
  * Adresi ACMA isi ust baglam cubugundaki baglantiya devredildi; buradaki `openSite`
  * sarmalayicisi o dugmeyle birlikte kalkti.
  */
-const primaryUrl = computed(() => {
-  // nip.io önizleme bağlamalarını ATLA → asıl domain gösterilsin/açılsın.
-  const binding = props.site?.bindings.find((item) => item.hostName && !item.hostName.toLowerCase().endsWith(".nip.io"))
-    ?? props.site?.bindings[0];
-  if (!binding) {
-    return "";
-  }
-
-  const host = binding.hostName || (binding.ipAddress === "*" ? "localhost" : binding.ipAddress);
-  const defaultPort = (binding.protocol === "http" && binding.port === 80)
-    || (binding.protocol === "https" && binding.port === 443);
-  return `${binding.protocol}://${host}${defaultPort ? "" : `:${binding.port}`}`;
-});
+const primaryUrl = computed(() => primarySiteUrl(props.site?.bindings ?? []));
 
 function submitBinding() {
   if (!props.site) {

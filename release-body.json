@@ -1,5 +1,5 @@
 {
-  "name": "0.8.62 — Posta denetimi ve hızlı servis ölçümü",
-  "body": "- Posta sağlık kontrolünde okunamayan veya eksik yanıtlar artık sağlıklı sayılmaz.\n- SMTP sunucu adı tam eşleşmeyle kontrol edilir; bozuk posta sorguları boş listeye dönüşmez.\n- Windows servisleri ve zamanlanmış görevlerin durum okumaları hızlandırıldı.",
-  "tag_name": "0.8.62"
+  "name": "0.8.63 — Arayüz ve site kurucu iyileştirmeleri",
+  "body": "- Kaynak göstergeleri daha kompakt ve okunur hale getirildi; telefon ve tablet menüsü iyileştirildi.\n- Site kurucuda taslak kaybı, geciken önizleme yanıtları ve çok sayfalı görsel temizliği düzeltildi.\n- Sistem siteleri doğru ayırt edilir; uygun site bağlantılarında HTTPS tercih edilir.\n- Etiketler, klavye erişimi ve Türkçe açıklamalar iyileştirildi.",
+  "tag_name": "0.8.63"
 }

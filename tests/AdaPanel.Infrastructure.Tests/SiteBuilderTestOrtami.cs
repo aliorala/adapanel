@@ -219,7 +219,8 @@ internal sealed class SiteBuilderSahteSiteServisi(string uygulamaKoku) : IIisSit
         {
             Name = siteName,
             PhysicalPath = uygulamaKoku,
-            ApplicationRootPath = uygulamaKoku
+            ApplicationRootPath = uygulamaKoku,
+            Bindings = [new SiteBindingDto { Protocol = "https", HostName = siteName, Port = 443, BindingInformation = "*:443:" + siteName }]
         });
 
     public Task<IReadOnlyCollection<SiteDto>> GetSitesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();

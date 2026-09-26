@@ -268,7 +268,7 @@
             <template v-if="user.parentName"> · {{ t("panel.users.subUserOf") }}: {{ user.parentName }}</template>
           </small>
         </div>
-        <span>{{ user.role }}</span>
+        <span>{{ t(`panel.role.${user.role.toLowerCase()}`) }}</span>
         <!-- "Kilitli" rozeti DURUM hücresinin İÇİNDE. Önceden ayrı bir ızgara çocuğuydu ve
              başlık 5 sütunluk olduğu için, bir kullanıcı kilitlendiğinde satır 6 hücreye çıkıp
              "İşlem" düğmelerini alt satıra atıyordu — tam da acilen "Kilidi aç"a basılması

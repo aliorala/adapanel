@@ -347,7 +347,7 @@ public sealed class SiteBuilderService(
             CreateStarterProject(site.Name),
             current =>
             {
-                foreach (var section in current.Sections)
+                foreach (var section in current.Sections.Concat(current.Pages.SelectMany(page => page.Sections)))
                 {
                     if (string.Equals(section.ImageName, imageName, StringComparison.OrdinalIgnoreCase))
                     {
@@ -391,13 +391,15 @@ public sealed class SiteBuilderService(
         // Kurucu oraya yayın yaparsa çalışan aracın index'ini ezer ve kullanıcı aracın neden
         // kaybolduğunu anlayamaz. Site oluşturma tarafında aynı koruma zaten var.
         var trimmed = (siteName ?? string.Empty).Trim();
-        if (trimmed.StartsWith("AdaPanel.", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(trimmed, "Default Web Site", StringComparison.OrdinalIgnoreCase))
+        var site = await iisSiteService.GetSiteAsync(trimmed, cancellationToken);
+        // Use the same name + binding classification as the site inventory. A public
+        // domain such as adapanel.host is not an internal service just because of its prefix.
+        if (Iis.WebAdministrationSiteService.IsSystemSite(site))
         {
             throw new AppException("sitebuilder.site_reserved", 409, 409);
         }
 
-        return await iisSiteService.GetSiteAsync(trimmed, cancellationToken);
+        return site;
     }
 
     /// <summary>Yayın kökü: uygulama kökü varsa o, yoksa fiziksel yol. Doğrulanmış hâlde döner.</summary>

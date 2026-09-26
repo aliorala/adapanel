@@ -1,5 +1,6 @@
 <template>
   <div class="app-shell">
+    <a class="skip-link" href="#panel-main">{{ t("panel.layout.skipToContent") }}</a>
     <!--
       Dar ekran: kenar menü içeriğin üstüne binmesin diye dışarı kayan (off-canvas)
       çekmeceye döner. Karartma katmanı hem dış tıklamayla kapatır hem de arka plandaki
@@ -7,7 +8,7 @@
     -->
     <div v-if="isNarrow && menuOpen" class="nav-scrim" @click="closeMenu"></div>
 
-    <aside id="ap-sidebar" ref="sidebarRef" :class="['sidebar', { open: isNarrow && menuOpen }]">
+    <aside id="ap-sidebar" ref="sidebarRef" :inert="isNarrow && !menuOpen" :class="['sidebar', { open: isNarrow && menuOpen }]" @transitionend.self="focusOpenMenu">
       <!--
         ÖZEL MARKA: logo varsa ürünün "AP" işareti YERİNE geçer (yanına değil) — beyaz etikette
         sağlayıcının işareti müşterinin ekranında hiç görünmemeli. Logo adresi bir data URI'dir
@@ -29,6 +30,7 @@
         </div>
       </component>
 
+      <button v-if="isNarrow" class="secondary compact nav-close" :aria-label="t('panel.attention.close')" @click="closeMenu">×</button>
       <nav ref="navListRef" class="nav-list" :aria-label="t('panel.layout.menu')">
         <!--
           GRUPLU MENÜ: `role="group"` + `aria-labelledby` başlığı maddelere BAĞLAR. Ekran okuyucu
@@ -83,7 +85,7 @@
       </div>
     </aside>
 
-    <div class="main-column">
+    <div class="main-column" :inert="isNarrow && menuOpen">
       <header class="topbar">
         <!-- Menü düğmesi yalnız dar ekranda: geniş ekranda kenar menü zaten görünür. -->
         <button
@@ -111,6 +113,7 @@
           <input
             v-model="searchQuery"
             class="search-input"
+            :aria-label="t('panel.layout.searchPlaceholder')"
             type="search"
             :placeholder="t('panel.layout.searchPlaceholder')"
             @focus="warmEntityIndex"
@@ -197,7 +200,7 @@
           </div>
           <span class="user-chip" :title="`${userEmail} · v${panelVersion} · ${t('panel.layout.twoFactor')}: ${twoFactorLabel}`">
             <strong>{{ userName }}</strong>
-            <small>{{ role }}</small>
+            <small>{{ t(`panel.role.${role.toLowerCase()}`, role) }}</small>
           </span>
           <button
             class="secondary compact theme-toggle"
@@ -212,12 +215,12 @@
               <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
             </svg>
           </button>
-          <button class="secondary compact icon-btn" :title="t('panel.dashboard.refresh')" @click="$emit('refresh')">↻</button>
+          <button class="secondary compact icon-btn" :title="t('panel.dashboard.refresh')" :aria-label="t('panel.dashboard.refresh')" @click="$emit('refresh')">↻</button>
           <button class="secondary compact" @click="$emit('logout')">{{ t("panel.auth.logout") }}</button>
         </div>
       </header>
 
-      <main class="content-column">
+      <main id="panel-main" tabindex="-1" class="content-column">
         <div v-if="authStore.session?.isImpersonating" class="impersonation-banner">
           <span>{{ t("panel.users.impersonatingAs", { name: authStore.session?.user?.userName }) }}</span>
           <button class="compact" :disabled="returningToAdmin" @click="returnToAdmin">{{ t("panel.users.returnToAdmin") }}</button>
@@ -606,7 +609,7 @@ function selectSearch(hit: SearchHit) {
 // 900px altında kenar menü sabit sütun olmaktan çıkıp çekmeceye döner (bkz. stiller).
 // Eşiği JS tarafında da biliyoruz ki menü düğmesi geniş ekranda hiç basılamasın (odak sırasına
 // girmesin) ve ekran genişleyince açık kalan çekmece kendiliğinden kapansın.
-const NARROW_QUERY = "(max-width: 900px)";
+const NARROW_QUERY = "(max-width: 1200px)";
 // İlk çizimde de doğru olmalı: aksi halde telefonda menü düğmesi bir kare gecikmeli belirir.
 const isNarrow = ref(typeof window !== "undefined" && window.matchMedia(NARROW_QUERY).matches);
 const menuOpen = ref(false);
@@ -639,9 +642,23 @@ function handleNavigate(sectionId: string) {
 }
 
 function onMenuKeydown(event: KeyboardEvent) {
+  if (event.key === 'Tab' && menuOpen.value) {
+    const items = [...(sidebarRef.value?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]') ?? [])].filter(item => item.getClientRects().length);
+    const first = items[0], last = items[items.length - 1];
+    if (first && last && (!sidebarRef.value?.contains(document.activeElement) || (event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last))) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    }
+  }
   if (event.key === "Escape" && menuOpen.value) {
     event.stopPropagation();
     closeMenu();
+  }
+}
+
+function focusOpenMenu() {
+  if (menuOpen.value && !sidebarRef.value?.contains(document.activeElement)) {
+    sidebarRef.value?.querySelector<HTMLElement>(".nav-item")?.focus();
   }
 }
 
@@ -660,11 +677,12 @@ watch(menuOpen, async (open) => {
   if (open) {
     document.addEventListener("keydown", onMenuKeydown, true);
     await nextTick();
-    sidebarRef.value?.querySelector<HTMLElement>(".nav-item")?.focus();
+    requestAnimationFrame(focusOpenMenu);
     return;
   }
 
   document.removeEventListener("keydown", onMenuKeydown, true);
+  await nextTick();
   menuButtonRef.value?.focus?.();
 });
 
@@ -1440,7 +1458,7 @@ a.brand-card {
   background: var(--surface-2);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .topbar-search {
     display: none;
   }
@@ -1728,31 +1746,6 @@ a.brand-card {
   background: rgba(15, 23, 42, 0.44);
 }
 
-/* Ara genişlik (tablet): kenar menü içeriğin üstünde yatay şerit — mevcut davranış. */
-@media (min-width: 901px) and (max-width: 1200px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    position: static;
-    height: auto;
-    overflow: visible;
-  }
-
-  /* Şerit düzende ÜÇ SÜTUNA giren MADDELERDİR, gruplar değil: grupları yan yana dizmek
-     farklı boydaki beş sütun üretir ve başlık hangi maddeye ait olduğunu kaybederdi.
-     Böylece her grup kendi başlığının altında yatay bir satır olur. */
-  .nav-list {
-    grid-template-columns: minmax(0, 1fr);
-    overflow: visible;
-  }
-
-  .nav-group-items {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 960px) {
   .topbar-panels {
     justify-content: space-between;
@@ -1766,7 +1759,7 @@ a.brand-card {
   üst bardaki DİKKAT düğmesi — bu yüzden üst bar yapışkan (sticky) yapılıp dikkat düğmesi
   her an ekranda tutulur, tam bölüm listesi ise çekmecede saklı kalır.
 */
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
     /* Yapışkan üst bar tepeye yaslansın diye üst boşluk yok. */
@@ -1876,4 +1869,12 @@ a.brand-card {
     font-size: 0.98rem;
   }
 }
+@media (min-width: 701px) and (max-width: 1200px) {
+  .topbar { flex-wrap: nowrap; }
+  .topbar-actions { flex: 0 1 auto; justify-content: flex-end; }
+}
+.skip-link { position: fixed; left: 12px; top: 8px; z-index: 100; padding: 12px 16px; background: var(--surface-0); color: var(--accent-text); border: 2px solid var(--focus-ring); border-radius: var(--radius-sm); transform: translateY(-150%); }
+.skip-link:focus { transform: none; }
+.nav-close { position: absolute; right: 12px; top: 18px; width: 34px; font-size: 1.4rem; }
+@media (max-width: 1200px) { .brand-card { padding-right: 44px; } }
 </style>

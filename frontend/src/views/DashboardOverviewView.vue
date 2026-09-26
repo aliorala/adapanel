@@ -66,68 +66,41 @@
       ölçüsü var), adresler ise ömürde bir kez okunup yer imine eklenen bir referans —
       ~280px dikey yeri her açılışta yeniden istiyordu.
 
-      Yeni sıra üç basamak: ÖNCE DURUM (güncelleme bandı, dikkat özeti, sağlık halkaları +
+      Yeni sıra üç basamak: ÖNCE DURUM (güncelleme bandı, dikkat özeti, kaynak göstergeleri +
       sayaçlar), SONRA İŞ (hızlı erişim), EN SONDA REFERANS (panel adresleri, dış bağlantı).
       Hiçbir bilgi SİLİNMEDİ: referans blok en alta indi ve katlanır hâle geldi (`<details>`),
       yani bir tık uzakta ve tarayıcının kendi metin aramasıyla yine bulunabilir.
     -->
     <section class="panel">
-      <div v-if="overview" class="meter-grid">
-        <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(overview.cpuUsagePercent)">
-            <div class="meter-core">
-              <span>{{ t("panel.system.cpu") }}</span>
-              <strong>{{ overview.cpuUsagePercent.toFixed(1) }}%</strong>
-              <small>{{ overview.logicalProcessorCount }} {{ t("panel.system.cores") }}</small>
-            </div>
-          </div>
-        </article>
-
-        <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(overview.memoryUsagePercent)">
-            <div class="meter-core">
-              <span>{{ t("panel.system.memory") }}</span>
-              <strong>{{ overview.memoryUsagePercent.toFixed(1) }}%</strong>
-              <small>{{ formatBytes(overview.usedMemoryBytes) }} / {{ formatBytes(overview.totalMemoryBytes) }}</small>
-            </div>
-          </div>
-        </article>
-
-        <article class="meter-card">
-          <div class="meter-ring" :style="ringStyle(primaryDisk ? primaryDisk.usagePercent : null)">
-            <div class="meter-core">
-              <span>{{ primaryDisk?.name || t("panel.system.disks") }}</span>
-              <strong>{{ primaryDisk ? `${primaryDisk.usagePercent.toFixed(1)}%` : t("panel.common.notAvailable") }}</strong>
-              <small v-if="primaryDisk">{{ formatBytes(primaryDisk.usedBytes) }} / {{ formatBytes(primaryDisk.totalBytes) }}</small>
-              <small v-if="primaryDisk">{{ t("panel.system.free") }}: {{ formatBytes(primaryDisk.freeBytes) }}</small>
-            </div>
-          </div>
-        </article>
+      <div v-if="overview" class="resource-grid">
+        <ResourceMetric :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')" />
+        <ResourceMetric :label="t('panel.system.memory')" :value="overview.memoryUsagePercent" :detail="formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)" />
+        <ResourceMetric :label="primaryDisk?.name || t('panel.system.disks')" :value="primaryDisk?.usagePercent ?? null" :detail="primaryDisk ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : t('panel.common.notAvailable')" :hint="primaryDisk ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
       </div>
 
       <div class="summary-grid">
-        <button type="button" :class="['summary-card', { clickable: can('sites') }]" @click="can('sites') && go('sites')">
+        <button type="button" :class="['summary-card', { clickable: can('sites') }]" :disabled="!can('sites')" @click="can('sites') && go('sites')">
           <span class="tile-label">{{ t("panel.sites.title") }}</span>
           <strong>{{ sitesCount }}</strong>
           <small>{{ t("panel.sites.bindings") }}: {{ totalBindingCount }}</small>
         </button>
 
-        <button type="button" :class="['summary-card', { clickable: can('sites') }]" @click="can('sites') && go('sites')">
+        <button type="button" :class="['summary-card', { clickable: can('sites') }]" :disabled="!can('sites')" @click="can('sites') && go('sites')">
           <span class="tile-label">{{ t("panel.ftp.title") }}</span>
           <strong>{{ ftpUserCount }}</strong>
           <small>{{ t("panel.ftp.cardHint") }}</small>
         </button>
 
-        <button type="button" :class="['summary-card', { clickable: can('database') }]" @click="can('database') && go('database')">
+        <button type="button" :class="['summary-card', { clickable: can('database') }]" :disabled="!can('database')" @click="can('database') && go('database')">
           <span class="tile-label">{{ t("panel.database.title") }}</span>
           <strong>{{ databaseCount }}</strong>
           <small>{{ t("panel.database.cardHint") }}</small>
         </button>
 
-        <button type="button" :class="['summary-card', { clickable: can('security') }]" @click="can('security') && go('security')">
-          <span class="tile-label">{{ t("panel.security.title") }}</span>
+        <button type="button" :class="['summary-card', { clickable: can('security') }]" :disabled="!can('security')" @click="can('security') && go('security')">
+          <span class="tile-label">{{ t("panel.dashboard.accessProtection") }}</span>
           <strong>{{ securityStatusLabel }}</strong>
-          <small>{{ securePath ? `/${securePath}` : t("panel.common.notAvailable") }}</small>
+          <small>{{ t("panel.dashboard.accessProtectionHint") }}</small>
         </button>
       </div>
     </section>
@@ -159,7 +132,7 @@
     </section>
 
     <div class="overview-columns">
-      <section class="panel">
+      <section class="panel server-info-panel">
         <div class="section-head">
           <h2>{{ t("panel.system.serverInfo") }}</h2>
           <span class="meta">{{ loading ? t("panel.system.loading") : formatUtc(overview?.currentServerTimeUtc ?? null) }}</span>
@@ -267,16 +240,21 @@
       -->
       <section class="panel">
         <div class="section-head">
-          <h2>{{ t("panel.audit.title") }}</h2>
+          <h2>{{ t("panel.layout.recentActivity") }}</h2>
+          <button v-if="can('audit')" class="secondary compact" @click="go('audit')">{{ t("panel.attention.viewAll") }}</button>
         </div>
 
-        <div class="audit-preview">
+        <p v-if="!auditItems.length" class="empty-state">{{ t("panel.audit.empty") }}</p>
+        <div v-else class="audit-preview">
           <article v-for="item in auditItems.slice(0, 4)" :key="item.id" class="audit-item">
             <div class="audit-top">
               <strong>{{ t(`panel.activity.action.${item.action}`, item.action) }}</strong>
               <span>{{ formatUtc(item.createdAtUtc) }}</span>
             </div>
-            <p>{{ item.details }}</p>
+            <details v-if="item.details" class="activity-detail">
+              <summary>{{ t('panel.audit.detailsShowAll') }}</summary>
+              <p>{{ item.details }}</p>
+            </details>
             <small>{{ item.userName }} / {{ item.ipAddress || t("panel.common.notAvailable") }}</small>
           </article>
         </div>
@@ -340,6 +318,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import ResourceMetric from "../components/ResourceMetric.vue";
 import { useI18n } from "vue-i18n";
 import { getServerIpAddresses } from "../api/system";
 import type { UpdateStatus } from "../api/update";
@@ -515,48 +494,18 @@ const primaryDisk = computed(() => props.overview?.disks[0] ?? null);
  * duracağı böylece TESADÜFE kalıyordu: dördüncü sürücü dolduğunda uyarı listenin dibindeydi.
  * Sıra yüzdeye göre AZALAN yapıldı — dikkat isteyen satır her zaman ilk satırdır.
  * KOPYA ÜZERİNDE sıralanıyor: `sort` yerinde çalışır ve prop dizisini doğrudan sıralamak
- * üst bileşenin verisini (ve halkanın okuduğu `disks[0]`ı) değiştirirdi.
+ * üst bileşenin verisini (ve kaynak göstergesinin okuduğu `disks[0]`ı) değiştirirdi.
  */
 const sortedDisks = computed(() => [...(props.overview?.disks ?? [])]
   .sort((a, b) => b.usagePercent - a.usagePercent));
 
-/*
- * HALKA RENGİ ARTIK DEĞERİN KENDİSİNDEN GELİYOR.
- *
- * ÖNCEKİ HÂLİ ÖLÇÜLDÜ: renk bir SABİTTİ. CPU ve bellek halkaları her zaman `--accent-1` (mavi),
- * disk halkası her zaman `--warn-1` (kehribar) çiziliyordu. Yani %3 dolu bir disk ile %99 dolu
- * bir disk BİREBİR aynı görünüyordu — üstelik ikisi de "uyarı" renginde, yani panel açılır
- * açılmaz kalıcı bir yanlış alarm veriyordu. Aynı şekilde %98 CPU, %2 CPU ile aynı sakin maviydi.
- * Bu üç halka ilk ekranın en büyük ögesi; hiçbir sağlık bilgisi taşımadan o alanı tutuyorlardı.
- *
- * EŞİKLER UYDURULMADI: Plesk ve cPanel'in kaynak göstergeleri de %80'de sarıya, %90'da kırmızıya
- * döner; aynı sınırlar seçildi ki sunucu yöneticisinin başka panellerden gelen refleksi bozulmasın.
- *
- * RENK TEK BAŞINA ANLAM TAŞIMIYOR: aynı oran halkanın ortasında rakamla da yazılı (ve altında
- * kullanılan/toplam). Renk yalnızca o rakamı İKİNCİ kez, daha hızlı okunan bir kanaldan söyler.
- *
- * `null` = ÖLÇÜLEMEDİ. Disk okunamadığında halka sıfır yeşile boyanıp "boş disk" demez; nötr
- * kalır ve çekirdekteki metin zaten `panel.common.notAvailable` yazar.
- */
+/* Disk satırları ortak kaynak göstergesiyle aynı %80 / %90 eşiklerini kullanır. */
 const METER_WARN_PERCENT = 80;
 const METER_DANGER_PERCENT = 90;
 
-function ringStyle(value: number | null) {
-  const percent = Math.max(0, Math.min(100, value ?? 0));
-  return {
-    "--progress": `${percent}%`,
-    "--ring-color": value === null
-      ? "var(--text-muted)"
-      : percent >= METER_DANGER_PERCENT
-        ? "var(--danger-1)"
-        : percent >= METER_WARN_PERCENT
-          ? "var(--warn-1)"
-          : "var(--ok-1)"
-  };
-}
 
 /**
- * Disk satırının tonu — HALKAYLA AYNI İKİ EŞİKTEN okunur (bkz. `ringStyle`).
+ * Disk satırının tonu — kaynak göstergesiyle aynı İKİ EŞİKTEN okunur (bkz. `ringStyle`).
  * Boş dize "eşiğin altında" demektir; o zaman satır ne rozet alır ne ton, çünkü sağlıklı bir
  * disk hakkında söylenecek bir şey yoktur (her satırı yeşile boyamak gürültüdür).
  */
@@ -596,12 +545,6 @@ function formatTimeSpan(value: string): string {
 </script>
 
 <style scoped>
-/* PANONUN "METRİK" ÖLÇEĞİ — üç ayrı yerde göz kararı yazılmış büyük rakam boyutlarının
-   TEK KAYNAĞI. SAYILDI: bu dosyada 13 ayrı sabit `rem` boyutu vardı ve bunların üçü (1.4rem,
-   clamp(1.4rem…2rem), 1.05rem) "büyük sayı" işini yapıyordu; hangisinin hangi hiyerarşi
-   basamağı olduğu isimden okunamıyordu. İki basamağa indirildi: halka/özet kartı `lg`,
-   dikkat rozeti `md`. `clamp` korundu, çünkü bu rakamlar kart genişliğiyle birlikte
-   büyümeli — sabit bir boyut dar kartta taşar, geniş kartta kaybolur. */
 .overview-stack {
   --metric-lg: clamp(1.4rem, 2.8vw, 2rem);
   --metric-md: clamp(1.15rem, 2vw, 1.4rem);
@@ -611,7 +554,6 @@ function formatTimeSpan(value: string): string {
    16, yani panelden panele boşluk ile panelin içindeki boşluk artık AYNI sayı — sayfanın
    dikey ritmi tek bir değerden okunur. */
 .overview-stack,
-.meter-grid,
 .summary-grid,
 .overview-columns,
 .info-grid,
@@ -632,17 +574,12 @@ function formatTimeSpan(value: string): string {
   align-items: start;
 }
 
-.meter-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 /* `.mini-row` bu listeden ÇIKARILDI: satırın kendi kenarlığı ve kendi zemini olması, onu
    tablo satırı değil ayrı bir kart yapıyordu (gerekçesi aşağıda, `.mini-table`). */
-.meter-card,
 .summary-card,
 .info-card,
 .audit-item {
@@ -650,54 +587,16 @@ function formatTimeSpan(value: string): string {
   background: var(--surface-2);
 }
 
-.meter-card,
 .summary-card,
 .info-card {
   padding: var(--sp-16);
   border-radius: var(--radius-lg);
 }
 
-.meter-card {
-  display: grid;
-  place-items: center;
-  padding: var(--sp-12);
-}
-
-.meter-ring {
-  --progress: 0%;
-  /* Varsayılan yalnızca YEDEK: gerçek renk `ringStyle()`ten satır içi gelir (bkz. script). */
-  --ring-color: var(--text-muted);
-  width: min(160px, 100%);
-  aspect-ratio: 1;
-  padding: var(--sp-10);
-  border-radius: 50%;
-  background: conic-gradient(var(--ring-color) var(--progress), var(--ring-track) 0);
-}
-
-.meter-core {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: var(--sp-4);
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: linear-gradient(180deg, var(--surface-2), var(--surface-0));
-  text-align: center;
-}
-
 /* `.tile-label` BU LİSTEDEN ÇIKARILDI: ortak tanımı artık base.css'te ve kapsamlı stil
    ([data-v] niteliğiyle) onu EZİYORDU — yani panelin geri kalanı `--fs-2xs` çizerken bu ekran
    `--fs-xs` çiziyordu. Kopya silindi, ortak tanım devraldı. GÖRÜNEN FARK: kutucuk etiketleri
    0.82rem -> 0.78rem (bir ölçek adımı küçülür ve panelin geri kalanıyla eşitlenir). */
-.meter-core span {
-  max-width: 80%;
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-}
 
 .access-panel {
   display: grid;
@@ -832,26 +731,12 @@ function formatTimeSpan(value: string): string {
   word-break: break-word;
 }
 
-.meter-core small {
-  max-width: 70%;
-  color: var(--text-soft);
-  font-size: var(--fs-2xs);
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.meter-core strong,
 .summary-card strong {
   font-size: var(--metric-lg);
   font-variant-numeric: tabular-nums;
 }
 
 /* Dairenin kenarlarına değil, ortadaki güvenli alana yerleşen tek metin grubu. */
-.meter-core strong {
-  font-size: 1.85rem;
-  line-height: 1.15;
-  white-space: nowrap;
-}
 
 .summary-card {
   display: grid;
@@ -867,16 +752,6 @@ function formatTimeSpan(value: string): string {
   display: grid;
   gap: var(--sp-10);
 }
-
-/* DİKKAT ÖZETİ — panonun "her şey yolunda mı" sorusuna verdiği cevabın DURDUĞU YER.
-   ÖNCESİ ÖLÇÜLDÜ: cevap yalnızca 1px'lik bir kenar renginde saklıydı (aşağıdaki üç ton kuralı
-   sadece `border-color` yazıyordu) ve kartın kalan bütün yüzeyi her durumda birebir aynıydı.
-   Bir metrede iki milimetre. Üstelik dört rozet EŞİT ağırlıktaydı: "12 site" (yalnızca bir
-   olgu) ile "3 uyarı" (harekete geçilmesi gereken tek şey) aynı boyda, aynı renkte, aynı
-   zemindeydi — göz hangisine gideceğini bilemiyordu.
-   ŞİMDİ ton üç kanaldan birden konuşuyor: sol kenar şeridi (3px), kartın çok hafif zemin
-   tonu ve UYARI ROZETİNİN kendi dolgusu. Hiçbir bilgi çıkarılmadı; yalnızca sayfanın en
-   önemli tek cümlesi, yanındaki üç olgudan görsel olarak ayrıldı. */
 .attention-card {
   display: grid;
   gap: var(--sp-10);
@@ -910,9 +785,10 @@ function formatTimeSpan(value: string): string {
 
 .ac-chips {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--sp-10);
 }
+@media (max-width: 700px) { .ac-chips { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .ac-chip {
   display: grid;
@@ -962,10 +838,6 @@ function formatTimeSpan(value: string): string {
 .attention-card.warning .ac-chip.alert strong {
   color: var(--warn-text);
 }
-
-/* "Bekleyen bir şey yok" — panonun verebileceği en iyi haber, o yüzden okunması şart.
-   ÖLÇÜLDÜ, açık tema: eski `--ok-1` (#1f9d63) beyaz kart üzerinde 3.46:1, AA eşiğinin
-   (4.5) altında. `--ok-text` (#147f4b) 5.04:1 — belirteç zaten "yeşilin METİN hâli" için var. */
 .ac-clear {
   margin: 0;
   color: var(--ok-text);
@@ -989,9 +861,6 @@ function formatTimeSpan(value: string): string {
   height: 36px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent-1) 20%, transparent);
-  /* `--accent-1` DEĞİL `--accent-text`: bu bir dolgu ÜZERİNE yazılan metin. ÖLÇÜLDÜ, açık
-     tema: rozet zemini beyazla karışınca #d0e3fa oluyor ve `--accent-1` (#1474e5) orada
-     3.44:1 veriyordu — AA eşiği 4.5. `--accent-text` (#0f62c4) 4.50:1. */
   color: var(--accent-text);
   font-weight: 800;
   font-size: var(--fs-lg);
@@ -1057,14 +926,6 @@ function formatTimeSpan(value: string): string {
   font: inherit;
   color: inherit;
 }
-
-/* TIKLANABİLİR KUTULARIN TEK BİR HOVER DİLİ.
-   SAYILDI: bu panoda birbirinin AYNI görünen üç kutu ailesi var (dikkat rozeti, hızlı erişim,
-   özet kartı) ve üçü hover'da ÜÇ FARKLI şey yapıyordu: biri yalnız kenarını değiştiriyor,
-   biri bütün yazısını maviye çeviriyor, biri kenar + halka ekliyordu. Aynı görünen şeyin
-   farklı davranması, kullanıcıya "bunlar farklı şeyler" diye yalan söyler.
-   Tek dil seçildi: kenar renklenir + 1px halka. Yazı rengini değiştirmek BİLEREK bırakıldı;
-   hızlı erişim düğmesinin etiketini maviye çevirmek onu bağlantı gibi gösteriyordu. */
 .ac-chip:not(:disabled):hover,
 .qa-btn:hover,
 .summary-card.clickable:hover {
@@ -1115,16 +976,6 @@ function formatTimeSpan(value: string): string {
   margin: 0;
   font-weight: 600;
 }
-
-/* MİNİ TABLOLAR ARTIK GERÇEKTEN TABLO.
-   ÖLÇÜLDÜ: `.mini-table` en üstteki ortak ızgara kuralından 18px `gap` alıyordu ve her satırın
-   KENDİ kenarlığı + KENDİ zemini vardı. Üç diskin listesi böylece 18px aralıklı üç yüzen
-   karta dönüşüyordu; başlık satırının zemini (`--surface-2`) veri satırlarınınkiyle BİREBİR
-   aynı olduğu için başlık da onlardan ayrılmıyordu. Sütunlar hizalıydı ama göz bunu tek bir
-   tablo olarak okuyamıyor, üç ayrı kutu sayıyordu.
-   Panelin geri kalanının `.data-table` / `.data-row` kalıbına oturtuldu: dışta tek çerçeve,
-   satırlar arasında ince ayraç, başlıkta ayrı zemin. Kazanılan dikey yer de ölçülebilir:
-   üç satırlık bir disk tablosu 2 x 18px gap + 2 x 2px kenar = 40px kısalır. */
 .mini-table {
   gap: 0;
   overflow: hidden;
@@ -1218,18 +1069,6 @@ function formatTimeSpan(value: string): string {
 .audit-item small {
   margin: 0;
 }
-
-/* ARA GENİŞLİK (700–1180px) ÖLÇÜLDÜ VE TERS ÇALIŞIYORDU.
-   Eski kural 1180px'de `.meter-grid` ve `.summary-grid`i DOĞRUDAN tek sütuna indiriyordu:
-   üç adet 220px'lik halka alt alta (~700px) ve dört özet kartı tam genişlikte alt alta.
-   Aynı sayfa 699px'de — telefon kuralları devreye girince — halkaları 3 yan yana, özetleri
-   2x2 diziyordu. Yani 900px'lik bir dizüstü ekranı, 699px'lik bir TELEFONDAN daha uzun ve
-   daha kötü bir sayfa görüyordu; arada bir eşik değil, bir boşluk vardı.
-   Şimdi 1180px'de yalnızca gerçekten iki sütun isteyen yerleşimler tek sütuna iner (sayfanın
-   iki kolonu ve sunucu bilgisi ızgarası); halkalar 3'lü, özetler 2'li kalır.
-   900px ekranda hesap (MainLayout kenar menüyü 900-1200 arası şeride alır, içerik tam
-   genişlik): panel içi ~869px -> halka başına (869 - 32) / 3 = 279px (halka 220px, sığar),
-   özet kartı başına (869 - 16) / 2 = 426px. */
 @media (max-width: 1180px) {
   .overview-columns,
   .info-grid {
@@ -1280,51 +1119,9 @@ function formatTimeSpan(value: string): string {
     padding: var(--sp-12);
   }
 }
-
-/*
-  Telefon: olay akışının 3. adımı "kaynak tüketimini oku". Halkalar burada da 3'lü kalır
-  (artık her genişlikte öyle); değişen tek şey, 220px'lik halkanın telefona sığmaması —
-  küçültülüp yan yana dizilir, tek bakışta CPU/RAM/disk okunur.
-*/
 @media (max-width: 700px) {
-  .meter-grid {
-    gap: var(--sp-8);
-  }
-
-  .meter-card {
-    position: relative;
-    padding: 38px var(--sp-8) var(--sp-8);
-    border-radius: var(--radius-md);
-  }
-
-  .meter-ring {
-    width: min(112px, 100%);
-    padding: var(--sp-4);
-  }
-
-  .meter-core {
-    gap: var(--sp-2);
-  }
 
   /* Telefonda başlık dairenin dışına çıkar; yüzde için ayrılan alanı daraltmaz. */
-  .meter-core span {
-    position: absolute;
-    inset: var(--sp-4) var(--sp-4) auto;
-    max-width: none;
-    font-size: var(--fs-2xs);
-  }
-
-  /* Halka metriği özet kartından AYRILIYOR: 112px'lik halkanın içi ile 2 sütunluk bir kartın
-     içi aynı rakam boyunu kaldırmaz. Bu yüzden `--metric-lg` burada devre dışı. */
-  .meter-core strong {
-    font-size: clamp(0.9rem, 4.4vw, 1.15rem);
-  }
-
-  /* Halkanın içindeki "kullanılan / toplam" satırı bu boyutta okunmuyor; aynı bilgi
-     hemen aşağıdaki Diskler tablosunda ve özet kartlarında zaten var. */
-  .meter-core small {
-    display: none;
-  }
 
   /* Özet kutuları telefonda da 2x2 (1180px'den beri öyle); burada yalnız iç ölçüler daralır. */
   .summary-grid {
@@ -1346,7 +1143,7 @@ function formatTimeSpan(value: string): string {
   /* `.tile-label` buradan da çıkarıldı: ortak tanım zaten `--fs-2xs` (0.78rem) ve o boyut
      telefonda da okunur. 0.7rem ölçek dışıydı ve yalnızca bu ekranda geçerliydi. */
   .summary-card small {
-    font-size: 0.7rem;
+    font-size: var(--fs-xs);
   }
 
   .info-card {
@@ -1363,4 +1160,13 @@ function formatTimeSpan(value: string): string {
     min-width: 100%;
   }
 }
+.server-info-panel { grid-row: span 2; }
+.audit-preview { gap: 0; }
+.audit-item { background: transparent; border: 0; border-radius: 0; padding: 12px 0; display: grid; gap: 6px; }
+.audit-item + .audit-item { border-top: 1px solid var(--panel-border); }
+.audit-item small { color: var(--text-muted); }
+.activity-detail summary { cursor: pointer; color: var(--accent-text); font-size: var(--fs-xs); }
+.activity-detail p { max-height: 180px; overflow: auto; padding: 10px; margin-top: 8px; background: var(--surface-1); white-space: pre-wrap; font-family: var(--font-mono); font-size: var(--fs-xs); }
+@media (max-width: 1180px) { .server-info-panel { grid-row: auto; } }
+@media (min-width: 901px) and (max-width: 1180px) { .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 </style>

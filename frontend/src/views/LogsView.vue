@@ -28,17 +28,17 @@
         </button>
       </div>
       <div class="toolbar-group">
-        <select v-if="activeTab === 'site'" v-model="selectedSiteName" class="compact-control">
+        <select v-if="activeTab === 'site'" v-model="selectedSiteName" :aria-label="t('panel.php.selectSite')" class="compact-control">
           <option value="">{{ t("panel.php.selectSite") }}</option>
           <option v-for="site in sitesStore.sites" :key="site.name" :value="site.name">{{ site.name }}</option>
         </select>
-        <select v-if="isTailTab" v-model.number="lineCount" class="compact-control" @change="refreshLogs">
+        <select v-if="isTailTab" v-model.number="lineCount" :aria-label="t('panel.logs.lineCount')" class="compact-control" @change="refreshLogs">
           <option :value="50">50</option>
           <option :value="120">120</option>
           <option :value="250">250</option>
           <option :value="500">500</option>
         </select>
-        <input v-if="activeTab !== 'rotation'" v-model.trim="query" class="search-control" :placeholder="t('panel.logs.search')" />
+        <input v-if="activeTab !== 'rotation'" v-model.trim="query" :aria-label="t('panel.logs.search')" class="search-control" :placeholder="t('panel.logs.search')" />
       </div>
     </div>
 
