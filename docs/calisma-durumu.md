@@ -1,10 +1,14 @@
 # Çalışma durumu — canlı kayıt
 
-## 2026-09-26 — 0.8.63 arayüz ve site kurucu düzeltmeleri hazır
+## 2026-09-26 — SON DURUM: 0.8.63 canlı — arayüz ve site kurucu
 
 Canlı ekran turunda saptanan site kurucu adapanel.host iç servis yanlış sınıflandırması düzeltildi. Ortak kompakt kaynak kartları, tablet çekmece menüsü/klavye odağı, faaliyet ayrıntılarını katlama, ek giriş koruması açıklaması, form etiketleri, Türkçe posta metinleri ve HTTPS/IPv6 bağlantı seçimi yenilendi. Site kurucu taslak koruması ve eski proje/önizleme/yayın-planı yanıtlarını reddetme eklendi; görsel silme taslağı kaybettirmez ve ek sayfa referanslarını da temizler.
 
-121 frontend + 5.508 Infrastructure + 2 Core başarılı. Typecheck/build geçti. Manifest/indirici değişmedi; .61 bileşen raporu 22 Passed / 3 mevcut Skipped yeniden kullanılıyor. Açık/koyu tema ve 1534/1024/390/360 px arayüz incelendi. Son paket ve canlı doğrulama sürüyor; henüz canlı .63 denmez. Ayrıntı docs/denetim-2026-09-26-063.md; kanıt .tmp/audit-063. Yedekleme tercihleri ve şifreleme kapalı durumu korundu. Dış fiyat botu API henüz taşınmadı. Kaynak/history/tag push yapılmaz.
+121 frontend + 5.508 Infrastructure + 2 Core başarılı. Typecheck/build geçti. Manifest/indirici değişmedi; .61 bileşen raporu 22 Passed / 3 mevcut Skipped yeniden kullanılıyor. Açık/koyu tema ve 1534/1024/390/360 px arayüz incelendi. 168 publish dosyası ve installer denetimi geçti. Kaynak e5e1992. Ayrıntı docs/denetim-2026-09-26-063.md; kanıt .tmp/audit-063. Yedekleme tercihleri ve şifreleme kapalı durumu korundu. Dış fiyat botu API henüz taşınmadı. Kaynak/history/tag push yapılmaz.
+
+Canlı 0.8.63 kuruldu: succeeded / exit0 / isFinished=true / isFailed=false, hata boş; updatedAtUtc 2026-09-26T17:27:12.6204755Z. Installer SHA256 9CD822A9E61DB64254CEA1566ED8F5B36039CD25742505EAA3736F053B45AAB0; GitHub yeniden indirme ve canlı doğrulama aynı. Canlı EXE hash'i yerel publish ile eşit (22A59A28104BEC70B9A6E6078FB9053FD2B8CBD783B28D3682674B60BE68A453). AdaPanel/AdaMariaDB/adaredis/DNS/ftpsvc/W3SVC/WAS Running, Stalwart9164; üç HTTPS200. Sağlık ekranı 3 alan adı güncel / 0 eksik / 0 sunucu bulgusu. Site kurucu adapanel.host ve önizleme açıldı; geçici kaydedilmemiş metinle ayrılma uyarısı + Vazgeç doğrulandı, metin eski haline alındı, sunucuya taslak kaydedilmedi veya site yayımlanmadı. Ana sayfa ve izleme uyarısız yüklendi; gerçek kaynak kartları129px (önce184px), yatay taşma0.
+
+Otomasyon canlıda tekrar doğrulandı: günlük03:00, ikinci saatkapalı, saklama5gün, yerel+FTP. Son çalışma26.09.2026 03:08 tamamlandı;3site/4veritabanı/mail/panel yedeklendi,4eski yedek silindi. Yazılım taramasının12:48 tarihli kaydı üç ayrı bileşen güncellemesi bildiriyor: Adminer6.1.0→6.1.1, PHP8.3.33→8.3.35, Stalwart0.16.22→0.16.23. Bu arayüz/site-kurucu sürümünde bileşenler yükseltilmedi; bekleyen sürüm bilgisi uygulama arızası diye sunulmamalı.
 
 ## 2026-09-26 — Eski sürüm kalıntıları canlıda temizlendi
 
