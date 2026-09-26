@@ -215,7 +215,7 @@
                Not artık ızgaranın TAMAMINI kaplayan kendi bandında (`grid-column: 1 / -1`):
                metin ~3 kat geniş bir ölçüde okunur, hücreler tek satırlık ortak yükseklikte
                kalır. HİÇBİR ŞEY GİZLENMEDİ — aynı metin, daha geniş yerde. -->
-          <p v-if="item.note" class="component-note">{{ item.note }}</p>
+          <p v-if="item.note" class="component-note">{{ componentNote(item, t) }}</p>
         </article>
       </div>
 
@@ -276,6 +276,7 @@
 
 <script setup lang="ts">
 import { getFormattingLocale } from '../utils/locale';
+import { componentNote } from '../utils/componentNote';
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AppStoreView from "./AppStoreView.vue";
@@ -427,7 +428,7 @@ const visibleManifestRows = computed(() => {
     const categoryMatches = activeCategory.value === "all" ||
       (activeCategory.value === "installed" ? !!item.installed : componentCategory(item) === activeCategory.value);
     const searchMatches = !query ||
-      [item.id, item.displayName, item.version, item.type, item.installDir, item.serviceName, item.note]
+      [item.id, item.displayName, item.version, item.type, item.installDir, item.serviceName, componentNote(item, t)]
         .some((value) => (value ?? "").toLowerCase().includes(query));
 
     return categoryMatches && searchMatches;

@@ -386,7 +386,7 @@
       ],
       "serviceName": "docker",
       "silentArgs": "",
-      "note": "Docker Engine (resmi static binary). Windows 'Containers' özelliğini etkinleştirir, dockerd'yi servis olarak kaydeder ve başlatır (Windows container'ları). Containers özelliği yeni açıldıysa servisin başlaması için yeniden başlatma gerekebilir. Sürüm kurulum anında download.docker.com'dan otomatik çözülür.",
+      "note": "Windows container'ları için resmi Docker Engine statik paketi. Windows Containers özelliğini etkinleştirir, dockerd'yi servis olarak kaydeder ve başlatır. Containers özelliğinin açılması yeniden başlatma gerektirebilir. Panel paketinde belirlenmiş sürüm ve doğrulama özeti kullanılır.",
       "default": false
     },
     {

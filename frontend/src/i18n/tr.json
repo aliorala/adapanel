@@ -5310,5 +5310,18 @@
   "panel.attention.unmeasuredCount": "Ölçülemedi",
   "panel.attention.incompleteSummary": "Bazı kontroller tamamlanamadı. — ile gösterilen sayılar bilinmiyor. Ayrıntılar için Tümünü gör düğmesini kullanın.",
   "panel.automation.result.incompleteChecks": "Bileşen sürüm denetimleri tamamlanamadı.",
-  "panel.automation.result.failedChecks": "Sürüm denetimi başarısız: {components}"
+  "panel.automation.result.failedChecks": "Sürüm denetimi başarısız: {components}",
+  "panel.software.componentNote.vc-redist-x64": "PHP ve veritabanı motorlarının temiz Windows kurulumlarında gereken Microsoft çalışma zamanı.",
+  "panel.software.componentNote.mysql-8": "MariaDB ile aynı sunucuda 3307 portunda çalışır; varsayılan yığında kapalı gelir.",
+  "panel.software.componentNote.pgadmin4": "PostgreSQL için resmi masaüstü ve web yönetim uygulaması.",
+  "panel.software.componentNote.url-rewrite": "Yönlendirme, özel rewrite kuralları ve ters proxy için IIS modülü.",
+  "panel.software.componentNote.iis-arr": "IIS ters proxy ve uygulama yönlendirme altyapısı.",
+  "panel.software.componentNote.nginx": "IIS önünde isteğe bağlı reverse proxy, statik önbellek ve trafik giriş katmanı. Windows sürümü beta olduğu için varsayılan olarak kurulmaz.",
+  "panel.software.componentNote.http-platform-handler": "Node.js ve Python uygulamalarını IIS arkasında çalıştırır.",
+  "panel.software.componentNote.stalwart-cli": "Stalwart sunucusunu panelden yönetmek için komut satırı aracı. Stalwart Mail Server varsayılan olduğundan bu da varsayılan kurulur (bağımlılık).",
+  "panel.software.componentNote.vandelay": "Stalwart'ın resmi hesap içe/dışa aktarıcısı. SİTE BAŞINA posta yedeği bununla alınır: hesap başına tek bir SQLite arşivi, sunucu ÇALIŞIRKEN; geri yükleme YALNIZ hedef alan adına yazar. Kurulu değilse site yedeği posta iletilerini İÇERMEZ ve bunu açıkça söyler.",
+  "panel.software.componentNote.stalwart-mail": "Modern, tek binary e-posta sunucusu (SMTP/IMAP/POP3/JMAP) — yerleşik DKIM/SPF/DMARC. AdaPanel'in VARSAYILAN mail sunucusudur; önerilen yığında otomatik kurulur. MailEnable yedektir; biri kurulurken diğeri durdurulur (çakışma yok).",
+  "panel.software.componentNote.mailenable-standard": "Olgun Windows e-posta sunucusu (SMTP/POP3/IMAP + web yönetim). YEDEK mail sunucusudur (varsayılan Stalwart); yalnız elle kurulur. Stalwart kuruluyken otomatik durdurulur (çakışma engellenir). Standard sürümde DKIM imzalama/mailing list yoktur.",
+  "panel.software.componentNote.clamav": "Açık kaynak dosya antivirüsü (Cisco Talos imzaları). Daemon çalıştırmaz; taramalar Güvenlik > Antivirüs ekranından isteğe bağlı yapılır. Kurulumdan sonra virüs tanımlarını indirmeyi unutmayın (~250 MB, freshclam).",
+  "panel.software.componentNote.docker-engine": "Windows container'ları için resmi Docker Engine statik paketi. Windows Containers özelliğini etkinleştirir, dockerd'yi servis olarak kaydeder ve başlatır. Containers özelliğinin açılması yeniden başlatma gerektirebilir. Panel paketinde belirlenmiş sürüm ve doğrulama özeti kullanılır."
 }

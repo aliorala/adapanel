@@ -1,5 +1,5 @@
 {
-  "name": "0.8.67 — Sürüm denetimi hata bildirimleri",
-  "tag_name": "0.8.67",
-  "body": "Güncelleme denetiminde ağ ve kaynak hataları açıkça bildirilir; son bilinen sürüm bilgileri korunur. Yazılım mağazası ve otomasyon sonuçlarının Türkçe ve İngilizce açıklamaları iyileştirildi."
+  "name": "0.8.68 — Yazılım mağazası açıklamaları",
+  "tag_name": "0.8.68",
+  "body": "Yazılım mağazasındaki bileşen açıklamaları Türkçe ve İngilizce sunulur. Docker paket açıklaması mevcut kurulum davranışına göre düzeltildi. Başarısız sürüm denetimleri ve son bilinen güncelleme bilgileri açıkça gösterilir.\n\nComponent descriptions in the software store are now available in Turkish and English. Docker notes match the current installation behavior. Failed version checks remain visible while previously known updates are preserved."
 }

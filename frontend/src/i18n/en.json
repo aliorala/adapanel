@@ -5310,5 +5310,18 @@
   "panel.attention.unmeasuredCount": "Not measured",
   "panel.attention.incompleteSummary": "Some checks could not be completed. Counts shown as — are unknown. Select View all for details.",
   "panel.automation.result.incompleteChecks": "Component version checks could not be completed.",
-  "panel.automation.result.failedChecks": "Version checks failed: {components}"
+  "panel.automation.result.failedChecks": "Version checks failed: {components}",
+  "panel.software.componentNote.vc-redist-x64": "Microsoft runtime required by PHP and database engines on a clean Windows installation.",
+  "panel.software.componentNote.mysql-8": "Runs on port 3307 alongside MariaDB on the same server. Not included in the default stack.",
+  "panel.software.componentNote.pgadmin4": "Official desktop and web administration application for PostgreSQL.",
+  "panel.software.componentNote.url-rewrite": "IIS module for redirects, custom rewrite rules and reverse proxy routing.",
+  "panel.software.componentNote.iis-arr": "IIS reverse proxy and application routing infrastructure.",
+  "panel.software.componentNote.nginx": "Optional reverse proxy, static cache and traffic entry point in front of IIS. Not installed by default because the Windows version is a beta release.",
+  "panel.software.componentNote.http-platform-handler": "Runs Node.js and Python applications behind IIS.",
+  "panel.software.componentNote.stalwart-cli": "Command-line tool for managing Stalwart from the panel. Installed by default as a dependency of Stalwart Mail Server.",
+  "panel.software.componentNote.vandelay": "Official Stalwart account import/export tool. Creates per-site mail backups as one SQLite archive per account while the server is running. Restore writes only to the target domain. If the tool is not installed, site backups do not include mail messages and explicitly report this.",
+  "panel.software.componentNote.stalwart-mail": "Mail server in a single executable with SMTP, IMAP, POP3, JMAP and built-in DKIM/SPF/DMARC. AdaPanel’s default mail server, installed with the recommended stack. MailEnable is an alternative; installing one stops the other to avoid conflicts.",
+  "panel.software.componentNote.mailenable-standard": "Windows mail server with SMTP, POP3, IMAP and web administration. An alternative to the default Stalwart server, installed only on request. Stopped automatically when Stalwart is installed to avoid conflicts. The Standard edition does not include DKIM signing or mailing lists.",
+  "panel.software.componentNote.clamav": "Open-source file antivirus using Cisco Talos signatures. No daemon runs; scans are started on demand under Security > Antivirus. Download virus definitions after installation (approximately 250 MB, using freshclam).",
+  "panel.software.componentNote.docker-engine": "Official Docker Engine static package for Windows containers. Enables the Windows Containers feature and registers and starts dockerd as a service. Enabling Containers may require a restart. Uses the version and checksum pinned in the panel package."
 }
