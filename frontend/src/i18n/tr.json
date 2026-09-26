@@ -1629,6 +1629,9 @@
   "panel.software.updatesFound": "{count} bileşen için yeni sürüm mevcut.",
   "panel.software.updatesWithFailures": "{failed} bileşenin kurulumu başarısız; ilgili satırdan yeniden deneyin. Diğer bileşenler için {count} güncelleme mevcut.",
   "panel.software.installedVersionUnknown": "Kurulu sürüm bilinmiyor",
+  "panel.software.versionCheckFailed": "denetim başarısız",
+  "panel.software.versionCheckFailedHint": "Güncellik doğrulanamadı. Bağlantıyı ve kurulu sürüm bilgisini kontrol edin. Varsa son bilinen güncelleme gösteriliyor; denetimi yeniden deneyin.",
+  "panel.software.updatesIncomplete": "{count} bileşenin güncelliği doğrulanamadı. Ayrıntılar ilgili satırlarda gösteriliyor.",
   "panel.software.updatesNone": "Tüm bileşenler güncel.",
   "software.updates_checked": "Güncellemeler denetlendi.",
   "panel.software.installing": "Kuruluyor...",
@@ -5305,5 +5308,7 @@
   "panel.automation.result.upToDate": "Denetlenebilen tüm bileşenler güncel.",
   "panel.automation.result.unchecked": "Sürümü otomatik denetlenemeyen bileşenler ({count}): {components}",
   "panel.attention.unmeasuredCount": "Ölçülemedi",
-  "panel.attention.incompleteSummary": "Bazı kontroller tamamlanamadı. — ile gösterilen sayılar bilinmiyor. Ayrıntılar için Tümünü gör düğmesini kullanın."
+  "panel.attention.incompleteSummary": "Bazı kontroller tamamlanamadı. — ile gösterilen sayılar bilinmiyor. Ayrıntılar için Tümünü gör düğmesini kullanın.",
+  "panel.automation.result.incompleteChecks": "Bileşen sürüm denetimleri tamamlanamadı.",
+  "panel.automation.result.failedChecks": "Sürüm denetimi başarısız: {components}"
 }

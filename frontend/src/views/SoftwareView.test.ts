@@ -22,7 +22,7 @@ async function mount(status: string, version = "", updateAvailable = false) {
     manifest: [{ id: "test", displayName: "Test", version: "2.0.0", type: "zip", installDir: "test",
       downloadUrl: "", sha256: "", postInstall: [], dependencies: [], serviceName: "", silentArgs: "", note: "", default: false }],
     defaults: [], installed: [{ id: "1", componentId: "test", displayName: "Test", version, status, updateAvailable,
-      versionCheckSupported: true, type: "Zip", installDir: "test", serviceName: "", lastError: "", generatedPassword: "",
+      versionCheckSupported: true, versionCheckFailed: false, type: "Zip", installDir: "test", serviceName: "", lastError: "", generatedPassword: "",
       isSystemDetected: false, detectionSource: "", availableVersion: "", installedAtUtc: "2026-01-01T00:00:00Z" }]
   };
   store.catalog = catalog; store.loaded = true;
@@ -40,6 +40,29 @@ async function mount(status: string, version = "", updateAvailable = false) {
   return { state, text: () => renderToString(createSSRApp({ ...SoftwareView, setup: () => state } as Component)) };
 }
 afterEach(() => { app?.unmount(); app = undefined; vi.resetAllMocks(); });
+
+it.each(["failed", "unsupported"])("does not claim everything is current when a version check is %s", async (kind) => {
+  const view = await mount("Installed", "1.0.0", true);
+  const item = useSoftwareStore().catalog!.installed[0]!;
+  item.versionCheckFailed = kind === "failed";
+  item.versionCheckSupported = kind !== "unsupported";
+  await view.state.checkForUpdates();
+  expect(view.state.notice).toContain('updatesIncomplete{"count":1}');
+  expect(view.state.notice).toContain('updatesFound{"count":1}');
+  expect(view.state.notice).not.toContain("updatesNone");
+  expect(view.state.noticeError).toBe(true);
+  const html = await view.text();
+  expect(html).toContain(kind === "failed" ? "versionCheckFailed" : "versionCheckUnsupported");
+  expect(html).toContain("newVersion");
+});
+
+it("does not count externally managed software as a failed panel check", async () => {
+  const { state } = await mount("Installed", "1.0.0");
+  const item = useSoftwareStore().catalog!.installed[0]!;
+  item.versionCheckSupported = false; item.isSystemDetected = true;
+  await state.checkForUpdates();
+  expect(state.noticeError).toBe(false);
+});
 
 it("shows unknown installed version and a failure summary instead of the target version or all-current claim", async () => {
   const view = await mount("Failed");

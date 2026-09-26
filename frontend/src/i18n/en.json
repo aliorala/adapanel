@@ -1629,6 +1629,9 @@
   "panel.software.updatesFound": "Components with updates: {count}.",
   "panel.software.updatesWithFailures": "Components with failed installations: {failed}. Retry from the relevant row. Other available updates: {count}.",
   "panel.software.installedVersionUnknown": "Installed version unknown",
+  "panel.software.versionCheckFailed": "check failed",
+  "panel.software.versionCheckFailedHint": "Freshness could not be verified. Check the connection and installed version information. Any previously known update is still shown; try checking again.",
+  "panel.software.updatesIncomplete": "The update status of {count} components could not be verified. See the relevant rows for details.",
   "panel.software.updatesNone": "All components are up to date.",
   "software.updates_checked": "Updates checked.",
   "panel.software.installing": "Installing...",
@@ -5305,5 +5308,7 @@
   "panel.automation.result.upToDate": "All checkable components are up to date.",
   "panel.automation.result.unchecked": "Versions that cannot be checked automatically ({count}): {components}",
   "panel.attention.unmeasuredCount": "Not measured",
-  "panel.attention.incompleteSummary": "Some checks could not be completed. Counts shown as — are unknown. Select View all for details."
+  "panel.attention.incompleteSummary": "Some checks could not be completed. Counts shown as — are unknown. Select View all for details.",
+  "panel.automation.result.incompleteChecks": "Component version checks could not be completed.",
+  "panel.automation.result.failedChecks": "Version checks failed: {components}"
 }

@@ -38,5 +38,7 @@ public sealed class InstalledComponentDto
     /// </summary>
     public bool VersionCheckSupported { get; init; }
 
+    public bool VersionCheckFailed { get; init; }
+
     public DateTime InstalledAtUtc { get; init; }
 }

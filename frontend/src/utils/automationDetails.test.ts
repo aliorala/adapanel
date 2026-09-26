@@ -18,6 +18,12 @@ it('localizes update summaries in Turkish without losing component versions', ()
     .toBe('Yüklenen güncellemeler: 0; bekleyen: 1: PHP 8.3.33 -> 8.3.35 | Sürümü otomatik denetlenemeyen bileşenler (1): Docker');
 });
 
+it('localizes incomplete version checks and preserves the affected software names', () => {
+  const details = 'Component version checks could not be completed. | Version cannot be checked automatically (1): Docker\nVersion checks failed: PHP, Adminer';
+  expect(automationDetails(details, translate(tr))).toBe('Bileşen sürüm denetimleri tamamlanamadı. | Sürümü otomatik denetlenemeyen bileşenler (1): Docker\nSürüm denetimi başarısız: PHP, Adminer');
+  expect(automationDetails(details, translate(en))).toContain('Version checks failed: PHP, Adminer');
+});
+
 it('retains unknown diagnostics and partial deletion failures without claiming success', () => {
   const failure = '3 site, 4 veritabanı yedeklendi, 0 eski yedek silindi, 1 yedegin uzak kopyasi SILINEMEDI.\nFTP: 550 Permission denied';
   expect(automationDetails(failure, translate(en))).toBe(failure);

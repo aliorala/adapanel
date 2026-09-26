@@ -44,13 +44,10 @@ public sealed class UpdatePolicyTests
     [Theory]
     [InlineData("roundcube")]
     [InlineData("clamav")]
-    [InlineData("phpmyadmin")]
     [InlineData("win-acme")]
     [InlineData("adminer")]
     [InlineData("memcached")]
     [InlineData("nodejs-lts")]
-    [InlineData("composer")]
-    [InlineData("docker-engine")]
     [InlineData("stalwart-mail")]
     [InlineData("stalwart-cli")]
     public void SupportsVersionCheck_IsTrue_ForComponentsWithALiveResolver(string componentId)
@@ -58,11 +55,14 @@ public sealed class UpdatePolicyTests
         Assert.True(ComponentBootstrapper.SupportsVersionCheck(componentId));
     }
 
-    // Geriye kalan tek istisna: MailEnable'ın sürüm akışı yok (indirme adresi elle güncellenir).
+    // A checksum or fixed download URL alone does not establish the latest version.
     // Bilinmeyen/gelecekte eklenecek bir bileşen de varsayılan olarak "kontrol edilemiyor" sayılır,
     // yani sessizce "güncel" GÖSTERİLMEZ.
     [Theory]
     [InlineData("mailenable-standard")]
+    [InlineData("composer")]
+    [InlineData("phpmyadmin")]
+    [InlineData("docker-engine")]
     [InlineData("gelecekteki-bilesen")]
     public void SupportsVersionCheck_IsFalse_ForComponentsWithoutAVersionFeed(string componentId)
     {

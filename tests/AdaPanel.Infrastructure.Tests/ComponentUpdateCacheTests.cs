@@ -58,6 +58,8 @@ public sealed class ComponentUpdateCacheTests : IDisposable
         db.InstalledComponents.Add(new InstalledComponent { ComponentId = "php-8.3", Version = "8.3.33", Status = ComponentInstallStatus.Installed });
         await db.SaveChangesAsync();
         await Assert.ThrowsAsync<InvalidDataException>(() => Create(db).GetPendingUpdateCountAsync());
+        ComponentUpdateCache.Write(CachePath, new() { ["php-8.3"] = new() { AvailableVersion = "8.3.35", VersionCheckFailed = true } });
+        await Assert.ThrowsAsync<InvalidDataException>(() => Create(db).GetPendingUpdateCountAsync());
     }
 
     [Fact]

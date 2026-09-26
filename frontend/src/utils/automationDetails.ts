@@ -10,10 +10,12 @@ export function automationDetails(details: string, t: Translate): string {
     if (match) return t(match[1] === 'mail' ? 'panel.automation.result.mail' : 'panel.automation.result.panel');
     match = /^(\d+) sertifika yenilendi\.(?: Mail sertifikası \(([^\r\n]+)\) güncellendi\.)?$/.exec(line);
     if (match) return t('panel.automation.result.ssl', { count: match[1]! }) + (match[2] ? ' ' + t('panel.automation.result.mailSsl', { host: match[2] }) : '');
+    match = /^Version checks failed: (.+)$/.exec(line);
+    if (match) return t('panel.automation.result.failedChecks', { components: match[1]! });
     const [headline, unchecked, ...rest] = line.split(' | ');
     if (rest.length) return line;
     match = /^(\d+) update\(s\) installed, (\d+) pending: (.*)$/.exec(headline!);
-    let translated = match ? t('panel.automation.result.updates', { installed: match[1]!, pending: match[2]!, components: match[3]! }) : headline === 'All checkable components are up to date.' ? t('panel.automation.result.upToDate') : null;
+    let translated = match ? t('panel.automation.result.updates', { installed: match[1]!, pending: match[2]!, components: match[3]! }) : headline === 'All checkable components are up to date.' ? t('panel.automation.result.upToDate') : headline === 'Component version checks could not be completed.' ? t('panel.automation.result.incompleteChecks') : null;
     if (translated === null) return line;
     if (unchecked) {
       const pending = /^Version cannot be checked automatically \((\d+)\): (.*)$/.exec(unchecked);

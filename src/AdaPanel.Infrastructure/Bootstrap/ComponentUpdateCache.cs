@@ -61,5 +61,7 @@ internal sealed class ComponentUpdateInfo
     // Kept for compatibility with existing cache files. Readers compare actual installed versions.
     public bool UpdateAvailable { get; set; }
     public bool VersionCheckSupported { get; set; }
+
+    public bool VersionCheckFailed { get; set; }
     public DateTime CheckedAtUtc { get; set; }
 }

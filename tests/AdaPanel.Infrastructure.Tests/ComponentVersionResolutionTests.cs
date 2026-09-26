@@ -86,7 +86,7 @@ public sealed class ComponentVersionResolutionTests
         Assert.Equal(expected, ComponentBootstrapper.IsTrustedNoChecksumHostForTests(url));
     }
 
-    // Artık her kurulabilir bileşenin sürümü ya canlı sorgulanıyor ya da adres evergreen.
+    // Only resolvers that actually retrieve a version can establish freshness.
     [Theory]
     [InlineData("php-8.3")]
     [InlineData("mariadb-11")]
@@ -96,10 +96,6 @@ public sealed class ComponentVersionResolutionTests
     [InlineData("nginx")]
     [InlineData("python-3")]
     [InlineData("redis")]
-    [InlineData("vc-redist-x64")]
-    [InlineData("url-rewrite")]
-    [InlineData("iis-arr")]
-    [InlineData("http-platform-handler")]
     public void SupportsVersionCheck_NowCoversThePreviouslyPinnedComponents(string componentId)
     {
         Assert.True(ComponentBootstrapper.SupportsVersionCheck(componentId));

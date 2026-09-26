@@ -896,6 +896,13 @@ public sealed class AutomationService(
                 .Where(component => !component.VersionCheckSupported && !component.IsSystemDetected)
                 .Select(component => $"{component.DisplayName} {component.Version}"));
 
+            var failedChecks = catalog.Installed.Where(component => component.VersionCheckFailed && !component.IsSystemDetected).ToArray();
+            if (failedChecks.Length > 0)
+            {
+                hasError = true;
+                summary.AppendLine($"Version checks failed: {string.Join(", ", failedChecks.Select(component => component.DisplayName))}");
+            }
+
             foreach (var component in outdated)
             {
                 pending.Add($"{component.DisplayName} {component.Version} -> {component.AvailableVersion}");
@@ -903,7 +910,7 @@ public sealed class AutomationService(
 
             if (autoApply)
             {
-                foreach (var component in outdated.Where(item => IsAutoUpdatable(item.ComponentId)))
+                foreach (var component in outdated.Where(item => !item.VersionCheckFailed && IsAutoUpdatable(item.ComponentId)))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     try
@@ -940,7 +947,7 @@ public sealed class AutomationService(
         // DÜRÜSTLÜK: sürümü canlı sorgulanamayan bileşenler için "güncel" DEME. Onların sürümü
         // manifeste sabittir; yeni sürüm çıksa da panel göremez ve sessizce eski kalır.
         var headline = pending.Count == 0 && applied == 0
-            ? "All checkable components are up to date."
+            ? hasError ? "Component version checks could not be completed." : "All checkable components are up to date."
             : $"{applied} update(s) installed, {pending.Count} pending: {string.Join(", ", pending.Take(12))}";
         if (unresolvable.Count > 0)
         {

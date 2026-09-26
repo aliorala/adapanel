@@ -1,5 +1,5 @@
 {
-  "name": "0.8.66 — Güncelleme durumunun güvenilirliği",
-  "tag_name": "0.8.66",
-  "body": "- Güncelleme sayacı ve yazılım kartları mevcut kurulu sürüme göre hesaplanır.\n- Güncelleme kaydı eşzamanlı okunurken veya yazılırken yarım içerik oluşması önlendi.\n- Eksik/bozuk ölçüm ana sayfada sıfır yerine belirsiz durum ve uyarı olarak gösterilir.\n- Update counts now use installed versions; unavailable checks are shown explicitly and cache writes are atomic."
+  "name": "0.8.67 — Sürüm denetimi hata bildirimleri",
+  "tag_name": "0.8.67",
+  "body": "Güncelleme denetiminde ağ ve kaynak hataları açıkça bildirilir; son bilinen sürüm bilgileri korunur. Yazılım mağazası ve otomasyon sonuçlarının Türkçe ve İngilizce açıklamaları iyileştirildi."
 }

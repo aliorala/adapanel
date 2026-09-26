@@ -42,6 +42,7 @@ export type InstalledComponent = {
   updateAvailable: boolean;
   /** Üst sürüm canlı sorgulanabiliyor mu; false ise "güncel" değil "bilinmiyor". */
   versionCheckSupported: boolean;
+  versionCheckFailed: boolean;
   installedAtUtc: string;
 };
 
@@ -80,6 +81,9 @@ export const useSoftwareStore = defineStore("software", {
     liveProgress: null as OperationProgress | null
   }),
   getters: {
+    incompleteCheckCount: (state) =>
+      (state.catalog?.installed ?? []).filter((item) => !item.isSystemDetected && item.status.toLowerCase() === "installed"
+        && (!item.versionCheckSupported || item.versionCheckFailed)).length,
     updatableCount: (state) =>
       (state.catalog?.installed ?? []).filter((item) => item.updateAvailable).length,
     failedCount: (state) =>

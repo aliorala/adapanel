@@ -153,10 +153,14 @@
             </span>
             <!-- Sürümü canlı sorgulanamayan bileşen: "güncel" DEĞİL, "bilinmiyor" demektir. -->
             <span
-              v-else-if="item.installed && !item.installed.versionCheckSupported && !item.installed.isSystemDetected"
+              v-if="item.installed && !item.installed.versionCheckSupported && !item.installed.isSystemDetected"
               class="unknown-badge"
               :title="t('panel.software.versionCheckUnsupportedHint')">
               {{ t("panel.software.versionCheckUnsupported") }}
+            </span>
+            <span v-else-if="item.installed?.versionCheckFailed" class="unknown-badge"
+              :title="t('panel.software.versionCheckFailedHint')">
+              {{ t("panel.software.versionCheckFailed") }}
             </span>
           </span>
           <!-- TÜR SÜTUNU İÇ DEĞER GÖSTERİYORDU: "phpFile", "phar", "targz" — bunlar kullanıcının
@@ -461,13 +465,14 @@ async function checkForUpdates() {
     await softwareStore.checkForUpdates();
     const count = softwareStore.updatableCount;
     const failed = softwareStore.failedCount;
-    showNotice(
-      failed > 0
+    const incomplete = softwareStore.incompleteCheckCount;
+    const result = failed > 0
         ? t("panel.software.updatesWithFailures", { failed, count })
         : count > 0
         ? t("panel.software.updatesFound", { count })
-        : t("panel.software.updatesNone"),
-      failed > 0);
+        : incomplete > 0 ? "" : t("panel.software.updatesNone");
+    showNotice([result, incomplete > 0 ? t("panel.software.updatesIncomplete", { count: incomplete }) : ""].filter(Boolean).join(" "),
+      failed > 0 || incomplete > 0);
   } catch (error) {
     showApiError(error);
   }

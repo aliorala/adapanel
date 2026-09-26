@@ -19,17 +19,19 @@ public sealed class WindowsNetworkHealthTests
         var port = ((IPEndPoint)tcp.LocalEndpoint).Port;
         using var udp = new UdpClient(address.AddressFamily);
         if (ipv6) udp.Client.DualMode = false;
-        udp.Client.Bind(new IPEndPoint(address, port));
+        // A port assigned by Windows for TCP may be reserved/unavailable for UDP.
+        udp.Client.Bind(new IPEndPoint(address, 0));
+        var udpPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
         var measured = WindowsNetworkHealth.ReadListeners((uint)Environment.ProcessId, port);
         Assert.Contains(address.ToString(), measured.Tcp);
-        Assert.Contains(address.ToString(), measured.Udp);
+        Assert.Contains(address.ToString(), WindowsNetworkHealth.ReadListeners((uint)Environment.ProcessId, udpPort).Udp);
         var other = WindowsNetworkHealth.ReadListeners(uint.MaxValue, port);
         Assert.Empty(other.Tcp);
-        Assert.Empty(other.Udp);
+        Assert.Empty(WindowsNetworkHealth.ReadListeners(uint.MaxValue, udpPort).Udp);
         udp.Dispose();
         measured = WindowsNetworkHealth.ReadListeners((uint)Environment.ProcessId, port);
         Assert.Contains(address.ToString(), measured.Tcp);
-        Assert.DoesNotContain(address.ToString(), measured.Udp);
+        Assert.DoesNotContain(address.ToString(), WindowsNetworkHealth.ReadListeners((uint)Environment.ProcessId, udpPort).Udp);
     }
 
     [Fact]

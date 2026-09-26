@@ -119,13 +119,10 @@ public sealed class ComponentBootstrapper(
     internal static bool SupportsVersionCheck(string componentId)
     {
         return componentId.Trim().ToLowerInvariant() is
-            "adminer" or "clamav" or "composer" or "docker-engine" or "memcached" or
-            "nodejs-lts" or "phpmyadmin" or "roundcube" or "stalwart-cli" or "stalwart-mail" or "win-acme" or
+            "adminer" or "clamav" or "memcached" or
+            "nodejs-lts" or "roundcube" or "stalwart-cli" or "stalwart-mail" or "win-acme" or
             "php-8.3" or "mariadb-11" or "mysql-8" or "postgresql-16" or "pgadmin4" or
-            "nginx" or "python-3" or "redis" or
-            // Sabit "evergreen" adresler: URL her zaman en gunceli verir (aka.ms/vs/17/release/...,
-            // Microsoft IIS eklenti MSI'lari). Surum sorgusu gerekmez; "kontrol edilemiyor" DEGIL.
-            "vc-redist-x64" or "url-rewrite" or "iis-arr" or "http-platform-handler";
+            "nginx" or "python-3" or "redis";
     }
 
     public async Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
@@ -137,7 +134,8 @@ public sealed class ComponentBootstrapper(
             .Where(item => item.Status == ComponentInstallStatus.Installed)
             .ToListAsync(cancellationToken);
         var managed = installed.Where(item => !ReadBoolean(ReadProtectedConfiguration(item.ProtectedConfigurationJson), SystemDetectedKey)).ToArray();
-        if (managed.Any(item => SupportsVersionCheck(item.ComponentId) && !cache.ContainsKey(item.ComponentId)))
+        if (managed.Any(item => SupportsVersionCheck(item.ComponentId) && (ParseVersionParts(item.Version) is null
+            || !cache.TryGetValue(item.ComponentId, out var result) || result.VersionCheckFailed)))
             throw new InvalidDataException("Component update results are not available for all installed components.");
 
         // A persisted flag may predate an installation; compare against the current DB version.
@@ -160,6 +158,7 @@ public sealed class ComponentBootstrapper(
             client.DefaultRequestHeaders.UserAgent.ParseAdd("AdaPanel-UpdateCheck/1.0");
         }
 
+        var previousCache = ReadUpdateCache();
         var cache = new Dictionary<string, ComponentUpdateInfo>(StringComparer.OrdinalIgnoreCase);
         foreach (var installed in installedEntities)
         {
@@ -179,30 +178,9 @@ public sealed class ComponentBootstrapper(
                 continue;
             }
 
-            var availableVersion = manifestItem.Version;
-            try
-            {
-                var resolved = await ResolveDynamicComponentAsync(manifestItem, client, cancellationToken);
-                if (!string.IsNullOrWhiteSpace(resolved.Version))
-                {
-                    availableVersion = resolved.Version;
-                }
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                logger.LogInformation(
-                    exception,
-                    "Update check could not resolve the latest version for {ComponentId}; using manifest version.",
-                    installed.ComponentId);
-            }
-
-            cache[installed.ComponentId] = new ComponentUpdateInfo
-            {
-                AvailableVersion = availableVersion,
-                UpdateAvailable = IsNewerVersion(availableVersion, installed.Version),
-                VersionCheckSupported = SupportsVersionCheck(installed.ComponentId),
-                CheckedAtUtc = DateTime.UtcNow
-            };
+            previousCache.TryGetValue(installed.ComponentId, out var previous);
+            cache[installed.ComponentId] = await CheckComponentVersionAsync(
+                manifestItem, installed.Version, previous, client, cancellationToken);
         }
 
         WriteUpdateCache(cache);
@@ -212,6 +190,45 @@ public sealed class ComponentBootstrapper(
             Manifest = manifest,
             Defaults = manifest.Where(component => component.Default).ToArray(),
             Installed = installedEntities.Select(component => MapInstalledComponent(component, cache)).ToArray()
+        };
+    }
+
+    internal async Task<ComponentUpdateInfo> CheckComponentVersionAsync(
+        ComponentManifestItemDto component, string installedVersion, ComponentUpdateInfo? previous,
+        HttpClient client, CancellationToken cancellationToken)
+    {
+        var supported = SupportsVersionCheck(component.Id);
+        var available = previous is not null && IsNewerVersion(previous.AvailableVersion, component.Version)
+            ? previous.AvailableVersion : component.Version;
+        var failed = false;
+        if (supported)
+        {
+            // HttpClient.Timeout does not cover bodies read with ResponseHeadersRead.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            try
+            {
+                var resolved = await ResolveDynamicComponentAsync(component, client, timeout.Token);
+                if (resolved is null || ParseVersionParts(resolved.Version) is null)
+                    throw new InvalidDataException("The upstream version could not be verified.");
+                available = resolved.Version;
+                if (ParseVersionParts(installedVersion) is null)
+                    throw new InvalidDataException("The installed version is not known; freshness cannot be compared.");
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                failed = true;
+                logger.LogWarning(exception, "Version check failed for {ComponentId}; keeping the last known version.", component.Id);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return new ComponentUpdateInfo
+        {
+            AvailableVersion = available,
+            UpdateAvailable = IsNewerVersion(available, installedVersion),
+            VersionCheckSupported = supported,
+            VersionCheckFailed = failed,
+            CheckedAtUtc = DateTime.UtcNow
         };
     }
 
@@ -719,7 +736,7 @@ public sealed class ComponentBootstrapper(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         }
 
-        component = await ResolveDynamicComponentAsync(component, client, cancellationToken);
+        component = await ResolveInstallComponentAsync(component, client, cancellationToken);
         EnsureIntegrityMetadata(component);
         var fileName = ResolveDownloadFileName(component);
         var downloadPath = Path.Combine(downloadsRoot, fileName);
@@ -924,7 +941,10 @@ public sealed class ComponentBootstrapper(
             DetectionSource = ReadConfigurationValue(configuration, DetectionSourceKey),
             AvailableVersion = updateInfo?.AvailableVersion ?? string.Empty,
             UpdateAvailable = !ReadBoolean(configuration, SystemDetectedKey) && component.Status == ComponentInstallStatus.Installed && updateInfo is not null && IsNewerVersion(updateInfo.AvailableVersion, component.Version),
-            VersionCheckSupported = updateInfo?.VersionCheckSupported ?? SupportsVersionCheck(component.ComponentId),
+            VersionCheckSupported = SupportsVersionCheck(component.ComponentId),
+            VersionCheckFailed = (updateInfo?.VersionCheckFailed ?? false) ||
+                (SupportsVersionCheck(component.ComponentId) && component.Status == ComponentInstallStatus.Installed
+                    && !ReadBoolean(configuration, SystemDetectedKey) && ParseVersionParts(component.Version) is null),
             InstalledAtUtc = component.InstalledAtUtc
         };
     }
@@ -949,16 +969,7 @@ public sealed class ComponentBootstrapper(
     }
 
     private void WriteUpdateCache(Dictionary<string, ComponentUpdateInfo> cache)
-    {
-        try
-        {
-            ComponentUpdateCache.Write(UpdateCacheFilePath(), cache);
-        }
-        catch (Exception exception)
-        {
-            logger.LogWarning(exception, "Component update cache could not be written.");
-        }
-    }
+        => ComponentUpdateCache.Write(UpdateCacheFilePath(), cache);
 
     /// <summary>
     /// İki sürümü sayısal noktalı parçalara ayırıp karşılaştırır. Sürümlerden biri
@@ -1395,7 +1406,21 @@ public sealed class ComponentBootstrapper(
         return Path.Combine(AppContext.BaseDirectory, "components.json");
     }
 
-    private async Task<ComponentManifestItemDto> ResolveDynamicComponentAsync(
+    private async Task<ComponentManifestItemDto> ResolveInstallComponentAsync(
+        ComponentManifestItemDto component, HttpClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ResolveDynamicComponentAsync(component, client, cancellationToken) ?? component;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Package resolution failed for {ComponentId}; using the pinned package.", component.Id);
+            return component;
+        }
+    }
+
+    private async Task<ComponentManifestItemDto?> ResolveDynamicComponentAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -1538,7 +1563,7 @@ public sealed class ComponentBootstrapper(
         if (phpBranch.Count(character => character == '.') != 1 ||
             phpBranch.Any(character => !char.IsDigit(character) && character != '.'))
         {
-            return component;
+            return null;
         }
 
         try
@@ -1553,7 +1578,7 @@ public sealed class ComponentBootstrapper(
                     "Unable to resolve latest PHP package for {ComponentId}. Status={StatusCode}",
                     component.Id,
                     response.StatusCode);
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -1563,13 +1588,13 @@ public sealed class ComponentBootstrapper(
                 !ntsPackage.TryGetProperty("zip", out var zipPackage) ||
                 !zipPackage.TryGetProperty("path", out var zipPathElement))
             {
-                return component;
+                return null;
             }
 
             var zipPath = zipPathElement.GetString();
             if (string.IsNullOrWhiteSpace(zipPath))
             {
-                return component;
+                return null;
             }
 
             var version = release.TryGetProperty("version", out var versionElement)
@@ -1594,11 +1619,11 @@ public sealed class ComponentBootstrapper(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Unable to resolve latest PHP package for {ComponentId}.", component.Id);
-            return component;
+            return null;
         }
     }
 
-    private async Task<ComponentManifestItemDto> ResolveDockerEngineAsync(
+    private async Task<ComponentManifestItemDto?> ResolveDockerEngineAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -1610,7 +1635,7 @@ public sealed class ComponentBootstrapper(
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("Unable to list Docker static binaries. Status={StatusCode}", response.StatusCode);
-                return component;
+                return null;
             }
 
             var listing = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -1625,7 +1650,7 @@ public sealed class ComponentBootstrapper(
             if (latest is null)
             {
                 logger.LogWarning("Could not determine the latest Docker engine version from the listing.");
-                return component;
+                return null;
             }
 
             var url = $"{baseUrl}docker-{latest}.zip";
@@ -1635,11 +1660,11 @@ public sealed class ComponentBootstrapper(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Unable to resolve the latest Docker engine package.");
-            return component;
+            return null;
         }
     }
 
-    private async Task<ComponentManifestItemDto> ResolveLatestGitHubAssetAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestGitHubAssetAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         string repository,
@@ -1661,18 +1686,19 @@ public sealed class ComponentBootstrapper(
                     component.Id,
                     repository,
                     response.StatusCode);
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             var tagName = document.RootElement.TryGetProperty("tag_name", out var tagElement)
-                ? tagElement.GetString() ?? component.Version
-                : component.Version;
+                ? tagElement.GetString() ?? string.Empty
+                : string.Empty;
+            if (ParseVersionParts(tagName.TrimStart('v')) is null) return null;
 
             if (!document.RootElement.TryGetProperty("assets", out var assets))
             {
-                return component;
+                return null;
             }
 
             foreach (var asset in assets.EnumerateArray())
@@ -1700,7 +1726,7 @@ public sealed class ComponentBootstrapper(
                     logger.LogWarning(
                         "GitHub release asset for {ComponentId} does not publish a SHA256 digest. Keeping the pinned manifest package.",
                         component.Id);
-                    return component;
+                    return null;
                 }
 
                 logger.LogInformation(
@@ -1721,10 +1747,10 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "Unable to resolve GitHub package for {ComponentId}.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
-    private async Task<ComponentManifestItemDto> ResolveLatestNodeLtsAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestNodeLtsAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -1741,7 +1767,7 @@ public sealed class ComponentBootstrapper(
                     "Unable to resolve latest Node.js LTS package for {ComponentId}. Status={StatusCode}",
                     component.Id,
                     response.StatusCode);
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -1782,7 +1808,7 @@ public sealed class ComponentBootstrapper(
                     logger.LogWarning(
                         "Unable to resolve the official Node.js checksum for {Version}. Keeping the pinned manifest package.",
                         version);
-                    return component;
+                    return null;
                 }
 
                 return CopyComponent(
@@ -1797,7 +1823,7 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "Unable to resolve latest Node.js LTS package for {ComponentId}.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     /// <summary>Sürüm dizesinin ilk <paramref name="parts"/> parçası ("8.3.31", 2 → "8.3").</summary>
@@ -1834,16 +1860,11 @@ public sealed class ComponentBootstrapper(
     /// <summary>Bir URL'in gerçekten indirilebilir olduğunu HEAD ile doğrular (yanlış sürüm yazmayalım).</summary>
     private static async Task<bool> UrlExistsAsync(HttpClient client, string url, CancellationToken cancellationToken)
     {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            return response.IsSuccessStatusCode;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return false;
-        }
+        using var request = new HttpRequestMessage(HttpMethod.Head, url);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
+        response.EnsureSuccessStatusCode();
+        return true;
     }
 
     /// <summary>
@@ -1951,7 +1972,7 @@ public sealed class ComponentBootstrapper(
 
     // PHP: windows.php.net/downloads/releases/releases.json dal başına EN GÜNCEL yamayı ve
     // dosyanın SHA256'sını verir → tam doğrulama korunur (checksum muafiyeti gerekmez).
-    private async Task<ComponentManifestItemDto> ResolveLatestPhpAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestPhpAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -1961,7 +1982,7 @@ public sealed class ComponentBootstrapper(
             var branch = VersionSeries(component.Version, 2);
             if (string.IsNullOrEmpty(branch))
             {
-                return component;
+                return null;
             }
 
             using var response = await client.GetAsync(
@@ -1970,7 +1991,7 @@ public sealed class ComponentBootstrapper(
                 cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -1978,13 +1999,13 @@ public sealed class ComponentBootstrapper(
             if (!document.RootElement.TryGetProperty(branch, out var branchElement) ||
                 !branchElement.TryGetProperty("version", out var versionElement))
             {
-                return component;
+                return null;
             }
 
             var parsed = ParsePhpBranch(branchElement, component.DownloadUrl);
             if (parsed is null)
             {
-                return component;
+                return null;
             }
 
             return CopyComponent(
@@ -1998,11 +2019,11 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "PHP sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     // MariaDB: resmi REST API seri içindeki sürümleri ve her dosyanın sha256'sını verir.
-    private async Task<ComponentManifestItemDto> ResolveLatestMariaDbAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestMariaDbAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -2012,7 +2033,7 @@ public sealed class ComponentBootstrapper(
             var series = VersionSeries(component.Version, 2);
             if (string.IsNullOrEmpty(series))
             {
-                return component;
+                return null;
             }
 
             using var response = await client.GetAsync(
@@ -2021,14 +2042,15 @@ public sealed class ComponentBootstrapper(
                 cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-            var parsed = ParseMariaDbReleases(document.RootElement, component.Version);
+            var parsed = ParseMariaDbReleases(document.RootElement, "0.0.0");
             if (parsed is not null)
             {
+                if (CompareVersions(parsed.Value.Version, component.Version) <= 0) return component;
                 return CopyComponent(
                     component,
                     version: parsed.Value.Version,
@@ -2042,12 +2064,12 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "MariaDB sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     // MySQL: dev.mysql.com kazımayı engelliyor (403) ve checksum sidecar'ı yok. CDN ise olmayan
     // dosyaya 404, olana 200 döndüğü için yama numarasını ileri YOKLAYARAK güvenilir şekilde bulunur.
-    private async Task<ComponentManifestItemDto> ResolveLatestMysqlAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestMysqlAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -2058,7 +2080,7 @@ public sealed class ComponentBootstrapper(
             var parts = component.Version.Split('.', StringSplitOptions.RemoveEmptyEntries);
             if (string.IsNullOrEmpty(series) || parts.Length < 3 || !int.TryParse(parts[2], out var patch))
             {
-                return component;
+                return null;
             }
 
             var bestVersion = component.Version;
@@ -2091,11 +2113,11 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "MySQL sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     // PostgreSQL: postgresql.org/versions.json her ana sürümün güncel yamasını bildirir; paket EDB'de.
-    private async Task<ComponentManifestItemDto> ResolveLatestPostgresAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestPostgresAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -2105,7 +2127,7 @@ public sealed class ComponentBootstrapper(
             var major = VersionSeries(component.Version, 1);
             if (string.IsNullOrEmpty(major))
             {
-                return component;
+                return null;
             }
 
             using var response = await client.GetAsync(
@@ -2114,7 +2136,7 @@ public sealed class ComponentBootstrapper(
                 cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -2131,15 +2153,16 @@ public sealed class ComponentBootstrapper(
                 var minor = minorElement.GetString();
                 if (string.IsNullOrWhiteSpace(minor))
                 {
-                    return component;
+                    return null;
                 }
 
                 var version = $"{major}.{minor}";
+                if (ParseVersionParts(version) is null) return null;
                 var url = $"https://get.enterprisedb.com/postgresql/postgresql-{version}-1-windows-x64.exe";
-                if (CompareVersions(version, component.Version) <= 0 ||
-                    !await UrlExistsAsync(client, url, cancellationToken))
+                if (CompareVersions(version, component.Version) <= 0) return component;
+                if (!await UrlExistsAsync(client, url, cancellationToken))
                 {
-                    return component;
+                    return null;
                 }
 
                 return CopyComponent(component, version: version, downloadUrl: url, sha256: string.Empty);
@@ -2150,11 +2173,11 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "PostgreSQL sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     // pgAdmin: resmi versions.json (uygulamanın kendi güncelleme kontrolü de bunu kullanır).
-    private async Task<ComponentManifestItemDto> ResolveLatestPgAdminAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestPgAdminAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -2167,7 +2190,7 @@ public sealed class ComponentBootstrapper(
                 cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return component;
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -2175,30 +2198,28 @@ public sealed class ComponentBootstrapper(
             if (!document.RootElement.TryGetProperty("pgadmin4", out var entry) ||
                 !entry.TryGetProperty("version", out var versionElement))
             {
-                return component;
+                return null;
             }
 
             var version = versionElement.GetString();
-            if (string.IsNullOrWhiteSpace(version) || CompareVersions(version, component.Version) <= 0)
-            {
-                return component;
-            }
+            if (ParseVersionParts(version) is null) return null;
+            if (CompareVersions(version, component.Version) <= 0) return component;
 
             var url = $"https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v{version}/windows/pgadmin4-{version}-x64.exe";
             return await UrlExistsAsync(client, url, cancellationToken)
                 ? CopyComponent(component, version: version, downloadUrl: url, sha256: string.Empty)
-                : component;
+                : null;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "pgAdmin sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     // nginx: indirme sayfasındaki sürümlerden AYNI DALDAKİ (ör. 1.31.x) en yenisi alınır.
-    private async Task<ComponentManifestItemDto> ResolveLatestNginxAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestNginxAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -2208,12 +2229,15 @@ public sealed class ComponentBootstrapper(
             var branch = VersionSeries(component.Version, 2);
             if (string.IsNullOrEmpty(branch))
             {
-                return component;
+                return null;
             }
 
             var html = await client.GetStringAsync("https://nginx.org/en/download.html", cancellationToken);
+            var versions = Regex.Matches(html, @"nginx-(\d+\.\d+\.\d+)\.zip")
+                .Select(match => match.Groups[1].Value).ToArray();
+            if (!versions.Any(version => VersionSeries(version, 2) == branch)) return null;
             var best = SelectNewerInSeries(
-                    Regex.Matches(html, @"nginx-(\d+\.\d+\.\d+)\.zip").Select(match => match.Groups[1].Value),
+                    versions,
                     component.Version,
                     2)
                 .FirstOrDefault();
@@ -2234,13 +2258,13 @@ public sealed class ComponentBootstrapper(
             logger.LogWarning(exception, "nginx sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
     // Python: DİKKAT — bir seri güvenlik-yalnız moda geçince (3.12.11+) yeni yamalar KAYNAK olarak
     // yayınlanır, Windows kurulumu ÜRETİLMEZ. Bu yüzden en yeni dizini körlemesine almak bozuk URL
     // uretir; adaylar yüksekten aşağı denenip installer'ı GERÇEKTEN olan ilk sürüm seçilir.
-    private async Task<ComponentManifestItemDto> ResolveLatestPythonAsync(
+    private async Task<ComponentManifestItemDto?> ResolveLatestPythonAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         CancellationToken cancellationToken)
@@ -2250,12 +2274,15 @@ public sealed class ComponentBootstrapper(
             var series = VersionSeries(component.Version, 2);
             if (string.IsNullOrEmpty(series))
             {
-                return component;
+                return null;
             }
 
             var html = await client.GetStringAsync("https://www.python.org/ftp/python/", cancellationToken);
+            var versions = Regex.Matches(html, @"href=""(\d+\.\d+\.\d+)/""")
+                .Select(match => match.Groups[1].Value).ToArray();
+            if (!versions.Any(version => VersionSeries(version, 2) == series)) return null;
             var candidates = SelectNewerInSeries(
-                    Regex.Matches(html, @"href=""(\d+\.\d+\.\d+)/""").Select(match => match.Groups[1].Value),
+                    versions,
                     component.Version,
                     2)
                 .Take(6)
@@ -2270,16 +2297,17 @@ public sealed class ComponentBootstrapper(
                     return CopyComponent(component, version: candidate, downloadUrl: url, sha256: string.Empty);
                 }
             }
+            return component;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Python sürümü çözülemedi ({ComponentId}); manifest sürümü korunuyor.", component.Id);
         }
 
-        return component;
+        return null;
     }
 
-    private async Task<ComponentManifestItemDto> ResolveChecksumTextAsync(
+    private async Task<ComponentManifestItemDto?> ResolveChecksumTextAsync(
         ComponentManifestItemDto component,
         HttpClient client,
         string checksumUrl,
@@ -2297,7 +2325,7 @@ public sealed class ComponentBootstrapper(
                     "Unable to resolve checksum for {ComponentId}. Status={StatusCode}",
                     component.Id,
                     response.StatusCode);
-                return component;
+                return null;
             }
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -2305,7 +2333,7 @@ public sealed class ComponentBootstrapper(
             if (string.IsNullOrWhiteSpace(sha256))
             {
                 logger.LogWarning("Checksum response for {ComponentId} did not contain a SHA256 value.", component.Id);
-                return component;
+                return null;
             }
 
             return CopyComponent(component, sha256: sha256);
@@ -2313,7 +2341,7 @@ public sealed class ComponentBootstrapper(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "Unable to resolve checksum for {ComponentId}.", component.Id);
-            return component;
+            return null;
         }
     }
 
