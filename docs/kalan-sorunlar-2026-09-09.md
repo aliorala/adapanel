@@ -1,5 +1,11 @@
 # 0.8.31–0.8.43 — Kalan sorunların düzeltilmesi
 
+## 2026-09-26 — Eski sürüm kalıntıları canlıda temizlendi
+
+Kullanıcının açık isteğiyle 5.230 kullanılmayan dosya / 2.312.989.443 bayt (2,31 GB) silindi. Eski PHP8.3.31/MariaDB11.8.3/Adminer5.5.1/Roundcube1.7.1 indirmeleri, 18 Eylül component-safety-20260918-044 geçici yükseltme kopyası, iki Roundcube paket varsayılanı klasörü ve eski panel dağıtımının387 dosyası kaldırıldı. Eski notlardaki component-safety kopyalarının tutulduğu bilgisi artık geçersizdir. Güncel otomatik yedekler ve ayarlar korundu.
+
+Etkin sürümler ve dosya sahipliği doğrulandı; mutlak kapsam/reparse/etkin modül kontrolleri uygulandı. Güncel EXE hash'i yerel0.8.62 publish ile aynı. Panel yeniden başlatıldı, yeni servisPID4068 (19:49:30) Running; diğer7servis/posta kontrolleri ve üçHTTPS200 başarılı. Terminal yeniden başlatma çağrısı30sn sınırını aştı, bağımsız yardımcı işlemi tamamladı; stderr yalnız ilerleme/bekleme uyarılarıydı. Etkin msquic.dll korundu. Kaynak/paket değişmedi, canlı0.8.62, yeni release yok. Bu bir canlı bakım işlemidir, otomatik kalıntı temizleyici eklenmedi. Ayrıntı docs/temizlik-2026-09-26.md; canlı envanterler maintenance/obsolete-cleanup-20260926.json ve obsolete-panel-files-20260926.json.
+
 ## 2026-09-26 — SON DURUM: 0.8.62 canlı
 
 SMTP sağlık denetimi okunamayan/kopan/zaman aşımına uğrayan yanıtı sağlıklı saymaz; çok satırlı220 tamamlanır ve sunucu adı tam eşleşir. SystemSettings/posta alanı sorgu hataları görünür ölçüm bulgusu olur. Bozuk/yarım JSON ve NDJSON artık boş envanter değildir; gerçek boş sorgu korunur. PTR beklemeleri sınırlı/iptal edilebilir. Servis sağlık ölçümü SCM/Task Scheduler API'lerine alındı; erişilemeyen satırUnknown, diğerleri korunur.
