@@ -1,5 +1,11 @@
 # 0.8.31–0.8.43 — Kalan sorunların düzeltilmesi
 
+## 2026-09-26 — 0.8.61 hazırlanıyor (canlı hâlâ 0.8.60)
+
+PHP 8.3.33 yedek URL arşiv dizinine düzeltildi, dosya mevcut hash ile eşleşti. DNS sağlık okuması modern Windows DNS sağlayıcısına, firewall okuması COM API'ye alındı; hata halinde eski PowerShell yolu korunur. DNSSEC dahil üç bölgenin anahtarları canlı komutlarla birebir eşleşti. Eski root/MicrosoftDNS prototipi DNSSEC eksiği nedeniyle kullanılmadı. ReturnValue=null başarılı sağlayıcı sözleşmesi C# ile doğrulandı, olmayan bölge ManagementException verir.
+
+72 hedefli / 106 frontend testi başarılı. Güncel bileşen denetimi 22 Passed / 3 mevcut büyük paket Skipped, artık StaleFallback yok. Paketleme aynı raporu kullanarak -SkipComponentAudit ile tam test/build/publish/installer çalıştırıyor. Henüz yeni canlı kurulum veya soğuk başlangıç kazanımı iddiası yok. Ayrıntı docs/denetim-2026-09-26-061.md, kanıt .tmp/audit-061. Yedek şifrelemesi kapalı; program 03:00, ikinci saat kapalı, 5 gün. Dış API taşınmadı; FTP kayıtsız nesne envanteri açık sınır. Kaynak/history/tag push yapılmaz.
+
 ## 2026-09-26 — SON DURUM: 0.8.60 canlı
 
 Bu turda uzun otomasyon işi bitince yeni ayarların ezilmesi, yakın iki günlük yedek saatinin kaçırılması, eksik sağlık ölçümünün sağlıklı sayılması, checkbox hizalaması ve güncelleme durum yarışı düzeltildi. Dahili FTP sitesine HTTP State sorgusu artık yapılmıyor. Yeni ölçüm uyarısı canlıdaki eski firewall JSON hatasını görünür yaptı; ADAPANEL-KURAL damgası JSON'dan ayrılarak asıl okuma hatası da .60'ta giderildi. Kaynak commitleri d2c55bc, 00badbb, 5b4ac01.

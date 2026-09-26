@@ -203,6 +203,15 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
     // tüm kurallara bakar (IIS'in 80/443 kuralları da sayılır). Hata olursa kapsam boş döner (engelli görünür).
     private async Task<(bool CoversAllTcp, List<(int Lo, int Hi)>? Ranges)> ReadAllowCoverageAsync(CancellationToken cancellationToken)
     {
+        try
+        {
+            return await WindowsFirewallInspection.ReadAllowCoverageAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Native firewall inspection failed; using PowerShell fallback.");
+        }
+
         var script = """
             # HIZ: kural basina Get-NetFirewallPortFilter cagirmak COM uzerinden N ayri sorgu demek
             # ve yuzlerce kurali olan bir sunucuda DAKIKALAR surer. Sure asiminda sonuc bos doner ve

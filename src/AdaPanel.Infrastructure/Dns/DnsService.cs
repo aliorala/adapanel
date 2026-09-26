@@ -797,7 +797,7 @@ public sealed partial class DnsService(
         @{ installed = $installed; zoneCount = $zones } | ConvertTo-Json -Compress
         """;
 
-    private static async Task<ServerHealthProbe> ReadServerProbeAsync(CancellationToken cancellationToken)
+    private async Task<ServerHealthProbe> ReadServerProbeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var service = WindowsNetworkHealth.ReadService("DNS");
@@ -805,8 +805,17 @@ public sealed partial class DnsService(
             return new ServerHealthProbe { ServiceStatus = "NotInstalled" };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
-        var run = await ProcessRunner.RunPowerShellStrictAsync(ServerHealthScript, deadline.Token);
-        var metadata = run.Success ? ParseProbe(run.StandardOutput) : null;
+        ServerHealthProbe? metadata;
+        try
+        {
+            metadata = new ServerHealthProbe { Installed = true, ZoneCount = await WindowsDnsInspection.ReadPrimaryZoneCountAsync(deadline.Token) };
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !deadline.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Native DNS inventory failed; using PowerShell fallback.");
+            var run = await ProcessRunner.RunPowerShellStrictAsync(ServerHealthScript, deadline.Token);
+            metadata = run.Success ? ParseProbe(run.StandardOutput) : null;
+        }
         if (metadata is null) throw new IOException("DNS zone inventory could not be measured.");
         // Read after the inventory, so a concurrent service restart cannot leave us using an old PID.
         service = WindowsNetworkHealth.ReadService("DNS");

@@ -35,7 +35,7 @@ public sealed partial class DnsService : IDnsInspectionService
             }
         }
 
-        var probes = await DnsZoneInspectionProbe.ReadAsync(prepared.Select(item => item.State.ZoneName), cancellationToken);
+        var probes = await DnsZoneInspectionProbe.ReadAsync(prepared.Select(item => item.State.ZoneName), cancellationToken, logger: logger);
         foreach (var (site, state, missing) in prepared)
         {
             var probe = probes[state.ZoneName];

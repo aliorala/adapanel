@@ -2,6 +2,7 @@ using AdaPanel.Core.Dtos.Health;
 using AdaPanel.Core.Dtos.Sites;
 using AdaPanel.Core.Dtos.Mail;
 using System.Text.Json;
+using System.Diagnostics;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Support;
 using Microsoft.Extensions.Logging;
@@ -306,21 +307,29 @@ internal sealed class DomainRefreshService(
     {
         sites ??= await siteService.GetSitesAsync(cancellationToken);
         var results = new List<DomainRefreshResultDto>(sites.Count);
+        var timer = Stopwatch.StartNew();
         var snapshots = !applyChanges && dnsInspectionService is not null
             ? await ReadDnsInspectionsAsync(sites, cancellationToken) : null;
+        var dnsMs = timer.ElapsedMilliseconds;
+        timer.Restart();
 
         foreach (var site in sites)
         {
             results.Add(await RunAsync(site.Name, applyChanges, cancellationToken, snapshots?[site.Name]));
         }
 
+        var siteMs = timer.ElapsedMilliseconds;
+        timer.Restart();
+        var serverFindings = await CollectServerFindingsAsync(applyChanges, cancellationToken);
+        logger.LogInformation("Domain inspection durations (ms): dns={DnsMs}, sites={SiteMs}, server={ServerMs}, repair={Repair}",
+            dnsMs, siteMs, timer.ElapsedMilliseconds, applyChanges);
         return new DomainRefreshSummaryDto
         {
             Results = results,
             TotalSites = results.Count,
             UpdatedSites = results.Count(item => item.Error.Length == 0 && !item.AlreadyCurrent),
             FailedSites = results.Count(item => item.Error.Length > 0),
-            ServerFindings = await CollectServerFindingsAsync(applyChanges, cancellationToken)
+            ServerFindings = serverFindings
         };
     }
 

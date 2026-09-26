@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AdaPanel.Infrastructure.Support;
+using Microsoft.Extensions.Logging;
 
 namespace AdaPanel.Infrastructure.Dns;
 
@@ -16,10 +17,24 @@ internal static class DnsZoneInspectionProbe
 
     internal static async Task<IReadOnlyDictionary<string, Result>> ReadAsync(
         IEnumerable<string> zoneNames, CancellationToken token,
-        Func<string, CancellationToken, Task<CommandResult>>? run = null)
+        Func<string, CancellationToken, Task<CommandResult>>? run = null, ILogger? logger = null,
+        Func<string[], CancellationToken, Task<IReadOnlyDictionary<string, Result>>>? native = null)
     {
         var names = zoneNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (names.Length == 0) return new Dictionary<string, Result>();
+        if (run is null || native is not null)
+        {
+            try
+            {
+                var direct = await (native ?? WindowsDnsInspection.ReadAsync)(names, token);
+                if (names.Any(name => !direct.ContainsKey(name))) throw new IOException("Native DNS inspection returned an incomplete result.");
+                return direct;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !token.IsCancellationRequested)
+            {
+                logger?.LogWarning(exception, "Native DNS inspection failed; using PowerShell fallback.");
+            }
+        }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         var result = await (run ?? ProcessRunner.RunPowerShellStrictAsync)(BuildScript(names), deadline.Token);

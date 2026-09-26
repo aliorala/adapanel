@@ -7,6 +7,42 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DnsZoneInspectionProbeTests
 {
     [Fact]
+    public async Task Native_success_does_not_start_PowerShell()
+    {
+        var result = await DnsZoneInspectionProbe.ReadAsync(["one.test"], default,
+            (_, _) => throw new Exception("Unnecessary PowerShell"),
+            native: (_, _) => Task.FromResult<IReadOnlyDictionary<string, DnsZoneInspectionProbe.Result>>(
+                new Dictionary<string, DnsZoneInspectionProbe.Result> { ["one.test"] = new() { Name = "one.test", Available = true, Keys = ["MX|@"] } }));
+        Assert.Equal("MX|@", Assert.Single(result["one.test"].Keys!));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Native_failure_or_incomplete_result_uses_verified_fallback(bool throws)
+    {
+        var calls = 0;
+        var result = await DnsZoneInspectionProbe.ReadAsync(["one.test"], default,
+            (_, _) => { calls++; return Task.FromResult(new CommandResult { ExitCode = 0, StandardOutput = "[{\"name\":\"one.test\",\"available\":true,\"keys\":[\"A|@\"]}]" }); },
+            native: (_, _) => throws ? throw new IOException("Provider unavailable")
+                : Task.FromResult<IReadOnlyDictionary<string, DnsZoneInspectionProbe.Result>>(new Dictionary<string, DnsZoneInspectionProbe.Result>()));
+        Assert.Equal(1, calls);
+        Assert.Equal("A|@", Assert.Single(result["one.test"].Keys!));
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_in_native_path_does_not_start_fallback()
+    {
+        using var cts = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => DnsZoneInspectionProbe.ReadAsync(["one.test"], cts.Token,
+            (_, _) => throw new Exception("Must not fall back"), native: (_, token) =>
+            {
+                cts.Cancel();
+                return Task.FromCanceled<IReadOnlyDictionary<string, DnsZoneInspectionProbe.Result>>(token);
+            }));
+    }
+
+    [Fact]
     public async Task Actual_powershell_preserves_single_empty_and_missing_zone_results()
     {
         const string stubs = """

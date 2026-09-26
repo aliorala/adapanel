@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.60",
-  "body": "- Güvenlik duvarı sorgusunun kontrol satırı JSON verisinden ayrılarak port kapsamının doğru okunması sağlandı.",
-  "name": "0.8.60 — Güvenlik duvarı ölçüm düzeltmesi"
+  "tag_name": "0.8.61",
+  "name": "0.8.61 — Sağlık taraması ve indirme iyileştirmeleri",
+  "body": "- DNS ve güvenlik duvarı sağlık okumaları doğrudan Windows arayüzleriyle hızlandırıldı; gerektiğinde mevcut sorgu yolu kullanılır.\n- PHP yedek paketinin arşiv indirme adresi düzeltildi."
 }
