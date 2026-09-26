@@ -1,9 +1,18 @@
 # Çalışma durumu — canlı kayıt
 
-## 2026-09-26 — 0.8.62 hazırlanıyor (canlı0.8.61)
+## 2026-09-26 — SON DURUM: 0.8.62 canlı
 
-Posta sağlık kontrolündeki başarısız okumaların sağlıklı sayılması, SMTP adının açıklama/önek içinde eşleşmesi ve bozuk/yarım CLI JSON'unun boş envantere dönüşmesi düzeltildi. PTR beklemeleri sınırlı ve iptal edilebilir. Windows servis/görev okumaları SCM/Task Scheduler API'lerine alındı; Unknown durum korunur. 63 hedefli test geçti, tam paketleme sürüyor. Manifest/indirici değişmediği için .61'in22Passed/3mevcutSkipped bileşen raporu yeniden kullanılıyor. Ayrıntı docs/denetim-2026-09-26-062.md; .tmp/audit-062. Henüz .62 canlı sonucu yok. Eski firewall kopyaları gelişmiş filtrelerle inceleniyor; şu ana kadar silme yok. Yedek tercihleri ve API taşınmadı bilgisi aynen geçerli. Kaynak/history/tag push yapılmaz.
+SMTP sağlık denetimi okunamayan/kopan/zaman aşımına uğrayan yanıtı sağlıklı saymaz; çok satırlı220 tamamlanır ve sunucu adı tam eşleşir. SystemSettings/posta alanı sorgu hataları görünür ölçüm bulgusu olur. Bozuk/yarım JSON ve NDJSON artık boş envanter değildir; gerçek boş sorgu korunur. PTR beklemeleri sınırlı/iptal edilebilir. Servis sağlık ölçümü SCM/Task Scheduler API'lerine alındı; erişilemeyen satırUnknown, diğerleri korunur.
 
+Kaynak c91f5f5. Tam5505Infrastructure+2Core başarılı, son küçük eksik alan-id kontrolü dahil kaynakta hedefli63 tekrar geçti. .61'in değişmeyen frontend106 testi, güncel typecheck/build/publish/installer doğrulaması. Manifest/indirici değişmediği için .61'in22Passed/3mevcutSkipped bileşen raporu tekrar kullanıldı. Paket90.824.774bayt SHA25637E4DAF916866F0C3E37171C2FE2ECFF435C4C74F5B5D82BEA1677E8FF91AF33; GitHub tekrar indirme ve canlı aynı. Kaynak/history/tag push yok.
+
+Kurulum succeeded/exit0/error boş/isFinished=true/isFailed=false; updatedAtUtc2026-09-26T16:35:28.6536603Z. Panel/MariaDB/Redis/DNS/FTP/IIS/WAS Running, Stalwart9164; üçHTTPS200. Sağlık3alan güncel/0eksik/0sunucu bulgusu; firewall6/6gerekli port hazır. Posta/native ölçüm uyarısı0. Tek açılış SQLiteERR, GET /panel istemci iptali TaskCanceledException ile eşleşiyor; veri hasarı kanıtı yok.
+
+İlk attention alt ölçüm toplamı5693ms (.61:13770ms), servis30ms (.61:7787ms); son sıcak toplam93ms, servis4ms. Alan adı ilk aşamalar429/2841/1301ms, site/posta maliyeti hâlâ var. İşletim sistemi yeniden başlatılmadı; ekran render süresi değil panel servis açılışı sağlık alt ölçümleridir.
+
+Canlıda eski14eşdeğer firewall kopyası kaldırıldı: Adminer2->1,phpMyAdmin8->1,webmail7->1. Kural+uygulama+servis+adres+port+arabirim+güvenlik filtreleri işlemden önce tekrar eşleştirildi. Yedek C:\ProgramData\AdaPanel\maintenance\firewall-before-dedupe-20260926-193251.wfw. .62 kurulumundan sonra sayılar1'er kaldı. Yeni kopya üreten eski netshadd yolu daha önce düzeltilmişti.
+
+Yedek03:00/ikinci saatkapalı/5gün/yerel+FTP korundu; şifreleme kapalı tercihine dokunulmadı. Fiyat botu API henüz taşınmadı; adres uydurulmaz. FTP kayıtsız nesne envanteri açık sınır. Ayrıntı docs/denetim-2026-09-26-062.md; kanıt .tmp/audit-062.
 ## 2026-09-26 — SON DURUM: 0.8.61 canlı
 
 PHP yedek paket adresi arşive düzeltildi; hash aynı. DNS sağlık okuması modern Windows DNS sağlayıcısına, firewall kapsam okuması COM API'ye alındı. DNSSEC dahil tam kayıt karşılaştırması geçti; sağlayıcı hatasında eski sorgu yolu ve ölçülemeyen durum korunur. Kaynak b2c69ac. 5.474 Infrastructure + 2 Core, 106 frontend, typecheck/build başarılı. Güncel bileşen denetimi 22 Passed / 3 mevcut büyük paket Skipped, StaleFallback0. 168 publish dosyası ve installer denetimi geçti.
