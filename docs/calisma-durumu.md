@@ -1,10 +1,16 @@
 # Çalışma durumu — canlı kayıt
 
-## 2026-09-26 — 0.8.59 denetim düzeltmeleri hazır
+## 2026-09-26 — SON DURUM: 0.8.60 canlı
 
-Uzun otomasyon işi bitince arada kaydedilen ayarların ezilmesi atomik ayar yazımı + yalnız iş sonucu birleştirmesiyle düzeltildi. Abonelik yoklaması1dakika sabitperiyot, yakın günlük saatlerin telafi penceresi enaz1dakika. Firewall/TCP ölçüm bayrakları ve sağlık okuma hataları artık açıkça görünür; eksik denetim sağlıklı diye önbelleğe alınmaz/otomatik port açmaz. Toggle hizalaması, yanlış indirme etiketi ve geç güncelleme yanıtının hazır paket durumunu ezmesi düzeltildi.
+Bu turda uzun otomasyon işi bitince yeni ayarların ezilmesi, yakın iki günlük yedek saatinin kaçırılması, eksik sağlık ölçümünün sağlıklı sayılması, checkbox hizalaması ve güncelleme durum yarışı düzeltildi. Dahili FTP sitesine HTTP State sorgusu artık yapılmıyor. Yeni ölçüm uyarısı canlıdaki eski firewall JSON hatasını görünür yaptı; ADAPANEL-KURAL damgası JSON'dan ayrılarak asıl okuma hatası da .60'ta giderildi. Kaynak commitleri d2c55bc, 00badbb, 5b4ac01.
 
-Mevcut tambackend5448/5448, değişiklik sonrası sonhedefli233/233, frontend106/106, typecheck/build başarılı. Paketleme/canlı doğrulama sürüyor; canlı henüz0.8.58. Ayrıntı docs/denetim-2026-09-26-059.md, kanıt .tmp/audit-059. İlk soğuk tarama gecikmesi tamamen çözülmüş sayılmaz; FTP kayıtsız envanter desteklenmiyor, fiyatbotu API henüz taşınmadı. Şifreleme kapalı tercihi ve günlük03:00/ikinci saatkapalı korunur. Kaynak/history/tag push yok.
+Son tam test: 5.464 Infrastructure + 2 Core başarılı, sıfır başarısız/atlanan. Frontend 106 başarılı; son typecheck/build ve publish/installer denetimleri geçti. .59 bileşen denetimindeki Docker TLS hatası normal yeniden denemede geçti; kalan win-acme de doğrulandı. Son rapor 21 Passed / 3 mevcut büyük paket Skipped / 1 PHP StaleFallback. Değişmeyen bileşen raporu .60 için yeniden kullanıldı; ayrıntı raporda açık. Kaynak/history/tag push yok, yalnız installer yayımlandı.
+
+0.8.60 paketi 90.817.904 bayt, SHA256 77CCF4EBFB4F4EA6396EC024BBB4DE2674BB5A50B7EA3423572B1032C3533AEE; GitHub yeniden indirme ve canlı aynı. Kurulum succeeded / exit 0 / error boş / isFinished=true / isFailed=false, updatedAtUtc=2026-09-26T13:52:55.5769358Z. Panel/MariaDB/Redis/DNS/FTP/IIS/WAS Running, Stalwart PID 9164, üç HTTPS 200. Firewall 6/6 gerekli port hazır; sağlıkta 3 alan adı güncel, 0 eksik / 0 sunucu bulgusu. Güncelleme sonrası IIS State ve firewall JSON uyarıları 0. Tek başlangıç SQLite ERR, istemci iptal kaydıyla eşleşiyor.
+
+Otomasyon görünümünde checkbox hizalaması flex; masaüstü 1524/1524 px taşma yok. Yedekler 50 kayıt; günlük 03:00, ikinci saat kapalı, saklama 5 gün ve şifreleme kapalı tercihi korundu. İsteğe bağlı ikinci saat özelliği mevcut; canlıdaki program kullanıcı seçimi olmadan değiştirilmedi.
+
+AÇIK SINIRLAR: ilk soğuk attention taraması hâlâ yavaş (DNS 10,5–12,8 sn; alan adı 36,7–40,7 sn); sıcak taramada alan adı 19–36 ms. Fiyat botu API henüz taşınmadı; adres uydurulmaz. PHP sabit yedek URL 404, güncel URL çözümleyicisi mevcut. FTP kayıtsız nesne envanteri desteklenmiyor. Tüm canlı yazma akışlarında sıfır hata garantisi verilmez. Ayrıntı docs/denetim-2026-09-26-059.md; kanıt .tmp/audit-059.
 
 ## 2026-09-26 — 0.8.58: isteğe bağlı ikinci günlük yedek
 
