@@ -1,5 +1,16 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-26 — SON DURUM: 0.8.57 canlı, SSL/DNS doğrulandı
+
+Kaynak182a652 (.56:750e764). Paket90.815.876bayt SHA256 A4B6E8BC5B8472A4FA677AB5EAE73A33C975D53B328108D1C99CDE7FE0177F15; GitHub yeniden indirme ve canlı aynı. Kurulum succeeded/exit0, error boş, isFinished=true/isFailed=false; updatedAtUtc=2026-09-26T11:15:01.6172999Z. Panel/MariaDB/Redis/DNS/FTP/IIS/WAS Running; Stalwart süreç9164 (AdaStalwart Windows servisi yok; mantıksal sağlık adı). Üç HTTPS200. SSL ana/www sertifikaları443 doğrulanıyor; eski joker depoda ama bağlı değil, değiştirilmedi. DNS panelinde SPF/DMARC birer satır; Windows DNS'e dokunulmadı.
+
+Test: .56 tam5417 ve sonhedefli349; .57 SSL86, sürüm97, sonDNS/SSL297; sonfrontend102, typecheck/build başarılı. .57 standart dış bileşen denetimi21Passed/3büyükpaketSkipped/1PHPStaleFallback geçti. Son yalnız iki etiket/çeviri düzeltmesi sonrası aynı bileşen raporu korunarak installer tekrar üretildi (o ikinci koşuda SkipComponentAudit); son installer denetimi geçti. Kaynak/history/tag push yok.
+
+Sıcak tarama2.67–2.82sn, DNS1.56–1.62sn (önceden8.5–11.3sn toplam). AÇIK SINIR: yeniden başlatma sonrası ilk çakışan taramalar46.8–50.2sn; tamamen giderildi denmez. FTP kayıtsız nesne envanteri desteklenmiyor. 50kayıt doğrulaması eksik/bozuk0. 21Eylül03:08:10–19 beşdosya,26Eylül03:08:07 temizliğinde5günü saniyelerle doldurmadı;27Eylül koşusuna uygun, henüz o koşu yaşanmadı. Eski boşFTPbakımı0/0/0 exit0.
+
+Fiyatbotunda eski bağımsız BAT argüman döngüsü giderildi, güncel görev API DNS hatası alıyor. Kullanıcı API henüz taşınmadı dedi: adres uydurulmaz/değiştirilmez. Ürünbotu korunur. Şifreleme açıkça kapalı tercihi korunur. Masaüstü kompakt görünüm doğrulandı; bu tur mobil boyut yeniden ölçülmedi. Tüm yazma akışlarında sıfır sorun iddiası yok. Ayrıntı docs/denetim-2026-09-26-056.md, kanıt .tmp/audit-056 ve057.
+
+
 ## 2026-09-26 — 0.8.56 canlı; 0.8.57 SSL/DNS düzeltmesi paketleniyor
 
 0.8.56 kaynak 750e764. Yayın varlığı ve canlı indirme aynı SHA256; kurulum succeeded/exit0, 2026-09-26T10:53:43.9246547Z. Servisler Running, üç HTTPS adresi200. Sıcak attention 2.8–3.5 saniye (önceden8.5–11.3); DNS1.6–2.1 saniye. İlk çakışan taramalar21–49.8 saniye, tamamen çözülmüş denmez. DNS TCP+UDP aynı genelIP'de,3bölge/0eksik. Cron atlanan tetikleme açıklaması canlı doğrulandı. İkinci AdaPanel PID --tray, ikinci API değil. Açılış SQLite ERR istemcinin iptal ettiği GET /panel, veritabanı hasarı değil.
