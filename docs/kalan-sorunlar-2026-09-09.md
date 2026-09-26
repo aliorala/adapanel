@@ -4,7 +4,9 @@
 
 Günlük programda ikinci saat seçeneği eklendi; sunucu otomasyonu, Yedekleme kısayolu ve abonelik programları aynı alanları kullanır. İki saat/dakika kullanıcı seçimi, sunucu yerel saati. Nullable ikinci saat eski kayıtları tek çalışmada tutar; aynı saat tek kez çalışır. Abonelik kotası1 ikinci saati etkin plandan düşürür ve mevcut uyarıyı gösterir, kayıttaki istek korunur. UTC sıralaması ve değişken telafi penceresi yaz saati/gün değişimi için testli. Canlıdaki günlük03:00 ve şifreleme kapalı tercihi otomatik değiştirilmez.
 
-195 ilgili backend ve104 frontend testi, typecheck/build başarılı. Paketleme/canlı doğrulama devam ediyor; henüz0.8.58 canlı diye kabul edilmez. Ayrıntı docs/ikinci-gunluk-yedek-2026-09-26.md, kanıt .tmp/audit-058. Kaynak/history/tag push yapılmaz.
+195 ilgili backend ve104 frontend testi, typecheck/build başarılı. Kaynak4acb4bb. Standart paket denetimi21Passed/3mevcut büyükpaketSkipped/1PHPStaleFallback; installer denetimi geçti. Paket90.818.087bayt SHA256 2DAF8F8317BECF548E76FE50DD8453ABBDA962DDFCFD92958596F13B3DEF5E92; GitHub yeniden indirme ve canlı aynı. 0.8.58 canlı kurulum succeeded/exit0/error boş, isFinished=true/isFailed=false, updatedAtUtc=2026-09-26T12:01:45.6321622Z. Panel/MariaDB/Redis/DNS/FTP/IIS/WAS Running; Stalwart9164; üçHTTPS200.
+
+Canlı otomasyonda03:00+20:45 ve abonelik formunda03:00+06:15 kaydetmeden denendi; masaüstü1524/1524px taşma yok. Yenileme/iptal sonrası günlük03:00, ikinci saatkapalı, saklama5gün, şifrelemekapalı korundu. Yedek ayarları kısayolunda da seçenek var. Canlıda iki gerçek zamanlanmış tur henüz çalıştırılmadı; zamanlama/saklama/kota senaryoları otomatik testlerle doğrulandı. Ayrıntı docs/ikinci-gunluk-yedek-2026-09-26.md, kanıt .tmp/audit-058. Kaynak/history/tag push yapılmadı.
 
 ## 2026-09-26 — SON DURUM: 0.8.57 canlı, SSL/DNS doğrulandı
 
