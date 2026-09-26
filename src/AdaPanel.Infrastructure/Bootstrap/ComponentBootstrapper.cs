@@ -130,21 +130,19 @@ public sealed class ComponentBootstrapper(
 
     public async Task<int> GetPendingUpdateCountAsync(CancellationToken cancellationToken = default)
     {
-        var cache = ReadUpdateCache();
-        if (cache.Count == 0)
-        {
-            return 0;
-        }
-
-        // Yalnız GERÇEKTEN kurulu olanlar sayılır: kaldırılmış bir bileşenin önbellekte kalan
-        // kaydı "bekleyen güncelleme" olarak görünmemeli.
-        var installedIds = await dbContext.InstalledComponents
+        cancellationToken.ThrowIfCancellationRequested();
+        var cache = ComponentUpdateCache.Read(UpdateCacheFilePath());
+        var installed = await dbContext.InstalledComponents
             .AsNoTracking()
             .Where(item => item.Status == ComponentInstallStatus.Installed)
-            .Select(item => item.ComponentId)
             .ToListAsync(cancellationToken);
+        var managed = installed.Where(item => !ReadBoolean(ReadProtectedConfiguration(item.ProtectedConfigurationJson), SystemDetectedKey)).ToArray();
+        if (managed.Any(item => SupportsVersionCheck(item.ComponentId) && !cache.ContainsKey(item.ComponentId)))
+            throw new InvalidDataException("Component update results are not available for all installed components.");
 
-        return installedIds.Count(id => cache.TryGetValue(id, out var info) && info.UpdateAvailable);
+        // A persisted flag may predate an installation; compare against the current DB version.
+        return managed.Count(item => cache.TryGetValue(item.ComponentId, out var info)
+            && IsNewerVersion(info.AvailableVersion, item.Version));
     }
 
     public async Task<SoftwareCatalogDto> CheckForUpdatesAsync(CancellationToken cancellationToken = default)
@@ -846,12 +844,6 @@ public sealed class ComponentBootstrapper(
 
             await dbContext.SaveChangesAsync(cancellationToken);
 
-            // Güncelleme önbelleğini TAZELE. Aksi halde "güncelleme var" bayrağı kurulum bittikten
-            // sonra da doğru sanılır: panel "1 güncelleme bekliyor" der, kullanıcı tıklar ve
-            // "zaten güncelsiniz" ekranıyla karşılaşır. Bayrak yeni kurulan sürüme göre yeniden
-            // hesaplanır (sürüm hâlâ eskiyse — ör. kurulum eski paketi tekrar kurduysa — açık kalır).
-            RefreshUpdateCacheEntry(installedComponent.ComponentId, installedComponent.Version);
-
             // KAYIT OLCUMDEN BESLENIR. Her sey yolundayken cumle SADE kalir ("version 1.2.3");
             // olculemediyse ya da sapma varsa ADIYLA yazilir (ComponentVersionRecord.Describe).
             await auditService.WriteAsync(
@@ -931,7 +923,7 @@ public sealed class ComponentBootstrapper(
             IsSystemDetected = ReadBoolean(configuration, SystemDetectedKey),
             DetectionSource = ReadConfigurationValue(configuration, DetectionSourceKey),
             AvailableVersion = updateInfo?.AvailableVersion ?? string.Empty,
-            UpdateAvailable = component.Status == ComponentInstallStatus.Installed && (updateInfo?.UpdateAvailable ?? false),
+            UpdateAvailable = !ReadBoolean(configuration, SystemDetectedKey) && component.Status == ComponentInstallStatus.Installed && updateInfo is not null && IsNewerVersion(updateInfo.AvailableVersion, component.Version),
             VersionCheckSupported = updateInfo?.VersionCheckSupported ?? SupportsVersionCheck(component.ComponentId),
             InstalledAtUtc = component.InstalledAtUtc
         };
@@ -943,48 +935,11 @@ public sealed class ComponentBootstrapper(
             "config",
             "component-updates.json");
 
-    /// <summary>
-    /// Bir bileşen kurulduktan/güncellendikten sonra o bileşenin güncelleme kaydını yeni sürüme göre
-    /// yeniden değerlendirir. Önbellek yalnız günlük kontrolde yazıldığı için, aksi halde kurulum
-    /// sonrası "bekleyen güncelleme" sayacı 24 saate kadar yanlış kalır.
-    /// </summary>
-    private void RefreshUpdateCacheEntry(string componentId, string installedVersion)
-    {
-        try
-        {
-            var cache = ReadUpdateCache();
-            if (!cache.TryGetValue(componentId, out var info))
-            {
-                return;
-            }
-
-            info.UpdateAvailable = IsNewerVersion(info.AvailableVersion, installedVersion);
-            cache[componentId] = info;
-            WriteUpdateCache(cache);
-        }
-        catch (Exception exception)
-        {
-            // Önbellek tazeleme kurulumu BOZMAMALI: en kötü ihtimalle sayaç bir sonraki kontrole
-            // kadar eski kalır, kurulum yine de başarılıdır.
-            logger.LogDebug(exception, "Güncelleme önbelleği tazelenemedi: {ComponentId}", componentId);
-        }
-    }
-
     private Dictionary<string, ComponentUpdateInfo> ReadUpdateCache()
     {
         try
         {
-            var path = UpdateCacheFilePath();
-            if (!File.Exists(path))
-            {
-                return new Dictionary<string, ComponentUpdateInfo>(StringComparer.OrdinalIgnoreCase);
-            }
-
-            var json = File.ReadAllText(path);
-            var data = JsonSerializer.Deserialize<Dictionary<string, ComponentUpdateInfo>>(json, SerializerOptions);
-            return data is null
-                ? new Dictionary<string, ComponentUpdateInfo>(StringComparer.OrdinalIgnoreCase)
-                : new Dictionary<string, ComponentUpdateInfo>(data, StringComparer.OrdinalIgnoreCase);
+            return ComponentUpdateCache.Read(UpdateCacheFilePath());
         }
         catch (Exception exception)
         {
@@ -997,9 +952,7 @@ public sealed class ComponentBootstrapper(
     {
         try
         {
-            var path = UpdateCacheFilePath();
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(cache, SerializerOptions));
+            ComponentUpdateCache.Write(UpdateCacheFilePath(), cache);
         }
         catch (Exception exception)
         {
@@ -1075,18 +1028,6 @@ public sealed class ComponentBootstrapper(
             .Split('.')
             .Select(part => int.TryParse(part, out var number) ? number : 0)
             .ToArray();
-    }
-
-    private sealed class ComponentUpdateInfo
-    {
-        public string AvailableVersion { get; set; } = string.Empty;
-
-        public bool UpdateAvailable { get; set; }
-
-        /// <summary>Üst sürüm canlı çözülebiliyor mu; false ise "güncel" değil "bilinmiyor" demektir.</summary>
-        public bool VersionCheckSupported { get; set; }
-
-        public DateTime CheckedAtUtc { get; set; }
     }
 
     private string ReadGeneratedPassword(string protectedConfigurationJson)

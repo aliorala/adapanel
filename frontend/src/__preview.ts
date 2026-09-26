@@ -26,7 +26,7 @@ const overview = {
   operatingSystem: "Microsoft Windows Server 2022 Standard",
   osArchitecture: "X64",
   frameworkDescription: ".NET 8.0.20",
-  panelVersion: "0.8.65",
+  panelVersion: "0.8.66",
   currentServerTimeUtc: "2026-09-26T13:02:00Z",
   bootTimeUtc: "2026-08-29T04:11:00Z",
   uptime: "28.08:51:00",
@@ -48,7 +48,7 @@ const overview = {
 
 createApp({
   render: () =>
-    h(MainLayout as never, {sections: ["home","sites","sitebuilder","mail","database","accounts","billing","monitor","advisor","seo","audit","tasks","software","security","tools","migration","cluster","ai","account","settings"].map(id=>({id,label:(translations as Record<string,string>)[({sitebuilder:"panel.navigation.siteBuilder",software:"panel.navigation.store",tools:"panel.navigation.serverTools",ai:"panel.navigation.aiConnection",account:"panel.account.title"} as Record<string,string>)[id] || `panel.navigation.${id}`] || id,description:"",glyph:""})), activeSection:"home", title:translations["panel.navigation.home"], description:"", subtitle:"", panelName:"AdaPanel", machineName:overview.machineName,secureEntryPath:"panel",userName:"admin",userEmail:"demo@example.com",role:"Administrator",panelVersion:"0.8.65",isTwoFactorEnabled:false,resolvedTheme:document.documentElement.dataset.theme}, () => h(DashboardOverviewView as never, {
+    h(MainLayout as never, {sections: ["home","sites","sitebuilder","mail","database","accounts","billing","monitor","advisor","seo","audit","tasks","software","security","tools","migration","cluster","ai","account","settings"].map(id=>({id,label:(translations as Record<string,string>)[({sitebuilder:"panel.navigation.siteBuilder",software:"panel.navigation.store",tools:"panel.navigation.serverTools",ai:"panel.navigation.aiConnection",account:"panel.account.title"} as Record<string,string>)[id] || `panel.navigation.${id}`] || id,description:"",glyph:""})), activeSection:"home", title:translations["panel.navigation.home"], description:"", subtitle:"", panelName:"AdaPanel", machineName:overview.machineName,secureEntryPath:"panel",userName:"admin",userEmail:"demo@example.com",role:"Administrator",panelVersion:"0.8.66",isTwoFactorEnabled:false,resolvedTheme:document.documentElement.dataset.theme}, () => h(DashboardOverviewView as never, {
       overview,
       loading: false,
       sitesCount: 12,
@@ -63,7 +63,7 @@ createApp({
       ],
       allowedSections: ["sites", "mail", "database", "files", "tools", "security", "audit"],
       panelUpdate: null,
-      attention: { criticalCount: 1, warningCount: 2, totalCount: 3, items: [], failedSources: [] }
+      attention: { criticalCount: 1, warningCount: 2, totalCount: 3, items: [], failedSources: new URLSearchParams(location.search).has("failed") ? ["components", "ssl"] : [] }
     }))
 })
   .use(createPinia())

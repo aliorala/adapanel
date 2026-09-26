@@ -5303,5 +5303,7 @@
   "panel.automation.result.mailSsl": "Posta sertifikası ({host}) güncellendi.",
   "panel.automation.result.updates": "Yüklenen güncellemeler: {installed}; bekleyen: {pending}: {components}",
   "panel.automation.result.upToDate": "Denetlenebilen tüm bileşenler güncel.",
-  "panel.automation.result.unchecked": "Sürümü otomatik denetlenemeyen bileşenler ({count}): {components}"
+  "panel.automation.result.unchecked": "Sürümü otomatik denetlenemeyen bileşenler ({count}): {components}",
+  "panel.attention.unmeasuredCount": "Ölçülemedi",
+  "panel.attention.incompleteSummary": "Bazı kontroller tamamlanamadı. — ile gösterilen sayılar bilinmiyor. Ayrıntılar için Tümünü gör düğmesini kullanın."
 }

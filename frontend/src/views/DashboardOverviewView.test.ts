@@ -6,7 +6,7 @@ import { emptyAttentionSummary, type AttentionItem } from "../api/attention";
 vi.mock("../api/system", () => ({ getServerIpAddresses: vi.fn(async () => []) }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 let app: App | undefined;
-function mount(items: AttentionItem[]) {
+function mount(items: AttentionItem[], failedSources: string[] = []) {
   const renderer = createRenderer<object, object>({
     createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
     insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {},
@@ -15,10 +15,10 @@ function mount(items: AttentionItem[]) {
   app = renderer.createApp({ ...DashboardOverviewView, render: () => h("section") } as Component, {
     overview: null, loading: false, sitesCount: 0, totalBindingCount: 0, ftpUserCount: 0, databaseCount: 0,
     securityStatusLabel: "", securePath: "panel", auditItems: [], allowedSections: [], panelUpdate: null,
-    attention: { ...emptyAttentionSummary(), items }
+    attention: { ...emptyAttentionSummary(), items, failedSources }
   });
   app.provide(ssrContextKey, {});
-  return (app.mount({}).$ as unknown as { setupState: { pendingUpdateCount: number; pendingUpdateTarget: string } }).setupState;
+  return (app.mount({}).$ as unknown as { setupState: { pendingUpdateCount: number | null; pendingUpdateTarget: string; expiringCertificateCount: number | null; attentionTone: string } }).setupState;
 }
 const item = (id: string, section: string, affectedCount?: number): AttentionItem => ({
   id, section, affectedCount, severity: "warning", titleKey: "test", descriptionKey: "", detail: "",
@@ -38,4 +38,16 @@ it("adds the panel update and ignores unrelated warnings", () => {
 });
 it("has no pending update when the resolved component finding disappears", () => {
   expect(mount([item("disk", "monitor")]).pendingUpdateCount).toBe(0);
+});
+
+it.each(["components", "panelUpdate", "advisor"])("does not report zero updates when %s cannot be measured", source => {
+  const state = mount([], [source]);
+  expect(state.pendingUpdateCount).toBeNull();
+  expect(state.pendingUpdateTarget).toBe("attention");
+  expect(state.attentionTone).toBe("warning");
+});
+it("keeps independent counts while certificate measurement is unavailable", () => {
+  const state = mount([item("component-updates", "software", 2)], ["ssl"]);
+  expect(state.pendingUpdateCount).toBe(2);
+  expect(state.expiringCertificateCount).toBeNull();
 });

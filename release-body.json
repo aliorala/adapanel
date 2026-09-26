@@ -1,5 +1,5 @@
 {
-  "name": "0.8.65 — Kaynak kartları ve dil tutarlılığı",
-  "body": "- CPU, bellek ve disk kartları kompakt yuvarlak göstergeler ve ayrı vurgu renkleriyle yenilendi.\n- Açık/koyu tema ve dar ekran yerleşimi iyileştirildi.\n- Türkçe ve İngilizce metinler, tarih/sayı biçimleri, webmail açılışı ve otomasyon özetleri düzeltildi.\n- Çeviri kapsamı ve dil değişimi için regresyon kontrolleri eklendi.\n- İzleme süreç listesi yenilenirken oluşan geçici yatay taşma düzeltildi.",
-  "tag_name": "0.8.65"
+  "name": "0.8.66 — Güncelleme durumunun güvenilirliği",
+  "tag_name": "0.8.66",
+  "body": "- Güncelleme sayacı ve yazılım kartları mevcut kurulu sürüme göre hesaplanır.\n- Güncelleme kaydı eşzamanlı okunurken veya yazılırken yarım içerik oluşması önlendi.\n- Eksik/bozuk ölçüm ana sayfada sıfır yerine belirsiz durum ve uyarı olarak gösterilir.\n- Update counts now use installed versions; unavailable checks are shown explicitly and cache writes are atomic."
 }

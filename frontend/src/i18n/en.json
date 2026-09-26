@@ -5303,5 +5303,7 @@
   "panel.automation.result.mailSsl": "Mail certificate ({host}) updated.",
   "panel.automation.result.updates": "Updates installed: {installed}; pending: {pending}: {components}",
   "panel.automation.result.upToDate": "All checkable components are up to date.",
-  "panel.automation.result.unchecked": "Versions that cannot be checked automatically ({count}): {components}"
+  "panel.automation.result.unchecked": "Versions that cannot be checked automatically ({count}): {components}",
+  "panel.attention.unmeasuredCount": "Not measured",
+  "panel.attention.incompleteSummary": "Some checks could not be completed. Counts shown as — are unknown. Select View all for details."
 }

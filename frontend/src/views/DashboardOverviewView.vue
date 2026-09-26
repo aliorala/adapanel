@@ -36,12 +36,12 @@
         </button>
 
         <button type="button" class="ac-chip" @click="go(pendingUpdateTarget)">
-          <strong>{{ pendingUpdateCount }}</strong>
+          <strong :aria-label="pendingUpdateCount === null ? t('panel.attention.unmeasuredCount') : undefined">{{ pendingUpdateCount ?? '—' }}</strong>
           <span>{{ t("panel.attention.summaryUpdates") }}</span>
         </button>
 
         <button type="button" class="ac-chip" :disabled="!can('sites')" @click="can('sites') && go('sites')">
-          <strong>{{ expiringCertificateCount }}</strong>
+          <strong :aria-label="expiringCertificateCount === null ? t('panel.attention.unmeasuredCount') : undefined">{{ expiringCertificateCount ?? '—' }}</strong>
           <span>{{ t("panel.attention.summaryCertificates") }}</span>
         </button>
 
@@ -51,7 +51,7 @@
         </button>
       </div>
 
-      <p v-if="attention.failedSources.length" class="notice warn" role="status">{{ t("panel.attention.failedSources") }}</p>
+      <p v-if="attention.failedSources.length" class="notice warn" role="status">{{ t("panel.attention.incompleteSummary") }}</p>
       <p v-else-if="attention.totalCount === 0" class="ac-clear">{{ t("panel.attention.emptyTitle") }}</p>
     </section>
 
@@ -393,12 +393,14 @@ const { t } = useI18n();
 // Bekleyen güncellemeler: bileşen güncellemeleri ("software") + panel güncellemesi ("updates").
 const pendingUpdateItems = computed(() => (props.attention?.items ?? [])
   .filter((item) => item.section === "software" || item.section === "updates"));
-const pendingUpdateCount = computed(() => pendingUpdateItems.value.reduce((total, item) => total + (item.affectedCount ?? 1), 0));
+const updateCountUnknown = computed(() => props.attention?.failedSources.some(source => ["advisor", "components", "panelUpdate"].includes(source)) ?? true);
+const pendingUpdateCount = computed(() => updateCountUnknown.value ? null : pendingUpdateItems.value.reduce((total, item) => total + (item.affectedCount ?? 1), 0));
 
 // Tıklayınca DOĞRU ekrana git. Sayaç iki farklı güncelleme türünü topluyor; hepsini panel
 // güncelleme sayfasına yollamak "1 güncelleme var" deyip "zaten son sürümdesiniz" gösterir.
 // Tek madde varsa kendi bölümüne, birden çoksa hepsini listeleyen çekmeceye gideriz.
 const pendingUpdateTarget = computed(() => {
+  if (updateCountUnknown.value) return "attention";
   const items = pendingUpdateItems.value;
   if (items.length === 1) {
     return items[0].section || "updates";
@@ -407,7 +409,7 @@ const pendingUpdateTarget = computed(() => {
 });
 
 // Süresi dolan/dolmak üzere olan sertifikalar (Danışman'ın SSL maddeleri).
-const expiringCertificateCount = computed(() => (props.attention?.items ?? [])
+const expiringCertificateCount = computed(() => props.attention?.failedSources.some(source => ["advisor", "ssl"].includes(source)) ? null : (props.attention?.items ?? [])
   .filter((item) => item.titleKey.startsWith("advisor.ssl")).length);
 
 const attentionTone = computed(() => {
@@ -415,7 +417,7 @@ const attentionTone = computed(() => {
     return "critical";
   }
 
-  return props.attention.warningCount > 0 ? "warning" : "calm";
+  return props.attention.warningCount > 0 || props.attention.failedSources.length > 0 ? "warning" : "calm";
 });
 
 // profesyonel panel benzeri: hizli erisim kartlari + ozet kutulari ilgili bolume gider.

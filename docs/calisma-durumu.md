@@ -1,5 +1,13 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-26 — 0.8.66 hazırlığı: güncelleme durumunun doğruluğu
+
+Yeni kod incelemesi: component-updates.json doğrudan üzerine yazılıyor, okuma hatası boş kayıt/0 güncellemeye çevriliyor ve eski UpdateAvailable bayrağı kurulu sürümden bağımsız kullanılıyordu. Atomik geçici dosya+yer değiştirme ve dosya yolu başına okuma/yazma kilidi eklendi. Kurulum sonrası önbellek oku-değiştir-yaz kaldırıldı; sayaç ve yazılım kartları mevcut DB sürümünü karşılaştırır. Bozuk/eksik/null önbellek ve eksik kurulu bileşen ölçümü attention failedSources'a gider. Başarısız ve dışarıdan algılanan kurulumlar sayılmaz.
+
+Ana sayfa güncelleme/SSL ölçümü başarısızsa sıfır yerine —, erişilebilir Ölçülemedi/Not measured etiketi ve açıklama gösterir. Bağımsız sağlam ölçümler korunur. 18 hedefli backend ve 134 frontend testi başarılı; tam backend/paket çalışması sürüyor. Windows eşzamanlı okuma testi ilk atomik sürümde gerçek UnauthorizedAccessException yakaladı; yol kilidiyle düzeltildi ve test geçti. TR koyu masaüstü ve EN açık390px önizlemede taşma0. Canlı başlangıçta0.8.65 ve3gerçek bekleyen güncelleme; canlıda bozuk dosya oluşturulmadı. Bu hata yolları yerel fault/concurrency testleriyle doğrulandı.
+
+Bileşen manifesti/indirici aynı; .61'in22Passed/3mevcutSkipped denetimi yeniden kullanılacak. Yedek03:00/ikinci saatkapalı/5gün/yerel+FTP ve şifreleme kapalı tercihi korunuyor. Fiyat botu API taşınmadı; FTP kayıtsız nesne envanteri önceki açık sınır. Adminer/PHP/Stalwart güncellemeleri bu turda kurulmadı. Kaynak/history/tag push yok. Ayrıntı docs/denetim-2026-09-26-066.md; kanıt .tmp/audit-066.
+
 ## 2026-09-26 — SON DURUM: 0.8.65 canlı — yuvarlak kartlar ve Türkçe/İngilizce
 
 CPU/bellek/disk kompakt yuvarlak göstergelerle yenilendi: mavi/mor/turkuaz; yüksek kullanım sarı/kırmızı. Ana sayfa ve izleme aynı bileşeni kullanır. Canlı masaüstü kartları138px (eski büyük tasarım184px), taşma yok. TR/EN ve açık/koyu tema, 1534/1024/390px önizleme incelendi. Canlı .64 son kontrolünde yakalanan süreç animasyonu taşması .65'te position:relative kapsayıcıyla düzeltildi; ayrılan satırların sağ kenarı1485px ve kapsayıcısıyla aynı, belge1524px/görünüm1534px.
