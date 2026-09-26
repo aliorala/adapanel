@@ -1,12 +1,14 @@
 # Çalışma durumu — canlı kayıt
 
-## 2026-09-26 — 0.8.64 hazırlığı: yuvarlak göstergeler ve iki dil
+## 2026-09-26 — SON DURUM: 0.8.65 canlı — yuvarlak kartlar ve Türkçe/İngilizce
 
-Kaynak kartları kompakt yuvarlak göstergelere döndü; CPU mavi, bellek mor, disk turkuaz. Yüzde daire içinde, başlık/kapasite dışında; yüksek kullanım sarı/kırmızı. Ana sayfa ve izleme aynı bileşeni kullanır. İki tema, İngilizce/Türkçe ve 1534/1024/390 px incelendi; kartlarda yatay taşma yok.
+CPU/bellek/disk kompakt yuvarlak göstergelerle yenilendi: mavi/mor/turkuaz; yüksek kullanım sarı/kırmızı. Ana sayfa ve izleme aynı bileşeni kullanır. Canlı masaüstü kartları138px (eski büyük tasarım184px), taşma yok. TR/EN ve açık/koyu tema, 1534/1024/390px önizleme incelendi. Canlı .64 son kontrolünde yakalanan süreç animasyonu taşması .65'te position:relative kapsayıcıyla düzeltildi; ayrılan satırların sağ kenarı1485px ve kapsayıcısıyla aynı, belge1524px/görünüm1534px.
 
-5.305'er TR/EN anahtarı: statik kullanım, boş/çift anahtar ve parametre eşleşmesi denetleniyor. Üç eksik site kurucu doğrulaması, webmail açılış/hata sayfası, kopyalama düğmeleri, servis adları ve standart otomasyon sonuçları yerelleştirildi. Tarih/sayı biçimleri panel dilini izler. Bilinmeyen teknik hata metinleri aynen korunur; yedekleme/iş durumları metinden türetilmez. 130 frontend testi ve typecheck geçti; paket/tam backend/canlı doğrulama sürüyor. Ayrıntı docs/denetim-2026-09-26-064.md.
+5.305'er çeviri anahtarı, statik kullanım/boş/çift anahtar/parametre eşleşmesi denetlendi. Site kurucu doğrulaması, webmail açılış/hata, kopyalama düğmesi, servis adı, standart otomasyon özetleri ve panel diline bağlı tarih/sayı biçimleri düzeltildi. Bilinmeyen teknik hata metinleri korunur; otomasyon durumları değiştirilmez. 130 frontend başarılı; tam backend ilk çalışmada5507başarılı/1CSS kaynak denetimi hatası, düzeltme sonrası ilgili3test başarılı; Core2başarılı. .65 yalnız bir CSS konumlandırma düzeltmesi + sürüm: güncel typecheck/build/3CSS testi başarılı, diğer sonuçlar yeniden kullanıldı. Manifest/indirici aynı: .61'in22Passed/3mevcutSkipped bileşen raporu yeniden kullanılıyor.
 
-Panel canlıda İngilizce denetim için geçici olarak English seçildi; bitişte Türkçeye geri alınacak. Yedek şifrelemesi kapalı, 03:00/ikinci saat kapalı/5 gün/yerel+FTP korunacak. Dış fiyat API henüz taşınmadı. Kaynak/history/tag push yasak; sadece installer release.
+Canlı .65 succeeded/exit0/isFinished=true/isFailed=false/error boş; updatedAtUtc2026-09-26T18:17:25.804864Z. Installer90.827.511bayt SHA256BB1CA53F663CC699A86171D621284E790503ADE87EE7C20D8E7FB3A99608E0F2; GitHub yeniden indirme ve canlı doğrulama eşit. EXEB3A22EA08F7B90615E739FEACE57C718F3E63526DD3462C788924C22C07DE409 yerel/canlı aynı. 168publish dosyası ve installer denetimleri bulgusuz. AdaPanel/AdaMariaDB/adaredis/DNS/ftpsvc/W3SVC/WAS Running, Stalwart9164; üçHTTPS200. Sağlık3alan/0eksik/0sunucu bulgusu. Kaynakbb68634+d44a61f; kaynak/history/tag push yok, yalnız installer.
+
+Canlı İngilizce denetimi tamamlandı ve Türkçe geri seçilip kaydedildi. Otomasyon03:00/ikinci saatkapalı/saklama5gün/yerel+FTP korundu; şifreleme kapalı tercihine dokunulmadı. Fiyat botu API henüz taşınmadı. Adminer/PHP/Stalwart bekleyen sürümleri bu arayüz çalışmasında yükseltilmedi. FTP kayıtsız nesne envanteri önceki açık sınırdır. Ayrıntı docs/denetim-2026-09-26-064.md; kanıt .tmp/audit-064 ve .tmp/audit-065.
 
 ## 2026-09-26 — SON DURUM: 0.8.63 canlı — arayüz ve site kurucu
 
