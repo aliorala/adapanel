@@ -23,6 +23,8 @@ export type AutomationSettings = {
   backupScheduleDayOfWeek: number;
   /** 1-31; ay o günü çekmiyorsa sunucu ayın son gününü kullanır. */
   backupScheduleDayOfMonth: number;
+  backupScheduleSecondHour?: number | null;
+  backupScheduleSecondMinute?: number;
   backupRetentionDays: number;
   backupSites: boolean;
   backupDatabases: boolean;

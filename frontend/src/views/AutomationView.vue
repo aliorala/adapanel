@@ -408,6 +408,8 @@ async function save() {
         backupScheduleMinute: schedulePlan.minute,
         backupScheduleDayOfWeek: schedulePlan.dayOfWeek,
         backupScheduleDayOfMonth: schedulePlan.dayOfMonth,
+        backupScheduleSecondHour: schedulePlan.secondHour ?? null,
+        backupScheduleSecondMinute: schedulePlan.secondMinute ?? 0,
         backupRemotePassword: remotePassword.value
       })
     );
@@ -477,7 +479,9 @@ function applyStatus(next: AutomationStatus) {
     hour: next.settings.backupScheduleHour,
     minute: next.settings.backupScheduleMinute,
     dayOfWeek: next.settings.backupScheduleDayOfWeek,
-    dayOfMonth: next.settings.backupScheduleDayOfMonth
+    dayOfMonth: next.settings.backupScheduleDayOfMonth,
+    secondHour: next.settings.backupScheduleSecondHour ?? null,
+    secondMinute: next.settings.backupScheduleSecondMinute ?? 0
   });
   settingsLoaded.value = true;
 }

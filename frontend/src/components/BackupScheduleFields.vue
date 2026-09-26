@@ -38,6 +38,19 @@
     <input v-model="timeText" type="time" :disabled="disabled" />
   </label>
 
+  <label v-if="plan.mode === 'daily'" class="stacked-field">
+    <span class="field-label check-field">
+      <input v-model="secondEnabled" type="checkbox" :disabled="disabled" />
+      {{ t("panel.schedule.secondEnabled") }}
+    </span>
+    <small class="field-hint">{{ t("panel.schedule.secondHint") }}</small>
+  </label>
+
+  <label v-if="plan.mode === 'daily' && secondEnabled" class="stacked-field">
+    <span class="field-label">{{ t("panel.schedule.secondTime") }}</span>
+    <input v-model="secondTimeText" type="time" :disabled="disabled" />
+  </label>
+
   <label v-if="plan.mode === 'weekly'" class="stacked-field">
     <span class="field-label">{{ t("panel.schedule.weekday") }}</span>
     <select v-model.number="plan.dayOfWeek" :disabled="disabled">
@@ -70,6 +83,26 @@ const props = defineProps<{
 const { t } = useI18n();
 
 const plan = computed(() => props.plan);
+
+const secondEnabled = computed({
+  get: () => props.plan.secondHour != null,
+  set(enabled: boolean) {
+    props.plan.secondHour = enabled ? (props.plan.hour + 12) % 24 : null;
+    props.plan.secondMinute = props.plan.minute;
+  }
+});
+
+const secondTimeText = computed({
+  get: () => `${String(props.plan.secondHour ?? 0).padStart(2, "0")}:${String(props.plan.secondMinute ?? 0).padStart(2, "0")}`,
+  set(value: string) {
+    if (!/^\d{2}:\d{2}$/.test(value)) return;
+    const [hour, minute] = value.split(":").map(Number);
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      props.plan.secondHour = hour;
+      props.plan.secondMinute = minute;
+    }
+  }
+});
 
 /**
  * `<input type="time">` tek bir "HH:MM" metniyle çalışır; kayıt ise saat ve dakikayı AYRI tutar

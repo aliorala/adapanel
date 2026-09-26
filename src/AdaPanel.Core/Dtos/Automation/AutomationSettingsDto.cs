@@ -43,6 +43,11 @@ public sealed class AutomationSettingsDto
     /// </summary>
     public int BackupScheduleDayOfMonth { get; set; } = 1;
 
+    /// <summary>İsteğe bağlı ikinci günlük saat; null = kapalı. Sunucunun yerel saati.</summary>
+    public int? BackupScheduleSecondHour { get; set; }
+
+    public int BackupScheduleSecondMinute { get; set; }
+
     /// <summary>Bu günden eski yerel yedekler silinir. 0 = sınırsız (silme).</summary>
     public int BackupRetentionDays { get; set; } = 14;
 

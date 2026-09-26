@@ -18,11 +18,14 @@ export type BackupSchedulePlan = {
   dayOfWeek: number;
   /** 1-31; ay o günü çekmiyorsa sunucu ayın son gününü kullanır. */
   dayOfMonth: number;
+  /** null/undefined = second daily backup disabled. */
+  secondHour?: number | null;
+  secondMinute?: number;
 };
 
 /** Sunucu tarafındaki varsayılanlarla aynı: eski kurulumlar aralık modunda kalır. */
 export function bosProgram(): BackupSchedulePlan {
-  return { mode: "interval", intervalHours: 24, hour: 3, minute: 0, dayOfWeek: 1, dayOfMonth: 1 };
+  return { mode: "interval", intervalHours: 24, hour: 3, minute: 0, dayOfWeek: 1, dayOfMonth: 1, secondHour: null, secondMinute: 0 };
 }
 
 function saatMetni(plan: BackupSchedulePlan) {
@@ -36,6 +39,8 @@ function saatMetni(plan: BackupSchedulePlan) {
 export function programOzeti(plan: BackupSchedulePlan, t: (key: string, named?: Record<string, unknown>) => string) {
   switch (plan.mode) {
     case "daily":
+      if (plan.secondHour != null && (plan.secondHour !== plan.hour || (plan.secondMinute ?? 0) !== plan.minute))
+        return t("panel.schedule.summaryTwiceDaily", { time: saatMetni(plan), secondTime: saatMetni({ ...plan, hour: plan.secondHour, minute: plan.secondMinute ?? 0 }) });
       return t("panel.schedule.summaryDaily", { time: saatMetni(plan) });
     case "weekly":
       return t("panel.schedule.summaryWeekly", {

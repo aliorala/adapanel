@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.57",
-  "name": "0.8.57 — SSL durumunun doğru ölçülmesi",
-  "body": "- IIS sertifika parmak izlerinin metin ve bayt biçimleri doğru okunur.\n- SSL ekranı eski kurulum sonucunu kullanmak yerine mevcut bağlamayı yeniden ölçer.\n- IPv6 HTTPS bağlamaları doğru ayrıştırılır; ölçülemeyen bağlamalar varken ortak sertifika silinmez.\n- Önceki sürümün DNS sağlık ve görev durumu düzeltmelerini içerir.\n- Yinelenen SPF/DMARC kayıtlarının panel listesinde birikmesi düzeltildi."
+  "tag_name": "0.8.58",
+  "name": "0.8.58 — İsteğe bağlı ikinci günlük yedek",
+  "body": "- Günlük yedek programına kullanıcı tarafından seçilebilen isteğe bağlı ikinci saat eklendi.\n- Sunucu geneli ve abonelik programları aynı zamanlama kurallarını kullanır.\n- Aynı saatler tek çalışma sayılır; aboneliklerin günlük yedek kotası korunur.\n- Saat dilimi, gün değişimi ve yaz saati geçişleri desteklenir. Mevcut tek saatli programlar korunur."
 }

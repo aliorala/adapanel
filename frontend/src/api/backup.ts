@@ -386,6 +386,8 @@ export type SubscriptionBackupSchedule = {
   scheduleDayOfWeek: number;
   /** 1-31; ay o günü çekmiyorsa sunucu ayın son gününü kullanır. */
   scheduleDayOfMonth: number;
+  scheduleSecondHour?: number | null;
+  scheduleSecondMinute?: number;
   /** 0 = süreye göre silme yok. */
   retentionDays: number;
   /** 0 = sayıya göre silme yok. */
@@ -424,6 +426,8 @@ export type SubscriptionBackupSchedulePayload = {
   scheduleMinute: number;
   scheduleDayOfWeek: number;
   scheduleDayOfMonth: number;
+  scheduleSecondHour?: number | null;
+  scheduleSecondMinute?: number;
   retentionDays: number;
   keepCount: number;
   incremental: boolean;

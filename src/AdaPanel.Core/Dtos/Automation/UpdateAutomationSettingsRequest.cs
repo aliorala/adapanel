@@ -27,6 +27,13 @@ public sealed class UpdateAutomationSettingsRequest
     [Range(1, 31)]
     public int BackupScheduleDayOfMonth { get; set; } = 1;
 
+    /// <summary>İsteğe bağlı ikinci günlük saat; null = kapalı. Sunucunun yerel saati.</summary>
+    [Range(0, 23)]
+    public int? BackupScheduleSecondHour { get; set; }
+
+    [Range(0, 59)]
+    public int BackupScheduleSecondMinute { get; set; }
+
     [Range(0, 3650)]
     public int BackupRetentionDays { get; set; } = 14;
 

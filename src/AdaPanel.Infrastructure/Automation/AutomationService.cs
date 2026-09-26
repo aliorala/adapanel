@@ -73,13 +73,17 @@ public sealed class AutomationService(
             request.BackupScheduleHour,
             request.BackupScheduleMinute,
             request.BackupScheduleDayOfWeek,
-            request.BackupScheduleDayOfMonth);
+            request.BackupScheduleDayOfMonth,
+            request.BackupScheduleSecondHour,
+            request.BackupScheduleSecondMinute);
         state.BackupScheduleMode = plan.Mode;
         state.BackupIntervalHours = plan.IntervalHours;
         state.BackupScheduleHour = plan.Hour;
         state.BackupScheduleMinute = plan.Minute;
         state.BackupScheduleDayOfWeek = plan.DayOfWeek;
         state.BackupScheduleDayOfMonth = plan.DayOfMonth;
+        state.BackupScheduleSecondHour = plan.SecondHour;
+        state.BackupScheduleSecondMinute = plan.SecondMinute;
         state.BackupRetentionDays = Math.Clamp(request.BackupRetentionDays, 0, 3650);
         state.BackupSites = request.BackupSites;
         state.BackupDatabases = request.BackupDatabases;
@@ -730,7 +734,9 @@ public sealed class AutomationService(
             state.BackupScheduleHour,
             state.BackupScheduleMinute,
             state.BackupScheduleDayOfWeek,
-            state.BackupScheduleDayOfMonth);
+            state.BackupScheduleDayOfMonth,
+            state.BackupScheduleSecondHour,
+            state.BackupScheduleSecondMinute);
 
     /// <summary>
     /// Sunucunun saat dilimi. Her çağrıda yeniden sorulur (önbelleğe alınmaz): yönetici Windows'ta
@@ -954,6 +960,8 @@ public sealed class AutomationService(
                 BackupScheduleMinute = plan.Minute,
                 BackupScheduleDayOfWeek = plan.DayOfWeek,
                 BackupScheduleDayOfMonth = plan.DayOfMonth,
+                BackupScheduleSecondHour = plan.SecondHour,
+                BackupScheduleSecondMinute = plan.SecondMinute,
                 BackupRetentionDays = state.BackupRetentionDays,
                 BackupSites = state.BackupSites,
                 BackupDatabases = state.BackupDatabases,
@@ -1312,6 +1320,11 @@ public sealed class AutomationService(
         public int BackupScheduleMinute { get; set; }
         public int BackupScheduleDayOfWeek { get; set; } = 1;
         public int BackupScheduleDayOfMonth { get; set; } = 1;
+
+        /// <summary>İsteğe bağlı ikinci günlük saat; null = kapalı. Sunucunun yerel saati.</summary>
+        public int? BackupScheduleSecondHour { get; set; }
+
+        public int BackupScheduleSecondMinute { get; set; }
         public int BackupRetentionDays { get; set; } = 14;
         public bool BackupSites { get; set; } = true;
         public bool BackupDatabases { get; set; }

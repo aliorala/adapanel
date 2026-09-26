@@ -31,8 +31,13 @@ internal sealed record BackupSchedulePlan(
     int Hour,
     int Minute,
     int DayOfWeek,
-    int DayOfMonth)
+    int DayOfMonth,
+    int? SecondHour = null,
+    int SecondMinute = 0)
 {
+    public bool HasSecondTime => Mode == BackupSchedule.Daily && SecondHour.HasValue &&
+        (SecondHour.Value != Hour || SecondMinute != Minute);
+
     /// <summary>Belirli bir SAATE bağlı mı (takvim), yoksa "son çalışmadan N saat sonra" mı.</summary>
     public bool Takvimli => Mode is BackupSchedule.Daily or BackupSchedule.Weekly or BackupSchedule.Monthly;
 
@@ -134,7 +139,9 @@ internal static class BackupSchedule
         int hour,
         int minute,
         int dayOfWeek,
-        int dayOfMonth)
+        int dayOfMonth,
+        int? secondHour = null,
+        int secondMinute = 0)
     {
         var temizMod = (mode ?? string.Empty).Trim().ToLowerInvariant();
         if (!Modes.Contains(temizMod))
@@ -148,7 +155,9 @@ internal static class BackupSchedule
             Math.Clamp(hour, 0, 23),
             Math.Clamp(minute, 0, 59),
             Math.Clamp(dayOfWeek, 0, 6),
-            Math.Clamp(dayOfMonth, 1, 31));
+            Math.Clamp(dayOfMonth, 1, 31),
+            secondHour.HasValue ? Math.Clamp(secondHour.Value, 0, 23) : null,
+            Math.Clamp(secondMinute, 0, 59));
     }
 
     /// <summary>
@@ -185,7 +194,12 @@ internal static class BackupSchedule
         // KAÇIRILAN TUR TELAFİ EDİLİR: sunucu 03:00'te kapalıysa açılınca hemen alınır, ertesi
         // günü beklemez — yoksa bir gün tamamen yedeksiz kalınırdı. Ama sınırsız değil: çok geç
         // kalınmışsa (bkz. TelafiPenceresi) tur atlanır ve sıradaki ana bırakılır.
-        return nowUtc - kacirilan.Value <= plan.TelafiPenceresi;
+        // İki saat arasındaki aralık eşit olmak zorunda değil. Telafi penceresi bir sonraki
+        // gerçek saate olan mesafenin yarısıdır; ikinci saate hemen önce çift iş başlatılmaz.
+        var pencere = plan.HasSecondTime && SonrakiPlanliZaman(plan, kacirilan.Value, zone) is { } sonraki
+            ? (sonraki - kacirilan.Value) / 2
+            : plan.TelafiPenceresi;
+        return nowUtc - kacirilan.Value <= pencere;
     }
 
     /// <summary>
@@ -212,12 +226,9 @@ internal static class BackupSchedule
                 continue;
             }
 
-            var an = YerelDenUtc(tarih.AddHours(plan.Hour).AddMinutes(plan.Minute), zone);
-            if (an <= nowUtc)
+            foreach (var an in GunSaatleri(plan, tarih, zone).OrderDescending())
             {
-                // Anlar tarihe göre artan olduğundan, geriye doğru taranırken BULUNAN İLK an
-                // aynı zamanda en yenisidir.
-                return an;
+                if (an <= nowUtc) return an;
             }
         }
 
@@ -243,6 +254,11 @@ internal static class BackupSchedule
             return nowUtc;
         }
 
+        return SonrakiPlanliZaman(plan, nowUtc, zone);
+    }
+
+    private static DateTime? SonrakiPlanliZaman(BackupSchedulePlan plan, DateTime nowUtc, TimeZoneInfo zone)
+    {
         var yerelBugun = YerelTarih(nowUtc, zone);
         var ileriGun = GeriyeBakisGunu(plan.Mode);
         for (var i = 0; i <= ileriGun; i++)
@@ -253,14 +269,20 @@ internal static class BackupSchedule
                 continue;
             }
 
-            var an = YerelDenUtc(tarih.AddHours(plan.Hour).AddMinutes(plan.Minute), zone);
-            if (an > nowUtc)
+            foreach (var an in GunSaatleri(plan, tarih, zone).Order())
             {
-                return an;
+                if (an > nowUtc) return an;
             }
         }
 
         return null;
+    }
+
+    private static IEnumerable<DateTime> GunSaatleri(BackupSchedulePlan plan, DateTime tarih, TimeZoneInfo zone)
+    {
+        yield return YerelDenUtc(tarih.AddHours(plan.Hour).AddMinutes(plan.Minute), zone);
+        if (plan.HasSecondTime)
+            yield return YerelDenUtc(tarih.AddHours(plan.SecondHour!.Value).AddMinutes(plan.SecondMinute), zone);
     }
 
     private static int GeriyeBakisGunu(string mode) => mode switch

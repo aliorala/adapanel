@@ -16,6 +16,53 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class AutomationRunningJobTests
 {
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Subscription_second_time_is_persisted_and_quota_is_applied_on_reload(int quota)
+    {
+        using var fixture = new Fixture();
+        var service = fixture.Subscription(quota);
+        var userId = Guid.NewGuid();
+        var request = new UpdateSubscriptionBackupScheduleRequest
+        {
+            Enabled = true, ScheduleMode = "daily", ScheduleHour = 3,
+            ScheduleSecondHour = 15, ScheduleSecondMinute = 45
+        };
+        await service.UpdateScheduleAsync(userId, request);
+        var saved = await service.GetScheduleAsync(userId);
+        Assert.Equal(quota == 1, saved.ThrottledByQuota);
+        Assert.Equal(quota == 1 ? (int?)null : 15, saved.ScheduleSecondHour);
+        Assert.Equal(45, saved.ScheduleSecondMinute);
+        // A later plan upgrade restores the stored requested second time.
+        Assert.Equal(15, (await fixture.Subscription(2).GetScheduleAsync(userId)).ScheduleSecondHour);
+        request.ScheduleSecondHour = null;
+        await service.UpdateScheduleAsync(userId, request);
+        Assert.Null((await service.GetScheduleAsync(userId)).ScheduleSecondHour);
+    }
+
+    [Fact]
+    public async Task Second_daily_time_survives_save_reload_and_can_be_disabled()
+    {
+        using var fixture = new Fixture();
+        await fixture.Configure();
+        Assert.Null((await fixture.Service.GetStatusAsync()).Settings.BackupScheduleSecondHour);
+        var request = new AdaPanel.Core.Dtos.Automation.UpdateAutomationSettingsRequest
+        {
+            AutoBackupEnabled = true, BackupScheduleMode = "daily", BackupScheduleHour = 3,
+            BackupScheduleSecondHour = 15, BackupScheduleSecondMinute = 45
+        };
+        await fixture.Service.UpdateSettingsAsync(request);
+        var saved = (await fixture.Service.GetStatusAsync()).Settings;
+        Assert.Equal(15, saved.BackupScheduleSecondHour);
+        Assert.Equal(45, saved.BackupScheduleSecondMinute);
+        Assert.Equal(3, saved.BackupScheduleHour);
+        request.BackupScheduleSecondHour = null;
+        await fixture.Service.UpdateSettingsAsync(request);
+        Assert.Null((await fixture.Service.GetStatusAsync()).Settings.BackupScheduleSecondHour);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -102,6 +149,17 @@ public sealed class AutomationRunningJobTests
             autoBackupEnabled = true, backupSites = false, backupPanelConfig = true,
             autoSslRenewEnabled = false, updateCheckEnabled = false
         });
+        public AdaPanel.Infrastructure.Subscriptions.SubscriptionBackupScheduleService Subscription(int quota)
+        {
+            var scopes = Stub<ICustomerScopeService>();
+            ((AsyncProxy)(object)scopes).Handler = (_, _) => Task.FromResult(new CustomerScope([], 0, 0, 0, 0, 0, PlanId: "test"));
+            var plans = Stub<IServicePlanService>();
+            ((AsyncProxy)(object)plans).Handler = (_, _) => Task.FromResult<AdaPanel.Core.Dtos.Users.ServicePlanDto?>(
+                new() { MaxBackupsPerDay = quota });
+            return new(store, Stub<IBackupService>(), scopes, plans, Stub<ISecretProtector>(),
+                new AdaPanel.Infrastructure.Services.ConcurrencyLock(), Jobs,
+                NullLogger<AdaPanel.Infrastructure.Subscriptions.SubscriptionBackupScheduleService>.Instance);
+        }
         public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
         private static T Stub<T>() where T : class => DispatchProxy.Create<T, AsyncProxy>();
     }

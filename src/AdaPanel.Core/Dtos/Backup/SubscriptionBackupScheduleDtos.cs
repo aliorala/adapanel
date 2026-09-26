@@ -46,6 +46,13 @@ public sealed class SubscriptionBackupScheduleDto
     /// <summary>Aylık modda ayın günü (1-31); ay o günü çekmiyorsa ayın son günü kullanılır.</summary>
     public int ScheduleDayOfMonth { get; set; } = 1;
 
+    /// <summary>İsteğe bağlı ikinci günlük saat; null = kapalı. Sunucunun yerel saati.</summary>
+    [Range(0, 23)]
+    public int? ScheduleSecondHour { get; set; }
+
+    [Range(0, 59)]
+    public int ScheduleSecondMinute { get; set; }
+
     /// <summary>Saklama süresi, gün (0 = süreye göre silme yok).</summary>
     public int RetentionDays { get; set; } = 14;
 
@@ -129,6 +136,13 @@ public sealed class UpdateSubscriptionBackupScheduleRequest
 
     [Range(1, 31)]
     public int ScheduleDayOfMonth { get; set; } = 1;
+
+    /// <summary>İsteğe bağlı ikinci günlük saat; null = kapalı. Sunucunun yerel saati.</summary>
+    [Range(0, 23)]
+    public int? ScheduleSecondHour { get; set; }
+
+    [Range(0, 59)]
+    public int ScheduleSecondMinute { get; set; }
 
     [Range(0, 3650)]
     public int RetentionDays { get; set; } = 14;

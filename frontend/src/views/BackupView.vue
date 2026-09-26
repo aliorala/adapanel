@@ -1746,7 +1746,9 @@ function scheduleToPlan(schedule: SubscriptionBackupSchedule): BackupSchedulePla
     hour: schedule.scheduleHour,
     minute: schedule.scheduleMinute,
     dayOfWeek: schedule.scheduleDayOfWeek,
-    dayOfMonth: schedule.scheduleDayOfMonth
+    dayOfMonth: schedule.scheduleDayOfMonth,
+    secondHour: schedule.scheduleSecondHour ?? null,
+    secondMinute: schedule.scheduleSecondMinute ?? 0
   };
 }
 
@@ -1930,7 +1932,9 @@ function applyAutoSettings(settings: AutomationSettings) {
     hour: settings.backupScheduleHour,
     minute: settings.backupScheduleMinute,
     dayOfWeek: settings.backupScheduleDayOfWeek,
-    dayOfMonth: settings.backupScheduleDayOfMonth
+    dayOfMonth: settings.backupScheduleDayOfMonth,
+    secondHour: settings.backupScheduleSecondHour ?? null,
+    secondMinute: settings.backupScheduleSecondMinute ?? 0
   });
 }
 
@@ -1947,6 +1951,8 @@ async function saveAutoBackup() {
       backupScheduleMinute: autoSchedule.minute,
       backupScheduleDayOfWeek: autoSchedule.dayOfWeek,
       backupScheduleDayOfMonth: autoSchedule.dayOfMonth,
+      backupScheduleSecondHour: autoSchedule.secondHour ?? null,
+      backupScheduleSecondMinute: autoSchedule.secondMinute ?? 0,
       backupRemotePassword: ""
     });
     applyAutoSettings(autoStatus.value.settings);
@@ -2648,6 +2654,8 @@ async function saveSchedule() {
       scheduleMinute: form.plan.minute,
       scheduleDayOfWeek: form.plan.dayOfWeek,
       scheduleDayOfMonth: form.plan.dayOfMonth,
+      scheduleSecondHour: form.plan.secondHour ?? null,
+      scheduleSecondMinute: form.plan.secondMinute ?? 0,
       retentionDays: form.retentionDays,
       keepCount: form.keepCount,
       incremental: form.incremental,

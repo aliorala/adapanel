@@ -81,13 +81,17 @@ public sealed class SubscriptionBackupScheduleService(
                     request.ScheduleHour,
                     request.ScheduleMinute,
                     request.ScheduleDayOfWeek,
-                    request.ScheduleDayOfMonth);
+                    request.ScheduleDayOfMonth,
+                    request.ScheduleSecondHour,
+                    request.ScheduleSecondMinute);
                 kayit.ScheduleMode = plan.Mode;
                 kayit.IntervalHours = plan.IntervalHours;
                 kayit.ScheduleHour = plan.Hour;
                 kayit.ScheduleMinute = plan.Minute;
                 kayit.ScheduleDayOfWeek = plan.DayOfWeek;
                 kayit.ScheduleDayOfMonth = plan.DayOfMonth;
+                kayit.ScheduleSecondHour = plan.SecondHour;
+                kayit.ScheduleSecondMinute = plan.SecondMinute;
                 kayit.RetentionDays = Math.Clamp(request.RetentionDays, 0, 3650);
                 kayit.KeepCount = Math.Clamp(request.KeepCount, 0, 1000);
                 kayit.Incremental = request.Incremental;
@@ -374,15 +378,6 @@ public sealed class SubscriptionBackupScheduleService(
     /// <summary>
     /// Kayıttaki programı plan kotasına çeker.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Kota YALNIZCA aralık modunda anlamlıdır ve bu bir boşluk değil, ölçülmüş bir sonuçtur:</b>
-    /// takvim modlarının hepsi (günlük/haftalık/aylık) en fazla GÜNDE BİR tur üretir. "Günde en
-    /// çok N yedek" sınırı N ≥ 1 için zaten sağlanır, N = 0 ise sınır yoktur. Yani takvim modu
-    /// kotayı hiçbir değerde delemez; aralık modunda ise saatlik program kotayı delebileceği için
-    /// eski daraltma aynen uygulanır.
-    /// </para>
-    /// </remarks>
     private async Task<KotaliPlan> KotayaCekilmisPlanAsync(ScheduleRecord kayit, Guid userId, CancellationToken cancellationToken)
     {
         var maxGunluk = await MaxBackupsPerDayAsync(userId, cancellationToken);
@@ -397,9 +392,13 @@ public sealed class SubscriptionBackupScheduleService(
         int minute,
         int dayOfWeek,
         int dayOfMonth,
-        int maxBackupsPerDay)
+        int maxBackupsPerDay,
+        int? secondHour = null,
+        int secondMinute = 0)
     {
-        var plan = BackupSchedule.Normalize(mode, intervalHours, hour, minute, dayOfWeek, dayOfMonth);
+        var plan = BackupSchedule.Normalize(mode, intervalHours, hour, minute, dayOfWeek, dayOfMonth, secondHour, secondMinute);
+        if (plan.HasSecondTime && maxBackupsPerDay == 1)
+            return new KotaliPlanSonucu(plan with { SecondHour = null }, true);
         if (plan.Takvimli)
         {
             return new KotaliPlanSonucu(plan, false);
@@ -421,7 +420,9 @@ public sealed class SubscriptionBackupScheduleService(
             kayit.ScheduleMinute,
             kayit.ScheduleDayOfWeek,
             kayit.ScheduleDayOfMonth,
-            maxBackupsPerDay);
+            maxBackupsPerDay,
+            kayit.ScheduleSecondHour,
+            kayit.ScheduleSecondMinute);
         return new KotaliPlan(sonuc.Plan, sonuc.Throttled, maxBackupsPerDay);
     }
 
@@ -481,6 +482,8 @@ public sealed class SubscriptionBackupScheduleService(
             ScheduleMinute = kota.Plan.Minute,
             ScheduleDayOfWeek = kota.Plan.DayOfWeek,
             ScheduleDayOfMonth = kota.Plan.DayOfMonth,
+            ScheduleSecondHour = kota.Plan.SecondHour,
+            ScheduleSecondMinute = kota.Plan.SecondMinute,
             RetentionDays = kayit.RetentionDays,
             KeepCount = kayit.KeepCount,
             Incremental = kayit.Incremental,
@@ -573,6 +576,11 @@ public sealed class SubscriptionBackupScheduleService(
         public int ScheduleDayOfWeek { get; set; } = 1;
 
         public int ScheduleDayOfMonth { get; set; } = 1;
+
+        /// <summary>İsteğe bağlı ikinci günlük saat; null = kapalı. Sunucunun yerel saati.</summary>
+        public int? ScheduleSecondHour { get; set; }
+
+        public int ScheduleSecondMinute { get; set; }
 
         public int RetentionDays { get; set; } = 14;
 

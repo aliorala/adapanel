@@ -452,6 +452,101 @@ public sealed class BackupScheduleTimeTests
         Assert.Equal(TimeSpan.FromHours(84), BackupSchedule.Normalize("weekly", 24, 3, 0, 1, 1).TelafiPenceresi);
         Assert.Equal(TimeSpan.FromDays(15), BackupSchedule.Normalize("monthly", 24, 3, 0, 1, 1).TelafiPenceresi);
     }
+    [Theory]
+    [InlineData(3, 0, 15, 0)]
+    [InlineData(20, 45, 6, 15)]
+    [InlineData(0, 0, 23, 59)]
+    [InlineData(3, 0, 3, 1)]
+    public void Two_daily_times_run_once_each_in_any_order(int hour, int minute, int secondHour, int secondMinute)
+    {
+        var plan = BackupSchedule.Normalize("daily", 24, hour, minute, 1, 1, secondHour, secondMinute);
+        var start = Utc(2026, 9, 25, 21); // local midnight
+        var runs = Simule(plan, Turkiye, start, start.AddDays(3).AddMinutes(-1), start.AddMinutes(-1));
+        Assert.Equal(6, runs.Count);
+        var expected = new[] { new TimeSpan(hour, minute, 0), new TimeSpan(secondHour, secondMinute, 0) }.Order().ToArray();
+        foreach (var day in runs.GroupBy(x => TimeZoneInfo.ConvertTimeFromUtc(x, Turkiye).Date))
+            Assert.Equal(expected, day.Select(x => TimeZoneInfo.ConvertTimeFromUtc(x, Turkiye).TimeOfDay).ToArray());
+    }
+
+    [Fact]
+    public void Next_run_uses_second_time_then_next_day_first_time()
+    {
+        var plan = BackupSchedule.Normalize("daily", 24, 3, 0, 1, 1, 15, 0);
+        Assert.Equal(Utc(2026, 9, 26, 12), BackupSchedule.SonrakiZaman(plan, Utc(2026, 9, 26, 0, 8), Utc(2026, 9, 26, 0, 8), Turkiye));
+        Assert.Equal(Utc(2026, 9, 27, 0), BackupSchedule.SonrakiZaman(plan, Utc(2026, 9, 26, 12, 8), Utc(2026, 9, 26, 12, 8), Turkiye));
+        Assert.False(BackupSchedule.ZamaniGeldi(plan, Utc(2026, 9, 26, 12, 8), Utc(2026, 9, 26, 12, 9), Turkiye));
+    }
+
+    [Fact]
+    public void Catch_up_window_follows_unequal_gap_between_times()
+    {
+        var plan = BackupSchedule.Normalize("daily", 24, 3, 0, 1, 1, 5, 0);
+        Assert.True(BackupSchedule.ZamaniGeldi(plan, null, Utc(2026, 9, 26, 0, 30), Turkiye));
+        Assert.False(BackupSchedule.ZamaniGeldi(plan, null, Utc(2026, 9, 26, 1, 59), Turkiye));
+        Assert.True(BackupSchedule.ZamaniGeldi(plan, null, Utc(2026, 9, 26, 2), Turkiye));
+        Assert.True(BackupSchedule.ZamaniGeldi(plan, null, Utc(2026, 9, 26, 12), Turkiye));
+        Assert.False(BackupSchedule.ZamaniGeldi(plan, null, Utc(2026, 9, 26, 23, 59), Turkiye));
+    }
+
+    [Fact]
+    public void Identical_times_and_disabled_second_time_both_run_once()
+    {
+        foreach (var second in new int?[] { null, 3 })
+        {
+            var plan = BackupSchedule.Normalize("daily", 24, 3, 0, 1, 1, second, 0);
+            Assert.False(plan.HasSecondTime);
+            Assert.Single(Simule(plan, Turkiye, Utc(2026, 9, 26, 0), Utc(2026, 9, 26, 23, 59)));
+        }
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    public void Second_daily_time_respects_subscription_quota(int quota, bool throttled)
+    {
+        var result = SubscriptionBackupScheduleService.KotayaCek("daily", 24, 3, 0, 1, 1, quota, 15, 30);
+        Assert.Equal(throttled, result.Throttled);
+        Assert.Equal(!throttled, result.Plan.HasSecondTime);
+        Assert.Equal(3, result.Plan.Hour);
+    }
+
+    [Theory]
+    [InlineData("interval")]
+    [InlineData("weekly")]
+    [InlineData("monthly")]
+    public void Second_time_is_ignored_outside_daily_mode(string mode)
+    {
+        var without = BackupSchedule.Normalize(mode, 24, 3, 0, 1, 1);
+        var with = BackupSchedule.Normalize(mode, 24, 3, 0, 1, 1, 15, 0);
+        Assert.False(with.HasSecondTime);
+        Assert.Equal(Simule(without, Turkiye, Utc(2026, 9, 26, 0), Utc(2026, 9, 29, 0)),
+                     Simule(with, Turkiye, Utc(2026, 9, 26, 0), Utc(2026, 9, 29, 0)));
+    }
+
+    [Theory]
+    [InlineData(3, 29)]
+    [InlineData(10, 25)]
+    public void Two_times_respect_daylight_saving_without_duplicate_runs(int month, int day)
+    {
+        var plan = BackupSchedule.Normalize("daily", 24, 2, 30, 1, 1, 15, 0);
+        var start = Utc(2026, month, day, 0);
+        var runs = Simule(plan, YazSaatli, start, start.AddHours(21), start.AddMinutes(-1));
+        Assert.Equal(2, runs.Count);
+        Assert.Equal(new TimeSpan(15, 0, 0), TimeZoneInfo.ConvertTimeFromUtc(runs[1], YazSaatli).TimeOfDay);
+    }
+
+    [Fact]
+    public void Spring_shifted_times_are_sorted_by_actual_instant_and_collisions_run_once()
+    {
+        var start = Utc(2026, 3, 29, 0);
+        var plan = BackupSchedule.Normalize("daily", 24, 2, 45, 1, 1, 3, 15);
+        Assert.Equal(new[] { start.AddMinutes(75), start.AddMinutes(105) },
+            Simule(plan, YazSaatli, start, start.AddHours(6), start.AddMinutes(-1)));
+        plan = plan with { SecondMinute = 45 };
+        Assert.Single(Simule(plan, YazSaatli, start, start.AddHours(6), start.AddMinutes(-1)));
+    }
+
 }
 
 /// <summary>
@@ -494,4 +589,5 @@ public sealed class SubscriptionBackupScheduleQuotaTests
         Assert.Equal(24, sonuc.Plan.IntervalHours);
         Assert.False(sonuc.Throttled);
     }
+
 }
