@@ -890,6 +890,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .proc-body {
+  position: relative;
   display: grid;
   gap: var(--sp-4);
 }
