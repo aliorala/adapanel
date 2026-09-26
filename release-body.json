@@ -1,5 +1,5 @@
 {
-  "name": "0.8.63 — Arayüz ve site kurucu iyileştirmeleri",
-  "body": "- Kaynak göstergeleri daha kompakt ve okunur hale getirildi; telefon ve tablet menüsü iyileştirildi.\n- Site kurucuda taslak kaybı, geciken önizleme yanıtları ve çok sayfalı görsel temizliği düzeltildi.\n- Sistem siteleri doğru ayırt edilir; uygun site bağlantılarında HTTPS tercih edilir.\n- Etiketler, klavye erişimi ve Türkçe açıklamalar iyileştirildi.",
-  "tag_name": "0.8.63"
+  "name": "0.8.64 — Yuvarlak kaynak göstergeleri ve dil tutarlılığı",
+  "body": "- CPU, bellek ve disk kartları kompakt yuvarlak göstergeler ve ayrı vurgu renkleriyle yenilendi.\n- Açık/koyu tema ve dar ekran yerleşimi iyileştirildi.\n- Türkçe ve İngilizce metinler, tarih/sayı biçimleri, webmail açılışı ve otomasyon özetleri düzeltildi.\n- Çeviri kapsamı ve dil değişimi için regresyon kontrolleri eklendi.",
+  "tag_name": "0.8.64"
 }

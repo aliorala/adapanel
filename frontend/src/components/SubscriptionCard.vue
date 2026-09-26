@@ -105,6 +105,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
@@ -198,7 +199,7 @@ function formatMib(value: number) {
 
 function formatDate(iso: string) {
   const tarih = new Date(iso);
-  return Number.isNaN(tarih.getTime()) ? iso : tarih.toLocaleDateString();
+  return Number.isNaN(tarih.getTime()) ? iso : tarih.toLocaleDateString(getFormattingLocale());
 }
 
 function resolveApiMessage(err: unknown) {

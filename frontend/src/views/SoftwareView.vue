@@ -271,6 +271,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AppStoreView from "./AppStoreView.vue";
@@ -386,7 +387,7 @@ const serverSoftware = useServerRunningTask({
   interruptedLabel: (job) =>
     t("panel.runningJob.interrupted", {
       job: runningJobLabel(t, job),
-      date: new Date(job.startedAtUtc).toLocaleString()
+      date: new Date(job.startedAtUtc).toLocaleString(getFormattingLocale())
     })
 });
 

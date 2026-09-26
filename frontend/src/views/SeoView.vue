@@ -454,6 +454,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -748,7 +749,7 @@ function formatUtc(value: string): string {
   }
 
   const parsed = new Date(value.endsWith("Z") ? value : `${value}Z`);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString(getFormattingLocale());
 }
 </script>
 

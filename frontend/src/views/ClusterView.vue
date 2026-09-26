@@ -234,7 +234,7 @@
       <div class="form-grid">
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.cluster.siteName") }}</span>
-          <input v-model="siteForm.name" maxlength="128" placeholder="ornek.test" />
+          <input v-model="siteForm.name" maxlength="128" placeholder="example.test" />
         </label>
         <label class="stacked-field">
           <span class="field-label">{{ t("panel.cluster.siteNode") }}</span>
@@ -258,6 +258,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 /*
  * ÇOKLU SUNUCU YÖNETİMİ (Plesk Multi Server karşılığı).
  *
@@ -549,7 +550,7 @@ function sonGorulme(row: ClusterNodeStatus) {
     return t("panel.cluster.neverSeen");
   }
 
-  // ELLE `new Date(...).toLocaleString()` — `utils/datetime.ts`in tek kaynaga topladigi 24
+  // ELLE `new Date(...).toLocaleString(getFormattingLocale())` — `utils/datetime.ts`in tek kaynaga topladigi 24
   // kopyadan biri BURADA HAYATTA KALMIS. Bugun ciktisi ayni, ama korumasi degil: bozuk bir
   // damga "Invalid Date" olarak basilirdi (tek kaynak ham degeri basar, gerekcesi orada
   // yazili). Ayrica bicim kararlarindan biri degistiginde bu ekran geride kalirdi.

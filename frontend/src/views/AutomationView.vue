@@ -146,7 +146,7 @@
           · {{ t("panel.automation.nextRun") }}: {{ formatDate(status.nextBackupRunUtc) }}
         </template>
       </p>
-      <p v-if="status?.lastBackupDetails" class="cell-muted details-line">{{ status.lastBackupDetails }}</p>
+      <p v-if="status?.lastBackupDetails" class="cell-muted details-line">{{ automationDetails(status.lastBackupDetails, t) }}</p>
     </div>
 
     <div class="form-surface">
@@ -171,7 +171,7 @@
           · {{ t("panel.automation.nextRun") }}: {{ formatDate(status.nextSslRunUtc) }}
         </template>
       </p>
-      <p v-if="status?.lastSslDetails" class="cell-muted details-line">{{ status.lastSslDetails }}</p>
+      <p v-if="status?.lastSslDetails" class="cell-muted details-line">{{ automationDetails(status.lastSslDetails, t) }}</p>
     </div>
 
     <div class="form-surface">
@@ -198,7 +198,7 @@
         <strong>{{ formatDate(status?.lastLogCleanupRunUtc) }}</strong>
         · {{ formatStatus(status?.lastLogCleanupStatus) }}
       </p>
-      <p v-if="status?.lastLogCleanupDetails" class="cell-muted details-line">{{ status.lastLogCleanupDetails }}</p>
+      <p v-if="status?.lastLogCleanupDetails" class="cell-muted details-line">{{ automationDetails(status.lastLogCleanupDetails, t) }}</p>
     </div>
 
     <!-- Yazılım güncellemeleri: kontrol varsayılan açık, KURULUM kararı yöneticinin. -->
@@ -230,7 +230,7 @@
           · {{ t("panel.automation.pendingUpdates", { count: status.pendingComponentUpdates }) }}
         </span>
       </p>
-      <p v-if="status?.lastUpdateCheckDetails" class="cell-muted details-line">{{ status.lastUpdateCheckDetails }}</p>
+      <p v-if="status?.lastUpdateCheckDetails" class="cell-muted details-line">{{ automationDetails(status.lastUpdateCheckDetails, t) }}</p>
     </div>
 
     <div class="form-surface">
@@ -300,8 +300,9 @@ import {
 } from "../api/automation";
 import { extractApiMessage } from "../stores/auth";
 import { formatDateTime } from "../utils/datetime";
+import { automationDetails } from "../utils/automationDetails";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const status = ref<AutomationStatus | null>(null);
 const loading = ref(false);
 // "Henüz bilmiyorum" ile "kapalı" ekranda ayırt edilemiyordu; ayarlar gelene kadar kartları gizle.
@@ -330,7 +331,7 @@ const remoteTestResult = ref<BackupRemoteTestResult | null>(null);
 const schedulePlan = reactive<BackupSchedulePlan>(bosProgram());
 const scheduleIsCalendar = computed(() => schedulePlan.mode !== "interval");
 const serverTimeZoneLabel = computed(
-  () => status.value?.serverTimeZoneDisplayName || status.value?.serverTimeZoneId || ""
+  () => (locale.value === "en" ? status.value?.serverTimeZoneId : status.value?.serverTimeZoneDisplayName) || status.value?.serverTimeZoneId || ""
 );
 const serverLocalTimeLabel = computed(() => (status.value?.serverLocalTime || "").replace("T", " "));
 
@@ -372,11 +373,11 @@ const form = reactive<AutomationSettings>({
 const remoteUrlPlaceholder = computed(() => {
   switch (form.backupTargetType) {
     case "ftp":
-      return "ftp://sunucu/yedekler/";
+      return "ftp://server.example/backups/";
     case "s3":
-      return "https://s3.eu-central-1.amazonaws.com/bucket-adi/yedekler/";
+      return "https://s3.eu-central-1.amazonaws.com/bucket-name/backups/";
     case "webdav":
-      return "https://depo.example.com/yedekler/";
+      return "https://storage.example.com/backups/";
     default:
       return "";
   }

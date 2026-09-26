@@ -634,6 +634,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { abortableDelay, pollProgress } from "../utils/progressPolling";
 import { closeConfirmDialog } from "../components/ConfirmDialog.vue";
 import { closePromptDialog } from "../components/PromptDialog.vue";
@@ -1327,7 +1328,7 @@ async function pollInstallProgress() {
     const result = await pollProgress({
       signal: controller.signal,
       fetch: () => setupStore.fetchProgress(controller.signal),
-      receive: (progress) => { installProgress.value = progress; installLastChecked.value = new Date().toLocaleTimeString(); },
+      receive: (progress) => { installProgress.value = progress; installLastChecked.value = new Date().toLocaleTimeString(getFormattingLocale()); },
       complete: (progress) => progress.completed || progress.failed,
       connection: (failures) => { installConnectionFailures.value = failures; }
     });

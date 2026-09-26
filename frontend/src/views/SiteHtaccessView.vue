@@ -324,7 +324,7 @@
 
         <label class="setting-row">
           <span>{{ t("panel.htaccess.simulate.path") }}</span>
-          <input v-model="simulatePath" spellcheck="false" placeholder="/urun/5" />
+          <input v-model="simulatePath" spellcheck="false" placeholder="/product/5" />
           <small>{{ t("panel.htaccess.simulate.pathHelp") }}</small>
         </label>
 

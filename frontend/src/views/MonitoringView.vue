@@ -10,13 +10,13 @@
       </div>
       <!-- Ortak kaynak göstergeleri ana sayfayla aynı durum eşiklerini kullanır. -->
       <div v-if="overview" class="resource-grid">
-        <ResourceMetric :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
+        <ResourceMetric kind="cpu" :label="t('panel.system.cpu')" :value="overview.cpuUsagePercent" :detail="overview.logicalProcessorCount + ' ' + t('panel.system.cores')">
           <svg v-if="cpuSpark" class="meter-spark cpu" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline :points="cpuSpark" /></svg>
         </ResourceMetric>
-        <ResourceMetric :label="t('panel.system.memory')" :value="overview.memoryUsagePercent" :detail="formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)">
+        <ResourceMetric kind="memory" :label="t('panel.system.memory')" :value="overview.memoryUsagePercent" :detail="formatBytes(overview.usedMemoryBytes) + ' / ' + formatBytes(overview.totalMemoryBytes)">
           <svg v-if="memSpark" class="meter-spark mem" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"><polyline :points="memSpark" /></svg>
         </ResourceMetric>
-        <ResourceMetric :label="primaryDisk?.name || t('panel.system.disks')" :value="primaryDisk?.usagePercent ?? null" :detail="primaryDisk ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : t('panel.common.notAvailable')" :hint="primaryDisk ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
+        <ResourceMetric kind="disk" :label="primaryDisk?.name || t('panel.system.disks')" :value="primaryDisk?.usagePercent ?? null" :detail="primaryDisk ? formatBytes(primaryDisk.usedBytes) + ' / ' + formatBytes(primaryDisk.totalBytes) : t('panel.common.notAvailable')" :hint="primaryDisk ? t('panel.system.free') + ': ' + formatBytes(primaryDisk.freeBytes) : ''" />
       </div>
     </section>
 
@@ -612,7 +612,7 @@ function formatTimeSpan(value: string): string {
 }
 
 .meter-spark.mem polyline {
-  stroke: var(--ok-1);
+  stroke: var(--resource-memory);
 }
 
 /* Üst boşluk KALDIRILDI: kapsayıcı `.panel` zaten 12px ızgara aralığı veriyor ve margin ona

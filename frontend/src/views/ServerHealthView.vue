@@ -246,7 +246,7 @@
         <div class="health-id">
           <span :class="['state-dot', dotClass(svc.status)]"></span>
           <div class="health-name">
-            <strong>{{ svc.label }}</strong>
+            <strong>{{ serviceLabel(svc, t) }}</strong>
             <span class="svc-id">{{ svc.name }}</span>
           </div>
         </div>
@@ -266,6 +266,7 @@
 </template>
 
 <script setup lang="ts">
+import { serviceLabel } from '../utils/serviceLabel';
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {

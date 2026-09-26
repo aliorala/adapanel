@@ -414,6 +414,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import CodeSample from "../components/CodeSample.vue";
@@ -460,7 +461,7 @@ const serverMigration = useServerRunningTask({
   interruptedLabel: (job) =>
     t("panel.runningJob.interrupted", {
       job: runningJobLabel(t, job),
-      date: new Date(job.startedAtUtc).toLocaleString()
+      date: new Date(job.startedAtUtc).toLocaleString(getFormattingLocale())
     })
 });
 

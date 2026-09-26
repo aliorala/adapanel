@@ -290,7 +290,7 @@
               <h4>{{ t("panel.antivirus.defsTitle") }}</h4>
               <p class="meta">
                 {{ avStatus.databaseReady && avStatus.databaseUpdatedAtUtc
-                  ? t("panel.antivirus.defsUpdatedAt", { date: new Date(avStatus.databaseUpdatedAtUtc).toLocaleString() })
+                  ? t("panel.antivirus.defsUpdatedAt", { date: new Date(avStatus.databaseUpdatedAtUtc).toLocaleString(getFormattingLocale()) })
                   : t("panel.antivirus.defsMissing") }}
               </p>
             </div>
@@ -335,7 +335,7 @@
               <!-- Yarıda kalan taramada "0 dosya tarandı, 0 sn sürdü" YAZILMAZ: o sayılar hiç
                    ölçülmedi, yazmak taramanın bittiğini ve boş çıktığını sandırırdı. -->
               <p class="meta">
-                {{ new Date(avStatus.lastScan.startedAtUtc).toLocaleString() }}
+                {{ new Date(avStatus.lastScan.startedAtUtc).toLocaleString(getFormattingLocale()) }}
                 <template v-if="avStatus.lastScan.status !== 'interrupted'">
                   • {{ t("panel.antivirus.scanSummary", {
                     files: avStatus.lastScan.scannedFiles,
@@ -425,8 +425,8 @@
         <div v-for="ban in bannedIps" :key="ban.ipAddress" class="data-row bruteforce-row">
           <strong>{{ ban.ipAddress }}</strong>
           <span>{{ ban.failedAttempts }}</span>
-          <span class="cell-muted">{{ new Date(ban.bannedAtUtc).toLocaleString() }}</span>
-          <span class="cell-muted">{{ ban.expiresAtUtc ? new Date(ban.expiresAtUtc).toLocaleString() : t("panel.bruteforce.permanent") }}</span>
+          <span class="cell-muted">{{ new Date(ban.bannedAtUtc).toLocaleString(getFormattingLocale()) }}</span>
+          <span class="cell-muted">{{ ban.expiresAtUtc ? new Date(ban.expiresAtUtc).toLocaleString(getFormattingLocale()) : t("panel.bruteforce.permanent") }}</span>
           <button class="secondary compact row-button" :disabled="busyAction === 'unban'" @click="unban(ban.ipAddress)">
             {{ t("panel.bruteforce.unban") }}
           </button>
@@ -441,6 +441,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { allowPort, blockPort, getFirewallRules, removeFirewallRule, type FirewallRule } from "../api/firewall";

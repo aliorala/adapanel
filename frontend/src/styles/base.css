@@ -12,6 +12,9 @@
   --text-strong: #f2f5f8;
   --text-soft: #cbd3dd;
   --text-muted: #8f9aaa;
+  --resource-cpu: #60a5fa;
+  --resource-memory: #b69aff;
+  --resource-disk: #42c9b4;
   --accent-1: #4b9cff;
   --accent-2: #2376d8;
   --accent-text: #8fc1ff;
@@ -213,6 +216,9 @@
      renk hâlâ aynı mavi-gri; daha koyu bir değer yardımcı metni ana metinden ayırt
      edilemez hâle getirirdi (hiyerarşi ölçünün de amacı). */
   --text-muted: #626d7e;
+  --resource-cpu: #2563eb;
+  --resource-memory: #7c3aed;
+  --resource-disk: #0d9488;
   --accent-1: #1474e5;
   --accent-2: #0f62c4;
   --accent-text: #0f62c4;

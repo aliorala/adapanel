@@ -453,7 +453,7 @@
           <label class="stacked-field">
             <span class="field-label">{{ t("panel.mail.publicBaseUrl") }}</span>
             <div class="row-actions">
-              <input v-model.trim="publicBaseUrl" placeholder="https://panel.ornek.com" />
+              <input v-model.trim="publicBaseUrl" placeholder="https://panel.example.com" />
               <button class="compact" v-bind="writeGate(busy)" @click="savePublicBaseUrl">
                 {{ t("panel.common.save") }}
               </button>
@@ -670,7 +670,7 @@
               </div>
               <div>
                 <dt>{{ t("panel.mail.autoconfig.checkedAt") }}</dt>
-                <dd>{{ new Date(autoconfig.checkedAtUtc).toLocaleString() }}</dd>
+                <dd>{{ new Date(autoconfig.checkedAtUtc).toLocaleString(getFormattingLocale()) }}</dd>
               </div>
             </dl>
 
@@ -850,7 +850,7 @@
             </span>
             {{ certificate.hostName }}
             <template v-if="certificate.notAfterUtc">
-              - {{ t("panel.mail.certExpires") }}: {{ new Date(certificate.notAfterUtc).toLocaleDateString() }}
+              - {{ t("panel.mail.certExpires") }}: {{ new Date(certificate.notAfterUtc).toLocaleDateString(getFormattingLocale()) }}
             </template>
           </p>
           <p v-else class="meta">{{ t("panel.mail.certNone") }}</p>
@@ -942,6 +942,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
@@ -1001,6 +1002,7 @@ import {
   unpublishMailAutoconfig,
   type MailAutodiscoverPublication
 } from "../api/autodiscover";
+import { webmailPage } from "../utils/webmailPage";
 import { toReachableUrl } from "../utils/url";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import MailQueueCard from "../components/MailQueueCard.vue";
@@ -1020,7 +1022,7 @@ import { copyToClipboard } from "../utils/clipboard";
 // önceden seçmek için opsiyonel prop (profesyonel paneller gibi domain-içi Mail sekmesi).
 const props = defineProps<{ domain?: string }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { confirm } = useConfirm();
 const { prompt } = usePrompt();
 // Askıdaki abonelikte YAZMA düğmeleri baştan devre dışı + sebebi title/aria ile söylenir
@@ -1543,14 +1545,9 @@ async function openWebmail() {
   // yoksa kullanıcı boş sayfa görüp "açılmadı" sanıyor. URL gelince oraya yönlendiririz; hata olursa sekmede yazarız.
   // Aşağıdaki renkler BİLEREK sabit: bu HTML yepyeni ve BOŞ bir sekmeye yazılıyor, panelin
   // stil sayfası orada YÜKLÜ DEĞİL — dolayısıyla `var(--...)` belirteçleri o belgede
-  // tanımsızdır ve hiçbir şeye çözülmez. Ölçüldü: metin 16.66:1, hata başlığı 5.55:1.
+  // tanımsızdır. Açılış sayfası bu yüzden kendi renklerini ve dilini taşır.
   if (tab) {
-    tab.document.write(
-      '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Webmail</title></head>' +
-      '<body style="margin:0;height:100vh;display:grid;place-items:center;font-family:Segoe UI,system-ui,sans-serif;background:#0a141a;color:#eaf5ee">' +
-      '<div style="text-align:center"><div style="font-size:1.15rem;font-weight:600">Webmail hazırlanıyor…</div>' +
-      '<div style="opacity:.6;margin-top:8px;font-size:.85rem">Roundcube ilk açılışta birkaç saniye sürebilir, lütfen bekleyin.</div></div></body></html>'
-    );
+    tab.document.write(webmailPage(locale.value, t("panel.mail.webmailPreparingTitle"), t("panel.mail.webmailPreparingHint")));
     tab.document.close();
   }
   webmailOpening.value = true;
@@ -1573,9 +1570,9 @@ async function openWebmail() {
     } catch (error) {
       // Sekmeyi sessizce kapatma → kullanıcı ne olduğunu anlamaz. Nedeni sekmede göster.
       if (tab && tab.document?.body) {
-        tab.document.body.innerHTML =
-          '<div style="text-align:center"><div style="font-size:1.05rem;color:#f85149;font-weight:600">Webmail açılamadı</div>' +
-          '<div style="opacity:.7;margin-top:8px;font-size:.85rem">Panele dönüp tekrar deneyin; sorun sürerse "Tanıla" ile nedenini görün.</div></div>';
+        tab.document.open();
+        tab.document.write(webmailPage(locale.value, t("panel.mail.webmailFailedTitle"), t("panel.mail.webmailFailedHint"), true));
+        tab.document.close();
       }
       throw error;
     }

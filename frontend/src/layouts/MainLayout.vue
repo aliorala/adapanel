@@ -247,6 +247,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AttentionDrawer from "../components/AttentionDrawer.vue";
@@ -893,7 +894,7 @@ watch(showNotifications, (open) => {
 
 function shortTime(iso: string): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString(getFormattingLocale());
 }
 
 function resolveApiMessage(error: unknown): string {

@@ -291,7 +291,7 @@
                   {{ t("panel.backup.warningsBadge", { count: backup.warnings.length }) }}
                 </button>
               </span>
-              <small>{{ new Date(backup.createdAtUtc).toLocaleString() }}</small>
+              <small>{{ new Date(backup.createdAtUtc).toLocaleString(getFormattingLocale()) }}</small>
             </div>
             <!--
               YIKICI EYLEM AYRI SATIRDA.
@@ -466,7 +466,7 @@
               {{ link.name }}
               <small v-if="link.backupId === chainRecord.id">{{ t("panel.backup.chain.currentLink") }}</small>
             </span>
-            <span class="cell-muted">{{ new Date(link.createdAtUtc).toLocaleString() }}</span>
+            <span class="cell-muted">{{ new Date(link.createdAtUtc).toLocaleString(getFormattingLocale()) }}</span>
             <span class="cell-muted">{{ formatBytes(link.size) }}</span>
             <span :class="['status-pill', link.available ? 'ok' : 'danger']">
               {{ link.available ? t("panel.backup.chain.fileOk") : t("panel.backup.chain.fileMissing") }}
@@ -540,8 +540,8 @@
       -->
       <p class="field-hint auto-run-line">
         {{ t("panel.backup.autoRuns", {
-          last: autoStatus?.lastBackupRunUtc ? new Date(autoStatus.lastBackupRunUtc).toLocaleString() : "-",
-          next: autoStatus?.nextBackupRunUtc ? new Date(autoStatus.nextBackupRunUtc).toLocaleString() : "-"
+          last: autoStatus?.lastBackupRunUtc ? new Date(autoStatus.lastBackupRunUtc).toLocaleString(getFormattingLocale()) : "-",
+          next: autoStatus?.nextBackupRunUtc ? new Date(autoStatus.nextBackupRunUtc).toLocaleString(getFormattingLocale()) : "-"
         }) }}
         <span v-if="autoStatus?.lastBackupStatus" :class="['status-pill', lastStatusTone(autoStatus.lastBackupStatus)]">
           {{ lastStatusText(autoStatus.lastBackupStatus) }}
@@ -615,7 +615,7 @@
       <p class="field-hint">
         {{ t("panel.backup.encryptionAlgorithm") }}: {{ encryption.algorithm }}
         <template v-if="encryption.enabled">
-          · {{ t("panel.backup.encryptionUpdatedAt") }}: {{ new Date(encryption.updatedAtUtc).toLocaleString() }}
+          · {{ t("panel.backup.encryptionUpdatedAt") }}: {{ new Date(encryption.updatedAtUtc).toLocaleString(getFormattingLocale()) }}
         </template>
       </p>
 
@@ -1130,6 +1130,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
@@ -2225,7 +2226,7 @@ function backupImpact(backup: BackupRecord) {
     `${t("panel.backup.name")}: ${backup.name}`,
     `${t("panel.backup.type")}: ${backupKindLabel(backup.type)} (${backupSourceLabel(backup)})`,
     `${t("panel.backup.size")}: ${formatBytes(backup.size)}`,
-    `${t("panel.backup.createdAt")}: ${new Date(backup.createdAtUtc).toLocaleString()}`
+    `${t("panel.backup.createdAt")}: ${new Date(backup.createdAtUtc).toLocaleString(getFormattingLocale())}`
   ];
 
   if (backup.chainId) {

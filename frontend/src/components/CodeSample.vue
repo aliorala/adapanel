@@ -2,27 +2,29 @@
   <div class="code-sample">
     <pre class="code-sample-body"><code>{{ code }}</code></pre>
     <button type="button" class="secondary compact code-sample-copy" @click="copy">
-      {{ copied ? copiedLabel : copyLabel }}
+      {{ copied ? (copiedLabel ?? t('panel.common.copied')) : (copyLabel ?? t('panel.files.copy')) }}
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
+import { useI18n } from 'vue-i18n';
 import { copyToClipboard } from "../utils/clipboard";
 
 /**
  * Kısa, kopyalanabilir kod/yol kutusu. Kullanıcıya "ne yazacağını" anlatmak yerine
  * doğrudan gösterir; tek tıkla panoya alınır.
  */
-const props = withDefaults(defineProps<{
+const { t } = useI18n();
+const props = defineProps<{
   /** Gösterilecek metin (kod parçası, dosya yolu vb.). */
   code: string;
   /** Kopyala düğmesinin metni. */
   copyLabel?: string;
   /** Kopyalandıktan sonra kısa süre gösterilen metin. */
   copiedLabel?: string;
-}>(), { copyLabel: "Kopyala", copiedLabel: "Kopyalandı" });
+}>();
 
 const copied = ref(false);
 let resetTimer: ReturnType<typeof setTimeout> | null = null;

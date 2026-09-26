@@ -23,11 +23,11 @@
       <div class="summary-strip">
         <div class="summary-item">
           <span>{{ t("panel.hosting.statsRequests") }}</span>
-          <strong>{{ stats.totalRequests.toLocaleString() }}</strong>
+          <strong>{{ stats.totalRequests.toLocaleString(getFormattingLocale()) }}</strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.hosting.statsVisitors") }}</span>
-          <strong>{{ stats.uniqueVisitors.toLocaleString() }}{{ stats.uniqueVisitorsApproximate ? "+" : "" }}</strong>
+          <strong>{{ stats.uniqueVisitors.toLocaleString(getFormattingLocale()) }}{{ stats.uniqueVisitorsApproximate ? "+" : "" }}</strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.hosting.statsBandwidth") }}</span>
@@ -44,7 +44,7 @@
           <h5>{{ t("panel.hosting.statsTopPages") }}</h5>
           <div v-for="page in stats.topPages" :key="page.key" class="stat-bar">
             <span class="stat-label" :title="page.key">{{ page.key }}</span>
-            <span class="stat-count">{{ page.count.toLocaleString() }}</span>
+            <span class="stat-count">{{ page.count.toLocaleString(getFormattingLocale()) }}</span>
           </div>
         </div>
         <div>
@@ -52,7 +52,7 @@
           <p v-if="stats.topReferrers.length === 0" class="meta">{{ t("panel.hosting.statsNoReferrers") }}</p>
           <div v-for="ref in stats.topReferrers" :key="ref.key" class="stat-bar">
             <span class="stat-label" :title="ref.key">{{ ref.key }}</span>
-            <span class="stat-count">{{ ref.count.toLocaleString() }}</span>
+            <span class="stat-count">{{ ref.count.toLocaleString(getFormattingLocale()) }}</span>
           </div>
         </div>
       </div>
@@ -62,7 +62,7 @@
         <div v-for="day in stats.dailyHits" :key="day.key" class="stat-bar">
           <span class="stat-label">{{ day.key }}</span>
           <span class="stat-track"><span class="stat-fill" :style="{ width: dailyWidth(day.count) }"></span></span>
-          <span class="stat-count">{{ day.count.toLocaleString() }}</span>
+          <span class="stat-count">{{ day.count.toLocaleString(getFormattingLocale()) }}</span>
         </div>
       </div>
     </template>
@@ -70,6 +70,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSitesStore } from "../stores/sites";

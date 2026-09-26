@@ -122,6 +122,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 /**
  * "Panel erişimi": paneli yöneticinin KENDİ alan adıyla, geçerli (Let's Encrypt) bir sertifikayla
  * dışarıya açar.
@@ -168,7 +169,7 @@ const checkedAtText = computed(() => {
   // Sunucu UTC gönderir; sonek yoksa UTC kabul edip yerel saate çevir.
   const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
   const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString(getFormattingLocale());
 });
 
 onMounted(refresh);

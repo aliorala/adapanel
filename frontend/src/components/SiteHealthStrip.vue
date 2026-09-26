@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFormattingLocale } from '../utils/locale';
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getSiteHealth, type SiteHealth, type SiteHealthCheck, type SiteHealthStatus } from "../api/siteHealth";
@@ -230,7 +231,7 @@ const checkedAtText = computed(() => {
   // Sunucu UTC gönderir; sonek yoksa UTC olarak yorumla, sonra yerel saate çevir.
   const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`;
   const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString();
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(getFormattingLocale());
 });
 
 async function load() {

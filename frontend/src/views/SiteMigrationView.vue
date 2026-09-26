@@ -13,7 +13,7 @@
     <div v-else class="form-surface">
       <label class="stacked-field">
         <span class="field-label">{{ t("panel.migration.url") }}</span>
-        <input v-model.trim="archiveUrl" placeholder="https://eski-sunucu/site.zip" :disabled="busy" />
+        <input v-model.trim="archiveUrl" placeholder="https://old-server.example/site.zip" :disabled="busy" />
         <small class="field-hint">{{ t("panel.migration.urlHint") }}</small>
       </label>
 

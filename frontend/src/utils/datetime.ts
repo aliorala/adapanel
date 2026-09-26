@@ -1,7 +1,8 @@
+import { getFormattingLocale } from './locale';
 /**
  * TARİH/SAAT BİÇİMLEYİCİ — TEK KAYNAK.
  *
- * NEDEN BURADA: `new Date(x).toLocaleString()` gövdesi 24 ekrana ELLE kopyalanmıştı
+ * NEDEN BURADA: `new Date(x).toLocaleString(getFormattingLocale())` gövdesi 24 ekrana ELLE kopyalanmıştı
  * (`formatDate`, `formatUtc`, `formatTime`, `formatCreatedAt` — dört ayrı ad, aynı iş) ve
  * kopyalar ayrışmıştı:
  *
@@ -31,7 +32,7 @@ export function formatDateTime(value: string | null | undefined, fallback = ""):
 
   const parsed = parseUtcTimestamp(value);
   // Ayrıştırılamayan değer YUTULMAZ: ham dizge, "Invalid Date"ten daha çok bilgi taşır.
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString(getFormattingLocale());
 }
 
 /**

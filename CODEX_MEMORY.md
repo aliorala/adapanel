@@ -1,5 +1,13 @@
 # AdaPanel Codex Memory
 
+## 2026-09-26 — 0.8.64 hazırlığı: yuvarlak göstergeler ve iki dil
+
+Kaynak kartları kompakt yuvarlak göstergelere döndü; CPU mavi, bellek mor, disk turkuaz. Yüzde daire içinde, başlık/kapasite dışında; yüksek kullanım sarı/kırmızı. Ana sayfa ve izleme aynı bileşeni kullanır. İki tema, İngilizce/Türkçe ve 1534/1024/390 px incelendi; kartlarda yatay taşma yok.
+
+5.305'er TR/EN anahtarı: statik kullanım, boş/çift anahtar ve parametre eşleşmesi denetleniyor. Üç eksik site kurucu doğrulaması, webmail açılış/hata sayfası, kopyalama düğmeleri, servis adları ve standart otomasyon sonuçları yerelleştirildi. Tarih/sayı biçimleri panel dilini izler. Bilinmeyen teknik hata metinleri aynen korunur; yedekleme/iş durumları metinden türetilmez. 130 frontend testi ve typecheck geçti; paket/tam backend/canlı doğrulama sürüyor. Ayrıntı docs/denetim-2026-09-26-064.md.
+
+Panel canlıda İngilizce denetim için geçici olarak English seçildi; bitişte Türkçeye geri alınacak. Yedek şifrelemesi kapalı, 03:00/ikinci saat kapalı/5 gün/yerel+FTP korunacak. Dış fiyat API henüz taşınmadı. Kaynak/history/tag push yasak; sadece installer release.
+
 ## 2026-09-26 — SON DURUM: 0.8.63 canlı — arayüz ve site kurucu
 
 Canlı ekran turunda saptanan site kurucu adapanel.host iç servis yanlış sınıflandırması düzeltildi. Ortak kompakt kaynak kartları, tablet çekmece menüsü/klavye odağı, faaliyet ayrıntılarını katlama, ek giriş koruması açıklaması, form etiketleri, Türkçe posta metinleri ve HTTPS/IPv6 bağlantı seçimi yenilendi. Site kurucu taslak koruması ve eski proje/önizleme/yayın-planı yanıtlarını reddetme eklendi; görsel silme taslağı kaybettirmez ve ek sayfa referanslarını da temizler.

@@ -1,4 +1,5 @@
 import { createI18n, type MessageFunction } from "vue-i18n";
+import { setFormattingLocale } from '../utils/locale';
 
 export function safeMessageCompiler(message: unknown): MessageFunction<string> {
   const source = typeof message === "string" ? message : String(message ?? "");
@@ -32,6 +33,7 @@ export async function setPanelLocale(value: string) {
   await loading.get(locale);
   if (request !== languageRequest) return;
   i18n.global.locale.value = locale;
+  setFormattingLocale(locale);
   document.documentElement.lang = locale;
   try { localStorage.setItem("adapanel-language", locale); } catch { /* private browsing */ }
 }
