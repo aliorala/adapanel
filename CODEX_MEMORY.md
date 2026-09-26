@@ -1,5 +1,17 @@
 # AdaPanel Codex Memory
 
+## 2026-09-27 — SON DURUM: 0.8.68 canlı — sürüm denetimi ve iki dilde mağaza
+
+0.8.67 ile üst kaynak hataları, geçersiz sürümler ve zaman aşımı artık güncel sonucu üretmiyor. Önceden doğrulanmış sürüm bilgisi korunuyor; iptal ile kaynak hatası ayrılıyor. Sürüm akışı olmayan paketler desteklenmiyor olarak gösteriliyor. Otomasyon eksik denetimi hatalı tamamlanma olarak kaydediyor ve doğrulanamayan paketi otomatik kurmuyor. Önbellek yazma hataları gizlenmiyor. 0.8.68 ile 13 mağaza açıklaması Türkçe/İngilizce tamamlandı; arama seçili dildeki açıklamayı kullanıyor. Docker açıklaması mevcut sabit sürüm davranışına uyarlandı.
+
+Son backend çalışması 0.8.67: 5.559 Infrastructure + 2 Core başarılı, başarısız/atlanan yok. 0.8.68 backend mantığı aynı olduğundan bu sonuç yeniden kullanıldı. Güncel 140 frontend testi, typecheck ve üretim derlemesi başarılı. Bileşen denetimi tekrar çalıştı: 22 Passed / 3 mevcut büyük paket Skipped. 168 publish dosyası ve installer denetimleri geçti. Kaynak commitleri 94f5bd6 ve 61ada55 yerel; kaynak/history/tag push yapılmadı, yalnız installer yayımlandı.
+
+Canlı 0.8.68: succeeded / exit0 / isFinished=true / isFailed=false / error boş; updatedAtUtc 2026-09-26T21:33:48.457474Z. Installer 90.830.418 bayt, SHA256 3BDB1442AE0F7627DF9E29B4332BBC25EB4B6807481BA984F37D64725F9510E4; GitHub yeniden indirme ve canlı indirme eşit. Canlı EXE 097156875645C434DEBAFE3D2F36646D2C29C0A05FEBA3670E9A530A3994F6D0 yerel publish ile aynı. AdaPanel/AdaMariaDB/adaredis/DNS/ftpsvc/W3SVC/WAS Running; Stalwart PID9164. adapanel.host, travianpanel.com ve webmail.travianpanel.com HTTPS200.
+
+Canlı İngilizce mağaza açıklamaları ve signatures araması doğrulandı. 390px mobilde 25 bileşen listesi açıkken yatay taşma yok (belge380px). Ekran boyutu normale ve panel dili Türkçeye geri alınıp kaydedildi. Ana sayfa 0.8.68 gösteriyor; renkli kompakt yuvarlak kartlar korunuyor, masaüstü 1476px/belge1466px taşma yok. Güncelleme toplamı eksik denetim nedeniyle — gösteriliyor; mağazada 3 bilinen güncelleme ve 6 doğrulanamayan bileşen ayrı gösteriliyor. Dört bileşenin sürüm akışı yok (Composer, phpMyAdmin, IIS ARR, URL Rewrite); Redis/win-acme eski latest kurulum kayıtları sayısal sürüm içermiyor. Bu paketler bu tur yükseltilmedi; bu belirsizlikler giderildi diye raporlanmamalı.
+
+Yedekleme modülü, günlük03:00/ikinci saat kapalı/saklama5gün/yerel+FTP ve şifreleme kapalı tercihi korundu. İngilizce otomasyon formu ve son başarılı yedek raporu tekrar okundu; yedek çalıştırılmadı. Fiyat botu API henüz taşınmadı. FTP kayıtsız nesne envanteri önceki açık sınırdır. .66 notundaki üst kaynak hata dönüşleriyle ilgili sınır sürüm denetimi için .67 ile giderildi; kurulumun sabit manifest fallback davranışı ayrıca yeniden tasarlanmadı. Ayrıntılar docs/denetim-2026-09-27-067.md ve docs/denetim-2026-09-27-068.md; kanıt .tmp/audit-067 ve .tmp/audit-068.
+
 ## 2026-09-26 — SON DURUM: 0.8.66 canlı — güvenilir güncelleme sayaçları
 
 Güncelleme önbelleği geçici dosya+atomik değiştirme ve yol başına okuma/yazma kilidiyle kaydedilir. Windows eşzamanlı okuma testinin yakaladığı erişim hatası da giderildi. Sayaç ve yazılım kartları eski UpdateAvailable bayrağı yerine mevcut kurulu sürümü karşılaştırır; kurulum sonrasında kayıp güncelleme üretebilen önbellek oku-değiştir-yaz kaldırıldı. Başarısız/dışarıdan algılanan kurulumlar sayılmaz. Bozuk/null/eksik kayıtlar sıfır güncelleme diye sunulmaz. Ana sayfada güncelleme/SSL ölçümü başarısızsa —, Ölçülemedi/Not measured ve açıklama görünür; bağımsız sağlam ölçümler korunur.
