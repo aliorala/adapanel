@@ -27,11 +27,7 @@ public sealed partial class WebAdministrationSiteService(
         return ExecuteReadAsync<IReadOnlyCollection<SiteDto>>(serverManager =>
         {
             var sites = GetSitesCollection(serverManager);
-            return EnumerateSites(sites)
-                .Select(MapSite)
-                .Where(site => !IsSystemSite(site))
-                .OrderBy(site => site.Name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            return MapCustomerSites(EnumerateSites(sites));
         }, "sites.read_failed", cancellationToken);
     }
 
@@ -747,6 +743,17 @@ public sealed partial class WebAdministrationSiteService(
 
     private const string InternalSiteNamePrefix = "AdaPanel.";
 
+    private static bool IsKnownSystemSiteName(string name) => SystemSiteNames.Contains(name) ||
+        SystemSitePrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+    // FTP siteleri HTTP State sorgusunu desteklemez; dahili siteleri eşlemeden önce ayır.
+    internal IReadOnlyCollection<SiteDto> MapCustomerSites(IEnumerable<object> sites) => sites
+        .Where(site => !IsKnownSystemSiteName(ReadSiteValue(site, "Name", () => GetStringProperty(site, "Name"), string.Empty)))
+        .Select(MapSite)
+        .Where(site => !IsSystemSite(site))
+        .OrderBy(site => site.Name, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
     internal static bool IsSystemSite(SiteDto site)
     {
         var name = site.Name;
@@ -755,8 +762,7 @@ public sealed partial class WebAdministrationSiteService(
             return false;
         }
 
-        if (SystemSiteNames.Contains(name) ||
-            SystemSitePrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+        if (IsKnownSystemSiteName(name))
         {
             return true;
         }

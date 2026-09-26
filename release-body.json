@@ -1,5 +1,5 @@
 {
   "tag_name": "0.8.59",
   "name": "0.8.59 — Yedekleme ve durum denetimi düzeltmeleri",
-  "body": "- Çalışan otomasyon işleri sırasında kaydedilen yeni ayarların eski değerlerle ezilmesi düzeltildi.\n- Yakın günlük yedek saatleri için yoklama ve telafi penceresi düzeltildi.\n- Ölçülemeyen güvenlik duvarı, dinleyici ve alan adı kontrolleri açıkça gösterilir; eksik denetimler başarılı diye önbelleğe alınmaz.\n- Otomasyon onay kutularının hizalaması düzeltildi.\n- Güncelleme indirme etiketi ve eşzamanlı durum kontrolleri düzeltildi."
+  "body": "- Çalışan otomasyon işleri sırasında kaydedilen yeni ayarların eski değerlerle ezilmesi düzeltildi.\n- Yakın günlük yedek saatleri için yoklama ve telafi penceresi düzeltildi.\n- Ölçülemeyen güvenlik duvarı, dinleyici ve alan adı kontrolleri açıkça gösterilir; eksik denetimler başarılı diye önbelleğe alınmaz.\n- Otomasyon onay kutularının hizalaması düzeltildi.\n- Güncelleme indirme etiketi ve eşzamanlı durum kontrolleri düzeltildi.\n- Dahili FTP sitesine yapılan hatalı web sitesi durum sorgusu giderildi; bilinmeyen IIS durumu eksik ölçüm olarak raporlanır."
 }

@@ -13,6 +13,19 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class DomainInspectionTests
 {
+    [Fact]
+    public async Task Unknown_IIS_state_is_an_incomplete_inspection_and_is_retried()
+    {
+        var fixture = new Fixture { SiteState = "Unknown" };
+        var findings = Assert.Single((await fixture.Service.InspectAllAsync()).Results).Findings;
+        Assert.Contains(findings, finding => finding.Key == "repair.inspection_failed");
+        Assert.DoesNotContain(findings, finding => finding.Key == "repair.site_stopped");
+        fixture.SiteState = "Started";
+        Assert.DoesNotContain(Assert.Single((await fixture.Service.InspectAllAsync()).Results).Findings,
+            finding => finding.Key == "repair.inspection_failed");
+        Assert.Equal(2, fixture.Inspections);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

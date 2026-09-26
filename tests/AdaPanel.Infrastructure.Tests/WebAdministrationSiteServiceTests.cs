@@ -10,6 +10,33 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class WebAdministrationSiteServiceTests
 {
     [Fact]
+    public void Customer_list_does_not_query_HTTP_state_of_internal_FTP_site()
+    {
+        var service = new WebAdministrationSiteService(
+            new ImmediateConcurrencyLock(), NullLogger<WebAdministrationSiteService>.Instance);
+        var ftp = new FtpSite();
+        var sites = service.MapCustomerSites([ftp, new StaleStateSite()]);
+        Assert.False(ftp.StateRead);
+        var customer = Assert.Single(sites);
+        Assert.Equal("example.test", customer.Name);
+        Assert.Equal("Unknown", customer.State);
+    }
+
+    private sealed class FtpSite
+    {
+        public string Name => "AdaPanel FTP";
+        public bool StateRead { get; private set; }
+        public object State
+        {
+            get
+            {
+                StateRead = true;
+                throw new COMException("FTP does not support HTTP state.");
+            }
+        }
+    }
+
+    [Fact]
     public void MapSite_UsesUnknownState_WhenIisReturnsAStaleComObject()
     {
         var service = new WebAdministrationSiteService(

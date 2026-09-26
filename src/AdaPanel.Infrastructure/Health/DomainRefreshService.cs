@@ -643,7 +643,11 @@ internal sealed class DomainRefreshService(
         try
         {
             var site = await siteService.GetSiteAsync(siteName, cancellationToken);
-            if (!string.Equals(site.State, "Started", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(site.State, "Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                findings.Add(InspectionFailure("IIS"));
+            }
+            else if (!string.Equals(site.State, "Started", StringComparison.OrdinalIgnoreCase))
             {
                 // ONAY ISTER: kullanici siteyi BILEREK durdurmus olabilir (bakim, odeme, ihlal).
                 // Onarmanin bunu sessizce geri almasi, kullanicinin kararini ezmek olurdu.
