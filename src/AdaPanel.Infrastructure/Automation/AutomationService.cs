@@ -61,68 +61,68 @@ public sealed class AutomationService(
 
     public async Task<AutomationStatusDto> UpdateSettingsAsync(UpdateAutomationSettingsRequest request, CancellationToken cancellationToken = default)
     {
-        var state = await LoadAsync(cancellationToken);
-
-        state.AutoBackupEnabled = request.AutoBackupEnabled;
-
-        // Program NORMALİZE edilerek saklanır: mod/saat/gün doğrulaması tek yerde (BackupSchedule)
-        // yapılır, ekranın gönderdiği değere güvenilmez.
-        var plan = BackupSchedule.Normalize(
-            request.BackupScheduleMode,
-            request.BackupIntervalHours,
-            request.BackupScheduleHour,
-            request.BackupScheduleMinute,
-            request.BackupScheduleDayOfWeek,
-            request.BackupScheduleDayOfMonth,
-            request.BackupScheduleSecondHour,
-            request.BackupScheduleSecondMinute);
-        state.BackupScheduleMode = plan.Mode;
-        state.BackupIntervalHours = plan.IntervalHours;
-        state.BackupScheduleHour = plan.Hour;
-        state.BackupScheduleMinute = plan.Minute;
-        state.BackupScheduleDayOfWeek = plan.DayOfWeek;
-        state.BackupScheduleDayOfMonth = plan.DayOfMonth;
-        state.BackupScheduleSecondHour = plan.SecondHour;
-        state.BackupScheduleSecondMinute = plan.SecondMinute;
-        state.BackupRetentionDays = Math.Clamp(request.BackupRetentionDays, 0, 3650);
-        state.BackupSites = request.BackupSites;
-        state.BackupDatabases = request.BackupDatabases;
-        state.BackupMail = request.BackupMail;
-        state.BackupPanelConfig = request.BackupPanelConfig;
-        state.BackupDatabaseEngines = NormalizeEngines(request.BackupDatabaseEngines);
-        state.AutoSslRenewEnabled = request.AutoSslRenewEnabled;
-        state.SslRenewIntervalHours = Math.Clamp(request.SslRenewIntervalHours, 1, 24 * 30);
-
-        // Uzak yedek hedefi: parola DPAPI ile korunur; boş gönderilirse mevcut korunur.
-        // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
-        var targetType = Backup.BackupService.NormalizeScheduleTargetType(request.BackupTargetType);
-        state.BackupTargetType = targetType;
-        state.BackupRemoteUrl = request.BackupRemoteUrl?.Trim() ?? string.Empty;
-        state.BackupRemoteUserName = request.BackupRemoteUserName?.Trim() ?? string.Empty;
-        state.BackupRemoteRegion = request.BackupRemoteRegion?.Trim() ?? string.Empty;
-        if (state.BackupTargetType == "local")
+        var state = await fileStore.UpdateAsync(StatePath, new AutomationStateRecord(), state =>
         {
-            state.BackupRemotePasswordProtected = string.Empty;
-        }
-        else if (!string.IsNullOrEmpty(request.BackupRemotePassword))
-        {
-            state.BackupRemotePasswordProtected = secretProtector.Protect(request.BackupRemotePassword);
-        }
+            state.AutoBackupEnabled = request.AutoBackupEnabled;
 
-        // IIS site log rotasyonu (Plesk log rotation): eski erişim logları dolan diski sessizce büyütür.
-        state.LogCleanupEnabled = request.LogCleanupEnabled;
-        state.LogRetentionDays = Math.Clamp(request.LogRetentionDays, 1, 3650);
+            // Program NORMALİZE edilerek saklanır: mod/saat/gün doğrulaması tek yerde (BackupSchedule)
+            // yapılır, ekranın gönderdiği değere güvenilmez.
+            var plan = BackupSchedule.Normalize(
+                request.BackupScheduleMode,
+                request.BackupIntervalHours,
+                request.BackupScheduleHour,
+                request.BackupScheduleMinute,
+                request.BackupScheduleDayOfWeek,
+                request.BackupScheduleDayOfMonth,
+                request.BackupScheduleSecondHour,
+                request.BackupScheduleSecondMinute);
+            state.BackupScheduleMode = plan.Mode;
+            state.BackupIntervalHours = plan.IntervalHours;
+            state.BackupScheduleHour = plan.Hour;
+            state.BackupScheduleMinute = plan.Minute;
+            state.BackupScheduleDayOfWeek = plan.DayOfWeek;
+            state.BackupScheduleDayOfMonth = plan.DayOfMonth;
+            state.BackupScheduleSecondHour = plan.SecondHour;
+            state.BackupScheduleSecondMinute = plan.SecondMinute;
+            state.BackupRetentionDays = Math.Clamp(request.BackupRetentionDays, 0, 3650);
+            state.BackupSites = request.BackupSites;
+            state.BackupDatabases = request.BackupDatabases;
+            state.BackupMail = request.BackupMail;
+            state.BackupPanelConfig = request.BackupPanelConfig;
+            state.BackupDatabaseEngines = NormalizeEngines(request.BackupDatabaseEngines);
+            state.AutoSslRenewEnabled = request.AutoSslRenewEnabled;
+            state.SslRenewIntervalHours = Math.Clamp(request.SslRenewIntervalHours, 1, 24 * 30);
 
-        state.UpdateCheckEnabled = request.UpdateCheckEnabled;
-        state.AutoApplyComponentUpdates = request.AutoApplyComponentUpdates;
+            // Uzak yedek hedefi: parola DPAPI ile korunur; boş gönderilirse mevcut korunur.
+            // Hedef listesi BackupService'in tek kaynağından gelir; burada elle liste tutulmaz.
+            var targetType = Backup.BackupService.NormalizeScheduleTargetType(request.BackupTargetType);
+            state.BackupTargetType = targetType;
+            state.BackupRemoteUrl = request.BackupRemoteUrl?.Trim() ?? string.Empty;
+            state.BackupRemoteUserName = request.BackupRemoteUserName?.Trim() ?? string.Empty;
+            state.BackupRemoteRegion = request.BackupRemoteRegion?.Trim() ?? string.Empty;
+            if (state.BackupTargetType == "local")
+            {
+                state.BackupRemotePasswordProtected = string.Empty;
+            }
+            else if (!string.IsNullOrEmpty(request.BackupRemotePassword))
+            {
+                state.BackupRemotePasswordProtected = secretProtector.Protect(request.BackupRemotePassword);
+            }
 
-        state.AlertsEnabled = request.AlertsEnabled;
-        state.DiskUsageThresholdPercent = Math.Clamp(request.DiskUsageThresholdPercent, 50, 99);
-        state.CertExpiryWarningDays = Math.Clamp(request.CertExpiryWarningDays, 1, 90);
-        state.MemoryUsageThresholdPercent = Math.Clamp(request.MemoryUsageThresholdPercent, 50, 99);
-        state.ServiceDownAlertsEnabled = request.ServiceDownAlertsEnabled;
+            // IIS site log rotasyonu (Plesk log rotation): eski erişim logları dolan diski sessizce büyütür.
+            state.LogCleanupEnabled = request.LogCleanupEnabled;
+            state.LogRetentionDays = Math.Clamp(request.LogRetentionDays, 1, 3650);
 
-        await SaveAsync(state, cancellationToken);
+            state.UpdateCheckEnabled = request.UpdateCheckEnabled;
+            state.AutoApplyComponentUpdates = request.AutoApplyComponentUpdates;
+
+            state.AlertsEnabled = request.AlertsEnabled;
+            state.DiskUsageThresholdPercent = Math.Clamp(request.DiskUsageThresholdPercent, 50, 99);
+            state.CertExpiryWarningDays = Math.Clamp(request.CertExpiryWarningDays, 1, 90);
+            state.MemoryUsageThresholdPercent = Math.Clamp(request.MemoryUsageThresholdPercent, 50, 99);
+            state.ServiceDownAlertsEnabled = request.ServiceDownAlertsEnabled;
+            return state;
+        }, cancellationToken);
         return ToStatus(state);
     }
 
@@ -135,7 +135,7 @@ public sealed class AutomationService(
         {
             var state = await LoadAsync(cancellationToken);
             await RunBackupAsync(state, cancellationToken);
-            await SaveAsync(state, cancellationToken);
+            await SaveRunResultsAsync(state, cancellationToken);
         }, cancellationToken);
 
         return await GetStatusAsync(cancellationToken);
@@ -147,7 +147,7 @@ public sealed class AutomationService(
         {
             var state = await LoadAsync(cancellationToken);
             await RunSslRenewAsync(state, cancellationToken);
-            await SaveAsync(state, cancellationToken);
+            await SaveRunResultsAsync(state, cancellationToken);
         }, cancellationToken);
 
         return await GetStatusAsync(cancellationToken);
@@ -319,7 +319,7 @@ public sealed class AutomationService(
 
             if (changed)
             {
-                await SaveAsync(state, cancellationToken);
+                await SaveRunResultsAsync(state, cancellationToken);
             }
         }, cancellationToken);
     }
@@ -749,10 +749,26 @@ public sealed class AutomationService(
         return await fileStore.ReadAsync(StatePath, new AutomationStateRecord(), cancellationToken);
     }
 
-    private async Task SaveAsync(AutomationStateRecord state, CancellationToken cancellationToken)
-    {
-        await fileStore.WriteAsync(StatePath, state, cancellationToken);
-    }
+    // Jobs hold an old settings snapshot while running. Merge only their results so an
+    // administrator can save new settings immediately without having them reverted at completion.
+    private Task SaveRunResultsAsync(AutomationStateRecord state, CancellationToken cancellationToken) =>
+        fileStore.UpdateAsync(StatePath, new AutomationStateRecord(), current =>
+        {
+            current.LastBackupRunUtc = state.LastBackupRunUtc;
+            current.LastBackupStatus = state.LastBackupStatus;
+            current.LastBackupDetails = state.LastBackupDetails;
+            current.LastSslRunUtc = state.LastSslRunUtc;
+            current.LastSslStatus = state.LastSslStatus;
+            current.LastSslDetails = state.LastSslDetails;
+            current.LastLogCleanupRunUtc = state.LastLogCleanupRunUtc;
+            current.LastLogCleanupStatus = state.LastLogCleanupStatus;
+            current.LastLogCleanupDetails = state.LastLogCleanupDetails;
+            current.LastUpdateCheckRunUtc = state.LastUpdateCheckRunUtc;
+            current.LastUpdateCheckStatus = state.LastUpdateCheckStatus;
+            current.LastUpdateCheckDetails = state.LastUpdateCheckDetails;
+            current.PendingComponentUpdates = state.PendingComponentUpdates;
+            return current;
+        }, cancellationToken);
 
     private static IReadOnlyCollection<string> NormalizeEngines(IReadOnlyCollection<string> engines)
     {

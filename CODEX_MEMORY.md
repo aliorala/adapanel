@@ -1,5 +1,11 @@
 # AdaPanel Codex Memory
 
+## 2026-09-26 — 0.8.59 denetim düzeltmeleri hazır
+
+Uzun otomasyon işi bitince arada kaydedilen ayarların ezilmesi atomik ayar yazımı + yalnız iş sonucu birleştirmesiyle düzeltildi. Abonelik yoklaması1dakika sabitperiyot, yakın günlük saatlerin telafi penceresi enaz1dakika. Firewall/TCP ölçüm bayrakları ve sağlık okuma hataları artık açıkça görünür; eksik denetim sağlıklı diye önbelleğe alınmaz/otomatik port açmaz. Toggle hizalaması, yanlış indirme etiketi ve geç güncelleme yanıtının hazır paket durumunu ezmesi düzeltildi.
+
+Mevcut tambackend5448/5448, değişiklik sonrası sonhedefli233/233, frontend106/106, typecheck/build başarılı. Paketleme/canlı doğrulama sürüyor; canlı henüz0.8.58. Ayrıntı docs/denetim-2026-09-26-059.md, kanıt .tmp/audit-059. İlk soğuk tarama gecikmesi tamamen çözülmüş sayılmaz; FTP kayıtsız envanter desteklenmiyor, fiyatbotu API henüz taşınmadı. Şifreleme kapalı tercihi ve günlük03:00/ikinci saatkapalı korunur. Kaynak/history/tag push yok.
+
 ## 2026-09-26 — 0.8.58: isteğe bağlı ikinci günlük yedek
 
 Günlük programda ikinci saat seçeneği eklendi; sunucu otomasyonu, Yedekleme kısayolu ve abonelik programları aynı alanları kullanır. İki saat/dakika kullanıcı seçimi, sunucu yerel saati. Nullable ikinci saat eski kayıtları tek çalışmada tutar; aynı saat tek kez çalışır. Abonelik kotası1 ikinci saati etkin plandan düşürür ve mevcut uyarıyı gösterir, kayıttaki istek korunur. UTC sıralaması ve değişken telafi penceresi yaz saati/gün değişimi için testli. Canlıdaki günlük03:00 ve şifreleme kapalı tercihi otomatik değiştirilmez.

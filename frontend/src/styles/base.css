@@ -652,7 +652,7 @@ h4 {
    ((0,1,1) -> (0,2,1)) ve boylece bilesenlerin kendi `.checkbox-field[data-v]` (0,2,0) kurallarini
    ezer -- SiteAliases'in onay kutulari tam olarak boyle bozulmustu. `:where()` her zaman SIFIR
    ozgullukte oldugu icin dislama yapar ama kurali guclendirmez. */
-.form-grid label:not(:where(.check-field, .checkbox-field, .checkbox-row)),
+.form-grid label:not(:where(.check-field, .checkbox-field, .checkbox-row, .toggle-field)),
 .stacked-field {
   display: grid;
   gap: var(--sp-6);

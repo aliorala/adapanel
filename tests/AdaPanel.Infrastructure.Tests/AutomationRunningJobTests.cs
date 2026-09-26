@@ -16,6 +16,37 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class AutomationRunningJobTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Settings_changed_during_backup_survive_completion(bool scheduled)
+    {
+        using var fixture = new Fixture();
+        await fixture.Configure();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource<BackupPruneResultDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Backup.Handler = (method, _) => method.Name == nameof(IBackupService.PruneAsync)
+            ? Wait() : Task.FromResult(new BackupRecordDto());
+        Task<BackupPruneResultDto> Wait() { entered.TrySetResult(); return finish.Task; }
+        var run = scheduled ? fixture.Service.RunDueJobsAsync() : fixture.Service.RunBackupNowAsync();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await fixture.Service.UpdateSettingsAsync(new AdaPanel.Core.Dtos.Automation.UpdateAutomationSettingsRequest
+            {
+                AutoBackupEnabled = false, BackupScheduleMode = "daily", BackupScheduleHour = 4,
+                BackupScheduleSecondHour = 16, BackupRetentionDays = 9
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally { finish.TrySetResult(new()); await run; }
+        var status = await fixture.Service.GetStatusAsync();
+        Assert.False(status.Settings.AutoBackupEnabled);
+        Assert.Equal(16, status.Settings.BackupScheduleSecondHour);
+        Assert.Equal(9, status.Settings.BackupRetentionDays);
+        Assert.Equal("completed", status.LastBackupStatus);
+        Assert.NotNull(status.LastBackupRunUtc);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]

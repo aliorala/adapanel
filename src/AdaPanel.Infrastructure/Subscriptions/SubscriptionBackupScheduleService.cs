@@ -222,12 +222,12 @@ public sealed class SubscriptionBackupScheduleService(
                 // programları kilitliyordu.
                 //
                 // Bu abonelik SESSİZCE ATLANMIYOR ve KAYBOLMUYOR: LastRunUtc'ye dokunulmadığı için
-                // program hâlâ "zamanı gelmiş" sayılır ve işçi on dakika sonra yeniden dener.
+                // program hâlâ "zamanı gelmiş" sayılır ve işçi bir dakika sonra yeniden dener.
                 // Alternatif -- kaydı hiç açmamak -- daha kötüydü: iki yedek gerçekten aynı anda
                 // koşabilir ve panel yalnızca birini gösterirdi.
                 logger.LogWarning(
                     "Abonelik yedek turu ertelendi ({UserId}): baska bir yedek isi suruyor. "
-                    + "Program kaydi guncellenmedi, bir sonraki turda (10 dk) yeniden denenecek.",
+                    + "Program kaydi guncellenmedi, bir sonraki turda (1 dk) yeniden denenecek.",
                     userId);
             }
             catch (Exception exception)

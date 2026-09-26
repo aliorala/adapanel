@@ -113,19 +113,19 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
 
         // 1) Dinleme: tek TCP listener tablosu taraması (servisleri rahatsız etmez, her portu ayrı ayrı yoklamaktan iyidir).
         IPEndPoint[] listeners;
+        var listeningMeasured = true;
         try
         {
             listeners = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
         }
         catch (Exception exception)
         {
-            // ÖLÇEMEDİK ≠ SORUN YOK: boş liste, panelde her portun "dinlenmiyor" görünmesine yol
-            // açar. Davranış bilerek böyle (uydurma bir "açık" listesi göstermektense boş göstermek),
-            // ama sebebi günlüğe düşmezse yönetici panelin yanlış bilgi verdiğini hiç öğrenemez.
+            // Preserve the unavailable measurement separately from a measured empty table.
             logger.LogWarning(
                 exception,
-                "TCP dinleyici tablosu okunamadi; port durumlari 'dinlenmiyor' olarak gosterilecek.");
+                "TCP dinleyici tablosu okunamadi; port durumlari 'olculemedi' olarak gosterilecek.");
             listeners = [];
+            listeningMeasured = false;
         }
 
         // 2) Firewall kapsamı: etkin inbound Allow (TCP/Any) kurallarının kapsadığı portlar.
@@ -152,7 +152,9 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
                 Category = category,
                 Required = required,
                 Listening = listening,
+                ListeningMeasured = listeningMeasured,
                 ListenScope = scope,
+                FirewallMeasured = ranges is not null,
                 FirewallAllowed = IsPortCovered(port, coversAllTcp, ranges)
             });
         }
@@ -257,7 +259,7 @@ public sealed class FirewallService(ILogger<FirewallService> logger) : IFirewall
 
             return (coversAll, ranges);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(
                 exception,

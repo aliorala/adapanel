@@ -26,9 +26,13 @@ public sealed class PortStatusDto
     /// <summary>Sunucuda bir süreç bu portu dinliyor mu (TCP listener tablosundan).</summary>
     public bool Listening { get; set; }
 
+    public bool ListeningMeasured { get; set; } = true;
+
     /// <summary>all = tüm arabirimler/erişilebilir, loopback = yalnız 127.0.0.1, boş = dinlenmiyor.</summary>
     public string ListenScope { get; set; } = string.Empty;
 
     /// <summary>Etkin bir inbound "Allow" firewall kuralı bu portu kapsıyor mu.</summary>
     public bool FirewallAllowed { get; set; }
+
+    public bool FirewallMeasured { get; set; } = true;
 }

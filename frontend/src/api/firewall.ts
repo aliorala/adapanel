@@ -31,6 +31,8 @@ export type PortStatus = {
   listening: boolean;
   listenScope: string;
   firewallAllowed: boolean;
+  firewallMeasured?: boolean;
+  listeningMeasured?: boolean;
 };
 
 export async function getFirewallRules() {

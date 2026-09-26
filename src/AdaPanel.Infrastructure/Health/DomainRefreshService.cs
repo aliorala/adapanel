@@ -287,7 +287,9 @@ internal sealed class DomainRefreshService(
             }
 
             var summary = await RunAllAsync(applyChanges: false, cancellationToken, sites);
-            if (summary.FailedSites == 0)
+            if (summary.FailedSites == 0 &&
+                !summary.ServerFindings.Concat(summary.Results.SelectMany(item => item.Findings))
+                    .Any(item => item.Key == "repair.inspection_failed"))
             {
                 Volatile.Write(ref _cachedInspection, new InspectionCache(summary, DateTime.UtcNow, fingerprint, generation));
             }
@@ -460,13 +462,16 @@ internal sealed class DomainRefreshService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogDebug(exception, "Posta karsilama adi denetlenemedi; posta sunucusu kurulu olmayabilir.");
+            findings.Add(InspectionFailure("SMTP hostname", exception));
         }
 
         try
         {
             // panelPort=0: katalogdaki panel girdisi zaten disarida birakiliyor.
             var ports = await firewallService.GetPortStatusAsync(0, cancellationToken);
-            foreach (var port in ports.Where(item => item.Required && !item.FirewallAllowed && !string.Equals(item.Category, "panel", StringComparison.OrdinalIgnoreCase)))
+            if (ports.Any(item => !item.FirewallMeasured || !item.ListeningMeasured))
+                findings.Add(InspectionFailure("Firewall / TCP listeners"));
+            foreach (var port in ports.Where(item => item.Required && item.FirewallMeasured && !item.FirewallAllowed && !string.Equals(item.Category, "panel", StringComparison.OrdinalIgnoreCase)))
             {
                 var finding = new RepairFindingDto
                 {
@@ -505,10 +510,17 @@ internal sealed class DomainRefreshService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogDebug(exception, "Guvenlik duvari durumu okunamadi.");
+            findings.Add(InspectionFailure("Firewall", exception));
         }
 
         return findings;
     }
+
+    private static RepairFindingDto InspectionFailure(string source, Exception? exception = null) => new()
+    {
+        Key = "repair.inspection_failed", Severity = "warn", NeedsConfirmation = true,
+        Detail = exception is null ? source : $"{source}: {DescribeError(exception)}"
+    };
 
     /// <summary>
     /// Domainsiz onizlemenin biraktigi gecici bagalamalari kaldirir ve kac tane kaldirildigini doner.
@@ -647,6 +659,7 @@ internal sealed class DomainRefreshService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogDebug(exception, "Site durumu okunamadi ({SiteName}).", siteName);
+            findings.Add(InspectionFailure("IIS", exception));
         }
 
         // --- Bolge Windows DNS'te var mi ---
@@ -672,6 +685,7 @@ internal sealed class DomainRefreshService(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogDebug(exception, "Bolge durumu okunamadi ({SiteName}).", siteName);
+            findings.Add(InspectionFailure("DNS", exception));
         }
 
         // Bolge BIR KEZ okunur ve posta bulgularina gecirilir. Eskiden her iki yer de ayri ayri

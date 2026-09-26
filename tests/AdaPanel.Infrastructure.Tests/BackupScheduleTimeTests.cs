@@ -23,6 +23,16 @@ namespace AdaPanel.Infrastructure.Tests;
 /// </remarks>
 public sealed class BackupScheduleTimeTests
 {
+    [Fact]
+    public void Adjacent_daily_times_are_not_skipped_between_minute_polls()
+    {
+        var plan = BackupSchedule.Normalize("daily", 24, 3, 0, 1, 1, 3, 1);
+        var now = Utc(2026, 9, 26, 0).AddSeconds(45);
+        Assert.True(BackupSchedule.ZamaniGeldi(plan, now.AddDays(-1), now, Turkiye));
+        Assert.True(BackupSchedule.ZamaniGeldi(plan, now, now.AddMinutes(1), Turkiye));
+        Assert.False(BackupSchedule.ZamaniGeldi(plan, now.AddMinutes(1), now.AddMinutes(2), Turkiye));
+    }
+
     /// <summary>Türkiye: sabit UTC+03, yaz saati YOK (2016'dan beri).</summary>
     private static readonly TimeZoneInfo Turkiye =
         TimeZoneInfo.CreateCustomTimeZone("Test TR", TimeSpan.FromHours(3), "Test TR", "Test TR");

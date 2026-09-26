@@ -5,7 +5,7 @@
         <h2>{{ t("panel.update.title") }}</h2>
         <p class="meta">{{ t("panel.update.subtitle") }}</p>
       </div>
-      <button class="secondary compact" @click="refresh(true)">
+      <button class="secondary compact" :disabled="Boolean(busy) || refreshing" @click="refresh(true)">
         {{ t("panel.update.refresh") }}
       </button>
     </div>
@@ -101,7 +101,7 @@
           class="secondary"
           :disabled="!status.downloadUrl || !status.packageSha256 || !status.isUpdateAvailable || Boolean(busy)"
           @click="downloadUpdate">
-          {{ busy === "download" ? t("panel.webdb.deploying") : t("panel.update.download") }}
+          {{ busy === "download" ? t("panel.update.downloading") : t("panel.update.download") }}
         </button>
         <button
           :disabled="!status.isPackageReady || status.isInstallScheduled || Boolean(busy)"
@@ -133,6 +133,8 @@ const { t } = useI18n();
 const { confirm } = useConfirm();
 const status = ref<UpdateStatus | null>(null);
 const busy = ref<"" | "download" | "install">("");
+const refreshing = ref(false);
+let statusRevision = 0;
 const notice = ref("");
 const noticeError = ref(false);
 
@@ -193,18 +195,25 @@ onMounted(async () => {
 // NOT: Güncelleme kaynağı (GitHub depo) ayarı kullanıcı isteğiyle UI'dan KALDIRILDI; backend
 // varsayılanı (SelfUpdateService.DefaultRepo) kullanılır, gerekirse config/update-github.json'dan değişir.
 async function refresh(force = true) {
+  if (busy.value || refreshing.value) return;
+  refreshing.value = true;
+  const revision = statusRevision;
   try {
-    status.value = await checkForUpdate(force);
+    const next = await checkForUpdate(force);
+    if (revision === statusRevision) status.value = next;
   } catch (error) {
     showNotice(resolveApiMessage(error), true);
+  } finally {
+    refreshing.value = false;
   }
 }
 
 async function downloadUpdate() {
-  if (!status.value) {
+  if (busy.value || !status.value) {
     return;
   }
 
+  statusRevision++;
   busy.value = "download";
   try {
     status.value = await applyUpdate(status.value.downloadUrl, status.value.packageSha256);
@@ -217,7 +226,7 @@ async function downloadUpdate() {
 }
 
 async function installUpdate() {
-  if (!status.value?.isPackageReady) {
+  if (busy.value || !status.value?.isPackageReady) {
     return;
   }
 
@@ -238,6 +247,7 @@ async function installUpdate() {
   }
 
   const versionBeforeInstall = status.value.currentVersion;
+  statusRevision++;
   busy.value = "install";
   try {
     status.value = await installPreparedUpdate();

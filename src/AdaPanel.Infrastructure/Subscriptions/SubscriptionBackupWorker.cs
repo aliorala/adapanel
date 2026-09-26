@@ -18,9 +18,8 @@ namespace AdaPanel.Infrastructure.Subscriptions;
 /// durdurmamasını sağlar.
 /// </para>
 /// <para>
-/// <b>Neden on dakikada bir:</b> en sık program saatliktir; on dakikalık çözünürlük, bir turu
-/// en fazla on dakika geciktirir ve buna karşılık boşta CPU harcamaz. Aralığın kendisi
-/// programın <c>IntervalHours</c> değeriyle uygulanır, bu tur sıklığıyla değil.
+/// Günlük program dakika seçimini destekler; otomasyonla aynı bir dakikalık yoklama kullanılır.
+/// Dönem sabittir: iş süresi bir sonraki yoklamanın üzerine eklenmez.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
@@ -28,7 +27,7 @@ public sealed class SubscriptionBackupWorker(
     IServiceScopeFactory scopeFactory,
     ILogger<SubscriptionBackupWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan Aralik = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan Aralik = TimeSpan.FromMinutes(1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -43,6 +42,7 @@ public sealed class SubscriptionBackupWorker(
             return;
         }
 
+        using var timer = new PeriodicTimer(Aralik);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -63,7 +63,7 @@ public sealed class SubscriptionBackupWorker(
 
             try
             {
-                await Task.Delay(Aralik, stoppingToken);
+                if (!await timer.WaitForNextTickAsync(stoppingToken)) return;
             }
             catch (OperationCanceledException)
             {

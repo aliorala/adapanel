@@ -80,8 +80,8 @@
                `tabular-nums` kaliyor: basamaklar satirdan satira ayni sutunda dursun. -->
           <span class="mono">{{ portLabel(p) }}</span>
           <span :class="['cell', listenClass(p)]">{{ listenLabel(p) }}</span>
-          <span :class="['cell', p.firewallAllowed ? 'ok' : 'bad']">
-            {{ p.firewallAllowed ? t("panel.firewall.ports.allowed") : t("panel.firewall.ports.missing") }}
+          <span :class="['cell', p.firewallMeasured === false ? 'warn' : p.firewallAllowed ? 'ok' : 'bad']">
+            {{ p.firewallMeasured === false ? t("panel.security.unmeasured") : p.firewallAllowed ? t("panel.firewall.ports.allowed") : t("panel.firewall.ports.missing") }}
           </span>
           <span class="cell action-cell">
             <span :class="['dot', rowStatus(p)]"></span>
@@ -92,7 +92,7 @@
                  dusuyordu. Panelin gercek kucuk dugmesi `.compact` (30px). Ton da `secondary`
                  oldu: ServerHealth ("Yeniden baslat"), Cluster ("Test/Ac/Duzenle") ve bu satir
                  ayni rutbede satir eylemi; ucu de artik ayni gorunuyor. -->
-            <button v-if="!p.firewallAllowed" class="secondary compact row-button" :disabled="busy" @click="openPort(p)">
+            <button v-if="p.firewallMeasured !== false && !p.firewallAllowed" class="secondary compact row-button" :disabled="busy" @click="openPort(p)">
               {{ t("panel.firewall.ports.open") }}
             </button>
           </span>
@@ -212,9 +212,9 @@ const form = reactive({ ruleName: "", port: 80, protocol: "TCP" });
 
 const requiredTotalCount = computed(() => portStatus.value.filter((p) => p.required).length);
 const requiredOpenCount = computed(
-  () => portStatus.value.filter((p) => p.required && p.listening && p.firewallAllowed).length
+  () => portStatus.value.filter((p) => p.required && p.listeningMeasured !== false && p.firewallMeasured !== false && p.listening && p.firewallAllowed).length
 );
-const missingRequired = computed(() => portStatus.value.filter((p) => p.required && !p.firewallAllowed));
+const missingRequired = computed(() => portStatus.value.filter((p) => p.required && p.firewallMeasured !== false && !p.firewallAllowed));
 
 /**
  * PANELİN KENDİ PORTU — TAHMİN DEĞİL, ÖLÇÜM.
@@ -295,6 +295,7 @@ function portLabel(p: PortStatus) {
 }
 
 function listenLabel(p: PortStatus) {
+  if (p.listeningMeasured === false) return t("panel.security.unmeasured");
   if (p.rangeEnd > 0) {
     return t("panel.firewall.ports.listen.onDemand");
   }
@@ -307,6 +308,7 @@ function listenLabel(p: PortStatus) {
 }
 
 function listenClass(p: PortStatus) {
+  if (p.listeningMeasured === false) return "warn";
   if (p.rangeEnd > 0) {
     return "muted";
   }
@@ -317,6 +319,7 @@ function listenClass(p: PortStatus) {
 }
 
 function rowStatus(p: PortStatus): "ok" | "warn" | "problem" | "unused" {
+  if (p.firewallMeasured === false || p.listeningMeasured === false) return "warn";
   // Aralık (FTP pasif): dinleme istek anında olur; durum yalnızca firewall'a bakar.
   if (p.rangeEnd > 0) {
     return p.firewallAllowed ? "ok" : "warn";

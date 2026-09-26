@@ -13,6 +13,34 @@ namespace AdaPanel.Infrastructure.Tests;
 
 public sealed class DomainInspectionTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Unavailable_firewall_is_visible_not_repaired_and_not_cached(bool throws)
+    {
+        var fixture = new Fixture { FirewallUnavailable = true, FirewallThrows = throws };
+        var first = await fixture.Service.InspectAllAsync();
+        var warning = Assert.Single(first.ServerFindings);
+        Assert.Equal("repair.inspection_failed", warning.Key);
+        Assert.True(warning.NeedsConfirmation);
+        Assert.False(warning.Repaired);
+        fixture.FirewallUnavailable = false;
+        Assert.Empty((await fixture.Service.InspectAllAsync()).ServerFindings);
+        Assert.Equal(2, fixture.Inspections);
+    }
+
+    [Fact]
+    public async Task Unavailable_IIS_read_is_visible_and_not_cached_as_healthy()
+    {
+        var fixture = new Fixture { SiteUnavailable = true };
+        Assert.Contains(Assert.Single((await fixture.Service.InspectAllAsync()).Results).Findings,
+            finding => finding.Key == "repair.inspection_failed");
+        fixture.SiteUnavailable = false;
+        Assert.DoesNotContain(Assert.Single((await fixture.Service.InspectAllAsync()).Results).Findings,
+            finding => finding.Key == "repair.inspection_failed");
+        Assert.Equal(2, fixture.Inspections);
+    }
+
     [Fact]
     public async Task Bulk_inspection_uses_one_snapshot_and_never_calls_mutating_dns_reads()
     {
@@ -150,6 +178,7 @@ public sealed class DomainInspectionTests
         public bool Published = true, MissingMailRecord, MailUnavailable, FailDefaults;
         public string SiteName = "example.test", SiteState = "Started";
         public Func<Task>? BeforeInspection;
+        public bool FirewallUnavailable, FirewallThrows, SiteUnavailable;
         public DomainRefreshService Service { get; }
         private SiteDto Site => new() { Id = 1, Name = SiteName, State = SiteState };
         public Fixture(bool bulk = false)
@@ -157,7 +186,7 @@ public sealed class DomainInspectionTests
             var sites = Stub<IIisSiteService>((method, _) => method.Name switch
             {
                 "GetSitesAsync" => Task.FromResult<IReadOnlyCollection<SiteDto>>([Site]),
-                "GetSiteAsync" => Task.FromResult(Site),
+                "GetSiteAsync" => SiteUnavailable ? Task.FromException<SiteDto>(new IOException("IIS unavailable")) : Task.FromResult(Site),
                 _ => throw new InvalidOperationException(method.Name)
             });
             var dns = Stub<IDnsService>((method, args) => method.Name switch
@@ -176,7 +205,10 @@ public sealed class DomainInspectionTests
                 "SyncCertificateAsync" => Task.FromResult<MailCertificateDto?>(null),
                 _ => throw new InvalidOperationException(method.Name)
             });
-            var firewall = Stub<IFirewallService>((_, _) => Task.FromResult<IReadOnlyCollection<PortStatusDto>>([]));
+            var firewall = Stub<IFirewallService>((_, _) => FirewallUnavailable && FirewallThrows
+                ? Task.FromException<IReadOnlyCollection<PortStatusDto>>(new IOException("Firewall unavailable"))
+                : Task.FromResult<IReadOnlyCollection<PortStatusDto>>(FirewallUnavailable
+                    ? [new() { Port = 80, Required = true, FirewallAllowed = false, FirewallMeasured = false }] : []));
             // No files are created; the distinct data path also isolates static cache entries.
             var store = new JsonFileStore(Microsoft.Extensions.Options.Options.Create(new PanelRuntimeOptions
             {

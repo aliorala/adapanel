@@ -199,6 +199,8 @@ internal static class BackupSchedule
         var pencere = plan.HasSecondTime && SonrakiPlanliZaman(plan, kacirilan.Value, zone) is { } sonraki
             ? (sonraki - kacirilan.Value) / 2
             : plan.TelafiPenceresi;
+        // Workers poll once a minute; a shorter window can expire between two healthy polls.
+        if (pencere < TimeSpan.FromMinutes(1)) pencere = TimeSpan.FromMinutes(1);
         return nowUtc - kacirilan.Value <= pencere;
     }
 
