@@ -1,5 +1,5 @@
 {
-  "tag_name": "0.8.56",
-  "name": "0.8.56 — Daha hızlı ve doğru sağlık denetimi",
-  "body": "- DNS sağlık ölçümündeki yavaş süreç sorguları azaltıldı; alan adları tek toplu okumayla denetlenir.\n- Salt okunur DNS taramalarının kayıt yayımlaması önlendi.\n- TCP ve UDP dinleyicileri birlikte doğrulanır; eksik ölçümler sağlıklı olarak gösterilmez.\n- Zamanlanmış görevlerde reddedilen tetiklemenin durum açıklaması düzeltildi."
+  "tag_name": "0.8.57",
+  "name": "0.8.57 — SSL durumunun doğru ölçülmesi",
+  "body": "- IIS sertifika parmak izlerinin metin ve bayt biçimleri doğru okunur.\n- SSL ekranı eski kurulum sonucunu kullanmak yerine mevcut bağlamayı yeniden ölçer.\n- IPv6 HTTPS bağlamaları doğru ayrıştırılır; ölçülemeyen bağlamalar varken ortak sertifika silinmez.\n- Önceki sürümün DNS sağlık ve görev durumu düzeltmelerini içerir.\n- Yinelenen SPF/DMARC kayıtlarının panel listesinde birikmesi düzeltildi."
 }

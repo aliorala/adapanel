@@ -6,7 +6,7 @@
         <h2>WordPress</h2>
         <p class="meta">{{ siteName || t("panel.php.selectSite") }}</p>
       </div>
-      <button class="secondary compact" :disabled="loading || !siteName" @click="refresh">{{ t("panel.backup.refresh") }}</button>
+      <button class="secondary compact" :disabled="loading || !siteName" @click="refresh">{{ t("panel.common.refresh") }}</button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>

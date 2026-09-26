@@ -1124,6 +1124,7 @@
   "panel.settings.saved": "Panel ayarları kaydedildi.",
   "panel.settings.restartRequired": "Servis yeniden başlatılmalı",
   "panel.common.cancel": "Vazgeç",
+  "panel.common.refresh": "Yenile",
   "panel.common.loading": "Yükleniyor…",
   "panel.common.save": "Kaydet",
   "panel.common.delete": "Sil",

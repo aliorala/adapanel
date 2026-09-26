@@ -37,6 +37,15 @@ public sealed class WinAcmeSslService(
             record => string.Equals(record.SiteName, site.Name, StringComparison.OrdinalIgnoreCase),
             cancellationToken);
 
+        IReadOnlyCollection<IisHttpsBinding>? bindings = null;
+        try { bindings = await ReadHttpsBindingsAsync(cancellationToken); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "HTTPS binding inventory could not be read for {SiteName}.", site.Name);
+        }
+        SslBindingVerification.Refresh(states.Where(record =>
+            string.Equals(record.SiteName, site.Name, StringComparison.OrdinalIgnoreCase)), bindings);
+
         return new SslWorkspaceDto
         {
             SiteName = site.Name,
@@ -855,12 +864,9 @@ public sealed class WinAcmeSslService(
         // Joker sertifikada bağlamayı win-acme kuruyor ve host başlığı "*.domain" OLMAK ZORUNDA
         // DEĞİL (alt alan adı başına ayrı bağlama açabilir). O yüzden burada belirli bir host
         // aranmaz; sitede HERHANGİ bir HTTPS bağlaması olması sorulur.
-        var dto = ToDto(
-            site.Name,
-            $"*.{domain}",
-            certificate,
-            ResolveCertificateSource(certificate),
-            await MeasureHttpsBindingAsync(site.Name, string.Empty, cancellationToken));
+        var dto = await OlcVeIsleAsync(
+            ToDto(site.Name, $"*.{domain}", certificate, ResolveCertificateSource(certificate), null),
+            site.Name, string.Empty, 443, certificate.Thumbprint ?? string.Empty, cancellationToken);
         await UpsertAsync(dto, cancellationToken);
         return dto;
     }
@@ -1371,9 +1377,7 @@ public sealed class WinAcmeSslService(
     /// ölçüm yerine cehalete dayandırırdı.
     /// </para>
     /// </summary>
-    private async Task<IReadOnlyCollection<IisHttpsBinding>> ReadHttpsBindingsAsync(CancellationToken cancellationToken)
-    {
-        const string script = """
+    internal const string HttpsBindingsScript = """
             Import-Module WebAdministration -ErrorAction Stop
             $ErrorActionPreference = 'Stop'
             $liste = @()
@@ -1385,7 +1389,17 @@ public sealed class WinAcmeSslService(
                 # ile "bakamadim" arasindaki fark tam da kullaniciya soylenecek cumleyi belirler.
                 $thumb = ''
                 $certOkundu = $true
-                try { if ($b.certificateHash) { $thumb = ($b.certificateHash | ForEach-Object { $_.ToString('x2') }) -join '' } } catch { $certOkundu = $false }
+                try {
+                  $hash = $b.certificateHash
+                  # WebAdministration exposes hexadecimal text; the managed IIS API uses byte[].
+                  if ($hash -is [string]) {
+                    $thumb = $hash.Trim()
+                    if ($thumb -and $thumb -notmatch '^(?:[0-9a-fA-F]{2})+$') { throw 'Invalid certificate hash' }
+                    $thumb = $thumb.ToLowerInvariant()
+                  } elseif ($hash -is [byte[]]) {
+                    $thumb = [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+                  } elseif ($null -ne $hash) { throw 'Unsupported certificate hash type' }
+                } catch { $thumb = ''; $certOkundu = $false }
                 $store = ''
                 try { $store = [string]$b.certificateStoreName } catch { }
                 $liste += [pscustomobject]@{
@@ -1397,10 +1411,12 @@ public sealed class WinAcmeSslService(
                 }
               }
             }
-            ConvertTo-Json @($liste) -Depth 3 -Compress
+            ConvertTo-Json -InputObject @($liste) -Depth 3 -Compress
             """;
 
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+    private async Task<IReadOnlyCollection<IisHttpsBinding>> ReadHttpsBindingsAsync(CancellationToken cancellationToken)
+    {
+        var result = await ProcessRunner.RunPowerShellStrictAsync(HttpsBindingsScript, cancellationToken);
         if (!result.Success)
         {
             throw new AppException(

@@ -458,7 +458,14 @@ public sealed partial class DnsService(
             // olabilir. Tek-ornek kurali bunlari da ezerse, onarma her calistiginda kullanicinin
             // eli emegini panel varsayilanina geri dondururdu -- ki panelin sozu tam tersi:
             // "eksikler eklenir, var olana dokunulmaz".
-            var duplicate = policyPrefix is not null
+            // An identical user-owned policy is already the desired record. The managed-only
+            // policy fallback below must not turn every repeated upsert into another copy.
+            var duplicate = state.Records.FirstOrDefault(item =>
+                string.Equals(item.Type, record.Type, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Host, record.Host, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Value, record.Value, StringComparison.Ordinal) &&
+                item.Priority == record.Priority);
+            duplicate ??= policyPrefix is not null
                 ? state.Records.FirstOrDefault(item =>
                     item.IsManaged &&
                     string.Equals(item.Type, "TXT", StringComparison.OrdinalIgnoreCase) &&
@@ -2422,6 +2429,10 @@ public sealed partial class DnsService(
     private static IEnumerable<DnsRecordState> SortRecords(IEnumerable<DnsRecordState> records)
     {
         return records
+            // Collapse historical exact copies, including the duplicate policy rows. Preserve
+            // distinct TXT case, priority, TTL and ownership; these can have different meaning.
+            .DistinctBy(record => (record.Type.ToUpperInvariant(), record.Host.ToLowerInvariant(),
+                record.Value, record.Priority, record.Ttl, record.IsManaged))
             .OrderBy(record => Array.IndexOf(SupportedTypes, record.Type.ToUpperInvariant()))
             .ThenBy(record => record.Host, StringComparer.OrdinalIgnoreCase)
             .ThenBy(record => record.Value, StringComparer.OrdinalIgnoreCase);

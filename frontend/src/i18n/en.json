@@ -1124,6 +1124,7 @@
   "panel.settings.saved": "Panel settings saved.",
   "panel.settings.restartRequired": "Service restart required",
   "panel.common.cancel": "Cancel",
+  "panel.common.refresh": "Refresh",
   "panel.common.loading": "Loading…",
   "panel.common.save": "Save",
   "panel.common.delete": "Delete",

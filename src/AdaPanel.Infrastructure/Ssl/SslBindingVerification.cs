@@ -33,6 +33,20 @@ namespace AdaPanel.Infrastructure.Ssl;
 /// </summary>
 public static class SslBindingVerification
 {
+    internal static void Refresh(IEnumerable<AdaPanel.Core.Dtos.Ssl.SslCertificateDto> certificates,
+        IReadOnlyCollection<IisHttpsBinding>? bindings)
+    {
+        foreach (var certificate in certificates)
+        {
+            var host = certificate.HostName.StartsWith("*.", StringComparison.Ordinal) ? "" : certificate.HostName;
+            var result = Olc(bindings, certificate.SiteName, host,
+                certificate.Port > 0 ? certificate.Port : 443, certificate.Thumbprint);
+            certificate.IsHttpsBindingPresent = result.BindingPresent;
+            certificate.IsCertificateBound = result.CertificateBound;
+            certificate.BindingDetail = result.Detail;
+        }
+    }
+
     /// <summary>
     /// <param name="bindings">
     /// IIS'ten okunan HTTPS bağlamalarının TAMAMI. <c>null</c> = OKUNAMADI (boş liste ile aynı şey

@@ -1,5 +1,12 @@
 # Çalışma durumu — canlı kayıt
 
+## 2026-09-26 — 0.8.56 canlı; 0.8.57 SSL/DNS düzeltmesi paketleniyor
+
+0.8.56 kaynak 750e764. Yayın varlığı ve canlı indirme aynı SHA256; kurulum succeeded/exit0, 2026-09-26T10:53:43.9246547Z. Servisler Running, üç HTTPS adresi200. Sıcak attention 2.8–3.5 saniye (önceden8.5–11.3); DNS1.6–2.1 saniye. İlk çakışan taramalar21–49.8 saniye, tamamen çözülmüş denmez. DNS TCP+UDP aynı genelIP'de,3bölge/0eksik. Cron atlanan tetikleme açıklaması canlı doğrulandı. İkinci AdaPanel PID --tray, ikinci API değil. Açılış SQLite ERR istemcinin iptal ettiği GET /panel, veritabanı hasarı değil.
+
+Yeni canlı bulgu: IIS certificateHash System.String, eski bayt ToString('x2') dönüşümü başarısız; SSL ekranı ayrıca eski kurulum ölçümünü saklıyordu. 0.8.57 metin/byte[] okuması, her SSL ekranında taze toplu bağlama ölçümü, joker sertifika gerçek doğrulaması, IPv6 ayrıştırması ve ölçülemeyen diğer bağlama varken ortak sertifika koruması getirir. SPF/DMARC upsert yönetilmeyen özdeş kaydı çoğaltıyordu; birebir eşleşme önce aranır, eski tam kopyalar okunurken tekilleştirilir. Windows DNS'te aynı politikalar zaten birer kayıt; canlı DNS silinmedi/değiştirilmedi. Yeni SSL86, sürüm97, son DNS/SSL297 test başarılı; frontend build geçti. .57 henüz paketleniyor, canlı .56. Ayrıntı docs/denetim-2026-09-26-056.md; .tmp/audit-056 ve057. Önceki API taşınmadı/şifreleme kapalı tercihleri aynen geçerli. Kaynak push yok.
+
+
 ## 2026-09-26 — 0.8.56 hazır; canlı doğrulama bekliyor
 
 DNS servis/ağ ölçümleri native Windows API'lerine alındı, TCP+UDP birlikte denetlenir. Alan adı DNS okumaları toplu ve salt okunur; dry-run artık kayıt yayımlamaz/dosya yazmaz. Unknown/başarısız denetim yeşil gösterilmez; cron 0x800710E0 sabiti düzeltildi. Tam backend 5417, son hedefli 349, Core 2, frontend 102 başarılı; typecheck/build ve standart installer denetimi geçti. Paket 90.814.341 bayt SHA256 425C1586690EBD407C2B1EC6A378CE1ADF35847A14FBE85DBC0F1A78BA48DAA6. İlk Docker SSL hatası sonrası denetimsiz geçiş yapılmadan tekrar başarılı. PHP sabit yedek indirme adresi 404, canlı çözümleyici var; raporda açık.

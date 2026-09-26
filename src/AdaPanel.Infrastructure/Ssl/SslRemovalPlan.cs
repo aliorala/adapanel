@@ -41,8 +41,12 @@ public sealed class IisHttpsBinding
 
     private string Parca(int index)
     {
-        var parcalar = BindingInformation.Split(':');
-        return parcalar.Length > index ? parcalar[index].Trim() : string.Empty;
+        // IPv6 addresses contain colons; only the last two separators delimit port/host.
+        var hostStart = BindingInformation.LastIndexOf(':');
+        var portStart = hostStart > 0 ? BindingInformation.LastIndexOf(':', hostStart - 1) : -1;
+        if (portStart < 0) return string.Empty;
+        return index == 2 ? BindingInformation[(hostStart + 1)..].Trim()
+            : BindingInformation[(portStart + 1)..hostStart].Trim();
     }
 }
 
@@ -121,7 +125,8 @@ public static class SslRemovalPlan
 
         return allBindings
             .Where(binding => !AynıBağlama(binding, target))
-            .Where(binding => string.Equals(binding.Thumbprint, target.Thumbprint, StringComparison.OrdinalIgnoreCase))
+            .Where(binding => !binding.CertificateReadable ||
+                string.Equals(binding.Thumbprint, target.Thumbprint, StringComparison.OrdinalIgnoreCase))
             .Select(binding => $"{binding.SiteName} ({binding.BindingInformation})")
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)

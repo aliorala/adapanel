@@ -17,7 +17,7 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class SslRemovalPlanTests
 {
     private static IisHttpsBinding Baglama(string site, string bilgi, string thumb = "aabbcc") =>
-        new() { SiteName = site, BindingInformation = bilgi, Thumbprint = thumb, StoreName = "My" };
+        new() { SiteName = site, BindingInformation = bilgi, Thumbprint = thumb, StoreName = "My", CertificateReadable = true };
 
     [Fact]
     public void BindingInformation_IsParsedIntoHostAndPort()
