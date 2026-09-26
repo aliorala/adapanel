@@ -150,23 +150,14 @@ public sealed class PostaAyariEtkinlestiMiTests
         Assert.NotEqual(dusen.Measured, bos.Measured);
     }
 
-    /// <summary>
-    /// Bozuk/yarim JSON basan BASARILI bir surec: cikti ayristirilamaz ama sorgu KOSMUSTUR.
-    /// </summary>
-    /// <remarks>
-    /// Bilerek boyle: cikis kodu 0 ise arac isini yapmistir. Burayi "olculemedi" saymak, gecerli
-    /// ama tanimadigimiz bir cikti bicimi yuzunden butun posta yonetimini kilitlerdi.
-    /// </remarks>
     [Fact]
-    public async Task Ayristirilamayan_cikti_sorgunun_KOSTUGU_gercegini_degistirmez()
+    public async Task Ayristirilamayan_cikti_bos_alan_listesi_sayilmaz()
     {
         var sonuc = MailService.MailQueryResult.Olc(
             await ProcessRunner.RunPowerShellAsync("[Console]::Out.WriteLine('bu JSON degil')"));
-
-        Assert.True(sonuc.Measured);
+        Assert.False(sonuc.Measured);
         Assert.Empty(sonuc.Items);
     }
-
     /// <summary>ParseItems gercekten NDJSON okuyor mu (yukaridaki testin dayandigi varsayim).</summary>
     [Fact]
     public async Task Stalwart_NDJSON_bicimi_gercekten_ayristiriliyor()

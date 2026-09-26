@@ -1,5 +1,9 @@
 # 0.8.31–0.8.43 — Kalan sorunların düzeltilmesi
 
+## 2026-09-26 — 0.8.62 hazırlanıyor (canlı0.8.61)
+
+Posta sağlık kontrolündeki başarısız okumaların sağlıklı sayılması, SMTP adının açıklama/önek içinde eşleşmesi ve bozuk/yarım CLI JSON'unun boş envantere dönüşmesi düzeltildi. PTR beklemeleri sınırlı ve iptal edilebilir. Windows servis/görev okumaları SCM/Task Scheduler API'lerine alındı; Unknown durum korunur. 63 hedefli test geçti, tam paketleme sürüyor. Manifest/indirici değişmediği için .61'in22Passed/3mevcutSkipped bileşen raporu yeniden kullanılıyor. Ayrıntı docs/denetim-2026-09-26-062.md; .tmp/audit-062. Henüz .62 canlı sonucu yok. Eski firewall kopyaları gelişmiş filtrelerle inceleniyor; şu ana kadar silme yok. Yedek tercihleri ve API taşınmadı bilgisi aynen geçerli. Kaynak/history/tag push yapılmaz.
+
 ## 2026-09-26 — SON DURUM: 0.8.61 canlı
 
 PHP yedek paket adresi arşive düzeltildi; hash aynı. DNS sağlık okuması modern Windows DNS sağlayıcısına, firewall kapsam okuması COM API'ye alındı. DNSSEC dahil tam kayıt karşılaştırması geçti; sağlayıcı hatasında eski sorgu yolu ve ölçülemeyen durum korunur. Kaynak b2c69ac. 5.474 Infrastructure + 2 Core, 106 frontend, typecheck/build başarılı. Güncel bileşen denetimi 22 Passed / 3 mevcut büyük paket Skipped, StaleFallback0. 168 publish dosyası ve installer denetimi geçti.

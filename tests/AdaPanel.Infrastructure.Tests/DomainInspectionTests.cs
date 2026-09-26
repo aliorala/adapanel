@@ -14,6 +14,17 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class DomainInspectionTests
 {
     [Fact]
+    public async Task Unreadable_smtp_greeting_is_visible_and_is_retried_without_a_repair_action()
+    {
+        var fixture = new Fixture { HostnameUnavailable = true };
+        var first = await fixture.Service.InspectAllAsync();
+        Assert.Contains(first.ServerFindings, finding => finding.Key == "repair.inspection_failed" && finding.NeedsConfirmation);
+        Assert.DoesNotContain(first.ServerFindings, finding => finding.Key == "repair.mail_hostname_mismatch");
+        fixture.HostnameUnavailable = false;
+        Assert.Empty((await fixture.Service.InspectAllAsync()).ServerFindings);
+        Assert.Equal(2, fixture.Inspections);
+    }
+    [Fact]
     public async Task Unknown_IIS_state_is_an_incomplete_inspection_and_is_retried()
     {
         var fixture = new Fixture { SiteState = "Unknown" };
@@ -191,7 +202,7 @@ public sealed class DomainInspectionTests
         public bool Published = true, MissingMailRecord, MailUnavailable, FailDefaults;
         public string SiteName = "example.test", SiteState = "Started";
         public Func<Task>? BeforeInspection;
-        public bool FirewallUnavailable, FirewallThrows, SiteUnavailable;
+        public bool FirewallUnavailable, FirewallThrows, SiteUnavailable, HostnameUnavailable;
         public DomainRefreshService Service { get; }
         private SiteDto Site => new() { Id = 1, Name = SiteName, State = SiteState };
         public Fixture(bool bulk = false)
@@ -214,7 +225,8 @@ public sealed class DomainInspectionTests
             var mail = Stub<IMailService>((method, _) => method.Name switch
             {
                 "GetDnsRecordsAsync" => MailRecords(),
-                "EnsureServerHostnameAsync" => Task.FromResult(false),
+                "EnsureServerHostnameAsync" => HostnameUnavailable
+                    ? Task.FromException<bool>(new IOException("SMTP greeting could not be measured")) : Task.FromResult(false),
                 "SyncCertificateAsync" => Task.FromResult<MailCertificateDto?>(null),
                 _ => throw new InvalidOperationException(method.Name)
             });

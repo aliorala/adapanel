@@ -85,79 +85,8 @@ public sealed class HealthService(AdaPanelDbContext dbContext) : IHealthService
         return targets;
     }
 
-    private static async Task<Dictionary<string, string>> QueryStatusesAsync(IReadOnlyCollection<string> names, CancellationToken cancellationToken)
-    {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (names.Count == 0)
-        {
-            return map;
-        }
-
-        var script = BuildStatusScript(names);
-        var result = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
-        if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
-        {
-            return map;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(result.StandardOutput.Trim());
-            if (document.RootElement.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var element in document.RootElement.EnumerateArray())
-                {
-                    AddEntry(map, element);
-                }
-            }
-            else if (document.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                AddEntry(map, document.RootElement);
-            }
-        }
-        catch
-        {
-            // Çözümlenemezse boş döner; UI 'Unknown' gösterir.
-        }
-
-        return map;
-
-        static void AddEntry(Dictionary<string, string> target, JsonElement element)
-        {
-            if (element.TryGetProperty("name", out var nameProp) &&
-                element.TryGetProperty("status", out var statusProp) &&
-                nameProp.GetString() is { } name)
-            {
-                target[name] = statusProp.GetString() ?? "Unknown";
-            }
-        }
-    }
-
-    internal static string BuildStatusScript(IReadOnlyCollection<string> names)
-    {
-        var list = string.Join(",", names.Select(name => "'" + name.Replace("'", "''") + "'"));
-        return $$"""
-            @({{list}}) | ForEach-Object {
-                $name = $_
-                $service = Get-Service -Name $name -ErrorAction SilentlyContinue
-                $status = 'NotInstalled'
-                if ($service) { $status = $service.Status.ToString() }
-                else {
-                    $task = Get-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction SilentlyContinue
-                    if ($task) {
-                        $status = switch ($task.State.ToString()) {
-                            'Running' { 'Running' }
-                            'Queued' { 'StartPending' }
-                            'Ready' { 'Stopped' }
-                            'Disabled' { 'Stopped' }
-                            default { 'Unknown' }
-                        }
-                    }
-                }
-                [pscustomobject]@{ name = $name; status = $status }
-            } | ConvertTo-Json -Compress
-            """;
-    }
+    private static Task<Dictionary<string, string>> QueryStatusesAsync(IReadOnlyCollection<string> names, CancellationToken cancellationToken)
+        => WindowsServiceInspection.ReadAsync(names, cancellationToken);
 
     internal static string BuildRestartScript(string name)
     {

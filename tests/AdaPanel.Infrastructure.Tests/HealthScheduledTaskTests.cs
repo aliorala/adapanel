@@ -7,34 +7,46 @@ namespace AdaPanel.Infrastructure.Tests;
 public sealed class HealthScheduledTaskTests
 {
     [Theory]
-    [InlineData("Running", "Running")]
-    [InlineData("Queued", "StartPending")]
-    [InlineData("Ready", "Stopped")]
-    [InlineData("Disabled", "Stopped")]
-    [InlineData("Unknown", "Unknown")]
-    public void Scheduled_component_status_is_read_from_the_task(string state, string expected)
+    [InlineData(4, "Running")]
+    [InlineData(2, "StartPending")]
+    [InlineData(3, "Stopped")]
+    [InlineData(1, "Stopped")]
+    [InlineData(0, "Unknown")]
+    public async Task Scheduled_component_status_is_read_from_the_task(int state, string expected)
     {
-        var result = ScriptTestHost.Run($$"""
-            function Get-Service { param($Name, $ErrorAction) return $null }
-            function Get-ScheduledTask { param($TaskName, $TaskPath, $ErrorAction) [pscustomobject]@{State='{{state}}'} }
-            {{HealthService.BuildStatusScript(["AdaStalwart"])}}
-            """);
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains($"\"status\":\"{expected}\"", result.StdOut);
+        var result = await WindowsServiceInspection.ReadAsync(["AdaStalwart"], default,
+            _ => "NotInstalled", _ => WindowsServiceInspection.TaskStatus(state));
+        Assert.Equal(expected, result["AdaStalwart"]);
     }
 
     [Fact]
-    public void Existing_service_takes_precedence_over_task_lookup()
+    public async Task Existing_service_takes_precedence_over_task_lookup()
     {
-        var result = ScriptTestHost.Run($$"""
-            function Get-Service { param($Name, $ErrorAction) [pscustomobject]@{Status='Running'} }
-            function Get-ScheduledTask { throw 'Task lookup should not run' }
-            {{HealthService.BuildStatusScript(["AdaMariaDB"])}}
-            """);
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("\"status\":\"Running\"", result.StdOut);
+        var result = await WindowsServiceInspection.ReadAsync(["AdaMariaDB"], default,
+            _ => "Running", _ => throw new Exception("Task lookup should not run"));
+        Assert.Equal("Running", result["AdaMariaDB"]);
     }
 
+    [Fact]
+    public async Task Unreadable_target_is_unknown_and_does_not_hide_other_services()
+    {
+        var result = await WindowsServiceInspection.ReadAsync(["denied", "task", "missing", "healthy"], default,
+            name => name switch { "denied" => throw new UnauthorizedAccessException(), "healthy" => "Running", _ => "NotInstalled" },
+            name => name == "task" ? throw new IOException("Task Scheduler unavailable") : "NotInstalled");
+        Assert.Equal("Unknown", result["denied"]);
+        Assert.Equal("Unknown", result["task"]);
+        Assert.Equal("NotInstalled", result["missing"]);
+        Assert.Equal("Running", result["healthy"]);
+    }
+
+    [Fact]
+    public async Task Canceled_health_query_does_not_read_services()
+    {
+        using var source = new CancellationTokenSource();
+        source.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WindowsServiceInspection.ReadAsync(["test"], source.Token,
+            _ => throw new Exception("Must not run")));
+    }
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -2660,7 +2660,7 @@ public sealed class MailService(
         var settings = await GetObjectAsync(cli, "SystemSettings", "singleton", env, cancellationToken);
         if (settings is null)
         {
-            return false;
+            throw new IOException("SMTP hostname inspection could not read SystemSettings.");
         }
 
         var currentHost = GetField(settings.Value, "defaultHostname") ?? string.Empty;
@@ -2681,13 +2681,16 @@ public sealed class MailService(
             logger.LogWarning(
                 "Posta karsilama adi DENETLENEMEDI: alan adi listesi okunamadi. "
                 + "Karsilama adinin dogru olup olmadigi bu turda OLCULMEDI.");
-            return false;
+            throw new IOException("SMTP hostname inspection could not read the mail domain inventory.");
         }
 
         var domainIds = alanSorgusu.Items
             .Select(item => GetField(item, "id"))
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .ToList();
+
+        if (domainIds.Count != alanSorgusu.Items.Count)
+            throw new IOException("SMTP hostname inspection received an incomplete mail domain inventory.");
 
         if (domainIds.Count == 0)
         {
@@ -2722,7 +2725,7 @@ public sealed class MailService(
             var domainName = domain is null ? null : GetField(domain.Value, "name");
             if (string.IsNullOrWhiteSpace(domainName))
             {
-                return false;
+                throw new IOException("SMTP hostname inspection could not read the default mail domain.");
             }
 
             hostName = $"mail.{domainName.Trim().ToLowerInvariant()}";
@@ -2806,42 +2809,8 @@ public sealed class MailService(
         return true;
     }
 
-    /// <summary>
-    /// Posta sunucusunun CANLI SMTP karsilamasini okur ve beklenen adi icerip icermedigini soyler.
-    /// Olcum yapilamazsa true doner (bilmiyorsak "bozuk" demeyiz).
-    /// <para>
-    /// Neden gerekli: ayarin yazili degeri sunucunun o an ne dedigini GARANTI ETMEZ. Ayar dogru
-    /// olup Stalwart henuz okumamis olabilir; o durumda panel susar ve sorun kalici olur.
-    /// </para>
-    /// </summary>
-    private async Task<bool> SmtpGreetingMatchesAsync(string hostName, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var client = new System.Net.Sockets.TcpClient();
-            var connect = client.ConnectAsync("127.0.0.1", 25, cancellationToken).AsTask();
-            if (await Task.WhenAny(connect, Task.Delay(3000, cancellationToken)) != connect)
-            {
-                return true;
-            }
-
-            await connect;
-            using var reader = new StreamReader(client.GetStream());
-            var readLine = reader.ReadLineAsync(cancellationToken).AsTask();
-            if (await Task.WhenAny(readLine, Task.Delay(3000, cancellationToken)) != readLine)
-            {
-                return true;
-            }
-
-            var banner = await readLine ?? string.Empty;
-            return banner.Contains(hostName, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            logger.LogDebug(exception, "SMTP karsilamasi okunamadi; ayarin yazili degerine guvenilecek.");
-            return true;
-        }
-    }
+    private static Task<bool> SmtpGreetingMatchesAsync(string hostName, CancellationToken cancellationToken)
+        => SmtpGreetingProbe.MatchesAsync(hostName, cancellationToken);
 
     /// <summary>
     /// Sunucunun IP'sinin PTR kaydini okur ve o adin AYNI IP'ye cozuldugunu dogrular.
@@ -2863,7 +2832,7 @@ public sealed class MailService(
                 return null;
             }
 
-            var ptr = await System.Net.Dns.GetHostEntryAsync(address);
+            var ptr = await System.Net.Dns.GetHostEntryAsync(address).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
             var name = ptr.HostName?.Trim().TrimEnd('.').ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(name) || !name.Contains('.'))
             {
@@ -2871,7 +2840,7 @@ public sealed class MailService(
             }
 
             // ILERI DOGRULAMA: ad ayni IP'ye cozulmeli.
-            var forward = await System.Net.Dns.GetHostAddressesAsync(name);
+            var forward = await System.Net.Dns.GetHostAddressesAsync(name).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
             return forward.Any(candidate => candidate.Equals(ip)) ? name : null;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -3318,11 +3287,46 @@ public sealed class MailService(
     internal readonly record struct MailQueryResult(bool Measured, IReadOnlyList<JsonElement> Items)
     {
         /// <summary>
-        /// CLI sonucunu okur. <b>Ayrimin yapildigi TEK yer budur</b> — cikis kodu sifirsa liste
-        /// bir OLCUMDUR (bos olsa bile), degilse liste hicbir sey soylemez.
+        /// CLI sonucunu okur. Başarılı çıkış ve eksiksiz ayrıştırılan liste bir ölçümdür;
+        /// gerçek boş çıktı geçerlidir, bozuk/kısmi çıktı boş envanter değildir.
         /// </summary>
-        internal static MailQueryResult Olc(CommandResult result) =>
-            result.Success ? Olculdu(ParseItems(result.StandardOutput)) : Olculemedi;
+        internal static MailQueryResult Olc(CommandResult result)
+        {
+            if (!result.Success) return Olculemedi;
+            var json = result.StandardOutput.Trim();
+            if (json.Length == 0) return Olculdu([]); // CLI emits nothing for an empty query.
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var key in new[] { "items", "data", "records", "results" })
+                        if (root.TryGetProperty(key, out var inner)) return FromArray(inner);
+                    return Olculdu([root.Clone()]);
+                }
+                return FromArray(root);
+            }
+            catch (JsonException)
+            {
+                var rows = new List<JsonElement>();
+                foreach (var line in json.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    try
+                    {
+                        using var document = JsonDocument.Parse(line);
+                        if (document.RootElement.ValueKind != JsonValueKind.Object) return Olculemedi;
+                        rows.Add(document.RootElement.Clone());
+                    }
+                    catch (JsonException) { return Olculemedi; }
+                }
+                return Olculdu(rows);
+            }
+
+            static MailQueryResult FromArray(JsonElement array) => array.ValueKind == JsonValueKind.Array &&
+                array.EnumerateArray().All(item => item.ValueKind == JsonValueKind.Object)
+                ? Olculdu(array.EnumerateArray().Select(item => item.Clone()).ToArray()) : Olculemedi;
+        }
 
         /// <summary>Sorgu KOSTU; liste bos da olabilir, dolu da. Bos olmasi bir OLCUMDUR.</summary>
         internal static MailQueryResult Olculdu(IReadOnlyList<JsonElement> items) => new(true, items);
@@ -3339,8 +3343,8 @@ public sealed class MailService(
             return null;
         }
 
-        var items = ParseItems(result.StandardOutput);
-        return items.Count > 0 ? items[0] : null;
+        var read = MailQueryResult.Olc(result);
+        return read.Measured && read.Items.Count == 1 ? read.Items[0] : null;
     }
 
     private async Task<(string Cli, Dictionary<string, string> Environment)> RequireCliAsync(CancellationToken cancellationToken)
