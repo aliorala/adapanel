@@ -1,11 +1,14 @@
 # AdaPanel Codex Memory
 
-## 2026-09-26 — 0.8.61 hazırlanıyor (canlı hâlâ 0.8.60)
+## 2026-09-26 — SON DURUM: 0.8.61 canlı
 
-PHP 8.3.33 yedek URL arşiv dizinine düzeltildi, dosya mevcut hash ile eşleşti. DNS sağlık okuması modern Windows DNS sağlayıcısına, firewall okuması COM API'ye alındı; hata halinde eski PowerShell yolu korunur. DNSSEC dahil üç bölgenin anahtarları canlı komutlarla birebir eşleşti. Eski root/MicrosoftDNS prototipi DNSSEC eksiği nedeniyle kullanılmadı. ReturnValue=null başarılı sağlayıcı sözleşmesi C# ile doğrulandı, olmayan bölge ManagementException verir.
+PHP yedek paket adresi arşive düzeltildi; hash aynı. DNS sağlık okuması modern Windows DNS sağlayıcısına, firewall kapsam okuması COM API'ye alındı. DNSSEC dahil tam kayıt karşılaştırması geçti; sağlayıcı hatasında eski sorgu yolu ve ölçülemeyen durum korunur. Kaynak b2c69ac. 5.474 Infrastructure + 2 Core, 106 frontend, typecheck/build başarılı. Güncel bileşen denetimi 22 Passed / 3 mevcut büyük paket Skipped, StaleFallback0. 168 publish dosyası ve installer denetimi geçti.
 
-72 hedefli / 106 frontend testi başarılı. Güncel bileşen denetimi 22 Passed / 3 mevcut büyük paket Skipped, artık StaleFallback yok. Paketleme aynı raporu kullanarak -SkipComponentAudit ile tam test/build/publish/installer çalıştırıyor. Henüz yeni canlı kurulum veya soğuk başlangıç kazanımı iddiası yok. Ayrıntı docs/denetim-2026-09-26-061.md, kanıt .tmp/audit-061. Yedek şifrelemesi kapalı; program 03:00, ikinci saat kapalı, 5 gün. Dış API taşınmadı; FTP kayıtsız nesne envanteri açık sınır. Kaynak/history/tag push yapılmaz.
+Paket90.823.919bayt SHA256 7F19FF18771A7CCFDED37A591ECB315AC9FFFACCCD872202C7BFED2A23975AC8; GitHub yeniden indirme ve canlı paket aynı. Kurulum succeeded/exit0/error boş/isFinished=true/isFailed=false, updatedAtUtc2026-09-26T16:06:35.6626197Z. Panel/MariaDB/Redis/DNS/FTP/IIS/WAS Running; Stalwart9164; üç HTTPS200. Sağlık3 alan adı güncel/0eksik/0sunucu bulgusu, firewall6/6gerekli port hazır. Yeni native fallback uyarısı0, güncelleme sonrası ERR0.
 
+İlk panel-servisi açılışı attention alt ölçüm toplamı13.770ms (önceki .60 yaklaşık50sn); DNS157ms, alan adı5576ms, servis7787ms. Alan adı aşamaları DNS401/sites3374/server1701ms. Son sıcak toplamlar1.234–1.999ms, DNS55–68ms. İşletim sistemi yeniden başlatılmadı; bunlar ekran render süresi değil ardışık sağlık alt ölçümleridir. İlk taramanın kalan servis/site maliyeti sürer; anlık veya tamamen çözülmüş denmez.
+
+Canlı otomasyon03:00, ikinci saatkapalı, saklama5gün, yerel+FTP korundu. Şifreleme kapalı tercihine dokunulmadı. Dış API kullanıcıya göre henüz taşınmadı, adres uydurulmaz. FTP kayıtsız nesne envanteri desteklenmiyor. Ayrıntı docs/denetim-2026-09-26-061.md, kanıt .tmp/audit-061. Kaynak/history/tag GitHub'a gönderilmedi; yalnız doğrulanmış installer.
 ## 2026-09-26 — SON DURUM: 0.8.60 canlı
 
 Bu turda uzun otomasyon işi bitince yeni ayarların ezilmesi, yakın iki günlük yedek saatinin kaçırılması, eksik sağlık ölçümünün sağlıklı sayılması, checkbox hizalaması ve güncelleme durum yarışı düzeltildi. Dahili FTP sitesine HTTP State sorgusu artık yapılmıyor. Yeni ölçüm uyarısı canlıdaki eski firewall JSON hatasını görünür yaptı; ADAPANEL-KURAL damgası JSON'dan ayrılarak asıl okuma hatası da .60'ta giderildi. Kaynak commitleri d2c55bc, 00badbb, 5b4ac01.
