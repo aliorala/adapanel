@@ -178,6 +178,7 @@ public sealed class ComponentBootstrapper(
                 continue;
             }
 
+            await RecoverInstalledVersionAsync(installed, cancellationToken);
             previousCache.TryGetValue(installed.ComponentId, out var previous);
             cache[installed.ComponentId] = await CheckComponentVersionAsync(
                 manifestItem, installed.Version, previous, client, cancellationToken);
@@ -191,6 +192,32 @@ public sealed class ComponentBootstrapper(
             Defaults = manifest.Where(component => component.Default).ToArray(),
             Installed = installedEntities.Select(component => MapInstalledComponent(component, cache)).ToArray()
         };
+    }
+
+    internal async Task RecoverInstalledVersionAsync(InstalledComponent installed,
+        CancellationToken cancellationToken, Func<string, string, string?>? readVersion = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (installed.Status != ComponentInstallStatus.Installed
+            || !InstalledComponentVersionReader.Supports(installed.ComponentId)
+            || ParseVersionParts(installed.Version) is not null
+            || ReadBoolean(ReadProtectedConfiguration(installed.ProtectedConfigurationJson), SystemDetectedKey)) return;
+
+        string? measured;
+        try
+        {
+            measured = (readVersion ?? InstalledComponentVersionReader.Read)(installed.ComponentId, installed.InstallDir);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception)
+        {
+            logger.LogWarning(exception, "Installed version could not be read for {ComponentId}.", installed.ComponentId);
+            return;
+        }
+        if (InstalledComponentVersionReader.Parse(measured) is not { } version) return;
+        installed.Version = version;
+        installed.UpdatedAtUtc = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+        logger.LogInformation("Recovered installed version {Version} from the executable for {ComponentId}.", version, installed.ComponentId);
     }
 
     internal async Task<ComponentUpdateInfo> CheckComponentVersionAsync(
@@ -3238,11 +3265,12 @@ public sealed class ComponentBootstrapper(
         }
 
         // PHP dogrulamasi surum DEGIL eklenti listesi basar ('AdaPanel-PHP-OK'); oradan surum
-        // ayiklamak sahte bir olcum olurdu. O yuzden yalniz gercekten `--version` kosan yollar
-        // olcum sayilir; digerleri "olculemedi" olarak raporlanir.
+        // ayiklamak sahte bir olcum olurdu. Gercek --version ciktisi veya Redis/win-acme
+        // dosyasinin surum kaynagi okunur; digerleri "olculemedi" olarak raporlanir.
         return componentId.StartsWith("php-", StringComparison.Ordinal)
             ? null
-            : ComponentVersionProbe.FromCommandOutput(result?.StandardOutput);
+            : ComponentVersionProbe.FromCommandOutput(result?.StandardOutput)
+                ?? InstalledComponentVersionReader.Read(componentId, installDirectory);
     }
 
     private static async Task<CommandResult> ValidatePhpRuntimeAsync(

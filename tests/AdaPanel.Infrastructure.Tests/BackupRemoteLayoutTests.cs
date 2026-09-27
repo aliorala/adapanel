@@ -612,11 +612,16 @@ public sealed class BackupRemoteLayoutTests
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
-    public async Task Budama_gercek_FTP_komutlariyla_bos_alt_klasorleri_temizler(bool emptyListing550, bool keepOtherFile)
+    [InlineData(false, false, "relative")]
+    [InlineData(false, true, "relative")]
+    [InlineData(false, false, "absolute")]
+    [InlineData(false, true, "absolute")]
+    public async Task Budama_gercek_FTP_komutlariyla_bos_alt_klasorleri_temizler(bool emptyListing550, bool keepOtherFile, string? dotEntries = null)
     {
         using var alan = new GeciciAlan();
         await using var server = SahteFtpSunucusu.Baslat();
         server.EmptyListing550 = emptyListing550;
+        server.DotEntries = dotEntries;
         const string path = "/yedekler/2026-08-01/sites/shop.example.com/eski.zip";
         server.DosyaKoy(path);
         if (keepOtherFile) server.DosyaKoy("/yedekler/2026-08-01/sites/other/keep.zip");
@@ -1176,6 +1181,7 @@ public sealed class BackupRemoteLayoutTests
         public int StoreFailureCode { get; set; } = 421;
         public int StoreAttempts { get; private set; }
         public bool EmptyListing550 { get; set; }
+        public string? DotEntries { get; set; }
         public bool HasDirectory(string path) => Var(path);
         public List<string> UserNames { get; } = [];
         public List<string> Passwords { get; } = [];
@@ -1366,6 +1372,11 @@ public sealed class BackupRemoteLayoutTests
                                 .Where(path => path.StartsWith(target + "/", StringComparison.Ordinal))
                                 .Select(path => path[(target.Length + 1)..])
                                 .Where(path => path.Length > 0 && !path.Contains('/')).ToArray();
+                        }
+                        if (DotEntries is not null)
+                        {
+                            var prefix = DotEntries == "absolute" ? target + "/" : "";
+                            entries = entries.Concat(new[] { prefix + "./", prefix + "../" }).ToArray();
                         }
                         if (EmptyListing550 && entries.Length == 0)
                         {

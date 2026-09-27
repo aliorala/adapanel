@@ -3,6 +3,14 @@ namespace AdaPanel.Infrastructure.Backup;
 /// <summary>Only the known backup layout, from the file's parent up to its day directory.</summary>
 internal static class BackupFtpCleanup
 {
+    internal static bool IsDirectoryMarker(string name, Uri directory)
+    {
+        var entry = name.TrimEnd('/');
+        var prefix = Uri.UnescapeDataString(directory.AbsolutePath).TrimEnd('/') + "/";
+        if (entry.StartsWith(prefix, StringComparison.Ordinal)) entry = entry[prefix.Length..];
+        return entry is "." or "..";
+    }
+
     internal static IReadOnlyList<Uri> DirectoriesFor(Uri file, string? configuredRoot = null)
     {
         var folders = file.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).SkipLast(1).ToArray();

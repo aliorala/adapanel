@@ -54,4 +54,6 @@ it('translates every static panel message referenced by production views and scr
   };
   walk();
   expect([...missing]).toEqual([]);
-});
+// This parses every production Vue/TypeScript AST; it is a completeness check,
+// not a performance benchmark. Allow the scan to finish on busy build machines.
+}, 30_000);

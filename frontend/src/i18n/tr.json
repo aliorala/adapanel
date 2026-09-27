@@ -1129,7 +1129,7 @@
   "panel.common.save": "Kaydet",
   "panel.common.delete": "Sil",
   "panel.automation.title": "Otomasyon",
-  "panel.automation.subtitle": "Panel içi zamanlanmış otomatik yedekleme ve SSL yenileme job'larini yönetin.",
+  "panel.automation.subtitle": "Panelin zamanlanmış yedekleme ve SSL yenileme görevlerini yönetin.",
   "panel.automation.refresh": "Durumu yenile",
   "panel.automation.enabled": "Etkin",
   "panel.automation.backupSection": "Otomatik yedekleme",

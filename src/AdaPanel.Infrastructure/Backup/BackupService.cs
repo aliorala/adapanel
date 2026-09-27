@@ -4168,7 +4168,7 @@ Register-ScheduledTask -TaskName '{ad.Replace("'", "''")}' -TaskPath '\AdaPanel\
             foreach (var klasor in BackupFtpCleanup.DirectoriesFor(uri, configuredRoot))
             {
                 var listeleme = await FtpCommands.ListDirectoryAsync(klasor, credential, cancellationToken);
-                if (listeleme.Success && listeleme.Names.Any(name => name is not "." and not ".."))
+                if (listeleme.Success && listeleme.Names.Any(name => !BackupFtpCleanup.IsDirectoryMarker(name, klasor)))
                 {
                     return;
                 }

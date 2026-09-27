@@ -1,5 +1,5 @@
 {
-  "name": "0.8.68 — Yazılım mağazası açıklamaları",
-  "tag_name": "0.8.68",
-  "body": "Yazılım mağazasındaki bileşen açıklamaları Türkçe ve İngilizce sunulur. Docker paket açıklaması mevcut kurulum davranışına göre düzeltildi. Başarısız sürüm denetimleri ve son bilinen güncelleme bilgileri açıkça gösterilir.\n\nComponent descriptions in the software store are now available in Turkish and English. Docker notes match the current installation behavior. Failed version checks remain visible while previously known updates are preserved."
+  "name": "0.8.69 — Kurulu sürüm ölçümü ve FTP klasör temizliği",
+  "tag_name": "0.8.69",
+  "body": "Belirsiz Redis ve win-acme sürüm kayıtları, güncelleme denetimi sırasında kurulu dosyalardan yeniden ölçülür. FTP yedek temizliği, nokta dizin girdileri döndüren sunucularda boş klasörleri doğru tanır. Mevcut yedek dosyaları ve saklama kuralları korunur.\n\nUnknown Redis and win-acme versions are recovered from installed executable metadata during update checks. FTP backup cleanup now recognizes dot directory entries correctly while preserving nonempty directories and retention rules."
 }
