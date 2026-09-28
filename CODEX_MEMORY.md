@@ -41,6 +41,10 @@ Yedekleme modülü, kapalı şifreleme tercihi, 03:00/ikinci saat kapalı/5 gün
 kompakt görünüm KORUNDU. Önceki açık sınırlar duruyor: güncelliği doğrulanamayan 6 bileşen, fiyat
 botu API'si, FTP kayıtsız nesne envanteri, ters vekil dış port alanı, veritabanı CA dosyası alanı.
 Kaynak/history/tag public GitHub'a PUSH EDİLMEZ; yalnız installer yayımlanır.
+[0.8.70 yayını](https://github.com/aliorala/adapanel/releases/tag/0.8.70) yapıldı; gövde kaynakla
+birebir, varlık yeniden indirilip aynı SHA256 ile doğrulandı (90.833.465 bayt,
+`5AD69410A76C229039E248C7D1404600A55BD05A9CB857976002ADD2B10546C7`).
+**CANLIYA KURULMADI** — canlı sürümü 0.8.70 sanmayın; son doğrulanmış canlı sürüm 0.8.69.
 Ayrıntı: `docs/denetim-2026-09-28-070.md`.
 
 
