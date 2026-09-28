@@ -1,5 +1,49 @@
 # AdaPanel Codex Memory
 
+## 2026-09-28 — SON DURUM: 0.8.70 — canlı SSL arızasının KÖK NEDENİ kapatıldı
+
+Kullanıcı "sistemi komple tara" dedi. Bulgu 0.8.69 devir notunda AÇIK bırakılan maddeden çıktı:
+*"Eski bağın hangi işlemle kaldığı ispatlanmadı."* Mekanizma kaynakta ölçüldü.
+
+**Zincir:** win-acme yeniler → `RenewAllAsync` `ssl.json` kaydını depodan tazeler (kayıt artık YENİ
+ve uzak bir bitiş tarihi taşır) → `AdvisorService` SSL kontrolü YALNIZ `NotAfterUtc`'ye baktığı için
+susar (o dosyada `IsCertificateBound` geçiş sayısı **0**) → IIS bağı eski sertifikada kalmışsa kimse
+görmez, site o sertifika dolana kadar onu sunar. Canlı kanıt: 26–27 Eylül'de `adapanel.host:443`
+süresi dolmuş `My/E549DF…` sunuyordu, geçerli `WebHosting/01D7C4…` 22 Ağustos'tan beri depodaydı.
+
+**ASIL DERS — bunu unutmayın:** kaydı tazeleme adımı YANLIŞ DEĞİLDİ, her gün gönderilen yalancı
+"süresi doldu" alarmını kapatıyordu. Ama bağ doğrulanmadığı için o düzeltme gürültülü bir YANLIŞ
+POZİTİFİ sessiz bir YANLIŞ NEGATİFE çevirdi. Gerçek panelde İKİ yerde ölçülebiliyordu
+(`SslBindingVerification` parmak izi; `SiteHealthService`/`PanelPublicAccessService` gerçek TLS el
+sıkışması) — uyarı üretmekle görevli tek bileşen ikisini de kullanmıyordu.
+
+Yapılan: yeni saf karar sınıfı `SslBindingDrift` (yalnız ÖLÇÜLEN ve TAZE sapma iddia edilir; `null`,
+damgasız kayıt ve bayat ölçüm iddia DEĞİLDİR), `SslCertificateDto.BindingCheckedAtUtc` ölçüm damgası,
+`RenewAllAsync` artık bağı ölçüp yazıyor (bağ OKUNAMAZSA kayda DOKUNULMAZ; win-acme kurulu olmayan
+dalda da ölçülür), `RenewAllResultDto.BindingDriftCount`/`BindingsMeasured` (sıfır "bağlar doğru"
+DEMEK DEĞİL), Danışman'da `ssl-binding-drift:<host>` KRİTİK maddesi, ve `WinAcmeSslService`'e isteğe
+bağlı `bindingReader` ölçüm dikişi (üretimde `null` → gerçek okuyucu).
+
+Mutasyon 2/4/2/2 kırmızı; ikincisi fazla kapatma nöbetçisi. Tam takım **Infrastructure 5.603 + Core
+2 = 5.605**, atlanan/başarısız yok (baseline 5.588 + 17). Ön yüz 28 dosya/140 test, typecheck+build
+temiz. i18n TR/EN 5.326 = 5.326. Kaynak commit `5f51047`.
+
+**KAPSAM DIŞI, KARAR SAHİBİNİN:** panel sapmayı görünce bağı KENDİ DÜZELTMİYOR, yalnız söylüyor.
+`EnsureHttpsBindingAsync` zaten var ve tek site yolunda kullanılıyor — ama toplu yolda canlı IIS'e
+yazmak yanlış depo/erişilemeyen özel anahtar gibi kendi ölçümünü gerektiren riskler taşıyor. Otomatik
+onarım istenirse ayrı bir tur olmalı. Bunu "unutulmuş eksik" saymayın.
+
+**Mahremiyet kapısı tuzağı tekrar yaşandı:** yayın notu ilk denemede YANLIŞ fonksiyon adıyla
+çağrıldı, hata non-terminating kaldı ve boş sonuç "temiz" sayıldı. Fonksiyon adı
+`Get-AdaReleaseNotePrivacyFindings`; varlığını kontrol edip tekrar koşturun.
+
+Yedekleme modülü, kapalı şifreleme tercihi, 03:00/ikinci saat kapalı/5 gün/yerel+FTP ayarları ve
+kompakt görünüm KORUNDU. Önceki açık sınırlar duruyor: güncelliği doğrulanamayan 6 bileşen, fiyat
+botu API'si, FTP kayıtsız nesne envanteri, ters vekil dış port alanı, veritabanı CA dosyası alanı.
+Kaynak/history/tag public GitHub'a PUSH EDİLMEZ; yalnız installer yayımlanır.
+Ayrıntı: `docs/denetim-2026-09-28-070.md`.
+
+
 ## 2026-09-27 — SON DURUM: 0.8.69 canlı — sürüm kaydı, FTP ve SSL onarımı
 
 Redis/win-acme latest kayıtları güncelleme denetiminde kurulu kök EXE'nin PE sürümünden düzeltilir; canlıda Redis5.0.14.1 ve win-acme2.2.9.1701 kaydedildi. Program çalıştırılmaz; parolalar/kurulum tarihi/servis durumu korunur. Var olan sayısal sürüm ve dışarıdan algılanan kurulum değiştirilmez. Ürün sürümündeki beta/geçersiz değer FileVersion ile gizlenmez. Yeni Redis kurulumunda da ölçülen dosya sürümü kullanılır. FTP NLST ./,../ ve tam yol nokta girdileri artık boş klasörü dolu göstermez; RMD sınırları, dolu klasör ve kök koruması değişmedi. Otomasyon alt başlığındaki bozuk Türkçe düzeltildi.
