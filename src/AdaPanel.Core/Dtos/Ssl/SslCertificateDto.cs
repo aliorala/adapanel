@@ -55,6 +55,24 @@ public sealed class SslCertificateDto
     /// <summary>Bağlama ölçümünün ham ayrıntısı (hangi site, hangi parmak izi okundu).</summary>
     public string BindingDetail { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Bağ ölçümünün YAPILDIĞI an (UTC). <c>null</c> = hiç ölçülmemiş.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden damga gerekiyor:</b> <see cref="IsCertificateBound"/> tek başına NE ZAMAN
+    /// ölçüldüğünü söylemez. Damgasız bir <c>false</c>, aylar önce ölçülmüş olabilir; yönetici bağı
+    /// çoktan düzeltmiş olsa bile panel sonsuza kadar kritik uyarı gösterirdi. Danışman bu yüzden
+    /// yalnız TAZE bir ölçüme dayanarak iddia eder (bkz. <c>SslBindingDrift</c>).
+    /// </para>
+    /// <para>
+    /// Ölçüm yapılamadığında bu alan ve <see cref="IsCertificateBound"/> DEĞİŞTİRİLMEZ: geçici bir
+    /// IIS okuma hatası, daha önce ölçülmüş gerçek bir sapmayı silmemelidir (aynı disiplin
+    /// <c>SslStateReconciler</c> sözleşmesinin 1. maddesinde yazılı).
+    /// </para>
+    /// </remarks>
+    public DateTime? BindingCheckedAtUtc { get; set; }
+
     public int Port { get; set; }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using AdaPanel.Core.Dtos.Advisor;
 using AdaPanel.Core.Dtos.Ssl;
+using AdaPanel.Infrastructure.Ssl;
 using AdaPanel.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using AdaPanel.Infrastructure.Support;
@@ -95,6 +96,36 @@ public sealed class AdvisorService(
                 else if (daysLeft <= 14)
                 {
                     items.Add(new AdvisorItemDto { Id = $"ssl-expiring:{cert.HostName}", Severity = "warning", TitleKey = "advisor.ssl.expiring", Detail = detail, ActionSection = "sites" });
+                }
+
+                // BITIS TARIHI TEK BASINA YETMEZ -- canlida olculmus ariza.
+                //
+                // Yukaridaki iki kontrol KAYITTAKI tarihe bakar. Yenileme turu kaydi sertifika
+                // deposundan tazeledigi icin, win-acme yeniledikten sonra o tarih HER ZAMAN
+                // saglikli gorunur. Ama IIS bagi eski sertifikada kalmissa site ESKI sertifikayi
+                // sunmaya devam eder ve o dolunca HTTPS duser. 26-27 Eylul 2026'da adapanel.host
+                // tam bunu yasadi: gecerli sertifika 22 Agustos'tan beri depodaydi, 443 bagi
+                // suresi dolmus olani sunuyordu ve panel hicbir sey soylemedi.
+                //
+                // Panel bu gercegi ZATEN olcuyordu (SslBindingVerification, ssl.json'daki
+                // IsCertificateBound) -- yalniz uyari uretmekle gorevli tek bilesen, yani burasi,
+                // ona hic bakmiyordu. Karar SslBindingDrift'te: yalniz ONCULEN ve TAZE bir sapma
+                // iddia edilir; "olcemedim" ve bayat olcum iddia DEGILDIR.
+                if (SslBindingDrift.Evaluate(cert.IsCertificateBound, cert.BindingCheckedAtUtc, now)
+                    == SslBindingDrift.Verdict.Drifted)
+                {
+                    var bagAyrinti = string.IsNullOrWhiteSpace(cert.BindingDetail)
+                        ? detail
+                        : $"{detail} — {cert.BindingDetail}";
+
+                    items.Add(new AdvisorItemDto
+                    {
+                        Id = $"ssl-binding-drift:{cert.HostName}",
+                        Severity = "critical",
+                        TitleKey = "advisor.ssl.bindingDrift",
+                        Detail = bagAyrinti,
+                        ActionSection = "sites"
+                    });
                 }
             }
         }

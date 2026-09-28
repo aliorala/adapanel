@@ -20,7 +20,15 @@ public sealed class WinAcmeSslService(
     IDnsService dnsService,
     JsonFileStore fileStore,
     IComponentBootstrapper componentBootstrapper,
-    ILogger<WinAcmeSslService> logger) : ISslService
+    ILogger<WinAcmeSslService> logger,
+    // ISTEGE BAGLI OLCUM DIKISI: IIS bag envanterini okuyan yol. Verilmezse GERCEK okuyucu
+    // (ReadHttpsBindingsAsync -> PowerShell) kullanilir, yani uretim davranisi DEGISMEZ.
+    //
+    // Neden gerekli: yenileme turunun bag olcumunu CAGIRDIGI, aksi halde hicbir testle
+    // olculemezdi -- ve tam bu sinif hata ("koruma yazildi ama kardes yol cagirmiyor") bu
+    // depoda defalarca yakalandi. Ayni kalip SiteHostingSettingsService (outboundResolver) ve
+    // MailEnableMailService (KomutKosucusu) icinde de var.
+    Func<CancellationToken, Task<IReadOnlyCollection<IisHttpsBinding>?>>? bindingReader = null) : ISslService
 {
     private const string StatePath = "config/ssl.json";
     private const string WebAdministrationAssemblyPath = "%windir%\\System32\\inetsrv\\Microsoft.Web.Administration.dll";
@@ -202,6 +210,11 @@ public sealed class WinAcmeSslService(
             // okunabilir. win-acme kurulu olmasa da (ör. sertifikalar elle içe aktarılmışsa)
             // kaydın gerçekle uyuşup uyuşmadığı burada ölçülür.
             var dogrulamaYok = await ReconcileWithCountsAsync(cancellationToken);
+
+            // BAG OLCUMU win-acme'ye BAGLI DEGIL: IIS bagi her halukarda okunabilir. win-acme
+            // kurulu olmasa bile bagin yanlis sertifikada kalmasi GERCEK bir arizadir ve
+            // soylenmelidir.
+            var bagYok = await MeasureBindingsAndPersistAsync(cancellationToken);
             return new RenewAllResultDto
             {
                 RenewedCount = 0,
@@ -210,7 +223,9 @@ public sealed class WinAcmeSslService(
                 Output = "win-acme kurulu degil.",
                 VerifiedCount = dogrulamaYok.Verified,
                 MissingFromStoreCount = dogrulamaYok.MissingFromStore,
-                UnverifiedCount = dogrulamaYok.Unmeasured
+                UnverifiedCount = dogrulamaYok.Unmeasured,
+                BindingDriftCount = bagYok.Drift,
+                BindingsMeasured = bagYok.Measured
             };
         }
 
@@ -238,6 +253,12 @@ public sealed class WinAcmeSslService(
         // bakmaz olur; gercek bir bitis de o gurultunun icinde kaybolurdu.
         var dogrulama = await ReconcileWithCountsAsync(cancellationToken);
 
+        // KAYIT TAZELENDI; SIMDI BAGIN GERCEGI. Bu satirin yoklugu, yukaridaki tazelemeyi
+        // gurultulu bir YANLIS POZITIFTEN sessiz bir YANLIS NEGATIFE cevirmisti: kayit
+        // saglikli gorunur, bag eski sertifikada kalir, site o sertifika dolana kadar onu
+        // sunar ve panel hicbir sey soylemez.
+        var bag = await MeasureBindingsAndPersistAsync(cancellationToken);
+
         return new RenewAllResultDto
         {
             RenewedCount = yenilenen,
@@ -246,10 +267,77 @@ public sealed class WinAcmeSslService(
             Output = cikti ?? string.Empty,
             VerifiedCount = dogrulama.Verified,
             MissingFromStoreCount = dogrulama.MissingFromStore,
-            UnverifiedCount = dogrulama.Unmeasured
+            UnverifiedCount = dogrulama.Unmeasured,
+            BindingDriftCount = bag.Drift,
+            BindingsMeasured = bag.Measured
         };
     }
 
+    /// <summary>
+    /// IIS bağlarını ölçer ve sonucu <c>ssl.json</c>'a YAZAR; sapan kayıt sayısını döner.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Neden yenileme turunun İÇİNDE:</b> kaydı depodan tazelemek tek başına yetmiyordu. Tazeleme
+    /// kayda YENİ ve uzak bir bitiş tarihi yazar; bağ eski sertifikada kalmışsa Danışman artık
+    /// sağlıklı bir tarih görür ve susar. Site ise eski sertifika dolana kadar onu sunar. Canlıda
+    /// 26–27 Eylül 2026'da olan tam olarak budur. Ölçümün tazelemeyle AYNI turda yapılması,
+    /// kaydın "sağlıklı" görünmesiyle bağın gerçeğinin aynı anda bilinmesini sağlar.
+    /// </para>
+    /// <para>
+    /// <b>Bağ listesi OKUNAMAZSA kayda DOKUNULMAZ</b> ve <c>false</c> döner. Geçici bir IIS okuma
+    /// hatası, daha önce ölçülmüş GERÇEK bir sapmayı silmemelidir — aynı disiplin
+    /// <see cref="SslStateReconciler"/> sözleşmesinin 1. maddesinde yazılı.
+    /// </para>
+    /// <para>
+    /// Ölçüm <see cref="SslBindingVerification"/> ile yapılır; ikinci bir okuyucu/karşılaştırıcı
+    /// yazılmadı, yoksa iki taraf sessizce ayrışırdı.
+    /// </para>
+    /// </remarks>
+    private async Task<(int Drift, bool Measured)> MeasureBindingsAndPersistAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyCollection<IisHttpsBinding>? baglamalar;
+        try
+        {
+            baglamalar = bindingReader is null
+                ? await ReadHttpsBindingsAsync(cancellationToken)
+                : await bindingReader(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "HTTPS baglama envanteri okunamadi; bag olcumu atlandi.");
+            return (0, false);
+        }
+
+        if (baglamalar is null)
+        {
+            return (0, false);
+        }
+
+        var olcumAni = DateTime.UtcNow;
+        var yazilan = await fileStore.UpdateAsync(
+            StatePath,
+            Array.Empty<SslCertificateDto>(),
+            existing =>
+            {
+                // Kilit ALTINDA taze icerik uzerinde olculur: olcum sirasinda baska bir akis
+                // (sertifika alma) yeni kayit eklediyse onu EZMEYELIM.
+                SslBindingVerification.Refresh(existing, baglamalar);
+                foreach (var kayit in existing)
+                {
+                    kayit.BindingCheckedAtUtc = olcumAni;
+                }
+
+                return existing;
+            },
+            cancellationToken);
+
+        var sapan = yazilan.Count(kayit =>
+            SslBindingDrift.Evaluate(kayit.IsCertificateBound, kayit.BindingCheckedAtUtc, olcumAni)
+                == SslBindingDrift.Verdict.Drifted);
+
+        return (sapan, true);
+    }
     /// <summary>Tüm kayıtları uzlaştırır ve sayımı döner (kayıtların kendisi burada gerekmiyor).</summary>
     private async Task<SslReconcileResult> ReconcileWithCountsAsync(CancellationToken cancellationToken)
     {

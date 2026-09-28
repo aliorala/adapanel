@@ -943,6 +943,7 @@
   "panel.automation.pendingUpdates": "{count} bileşen güncellenebilir",
   "advisor.ssl.expired": "SSL sertifikasının süresi doldu",
   "advisor.ssl.expiring": "SSL sertifikası yakında bitiyor",
+  "advisor.ssl.bindingDrift": "Yenilenen SSL sertifikası sunulmuyor",
   "advisor.disk.critical": "Disk kritik seviyede dolu",
   "advisor.disk.warning": "Disk doluluğu yüksek",
   "advisor.memory.high": "Bellek kullanımı yüksek",

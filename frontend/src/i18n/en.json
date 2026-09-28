@@ -943,6 +943,7 @@
   "panel.automation.pendingUpdates": "Components with updates: {count}",
   "advisor.ssl.expired": "An SSL certificate has expired",
   "advisor.ssl.expiring": "An SSL certificate is expiring soon",
+  "advisor.ssl.bindingDrift": "The renewed SSL certificate is not being served",
   "advisor.disk.critical": "Disk is critically full",
   "advisor.disk.warning": "Disk usage is high",
   "advisor.memory.high": "Memory usage is high",

@@ -47,4 +47,26 @@ public sealed class RenewAllResultDto
     /// yalnızca bu turda doğrulanamamıştır ve kayıtlarına dokunulmamıştır.
     /// </summary>
     public int UnverifiedCount { get; set; }
+
+    /// <summary>
+    /// ÖLÇÜLDÜ: IIS bağı duruyor ama üzerinde panelin kayıtlı sertifikası YOK — yani yenilenen
+    /// sertifika sunulmuyor.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bu sayı canlıda ölçülmüş bir arızadan doğdu.</b> Yenileme kaydı depodan tazeliyor ama
+    /// bağı hiç sormuyordu; bağ eski sertifikada kalınca kayıt sağlıklı görünüyor, site ise eski
+    /// sertifika dolana kadar onu sunuyordu. 26–27 Eylül 2026'da <c>adapanel.host</c> tam bunu
+    /// yaşadı: geçerli sertifika 22 Ağustos'tan beri depodaydı, 443 bağı süresi dolmuş olanı
+    /// sunuyordu ve panel hiçbir şey söylemedi.
+    /// </para>
+    /// <para>
+    /// Sıfır olması "bağlar doğru" DEMEK DEĞİLDİR: bağ listesi hiç okunamadıysa ölçüm yapılmaz ve
+    /// bu sayı yine 0 kalır. Okunamama <see cref="BindingsMeasured"/> ile ayrılır.
+    /// </para>
+    /// </remarks>
+    public int BindingDriftCount { get; set; }
+
+    /// <summary>IIS bağ listesi bu turda OKUNABİLDİ mi. false ise bağ sayıları anlamsızdır.</summary>
+    public bool BindingsMeasured { get; set; }
 }

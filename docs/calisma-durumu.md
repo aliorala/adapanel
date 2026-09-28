@@ -4103,3 +4103,67 @@ gerçekten tutarsız — ama **daha sıkı** yönde, yani bir açık değil.
 
 Uydurma bir gerekçe yazılmadı: (b) için ölçülmüş bir sebep BULUNAMADI. Bu yüzden
 kod DEĞİŞTİRİLMEDİ — gevşetmek de, sahte gerekçeyle sabitlemek de sahibinin kararı.
+
+## 2026-09-28 — CANLI SSL ARIZASININ KÖK NEDENİ KAPATILDI
+
+**Bulgu 0.8.69 devir notundaki açık maddeden çıktı:** *"Eski bağın hangi işlemle kaldığı
+ispatlanmadı."* Mekanizma panelin kendi kodunda, iki parça hâlinde ölçüldü.
+
+### Ölçülen zincir
+
+1. win-acme sertifikayı yeniler, YENİ parmak iziyle depoya koyar.
+2. `WinAcmeSslService.RenewAllAsync` `ssl.json` kaydını depodan tazeler — kayıt artık YENİ ve
+   uzak bir bitiş tarihi taşır.
+3. `AdvisorService` SSL kontrolü YALNIZ `cert.NotAfterUtc`'ye bakıyordu. O dosyada
+   `IsCertificateBound` geçiş sayısı: **0** (sayıldı).
+4. IIS bağı eski sertifikada kalmışsa kimse görmez. Site, eski sertifika dolana kadar onu sunar.
+
+**Canlı kanıt:** 26–27 Eylül 2026'da `adapanel.host:443` süresi dolmuş `My/E549DF…` sertifikasını
+sunuyordu; geçerli `WebHosting/01D7C4…` 22 Ağustos'tan beri depodaydı. Panel hiçbir ekranda uyarı
+vermedi.
+
+### Asıl ders
+
+Kaydı tazeleme adımı YANLIŞ DEĞİLDİ — her gün gönderilen yalancı "süresi doldu" alarmını
+kapatıyordu ve gerekçesi doğruydu. Ama bağ doğrulanmadığı için o düzeltme **gürültülü bir yanlış
+pozitifi sessiz bir yanlış negatife çevirdi.** Gerçek panelde İKİ yerde ölçülebiliyordu
+(`SslBindingVerification` parmak izi uyuşmazlığı; `SiteHealthService` / `PanelPublicAccessService`
+gerçek TLS el sıkışmasıyla sunulan sertifika) — uyarı üretmekle görevli tek bileşen ikisini de
+kullanmıyordu.
+
+### Yapılan
+
+- `SslBindingDrift` (yeni, saf karar, IIS'siz sınanabilir): yalnız ÖLÇÜLEN ve TAZE sapma iddia
+  edilir. `null` (ölçülemedi), damgasız kayıt ve bayat ölçüm iddia DEĞİLDİR.
+- `SslCertificateDto.BindingCheckedAtUtc` (yeni): damgasız bir `false`, aylar önce ölçülmüş
+  olabilir; yönetici bağı düzeltmiş olsa bile panel sonsuza kadar kırmızı gösterirdi.
+- `RenewAllAsync` artık kaydı tazeledikten sonra bağı ÖLÇER ve `ssl.json`'a yazar. Bağ listesi
+  OKUNAMAZSA kayda DOKUNULMAZ (geçici bir IIS hatası, ölçülmüş gerçek bir sapmayı silmemeli).
+  win-acme kurulu olmayan dalda da ölçülür — bağ ölçümü win-acme'ye bağlı değildir.
+- `RenewAllResultDto.BindingDriftCount` + `BindingsMeasured`: sıfır, "bağlar doğru" DEMEK DEĞİL.
+- Danışman'da `ssl-binding-drift:<host>` **kritik** maddesi; ayrıntıda okunan parmak izleri var ki
+  yönetici iddiayı kendi doğrulayabilsin.
+- `WinAcmeSslService`'e isteğe bağlı `bindingReader` ölçüm dikişi. Üretimde `null` → gerçek
+  okuyucu. Dikiş olmadan "yenileme ölçümü ÇAĞIRIYOR mu" hiçbir testle ölçülemezdi.
+
+### Mutasyon (hepsi geri alındı)
+
+| Mutasyon | Kırmızı |
+|---|---|
+| Danışman sapma dalı kapatıldı | 2 |
+| **Fazla kapatma:** `true`/`null` da sapma sayıldı | **4** |
+| Bayatlık penceresi kaldırıldı | 2 |
+| Yenileme yolundan ölçüm çağrısı çıkarıldı | 2 |
+
+### Test
+
+**5605 yeşil** (5588 + 17). Ön yüz 140/140, typecheck + build temiz, i18n TR/EN 5326 = 5326.
+
+### KAPSAM DIŞI BIRAKILAN — karar sahibinin
+
+**Panel sapmayı görünce bağı KENDİ DÜZELTMİYOR.** Yalnız ölçüp kritik uyarı olarak söylüyor.
+`EnsureHttpsBindingAsync` zaten var ve tek site yenileme yolunda kullanılıyor; `RenewAllAsync`'in
+onu çağırmaması bu deponun bilinen "kardeş yol çağırmıyor" sınıfının bir örneği sayılabilir. Bu
+turda BİLEREK yapılmadı: toplu yolda canlı IIS'e yazmak, yanlış depo / eksik özel anahtar gibi
+kendi başına ölçülmesi gereken başarısızlık biçimleri taşıyor ve çalışan bir bağı bozma riski
+kapatılan riskten büyük olabilir. Otomatik onarım istenirse ayrı bir tur olmalı.
