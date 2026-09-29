@@ -1,5 +1,38 @@
 # AdaPanel Codex Memory
 
+## 2026-09-29 — SON DURUM: 0.8.72 — yeni sitenin karsilama sayfasi yenilendi
+
+Kullanici: *"default olarak gozuken site var ya cok kotu"*, ardindan *"plesk'te daha dolgun
+duruyor"*. Eski sayfanin OLCULEN kusurlari: Turkce KARAKTERSIZ ("yayinda", "Dosyalarinizi",
+"degistirebilirsiniz"), yalniz KOYU tema, ve siradaki adimi soylememesi.
+
+**Kusurlarin aylarca fark edilmemesinin sebebi:** metin  icine
+gomuluydu ve yalniz GERCEK bir IIS kurulumunda gorulebiliyordu. Icerik 'e cikarildi;
+artik IIS'siz uretilip sinanabiliyor (17 test).
+
+Yeni sayfa Plesk deseni arastirilip kopyalandi: gradyanli hero + durum rozeti + UC YOL kart
+izgarasi (Dosya Yoneticisi / FTP / uygulama kurucu). Plesk belgeleri yeni alan adinin icerigini bu
+uc yoldan birinin degistirdigini soyluyor. "Bu index.html'i silin" uyarisi liste maddesi degil
+vurgulu kutu -- index.html diger index dosyalarindan ONCELIKLIDIR ve o panelin en sik destek konusu.
+
+**SAYFA HERKESE ACIK; icerigi bir GUVENLIK karari:** sunucudaki fiziksel yol YAZILMAZ (Plesk/cPanel
+de yazmaz), DIS KAYNAK yok (yazi tipi/betik/resim), , site adi HTML kacirilir. Bunlari
+"suslemek icin" degistirmeyin; her biri testle tutuluyor.
+
+**GOZLE GORULEN, TESTIN YAKALAMADIGI KUSUR:** ilk yazimda adres her zaman basiliyordu ve site adi
+ile host adi ayni oldugunda (en olagan durum) ayni metin ALT ALTA IKI KEZ cikiyordu. Tarayicida
+bakildigi icin goruldu. Ders: **yesil test, sayfanin dogru GORUNDUGUNU kanitlamaz.** 
+onizlemeyi  dosyasina doker; degistiren kisi ACIP BAKSIN.
+
+Tarayicida dogrulandi: koyu + acik tema, 390px'te kartlar tek sutuna iniyor, cok uzun alan adi
+tasmadan sariliyor. Tam takim **Infrastructure 5.624 + Core 2 = 5.626**, atlanan/basarisiz yok.
+Kaynak commit .
+
+Onceki surumler bu oturumda: 0.8.70 (SSL bag sapmasi), 0.8.71 (site olusturmada cift gonderim).
+**UCU DE CANLIYA KURULMADI** -- son dogrulanmis canli surum 0.8.69.
+Ayrinti:  ve bu surum icin commit mesaji.
+
+
 ## 2026-09-29 — SON DURUM: 0.8.71 — site olusturmada CIFT GONDERIM korumasi
 
 Kullanici canlida bildirdi: `videotools.com.tr` eklendi, site kuruldu, **ama dugme halen "Olustur
