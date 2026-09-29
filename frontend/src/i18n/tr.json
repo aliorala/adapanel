@@ -557,6 +557,7 @@
   "panel.sites.createTitle": "Alan adı ekle",
   "panel.sites.createHint": "Alan adını girin; AdaPanel hosting, DNS, çalışma zamanı ve kurulu servisleri otomatik hazırlasın.",
   "panel.sites.createAndPublish": "Siteyi oluştur ve yayınla",
+  "panel.sites.creatingHint": "Site kuruluyor. Çalışma zamanı indirilmesi ve DNS/izin adımları birkaç dakika sürebilir; bu pencereyi kapatmayın. Site hazır olduğunda aşağıdaki listede görünür.",
   "panel.sites.replaceExisting.title": "{name} adında bir site zaten var",
   "panel.sites.replaceExisting.message": "Bu ad IIS'te zaten kullanılıyor. Devam ederseniz mevcut site KALDIRILIP yeniden oluşturulur. Az önce site oluşturduysanız bu istek yanlışlıkla ikinci kez gönderilmiş olabilir — o durumda vazgeçin, siteniz olduğu gibi durur.",
   "panel.sites.replaceExisting.impactRemove": "{name} sitesi IIS'ten kaldırılır ve yeniden oluşturulur; bağlamaları, uygulama havuzu ayarları ve sertifika bağı sıfırlanır.",

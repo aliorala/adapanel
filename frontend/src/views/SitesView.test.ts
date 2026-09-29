@@ -19,6 +19,7 @@ import SitesView from "./SitesView.vue";
 const createSiteMock = vi.fn();
 const prepareSiteDefaultsMock = vi.fn();
 const confirmMock = vi.fn();
+const fetchSitesMock = vi.fn();
 let apiMessageKey = "";
 
 vi.mock("../stores/sites", () => ({
@@ -29,7 +30,7 @@ vi.mock("../stores/sites", () => ({
     busySiteName: "",
     createSite: createSiteMock,
     prepareSiteDefaults: prepareSiteDefaultsMock,
-    fetchSites: vi.fn().mockResolvedValue([]),
+    fetchSites: fetchSitesMock,
     importExistingSites: vi.fn().mockResolvedValue([])
   })
 }));
@@ -53,6 +54,7 @@ beforeEach(() => {
   apiMessageKey = "";
   createSiteMock.mockReset();
   prepareSiteDefaultsMock.mockReset().mockResolvedValue(null);
+  fetchSitesMock.mockReset().mockResolvedValue([]);
   confirmMock.mockReset().mockResolvedValue(false);
 });
 
@@ -143,6 +145,62 @@ it("form, uzun süren varsayılanlar adımını BEKLEMEDEN kapanır", async () =
   varsayilanlariBitir(null);
   await akis;
   expect(state.creatingSite).toBe(false);
+});
+
+it("olusturma SURERKEN listeyi yoklar; site gorununce yoklamayi birakir", async () => {
+  vi.useFakeTimers();
+  try {
+    const state = await mount();
+    state.createForm.name = "videotools.com.tr";
+
+    // Istek COZULMEZ: kullanicinin canlida yasadigi uzun bekleme.
+    createSiteMock.mockImplementationOnce(() => new Promise(() => {}));
+    void state.submitCreateSite();
+    await Promise.resolve();
+
+    // ONCE askidaki KURULUM cagrilari bosalsin. Bu satir olmadan test DOGMUS OLUYDU: gozcu hic
+    // baslamasa bile onMounted'in surdurmesi ilerletme sirasinda dusuyor, sayac artiyor ve test
+    // geciyordu (mutasyonla olculdu -- "gozcu hic baslamiyor" mutasyonu 7/7 yesil kalmisti).
+    await vi.advanceTimersByTimeAsync(100);
+
+    // MUTLAK sayi DEGIL, FARK olculuyor: bilesen baska sebeplerle de liste cekebilir.
+    const yoklamaOncesi = fetchSitesMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchSitesMock.mock.calls.length).toBeGreaterThan(yoklamaOncesi);
+
+    // Sunucu siteyi olusturdu: bir sonraki turda gorunur ve yoklama BIRAKILIR.
+    fetchSitesMock.mockResolvedValue([{ name: "videotools.com.tr" }]);
+    await vi.advanceTimersByTimeAsync(5000);
+    const gorununceSonrasi = fetchSitesMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(fetchSitesMock.mock.calls.length).toBe(gorununceSonrasi);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("olusturma bitince yoklama DURUR", async () => {
+  vi.useFakeTimers();
+  try {
+    const state = await mount();
+    state.createForm.name = "videotools.com.tr";
+    createSiteMock.mockResolvedValueOnce(siteSonucu("videotools.com.tr"));
+
+    await state.submitCreateSite();
+
+    // Once KURULUMDAN kalan askidaki cagrilar bosalsin: advanceTimersByTimeAsync mikro gorevleri
+    // de isletiyor, yani onMounted'in surdurmesi bu ilerletme sirasinda dusebiliyor. Taban
+    // ondan SONRA alinmazsa test, yoklamayi degil kurulumu olcerdi.
+    await vi.advanceTimersByTimeAsync(100);
+    const bitisteki = fetchSitesMock.mock.calls.length;
+
+    // Istek zaten dondu; arkada calisan bir yoklama KALMAMALI.
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(fetchSitesMock.mock.calls.length).toBe(bitisteki);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("aynı ad varsa ONAY sorar ve onaylanınca isteği replaceExisting ile tekrarlar", async () => {

@@ -70,6 +70,20 @@ public sealed class SiteDefaultsService(
         await TrackAsync("runtime", async () => _ = await appRuntimeService.GetSiteConfigurationAsync(site.Name, cancellationToken));
         await TrackAsync("proxy", async () => _ = await reverseProxyService.GetSiteConfigurationAsync(site.Name, cancellationToken));
 
+        // PANELIN KENDI YER TUTUCUSUNU TAZELE -- kullanici canlida iki kez bildirdi.
+        //
+        // Karsilama sayfasi yalniz site OLUSTURULURKEN diske yaziliyordu. Paneli guncelleyen
+        // kullanici sayfanin degistigini gormuyordu; dosya coktan diskteydi ve kimse onu bir daha
+        // yazmiyordu. Tek cikis yolu siteyi SILIP yeniden kurmakti -- panel bunu dayatmamali.
+        //
+        // SINIR: yalniz ZATEN VAR OLAN ve panelin isaretini tasiyan dosya yeniden yazilir.
+        // Yeni dosya olusturulmaz, kullanicinin dosyasina dokunulmaz (gerekce StarterPageRefresh).
+        await TrackAsync("starter", () =>
+        {
+            StarterPageRefresh.Refresh(site);
+            return Task.CompletedTask;
+        });
+
         return new AdaPanel.Core.Dtos.Sites.SiteDefaultsResultDto
         {
             SiteName = site.Name,

@@ -557,6 +557,7 @@
   "panel.sites.createTitle": "Add domain",
   "panel.sites.createHint": "Enter the domain and let AdaPanel prepare hosting, DNS, runtimes and installed services automatically.",
   "panel.sites.createAndPublish": "Create and publish site",
+  "panel.sites.creatingHint": "The site is being created. Runtime download plus DNS and permission steps can take a few minutes; do not close this window. The site appears in the list below as soon as it is ready.",
   "panel.sites.replaceExisting.title": "A site named {name} already exists",
   "panel.sites.replaceExisting.message": "This name is already in use in IIS. If you continue, the existing site is REMOVED and recreated. If you just created a site, this request may have been sent a second time by accident - in that case cancel, and your site stays as it is.",
   "panel.sites.replaceExisting.impactRemove": "The site {name} is removed from IIS and recreated; its bindings, application pool settings and certificate binding are reset.",

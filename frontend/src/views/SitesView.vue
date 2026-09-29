@@ -175,7 +175,7 @@
       </div>
 
       <div class="create-actions">
-        <p class="meta">{{ t("panel.sites.automatic.submitHint") }}</p>
+        <p class="meta">{{ creatingSite ? t("panel.sites.creatingHint") : t("panel.sites.automatic.submitHint") }}</p>
         <button type="submit" v-bind="writeGate(creatingSite)">
           {{ creatingSite ? t("panel.sites.creating") : t("panel.sites.createAndPublish") }}
         </button>
@@ -447,6 +447,57 @@ const showCreateForm = ref(false);
  * kaldir-ve-yeniden-olustur davranisi yuzunden AZ ONCE KURULAN SITEYI SILIYORDU.
  */
 const creatingSite = ref(false);
+
+/** Oluşturma sürerken site listesinin yoklanma aralığı (ms). */
+const LISTE_YOKLAMA_MS = 5000;
+
+/**
+ * Site listesini, oluşturma isteği SÜRERKEN yoklar.
+ *
+ * KULLANICI CANLIDA BİLDİRDİ: "siteyi eklemiş ama yenilenmedi, ben başka sekmede açınca gördüm".
+ * Doğruydu ve sebebi şu: site IIS'te ERKENDEN oluşuyor, ama `POST /sites` yanıtı yan kaynaklar
+ * (DNS alt alan kaydı, veritabanı, posta alanı, FTP hesabı) bitene kadar dönmüyor. Bu arada yeni
+ * bir sekme `GET /sites` ile siteyi görüyor, kullanıcının sekmesi ise hâlâ bekliyordu — ekranda
+ * hiçbir kanıt olmadığı için iş olmamış gibi görünüyordu.
+ *
+ * Yoklama yalnız GÖRÜNÜRLÜK içindir: düğme yine iş bitene kadar kilitli kalır (çift gönderim
+ * koruması bozulmaz) ve sonuç mesajı yine asıl yanıttan gelir.
+ *
+ * Yoklama hatası SESSİZDİR: geçici bir liste okuma hatası, süren oluşturmayı başarısız
+ * göstermemeli.
+ */
+function siteyiListedeGozle(ad: string) {
+  const hedef = (ad ?? "").trim().toLowerCase();
+  let durduruldu = false;
+  // window.setTimeout DEGIL, cipllak setTimeout: bu bilesen tarayici disinda da kuruluyor (testler DOM'suz bir
+  // olusturucu kullaniyor) ve window'a dokunmak fonksiyonu daha ILK satirda patlatiyordu.
+  let zamanlayici: ReturnType<typeof setTimeout> | undefined;
+
+  async function tur() {
+    if (durduruldu || !hedef) {
+      return;
+    }
+
+    try {
+      const siteler = await sitesStore.fetchSites();
+      if (siteler.some((site) => (site.name ?? "").toLowerCase() === hedef)) {
+        return; // göründü; yoklamaya gerek kalmadı
+      }
+    } catch {
+      // yoklama sessizdir
+    }
+
+    if (!durduruldu) {
+      zamanlayici = setTimeout(tur, LISTE_YOKLAMA_MS);
+    }
+  }
+
+  zamanlayici = setTimeout(tur, LISTE_YOKLAMA_MS);
+  return () => {
+    durduruldu = true;
+    clearTimeout(zamanlayici);
+  };
+}
 const showAdvanced = ref(false);
 const physicalPathEdited = ref(false);
 const defaultSiteRoot = ref("C:\\inetpub\\wwwroot");
@@ -580,6 +631,7 @@ async function submitCreateSite(replaceExisting = false) {
   }
 
   creatingSite.value = true;
+  const gozcuyuDurdur = siteyiListedeGozle(createForm.name);
   try {
     const requestedPort = createForm.port;
     const result = await sitesStore.createSite({ ...createForm, replaceExisting });
@@ -652,6 +704,7 @@ async function submitCreateSite(replaceExisting = false) {
 
     showNotice(resolveApiMessage(error), true);
   } finally {
+    gozcuyuDurdur();
     creatingSite.value = false;
   }
 }
