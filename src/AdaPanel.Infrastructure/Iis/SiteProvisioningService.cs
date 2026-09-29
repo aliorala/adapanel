@@ -404,7 +404,7 @@ public sealed class SiteProvisioningService(
                 try
                 {
                     var componentId = await EnsurePhpAsync(request, actorUserId, ipAddress, cancellationToken);
-                    WriteMixedStarter(site.PhysicalPath);
+                    WriteMixedStarter(site);
                     await aspNetService.EnableMixedHandlersAsync(
                         site.Name,
                         new EnableMixedHandlersRequest
@@ -437,7 +437,7 @@ public sealed class SiteProvisioningService(
                         exception,
                         "Automatic runtime profile fell back to ASP.NET for site {SiteName}.",
                         site.Name);
-                    WriteAspNetStarter(site.PhysicalPath);
+                    WriteAspNetStarter(site);
                     await aspNetService.SetDotNetVersionAsync(
                         site.Name,
                         new UpdateDotNetRuntimeRequest
@@ -455,7 +455,7 @@ public sealed class SiteProvisioningService(
             case "php":
             {
                 var componentId = await EnsurePhpAsync(request, actorUserId, ipAddress, cancellationToken);
-                WritePhpStarter(site.PhysicalPath);
+                WritePhpStarter(site);
                 await phpService.SetSitePhpVersionAsync(
                     site.Name,
                     new SetSitePhpVersionRequest { ComponentId = componentId },
@@ -463,7 +463,7 @@ public sealed class SiteProvisioningService(
                 return;
             }
             case "aspnet":
-                WriteAspNetStarter(site.PhysicalPath);
+                WriteAspNetStarter(site);
                 await aspNetService.SetDotNetVersionAsync(
                     site.Name,
                     new UpdateDotNetRuntimeRequest
@@ -474,7 +474,7 @@ public sealed class SiteProvisioningService(
                     cancellationToken);
                 return;
             case "classic-asp":
-                WriteClassicAspStarter(site.PhysicalPath);
+                WriteClassicAspStarter(site);
                 await aspNetService.SetClassicAspAsync(
                     site.Name,
                     new UpdateClassicAspRequest { Enabled = true },
@@ -483,7 +483,7 @@ public sealed class SiteProvisioningService(
             case "mixed":
             {
                 var componentId = await EnsurePhpAsync(request, actorUserId, ipAddress, cancellationToken);
-                WriteMixedStarter(site.PhysicalPath);
+                WriteMixedStarter(site);
                 await aspNetService.EnableMixedHandlersAsync(
                     site.Name,
                     new EnableMixedHandlersRequest
@@ -605,96 +605,79 @@ public sealed class SiteProvisioningService(
         await componentBootstrapper.InstallAsync(componentId, actorUserId, ipAddress, force: false, cancellationToken: cancellationToken);
     }
 
-    private static void WritePhpStarter(string root)
+    /// <summary>
+    /// Sitenin karşılama sayfası — <b>tek kaynaktan</b> (<see cref="StarterPage"/>).
+    /// </summary>
+    /// <remarks>
+    /// <b>ÖLÇÜLEN HATA:</b> bu sayfanın İKİ ayrı üreteci vardı. Burası profile göre
+    /// <c>default.asp</c>/<c>index.php</c> yazıyor, <c>WebAdministrationSiteService</c> ise
+    /// <c>index.html</c> yazıyordu — üstelik <see cref="RemoveDefaultHtml"/> ötekinin dosyasını
+    /// siliyordu. Biri düzeltilince kullanıcı hiçbir değişiklik görmüyordu, çünkü sitesinde duran
+    /// öteki sayfaydı. İki kopya sessizce ayrışır; bu yüzden tek kaynak.
+    /// </remarks>
+    private static string StarterHtml(SiteDto site, StarterPageOptions secenekler)
     {
+        var baglama = site.Bindings?.FirstOrDefault();
+        return StarterPage.Render(
+            site.Name,
+            baglama?.HostName ?? string.Empty,
+            baglama is { Port: > 0 } ? baglama.Port : 80,
+            secenekler);
+    }
+
+    private static void WritePhpStarter(SiteDto site)
+    {
+        var root = site.PhysicalPath;
         RemoveDefaultHtml(root);
-        WriteStarterIfAbsent(Path.Combine(root, "index.php"), """
-            <?php /* adapanel-starter */
-            $site = htmlspecialchars($_SERVER['HTTP_HOST'] ?? 'AdaPanel', ENT_QUOTES, 'UTF-8');
-            ?><!doctype html>
-            <html lang="tr"><meta charset="utf-8"><title><?= $site ?></title>
-            <body style="font-family:Segoe UI,sans-serif;background:#09151c;color:#eaf5ee;padding:48px">
-            <h1>PHP sitesi yayinda</h1><p>AdaPanel bu siteyi otomatik olarak PHP FastCGI profiline bagladi.</p>
-            </body></html>
-            """);
+        WriteStarterIfAbsent(Path.Combine(root, "index.php"), StarterHtml(site, new StarterPageOptions(
+            DosyaAdi: "index.php",
+            Rozet: "PHP",
+            Aciklama: "Bu site PHP FastCGI profiline bağlandı.")));
         WriteDefaultDocumentConfig(root, "index.php");
     }
 
-    private static void WriteAspNetStarter(string root)
+    private static void WriteAspNetStarter(SiteDto site)
     {
+        var root = site.PhysicalPath;
         RemoveDefaultHtml(root);
-        WriteStarterIfAbsent(Path.Combine(root, "Default.aspx"), """
-            <%@ Page Language="C#" %>
-            <!-- adapanel-starter -->
-            <!doctype html>
-            <html lang="tr"><meta charset="utf-8"><title>AdaPanel ASP.NET</title>
-            <body style="font-family:Segoe UI,sans-serif;background:#09151c;color:#eaf5ee;padding:48px">
-            <h1>ASP.NET sitesi yayinda</h1><p>CLR v4.0 ve Integrated pipeline otomatik olarak ayarlandi.</p>
-            </body></html>
-            """);
+        // <%@ Page %> yonergesi ILK satirda olmak ZORUNDA; sayfanin kendisi ondan sonra gelir.
+        WriteStarterIfAbsent(
+            Path.Combine(root, "Default.aspx"),
+            "<%@ Page Language=\"C#\" %>\n" + StarterHtml(site, new StarterPageOptions(
+                DosyaAdi: "Default.aspx",
+                Rozet: "ASP.NET",
+                Aciklama: "CLR v4.0 ve Integrated pipeline otomatik olarak ayarlandı.",
+                DinamikSatir: "<p class=\"row\"><span class=\"k\">Sunucu saati</span>"
+                    + "<span class=\"v\"><%= DateTime.Now.ToString(\"dd.MM.yyyy HH:mm:ss\") %></span></p>")));
     }
 
-    private static void WriteClassicAspStarter(string root)
+    private static void WriteClassicAspStarter(SiteDto site)
     {
+        var root = site.PhysicalPath;
         RemoveDefaultHtml(root);
-        WriteStarterIfAbsent(Path.Combine(root, "default.asp"), """
-            <!-- adapanel-starter -->
-            <!doctype html>
-            <html lang="tr"><meta charset="utf-8"><title>AdaPanel Classic ASP</title>
-            <body style="font-family:Segoe UI,sans-serif;background:#09151c;color:#eaf5ee;padding:48px">
-            <h1>Classic ASP sitesi yayinda</h1><p><%= Now() %></p>
-            </body></html>
-            """);
+        WriteStarterIfAbsent(Path.Combine(root, "default.asp"), StarterHtml(site, new StarterPageOptions(
+            DosyaAdi: "default.asp",
+            Rozet: "Classic ASP",
+            Aciklama: "Bu site Classic ASP çalıştırmaya hazır.",
+            DinamikSatir: "<p class=\"row\"><span class=\"k\">Sunucu saati</span>"
+                + "<span class=\"v\"><%= Now() %></span></p>")));
     }
 
-    private static void WriteMixedStarter(string root)
+    private static void WriteMixedStarter(SiteDto site)
     {
+        var root = site.PhysicalPath;
         RemoveDefaultHtml(root);
-        // Şık karşılama sayfası (Classic ASP ile canlı saat). PHP doğrulaması ayrı php-info.php'de.
-        // Kullanıcının kendi dosyalarının ÜZERINE yazma (WriteStarterIfAbsent).
-        WriteStarterIfAbsent(Path.Combine(root, "default.asp"), BuildWelcomePage(
-            badge: "ASP · ASP.NET · PHP",
-            heading: "Siteniz yayında",
-            subtitle: "Bu sunucu Classic ASP, ASP.NET ve PHP çalıştırmaya hazır.",
-            dynamicLine: "<p class=\"row\"><span class=\"k\">Classic ASP</span><span class=\"v\"><%= Now() %></span></p>",
-            extra: "<p class=\"links\"><a href=\"php-info.php\">PHP doğrulaması →</a></p>"));
+        // Canli saati Classic ASP uretir: sayfanin GERCEKTEN calistiginin kaniti. PHP dogrulamasi
+        // ayri bir dosyada; ikisini birlestirmek sayfayi PHP'siz kurulumlarda kirardi.
+        WriteStarterIfAbsent(Path.Combine(root, "default.asp"), StarterHtml(site, new StarterPageOptions(
+            DosyaAdi: "default.asp",
+            Rozet: "ASP · ASP.NET · PHP",
+            Aciklama: "Bu sunucu Classic ASP, ASP.NET ve PHP çalıştırmaya hazır.",
+            DinamikSatir: "<p class=\"row\"><span class=\"k\">Sunucu saati</span>"
+                + "<span class=\"v\"><%= Now() %></span></p>",
+            EkBaglanti: "<p class=\"links\"><a href=\"php-info.php\">PHP doğrulaması →</a></p>")));
         WriteStarterIfAbsent(Path.Combine(root, "php-info.php"), BuildPhpWelcomePage());
     }
-
-    /// <summary>Şık, koyu temalı karşılama HTML'i (profesyonel panel benzeri "site hazır" sayfası).</summary>
-    private static string BuildWelcomePage(string badge, string heading, string subtitle, string dynamicLine, string extra)
-        => $$"""
-            <!doctype html>
-            <!-- adapanel-starter -->
-            <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-            <title>{{heading}}</title>
-            <style>
-              :root{color-scheme:dark}
-              *{box-sizing:border-box}
-              body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:"Segoe UI",system-ui,Arial,sans-serif;
-                background:radial-gradient(1200px 600px at 50% -10%,#14323a,#0a141a 60%);color:#eaf5ee;padding:24px}
-              .card{width:min(640px,100%);padding:46px 44px;border-radius:22px;border:1px solid #21443c;
-                background:linear-gradient(180deg,#11242c,#0d1b22);box-shadow:0 30px 90px #0009}
-              .badge{display:inline-block;font-size:.74rem;letter-spacing:.16em;text-transform:uppercase;color:#0c1a16;
-                background:linear-gradient(90deg,#5fe39a,#37b87a);padding:6px 12px;border-radius:999px;font-weight:800}
-              h1{margin:18px 0 8px;font-size:clamp(2rem,6vw,3.2rem);line-height:1.05}
-              .sub{color:#9fbcb0;line-height:1.6;margin:0 0 22px}
-              .row{display:flex;justify-content:space-between;gap:14px;padding:12px 0;border-top:1px solid #1d3a33;margin:0}
-              .k{color:#7fa596}.v{color:#dff6e8;font-variant-numeric:tabular-nums}
-              .links{margin-top:22px}
-              .links a{color:#5fe39a;text-decoration:none;font-weight:600}
-              .links a:hover{text-decoration:underline}
-              .foot{margin-top:26px;color:#5d7a70;font-size:.82rem}
-            </style></head>
-            <body><main class="card">
-              <span class="badge">{{badge}}</span>
-              <h1>{{heading}}</h1>
-              <p class="sub">{{subtitle}}</p>
-              {{dynamicLine}}
-              {{extra}}
-              <p class="foot">AdaPanel · dosyalarınızı bu klasöre yükleyerek bu sayfayı değiştirin.</p>
-            </main></body></html>
-            """;
 
     private static string BuildPhpWelcomePage()
         => "<?php /* adapanel-starter */\n"
@@ -791,7 +774,9 @@ public sealed class SiteProvisioningService(
             """);
     }
 
-    private const string StarterMarker = "adapanel-starter";
+    // ISARET TEK KAYNAKTAN: sayfayi StarterPage uretiyor, isareti de o tanimliyor. Burada
+    // ikinci bir kopya tutmak, sayfa degistiginde bu kontrolun sessizce yanlislanmasi demekti.
+    private const string StarterMarker = StarterPage.Marker;
 
     // Yalnız AdaPanel'in KENDI başlangıç index.html'ini kaldırır (işaret içerir). KULLANICININ
     // yüklediği index.html ASLA silinmez (runtime profili değiştirince site bozulmasın).

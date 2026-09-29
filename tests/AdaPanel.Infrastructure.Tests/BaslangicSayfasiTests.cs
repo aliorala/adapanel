@@ -227,6 +227,70 @@ public sealed class BaslangicSayfasiTests
     }
 
     /// <summary>
+    /// "Bu dosyayı silin" uyarısı PROFİLİN GERÇEK dosyasını yazar.
+    /// </summary>
+    /// <remarks>
+    /// Karma profilde sayfa <c>default.asp</c>, PHP profilinde <c>index.php</c> olarak yazılıyor.
+    /// Uyarı her zaman "index.html" deseydi kullanıcı var olmayan bir dosyayı arar, gerçek yer
+    /// tutucu yerinde kalır ve kendi sayfasını gölgelemeye devam ederdi.
+    /// </remarks>
+    [Theory]
+    [InlineData("default.asp")]
+    [InlineData("index.php")]
+    [InlineData("Default.aspx")]
+    public void Silinecek_dosya_adi_profile_gore_yazilir(string dosya)
+    {
+        var html = StarterPage.Render("musteri.com", "musteri.com", 80, new StarterPageOptions(DosyaAdi: dosya));
+
+        Assert.Contains($"<strong>{dosya}</strong>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<strong>index.html</strong>", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PANELİN İŞARETİ sayfada bulunur — kullanıcının dosyasıyla karışmaması için.
+    /// </summary>
+    /// <remarks>
+    /// <c>SiteProvisioningService</c> bu işarete bakarak dosyanın panele mi kullanıcıya mı ait
+    /// olduğunu ayırır. İşaret kaybolursa panel kendi yer tutucusunu kullanıcı içeriği sanar ve
+    /// profil değişiminde yetim bırakır.
+    /// </remarks>
+    [Fact]
+    public void Panel_isareti_sayfada_bulunur()
+    {
+        var html = StarterPage.Render("musteri.com", "musteri.com", 80);
+
+        Assert.Contains(StarterPage.Marker, html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// SUNUCUDA ÜRETİLEN satır KAÇIRILMAZ — sayfanın çalıştığının kanıtıdır.
+    /// </summary>
+    /// <remarks>
+    /// Classic ASP'nin <c>&lt;%= Now() %&gt;</c> ifadesi kaçırılsaydı sayfada düz metin olarak
+    /// görünür ve sunucunun gerçekten çalıştığını kanıtlamazdı. Bu HTML paneldendir, kullanıcı
+    /// girdisi değildir.
+    /// </remarks>
+    [Fact]
+    public void Sunucuda_uretilen_satir_kacirilmaz()
+    {
+        var html = StarterPage.Render("musteri.com", "musteri.com", 80,
+            new StarterPageOptions(DinamikSatir: "<p class=\"row\"><%= Now() %></p>"));
+
+        Assert.Contains("<%= Now() %>", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>Profil rozeti ve açıklaması KAÇIRILIR (panel metni olsa da disiplin bozulmaz).</summary>
+    [Fact]
+    public void Rozet_ve_aciklama_kacirilir()
+    {
+        var html = StarterPage.Render("musteri.com", "musteri.com", 80,
+            new StarterPageOptions(Rozet: "<b>x</b>", Aciklama: "<i>y</i>"));
+
+        Assert.DoesNotContain("<b>x</b>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<i>y</i>", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// GÖZLE BAKMAK İÇİN: sayfanın gerçek çıktısını diske yazar.
     /// </summary>
     /// <remarks>
@@ -236,9 +300,22 @@ public sealed class BaslangicSayfasiTests
     [Fact]
     public void Onizleme_diske_yazilir()
     {
-        var yol = Path.Combine(Path.GetTempPath(), "adapanel-baslangic-onizleme.html");
-        File.WriteAllText(yol, StarterPage.Render("videotools.com.tr", "videotools.com.tr", 80));
+        var sade = Path.Combine(Path.GetTempPath(), "adapanel-baslangic-onizleme.html");
+        File.WriteAllText(sade, StarterPage.Render("videotools.com.tr", "videotools.com.tr", 80));
 
-        Assert.True(File.Exists(yol));
+        // KARMA PROFIL: kullanicinin canlida gordugu sayfa budur (default.asp). Onizlemede
+        // <%= Now() %> calismayacagi icin ornek bir saat konuyor; olculen sey DUZENDIR.
+        var karma = Path.Combine(Path.GetTempPath(), "adapanel-baslangic-onizleme-karma.html");
+        File.WriteAllText(karma, StarterPage.Render("videotools.com.tr", "videotools.com.tr", 80,
+            new StarterPageOptions(
+                DosyaAdi: "default.asp",
+                Rozet: "ASP · ASP.NET · PHP",
+                Aciklama: "Bu sunucu Classic ASP, ASP.NET ve PHP çalıştırmaya hazır.",
+                DinamikSatir: "<p class=\"row\"><span class=\"k\">Sunucu saati</span>"
+                    + "<span class=\"v\">29.09.2026 18:07:42</span></p>",
+                EkBaglanti: "<p class=\"links\"><a href=\"php-info.php\">PHP doğrulaması →</a></p>")));
+
+        Assert.True(File.Exists(sade));
+        Assert.True(File.Exists(karma));
     }
 }

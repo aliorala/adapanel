@@ -29,6 +29,26 @@ namespace AdaPanel.Infrastructure.Iis;
 /// bozuk Türkçe ("yayinda", "degistirebilirsiniz") ve yalnız koyu temada çalışan bir sayfaydı.
 /// </para>
 /// </remarks>
+/// <summary>Karşılama sayfasının profile göre değişen parçaları.</summary>
+/// <param name="DosyaAdi">
+/// Sayfanın yazıldığı dosya (<c>index.html</c> / <c>default.asp</c> / <c>index.php</c>). Sayfa
+/// "bu dosyayı silin" derken DOĞRU adı yazmalı; yanlış ad, kullanıcıyı var olmayan bir dosyayı
+/// aramaya gönderir.
+/// </param>
+/// <param name="Rozet">Çalışma zamanı etiketi (ör. <c>ASP · ASP.NET · PHP</c>). Boşsa gösterilmez.</param>
+/// <param name="Aciklama">Profile özgü cümle.</param>
+/// <param name="DinamikSatir">
+/// Sunucuda üretilen HTML (ör. Classic ASP <c>&lt;%= Now() %&gt;</c>). Sayfanın gerçekten
+/// ÇALIŞTIĞINI kanıtlar — statik bir sayfa bunu üretemez.
+/// </param>
+/// <param name="EkBaglanti">Profile özgü ek bağlantı (ör. PHP doğrulama sayfası).</param>
+internal sealed record StarterPageOptions(
+    string DosyaAdi = "index.html",
+    string Rozet = "",
+    string Aciklama = "",
+    string DinamikSatir = "",
+    string EkBaglanti = "");
+
 internal static class StarterPage
 {
     /// <summary>
@@ -36,8 +56,32 @@ internal static class StarterPage
     /// <param name="hostName">Bağlamadaki host adı; boşsa <c>localhost</c> varsayılır.</param>
     /// <param name="port">Bağlamadaki port.</param>
     /// </summary>
-    public static string Render(string siteName, string hostName, int port)
+    /// <summary>AdaPanel'in KENDİ başlangıç sayfası olduğunun işareti.</summary>
+    /// <remarks>
+    /// <c>SiteProvisioningService</c> bu işarete bakarak dosyanın panele mi KULLANICIYA mı ait
+    /// olduğunu ayırır; kullanıcının yüklediği dosya asla silinmez/üzerine yazılmaz. İşaret
+    /// kaybolursa panel kendi yer tutucusunu kullanıcı içeriği sanar.
+    /// </remarks>
+    public const string Marker = "adapanel-starter";
+
+    public static string Render(string siteName, string hostName, int port, StarterPageOptions? secenekler = null)
     {
+        var s = secenekler ?? new StarterPageOptions();
+        var dosya = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(s.DosyaAdi) ? "index.html" : s.DosyaAdi.Trim());
+
+        var rozetEk = string.IsNullOrWhiteSpace(s.Rozet)
+            ? string.Empty
+            : $"<span class=\"rozet-ek\">{WebUtility.HtmlEncode(s.Rozet)}</span>";
+
+        var aciklama = string.IsNullOrWhiteSpace(s.Aciklama)
+            ? string.Empty
+            : $"<p class=\"profil\">{WebUtility.HtmlEncode(s.Aciklama)}</p>";
+
+        // DİNAMİK SATIR ve EK BAĞLANTI panelin KENDİ ürettiği HTML'dir (kullanıcı girdisi değil),
+        // bu yüzden kaçırılmaz — Classic ASP'nin <%= Now() %> ifadesi kaçırılsaydı sayfada metin
+        // olarak görünür, sunucunun çalıştığını kanıtlamazdı.
+        var dinamik = s.DinamikSatir ?? string.Empty;
+        var ek = s.EkBaglanti ?? string.Empty;
         var ad = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(siteName) ? "Yeni site" : siteName.Trim());
 
         // ADRES YALNIZ BİLGİ KATIYORSA GÖSTERİLİR.
@@ -57,6 +101,7 @@ internal static class StarterPage
 
         return $$"""
             <!doctype html>
+            <!-- {{Marker}} -->
             <html lang="tr">
             <head>
               <meta charset="utf-8">
@@ -131,7 +176,17 @@ internal static class StarterPage
                   font-size: .84rem;
                   font-weight: 600;
                 }
+                .rozetler { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
                 .nokta { width: 8px; height: 8px; border-radius: 50%; background: #7ef0b0; }
+                .rozet-ek {
+                  padding: 6px 13px;
+                  border-radius: 999px;
+                  border: 1px solid #ffffff40;
+                  font-size: .78rem;
+                  font-weight: 600;
+                  letter-spacing: .04em;
+                  color: #ffffffd9;
+                }
                 h1 {
                   margin: 16px 0 8px;
                   font-size: clamp(1.6rem, 5.5vw, 2.4rem);
@@ -139,6 +194,12 @@ internal static class StarterPage
                   overflow-wrap: anywhere;
                 }
                 .hero p { margin: 0; color: #ffffffd9; max-width: 56ch; }
+                .profil { margin-top: 8px !important; color: #ffffffb3 !important; font-size: .93rem; }
+                .row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 0 !important;
+                  padding-top: 13px; border-top: 1px solid #ffffff2e; font-size: .88rem; color: #ffffffcc !important; }
+                .row .k { color: #ffffff99; }
+                .links { margin-top: 12px !important; font-size: .9rem; }
+                .links a { color: #b9f5d5; font-weight: 600; }
                 .adres { margin-top: 10px !important; font-size: .92rem; color: #ffffffb3 !important; overflow-wrap: anywhere; }
                 .govde { padding: clamp(24px, 5vw, 40px); }
                 h2 { margin: 0 0 4px; font-size: 1.08rem; }
@@ -193,11 +254,17 @@ internal static class StarterPage
             <body>
               <main>
                 <header class="hero">
-                  <p class="rozet"><span class="nokta"></span>Site yayında</p>
+                  <div class="rozetler">
+                    <span class="rozet"><span class="nokta"></span>Site yayında</span>
+                    {{rozetEk}}
+                  </div>
                   <h1>{{ad}}</h1>
                   <p>Bu sayfayı görüyorsanız site doğru kuruldu ve çalışıyor. Henüz içerik yüklenmediği
                      için panelin hazırladığı karşılama sayfası gösteriliyor.</p>
+                  {{aciklama}}
                   {{adresSatiri}}
+                  {{dinamik}}
+                  {{ek}}
                 </header>
 
                 <section class="govde">
@@ -232,7 +299,7 @@ internal static class StarterPage
 
                   <div class="uyari">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5h.01"/></svg>
-                    <span>Dosyalarınızı yükledikten sonra bu <strong>index.html</strong> dosyasını silmeyi
+                    <span>Dosyalarınızı yükledikten sonra bu <strong>{{dosya}}</strong> dosyasını silmeyi
                       unutmayın. Yerinde kalırsa kendi açılış sayfanızı gölgeler ve site değişmemiş görünür.</span>
                   </div>
 
@@ -241,7 +308,7 @@ internal static class StarterPage
                        değişikliklerinin yayılması birkaç saat sürebilir.</p>
                     <div class="marka">
                       <span>AdaPanel</span>
-                      <span>Site is live — upload your files and delete <strong>index.html</strong>.</span>
+                      <span>Site is live — upload your files and delete <strong>{{dosya}}</strong>.</span>
                     </div>
                   </div>
                 </section>
