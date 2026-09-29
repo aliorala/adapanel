@@ -1,37 +1,44 @@
 # AdaPanel Codex Memory
 
-## 2026-09-29 — SON DURUM: 0.8.72 — yeni sitenin karsilama sayfasi yenilendi
+## 2026-09-29 — SON DURUM: 0.8.72 — yeni sitenin karşılama sayfası yenilendi
 
-Kullanici: *"default olarak gozuken site var ya cok kotu"*, ardindan *"plesk'te daha dolgun
-duruyor"*. Eski sayfanin OLCULEN kusurlari: Turkce KARAKTERSIZ ("yayinda", "Dosyalarinizi",
-"degistirebilirsiniz"), yalniz KOYU tema, ve siradaki adimi soylememesi.
+Kullanıcı: *"default olarak gözüken site var ya çok kötü"*, ardından *"Plesk'te daha dolgun
+duruyor"*. Eski sayfanın ÖLÇÜLEN kusurları: Türkçe KARAKTERSİZ ("yayinda", "Dosyalarinizi",
+"degistirebilirsiniz"), yalnız KOYU tema, ve sıradaki adımı söylememesi.
 
-**Kusurlarin aylarca fark edilmemesinin sebebi:** metin  icine
-gomuluydu ve yalniz GERCEK bir IIS kurulumunda gorulebiliyordu. Icerik 'e cikarildi;
-artik IIS'siz uretilip sinanabiliyor (17 test).
+**Kusurların aylarca fark edilmemesinin sebebi:** metin `WebAdministrationSiteService` içine
+gömülüydü ve yalnız GERÇEK bir IIS kurulumunda görülebiliyordu. İçerik `StarterPage`'e çıkarıldı;
+artık IIS'siz üretilip sınanabiliyor (17 test).
 
-Yeni sayfa Plesk deseni arastirilip kopyalandi: gradyanli hero + durum rozeti + UC YOL kart
-izgarasi (Dosya Yoneticisi / FTP / uygulama kurucu). Plesk belgeleri yeni alan adinin icerigini bu
-uc yoldan birinin degistirdigini soyluyor. "Bu index.html'i silin" uyarisi liste maddesi degil
-vurgulu kutu -- index.html diger index dosyalarindan ONCELIKLIDIR ve o panelin en sik destek konusu.
+Yeni sayfa Plesk deseni araştırılıp kopyalandı: gradyanlı hero + durum rozeti + ÜÇ YOL kart
+ızgarası (Dosya Yöneticisi / FTP / uygulama kurucu). Plesk belgeleri yeni alan adının içeriğini bu
+üç yoldan birinin değiştirdiğini söylüyor. **"Bu index.html'i silin" uyarısı liste maddesi değil
+vurgulu kutu** — index.html diğer index dosyalarından ÖNCELİKLİDİR ve o panelin en sık destek
+konusu.
 
-**SAYFA HERKESE ACIK; icerigi bir GUVENLIK karari:** sunucudaki fiziksel yol YAZILMAZ (Plesk/cPanel
-de yazmaz), DIS KAYNAK yok (yazi tipi/betik/resim), , site adi HTML kacirilir. Bunlari
-"suslemek icin" degistirmeyin; her biri testle tutuluyor.
+**SAYFA HERKESE AÇIK; içeriği bir GÜVENLİK kararıdır.** Şunlar bilerek YOKTUR ve her biri testle
+tutuluyor — "süslemek için" eklemeyin:
 
-**GOZLE GORULEN, TESTIN YAKALAMADIGI KUSUR:** ilk yazimda adres her zaman basiliyordu ve site adi
-ile host adi ayni oldugunda (en olagan durum) ayni metin ALT ALTA IKI KEZ cikiyordu. Tarayicida
-bakildigi icin goruldu. Ders: **yesil test, sayfanin dogru GORUNDUGUNU kanitlamaz.** 
-onizlemeyi  dosyasina doker; degistiren kisi ACIP BAKSIN.
+- sunucudaki fiziksel yol (Plesk ve cPanel de yazmaz),
+- dış kaynak: yazı tipi / betik / resim,
+- arama motoruna açıklık (`noindex` var).
 
-Tarayicida dogrulandi: koyu + acik tema, 390px'te kartlar tek sutuna iniyor, cok uzun alan adi
-tasmadan sariliyor. Tam takim **Infrastructure 5.624 + Core 2 = 5.626**, atlanan/basarisiz yok.
-Kaynak commit .
+Site adı HTML olarak kaçırılıyor.
 
-Onceki surumler bu oturumda: 0.8.70 (SSL bag sapmasi), 0.8.71 (site olusturmada cift gonderim).
-**UCU DE CANLIYA KURULMADI** -- son dogrulanmis canli surum 0.8.69.
-Ayrinti:  ve bu surum icin commit mesaji.
+**GÖZLE GÖRÜLEN, TESTİN YAKALAMADIĞI KUSUR:** ilk yazımda adres her zaman basılıyordu ve site adı
+ile host adı aynı olduğunda (en olağan durum) aynı metin ALT ALTA İKİ KEZ çıkıyordu. Tarayıcıda
+bakıldığı için görüldü. **Ders: yeşil test, sayfanın doğru GÖRÜNDÜĞÜNÜ kanıtlamaz.**
+`BaslangicSayfasiTests.Onizleme_diske_yazilir` çıktıyı
+`%TEMP%\adapanel-baslangic-onizleme.html` dosyasına döker; bu sayfayı değiştiren kişi AÇIP BAKSIN.
 
+Tarayıcıda doğrulandı: koyu + açık tema, 390px'te kartlar tek sütuna iniyor, çok uzun alan adı
+taşmadan sarılıyor. Tam takım **Infrastructure 5.624 + Core 2 = 5.626**, atlanan/başarısız yok.
+Kaynak commit `e4edb40`.
+
+**Bu oturumda üç sürüm çıktı: 0.8.70 (SSL bağ sapması), 0.8.71 (site oluşturmada çift gönderim),
+0.8.72 (karşılama sayfası). ÜÇÜ DE CANLIYA KURULMADI** — son doğrulanmış canlı sürüm 0.8.69.
+Ayrıntı: `docs/denetim-2026-09-28-070.md`, `docs/denetim-2026-09-29-071.md` ve `e4edb40` commit
+mesajı.
 
 ## 2026-09-29 — SON DURUM: 0.8.71 — site olusturmada CIFT GONDERIM korumasi
 
