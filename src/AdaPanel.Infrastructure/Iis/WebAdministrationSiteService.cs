@@ -401,38 +401,10 @@ public sealed partial class WebAdministrationSiteService(
             return;
         }
 
-        var publicAddress = string.IsNullOrWhiteSpace(hostName)
-            ? $"http://localhost:{port}"
-            : $"http://{WebUtility.HtmlEncode(hostName)}:{port}";
-        var safeSiteName = WebUtility.HtmlEncode(siteName);
-        var html = $$"""
-            <!doctype html>
-            <html lang="tr">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>{{safeSiteName}}</title>
-              <style>
-                :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
-                body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #09151c; color: #edf7f1; }
-                main { width: min(620px, calc(100% - 48px)); padding: 42px; border: 1px solid #24443b; border-radius: 20px; background: #10232a; box-shadow: 0 24px 80px #0008; }
-                span { color: #62dc8d; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-                h1 { margin: 14px 0 10px; font-size: clamp(2rem, 7vw, 4rem); }
-                p { color: #a9beb4; line-height: 1.7; }
-                code { color: #d9f5e3; }
-              </style>
-            </head>
-            <body>
-              <main>
-                <span>AdaPanel</span>
-                <h1>{{safeSiteName}}</h1>
-                <p>Siteniz yayinda. Dosyalarinizi bu klasore yukleyerek bu baslangic sayfasini degistirebilirsiniz.</p>
-                <p><code>{{publicAddress}}</code></p>
-              </main>
-            </body>
-            </html>
-            """;
-
+        // ICERIK AYRI BIR SINIFTA: sayfa HERKESE ACIKTIR ve icinde ne oldugu bir guvenlik
+        // kararidir (sunucudaki fiziksel yol yazilmaz, dis kaynak kullanilmaz). Gerekce ve
+        // sinirlar StarterPage'de yazili; orada IIS olmadan sinanabiliyor.
+        var html = StarterPage.Render(siteName, hostName, port);
         File.WriteAllText(indexPath, html, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
