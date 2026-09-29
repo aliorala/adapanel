@@ -1,5 +1,45 @@
 # AdaPanel Codex Memory
 
+## 2026-09-29 — SON DURUM: 0.8.71 — site olusturmada CIFT GONDERIM korumasi
+
+Kullanici canlida bildirdi: `videotools.com.tr` eklendi, site kuruldu, **ama dugme halen "Olustur
+ve yayinla" yaziyordu ve form acikti**. Kendi cikarimi dogruydu: *"yanlislikla olusmadi diye tekrar
+basilabilir."*
+
+**Zincir:** `sitesStore.creating` akisin YALNIZ ilk cagrisini (`POST /sites`) kapsiyordu; uzun suren
+ikinci adim (`POST /sites/{ad}/defaults`) o bayrak DUSTUKTEN sonra kosuyor, form ise akisin en
+sonunda kapaniyordu → tam o pencerede dugme yeniden etkinlesiyordu. Ikinci basisin bedeli:
+`WebAdministrationSiteService.CreateSiteAsync` ayni adda site bulunca onu **KALDIRIP yeniden
+olusturur** (bilincli davranis, artik siteyi devralmak icin) ve hicbir onay istemiyordu. Ustelik
+`EnsureSiteNameIsClaimableAsync` korumasi `if (!User.IsInRole("Administrator"))` blogunun ICINDE --
+**panelin SAHIBI bu korumanin tamamen disindaydi.**
+
+Yapilan — on yuz: akisin TAMAMINI kapsayan `creatingSite` bayragi; fonksiyon basinda yeniden-girme
+kapisi (Enter ve ayni tick'te cift tiklama `disabled`i atlayabilir); form uzun adimi BEKLEMEDEN
+kapaniyor; `sites.name_exists` gelirse ONAY diyalogu ve onaylanirsa `replaceExisting` ile tekrar.
+Arka uc: `CreateSiteRequest.ReplaceExisting` (varsayilan false) ve olusturma ucunde KILIDIN ICINDE
+varlik kontrolu → onaysizsa 409 `sites.name_exists`.
+
+**Kendi yazdigim hata testten once yakalandi:** form `@submit.prevent="submitCreateSite"` ile
+bagliydi, yani Vue Event nesnesini ilk argüman olarak geciriyordu → `replaceExisting` truthy olup
+korumayi bastan atlatirdi. `submitCreateSite()` olarak duzeltildi.
+
+Mutasyon 3/1/1/1 kirmizi (ikincisi fazla kapatma nobetcisi). Tam takim **Infrastructure 5.608 +
+Core 2 = 5.610**; on yuz **29 dosya/145 test** (140'ti), typecheck+build temiz, i18n 5.331 = 5.331.
+Deponun kendi `MessageKeyCoverageTests` korumasi eksik `sites.name_exists` cevirisini yakaladi.
+
+**"NEDEN UZUN SURUYOR" — KOD DEGISMEDI.** Site kurulduktan sonra `SiteDefaultsService` SIRAYLA on
+bir adim kosuyor: files, logs, backup, dns (bolge yayini), hosting, security (WAF + klasor ACL),
+ssl, ftp, aspnet, runtime, proxy. Cogu PowerShell/IIS/DNS'e cikiyor. Sure NORMALDIR; kusur
+arayuzun "hicbir sey olmuyor" izlenimi vermesiydi. Adimlar hizlandirilmadi/paralellestirilmedi --
+IIS yazmalari ortak kilit altinda ve sirayi degistirmek kendi olcumunu gerektirir. Bunu
+"iyilestirildi" diye raporlamayin.
+
+Yedekleme modulu, kapali sifreleme tercihi, 03:00/ikinci saat kapali/5 gun/yerel+FTP ve kompakt
+gorunum KORUNDU. Kaynak/history/tag push edilmez; yalniz installer.
+Ayrinti: `docs/denetim-2026-09-29-071.md`.
+
+
 ## 2026-09-28 — SON DURUM: 0.8.70 — canlı SSL arızasının KÖK NEDENİ kapatıldı
 
 Kullanıcı "sistemi komple tara" dedi. Bulgu 0.8.69 devir notunda AÇIK bırakılan maddeden çıktı:
