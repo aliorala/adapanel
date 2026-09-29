@@ -1,5 +1,59 @@
 # AdaPanel Codex Memory
 
+## 2026-09-29 — SON DURUM: 0.8.73 — karşılama sayfası TEK KAYNAĞA indirildi
+
+Kullanıcı 0.8.72'yi kurdu ve **"videotools.com.tr hâlen eskisi gibi"** dedi. Doğruydu.
+
+**ÖLÇÜLDÜ, VARSAYILMADI:** canlı site `curl` ile çekildi. Sunulan sayfa 0.8.72'de değiştirilen
+sayfa DEĞİLDİ — Classic ASP üretimi bir `default.asp` geliyordu (`ASPSESSIONID` çerezi, sunucuda
+üretilen saat).
+
+**KÖK NEDEN — bu deponun tekrar eden hatasının ders niteliğinde örneği:** karşılama sayfasının
+İKİ ayrı üreteci vardı.
+
+| Üreteç | Yazdığı dosya |
+|---|---|
+| `WebAdministrationSiteService.EnsureStarterContent` | `index.html` |
+| `SiteProvisioningService.Write*Starter` (php/aspnet/classic-asp/mixed) | `default.asp`, `index.php`, `Default.aspx` |
+
+İkincisi ayrıca `RemoveDefaultHtml` ile **birincinin dosyasını siliyor.** Yani 0.8.72'de düzeltilen
+sayfa, çalışma zamanı profili olan hiçbir sitede durmuyordu.
+
+**BENİM HATAM:** 0.8.72'de hangi sayfanın GERÇEKTEN sunulduğunu ölçmeden düzelttim. Önce `curl`
+ile bakmalıydım. Bir sonraki tur: **kullanıcı "değişmedi" dediğinde önce canlıdan çek, sonra
+kodda ara.**
+
+**Düzeltme:** iki üreteç tek kaynağa indirildi. `StarterPage.Render` artık `StarterPageOptions`
+alıyor (dosya adı, rozet, açıklama, sunucuda üretilen satır, ek bağlantı); dört üreticinin hepsi
+oradan geçiyor. `StarterMarker` sabiti de tek kaynaktan (`StarterPage.Marker`) — ikinci kopya,
+sayfa değiştiğinde "bu dosya panelin mi kullanıcının mı" kontrolünü sessizce yanlışlardı.
+
+Eski profil sayfalarının kusurları da böylece kapandı: karaktersiz Türkçe ("yayinda", "ayarlandi"),
+yalnız koyu tema, sıradaki adımın yazılmaması.
+
+**Silinecek dosya adı artık doğru** (profile göre `default.asp` / `index.php` / `Default.aspx`).
+Her zaman "index.html" deseydi kullanıcı var olmayan bir dosyayı arar, gerçek yer tutucu yerinde
+kalır ve kendi sayfasını gölgelemeye devam ederdi.
+
+Sunucuda üretilen satır (`<%= Now() %>`) **kaçırılmaz** — sayfanın gerçekten çalıştığının kanıtı.
+Profil rozeti ve açıklaması ise kaçırılır. `BuildPhpWelcomePage` korundu; içindeki `phpinfo()`
+ifşa gerekçesi duruyor.
+
+**SAYFA HERKESE AÇIK; şunlar bilerek YOKTUR ve testle tutuluyor:** sunucudaki fiziksel yol, dış
+kaynak (yazı tipi/betik/resim), arama motoruna açıklık (`noindex` var). "Süslemek için" eklemeyin.
+
+22 test (6 yeni). Tam takım **Infrastructure 5.630 + Core 2 = 5.632**, atlanan/başarısız yok.
+Tarayıcıda doğrulandı: karma profil sayfası açık + koyu temada, doğru dosya adıyla.
+`BaslangicSayfasiTests.Onizleme_diske_yazilir` iki önizlemeyi de `%TEMP%` altına döker
+(`adapanel-baslangic-onizleme.html` ve `-karma.html`); bu sayfayı değiştiren kişi AÇIP BAKSIN —
+**yeşil test sayfanın doğru GÖRÜNDÜĞÜNÜ kanıtlamaz.**
+
+**Bu oturumda dört sürüm çıktı: 0.8.70 (SSL bağ sapması), 0.8.71 (site oluşturmada çift gönderim),
+0.8.72 ve 0.8.73 (karşılama sayfası). Son doğrulanmış canlı sürüm 0.8.72'dir** — kullanıcı onu
+kurdu; 0.8.73 henüz kurulmadı.
+
+
+
 ## 2026-09-29 — SON DURUM: 0.8.72 — yeni sitenin karşılama sayfası yenilendi
 
 Kullanıcı: *"default olarak gözüken site var ya çok kötü"*, ardından *"Plesk'te daha dolgun
