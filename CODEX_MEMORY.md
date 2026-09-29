@@ -37,6 +37,10 @@ IIS yazmalari ortak kilit altinda ve sirayi degistirmek kendi olcumunu gerektiri
 
 Yedekleme modulu, kapali sifreleme tercihi, 03:00/ikinci saat kapali/5 gun/yerel+FTP ve kompakt
 gorunum KORUNDU. Kaynak/history/tag push edilmez; yalniz installer.
+[0.8.71 yayini](https://github.com/aliorala/adapanel/releases/tag/0.8.71) yapildi; govde kaynakla
+birebir, varlik yeniden indirilip ayni SHA256 ile dogrulandi (90.834.605 bayt).
+**CANLIYA KURULMADI** — son dogrulanmis canli surum 0.8.69; 0.8.70 ve 0.8.71 yayimlandi ama
+kurulmadi. Canli surumu 0.8.71 sanmayin.
 Ayrinti: `docs/denetim-2026-09-29-071.md`.
 
 
