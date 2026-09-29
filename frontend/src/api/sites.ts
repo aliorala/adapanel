@@ -89,6 +89,13 @@ export type CreateSitePayload = {
   createFtpUser?: boolean;
   ftpUserName?: string;
   ftpPassword?: string;
+  /**
+   * Aynı adda bir IIS sitesi varsa onu kaldırıp yeniden oluşturmaya AÇIK onay.
+   *
+   * Verilmezse sunucu 409 `sites.name_exists` döner. Bu, kazayla ikinci kez gönderilen bir
+   * oluşturma isteğinin az önce kurulan siteyi SİLİP yeniden kurmasını engeller.
+   */
+  replaceExisting?: boolean;
 };
 
 export type SiteCreationResult = {

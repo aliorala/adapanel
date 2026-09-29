@@ -82,7 +82,7 @@
       </div>
     </section>
 
-    <form v-if="showCreateForm && canCreateSite" class="create-card" @submit.prevent="submitCreateSite">
+    <form v-if="showCreateForm && canCreateSite" class="create-card" @submit.prevent="submitCreateSite()">
       <div class="create-card-head">
         <div>
           <h3>{{ t("panel.sites.createTitle") }}</h3>
@@ -176,8 +176,8 @@
 
       <div class="create-actions">
         <p class="meta">{{ t("panel.sites.automatic.submitHint") }}</p>
-        <button type="submit" v-bind="writeGate(sitesStore.creating)">
-          {{ sitesStore.creating ? t("panel.sites.creating") : t("panel.sites.createAndPublish") }}
+        <button type="submit" v-bind="writeGate(creatingSite)">
+          {{ creatingSite ? t("panel.sites.creating") : t("panel.sites.createAndPublish") }}
         </button>
       </div>
     </form>
@@ -434,6 +434,19 @@ const defaultsSummary = computed(() => {
 });
 const generatedCredentials = ref<Array<{ service: string; userName: string; password: string }>>([]);
 const showCreateForm = ref(false);
+
+/**
+ * OLUSTURMA AKISININ TAMAMI sururken true.
+ *
+ * NEDEN sitesStore.creating YETMIYOR: o bayrak akisin YALNIZ ILK cagrisini (POST /sites)
+ * kapsiyordu. Ikinci ve UZUN suren adim (prepareSiteDefaults -> POST /sites/{ad}/defaults;
+ * dns, guvenlik, ssl, ftp, aspnet, runtime, proxy) o bayrak dustukten SONRA calisiyordu.
+ * Sonuc canlida olculdu: site kuruluyor, dugme yeniden etkinlesip etiketi "Olustur ve
+ * yayinla"ya donuyor, form HALA acik kaliyor (asagida ancak akisin sonunda kapaniyordu) --
+ * kullanici is olmamis saniyor ve tekrar basiyor. O ikinci istek, sunucu tarafindaki
+ * kaldir-ve-yeniden-olustur davranisi yuzunden AZ ONCE KURULAN SITEYI SILIYORDU.
+ */
+const creatingSite = ref(false);
 const showAdvanced = ref(false);
 const physicalPathEdited = ref(false);
 const defaultSiteRoot = ref("C:\\inetpub\\wwwroot");
@@ -559,12 +572,27 @@ async function handleAddSubdomain(label: string) {
   }
 }
 
-async function submitCreateSite() {
+async function submitCreateSite(replaceExisting = false) {
+  // CIFT GONDERIM KAPISI. Vue dugmeyi devre disi biraksa da bu fonksiyon baska yollardan
+  // (Enter tusu, form submit, hizli cift tiklamada ayni tick) yeniden girilebilir.
+  if (creatingSite.value) {
+    return;
+  }
+
+  creatingSite.value = true;
   try {
     const requestedPort = createForm.port;
-    const result = await sitesStore.createSite({ ...createForm });
+    const result = await sitesStore.createSite({ ...createForm, replaceExisting });
     const site = result.site;
     generatedCredentials.value = result.generatedCredentials ?? [];
+
+    // FORM BURADA KAPANIR, akisin sonunda DEGIL.
+    //
+    // Site bu noktada GERCEKTEN kurulmustur; asagidaki varsayilanlar adimi takip isidir ve
+    // uzun surer. Formu acik tutmak, kullaniciya "olmadi" izlenimi veren tam da o pencereyi
+    // uretiyordu.
+    showCreateForm.value = false;
+
     defaultsReport.value = await sitesStore.prepareSiteDefaults(site.name).catch(() => null);
     const createdPort = site.bindings[0]?.port ?? requestedPort;
     createForm.name = "";
@@ -584,7 +612,6 @@ async function submitCreateSite() {
     createForm.ftpPassword = "";
     createForm.physicalPath = `${defaultSiteRoot.value}\\new-site`;
     physicalPathEdited.value = false;
-    showCreateForm.value = false;
 
     const base = createdPort !== requestedPort
       ? t("panel.sites.createdWithPort", { port: createdPort })
@@ -598,7 +625,34 @@ async function submitCreateSite() {
       showNotice(`${base}${extras}`, false);
     }
   } catch (error) {
+    // AYNI ADDA SITE VAR: sunucu artik sessizce SILIP yeniden kurmuyor, soruyor.
+    //
+    // Iki mesru durum ayni hataya dusuyor ve AYRIMI KULLANICI yapmali:
+    //   * kazayla ikinci gonderim -> "Vazgec" der, sitesi oldugu gibi kalir;
+    //   * alan adini BILEREK yeniden ekleme (onceki kurulumdan kalan artik site)
+    //     -> onaylar, istek replaceExisting ile tekrar gider.
+    // Panel bu ikisini kullanici adina TAHMIN EDEMEZ; yanlis tahminin bedeli calisan bir
+    // sitenin silinmesidir.
+    if (!replaceExisting && extractApiMessage(error) === "sites.name_exists") {
+      creatingSite.value = false;
+      await confirm({
+        title: t("panel.sites.replaceExisting.title", { name: createForm.name }),
+        message: t("panel.sites.replaceExisting.message"),
+        impact: [
+          t("panel.sites.replaceExisting.impactRemove", { name: createForm.name }),
+          t("panel.sites.replaceExisting.impactFiles")
+        ],
+        requireText: createForm.name,
+        action: async () => {
+          await submitCreateSite(true);
+        }
+      });
+      return;
+    }
+
     showNotice(resolveApiMessage(error), true);
+  } finally {
+    creatingSite.value = false;
   }
 }
 

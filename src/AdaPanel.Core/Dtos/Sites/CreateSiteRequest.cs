@@ -33,6 +33,30 @@ public sealed class CreateSiteRequest
 
     public bool AutoStart { get; init; } = true;
 
+    /// <summary>
+    /// Aynı adda bir IIS sitesi ZATEN VARSA onu kaldırıp yeniden oluşturmaya AÇIK onay.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>CANLIDA ÖLÇÜLEN TEHLİKE.</b> <c>WebAdministrationSiteService.CreateSiteAsync</c> aynı adlı
+    /// bir site bulunca onu KALDIRIP yeniden oluşturur. Bu davranış bilinçliydi (önceki bir AdaPanel
+    /// kurulumundan kalan artık siteyi devralmak için) ama hiçbir onay istemiyordu ve yönetici
+    /// <c>EnsureSiteNameIsClaimableAsync</c> denetiminin TAMAMEN dışındaydı.
+    /// </para>
+    /// <para>
+    /// Sonuç: "Oluştur ve yayınla" düğmesine yanlışlıkla ikinci kez basmak, az önce kurulan siteyi
+    /// SİLİP yeniden kuruyordu — ve yan kaynaklar (veritabanı, FTP kullanıcısı, posta alanı) yeniden
+    /// sağlanıyordu. Kullanıcı bunu canlıda bildirdi: iş sürerken düğme yeniden etkinleşiyor, site
+    /// oluşmamış gibi görünüyordu.
+    /// </para>
+    /// <para>
+    /// Varsayılan <c>false</c>: kaza ile gelen ikinci istek artık 409 <c>sites.name_exists</c> alır.
+    /// Alan adını BİLEREK yeniden ekleyen yönetici, paneldeki onay kutusundan sonra bu bayrakla
+    /// gönderir — yani yıkıcı adım sessiz olmaktan çıkıp AÇIK bir karara dönüşür.
+    /// </para>
+    /// </remarks>
+    public bool ReplaceExisting { get; init; }
+
     [Required]
     [RegularExpression("^(auto|static|php|aspnet|classic-asp|mixed|node|python)$")]
     public string RuntimeProfile { get; init; } = "auto";

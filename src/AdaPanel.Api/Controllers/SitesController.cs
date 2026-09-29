@@ -647,6 +647,35 @@ if (!empty($_SERVER['HTTP_HOST']) && preg_match('/\.nip\.io$/i', (string) $_SERV
                 // M1 (profesyonel paneller gibi): Admin sınırsız; Bayi yalnız planının MaxSites kotası kadar site açabilir.
                 await EnsureSiteQuotaAsync(cancellationToken);
 
+                // AYNI ADDA SITE VARSA ACIK ONAY SART -- canlida olculen tehlike.
+                //
+                // WebAdministrationSiteService.CreateSiteAsync ayni adli bir site bulunca onu
+                // KALDIRIP yeniden olusturur. Davranis bilincliydi (onceki kurulumdan kalan artik
+                // siteyi devralmak) ama hicbir onay istemiyordu ve YONETICI, yukaridaki
+                // EnsureSiteNameIsClaimableAsync denetiminin tamamen disindaydi -- o kontrol
+                // `if (!User.IsInRole("Administrator"))` blogunun icinde.
+                //
+                // Sonuc: "Olustur ve yayinla" dugmesine kazayla ikinci kez basmak, az once kurulan
+                // siteyi SILIP yeniden kuruyor ve yan kaynaklari (veritabani, FTP kullanicisi, posta
+                // alani) yeniden sagliyordu. Kullanici bunu canlida bildirdi.
+                //
+                // KONTROL KILIDIN ICINDE: disarida olsaydi iki es zamanli istek arasinda kontrol ile
+                // olusturma arasi bir pencere kalirdi (TOCTOU).
+                //
+                // FAIL-OPEN degil, FAIL-SAFE degil -- OLCULEBILIR: site listesi okunamazsa istisna
+                // yukari cikar ve olusturma hic baslamaz. "Okuyamadim" ile "ad bos" ayni sayilmaz.
+                if (!request.ReplaceExisting)
+                {
+                    var mevcutlar = await iisSiteService.GetSitesAsync(cancellationToken);
+                    var istenenAd = (request.Name ?? string.Empty).Trim();
+                    if (mevcutlar.Any(mevcut => string.Equals(mevcut.Name, istenenAd, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        // 409: istek gecerli, DURUM cakisiyor. Ayrintiya ad yazilir ki panel
+                        // kullaniciya HANGI sitenin degistirilecegini sorabilsin.
+                        throw new AppException("sites.name_exists", 409, 409, istenenAd);
+                    }
+                }
+
                 var olusan = await siteProvisioningService.CreateAndProvisionAsync(
                     request,
                     User.GetRequiredUserId(),
