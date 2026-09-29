@@ -1,5 +1,69 @@
 # AdaPanel Codex Memory
 
+## 2026-09-29 — SON DURUM: 0.8.74 — yer tutucu tazeleme + oluşturmada canlı liste
+
+Kullanıcı canlıda **iki ayrı şey** bildirdi, ikisi de gerçekti.
+
+### 1) "Güncelledim ama eski sayfa duruyor"
+
+Karşılama sayfası yalnız site OLUŞTURULURKEN diske yazılıyordu; panel güncellemesi diskteki
+dosyaya dokunmuyordu. Tek çıkış yolu siteyi SİLİP yeniden kurmaktı — kullanıcı gerçekten öyle
+yapmak zorunda kaldı. `StarterPageRefresh` var olan siteyi tazeler, `SiteDefaultsService`'te
+`"starter"` özelliği olarak koşar.
+
+**SINIRLAR — bu sınıfın tamamı bunun üzerine kurulu, gevşetmeyin:**
+
+- Yalnız **ZATEN VAR OLAN** ve panelin işaretini taşıyan dosya yazılır.
+- **YENİ DOSYA OLUŞTURULMAZ.** "Tazele" ile "eksikse yaz" aynı şey değil: içeriği olan ama açılış
+  belgesi olmayan bir sitede (yalnız API yayınlayan site) yeni yer tutucu yazmak, çalışan siteyi
+  yer tutucu gösterirdi.
+- Kullanıcının dosyasına **asla** dokunulmaz; kullanıcı panelin sayfasını alıp kendi sayfası hâline
+  getirmiş olabilir.
+- Profil **diskten** okunur (`php-info.php` varsa karma, yoksa klasik ASP). Profili ayrıca
+  servislerden sormak, ayrışabilecek üçüncü bir kaynak açardı.
+- Okuma hatası "bizim değil" sayılır → dokunulmaz.
+- `<%@ Page %>` yönergesi İLK satırda kalır; yoksa ASP.NET sayfayı derleyemez.
+
+Mutasyon: işaret kontrolü kaldırılınca **8** kırmızı, "tazele" yerine "eksikse yaz" yapılınca
+**7** kırmızı.
+
+### 2) "Siteyi eklemiş ama liste yenilenmedi; başka sekmede açınca gördüm"
+
+Site IIS'te **erkenden** oluşuyor ama `POST /sites` yanıtı yan kaynaklar (DNS alt alan kaydı,
+veritabanı, posta alanı, FTP hesabı) bitene kadar dönmüyor. Yeni sekme `GET /sites` ile siteyi
+görüyor, kullanıcının sekmesi hâlâ bekliyordu.
+
+Oluşturma sürerken liste 5 saniyede bir yoklanıyor; site görününce yoklama bırakılıyor, istek
+bitince durduruluyor. **Yoklama yalnız GÖRÜNÜRLÜK içindir:** düğme yine iş bitene kadar kilitli
+(çift gönderim koruması bozulmadı) ve sonuç mesajı yine asıl yanıttan gelir. Yoklama hatası
+sessizdir. Ayrıca sürerken süre uyarısı gösteriliyor.
+
+`window.setTimeout` DEĞİL çıplak `setTimeout`: bileşen tarayıcı dışında da kuruluyor (testler
+DOM'suz bir oluşturucu kullanıyor) ve `window`'a dokunmak fonksiyonu İLK satırda patlatıyordu.
+
+### DOĞMUŞ ÖLÜ TEST YAKALANDI — kaydedilmeye değer
+
+"Yoklama oluyor mu" testi ilk yazımda, gözcü **hiç başlamasa bile** geçiyordu: `onMounted`'in
+askıdaki sürdürmesi sahte zamanlayıcı ilerletilirken düşüyor ve sayacı artırıyordu. Mutasyon
+(“gözcü hiç başlamasın”) **7/7 yeşil** kalmıştı. Taban ölçümü askıdaki çağrılar boşaldıktan SONRA
+alınacak şekilde düzeltildi; mutasyon tekrarlandı ve artık kırmızı.
+
+**Ders:** vitest'te `advanceTimersByTimeAsync` mikro görevleri de işletir. Zamanlayıcı testlerinde
+tabanı ilerletmeden önce değil, **bir kez ilerlettikten sonra** alın.
+
+### Doğrulama
+
+Tam takım **Infrastructure 5.642 + Core 2 = 5.644**. Ön yüz **29 dosya / 147 test**,
+typecheck + build temiz. i18n TR/EN **5.332 = 5.332**. Mahremiyet kapısı 0 bulgu.
+
+### Bu oturumda çıkan sürümler
+
+0.8.70 (SSL bağ sapması), 0.8.71 (site oluşturmada çift gönderim), 0.8.72 ve 0.8.73 (karşılama
+sayfası; .72 yanlış sayfayı düzeltmişti — hangi sayfanın SUNULDUĞU ölçülmeden değiştirilmişti),
+0.8.74 (bu). **Kullanıcı 0.8.73'ü kurdu ve yeni sayfayı gördü.** 0.8.74 henüz kurulmadı.
+
+
+
 ## 2026-09-29 — SON DURUM: 0.8.73 — karşılama sayfası TEK KAYNAĞA indirildi
 
 Kullanıcı 0.8.72'yi kurdu ve **"videotools.com.tr hâlen eskisi gibi"** dedi. Doğruydu.
