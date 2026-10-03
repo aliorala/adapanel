@@ -266,5 +266,7 @@
   "nginx.reloaded": "Nginx yeniden yüklendi.",
   "nginx.config_valid": "Nginx yapılandırma testi başarılı.",
   "users.create.success": "Kullanıcı oluşturuldu.",
-  "users.update.success": "Kullanıcı güncellendi."
+  "users.update.success": "Kullanıcı güncellendi.",
+  "update.package_changed": "Hazır güncelleme paketi değişti. Paket bilgilerini yenileyip kurulumu tekrar onaylayın.",
+  "update.install_already_scheduled": "Bu paketin kurulumu zaten planlandı. Panelin yeniden başlamasını bekleyin."
 }

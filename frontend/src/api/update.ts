@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+import { UserFacingError } from "../utils/apiError";
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -32,6 +33,9 @@ export type UpdateStatus = {
   downloadUrl: string;
   packageSha256: string;
   packagePath: string;
+  /** Prepared package identity is independent of the current release manifest. */
+  preparedVersion?: string;
+  preparedPackageSha256?: string;
   isPackageReady: boolean;
   isInstallScheduled: boolean;
   installScheduledAtUtc: string | null;
@@ -39,6 +43,16 @@ export type UpdateStatus = {
   githubRepo: string;
   checkedAtUtc: string;
 };
+
+function measuredStatus(envelope: ApiEnvelope<UpdateStatus>): UpdateStatus {
+  const value = envelope?.data;
+  if (envelope?.success !== true || !value || typeof value.currentVersion !== "string" || !value.currentVersion.trim() ||
+    [value.latestVersion, value.downloadUrl, value.packageSha256, value.packagePath].some(item => typeof item !== "string") ||
+    [value.isUpdateAvailable, value.isCheckFailed, value.isPackageReady, value.isInstallScheduled].some(item => typeof item !== "boolean") ||
+    [value.preparedVersion, value.preparedPackageSha256].some(item => item !== undefined && typeof item !== "string"))
+    throw new UserFacingError("panel.update.resultUnconfirmed");
+  return value;
+}
 
 /**
  * force=true yalnız kullanıcı AÇIKÇA "kontrol et" dediğinde gönderilir: sunucu o zaman önbelleği
@@ -49,7 +63,7 @@ export async function checkForUpdate(force = false) {
   const response = await apiClient.get<ApiEnvelope<UpdateStatus>>(
     force ? "/update/check?force=true" : "/update/check",
   );
-  return response.data.data;
+  return measuredStatus(response.data);
 }
 
 export async function applyUpdate(downloadUrl: string, packageSha256 = "") {
@@ -57,16 +71,16 @@ export async function applyUpdate(downloadUrl: string, packageSha256 = "") {
     downloadUrl,
     packageSha256
   });
-  return response.data.data;
+  return measuredStatus(response.data);
 }
 
-export async function installPreparedUpdate() {
-  const response = await apiClient.post<ApiEnvelope<UpdateStatus>>("/update/install");
-  return response.data.data;
+export async function installPreparedUpdate(expectedVersion: string, expectedPackageSha256: string) {
+  const response = await apiClient.post<ApiEnvelope<UpdateStatus>>("/update/install", { expectedVersion, expectedPackageSha256 });
+  return measuredStatus(response.data);
 }
 
 // Güncellemelerin çekileceği GitHub deposunu (owner/repo) ayarla.
 export async function setUpdateGithubRepo(repo: string) {
   const response = await apiClient.post<ApiEnvelope<UpdateStatus>>("/update/github", { repo });
-  return response.data.data;
+  return measuredStatus(response.data);
 }

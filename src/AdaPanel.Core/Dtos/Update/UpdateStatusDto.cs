@@ -36,6 +36,12 @@ public sealed class UpdateStatusDto
 
     public string PackagePath { get; set; } = string.Empty;
 
+    /// <summary>Version of the locally staged package, independent of the latest release.</summary>
+    public string PreparedVersion { get; set; } = string.Empty;
+
+    /// <summary>Checksum bound to PreparedVersion and used when confirming installation.</summary>
+    public string PreparedPackageSha256 { get; set; } = string.Empty;
+
     public bool IsPackageReady { get; set; }
 
     public bool IsInstallScheduled { get; set; }

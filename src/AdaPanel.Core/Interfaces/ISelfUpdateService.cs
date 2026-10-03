@@ -24,4 +24,7 @@ public interface ISelfUpdateService
     Task<UpdateStatusDto> ApplyUpdateAsync(ApplyUpdateRequest request, CancellationToken cancellationToken = default);
 
     Task<UpdateStatusDto> InstallPreparedUpdateAsync(CancellationToken cancellationToken = default);
+
+    Task<UpdateStatusDto> InstallPreparedUpdateAsync(InstallUpdateRequest request, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This updater does not support confirmed package identities.");
 }

@@ -266,5 +266,7 @@
   "nginx.reloaded": "Nginx was reloaded.",
   "nginx.config_valid": "The Nginx configuration test passed.",
   "users.create.success": "The user was created.",
-  "users.update.success": "The user was updated."
+  "users.update.success": "The user was updated.",
+  "update.package_changed": "The prepared update package changed. Refresh the package details and confirm installation again.",
+  "update.install_already_scheduled": "Installation of this package is already scheduled. Wait for the panel to restart."
 }

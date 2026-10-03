@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Options;
@@ -142,12 +143,38 @@ public sealed class PendingUpdateCleanupTests
         var veriKoku = VeriKokuOlustur();
         try
         {
-            await BekleyenYazAsync(veriKoku, "99.0.0", planlandi: true);
+            await BekleyenYazAsync(veriKoku, "99.0.0", planlanmaAni: DateTime.UtcNow);
 
             var durum = await Servis(veriKoku).CheckForUpdateAsync();
 
             Assert.True(File.Exists(Path.Combine(veriKoku, "updates", "pending-update.json")));
             Assert.True(durum.IsInstallScheduled);
+            Assert.True(durum.IsPackageReady);
+            Assert.Null(durum.LastAttempt);
+        }
+        finally
+        {
+            Directory.Delete(veriKoku, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ISARETSIZ_eski_kurulum_sonucsuz_kapanir_ama_paket_ve_kayit_korunur()
+    {
+        var veriKoku = VeriKokuOlustur();
+        try
+        {
+            var paket = await BekleyenYazAsync(veriKoku, "99.0.0", planlandi: true);
+
+            var durum = await Servis(veriKoku).CheckForUpdateAsync();
+
+            Assert.True(File.Exists(Path.Combine(veriKoku, "updates", "pending-update.json")));
+            Assert.True(File.Exists(paket));
+            Assert.True(durum.IsPackageReady);
+            Assert.False(durum.IsInstallScheduled);
+            Assert.NotNull(durum.LastAttempt);
+            Assert.True(durum.LastAttempt.IsFailed);
+            Assert.Equal("update.attempt_no_verdict", durum.LastAttempt.ErrorKey);
         }
         finally
         {
@@ -220,7 +247,8 @@ public sealed class PendingUpdateCleanupTests
         var guncellemeler = Path.Combine(veriKoku, "updates");
         Directory.CreateDirectory(guncellemeler);
         var paket = Path.Combine(guncellemeler, "AdaPanelSetup.exe");
-        await File.WriteAllBytesAsync(paket, [(byte)'M', (byte)'Z', 1, 2, 3, 4]);
+        byte[] paketIcerigi = [(byte)'M', (byte)'Z', 1, 2, 3, 4];
+        await File.WriteAllBytesAsync(paket, paketIcerigi);
 
         await File.WriteAllTextAsync(
             Path.Combine(guncellemeler, "pending-update.json"),
@@ -229,7 +257,7 @@ public sealed class PendingUpdateCleanupTests
                 version = surum,
                 downloadUrl = "https://example.test/AdaPanelSetup.exe",
                 packagePath = paket,
-                packageSha256 = new string('A', 64),
+                packageSha256 = Convert.ToHexString(SHA256.HashData(paketIcerigi)),
                 stagedAtUtc = (planlanmaAni ?? DateTime.UtcNow).AddMinutes(-5),
                 installScheduledAtUtc = planlanmaAni
             }));

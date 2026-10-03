@@ -167,6 +167,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
             {
                 fetchNote = appException.MessageKey;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch
             {
                 fetchNote = "update.github_fetch_failed";
@@ -175,6 +176,7 @@ public sealed class SelfUpdateService : ISelfUpdateService
 
         var manifest = await fileStore.ReadAsync(ManifestPath, new UpdateManifest(), cancellationToken);
         var latestVersion = string.IsNullOrWhiteSpace(manifest.LatestVersion) ? currentVersion : manifest.LatestVersion;
+        using var pendingLease = await SelfUpdateLifecycle.EnterAsync(fileStore.ResolvePath(PendingUpdatePath), cancellationToken);
         var pendingUpdate = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
 
         // HUKUM BURADA VERILIR -- bekleyen kayit silinmeden ONCE, cunku hukmun tek kaniti odur.
@@ -214,8 +216,10 @@ public sealed class SelfUpdateService : ISelfUpdateService
             DownloadUrl = manifest.DownloadUrl,
             PackageSha256 = manifest.PackageSha256,
             PackagePath = pendingUpdate.PackagePath,
-            IsPackageReady = !string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) && File.Exists(pendingUpdate.PackagePath),
-            IsInstallScheduled = pendingUpdate.InstallScheduledAtUtc.HasValue,
+            PreparedVersion = pendingUpdate.Version,
+            PreparedPackageSha256 = pendingUpdate.PackageSha256,
+            IsPackageReady = await IsPreparedPackageReadyAsync(pendingUpdate, cancellationToken),
+            IsInstallScheduled = IsInstallationActive(pendingUpdate, lastAttempt),
             InstallScheduledAtUtc = pendingUpdate.InstallScheduledAtUtc,
             Notes = !string.IsNullOrEmpty(fetchNote) ? fetchNote : (string.IsNullOrWhiteSpace(manifest.Notes) ? defaultNote : manifest.Notes),
             GithubRepo = github.Repo,
@@ -674,6 +678,8 @@ public sealed class SelfUpdateService : ISelfUpdateService
     {
         // İndirme başlıyor: indirme linki ve SHA256 GÜNCEL olmalı, bayat manifestten indirme yapılmaz.
         var status = await CheckForUpdateAsync(forceRefresh: true, cancellationToken);
+        if (status.IsInstallScheduled)
+            throw new AppException("update.install_already_scheduled", 409, 409);
 
         // ISTEK GOVDESINDEKI adres ve ozet KULLANILMAZ; kaynak yalnizca taze cekilmis manifesttir.
         //
@@ -695,7 +701,11 @@ public sealed class SelfUpdateService : ISelfUpdateService
                 DownloadUrl = status.DownloadUrl,
                 PackageSha256 = status.PackageSha256,
                 PackagePath = status.PackagePath,
+                PreparedVersion = status.PreparedVersion,
+                PreparedPackageSha256 = status.PreparedPackageSha256,
                 IsPackageReady = status.IsPackageReady,
+                IsCheckFailed = status.IsCheckFailed,
+                GithubRepo = status.GithubRepo,
                 Notes = "update.package_url_missing",
                 IsUpdateAvailable = status.IsUpdateAvailable,
                 CheckedAtUtc = DateTime.UtcNow
@@ -714,7 +724,12 @@ public sealed class SelfUpdateService : ISelfUpdateService
 
         var expectedHash = NormalizeSha256(status.PackageSha256);
         var updatesDirectory = fileStore.EnsureDirectory("updates");
-        var destination = Path.Combine(updatesDirectory, ResolvePackageFileName(packageUri));
+        // The previous prepared package may still be approved or in use by the installer.
+        // Download into an independent candidate; only publish its metadata after verification.
+        var destination = Path.Combine(updatesDirectory, $"AdaPanelUpdate-{Guid.NewGuid():N}.exe");
+        var published = false;
+        try
+        {
         var client = httpClientFactory.CreateClient();
         client.Timeout = Timeout.InfiniteTimeSpan;
         using var response = await client.GetAsync(packageUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -777,7 +792,16 @@ public sealed class SelfUpdateService : ISelfUpdateService
             StagedAtUtc = DateTime.UtcNow,
             InstallScheduledAtUtc = null
         };
-        await fileStore.WriteAsync(PendingUpdatePath, pendingUpdate, cancellationToken);
+        using (await SelfUpdateLifecycle.EnterAsync(fileStore.ResolvePath(PendingUpdatePath), cancellationToken))
+        {
+            var previous = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
+            var attempt = await ReconcileLastAttemptAsync(previous, VersionInfo.Current, cancellationToken);
+            if (IsInstallationActive(previous, attempt))
+                throw new AppException("update.install_already_scheduled", 409, 409);
+            await fileStore.WriteAsync(PendingUpdatePath, pendingUpdate, cancellationToken);
+            published = true;
+            await TryDeleteSupersededPackageAsync(previous, destination);
+        }
 
         return new UpdateStatusDto
         {
@@ -786,17 +810,47 @@ public sealed class SelfUpdateService : ISelfUpdateService
             DownloadUrl = packageUri.ToString(),
             PackageSha256 = actualHash,
             PackagePath = destination,
+            PreparedVersion = pendingUpdate.Version,
+            PreparedPackageSha256 = actualHash,
             IsPackageReady = true,
             IsInstallScheduled = false,
+            IsCheckFailed = status.IsCheckFailed,
+            GithubRepo = status.GithubRepo,
             Notes = "update.package_staged",
             IsUpdateAvailable = status.IsUpdateAvailable,
             CheckedAtUtc = DateTime.UtcNow
         };
+        }
+        finally
+        {
+            if (!published) TemizlemeyiDene(() => File.Delete(destination));
+        }
     }
 
-    public async Task<UpdateStatusDto> InstallPreparedUpdateAsync(CancellationToken cancellationToken = default)
+    public Task<UpdateStatusDto> InstallPreparedUpdateAsync(CancellationToken cancellationToken = default) =>
+        InstallPreparedUpdateCoreAsync(null, cancellationToken);
+
+    public Task<UpdateStatusDto> InstallPreparedUpdateAsync(InstallUpdateRequest request, CancellationToken cancellationToken = default) =>
+        InstallPreparedUpdateCoreAsync(new InstallUpdateRequest
+        {
+            ExpectedVersion = request?.ExpectedVersion ?? string.Empty,
+            ExpectedPackageSha256 = request?.ExpectedPackageSha256 ?? string.Empty
+        }, cancellationToken);
+
+    private async Task<UpdateStatusDto> InstallPreparedUpdateCoreAsync(InstallUpdateRequest? request, CancellationToken cancellationToken)
     {
+        using (await SelfUpdateLifecycle.EnterAsync(fileStore.ResolvePath(PendingUpdatePath), cancellationToken))
+        {
         var pendingUpdate = await fileStore.ReadAsync(PendingUpdatePath, new PendingUpdate(), cancellationToken);
+        if (request is not null &&
+            (string.IsNullOrWhiteSpace(request.ExpectedVersion) ||
+             request.ExpectedPackageSha256.Length != 64 || request.ExpectedPackageSha256.Any(character => !Uri.IsHexDigit(character)) ||
+             !string.Equals(request.ExpectedVersion, pendingUpdate.Version, StringComparison.Ordinal) ||
+             !string.Equals(request.ExpectedPackageSha256, pendingUpdate.PackageSha256, StringComparison.OrdinalIgnoreCase)))
+            throw new AppException("update.package_changed", 409, 409);
+        var attempt = await ReconcileLastAttemptAsync(pendingUpdate, VersionInfo.Current, cancellationToken);
+        if (IsInstallationActive(pendingUpdate, attempt))
+            throw new AppException("update.install_already_scheduled", 409, 409);
         if (string.IsNullOrWhiteSpace(pendingUpdate.PackagePath) ||
             string.IsNullOrWhiteSpace(pendingUpdate.PackageSha256) ||
             !File.Exists(pendingUpdate.PackagePath))
@@ -847,11 +901,69 @@ public sealed class SelfUpdateService : ISelfUpdateService
 
         await installerLauncher.ScheduleAsync(packagePath, actualHash, cancellationToken);
         pendingUpdate.InstallScheduledAtUtc = DateTime.UtcNow;
-        await fileStore.WriteAsync(PendingUpdatePath, pendingUpdate, cancellationToken);
+        // Scheduling has committed. A disconnected caller must not erase that fact.
+        using var publicationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await fileStore.WriteAsync(PendingUpdatePath, pendingUpdate, publicationDeadline.Token);
+        }
 
         var status = await CheckForUpdateAsync(forceRefresh: false, cancellationToken);
         status.Notes = "update.install_scheduled";
         return status;
+    }
+
+    private static bool IsInstallationActive(PendingUpdate pending, UpdateAttemptDto? attempt) =>
+        pending.InstallScheduledAtUtc is { } scheduled &&
+        !(attempt is { IsFinished: true, UpdatedAtUtc: { } finished } && finished >= scheduled &&
+          (!attempt.IsDecidedByPanel || attempt.IsFailed || scheduled < SurecBaslangici()));
+
+    private async Task TryDeleteSupersededPackageAsync(PendingUpdate previous, string publishedPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(previous.PackagePath)) return;
+            var oldPath = Path.GetFullPath(previous.PackagePath);
+            var updatesPath = Path.GetFullPath(fileStore.ResolvePath("updates"));
+            if (!string.Equals(Path.GetDirectoryName(oldPath), updatesPath, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(oldPath, publishedPath, StringComparison.OrdinalIgnoreCase)) return;
+
+            var name = Path.GetFileName(oldPath);
+            var stem = Path.GetFileNameWithoutExtension(name);
+            var managedCandidate = stem.StartsWith("AdaPanelUpdate-", StringComparison.OrdinalIgnoreCase) &&
+                                   Guid.TryParseExact(stem["AdaPanelUpdate-".Length..], "N", out _);
+            if (!string.Equals(name, "AdaPanelSetup.exe", StringComparison.OrdinalIgnoreCase) &&
+                !(managedCandidate && string.Equals(Path.GetExtension(name), ".exe", StringComparison.OrdinalIgnoreCase))) return;
+
+            // Only the previous metadata record is eligible. No directory sweep: another
+            // request may be downloading a candidate while this publication owns the lease.
+            for (string? current = oldPath; current is not null; current = Path.GetDirectoryName(current))
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            if (!await IsPreparedPackageReadyAsync(previous, deadline.Token)) return;
+            File.Delete(oldPath);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or OperationCanceledException)
+        {
+            // The verified replacement is already published. Cleanup failure must not undo it.
+        }
+    }
+
+    private async Task<bool> IsPreparedPackageReadyAsync(PendingUpdate pending, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(pending.Version) || string.IsNullOrWhiteSpace(pending.PackagePath) ||
+            pending.PackageSha256 is not { Length: 64 } || pending.PackageSha256.Any(character => !Uri.IsHexDigit(character))) return false;
+        try
+        {
+            var root = Path.GetFullPath(fileStore.ResolvePath("updates")) + Path.DirectorySeparatorChar;
+            var path = Path.GetFullPath(pending.PackagePath);
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+            await EnsureWindowsExecutableAsync(path, token);
+            return string.Equals(await CalculateSha256Async(path, token), pending.PackageSha256, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or AppException)
+        {
+            return false;
+        }
     }
 
     private static async Task<string> CalculateSha256Async(string filePath, CancellationToken cancellationToken)

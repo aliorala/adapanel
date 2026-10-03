@@ -5,112 +5,58 @@
         <h2>{{ t("panel.update.title") }}</h2>
         <p class="meta">{{ t("panel.update.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="Boolean(busy) || refreshing" @click="refresh(true)">
-        {{ t("panel.update.refresh") }}
+      <button class="secondary compact" :disabled="Boolean(busy) || refreshing || monitoring" @click="refresh(true)">
+        {{ refreshing ? t("panel.update.checking") : t("panel.update.refresh") }}
       </button>
     </div>
 
     <p v-if="notice" :class="['notice', 'page-notice', { error: noticeError }]" :role="noticeError ? 'alert' : 'status'">{{ notice }}</p>
 
-    <!-- Sürüm durumu gelmeden ekran boştu; yükleniyor ile "veri yok" ayırt edilemiyordu. -->
-    <p v-if="!status" class="empty-state" role="status" aria-live="polite">{{ t("panel.common.loading") }}</p>
+    <UpdateStatusCard :status="status" :confirmed="statusConfirmed" :checking="refreshing"
+      :phase="busy === 'download' ? 'downloading' : installPhase" />
 
-    <template v-else>
-      <!-- Panelin ortak ozet seridi (`.summary-strip` / `.summary-item`, base.css). Bu ekran ayni
-           deseni KENDI adlariyla yeniden yaziyordu (`.update-summary article`) ve olculebilir
-           farklari vardi: 14px dolgu (ortak 12), `--input-bg` zemin (ortak `--surface-0`), etiket
-           govde boyunda (ortak `--fs-2xs`). Ayni bilgi kutusu iki ekranda iki turlu ciziliyordu. -->
-      <div class="summary-strip update-summary">
-        <article class="summary-item">
-          <span class="tile-label">{{ t("panel.update.current") }}</span>
-          <strong>{{ status.currentVersion }}</strong>
-        </article>
-        <article class="summary-item">
-          <span class="tile-label">{{ t("panel.update.latest") }}</span>
-          <strong>{{ status.latestVersion }}</strong>
-        </article>
-        <article class="summary-item">
-          <span class="tile-label">{{ t("panel.update.packageState") }}</span>
-          <!-- Paket durumu bir DURUMDUR, bir deger degil: iki surum numarasinin yaninda duz
-               kalin metin olarak durunca "surum gibi" okunuyordu. Rozet hem rutbeyi hem de
-               tonu (hazir/bekliyor) tasir; renk tek kanal degil, metin de ayni seyi soyler. -->
-          <span :class="['status-pill', status.isPackageReady && !status.isInstallScheduled ? 'ok' : 'warn']">
-            {{
-              status.isInstallScheduled
-                ? t("panel.update.scheduled")
-                : status.isPackageReady
-                  ? t("panel.update.ready")
-                  : t("panel.update.notReady")
-            }}
-          </span>
-        </article>
-      </div>
-
-      <!-- Kontrol BAŞARISIZSA "güncelsiniz" demek yalan olur: yeni sürüm yayınlanmış olabilir
-           ve panel onu görememiştir (en sık sebep GitHub'ın saatlik istek sınırı).
-           `warn` -> `warn-banner`: `warn` bu bilesende HIC TANIMLI DEGILDI, yani uyari seridi
-           bugune kadar MAVI bilgi seridi olarak ciziliyordu (base.css `.notice` varsayilani).
-           `warn-banner` base.css'te tanimli kehribar surumdur. -->
-      <p v-if="status.isCheckFailed" class="notice warn-banner" role="alert">{{ t("panel.update.checkFailed") }}</p>
-      <p v-else-if="!status.isUpdateAvailable" class="meta up-to-date">✓ {{ t("panel.update.upToDate") }}</p>
-
-      <!-- Notlar tabloya SIĞMIYORDU: <dd> içinde düz metin olarak basılınca HTML satır
-           sonlarını yutuyor, bütün sürüm notu tek satıra çöküyordu. Kendi bloğunda ve
-           biçimlendirilmiş olarak gösteriliyor. -->
-      <section class="update-notes">
-        <h3>{{ t("panel.update.notes") }}</h3>
-        <p v-if="notlar.anahtar" class="meta">{{ notlar.anahtar }}</p>
-        <ReleaseNotes v-else-if="notlar.metin" :text="notlar.metin" />
-        <p v-else class="meta">-</p>
-      </section>
-
-      <dl class="detail-grid">
-        <div><dt>{{ t("panel.update.sha256") }}</dt><dd>{{ status.packageSha256 || "-" }}</dd></div>
-        <div><dt>{{ t("panel.update.packagePath") }}</dt><dd>{{ status.packagePath || "-" }}</dd></div>
-      </dl>
-
-      <!-- Kurulum ilerlemesi. Çubuk ZAMANLAYICIYLA değil, gözlemlenen adımlarla ilerler; her yüzde
-           sunucudan gelen somut bir cevaba karşılık gelir. Panel kurulum sırasında kapalı olduğu
-           için o aralıkta ara bir sayı üretilmez — uydurma yüzde göstermek yerine geçen süre yazılır.
-           %100 yalnızca yeni sürüm DOĞRULANINCA görünür; başarısızlıkta çubuk ilerlemez. -->
+    <template v-if="status">
       <div v-if="installPhase" class="install-progress" role="status" aria-live="polite">
-        <div
-          class="progress-track"
-          role="progressbar"
-          :aria-valuenow="installPercent"
-          aria-valuemin="0"
-          aria-valuemax="100">
+        <div class="progress-track" role="progressbar" :aria-valuenow="installPercent" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill" :class="{ done: installPhase === 'done' }" :style="{ width: installPercent + '%' }"></div>
         </div>
         <div class="progress-meta">
-          <strong>{{ t(`panel.update.phase.${installPhase}`) }}</strong>
+          <strong>{{ t('panel.update.phase.' + installPhase) }}</strong>
           <span class="meta">%{{ installPercent }} · {{ formatElapsed(installElapsedSeconds) }}</span>
         </div>
         <p class="meta">{{ t("panel.update.phaseHintReal") }}</p>
       </div>
 
-      <!-- AGIRLIKLAR DUZELTILDI, iki adimlik akisa gore:
-           "Indir" bir HAZIRLIKTIR (paketi diske alir, hicbir sey degistirmez) -> ikincil.
-           "Kur" bu ekranin ASIL eylemidir -> tek birincil dugme.
-           `danger` KALDIRILDI: kirmizi "geri alinamaz / veri gider" demektir; oysa bu akisin kendi
-           onay kutusu tonu ACIKCA `tone: "neutral"` (bkz. installUpdate) ve gerekcesi kodda yazili
-           ("Yikici degil (silme yok, yalniz servis yeniden baslar)"). Dugme, kendi onay diyalogunun
-           soyledigi seyle celisiyordu. -->
-      <div class="update-actions">
-        <button
-          class="secondary"
-          :disabled="!status.downloadUrl || !status.packageSha256 || !status.isUpdateAvailable || Boolean(busy)"
-          @click="downloadUpdate">
-          {{ busy === "download" ? t("panel.update.downloading") : t("panel.update.download") }}
-        </button>
-        <button
-          :disabled="!status.isPackageReady || status.isInstallScheduled || Boolean(busy)"
-          @click="installUpdate"
-        >
-          {{ busy === "install" ? t("panel.update.scheduling") : t("panel.update.install") }}
-        </button>
-        <p class="meta">{{ t("panel.update.safeApplyHint") }}</p>
-      </div>
+      <section v-if="status.isUpdateAvailable || status.isPackageReady || status.isInstallScheduled || busy || monitoring" class="update-next-step">
+        <div class="next-step-heading">
+          <h3>{{ t("panel.update.nextStep") }}</h3>
+          <p class="meta">{{ t("panel.update.safeApplyHint") }}</p>
+        </div>
+        <div class="update-actions">
+          <button :class="{ secondary: status.isPackageReady }" :disabled="!canDownload" @click="downloadUpdate">
+            {{ busy === "download" ? t("panel.update.downloading") : t("panel.update.download") }}
+          </button>
+          <button :class="{ secondary: !status.isPackageReady }" :disabled="!canInstall" @click="installUpdate">
+            {{ busy === "install" ? t("panel.update.scheduling") : t("panel.update.install") }}
+          </button>
+        </div>
+      </section>
+
+      <section class="update-notes">
+        <h3>{{ t("panel.update.notes") }}</h3>
+        <p v-if="notlar.anahtar" class="meta">{{ notlar.anahtar }}</p>
+        <ReleaseNotes v-else-if="notlar.metin" :text="notlar.metin" />
+        <p v-else class="meta">{{ t("panel.update.noNotes") }}</p>
+      </section>
+
+      <details v-if="status.packageSha256 || status.packagePath" class="update-details">
+        <summary>{{ t("panel.update.technicalDetails") }}</summary>
+        <dl class="detail-grid">
+          <div v-if="status.preparedPackageSha256"><dt>{{ t("panel.update.preparedChecksum") }}</dt><dd>{{ status.preparedPackageSha256 }}</dd></div>
+          <div v-if="status.packageSha256"><dt>{{ t("panel.update.releaseChecksum") }}</dt><dd>{{ status.packageSha256 }}</dd></div>
+          <div v-if="status.packagePath"><dt>{{ t("panel.update.packagePath") }}</dt><dd>{{ status.packagePath }}</dd></div>
+        </dl>
+      </details>
     </template>
   </section>
 </template>
@@ -127,7 +73,9 @@ import {
 } from "../api/update";
 import { useConfirm } from "../components/ConfirmDialog.vue";
 import ReleaseNotes from "../components/ReleaseNotes.vue";
-import { extractApiMessage } from "../stores/auth";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
+import UpdateStatusCard from "../components/UpdateStatusCard.vue";
 
 const { t } = useI18n();
 const { confirm } = useConfirm();
@@ -135,6 +83,17 @@ const status = ref<UpdateStatus | null>(null);
 const busy = ref<"" | "download" | "install">("");
 const refreshing = ref(false);
 let statusRevision = 0;
+const statusConfirmed = ref(false);
+const monitoring = ref(false);
+const auth = useAuthStore();
+const mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
+let disposed = false;
+const current = () => !disposed && getSessionEpoch() === mountedEpoch && auth.session?.user?.id === actor && auth.session?.user?.role === role;
+const validHash = (hash?: string) => typeof hash === "string" && /^[a-f\d]{64}$/i.test(hash);
+const prepared = (value: UpdateStatus | null) => !!value?.isPackageReady && !!value.preparedVersion?.trim() && validHash(value.preparedPackageSha256);
+const canDownload = computed(() => statusConfirmed.value && !!status.value && !status.value.isCheckFailed && status.value.isUpdateAvailable &&
+  !!status.value.downloadUrl && validHash(status.value.packageSha256) && !status.value.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
+const canInstall = computed(() => statusConfirmed.value && prepared(status.value) && !status.value?.isInstallScheduled && !busy.value && !refreshing.value && !monitoring.value);
 const notice = ref("");
 const noticeError = ref(false);
 
@@ -195,68 +154,86 @@ onMounted(async () => {
 // NOT: Güncelleme kaynağı (GitHub depo) ayarı kullanıcı isteğiyle UI'dan KALDIRILDI; backend
 // varsayılanı (SelfUpdateService.DefaultRepo) kullanılır, gerekirse config/update-github.json'dan değişir.
 async function refresh(force = true) {
-  if (busy.value || refreshing.value) return;
+  if (!current() || busy.value || refreshing.value || monitoring.value) return;
   refreshing.value = true;
-  const revision = statusRevision;
+  const revision = ++statusRevision;
   try {
     const next = await checkForUpdate(force);
-    if (revision === statusRevision) status.value = next;
+    if (!current() || revision !== statusRevision) return;
+    status.value = next;
+    statusConfirmed.value = true;
+    notice.value = "";
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    refreshing.value = false;
+    if (current() && revision === statusRevision) refreshing.value = false;
   }
 }
 
 async function downloadUpdate() {
-  if (busy.value || !status.value) {
-    return;
-  }
-
-  statusRevision++;
+  if (!current() || !canDownload.value || !status.value) return;
+  const submitted = { ...status.value }, revision = ++statusRevision;
   busy.value = "download";
   try {
-    status.value = await applyUpdate(status.value.downloadUrl, status.value.packageSha256);
-    showNotice(t("panel.update.staged"), false);
+    const result = await applyUpdate(submitted.downloadUrl, submitted.packageSha256);
+    if (!current() || revision !== statusRevision) return;
+    status.value = result;
+    const verified = prepared(result) && sameVersion(result.preparedVersion!, submitted.latestVersion) &&
+      result.preparedPackageSha256!.toLowerCase() === submitted.packageSha256.toLowerCase();
+    statusConfirmed.value = verified;
+    showNotice(t(verified ? "panel.update.staged" : "panel.update.resultUnconfirmed"), !verified);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    busy.value = "";
+    if (current() && revision === statusRevision) busy.value = "";
   }
 }
 
 async function installUpdate() {
-  if (busy.value || !status.value?.isPackageReady) {
-    return;
-  }
-
-  // Yıkıcı değil (silme yok, yalnız servis yeniden başlar) → nötr ton, ad yazdırma yok.
-  const approved = await confirm({
-    title: t("panel.confirm.installUpdateTitle", { name: status.value.latestVersion }),
+  if (!current() || !canInstall.value || !status.value) return;
+  const submitted = { ...status.value }, revision = ++statusRevision;
+  const expectedVersion = submitted.preparedVersion!, expectedPackageSha256 = submitted.preparedPackageSha256!;
+  busy.value = "install";
+  try {
+    const approved = await confirm({
+    title: t("panel.confirm.installUpdateTitle", { name: expectedVersion }),
     message: t("panel.update.installConfirm"),
     impact: [
-      `${t("panel.update.current")}: ${status.value.currentVersion}`,
-      `${t("panel.update.latest")}: ${status.value.latestVersion}`
+      `${t("panel.update.current")}: ${submitted.currentVersion}`,
+      `${t("panel.update.preparedVersion")}: ${expectedVersion}`
     ],
     tone: "neutral",
     confirmLabel: t("panel.update.install"),
     busyLabel: t("panel.update.scheduling"),
   });
-  if (!approved) {
-    return;
-  }
-
-  const versionBeforeInstall = status.value.currentVersion;
-  statusRevision++;
-  busy.value = "install";
-  try {
-    status.value = await installPreparedUpdate();
+    if (!approved || !current() || revision !== statusRevision) return;
+    // This read explains a changed confirmation; the server checks the same
+    // expected identity atomically when it schedules the installation.
+    const checked = await checkForUpdate();
+    if (!current() || revision !== statusRevision) return;
+    status.value = checked;
+    if (!prepared(checked) || checked.isInstallScheduled || !sameVersion(checked.preparedVersion!, expectedVersion) ||
+      checked.preparedPackageSha256!.toLowerCase() !== expectedPackageSha256.toLowerCase()) {
+      statusConfirmed.value = false;
+      showNotice(t("panel.update.targetChanged"), true);
+      return;
+    }
+    const result = await installPreparedUpdate(expectedVersion, expectedPackageSha256);
+    if (!current() || revision !== statusRevision) return;
+    status.value = result;
+    if (!result.isInstallScheduled || !prepared(result) || !sameVersion(result.preparedVersion!, expectedVersion) ||
+      result.preparedPackageSha256!.toLowerCase() !== expectedPackageSha256.toLowerCase()) {
+      statusConfirmed.value = false;
+      showNotice(t("panel.update.resultUnconfirmed"), true);
+      return;
+    }
+    statusConfirmed.value = true;
     showNotice(t("panel.update.waitingRestart"), false);
-    startPostInstallWatch(versionBeforeInstall);
+    startPostInstallWatch(expectedVersion, checked.currentVersion, checked.lastAttempt);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current() && revision === statusRevision) { statusConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    busy.value = "";
+    if (current() && revision === statusRevision) busy.value = "";
   }
 }
 
@@ -264,98 +241,90 @@ async function installUpdate() {
 // panel YENİ sürümle dönünce sayfa otomatik yenilenir (Plesk davranışı). Oturum düşmüşse (401) login'e döner.
 let postInstallHandle: number | null = null;
 let progressHandle: number | null = null;
+let reloadHandle: number | null = null;
+let watchGeneration = 0;
 
-function startPostInstallWatch(versionBeforeInstall: string) {
+function sameVersion(first: string, second: string) {
+  const normalize = (value: string) => value.trim().replace(/^v/i, "").replace(/(?:\.0)+$/, "");
+  return normalize(first) === normalize(second);
+}
+
+function startPostInstallWatch(expectedVersion: string, previousVersion: string, previousAttempt: UpdateAttempt | null) {
   stopPostInstallWatch();
-  const startedAt = Date.now();
+  const generation = watchGeneration, startedAt = Date.now();
+  const previousAttemptIdentity = JSON.stringify(previousAttempt);
+  const owned = () => current() && generation === watchGeneration;
+  monitoring.value = true;
   installPhase.value = "scheduled";
   installElapsedSeconds.value = 0;
   installAttempt.value = null;
   installStartedAtIso = new Date().toISOString();
-
-  // Çubuk saniyede bir ilerler; sunucuya 5 saniyede bir sorulur. İkisini ayırmak, bekleyen
-  // kullanıcının donmuş bir ekrana bakmamasını sağlar.
+  const reloadLater = () => {
+    reloadHandle = window.setTimeout(() => {
+      reloadHandle = null;
+      if (current()) window.location.reload();
+    }, 1500);
+  };
+  // Keep the deadline independent of HTTP completion, including hung responses.
   progressHandle = window.setInterval(() => {
+    if (!owned()) { stopPostInstallWatch(true); return; }
     installElapsedSeconds.value = Math.round((Date.now() - startedAt) / 1000);
-  }, 1000);
-  postInstallHandle = window.setInterval(async () => {
-    // 15 dakika: kurulum servisi durdurur, ~50 MB'lık paketi açar, şema göçlerini çalıştırır ve
-    // servisi yeniden başlatır. Yüklü bir sunucuda (yavaş disk, kurulum dosyasını tarayan antivirüs)
-    // bu 5 dakikayı rahatça aşar. Süre kısa olduğunda kullanıcı, aslında BAŞARIYLA süren bir
-    // güncellemeyi başarısız sanıyordu.
-    if (Date.now() - startedAt > 15 * 60_000) {
+    if (Date.now() - startedAt >= 15 * 60_000) {
       installPhase.value = "timeout";
+      statusConfirmed.value = false;
       stopPostInstallWatch(true);
       showNotice(t("panel.update.updateTimeout"), true);
-      return;
     }
-
+  }, 1000);
+  const poll = async () => {
+    postInstallHandle = null;
+    if (!owned()) { stopPostInstallWatch(true); return; }
     try {
       const fresh = await checkForUpdate();
-      if (fresh.currentVersion && fresh.currentVersion !== versionBeforeInstall) {
+      if (!owned()) return;
+      status.value = fresh;
+      statusConfirmed.value = true;
+      const attempt = fresh.lastAttempt;
+      const finished = attempt?.isFinished === true && attemptIsNewerThan(attempt, installStartedAtIso) && JSON.stringify(attempt) !== previousAttemptIdentity;
+      if (sameVersion(fresh.currentVersion, expectedVersion) &&
+        (!sameVersion(previousVersion, expectedVersion) || (finished && attempt.isFailed === false))) {
         installPhase.value = "done";
         stopPostInstallWatch(true);
-        status.value = fresh;
         showNotice(t("panel.update.updated"), false);
-        window.setTimeout(() => window.location.reload(), 1500);
+        reloadLater();
         return;
       }
-
-      // Panel yanıt veriyor ve sürüm DEĞİŞMEDİ. Burada kritik soru şu: kurulum hâlâ sürüyor mu,
-      // yoksa çoktan bitip BAŞARISIZ mı oldu? Eskiden bu ayrım yapılmıyordu; kurulum saniyeler
-      // içinde iptal olsa bile ekran dakikalarca "panel yeniden başlatılıyor" diyor, kullanıcı ne
-      // sonucu ne sebebini görüyordu. Çalıştırıcının yazdığı durum bu soruyu kesin yanıtlar.
-      const attempt = fresh.lastAttempt;
-      if (attempt?.isFinished && attemptIsNewerThan(attempt, installStartedAtIso)) {
-        // BASARILI biten bir deneme "failed" sayilamaz. Eskiden burada yalnizca isFinished'a
-        // bakiliyordu ve isFinished BASARIYI DA kapsiyor: kurulum bittigi halde surum dizesi
-        // ayni kaldiysa (ayni surumun yeniden kurulmasi) panel, BASARILI kurulumu "tamamlanamadi"
-        // diye raporluyordu.
-        installPhase.value = attempt.isFailed ? "failed" : "done";
+      if (finished) {
+        installPhase.value = "failed";
         installAttempt.value = attempt;
         stopPostInstallWatch(true);
-        status.value = fresh;
-        if (attempt.isFailed) {
-          showNotice(describeAttemptFailure(attempt), true);
-          return;
-        }
-
-        showNotice(t("panel.update.updated"), false);
-        window.setTimeout(() => window.location.reload(), 1500);
+        showNotice(attempt.isFailed === true ? describeAttemptFailure(attempt) : t("panel.update.resultUnconfirmed"), true);
         return;
       }
-
-      // Kurulum daha servisi durdurmadı (zamanlanmış görev 15 saniye sonra başlıyor) ya da
-      // panel yeni açıldı ve sürüm doğrulanıyor.
       installPhase.value = installPhase.value === "restarting" ? "verifying" : "scheduled";
     } catch (error) {
+      if (!owned()) return;
+      statusConfirmed.value = false;
       if ((error as { response?: { status?: number } })?.response?.status === 401) {
         stopPostInstallWatch(true);
-        window.location.reload();
+        if (current()) window.location.reload();
         return;
       }
-
-      // İstek düştü: servis şu an duruyor/yeniden başlıyor. BEKLENEN durum, hata değil.
       installPhase.value = "restarting";
     }
-  }, 5000);
+    if (owned()) postInstallHandle = window.setTimeout(() => { void poll(); }, 5000);
+  };
+  postInstallHandle = window.setTimeout(() => { void poll(); }, 5000);
 }
 
-/** @param keepProgress true ise ilerleme kutusu ekranda kalır (bitti/zaman aşımı durumunu göstermek için). */
+/** Invalidate in-flight polls as well as scheduled callbacks. */
 function stopPostInstallWatch(keepProgress = false) {
-  if (postInstallHandle !== null) {
-    window.clearInterval(postInstallHandle);
-    postInstallHandle = null;
-  }
-
-  if (progressHandle !== null) {
-    window.clearInterval(progressHandle);
-    progressHandle = null;
-  }
-
-  if (!keepProgress) {
-    installPhase.value = "";
-  }
+  watchGeneration++;
+  monitoring.value = false;
+  if (postInstallHandle !== null) { window.clearTimeout(postInstallHandle); postInstallHandle = null; }
+  if (progressHandle !== null) { window.clearInterval(progressHandle); progressHandle = null; }
+  if (reloadHandle !== null) { window.clearTimeout(reloadHandle); reloadHandle = null; }
+  if (!keepProgress) installPhase.value = "";
 }
 
 /** Durum dosyasi BU denemeye mi ait? Onceki bir denemeden kalan dosya yanlis sonuc gosterirdi. */
@@ -393,7 +362,7 @@ function formatElapsed(seconds: number) {
     : t("panel.update.elapsedSeconds", { seconds: rest });
 }
 
-onBeforeUnmount(stopPostInstallWatch);
+onBeforeUnmount(() => { disposed = true; statusRevision++; stopPostInstallWatch(); });
 
 /**
  * Arka uç bu alana İKİ farklı şey koyar: ya bir çeviri ANAHTARI ("update.package_staged"),
@@ -529,9 +498,19 @@ function showNotice(message: string, isError: boolean) {
 }
 
 .update-actions {
-  grid-template-columns: max-content max-content minmax(0, 1fr);
+  grid-template-columns: max-content max-content;
   align-items: center;
 }
+
+.update-next-step { display: grid; gap: var(--sp-12); padding: var(--sp-16); border: 1px solid var(--panel-border); border-radius: var(--radius-md); }
+.next-step-heading h3, .update-notes h3 { margin: 0 0 var(--sp-8); }
+.next-step-heading p { line-height: 1.6; max-width: 80ch; }
+.update-notes { min-width: 0; padding-top: var(--sp-8); }
+.update-details { border-top: 1px solid var(--panel-border); padding-top: var(--sp-12); min-width: 0; }
+.update-details summary { cursor: pointer; color: var(--text-muted); padding: var(--sp-8) 0; width: fit-content; }
+.update-details summary:hover { color: var(--text-strong); }
+.update-details summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: var(--radius-sm); }
+.update-details .detail-grid { padding: var(--sp-12) 0; }
 
 .update-actions button {
   width: fit-content;

@@ -1,5 +1,38 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R26 tamamlandı; 0.8.76 yayımlandı ve doğrulandı
+
+Kullanıcı 0.8.75'i kurduğunu ve mevcut/son sürüm eşitken “Paket hazır değil” gördüğünü bildirdi.
+Geçici paket temizliğinin normal olduğu, ifadenin yanıltıcı olduğu açıklandı. Aktif hedef,
+kullanıcı durdurana kadar denetim ve yararlı grupların dönemsel yayını; görsel açıklık ve
+pratik kullanım da kapsamda. **0.8.76 yayımlandı**, latest/draft=false/prerelease=false.
+[Sürüm](https://github.com/aliorala/adapanel/releases/tag/0.8.76),
+[kurucu](https://github.com/aliorala/adapanel/releases/download/0.8.76/AdaPanelSetup.exe).
+Yayın zamanı **2026-10-04 01:44:33 İstanbul**; paket **90.999.141 bayt**, SHA-256
+**08D4343579E7F6220A48BEE0421A7578076FEF2A3056EBC982A812C3B4408D1F**.
+Paketleme session62216 exit0; publish169dosya/0bulgu, kurucu0bulgu. Yayın session35293 exit0;
+indirilen dosya SHA ve GitHub digest/size/state eşleşti (`release076-published-verification.json`).
+
+Yeni UpdateStatusCard; güncel/yeni sürüm/hazır paket/indirme/kurulum/ölçülemeyen durumları ayırır.
+Hazır paket sürümü ve SHA manifestten bağımsız; HTTP kurulum onayı aynı kimliğe bağlanır.
+İndirme benzersiz aday dosyaya yapılır, hata önceki paketi korur; doğrulanmış eski paket yeni
+kayıt yayımlandıktan sonra sınırlı biçimde temizlenir. Ağ dışında veri kökü başına ortak
+pending lifecycle kilidi vardır. UI oturum/kapanış/eski yanıt/onay/yoklama/timeout ve doğru
+sürüm ölçümünü korur. Direct SSL Issue, ACME/DNS/fallback/store/binding/Rewrite/JSON sınırları
+boyunca özgün siteyi ve güncel yetkiyi doğrular; uzun bekleyişte genel IIS kilidi tutulmaz.
+
+FE tam **1.337/1.337**, son etiket sonrası hedefli **53/53**, types/Vite başarılı, TR/EN **5.429**.
+Sunucu birleşik **271/271**, yeni SSL **57/57**, paket kimliği/temizliği **29/29**. İlk full
+7.717 Infrastructure testinde 2 eski fixture sorunu bulundu; üretim gevşetilmeden düzeltildi,
+sonuçsuz deneme için ek test yazıldı. Son tam test **Infrastructure 7.718 + Core 2 = 7.720/7.720**;
+başarısız/atlanan yok, çözüm derlemesi 0 uyarı/0 hata (`release076-final` log/TRX).
+Görsel QA: 1440 açık/TR, 390 koyu/TR, 320 açık/EN, farklı son/hazır sürüm ve offline durumları;
+yatay taşma ve console error yok. Mock dosyaları kaldırıldı, özgün __preview korundu.
+Bileşen denetimi 22 Passed/3 standart Skipped/0 Failed, aynı indirmeler paketlemede tekrarlanmayacak.
+Detaylar `docs/audit-2026-10-04.md`, loglar `.tmp/audit-20261004/`, TRX `test-results/audit-20261004/`.
+Canlı sunucuda ACME/IIS/CERT veya gerçek installer çalıştırılmadı. Public GitHub'a yalnız
+kurucu ve sürüm notu yayımlandı; kaynak/history push yapılmadı. Sürekli hedef aktif kalır.
+
 ## 2026-10-02–03 — R25 tamamlandı; 0.8.75 yayımlandı ve indirilen paket doğrulandı
 
 Kullanıcının bütün sistemi tarama isteğiyle kaynak, test ve yerel tarayıcı kontrolleri yapıldı.

@@ -61,6 +61,16 @@ public sealed class WinAcmeSslService(
     internal Func<string, CancellationToken, Task<CommandResult>> HttpsBindingCommand { get; init; } =
         ProcessRunner.RunPowerShellAsync;
 
+    internal Func<string, string, CancellationToken, Task<CommandResult>> IssueCommand { get; init; } =
+        (executable, arguments, token) => ProcessRunner.RunAsync(executable, arguments,
+            cancellationToken: token, timeout: TimeSpan.FromMinutes(10));
+
+    internal Func<string, X509Certificate2?> IssueCertificateLookup { get; init; } = FindBestCertificate;
+    internal Func<string, string, X509Certificate2> IssueFallbackCertificate { get; init; } = CreateSelfSignedCertificate;
+    internal Action<X509Certificate2> PersistIssuedCertificate { get; init; } = PersistCertificate;
+    internal Func<string, CancellationToken, Task<CommandResult>> DnsPreflightCommand { get; init; } =
+        ProcessRunner.RunPowerShellAsync;
+
     public Task<SslWorkspaceDto> GetSiteWorkspaceAsync(string siteName, CancellationToken cancellationToken = default) =>
         GetSiteWorkspaceCoreAsync(siteName, null, cancellationToken);
 
@@ -165,58 +175,105 @@ public sealed class WinAcmeSslService(
         return silinen;
     }
 
-    public async Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request, CancellationToken cancellationToken = default)
+    public Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request, CancellationToken cancellationToken = default) =>
+        IssueLetsEncryptCoreAsync(request, null, cancellationToken);
+
+    public Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        IssueLetsEncryptCoreAsync(request, beforeMutation, cancellationToken);
+
+    private async Task<SslCertificateDto> IssueLetsEncryptCoreAsync(IssueLetsEncryptRequest request,
+        Func<SiteDto, CancellationToken, Task>? beforeMutation, CancellationToken cancellationToken)
     {
-        var site = await iisSiteService.GetSiteAsync(request.SiteName, cancellationToken);
-
-        if (request.Wildcard)
+        var input = new IssueLetsEncryptRequest
         {
-            return await IssueWildcardAsync(site, request, cancellationToken);
-        }
-
-        var hostName = ResolveHostName(site, request.HostName);
-
-        // Sonuç SEBEBİYLE birlikte gelir: Let's Encrypt alınamadığında kendinden imzalıya
-        // düşülüyor ama bu SESSİZ olmamalı. Öncesinde işlem "başarılı" dönüyor, kullanıcı SSL'in
-        // kurulduğunu sanıyor ve sorunu ancak tarayıcı "bu bağlantı güvenli değil" dediğinde
-        // fark ediyordu; sebep hiçbir yerde yazmıyordu.
-        var acmeSonucu = await TryIssueWithWinAcmeAsync(site, hostName, request.ContactEmail, request.UseStaging, cancellationToken);
-        var certificate = acmeSonucu.Certificate ?? CreateSelfSignedCertificate(hostName, site.Name);
-
-        // İletişim e-postasını panel geneline kaydet ki mail sertifikası otomatik alınırken
-        // (MailService) tekrar sorulmasın. Best-effort.
-        if (!string.IsNullOrWhiteSpace(request.ContactEmail))
+            SiteName = request.SiteName, HostName = request.HostName, ContactEmail = request.ContactEmail,
+            UseStaging = request.UseStaging, Wildcard = request.Wildcard
+        };
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService, siteGates, input.SiteName, cancellationToken);
+        var site = target.Site;
+        IDisposable? reservation = null;
+        async Task ValidateAsync(SiteDto current, CancellationToken token)
         {
-            await fileStore.WriteAsync(
-                Support.AcmeContactSettings.Path,
-                new Support.AcmeContactSettings { Email = request.ContactEmail.Trim() },
-                cancellationToken);
+            token.ThrowIfCancellationRequested();
+            if (beforeMutation is not null) await beforeMutation(current, token);
+            target.ValidateSnapshot(current);
+            token.ThrowIfCancellationRequested();
         }
+        async Task ApproveAsync(CancellationToken token)
+        {
+            // Resolve the executable before pinning. A replaced site during that read must
+            // invalidate the old request; long ACME work only starts with a live reservation.
+            if (reservation is null) reservation = await target.ReserveAsync(ValidateAsync, token);
+            else await target.RunAsync(current => ValidateAsync(current, token), token);
+        }
+        async Task MutateAsync(Func<Task> operation)
+        {
+            await ApproveAsync(cancellationToken);
+            await target.RunAsync(async current =>
+            {
+                await ValidateAsync(current, cancellationToken);
+                await operation();
+            }, cancellationToken);
+        }
+        async Task ValidatePublicationAsync(CancellationToken token) =>
+            await ValidateAsync(await target.ValidateAsync(token), token);
+        Task PublishAsync(SslCertificateDto dto) => MutateAsync(() => UpsertAsync(dto, cancellationToken, ValidatePublicationAsync));
+        async Task<CommandResult> RunRedirectAsync(string script, CancellationToken token)
+        {
+            CommandResult result = null!;
+            await target.RunAsync(async current =>
+            {
+                await ValidateAsync(current, token);
+                result = await RedirectCommand(script, token);
+            }, token);
+            return result;
+        }
+        async Task ApplyRedirectAsync()
+        {
+            await ApplyHttpsRedirectCoreAsync(site.Name, true, cancellationToken, ApproveAsync, RunRedirectAsync);
+        }
+        try
+        {
+            if (input.Wildcard)
+                return await IssueWildcardAsync(site, input, cancellationToken, ApproveAsync, MutateAsync, ApplyRedirectAsync, PublishAsync);
 
-        PersistCertificate(certificate);
-        await EnsureHttpsBindingAsync(site.Name, hostName, 443, certificate, cancellationToken);
-
-        // profesyonel paneller gibi: SSL kurulunca HTTP→HTTPS yönlendirmesi otomatik açılır (best-effort).
-        await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
-
-        // Kaynak SERTİFİKANIN KENDİSİNDEN okunur, FriendlyName'den değil.
-        // Bağlama ÖLÇÜMÜ İSE TAZE SİTEDEN: elimizdeki `site` nesnesi bu metodun BAŞINDA alındı,
-        // yani HTTPS bağlaması daha kurulmamışken. Onu okumak, az önce kurduğumuz bağlamayı
-        // "yok" saymak olurdu — üstelik sonuç ssl.json'a yazıldığı için yanlış cevap kalıcı olurdu.
-        //
-        // ÖLÇÜM SERTİFİKAYI DA KAPSAR. Yalnız "https bağlaması var mı" sorusu, bağlamanın
-        // sertifikasız kalabildiği bu akışta yetersizdir (bkz. SslBindingVerification).
-        var dto = await OlcVeIsleAsync(
-            ToDto(site.Name, hostName, certificate, ResolveCertificateSource(certificate), null),
-            site.Name,
-            hostName,
-            443,
-            certificate.Thumbprint ?? string.Empty,
-            cancellationToken);
-        dto.FallbackReason = acmeSonucu.Certificate is null ? acmeSonucu.FailureReason : string.Empty;
-
-        await UpsertAsync(dto, cancellationToken);
-        return dto;
+            var hostName = ResolveHostName(site, input.HostName);
+            var outcome = await TryIssueWithWinAcmeAsync(site, hostName, input.ContactEmail,
+                input.UseStaging, cancellationToken, ApproveAsync);
+            X509Certificate2? certificate = outcome.Certificate;
+            if (certificate is null)
+            {
+                // The fallback constructor itself imports a persistent machine key.
+                await MutateAsync(() =>
+                {
+                    certificate = IssueFallbackCertificate(hostName, site.Name);
+                    return Task.CompletedTask;
+                });
+            }
+            using var issuedCertificate = certificate!;
+            if (!string.IsNullOrWhiteSpace(input.ContactEmail))
+            {
+                await MutateAsync(async () =>
+                {
+                    await fileStore.UpdateAsync(AcmeContactSettings.Path, new AcmeContactSettings(),
+                        _ => new AcmeContactSettings { Email = input.ContactEmail.Trim() },
+                        ValidatePublicationAsync, cancellationToken);
+                });
+            }
+            await MutateAsync(() => { PersistIssuedCertificate(issuedCertificate); return Task.CompletedTask; });
+            await MutateAsync(() => EnsureHttpsBindingAsync(site.Name, hostName, 443, issuedCertificate, cancellationToken));
+            // URL Rewrite installation is deliberately outside the global IIS gate.
+            await ApplyRedirectAsync();
+            await ApproveAsync(cancellationToken);
+            var dto = await OlcVeIsleAsync(
+                ToDto(site.Name, hostName, issuedCertificate, ResolveCertificateSource(issuedCertificate), null),
+                site.Name, hostName, 443, issuedCertificate.Thumbprint ?? string.Empty, cancellationToken);
+            dto.FallbackReason = outcome.Certificate is null ? outcome.FailureReason : string.Empty;
+            await PublishAsync(dto);
+            return dto;
+        }
+        finally { reservation?.Dispose(); }
     }
 
     // Domainsiz önizleme (nip.io): HIZLI self-signed HTTPS bağlaması — ACME beklemez, redirect'i değiştirmez.
@@ -1072,7 +1129,7 @@ public sealed class WinAcmeSslService(
         }
 
         var script = $"$domain = '{domain}'\r\n{Dns01PreflightScript}";
-        var run = await ProcessRunner.RunPowerShellAsync(script, cancellationToken);
+        var run = await DnsPreflightCommand(script, cancellationToken);
 
         Dns01Preflight? preflight = null;
         try
@@ -1167,7 +1224,11 @@ public sealed class WinAcmeSslService(
     private async Task<SslCertificateDto> IssueWildcardAsync(
         AdaPanel.Core.Dtos.Sites.SiteDto site,
         IssueLetsEncryptRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> approve,
+        Func<Func<Task>, Task> mutate,
+        Func<Task> applyRedirect,
+        Func<SslCertificateDto, Task> publish)
     {
         // Wildcard'da self-signed'a SESSİZ düşme YOK: kullanıcı bilinçli DNS-01 istedi, hata gerçek nedeniyle döner.
         // Apex türetme: "*." ve baştaki "www." atılır (kullanıcı listeden www'lu hostu seçmiş olabilir).
@@ -1189,6 +1250,7 @@ public sealed class WinAcmeSslService(
         }
 
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
+        await approve(cancellationToken);
         if (string.IsNullOrWhiteSpace(wacs))
         {
             throw new AppException("ssl.winacme_missing", 409, 409);
@@ -1196,9 +1258,14 @@ public sealed class WinAcmeSslService(
 
         // Doğrulamayı denemeden ÖNCE zincirin dışarıdan çalıştığını kanıtla (bkz. EnsureDns01ResolvableAsync).
         await EnsureDns01ResolvableAsync(domain, cancellationToken);
+        await approve(cancellationToken);
 
-        var scriptPath = Path.Combine(fileStore.EnsureDirectory("tools"), "acme-dns01.ps1");
-        await File.WriteAllTextAsync(scriptPath, Dns01ScriptContent, cancellationToken);
+        var scriptPath = fileStore.ResolvePath("tools/acme-dns01.ps1");
+        await mutate(async () =>
+        {
+            fileStore.EnsureDirectory("tools");
+            await File.WriteAllTextAsync(scriptPath, Dns01ScriptContent, cancellationToken);
+        });
 
         var baseUri = request.UseStaging
             ? "https://acme-staging-v02.api.letsencrypt.org/"
@@ -1211,18 +1278,21 @@ public sealed class WinAcmeSslService(
             $"--emailaddress \"{request.ContactEmail.Trim()}\" --accepttos --baseuri {baseUri}";
 
         // DNS-01 turları (kayıt yazma + yetkili sunucu doğrulaması) HTTP-01'den uzun sürebilir.
-        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken, timeout: TimeSpan.FromMinutes(10));
+        await approve(cancellationToken);
+        var result = await IssueCommand(wacs, args, cancellationToken);
+        await approve(cancellationToken);
         if (!result.Success)
         {
             var detail = (result.StandardError + "\r\n" + result.StandardOutput).Trim();
             throw new AppException("ssl.wildcard_failed", 502, 502, detail.Length > 2000 ? detail[^2000..] : detail);
         }
 
-        var certificate = FindBestCertificate($"*.{domain}")
+        using var certificate = IssueCertificateLookup($"*.{domain}")
             ?? throw new AppException("ssl.wildcard_failed", 502, 502, "win-acme succeeded but the wildcard certificate was not found in the store.");
 
-        PersistCertificate(certificate);
-        await ApplyHttpsRedirectAsync(site.Name, true, cancellationToken);
+        await mutate(() => { PersistIssuedCertificate(certificate); return Task.CompletedTask; });
+        await applyRedirect();
+        await approve(cancellationToken);
 
         // Joker sertifikada bağlamayı win-acme kuruyor ve host başlığı "*.domain" OLMAK ZORUNDA
         // DEĞİL (alt alan adı başına ayrı bağlama açabilir). O yüzden burada belirli bir host
@@ -1230,7 +1300,7 @@ public sealed class WinAcmeSslService(
         var dto = await OlcVeIsleAsync(
             ToDto(site.Name, $"*.{domain}", certificate, ResolveCertificateSource(certificate), null),
             site.Name, string.Empty, 443, certificate.Thumbprint ?? string.Empty, cancellationToken);
-        await UpsertAsync(dto, cancellationToken);
+        await publish(dto);
         return dto;
     }
 
@@ -1242,9 +1312,12 @@ public sealed class WinAcmeSslService(
         string hostName,
         string contactEmail,
         bool useStaging,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeMutation = null)
     {
         var wacs = await ResolveWinAcmeExecutableAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
         if (string.IsNullOrWhiteSpace(wacs))
         {
             return new AcmeIssueResult(null, "ssl.fallback.winacme_missing");
@@ -1272,7 +1345,7 @@ public sealed class WinAcmeSslService(
             ? "https://acme-staging-v02.api.letsencrypt.org/"
             : "https://acme-v02.api.letsencrypt.org/";
 
-        var before = FindBestCertificate(hostName);
+        var before = IssueCertificateLookup(hostName);
         // Değerler ayrıca TIRNAKLANIYOR. Doğrulamadan sonra tırnak gereksiz görünür; kasten
         // konuyor: doğrulama bir gün gevşerse tek satırlık bir değişiklik sessizce argüman
         // enjeksiyonunu geri getirmesin. İki katman birbirinden bağımsız.
@@ -1283,7 +1356,11 @@ public sealed class WinAcmeSslService(
         // sınırı beklemelerini içerebilir. Süre dolunca süreç öldürülüyor, sessizce kendinden
         // imzalı üretiliyor ve işlem BAŞARILI dönüyordu. Aynı dosyadaki joker karakter yolu
         // (IssueWildcardAsync) zaten 10 dakika kullanıyor; tekil yol ondan geri kalmıştı.
-        var result = await ProcessRunner.RunAsync(wacs, args, cancellationToken: cancellationToken, timeout: TimeSpan.FromMinutes(10));
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = await IssueCommand(wacs, args, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (beforeMutation is not null) await beforeMutation(cancellationToken);
         if (!result.Success)
         {
             logger.LogWarning(
@@ -1294,7 +1371,7 @@ public sealed class WinAcmeSslService(
             return new AcmeIssueResult(null, "ssl.fallback.acme_failed");
         }
 
-        var after = FindBestCertificate(hostName);
+        var after = IssueCertificateLookup(hostName);
         var certificate = after?.Thumbprint != before?.Thumbprint ? after : before;
 
         // win-acme "basarili" cikis kodu dondurup ORTADA SERTIFIKA BIRAKMAYABILIR. Cikis kodunu

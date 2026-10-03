@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createPinia } from "pinia";
 import { createRenderer, h, nextTick, ssrContextKey, type App, type Component } from "vue";
 import UpdateView from "./UpdateView.vue";
 import FirewallView from "./FirewallView.vue";
@@ -7,7 +8,7 @@ import { getPortStatus, type PortStatus } from "../api/firewall";
 
 vi.mock("../api/update", () => ({ checkForUpdate: vi.fn(), applyUpdate: vi.fn(), installPreparedUpdate: vi.fn() }));
 vi.mock("../api/firewall", () => ({ getPortStatus: vi.fn(), getFirewallRules: vi.fn().mockResolvedValue([]), allowPort: vi.fn(), blockPort: vi.fn() }));
-vi.mock("../stores/auth", () => ({ extractApiMessage: () => "failed" }));
+vi.mock("../stores/auth", async original => ({ ...await original<object>(), extractApiMessage: () => "failed" }));
 vi.mock("../components/ConfirmDialog.vue", () => ({ default: {}, useConfirm: () => ({ confirm: vi.fn().mockResolvedValue(false) }) }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
@@ -19,16 +20,18 @@ async function mount<T>(view: Component): Promise<T> {
     insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {},
     parentNode: () => null, nextSibling: () => null
   });
-  app = renderer.createApp({ ...view, render: () => h("section") } as Component);
+  app = renderer.createApp({ ...view, render: () => h("section") } as Component).use(createPinia());
   app.provide(ssrContextKey, {});
   const state = (app.mount({}).$ as unknown as { setupState: T }).setupState;
   await nextTick(); await nextTick(); await nextTick();
   return state;
 }
 
-it("ignores a late version check after downloading and prevents duplicate downloads", async () => {
-  const old = { isPackageReady: false, downloadUrl: "https://example.test/update", packageSha256: "test" } as UpdateStatus;
-  const ready = { ...old, isPackageReady: true };
+it("keeps a deferred version check from overlapping a download and prevents duplicate downloads", async () => {
+  const old: UpdateStatus = { currentVersion: "0.8.75", latestVersion: "0.8.76", isUpdateAvailable: true, isCheckFailed: false, lastAttempt: null,
+    isPackageReady: false, isInstallScheduled: false, installScheduledAtUtc: null, packagePath: "", downloadUrl: "https://example.test/update", packageSha256: "a".repeat(64),
+    notes: "", githubRepo: "fixture/panel", checkedAtUtc: "2026-10-04T00:00:00Z" };
+  const ready = { ...old, isPackageReady: true, preparedVersion: old.latestVersion, preparedPackageSha256: old.packageSha256 };
   vi.mocked(checkForUpdate).mockResolvedValueOnce(old);
   const state = await mount<{ status: UpdateStatus; refresh: () => Promise<void>; downloadUpdate: () => Promise<void> }>(UpdateView);
   let finishCheck!: (v: UpdateStatus) => void;
@@ -36,11 +39,17 @@ it("ignores a late version check after downloading and prevents duplicate downlo
   const checking = state.refresh();
   let finishDownload!: (v: UpdateStatus) => void;
   vi.mocked(applyUpdate).mockImplementationOnce(() => new Promise(resolve => { finishDownload = resolve; }));
+  // An outstanding GET now closes the write gate rather than allowing a write
+  // to race it. Keep the read genuinely pending while exercising the handler.
+  await state.downloadUpdate();
+  expect(applyUpdate).not.toHaveBeenCalled();
+  finishCheck(old); await checking;
   const downloading = state.downloadUpdate();
   await state.downloadUpdate();
+  await state.refresh();
   expect(applyUpdate).toHaveBeenCalledTimes(1);
+  expect(checkForUpdate).toHaveBeenCalledTimes(2);
   finishDownload(ready); await downloading;
-  finishCheck(old); await checking;
   expect(state.status.isPackageReady).toBe(true);
 });
 

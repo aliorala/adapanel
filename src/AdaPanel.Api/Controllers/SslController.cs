@@ -67,25 +67,37 @@ public sealed class SslController(
         [FromServices] ILogger<SslController> logger,
         CancellationToken cancellationToken)
     {
-        await CustomerAccess.EnsureSiteAsync(customerScopes, User, request.SiteName, cancellationToken);
-
-        // Wildcard (DNS-01) sunucunun DNS bölgesine kayıt yazar → yalnız yönetici.
-        if (request.Wildcard && !User.IsInRole("Administrator"))
+        var input = new IssueLetsEncryptRequest
         {
-            throw new AdaPanel.Core.Common.AppException("ssl.wildcard_admin_only", 403, 403);
+            SiteName = request.SiteName, HostName = request.HostName, ContactEmail = request.ContactEmail,
+            UseStaging = request.UseStaging, Wildcard = request.Wildcard
+        };
+        var services = HttpContext.RequestServices;
+        using var target = await SiteMutationGuard.CaptureAsync(iisSiteService,
+            services.GetRequiredService<IConcurrencyLock>(), input.SiteName, cancellationToken);
+        if (string.IsNullOrWhiteSpace(input.HostName))
+            input.HostName = target.Site.Bindings.FirstOrDefault(binding => !string.IsNullOrWhiteSpace(binding.HostName))?.HostName ?? string.Empty;
+        var db = services.GetRequiredService<AdaPanelDbContext>();
+        var authority = await SiteActorAuthority.CaptureAsync(db, customerScopes, User, cancellationToken);
+        if (input.Wildcard && authority.Role != "Administrator")
+            throw new AppException("ssl.wildcard_admin_only", 403, 403);
+        using var subscription = await DatabaseLifecycle.EnterSubscriptionAsync(authority.SubscriptionId, cancellationToken);
+        async Task ApproveAsync(SiteDto current, CancellationToken token)
+        {
+            target.ValidateSnapshot(current);
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, input.SiteName, token);
+            await CustomerAccess.EnsureDomainClaimAsync(customerScopes, iisSiteService, mailService,
+                User, input.HostName, input.SiteName, logger, token);
+            await authority.RevalidateAsync(db, customerScopes, User, token);
+            await CustomerAccess.EnsureSiteAsync(customerScopes, User, input.SiteName, token);
+            target.ValidateSnapshot(current);
+            token.ThrowIfCancellationRequested();
         }
-
-        // GÜVENLİK (çapraz-kiracı): host adı bağlama ucundakiyle AYNI denetimden geçmek zorunda.
-        //
-        // Buradaki akış sertifikayı almakla kalmıyor, o host adını siteye BAĞLAMA olarak da ekliyor
-        // (WinAcmeSslService.EnsureHttpsBindingAsync). Yani denetimsiz bırakılırsa, bağlama ucuna
-        // konan kısıt bu uçtan dolanılır ve mail sahipliği zinciri yeniden açılırdı. Üstelik ACME
-        // başarısız olsa bile akış self-signed sertifikaya düşüp bağlamayı YİNE ekliyor — yani
-        // "nasılsa doğrulama tutmaz" diye güvenmek yanlış olurdu.
-        await CustomerAccess.EnsureDomainClaimAsync(
-            customerScopes, iisSiteService, mailService, User, request.HostName, request.SiteName, logger, cancellationToken);
-
-        var certificate = await sslService.IssueLetsEncryptAsync(request, cancellationToken);
+        await ApproveAsync(target.Site, cancellationToken);
+        var certificate = await sslService.IssueLetsEncryptAsync(input, ApproveAsync, cancellationToken);
+        var owner = await SiteSahibiAsync(certificate.SiteName, cancellationToken);
+        await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
 
         // Sertifika ALMAK da durum değiştiren bir işlemdir: siteye HTTPS bağlaması ekler,
         // HTTP→HTTPS yönlendirmesini açar ve sunucu adına Let's Encrypt'e istek yapar (hesap
@@ -96,14 +108,16 @@ public sealed class SslController(
             "ssl.issued",
             $"ssl:{certificate.SiteName}",
             $"Sertifika alindi: {certificate.HostName} (kaynak={certificate.Source}, " +
-            $"joker={request.Wildcard}, staging={request.UseStaging}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}" +
+            $"joker={input.Wildcard}, staging={input.UseStaging}, bitis={certificate.NotAfterUtc:yyyy-MM-dd}" +
             (string.IsNullOrWhiteSpace(certificate.FallbackReason)
                 ? ")"
                 : $", kendinden-imzaliya dusuldu: {certificate.FallbackReason})")
             + BaglamaNotu(certificate),
-            await SiteSahibiAsync(certificate.SiteName, cancellationToken));
+            owner);
 
-        await TrySecureWebmailAsync(certificate.HostName, request.ContactEmail, cancellationToken);
+        await target.RunAsync(current => ApproveAsync(current, cancellationToken), cancellationToken);
+        await TrySecureWebmailAsync(certificate.HostName, input.ContactEmail, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         return Ok(ApiResponse<SslCertificateDto>.Ok(certificate, "ssl.issued"));
     }
 

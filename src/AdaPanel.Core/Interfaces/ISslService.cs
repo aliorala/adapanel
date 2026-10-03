@@ -13,6 +13,10 @@ public interface ISslService
 
     Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request, CancellationToken cancellationToken = default);
 
+    Task<SslCertificateDto> IssueLetsEncryptAsync(IssueLetsEncryptRequest request,
+        Func<SiteDto, CancellationToken, Task> beforeMutation, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This SSL provider does not support authorized certificate issuance.");
+
     Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request, CancellationToken cancellationToken = default);
 
     Task<SslCertificateDto> ImportCertificateAsync(ImportCertificateRequest request,

@@ -1,5 +1,6 @@
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Update;
+using AdaPanel.Core.Common;
 using AdaPanel.Core.Interfaces;
 using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
@@ -63,16 +64,19 @@ public sealed class UpdateController(
             HttpContext,
             "update.package.downloaded",
             "panel",
-            $"Update package prepared: current={status.CurrentVersion}, latest={status.LatestVersion}, "
-            + $"package ready={status.IsPackageReady}, sha256={status.PackageSha256}.");
+            $"Update package prepared: current={status.CurrentVersion}, prepared={status.PreparedVersion}, "
+            + $"package ready={status.IsPackageReady}, sha256={status.PreparedPackageSha256}.");
 
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.downloaded"));
     }
 
     [HttpPost("install")]
-    public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> InstallAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<UpdateStatusDto>>> InstallAsync([FromBody] InstallUpdateRequest request, CancellationToken cancellationToken)
     {
-        var status = await selfUpdateService.InstallPreparedUpdateAsync(cancellationToken);
+        if (request is null || string.IsNullOrWhiteSpace(request.ExpectedVersion) ||
+            request.ExpectedPackageSha256?.Length != 64 || request.ExpectedPackageSha256.Any(character => !Uri.IsHexDigit(character)))
+            throw new AppException("update.package_changed", 409, 409);
+        var status = await selfUpdateService.InstallPreparedUpdateAsync(request, cancellationToken);
 
         // KAYIT KURULUMDAN ÖNCE DEĞİL, ZAMANLAMADAN SONRA ama panel DURMADAN önce yazılır: kurulum
         // paneli yeniden başlatır, yani bu satır yazılamazsa işlemin hiçbir izi kalmaz.
@@ -80,7 +84,7 @@ public sealed class UpdateController(
             HttpContext,
             "update.install.scheduled",
             "panel",
-            $"Panel update installation scheduled: {status.CurrentVersion} → {status.LatestVersion}.");
+            $"Panel update installation scheduled: {status.CurrentVersion} → {status.PreparedVersion}.");
 
         return Ok(ApiResponse<UpdateStatusDto>.Ok(status, "update.install_scheduled"));
     }
