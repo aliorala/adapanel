@@ -23,6 +23,8 @@ public sealed class ErrorReportSender(
     /// bu iş (otomasyon döngüsünde çalışır) dakikalarca asılı kalmamalı.
     /// </summary>
     private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan PublicationTimeout = TimeSpan.FromSeconds(20);
+    private string SettingsFilePath => fileStore.ResolvePath(SettingsPath);
 
     public async Task<ErrorReportingSettingsDto> GetSettingsAsync(CancellationToken cancellationToken = default) =>
         await fileStore.ReadAsync(SettingsPath, new ErrorReportingSettingsDto(), cancellationToken);
@@ -39,6 +41,7 @@ public sealed class ErrorReportSender(
             throw new AppException("errorReporting.invalid_collector_url", 400, 400);
         }
 
+        using var lease = await ErrorReportDeliveryLifecycle.EnterSettingsAsync(SettingsFilePath, cancellationToken);
         return await fileStore.UpdateAsync(
             SettingsPath,
             new ErrorReportingSettingsDto(),
@@ -60,6 +63,7 @@ public sealed class ErrorReportSender(
 
     public async Task<int> SendPendingAsync(CancellationToken cancellationToken = default)
     {
+        using var delivery = await ErrorReportDeliveryLifecycle.EnterSendAsync(SettingsFilePath, cancellationToken);
         var settings = await GetSettingsAsync(cancellationToken);
 
         // Onay yok VEYA toplayıcı adresi boş → hiçbir şey gönderilmez, kayıtlar yerelde birikir.
@@ -100,15 +104,26 @@ public sealed class ErrorReportSender(
             }).ToArray()
         };
 
-        var client = httpClientFactory.CreateClient();
+        using var client = httpClientFactory.CreateClient(OutboundConnectGuard.GuardedClientName);
         client.Timeout = SendTimeout;
 
         try
         {
-            using var response = await client.PostAsJsonAsync(collectorUrl, batch, cancellationToken);
+            Task<HttpResponseMessage> submission;
+            using (await ErrorReportDeliveryLifecycle.EnterSettingsAsync(SettingsFilePath, cancellationToken))
+            {
+                var current = await GetSettingsAsync(cancellationToken);
+                if (!SameConfiguration(settings, current))
+                    throw new AppException("errorReporting.settings_changed", 409, 409);
+                cancellationToken.ThrowIfCancellationRequested();
+                // Only initiation is ordered against a settings save. The network wait must
+                // not prevent consent from being revoked; an initiated POST cannot be recalled.
+                submission = client.PostAsJsonAsync(collectorUrl, batch, cancellationToken);
+            }
+            using var response = await submission;
             if (!response.IsSuccessStatusCode)
             {
-                await RecordFailureAsync($"HTTP {(int)response.StatusCode}", cancellationToken);
+                await RecordFailureAsync(settings, $"HTTP {(int)response.StatusCode}", cancellationToken);
                 throw new AppException(
                     "errorReporting.send_failed",
                     502,
@@ -128,39 +143,54 @@ public sealed class ErrorReportSender(
         catch (Exception exception)
         {
             // Zaman aşımı da buraya düşer (TaskCanceledException). Kayıtlar gönderilmemiş kalır.
-            await RecordFailureAsync(exception.Message, cancellationToken);
+            await RecordFailureAsync(settings, exception.Message, cancellationToken);
             throw new AppException("errorReporting.collector_unreachable", 502, 502, exception.Message);
         }
 
-        await errorReportService.MarkSentAsync(pending.Select(report => report.Id).ToArray(), cancellationToken);
+        // A received success is already an external effect. A disconnected HTTP caller must
+        // not prevent its bounded local acknowledgment and cause an avoidable repeat send.
+        using var publication = new CancellationTokenSource(PublicationTimeout);
+        await errorReportService.MarkSentAsync(pending, publication.Token);
 
-        await fileStore.UpdateAsync(
-            SettingsPath,
-            new ErrorReportingSettingsDto(),
-            current =>
-            {
-                current.LastSentAtUtc = DateTime.UtcNow;
-                current.LastError = string.Empty;
-                return current;
-            },
-            cancellationToken);
-
-        // Gönderilenler artık geliştiricide; saklama süresi dolanları yerelde tutmaya gerek yok.
-        await errorReportService.PurgeAsync(settings.RetentionDays <= 0 ? 30 : settings.RetentionDays, cancellationToken);
-
-        return pending.Count;
-    }
-
-    private async Task RecordFailureAsync(string reason, CancellationToken cancellationToken)
-    {
-        try
+        var contextMatches = false;
+        using (await ErrorReportDeliveryLifecycle.EnterSettingsAsync(SettingsFilePath, publication.Token))
         {
             await fileStore.UpdateAsync(
                 SettingsPath,
                 new ErrorReportingSettingsDto(),
                 current =>
                 {
-                    current.LastError = reason.Length > 300 ? reason[..300] : reason;
+                    contextMatches = SameConfiguration(settings, current);
+                    if (contextMatches)
+                    {
+                        current.LastSentAtUtc = DateTime.UtcNow;
+                        current.LastError = string.Empty;
+                    }
+                    return current;
+                },
+                publication.Token);
+        }
+
+        // Gönderilenler artık geliştiricide; saklama süresi dolanları yerelde tutmaya gerek yok.
+        if (contextMatches)
+            await errorReportService.PurgeAsync(settings.RetentionDays <= 0 ? 30 : settings.RetentionDays, publication.Token);
+
+        return pending.Count;
+    }
+
+    private async Task RecordFailureAsync(ErrorReportingSettingsDto settings, string reason, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var safeReason = SecretRedactor.Redact(reason);
+            using var lease = await ErrorReportDeliveryLifecycle.EnterSettingsAsync(SettingsFilePath, cancellationToken);
+            await fileStore.UpdateAsync(
+                SettingsPath,
+                new ErrorReportingSettingsDto(),
+                current =>
+                {
+                    if (SameConfiguration(settings, current))
+                        current.LastError = safeReason.Length > 300 ? safeReason[..300] : safeReason;
                     return current;
                 },
                 cancellationToken);
@@ -170,6 +200,12 @@ public sealed class ErrorReportSender(
             // Teşhis notu yazılamadıysa asıl hatayı gölgeleme.
         }
     }
+
+    private static bool SameConfiguration(ErrorReportingSettingsDto expected, ErrorReportingSettingsDto current) =>
+        expected.Enabled == current.Enabled &&
+        string.Equals(expected.CollectorUrl?.Trim(), current.CollectorUrl?.Trim(), StringComparison.Ordinal) &&
+        expected.ConsentGrantedAtUtc == current.ConsentGrantedAtUtc &&
+        expected.BatchSize == current.BatchSize && expected.RetentionDays == current.RetentionDays;
 
     private static bool IsValidCollectorUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) &&

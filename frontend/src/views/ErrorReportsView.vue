@@ -1,11 +1,11 @@
 <template>
-  <section class="panel module-shell">
+  <section class="panel module-shell settings-editor">
     <div class="module-head">
       <div>
         <h2>{{ t("panel.errorReports.title") }}</h2>
         <p>{{ t("panel.errorReports.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="busy === 'load'" @click="loadAll">
+      <button class="secondary compact" :disabled="Boolean(busy)" @click="loadAll">
         {{ t("panel.errorReports.refresh") }}
       </button>
     </div>
@@ -14,19 +14,26 @@
 
     <!-- Ayarlar/kayıtlar gelmeden "kayıt yok" veya "kapalı" göstermek yanıltıcı olurdu:
          yönetici açık bir gönderimi kapalı sanabilir ya da biriken kayıtları göremeyebilir. -->
-    <p v-if="!loaded" class="empty-state" role="status" aria-live="polite">
+    <div v-if="loadError" class="settings-read-error" role="alert">
+      <strong>{{ t("panel.errorReports.loadFailed") }}</strong>
+      <p>{{ loadError }}</p>
+      <p>{{ t("panel.errorReports.loadFailedHint") }}</p>
+      <button class="secondary compact" :disabled="Boolean(busy)" @click="loadAll">{{ t("panel.common.retry") }}</button>
+    </div>
+    <p v-else-if="!loaded" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
 
-    <template v-else>
+    <template v-if="loaded">
+      <p class="settings-caption">{{ t(settingsConfirmed ? "panel.errorReports.savedSettings" : "panel.errorReports.lastKnownSettings") }}</p>
       <div class="summary-strip">
         <div class="summary-item">
           <span>{{ t("panel.errorReports.autoSendStatus") }}</span>
-          <strong>{{ settings.enabled ? t("panel.errorReports.on") : t("panel.errorReports.off") }}</strong>
+          <strong>{{ savedSettings?.enabled ? t("panel.errorReports.on") : t("panel.errorReports.off") }}</strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.errorReports.collectorStatus") }}</span>
-          <strong>{{ settings.collectorUrl ? t("panel.errorReports.configured") : t("panel.errorReports.notConfigured") }}</strong>
+          <strong>{{ savedSettings?.collectorUrl ? t("panel.errorReports.configured") : t("panel.errorReports.notConfigured") }}</strong>
         </div>
         <div class="summary-item">
           <span>{{ t("panel.errorReports.pendingCount") }}</span>
@@ -34,10 +41,11 @@
         </div>
         <div class="summary-item">
           <span>{{ t("panel.errorReports.lastSentAt") }}</span>
-          <strong>{{ formatUtc(settings.lastSentAtUtc) }}</strong>
+          <strong>{{ formatUtc(savedSettings?.lastSentAtUtc ?? null) }}</strong>
         </div>
       </div>
 
+      <p v-if="hasUnsavedChanges" class="settings-draft-hint" role="status">{{ t("panel.errorReports.saveBeforeSend") }}</p>
       <!-- Onay ayarları -->
       <section class="form-surface settings-section">
         <div class="section-head">
@@ -45,8 +53,8 @@
             <h3>{{ t("panel.errorReports.consentTitle") }}</h3>
             <p class="meta">{{ t("panel.errorReports.consentHint") }}</p>
           </div>
-          <span v-if="settings.consentGrantedAtUtc" class="status-pill ok">
-            {{ t("panel.errorReports.consentGrantedAt") }}: {{ formatUtc(settings.consentGrantedAtUtc) }}
+          <span v-if="savedSettings?.consentGrantedAtUtc" class="status-pill ok">
+            {{ t("panel.errorReports.consentGrantedAt") }}: {{ formatUtc(savedSettings.consentGrantedAtUtc) }}
           </span>
         </div>
 
@@ -72,19 +80,19 @@
           </label>
         </div>
 
-        <p v-if="settings.lastError" class="notice error" role="alert">
-          {{ t("panel.errorReports.lastError") }}: {{ settings.lastError }}
+        <p v-if="savedSettings?.lastError" class="notice error" role="alert">
+          {{ t("panel.errorReports.lastError") }}: {{ savedSettings.lastError }}
         </p>
 
         <div class="row-actions">
-          <button class="compact" :disabled="busy === 'save'" @click="save">
+          <button class="compact" :disabled="!canSave" @click="save">
             {{ busy === "save" ? t("panel.errorReports.saving") : t("panel.errorReports.save") }}
           </button>
           <button class="secondary compact" :disabled="busy === 'send' || !canSend" @click="sendNow">
             {{ busy === "send" ? t("panel.errorReports.sending") : t("panel.errorReports.sendNow") }}
           </button>
         </div>
-        <p v-if="!canSend" class="field-hint">{{ t("panel.errorReports.sendDisabledHint") }}</p>
+        <p v-if="!canSend && !hasUnsavedChanges" class="field-hint">{{ t("panel.errorReports.sendDisabledHint") }}</p>
       </section>
 
       <!-- "Sessiz gönderim yok" sözünün arayüzdeki karşılığı: ne gidiyor, ne GİTMİYOR.
@@ -140,7 +148,7 @@
           </div>
         </div>
 
-        <div class="data-table">
+        <div class="data-table reports-table">
           <div class="data-row table-head report-row">
             <span>{{ t("panel.errorReports.column.lastSeen") }}</span>
             <span>{{ t("panel.errorReports.column.type") }}</span>
@@ -152,24 +160,24 @@
 
           <template v-for="report in reports" :key="report.id">
             <div class="data-row report-row">
-              <span class="cell-muted">{{ formatUtc(report.lastSeenAtUtc) }}</span>
-              <span class="cell-main">
+              <span class="cell-muted report-time" :data-label="t('panel.errorReports.column.lastSeen')">{{ formatUtc(report.lastSeenAtUtc) }}</span>
+              <span class="cell-main report-type" :data-label="t('panel.errorReports.column.type')">
                 <strong>{{ shortType(report.exceptionType) }}</strong>
                 <small>{{ report.routePattern || "-" }}</small>
               </span>
-              <span class="cell-muted">{{ truncate(report.message, 90) }}</span>
-              <span>{{ report.occurrenceCount }}</span>
-              <span :class="['status-pill', report.sentAtUtc ? 'ok' : 'warn']">
-                {{ report.sentAtUtc ? t("panel.errorReports.sentYes") : t("panel.errorReports.sentNo") }}
+              <span class="cell-muted report-message" :data-label="t('panel.errorReports.column.message')">{{ truncate(report.message, 90) }}</span>
+              <span :data-label="t('panel.errorReports.column.occurrences')">{{ report.occurrenceCount }}</span>
+              <span :data-label="t('panel.errorReports.column.sent')">
+                <span :class="['status-pill', report.sentAtUtc ? 'ok' : 'warn']">{{ report.sentAtUtc ? t("panel.errorReports.sentYes") : t("panel.errorReports.sentNo") }}</span>
               </span>
               <span class="row-actions">
-                <button class="secondary compact" @click="toggleDetail(report.id)">
+                <button class="secondary compact" :aria-expanded="expandedId === report.id" :aria-controls="'report-detail-' + report.id" @click="toggleDetail(report.id)">
                   {{ expandedId === report.id ? t("panel.errorReports.hideDetail") : t("panel.errorReports.showDetail") }}
                 </button>
               </span>
             </div>
 
-            <div v-if="expandedId === report.id" class="data-row detail-row">
+            <div v-if="expandedId === report.id" :id="'report-detail-' + report.id" class="data-row detail-row">
               <div class="detail-body">
                 <p class="field-hint">{{ t("panel.errorReports.detailMaskedHint") }}</p>
                 <dl class="detail-grid">
@@ -224,7 +232,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getErrorReportingSettings,
@@ -234,14 +242,21 @@ import {
   type ErrorReport,
   type ErrorReportingSettings
 } from "../api/errorReports";
-import { extractApiDetails, extractApiMessage } from "../stores/auth";
+import { extractApiDetails, extractApiMessage, useAuthStore } from "../stores/auth";
 import { formatDateTime } from "../utils/datetime";
+import { getSessionEpoch } from "../api/client";
 
 const { t } = useI18n();
 
 const busy = ref("");
 // Veri gelmeden liste "kayıt yok", ayarlar "kapalı" görünmemeli.
 const loaded = ref(false);
+const settingsConfirmed = ref(false);
+const loadError = ref("");
+const savedSettings = ref<ErrorReportingSettings | null>(null);
+const auth = useAuthStore(), mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
+let disposed = false, draftRevision = 0;
+const current = () => !disposed && getSessionEpoch() === mountedEpoch && auth.session?.user?.id === actor && auth.session?.user?.role === role;
 const notice = ref("");
 const noticeError = ref(false);
 const reports = ref<ErrorReport[]>([]);
@@ -258,62 +273,91 @@ const settings = reactive<ErrorReportingSettings>({
 });
 
 const pendingCount = computed(() => reports.value.filter((report) => !report.sentAtUtc).length);
-// Onay kapalıyken veya adres boşken sunucu zaten hiçbir şey göndermez; düğme de boş yere umut vermesin.
-const canSend = computed(() => settings.enabled && settings.collectorUrl.trim().length > 0 && pendingCount.value > 0);
+watch(settings, () => { draftRevision++; }, { deep: true, flush: "sync" });
+const target = (value: ErrorReportingSettings) => JSON.stringify([value.enabled, value.collectorUrl.trim(), value.batchSize, value.retentionDays]);
+const hasUnsavedChanges = computed(() => !!savedSettings.value && target(settings) !== target(savedSettings.value));
+const canSave = computed(() => settingsConfirmed.value && !busy.value && Number.isSafeInteger(settings.batchSize) && settings.batchSize >= 1 && settings.batchSize <= 50 &&
+  Number.isSafeInteger(settings.retentionDays) && settings.retentionDays >= 1 && settings.retentionDays <= 365);
+// The recent fifty rows are not a complete inventory of unsent reports.
+const canSend = computed(() => settingsConfirmed.value && !busy.value && !hasUnsavedChanges.value && savedSettings.value?.enabled === true && !!savedSettings.value.collectorUrl.trim());
 
 onMounted(loadAll);
+onBeforeUnmount(() => { disposed = true; });
+
+function publishSettings(value: ErrorReportingSettings, revision: number, preserveDraft = false) {
+  savedSettings.value = { ...value };
+  if (!preserveDraft && draftRevision === revision) Object.assign(settings, value);
+  settingsConfirmed.value = true;
+  loadError.value = "";
+}
+
+async function readAll(revision: number, preserveDraft = false) {
+  try {
+    const [loadedSettings, loadedReports] = await Promise.all([getErrorReportingSettings(), getErrorReports(50)]);
+    if (!current()) return false;
+    publishSettings(loadedSettings, revision, preserveDraft);
+    reports.value = loadedReports;
+    if (expandedId.value !== null && !loadedReports.some(report => report.id === expandedId.value)) expandedId.value = null;
+    loaded.value = true;
+    return true;
+  } catch (error) {
+    if (current()) { settingsConfirmed.value = false; loadError.value = resolveApiMessage(error); }
+    return false;
+  }
+}
 
 async function loadAll() {
+  if (!current() || busy.value) return;
+  const revision = draftRevision, preserveDraft = hasUnsavedChanges.value;
   busy.value = "load";
   try {
-    const [loadedSettings, loadedReports] = await Promise.all([
-      getErrorReportingSettings(),
-      getErrorReports(50)
-    ]);
-    Object.assign(settings, loadedSettings);
-    reports.value = loadedReports;
-    loaded.value = true;
-    notice.value = "";
-  } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    await readAll(revision, preserveDraft);
+    if (current()) notice.value = "";
   } finally {
-    busy.value = "";
+    if (current()) busy.value = "";
   }
 }
 
 async function save() {
+  if (!current() || !canSave.value) return;
+  const submitted = { ...settings }, revision = draftRevision;
   busy.value = "save";
   try {
-    const saved = await saveErrorReportingSettings({ ...settings });
-    Object.assign(settings, saved);
+    const saved = await saveErrorReportingSettings(submitted);
+    if (!current()) return;
+    if (target(saved) !== target(submitted)) {
+      settingsConfirmed.value = false;
+      showNotice(t("panel.errorReports.resultUnconfirmed"), true);
+      return;
+    }
+    publishSettings(saved, revision);
     showNotice(t("panel.errorReports.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { settingsConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    busy.value = "";
+    if (current()) busy.value = "";
   }
 }
 
 async function sendNow() {
+  if (!current() || !canSend.value) return;
+  const revision = draftRevision;
   busy.value = "send";
   try {
     const result = await sendPendingErrorReports();
-    // Gönderim sonrası "gönderildi" damgaları ve son gönderim zamanı tazelensin.
-    const [loadedSettings, loadedReports] = await Promise.all([
-      getErrorReportingSettings(),
-      getErrorReports(50)
-    ]);
-    Object.assign(settings, loadedSettings);
-    reports.value = loadedReports;
+    if (!current()) return;
+    const unchanged = revision === draftRevision;
+    await readAll(revision);
+    if (!current() || !unchanged || hasUnsavedChanges.value) return;
     showNotice(
       result.sentCount > 0
         ? `${t("panel.errorReports.sentResult")}: ${result.sentCount}`
         : t("panel.errorReports.nothingToSend"),
       false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current() && revision === draftRevision) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = "";
+    if (current()) busy.value = "";
   }
 }
 
@@ -384,7 +428,7 @@ function resolveApiMessage(error: unknown): string {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 8px;
   margin: 0;
 }
@@ -401,7 +445,7 @@ function resolveApiMessage(error: unknown): string {
 
 .disclosure-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 12px;
 }
 
@@ -441,6 +485,13 @@ function resolveApiMessage(error: unknown): string {
 }
 
 @media (max-width: 900px) {
+  .reports-table { overflow: visible; }
+  .report-row { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+  .report-row.table-head { display: none; }
+  .report-row > span { min-width: 0; overflow-wrap: anywhere; }
+  .report-row > [data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted); }
+  .report-time, .report-type, .report-message, .report-row .row-actions { grid-column: 1 / -1; }
+  .report-row .row-actions button { width: 100%; }
   .detail-row {
     min-width: 0;
   }

@@ -2,6 +2,7 @@ using AdaPanel.Api.Extensions;
 using AdaPanel.Core.Dtos.Common;
 using AdaPanel.Core.Dtos.Diagnostics;
 using AdaPanel.Core.Interfaces;
+using AdaPanel.Infrastructure.Audit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -46,11 +47,14 @@ public sealed class ErrorReportsController(
         CancellationToken cancellationToken)
     {
         var settings = await errorReportSender.UpdateSettingsAsync(request, cancellationToken);
+        var collectorForAudit = string.IsNullOrWhiteSpace(settings.CollectorUrl)
+            ? "not configured"
+            : AuditSecretRedactor.RedactUrl(settings.CollectorUrl);
 
         await WriteAuditAsync(
             "error_reports.settings_updated",
             $"Automatic error reporting {(settings.Enabled ? "enabled" : "disabled")}; collector "
-                + (string.IsNullOrWhiteSpace(settings.CollectorUrl) ? "not configured" : settings.CollectorUrl)
+                + collectorForAudit
                 + $"; retention {settings.RetentionDays} day(s).",
             cancellationToken);
 

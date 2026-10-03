@@ -22,6 +22,9 @@ public sealed class NotificationService(
 {
     private const string SettingsPath = "config/notifications.json";
 
+    internal Func<ISmtpClient> SmtpClientFactory { get; init; } = static () => new SmtpClient();
+    internal Func<CancellationToken, Task>? BeforeSettingsWrite { get; init; }
+
     /// <summary>
     /// Bildirim ayarlarının işaret ettiği iki dış hedefi (webhook adresi ve SMTP konağı) denetler.
     /// </summary>
@@ -104,31 +107,41 @@ public sealed class NotificationService(
 
     public async Task<NotificationSettingsDto> UpdateSettingsAsync(UpdateNotificationSettingsRequest request, CancellationToken cancellationToken = default)
     {
-        await EnsureNotificationTargetsAllowedAsync(
-            request.WebhookUrl.Trim(),
-            request.SmtpHost.Trim(),
-            cancellationToken);
-
-        var current = await ReadStoredSettingsAsync(cancellationToken);
-        var protectedPassword = string.IsNullOrWhiteSpace(request.SmtpPassword)
-            ? current.SmtpPassword
-            : secretProtector.Protect(request.SmtpPassword);
-
+        // Freeze the whole submission before DNS or file I/O can yield. The saved target
+        // must be the one that passed validation, even for non-HTTP callers sharing a DTO.
         var settings = new NotificationSettingsDto
         {
-            SmtpHost = request.SmtpHost.Trim(),
+            SmtpHost = request.SmtpHost?.Trim() ?? string.Empty,
             SmtpPort = request.SmtpPort,
-            SmtpUserName = request.SmtpUserName.Trim(),
-            SmtpPassword = protectedPassword,
-            HasSmtpPassword = !string.IsNullOrWhiteSpace(protectedPassword),
-            FromEmail = request.FromEmail.Trim(),
-            ToEmail = request.ToEmail.Trim(),
+            SmtpUserName = request.SmtpUserName?.Trim() ?? string.Empty,
+            FromEmail = request.FromEmail?.Trim() ?? string.Empty,
+            ToEmail = request.ToEmail?.Trim() ?? string.Empty,
             UseSsl = request.UseSsl,
-            WebhookUrl = request.WebhookUrl.Trim()
+            WebhookUrl = request.WebhookUrl?.Trim() ?? string.Empty
         };
+        var submittedPassword = request.SmtpPassword;
+        if (settings.SmtpPort is < 1 or > 65535 ||
+            (settings.FromEmail.Length > 0 && !MailboxAddress.TryParse(settings.FromEmail, out _)) ||
+            (settings.ToEmail.Length > 0 && !MailboxAddress.TryParse(settings.ToEmail, out _)))
+        {
+            throw new AppException("notifications.settings_invalid", 400, 400);
+        }
 
-        await fileStore.WriteAsync(SettingsPath, settings, cancellationToken);
-        return ToClientSettings(settings);
+        await EnsureNotificationTargetsAllowedAsync(settings.WebhookUrl, settings.SmtpHost, cancellationToken);
+        var protectedPassword = string.IsNullOrWhiteSpace(submittedPassword)
+            ? null
+            : secretProtector.Protect(submittedPassword);
+
+        if (BeforeSettingsWrite is not null) await BeforeSettingsWrite(cancellationToken);
+        var updated = await fileStore.UpdateAsync(SettingsPath, new NotificationSettingsDto(), current =>
+        {
+            // A blank password means keep the latest stored secret. Reading it under the
+            // publication lock prevents another request's password rotation being undone.
+            settings.SmtpPassword = protectedPassword ?? current.SmtpPassword ?? string.Empty;
+            settings.HasSmtpPassword = !string.IsNullOrWhiteSpace(settings.SmtpPassword);
+            return settings;
+        }, cancellationToken);
+        return ToClientSettings(updated);
     }
 
     public async Task SendEmailAsync(string subject, string body, CancellationToken cancellationToken = default)
@@ -279,7 +292,7 @@ public sealed class NotificationService(
 
         var options = ResolveSecureSocketOptions(settings.UseSsl, settings.SmtpPort);
 
-        using var client = new SmtpClient();
+        var client = SmtpClientFactory();
         try
         {
             await client.ConnectAsync(settings.SmtpHost, settings.SmtpPort, options, cancellationToken);
@@ -327,9 +340,19 @@ public sealed class NotificationService(
         }
         finally
         {
-            if (client.IsConnected)
+            // SMTP acceptance is determined by SendAsync, not QUIT. Cleanup must neither
+            // turn an accepted message into a retryable failure nor replace a send error.
+            // No QUIT round trip, and no canceled request token during socket cleanup.
+            try
             {
-                await client.DisconnectAsync(true, cancellationToken);
+                if (client.IsConnected)
+                    await client.DisconnectAsync(false, CancellationToken.None);
+            }
+            catch (Exception) { /* Disposal below still releases transport resources. */ }
+            finally
+            {
+                try { client.Dispose(); }
+                catch (Exception) { /* Preserve the measured delivery outcome. */ }
             }
         }
     }

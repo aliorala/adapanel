@@ -155,6 +155,16 @@ public sealed class SiteSettingsLifecycleTests
         using var f = await Fixture.Create();
         Task? contender = null;
         f.BeforeSideEffect = () => { f.BeforeSideEffect = null; contender = f.Mutate(mutation); };
+        if (route == "repair")
+        {
+            // Other test classes share the IIS gate. Keep the permission phase (and its
+            // generation pin) open until this contender actually reaches that gate.
+            f.PermissionCommand = async _ =>
+            {
+                await Capture(() => contender!).WaitAsync(Deadline);
+                return new CommandResult();
+            };
+        }
         await f.Invoke(route).WaitAsync(Deadline);
         Assert.NotNull(contender);
         Assert.Equal("sites.target_changed", Assert.IsType<AppException>(

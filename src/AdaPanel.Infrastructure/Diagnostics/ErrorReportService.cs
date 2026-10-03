@@ -38,16 +38,19 @@ public sealed class ErrorReportService(
             var now = DateTime.UtcNow;
 
             var existing = await dbContext.ErrorReports
+                .AsNoTracking()
                 .FirstOrDefaultAsync(report => report.Fingerprint == sanitized.Fingerprint, cancellationToken);
 
             if (existing is not null)
             {
                 // AYNI hata: yeni satır AÇMA. Döngüye giren bir hata dakikada binlerce kayıt
                 // üretip veritabanını şişirirdi; burada yalnız sayaç ve son görülme güncellenir.
-                existing.OccurrenceCount++;
-                existing.LastSeenAtUtc = now;
-                await dbContext.SaveChangesAsync(cancellationToken);
-                return;
+                var updated = await dbContext.ErrorReports.Where(report => report.Id == existing.Id)
+                    .ExecuteUpdateAsync(update => update
+                        .SetProperty(report => report.OccurrenceCount, report => report.OccurrenceCount + 1)
+                        .SetProperty(report => report.LastSeenAtUtc, report => report.LastSeenAtUtc > now ? report.LastSeenAtUtc : now)
+                        .SetProperty(report => report.SentAtUtc, (DateTime?)null), cancellationToken);
+                if (updated != 0) return;
             }
 
             await EnforceStorageCapAsync(cancellationToken);
@@ -132,6 +135,21 @@ public sealed class ErrorReportService(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task MarkSentAsync(IReadOnlyCollection<ErrorReportDto> snapshots, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        var now = DateTime.UtcNow;
+        foreach (var snapshot in snapshots)
+        {
+            // Acknowledgment belongs to the posted occurrence, not a later repetition.
+            // The predicate and write execute together even when RecordAsync runs meanwhile.
+            await dbContext.ErrorReports.Where(report => report.Id == snapshot.Id &&
+                    report.Fingerprint == snapshot.Fingerprint && report.OccurrenceCount == snapshot.OccurrenceCount &&
+                    report.LastSeenAtUtc == snapshot.LastSeenAtUtc && report.SentAtUtc == null)
+                .ExecuteUpdateAsync(update => update.SetProperty(report => report.SentAtUtc, (DateTime?)now), cancellationToken);
+        }
+    }
+
     public async Task<int> PurgeAsync(int retentionDays = 30, CancellationToken cancellationToken = default)
     {
         var cappedDays = Math.Clamp(retentionDays, 1, 365);
@@ -139,18 +157,9 @@ public sealed class ErrorReportService(
 
         // Yalnız GÖNDERİLMİŞ ve eski kayıtlar silinir: gönderilmemiş kayıt (toplayıcı adresi
         // yokken biriken kayıtlar dâhil) silinirse geliştirici o hatayı hiç göremez.
-        var stale = await dbContext.ErrorReports
+        return await dbContext.ErrorReports
             .Where(report => report.SentAtUtc != null && report.LastSeenAtUtc < cutoff)
-            .ToListAsync(cancellationToken);
-
-        if (stale.Count == 0)
-        {
-            return 0;
-        }
-
-        dbContext.ErrorReports.RemoveRange(stale);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return stale.Count;
+            .ExecuteDeleteAsync(cancellationToken);
     }
 
     private async Task EnforceStorageCapAsync(CancellationToken cancellationToken)

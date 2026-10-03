@@ -22,6 +22,9 @@ public interface IErrorReportService
 
     Task MarkSentAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default);
 
+    Task MarkSentAsync(IReadOnlyCollection<ErrorReportDto> snapshots, CancellationToken cancellationToken = default) =>
+        MarkSentAsync(snapshots.Select(report => report.Id).ToArray(), cancellationToken);
+
     /// <summary>Gönderilmiş ve <paramref name="retentionDays"/> günden eski kayıtları siler; silinen sayısını döner.</summary>
     Task<int> PurgeAsync(int retentionDays = 30, CancellationToken cancellationToken = default);
 }

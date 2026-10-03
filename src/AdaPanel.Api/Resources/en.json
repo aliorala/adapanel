@@ -268,5 +268,7 @@
   "users.create.success": "The user was created.",
   "users.update.success": "The user was updated.",
   "update.package_changed": "The prepared update package changed. Refresh the package details and confirm installation again.",
-  "update.install_already_scheduled": "Installation of this package is already scheduled. Wait for the panel to restart."
+  "update.install_already_scheduled": "Installation of this package is already scheduled. Wait for the panel to restart.",
+  "errorReporting.settings_changed": "Delivery settings changed during the operation. Check the current settings and try again.",
+  "notifications.settings_invalid": "SMTP settings are invalid. Check the port and email addresses."
 }

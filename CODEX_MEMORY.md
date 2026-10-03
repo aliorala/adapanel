@@ -1,5 +1,51 @@
 # AdaPanel Codex Memory
 
+## 2026-10-04 — R27 tamamlandı; bildirim/hata raporu düzeltmeleri yerel, yayımlanmadı
+
+Yayımdaki kurucu **0.8.76 R26** olarak kalıyor; R27 için sürüm artırılmadı veya paket
+yayımlanmadı. Kullanıcının sürekli denetim, görsel açıklık/pratiklik ve dönemsel yayın
+hedefi aktif. Canlıya kurulum, gerçek e-posta/webhook/hata raporu gönderimi yapılmadı.
+
+Bildirim ve hata raporu ekranları kaydedilmiş ayarları taslaktan ayırır. Mevcut veya istek
+sırasında değişen taslak yenileme/yeniden denemede korunur. Okuma başarısızsa açıklama,
+yeniden deneme ve son bilinen ayarlar görünür; doğrulanmadan yazma/gönderme kapalıdır.
+API zarf/alan/sonuç ölçümü, eşzamanlı işlem, oturum/aktör/unmount kapıları tamamlandı.
+Son50 rapor listedeki bekleyen olarak etiketlenir; eski bekleyenler nedeniyle gönderim
+düğmesi yalnız bu listeye bağlı değildir. Mobil tablo etiketli kart, ayrıntı ızgarası
+dar ekrana sığar; özetler iki sütun, uzun değerler sarılır. UI52 yeni test, önce43+4RED.
+
+NotificationService istek snapshot'ı, port/mailbox doğrulaması, JsonFileStore.UpdateAsync
+altında son parolayı koruma, SMTP kabul/asıl hata sonucunu Disconnect/Dispose'tan ayırma:
+33 yeni test. ErrorReportSender veri kökü send/settings kilitleri, HTTP başlamadan güncel
+onay/ayar ölçümü, eski hedef sonucunu yeniye yazmama, masked LastError, GuardedClientName;
+ErrorReportService atomik tekrar/koşullu ack/atomik purge; ErrorReportDeliveryLifecycle
+kilit referanslarını temizler. Başarı ack'i çağıranın iptalinden bağımsız bounded20sn;
+21 yeni test. Controller audit URL'si özel redaksiyondan geçer; 5 mahremiyet testi.
+Yeni59 sunucu testinin önce53=29RED24green, ekguard/purge4RED, ekDispose2green.
+
+Son hedefli **93/93**; ilk full'de iki eski test sorunu: AuditCoverage sınıf adındaki
+Secret sözcüğünü yakaladı (güvenli URL audit çağrısından önce hesaplandı, tarama korunuyor),
+SiteSettingsLifecycle repair fixture rakibin pin kontrolünü beklemiyordu (async izin
+seam'inde bounded bekleme, üretim/assert/deadline değişmedi). Yeniden kontrol **61/61**.
+Son tam **Infrastructure7.777 + Core2 = 7.779/7.779**, atlanan/başarısız yok, build0uyarı/0hata,
+session84449 exit0. Loglar `round27-complete*`, `round27-recheck*`, TRX aynı audit klasörü.
+FE tam **82 dosya/1.389**, vue-tsc/Vite başarılı; wwwroot eşitlendi. TR/EN FE5.443/API272,
+eksik eşleşme yok; diffcheck temiz. Son FE session61569 exit0, son types/build logları
+`round27-frontend-final*`. C# ve frontend ajanları sabit; aktif compiler/test/preview yok.
+
+Gerçek ekran+sahteAPI: 1440koyuTR,390koyuTR,320açıkEN; yatay taşma/consoleerror yok.
+Bildirim taslak/kayıt/test/failure/retry ve her iki ekranda dirty-refresh koruması görüldü.
+Görseller `.tmp/audit-20261004/round27-notifications-read-failure.png`,
+`round27-notifications-draft-mobile.png`, `round27-reports-detail-mobile.png`,
+`round27-reports-detail-en320.png`, `round27-reports-desktop.png`. Preview22668 kapandı,
+auditTab27 kapandı, viewport sıfırlandı; __audit27 dosyaları silindi, __preview346/4182korundu.
+
+Kalan gerçek sınırlar: SMTP bağlantı-anı DNS rebinding; başka adminin hedef değişimini
+beklenen settings revision ile HTTP test/send isteğine bağlama; ağ ACK kaybı/kalıcıDB
+hatasında collector idempotency olmadan exactly-once garanti edilmez. Sonraki yararlı
+denetim bu sınırları ele alabilir; kapatılmış sayılmamalı. Ayrıntılar docs/audit-2026-10-04.md.
+Preexisting untracked tests/AdaPanel.Infrastructure.Tests/TestResults/ korunur/commit edilmez.
+
 ## 2026-10-04 — R26 tamamlandı; 0.8.76 yayımlandı ve doğrulandı
 
 Kullanıcı 0.8.75'i kurduğunu ve mevcut/son sürüm eşitken “Paket hazır değil” gördüğünü bildirdi.

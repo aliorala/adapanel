@@ -1,11 +1,11 @@
 <template>
-  <section class="panel module-shell">
+  <section class="panel module-shell settings-editor">
     <div class="module-head">
       <div>
         <h2>{{ t("panel.notifications.title") }}</h2>
         <p>{{ t("panel.notifications.subtitle") }}</p>
       </div>
-      <button class="secondary compact" :disabled="busy === 'load'" @click="loadSettings">
+      <button class="secondary compact" :disabled="Boolean(busy)" @click="loadSettings">
         {{ t("panel.notifications.refresh") }}
       </button>
     </div>
@@ -14,11 +14,18 @@
 
     <!-- Ayarlar gelmeden form boş / "yapılandırılmamış" görünüyordu; kayıtlı SMTP'si olan
          yönetici bunu "ayar yok" sanıp boş formu üstüne kaydedebiliyordu. -->
-    <p v-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
+    <div v-if="loadError" class="settings-read-error" role="alert">
+      <strong>{{ t("panel.notifications.loadFailed") }}</strong>
+      <p>{{ loadError }}</p>
+      <p>{{ t("panel.notifications.loadFailedHint") }}</p>
+      <button class="secondary compact" :disabled="Boolean(busy)" @click="loadSettings">{{ t("panel.common.retry") }}</button>
+    </div>
+    <p v-else-if="!settingsLoaded" class="empty-state" role="status" aria-live="polite">
       {{ t("panel.common.loading") }}
     </p>
 
-    <template v-else>
+    <template v-if="settingsLoaded">
+    <p class="settings-caption">{{ t(settingsConfirmed ? "panel.notifications.savedSettings" : "panel.notifications.lastKnownSettings") }}</p>
     <div class="summary-strip">
       <div class="summary-item">
         <span>{{ t("panel.notifications.smtpStatus") }}</span>
@@ -26,18 +33,19 @@
       </div>
       <div class="summary-item">
         <span>{{ t("panel.notifications.webhookStatus") }}</span>
-        <strong>{{ form.webhookUrl ? t("panel.notifications.configured") : t("panel.notifications.notConfigured") }}</strong>
+        <strong>{{ savedSettings?.webhookUrl ? t("panel.notifications.configured") : t("panel.notifications.notConfigured") }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.notifications.encryption") }}</span>
-        <strong>{{ form.useSsl ? "TLS / SSL" : t("panel.notifications.disabled") }}</strong>
+        <strong>{{ savedSettings?.useSsl ? "TLS / SSL" : t("panel.notifications.disabled") }}</strong>
       </div>
       <div class="summary-item">
         <span>{{ t("panel.notifications.recipient") }}</span>
-        <strong>{{ form.toEmail || "-" }}</strong>
+        <strong>{{ savedSettings?.toEmail || "-" }}</strong>
       </div>
     </div>
 
+    <p v-if="hasUnsavedChanges" class="settings-draft-hint" role="status">{{ t("panel.notifications.saveBeforeTest") }}</p>
     <div class="segmented-tabs" role="tablist">
       <button role="tab" :aria-selected="activeTab === 'email'" :class="{ active: activeTab === 'email' }" @click="activeTab = 'email'">
         {{ t("panel.notifications.emailTab") }}
@@ -95,20 +103,20 @@
 
     <div class="module-toolbar">
       <div class="toolbar-group">
-        <button v-bind="writeGate(busy === 'save')" @click="save">
+        <button v-bind="writeGate(!canSave)" @click="save">
           {{ busy === "save" ? t("panel.notifications.saving") : t("panel.notifications.save") }}
         </button>
         <button
           v-if="activeTab === 'email'"
           class="secondary compact"
-          v-bind="writeGate(busy === 'email' || !smtpReady)"
+          v-bind="writeGate(!canTestEmail)"
           @click="test('email')">
           {{ busy === "email" ? t("panel.notifications.testing") : t("panel.notifications.testEmail") }}
         </button>
         <button
           v-else
           class="secondary compact"
-          v-bind="writeGate(busy === 'webhook' || !form.webhookUrl)"
+          v-bind="writeGate(!canTestWebhook)"
           @click="test('webhook')">
           {{ busy === "webhook" ? t("panel.notifications.testing") : t("panel.notifications.testWebhook") }}
         </button>
@@ -120,21 +128,28 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import PasswordField from "../components/PasswordField.vue";
-import { getNotificationSettings, saveNotificationSettings, sendNotificationTest } from "../api/notifications";
-import { extractApiMessage } from "../stores/auth";
+import { getNotificationSettings, saveNotificationSettings, sendNotificationTest, type NotificationSettings } from "../api/notifications";
+import { extractApiMessage, useAuthStore } from "../stores/auth";
+import { getSessionEpoch } from "../api/client";
 import { useSubscriptionGate } from "../composables/useSubscriptionGate";
 
 const { t } = useI18n();
 // Askidaki abonelikte YAZMA dugmeleri bastan devre disi + sebebi title/aria ile soylenir
 // (bkz. composables/useSubscriptionGate.ts). Okuma dugmeleri kapiya girmez.
-const { writeGate } = useSubscriptionGate();
+const { writeGate, locked } = useSubscriptionGate();
 const activeTab = ref<"email" | "webhook">("email");
 const busy = ref("");
 // Yüklenmemiş durumu "yapılandırılmamış/boş" göstermek yanıltıcıydı.
 const settingsLoaded = ref(false);
+const settingsConfirmed = ref(false);
+const loadError = ref("");
+const savedSettings = ref<NotificationSettings | null>(null);
+const auth = useAuthStore(), mountedEpoch = getSessionEpoch(), actor = auth.session?.user?.id, role = auth.session?.user?.role;
+let disposed = false, draftRevision = 0;
+const current = () => !disposed && getSessionEpoch() === mountedEpoch && auth.session?.user?.id === actor && auth.session?.user?.role === role;
 const notice = ref("");
 const noticeError = ref(false);
 
@@ -150,46 +165,74 @@ const form = reactive({
   webhookUrl: ""
 });
 
-const smtpReady = computed(() =>
-  Boolean(form.smtpHost && form.fromEmail && form.toEmail));
+watch(form, () => { draftRevision++; }, { deep: true, flush: "sync" });
+const target = (value: NotificationSettings) => JSON.stringify([value.smtpHost.trim(), value.smtpPort, value.smtpUserName.trim(), value.fromEmail.trim(), value.toEmail.trim(), value.useSsl, value.webhookUrl.trim()]);
+const hasUnsavedChanges = computed(() => !!savedSettings.value && (target(form) !== target(savedSettings.value) || !!form.smtpPassword));
+const smtpReady = computed(() => Boolean(savedSettings.value?.smtpHost && savedSettings.value.fromEmail && savedSettings.value.toEmail));
+const canSave = computed(() => settingsConfirmed.value && !busy.value && !locked.value && Number.isSafeInteger(form.smtpPort) && form.smtpPort >= 1 && form.smtpPort <= 65535);
+const canTestEmail = computed(() => settingsConfirmed.value && !busy.value && !locked.value && !hasUnsavedChanges.value && smtpReady.value);
+const canTestWebhook = computed(() => settingsConfirmed.value && !busy.value && !locked.value && !hasUnsavedChanges.value && !!savedSettings.value?.webhookUrl);
+
+function publishSettings(value: NotificationSettings, revision: number, preserveDraft = false) {
+  const measured = { ...value, smtpPassword: "" };
+  savedSettings.value = measured;
+  if (!preserveDraft && draftRevision === revision) Object.assign(form, measured);
+  settingsLoaded.value = true;
+  settingsConfirmed.value = true;
+  loadError.value = "";
+}
 
 onMounted(loadSettings);
+onBeforeUnmount(() => { disposed = true; form.smtpPassword = ""; });
 
 async function loadSettings() {
+  if (!current() || busy.value) return;
+  const revision = draftRevision, preserveDraft = hasUnsavedChanges.value;
   busy.value = "load";
   try {
-    Object.assign(form, await getNotificationSettings(), { smtpPassword: "" });
-    settingsLoaded.value = true;
+    const measured = await getNotificationSettings();
+    if (!current()) return;
+    publishSettings(measured, revision, preserveDraft);
     notice.value = "";
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { settingsConfirmed.value = false; loadError.value = resolveApiMessage(error); notice.value = ""; }
   } finally {
-    busy.value = "";
+    if (current()) busy.value = "";
   }
 }
 
 async function save() {
+  if (!current() || !canSave.value) return;
+  const submitted = { ...form }, revision = draftRevision;
   busy.value = "save";
   try {
-    const saved = await saveNotificationSettings({ ...form });
-    Object.assign(form, saved, { smtpPassword: "" });
+    const saved = await saveNotificationSettings(submitted);
+    if (!current()) return;
+    if (target(saved) !== target(submitted) || (!!submitted.smtpPassword && !saved.hasSmtpPassword)) {
+      settingsConfirmed.value = false;
+      showNotice(t("panel.notifications.resultUnconfirmed"), true);
+      return;
+    }
+    publishSettings(saved, revision);
     showNotice(t("panel.notifications.saved"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current()) { settingsConfirmed.value = false; showNotice(resolveApiMessage(error), true); }
   } finally {
-    busy.value = "";
+    if (current()) busy.value = "";
   }
 }
 
 async function test(channel: "email" | "webhook") {
+  if (!current() || !(channel === "email" ? canTestEmail.value : canTestWebhook.value)) return;
+  const revision = draftRevision;
   busy.value = channel;
   try {
     await sendNotificationTest(channel, t("panel.notifications.testMessage"));
-    showNotice(t("panel.notifications.testSent"), false);
+    if (current() && revision === draftRevision) showNotice(t("panel.notifications.testSent"), false);
   } catch (error) {
-    showNotice(resolveApiMessage(error), true);
+    if (current() && revision === draftRevision) showNotice(resolveApiMessage(error), true);
   } finally {
-    busy.value = "";
+    if (current()) busy.value = "";
   }
 }
 
