@@ -1,17 +1,22 @@
 # AdaPanel Codex Memory
 
-## 2026-10-02–03 — R25 tamamlandı; 0.8.75 yayın hazırlığı
+## 2026-10-02–03 — R25 tamamlandı; 0.8.75 yayımlandı ve indirilen paket doğrulandı
 
 Kullanıcının bütün sistemi tarama isteğiyle kaynak, test ve yerel tarayıcı kontrolleri yapıldı.
 Son yönlendirme **“bittiyse yayınla artık”**: yeni uzun denetim açılmıyor; R25 kapatıldı ve
 **0.8.75** kurulum paketi hazır; **session39229 exit0**. Publish içerik denetimi **169 dosya/0 bulgu**,
 installer denetimi **0 bulgu**, sürüm **0.8.75**; paket **90.989.933 bayt (86,77 MiB)**,
 SHA-256 **EFA622694590D4A1C158D043C5D8772F90500DCC69737DD5A6F3559C99C40FEF**.
-İlk GitHub yayın denemesi **session68731 exit1**: kayıtlı GitHub hesabı/token bulunamadı
-(`release075-github-publish.log`); yükleme veya release oluşturulmadı. Resmi GCM cihaz girişi
-etkileşimli terminalde **session15814** ile kullanıcı onayını bekliyor. Giriş tamamlanınca
-aynı yayın betiğiyle yükleme ve indirme/hash doğrulaması yapılmalı; yayımlandı denmemeli.
-Public GitHub'a kaynak/history/tag push yapılmadı; mevcut yayın betiğiyle yalnız installer akışı.
+[0.8.75 GitHub yayını](https://github.com/aliorala/adapanel/releases/tag/0.8.75) tamamlandı;
+**session21821 exit0** (`.tmp/audit-20261002/release075-github-publish-final.log`). Yayın notları
+kaynakla birebir eşleşti; **AdaPanelSetup.exe uploaded**, yeniden indirilen dosyanın SHA-256 değeri
+yukarıdaki yerel paketle aynı. İlk deneme kayıtlı GitHub kimliği bulunmadığı için durmuştu
+(session68731 exit1); resmi GCM cihaz girişi **session15814 exit0** ile tamamlandı, giriş beklenmiyor.
+Kaynak commit'i **a8916c8** yerel; public GitHub'a kaynak/history push yapılmadı, yalnız installer yayımlandı.
+**Gerçek sunucuya kurulum çalıştırılmadı**; yayınlanmış sürüm kurulu canlı sürüm sayılmamalı.
+GitHub latest **0.8.75**, draft/prerelease **false**; yayın zamanı **2026-10-03 09:44:51 İstanbul**.
+API dosya boyutu/digest eşleşti (`release075-published-verification.json`).
+[Doğrudan kurucu](https://github.com/aliorala/adapanel/releases/download/0.8.75/AdaPanelSetup.exe).
 Ayrıntılar `docs/audit-2026-10-02.md`.
 
 R25 son doğrulama: **Infrastructure 7.631 + Core 2 = 7.633/7.633**, başarısız/atlanan yok;
@@ -456,7 +461,7 @@ rewriteA→B'deformreset yok ve lateAresponse Btaslağınısiler. ActualPinia/Ax
 Sonraki tur önerilen sahiplik: hostingproxybackendactor/native; pollingproxyfrontend;
 serverSSLlastbinding+optionalstore; rootreconcileactor/barriers+combined.NET. C#testsrootonly.
 R24 kapanışında değişiklikler yayımlanmamış ve sürüm0.8.74 idi. Sonraki R25 tamamlandı;
-kullanıcının yayın yönlendirmesiyle güncel0.8.75 paket başarısı ve süren yayın aktarımı üstte kayıtlıdır.
+kullanıcının yayın yönlendirmesiyle 0.8.75 paket/yayın ve indirme doğrulaması üstte kayıtlıdır.
 Gerçek servis işlemleriyle uçtan uca doğrulama yapılmış sayılmaz.
 
 Bu makinede `npm` PATH'te yok; Node ile `frontend/node_modules/{vitest/vitest.mjs,vue-tsc/bin/vue-tsc.js,vite/bin/vite.js}`
